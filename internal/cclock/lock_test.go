@@ -265,3 +265,131 @@ func TestReStatFailureAfterTouchMarksLockLost(t *testing.T) {
 		t.Fatal("Compromised() did not close after the re-stat started failing")
 	}
 }
+
+// A second Release call, after the first found the lock compromised, must
+// report the SAME outcome -- not silently claim success. This is the bug
+// F4-1 named: storing the outcome in a local variable meant every caller
+// after the first (concurrent or sequential) read Go's zero value instead.
+func TestReleaseIsIdempotentAfterCompromise(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "x.lock")
+
+	lk, err := Acquire(dir, Options{Stale: time.Minute, Timeout: time.Second, TouchInterval: 20 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-lk.Compromised():
+	case <-time.After(time.Second):
+		t.Fatal("Compromised() did not close after the lock directory was taken over")
+	}
+
+	first := lk.Release()
+	second := lk.Release()
+	if !errors.Is(first, ErrCompromised) {
+		t.Fatalf("first Release() = %v, want ErrCompromised", first)
+	}
+	if second != first {
+		t.Fatalf("second Release() = %v, want the identical value as the first (%v)", second, first)
+	}
+}
+
+// A stale lock directory whose removal keeps failing must not hang Acquire
+// forever: F4-3 found that the stale-steal path, and the "released between
+// mkdir and stat" path, looped back to the top with no deadline check at
+// all. A non-empty directory makes os.Remove fail deterministically and
+// portably (ENOTEMPTY), the same way a read-only mount or a sticky-bit
+// parent would in production.
+func TestAcquireTimesOutWhenStaleRemovalKeepsFailing(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "x.lock")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "stray"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(dir, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	_, err := Acquire(dir, Options{Stale: time.Minute, Timeout: 300 * time.Millisecond, TouchInterval: 20 * time.Millisecond})
+	elapsed := time.Since(start)
+	if !errors.Is(err, ErrTimeout) {
+		t.Fatalf("Acquire() over an unremovable stale lock = %v, want ErrTimeout", err)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("Acquire() took %v to time out with a 300ms Timeout, want it bounded", elapsed)
+	}
+}
+
+// A takeover that happens AFTER the touch goroutine's last check but BEFORE
+// Release is called must still be caught: F4-4 found that Release trusted
+// l.lost alone, which only the touch goroutine's own ticker sets. A touch
+// interval far longer than the test guarantees the ticker never fires, so
+// any detection observed here comes from Release's own final synchronous
+// check, not from touch. It must also close Compromised(): a caller
+// watching that channel separately from the one calling Release must see
+// the same event, not silence.
+func TestReleaseDetectsTakeoverTouchHasNotYetNoticed(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "x.lock")
+
+	lk, err := Acquire(dir, Options{Stale: time.Hour, Timeout: time.Second, TouchInterval: 10 * time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-lk.Compromised():
+		t.Fatal("Compromised() closed before any takeover")
+	default:
+	}
+
+	// The same short sleep TestTouchDetectsTakeover uses: on this
+	// filesystem directory mtimes advance in coarse steps, so an
+	// instantaneous remove+recreate can otherwise land on the same mtime
+	// tick as the original -- which cannot happen for a real takeover,
+	// separated from the original by at least Stale.
+	time.Sleep(50 * time.Millisecond)
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := lk.Release(); !errors.Is(err, ErrCompromised) {
+		t.Fatalf("Release() = %v, want ErrCompromised even though touch's own ticker never fired", err)
+	}
+	select {
+	case <-lk.Compromised():
+	default:
+		t.Fatal("Compromised() did not close even though Release() reported ErrCompromised")
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("lock directory missing after a compromised Release(), want it left for the new owner: %v", err)
+	}
+}
+
+// Exported methods on a nil *Lock must not panic: a caller that skips the
+// error check on a failed Acquire can plausibly hold one.
+func TestLockNilReceiverIsSafe(t *testing.T) {
+	var lk *Lock
+
+	if err := lk.Release(); err != nil {
+		t.Fatalf("nil Lock Release() = %v, want nil", err)
+	}
+	select {
+	case <-lk.Compromised():
+		t.Fatal("nil Lock Compromised() closed, want a channel that never fires")
+	case <-time.After(20 * time.Millisecond):
+	}
+}
