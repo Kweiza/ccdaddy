@@ -199,3 +199,24 @@ func TestSwitchAlreadyOnAsksTheFileNotTheEnvironment(t *testing.T) {
 		t.Fatalf("stderr = %q, want the no-op notice", errOut)
 	}
 }
+
+// Nothing asserted ActiveUUID after a SUCCESSFUL switch; the only assertion
+// nearby expects "" after a FAILED one, which never calling SetActive satisfies
+// perfectly. The stored value is load-bearing: `ccdad which` and the re-auth key
+// carry both read it.
+func TestSwitchRecordsTheActiveAccount(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "u-1", "a@example.com")
+	seedAccount(t, "u-2", "b@example.com")
+
+	if code, _, _, top := runRoot(t, "switch", "2"); code != ExitOK {
+		t.Fatalf("switch = %d (%s)", code, top)
+	}
+	s, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.ActiveUUID(); got != "u-2" {
+		t.Fatalf("ActiveUUID() = %q, want u-2", got)
+	}
+}

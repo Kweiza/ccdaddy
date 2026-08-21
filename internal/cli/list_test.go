@@ -111,3 +111,45 @@ func TestListWithEveryAccountDisabledSaysSo(t *testing.T) {
 		t.Fatalf("list --all does not show the disabled account:\n%s", out)
 	}
 }
+
+// Which account is live is the whole point of the listing. Nothing asserted the
+// `*` marker, the per-row `active` field or `activeUuid`, so the entire
+// attribution step could be deleted with the suite green.
+func TestListMarksTheActiveAccount(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "u-1", "a@example.com")
+	seedAccount(t, "u-2", "b@example.com")
+	if code, _, _, top := runRoot(t, "switch", "2"); code != ExitOK {
+		t.Fatalf("switch = %d (%s)", code, top)
+	}
+
+	_, out, _, _ := runRoot(t, "list")
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "b@example.com") && !strings.HasPrefix(line, "*") {
+			t.Fatalf("the live account is not marked:\n%s", out)
+		}
+		if strings.Contains(line, "a@example.com") && strings.HasPrefix(line, "*") {
+			t.Fatalf("a non-live account is marked:\n%s", out)
+		}
+	}
+
+	_, jsonOut, _, _ := runRoot(t, "list", "--json")
+	var payload struct {
+		ActiveUUID string `json:"activeUuid"`
+		Accounts   []struct {
+			UUID   string `json:"uuid"`
+			Active bool   `json:"active"`
+		} `json:"accounts"`
+	}
+	if err := json.Unmarshal([]byte(jsonOut), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.ActiveUUID != "u-2" {
+		t.Fatalf("activeUuid = %q, want u-2", payload.ActiveUUID)
+	}
+	for _, a := range payload.Accounts {
+		if (a.UUID == "u-2") != a.Active {
+			t.Fatalf("account %s active = %v, want it true only for u-2", a.UUID, a.Active)
+		}
+	}
+}

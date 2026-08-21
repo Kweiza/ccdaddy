@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
 	"time"
 
@@ -112,12 +113,31 @@ func newAddCmd() *cobra.Command {
 				if err := store.ValidateAlias(alias); err != nil {
 					return UsageError("%s", err.Error())
 				}
+				// Checked before the login, not only after it. A collision found
+				// afterwards cannot fail the command — the account is stored and
+				// the browser round trip really did succeed — so catching it here
+				// is the only place it can still be a clean usage error.
+				if err := aliasIsFree(alias); err != nil {
+					return err
+				}
 			}
 
 			surface := oauth.SurfaceClaudeAI
 			if useConsole {
 				surface = oauth.SurfaceConsole
 			}
+
+			// The SIGINT trap is scoped to this command and to the span of its
+			// own blocking login. `add` waits minutes on a browser callback or a
+			// pasted code, and oauth.Login unwinds its loopback listener when
+			// the context is cancelled — that arm is only reachable with the
+			// trap installed. Installing it process-wide instead would strip
+			// SIGINT's default disposition from every other command while none
+			// of them watch the context, which makes Ctrl-C do nothing at all.
+			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
+			defer stop()
+			cmd.SetContext(ctx)
+
 			return runAdd(cmd, addOptions{
 				surface:    surface,
 				tryBrowser: !noBrowser,
@@ -226,8 +246,10 @@ func runAdd(cmd *cobra.Command, opts addOptions) error {
 	}
 	_, existed := s.Get(acct.UUID)
 
-	// A first-time account has no prior record; the error is the absence, not a
-	// failure, so it is deliberately ignored.
+	// The stored record this account had before this login, if any. Reading it
+	// can fail because there is none (a first-time account) or because it is
+	// corrupt; both mean the same thing here — start from nothing — so the
+	// error is deliberately ignored rather than distinguished.
 	prior, _ := s.Credentials(acct.UUID)
 	creds, err := credentialBlob(result.Token, profile, prior)
 	if err != nil {
@@ -235,26 +257,45 @@ func runAdd(cmd *cobra.Command, opts addOptions) error {
 	}
 
 	// add doubles as re-authentication (spec §6.5). When the account being
-	// re-authenticated is the one currently live, its other account-scoped keys
-	// — trustedDeviceToken, enterpriseGateway, designOauth — are still in the
-	// live file and are cheap to keep. Losing them costs a device-cap slot and a
-	// gateway re-trust (spec §4.1). Guarded on identity: capturing
-	// unconditionally would file the PREVIOUS account's device token under this
-	// one, which is the same leak in the other direction.
-	if existed && s.ActiveUUID() == acct.UUID {
-		if snapshot, cerr := cclink.Capture(); cerr == nil {
-			for k, v := range snapshot {
-				if _, fresh := creds[k]; !fresh {
-					creds[k] = v
-				}
+	// re-authenticated is the one already in the live file, its other
+	// account-scoped keys — trustedDeviceToken, enterpriseGateway, designOauth —
+	// are sitting there and are cheap to keep. Losing them costs a device-cap
+	// slot and a gateway re-trust (spec §4.1).
+	//
+	// Whether the live file IS this account is decided by comparing its OAuth
+	// record against the one this account last stored, and NOT by
+	// store.ActiveUUID: that is ccdad's own record of what ccdad last
+	// activated, which the store documents as a display hint. It goes stale the
+	// moment the user runs `/login` inside Claude Code, and trusting it there
+	// copies THAT account's device and design tokens into this account's
+	// snapshot — a cross-account leak, which is worse than the loss this carry
+	// exists to prevent.
+	live, liveErr := cclink.Load()
+	liveIsThisAccount := liveErr == nil &&
+		credentialIdentity(live) != "" &&
+		credentialIdentity(live) == credentialIdentity(prior)
+
+	if liveIsThisAccount {
+		for k, v := range cclink.Extract(live) {
+			if _, fresh := creds[k]; !fresh {
+				creds[k] = v
 			}
 		}
+	} else if orphaned := carriableKeys(live); len(orphaned) > 0 {
+		// Nothing in the credentials file names an account, so when the live
+		// login is not provably this one — above all when adopting the login
+		// Claude Code already had — ccdad cannot tell whose these are and will
+		// not guess. Say so: the first switch away deletes them.
+		fmt.Fprintf(stderr,
+			"warning: the current login carries %s, and ccdad cannot tell which account they belong to, so they are not being stored.\n"+
+				"They will be dropped by the next switch; the account they belong to may need re-trusting.\n",
+			strings.Join(orphaned, ", "))
 	}
 
 	if err := s.Add(acct, creds); err != nil {
 		return err
 	}
-	if err := applyAlias(s, acct.UUID, opts.alias); err != nil {
+	if err := applyAlias(cmd, s, acct.UUID, opts.alias); err != nil {
 		return err
 	}
 
@@ -269,6 +310,12 @@ func runAdd(cmd *cobra.Command, opts addOptions) error {
 	fmt.Fprintf(stderr, "\n%s %s (%s, index %d).\n", verb, saved.Label(), saved.Kind, saved.Idx)
 
 	if opts.activate {
+		// --activate IS a switch, so spec §4.3's drift probe belongs here too.
+		if unknown := cclink.UnknownKeys(live); len(unknown) > 0 {
+			fmt.Fprintf(stderr,
+				"note: unrecognized keys in the credentials file are being preserved unchanged: %s\n",
+				strings.Join(unknown, ", "))
+		}
 		if err := cclink.Activate(creds); err != nil {
 			return err
 		}
@@ -295,19 +342,87 @@ func loginError(err error) error {
 	return err
 }
 
+// subscriptionTypeOf maps the profile's organization_type to the short name
+// Claude Code stores, mirroring its own four-entry table:
+//
+//	[["claude_max","max"],["claude_pro","pro"],
+//	 ["claude_enterprise","enterprise"],["claude_team","team"]]
+//
+// Every tier predicate in Claude Code compares against the short name — the Max
+// check is literally `subscriptionType === "max"` — so storing the raw value
+// makes a paid entitlement invisible to the running client. An organization
+// type the table does not cover yields nil rather than the raw string, matching
+// what Claude Code writes when its Map misses.
+func subscriptionTypeOf(organizationType string) any {
+	switch organizationType {
+	case "claude_max":
+		return "max"
+	case "claude_pro":
+		return "pro"
+	case "claude_enterprise":
+		return "enterprise"
+	case "claude_team":
+		return "team"
+	}
+	return nil
+}
+
+// carriableKeys names the account-scoped keys the live file holds besides the
+// OAuth login itself — the ones a switch will delete and that only a correct
+// attribution could have preserved.
+func carriableKeys(live cclink.Blob) []string {
+	var out []string
+	for _, k := range cclink.AccountScopedKeys {
+		if k == "claudeAiOauth" {
+			continue
+		}
+		if _, ok := live[k]; ok {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
 // applyAlias routes an alias through SetAlias rather than through Account.Alias.
 //
 // SetAlias is the only path that enforces uniqueness, and it is also what lets
 // an explicit --alias re-label an account being re-authenticated: store.Add
 // deliberately preserves the stored alias over the incoming one, so assigning
 // Account.Alias would silently discard --alias on every re-auth.
-func applyAlias(s *store.Store, uuid, alias string) error {
+func applyAlias(cmd *cobra.Command, s *store.Store, uuid, alias string) error {
 	normalized := store.NormalizeAlias(alias)
 	if normalized == "" {
 		return nil
 	}
-	if err := s.SetAlias(uuid, normalized); err != nil {
-		return UsageError("%s", err.Error())
+	err := s.SetAlias(uuid, normalized)
+	if err == nil {
+		return nil
+	}
+	// The account is already stored at this point, so the command did not fail:
+	// reporting exit 2 would tell a caller the login was rejected when it was
+	// not, and re-running it would repeat the whole browser round trip for
+	// nothing. Say what did not happen and leave the account in place.
+	fmt.Fprintf(cmd.ErrOrStderr(),
+		"warning: the account was added but the alias was not set (%v). Set another with 'ccdad alias'.\n", err)
+	return nil
+}
+
+// aliasIsFree reports whether an alias can still be taken, without touching the
+// store's contents. It exists so `add` can refuse a collision BEFORE spending a
+// login on it.
+func aliasIsFree(alias string) error {
+	normalized := store.NormalizeAlias(alias)
+	if normalized == "" {
+		return nil
+	}
+	s, err := store.Open()
+	if err != nil {
+		return err
+	}
+	for _, a := range s.Accounts() {
+		if store.NormalizeAlias(a.Alias) == normalized {
+			return UsageError("%s: %q already belongs to %s (%s)", store.ErrAliasTaken, normalized, a.Label(), a.UUID)
+		}
 	}
 	return nil
 }
@@ -333,7 +448,16 @@ func credentialBlob(tok *oauth.TokenResponse, profile *identity.Profile, prior c
 	payload["accessToken"] = tok.AccessToken
 	payload["refreshToken"] = tok.RefreshToken
 	payload["expiresAt"] = now + tok.ExpiresIn*1000
-	payload["clientId"] = oauth.ClientID
+	// clientId is deliberately NOT written. Claude Code's login sets
+	// `clientId: t?.oauthClient?.clientId`, which is undefined for the default
+	// public client, so the key is absent from a first-party record — and its
+	// absence is load-bearing on refresh: Claude Code computes
+	// `d = Boolean((IZ(f.scopes) || f.subscriptionType) && !f.clientId)` and
+	// only when d is true does it send the curated refresh scope set. A
+	// synthesized clientId flips d to false, making Claude Code refresh with
+	// the raw stored scopes including org:create_api_key — the exact scope
+	// spec §3.1 says the refresh grant drops. A clientId that a non-default
+	// client really did store survives through the prior merge above.
 	if tok.RefreshTokenExpiresIn > 0 {
 		payload["refreshTokenExpiresAt"] = now + tok.RefreshTokenExpiresIn*1000
 	}
@@ -345,7 +469,7 @@ func credentialBlob(tok *oauth.TokenResponse, profile *identity.Profile, prior c
 	// 2.1.238 bundle) — so a value we do not have falls back to the stored one,
 	// and an explicit null is written only when neither side knows.
 	if profile != nil && profile.OrganizationType != "" {
-		payload["subscriptionType"] = profile.OrganizationType
+		payload["subscriptionType"] = subscriptionTypeOf(profile.OrganizationType)
 	}
 	if profile != nil && profile.RateLimitTier != "" {
 		payload["rateLimitTier"] = profile.RateLimitTier
@@ -500,6 +624,12 @@ func runAddToken(cmd *cobra.Command, token string, isAPIKey bool, email, alias s
 		// resolves one to an account, so that path makes no request at all.
 		profile, err := newProfileClient().FetchProfile(cmd.Context(), token)
 		switch {
+		case err != nil && cmd.Context().Err() != nil:
+			// An interrupted lookup is not a flaky network. Filing it as one
+			// stores the account under a fabricated token-<hash> uuid and
+			// reports success, so the next run stores the SAME account again
+			// under its real uuid.
+			return WithCode(err, ExitInterrupted)
 		case errors.Is(err, identity.ErrUnauthorized):
 			// Anthropic has already rejected this credential. Storing it would
 			// create a managed account under a fabricated uuid that can never be
@@ -532,6 +662,20 @@ func runAddToken(cmd *cobra.Command, token string, isAPIKey bool, email, alias s
 	if err != nil {
 		return err
 	}
+
+	// A setup token resolves to a real account uuid, and that account may
+	// already be managed through a browser login. store.Add replaces the
+	// credential file wholesale, so writing only the token record would destroy
+	// that account's claudeAiOauth — refresh token included, which nothing else
+	// has a copy of. The two are different credentials for the same account and
+	// both are worth keeping.
+	if existing, cerr := s.Credentials(acct.UUID); cerr == nil {
+		for k, v := range existing {
+			if _, fresh := creds[k]; !fresh {
+				creds[k] = v
+			}
+		}
+	}
 	if acct.Email == "" {
 		// A synthetic label must not churn on re-add, so an existing one wins.
 		if existing, ok := s.Get(acct.UUID); ok && existing.Email != "" {
@@ -544,7 +688,7 @@ func runAddToken(cmd *cobra.Command, token string, isAPIKey bool, email, alias s
 	if err := s.Add(acct, creds); err != nil {
 		return err
 	}
-	if err := applyAlias(s, acct.UUID, alias); err != nil {
+	if err := applyAlias(cmd, s, acct.UUID, alias); err != nil {
 		return err
 	}
 	saved, ok := s.Get(acct.UUID)

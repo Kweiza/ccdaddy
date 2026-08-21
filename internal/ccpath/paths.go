@@ -74,6 +74,11 @@ func GlobalConfigPath() string {
 	if _, err := os.Stat(legacy); err == nil {
 		return legacy
 	}
+	// This re-reads CLAUDE_CONFIG_DIR instead of calling ConfigHome, and must
+	// keep doing so: ConfigHome falls back to <home>/.claude, while Claude Code
+	// computes this file as join(CLAUDE_CONFIG_DIR || homedir(), ".claude.json")
+	// — the bare home, with no .claude segment. Sharing a helper would move
+	// ~/.claude.json to ~/.claude/.claude.json and stop finding the real one.
 	base := os.Getenv("CLAUDE_CONFIG_DIR")
 	if base == "" {
 		base = homeDir()

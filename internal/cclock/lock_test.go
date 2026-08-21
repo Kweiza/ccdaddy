@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -391,5 +392,67 @@ func TestLockNilReceiverIsSafe(t *testing.T) {
 	case <-lk.Compromised():
 		t.Fatal("nil Lock Compromised() closed, want a channel that never fires")
 	case <-time.After(20 * time.Millisecond):
+	}
+}
+
+// The staleness rule has two halves and only the positive one was pinned: the
+// two stealing tests sit at the extremes (a lock ~20ms old, and one 2 hours
+// old), so the threshold itself could be re-based on any shorter duration with
+// the suite green. That matters because Claude Code legitimately holds
+// .oauth_refresh.lock across a full token round trip — which is why its own
+// config sets a 60s stale window — and a shortened threshold makes ccdad steal
+// a lock Claude Code is still using.
+func TestAcquireDoesNotStealALockYoungerThanStale(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "held.lock")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const stale = 60 * time.Second
+	// Well inside the stale window, but old enough that any threshold
+	// meaningfully shorter than Stale would steal it.
+	aged := time.Now().Add(-(stale - 2*time.Second))
+	if err := os.Chtimes(dir, aged, aged); err != nil {
+		t.Fatal(err)
+	}
+
+	lk, err := Acquire(dir, Options{Stale: stale, Timeout: 300 * time.Millisecond})
+	if err == nil {
+		_ = lk.Release()
+		t.Fatal("Acquire() stole a lock that is younger than Stale")
+	}
+	if !errors.Is(err, ErrTimeout) {
+		t.Fatalf("Acquire() = %v, want ErrTimeout while the holder is still fresh", err)
+	}
+}
+
+// A stale lock that cannot be removed at all — a read-only parent, a permission
+// problem — is retried until Timeout. The timeout is the right outcome, but
+// reporting only "held by another process" buries the one sentence that says
+// what to do: the holder IS gone, the removal is what failed.
+func TestAcquireReportsWhyAStaleLockCouldNotBeRemoved(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "stuck.lock")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	aged := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(dir, aged, aged); err != nil {
+		t.Fatal(err)
+	}
+	// Removing a directory needs write permission on its PARENT.
+	if err := os.Chmod(parent, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(parent, 0o700) })
+
+	_, err := Acquire(dir, Options{Stale: time.Minute, Timeout: 300 * time.Millisecond})
+	if !errors.Is(err, ErrTimeout) {
+		t.Fatalf("Acquire() = %v, want ErrTimeout", err)
+	}
+	if !strings.Contains(err.Error(), "could not be removed") {
+		t.Fatalf("error = %q, want it to name the removal failure rather than only the timeout", err)
 	}
 }

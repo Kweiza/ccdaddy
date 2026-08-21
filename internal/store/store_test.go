@@ -539,3 +539,40 @@ func TestValidUUIDRefusesWindowsDeviceNames(t *testing.T) {
 		}
 	}
 }
+
+// Label picks the account's best human name, and every error message and table
+// row in the CLI goes through it. The precedence was never asserted, so a
+// reordering would rename accounts everywhere with the suite green.
+func TestAccountLabelPrecedence(t *testing.T) {
+	long := "aaaaaaaa-1111-2222-3333-444444444444"
+	cases := []struct {
+		name string
+		acct Account
+		want string
+	}{
+		{"alias wins", Account{Alias: "work", Email: "a@example.com", UUID: long}, "work"},
+		{"email when there is no alias", Account{Email: "a@example.com", UUID: long}, "a@example.com"},
+		{"a short uuid when there is neither", Account{UUID: long}, "aaaaaaaa"},
+		{"a uuid too short to truncate is used whole", Account{UUID: "u-1"}, "u-1"},
+	}
+	for _, tc := range cases {
+		if got := tc.acct.Label(); got != tc.want {
+			t.Errorf("%s: Label() = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// ccpath.homeDir returns "" when os.UserHomeDir fails, which makes every
+// derived path relative — and a relative store puts live tokens in whatever
+// directory ccdad happened to be run from, a different one each time.
+func TestOpenRefusesARelativeStoreRoot(t *testing.T) {
+	t.Setenv("CCDAD_HOME", filepath.Join("relative", "ccdad"))
+
+	_, err := Open()
+	if err == nil {
+		t.Fatal("Open() = nil, want a relative store root refused")
+	}
+	if !strings.Contains(err.Error(), "absolute") {
+		t.Fatalf("error = %q, want it to say what to do", err)
+	}
+}

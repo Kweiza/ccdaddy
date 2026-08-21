@@ -172,3 +172,13 @@ func addLiveKey(t *testing.T, key, rawValue string) {
 		t.Fatal(err)
 	}
 }
+
+// writeLiveFile replaces Claude Code's credentials file wholesale, standing in
+// for something that changed it without ccdad being told — `/login` inside
+// Claude Code, or a restore from a backup.
+func writeLiveFile(t *testing.T, raw string) {
+	t.Helper()
+	if err := os.WriteFile(ccpath.CredentialsPath(), []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}

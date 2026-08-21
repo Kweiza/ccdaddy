@@ -76,9 +76,15 @@ func newSwitchCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if rec, isToken := tokenRecordOf(creds); isToken {
-				return UsageError("%s is an %s account; Claude Code reads that credential from %s, so there is nothing to install in the credentials file",
-					target.Label(), rec.Kind, envVarFor(rec.Kind))
+			// An account can hold both a browser login and a token. The OAuth
+			// record is what goes in the credentials file, so a token sitting
+			// beside it must not make the account look uninstallable — only an
+			// account with NO OAuth record is unswitchable.
+			if _, hasOAuth := creds["claudeAiOauth"]; !hasOAuth {
+				if rec, isToken := tokenRecordOf(creds); isToken {
+					return UsageError("%s is an %s account; Claude Code reads that credential from %s, so there is nothing to install in the credentials file",
+						target.Label(), rec.Kind, envVarFor(rec.Kind))
+				}
 			}
 
 			// A live file we cannot read is not a reason to refuse the switch:

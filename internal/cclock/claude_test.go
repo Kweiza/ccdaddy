@@ -7,17 +7,36 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/Kweiza/ccdaddy/internal/ccpath"
 )
 
+// withCredentialHome points every credential path at a temp directory.
+//
+// It sets CLAUDE_SECURESTORAGE_CONFIG_DIR rather than relying on $HOME, because
+// ccpath.homeDir goes through os.UserHomeDir — which reads %USERPROFILE% on
+// Windows and ignores $HOME entirely. A HOME-only sandbox therefore does not
+// sandbox on Windows at all: these tests acquire and mutate real credential
+// locks, and .storage-write.lock is left behind in the developer's live
+// ~/.claude. The assertion at the end is what makes that failure loud rather
+// than silent if the resolution rules ever change again.
 func withCredentialHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("CLAUDE_CONFIG_DIR", "")
-	os.Unsetenv("CLAUDE_SECURESTORAGE_CONFIG_DIR")
 	dir := filepath.Join(home, ".claude")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+	t.Setenv("CLAUDE_SECURESTORAGE_CONFIG_DIR", dir)
+
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := filepath.EvalSymlinks(ccpath.CredentialHome()); got != resolved {
+		t.Fatalf("credential home is %q, not the sandbox %q — these tests would touch the real one", got, resolved)
 	}
 	return dir
 }
@@ -31,8 +50,15 @@ func TestLockPaths(t *testing.T) {
 	if got, want := OAuthRefreshLockDir(), filepath.Join(dir, ".oauth_refresh.lock"); got != want {
 		t.Fatalf("OAuthRefreshLockDir() = %q, want %q", got, want)
 	}
-	// The legacy lock is a sibling of the directory, named after its REAL path.
-	if got, want := LegacyRefreshLockDir(), dir+".lock"; got != want {
+	// The legacy lock is a sibling of the directory, named after its REAL path —
+	// resolved, which is what Claude Code computes. Asserting the unresolved
+	// form passes on Linux only by accident and fails on macOS, where the temp
+	// dir sits behind /private.
+	resolvedDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := LegacyRefreshLockDir(), resolvedDir+".lock"; got != want {
 		t.Fatalf("LegacyRefreshLockDir() = %q, want %q", got, want)
 	}
 }
@@ -346,5 +372,37 @@ func TestHeldNilReceiverIsSafe(t *testing.T) {
 	case <-held.Compromised():
 		t.Fatal("nil Held Compromised() closed, want a channel that never fires")
 	case <-time.After(20 * time.Millisecond):
+	}
+}
+
+// The legacy lock name is derived from the RESOLVED credential home, so a home
+// reached through a symlink must produce the same lock as the real path — that
+// is what makes ccdad and Claude Code contend on one lock rather than two.
+// Without a symlinked fixture, deleting the EvalSymlinks call leaves the suite
+// green because the two forms coincide.
+func TestLegacyRefreshLockDirResolvesSymlinks(t *testing.T) {
+	root := t.TempDir()
+	real := filepath.Join(root, "real", ".claude")
+	if err := os.MkdirAll(real, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(filepath.Join(root, "real"), link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	viaLink := filepath.Join(link, ".claude")
+
+	t.Setenv("CLAUDE_SECURESTORAGE_CONFIG_DIR", viaLink)
+	resolved, err := filepath.EvalSymlinks(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := LegacyRefreshLockDir()
+	if got != resolved+".lock" {
+		t.Fatalf("LegacyRefreshLockDir() = %q, want the resolved %q", got, resolved+".lock")
+	}
+	if got == viaLink+".lock" {
+		t.Fatal("the lock name was built from the unresolved path, so ccdad and Claude Code would take different locks")
 	}
 }

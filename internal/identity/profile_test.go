@@ -213,3 +213,34 @@ func TestNewClientIsBounded(t *testing.T) {
 		t.Fatalf("NewClient().HTTP.Timeout = %v, want a bounded deadline", got)
 	}
 }
+
+// The body can stop mid-read for the same reasons the request can. Reporting
+// only "reading the profile response" sends a user to look at the endpoint when
+// they cancelled it themselves.
+func TestFetchProfileCancelledDuringTheBodyRead(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	c := testClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "4096")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			io.WriteString(w, `{"account":{"uuid":"acct-1"`)
+			f.Flush()
+		}
+		cancel()
+		<-ctx.Done()
+	})
+
+	_, err := c.FetchProfile(ctx, "SECRET-TOKEN-VALUE")
+	if err == nil {
+		t.Fatal("FetchProfile() = nil, want an error")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want it to wrap context.Canceled", err)
+	}
+	if !strings.Contains(err.Error(), "cancelled") {
+		t.Fatalf("err = %q, want it to say the lookup was cancelled", err)
+	}
+	if strings.Contains(err.Error(), "SECRET-TOKEN-VALUE") {
+		t.Fatalf("error leaked the token: %q", err)
+	}
+}
