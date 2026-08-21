@@ -147,12 +147,25 @@ func (c *Client) ExchangeCode(ctx context.Context, code, verifier, redirectURI, 
 // The scope parameter is Claude Code's narrowed refresh set, not the authorize
 // set — see RefreshScopeString for why omitting it is not equivalent.
 func (c *Client) Refresh(ctx context.Context, refreshToken string) (*TokenResponse, error) {
-	return c.post(ctx, map[string]string{
+	out, err := c.post(ctx, map[string]string{
 		"grant_type":    "refresh_token",
 		"refresh_token": refreshToken,
 		"client_id":     ClientID,
 		"scope":         RefreshScopeString,
 	})
+	if err != nil {
+		return nil, err
+	}
+	// RFC 6749 §6 makes a NEW refresh token optional, and Claude Code defends
+	// against its absence by defaulting the field to the token it just sent
+	// (`refresh_token: d = e`). Handing back "" instead would overwrite a
+	// still-valid token in the credential file; the next refresh would send an
+	// empty one, take a 400 invalid_grant, and quarantine a healthy account.
+	// This is the only place that holds both tokens, so no caller can fix it.
+	if out.RefreshToken == "" {
+		out.RefreshToken = refreshToken
+	}
+	return out, nil
 }
 
 func (c *Client) post(ctx context.Context, body map[string]string) (*TokenResponse, error) {
@@ -166,9 +179,17 @@ func (c *Client) post(ctx context.Context, body map[string]string) (*TokenRespon
 	if err != nil {
 		return nil, fmt.Errorf("building token request: %w", err)
 	}
-	// Content-Type and nothing else: Claude Code's exchange sets only this
-	// header, and ccdad's request should not be distinguishable from one of
-	// Claude Code's.
+	// Content-Type and nothing else, matching what Claude Code's exchange sets
+	// in its own code (spec §3.2).
+	//
+	// That does NOT make the request indistinguishable on the wire, and it is
+	// not meant to. Claude Code posts through axios, whose node adapter adds
+	// User-Agent: axios/<ver> and a four-token Accept-Encoding beneath the
+	// call, and whose defaults add Accept: application/json, text/plain, */*.
+	// Go adds its own User-Agent and Accept-Encoding: gzip instead. Matching
+	// those would mean forging a pinned axios version that drifts with every
+	// Claude Code release — a worse lie than an honest one — so ccdad matches
+	// the header the code sets and leaves the rest to its own client.
 	req.Header.Set("Content-Type", "application/json")
 
 	res, err := c.HTTP.Do(req)
