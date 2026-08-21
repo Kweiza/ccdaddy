@@ -132,6 +132,8 @@ type Lock struct {
 
 	mu    sync.Mutex
 	mtime time.Time // the mtime this holder last observed on its own directory
+
+	releaseErr error // the outcome of the first Release call; every call returns this
 }
 
 // Acquire takes the lock at lockDir, waiting up to opts.Timeout.
@@ -147,7 +149,18 @@ func Acquire(lockDir string, opts Options) (*Lock, error) {
 	}
 
 	deadline := time.Now().Add(opts.Timeout)
-	for {
+	for attempt := 0; ; attempt++ {
+		// Bound every path back to the top of this loop, including the two
+		// "continue" paths below: a stale lock whose removal keeps failing
+		// (non-empty directory, read-only mount, ...) must not spin forever
+		// just because it never reaches the backoff at the bottom. The very
+		// first attempt is exempt so Timeout == 0's documented "a single
+		// attempt" still gets to make that attempt instead of expiring
+		// before ever calling Mkdir.
+		if attempt > 0 && time.Now().After(deadline) {
+			return nil, fmt.Errorf("%s: %w", filepath.Base(lockDir), ErrTimeout)
+		}
+
 		err := os.Mkdir(lockDir, 0o700)
 		if err == nil {
 			break
@@ -173,9 +186,6 @@ func Acquire(lockDir string, opts Options) (*Lock, error) {
 			continue
 		}
 
-		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("%s: %w", filepath.Base(lockDir), ErrTimeout)
-		}
 		// Jittered backoff so several waiters do not retry in lockstep.
 		time.Sleep(250*time.Millisecond + time.Duration(rand.N(250))*time.Millisecond)
 	}
@@ -274,29 +284,64 @@ func (l *Lock) markLost() {
 // Compromised is closed when this lock discovers it no longer owns its
 // directory. A caller holding the lock across more than a brief critical
 // section should select on it and abandon whatever it was protecting.
-func (l *Lock) Compromised() <-chan struct{} { return l.lost }
+func (l *Lock) Compromised() <-chan struct{} {
+	if l == nil {
+		return nil
+	}
+	return l.lost
+}
 
-// Release stops touching and removes the lock directory. It is idempotent.
+// Release stops touching and removes the lock directory. It is idempotent:
+// every call, including a concurrent one, observes the exact outcome of the
+// first -- sync.Once guarantees that, but only because the outcome itself is
+// stored on the Lock rather than in a local variable a second caller would
+// never see.
 //
 // If the lock was compromised -- taken over by another process while held --
 // Release does not remove the directory (it belongs to the new owner now)
-// and returns ErrCompromised instead.
+// and returns ErrCompromised instead. This is checked twice. First, via
+// l.lost, which the touch goroutine sets on its own ticker -- so a takeover
+// can be up to one TouchInterval old before that goroutine notices it. Second,
+// synchronously, right here: a final stat of the directory compared against
+// the mtime this holder last confirmed. The second check is what catches a
+// takeover in the window between touch's last tick and this call, which the
+// first check alone cannot see -- and it is why Release must never remove
+// the directory on the strength of l.lost being merely unclosed: unclosed
+// only means "not detected yet", not "did not happen".
 func (l *Lock) Release() error {
-	var err error
+	if l == nil {
+		return nil
+	}
 	l.stopOnce.Do(func() {
 		close(l.stop)
 		<-l.done
 
 		select {
 		case <-l.lost:
-			err = ErrCompromised
+			l.releaseErr = ErrCompromised
 			return
 		default:
 		}
 
+		// touch has already exited (we waited on l.done above), so nothing
+		// else in this process can be racing this read or l.mtime.
+		info, statErr := statLock(l.dir)
+		l.mu.Lock()
+		owned := statErr == nil && info.ModTime().Equal(l.mtime)
+		l.mu.Unlock()
+		if !owned {
+			// Mark it lost too, not just report it: a caller separately
+			// watching Compromised() must see the same event Release just
+			// reported, not silence, or the two signals disagree about
+			// whether this ever happened.
+			l.markLost()
+			l.releaseErr = ErrCompromised
+			return
+		}
+
 		if rmErr := os.Remove(l.dir); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
-			err = fmt.Errorf("releasing %s: %w", filepath.Base(l.dir), rmErr)
+			l.releaseErr = fmt.Errorf("releasing %s: %w", filepath.Base(l.dir), rmErr)
 		}
 	})
-	return err
+	return l.releaseErr
 }

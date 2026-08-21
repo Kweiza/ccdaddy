@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -37,11 +38,14 @@ func TestLockPaths(t *testing.T) {
 }
 
 func TestAcquireCredentialsTakesAllThree(t *testing.T) {
-	withCredentialHome(t)
+	dir := withCredentialHome(t)
 
 	held, err := AcquireCredentials(time.Second)
 	if err != nil {
 		t.Fatalf("AcquireCredentials() = %v, want nil", err)
+	}
+	if got := held.CredentialHome(); got != dir {
+		t.Fatalf("held.CredentialHome() = %q, want %q", got, dir)
 	}
 	for _, d := range []string{OAuthRefreshLockDir(), LegacyRefreshLockDir(), StorageWriteLockDir()} {
 		if _, err := os.Stat(d); err != nil {
@@ -70,8 +74,9 @@ func TestAcquireCredentialsRollsBackOnContention(t *testing.T) {
 	}
 	defer blocker.Release()
 
-	if _, err := AcquireCredentials(200 * time.Millisecond); err == nil {
-		t.Fatal("AcquireCredentials() = nil, want a timeout error")
+	_, err = AcquireCredentials(200 * time.Millisecond)
+	if !errors.Is(err, ErrTimeout) {
+		t.Fatalf("AcquireCredentials() = %v, want an error satisfying errors.Is(err, ErrTimeout)", err)
 	}
 	if _, err := os.Stat(OAuthRefreshLockDir()); !os.IsNotExist(err) {
 		t.Fatal("primary refresh lock leaked after a failed acquisition")
@@ -86,9 +91,15 @@ func TestAcquireCredentialsRollsBackOnContention(t *testing.T) {
 // reversing the order, or shortening a stale window, leaves every
 // behavioural test in this package green. Pin the exact sequence directly.
 func TestCredentialLockOrder(t *testing.T) {
-	dir := withCredentialHome(t)
+	// A literal, non-existent path -- not withCredentialHome's real
+	// directory -- deliberately, so this pins credentialLockOrder's output
+	// against the home it is GIVEN rather than depending on env-var
+	// resolution or filesystem state. (A non-existent home just makes
+	// legacyRefreshLockDir's EvalSymlinks fail and fall back to the
+	// unresolved path, which is exactly what "want" below expects.)
+	const home = "/nonexistent/credential/home/.claude"
 
-	steps := credentialLockOrder()
+	steps := credentialLockOrder(home)
 	if len(steps) != 3 {
 		t.Fatalf("credentialLockOrder() has %d steps, want 3", len(steps))
 	}
@@ -97,9 +108,9 @@ func TestCredentialLockOrder(t *testing.T) {
 	// the 2.1.238 binary. They are not tuning knobs: a shorter one here
 	// would let ccdad steal a lock Claude Code still legitimately holds.
 	want := []lockStep{
-		{filepath.Join(dir, ".oauth_refresh.lock"), 60 * time.Second},
-		{dir + ".lock", 60 * time.Second},
-		{filepath.Join(dir, ".storage-write.lock"), 15 * time.Second},
+		{filepath.Join(home, ".oauth_refresh.lock"), 60 * time.Second},
+		{home + ".lock", 60 * time.Second},
+		{filepath.Join(home, ".storage-write.lock"), 15 * time.Second},
 	}
 	for i, w := range want {
 		if steps[i] != w {
@@ -111,7 +122,7 @@ func TestCredentialLockOrder(t *testing.T) {
 // Held.Compromised() must fire as soon as any ONE of its member locks is
 // taken over, not just be discoverable after the fact through Release.
 func TestHeldCompromisedFiresOnMemberTakeover(t *testing.T) {
-	withCredentialHome(t)
+	dir := withCredentialHome(t)
 
 	opts := Options{Stale: time.Minute, Timeout: time.Second, TouchInterval: 20 * time.Millisecond}
 	oauth, err := Acquire(OAuthRefreshLockDir(), opts)
@@ -126,7 +137,7 @@ func TestHeldCompromisedFiresOnMemberTakeover(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	held := newHeld([]*Lock{oauth, legacy, storage})
+	held := newHeld([]*Lock{oauth, legacy, storage}, dir)
 
 	select {
 	case <-held.Compromised():
@@ -163,7 +174,7 @@ func TestHeldCompromisedFiresOnMemberTakeover(t *testing.T) {
 // lock happens to fail first in reverse order and silently drop the
 // compromise if it belongs to a different lock.
 func TestHeldReleaseDoesNotMaskCompromise(t *testing.T) {
-	withCredentialHome(t)
+	dir := withCredentialHome(t)
 
 	opts := Options{Stale: time.Minute, Timeout: time.Second, TouchInterval: 20 * time.Millisecond}
 	oauth, err := Acquire(OAuthRefreshLockDir(), opts)
@@ -178,7 +189,7 @@ func TestHeldReleaseDoesNotMaskCompromise(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	held := newHeld([]*Lock{oauth, legacy, storage})
+	held := newHeld([]*Lock{oauth, legacy, storage}, dir)
 
 	// Force a mundane, unrelated failure on the LAST lock in acquisition
 	// order (storage-write), which Release visits FIRST since it releases
@@ -209,5 +220,131 @@ func TestHeldReleaseDoesNotMaskCompromise(t *testing.T) {
 	err = held.Release()
 	if !errors.Is(err, ErrCompromised) {
 		t.Fatalf("Release() = %v, want an error satisfying errors.Is(err, ErrCompromised) even though the unrelated storage-write release also failed", err)
+	}
+}
+
+// F4-11: releaseOnce is the only thing making a second Release call safe
+// rather than a double-close panic on watchStop. Unpin it and this test
+// starts panicking instead of failing cleanly.
+func TestHeldReleaseIsIdempotent(t *testing.T) {
+	dir := withCredentialHome(t)
+
+	opts := Options{Stale: time.Minute, Timeout: time.Second, TouchInterval: 20 * time.Millisecond}
+	oauth, err := Acquire(OAuthRefreshLockDir(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := Acquire(LegacyRefreshLockDir(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	storage, err := Acquire(StorageWriteLockDir(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	held := newHeld([]*Lock{oauth, legacy, storage}, dir)
+
+	// Give the first Release() call something non-nil to return, so a
+	// second call silently reporting nil (F4-1's exact bug) is visible
+	// rather than trivially "nil equals nil".
+	time.Sleep(50 * time.Millisecond)
+	legacyDir := LegacyRefreshLockDir()
+	if err := os.RemoveAll(legacyDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(legacyDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-held.Compromised():
+	case <-time.After(time.Second):
+		t.Fatal("member lock did not detect its own takeover")
+	}
+
+	first := held.Release()
+	second := held.Release()
+	if !errors.Is(first, ErrCompromised) {
+		t.Fatalf("first Release() = %v, want an error satisfying errors.Is(err, ErrCompromised)", first)
+	}
+	if second != first {
+		t.Fatalf("second Release() = %v, want the identical value as the first (%v); a second call must not silently report success", second, first)
+	}
+}
+
+// sync.Once is the only thing that makes a concurrent second Release call
+// safe. Run under -race: without the guard this is a data race on
+// h.releaseErr and a double-close panic on watchStop, not just a logic bug.
+func TestHeldReleaseIsSafeForConcurrentCalls(t *testing.T) {
+	withCredentialHome(t)
+
+	held, err := AcquireCredentials(time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var first, second error
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); first = held.Release() }()
+	go func() { defer wg.Done(); second = held.Release() }()
+	wg.Wait()
+
+	if first != nil {
+		t.Fatalf("first concurrent Release() = %v, want nil", first)
+	}
+	if second != nil {
+		t.Fatalf("second concurrent Release() = %v, want nil", second)
+	}
+}
+
+// If a lock AcquireCredentials already holds is compromised while it is
+// still waiting on a later one, the failure path must not discard that: it
+// must still surface as errors.Is(err, ErrCompromised), the same masking
+// concern the successful-Held Release fixes. A TouchInterval far longer than
+// the test guarantees the compromised lock's own touch goroutine cannot
+// have noticed it either, so any detection is Lock.Release's own final
+// synchronous check running on the rollback path.
+func TestAcquireCredentialsRollbackSurfacesCompromise(t *testing.T) {
+	withCredentialHome(t)
+
+	// Occupy the SECOND lock so AcquireCredentials blocks there after taking
+	// the first, giving the goroutine below time to steal the first.
+	blocker, err := Acquire(LegacyRefreshLockDir(), Options{Stale: time.Minute, Timeout: 2 * time.Second, TouchInterval: 20 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Release()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		time.Sleep(150 * time.Millisecond)
+		oauthDir := OAuthRefreshLockDir()
+		_ = os.RemoveAll(oauthDir)
+		_ = os.Mkdir(oauthDir, 0o700)
+	}()
+
+	_, err = AcquireCredentials(700 * time.Millisecond)
+	<-done
+	if !errors.Is(err, ErrCompromised) {
+		t.Fatalf("AcquireCredentials() = %v, want an error satisfying errors.Is(err, ErrCompromised)", err)
+	}
+}
+
+// Exported methods on a nil *Held must not panic: a caller that ignores the
+// error from a failed AcquireCredentials can plausibly hold one.
+func TestHeldNilReceiverIsSafe(t *testing.T) {
+	var held *Held
+
+	if err := held.Release(); err != nil {
+		t.Fatalf("nil Held Release() = %v, want nil", err)
+	}
+	if got := held.CredentialHome(); got != "" {
+		t.Fatalf("nil Held CredentialHome() = %q, want empty", got)
+	}
+	select {
+	case <-held.Compromised():
+		t.Fatal("nil Held Compromised() closed, want a channel that never fires")
+	case <-time.After(20 * time.Millisecond):
 	}
 }
