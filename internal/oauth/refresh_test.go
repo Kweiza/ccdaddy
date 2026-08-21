@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -53,11 +54,11 @@ func status(code int, body string) func(http.ResponseWriter) {
 // stored credential carries expansion scopes: it sends
 // `eo([...UYe, ...preservableScopesFrom(stored)])`. Dropping user:plugins on a
 // refresh silently removes a capability the account was granted.
-func TestRefreshWithPreservesExpansionScopes(t *testing.T) {
+func TestRefreshPreservesExpansionScopes(t *testing.T) {
 	c, bodies := countingServer(t, ok200(`{"access_token":"AT2","refresh_token":"RT2"}`))
-	_, err := c.RefreshWith(context.Background(), RefreshParams{
+	_, err := c.Refresh(context.Background(), RefreshParams{
 		RefreshToken: "RT",
-		Scopes: []string{
+		StoredScopes: []string{
 			"user:profile", "user:inference", "user:sessions:claude_code",
 			"user:mcp_servers", "user:file_upload", "user:plugins",
 		},
@@ -74,11 +75,11 @@ func TestRefreshWithPreservesExpansionScopes(t *testing.T) {
 
 // Only the three PRESERVABLE_EXPANSION_SCOPES survive the filter. A stored
 // org:create_api_key must NOT come back — Claude Code drops it on refresh.
-func TestRefreshWithFiltersToPreservableScopesOnly(t *testing.T) {
+func TestRefreshFiltersToPreservableScopesOnly(t *testing.T) {
 	c, bodies := countingServer(t, ok200(`{"access_token":"AT2"}`))
-	_, err := c.RefreshWith(context.Background(), RefreshParams{
+	_, err := c.Refresh(context.Background(), RefreshParams{
 		RefreshToken: "RT",
-		Scopes:       []string{"org:create_api_key", "user:inference", "user:some:future:scope"},
+		StoredScopes: []string{"org:create_api_key", "user:inference", "user:some:future:scope"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -91,11 +92,11 @@ func TestRefreshWithFiltersToPreservableScopesOnly(t *testing.T) {
 // Claude Code dedupes with `[...new Set(e)]`, which drops every repeat, not
 // just adjacent ones. A stored list that repeats a scope non-adjacently must
 // still produce each scope once.
-func TestRefreshWithDedupesNonAdjacentRepeats(t *testing.T) {
+func TestRefreshDedupesNonAdjacentRepeats(t *testing.T) {
 	c, bodies := countingServer(t, ok200(`{"access_token":"AT2"}`))
-	_, err := c.RefreshWith(context.Background(), RefreshParams{
+	_, err := c.Refresh(context.Background(), RefreshParams{
 		RefreshToken: "RT",
-		Scopes: []string{
+		StoredScopes: []string{
 			"user:plugins", "user:inference", "user:projects:read", "user:plugins",
 		},
 	})
@@ -144,11 +145,11 @@ func TestPreservableScopesFrom(t *testing.T) {
 
 // A credential with its own clientId is not the default first-party client, so
 // Claude Code sends the stored scopes verbatim rather than its own set.
-func TestRefreshWithSendsStoredScopesVerbatimForACustomClient(t *testing.T) {
+func TestRefreshSendsStoredScopesVerbatimForACustomClient(t *testing.T) {
 	c, bodies := countingServer(t, ok200(`{"access_token":"AT2"}`))
-	_, err := c.RefreshWith(context.Background(), RefreshParams{
+	_, err := c.Refresh(context.Background(), RefreshParams{
 		RefreshToken: "RT",
-		Scopes:       []string{"user:inference", "user:profile"},
+		StoredScopes: []string{"user:inference", "user:profile"},
 		ClientID:     "custom-client-uuid",
 	})
 	if err != nil {
@@ -164,11 +165,11 @@ func TestRefreshWithSendsStoredScopesVerbatimForACustomClient(t *testing.T) {
 
 // Neither an inference scope nor a subscription means it is not the first-party
 // default either, even with no explicit clientId.
-func TestRefreshWithSendsStoredScopesWhenNotFirstParty(t *testing.T) {
+func TestRefreshSendsStoredScopesWhenNotFirstParty(t *testing.T) {
 	c, bodies := countingServer(t, ok200(`{"access_token":"AT2"}`))
-	_, err := c.RefreshWith(context.Background(), RefreshParams{
+	_, err := c.Refresh(context.Background(), RefreshParams{
 		RefreshToken: "RT",
-		Scopes:       []string{"user:profile"},
+		StoredScopes: []string{"user:profile"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -179,11 +180,11 @@ func TestRefreshWithSendsStoredScopesWhenNotFirstParty(t *testing.T) {
 }
 
 // A subscriptionType makes it first-party even without an inference scope.
-func TestRefreshWithTreatsASubscriptionAsFirstParty(t *testing.T) {
+func TestRefreshTreatsASubscriptionAsFirstParty(t *testing.T) {
 	c, bodies := countingServer(t, ok200(`{"access_token":"AT2"}`))
-	_, err := c.RefreshWith(context.Background(), RefreshParams{
+	_, err := c.Refresh(context.Background(), RefreshParams{
 		RefreshToken:     "RT",
-		Scopes:           []string{"user:profile", "user:plugins"},
+		StoredScopes:     []string{"user:profile", "user:plugins"},
 		SubscriptionType: "max",
 	})
 	if err != nil {
@@ -195,10 +196,11 @@ func TestRefreshWithTreatsASubscriptionAsFirstParty(t *testing.T) {
 	}
 }
 
-// The zero-value params must reproduce the plain Refresh wire body exactly.
-func TestRefreshWithNoScopesMatchesPlainRefresh(t *testing.T) {
+// No stored scopes means nothing to preserve, so the wire carries the bare
+// five-scope set and Claude Code's own client.
+func TestRefreshWithNoStoredScopesSendsTheBareRefreshSet(t *testing.T) {
 	c, bodies := countingServer(t, ok200(`{"access_token":"AT2"}`))
-	if _, err := c.RefreshWith(context.Background(), RefreshParams{RefreshToken: "RT"}); err != nil {
+	if _, err := c.Refresh(context.Background(), RefreshParams{RefreshToken: "RT"}); err != nil {
 		t.Fatal(err)
 	}
 	if got := (*bodies)[0]["scope"]; got != RefreshScopeString {
@@ -212,15 +214,15 @@ func TestRefreshWithNoScopesMatchesPlainRefresh(t *testing.T) {
 // Claude Code retries ONCE with the raw stored scopes when the endpoint rejects
 // the widened set with 400 invalid_scope. Without it, an account whose stored
 // scopes the server no longer honours cannot refresh at all.
-func TestRefreshWithRetriesWithStoredScopesOnInvalidScope(t *testing.T) {
+func TestRefreshRetriesWithStoredScopesOnInvalidScope(t *testing.T) {
 	c, bodies := countingServer(t,
 		status(http.StatusBadRequest, `{"error":"invalid_scope"}`),
 		ok200(`{"access_token":"AT2","refresh_token":"RT2"}`),
 	)
 	stored := []string{"user:inference", "user:profile", "user:plugins"}
-	got, err := c.RefreshWith(context.Background(), RefreshParams{RefreshToken: "RT", Scopes: stored})
+	got, err := c.Refresh(context.Background(), RefreshParams{RefreshToken: "RT", StoredScopes: stored})
 	if err != nil {
-		t.Fatalf("RefreshWith() = %v, want the retry to succeed", err)
+		t.Fatalf("Refresh() = %v, want the retry to succeed", err)
 	}
 	if got.AccessToken != "AT2" {
 		t.Fatalf("AccessToken = %q, want AT2", got.AccessToken)
@@ -238,13 +240,13 @@ func TestRefreshWithRetriesWithStoredScopesOnInvalidScope(t *testing.T) {
 
 // The retry is keyed to invalid_scope alone. A dead refresh token must fail on
 // the first attempt: refreshing is not idempotent and must not be re-sent.
-func TestRefreshWithDoesNotRetryOnInvalidGrant(t *testing.T) {
+func TestRefreshDoesNotRetryOnInvalidGrant(t *testing.T) {
 	c, bodies := countingServer(t,
 		status(http.StatusBadRequest, `{"error":"invalid_grant"}`),
 		ok200(`{"access_token":"SHOULD-NOT-HAPPEN"}`),
 	)
-	_, err := c.RefreshWith(context.Background(), RefreshParams{
-		RefreshToken: "DEAD", Scopes: []string{"user:inference", "user:plugins"},
+	_, err := c.Refresh(context.Background(), RefreshParams{
+		RefreshToken: "DEAD", StoredScopes: []string{"user:inference", "user:plugins"},
 	})
 	var te *TokenError
 	if !errors.As(err, &te) || te.Kind != TokenErrorInvalidCode {
@@ -256,12 +258,12 @@ func TestRefreshWithDoesNotRetryOnInvalidGrant(t *testing.T) {
 }
 
 // No stored scopes means nothing to fall back TO, so there is no second attempt.
-func TestRefreshWithDoesNotRetryWithoutStoredScopes(t *testing.T) {
+func TestRefreshDoesNotRetryWithoutStoredScopes(t *testing.T) {
 	c, bodies := countingServer(t,
 		status(http.StatusBadRequest, `{"error":"invalid_scope"}`),
 		ok200(`{"access_token":"SHOULD-NOT-HAPPEN"}`),
 	)
-	_, err := c.RefreshWith(context.Background(), RefreshParams{RefreshToken: "RT"})
+	_, err := c.Refresh(context.Background(), RefreshParams{RefreshToken: "RT"})
 	var te *TokenError
 	if !errors.As(err, &te) || te.Kind != TokenErrorInvalidScope {
 		t.Fatalf("err = %v, want a *TokenError with TokenErrorInvalidScope", err)
@@ -293,7 +295,7 @@ func TestErrorCodeAcceptsBothWireShapes(t *testing.T) {
 				w.WriteHeader(http.StatusBadRequest)
 				io.WriteString(w, c.body)
 			})
-			_, err := cl.Refresh(context.Background(), "RT")
+			_, err := cl.Refresh(context.Background(), RefreshParams{RefreshToken: "RT"})
 			var te *TokenError
 			if !errors.As(err, &te) {
 				t.Fatalf("err = %v, want a *TokenError", err)
@@ -349,7 +351,7 @@ func Test401WithNoErrorBodyIsStillInvalidCode(t *testing.T) {
 			w.WriteHeader(http.StatusUnauthorized)
 			io.WriteString(w, body)
 		})
-		_, err := c.Refresh(context.Background(), "RT")
+		_, err := c.Refresh(context.Background(), RefreshParams{RefreshToken: "RT"})
 		var te *TokenError
 		if !errors.As(err, &te) {
 			t.Fatalf("body %q: err = %v, want a *TokenError", body, err)
@@ -366,10 +368,96 @@ func TestInvalidScopeErrorStillWithholdsTheBody(t *testing.T) {
 		w.WriteHeader(http.StatusBadRequest)
 		io.WriteString(w, `{"error":"invalid_scope","error_description":"LEAK-ME"}`)
 	})
-	_, err := c.Refresh(context.Background(), "RT")
+	_, err := c.Refresh(context.Background(), RefreshParams{RefreshToken: "RT"})
 	if err == nil || strings.Contains(err.Error(), "LEAK-ME") {
 		t.Fatalf("err = %v, must not carry the upstream body", err)
 	}
 }
 
 var _ = httptest.NewServer
+
+// Claude Code's retry gate carries `!IZ(f.scopes)` as its own disjunct:
+// `if(!d||!baa(g)||!Array.isArray(f.scopes)||f.scopes.length===0||!IZ(f.scopes)) throw g`.
+// A subscription makes a credential first-party, but it does NOT make the retry
+// fire — the stored set must itself carry user:inference.
+func TestRefreshDoesNotRetryWithoutAnInferenceScope(t *testing.T) {
+	c, bodies := countingServer(t,
+		status(http.StatusBadRequest, `{"error":"invalid_scope"}`),
+		ok200(`{"access_token":"SHOULD-NOT-HAPPEN"}`),
+	)
+	_, err := c.Refresh(context.Background(), RefreshParams{
+		RefreshToken:     "RT",
+		StoredScopes:     []string{"user:profile", "user:plugins"},
+		SubscriptionType: "max",
+	})
+	if err == nil {
+		t.Fatal("Refresh() = nil, want the invalid_scope error to surface")
+	}
+	if len(*bodies) != 1 {
+		t.Fatalf("made %d requests, want exactly 1", len(*bodies))
+	}
+}
+
+// `baa` pins the status: `if(!ui.isAxiosError(e)||e.response?.status!==400) return !1`.
+// invalid_scope on anything but a 400 is an ordinary status failure, and a
+// refresh is not idempotent, so it must not be re-sent.
+func TestInvalidScopeIsClassifiedOnlyOn400(t *testing.T) {
+	for _, code := range []int{http.StatusForbidden, http.StatusConflict, http.StatusInternalServerError} {
+		c, bodies := countingServer(t,
+			status(code, `{"error":"invalid_scope"}`),
+			ok200(`{"access_token":"SHOULD-NOT-HAPPEN"}`),
+		)
+		_, err := c.Refresh(context.Background(), RefreshParams{
+			RefreshToken: "RT", StoredScopes: []string{"user:inference", "user:plugins"},
+		})
+		var te *TokenError
+		if !errors.As(err, &te) {
+			t.Fatalf("status %d: err = %v, want a *TokenError", code, err)
+		}
+		if te.Kind == TokenErrorInvalidScope {
+			t.Errorf("status %d: Kind = invalid_scope, want a plain status failure", code)
+		}
+		if len(*bodies) != 1 {
+			t.Errorf("status %d: made %d requests, want exactly 1", code, len(*bodies))
+		}
+	}
+}
+
+// The easiest call to type must not reach the network. Posting refresh_token:""
+// earns a 400 invalid_grant, which is the signal §7.2 quarantines on — so the
+// laziest mistake would read as a dead account.
+func TestRefreshRejectsAnEmptyTokenWithoutARequest(t *testing.T) {
+	c, bodies := countingServer(t, ok200(`{"access_token":"SHOULD-NOT-HAPPEN"}`))
+	_, err := c.Refresh(context.Background(), RefreshParams{})
+	if err == nil {
+		t.Fatal("Refresh() = nil, want an error for an empty refresh token")
+	}
+	var te *TokenError
+	if errors.As(err, &te) {
+		t.Errorf("err = %v, want a local error rather than a *TokenError", err)
+	}
+	if len(*bodies) != 0 {
+		t.Fatalf("made %d requests, want 0: nothing should reach the endpoint", len(*bodies))
+	}
+}
+
+// const.go's own policy: nothing a caller can reach may sit on the request path.
+// ScopeString exists for exactly this reason on the authorize side.
+func TestRefreshDoesNotReadTheExportedScopeSlices(t *testing.T) {
+	refreshBefore, preservableBefore := slices.Clone(RefreshScopes), slices.Clone(PreservableExpansionScopes)
+	t.Cleanup(func() { RefreshScopes, PreservableExpansionScopes = refreshBefore, preservableBefore })
+
+	RefreshScopes = []string{"EVIL"}
+	PreservableExpansionScopes = nil
+
+	c, bodies := countingServer(t, ok200(`{"access_token":"AT2"}`))
+	if _, err := c.Refresh(context.Background(), RefreshParams{
+		RefreshToken: "RT", StoredScopes: []string{"user:inference", "user:plugins"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := RefreshScopeString + " user:plugins"
+	if got := (*bodies)[0]["scope"]; got != want {
+		t.Fatalf("scope = %q, want %q; the builder read a mutable exported slice", got, want)
+	}
+}

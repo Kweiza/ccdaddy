@@ -64,26 +64,35 @@ const RefreshScopeString = "user:profile user:inference " +
 // RefreshScopes is RefreshScopeString split out, mirroring Scopes.
 var RefreshScopes = strings.Split(RefreshScopeString, " ")
 
-// PreservableExpansionScopes are the scopes a refresh carries forward from the
-// stored credential instead of dropping. The bundle exports the list as
-// PRESERVABLE_EXPANSION_SCOPES and filters against it in preservableScopesFrom.
+// ScopeInference is the scope that marks a credential as a claude.ai login.
+// Claude Code tests for it by name in several places, so it is named here once.
+const ScopeInference = "user:inference"
+
+// preservableExpansionScopes is the set a refresh carries forward from the
+// stored credential instead of dropping — the bundle's
+// PRESERVABLE_EXPANSION_SCOPES, filtered against in preservableScopesFrom.
 //
-// They are not in RefreshScopeString because a refresh does not ASK for them —
+// They are not in RefreshScopeString because a refresh does not ASK for them:
 // it only keeps them if the credential already has them. An account that never
 // expanded never sees these.
-var PreservableExpansionScopes = []string{
-	"user:projects:read",
-	"user:projects:write",
-	"user:plugins",
-}
+//
+// It is a const string, and unexported, for the same reason ScopeString is: a
+// caller who can reach the value can silently change every subsequent request.
+// Emptying the exported slice used to drop user:plugins from the wire.
+const preservableExpansionScopes = "user:projects:read user:projects:write user:plugins"
+
+// PreservableExpansionScopes lists the same set for callers that need to
+// inspect it. Mutating it cannot affect a request.
+var PreservableExpansionScopes = strings.Split(preservableExpansionScopes, " ")
 
 // PreservableScopesFrom returns the members of stored that survive a refresh,
 // in the order stored lists them. It is Claude Code's preservableScopesFrom:
 // `e.filter(r => PRESERVABLE_EXPANSION_SCOPES.includes(r))`.
 func PreservableScopesFrom(stored []string) []string {
+	preservable := strings.Split(preservableExpansionScopes, " ")
 	var kept []string
 	for _, s := range stored {
-		if slices.Contains(PreservableExpansionScopes, s) {
+		if slices.Contains(preservable, s) {
 			kept = append(kept, s)
 		}
 	}

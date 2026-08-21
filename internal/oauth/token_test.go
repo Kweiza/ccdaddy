@@ -239,7 +239,7 @@ func TestTokenErrorKindZeroValueIsNotAClassification(t *testing.T) {
 func TestRefreshSendsRefreshGrant(t *testing.T) {
 	c, ch := recordingClient(t, http.StatusOK, `{"access_token":"AT2","refresh_token":"RT2","expires_in":60}`)
 
-	res, err := c.Refresh(context.Background(), "OLD-RT")
+	res, err := c.Refresh(context.Background(), RefreshParams{RefreshToken: "OLD-RT"})
 	if err != nil {
 		t.Fatalf("Refresh() = %v, want nil", err)
 	}
@@ -271,7 +271,7 @@ func TestRefreshSendsClaudeCodesNarrowedScopeSet(t *testing.T) {
 	const want = "user:profile user:inference user:sessions:claude_code " +
 		"user:mcp_servers user:file_upload"
 	c, ch := recordingClient(t, http.StatusOK, `{"access_token":"AT2"}`)
-	if _, err := c.Refresh(context.Background(), "OLD-RT"); err != nil {
+	if _, err := c.Refresh(context.Background(), RefreshParams{RefreshToken: "OLD-RT"}); err != nil {
 		t.Fatal(err)
 	}
 	got := <-ch
@@ -292,7 +292,7 @@ func TestRefreshKeepsTheSentTokenWhenTheResponseOmitsOne(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"access_token":"AT2","expires_in":28800,"scope":"user:profile"}`)
 	})
-	got, err := c.Refresh(context.Background(), "STILL-VALID-RT")
+	got, err := c.Refresh(context.Background(), RefreshParams{RefreshToken: "STILL-VALID-RT"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +306,7 @@ func TestRefreshPrefersARotatedTokenOverTheOneItSent(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"access_token":"AT2","refresh_token":"ROTATED-RT","expires_in":28800}`)
 	})
-	got, err := c.Refresh(context.Background(), "OLD-RT")
+	got, err := c.Refresh(context.Background(), RefreshParams{RefreshToken: "OLD-RT"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +320,7 @@ func TestRefresh400InvalidGrantIsInvalidCode(t *testing.T) {
 		w.WriteHeader(http.StatusBadRequest)
 		io.WriteString(w, `{"error":"invalid_grant","error_description":"LEAK"}`)
 	})
-	_, err := c.Refresh(context.Background(), "DEAD")
+	_, err := c.Refresh(context.Background(), RefreshParams{RefreshToken: "DEAD"})
 	var te *TokenError
 	if !errors.As(err, &te) {
 		t.Fatalf("Refresh() = %v, want a *TokenError", err)
@@ -342,7 +342,7 @@ func TestRefresh400OtherErrorStaysAStatusError(t *testing.T) {
 		w.WriteHeader(http.StatusBadRequest)
 		io.WriteString(w, `{"error":"invalid_request"}`)
 	})
-	_, err := c.Refresh(context.Background(), "RT")
+	_, err := c.Refresh(context.Background(), RefreshParams{RefreshToken: "RT"})
 	var te *TokenError
 	if !errors.As(err, &te) {
 		t.Fatalf("Refresh() = %v, want a *TokenError", err)
@@ -493,7 +493,7 @@ func TestClientDoesNotFollowRedirects(t *testing.T) {
 		c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, evil.URL, code)
 		})
-		res, err := c.Refresh(context.Background(), "SUPER-SECRET-REFRESH-TOKEN")
+		res, err := c.Refresh(context.Background(), RefreshParams{RefreshToken: "SUPER-SECRET-REFRESH-TOKEN"})
 		if err == nil {
 			t.Fatalf("redirect %d: Refresh() = %+v, want an error", code, res)
 		}
