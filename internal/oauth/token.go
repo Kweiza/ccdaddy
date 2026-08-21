@@ -45,6 +45,20 @@ type TokenResponse struct {
 	Organization Organization `json:"organization"`
 }
 
+// String redacts both tokens so a TokenResponse printed with %v, %+v, %s or
+// %#v — in an error, a debug line, or a struct that embeds it — cannot leak
+// them. This is the same guard PKCE carries, for the same reason and on a
+// strictly more valuable secret: the credential writer in part 3 is handed this
+// struct, and one %+v in a future log line is all it takes.
+func (r TokenResponse) String() string {
+	return fmt.Sprintf("TokenResponse{AccessToken:REDACTED, RefreshToken:REDACTED, "+
+		"ExpiresIn:%d, Scope:%q, RefreshTokenExpiresIn:%d, Account:%+v, Organization:%+v}",
+		r.ExpiresIn, r.Scope, r.RefreshTokenExpiresIn, r.Account, r.Organization)
+}
+
+// GoString keeps %#v redacted too; without it fmt falls back to the raw struct.
+func (r TokenResponse) GoString() string { return r.String() }
+
 // TokenErrorKind classifies a token-endpoint failure.
 type TokenErrorKind int
 
