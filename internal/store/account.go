@@ -50,6 +50,39 @@ type Account struct {
 	Disabled bool `toml:"disabled,omitempty"`
 	// AddedAt is when ccdad first stored this account.
 	AddedAt time.Time `toml:"added_at"`
+	// Credit is the credit balance kept alongside the classification. §5: an
+	// account that is both classifies as Subscription and keeps its credit
+	// balance as a SECONDARY axis, because credits are not spent while a
+	// subscription window still has room — but the engine still has to know
+	// what is there when that window runs out.
+	Credit CreditBalance `toml:"credit,omitempty"`
+}
+
+// CreditBalance is what a usage reading last said about an account's overage
+// credits.
+//
+// The two figures are pointers because §7.3 branches on used_credits being nil
+// and fails closed on money: a balance that could not be read must never persist
+// as "$0 spent, full cap available". State is a string rather than a typed enum
+// so that reading an accounts.toml stays free of the usage package; callers turn
+// it back into one with usage.ParseExtraUsageState, which reads anything it does
+// not recognize as unknown.
+type CreditBalance struct {
+	// State is usage.ExtraUsageState's name: enabled, disabled, blocked, or
+	// empty for an account no reading has covered yet.
+	State string `toml:"state,omitempty"`
+	// DisabledReason is the organization's own word for a refusal, kept
+	// verbatim because it is what a notification says out loud.
+	DisabledReason string `toml:"disabled_reason,omitempty"`
+	// MonthlyLimit is the account's own spend cap. Nil means the account sets
+	// none — unlimited — which is not the same as a cap of zero.
+	MonthlyLimit *float64 `toml:"monthly_limit,omitempty"`
+	// UsedCredits is what has already been spent. Nil means it could not be
+	// read, and that refuses a switch rather than reading as zero.
+	UsedCredits *float64 `toml:"used_credits,omitempty"`
+	// ObservedAt is when the reading behind these figures was taken. The zero
+	// time means no reading ever has been.
+	ObservedAt time.Time `toml:"observed_at,omitempty"`
 }
 
 // Label is the account's best human name: the alias when it has one, else the
