@@ -169,6 +169,12 @@ func (c *Client) post(ctx context.Context, body map[string]string) (*TokenRespon
 
 	data, err := io.ReadAll(io.LimitReader(res.Body, maxTokenResponse))
 	if err != nil {
+		// Same reasoning as the Do error above, and it has to be repeated: a
+		// cancellation that lands while the body is streaming is still a
+		// cancellation, not an unreachable endpoint.
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, &TokenError{Kind: TokenErrorTransport}
 	}
 	if res.StatusCode != http.StatusOK {
