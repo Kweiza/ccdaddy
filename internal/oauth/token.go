@@ -115,9 +115,11 @@ func NewClient() *Client {
 			return http.ErrUseLastResponse
 		},
 	}
-	// Clone the stdlib transport so proxy environment variables keep working.
-	// If something in the process replaced DefaultTransport, fall back to the
-	// zero transport rather than panicking inside a login.
+	// Clone the stdlib transport so this client gets its own connection pool
+	// while still honouring the proxy environment variables. If something in
+	// the process replaced DefaultTransport with another RoundTripper, leave
+	// Transport nil — the client then uses that replacement — rather than
+	// asserting the type and panicking inside a login.
 	if tr, ok := http.DefaultTransport.(*http.Transport); ok {
 		httpClient.Transport = tr.Clone()
 	}
@@ -165,7 +167,8 @@ func (c *Client) post(ctx context.Context, body map[string]string) (*TokenRespon
 		return nil, fmt.Errorf("building token request: %w", err)
 	}
 	// Content-Type and nothing else: Claude Code's exchange sets only this
-	// header, and ccdad's request should not be distinguishable from its.
+	// header, and ccdad's request should not be distinguishable from one of
+	// Claude Code's.
 	req.Header.Set("Content-Type", "application/json")
 
 	res, err := c.HTTP.Do(req)
