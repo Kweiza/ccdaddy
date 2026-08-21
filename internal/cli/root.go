@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"syscall"
@@ -59,10 +60,16 @@ func ExecuteCmd(root *cobra.Command) error {
 	return err
 }
 
-// Execute runs the command tree and returns the process exit code. It prints
-// the error itself, so main only has to exit.
+// Execute builds the command tree, runs it, and returns the process exit code.
 func Execute() ExitCode {
-	root := NewRootCmd()
+	return ExecuteWith(NewRootCmd(), os.Stderr)
+}
+
+// ExecuteWith runs an already-built root command and reports the exit code,
+// writing any error to errOut. Execute is a thin wrapper over it so the
+// error-to-exit-code mapping — the contract every command shares — is testable
+// without touching os.Stderr or os.Args.
+func ExecuteWith(root *cobra.Command, errOut io.Writer) ExitCode {
 	err := ExecuteCmd(root)
 	if err == nil {
 		return ExitOK
@@ -72,7 +79,7 @@ func Execute() ExitCode {
 	if errors.Is(err, syscall.EPIPE) {
 		return ExitOK
 	}
-	fmt.Fprintf(os.Stderr, "ccdad: %s\n", err)
+	fmt.Fprintf(errOut, "ccdad: %s\n", err)
 	return CodeFor(err)
 }
 
