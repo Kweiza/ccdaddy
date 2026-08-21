@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -143,6 +144,23 @@ const (
 	ExtraUsageBlocked
 )
 
+// ParseExtraUsageState is String's inverse, for reading a persisted state back.
+//
+// An unrecognized name — a file written before the field existed, a typo, or a
+// state a future release adds — reads as unknown for the same reason Classify's
+// default leans the way it does: unknown is the side that does not spend.
+func ParseExtraUsageState(name string) ExtraUsageState {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "enabled":
+		return ExtraUsageEnabled
+	case "disabled":
+		return ExtraUsageDisabled
+	case "blocked":
+		return ExtraUsageBlocked
+	}
+	return ExtraUsageUnknown
+}
+
 func (s ExtraUsageState) String() string {
 	switch s {
 	case ExtraUsageEnabled:
@@ -231,13 +249,26 @@ func (s *Snapshot) RateLimitWindows() []NamedWindow {
 	}
 }
 
-// HasSubscriptionWindows reports whether the account carried the windows a
-// subscription is metered by. The model-specific windows do not count: an
-// account can report seven_day_opus without being on a subscription plan, and
-// identity.Classify uses this answer to decide which side of the credit gate an
-// account falls on.
+// HasSubscriptionWindows reports whether the account carried any of the
+// recurring windows a plan is metered by.
+//
+// It counts the model-specific weekly windows too, not just five_hour and
+// seven_day. They are plan limits — an account only has an Opus or Sonnet weekly
+// cap because a subscription gives it one — and an Opus-limited account whose
+// five_hour and seven_day keys happen not to come back would otherwise classify
+// as having no subscription evidence at all, which is the side of the credit
+// gate that spends money.
+//
+// cinder_cove is excluded for the opposite reason: it is a one-time credit
+// grant, not a plan window, so it is evidence of the credit axis rather than of
+// a subscription.
 func (s *Snapshot) HasSubscriptionWindows() bool {
-	return s.FiveHour.Present || s.SevenDay.Present
+	for _, w := range s.RateLimitWindows() {
+		if w.Present {
+			return true
+		}
+	}
+	return false
 }
 
 // usageFields are the eight keys a usage response is made of, from the 2.1.239

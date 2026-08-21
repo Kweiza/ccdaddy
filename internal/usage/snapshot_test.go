@@ -345,7 +345,14 @@ func TestHasSubscriptionWindows(t *testing.T) {
 		{"five_hour only", `{"five_hour": {"utilization": null, "resets_at": null}}`, true},
 		{"seven_day only", `{"seven_day": {"utilization": null, "resets_at": null}}`, true},
 		{"credit account", `{"extra_usage": {"is_enabled": true, "monthly_limit": null, "used_credits": null, "utilization": null}}`, false},
-		{"opus window alone", `{"seven_day_opus": {"utilization": 1, "resets_at": null}}`, false},
+		// A model-specific weekly cap is a plan limit: an account only has one
+		// because a subscription gives it one. Reading this as "no subscription
+		// evidence" would put an Opus-limited account on the money-spending
+		// side of the credit gate.
+		{"opus window alone", `{"seven_day_opus": {"utilization": 1, "resets_at": null}}`, true},
+		{"sonnet window alone", `{"seven_day_sonnet": {"utilization": null, "resets_at": null}}`, true},
+		// cinder_cove is a one-time credit grant, not a plan window.
+		{"cinder_cove alone", `{"cinder_cove": {"utilization": 1, "resets_at": null}}`, false},
 		{"nulls", `{"five_hour": null, "seven_day": null}`, false},
 	}
 	for _, tc := range cases {
@@ -436,3 +443,29 @@ func TestParseKeepsAnOutOfRangePercentVerbatim(t *testing.T) {
 // ftoa renders a float the way JSON does, so a table of numbers can be spliced
 // into a body without a fixture file per value.
 func ftoa(v float64) string { return strconv.FormatFloat(v, 'g', -1, 64) }
+
+// ParseExtraUsageState is what reads a persisted state back, so every name
+// String() writes has to come back as the state it was written from.
+func TestExtraUsageStateNamesRoundTrip(t *testing.T) {
+	for _, want := range []ExtraUsageState{ExtraUsageUnknown, ExtraUsageEnabled, ExtraUsageDisabled, ExtraUsageBlocked} {
+		if got := ParseExtraUsageState(want.String()); got != want {
+			t.Errorf("ParseExtraUsageState(%q) = %v, want %v", want.String(), got, want)
+		}
+	}
+}
+
+// An unrecognized name reads as unknown, which is the side that does not spend.
+func TestParseExtraUsageStateIsForwardCompatible(t *testing.T) {
+	for _, name := range []string{"", "  ", "ENABLED_SOMEDAY", "credit", "yes"} {
+		if got := ParseExtraUsageState(name); got != ExtraUsageUnknown {
+			t.Errorf("ParseExtraUsageState(%q) = %v, want unknown", name, got)
+		}
+	}
+}
+
+// Case and surrounding space are tolerated, as ParseKind tolerates them.
+func TestParseExtraUsageStateTolerAtesCaseAndSpace(t *testing.T) {
+	if got := ParseExtraUsageState("  BLOCKED "); got != ExtraUsageBlocked {
+		t.Errorf("ParseExtraUsageState = %v, want blocked", got)
+	}
+}
