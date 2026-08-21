@@ -376,6 +376,19 @@ func TestExchangeCodeRejectsNonJSONResponse(t *testing.T) {
 	}
 }
 
+// encoding/json fills the fields it decoded BEFORE the one that failed, so a
+// decode error can coexist with a populated access token. That makes the JSON
+// guard load-bearing rather than redundant with the empty-token guard: without
+// it this response becomes a stored credential whose expiry is silently zero.
+func TestExchangeCodeRejectsPartiallyDecodableResponse(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"access_token":"AT","expires_in":"not-a-number"}`)
+	})
+	if _, err := c.ExchangeCode(context.Background(), "c", "v", "r", "s"); err == nil {
+		t.Fatal("ExchangeCode() = nil, want an error: a body that fails to decode must not become a credential")
+	}
+}
+
 func TestNewClientDefaults(t *testing.T) {
 	c := NewClient()
 	if c.TokenEndpoint != TokenURL {
