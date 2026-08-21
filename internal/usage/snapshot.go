@@ -425,3 +425,126 @@ func Parse(body []byte) (*Snapshot, error) {
 		Limits:            toLimits(w.Limits),
 	}, nil
 }
+
+// ---- JSON codec -------------------------------------------------------------
+//
+// A Snapshot encodes back into the endpoint's own eight-key shape. That is what
+// makes the on-disk cache and a live response the same document, read by one
+// parser — and it is what Claude Code does too, persisting the raw utilization
+// object rather than a private projection of it.
+//
+// Absent windows encode as an explicit null rather than being omitted. The two
+// are the same thing to this package (Claude Code's own check cannot tell them
+// apart either), and always writing the key keeps the eight-key probe happy on
+// the way back in.
+
+func fromTime(t time.Time, ok bool) *string {
+	if !ok {
+		return nil
+	}
+	s := t.UTC().Format(time.RFC3339Nano)
+	return &s
+}
+
+func fromFloat(v float64, ok bool) *float64 {
+	if !ok {
+		return nil
+	}
+	return &v
+}
+
+func (w Window) toWire() *windowWire {
+	if !w.Present {
+		return nil
+	}
+	return &windowWire{
+		Utilization: fromFloat(w.pct, w.hasPct),
+		ResetsAt:    fromTime(w.reset, w.hasTime),
+	}
+}
+
+func (e ExtraUsage) toWire() *extraUsageWire {
+	if !e.Present {
+		return nil
+	}
+	out := &extraUsageWire{
+		MonthlyLimit: fromFloat(e.limit, e.hasLimit),
+		UsedCredits:  fromFloat(e.used, e.hasUsed),
+		Utilization:  fromFloat(e.pct, e.hasPct),
+	}
+	if e.Currency != "" {
+		c := e.Currency
+		out.Currency = &c
+	}
+	if e.DisabledReason != "" {
+		r := e.DisabledReason
+		out.DisabledReason = &r
+	}
+	// ExtraUsageUnknown leaves is_enabled absent, which is exactly the drift
+	// that produced it — so the state survives the round trip rather than being
+	// rounded to the nearest boolean.
+	switch e.State {
+	case ExtraUsageEnabled:
+		v := true
+		out.IsEnabled = &v
+	case ExtraUsageDisabled, ExtraUsageBlocked:
+		v := false
+		out.IsEnabled = &v
+	}
+	return out
+}
+
+func (l Limit) toWire() limitWire {
+	out := limitWire{
+		Kind:     l.Kind,
+		Group:    l.Group,
+		Percent:  l.Percent,
+		ResetsAt: fromTime(l.reset, l.hasTime),
+	}
+	if l.ModelDisplayName != "" || l.SurfaceDisplayName != "" {
+		out.Scope = &struct {
+			Model   *displayNameWire `json:"model"`
+			Surface *displayNameWire `json:"surface"`
+		}{}
+		if l.ModelDisplayName != "" {
+			out.Scope.Model = &displayNameWire{DisplayName: l.ModelDisplayName}
+		}
+		if l.SurfaceDisplayName != "" {
+			out.Scope.Surface = &displayNameWire{DisplayName: l.SurfaceDisplayName}
+		}
+	}
+	return out
+}
+
+// MarshalJSON writes the endpoint's own shape.
+func (s Snapshot) MarshalJSON() ([]byte, error) {
+	w := wire{
+		FiveHour:          s.FiveHour.toWire(),
+		SevenDay:          s.SevenDay.toWire(),
+		SevenDayOAuthApps: s.SevenDayOAuthApps.toWire(),
+		SevenDayOpus:      s.SevenDayOpus.toWire(),
+		SevenDaySonnet:    s.SevenDaySonnet.toWire(),
+		CinderCove:        s.CinderCove.toWire(),
+		ExtraUsage:        s.ExtraUsage.toWire(),
+	}
+	if len(s.Limits) > 0 {
+		w.Limits = make([]limitWire, 0, len(s.Limits))
+		for _, l := range s.Limits {
+			w.Limits = append(w.Limits, l.toWire())
+		}
+	}
+	return json.Marshal(w)
+}
+
+// UnmarshalJSON reads a snapshot with the same parser a live response goes
+// through, tri-state rules and eight-key probe included: a cache file that has
+// been hand-edited into nonsense is refused for the same reasons a nonsense
+// response is.
+func (s *Snapshot) UnmarshalJSON(data []byte) error {
+	parsed, err := Parse(data)
+	if err != nil {
+		return err
+	}
+	*s = *parsed
+	return nil
+}
