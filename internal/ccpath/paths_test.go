@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 // decomposedCafe is "café" in NFD form: LATIN SMALL LETTER E (U+0065) followed
@@ -146,5 +148,21 @@ func TestCredentialHomeNormalizesToNFC(t *testing.T) {
 	want := "/creds/" + composedCafe
 	if got := CredentialHome(); got != want {
 		t.Fatalf("CredentialHome() = %q, want %q (NFC-normalized)", got, want)
+	}
+}
+
+// The two constants above are the only thing that makes the NFC tests
+// meaningful, and they are exactly what an editor or a VCS filter can silently
+// renormalize on a future save. If that happens they become byte-identical, the
+// NFC tests start comparing a string to itself, and they keep passing with no
+// signal. This asserts the premise instead of assuming it.
+func TestNFCFixturesDifferInBytes(t *testing.T) {
+	if decomposedCafe == composedCafe {
+		t.Fatalf("NFC test fixtures are byte-identical (%q); something renormalized them, "+
+			"and TestConfigHomeNormalizesToNFC / TestCredentialHomeNormalizesToNFC now prove nothing",
+			decomposedCafe)
+	}
+	if norm.NFC.String(decomposedCafe) != composedCafe {
+		t.Fatalf("NFC(decomposedCafe) = %q, want composedCafe %q", norm.NFC.String(decomposedCafe), composedCafe)
 	}
 }
