@@ -94,7 +94,7 @@ func TestExtractTakesOnlyAccountScoped(t *testing.T) {
 		"gatewayTrust":       `{"gw.example":"fp"}`,
 	})
 
-	got := Extract(live, "")
+	got := Extract(live)
 	if want := []string{"claudeAiOauth", "trustedDeviceToken"}; !reflect.DeepEqual(keysOf(got), want) {
 		t.Fatalf("Extract keys = %v, want %v", keysOf(got), want)
 	}
@@ -103,11 +103,28 @@ func TestExtractTakesOnlyAccountScoped(t *testing.T) {
 func TestExtractOutputIsIndependentOfInput(t *testing.T) {
 	live := blob(t, map[string]string{"claudeAiOauth": `{"accessToken":"old"}`})
 
-	got := Extract(live, "")
+	got := Extract(live)
 	got["claudeAiOauth"][0] = 'X'
 
 	if string(live["claudeAiOauth"]) != `{"accessToken":"old"}` {
 		t.Fatalf("mutating Extract's output corrupted live: %s", live["claudeAiOauth"])
+	}
+}
+
+// The central correction of this round: coworkRemoteDevice must NEVER enter a
+// snapshot. A snapshot is not just an in-process value — `export` writes it
+// to a file and `import` can restore it on a DIFFERENT machine, where this
+// machine's device private key and hostname-scoped registration would be
+// invalid and would collide with that machine's own.
+func TestExtractNeverCarriesCoworkRemoteDevice(t *testing.T) {
+	live := blob(t, map[string]string{
+		"claudeAiOauth":      `{"accessToken":"a"}`,
+		"coworkRemoteDevice": `{"org-a":{"privateKeyPkcs8B64":"KEY-A"}}`,
+	})
+
+	got := Extract(live)
+	if _, ok := got["coworkRemoteDevice"]; ok {
+		t.Fatal("coworkRemoteDevice must never enter a snapshot; it can be exported to another machine")
 	}
 }
 
@@ -201,26 +218,25 @@ func TestUnknownKeysReportsOnlyUnrecognized(t *testing.T) {
 }
 
 // coworkRemoteDevice is keyed by organization uuid and holds a device private
-// key minted on THIS machine. Replacing the whole object on a switch destroys
-// the other organization's key and burns its device-registration cap, so the
-// two objects are unioned per sub-key with the live copy winning.
-//
-// This drives the actual pipeline (Extract then Merge), not a hand-built
-// incoming blob: incoming's coworkRemoteDevice entry can only ever be what
-// Extract put there, which is exactly one org — the account's own.
+// key minted on THIS machine. Merge unions rather than replaces (spec 4.2.1)
+// as defence-in-depth, not because the shipped pipeline needs it: Extract
+// never puts this key in a snapshot (see its doc comment), so incoming here
+// is hand-built, not something Capture can produce. It guards a source of
+// incoming that does not occur in the pipeline today — a hand-built call, or
+// an export written by some future version of ccdad — so that even then, a
+// wholesale replace cannot destroy the live machine's other-organization
+// entries. This is a unit-level guard on unionObjects, not an end-to-end one.
 func TestMergeUnionsCoworkRemoteDevicePerOrg(t *testing.T) {
-	liveOnA := blob(t, map[string]string{
-		"claudeAiOauth":      `{"accessToken":"a"}`,
+	live := blob(t, map[string]string{
+		"claudeAiOauth":      `{"accessToken":"old"}`,
 		"coworkRemoteDevice": `{"org-a":{"privateKeyPkcs8B64":"KEY-A"}}`,
 	})
-	snapA := Extract(liveOnA, "org-a")
-
-	liveOnB := blob(t, map[string]string{
-		"claudeAiOauth":      `{"accessToken":"b"}`,
+	incoming := blob(t, map[string]string{
+		"claudeAiOauth":      `{"accessToken":"new"}`,
 		"coworkRemoteDevice": `{"org-b":{"privateKeyPkcs8B64":"KEY-B"}}`,
 	})
 
-	got := Merge(liveOnB, snapA)
+	got := Merge(live, incoming)
 
 	var merged map[string]map[string]string
 	if err := json.Unmarshal(got["coworkRemoteDevice"], &merged); err != nil {
