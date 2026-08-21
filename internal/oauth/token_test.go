@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // capture is handed from the httptest handler goroutine to the test goroutine
@@ -341,6 +342,49 @@ func TestExchangeCodeRespectsContextCancellation(t *testing.T) {
 	// exit 1 a transport failure gets.
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("ExchangeCode() = %v, want an error matching context.Canceled", err)
+	}
+}
+
+// Cancelling while the body is still streaming must also read as cancellation.
+// The guard on the Do error does not cover this: by then the request has an
+// answer and the read is what gets interrupted, so a missing guard here reports
+// Ctrl-C as an unreachable endpoint and maps it to exit 1 instead of 130.
+//
+// The wait before cancelling is there to land in the body read rather than in
+// Do. If it landed in Do instead the test would still pass — it just would not
+// exercise this path — so the wait can never make it fail spuriously.
+func TestExchangeCodeRespectsCancellationWhileReadingTheBody(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	flushed := make(chan struct{})
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// A length the handler never finishes writing, so the client blocks in
+		// the body read until the context is cancelled.
+		w.Header().Set("Content-Length", "4096")
+		w.WriteHeader(http.StatusOK)
+		io.WriteString(w, `{"access_token":"AT",`)
+		w.(http.Flusher).Flush()
+		close(flushed)
+		<-r.Context().Done()
+	})
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := c.ExchangeCode(ctx, "c", "v", "r", "s")
+		errCh <- err
+	}()
+
+	<-flushed
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("ExchangeCode() = %v, want an error matching context.Canceled", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("ExchangeCode did not return after the context was cancelled")
 	}
 }
 
