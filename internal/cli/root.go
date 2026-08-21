@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
 	"syscall"
 
@@ -24,15 +26,11 @@ func NewRootCmd() *cobra.Command {
 		Version:       buildinfo.String(),
 		SilenceUsage:  true,
 		SilenceErrors: true,
-		RunE: func(_ *cobra.Command, args []string) error {
-			// The len(args) > 0 branch is a Task-1-only stopgap. Once subcommands
-			// are registered (Task 14 adds `add`), Cobra's Find() intercepts unknown
-			// subcommands before this RunE is ever reached, so this branch goes dead.
-			// The len(args) == 0 branch is where a later task adds the TTY-aware
+		RunE: func(_ *cobra.Command, _ []string) error {
+			// Subcommands are registered below, so Cobra's Find() intercepts an
+			// unknown subcommand before this RunE is ever reached. What is left
+			// is the bare `ccdad` slot, where a later task adds the TTY-aware
 			// dashboard-or-usage-error behaviour.
-			if len(args) > 0 {
-				return UsageError("unknown command %q", args[0])
-			}
 			return nil
 		},
 	}
@@ -42,7 +40,30 @@ func NewRootCmd() *cobra.Command {
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
 		return UsageError("%s", err.Error())
 	})
+
+	root.AddCommand(newAddCmd())
+	root.AddCommand(newAddTokenCmd())
+	root.AddCommand(newWhichCmd())
+	root.AddCommand(newListCmd())
+	root.AddCommand(newSwitchCmd())
+	root.AddCommand(newRemoveCmd())
 	return root
+}
+
+// usageArgs wraps a positional-argument validator so a violation exits 2.
+//
+// Cobra reports an arg-count mistake as a plain error, which CodeFor maps to
+// ExitFailure — indistinguishable from a network failure. The exit contract
+// reserves 2 for "a bad flag, a bad flag combination, an unknown account
+// reference, a missing argument", and this is the only place that class of
+// error is produced.
+func usageArgs(validate cobra.PositionalArgs) cobra.PositionalArgs {
+	return func(cmd *cobra.Command, args []string) error {
+		if err := validate(cmd, args); err != nil {
+			return UsageError("%s", err.Error())
+		}
+		return nil
+	}
 }
 
 // ExecuteCmd runs an already-built root command and maps Cobra's raw errors
@@ -61,8 +82,20 @@ func ExecuteCmd(root *cobra.Command) error {
 }
 
 // Execute builds the command tree, runs it, and returns the process exit code.
+//
+// The root carries a context cancelled by SIGINT. `add` is the first command
+// that blocks for minutes — on a browser callback or a pasted code — and
+// without this its cancellation arm is unreachable: Ctrl-C would kill the
+// process by default disposition, abandoning the loopback listener and any lock
+// directory rather than unwinding them. Spec §6.4 asks for a clean exit at 130,
+// and 130 is only correct if something actually cleaned up.
 func Execute() ExitCode {
-	return ExecuteWith(NewRootCmd(), os.Stderr)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	root := NewRootCmd()
+	root.SetContext(ctx)
+	return ExecuteWith(root, os.Stderr)
 }
 
 // ExecuteWith runs an already-built root command and reports the exit code,
@@ -78,6 +111,11 @@ func ExecuteWith(root *cobra.Command, errOut io.Writer) ExitCode {
 	// must exit 0.
 	if errors.Is(err, syscall.EPIPE) {
 		return ExitOK
+	}
+	// A silent error carries an exit code without a message: the command has
+	// already said what happened in its own words on stderr.
+	if errors.Is(err, errSilent) {
+		return CodeFor(err)
 	}
 	fmt.Fprintf(errOut, "ccdad: %s\n", err)
 	return CodeFor(err)

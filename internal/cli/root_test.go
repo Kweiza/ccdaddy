@@ -45,13 +45,9 @@ func TestRootUnknownCommandIsUsageError(t *testing.T) {
 
 func TestRootUnknownSubcommandThroughFind(t *testing.T) {
 	root := NewRootCmd()
-	// Register a throwaway subcommand so Cobra's Find() actually evaluates unknown
-	// command detection. Without a subcommand, Find() returns nil and the test would
-	// silently exercise the Task-1 stopgap RunE instead of the normalization path.
-	root.AddCommand(&cobra.Command{
-		Use:  "add",
-		RunE: func(*cobra.Command, []string) error { return nil },
-	})
+	// NewRootCmd now registers real subcommands, so Cobra's Find() evaluates
+	// unknown-command detection natively and this test exercises the
+	// normalization path rather than the root's own RunE.
 	var out bytes.Buffer
 	root.SetOut(&out)
 	root.SetErr(&out)
@@ -68,10 +64,6 @@ func TestRootUnknownSubcommandThroughFind(t *testing.T) {
 
 func TestExecuteWithUnknownSubcommandThroughFind(t *testing.T) {
 	root := NewRootCmd()
-	root.AddCommand(&cobra.Command{
-		Use:  "add",
-		RunE: func(*cobra.Command, []string) error { return nil },
-	})
 	root.SetArgs([]string{"bogus-subcommand"})
 
 	var errBuf bytes.Buffer
@@ -97,10 +89,6 @@ func TestExecuteWithSuccessIsOKAndPrintsNothing(t *testing.T) {
 
 func TestExecuteWithErrorWrittenToErrOut(t *testing.T) {
 	root := NewRootCmd()
-	root.AddCommand(&cobra.Command{
-		Use:  "add",
-		RunE: func(*cobra.Command, []string) error { return nil },
-	})
 	root.SetArgs([]string{"unknown-cmd"})
 
 	var errBuf bytes.Buffer
