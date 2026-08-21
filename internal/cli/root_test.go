@@ -30,9 +30,9 @@ func TestRootUnknownCommandIsUsageError(t *testing.T) {
 	cmd.SetErr(&out)
 	cmd.SetArgs([]string{"definitely-not-a-command"})
 
-	err := cmd.Execute()
+	err := ExecuteCmd(cmd)
 	if err == nil {
-		t.Fatal("Execute() = nil, want an error")
+		t.Fatal("ExecuteCmd() = nil, want an error")
 	}
 	if got := CodeFor(err); got != ExitUsage {
 		t.Fatalf("CodeFor(unknown command) = %d, want %d", got, ExitUsage)

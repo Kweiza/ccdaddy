@@ -3,9 +3,9 @@ package cli
 import (
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"strings"
+	"syscall"
 
 	"github.com/spf13/cobra"
 
@@ -24,6 +24,11 @@ func NewRootCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(_ *cobra.Command, args []string) error {
+			// The len(args) > 0 branch is a Task-1-only stopgap. Once subcommands
+			// are registered (Task 14 adds `add`), Cobra's Find() intercepts unknown
+			// subcommands before this RunE is ever reached, so this branch goes dead.
+			// The len(args) == 0 branch is where a later task adds the TTY-aware
+			// dashboard-or-usage-error behaviour.
 			if len(args) > 0 {
 				return UsageError("unknown command %q", args[0])
 			}
@@ -39,20 +44,32 @@ func NewRootCmd() *cobra.Command {
 	return root
 }
 
+// ExecuteCmd runs an already-built root command and maps Cobra's raw errors
+// into ccdad's exit taxonomy. Execute and the tests both go through it, so the
+// mapping cannot depend on which caller ran the command — Cobra reports an
+// unknown subcommand from Find(), before the root's own RunE is ever reached.
+func ExecuteCmd(root *cobra.Command) error {
+	err := root.Execute()
+	if err == nil {
+		return nil
+	}
+	if isUnknownCommand(err) {
+		return UsageError("%s", err.Error())
+	}
+	return err
+}
+
 // Execute runs the command tree and returns the process exit code. It prints
 // the error itself, so main only has to exit.
 func Execute() ExitCode {
 	root := NewRootCmd()
-	err := root.Execute()
+	err := ExecuteCmd(root)
 	if err == nil {
 		return ExitOK
 	}
-	if isUnknownCommand(err) {
-		err = UsageError("%s", err.Error())
-	}
 	// A closed stdout reader is not a failure: `ccdad list --json | head -1`
 	// must exit 0.
-	if errors.Is(err, io.ErrClosedPipe) || strings.Contains(err.Error(), "broken pipe") {
+	if errors.Is(err, syscall.EPIPE) {
 		return ExitOK
 	}
 	fmt.Fprintf(os.Stderr, "ccdad: %s\n", err)
@@ -61,7 +78,5 @@ func Execute() ExitCode {
 
 func isUnknownCommand(err error) bool {
 	msg := err.Error()
-	return strings.HasPrefix(msg, "unknown command") ||
-		strings.HasPrefix(msg, "unknown flag") ||
-		strings.HasPrefix(msg, "unknown shorthand flag")
+	return strings.HasPrefix(msg, "unknown command")
 }
