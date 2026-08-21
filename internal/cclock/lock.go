@@ -42,6 +42,68 @@ var ErrCompromised = errors.New("lock was taken over by another process while he
 // live to a Claude Code waiter.
 const DefaultTouchInterval = 3 * time.Second
 
+// statRetries and statRetryDelay bound the retry on a stat of a directory we
+// have just successfully created or touched. A failure there is a filesystem
+// blip rather than a protocol event, and treating the first one as fatal
+// turns a transient error into a permanent orphaned lock.
+const (
+	statRetries    = 3
+	statRetryDelay = 5 * time.Millisecond
+)
+
+// statLockMu guards statLockImpl. touch runs for as long as a Lock is held,
+// so a test that wants to force statLock's failure path is necessarily
+// swapping the implementation out from under a concurrently running
+// goroutine; without this lock that swap and touch's read of the same
+// package-level function value race under the Go memory model regardless of
+// how much time separates them; -race deterministically catches it within a
+// handful of iterations. Guarding both sides gives the override a real
+// happens-before edge.
+var (
+	statLockMu   sync.RWMutex
+	statLockImpl = defaultStatLock
+)
+
+// defaultStatLock is the implementation statLockImpl starts as, and the one
+// production code runs under normal operation.
+func defaultStatLock(dir string) (os.FileInfo, error) {
+	var err error
+	for i := 0; i < statRetries; i++ {
+		var info os.FileInfo
+		if info, err = os.Stat(dir); err == nil {
+			return info, nil
+		}
+		time.Sleep(statRetryDelay)
+	}
+	return nil, err
+}
+
+// statLock reads a lock directory's metadata, retrying briefly on failure.
+// Production code must always go through this function, never through
+// statLockImpl directly.
+func statLock(dir string) (os.FileInfo, error) {
+	statLockMu.RLock()
+	impl := statLockImpl
+	statLockMu.RUnlock()
+	return impl(dir)
+}
+
+// setStatLockForTest replaces the implementation statLock calls and returns
+// a function that restores the previous one. It exists only so tests can
+// force statLock's failure path while a Lock's touch goroutine may be
+// concurrently calling it; production code must never call it.
+func setStatLockForTest(fn func(string) (os.FileInfo, error)) (restore func()) {
+	statLockMu.Lock()
+	prev := statLockImpl
+	statLockImpl = fn
+	statLockMu.Unlock()
+	return func() {
+		statLockMu.Lock()
+		statLockImpl = prev
+		statLockMu.Unlock()
+	}
+}
+
 // Options configures one acquisition.
 type Options struct {
 	// Stale is how old a lock's mtime must be before it may be taken over.
@@ -118,8 +180,18 @@ func Acquire(lockDir string, opts Options) (*Lock, error) {
 		time.Sleep(250*time.Millisecond + time.Duration(rand.N(250))*time.Millisecond)
 	}
 
-	info, err := os.Stat(lockDir)
+	info, err := statLock(lockDir)
 	if err != nil {
+		// The directory was created microseconds ago by the Mkdir above, so
+		// no waiter can have stolen it yet -- stealing requires an mtime
+		// older than Stale, and nothing has had time to elapse. Removing it
+		// here is therefore safe in a way it is NOT safe in Release, where a
+		// long hold may genuinely have outlived Stale and the directory may
+		// already belong to a new owner. Leaving it in place on this path
+		// would instead orphan it: no *Lock is returned, so nothing could
+		// ever call Release, and it would block every other acquirer until
+		// Stale elapses.
+		_ = os.Remove(lockDir)
 		return nil, fmt.Errorf("inspecting %s after acquire: %w", filepath.Base(lockDir), err)
 	}
 
@@ -152,7 +224,7 @@ func (l *Lock) touch(every time.Duration) {
 		case <-l.stop:
 			return
 		case <-t.C:
-			info, err := os.Stat(l.dir)
+			info, err := statLock(l.dir)
 			if err != nil {
 				l.markLost() // removed outright; we no longer hold anything
 				return
@@ -169,14 +241,24 @@ func (l *Lock) touch(every time.Duration) {
 				l.markLost()
 				return
 			}
-			// Re-stat rather than trusting `now`: a filesystem may store a
-			// coarser mtime than we asked for, and the next comparison has to
-			// match what actually landed on disk, not what we requested.
-			if info, err := os.Stat(l.dir); err == nil {
-				l.mu.Lock()
-				l.mtime = info.ModTime()
-				l.mu.Unlock()
+			// Read back what actually landed on disk rather than trusting
+			// `now`: a coarse-granularity filesystem may store a rounded
+			// value. If that read-back cannot be verified even after
+			// retrying, we no longer know our own mtime and must not keep
+			// asserting ownership on unverified state: silently keeping the
+			// stale in-memory value would make the *next* tick's comparison
+			// fail against the (genuinely changed, just unread) on-disk
+			// value and manufacture a false compromise for a lock nobody
+			// actually stole. Fail closed instead -- a lock whose ownership
+			// cannot be verified must not keep being asserted.
+			info, err = statLock(l.dir)
+			if err != nil {
+				l.markLost()
+				return
 			}
+			l.mu.Lock()
+			l.mtime = info.ModTime()
+			l.mu.Unlock()
 		}
 	}
 }
