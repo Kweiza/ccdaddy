@@ -45,6 +45,34 @@ func TestAuthorizeURLClaudeAISurface(t *testing.T) {
 	}
 }
 
+// The complete key set, not just the values. Claude Code's builder appends
+// exactly these eight unconditionally; its orgUUID, login_hint and login_method
+// each sit behind an `if`, so they are not part of what ccdad sends. Nothing
+// else in this file would notice a ninth key: the per-key checks only look up
+// names they already know, and the manual-vs-loopback comparison passes when a
+// stray parameter is on BOTH URLs.
+func TestAuthorizeURLSendsExactlyClaudeCodesParameterSet(t *testing.T) {
+	want := []string{
+		"client_id",
+		"code",
+		"code_challenge",
+		"code_challenge_method",
+		"redirect_uri",
+		"response_type",
+		"scope",
+		"state",
+	}
+	for _, surface := range []Surface{SurfaceClaudeAI, SurfaceConsole} {
+		_, q := parseAuthorize(t, AuthorizeURL(AuthorizeParams{
+			Surface: surface, Challenge: "c", State: "s", RedirectURI: "r",
+		}))
+		got := slices.Sorted(maps.Keys(q))
+		if !slices.Equal(got, want) {
+			t.Errorf("surface %v: parameters = %q, want exactly %q", surface, got, want)
+		}
+	}
+}
+
 // Claude Code appends code=true to every authorize request, loopback and manual
 // alike; it selects the CLI code flow.
 func TestAuthorizeURLAlwaysSetsCodeTrue(t *testing.T) {

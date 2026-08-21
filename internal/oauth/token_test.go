@@ -83,10 +83,10 @@ func TestExchangeCodeSendsJSONBody(t *testing.T) {
 	}
 }
 
-// Claude Code's exchange sets only Content-Type (spec §3.2, and function `maa`
-// in the 2.1.238 bundle). The Accept and User-Agent headers other reverse
-// engineerings send are their own invention; adding one makes ccdad's request
-// distinguishable from Claude Code's.
+// Claude Code's exchange sets only Content-Type in its own code (spec §3.2, and
+// function `maa` in the 2.1.238 bundle). ccdad matches that and does not forge
+// the headers axios adds beneath it — see NewClient and the post() comment for
+// why. What this pins is only that nobody re-adds an Accept header by hand.
 func TestExchangeCodeSetsOnlyContentType(t *testing.T) {
 	c, ch := recordingClient(t, http.StatusOK, `{"access_token":"AT"}`)
 	if _, err := c.ExchangeCode(context.Background(), "c", "v", "r", "s"); err != nil {
@@ -277,6 +277,40 @@ func TestRefreshSendsClaudeCodesNarrowedScopeSet(t *testing.T) {
 
 	if got.body["scope"] != want {
 		t.Fatalf("refresh scope = %q, want %q", got.body["scope"], want)
+	}
+}
+
+// RFC 6749 §6 makes issuing a NEW refresh token optional, and Claude Code
+// defends against its absence: `let {access_token:u, refresh_token:d=e, ...}`
+// in the 2.1.238 bundle defaults the field to the token it just sent. Returning
+// "" instead would clobber a still-valid token in the credential file, and the
+// next refresh would post an empty one, earn a 400 invalid_grant, and get the
+// account quarantined under §7.2 — a healthy account destroyed by a response
+// Claude Code survives untouched.
+func TestRefreshKeepsTheSentTokenWhenTheResponseOmitsOne(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"access_token":"AT2","expires_in":28800,"scope":"user:profile"}`)
+	})
+	got, err := c.Refresh(context.Background(), "STILL-VALID-RT")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RefreshToken != "STILL-VALID-RT" {
+		t.Fatalf("RefreshToken = %q, want the token we sent back unchanged", got.RefreshToken)
+	}
+}
+
+// The fallback must not shadow a token the endpoint did rotate to.
+func TestRefreshPrefersARotatedTokenOverTheOneItSent(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"access_token":"AT2","refresh_token":"ROTATED-RT","expires_in":28800}`)
+	})
+	got, err := c.Refresh(context.Background(), "OLD-RT")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RefreshToken != "ROTATED-RT" {
+		t.Fatalf("RefreshToken = %q, want ROTATED-RT", got.RefreshToken)
 	}
 }
 
