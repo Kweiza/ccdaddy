@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -506,6 +507,30 @@ func TestClientDoesNotFollowRedirects(t *testing.T) {
 	}
 	if n := reached.Load(); n != 0 {
 		t.Fatalf("the redirect target was contacted %d times; it must never be reached", n)
+	}
+}
+
+// Same guard as PKCE, on a more valuable secret. The refuting reviewer was
+// right that no caller exists today — but no caller exists for anything in this
+// package yet, and part 3 hands this exact struct to the credential writer.
+func TestTokenResponseDoesNotLeakTokensWhenPrinted(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"access_token":"sk-ant-oat01-SECRET","refresh_token":"sk-ant-ort01-SECRET",
+			"expires_in":3600,"scope":"user:profile"}`)
+	})
+	got, err := c.ExchangeCode(context.Background(), "c", "v", "r", "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, format := range []string{"%v", "%+v", "%s", "%#v", "%q"} {
+		for _, arg := range []any{*got, got, struct{ T TokenResponse }{*got}} {
+			s := fmt.Sprintf(format, arg)
+			for _, secret := range []string{got.AccessToken, got.RefreshToken} {
+				if strings.Contains(s, secret) {
+					t.Errorf("fmt.Sprintf(%q, %T) leaked a token: %s", format, arg, s)
+				}
+			}
+		}
 	}
 }
 
