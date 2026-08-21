@@ -95,3 +95,33 @@ func Classify(p *Profile, u UsageShape, isAPIKey bool) Kind {
 	}
 	return KindSubscription
 }
+
+// ReclassifyOnUsage revises an account's stored Kind in the light of a
+// SUCCESSFUL usage reading, and reports whether the reading was evidence at all.
+//
+// It is not simply Classify re-run. Classify's no-evidence default —
+// KindSubscription — is a FIRST-classification default: guessing subscription
+// for an account nothing is known about only costs a wasted rotation, while
+// guessing credit would put it on the money-spending side of the gate. Applied
+// to an account that has ALREADY been classified, that same default is
+// destructive: a credit account that has run out of credits reports overage off
+// and no plan windows, and re-running Classify on it would file it as a
+// subscription at exactly the moment it went broke.
+//
+// So an absence of evidence leaves the stored Kind where it is, and only the two
+// positive signals — plan windows, or overage actually switched on — move it.
+// A failed poll must not reach here at all; that is the caller's job, and it is
+// a different rule from this one.
+func ReclassifyOnUsage(current Kind, u UsageShape) (Kind, bool) {
+	// An api-key account has no quota concept, so a usage reading says nothing
+	// about how it is metered.
+	if current == KindAPIKey {
+		return current, false
+	}
+	if !u.HasSubscriptionWindows && !u.ExtraUsageEnabled {
+		return current, false
+	}
+	// Defined in terms of Classify so the two cannot drift into disagreeing
+	// about the same evidence.
+	return Classify(nil, u, false), true
+}
