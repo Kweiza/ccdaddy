@@ -6,7 +6,10 @@
 // file: a drift check has exactly one place to look.
 package oauth
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 // Endpoints, verbatim from Claude Code 2.1.238.
 const (
@@ -60,3 +63,29 @@ const RefreshScopeString = "user:profile user:inference " +
 
 // RefreshScopes is RefreshScopeString split out, mirroring Scopes.
 var RefreshScopes = strings.Split(RefreshScopeString, " ")
+
+// PreservableExpansionScopes are the scopes a refresh carries forward from the
+// stored credential instead of dropping. The bundle exports the list as
+// PRESERVABLE_EXPANSION_SCOPES and filters against it in preservableScopesFrom.
+//
+// They are not in RefreshScopeString because a refresh does not ASK for them —
+// it only keeps them if the credential already has them. An account that never
+// expanded never sees these.
+var PreservableExpansionScopes = []string{
+	"user:projects:read",
+	"user:projects:write",
+	"user:plugins",
+}
+
+// PreservableScopesFrom returns the members of stored that survive a refresh,
+// in the order stored lists them. It is Claude Code's preservableScopesFrom:
+// `e.filter(r => PRESERVABLE_EXPANSION_SCOPES.includes(r))`.
+func PreservableScopesFrom(stored []string) []string {
+	var kept []string
+	for _, s := range stored {
+		if slices.Contains(PreservableExpansionScopes, s) {
+			kept = append(kept, s)
+		}
+	}
+	return kept
+}

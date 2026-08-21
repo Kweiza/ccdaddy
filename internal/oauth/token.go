@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
+	"strings"
 	"time"
 )
 
@@ -70,6 +73,10 @@ const (
 	// TokenErrorInvalidCode is a 401, or any status carrying RFC 6749's
 	// invalid_grant: the code or the refresh token was rejected.
 	TokenErrorInvalidCode
+	// TokenErrorInvalidScope is a 400 carrying RFC 6749's invalid_scope: the
+	// endpoint refused the scope set, not the credential. RefreshWith retries
+	// once with the credential's own scopes when it sees this.
+	TokenErrorInvalidScope
 	// TokenErrorStatus is any other non-200.
 	TokenErrorStatus
 )
@@ -80,6 +87,8 @@ func (k TokenErrorKind) String() string {
 		return "transport"
 	case TokenErrorInvalidCode:
 		return "invalid_code"
+	case TokenErrorInvalidScope:
+		return "invalid_scope"
 	case TokenErrorStatus:
 		return "status"
 	}
@@ -103,6 +112,8 @@ func (e *TokenError) Error() string {
 		return "could not reach the Claude token endpoint"
 	case TokenErrorInvalidCode:
 		return fmt.Sprintf("the authorization was rejected (HTTP %d); start the login again", e.Status)
+	case TokenErrorInvalidScope:
+		return fmt.Sprintf("the token endpoint refused the requested scopes (HTTP %d)", e.Status)
 	default:
 		return fmt.Sprintf("the token endpoint refused the request (HTTP %d)", e.Status)
 	}
@@ -156,20 +167,85 @@ func (c *Client) ExchangeCode(ctx context.Context, code, verifier, redirectURI, 
 	})
 }
 
-// Refresh trades a refresh token for a new pair.
+// RefreshParams describes one refresh against a stored credential.
 //
-// The scope parameter is Claude Code's narrowed refresh set, not the authorize
-// set — see RefreshScopeString for why omitting it is not equivalent.
+// Only RefreshToken is required, and params carrying nothing else reproduce a
+// default first-party refresh byte for byte. The other fields exist because
+// Claude Code's refresh is a function of the STORED credential, not of the
+// token alone: see refreshScopes.
+type RefreshParams struct {
+	RefreshToken string
+
+	// Scopes is the scope set stored with the credential (`scopes[]` in
+	// .credentials.json), not the set to request. What gets requested is
+	// derived from it.
+	Scopes []string
+
+	// SubscriptionType is the credential's subscriptionType, if any. It is one
+	// of the two things that mark a credential as the default first-party
+	// client.
+	SubscriptionType string
+
+	// ClientID is the credential's own clientId, for a credential that did not
+	// come from Claude Code's public client. Setting it changes which scopes
+	// are requested as well as which client is named.
+	ClientID string
+}
+
+// isFirstParty mirrors Claude Code's
+// `Boolean((IZ(f.scopes) || f.subscriptionType) && !f.clientId)`.
+func (p RefreshParams) isFirstParty() bool {
+	if p.ClientID != "" {
+		return false
+	}
+	return slices.Contains(p.Scopes, "user:inference") || p.SubscriptionType != ""
+}
+
+// refreshScopes is Claude Code's
+// `m = d ? eo([...UYe, ...preservableScopesFrom(f.scopes)]) : f.scopes`.
+//
+// The first-party branch does NOT send the stored set: it sends Claude Code's
+// own five plus whatever expansion scopes the credential already holds. Sending
+// the bare five instead would silently strip user:plugins and the project
+// scopes from an expanded account; sending the stored set would re-request
+// org:create_api_key, which a refresh drops.
+func (p RefreshParams) refreshScopes() []string {
+	if !p.isFirstParty() {
+		return p.Scopes
+	}
+	return dedupe(append(slices.Clone(RefreshScopes), PreservableScopesFrom(p.Scopes)...))
+}
+
+// Refresh trades a refresh token for a new pair, as the default first-party
+// client with no stored scopes to preserve.
+//
+// A caller holding a stored credential should use RefreshWith instead: this
+// form cannot know about expansion scopes or a custom client, and would strip
+// them.
 func (c *Client) Refresh(ctx context.Context, refreshToken string) (*TokenResponse, error) {
-	out, err := c.post(ctx, map[string]string{
-		"grant_type":    "refresh_token",
-		"refresh_token": refreshToken,
-		"client_id":     ClientID,
-		"scope":         RefreshScopeString,
-	})
+	return c.RefreshWith(ctx, RefreshParams{RefreshToken: refreshToken})
+}
+
+// RefreshWith trades a refresh token for a new pair, deriving the request from
+// the stored credential the way Claude Code does.
+//
+// On a 400 invalid_scope it retries ONCE with the credential's own scopes,
+// which is Claude Code's `tengu_oauth_refresh_invalid_scope_fallback`. That is
+// not a general retry — refreshing is not idempotent — but a 400 issued no
+// token, so re-sending is safe, and without it an account whose stored scopes
+// the endpoint no longer honours could never refresh at all.
+func (c *Client) RefreshWith(ctx context.Context, p RefreshParams) (*TokenResponse, error) {
+	out, err := c.refreshOnce(ctx, p, p.refreshScopes())
+
+	var te *TokenError
+	if errors.As(err, &te) && te.Kind == TokenErrorInvalidScope &&
+		p.isFirstParty() && len(p.Scopes) > 0 {
+		out, err = c.refreshOnce(ctx, p, p.Scopes)
+	}
 	if err != nil {
 		return nil, err
 	}
+
 	// RFC 6749 §6 makes a NEW refresh token optional, and Claude Code defends
 	// against its absence by defaulting the field to the token it just sent
 	// (`refresh_token: d = e`). Handing back "" instead would overwrite a
@@ -177,9 +253,45 @@ func (c *Client) Refresh(ctx context.Context, refreshToken string) (*TokenRespon
 	// empty one, take a 400 invalid_grant, and quarantine a healthy account.
 	// This is the only place that holds both tokens, so no caller can fix it.
 	if out.RefreshToken == "" {
-		out.RefreshToken = refreshToken
+		out.RefreshToken = p.RefreshToken
 	}
 	return out, nil
+}
+
+// dedupe keeps the first occurrence of each element, which is what Claude Code's
+// `eo(e) { return [...new Set(e)] }` does. slices.Compact is NOT the same: it
+// only collapses ADJACENT repeats, so a stored list naming a scope twice with
+// something in between would send it twice.
+func dedupe(in []string) []string {
+	seen := make(map[string]struct{}, len(in))
+	out := in[:0:0]
+	for _, s := range in {
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
+}
+
+func (c *Client) refreshOnce(ctx context.Context, p RefreshParams, scopes []string) (*TokenResponse, error) {
+	clientID := p.ClientID
+	if clientID == "" {
+		clientID = ClientID
+	}
+	// Claude Code's wire call falls back to its own set for an empty list:
+	// `scope:(Array.isArray(t)&&t.length ? t : UYe).join(" ")`.
+	scope := RefreshScopeString
+	if len(scopes) > 0 {
+		scope = strings.Join(scopes, " ")
+	}
+	return c.post(ctx, map[string]string{
+		"grant_type":    "refresh_token",
+		"refresh_token": p.RefreshToken,
+		"client_id":     clientID,
+		"scope":         scope,
+	})
 }
 
 func (c *Client) post(ctx context.Context, body map[string]string) (*TokenResponse, error) {
@@ -229,8 +341,11 @@ func (c *Client) post(ctx context.Context, body map[string]string) (*TokenRespon
 	}
 	if res.StatusCode != http.StatusOK {
 		kind := TokenErrorStatus
-		if res.StatusCode == http.StatusUnauthorized || isInvalidGrant(data) {
+		switch {
+		case res.StatusCode == http.StatusUnauthorized, wireErrorCode(data) == "invalid_grant":
 			kind = TokenErrorInvalidCode
+		case wireErrorCode(data) == "invalid_scope":
+			kind = TokenErrorInvalidScope
 		}
 		return nil, &TokenError{Kind: kind, Status: res.StatusCode}
 	}
@@ -245,19 +360,40 @@ func (c *Client) post(ctx context.Context, body map[string]string) (*TokenRespon
 	return &out, nil
 }
 
-// isInvalidGrant reports whether the body carries RFC 6749's invalid_grant,
-// which is how a revoked or expired refresh token comes back — conventionally
-// with a 400, not a 401. §7.2 quarantines an account on exactly that signal.
+// wireErrorCode extracts the RFC 6749 error code from a failure body, mapping
+// anything outside the closed set to "".
 //
-// Only the closed set of RFC 6749 error codes is consulted and only a bool
-// leaves this function: no byte of the response body is retained, so the
-// no-bytes-from-the-wire guarantee on TokenError still holds.
-func isInvalidGrant(data []byte) bool {
+// It accepts both shapes Claude Code accepts. Its parser is
+// `code: typeof r === "string" ? r : (r && typeof r === "object" ? r.type : undefined)`,
+// so an endpoint answering {"error":{"type":"invalid_grant"}} is a dead refresh
+// token to Claude Code; reading only the string shape would miss it and leave
+// §7.2's quarantine signal unfired.
+//
+// Only a member of the closed set is ever returned — an unrecognised code
+// becomes "" — so no byte of the response body escapes and TokenError keeps its
+// no-bytes-from-the-wire guarantee.
+func wireErrorCode(data []byte) string {
 	var wire struct {
-		Error string `json:"error"`
+		Error json.RawMessage `json:"error"`
 	}
-	if err := json.Unmarshal(data, &wire); err != nil {
-		return false
+	if err := json.Unmarshal(data, &wire); err != nil || len(wire.Error) == 0 {
+		return ""
 	}
-	return wire.Error == "invalid_grant"
+
+	var code string
+	if err := json.Unmarshal(wire.Error, &code); err != nil {
+		var object struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(wire.Error, &object); err != nil {
+			return ""
+		}
+		code = object.Type
+	}
+
+	// The allowlist is what keeps this from becoming a body-reading path.
+	if slices.Contains([]string{"invalid_grant", "invalid_scope"}, code) {
+		return code
+	}
+	return ""
 }
