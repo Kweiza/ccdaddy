@@ -123,3 +123,82 @@ func TestReleaseIsIdempotent(t *testing.T) {
 		t.Fatalf("second Release() = %v, want nil", err)
 	}
 }
+
+// A holder must notice when a waiter takes over its lock (rmdir + mkdir)
+// while its own toucher was stalled. Chtimes on the same path would
+// otherwise succeed silently against the new owner's directory, leaving two
+// processes each believing they hold the lock.
+func TestTouchDetectsTakeover(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "x.lock")
+
+	lk, err := Acquire(dir, Options{Stale: time.Minute, Timeout: time.Second, TouchInterval: 20 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate a waiter stealing the lock: remove the directory this holder
+	// owns and recreate it as if a new holder had just won it. The short
+	// sleep guarantees the recreated directory gets a distinguishable mtime:
+	// on this filesystem, directory mtimes advance in coarse (multi-
+	// millisecond) steps, so an instantaneous remove+recreate can otherwise
+	// land on the same mtime tick as the original -- something that cannot
+	// happen for a real takeover, which only follows the Stale threshold
+	// elapsing (seconds to minutes, far larger than that granularity).
+	time.Sleep(50 * time.Millisecond)
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-lk.Compromised():
+	case <-time.After(time.Second):
+		t.Fatal("Compromised() did not close after the lock directory was taken over")
+	}
+
+	if err := lk.Release(); !errors.Is(err, ErrCompromised) {
+		t.Fatalf("Release() = %v, want ErrCompromised", err)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("lock directory missing after a compromised Release(), want it left for the new owner: %v", err)
+	}
+}
+
+// The ownership check must not misfire on the normal path: a holder that was
+// never stolen from stays exclusive across many touches.
+func TestTouchNormalPathUnaffected(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "x.lock")
+
+	lk, err := Acquire(dir, Options{Stale: time.Minute, Timeout: time.Second, TouchInterval: 20 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	time.Sleep(150 * time.Millisecond) // several touch intervals
+
+	select {
+	case <-lk.Compromised():
+		t.Fatal("Compromised() closed on a lock that was never taken over")
+	default:
+	}
+
+	if err := lk.Release(); err != nil {
+		t.Fatalf("Release() = %v, want nil", err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("lock directory still present after Release: %v", err)
+	}
+}
+
+// TouchInterval must never exceed half of Stale, or a holder's own lock can
+// go stale by its own definition between two touches.
+func TestAcquireRejectsContradictoryOptions(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "x.lock")
+
+	_, err := Acquire(dir, Options{Stale: 2 * time.Second, Timeout: time.Second, TouchInterval: 3 * time.Second})
+	if err == nil {
+		t.Fatal("Acquire() with TouchInterval > Stale/2 = nil, want an error")
+	}
+}
