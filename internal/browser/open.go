@@ -142,7 +142,20 @@ func fromBrowserEnv(goos, browserEnv, url string) (string, []string, bool) {
 	if goos == "windows" {
 		sep = ";"
 	}
-	fields := strings.Fields(strings.Split(browserEnv, sep)[0])
+	entry := strings.Split(browserEnv, sep)[0]
+	// On Unix, BROWSER's convention is a command line: whitespace separates the
+	// executable from its arguments. Windows has no such convention, and a
+	// program path with a space in it is the norm rather than the exception —
+	// splitting "C:\Program Files\x\b.exe" on whitespace launches
+	// "C:\Program", which fails silently.
+	var fields []string
+	if goos == "windows" {
+		if t := strings.TrimSpace(entry); t != "" {
+			fields = []string{t}
+		}
+	} else {
+		fields = strings.Fields(entry)
+	}
 	if len(fields) == 0 {
 		// Whitespace only. Fall through to the platform default rather than
 		// trying to launch "".

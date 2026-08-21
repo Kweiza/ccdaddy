@@ -18,9 +18,12 @@ import (
 // buffers and argument list.
 func NewRootCmd() *cobra.Command {
 	root := &cobra.Command{
-		Use:           "ccdad",
-		Short:         "Claude Code Daemon: Always Drilling Don't Yap",
-		Long:          "ccdad manages multiple Claude Code accounts and switches between them\nbefore a rate limit stops you.",
+		Use:   "ccdad",
+		Short: "Claude Code Daemon: Always Drilling Don't Yap",
+		Long: "ccdad manages multiple Claude Code accounts and switches between them\n" +
+			"before a rate limit stops you.\n\n" +
+			"Stability contract: idx is a display ordinal, not a key. It is recompacted\n" +
+			"when an account is removed. Scripts must reference accounts by uuid or alias.",
 		Version:       buildinfo.String(),
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -39,12 +42,34 @@ func NewRootCmd() *cobra.Command {
 		return UsageError("%s", err.Error())
 	})
 
+	// Cobra's generated `completion` accepts an unknown shell by printing its
+	// own help and returning nil, which exits 0 and puts help text on stdout —
+	// a caller redirecting that into a completion file gets help text instead.
+	// A shell it cannot generate for is a usage error like any other.
 	root.AddCommand(newAddCmd())
 	root.AddCommand(newAddTokenCmd())
 	root.AddCommand(newWhichCmd())
 	root.AddCommand(newListCmd())
 	root.AddCommand(newSwitchCmd())
 	root.AddCommand(newRemoveCmd())
+
+	// Cobra adds `completion` lazily, during Execute, so it has to be
+	// materialized before it can be corrected. Left alone it answers an unknown
+	// shell by printing its own help and returning nil — exit 0, with help text
+	// on stdout, so `ccdad completion "$SHELL" > _ccdad` writes help into the
+	// completion file. A shell it cannot generate for is a usage error.
+	root.InitDefaultCompletionCmd()
+	for _, c := range root.Commands() {
+		if c.Name() != "completion" {
+			continue
+		}
+		shells := shellNames(c)
+		c.RunE = func(*cobra.Command, []string) error {
+			return UsageError("completion needs a shell to generate for: one of %s", strings.Join(shells, ", "))
+		}
+		c.Args = usageArgs(cobra.ArbitraryArgs)
+		c.SilenceUsage, c.SilenceErrors = true, true
+	}
 	return root
 }
 
@@ -115,6 +140,15 @@ func ExecuteWith(root *cobra.Command, errOut io.Writer) ExitCode {
 	}
 	fmt.Fprintf(errOut, "ccdad: %s\n", err)
 	return CodeFor(err)
+}
+
+// shellNames lists the shells the generated completion command can produce for.
+func shellNames(completion *cobra.Command) []string {
+	out := make([]string, 0, len(completion.Commands()))
+	for _, c := range completion.Commands() {
+		out = append(out, c.Name())
+	}
+	return out
 }
 
 func isUnknownCommand(err error) bool {
