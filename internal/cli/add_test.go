@@ -163,9 +163,17 @@ func TestCredentialBlobCarriesEveryField(t *testing.T) {
 			t.Errorf("claudeAiOauth[%q] = %#v, want %#v", k, got[k], want)
 		}
 	}
-	for _, k := range []string{"expiresAt", "refreshTokenExpiresAt"} {
-		if _, ok := got[k]; !ok {
-			t.Errorf("claudeAiOauth is missing %q", k)
+	// Values, not presence: spec §4.2 rule 3 names refreshTokenExpiresAt as one
+	// of the three fields clauth destroyed, and a key that exists carrying the
+	// wrong number is no better than a missing one.
+	for k, seconds := range map[string]int64{"expiresAt": 3600, "refreshTokenExpiresAt": 7200} {
+		ms, ok := got[k].(float64)
+		if !ok {
+			t.Errorf("claudeAiOauth[%q] = %#v, want a millisecond timestamp", k, got[k])
+			continue
+		}
+		if d := ms - float64(time.Now().UnixMilli()); d < float64(seconds*1000-100_000) || d > float64(seconds*1000) {
+			t.Errorf("claudeAiOauth[%q] = %v, want roughly now+%ds in milliseconds", k, ms, seconds)
 		}
 	}
 	// clientId must NOT be synthesized. Claude Code's login writes
@@ -178,11 +186,6 @@ func TestCredentialBlobCarriesEveryField(t *testing.T) {
 	// says the refresh grant must not carry.
 	if _, bad := got["clientId"]; bad {
 		t.Errorf("claudeAiOauth carries a synthesized clientId (%v); a first-party login must omit the key", got["clientId"])
-	}
-	// expiresAt is MILLISECONDS since epoch, as Claude Code writes it.
-	ms, _ := got["expiresAt"].(float64)
-	if d := ms - float64(time.Now().UnixMilli()); d < 3_500_000 || d > 3_600_000 {
-		t.Errorf("expiresAt = %v; want roughly now+3600s expressed in milliseconds", ms)
 	}
 }
 
@@ -927,24 +930,6 @@ func TestAddTokenOnACancelledContextDoesNotStoreTheAccount(t *testing.T) {
 	}
 }
 
-// A login that ran out of time is not a runtime failure: nothing is wrong with
-// the machine, there is simply no viable target yet. Only the interrupted arm
-// of loginError was pinned.
-func TestAddOnALoginTimeoutIsBlocked(t *testing.T) {
-	isolate(t)
-	stubEnvironment(t, true, false)
-	restore := login
-	t.Cleanup(func() { login = restore })
-	login = func(context.Context, oauth.LoginOptions) (*oauth.LoginResult, error) {
-		return nil, oauth.ErrLoginTimeout
-	}
-
-	err, _, _ := runCmd(t, newAddCmd())
-	if got := CodeFor(err); got != ExitBlocked {
-		t.Fatalf("CodeFor = %d, want %d", got, ExitBlocked)
-	}
-}
-
 // --activate is a switch, so spec §4.3's unknown-key probe has to run on it too.
 func TestAddActivateRunsTheUnknownKeyProbe(t *testing.T) {
 	isolate(t)
@@ -992,5 +977,61 @@ func TestCaptureDoesNotTreatTwoUnidentifiableCredentialsAsEqual(t *testing.T) {
 		if _, bad := stored[k]; bad {
 			t.Fatalf("absorbed %s from a credential that cannot identify itself: %v", k, stored)
 		}
+	}
+}
+
+// Re-authenticating an account that is NOT the live one must still keep that
+// account's OWN account-scoped keys. There is no ambiguity about whose they
+// are — they came out of this account's own stored snapshot — and store.Add
+// replaces the credential file wholesale, so not carrying them forward deletes
+// them.
+func TestReAuthenticatingANonLiveAccountKeepsItsOwnKeys(t *testing.T) {
+	isolate(t)
+	stubEnvironment(t, true, false)
+	stubProfile(t, func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, profileJSON("acct-1", "a@example.com"))
+	})
+
+	stubLogin(t, loginToken("acct-1", "a@example.com", "RT-1"))
+	if err, _, _ := runCmd(t, newAddCmd(), "--activate"); err != nil {
+		t.Fatal(err)
+	}
+	addLiveKey(t, "trustedDeviceToken", `"acct-1-device"`)
+	stubLogin(t, loginToken("acct-1", "a@example.com", "RT-2"))
+	if err, _, _ := runCmd(t, newAddCmd()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Something else becomes the live login, so acct-1 is no longer live.
+	writeLiveFile(t, `{"claudeAiOauth":{"accessToken":"OTHER","refreshToken":"RT-OTHER"}}`)
+
+	stubLogin(t, loginToken("acct-1", "a@example.com", "RT-3"))
+	if err, _, _ := runCmd(t, newAddCmd()); err != nil {
+		t.Fatal(err)
+	}
+
+	s, _ := store.Open()
+	stored, err := s.Credentials("acct-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := stored["trustedDeviceToken"]; !ok {
+		t.Fatalf("re-authenticating a non-live account dropped its own device token: %v", stored)
+	}
+}
+
+// spec §6.4 assigns exit 1 to a login timeout, by name, in its edge-case table.
+func TestAddOnALoginTimeoutFollowsTheSpecExitCode(t *testing.T) {
+	isolate(t)
+	stubEnvironment(t, true, false)
+	restore := login
+	t.Cleanup(func() { login = restore })
+	login = func(context.Context, oauth.LoginOptions) (*oauth.LoginResult, error) {
+		return nil, oauth.ErrLoginTimeout
+	}
+
+	err, _, _ := runCmd(t, newAddCmd())
+	if got := CodeFor(err); got != ExitFailure {
+		t.Fatalf("CodeFor = %d, want %d (spec §6.4 assigns 1 to a timeout)", got, ExitFailure)
 	}
 }

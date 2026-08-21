@@ -275,6 +275,16 @@ func runAdd(cmd *cobra.Command, opts addOptions) error {
 		credentialIdentity(live) != "" &&
 		credentialIdentity(live) == credentialIdentity(prior)
 
+	// This account's OWN previously stored keys carry forward unconditionally.
+	// There is no ambiguity about whose they are, and store.Add replaces the
+	// credential file wholesale — so without this, re-authenticating an account
+	// that is not currently live deletes its trustedDeviceToken and designOauth.
+	for k, v := range cclink.Extract(prior) {
+		if _, fresh := creds[k]; !fresh {
+			creds[k] = v
+		}
+	}
+
 	if liveIsThisAccount {
 		for k, v := range cclink.Extract(live) {
 			if _, fresh := creds[k]; !fresh {
@@ -337,7 +347,12 @@ func loginError(err error) error {
 	case errors.Is(err, oauth.ErrLoginInterrupted):
 		return WithCode(err, ExitInterrupted)
 	case errors.Is(err, oauth.ErrLoginTimeout):
-		return WithCode(err, ExitBlocked)
+		// Spec §6.4's edge-case table assigns 1 to a timeout, by name. Exit 4
+		// is arguably the better fit for "wanted, no viable target", but the
+		// spec is the binding authority and a silent divergence in an exit code
+		// is exactly what the contract exists to prevent. Raise it there first
+		// if it should change.
+		return WithCode(err, ExitFailure)
 	}
 	return err
 }

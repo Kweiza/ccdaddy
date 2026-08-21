@@ -186,3 +186,26 @@ func TestOpenReportsAnUnlaunchableBrowser(t *testing.T) {
 func TestAvailableAnswers(t *testing.T) {
 	_ = Available()
 }
+
+// Windows program paths routinely contain spaces and Windows has no BROWSER
+// command-line convention, so splitting the entry on whitespace launches a
+// prefix of the path and the browser silently never opens.
+func TestBrowserEnvKeepsAWindowsPathWithSpaces(t *testing.T) {
+	const exe = `C:\Program Files\Mozilla Firefox\firefox.exe`
+
+	name, args, ok := fromBrowserEnv("windows", exe, "https://example.com")
+	if !ok {
+		t.Fatal("fromBrowserEnv() = false, want the entry used")
+	}
+	if name != exe {
+		t.Fatalf("executable = %q, want the whole path %q", name, exe)
+	}
+	if len(args) != 1 || args[0] != "https://example.com" {
+		t.Fatalf("args = %v, want just the URL", args)
+	}
+	// Unix keeps the command-line convention: whitespace separates arguments.
+	name, args, ok = fromBrowserEnv("linux", "firefox --new-tab", "https://example.com")
+	if !ok || name != "firefox" || len(args) != 2 || args[0] != "--new-tab" {
+		t.Fatalf("unix split = %q %v %v, want firefox with its argument", name, args, ok)
+	}
+}

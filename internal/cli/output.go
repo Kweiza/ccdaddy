@@ -28,9 +28,9 @@ func writeJSON(cmd *cobra.Command, payload any) error {
 
 // accountJSON renders an account for a --json payload.
 //
-// uuid leads because it is the key; idx is included for display but the README
-// and the help both say it is an ordinal, not a key, and no payload is ever
-// keyed on it.
+// uuid leads because it is the key; idx is included for display but `ccdad
+// --help` states, as spec §5.1 requires, that it is an ordinal rather than a
+// key — and no payload is ever keyed on it.
 func accountJSON(a store.Account) map[string]any {
 	out := map[string]any{
 		"uuid":  a.UUID,
