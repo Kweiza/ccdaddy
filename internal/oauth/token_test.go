@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -430,6 +431,47 @@ func TestExchangeCodeRejectsPartiallyDecodableResponse(t *testing.T) {
 	})
 	if _, err := c.ExchangeCode(context.Background(), "c", "v", "r", "s"); err == nil {
 		t.Fatal("ExchangeCode() = nil, want an error: a body that fails to decode must not become a credential")
+	}
+}
+
+// The token endpoint never legitimately redirects, and following one is a
+// credential-disclosure path: 307 and 308 replay the POST body, which carries
+// the refresh token and the PKCE verifier, to whatever host the redirect names.
+// Worse, every 3xx — 303 included, where the body is dropped — would let that
+// host supply the access and refresh tokens ccdad then writes into the
+// credential file. A 3xx is a failed exchange, not a hop.
+func TestClientDoesNotFollowRedirects(t *testing.T) {
+	var reached atomic.Int32
+	evil := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached.Add(1)
+		io.WriteString(w, `{"access_token":"EVIL-TOKEN","refresh_token":"EVIL-RT"}`)
+	}))
+	t.Cleanup(evil.Close)
+
+	for _, code := range []int{
+		http.StatusMovedPermanently,
+		http.StatusFound,
+		http.StatusSeeOther,
+		http.StatusTemporaryRedirect,
+		http.StatusPermanentRedirect,
+	} {
+		c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, evil.URL, code)
+		})
+		res, err := c.Refresh(context.Background(), "SUPER-SECRET-REFRESH-TOKEN")
+		if err == nil {
+			t.Fatalf("redirect %d: Refresh() = %+v, want an error", code, res)
+		}
+		var te *TokenError
+		if !errors.As(err, &te) {
+			t.Fatalf("redirect %d: err = %v, want a *TokenError", code, err)
+		}
+		if te.Status != code {
+			t.Errorf("redirect %d: Status = %d, want the redirect status itself", code, te.Status)
+		}
+	}
+	if n := reached.Load(); n != 0 {
+		t.Fatalf("the redirect target was contacted %d times; it must never be reached", n)
 	}
 }
 
