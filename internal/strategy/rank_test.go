@@ -448,3 +448,114 @@ func TestModesAllHaveNames(t *testing.T) {
 		}
 	}
 }
+
+func credit(uuid string, s *usage.Snapshot) Candidate {
+	return Candidate{UUID: uuid, Kind: identity.KindCredit, Usage: s}
+}
+
+// A credit account is metered in money and carries no plan windows, so its
+// headroom is permanently unknown. Ranking it on that axis files it in the "we
+// have no idea" tier -- ahead of every account known to be spent -- and makes
+// the engine's best candidate the one that costs money, which inverts §7.3.
+func TestRankKeepsCreditAccountsOffTheHeadroomAxis(t *testing.T) {
+	cands := []Candidate{
+		sub("soon", snap(win(99, 8*time.Minute), win(99, 48*time.Hour))),
+		sub("later", snap(win(85, 40*time.Hour), win(85, 40*time.Hour))),
+		credit("money", nil),
+	}
+
+	r := Rank(cands, opts())
+	eq(t, order(r), []string{"soon", "later"})
+	if len(r.Credit) != 1 || r.Credit[0].UUID != "money" {
+		t.Errorf("Credit = %v, want the one credit account", r.Credit)
+	}
+	// And with the credit account out of the fold, §7.1's second situation is
+	// reachable again: both subscription accounts really are over threshold.
+	if !r.AllOverThreshold {
+		t.Error("AllOverThreshold = false; a credit account's unknown headroom must not pin it")
+	}
+	if r.Mode != ModeRecovery {
+		t.Errorf("Mode = %v, want ModeRecovery — a registered credit account must not make recovery mode unreachable", r.Mode)
+	}
+}
+
+func TestRankOrdersTheCreditPoolDeterministically(t *testing.T) {
+	for _, input := range [][]Candidate{
+		{credit("ccc", nil), credit("aaa", nil), credit("bbb", nil)},
+		{credit("bbb", nil), credit("ccc", nil), credit("aaa", nil)},
+	} {
+		r := Rank(input, opts())
+		got := []string{}
+		for _, x := range r.Credit {
+			got = append(got, x.UUID)
+		}
+		eq(t, got, []string{"aaa", "bbb", "ccc"})
+	}
+}
+
+func TestRankStillExcludesADisabledCreditAccount(t *testing.T) {
+	cands := []Candidate{{UUID: "off", Kind: identity.KindCredit, Disabled: true}}
+	r := Rank(cands, opts())
+	if len(r.Credit) != 0 || len(r.Order) != 0 {
+		t.Errorf("a disabled credit account was ranked: order=%v credit=%v", order(r), r.Credit)
+	}
+}
+
+// The two knobs the engine is configurable on have to be read from Options, or
+// task 47's `ccdad config` will have no effect on any decision.
+func TestRankReadsTheConfiguredThreshold(t *testing.T) {
+	// 70% used: over a threshold of 60, under the default of 80.
+	cands := []Candidate{sub("a", snap(win(70, time.Hour), win(70, 48*time.Hour)))}
+
+	o := opts()
+	o.Threshold = 60
+	if r := Rank(cands, o); !r.AllOverThreshold || r.Mode != ModeRecovery {
+		t.Errorf("threshold 60: AllOverThreshold = %v, Mode = %v; want true/recovery", r.AllOverThreshold, r.Mode)
+	}
+	o.Threshold = 80
+	if r := Rank(cands, o); r.AllOverThreshold || r.Mode != ModeHeadroom {
+		t.Errorf("threshold 80: AllOverThreshold = %v, Mode = %v; want false/headroom", r.AllOverThreshold, r.Mode)
+	}
+}
+
+func TestRankReadsTheConfiguredHorizon(t *testing.T) {
+	// Back in 30 minutes: inside the default hour, outside a 15-minute horizon.
+	cands := []Candidate{
+		sub("aaa-roomier-later", snap(win(85, 30*time.Minute), win(85, 48*time.Hour))),
+		sub("zzz-blown-sooner", snap(win(99, 5*time.Minute), win(99, 48*time.Hour))),
+	}
+
+	o := opts()
+	o.Horizon = 15 * time.Minute
+	// Only zzz is inside a 15-minute horizon, so it wins its tier outright; aaa
+	// falls to the far tier where headroom leads.
+	r := Rank(cands, o)
+	eq(t, order(r), []string{"zzz-blown-sooner", "aaa-roomier-later"})
+	for _, x := range r.Order {
+		if x.UUID == "aaa-roomier-later" && x.ReturnsInsideHorizon {
+			t.Error("a 30-minute recovery counted as inside a 15-minute horizon")
+		}
+	}
+}
+
+// The zero value of Options must not be the one that starts spending money.
+func TestRankDefaultsAnOmittedThresholdRatherThanReadingItAsZero(t *testing.T) {
+	cands := []Candidate{sub("a", snap(win(3, time.Hour), win(3, 48*time.Hour)))}
+	bare := Options{Now: now}
+
+	if r := Rank(cands, bare); r.AllOverThreshold {
+		t.Error("AllOverThreshold = true for an account 3% used; a zero Threshold must not mean 'spent at any usage'")
+	}
+	if SubscriptionExhausted(cands, bare) {
+		t.Error("SubscriptionExhausted() = true for an account 3% used — that is the input that opens the credit gate")
+	}
+}
+
+func TestRankDefaultsAnOmittedHorizon(t *testing.T) {
+	cands := []Candidate{sub("a", snap(win(99, 30*time.Minute), win(99, 48*time.Hour)))}
+
+	r := Rank(cands, Options{Now: now})
+	if len(r.Order) != 1 || !r.Order[0].ReturnsInsideHorizon {
+		t.Error("a 30-minute recovery fell outside the defaulted one-hour horizon")
+	}
+}

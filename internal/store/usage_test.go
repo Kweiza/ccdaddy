@@ -24,7 +24,7 @@ func subscriptionSnapshot() *usage.Snapshot {
 // creditSnapshot is a pure credit account: no plan windows at all, with overage
 // switched on.
 func creditSnapshot(state usage.ExtraUsageState, reason string, limit, used *float64) *usage.Snapshot {
-	return &usage.Snapshot{ExtraUsage: usage.ExtraUsageFor(state, reason, limit, used)}
+	return &usage.Snapshot{ExtraUsage: usage.ExtraUsageFor(usage.ExtraUsageInput{State: state, DisabledReason: reason, Currency: "USD", MonthlyLimit: limit, UsedCredits: used})}
 }
 
 func seed(t *testing.T, kind identity.Kind) *Store {
@@ -56,7 +56,7 @@ func reopen(t *testing.T) *Store {
 func TestApplyUsageReclassifiesACreditAccountOnRealEvidence(t *testing.T) {
 	s := seed(t, identity.KindSubscription)
 
-	if err := s.ApplyUsage("acct-1", creditSnapshot(usage.ExtraUsageEnabled, "", pf(150), pf(10)), observed); err != nil {
+	if err := s.ApplyUsage("acct-1", creditSnapshot(usage.ExtraUsageEnabled, "", pf(15000), pf(1000)), observed); err != nil {
 		t.Fatalf("ApplyUsage() error = %v", err)
 	}
 
@@ -72,7 +72,7 @@ func TestApplyUsageReclassifiesACreditAccountOnRealEvidence(t *testing.T) {
 func TestApplyUsageKeepsWindowsPrimaryOverCredits(t *testing.T) {
 	s := seed(t, identity.KindCredit)
 	snap := subscriptionSnapshot()
-	snap.ExtraUsage = usage.ExtraUsageFor(usage.ExtraUsageEnabled, "", pf(150), pf(10))
+	snap.ExtraUsage = usage.ExtraUsageFor(usage.ExtraUsageInput{State: usage.ExtraUsageEnabled, Currency: "USD", MonthlyLimit: pf(15000), UsedCredits: pf(1000)})
 
 	if err := s.ApplyUsage("acct-1", snap, observed); err != nil {
 		t.Fatalf("ApplyUsage() error = %v", err)
@@ -85,11 +85,12 @@ func TestApplyUsageKeepsWindowsPrimaryOverCredits(t *testing.T) {
 	if a.Credit.State != usage.ExtraUsageEnabled.String() {
 		t.Errorf("Credit.State = %q, want %q — the credit axis is kept alongside", a.Credit.State, usage.ExtraUsageEnabled)
 	}
+	// The store keeps MAJOR units, so 15000 cents on the wire is $150 here.
 	if a.Credit.MonthlyLimit == nil || *a.Credit.MonthlyLimit != 150 {
-		t.Errorf("Credit.MonthlyLimit = %v, want 150", a.Credit.MonthlyLimit)
+		t.Errorf("Credit.MonthlyLimit = %v, want 150 dollars from 15000 cents", a.Credit.MonthlyLimit)
 	}
 	if a.Credit.UsedCredits == nil || *a.Credit.UsedCredits != 10 {
-		t.Errorf("Credit.UsedCredits = %v, want 10", a.Credit.UsedCredits)
+		t.Errorf("Credit.UsedCredits = %v, want 10 dollars from 1000 cents", a.Credit.UsedCredits)
 	}
 	if !a.Credit.ObservedAt.Equal(observed) {
 		t.Errorf("Credit.ObservedAt = %s, want %s", a.Credit.ObservedAt, observed)
@@ -103,7 +104,7 @@ func TestApplyUsageKeepsWindowsPrimaryOverCredits(t *testing.T) {
 func TestApplyUsageDoesNotFlipABrokeCreditAccountToSubscription(t *testing.T) {
 	s := seed(t, identity.KindCredit)
 
-	if err := s.ApplyUsage("acct-1", creditSnapshot(usage.ExtraUsageBlocked, "out_of_credits", pf(150), pf(150)), observed); err != nil {
+	if err := s.ApplyUsage("acct-1", creditSnapshot(usage.ExtraUsageBlocked, "out_of_credits", pf(15000), pf(15000)), observed); err != nil {
 		t.Fatalf("ApplyUsage() error = %v", err)
 	}
 
@@ -122,7 +123,7 @@ func TestApplyUsageDoesNotFlipABrokeCreditAccountToSubscription(t *testing.T) {
 func TestApplyUsageDoesNotReadOverageBeingAvailableAsACreditAxis(t *testing.T) {
 	s := seed(t, identity.KindSubscription)
 
-	if err := s.ApplyUsage("acct-1", creditSnapshot(usage.ExtraUsageDisabled, "", pf(150), pf(0)), observed); err != nil {
+	if err := s.ApplyUsage("acct-1", creditSnapshot(usage.ExtraUsageDisabled, "", pf(15000), pf(0)), observed); err != nil {
 		t.Fatalf("ApplyUsage() error = %v", err)
 	}
 
@@ -288,7 +289,7 @@ func TestApplyUsageKeepsAnUnreadableBalanceUnread(t *testing.T) {
 func TestCreditBalanceSurvivesTheTOMLRoundTrip(t *testing.T) {
 	s := seed(t, identity.KindSubscription)
 	snap := subscriptionSnapshot()
-	snap.ExtraUsage = usage.ExtraUsageFor(usage.ExtraUsageBlocked, "org_spend_cap_reached", pf(500), pf(499.5))
+	snap.ExtraUsage = usage.ExtraUsageFor(usage.ExtraUsageInput{State: usage.ExtraUsageBlocked, DisabledReason: "org_spend_cap_reached", Currency: "USD", MonthlyLimit: pf(50000), UsedCredits: pf(49950)})
 	if err := s.ApplyUsage("acct-1", snap, observed); err != nil {
 		t.Fatal(err)
 	}
@@ -298,6 +299,9 @@ func TestCreditBalanceSurvivesTheTOMLRoundTrip(t *testing.T) {
 		t.Errorf("Credit = %+v", a.Credit)
 	}
 	if a.Credit.UsedCredits == nil || *a.Credit.UsedCredits != 499.5 {
-		t.Errorf("Credit.UsedCredits = %v, want 499.5", a.Credit.UsedCredits)
+		t.Errorf("Credit.UsedCredits = %v, want 499.50 dollars from 49950 cents", a.Credit.UsedCredits)
+	}
+	if a.Credit.Currency != "USD" {
+		t.Errorf("Credit.Currency = %q; a stored amount with no currency is ambiguous", a.Credit.Currency)
 	}
 }

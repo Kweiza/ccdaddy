@@ -32,15 +32,25 @@ const (
 	usagePath = "/api/oauth/usage"
 )
 
-// ErrUnauthorized means the usage endpoint rejected the credential itself.
+// ErrUnauthorized is a 401: the access token was not accepted.
 //
 // It is deliberately this package's own sentinel and not identity's: they are
 // different endpoints, and a caller that fetches usage checks the error the
 // usage client returns. What it means here is narrower than "the account is
 // dead" — Claude Code answers a 401 on this call by refreshing the token and
-// retrying once (`refreshOAuth:true`, then `Uzd` -> "retry"), so a caller must
-// read this as "refresh and try again", never as "quarantine the account".
+// retrying once — so a caller must read this as "refresh and try again", never
+// as "quarantine the account".
 var ErrUnauthorized = errors.New("the usage endpoint rejected the token")
+
+// ErrForbidden is a 403, and it is deliberately NOT ErrUnauthorized.
+//
+// Claude Code's retry wrapper refreshes and retries a 401 unconditionally, but
+// it retries a 403 only when the caller opts in with `also403Revoked` AND the
+// body says the token was revoked — and the usage call opts into neither, so a
+// 403 there is rethrown on the first response and becomes "unavailable".
+// Folding the two together would have ccdad refresh a perfectly good token
+// against an organization that has withdrawn access, forever.
+var ErrForbidden = errors.New("the usage endpoint refused this credential")
 
 // StatusError is a non-200 from the usage endpoint. It carries the status and
 // the Retry-After the endpoint offered, and nothing else: the token is a live
@@ -62,14 +72,17 @@ func (e *StatusError) RetryAfter() (time.Duration, bool) {
 	return e.retryAfter, e.hasRetryAfter
 }
 
-// Unwrap reports the two conditions a caller acts on differently. A rejected
-// credential means refresh and retry; a 429 means the shared per-identity budget
-// is saturated and the poll policy must back off. Everything else is just a bad
-// day upstream and unwraps to nothing.
+// Unwrap reports the three conditions a caller acts on differently: a 401 means
+// refresh and retry, a 403 means this credential is refused and refreshing will
+// not change that, and a 429 means the shared per-identity budget is saturated
+// and the poll policy must back off. Everything else is just a bad day upstream
+// and unwraps to nothing.
 func (e *StatusError) Unwrap() error {
 	switch e.Status {
-	case http.StatusUnauthorized, http.StatusForbidden:
+	case http.StatusUnauthorized:
 		return ErrUnauthorized
+	case http.StatusForbidden:
+		return ErrForbidden
 	case http.StatusTooManyRequests:
 		return ErrRateLimited
 	}
@@ -120,11 +133,22 @@ func (c *Client) FetchUsage(ctx context.Context, accessToken string) (*Snapshot,
 	if err != nil {
 		return nil, fmt.Errorf("building the usage request: %w", err)
 	}
-	// The three headers Claude Code's own usage call ends up sending: the call
-	// site (`eWe`) sets Content-Type, and its OAuth client (`Gnr` -> `l$e`)
-	// supplies Authorization and anthropic-beta. Cache-Control is NOT among
-	// them — that one belongs to the profile call — and Accept is only ever
-	// added by axios, so ccdad does not forge it.
+	// Claude Code's own usage call ends up sending FOUR first-party headers, not
+	// three: the call site (`eWe`) sets Content-Type, and its OAuth client
+	// (`Gnr` -> `l$e`) supplies Authorization, anthropic-beta and
+	// `User-Agent: claude-cli/<version> (external, cli)`. Cache-Control is NOT
+	// among them — that one belongs to the profile call, which does not go
+	// through this client — and Accept is only ever added by axios.
+	//
+	// ccdad matches three of the four and DECLINES the User-Agent, which is a
+	// deliberate exception to §3.2's "match what Claude Code's own code sets"
+	// rule rather than an oversight. That header names a Claude Code version
+	// ccdad is not, so sending it is the same pinned-version lie §3.2 refuses
+	// for `axios/1.15.2`: it would go stale on Claude Code's next release and it
+	// would misreport which client made the request. Go contributes
+	// `User-Agent: Go-http-client/1.1` instead, so ccdad's request stays
+	// distinguishable on the wire — which is the honest outcome, and the same
+	// call ccdad already makes on the token endpoint.
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("anthropic-beta", BetaHeader)

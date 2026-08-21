@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 )
@@ -69,7 +70,22 @@ type Window struct {
 
 // Percent is the window's utilization as a percent of 0-100, and whether it was
 // reported at all. It is never scaled: the body is already a percent.
-func (w Window) Percent() (float64, bool) { return w.pct, w.hasPct }
+//
+// A value that is not finite is not a reading. JSON cannot carry one, but a
+// header parsed with Number()/ParseFloat can, and Claude Code's own consumer
+// re-checks `Number.isFinite(l.utilization)` on exactly that path. Without this
+// guard a NaN would report as KNOWN — and because every NaN comparison is
+// false, it would then lose no comparison in the ranking and could hold first
+// place while being the one account nobody could read.
+func (w Window) Percent() (float64, bool) {
+	if !w.hasPct || !isFinite(w.pct) {
+		return 0, false
+	}
+	return w.pct, true
+}
+
+// isFinite is the guard every tri-state accessor shares.
+func isFinite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
 
 // Reset is when the window rolls over, and whether it was reported at all. An
 // unreported reset is unknown, never "now".
@@ -101,15 +117,43 @@ func NewWindow(pct *float64, resetsAt *time.Time) Window {
 	return w
 }
 
-// ExtraUsageFor builds a present ExtraUsage, for the same reason NewWindow
-// exists. The zero value stays the absent one.
-func ExtraUsageFor(state ExtraUsageState, disabledReason string, monthlyLimit, usedCredits *float64) ExtraUsage {
-	e := ExtraUsage{Present: true, State: state, DisabledReason: disabledReason}
-	if monthlyLimit != nil {
-		e.limit, e.hasLimit = *monthlyLimit, true
+// ExtraUsageInput is what ExtraUsageFor takes, for the same reason NewWindow
+// exists: the zero ExtraUsage stays the absent one, so a present-but-empty
+// reading needs a constructor.
+//
+// It takes every field the type carries, so there is no part of an ExtraUsage
+// that only a parsed response can express -- an unconstructible field is a field
+// nothing downstream can test against.
+//
+// MonthlyLimit and UsedCredits are WIRE amounts, in the currency's minor unit,
+// because that is what this type stores and what its JSON codec writes back; the
+// accessors convert, see majorUnits. Utilization is already a percent and is
+// not converted. An empty Currency reads as a two-decimal one.
+type ExtraUsageInput struct {
+	State          ExtraUsageState
+	DisabledReason string
+	Currency       string
+	MonthlyLimit   *float64
+	UsedCredits    *float64
+	Utilization    *float64
+}
+
+// ExtraUsageFor builds a present ExtraUsage from already-normalized values.
+func ExtraUsageFor(in ExtraUsageInput) ExtraUsage {
+	e := ExtraUsage{
+		Present:        true,
+		State:          in.State,
+		DisabledReason: in.DisabledReason,
+		Currency:       in.Currency,
 	}
-	if usedCredits != nil {
-		e.used, e.hasUsed = *usedCredits, true
+	if in.MonthlyLimit != nil {
+		e.limit, e.hasLimit = *in.MonthlyLimit, true
+	}
+	if in.UsedCredits != nil {
+		e.used, e.hasUsed = *in.UsedCredits, true
+	}
+	if in.Utilization != nil {
+		e.pct, e.hasPct = *in.Utilization, true
 	}
 	return e
 }
@@ -118,12 +162,23 @@ func ExtraUsageFor(state ExtraUsageState, disabledReason string, monthlyLimit, u
 // response headers, which use the OTHER representation: utilization is a 0-1
 // fraction and resets_at is an epoch second. This is the single conversion
 // boundary; nothing else in the package may accept the header form.
-func WindowFromHeader(fraction float64, resetsAtUnix int64) Window {
+//
+// Both halves are pointers, and a missing or non-finite half yields the ABSENT
+// window rather than a half-filled one. That is Claude Code's own rule: `y9p`
+// records a window only `if(o!==null&&i!==null)`, and its consumer re-checks
+// both with Number.isFinite before trusting the record. Filling in the other
+// half would mean a header that was never sent arriving as "0% used" or as a
+// reset at the 1970 epoch — which reads as "already recovered" and puts the one
+// account nobody could measure at the front of the recovery queue.
+func WindowFromHeader(fraction *float64, resetsAtUnix *int64) Window {
+	if fraction == nil || resetsAtUnix == nil || !isFinite(*fraction) {
+		return Window{}
+	}
 	return Window{
 		Present: true,
-		pct:     fraction * 100,
+		pct:     *fraction * 100,
 		hasPct:  true,
-		reset:   time.Unix(resetsAtUnix, 0).UTC(),
+		reset:   time.Unix(*resetsAtUnix, 0).UTC(),
 		hasTime: true,
 	}
 }
@@ -191,17 +246,61 @@ type ExtraUsage struct {
 	hasPct   bool
 }
 
-// MonthlyLimit is the account's own spend cap, and whether one was reported. A
-// null limit means unlimited, which §7.3 reads as "no account cap" and falls
-// back to the configured ceiling — it does not mean a cap of zero.
-func (e ExtraUsage) MonthlyLimit() (float64, bool) { return e.limit, e.hasLimit }
+// zeroDecimalCurrencies have no minor unit — their smallest unit IS the major
+// one — so an amount in them is not divided. The set is Claude Code's own
+// (`OpE=new Set(["JPY","KRW","VND"])`, consulted by its currency formatter `Zm`
+// before that formatter's `e/100`).
+var zeroDecimalCurrencies = map[string]bool{"JPY": true, "KRW": true, "VND": true}
 
-// UsedCredits is the money already spent, and whether it could be read at all.
-// §7.3 refuses to switch when this is unknown: fail closed on money.
-func (e ExtraUsage) UsedCredits() (float64, bool) { return e.used, e.hasUsed }
+// majorUnits converts a wire amount to the unit max_auto_spend is written in.
+//
+// THE OTHER 100x TRAP, and it is the one that spends money. extra_usage's
+// monthly_limit and used_credits arrive in the currency's MINOR unit — cents for
+// USD — while spec §5's max_auto_spend is dollars. Claude Code's formatter `Zm`
+// proves it by dividing by 100 before rendering either figure, and its own test
+// double maps `spendLimitCents -> monthly_limit` and `usedCents -> used_credits`
+// with no conversion at all. Comparing the two units directly makes a $0.60
+// spend look like $60 against a $50 ceiling and blocks the engine at 1.2% of the
+// authorized budget; in the other direction an account's own cap stops binding.
+//
+// An unreported or unrecognized currency is treated as a two-decimal one, which
+// is what Claude Code does (`tse.currency ?? "USD"`).
+func (e ExtraUsage) majorUnits(minor float64) float64 {
+	if zeroDecimalCurrencies[strings.ToUpper(strings.TrimSpace(e.Currency))] {
+		return minor
+	}
+	return minor / 100
+}
 
-// Percent is extra_usage.utilization, a percent of 0-100.
-func (e ExtraUsage) Percent() (float64, bool) { return e.pct, e.hasPct }
+// MonthlyLimit is the account's own spend cap IN MAJOR UNITS — dollars for USD —
+// and whether one was reported. A null limit means unlimited, which §7.3 reads
+// as "no account cap" and falls back to the configured ceiling; it does not mean
+// a cap of zero.
+func (e ExtraUsage) MonthlyLimit() (float64, bool) {
+	if !e.hasLimit || !isFinite(e.limit) {
+		return 0, false
+	}
+	return e.majorUnits(e.limit), true
+}
+
+// UsedCredits is the money already spent, in major units, and whether it could
+// be read at all. §7.3 refuses to switch when this is unknown: fail closed on
+// money.
+func (e ExtraUsage) UsedCredits() (float64, bool) {
+	if !e.hasUsed || !isFinite(e.used) {
+		return 0, false
+	}
+	return e.majorUnits(e.used), true
+}
+
+// Percent is extra_usage.utilization, a percent of 0-100. Unlike the two money
+// figures it is already a percent on the wire and is not converted.
+func (e ExtraUsage) Percent() (float64, bool) {
+	if !e.hasPct || !isFinite(e.pct) {
+		return 0, false
+	}
+	return e.pct, true
+}
 
 // Limit is one entry of the limits[] array: a per-model or per-surface weekly
 // window the server reports alongside the fixed six.

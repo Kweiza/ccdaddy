@@ -1,6 +1,7 @@
 package usage
 
 import (
+	"encoding/json"
 	"errors"
 	"math"
 	"strconv"
@@ -19,7 +20,7 @@ const realBody = `{
   "seven_day_opus":       {"utilization": 0,    "resets_at": "2026-08-27T00:00:00Z"},
   "seven_day_sonnet":     {"utilization": 3.25, "resets_at": "2026-08-27T00:00:00Z"},
   "cinder_cove":          {"utilization": 10,   "resets_at": "2026-09-30T00:00:00Z"},
-  "extra_usage": {"is_enabled": true, "monthly_limit": 150, "used_credits": 12.5,
+  "extra_usage": {"is_enabled": true, "monthly_limit": 15000, "used_credits": 1250,
                   "utilization": 8.33, "currency": "USD", "disabled_reason": null},
   "limits": [
     {"kind": "weekly_scoped", "group": "model", "percent": 12.5,
@@ -163,7 +164,7 @@ func TestParseStoresUtilizationAsAPercentWithoutRescaling(t *testing.T) {
 // conversion lives at that boundary and is pinned here so the two forms can
 // never be mixed silently.
 func TestPercentFromHeaderFractionConvertsBothAxes(t *testing.T) {
-	w := WindowFromHeader(0.925, 1787389200)
+	w := WindowFromHeader(ptr(0.925), ptrI(1787389200))
 
 	pct, ok := w.Percent()
 	if !ok || pct != 92.5 {
@@ -203,11 +204,13 @@ func TestParseRoundTripsExtraUsage(t *testing.T) {
 	if e.State != ExtraUsageEnabled {
 		t.Errorf("State = %v, want %v", e.State, ExtraUsageEnabled)
 	}
+	// 15000 and 1250 on the wire are $150.00 and $12.50: the endpoint reports
+	// money in the currency's minor unit, and max_auto_spend is in dollars.
 	if v, ok := e.MonthlyLimit(); !ok || v != 150 {
-		t.Errorf("MonthlyLimit() = %v, %v; want 150", v, ok)
+		t.Errorf("MonthlyLimit() = %v, %v; want 150 dollars from 15000 cents", v, ok)
 	}
 	if v, ok := e.UsedCredits(); !ok || v != 12.5 {
-		t.Errorf("UsedCredits() = %v, %v; want 12.5", v, ok)
+		t.Errorf("UsedCredits() = %v, %v; want 12.50 dollars from 1250 cents", v, ok)
 	}
 	if v, ok := e.Percent(); !ok || v != 8.33 {
 		t.Errorf("Percent() = %v, %v; want 8.33", v, ok)
@@ -467,5 +470,178 @@ func TestParseExtraUsageStateIsForwardCompatible(t *testing.T) {
 func TestParseExtraUsageStateTolerAtesCaseAndSpace(t *testing.T) {
 	if got := ParseExtraUsageState("  BLOCKED "); got != ExtraUsageBlocked {
 		t.Errorf("ParseExtraUsageState = %v, want blocked", got)
+	}
+}
+
+func ptr(v float64) *float64 { return &v }
+func ptrI(v int64) *int64    { return &v }
+
+// A header that was not sent is not a header that said zero. Claude Code records
+// a window only when BOTH halves are present, and half a pair here would mean a
+// reset at the 1970 epoch — which reads as "already recovered".
+func TestWindowFromHeaderNeedsBothHalves(t *testing.T) {
+	cases := []struct {
+		name     string
+		fraction *float64
+		reset    *int64
+	}{
+		{"no utilization header", nil, ptrI(1787389200)},
+		{"no reset header", ptr(0.9), nil},
+		{"neither", nil, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := WindowFromHeader(tc.fraction, tc.reset)
+			if w.Present {
+				t.Error("Present = true; half a header pair is not a window")
+			}
+			if _, ok := w.Reset(); ok {
+				t.Error("Reset() reported a value built from a header that was never sent")
+			}
+			if _, ok := w.Percent(); ok {
+				t.Error("Percent() reported a value built from a header that was never sent")
+			}
+		})
+	}
+}
+
+// Number("nonsense") is NaN, which is why Claude Code's own consumer re-checks
+// Number.isFinite on this exact path.
+func TestWindowFromHeaderRefusesANonFiniteFraction(t *testing.T) {
+	for _, v := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		if w := WindowFromHeader(&v, ptrI(1787389200)); w.Present {
+			t.Errorf("fraction %v: Present = true", v)
+		}
+	}
+}
+
+// A non-finite value is not a reading, wherever it came from. Reporting one as
+// KNOWN is worse than reporting it unknown: every NaN comparison is false, so it
+// loses no comparison in the ranking and can hold first place.
+func TestPercentRefusesANonFiniteValue(t *testing.T) {
+	for _, v := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		w := NewWindow(&v, nil)
+		if got, ok := w.Percent(); ok {
+			t.Errorf("NewWindow(%v).Percent() = %v, ok = true", v, got)
+		}
+	}
+}
+
+// THE OTHER 100x TRAP. extra_usage's two money figures arrive in the currency's
+// MINOR unit, while max_auto_spend is written in the major one.
+func TestExtraUsageConvertsMoneyOutOfMinorUnits(t *testing.T) {
+	cases := []struct {
+		name      string
+		currency  string
+		wireLimit float64
+		wireUsed  float64
+		wantLimit float64
+		wantUsed  float64
+	}{
+		{"USD", "USD", 15000, 1250, 150, 12.5},
+		{"lowercase and padded", " usd ", 5000, 60, 50, 0.6},
+		// The zero-decimal case is the one that proves the normalization: a
+		// currency compared verbatim would divide " jpy " by 100.
+		{"lowercase zero-decimal", " jpy ", 15000, 1250, 15000, 1250},
+		// JPY, KRW and VND have no minor unit, so their amounts are not divided.
+		// This is Claude Code's own list, consulted before its formatter's /100.
+		{"JPY", "JPY", 15000, 1250, 15000, 1250},
+		{"KRW", "KRW", 20000, 500, 20000, 500},
+		{"VND", "VND", 20000, 500, 20000, 500},
+		// An unreported currency is a two-decimal one, as Claude Code assumes.
+		{"absent", "", 15000, 1250, 150, 12.5},
+		{"unrecognized", "XYZ", 15000, 1250, 150, 12.5},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := ExtraUsageFor(ExtraUsageInput{State: ExtraUsageEnabled, Currency: tc.currency, MonthlyLimit: &tc.wireLimit, UsedCredits: &tc.wireUsed})
+			if v, ok := e.MonthlyLimit(); !ok || v != tc.wantLimit {
+				t.Errorf("MonthlyLimit() = %v, %v; want %v", v, ok, tc.wantLimit)
+			}
+			if v, ok := e.UsedCredits(); !ok || v != tc.wantUsed {
+				t.Errorf("UsedCredits() = %v, %v; want %v", v, ok, tc.wantUsed)
+			}
+		})
+	}
+}
+
+// extra_usage.utilization is already a percent on the wire, like every other
+// utilization in this schema, and must not be dragged through the money
+// conversion.
+// The constructor has to be able to express every field, including the one only
+// a parsed response used to be able to set.
+func TestExtraUsageForCarriesEveryField(t *testing.T) {
+	e := ExtraUsageFor(ExtraUsageInput{
+		State:          ExtraUsageBlocked,
+		DisabledReason: "out_of_credits",
+		Currency:       "USD",
+		MonthlyLimit:   ptr(15000),
+		UsedCredits:    ptr(1250),
+		Utilization:    ptr(8.33),
+	})
+
+	if !e.Present || e.State != ExtraUsageBlocked || e.DisabledReason != "out_of_credits" || e.Currency != "USD" {
+		t.Errorf("ExtraUsageFor() = %+v", e)
+	}
+	if v, ok := e.Percent(); !ok || v != 8.33 {
+		t.Errorf("Percent() = %v, %v; want 8.33 — a field the constructor cannot set is a field nothing downstream can test against", v, ok)
+	}
+	if v, ok := e.MonthlyLimit(); !ok || v != 150 {
+		t.Errorf("MonthlyLimit() = %v, %v; want 150", v, ok)
+	}
+	if v, ok := e.UsedCredits(); !ok || v != 12.5 {
+		t.Errorf("UsedCredits() = %v, %v; want 12.5", v, ok)
+	}
+}
+
+func TestExtraUsagePercentIsNotConverted(t *testing.T) {
+	s := mustParse(t, `{"extra_usage": {"is_enabled": true, "monthly_limit": 15000,
+	                                    "used_credits": 1250, "utilization": 8.33,
+	                                    "currency": "USD"}}`)
+	if v, ok := s.ExtraUsage.Percent(); !ok || v != 8.33 {
+		t.Errorf("Percent() = %v, %v; want 8.33", v, ok)
+	}
+}
+
+// The disk keeps the WIRE amount, so a cached reading and a live one are the
+// same document and the conversion happens in exactly one place.
+func TestExtraUsageRoundTripsTheWireAmountNotTheConvertedOne(t *testing.T) {
+	s := mustParse(t, realBody)
+
+	encoded, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		ExtraUsage struct {
+			MonthlyLimit *float64 `json:"monthly_limit"`
+			UsedCredits  *float64 `json:"used_credits"`
+		} `json:"extra_usage"`
+	}
+	if err := json.Unmarshal(encoded, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.ExtraUsage.MonthlyLimit == nil || *got.ExtraUsage.MonthlyLimit != 15000 {
+		t.Errorf("monthly_limit = %v, want the wire's 15000", got.ExtraUsage.MonthlyLimit)
+	}
+	if got.ExtraUsage.UsedCredits == nil || *got.ExtraUsage.UsedCredits != 1250 {
+		t.Errorf("used_credits = %v, want the wire's 1250", got.ExtraUsage.UsedCredits)
+	}
+}
+
+// A non-finite figure is not money, and the money path is the one place a NaN
+// getting through actually spends something.
+func TestExtraUsageMoneyRefusesNonFiniteFigures(t *testing.T) {
+	for _, v := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		e := ExtraUsageFor(ExtraUsageInput{State: ExtraUsageEnabled, Currency: "USD", MonthlyLimit: &v, UsedCredits: &v, Utilization: &v})
+		if got, ok := e.UsedCredits(); ok {
+			t.Errorf("UsedCredits() = %v, ok = true for a wire value of %v", got, v)
+		}
+		if got, ok := e.MonthlyLimit(); ok {
+			t.Errorf("MonthlyLimit() = %v, ok = true for a wire value of %v", got, v)
+		}
+		if got, ok := e.Percent(); ok {
+			t.Errorf("Percent() = %v, ok = true for a wire value of %v", got, v)
+		}
 	}
 }

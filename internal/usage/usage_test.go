@@ -71,14 +71,27 @@ func TestFetchUsageSendsTheHeadersClaudeCodeSends(t *testing.T) {
 	if v := got.Get("Content-Type"); v != "application/json" {
 		t.Errorf("Content-Type = %q, want application/json", v)
 	}
-	if v := got.Get("anthropic-beta"); v != BetaHeader {
-		t.Errorf("anthropic-beta = %q, want %q", v, BetaHeader)
+	// The literal, not the constant FetchUsage also reads: comparing BetaHeader
+	// against BetaHeader through an HTTP round trip can never fail for a wrong
+	// value. This is the string spec §3.2.1 fixes.
+	if v := got.Get("anthropic-beta"); v != "oauth-2025-04-20" {
+		t.Errorf("anthropic-beta = %q, want oauth-2025-04-20", v)
+	}
+	if BetaHeader != "oauth-2025-04-20" {
+		t.Errorf("BetaHeader = %q, want oauth-2025-04-20", BetaHeader)
 	}
 	if v := got.Get("Cache-Control"); v != "" {
 		t.Errorf("Cache-Control = %q; the usage call does not set it — only the profile call does", v)
 	}
 	if v := got.Get("Accept"); v != "" {
 		t.Errorf("Accept = %q; only axios adds it, so ccdad must not forge it", v)
+	}
+	// Claude Code's own client sets a FOURTH first-party header here,
+	// `User-Agent: claude-cli/<version> (external, cli)`. ccdad deliberately
+	// does not send it: it names a Claude Code version ccdad is not, and
+	// pinning one is the lie §3.2 already refuses for axios's version string.
+	if v := got.Get("User-Agent"); strings.Contains(v, "claude-cli") {
+		t.Errorf("User-Agent = %q; ccdad must not claim to be a Claude Code build", v)
 	}
 }
 
@@ -100,21 +113,43 @@ func TestFetchUsageNormalizesATrailingSlashInTheBaseURL(t *testing.T) {
 	}
 }
 
-// A rejected credential is a different condition from an endpoint having a bad
-// day, and the caller must be able to tell them apart without reading numbers.
-func TestFetchUsageReportsARejectedCredential(t *testing.T) {
-	for _, code := range []int{http.StatusUnauthorized, http.StatusForbidden} {
-		c := serve(t, func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(code)
-		})
-		_, err := c.FetchUsage(context.Background(), "tok")
-		if !errors.Is(err, ErrUnauthorized) {
-			t.Errorf("HTTP %d: error = %v, want ErrUnauthorized", code, err)
-		}
-		var se *StatusError
-		if !errors.As(err, &se) || se.Status != code {
-			t.Errorf("HTTP %d: error did not carry the status: %v", code, err)
-		}
+// A 401 is "the token is stale, refresh it". Claude Code refreshes and retries
+// this call unconditionally on a 401.
+func TestFetchUsageReportsAStaleToken(t *testing.T) {
+	c := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+
+	_, err := c.FetchUsage(context.Background(), "tok")
+	if !errors.Is(err, ErrUnauthorized) {
+		t.Errorf("error = %v, want ErrUnauthorized", err)
+	}
+	var se *StatusError
+	if !errors.As(err, &se) || se.Status != http.StatusUnauthorized {
+		t.Errorf("error did not carry the status: %v", err)
+	}
+}
+
+// A 403 is NOT the same condition, and folding it into the 401 would have ccdad
+// refresh a perfectly good token forever against an organization that has
+// withdrawn access. Claude Code's own retry wrapper refreshes a 401
+// unconditionally but retries a 403 only for callers that opt in — and the usage
+// call does not, so its 403 is rethrown on the first response.
+func TestFetchUsageDoesNotTreatAForbiddenAsRefreshable(t *testing.T) {
+	c := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	})
+
+	_, err := c.FetchUsage(context.Background(), "tok")
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("error = %v, want ErrForbidden", err)
+	}
+	if errors.Is(err, ErrUnauthorized) {
+		t.Error("a 403 also read as ErrUnauthorized; refreshing the token cannot fix a refusal")
+	}
+	var se *StatusError
+	if !errors.As(err, &se) || se.Status != http.StatusForbidden {
+		t.Errorf("error did not carry the status: %v", err)
 	}
 }
 

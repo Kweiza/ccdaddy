@@ -74,11 +74,18 @@ type CreditBalance struct {
 	// DisabledReason is the organization's own word for a refusal, kept
 	// verbatim because it is what a notification says out loud.
 	DisabledReason string `toml:"disabled_reason,omitempty"`
-	// MonthlyLimit is the account's own spend cap. Nil means the account sets
-	// none — unlimited — which is not the same as a cap of zero.
+	// Currency is the ISO code the figures below are denominated in, so that a
+	// stored 150 is never ambiguous between $150 and ¥150.
+	Currency string `toml:"currency,omitempty"`
+	// MonthlyLimit is the account's own spend cap, in the MAJOR unit — dollars
+	// for USD, the same unit max_auto_spend is written in. The endpoint reports
+	// it in the minor unit; usage.ExtraUsage converts, and that conversion
+	// happens in exactly one place. Nil means the account sets no cap —
+	// unlimited — which is not the same as a cap of zero.
 	MonthlyLimit *float64 `toml:"monthly_limit,omitempty"`
-	// UsedCredits is what has already been spent. Nil means it could not be
-	// read, and that refuses a switch rather than reading as zero.
+	// UsedCredits is what has already been spent, in the same major unit. Nil
+	// means it could not be read, and that refuses a switch rather than reading
+	// as zero.
 	UsedCredits *float64 `toml:"used_credits,omitempty"`
 	// ObservedAt is when the reading behind these figures was taken. The zero
 	// time means no reading ever has been.

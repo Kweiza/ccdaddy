@@ -63,6 +63,9 @@ func (s *Store) ApplyUsage(uuid string, snap *usage.Snapshot, observedAt time.Ti
 }
 
 // creditBalanceOf projects a reading's credit axis onto what the store keeps.
+// The figures come out of the accessors, so they are in the currency's MAJOR
+// unit — the one max_auto_spend is written in — and the currency is recorded
+// alongside them so the number is never ambiguous.
 // An account whose reading carried no extra_usage at all records an empty
 // balance rather than a zeroed one: "no credit axis" and "a credit axis worth
 // nothing" are different facts, and only one of them is safe to spend against.
@@ -73,6 +76,7 @@ func creditBalanceOf(e usage.ExtraUsage, observedAt time.Time) CreditBalance {
 	b := CreditBalance{
 		State:          e.State.String(),
 		DisabledReason: e.DisabledReason,
+		Currency:       e.Currency,
 		ObservedAt:     observedAt,
 	}
 	if limit, ok := e.MonthlyLimit(); ok {

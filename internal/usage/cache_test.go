@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Kweiza/ccdaddy/internal/cclock"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 )
 
@@ -507,5 +508,53 @@ func TestCachePathIsInsideTheCcdadStore(t *testing.T) {
 	}
 	if !strings.HasPrefix(CachePath(), ccpath.StoreHome()) {
 		t.Errorf("CachePath() = %q is outside the store at %q", CachePath(), ccpath.StoreHome())
+	}
+}
+
+// cclock catches a takeover two ways, and only one of them can see a steal that
+// happened after the touch goroutine's last tick: the synchronous re-stat inside
+// Release. Throwing Release's answer away reports success for the one write that
+// actually raced.
+func TestWithCacheReportsALockStolenDuringTheHold(t *testing.T) {
+	dir := isolate(t)
+	lockDir := filepath.Join(dir, cacheLockDir)
+
+	err := WithCache(time.Second, func(c *Cache) error {
+		c.Put("a", Entry{Snapshot: &Snapshot{}, FetchedAt: time.Now()})
+		// Another process deems the lock stale and takes it over: rmdir then
+		// mkdir, which is exactly what cclock.Acquire's steal path does. The
+		// touch ticker has not fired yet, so only Release can notice.
+		if err := os.Remove(lockDir); err != nil {
+			return err
+		}
+		if err := os.Mkdir(lockDir, 0o700); err != nil {
+			return err
+		}
+		past := time.Now().Add(-time.Second)
+		return os.Chtimes(lockDir, past, past)
+	})
+
+	if err == nil {
+		t.Fatal("WithCache() reported success for a write that raced a lock takeover")
+	}
+	if !errors.Is(err, cclock.ErrCompromised) {
+		t.Errorf("error = %v, want it to carry cclock.ErrCompromised", err)
+	}
+	// The stealer's directory is not ours to remove.
+	if _, statErr := os.Stat(lockDir); statErr != nil {
+		t.Error("Release removed a lock directory that belonged to the process that took it over")
+	}
+	_ = os.Remove(lockDir)
+}
+
+// A callback that fails still reports its own error, and joining Release's
+// answer must not swallow it.
+func TestWithCacheKeepsTheCallbacksError(t *testing.T) {
+	isolate(t)
+	boom := errors.New("boom")
+
+	err := WithCache(time.Second, func(c *Cache) error { return boom })
+	if !errors.Is(err, boom) {
+		t.Errorf("error = %v, want boom", err)
 	}
 }
