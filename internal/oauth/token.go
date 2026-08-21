@@ -73,9 +73,11 @@ const (
 	// TokenErrorInvalidCode is a 401, or any status carrying RFC 6749's
 	// invalid_grant: the code or the refresh token was rejected.
 	TokenErrorInvalidCode
-	// TokenErrorInvalidScope is a 400 carrying RFC 6749's invalid_scope: the
-	// endpoint refused the scope set, not the credential. RefreshWith retries
-	// once with the credential's own scopes when it sees this.
+	// TokenErrorInvalidScope is a 400 — and only a 400 — carrying RFC 6749's
+	// invalid_scope: the endpoint refused the scope set, not the credential.
+	// Refresh retries once with the credential's own scopes when it sees this.
+	// Claude Code pins the status the same way: `e.response?.status !== 400`
+	// short-circuits its check before the code is even read.
 	TokenErrorInvalidScope
 	// TokenErrorStatus is any other non-200.
 	TokenErrorStatus
@@ -169,21 +171,30 @@ func (c *Client) ExchangeCode(ctx context.Context, code, verifier, redirectURI, 
 
 // RefreshParams describes one refresh against a stored credential.
 //
-// Only RefreshToken is required, and params carrying nothing else reproduce a
-// default first-party refresh byte for byte. The other fields exist because
-// Claude Code's refresh is a function of the STORED credential, not of the
-// token alone: see refreshScopes.
+// Claude Code's refresh is a function of the whole stored record, not of the
+// token alone: which scopes go on the wire depends on StoredScopes,
+// SubscriptionType and ClientID together. There is deliberately no
+// token-only form — all six refresh call sites in the 2.1.238 bundle pass an
+// explicit scope array, so a token-only call is not a shape Claude Code has,
+// and offering it as the shortest, best-named entry point would make silently
+// stripping an account's expansion scopes the easiest thing to type.
 type RefreshParams struct {
 	RefreshToken string
 
-	// Scopes is the scope set stored with the credential (`scopes[]` in
-	// .credentials.json), not the set to request. What gets requested is
-	// derived from it.
-	Scopes []string
+	// StoredScopes is the scope set recorded WITH the credential (`scopes[]` in
+	// .credentials.json) — not the set to request. What gets requested is
+	// derived from it. Leaving it nil asks for the bare RefreshScopeString,
+	// which is right only for a credential that has no scopes recorded.
+	StoredScopes []string
 
-	// SubscriptionType is the credential's subscriptionType, if any. It is one
-	// of the two things that mark a credential as the default first-party
-	// client.
+	// SubscriptionType is the credential's subscriptionType, if any.
+	//
+	// It is one of the two things that mark a credential as the default
+	// first-party client. Nothing Claude Code writes can carry a
+	// subscriptionType without also carrying user:inference — both credential
+	// writers gate on it — so this field only changes the outcome for a record
+	// something else produced. It is kept because the bundle's predicate has
+	// the disjunct and the cost of honouring it is one line.
 	SubscriptionType string
 
 	// ClientID is the credential's own clientId, for a credential that did not
@@ -198,7 +209,14 @@ func (p RefreshParams) isFirstParty() bool {
 	if p.ClientID != "" {
 		return false
 	}
-	return slices.Contains(p.Scopes, "user:inference") || p.SubscriptionType != ""
+	return p.hasInferenceScope() || p.SubscriptionType != ""
+}
+
+// hasInferenceScope is Claude Code's `IZ(f.scopes)`. It gates the invalid_scope
+// retry on its own, separately from isFirstParty — a subscription makes a
+// credential first-party but does not make the retry fire.
+func (p RefreshParams) hasInferenceScope() bool {
+	return slices.Contains(p.StoredScopes, ScopeInference)
 }
 
 // refreshScopes is Claude Code's
@@ -211,36 +229,43 @@ func (p RefreshParams) isFirstParty() bool {
 // org:create_api_key, which a refresh drops.
 func (p RefreshParams) refreshScopes() []string {
 	if !p.isFirstParty() {
-		return p.Scopes
+		return p.StoredScopes
 	}
-	return dedupe(append(slices.Clone(RefreshScopes), PreservableScopesFrom(p.Scopes)...))
+	return dedupe(append(strings.Split(RefreshScopeString, " "),
+		PreservableScopesFrom(p.StoredScopes)...))
 }
 
-// Refresh trades a refresh token for a new pair, as the default first-party
-// client with no stored scopes to preserve.
-//
-// A caller holding a stored credential should use RefreshWith instead: this
-// form cannot know about expansion scopes or a custom client, and would strip
-// them.
-func (c *Client) Refresh(ctx context.Context, refreshToken string) (*TokenResponse, error) {
-	return c.RefreshWith(ctx, RefreshParams{RefreshToken: refreshToken})
-}
-
-// RefreshWith trades a refresh token for a new pair, deriving the request from
-// the stored credential the way Claude Code does.
+// Refresh trades a refresh token for a new pair, deriving the request from the
+// stored credential the way Claude Code does.
 //
 // On a 400 invalid_scope it retries ONCE with the credential's own scopes,
 // which is Claude Code's `tengu_oauth_refresh_invalid_scope_fallback`. That is
 // not a general retry — refreshing is not idempotent — but a 400 issued no
 // token, so re-sending is safe, and without it an account whose stored scopes
 // the endpoint no longer honours could never refresh at all.
-func (c *Client) RefreshWith(ctx context.Context, p RefreshParams) (*TokenResponse, error) {
+//
+// It does NOT port the caller-side `not_refreshable` guard Claude Code applies
+// before taking its refresh lock (`if(!IZ(i.scopes)&&!i.subscriptionType)`).
+// That is a policy about which accounts are worth refreshing, and it belongs to
+// whoever decides to refresh, not to the client that performs one.
+func (c *Client) Refresh(ctx context.Context, p RefreshParams) (*TokenResponse, error) {
+	// Posting an empty refresh token earns a 400 invalid_grant, which is the
+	// signal §7.2 quarantines on — so the laziest mistake a caller can make
+	// would read as a dead account. Refuse it before it reaches the network.
+	if p.RefreshToken == "" {
+		return nil, fmt.Errorf("refreshing requires a refresh token")
+	}
+
 	out, err := c.refreshOnce(ctx, p, p.refreshScopes())
 
+	// Every conjunct of Claude Code's gate:
+	// `if(!d || !baa(g) || !Array.isArray(f.scopes) || f.scopes.length===0 || !IZ(f.scopes)) throw g`.
+	// hasInferenceScope subsumes the array and length checks — an empty or
+	// absent slice cannot contain user:inference.
 	var te *TokenError
 	if errors.As(err, &te) && te.Kind == TokenErrorInvalidScope &&
-		p.isFirstParty() && len(p.Scopes) > 0 {
-		out, err = c.refreshOnce(ctx, p, p.Scopes)
+		p.isFirstParty() && p.hasInferenceScope() {
+		out, err = c.refreshOnce(ctx, p, p.StoredScopes)
 	}
 	if err != nil {
 		return nil, err
@@ -344,7 +369,7 @@ func (c *Client) post(ctx context.Context, body map[string]string) (*TokenRespon
 		switch {
 		case res.StatusCode == http.StatusUnauthorized, wireErrorCode(data) == "invalid_grant":
 			kind = TokenErrorInvalidCode
-		case wireErrorCode(data) == "invalid_scope":
+		case res.StatusCode == http.StatusBadRequest && wireErrorCode(data) == "invalid_scope":
 			kind = TokenErrorInvalidScope
 		}
 		return nil, &TokenError{Kind: kind, Status: res.StatusCode}
