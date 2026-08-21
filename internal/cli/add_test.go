@@ -163,13 +163,21 @@ func TestCredentialBlobCarriesEveryField(t *testing.T) {
 			t.Errorf("claudeAiOauth[%q] = %#v, want %#v", k, got[k], want)
 		}
 	}
-	for _, k := range []string{"expiresAt", "refreshTokenExpiresAt", "clientId"} {
+	for _, k := range []string{"expiresAt", "refreshTokenExpiresAt"} {
 		if _, ok := got[k]; !ok {
 			t.Errorf("claudeAiOauth is missing %q", k)
 		}
 	}
-	if got["clientId"] != oauth.ClientID {
-		t.Errorf("clientId = %v, want %q (it is what a revocation needs)", got["clientId"], oauth.ClientID)
+	// clientId must NOT be synthesized. Claude Code's login writes
+	// `clientId: t?.oauthClient?.clientId`, which is undefined for the default
+	// public client, so JSON.stringify omits the key — and its ABSENCE is what
+	// Claude Code's own refresh tests: `d = Boolean((IZ(f.scopes) ||
+	// f.subscriptionType) && !f.clientId)` selects the curated refresh scope
+	// set. Writing a clientId flips that to false and makes Claude Code refresh
+	// with the raw stored scopes, including org:create_api_key, which spec §3.1
+	// says the refresh grant must not carry.
+	if _, bad := got["clientId"]; bad {
+		t.Errorf("claudeAiOauth carries a synthesized clientId (%v); a first-party login must omit the key", got["clientId"])
 	}
 	// expiresAt is MILLISECONDS since epoch, as Claude Code writes it.
 	ms, _ := got["expiresAt"].(float64)
@@ -380,18 +388,56 @@ func TestSyntheticLabelIsStableAcrossReAdd(t *testing.T) {
 	}
 }
 
-// Task 12 stopped treating the organization's overage switch as credit
-// evidence. This is the CLI-level regression guard: `ccdad add` classifies with
-// an empty UsageShape because it never fetches usage, and a Max org with
-// overage on must not land behind the credit gate (spec §5).
-func TestMaxOrgWithOverageIsNotStoredAsCredit(t *testing.T) {
-	profile := &identity.Profile{
-		OrganizationType: "claude_max",
-		BillingType:      "subscription",
-		HasExtraUsage:    true,
+// The stored Kind is what the auto-switch engine ranks on (spec §5), so it has
+// to be asserted through the command that stores it — calling identity.Classify
+// directly only duplicates a table case in that package and leaves the CLI's
+// own call site free to be replaced by a constant.
+func TestAddStoresTheClassifiedKind(t *testing.T) {
+	cases := []struct {
+		name        string
+		billingType string
+		want        identity.Kind
+	}{
+		{"a max org with overage on is a subscription", "subscription", identity.KindSubscription},
+		{"a metered billing type is credit", "usage_based", identity.KindCredit},
 	}
-	if got := identity.Classify(profile, identity.UsageShape{}, false); got != identity.KindSubscription {
-		t.Fatalf("Classify(max org with overage, no usage) = %v, want subscription", got)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			isolate(t)
+			stubEnvironment(t, true, false)
+			stubProfile(t, func(w http.ResponseWriter, _ *http.Request) {
+				io.WriteString(w, `{"account":{"uuid":"acct-1","email":"a@example.com"},`+
+					`"organization":{"uuid":"org-1","organization_type":"claude_max",`+
+					`"has_extra_usage_enabled":true,"billing_type":"`+tc.billingType+`"}}`)
+			})
+			stubLogin(t, loginToken("acct-1", "a@example.com", "RT-1"))
+
+			if err, _, _ := runCmd(t, newAddCmd()); err != nil {
+				t.Fatal(err)
+			}
+			s, _ := store.Open()
+			got, ok := s.Get("acct-1")
+			if !ok {
+				t.Fatal("the account was not stored")
+			}
+			if got.Kind != tc.want {
+				t.Fatalf("stored Kind = %v, want %v", got.Kind, tc.want)
+			}
+		})
+	}
+}
+
+// The api-key twin: add-token classifies without a profile at all.
+func TestAddTokenStoresTheAPIKeyKind(t *testing.T) {
+	isolate(t)
+	stubEnvironment(t, false, false)
+
+	if err, _, _ := runCmd(t, newAddTokenCmd(), "sk-ant-api03-KINDTEST"); err != nil {
+		t.Fatal(err)
+	}
+	s, _ := store.Open()
+	if got := s.Accounts()[0].Kind; got != identity.KindAPIKey {
+		t.Fatalf("stored Kind = %v, want api-key", got)
 	}
 }
 
@@ -499,8 +545,8 @@ func TestAddWithActivateWritesTheLiveFile(t *testing.T) {
 	}
 	// subscriptionType is the other half of the same rule, and Claude Code's own
 	// normalizer writes it from the profile's organization_type.
-	if rec["subscriptionType"] != "claude_max" {
-		t.Fatalf("subscriptionType = %v, want the profile's organization type", rec["subscriptionType"])
+	if rec["subscriptionType"] != "max" {
+		t.Fatalf("subscriptionType = %v, want Claude Code's mapped short name", rec["subscriptionType"])
 	}
 	s, _ := store.Open()
 	if got := s.ActiveUUID(); got != "acct-1" {
@@ -684,5 +730,267 @@ func TestAddTokenPromptsOnStderr(t *testing.T) {
 	s, _ := store.Open()
 	if n := len(s.Accounts()); n != 1 {
 		t.Fatalf("Accounts() = %d, want the typed token stored", n)
+	}
+}
+
+// The live credentials file can change without ccdad being told: the user runs
+// `/login` inside Claude Code. ccdad's own active_uuid is a display hint (the
+// store says so), so gating the key carry on it means a re-authentication can
+// absorb whichever account happens to be live — filing that account's device
+// and design tokens under this one. That is a cross-account credential leak,
+// which is worse than the loss it was added to prevent.
+func TestReAuthenticationDoesNotAbsorbAnotherAccountsKeys(t *testing.T) {
+	isolate(t)
+	stubEnvironment(t, true, false)
+	stubProfile(t, func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, profileJSON("acct-1", "a@example.com"))
+	})
+
+	stubLogin(t, loginToken("acct-1", "a@example.com", "RT-1"))
+	if err, _, _ := runCmd(t, newAddCmd(), "--activate"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Someone else's login lands in the live file, out of band. ccdad's
+	// active_uuid still names acct-1.
+	writeLiveFile(t, `{"claudeAiOauth":{"accessToken":"OTHER","refreshToken":"RT-SOMEONE-ELSE"},`+
+		`"trustedDeviceToken":"SOMEONE-ELSES-DEVICE","designOauth":{"refreshToken":"SOMEONE-ELSES-DESIGN"}}`)
+
+	stubLogin(t, loginToken("acct-1", "a@example.com", "RT-2"))
+	if err, _, _ := runCmd(t, newAddCmd()); err != nil {
+		t.Fatal(err)
+	}
+
+	s, _ := store.Open()
+	stored, err := s.Credentials("acct-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, leaked := range []string{"trustedDeviceToken", "designOauth"} {
+		if _, bad := stored[leaked]; bad {
+			t.Fatalf("re-authentication absorbed another account's %s: %s", leaked, stored[leaked])
+		}
+	}
+}
+
+// Adopting the account Claude Code is already logged in as cannot carry its
+// other account-scoped keys — nothing in the credentials file names an account,
+// so ccdad cannot prove the live login is the one just authenticated. The state
+// must not be silent: the first switch away deletes those keys.
+func TestAdoptingTheLiveLoginSaysWhatItCannotCarry(t *testing.T) {
+	isolate(t)
+	stubEnvironment(t, true, false)
+	stubProfile(t, func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, profileJSON("acct-1", "a@example.com"))
+	})
+	writeLiveFile(t, `{"claudeAiOauth":{"accessToken":"OLD","refreshToken":"RT-OLD"},`+
+		`"trustedDeviceToken":"DEVICE","enterpriseGateway":{"url":"https://gw"}}`)
+
+	stubLogin(t, loginToken("acct-1", "a@example.com", "RT-1"))
+	err, _, errOut := runCmd(t, newAddCmd())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(errOut, "trustedDeviceToken") || !strings.Contains(errOut, "enterpriseGateway") {
+		t.Fatalf("stderr = %q, want it to name the account-scoped keys it is not carrying", errOut)
+	}
+}
+
+// spec §4.2 rule 3 names clientId as one of the three fields clauth destroyed.
+// Not synthesizing one is not the same as dropping one that is already stored:
+// a credential that really did come from a non-default client keeps it.
+func TestCredentialBlobPreservesAStoredClientID(t *testing.T) {
+	prior := cclink.Blob{"claudeAiOauth": json.RawMessage(
+		`{"accessToken":"OLD","clientId":"a-non-default-client"}`)}
+	tok := &oauth.TokenResponse{AccessToken: "NEW", RefreshToken: "RT", ExpiresIn: 3600}
+
+	blob, err := credentialBlob(tok, nil, prior)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(blob["claudeAiOauth"], &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["clientId"] != "a-non-default-client" {
+		t.Fatalf("clientId = %v, want the stored one preserved", got["clientId"])
+	}
+}
+
+// Claude Code maps organization_type through a four-entry table before storing
+// it, and every one of its tier predicates compares against the SHORT name:
+// HXe() is `subscriptionType === "max"`. Writing the raw "claude_max" makes a
+// Max subscriber's entitlement invisible to the running Claude Code.
+func TestCredentialBlobMapsSubscriptionType(t *testing.T) {
+	for orgType, want := range map[string]any{
+		"claude_max":        "max",
+		"claude_pro":        "pro",
+		"claude_enterprise": "enterprise",
+		"claude_team":       "team",
+		"something_new":     nil, // unmapped must be null, not the raw string
+	} {
+		tok := &oauth.TokenResponse{AccessToken: "AT", RefreshToken: "RT", ExpiresIn: 3600}
+		blob, err := credentialBlob(tok, &identity.Profile{OrganizationType: orgType}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got map[string]any
+		if err := json.Unmarshal(blob["claudeAiOauth"], &got); err != nil {
+			t.Fatal(err)
+		}
+		if got["subscriptionType"] != want {
+			t.Errorf("organization_type %q -> subscriptionType %#v, want %#v", orgType, got["subscriptionType"], want)
+		}
+	}
+}
+
+// A setup token resolves to a real account uuid, which may already be managed
+// through a browser login. store.Add replaces the credential file wholesale, so
+// writing only the token record there destroys that account's claudeAiOauth —
+// including the refresh token, which nothing else has a copy of.
+func TestAddTokenKeepsAnExistingOAuthRecord(t *testing.T) {
+	isolate(t)
+	stubEnvironment(t, true, false)
+	stubProfile(t, func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, profileJSON("acct-1", "a@example.com"))
+	})
+
+	stubLogin(t, loginToken("acct-1", "a@example.com", "RT-1"))
+	if err, _, _ := runCmd(t, newAddCmd()); err != nil {
+		t.Fatal(err)
+	}
+	if err, _, _ := runCmd(t, newAddTokenCmd(), "sk-ant-oat01-SAMEACCOUNT"); err != nil {
+		t.Fatal(err)
+	}
+
+	s, _ := store.Open()
+	stored, err := s.Credentials("acct-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := stored["claudeAiOauth"]; !ok {
+		t.Fatalf("add-token destroyed the account's OAuth login: %v", stored)
+	}
+	if _, ok := stored[tokenCredentialKey]; !ok {
+		t.Fatalf("add-token did not record the token: %v", stored)
+	}
+}
+
+// An account that has both a browser login and a token is switchable: the OAuth
+// record is what goes in the credentials file, and the token record sitting
+// beside it must not make the account look uninstallable.
+func TestSwitchPrefersTheOAuthRecordOverAToken(t *testing.T) {
+	isolate(t)
+	stubEnvironment(t, true, false)
+	stubProfile(t, func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, profileJSON("acct-1", "a@example.com"))
+	})
+	stubLogin(t, loginToken("acct-1", "a@example.com", "RT-1"))
+	if err, _, _ := runCmd(t, newAddCmd()); err != nil {
+		t.Fatal(err)
+	}
+	if err, _, _ := runCmd(t, newAddTokenCmd(), "sk-ant-oat01-SAMEACCOUNT"); err != nil {
+		t.Fatal(err)
+	}
+
+	code, _, _, top := runRoot(t, "switch", "1")
+	if code != ExitOK {
+		t.Fatalf("switch = %d (%s), want it to activate the OAuth record", code, top)
+	}
+}
+
+// A cancelled profile lookup is not a transient network failure. Filing it as
+// one stores the account under a fabricated token-<hash> uuid and reports
+// success, so the next run stores the SAME account a second time under its real
+// uuid.
+func TestAddTokenOnACancelledContextDoesNotStoreTheAccount(t *testing.T) {
+	isolate(t)
+	stubEnvironment(t, true, false)
+	stubProfile(t, func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, profileJSON("acct-1", "a@example.com"))
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	cmd := newAddTokenCmd()
+	cmd.SetContext(ctx)
+	err, _, _ := runCmd(t, cmd, "sk-ant-oat01-INTERRUPTED")
+	if err == nil {
+		t.Fatal("Execute() = nil, want a cancelled lookup to fail rather than be filed as transient")
+	}
+	if got := CodeFor(err); got != ExitInterrupted {
+		t.Fatalf("CodeFor = %d, want %d", got, ExitInterrupted)
+	}
+	s, _ := store.Open()
+	if n := len(s.Accounts()); n != 0 {
+		t.Fatalf("Accounts() = %d, want nothing stored for an interrupted run", n)
+	}
+}
+
+// A login that ran out of time is not a runtime failure: nothing is wrong with
+// the machine, there is simply no viable target yet. Only the interrupted arm
+// of loginError was pinned.
+func TestAddOnALoginTimeoutIsBlocked(t *testing.T) {
+	isolate(t)
+	stubEnvironment(t, true, false)
+	restore := login
+	t.Cleanup(func() { login = restore })
+	login = func(context.Context, oauth.LoginOptions) (*oauth.LoginResult, error) {
+		return nil, oauth.ErrLoginTimeout
+	}
+
+	err, _, _ := runCmd(t, newAddCmd())
+	if got := CodeFor(err); got != ExitBlocked {
+		t.Fatalf("CodeFor = %d, want %d", got, ExitBlocked)
+	}
+}
+
+// --activate is a switch, so spec §4.3's unknown-key probe has to run on it too.
+func TestAddActivateRunsTheUnknownKeyProbe(t *testing.T) {
+	isolate(t)
+	stubEnvironment(t, true, false)
+	stubProfile(t, func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, profileJSON("acct-1", "a@example.com"))
+	})
+	writeLiveFile(t, `{"claudeAiOauth":{"accessToken":"OLD","refreshToken":"RT-OLD"},"somethingNew":{"a":1}}`)
+	stubLogin(t, loginToken("acct-1", "a@example.com", "RT-1"))
+
+	err, _, errOut := runCmd(t, newAddCmd(), "--activate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(errOut, "somethingNew") {
+		t.Fatalf("stderr = %q, want the unrecognized key named", errOut)
+	}
+}
+
+// Two credentials that cannot identify themselves are not the same credential.
+// A live file carrying account-scoped keys but no OAuth record has identity "",
+// and so does an account with no prior record — comparing those as equal would
+// absorb keys of unknown ownership on the very first add.
+func TestCaptureDoesNotTreatTwoUnidentifiableCredentialsAsEqual(t *testing.T) {
+	isolate(t)
+	stubEnvironment(t, true, false)
+	stubProfile(t, func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, profileJSON("acct-1", "a@example.com"))
+	})
+	// No claudeAiOauth, so credentialIdentity(live) == "" — same as a brand-new
+	// account's prior.
+	writeLiveFile(t, `{"trustedDeviceToken":"UNKNOWN-OWNER","designOauth":{"refreshToken":"UNKNOWN"}}`)
+
+	stubLogin(t, loginToken("acct-1", "a@example.com", "RT-1"))
+	if err, _, _ := runCmd(t, newAddCmd()); err != nil {
+		t.Fatal(err)
+	}
+
+	s, _ := store.Open()
+	stored, err := s.Credentials("acct-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"trustedDeviceToken", "designOauth"} {
+		if _, bad := stored[k]; bad {
+			t.Fatalf("absorbed %s from a credential that cannot identify itself: %v", k, stored)
+		}
 	}
 }

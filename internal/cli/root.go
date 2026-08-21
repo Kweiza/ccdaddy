@@ -1,12 +1,10 @@
 package cli
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
 	"strings"
 	"syscall"
 
@@ -83,19 +81,17 @@ func ExecuteCmd(root *cobra.Command) error {
 
 // Execute builds the command tree, runs it, and returns the process exit code.
 //
-// The root carries a context cancelled by SIGINT. `add` is the first command
-// that blocks for minutes — on a browser callback or a pasted code — and
-// without this its cancellation arm is unreachable: Ctrl-C would kill the
-// process by default disposition, abandoning the loopback listener and any lock
-// directory rather than unwinding them. Spec §6.4 asks for a clean exit at 130,
-// and 130 is only correct if something actually cleaned up.
+// SIGINT is deliberately NOT trapped here. Trapping it process-wide removes its
+// default terminating disposition for every command, and only the commands that
+// actually watch the context can then do anything about it — which turned
+// Ctrl-C into a no-op on `switch` waiting for a credential lock and on
+// `add-token` blocked reading stdin, where the process had to be killed
+// outright. The trap is installed by `add` alone, for the span of its own
+// blocking login; everywhere else Ctrl-C keeps its default meaning, which the
+// shell already reports as 130.
 func Execute() ExitCode {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
-
-	root := NewRootCmd()
-	root.SetContext(ctx)
-	return ExecuteWith(root, os.Stderr)
+	ignoreSIGPIPE()
+	return ExecuteWith(NewRootCmd(), os.Stderr)
 }
 
 // ExecuteWith runs an already-built root command and reports the exit code,

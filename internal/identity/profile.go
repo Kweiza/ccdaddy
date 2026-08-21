@@ -139,7 +139,15 @@ func (c *Client) FetchProfile(ctx context.Context, accessToken string) (*Profile
 
 	data, err := io.ReadAll(io.LimitReader(res.Body, maxProfileBytes))
 	if err != nil {
-		return nil, fmt.Errorf("reading the profile response")
+		// The body can stop mid-read for the same reasons the request can: a
+		// cancelled context, a dropped connection. Reporting only "reading the
+		// profile response" sends a user to look at the endpoint when they
+		// cancelled it themselves, so keep the cause and name cancellation
+		// exactly as the request path does.
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("the profile lookup was cancelled: %w", ctx.Err())
+		}
+		return nil, fmt.Errorf("reading the profile response: %w", err)
 	}
 	if res.StatusCode != http.StatusOK {
 		return nil, &StatusError{Status: res.StatusCode}

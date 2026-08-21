@@ -144,11 +144,21 @@ func Acquire(lockDir string, opts Options) (*Lock, error) {
 	if opts.TouchInterval*2 > opts.Stale {
 		return nil, fmt.Errorf("cclock: touch interval %s must be at most half of stale threshold %s, or a stalled toucher lets the lock go stale by its own definition between touches", opts.TouchInterval, opts.Stale)
 	}
+	// 0o700 is tighter than the 0o777&~umask Node gives the same directory when
+	// Claude Code creates it first. That is interop-neutral — the directory is
+	// only ever read by its owner, and whichever process creates it, the other
+	// can still take locks in it — and it is the right default for a path that
+	// holds credentials. Tightening an EXISTING directory is deliberately not
+	// done here: that is the store's job for its own tree, not ccdad's for
+	// Claude Code's.
 	if err := os.MkdirAll(filepath.Dir(lockDir), 0o700); err != nil {
 		return nil, fmt.Errorf("creating lock parent: %w", err)
 	}
 
 	deadline := time.Now().Add(opts.Timeout)
+	// The last reason a stale lock could not be removed, if any. Carried out
+	// through the timeout so a permanent failure reports what it actually was.
+	var lastStealErr error
 	for attempt := 0; ; attempt++ {
 		// Bound every path back to the top of this loop, including the two
 		// "continue" paths below: a stale lock whose removal keeps failing
@@ -158,6 +168,10 @@ func Acquire(lockDir string, opts Options) (*Lock, error) {
 		// attempt" still gets to make that attempt instead of expiring
 		// before ever calling Mkdir.
 		if attempt > 0 && time.Now().After(deadline) {
+			if lastStealErr != nil {
+				return nil, fmt.Errorf("%s: %w (its holder looks gone, but the lock could not be removed: %v)",
+					filepath.Base(lockDir), ErrTimeout, lastStealErr)
+			}
 			return nil, fmt.Errorf("%s: %w", filepath.Base(lockDir), ErrTimeout)
 		}
 
@@ -179,8 +193,15 @@ func Acquire(lockDir string, opts Options) (*Lock, error) {
 		}
 		if time.Since(info.ModTime()) > opts.Stale {
 			if rmErr := os.Remove(lockDir); rmErr != nil {
-				// Another waiter beat us to the removal, or we cannot remove it
-				// at all. Either way, do not spin hot.
+				// ENOENT means another waiter beat us to it, which is the normal
+				// race and carries no information. Anything else — a read-only
+				// parent, a permission problem — will not fix itself, and
+				// retrying until Timeout would report ErrTimeout and bury the
+				// only sentence that says what to do about it. Keep it, and let
+				// the timeout carry it out.
+				if !errors.Is(rmErr, os.ErrNotExist) {
+					lastStealErr = rmErr
+				}
 				time.Sleep(50 * time.Millisecond)
 			}
 			continue

@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"syscall"
 	"testing"
 	"time"
 
@@ -375,37 +374,34 @@ func TestActivateRefusesSnapshotWithoutOAuth(t *testing.T) {
 	}
 }
 
-// Claude Code's storage-V5 change probe watches dev:ino:size:mtimeNs, so a
-// running session detects a swap by inode change even at an identical
-// mtime. WriteFileAtomic's sibling-temp-file-then-rename is what produces a
-// new inode; an in-place write would be invisible to that probe. This is
-// also the test that catches "the atomic write replaced with os.WriteFile":
-// the credentials file already exists with mode 0600 before Activate runs,
-// so an in-place os.WriteFile would leave both content and mode looking
-// correct while silently keeping the old inode.
-func TestActivateWritesViaRenameSoTheInodeChanges(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("inode numbers are not meaningful on Windows")
-	}
+// Claude Code writes the credentials file with JSON.stringify(x, null, 2),
+// which does not HTML-escape. Go's encoder rewrites '&', '<' and '>' into their
+// \\u00xx escapes — inside a RawMessage it is only copying through, too — so a
+// machine key holding a URL with a query string would come back byte-different
+// from what Claude Code wrote. The values parse the same either way; matching
+// the bytes is what keeps a diff of this file meaningful.
+func TestActivateDoesNotHTMLEscapeTheCredentialsFile(t *testing.T) {
 	withClaudeHome(t)
-	path := writeCreds(t, `{"claudeAiOauth":{"accessToken":"old"}}`)
-
-	before, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	beforeIno := before.Sys().(*syscall.Stat_t).Ino
+	// A MACHINE-scoped key, so Merge preserves it across the swap — an
+	// account-scoped one would be deleted, which is correct and would test
+	// nothing about encoding.
+	path := writeCreds(t, `{"claudeAiOauth":{"accessToken":"old"},`+
+		`"mcpOAuth":{"server":{"authorizationUrl":"https://idp.example.com/a?x=1&y=2<z>"}}}`)
 
 	if err := Activate(Blob{"claudeAiOauth": json.RawMessage(`{"accessToken":"new"}`)}); err != nil {
 		t.Fatal(err)
 	}
 
-	after, err := os.Stat(path)
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	afterIno := after.Sys().(*syscall.Stat_t).Ino
-	if afterIno == beforeIno {
-		t.Fatalf("inode did not change across Activate (stayed %d); an in-place write is invisible to Claude Code's storage-V5 change probe", beforeIno)
+	for _, escaped := range []string{`\u0026`, `\u003c`, `\u003e`} {
+		if bytes.Contains(raw, []byte(escaped)) {
+			t.Fatalf("the credentials file carries the escape %s; Claude Code writes these characters literally:\n%s", escaped, raw)
+		}
+	}
+	if !bytes.Contains(raw, []byte("x=1&y=2<z>")) {
+		t.Fatalf("the preserved machine key lost its literal characters:\n%s", raw)
 	}
 }

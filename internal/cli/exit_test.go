@@ -46,3 +46,28 @@ func TestCodeForPlainError(t *testing.T) {
 		t.Fatalf("CodeFor(plain) = %d, want %d", got, ExitFailure)
 	}
 }
+
+// The numeric values ARE the contract. Every other assertion in this package
+// compares a produced constant against the same constant, which cannot notice a
+// renumbering — and spec §9.3 exists precisely because cswap collapsed two
+// meanings onto one number.
+func TestExitCodeLiterals(t *testing.T) {
+	want := map[ExitCode]int{
+		ExitOK: 0, ExitFailure: 1, ExitUsage: 2, ExitNothingToDo: 3,
+		ExitBlocked: 4, ExitProbeNegative: 5, ExitInterrupted: 130,
+	}
+	for code, n := range want {
+		if int(code) != n {
+			t.Errorf("exit code = %d, want %d", int(code), n)
+		}
+	}
+	// Two codes collapsing onto one number is the cswap defect by name: exit 4
+	// says "do something", exit 3 says "ignore me".
+	seen := map[int]bool{}
+	for code := range want {
+		if seen[int(code)] {
+			t.Fatalf("two exit codes share the value %d", int(code))
+		}
+		seen[int(code)] = true
+	}
+}

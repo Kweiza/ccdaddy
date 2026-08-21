@@ -34,6 +34,12 @@ func oauthRefreshLockDir(home string) string {
 }
 
 func legacyRefreshLockDir(home string) string {
+	// The EvalSymlinks error is deliberately dropped rather than surfaced. It
+	// fails when the home does not exist yet — the ordinary first-run state,
+	// since this name is computed before anything creates the directory — and
+	// Claude Code's own realpath call degrades the same way. Falling back to the
+	// unresolved path is what it does too, so the two still agree on the lock
+	// name. A hard failure here would make a first run unable to lock at all.
 	if resolved, err := filepath.EvalSymlinks(home); err == nil {
 		home = resolved
 	}

@@ -166,7 +166,14 @@ func Activate(incoming Blob) (err error) {
 	}
 
 	merged := Merge(live, incoming)
-	data, err := json.MarshalIndent(merged, "", "  ")
+	// Indented two spaces and NOT HTML-escaped, which is what Claude Code
+	// writes: `JSON.stringify(t,null,2)` followed by fsync and rename.
+	// json.MarshalIndent would rewrite '&', '<' and '>' as \u0026, \u003c and
+	// \u003e -- inside RawMessage values too, so a machine key holding a URL
+	// with a query string comes back byte-different from what Claude Code wrote.
+	// The values parse identically either way; matching the bytes is what keeps
+	// a diff of the credentials file meaningful.
+	data, err := marshalIndentNoEscape(merged)
 	if err != nil {
 		return fmt.Errorf("encoding credentials: %w", err)
 	}

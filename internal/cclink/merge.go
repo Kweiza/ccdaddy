@@ -131,9 +131,12 @@ func decodeObject(raw json.RawMessage) (map[string]json.RawMessage, bool) {
 }
 
 // marshalNoEscape encodes v without HTML-escaping '<', '>' and '&', unlike
-// json.Marshal. It is used only to re-encode the small coworkRemoteDevice
-// sub-object: every other value in this package passes through untouched as
-// RawMessage, so this is the sole place re-encoding can alter bytes at all.
+// json.Marshal. It re-encodes the small coworkRemoteDevice sub-object.
+//
+// The escaping matters wherever this package writes JSON, not only here: Go's
+// encoder rewrites those three characters even inside a json.RawMessage it is
+// merely copying through, so an unescaped encoder is needed at the top level
+// too -- see marshalIndentNoEscape.
 func marshalNoEscape(v any) (json.RawMessage, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
@@ -142,4 +145,17 @@ func marshalNoEscape(v any) (json.RawMessage, error) {
 		return nil, err
 	}
 	return json.RawMessage(bytes.TrimRight(buf.Bytes(), "\n")), nil
+}
+
+// marshalIndentNoEscape renders the credentials file the way Claude Code does:
+// two-space indent, no HTML escaping.
+func marshalIndentNoEscape(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimRight(buf.Bytes(), "\n"), nil
 }
