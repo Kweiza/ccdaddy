@@ -81,6 +81,38 @@ type NamedWindow struct {
 	Window
 }
 
+// NewWindow builds a present Window from already-normalized values: a percent
+// of 0-100 and a reset time, either of which may be nil for "not reported". The
+// zero Window is the absent one, so this is the only way to say "present, and
+// here is what it said".
+//
+// It exists because Window's tri-state fields are unexported — which is what
+// stops a caller reading a zero out of an unknown — and without a constructor
+// every package downstream would have to build its test readings out of JSON.
+func NewWindow(pct *float64, resetsAt *time.Time) Window {
+	w := Window{Present: true}
+	if pct != nil {
+		w.pct, w.hasPct = *pct, true
+	}
+	if resetsAt != nil {
+		w.reset, w.hasTime = resetsAt.UTC(), true
+	}
+	return w
+}
+
+// ExtraUsageFor builds a present ExtraUsage, for the same reason NewWindow
+// exists. The zero value stays the absent one.
+func ExtraUsageFor(state ExtraUsageState, disabledReason string, monthlyLimit, usedCredits *float64) ExtraUsage {
+	e := ExtraUsage{Present: true, State: state, DisabledReason: disabledReason}
+	if monthlyLimit != nil {
+		e.limit, e.hasLimit = *monthlyLimit, true
+	}
+	if usedCredits != nil {
+		e.used, e.hasUsed = *usedCredits, true
+	}
+	return e
+}
+
 // WindowFromHeader builds a Window from the anthropic-ratelimit-unified-*
 // response headers, which use the OTHER representation: utilization is a 0-1
 // fraction and resets_at is an epoch second. This is the single conversion
