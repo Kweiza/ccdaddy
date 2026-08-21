@@ -42,3 +42,24 @@ func TestScopesMatchClaudeCodeExactlyAndInOrder(t *testing.T) {
 		t.Fatalf("ScopeString = %q, want %q", ScopeString, got)
 	}
 }
+
+// The refresh grant's scope set is NOT the authorize set: Claude Code drops
+// org:create_api_key there. Written out again for the same reason as above.
+func TestRefreshScopesMatchClaudeCodeExactlyAndInOrder(t *testing.T) {
+	want := []string{
+		"user:profile",
+		"user:inference",
+		"user:sessions:claude_code",
+		"user:mcp_servers",
+		"user:file_upload",
+	}
+	if !slices.Equal(RefreshScopes, want) {
+		t.Fatalf("RefreshScopes = %q, want %q", RefreshScopes, want)
+	}
+	if got := strings.Join(want, " "); RefreshScopeString != got {
+		t.Fatalf("RefreshScopeString = %q, want %q", RefreshScopeString, got)
+	}
+	if slices.Contains(RefreshScopes, "org:create_api_key") {
+		t.Fatal("RefreshScopes carries org:create_api_key; Claude Code's refresh does not request it")
+	}
+}
