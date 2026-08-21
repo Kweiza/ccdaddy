@@ -101,8 +101,20 @@ type Client struct {
 }
 
 // NewClient returns a Client with Claude Code's 30s timeout on this endpoint.
+//
+// Unlike Claude Code's axios call it refuses to FOLLOW a redirect. The token
+// endpoint never legitimately sends one, and following it hands the credentials
+// to whoever the redirect names: 307 and 308 replay the POST body — refresh
+// token and PKCE verifier included — and every 3xx would let the redirect
+// target supply the tokens ccdad writes to disk. Against a well-behaved server
+// this deviation is unobservable.
 func NewClient() *Client {
-	httpClient := &http.Client{Timeout: tokenRequestTimeout}
+	httpClient := &http.Client{
+		Timeout: tokenRequestTimeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 	// Clone the stdlib transport so proxy environment variables keep working.
 	// If something in the process replaced DefaultTransport, fall back to the
 	// zero transport rather than panicking inside a login.
