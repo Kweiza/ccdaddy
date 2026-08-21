@@ -8,16 +8,16 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
-// decomposedCafe is "café" in NFD form: LATIN SMALL LETTER E (U+0065) followed
+// decomposedCafe is "caf\u00e9" in NFD form: LATIN SMALL LETTER E (U+0065) followed
 // by COMBINING ACUTE ACCENT (U+0301) -- the decomposed form macOS's filesystem
 // hands back for accented names. Spelled with explicit \u escapes, not a
 // literal accented character, so the decomposition survives any editor or VCS
 // filter that re-normalizes source files to NFC.
-const decomposedCafe = "café"
+const decomposedCafe = "caf\u0065\u0301"
 
 // composedCafe is the same string in NFC form: LATIN SMALL LETTER E WITH
 // ACUTE (U+00E9) as a single code point.
-const composedCafe = "café"
+const composedCafe = "caf\u00e9"
 
 func TestConfigHomeDefault(t *testing.T) {
 	home := t.TempDir()
