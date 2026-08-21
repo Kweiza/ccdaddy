@@ -78,9 +78,25 @@ func pasteFrom(r io.Reader) PasteSource {
 
 // SplitPaste parses a pasted `code#state` value.
 //
-// Both halves are required. Claude Code requires them syntactically and then
-// discards the pasted state; ccdad validates it against the attempt, which costs
-// nothing and catches a code pasted from a different login window.
+// Verified against the 2.1.238 bundle rather than inferred. Claude Code's own
+// paste handler is `let[ie,fe]=re.split("#"); if(!ie||!fe){...error...};
+// handleManualAuthCodeInput({authorizationCode:ie,state:fe})`, sitting next to
+// the `tengu_oauth_manual_entry` event and in the class whose config carries
+// CLIENT_ID 9d1c250a-e61b-44d9-88ed-5944d1962f5e — so it is Claude Code's own
+// login, not the MCP OAuth client and not msal, both of which also split on '#'
+// elsewhere in the binary and have misled this check before.
+//
+// Both halves are required, exactly as there. The pasted state is where the two
+// deliberately differ: handleManualAuthCodeInput takes it and forwards only
+// e.authorizationCode to its resolver, so Claude Code requires the state
+// syntactically and then drops it. ccdad validates it against the attempt
+// instead, which costs nothing and catches a code pasted from a different login
+// window. Stricter than the original, not divergent from it.
+//
+// The leading TrimSpace matches Claude Code's headless `claude login` reader
+// (`m.trim().split("#")`), which is the path ccdad is the analogue of. Its
+// interactive Ink prompt does not trim, and would forward a space-prefixed code
+// to the token exchange; there is no reason to reproduce that.
 func SplitPaste(s string) (code, state string, err error) {
 	s = strings.TrimSpace(s)
 	before, after, found := strings.Cut(s, "#")

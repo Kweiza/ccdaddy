@@ -567,3 +567,22 @@ func TestAwaitWinnerDeadlineIsNotPushedOutByRepromptTurns(t *testing.T) {
 		t.Fatalf("the deadline arrived after %v for a 200ms timeout; it is being rebuilt inside the loop", elapsed)
 	}
 }
+
+// Both sides split on the FIRST '#', so a value carrying more than one keeps the
+// remainder in the state half. Claude Code's `let[code,state]=s.split("#")`
+// destructuring reaches the same code — it drops everything past the second '#'
+// rather than keeping it, but the code half, which is the part that matters, is
+// identical. A single-'#' fixture cannot tell first from last, which is why this
+// case exists.
+func TestSplitPasteSplitsOnTheFirstHash(t *testing.T) {
+	code, state, err := SplitPaste("THE-CODE#THE#STATE")
+	if err != nil {
+		t.Fatalf("SplitPaste() = %v, want nil", err)
+	}
+	if code != "THE-CODE" {
+		t.Fatalf("code = %q, want THE-CODE", code)
+	}
+	if state != "THE#STATE" {
+		t.Fatalf("state = %q, want the remainder after the first '#'", state)
+	}
+}
