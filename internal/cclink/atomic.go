@@ -33,6 +33,13 @@ var renameFile = os.Rename
 // depending on platform-specific errors.
 var retryable = replaceRetryable
 
+// syncFile flushes a file's contents to disk. It is a seam so a test can pin
+// that the sync happens BEFORE the rename: crash durability itself is not
+// observable from a Go test, but a refactor deleting the call is, and without
+// the sync a crash between write and rename can leave the renamed file present
+// but empty -- which reads as a corrupt credential store.
+var syncFile = (*os.File).Sync
+
 // WriteFileAtomic writes data to path via a sibling temp file and a rename.
 //
 // The temp file MUST be a sibling: a rename within one directory is atomic, so
@@ -70,7 +77,7 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	// lose the directory-entry update and revert to the old file. That gap is
 	// accepted: the failure mode is benign, since the old credentials survive
 	// intact rather than becoming corrupt.
-	if err := tmp.Sync(); err != nil {
+	if err := syncFile(tmp); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("syncing temp file: %w", err)
 	}

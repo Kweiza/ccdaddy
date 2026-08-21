@@ -134,6 +134,47 @@ func TestWriteFileAtomicCreatesTempBesideTarget(t *testing.T) {
 	}
 }
 
+// TestWriteFileAtomicSyncsBeforeRename pins that the fsync actually happens,
+// and that it happens before the rename. Crash durability itself is not
+// observable from a Go test -- proving the sync's disk-flush guarantee would
+// need OS-level fault injection -- but a refactor that drops the syncFile
+// call, or moves it after the rename, is observable, and this test exists to
+// catch exactly that regression.
+func TestWriteFileAtomicSyncsBeforeRename(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".credentials.json")
+
+	origSync := syncFile
+	origRename := renameFile
+	t.Cleanup(func() {
+		syncFile = origSync
+		renameFile = origRename
+	})
+
+	var events []string
+	syncFile = func(f *os.File) error {
+		events = append(events, "sync")
+		return origSync(f)
+	}
+	renameFile = func(oldpath, newpath string) error {
+		events = append(events, "rename")
+		return origRename(oldpath, newpath)
+	}
+
+	if err := WriteFileAtomic(path, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{"sync", "rename"}
+	if len(events) != len(want) {
+		t.Fatalf("events = %v, want %v", events, want)
+	}
+	for i := range want {
+		if events[i] != want[i] {
+			t.Fatalf("events = %v, want %v (sync must happen before the rename)", events, want)
+		}
+	}
+}
+
 func TestWriteFileAtomicFailsOnMissingDirectory(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nope", ".credentials.json")
 
