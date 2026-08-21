@@ -45,3 +45,18 @@ const ScopeString = "org:create_api_key user:profile user:inference " +
 // Scopes is the same set split out, for callers that need the individual tokens
 // rather than the wire string.
 var Scopes = strings.Split(ScopeString, " ")
+
+// RefreshScopeString is the scope parameter Claude Code sends on the REFRESH
+// grant, and it is deliberately not ScopeString: it drops org:create_api_key.
+//
+// In the 2.1.238 bundle the authorize builder joins `Jjs`, the deduped union of
+// both scope lists, while the refresh call joins `UYe` alone. Omitting the
+// parameter is not equivalent — RFC 6749 §6 reads an absent scope as "the same
+// as originally granted", which would keep all six. A live
+// ~/.claude/.credentials.json holds exactly these five, so sending anything else
+// would write a scope set Claude Code never produces into the file ccdad swaps.
+const RefreshScopeString = "user:profile user:inference " +
+	"user:sessions:claude_code user:mcp_servers user:file_upload"
+
+// RefreshScopes is RefreshScopeString split out, mirroring Scopes.
+var RefreshScopes = strings.Split(RefreshScopeString, " ")
