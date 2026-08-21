@@ -224,41 +224,41 @@ func (c *Cache) save(root string) error {
 //
 // fn returning an error leaves the file exactly as it was: a poll that failed
 // halfway must not persist half a reading.
-func WithCache(timeout time.Duration, fn func(*Cache) error) error {
-	root, err := storeRoot()
-	if err != nil {
-		return err
+func WithCache(timeout time.Duration, fn func(*Cache) error) (err error) {
+	root, rerr := storeRoot()
+	if rerr != nil {
+		return rerr
 	}
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return fmt.Errorf("creating the ccdad store: %w", err)
 	}
 
-	lock, err := cclock.Acquire(cacheLockPath(), cclock.Options{
+	lock, aerr := cclock.Acquire(cacheLockPath(), cclock.Options{
 		Stale:   cacheLockStale,
 		Timeout: timeout,
 	})
-	if err != nil {
-		return fmt.Errorf("locking the usage cache: %w", err)
+	if aerr != nil {
+		return fmt.Errorf("locking the usage cache: %w", aerr)
 	}
-	defer func() { _ = lock.Release() }()
+	// Release's return value is part of the answer, not noise. cclock detects a
+	// takeover two ways, and the one Release performs — a synchronous re-stat of
+	// the lock directory — is the ONLY one that can see a takeover in the window
+	// between the touch goroutine's last tick and now. Discarding it would
+	// report success for exactly the write that raced. It also reports a lock
+	// directory that could not be removed, which would otherwise block every
+	// other writer silently until the stale threshold elapsed.
+	defer func() { err = errors.Join(err, lock.Release()) }()
 
 	c, err := LoadCache()
 	if err != nil {
 		return err
 	}
+	// A cache that could not be parsed is deliberately overwritten rather than
+	// preserved: nothing in it was recoverable, and refusing to write would
+	// leave the file broken for every future run. LoadError has already
+	// recorded what happened for `ccdad doctor`.
 	if err := fn(c); err != nil {
 		return err
 	}
-	if err := c.save(root); err != nil {
-		return err
-	}
-	// The lock can be stolen by a waiter that deemed it stale, and a write that
-	// happened after that is a write that raced. Say so rather than reporting
-	// success on a document another process may have overwritten.
-	select {
-	case <-lock.Compromised():
-		return fmt.Errorf("the usage cache lock was taken over while held; the write may have raced")
-	default:
-	}
-	return nil
+	return c.save(root)
 }

@@ -107,6 +107,20 @@ func (o Options) horizon() time.Duration {
 	return o.Horizon
 }
 
+// threshold defaults the same way Horizon does, and it matters more.
+//
+// A zero Threshold read literally means "over threshold if utilization > 0", so
+// an account with a single percent used counts as spent — which flows straight
+// into SubscriptionExhausted, the input that opens the credit gate. The zero
+// value of this struct would therefore fail OPEN on money, against everything
+// §7.3 stands for. Defaulting it makes the omission harmless instead.
+func (o Options) threshold() float64 {
+	if o.Threshold <= 0 {
+		return DefaultThreshold
+	}
+	return o.Threshold
+}
+
 // Ranked is a candidate with the figures the ranking used, so a caller can
 // explain the order rather than only obey it.
 type Ranked struct {
@@ -125,12 +139,23 @@ type Ranked struct {
 
 // Result is one ranking pass.
 type Result struct {
-	// Order is the eligible candidates, best first.
+	// Order is the SUBSCRIPTION pool, best first.
 	Order []Ranked
-	// AllOverThreshold is true only when every eligible candidate is KNOWN to
-	// be over threshold. An account that could not be read makes it false: it
-	// is neither over nor under, and letting one expired token decide this is
-	// how cswap's engine came to park itself permanently.
+	// Credit is the credit accounts, in uuid order. They are not ranked here
+	// and never appear in Order: a credit account is metered in money and
+	// carries no plan windows, so its headroom is permanently unknown — which
+	// would file it in the "we have no idea" tier, ahead of every account known
+	// to be spent, and make the engine's best candidate the one that costs
+	// money. §7.3 calls credit accounts a last resort, and the gate, not this
+	// comparator, is what decides whether one may be used.
+	Credit []Ranked
+	// AllOverThreshold is true only when every SUBSCRIPTION candidate is KNOWN
+	// to be over threshold. An account that could not be read makes it false:
+	// it is neither over nor under, and letting one expired token decide this
+	// is how cswap's engine came to park itself permanently. Credit accounts
+	// are excluded, or a registered credit account's permanently unknown
+	// headroom would pin this to false and make §7.1's recovery situation
+	// unreachable.
 	AllOverThreshold bool
 	Mode             Mode
 }
@@ -138,6 +163,9 @@ type Result struct {
 // eligible drops the accounts that cannot be ranked at all, BEFORE any ordering
 // happens. KindAPIKey has no quota concept, so there is nothing to compare it
 // on; a disabled account is held out of auto-rotation by the user.
+//
+// KindCredit IS eligible — it is a real switch target — but it is ranked on the
+// credit axis rather than on headroom; see Result.Credit.
 func eligible(c Candidate) bool {
 	return !c.Disabled && c.Kind != identity.KindAPIKey
 }
@@ -200,24 +228,30 @@ func measure(c Candidate, o Options) Ranked {
 // Rank orders the eligible accounts, best first. It does not reorder its input.
 func Rank(cands []Candidate, o Options) Result {
 	measured := make([]Ranked, 0, len(cands))
-	// True until some candidate turns out not to be known-and-over. An account
-	// that could not be read counts against it: it is neither over nor under,
-	// and letting one expired token answer this is how cswap's engine came to
-	// park itself permanently.
+	credit := make([]Ranked, 0)
+	// True until some SUBSCRIPTION candidate turns out not to be known-and-over.
+	// An account that could not be read counts against it: it is neither over
+	// nor under, and letting one expired token answer this is how cswap's engine
+	// came to park itself permanently.
 	allOver := true
 	for _, c := range cands {
 		if !eligible(c) {
 			continue
 		}
 		r := measure(c, o)
+		if c.Kind == identity.KindCredit {
+			credit = append(credit, r)
+			continue
+		}
 		measured = append(measured, r)
 
-		if over, known := overThreshold(r.Headroom, o.Threshold); !known || !over {
+		if over, known := overThreshold(r.Headroom, o.threshold()); !known || !over {
 			allOver = false
 		}
 	}
+	sort.SliceStable(credit, func(i, j int) bool { return credit[i].UUID < credit[j].UUID })
 
-	res := Result{Order: measured, AllOverThreshold: allOver}
+	res := Result{Order: measured, Credit: credit, AllOverThreshold: allOver}
 	switch {
 	case o.Strategy == StrategyConsumeFirst:
 		res.Mode = ModeConsumeFirst
@@ -227,7 +261,7 @@ func Rank(cands []Candidate, o Options) Result {
 		sort.SliceStable(measured, func(i, j int) bool { return lessRecovery(measured[i], measured[j]) })
 	default:
 		res.Mode = ModeHeadroom
-		sort.SliceStable(measured, func(i, j int) bool { return lessHeadroom(measured[i], measured[j], o.Threshold) })
+		sort.SliceStable(measured, func(i, j int) bool { return lessHeadroom(measured[i], measured[j], o.threshold()) })
 	}
 	return res
 }
@@ -327,7 +361,7 @@ func SubscriptionExhausted(cands []Candidate, o Options) bool {
 		return true
 	}
 	for _, c := range subs {
-		over, known := overThreshold(HeadroomOf(c.Usage), o.Threshold)
+		over, known := overThreshold(HeadroomOf(c.Usage), o.threshold())
 		if !known || !over {
 			return false
 		}

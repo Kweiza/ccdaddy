@@ -119,14 +119,16 @@ func TestCreditRoomRefusesNaNSpendFigures(t *testing.T) {
 
 // ---- the gate --------------------------------------------------------------
 
+// enabledExtra takes WIRE amounts, in cents, because that is what the endpoint
+// sends and what usage.ExtraUsage stores; the accessors convert to dollars.
 func enabledExtra(limit, used *float64) usage.ExtraUsage {
-	return usage.ExtraUsageFor(usage.ExtraUsageEnabled, "", limit, used)
+	return usage.ExtraUsageFor(usage.ExtraUsageInput{State: usage.ExtraUsageEnabled, Currency: "USD", MonthlyLimit: limit, UsedCredits: used})
 }
 
 // Step 1 and 2: the credit pool is consulted only once the subscription pool is
 // EXHAUSTED — not merely once it has failed hysteresis.
 func TestCreditGateWaitsForTheSubscriptionPoolToBeExhausted(t *testing.T) {
-	g := CreditGate(enabledExtra(f(100), f(0)), 100, false)
+	g := CreditGate(enabledExtra(f(10000), f(0)), 100, false)
 
 	if g.Allow {
 		t.Error("Allow = true while the subscription pool still has a target")
@@ -140,7 +142,7 @@ func TestCreditGateWaitsForTheSubscriptionPoolToBeExhausted(t *testing.T) {
 }
 
 func TestCreditGateAllowsAnArmedAccountOnceSubscriptionIsExhausted(t *testing.T) {
-	g := CreditGate(enabledExtra(f(100), f(10)), 100, true)
+	g := CreditGate(enabledExtra(f(10000), f(1000)), 100, true)
 
 	if !g.Allow {
 		t.Fatalf("Allow = false, reason %v", g.Reason)
@@ -155,7 +157,7 @@ func TestCreditGateAllowsAnArmedAccountOnceSubscriptionIsExhausted(t *testing.T)
 // exact cswap conflation §9.3 calls out, and it turns a money-blocked engine
 // into something a cron job cannot see.
 func TestCreditGateBlocksLoudlyWhenSpendingIsNotOptedIn(t *testing.T) {
-	g := CreditGate(enabledExtra(f(100), f(0)), 0, true)
+	g := CreditGate(enabledExtra(f(10000), f(0)), 0, true)
 
 	if g.Allow {
 		t.Fatal("Allow = true with max_auto_spend at 0")
@@ -170,7 +172,7 @@ func TestCreditGateBlocksLoudlyWhenSpendingIsNotOptedIn(t *testing.T) {
 
 // Step 4: refuse when spend cannot be read.
 func TestCreditGateRefusesUnreadableSpend(t *testing.T) {
-	g := CreditGate(enabledExtra(f(100), nil), 100, true)
+	g := CreditGate(enabledExtra(f(10000), nil), 100, true)
 
 	if g.Allow {
 		t.Fatal("Allow = true with an unreadable spend")
@@ -195,7 +197,7 @@ func TestCreditGateReadsTheFourExtraUsageStates(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.wantReason.String(), func(t *testing.T) {
-			g := CreditGate(usage.ExtraUsageFor(tc.state, tc.reason, f(100), f(0)), 100, true)
+			g := CreditGate(usage.ExtraUsageFor(usage.ExtraUsageInput{State: tc.state, DisabledReason: tc.reason, Currency: "USD", MonthlyLimit: f(10000), UsedCredits: f(0)}), 100, true)
 			if g.Allow {
 				t.Fatal("Allow = true")
 			}
@@ -212,7 +214,7 @@ func TestCreditGateReadsTheFourExtraUsageStates(t *testing.T) {
 // The organization's own refusal is worth repeating back verbatim: it is the
 // difference between "turn overage on" and "your org hit its spend cap".
 func TestCreditGateCarriesTheOrganizationsReason(t *testing.T) {
-	g := CreditGate(usage.ExtraUsageFor(usage.ExtraUsageBlocked, "out_of_credits", f(100), f(0)), 100, true)
+	g := CreditGate(usage.ExtraUsageFor(usage.ExtraUsageInput{State: usage.ExtraUsageBlocked, DisabledReason: "out_of_credits", Currency: "USD", MonthlyLimit: f(10000), UsedCredits: f(0)}), 100, true)
 
 	if g.DisabledReason != "out_of_credits" {
 		t.Errorf("DisabledReason = %q, want out_of_credits", g.DisabledReason)
@@ -220,7 +222,7 @@ func TestCreditGateCarriesTheOrganizationsReason(t *testing.T) {
 }
 
 func TestCreditGateReportsNoRoomLeft(t *testing.T) {
-	g := CreditGate(enabledExtra(f(100), f(95)), 100, true)
+	g := CreditGate(enabledExtra(f(10000), f(9500)), 100, true)
 
 	if g.Allow {
 		t.Fatal("Allow = true past the armed cap")
@@ -237,7 +239,7 @@ func TestCreditGateReportsNoRoomLeft(t *testing.T) {
 // than reporting it as "you never opted in".
 func TestCreditGateNamesAnInvalidCeilingSeparately(t *testing.T) {
 	for _, ceiling := range []float64{math.Inf(1), math.NaN(), -1} {
-		g := CreditGate(enabledExtra(f(100), f(0)), ceiling, true)
+		g := CreditGate(enabledExtra(f(10000), f(0)), ceiling, true)
 		if g.Allow {
 			t.Fatalf("ceiling %v: Allow = true", ceiling)
 		}
@@ -252,5 +254,42 @@ func TestCreditReasonsAllHaveNames(t *testing.T) {
 		if r.String() == "" || r.String() == "unknown" {
 			t.Errorf("CreditReason(%d) has no name; it reaches a user-facing notification", r)
 		}
+	}
+}
+
+// The regression the whole units fix exists for. max_auto_spend is dollars and
+// the endpoint reports cents, so comparing them directly blocks the engine after
+// 1.2% of the authorized budget -- and, in the other direction, makes the
+// account's own cap stop binding.
+func TestCreditGateReadsTheWiresCentsAgainstADollarCeiling(t *testing.T) {
+	// Sixty cents spent against a fifty dollar ceiling: nowhere near the arm.
+	g := CreditGate(enabledExtra(nil, f(60)), 50, true)
+	if !g.Allow {
+		t.Errorf("Allow = false (%v) after spending $0.60 of a $50 ceiling", g.Reason)
+	}
+	if g.Room != 44.4 {
+		t.Errorf("Room = %v, want 44.4 — 90%% of $50, less $0.60", g.Room)
+	}
+
+	// The account's own $150 cap is the binding one under a $200 ceiling.
+	g = CreditGate(enabledExtra(f(15000), f(0)), 200, true)
+	if !g.Allow {
+		t.Fatalf("Allow = false (%v)", g.Reason)
+	}
+	if g.Room != 135 {
+		t.Errorf("Room = %v, want 135 — 90%% of the account's own $150 cap", g.Room)
+	}
+}
+
+// A zero-decimal currency has no minor unit, so its amounts are not divided.
+func TestCreditGateDoesNotDivideAZeroDecimalCurrency(t *testing.T) {
+	e := usage.ExtraUsageFor(usage.ExtraUsageInput{State: usage.ExtraUsageEnabled, Currency: "JPY", MonthlyLimit: f(20000), UsedCredits: f(5000)})
+
+	g := CreditGate(e, 20000, true)
+	if !g.Allow {
+		t.Fatalf("Allow = false (%v)", g.Reason)
+	}
+	if g.Room != 13000 {
+		t.Errorf("Room = %v, want 13000 — 90%% of ¥20000, less ¥5000", g.Room)
 	}
 }
