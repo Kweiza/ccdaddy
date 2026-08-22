@@ -1,10 +1,12 @@
 package daemon
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -32,6 +34,11 @@ const (
 	roleSpawner  = "spawner"
 	roleHolder   = "singleton-holder"
 	roleHoldPipe = "spawner-writes-nothing"
+	roleDaemon   = "daemon"
+
+	// stderrMarker is written to the daemon's own descriptor 2, to prove it
+	// lands in daemon.log rather than in the null device Spawn hands the child.
+	stderrMarker = "this line went to descriptor 2"
 )
 
 // TestMain turns this test binary into its own fixture.
@@ -62,7 +69,16 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	case roleHolder:
 		os.Exit(runAsSingletonHolder())
+	case roleDaemon:
+		os.Exit(runAsDaemon())
 	}
+	// The real redirect points the TEST BINARY's file descriptor 2 at a log in a
+	// temp directory, which would swallow `go test`'s own output. Neutralised
+	// here rather than in each test, because a test that forgets does not fail —
+	// it silently takes the output of every test after it with it. The roles
+	// above have already exited, so a subprocess daemon still gets the real one,
+	// and the one test that exercises it calls platformRedirectStderr directly.
+	redirectStderr = func(*os.File) error { return nil }
 	os.Exit(m.Run())
 }
 
@@ -128,6 +144,33 @@ func runAsSpawnedDaemon() int {
 		// passing run left a detached process polling for another minute after
 		// `go test` printed ok.
 		_ = os.WriteFile(linger+".seen", nil, 0o600)
+	}
+	return 0
+}
+
+// runAsDaemon is a real daemon in a process of its own. Signals cannot be
+// tested any other way: delivering SIGTERM to the test binary kills the test
+// binary.
+func runAsDaemon() int {
+	ready := os.Getenv(readyEnv)
+	var once sync.Once
+	err := Run(context.Background(), Options{
+		Interval: 10 * time.Millisecond,
+		Tick: func(context.Context) error {
+			once.Do(func() {
+				// Written to descriptor 2, which Run is supposed to have pointed
+				// at daemon.log. Spawn hands the daemon /dev/null on all three,
+				// so without that redirect this line is gone forever.
+				fmt.Fprintln(os.Stderr, stderrMarker)
+				_ = os.WriteFile(ready, []byte("up\n"), 0o600)
+			})
+			return nil
+		},
+		Snapshot: func() Status { return Status{ActiveUUID: "uuid-a"} },
+	})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "daemon:", err)
+		return 1
 	}
 	return 0
 }
