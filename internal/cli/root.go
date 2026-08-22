@@ -54,6 +54,10 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newRemoveCmd())
 	root.AddCommand(newStatusCmd())
 	root.AddCommand(newDoctorCmd())
+	root.AddCommand(newDaemonCmd())
+	// Hidden, and registered on the root rather than under `daemon`: Spawn
+	// re-execs `ccdad <daemon.RunArg>` as a single argument.
+	root.AddCommand(newDaemonRunCmd())
 
 	// Cobra adds `completion` lazily, during Execute, so it has to be
 	// materialized before it can be corrected. Left alone it answers an unknown

@@ -249,21 +249,10 @@ func (r statusRow) paceLabel() string {
 }
 
 func statusPayload(report daemon.Report, probeErr error, rows []statusRow, active store.Account, hasActive bool, now time.Time) map[string]any {
-	d := map[string]any{"state": report.State.String()}
-	if probeErr != nil {
-		d["error"] = probeErr.Error()
-	}
-	if report.HasStatus {
-		d["pid"] = report.Status.PID
-		d["schemaVersion"] = report.Status.SchemaVersion
-		d["generatedAt"] = report.Status.GeneratedAt
-		if !report.Status.StartedAt.IsZero() {
-			d["startedAt"] = report.Status.StartedAt
-		}
-		if report.Status.Stopped {
-			d["stopped"] = true
-		}
-	}
+	// The daemon half is daemonJSON's, and `ccdad daemon status --json` nests
+	// the same object under the same key: two commands describing one daemon
+	// must not describe it two ways.
+	d := daemonJSON(report, probeErr)
 
 	out := []map[string]any{}
 	for _, r := range rows {
