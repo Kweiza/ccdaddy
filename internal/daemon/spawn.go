@@ -69,15 +69,23 @@ const (
 // its own stderr onto that log — so a panic, which goes straight to descriptor
 // 2 without passing through any logger — is the log's owner's job.
 //
-// The environment is inherited whole, because CCDAD_HOME and CLAUDE_CONFIG_DIR
-// have to reach the daemon or it would manage a different store than the CLI
-// that started it. That inheritance is exactly why autostart must be suppressed
-// under `go test`: an unsuppressed spawn detaches a daemon pinned to a
-// t.TempDir() that is about to be deleted underneath it.
+// The environment is inherited, because CCDAD_HOME and CLAUDE_CONFIG_DIR have
+// to reach the daemon or it would manage a different store than the CLI that
+// started it — but inherited through ChildEnv rather than wholesale, so the
+// paths ccpath resolves at call time are pinned to what they resolved to HERE.
+// cmd.Dir below is about to move the child to the root of the volume, which is
+// what makes a relative override resolve to a different directory in the child
+// than in the parent. That same inheritance is why auto-start must be
+// suppressed under `go test`: an unsuppressed spawn detaches a daemon pinned to
+// a t.TempDir() that is about to be deleted underneath it.
 func Spawn() error {
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("locating the ccdad binary: %w", err)
+	}
+	env, err := ChildEnv()
+	if err != nil {
+		return err
 	}
 	devnull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
 	if err != nil {
@@ -86,6 +94,7 @@ func Spawn() error {
 	defer devnull.Close()
 
 	cmd := exec.Command(exe, RunArg)
+	cmd.Env = env
 	cmd.Stdin = devnull
 	cmd.Stdout = devnull
 	cmd.Stderr = devnull
