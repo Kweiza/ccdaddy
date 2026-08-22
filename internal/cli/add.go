@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
@@ -19,7 +20,40 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/oauth"
 	"github.com/Kweiza/ccdaddy/internal/store"
+	"github.com/Kweiza/ccdaddy/internal/strategy"
 )
+
+// quarantineLiftTimeout bounds the wait for the engine state lock. The only
+// other writer is the daemon stamping a cooldown, which holds it for a
+// sub-second write, so this is generous already.
+const quarantineLiftTimeout = 5 * time.Second
+
+// liftQuarantine clears an auto-switch quarantine after a successful add.
+//
+// §7.2's quarantine fires on a dead refresh token, and re-authenticating is the
+// only thing that fixes one. store.Add updates an existing uuid IN PLACE, so
+// without this the user logs in again, is told it worked, and the engine goes
+// on refusing to use the account with nothing anywhere saying why.
+//
+// It never fails the command. The account is added by the time this runs, and
+// returning an error here would report a successful login as a failure.
+func liftQuarantine(stderr io.Writer, uuid string) {
+	var lifted bool
+	// The lock is taken unconditionally rather than after a lock-free peek: a
+	// peek would race a quarantine landing from the refresh that used the OLD
+	// credential, which is exactly the one this is here to clear.
+	if err := strategy.WithState(quarantineLiftTimeout, func(st *strategy.State) error {
+		lifted = st.ClearQuarantine(uuid)
+		return nil
+	}); err != nil {
+		fmt.Fprintf(stderr, "note: the auto-switch state could not be updated (%v); "+
+			"if this account was quarantined it stays out of rotation until that is fixed.\n", err)
+		return
+	}
+	if lifted {
+		fmt.Fprintln(stderr, "Lifted this account's auto-switch quarantine.")
+	}
+}
 
 // Injected so a test can describe a machine it is not running on. A real
 // terminal and a real browser are not things a test can arrange, and the two
@@ -305,6 +339,7 @@ func runAdd(cmd *cobra.Command, opts addOptions) error {
 	if err := s.Add(acct, creds); err != nil {
 		return err
 	}
+	liftQuarantine(stderr, acct.UUID)
 	if err := applyAlias(cmd, s, acct.UUID, opts.alias); err != nil {
 		return err
 	}
@@ -703,6 +738,7 @@ func runAddToken(cmd *cobra.Command, token string, isAPIKey bool, email, alias s
 	if err := s.Add(acct, creds); err != nil {
 		return err
 	}
+	liftQuarantine(stderr, acct.UUID)
 	if err := applyAlias(cmd, s, acct.UUID, alias); err != nil {
 		return err
 	}

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -17,6 +18,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/oauth"
 	"github.com/Kweiza/ccdaddy/internal/store"
+	"github.com/Kweiza/ccdaddy/internal/strategy"
 )
 
 func TestDetectTokenType(t *testing.T) {
@@ -1033,5 +1035,109 @@ func TestAddOnALoginTimeoutFollowsTheSpecExitCode(t *testing.T) {
 	err, _, _ := runCmd(t, newAddCmd())
 	if got := CodeFor(err); got != ExitFailure {
 		t.Fatalf("CodeFor = %d, want %d (spec §6.4 assigns 1 to a timeout)", got, ExitFailure)
+	}
+}
+
+// §7.2's quarantine fires on a dead refresh token, and re-authenticating is the
+// only thing that fixes one. store.Add updates an existing uuid IN PLACE, so
+// without an explicit lift the user logs in again, is told it worked, and the
+// engine goes on refusing to use the account with nothing anywhere saying why.
+func TestAddLiftsTheEngineQuarantine(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		run  func(t *testing.T) (error, string, string)
+	}{
+		{"browser login", func(t *testing.T) (error, string, string) {
+			stubEnvironment(t, true, false)
+			stubLogin(t, loginToken("acct-1", "a@example.com", "RT-2"))
+			stubProfile(t, func(w http.ResponseWriter, _ *http.Request) {
+				io.WriteString(w, profileJSON("acct-1", "a@example.com"))
+			})
+			return runCmd(t, newAddCmd())
+		}},
+		{"setup token", func(t *testing.T) (error, string, string) {
+			stubProfile(t, func(w http.ResponseWriter, _ *http.Request) {
+				io.WriteString(w, profileJSON("acct-1", "a@example.com"))
+			})
+			return runCmd(t, newAddTokenCmd(), "sk-ant-oat01-TESTTOKEN")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolate(t)
+			seedAccount(t, "acct-1", "a@example.com")
+			quarantined := time.Now().Add(-time.Minute)
+			if err := strategy.WithState(time.Second, func(st *strategy.State) error {
+				st.Quarantine("acct-1", quarantined, time.Hour, "dead refresh token")
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			err, _, stderr := tc.run(t)
+			if err != nil {
+				t.Fatalf("Execute() = %v, want nil", err)
+			}
+
+			st, lerr := strategy.LoadState()
+			if lerr != nil {
+				t.Fatal(lerr)
+			}
+			if _, held := st.Quarantined("acct-1", time.Now()); held {
+				t.Error("the account is still quarantined after being re-authenticated")
+			}
+			if !strings.Contains(stderr, "quarantine") {
+				t.Errorf("stderr = %q, want the lift said out loud", stderr)
+			}
+		})
+	}
+}
+
+// An account that was never quarantined must not be told one was lifted.
+func TestAddSaysNothingWhenThereWasNoQuarantine(t *testing.T) {
+	isolate(t)
+	stubEnvironment(t, true, false)
+	stubLogin(t, loginToken("acct-1", "a@example.com", "RT-1"))
+	stubProfile(t, func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, profileJSON("acct-1", "a@example.com"))
+	})
+
+	err, _, stderr := runCmd(t, newAddCmd())
+	if err != nil {
+		t.Fatalf("Execute() = %v, want nil", err)
+	}
+	if strings.Contains(stderr, "quarantine") {
+		t.Errorf("stderr = %q, want no mention of a quarantine that never existed", stderr)
+	}
+}
+
+// The account IS added by the time the lift runs, so a state file that cannot
+// be written is a note on stderr and never a failed command: reporting a
+// successful login as an error is worse than a quarantine that outlives it.
+func TestAddSurvivesAnUnwritableEngineState(t *testing.T) {
+	isolate(t)
+	stubEnvironment(t, true, false)
+	stubLogin(t, loginToken("acct-1", "a@example.com", "RT-1"))
+	stubProfile(t, func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, profileJSON("acct-1", "a@example.com"))
+	})
+	// A directory where the state document belongs cannot be replaced by a
+	// file, so the write fails while everything before it succeeds.
+	if err := os.MkdirAll(filepath.Join(ccpath.StoreHome(), "strategy.json", "held"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	err, _, stderr := runCmd(t, newAddCmd())
+	if err != nil {
+		t.Fatalf("Execute() = %v, want the add to succeed anyway", err)
+	}
+	if !strings.Contains(stderr, "auto-switch state could not be updated") {
+		t.Errorf("stderr = %q, want the failure named", stderr)
+	}
+	s, serr := store.Open()
+	if serr != nil {
+		t.Fatal(serr)
+	}
+	if len(s.Accounts()) != 1 {
+		t.Error("the account was not stored")
 	}
 }
