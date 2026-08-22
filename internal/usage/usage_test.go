@@ -190,6 +190,33 @@ func TestFetchUsageReportsAHardRateLimit(t *testing.T) {
 	}
 }
 
+// Retry-After is legally an HTTP-date as well as delta-seconds. Task 20
+// accepted only the integer form on the grounds that a date parsed against a
+// skewed clock is worse than no answer; §7.4 owns that judgement now, and it
+// resolves it by refusing a date already in the PAST rather than by refusing
+// the form. Discarding a legal header means ignoring a wait the endpoint asked
+// for, and the next request earns another 429.
+func TestFetchUsageReadsAnHTTPDateRetryAfter(t *testing.T) {
+	c := serve(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", time.Now().Add(90*time.Second).UTC().Format(http.TimeFormat))
+		w.WriteHeader(http.StatusTooManyRequests)
+	})
+
+	_, err := c.FetchUsage(context.Background(), "tok")
+	var se *StatusError
+	if !errors.As(err, &se) {
+		t.Fatalf("error = %v, want a *StatusError", err)
+	}
+	d, ok := se.RetryAfter()
+	if !ok {
+		t.Fatal("RetryAfter() reported absent for a legal HTTP-date header")
+	}
+	// Whole seconds, and the round trip costs a few milliseconds of it.
+	if d < 85*time.Second || d > 90*time.Second {
+		t.Errorf("RetryAfter() = %v, want about 90s", d)
+	}
+}
+
 func TestFetchUsageLeavesAnAbsentRetryAfterUnknown(t *testing.T) {
 	c := serve(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTooManyRequests)

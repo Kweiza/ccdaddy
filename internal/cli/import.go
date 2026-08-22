@@ -321,8 +321,8 @@ func importSnapshot(b cclink.Blob) cclink.Blob {
 		return nil
 	}
 	out := cclink.Extract(b)
-	if raw, ok := b[tokenCredentialKey]; ok {
-		out[tokenCredentialKey] = append(json.RawMessage(nil), raw...)
+	if raw, ok := b[cclink.TokenKey]; ok {
+		out[cclink.TokenKey] = append(json.RawMessage(nil), raw...)
 	}
 	if len(out) == 0 {
 		return nil

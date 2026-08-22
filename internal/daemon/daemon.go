@@ -31,6 +31,33 @@ type Options struct {
 	Interval time.Duration
 	// Now is the clock. Zero means time.Now.
 	Now func() time.Time
+	// Attach is handed the daemon's log once it is open, before the first tick.
+	// The tick body is injected, so without this it has nowhere to record what
+	// it decided — and a daemon that switches accounts silently is one nobody
+	// can debug after the fact.
+	Attach func(*Logger)
+	// Drain is called after the loop has stopped and before the final status is
+	// published. The tick body does not wait for the work it dispatches, so
+	// this is what stops a poll landing in the cache after the document that
+	// said the daemon had stopped.
+	Drain func()
+}
+
+// EngineOptions is the Options the real daemon runs with: §8.4's tick body,
+// wired to the engine.
+//
+// It lives here rather than in the CLI so the process and the thing it runs are
+// composed in one place. internal/cli holds the seam that lets a test drive the
+// hidden entrypoint without becoming a daemon; what that entrypoint runs is
+// this.
+func EngineOptions() Options {
+	e := NewEngine()
+	return Options{
+		Tick:     e.Tick,
+		Snapshot: e.Snapshot,
+		Drain:    e.Wait,
+		Attach:   func(l *Logger) { e.Log = l.Printf },
+	}
 }
 
 func (o Options) tick(ctx context.Context) error {
@@ -45,6 +72,18 @@ func (o Options) snapshot() Status {
 		return Status{}
 	}
 	return o.Snapshot()
+}
+
+func (o Options) attach(l *Logger) {
+	if o.Attach != nil {
+		o.Attach(l)
+	}
+}
+
+func (o Options) drain() {
+	if o.Drain != nil {
+		o.Drain()
+	}
 }
 
 func (o Options) now() time.Time {
@@ -93,6 +132,9 @@ func Run(ctx context.Context, o Options) (err error) {
 		log.Printf("stderr stays where it was: %v", cerr)
 	}
 	log.Printf("ccdad daemon up, pid %d", os.Getpid())
+	// Before the first tick, so nothing the engine decides is written to a log
+	// it does not have yet.
+	o.attach(log)
 
 	if serr := SweepStatusTemps(); serr != nil {
 		log.Printf("sweeping orphaned status temp files: %v", serr)
@@ -142,6 +184,10 @@ func Run(ctx context.Context, o Options) (err error) {
 	loopErr := loop.Run(runCtx)
 
 	log.Printf("ccdad daemon stopping")
+	// Before the final document, never after: it is the one that says the
+	// daemon has stopped, and a poll still in flight would write into the cache
+	// behind it.
+	o.drain()
 	if perr := publish(true); perr != nil {
 		log.Printf("publishing the final status: %v", perr)
 	}

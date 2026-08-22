@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/oauth"
+	"github.com/Kweiza/ccdaddy/internal/pollpolicy"
 )
 
 const (
@@ -105,19 +105,11 @@ func NewClient() *Client {
 	}
 }
 
-// parseRetryAfter reads the delay-seconds form of Retry-After. The HTTP-date
-// form is legal too, but this endpoint sends seconds and a date parsed against a
-// skewed clock is worse than no answer, so only the seconds form is accepted.
-func parseRetryAfter(h http.Header) (time.Duration, bool) {
-	v := strings.TrimSpace(h.Get("Retry-After"))
-	if v == "" {
-		return 0, false
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil || n < 0 {
-		return 0, false
-	}
-	return time.Duration(n) * time.Second, true
+// parseRetryAfter pulls the header out and hands the value to the poll policy,
+// which owns both legal forms and the clock-skew rule that makes the HTTP-date
+// one safe. Parsing it here as well would put one grammar in two places.
+func parseRetryAfter(h http.Header, now time.Time) (time.Duration, bool) {
+	return pollpolicy.ParseRetryAfter(h.Get("Retry-After"), now)
 }
 
 // FetchUsage reads accessToken's account usage.
@@ -176,7 +168,7 @@ func (c *Client) FetchUsage(ctx context.Context, accessToken string) (*Snapshot,
 	}
 	if res.StatusCode != http.StatusOK {
 		e := &StatusError{Status: res.StatusCode}
-		e.retryAfter, e.hasRetryAfter = parseRetryAfter(res.Header)
+		e.retryAfter, e.hasRetryAfter = parseRetryAfter(res.Header, time.Now())
 		return nil, e
 	}
 

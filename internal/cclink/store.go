@@ -36,6 +36,12 @@ var (
 	// so neither process can be redirected into reading or writing tokens
 	// somewhere unexpected.
 	ErrSymlink = errors.New("credentials path is a symlink")
+	// ErrNoChange is what an ActivateWith decision returns to stand down: the
+	// locks were taken, the file was read, and the answer is that nothing should
+	// be written. It is a sentinel rather than a (Blob, bool) return so the one
+	// path that must never be confused with it -- a decision that FAILED -- keeps
+	// its own error, and so a caller can tell the two apart with errors.Is.
+	ErrNoChange = errors.New("the credentials file is to be left as it is")
 )
 
 // Load reads the live credentials file. A missing file is an empty Blob and
@@ -87,25 +93,6 @@ func loadFrom(path string) (Blob, error) {
 	return b, nil
 }
 
-// Capture returns the account-scoped subset of the live file -- what ccdad
-// stores when adopting the account Claude Code is currently logged in as.
-//
-// This read is NOT taken under the credential locks: spec 4.4 numbers it as
-// step 1, before locking begins, and it is a separate operation from
-// Activate's locked swap. If Claude Code is mid-refresh, Capture can
-// snapshot a refresh token that gets rotated away microseconds later,
-// producing a stored account that is dead on first use. The window is
-// narrow and the failure mode is a refresh error on next use, not silent
-// corruption of a live login, so the unlocked read is accepted here rather
-// than paying for a lock acquisition on every `ccdad add`.
-func Capture() (Blob, error) {
-	live, err := Load()
-	if err != nil {
-		return nil, err
-	}
-	return Extract(live), nil
-}
-
 // Activate makes incoming the live login.
 //
 // The whole read-merge-write runs under Claude Code's three credential
@@ -148,18 +135,63 @@ func Capture() (Blob, error) {
 // the live Blob via Load and can call UnknownKeys directly, without widening
 // this function's signature for every caller that does not need the result.
 func Activate(incoming Blob) error {
-	// Before taking any lock: an incoming snapshot with no claudeAiOauth
-	// would have every account-scoped key deleted by Merge and nothing put
-	// back, silently logging the user out. A corrupt or truncated stored
-	// snapshot is exactly the kind of input this must refuse up front.
-	//
-	// ClearLogin is the same write with that refusal lifted, and lifting it is
-	// only correct there because logging the user out is what the caller asked
-	// for by name.
+	// Refused BEFORE any lock is taken, unlike ActivateWith's identical check:
+	// the argument is already in hand, so a corrupt or truncated stored snapshot
+	// costs nothing to reject, and rejecting it early keeps a doomed switch from
+	// standing in front of Claude Code's own refresh.
+	if err := requireLogin(incoming); err != nil {
+		return err
+	}
+	return writeMerged(func(Blob) (Blob, error) { return incoming, nil })
+}
+
+// ActivateWith is Activate for a caller whose decision is only sound against
+// the file as it is at the moment of the write.
+//
+// Activate re-reads under the lock too, but only to build its merge base: by
+// the time it has the locks it has already committed to writing. An UNATTENDED
+// executor cannot commit that early. Between the engine reading the live login
+// and the swap landing, the user may have run `ccdad switch` by hand or logged
+// in through Claude Code, and a daemon that goes ahead overwrites a choice a
+// human made seconds ago. decide runs under the three credential locks with the
+// live file as it is, and returns ErrNoChange to stand down.
+//
+// Two rules decide inherits, neither of which this function can enforce:
+//
+//   - It runs with Claude Code's refresh locks held, so it must not make a
+//     network call, refresh a token, or fetch usage. cclock says why: Claude
+//     Code's own refresh blocks on these, so anything slow here stalls the
+//     user's session.
+//   - It must not take ccdad's store lock. store/lock.go documents the store
+//     lock as the OUTER one, and a store mutation inside a credential lock is
+//     the opposite order -- two callers that pick opposite orders deadlock.
+//     Reading a credential blob the caller already holds is fine; writing is
+//     what waits until after this returns.
+func ActivateWith(decide func(live Blob) (Blob, error)) error {
+	return writeMerged(func(live Blob) (Blob, error) {
+		incoming, err := decide(live)
+		if err != nil {
+			return nil, err
+		}
+		if err := requireLogin(incoming); err != nil {
+			return nil, err
+		}
+		return incoming, nil
+	})
+}
+
+// requireLogin refuses a snapshot Merge would turn into a logout. Merge deletes
+// every account-scoped key and puts back only what the snapshot carries, so a
+// snapshot with no claudeAiOauth silently signs the user out.
+//
+// ClearLogin is the same write with this refusal lifted, and lifting it is only
+// correct there because logging the user out is what the caller asked for by
+// name.
+func requireLogin(incoming Blob) error {
 	if _, ok := incoming["claudeAiOauth"]; !ok {
 		return fmt.Errorf("refusing to activate a snapshot with no claudeAiOauth: it would log the user out")
 	}
-	return writeMerged(incoming)
+	return nil
 }
 
 // ClearLogin removes every account-scoped key from the live credentials file,
@@ -178,11 +210,11 @@ func Activate(incoming Blob) error {
 // Nothing is lost by it: the account whose login is being removed keeps its own
 // stored snapshot in ccdad's store, and switching back reinstalls it.
 func ClearLogin() error {
-	return writeMerged(Blob{})
+	return writeMerged(func(Blob) (Blob, error) { return Blob{}, nil })
 }
 
-// writeMerged is the locked read-merge-write both of the above perform.
-func writeMerged(incoming Blob) (err error) {
+// writeMerged is the locked read-decide-merge-write all of the above perform.
+func writeMerged(decide func(live Blob) (Blob, error)) (err error) {
 	held, aerr := cclock.AcquireCredentials(LockTimeout)
 	if aerr != nil {
 		return aerr
@@ -193,6 +225,15 @@ func writeMerged(incoming Blob) (err error) {
 
 	live, err := loadFrom(livePath)
 	if err != nil {
+		return err
+	}
+
+	incoming, err := decide(live)
+	if err != nil {
+		// Including ErrNoChange, which is a decision and not a failure. It
+		// still travels back through Release's deferred join, so a takeover
+		// that happened while the caller was deciding is not lost just because
+		// the decision was to stand down.
 		return err
 	}
 
