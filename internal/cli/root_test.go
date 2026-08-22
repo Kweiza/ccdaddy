@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"strings"
-	"syscall"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -106,7 +105,7 @@ func TestExecuteWithEPIPEIsOK(t *testing.T) {
 	root.SetArgs([]string{})
 	// Replace the RunE to return EPIPE error
 	root.RunE = func(*cobra.Command, []string) error {
-		return fmt.Errorf("writing output: %w", syscall.EPIPE)
+		return fmt.Errorf("writing output: %w", errBrokenPipeForTest)
 	}
 
 	var errBuf bytes.Buffer
