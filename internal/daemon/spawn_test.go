@@ -84,8 +84,25 @@ func TestSpawnLeavesTheChildInItsOwnSessionAndReparented(t *testing.T) {
 func TestSpawnGivesTheChildTheSameStore(t *testing.T) {
 	store := t.TempDir()
 	report, _ := spawnViaAChildThatExits(t, "CCDAD_HOME="+store)
-	if got := report["store"]; got != store {
-		t.Errorf("the child sees CCDAD_HOME=%q, want %q — it would manage a different store than its caller", got, store)
+	// The RESOLVED spelling, which is what ChildEnv pins. On macOS t.TempDir()
+	// sits under /var, itself a symlink to /private/var, so comparing against
+	// the raw string would fail there and nowhere else.
+	want, err := filepath.EvalSymlinks(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := report["store"]; got != want {
+		t.Errorf("the child sees CCDAD_HOME=%q, want %q — it would manage a different store than its caller", got, want)
+	}
+}
+
+// The sentinel has to survive the fork, or the recursion guard is a comment.
+// The allow-list refuses to auto-start for the hidden entrypoint; this is what
+// refuses for everything else a daemon's descendants might run.
+func TestSpawnMarksTheChildAsOne(t *testing.T) {
+	report, _ := spawnViaAChildThatExits(t)
+	if got := report["child"]; got == "" {
+		t.Errorf("the child does not carry %s; nothing downstream can tell it apart from a user's own invocation", ChildEnvVar)
 	}
 }
 
