@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -40,16 +41,11 @@ import (
 // repair — is unsettled, so there is deliberately no `--fix` and no code behind
 // one. A repair added later has to be an explicit act by the user.
 //
-// Two checks named in the brief are absent because their subject does not exist
-// yet, not because they were judged unnecessary:
-//
-//   - the stale `Claude Code-credentials` keychain item, which needs the legacy
-//     keychain reader (task 49). There is no code in the tree that can look;
-//   - the temp credential directories `ccdad run` may have leaked, which needs
-//     `run` (task 48) to have chosen a naming convention. Guessing one here
-//     would invent the contract that task has to follow, and §13's first open
-//     question — CLAUDE_SECURESTORAGE_CONFIG_DIR versus a full config clone —
-//     is exactly what decides it.
+// The two checks this file once listed as absent — the leaked `ccdad run`
+// session directories, and the stale `Claude Code-credentials` keychain item —
+// are both here now, as checkSessions and checkKeychain. Neither changed the
+// report-only rule: checkKeychain finds the item and prints the `security`
+// command that removes it, rather than removing it.
 
 // checkLevel is how much a finding matters.
 type checkLevel string
@@ -157,6 +153,7 @@ func runChecks() []check {
 		checkSessions(root, storeUsable),
 		checkClaudeCode(live, liveErr),
 		checkCredentialKeys(live, liveErr),
+		checkKeychain(),
 		checkEnvironment(),
 	}
 }
@@ -528,6 +525,67 @@ func checkCredentialKeys(live cclink.Blob, err error) check {
 	return check{"credential-keys", levelWarn, fmt.Sprintf(
 		"unrecognised top-level keys: %s. They are preserved on a switch, but an ACCOUNT-scoped one would leak between accounts until ccdad is updated",
 		strings.Join(unknown, ", "))}
+}
+
+// keychainProbe is doctor's window onto the legacy macOS Keychain, and it is a
+// var so the tests can describe a machine that has an item on it. Without the
+// seam every branch below except "skipped" would be unreachable from a Linux
+// development machine, and the branch that matters — a stale item found — would
+// ship having never been rendered.
+var keychainProbe = cclink.CredentialKeychainItemPresent
+
+// keychainDetailer is an error that already knows how to explain itself to a
+// user. cclink.KeychainError is the one that does; matching on the BEHAVIOUR
+// rather than on that concrete type is what lets a test describe a locked
+// keychain without cclink having to export the classification it keeps private.
+type keychainDetailer interface{ Detail() string }
+
+// checkKeychain looks for the credential item a Keychain-era Claude Code would
+// have written, which a DOWNGRADED Claude Code would still read in preference
+// to the file ccdad writes. §12 rates "Claude Code changes these internals
+// between releases" High and names doctor as the mitigation; this is the half
+// of §12 that points backwards rather than forwards.
+//
+// It is the one check here that runs another program, and two properties keep
+// that honest. The lookup asks for the item's ATTRIBUTES and never its secret,
+// so it cannot raise the "wants to use your keychain" dialog on anybody's
+// machine; and every spawn has a wall-clock deadline with a kill behind it,
+// because a locked keychain on a headless host does not fail, it waits.
+//
+// Report-only, like the rest of the file. What it prints instead is the exact
+// `security` invocation that removes the item — deleting another program's
+// credential unasked is the most destructive thing ccdad could do on its own
+// initiative, and §13's fourth open question is still open.
+func checkKeychain() check {
+	present, item, err := keychainProbe(context.Background())
+
+	if errors.Is(err, cclink.ErrKeychainUnsupported) {
+		return check{"keychain", levelSkipped, "there is no macOS Keychain on this platform"}
+	}
+	if err != nil {
+		// A probe that could not answer is NOT an absence. Saying "no stale
+		// item" because a locked keychain refused to be read is the same
+		// mistake as reporting "no daemon" for a filesystem where locks do not
+		// work, one check up.
+		var explained keychainDetailer
+		if errors.As(err, &explained) {
+			return check{"keychain", levelWarn, fmt.Sprintf(
+				"ccdad could not check for a stale %s item: %s", item.Service, explained.Detail())}
+		}
+		return check{"keychain", levelWarn, fmt.Sprintf(
+			"ccdad could not check for a stale %s item: %v", item.Service, err)}
+	}
+	if !present {
+		return check{"keychain", levelOK, fmt.Sprintf(
+			"no legacy %q item for %q", item.Service, item.Account)}
+	}
+	// A warning rather than a failure, and deliberately: no Claude Code that
+	// can be installed today reads this item, so nothing is broken right now.
+	// What it costs is a downgrade — after which switching accounts would
+	// appear to work and change nothing.
+	return check{"keychain", levelWarn, fmt.Sprintf(
+		"a legacy keychain item %q for %q is still there; today's Claude Code ignores it, but a downgraded one would read it INSTEAD of the credentials file and every switch would silently do nothing. Remove it with: /usr/bin/security delete-generic-password -a %q -s %q",
+		item.Service, item.Account, item.Account, item.Service)}
 }
 
 // checkEnvironment names the variables that make a switch pointless.

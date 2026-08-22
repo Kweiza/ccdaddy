@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/config"
 	"github.com/Kweiza/ccdaddy/internal/daemon"
@@ -440,7 +442,7 @@ func TestDoctorHumanOutputNamesEveryCheck(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit %d, want 0\n%s", code, stdout)
 	}
-	for _, name := range []string{"store", "permissions", "locks", "pidfile", "status-file", "usage-cache", "engine-state", "config", "sessions", "claude-code", "credential-keys", "environment"} {
+	for _, name := range []string{"store", "permissions", "locks", "pidfile", "status-file", "usage-cache", "engine-state", "config", "sessions", "claude-code", "credential-keys", "keychain", "environment"} {
 		if !strings.Contains(stdout, name) {
 			t.Errorf("the human report does not mention the %s check:\n%s", name, stdout)
 		}
@@ -660,5 +662,155 @@ func TestDoctorFailsOnASessionDirectoryAnyoneCanRead(t *testing.T) {
 	}
 	if code != ExitFailure {
 		t.Errorf("exit %d, want %d — only fail changes the exit code, and this is one", code, ExitFailure)
+	}
+}
+
+// The keychain check, whose whole subject is a platform this suite does not run
+// on. Every case below goes through the stub in isolate, because the alternative
+// -- letting the real probe decide -- makes the answer depend on which machine
+// ran the test, and on a Mac would spawn /usr/bin/security once per doctor test.
+
+// Off macOS there is nothing to check, and "skipped" says so without pretending
+// the machine is clean.
+func TestDoctorSkipsTheKeychainWhereThereIsNone(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+
+	_, report, _ := runDoctor(t)
+	if got := report.level(t, "keychain"); got != "skipped" {
+		t.Fatalf("keychain level = %q, want skipped\n%s", got, report.detail(t, "keychain"))
+	}
+}
+
+// A machine that has been switched to the file store and never cleaned up. The
+// assertion is on the REMEDIATION, not on the level: a warning that named the
+// problem without the command to fix it would pass a level check and be useless
+// to the person reading it, and there is nothing else in the tree that can spell
+// this item's name.
+func TestDoctorReportsAStaleKeychainItem(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	stubKeychain(t, true, cclink.KeychainItem{
+		Service: "Claude Code-credentials-aa3d8c96",
+		Account: "tester",
+	}, nil)
+
+	code, report, _ := runDoctor(t)
+	if got := report.level(t, "keychain"); got != "warn" {
+		t.Fatalf("keychain level = %q, want warn", got)
+	}
+	// Still exit 0. A stale item breaks nothing on any Claude Code that can be
+	// installed today; only a downgrade makes it bite, and doctor's exit code is
+	// reserved for what is broken now.
+	if code != ExitOK {
+		t.Fatalf("exit %d, want 0 — a warning is not a failure", code)
+	}
+	detail := report.detail(t, "keychain")
+	for _, want := range []string{
+		"delete-generic-password",
+		"Claude Code-credentials-aa3d8c96",
+		"tester",
+		"downgraded",
+	} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("the detail does not mention %q:\n%s", want, detail)
+		}
+	}
+}
+
+// The clean answer names the item it looked for. A bare "ok" would hide the case
+// this check exists to make visible: CLAUDE_CONFIG_DIR changes the item's name,
+// so a user can be told "nothing there" about an item Claude Code never wrote.
+func TestDoctorNamesTheKeychainItemItLookedFor(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	stubKeychain(t, false, cclink.KeychainItem{
+		Service: "Claude Code-credentials-aa3d8c96",
+		Account: "tester",
+	}, nil)
+
+	_, report, _ := runDoctor(t)
+	if got := report.level(t, "keychain"); got != "ok" {
+		t.Fatalf("keychain level = %q, want ok", got)
+	}
+	if detail := report.detail(t, "keychain"); !strings.Contains(detail, "Claude Code-credentials-aa3d8c96") {
+		t.Fatalf("the detail does not name the item it checked:\n%s", detail)
+	}
+}
+
+// lockedKeychain is a probe failure that can explain itself, which is the shape
+// cclink.KeychainError has. The interface is what doctor matches on, so a test
+// can describe a locked keychain without cclink exporting its classification.
+type lockedKeychain struct{}
+
+func (lockedKeychain) Error() string  { return "security find-generic-password: keychain-locked" }
+func (lockedKeychain) Detail() string { return "the login keychain is locked, so ccdad cannot tell" }
+
+// §8.2's rule, at the level of one subprocess: a probe that could not answer is
+// not an absence. This is the failure mode that would make the whole check
+// worthless -- a machine with a stale credential AND a locked keychain reported
+// as having neither.
+func TestDoctorTreatsAnUnreadableKeychainAsUnknown(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	stubKeychain(t, false, cclink.KeychainItem{
+		Service: "Claude Code-credentials",
+		Account: "tester",
+	}, lockedKeychain{})
+
+	_, report, _ := runDoctor(t)
+	if got := report.level(t, "keychain"); got != "warn" {
+		t.Fatalf("keychain level = %q, want warn", got)
+	}
+	detail := report.detail(t, "keychain")
+	if !strings.Contains(detail, "could not check") {
+		t.Errorf("the detail does not say the check failed to run:\n%s", detail)
+	}
+	if !strings.Contains(detail, "locked") {
+		t.Errorf("the detail does not carry the explanation the error offered:\n%s", detail)
+	}
+	// The sentence a clean machine gets must not appear here. Both branches are
+	// warnings on a clean-looking report, so the level alone cannot tell them
+	// apart -- what only one of them says is "no legacy item".
+	if strings.Contains(detail, "no legacy") {
+		t.Errorf("an unreadable keychain was reported as an empty one:\n%s", detail)
+	}
+}
+
+// A failure with nothing to explain still has to reach the report rather than
+// being swallowed into a clean answer.
+func TestDoctorCarriesAKeychainErrorItCannotInterpret(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	stubKeychain(t, false, cclink.KeychainItem{Service: "Claude Code-credentials"},
+		errors.New("something nobody has seen before"))
+
+	_, report, _ := runDoctor(t)
+	if got := report.level(t, "keychain"); got != "warn" {
+		t.Fatalf("keychain level = %q, want warn", got)
+	}
+	if detail := report.detail(t, "keychain"); !strings.Contains(detail, "something nobody has seen before") {
+		t.Fatalf("the underlying error did not reach the report:\n%s", detail)
+	}
+}
+
+// doctor reports; it does not repair. The item is left where it is, and the
+// report hands the user the command instead.
+func TestDoctorDeletesNoKeychainItem(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+
+	item := cclink.KeychainItem{Service: "Claude Code-credentials", Account: "tester"}
+	var asked []string
+	saved := keychainProbe
+	t.Cleanup(func() { keychainProbe = saved })
+	keychainProbe = func(context.Context) (bool, cclink.KeychainItem, error) {
+		asked = append(asked, "probe")
+		return true, item, nil
+	}
+
+	runDoctor(t)
+	if len(asked) != 1 {
+		t.Fatalf("the keychain was consulted %d times, want exactly one attribute lookup", len(asked))
 	}
 }
