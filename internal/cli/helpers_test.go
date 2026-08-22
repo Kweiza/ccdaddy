@@ -13,6 +13,7 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
+	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/store"
 )
 
@@ -147,6 +148,20 @@ func seedDisabledAccount(t *testing.T, uuid, email string) {
 		t.Fatal(err)
 	}
 	if err := s.Add(store.Account{UUID: uuid, Email: email, Disabled: true}, credsFor("RT-"+uuid)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// seedCreditAccount stores an account metered in money. Kind is set explicitly
+// because store.Add takes the caller's Kind and Save serializes it: a credit
+// account is the one the engine may never reach without §7.3's two opt-ins.
+func seedCreditAccount(t *testing.T, uuid, email string) {
+	t.Helper()
+	s, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add(store.Account{UUID: uuid, Email: email, Kind: identity.KindCredit}, credsFor("RT-"+uuid)); err != nil {
 		t.Fatal(err)
 	}
 }
