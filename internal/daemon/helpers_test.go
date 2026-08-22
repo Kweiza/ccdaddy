@@ -122,6 +122,7 @@ func runAsSpawnedDaemon() int {
 		"sid_err=" + fmt.Sprint(sidErr),
 		"cwd=" + cwd,
 		"store=" + os.Getenv("CCDAD_HOME"),
+		"child=" + os.Getenv(ChildEnvVar),
 	}
 	if err := os.WriteFile(report, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 		return 4

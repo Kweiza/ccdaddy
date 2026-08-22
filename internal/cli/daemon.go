@@ -43,6 +43,9 @@ var (
 	// daemon went is the singleton, polled below.
 	requestShutdown = daemon.RequestShutdown
 	readDaemonPID   = daemon.ReadPID
+	// runDaemon is the loop itself, behind a seam so a test can drive the hidden
+	// entrypoint without turning the test binary into a daemon.
+	runDaemon = daemon.Run
 )
 
 var (
@@ -114,7 +117,7 @@ func newDaemonRunCmd() *cobra.Command {
 			// A lost race for the singleton is not a failure: it means another
 			// daemon got there first, which is exactly what the singleton is
 			// for, and "the world is already as you asked" is 3.
-			err := daemon.Run(cmd.Context(), daemon.Options{})
+			err := runDaemon(cmd.Context(), daemon.Options{})
 			if errors.Is(err, daemon.ErrSingletonHeld) {
 				return WithCode(err, ExitNothingToDo)
 			}
