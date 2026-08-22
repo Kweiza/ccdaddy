@@ -52,7 +52,21 @@ func CreditRoom(s SpendInfo, ceiling float64) (float64, bool) {
 	if s.Used == nil {
 		return 0, false // wire drift must not hand back the full cap
 	}
-	room := spendArmFraction*capacity - *s.Used
+	// The float64 conversion is load-bearing, not decoration. Go permits a
+	// compiler to fuse `a*b - c` into a single FMA -- possibly ACROSS
+	// statements, so an intermediate variable does not stop it -- and arm64
+	// does. Fused, the exact product 0.90*100 (90.000000000000002220446…) is
+	// never rounded to 90 before the subtraction, so $90 spent against a $100
+	// cap answers 2.22e-15 of room, and `room > 0` is TRUE. That is not a
+	// display artefact: it is the credit gate reporting room on the one axis
+	// in ccdad where a wrong answer spends the user's money, and darwin/arm64
+	// and linux/arm64 are two of the six shipped targets.
+	//
+	// An explicit conversion is the one thing the spec says forbids the
+	// fusion, which makes all six targets agree. Measured: green on amd64,
+	// red on macos-latest (arm64), where CreditRoom(limit 100, used 80) came
+	// back as 10.000000000000002.
+	room := float64(spendArmFraction*capacity) - *s.Used
 	// A NaN anywhere in the account's own figures reaches here as a NaN room,
 	// and `room > 0` is false for it — which is the fail-closed answer.
 	return room, room > 0

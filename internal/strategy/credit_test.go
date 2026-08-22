@@ -53,6 +53,10 @@ func TestCreditRoomSubtractsWhatIsAlreadySpent(t *testing.T) {
 	}
 }
 
+// Exactly at the armed cap. This is the test that caught the FMA contraction
+// on arm64: fused, the subtraction never sees a rounded 90 and answers
+// 2.22e-15 of room rather than none. It passes on amd64 either way, so the
+// macOS leg of the matrix is what makes it a guard rather than a comment.
 func TestCreditRoomRefusesWhenTheArmedCapIsSpent(t *testing.T) {
 	room, ok := CreditRoom(SpendInfo{Enabled: true, Limit: f(100), Used: f(90)}, 100)
 	if ok {
