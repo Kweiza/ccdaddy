@@ -19,7 +19,8 @@ import (
 //
 //	status   0 running · 5 not running · 1 cannot determine
 //	start    0 started one · 3 one is already running · 1 cannot determine
-//	stop     0 stopped it · 3 nothing was running · 1 cannot determine, or it would not go
+//	stop     0 stopped it · 3 nothing was running · 5 nothing was listening ·
+//	         1 cannot determine, or it would not go and could not be terminated
 //	restart  0 there is a daemon running now · 1 otherwise
 //	logs     0 printed · 5 there is no log to print
 //
@@ -42,7 +43,12 @@ var (
 	// requestShutdown delivers the stop; it never waits for it. What proves the
 	// daemon went is the singleton, polled below.
 	requestShutdown = daemon.RequestShutdown
-	readDaemonPID   = daemon.ReadPID
+	// forceShutdown is the guarded escalation, and it exists on Windows alone —
+	// everywhere else it answers errors.ErrUnsupported and this file reports the
+	// timeout instead. See daemon.ForceShutdown for why the asymmetry is the
+	// design rather than a gap.
+	forceShutdown = daemon.ForceShutdown
+	readDaemonPID = daemon.ReadPID
 	// runDaemon is the loop itself, behind a seam so a test can drive the hidden
 	// entrypoint without turning the test binary into a daemon.
 	runDaemon = daemon.Run
@@ -357,6 +363,16 @@ func stopDaemon(cmd *cobra.Command) (bool, error) {
 	}
 
 	if err := requestShutdown(pid); err != nil {
+		if errors.Is(err, daemon.ErrNoShutdownListener) {
+			// Windows can answer this directly: the named event either exists
+			// or it does not, and the stopping side never creates it. A daemon
+			// holding the singleton with nothing listening is a negative answer
+			// to a probe, not a runtime failure — and not something to escalate
+			// on, because the graceful request was never delivered at all.
+			fmt.Fprintf(cmd.ErrOrStderr(),
+				"The daemon at pid %d holds the singleton but is not listening for a shutdown request: %v\n", pid, err)
+			return false, WithCode(errSilent, ExitProbeNegative)
+		}
 		return false, err
 	}
 	gone, err := waitForSingleton(false)
@@ -364,8 +380,24 @@ func stopDaemon(cmd *cobra.Command) (bool, error) {
 		return false, cannotTell(err)
 	}
 	if !gone {
-		return false, fmt.Errorf("the daemon at pid %d was asked to stop and still held the singleton %s later",
-			pid, daemonWaitTimeout)
+		// The request went out and was not acted on. This is where — and only
+		// where — a terminate is on the table, and only on a platform that has
+		// a cross-check to put behind it.
+		if ferr := forceShutdown(pid); ferr != nil {
+			if errors.Is(ferr, errors.ErrUnsupported) {
+				return false, fmt.Errorf("the daemon at pid %d was asked to stop and still held the singleton %s later",
+					pid, daemonWaitTimeout)
+			}
+			return false, fmt.Errorf("the daemon at pid %d did not stop, and terminating it was refused: %w", pid, ferr)
+		}
+		fmt.Fprintf(cmd.ErrOrStderr(),
+			"The daemon at pid %d did not stop when asked, so it was terminated.\n", pid)
+		if gone, err = waitForSingleton(false); err != nil {
+			return false, cannotTell(err)
+		}
+		if !gone {
+			return false, fmt.Errorf("the daemon at pid %d was terminated and still holds the singleton", pid)
+		}
 	}
 	fmt.Fprintf(cmd.ErrOrStderr(), "Stopped the ccdad daemon (pid %d).\n", pid)
 	return true, nil
