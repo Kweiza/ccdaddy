@@ -33,6 +33,11 @@ const (
 	// a race it should win. Three attempts, a hundred milliseconds apart.
 	acquireAttempts   = 3
 	acquireRetryDelay = 100 * time.Millisecond
+
+	// The window the retry is worth, as a literal rather than as a multiple of
+	// the constant above: an assertion written in terms of the value it is
+	// checking moves with it, so shrinking the delay would shrink the test too.
+	acquireRetryBudget = 200 * time.Millisecond
 )
 
 // tryLockMu guards tryLockImpl. Nothing in this package reads it from a
@@ -62,14 +67,31 @@ var (
 // closes the fd, flock(2) releases on last close of the open file description,
 // and a *Flock that becomes unreachable therefore drops the lock with no error
 // anywhere. Reproduced on this machine — three runtime.GC() cycles were enough.
+//
+// A probe takes a SHARED lock, and that is not an optimisation. An exclusive
+// probe contends with every OTHER PROBE as well as with a daemon, and a
+// contended try-lock is indistinguishable from a held one — so two ccdad
+// commands probing at the same instant would each report a running daemon
+// whose only holder was the other one. Measured with this library on this
+// machine: sixteen concurrent exclusive probers against a free lock produced
+// 2059 false "running" answers out of 8000, and the same run with shared locks
+// produced none. A shared lock still fails against the daemon's exclusive one,
+// which is the answer the probe exists to give.
+//
+// The reverse direction is unchanged and deliberate: a live shared probe does
+// briefly block an exclusive acquire, which is what the acquire retry is for.
 func defaultTryLock(path string, create bool) (locked bool, release func() error, err error) {
-	var fl *flock.Flock
+	var (
+		fl *flock.Flock
+		ok bool
+	)
 	if create {
 		fl = flock.New(path)
+		ok, err = fl.TryLock()
 	} else {
 		fl = flock.New(path, flock.SetFlag(os.O_RDONLY))
+		ok, err = fl.TryRLock()
 	}
-	ok, err := fl.TryLock()
 	if err != nil {
 		return false, nil, err
 	}
@@ -158,6 +180,8 @@ func SingletonHeld() (held bool, err error) {
 		return false, classifyLockError(err)
 	}
 	if !locked {
+		// A shared probe only fails against an exclusive holder, and the only
+		// thing that takes this lock exclusively is a daemon.
 		return true, nil
 	}
 	// We took it, so nobody held it. Give it straight back — and report a

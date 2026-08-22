@@ -79,6 +79,22 @@ jobs:
       # so there is no matrix here and therefore nothing for fail-fast to
       # apply to. Deliberately the same script a developer runs, so the asset
       # names cannot drift between the two.
+      # `go test` compiles for the host only, and `go build ./...` in the next
+      # step compiles only what cmd/ccdad imports. internal/daemon is the first
+      # package with platform-divergent files, and nothing yet imports it — so
+      # a spawn_windows.go that does not even parse would sail through the
+      # whole pipeline and ship. vet type-checks the package AND its test files
+      # for a target, which is the cheapest gate that catches it. It stays here
+      # until the three-OS matrix exists.
+      - name: Vet every release target
+        run: |
+          set -euo pipefail
+          for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            echo "::group::vet $t"
+            GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go vet ./...
+            echo "::endgroup::"
+          done
+
       - name: Build the release assets
         env:
           VERSION: ${{ needs.gate.outputs.version }}

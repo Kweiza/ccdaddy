@@ -114,11 +114,26 @@ func TestSpawnDoesNotLeaveTheChildHoldingOurStdout(t *testing.T) {
 	}
 	dir := t.TempDir()
 	report := filepath.Join(dir, "child.txt")
-	// The child holds on until this file appears, so it is still alive while
-	// the pipes are read — which is the only condition under which a leaked
-	// descriptor is observable.
-	linger := filepath.Join(dir, "let-the-child-go")
-	t.Cleanup(func() { _ = os.WriteFile(linger, nil, 0o600) })
+	// The signal files live OUTSIDE the directory t.TempDir will delete, and
+	// their cleanup is registered FIRST so that it runs LAST. t.Cleanup is
+	// LIFO: with the release file inside dir, the framework removed it
+	// microseconds after it appeared, the child's 5 ms poll never saw it, and
+	// a passing test left a detached process spinning for another minute.
+	sig, err := os.MkdirTemp("", "ccdad-spawn-signal")
+	if err != nil {
+		t.Fatalf("creating the signal directory: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(sig) })
+	linger := filepath.Join(sig, "let-the-child-go")
+	t.Cleanup(func() {
+		if err := os.WriteFile(linger, nil, 0o600); err != nil {
+			t.Errorf("releasing the child: %v", err)
+			return
+		}
+		// And wait for it to actually go, so the suite does not finish while a
+		// detached copy of the test binary is still running.
+		waitFor(t, linger+".seen", 30*time.Second)
+	})
 	spawner := exec.Command(os.Args[0])
 	spawner.Env = append(os.Environ(),
 		roleEnv+"="+roleHoldPipe,
@@ -170,6 +185,53 @@ func TestSpawnDoesNotLeaveTheChildHoldingOurStdout(t *testing.T) {
 	}
 }
 
+// §8.3 rule 3. Under `go test` os.Args[0] is already the absolute path of the
+// test binary, so every other test here would pass with either one — the two
+// implementations are indistinguishable unless the spawner is invoked the way
+// a person actually invokes a freshly built binary. So it is run as
+// "./spawner" from a directory of its own: os.Executable still answers with an
+// absolute path, while os.Args[0] would be resolved against cmd.Dir, which
+// Spawn sets to the root of the volume.
+func TestSpawnResolvesItsOwnPathRatherThanArgv0(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the spawner harness re-execs this binary in a unix role")
+	}
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+	launchDir := t.TempDir()
+	if err := os.Symlink(self, filepath.Join(launchDir, "spawner")); err != nil {
+		t.Skipf("this filesystem cannot symlink: %v", err)
+	}
+
+	dir := t.TempDir()
+	report := filepath.Join(dir, "child.txt")
+	gone := filepath.Join(dir, "spawner-reaped")
+	spawner := exec.Command("./spawner")
+	spawner.Dir = launchDir
+	spawner.Env = append(os.Environ(),
+		roleEnv+"="+roleSpawner,
+		reportEnv+"="+report,
+		goneEnv+"="+gone,
+	)
+	spawner.Stderr = os.Stderr
+	if err := spawner.Start(); err != nil {
+		t.Fatalf("starting the spawner by a relative path: %v", err)
+	}
+	if err := spawner.Wait(); err != nil {
+		t.Fatalf("the spawner failed: %v — Spawn resolved a relative argv[0] against the working "+
+			"directory it sets for the child, so autostart is dead for `./ccdad` and `build/ccdad`", err)
+	}
+	if err := os.WriteFile(gone, nil, 0o600); err != nil {
+		t.Fatalf("signalling the child: %v", err)
+	}
+	report2 := readReport(t, report, 15*time.Second)
+	if report2["pid"] == "" {
+		t.Error("no child was started")
+	}
+}
+
 func TestSpawnPassesTheArgumentThatStopsTheChildSpawningAChild(t *testing.T) {
 	if RunArg == "" || !strings.HasPrefix(RunArg, "__") {
 		t.Errorf("RunArg is %q; it has to be something a user cannot type by accident", RunArg)
@@ -180,6 +242,24 @@ func TestSpawnPassesTheArgumentThatStopsTheChildSpawningAChild(t *testing.T) {
 	report, _ := spawnViaAChildThatExits(t)
 	if report["pid"] == "" {
 		t.Error("the child never identified itself as the daemon")
+	}
+}
+
+// The Windows flag values, pinned from every platform. This cannot catch a
+// value that was wrong from the start — only a definition ccdad does not own
+// can do that, which is what the windows-tagged test beside it uses
+// x/sys/windows for — but it does catch the constant drifting afterwards, and
+// it records where the numbers came from.
+func TestTheWindowsCreationFlagsAreTheDocumentedValues(t *testing.T) {
+	// Win32 processthreadsapi.h / winbase.h, and identical in
+	// golang.org/x/sys/windows: DETACHED_PROCESS 0x00000008,
+	// CREATE_NEW_PROCESS_GROUP 0x00000200.
+	if flagDetachedProcess != 0x00000008 {
+		t.Errorf("flagDetachedProcess = %#x, want 0x8 — without DETACHED_PROCESS the child inherits "+
+			"the console and dies on CTRL_CLOSE_EVENT", flagDetachedProcess)
+	}
+	if flagCreateNewProcessGroup != 0x00000200 {
+		t.Errorf("flagCreateNewProcessGroup = %#x, want 0x200", flagCreateNewProcessGroup)
 	}
 }
 

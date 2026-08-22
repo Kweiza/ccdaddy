@@ -115,13 +115,19 @@ func runAsSpawnedDaemon() int {
 	// child that exits immediately closes any leaked descriptor at once and
 	// hides the bug, so the pipe test asks this one to stay.
 	if linger := os.Getenv(lingerEnv); linger != "" {
-		deadline := time.Now().Add(60 * time.Second)
+		deadline := time.Now().Add(30 * time.Second)
 		for time.Now().Before(deadline) {
 			if _, err := os.Stat(linger); err == nil {
 				break
 			}
 			time.Sleep(5 * time.Millisecond)
 		}
+		// Say so on the way out. A test that only writes the release file has
+		// no way to know the child ever saw it, and the file lives in a
+		// directory the test framework is about to delete — which is how a
+		// passing run left a detached process polling for another minute after
+		// `go test` printed ok.
+		_ = os.WriteFile(linger+".seen", nil, 0o600)
 	}
 	return 0
 }

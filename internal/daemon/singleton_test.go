@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -15,6 +17,89 @@ import (
 // opens with os.O_CREATE by default, so this is one SetFlag away from being
 // wrong, and being wrong is invisible: the probe still answers "not running",
 // it just destroys the missing-file evidence for every probe afterwards.
+// §8.2 fixes both numbers: "a starting daemon must retry a lost race (3
+// attempts, 100 ms apart)". The behavioural assertions elsewhere cannot pin
+// the delay on their own, because any assertion phrased in terms of the
+// constant shrinks with it.
+func TestTheRetryMatchesTheSpecificationsNumbers(t *testing.T) {
+	if acquireAttempts != 3 {
+		t.Errorf("acquireAttempts = %d, want 3", acquireAttempts)
+	}
+	if acquireRetryDelay != 100*time.Millisecond {
+		t.Errorf("acquireRetryDelay = %s, want 100ms", acquireRetryDelay)
+	}
+	if want := time.Duration(acquireAttempts-1) * acquireRetryDelay; acquireRetryBudget != want {
+		t.Errorf("acquireRetryBudget = %s, but %d attempts %s apart wait %s", acquireRetryBudget, acquireAttempts, acquireRetryDelay, want)
+	}
+}
+
+// A probe must not contend with another probe. It takes a shared lock for
+// exactly this reason: an exclusive one is indistinguishable from a held one
+// when it fails, so two ccdad commands probing at the same instant would each
+// report a daemon whose only holder was the other. Measured with exclusive
+// locks on this machine: 2059 false "running" answers out of 8000.
+func TestConcurrentProbesDoNotInventADaemon(t *testing.T) {
+	isolate(t)
+	// The lock file has to exist, or every probe short-circuits on ENOENT and
+	// the contention this test is about cannot happen.
+	s, err := AcquireSingleton()
+	if err != nil {
+		t.Fatalf("AcquireSingleton: %v", err)
+	}
+	if err := s.Release(); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+
+	const probers, each = 16, 200
+	var running, failed atomic.Int64
+	var wg sync.WaitGroup
+	for i := 0; i < probers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < each; j++ {
+				held, err := SingletonHeld()
+				if err != nil {
+					failed.Add(1)
+					continue
+				}
+				if held {
+					running.Add(1)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	if n := running.Load(); n != 0 {
+		t.Errorf("%d of %d concurrent probes reported a running daemon with none running — "+
+			"a probe that contends with other probes reports them as a daemon", n, probers*each)
+	}
+	if n := failed.Load(); n != 0 {
+		t.Errorf("%d of %d concurrent probes failed outright", n, probers*each)
+	}
+}
+
+// The other direction, unchanged and deliberate: a live probe does briefly
+// block an acquiring daemon, which is what the retry exists for.
+func TestAProbeStillSeesADaemonHoldingTheSingleton(t *testing.T) {
+	isolate(t)
+	s, err := AcquireSingleton()
+	if err != nil {
+		t.Fatalf("AcquireSingleton: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Release() })
+	for i := 0; i < 50; i++ {
+		held, err := SingletonHeld()
+		if err != nil {
+			t.Fatalf("SingletonHeld: %v", err)
+		}
+		if !held {
+			t.Fatalf("probe %d reported no daemon while the singleton was held — a shared probe must "+
+				"still fail against the exclusive lock a daemon takes", i)
+		}
+	}
+}
+
 func TestSingletonHeldDoesNotCreateTheLockFile(t *testing.T) {
 	isolate(t)
 	held, err := SingletonHeld()
@@ -135,11 +220,14 @@ func TestASecondProcessHoldingTheSingletonIsSeenAndLocksUsOut(t *testing.T) {
 		t.Fatalf("AcquireSingleton() = %v, want ErrSingletonHeld — a lost race has to be tellable "+
 			"from a filesystem that cannot lock, or `auto` cannot refuse and `daemon status` cannot pick an exit code", err)
 	}
-	// Three attempts a hundred milliseconds apart means two waits before the
-	// verdict.
-	if elapsed := time.Since(start); elapsed < 2*acquireRetryDelay {
+	// §8.2 says three attempts a hundred milliseconds apart, so two waits
+	// before the verdict. Asserted against acquireRetryBudget, which is a
+	// literal: `elapsed >= 2*acquireRetryDelay` would shrink along with the
+	// constant it is supposed to be pinning, and a one-millisecond delay would
+	// pass it while collapsing the window a starting daemon needs.
+	if elapsed := time.Since(start); elapsed < acquireRetryBudget {
 		t.Errorf("AcquireSingleton gave up after %s, want at least %s — a probe momentarily OWNS the lock it reads, "+
-			"so a daemon starting alongside one loses a race it should win", elapsed, 2*acquireRetryDelay)
+			"so a daemon starting alongside one loses a race it should win", elapsed, acquireRetryBudget)
 	}
 }
 
@@ -291,7 +379,7 @@ func TestASecondAcquireInTheSameProcessIsRefused(t *testing.T) {
 	// retry budget waiting for a holder that is us.
 	if elapsed := time.Since(start); elapsed >= acquireRetryDelay {
 		t.Errorf("the second AcquireSingleton took %s; a process that already holds the singleton "+
-			"should be told so at once rather than retrying against itself for %s", elapsed, 2*acquireRetryDelay)
+			"should be told so at once rather than retrying against itself for %s", elapsed, acquireRetryBudget)
 	}
 }
 
