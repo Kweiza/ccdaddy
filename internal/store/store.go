@@ -383,3 +383,95 @@ func (s *Store) reindex() {
 		s.data.Accounts[i].Idx = i + 1
 	}
 }
+
+// SetDisabled holds an account out of auto-rotation, or puts it back, and
+// reports whether that was a change.
+//
+// Disabled is a policy for the auto engine and NOT a lock: an explicit `ccdad
+// switch <account>` still works on a disabled account, because a user naming an
+// account by hand has said what they want more clearly than the flag has. The
+// bool exists so the caller can spend §9.3's exit 3 — "the world is already as
+// you asked" — rather than reporting a no-op as an action taken.
+func (s *Store) SetDisabled(uuid string, disabled bool) (changed bool, err error) {
+	err = s.mutate(func() error {
+		idx := -1
+		for i := range s.data.Accounts {
+			if s.data.Accounts[i].UUID == uuid {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			return fmt.Errorf("%w: %q", ErrNotFound, uuid)
+		}
+		changed = s.data.Accounts[idx].Disabled != disabled
+		s.data.Accounts[idx].Disabled = disabled
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return changed, nil
+}
+
+// Move puts an account at a 1-based display position and renumbers the rest.
+//
+// A position past the end clamps to the end rather than erroring: "put it last"
+// is what a caller who typed a big number meant, and the alternative is making
+// them count. A position below 1 clamps to the front for the same reason —
+// callers that want to refuse 0 as a non-position do so before calling, where
+// they can say so in the user's own terms.
+//
+// It renumbers rather than reorders-and-sorts. sortAndReindex sorts on the Idx
+// values already stored, so a moved slice handed to it is sorted straight back
+// into the order it started in — which is also what a "just set the new Idx and
+// Save" implementation runs into on the next Open, where two accounts then share
+// an Idx and SliceStable breaks the tie by slice position.
+//
+// It reports whether the account actually moved, so a caller can spend exit 3
+// on a move that asked for the position the account already holds.
+//
+// Every account between the source and the destination changes number, so a
+// script holding an idx from an earlier `ccdad list` now acts on a different
+// account. That is the stability contract in `ccdad --help` — idx is an ordinal,
+// not a key — and move is the command that makes it routine rather than a side
+// effect of removal.
+func (s *Store) Move(uuid string, position int) (changed bool, err error) {
+	err = s.mutate(func() error {
+		from := -1
+		for i := range s.data.Accounts {
+			if s.data.Accounts[i].UUID == uuid {
+				from = i
+				break
+			}
+		}
+		if from < 0 {
+			return fmt.Errorf("%w: %q", ErrNotFound, uuid)
+		}
+		to := position - 1
+		if to < 0 {
+			to = 0
+		}
+		if last := len(s.data.Accounts) - 1; to > last {
+			to = last
+		}
+		if to == from {
+			return nil
+		}
+		changed = true
+
+		moved := s.data.Accounts[from]
+		rest := append(s.data.Accounts[:from:from], s.data.Accounts[from+1:]...)
+		reordered := make([]Account, 0, len(s.data.Accounts))
+		reordered = append(reordered, rest[:to]...)
+		reordered = append(reordered, moved)
+		reordered = append(reordered, rest[to:]...)
+		s.data.Accounts = reordered
+		s.reindex()
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return changed, nil
+}
