@@ -46,6 +46,12 @@ func stubClaude(t *testing.T, code ExitCode) *claudeStub {
 // afterwards is looking at a directory that is correctly gone.
 func stubClaudeDuring(t *testing.T, code ExitCode, during func(launchSpec)) *claudeStub {
 	t.Helper()
+	// The resolver is stubbed too. Without it every one of these tests passes
+	// or fails on whether the developer happens to have Claude Code installed
+	// — which is exactly the hazard isolate() exists for, and which CI found
+	// by not having it. Tests that mean to exercise the real launcher name
+	// their own binary with stubLookClaude.
+	stubLookClaude(t, filepath.Join(t.TempDir(), "claude"))
 	var stub claudeStub
 	saved := startChild
 	t.Cleanup(func() { startChild = saved })
@@ -349,6 +355,7 @@ func TestRunReportsASignalKilledChildAsTheShellDoes(t *testing.T) {
 func TestRunRemovesTheSessionWhenTheChildExits(t *testing.T) {
 	isolate(t)
 	seedAccount(t, "u-1", "a@example.com")
+	stubLookClaude(t, filepath.Join(t.TempDir(), "claude"))
 	var home string
 	saved := startChild
 	t.Cleanup(func() { startChild = saved })
@@ -453,8 +460,8 @@ func TestUnsafeForCmdShimCatchesWhatCmdExeWouldReinterpret(t *testing.T) {
 func TestRunRefusesAnArgumentACmdShimWouldReinterpret(t *testing.T) {
 	isolate(t)
 	seedAccount(t, "u-1", "a@example.com")
-	stubLookClaude(t, `C:\Users\x\AppData\Roaming\npm\claude.cmd`)
 	stub := stubClaude(t, ExitOK)
+	stubLookClaude(t, `C:\Users\x\AppData\Roaming\npm\claude.cmd`)
 
 	code, _, errOut, top := runRoot(t, "run", "1", "-p", "fix&whoami")
 	if code != ExitUsage {
