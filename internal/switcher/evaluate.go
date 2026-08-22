@@ -56,6 +56,11 @@ type Evaluation struct {
 	// StateErr is engine state that could not be read; the pass ran with no
 	// cooldown and no quarantines.
 	StateErr error
+	// LastSwitchAt and LastSwitchTo are the cooldown stamp this pass read. The
+	// daemon publishes them; nothing in the ranking needs them, because the
+	// cooldown gate has already been applied by the time this is returned.
+	LastSwitchAt time.Time
+	LastSwitchTo string
 }
 
 // EvalOptions are the inputs that do not come from disk.
@@ -71,6 +76,29 @@ type EvalOptions struct {
 	Force bool
 	// Now is the clock. Zero means time.Now.
 	Now time.Time
+	// Config supplies §7's knobs, and whatever went wrong getting them. The
+	// config it returns is used either way: that IS the warning contract.
+	//
+	// Nil reads the file and falls back to the built-in defaults, which is
+	// right for a one-shot — there is no previous config to keep. A daemon must
+	// pass config.Reloader.Reload instead: §7.6 rule 4 says an unusable file
+	// leaves the engine on the LAST CONFIG THAT PARSED, and silently reverting
+	// a tuned threshold to stock because somebody mistyped an edit is the
+	// failure that rule exists to prevent.
+	Config func() (config.Config, error)
+}
+
+// config resolves the §7 knobs. Both branches return a usable config; only the
+// error differs.
+func (o EvalOptions) config() (config.Config, error) {
+	if o.Config != nil {
+		return o.Config()
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return config.Defaults(), err
+	}
+	return cfg, nil
 }
 
 func (o EvalOptions) now() time.Time {
@@ -134,15 +162,13 @@ func Evaluate(s *store.Store, opts EvalOptions) (Evaluation, error) {
 		return ev, err
 	}
 	ev.StateErr = st.LoadError()
+	ev.LastSwitchAt, ev.LastSwitchTo = st.LastSwitch()
 
-	// The §7 knobs come from ~/.ccdad/config.toml. A file that cannot be used
-	// falls back to the built-in defaults rather than failing: the direction
-	// §8.4 takes, and for the same reason.
-	cfg, cerr := config.Load()
-	if cerr != nil {
-		ev.ConfigErr = cerr
-		cfg = config.Defaults()
-	}
+	// A config that cannot be used is a warning, never a failure: §7.6 rule 4,
+	// because refusing to switch over a mistyped threshold stops the engine
+	// silently, which is the worse outcome.
+	cfg, cerr := opts.config()
+	ev.ConfigErr = cerr
 
 	o := cfg.RankOptions(now)
 	if opts.HasStrategy {

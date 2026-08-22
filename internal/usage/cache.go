@@ -73,6 +73,14 @@ type PollState struct {
 	// LastRateLimited is when a 429 was last seen. The zero time means never,
 	// which is not the same as "an hour ago".
 	LastRateLimited time.Time `json:"last_rate_limited,omitempty"`
+	// LastBindingPct is the previous sample's binding utilization, and
+	// HasLastBinding whether there was one. §7.4 detects movement by comparing
+	// against it, so it is persisted for the same reason the backoff is: a
+	// restarted daemon with no baseline sees no movement, and one that treated
+	// "no baseline" as movement would drop the whole fleet to the urgent
+	// cadence on every start.
+	LastBindingPct float64 `json:"last_binding_pct,omitempty"`
+	HasLastBinding bool    `json:"has_last_binding,omitempty"`
 }
 
 // Entry is one account's cached reading.

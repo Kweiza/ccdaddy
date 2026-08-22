@@ -372,3 +372,24 @@ func TestTheDeadlineIsAlwaysInTheFuture(t *testing.T) {
 		}
 	}
 }
+
+// The budget belongs to the IDENTITY, not the account. Three accounts in one
+// organization polling at MinInterval each is 60 requests an hour against a
+// ~30-an-hour allowance, so the cadence has to be divided among them — and the
+// division is here, with the arithmetic, rather than in whatever happens to
+// know the organization.
+func TestTheBudgetIsSharedAcrossAnIdentity(t *testing.T) {
+	if got := PerIdentity(MinInterval, 1); got != MinInterval {
+		t.Errorf("one account = %s, want %s", got, MinInterval)
+	}
+	if got, want := PerIdentity(MinInterval, 3), 3*MinInterval; got != want {
+		t.Errorf("three accounts = %s, want %s", got, want)
+	}
+	// A count of zero is the caller having nothing to share among, not a
+	// licence to poll as fast as possible.
+	for _, n := range []int{0, -1} {
+		if got := PerIdentity(MinInterval, n); got != MinInterval {
+			t.Errorf("%d accounts = %s, want the unshared interval %s", n, got, MinInterval)
+		}
+	}
+}
