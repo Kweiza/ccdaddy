@@ -142,7 +142,11 @@ func (s *Source) AccessToken(ctx context.Context, uuid string) (string, error) {
 
 // liveToken answers for the account Claude Code is logged in as.
 func (s *Source) liveToken(uuid string, stored record) (string, error) {
-	lock, err := cclock.Acquire(cclock.OAuthRefreshLockDir(), cclock.Options{
+	lockDir, err := cclock.OAuthRefreshLockDir()
+	if err != nil {
+		return "", err
+	}
+	lock, err := cclock.Acquire(lockDir, cclock.Options{
 		Stale:   cclock.RefreshStale,
 		Timeout: s.LockTimeout,
 	})

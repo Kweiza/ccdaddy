@@ -29,11 +29,15 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 )
 
+// The four basenames are exported so a reader that needs the NAME and not the
+// path — `ccdad uninstall`, deciding whether a directory is a ccdad store —
+// gets it from the package that owns it without resolving a home directory it
+// does not need.
 const (
-	lockFileName   = "ccdad.lock"
-	pidFileName    = "ccdad.pid"
-	statusFileName = "status.json"
-	logFileName    = "daemon.log"
+	LockFileName   = "ccdad.lock"
+	PIDFileName    = "ccdad.pid"
+	StatusFileName = "status.json"
+	LogFileName    = "daemon.log"
 )
 
 // LockPath is the singleton lock. It is never written and never read; the only
@@ -41,37 +45,64 @@ const (
 // so delete-and-recreate lets two daemons each hold "the" lock on a different
 // inode, and unlinking also erases the missing-file evidence that no daemon has
 // ever started here.
-func LockPath() string { return filepath.Join(ccpath.StoreHome(), lockFileName) }
+func LockPath() (string, error) {
+	root, err := ccpath.StoreHome()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(root, LockFileName), nil
+}
 
 // PIDPath is the pidfile. It is never locked — see the package comment for why
 // locking it inverts on Windows.
-func PIDPath() string { return filepath.Join(ccpath.StoreHome(), pidFileName) }
+func PIDPath() (string, error) {
+	root, err := ccpath.StoreHome()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(root, PIDFileName), nil
+}
 
 // StatusPath is the per-tick status document.
-func StatusPath() string { return filepath.Join(ccpath.StoreHome(), statusFileName) }
+func StatusPath() (string, error) {
+	root, err := ccpath.StoreHome()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(root, StatusFileName), nil
+}
 
 // LogPath is the daemon's log. It is never locked, and the daemon opens it
 // itself rather than inheriting it from whoever spawned it — a parent-opened
 // descriptor would survive a rename and leave the daemon writing into the
 // rotated inode while the new file stays empty.
-func LogPath() string { return filepath.Join(ccpath.StoreHome(), logFileName) }
+func LogPath() (string, error) {
+	root, err := ccpath.StoreHome()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(root, LogFileName), nil
+}
 
 // storeRoot resolves the store directory and refuses a relative one.
 //
-// ccpath.StoreHome() degrades to the relative path ".ccdad" when os.UserHomeDir
-// fails, because filepath.Join("", ".ccdad") is ".ccdad". That is worse here
-// than anywhere else in the tree: a detached daemon's working directory differs
-// from its parent's by design, so a relative lock path means the daemon flocks
-// one file and the CLI probes another. Two invocations from two directories
-// would each see "no daemon" and each spawn one.
+// A relative root is worse here than anywhere else in the tree: a detached
+// daemon's working directory differs from its parent's by design, so a relative
+// lock path means the daemon flocks one file and the CLI probes another. Two
+// invocations from two directories would each see "no daemon" and each spawn
+// one. ccpath.StoreHome reports an unresolvable home itself; what reaches this
+// guard is a CCDAD_HOME that is relative.
 //
-// The accessors above stay plain one-liners to match usage.CachePath and
-// strategy.StatePath; the guard lives on the paths that act, exactly as
-// store.Open's does. Canonicalizing with EvalSymlinks — so that two spellings
+// The accessors above only propagate ccpath's error, matching usage.CachePath
+// and strategy.StatePath; the absolute-path guard lives on the paths that act,
+// exactly as store.Open's does. Canonicalizing with EvalSymlinks — so that two spellings
 // of the same CCDAD_HOME cannot yield two daemons — is a separate question and
 // belongs to the autostart task that raised it.
 func storeRoot() (string, error) {
-	root := ccpath.StoreHome()
+	root, err := ccpath.StoreHome()
+	if err != nil {
+		return "", err
+	}
 	if !filepath.IsAbs(root) {
 		return "", fmt.Errorf("the ccdad store resolved to the relative path %q; set CCDAD_HOME to an absolute path", root)
 	}

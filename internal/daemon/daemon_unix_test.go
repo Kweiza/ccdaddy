@@ -41,12 +41,12 @@ func waitForLogLine(t *testing.T, needle string, within time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(within)
 	for time.Now().Before(deadline) {
-		if body, err := os.ReadFile(LogPath()); err == nil && strings.Contains(string(body), needle) {
+		if body, err := os.ReadFile(mustPath(LogPath())); err == nil && strings.Contains(string(body), needle) {
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	body, _ := os.ReadFile(LogPath())
+	body, _ := os.ReadFile(mustPath(LogPath()))
 	t.Fatalf("%q never appeared in daemon.log within %s. Log:\n%s", needle, within, body)
 }
 
@@ -76,7 +76,7 @@ func TestSIGTERMShutsTheDaemonDownCleanly(t *testing.T) {
 	if pid, ok, err := ReadPID(); ok || err != nil {
 		t.Errorf("ReadPID() = (%d, %v, %v), want the pidfile truncated", pid, ok, err)
 	}
-	if _, err := os.Stat(LockPath()); err != nil {
+	if _, err := os.Stat(mustPath(LockPath())); err != nil {
 		t.Errorf("the lock file was removed: %v", err)
 	}
 	if held, err := SingletonHeld(); err != nil || held {
@@ -163,7 +163,7 @@ func TestCaptureStderrFollowsTheLogThroughARotation(t *testing.T) {
 	}
 	defer restore()
 
-	l, err := openLog(LogPath(), 64, 3)
+	l, err := openLog(mustPath(LogPath()), 64, 3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,10 +182,10 @@ func TestCaptureStderrFollowsTheLogThroughARotation(t *testing.T) {
 	os.Stderr.WriteString("a panic after the rotation\n")
 	restore()
 
-	if got := readFile(t, LogPath()+".1"); !strings.Contains(got, "before the rotation") {
+	if got := readFile(t, mustPath(LogPath())+".1"); !strings.Contains(got, "before the rotation") {
 		t.Errorf("pre-rotation stderr did not reach the log:\n%s", got)
 	}
-	if got := readFile(t, LogPath()); !strings.Contains(got, "after the rotation") {
+	if got := readFile(t, mustPath(LogPath())); !strings.Contains(got, "after the rotation") {
 		t.Errorf("post-rotation stderr went to the rotated inode, not the new log:\n%s", got)
 	}
 }

@@ -79,7 +79,7 @@ func ForceShutdown(pid int) error {
 	if ok {
 		if s.PID != pid {
 			return fmt.Errorf("refusing to terminate pid %d: %s describes pid %d",
-				pid, statusFileName, s.PID)
+				pid, StatusFileName, s.PID)
 		}
 		target.StartedAt = s.StartedAt
 	}

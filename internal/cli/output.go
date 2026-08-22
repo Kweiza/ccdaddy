@@ -49,3 +49,17 @@ func accountJSON(a store.Account) map[string]any {
 	}
 	return out
 }
+
+// namePath renders an already-resolved path for inclusion in a MESSAGE.
+//
+// Every caller is reporting some other failure and has already completed an
+// operation that needed the same home directory, so the error branch is not
+// reachable from a working machine. It exists because Go makes a two-value call
+// unusable inside a format string, and because a message that silently contains
+// an empty path is worse than one that says why it is empty.
+func namePath(path string, err error) string {
+	if err != nil {
+		return fmt.Sprintf("(unresolved: %v)", err)
+	}
+	return path
+}

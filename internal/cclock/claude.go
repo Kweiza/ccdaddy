@@ -21,6 +21,16 @@ const (
 	refreshStale = RefreshStale
 )
 
+// GlobalConfigStale is the staleness window for the ~/.claude.json lock.
+//
+// Claude Code takes that one through proper-lockfile WITHOUT passing a stale
+// option (`nv(configPath, {lockfilePath: configPath + ".lock", ...})`), so the
+// window is proper-lockfile's own default: `{stale:1e4}` followed by
+// `Math.max(stale, 2000)`. Ten seconds, and it is the shortest of the four
+// windows ccdad honours -- which is exactly why it must not be re-spelled as
+// one of the others.
+const GlobalConfigStale = 10 * time.Second
+
 // RefreshStale is Claude Code's staleness window for the OAuth refresh locks.
 //
 // It is exported because ccdad has a second caller that takes ONE of these
@@ -59,23 +69,55 @@ func storageWriteLockDir(home string) string {
 	return filepath.Join(home, ".storage-write.lock")
 }
 
+// globalConfigLockDir is the mutex directory for Claude Code's global config.
+//
+// Claude Code passes proper-lockfile an explicit `lockfilePath` of
+// `${configPath}.lock`, so the name is the config file's own path with .lock
+// appended -- NOT a directory beside it and not a name derived from the config
+// home. It is computed from an already-resolved config path for the same reason
+// the credential lock names are: the caller resolves once and passes it in.
+func globalConfigLockDir(configPath string) string {
+	return configPath + ".lock"
+}
+
 // StorageWriteLockDir guards every read-modify-write of .credentials.json.
 // cswap does not take this lock; ccdad does.
-func StorageWriteLockDir() string {
-	return storageWriteLockDir(ccpath.CredentialHome())
+func StorageWriteLockDir() (string, error) {
+	home, err := ccpath.CredentialHome()
+	if err != nil {
+		return "", err
+	}
+	return storageWriteLockDir(home), nil
 }
 
 // OAuthRefreshLockDir is Claude Code's primary token-refresh lock.
-func OAuthRefreshLockDir() string {
-	return oauthRefreshLockDir(ccpath.CredentialHome())
+func OAuthRefreshLockDir() (string, error) {
+	home, err := ccpath.CredentialHome()
+	if err != nil {
+		return "", err
+	}
+	return oauthRefreshLockDir(home), nil
 }
 
 // LegacyRefreshLockDir is the older sibling-of-the-directory lock Claude Code
 // still takes for compatibility with external tools. Claude Code names it after
 // the REAL path of the credential home, so a symlinked home must resolve first
 // or the two processes lock different files and exclude nothing.
-func LegacyRefreshLockDir() string {
-	return legacyRefreshLockDir(ccpath.CredentialHome())
+func LegacyRefreshLockDir() (string, error) {
+	home, err := ccpath.CredentialHome()
+	if err != nil {
+		return "", err
+	}
+	return legacyRefreshLockDir(home), nil
+}
+
+// GlobalConfigLockDir is the lock guarding ~/.claude.json.
+func GlobalConfigLockDir() (string, error) {
+	path, err := ccpath.GlobalConfigPath()
+	if err != nil {
+		return "", err
+	}
+	return globalConfigLockDir(path), nil
 }
 
 // lockStep is one entry in the credential-lock sequence.
@@ -106,10 +148,10 @@ func credentialLockOrder(home string) []lockStep {
 	}
 }
 
-// Held is a set of credential locks held together.
+// Held is a set of Claude Code locks held together.
 type Held struct {
 	locks []*Lock
-	home  string
+	scope string
 
 	compromised     chan struct{}
 	compromisedOnce sync.Once
@@ -120,13 +162,13 @@ type Held struct {
 }
 
 // newHeld wraps already-acquired locks and starts the goroutine that fans
-// their individual Compromised channels into Held's aggregate one. home is
-// the credential home directory these locks actually cover, resolved once by
-// the caller.
-func newHeld(locks []*Lock, home string) *Held {
+// their individual Compromised channels into Held's aggregate one. scope is
+// the already-resolved path these locks cover, resolved once by the caller;
+// see Held.Scope.
+func newHeld(locks []*Lock, scope string) *Held {
 	h := &Held{
 		locks:       locks,
-		home:        home,
+		scope:       scope,
 		compromised: make(chan struct{}),
 		watchStop:   make(chan struct{}),
 		watchDone:   make(chan struct{}),
@@ -174,19 +216,21 @@ func (h *Held) Compromised() <-chan struct{} {
 	return h.compromised
 }
 
-// CredentialHome is the credential home directory this Held's locks actually
-// cover -- the value ccpath.CredentialHome() resolved to at the moment
-// AcquireCredentials was called, not a fresh re-resolution. A caller about to
-// write the credentials file under this Held must write under THIS
-// directory rather than calling ccpath.CredentialHome() again: the
-// environment variables it reads are exactly the ones ccdad itself mutates
-// for per-account credential scoping, so a change between resolutions would
-// lock one directory and write another.
-func (h *Held) CredentialHome() string {
+// Scope is the already-resolved path this Held's locks actually cover: the
+// credential home for AcquireCredentials, the global config FILE for
+// AcquireGlobalConfig. It is the value resolved at the moment of acquisition,
+// never a fresh re-resolution.
+//
+// A caller about to write under this Held must derive the target from THIS
+// value rather than calling ccpath again: the environment variables ccpath
+// reads are exactly the ones ccdad itself mutates for per-account credential
+// scoping, so a change between resolutions would lock one path and write
+// another.
+func (h *Held) Scope() string {
 	if h == nil {
 		return ""
 	}
-	return h.home
+	return h.scope
 }
 
 // Release gives the locks back in reverse acquisition order, releasing all
@@ -236,13 +280,49 @@ func (h *Held) Release() error {
 // holding them across our own network call would stall Claude Code for the
 // duration of our request.
 func AcquireCredentials(timeout time.Duration) (*Held, error) {
-	home := ccpath.CredentialHome()
+	home, err := ccpath.CredentialHome()
+	if err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(home, 0o700); err != nil {
 		return nil, fmt.Errorf("creating credential home: %w", err)
 	}
+	return acquireAll(credentialLockOrder(home), home, timeout)
+}
 
+// AcquireGlobalConfig takes the single lock guarding ~/.claude.json.
+//
+// It is deliberately NOT folded into AcquireCredentials. The two files have
+// different locks, different stale windows and different writers, and a caller
+// that needs both must take the credential locks first and this one second --
+// which is the order Claude Code itself uses, because its credential save runs
+// under the refresh locks and only then reaches the config writer. Taking this
+// one first would put a ccdad holding it in front of a Claude Code holding the
+// refresh locks and waiting for it.
+//
+// The parent directory is created but the config FILE is not. Claude Code's own
+// acquisition passes proper-lockfile realpath:true against the config path, so
+// on a machine where ~/.claude.json does not exist yet its lock attempt fails
+// ENOENT and it falls back to an unlocked write. ccdad does not copy that
+// fallback: our lock directory is a mkdir of a path that needs no existing
+// file, so we can lock a not-yet-created config correctly.
+func AcquireGlobalConfig(timeout time.Duration) (*Held, error) {
+	path, err := ccpath.GlobalConfigPath()
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, fmt.Errorf("creating the directory for %s: %w", filepath.Base(path), err)
+	}
+	steps := []lockStep{{globalConfigLockDir(path), GlobalConfigStale}}
+	return acquireAll(steps, path, timeout)
+}
+
+// acquireAll takes every step in order and gives back what it already holds if
+// any one of them fails.
+func acquireAll(steps []lockStep, scope string, timeout time.Duration) (*Held, error) {
 	var locks []*Lock
-	for _, step := range credentialLockOrder(home) {
+	for _, step := range steps {
 		lk, err := Acquire(step.dir, Options{Stale: step.stale, Timeout: timeout})
 		if err != nil {
 			// Give back whatever we already took, in reverse order; a
@@ -261,7 +341,7 @@ func AcquireCredentials(timeout time.Duration) (*Held, error) {
 		}
 		locks = append(locks, lk)
 	}
-	return newHeld(locks, home), nil
+	return newHeld(locks, scope), nil
 }
 
 // acquireCredentialsError describes why one lock in the set could not be

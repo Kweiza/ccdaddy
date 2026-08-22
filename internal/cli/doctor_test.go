@@ -80,7 +80,7 @@ func TestDoctorCreatesNothing(t *testing.T) {
 	if _, err := os.Stat(missing); !os.IsNotExist(err) {
 		t.Fatalf("doctor created the store directory it was asked to report on: %v", err)
 	}
-	if _, err := os.Stat(daemon.LockPath()); !os.IsNotExist(err) {
+	if _, err := os.Stat(mustPath(daemon.LockPath())); !os.IsNotExist(err) {
 		t.Error("doctor created the daemon lock file, destroying the evidence that no daemon ever started here")
 	}
 }
@@ -280,7 +280,7 @@ func TestDoctorReportsLooseStorePermissions(t *testing.T) {
 	}
 	isolate(t)
 	seedHealthyMachine(t)
-	if err := os.Chmod(ccpath.StoreHome(), 0o755); err != nil {
+	if err := os.Chmod(mustPath(ccpath.StoreHome()), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -299,7 +299,7 @@ func TestDoctorReportsALooseCredentialFile(t *testing.T) {
 	}
 	isolate(t)
 	seedHealthyMachine(t)
-	matches, err := filepath.Glob(filepath.Join(ccpath.StoreHome(), "credentials", "*"))
+	matches, err := filepath.Glob(filepath.Join(mustPath(ccpath.StoreHome()), "credentials", "*"))
 	if err != nil || len(matches) == 0 {
 		t.Fatalf("no stored credential to loosen: %v %v", matches, err)
 	}
@@ -335,7 +335,7 @@ func TestDoctorAcceptsATightStore(t *testing.T) {
 func TestDoctorReportsACorruptPidfile(t *testing.T) {
 	isolate(t)
 	seedHealthyMachine(t)
-	if err := os.WriteFile(daemon.PIDPath(), []byte("not-a-pid\n"), 0o600); err != nil {
+	if err := os.WriteFile(mustPath(daemon.PIDPath()), []byte("not-a-pid\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -381,7 +381,7 @@ func TestDoctorReportsACorruptStatusFile(t *testing.T) {
 func TestDoctorReportsCorruptEngineState(t *testing.T) {
 	isolate(t)
 	seedHealthyMachine(t)
-	if err := os.WriteFile(filepath.Join(ccpath.StoreHome(), "strategy.json"), []byte("{{{"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(mustPath(ccpath.StoreHome()), "strategy.json"), []byte("{{{"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -394,7 +394,7 @@ func TestDoctorReportsCorruptEngineState(t *testing.T) {
 func TestDoctorReportsACorruptUsageCache(t *testing.T) {
 	isolate(t)
 	seedHealthyMachine(t)
-	if err := os.WriteFile(filepath.Join(ccpath.StoreHome(), "usage.json"), []byte("{{{"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(mustPath(ccpath.StoreHome()), "usage.json"), []byte("{{{"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -455,12 +455,12 @@ func TestDoctorRepairsNothing(t *testing.T) {
 	}
 	isolate(t)
 	seedHealthyMachine(t)
-	if err := os.Chmod(ccpath.StoreHome(), 0o755); err != nil {
+	if err := os.Chmod(mustPath(ccpath.StoreHome()), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
 	runDoctor(t)
-	info, err := os.Stat(ccpath.StoreHome())
+	info, err := os.Stat(mustPath(ccpath.StoreHome()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -495,7 +495,7 @@ func TestDoctorTakesNoArguments(t *testing.T) {
 func TestDoctorReportsAnUnusableConfigFile(t *testing.T) {
 	isolate(t)
 	seedHealthyMachine(t)
-	if err := os.WriteFile(filepath.Join(ccpath.StoreHome(), config.FileName), []byte("threshold = = 9"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(mustPath(ccpath.StoreHome()), config.FileName), []byte("threshold = = 9"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -511,7 +511,7 @@ func TestDoctorReportsAnUnusableConfigFile(t *testing.T) {
 func TestDoctorReportsAConfigItCanRead(t *testing.T) {
 	isolate(t)
 	seedHealthyMachine(t)
-	if err := os.WriteFile(filepath.Join(ccpath.StoreHome(), config.FileName), []byte("threshold = 90\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(mustPath(ccpath.StoreHome()), config.FileName), []byte("threshold = 90\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -538,7 +538,7 @@ func TestDoctorTreatsAMissingConfigAsOrdinary(t *testing.T) {
 func TestDoctorSaysWhenUnattendedSpendingIsArmed(t *testing.T) {
 	isolate(t)
 	seedHealthyMachine(t)
-	if err := os.WriteFile(filepath.Join(ccpath.StoreHome(), config.FileName),
+	if err := os.WriteFile(filepath.Join(mustPath(ccpath.StoreHome()), config.FileName),
 		[]byte("[credit]\nmax_auto_spend = 100\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -558,7 +558,7 @@ func TestDoctorSaysWhenUnattendedSpendingIsArmed(t *testing.T) {
 func TestDoctorNamesConfigKeysItDoesNotKnow(t *testing.T) {
 	isolate(t)
 	seedHealthyMachine(t)
-	if err := os.WriteFile(filepath.Join(ccpath.StoreHome(), config.FileName),
+	if err := os.WriteFile(filepath.Join(mustPath(ccpath.StoreHome()), config.FileName),
 		[]byte("threshhold = 90\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}

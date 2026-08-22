@@ -667,8 +667,8 @@ func TestWithStateWritesAPrivateFile(t *testing.T) {
 	if perm := info.Mode().Perm(); perm != 0o600 {
 		t.Errorf("mode = %v, want 0600", perm)
 	}
-	if StatePath() != filepath.Join(root, "strategy.json") {
-		t.Errorf("StatePath = %q, want it under CCDAD_HOME", StatePath())
+	if mustPath(StatePath()) != filepath.Join(root, "strategy.json") {
+		t.Errorf("StatePath = %q, want it under CCDAD_HOME", mustPath(StatePath()))
 	}
 }
 
