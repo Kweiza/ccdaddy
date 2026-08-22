@@ -49,6 +49,36 @@ const (
 	StrategyConsumeFirst
 )
 
+func (s Strategy) String() string {
+	switch s {
+	case StrategyHeadroom:
+		return "headroom"
+	case StrategyConsumeFirst:
+		return "consume-first"
+	}
+	return "unknown"
+}
+
+// StrategyNames lists every strategy a caller may name, in this type's own
+// order. A CLI builds its help text and its error message from this, so a
+// strategy added here cannot be forgotten in one of them.
+func StrategyNames() []string {
+	return []string{StrategyHeadroom.String(), StrategyConsumeFirst.String()}
+}
+
+// ParseStrategy is String's inverse. Unlike identity.ParseKind it does NOT fall
+// back to a default: a name that reaches here came from a user typing it, and
+// silently running the wrong strategy for a typo is the cswap behaviour §9.3
+// exists to fix.
+func ParseStrategy(name string) (Strategy, bool) {
+	for _, s := range []Strategy{StrategyHeadroom, StrategyConsumeFirst} {
+		if s.String() == name {
+			return s, true
+		}
+	}
+	return StrategyHeadroom, false
+}
+
 // Mode is the situation the ranking actually found itself in (§7.1's three
 // rows). It is reported so `ccdad status` can say WHY an order looks the way it
 // does.
