@@ -25,6 +25,7 @@ const (
 	roleEnv    = "CCDAD_TEST_ROLE"
 	reportEnv  = "CCDAD_TEST_REPORT"
 	goneEnv    = "CCDAD_TEST_PARENT_GONE"
+	lingerEnv  = "CCDAD_TEST_CHILD_LINGER"
 	readyEnv   = "CCDAD_TEST_READY"
 	releaseEnv = "CCDAD_TEST_RELEASE"
 
@@ -108,6 +109,19 @@ func runAsSpawnedDaemon() int {
 	}
 	if err := os.WriteFile(report, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 		return 4
+	}
+	// A real daemon does not exit, and that is the whole reason inheriting a
+	// descriptor is fatal: the pipe stays open for as long as it lives. A
+	// child that exits immediately closes any leaked descriptor at once and
+	// hides the bug, so the pipe test asks this one to stay.
+	if linger := os.Getenv(lingerEnv); linger != "" {
+		deadline := time.Now().Add(60 * time.Second)
+		for time.Now().Before(deadline) {
+			if _, err := os.Stat(linger); err == nil {
+				break
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
 	}
 	return 0
 }

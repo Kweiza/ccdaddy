@@ -203,6 +203,12 @@ func TestClearPIDOnAStoreThatNeverHadADaemonIsNotAFailure(t *testing.T) {
 // differs from its parent's by design — so a relative store means the daemon
 // and the CLI act on two different files while both believe they agree.
 func TestTheStoreMustBeAnAbsolutePath(t *testing.T) {
+	// A relative store resolves against the working directory, which under
+	// `go test` is the package source tree. If any of the three calls below
+	// stops refusing, the files it creates must land somewhere disposable
+	// rather than in internal/daemon/ — a mutation run proved that is not
+	// hypothetical by leaving one there.
+	t.Chdir(t.TempDir())
 	t.Setenv("CCDAD_HOME", filepath.Join("relative", "store"))
 	if err := WritePID(1234); err == nil {
 		t.Error("WritePID accepted a relative store")

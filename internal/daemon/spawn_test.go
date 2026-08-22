@@ -112,16 +112,29 @@ func TestSpawnDoesNotLeaveTheChildHoldingOurStdout(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the spawner harness re-execs this binary in a unix role")
 	}
-	report := filepath.Join(t.TempDir(), "child.txt")
+	dir := t.TempDir()
+	report := filepath.Join(dir, "child.txt")
+	// The child holds on until this file appears, so it is still alive while
+	// the pipes are read — which is the only condition under which a leaked
+	// descriptor is observable.
+	linger := filepath.Join(dir, "let-the-child-go")
+	t.Cleanup(func() { _ = os.WriteFile(linger, nil, 0o600) })
 	spawner := exec.Command(os.Args[0])
 	spawner.Env = append(os.Environ(),
 		roleEnv+"="+roleHoldPipe,
 		reportEnv+"="+report,
+		lingerEnv+"="+linger,
 	)
-	spawner.Stderr = os.Stderr
 	stdout, err := spawner.StdoutPipe()
 	if err != nil {
 		t.Fatalf("StdoutPipe: %v", err)
+	}
+	// stderr as well: a redirect that covers only stdout still leaves
+	// `ccdad which 2>&1 | cat` hanging, and stderr is the descriptor most
+	// likely to be left inherited "so panics are visible".
+	stderr, err := spawner.StderrPipe()
+	if err != nil {
+		t.Fatalf("StderrPipe: %v", err)
 	}
 	if err := spawner.Start(); err != nil {
 		t.Fatalf("starting the spawner: %v", err)
@@ -129,23 +142,32 @@ func TestSpawnDoesNotLeaveTheChildHoldingOurStdout(t *testing.T) {
 	t.Cleanup(func() { _ = spawner.Wait() })
 
 	// Read to EOF exactly as a command substitution would.
-	done := make(chan error, 1)
-	go func() {
-		_, err := io.Copy(io.Discard, bufio.NewReader(stdout))
-		done <- err
-	}()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("reading the spawner's stdout: %v", err)
+	for _, stream := range []struct {
+		name string
+		r    io.Reader
+	}{{"stdout", stdout}, {"stderr", stderr}} {
+		done := make(chan error, 1)
+		go func() {
+			_, err := io.Copy(io.Discard, bufio.NewReader(stream.r))
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("reading the spawner's %s: %v", stream.name, err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("the spawner's %s never reached EOF although the spawner exited — the detached "+
+				"child inherited the pipe, so every `$(ccdad ...)` in a script hangs for as long as the daemon lives", stream.name)
 		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("the spawner's stdout never reached EOF although the spawner exited — the detached " +
-			"child inherited the pipe, so every `$(ccdad ...)` in a script hangs for as long as the daemon lives")
 	}
-	// And the child really did start; otherwise this test would pass by
-	// spawning nothing at all.
+	// And the child really did start and is still running; otherwise this test
+	// would pass by spawning nothing at all, or by spawning something that had
+	// already exited and closed whatever it inherited.
 	readReport(t, report, 15*time.Second)
+	if _, err := os.Stat(linger); err == nil {
+		t.Fatal("the child had already been let go before the pipes were read")
+	}
 }
 
 func TestSpawnPassesTheArgumentThatStopsTheChildSpawningAChild(t *testing.T) {

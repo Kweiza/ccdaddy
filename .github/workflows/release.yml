@@ -68,7 +68,12 @@ jobs:
       # the CI workflow and runs on the commit; this is the cheap re-run that
       # stops a tag publishing a binary whose own build script is broken.
       - name: Test
-        run: go test ./...
+        # -race, not a bare test run. internal/daemon is the first package with
+        # a lock held for process life, a spawned child and a background loop,
+        # and the race detector has already caught one defect there that a
+        # plain run passed. The three-OS matrix still belongs in the CI
+        # workflow; this is the last gate before a public artifact.
+        run: go test -race ./...
 
       # Go cross-compiles all six targets on one runner in about two minutes,
       # so there is no matrix here and therefore nothing for fail-fast to
