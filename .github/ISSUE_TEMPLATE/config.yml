@@ -1,0 +1,11 @@
+# Discussions is not enabled on this repository, so there is deliberately no
+# contact link for it: a link in this file that 404s is worse than no link.
+# Turn Discussions on in the repository settings and add one here if the issue
+# tracker starts filling with questions.
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/Kweiza/ccdaddy/security/advisories/new
+    about: >-
+      ccdad holds live OAuth refresh tokens and API keys. Report anything that
+      could expose them privately, not in an issue. See SECURITY.md.

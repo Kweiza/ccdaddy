@@ -77,11 +77,23 @@ targets="linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows
 
 cd -- "$repo_root"
 
+# The notice files ship WITH the binaries, not only in the repository.
+# BSD-3-Clause and Apache-2.0 both require their notices to accompany a BINARY
+# distribution, and a GitHub release is a binary distribution: somebody who
+# downloads ccdad-linux-amd64 and never clones the repository has still received
+# eight modules' worth of licensed code. They are hashed into sha256sums.txt
+# with everything else, so they are covered by the same checksum and the same
+# provenance attestation as the binaries.
+notices="LICENSE NOTICE THIRD-PARTY-LICENSES.txt"
+
 # Sweep before building, not after, so the glob below sees exactly what this
 # run produced. An asset left over from an earlier run with a different target
 # list would otherwise be hashed into the sums file and then attested and
 # published, with nothing in the release that explains where it came from.
 rm -f -- "$dist"/ccdad-* "$dist"/sha256sums.txt
+for notice in $notices; do
+	rm -f -- "$dist/$notice"
+done
 
 failed=
 for target in $targets; do
@@ -99,6 +111,14 @@ for target in $targets; do
 	fi
 done
 
+for notice in $notices; do
+	[ -f "$repo_root/$notice" ] || {
+		echo "build-release: $notice is missing from the repository" >&2
+		exit 1
+	}
+	cp -- "$repo_root/$notice" "$dist/$notice"
+done
+
 # Glob what actually landed rather than replaying the target list: a partial
 # build then still gets a sums file that matches its own assets, instead of one
 # naming a binary nobody can download.
@@ -110,13 +130,22 @@ if [ ${#assets[@]} -eq 0 ]; then
 	echo "build-release: no assets in $dist" >&2
 	exit 1
 fi
+# The binaries first, then the notices, so the file the installers parse opens
+# with the lines they are looking for. Both installers match their own asset
+# with an anchored per-line regex, so the extra lines are inert to them --
+# but the shape check they run first ("does this look like a checksum file")
+# would fail on a file that led with something else.
+sums_inputs=("${assets[@]}")
+for notice in $notices; do
+	sums_inputs+=("$notice")
+done
 if command -v sha256sum >/dev/null 2>&1; then
-	sha256sum -- "${assets[@]}" >sha256sums.txt
+	sha256sum -- "${sums_inputs[@]}" >sha256sums.txt
 else
-	shasum -a 256 -- "${assets[@]}" >sha256sums.txt
+	shasum -a 256 -- "${sums_inputs[@]}" >sha256sums.txt
 fi
 
-echo "build-release: ${#assets[@]} asset(s) and sha256sums.txt in $dist" >&2
+echo "build-release: ${#assets[@]} asset(s), ${#sums_inputs[@]} sums line(s) in $dist" >&2
 
 if [ -n "$failed" ]; then
 	echo "build-release: failed for:$failed" >&2

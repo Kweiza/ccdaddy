@@ -1,0 +1,35 @@
+# Two ecosystems, because this repository has two kinds of pinned dependency
+# and only one of them is visible in go.mod.
+#
+# The action versions in .github/workflows/*.yml are pinned to majors
+# (actions/checkout@v7 and so on) and are the ones nobody thinks about until a
+# runner image changes under them.
+#
+# Grouped into one pull request per ecosystem per week. Ungrouped, eight Go
+# modules produce eight pull requests, each of which has to go through the full
+# three-OS matrix — and the point of updating them is the aggregate, not any
+# single bump.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      go-modules:
+        patterns: ["*"]
+    commit-message:
+      # Matches the imperative subjects the rest of the history uses.
+      prefix: "Update"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "Update"

@@ -1,0 +1,33 @@
+# Go is tabs, and gofmt is the authority — scripts/ci.sh fmt fails on anything
+# else. Everything below exists so an editor does not fight it.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.go]
+indent_style = tab
+
+# The shell scripts in scripts/ and install.sh are tab-indented to match.
+[*.sh]
+indent_style = tab
+
+[*.{yml,yaml}]
+indent_style = space
+indent_size = 2
+
+[*.ps1]
+indent_style = tab
+
+[*.md]
+# Two trailing spaces are a hard line break in Markdown.
+trim_trailing_whitespace = false
+
+# Reproduced byte-for-byte from upstream license files. A tidied license is
+# not a reproduction, so no editor may touch this one.
+[THIRD-PARTY-LICENSES.txt]
+trim_trailing_whitespace = false
+insert_final_newline = false
