@@ -274,7 +274,7 @@ func TestAddTokenStoresTokensOutsideTheOAuthRecord(t *testing.T) {
 			if _, bad := creds["claudeAiOauth"]; bad {
 				t.Fatalf("stored a claudeAiOauth record for a %s: %s", tc.name, creds["claudeAiOauth"])
 			}
-			if _, ok := creds[tokenCredentialKey]; !ok {
+			if _, ok := creds[cclink.TokenKey]; !ok {
 				t.Fatalf("stored credentials = %v, want the ccdad token record", creds)
 			}
 		})
@@ -978,7 +978,7 @@ func TestAddTokenKeepsAnExistingOAuthRecord(t *testing.T) {
 	if _, ok := stored["claudeAiOauth"]; !ok {
 		t.Fatalf("add-token destroyed the account's OAuth login: %v", stored)
 	}
-	if _, ok := stored[tokenCredentialKey]; !ok {
+	if _, ok := stored[cclink.TokenKey]; !ok {
 		t.Fatalf("add-token did not record the token: %v", stored)
 	}
 }

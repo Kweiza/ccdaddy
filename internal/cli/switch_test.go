@@ -17,6 +17,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
+	"github.com/Kweiza/ccdaddy/internal/switcher"
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
 
@@ -389,7 +390,7 @@ func liveUUIDOf(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	acct, ok := attributeWith(live, s.Accounts(), s.Credentials)
+	acct, ok := switcher.AttributeFile(live, s.Accounts(), s.Credentials)
 	if !ok {
 		return ""
 	}

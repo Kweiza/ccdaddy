@@ -221,7 +221,7 @@ func TestUnknownKeysReportsOnlyUnrecognized(t *testing.T) {
 // key minted on THIS machine. Merge unions rather than replaces (spec 4.2.1)
 // as defence-in-depth, not because the shipped pipeline needs it: Extract
 // never puts this key in a snapshot (see its doc comment), so incoming here
-// is hand-built, not something Capture can produce. It guards a source of
+// is hand-built, not something Extract can produce. It guards a source of
 // incoming that does not occur in the pipeline today — a hand-built call, or
 // an export written by some future version of ccdad — so that even then, a
 // wholesale replace cannot destroy the live machine's other-organization
