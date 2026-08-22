@@ -11,6 +11,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/cclock"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
+	"github.com/Kweiza/ccdaddy/internal/pollpolicy"
 )
 
 // The on-disk usage cache: one document the daemon writes and every CLI
@@ -27,7 +28,12 @@ import (
 const (
 	// ServeTTL is spec §7.4's serveTTL: a reading younger than this is served
 	// from the cache with no fetch, `--refresh` included.
-	ServeTTL = 180 * time.Second
+	//
+	// It is an alias rather than a second spelling. §7.4 lives in
+	// internal/pollpolicy; a cache that carried its own copy of the number
+	// would be one edit away from serving readings the scheduler thinks are
+	// already stale.
+	ServeTTL = pollpolicy.ServeTTL
 
 	CacheFileName = "usage.json"
 	// cacheLockDir is a DIRECTORY, because that is what cclock's mutex is.
