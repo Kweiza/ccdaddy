@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,6 +36,11 @@ type fakeDaemon struct {
 
 	spawnErr    error
 	shutdownErr error
+	// forceSucceeds says whether this platform HAS a guarded escalation. False
+	// is Unix's answer — errors.ErrUnsupported, by design — and true is what
+	// Windows does once the cross-check passes.
+	forceSucceeds bool
+	forced        []int
 
 	// releaseAfter is how many probes the daemon takes to let go of the
 	// singleton after being asked to. Zero is gone by the next probe; a larger
@@ -106,6 +112,15 @@ func (f *fakeDaemon) spawn() error {
 
 func (f *fakeDaemon) readPID() (int, bool, error) { return f.pid, f.pidOK, f.pidErr }
 
+func (f *fakeDaemon) force(pid int) error {
+	f.forced = append(f.forced, pid)
+	if !f.forceSucceeds {
+		return errors.ErrUnsupported
+	}
+	f.held, f.releaseAfter = false, 0
+	return nil
+}
+
 // observe is the same world seen through daemon.Observe: `daemon status` reads
 // the published document as well as the lock, because the pid and the uptime it
 // prints come from there.
@@ -143,14 +158,17 @@ func (f *fakeDaemon) shutdown(pid int) error {
 func stubDaemonWorld(t *testing.T, f *fakeDaemon) *fakeDaemon {
 	t.Helper()
 	savedHeld, savedSpawn, savedShutdown, savedPID := singletonHeld, spawnDaemon, requestShutdown, readDaemonPID
+	savedForce := forceShutdown
 	savedObserve := observeDaemon
 	savedPoll, savedWait := daemonPollInterval, daemonWaitTimeout
 	t.Cleanup(func() {
 		singletonHeld, spawnDaemon, requestShutdown, readDaemonPID = savedHeld, savedSpawn, savedShutdown, savedPID
+		forceShutdown = savedForce
 		observeDaemon = savedObserve
 		daemonPollInterval, daemonWaitTimeout = savedPoll, savedWait
 	})
 	singletonHeld, spawnDaemon, requestShutdown, readDaemonPID = f.probe, f.spawn, f.shutdown, f.readPID
+	forceShutdown = f.force
 	observeDaemon = f.observe
 	daemonPollInterval, daemonWaitTimeout = time.Millisecond, 150*time.Millisecond
 	return f
@@ -467,6 +485,66 @@ func TestStopReportsADaemonThatWillNotGo(t *testing.T) {
 	}
 	if !f.held {
 		t.Error("the fake released the lock; this test is no longer testing the timeout")
+	}
+}
+
+// Windows answers "is anything listening" directly, because the named event
+// either exists or does not — and a daemon holding the singleton with nothing
+// listening is a negative answer to a probe rather than a runtime failure. The
+// stopping side must never create the event, so this state is real.
+func TestStopReportsWhenNothingIsListeningForTheRequest(t *testing.T) {
+	isolate(t)
+	f := stubDaemonWorld(t, &fakeDaemon{
+		held: true, pid: 4321, pidOK: true,
+		shutdownErr: fmt.Errorf("%w on Local\\ccdad-shutdown-abc", daemon.ErrNoShutdownListener),
+	})
+
+	code, _, stderr, top := runRoot(t, "daemon", "stop")
+	if code != ExitProbeNegative {
+		t.Fatalf("exit = %d, want %d", code, ExitProbeNegative)
+	}
+	if !strings.Contains(stderr+top, "4321") {
+		t.Errorf("the notice does not name the pid: %q", stderr+top)
+	}
+	if len(f.forced) != 0 {
+		t.Errorf("terminated %v after the graceful request was never delivered; the escalation is a TIMEOUT fallback", f.forced)
+	}
+}
+
+// The escalation is strictly behind the event, and behind the wait. A daemon
+// that stops when asked must never be terminated.
+func TestStopDoesNotEscalateWhenTheDaemonStops(t *testing.T) {
+	isolate(t)
+	f := stubDaemonWorld(t, &fakeDaemon{held: true, pid: 4321, pidOK: true, forceSucceeds: true})
+
+	if code, _, _, top := runRoot(t, "daemon", "stop"); code != ExitOK {
+		t.Fatalf("exit = %d, want %d\n%s", code, ExitOK, top)
+	}
+	if len(f.forced) != 0 {
+		t.Fatalf("terminated %v a daemon that had already stopped", f.forced)
+	}
+}
+
+// And when it does not stop, on a platform that HAS a guarded escalation, the
+// user is told it was terminated rather than left with a daemon nothing in the
+// tool can reach.
+func TestStopEscalatesAfterTheWaitOnAPlatformThatCan(t *testing.T) {
+	isolate(t)
+	f := stubDaemonWorld(t, &fakeDaemon{
+		held: true, pid: 4321, pidOK: true,
+		releaseAfter:  1 << 30,
+		forceSucceeds: true,
+	})
+
+	code, _, stderr, top := runRoot(t, "daemon", "stop")
+	if code != ExitOK {
+		t.Fatalf("exit = %d, want %d\n%s%s", code, ExitOK, stderr, top)
+	}
+	if len(f.forced) != 1 || f.forced[0] != 4321 {
+		t.Fatalf("terminated %v, want exactly [4321]", f.forced)
+	}
+	if !strings.Contains(stderr, "terminated") {
+		t.Errorf("a terminated daemon was reported as an ordinary stop: %q", stderr)
 	}
 }
 
