@@ -35,6 +35,13 @@ func NewRootCmd() *cobra.Command {
 			return nil
 		},
 	}
+	// Auto-start hangs off PersistentPreRun rather than PersistentPreRunE, and
+	// the missing E is the point: §8's auto-start must never fail the command
+	// it rode in on, and a hook with no error to return cannot be wired into
+	// one later. Which commands it actually acts for is autostart.go's
+	// allow-list; this is only where the tree offers it the chance.
+	root.PersistentPreRun = func(cmd *cobra.Command, _ []string) { autoStart(cmd) }
+
 	// Cobra reports a mistyped subcommand and a mistyped flag as plain errors.
 	// Both are usage errors under this binary's exit contract, so retag them at
 	// the single point where Cobra hands them back.
@@ -54,6 +61,11 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newRemoveCmd())
 	root.AddCommand(newStatusCmd())
 	root.AddCommand(newDoctorCmd())
+	root.AddCommand(newDaemonCmd())
+	root.AddCommand(newUninstallCmd())
+	// Hidden, and registered on the root rather than under `daemon`: Spawn
+	// re-execs `ccdad <daemon.RunArg>` as a single argument.
+	root.AddCommand(newDaemonRunCmd())
 
 	// Cobra adds `completion` lazily, during Execute, so it has to be
 	// materialized before it can be corrected. Left alone it answers an unknown

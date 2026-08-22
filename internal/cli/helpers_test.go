@@ -43,6 +43,15 @@ func isolate(t *testing.T) string {
 	// that means to describe a machine with a browser calls stubEnvironment.
 	stubEnvironment(t, false, false)
 
+	// Auto-start is suppressed for the whole suite, and this is a hard
+	// requirement rather than tidiness: nothing else stops a spawn, and an
+	// unsuppressed one detaches a REAL daemon pinned to the t.TempDir() above,
+	// which the framework then deletes underneath it — leaving a process
+	// holding a lock in a directory that no longer exists, on the developer's
+	// machine, after `go test` has printed ok. The tests that exercise the
+	// policy put the real hook back by name.
+	suppressAutoStart(t)
+
 	// The network is isolated for the same reason the filesystem is. A test that
 	// reaches api.anthropic.com is not testing ccdad: it depends on the machine
 	// being online, on a real token being rejected, and it sends a value the
@@ -52,6 +61,14 @@ func isolate(t *testing.T) string {
 		t.Error("this test reached the profile endpoint; call stubProfile if that is intended")
 	})
 	return claude
+}
+
+// suppressAutoStart replaces the auto-start hook with a no-op. See isolate.
+func suppressAutoStart(t *testing.T) {
+	t.Helper()
+	saved := autoStart
+	t.Cleanup(func() { autoStart = saved })
+	autoStart = func(*cobra.Command) {}
 }
 
 // stubProfile points the profile client at a local server for the duration of

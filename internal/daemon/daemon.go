@@ -121,6 +121,12 @@ func Run(ctx context.Context, o Options) (err error) {
 	runCtx, stop := context.WithCancel(ctx)
 	defer stop()
 	watchSignals(runCtx, stop, log)
+	// The same stop, reached the only other way it can be: Windows delivers no
+	// signal to a DETACHED_PROCESS child, so §8.4's named event is the
+	// mechanism there and this is a no-op everywhere else. Both routes end in
+	// the same cancel, so shutdown stays ONE path — which is the property this
+	// function is organised around.
+	watchShutdownRequest(runCtx, stop, log)
 
 	loop := &Loop{
 		Tick: func(c context.Context) error {
@@ -157,7 +163,8 @@ func Run(ctx context.Context, o Options) (err error) {
 // for a HUP to reload — external config is picked up by the tick loop.
 //
 // Windows delivers none of this to a DETACHED_PROCESS child; §8.4's named event
-// is a separate mechanism and a separate task. signal.Notify is harmless there.
+// is the mechanism there, and watchShutdownRequest is where it lives.
+// signal.Notify is harmless on Windows.
 func watchSignals(ctx context.Context, stop func(), log *Logger) {
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
