@@ -52,6 +52,8 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newListCmd())
 	root.AddCommand(newSwitchCmd())
 	root.AddCommand(newRemoveCmd())
+	root.AddCommand(newStatusCmd())
+	root.AddCommand(newDoctorCmd())
 
 	// Cobra adds `completion` lazily, during Execute, so it has to be
 	// materialized before it can be corrected. Left alone it answers an unknown

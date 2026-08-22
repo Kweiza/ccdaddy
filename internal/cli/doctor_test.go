@@ -1,0 +1,489 @@
+package cli
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+
+	"github.com/Kweiza/ccdaddy/internal/ccpath"
+	"github.com/Kweiza/ccdaddy/internal/daemon"
+)
+
+// doctorReport is one run of the command, parsed out of --json.
+type doctorReport struct {
+	payload map[string]any
+	checks  map[string]map[string]any
+}
+
+func runDoctor(t *testing.T) (ExitCode, doctorReport, string) {
+	t.Helper()
+	code, stdout, stderr, _ := runRoot(t, "doctor", "--json")
+	payload := statusJSON(t, stdout)
+	out := doctorReport{payload: payload, checks: map[string]map[string]any{}}
+	rows, ok := payload["checks"].([]any)
+	if !ok {
+		t.Fatalf("no checks array: %v", payload)
+	}
+	for _, r := range rows {
+		row := r.(map[string]any)
+		out.checks[row["name"].(string)] = row
+	}
+	return code, out, stderr
+}
+
+func (r doctorReport) check(t *testing.T, name string) map[string]any {
+	t.Helper()
+	c, ok := r.checks[name]
+	if !ok {
+		names := make([]string, 0, len(r.checks))
+		for n := range r.checks {
+			names = append(names, n)
+		}
+		t.Fatalf("no check named %q; there are %v", name, names)
+	}
+	return c
+}
+
+func (r doctorReport) level(t *testing.T, name string) string {
+	t.Helper()
+	return r.check(t, name)["level"].(string)
+}
+
+func (r doctorReport) detail(t *testing.T, name string) string {
+	t.Helper()
+	d, _ := r.check(t, name)["detail"].(string)
+	return d
+}
+
+// seedHealthyMachine leaves the store and the live credentials file in the
+// state a working install has, so a test can assert on one departure from it.
+func seedHealthyMachine(t *testing.T) {
+	t.Helper()
+	seedAccount(t, "uuid-a", "work@example.com")
+	writeLiveFile(t, `{"claudeAiOauth":{"accessToken":"AT","refreshToken":"RT-uuid-a"}}`)
+}
+
+// §8.2's rule, one layer up: creating the lock file while checking for it
+// destroys the one piece of genuine evidence that no daemon ever started here.
+// store.Open would create the store directory too, which is why doctor does not
+// use it — a diagnostic that manufactures what it reports on is worthless.
+func TestDoctorCreatesNothing(t *testing.T) {
+	isolate(t)
+	missing := filepath.Join(t.TempDir(), "never-created")
+	t.Setenv("CCDAD_HOME", missing)
+
+	runDoctor(t)
+	if _, err := os.Stat(missing); !os.IsNotExist(err) {
+		t.Fatalf("doctor created the store directory it was asked to report on: %v", err)
+	}
+	if _, err := os.Stat(daemon.LockPath()); !os.IsNotExist(err) {
+		t.Error("doctor created the daemon lock file, destroying the evidence that no daemon ever started here")
+	}
+}
+
+// §8.2 names this as doctor's job: a store that points at nothing is a
+// configuration question, and the singleton answers "not running" for it on
+// purpose rather than "cannot determine".
+//
+// It is a warning and not a failure because the two readings are
+// indistinguishable from here — a fresh install and a mistyped CCDAD_HOME
+// produce exactly the same evidence — so the report has to name both rather
+// than pick one and make a new machine look broken.
+func TestDoctorNamesAStoreThatPointsAtNothing(t *testing.T) {
+	isolate(t)
+	missing := filepath.Join(t.TempDir(), "never-created")
+	t.Setenv("CCDAD_HOME", missing)
+
+	code, r, _ := runDoctor(t)
+	if got := r.level(t, "store"); got != "warn" {
+		t.Errorf("store check = %q, want warn: %s", got, r.detail(t, "store"))
+	}
+	detail := r.detail(t, "store")
+	if !strings.Contains(detail, missing) {
+		t.Errorf("the store path is not named: %s", detail)
+	}
+	if !strings.Contains(detail, "CCDAD_HOME") {
+		t.Errorf("the detail does not offer the other reading — a store pointing somewhere unintended: %s", detail)
+	}
+	if code != ExitOK {
+		t.Errorf("exit %d for a machine ccdad has never run on, want 0", code)
+	}
+	// Everything downstream of the store is skipped rather than answered from
+	// nothing: a "permissions ok" for a directory that does not exist is a
+	// diagnostic that lies.
+	for _, name := range []string{"permissions", "pidfile", "usage-cache", "engine-state"} {
+		if got := r.level(t, name); got != "skipped" {
+			t.Errorf("%s = %q with no store to check, want skipped: %s", name, got, r.detail(t, name))
+		}
+	}
+}
+
+// A relative store IS a failure: store.Open refuses one outright, because it
+// would put a credentials tree in whatever directory ccdad happened to be run
+// from, a different one each time, with live tokens in it.
+func TestDoctorFailsOnARelativeStore(t *testing.T) {
+	isolate(t)
+	t.Setenv("CCDAD_HOME", "relative-store")
+
+	code, r, _ := runDoctor(t)
+	if got := r.level(t, "store"); got != "fail" {
+		t.Errorf("store check = %q, want fail: %s", got, r.detail(t, "store"))
+	}
+	if code != ExitFailure {
+		t.Errorf("exit %d, want 1", code)
+	}
+}
+
+// The highest-value check and the easiest to get wrong. The question is not "is
+// a daemon running" but "do locks work on this filesystem at all". A doctor that
+// reports "no daemon" where locks are broken has reproduced clauth's bug inside
+// the diagnostic tool meant to find it.
+func TestDoctorReportsABrokenLockAsBrokenAndNotAsNoDaemon(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	stubDaemon(t, daemon.Report{State: daemon.DaemonUnknown}, daemon.ErrLocksUnsupported)
+
+	code, r, _ := runDoctor(t)
+	if got := r.level(t, "locks"); got != "fail" {
+		t.Errorf("locks check = %q, want fail", got)
+	}
+	detail := strings.ToLower(r.detail(t, "locks"))
+	if strings.Contains(detail, "not running") || strings.Contains(detail, "no daemon") {
+		t.Errorf("a filesystem that cannot lock was reported as an absent daemon: %s", detail)
+	}
+	if !strings.Contains(detail, "lock") {
+		t.Errorf("the locks check does not mention locking: %s", detail)
+	}
+	// Naming the condition is only half of doctor's job; the other half is
+	// saying what to do about it. A generic "could not be probed" leaves the
+	// user with a diagnostic and no next step.
+	if !strings.Contains(detail, "nfs") && !strings.Contains(detail, "cifs") {
+		t.Errorf("the locks check does not name what does this — an NFS or CIFS mount with no lock daemon: %s", detail)
+	}
+	if !strings.Contains(detail, "ccdad_home") {
+		t.Errorf("the locks check does not say what to do about it: %s", detail)
+	}
+	if code != ExitFailure {
+		t.Errorf("exit %d, want 1 when a check fails", code)
+	}
+}
+
+// Any probe failure is a failure, not just the recognised errno. "Cannot tell"
+// is the condition the three-outcome contract exists for, whatever produced it.
+func TestDoctorFailsOnAnyUnprobeableLock(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	stubDaemon(t, daemon.Report{State: daemon.DaemonUnknown}, errors.New("something else went wrong"))
+
+	code, r, _ := runDoctor(t)
+	if got := r.level(t, "locks"); got != "fail" {
+		t.Errorf("locks = %q, want fail: %s", got, r.detail(t, "locks"))
+	}
+	if code != ExitFailure {
+		t.Errorf("exit %d, want 1", code)
+	}
+}
+
+// A machine with no daemon running is a healthy machine. A doctor that failed on
+// it would cry wolf on every laptop that has not started one yet.
+func TestDoctorTreatsAnAbsentDaemonAsHealthy(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+
+	code, r, _ := runDoctor(t)
+	if got := r.level(t, "locks"); got != "ok" {
+		t.Errorf("locks check = %q on a machine where locking works, want ok: %s", got, r.detail(t, "locks"))
+	}
+	if code != ExitOK {
+		t.Errorf("exit %d on a healthy machine, want 0", code)
+	}
+}
+
+// §4.3's "on startup" half — the only part of it that was still missing. Six
+// machine keys drifted in after clauth's one-key list was written, so this is
+// demonstrated drift rather than a hypothetical.
+func TestDoctorReportsUnknownCredentialKeys(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	addLiveKey(t, "somethingAnthropicAddedLater", `{"a":1}`)
+
+	code, r, _ := runDoctor(t)
+	if got := r.level(t, "credential-keys"); got != "warn" {
+		t.Errorf("credential-keys = %q, want warn", got)
+	}
+	if !strings.Contains(r.detail(t, "credential-keys"), "somethingAnthropicAddedLater") {
+		t.Errorf("the drifted key is not named: %s", r.detail(t, "credential-keys"))
+	}
+	// A warning is not a failure: an unrecognised key is preserved by the
+	// deny-list, so nothing is broken — the user is being told to update ccdad.
+	if code != ExitOK {
+		t.Errorf("exit %d for a warning, want 0", code)
+	}
+}
+
+func TestDoctorIsQuietWhenNoKeyHasDrifted(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	addLiveKey(t, "mcpOAuth", `{"server":{}}`)
+	addLiveKey(t, "gatewayTrust", `{"host":"fp"}`)
+
+	_, r, _ := runDoctor(t)
+	if got := r.level(t, "credential-keys"); got != "ok" {
+		t.Errorf("credential-keys = %q for two known machine keys, want ok: %s", got, r.detail(t, "credential-keys"))
+	}
+}
+
+// switch.go already warns when it is about to be a no-op; doctor says it before
+// the user tries.
+func TestDoctorReportsTheEnvironmentHazards(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-whatever")
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-api03-whatever")
+
+	_, r, _ := runDoctor(t)
+	if got := r.level(t, "environment"); got != "warn" {
+		t.Errorf("environment = %q, want warn", got)
+	}
+	detail := r.detail(t, "environment")
+	for _, want := range []string{"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("the environment check does not name %s: %s", want, detail)
+		}
+	}
+	// The secrets themselves must never be echoed by a diagnostic a user pastes
+	// into an issue.
+	for _, secret := range []string{"sk-ant-oat01-whatever", "sk-ant-api03-whatever"} {
+		if strings.Contains(detail, secret) {
+			t.Errorf("doctor printed a live token: %s", detail)
+		}
+	}
+}
+
+func TestDoctorIsQuietWithACleanEnvironment(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+
+	_, r, _ := runDoctor(t)
+	if got := r.level(t, "environment"); got != "ok" {
+		t.Errorf("environment = %q, want ok: %s", got, r.detail(t, "environment"))
+	}
+}
+
+func TestDoctorReportsLooseStorePermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("§10.3: chmod is a no-op on Windows")
+	}
+	isolate(t)
+	seedHealthyMachine(t)
+	if err := os.Chmod(ccpath.StoreHome(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	code, r, _ := runDoctor(t)
+	if got := r.level(t, "permissions"); got != "fail" {
+		t.Errorf("permissions = %q, want fail", got)
+	}
+	if code != ExitFailure {
+		t.Errorf("exit %d, want 1", code)
+	}
+}
+
+func TestDoctorReportsALooseCredentialFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("§10.3: chmod is a no-op on Windows")
+	}
+	isolate(t)
+	seedHealthyMachine(t)
+	matches, err := filepath.Glob(filepath.Join(ccpath.StoreHome(), "credentials", "*"))
+	if err != nil || len(matches) == 0 {
+		t.Fatalf("no stored credential to loosen: %v %v", matches, err)
+	}
+	if err := os.Chmod(matches[0], 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, r, _ := runDoctor(t)
+	if got := r.level(t, "permissions"); got != "fail" {
+		t.Errorf("permissions = %q, want fail: %s", got, r.detail(t, "permissions"))
+	}
+	if !strings.Contains(r.detail(t, "permissions"), filepath.Base(matches[0])) {
+		t.Errorf("the loose file is not named: %s", r.detail(t, "permissions"))
+	}
+}
+
+func TestDoctorAcceptsATightStore(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("§10.3: chmod is a no-op on Windows")
+	}
+	isolate(t)
+	seedHealthyMachine(t)
+
+	_, r, _ := runDoctor(t)
+	if got := r.level(t, "permissions"); got != "ok" {
+		t.Errorf("permissions = %q on a store ccdad wrote itself, want ok: %s", got, r.detail(t, "permissions"))
+	}
+}
+
+// pidfile.go names doctor as the reader that has to see this: a body that IS
+// committed but does not parse is a damaged store, and folding it into "nothing
+// to read" is what sends a supervisor into a respawn loop.
+func TestDoctorReportsACorruptPidfile(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	if err := os.WriteFile(daemon.PIDPath(), []byte("not-a-pid\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	code, r, _ := runDoctor(t)
+	if got := r.level(t, "pidfile"); got != "fail" {
+		t.Errorf("pidfile = %q, want fail", got)
+	}
+	if code != ExitFailure {
+		t.Errorf("exit %d, want 1", code)
+	}
+	if r.payload["ok"] != false {
+		t.Errorf("ok = %v with a failing check", r.payload["ok"])
+	}
+}
+
+func TestDoctorAcceptsAnAbsentPidfile(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+
+	_, r, _ := runDoctor(t)
+	if got := r.level(t, "pidfile"); got != "ok" {
+		t.Errorf("pidfile = %q with no pidfile at all, want ok: %s", got, r.detail(t, "pidfile"))
+	}
+}
+
+func TestDoctorReportsACorruptStatusFile(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	stubDaemon(t, daemon.Report{
+		State:     daemon.DaemonStopped,
+		StatusErr: os.ErrInvalid,
+	}, nil)
+
+	code, r, _ := runDoctor(t)
+	if got := r.level(t, "status-file"); got != "fail" {
+		t.Errorf("status-file = %q, want fail", got)
+	}
+	if code != ExitFailure {
+		t.Errorf("exit %d, want 1", code)
+	}
+}
+
+func TestDoctorReportsCorruptEngineState(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	if err := os.WriteFile(filepath.Join(ccpath.StoreHome(), "strategy.json"), []byte("{{{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, r, _ := runDoctor(t)
+	if got := r.level(t, "engine-state"); got != "warn" {
+		t.Errorf("engine-state = %q, want warn: %s", got, r.detail(t, "engine-state"))
+	}
+}
+
+func TestDoctorReportsACorruptUsageCache(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	if err := os.WriteFile(filepath.Join(ccpath.StoreHome(), "usage.json"), []byte("{{{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, r, _ := runDoctor(t)
+	if got := r.level(t, "usage-cache"); got != "warn" {
+		t.Errorf("usage-cache = %q, want warn: %s", got, r.detail(t, "usage-cache"))
+	}
+}
+
+// §12's High-severity risk: Claude Code changes these internals between
+// releases. A credentials file ccdad cannot parse is the loudest form of that,
+// and switch deliberately refuses to repair one.
+func TestDoctorReportsAnUnparseableCredentialsFile(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	writeLiveFile(t, "this is not json")
+
+	code, r, _ := runDoctor(t)
+	if got := r.level(t, "claude-code"); got != "fail" {
+		t.Errorf("claude-code = %q, want fail", got)
+	}
+	if code != ExitFailure {
+		t.Errorf("exit %d, want 1", code)
+	}
+}
+
+func TestDoctorAcceptsAMachineWhereClaudeCodeHasNeverLoggedIn(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "uuid-a", "work@example.com")
+
+	_, r, _ := runDoctor(t)
+	if got := r.level(t, "claude-code"); got == "fail" {
+		t.Errorf("claude-code = fail with no credentials file; that is a fresh machine, not a broken one: %s",
+			r.detail(t, "claude-code"))
+	}
+}
+
+func TestDoctorHumanOutputNamesEveryCheck(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+
+	code, stdout, _, _ := runRoot(t, "doctor")
+	if code != ExitOK {
+		t.Fatalf("exit %d, want 0\n%s", code, stdout)
+	}
+	for _, name := range []string{"store", "permissions", "locks", "pidfile", "status-file", "usage-cache", "engine-state", "claude-code", "credential-keys", "environment"} {
+		if !strings.Contains(stdout, name) {
+			t.Errorf("the human report does not mention the %s check:\n%s", name, stdout)
+		}
+	}
+}
+
+// §13 open question 4 is unsettled, so this ships report-only. A repair would
+// have to be a deliberate act behind a flag, and there is no flag.
+func TestDoctorRepairsNothing(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("§10.3: chmod is a no-op on Windows")
+	}
+	isolate(t)
+	seedHealthyMachine(t)
+	if err := os.Chmod(ccpath.StoreHome(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	runDoctor(t)
+	info, err := os.Stat(ccpath.StoreHome())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o755 {
+		t.Errorf("doctor changed the store mode to %04o; it reports, it does not repair", info.Mode().Perm())
+	}
+}
+
+func TestDoctorJSONCarriesASchemaVersion(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+
+	_, r, _ := runDoctor(t)
+	if r.payload["schemaVersion"] != float64(1) {
+		t.Errorf("schemaVersion = %v", r.payload["schemaVersion"])
+	}
+	if r.payload["ok"] != true {
+		t.Errorf("ok = %v on a healthy machine", r.payload["ok"])
+	}
+}
+
+func TestDoctorTakesNoArguments(t *testing.T) {
+	isolate(t)
+	if code, _, _, _ := runRoot(t, "doctor", "extra"); code != ExitUsage {
+		t.Errorf("exit %d, want 2", code)
+	}
+}
