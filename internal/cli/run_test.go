@@ -764,3 +764,40 @@ func TestRunRefusesAnAPIKeyAccountAndSaysWhy(t *testing.T) {
 		t.Error("started a session that would not have been authenticated as that account")
 	}
 }
+
+// The adopt-back is for the credential ccdad put there, and only that.
+//
+// A setup-token account gets no credentials file — Claude Code reads its token
+// from the environment — but a session is a whole Claude Code, and a user who
+// runs /login inside one leaves a claudeAiOauth behind in the session's own
+// home. Carrying that into the store would silently attach an OAuth login to an
+// account whose stored credential is a token record, changing what `switch`
+// and attribution make of it. The account's identity is not the session's to
+// change.
+func TestRunDoesNotAdoptALoginBackIntoATokenAccount(t *testing.T) {
+	isolate(t)
+	seedTokenAccount(t, "u-1", "a@example.com", "setup-token", "sk-ant-oat-XYZ")
+	stubClaudeDuring(t, ExitOK, func(spec launchSpec) {
+		home, _ := envOf(spec.Env, "CLAUDE_SECURESTORAGE_CONFIG_DIR")
+		body := `{"claudeAiOauth":{"accessToken":"AT","refreshToken":"RT-logged-in-inside"}}`
+		if err := os.WriteFile(filepath.Join(home, ccpath.CredentialsFile), []byte(body), 0o600); err != nil {
+			t.Error(err)
+		}
+	})
+
+	if code, _, errOut, top := runRoot(t, "run", "1"); code != ExitOK {
+		t.Fatalf("exit = %d (%s / %s), want 0", code, errOut, top)
+	}
+
+	s, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob, err := s.Credentials("u-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := blob["claudeAiOauth"]; ok {
+		t.Errorf("a session's own login was attached to a setup-token account: %v", blob)
+	}
+}

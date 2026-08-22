@@ -337,6 +337,17 @@ func adoptBack(uuid, home string) error {
 		if err != nil {
 			return err
 		}
+		if _, isLogin := current["claudeAiOauth"]; !isLogin {
+			// The account's stored credential is not an OAuth login — it is a
+			// setup token or an API key — so there is nothing here that Claude
+			// Code could have rotated. A session is a whole Claude Code, and a
+			// user who runs /login inside one leaves a claudeAiOauth in the
+			// session's own home; carrying that back would silently attach an
+			// OAuth login to a token account and change what `switch` and
+			// attribution make of it. The account's identity is not the
+			// session's to change.
+			return nil
+		}
 		if bytes.Equal(current["claudeAiOauth"], fresh) {
 			return nil
 		}
