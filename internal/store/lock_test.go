@@ -2,15 +2,15 @@ package store
 
 import (
 	"errors"
+	"github.com/Kweiza/ccdaddy/internal/identity"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
 	"testing"
 	"time"
-
-	"github.com/Kweiza/ccdaddy/internal/identity"
 )
 
 // TestConcurrentAddsLoseNoAccount is the defect this lock exists to close.
@@ -151,6 +151,20 @@ func TestLockBusyGivesUpAfterTimeout(t *testing.T) {
 // TestLocksUnsupportedIsRefusedNotIgnored covers ENOLCK — an NFS or CIFS mount
 // with no lock daemon. Proceeding unguarded there would reintroduce the lost
 // account silently, on the class of machine most likely to have two writers.
+
+// unlockableFilesystem is what a filesystem that cannot lock at all answers
+// with on this platform. ENOLCK is the unix one -- an NFS or CIFS mount with
+// no lock daemon -- and locksUnsupported recognises it only there; off unix
+// that file has no errno cases and the condition arrives as
+// errors.ErrUnsupported instead. Injecting the wrong one asserts that
+// classifyLockError does something it was never asked to do.
+var unlockableFilesystem = func() error {
+	if runtime.GOOS == "windows" {
+		return errors.ErrUnsupported
+	}
+	return syscall.ENOLCK
+}()
+
 func TestLocksUnsupportedIsRefusedNotIgnored(t *testing.T) {
 	withStore(t)
 
@@ -160,7 +174,7 @@ func TestLocksUnsupportedIsRefusedNotIgnored(t *testing.T) {
 	}
 
 	restore := setTryLockForTest(func(string) (bool, func() error, error) {
-		return false, nil, &os.PathError{Op: "flock", Path: "store.lock", Err: syscall.ENOLCK}
+		return false, nil, &os.PathError{Op: "flock", Path: "store.lock", Err: unlockableFilesystem}
 	})
 	defer restore()
 
@@ -169,8 +183,8 @@ func TestLocksUnsupportedIsRefusedNotIgnored(t *testing.T) {
 		t.Fatalf("Add() on a filesystem without locks = %v, want ErrLocksUnsupported", err)
 	}
 	// Classifying must not consume the cause: doctor prints the errno.
-	if !errors.Is(err, syscall.ENOLCK) {
-		t.Errorf("the ENOLCK cause was consumed by classification: %v", err)
+	if !errors.Is(err, unlockableFilesystem) {
+		t.Errorf("the %v cause was consumed by classification: %v", unlockableFilesystem, err)
 	}
 	if _, statErr := os.Stat(filepath.Join(s.root, accountsFile)); !os.IsNotExist(statErr) {
 		t.Error("accounts.toml was written despite the lock being unavailable")

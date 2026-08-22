@@ -280,7 +280,12 @@ func TestSingletonHeldNeverReportsNotRunningOnAFailure(t *testing.T) {
 		err         error
 		unsupported bool
 	}{
-		{name: "the filesystem has no lock daemon", err: syscall.ENOLCK, unsupported: true},
+		// ENOLCK classifies on unix only: locksUnsupported has no errno cases
+		// off it. ENOSYS below classifies everywhere regardless, because
+		// syscall.Errno.Is maps it to errors.ErrUnsupported on every platform
+		// -- which is why this row, and not that one, is the one that failed
+		// on windows-latest.
+		{name: "the filesystem has no lock daemon", err: syscall.ENOLCK, unsupported: runtime.GOOS != "windows"},
 		{name: "the kernel has no such call", err: syscall.ENOSYS, unsupported: true},
 		{name: "this GOOS has no implementation", err: errors.ErrUnsupported, unsupported: true},
 		{name: "permission denied", err: os.ErrPermission},
@@ -313,10 +318,23 @@ func TestSingletonHeldNeverReportsNotRunningOnAFailure(t *testing.T) {
 	}
 }
 
+// unlockableFilesystem is what a filesystem that cannot lock at all answers
+// with on this platform. ENOLCK is the unix one -- an NFS or CIFS mount with
+// no lock daemon -- and locksUnsupported recognises it only there; off unix
+// that file has no errno cases and the condition arrives as
+// errors.ErrUnsupported instead. Injecting the wrong one asserts that
+// classifyLockError does something it was never asked to do.
+var unlockableFilesystem = func() error {
+	if runtime.GOOS == "windows" {
+		return errors.ErrUnsupported
+	}
+	return syscall.ENOLCK
+}()
+
 func TestAcquireSingletonReportsAFilesystemThatCannotLock(t *testing.T) {
 	isolate(t)
 	restore := setTryLockForTest(func(string, bool) (bool, func() error, error) {
-		return false, nil, syscall.ENOLCK
+		return false, nil, unlockableFilesystem
 	})
 	defer restore()
 
