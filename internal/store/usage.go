@@ -20,17 +20,20 @@ import (
 // no-evidence default. A failed poll has nothing to pass here, and passing nil
 // is refused rather than treated as an empty reading.
 //
-// The read-modify-write is not multi-process safe. That is a pre-existing
-// property of Store, documented on the type, and the store-level cross-process
-// lock is its own queue item (ccdad/task-19-store-cross-process-lock) whose file
-// this deliberately does not pre-empt. Nothing here widens the window.
+// The read-modify-write runs under the store lock like every other mutator, so
+// the daemon applying a poll result and a CLI adding an account cannot lose
+// each other's write. The nil check happens BEFORE the lock is taken: a caller
+// that has nothing to apply should not make every other writer wait for it.
 func (s *Store) ApplyUsage(uuid string, snap *usage.Snapshot, observedAt time.Time) error {
 	if snap == nil {
 		return fmt.Errorf("ApplyUsage needs a reading; a poll that failed must leave %q classified as it is", uuid)
 	}
+	return s.mutate(func() error { return s.applyUsage(uuid, snap, observedAt) })
+}
 
+func (s *Store) applyUsage(uuid string, snap *usage.Snapshot, observedAt time.Time) error {
 	// The account has to be mutated in the store's OWN slice. Accounts() hands
-	// back a defensive copy, and Save() rewrites KindName from Kind on every
+	// back a defensive copy, and save() rewrites KindName from Kind on every
 	// write, so a change made to either of those is a change that never reaches
 	// the disk.
 	idx := -1
@@ -59,7 +62,7 @@ func (s *Store) ApplyUsage(uuid string, snap *usage.Snapshot, observedAt time.Ti
 	s.data.Accounts[idx].Kind, _ = identity.ReclassifyOnUsage(s.data.Accounts[idx].Kind, shape)
 	s.data.Accounts[idx].Credit = creditBalanceOf(snap.ExtraUsage, observedAt)
 
-	return s.Save()
+	return nil
 }
 
 // creditBalanceOf projects a reading's credit axis onto what the store keeps.
