@@ -207,4 +207,10 @@ func TestTheStoreMustBeAnAbsolutePath(t *testing.T) {
 	if err := WritePID(1234); err == nil {
 		t.Error("WritePID accepted a relative store")
 	}
+	if _, err := AcquireSingleton(); err == nil {
+		t.Error("AcquireSingleton accepted a relative store")
+	}
+	if _, err := SingletonHeld(); err == nil {
+		t.Error("SingletonHeld accepted a relative store")
+	}
 }
