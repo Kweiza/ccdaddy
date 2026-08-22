@@ -36,8 +36,8 @@ func withClaudeHome(t *testing.T) string {
 	t.Setenv("CLAUDE_SECURESTORAGE_CONFIG_DIR", creds)
 	t.Setenv("HOME", home) // still consulted by ccpath.ConfigHome, unrelated to this package
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
-	if got := ccpath.CredentialHome(); got != creds {
-		t.Fatalf("withClaudeHome: ccpath.CredentialHome() = %q, want %q -- refusing to run with unsandboxed credentials", got, creds)
+	if got := mustPath(ccpath.CredentialHome()); got != creds {
+		t.Fatalf("withClaudeHome: mustPath(ccpath.CredentialHome()) = %q, want %q -- refusing to run with unsandboxed credentials", got, creds)
 	}
 	return creds
 }
@@ -46,7 +46,7 @@ func withClaudeHome(t *testing.T) string {
 // call withClaudeHome first: its self-assertion is what makes this safe.
 func writeCreds(t *testing.T, body string) string {
 	t.Helper()
-	path := ccpath.CredentialsPath()
+	path := mustPath(ccpath.CredentialsPath())
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func writeCreds(t *testing.T, body string) string {
 // readCreds reads back the sandboxed credentials file as decoded JSON.
 func readCreds(t *testing.T) map[string]json.RawMessage {
 	t.Helper()
-	raw, err := os.ReadFile(ccpath.CredentialsPath())
+	raw, err := os.ReadFile(mustPath(ccpath.CredentialsPath()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +186,7 @@ func TestActivateReleasesEveryLock(t *testing.T) {
 	// naively-joined path on any platform where the temp dir sits behind a
 	// symlink (e.g. macOS's /var -> /private/var), and a hand-built path
 	// there would report "not found" no matter what Activate actually did.
-	for _, d := range []string{cclock.OAuthRefreshLockDir(), cclock.LegacyRefreshLockDir(), cclock.StorageWriteLockDir()} {
+	for _, d := range []string{mustPath(cclock.OAuthRefreshLockDir()), mustPath(cclock.LegacyRefreshLockDir()), mustPath(cclock.StorageWriteLockDir())} {
 		if _, err := os.Stat(d); !os.IsNotExist(err) {
 			t.Fatalf("%s was left behind after Activate", filepath.Base(d))
 		}
@@ -275,7 +275,7 @@ func TestActivateSurfacesCompromiseThroughRelease(t *testing.T) {
 	withClaudeHome(t)
 	writeCreds(t, `{"claudeAiOauth":{"accessToken":"old"}}`)
 
-	blocker, err := cclock.Acquire(cclock.LegacyRefreshLockDir(), cclock.Options{Stale: time.Minute, Timeout: time.Second})
+	blocker, err := cclock.Acquire(mustPath(cclock.LegacyRefreshLockDir()), cclock.Options{Stale: time.Minute, Timeout: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +291,7 @@ func TestActivateSurfacesCompromiseThroughRelease(t *testing.T) {
 	case <-time.After(300 * time.Millisecond):
 	}
 
-	oauthDir := cclock.OAuthRefreshLockDir()
+	oauthDir := mustPath(cclock.OAuthRefreshLockDir())
 	if err := os.RemoveAll(oauthDir); err != nil {
 		t.Fatal(err)
 	}
@@ -333,7 +333,7 @@ func TestActivateTimesOutWhenLockIsHeld(t *testing.T) {
 	LockTimeout = 200 * time.Millisecond
 	t.Cleanup(func() { LockTimeout = orig })
 
-	blocker, err := cclock.Acquire(cclock.OAuthRefreshLockDir(), cclock.Options{Stale: time.Minute, Timeout: time.Second})
+	blocker, err := cclock.Acquire(mustPath(cclock.OAuthRefreshLockDir()), cclock.Options{Stale: time.Minute, Timeout: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -403,5 +403,77 @@ func TestActivateDoesNotHTMLEscapeTheCredentialsFile(t *testing.T) {
 	}
 	if !bytes.Contains(raw, []byte("x=1&y=2<z>")) {
 		t.Fatalf("the preserved machine key lost its literal characters:\n%s", raw)
+	}
+}
+
+// The WRITE — not only the read — has to happen while all three credential
+// locks are held.
+//
+// TestActivateWaitsForCredentialLocksAndRereadsUnderThem already pins the
+// re-read, and it is satisfied by an implementation that reads under the locks,
+// releases them, and only then renames. That implementation is a plausible
+// refactor (release as soon as the merged bytes are in hand, keep the critical
+// section short) and it is exactly the bug the locks exist to prevent: Claude
+// Code's own double-checked re-read happens under these locks, so a rename
+// landing after ccdad let go is a rename Claude Code has already decided cannot
+// have happened, and its refreshed token overwrites the freshly switched
+// account.
+//
+// Lock-directory existence alone would be a weak assertion — the directories
+// are ordinary mkdirs and could in principle be someone else's. So the hook
+// also tries to ACQUIRE the storage-write lock from inside the rename and
+// requires that to time out: that is the property a second process would
+// actually observe.
+func TestActivateWritesWhileTheCredentialLocksAreHeld(t *testing.T) {
+	withClaudeHome(t)
+	writeCreds(t, `{"claudeAiOauth":{"accessToken":"old"},"mcpOAuth":{"srv":1}}`)
+
+	lockDirs := []string{
+		mustPath(cclock.OAuthRefreshLockDir()),
+		mustPath(cclock.LegacyRefreshLockDir()),
+		mustPath(cclock.StorageWriteLockDir()),
+	}
+
+	var missing []string
+	var contendErr error
+	renamed := false
+
+	orig := renameFile
+	renameFile = func(from, to string) error {
+		renamed = true
+		for _, d := range lockDirs {
+			if _, err := os.Stat(d); err != nil {
+				missing = append(missing, filepath.Base(d))
+			}
+		}
+		// Timeout 0 is a single attempt, so this cannot outlast the write it is
+		// measuring. Stale is a minute because the lock was taken microseconds
+		// ago and must not be deemed abandoned; a short window here would steal
+		// the very lock the assertion is about.
+		lk, err := cclock.Acquire(mustPath(cclock.StorageWriteLockDir()),
+			cclock.Options{Stale: time.Minute, Timeout: 0})
+		if err == nil {
+			_ = lk.Release()
+			contendErr = nil
+		} else {
+			contendErr = err
+		}
+		return orig(from, to)
+	}
+	t.Cleanup(func() { renameFile = orig })
+
+	if err := Activate(Blob{"claudeAiOauth": json.RawMessage(`{"accessToken":"new"}`)}); err != nil {
+		t.Fatalf("Activate() = %v", err)
+	}
+	if !renamed {
+		t.Fatal("Activate never reached the rename, so this test proved nothing about the write")
+	}
+	if len(missing) > 0 {
+		t.Errorf("the credentials file was renamed with %v not held; the write is outside the locks", missing)
+	}
+	if contendErr == nil {
+		t.Error("the storage-write lock could be acquired during the rename; nothing was excluding a second writer")
+	} else if !errors.Is(contendErr, cclock.ErrTimeout) {
+		t.Errorf("acquiring the storage-write lock during the rename = %v, want cclock.ErrTimeout", contendErr)
 	}
 }

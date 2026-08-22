@@ -562,9 +562,9 @@ func TestAccountLabelPrecedence(t *testing.T) {
 	}
 }
 
-// ccpath.homeDir returns "" when os.UserHomeDir fails, which makes every
-// derived path relative — and a relative store puts live tokens in whatever
-// directory ccdad happened to be run from, a different one each time.
+// A relative store puts live tokens in whatever directory ccdad happened to be
+// run from, a different one each time. This is the CCDAD_HOME-is-relative half;
+// the home-cannot-be-resolved half is the test below it.
 func TestOpenRefusesARelativeStoreRoot(t *testing.T) {
 	t.Setenv("CCDAD_HOME", filepath.Join("relative", "ccdad"))
 
@@ -574,5 +574,42 @@ func TestOpenRefusesARelativeStoreRoot(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "absolute") {
 		t.Fatalf("error = %q, want it to say what to do", err)
+	}
+}
+
+// The other half of the same hazard, and the one that used to be silent: with
+// no home directory and no CCDAD_HOME, ccpath used to hand back the RELATIVE
+// path ".ccdad" and Open would happily create a credential tree inside the
+// current working directory. The error has to arrive from ccpath rather than
+// from Open's own absolute-path guard, so this asserts on the sentence that
+// names the variable to set — the absolute-path message would be a wrong
+// diagnosis here, since nothing about CCDAD_HOME is at fault.
+func TestOpenRefusesWhenTheHomeDirectoryCannotBeResolved(t *testing.T) {
+	// If the refusal regresses, whatever gets created lands in a temp directory
+	// rather than in internal/store/.
+	t.Chdir(t.TempDir())
+	t.Setenv("CCDAD_HOME", "")
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", "")
+	} else {
+		t.Setenv("HOME", "")
+	}
+
+	_, err := Open()
+	if err == nil {
+		t.Fatal("Open() = nil; want a refusal when the home directory cannot be resolved")
+	}
+	// Asserted against a sentence only ccpath's error carries. Open's own
+	// absolute-path guard ALSO fires here — filepath.IsAbs("") is false — and
+	// its message also names CCDAD_HOME, so an assertion on that name alone
+	// passes whether or not Open propagates ccpath's error at all. The
+	// diagnosis is the difference that matters: nothing about CCDAD_HOME is
+	// wrong on this machine, and telling the user to make it absolute sends
+	// them to fix a variable they never set.
+	if !strings.Contains(err.Error(), "cannot tell where your home directory is") {
+		t.Fatalf("error = %q, want ccpath's diagnosis rather than the relative-path one", err)
+	}
+	if _, serr := os.Stat(".ccdad"); serr == nil {
+		t.Fatal("Open() created a relative .ccdad store in the working directory")
 	}
 }

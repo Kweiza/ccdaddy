@@ -29,7 +29,7 @@ import (
 // engine-rate writer behind a poller-rate lock for no gain.
 
 const (
-	stateFileName = "strategy.json"
+	StateFileName = "strategy.json"
 	// stateLockDir is a DIRECTORY, because that is what cclock's mutex is.
 	stateLockDir = "strategy.json.lock"
 
@@ -41,9 +41,21 @@ const (
 )
 
 // StatePath is where the state lives.
-func StatePath() string { return filepath.Join(ccpath.StoreHome(), stateFileName) }
+func StatePath() (string, error) {
+	root, err := ccpath.StoreHome()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(root, StateFileName), nil
+}
 
-func stateLockPath() string { return filepath.Join(ccpath.StoreHome(), stateLockDir) }
+func stateLockPath() (string, error) {
+	root, err := ccpath.StoreHome()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(root, stateLockDir), nil
+}
 
 // Quarantine is one account held out of auto-rotation by the engine.
 //
@@ -201,7 +213,10 @@ func (s *State) Prune(managed map[string]bool) {
 // directory ccdad happened to be run from, a different one each time — which
 // for a cooldown means every invocation starts with none.
 func storeRoot() (string, error) {
-	root := ccpath.StoreHome()
+	root, err := ccpath.StoreHome()
+	if err != nil {
+		return "", err
+	}
 	if !filepath.IsAbs(root) {
 		return "", fmt.Errorf("the ccdad store resolved to the relative path %q; set CCDAD_HOME to an absolute path", root)
 	}
@@ -224,18 +239,18 @@ func LoadState() (*State, error) {
 	}
 	s := NewState()
 
-	raw, err := os.ReadFile(filepath.Join(root, stateFileName))
+	raw, err := os.ReadFile(filepath.Join(root, StateFileName))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return s, nil
 		}
-		s.loadErr = fmt.Errorf("reading %s: %w", stateFileName, err)
+		s.loadErr = fmt.Errorf("reading %s: %w", StateFileName, err)
 		return s, nil
 	}
 
 	var parsed stateFile
 	if err := json.Unmarshal(raw, &parsed); err != nil {
-		s.loadErr = fmt.Errorf("parsing %s: %w", stateFileName, err)
+		s.loadErr = fmt.Errorf("parsing %s: %w", StateFileName, err)
 		return s, nil
 	}
 	if parsed.Quarantine != nil {
@@ -252,9 +267,9 @@ func (s *State) save(root string) error {
 	s.data.Version = 1
 	encoded, err := json.Marshal(s.data)
 	if err != nil {
-		return fmt.Errorf("encoding %s: %w", stateFileName, err)
+		return fmt.Errorf("encoding %s: %w", StateFileName, err)
 	}
-	return cclink.WriteFileAtomic(filepath.Join(root, stateFileName), encoded, 0o600)
+	return cclink.WriteFileAtomic(filepath.Join(root, StateFileName), encoded, 0o600)
 }
 
 // WithState runs fn against the state under a cross-process lock and writes back
@@ -275,7 +290,7 @@ func WithState(timeout time.Duration, fn func(*State) error) (err error) {
 		return fmt.Errorf("creating the ccdad store: %w", err)
 	}
 
-	lock, aerr := cclock.Acquire(stateLockPath(), cclock.Options{
+	lock, aerr := cclock.Acquire(filepath.Join(root, stateLockDir), cclock.Options{
 		Stale:   stateLockStale,
 		Timeout: timeout,
 	})

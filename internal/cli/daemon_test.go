@@ -182,10 +182,10 @@ func stubDaemonWorld(t *testing.T, f *fakeDaemon) *fakeDaemon {
 
 func writeDaemonLog(t *testing.T, body string) {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(daemon.LogPath()), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(mustPath(daemon.LogPath())), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(daemon.LogPath(), []byte(body), 0o600); err != nil {
+	if err := os.WriteFile(mustPath(daemon.LogPath()), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -612,12 +612,12 @@ func TestFollowLogPicksUpTheNewFileAfterARotation(t *testing.T) {
 	var out safeBuffer
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- followLog(ctx, &out, daemon.LogPath(), 0, 5*time.Millisecond) }()
+	go func() { done <- followLog(ctx, &out, mustPath(daemon.LogPath()), 0, 5*time.Millisecond) }()
 
 	// Rotate the way Logger.rotate does: rename the file aside and create a new
 	// one in its place.
 	waitForOutput(t, &out, "first line")
-	if err := os.Rename(daemon.LogPath(), daemon.LogPath()+".1"); err != nil {
+	if err := os.Rename(mustPath(daemon.LogPath()), mustPath(daemon.LogPath())+".1"); err != nil {
 		t.Fatal(err)
 	}
 	writeDaemonLog(t, "after the rotation\n")

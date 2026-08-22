@@ -72,7 +72,7 @@ func runStatus(cmd *cobra.Command, asJSON bool) error {
 	// marker and nothing else, and status is what a user reaches for when
 	// something is already wrong.
 	live, _ := cclink.Load()
-	active, hasActive := attributeLogin(live, accounts, s.Credentials)
+	active, hasActive := attributeLive(live, accounts, s.Credentials)
 
 	report, probeErr := observeDaemon()
 	if probeErr != nil {

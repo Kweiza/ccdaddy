@@ -281,30 +281,71 @@ func TestAddTokenStoresTokensOutsideTheOAuthRecord(t *testing.T) {
 	}
 }
 
-// Activating a token account would mean writing a record Claude Code never
-// writes. Refuse and name the mechanism that does work, rather than producing a
-// live credentials file Claude Code cannot use.
-func TestAddTokenRefusesToActivate(t *testing.T) {
-	for _, tc := range []struct{ name, token, wantMention string }{
-		{"api key", "sk-ant-api03-TESTKEY", "ANTHROPIC_API_KEY"},
-		{"setup token", "sk-ant-oat01-TESTTOKEN", "CLAUDE_CODE_OAUTH_TOKEN"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			isolate(t)
-			stubEnvironment(t, false, false)
+// A setup token has nowhere to be installed. Claude Code reads one from
+// CLAUDE_CODE_OAUTH_TOKEN and from nothing else — `claude setup-token` prints
+// it and deliberately skips saving it — so refuse and name the mechanism that
+// does work, rather than producing a live credentials file Claude Code cannot
+// use.
+//
+// This is deliberately no longer a table over both token kinds. An API key HAS
+// somewhere to go and is activated; see TestAddTokenActivatesAnAPIKey.
+func TestAddTokenRefusesToActivateASetupToken(t *testing.T) {
+	isolate(t)
+	stubEnvironment(t, false, false)
 
-			err, _, _ := runCmd(t, newAddTokenCmd(), tc.token, "--activate")
-			if err == nil {
-				t.Fatal("Execute() = nil, want --activate refused for a token account")
-			}
-			if got := CodeFor(err); got != ExitUsage {
-				t.Fatalf("CodeFor = %d, want %d", got, ExitUsage)
-			}
-			if !strings.Contains(err.Error(), tc.wantMention) {
-				t.Fatalf("error %q should name %s", err, tc.wantMention)
-			}
-			assertNoLiveCredentials(t)
-		})
+	err, _, _ := runCmd(t, newAddTokenCmd(), "sk-ant-oat01-TESTTOKEN", "--activate")
+	if err == nil {
+		t.Fatal("Execute() = nil, want --activate refused for a setup token")
+	}
+	if got := CodeFor(err); got != ExitUsage {
+		t.Fatalf("CodeFor = %d, want %d", got, ExitUsage)
+	}
+	if !strings.Contains(err.Error(), "CLAUDE_CODE_OAUTH_TOKEN") {
+		t.Fatalf("error %q should name CLAUDE_CODE_OAUTH_TOKEN", err)
+	}
+	assertNoLiveCredentials(t)
+}
+
+// --activate on an API key is BOTH writes or it is nothing.
+//
+// Asserting only the config half would pass against the bug this path exists to
+// avoid: Claude Code prefers a claudeAiOauth login over its stored
+// primaryApiKey in every configuration, so a key written while a login sits in
+// the credentials file is read and then ignored. The account would report as
+// switched and the session would go on billing the old one.
+func TestAddTokenActivatesAnAPIKey(t *testing.T) {
+	isolate(t)
+	stubEnvironment(t, false, false)
+	// A login already in place, so the removal half is observable at all: with
+	// an empty credentials file both a correct and a broken implementation leave
+	// nothing behind.
+	writeLiveFile(t, `{"claudeAiOauth":{"accessToken":"live","refreshToken":"live-r"},"mcpOAuth":{"srv":1}}`)
+
+	const key = "sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUV"
+	if err, _, _ := runCmd(t, newAddTokenCmd(), key, "--activate"); err != nil {
+		t.Fatalf("Execute() = %v", err)
+	}
+
+	cfg, err := cclink.LoadGlobalConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := cclink.PrimaryAPIKey(cfg); !ok || got != key {
+		t.Fatalf("primaryApiKey = %q (present %v), want the key just added", got, ok)
+	}
+	if approved := cclink.ApprovedAPIKeys(cfg); len(approved) != 1 || approved[0] != cclink.APIKeyApproval(key) {
+		t.Fatalf("approved = %v, want exactly %q", approved, cclink.APIKeyApproval(key))
+	}
+
+	live, err := cclink.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, still := live["claudeAiOauth"]; still {
+		t.Fatal("the OAuth login is still in the credentials file, so the stored key is inert and nothing was activated")
+	}
+	if _, gone := live["mcpOAuth"]; !gone {
+		t.Fatal("clearing the login destroyed the machine-scoped mcpOAuth key")
 	}
 }
 
@@ -528,7 +569,7 @@ func TestAddWithActivateWritesTheLiveFile(t *testing.T) {
 		t.Fatalf("Execute() = %v, want nil", err)
 	}
 
-	raw, err := os.ReadFile(ccpath.CredentialsPath())
+	raw, err := os.ReadFile(mustPath(ccpath.CredentialsPath()))
 	if err != nil {
 		t.Fatalf("--activate did not write the live credentials file: %v", err)
 	}
@@ -747,7 +788,15 @@ func TestAddTokenPromptsOnStderr(t *testing.T) {
 func TestReAuthenticationDoesNotAbsorbAnotherAccountsKeys(t *testing.T) {
 	isolate(t)
 	stubEnvironment(t, true, false)
-	stubProfile(t, func(w http.ResponseWriter, _ *http.Request) {
+	// Token-aware, and it has to be: ccdad now RESOLVES the live login rather
+	// than giving up on it, so a stub that answers acct-1 for every bearer
+	// would report someone else's token as acct-1's and the test would pass
+	// while the code absorbed the keys.
+	stubProfile(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "Bearer OTHER" {
+			io.WriteString(w, profileJSON("acct-someone-else", "else@example.com"))
+			return
+		}
 		io.WriteString(w, profileJSON("acct-1", "a@example.com"))
 	})
 
@@ -778,17 +827,62 @@ func TestReAuthenticationDoesNotAbsorbAnotherAccountsKeys(t *testing.T) {
 	}
 }
 
-// Adopting the account Claude Code is already logged in as cannot carry its
-// other account-scoped keys — nothing in the credentials file names an account,
-// so ccdad cannot prove the live login is the one just authenticated. The state
-// must not be silent: the first switch away deletes those keys.
-func TestAdoptingTheLiveLoginSaysWhatItCannotCarry(t *testing.T) {
+// Adopting the account Claude Code is already logged in as DOES carry its other
+// account-scoped keys, at the cost of one profile call.
+//
+// Nothing in the credentials file names an account, so the cheap comparison —
+// this login's record against the one this account last stored — has nothing to
+// compare on a first adoption. The account endpoint does name one, so resolving
+// the live login's own access token settles whose those keys are. What it buys
+// is concrete: trustedDeviceToken is a device-cap slot and enterpriseGateway is
+// a gateway re-trust, both lost on the very first switch away.
+func TestAdoptingTheLiveLoginCarriesItsKeysWhenTheProfileProvesTheAccount(t *testing.T) {
 	isolate(t)
 	stubEnvironment(t, true, false)
-	stubProfile(t, func(w http.ResponseWriter, _ *http.Request) {
+	var probedLive bool
+	stubProfile(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "Bearer OLD" {
+			probedLive = true
+		}
 		io.WriteString(w, profileJSON("acct-1", "a@example.com"))
 	})
 	writeLiveFile(t, `{"claudeAiOauth":{"accessToken":"OLD","refreshToken":"RT-OLD"},`+
+		`"trustedDeviceToken":"DEVICE","enterpriseGateway":{"url":"https://gw"}}`)
+
+	stubLogin(t, loginToken("acct-1", "a@example.com", "RT-1"))
+	if err, _, _ := runCmd(t, newAddCmd()); err != nil {
+		t.Fatal(err)
+	}
+	if !probedLive {
+		t.Fatal("the live login was never resolved, so the keys can only have been carried on a guess")
+	}
+
+	s, _ := store.Open()
+	stored, err := s.Credentials("acct-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"trustedDeviceToken", "enterpriseGateway"} {
+		if _, ok := stored[want]; !ok {
+			t.Fatalf("adoption dropped %s even though the profile proved the account: %v", want, stored)
+		}
+	}
+}
+
+// When the probe cannot answer, the old behaviour stands: carry nothing and say
+// so. A live access token that has expired is the ordinary way to get here, and
+// it must not turn a successful login into a failure — nor into a silent drop.
+func TestAdoptingTheLiveLoginSaysWhatItCannotCarryWhenTheProbeFails(t *testing.T) {
+	isolate(t)
+	stubEnvironment(t, true, false)
+	stubProfile(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "Bearer EXPIRED" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		io.WriteString(w, profileJSON("acct-1", "a@example.com"))
+	})
+	writeLiveFile(t, `{"claudeAiOauth":{"accessToken":"EXPIRED","refreshToken":"RT-OLD"},`+
 		`"trustedDeviceToken":"DEVICE","enterpriseGateway":{"url":"https://gw"}}`)
 
 	stubLogin(t, loginToken("acct-1", "a@example.com", "RT-1"))
@@ -798,6 +892,14 @@ func TestAdoptingTheLiveLoginSaysWhatItCannotCarry(t *testing.T) {
 	}
 	if !strings.Contains(errOut, "trustedDeviceToken") || !strings.Contains(errOut, "enterpriseGateway") {
 		t.Fatalf("stderr = %q, want it to name the account-scoped keys it is not carrying", errOut)
+	}
+	s, _ := store.Open()
+	stored, err := s.Credentials("acct-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, bad := stored["trustedDeviceToken"]; bad {
+		t.Fatal("an unresolved live login had its keys carried anyway")
 	}
 }
 
@@ -1122,7 +1224,7 @@ func TestAddSurvivesAnUnwritableEngineState(t *testing.T) {
 	})
 	// A directory where the state document belongs cannot be replaced by a
 	// file, so the write fails while everything before it succeeds.
-	if err := os.MkdirAll(filepath.Join(ccpath.StoreHome(), "strategy.json", "held"), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(mustPath(ccpath.StoreHome()), "strategy.json", "held"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 

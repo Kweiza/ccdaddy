@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 )
 
@@ -38,8 +39,12 @@ func WritePID(pid int) error {
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return fmt.Errorf("creating the ccdad store: %w", err)
 	}
+	// Derived from the root storeRoot just returned rather than from a second
+	// PIDPath() call: one resolution per operation is what keeps the directory
+	// that was created and the file that is written provably the same one.
+	path := filepath.Join(root, PIDFileName)
 	body := strconv.Itoa(pid) + string(commitMarker)
-	if err := os.WriteFile(PIDPath(), []byte(body), pidFilePerm); err != nil {
+	if err := os.WriteFile(path, []byte(body), pidFilePerm); err != nil {
 		return fmt.Errorf("writing the pidfile: %w", err)
 	}
 	return nil
@@ -69,7 +74,11 @@ func WritePID(pid int) error {
 // unrelated, and Kill(pid, 0) answering proves only that SOME process has that
 // pid, never that it is ours.
 func ReadPID() (pid int, ok bool, err error) {
-	body, err := os.ReadFile(PIDPath())
+	path, err := PIDPath()
+	if err != nil {
+		return 0, false, err
+	}
+	body, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return 0, false, nil
@@ -102,7 +111,11 @@ func ReadPID() (pid int, ok bool, err error) {
 // same reason the singleton lock file is never unlinked. A zero-byte file says
 // "a daemon ran here and is not running now", which is the truth.
 func ClearPID() error {
-	f, err := os.OpenFile(PIDPath(), os.O_WRONLY|os.O_TRUNC, pidFilePerm)
+	path, err := PIDPath()
+	if err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, pidFilePerm)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil

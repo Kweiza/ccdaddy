@@ -106,8 +106,8 @@ func TestSingletonHeldDoesNotCreateTheLockFile(t *testing.T) {
 	if err != nil || held {
 		t.Fatalf("SingletonHeld() = (%v, %v) on an empty store, want (false, nil)", held, err)
 	}
-	if _, err := os.Stat(LockPath()); !os.IsNotExist(err) {
-		t.Errorf("probing created %s — a missing lock file is the only evidence that no daemon has ever started here, and this erases it", LockPath())
+	if _, err := os.Stat(mustPath(LockPath())); !os.IsNotExist(err) {
+		t.Errorf("probing created %s — a missing lock file is the only evidence that no daemon has ever started here, and this erases it", mustPath(LockPath()))
 	}
 }
 
@@ -150,7 +150,7 @@ func TestAcquireSingletonMakesTheProbeSayRunning(t *testing.T) {
 	if err != nil || !held {
 		t.Fatalf("SingletonHeld() = (%v, %v) while the singleton is held, want (true, nil)", held, err)
 	}
-	info, err := os.Stat(LockPath())
+	info, err := os.Stat(mustPath(LockPath()))
 	if err != nil {
 		t.Fatalf("the lock file was not created by acquiring: %v", err)
 	}
@@ -179,7 +179,7 @@ func TestReleasingTheSingletonMakesTheProbeSayNotRunningAgain(t *testing.T) {
 	}
 	// Never unlinked. flock is per-inode, so a release that removed the file
 	// would let two daemons each hold "the" lock on a different inode.
-	if _, err := os.Stat(LockPath()); err != nil {
+	if _, err := os.Stat(mustPath(LockPath())); err != nil {
 		t.Errorf("Release removed the lock file: %v", err)
 	}
 }

@@ -242,9 +242,13 @@ func newConfigListCmd() *cobra.Command {
 			}
 
 			if asJSON {
+				path, err := config.Path()
+				if err != nil {
+					return err
+				}
 				payload := map[string]any{
 					"schemaVersion": 1,
-					"path":          config.Path(),
+					"path":          path,
 					"keys":          rows,
 				}
 				if len(unknown) > 0 {
@@ -278,15 +282,22 @@ func newConfigPathCmd() *cobra.Command {
 			"would put it.",
 		Args: usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			path := config.Path()
+			path, err := config.Path()
+			if err != nil {
+				return err
+			}
 			_, statErr := os.Stat(path)
 			exists := statErr == nil
 
 			if asJSON {
+				home, err := ccpath.StoreHome()
+				if err != nil {
+					return err
+				}
 				return writeJSON(cmd, map[string]any{
 					"schemaVersion": 1,
 					"path":          path,
-					"home":          ccpath.StoreHome(),
+					"home":          home,
 					"exists":        exists,
 				})
 			}

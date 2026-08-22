@@ -339,7 +339,7 @@ func TestLoopKeepsGoingAfterATickPanics(t *testing.T) {
 	if got := h.loop.Panics(); got != 1 {
 		t.Errorf("Panics() = %d, want 1: a panic that is not counted is a panic nobody will ever see", got)
 	}
-	if body := readFile(t, LogPath()); !strings.Contains(body, "the poller fleet fell over") {
+	if body := readFile(t, mustPath(LogPath())); !strings.Contains(body, "the poller fleet fell over") {
 		t.Errorf("the panic is not in the log:\n%s", body)
 	}
 }
@@ -421,7 +421,7 @@ func TestLoopLogsATickErrorAndCarriesOn(t *testing.T) {
 	if calls, _ := h.counts(); calls != 2 {
 		t.Errorf("the body ran %d times, want 2", calls)
 	}
-	if body := readFile(t, LogPath()); !strings.Contains(body, "refused this credential") {
+	if body := readFile(t, mustPath(LogPath())); !strings.Contains(body, "refused this credential") {
 		t.Errorf("the tick error is not in the log:\n%s", body)
 	}
 	if got := h.loop.Panics(); got != 0 {

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -169,10 +170,11 @@ func classifyLockError(err error) error {
 // through a second descriptor exactly as it would see another process's. The
 // answer "a daemon is running" is still correct.
 func SingletonHeld() (held bool, err error) {
-	if _, err := storeRoot(); err != nil {
+	root, err := storeRoot()
+	if err != nil {
 		return false, err
 	}
-	locked, release, err := tryLock(LockPath(), false)
+	locked, release, err := tryLock(filepath.Join(root, LockFileName), false)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return false, nil
@@ -234,7 +236,7 @@ func AcquireSingleton() (*Singleton, error) {
 		return nil, fmt.Errorf("creating the ccdad store: %w", err)
 	}
 	for attempt := 1; ; attempt++ {
-		locked, release, err := tryLock(LockPath(), true)
+		locked, release, err := tryLock(filepath.Join(root, LockFileName), true)
 		if err != nil {
 			return nil, classifyLockError(err)
 		}

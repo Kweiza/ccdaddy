@@ -421,8 +421,8 @@ func TestTheKeySetIsClosed(t *testing.T) {
 
 func TestPathIsInsideTheStoreHome(t *testing.T) {
 	home := write(t, "")
-	if got, want := Path(), filepath.Join(home, FileName); got != want {
-		t.Errorf("Path() = %q, want %q", got, want)
+	if got, want := mustPath(Path()), filepath.Join(home, FileName); got != want {
+		t.Errorf("mustPath(Path()) = %q, want %q", got, want)
 	}
 }
 

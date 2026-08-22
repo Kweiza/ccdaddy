@@ -3,6 +3,8 @@ package ccpath
 import (
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"golang.org/x/text/unicode/norm"
@@ -25,7 +27,11 @@ func TestConfigHomeDefault(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	t.Setenv("CLAUDE_SECURESTORAGE_CONFIG_DIR", "")
 
-	if got, want := ConfigHome(), filepath.Join(home, ".claude"); got != want {
+	got, err := ConfigHome()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(home, ".claude"); got != want {
 		t.Fatalf("ConfigHome() = %q, want %q", got, want)
 	}
 }
@@ -34,7 +40,11 @@ func TestConfigHomeRespectsEnv(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("CLAUDE_CONFIG_DIR", "/custom/cc")
 
-	if got, want := ConfigHome(), "/custom/cc"; got != want {
+	got, err := ConfigHome()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "/custom/cc"; got != want {
 		t.Fatalf("ConfigHome() = %q, want %q", got, want)
 	}
 }
@@ -48,17 +58,29 @@ func TestCredentialHomeScopesIndependently(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", "/custom/cc")
 
 	t.Setenv("CLAUDE_SECURESTORAGE_CONFIG_DIR", "/custom/creds")
-	if got, want := CredentialHome(), "/custom/creds"; got != want {
+	got, err := CredentialHome()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "/custom/creds"; got != want {
 		t.Fatalf("CredentialHome() with value = %q, want %q", got, want)
 	}
 
 	t.Setenv("CLAUDE_SECURESTORAGE_CONFIG_DIR", "")
-	if got, want := CredentialHome(), filepath.Join(home, ".claude"); got != want {
+	got, err = CredentialHome()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(home, ".claude"); got != want {
 		t.Fatalf("CredentialHome() with empty value = %q, want %q", got, want)
 	}
 
 	os.Unsetenv("CLAUDE_SECURESTORAGE_CONFIG_DIR")
-	if got, want := CredentialHome(), "/custom/cc"; got != want {
+	got, err = CredentialHome()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "/custom/cc"; got != want {
 		t.Fatalf("CredentialHome() unset = %q, want %q", got, want)
 	}
 }
@@ -70,7 +92,11 @@ func TestCredentialsPath(t *testing.T) {
 	os.Unsetenv("CLAUDE_SECURESTORAGE_CONFIG_DIR")
 
 	want := filepath.Join(home, ".claude", ".credentials.json")
-	if got := CredentialsPath(); got != want {
+	got, err := CredentialsPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
 		t.Fatalf("CredentialsPath() = %q, want %q", got, want)
 	}
 }
@@ -82,7 +108,11 @@ func TestGlobalConfigPathDefault(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 
 	want := filepath.Join(home, ".claude.json")
-	if got := GlobalConfigPath(); got != want {
+	got, err := GlobalConfigPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
 		t.Fatalf("GlobalConfigPath() = %q, want %q", got, want)
 	}
 }
@@ -101,7 +131,11 @@ func TestGlobalConfigPathPrefersLegacyWhenPresent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got := GlobalConfigPath(); got != legacy {
+	got, err := GlobalConfigPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != legacy {
 		t.Fatalf("GlobalConfigPath() = %q, want %q", got, legacy)
 	}
 }
@@ -111,12 +145,20 @@ func TestStoreHome(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("CCDAD_HOME", "")
 
-	if got, want := StoreHome(), filepath.Join(home, ".ccdad"); got != want {
+	got, err := StoreHome()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(home, ".ccdad"); got != want {
 		t.Fatalf("StoreHome() = %q, want %q", got, want)
 	}
 
 	t.Setenv("CCDAD_HOME", "/opt/ccdad")
-	if got, want := StoreHome(), "/opt/ccdad"; got != want {
+	got, err = StoreHome()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "/opt/ccdad"; got != want {
 		t.Fatalf("StoreHome() override = %q, want %q", got, want)
 	}
 }
@@ -130,7 +172,11 @@ func TestConfigHomeNormalizesToNFC(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", "/custom/"+decomposedCafe)
 
 	want := "/custom/" + composedCafe
-	if got := ConfigHome(); got != want {
+	got, err := ConfigHome()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
 		t.Fatalf("ConfigHome() = %q, want %q (NFC-normalized)", got, want)
 	}
 }
@@ -146,7 +192,11 @@ func TestCredentialHomeNormalizesToNFC(t *testing.T) {
 	t.Setenv("CLAUDE_SECURESTORAGE_CONFIG_DIR", "/creds/"+decomposedCafe)
 
 	want := "/creds/" + composedCafe
-	if got := CredentialHome(); got != want {
+	got, err := CredentialHome()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
 		t.Fatalf("CredentialHome() = %q, want %q (NFC-normalized)", got, want)
 	}
 }
@@ -164,5 +214,106 @@ func TestNFCFixturesDifferInBytes(t *testing.T) {
 	}
 	if norm.NFC.String(decomposedCafe) != composedCafe {
 		t.Fatalf("NFC(decomposedCafe) = %q, want composedCafe %q", norm.NFC.String(decomposedCafe), composedCafe)
+	}
+}
+
+// clearHome unsets the variable os.UserHomeDir consults on this platform, which
+// is the only way to make the lookup fail. It is written per-platform rather
+// than clearing both, so a future change to os.UserHomeDir's variable is a
+// compile-visible edit here rather than a test that silently stops failing.
+func clearHome(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", "")
+		return
+	}
+	t.Setenv("HOME", "")
+}
+
+// isolateEnv clears every variable the resolvers consult, so a test starts from
+// "nothing is set" rather than from whatever the developer's shell exports.
+func isolateEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("CCDAD_HOME", "")
+	os.Unsetenv("CLAUDE_SECURESTORAGE_CONFIG_DIR")
+}
+
+// resolvers is every exported path function, named, so the no-home test covers
+// the whole surface instead of a sample of it -- a new resolver that forgets to
+// propagate the error is the regression this is here to catch, and it is only
+// caught if adding one to the package means adding it here too.
+func resolvers() []struct {
+	name string
+	fn   func() (string, error)
+} {
+	return []struct {
+		name string
+		fn   func() (string, error)
+	}{
+		{"ConfigHome", ConfigHome},
+		{"CredentialHome", CredentialHome},
+		{"CredentialsPath", CredentialsPath},
+		{"GlobalConfigPath", GlobalConfigPath},
+		{"StoreHome", StoreHome},
+	}
+}
+
+// With no home and no overrides, every resolver must fail -- and must return
+// "" alongside the error.
+//
+// The empty string is half the point and is asserted separately. The bug this
+// replaced was not that the old code returned a wrong error; it returned no
+// error at all and a RELATIVE path (".claude", ".ccdad"), so ccdad read and
+// wrote credentials under the process's working directory. A resolver that
+// returned an error but still handed back that relative path would leave a
+// caller who ignores the error in exactly the old situation.
+func TestEveryResolverFailsWhenTheHomeIsUnknown(t *testing.T) {
+	isolateEnv(t)
+	clearHome(t)
+
+	for _, r := range resolvers() {
+		got, err := r.fn()
+		if err == nil {
+			t.Errorf("%s() = %q, nil; want an error when the home directory cannot be resolved", r.name, got)
+			continue
+		}
+		if got != "" {
+			t.Errorf("%s() returned %q alongside its error; a caller that drops the error would use a relative path", r.name, got)
+		}
+	}
+}
+
+// The error has to name what to set, because the operator's only fix is an
+// environment variable and nothing else in the process knows which one.
+func TestNoHomeErrorNamesTheVariableToSet(t *testing.T) {
+	isolateEnv(t)
+	clearHome(t)
+
+	_, err := StoreHome()
+	if err == nil {
+		t.Fatal("StoreHome() succeeded with no home directory")
+	}
+	for _, want := range []string{"HOME", "CCDAD_HOME"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("StoreHome() error = %q, want it to name %s", err, want)
+		}
+	}
+}
+
+// The home lookup is consulted lazily: a fully overridden environment resolves
+// every path without one. This is what makes the error above a genuine
+// last-resort rather than a new hard requirement, and it is the configuration
+// the test suite itself runs under.
+func TestResolversDoNotNeedAHomeWhenTheEnvironmentSuppliesOne(t *testing.T) {
+	clearHome(t)
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join("/custom", "cc"))
+	t.Setenv("CCDAD_HOME", filepath.Join("/custom", "ccdad"))
+	os.Unsetenv("CLAUDE_SECURESTORAGE_CONFIG_DIR")
+
+	for _, r := range resolvers() {
+		if _, err := r.fn(); err != nil {
+			t.Errorf("%s() = %v; want it to resolve from the environment without a home directory", r.name, err)
+		}
 	}
 }

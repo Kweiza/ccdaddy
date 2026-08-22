@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
+	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/store"
 )
 
@@ -186,4 +187,111 @@ func TestWhichDoesNotFallBackWhenTheEnvTokenIsUnmanaged(t *testing.T) {
 	if !strings.Contains(errOut, "not one ccdad manages") {
 		t.Fatalf("stderr = %q", errOut)
 	}
+}
+
+// apiKeyCreds builds the stored blob an `add-token` API key produces.
+func apiKeyCreds(key string) cclink.Blob {
+	return cclink.Blob{tokenCredentialKey: json.RawMessage(
+		`{"kind":"api-key","token":"` + key + `"}`)}
+}
+
+// A stored primaryApiKey does NOT displace a live OAuth login, and `which` has
+// to say so.
+//
+// This is the single most important rule in the model and the easiest to get
+// backwards. Claude Code's client binds `anthropicAuthEnabled: BE()`, and BE()
+// is unaffected by primaryApiKey -- only an ENVIRONMENT key, a file descriptor
+// or an apiKeyHelper turns it off. So with both present the session is on the
+// login, and an implementation that answered "the api-key account" would send
+// someone to look at the wrong account's quota.
+func TestAttributePrefersTheLoginOverAStoredAPIKey(t *testing.T) {
+	accounts := []store.Account{
+		{UUID: "u-login", Email: "login@example.com", Idx: 1},
+		{UUID: "u-key", Email: "key@example.com", Idx: 2},
+	}
+	stored := map[string]cclink.Blob{
+		"u-login": credsFor("RT-ONE"),
+		"u-key":   apiKeyCreds("sk-ant-api03-STORED"),
+	}
+	live := cclink.Blob{"claudeAiOauth": json.RawMessage(`{"accessToken":"AT","refreshToken":"RT-ONE"}`)}
+	env := identity.APIKeyEnvironment{Interactive: true, ManagedKey: "sk-ant-api03-STORED"}
+
+	res := attributeLogin(live, accounts, lookupFrom(stored), env)
+	if !res.ok || res.account.UUID != "u-login" {
+		t.Fatalf("attributed to %+v via %q, want the login account", res.account, res.via)
+	}
+}
+
+// With no login left, the stored key IS the credential -- which is exactly the
+// state `ccdad switch <api-key account>` creates.
+func TestAttributeUsesTheStoredAPIKeyWhenThereIsNoLogin(t *testing.T) {
+	accounts := []store.Account{{UUID: "u-key", Email: "key@example.com", Idx: 1}}
+	stored := map[string]cclink.Blob{"u-key": apiKeyCreds("sk-ant-api03-STORED")}
+	env := identity.APIKeyEnvironment{Interactive: true, ManagedKey: "sk-ant-api03-STORED"}
+
+	res := attributeLogin(cclink.Blob{}, accounts, lookupFrom(stored), env)
+	if !res.ok || res.account.UUID != "u-key" {
+		t.Fatalf("attributed to %+v via %q, want the api-key account", res.account, res.via)
+	}
+}
+
+// An APPROVED ANTHROPIC_API_KEY displaces the login, and the credentials file
+// must not be consulted as a fallback -- naming its account would name one
+// Claude Code is not using.
+func TestAttributeEnvAPIKeyDisplacesTheLogin(t *testing.T) {
+	const key = "sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUV"
+	accounts := []store.Account{
+		{UUID: "u-login", Email: "login@example.com", Idx: 1},
+		{UUID: "u-key", Email: "key@example.com", Idx: 2},
+	}
+	stored := map[string]cclink.Blob{
+		"u-login": credsFor("RT-ONE"),
+		"u-key":   apiKeyCreds(key),
+	}
+	live := cclink.Blob{"claudeAiOauth": json.RawMessage(`{"accessToken":"AT","refreshToken":"RT-ONE"}`)}
+
+	env := identity.APIKeyEnvironment{
+		Interactive: true,
+		EnvKey:      key,
+		Approved:    []string{identity.APIKeyApproval(key)},
+	}
+	res := attributeLogin(live, accounts, lookupFrom(stored), env)
+	if !res.ok || res.account.UUID != "u-key" {
+		t.Fatalf("attributed to %+v via %q, want the api-key account", res.account, res.via)
+	}
+
+	// The same key with no approval entry is refused by an interactive Claude
+	// Code, so the login is the answer again. This is the pair that proves the
+	// approval list is actually consulted: without it, both halves would
+	// attribute to the key.
+	env.Approved = nil
+	res = attributeLogin(live, accounts, lookupFrom(stored), env)
+	if !res.ok || res.account.UUID != "u-login" {
+		t.Fatalf("unapproved key attributed to %+v via %q, want the login account", res.account, res.via)
+	}
+	if !env.EnvKeyNeedsApproval() {
+		t.Fatal("EnvKeyNeedsApproval() = false; the caller has no way to report the ambiguity")
+	}
+}
+
+// A configured apiKeyHelper resolves a key ccdad cannot see and that displaces
+// the login. The answer is "not managed", and it names the mechanism -- because
+// "not managed" alone would send someone looking at their accounts when the
+// cause is a settings key.
+func TestAttributeReportsAnApiKeyHelperRatherThanGuessing(t *testing.T) {
+	accounts := []store.Account{{UUID: "u-login", Email: "login@example.com", Idx: 1}}
+	stored := map[string]cclink.Blob{"u-login": credsFor("RT-ONE")}
+	live := cclink.Blob{"claudeAiOauth": json.RawMessage(`{"accessToken":"AT","refreshToken":"RT-ONE"}`)}
+
+	res := attributeLogin(live, accounts, lookupFrom(stored), identity.APIKeyEnvironment{Interactive: true, Helper: true})
+	if res.ok {
+		t.Fatalf("attributed to %+v; the helper's key is one ccdad cannot see", res.account)
+	}
+	if !strings.Contains(res.via, "apiKeyHelper") {
+		t.Fatalf("via = %q, want it to name apiKeyHelper", res.via)
+	}
+}
+
+func lookupFrom(stored map[string]cclink.Blob) func(string) (cclink.Blob, error) {
+	return func(uuid string) (cclink.Blob, error) { return stored[uuid], nil }
 }

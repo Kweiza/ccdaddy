@@ -84,7 +84,7 @@ func setDisabled(cmd *cobra.Command, ref string, disabled bool) error {
 	// loud for the same reason.
 	if disabled {
 		live, _ := cclink.Load()
-		if current, ok := attributeLogin(live, accounts, s.Credentials); ok && current.UUID == target.UUID {
+		if current, ok := attributeLive(live, accounts, s.Credentials); ok && current.UUID == target.UUID {
 			fmt.Fprintln(cmd.ErrOrStderr(),
 				"Note: that is the live Claude Code login. It stays live — disabling only holds it out of "+
 					"automatic rotation, so nothing will switch back to it once something switches away.")

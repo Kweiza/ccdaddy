@@ -503,11 +503,11 @@ func TestWithCacheDoesNotWriteWhenTheCallbackFails(t *testing.T) {
 
 func TestCachePathIsInsideTheCcdadStore(t *testing.T) {
 	dir := isolate(t)
-	if got, want := CachePath(), filepath.Join(dir, "usage.json"); got != want {
-		t.Errorf("CachePath() = %q, want %q", got, want)
+	if got, want := mustPath(CachePath()), filepath.Join(dir, "usage.json"); got != want {
+		t.Errorf("mustPath(CachePath()) = %q, want %q", got, want)
 	}
-	if !strings.HasPrefix(CachePath(), ccpath.StoreHome()) {
-		t.Errorf("CachePath() = %q is outside the store at %q", CachePath(), ccpath.StoreHome())
+	if !strings.HasPrefix(mustPath(CachePath()), mustPath(ccpath.StoreHome())) {
+		t.Errorf("mustPath(CachePath()) = %q is outside the store at %q", mustPath(CachePath()), mustPath(ccpath.StoreHome()))
 	}
 }
 
