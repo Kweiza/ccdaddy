@@ -331,7 +331,12 @@ func TestTheContinuousFormKeepsEvaluatingAndReportsAnInterrupt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	// Two seconds against a one-millisecond interval, for an assertion that
+	// wants two evaluations. Measured on Linux under -race the old
+	// 200 ms budget yielded 83-109 of them, which reads as ample and is not:
+	// the margin that matters is the one on the slowest runner in the matrix
+	// under load, and nothing about this test needs the budget to be tight.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	err = runAutoLoop(ctx, newAutoEmitter(root, true), s, time.Millisecond)
 

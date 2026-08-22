@@ -110,16 +110,20 @@ func TestLoadRejectsOversizeFile(t *testing.T) {
 }
 
 func TestLoadRefusesSymlink(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("symlinks need Developer Mode on Windows")
-	}
 	dir := withClaudeHome(t)
 	target := filepath.Join(t.TempDir(), "elsewhere.json")
 	if err := os.WriteFile(target, []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(target, filepath.Join(dir, ccpath.CredentialsFile)); err != nil {
-		t.Fatal(err)
+		// Probed rather than skipped by OS name. Creating a symlink on Windows
+		// needs Developer Mode or elevation, but store_windows.go's Lstat
+		// refusal is the ONLY code that produces ErrSymlink there and this is
+		// the only test in the tree that asserts it — so an unconditional skip
+		// leaves that branch exercised on no platform at all. Where the
+		// capability is present, including a runner with Developer Mode on,
+		// the test now runs.
+		t.Skipf("cannot create a symlink here: %v", err)
 	}
 
 	if _, err := Load(); !errors.Is(err, ErrSymlink) {

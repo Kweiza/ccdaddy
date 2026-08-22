@@ -617,15 +617,35 @@ func TestFollowLogPicksUpTheNewFileAfterARotation(t *testing.T) {
 	// Rotate the way Logger.rotate does: rename the file aside and create a new
 	// one in its place.
 	waitForOutput(t, &out, "first line")
-	if err := os.Rename(mustPath(daemon.LogPath()), mustPath(daemon.LogPath())+".1"); err != nil {
-		t.Fatal(err)
-	}
+	rotateAside(t, mustPath(daemon.LogPath()))
 	writeDaemonLog(t, "after the rotation\n")
 	waitForOutput(t, &out, "after the rotation")
 
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatalf("followLog: %v", err)
+	}
+}
+
+// rotateAside renames the log the way Logger.rotate does, retrying while the
+// follower has it open.
+//
+// os.Open does not pass FILE_SHARE_DELETE, so on Windows a rename whose window
+// overlaps the follower's 5 ms poll fails with a sharing violation. A real log
+// rotator retries for the same reason; a test that does not is a test that
+// fails on whichever poll it happened to collide with.
+func rotateAside(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		err := os.Rename(path, path+".1")
+		if err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("rotating %s: %v", path, err)
+		}
+		time.Sleep(2 * time.Millisecond)
 	}
 }
 
