@@ -1,0 +1,113 @@
+# Publish a release: six bare binaries, a sums file, and a build-provenance
+# attestation over both.
+#
+# §11.4 makes enforced sha256sums plus keyless attestation the ENTIRE v1
+# authenticity story - there is no minisign and no self-update to fall back on
+# - so an attestation that is not produced beside the upload leaves a release
+# with integrity and no authenticity, and nothing downstream notices.
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+# Read-only by default; the one job that needs to write says so for itself.
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # A SEPARATE job, before the build, on purpose. A tag that is not strict
+  # semver, or a repository still on the default read-only GITHUB_TOKEN, both
+  # fail at `gh release create` - the very last step, after every build minute
+  # is already spent. This job costs seconds and needs no permissions at all.
+  gate:
+    name: Gate the tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+      prerelease: ${{ steps.tag.outputs.prerelease }}
+    steps:
+      # Only the workflow file and the two scripts are needed here, but a
+      # sparse checkout for four seconds of work is not worth the branch.
+      - uses: actions/checkout@v7
+
+      # The rule itself lives in scripts/tag-gate.sh, where it has a test.
+      # Inline in a `run:` block it would be the one piece of release logic
+      # that could only be exercised by pushing a tag.
+      - id: tag
+        # Through the environment rather than interpolated into the shell
+        # line: a tag name is repository input, and `${{ }}` inside `run:`
+        # substitutes before bash ever sees it.
+        env:
+          TAG: ${{ github.ref_name }}
+        run: scripts/tag-gate.sh "$TAG" >>"$GITHUB_OUTPUT"
+
+  publish:
+    name: Build and publish
+    needs: gate
+    runs-on: ubuntu-latest
+    # All three are needed and all three fail late: id-token and attestations
+    # for the keyless signature, contents for the release itself.
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      # The last gate before a public artifact. The three-OS matrix lives in
+      # the CI workflow and runs on the commit; this is the cheap re-run that
+      # stops a tag publishing a binary whose own build script is broken.
+      - name: Test
+        run: go test ./...
+
+      # Go cross-compiles all six targets on one runner in about two minutes,
+      # so there is no matrix here and therefore nothing for fail-fast to
+      # apply to. Deliberately the same script a developer runs, so the asset
+      # names cannot drift between the two.
+      - name: Build the release assets
+        env:
+          VERSION: ${{ needs.gate.outputs.version }}
+          COMMIT: ${{ github.sha }}
+        run: scripts/build-release.sh
+
+      # Attest what is about to be uploaded, in this job, before uploading.
+      # Attesting a rebuilt copy produces digests that `gh attestation verify`
+      # then rejects, and the failure is only visible to whoever tries to
+      # verify - never to the release that produced it.
+      - name: Attest the build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: dist/*
+
+      # `gh release create` errors on a tag that already has a release, so the
+      # idempotent shape is create-if-missing followed by upload --clobber.
+      # That is what makes a re-run of a failed publish a no-op rather than a
+      # second failure.
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          PRERELEASE: ${{ needs.gate.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            flags=""
+            if [ "$PRERELEASE" = true ]; then
+              flags="--prerelease"
+            fi
+            # --verify-tag refuses to invent a tag if the ref went missing
+            # between the push and this step.
+            gh release create "$TAG" --verify-tag --title "$TAG" --generate-notes $flags
+          fi
+          gh release upload "$TAG" dist/* --clobber
+          gh release view "$TAG" --json assets --jq '.assets[].name'
