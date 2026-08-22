@@ -310,7 +310,9 @@ func (e *Engine) dispatch(ctx context.Context, s *store.Store, accounts []store.
 		go func(a store.Account) {
 			defer e.wg.Done()
 			defer e.release(a.UUID)
-			e.poll(ctx, a, cfg, sizes[identityOf(a)], a.UUID == active)
+			// Discarded: a tick reports through the status document, and
+			// the failure is already in this account's pollRecord.
+			_ = e.poll(ctx, a, cfg, sizes[identityOf(a)], a.UUID == active)
 		}(a)
 	}
 }
@@ -380,9 +382,11 @@ func (e *Engine) release(uuid string) {
 	delete(e.inFlight, uuid)
 }
 
-// poll takes one reading. It runs on its own goroutine and its only output is
-// the cache, the engine state, and this account's pollRecord.
-func (e *Engine) poll(ctx context.Context, a store.Account, cfg config.Config, identitySize int, active bool) {
+// poll takes one reading. Dispatched by a tick it runs on its own goroutine and
+// its only output is the cache, the engine state, and this account's
+// pollRecord; the returned error is for Refresh, which has a caller waiting to
+// be told what happened rather than a status document to publish into.
+func (e *Engine) poll(ctx context.Context, a store.Account, cfg config.Config, identitySize int, active bool) error {
 	ctx, cancel := context.WithTimeout(ctx, e.pollTimeout())
 	defer cancel()
 
@@ -399,9 +403,10 @@ func (e *Engine) poll(ctx context.Context, a store.Account, cfg config.Config, i
 	e.record(a.UUID, now, err)
 	if err != nil {
 		e.handleFailure(a, cfg, err, now, identitySize, active)
-		return
+		return err
 	}
 	e.commit(a, snap, now, identitySize, cfg, active, nil)
+	return nil
 }
 
 // handleFailure decides what a failed poll means. Only ONE of the failures says
@@ -473,12 +478,7 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now time.Time,
 
 	err := usage.WithCache(cacheTimeout, func(c *usage.Cache) error {
 		entry, had := c.Get(a.UUID)
-		state := pollpolicy.State{
-			Interval:        entry.Poll.Interval,
-			LastRateLimited: entry.Poll.LastRateLimited,
-			LastBindingPct:  entry.Poll.LastBindingPct,
-			HasLastBinding:  entry.Poll.HasLastBinding,
-		}
+		state := pollStateOf(entry)
 		if adjust != nil {
 			state = adjust(state)
 		}
@@ -519,6 +519,18 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now time.Time,
 	})
 	if err != nil {
 		e.logf("recording %s's reading failed: %v", a.UUID, err)
+	}
+}
+
+// pollStateOf lifts an entry's persisted history back into the poll policy's
+// own type. Both writers of that history go through it, so a field added to one
+// side cannot be silently dropped by the other.
+func pollStateOf(e usage.Entry) pollpolicy.State {
+	return pollpolicy.State{
+		Interval:        e.Poll.Interval,
+		LastRateLimited: e.Poll.LastRateLimited,
+		LastBindingPct:  e.Poll.LastBindingPct,
+		HasLastBinding:  e.Poll.HasLastBinding,
 	}
 }
 

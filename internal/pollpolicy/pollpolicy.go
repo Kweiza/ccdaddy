@@ -265,6 +265,39 @@ func RateLimited(s State, now time.Time, retryAfter time.Duration, hasRetryAfter
 	return next
 }
 
+// RateLimitedUntil is the post-429 floor as an instant, for the caller that has
+// no cadence to ask Next() about: `ccdad list --refresh` is a button a hand
+// presses, not a scheduler, and §9.1 still holds it to §7.4's backoff.
+//
+// It is the LONGER of the flat floor and whatever AIMD has earned, measured
+// from the 429 itself rather than from the last reading. A failed poll leaves
+// the previous reading's timestamp alone — deliberately, because §7.2 keeps the
+// old evidence — so an age-based hold would expire the instant a 429 arrived
+// for an account whose last good reading was already stale.
+//
+// Recent429Window is not consulted, and that is not an omission: the hold can
+// never outlast it, because Post429MaxInterval clamps the earned backoff at
+// 1800 s against a 3600 s window. A branch that can never be taken is worse
+// than no branch, so there is none.
+//
+// The IsZero guard below is the opposite case, and it is kept on purpose even
+// though a mutation deleting it SURVIVES. Without it the answer is epoch plus
+// the interval, and a time.Duration tops out at about 292 years — so from the
+// zero time it can never reach a real clock, and the function returns false
+// either way. That equivalence is an accident of an unrelated type's range,
+// which is not what "never rate-limited is not rate-limited" should rest on:
+// the guard says the thing the arithmetic only happens to agree with.
+func RateLimitedUntil(s State, now time.Time) (time.Time, bool) {
+	if s.LastRateLimited.IsZero() {
+		return time.Time{}, false
+	}
+	at := s.LastRateLimited.Add(longest(Post429MinInterval, s.Interval))
+	if !now.Before(at) {
+		return time.Time{}, false
+	}
+	return at, true
+}
+
 // ParseRetryAfter reads either legal form of the header.
 //
 // RFC 9110 allows delta-seconds or an HTTP-date, and accepting only the integer

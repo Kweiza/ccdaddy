@@ -137,8 +137,7 @@ func newSwitchCmd() *cobra.Command {
 		Long: "ACCOUNT may be a display index, an alias, an email address, or a uuid prefix.\n\n" +
 			"With no ACCOUNT, --strategy lets the auto-switch engine choose, under the same\n" +
 			"anti-flap margins the daemon uses and reading the same on-disk usage cache.\n" +
-			// See the note in auto.go: `list --refresh` does not exist yet.
-			"It never polls: run 'ccdad daemon start' to freshen the cache.\n\n" +
+			"It never polls: run the daemon, or 'ccdad list --refresh', to freshen the cache.\n\n" +
 			"--model is accepted for forward compatibility and currently changes nothing:\n" +
 			"the ranking has no model dimension yet, so honouring it would mean inventing one.",
 		Args:          atMostOneAccount("switch"),
