@@ -35,6 +35,11 @@ const logTimeFormat = "2006-01-02T15:04:05.000Z07:00"
 // NEVER read by the daemon itself. `ccdad daemon logs` reads it, and a reader
 // competing with a rotation is a reader's problem — nothing here waits for one.
 //
+// One rule for whoever writes that reader: on Windows a handle opened without
+// FILE_SHARE_DELETE BLOCKS the rename below. Go's os.OpenFile passes
+// share-delete, so a tail-follow built on os.Open is fine and one built on a raw
+// CreateFile silently wedges rotation for as long as it is attached.
+//
 // The daemon opens this file ITSELF rather than inheriting a descriptor from
 // whoever spawned it, and that is the whole reason Spawn hands the child
 // /dev/null on all three descriptors. A parent-opened descriptor survives the

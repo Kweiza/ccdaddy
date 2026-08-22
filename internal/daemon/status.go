@@ -198,6 +198,13 @@ func (w *StatusWriter) onDisk() bool {
 // TestReadStatusIgnoresUnknownFields pins deliberately: a DisallowUnknownFields
 // "hardening" here would break every older reader the first time a field is
 // added, and it is one line away at all times.
+//
+// It takes NO LOCK, and must not grow one. §8.1 puts this file in the
+// never-locked column, and on Windows LockFileEx locks are MANDATORY: a reader
+// holding one makes the daemon's next rename fail outright. The write is a
+// rename, so a reader sees one whole version of the document or another — and
+// catching the pre-rename inode is legitimate rather than something to guard
+// against.
 func ReadStatus() (Status, bool, error) {
 	if _, err := storeRoot(); err != nil {
 		return Status{}, false, err
