@@ -306,3 +306,16 @@ func TestBuildReleaseStillDescribesItselfWhenATargetFails(t *testing.T) {
 		t.Fatalf("sha256sums.txt lists %v, want %v — a sums file must not name an asset the release does not have", listed, shipped)
 	}
 }
+
+// The one seam between the three files: build-release.sh decides the asset
+// names, and each installer computes its own half of the list independently.
+// Nothing else would notice the two halves drifting apart, because each side's
+// tests are self-consistent - the release would simply publish assets no
+// installer asks for.
+func TestTheInstallersBetweenThemCoverEveryAsset(t *testing.T) {
+	both := append(slices.Clone(unixAssets), windowsAssets...)
+	slices.Sort(both)
+	if !slices.Equal(both, releaseAssets) {
+		t.Errorf("install.sh and install.ps1 between them resolve to %v, but the release ships %v", both, releaseAssets)
+	}
+}
