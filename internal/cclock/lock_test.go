@@ -126,6 +126,51 @@ func TestReleaseIsIdempotent(t *testing.T) {
 	}
 }
 
+// stealLock simulates a waiter taking a lock over the way a real one does:
+// remove the holder's directory and recreate it as the new owner.
+//
+// It exists because the obvious two lines are wrong on Windows, in two
+// independent ways.
+//
+// The holder's own toucher has a handle open on that directory every
+// TouchInterval — os.Chtimes opens with FILE_WRITE_ATTRIBUTES — and
+// RemoveDirectory fails with a sharing violation while a handle is open. The
+// removal is therefore retried, so a collision is a slower simulation rather
+// than a failed one. Retrying the SIMULATION is not retrying the code under
+// test: what is being observed is still one takeover.
+//
+// And takeover is detected by comparing mtimes (lock.go's `owned :=
+// info.ModTime().Equal(l.mtime)`), so the recreated directory has to carry an
+// mtime the holder cannot already have written. Letting mkdir stamp it with
+// `now` is not enough: the system clock granularity is about 15.6 ms on
+// Windows while the toucher runs every 20 ms, so a fresh directory routinely
+// lands on the same tick as the touch that preceded it, the comparison says
+// "still mine", and the takeover goes unnoticed. Observed on windows-latest as
+// "Compromised() did not close after the lock directory was taken over".
+// Backdating is unambiguous, and it is also what a real takeover looks like: a
+// waiter only steals a lock whose mtime is already older than Stale.
+func stealLock(t *testing.T, dir string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		err := os.RemoveAll(dir)
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("could not remove %s to simulate a takeover: %v", dir, err)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	stolen := time.Now().Add(-time.Second)
+	if err := os.Chtimes(dir, stolen, stolen); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // A holder must notice when a waiter takes over its lock (rmdir + mkdir)
 // while its own toucher was stalled. Chtimes on the same path would
 // otherwise succeed silently against the new owner's directory, leaving two
@@ -138,21 +183,12 @@ func TestTouchDetectsTakeover(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Simulate a waiter stealing the lock: remove the directory this holder
-	// owns and recreate it as if a new holder had just won it. The short
-	// sleep guarantees the recreated directory gets a distinguishable mtime:
-	// on this filesystem, directory mtimes advance in coarse (multi-
-	// millisecond) steps, so an instantaneous remove+recreate can otherwise
-	// land on the same mtime tick as the original -- something that cannot
-	// happen for a real takeover, which only follows the Stale threshold
-	// elapsing (seconds to minutes, far larger than that granularity).
+	// The sleep lets the toucher run at least once, so this is a takeover of a
+	// lock that has been held and refreshed rather than of a brand-new one.
+	// stealLock does the rest; see its comment for why the two obvious lines
+	// are not enough.
 	time.Sleep(50 * time.Millisecond)
-	if err := os.RemoveAll(dir); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	stealLock(t, dir)
 
 	select {
 	case <-lk.Compromised():

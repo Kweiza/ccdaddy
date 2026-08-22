@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -104,6 +105,25 @@ func TestUninstallWithYesRemovesTheStoreAndTheBinary(t *testing.T) {
 	}
 	if _, err := os.Stat(mustPath(ccpath.StoreHome())); !os.IsNotExist(err) {
 		t.Errorf("the store survived: %v", err)
+	}
+	assertBinaryGone(t, bin)
+}
+
+// assertBinaryGone is "uninstall removed the binary", spelled for each
+// platform's version of removing it.
+//
+// A running .exe cannot be deleted on Windows, so removeSelf renames it aside
+// and asks the kernel to delete the leftover at the next restart. The rename is
+// the step that matters there, and asserting the path is simply gone would
+// either fail or — worse — pass for the wrong reason once the leftover is
+// cleaned up by something else.
+func assertBinaryGone(t *testing.T, bin string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		if _, err := os.Stat(bin); err == nil {
+			t.Errorf("the binary is still at its own path; on Windows it has to be renamed aside")
+		}
+		return
 	}
 	if _, err := os.Stat(bin); !os.IsNotExist(err) {
 		t.Errorf("the binary survived: %v", err)
