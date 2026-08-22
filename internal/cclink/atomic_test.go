@@ -221,7 +221,7 @@ func TestWriteFileAtomicReaderNeverSeesPartialFile(t *testing.T) {
 			return
 		default:
 		}
-		got, err := os.ReadFile(path)
+		got, err := readSharedDelete(path)
 		if err != nil {
 			t.Errorf("read: %v", err)
 			break

@@ -48,6 +48,14 @@ func buildRelease(t *testing.T) string {
 	if testing.Short() {
 		t.Skip("cross-compiles six targets")
 	}
+	if runtime.GOOS == "windows" {
+		// The script runs on the ubuntu-latest release runner, and this is the
+		// only place it would ever run anywhere else. It could not run here as
+		// written in any case: exec hands bash an absolute C:\… path, and the
+		// script locates its own repository with `dirname -- "$0"`, which
+		// splits on "/" and answers "." for a backslash path.
+		t.Skip("the release builds on ubuntu-latest")
+	}
 	script, err := filepath.Abs("build-release.sh")
 	if err != nil {
 		t.Fatalf("resolving build-release.sh: %v", err)

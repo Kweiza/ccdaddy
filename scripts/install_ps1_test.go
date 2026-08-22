@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -210,6 +211,21 @@ func TestInstallPs1AppendsToUserPathWithoutDuplicating(t *testing.T) {
 // aborts and the replace-a-running-exe dance all execute here.
 func runInstallPs1(t *testing.T, dir string, env map[string]string) (string, error) {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		// Not a portability problem — the opposite. Everything behind
+		// Test-CcdadOnWindows becomes live here, and the last of those is
+		// Add-CcdadToUserPath, which appends $installDir to the real
+		// HKCU\Environment PATH. On a runner that is merely pointless; on a
+		// contributor's own machine, `go test ./...` would leave one t.TempDir()
+		// in their PATH per test, permanently, and the broadcast would make it
+		// take effect immediately.
+		//
+		// The pwsh-on-Linux run exercises the download, the verification, the
+		// aborts and the replace dance, all of which are platform-independent.
+		// The published installer against a real Windows box is the
+		// install-smoke workflow's job, where the machine is disposable.
+		t.Skip("install.ps1 writes the user's real PATH on Windows; the install-smoke workflow owns that")
+	}
 	shell := powershell(t)
 	script, err := filepath.Abs(filepath.Join("..", "install.ps1"))
 	if err != nil {

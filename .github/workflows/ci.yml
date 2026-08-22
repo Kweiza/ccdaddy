@@ -1,0 +1,101 @@
+# The gate every commit passes before a tag can publish it.
+#
+# Three jobs, and each one exists because something in this repository is
+# otherwise compiled by nothing or run by nobody:
+#
+#   check   gofmt and `go vet` for the host.
+#   test    `go test ./... -race` on all three operating systems. Until this
+#           existed, `internal/cclink/atomic_windows.go` and every other
+#           _windows.go file in the tree had never been compiled, let alone
+#           run: `GOOS=windows go build ./...` passing on a developer's Linux
+#           box is luck, not a gate, and it does not touch _test.go at all.
+#   cgo     §10.1: "add a CI job that fails if any target needs CGO."
+#
+# The checks themselves live in scripts/ci.sh, one subcommand per job, so that
+# a developer can run the same thing before pushing and get the same answer.
+# `.github/workflows/release.yml` refuses to publish a tag whose commit has no
+# successful run of THIS workflow.
+name: ci
+
+on:
+  # Every branch, not just main. Work in this repository lands from a worktree
+  # branch straight onto main rather than through a pull request, so "on: push
+  # to main" would mean nothing was ever checked until after it landed — and
+  # the release gate would have no run to read for any commit that was tagged
+  # before main caught up.
+  #
+  # There is deliberately no `pull_request:` trigger yet. With this `push:` it
+  # would run every matrix leg twice for the same commit of a same-repository
+  # pull request; the day this repository takes outside contributions, add it
+  # together with a guard that skips the push run when a pull request covers
+  # the same head.
+  #
+  # workflow_dispatch takes a ref of any kind, a tag included, which is the
+  # supported way to get a run onto a commit that never had one. It is not an
+  # override: the dispatched run still has to go green for the release gate to
+  # pass.
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # Never on main. A superseded run is a run that ends `cancelled`, and the
+  # release gate reads a cancelled run as "this commit was never green" — so
+  # cancelling main's runs would make every commit but the tip untaggable.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+# One place, because the alternative is remembering it per step: without an
+# explicit shell, Actions runs `run:` blocks on Windows through PowerShell,
+# where `./...` is mangled before go ever sees it.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  check:
+    name: gofmt and vet
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: scripts/ci.sh fmt vet
+
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      # §11.5, and the reason the matrix is worth having: one OS failing is
+      # information about that OS, and cancelling the other two throws it away
+      # at exactly the moment it is most wanted.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      # -race needs cgo and therefore a C compiler. All three runner images
+      # ship one (gcc on ubuntu, clang from the Command Line Tools on macOS,
+      # mingw-w64 on windows); if a future image drops it, this job fails
+      # loudly with "-race requires cgo" rather than quietly testing less.
+      - run: scripts/ci.sh test
+
+  cgo:
+    name: six targets without cgo
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: scripts/ci.sh cgo
