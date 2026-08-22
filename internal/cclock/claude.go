@@ -18,8 +18,17 @@ const (
 	// storageWriteStale is proper-lockfile's stale window for .storage-write.
 	storageWriteStale = 15 * time.Second
 	// refreshStale is the window for both OAuth refresh locks.
-	refreshStale = 60 * time.Second
+	refreshStale = RefreshStale
 )
+
+// RefreshStale is Claude Code's staleness window for the OAuth refresh locks.
+//
+// It is exported because ccdad has a second caller that takes ONE of these
+// locks on its own — internal/tokens, refreshing the live login's credential —
+// and a caller that re-spells the window is a caller that can drift from it.
+// Never pass a shorter value: a live holder whose toucher stalled gets its lock
+// stolen out from under it, and the holder here can be Claude Code itself.
+const RefreshStale = 60 * time.Second
 
 // oauthRefreshLockDir, legacyRefreshLockDir and storageWriteLockDir compute
 // each lock path from an already-resolved credential home, so a caller that
