@@ -447,6 +447,14 @@ func TestAcquireReportsWhyAStaleLockCouldNotBeRemoved(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(parent, 0o700) })
+	// Chmod REPORTS success on Windows and changes nothing but the read-only
+	// attribute, so the setup above silently does not hold there and Acquire
+	// removes the stale lock and succeeds. Probe rather than test GOOS: the
+	// same thing is true of any filesystem that ignores the mode bits.
+	if probe := filepath.Join(parent, "probe"); os.Mkdir(probe, 0o700) == nil {
+		_ = os.Remove(probe)
+		t.Skip("this filesystem ignores the mode bits, so the removal cannot be made to fail")
+	}
 
 	_, err := Acquire(dir, Options{Stale: time.Minute, Timeout: 300 * time.Millisecond})
 	if !errors.Is(err, ErrTimeout) {

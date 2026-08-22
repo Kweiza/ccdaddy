@@ -23,7 +23,7 @@ const composedCafe = "caf\u00e9"
 
 func TestConfigHomeDefault(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setHome(t, home)
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	t.Setenv("CLAUDE_SECURESTORAGE_CONFIG_DIR", "")
 
@@ -37,7 +37,7 @@ func TestConfigHomeDefault(t *testing.T) {
 }
 
 func TestConfigHomeRespectsEnv(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setHome(t, t.TempDir())
 	t.Setenv("CLAUDE_CONFIG_DIR", "/custom/cc")
 
 	got, err := ConfigHome()
@@ -54,7 +54,7 @@ func TestConfigHomeRespectsEnv(t *testing.T) {
 // falls back to ~/.claude rather than to CLAUDE_CONFIG_DIR.
 func TestCredentialHomeScopesIndependently(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setHome(t, home)
 	t.Setenv("CLAUDE_CONFIG_DIR", "/custom/cc")
 
 	t.Setenv("CLAUDE_SECURESTORAGE_CONFIG_DIR", "/custom/creds")
@@ -87,7 +87,7 @@ func TestCredentialHomeScopesIndependently(t *testing.T) {
 
 func TestCredentialsPath(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setHome(t, home)
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	os.Unsetenv("CLAUDE_SECURESTORAGE_CONFIG_DIR")
 
@@ -104,7 +104,7 @@ func TestCredentialsPath(t *testing.T) {
 // The global config sits at the HOME root by default, not inside .claude/.
 func TestGlobalConfigPathDefault(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setHome(t, home)
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 
 	want := filepath.Join(home, ".claude.json")
@@ -119,7 +119,7 @@ func TestGlobalConfigPathDefault(t *testing.T) {
 
 func TestGlobalConfigPathPrefersLegacyWhenPresent(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setHome(t, home)
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 
 	legacyDir := filepath.Join(home, ".claude")
@@ -142,7 +142,7 @@ func TestGlobalConfigPathPrefersLegacyWhenPresent(t *testing.T) {
 
 func TestStoreHome(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setHome(t, home)
 	t.Setenv("CCDAD_HOME", "")
 
 	got, err := StoreHome()
@@ -168,7 +168,7 @@ func TestStoreHome(t *testing.T) {
 // resolve to a different path than Claude Code did when it created the file.
 func TestConfigHomeNormalizesToNFC(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setHome(t, home)
 	t.Setenv("CLAUDE_CONFIG_DIR", "/custom/"+decomposedCafe)
 
 	want := "/custom/" + composedCafe
@@ -187,7 +187,7 @@ func TestConfigHomeNormalizesToNFC(t *testing.T) {
 // own coverage, not just ConfigHome's.
 func TestCredentialHomeNormalizesToNFC(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setHome(t, home)
 	t.Setenv("CLAUDE_CONFIG_DIR", "/should-not-be-used")
 	t.Setenv("CLAUDE_SECURESTORAGE_CONFIG_DIR", "/creds/"+decomposedCafe)
 
@@ -215,6 +215,17 @@ func TestNFCFixturesDifferInBytes(t *testing.T) {
 	if norm.NFC.String(decomposedCafe) != composedCafe {
 		t.Fatalf("NFC(decomposedCafe) = %q, want composedCafe %q", norm.NFC.String(decomposedCafe), composedCafe)
 	}
+}
+
+// setHome points os.UserHomeDir at dir on every platform. It reads $HOME on
+// Unix and %USERPROFILE% on Windows, so a test that sets only HOME sandboxes
+// nothing on the Windows CI leg: every resolver below falls through to the
+// runner's real profile and the comparison against the temp directory fails.
+// Setting the variable that does not apply is harmless; not setting it is not.
+func setHome(t *testing.T, dir string) {
+	t.Helper()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
 }
 
 // clearHome unsets the variable os.UserHomeDir consults on this platform, which

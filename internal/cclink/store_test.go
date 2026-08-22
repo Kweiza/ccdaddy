@@ -34,7 +34,8 @@ func withClaudeHome(t *testing.T) string {
 		t.Fatal(err)
 	}
 	t.Setenv("CLAUDE_SECURESTORAGE_CONFIG_DIR", creds)
-	t.Setenv("HOME", home) // still consulted by ccpath.ConfigHome, unrelated to this package
+	t.Setenv("HOME", home)        // still consulted by ccpath.ConfigHome, unrelated to this package
+	t.Setenv("USERPROFILE", home) // the same variable, on Windows
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	if got := mustPath(ccpath.CredentialHome()); got != creds {
 		t.Fatalf("withClaudeHome: mustPath(ccpath.CredentialHome()) = %q, want %q -- refusing to run with unsandboxed credentials", got, creds)
