@@ -56,6 +56,9 @@ import (
 //   - `remove`, `export`, `import`, `config` and `uninstall`: administering
 //     ccdad is not using it, and `uninstall` in particular would start the
 //     process it is about to stop.
+//   - `auto`, which IS the engine. Starting a daemon for it would hand the
+//     singleton to the daemon and make the continuous form refuse itself, and
+//     `auto --once` exists precisely so the engine can be run WITHOUT one.
 //   - bare `ccdad`. §9.2 gives that slot to a dashboard behind a TTY gate and a
 //     usage error otherwise, and which of those wants a daemon is that task's
 //     decision rather than one to make here in advance.

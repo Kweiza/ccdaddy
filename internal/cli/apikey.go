@@ -13,10 +13,8 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/store"
+	"github.com/Kweiza/ccdaddy/internal/switcher"
 )
-
-// apiKeyKind is the tokenRecord.Kind an API key is stored under.
-const apiKeyKind = "api-key"
 
 // settingsAPIKeyHelper is the settings key naming a command Claude Code runs to
 // obtain an API key.
@@ -86,23 +84,6 @@ func claudeAPIKeyEnvironment(cfg *cclink.GlobalConfig) identity.APIKeyEnvironmen
 	return env
 }
 
-// apiKeyOwner finds the managed account whose stored credential is key.
-func apiKeyOwner(accounts []store.Account, lookup func(string) (cclink.Blob, error), key string) (store.Account, bool) {
-	if key == "" {
-		return store.Account{}, false
-	}
-	for _, a := range accounts {
-		creds, err := lookup(a.UUID)
-		if err != nil {
-			continue
-		}
-		if rec, ok := tokenRecordOf(creds); ok && rec.Kind == apiKeyKind && rec.Token == key {
-			return a, true
-		}
-	}
-	return store.Account{}, false
-}
-
 // activateAPIKeyAccount makes an API-key account the credential Claude Code
 // uses. It is two writes to two files, and the ORDER is the safety property.
 //
@@ -124,64 +105,29 @@ func activateAPIKeyAccount(key string) error {
 	return cclink.ClearLogin()
 }
 
-// releaseManagedAPIKey removes a stored primaryApiKey that belongs to a ccdad
-// account, and reports whose it was.
-//
-// A key ccdad does not recognise is LEFT ALONE. It came from Claude Code's own
-// `/login`, it is inert for as long as the login being installed is live, and
-// deleting a credential ccdad did not create is not a side effect a switch gets
-// to have.
-//
-// The peek before the lock is not an optimisation of the ordinary path so much
-// as the whole point of it: on a machine with no API-key accounts there is
-// nothing to clear, and taking Claude Code's config lock on every switch to
-// discover that would put ccdad in the way of a running session for no reason.
-// The peek can race a key that appears after it -- and the cost of losing that
-// race is one stale inert key, which the next switch clears.
-func releaseManagedAPIKey(s *store.Store) (store.Account, bool, error) {
-	cfg, err := cclink.LoadGlobalConfig()
-	if err != nil {
-		return store.Account{}, false, err
-	}
-	stored, ok := cclink.PrimaryAPIKey(cfg)
-	if !ok {
-		return store.Account{}, false, nil
-	}
-	owner, ok := apiKeyOwner(s.Accounts(), s.Credentials, stored)
-	if !ok {
-		return store.Account{}, false, nil
-	}
-
-	var cleared bool
-	err = cclink.UpdateGlobalConfig(func(g *cclink.GlobalConfig) error {
-		// Re-checked under the lock rather than trusting the peek: Claude Code
-		// may have replaced the key while ccdad waited, and clearing THAT one
-		// would delete a credential ccdad never installed.
-		current, ok := cclink.PrimaryAPIKey(g)
-		if !ok || current != stored {
-			return nil
-		}
-		cleared = cclink.ClearPrimaryAPIKey(g)
-		return nil
-	})
-	if err != nil {
-		return store.Account{}, false, err
-	}
-	return owner, cleared, nil
-}
-
-// noteReleasedAPIKey reports a cleared key without failing the command. The
-// login it was clearing the way for is already installed by the time this runs.
-func noteReleasedAPIKey(cmd *cobra.Command, s *store.Store) {
-	owner, cleared, err := releaseManagedAPIKey(s)
-	if err != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(),
-			"note: the API key stored in Claude Code's config could not be cleared (%v); "+
-				"it stays inert while this login is live, but it becomes the login again if you sign out.\n", err)
+// noteCooldown reports an anti-flap stamp that could not be written. It never
+// fails the command: the credential is already installed by the time this runs,
+// so returning an error here would report a completed switch as a failure.
+func noteCooldown(cmd *cobra.Command, err error) {
+	if err == nil {
 		return
 	}
-	if cleared {
-		fmt.Fprintf(cmd.ErrOrStderr(), "Removed %s's API key from Claude Code's config.\n", owner.Label())
+	fmt.Fprintf(cmd.ErrOrStderr(),
+		"note: %v; the daemon may switch again sooner than it should.\n", err)
+}
+
+// noteReleasedAPIKey reports what the executor did with a stored key. It never
+// fails the command: the login it was clearing the way for is already installed
+// by the time this runs.
+func noteReleasedAPIKey(cmd *cobra.Command, res switcher.Result) {
+	if res.KeyErr != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(),
+			"note: the API key stored in Claude Code's config could not be cleared (%v); "+
+				"it stays inert while this login is live, but it becomes the login again if you sign out.\n", res.KeyErr)
+		return
+	}
+	if res.ClearedKey {
+		fmt.Fprintf(cmd.ErrOrStderr(), "Removed %s's API key from Claude Code's config.\n", res.ClearedKeyOwner.Label())
 	}
 }
 
@@ -272,7 +218,7 @@ func switchToAPIKey(cmd *cobra.Command, s *store.Store, target store.Account, ke
 	// login in exactly the same way, so this is not a new hazard — but there the
 	// machine is left holding another login, and here it is left holding none,
 	// which makes the difference worth a sentence.
-	_, managedLogin := attributeWith(live, s.Accounts(), s.Credentials)
+	_, managedLogin := switcher.AttributeFile(live, s.Accounts(), s.Credentials)
 	_, hadLogin := live["claudeAiOauth"]
 
 	if err := activateAPIKeyAccount(key); err != nil {
@@ -281,7 +227,7 @@ func switchToAPIKey(cmd *cobra.Command, s *store.Store, target store.Account, ke
 	if err := s.SetActive(target.UUID); err != nil {
 		return err
 	}
-	recordSwitch(cmd, target.UUID)
+	noteCooldown(cmd, switcher.RecordSwitch(target.UUID))
 
 	fmt.Fprintf(stderr, "Switched to %s.\n", target.Label())
 	switch {
@@ -328,7 +274,7 @@ func noteEnvKeyApproval(cmd *cobra.Command, env identity.APIKeyEnvironment) {
 			"'claude -p' and refused by an interactive session. This answer is for the interactive case.")
 }
 
-// attributeLive is attributeLogin for the callers that want the account and
+// attributeLive is switcher.AttributeLogin for the callers that want the account and
 // have no place to report the mechanism — `list` marking a row active, and
 // `disable` noticing it is talking about the live one.
 //
@@ -343,8 +289,8 @@ func attributeLive(live cclink.Blob, accounts []store.Account,
 	if err != nil {
 		cfg = nil
 	}
-	res := attributeLogin(live, accounts, lookup, claudeAPIKeyEnvironment(cfg))
-	return res.account, res.ok
+	res := switcher.AttributeLogin(live, accounts, lookup, claudeAPIKeyEnvironment(cfg))
+	return res.Account, res.OK
 }
 
 // projectSettingsFiles names the per-project settings Claude Code merges,

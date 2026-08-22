@@ -49,9 +49,9 @@ func Extract(live Blob) Blob {
 //
 // coworkRemoteDevice is unioned per organization sub-key rather than replaced
 // wholesale (spec 4.2.1), with live winning on any collision — see
-// unionObjects. This is defence-in-depth, not a path Capture can exercise:
+// unionObjects. This is defence-in-depth, not a path Extract can exercise:
 // Extract deliberately never puts coworkRemoteDevice in a snapshot (see its
-// doc comment), so an incoming blob built by this package's own Capture can
+// doc comment), so an incoming blob built by this package from a live file can
 // never carry the key. The union guards against any OTHER source of incoming
 // doing so — a hand-built call, or an export file written by some future
 // version of ccdad — so that even then, a wholesale replace cannot destroy

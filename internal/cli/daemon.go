@@ -123,7 +123,7 @@ func newDaemonRunCmd() *cobra.Command {
 			// A lost race for the singleton is not a failure: it means another
 			// daemon got there first, which is exactly what the singleton is
 			// for, and "the world is already as you asked" is 3.
-			err := runDaemon(cmd.Context(), daemon.Options{})
+			err := runDaemon(cmd.Context(), daemon.EngineOptions())
 			if errors.Is(err, daemon.ErrSingletonHeld) {
 				return WithCode(err, ExitNothingToDo)
 			}

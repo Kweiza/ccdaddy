@@ -11,6 +11,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/cclock"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
+	"github.com/Kweiza/ccdaddy/internal/pollpolicy"
 )
 
 // The on-disk usage cache: one document the daemon writes and every CLI
@@ -27,7 +28,12 @@ import (
 const (
 	// ServeTTL is spec §7.4's serveTTL: a reading younger than this is served
 	// from the cache with no fetch, `--refresh` included.
-	ServeTTL = 180 * time.Second
+	//
+	// It is an alias rather than a second spelling. §7.4 lives in
+	// internal/pollpolicy; a cache that carried its own copy of the number
+	// would be one edit away from serving readings the scheduler thinks are
+	// already stale.
+	ServeTTL = pollpolicy.ServeTTL
 
 	CacheFileName = "usage.json"
 	// cacheLockDir is a DIRECTORY, because that is what cclock's mutex is.
@@ -67,6 +73,14 @@ type PollState struct {
 	// LastRateLimited is when a 429 was last seen. The zero time means never,
 	// which is not the same as "an hour ago".
 	LastRateLimited time.Time `json:"last_rate_limited,omitempty"`
+	// LastBindingPct is the previous sample's binding utilization, and
+	// HasLastBinding whether there was one. §7.4 detects movement by comparing
+	// against it, so it is persisted for the same reason the backoff is: a
+	// restarted daemon with no baseline sees no movement, and one that treated
+	// "no baseline" as movement would drop the whole fleet to the urgent
+	// cadence on every start.
+	LastBindingPct float64 `json:"last_binding_pct,omitempty"`
+	HasLastBinding bool    `json:"has_last_binding,omitempty"`
 }
 
 // Entry is one account's cached reading.
