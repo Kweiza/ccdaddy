@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -83,7 +84,26 @@ func isolate(t *testing.T) string {
 	stubProfile(t, func(http.ResponseWriter, *http.Request) {
 		t.Error("this test reached the profile endpoint; call stubProfile if that is intended")
 	})
+
+	// The macOS Keychain is the third axis, and the only one that would be
+	// invisible from here: on a Linux machine the real probe answers
+	// "unsupported" without spawning anything, so a suite that left it alone
+	// would look perfectly isolated and would shell out to /usr/bin/security in
+	// every doctor test on a developer's Mac. Stubbed to the same answer on
+	// every host, so the report does not depend on who ran it; a test that means
+	// to describe a machine with a keychain calls stubKeychain by name.
+	stubKeychain(t, false, cclink.KeychainItem{}, cclink.ErrKeychainUnsupported)
 	return claude
+}
+
+// stubKeychain describes the legacy macOS Keychain one doctor run will see.
+func stubKeychain(t *testing.T, present bool, item cclink.KeychainItem, err error) {
+	t.Helper()
+	saved := keychainProbe
+	t.Cleanup(func() { keychainProbe = saved })
+	keychainProbe = func(context.Context) (bool, cclink.KeychainItem, error) {
+		return present, item, err
+	}
 }
 
 // suppressAutoStart replaces the auto-start hook with a no-op. See isolate.
