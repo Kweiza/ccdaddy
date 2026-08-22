@@ -103,18 +103,29 @@ func checkSwitchFlags(args []string, strategyName, model string) error {
 
 // installable reports whether an account can become the live login at all.
 //
-// A token account is stored but has no claudeAiOauth record, so there is
-// nothing for cclink to install. Left in the pool it can rank first and then
-// fail the switch, turning a strategy the user asked for into an exit 2 they
-// cannot act on — so it is excluded from the ranking rather than rejected after
-// winning it. An explicit `switch <ACCT>` still names one and still gets the
-// message that says which mechanism does read it.
+// A SETUP-TOKEN account is stored but has no claudeAiOauth record and no file
+// Claude Code would read it from, so there is nothing to install. Left in the
+// pool it can rank first and then fail the switch, turning a strategy the user
+// asked for into an exit 2 they cannot act on — so it is excluded from the
+// ranking rather than rejected after winning it. An explicit `switch <ACCT>`
+// still names one and still gets the message that says how to use it.
+//
+// An API-KEY account is installable: `switch` writes primaryApiKey into
+// ~/.claude.json and clears the login in front of it. It is still never chosen
+// by the engine, but for a different reason and in a different place —
+// strategy.eligible drops identity.KindAPIKey because an account with no quota
+// windows has nothing for a usage-aware ranking to compare. Saying so here
+// instead would state the same exclusion twice and let the two spellings
+// disagree.
 func installable(creds cclink.Blob, err error) bool {
 	if err != nil {
 		return false
 	}
-	_, hasOAuth := creds["claudeAiOauth"]
-	return hasOAuth
+	if _, hasOAuth := creds["claudeAiOauth"]; hasOAuth {
+		return true
+	}
+	rec, isToken := tokenRecordOf(creds)
+	return isToken && rec.Kind == apiKeyKind
 }
 
 // engineCandidates projects the store and the on-disk usage cache onto what the
@@ -349,13 +360,15 @@ func newSwitchCmd() *cobra.Command {
 				return err
 			}
 			// An account can hold both a browser login and a token. The OAuth
-			// record is what goes in the credentials file, so a token sitting
-			// beside it must not make the account look uninstallable — only an
-			// account with NO OAuth record is unswitchable.
+			// record is what goes in the credentials file and is the stronger
+			// credential, so a token sitting beside it must not divert the
+			// switch — only an account with NO OAuth record takes a token path.
 			if _, hasOAuth := creds["claudeAiOauth"]; !hasOAuth {
 				if rec, isToken := tokenRecordOf(creds); isToken {
-					return UsageError("%s is an %s account; Claude Code reads that credential from %s, so there is nothing to install in the credentials file",
-						target.Label(), rec.Kind, envVarFor(rec.Kind))
+					if rec.Kind != apiKeyKind {
+						return setupTokenRefusal(target.Label())
+					}
+					return switchToAPIKey(cmd, s, target, rec.Token, live, force)
 				}
 			}
 
@@ -381,6 +394,11 @@ func newSwitchCmd() *cobra.Command {
 				return err
 			}
 			recordSwitch(cmd, target.UUID)
+			// The login now in place outranks any stored API key, so nothing is
+			// broken by leaving one — but it would become the credential again
+			// the moment this login went away, silently and as a different
+			// account. Clear ccdad's own; a key ccdad did not install stays.
+			noteReleasedAPIKey(cmd, s)
 
 			fmt.Fprintf(cmd.ErrOrStderr(), "Switched to %s.\n", target.Label())
 			// Claude Code reads CLAUDE_CODE_OAUTH_TOKEN in preference to the

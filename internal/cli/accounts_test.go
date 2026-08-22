@@ -344,7 +344,7 @@ func TestAWriteBlockedOnTheStoreLockExitsOne(t *testing.T) {
 	// Another process's hold. gofrs is used directly rather than through the
 	// store so this is a second open file description, which is what makes
 	// flock(2) exclude it.
-	held := flock.New(store.LockPath())
+	held := flock.New(mustPath(store.LockPath()))
 	locked, err := held.TryLock()
 	if err != nil || !locked {
 		t.Fatalf("TryLock() = %v, %v; want the lock", locked, err)

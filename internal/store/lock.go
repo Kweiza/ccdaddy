@@ -112,7 +112,13 @@ var (
 
 // LockPath is the store lock's path. `ccdad doctor` reports the layout, so the
 // name lives in one place rather than in a string literal per reader.
-func LockPath() string { return filepath.Join(ccpath.StoreHome(), lockFileName) }
+func LockPath() (string, error) {
+	root, err := ccpath.StoreHome()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(root, lockFileName), nil
+}
 
 // defaultTryLock takes the store lock at path without blocking.
 //

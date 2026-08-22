@@ -43,6 +43,29 @@ func isolate(t *testing.T) string {
 	// that means to describe a machine with a browser calls stubEnvironment.
 	stubEnvironment(t, false, false)
 
+	// Claude Code's auth environment is cleared for the same reason the
+	// filesystem is sandboxed. ccdad's attribution reads every one of these to
+	// decide which credential a session will use, so a developer who exports
+	// ANTHROPIC_API_KEY in their shell would otherwise get answers out of this
+	// suite that CI never sees — and the failure would look like a flake in
+	// attribution rather than an unsandboxed input.
+	for _, v := range []string{
+		"ANTHROPIC_API_KEY",
+		"ANTHROPIC_AUTH_TOKEN",
+		"CLAUDE_CODE_OAUTH_TOKEN",
+		"CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
+		"CLAUDE_CODE_SIMPLE",
+	} {
+		t.Setenv(v, "")
+	}
+
+	// The project settings files resolve against the working directory, which
+	// under `go test` is this package's source tree. Empty them so the answer
+	// does not depend on what the repository happens to contain.
+	savedSettings := projectSettingsFiles
+	t.Cleanup(func() { projectSettingsFiles = savedSettings })
+	projectSettingsFiles = func() []string { return nil }
+
 	// Auto-start is suppressed for the whole suite, and this is a hard
 	// requirement rather than tidiness: nothing else stops a spawn, and an
 	// unsuppressed one detaches a REAL daemon pinned to the t.TempDir() above,
@@ -132,8 +155,8 @@ func stubEnvironment(t *testing.T, tty, browser bool) {
 // switch really did not.
 func assertNoLiveCredentials(t *testing.T) {
 	t.Helper()
-	if _, err := os.Stat(ccpath.CredentialsPath()); !os.IsNotExist(err) {
-		t.Fatalf("the live credentials file exists at %s; this path must not write it", ccpath.CredentialsPath())
+	if _, err := os.Stat(mustPath(ccpath.CredentialsPath())); !os.IsNotExist(err) {
+		t.Fatalf("the live credentials file exists at %s; this path must not write it", mustPath(ccpath.CredentialsPath()))
 	}
 }
 
@@ -187,7 +210,7 @@ func seedCreditAccount(t *testing.T, uuid, email string) {
 // something Claude Code earned during use rather than at login.
 func addLiveKey(t *testing.T, key, rawValue string) {
 	t.Helper()
-	raw, err := os.ReadFile(ccpath.CredentialsPath())
+	raw, err := os.ReadFile(mustPath(ccpath.CredentialsPath()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +223,7 @@ func addLiveKey(t *testing.T, key, rawValue string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(ccpath.CredentialsPath(), encoded, 0o600); err != nil {
+	if err := os.WriteFile(mustPath(ccpath.CredentialsPath()), encoded, 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -210,7 +233,7 @@ func addLiveKey(t *testing.T, key, rawValue string) {
 // Claude Code, or a restore from a backup.
 func writeLiveFile(t *testing.T, raw string) {
 	t.Helper()
-	if err := os.WriteFile(ccpath.CredentialsPath(), []byte(raw), 0o600); err != nil {
+	if err := os.WriteFile(mustPath(ccpath.CredentialsPath()), []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -23,7 +23,7 @@ func at(s string) time.Time {
 // consumer of the §9.4 contract sees it.
 func readRaw(t *testing.T) map[string]any {
 	t.Helper()
-	body, err := os.ReadFile(StatusPath())
+	body, err := os.ReadFile(mustPath(StatusPath()))
 	if err != nil {
 		t.Fatalf("reading status.json: %v", err)
 	}
@@ -36,7 +36,7 @@ func readRaw(t *testing.T) map[string]any {
 
 func TestStatusWriterPublishesTheDocument(t *testing.T) {
 	isolate(t)
-	if err := os.MkdirAll(filepath.Dir(StatusPath()), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(mustPath(StatusPath())), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	now := at("2026-08-22T05:00:00Z")
@@ -80,14 +80,14 @@ func TestStatusWriterPublishesTheDocument(t *testing.T) {
 // time is worse than a consumer seeing no field at all.
 func TestStatusOmitsUnsetTimes(t *testing.T) {
 	isolate(t)
-	if err := os.MkdirAll(filepath.Dir(StatusPath()), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(mustPath(StatusPath())), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	w := NewStatusWriter()
 	if _, err := w.Write(Status{PID: 1, Accounts: []AccountStatus{{UUID: "u"}}}, at("2026-08-22T05:00:00Z")); err != nil {
 		t.Fatal(err)
 	}
-	body, err := os.ReadFile(StatusPath())
+	body, err := os.ReadFile(mustPath(StatusPath()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestStatusOmitsUnsetTimes(t *testing.T) {
 
 func TestStatusWriterSkipsAnUnchangedDocument(t *testing.T) {
 	isolate(t)
-	if err := os.MkdirAll(filepath.Dir(StatusPath()), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(mustPath(StatusPath())), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	s := Status{PID: 7, Accounts: []AccountStatus{{UUID: "u", State: StateCandidate}}}
@@ -111,7 +111,7 @@ func TestStatusWriterSkipsAnUnchangedDocument(t *testing.T) {
 	if _, err := w.Write(s, at("2026-08-22T05:00:00Z")); err != nil {
 		t.Fatal(err)
 	}
-	before, err := os.Stat(StatusPath())
+	before, err := os.Stat(mustPath(StatusPath()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestStatusWriterSkipsAnUnchangedDocument(t *testing.T) {
 	if got := readRaw(t)["generatedAt"]; got != "2026-08-22T05:00:00Z" {
 		t.Errorf("generatedAt = %v after a skipped write, want the earlier stamp", got)
 	}
-	after, err := os.Stat(StatusPath())
+	after, err := os.Stat(mustPath(StatusPath()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +140,7 @@ func TestStatusWriterSkipsAnUnchangedDocument(t *testing.T) {
 
 func TestStatusWriterPublishesAChange(t *testing.T) {
 	isolate(t)
-	if err := os.MkdirAll(filepath.Dir(StatusPath()), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(mustPath(StatusPath())), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	w := NewStatusWriter()
@@ -169,7 +169,7 @@ func TestStatusWriterPublishesAChange(t *testing.T) {
 // reporting "unchanged".
 func TestStatusWriterRepublishesWhenTheFileIsGone(t *testing.T) {
 	isolate(t)
-	if err := os.MkdirAll(filepath.Dir(StatusPath()), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(mustPath(StatusPath())), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	s := Status{PID: 7}
@@ -177,7 +177,7 @@ func TestStatusWriterRepublishesWhenTheFileIsGone(t *testing.T) {
 	if _, err := w.Write(s, at("2026-08-22T05:00:00Z")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Remove(StatusPath()); err != nil {
+	if err := os.Remove(mustPath(StatusPath())); err != nil {
 		t.Fatal(err)
 	}
 	wrote, err := w.Write(s, at("2026-08-22T05:00:01Z"))
@@ -187,14 +187,14 @@ func TestStatusWriterRepublishesWhenTheFileIsGone(t *testing.T) {
 	if !wrote {
 		t.Fatal("the writer skipped a document that is no longer on disk")
 	}
-	if _, err := os.Stat(StatusPath()); err != nil {
+	if _, err := os.Stat(mustPath(StatusPath())); err != nil {
 		t.Fatalf("status.json was not restored: %v", err)
 	}
 }
 
 func TestStatusWriterRepublishesWhenTheFileWasTruncated(t *testing.T) {
 	isolate(t)
-	if err := os.MkdirAll(filepath.Dir(StatusPath()), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(mustPath(StatusPath())), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	s := Status{PID: 7}
@@ -202,7 +202,7 @@ func TestStatusWriterRepublishesWhenTheFileWasTruncated(t *testing.T) {
 	if _, err := w.Write(s, at("2026-08-22T05:00:00Z")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(StatusPath(), []byte("{}"), 0o600); err != nil {
+	if err := os.WriteFile(mustPath(StatusPath()), []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	wrote, err := w.Write(s, at("2026-08-22T05:00:01Z"))
@@ -222,13 +222,13 @@ func TestStatusFileIsPrivate(t *testing.T) {
 		t.Skip("§10.3: chmod is a no-op on Windows and nothing may depend on the mode")
 	}
 	isolate(t)
-	if err := os.MkdirAll(filepath.Dir(StatusPath()), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(mustPath(StatusPath())), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := NewStatusWriter().Write(Status{PID: 1}, at("2026-08-22T05:00:00Z")); err != nil {
 		t.Fatal(err)
 	}
-	info, err := os.Stat(StatusPath())
+	info, err := os.Stat(mustPath(StatusPath()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +244,7 @@ func TestStatusWriterCreatesTheStore(t *testing.T) {
 	if _, err := NewStatusWriter().Write(Status{PID: 1}, at("2026-08-22T05:00:00Z")); err != nil {
 		t.Fatalf("Write into a store that does not exist yet: %v", err)
 	}
-	if _, err := os.Stat(StatusPath()); err != nil {
+	if _, err := os.Stat(mustPath(StatusPath())); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -255,13 +255,13 @@ func TestStatusWriterCreatesTheStore(t *testing.T) {
 // know.
 func TestReadStatusIgnoresUnknownFields(t *testing.T) {
 	isolate(t)
-	if err := os.MkdirAll(filepath.Dir(StatusPath()), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(mustPath(StatusPath())), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	body := `{"schemaVersion":9,"generatedAt":"2026-08-22T05:00:00Z","pid":11,
 	          "activeUuid":"uuid-a","somethingV9Added":{"deep":[1,2,3]},
 	          "accounts":[{"uuid":"uuid-a","state":"orbiting","perAccountV9Field":true}]}`
-	if err := os.WriteFile(StatusPath(), []byte(body), 0o600); err != nil {
+	if err := os.WriteFile(mustPath(StatusPath()), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -300,10 +300,10 @@ func TestReadStatusReportsAbsenceRatherThanFailing(t *testing.T) {
 
 func TestReadStatusRefusesADocumentWithNoSchemaVersion(t *testing.T) {
 	isolate(t)
-	if err := os.MkdirAll(filepath.Dir(StatusPath()), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(mustPath(StatusPath())), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(StatusPath(), []byte(`{"pid":11}`), 0o600); err != nil {
+	if err := os.WriteFile(mustPath(StatusPath()), []byte(`{"pid":11}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok, err := ReadStatus(); err == nil || ok {
@@ -313,10 +313,10 @@ func TestReadStatusRefusesADocumentWithNoSchemaVersion(t *testing.T) {
 
 func TestReadStatusRefusesAnUnparseableDocument(t *testing.T) {
 	isolate(t)
-	if err := os.MkdirAll(filepath.Dir(StatusPath()), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(mustPath(StatusPath())), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(StatusPath(), []byte("not json"), 0o600); err != nil {
+	if err := os.WriteFile(mustPath(StatusPath()), []byte("not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok, err := ReadStatus(); err == nil || ok {
@@ -326,7 +326,7 @@ func TestReadStatusRefusesAnUnparseableDocument(t *testing.T) {
 
 func TestStatusRoundTrips(t *testing.T) {
 	isolate(t)
-	if err := os.MkdirAll(filepath.Dir(StatusPath()), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(mustPath(StatusPath())), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	want := Status{
@@ -502,7 +502,7 @@ func TestObserveCarriesAnUnreadableDocumentWithoutFailing(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(StatusPath(), []byte("{{{"), 0o600); err != nil {
+	if err := os.WriteFile(mustPath(StatusPath()), []byte("{{{"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	r, err := Observe()

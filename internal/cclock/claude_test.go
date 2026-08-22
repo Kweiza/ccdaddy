@@ -4,6 +4,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -35,7 +37,7 @@ func withCredentialHome(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := filepath.EvalSymlinks(ccpath.CredentialHome()); got != resolved {
+	if got, _ := filepath.EvalSymlinks(mustPath(ccpath.CredentialHome())); got != resolved {
 		t.Fatalf("credential home is %q, not the sandbox %q — these tests would touch the real one", got, resolved)
 	}
 	return dir
@@ -44,11 +46,11 @@ func withCredentialHome(t *testing.T) string {
 func TestLockPaths(t *testing.T) {
 	dir := withCredentialHome(t)
 
-	if got, want := StorageWriteLockDir(), filepath.Join(dir, ".storage-write.lock"); got != want {
-		t.Fatalf("StorageWriteLockDir() = %q, want %q", got, want)
+	if got, want := mustPath(StorageWriteLockDir()), filepath.Join(dir, ".storage-write.lock"); got != want {
+		t.Fatalf("mustPath(StorageWriteLockDir()) = %q, want %q", got, want)
 	}
-	if got, want := OAuthRefreshLockDir(), filepath.Join(dir, ".oauth_refresh.lock"); got != want {
-		t.Fatalf("OAuthRefreshLockDir() = %q, want %q", got, want)
+	if got, want := mustPath(OAuthRefreshLockDir()), filepath.Join(dir, ".oauth_refresh.lock"); got != want {
+		t.Fatalf("mustPath(OAuthRefreshLockDir()) = %q, want %q", got, want)
 	}
 	// The legacy lock is a sibling of the directory, named after its REAL path —
 	// resolved, which is what Claude Code computes. Asserting the unresolved
@@ -58,8 +60,8 @@ func TestLockPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := LegacyRefreshLockDir(), resolvedDir+".lock"; got != want {
-		t.Fatalf("LegacyRefreshLockDir() = %q, want %q", got, want)
+	if got, want := mustPath(LegacyRefreshLockDir()), resolvedDir+".lock"; got != want {
+		t.Fatalf("mustPath(LegacyRefreshLockDir()) = %q, want %q", got, want)
 	}
 }
 
@@ -70,10 +72,10 @@ func TestAcquireCredentialsTakesAllThree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AcquireCredentials() = %v, want nil", err)
 	}
-	if got := held.CredentialHome(); got != dir {
-		t.Fatalf("held.CredentialHome() = %q, want %q", got, dir)
+	if got := held.Scope(); got != dir {
+		t.Fatalf("held.Scope() = %q, want %q", got, dir)
 	}
-	for _, d := range []string{OAuthRefreshLockDir(), LegacyRefreshLockDir(), StorageWriteLockDir()} {
+	for _, d := range []string{mustPath(OAuthRefreshLockDir()), mustPath(LegacyRefreshLockDir()), mustPath(StorageWriteLockDir())} {
 		if _, err := os.Stat(d); err != nil {
 			t.Fatalf("lock %s not held: %v", filepath.Base(d), err)
 		}
@@ -81,7 +83,7 @@ func TestAcquireCredentialsTakesAllThree(t *testing.T) {
 	if err := held.Release(); err != nil {
 		t.Fatalf("Release() = %v, want nil", err)
 	}
-	for _, d := range []string{OAuthRefreshLockDir(), LegacyRefreshLockDir(), StorageWriteLockDir()} {
+	for _, d := range []string{mustPath(OAuthRefreshLockDir()), mustPath(LegacyRefreshLockDir()), mustPath(StorageWriteLockDir())} {
 		if _, err := os.Stat(d); !os.IsNotExist(err) {
 			t.Fatalf("lock %s still held after Release", filepath.Base(d))
 		}
@@ -94,7 +96,7 @@ func TestAcquireCredentialsRollsBackOnContention(t *testing.T) {
 
 	// Occupy the SECOND lock in the order, so the first is taken and must be
 	// given back when the second fails.
-	blocker, err := Acquire(LegacyRefreshLockDir(), Options{Stale: time.Minute, Timeout: time.Second, TouchInterval: 20 * time.Millisecond})
+	blocker, err := Acquire(mustPath(LegacyRefreshLockDir()), Options{Stale: time.Minute, Timeout: time.Second, TouchInterval: 20 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,10 +106,10 @@ func TestAcquireCredentialsRollsBackOnContention(t *testing.T) {
 	if !errors.Is(err, ErrTimeout) {
 		t.Fatalf("AcquireCredentials() = %v, want an error satisfying errors.Is(err, ErrTimeout)", err)
 	}
-	if _, err := os.Stat(OAuthRefreshLockDir()); !os.IsNotExist(err) {
+	if _, err := os.Stat(mustPath(OAuthRefreshLockDir())); !os.IsNotExist(err) {
 		t.Fatal("primary refresh lock leaked after a failed acquisition")
 	}
-	if _, err := os.Stat(StorageWriteLockDir()); !os.IsNotExist(err) {
+	if _, err := os.Stat(mustPath(StorageWriteLockDir())); !os.IsNotExist(err) {
 		t.Fatal("storage-write lock was taken despite the failure")
 	}
 }
@@ -151,15 +153,15 @@ func TestHeldCompromisedFiresOnMemberTakeover(t *testing.T) {
 	dir := withCredentialHome(t)
 
 	opts := Options{Stale: time.Minute, Timeout: time.Second, TouchInterval: 20 * time.Millisecond}
-	oauth, err := Acquire(OAuthRefreshLockDir(), opts)
+	oauth, err := Acquire(mustPath(OAuthRefreshLockDir()), opts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacy, err := Acquire(LegacyRefreshLockDir(), opts)
+	legacy, err := Acquire(mustPath(LegacyRefreshLockDir()), opts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	storage, err := Acquire(StorageWriteLockDir(), opts)
+	storage, err := Acquire(mustPath(StorageWriteLockDir()), opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +177,7 @@ func TestHeldCompromisedFiresOnMemberTakeover(t *testing.T) {
 	// the same way TestTouchDetectsTakeover simulates a single Lock's
 	// takeover: remove and recreate the directory as a new owner would.
 	time.Sleep(50 * time.Millisecond)
-	legacyDir := LegacyRefreshLockDir()
+	legacyDir := mustPath(LegacyRefreshLockDir())
 	if err := os.RemoveAll(legacyDir); err != nil {
 		t.Fatal(err)
 	}
@@ -203,15 +205,15 @@ func TestHeldReleaseDoesNotMaskCompromise(t *testing.T) {
 	dir := withCredentialHome(t)
 
 	opts := Options{Stale: time.Minute, Timeout: time.Second, TouchInterval: 20 * time.Millisecond}
-	oauth, err := Acquire(OAuthRefreshLockDir(), opts)
+	oauth, err := Acquire(mustPath(OAuthRefreshLockDir()), opts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacy, err := Acquire(LegacyRefreshLockDir(), opts)
+	legacy, err := Acquire(mustPath(LegacyRefreshLockDir()), opts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	storage, err := Acquire(StorageWriteLockDir(), opts)
+	storage, err := Acquire(mustPath(StorageWriteLockDir()), opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +224,7 @@ func TestHeldReleaseDoesNotMaskCompromise(t *testing.T) {
 	// in reverse order. os.Remove requires an empty directory, so leaving a
 	// stray file inside makes its own release fail deterministically and
 	// portably, without depending on privilege.
-	storageDir := StorageWriteLockDir()
+	storageDir := mustPath(StorageWriteLockDir())
 	if err := os.WriteFile(filepath.Join(storageDir, "stray"), []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +232,7 @@ func TestHeldReleaseDoesNotMaskCompromise(t *testing.T) {
 	// Simulate a taker stealing the FIRST lock in acquisition order (the
 	// primary refresh lock), which Release visits LAST.
 	time.Sleep(50 * time.Millisecond)
-	oauthDir := OAuthRefreshLockDir()
+	oauthDir := mustPath(OAuthRefreshLockDir())
 	if err := os.RemoveAll(oauthDir); err != nil {
 		t.Fatal(err)
 	}
@@ -256,15 +258,15 @@ func TestHeldReleaseIsIdempotent(t *testing.T) {
 	dir := withCredentialHome(t)
 
 	opts := Options{Stale: time.Minute, Timeout: time.Second, TouchInterval: 20 * time.Millisecond}
-	oauth, err := Acquire(OAuthRefreshLockDir(), opts)
+	oauth, err := Acquire(mustPath(OAuthRefreshLockDir()), opts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacy, err := Acquire(LegacyRefreshLockDir(), opts)
+	legacy, err := Acquire(mustPath(LegacyRefreshLockDir()), opts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	storage, err := Acquire(StorageWriteLockDir(), opts)
+	storage, err := Acquire(mustPath(StorageWriteLockDir()), opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +276,7 @@ func TestHeldReleaseIsIdempotent(t *testing.T) {
 	// second call silently reporting nil (F4-1's exact bug) is visible
 	// rather than trivially "nil equals nil".
 	time.Sleep(50 * time.Millisecond)
-	legacyDir := LegacyRefreshLockDir()
+	legacyDir := mustPath(LegacyRefreshLockDir())
 	if err := os.RemoveAll(legacyDir); err != nil {
 		t.Fatal(err)
 	}
@@ -335,7 +337,7 @@ func TestAcquireCredentialsRollbackSurfacesCompromise(t *testing.T) {
 
 	// Occupy the SECOND lock so AcquireCredentials blocks there after taking
 	// the first, giving the goroutine below time to steal the first.
-	blocker, err := Acquire(LegacyRefreshLockDir(), Options{Stale: time.Minute, Timeout: 2 * time.Second, TouchInterval: 20 * time.Millisecond})
+	blocker, err := Acquire(mustPath(LegacyRefreshLockDir()), Options{Stale: time.Minute, Timeout: 2 * time.Second, TouchInterval: 20 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -345,7 +347,7 @@ func TestAcquireCredentialsRollbackSurfacesCompromise(t *testing.T) {
 	go func() {
 		defer close(done)
 		time.Sleep(150 * time.Millisecond)
-		oauthDir := OAuthRefreshLockDir()
+		oauthDir := mustPath(OAuthRefreshLockDir())
 		_ = os.RemoveAll(oauthDir)
 		_ = os.Mkdir(oauthDir, 0o700)
 	}()
@@ -365,7 +367,7 @@ func TestHeldNilReceiverIsSafe(t *testing.T) {
 	if err := held.Release(); err != nil {
 		t.Fatalf("nil Held Release() = %v, want nil", err)
 	}
-	if got := held.CredentialHome(); got != "" {
+	if got := held.Scope(); got != "" {
 		t.Fatalf("nil Held CredentialHome() = %q, want empty", got)
 	}
 	select {
@@ -398,11 +400,62 @@ func TestLegacyRefreshLockDirResolvesSymlinks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := LegacyRefreshLockDir()
+	got := mustPath(LegacyRefreshLockDir())
 	if got != resolved+".lock" {
-		t.Fatalf("LegacyRefreshLockDir() = %q, want the resolved %q", got, resolved+".lock")
+		t.Fatalf("mustPath(LegacyRefreshLockDir()) = %q, want the resolved %q", got, resolved+".lock")
 	}
 	if got == viaLink+".lock" {
 		t.Fatal("the lock name was built from the unresolved path, so ccdad and Claude Code would take different locks")
+	}
+}
+
+// clearHomeAndConfigDirs removes every variable the credential and config paths
+// resolve from, which is the only way to make ccpath report a failure.
+func clearHomeAndConfigDirs(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", "")
+	} else {
+		t.Setenv("HOME", "")
+	}
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	os.Unsetenv("CLAUDE_SECURESTORAGE_CONFIG_DIR")
+}
+
+// Both acquisitions must refuse an unresolvable home, and the assertion that
+// carries the weight is the second one: the working directory must be left
+// untouched.
+//
+// The two fail differently if the check is dropped, which is why this is not
+// one assertion. AcquireCredentials would call os.MkdirAll("") and get ENOENT,
+// so it errors either way and only its DIAGNOSIS changes — "creating credential
+// home" sends a user looking at permissions on a directory that was never
+// named. AcquireGlobalConfig has no such accident to fall back on:
+// filepath.Dir("") is ".", MkdirAll(".") succeeds, and it would take a lock
+// called ".lock" in whatever directory ccdad was run from — silently, and
+// excluding nothing, since Claude Code locks the real one.
+func TestAcquireRefusesWhenTheHomeCannotBeResolved(t *testing.T) {
+	work := t.TempDir()
+	t.Chdir(work)
+	clearHomeAndConfigDirs(t)
+
+	if held, err := AcquireCredentials(time.Second); err == nil {
+		_ = held.Release()
+		t.Error("AcquireCredentials() = nil; want a refusal when the credential home cannot be resolved")
+	} else if strings.Contains(err.Error(), "creating credential home") {
+		t.Errorf("AcquireCredentials() = %q; want ccpath's diagnosis, not a mkdir failure on the empty path", err)
+	}
+
+	if held, err := AcquireGlobalConfig(time.Second); err == nil {
+		_ = held.Release()
+		t.Error("AcquireGlobalConfig() = nil; want a refusal when the config path cannot be resolved")
+	}
+
+	entries, err := os.ReadDir(work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		t.Errorf("a refused acquisition created %q in the working directory", e.Name())
 	}
 }

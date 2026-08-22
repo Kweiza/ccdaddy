@@ -132,7 +132,14 @@ func newDoctorCmd() *cobra.Command {
 
 // runChecks is the whole diagnostic, in a fixed order so two runs are diffable.
 func runChecks() []check {
-	root := ccpath.StoreHome()
+	root, rootErr := ccpath.StoreHome()
+	if rootErr != nil {
+		// Every other check derives its path from this one, so there is nothing
+		// further to report and reporting each of them as "skipped" would bury
+		// the single fact that explains all of them. The fixed order the rest of
+		// this function keeps is a property of a run that got that far.
+		return []check{{"store", levelFail, rootErr.Error()}}
+	}
 	storeCheck, storeUsable := checkStore(root)
 
 	live, liveErr := cclink.Load()
@@ -272,7 +279,7 @@ func checkPidfile(usable bool) check {
 	pid, ok, err := daemon.ReadPID()
 	switch {
 	case err != nil:
-		return check{"pidfile", levelFail, fmt.Sprintf("%s is damaged: %v", daemon.PIDPath(), err)}
+		return check{"pidfile", levelFail, fmt.Sprintf("%s is damaged: %v", namePath(daemon.PIDPath()), err)}
 	case !ok:
 		return check{"pidfile", levelOK, "no pid recorded, which is what a stopped or never-started daemon leaves"}
 	}
@@ -284,7 +291,7 @@ func checkPidfile(usable bool) check {
 
 func checkStatusFile(report daemon.Report) check {
 	if report.StatusErr != nil {
-		return check{"status-file", levelFail, fmt.Sprintf("%s cannot be read: %v", daemon.StatusPath(), report.StatusErr)}
+		return check{"status-file", levelFail, fmt.Sprintf("%s cannot be read: %v", namePath(daemon.StatusPath()), report.StatusErr)}
 	}
 	if !report.HasStatus {
 		return check{"status-file", levelOK, "no daemon has published one"}
@@ -309,7 +316,7 @@ func checkUsageCache(usable bool) check {
 		return check{"usage-cache", levelWarn, fmt.Sprintf(
 			"%v — every account will read as unknown until it is rewritten", cerr)}
 	}
-	return check{"usage-cache", levelOK, usage.CachePath()}
+	return check{"usage-cache", levelOK, namePath(usage.CachePath())}
 }
 
 // checkEngineState is the anti-flap state: cooldown, last switch, quarantines.
@@ -328,7 +335,7 @@ func checkEngineState(usable bool) check {
 		return check{"engine-state", levelWarn, fmt.Sprintf(
 			"%v — the cooldown and every quarantine are being ignored until it is rewritten", serr)}
 	}
-	return check{"engine-state", levelOK, strategy.StatePath()}
+	return check{"engine-state", levelOK, namePath(strategy.StatePath())}
 }
 
 // checkConfig answers whether ~/.ccdad/config.toml is doing anything.
@@ -347,7 +354,10 @@ func checkConfig(usable bool) check {
 	if !usable {
 		return check{"config", levelSkipped, "there is no store to check"}
 	}
-	path := config.Path()
+	path, perr := config.Path()
+	if perr != nil {
+		return check{"config", levelFail, perr.Error()}
+	}
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 		return check{"config", levelOK, fmt.Sprintf(
 			"no %s, so the engine runs on the built-in defaults", config.FileName)}
@@ -379,15 +389,22 @@ func checkConfig(usable bool) check {
 // repair the last of those, because overwriting destroys the machine-scoped keys
 // still in it. So this is the place a user finds out.
 func checkClaudeCode(live cclink.Blob, err error) check {
-	home := ccpath.CredentialHome()
+	// Resolved independently of the store root: CCDAD_HOME can be set while
+	// HOME is not, which resolves ccdad's own tree and leaves Claude Code's
+	// unlocatable — a real drift state, and one only this check can name.
+	home, homeErr := ccpath.CredentialHome()
+	if homeErr != nil {
+		return check{"claude-code", levelFail, homeErr.Error()}
+	}
+	path := filepath.Join(home, ccpath.CredentialsFile)
 	if err != nil {
-		return check{"claude-code", levelFail, fmt.Sprintf("%s: %v", ccpath.CredentialsPath(), err)}
+		return check{"claude-code", levelFail, fmt.Sprintf("%s: %v", path, err)}
 	}
 	if len(live) == 0 {
 		return check{"claude-code", levelWarn, fmt.Sprintf(
 			"no login in %s — Claude Code has not logged in on this machine, or it keeps its credentials elsewhere", home)}
 	}
-	return check{"claude-code", levelOK, fmt.Sprintf("%s reads as %d top-level keys", ccpath.CredentialsPath(), len(live))}
+	return check{"claude-code", levelOK, fmt.Sprintf("%s reads as %d top-level keys", path, len(live))}
 }
 
 // checkCredentialKeys is §4.3's "on startup" half, and the last part of §4.3

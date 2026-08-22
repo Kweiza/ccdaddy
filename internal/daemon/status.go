@@ -158,7 +158,7 @@ func (w *StatusWriter) Write(s Status, now time.Time) (bool, error) {
 	s.GeneratedAt = time.Time{}
 	probe, err := json.Marshal(s)
 	if err != nil {
-		return false, fmt.Errorf("encoding %s: %w", statusFileName, err)
+		return false, fmt.Errorf("encoding %s: %w", StatusFileName, err)
 	}
 	if w.published && bytes.Equal(probe, w.last) && w.onDisk() {
 		return false, nil
@@ -167,12 +167,12 @@ func (w *StatusWriter) Write(s Status, now time.Time) (bool, error) {
 	s.GeneratedAt = now
 	encoded, err := json.Marshal(s)
 	if err != nil {
-		return false, fmt.Errorf("encoding %s: %w", statusFileName, err)
+		return false, fmt.Errorf("encoding %s: %w", StatusFileName, err)
 	}
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return false, fmt.Errorf("creating the ccdad store: %w", err)
 	}
-	if err := cclink.WriteFileAtomic(StatusPath(), encoded, statusFilePerm); err != nil {
+	if err := cclink.WriteFileAtomic(filepath.Join(root, StatusFileName), encoded, statusFilePerm); err != nil {
 		return false, err
 	}
 	w.last, w.size, w.published = probe, int64(len(encoded)), true
@@ -181,8 +181,15 @@ func (w *StatusWriter) Write(s Status, now time.Time) (bool, error) {
 
 // onDisk reports whether the file still looks like what was last published. A
 // stat per tick is cheap; the write it avoids is not.
+// A path that cannot be resolved reports "not on disk", which makes the caller
+// attempt the write — and that is where the resolution failure is reported as
+// an error rather than swallowed as a skipped tick.
 func (w *StatusWriter) onDisk() bool {
-	info, err := os.Stat(StatusPath())
+	path, err := StatusPath()
+	if err != nil {
+		return false
+	}
+	info, err := os.Stat(path)
 	return err == nil && info.Size() == w.size
 }
 
@@ -206,25 +213,26 @@ func (w *StatusWriter) onDisk() bool {
 // catching the pre-rename inode is legitimate rather than something to guard
 // against.
 func ReadStatus() (Status, bool, error) {
-	if _, err := storeRoot(); err != nil {
+	root, err := storeRoot()
+	if err != nil {
 		return Status{}, false, err
 	}
-	body, err := os.ReadFile(StatusPath())
+	body, err := os.ReadFile(filepath.Join(root, StatusFileName))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return Status{}, false, nil
 		}
-		return Status{}, false, fmt.Errorf("reading %s: %w", statusFileName, err)
+		return Status{}, false, fmt.Errorf("reading %s: %w", StatusFileName, err)
 	}
 	var s Status
 	if err := json.Unmarshal(body, &s); err != nil {
-		return Status{}, false, fmt.Errorf("parsing %s: %w", statusFileName, err)
+		return Status{}, false, fmt.Errorf("parsing %s: %w", StatusFileName, err)
 	}
 	// A document with no schemaVersion was not written by any ccdad. Anything
 	// from 1 upwards is accepted, including versions from the future: refusing
 	// one is exactly the break the additive contract exists to prevent.
 	if s.SchemaVersion < 1 {
-		return Status{}, false, fmt.Errorf("%s carries no schemaVersion, so it was not written by ccdad", statusFileName)
+		return Status{}, false, fmt.Errorf("%s carries no schemaVersion, so it was not written by ccdad", StatusFileName)
 	}
 	return s, true, nil
 }
@@ -248,10 +256,10 @@ func SweepStatusTemps() error {
 		return err
 	}
 	// The pattern is WriteFileAtomic's own: filepath.Base(path) + ".tmp-*".
-	matches, err := filepath.Glob(filepath.Join(root, statusFileName+".tmp-*"))
+	matches, err := filepath.Glob(filepath.Join(root, StatusFileName+".tmp-*"))
 	if err != nil {
 		// Glob only fails on a malformed pattern, and this one is a constant.
-		return fmt.Errorf("scanning for %s temp files: %w", statusFileName, err)
+		return fmt.Errorf("scanning for %s temp files: %w", StatusFileName, err)
 	}
 	var errs []error
 	for _, path := range matches {
@@ -260,7 +268,7 @@ func SweepStatusTemps() error {
 		}
 	}
 	if len(errs) > 0 {
-		return fmt.Errorf("sweeping %s temp files: %w", statusFileName, errors.Join(errs...))
+		return fmt.Errorf("sweeping %s temp files: %w", StatusFileName, errors.Join(errs...))
 	}
 	return nil
 }

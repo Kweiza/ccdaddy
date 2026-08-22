@@ -82,15 +82,26 @@ func (c Config) RankOptions(now time.Time) strategy.Options {
 }
 
 // Path is where the config lives.
-func Path() string { return filepath.Join(ccpath.StoreHome(), FileName) }
+func Path() (string, error) {
+	root, err := ccpath.StoreHome()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(root, FileName), nil
+}
 
 // storeRoot refuses a relative store root, exactly as store.Open and
-// strategy.LoadState do: ccpath.StoreHome falls back to a bare ".ccdad" when
-// the home directory cannot be resolved, and a relative root means the config
-// comes from whatever directory ccdad happened to be run in — a different
-// answer per invocation, which for a threshold is worse than no answer.
+// strategy.LoadState do. ccpath.StoreHome now reports an unresolvable home
+// rather than degrading to a relative path, so what is left for this guard is
+// the case it cannot report: a CCDAD_HOME that is itself relative. A relative
+// root means the config comes from whatever directory ccdad happened to be run
+// in — a different answer per invocation, which for a threshold is worse than
+// no answer.
 func storeRoot() (string, error) {
-	root := ccpath.StoreHome()
+	root, err := ccpath.StoreHome()
+	if err != nil {
+		return "", err
+	}
 	if !filepath.IsAbs(root) {
 		return "", fmt.Errorf("the ccdad store resolved to the relative path %q; set CCDAD_HOME to an absolute path", root)
 	}

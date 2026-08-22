@@ -328,7 +328,7 @@ func startDaemon(cmd *cobra.Command) error {
 	}
 	if !up {
 		return fmt.Errorf("a daemon was started but had not taken the singleton after %s; %s may say why",
-			daemonWaitTimeout, daemon.LogPath())
+			daemonWaitTimeout, namePath(daemon.LogPath()))
 	}
 	fmt.Fprintf(cmd.ErrOrStderr(), "Started the ccdad daemon%s.\n", runningPIDSuffix())
 	return nil
@@ -354,12 +354,12 @@ func stopDaemon(cmd *cobra.Command) (bool, error) {
 		// parse. There is nothing to signal, and guessing is how an unrelated
 		// process gets terminated.
 		return false, fmt.Errorf("a daemon holds the singleton but %s does not parse, so there is no pid to ask: %w",
-			daemon.PIDPath(), err)
+			namePath(daemon.PIDPath()), err)
 	case !ok:
 		// A daemon that has taken the lock but not yet written its pid, which is
 		// a window of microseconds during startup.
 		return false, fmt.Errorf("a daemon holds the singleton but has not recorded a pid in %s yet; try again in a moment",
-			daemon.PIDPath())
+			namePath(daemon.PIDPath()))
 	}
 
 	if err := requestShutdown(pid); err != nil {
@@ -476,7 +476,10 @@ func newDaemonLogsCmd() *cobra.Command {
 // rather than a failure. Treating it as 1 is what would make a supervisor that
 // collects logs alert on a fresh install.
 func runDaemonLogs(cmd *cobra.Command, lines int, follow bool) error {
-	path := daemon.LogPath()
+	path, err := daemon.LogPath()
+	if err != nil {
+		return err
+	}
 	body, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

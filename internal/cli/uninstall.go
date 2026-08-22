@@ -46,18 +46,21 @@ const (
 )
 
 // storeMarkers are the top-level entries only ccdad puts in its store. Every
-// one that HAS an accessor is derived from the package that owns it, so a
-// rename there cannot silently make this stop recognising its own store.
+// one that HAS an owning package is taken from that package's exported
+// basename, so a rename there cannot silently make this stop recognising its
+// own store. The names are used rather than the path accessors deliberately:
+// this question is about basenames, and the accessors resolve a home directory
+// that a command deciding "is this a ccdad store" already has in hand.
 func storeMarkers() []string {
 	return []string{
 		accountsFileName,
 		credentialsDirName,
-		filepath.Base(daemon.LockPath()),
-		filepath.Base(daemon.PIDPath()),
-		filepath.Base(daemon.StatusPath()),
-		filepath.Base(daemon.LogPath()),
-		filepath.Base(usage.CachePath()),
-		filepath.Base(strategy.StatePath()),
+		daemon.LockFileName,
+		daemon.PIDFileName,
+		daemon.StatusFileName,
+		daemon.LogFileName,
+		usage.CacheFileName,
+		strategy.StateFileName,
 	}
 }
 
@@ -101,7 +104,10 @@ func newUninstallCmd() *cobra.Command {
 func runUninstall(cmd *cobra.Command, assumeYes bool) error {
 	out := cmd.ErrOrStderr()
 
-	root := ccpath.StoreHome()
+	root, err := ccpath.StoreHome()
+	if err != nil {
+		return err
+	}
 	storeState, err := inspectStore(root)
 	if err != nil {
 		return err
@@ -124,7 +130,7 @@ func runUninstall(cmd *cobra.Command, assumeYes bool) error {
 	// Attribute BEFORE anything is deleted: afterwards the stored credentials
 	// are gone and the question can no longer be answered.
 	live, _ := cclink.Load()
-	current, hasLive := attributeLogin(live, storeState.accounts, storeState.lookup)
+	current, hasLive := attributeLive(live, storeState.accounts, storeState.lookup)
 
 	enumerate(out, storeState, exe, exeErr, owner, current, hasLive)
 

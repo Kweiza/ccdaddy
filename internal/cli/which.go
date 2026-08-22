@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
+	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/store"
 )
 
@@ -49,21 +50,52 @@ func credentialIdentity(b cclink.Blob) string {
 	return ""
 }
 
+// attribution is what `which` learned: the account, and how Claude Code gets
+// to it. The how is reported even when the account is not one ccdad manages,
+// because "not managed" plus "because apiKeyHelper is set" is actionable where
+// "not managed" alone is not.
+type attribution struct {
+	account store.Account
+	ok      bool
+	// via names the mechanism, in the caller's words.
+	via string
+}
+
 // attributeLogin answers "which managed account is Claude Code actually using".
 //
-// It is not always the credentials file. CLAUDE_CODE_OAUTH_TOKEN takes
-// precedence over the stored claudeAiOauth in Claude Code itself, so when that
-// variable is set the file is not the answer and must not be consulted as a
-// fallback — reporting the file's account would name one Claude Code is not
-// using. A headless machine, which is the whole reason `ccdad add-token`
-// exists, is exactly where this matters.
+// It models Claude Code's two competing axes in the order Claude Code resolves
+// them, which is documented rule by rule in identity/apikey.go:
 //
-// ANTHROPIC_API_KEY is deliberately NOT handled here. Claude Code accepts it
-// only when its 20-character suffix is already in customApiKeyResponses.approved
-// in ~/.claude.json, and it competes with apiKeyHelper and the stored
-// primaryApiKey in an order ccdad does not yet model. Guessing at that order
-// would produce a confident wrong answer, which is worse than "not managed".
-func attributeLogin(live cclink.Blob, accounts []store.Account, lookup func(uuid string) (cclink.Blob, error)) (store.Account, bool) {
+//   - An API key from the ENVIRONMENT, a file descriptor or an apiKeyHelper
+//     turns the OAuth path off entirely (`BE()`), so it is asked first. The
+//     credentials file must not even be consulted then: reporting its account
+//     would name one Claude Code is not using.
+//   - Otherwise the OAuth axis answers, in `ua()`'s own order —
+//     CLAUDE_CODE_OAUTH_TOKEN first, the credentials file second.
+//   - Only when the OAuth axis has nothing does a STORED primaryApiKey become
+//     the credential. It is Claude Code's lowest-priority source, and treating
+//     it as the answer while a login exists is the single mistake this whole
+//     model exists to avoid.
+func attributeLogin(live cclink.Blob, accounts []store.Account,
+	lookup func(uuid string) (cclink.Blob, error), env identity.APIKeyEnvironment) attribution {
+
+	key, source := env.Resolve()
+
+	if source.DisplacesOAuth() {
+		if key == "" {
+			// A file descriptor or a helper: something WILL resolve and it will
+			// displace the login, but reading it means reading another
+			// process's descriptor or running a user's command. Neither belongs
+			// in a read-only question, so the honest answer is the mechanism
+			// without the account.
+			return attribution{via: source.String()}
+		}
+		if acct, ok := apiKeyOwner(accounts, lookup, key); ok {
+			return attribution{account: acct, ok: true, via: source.String()}
+		}
+		return attribution{via: source.String()}
+	}
+
 	if envToken := os.Getenv("CLAUDE_CODE_OAUTH_TOKEN"); envToken != "" {
 		for _, a := range accounts {
 			stored, err := lookup(a.UUID)
@@ -71,12 +103,25 @@ func attributeLogin(live cclink.Blob, accounts []store.Account, lookup func(uuid
 				continue
 			}
 			if rec, ok := tokenRecordOf(stored); ok && rec.Token == envToken {
-				return a, true
+				return attribution{account: a, ok: true, via: "CLAUDE_CODE_OAUTH_TOKEN"}
 			}
 		}
-		return store.Account{}, false
+		return attribution{via: "CLAUDE_CODE_OAUTH_TOKEN"}
 	}
-	return attributeWith(live, accounts, lookup)
+
+	if _, hasOAuth := live["claudeAiOauth"]; hasOAuth {
+		acct, ok := attributeWith(live, accounts, lookup)
+		return attribution{account: acct, ok: ok, via: "the Claude Code credentials file"}
+	}
+
+	// No login anywhere, so Claude Code falls through to its stored key.
+	if source == identity.APIKeyManaged {
+		if acct, ok := apiKeyOwner(accounts, lookup, key); ok {
+			return attribution{account: acct, ok: true, via: source.String()}
+		}
+		return attribution{via: source.String()}
+	}
+	return attribution{via: "none"}
 }
 
 // attributeWith matches the live credentials file against the managed accounts,
@@ -117,12 +162,25 @@ func newWhichCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			acct, ok := attributeLogin(live, s.Accounts(), s.Credentials)
+			// A config that cannot be read is not a reason to refuse the whole
+			// question: it costs the two api-key inputs, and the environment
+			// axes — which are the ones that OVERRIDE a login — still answer.
+			cfg, cfgErr := cclink.LoadGlobalConfig()
+			if cfgErr != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(),
+					"note: could not read Claude Code's config (%v); a stored API key cannot be seen from here\n", cfgErr)
+				cfg = nil
+			}
+			env := claudeAPIKeyEnvironment(cfg)
+			res := attributeLogin(live, s.Accounts(), s.Credentials, env)
 
 			if asJSON {
-				payload := map[string]any{"schemaVersion": 1, "attributed": ok}
-				if ok {
-					payload["account"] = accountJSON(acct)
+				payload := map[string]any{"schemaVersion": 1, "attributed": res.ok, "via": res.via}
+				if res.ok {
+					payload["account"] = accountJSON(res.account)
+				}
+				if env.EnvKeyNeedsApproval() {
+					payload["envKeyNeedsApproval"] = true
 				}
 				if unknown := cclink.UnknownKeys(live); len(unknown) > 0 {
 					payload["unknownKeys"] = unknown
@@ -130,7 +188,7 @@ func newWhichCmd() *cobra.Command {
 				if err := writeJSON(cmd, payload); err != nil {
 					return err
 				}
-				if !ok {
+				if !res.ok {
 					// The exit code is the same with or without --json: the flag
 					// changes the representation, never the answer.
 					return WithCode(errSilent, ExitProbeNegative)
@@ -138,13 +196,15 @@ func newWhichCmd() *cobra.Command {
 				return nil
 			}
 
-			if !ok {
-				fmt.Fprintln(cmd.ErrOrStderr(), "The current login is not one ccdad manages.")
+			noteEnvKeyApproval(cmd, env)
+			if !res.ok {
+				fmt.Fprintf(cmd.ErrOrStderr(), "The current credential (%s) is not one ccdad manages.\n", res.via)
 				// A negative probe answer, not a failure: exit 5 so a script can
 				// tell it from a real error.
 				return WithCode(errSilent, ExitProbeNegative)
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), acct.Label())
+			fmt.Fprintln(cmd.OutOrStdout(), res.account.Label())
+			fmt.Fprintf(cmd.ErrOrStderr(), "via %s\n", res.via)
 			return nil
 		},
 	}

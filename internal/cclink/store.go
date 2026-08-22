@@ -41,12 +41,16 @@ var (
 // Load reads the live credentials file. A missing file is an empty Blob and
 // no error: that is a machine where Claude Code has never logged in.
 func Load() (Blob, error) {
-	return loadFrom(ccpath.CredentialsPath())
+	path, err := ccpath.CredentialsPath()
+	if err != nil {
+		return nil, err
+	}
+	return loadFrom(path)
 }
 
 // loadFrom reads and decodes the credentials file at an already-resolved
 // path. It exists so Activate can re-read from the SAME directory its locks
-// cover (held.CredentialHome()) rather than a fresh call to
+// cover (held.Scope()) rather than a fresh call to
 // ccpath.CredentialsPath(), which re-resolves environment variables that
 // ccdad itself is the program that mutates.
 func loadFrom(path string) (Blob, error) {
@@ -112,8 +116,8 @@ func Capture() (Blob, error) {
 // Code's own double-checked re-read sees the swapped credential and
 // abandons its refresh.
 //
-// The file is re-read INSIDE the lock (loadFrom held.CredentialHome(),
-// never Load's fresh ccpath.CredentialsPath()): whatever was loaded before
+// The file is re-read INSIDE the lock (loadFrom held.Scope(), never Load's
+// fresh ccpath.CredentialsPath()): whatever was loaded before
 // the wait may be stale by the time the lock is granted, and a freshly
 // re-resolved path could in principle disagree with the directory just
 // locked if the environment changed in between -- ccdad is the program that
@@ -143,22 +147,49 @@ func Capture() (Blob, error) {
 // unknown-key probe). That is deferred to the CLI layer: it already holds
 // the live Blob via Load and can call UnknownKeys directly, without widening
 // this function's signature for every caller that does not need the result.
-func Activate(incoming Blob) (err error) {
+func Activate(incoming Blob) error {
 	// Before taking any lock: an incoming snapshot with no claudeAiOauth
 	// would have every account-scoped key deleted by Merge and nothing put
 	// back, silently logging the user out. A corrupt or truncated stored
 	// snapshot is exactly the kind of input this must refuse up front.
+	//
+	// ClearLogin is the same write with that refusal lifted, and lifting it is
+	// only correct there because logging the user out is what the caller asked
+	// for by name.
 	if _, ok := incoming["claudeAiOauth"]; !ok {
 		return fmt.Errorf("refusing to activate a snapshot with no claudeAiOauth: it would log the user out")
 	}
+	return writeMerged(incoming)
+}
 
+// ClearLogin removes every account-scoped key from the live credentials file,
+// leaving the machine-scoped ones -- MCP logins, this machine's device key --
+// exactly where they are.
+//
+// This is Activate with an empty snapshot, and it logs the user out on purpose.
+// It exists for the one target that cannot be installed as a credential record:
+// an API-key account. Claude Code prefers a claudeAiOauth login over its stored
+// primaryApiKey in every configuration (the client binds
+// `anthropicAuthEnabled: BE()`, and BE() only turns off for an ENVIRONMENT key
+// or an apiKeyHelper), so writing the key while a login is sitting in the
+// credentials file activates nothing at all. Removing the login is what makes
+// the key the answer.
+//
+// Nothing is lost by it: the account whose login is being removed keeps its own
+// stored snapshot in ccdad's store, and switching back reinstalls it.
+func ClearLogin() error {
+	return writeMerged(Blob{})
+}
+
+// writeMerged is the locked read-merge-write both of the above perform.
+func writeMerged(incoming Blob) (err error) {
 	held, aerr := cclock.AcquireCredentials(LockTimeout)
 	if aerr != nil {
 		return aerr
 	}
 	defer func() { err = errors.Join(err, held.Release()) }()
 
-	livePath := filepath.Join(held.CredentialHome(), ccpath.CredentialsFile)
+	livePath := filepath.Join(held.Scope(), ccpath.CredentialsFile)
 
 	live, err := loadFrom(livePath)
 	if err != nil {

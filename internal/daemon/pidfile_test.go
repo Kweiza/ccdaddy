@@ -11,10 +11,10 @@ import (
 func TestTheDaemonsFilesAllLiveInTheStore(t *testing.T) {
 	store := isolate(t)
 	for name, got := range map[string]string{
-		"ccdad.lock":  LockPath(),
-		"ccdad.pid":   PIDPath(),
-		"status.json": StatusPath(),
-		"daemon.log":  LogPath(),
+		"ccdad.lock":  mustPath(LockPath()),
+		"ccdad.pid":   mustPath(PIDPath()),
+		"status.json": mustPath(StatusPath()),
+		"daemon.log":  mustPath(LogPath()),
 	} {
 		if want := filepath.Join(store, name); got != want {
 			t.Errorf("%s resolved to %q, want %q", name, got, want)
@@ -62,7 +62,7 @@ func TestReadPIDTellsAnInterruptedWriteFromCorruption(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			isolate(t)
 			if !tc.absent {
-				if err := os.WriteFile(PIDPath(), []byte(tc.body), 0o600); err != nil {
+				if err := os.WriteFile(mustPath(PIDPath()), []byte(tc.body), 0o600); err != nil {
 					t.Fatalf("planting the pidfile: %v", err)
 				}
 			}
@@ -91,7 +91,7 @@ func TestReadPIDReportsAReadFailureRatherThanNothingToRead(t *testing.T) {
 	isolate(t)
 	// A directory where the pidfile should be: os.ReadFile fails with
 	// something that is NOT os.ErrNotExist.
-	if err := os.Mkdir(PIDPath(), 0o700); err != nil {
+	if err := os.Mkdir(mustPath(PIDPath()), 0o700); err != nil {
 		t.Fatalf("planting a directory at the pidfile: %v", err)
 	}
 	pid, ok, err := ReadPID()
@@ -109,7 +109,7 @@ func TestWritePIDRefusesToRecordANonPID(t *testing.T) {
 			t.Errorf("WritePID(%d) was accepted", pid)
 		}
 	}
-	if _, err := os.Stat(PIDPath()); !os.IsNotExist(err) {
+	if _, err := os.Stat(mustPath(PIDPath())); !os.IsNotExist(err) {
 		t.Errorf("WritePID created the pidfile for a pid it refused")
 	}
 }
@@ -124,14 +124,14 @@ func TestWritePIDReplacesTheFileInPlace(t *testing.T) {
 	if err := WritePID(1111); err != nil {
 		t.Fatalf("WritePID: %v", err)
 	}
-	first, err := os.Stat(PIDPath())
+	first, err := os.Stat(mustPath(PIDPath()))
 	if err != nil {
 		t.Fatalf("stat: %v", err)
 	}
 	if err := WritePID(2222); err != nil {
 		t.Fatalf("WritePID: %v", err)
 	}
-	second, err := os.Stat(PIDPath())
+	second, err := os.Stat(mustPath(PIDPath()))
 	if err != nil {
 		t.Fatalf("stat: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestWritePIDReplacesTheFileInPlace(t *testing.T) {
 		t.Error("the second write landed on a different file — this is a temp-and-rename, " +
 			"which makes the trailing-newline commit marker unreachable and therefore untestable")
 	}
-	entries, err := os.ReadDir(filepath.Dir(PIDPath()))
+	entries, err := os.ReadDir(filepath.Dir(mustPath(PIDPath())))
 	if err != nil {
 		t.Fatalf("reading the store: %v", err)
 	}
@@ -158,7 +158,7 @@ func TestWritePIDLeavesThePidfileReadableOnlyByItsOwner(t *testing.T) {
 	if err := WritePID(1234); err != nil {
 		t.Fatalf("WritePID: %v", err)
 	}
-	info, err := os.Stat(PIDPath())
+	info, err := os.Stat(mustPath(PIDPath()))
 	if err != nil {
 		t.Fatalf("stat: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestClearPIDEmptiesThePidfileWithoutRemovingIt(t *testing.T) {
 	if err := ClearPID(); err != nil {
 		t.Fatalf("ClearPID: %v", err)
 	}
-	info, err := os.Stat(PIDPath())
+	info, err := os.Stat(mustPath(PIDPath()))
 	if err != nil {
 		t.Fatalf("the pidfile is gone after ClearPID, which forges the never-ran state: %v", err)
 	}
@@ -201,15 +201,16 @@ func TestClearPIDOnAStoreThatNeverHadADaemonIsNotAFailure(t *testing.T) {
 	// forge the opposite, and the whole point of the never-remove rule above
 	// is that these two states stay distinct. This is the same class as the
 	// singleton's never-create-the-lock-file rule, in the other direction.
-	if _, err := os.Stat(PIDPath()); !os.IsNotExist(err) {
-		t.Errorf("ClearPID created %s on a store no daemon had ever used", PIDPath())
+	if _, err := os.Stat(mustPath(PIDPath())); !os.IsNotExist(err) {
+		t.Errorf("ClearPID created %s on a store no daemon had ever used", mustPath(PIDPath()))
 	}
 }
 
-// ccpath.StoreHome degrades to the relative path ".ccdad" when the home
-// directory cannot be resolved, and a detached daemon's working directory
-// differs from its parent's by design — so a relative store means the daemon
-// and the CLI act on two different files while both believe they agree.
+// A detached daemon's working directory differs from its parent's by design,
+// so a relative store means the daemon and the CLI act on two different files
+// while both believe they agree. ccpath now reports an unresolvable home rather
+// than degrading to ".ccdad", so what still reaches this guard is a CCDAD_HOME
+// that is itself relative — which the test sets explicitly.
 func TestTheStoreMustBeAnAbsolutePath(t *testing.T) {
 	// A relative store resolves against the working directory, which under
 	// `go test` is the package source tree. If any of the three calls below
