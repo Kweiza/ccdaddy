@@ -64,6 +64,8 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newAliasCmd())
 	root.AddCommand(newMoveCmd())
 	root.AddCommand(newStatusCmd())
+	root.AddCommand(newExportCmd())
+	root.AddCommand(newImportCmd())
 	root.AddCommand(newDoctorCmd())
 	root.AddCommand(newDaemonCmd())
 	root.AddCommand(newUninstallCmd())
