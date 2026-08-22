@@ -26,6 +26,21 @@ func TestSingletonHeldDoesNotCreateTheLockFile(t *testing.T) {
 	}
 }
 
+// The same rule one level up. A probe that creates the store directory
+// manufactures a different piece of the same evidence, and it is easy to add by
+// accident: the acquire path legitimately needs the MkdirAll, and lifting it
+// into a shared prologue would put it here too.
+func TestSingletonHeldDoesNotCreateTheStore(t *testing.T) {
+	store := filepath.Join(t.TempDir(), "not", "created", "yet")
+	t.Setenv("CCDAD_HOME", store)
+	if _, err := SingletonHeld(); err != nil {
+		t.Fatalf("SingletonHeld: %v", err)
+	}
+	if _, err := os.Stat(store); !os.IsNotExist(err) {
+		t.Errorf("probing created the store at %s", store)
+	}
+}
+
 // A store directory that does not exist has no daemon in it. That it is
 // indistinguishable from a mistyped CCDAD_HOME is deliberate: both are
 // *fs.PathError satisfying os.ErrNotExist, and answering "cannot determine" for
@@ -265,8 +280,47 @@ func TestASecondAcquireInTheSameProcessIsRefused(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = s.Release() })
 
+	start := time.Now()
 	if _, err := AcquireSingleton(); !errors.Is(err, ErrSingletonHeld) {
 		t.Fatalf("the second AcquireSingleton() = %v, want ErrSingletonHeld", err)
+	}
+	// The kernel would refuse this anyway — flock is per open file
+	// description, so a second descriptor in the same process contends with
+	// the first exactly as another process would. What the in-process guard
+	// adds is that it says so IMMEDIATELY, instead of spending the lost-race
+	// retry budget waiting for a holder that is us.
+	if elapsed := time.Since(start); elapsed >= acquireRetryDelay {
+		t.Errorf("the second AcquireSingleton took %s; a process that already holds the singleton "+
+			"should be told so at once rather than retrying against itself for %s", elapsed, 2*acquireRetryDelay)
+	}
+}
+
+// Release must not repeat the underlying unlock. gofrs/flock happens to
+// tolerate a second Unlock today, so nothing about the observable behaviour
+// says whether the guard is there — but the guard is what makes that
+// independent of the lock library, and a release closure that is not
+// idempotent would otherwise be called twice on a shutdown path that ran
+// twice.
+func TestReleaseUnlocksExactlyOnce(t *testing.T) {
+	isolate(t)
+	unlocks := 0
+	restore := setTryLockForTest(func(string, bool) (bool, func() error, error) {
+		return true, func() error { unlocks++; return nil }, nil
+	})
+	defer restore()
+
+	s, err := AcquireSingleton()
+	if err != nil {
+		t.Fatalf("AcquireSingleton: %v", err)
+	}
+	if err := s.Release(); err != nil {
+		t.Fatalf("first Release: %v", err)
+	}
+	if err := s.Release(); err != nil {
+		t.Fatalf("second Release: %v", err)
+	}
+	if unlocks != 1 {
+		t.Errorf("the underlying unlock ran %d times across two Release calls, want 1", unlocks)
 	}
 }
 
