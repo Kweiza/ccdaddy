@@ -213,6 +213,11 @@ func checkPermissions(root string, usable bool) check {
 
 	// Every file that holds a token, by glob rather than through the store: the
 	// point is to see what is on disk, not what ccdad believes it wrote.
+	//
+	// The two names are store's and are spelled out here because store exports
+	// no path accessors and opening it would create the tree. If they ever
+	// change, TestDoctorReportsALooseCredentialFile fails on its own glob rather
+	// than passing while checking nothing.
 	files, _ := filepath.Glob(filepath.Join(root, "credentials", "*"))
 	files = append(files, filepath.Join(root, "accounts.toml"))
 	for _, path := range files {
