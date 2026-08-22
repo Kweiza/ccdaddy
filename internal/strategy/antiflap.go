@@ -248,6 +248,12 @@ type Plan struct {
 // cooldown behind.
 func Decide(cands []Candidate, o Options, cfg Config, st *State, activeUUID string) Plan {
 	cfg = cfg.withDefaults()
+	// The ceiling the pool is ORDERED on has to be the ceiling the gate DECIDES
+	// on. Config is the half that comes from config.toml, so it is copied into
+	// the pass rather than read from both places: ranking on one ceiling while
+	// gating on another walks to a first choice the gate then refuses, with a
+	// usable account waiting behind it.
+	o.MaxAutoSpend = cfg.MaxAutoSpend
 	if st == nil {
 		st = NewState()
 	}
@@ -347,9 +353,9 @@ func Decide(cands []Candidate, o Options, cfg Config, st *State, activeUUID stri
 		return plan
 	}
 
-	// Result.Credit is in uuid order and this walks it in that order. Ranking
-	// the credit pool on anything better is its own open question
-	// (ccdad/credit-pool-ordering) and is deliberately not invented here.
+	// Result.Credit is ordered by most armed room, uuid last, and this walks it
+	// in that order — so the first account it reaches is the one with the most
+	// money armed under §7.3's cap.
 	var firstRefusal Decision
 	for _, r := range res.Credit {
 		c := byUUID[r.UUID]
