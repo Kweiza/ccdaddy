@@ -29,7 +29,7 @@ const (
 	// from the cache with no fetch, `--refresh` included.
 	ServeTTL = 180 * time.Second
 
-	cacheFileName = "usage.json"
+	CacheFileName = "usage.json"
 	// cacheLockDir is a DIRECTORY, because that is what cclock's mutex is.
 	cacheLockDir = "usage.json.lock"
 
@@ -42,9 +42,21 @@ const (
 )
 
 // CachePath is where the cache lives.
-func CachePath() string { return filepath.Join(ccpath.StoreHome(), cacheFileName) }
+func CachePath() (string, error) {
+	root, err := ccpath.StoreHome()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(root, CacheFileName), nil
+}
 
-func cacheLockPath() string { return filepath.Join(ccpath.StoreHome(), cacheLockDir) }
+func cacheLockPath() (string, error) {
+	root, err := ccpath.StoreHome()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(root, cacheLockDir), nil
+}
 
 // PollState is the poll policy's per-account state, persisted so that restarting
 // ccdad does not reset a backoff that a 429 earned. §7.4 owns what these mean;
@@ -157,7 +169,10 @@ func (c *Cache) Prune(accounts map[string]time.Time) {
 // same reason store.Open does: a relative root puts the cache in whatever
 // directory ccdad happened to be run from, a different one each time.
 func storeRoot() (string, error) {
-	root := ccpath.StoreHome()
+	root, err := ccpath.StoreHome()
+	if err != nil {
+		return "", err
+	}
 	if !filepath.IsAbs(root) {
 		return "", fmt.Errorf("the ccdad store resolved to the relative path %q; set CCDAD_HOME to an absolute path", root)
 	}
@@ -179,20 +194,20 @@ func LoadCache() (*Cache, error) {
 	}
 	c := &Cache{data: cacheFile{Version: 1, Accounts: map[string]Entry{}}}
 
-	raw, err := os.ReadFile(filepath.Join(root, cacheFileName))
+	raw, err := os.ReadFile(filepath.Join(root, CacheFileName))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return c, nil
 		}
 		// A cache we cannot read at all is the same condition as one we cannot
 		// parse: unknown, not fatal.
-		c.loadErr = fmt.Errorf("reading %s: %w", cacheFileName, err)
+		c.loadErr = fmt.Errorf("reading %s: %w", CacheFileName, err)
 		return c, nil
 	}
 
 	var parsed cacheFile
 	if err := json.Unmarshal(raw, &parsed); err != nil {
-		c.loadErr = fmt.Errorf("parsing %s: %w", cacheFileName, err)
+		c.loadErr = fmt.Errorf("parsing %s: %w", CacheFileName, err)
 		return c, nil
 	}
 	if parsed.Accounts != nil {
@@ -207,9 +222,9 @@ func (c *Cache) save(root string) error {
 	c.data.Version = 1
 	encoded, err := json.Marshal(c.data)
 	if err != nil {
-		return fmt.Errorf("encoding %s: %w", cacheFileName, err)
+		return fmt.Errorf("encoding %s: %w", CacheFileName, err)
 	}
-	return cclink.WriteFileAtomic(filepath.Join(root, cacheFileName), encoded, 0o600)
+	return cclink.WriteFileAtomic(filepath.Join(root, CacheFileName), encoded, 0o600)
 }
 
 // WithCache runs fn against the cache under a cross-process lock and writes back
@@ -233,7 +248,7 @@ func WithCache(timeout time.Duration, fn func(*Cache) error) (err error) {
 		return fmt.Errorf("creating the ccdad store: %w", err)
 	}
 
-	lock, aerr := cclock.Acquire(cacheLockPath(), cclock.Options{
+	lock, aerr := cclock.Acquire(filepath.Join(root, cacheLockDir), cclock.Options{
 		Stale:   cacheLockStale,
 		Timeout: timeout,
 	})

@@ -32,7 +32,7 @@ func newListCmd() *cobra.Command {
 			// the answer, and `ccdad list` is what a user reaches for when
 			// something is already wrong.
 			live, _ := cclink.Load()
-			active, hasActive := attributeLogin(live, accounts, s.Credentials)
+			active, hasActive := attributeLive(live, accounts, s.Credentials)
 
 			visible := make([]store.Account, 0, len(accounts))
 			for _, a := range accounts {

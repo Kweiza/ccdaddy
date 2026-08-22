@@ -90,13 +90,16 @@ func ValidateUUID(uuid string) error {
 
 // Open loads the store, creating an empty one if none exists.
 func Open() (*Store, error) {
-	root := ccpath.StoreHome()
-	// ccpath.homeDir returns "" when os.UserHomeDir fails, which degrades every
-	// derived path to a relative one — and a relative store means ccdad creates
-	// a credentials tree in whatever directory it happened to be run from, a
-	// different one each time, with tokens in it. Refuse instead: the tokens are
-	// the whole point of the directory, so the wrong directory is not a
-	// degradation worth accepting silently.
+	root, err := ccpath.StoreHome()
+	if err != nil {
+		return nil, err
+	}
+	// An unresolvable home is now ccpath's error to report, but a CCDAD_HOME
+	// that is itself relative still reaches here — and a relative store means
+	// ccdad creates a credentials tree in whatever directory it happened to be
+	// run from, a different one each time, with tokens in it. Refuse instead:
+	// the tokens are the whole point of the directory, so the wrong directory
+	// is not a degradation worth accepting silently.
 	if !filepath.IsAbs(root) {
 		return nil, fmt.Errorf("the ccdad store resolved to the relative path %q; set CCDAD_HOME to an absolute path", root)
 	}

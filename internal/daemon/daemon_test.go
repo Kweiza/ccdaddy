@@ -108,7 +108,7 @@ func TestRunShutsDownInOrderAndLeavesTheLockFileAlone(t *testing.T) {
 
 	// Truncated, not removed. An absent pidfile means "no daemon has ever run
 	// against this store", which is a different fact and a false one here.
-	if _, err := os.Stat(PIDPath()); err != nil {
+	if _, err := os.Stat(mustPath(PIDPath())); err != nil {
 		t.Errorf("the pidfile was removed: %v", err)
 	}
 	if pid, ok, err := ReadPID(); ok || err != nil {
@@ -117,7 +117,7 @@ func TestRunShutsDownInOrderAndLeavesTheLockFileAlone(t *testing.T) {
 
 	// flock is per-inode: unlinking and recreating lets two daemons each hold
 	// "the" lock on a different one.
-	if _, err := os.Stat(LockPath()); err != nil {
+	if _, err := os.Stat(mustPath(LockPath())); err != nil {
 		t.Errorf("the lock file was removed on shutdown: %v", err)
 	}
 	if held, err := SingletonHeld(); err != nil || held {
@@ -242,7 +242,7 @@ func TestRunWritesItsOwnLog(t *testing.T) {
 	waitForStatus(t, 10*time.Second, func(s Status) bool { return s.PID != 0 })
 	stop()
 
-	body := readFile(t, LogPath())
+	body := readFile(t, mustPath(LogPath()))
 	if body == "" {
 		t.Fatal("the daemon logged nothing at all")
 	}

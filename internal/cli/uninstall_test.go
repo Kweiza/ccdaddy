@@ -30,7 +30,7 @@ func fakeBinary(t *testing.T) string {
 	return stubExecutable(t, path)
 }
 
-func accountsFilePath() string { return filepath.Join(ccpath.StoreHome(), "accounts.toml") }
+func accountsFilePath() string { return filepath.Join(mustPath(ccpath.StoreHome()), "accounts.toml") }
 
 func storeIsThere(t *testing.T) bool {
 	t.Helper()
@@ -56,7 +56,7 @@ func TestUninstallEnumeratesBeforeAsking(t *testing.T) {
 	if CodeFor(err) != ExitNothingToDo {
 		t.Fatalf("answering no = %d, want %d", CodeFor(err), ExitNothingToDo)
 	}
-	for _, want := range []string{"work@example.com", "home@example.com", ccpath.StoreHome(), bin, "2 account"} {
+	for _, want := range []string{"work@example.com", "home@example.com", mustPath(ccpath.StoreHome()), bin, "2 account"} {
 		if !strings.Contains(errOut, want) {
 			t.Errorf("the enumeration does not mention %q:\n%s", want, errOut)
 		}
@@ -102,7 +102,7 @@ func TestUninstallWithYesRemovesTheStoreAndTheBinary(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit = %d, want %d\n%s%s", code, ExitOK, errOut, top)
 	}
-	if _, err := os.Stat(ccpath.StoreHome()); !os.IsNotExist(err) {
+	if _, err := os.Stat(mustPath(ccpath.StoreHome())); !os.IsNotExist(err) {
 		t.Errorf("the store survived: %v", err)
 	}
 	if _, err := os.Stat(bin); !os.IsNotExist(err) {
@@ -176,7 +176,7 @@ func TestUninstallRemovesAStoreWithNoAccountsYet(t *testing.T) {
 	fakeBinary(t)
 	// What the first `ccdad list` on a fresh machine leaves behind, and nothing
 	// else: no accounts.toml, because nothing has been saved.
-	if err := os.MkdirAll(filepath.Join(ccpath.StoreHome(), "credentials"), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(mustPath(ccpath.StoreHome()), "credentials"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
@@ -184,7 +184,7 @@ func TestUninstallRemovesAStoreWithNoAccountsYet(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit = %d, want %d\n%s%s", code, ExitOK, errOut, top)
 	}
-	if _, err := os.Stat(ccpath.StoreHome()); !os.IsNotExist(err) {
+	if _, err := os.Stat(mustPath(ccpath.StoreHome())); !os.IsNotExist(err) {
 		t.Errorf("the store survived: %v", err)
 	}
 }
@@ -282,7 +282,7 @@ func TestUninstallLeavesTheLiveLoginAloneAndSaysWhichItIs(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit = %d, want %d\n%s", code, ExitOK, top)
 	}
-	if _, err := os.Stat(ccpath.CredentialsPath()); err != nil {
+	if _, err := os.Stat(mustPath(ccpath.CredentialsPath())); err != nil {
 		t.Fatalf("uninstall touched Claude Code's own credentials file: %v", err)
 	}
 	// The CLOSING notice specifically, not just the label anywhere in the
@@ -324,7 +324,7 @@ func TestUninstallRefusesToDeleteAPackageManagerBinary(t *testing.T) {
 	if !strings.Contains(errOut, "Homebrew") {
 		t.Errorf("the user is not told why the binary is still there:\n%s", errOut)
 	}
-	if _, err := os.Stat(ccpath.StoreHome()); !os.IsNotExist(err) {
+	if _, err := os.Stat(mustPath(ccpath.StoreHome())); !os.IsNotExist(err) {
 		t.Error("refusing the binary also stopped the store being removed")
 	}
 }
@@ -387,7 +387,7 @@ func TestUninstallWarnsButFinishesWhenTheMCPUnwireFails(t *testing.T) {
 	if !strings.Contains(errOut, "read-only") {
 		t.Errorf("the unwire failure was swallowed:\n%s", errOut)
 	}
-	if _, err := os.Stat(ccpath.StoreHome()); !os.IsNotExist(err) {
+	if _, err := os.Stat(mustPath(ccpath.StoreHome())); !os.IsNotExist(err) {
 		t.Error("the store survived a failure that must not stop the uninstall")
 	}
 }

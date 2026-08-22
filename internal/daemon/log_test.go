@@ -24,7 +24,7 @@ func readFile(t *testing.T, path string) string {
 // cannot shrink the assertion that it is what the design says.
 func openTestLog(t *testing.T, max int64, keep int) *Logger {
 	t.Helper()
-	l, err := openLog(LogPath(), max, keep)
+	l, err := openLog(mustPath(LogPath()), max, keep)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +39,7 @@ func TestLogAppendsToItsOwnFile(t *testing.T) {
 	l.Printf("started, pid %d", 42)
 	l.Printf("tick %d", 1)
 
-	body := readFile(t, LogPath())
+	body := readFile(t, mustPath(LogPath()))
 	if !strings.Contains(body, "started, pid 42") || !strings.Contains(body, "tick 1") {
 		t.Fatalf("lines missing from the log:\n%s", body)
 	}
@@ -61,7 +61,7 @@ func TestLogReopensAnExistingFileWithoutTruncatingIt(t *testing.T) {
 
 	again := openTestLog(t, 1<<20, 3)
 	again.Printf("after the restart")
-	body := readFile(t, LogPath())
+	body := readFile(t, mustPath(LogPath()))
 	if !strings.Contains(body, "before the restart") {
 		t.Fatalf("reopening the log truncated it:\n%s", body)
 	}
@@ -82,7 +82,7 @@ func TestLogDoesNotRotateBelowTheCap(t *testing.T) {
 	if rotated {
 		t.Fatal("a small log was rotated")
 	}
-	if _, err := os.Stat(LogPath() + ".1"); !os.IsNotExist(err) {
+	if _, err := os.Stat(mustPath(LogPath()) + ".1"); !os.IsNotExist(err) {
 		t.Error("a rotated copy exists although nothing was rotated")
 	}
 }
@@ -99,10 +99,10 @@ func TestLogRotatesAtTheCap(t *testing.T) {
 	if !rotated {
 		t.Fatal("a log over the cap was not rotated")
 	}
-	if !strings.Contains(readFile(t, LogPath()+".1"), "xxx") {
+	if !strings.Contains(readFile(t, mustPath(LogPath())+".1"), "xxx") {
 		t.Error("the rotated copy does not hold what the log held")
 	}
-	if body := readFile(t, LogPath()); body != "" {
+	if body := readFile(t, mustPath(LogPath())); body != "" {
 		t.Errorf("the fresh log is not empty:\n%s", body)
 	}
 }
@@ -121,10 +121,10 @@ func TestPostRotationWritesLandInTheNewFile(t *testing.T) {
 
 	l.Printf("this line is after the rotation")
 
-	if got := readFile(t, LogPath()); !strings.Contains(got, "after the rotation") {
+	if got := readFile(t, mustPath(LogPath())); !strings.Contains(got, "after the rotation") {
 		t.Fatalf("the post-rotation line did not land in the new daemon.log:\n%s", got)
 	}
-	if got := readFile(t, LogPath()+".1"); strings.Contains(got, "after the rotation") {
+	if got := readFile(t, mustPath(LogPath())+".1"); strings.Contains(got, "after the rotation") {
 		t.Fatal("the post-rotation line landed in the rotated inode; the daemon never reopened")
 	}
 }
@@ -140,16 +140,16 @@ func TestLogKeepsABoundedNumberOfRotations(t *testing.T) {
 		}
 	}
 	for i := 1; i <= keep; i++ {
-		if _, err := os.Stat(LogPath() + "." + strconv.Itoa(i)); err != nil {
+		if _, err := os.Stat(mustPath(LogPath()) + "." + strconv.Itoa(i)); err != nil {
 			t.Errorf("daemon.log.%d is missing: %v", i, err)
 		}
 	}
-	if _, err := os.Stat(LogPath() + "." + strconv.Itoa(keep+1)); !os.IsNotExist(err) {
+	if _, err := os.Stat(mustPath(LogPath()) + "." + strconv.Itoa(keep+1)); !os.IsNotExist(err) {
 		t.Errorf("daemon.log.%d survived; the kept count is unbounded", keep+1)
 	}
 	// The newest rotation holds the newest generation: the shift must go from
 	// the oldest end, or every copy is overwritten by its neighbour.
-	if got := readFile(t, LogPath()+".1"); !strings.Contains(got, "generation 4") {
+	if got := readFile(t, mustPath(LogPath())+".1"); !strings.Contains(got, "generation 4") {
 		t.Errorf("daemon.log.1 is not the most recent rotation:\n%s", got)
 	}
 }
@@ -161,7 +161,7 @@ func TestTheRotationThresholdIsTheCapExactly(t *testing.T) {
 	isolate(t)
 	measure := openTestLog(t, 1<<20, 3)
 	measure.Printf("ab")
-	info, err := os.Stat(LogPath())
+	info, err := os.Stat(mustPath(LogPath()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +216,7 @@ func TestLogFileIsPrivate(t *testing.T) {
 	}
 	l.Printf("after")
 
-	for _, path := range []string{LogPath(), LogPath() + ".1"} {
+	for _, path := range []string{mustPath(LogPath()), mustPath(LogPath()) + ".1"} {
 		info, err := os.Stat(path)
 		if err != nil {
 			t.Fatal(err)
@@ -243,7 +243,7 @@ func TestLogIsSafeForConcurrentWriters(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	if got := strings.Count(readFile(t, LogPath()), "\n"); got != 160 {
+	if got := strings.Count(readFile(t, mustPath(LogPath())), "\n"); got != 160 {
 		t.Errorf("wrote 160 lines, log holds %d", got)
 	}
 }

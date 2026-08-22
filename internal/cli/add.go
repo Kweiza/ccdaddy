@@ -309,6 +309,38 @@ func runAdd(cmd *cobra.Command, opts addOptions) error {
 		credentialIdentity(live) != "" &&
 		credentialIdentity(live) == credentialIdentity(prior)
 
+	// The comparison above cannot answer for an ADOPTION -- the first `ccdad
+	// add` for an account Claude Code was already logged in as. There is no
+	// prior record to compare against, so liveIsThisAccount is false, and the
+	// keys sitting in the live file are dropped with a warning. That is the
+	// single most common first run there is, and the keys it drops are the
+	// expensive ones: a device-cap slot and a gateway re-trust.
+	//
+	// One profile call settles it. Nothing in the credentials file names an
+	// account, but the account endpoint does, so resolving the LIVE login's own
+	// access token says whose those keys are instead of guessing.
+	//
+	// It is worth exactly one request and no more, so it is gated three ways:
+	// only when the cheap comparison already failed, only when there is
+	// something to carry, and only when the live record actually has a token to
+	// ask with. A dead or expired live token, an offline machine, or a
+	// cancelled context all land on "cannot tell" and keep the old behaviour --
+	// the warning -- rather than failing an otherwise successful login.
+	if !liveIsThisAccount && len(carriableKeys(live)) > 0 {
+		switch liveLoginOwner(cmd, acct.UUID, live) {
+		case liveOwnershipSame:
+			liveIsThisAccount = true
+		case liveOwnershipOther:
+			fmt.Fprintf(stderr,
+				"note: the current login belongs to a different account, so its %s are not being stored.\n",
+				strings.Join(carriableKeys(live), " and "))
+			// Reported here rather than falling through to the warning below,
+			// which says ccdad cannot tell. It can, now, and saying otherwise
+			// would send someone looking for a problem that was just resolved.
+			live = nil
+		}
+	}
+
 	// This account's OWN previously stored keys carry forward unconditionally.
 	// There is no ambiguity about whose they are, and store.Add replaces the
 	// credential file wholesale — so without this, re-authenticating an account
@@ -550,9 +582,10 @@ func newAddTokenCmd() *cobra.Command {
 		Long: "Registers an sk-ant-oat... setup token or an sk-ant-api... API key.\n" +
 			"Use this on a headless machine, or when a token came from somewhere else.\n" +
 			"'-' reads the token from stdin; with no argument ccdad prompts without echoing.\n\n" +
-			"Claude Code reads these from the environment, not from its credentials file:\n" +
-			"CLAUDE_CODE_OAUTH_TOKEN for a setup token, ANTHROPIC_API_KEY for an API key.\n" +
-			"ccdad records the account but cannot install one as the live login.",
+			"An API key can be made the live credential: --activate writes it to Claude Code's\n" +
+			"config as primaryApiKey and removes the OAuth login sitting in front of it.\n" +
+			"A setup token cannot — Claude Code reads one from CLAUDE_CODE_OAUTH_TOKEN only,\n" +
+			"so run Claude Code with that variable exported instead.",
 		Args:          usageArgs(cobra.MaximumNArgs(1)),
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -576,7 +609,7 @@ func newAddTokenCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&email, "email", "", "label for the account (optional)")
 	cmd.Flags().StringVar(&alias, "alias", "", "short handle for the account")
-	cmd.Flags().BoolVar(&activate, "activate", false, "not supported for tokens; Claude Code reads them from the environment")
+	cmd.Flags().BoolVar(&activate, "activate", false, "make an API key the live credential (not available for a setup token)")
 	return cmd
 }
 
@@ -653,13 +686,13 @@ func runAddToken(cmd *cobra.Command, token string, isAPIKey bool, email, alias s
 		kind, envVar, uuidPrefix = "api-key", "ANTHROPIC_API_KEY", "apikey-"
 	}
 
-	// Refuse before doing any work. Claude Code reads neither kind of token out
-	// of the credentials file, so "activating" one would mean writing a record
-	// it never writes and cannot use as a login. Name the mechanism that does
-	// work instead of producing a broken live file.
-	if activate {
-		return UsageError("an %s cannot be activated as a Claude Code login; Claude Code reads it from %s, not from the credentials file",
-			kind, envVar)
+	// Refuse before doing any work, and only for the kind that genuinely has
+	// nowhere to go: a setup token is read from the environment ONLY, so
+	// "activating" one would mean writing a record Claude Code never writes and
+	// cannot use. An API key does have a home — ~/.claude.json's primaryApiKey —
+	// and is activated further down, after it has been stored.
+	if activate && !isAPIKey {
+		return setupTokenRefusal("that token")
 	}
 
 	acct := store.Account{
@@ -747,6 +780,94 @@ func runAddToken(cmd *cobra.Command, token string, isAPIKey bool, email, alias s
 		return fmt.Errorf("the account was stored but cannot be read back; the store may be corrupt")
 	}
 	fmt.Fprintf(stderr, "Added %s (%s, index %d).\n", saved.Label(), saved.Kind, saved.Idx)
-	fmt.Fprintf(stderr, "Claude Code reads this credential from %s; ccdad stores it but does not install it as the live login.\n", envVar)
+
+	if !activate {
+		if isAPIKey {
+			fmt.Fprintf(stderr, "Run 'ccdad switch %d' to make it the credential Claude Code uses.\n", saved.Idx)
+		} else {
+			fmt.Fprintf(stderr, "Claude Code reads a setup token from %s only; export it to use this account.\n", envVar)
+		}
+		return nil
+	}
+
+	// --activate IS a switch, so the drift probe and the cooldown stamp belong
+	// here exactly as they do on `switch`. Reached only for an API key: the
+	// setup-token case was refused before any work was done.
+	live, liveErr := cclink.Load()
+	if liveErr != nil {
+		fmt.Fprintf(stderr, "note: could not read the current login (%v); activating anyway\n", liveErr)
+	}
+	if unknown := cclink.UnknownKeys(live); len(unknown) > 0 {
+		fmt.Fprintf(stderr,
+			"note: unrecognized keys in the credentials file are being preserved unchanged: %s\n",
+			strings.Join(unknown, ", "))
+	}
+	if err := activateAPIKeyAccount(token); err != nil {
+		return err
+	}
+	if err := s.SetActive(saved.UUID); err != nil {
+		return err
+	}
+	recordSwitch(cmd, saved.UUID)
+	fmt.Fprintf(stderr, "Switched to %s.\n", saved.Label())
+	noteDisplacingAuth(cmd, token)
 	return nil
+}
+
+// liveOwnership is what a probe of the live login concluded.
+type liveOwnership uint8
+
+const (
+	// liveOwnershipUnknown means the question could not be answered: no token
+	// to ask with, a rejected token, an unreachable endpoint, a cancelled
+	// command. It is the value every failure maps to, because none of them is
+	// evidence either way.
+	liveOwnershipUnknown liveOwnership = iota
+	// liveOwnershipSame means the live login is the account just authenticated.
+	liveOwnershipSame
+	// liveOwnershipOther means it provably belongs to someone else.
+	liveOwnershipOther
+)
+
+// liveAccessToken is the access token in the live credentials file, or "".
+func liveAccessToken(live cclink.Blob) string {
+	raw, ok := live["claudeAiOauth"]
+	if !ok {
+		return ""
+	}
+	var payload struct {
+		AccessToken string `json:"accessToken"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return ""
+	}
+	return payload.AccessToken
+}
+
+// liveLoginOwner resolves the live login to an account and compares it to uuid.
+//
+// The token it sends is a credential that may belong to a DIFFERENT account
+// than the one being added, and that is the whole point: the question is whose
+// it is. It goes to the same endpoint, over the same TLS, in the same
+// Authorization header that every other profile call in this package uses, so
+// it is not a new class of exposure -- but it IS a request made with a token
+// the user did not just hand us, which is why it happens only on the branch
+// that has something to gain from it.
+//
+// Every failure is liveOwnershipUnknown rather than an error. The login has
+// already succeeded by the time this runs; refusing to store an account because
+// a best-effort probe timed out would turn an optimisation into an outage.
+func liveLoginOwner(cmd *cobra.Command, uuid string, live cclink.Blob) liveOwnership {
+	token := liveAccessToken(live)
+	if token == "" || uuid == "" {
+		return liveOwnershipUnknown
+	}
+	profile, err := newProfileClient().FetchProfile(cmd.Context(), token)
+	if err != nil || profile == nil || profile.AccountUUID == "" {
+		return liveOwnershipUnknown
+	}
+	if profile.AccountUUID == uuid {
+		return liveOwnershipSame
+	}
+	return liveOwnershipOther
 }

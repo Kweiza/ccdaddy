@@ -194,11 +194,11 @@ func TestStatusNeverFetches(t *testing.T) {
 		FetchedAt: statusNow.Add(-6 * time.Hour),
 		Snapshot:  &usage.Snapshot{FiveHour: window(62, statusNow.Add(time.Hour))},
 	})
-	before, err := os.ReadFile(usage.CachePath())
+	before, err := os.ReadFile(mustPath(usage.CachePath()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	beforeInfo, err := os.Stat(usage.CachePath())
+	beforeInfo, err := os.Stat(mustPath(usage.CachePath()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +207,7 @@ func TestStatusNeverFetches(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit %d, want 0", code)
 	}
-	after, err := os.ReadFile(usage.CachePath())
+	after, err := os.ReadFile(mustPath(usage.CachePath()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,7 +217,7 @@ func TestStatusNeverFetches(t *testing.T) {
 	// Content equality alone is not enough: a fetch that happened to return the
 	// same numbers would still rewrite the file. Every write here is a rename,
 	// so the modification time moves whether the bytes did or not.
-	afterInfo, err := os.Stat(usage.CachePath())
+	afterInfo, err := os.Stat(mustPath(usage.CachePath()))
 	if err != nil {
 		t.Fatal(err)
 	}

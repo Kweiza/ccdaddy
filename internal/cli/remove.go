@@ -32,7 +32,7 @@ func newRemoveCmd() *cobra.Command {
 			// Attribute before removing: afterwards the stored credentials are
 			// gone and the question can no longer be answered.
 			live, _ := cclink.Load()
-			current, hasLive := attributeLogin(live, accounts, s.Credentials)
+			current, hasLive := attributeLive(live, accounts, s.Credentials)
 			wasLive := hasLive && current.UUID == target.UUID
 
 			// A destructive command with no terminal to confirm at must be told

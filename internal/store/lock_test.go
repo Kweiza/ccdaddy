@@ -313,8 +313,8 @@ func TestLockFileIsNeverWrittenOrUnlinked(t *testing.T) {
 // the daemon writes. The evidence is that the lock lives on its own path.
 func TestAccountsFileIsNotItselfLocked(t *testing.T) {
 	root := withStore(t)
-	if LockPath() != filepath.Join(root, lockFileName) {
-		t.Fatalf("LockPath() = %q, want %q", LockPath(), filepath.Join(root, lockFileName))
+	if mustPath(LockPath()) != filepath.Join(root, lockFileName) {
+		t.Fatalf("mustPath(LockPath()) = %q, want %q", mustPath(LockPath()), filepath.Join(root, lockFileName))
 	}
 	if lockFileName == accountsFile {
 		t.Fatal("the lock is on accounts.toml itself; an atomic rename would move the file out from under it")

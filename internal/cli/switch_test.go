@@ -3,9 +3,11 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -97,7 +99,7 @@ func TestSwitchToActiveAccountIsExitThree(t *testing.T) {
 	if code, _, _, top := runRoot(t, "switch", "1"); code != ExitOK {
 		t.Fatalf("first switch = %d (%s), want 0", code, top)
 	}
-	before, err := os.ReadFile(ccpath.CredentialsPath())
+	before, err := os.ReadFile(mustPath(ccpath.CredentialsPath()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +114,7 @@ func TestSwitchToActiveAccountIsExitThree(t *testing.T) {
 	if !strings.Contains(errOut, "Already on") {
 		t.Fatalf("stderr = %q, want the no-op notice", errOut)
 	}
-	after, err := os.ReadFile(ccpath.CredentialsPath())
+	after, err := os.ReadFile(mustPath(ccpath.CredentialsPath()))
 	if err != nil || !bytes.Equal(before, after) {
 		t.Fatal("a no-op switch rewrote the live credentials file")
 	}
@@ -127,10 +129,13 @@ func TestSwitchToActiveAccountIsExitThree(t *testing.T) {
 // never from the credentials file, so there is nothing to install. Say that
 // instead of handing cclink a snapshot it will refuse for a reason the user
 // cannot act on.
-func TestSwitchRefusesATokenAccount(t *testing.T) {
+func TestSwitchRefusesASetupTokenAccount(t *testing.T) {
 	isolate(t)
 	stubEnvironment(t, false, false)
-	if err, _, _ := runCmd(t, newAddTokenCmd(), "sk-ant-api03-TESTKEY"); err != nil {
+	stubProfile(t, func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, profileJSON("u-token", "token@example.com"))
+	})
+	if err, _, _ := runCmd(t, newAddTokenCmd(), "sk-ant-oat01-TESTTOKEN"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -138,10 +143,97 @@ func TestSwitchRefusesATokenAccount(t *testing.T) {
 	if code != ExitUsage {
 		t.Fatalf("exit = %d, want %d", code, ExitUsage)
 	}
-	if !strings.Contains(top, "ANTHROPIC_API_KEY") {
+	if !strings.Contains(top, "CLAUDE_CODE_OAUTH_TOKEN") {
 		t.Fatalf("error %q should name the mechanism that does work", top)
 	}
 	assertNoLiveCredentials(t)
+}
+
+// An api-key account IS switchable, and the switch is two writes to two files.
+//
+// The credentials half is the one a plausible implementation omits, and the
+// assertion for it is written against a file that HAS a login: Claude Code
+// prefers claudeAiOauth over its stored primaryApiKey in every configuration,
+// so a switch that writes only the config reports success while the session
+// goes on using the old account. With an empty credentials file both
+// implementations look identical.
+func TestSwitchInstallsAnAPIKeyAccount(t *testing.T) {
+	isolate(t)
+	stubEnvironment(t, false, false)
+	const key = "sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUV"
+	if err, _, _ := runCmd(t, newAddTokenCmd(), key); err != nil {
+		t.Fatal(err)
+	}
+	writeLiveFile(t, `{"claudeAiOauth":{"accessToken":"live","refreshToken":"live-r"},"mcpOAuth":{"srv":1}}`)
+
+	code, _, _, top := runRoot(t, "switch", "1")
+	if code != ExitOK {
+		t.Fatalf("switch = %d (%s), want 0", code, top)
+	}
+
+	cfg, err := cclink.LoadGlobalConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := cclink.PrimaryAPIKey(cfg); !ok || got != key {
+		t.Fatalf("primaryApiKey = %q (present %v), want the switched-to key", got, ok)
+	}
+	live, err := cclink.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, still := live["claudeAiOauth"]; still {
+		t.Fatal("the OAuth login survived the switch, so the stored key is inert and nothing changed")
+	}
+	if _, gone := live["mcpOAuth"]; !gone {
+		t.Fatal("the switch destroyed the machine-scoped mcpOAuth key")
+	}
+
+	// The second switch is the already-on check, and it has to consider BOTH
+	// halves: a check that only compared the stored key would also report
+	// "already on" in the state where the key is stored but a login is still in
+	// front of it — which is the state where nothing is in effect.
+	code, _, _, _ = runRoot(t, "switch", "1")
+	if code != ExitNothingToDo {
+		t.Fatalf("second switch = %d, want %d (already on)", code, ExitNothingToDo)
+	}
+}
+
+// Switching back to a login must take ccdad's key out of the config.
+//
+// Leaving it is not neutral. The login wins for as long as it is there, so
+// nothing looks wrong — and the moment the user signs out of Claude Code, a key
+// belonging to a DIFFERENT account silently becomes the credential, because
+// primaryApiKey is exactly Claude Code's fallback for "no login".
+func TestSwitchToALoginClearsCcdadsStoredAPIKey(t *testing.T) {
+	isolate(t)
+	stubEnvironment(t, false, false)
+	const key = "sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUV"
+	if err, _, _ := runCmd(t, newAddTokenCmd(), key); err != nil {
+		t.Fatal(err)
+	}
+	seedAccount(t, "u-1", "a@example.com")
+
+	if code, _, _, top := runRoot(t, "switch", "1"); code != ExitOK {
+		t.Fatalf("switch to the api key = %d (%s)", code, top)
+	}
+	if code, _, _, top := runRoot(t, "switch", "2"); code != ExitOK {
+		t.Fatalf("switch to the login = %d (%s)", code, top)
+	}
+
+	cfg, err := cclink.LoadGlobalConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := cclink.PrimaryAPIKey(cfg); ok {
+		t.Fatalf("primaryApiKey = %q after switching to a login; it becomes the credential again on sign-out", got)
+	}
+	// The approval entry is left behind on purpose: it is twenty characters of
+	// a key, it is consent the user gave through Claude Code's own prompt, and
+	// removing it would make the next switch back prompt again.
+	if approved := cclink.ApprovedAPIKeys(cfg); len(approved) != 1 {
+		t.Fatalf("approved = %v, want the approval entry preserved", approved)
+	}
 }
 
 // Spec §4.3 requires the unknown-key probe on every switch: drift here is
@@ -152,7 +244,7 @@ func TestSwitchWarnsAboutUnknownKeysAndPreservesThem(t *testing.T) {
 	seedAccount(t, "u-1", "a@example.com")
 
 	live := `{"claudeAiOauth":{"accessToken":"OTHER","refreshToken":"OTHER-RT"},"somethingNew":{"a":1}}`
-	if err := os.WriteFile(ccpath.CredentialsPath(), []byte(live), 0o600); err != nil {
+	if err := os.WriteFile(mustPath(ccpath.CredentialsPath()), []byte(live), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -164,7 +256,7 @@ func TestSwitchWarnsAboutUnknownKeysAndPreservesThem(t *testing.T) {
 		t.Fatalf("stderr = %q, want the unrecognized key named", errOut)
 	}
 
-	raw, err := os.ReadFile(ccpath.CredentialsPath())
+	raw, err := os.ReadFile(mustPath(ccpath.CredentialsPath()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +283,7 @@ func TestSwitchWarnsAboutUnknownKeysAndPreservesThem(t *testing.T) {
 func TestSwitchGetsPastAnUnreadableLiveFileToTheRealError(t *testing.T) {
 	isolate(t)
 	seedAccount(t, "u-1", "a@example.com")
-	if err := os.WriteFile(ccpath.CredentialsPath(), []byte("{ not json"), 0o600); err != nil {
+	if err := os.WriteFile(mustPath(ccpath.CredentialsPath()), []byte("{ not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -576,7 +668,7 @@ func TestATargetlessSwitchOnTheBestAccountIsExitThree(t *testing.T) {
 	seedUsage(t, "u-1", 80)
 	seedUsage(t, "u-2", 10)
 	clearCooldown(t)
-	before, err := os.ReadFile(ccpath.CredentialsPath())
+	before, err := os.ReadFile(mustPath(ccpath.CredentialsPath()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -585,7 +677,7 @@ func TestATargetlessSwitchOnTheBestAccountIsExitThree(t *testing.T) {
 	if code != ExitNothingToDo {
 		t.Fatalf("exit = %d (%s), want %d", code, errOut, ExitNothingToDo)
 	}
-	after, err := os.ReadFile(ccpath.CredentialsPath())
+	after, err := os.ReadFile(mustPath(ccpath.CredentialsPath()))
 	if err != nil || !bytes.Equal(before, after) {
 		t.Fatal("a no-op targetless switch rewrote the live credentials file")
 	}
@@ -704,7 +796,7 @@ func TestForceOnTheBestAccountIsStillNothingToDo(t *testing.T) {
 	}
 	seedUsage(t, "u-1", 80)
 	seedUsage(t, "u-2", 10)
-	before, err := os.ReadFile(ccpath.CredentialsPath())
+	before, err := os.ReadFile(mustPath(ccpath.CredentialsPath()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -713,7 +805,7 @@ func TestForceOnTheBestAccountIsStillNothingToDo(t *testing.T) {
 	if code != ExitNothingToDo {
 		t.Fatalf("exit = %d (%s), want %d", code, errOut, ExitNothingToDo)
 	}
-	after, err := os.ReadFile(ccpath.CredentialsPath())
+	after, err := os.ReadFile(mustPath(ccpath.CredentialsPath()))
 	if err != nil || !bytes.Equal(before, after) {
 		t.Fatal("--force rewrote the live credentials file with nothing to switch to")
 	}
@@ -793,5 +885,118 @@ func TestATargetlessSwitchNamesWhyTheCreditGateRefused(t *testing.T) {
 				t.Fatalf("live account = %q; ccdad spent money it was never opted in to", got)
 			}
 		})
+	}
+}
+
+// The two writes happen config-first, and the order is a safety property rather
+// than a style choice.
+//
+// The key is inert while a login sits in front of it, so writing the config
+// first means an interruption between the two leaves the machine logged in as
+// whatever it was, with an unused key beside it. The opposite order leaves a
+// window with no login and no key: a logged-out machine, from a command that
+// was asked to switch accounts.
+//
+// The failure is induced by making ~/.claude.json unreadable rather than by a
+// seam, so the test drives the real code path a full disk or a permission
+// change would.
+func TestSwitchToAnAPIKeyLeavesTheLoginAloneWhenTheConfigCannotBeWritten(t *testing.T) {
+	claude := isolate(t)
+	stubEnvironment(t, false, false)
+	if err, _, _ := runCmd(t, newAddTokenCmd(), "sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUV"); err != nil {
+		t.Fatal(err)
+	}
+	const login = `{"claudeAiOauth":{"accessToken":"live","refreshToken":"live-r"}}`
+	writeLiveFile(t, login)
+
+	// A directory where the config file goes: readable as a path, unreadable as
+	// a document, on every platform.
+	if err := os.MkdirAll(filepath.Join(claude, ".claude.json"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if code, _, _, _ := runRoot(t, "switch", "1"); code == ExitOK {
+		t.Fatal("switch reported success with the config unwritable")
+	}
+
+	raw, err := os.ReadFile(mustPath(ccpath.CredentialsPath()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var after map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &after); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := after["claudeAiOauth"]; !ok {
+		t.Fatalf("the login was removed before the key was stored, so the machine is signed out of everything: %s", raw)
+	}
+}
+
+// A primaryApiKey ccdad did not install is left where it is.
+//
+// It came from Claude Code's own `/login`, it is inert for as long as the login
+// being installed is live, and deleting a credential ccdad never created is not
+// a side effect a switch is entitled to have.
+func TestSwitchToALoginLeavesAForeignAPIKeyAlone(t *testing.T) {
+	claude := isolate(t)
+	seedAccount(t, "u-1", "a@example.com")
+	if err := os.WriteFile(filepath.Join(claude, ".claude.json"),
+		[]byte(`{"primaryApiKey":"sk-ant-api03-SOMEONE-ELSES"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if code, _, _, top := runRoot(t, "switch", "1"); code != ExitOK {
+		t.Fatalf("switch = %d (%s)", code, top)
+	}
+
+	cfg, err := cclink.LoadGlobalConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := cclink.PrimaryAPIKey(cfg); !ok || got != "sk-ant-api03-SOMEONE-ELSES" {
+		t.Fatalf("primaryApiKey = %q (present %v); a key ccdad never stored must survive a switch", got, ok)
+	}
+}
+
+// Removing an UNMANAGED login has to say so.
+//
+// A switch between two OAuth accounts destroys an unmanaged live login in the
+// same way, so this is not a new hazard — but that switch leaves the machine
+// holding another login, and this one leaves it holding none. The message
+// ccdad prints for a managed login says the account can be switched back to,
+// and printing that sentence for a login nothing has a copy of would be false.
+func TestSwitchToAnAPIKeyWarnsWhenItRemovesAnUnmanagedLogin(t *testing.T) {
+	isolate(t)
+	stubEnvironment(t, false, false)
+	if err, _, _ := runCmd(t, newAddTokenCmd(), "sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUV"); err != nil {
+		t.Fatal(err)
+	}
+	// A login ccdad has never stored.
+	writeLiveFile(t, `{"claudeAiOauth":{"accessToken":"STRANGER","refreshToken":"RT-STRANGER"}}`)
+
+	code, _, errOut, top := runRoot(t, "switch", "1")
+	if code != ExitOK {
+		t.Fatalf("switch = %d (%s)", code, top)
+	}
+	if !strings.Contains(errOut, "NOT one ccdad manages") {
+		t.Fatalf("stderr = %q, want a warning that the removed login cannot be restored", errOut)
+	}
+
+	// The managed case must NOT carry that warning, or the warning means
+	// nothing: a message printed either way tells a reader nothing about which
+	// case they are in.
+	isolate(t)
+	stubEnvironment(t, false, false)
+	if err, _, _ := runCmd(t, newAddTokenCmd(), "sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUV"); err != nil {
+		t.Fatal(err)
+	}
+	seedAccount(t, "u-1", "a@example.com")
+	if code, _, _, top := runRoot(t, "switch", "2"); code != ExitOK {
+		t.Fatalf("switch to the managed login = %d (%s)", code, top)
+	}
+	if code, _, errOut, top := runRoot(t, "switch", "1"); code != ExitOK {
+		t.Fatalf("switch back to the api key = %d (%s)", code, top)
+	} else if strings.Contains(errOut, "NOT one ccdad manages") {
+		t.Fatalf("stderr = %q, want no warning for a login ccdad can restore", errOut)
 	}
 }

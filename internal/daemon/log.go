@@ -64,7 +64,13 @@ type Logger struct {
 }
 
 // OpenLog opens the daemon log with the size policy above.
-func OpenLog() (*Logger, error) { return openLog(LogPath(), maxLogSize, keepRotated) }
+func OpenLog() (*Logger, error) {
+	path, err := LogPath()
+	if err != nil {
+		return nil, err
+	}
+	return openLog(path, maxLogSize, keepRotated)
+}
 
 func openLog(path string, max int64, keep int) (*Logger, error) {
 	if keep < 1 {

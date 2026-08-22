@@ -205,7 +205,7 @@ func TestInactiveAccountTakesNoClaudeCodeLock(t *testing.T) {
 
 	src := sourceFor(t, func(w http.ResponseWriter, _ *http.Request) {
 		// The lock must be absent DURING the call, not merely released after.
-		if _, err := os.Stat(cclock.OAuthRefreshLockDir()); err == nil {
+		if _, err := os.Stat(mustPath(cclock.OAuthRefreshLockDir())); err == nil {
 			t.Error("Claude Code's refresh lock is held while refreshing an inactive account")
 		}
 		fmt.Fprint(w, tokenResponse("NEW-AT", "NEW-RT", 28800))
@@ -214,7 +214,7 @@ func TestInactiveAccountTakesNoClaudeCodeLock(t *testing.T) {
 	if _, err := src.AccessToken(context.Background(), "u-1"); err != nil {
 		t.Fatalf("AccessToken() = %v, want nil", err)
 	}
-	if _, err := os.Stat(cclock.OAuthRefreshLockDir()); err == nil {
+	if _, err := os.Stat(mustPath(cclock.OAuthRefreshLockDir())); err == nil {
 		t.Error("Claude Code's refresh lock was left behind by an inactive refresh")
 	}
 	// The live login is untouched: this package never writes ~/.claude.
@@ -278,7 +278,7 @@ func TestLiveLoginTakesClaudeCodesRefreshLock(t *testing.T) {
 	seed(t, "u-1", rec)
 	writeLive(t, rec)
 
-	held, err := cclock.Acquire(cclock.OAuthRefreshLockDir(), cclock.Options{
+	held, err := cclock.Acquire(mustPath(cclock.OAuthRefreshLockDir()), cclock.Options{
 		Stale:   cclock.RefreshStale,
 		Timeout: time.Second,
 	})
@@ -299,7 +299,7 @@ func TestLiveLoginTakesClaudeCodesRefreshLock(t *testing.T) {
 	if _, err := src.AccessToken(context.Background(), "u-1"); err != nil {
 		t.Fatalf("AccessToken() after the lock was freed = %v, want nil", err)
 	}
-	if _, err := os.Stat(cclock.OAuthRefreshLockDir()); err == nil {
+	if _, err := os.Stat(mustPath(cclock.OAuthRefreshLockDir())); err == nil {
 		t.Error("the refresh lock was left held")
 	}
 }
