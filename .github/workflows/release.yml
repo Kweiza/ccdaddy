@@ -5,6 +5,9 @@
 # authenticity story - there is no minisign and no self-update to fall back on
 # - so an attestation that is not produced beside the upload leaves a release
 # with integrity and no authenticity, and nothing downstream notices.
+#
+# Nothing here publishes until .github/workflows/ci.yml has gone green on the
+# tagged commit: see the gate job below.
 name: release
 
 on:
@@ -24,10 +27,21 @@ jobs:
   # A SEPARATE job, before the build, on purpose. A tag that is not strict
   # semver, or a repository still on the default read-only GITHUB_TOKEN, both
   # fail at `gh release create` - the very last step, after every build minute
-  # is already spent. This job costs seconds and needs no permissions at all.
+  # is already spent.
+  #
+  # It answers two questions, cheapest first: is this tag publishable at all,
+  # and did CI ever prove this commit green. The second can wait for a run that
+  # is still in flight, so the first is deliberately the one that costs
+  # seconds.
   gate:
     name: Gate the tag
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Reading another workflow's runs is the Actions API, which `contents:
+    # read` does not cover.
+    permissions:
+      contents: read
+      actions: read
     outputs:
       version: ${{ steps.tag.outputs.version }}
       prerelease: ${{ steps.tag.outputs.prerelease }}
@@ -47,6 +61,20 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: scripts/tag-gate.sh "$TAG" >>"$GITHUB_OUTPUT"
 
+      # Until this existed, a tag on a commit whose CI never ran - or ran red -
+      # published six binaries and an attestation anyway, because the only test
+      # in this workflow is the ubuntu-only re-run below. The rule lives in
+      # scripts/require-green-ci.sh, where it has a test that does not need a
+      # tag to exercise it, and its header records why it asks the Actions API
+      # for ci.yml's runs rather than for the commit's check runs.
+      #
+      # There is no override input. A red CI and a human in a hurry is the
+      # combination this exists for.
+      - name: Require a green CI run on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/require-green-ci.sh "$GITHUB_SHA"
+
   publish:
     name: Build and publish
     needs: gate
@@ -64,37 +92,29 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # The last gate before a public artifact. The three-OS matrix lives in
-      # the CI workflow and runs on the commit; this is the cheap re-run that
-      # stops a tag publishing a binary whose own build script is broken.
+      # The last gate before a public artifact, and the only one in this
+      # workflow that runs the code. The three-OS matrix in .github/workflows/
+      # ci.yml is what actually covers the platforms, and the gate job has
+      # already refused this tag unless that matrix went green on this very
+      # commit; this is the cheap re-run that catches a tree which builds but
+      # whose release path does not.
       - name: Test
         # -race, not a bare test run. internal/daemon is the first package with
         # a lock held for process life, a spawned child and a background loop,
         # and the race detector has already caught one defect there that a
-        # plain run passed. The three-OS matrix still belongs in the CI
-        # workflow; this is the last gate before a public artifact.
+        # plain run passed.
         run: go test -race ./...
 
       # Go cross-compiles all six targets on one runner in about two minutes,
       # so there is no matrix here and therefore nothing for fail-fast to
       # apply to. Deliberately the same script a developer runs, so the asset
       # names cannot drift between the two.
-      # `go test` compiles for the host only, and `go build ./...` in the next
-      # step compiles only what cmd/ccdad imports. internal/daemon is the first
-      # package with platform-divergent files, and nothing yet imports it — so
-      # a spawn_windows.go that does not even parse would sail through the
-      # whole pipeline and ship. vet type-checks the package AND its test files
-      # for a target, which is the cheapest gate that catches it. It stays here
-      # until the three-OS matrix exists.
-      - name: Vet every release target
-        run: |
-          set -euo pipefail
-          for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
-            echo "::group::vet $t"
-            GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go vet ./...
-            echo "::endgroup::"
-          done
-
+      #
+      # A `Vet every release target` step used to stand here, because nothing
+      # else compiled a _windows.go file or its tests. The ci.yml `cgo` job now
+      # does exactly that on every commit, and the gate above will not let this
+      # job start on a commit where it did not pass, so repeating it here costs
+      # a minute of every release and proves nothing new.
       - name: Build the release assets
         env:
           VERSION: ${{ needs.gate.outputs.version }}

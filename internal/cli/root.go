@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"syscall"
 
 	"github.com/spf13/cobra"
 
@@ -151,8 +150,10 @@ func ExecuteWith(root *cobra.Command, errOut io.Writer) ExitCode {
 		return ExitOK
 	}
 	// A closed stdout reader is not a failure: `ccdad list --json | head -1`
-	// must exit 0.
-	if errors.Is(err, syscall.EPIPE) {
+	// must exit 0. What that looks like is per-platform -- EPIPE here, two
+	// Windows error codes there -- so the predicate is build-tagged rather
+	// than an errno spelled inline.
+	if isBrokenPipe(err) {
 		return ExitOK
 	}
 	// A silent error carries an exit code without a message: the command has

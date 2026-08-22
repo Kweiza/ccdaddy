@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -230,7 +229,7 @@ func TestAutoJSONExitsZeroWhenTheReaderGoesAway(t *testing.T) {
 // brokenPipe is a stdout whose reader has gone away.
 type brokenPipe struct{}
 
-func (brokenPipe) Write([]byte) (int, error) { return 0, syscall.EPIPE }
+func (brokenPipe) Write([]byte) (int, error) { return 0, errBrokenPipeForTest }
 
 // Two processes both executing switches fight the cooldown and the anti-flap
 // state, which live on disk. The continuous form refuses rather than joining

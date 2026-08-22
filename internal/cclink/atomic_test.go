@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestWriteFileAtomicCreates(t *testing.T) {
@@ -214,6 +215,22 @@ func TestWriteFileAtomicReaderNeverSeesPartialFile(t *testing.T) {
 		}
 		close(stop)
 	}()
+	// On Windows the reader has to breathe. FILE_SHARE_DELETE stops it
+	// BLOCKING the replace, but the replaced file then sits delete-pending
+	// until that handle closes, and MoveFileEx onto a name in that state
+	// answers ERROR_ACCESS_DENIED. A reader that reopens with no pause at all
+	// keeps the name permanently in it, and the writer spends all ten of the
+	// bounded retries §10.3 sizes for a TRANSIENT antivirus handle against
+	// interference that never stops. Measured: this test failed on
+	// windows-latest with "replacing .credentials.json: Access is denied".
+	//
+	// No pause off Windows: a rename there cannot be obstructed by an open
+	// handle at all, and the tighter the loop the better this test is at
+	// catching a torn write.
+	var breathe time.Duration
+	if runtime.GOOS == "windows" {
+		breathe = time.Millisecond
+	}
 	for {
 		select {
 		case <-stop:
@@ -221,7 +238,10 @@ func TestWriteFileAtomicReaderNeverSeesPartialFile(t *testing.T) {
 			return
 		default:
 		}
-		got, err := os.ReadFile(path)
+		if breathe > 0 {
+			time.Sleep(breathe)
+		}
+		got, err := readSharedDelete(path)
 		if err != nil {
 			t.Errorf("read: %v", err)
 			break

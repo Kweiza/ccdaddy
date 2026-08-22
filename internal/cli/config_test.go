@@ -2,12 +2,12 @@ package cli
 
 import (
 	"encoding/json"
+	"github.com/Kweiza/ccdaddy/internal/config"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
-
-	"github.com/Kweiza/ccdaddy/internal/config"
 )
 
 func configPath(t *testing.T) string {
@@ -238,8 +238,15 @@ func TestTheConfigFileIsWrittenPrivately(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Errorf("mode = %v, want 0600", perm)
+	// Windows has no mode bits: os.Chmod there toggles the read-only attribute
+	// and Stat reports 0666 whatever the file was created with. §10.3 accepts
+	// that for v1 and relies on the inherited %USERPROFILE% ACL instead --
+	// which is a property of the directory, not of this file, and not
+	// something a Go test can assert here.
+	if runtime.GOOS != "windows" {
+		if perm := info.Mode().Perm(); perm != 0o600 {
+			t.Errorf("mode = %v, want 0600", perm)
+		}
 	}
 }
 

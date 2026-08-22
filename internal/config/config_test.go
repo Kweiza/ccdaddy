@@ -293,8 +293,13 @@ func TestAnUnreadableConfigIsAnErrorRatherThanSilentDefaults(t *testing.T) {
 		t.Skipf("cannot make the file unreadable here: %v", err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(filepath.Join(home, FileName), 0o600) })
-	if os.Geteuid() == 0 {
-		t.Skip("root reads anything")
+	// Probe rather than trust the chmod. os.Chmod REPORTS success on Windows
+	// and changes nothing but the read-only attribute, and root reads a
+	// mode-000 file anywhere -- either way the file stays readable and this
+	// test has nothing left to assert. os.Geteuid() cannot see the first
+	// case: it answers -1 on Windows.
+	if _, err := os.ReadFile(filepath.Join(home, FileName)); err == nil {
+		t.Skip("the file is still readable here, so there is nothing to refuse")
 	}
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() reported the defaults for a file it could not read; that hides a config the user believes is in force")
@@ -448,9 +453,6 @@ func TestNoNonFiniteValueCanReachTheEngine(t *testing.T) {
 // bytes would leave the daemon reporting a problem that has gone away for as
 // long as nobody edits the file again.
 func TestATransientReadFailureIsNotRememberedOnceItClears(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("root reads anything")
-	}
 	home := write(t, "threshold = 70.0\n")
 	path := filepath.Join(home, FileName)
 	r := NewReloader()
@@ -460,6 +462,14 @@ func TestATransientReadFailureIsNotRememberedOnceItClears(t *testing.T) {
 
 	if err := os.Chmod(path, 0o000); err != nil {
 		t.Skipf("cannot make the file unreadable here: %v", err)
+	}
+	// Probe rather than trust the chmod. os.Chmod REPORTS success on Windows
+	// and changes nothing but the read-only attribute, and root reads a
+	// mode-000 file anywhere -- either way the file stays readable and this
+	// test has nothing left to assert. os.Geteuid() cannot see the first
+	// case: it answers -1 on Windows.
+	if _, err := os.ReadFile(path); err == nil {
+		t.Skip("the file is still readable here, so there is nothing to refuse")
 	}
 	if _, err := r.Reload(); err == nil {
 		t.Fatal("Reload() hid an unreadable file")
