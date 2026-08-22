@@ -13,7 +13,11 @@
 #
 # `curl | bash` puts the script itself on stdin, so nothing here may read from
 # stdin: no prompts, no `read`, and therefore no offer to edit a shell profile.
-# The PATH note at the end and `ccdad setup-path` exist because of that.
+# The PATH note at the end exists because of that. It prints the export line
+# rather than naming `ccdad setup-path`: that command is not in the tree yet,
+# and an installer whose last instruction is `unknown command` is worse than
+# one that asks for a copy and paste. Point it back at setup-path when that
+# command lands.
 #
 # This is the only thing verifying the download, so every failure to verify is
 # an abort, never a warning. There are three distinct ones: the checksum file
@@ -172,9 +176,9 @@ case ":${PATH:-}:" in
 	info ""
 	info "$INSTALL_DIR is not on your PATH. This installer never edits a shell"
 	info "profile — it cannot ask, and guessing at a startup file is how"
-	info "installers corrupt them. Register it with:"
+	info "installers corrupt them. Add this to your shell profile:"
 	info ""
-	info "    $TARGET setup-path"
+	info "    export PATH=\"$INSTALL_DIR:\$PATH\""
 	;;
 esac
 

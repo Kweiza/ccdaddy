@@ -40,7 +40,10 @@ func newAutoCmd() *cobra.Command {
 			"the whole engine. Without it, evaluate continuously in the foreground until\n" +
 			"interrupted, which is what the daemon does with nothing detached.\n\n" +
 			"It never polls: it reads the same on-disk usage cache 'ccdad list' reads.\n" +
-			"Run the daemon, or 'ccdad list --refresh', to freshen it.\n\n" +
+			// `ccdad list --refresh` is task 43 and is not in the tree; naming
+			// it here told the user to run a flag the binary rejects. Put it
+			// back beside the daemon when that flag lands.
+			"Run 'ccdad daemon start' to freshen it.\n\n" +
 			"Exit codes are the point. 0 switched; 3 nothing to do; 4 wanted to move and\n" +
 			"could not, which is the one to alert on; 2 only ever a usage error.\n\n" +
 			"--json emits NDJSON — one object per line, not one document. It is the only\n" +
@@ -168,7 +171,7 @@ func autoPass(em *autoEmitter, s *store.Store) (ExitCode, error) {
 		// back empty. Both are 4, but only this one is fixed by polling.
 		em.evaluated(ev, "blocked", "no usage readings yet")
 		em.say("ccdad has no usage readings yet, so there is nothing to choose on.")
-		em.say("Run the daemon, or 'ccdad list --refresh', to fill the cache.")
+		em.say("Run 'ccdad daemon start' to fill the cache.")
 		return ExitBlocked, nil
 	}
 
