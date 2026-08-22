@@ -3,13 +3,63 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"io"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
+	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/store"
+	"github.com/Kweiza/ccdaddy/internal/strategy"
+	"github.com/Kweiza/ccdaddy/internal/usage"
 )
+
+// clearCooldown removes the stamp a preceding setup switch left, so a test that
+// is about the RANKING is not silently testing the cooldown instead.
+func clearCooldown(t *testing.T) {
+	t.Helper()
+	if err := strategy.WithState(time.Second, func(st *strategy.State) error {
+		st.RecordSwitch("", time.Time{})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// seedUsageAt is seedUsage with the reading's own timestamp, for the case the
+// cache's Prune rule exists for: an entry left behind by a PREVIOUS account at
+// the same uuid.
+func seedUsageAt(t *testing.T, uuid string, headroom float64, fetchedAt time.Time) {
+	t.Helper()
+	pct := 100 - headroom
+	resets := time.Now().Add(time.Hour)
+	snap := &usage.Snapshot{FiveHour: usage.NewWindow(&pct, &resets)}
+	if err := usage.WithCache(time.Second, func(c *usage.Cache) error {
+		c.Put(uuid, usage.Entry{Snapshot: snap, FetchedAt: fetchedAt})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// seedWeekly puts a reading whose PERISHABLE seven-day window is what moves,
+// which is the axis consume-first ranks on.
+func seedWeekly(t *testing.T, uuid string, headroom float64, expiresIn time.Duration) {
+	t.Helper()
+	pct := 100 - headroom
+	resets := time.Now().Add(expiresIn)
+	snap := &usage.Snapshot{SevenDay: usage.NewWindow(&pct, &resets)}
+	if err := usage.WithCache(time.Second, func(c *usage.Cache) error {
+		c.Put(uuid, usage.Entry{Snapshot: snap, FetchedAt: time.Now()})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
 
 // A missing argument is a caller mistake, which the exit contract reserves 2
 // for. Cobra reports it as a plain error, which would exit 1 and make a cron
@@ -218,5 +268,530 @@ func TestSwitchRecordsTheActiveAccount(t *testing.T) {
 	}
 	if got := s.ActiveUUID(); got != "u-2" {
 		t.Fatalf("ActiveUUID() = %q, want u-2", got)
+	}
+}
+
+// seedUsage puts one reading in the on-disk cache, which is the only thing a
+// targetless switch ranks on: `switch` never polls, for the same reason `list`
+// does not (§9.1, §7.4).
+func seedUsage(t *testing.T, uuid string, headroom float64) {
+	t.Helper()
+	pct := 100 - headroom
+	resets := time.Now().Add(time.Hour)
+	snap := &usage.Snapshot{FiveHour: usage.NewWindow(&pct, &resets)}
+	if err := usage.WithCache(time.Second, func(c *usage.Cache) error {
+		c.Put(uuid, usage.Entry{Snapshot: snap, FetchedAt: time.Now()})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func liveUUIDOf(t *testing.T) string {
+	t.Helper()
+	s, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, err := cclink.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	acct, ok := attributeWith(live, s.Accounts(), s.Credentials)
+	if !ok {
+		return ""
+	}
+	return acct.UUID
+}
+
+// ---- the three grammars ----------------------------------------------------
+
+// §9.1's optional form. The engine picks under §7.2's margins and installs the
+// winner.
+func TestSwitchWithNoTargetLetsTheEngineChoose(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "u-1", "a@example.com")
+	seedAccount(t, "u-2", "b@example.com")
+	if code, _, _, top := runRoot(t, "switch", "1"); code != ExitOK {
+		t.Fatalf("setup switch = %d (%s)", code, top)
+	}
+	seedUsage(t, "u-1", 10)
+	seedUsage(t, "u-2", 80)
+	clearCooldown(t)
+
+	code, _, errOut, top := runRoot(t, "switch", "--strategy", "headroom")
+	if code != ExitOK {
+		t.Fatalf("exit = %d (%s / %s), want 0", code, errOut, top)
+	}
+	if got := liveUUIDOf(t); got != "u-2" {
+		t.Fatalf("live account = %q, want u-2 — the one with headroom", got)
+	}
+}
+
+// The engine must obey the strategy it was given, not just the default.
+func TestSwitchHonoursTheNamedStrategy(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "u-1", "a@example.com")
+	seedAccount(t, "u-2", "b@example.com")
+	if code, _, _, top := runRoot(t, "switch", "1"); code != ExitOK {
+		t.Fatalf("setup switch = %d (%s)", code, top)
+	}
+	// u-2 has far more headroom; u-1's weekly quota is the one about to expire.
+	seedWeekly(t, "u-1", 40, 12*time.Hour)
+	seedWeekly(t, "u-2", 95, 6*24*time.Hour)
+	clearCooldown(t)
+
+	if code, _, errOut, top := runRoot(t, "switch", "--strategy", "headroom"); code != ExitOK {
+		t.Fatalf("headroom exit = %d (%s / %s)", code, errOut, top)
+	}
+	if got := liveUUIDOf(t); got != "u-2" {
+		t.Fatalf("headroom chose %q, want u-2", got)
+	}
+
+	clearCooldown(t)
+	if code, _, errOut, top := runRoot(t, "switch", "--strategy", "consume-first"); code != ExitOK {
+		t.Fatalf("consume-first exit = %d (%s / %s)", code, errOut, top)
+	}
+	if got := liveUUIDOf(t); got != "u-1" {
+		t.Fatalf("consume-first chose %q, want u-1 — perishable quota is spent first", got)
+	}
+}
+
+// The two rejections are asymmetric and easy to invert: --strategy is refused
+// WITH a target, --model WITHOUT --strategy.
+func TestSwitchRejectsTheTwoBadCombinations(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		args    []string
+		mention string
+	}{
+		{"strategy with an explicit target", []string{"switch", "1", "--strategy", "headroom"}, "cannot be given one as well"},
+		{"model without a strategy", []string{"switch", "--model", "opus"}, "alongside --strategy"},
+		{"model with an explicit target", []string{"switch", "1", "--model", "opus"}, "alongside --strategy"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolate(t)
+			seedAccount(t, "u-1", "a@example.com")
+
+			code, _, _, top := runRoot(t, tc.args...)
+			if code != ExitUsage {
+				t.Fatalf("exit = %d, want %d", code, ExitUsage)
+			}
+			if !strings.Contains(top, tc.mention) {
+				t.Fatalf("error %q should say %q", top, tc.mention)
+			}
+			assertNoLiveCredentials(t)
+		})
+	}
+}
+
+// --model is accepted alongside --strategy, and deliberately changes nothing:
+// §7.1's ranking has no model dimension, so honouring it would mean inventing
+// product.
+func TestSwitchAcceptsModelAlongsideStrategyAndIgnoresIt(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "u-1", "a@example.com")
+	seedAccount(t, "u-2", "b@example.com")
+	if code, _, _, top := runRoot(t, "switch", "1"); code != ExitOK {
+		t.Fatalf("setup switch = %d (%s)", code, top)
+	}
+	seedUsage(t, "u-1", 10)
+	seedUsage(t, "u-2", 80)
+	clearCooldown(t)
+
+	if code, _, errOut, top := runRoot(t, "switch", "--strategy", "headroom", "--model", "opus"); code != ExitOK {
+		t.Fatalf("exit = %d (%s / %s), want 0", code, errOut, top)
+	}
+	if got := liveUUIDOf(t); got != "u-2" {
+		t.Fatalf("live account = %q, want the same u-2 the ranking picks without --model", got)
+	}
+}
+
+// The message a user sees most often. "needs exactly one account" was false the
+// moment the strategy form existed.
+func TestSwitchWithNoArgumentNamesBothGrammars(t *testing.T) {
+	isolate(t)
+
+	code, _, _, top := runRoot(t, "switch")
+	if code != ExitUsage {
+		t.Fatalf("exit = %d, want %d", code, ExitUsage)
+	}
+	if !strings.Contains(top, "--strategy") {
+		t.Errorf("error %q should name the targetless grammar", top)
+	}
+	if strings.Contains(top, "exactly one") {
+		t.Errorf("error %q still claims switch takes exactly one account", top)
+	}
+}
+
+func TestSwitchWithTwoAccountsIsUsageError(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "u-1", "a@example.com")
+	seedAccount(t, "u-2", "b@example.com")
+
+	code, _, _, top := runRoot(t, "switch", "1", "2")
+	if code != ExitUsage {
+		t.Fatalf("exit = %d, want %d", code, ExitUsage)
+	}
+	if !strings.Contains(top, "at most one account") {
+		t.Fatalf("error %q should say at most one", top)
+	}
+}
+
+// A typo'd strategy is a usage error, never a silent run of the default. That
+// is §9.3's whole complaint about cswap.
+func TestSwitchRefusesAnUnknownStrategy(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "u-1", "a@example.com")
+
+	code, _, _, top := runRoot(t, "switch", "--strategy", "most-headroom")
+	if code != ExitUsage {
+		t.Fatalf("exit = %d, want %d", code, ExitUsage)
+	}
+	if !strings.Contains(top, "consume-first") {
+		t.Fatalf("error %q should list the strategies that do exist", top)
+	}
+	assertNoLiveCredentials(t)
+}
+
+// ---- the anti-flap state, across processes ---------------------------------
+
+// A one-shot command has no in-memory anti-flap history. Reading the cooldown
+// from disk is what stops a bare `switch` ping-ponging against a daemon that is
+// honouring it.
+func TestATargetlessSwitchReadsTheCooldownFromDisk(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "u-1", "a@example.com")
+	seedAccount(t, "u-2", "b@example.com")
+	if code, _, _, top := runRoot(t, "switch", "1"); code != ExitOK {
+		t.Fatalf("setup switch = %d (%s)", code, top)
+	}
+	seedUsage(t, "u-1", 10)
+	seedUsage(t, "u-2", 80)
+
+	// The setup switch stamped the cooldown itself, which is the point.
+	code, _, errOut, _ := runRoot(t, "switch", "--strategy", "headroom")
+	if code != ExitNothingToDo {
+		t.Fatalf("exit = %d (%s), want %d", code, errOut, ExitNothingToDo)
+	}
+	if !strings.Contains(errOut, "too recently") {
+		t.Errorf("stderr = %q, want the cooldown named", errOut)
+	}
+	// A hold with no end in sight is indistinguishable from a refusal.
+	if !strings.Contains(errOut, "try again after") {
+		t.Errorf("stderr = %q, want the moment the cooldown lifts", errOut)
+	}
+	if got := liveUUIDOf(t); got != "u-1" {
+		t.Fatalf("live account = %q; the cooldown was ignored", got)
+	}
+
+	// --force is the explicit bypass.
+	if code, _, errOut, top := runRoot(t, "switch", "--strategy", "headroom", "--force"); code != ExitOK {
+		t.Fatalf("forced exit = %d (%s / %s), want 0", code, errOut, top)
+	}
+	if got := liveUUIDOf(t); got != "u-2" {
+		t.Fatalf("live account = %q after --force, want u-2", got)
+	}
+}
+
+// An EXPLICIT switch stamps the cooldown too: the user has just chosen an
+// account and a daemon evaluating ten seconds later must not override it.
+func TestAnExplicitSwitchStampsTheCooldown(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "u-1", "a@example.com")
+
+	if code, _, _, top := runRoot(t, "switch", "1"); code != ExitOK {
+		t.Fatalf("switch = %d (%s)", code, top)
+	}
+
+	st, err := strategy.LoadState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	last, to := st.LastSwitch()
+	if last.IsZero() || to != "u-1" {
+		t.Fatalf("LastSwitch = %v/%q, want a stamp naming u-1", last, to)
+	}
+	if _, cooling := st.CooldownRemaining(time.Now(), strategy.DefaultCooldown); !cooling {
+		t.Error("the cooldown is not in force right after a switch")
+	}
+}
+
+// A quarantined account is out of auto-rotation, and with nothing else to move
+// to that is exit 4 — actionable — rather than exit 3.
+func TestATargetlessSwitchWithNoViableTargetIsBlocked(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "u-1", "a@example.com")
+	seedAccount(t, "u-2", "b@example.com")
+	if code, _, _, top := runRoot(t, "switch", "1"); code != ExitOK {
+		t.Fatalf("setup switch = %d (%s)", code, top)
+	}
+	seedUsage(t, "u-1", 10)
+	seedUsage(t, "u-2", 80)
+	if err := strategy.WithState(time.Second, func(st *strategy.State) error {
+		st.RecordSwitch("", time.Time{})
+		st.Quarantine("u-1", time.Now(), time.Hour, "dead refresh token")
+		st.Quarantine("u-2", time.Now(), time.Hour, "dead refresh token")
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	code, _, errOut, _ := runRoot(t, "switch", "--strategy", "headroom")
+	if code != ExitBlocked {
+		t.Fatalf("exit = %d (%s), want %d", code, errOut, ExitBlocked)
+	}
+	// The count and the remedy, not just the word: a user whose engine is
+	// parked has to be told that re-authenticating is what unparks it.
+	if !strings.Contains(errOut, "2 account(s) quarantined") || !strings.Contains(errOut, "ccdad add") {
+		t.Errorf("stderr = %q, want the count and the remedy", errOut)
+	}
+}
+
+// With no readings the ranking has nothing to order on, so a move would be a
+// reshuffle rather than a choice.
+func TestATargetlessSwitchWithNoReadingsIsBlocked(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "u-1", "a@example.com")
+	seedAccount(t, "u-2", "b@example.com")
+
+	code, _, errOut, _ := runRoot(t, "switch", "--strategy", "headroom")
+	if code != ExitBlocked {
+		t.Fatalf("exit = %d (%s), want %d", code, errOut, ExitBlocked)
+	}
+	if !strings.Contains(errOut, "no usage readings") {
+		t.Errorf("stderr = %q, want the missing readings named", errOut)
+	}
+	assertNoLiveCredentials(t)
+}
+
+// Being already on the best account is exit 3, and it must not rewrite the file.
+func TestATargetlessSwitchOnTheBestAccountIsExitThree(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "u-1", "a@example.com")
+	seedAccount(t, "u-2", "b@example.com")
+	if code, _, _, top := runRoot(t, "switch", "1"); code != ExitOK {
+		t.Fatalf("setup switch = %d (%s)", code, top)
+	}
+	seedUsage(t, "u-1", 80)
+	seedUsage(t, "u-2", 10)
+	clearCooldown(t)
+	before, err := os.ReadFile(ccpath.CredentialsPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	code, _, errOut, _ := runRoot(t, "switch", "--strategy", "headroom")
+	if code != ExitNothingToDo {
+		t.Fatalf("exit = %d (%s), want %d", code, errOut, ExitNothingToDo)
+	}
+	after, err := os.ReadFile(ccpath.CredentialsPath())
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("a no-op targetless switch rewrote the live credentials file")
+	}
+}
+
+// Hysteresis has to measure against the account in the LIVE CREDENTIALS FILE.
+// store.ActiveUUID is a display hint that goes stale the moment the user runs
+// /login inside Claude Code, and a margin measured against it compares the
+// candidate to an account that is not there.
+//
+// The two baselines are made to give different EXIT CODES, not just different
+// reasons: an earlier version of this test asserted exit 3 and passed with
+// either baseline, because the wrong one happened to fail hysteresis.
+func TestATargetlessSwitchMeasuresAgainstTheLiveFileNotTheStoreHint(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "u-1", "a@example.com")
+	seedAccount(t, "u-2", "b@example.com")
+	seedAccount(t, "u-3", "c@example.com")
+	// ccdad last activated u-2 and recorded it in accounts.toml, then something
+	// outside ccdad put u-1 back in the credentials file.
+	if code, _, _, top := runRoot(t, "switch", "2"); code != ExitOK {
+		t.Fatalf("setup switch = %d (%s)", code, top)
+	}
+	writeLiveFile(t, `{"claudeAiOauth":{"accessToken":"AT","refreshToken":"RT-u-1"}}`)
+	// u-3 tops the ranking either way. Against the live u-1 it fails the 2.0
+	// ratio and nothing happens; against the stale hint u-2 it clears every
+	// margin and the engine moves the user off a login it never measured.
+	seedUsage(t, "u-3", 100)
+	seedUsage(t, "u-1", 60)
+	seedUsage(t, "u-2", 20)
+	clearCooldown(t)
+
+	code, _, errOut, _ := runRoot(t, "switch", "--strategy", "headroom")
+	if code != ExitNothingToDo {
+		t.Fatalf("exit = %d (%s), want %d — u-3 does not have twice the live account's headroom", code, errOut, ExitNothingToDo)
+	}
+	if got := liveUUIDOf(t); got != "u-1" {
+		t.Fatalf("live account = %q, want u-1 left alone", got)
+	}
+}
+
+// A token account cannot become the live login, so leaving it in the ranking
+// would turn a strategy the user asked for into an exit 2 they cannot act on.
+//
+// It has to be a SETUP TOKEN. An api-key account is already held out by
+// identity.KindAPIKey, so testing with one proves nothing about this rule — a
+// setup token classifies as a subscription and would rank.
+func TestATargetlessSwitchNeverRanksATokenAccount(t *testing.T) {
+	isolate(t)
+	stubEnvironment(t, false, false)
+	seedAccount(t, "u-1", "a@example.com")
+	seedAccount(t, "u-2", "b@example.com")
+	if code, _, _, top := runRoot(t, "switch", "1"); code != ExitOK {
+		t.Fatalf("setup switch = %d (%s)", code, top)
+	}
+	stubProfile(t, func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, profileJSON("u-tok", "tok@example.com"))
+	})
+	if err, _, _ := runCmd(t, newAddTokenCmd(), "sk-ant-oat01-TESTTOKEN"); err != nil {
+		t.Fatal(err)
+	}
+	s, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok, ok := s.Get("u-tok")
+	if !ok || tok.Kind == identity.KindAPIKey {
+		t.Fatalf("setup: the setup-token account is %+v; it must be rankable to be a real test", tok)
+	}
+	// The token account looks like the best target on every axis.
+	seedUsage(t, "u-1", 10)
+	seedUsage(t, "u-2", 20)
+	seedUsage(t, "u-tok", 99)
+	clearCooldown(t)
+
+	code, _, errOut, top := runRoot(t, "switch", "--strategy", "headroom")
+	if code != ExitOK {
+		t.Fatalf("exit = %d (%s / %s), want 0", code, errOut, top)
+	}
+	if got := liveUUIDOf(t); got != "u-2" {
+		t.Fatalf("live account = %q, want u-2 — the best account that can actually be installed", got)
+	}
+}
+
+// A reading OLDER than the account's AddedAt belonged to a previous account at
+// the same uuid, removed and added again. Letting it through hands a fresh
+// login the headroom its predecessor had already spent.
+func TestATargetlessSwitchIgnoresAReadingFromAPreviousAccount(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "u-1", "a@example.com")
+	seedAccount(t, "u-2", "b@example.com")
+	if code, _, _, top := runRoot(t, "switch", "1"); code != ExitOK {
+		t.Fatalf("setup switch = %d (%s)", code, top)
+	}
+	seedUsage(t, "u-1", 30)
+	seedUsageAt(t, "u-2", 90, time.Now().Add(-time.Hour))
+	clearCooldown(t)
+
+	code, _, errOut, _ := runRoot(t, "switch", "--strategy", "headroom")
+	if code != ExitNothingToDo {
+		t.Fatalf("exit = %d (%s), want %d — u-2's reading predates the account", code, errOut, ExitNothingToDo)
+	}
+	if got := liveUUIDOf(t); got != "u-1" {
+		t.Fatalf("live account = %q, want u-1", got)
+	}
+}
+
+// --force overrides the anti-flap HOLD, not the ranking. With nothing to move
+// to there is no hold to override, so it stays a no-op.
+func TestForceOnTheBestAccountIsStillNothingToDo(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "u-1", "a@example.com")
+	seedAccount(t, "u-2", "b@example.com")
+	if code, _, _, top := runRoot(t, "switch", "1"); code != ExitOK {
+		t.Fatalf("setup switch = %d (%s)", code, top)
+	}
+	seedUsage(t, "u-1", 80)
+	seedUsage(t, "u-2", 10)
+	before, err := os.ReadFile(ccpath.CredentialsPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	code, _, errOut, _ := runRoot(t, "switch", "--strategy", "headroom", "--force")
+	if code != ExitNothingToDo {
+		t.Fatalf("exit = %d (%s), want %d", code, errOut, ExitNothingToDo)
+	}
+	after, err := os.ReadFile(ccpath.CredentialsPath())
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("--force rewrote the live credentials file with nothing to switch to")
+	}
+}
+
+// --force must never reach the credit pool. §7.3 requires two independent
+// opt-ins before ccdad spends money, and a flag named "force" is neither of
+// them.
+func TestForceNeverReachesTheCreditPool(t *testing.T) {
+	isolate(t)
+	seedCreditAccount(t, "c-1", "one@example.com")
+	seedCreditAccount(t, "c-2", "two@example.com")
+	if code, _, _, top := runRoot(t, "switch", "2"); code != ExitOK {
+		t.Fatalf("setup switch = %d (%s)", code, top)
+	}
+	seedUsage(t, "c-1", 90)
+	seedUsage(t, "c-2", 5)
+	clearCooldown(t)
+
+	code, _, errOut, _ := runRoot(t, "switch", "--strategy", "headroom", "--force")
+	if code == ExitOK {
+		t.Fatalf("exit = 0 (%s); --force moved into the credit pool", errOut)
+	}
+	if got := liveUUIDOf(t); got != "c-2" {
+		t.Fatalf("live account = %q, want c-2 untouched", got)
+	}
+}
+
+// seedCreditReading puts a reading carrying the CREDIT axis, which is what the
+// gate prices a switch on. Wire amounts are in the currency's minor unit.
+func seedCreditReading(t *testing.T, uuid string, limitCents, usedCents float64) {
+	t.Helper()
+	e := usage.ExtraUsageFor(usage.ExtraUsageInput{
+		State: usage.ExtraUsageEnabled, Currency: "USD",
+		MonthlyLimit: &limitCents, UsedCredits: &usedCents,
+	})
+	if err := usage.WithCache(time.Second, func(c *usage.Cache) error {
+		c.Put(uuid, usage.Entry{Snapshot: &usage.Snapshot{ExtraUsage: e}, FetchedAt: time.Now()})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// "the credit gate refused" tells nobody whether to raise max_auto_spend or to
+// call their organization. The gate's own reason is the actionable half.
+func TestATargetlessSwitchNamesWhyTheCreditGateRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		seed    func(t *testing.T)
+		mention string
+	}{
+		{"never opted in", func(t *testing.T) { seedCreditReading(t, "c-1", 10000, 0) }, "max_auto_spend is 0"},
+		{"spend cannot be read", func(t *testing.T) { seedUsage(t, "c-1", 50) }, "could not be read"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolate(t)
+			seedAccount(t, "u-1", "a@example.com")
+			seedCreditAccount(t, "c-1", "money@example.com")
+			if code, _, _, top := runRoot(t, "switch", "1"); code != ExitOK {
+				t.Fatalf("setup switch = %d (%s)", code, top)
+			}
+			// The one subscription account is spent, which is the only thing
+			// that opens §7.3 step 2.
+			seedUsage(t, "u-1", 5)
+			tc.seed(t)
+			clearCooldown(t)
+
+			code, _, errOut, _ := runRoot(t, "switch", "--strategy", "headroom")
+			if code != ExitBlocked {
+				t.Fatalf("exit = %d (%s), want %d", code, errOut, ExitBlocked)
+			}
+			if !strings.Contains(errOut, tc.mention) {
+				t.Errorf("stderr = %q, want the gate's own reason %q", errOut, tc.mention)
+			}
+			if got := liveUUIDOf(t); got != "u-1" {
+				t.Fatalf("live account = %q; ccdad spent money it was never opted in to", got)
+			}
+		})
 	}
 }
