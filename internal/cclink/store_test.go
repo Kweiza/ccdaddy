@@ -126,22 +126,6 @@ func TestLoadRefusesSymlink(t *testing.T) {
 	}
 }
 
-func TestCaptureReturnsOnlyAccountScoped(t *testing.T) {
-	withClaudeHome(t)
-	writeCreds(t, `{"claudeAiOauth":{"accessToken":"a"},"mcpOAuth":{"s|1":{}}}`)
-
-	got, err := Capture()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := got["claudeAiOauth"]; !ok {
-		t.Fatal("Capture() dropped claudeAiOauth")
-	}
-	if _, ok := got["mcpOAuth"]; ok {
-		t.Fatal("Capture() included mcpOAuth; machine-scoped keys must never enter a snapshot")
-	}
-}
-
 func TestActivateSwapsAccountAndPreservesMachineKeys(t *testing.T) {
 	withClaudeHome(t)
 	path := writeCreds(t, `{"claudeAiOauth":{"accessToken":"old"},"mcpOAuth":{"sentry|1":{"accessToken":"keep"}}}`)
@@ -475,5 +459,137 @@ func TestActivateWritesWhileTheCredentialLocksAreHeld(t *testing.T) {
 		t.Error("the storage-write lock could be acquired during the rename; nothing was excluding a second writer")
 	} else if !errors.Is(contendErr, cclock.ErrTimeout) {
 		t.Errorf("acquiring the storage-write lock during the rename = %v, want cclock.ErrTimeout", contendErr)
+	}
+}
+
+// ActivateWith exists for the one caller Activate cannot serve: an unattended
+// executor whose DECISION -- switch, or stand down -- is only sound against the
+// file as it is at the moment of the write. Activate re-reads under the lock to
+// build its merge base, but it has already committed to writing; a daemon that
+// decided to move away from an account the user has since changed by hand must
+// be able to look and abandon.
+//
+// This is the property, and it is the same shape as the Activate test above:
+// only a read taken INSIDE the lock can see the write that landed while the
+// call was blocked on it.
+func TestActivateWithDecidesFromTheFileAsItIsUnderTheLock(t *testing.T) {
+	withClaudeHome(t)
+	writeCreds(t, `{"claudeAiOauth":{"accessToken":"early"}}`)
+
+	held, err := cclock.AcquireCredentials(2 * time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	seen := make(chan Blob, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- ActivateWith(func(live Blob) (Blob, error) {
+			seen <- live
+			return Blob{"claudeAiOauth": json.RawMessage(`{"accessToken":"new"}`)}, nil
+		})
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("ActivateWith() returned %v while the credential locks were held; it never took them", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	writeCreds(t, `{"claudeAiOauth":{"accessToken":"late"}}`)
+	if err := held.Release(); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("ActivateWith: %v", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("ActivateWith did not return after the locks were released")
+	}
+
+	live := <-seen
+	if !bytes.Contains(live["claudeAiOauth"], []byte("late")) {
+		t.Fatalf("decide saw claudeAiOauth = %s; it was handed a pre-lock read", live["claudeAiOauth"])
+	}
+}
+
+// ErrNoChange is how the decision stands down. Returning it must leave the file
+// untouched -- byte for byte, not merely equivalent -- because "I looked and
+// decided not to" and "I rewrote it with the same content" are different facts
+// to anything watching the file's mtime, and one of those watchers is Claude
+// Code's own change detection.
+func TestActivateWithErrNoChangeWritesNothing(t *testing.T) {
+	withClaudeHome(t)
+	path := writeCreds(t, `{"claudeAiOauth":{"accessToken":"old"}}`)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = ActivateWith(func(Blob) (Blob, error) {
+		return Blob{"claudeAiOauth": json.RawMessage(`{"accessToken":"new"}`)}, ErrNoChange
+	})
+	if !errors.Is(err, ErrNoChange) {
+		t.Fatalf("ActivateWith() = %v, want an error satisfying errors.Is(err, ErrNoChange)", err)
+	}
+
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("the credentials file changed:\nbefore %s\nafter  %s", before, after)
+	}
+}
+
+// The guard Activate applies to its argument applies to what decide returns,
+// for the same reason: Merge deletes every account-scoped key and puts back
+// only what the snapshot carries, so a snapshot with no login is a logout
+// wearing a switch's clothing.
+func TestActivateWithRefusesASnapshotWithNoLogin(t *testing.T) {
+	withClaudeHome(t)
+	path := writeCreds(t, `{"claudeAiOauth":{"accessToken":"old"}}`)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ActivateWith(func(Blob) (Blob, error) { return Blob{}, nil }); err == nil {
+		t.Fatal("ActivateWith() accepted a snapshot with no claudeAiOauth")
+	}
+
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("a refused snapshot still rewrote the credentials file")
+	}
+}
+
+// A decide that fails is not a write. The error reaches the caller unchanged so
+// an executor can tell its own refusal from a lock or I/O failure.
+func TestActivateWithPropagatesADecideFailureWithoutWriting(t *testing.T) {
+	withClaudeHome(t)
+	path := writeCreds(t, `{"claudeAiOauth":{"accessToken":"old"}}`)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	boom := errors.New("the store went away")
+	if err := ActivateWith(func(Blob) (Blob, error) { return nil, boom }); !errors.Is(err, boom) {
+		t.Fatalf("ActivateWith() = %v, want the decide error", err)
+	}
+
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("a failed decision still rewrote the credentials file")
 	}
 }

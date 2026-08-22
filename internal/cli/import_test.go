@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/store"
 )
 
@@ -198,7 +199,7 @@ func TestImportKeepsTokenAccounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(creds[tokenCredentialKey]), "sk-ant-api-XYZ") {
+	if !strings.Contains(string(creds[cclink.TokenKey]), "sk-ant-api-XYZ") {
 		t.Fatalf("the token record was dropped: %v", creds)
 	}
 }

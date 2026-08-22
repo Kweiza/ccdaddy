@@ -1,9 +1,7 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -13,29 +11,9 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/config"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
+	"github.com/Kweiza/ccdaddy/internal/switcher"
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
-
-// switchStateTimeout bounds the wait for the engine state lock. The only other
-// writer is the daemon stamping a cooldown, a sub-second write.
-const switchStateTimeout = 5 * time.Second
-
-// tokenRecordOf reports the ccdad token record a blob carries, if any.
-//
-// A token account is not installable as a Claude Code login: Claude Code reads
-// an API key from ~/.claude.json and a setup token from an environment
-// variable, never from the credentials file.
-func tokenRecordOf(b cclink.Blob) (tokenRecord, bool) {
-	raw, ok := b[tokenCredentialKey]
-	if !ok {
-		return tokenRecord{}, false
-	}
-	var rec tokenRecord
-	if err := json.Unmarshal(raw, &rec); err != nil {
-		return tokenRecord{}, false
-	}
-	return rec, true
-}
 
 // envVarFor names the mechanism Claude Code actually reads a token kind from.
 func envVarFor(kind string) string {
@@ -124,8 +102,8 @@ func installable(creds cclink.Blob, err error) bool {
 	if _, hasOAuth := creds["claudeAiOauth"]; hasOAuth {
 		return true
 	}
-	rec, isToken := tokenRecordOf(creds)
-	return isToken && rec.Kind == apiKeyKind
+	rec, isToken := cclink.TokenRecordOf(creds)
+	return isToken && rec.Kind == cclink.APIKeyKind
 }
 
 // engineCandidates projects the store and the on-disk usage cache onto what the
@@ -322,18 +300,21 @@ func newSwitchCmd() *cobra.Command {
 				fmt.Fprintf(cmd.ErrOrStderr(), "note: could not read the current login (%v); switching anyway\n", err)
 				live = nil
 			}
-			// attributeWith, not attributeLogin, and deliberately: this asks
+			// AttributeFile, not AttributeLogin, and deliberately: this asks
 			// "is the FILE already this account", because the file is what a
-			// switch rewrites. attributeLogin would answer about the
-			// environment token instead, which switching does not touch — and
-			// the override is reported separately below.
+			// switch rewrites. AttributeLogin would answer about the
+			// environment token instead, which switching does not touch.
 			//
 			// It is also the ONLY acceptable hysteresis baseline. store.go
 			// documents ActiveUUID as a display HINT that goes stale the moment
 			// the user runs /login inside Claude Code, and a margin measured
 			// against a stale baseline compares the candidate to an account
 			// that is not there.
-			current, liveOK := attributeWith(live, accounts, s.Credentials)
+			//
+			// The executor asks the same question again under the lock, and its
+			// answer is the one that decides the swap. This one only feeds the
+			// engine, which has to rank before any lock is taken.
+			current, liveOK := switcher.AttributeFile(live, accounts, s.Credentials)
 			liveUUID := ""
 			if liveOK {
 				liveUUID = current.UUID
@@ -355,6 +336,12 @@ func newSwitchCmd() *cobra.Command {
 				}
 			}
 
+			// The two token paths stay here rather than in the executor. A
+			// setup token has no file to be installed into at all, and an
+			// api-key account is installed by two writes to ~/.claude.json and
+			// the credentials file — a different sequence, under a different
+			// lock, that the engine never asks for because an account with no
+			// quota windows has nothing for a usage-aware ranking to compare.
 			creds, err := s.Credentials(target.UUID)
 			if err != nil {
 				return err
@@ -364,47 +351,49 @@ func newSwitchCmd() *cobra.Command {
 			// credential, so a token sitting beside it must not divert the
 			// switch — only an account with NO OAuth record takes a token path.
 			if _, hasOAuth := creds["claudeAiOauth"]; !hasOAuth {
-				if rec, isToken := tokenRecordOf(creds); isToken {
-					if rec.Kind != apiKeyKind {
+				if rec, isToken := cclink.TokenRecordOf(creds); isToken {
+					if rec.Kind != cclink.APIKeyKind {
 						return setupTokenRefusal(target.Label())
 					}
 					return switchToAPIKey(cmd, s, target, rec.Token, live, force)
 				}
 			}
 
-			if liveOK && current.UUID == target.UUID && !force {
-				fmt.Fprintf(cmd.ErrOrStderr(), "Already on %s.\n", target.Label())
-				return WithCode(errSilent, ExitNothingToDo)
-			}
-
+			// Attended: nobody is left guessing, so the executor reports rather
+			// than refuses. Its Unattended half is the daemon's.
+			res, err := switcher.Execute(s, switcher.Request{
+				Target: target, LiveUUID: liveUUID, Force: force,
+			})
 			// Spec §4.3: drift in the credentials file is demonstrated, not
 			// hypothetical — six machine keys appeared after clauth's carry list
 			// was written. Merge preserves what it does not recognize, but the
 			// operator still needs to know a new key exists.
-			if unknown := cclink.UnknownKeys(live); len(unknown) > 0 {
+			//
+			// Reported for a merge that happened, and for one that failed part
+			// way, because the keys are in the file either way. NOT for a no-op:
+			// that never rewrites the file, so "being preserved unchanged" would
+			// describe a write that did not happen.
+			if len(res.UnknownKeys) > 0 && (res.Outcome == switcher.Switched || err != nil) {
 				fmt.Fprintf(cmd.ErrOrStderr(),
 					"note: unrecognized keys in the credentials file are being preserved unchanged: %s\n",
-					strings.Join(unknown, ", "))
+					strings.Join(res.UnknownKeys, ", "))
+			}
+			if err != nil {
+				return err
+			}
+			if res.Outcome == switcher.AlreadyOn {
+				fmt.Fprintf(cmd.ErrOrStderr(), "Already on %s.\n", target.Label())
+				return WithCode(errSilent, ExitNothingToDo)
 			}
 
-			if err := cclink.Activate(creds); err != nil {
-				return err
-			}
-			if err := s.SetActive(target.UUID); err != nil {
-				return err
-			}
-			recordSwitch(cmd, target.UUID)
-			// The login now in place outranks any stored API key, so nothing is
-			// broken by leaving one — but it would become the credential again
-			// the moment this login went away, silently and as a different
-			// account. Clear ccdad's own; a key ccdad did not install stays.
-			noteReleasedAPIKey(cmd, s)
+			noteCooldown(cmd, res.CooldownErr)
+			noteReleasedAPIKey(cmd, res)
 
 			fmt.Fprintf(cmd.ErrOrStderr(), "Switched to %s.\n", target.Label())
 			// Claude Code reads CLAUDE_CODE_OAUTH_TOKEN in preference to the
 			// credentials file, so with that variable set the switch has done its
 			// work and still changed nothing about what Claude Code uses.
-			if os.Getenv("CLAUDE_CODE_OAUTH_TOKEN") != "" {
+			if res.EnvTokenWins {
 				fmt.Fprintln(cmd.ErrOrStderr(),
 					"Note: CLAUDE_CODE_OAUTH_TOKEN is set, and Claude Code reads it in preference to the credentials file. "+
 						"Unset it for this switch to take effect.")
@@ -421,24 +410,4 @@ func newSwitchCmd() *cobra.Command {
 	cmd.Flags().StringVar(&model, "model", "",
 		"reserved; accepted only alongside --strategy and currently has no effect on the ranking")
 	return cmd
-}
-
-// recordSwitch stamps §7.2's cooldown after the swap has succeeded.
-//
-// An EXPLICIT switch stamps it too, and that is the point: the user has just
-// chosen an account, and a daemon evaluating ten seconds later must not
-// immediately override the choice. Stamping before the swap would let a switch
-// that FAILED hold the engine off its own retry.
-//
-// It never fails the command. The credentials file has already been written by
-// the time this runs, so returning an error here would report a completed
-// switch as a failure.
-func recordSwitch(cmd *cobra.Command, uuid string) {
-	if err := strategy.WithState(switchStateTimeout, func(st *strategy.State) error {
-		st.RecordSwitch(uuid, time.Now())
-		return nil
-	}); err != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(),
-			"note: the auto-switch cooldown could not be recorded (%v); the daemon may switch again sooner than it should.\n", err)
-	}
 }

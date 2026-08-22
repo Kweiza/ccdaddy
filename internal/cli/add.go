@@ -21,6 +21,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/oauth"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
+	"github.com/Kweiza/ccdaddy/internal/switcher"
 )
 
 // quarantineLiftTimeout bounds the wait for the engine state lock. The only
@@ -79,31 +80,6 @@ var (
 	// by review, not by this suite.
 	readPassword = func() ([]byte, error) { return term.ReadPassword(int(os.Stdin.Fd())) }
 )
-
-// tokenCredentialKey is ccdad's own record for a credential Claude Code does
-// NOT read out of the credentials file.
-//
-// The 2.1.238 bundle is explicit about both kinds. An API key is persisted to
-// ~/.claude.json as the top-level string primaryApiKey (function Saa), and the
-// claudeAiOauth object has exactly eight keys — accessToken, refreshToken,
-// expiresAt, refreshTokenExpiresAt, scopes, subscriptionType, rateLimitTier,
-// clientId (function hjd) — none of which is an API key. A setup token is not
-// persisted at all: `claude setup-token` prints it and tells the user to export
-// CLAUDE_CODE_OAUTH_TOKEN, and the OAuth flow's setup-token branch deliberately
-// skips the credential save.
-//
-// So neither belongs under claudeAiOauth. Putting one there would write a
-// record Claude Code never writes and cannot read as a login. This key is
-// ccdad's own file, plainly named as such; cclink.Activate refuses a snapshot
-// with no claudeAiOauth, which makes the separation fail-closed.
-const tokenCredentialKey = "ccdadToken"
-
-// tokenRecord is what tokenCredentialKey holds.
-type tokenRecord struct {
-	// Kind is "api-key" or "setup-token".
-	Kind  string `json:"kind"`
-	Token string `json:"token"`
-}
 
 func newProfileClient() *identity.Client {
 	c := identity.NewClient()
@@ -306,8 +282,8 @@ func runAdd(cmd *cobra.Command, opts addOptions) error {
 	// exists to prevent.
 	live, liveErr := cclink.Load()
 	liveIsThisAccount := liveErr == nil &&
-		credentialIdentity(live) != "" &&
-		credentialIdentity(live) == credentialIdentity(prior)
+		switcher.CredentialIdentity(live) != "" &&
+		switcher.CredentialIdentity(live) == switcher.CredentialIdentity(prior)
 
 	// The comparison above cannot answer for an ADOPTION -- the first `ccdad
 	// add` for an account Claude Code was already logged in as. There is no
@@ -732,11 +708,11 @@ func runAddToken(cmd *cobra.Command, token string, isAPIKey bool, email, alias s
 		}
 	}
 
-	encoded, err := json.Marshal(tokenRecord{Kind: kind, Token: token})
+	encoded, err := json.Marshal(cclink.TokenRecord{Kind: kind, Token: token})
 	if err != nil {
 		return err
 	}
-	creds := cclink.Blob{tokenCredentialKey: encoded}
+	creds := cclink.Blob{cclink.TokenKey: encoded}
 
 	// Open after the network call, matching runAdd: a typo'd token should not
 	// leave a freshly created ~/.ccdad behind on a machine that has never used
@@ -808,7 +784,7 @@ func runAddToken(cmd *cobra.Command, token string, isAPIKey bool, email, alias s
 	if err := s.SetActive(saved.UUID); err != nil {
 		return err
 	}
-	recordSwitch(cmd, saved.UUID)
+	noteCooldown(cmd, switcher.RecordSwitch(saved.UUID))
 	fmt.Fprintf(stderr, "Switched to %s.\n", saved.Label())
 	noteDisplacingAuth(cmd, token)
 	return nil

@@ -1,7 +1,6 @@
 // Package cclink classifies and merges the top-level keys of Claude Code's
-// .credentials.json. Reading and writing the file itself — Load, Capture,
-// Activate, and the atomic writer — arrive with the credential store in a
-// later task; this package is pure functions over already-decoded JSON.
+// .credentials.json, and reads and writes the file itself — Load, Activate,
+// ActivateWith, ClearLogin, and the atomic writer.
 //
 // The file holds twelve top-level keys, not one. Five travel with the account
 // and seven belong to the machine; getting the split wrong destroys either the
