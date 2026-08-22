@@ -179,12 +179,7 @@ func TestHeldCompromisedFiresOnMemberTakeover(t *testing.T) {
 	// takeover: remove and recreate the directory as a new owner would.
 	time.Sleep(50 * time.Millisecond)
 	legacyDir := mustPath(LegacyRefreshLockDir())
-	if err := os.RemoveAll(legacyDir); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(legacyDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	stealLock(t, legacyDir)
 
 	select {
 	case <-held.Compromised():
@@ -234,12 +229,7 @@ func TestHeldReleaseDoesNotMaskCompromise(t *testing.T) {
 	// primary refresh lock), which Release visits LAST.
 	time.Sleep(50 * time.Millisecond)
 	oauthDir := mustPath(OAuthRefreshLockDir())
-	if err := os.RemoveAll(oauthDir); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(oauthDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	stealLock(t, oauthDir)
 	select {
 	case <-oauth.Compromised():
 	case <-time.After(time.Second):
@@ -278,12 +268,7 @@ func TestHeldReleaseIsIdempotent(t *testing.T) {
 	// rather than trivially "nil equals nil".
 	time.Sleep(50 * time.Millisecond)
 	legacyDir := mustPath(LegacyRefreshLockDir())
-	if err := os.RemoveAll(legacyDir); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(legacyDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	stealLock(t, legacyDir)
 	select {
 	case <-held.Compromised():
 	case <-time.After(time.Second):
