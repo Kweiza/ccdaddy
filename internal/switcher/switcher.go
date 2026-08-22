@@ -29,6 +29,36 @@ const stateTimeout = 5 * time.Second
 // refuse would put a doomed switch in front of Claude Code's own refresh.
 var ErrNoLogin = errors.New("this account has no Claude Code login to install")
 
+// Installable reports whether an account can become the live login at all.
+//
+// A SETUP-TOKEN account is stored but has no claudeAiOauth record and no file
+// Claude Code would read it from, so there is nothing to install. Left in the
+// pool it can rank first and then fail the switch, turning a strategy the user
+// asked for into an error they cannot act on — so it is excluded from the
+// ranking rather than rejected after winning it. An explicit `switch <ACCT>`
+// still names one and still gets the message that says how to use it.
+//
+// An API-KEY account IS installable: `switch` writes primaryApiKey into
+// ~/.claude.json and clears the login in front of it. It is still never chosen
+// by the engine, but for a different reason and in a different place —
+// strategy.eligible drops identity.KindAPIKey because an account with no quota
+// windows has nothing for a usage-aware ranking to compare. Saying so here
+// instead would state the same exclusion twice and let the two spellings
+// disagree.
+//
+// The signature takes the (Blob, error) pair a lookup returns, so a caller can
+// hand it one call rather than unpacking at every site.
+func Installable(creds cclink.Blob, err error) bool {
+	if err != nil {
+		return false
+	}
+	if _, hasOAuth := creds["claudeAiOauth"]; hasOAuth {
+		return true
+	}
+	rec, isToken := cclink.TokenRecordOf(creds)
+	return isToken && rec.Kind == cclink.APIKeyKind
+}
+
 // Outcome is what one Execute did. Everything except Switched left the
 // credentials file exactly as it found it.
 type Outcome uint8
