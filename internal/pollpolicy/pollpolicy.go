@@ -212,6 +212,28 @@ func recent429(s State, now time.Time) bool {
 	return now.Sub(s.LastRateLimited) < Recent429Window
 }
 
+// PerIdentity divides a cadence among the accounts that share one identity's
+// budget.
+//
+// The endpoint's allowance is per IDENTITY, not per account, so three accounts
+// in one organization polling at MinInterval each is 60 requests an hour
+// against a ~30-an-hour allowance. Multiplying by the group size holds the
+// identity's aggregate rate where a single account's would have been.
+//
+// The urgent cadence is scaled like everything else, and it can still exceed
+// the allowance transiently on a group of one — 60 s is 60 requests an hour.
+// That is §7.4's own arithmetic and it is deliberate: urgency is a burst, not a
+// steady state, and AIMD is the backstop when it turns out to be one.
+//
+// accounts below 1 means the caller has nothing to share among, which is the
+// unshared interval rather than a licence to poll as fast as possible.
+func PerIdentity(d time.Duration, accounts int) time.Duration {
+	if accounts < 1 {
+		return d
+	}
+	return d * time.Duration(accounts)
+}
+
 // RateLimited records a 429 and applies AIMD's multiplicative increase.
 //
 // retryAfter is what the endpoint asked for, and hasRetryAfter whether it asked
