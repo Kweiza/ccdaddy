@@ -41,6 +41,9 @@ type fakeDaemon struct {
 	// Windows does once the cross-check passes.
 	forceSucceeds bool
 	forced        []int
+	// onShutdown runs when the daemon is asked to stop, so a test can assert
+	// what the world looked like AT that moment rather than afterwards.
+	onShutdown func()
 
 	// releaseAfter is how many probes the daemon takes to let go of the
 	// singleton after being asked to. Zero is gone by the next probe; a larger
@@ -145,6 +148,9 @@ func (f *fakeDaemon) observe() (daemon.Report, error) {
 
 func (f *fakeDaemon) shutdown(pid int) error {
 	f.signalled = append(f.signalled, pid)
+	if f.onShutdown != nil {
+		f.onShutdown()
+	}
 	if f.shutdownErr != nil {
 		return f.shutdownErr
 	}
