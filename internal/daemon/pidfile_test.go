@@ -119,22 +119,37 @@ func TestWritePIDRefusesToRecordANonPID(t *testing.T) {
 // reader to catch, the commit marker becomes dead code, and the next reader of
 // pidfile.go deletes it as noise. Both halves stand or fall together, so this
 // pins the half that is otherwise invisible.
+// fileIdentity stats a file through an OPEN HANDLE rather than by path.
+//
+// On Windows os.Stat's fast path records the path and os.SameFile resolves
+// identity by re-opening it at comparison time, so two path-derived stats of
+// the same path compare equal whatever happened in between — which is exactly
+// the question this test asks. A handle carries the volume serial and file
+// index, so the comparison is about the FILE.
+func fileIdentity(t *testing.T, path string) os.FileInfo {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open %s: %v", path, err)
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	return info
+}
+
 func TestWritePIDReplacesTheFileInPlace(t *testing.T) {
 	isolate(t)
 	if err := WritePID(1111); err != nil {
 		t.Fatalf("WritePID: %v", err)
 	}
-	first, err := os.Stat(mustPath(PIDPath()))
-	if err != nil {
-		t.Fatalf("stat: %v", err)
-	}
+	first := fileIdentity(t, mustPath(PIDPath()))
 	if err := WritePID(2222); err != nil {
 		t.Fatalf("WritePID: %v", err)
 	}
-	second, err := os.Stat(mustPath(PIDPath()))
-	if err != nil {
-		t.Fatalf("stat: %v", err)
-	}
+	second := fileIdentity(t, mustPath(PIDPath()))
 	if !os.SameFile(first, second) {
 		t.Error("the second write landed on a different file — this is a temp-and-rename, " +
 			"which makes the trailing-newline commit marker unreachable and therefore untestable")
