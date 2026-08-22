@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,8 +15,10 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
+	"github.com/Kweiza/ccdaddy/internal/daemon"
 	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/store"
+	"github.com/Kweiza/ccdaddy/internal/usage"
 )
 
 // isolate points ccdad's store AND every Claude Code path this package can
@@ -84,6 +87,25 @@ func isolate(t *testing.T) string {
 	stubProfile(t, func(http.ResponseWriter, *http.Request) {
 		t.Error("this test reached the profile endpoint; call stubProfile if that is intended")
 	})
+
+	// The poller `list --refresh` borrows is the same axis as the profile
+	// client above, and the more dangerous of the two: it spends an access
+	// token against a live, rate-limited endpoint. A test that means to refresh
+	// calls stubRefresh by name.
+	savedEngine := newEngine
+	t.Cleanup(func() { newEngine = savedEngine })
+	newEngine = func() *daemon.Engine {
+		e := daemon.NewEngine()
+		e.AccessToken = func(context.Context, string) (string, error) {
+			t.Error("this test asked for an access token; call stubRefresh if that is intended")
+			return "", errors.New("the token source is not stubbed")
+		}
+		e.FetchUsage = func(context.Context, string) (*usage.Snapshot, error) {
+			t.Error("this test reached the usage endpoint; call stubRefresh if that is intended")
+			return nil, errors.New("the usage client is not stubbed")
+		}
+		return e
+	}
 
 	// The macOS Keychain is the third axis, and the only one that would be
 	// invisible from here: on a Linux machine the real probe answers
@@ -208,6 +230,25 @@ func seedDisabledAccount(t *testing.T, uuid, email string) {
 		t.Fatal(err)
 	}
 	if err := s.Add(store.Account{UUID: uuid, Email: email, Disabled: true}, credsFor("RT-"+uuid)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// seedAPIKeyAccount stores an account whose credential Claude Code reads from
+// somewhere other than the credentials file. There is no refresh grant behind
+// one, so its usage can never be polled.
+func seedAPIKeyAccount(t *testing.T, uuid, email string) {
+	t.Helper()
+	s, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, err := json.Marshal(cclink.TokenRecord{Kind: cclink.APIKeyKind, Token: "sk-ant-api-" + uuid})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add(store.Account{UUID: uuid, Email: email, Kind: identity.KindAPIKey},
+		cclink.Blob{cclink.TokenKey: rec}); err != nil {
 		t.Fatal(err)
 	}
 }
