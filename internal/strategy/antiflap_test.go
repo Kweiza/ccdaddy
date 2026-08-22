@@ -997,3 +997,42 @@ func TestAQuarantinedAccountDoesNotHoldTheCreditPoolClosed(t *testing.T) {
 	}
 	want(t, p, ActionSwitch, ReasonBetterTarget, "c")
 }
+
+// ---- which credit account, once the credit pool is reached -----------------
+
+// Decide walks Result.Credit in order, so the ordering key decides which
+// account gets the money. The uuids run opposite to the answer.
+func TestDecideTakesTheCreditAccountWithTheMostArmedRoom(t *testing.T) {
+	cands := []Candidate{
+		hr("a", 5, 4*time.Hour), // the subscription pool, spent
+		creditWith("aaa-nearly-spent", enabledExtra(f(10000), f(8000))),
+		creditWith("zzz-untouched", enabledExtra(f(10000), f(0))),
+	}
+
+	p := Decide(cands, opts(), Config{MaxAutoSpend: 200}, NewState(), "a")
+
+	want(t, p, ActionSwitch, ReasonBetterTarget, "zzz-untouched")
+	if p.Credit.Room != 90 {
+		t.Errorf("Credit.Room = %v, want the $90 the gate armed", p.Credit.Room)
+	}
+}
+
+// The ceiling the pool is ORDERED on and the ceiling the gate DECIDES on must
+// be the same number. Config is the one that comes from config.toml, so it wins
+// over anything a caller left in Options.
+func TestTheConfiguredCeilingWinsOverOneLeftInTheRankingOptions(t *testing.T) {
+	cands := []Candidate{
+		hr("a", 5, 4*time.Hour),
+		creditWith("aaa-small-cap", enabledExtra(f(2000), f(0))),   // $20 cap -> $18 armed
+		creditWith("zzz-large-cap", enabledExtra(f(100000), f(0))), // $1000 cap, ceiling binds
+	}
+
+	o := opts()
+	o.MaxAutoSpend = 0 // a caller that never set it, or set it wrong
+	p := Decide(cands, o, Config{MaxAutoSpend: 200}, NewState(), "a")
+
+	want(t, p, ActionSwitch, ReasonBetterTarget, "zzz-large-cap")
+	if len(p.Result.Credit) == 0 || !p.Result.Credit[0].HasCreditRoom {
+		t.Fatal("the ranking armed nothing; Decide did not carry the configured ceiling into the pass")
+	}
+}

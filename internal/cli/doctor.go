@@ -15,6 +15,7 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
+	"github.com/Kweiza/ccdaddy/internal/config"
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/usage"
@@ -145,6 +146,7 @@ func runChecks() []check {
 		checkStatusFile(report),
 		checkUsageCache(storeUsable),
 		checkEngineState(storeUsable),
+		checkConfig(storeUsable),
 		checkClaudeCode(live, liveErr),
 		checkCredentialKeys(live, liveErr),
 		checkEnvironment(),
@@ -327,6 +329,47 @@ func checkEngineState(usable bool) check {
 			"%v — the cooldown and every quarantine are being ignored until it is rewritten", serr)}
 	}
 	return check{"engine-state", levelOK, strategy.StatePath()}
+}
+
+// checkConfig answers whether ~/.ccdad/config.toml is doing anything.
+//
+// This is the one check whose subject fails SILENTLY by design: §8.4 has the
+// daemon keep running on the last good config when an edit breaks the file,
+// which is right — a daemon that dies on a typo stops switching accounts — and
+// it means a user can edit a threshold, see no error anywhere, and have nothing
+// take effect. Here is where they find out.
+//
+// A missing file is OK rather than a warning: the defaults are a complete
+// configuration and most machines never need one. An unusable file is a warning
+// rather than a failure for the same reason — ccdad goes on working, on numbers
+// the user did not choose.
+func checkConfig(usable bool) check {
+	if !usable {
+		return check{"config", levelSkipped, "there is no store to check"}
+	}
+	path := config.Path()
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return check{"config", levelOK, fmt.Sprintf(
+			"no %s, so the engine runs on the built-in defaults", config.FileName)}
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return check{"config", levelWarn, fmt.Sprintf(
+			"%v — every value in it is being ignored and the engine is running on its defaults", err)}
+	}
+	detail := path
+	if raw, rerr := os.ReadFile(path); rerr == nil {
+		if unknown, uerr := config.UnknownKeys(raw); uerr == nil && len(unknown) > 0 {
+			return check{"config", levelWarn, fmt.Sprintf(
+				"%s carries keys this ccdad does not know, which are preserved but ignored: %v", path, unknown)}
+		}
+	}
+	if cfg.MaxAutoSpend > 0 {
+		// Unattended spending is on. §12 lists it as a High risk and doctor is
+		// where a user checks what their machine will do without them.
+		detail = fmt.Sprintf("%s — unattended credit spending is armed up to %v", path, cfg.MaxAutoSpend)
+	}
+	return check{"config", levelOK, detail}
 }
 
 // checkClaudeCode is §12's actual mitigation: has Claude Code's layout moved.

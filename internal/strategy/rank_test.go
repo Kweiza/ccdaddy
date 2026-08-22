@@ -559,3 +559,114 @@ func TestRankDefaultsAnOmittedHorizon(t *testing.T) {
 		t.Error("a 30-minute recovery fell outside the defaulted one-hour horizon")
 	}
 }
+
+// ---- the credit pool's own order -------------------------------------------
+//
+// Result.Credit was ordered by uuid — deterministic and arbitrary — because the
+// natural key needs a ceiling and the ceiling had no source until
+// ~/.ccdad/config.toml existed. It has one now.
+
+// creditRoom builds a credit account with limit and used in WIRE amounts
+// (cents), which is what usage.ExtraUsage stores.
+func creditRoom(uuid string, limitCents, usedCents float64) Candidate {
+	return credit(uuid, &usage.Snapshot{ExtraUsage: usage.ExtraUsageFor(usage.ExtraUsageInput{
+		State: usage.ExtraUsageEnabled, Currency: "USD",
+		MonthlyLimit: &limitCents, UsedCredits: &usedCents,
+	})})
+}
+
+func creditOrder(r Result) []string {
+	out := make([]string, 0, len(r.Credit))
+	for _, x := range r.Credit {
+		out = append(out, x.UUID)
+	}
+	return out
+}
+
+// The uuids run OPPOSITE to the answer, so the old uuid ordering cannot
+// reproduce a passing result.
+func TestTheCreditPoolIsOrderedByMostArmedRoom(t *testing.T) {
+	cands := []Candidate{
+		creditRoom("aaa-nearly-spent", 10000, 8000), // $100 cap, $80 spent -> $10 armed
+		creditRoom("zzz-untouched", 10000, 0),       // $100 cap, nothing spent -> $90 armed
+	}
+
+	o := opts()
+	o.MaxAutoSpend = 200
+	r := Rank(cands, o)
+
+	eq(t, creditOrder(r), []string{"zzz-untouched", "aaa-nearly-spent"})
+	if !r.Credit[0].HasCreditRoom || r.Credit[0].CreditRoom != 90 {
+		t.Errorf("CreditRoom = %v (known %v), want 90", r.Credit[0].CreditRoom, r.Credit[0].HasCreditRoom)
+	}
+}
+
+// Identical room must not reorder between two ticks, or the cooldown never
+// converges: the engine would switch, find a new "best", and switch back.
+func TestEqualCreditRoomFallsBackToTheUuidTieBreak(t *testing.T) {
+	o := opts()
+	o.MaxAutoSpend = 200
+	for _, input := range [][]Candidate{
+		{creditRoom("ccc", 10000, 100), creditRoom("aaa", 10000, 100), creditRoom("bbb", 10000, 100)},
+		{creditRoom("bbb", 10000, 100), creditRoom("ccc", 10000, 100), creditRoom("aaa", 10000, 100)},
+	} {
+		eq(t, creditOrder(Rank(input, o)), []string{"aaa", "bbb", "ccc"})
+	}
+}
+
+// An account the gate would refuse has no room to compare, so it sorts behind
+// every account that has one — whatever its uuid.
+func TestACreditAccountWithNoArmedRoomSortsBehindOneThatHasSome(t *testing.T) {
+	o := opts()
+	o.MaxAutoSpend = 200
+	// Both input orders, because a comparator that answers true in BOTH
+	// directions for the same pair can still produce the right answer from one
+	// of them by luck — which is exactly what dropping the no-room tier does.
+	for _, cands := range [][]Candidate{
+		{
+			creditRoom("aaa-spent", 10000, 10000),       // nothing armed left
+			credit("bbb-unreadable", &usage.Snapshot{}), // never read
+			creditRoom("zzz-has-room", 10000, 0),        // $90 armed
+		},
+		{
+			creditRoom("zzz-has-room", 10000, 0),
+			creditRoom("aaa-spent", 10000, 10000),
+			credit("bbb-unreadable", &usage.Snapshot{}),
+		},
+	} {
+		eq(t, creditOrder(Rank(cands, o)), []string{"zzz-has-room", "aaa-spent", "bbb-unreadable"})
+	}
+}
+
+// With the default ceiling nothing is armed at all, so the pool keeps the
+// deterministic uuid order it had before this key existed.
+func TestWithNoCeilingTheCreditPoolStaysInUuidOrder(t *testing.T) {
+	cands := []Candidate{creditRoom("zzz", 10000, 0), creditRoom("aaa", 10000, 5000)}
+
+	r := Rank(cands, opts())
+	eq(t, creditOrder(r), []string{"aaa", "zzz"})
+	if r.Credit[0].HasCreditRoom {
+		t.Error("HasCreditRoom = true with max_auto_spend at its default of 0")
+	}
+}
+
+// The ordering must agree with the gate that later approves the account, or the
+// engine would walk to a first choice the gate then refuses while a usable one
+// waits behind it. The account's OWN limit binds here, not the ceiling.
+func TestTheCreditOrderUsesTheSmallerOfTheAccountLimitAndTheCeiling(t *testing.T) {
+	cands := []Candidate{
+		creditRoom("aaa-big-limit", 100000, 0), // $1000 cap, but the $50 ceiling binds -> $45
+		creditRoom("zzz-small-limit", 6000, 0), // $60 cap binds under the $50 ceiling? no: min(60,50)=50 -> $45
+	}
+	o := opts()
+	o.MaxAutoSpend = 50
+	r := Rank(cands, o)
+	// Both cap at the ceiling, so both have the same room and the tie-break
+	// decides. What matters is that neither reads as $900 of room.
+	for _, x := range r.Credit {
+		if x.CreditRoom != 45 {
+			t.Errorf("%s: CreditRoom = %v, want 45 — the cap is min(account limit, ceiling)", x.UUID, x.CreditRoom)
+		}
+	}
+	eq(t, creditOrder(r), []string{"aaa-big-limit", "zzz-small-limit"})
+}
