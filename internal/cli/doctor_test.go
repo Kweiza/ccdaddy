@@ -115,7 +115,7 @@ func TestDoctorNamesAStoreThatPointsAtNothing(t *testing.T) {
 	// Everything downstream of the store is skipped rather than answered from
 	// nothing: a "permissions ok" for a directory that does not exist is a
 	// diagnostic that lies.
-	for _, name := range []string{"permissions", "pidfile", "usage-cache", "engine-state", "config"} {
+	for _, name := range []string{"permissions", "pidfile", "usage-cache", "engine-state", "config", "sessions"} {
 		if got := r.level(t, name); got != "skipped" {
 			t.Errorf("%s = %q with no store to check, want skipped: %s", name, got, r.detail(t, name))
 		}
@@ -440,7 +440,7 @@ func TestDoctorHumanOutputNamesEveryCheck(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit %d, want 0\n%s", code, stdout)
 	}
-	for _, name := range []string{"store", "permissions", "locks", "pidfile", "status-file", "usage-cache", "engine-state", "config", "claude-code", "credential-keys", "environment"} {
+	for _, name := range []string{"store", "permissions", "locks", "pidfile", "status-file", "usage-cache", "engine-state", "config", "sessions", "claude-code", "credential-keys", "environment"} {
 		if !strings.Contains(stdout, name) {
 			t.Errorf("the human report does not mention the %s check:\n%s", name, stdout)
 		}
@@ -572,5 +572,93 @@ func TestDoctorNamesConfigKeysItDoesNotKnow(t *testing.T) {
 	}
 	if code != ExitOK {
 		t.Errorf("exit %d, want 0: an ignored key is not a failure", code)
+	}
+}
+
+// seedLeakedSession writes what a `ccdad run` that never got to clean up
+// leaves behind: a directory under the store holding a live refresh token.
+func seedLeakedSession(t *testing.T, name string) string {
+	t.Helper()
+	dir := filepath.Join(mustPath(ccpath.StoreHome()), SessionsDirName, name)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"claudeAiOauth":{"accessToken":"AT","refreshToken":"RT-leaked-secret"}}`
+	if err := os.WriteFile(filepath.Join(dir, ccpath.CredentialsFile), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// A session directory holds a live refresh token. `ccdad run` deletes its own
+// on the way out, but a machine that was powered off mid-session, or a run
+// whose adopt-back failed, leaves one — and nothing else in the tree would ever
+// mention it again.
+func TestDoctorReportsSessionCredentialsLeftBehind(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	seedLeakedSession(t, "u-1-123")
+	seedLeakedSession(t, "u-2-456")
+
+	code, r, _ := runDoctor(t)
+	if got := r.level(t, "sessions"); got != "warn" {
+		t.Errorf("sessions = %q, want warn: %s", got, r.detail(t, "sessions"))
+	}
+	detail := r.detail(t, "sessions")
+	if !strings.Contains(detail, "2") {
+		t.Errorf("the detail does not say how many were found: %q", detail)
+	}
+	// A diagnostic is what a user pastes into an issue.
+	if strings.Contains(detail, "RT-leaked-secret") {
+		t.Errorf("the detail printed a token out of a session's credentials: %q", detail)
+	}
+	// Warn does not fail the machine. Only levelFail changes the exit code.
+	if code != ExitOK {
+		t.Errorf("exit %d for leftover sessions, want 0 — a warn is not a broken machine", code)
+	}
+}
+
+// The ordinary answer on a machine where every run cleaned up after itself,
+// and on one that has never run a session at all: os.ReadDir on a container
+// that was never created is "no sessions", not an error, and doctor must not
+// create it either.
+func TestDoctorReportsNoSessionsWhenTheContainerWasNeverCreated(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+
+	code, r, _ := runDoctor(t)
+	if got := r.level(t, "sessions"); got != "ok" {
+		t.Errorf("sessions = %q, want ok: %s", got, r.detail(t, "sessions"))
+	}
+	if code != ExitOK {
+		t.Errorf("exit %d, want 0", code)
+	}
+	container := filepath.Join(mustPath(ccpath.StoreHome()), SessionsDirName)
+	if _, err := os.Stat(container); !os.IsNotExist(err) {
+		t.Errorf("doctor created %s (err = %v); the probe must not create what it probes", container, err)
+	}
+}
+
+// A session directory holds a live refresh token, so loose modes on it are the
+// same failure as loose modes on the store — and the permissions check does not
+// see them: it reads one level deep and skips directories, so a world-readable
+// token inside a session would otherwise be reported as "ok".
+func TestDoctorFailsOnASessionDirectoryAnyoneCanRead(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("§10.3: chmod is a no-op on Windows")
+	}
+	isolate(t)
+	seedHealthyMachine(t)
+	dir := seedLeakedSession(t, "u-1-123")
+	if err := os.Chmod(filepath.Join(dir, ccpath.CredentialsFile), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	code, r, _ := runDoctor(t)
+	if got := r.level(t, "sessions"); got != "fail" {
+		t.Errorf("sessions = %q, want fail: %s", got, r.detail(t, "sessions"))
+	}
+	if code != ExitFailure {
+		t.Errorf("exit %d, want %d — only fail changes the exit code, and this is one", code, ExitFailure)
 	}
 }
