@@ -1,0 +1,404 @@
+package cli
+
+import (
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"runtime"
+	"sort"
+	"strings"
+	"text/tabwriter"
+
+	"github.com/spf13/cobra"
+
+	"github.com/Kweiza/ccdaddy/internal/cclink"
+	"github.com/Kweiza/ccdaddy/internal/ccpath"
+	"github.com/Kweiza/ccdaddy/internal/daemon"
+	"github.com/Kweiza/ccdaddy/internal/strategy"
+	"github.com/Kweiza/ccdaddy/internal/usage"
+)
+
+// Everything ccdad does is reverse-engineered against exactly one pinned Claude
+// Code, and §12 rates "Claude Code changes these internals between releases"
+// High. doctor is the mitigation: the only thing that tells a user their Claude
+// Code moved out from under ccdad BEFORE a switch destroys a credential.
+//
+// Two rules shape the whole file.
+//
+// The probe must not create what it probes. §8.2 is explicit that bringing the
+// daemon lock file into existence while checking for it destroys the one piece
+// of genuine evidence that no daemon ever started here — and the same argument
+// reaches the store directory, which is why nothing here calls store.Open:
+// store.Open does an MkdirAll, so a diagnostic built on it would manufacture the
+// very thing it was asked to report on. Every path below is stat-ed, and every
+// reader used is one that returns "absent" rather than creating.
+//
+// And it reports; it does not repair. §13's fourth open question — report versus
+// repair — is unsettled, so there is deliberately no `--fix` and no code behind
+// one. A repair added later has to be an explicit act by the user.
+//
+// Two checks named in the brief are absent because their subject does not exist
+// yet, not because they were judged unnecessary:
+//
+//   - the stale `Claude Code-credentials` keychain item, which needs the legacy
+//     keychain reader (task 49). There is no code in the tree that can look;
+//   - the temp credential directories `ccdad run` may have leaked, which needs
+//     `run` (task 48) to have chosen a naming convention. Guessing one here
+//     would invent the contract that task has to follow, and §13's first open
+//     question — CLAUDE_SECURESTORAGE_CONFIG_DIR versus a full config clone —
+//     is exactly what decides it.
+
+// checkLevel is how much a finding matters.
+type checkLevel string
+
+const (
+	// levelOK is nothing to do.
+	levelOK checkLevel = "ok"
+	// levelWarn is worth knowing and not broken. An unrecognised credential key
+	// is preserved by the deny-list; a fresh machine has no store yet.
+	levelWarn checkLevel = "warn"
+	// levelFail is something that will bite. It is the only level that changes
+	// the exit code.
+	levelFail checkLevel = "fail"
+	// levelSkipped is a check that does not apply here — §10.3's file modes on
+	// Windows, or a check whose subject is missing.
+	levelSkipped checkLevel = "skipped"
+)
+
+type check struct {
+	Name   string
+	Level  checkLevel
+	Detail string
+}
+
+func newDoctorCmd() *cobra.Command {
+	var asJSON bool
+
+	cmd := &cobra.Command{
+		Use:   "doctor",
+		Short: "Check the layout ccdad depends on, and the hazards around it",
+		Long: "doctor reports; it never repairs, and it never creates anything it is\n" +
+			"checking for. Exit 0 when nothing failed, 1 when something did — a\n" +
+			"warning is not a failure.",
+		Args:          usageArgs(cobra.NoArgs),
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			checks := runChecks()
+			failed := false
+			for _, c := range checks {
+				if c.Level == levelFail {
+					failed = true
+				}
+			}
+
+			if asJSON {
+				rows := make([]map[string]any, 0, len(checks))
+				for _, c := range checks {
+					rows = append(rows, map[string]any{
+						"name": c.Name, "level": string(c.Level), "detail": c.Detail,
+					})
+				}
+				if err := writeJSON(cmd, map[string]any{
+					"schemaVersion": 1,
+					"ok":            !failed,
+					"checks":        rows,
+				}); err != nil {
+					return err
+				}
+			} else {
+				w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+				for _, c := range checks {
+					fmt.Fprintf(w, "%s\t%s\t%s\n", c.Level, c.Name, c.Detail)
+				}
+				if err := w.Flush(); err != nil {
+					return err
+				}
+			}
+			if failed {
+				// The command has already said what is wrong, in its own words
+				// and in the format the caller asked for.
+				return WithCode(errSilent, ExitFailure)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&asJSON, "json", false, "emit a machine-readable object on stdout")
+	return cmd
+}
+
+// runChecks is the whole diagnostic, in a fixed order so two runs are diffable.
+func runChecks() []check {
+	root := ccpath.StoreHome()
+	storeCheck, storeUsable := checkStore(root)
+
+	live, liveErr := cclink.Load()
+	report, probeErr := observeDaemon()
+
+	return []check{
+		storeCheck,
+		checkPermissions(root, storeUsable),
+		checkLocks(report, probeErr),
+		checkPidfile(storeUsable),
+		checkStatusFile(report),
+		checkUsageCache(storeUsable),
+		checkEngineState(storeUsable),
+		checkClaudeCode(live, liveErr),
+		checkCredentialKeys(live, liveErr),
+		checkEnvironment(),
+	}
+}
+
+// checkStore reports where ccdad's own state lives, and whether it is there.
+//
+// A missing store is a WARNING, not a failure, and the wording carries both
+// readings on purpose. §8.2 makes the point one layer down: a fresh install and
+// a mistyped CCDAD_HOME are indistinguishable at this layer — both are an
+// *fs.PathError satisfying os.ErrNotExist — and making a new machine look broken
+// is the worse of the two mistakes.
+//
+// A RELATIVE store is a failure, because store.Open refuses one outright: it
+// would put a credentials tree in whatever directory ccdad happened to be run
+// from, a different one each time, with live tokens in it.
+func checkStore(root string) (check, bool) {
+	if !filepath.IsAbs(root) {
+		return check{"store", levelFail, fmt.Sprintf(
+			"the store resolved to the relative path %q; set CCDAD_HOME to an absolute path", root)}, false
+	}
+	info, err := os.Stat(root)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return check{"store", levelWarn, fmt.Sprintf(
+			"%s does not exist — either ccdad has not run on this machine yet, or CCDAD_HOME points somewhere unintended", root)}, false
+	case err != nil:
+		return check{"store", levelFail, fmt.Sprintf("%s cannot be read: %v", root, err)}, false
+	case !info.IsDir():
+		return check{"store", levelFail, fmt.Sprintf("%s is not a directory", root)}, false
+	}
+	return check{"store", levelOK, root}, true
+}
+
+// checkPermissions holds the store to 0700 and everything in it to 0600.
+//
+// §10.3: Windows gets no chmod and the ACL inherited from %USERPROFILE% is what
+// protects the files there, so this is skipped rather than guessed at.
+func checkPermissions(root string, usable bool) check {
+	if runtime.GOOS == "windows" {
+		return check{"permissions", levelSkipped, "§10.3: file modes are not how Windows protects these; the %USERPROFILE% ACL is"}
+	}
+	if !usable {
+		return check{"permissions", levelSkipped, "there is no store to check"}
+	}
+
+	var loose []string
+	want := map[string]fs.FileMode{
+		root:                               0o700,
+		filepath.Join(root, "credentials"): 0o700,
+	}
+	for path, mode := range want {
+		info, err := os.Stat(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			loose = append(loose, fmt.Sprintf("%s cannot be read (%v)", path, err))
+			continue
+		}
+		if info.Mode().Perm() != mode {
+			loose = append(loose, fmt.Sprintf("%s is %04o, want %04o", path, info.Mode().Perm(), mode))
+		}
+	}
+
+	// Every file that holds a token, by glob rather than through the store: the
+	// point is to see what is on disk, not what ccdad believes it wrote.
+	files, _ := filepath.Glob(filepath.Join(root, "credentials", "*"))
+	files = append(files, filepath.Join(root, "accounts.toml"))
+	for _, path := range files {
+		info, err := os.Stat(path)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		if info.Mode().Perm() != 0o600 {
+			loose = append(loose, fmt.Sprintf("%s is %04o, want 0600", path, info.Mode().Perm()))
+		}
+	}
+
+	if len(loose) > 0 {
+		sort.Strings(loose)
+		return check{"permissions", levelFail, strings.Join(loose, "; ")}
+	}
+	return check{"permissions", levelOK, "the store and everything in it are 0700/0600"}
+}
+
+// checkLocks is the highest-value check here, and the easiest to get wrong.
+//
+// The question is not "is a daemon running". It is "do locks work on this
+// filesystem at all" — ENOLCK on an NFS or CIFS mount with no lock daemon — and
+// answering that with "no daemon" is precisely the `status || spawn` respawn
+// loop §9.3 introduced exit 5 to prevent. A doctor that made that mistake would
+// have reproduced clauth's bug inside the tool written to find it.
+func checkLocks(report daemon.Report, probeErr error) check {
+	if probeErr != nil {
+		if errors.Is(probeErr, daemon.ErrLocksUnsupported) {
+			return check{"locks", levelFail, fmt.Sprintf(
+				"this filesystem cannot take a lock, so nothing here can tell whether a daemon is running: %v. "+
+					"An NFS or CIFS mount with no lock daemon does this; move CCDAD_HOME onto local storage", probeErr)}
+		}
+		return check{"locks", levelFail, fmt.Sprintf("the singleton lock could not be probed: %v", probeErr)}
+	}
+	if report.State == daemon.DaemonRunning {
+		return check{"locks", levelOK, "locking works here, and a daemon holds the singleton"}
+	}
+	return check{"locks", levelOK, "locking works here, and the singleton is free"}
+}
+
+// checkPidfile surfaces the one pidfile state the reader refuses to fold into
+// "nothing to read": a body that IS committed and does not parse. pidfile.go
+// names this command as the reader that needs to see it, because a supervisor
+// that cannot tell "no daemon" from "this store is damaged" respawns forever.
+func checkPidfile(usable bool) check {
+	if !usable {
+		return check{"pidfile", levelSkipped, "there is no store to check"}
+	}
+	pid, ok, err := daemon.ReadPID()
+	switch {
+	case err != nil:
+		return check{"pidfile", levelFail, fmt.Sprintf("%s is damaged: %v", daemon.PIDPath(), err)}
+	case !ok:
+		return check{"pidfile", levelOK, "no pid recorded, which is what a stopped or never-started daemon leaves"}
+	}
+	// Deliberately not checked for liveness. The process may have died and the
+	// number may have been recycled onto something unrelated; only the singleton
+	// knows, and it was asked above.
+	return check{"pidfile", levelOK, fmt.Sprintf("records pid %d (a recorded pid is never liveness evidence)", pid)}
+}
+
+func checkStatusFile(report daemon.Report) check {
+	if report.StatusErr != nil {
+		return check{"status-file", levelFail, fmt.Sprintf("%s cannot be read: %v", daemon.StatusPath(), report.StatusErr)}
+	}
+	if !report.HasStatus {
+		return check{"status-file", levelOK, "no daemon has published one"}
+	}
+	return check{"status-file", levelOK, fmt.Sprintf("schema %d, generated %s",
+		report.Status.SchemaVersion, report.Status.GeneratedAt.Format("2006-01-02T15:04:05Z07:00"))}
+}
+
+// checkUsageCache is a warning rather than a failure by the cache's own design:
+// an unreadable cache leaves every account UNKNOWN, which the engine already
+// knows how to handle. It is invisible everywhere else, which is why LoadError
+// exists at all.
+func checkUsageCache(usable bool) check {
+	if !usable {
+		return check{"usage-cache", levelSkipped, "there is no store to check"}
+	}
+	c, err := usage.LoadCache()
+	if err != nil {
+		return check{"usage-cache", levelFail, err.Error()}
+	}
+	if cerr := c.LoadError(); cerr != nil {
+		return check{"usage-cache", levelWarn, fmt.Sprintf(
+			"%v — every account will read as unknown until it is rewritten", cerr)}
+	}
+	return check{"usage-cache", levelOK, usage.CachePath()}
+}
+
+// checkEngineState is the anti-flap state: cooldown, last switch, quarantines.
+// Unreadable, it degrades towards MORE switching rather than less, so it is a
+// warning — but a permanently unreadable one means the cooldown never applies
+// and nothing else would ever say so.
+func checkEngineState(usable bool) check {
+	if !usable {
+		return check{"engine-state", levelSkipped, "there is no store to check"}
+	}
+	st, err := strategy.LoadState()
+	if err != nil {
+		return check{"engine-state", levelFail, err.Error()}
+	}
+	if serr := st.LoadError(); serr != nil {
+		return check{"engine-state", levelWarn, fmt.Sprintf(
+			"%v — the cooldown and every quarantine are being ignored until it is rewritten", serr)}
+	}
+	return check{"engine-state", levelOK, strategy.StatePath()}
+}
+
+// checkClaudeCode is §12's actual mitigation: has Claude Code's layout moved.
+//
+// cclink.Load's refusals ARE the drift signals — a symlink at the path, a file
+// over the 1 MiB cap, a body that is not JSON — and switch deliberately cannot
+// repair the last of those, because overwriting destroys the machine-scoped keys
+// still in it. So this is the place a user finds out.
+func checkClaudeCode(live cclink.Blob, err error) check {
+	home := ccpath.CredentialHome()
+	if err != nil {
+		return check{"claude-code", levelFail, fmt.Sprintf("%s: %v", ccpath.CredentialsPath(), err)}
+	}
+	if len(live) == 0 {
+		return check{"claude-code", levelWarn, fmt.Sprintf(
+			"no login in %s — Claude Code has not logged in on this machine, or it keeps its credentials elsewhere", home)}
+	}
+	return check{"claude-code", levelOK, fmt.Sprintf("%s reads as %d top-level keys", ccpath.CredentialsPath(), len(live))}
+}
+
+// checkCredentialKeys is §4.3's "on startup" half, and the last part of §4.3
+// that was still missing.
+//
+// Unrecognised keys are a warning, not a failure: the swap is a DENY-list, so
+// anything ccdad has never heard of is preserved rather than destroyed. What
+// this is telling the user is that ccdad is behind Claude Code — six machine
+// keys drifted in after clauth's one-key carry list was written, which is why
+// this is demonstrated drift rather than a hypothetical.
+func checkCredentialKeys(live cclink.Blob, err error) check {
+	if err != nil {
+		return check{"credential-keys", levelSkipped, "the credentials file could not be read"}
+	}
+	unknown := cclink.UnknownKeys(live)
+	if len(unknown) == 0 {
+		return check{"credential-keys", levelOK, "every top-level key is one ccdad knows"}
+	}
+	sort.Strings(unknown)
+	return check{"credential-keys", levelWarn, fmt.Sprintf(
+		"unrecognised top-level keys: %s. They are preserved on a switch, but an ACCOUNT-scoped one would leak between accounts until ccdad is updated",
+		strings.Join(unknown, ", "))}
+}
+
+// checkEnvironment names the variables that make a switch pointless.
+//
+// Claude Code prefers CLAUDE_CODE_OAUTH_TOKEN over the stored login outright, so
+// with it set a switch writes a credentials file nothing reads. ANTHROPIC_API_KEY
+// competes with apiKeyHelper and the stored primaryApiKey in an order ccdad does
+// not model, which is also why `which` refuses to attribute it. switch.go warns
+// when the user tries; this says it first.
+//
+// The VALUES are never printed. A diagnostic is the output a user pastes into an
+// issue, and both of these are live credentials.
+func checkEnvironment() check {
+	var hazards []string
+	for _, name := range []string{"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"} {
+		if os.Getenv(name) != "" {
+			hazards = append(hazards, name)
+		}
+	}
+
+	// The path overrides are not hazards; they are just worth seeing, because
+	// they decide which files everything above was talking about.
+	var paths []string
+	for _, name := range []string{"CCDAD_HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR"} {
+		if v, ok := os.LookupEnv(name); ok {
+			paths = append(paths, fmt.Sprintf("%s=%s", name, v))
+		}
+	}
+	suffix := ""
+	if len(paths) > 0 {
+		suffix = ". Set: " + strings.Join(paths, ", ")
+	}
+
+	if len(hazards) > 0 {
+		return check{"environment", levelWarn, fmt.Sprintf(
+			"%s set — Claude Code reads these instead of the credentials file, so a switch would have no effect%s",
+			strings.Join(hazards, " and "), suffix)}
+	}
+	return check{"environment", levelOK, "nothing set that would make a switch a no-op" + suffix}
+}
