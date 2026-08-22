@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/pollpolicy"
@@ -566,5 +568,38 @@ func TestListRefreshDoesNotSayNothingWasNeededWhenSomethingWasFetched(t *testing
 	}
 	if strings.Contains(errOut, "Nothing needed refreshing") {
 		t.Fatalf("stderr = %q, want no such claim after a real fetch", errOut)
+	}
+}
+
+// `auto` and `switch` both tell a user to run `ccdad list --refresh` when the
+// cache is empty or stale. That advice named a flag the binary rejected before
+// this landed, and the sentences had to be pulled out of both files to stop
+// sending people to a usage error. This is what makes putting them back safe:
+// it fails if the flag ever leaves again, instead of the advice going stale in
+// silence.
+func TestTheAdviceToRunListRefreshNamesAFlagThatExists(t *testing.T) {
+	root := NewRootCmd()
+
+	var list *cobra.Command
+	advice := map[string]string{}
+	for _, c := range root.Commands() {
+		switch c.Name() {
+		case "list":
+			list = c
+		case "auto", "switch":
+			advice[c.Name()] = c.Long
+		}
+	}
+	if list == nil {
+		t.Fatal("there is no list command")
+	}
+	if list.Flags().Lookup("refresh") == nil {
+		t.Fatal("`list` has no --refresh flag, and two commands tell users to run it")
+	}
+	for name, long := range advice {
+		if !strings.Contains(long, "ccdad list --refresh") {
+			t.Errorf("`%s --help` no longer points at the one flag that can freshen the cache:\n%s",
+				name, long)
+		}
 	}
 }
