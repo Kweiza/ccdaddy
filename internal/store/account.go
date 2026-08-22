@@ -21,7 +21,7 @@ import (
 type Account struct {
 	// UUID is account.uuid from the profile endpoint. The primary key, and the
 	// name of the account's credential file, so it is charset-checked on the
-	// way in — see validUUID.
+	// way in — see ValidateUUID.
 	UUID string `toml:"uuid"`
 	// Email labels the account for humans.
 	Email string `toml:"email"`

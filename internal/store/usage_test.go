@@ -212,7 +212,7 @@ func TestApplyUsageOnAnUnknownAccountIsNotFound(t *testing.T) {
 	}
 }
 
-// Save() rewrites KindName from Kind on every write, and Accounts() hands back a
+// save() rewrites KindName from Kind on every write, and Accounts() hands back a
 // defensive copy — so a change made to the wrong one is a change that never
 // reaches the disk.
 func TestApplyUsagePersistsThroughTheStoresOwnRecord(t *testing.T) {
@@ -227,7 +227,7 @@ func TestApplyUsagePersistsThroughTheStoresOwnRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Save() rewrites KindName from Kind, so the file is the only place that
+	// save() rewrites KindName from Kind, so the file is the only place that
 	// proves the change went through the store's own record and not through a
 	// copy Accounts() handed out.
 	if !strings.Contains(stripQuotes(string(raw)), "kind = credit") {
