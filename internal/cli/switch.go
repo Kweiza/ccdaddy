@@ -3,16 +3,13 @@ package cli
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
-	"github.com/Kweiza/ccdaddy/internal/config"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/switcher"
-	"github.com/Kweiza/ccdaddy/internal/usage"
 )
 
 // envVarFor names the mechanism Claude Code actually reads a token kind from.
@@ -21,6 +18,57 @@ func envVarFor(kind string) string {
 		return "ANTHROPIC_API_KEY"
 	}
 	return "CLAUDE_CODE_OAUTH_TOKEN"
+}
+
+// chooseTarget is the targetless grammar: the engine picks, under §7.2's
+// margins and §7.3's gate. The decision itself is switcher.Evaluate — the same
+// call `ccdad auto` and the daemon make, because the moment there are two
+// copies the hand-verified path and the unattended path diverge. What stays
+// here is the wording.
+func chooseTarget(cmd *cobra.Command, s *store.Store, strategyName string, force bool) (store.Account, error) {
+	stderr := cmd.ErrOrStderr()
+
+	// Parsed, not defaulted: checkSwitchFlags has already refused an unknown
+	// name, so anything reaching here is one the ranking knows. It is always
+	// present on this path — a targetless switch IS the --strategy grammar — so
+	// the config's own strategy key reaches the daemon rather than this command.
+	chosen, _ := strategy.ParseStrategy(strategyName)
+	ev, err := switcher.Evaluate(s, switcher.EvalOptions{
+		Strategy: chosen, HasStrategy: true, Force: force,
+	})
+	if err != nil {
+		return store.Account{}, err
+	}
+	if ev.LiveErr != nil {
+		fmt.Fprintf(stderr, "note: could not read the current login (%v); ranking without it\n", ev.LiveErr)
+	}
+	if ev.StateErr != nil {
+		fmt.Fprintf(stderr, "note: the auto-switch state could not be read (%v); "+
+			"proceeding with no cooldown and no quarantines.\n", ev.StateErr)
+	}
+	if ev.ConfigErr != nil {
+		fmt.Fprintf(stderr, "note: %v; using the built-in defaults.\n", ev.ConfigErr)
+	}
+	if ev.Forced {
+		// --force is the explicit bypass of §7.2's margins, and only of those.
+		fmt.Fprintf(stderr, "note: --force is overriding the anti-flap hold (%s).\n", ev.Plan.Reason)
+	}
+	if ev.NoReadings {
+		fmt.Fprintln(stderr, "ccdad has no usage readings yet, so there is nothing to choose on.")
+		fmt.Fprintln(stderr, "Name an account explicitly, or let the daemon poll first.")
+		return store.Account{}, WithCode(errSilent, ExitBlocked)
+	}
+
+	switch ev.Plan.Action {
+	case strategy.ActionSwitch:
+		return ev.Target, nil
+	case strategy.ActionBlocked:
+		fmt.Fprintf(stderr, "No account can be switched to: %s.\n", switcher.Explain(ev.Plan))
+		return store.Account{}, WithCode(errSilent, ExitBlocked)
+	default:
+		fmt.Fprintf(stderr, "Staying put: %s.\n", switcher.Explain(ev.Plan))
+		return store.Account{}, WithCode(errSilent, ExitNothingToDo)
+	}
 }
 
 // exactlyOneAccount is spelled out rather than delegated to cobra.ExactArgs so
@@ -77,191 +125,6 @@ func checkSwitchFlags(args []string, strategyName, model string) error {
 		return UsageError("unknown strategy %q: one of %s", strategyName, strings.Join(strategy.StrategyNames(), ", "))
 	}
 	return nil
-}
-
-// installable reports whether an account can become the live login at all.
-//
-// A SETUP-TOKEN account is stored but has no claudeAiOauth record and no file
-// Claude Code would read it from, so there is nothing to install. Left in the
-// pool it can rank first and then fail the switch, turning a strategy the user
-// asked for into an exit 2 they cannot act on — so it is excluded from the
-// ranking rather than rejected after winning it. An explicit `switch <ACCT>`
-// still names one and still gets the message that says how to use it.
-//
-// An API-KEY account is installable: `switch` writes primaryApiKey into
-// ~/.claude.json and clears the login in front of it. It is still never chosen
-// by the engine, but for a different reason and in a different place —
-// strategy.eligible drops identity.KindAPIKey because an account with no quota
-// windows has nothing for a usage-aware ranking to compare. Saying so here
-// instead would state the same exclusion twice and let the two spellings
-// disagree.
-func installable(creds cclink.Blob, err error) bool {
-	if err != nil {
-		return false
-	}
-	if _, hasOAuth := creds["claudeAiOauth"]; hasOAuth {
-		return true
-	}
-	rec, isToken := cclink.TokenRecordOf(creds)
-	return isToken && rec.Kind == cclink.APIKeyKind
-}
-
-// engineCandidates projects the store and the on-disk usage cache onto what the
-// ranking takes.
-//
-// It READS the cache and never fetches. That is the same rule `ccdad list`
-// follows (§9.1) and for the same reason: /api/oauth/usage allows roughly 28-30
-// requests per identity per rolling hour over a SLIDING window, so a command a
-// user can run in a loop must not be a way to spend it.
-func engineCandidates(s *store.Store, accounts []store.Account, c *usage.Cache) []strategy.Candidate {
-	out := make([]strategy.Candidate, 0, len(accounts))
-	for _, a := range accounts {
-		if !installable(s.Credentials(a.UUID)) {
-			continue
-		}
-		cand := strategy.Candidate{UUID: a.UUID, Kind: a.Kind, Disabled: a.Disabled}
-		if e, ok := c.Get(a.UUID); ok {
-			cand.Usage = e.Snapshot
-		}
-		out = append(out, cand)
-	}
-	return out
-}
-
-// anyReading reports whether ccdad has ever read any of these accounts.
-func anyReading(cands []strategy.Candidate) bool {
-	for _, c := range cands {
-		if c.Usage != nil {
-			return true
-		}
-	}
-	return false
-}
-
-// chooseTarget is the targetless grammar: the engine picks, under §7.2's
-// margins and §7.3's gate.
-func chooseTarget(cmd *cobra.Command, s *store.Store, accounts []store.Account,
-	liveUUID, strategyName string, force bool) (store.Account, error) {
-	stderr := cmd.ErrOrStderr()
-
-	cache, err := usage.LoadCache()
-	if err != nil {
-		return store.Account{}, err
-	}
-	// An entry older than its account's AddedAt belonged to a previous account
-	// at the same uuid, and letting it through would hand a fresh login the
-	// headroom its predecessor had already spent.
-	added := make(map[string]time.Time, len(accounts))
-	for _, a := range accounts {
-		added[a.UUID] = a.AddedAt
-	}
-	cache.Prune(added)
-
-	cands := engineCandidates(s, accounts, cache)
-	if !anyReading(cands) {
-		// No evidence at all. Moving here would not be a choice, it would be a
-		// reshuffle — and §9.3 reserves 4 for "wanted, but no viable target".
-		fmt.Fprintln(stderr, "ccdad has no usage readings yet, so there is nothing to choose on.")
-		fmt.Fprintln(stderr, "Name an account explicitly, or let the daemon poll first.")
-		return store.Account{}, WithCode(errSilent, ExitBlocked)
-	}
-
-	// The cooldown is read from DISK. A one-shot command has no in-memory
-	// anti-flap history, and a bare `switch` that ignored the cooldown would
-	// ping-pong against a running daemon that is honouring it.
-	st, err := strategy.LoadState()
-	if err != nil {
-		return store.Account{}, err
-	}
-	if lerr := st.LoadError(); lerr != nil {
-		fmt.Fprintf(stderr, "note: the auto-switch state could not be read (%v); "+
-			"proceeding with no cooldown and no quarantines.\n", lerr)
-	}
-
-	// The §7 knobs come from ~/.ccdad/config.toml. A file that cannot be used
-	// falls back to the built-in defaults with a note rather than failing the
-	// command: the same direction the daemon takes (§8.4), and for the same
-	// reason — refusing to switch because a threshold was mistyped is a worse
-	// answer than switching on the documented default.
-	cfg, cerr := config.Load()
-	if cerr != nil {
-		fmt.Fprintf(stderr, "note: %v; using the built-in defaults.\n", cerr)
-		cfg = config.Defaults()
-	}
-
-	// Parsed, not defaulted: checkSwitchFlags has already refused an unknown
-	// name, so anything reaching here is one the ranking knows.
-	chosen, _ := strategy.ParseStrategy(strategyName)
-	opts := cfg.RankOptions(time.Now())
-	// --strategy is explicit and the file is not, so the flag wins. It is
-	// always present on this path — a targetless switch IS the --strategy
-	// grammar — so the config's own strategy key reaches the daemon rather than
-	// this command.
-	opts.Strategy = chosen
-	plan := strategy.Decide(cands, opts, cfg.StrategyConfig(), st, liveUUID)
-
-	if plan.Action == strategy.ActionStay && force {
-		// --force is the explicit bypass of §7.2's margins, and only of those.
-		// It never bypasses §7.3's credit gate: that one spends money, and a
-		// flag named "force" is not the two independent opt-ins §7.3 requires.
-		if best, ok := forceableTarget(plan, liveUUID); ok {
-			fmt.Fprintf(stderr, "note: --force is overriding the anti-flap hold (%s).\n", plan.Reason)
-			plan.Action, plan.Target = strategy.ActionSwitch, best
-		}
-	}
-
-	switch plan.Action {
-	case strategy.ActionSwitch:
-		target, ok := s.Get(plan.Target.UUID)
-		if !ok {
-			return store.Account{}, fmt.Errorf("the engine chose %q, which is no longer in the store", plan.Target.UUID)
-		}
-		return target, nil
-
-	case strategy.ActionBlocked:
-		fmt.Fprintf(stderr, "No account can be switched to: %s.\n", explain(plan))
-		return store.Account{}, WithCode(errSilent, ExitBlocked)
-
-	default:
-		fmt.Fprintf(stderr, "Staying put: %s.\n", explain(plan))
-		return store.Account{}, WithCode(errSilent, ExitNothingToDo)
-	}
-}
-
-// forceableTarget is the best account --force may move to: the top of the
-// ranking, when that is not already the live one. A credit account is never
-// returned, which is what keeps --force away from §7.3.
-func forceableTarget(plan strategy.Plan, liveUUID string) (strategy.Ranked, bool) {
-	if len(plan.Result.Order) == 0 {
-		return strategy.Ranked{}, false
-	}
-	best := plan.Result.Order[0]
-	if best.UUID == liveUUID {
-		return strategy.Ranked{}, false
-	}
-	return best, true
-}
-
-// explain turns a plan into a sentence, adding the detail the reason alone
-// cannot carry.
-func explain(plan strategy.Plan) string {
-	msg := plan.Reason.String()
-	if plan.Reason == strategy.ReasonCreditGate {
-		// The gate's own reason is the actionable half: "the credit gate
-		// refused" tells nobody whether to raise max_auto_spend or to call
-		// their organization.
-		msg += " — " + plan.Credit.Reason.String()
-		if plan.Credit.DisabledReason != "" {
-			msg += " (" + plan.Credit.DisabledReason + ")"
-		}
-	}
-	if plan.HasRetryAt {
-		msg += fmt.Sprintf("; try again after %s", plan.RetryAt.Format(time.Kitchen))
-	}
-	if len(plan.Quarantined) > 0 {
-		msg += fmt.Sprintf("; %d account(s) quarantined, re-run 'ccdad add' for them", len(plan.Quarantined))
-	}
-	return msg
 }
 
 func newSwitchCmd() *cobra.Command {
@@ -330,7 +193,7 @@ func newSwitchCmd() *cobra.Command {
 					return UsageError("%s", err.Error())
 				}
 			} else {
-				target, err = chooseTarget(cmd, s, accounts, liveUUID, strategyName, force)
+				target, err = chooseTarget(cmd, s, strategyName, force)
 				if err != nil {
 					return err
 				}
