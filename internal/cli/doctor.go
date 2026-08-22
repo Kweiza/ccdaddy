@@ -154,6 +154,7 @@ func runChecks() []check {
 		checkUsageCache(storeUsable),
 		checkEngineState(storeUsable),
 		checkConfig(storeUsable),
+		checkSessions(root, storeUsable),
 		checkClaudeCode(live, liveErr),
 		checkCredentialKeys(live, liveErr),
 		checkEnvironment(),
@@ -243,7 +244,10 @@ func checkPermissions(root string, usable bool) check {
 		sort.Strings(loose)
 		return check{"permissions", levelFail, strings.Join(loose, "; ")}
 	}
-	return check{"permissions", levelOK, "the store and everything in it are 0700/0600"}
+	// Named rather than "everything in it": this reads one level deep and skips
+	// directories, so the per-session and per-profile homes `ccdad run` creates
+	// are not covered here. checkSessions covers those.
+	return check{"permissions", levelOK, "the store's own files and directories are 0700/0600"}
 }
 
 // checkLocks is the highest-value check here, and the easiest to get wrong.
@@ -317,6 +321,103 @@ func checkUsageCache(usable bool) check {
 			"%v — every account will read as unknown until it is rewritten", cerr)}
 	}
 	return check{"usage-cache", levelOK, namePath(usage.CachePath())}
+}
+
+// checkSessions reports the per-session credential directories `ccdad run`
+// creates under the store.
+//
+// Each one holds a live refresh token at 0600. `run` deletes its own on the way
+// out, but a machine powered off mid-session, a SIGKILL, or a run whose
+// adopt-back failed all leave one — and nothing else in the tree would ever
+// mention it again.
+//
+// It cannot tell a leftover from a session running RIGHT NOW, and does not
+// pretend to: the tree's doctrine is that a recorded pid is not liveness
+// evidence, and there is nothing else to read. So the text says both readings
+// and the level stays a warning; deciding which one it is belongs to the human
+// who knows whether they have a session open.
+//
+// Report-only, like every other check here. §13 open question 4 ships as
+// report-only and there is no --fix; deleting a directory that turns out to
+// belong to a live session would take the credentials out from under it.
+func checkSessions(root string, usable bool) check {
+	if !usable {
+		return check{"sessions", levelSkipped, "there is no store to check"}
+	}
+	container := filepath.Join(root, SessionsDirName)
+	entries, err := os.ReadDir(container)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			// The container is created by `run`, never by this probe.
+			return check{"sessions", levelOK, "no parallel-session credentials are left behind"}
+		}
+		return check{"sessions", levelFail, err.Error()}
+	}
+
+	var live []string
+	for _, e := range entries {
+		// Claude Code's legacy refresh lock is a directory named after the
+		// session with ".lock" appended, created BESIDE it. It is not a
+		// session, and counting it would double every number here.
+		if !e.IsDir() || strings.HasSuffix(e.Name(), ".lock") {
+			continue
+		}
+		live = append(live, e.Name())
+	}
+	if len(live) == 0 {
+		return check{"sessions", levelOK, "no parallel-session credentials are left behind"}
+	}
+	sort.Strings(live)
+
+	// The permissions check cannot see any of this: it reads one level deep and
+	// skips directories, so a world-readable token inside a session would be
+	// reported as "ok" by the check whose whole job is modes.
+	if loose := looseSessions(container, live); len(loose) > 0 {
+		return check{"sessions", levelFail, strings.Join(loose, "; ")}
+	}
+	return check{"sessions", levelWarn, fmt.Sprintf(
+		"%d session credential director%s under %s (%s). A running 'ccdad run' owns one each; "+
+			"any others hold a refresh token nothing is using, and are safe to delete once no session is open",
+		len(live), plural(len(live), "y", "ies"), container, strings.Join(live, ", "))}
+}
+
+// looseSessions names every session directory or credential file that anyone
+// but the owner can read.
+//
+// §10.3: Windows has no mode bits and the inherited profile ACL is what
+// protects these, so there is nothing here to answer.
+func looseSessions(container string, names []string) []string {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	var loose []string
+	for _, name := range names {
+		dir := filepath.Join(container, name)
+		want := map[string]fs.FileMode{
+			dir: 0o700,
+			filepath.Join(dir, ccpath.CredentialsFile): 0o600,
+		}
+		for path, mode := range want {
+			info, err := os.Stat(path)
+			if err != nil {
+				continue
+			}
+			if info.Mode().Perm() != mode {
+				loose = append(loose, fmt.Sprintf("%s is %04o, want %04o", path, info.Mode().Perm(), mode))
+			}
+		}
+	}
+	sort.Strings(loose)
+	return loose
+}
+
+// plural picks a suffix. It exists because "1 directories" in a diagnostic is
+// the kind of thing a reader stops trusting the rest of the sentence over.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }
 
 // checkEngineState is the anti-flap state: cooldown, last switch, quarantines.
