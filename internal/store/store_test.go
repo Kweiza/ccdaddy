@@ -472,7 +472,7 @@ func TestAddIsEmptyUUIDRejected(t *testing.T) {
 }
 
 // A failed credential write must leave nothing behind in memory: the next
-// Save() from any other call would otherwise persist an account whose tokens
+// A save() from any other call would otherwise persist an account whose tokens
 // were never written.
 func TestAddDoesNotRecordAnAccountWhoseCredentialsFailedToWrite(t *testing.T) {
 	skipIfPermissionsAreMeaningless(t)
@@ -496,7 +496,7 @@ func TestAddDoesNotRecordAnAccountWhoseCredentialsFailedToWrite(t *testing.T) {
 }
 
 // The mirror image: a failed credential deletion must leave the account in
-// place, or the next Save() drops it from accounts.toml while its credential
+// place, or the next save() drops it from accounts.toml while its credential
 // file survives as an orphan holding a live token.
 func TestRemoveKeepsTheAccountWhenTheCredentialFileCannotBeDeleted(t *testing.T) {
 	skipIfPermissionsAreMeaningless(t)
@@ -528,14 +528,14 @@ func TestRemoveKeepsTheAccountWhenTheCredentialFileCannotBeDeleted(t *testing.T)
 // opening it behaves in ways no error path here expects.
 func TestValidUUIDRefusesWindowsDeviceNames(t *testing.T) {
 	for _, uuid := range []string{"CON", "con", "NUL", "aux", "COM1", "lpt9", "PRN"} {
-		if err := validUUID(uuid); err == nil {
-			t.Errorf("validUUID(%q) = nil, want it refused as a reserved device name", uuid)
+		if err := ValidateUUID(uuid); err == nil {
+			t.Errorf("ValidateUUID(%q) = nil, want it refused as a reserved device name", uuid)
 		}
 	}
 	// The names the store actually uses must keep working.
 	for _, uuid := range []string{"u-1", "console", "com", "com10", "aaaaaaaa-1111-2222-3333-444444444444"} {
-		if err := validUUID(uuid); err != nil {
-			t.Errorf("validUUID(%q) = %v, want nil", uuid, err)
+		if err := ValidateUUID(uuid); err != nil {
+			t.Errorf("ValidateUUID(%q) = %v, want nil", uuid, err)
 		}
 	}
 }
