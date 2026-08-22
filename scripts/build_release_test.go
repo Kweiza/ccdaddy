@@ -28,6 +28,24 @@ var releaseAssets = []string{
 	"ccdad-windows-arm64.exe",
 }
 
+// releaseNotices ship beside the binaries and are hashed into the same sums
+// file. BSD-3-Clause and Apache-2.0 require their notices to accompany a BINARY
+// distribution, and somebody who downloads one asset from the releases page has
+// received eight modules' worth of licensed code without ever seeing the
+// repository. They are asserted here rather than left to a human because the
+// failure mode is silent: a release that ships without them looks identical.
+var releaseNotices = []string{
+	"LICENSE",
+	"NOTICE",
+	"THIRD-PARTY-LICENSES.txt",
+}
+
+// releaseFiles is everything build-release.sh puts in dist besides the sums
+// file itself.
+func releaseFiles() []string {
+	return append(slices.Clone(releaseAssets), releaseNotices...)
+}
+
 const (
 	stampedVersion = "9.9.9-test"
 	stampedCommit  = "0123456789abcdef0123456789abcdef01234567"
@@ -101,7 +119,7 @@ func TestBuildReleaseShipsSixAssetsAndAMatchingSumsFile(t *testing.T) {
 		got = append(got, e.Name())
 	}
 	slices.Sort(got)
-	want := append(slices.Clone(releaseAssets), "sha256sums.txt")
+	want := append(releaseFiles(), "sha256sums.txt")
 	slices.Sort(want)
 	if !slices.Equal(got, want) {
 		t.Fatalf("dist contains %v, want %v — the asset names are what both installers compute, "+
@@ -134,8 +152,20 @@ func TestBuildReleaseSumsFileIsTheFormatTheInstallersParse(t *testing.T) {
 		names = append(names, name)
 	}
 	slices.Sort(names)
-	if !slices.Equal(names, releaseAssets) {
-		t.Fatalf("sha256sums.txt lists %v, want %v", names, releaseAssets)
+	wantListed := releaseFiles()
+	slices.Sort(wantListed)
+	if !slices.Equal(names, wantListed) {
+		t.Fatalf("sha256sums.txt lists %v, want %v", names, wantListed)
+	}
+
+	// The binaries come FIRST in the file. Both installers run a shape check
+	// ("does this look like a checksum file at all") before their anchored
+	// per-asset match, and a file that opened with something else would be the
+	// kind of thing that passes here and fails on a user's machine.
+	for i, name := range releaseAssets {
+		if got := sumsLine.FindStringSubmatch(lines[i])[2]; got != name {
+			t.Errorf("sha256sums.txt line %d names %q, want %q — binaries before notices", i+1, got, name)
+		}
 	}
 
 	for name, sum := range listed {
@@ -291,7 +321,8 @@ func TestBuildReleaseStillDescribesItselfWhenATargetFails(t *testing.T) {
 		got = append(got, e.Name())
 	}
 	slices.Sort(got)
-	want := append(slices.Clone(shipped), "sha256sums.txt")
+	want := append(slices.Clone(shipped), releaseNotices...)
+	want = append(want, "sha256sums.txt")
 	slices.Sort(want)
 	if !slices.Equal(got, want) {
 		t.Fatalf("dist contains %v, want %v", got, want)
@@ -310,8 +341,12 @@ func TestBuildReleaseStillDescribesItselfWhenATargetFails(t *testing.T) {
 		listed = append(listed, m[2])
 	}
 	slices.Sort(listed)
-	if !slices.Equal(listed, shipped) {
-		t.Fatalf("sha256sums.txt lists %v, want %v — a sums file must not name an asset the release does not have", listed, shipped)
+	// The notices ship whether or not every target built: they describe the
+	// binaries that DID land, and a partial release still distributes them.
+	wantListed := append(slices.Clone(shipped), releaseNotices...)
+	slices.Sort(wantListed)
+	if !slices.Equal(listed, wantListed) {
+		t.Fatalf("sha256sums.txt lists %v, want %v — a sums file must not name an asset the release does not have", listed, wantListed)
 	}
 }
 

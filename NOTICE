@@ -1,0 +1,43 @@
+ccdaddy
+Copyright (c) 2026 Junseong Park
+
+ccdaddy is an original Go program. It vendors no third-party source and copies
+none: every package in internal/ was written for this repository. Its own
+license is in LICENSE.
+
+Two things nevertheless travel with it, and this file is where they are
+recorded: the notices the Go modules it links require, and what it is that
+ccdaddy interoperates with.
+
+
+================================================================================
+Anthropic Claude Code
+================================================================================
+
+ccdaddy is an unofficial, third-party tool. It is not affiliated with,
+endorsed by, sponsored by or supported by Anthropic.
+
+It works by reading and writing the files Claude Code itself reads and writes,
+and by calling the same public OAuth and usage endpoints with Claude Code's own
+public client id — the ordinary way a tool interoperates with the program it
+sits beside. The file layouts, the lock protocol and the endpoint constants were
+established by observing the shipped Claude Code binary. No Anthropic source
+code is included here, and none of it is redistributed.
+
+"Claude" and "Claude Code" are trademarks of Anthropic, PBC. They are used here
+only nominatively — to say which program this one works with — and not as a
+brand for ccdaddy.
+
+
+================================================================================
+Go modules
+================================================================================
+
+The released binaries statically link eight third-party Go modules under
+BSD-3-Clause, MIT and Apache-2.0. BSD-3-Clause and Apache-2.0 both require the
+notice to accompany a BINARY distribution, so their texts are reproduced
+verbatim in THIRD-PARTY-LICENSES.txt rather than linked.
+
+That file is generated from what the binaries actually link — the union across
+all six release targets, since cobra pulls in mousetrap only on Windows — by
+`scripts/third-party-licenses.sh`, and a test fails when it is stale.
