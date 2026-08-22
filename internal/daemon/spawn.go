@@ -17,6 +17,21 @@ import (
 // the namespace a user could type by accident.
 const RunArg = "__daemon"
 
+// Windows process creation flags, as literals so that a test on any platform
+// can assert their values; spawn_windows.go is the only consumer, and a test
+// there checks them against the syscall package's own constants — which is the
+// half that cannot be written here, since syscall defines neither off Windows.
+//
+// DETACHED_PROCESS is the load-bearing one: without it the child inherits the
+// console and dies on CTRL_CLOSE_EVENT. The pair is deliberately exactly two.
+// CREATE_NO_WINDOW is documented as ignored when DETACHED_PROCESS is set, and
+// DETACHED_PROCESS with CREATE_NEW_CONSOLE fails outright, so a
+// belt-and-braces flag set is a startup failure rather than extra safety.
+const (
+	flagDetachedProcess       = 0x00000008
+	flagCreateNewProcessGroup = 0x00000200
+)
+
 // Spawn starts a detached daemon and returns without waiting for it.
 //
 // Three rules, all of which have their own failure mode:
@@ -31,13 +46,23 @@ const RunArg = "__daemon"
 //  2. Release, never Wait. Wait blocks the CLI for the daemon's whole lifetime;
 //     omitting both leaks the process handle on Windows.
 //
-//  3. os.Executable, never os.Args[0]. The latter may be a bare PATH name or a
-//     path relative to a working directory the daemon is about to leave. Note
-//     that on Linux this resolves through /proc/self/exe, so after an in-place
-//     binary replacement it re-execs the OLD inode — which is why install.sh
-//     stops the daemon before replacing the binary rather than after.
+//  3. os.Executable, never os.Args[0]. The latter may be a bare PATH name, or
+//     a path relative to a working directory this function is about to leave —
+//     cmd.Dir is set below, so a relative argv[0] resolves against the wrong
+//     directory and the spawn fails with an ENOENT naming a path that exists.
 //
-// Both descriptors point at the null device, including stderr. Handing the
+//     An earlier version of this comment claimed that /proc/self/exe makes
+//     Linux re-exec the OLD inode after an in-place binary replacement. That
+//     is wrong, and the probe is easy: os.Executable returns a path STRING and
+//     exec re-resolves it at fork time, so after a rename-over the child is
+//     the new binary. What IS true is that once the binary has been unlinked,
+//     readlink yields "<path> (deleted)", Go strips that suffix and reports no
+//     error, and the failure surfaces one line later as an ENOENT. install.sh
+//     stops the daemon before replacing the binary for its own stated reason —
+//     otherwise the old daemon keeps running old code and holding the
+//     singleton — and not because of anything about inodes.
+//
+// All three descriptors point at the null device, including stderr. Handing the
 // child a log file opened HERE would look tidier and would break log rotation
 // permanently: the daemon would keep writing into the renamed inode while the
 // fresh daemon.log stayed empty. The daemon opens its own log, and redirecting

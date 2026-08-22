@@ -196,6 +196,14 @@ func TestClearPIDOnAStoreThatNeverHadADaemonIsNotAFailure(t *testing.T) {
 	if err := ClearPID(); err != nil {
 		t.Errorf("ClearPID() = %v with no pidfile present, want nil", err)
 	}
+	// And it must not have created one. An absent pidfile means "no daemon has
+	// ever run against this store"; a ClearPID that opened with O_CREATE would
+	// forge the opposite, and the whole point of the never-remove rule above
+	// is that these two states stay distinct. This is the same class as the
+	// singleton's never-create-the-lock-file rule, in the other direction.
+	if _, err := os.Stat(PIDPath()); !os.IsNotExist(err) {
+		t.Errorf("ClearPID created %s on a store no daemon had ever used", PIDPath())
+	}
 }
 
 // ccpath.StoreHome degrades to the relative path ".ccdad" when the home
