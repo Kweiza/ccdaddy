@@ -393,3 +393,61 @@ func TestTheBudgetIsSharedAcrossAnIdentity(t *testing.T) {
 		}
 	}
 }
+
+// The post-429 floor as a hand-held command has to read it. `ccdad list
+// --refresh` does not run on a cadence, so it cannot ask Next() when it may
+// call the endpoint again — it has to ask directly.
+func TestTheHandHeldFloorIsTheLongerOfTheFloorAndTheEarnedBackoff(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		state State
+		now   time.Time
+		want  time.Time
+		held  bool
+	}{
+		{
+			name:  "never rate limited",
+			state: State{},
+			now:   epoch,
+		},
+		{
+			// The zero Interval is an unearned backoff, so the floor is what
+			// stands. A max() that let it win would clear the hold entirely.
+			name:  "one 429, no backoff earned yet",
+			state: State{LastRateLimited: epoch},
+			now:   epoch.Add(time.Minute),
+			want:  epoch.Add(Post429MinInterval),
+			held:  true,
+		},
+		{
+			name:  "the earned backoff is longer than the floor",
+			state: State{LastRateLimited: epoch, Interval: 900 * time.Second},
+			now:   epoch.Add(7 * time.Minute),
+			want:  epoch.Add(900 * time.Second),
+			held:  true,
+		},
+		{
+			// A backoff SHORTER than the floor must not shorten the hold.
+			name:  "the earned backoff is shorter than the floor",
+			state: State{LastRateLimited: epoch, Interval: 60 * time.Second},
+			now:   epoch.Add(2 * time.Minute),
+			want:  epoch.Add(Post429MinInterval),
+			held:  true,
+		},
+		{
+			name:  "the floor has elapsed",
+			state: State{LastRateLimited: epoch},
+			now:   epoch.Add(Post429MinInterval),
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			at, held := RateLimitedUntil(c.state, c.now)
+			if held != c.held {
+				t.Fatalf("held = %v, want %v", held, c.held)
+			}
+			if held && !at.Equal(c.want) {
+				t.Errorf("until = %s, want %s", at, c.want)
+			}
+		})
+	}
+}

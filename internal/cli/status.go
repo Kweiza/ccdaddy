@@ -100,13 +100,32 @@ func runStatus(cmd *cobra.Command, asJSON bool) error {
 		engine[a.UUID] = a
 	}
 
+	rows := quotaRows(accounts, cache, active, hasActive, now)
+	for i := range rows {
+		rows[i].Engine = engine[rows[i].Account.UUID]
+	}
+
+	if asJSON {
+		return writeJSON(cmd, statusPayload(report, probeErr, rows, active, hasActive, now))
+	}
+	return renderStatus(cmd, report, rows, now)
+}
+
+// quotaRows pairs every account with its cached reading.
+//
+// `list` builds its rows through this too, and that is what §8.4's "`ccdad
+// list` and `ccdad status --json` can never disagree" actually rests on: one
+// cache, read one way, into one shape. Two commands each deriving headroom for
+// themselves would agree until the day one of them was changed.
+//
+// Engine state is deliberately NOT filled in here. It comes from status.json,
+// which is the daemon's own document and no part of what `list` reports.
+func quotaRows(accounts []store.Account, cache *usage.Cache,
+	active store.Account, hasActive bool, now time.Time) []statusRow {
+
 	rows := make([]statusRow, 0, len(accounts))
 	for _, a := range accounts {
-		row := statusRow{
-			Account: a,
-			Active:  hasActive && a.UUID == active.UUID,
-			Engine:  engine[a.UUID],
-		}
+		row := statusRow{Account: a, Active: hasActive && a.UUID == active.UUID}
 		if entry, ok := cache.Get(a.UUID); ok && entry.Snapshot != nil {
 			row.Entry, row.HasEntry = entry, true
 			row.Headroom = strategy.HeadroomOf(entry.Snapshot)
@@ -114,11 +133,7 @@ func runStatus(cmd *cobra.Command, asJSON bool) error {
 		}
 		rows = append(rows, row)
 	}
-
-	if asJSON {
-		return writeJSON(cmd, statusPayload(report, probeErr, rows, active, hasActive, now))
-	}
-	return renderStatus(cmd, report, rows, now)
+	return rows
 }
 
 // statusRow is one account with everything the dashboard knows about it, from
@@ -193,16 +208,14 @@ func renderStatus(cmd *cobra.Command, report daemon.Report, rows []statusRow, no
 		if r.Active {
 			marker = "*"
 		}
-		used, windowName, resetsIn := unreadable, "-", "-"
+		used, windowName := unreadable, "-"
 		if bw, ok := r.binding(); ok {
 			if pct, ok := bw.Percent(); ok {
 				used = fmt.Sprintf("%.0f%%", pct)
 			}
 			windowName = string(bw.Name)
-			if reset, ok := bw.Reset(); ok {
-				resetsIn = humanDuration(reset.Sub(now))
-			}
 		}
+		resetsIn := r.resetsLabel(now)
 		age := unreadable
 		if r.HasEntry {
 			if d, ok := r.Entry.Age(now); ok {
@@ -218,6 +231,36 @@ func renderStatus(cmd *cobra.Command, report daemon.Report, rows []statusRow, no
 			used, windowName, resetsIn, r.paceLabel(), age, suffix)
 	}
 	return w.Flush()
+}
+
+// leftLabel is how much of the binding window is LEFT, which is the column
+// `ccdad list` carries.
+//
+// It is the complement of status's USED column and deliberately so: `list` is
+// where an account is chosen, and headroom is the quantity that choice is made
+// on — it is what the engine itself ranks by. The two columns are labelled, so
+// a reader is never asked to guess which way round a bare percentage runs.
+//
+// Never "0%" for an account that could not be read (§7.2).
+func (r statusRow) leftLabel() string {
+	if !r.Headroom.Known {
+		return unreadable
+	}
+	return fmt.Sprintf("%.0f%%", r.Headroom.Pct)
+}
+
+// resetsLabel is when the binding window rolls over, as a span. Both tables
+// render it from here so the two can never describe one reset two ways.
+func (r statusRow) resetsLabel(now time.Time) string {
+	bw, ok := r.binding()
+	if !ok {
+		return "-"
+	}
+	reset, ok := bw.Reset()
+	if !ok {
+		return "-"
+	}
+	return humanDuration(reset.Sub(now))
 }
 
 // paceLabel is §7.5's human half: how the binding window's consumption compares
