@@ -62,6 +62,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newStatusCmd())
 	root.AddCommand(newDoctorCmd())
 	root.AddCommand(newDaemonCmd())
+	root.AddCommand(newUninstallCmd())
 	// Hidden, and registered on the root rather than under `daemon`: Spawn
 	// re-execs `ccdad <daemon.RunArg>` as a single argument.
 	root.AddCommand(newDaemonRunCmd())
