@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
+	"github.com/Kweiza/ccdaddy/internal/config"
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 )
 
@@ -114,7 +115,7 @@ func TestDoctorNamesAStoreThatPointsAtNothing(t *testing.T) {
 	// Everything downstream of the store is skipped rather than answered from
 	// nothing: a "permissions ok" for a directory that does not exist is a
 	// diagnostic that lies.
-	for _, name := range []string{"permissions", "pidfile", "usage-cache", "engine-state"} {
+	for _, name := range []string{"permissions", "pidfile", "usage-cache", "engine-state", "config"} {
 		if got := r.level(t, name); got != "skipped" {
 			t.Errorf("%s = %q with no store to check, want skipped: %s", name, got, r.detail(t, name))
 		}
@@ -439,7 +440,7 @@ func TestDoctorHumanOutputNamesEveryCheck(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit %d, want 0\n%s", code, stdout)
 	}
-	for _, name := range []string{"store", "permissions", "locks", "pidfile", "status-file", "usage-cache", "engine-state", "claude-code", "credential-keys", "environment"} {
+	for _, name := range []string{"store", "permissions", "locks", "pidfile", "status-file", "usage-cache", "engine-state", "config", "claude-code", "credential-keys", "environment"} {
 		if !strings.Contains(stdout, name) {
 			t.Errorf("the human report does not mention the %s check:\n%s", name, stdout)
 		}
@@ -485,5 +486,91 @@ func TestDoctorTakesNoArguments(t *testing.T) {
 	isolate(t)
 	if code, _, _, _ := runRoot(t, "doctor", "extra"); code != ExitUsage {
 		t.Errorf("exit %d, want 2", code)
+	}
+}
+
+// A broken config.toml is ignored SILENTLY by the engine — that is the whole
+// point of §8.4's "keep running on the last good config" — so doctor is where a
+// user finds out it has been doing nothing.
+func TestDoctorReportsAnUnusableConfigFile(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	if err := os.WriteFile(filepath.Join(ccpath.StoreHome(), config.FileName), []byte("threshold = = 9"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	code, r, _ := runDoctor(t)
+	if got := r.level(t, "config"); got != "warn" {
+		t.Errorf("config = %q, want warn: %s", got, r.detail(t, "config"))
+	}
+	if code != ExitOK {
+		t.Errorf("exit %d, want 0: a config ccdad can fall back from is not a failure", code)
+	}
+}
+
+func TestDoctorReportsAConfigItCanRead(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	if err := os.WriteFile(filepath.Join(ccpath.StoreHome(), config.FileName), []byte("threshold = 90\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, r, _ := runDoctor(t)
+	if got := r.level(t, "config"); got != "ok" {
+		t.Errorf("config = %q, want ok: %s", got, r.detail(t, "config"))
+	}
+}
+
+// No config file at all is the ordinary state of a machine that never needed
+// one, not a warning to act on.
+func TestDoctorTreatsAMissingConfigAsOrdinary(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+
+	_, r, _ := runDoctor(t)
+	if got := r.level(t, "config"); got != "ok" {
+		t.Errorf("config = %q, want ok: %s", got, r.detail(t, "config"))
+	}
+}
+
+// §12 lists unattended credit spend as a High risk, and doctor is where a user
+// checks what their machine will do while they are not watching.
+func TestDoctorSaysWhenUnattendedSpendingIsArmed(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	if err := os.WriteFile(filepath.Join(ccpath.StoreHome(), config.FileName),
+		[]byte("[credit]\nmax_auto_spend = 100\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, r, _ := runDoctor(t)
+	if got := r.level(t, "config"); got != "ok" {
+		t.Fatalf("config = %q, want ok", got)
+	}
+	detail := r.detail(t, "config")
+	if !strings.Contains(detail, "100") || !strings.Contains(detail, "spending") {
+		t.Errorf("config detail = %q, want it to say unattended spending is armed and up to how much", detail)
+	}
+}
+
+// A key ccdad does not know is preserved rather than deleted, which means a
+// typo survives forever doing nothing. doctor is the one place that says so.
+func TestDoctorNamesConfigKeysItDoesNotKnow(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	if err := os.WriteFile(filepath.Join(ccpath.StoreHome(), config.FileName),
+		[]byte("threshhold = 90\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	code, r, _ := runDoctor(t)
+	if got := r.level(t, "config"); got != "warn" {
+		t.Errorf("config = %q, want warn: %s", got, r.detail(t, "config"))
+	}
+	if !strings.Contains(r.detail(t, "config"), "threshhold") {
+		t.Errorf("config detail = %q, want the key it is ignoring named", r.detail(t, "config"))
+	}
+	if code != ExitOK {
+		t.Errorf("exit %d, want 0: an ignored key is not a failure", code)
 	}
 }

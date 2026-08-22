@@ -128,6 +128,15 @@ type Options struct {
 	// Horizon is how soon a recovery has to be to win its tier.
 	Horizon  time.Duration
 	Strategy Strategy
+	// MaxAutoSpend is §7.3's ceiling, and it is here for ONE reason: the credit
+	// pool is ordered by armed room, and room cannot be computed without it.
+	//
+	// It is the same number Config.MaxAutoSpend carries, and Decide copies it
+	// from there rather than trusting a caller to set both — a pass that ranked
+	// on one ceiling while the gate decided on another would walk to a first
+	// choice the gate then refuses. 0 is the default and arms nothing, which
+	// leaves the pool in the uuid order it had before this field existed.
+	MaxAutoSpend float64
 }
 
 func (o Options) horizon() time.Duration {
@@ -165,6 +174,15 @@ type Ranked struct {
 	HasWeeklyReset bool
 	// ReturnsInsideHorizon is the tier bit of §7.1's key.
 	ReturnsInsideHorizon bool
+	// CreditRoom is §7.3's armed spend, for a credit account under the
+	// configured ceiling. It is the credit pool's ordering key and is reported
+	// so `ccdad status` can explain that order rather than only obey it.
+	CreditRoom float64
+	// HasCreditRoom is whether there is any. False covers every refusal the
+	// gate would make — no ceiling configured, overage switched off, spend
+	// unreadable, the armed cap spent — so it is not a claim that the account
+	// has none, only that none can be armed right now.
+	HasCreditRoom bool
 }
 
 // Result is one ranking pass.
@@ -270,6 +288,7 @@ func Rank(cands []Candidate, o Options) Result {
 		}
 		r := measure(c, o)
 		if c.Kind == identity.KindCredit {
+			r.CreditRoom, r.HasCreditRoom = armedRoom(c, o.MaxAutoSpend)
 			credit = append(credit, r)
 			continue
 		}
@@ -279,7 +298,7 @@ func Rank(cands []Candidate, o Options) Result {
 			allOver = false
 		}
 	}
-	sort.SliceStable(credit, func(i, j int) bool { return credit[i].UUID < credit[j].UUID })
+	sort.SliceStable(credit, func(i, j int) bool { return lessCredit(credit[i], credit[j]) })
 
 	res := Result{Order: measured, Credit: credit, AllOverThreshold: allOver}
 	switch {
@@ -357,6 +376,46 @@ func lessRecovery(a, b Ranked) bool {
 		return a.RecoversAt.Before(b.RecoversAt)
 	}
 	return a.UUID < b.UUID
+}
+
+// lessCredit orders the credit pool by MOST ARMED ROOM, which is the money
+// analogue of most headroom, with the uuid as the final key.
+//
+// The uuid tie-break is not decoration: two accounts with identical room must
+// not reorder between two ticks, or the engine switches, finds a new "best" on
+// the next pass and switches back — and the cooldown never converges. An
+// account with no armed room sorts behind every account that has some, whatever
+// its uuid, because Decide walks this order and the first account it can
+// actually use should be the first one it reaches.
+func lessCredit(a, b Ranked) bool {
+	if a.HasCreditRoom != b.HasCreditRoom {
+		return a.HasCreditRoom
+	}
+	if a.HasCreditRoom && a.CreditRoom != b.CreditRoom {
+		return a.CreditRoom > b.CreditRoom
+	}
+	return a.UUID < b.UUID
+}
+
+// armedRoom is what §7.3's gate would arm for this account under ceiling.
+//
+// It goes through CreditGate rather than through CreditRoom directly, so the
+// order agrees with the decision by construction: every refusal the gate makes
+// — the account's own overage switch, the organization's block, an unreadable
+// spend, an invalid ceiling — lands here as "no room" without this file
+// re-stating any of them. subscriptionExhausted is true because this asks what
+// the gate WOULD say when it is the credit pool's turn; whether it is that
+// pool's turn is Decide's question, not the comparator's.
+func armedRoom(c Candidate, ceiling float64) (float64, bool) {
+	var e usage.ExtraUsage
+	if c.Usage != nil {
+		e = c.Usage.ExtraUsage
+	}
+	d := CreditGate(e, ceiling, true)
+	if !d.Allow {
+		return 0, false
+	}
+	return d.Room, true
 }
 
 // lessConsumeFirst ranks by SOONEST weekly reset. Weekly quota is perishable —

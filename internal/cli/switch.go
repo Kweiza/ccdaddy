@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
+	"github.com/Kweiza/ccdaddy/internal/config"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/usage"
@@ -188,15 +189,27 @@ func chooseTarget(cmd *cobra.Command, s *store.Store, accounts []store.Account,
 			"proceeding with no cooldown and no quarantines.\n", lerr)
 	}
 
+	// The §7 knobs come from ~/.ccdad/config.toml. A file that cannot be used
+	// falls back to the built-in defaults with a note rather than failing the
+	// command: the same direction the daemon takes (§8.4), and for the same
+	// reason — refusing to switch because a threshold was mistyped is a worse
+	// answer than switching on the documented default.
+	cfg, cerr := config.Load()
+	if cerr != nil {
+		fmt.Fprintf(stderr, "note: %v; using the built-in defaults.\n", cerr)
+		cfg = config.Defaults()
+	}
+
 	// Parsed, not defaulted: checkSwitchFlags has already refused an unknown
 	// name, so anything reaching here is one the ranking knows.
 	chosen, _ := strategy.ParseStrategy(strategyName)
-	opts := strategy.Options{Now: time.Now(), Strategy: chosen}
-	// The zero Config is the full §7.2 default set, and its MaxAutoSpend of 0 is
-	// §7.3's documented default rather than an omission: until `ccdad config`
-	// (task 47) can raise it, a targetless switch never spends money and the
-	// credit gate answers CreditNotOptedIn out loud.
-	plan := strategy.Decide(cands, opts, strategy.Config{}, st, liveUUID)
+	opts := cfg.RankOptions(time.Now())
+	// --strategy is explicit and the file is not, so the flag wins. It is
+	// always present on this path — a targetless switch IS the --strategy
+	// grammar — so the config's own strategy key reaches the daemon rather than
+	// this command.
+	opts.Strategy = chosen
+	plan := strategy.Decide(cands, opts, cfg.StrategyConfig(), st, liveUUID)
 
 	if plan.Action == strategy.ActionStay && force {
 		// --force is the explicit bypass of §7.2's margins, and only of those.
