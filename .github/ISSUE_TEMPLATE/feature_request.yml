@@ -1,0 +1,44 @@
+name: Feature request
+description: Something ccdad should do
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Some things are already known to be missing and are deliberate rather
+        than forgotten — a TUI, an MCP plugin, OS service integration, Windows
+        code signing. The README's "What is not here yet" section lists them
+        with the reason. Saying "the README says X is deferred, here is why it
+        matters to me" is a useful issue; it tells the maintainer which
+        deferral is costing someone something.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: >-
+        What you were trying to do, and where ccdad got in the way. Describe
+        the situation rather than the fix — the fix is often not the one that
+        first comes to mind.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like it to do
+      description: >-
+        If it is a command or a flag, spell it the way you would type it.
+      placeholder: "`ccdad list --sort=headroom`"
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you are doing instead today
+      description: >-
+        A workaround is evidence about how much the gap costs, and sometimes it
+        is a better shape than the proposal.
+    validations:
+      required: false
