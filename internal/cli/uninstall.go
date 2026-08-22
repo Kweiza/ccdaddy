@@ -51,6 +51,23 @@ const (
 // own store. The names are used rather than the path accessors deliberately:
 // this question is about basenames, and the accessors resolve a home directory
 // that a command deciding "is this a ccdad store" already has in hand.
+// countSessions is how many per-session credential homes the store holds. A
+// missing container is none, and this never creates one.
+func countSessions(root string) int {
+	entries, err := os.ReadDir(filepath.Join(root, SessionsDirName))
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, e := range entries {
+		// The `.lock` siblings Claude Code leaves are not sessions.
+		if e.IsDir() && !strings.HasSuffix(e.Name(), ".lock") {
+			n++
+		}
+	}
+	return n
+}
+
 func storeMarkers() []string {
 	return []string{
 		accountsFileName,
@@ -61,6 +78,11 @@ func storeMarkers() []string {
 		daemon.LogFileName,
 		usage.CacheFileName,
 		strategy.StateFileName,
+		// `ccdad run` puts these here, and a store whose accounts have all been
+		// removed can still hold one. Without them such a store is refused as
+		// "not a ccdad store", leaving a directory nothing else cleans up.
+		SessionsDirName,
+		ProfilesDirName,
 	}
 }
 
@@ -279,6 +301,18 @@ func enumerate(out io.Writer, s storeInspection, exe string, exeErr error, owner
 				fmt.Fprintf(out, "  %s %s\n", marker, a.Label())
 			}
 			fmt.Fprintln(out, "Their OAuth refresh tokens cannot be recovered; each account has to be logged in again.")
+		}
+		// A parallel session's credentials live inside the store, so they go
+		// with it — including those of a `ccdad run` that is still going. This
+		// does not refuse: uninstall is a deliberate act, and refusing would
+		// strand someone whose session is wedged. It says so, because "Removed
+		// <store>" does not tell a user their running session just lost its
+		// login.
+		if n := countSessions(s.root); n > 0 {
+			fmt.Fprintf(out, "%d parallel session(s) have credentials under %s; a session still running "+
+				"will lose its login.\n", n, filepath.Join(s.root, SessionsDirName))
+		}
+		if len(s.accounts) > 0 {
 		}
 	}
 	switch {

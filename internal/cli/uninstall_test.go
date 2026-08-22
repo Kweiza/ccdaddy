@@ -391,3 +391,54 @@ func TestUninstallWarnsButFinishesWhenTheMCPUnwireFails(t *testing.T) {
 		t.Error("the store survived a failure that must not stop the uninstall")
 	}
 }
+
+// A parallel session's credentials live inside the store, so uninstall takes
+// them with it — including one belonging to a `ccdad run` that is still going.
+// It does not refuse: uninstall is a deliberate act and refusing would strand
+// someone whose session is wedged. It says so, because "Removed <store>" alone
+// does not tell a user their running session just lost its login.
+func TestUninstallSaysWhenItIsTakingLiveSessionsWithIt(t *testing.T) {
+	isolate(t)
+	stubDaemonWorld(t, &fakeDaemon{})
+	stubEnvironment(t, false, false)
+	fakeBinary(t)
+	seedAccount(t, "u-1", "a@example.com")
+
+	session := filepath.Join(mustPath(ccpath.StoreHome()), SessionsDirName, "u-1-abc")
+	if err := os.MkdirAll(session, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	code, stdout, errOut, top := runRoot(t, "uninstall", "--yes")
+	if code != ExitOK {
+		t.Fatalf("exit = %d (%s / %s), want 0", code, errOut, top)
+	}
+	if got := stdout + errOut; !strings.Contains(got, "session") {
+		t.Errorf("uninstall removed a session's credentials without saying so:\n%s", got)
+	}
+}
+
+// The store is identified by what ccdad puts in it, and a store whose accounts
+// have been removed but which still holds a session directory is still a ccdad
+// store — refusing to uninstall it would leave a directory nothing else can
+// clean up.
+func TestUninstallRecognisesAStoreThatOnlyHoldsSessions(t *testing.T) {
+	isolate(t)
+	stubDaemonWorld(t, &fakeDaemon{})
+	stubEnvironment(t, false, false)
+	fakeBinary(t)
+
+	root := t.TempDir()
+	t.Setenv("CCDAD_HOME", root)
+	if err := os.MkdirAll(filepath.Join(root, SessionsDirName, "u-1-abc"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	code, _, errOut, top := runRoot(t, "uninstall", "--yes")
+	if code != ExitOK {
+		t.Fatalf("exit = %d (%s / %s), want 0 — a sessions directory is ccdad's own", code, errOut, top)
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Errorf("the store survived (err = %v)", err)
+	}
+}
