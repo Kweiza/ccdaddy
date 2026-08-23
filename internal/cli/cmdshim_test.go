@@ -154,6 +154,44 @@ func TestParseNpmShimAcceptsAShimWhoseLineEndingsWereConverted(t *testing.T) {
 	}
 }
 
+// A shim carrying lines ccdad does not model is ACCEPTED, and they are
+// dropped rather than refused. Pinned here because the widening made it matter
+// and because, left unwritten, it reads as an oversight the next reader closes.
+//
+// Refusing instead is the tempting move now that every .cmd is resolved past.
+// It is the wrong one: nothing here can tell a hand-edit from a future npm
+// template, so a strict rule would route every user of a template ccdad has
+// not seen back through cmd.exe, silently, with no signal that the improvement
+// stopped applying — and a false rejection is invisible in a way a false
+// acceptance is not.
+//
+// What makes the leniency safe for the shape that actually occurs is not in Go
+// and cannot be asserted from here: the generated shim runs `endLocal` in the
+// same &-chain and BEFORE `"%_prog%"`, so a variable one of these lines set is
+// discarded before the child starts either way — with or without ccdad. The
+// residue is a hand-edit that survives npm regenerating the file AND does
+// something other than set a variable, such as the CALL below. It is knowingly
+// left, and it is the reason this test asserts the seam rather than blessing
+// the parser as complete.
+func TestParseNpmShimAcceptsAShimCarryingLinesItDoesNotModel(t *testing.T) {
+	extra := strings.Replace(readFixture(t, "env-node.cmd"), "CALL :find_dp0\r\n",
+		"CALL :find_dp0\r\nSET ANTHROPIC_BASE_URL=https://proxy.example\r\nCALL \"%dp0%\\preflight.cmd\"\r\n", 1)
+	if extra == readFixture(t, "env-node.cmd") {
+		t.Fatal("the insertion point moved; this test is measuring the unmodified fixture")
+	}
+
+	shim, ok := parseNpmShim(extra, shimDir)
+	if !ok {
+		t.Fatal("a shim with two unmodelled lines was refused — the seam this pins has been closed; read the comment above before deleting this test")
+	}
+	if len(shim.env) != 0 {
+		t.Errorf("env = %q, want the unmodelled SET dropped rather than carried into the child", shim.env)
+	}
+	if shim.fallback != "node" {
+		t.Errorf("fallback = %q, want the interpreter still read correctly around the extra lines", shim.fallback)
+	}
+}
+
 func TestResolvePastShim(t *testing.T) {
 	beside := shimDir + `\` + `\node.exe`
 	shim := npmShim{prog: beside, fallback: "node", args: []string{"cli.js"}, env: []string{"FOO=bar"}}
@@ -375,35 +413,42 @@ func TestRunCarriesTheVariablesTheShimWouldHaveExported(t *testing.T) {
 	}
 }
 
+// The shims ccdad cannot resolve past, shared by the two tests below because
+// they are the two halves of one rule: when resolution fails, refuse the
+// argument cmd.exe would eat and launch everything else through the shim
+// exactly as before. Splitting the shapes across the two would leave each half
+// asserted for some of them and neither half asserted for all.
+var unresolvableShims = []struct {
+	name  string
+	setup func(*testing.T)
+}{
+	{"a .cmd that npm did not write", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "claude.cmd")
+		if err := os.WriteFile(path, []byte("@echo off\r\nnode c:\\claude.js %*\r\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		stubLookClaude(t, path)
+	}},
+	{"no shim on disk at all", func(t *testing.T) {
+		stubLookClaude(t, filepath.Join(t.TempDir(), "claude.cmd"))
+	}},
+	{"an interpreter that is not installed", func(t *testing.T) {
+		installShim(t, "env-node.cmd")
+		stubFileExists(t, false)
+		stubLookProgram(t, "", errors.New("executable file not found in %PATH%"))
+	}},
+	{"a target cmd.exe would run by file association", func(t *testing.T) {
+		installShim(t, "no-shebang.cmd")
+		stubFileExists(t, true)
+	}},
+}
+
 // When resolution cannot be done, the refusal that shipped before this is what
 // is left — and it has to say both things, or the reader is told the argument
 // is at fault when the shim is.
 func TestRunFallsBackToTheRefusalWhenTheShimCannotBeResolved(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		setup func(*testing.T)
-	}{
-		{"a .cmd that npm did not write", func(t *testing.T) {
-			dir := t.TempDir()
-			path := filepath.Join(dir, "claude.cmd")
-			if err := os.WriteFile(path, []byte("@echo off\r\nnode c:\\claude.js %*\r\n"), 0o700); err != nil {
-				t.Fatal(err)
-			}
-			stubLookClaude(t, path)
-		}},
-		{"no shim on disk at all", func(t *testing.T) {
-			stubLookClaude(t, filepath.Join(t.TempDir(), "claude.cmd"))
-		}},
-		{"an interpreter that is not installed", func(t *testing.T) {
-			installShim(t, "env-node.cmd")
-			stubFileExists(t, false)
-			stubLookProgram(t, "", errors.New("executable file not found in %PATH%"))
-		}},
-		{"a target cmd.exe would run by file association", func(t *testing.T) {
-			installShim(t, "no-shebang.cmd")
-			stubFileExists(t, true)
-		}},
-	} {
+	for _, tc := range unresolvableShims {
 		t.Run(tc.name, func(t *testing.T) {
 			isolate(t)
 			seedAccount(t, "u-1", "a@example.com")
@@ -424,11 +469,16 @@ func TestRunFallsBackToTheRefusalWhenTheShimCannotBeResolved(t *testing.T) {
 	}
 }
 
-// The narrowing, pinned rather than left implicit: resolution runs only where
-// the refusal would otherwise fire. An argument cmd.exe handles fine still
-// goes through the shim, so a parse bug can only ever turn a refusal into a
-// different refusal — never a working launch into a broken one.
-func TestRunLeavesASafeInvocationOnTheShim(t *testing.T) {
+// The widening, pinned where the narrowing used to be: an argument cmd.exe
+// would have handled fine takes the SAME route as one it would have eaten.
+// Before this, `summarize this` went through the shim and `fix&whoami` did
+// not, which made the launch depend on the text of a prompt.
+//
+// The quiet stderr is half the assertion. On the rescue path the note explains
+// why the process tree looks different from what was typed; here there is
+// nothing to explain, and a line printed on every Windows session would be
+// noise the reader cannot act on.
+func TestRunResolvesPastTheShimForAnOrdinaryArgumentToo(t *testing.T) {
 	isolate(t)
 	seedAccount(t, "u-1", "a@example.com")
 	stub := stubClaude(t, ExitOK)
@@ -436,11 +486,54 @@ func TestRunLeavesASafeInvocationOnTheShim(t *testing.T) {
 	stubFileExists(t, false)
 	stubLookProgram(t, `C:\nodejs\node.exe`, nil)
 
-	if code, _, errOut, top := runRoot(t, "run", "1", "-p", "summarize this"); code != ExitOK {
+	code, _, errOut, top := runRoot(t, "run", "1", "-p", "summarize this")
+	if code != ExitOK {
 		t.Fatalf("exit = %d (%s / %s), want 0", code, errOut, top)
 	}
-	if stub.spec.Path != path {
-		t.Fatalf("launched %q, want the shim %q: an argument with nothing cmd.exe acts on has no reason to change the launch",
-			stub.spec.Path, path)
+	if stub.spec.Path == path {
+		t.Fatalf("launched the shim %q: an ordinary argument takes the same route as a dangerous one now", path)
+	}
+	if stub.spec.Path != `C:\nodejs\node.exe` {
+		t.Fatalf("launched %q, want the interpreter the shim names", stub.spec.Path)
+	}
+	if got := stub.spec.Args[1:]; !slices.Equal(got, []string{"-p", "summarize this"}) {
+		t.Errorf("args = %q, want the caller's arguments untouched", got)
+	}
+	if strings.Contains(errOut, "note:") {
+		t.Errorf("a note was printed for a launch with nothing to explain:\n%s", errOut)
+	}
+}
+
+// The other half of the failure rule, and the one that makes the widening safe
+// to ship: a shim ccdad cannot read is not a reason to refuse arguments
+// cmd.exe would have carried correctly. Every shape in unresolvableShims used
+// to reach cmd.exe here and still does.
+//
+// Without this, widening the resolution would turn a wrapper someone wrote, a
+// shim from a future npm, or the no-shebang shape into a usage error for
+// invocations that work today — breaking working launches, which is exactly
+// what the narrow shape was protecting against.
+func TestRunKeepsAnUnresolvableShimWhenTheArgumentsAreSafe(t *testing.T) {
+	for _, tc := range unresolvableShims {
+		t.Run(tc.name, func(t *testing.T) {
+			isolate(t)
+			seedAccount(t, "u-1", "a@example.com")
+			stub := stubClaude(t, ExitOK)
+			tc.setup(t)
+
+			code, _, errOut, top := runRoot(t, "run", "1", "-p", "summarize this file")
+			if code != ExitOK {
+				t.Fatalf("exit = %d (%s / %s), want 0: a shim ccdad cannot read still runs", code, errOut, top)
+			}
+			if !stub.started {
+				t.Fatal("nothing was started; an invocation that worked before now does not")
+			}
+			if ext := strings.ToLower(extOf(stub.spec.Path)); ext != ".cmd" {
+				t.Errorf("launched %q, want the shim itself — there was nothing to resolve past to", stub.spec.Path)
+			}
+			if got := stub.spec.Args; !slices.Equal(got, []string{"-p", "summarize this file"}) {
+				t.Errorf("args = %q, want the caller's arguments forwarded to the shim", got)
+			}
+		})
 	}
 }
