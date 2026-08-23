@@ -16,7 +16,13 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
-Everything below is on `main` and has not been published in a release yet.
+Nothing yet.
+
+## [0.1.0] — 2026-08-23
+
+The first release the install one-liners can reach: `v0.1.0-rc1` was a
+prerelease, so `releases/latest` had no answer for it and both installers
+aborted fail-closed. That is fixed by this tag existing, not by any code in it.
 
 ### Added
 
@@ -36,6 +42,11 @@ Everything below is on `main` and has not been published in a release yet.
   and it never creates what it is checking for.
 - **`ccdad run`** — start a Claude Code session as a chosen account without
   changing the live login, by scoping that session's credential directory.
+- **`ccdad list --refresh`** — take a fresh usage reading before listing, where
+  the poll policy allows one, and two columns (`LEFT`, `RESETS IN`) to show it.
+  The endpoint allows roughly 28–30 requests per identity per rolling hour on a
+  sliding window, so a reading under three minutes old is served as it stands
+  and no request is made; it says on stderr when it did nothing and why.
 - **`ccdad config`** — read and write `~/.ccdad/config.toml`.
 - **`ccdad export` / `ccdad import`** — a portable JSON document of the account
   store, with a three-flag gate on including MCP credentials.
@@ -47,7 +58,15 @@ Everything below is on `main` and has not been published in a release yet.
 - **CI**: `gofmt` and `go vet`, `go test -race` on Linux, macOS and Windows,
   and a gate that fails if any of the six release targets needs cgo. The
   release workflow now refuses to publish a tag whose commit has no green CI
-  run.
+  run. Pull requests from forks get their own run; a branch in this repository
+  keeps the run its push already triggered.
+- **The files a public repository is expected to have**: a README, `LICENSE`,
+  `NOTICE`, `THIRD-PARTY-LICENSES.txt`, `SECURITY.md`, `CONTRIBUTING.md`, a
+  code of conduct, issue and pull request templates and a dependabot config.
+  Every release now also carries `LICENSE`, `NOTICE` and
+  `THIRD-PARTY-LICENSES.txt` as assets, hashed into the same `sha256sums.txt`
+  and covered by the same attestation as the binaries — BSD-3-Clause and
+  Apache-2.0 require the notice to accompany a *binary* distribution.
 
 ### Changed
 
@@ -90,5 +109,6 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.1.0-rc1...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/Kweiza/ccdaddy/compare/v0.1.0-rc1...v0.1.0
 [0.1.0-rc1]: https://github.com/Kweiza/ccdaddy/releases/tag/v0.1.0-rc1

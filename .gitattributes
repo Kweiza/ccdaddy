@@ -1,1 +1,6 @@
 * text=auto eol=lf
+
+# `text=auto` guesses, and a guess that goes the wrong way rewrites line endings
+# inside a PNG and corrupts it. The README banner is the first binary this
+# repository has ever tracked; say so rather than trust the heuristic.
+*.png binary
