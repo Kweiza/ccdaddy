@@ -42,6 +42,10 @@ func newConfigCmd() *cobra.Command {
 			"Keys this ccdad does not know are left alone rather than deleted, so a file\n" +
 			"written by a newer release survives an older one. Setting one is still a\n" +
 			"usage error: a typo that is quietly accepted is a setting that does nothing.\n\n" +
+			"[window_threshold] takes one threshold per rate-limit window —\n" +
+			"window_threshold.five_hour, window_threshold.seven_day and the rest. A window\n" +
+			"with no key of its own uses the top-level threshold, and 'ccdad config list'\n" +
+			"shows a row for each window the file names and none before it names one.\n\n" +
 			"No credential belongs here. This file is plain text and is what people paste\n" +
 			"into a bug report; tokens live in the store's credentials directory.",
 		Args:          usageArgs(cobra.NoArgs),
@@ -141,7 +145,15 @@ func newConfigSetCmd() *cobra.Command {
 					// leaves the file untouched.
 					return UsageError("%s", err.Error())
 				}
-				if written, set, verr := d.Value(key); verr == nil && set {
+				written, set, verr := d.Value(key)
+				if verr != nil {
+					// Set took this key and Value refused it. The two answer
+					// from one predicate, so this is a broken key surface
+					// rather than a user error — and swallowing it would echo
+					// the string that was typed as though it had been stored.
+					return fmt.Errorf("%s was written to %s and cannot be read back: %w", key, config.FileName, verr)
+				}
+				if set {
 					stored = written
 				}
 				// The value is legal on its own; the document as a whole may
@@ -224,8 +236,12 @@ func newConfigListCmd() *cobra.Command {
 				Value  string `json:"value"`
 				Source string `json:"source"`
 			}
-			rows := make([]row, 0, len(config.Keys()))
-			for _, key := range config.Keys() {
+			// The document's own list, not the fixed one: window_threshold
+			// takes a key per window and only the file knows which windows it
+			// names.
+			keys := d.Keys()
+			rows := make([]row, 0, len(keys))
+			for _, key := range keys {
 				value, verr := cfg.Value(key)
 				if verr != nil {
 					return verr

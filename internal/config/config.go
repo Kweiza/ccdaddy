@@ -272,7 +272,7 @@ func Parse(raw []byte) (Config, error) {
 		if err := applyFloat(&cfg.MaxAutoSpend, f.Credit.MaxAutoSpend, keyMaxAutoSpend, validMaxAutoSpend); err != nil {
 			return Config{}, err
 		}
-		if err := applyFloat(&cfg.CreditThreshold, f.Credit.Threshold, "credit.threshold", validThreshold); err != nil {
+		if err := applyFloat(&cfg.CreditThreshold, f.Credit.Threshold, keyCreditThreshold, validThreshold); err != nil {
 			return Config{}, err
 		}
 	}
@@ -428,7 +428,7 @@ func parseConfigDuration(key string, v string) (time.Duration, error) {
 // switch after the exhaustion it exists to get ahead of, which is not a shorter
 // lead but a nonsense one.
 func applyPreemptLead(dst *time.Duration, v *string) error {
-	const key = "preempt_lead"
+	const key = keyPreemptLead
 	if v == nil {
 		return nil
 	}
@@ -482,7 +482,7 @@ func applyWindowThresholds(cfg *Config, table map[string]float64) error {
 	for _, name := range slices.Sorted(maps.Keys(table)) {
 		v := table[name]
 		if err := validThreshold(v); err != nil {
-			return fmt.Errorf("window_threshold.%s in %s: %w", name, FileName, err)
+			return fmt.Errorf(windowThresholdPrefix+"%s in %s: %w", name, FileName, err)
 		}
 		out[usage.WindowName(name)] = v
 	}
