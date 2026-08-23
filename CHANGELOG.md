@@ -81,6 +81,33 @@ by `uuid` or `alias`.
   it for every api-key account: a hazard list would have warned about ccdad's
   own steady state forever.
 
+- **`ccdad daemon logs --follow` no longer goes silent at a log rotation on
+  Windows, and the rotation on the other side of that race is no longer a coin
+  flip.** Opening a file while a rename is in flight is where Windows answers
+  `ERROR_SHARING_VIOLATION`, `ERROR_ACCESS_DENIED` or `ERROR_LOCK_VIOLATION` —
+  an antivirus scanner or the search indexer holding it for a moment, measured
+  at roughly 44% of replaces. None of the three is "not found", so the follower
+  treated them as fatal and ENDED: someone watching the log got nothing from the
+  rotation onwards, with the command already gone. It waits for the next poll
+  now, and holds its position rather than guessing the file was replaced, which
+  would replay the whole log for a rotation that never happened.
+
+  The rotation itself had the same gap and a worse consequence. It closes the
+  log's descriptor BEFORE renaming, and a rename that failed returned without
+  reopening — so every later line went to a closed descriptor and vanished, and
+  `RotateIfLarge` failed on the `Stat` it starts with, which meant the next tick
+  could not recover either. One rename that lost a race cost the daemon its log
+  for the rest of its life. The renames are retried now, on the same bounded
+  policy `cclink` already used for credential writes, and the log is reopened
+  whatever happens: a failed rotation costs one tick instead of the log. The
+  errno set both sides consult is one copy, in `internal/winerr`, so they cannot
+  drift.
+
+  Three comments in the tree said Go passes `FILE_SHARE_DELETE` on `os.Open` and
+  `os.OpenFile`. It does not — `syscall.Open` asks for `FILE_SHARE_READ` and
+  `FILE_SHARE_WRITE` only — and that false premise is what excused both missing
+  retries. They now say what the standard library does.
+
 ## [0.2.0] — 2026-08-23
 
 Three things that were quiet in 0.1.0 answer back now, and an upgrade is where
