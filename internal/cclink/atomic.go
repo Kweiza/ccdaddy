@@ -5,12 +5,14 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/Kweiza/ccdaddy/internal/winerr"
 )
 
 // replaceAttempts and the backoff bounds exist for Windows, where antivirus
 // scanners and the search indexer hold transient handles on a file being
 // replaced. Measured, roughly 44% of replaces hit one. On Unix the retry
-// never triggers because replaceRetryable always reports false.
+// never triggers because winerr.Retryable always reports false there.
 const (
 	replaceAttempts   = 10
 	replaceBackoffMin = 2 * time.Millisecond
@@ -28,10 +30,10 @@ var createTemp = os.CreateTemp
 var renameFile = os.Rename
 
 // retryable reports whether a failed rename is worth retrying. It defaults to
-// the build-tagged replaceRetryable; a test may swap it to make the retry
-// loop's own bookkeeping (attempt count, giving up) observable without
-// depending on platform-specific errors.
-var retryable = replaceRetryable
+// winerr.Retryable; a test may swap it to make the retry loop's own
+// bookkeeping (attempt count, giving up) observable without depending on
+// platform-specific errors.
+var retryable = winerr.Retryable
 
 // syncFile flushes a file's contents to disk. It is a seam so a test can pin
 // that the sync happens BEFORE the rename: crash durability itself is not
@@ -52,7 +54,7 @@ var syncFile = (*os.File).Sync
 // session with no restart.
 //
 // On Windows an antivirus scanner or the search indexer may hold the target
-// file open when the rename is attempted; that is retried per replaceRetryable.
+// file open when the rename is attempted; that is retried per winerr.Retryable.
 // If the temp file itself is still held after every retry, it can survive as
 // an orphan — accepted here, since guarding against it needs a second retry
 // loop for a rarer failure than the one this function already handles.
