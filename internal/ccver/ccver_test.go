@@ -574,3 +574,27 @@ func TestAnOversizedManifestIsRefused(t *testing.T) {
 		t.Fatalf("Describe read a %d-byte manifest and reported %s", len(body), got.Version)
 	}
 }
+
+// A manifest that names Claude Code and carries no readable version is a found
+// install whose version could not be read, and it must not be reported as an
+// absence: "your launcher is not an npm install" sends a user looking in the
+// wrong place when the package is right there.
+func TestAClaudeCodeManifestWithNoVersionIsFoundButUnreadable(t *testing.T) {
+	prefix := t.TempDir()
+	write(t, filepath.Join(prefix, "node_modules", "@anthropic-ai", "claude-code", "package.json"),
+		`{"name":"`+PackageName+`","description":"no version field"}`)
+	launcher := filepath.Join(prefix, "claude")
+	write(t, launcher, "#!/bin/sh\n")
+
+	got := Describe(launcher)
+	if got.Known {
+		t.Fatalf("Known = true (%s) for a manifest with no version", got.Version)
+	}
+	if got.Method != MethodNPM {
+		t.Errorf("Method = %q, want %q — the install WAS found, only its version was not",
+			got.Method, MethodNPM)
+	}
+	if !strings.Contains(got.Why, "package.json") {
+		t.Errorf("Why does not name the manifest it read:\n%s", got.Why)
+	}
+}

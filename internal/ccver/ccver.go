@@ -428,14 +428,20 @@ func npmVersion(launcher string) (version, where string, ok bool) {
 	return "", "", false
 }
 
-// readPackageVersion reads a package.json and returns its version, but only if
-// the manifest is Claude Code's own.
+// readPackageVersion reads a package.json and reports whether it is Claude
+// Code's own, along with whatever it declares as a version.
 //
 // The name check is the whole safety property. Without it the first ancestor
 // manifest wins, and on a local install that is ~/.claude/local/package.json,
 // which Claude Code writes itself as {"name":"claude-local","version":"0.0.1"} —
 // a version number, of the wrong thing, that would make every machine with a
 // local install look like it was on the keychain side of the boundary.
+//
+// The version is NOT part of the found test, deliberately. A manifest that names
+// the right package and carries no readable version means "this is the install,
+// and its version could not be read" — which is a different answer from "there
+// is no install here", and it is the one that tells a user where to look. Making
+// found depend on the version would report the first and print the second.
 func readPackageVersion(path string) (string, bool) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -453,7 +459,7 @@ func readPackageVersion(path string) (string, bool) {
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		return "", false
 	}
-	if manifest.Name != PackageName || manifest.Version == "" {
+	if manifest.Name != PackageName {
 		return "", false
 	}
 	return manifest.Version, true
