@@ -18,6 +18,16 @@ by `uuid` or `alias`.
 
 ## [0.2.0] — 2026-08-23
 
+Three things that were quiet in 0.1.0 answer back now, and an upgrade is where
+you meet them. Bare `ccdad` was a no-op that exited 0; it is the dashboard now,
+so without a terminal on both ends it is a usage error. Nine commands refuse to
+run inside a `ccdad run` session rather than acting on that session's private
+copy of Claude Code's state. And `switch --model`, which 0.1.0 documented as
+having no effect, now narrows the ranking and rejects a model name it cannot
+place. Two smaller ones: `ccdad uninstall` takes back the `PATH` entry ccdad
+registered, and `ccdad doctor` gained a `credential-home` check that can fail a
+machine 0.1.0 passed.
+
 ### Added
 
 - **One engine per Claude Code login.** `CCDAD_HOME` and `CLAUDE_CONFIG_DIR` are

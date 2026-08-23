@@ -127,9 +127,9 @@ the modules inside it require.
 
 Re-run the same one-liner. Both installers stop the running daemon before
 replacing the binary and neither restarts it: it comes back on the next command
-that is allowed to auto-start one — `add`, `add-token`, `list`, `status`,
-`switch` or `which`. `ccdad daemon status` is not one of them, on purpose, so a
-supervisor loop cannot start what it was only asked to look at.
+that is allowed to auto-start one — bare `ccdad`, `add`, `add-token`, `list`,
+`status`, `switch` or `which`. `ccdad daemon status` is not one of them, on
+purpose, so a supervisor loop cannot start what it was only asked to look at.
 
 ### Removing it
 
@@ -318,12 +318,12 @@ reports 128 plus the signal number, as a shell would.
 **Inside a session, the commands that write Claude Code's own state refuse.** A
 session is a whole Claude Code, and everything you — or the model — type in
 there inherits the session's credential home. `ccdad switch`, `auto`, `add`,
-`add-token`, `remove`, `uninstall` and `ccdad daemon start` would act on the
-session's copy while reporting they had changed the live login, so they exit
-`2` and name the session instead. Reads are untouched: `list`, `which`,
-`status`, `doctor` and `export` answer for the shell you are in, and `ccdad
-doctor` says which session that is. Run the refused ones from a shell outside
-the session.
+`add-token`, `remove`, `uninstall`, `ccdad daemon start` and `ccdad daemon
+restart` would act on the session's copy while reporting they had changed the
+live login, so they exit `2` and name the session instead. Reads are untouched:
+`list`, `which`, `status`, `doctor` and `export` answer for the shell you are
+in, and `ccdad doctor` says which session that is. Run the refused ones from a
+shell outside the session.
 
 ## Configuration
 
