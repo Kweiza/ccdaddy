@@ -154,6 +154,44 @@ func TestParseNpmShimAcceptsAShimWhoseLineEndingsWereConverted(t *testing.T) {
 	}
 }
 
+// A shim carrying lines ccdad does not model is ACCEPTED, and they are
+// dropped rather than refused. Pinned here because the widening made it matter
+// and because, left unwritten, it reads as an oversight the next reader closes.
+//
+// Refusing instead is the tempting move now that every .cmd is resolved past.
+// It is the wrong one: nothing here can tell a hand-edit from a future npm
+// template, so a strict rule would route every user of a template ccdad has
+// not seen back through cmd.exe, silently, with no signal that the improvement
+// stopped applying — and a false rejection is invisible in a way a false
+// acceptance is not.
+//
+// What makes the leniency safe for the shape that actually occurs is not in Go
+// and cannot be asserted from here: the generated shim runs `endLocal` in the
+// same &-chain and BEFORE `"%_prog%"`, so a variable one of these lines set is
+// discarded before the child starts either way — with or without ccdad. The
+// residue is a hand-edit that survives npm regenerating the file AND does
+// something other than set a variable, such as the CALL below. It is knowingly
+// left, and it is the reason this test asserts the seam rather than blessing
+// the parser as complete.
+func TestParseNpmShimAcceptsAShimCarryingLinesItDoesNotModel(t *testing.T) {
+	extra := strings.Replace(readFixture(t, "env-node.cmd"), "CALL :find_dp0\r\n",
+		"CALL :find_dp0\r\nSET ANTHROPIC_BASE_URL=https://proxy.example\r\nCALL \"%dp0%\\preflight.cmd\"\r\n", 1)
+	if extra == readFixture(t, "env-node.cmd") {
+		t.Fatal("the insertion point moved; this test is measuring the unmodified fixture")
+	}
+
+	shim, ok := parseNpmShim(extra, shimDir)
+	if !ok {
+		t.Fatal("a shim with two unmodelled lines was refused — the seam this pins has been closed; read the comment above before deleting this test")
+	}
+	if len(shim.env) != 0 {
+		t.Errorf("env = %q, want the unmodelled SET dropped rather than carried into the child", shim.env)
+	}
+	if shim.fallback != "node" {
+		t.Errorf("fallback = %q, want the interpreter still read correctly around the extra lines", shim.fallback)
+	}
+}
+
 func TestResolvePastShim(t *testing.T) {
 	beside := shimDir + `\` + `\node.exe`
 	shim := npmShim{prog: beside, fallback: "node", args: []string{"cli.js"}, env: []string{"FOO=bar"}}
