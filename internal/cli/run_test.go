@@ -421,10 +421,41 @@ func TestRunAdoptsBackARefreshTokenTheSessionRotated(t *testing.T) {
 }
 
 // `claude` is often npm's `.cmd` shim, and exec.LookPath honors PATHEXT, so
-// that is the path `ccdad run` gets back. A `.cmd` target runs through
-// cmd.exe, so an argument cmd.exe would re-interpret must never reach one on
-// argv: `run` resolves past a shim it recognises and launches the interpreter
-// directly, and refuses the argument when it cannot.
+// that is the path `ccdad run` gets back. Which programs those are is the
+// whole condition on the shim branch now that resolution runs for every one of
+// them, so it is asserted on its own rather than only through a launch.
+//
+// The spellings matter more than they look. extOf is hand-written because
+// filepath picks its separator at BUILD time, so a `C:\...` path is a string
+// with no separators at all on the machine these lines were typed on — and a
+// directory carrying the only dot in the path is the case a naive last-dot
+// scan gets wrong.
+func TestCmdShimTargetIsExactlyWhatCmdExeRuns(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		path string
+		want bool
+	}{
+		{"npm's shim, in the spelling Windows hands back", `C:\Users\x\AppData\Roaming\npm\claude.cmd`, true},
+		{"the extension is matched case-insensitively", `C:\CLAUDE.CMD`, true},
+		{"a .bat is the same shim", `C:\claude.BAT`, true},
+		{"a native exe is not routed through cmd.exe", `C:\Program Files\claude\claude.exe`, false},
+		{"a unix path is not either", "/usr/local/bin/claude", false},
+		{"no extension at all", `C:\npm\claude`, false},
+		{"a dot in a DIRECTORY is not an extension", `C:\tools\claude.d\claude`, false},
+		{"nor is one in a unix directory", "/opt/claude.d/claude", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := cmdShimTarget(tc.path); got != tc.want {
+				t.Errorf("cmdShimTarget(%q) = %v, want %v", tc.path, got, tc.want)
+			}
+		})
+	}
+}
+
+// What cmd.exe would do to an argument, which is a separate question from
+// whether cmd.exe is in the launch at all. It decides one thing now: whether a
+// shim that could NOT be resolved past is refused or simply launched.
 //
 // Go builds a command line to CommandLineToArgvW rules and has no special case
 // for .bat/.cmd anywhere; cmd.exe does not parse by those rules. An argument
@@ -435,27 +466,24 @@ func TestRunAdoptsBackARefreshTokenTheSessionRotated(t *testing.T) {
 func TestUnsafeForCmdShimCatchesWhatCmdExeWouldReinterpret(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		path string
 		args []string
 		want string
 	}{
-		{"a native exe is not routed through cmd.exe", `C:\claude.exe`, []string{"fix&whoami"}, ""},
-		{"a unix path is not either", "/usr/local/bin/claude", []string{"fix&whoami"}, ""},
-		{"an ampersand chains a second command", `C:\claude.cmd`, []string{"-p", "fix&whoami"}, "fix&whoami"},
-		{"a pipe does too", `C:\claude.cmd`, []string{"a|b"}, "a|b"},
-		{"a redirect truncates a file", `C:\claude.cmd`, []string{"a>b"}, "a>b"},
-		{"a caret escapes the next character", `C:\claude.cmd`, []string{"a^b"}, "a^b"},
-		{"a percent expands a variable, even inside quotes", `C:\claude.cmd`, []string{"%PATH%"}, "%PATH%"},
-		{"a quote toggles cmd.exe's quoting state", `C:\claude.cmd`, []string{`say "hi" there`}, `say "hi" there`},
-		{"a newline ends the command line", `C:\claude.cmd`, []string{"a\nb"}, "a\nb"},
-		{"the extension is matched case-insensitively", `C:\CLAUDE.CMD`, []string{"a&b"}, "a&b"},
-		{"a .bat shim is the same shim", `C:\claude.BAT`, []string{"a&b"}, "a&b"},
-		{"ordinary prompts pass", `C:\claude.cmd`, []string{"-p", "summarize this file", "--json"}, ""},
-		{"the first offender is the one reported", `C:\claude.cmd`, []string{"ok", "a&b", "c|d"}, "a&b"},
+		{"an ampersand chains a second command", []string{"-p", "fix&whoami"}, "fix&whoami"},
+		{"a pipe does too", []string{"a|b"}, "a|b"},
+		{"a redirect truncates a file", []string{"a>b"}, "a>b"},
+		{"a caret escapes the next character", []string{"a^b"}, "a^b"},
+		{"a percent expands a variable, even inside quotes", []string{"%PATH%"}, "%PATH%"},
+		{"a quote toggles cmd.exe's quoting state", []string{`say "hi" there`}, `say "hi" there`},
+		{"a newline ends the command line", []string{"a\nb"}, "a\nb"},
+		{"ordinary prompts pass", []string{"-p", "summarize this file", "--json"}, ""},
+		{"so does a path with spaces and backslashes", []string{"--add-dir", `C:\Users\x\my repo`}, ""},
+		{"no arguments at all", nil, ""},
+		{"the first offender is the one reported", []string{"ok", "a&b", "c|d"}, "a&b"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := unsafeForCmdShim(tc.path, tc.args); got != tc.want {
-				t.Errorf("unsafeForCmdShim(%q, %q) = %q, want %q", tc.path, tc.args, got, tc.want)
+			if got := unsafeForCmdShim(tc.args); got != tc.want {
+				t.Errorf("unsafeForCmdShim(%q) = %q, want %q", tc.args, got, tc.want)
 			}
 		})
 	}
