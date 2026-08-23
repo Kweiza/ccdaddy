@@ -11,6 +11,33 @@
 // Note the asymmetry in the last rule: .claude.json sits at the home directory
 // by default, not inside .claude/.
 //
+// # Claude Code has TWO home directories, and this package answers both
+//
+// Every rule above hangs off one home, and Claude Code's XDG-style LAYOUT --
+// where the native launcher and the installed binaries live -- hangs off a
+// DIFFERENT one. Measured out of 2.1.241, where the config root is Hn() rather
+// than the An() the 2.1.238 rules above name -- minified symbols are renamed
+// between builds, and Hn is a `var` assignment rather than a function
+// declaration, so it is found with `grep -abFo 'Hn=pp(' cc.js` and NOT with the
+// `function <name>(` recipe in internal/ccver's header:
+//
+//	Hn()   = (CLAUDE_CONFIG_DIR ?? join(os.homedir(), ".claude")).normalize("NFC")
+//	lAi()  = { home: env.HOME ?? os.homedir() }
+//	fpr()  = env.XDG_DATA_HOME ?? join(lAi().home, ".local", "share")
+//	q1e()  = join(lAi().home, ".local", "bin")
+//
+// os.homedir() on one side, HOME-then-os.homedir() on the other. On Unix the two
+// are one value. On WINDOWS they part whenever HOME is set -- which a
+// Git-for-Windows shell does by default -- and then .credentials.json is under
+// %USERPROFILE% while claude.exe is under $HOME. homeDir answers the first and
+// LayoutHome the second, and swapping them points a switch at the wrong
+// credentials file in one direction and loses a native install in the other.
+//
+// NOT that a native install is only ever under the layout home. Claude Code
+// INSTALLS under it and SEARCHES under os.homedir(), so both directories can
+// hold one; internal/ccver.layoutHomes carries that measurement and searches
+// both. This package's job is to spell each home correctly, not to choose.
+//
 // Every resolver returns an error rather than a best-effort string. The
 // home-directory lookup is the only step that can fail, and it fails in exactly
 // one situation -- $HOME (or %USERPROFILE%) is not set -- but the consequence
@@ -38,9 +65,14 @@ const GlobalConfigFile = ".claude.json"
 
 const legacyGlobalConfigFile = ".config.json"
 
-// homeDir returns the user's home directory. os.UserHomeDir consults $HOME on
-// Unix and %USERPROFILE% on Windows, which is what Claude Code's os.homedir()
-// does, so the two agree.
+// homeDir returns the home directory Claude Code hangs its CONFIG paths off:
+// Hn() joins os.homedir(), and os.UserHomeDir consults $HOME on Unix and
+// %USERPROFILE% on Windows exactly as Node's os.homedir() does, so the two agree
+// on every platform.
+//
+// It is NOT the home the launcher and versions directories hang off -- that one
+// reads HOME first and is LayoutHome. The header says why the difference is not
+// a detail.
 //
 // os.UserHomeDir never returns an empty path with a nil error -- it either
 // finds a non-empty value in the environment, answers "/sdcard" on Android, or
@@ -56,10 +88,42 @@ func homeDir() (string, error) {
 
 // Home is the user's home directory, for the callers that need the directory
 // itself rather than a path derived from it -- `ccdad setup-path` writing a
-// shell startup file, and `ccdad uninstall` removing one. It is the same
-// resolution and the same error every other path in this package is built on,
-// exported so those two cannot grow a second, differently-sandboxed answer.
+// shell startup file, `ccdad uninstall` removing one, and internal/ccver
+// spelling the config-side half of where a Claude Code install can be. It is the
+// same resolution and the same error every other path in this package is built
+// on, exported so those callers cannot grow a second, differently-sandboxed
+// answer.
 func Home() (string, error) { return homeDir() }
+
+// LayoutHome is the home Claude Code's XDG-STYLE LAYOUT hangs off -- the native
+// launcher at <home>/.local/bin and, through XDG_DATA_HOME, the installed
+// binaries under <home>/.local/share/claude/versions. It is a SECOND resolution
+// and not a variant of the first: Claude Code computes it as
+//
+//	lAi() = { home: env.HOME ?? os.homedir() }
+//
+// HOME first, on every platform, while Hn() joins a plain os.homedir(). On Unix
+// this returns what homeDir returns, because Go's os.UserHomeDir IS $HOME there.
+// On Windows it returns $HOME where homeDir returns %USERPROFILE%.
+//
+// Only internal/ccver calls this, and that is the point rather than an accident:
+// resolving the credential paths through it would move which .credentials.json
+// `ccdad switch` writes on a Git-for-Windows shell. It does NOT replace homeDir
+// for the launcher search -- ccver searches both homes, because Claude Code
+// installs under this one and looks for an existing install under the other.
+//
+// ONE DELIBERATE DIVERGENCE, and it is a divergence from a bug. JavaScript's ??
+// falls through on null and undefined but NOT on "", so Claude Code started with
+// HOME set to the empty string computes a RELATIVE .local/bin. This package's
+// rule is that a home it cannot spell is an error and never a relative path --
+// see the header -- so an empty HOME falls through to homeDir here, which either
+// finds %USERPROFILE% or says which variable to set.
+func LayoutHome() (string, error) {
+	if v := os.Getenv("HOME"); v != "" {
+		return v, nil
+	}
+	return homeDir()
+}
 
 // nfc normalizes to NFC, as Claude Code does to every path it derives. This
 // matters on macOS, where the filesystem hands back decomposed forms.
