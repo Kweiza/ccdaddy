@@ -215,6 +215,21 @@ func (it KeychainItem) Read(ctx context.Context) (string, bool, error) {
 
 // Delete removes the item. An item that was already absent is success: the
 // caller asked for a state, not for an event.
+//
+// NOTHING IN ccdad CALLS THIS, and that is now a ruling rather than a gap.
+// §3.3's use (b) proposed deleting the item during a switch, and the fact it
+// waited on is settled: <=2.1.112 reads the keychain and FALLS BACK to the
+// credentials file, so the delete is a repair and not a logout. It still does
+// not ship inside a switch, for two reasons the measurement supplied rather
+// than removed. 2.1.113 dropped the backend, so on every Claude Code a user can
+// install today the item is inert and the spawn would buy nothing while sitting
+// inside the credential-lock window on every macOS switch. And where it is NOT
+// inert -- a machine still on <=2.1.112 -- the item is that Claude Code's live
+// login, so deleting it unasked is §12's "destroying a credential on every
+// switch" with a different subject; making it safe needs the item READ and
+// attributed against the store first, which is a second spawn, this time one
+// that decrypts. doctor names the item and hands over the command instead, and
+// now says what running it costs.
 func (it KeychainItem) Delete(ctx context.Context) error {
 	res, err := runSecurity(ctx, "delete-generic-password", "-a", it.Account, "-s", it.Service)
 	if err != nil {
@@ -242,6 +257,16 @@ func CredentialKeychainItemPresent(ctx context.Context) (bool, KeychainItem, err
 // LoadKeychainCredentials reads the login a Keychain-era Claude Code would be
 // using on this machine. The second return is false when there is no such item,
 // which is every machine running any Claude Code this project has seen.
+//
+// NOTHING IN ccdad CALLS THIS EITHER, and the routing question §3.3's use (a)
+// raised is answered: Load() must NOT fall back to the Keychain on macOS. Since
+// 2.1.113 the installed Claude Code does not read the item, so a ccdad that did
+// would report a login that Claude Code will never use -- a confident wrong
+// answer on the overwhelming majority of machines, reached by changing the read
+// path of every command (switch, which, doctor, add) for a population that
+// shrinks with each release. doctor's two rows already tell the truth together
+// without touching Load(): `claude-code` says there is no login in the file,
+// and `keychain` says the item is there.
 //
 // A value that is not JSON is an error rather than an empty blob: `security -w`
 // hex-encodes data it cannot print, so unparseable output means the item is not

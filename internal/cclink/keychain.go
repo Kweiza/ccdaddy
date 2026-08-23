@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"os"
 	"os/user"
+	"path/filepath"
 	"strings"
 
 	"golang.org/x/text/unicode/norm"
@@ -20,12 +21,17 @@ import (
 // exactly 2.1.113.
 //
 // THE READ ORDER, which is the fact everything else here turns on. Every release
-// from 0.2.125 through 2.1.112 wraps the keychain in the SAME combinator, and
-// the body does not change once across that span:
+// sampled from 0.2.125 through 2.1.112 wraps the keychain in the same
+// combinator, and the ORDER never varies -- only the spelling of its null test
+// does (`Q!=null` up to ~1.0.0, `K!==null&&K!==void 0` from ~1.0.30, which mean
+// the same thing):
 //
 //	{name:`${A.name}-with-${B.name}-fallback`,
-//	 read(){let Q=A.read();if(Q!=null)return Q;return B.read()||{}}, ...}
+//	 read(){let K=A.read();if(K!==null&&K!==void 0)return K;return B.read()||{}}, ...}
 //	function GP(){if(process.platform==="darwin")return <combinator>;return <file>}
+//
+// 2.1.50 adds a readAsync beside it with the same order, spawning through
+// execFile rather than a shell.
 //
 // Keychain FIRST, then the file. Never keychain-only. Two consequences, and they
 // are the two §3.3 kept this path for:
@@ -130,8 +136,13 @@ type keychainEnv struct {
 // readKeychainEnv captures the environment once, so a service name and an
 // account name derived in the same call cannot straddle a change to it.
 func readKeychainEnv() keychainEnv {
+	dir, ok := os.LookupEnv("CLAUDE_CONFIG_DIR")
+	if ok && dir == "" {
+		home, _ := os.UserHomeDir()
+		dir = filepath.Join(home, ".claude")
+	}
 	return keychainEnv{
-		configDir:      os.Getenv("CLAUDE_CONFIG_DIR"),
+		configDir:      dir,
 		customOAuthURL: os.Getenv("CLAUDE_CODE_CUSTOM_OAUTH_URL"),
 		user:           os.Getenv("USER"),
 	}
@@ -153,7 +164,11 @@ func CredentialKeychainItem() KeychainItem {
 
 // keychainServiceName is the service attribute of the item, derived the way the
 // releases that WROTE one derived it -- 1.0.128 through 2.1.112, read out of
-// 2.1.112's bundle:
+// 2.1.112's bundle. (Before 1.0.128 the account was not computed in JS at all:
+// the item name went into a SHELL string as a literal `$USER`, and there was no
+// OAUTH_FILE_SUFFIX before ~1.0.128 and no hash suffix before ~1.0.30. Those
+// eras name the same item as this one on any machine that sets neither
+// CLAUDE_CONFIG_DIR nor CLAUDE_CODE_CUSTOM_OAUTH_URL.)
 //
 //	function Fh(q=""){let K=A7(),
 //	    z=!process.env.CLAUDE_CONFIG_DIR?"":`-${sha256(K).hex.substring(0,8)}`;
