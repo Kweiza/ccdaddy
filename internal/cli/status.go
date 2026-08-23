@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
+	"github.com/Kweiza/ccdaddy/internal/config"
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
@@ -102,7 +103,7 @@ func runStatus(cmd *cobra.Command, asJSON bool) error {
 		engine[a.UUID] = a
 	}
 
-	rows := quotaRows(accounts, cache, active, hasActive, now)
+	rows := quotaRows(accounts, cache, active, hasActive, now, rowThresholds(cmd, now))
 	for i := range rows {
 		rows[i].Engine = engine[rows[i].Account.UUID]
 	}
@@ -122,20 +123,39 @@ func runStatus(cmd *cobra.Command, asJSON bool) error {
 //
 // Engine state is deliberately NOT filled in here. It comes from status.json,
 // which is the daemon's own document and no part of what `list` reports.
-func quotaRows(accounts []store.Account, cache *usage.Cache,
-	active store.Account, hasActive bool, now time.Time) []statusRow {
+func quotaRows(accounts []store.Account, cache *usage.Cache, active store.Account,
+	hasActive bool, now time.Time, thresholds strategy.Thresholds) []statusRow {
 
 	rows := make([]statusRow, 0, len(accounts))
 	for _, a := range accounts {
 		row := statusRow{Account: a, Active: hasActive && a.UUID == active.UUID}
 		if entry, ok := cache.Get(a.UUID); ok && entry.Snapshot != nil {
 			row.Entry, row.HasEntry = entry, true
-			row.Headroom = strategy.HeadroomOf(entry.Snapshot)
+			row.Headroom = strategy.HeadroomOf(entry.Snapshot, thresholds)
 			row.Pace = entry.Snapshot.Pace(now)
 		}
 		rows = append(rows, row)
 	}
 	return rows
+}
+
+// rowThresholds is what `status` and `list` measure their rows against.
+//
+// It goes through RankOptions rather than reading the threshold keys itself, so
+// the number a row is reported against is the number the engine ranked on. Two
+// constructions of the same bundle would agree until the day one of them was
+// changed.
+//
+// A config that cannot be used is a notice and not a failure: refusing to render
+// a dashboard because a threshold was mistyped is a worse answer than rendering
+// it against the documented defaults, which is the same call `ccdad auto` makes.
+func rowThresholds(cmd *cobra.Command, now time.Time) strategy.Thresholds {
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "note: %v; the rows are measured against the built-in thresholds\n", err)
+		cfg = config.Defaults()
+	}
+	return cfg.RankOptions(now).Thresholds()
 }
 
 // statusRow is one account with everything the dashboard knows about it, from
@@ -150,25 +170,42 @@ type statusRow struct {
 	Engine   daemon.AccountStatus
 }
 
-// binding is the window that decides this account's headroom, together with
-// when it rolls over. It is what both the USED and the RESETS IN columns read,
-// so the two always describe the same window.
+// reportedName is the window this account is REPORTED against, which is not
+// always the one it is ordered on.
+//
+// A tripped WEEKLY cap wins, because it is the one that will not come back for
+// days: an account whose five-hour window rolls over in eight minutes is still
+// unusable until Friday, and naming the five-hour window would tell the user to
+// wait eight minutes for it. Ordering still runs on Headroom.Slack, which is the
+// tightest window whichever family it belongs to; this rule moves no account in
+// the ranking.
+func (r statusRow) reportedName() usage.WindowName {
+	if r.Headroom.HasFloor {
+		return r.Headroom.Floor
+	}
+	return r.Headroom.Binding
+}
+
+// reported resolves reportedName to the window itself, together with when it
+// rolls over. It is what the USED, WINDOW, RESETS IN and PACE columns all read,
+// so they always describe the same window.
 //
 // The Known check is redundant TODAY and is kept deliberately: with no window
-// reporting a utilization, strategy leaves Binding as the empty WindowName and
-// the loop below matches nothing anyway. A mutation removing it survives for
+// reporting a utilization, strategy leaves both names as the empty WindowName
+// and the loop below matches nothing anyway. A mutation removing it survives for
 // exactly that reason. It stays because the alternative is for this function's
 // correctness to rest on an invariant of another package's zero value.
-func (r statusRow) binding() (usage.NamedWindow, bool) {
+func (r statusRow) reported() (usage.NamedWindow, bool) {
 	if !r.HasEntry || !r.Headroom.Known {
 		return usage.NamedWindow{}, false
 	}
-	// AllWindows, not RateLimitWindows: the binding window can be a per-model or
+	// AllWindows, not RateLimitWindows: the reported window can be a per-model or
 	// per-surface weekly one out of limits[], and looking it up in the fixed five
 	// alone would leave both columns blank for an account whose headroom is
 	// perfectly well known.
+	want := r.reportedName()
 	for _, w := range r.Entry.Snapshot.AllWindows() {
-		if w.Name == r.Headroom.Binding {
+		if w.Name == want {
 			return w, true
 		}
 	}
@@ -215,7 +252,7 @@ func renderStatus(cmd *cobra.Command, report daemon.Report, rows []statusRow, no
 			marker = "*"
 		}
 		used, windowName := unreadable, "-"
-		if bw, ok := r.binding(); ok {
+		if bw, ok := r.reported(); ok {
 			if pct, ok := bw.Percent(); ok {
 				used = fmt.Sprintf("%.0f%%", pct)
 			}
@@ -247,6 +284,13 @@ func renderStatus(cmd *cobra.Command, report daemon.Report, rows []statusRow, no
 // on — it is what the engine itself ranks by. The two columns are labelled, so
 // a reader is never asked to guess which way round a bare percentage runs.
 //
+// It stays on the ORDERING window while RESETS IN beside it names the reported
+// one, so on an account with a tripped weekly cap the two describe different
+// windows. That is the intended trade: LEFT has to keep meaning "how much of the
+// tightest window is left" or it stops being the figure the ranking used, and
+// RESETS IN has to name the cap that actually holds the account back or it tells
+// a user to wait ten minutes for an account that is gone until Friday.
+//
 // Never "0%" for an account that could not be read.
 func (r statusRow) leftLabel() string {
 	if !r.Headroom.Known {
@@ -255,10 +299,10 @@ func (r statusRow) leftLabel() string {
 	return fmt.Sprintf("%.0f%%", r.Headroom.Pct)
 }
 
-// resetsLabel is when the binding window rolls over, as a span. Both tables
+// resetsLabel is when the reported window rolls over, as a span. Both tables
 // render it from here so the two can never describe one reset two ways.
 func (r statusRow) resetsLabel(now time.Time) string {
-	bw, ok := r.binding()
+	bw, ok := r.reported()
 	if !ok {
 		return "-"
 	}
@@ -269,18 +313,19 @@ func (r statusRow) resetsLabel(now time.Time) string {
 	return humanDuration(reset.Sub(now))
 }
 
-// paceLabel is the pace reading's human half: how the binding window's
+// paceLabel is the pace reading's human half: how the reported window's
 // consumption compares with the time elapsed in it.
 //
-// It reports the BINDING window's pace and no other, so the column describes the
-// same window the two columns beside it do. Every window's pace is in --json.
+// It reports the REPORTED window's pace and no other, so the column describes
+// the same window the two columns beside it do. Every window's pace is in
+// --json.
 //
 // The projection is deliberately absent: projectedExhaustionAt and
 // willLastToReset stay out of every human view, because a straight line through
 // bursty real usage is too rough to present as fact — and the way that sticks is
 // that nothing here can reach them: they are behind usage.Pace.Projection.
 func (r statusRow) paceLabel() string {
-	bw, ok := r.binding()
+	bw, ok := r.reported()
 	if !ok {
 		return "-"
 	}
@@ -342,11 +387,22 @@ func usageJSON(r statusRow, now time.Time) map[string]any {
 	}
 	if r.Headroom.Known {
 		out["headroomPct"] = r.Headroom.Pct
-		out["bindingWindow"] = string(r.Headroom.Binding)
+		// slack and windowThreshold are the pair the DECISION is made on: the
+		// threshold the tightest window was given, and how far under it that
+		// window is. headroomPct is 100 minus the same window's utilization, so a
+		// script can see both the axis and the display figure rather than having
+		// to infer one from the other.
+		out["slack"] = r.Headroom.Slack
+		out["windowThreshold"] = r.Headroom.Threshold
+		// bindingWindow is the REPORTED window, which is a tripped weekly cap
+		// when there is one. It is the name the WINDOW column prints, and it can
+		// differ from the window slack was measured on: what is tightest right
+		// now and what will still be tight in two days are two questions.
+		out["bindingWindow"] = string(r.reportedName())
 	}
 
 	// AllWindows, so that bindingWindow above always names a key that is in
-	// here: the window that binds can be a per-model or per-surface weekly one
+	// here: the window reported can be a per-model or per-surface weekly one
 	// out of limits[], and a consumer resolving the name against the fixed five
 	// would find nothing for an account whose headroom is perfectly well known.
 	windows := map[string]any{}

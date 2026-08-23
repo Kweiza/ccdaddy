@@ -549,3 +549,53 @@ func TestStatusRendersAScopedBindingWindow(t *testing.T) {
 		t.Errorf("bindingWindow names %q, which is not one of the published windows %v", name, windows)
 	}
 }
+
+// A tripped WEEKLY cap is what a user has to be told about: it is the one that
+// will not come back for days, and naming the five-hour window instead tells
+// them to wait ten minutes for an account that is unusable until Friday. The
+// engine still ORDERS on the tightest window, which here is the five-hour one.
+func TestStatusReportsATrippedWeeklyCapRatherThanTheTightestWindow(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	seedAccount(t, "uuid-a", "work@example.com")
+	seedUsageEntry(t, "uuid-a", usage.Entry{
+		FetchedAt: statusNow.Add(-time.Minute),
+		Snapshot: &usage.Snapshot{
+			// 95% used and back in ten minutes: the least slack, so the ranking
+			// orders on it.
+			FiveHour: window(95, statusNow.Add(10*time.Minute)),
+			// 85% used and not back for forty hours: over threshold, so it is a
+			// floor, and it is what the row reports.
+			SevenDay: window(85, statusNow.Add(40*time.Hour)),
+		},
+	})
+
+	_, human, _, _ := runRoot(t, "status")
+	for _, want := range []string{"85%", "seven_day", "1d16h"} {
+		if !strings.Contains(human, want) {
+			t.Errorf("the dashboard does not report the tripped weekly cap (%q):\n%s", want, human)
+		}
+	}
+	if strings.Contains(human, "five_hour") {
+		t.Errorf("the dashboard names five_hour, which comes back in ten minutes:\n%s", human)
+	}
+
+	_, out, _, _ := runRoot(t, "status", "--json")
+	usageObj, ok := accountRow(t, statusJSON(t, out), "uuid-a")["usage"].(map[string]any)
+	if !ok {
+		t.Fatal("no usage object")
+	}
+	if got := usageObj["bindingWindow"]; got != "seven_day" {
+		t.Errorf("bindingWindow = %v, want seven_day", got)
+	}
+	// And the axis is still the five-hour window: 80 - 95.
+	if got := usageObj["slack"]; got != -15.0 {
+		t.Errorf("slack = %v, want -15 from the five-hour window", got)
+	}
+	if got := usageObj["windowThreshold"]; got != 80.0 {
+		t.Errorf("windowThreshold = %v, want the configured 80", got)
+	}
+	if got := usageObj["headroomPct"]; got != 5.0 {
+		t.Errorf("headroomPct = %v, want 5", got)
+	}
+}
