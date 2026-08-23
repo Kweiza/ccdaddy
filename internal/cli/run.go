@@ -45,7 +45,8 @@ type launchSpec struct {
 	// Path is the resolved claude binary. Never a bare name: resolution
 	// happens before the launch so a relative PATH entry can be refused.
 	Path string
-	// Args are the arguments after the program name, verbatim from §9.1.
+	// Args are the arguments after the program name, verbatim: everything at
+	// or after ACCT reaches claude untouched.
 	Args []string
 	// Env is the COMPLETE child environment. ccdad never mutates its own.
 	Env []string
@@ -66,7 +67,7 @@ var lookProgram = exec.LookPath
 // follows.
 var startChild = runChild
 
-// claudeArgs is §9.1's separator rule: everything after ACCT, minus a single
+// claudeArgs is the separator rule: everything after ACCT, minus a single
 // literal `--` sitting immediately after it.
 //
 // pflag will not do this for us. Measured under SetInterspersed(false): a `--`
@@ -300,10 +301,10 @@ func seedProfile(home string) error {
 		}
 	}
 
-	// The global config is NOT always inside the config home: §3.3's asymmetry
-	// puts it at (CLAUDE_CONFIG_DIR ?? $HOME)/.claude.json, so on a machine
-	// with no CLAUDE_CONFIG_DIR it sits beside the home directory and the loop
-	// above never saw it. Inside the profile it lands at <profile>/.claude.json,
+	// The global config is NOT always inside the config home: Claude Code puts
+	// it at (CLAUDE_CONFIG_DIR ?? $HOME)/.claude.json, so on a machine with no
+	// CLAUDE_CONFIG_DIR it sits beside the home directory and the loop above
+	// never saw it. Inside the profile it lands at <profile>/.claude.json,
 	// which is where the child will look once CLAUDE_CONFIG_DIR points there.
 	global, err := ccpath.GlobalConfigPath()
 	if err != nil {
@@ -360,14 +361,14 @@ func newSession(uuid string) (runSession, error) {
 // seedSession writes the account's stored credentials into the session's
 // credential home.
 //
-// §4.4's swap algorithm does not apply here and must not be reached for: it
-// starts from the LIVE map and deletes the account-scoped keys before inserting
-// the target's, because it is editing a file Claude Code already owns. This
-// file has no base — it is created from nothing — so the stored snapshot is
-// written as it stands, and the machine-scoped keys are simply absent inside
-// the session. §4.1 prices those absences: a gateway-trust prompt, and MCP
-// logins that are not carried in (which is the cost §3.3 names for scoping
-// credentials rather than cloning a profile).
+// The live-file swap algorithm does not apply here and must not be reached
+// for: it starts from the LIVE map and deletes the account-scoped keys before
+// inserting the target's, because it is editing a file Claude Code already
+// owns. This file has no base — it is created from nothing — so the stored
+// snapshot is written as it stands, and the machine-scoped keys are simply
+// absent inside the session. Those absences have a price: a gateway-trust
+// prompt, and MCP logins that are not carried in — the cost of scoping
+// credentials rather than cloning a profile.
 func seedSession(blob cclink.Blob, session string) error {
 	data, err := json.Marshal(blob)
 	if err != nil {
@@ -394,9 +395,9 @@ const cmdShimMetacharacters = "&|<>^%\"\n\r"
 // CommandLineToArgvW rules only — so an argument with no space, quote or
 // backslash is emitted RAW: `fix&whoami` reaches cmd.exe as two commands.
 //
-// §10.3 says "never pass a prompt on argv on Windows"; this is that sentence
-// enforced, and refusing is deliberate. The alternative, quoting for cmd.exe,
-// is a correctness liability that fails silently and only on one platform.
+// Never pass a prompt on argv on Windows; this is that rule enforced, and
+// refusing is deliberate. The alternative, quoting for cmd.exe, is a
+// correctness liability that fails silently and only on one platform.
 func unsafeForCmdShim(path string, args []string) string {
 	switch strings.ToLower(filepath.Ext(path)) {
 	case ".cmd", ".bat":
@@ -504,7 +505,7 @@ func adoptBack(uuid, home string) error {
 // removeSession deletes a session's credential home and the lock Claude Code
 // keeps beside it.
 //
-// The sibling is not a detail: §3.5's legacy OAuth refresh lock is
+// The sibling is not a detail: Claude Code's legacy OAuth refresh lock is
 // `realpath(<credential home>) + ".lock"`, created in the PARENT directory, so
 // os.RemoveAll on the home alone leaves a directory behind on every session
 // that ever refreshed. Both spellings are removed because cclock resolves
@@ -598,9 +599,9 @@ func runChild(spec launchSpec) (ExitCode, error) {
 //
 // ProcessState.ExitCode() answers -1 for a process killed by a signal, and
 // os.Exit(-1) exits 255 — a value that means nothing to anyone. The shell
-// convention is 128+N, which for SIGINT is 130, the same number §9.3 already
-// gives ExitInterrupted; a session the user Ctrl-C'd therefore reads the same
-// whether the shell reported it or ccdad did.
+// convention is 128+N, which for SIGINT is 130, the same number the exit
+// contract already gives ExitInterrupted; a session the user Ctrl-C'd
+// therefore reads the same whether the shell reported it or ccdad did.
 //
 // No build tag: syscall.WaitStatus exists on every GOOS ccdad ships to, and on
 // Windows Signaled() is hardcoded false, so the branch is simply never taken
@@ -660,8 +661,9 @@ func newRunCmd() *cobra.Command {
 				return err
 			}
 			// Every account-taking command turns a resolution failure into a
-			// usage error, and §5.1 names this command as the reason there is
-			// no interactive fallback to reach for.
+			// usage error, and this command is the reason there is no
+			// interactive fallback to reach for: `ccdad run` ends in an exec,
+			// so callers need determinism.
 			target, err := store.Resolve(s.Accounts(), args[0])
 			if err != nil {
 				return UsageError("%s", err.Error())
@@ -753,7 +755,7 @@ func newRunCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&fullProfile, "full-profile", false,
 		"give the session a whole config home of its own, so its MCP logins survive")
-	// §9.1 requires everything at or after ACCT to reach claude verbatim.
+	// Everything at or after ACCT must reach claude verbatim.
 	// Without this, cobra parses `-p` as its own and exits 2 before RunE.
 	cmd.Flags().SetInterspersed(false)
 	return cmd

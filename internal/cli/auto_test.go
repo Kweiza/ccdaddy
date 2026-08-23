@@ -79,7 +79,8 @@ func TestAutoOnceSwitchesToTheAccountWithRoom(t *testing.T) {
 	}
 }
 
-// §9.3's whole point: a no-op is 3, and it is NOT the code a typo produces.
+// The exit contract's whole point: a no-op is 3, and it is NOT the code a typo
+// produces.
 func TestAutoOnceOnTheBestAccountIsExitThree(t *testing.T) {
 	isolate(t)
 	seedAccount(t, "u-1", "a@example.com")
@@ -131,9 +132,9 @@ func TestAutoOnceWithNoReadingsIsExitFour(t *testing.T) {
 	assertNoLiveCredentials(t)
 }
 
-// The defect §9.3 names by name: cswap answers 2 for both a typo and a normal
-// no-op, so `cswap auto --once --thresold 80` looks like a healthy cron line
-// forever. Here 2 is usage-only.
+// The defect the exit contract exists to fix: cswap answers 2 for both a typo
+// and a normal no-op, so `cswap auto --once --thresold 80` looks like a healthy
+// cron line forever. Here 2 is usage-only.
 func TestAMistypedAutoFlagIsExitTwoAndNotThree(t *testing.T) {
 	isolate(t)
 	twoAccountsOneBetter(t)
@@ -193,8 +194,8 @@ func TestAutoJSONKeepsTheSameExitCode(t *testing.T) {
 	}
 }
 
-// §9.4: human notices go to stderr. In NDJSON mode stdout must carry the stream
-// and nothing else, or `ccdad auto --json | jq` dies on the first notice.
+// Human notices go to stderr. In NDJSON mode stdout must carry the stream and
+// nothing else, or `ccdad auto --json | jq` dies on the first notice.
 func TestAutoJSONKeepsNoticesOffTheStream(t *testing.T) {
 	isolate(t)
 	seedAccount(t, "u-1", "a@example.com")

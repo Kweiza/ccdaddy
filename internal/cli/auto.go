@@ -25,10 +25,10 @@ import (
 // reinterprets something.
 const autoSchemaVersion = 1
 
-// autoTickInterval is the continuous form's cadence, §8.4's one second. It
-// matches the daemon deliberately: `auto` exists to be the daemon's engine with
-// nothing detached, and an engine that evaluated on a different rhythm would
-// not be describing the thing it is standing in for.
+// autoTickInterval is the continuous form's cadence, the tick loop's one
+// second. It matches the daemon deliberately: `auto` exists to be the daemon's
+// engine with nothing detached, and an engine that evaluated on a different
+// rhythm would not be describing the thing it is standing in for.
 const autoTickInterval = time.Second
 
 func newAutoCmd() *cobra.Command {
@@ -61,10 +61,10 @@ func newAutoCmd() *cobra.Command {
 					return err
 				}
 				// A broken stream outranks the pass's own code. EPIPE reaches
-				// ExecuteWith through it and becomes 0, which is §9.3's
-				// "`ccdad auto --json | head -1` exits 0"; any other write
-				// failure becomes 1, because reporting the evaluation's answer
-				// would claim an output nobody received.
+				// ExecuteWith through it and becomes 0, because a reader that
+				// has gone away is not an error and `ccdad auto --json | head -1`
+				// exits 0; any other write failure becomes 1, because reporting
+				// the evaluation's answer would claim an output nobody received.
 				if em.err != nil {
 					return em.err
 				}
@@ -99,9 +99,10 @@ func newAutoCmd() *cobra.Command {
 // to refuse, and the daemon is the one with a reason to be there.
 //
 // The refusal is 3, not 1. A daemon already running the engine is the world
-// being as the caller asked for it, which is exactly what §9.3 reserves 3 for —
-// and ErrSingletonHeld is a distinct sentinel from ErrLocksUnsupported for this
-// reason, so a filesystem with no working locks still reports a failure.
+// being as the caller asked for it, which is exactly what exit.go reserves 3
+// for — and ErrSingletonHeld is a distinct sentinel from ErrLocksUnsupported
+// for this reason, so a filesystem with no working locks still reports a
+// failure.
 //
 // The credential-home claim is the second exclusion and a different question:
 // the singleton keeps two engines out of one STORE, and the claim keeps two
@@ -191,7 +192,7 @@ func autoPass(em *autoEmitter, s *store.Store) (ExitCode, error) {
 			"proceeding with no cooldown and no quarantines", ev.StateErr)
 	}
 	if ev.ConfigErr != nil {
-		// §7.6 rule 4: a mistyped threshold must not stop the engine.
+		// A mistyped threshold must not stop the engine.
 		em.notice("%v; using the built-in defaults", ev.ConfigErr)
 	}
 
@@ -307,9 +308,10 @@ func autoActionName(a strategy.Action) string {
 // autoEmitter writes both halves of this command's output: the NDJSON stream on
 // stdout, and the human sentences that go to stderr in EVERY mode.
 //
-// The split is §9.4's, and for `auto` it is load-bearing rather than tidy: a
-// single stray line on stdout ends `ccdad auto --json | jq`, and the notices
-// are exactly the lines a degraded run produces.
+// The split is the `--json` contract's, and for `auto` it is load-bearing
+// rather than tidy: a single stray line on stdout ends
+// `ccdad auto --json | jq`, and the notices are exactly the lines a degraded
+// run produces.
 type autoEmitter struct {
 	cmd  *cobra.Command
 	enc  *json.Encoder

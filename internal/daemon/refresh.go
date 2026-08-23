@@ -54,21 +54,22 @@ type RefreshResult struct {
 	Err error
 }
 
-// Refresh is §9.1's `--refresh`: one pass over `want`, taking a reading for
+// Refresh is `ccdad list --refresh`: one pass over `want`, taking a reading for
 // every account allowed to have one taken, and returning when they are all in.
 //
 // It is the SAME poller the daemon's tick dispatches — the same token source,
-// the same commit, the same §7.4 cadence written back into the same cache — and
-// that is the point rather than an economy. Two implementations of "record a
-// poll" would compute two schedules, and §8.4's promise that `list` and `status
-// --json` can never disagree only survives while one number has one writer.
+// the same commit, the same poll-policy cadence written back into the same
+// cache — and that is the point rather than an economy. Two implementations of
+// "record a poll" would compute two schedules, and the promise that `list` and
+// `status --json` can never disagree only survives while one number has one
+// writer.
 //
 // What differs from the tick is the GATE, and only the gate. A tick polls what
 // its own cadence says is due; a hand pressing a button is not on a cadence, so
-// §7.4 holds it to serveTTL and to whatever floor a 429 has earned, and to
-// nothing else. Honouring nextPollAt as well would make the flag useless in the
-// one situation it exists for — no daemon running, a reading four minutes old,
-// and a candidate's ten-minute cadence with nothing to advance it.
+// the poll policy holds it to serveTTL and to whatever floor a 429 has earned,
+// and to nothing else. Honouring nextPollAt as well would make the flag useless
+// in the one situation it exists for — no daemon running, a reading four
+// minutes old, and a candidate's ten-minute cadence with nothing to advance it.
 //
 // The caller's Engine must not be ticking. Nothing here takes the in-flight
 // claim, because the CLI's Engine only ever runs this: a second poller inside
@@ -115,8 +116,9 @@ func (e *Engine) Refresh(ctx context.Context, s *store.Store, want []store.Accou
 		}
 		// Measured from the 429 and not from the reading, which is why it is
 		// asked here rather than read off the entry's age: commit deliberately
-		// leaves FetchedAt alone on a failed poll (§7.2 keeps the old
-		// evidence), so an age-based hold would lapse the moment it was earned.
+		// leaves FetchedAt alone on a failed poll (an account that could not be
+		// read is unknown, not empty, so its last good reading stands), and an
+		// age-based hold would therefore lapse the moment it was earned.
 		if at, held := pollpolicy.RateLimitedUntil(pollStateOf(entry), now); held {
 			res.State, res.At = RefreshHeld, at
 			continue

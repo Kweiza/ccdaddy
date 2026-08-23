@@ -45,8 +45,9 @@ func onlyResult(t *testing.T, results []RefreshResult) RefreshResult {
 }
 
 // The reading has to land in the SAME cache the daemon reads, and the schedule
-// has to come from §7.4 — a hand-held fetch that wrote a reading without a
-// cadence would leave the next daemon tick free to spend the budget again.
+// has to come from the poll policy — a hand-held fetch that wrote a reading
+// without a cadence would leave the next daemon tick free to spend the budget
+// again.
 func TestRefreshFetchesAndSchedulesThroughThePollPolicy(t *testing.T) {
 	isolateEngine(t)
 	seedAccount(t, "u-1", "org-1")
@@ -82,8 +83,8 @@ func TestRefreshFetchesAndSchedulesThroughThePollPolicy(t *testing.T) {
 	}
 }
 
-// §7.4's serveTTL, and the whole reason `--refresh` is safe to put under a
-// human finger: a reading younger than 180 s is served from the cache.
+// The poll policy's serveTTL, and the whole reason `--refresh` is safe to put
+// under a human finger: a reading younger than 180 s is served from the cache.
 func TestRefreshServesAReadingInsideTheServeTTLFromTheCache(t *testing.T) {
 	isolateEngine(t)
 	seedAccount(t, "u-1", "org-1")
@@ -176,7 +177,7 @@ func TestRefreshSkipsAnAccountWithNothingToPollWith(t *testing.T) {
 	}
 }
 
-// A failed attempt reports the cause and keeps the last good reading: §7.2's
+// A failed attempt reports the cause and keeps the last good reading: an
 // unknown account is not an empty one, and one bad minute must not erase the
 // evidence the engine ranks on.
 func TestRefreshReportsAFailureAndKeepsTheLastGoodReading(t *testing.T) {
@@ -241,9 +242,9 @@ func TestRefreshDividesTheIdentityBudgetOverTheFleetAndNotTheListing(t *testing.
 	}
 }
 
-// §7.4's cadence branches on which account is live, and a refresh that never
-// told the policy which one that is would schedule the active account on the
-// idle-alternate cadence: 600 s where 300 s was specified.
+// The poll policy's cadence branches on which account is live, and a refresh
+// that never told the policy which one that is would schedule the active
+// account on the idle-alternate cadence: 600 s where 300 s belongs.
 func TestRefreshSchedulesTheActiveAccountOnTheActiveCadence(t *testing.T) {
 	isolateEngine(t)
 	seedAccount(t, "u-1", "org-1")

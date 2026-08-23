@@ -84,10 +84,10 @@ func TestExchangeCodeSendsJSONBody(t *testing.T) {
 	}
 }
 
-// Claude Code's exchange sets only Content-Type in its own code (spec §3.2, and
-// function `maa` in the 2.1.238 bundle). ccdad matches that and does not forge
-// the headers axios adds beneath it — see NewClient and the post() comment for
-// why. What this pins is only that nobody re-adds an Accept header by hand.
+// Claude Code's exchange sets only Content-Type in its own code (function `maa`
+// in the 2.1.238 bundle). ccdad matches that and does not forge the headers
+// axios adds beneath it — see NewClient and the post() comment for why. What
+// this pins is only that nobody re-adds an Accept header by hand.
 func TestExchangeCodeSetsOnlyContentType(t *testing.T) {
 	c, ch := recordingClient(t, http.StatusOK, `{"access_token":"AT"}`)
 	if _, err := c.ExchangeCode(context.Background(), "c", "v", "r", "s"); err != nil {
@@ -285,9 +285,9 @@ func TestRefreshSendsClaudeCodesNarrowedScopeSet(t *testing.T) {
 // defends against its absence: `let {access_token:u, refresh_token:d=e, ...}`
 // in the 2.1.238 bundle defaults the field to the token it just sent. Returning
 // "" instead would clobber a still-valid token in the credential file, and the
-// next refresh would post an empty one, earn a 400 invalid_grant, and get the
-// account quarantined under §7.2 — a healthy account destroyed by a response
-// Claude Code survives untouched.
+// next refresh would post an empty one, earn a 400 invalid_grant, and trip the
+// anti-flap quarantine — a healthy account destroyed by a response Claude Code
+// survives untouched.
 func TestRefreshKeepsTheSentTokenWhenTheResponseOmitsOne(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"access_token":"AT2","expires_in":28800,"scope":"user:profile"}`)
@@ -325,8 +325,8 @@ func TestRefresh400InvalidGrantIsInvalidCode(t *testing.T) {
 	if !errors.As(err, &te) {
 		t.Fatalf("Refresh() = %v, want a *TokenError", err)
 	}
-	// A dead refresh token is what §7.2 quarantines on; it must not read as a
-	// generic bad status.
+	// A dead refresh token is what the anti-flap quarantine fires on; it must
+	// not read as a generic bad status.
 	if te.Kind != TokenErrorInvalidCode {
 		t.Fatalf("Kind = %v, want TokenErrorInvalidCode", te.Kind)
 	}

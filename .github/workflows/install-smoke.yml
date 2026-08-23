@@ -1,13 +1,13 @@
 # The only test that proves the installers work.
 #
-# Everything else about §11 is checked against a release that does not exist:
-# scripts/install_sh_test.go and scripts/install_ps1_test.go serve their own
-# assets from a local HTTP server, which is the right way to pin the parsing and
-# the fail-closed branches and can say nothing at all about the real thing. This
-# workflow runs the PUBLISHED installer against a PUBLISHED release, on real
-# runners, and asserts that the binary which lands answers for the version it
-# claims to be. §11.5 calls it "the highest-value test neither reference project
-# has".
+# Everything else about installing is checked against a release that does not
+# exist: scripts/install_sh_test.go and scripts/install_ps1_test.go serve their
+# own assets from a local HTTP server, which is the right way to pin the parsing
+# and the fail-closed branches and can say nothing at all about the real thing.
+# This workflow runs the PUBLISHED installer against a PUBLISHED release, on
+# real runners, and asserts that the binary which lands answers for the version
+# it claims to be. That combination — published script, published release, a
+# real runner — exists nowhere else in this repository.
 #
 # ---------------------------------- why this is a reusable workflow and not
 #                                    `on: release` alone
@@ -31,8 +31,8 @@
 #
 # ---------------------------------- which installer is under test
 #
-# The one at raw.githubusercontent.com/<repo>/main/install.sh: §11.1's
-# documented one-liner, which is the artifact users actually execute. It is NOT
+# The one at raw.githubusercontent.com/<repo>/main/install.sh: the documented
+# one-liner, which is the artifact users actually execute. It is NOT
 # the tagged copy, so a release cut from a commit whose installer differs from
 # main is tested against a script that did not ship with it. That is the
 # deliberate half of the trade: the failure worth being loud about is "the
@@ -193,9 +193,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
-      # §11.5, and the reason the matrix is worth having: one leg failing is
-      # information about that platform, and cancelling the rest throws it away
-      # at exactly the moment it is most wanted.
+      # The matrix is for tests, and the reason it is worth having: one leg
+      # failing is information about that platform, and cancelling the rest
+      # throws it away at exactly the moment it is most wanted.
       fail-fast: false
       matrix:
         # ubuntu-24.04-arm is here rather than named as a gap because a dispatch
@@ -233,7 +233,8 @@ jobs:
       # HKCU\Environment, so `go test ./...` on a contributor's machine would
       # leave one t.TempDir() in their PATH per run, permanently, and broadcast
       # it into effect. This runner is disposable, so here it can run for real -
-      # and here is the only place §11.3's two landmines are ever executed. The
+      # and here is the only place install.ps1's two PATH landmines are ever
+      # executed. The
       # decision they guard, Get-CcdadUpdatedPath, is unit-tested off Windows;
       # the registry round-trip around it is not, and that is what these two
       # steps read. Inline rather than in a script with a test of its own,
@@ -266,7 +267,8 @@ jobs:
           [System.IO.File]::WriteAllText((Join-Path $env:RUNNER_TEMP 'user-path-kind.txt'), $kind)
           [System.IO.File]::WriteAllText((Join-Path $env:RUNNER_TEMP 'user-path-value.txt'), $value)
 
-      # §11.1's one-liner, and the pipe is load-bearing rather than decorative:
+      # The documented one-liner, and the pipe is load-bearing rather than
+      # decorative:
       # `curl | bash` puts the script itself on stdin, which is the constraint
       # install.sh is written around, and a leg that saved it to a file first
       # would hand it a stdin it never has in real life. The repository is an
@@ -508,10 +510,10 @@ jobs:
 
           Write-Host "install-smoke: the user PATH gained $installDir and nothing else, still $kindAfter, recorded as ccdad's"
 
-  # One leg, on the cheapest runner. What it adds over the three above is §11.2
-  # fix 3 - stop the daemon before replacing the binary, which clauth does not
-  # need because launchd owns its process and ccdad does because its daemon is
-  # self-managed and holds a singleton lock.
+  # One leg, on the cheapest runner. What it adds over the three above is
+  # install.sh stopping the daemon before replacing the binary, which clauth
+  # does not need because launchd owns its process and ccdad does because its
+  # daemon is self-managed and holds a singleton lock.
   #
   # install.ps1's upgrade path is NOT covered and is the first thing to add if
   # this ever grows a second upgrade leg: a running .exe cannot be overwritten

@@ -69,12 +69,12 @@ func spawnViaAChildThatExits(t *testing.T, extraEnv ...string) (childReport, int
 // The observable form of "detached": the child is in a session of its own, and
 // once its parent is gone it has been reparented away from it.
 //
-// The brief asked for "PPID is 1", and that is what this host shows, but it is
-// not portable: any ancestor holding PR_SET_CHILD_SUBREAPER — some container
-// inits, some session managers — collects the orphan instead of init, and the
-// assertion would be flaky for a reason that has nothing to do with ccdad. What
-// is always true is that the child no longer belongs to the process that
-// started it.
+// The obvious assertion is "PPID is 1", and that is what this host shows, but
+// it is not portable: any ancestor holding PR_SET_CHILD_SUBREAPER — some
+// container inits, some session managers — collects the orphan instead of
+// init, and the assertion would be flaky for a reason that has nothing to do
+// with ccdad. What is always true is that the child no longer belongs to the
+// process that started it.
 //
 // Unix only, and this is where the skip that used to sit on the harness
 // belongs. A session is a unix object, and Windows does not reparent an orphan
@@ -235,13 +235,13 @@ func TestSpawnDoesNotLeaveTheChildHoldingOurStdout(t *testing.T) {
 	}
 }
 
-// §8.3 rule 3. Under `go test` os.Args[0] is already the absolute path of the
-// test binary, so every other test here would pass with either one — the two
-// implementations are indistinguishable unless the spawner is invoked the way
-// a person actually invokes a freshly built binary. So it is run as
-// "./spawner" from a directory of its own: os.Executable still answers with an
-// absolute path, while os.Args[0] would be resolved against cmd.Dir, which
-// Spawn sets to the root of the volume.
+// Re-exec os.Executable(), not os.Args[0]. Under `go test` os.Args[0] is
+// already the absolute path of the test binary, so every other test here would
+// pass with either one — the two implementations are indistinguishable unless
+// the spawner is invoked the way a person actually invokes a freshly built
+// binary. So it is run as "./spawner" from a directory of its own:
+// os.Executable still answers with an absolute path, while os.Args[0] would be
+// resolved against cmd.Dir, which Spawn sets to the root of the volume.
 //
 // On Windows the same mistake is worse rather than equivalent: os/exec resolves
 // a relative Path against cmd.Dir through lookExtensions and syscall.StartProcess

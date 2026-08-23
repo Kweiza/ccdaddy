@@ -55,8 +55,9 @@ func TestIsolateSuppressesAutoStart(t *testing.T) {
 	}
 }
 
-// §8: "Auto-started by any ccdad command when no daemon is up". This is the
-// feature — §1.1 priority 2 is automatic switching with nothing to run.
+// An allow-listed ccdad command auto-starts a daemon when none is up. That is
+// the feature: automatic switching with nothing for the user to run is the
+// whole point.
 func TestAutoStartStartsADaemonForAnAllowListedCommand(t *testing.T) {
 	for _, verb := range []string{"list", "status", "which"} {
 		t.Run(verb, func(t *testing.T) {

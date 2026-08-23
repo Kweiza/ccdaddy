@@ -12,11 +12,11 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 )
 
-// `ccdad setup-path` is §11.2 fix 5's other half. `curl | bash` puts the
-// script itself on stdin, so install.sh cannot prompt and must never guess at a
-// startup file — which leaves "ccdad: command not found" as the last thing a
-// successful install can produce. This command is the whole answer to it, and
-// both installers point at it.
+// `ccdad setup-path` is the other half of the installer's rule against editing
+// a shell profile. `curl | bash` puts the script itself on stdin, so install.sh
+// cannot prompt and must never guess at a startup file — which leaves "ccdad:
+// command not found" as the last thing a successful install can produce. This
+// command is the whole answer to it, and both installers point at it.
 //
 // Everything that DECIDES lives in this file and everything that WRITES lives
 // in the build-tagged pair beside it. That split is not tidiness: the decision
@@ -106,10 +106,10 @@ func (r pathRules) same(a, b string) bool {
 
 // onPathList reports whether dir is one of the components of list.
 //
-// Whole components, never a substring: the brief names the trap and it is a
-// real directory pair — `/home/u/.local/bin` is a substring of
-// `/home/u/.local/bin2`, so a strings.Contains here answers "already on PATH"
-// for a machine where ccdad is not on PATH at all.
+// Whole components, never a substring. The trap is a real directory pair —
+// `/home/u/.local/bin` is a substring of `/home/u/.local/bin2`, so a
+// strings.Contains here answers "already on PATH" for a machine where ccdad
+// is not on PATH at all.
 func onPathList(list, dir string, r pathRules) bool {
 	for _, entry := range r.split(list) {
 		if r.same(entry, dir) {

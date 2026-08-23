@@ -1,15 +1,25 @@
 # The gate every commit passes before a tag can publish it.
 #
 # Three jobs, and each one exists because something in this repository is
-# otherwise compiled by nothing or run by nobody:
+# otherwise compiled by nothing, run by nobody, or readable by no one outside
+# this machine:
 #
-#   check   gofmt and `go vet` for the host.
+#   check   gofmt and `go vet` for the host, plus the check that no comment
+#           points at a document this repository does not contain — the
+#           comments cited an unpublished design document by section number
+#           for a while, and every one of those citations resolved for exactly
+#           one person.
 #   test    `go test ./... -race` on all three operating systems. Until this
 #           existed, `internal/cclink/atomic_windows.go` and every other
 #           _windows.go file in the tree had never been compiled, let alone
 #           run: `GOOS=windows go build ./...` passing on a developer's Linux
 #           box is luck, not a gate, and it does not touch _test.go at all.
-#   cgo     §10.1: "add a CI job that fails if any target needs CGO."
+#   cgo     no target may need CGO: all six cross-compile with CGO_ENABLED=0,
+#           and this job fails if that stops being true.
+#
+# `cites` rides in the `check` job rather than taking a runner of its own: it is
+# a `git grep` and wants no toolchain, so a fourth job would spend a whole
+# runner's startup on a question that takes milliseconds.
 #
 # The checks themselves live in scripts/ci.sh, one subcommand per job, so that
 # a developer can run the same thing before pushing and get the same answer.
@@ -85,7 +95,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - run: scripts/ci.sh fmt vet
+      - run: scripts/ci.sh fmt vet cites
 
   test:
     name: test (${{ matrix.os }})
@@ -97,9 +107,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
-      # §11.5, and the reason the matrix is worth having: one OS failing is
-      # information about that OS, and cancelling the other two throws it away
-      # at exactly the moment it is most wanted.
+      # The OS matrix is for tests, and the reason it is worth having: one OS
+      # failing is information about that OS, and cancelling the other two
+      # throws it away at exactly the moment it is most wanted.
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]

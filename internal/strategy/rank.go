@@ -8,26 +8,26 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
 
-// Spec §7.1, the ranking axis. This is the decision the whole product exists to
-// make, and the spec writes out the exact key shape because the obvious
+// The ranking axis. This is the decision the whole product exists to make, and
+// lessRecovery writes out the exact key shape because the obvious
 // implementation is wrong.
 
 const (
 	// DefaultThreshold is the utilization percent above which an account counts
-	// as spent. Task 47's `ccdad config` supplies the real value; this is the
-	// value used until it does.
+	// as spent. `ccdad config` supplies the real value; this is what stands in
+	// when it has not.
 	DefaultThreshold = 80.0
 
 	// DefaultRecoveryHorizon is how soon a spent account has to come back before
 	// "it comes back soon" outranks "it is less blown".
 	//
-	// The spec fixes the 300 s recovery hysteresis but never fixes this, so it
-	// is chosen here. An hour matches the window the endpoint's own request
-	// budget slides over (§7.4's recent429Window), and it is about the longest
-	// wait a user would sit through rather than switching by hand. Past it,
-	// "when does it come back" stops being the useful question and how badly an
-	// account is blown is the better discriminator — which is exactly what the
-	// far tier ranks on.
+	// The 300 s recovery hysteresis has a fixed default; nothing fixes this
+	// one, so it is chosen here. An hour matches the window the endpoint's own
+	// request budget slides over (pollpolicy.Recent429Window), and it is about
+	// the longest wait a user would sit through rather than switching by hand.
+	// Past it, "when does it come back" stops being the useful question and how
+	// badly an account is blown is the better discriminator — which is exactly
+	// what the far tier ranks on.
 	DefaultRecoveryHorizon = time.Hour
 )
 
@@ -68,8 +68,8 @@ func StrategyNames() []string {
 
 // ParseStrategy is String's inverse. Unlike identity.ParseKind it does NOT fall
 // back to a default: a name that reaches here came from a user typing it, and
-// silently running the wrong strategy for a typo is the cswap behaviour §9.3
-// exists to fix.
+// silently running the wrong strategy for a typo is the cswap behaviour the
+// exit contract exists to fix.
 func ParseStrategy(name string) (Strategy, bool) {
 	for _, s := range []Strategy{StrategyHeadroom, StrategyConsumeFirst} {
 		if s.String() == name {
@@ -79,8 +79,8 @@ func ParseStrategy(name string) (Strategy, bool) {
 	return StrategyHeadroom, false
 }
 
-// Mode is the situation the ranking actually found itself in (§7.1's three
-// rows). It is reported so `ccdad status` can say WHY an order looks the way it
+// Mode is the situation the ranking actually found itself in — one of the three
+// below. It is reported so `ccdad status` can say WHY an order looks the way it
 // does.
 type Mode uint8
 
@@ -131,14 +131,15 @@ type Options struct {
 	// Model is the model the session about to run will use, as the user typed
 	// it. Empty is the unqualified pass — every window binds — and is what the
 	// daemon and every reporting caller use. A named model narrows the ranking
-	// to the windows that bind for it; see bindingWindows for §7.1's rule.
+	// to the windows that bind for it; see bindingWindows for the rule.
 	//
 	// It is a free string rather than a parsed family because the refusal for a
 	// name ccdad cannot place belongs at the CLI, where there is a user to tell.
 	// Reaching the engine, an unplaceable name simply narrows nothing.
 	Model string
-	// MaxAutoSpend is §7.3's ceiling, and it is here for ONE reason: the credit
-	// pool is ordered by armed room, and room cannot be computed without it.
+	// MaxAutoSpend is the credit gate's ceiling, and it is here for ONE reason:
+	// the credit pool is ordered by armed room, and room cannot be computed
+	// without it.
 	//
 	// It is the same number Config.MaxAutoSpend carries, and Decide copies it
 	// from there rather than trusting a caller to set both — a pass that ranked
@@ -161,7 +162,8 @@ func (o Options) horizon() time.Duration {
 // an account with a single percent used counts as spent — which flows straight
 // into SubscriptionExhausted, the input that opens the credit gate. The zero
 // value of this struct would therefore fail OPEN on money, against everything
-// §7.3 stands for. Defaulting it makes the omission harmless instead.
+// the credit gate stands for. Defaulting it makes the omission harmless
+// instead.
 func (o Options) threshold() float64 {
 	if o.Threshold <= 0 {
 		return DefaultThreshold
@@ -181,11 +183,12 @@ type Ranked struct {
 	// WeeklyResetsAt is the soonest weekly reset, which consume-first ranks on.
 	WeeklyResetsAt time.Time
 	HasWeeklyReset bool
-	// ReturnsInsideHorizon is the tier bit of §7.1's key.
+	// ReturnsInsideHorizon is the tier bit of lessRecovery's tiered key.
 	ReturnsInsideHorizon bool
-	// CreditRoom is §7.3's armed spend, for a credit account under the
-	// configured ceiling. It is the credit pool's ordering key and is reported
-	// so `ccdad status` can explain that order rather than only obey it.
+	// CreditRoom is the armed spend the credit gate would allow, for a credit
+	// account under the configured ceiling. It is the credit pool's ordering
+	// key and is reported so `ccdad status` can explain that order rather than
+	// only obey it.
 	CreditRoom float64
 	// HasCreditRoom is whether there is any. False covers every refusal the
 	// gate would make — no ceiling configured, overage switched off, spend
@@ -203,7 +206,7 @@ type Result struct {
 	// carries no plan windows, so its headroom is permanently unknown — which
 	// would file it in the "we have no idea" tier, ahead of every account known
 	// to be spent, and make the engine's best candidate the one that costs
-	// money. §7.3 calls credit accounts a last resort, and the gate, not this
+	// money. A credit account is a last resort, and the gate, not this
 	// comparator, is what decides whether one may be used.
 	Credit []Ranked
 	// AllOverThreshold is true only when every SUBSCRIPTION candidate is KNOWN
@@ -211,8 +214,7 @@ type Result struct {
 	// it is neither over nor under, and letting one expired token decide this
 	// is how cswap's engine came to park itself permanently. Credit accounts
 	// are excluded, or a registered credit account's permanently unknown
-	// headroom would pin this to false and make §7.1's recovery situation
-	// unreachable.
+	// headroom would pin this to false and make ModeRecovery unreachable.
 	AllOverThreshold bool
 	Mode             Mode
 }
@@ -228,7 +230,8 @@ func eligible(c Candidate) bool {
 }
 
 // overThreshold is three-valued on purpose. An account that could not be read is
-// neither over nor under, and folding that into a boolean is §7.2's named bug.
+// neither over nor under, and folding that into a boolean is the bug that left
+// cswap parked on the account that reset last.
 func overThreshold(h Headroom, threshold float64) (over, known bool) {
 	if !h.Known {
 		return false, false
@@ -350,7 +353,7 @@ func lessHeadroom(a, b Ranked, threshold float64) bool {
 	return a.UUID < b.UUID
 }
 
-// lessRecovery is §7.1's tiered key:
+// lessRecovery is the tiered recovery key:
 //
 //	{0, recoveryTS, -headroom}  // returns inside the horizon
 //	{1, -headroom, recoveryTS}  // does not
@@ -404,7 +407,7 @@ func lessCredit(a, b Ranked) bool {
 	return a.UUID < b.UUID
 }
 
-// armedRoom is what §7.3's gate would arm for this account under ceiling.
+// armedRoom is what the credit gate would arm for this account under ceiling.
 //
 // It goes through CreditGate rather than through CreditRoom directly, so the
 // order agrees with the decision by construction: every refusal the gate makes
@@ -438,8 +441,8 @@ func lessConsumeFirst(a, b Ranked) bool {
 	return a.UUID < b.UUID
 }
 
-// SubscriptionExhausted answers §7.3 step 2: may the credit pool be considered
-// at all?
+// SubscriptionExhausted answers step 2 of the credit gate: may the credit pool
+// be considered at all?
 //
 // Only subscription accounts count. An account that could not be read holds the
 // pool OPEN — it is not known to be spent, and the fail-closed direction on

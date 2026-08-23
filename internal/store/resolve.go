@@ -58,8 +58,9 @@ func ValidateAlias(alias string) error {
 	return nil
 }
 
-// isAllDigits is spec §5.1 step 1's literal test. strconv.Atoi is not a
-// substitute: it accepts "+2" and rejects a 20-digit run with ErrRange.
+// isAllDigits is the literal test for step 1 of the resolution order.
+// strconv.Atoi is not a substitute: it accepts "+2" and rejects a 20-digit run
+// with ErrRange.
 func isAllDigits(s string) bool {
 	if s == "" {
 		return false

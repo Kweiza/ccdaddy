@@ -287,11 +287,11 @@ var scopedSessionAllowed = map[string]bool{
 // refuseInsideScopedSession is the gate, run from the root's
 // PersistentPreRunE.
 //
-// The exit code is 2. §9.3 reserves it for usage errors, and this is one on
-// the axis that matters: 2 is what tells a caller "you asked for something
-// that cannot be done, and running it again will not help" as against 1's
-// "something went wrong". `run`'s own refusals -- an API-key account, a
-// cmd.exe shim -- are the same shape and already 2.
+// The exit code is 2. The exit contract reserves it for usage errors, and
+// this is one on the axis that matters: 2 is what tells a caller "you asked
+// for something that cannot be done, and running it again will not help" as
+// against 1's "something went wrong". `run`'s own refusals -- an API-key
+// account, a cmd.exe shim -- are the same shape and already 2.
 func refuseInsideScopedSession(cmd *cobra.Command) error {
 	clause, refused := scopedSessionRefusals[cmd.CommandPath()]
 	if !refused {

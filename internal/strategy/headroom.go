@@ -18,8 +18,8 @@ type Headroom struct {
 	// orders it against other spent accounts.
 	Pct float64
 	// Known is false when no window reported a utilization. An account that
-	// could not be read is NOT an empty one — spec §7.2, and the exact bug that
-	// parked cswap's engine permanently.
+	// could not be read is NOT an empty one, and treating it as one is the
+	// exact bug that parked cswap's engine permanently.
 	Known bool
 	// Binding names the window Pct came from.
 	Binding usage.WindowName
@@ -81,8 +81,8 @@ func fixedWindowFamily(n usage.WindowName) (string, bool) {
 	return "", false
 }
 
-// bindingWindows is the set of windows that bind for one ranking pass: spec
-// §7.1's model rule.
+// bindingWindows is the set of windows that bind for one ranking pass: the
+// --model narrowing rule (README, "ccdad switch").
 //
 // With no model named EVERY window binds, scoped ones included. That is the
 // direction the fixed five already went — seven_day_opus binds today whatever a
@@ -142,9 +142,10 @@ func HeadroomOf(s *usage.Snapshot) Headroom {
 // The set it ranges over excludes cinder_cove: that is a one-time credit grant
 // whose resets_at is an expiry, so a spent one would otherwise read as a
 // permanently exhausted account. seven_day_oauth_apps IS included even though
-// the brief's list of four leaves it out — Claude Code is itself an OAuth app,
-// nothing in the bundle says the window means anything else, and counting a
-// window that does not bind is the cheaper of the two mistakes.
+// it is the one of the fixed five that reads as though it belonged to some
+// other client — Claude Code is itself an OAuth app, nothing in the bundle says
+// the window means anything else, and counting a window that does not bind is
+// the cheaper of the two mistakes.
 //
 // Windows tie on the first in the schema's own order, and the scoped ones come
 // after the fixed five in wire order, so the answer does not depend on map

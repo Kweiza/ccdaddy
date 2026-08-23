@@ -208,9 +208,9 @@ func noteDisplacingAuth(cmd *cobra.Command, installed string) {
 
 // switchToAPIKey is the whole switch for an api-key account.
 //
-// It mirrors the OAuth path step for step -- already-on check, §4.3 drift
-// probe, activate, record, report -- so the two cannot drift apart in what a
-// switch means.
+// It mirrors the OAuth path step for step -- already-on check, unknown-key
+// drift probe, activate, record, report -- so the two cannot drift apart in
+// what a switch means.
 func switchToAPIKey(cmd *cobra.Command, s *store.Store, target store.Account, key string, live cclink.Blob, force bool) error {
 	stderr := cmd.ErrOrStderr()
 
@@ -231,9 +231,10 @@ func switchToAPIKey(cmd *cobra.Command, s *store.Store, target store.Account, ke
 		}
 	}
 
-	// Spec §4.3: the credentials file is about to be rewritten -- this path
-	// empties it of account-scoped keys -- so the drift probe belongs here for
-	// the same reason it belongs on the OAuth path.
+	// The drift probe runs on every switch, and this is one: the credentials
+	// file is about to be rewritten -- this path empties it of account-scoped
+	// keys -- so the probe belongs here for the same reason it belongs on the
+	// OAuth path.
 	if unknown := cclink.UnknownKeys(live); len(unknown) > 0 {
 		fmt.Fprintf(stderr,
 			"note: unrecognized keys in the credentials file are being preserved unchanged: %s\n",

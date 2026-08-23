@@ -17,11 +17,12 @@ import (
 
 // The engine's anti-flap state, on disk.
 //
-// Spec §7.2's cooldown and quarantine are not derivable from anything else, and
-// they are the two mechanisms whose whole job is to remember something across
-// time. A daemon that auto-restarts from any CLI command (§8) would reset an
-// in-memory cooldown on every restart and become the exact switch storm the
-// cooldown exists to prevent, so this lives in a file rather than in a process.
+// The cooldown and the quarantine are not derivable from anything else, and
+// they are the two anti-flap mechanisms whose whole job is to remember
+// something across time. A daemon that auto-restarts from any CLI command
+// would reset an in-memory cooldown on every restart and become the exact
+// switch storm the cooldown exists to prevent, so this lives in a file rather
+// than in a process.
 //
 // It is a SEPARATE file from usage.json with its own lock. The usage cache is
 // written by the poller fleet on every reading; this is written only when the
@@ -132,8 +133,8 @@ func (s *State) RecordSwitch(uuid string, at time.Time) {
 	s.data.LastSwitchTo = uuid
 }
 
-// CooldownRemaining is how long §7.2's cooldown still has to run, and whether
-// one is in force at all.
+// CooldownRemaining is how long the anti-flap cooldown still has to run, and
+// whether one is in force at all.
 //
 // A LastSwitchAt in the future is a clock that moved backwards rather than a
 // switch that has not happened yet, and it is deliberately still honoured: the
@@ -231,7 +232,9 @@ func storeRoot() (string, error) {
 // records why in LoadError. That degradation is deliberately towards MORE
 // switching rather than less: a quarantine that cannot be read is not evidence
 // that an account is dead, and refusing to switch at all on a corrupt file
-// would park the engine exactly the way §7.2 says never to.
+// would park the engine exactly the way anti-flap must never park it: those
+// margins bound the rate of switching, not whether the engine can switch at
+// all.
 func LoadState() (*State, error) {
 	root, err := storeRoot()
 	if err != nil {
@@ -316,9 +319,10 @@ func WithState(timeout time.Duration, fn func(*State) error) (err error) {
 // RefreshOutcome is what a token-refresh failure means for the engine.
 //
 // Every TokenErrorKind gets its own value, and only one of them quarantines.
-// Collapsing them is the named defect in §7.2's quarantine row: firing on a
-// transport failure quarantines every account the first time the laptop sleeps,
-// and firing on a bad status does it the first time Anthropic returns a 503.
+// The quarantine has exactly one trigger, a refresh token the server
+// rejected, and collapsing these would fire it on anything: a transport
+// failure quarantines every account the first time the laptop sleeps, and a
+// bad status does it the first time Anthropic returns a 503.
 type RefreshOutcome uint8
 
 const (

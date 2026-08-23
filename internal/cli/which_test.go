@@ -101,7 +101,7 @@ func TestWhichDoesNotFallBackWhenTheEnvTokenIsUnmanaged(t *testing.T) {
 	}
 }
 
-// §4.3's drift probe has a machine-readable half, and it is the half that
+// The drift probe has a machine-readable half, and it is the half that
 // matters: an unrecognized key in the credentials file is the one signal that
 // Claude Code has grown something ccdad does not model. The key could be
 // deleted from this payload with the whole suite green, so nothing scripted was

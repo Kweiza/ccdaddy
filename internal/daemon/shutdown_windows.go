@@ -17,7 +17,7 @@ import (
 // mechanism there at all — and the only fallback anyone reaches for is killing
 // a pid read out of a file, which is how an unrelated process gets terminated.
 //
-// The mechanism is §8.4's named event, and the pid is not part of it: the event
+// The mechanism is a named event, and the pid is not part of it: the event
 // names the STORE, so a stopper that opens it is talking to whatever daemon
 // owns that store rather than to whatever process currently holds a number. The
 // pid is used only by the terminate fallback, behind the cross-check.

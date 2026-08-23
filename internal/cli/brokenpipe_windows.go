@@ -20,10 +20,10 @@ import (
 //
 // So the single `errors.Is(err, syscall.EPIPE)` this replaced was simply false
 // on Windows, and `ccdad list --json | head -1` printed "ccdad: writing
-// output: The pipe is being closed." and exited non-zero -- against §9.3 and
-// against the plan's global "EPIPE on stdout is not an error; it ends the run
-// at exit 0". Nothing noticed, because until the three-OS matrix existed
-// nothing in this repository had ever run on Windows.
+// output: The pipe is being closed." and exited non-zero -- against the exit
+// contract, under which a reader that has gone away is not an error and the
+// run ends at exit 0. Nothing noticed, because until the three-OS matrix
+// existed nothing in this repository had ever run on Windows.
 func isBrokenPipe(err error) bool {
 	return errors.Is(err, windows.ERROR_BROKEN_PIPE) || errors.Is(err, windows.ERROR_NO_DATA)
 }

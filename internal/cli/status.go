@@ -25,8 +25,9 @@ var timeNow = time.Now
 var observeDaemon = daemon.Observe
 
 // unreadable is what a value that could not be read renders as. Never "0%" —
-// §7.2, and cswap's version of that bug parked its engine on the account that
-// reset last, because one expired token made every account look empty.
+// unknown is never read as zero, and cswap's version of that bug parked its
+// engine on the account that reset last, because one expired token made every
+// account look empty.
 const unreadable = "?"
 
 func newStatusCmd() *cobra.Command {
@@ -52,7 +53,7 @@ func newStatusCmd() *cobra.Command {
 }
 
 // runStatus is the dashboard, factored out of the command so bare `ccdad` can
-// dispatch to exactly this and not to a near-copy of it (§9.2).
+// dispatch to exactly this and not to a near-copy of it.
 //
 // It exits 0 for every answer it can render, including "no daemon". status is a
 // dashboard, not a probe: exit 5 is `daemon status`'s, and a `ccdad status` that
@@ -77,7 +78,7 @@ func runStatus(cmd *cobra.Command, asJSON bool) error {
 	report, probeErr := observeDaemon()
 	if probeErr != nil {
 		// A human notice, so a --json caller still receives exactly one document
-		// on stdout (§9.4).
+		// on stdout.
 		fmt.Fprintf(cmd.ErrOrStderr(), "Cannot tell whether a daemon is running: %v\n", probeErr)
 	}
 	if report.StatusErr != nil {
@@ -85,8 +86,9 @@ func runStatus(cmd *cobra.Command, asJSON bool) error {
 	}
 
 	// The cache is the authority for quota, for both this command and `list`.
-	// §8.4's "can never disagree" is only true because neither of them has a
-	// second source for a number — see daemon.Status's authority note.
+	// That `ccdad list` and `ccdad status --json` can never disagree is only
+	// true because neither of them has a second source for a number — see
+	// daemon.Status's authority note.
 	cache, err := usage.LoadCache()
 	if err != nil {
 		return err
@@ -113,10 +115,10 @@ func runStatus(cmd *cobra.Command, asJSON bool) error {
 
 // quotaRows pairs every account with its cached reading.
 //
-// `list` builds its rows through this too, and that is what §8.4's "`ccdad
-// list` and `ccdad status --json` can never disagree" actually rests on: one
-// cache, read one way, into one shape. Two commands each deriving headroom for
-// themselves would agree until the day one of them was changed.
+// `list` builds its rows through this too, and that is what "`ccdad list` and
+// `ccdad status --json` can never disagree" actually rests on: one cache, read
+// one way, into one shape. Two commands each deriving headroom for themselves
+// would agree until the day one of them was changed.
 //
 // Engine state is deliberately NOT filled in here. It comes from status.json,
 // which is the daemon's own document and no part of what `list` reports.
@@ -245,7 +247,7 @@ func renderStatus(cmd *cobra.Command, report daemon.Report, rows []statusRow, no
 // on — it is what the engine itself ranks by. The two columns are labelled, so
 // a reader is never asked to guess which way round a bare percentage runs.
 //
-// Never "0%" for an account that could not be read (§7.2).
+// Never "0%" for an account that could not be read.
 func (r statusRow) leftLabel() string {
 	if !r.Headroom.Known {
 		return unreadable
@@ -267,14 +269,14 @@ func (r statusRow) resetsLabel(now time.Time) string {
 	return humanDuration(reset.Sub(now))
 }
 
-// paceLabel is §7.5's human half: how the binding window's consumption compares
-// with the time elapsed in it.
+// paceLabel is the pace reading's human half: how the binding window's
+// consumption compares with the time elapsed in it.
 //
 // It reports the BINDING window's pace and no other, so the column describes the
 // same window the two columns beside it do. Every window's pace is in --json.
 //
-// The projection is deliberately absent. §7.5 keeps projectedExhaustionAt and
-// willLastToReset out of every human view, because a straight line through
+// The projection is deliberately absent: projectedExhaustionAt and
+// willLastToReset stay out of every human view, because a straight line through
 // bursty real usage is too rough to present as fact — and the way that sticks is
 // that nothing here can reach them: they are behind usage.Pace.Projection.
 func (r statusRow) paceLabel() string {
@@ -286,7 +288,7 @@ func (r statusRow) paceLabel() string {
 	if !ok {
 		// Either not a weekly window, or less than a day since its reset — in
 		// which case elapsed time is tiny and almost any usage divides out as
-		// "far ahead". Saying nothing is the specified answer.
+		// "far ahead". Saying nothing is the deliberate answer.
 		return "-"
 	}
 	if p.AheadOfPace {
@@ -372,9 +374,9 @@ func usageJSON(r statusRow, now time.Time) map[string]any {
 			"actualPct":   p.ActualPct,
 			"aheadOfPace": p.AheadOfPace,
 		}
-		// §7.5's --json-only half. This is the one place in ccdad allowed to
-		// reach through Pace.Projection, and the human renderer above must never
-		// gain a second one.
+		// The projection is --json-only. This is the one place in ccdad allowed
+		// to reach through Pace.Projection, and the human renderer above must
+		// never gain a second one.
 		if proj, ok := p.Projection(); ok {
 			entry["projectedExhaustionAt"] = proj.ExhaustionAt
 			entry["willLastToReset"] = proj.WillLastToReset

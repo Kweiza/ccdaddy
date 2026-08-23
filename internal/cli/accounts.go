@@ -16,8 +16,8 @@ import (
 // which `list --all` has always filtered on with nothing able to set it;
 // SetAlias, which was fully implemented, validated and collision-checked with
 // exactly one caller (`add --alias`), so an account added without one could
-// never get one and a typo could never be fixed; and idx, which §5.1 calls
-// "stored, not derived" but which nothing except arrival order ever assigned.
+// never get one and a typo could never be fixed; and idx, which is stored
+// rather than derived but which nothing except arrival order ever assigned.
 //
 // All four go through the store's mutators, so each runs its read-modify-write
 // under the cross-process lock.
@@ -70,7 +70,7 @@ func setDisabled(cmd *cobra.Command, ref string, disabled bool) error {
 		verb = "disabled"
 	}
 	if !changed {
-		// §9.3: 3 is "the world is already as you asked". Reporting 0 here
+		// Exit 3 is "the world is already as you asked". Reporting 0 here
 		// would tell a cron job it changed something it did not.
 		fmt.Fprintf(cmd.ErrOrStderr(), "%s is already %s.\n", target.Label(), verb)
 		return WithCode(errSilent, ExitNothingToDo)
@@ -91,9 +91,9 @@ func setDisabled(cmd *cobra.Command, ref string, disabled bool) error {
 		}
 	}
 
-	// Disabling the last enabled account is still a completed action, not
-	// §9.3's 4: nothing was blocked, and the state is exactly what was asked
-	// for. The engine reports having no viable target when it next looks.
+	// Disabling the last enabled account is still a completed action, not the
+	// blocked exit 4: nothing was blocked, and the state is exactly what was
+	// asked for. The engine reports having no viable target when it next looks.
 	if disabled && countEnabled(s.Accounts()) == 0 {
 		fmt.Fprintln(cmd.ErrOrStderr(),
 			"Note: every account is now disabled, so automatic switching has nothing to rotate to.")
@@ -170,10 +170,10 @@ func newAliasCmd() *cobra.Command {
 			}
 			if err := s.SetAlias(target.UUID, normalized); err != nil {
 				// A rejected alias and a taken one are both the caller naming
-				// something unusable, which is exit 2 under §9.3. SetAlias's own
-				// collision message names the other account by label and uuid
-				// and never by idx, which is what makes it still true after a
-				// removal recompacts the ordinals.
+				// something unusable, which is exit 2, the usage error.
+				// SetAlias's own collision message names the other account by
+				// label and uuid and never by idx, which is what makes it
+				// still true after a removal recompacts the ordinals.
 				if errors.Is(err, store.ErrBadAlias) || errors.Is(err, store.ErrAliasTaken) {
 					return UsageError("%s", err.Error())
 				}
@@ -185,7 +185,7 @@ func newAliasCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&clear, "clear", false, "remove the account's alias")
 
-	// §5.1 forbids a leading '-' so an alias can never be read as a flag — but
+	// An alias may not start with '-', so it can never be read as a flag — but
 	// pflag parses before Args ever runs, so `ccdad alias work -foo` fails with
 	// "unknown shorthand flag: 'f' in -foo", which names neither the rule nor
 	// the argument the user typed. Only the shorthand form is rewritten: a

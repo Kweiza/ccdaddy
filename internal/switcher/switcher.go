@@ -147,9 +147,9 @@ type Result struct {
 	// LiveKnown whether it attributed at all.
 	Live      store.Account
 	LiveKnown bool
-	// UnknownKeys are §4.3's unrecognized top-level keys, read from the file
-	// that was actually merged. Merge preserves them; the operator still needs
-	// to know a new key exists.
+	// UnknownKeys are the unrecognized top-level keys the unknown-key probe
+	// found, read from the file that was actually merged. Merge preserves them;
+	// the operator still needs to know a new key exists.
 	UnknownKeys []string
 	// EnvTokenWins reports that CLAUDE_CODE_OAUTH_TOKEN is set. Attended, the
 	// swap still happened and this is the reason it appears not to have.
@@ -296,7 +296,7 @@ func Execute(s *store.Store, req Request) (Result, error) {
 	return res, nil
 }
 
-// RecordSwitch stamps §7.2's cooldown after a swap has succeeded.
+// RecordSwitch stamps the anti-flap cooldown after a swap has succeeded.
 //
 // An EXPLICIT switch stamps it too, and that is the point: the user has just
 // chosen an account, and a daemon evaluating ten seconds later must not

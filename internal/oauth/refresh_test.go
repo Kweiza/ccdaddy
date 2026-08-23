@@ -424,8 +424,8 @@ func TestInvalidScopeIsClassifiedOnlyOn400(t *testing.T) {
 }
 
 // The easiest call to type must not reach the network. Posting refresh_token:""
-// earns a 400 invalid_grant, which is the signal §7.2 quarantines on — so the
-// laziest mistake would read as a dead account.
+// earns a 400 invalid_grant, the one signal the anti-flap quarantine fires on —
+// so the laziest mistake would read as a dead account.
 func TestRefreshRejectsAnEmptyTokenWithoutARequest(t *testing.T) {
 	c, bodies := countingServer(t, ok200(`{"access_token":"SHOULD-NOT-HAPPEN"}`))
 	_, err := c.Refresh(context.Background(), RefreshParams{})

@@ -12,13 +12,13 @@ import (
 )
 
 // exportSchemaVersion is the payload's contract version. The contract is
-// additive per §9.4: a reader must ignore fields and accounts it does not
-// recognize rather than refusing the document.
+// additive: a reader must ignore fields and accounts it does not recognize
+// rather than refusing the document.
 const exportSchemaVersion = 1
 
 // exportPayload is what `ccdad export` writes and `ccdad import` reads.
 //
-// §5.1: uuid, email and alias go in and idx does NOT. idx recompacts on every
+// uuid, email and alias go in and idx does NOT. idx recompacts on every
 // removal, so an export carrying it would reproduce a stale ordinal on the
 // machine it was imported into — and the two machines would then disagree about
 // what `ccdad switch 2` means. Order is carried implicitly by the array, which
@@ -37,8 +37,8 @@ type exportPayload struct {
 	// them. It is not per-account: these belong to the machine.
 	Machine *exportMachine `json:"machine,omitempty"`
 
-	// UnknownKeys is §4.3's probe, surfaced in the export itself and not only
-	// on stderr. Six machine keys drifted into the credentials file after
+	// UnknownKeys is the drift probe, surfaced in the export itself and not
+	// only on stderr. Six machine keys drifted into the credentials file after
 	// clauth's carry list was written, so an export taken by a build that did
 	// not recognize a key should say so in the artifact that outlives it.
 	UnknownKeys []string `json:"unknownKeys,omitempty"`
@@ -64,11 +64,10 @@ type exportAccount struct {
 // exportMachine is the machine-scoped half, and the only thing here that is not
 // this ccdad store's own data.
 //
-// Both halves travel together or neither does: §4.1 records that
-// mcpOAuthClientConfig is the client-secret half of mcpOAuth and that Claude
-// Code reads them under the same composite key, so carrying only the token half
-// produces MCP logins that cannot refresh — a backup that looks complete and is
-// not.
+// Both halves travel together or neither does: mcpOAuthClientConfig is the
+// client-secret half of mcpOAuth and Claude Code reads them under the same
+// composite key, so carrying only the token half produces MCP logins that
+// cannot refresh — a backup that looks complete and is not.
 type exportMachine struct {
 	MCPOAuth             json.RawMessage `json:"mcpOAuth,omitempty"`
 	MCPOAuthClientConfig json.RawMessage `json:"mcpOAuthClientConfig,omitempty"`
@@ -97,11 +96,13 @@ func newExportCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			// All three of §9.1's conditions on --include-mcp are enforced
-			// together, and the flag alone is a usage error rather than a
-			// silent upgrade to --full: the difference between the two payloads
-			// is every MCP client secret on the machine, which is not something
-			// to infer from a flag the user did not pass.
+			// --include-mcp's three conditions — it needs --full, it warns
+			// loudly, and it is the only path by which mcpOAuth leaves the
+			// machine — are enforced together, and the flag alone is a usage
+			// error rather than a silent upgrade to --full: the difference
+			// between the two payloads is every MCP client secret on the
+			// machine, which is not something to infer from a flag the user
+			// did not pass.
 			if includeMCP && !full {
 				return UsageError("--include-mcp carries this machine's MCP logins, so it needs --full as well")
 			}

@@ -149,10 +149,11 @@ func TestRankPrefersTheMostHeadroomWhenSomeoneHasRoom(t *testing.T) {
 	}
 }
 
-// The cswap bug §7.2 names by name. An account whose usage cannot be read is
-// neither over threshold nor under it, so a single expired token must not decide
-// the mode — and the unreadable account is still worth trying before one that is
-// known to be spent, because a maybe beats a no.
+// The cswap bug the unknown-is-never-zero rule exists to prevent. An account
+// whose usage cannot be read is neither over threshold nor under it, so a
+// single expired token must not decide the mode — and the unreadable account
+// is still worth trying before one that is known to be spent, because a maybe
+// beats a no.
 func TestRankPutsAnUnreadableAccountBetweenRoomAndExhaustion(t *testing.T) {
 	// The uuids run the opposite way from the expected order on purpose: if the
 	// tier were dropped, the tie-break alone would reproduce a passing order.
@@ -403,10 +404,10 @@ func TestRankOnAnEmptyPool(t *testing.T) {
 
 // ---- the credit gate's input ------------------------------------------------
 
-// §7.3 step 2 asks whether the SUBSCRIPTION pool is exhausted, and only credit
-// accounts are ranked separately. Money is the fail-closed direction: an
-// unreadable subscription account means "not exhausted", so ccdad does not start
-// spending because one poll failed.
+// Step 2 of the credit gate asks whether the SUBSCRIPTION pool is exhausted,
+// and only credit accounts are ranked separately. Money is the fail-closed
+// direction: an unreadable subscription account means "not exhausted", so
+// ccdad does not start spending because one poll failed.
 func TestSubscriptionExhausted(t *testing.T) {
 	credit := func(uuid string, s *usage.Snapshot) Candidate {
 		return Candidate{UUID: uuid, Kind: identity.KindCredit, Usage: s}
@@ -456,7 +457,8 @@ func credit(uuid string, s *usage.Snapshot) Candidate {
 // A credit account is metered in money and carries no plan windows, so its
 // headroom is permanently unknown. Ranking it on that axis files it in the "we
 // have no idea" tier -- ahead of every account known to be spent -- and makes
-// the engine's best candidate the one that costs money, which inverts §7.3.
+// the engine's best candidate the one that costs money, which inverts the
+// credit gate: subscription quota first, credit as a last resort.
 func TestRankKeepsCreditAccountsOffTheHeadroomAxis(t *testing.T) {
 	cands := []Candidate{
 		sub("soon", snap(win(99, 8*time.Minute), win(99, 48*time.Hour))),
@@ -469,8 +471,9 @@ func TestRankKeepsCreditAccountsOffTheHeadroomAxis(t *testing.T) {
 	if len(r.Credit) != 1 || r.Credit[0].UUID != "money" {
 		t.Errorf("Credit = %v, want the one credit account", r.Credit)
 	}
-	// And with the credit account out of the fold, §7.1's second situation is
-	// reachable again: both subscription accounts really are over threshold.
+	// And with the credit account out of the fold, the all-over-threshold
+	// recovery mode is reachable again: both subscription accounts really are
+	// over threshold.
 	if !r.AllOverThreshold {
 		t.Error("AllOverThreshold = false; a credit account's unknown headroom must not pin it")
 	}
@@ -502,7 +505,7 @@ func TestRankStillExcludesADisabledCreditAccount(t *testing.T) {
 }
 
 // The two knobs the engine is configurable on have to be read from Options, or
-// task 47's `ccdad config` will have no effect on any decision.
+// `ccdad config` will have no effect on any decision.
 func TestRankReadsTheConfiguredThreshold(t *testing.T) {
 	// 70% used: over a threshold of 60, under the default of 80.
 	cands := []Candidate{sub("a", snap(win(70, time.Hour), win(70, 48*time.Hour)))}

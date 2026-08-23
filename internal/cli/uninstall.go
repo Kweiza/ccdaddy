@@ -20,10 +20,10 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
 
-// §11.2 fix 6 points BOTH installers at this command instead of `rm <binary>`,
-// precisely because there is a daemon holding a lock, a token directory and
-// possibly an MCP registration to unwire — so shipping the installers without
-// it publishes a dead pointer.
+// BOTH installers point at this command instead of `rm <binary>`, precisely
+// because there is a daemon holding a lock, a token directory and possibly an
+// MCP registration to unwire — so shipping the installers without it publishes
+// a dead pointer.
 //
 // It is the most destructive command in the tree, and the shape it takes from
 // that is remove.go's: enumerate, refuse without an explicit yes, and treat a
@@ -256,9 +256,10 @@ func runUninstall(cmd *cobra.Command, assumeYes bool) error {
 	// It runs after the binary is gone because that is the order the user reads
 	// it in, and it WARNS rather than returning: someone whose store has
 	// already been deleted must not be left with a half-uninstalled machine
-	// because one startup file could not be rewritten. §11.2 fix 5 is not in
-	// tension with this — its reason is that `curl | bash` cannot prompt, and
-	// this command has both a prompt and a --yes.
+	// because one startup file could not be rewritten. The installer's rule
+	// against editing a shell profile is not in tension with this — its reason
+	// is that `curl | bash` has the pipe on stdin and cannot prompt, and this
+	// command has both a prompt and a --yes.
 	removed, err := unregisterPath(pathDir)
 	// What WAS removed is printed whatever else happened. Reporting only the
 	// failure leaves a user believing nothing changed while several of their

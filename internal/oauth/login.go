@@ -18,17 +18,17 @@ import (
 // ccdad adds one so an abandoned `ccdad add` cannot hold a terminal forever.
 const DefaultLoginTimeout = 300 * time.Second
 
-// maxBadPastes bounds the re-prompt. A malformed paste is not fatal ([§6.4]) —
-// the loopback race may still be about to win — but a pipe feeding garbage must
-// not keep the attempt alive indefinitely.
+// maxBadPastes bounds the re-prompt. A malformed paste is not fatal — the
+// loopback race may still be about to win — but a pipe feeding garbage must not
+// keep the attempt alive indefinitely.
 const maxBadPastes = 5
 
 var (
 	// ErrLoginTimeout means neither path delivered a code in time.
 	ErrLoginTimeout = errors.New("timed out waiting for the login to complete")
 	// ErrLoginInterrupted means the caller cancelled. It is deliberately NOT
-	// used for a context deadline: [§9.3] reserves exit 130 for SIGINT, and a
-	// supervisor keys on it to mean a human pressed Ctrl-C.
+	// used for a context deadline: the exit contract reserves exit 130 for
+	// SIGINT, and a supervisor keys on it to mean a human pressed Ctrl-C.
 	ErrLoginInterrupted = errors.New("login canceled")
 )
 
@@ -62,8 +62,8 @@ func pasteFrom(r io.Reader) PasteSource {
 				}
 				select {
 				case ch <- line:
-					// Keep reading. A malformed paste is a re-prompt ([§6.4]),
-					// and retiring after one line would leave nothing to
+					// Keep reading. A malformed paste is a re-prompt, and
+					// retiring after one line would leave nothing to
 					// re-prompt into.
 				case <-done:
 					return
@@ -121,8 +121,8 @@ type LoginOptions struct {
 	// Callers print it so the flow is visible and the URL can be used by hand.
 	Announce func(manualURL string)
 	// Rejected receives a message for a paste that could not be parsed. The
-	// login keeps waiting: [§6.4] makes a malformed paste a re-prompt rather
-	// than an abort, because the loopback race may still be about to win.
+	// login keeps waiting: a malformed paste is a re-prompt rather than an
+	// abort, because the loopback race may still be about to win.
 	Rejected func(msg string)
 	// Client is the token endpoint client. Nil means NewClient().
 	Client *Client
@@ -211,8 +211,8 @@ func awaitWinner(
 				continue
 			}
 			if pastedState != state {
-				// [§6.4] makes this arm fatal: a code carrying someone else's
-				// state is a possible CSRF, not a typo.
+				// This arm is fatal rather than a re-prompt: a code carrying
+				// someone else's state is a possible CSRF, not a typo.
 				return winner{err: errors.New("that code did not match the login ccdad started — it may belong to a different login window")}, turns, nil
 			}
 			return winner{code: code, viaLoopback: false}, turns, nil
@@ -320,8 +320,8 @@ func Login(ctx context.Context, opts LoginOptions) (*LoginResult, error) {
 	if got.viaLoopback {
 		redirectURI = LoopbackRedirectURI(listener.Port())
 	} else if listener != nil {
-		// [§6.6] Claude Code closes the listener immediately at paste time,
-		// not after the exchange. Nothing can legitimately arrive on it once a
+		// Claude Code closes the listener immediately at paste time, not
+		// after the exchange. Nothing can legitimately arrive on it once a
 		// code is in hand, and the exchange is a full network round trip. Close
 		// is idempotent, so the deferred one above stays harmless.
 		_ = listener.Close()

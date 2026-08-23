@@ -21,8 +21,8 @@ import (
 // A Document is the file as WRITTEN — a generic table, not the typed struct the
 // loader produces — because a set has to round-trip what it does not
 // understand. Decoding into fileShape and re-marshalling would silently delete
-// a key a newer ccdad wrote, which is the failure §4.2 rule 3 names for the
-// credentials file and is the same failure here.
+// a key a newer ccdad wrote, which is the failure the credentials swap's
+// round-trip rule exists against and is the same failure here.
 
 const (
 	// configLockDir is a DIRECTORY, because that is what cclock's mutex is.
@@ -55,9 +55,9 @@ const (
 var LockTimeout = 5 * time.Second
 
 // ErrUnknownKey is a key this release does not have. It is a sentinel because
-// the CLI maps it to §9.3's exit 2 — a typo is a usage error — while a bad
-// VALUE for a real key is a different sentence with the same exit code, and
-// `ccdad doctor` may one day want to tell them apart.
+// the CLI maps it to exit 2 — a typo is a usage error — while a bad VALUE for
+// a real key is a different sentence with the same exit code, and `ccdad
+// doctor` may one day want to tell them apart.
 var ErrUnknownKey = errors.New("unknown config key")
 
 // Document is config.toml as it is written.
@@ -129,8 +129,8 @@ func (d *Document) UnknownKeys() []string {
 }
 
 // Value is the key's value AS THE FILE HOLDS IT, and whether the file holds one
-// at all. `ccdad config get` answers exit 5 on the false, which is §9.3's
-// negative answer to a probe rather than a failure.
+// at all. `ccdad config get` answers exit 5 on the false, which the exit
+// contract reserves for a negative answer to a probe rather than a failure.
 func (d *Document) Value(key string) (string, bool, error) {
 	if !isKnownKey(key) {
 		return "", false, unknownKey(key)
@@ -166,8 +166,8 @@ func (d *Document) Set(key, value string) error {
 }
 
 // Unset removes the key and reports whether it was there. It is not an error
-// for it to be absent — that is §9.3's exit 3, the world already being as the
-// caller asked.
+// for it to be absent — that is exit 3, the world already being as the caller
+// asked.
 func (d *Document) Unset(key string) (bool, error) {
 	if !isKnownKey(key) {
 		return false, unknownKey(key)
@@ -347,7 +347,7 @@ func WithDocument(fn func(*Document) error) (err error) {
 		return err
 	}
 	// The same atomic rename every other ccdad document is written with: the
-	// daemon re-reads this file on every tick (§8.4), and a reader must never
-	// catch a half-written config.
+	// daemon's tick loop re-reads this file every second, and a reader must
+	// never catch a half-written config.
 	return cclink.WriteFileAtomic(filepath.Join(root, FileName), encoded, 0o600)
 }

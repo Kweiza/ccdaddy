@@ -72,9 +72,10 @@ var ErrKeychainUnsupported = errors.New("the macOS Keychain does not exist on th
 // KeychainError is a `security` invocation that did not answer: not "the item
 // is not there", which is an answer, but "ccdad could not find out".
 //
-// The distinction is §8.2's, one layer down. A keychain that is locked and a
-// keychain with nothing in it produce the same silence, and treating the first
-// as the second reports a machine as clean while a stale credential sits on it.
+// A probe that could not answer is not an absence, the same rule daemon status
+// follows one layer up. A keychain that is locked and a keychain with nothing
+// in it produce the same silence, and treating the first as the second reports
+// a machine as clean while a stale credential sits on it.
 type KeychainError struct {
 	// Op is the security subcommand that failed.
 	Op string
@@ -217,7 +218,7 @@ func (it KeychainItem) Read(ctx context.Context) (string, bool, error) {
 // caller asked for a state, not for an event.
 //
 // NOTHING IN ccdad CALLS THIS, and that is now a ruling rather than a gap.
-// §3.3's use (b) proposed deleting the item during a switch. The fact it waited
+// Deleting the item during a switch was the proposed use. The fact it waited
 // on is settled -- <=2.1.112 reads the keychain and FALLS BACK to the
 // credentials file, so the delete redirects rather than logs out -- and the
 // measurement then supplied three reasons not to ship it anyway:
@@ -226,8 +227,8 @@ func (it KeychainItem) Read(ctx context.Context) (string, bool, error) {
 //     today the item is inert. The spawn would buy nothing while sitting inside
 //     the credential-lock window of every macOS switch.
 //   - Where it is NOT inert, the item is that Claude Code's live login, so
-//     deleting it unasked is §12's "destroying a credential on every switch"
-//     with a different subject. Making it safe needs the item READ and
+//     deleting it unasked is "destroying a credential on every switch" -- the
+//     highest-rated risk this tool carries -- with a different subject. Making it safe needs the item READ and
 //     attributed against the store first -- a second spawn, and one that
 //     decrypts.
 //   - AND IT WOULD NOT EVEN WORK THERE. From 1.0.36 the combinator's update()
@@ -296,8 +297,9 @@ func ProbeCredentialKeychainItem(ctx context.Context) (KeychainLookup, error) {
 // using on this machine. The second return is false when there is no such item,
 // which is every machine running any Claude Code this project has seen.
 //
-// NOTHING IN ccdad CALLS THIS EITHER, and the routing question §3.3's use (a)
-// raised is answered: Load() must NOT fall back to the Keychain on macOS. Since
+// NOTHING IN ccdad CALLS THIS EITHER, and the routing question the other
+// proposed use raised is answered: Load() must NOT fall back to the Keychain on
+// macOS. Since
 // 2.1.113 the installed Claude Code does not read the item, so a ccdad that did
 // would report a login that Claude Code will never use -- a confident wrong
 // answer on the overwhelming majority of machines, reached by changing the read

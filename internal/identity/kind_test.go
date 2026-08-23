@@ -25,11 +25,11 @@ func TestClassify(t *testing.T) {
 			want:    KindSubscription,
 		},
 		{
-			// Spec §5: an account that is both is a subscription. The login and
-			// add-token paths classify with an empty UsageShape because they
-			// never fetch usage, so this is the shape every `ccdad add` sees:
-			// the organization's overage switch is the ONLY credit-looking
-			// signal present, and it must not decide the verdict.
+			// An account that is both is a subscription. The login and add-token
+			// paths classify with an empty UsageShape because they never fetch
+			// usage, so this is the shape every `ccdad add` sees: the
+			// organization's overage switch is the ONLY credit-looking signal
+			// present, and it must not decide the verdict.
 			name:    "a max org with overage enabled and no usage read is still a subscription",
 			profile: &Profile{OrganizationType: "claude_max", BillingType: "subscription", HasExtraUsage: true},
 			usage:   UsageShape{},

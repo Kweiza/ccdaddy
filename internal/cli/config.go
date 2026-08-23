@@ -14,7 +14,7 @@ import (
 
 // `ccdad config` is the user-facing half of ~/.ccdad/config.toml.
 //
-// The exit taxonomy is the contract here, and two of §9.3's codes do real work:
+// The exit taxonomy is the contract here, and two of its codes do real work:
 //
 //	get <KEY>     0 the file sets it · 5 it does not · 2 there is no such key
 //	set/unset     0 done · 3 unset had nothing to remove · 2 bad key or value
@@ -37,7 +37,7 @@ func newConfigCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "config",
 		Short: "Read and write ~/.ccdad/config.toml",
-		Long: "The auto-switch engine's knobs (§7): thresholds, anti-flap margins, the\n" +
+		Long: "The auto-switch engine's knobs: thresholds, anti-flap margins, the\n" +
 			"strategy, and the credit ceiling.\n\n" +
 			"Keys this ccdad does not know are left alone rather than deleted, so a file\n" +
 			"written by a newer release survives an older one. Setting one is still a\n" +

@@ -118,10 +118,10 @@ func (c *Client) FetchProfile(ctx context.Context, accessToken string) (*Profile
 	// These are exactly the three headers Claude Code's own profile call sets
 	// (function KLt in the 2.1.238 bundle: `ui.get(t, {headers:{Authorization,
 	// "Content-Type":"application/json", "Cache-Control":"no-cache"},
-	// timeout:1e4})`). Content-Type is meaningless on a bodyless GET, but spec
-	// §3.2's rule is to match the headers Claude Code sets in its own code and
-	// not to forge the ones axios adds beneath it — so it stays, and Accept
-	// (which only axios contributes) is not sent.
+	// timeout:1e4})`). Content-Type is meaningless on a bodyless GET, but the
+	// header-fidelity rule is to match the headers Claude Code sets in its own
+	// code and not to forge the ones axios adds beneath it — so it stays, and
+	// Accept (which only axios contributes) is not sent.
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Cache-Control", "no-cache")

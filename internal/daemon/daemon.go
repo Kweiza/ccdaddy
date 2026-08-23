@@ -13,11 +13,11 @@ import (
 
 // Options configures the daemon process.
 //
-// Tick and Snapshot are injected because the engine they belong to — the poller
-// fleet, the scheduler, the switch executor — does not exist yet, and composing
-// this process afterwards, alongside all three, is how shutdown correctness gets
-// cut. Both have working zero values, so the process is complete and testable
-// before any of that lands.
+// Tick and Snapshot are injected rather than built here, because composing this
+// process alongside the engine they belong to — the poller fleet, the
+// scheduler, the switch executor — is how shutdown correctness gets cut. Both
+// have working zero values, so the process is complete and testable without any
+// of them. EngineOptions below is what wires in the real engine.
 type Options struct {
 	// Tick is the body of one iteration. It gets a context that is cancelled on
 	// shutdown as a courtesy; the loop waits for it to return regardless.
@@ -29,7 +29,7 @@ type Options struct {
 	// Snapshot is the engine state to publish. The process fills in what it
 	// owns — pid, startedAt, the stopped flag — and stamps the time.
 	Snapshot func() Status
-	// Interval is the tick cadence. Zero means §8.4's one second.
+	// Interval is the tick cadence. Zero means the tick loop's one second.
 	Interval time.Duration
 	// Now is the clock. Zero means time.Now.
 	Now func() time.Time
@@ -45,8 +45,8 @@ type Options struct {
 	Drain func()
 }
 
-// EngineOptions is the Options the real daemon runs with: §8.4's tick body,
-// wired to the engine.
+// EngineOptions is the Options the real daemon runs with: the tick loop's
+// body, wired to the engine.
 //
 // It lives here rather than in the CLI so the process and the thing it runs are
 // composed in one place. internal/cli holds the seam that lets a test drive the
@@ -209,7 +209,7 @@ func Run(ctx context.Context, o Options) (err error) {
 	defer stop()
 	watchSignals(runCtx, stop, log)
 	// The same stop, reached the only other way it can be: Windows delivers no
-	// signal to a DETACHED_PROCESS child, so §8.4's named event is the
+	// signal to a DETACHED_PROCESS child, so a named shutdown event is the
 	// mechanism there and this is a no-op everywhere else. Both routes end in
 	// the same cancel, so shutdown stays ONE path — which is the property this
 	// function is organised around.
@@ -253,8 +253,8 @@ func Run(ctx context.Context, o Options) (err error) {
 // leaving it unhandled would kill the daemon silently, and there is nothing here
 // for a HUP to reload — external config is picked up by the tick loop.
 //
-// Windows delivers none of this to a DETACHED_PROCESS child; §8.4's named event
-// is the mechanism there, and watchShutdownRequest is where it lives.
+// Windows delivers none of this to a DETACHED_PROCESS child; a named shutdown
+// event is the mechanism there, and watchShutdownRequest is where it lives.
 // signal.Notify is harmless on Windows.
 func watchSignals(ctx context.Context, stop func(), log *Logger) {
 	ch := make(chan os.Signal, 1)

@@ -144,7 +144,7 @@ func TestPaceGoesQuietWithoutAUtilization(t *testing.T) {
 	}
 }
 
-// §7.5 scopes pace to the weekly windows. The five-hour window is far too short
+// Pace is scoped to the weekly windows. The five-hour window is far too short
 // for a 24-hour suppression to leave anything, and cinder_cove is not a window
 // at all.
 func TestPaceOnlyAppliesToWeeklyWindows(t *testing.T) {
@@ -247,9 +247,9 @@ func TestProjectionReportsNothingWhenPaceIsSuppressed(t *testing.T) {
 	}
 }
 
-// §7.5: the projection stays --json-only. A linear extrapolation against bursty
-// real usage is too rough to present as fact, and the next reviewer's instinct is
-// to surface it "helpfully". Keeping it off Pace's own field set is what makes
+// The projection stays --json-only. A linear extrapolation against bursty real
+// usage is too rough to present as fact, and the next reviewer's instinct is to
+// surface it "helpfully". Keeping it off Pace's own field set is what makes
 // that a deliberate act rather than an accident, and this test is the guard.
 func TestPaceCarriesNoProjectionFields(t *testing.T) {
 	tp := reflect.TypeOf(Pace{})
@@ -264,7 +264,7 @@ func TestPaceCarriesNoProjectionFields(t *testing.T) {
 		name := f.Name
 		for _, banned := range []string{"Project", "Exhaust", "WillLast"} {
 			if strings.Contains(name, banned) {
-				t.Errorf("Pace.%s: the projection is --json-only (spec §7.5) and must stay behind Pace.Projection(), "+
+				t.Errorf("Pace.%s: the projection is --json-only and must stay behind Pace.Projection(), "+
 					"so a human renderer ranging over Pace's fields cannot pick it up", name)
 			}
 		}
@@ -296,7 +296,7 @@ func TestSnapshotPacesEveryWeeklyWindow(t *testing.T) {
 }
 
 // An account whose binding cap is a per-model weekly one is exactly the account
-// a pace reading is most useful for, so limits[] has to reach §7.5 too.
+// a pace reading is most useful for, so limits[] has to be paced too.
 func TestPaceCoversTheScopedWindows(t *testing.T) {
 	now := mustTime(t, "2026-08-24T00:00:00Z")
 	reset := mustTime(t, "2026-08-27T00:00:00Z")

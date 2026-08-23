@@ -15,12 +15,13 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 )
 
-// §9.4 states one rule for the whole command tree: every read command emits a
-// single machine-readable object on stdout, human notices go to stderr, every
-// payload carries schemaVersion, and the contract is additive. Each command's
-// own test file proves its own payload. This file proves the part that only
-// exists BETWEEN commands — that nine `--json` surfaces answer to one shape —
-// and it is a table so that the tenth costs one row rather than a decision.
+// The `--json` contract is one rule for the whole command tree: every read
+// command emits a single machine-readable object on stdout, human notices go
+// to stderr, every payload carries schemaVersion, and the contract is additive.
+// Each command's own test file proves its own payload. This file proves the
+// part that only exists BETWEEN commands — that nine `--json` surfaces answer
+// to one shape — and it is a table so that the tenth costs one row rather than
+// a decision.
 //
 // Four rules, and each is here because of a specific way a later command
 // breaks the contract while its own tests stay green:
@@ -33,10 +34,11 @@ import (
 //     break the contract silently, because a consumer only finds out on the
 //     day the answer goes negative. The flag changes the representation, never
 //     the answer — so the exit code is identical with and without it.
-//  3. The document is INDENTED and `auto`'s stream is not. §9.4's one exception
-//     is NDJSON, and the two encoders must never converge: see the comment on
-//     TestJSONContractOnlyAutoIsLineOriented for what that asymmetry buys.
-//  4. A stdout whose reader has gone away is exit 0 (§9.3), and any OTHER write
+//  3. The document is INDENTED and `auto`'s stream is not. The contract's one
+//     exception is NDJSON, and the two encoders must never converge: see the
+//     comment on TestJSONContractOnlyAutoIsLineOriented for what that
+//     asymmetry buys.
+//  4. A stdout whose reader has gone away is exit 0, and any OTHER write
 //     failure is exit 1. Both halves are needed to rule out both wrong
 //     implementations — see TestJSONContractWriteFailures.
 //
@@ -64,8 +66,8 @@ type jsonContractCase struct {
 	// schemaVersion. They are the contract a consumer writes against; adding
 	// one is additive, removing one is what this pins.
 	keys []string
-	// stream marks §9.4's one exception, `auto --json`, whose stdout is NDJSON
-	// rather than a document.
+	// stream marks the contract's one exception, `auto --json`, whose stdout is
+	// NDJSON rather than a document.
 	stream bool
 }
 
@@ -158,10 +160,11 @@ func jsonContractCases() []jsonContractCase {
 		path: "daemon status",
 		name: "daemon status/cannot tell",
 		args: []string{"--json"},
-		// The third answer, and the one §9.3 split 5 off from 1 for: a lock
-		// that cannot be probed is not "no daemon". Nothing else in the package
-		// reaches this command's --json branch for it, so without this row the
-		// arm that keeps the answer silent AND non-zero is unexecuted code.
+		// The third answer, and the one the exit contract split 5 off from 1
+		// for: a lock that cannot be probed is not "no daemon". Nothing else in
+		// the package reaches this command's --json branch for it, so without
+		// this row the arm that keeps the answer silent AND non-zero is
+		// unexecuted code.
 		setup: func(t *testing.T) {
 			t.Helper()
 			stubDaemon(t, daemon.Report{State: daemon.DaemonUnknown}, daemon.ErrLocksUnsupported)
@@ -182,9 +185,10 @@ func jsonContractCases() []jsonContractCase {
 		setup: func(t *testing.T) {
 			t.Helper()
 			seedHealthyMachine(t)
-			// The loudest form of §12's High risk, and doctor's own suite's
-			// fixture for it: a credentials file ccdad cannot parse is a
-			// levelFail, so this row exits 1 with a full report on stdout.
+			// The loudest form of the drift that doctor exists to catch, and
+			// doctor's own suite's fixture for it: a credentials file ccdad
+			// cannot parse is a levelFail, so this row exits 1 with a full
+			// report on stdout.
 			writeLiveFile(t, "this is not json")
 		},
 		want: ExitFailure,
@@ -229,7 +233,7 @@ func jsonContractCases() []jsonContractCase {
 		path: "auto",
 		name: "auto/nothing to do",
 		args: []string{"--once", "--json"},
-		// Already on the best account. §9.3's 3, and a rendered answer like any
+		// Already on the best account. Exit 3, and a rendered answer like any
 		// other: the stream carries the evaluation that reached it.
 		setup: func(t *testing.T) {
 			t.Helper()
@@ -250,7 +254,7 @@ func jsonContractCases() []jsonContractCase {
 		name: "auto/blocked",
 		args: []string{"--once", "--json"},
 		// Wanted to move and could not, for want of any reading to rank on.
-		// §9.3's 4 is the code a supervisor alerts on, which is the one this
+		// Exit 4 is the code a supervisor alerts on, which is the one this
 		// table can least afford to leave unpinned.
 		setup: func(t *testing.T) {
 			t.Helper()
@@ -396,7 +400,7 @@ func TestJSONContractDoesNotChangeTheExitCode(t *testing.T) {
 // Rule 3, first half: a document spans lines, on purpose.
 //
 // writeJSON calls SetIndent, so "a single object" is several lines of it. That
-// is the choice §9.4 made — jq-friendly, and unusable by anything
+// is this repository's own choice — jq-friendly, and unusable by anything
 // line-oriented — and it is worth an assertion rather than a comment for two
 // reasons. It is what makes reusing writeJSON for `auto`'s stream fail LOUDLY
 // instead of producing a stream nothing can read; and it is how this table
@@ -450,7 +454,8 @@ func TestJSONContractOnlyAutoIsLineOriented(t *testing.T) {
 		})
 	}
 	if len(streams) != 1 || !streams["auto"] {
-		t.Fatalf("%v are marked as streams; §9.4 has exactly one exception and it is `auto --json`", streams)
+		t.Fatalf("%v are marked as streams; the `--json` contract has exactly one "+
+			"exception and it is `auto --json`", streams)
 	}
 }
 
@@ -462,7 +467,7 @@ func TestJSONContractOnlyAutoIsLineOriented(t *testing.T) {
 // on its own has rows where it cannot see one:
 //
 //   - A command that maps every write failure to an error fails the first half
-//     (§9.3: `ccdad list --json | head -1` exits 0).
+//     (`ccdad list --json | head -1` exits 0).
 //   - A command that SWALLOWS write failures — the bufio.Writer flushed in a
 //     defer, which is how this arrives in practice — still exits with whatever
 //     code its ANSWER earned. On a row whose answer is 0 that is
@@ -479,7 +484,7 @@ func TestJSONContractWriteFailures(t *testing.T) {
 				inContractWorld(t, c, func(t *testing.T) {
 					code, _, top := runRootTo(t, failingWriter{errBrokenPipeForTest}, c.argv()...)
 					if code != ExitOK {
-						t.Fatalf("exit = %d, want 0: a reader that has gone away is not an error (§9.3)", code)
+						t.Fatalf("exit = %d, want 0: a reader that has gone away is not an error", code)
 					}
 					if top != "" {
 						t.Errorf("ExecuteWith printed %q; there is nobody left to read it", top)
@@ -524,7 +529,7 @@ func TestJSONContractCoversEveryJSONCommand(t *testing.T) {
 	}
 	for path := range inTree {
 		if !covered[path] {
-			t.Errorf("`ccdad %s` offers --json and has no row in the §9.4 contract table; "+
+			t.Errorf("`ccdad %s` offers --json and has no row in the `--json` contract table; "+
 				"add one to jsonContractCases", path)
 		}
 	}
@@ -561,8 +566,8 @@ func jsonCommandPaths(cmd *cobra.Command) []string {
 	return out
 }
 
-// decodeContractDocument is §9.4's "a single object", as an assertion: one JSON
-// OBJECT, carrying schemaVersion as a number, with nothing after it.
+// decodeContractDocument is the contract's "a single object", as an assertion:
+// one JSON OBJECT, carrying schemaVersion as a number, with nothing after it.
 func decodeContractDocument(t *testing.T, stdout string) map[string]any {
 	t.Helper()
 	dec := json.NewDecoder(strings.NewReader(stdout))
@@ -574,8 +579,8 @@ func decodeContractDocument(t *testing.T, stdout string) map[string]any {
 	// Decoding the first value alone would not see it.
 	var extra json.RawMessage
 	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
-		t.Fatalf("stdout carries more than the one document §9.4 promises (%q after it, %v):\n%s",
-			extra, err, stdout)
+		t.Fatalf("stdout carries more than the one document the `--json` contract "+
+			"promises (%q after it, %v):\n%s", extra, err, stdout)
 	}
 	if payload["schemaVersion"] != float64(1) {
 		t.Fatalf("schemaVersion = %v (%T), want the number 1", payload["schemaVersion"], payload["schemaVersion"])
@@ -583,9 +588,9 @@ func decodeContractDocument(t *testing.T, stdout string) map[string]any {
 	return payload
 }
 
-// decodeContractStream is the same assertion for §9.4's one exception: one
-// complete object per line, each carrying its own schemaVersion, and no blank
-// lines standing in for records.
+// decodeContractStream is the same assertion for the contract's one exception:
+// one complete object per line, each carrying its own schemaVersion, and no
+// blank lines standing in for records.
 func decodeContractStream(t *testing.T, stdout string) []map[string]any {
 	t.Helper()
 	if strings.HasPrefix(strings.TrimSpace(stdout), "[") {
@@ -625,7 +630,7 @@ func requireContractKeys(t *testing.T, payload map[string]any, keys []string, wh
 }
 
 // failingWriter is a stdout that cannot be written to. The error is the whole
-// fixture: which one it is decides which half of §9.3 applies.
+// fixture: which one it is decides whether the answer is exit 0 or exit 1.
 type failingWriter struct{ err error }
 
 func (w failingWriter) Write([]byte) (int, error) { return 0, w.err }
@@ -683,7 +688,8 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// §9.3's sentence, end to end: `ccdad list --json | head -1` exits 0.
+// A closed reader is not an error, end to end: `ccdad list --json | head -1`
+// exits 0.
 //
 // Every other test in this file injects the write error, which asserts the
 // MAPPING in ExecuteWith and nothing about how a real closed pipe arrives. On
@@ -736,8 +742,8 @@ func TestJSONContractAClosedReaderExitsZero(t *testing.T) {
 			}
 
 			if err := cmd.Wait(); err != nil {
-				t.Fatalf("`ccdad %s` into a pipe with no reader exited %v, want 0 — §9.3 says a closed "+
-					"reader is not an error.\nstderr: %s", argv, err, stderr.String())
+				t.Fatalf("`ccdad %s` into a pipe with no reader exited %v, want 0 — "+
+					"a closed reader is not an error.\nstderr: %s", argv, err, stderr.String())
 			}
 		})
 	}

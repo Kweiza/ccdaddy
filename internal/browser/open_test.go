@@ -14,10 +14,10 @@ func envFrom(m map[string]string) func(string) string {
 	return func(k string) string { return m[k] }
 }
 
-// Spec §6.4 requires headless, SSH and container sessions to be detected so the
-// browser attempt is skipped and the prompt is worded for a manual paste. The
-// policy is separated from the process environment precisely so it can be
-// asserted on any developer machine.
+// Headless, SSH and container sessions are detected so the browser attempt is
+// skipped and the prompt is worded for a manual paste. The policy is separated
+// from the process environment precisely so it can be asserted on any developer
+// machine.
 func TestAvailablePolicy(t *testing.T) {
 	no := func() bool { return false }
 	yes := func() bool { return true }
@@ -151,8 +151,8 @@ func TestCommandForHonoursTheBrowserConvention(t *testing.T) {
 	}
 }
 
-// Spec §10.1 rejects pkg/browser precisely because it leaks the launcher's
-// stderr into the login prompt. Keeping all three streams nil routes them to
+// pkg/browser was rejected precisely because it leaks the launcher's stderr
+// into the login prompt. Keeping all three streams nil routes them to
 // os.DevNull — the whole reason this package is hand-rolled. Stdin matters too:
 // the paste reader is blocked on the terminal's stdin and a launcher that
 // inherited it would fight for the same bytes.

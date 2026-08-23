@@ -139,8 +139,9 @@ func TestCompletionWithAnUnknownShellIsUsageError(t *testing.T) {
 	}
 }
 
-// Spec §5.1 requires the stability contract in --help. A --json consumer that
-// keys on idx breaks the first time an account is removed.
+// --help has to carry the stability contract: idx is a display ordinal, not a
+// key. A --json consumer that keys on idx breaks the first time an account is
+// removed.
 func TestRootHelpStatesTheStabilityContract(t *testing.T) {
 	root := NewRootCmd()
 	root.SetArgs([]string{"--help"})
@@ -167,9 +168,10 @@ func stubTTYs(t *testing.T, stdout, stdin bool) {
 	stubEnvironment(t, stdin, false)
 }
 
-// §9.2, and the four combinations rather than two: a gate written as OR, or on
-// stdout alone, or on stdin alone, all agree with the interactive case and with
-// the fully-redirected one. Only the two mixed rows tell them apart.
+// The TTY gate, and the four combinations rather than two: a gate written as
+// OR, or on stdout alone, or on stdin alone, all agree with the interactive
+// case and with the fully-redirected one. Only the two mixed rows tell them
+// apart.
 //
 // The non-interactive answer is a USAGE ERROR from the first release that has
 // this slot at all, so no script can ever come to depend on interactive output
@@ -240,7 +242,7 @@ func TestBareCcdadRendersTheStatusDashboardItselfPlusAFooter(t *testing.T) {
 		}
 	}
 	if lines := strings.Count(strings.TrimSpace(footer), "\n"); lines != 0 {
-		t.Fatalf("§9.2 asks for a ONE-line footer; got %d:\n%s", lines+1, footer)
+		t.Fatalf("the footer must be ONE line; got %d:\n%s", lines+1, footer)
 	}
 }
 
@@ -251,8 +253,8 @@ func TestTheDashboardFooterNamesOnlyRealCommands(t *testing.T) {
 	root := NewRootCmd()
 	// A for-all over an empty list is vacuously true, and so is the loop in the
 	// dashboard test above: emptying topVerbs ships a footer reading `Verbs:  `
-	// past both of them. §9.2 asks for a footer OF THE TOP VERBS, so the list
-	// having members is part of what is being checked, not a precondition.
+	// past both of them. The footer names THE TOP VERBS, so the list having
+	// members is part of what is being checked, not a precondition.
 	if len(topVerbs) == 0 {
 		t.Fatal("topVerbs is empty, so this test and the footer both assert nothing")
 	}
@@ -266,13 +268,13 @@ func TestTheDashboardFooterNamesOnlyRealCommands(t *testing.T) {
 
 // Cobra's Windows-only mousetrap fires before any of this runs: launched from
 // Explorer it prints its own message, waits for a keypress and exits 1, which
-// bypasses the §9.2 gate entirely. Emptying the text is how Cobra is told not
+// bypasses the TTY gate entirely. Emptying the text is how Cobra is told not
 // to — and on the machine this test runs on, the assignment is the only
 // observable half of it.
 func TestTheExplorerMousetrapIsNeutered(t *testing.T) {
 	NewRootCmd()
 	if cobra.MousetrapHelpText != "" {
-		t.Fatalf("cobra.MousetrapHelpText = %q, want empty: a double-clicked ccdad.exe must fall through to the §9.2 gate", cobra.MousetrapHelpText)
+		t.Fatalf("cobra.MousetrapHelpText = %q, want empty: a double-clicked ccdad.exe must fall through to the TTY gate", cobra.MousetrapHelpText)
 	}
 }
 
@@ -325,10 +327,11 @@ func TestBareCcdadAutoStartsOnlyOnTheDashboardHalf(t *testing.T) {
 	}
 }
 
-// §10.3: "SetConsoleMode VT at startup, console only, never in the daemon".
-// The daemon's stdout is a log file rather than a console, so the call would be
-// a harmless no-op there — but that is a property of how Spawn redirects, and
-// this is the process that must not touch a console mode it does not own.
+// SetConsoleMode enables VT at startup, on a console only and never in the
+// daemon. The daemon's stdout is a log file rather than a console, so the call
+// would be a harmless no-op there — but that is a property of how Spawn
+// redirects, and this is the process that must not touch a console mode it
+// does not own.
 func TestConsoleVTIsEnabledForACommandAndNeverForTheDaemon(t *testing.T) {
 	var handles []*os.File
 	saved := consoleVT
@@ -345,7 +348,7 @@ func TestConsoleVTIsEnabledForACommandAndNeverForTheDaemon(t *testing.T) {
 	}
 	enableConsoleVT([]string{daemon.RunArg})
 	if len(handles) != 2 {
-		t.Fatalf("`ccdad %s` enabled VT on its own output: §10.3 is console only, never in the daemon", daemon.RunArg)
+		t.Fatalf("`ccdad %s` enabled VT on its own output: VT is console only, never in the daemon", daemon.RunArg)
 	}
 }
 

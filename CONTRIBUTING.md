@@ -59,6 +59,7 @@ the same thing:
 | `vet` | `go vet ./...` for the host |
 | `test` | `go test ./... -race` |
 | `cgo` | all six release targets build and vet with `CGO_ENABLED=0` |
+| `cites` | no comment cites a document this repository does not contain |
 
 The only thing CI adds is running `test` on Linux, macOS and Windows instead of
 one of them. That matters more than it sounds: every `_windows.go` file in this
@@ -125,20 +126,20 @@ contents; keep it that way.
   was rejected, the thing that looks like a bug and is not, the platform
   behaviour that surprised you. Several comments in this tree exist purely to
   stop the next reader from "fixing" something back.
+- **Comments are self-contained.** A comment may point at something in this
+  repository — a file, a function, a README section — and at a published
+  standard (an RFC, the Go specification). It may not point at anything else.
+  For a while these comments cited a design document by section, `§7.2` and
+  `§9.3`, and named internal work items; that document is not in the tree and
+  is not going to be, so every one of those references was worth nothing to the
+  person actually reading the code. State the fact instead.
+  `scripts/ci.sh cites` fails the build on `§`, on "the brief", and on
+  "task *n*".
 - **Commit messages are imperative and explain themselves.** Look at
   `git log` — the subject says what the commit does, and the body says why,
   what was considered, and what was deliberately left alone. That body is
   frequently the only record of a decision.
 - **English throughout**, in code, comments, commit messages and documentation.
-
-## A thing you should know before reading the comments
-
-The code refers to a design specification by section — `§3.3`, `§8.2`,
-`§13 Q4`. **That document is not in this repository.** It is a working file
-outside version control, so those references currently resolve only for the
-maintainer. This is a known rough edge for outside contributors; if a section
-reference is blocking you, ask in the issue and the relevant part will be
-quoted or published.
 
 ## What happens to your pull request
 

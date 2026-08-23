@@ -55,7 +55,7 @@ func TestAPartialConfigLeavesEveryOtherKeyAtItsDefault(t *testing.T) {
 func TestAnInfiniteCeilingIsRefusedAtParseTime(t *testing.T) {
 	_, err := Parse([]byte("[credit]\nmax_auto_spend = inf\n"))
 	if err == nil {
-		t.Fatal("max_auto_spend = inf parsed without error; §7.3's IsInf check must fire at read time")
+		t.Fatal("max_auto_spend = inf parsed without error; the IsInf check must fire at read time")
 	}
 	if !strings.Contains(err.Error(), "max_auto_spend") {
 		t.Errorf("error = %q, want it to name max_auto_spend", err)
@@ -92,7 +92,7 @@ func TestAnExplicitZeroCeilingIsHonouredAsTheRefusingDefault(t *testing.T) {
 func TestAnExplicitZeroHysteresisIsRefusedRatherThanSilentlyDisablingAntiFlap(t *testing.T) {
 	_, err := Parse([]byte("hysteresis_pct = 0.0\n"))
 	if err == nil {
-		t.Fatal("hysteresis_pct = 0 was accepted; §7.2 lists no way to switch a margin off, " +
+		t.Fatal("hysteresis_pct = 0 was accepted; an anti-flap margin cannot be switched off, " +
 			"and strategy.Config.withDefaults would silently replace it anyway")
 	}
 }
@@ -166,7 +166,7 @@ func TestAKnownStrategyNameIsParsedAndAnUnknownOneIsRefused(t *testing.T) {
 	}
 	_, err = Parse([]byte(`strategy = "consume-frist"`))
 	if err == nil {
-		t.Fatal("a misspelled strategy was accepted; a typo that silently runs the wrong strategy is the cswap behaviour §9.3 exists to fix")
+		t.Fatal("a misspelled strategy was accepted; a typo that silently runs the wrong strategy is the cswap behaviour the exit contract exists to fix")
 	}
 	if !strings.Contains(err.Error(), "consume-first") {
 		t.Errorf("error = %q, want it to list the strategies that do exist", err)
@@ -204,7 +204,7 @@ func TestTheDefaultsAreTheEnginesOwnDefaults(t *testing.T) {
 		t.Errorf("Strategy = %v, want headroom", d.Strategy)
 	}
 	if d.MaxAutoSpend != 0 {
-		t.Errorf("MaxAutoSpend = %v, want 0 — the explicit opt-in §7.3 requires", d.MaxAutoSpend)
+		t.Errorf("MaxAutoSpend = %v, want 0 — the explicit opt-in the credit gate requires", d.MaxAutoSpend)
 	}
 }
 
@@ -313,8 +313,8 @@ func TestARelativeStoreRootIsRefused(t *testing.T) {
 	}
 }
 
-// The re-read §8.4 asks for: the daemon picks up an external edit, and a broken
-// one leaves it running on the last good config.
+// The re-read the tick loop performs: the daemon picks up an external edit, and
+// a broken one leaves it running on the last good config.
 
 func TestAReloaderPicksUpAnExternalEdit(t *testing.T) {
 	home := write(t, "threshold = 70.0\n")

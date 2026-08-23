@@ -278,7 +278,7 @@ func TestExecuteRefusesAnAccountWithNoLoginToInstall(t *testing.T) {
 	}
 }
 
-// §4.3: drift in the credentials file is demonstrated, not hypothetical. The keys
+// Drift in the credentials file is demonstrated, not hypothetical. The keys
 // are reported from the file read UNDER the lock, so the report describes the
 // file that was actually merged.
 func TestExecuteReportsTheUnknownKeysItPreserved(t *testing.T) {

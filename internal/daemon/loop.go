@@ -8,16 +8,17 @@ import (
 )
 
 const (
-	// tickInterval is §8.4's cadence: once a second.
+	// tickInterval is the tick loop's cadence: once a second.
 	tickInterval = time.Second
 
-	// rotateCheckInterval is what §8.4 writes as "every 300 ticks: rotate
-	// daemon.log if large", expressed as the wall-clock period it was meant to
-	// name. The difference is not pedantry. time.Ticker DROPS ticks rather than
-	// queueing them when a body overruns, so 300 ticks is 5 minutes only on a
-	// machine where nothing ever runs long — and a laptop that sleeps for eight
-	// hours wakes to ONE tick, not 28,800. Every deadline this loop compares is
-	// therefore a timestamp, never a counter.
+	// rotateCheckInterval is how often the tick loop checks daemon.log for
+	// rotation. At a 1 s tick, 5 minutes is 300 ticks; this is deliberately the
+	// wall-clock form and not the count. The difference is not pedantry.
+	// time.Ticker DROPS ticks rather than queueing them when a body overruns, so
+	// 300 ticks is 5 minutes only on a machine where nothing ever runs long —
+	// and a laptop that sleeps for eight hours wakes to ONE tick, not 28,800.
+	// Every deadline this loop compares is therefore a timestamp, never a
+	// counter.
 	rotateCheckInterval = 5 * time.Minute
 
 	// maxConsecutivePanics is where "keep going" stops being the right answer. A

@@ -134,8 +134,9 @@ func TestAddRefusesUpFrontWithNeitherBrowserNorTTY(t *testing.T) {
 	assertNoLiveCredentials(t)
 }
 
-// Spec §4.2 rule 3 names refreshTokenExpiresAt, rateLimitTier and clientId as
-// the three fields clauth destroyed. clientId is what a revocation needs.
+// refreshTokenExpiresAt, rateLimitTier and clientId are the three fields
+// clauth's typed struct drops on every re-serialize. clientId is what a
+// revocation needs.
 func TestCredentialBlobCarriesEveryField(t *testing.T) {
 	tok := &oauth.TokenResponse{
 		AccessToken: "AT", RefreshToken: "RT",
@@ -165,9 +166,9 @@ func TestCredentialBlobCarriesEveryField(t *testing.T) {
 			t.Errorf("claudeAiOauth[%q] = %#v, want %#v", k, got[k], want)
 		}
 	}
-	// Values, not presence: spec §4.2 rule 3 names refreshTokenExpiresAt as one
-	// of the three fields clauth destroyed, and a key that exists carrying the
-	// wrong number is no better than a missing one.
+	// Values, not presence: refreshTokenExpiresAt is one of the three fields
+	// clauth destroyed, and a key that exists carrying the wrong number is no
+	// better than a missing one.
 	for k, seconds := range map[string]int64{"expiresAt": 3600, "refreshTokenExpiresAt": 7200} {
 		ms, ok := got[k].(float64)
 		if !ok {
@@ -184,16 +185,17 @@ func TestCredentialBlobCarriesEveryField(t *testing.T) {
 	// Claude Code's own refresh tests: `d = Boolean((IZ(f.scopes) ||
 	// f.subscriptionType) && !f.clientId)` selects the curated refresh scope
 	// set. Writing a clientId flips that to false and makes Claude Code refresh
-	// with the raw stored scopes, including org:create_api_key, which spec §3.1
-	// says the refresh grant must not carry.
+	// with the raw stored scopes, including org:create_api_key, the exact scope
+	// the refresh grant drops.
 	if _, bad := got["clientId"]; bad {
 		t.Errorf("claudeAiOauth carries a synthesized clientId (%v); a first-party login must omit the key", got["clientId"])
 	}
 }
 
 // A re-authentication must not wipe fields a previous login or import put in
-// the stored record. That is the exact clauth failure mode spec §4.2 rule 3
-// names, and it would be reintroduced one layer above cclink.
+// the stored record. That is the exact clauth failure mode — a typed decode
+// that silently drops every field it does not know — and it would be
+// reintroduced one layer above cclink.
 func TestCredentialBlobPreservesPriorFields(t *testing.T) {
 	prior := cclink.Blob{"claudeAiOauth": json.RawMessage(
 		`{"accessToken":"OLD","subscriptionType":"max","somethingAnthropicAddedLater":"keep me"}`)}
@@ -434,8 +436,8 @@ func TestSyntheticLabelIsStableAcrossReAdd(t *testing.T) {
 	}
 }
 
-// The stored Kind is what the auto-switch engine ranks on (spec §5), so it has
-// to be asserted through the command that stores it — calling identity.Classify
+// The stored Kind is what the auto-switch engine ranks on, so it has to be
+// asserted through the command that stores it — calling identity.Classify
 // directly only duplicates a table case in that package and leaves the CLI's
 // own call site free to be replaced by a constant.
 func TestAddStoresTheClassifiedKind(t *testing.T) {
@@ -750,9 +752,9 @@ func TestAddAnnouncesTheURLAndWhichPathCanFinish(t *testing.T) {
 	}
 }
 
-// Spec §9.1: add never switches unless --activate. The two halves are a matched
-// pair — the first alone is satisfied by deleting the Activate call, the second
-// alone by always activating.
+// add never switches the live login unless --activate. The two halves are a
+// matched pair — the first alone is satisfied by deleting the Activate call,
+// the second alone by always activating.
 func TestAddDoesNotSwitchWithoutActivate(t *testing.T) {
 	isolate(t)
 	stubEnvironment(t, true, false)
@@ -802,8 +804,8 @@ func TestAddWithActivateWritesTheLiveFile(t *testing.T) {
 	if rec["refreshToken"] != "RT-1" {
 		t.Fatalf("live refreshToken = %v, want the one just obtained", rec["refreshToken"])
 	}
-	// rateLimitTier must carry the profile's value, not merely exist: spec §4.2
-	// rule 3 names it as one of the three fields clauth destroyed.
+	// rateLimitTier must carry the profile's value, not merely exist: it is one
+	// of the three fields clauth destroyed.
 	if rec["rateLimitTier"] != "default_claude_max_20x" {
 		t.Fatalf("rateLimitTier = %v, want the profile's value", rec["rateLimitTier"])
 	}
@@ -821,7 +823,7 @@ func TestAddWithActivateWritesTheLiveFile(t *testing.T) {
 // add doubles as re-authentication. Re-authenticating the account that is
 // currently live must keep the other account-scoped keys that are sitting in
 // the live file: losing trustedDeviceToken costs a device-cap slot and losing
-// enterpriseGateway costs a re-trust (spec §4.1).
+// enterpriseGateway costs a re-trust.
 func TestReAuthenticatingTheLiveAccountKeepsItsOtherKeys(t *testing.T) {
 	isolate(t)
 	stubEnvironment(t, true, false)
@@ -886,9 +888,9 @@ func TestAddingASecondAccountDoesNotInheritTheFirstsKeys(t *testing.T) {
 	}
 }
 
-// An alias is unique across accounts (spec §5.1). store.Add writes Account.Alias
-// straight through with no uniqueness check, so routing it through SetAlias is
-// the only thing that catches a collision — and it must surface as exit 2.
+// An alias is unique across accounts. store.Add writes Account.Alias straight
+// through with no uniqueness check, so routing it through SetAlias is the only
+// thing that catches a collision — and it must surface as exit 2.
 func TestAddRejectsAnAliasAnotherAccountHolds(t *testing.T) {
 	isolate(t)
 	stubEnvironment(t, true, false)
@@ -1121,9 +1123,9 @@ func TestAdoptingTheLiveLoginSaysWhatItCannotCarryWhenTheProbeFails(t *testing.T
 	}
 }
 
-// spec §4.2 rule 3 names clientId as one of the three fields clauth destroyed.
-// Not synthesizing one is not the same as dropping one that is already stored:
-// a credential that really did come from a non-default client keeps it.
+// clientId is one of the three fields clauth destroyed. Not synthesizing one
+// is not the same as dropping one that is already stored: a credential that
+// really did come from a non-default client keeps it.
 func TestCredentialBlobPreservesAStoredClientID(t *testing.T) {
 	prior := cclink.Blob{"claudeAiOauth": json.RawMessage(
 		`{"accessToken":"OLD","clientId":"a-non-default-client"}`)}
@@ -1252,7 +1254,7 @@ func TestAddTokenOnACancelledContextDoesNotStoreTheAccount(t *testing.T) {
 	}
 }
 
-// --activate is a switch, so spec §4.3's unknown-key probe has to run on it too.
+// --activate is a switch, so the unknown-key probe has to run on it too.
 func TestAddActivateRunsTheUnknownKeyProbe(t *testing.T) {
 	isolate(t)
 	stubEnvironment(t, true, false)
@@ -1342,8 +1344,9 @@ func TestReAuthenticatingANonLiveAccountKeepsItsOwnKeys(t *testing.T) {
 	}
 }
 
-// spec §6.4 assigns exit 1 to a login timeout, by name, in its edge-case table.
-func TestAddOnALoginTimeoutFollowsTheSpecExitCode(t *testing.T) {
+// A login timeout is exit 1 — a runtime failure in the exit contract the
+// README's "Exit codes" section publishes.
+func TestAddOnALoginTimeoutExitsOne(t *testing.T) {
 	isolate(t)
 	stubEnvironment(t, true, false)
 	restore := login
@@ -1354,14 +1357,14 @@ func TestAddOnALoginTimeoutFollowsTheSpecExitCode(t *testing.T) {
 
 	err, _, _ := runCmd(t, newAddCmd())
 	if got := CodeFor(err); got != ExitFailure {
-		t.Fatalf("CodeFor = %d, want %d (spec §6.4 assigns 1 to a timeout)", got, ExitFailure)
+		t.Fatalf("CodeFor = %d, want %d (a login timeout is exit 1)", got, ExitFailure)
 	}
 }
 
-// §6.4 makes a paste without a '#' a re-prompt rather than an abort — the
-// loopback race may still be about to win. oauth.Login carries that machinery
-// and reports each unreadable line through LoginOptions.Rejected, so whether
-// the user sees anything at all is decided HERE, by whether `add` supplies the
+// A paste without a '#' is a re-prompt rather than an abort — the loopback
+// race may still be about to win. oauth.Login carries that machinery and
+// reports each unreadable line through LoginOptions.Rejected, so whether the
+// user sees anything at all is decided HERE, by whether `add` supplies the
 // callback. Without it a malformed paste is swallowed in silence and the
 // terminal just sits there.
 func TestAddRepromptsOnAPasteItCouldNotRead(t *testing.T) {
@@ -1373,7 +1376,8 @@ func TestAddRepromptsOnAPasteItCouldNotRead(t *testing.T) {
 	restore := login
 	t.Cleanup(func() { login = restore })
 	// Mimics the real Login's order: announce, then report an unreadable line,
-	// then let the loopback win — which is exactly the sequence §6.4 describes.
+	// then let the loopback win — which is exactly the sequence a bounded
+	// re-prompt exists to keep open.
 	login = func(_ context.Context, opts oauth.LoginOptions) (*oauth.LoginResult, error) {
 		if opts.Rejected == nil {
 			t.Fatal("add gave the login no Rejected callback, so an unreadable paste tells the user nothing")
@@ -1397,10 +1401,10 @@ func TestAddRepromptsOnAPasteItCouldNotRead(t *testing.T) {
 	}
 }
 
-// T10-6 parsed the callback's error parameter into a closed set precisely so a
+// The callback's error parameter is parsed into a closed set precisely so a
 // caller could log the spec code with none of the browser's bytes reaching a
-// message — "so a caller can log LogDetail" is its stated purpose. Nothing
-// called it.
+// message; that is the stated purpose of RejectionError in
+// internal/oauth/callback.go. Nothing called LogDetail until `add` did.
 //
 // The unrecognized row is the one that carries this test: RejectionRefused and
 // RejectionUnrecognized share UserMessage's default arm, so "Anthropic refused
@@ -1432,10 +1436,10 @@ func TestAddReportsTheRejectionDetailBehindTheCannedMessage(t *testing.T) {
 			if err == nil {
 				t.Fatal("Execute() = nil, want the rejected login reported")
 			}
-			// §6.4's edge-case table assigns 1 to an OAuth error in the
-			// callback, alongside the timeout row this branch sits next to.
+			// An OAuth error in the callback is exit 1, the same
+			// runtime-failure code as the login timeout beside it.
 			if got := CodeFor(err); got != ExitFailure {
-				t.Errorf("CodeFor = %d, want %d (spec §6.4 assigns 1 to a rejected callback)", got, ExitFailure)
+				t.Errorf("CodeFor = %d, want %d (a rejected callback is exit 1)", got, ExitFailure)
 			}
 			if !strings.Contains(stderr, tc.want) {
 				t.Errorf("stderr = %q, want the spec code %q an operator can act on", stderr, tc.want)
@@ -1449,10 +1453,11 @@ func TestAddReportsTheRejectionDetailBehindTheCannedMessage(t *testing.T) {
 	}
 }
 
-// §7.2's quarantine fires on a dead refresh token, and re-authenticating is the
-// only thing that fixes one. store.Add updates an existing uuid IN PLACE, so
-// without an explicit lift the user logs in again, is told it worked, and the
-// engine goes on refusing to use the account with nothing anywhere saying why.
+// The engine's quarantine fires on a dead refresh token, and re-authenticating
+// is the only thing that fixes one. store.Add updates an existing uuid IN
+// PLACE, so without an explicit lift the user logs in again, is told it worked,
+// and the engine goes on refusing to use the account with nothing anywhere
+// saying why.
 func TestAddLiftsTheEngineQuarantine(t *testing.T) {
 	for _, tc := range []struct {
 		name string

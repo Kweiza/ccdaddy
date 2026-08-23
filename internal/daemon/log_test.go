@@ -21,7 +21,7 @@ func readFile(t *testing.T, path string) string {
 
 // openTestLog opens the daemon log with a cap small enough to reach in a test.
 // The default cap is pinned separately against a literal, so shrinking it here
-// cannot shrink the assertion that it is what the design says.
+// cannot shrink the assertion that it is 8 MiB.
 func openTestLog(t *testing.T, max int64, keep int) *Logger {
 	t.Helper()
 	l, err := openLog(mustPath(LogPath()), max, keep)
@@ -107,7 +107,7 @@ func TestLogRotatesAtTheCap(t *testing.T) {
 	}
 }
 
-// The trap the brief names. Rotation by rename leaves an already-open
+// The trap rotation sets. Rotation by rename leaves an already-open
 // descriptor pointing at the RENAMED inode, so a daemon that does not reopen
 // keeps writing into daemon.log.1 forever while daemon.log stays 0 bytes —
 // silently discarding every line it will ever log again.
@@ -206,7 +206,7 @@ func TestDefaultLogCapIsTheDocumentedNumber(t *testing.T) {
 
 func TestLogFileIsPrivate(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("§10.3: chmod is a no-op on Windows and nothing may depend on the mode")
+		t.Skip("chmod is a no-op on Windows and nothing may depend on the mode")
 	}
 	isolate(t)
 	l := openTestLog(t, 64, 3)
@@ -228,7 +228,7 @@ func TestLogFileIsPrivate(t *testing.T) {
 }
 
 // The tick loop is not the only writer: pollers run as their own goroutines
-// (§8.4) and every one of them logs.
+// and every one of them logs.
 func TestLogIsSafeForConcurrentWriters(t *testing.T) {
 	isolate(t)
 	l := openTestLog(t, 1<<20, 3)

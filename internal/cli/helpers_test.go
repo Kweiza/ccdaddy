@@ -287,7 +287,8 @@ func seedAPIKeyAccount(t *testing.T, uuid, email string) {
 
 // seedCreditAccount stores an account metered in money. Kind is set explicitly
 // because store.Add takes the caller's Kind and Save serializes it: a credit
-// account is the one the engine may never reach without §7.3's two opt-ins.
+// account is the one the engine may never reach without the two independent
+// opt-ins the credit gate requires.
 func seedCreditAccount(t *testing.T, uuid, email string) {
 	t.Helper()
 	s, err := store.Open()
@@ -339,9 +340,9 @@ func writeLiveFile(t *testing.T, raw string) {
 func TestNoArgumentsDoesNotInheritTheTestBinarysCommandLine(t *testing.T) {
 	isolate(t)
 	// Both axes stubbed so the expected code is a fact about this helper rather
-	// than about the machine: bare `ccdad` is §9.2's usage error with no
-	// terminal, and `go test` gives the binary a pipe while a developer running
-	// the compiled binary by hand gives it a console.
+	// than about the machine: bare `ccdad` with no terminal is a usage error,
+	// and `go test` gives the binary a pipe while a developer running the
+	// compiled binary by hand gives it a console.
 	stubTTYs(t, false, false)
 	saved := os.Args
 	t.Cleanup(func() { os.Args = saved })

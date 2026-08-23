@@ -237,9 +237,9 @@ func TestSwitchToALoginClearsCcdadsStoredAPIKey(t *testing.T) {
 	}
 }
 
-// Spec §4.3 requires the unknown-key probe on every switch: drift here is
-// demonstrated rather than hypothetical. Merge preserves what it does not
-// recognize, but the operator still has to be told a new key exists.
+// The unknown-key probe runs on every switch: drift here is demonstrated
+// rather than hypothetical. Merge preserves what it does not recognize, but the
+// operator still has to be told a new key exists.
 func TestSwitchWarnsAboutUnknownKeysAndPreservesThem(t *testing.T) {
 	claude := isolate(t)
 	seedAccount(t, "u-1", "a@example.com")
@@ -366,7 +366,7 @@ func TestSwitchRecordsTheActiveAccount(t *testing.T) {
 
 // seedUsage puts one reading in the on-disk cache, which is the only thing a
 // targetless switch ranks on: `switch` never polls, for the same reason `list`
-// does not (§9.1, §7.4).
+// does not.
 func seedUsage(t *testing.T, uuid string, headroom float64) {
 	t.Helper()
 	pct := 100 - headroom
@@ -399,8 +399,8 @@ func liveUUIDOf(t *testing.T) string {
 
 // ---- the three grammars ----------------------------------------------------
 
-// §9.1's optional form. The engine picks under §7.2's margins and installs the
-// winner.
+// The targetless form. The engine picks under the anti-flap margins and
+// installs the winner.
 func TestSwitchWithNoTargetLetsTheEngineChoose(t *testing.T) {
 	isolate(t)
 	seedAccount(t, "u-1", "a@example.com")
@@ -497,7 +497,7 @@ func seedModelWindows(t *testing.T, uuid string, fiveHour, opus, sonnet float64)
 	}
 }
 
-// --model narrows §7.1's ranking to the caps that bind for the model this
+// --model narrows the ranking to the caps that bind for the model this
 // session will run. The control is the same fixture without the flag, which
 // picks the OTHER account — so this cannot pass by the flag being ignored.
 func TestSwitchModelNarrowsTheRanking(t *testing.T) {
@@ -591,7 +591,7 @@ func TestSwitchWithTwoAccountsIsUsageError(t *testing.T) {
 }
 
 // A typo'd strategy is a usage error, never a silent run of the default. That
-// is §9.3's whole complaint about cswap.
+// is the exit contract's whole complaint about cswap.
 func TestSwitchRefusesAnUnknownStrategy(t *testing.T) {
 	isolate(t)
 	seedAccount(t, "u-1", "a@example.com")
@@ -871,9 +871,9 @@ func TestForceOnTheBestAccountIsStillNothingToDo(t *testing.T) {
 	}
 }
 
-// --force must never reach the credit pool. §7.3 requires two independent
-// opt-ins before ccdad spends money, and a flag named "force" is neither of
-// them.
+// --force must never reach the credit pool. The credit gate requires two
+// independent opt-ins before ccdad spends money, and a flag named "force" is
+// neither of them.
 func TestForceNeverReachesTheCreditPool(t *testing.T) {
 	isolate(t)
 	seedCreditAccount(t, "c-1", "one@example.com")
@@ -929,7 +929,7 @@ func TestATargetlessSwitchNamesWhyTheCreditGateRefused(t *testing.T) {
 				t.Fatalf("setup switch = %d (%s)", code, top)
 			}
 			// The one subscription account is spent, which is the only thing
-			// that opens §7.3 step 2.
+			// that opens step 2 of the credit gate.
 			seedUsage(t, "u-1", 5)
 			tc.seed(t)
 			clearCooldown(t)
