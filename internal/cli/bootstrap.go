@@ -60,8 +60,23 @@ func runBootstrap(cmd *cobra.Command, force bool) error {
 	}
 
 	payload, err := readExport(cmd, path)
+	if IsUsageError(err) {
+		// readExport's usage errors are the ones that describe the FILE:
+		// json.Unmarshal names the byte it choked on, so a document that is
+		// nothing but a refresh token comes back as "invalid character 'R'".
+		// Its other errors are an *os.PathError or a size, which name a path
+		// and a number rather than anything inside the document.
+		return refuseBootstrapDocument()
+	}
 	if err != nil {
 		return err
+	}
+	if payload.SchemaVersion > exportSchemaVersion {
+		// The fact without the number. An operator whose image is older than
+		// the document they mounted has no other way to learn it, and the
+		// version is a value out of that document.
+		fmt.Fprintln(cmd.ErrOrStderr(),
+			"Note: that document was written by a newer ccdad; anything this build does not recognize is ignored.")
 	}
 	if payload.Machine != nil {
 		// A fixed sentence, carrying nothing out of the document. It is worth

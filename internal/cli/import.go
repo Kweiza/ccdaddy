@@ -44,6 +44,11 @@ func newImportCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if payload.SchemaVersion > exportSchemaVersion {
+				fmt.Fprintf(cmd.ErrOrStderr(),
+					"note: this export was written by a newer ccdad (schema %d); anything this build does not recognize is ignored\n",
+					payload.SchemaVersion)
+			}
 			if len(payload.Accounts) == 0 {
 				fmt.Fprintln(cmd.ErrOrStderr(), "That export holds no accounts.")
 				return WithCode(errSilent, ExitNothingToDo)
@@ -113,10 +118,6 @@ func applyImport(payload exportPayload, force bool) (imported, skipped []string,
 		for _, a := range s.Accounts() {
 			existing[a.UUID] = a
 		}
-		if err := checkAliasCollisions(payload, existing); err != nil {
-			return UsageError("%s", err.Error())
-		}
-
 		type staged struct {
 			row   exportAccount
 			creds cclink.Blob
@@ -155,6 +156,24 @@ func applyImport(payload exportPayload, force bool) (imported, skipped []string,
 				continue
 			}
 			batch = append(batch, staged{row: row, creds: creds})
+		}
+
+		// Collisions are judged AFTER staging, against the rows that will
+		// actually be applied, and the order is the whole correctness of the
+		// check. It clears from its watch list every local account the batch
+		// covers, because the first apply pass below blanks their aliases — and
+		// a row that was SKIPPED just above never reaches that pass, so its
+		// alias is still held. Judging the whole document instead would exempt
+		// the skipped account's alias and let a later row collide with it
+		// mid-batch, after that row's credential file is already on disk.
+		//
+		// Nothing has been written yet: the staging loop only reads.
+		rows := make([]exportAccount, 0, len(batch))
+		for _, item := range batch {
+			rows = append(rows, item.row)
+		}
+		if err := checkAliasCollisions(rows, existing); err != nil {
+			return UsageError("%s", err.Error())
 		}
 
 		// The aliases are cleared across the WHOLE batch before any of them is
@@ -201,7 +220,20 @@ func applyImport(payload exportPayload, force bool) (imported, skipped []string,
 		for _, item := range batch {
 			if item.row.Alias != "" {
 				if err := s.SetAlias(item.row.UUID, item.row.Alias); err != nil {
-					return err
+					// A BACKSTOP, and unreachable while the check above is
+					// right: validateExport has already refused a malformed
+					// alias and a document that gives one alias twice, the
+					// pass above blanked every alias this batch owns, and the
+					// collision check covered every alias it does not. No
+					// test reaches this line, and that is the disclosure.
+					//
+					// It is here rather than `return err` because the failure
+					// it would report quotes the alias out of the document,
+					// and `ccdad bootstrap` decides whether a message may be
+					// repeated into a container log by asking whether it is a
+					// usage error. A regression in the check above would
+					// otherwise reopen that hole silently.
+					return UsageError("%s", err.Error())
 				}
 			}
 			imported = append(imported, item.row.label())
@@ -257,13 +289,14 @@ func readExport(cmd *cobra.Command, path string) (exportPayload, error) {
 	// is not a ccdad export has. A HIGHER version is accepted: the `--json`
 	// contract is additive, so a newer export's extra fields are ignored rather
 	// than refused.
+	//
+	// Saying so out loud is the CALLER's, and SchemaVersion is on the payload
+	// for it to read. `ccdad import` names the number to a person who typed the
+	// path; `ccdad bootstrap` says the same fact without it, because the number
+	// comes out of a document it must not describe into a container log. A note
+	// printed from here would reach both.
 	if payload.SchemaVersion < 1 {
 		return exportPayload{}, UsageError("that file is not a ccdad export: it carries no schemaVersion")
-	}
-	if payload.SchemaVersion > exportSchemaVersion {
-		fmt.Fprintf(cmd.ErrOrStderr(),
-			"note: this export was written by a newer ccdad (schema %d); anything this build does not recognize is ignored\n",
-			payload.SchemaVersion)
 	}
 	return payload, nil
 }
@@ -298,11 +331,16 @@ func validateExport(payload exportPayload) error {
 }
 
 // checkAliasCollisions catches the aliases that only collide once the local
-// store is in front of us: one held by an account the export does not mention.
+// store is in front of us: one held by an account this batch does not cover.
 // SetAlias would refuse it mid-batch, and the batch has already begun by then.
-func checkAliasCollisions(payload exportPayload, existing map[string]store.Account) error {
+//
+// rows is the batch that will actually be applied, NOT the whole document. An
+// account whose alias this batch is about to blank cannot collide with it, and
+// one the batch leaves alone still holds it — so passing rows the caller has
+// decided to skip would exempt an alias that is still taken.
+func checkAliasCollisions(rows []exportAccount, existing map[string]store.Account) error {
 	incoming := map[string]bool{}
-	for _, row := range payload.Accounts {
+	for _, row := range rows {
 		incoming[row.UUID] = true
 	}
 	held := map[string]store.Account{}
@@ -311,13 +349,13 @@ func checkAliasCollisions(payload exportPayload, existing map[string]store.Accou
 			held[store.NormalizeAlias(a.Alias)] = a
 		}
 	}
-	for _, row := range payload.Accounts {
+	for _, row := range rows {
 		if row.Alias == "" {
 			continue
 		}
 		normalized := store.NormalizeAlias(row.Alias)
 		if other, taken := held[normalized]; taken {
-			return fmt.Errorf("%s: %q already belongs to %s (%s), which this export does not mention",
+			return fmt.Errorf("%s: %q already belongs to %s (%s), which this import is not applying",
 				store.ErrAliasTaken, normalized, other.Label(), other.UUID)
 		}
 	}

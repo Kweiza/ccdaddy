@@ -81,10 +81,17 @@ func setPrimary(cmd *cobra.Command, ref string, primary bool) error {
 
 	// Before the write, and only on the way ON.
 	//
-	// The account this reads is the pre-lock copy, so a racing writer could
-	// make the line redundant. That is the harmless direction. The other
-	// direction is a spending ceiling removed by a command that never said so,
-	// which is why this is not deferred until the setter reports a change.
+	// It has to precede the write, because the reader this line exists for is
+	// the one who typed the command by mistake and needs it while the flag is
+	// still off. Deciding it from the setter's `changed` is the only exact
+	// alternative, and that answer does not exist until the ceiling is already
+	// gone.
+	//
+	// What that costs: target is the pre-lock copy, so a second `ccdad primary`
+	// racing this one can make the line redundant, or — if it cleared the flag
+	// between this read and the lock — absent from a run that really does
+	// remove the ceiling. Both need two of these racing on one machine. A
+	// notice printed after the write is late on every mistyped run there is.
 	if primary && !target.Primary {
 		fmt.Fprintf(cmd.ErrOrStderr(),
 			"Turning primary on for %s removes the max_auto_spend ceiling for that account: "+

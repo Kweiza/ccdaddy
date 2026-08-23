@@ -3,11 +3,13 @@ package cli
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/store"
 )
 
@@ -338,5 +340,114 @@ func TestBootstrapSaysMCPLoginsAreNotInstalled(t *testing.T) {
 	t.Setenv("CCDAD_IMPORT", bootstrapDocument(t, "u-1", "one@example.com"))
 	if _, _, stderr, _ := runRoot(t, "bootstrap"); strings.Contains(stderr, "MCP logins") {
 		t.Errorf("stderr = %q, want no MCP note for a document that carries none", stderr)
+	}
+}
+
+// The alias collision checkAliasCollisions does NOT catch, and the one a
+// container walks into on an ordinary restart.
+//
+// That check excludes every local account the document also names, on the
+// assumption that the first apply pass clears its alias. A row SKIPPED because
+// the credentials here are newer never reaches that pass, so its alias is still
+// held when a later row asks for it — and store.setAlias refuses mid-batch with
+// a message naming the alias out of the document and the local account holding
+// it. Both of those are the values this command exists not to log, and the
+// trigger is the same "the daemon refreshed a token while the container ran"
+// state the never-answer-3 rule was written for.
+func TestBootstrapNamesNothingWhenAnAliasCollidesMidBatch(t *testing.T) {
+	const (
+		alias    = "sharedhandle"
+		local    = "alpha@example.com"
+		incoming = "beta@example.com"
+		refresh  = "RT-DO-NOT-LOG-THIS"
+	)
+	isolate(t)
+	newer := time.Now().Add(6 * time.Hour).UnixMilli()
+	older := time.Now().Add(-2 * time.Hour).UnixMilli()
+
+	s, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add(store.Account{UUID: "u-alpha", Email: local}, credsWithExpiry("RT-local", newer)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetAlias("u-alpha", alias); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("CCDAD_IMPORT", writeImportFile(t, fmt.Sprintf(`{
+	  "schemaVersion":1,"full":true,"accounts":[
+	    {"uuid":"u-alpha","email":%q,"kind":"subscription",
+	     "credentials":{"claudeAiOauth":{"accessToken":"AT","refreshToken":"RT-stale","expiresAt":%d}}},
+	    {"uuid":"u-beta","email":%q,"alias":%q,"kind":"subscription",
+	     "credentials":{"claudeAiOauth":{"accessToken":"AT","refreshToken":%q,"expiresAt":%d}}}]}`,
+		local, older, incoming, alias, refresh, older)))
+
+	code, stdout, stderr, top := runRoot(t, "bootstrap")
+
+	said := stdout + stderr + top
+	for _, secret := range []string{alias, local, incoming, refresh, "u-alpha", "u-beta"} {
+		if strings.Contains(said, secret) {
+			t.Errorf("bootstrap put %q into its output:\n%s", secret, said)
+		}
+	}
+	if code != ExitUsage {
+		t.Errorf("exit = %d, want %d: the document is what is wrong, not this machine\n%s", code, ExitUsage, said)
+	}
+	if got := accountCount(t); got != 1 {
+		t.Errorf("the store holds %d account(s), want only the one that was already here", got)
+	}
+	// And nothing was half-written. store.Add writes the credential file before
+	// it touches memory, so a batch refused after the add leaves a live refresh
+	// token in a file no accounts.toml names.
+	orphan := filepath.Join(mustPath(ccpath.StoreHome()), "credentials", "u-beta.json")
+	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+		t.Errorf("a credential file holding a live refresh token was left at %s with no account naming it", orphan)
+	}
+}
+
+// readExport's own refusals reach this command too, and json.Unmarshal's error
+// describes the bytes it choked on. A file that is nothing but a refresh token
+// produces `invalid character 'R' looking for beginning of value` — the parser
+// reading the document back out loud, into a log.
+func TestBootstrapDoesNotRepeatWhyTheDocumentWouldNotParse(t *testing.T) {
+	isolate(t)
+	t.Setenv("CCDAD_IMPORT", writeImportFile(t, "RT-DO-NOT-LOG-THIS"))
+
+	code, stdout, stderr, top := runRoot(t, "bootstrap")
+
+	said := stdout + stderr + top
+	if code != ExitUsage {
+		t.Errorf("exit = %d, want %d: the document is what is wrong\n%s", code, ExitUsage, said)
+	}
+	if strings.Contains(said, "invalid character") {
+		t.Errorf("bootstrap repeated the parser's reading of the document:\n%s", said)
+	}
+	if !strings.Contains(said, "CCDAD_IMPORT") {
+		t.Errorf("the refusal never names the variable that carried the document:\n%s", said)
+	}
+}
+
+// A document from a newer ccdad is accepted, and saying so is worth a line —
+// an operator whose image is older than their backup has no other way to learn
+// it. The version number is not: it is a value out of the document, and the
+// fact travels without it.
+func TestBootstrapNotesANewerSchemaWithoutQuotingIt(t *testing.T) {
+	isolate(t)
+	t.Setenv("CCDAD_IMPORT", writeImportFile(t, `{"schemaVersion":99,"full":true,"accounts":[
+	  {"uuid":"u-1","email":"one@example.com","kind":"subscription",
+	   "credentials":{"claudeAiOauth":{"accessToken":"AT","refreshToken":"RT-u-1"}}}]}`))
+
+	code, stdout, stderr, top := runRoot(t, "bootstrap")
+
+	if code != ExitOK {
+		t.Fatalf("exit = %d, want %d\nstderr: %s\ntop: %s", code, ExitOK, stderr, top)
+	}
+	if !strings.Contains(stderr, "newer ccdad") {
+		t.Errorf("stderr = %q, want it to say the document is from a newer build", stderr)
+	}
+	if strings.Contains(stdout+stderr+top, "99") {
+		t.Errorf("bootstrap quoted the document's schema version:\n%s", stdout+stderr+top)
 	}
 }
