@@ -16,6 +16,7 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
+	"github.com/Kweiza/ccdaddy/internal/ccver"
 	"github.com/Kweiza/ccdaddy/internal/store"
 )
 
@@ -59,6 +60,46 @@ var lookClaude = exec.LookPath
 // lookClaude so a test can describe the machine this exists for: one where
 // claude is a .cmd shim and node is a real executable somewhere else.
 var lookProgram = exec.LookPath
+
+// describeClaudeInstall names the version of the claude this command is about
+// to run. It is a var for the same reason lookClaude is one: the branch that
+// matters is a machine on the far side of 2.1.113, which no development machine
+// running a current release can reach.
+var describeClaudeInstall = ccver.Describe
+
+// refuseKeychainEra is the default mode's refusal on a Claude Code that does not
+// know the variable the default mode scopes with.
+//
+// The measurement, from cclink's keychain header and the item that filed this:
+// CLAUDE_SECURESTORAGE_CONFIG_DIR does not occur even ONCE in 2.1.112. It
+// arrived in 2.1.113, AFTER the keychain backend it nominally outranks was
+// already gone. So on such a build newSession's whole mechanism is a variable
+// nothing reads: claude falls through to the machine's own ~/.claude, the
+// session runs as the LIVE login, and ccdad reports success. That is the same
+// silent no-op as the keychain shadow, on the same population, and this command
+// exists to promise the opposite.
+//
+// Refusing rather than warning, because a warning that is scrolled past leaves
+// the user running the wrong account under a label that says otherwise — §12's
+// High risk with a different subject. Refusing rather than silently promoting to
+// --full-profile, because that mode creates persistent per-account state and
+// copies the config home, and changing a user's blast radius without being asked
+// is not a smaller decision than refusing.
+//
+// It fires ONLY on a version ccdad actually read. An install ccdad cannot
+// classify proceeds untouched: a refusal keyed on "ccdad could not tell" would
+// break machines that work, and doctor's claude-version row is the place that
+// reports a launcher it could not name.
+func refuseKeychainEra(install ccver.Install, label string) error {
+	if !install.KeychainEra() {
+		return nil
+	}
+	return UsageError("%s does not know CLAUDE_SECURESTORAGE_CONFIG_DIR — the variable arrived in %s — so this "+
+		"session would not be scoped at all: claude would read the machine's own credentials file and run as the "+
+		"LIVE login rather than as %s, and ccdad would report success. Run it with --full-profile, which scopes "+
+		"CLAUDE_CONFIG_DIR and does work on this build; or upgrade Claude Code to %s or later",
+		install, ccver.LastKeychainEra.NextPatch(), label, ccver.LastKeychainEra.NextPatch())
+}
 
 // startChild starts claude, waits for it, and reports its exit status. It is a
 // var because starting a real process is the one thing a test in this package
@@ -645,6 +686,10 @@ func newRunCmd() *cobra.Command {
 			"of its own holding only that account's login, which is the smallest blast radius\n" +
 			"available — at the cost that MCP logins do not come with it, because Claude Code\n" +
 			"keeps them in the same file.\n\n" +
+			"That default needs Claude Code 2.1.113 or later: the variable it scopes with\n" +
+			"did not exist before then, so on an older build the session would silently read\n" +
+			"the machine's own login. ccdad refuses to start rather than run as the wrong\n" +
+			"account, and names --full-profile, which scopes something every era reads.\n\n" +
 			"--full-profile gives the account a whole config home instead, kept between runs\n" +
 			"under the ccdad store, so its MCP logins and trust answers survive. It is seeded\n" +
 			"once from the live config home — top-level files only, never the project history —\n" +
@@ -670,6 +715,17 @@ func newRunCmd() *cobra.Command {
 			path, err := lookClaude("claude")
 			if err != nil {
 				return err
+			}
+			// Described from the path PATH just gave, not probed independently:
+			// the version that matters is the one belonging to the binary this
+			// invocation is about to exec, and a second resolution could name a
+			// different one. Before the shim dance below for the same reason —
+			// launchPastShim replaces the path with an interpreter, which is
+			// node rather than claude.
+			if !fullProfile {
+				if err := refuseKeychainEra(describeClaudeInstall(path), target.Label()); err != nil {
+					return err
+				}
 			}
 			tail := claudeArgs(args)
 			var shimEnv []string

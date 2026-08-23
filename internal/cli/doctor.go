@@ -17,6 +17,7 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
+	"github.com/Kweiza/ccdaddy/internal/ccver"
 	"github.com/Kweiza/ccdaddy/internal/config"
 	"github.com/Kweiza/ccdaddy/internal/credhome"
 	"github.com/Kweiza/ccdaddy/internal/daemon"
@@ -51,6 +52,15 @@ import (
 // report-only rule: checkKeychain finds the item and prints the `security`
 // command that removes it, rather than removing it — and says what running it
 // costs, which is the half that was missing.
+//
+// checkClaudeVersion is the newest row and the one that most nearly broke the
+// first rule. Its subject is the installed Claude Code, whose obvious probe is
+// `claude --version` — and the native launcher resolves, and can UPDATE itself,
+// when invoked, so that probe changes what it measures. internal/ccver reads the
+// same answer out of the install layout instead, with a readlink and a
+// package.json, and the rest of this file consumes it: the keychain row's remedy
+// inverts across 2.1.113 and used to make the user decide which side they were
+// on.
 
 // checkLevel is how much a finding matters.
 type checkLevel string
@@ -156,6 +166,12 @@ func runChecks() []check {
 	// three lines down and this is not.
 	cfg, cfgErr := cclink.LoadGlobalConfig()
 	report, probeErr := observeDaemon()
+	// Probed once and passed to both consumers rather than probed twice. Two
+	// calls could disagree — an update can land between them — and a report
+	// whose keychain remedy contradicts its own version row is worse than
+	// either answer alone. It creates nothing: stat, readlink and a read of a
+	// package.json.
+	install, installErr := probeClaudeInstall()
 
 	return []check{
 		storeCheck,
@@ -170,9 +186,10 @@ func runChecks() []check {
 		checkSessions(root, storeUsable),
 		checkProfiles(root, storeUsable),
 		checkCredentialHome(report),
+		checkClaudeVersion(install, installErr),
 		checkClaudeCode(live, liveErr),
 		checkCredentialKeys(live, liveErr),
-		checkKeychain(),
+		checkKeychain(install),
 		checkEnvironment(),
 		checkAPIKey(cfg, cfgErr),
 	}
@@ -589,6 +606,58 @@ func credentialHomeDrift(report daemon.Report, resolved string) string {
 			"restart it from an ordinary shell", recorded, resolved)
 }
 
+// probeClaudeInstall is doctor's window onto which Claude Code is installed. It
+// is a var for the same reason keychainProbe is one: the branch that matters —
+// a machine still on the keychain era — cannot be reached from a development
+// machine running a current release, and would ship having never been rendered.
+var probeClaudeInstall = ccver.Probe
+
+// checkClaudeVersion names the Claude Code this machine would run.
+//
+// It is a row of its own rather than a sentence inside checkClaudeCode, and the
+// split is deliberate: "which Claude Code is installed" and "can ccdad read
+// Claude Code's credentials file" are two probes with two independent failure
+// modes — a launcher ccdad cannot classify says nothing about the credentials
+// file, and an unreadable credentials file says nothing about the version.
+// runChecks keeps one fact per row so two runs diff cleanly.
+//
+// The version is read, never asked for. ccver's header carries why: `claude
+// --version` would spawn a ~300 MB process that resolves and can UPDATE itself
+// on invocation, which is the one thing this file's opening rule forbids.
+func checkClaudeVersion(install ccver.Install, err error) check {
+	if errors.Is(err, ccver.ErrNoClaudeCode) {
+		// Not a failure. ccdad manages logins for a Claude Code that may be
+		// installed later, or installed somewhere this does not look, and a
+		// machine being set up in either order must not read as broken — the
+		// same judgement checkStore makes about a store that is not there yet.
+		return check{"claude-version", levelWarn, "no claude launcher on PATH, or in the two places the native " +
+			"and local installers write one, so ccdad cannot tell which Claude Code this machine runs"}
+	}
+	if err != nil {
+		return check{"claude-version", levelWarn, fmt.Sprintf("ccdad could not look for a claude launcher: %v", err)}
+	}
+	if !install.Known {
+		// A probe that could not answer is NOT an answer, which is the rule
+		// checkKeychain states one check down. The keychain row below reads
+		// this same result and keeps handing the user both remedies precisely
+		// because of this branch.
+		return check{"claude-version", levelWarn, fmt.Sprintf(
+			"ccdad found a claude launcher and cannot name its version: %s", install.Why)}
+	}
+	if install.KeychainEra() {
+		return check{"claude-version", levelFail, fmt.Sprintf(
+			"%s is on the far side of the boundary ccdad is built on, and two of ccdad's promises are void on it. "+
+				"Its credential store reads the macOS Keychain BEFORE .credentials.json, so on macOS a stale item "+
+				"shadows every switch ccdad makes and the switch silently does nothing; and it does not know "+
+				"CLAUDE_SECURESTORAGE_CONFIG_DIR at all, on any platform, so `ccdad run`'s default scoping is ignored "+
+				"and the session would run as the machine's live login. Upgrade Claude Code to %s or later, which "+
+				"removed the keychain backend and added the variable. Until then `ccdad run --full-profile` is the "+
+				"one mode that still scopes, because it sets CLAUDE_CONFIG_DIR, which this build does read",
+			install, ccver.LastKeychainEra.NextPatch())}
+	}
+	return check{"claude-version", levelOK, install.String()}
+}
+
 // checkClaudeCode is §12's actual mitigation: has Claude Code's layout moved.
 //
 // cclink.Load's refusals ARE the drift signals — a symlink at the path, a file
@@ -691,7 +760,15 @@ type keychainDetailer interface{ Detail() string }
 // question is still open, and doing this inside a switch would put a `security`
 // spawn in the credential-lock window on every macOS switch to serve a
 // population that shrinks with every release.
-func checkKeychain() check {
+//
+// It takes the install because the remedy INVERTS across 2.1.113 and the two
+// halves are not variations of one sentence: on a current build removing the
+// item is cleanup, and on a keychain-era build it destroys that machine's live
+// login and reverts within hours. This row used to print both and make the user
+// decide which machine they were on — a question ccdad can now answer, and the
+// item that asked it is the reason ccver exists. Only an install whose version
+// ccdad could not read still gets both.
+func checkKeychain(install ccver.Install) check {
 	found, err := keychainProbe(context.Background())
 	item := found.Item
 
@@ -727,9 +804,45 @@ func checkKeychain() check {
 	// is the live login rather than a leftover. Printing the command without
 	// that sentence was handing someone a way to lose an account ccdad may not
 	// hold.
-	return check{"keychain", levelWarn, fmt.Sprintf(
-		"a legacy keychain item %q for %q is still there. Claude Code 2.1.112 and earlier read this item BEFORE the credentials file, so such a build reads it INSTEAD of what ccdad writes and every switch silently does nothing; 2.1.113 removed that backend, so a current Claude Code ignores the item entirely. WHICH ONE YOU ARE ON DECIDES THE REMEDY. On 2.1.113 or later, removing the item is cleanup — nothing recreates it, and it stops a future downgrade from shadowing ccdad. On 2.1.112 or earlier, removing it is NOT a fix: that item is the live login, and the next credential write recreates it and deletes the credentials file with it, so upgrade Claude Code instead. Remove it with: /usr/bin/security delete-generic-password -a %q -s %q",
-		item.Service, item.Account, item.Account, item.Service)}
+	//
+	// Which of the three sentences below applies is now READ rather than asked.
+	remove := fmt.Sprintf("/usr/bin/security delete-generic-password -a %q -s %q", item.Account, item.Service)
+	switch {
+	case install.KeychainEra():
+		// The remedy is not the command, and leading with the command would be
+		// read as one. On this machine the item is the live login and deleting
+		// it undoes itself: cclink's keychain header measures the update path
+		// that re-creates the item and unlinks .credentials.json on the next
+		// token refresh, so the "fix" reverts within hours and takes what ccdad
+		// wrote with it.
+		return check{"keychain", levelWarn, fmt.Sprintf(
+			"a legacy keychain item %q for %q is still there, and %s reads it BEFORE the credentials file — so it "+
+				"reads that item INSTEAD of what ccdad writes, and every switch silently does nothing. Do NOT delete it: "+
+				"on this build that item is your live login, and the next token refresh re-creates it and deletes the "+
+				"credentials file with it, so the deletion reverts within hours and costs what ccdad wrote. Upgrade "+
+				"Claude Code to %s or later, which does not read the item at all; after that, removing it is cleanup: %s",
+			item.Service, item.Account, install, ccver.LastKeychainEra.NextPatch(), remove)}
+	case install.Known:
+		return check{"keychain", levelWarn, fmt.Sprintf(
+			"a legacy keychain item %q for %q is still there. %s ignores it — 2.1.113 removed that backend — so "+
+				"nothing is broken right now. Removing it is cleanup: nothing recreates it, and it stops a future "+
+				"downgrade, or a pin to 2.1.112 or earlier, from shadowing everything ccdad writes. Remove it with: %s",
+			item.Service, item.Account, install, remove)}
+	default:
+		// Both remedies, because ccdad could not name the version. The
+		// claude-version row is named rather than left implicit, so a reader
+		// who wants one remedy instead of two knows which row to fix first.
+		return check{"keychain", levelWarn, fmt.Sprintf(
+			"a legacy keychain item %q for %q is still there. Claude Code 2.1.112 and earlier read this item BEFORE "+
+				"the credentials file, so such a build reads it INSTEAD of what ccdad writes and every switch silently "+
+				"does nothing; 2.1.113 removed that backend, so a current Claude Code ignores the item entirely. ccdad "+
+				"could not name the Claude Code on this machine — the claude-version check says why — so WHICH ONE "+
+				"YOU ARE ON DECIDES THE REMEDY. On 2.1.113 or later, removing the item is cleanup: nothing recreates it, "+
+				"and it stops a future downgrade from shadowing ccdad. On 2.1.112 or earlier, removing it is NOT a fix: "+
+				"that item is the live login, and the next credential write recreates it and deletes the credentials "+
+				"file with it, so upgrade Claude Code instead. Remove it with: %s",
+			item.Service, item.Account, remove)}
+	}
 }
 
 // keychainNameList renders the names a probe looked for. It is a list rather

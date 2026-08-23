@@ -18,6 +18,24 @@ by `uuid` or `alias`.
 
 ### Added
 
+- **ccdad can name the Claude Code that is installed, and does it without
+  running one.** A new `internal/ccver` reads the version off the install layout
+  — a native launcher is a symlink into `<data home>/claude/versions/<VERSION>`,
+  so one `readlink` names it, and an npm install of any era resolves into
+  `node_modules`, so `@anthropic-ai/claude-code/package.json` names it. The
+  obvious source, `claude --version`, is deliberately not used: the native
+  launcher resolves and can UPDATE itself when invoked, so that probe would
+  change what it measures, and `ccdad doctor`'s first rule is that a probe must
+  not disturb its subject. `~/.claude.json` is not a source either —
+  `lastOnboardingVersion` lagged the installed release by 118 patch versions on
+  the machine this was written on.
+- **`ccdad doctor` gains a `claude-version` check, for eighteen.** It names the
+  version, how Claude Code was installed and which launcher it read, and it
+  **fails** on 2.1.112 or earlier — the era where a keychain item shadows every
+  switch and `ccdad run`'s default scoping is ignored, so a green report would
+  be telling you the machine is fine while nothing ccdad does reaches Claude
+  Code. A launcher it cannot classify is a warning, not a failure: ccdad not
+  being able to read an install is not the install being broken.
 - **`ccdad doctor` gains three checks — `path`, `profiles` and `api-key` — for
   seventeen.** `path` answers `ccdad: command not found` by reading two facts
   rather than one: whether the binary's directory is on the PATH of the shell
@@ -32,6 +50,25 @@ by `uuid` or `alias`.
   account list, so a profile in daily use is not reported at all. `api-key`
   names which of Claude Code's five API-key sources would actually win, and
   whether that win displaces the OAuth login.
+
+### Changed
+
+- **`ccdad doctor`'s stale-keychain-item remedy stops asking you which Claude
+  Code you are on.** The remedy inverts across 2.1.113 — after it, deleting the
+  item is cleanup; before it, the item is your live login and the next token
+  refresh recreates it and deletes `.credentials.json` with it — and the row
+  used to print both and leave you to decide. It now reads the version and gives
+  the one that applies, leading with the cost rather than the command. Only an
+  install ccdad could not classify still gets both.
+- **`ccdad run` refuses in its default mode on Claude Code 2.1.112 or earlier.**
+  That mode scopes with `CLAUDE_SECURESTORAGE_CONFIG_DIR`, which does not occur
+  even once in 2.1.112 — the variable arrived in 2.1.113, after the keychain
+  backend it nominally outranks was already gone. So on such a build the
+  scoping was inert: `claude` read the machine's own credentials file and the
+  session ran as the LIVE login while ccdad reported success. The refusal is a
+  usage error naming `--full-profile`, which scopes `CLAUDE_CONFIG_DIR` and does
+  work there. It fires only on a version ccdad actually read; an install it
+  cannot classify starts as before.
 
 ### Fixed
 
