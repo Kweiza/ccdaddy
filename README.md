@@ -257,6 +257,16 @@ history.
 The exit status is `claude`'s, not ccdad's. A session killed by a signal
 reports 128 plus the signal number, as a shell would.
 
+**Inside a session, the commands that write Claude Code's own state refuse.** A
+session is a whole Claude Code, and everything you — or the model — type in
+there inherits the session's credential home. `ccdad switch`, `auto`, `add`,
+`add-token`, `remove`, `uninstall` and `ccdad daemon start` would act on the
+session's copy while reporting they had changed the live login, so they exit
+`2` and name the session instead. Reads are untouched: `list`, `which`,
+`status`, `doctor` and `export` answer for the shell you are in, and `ccdad
+doctor` says which session that is. Run the refused ones from a shell outside
+the session.
+
 ## Configuration
 
 `~/.ccdad/config.toml`, written by `ccdad config set` and readable by hand.

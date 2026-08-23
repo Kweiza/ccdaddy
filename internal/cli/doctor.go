@@ -495,14 +495,35 @@ func checkClaudeCode(live cclink.Blob, err error) check {
 		return check{"claude-code", levelFail, homeErr.Error()}
 	}
 	path := filepath.Join(home, ccpath.CredentialsFile)
+	// Inside a `ccdad run` session this file is the SESSION's, and every
+	// sentence below would otherwise describe it as the machine's live login.
+	// Measured before this line existed: a user who ran doctor to find out why
+	// a switch had done nothing was told that the switch's own file read fine.
+	scope := scopedSessionNote()
 	if err != nil {
-		return check{"claude-code", levelFail, fmt.Sprintf("%s: %v", path, err)}
+		return check{"claude-code", levelFail, fmt.Sprintf("%s: %v%s", path, err, scope)}
 	}
 	if len(live) == 0 {
 		return check{"claude-code", levelWarn, fmt.Sprintf(
-			"no login in %s — Claude Code has not logged in on this machine, or it keeps its credentials elsewhere", home)}
+			"no login in %s — Claude Code has not logged in on this machine, or it keeps its credentials elsewhere%s", home, scope)}
 	}
-	return check{"claude-code", levelOK, fmt.Sprintf("%s reads as %d top-level keys", path, len(live))}
+	return check{"claude-code", levelOK, fmt.Sprintf("%s reads as %d top-level keys%s", path, len(live), scope)}
+}
+
+// scopedSessionNote is the clause every credential answer in this report needs
+// when ccdad is running inside one of its own `ccdad run` sessions: without
+// it, each check describes the session's copy of Claude Code's state as though
+// it were the machine's.
+//
+// It says "session" rather than repeating the whole explanation in each check
+// — checkEnvironment carries the long form, and the two are read together.
+func scopedSessionNote() string {
+	session, ok := currentScopedSession()
+	if !ok {
+		return ""
+	}
+	return fmt.Sprintf(" — but this shell is inside a `ccdad run` session (%s), so that is the session's own login and not the machine's live one",
+		session.describe())
 }
 
 // checkCredentialKeys is §4.3's "on startup" half, and the last part of §4.3
@@ -617,6 +638,18 @@ func checkEnvironment() check {
 	suffix := ""
 	if len(paths) > 0 {
 		suffix = ". Set: " + strings.Join(paths, ", ")
+	}
+
+	// A path override pointing into ccdad's OWN sessions or profiles container
+	// is not merely worth seeing: it means every answer above described a
+	// `ccdad run` session rather than the machine. Listing the variable
+	// without saying so — which is what this check did — is how the override
+	// stayed invisible in the report that exists to surface it.
+	if session, inSession := currentScopedSession(); inSession {
+		return check{"environment", levelWarn, fmt.Sprintf(
+			"this shell is inside a `ccdad run` session: %s. Every answer above describes that session, "+
+				"not the live login, and the commands that would write Claude Code's own state refuse in here%s",
+			session.describe(), suffix)}
 	}
 
 	if len(hazards) > 0 {

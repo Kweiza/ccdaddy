@@ -114,6 +114,17 @@ func maybeAutoStart(cmd *cobra.Command) {
 	if _, scoped := os.LookupEnv("CLAUDE_SECURESTORAGE_CONFIG_DIR"); scoped {
 		return
 	}
+	// The half the test above cannot see. `ccdad run --full-profile` REMOVES
+	// that variable rather than emptying it and scopes with CLAUDE_CONFIG_DIR
+	// instead, so a session in that mode reads as an unscoped shell here —
+	// while ChildEnv would pin the profile into the daemon exactly the same
+	// way. CLAUDE_CONFIG_DIR on its own is NOT a reason to refuse: it is where
+	// a great many people keep their Claude Code configuration, and refusing
+	// there would turn auto-start off for all of them. Only a config home
+	// ccdad created for a run counts, which is what scoped.go answers.
+	if _, session := currentScopedSession(); session {
+		return
+	}
 	held, err := singletonHeld()
 	if err != nil || held {
 		// A lock that cannot be probed is not an invitation. This is the same
