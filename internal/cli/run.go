@@ -450,24 +450,49 @@ func seedSession(blob cclink.Blob, session string) error {
 // is in it because it ends the command line outright.
 const cmdShimMetacharacters = "&|<>^%\"\n\r"
 
-// unsafeForCmdShim reports the first argument cmd.exe would re-interpret, or
-// "" if handing these arguments to this program is safe.
+// cmdShimTarget reports whether CreateProcessW would run this program through
+// cmd.exe, which is true of a .cmd or a .bat and of nothing else.
 //
-// It fires only for a .cmd or .bat target, because that is the only case where
-// CreateProcessW routes through cmd.exe. Go 1.26 has no special-casing of
-// .bat/.cmd in argument building anywhere — syscall.makeCmdLine implements
-// CommandLineToArgvW rules only — so an argument with no space, quote or
-// backslash is emitted RAW: `fix&whoami` reaches cmd.exe as two commands.
+// This is now the whole condition on the shim branch in `run`. It used to be
+// half of one: resolution was reached only where an argument would ALSO have
+// been refused, so what ccdad launched depended on the text of a prompt. The
+// extension is the honest axis — either cmd.exe is in the launch or it is not
+// — and it is the one asked here.
+//
+// extOf rather than filepath.Ext, for the reason cmdshim.go gives at length:
+// filepath picks its separator at BUILD time, and every line of this logic is
+// written on Linux about a path spelled `C:\npm\claude.cmd`. filepath.Ext
+// happens to be safe on that path, and being the only filepath call left in
+// the shim logic would make it the one a reader has to re-derive.
+func cmdShimTarget(path string) bool {
+	switch strings.ToLower(extOf(path)) {
+	case ".cmd", ".bat":
+		return true
+	}
+	return false
+}
+
+// unsafeForCmdShim reports the first argument cmd.exe would re-interpret, or
+// "" if every one of them would survive being read by it.
+//
+// Go 1.26 has no special-casing of .bat/.cmd in argument building anywhere —
+// syscall.makeCmdLine implements CommandLineToArgvW rules only — so an
+// argument with no space, quote or backslash is emitted RAW: `fix&whoami`
+// reaches cmd.exe as two commands.
+//
+// It no longer decides whether to look past a shim; cmdShimTarget does that.
+// It decides what happens when looking past FAILED, which is the only place
+// cmd.exe is still in the launch: an argument it would eat has to be refused,
+// and an argument it would not can go through the shim exactly as it always
+// has. Callers ask it only about a program cmd.exe actually runs — asking
+// about a native claude.exe would be a question with no consequence, so the
+// extension check that used to live here would now be dead weight rather than
+// a guard.
 //
 // Never pass a prompt on argv on Windows; this is that rule enforced, and
 // refusing is deliberate. The alternative, quoting for cmd.exe, is a
 // correctness liability that fails silently and only on one platform.
-func unsafeForCmdShim(path string, args []string) string {
-	switch strings.ToLower(filepath.Ext(path)) {
-	case ".cmd", ".bat":
-	default:
-		return ""
-	}
+func unsafeForCmdShim(args []string) string {
 	for _, arg := range args {
 		if strings.ContainsAny(arg, cmdShimMetacharacters) {
 			return arg
@@ -479,13 +504,22 @@ func unsafeForCmdShim(path string, args []string) string {
 // launchPastShim is the seam between `run` and cmdshim.go: it reads the shim
 // at path and says what to launch instead.
 //
-// Reached ONLY when the refusal would otherwise fire, and that narrowness is
-// deliberate rather than timid. Resolving past every shim would be the better
-// end state — it makes Go's escaping exactly right for every argument instead
-// of only the dangerous ones — but this code has never run on a Windows box,
-// and here the worst a parse bug can do is turn a refusal into a different
-// refusal. Widening it to every .cmd is one line, and belongs after a Windows
-// runner has exercised the narrow path.
+// Reached for EVERY .cmd and .bat, which is the end state the narrow shape was
+// staged towards. Go's escaping is then exactly right for every argument
+// rather than only the dangerous ones, cmd.exe leaves the picture along with
+// the `SET PATHEXT=%PATHEXT:;.JS;=;%` line whose purpose ccdad reimplements by
+// refusing an interpreter that resolves to a .js, and two shapes of the same
+// command stop taking two different routes to the same program.
+//
+// The narrowing existed because none of this had run on Windows, and that
+// reason has expired rather than been argued away: `test (windows-latest)` has
+// been green with cmdshim_windows_test.go in it since main 72e3f61.
+//
+// What did NOT widen is the failure behaviour, and that is the half keeping
+// this from being a regression. When resolution fails, the caller refuses only
+// the argument cmd.exe would have eaten and otherwise launches the shim as it
+// always did — so a parse bug here still cannot break an invocation that works
+// today. It can only fail to improve one.
 func launchPastShim(path string) (pastShim, error) {
 	text, err := readShim(path)
 	if err != nil {
@@ -765,16 +799,36 @@ func newRunCmd() *cobra.Command {
 			}
 			tail := claudeArgs(args)
 			var shimEnv []string
-			if bad := unsafeForCmdShim(path, tail); bad != "" {
+			if cmdShimTarget(path) {
 				past, err := launchPastShim(path)
-				if err != nil {
+				bad := unsafeForCmdShim(tail)
+				switch {
+				case err == nil:
+					// The note is kept for the rescue and dropped for the
+					// ordinary launch. It is only TRUE when there is an
+					// argument that would not have survived, and on the
+					// ordinary path it would print on every Windows session
+					// an npm install ever starts — a line the reader cannot
+					// act on, in the middle of claude's own output.
+					if bad != "" {
+						fmt.Fprintf(cmd.ErrOrStderr(), "note: %q would not survive %s, so ccdad is running %s directly.\n",
+							bad, shimBaseOf(path), shimBaseOf(past.path))
+					}
+					path, tail, shimEnv = past.path, append(past.args, tail...), past.env
+				case bad != "":
 					return UsageError("%s is a cmd.exe shim, and cmd.exe would re-interpret %q rather than "+
 						"pass it on. ccdad could not run its interpreter directly instead (%v); quote the "+
 						"argument differently, or install the native claude.exe", path, bad, err)
+				default:
+					// A shim ccdad cannot read, carrying arguments cmd.exe
+					// handles correctly: the launch stays on the shim, which
+					// is what it did before any of this existed. Refusing
+					// here instead would turn every working invocation on an
+					// unrecognised .cmd — a wrapper someone wrote, a shim
+					// from a future npm, the no-shebang shape cmd.exe runs by
+					// file association — into a usage error, and that is the
+					// one thing widening the resolution must not do.
 				}
-				fmt.Fprintf(cmd.ErrOrStderr(), "note: %q would not survive %s, so ccdad is running %s directly.\n",
-					bad, shimBaseOf(path), shimBaseOf(past.path))
-				path, tail, shimEnv = past.path, append(past.args, tail...), past.env
 			}
 
 			newHome := newSession

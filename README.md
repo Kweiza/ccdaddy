@@ -447,11 +447,13 @@ Deliberate, and listed so you can tell a gap from a bug.
   never surfaces.
 - **Windows file modes.** `chmod` is a no-op there, so the store relies on the
   ACL inherited from `%USERPROFILE%`. Windows binaries are also unsigned.
-- **`ccdad run` reads npm's `claude.cmd` when it has to.** If `claude` on your
-  PATH is npm's batch shim, an argument containing `& | < > ^ % "` cannot pass
-  through `cmd.exe` intact — so ccdad launches the interpreter the shim names
-  instead. A shim it does not recognise still gets the old refusal, which names
-  the argument.
+- **`ccdad run` launches past npm's `claude.cmd`.** If `claude` on your PATH is
+  npm's batch shim, ccdad reads it and runs the interpreter it names — `node
+  cli.js` — directly, for every invocation rather than only the ones carrying an
+  argument `cmd.exe` would eat. That takes `cmd.exe` out of the launch, so the
+  arguments Windows hands your session are the ones you typed. A shim ccdad does
+  not recognise still runs through `cmd.exe` as before, and there an argument
+  containing `& | < > ^ % "` is refused rather than mangled.
 - **The macOS Keychain is not used**, because Claude Code no longer uses it.
   `ccdad doctor` reports a *stale* keychain item, since a downgraded Claude
   Code would still read one — and names which remedy applies, because on

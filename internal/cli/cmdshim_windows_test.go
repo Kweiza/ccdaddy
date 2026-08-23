@@ -24,7 +24,8 @@ import (
 // than node, for the reason internal/cclink's fixture `security` gives: a
 // runner that happens not to have node would turn a real assertion into a
 // skip, and the property under test is about the command line, not about node.
-func TestWindowsAnAmpersandReachesTheChildUnmangled(t *testing.T) {
+func childArgvThroughShim(t *testing.T, args ...string) ([]string, string) {
+	t.Helper()
 	isolate(t)
 	seedAccount(t, "u-1", "a@example.com")
 
@@ -59,7 +60,7 @@ func TestWindowsAnAmpersandReachesTheChildUnmangled(t *testing.T) {
 	t.Setenv(argvRoleEnv, seen)
 
 	// startChild is NOT stubbed. A real process is the whole point.
-	code, _, errOut, top := runRoot(t, "run", "1", "-p", "fix&whoami", "--model", "a|b")
+	code, _, errOut, top := runRoot(t, append([]string{"run", "1"}, args...)...)
 	if code != ExitOK {
 		t.Fatalf("exit = %d (%s / %s), want 0", code, errOut, top)
 	}
@@ -78,8 +79,47 @@ func TestWindowsAnAmpersandReachesTheChildUnmangled(t *testing.T) {
 	if !strings.HasSuffix(got[0], "cli.js") {
 		t.Errorf("argv[0] = %q, want the script the shim runs", got[0])
 	}
+	return got[1:], errOut
+}
+
+// The case the shim resolution was written for: `&` is emitted raw by Go and
+// read by cmd.exe as a command separator, so this argument is either delivered
+// whole or it is a second command.
+func TestWindowsAnAmpersandReachesTheChildUnmangled(t *testing.T) {
+	got, _ := childArgvThroughShim(t, "-p", "fix&whoami", "--model", "a|b")
+
 	want := []string{"-p", "fix&whoami", "--model", "a|b"}
-	if !slices.Equal(got[1:], want) {
-		t.Fatalf("the child received %q, want %q — the metacharacters did not survive the launch", got[1:], want)
+	if !slices.Equal(got, want) {
+		t.Fatalf("the child received %q, want %q — the metacharacters did not survive the launch", got, want)
+	}
+}
+
+// The case the WIDENING newly covers, and the one a green run of the test
+// above says nothing about.
+//
+// None of these arguments contains anything cmd.exe acts on, so until the
+// resolution ran for every shim they took the other route: Go quoted them,
+// cmd.exe unquoted them, `%*` re-emitted them and the CRT parsed them again.
+// That round trip is approximately correct, which is a different thing from
+// correct — and the only way to tell the two apart is to ask the child.
+//
+// The last argument ends in a backslash on purpose. It is where Go's escaping
+// and cmd.exe's re-reading disagree most quietly: makeCmdLine doubles the
+// trailing backslash so the closing quote is not escaped, and every layer that
+// re-reads the line afterwards is another chance for the pair to survive as a
+// pair.
+func TestWindowsAnOrdinaryArgumentReachesTheChildUnmangled(t *testing.T) {
+	got, errOut := childArgvThroughShim(t,
+		"-p", "summarize this file", "--add-dir", `C:\Users\dev\my repo\`)
+
+	want := []string{"-p", "summarize this file", "--add-dir", `C:\Users\dev\my repo\`}
+	if !slices.Equal(got, want) {
+		t.Fatalf("the child received %q, want %q — an ordinary argument did not survive the launch", got, want)
+	}
+	// The rescue note explains why the process tree does not match what was
+	// typed. There is nothing to explain here, and this is the launch every
+	// npm-installed session now takes.
+	if strings.Contains(errOut, "note:") {
+		t.Errorf("a note was printed for a launch with nothing to explain:\n%s", errOut)
 	}
 }

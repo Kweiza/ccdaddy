@@ -88,6 +88,27 @@ by `uuid` or `alias`.
   used to print both and leave you to decide. It now reads the version and gives
   the one that applies, leading with the cost rather than the command. Only an
   install ccdad could not classify still gets both.
+- **`ccdad run` launches past npm's `claude.cmd` for every invocation, not only
+  the ones it had to.** Resolution shipped narrow: ccdad read the shim and ran
+  `node cli.js` directly only where the alternative was refusing an argument
+  `cmd.exe` would have eaten, so `ccdad run acct -p 'fix&whoami'` went to the
+  interpreter and `ccdad run acct -p 'summarize this'` went through
+  `cmd.exe` — the same command taking two routes depending on the text of a
+  prompt. It is now the extension alone that decides: a `.cmd` or `.bat` target
+  is resolved past, and Go's escaping is then exactly right for every argument
+  instead of approximately right for the harmless ones. `cmd.exe` leaves the
+  launch entirely. The narrow shape was deliberate — none of the parser had run
+  on Windows when it shipped — and the reason expired rather than being argued
+  away: the Windows leg of CI has been green with it since `72e3f61`.
+
+  **Nothing that worked before can stop working.** When the shim cannot be
+  resolved — a `.cmd` npm did not write, an unmodelled `%VAR%`, an interpreter
+  that is not installed or that resolves to another `.cmd`, the no-shebang shape
+  `cmd.exe` runs by file association — the launch goes through the shim exactly
+  as it always did, and only an argument `cmd.exe` would re-interpret is still
+  refused. The `note:` line naming the substituted interpreter now prints only
+  on that rescue, where it explains something; the ordinary launch is silent.
+
 - **`ccdad run` refuses in its default mode on Claude Code 2.1.112 or earlier.**
   That mode scopes with `CLAUDE_SECURESTORAGE_CONFIG_DIR`, which does not occur
   even once in 2.1.112 — the variable arrived in 2.1.113, after the keychain
