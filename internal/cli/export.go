@@ -163,7 +163,21 @@ func newExportCmd() *cobra.Command {
 			if includeMCP {
 				payload.Machine = machineKeysOf(live)
 				if payload.Machine == nil {
-					fmt.Fprintln(cmd.ErrOrStderr(), "note: there are no MCP logins on this machine to include.")
+					// "on this machine" is a claim about the machine, and
+					// inside a `ccdad run` session it is a claim this command
+					// cannot make: the default mode scopes mcpOAuth away with
+					// the credentials (§3.3's named cost), so an empty answer
+					// in here says nothing about what the live login carries.
+					// Someone backing their MCP logins up from inside a
+					// session would otherwise be told there were none.
+					if session, inSession := currentScopedSession(); inSession {
+						fmt.Fprintf(cmd.ErrOrStderr(),
+							"note: this shell is inside a `ccdad run` session (%s), which does not carry the machine's "+
+								"MCP logins — so there are none to include HERE. Export from a shell outside the session "+
+								"to capture them.\n", session.describe())
+					} else {
+						fmt.Fprintln(cmd.ErrOrStderr(), "note: there are no MCP logins on this machine to include.")
+					}
 				} else {
 					fmt.Fprintln(cmd.ErrOrStderr(),
 						"WARNING: this export carries this machine's MCP server logins, client secrets included. "+

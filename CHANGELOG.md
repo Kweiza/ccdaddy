@@ -35,6 +35,31 @@ by `uuid` or `alias`.
   model name `ccdad` cannot place is now a usage error rather than a flag that
   silently did nothing.
 
+### Fixed
+
+- **`ccdad switch` typed inside a `ccdad run` session rewrote the session, not
+  the live login.** A session is a whole Claude Code, and everything typed in
+  it inherits the session's `CLAUDE_SECURESTORAGE_CONFIG_DIR`, so the switch
+  wrote `<session>/.credentials.json`, printed `Switched to`, changed nothing
+  outside the session, and replaced the session's own login with another
+  account's — in a directory `run` deletes on the way out. The commands that
+  write Claude Code's state, delete the store the session lives in, or leave a
+  daemon behind carrying the session's scope now exit `2` and name the session:
+  `switch`, `auto`, `add`, `add-token`, `remove`, `uninstall`, `daemon start`
+  and `daemon restart`. Reads still run, and `ccdad doctor` now says which
+  session it is inside rather than reporting the session's credentials file as
+  the live login.
+
+- **Auto-start could still spawn a daemon inside a `--full-profile` session.**
+  The existing guard read `CLAUDE_SECURESTORAGE_CONFIG_DIR`, which that mode
+  removes rather than sets — so a daemon born there was pinned to the profile
+  and managed it for the rest of its life. An ordinary `CLAUDE_CONFIG_DIR` of
+  your own is still not a reason to refuse; only a config home ccdad created
+  for a run is.
+
+- **`ccdad export --include-mcp` no longer says "there are no MCP logins on
+  this machine"** when run from inside a session, which does not carry them.
+
 ### Changed
 
 - **The per-model and per-surface weekly caps the usage endpoint reports in
