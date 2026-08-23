@@ -19,11 +19,27 @@ import (
 // The intermediate process is what makes the test mean anything: a child is
 // only orphaned once its parent is gone, so asserting on the daemon's parent
 // while the spawner is still running would assert nothing.
+//
+// It runs on every platform. What stood here was a wholesale Windows skip
+// reading "detachment on Windows is a console and process-group property, not a
+// session one" — true, and an answer to the question only ONE of its five
+// callers asks. The other four ask about the store, the marker, the working
+// directory and the argument, none of which is a unix concept, and the skip
+// meant Spawn() itself executed on no Windows machine: os.OpenFile(os.DevNull),
+// cmd.Start, Process.Release and the DETACHED_PROCESS creation flags were
+// covered there by a test asserting a SysProcAttr struct literal. The session
+// assertion now carries the skip itself.
+//
+// Nothing in this harness is unix-specific. The roles are selected before
+// testing.Main runs and re-exec THIS binary, whatever it was built for.
+//
+// The worst case is bounded on purpose, because the subject is a process that
+// deliberately outlives its parent and a leaked one on a shared runner is worse
+// than a red job: the grandchild waits at most 20 s for the "parent reaped"
+// file, and at most 30 s for the pipe test's release file, then exits on its
+// own whatever the test did or failed to do.
 func spawnViaAChildThatExits(t *testing.T, extraEnv ...string) (childReport, int) {
 	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("detachment on Windows is a console and process-group property, not a session one")
-	}
 	dir := t.TempDir()
 	report := filepath.Join(dir, "child.txt")
 	gone := filepath.Join(dir, "spawner-reaped")
@@ -59,7 +75,18 @@ func spawnViaAChildThatExits(t *testing.T, extraEnv ...string) (childReport, int
 // assertion would be flaky for a reason that has nothing to do with ccdad. What
 // is always true is that the child no longer belongs to the process that
 // started it.
+//
+// Unix only, and this is where the skip that used to sit on the harness
+// belongs. A session is a unix object, and Windows does not reparent an orphan
+// either: syscall.Getppid there reads the creator's pid out of a process
+// snapshot and keeps answering with it long after that process is gone, so
+// `ppid != spawnerPID` would be FALSE for a child that is properly detached.
+// What detachment means on Windows is asserted by
+// TestSpawnLeavesTheChildWithNoConsole and by the stdout test below.
 func TestSpawnLeavesTheChildInItsOwnSessionAndReparented(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a session is a unix object and Windows does not reparent an orphan; see the comment above")
+	}
 	report, spawnerPID := spawnViaAChildThatExits(t)
 
 	pid := report.num(t, "pid")
@@ -125,10 +152,16 @@ func TestSpawnLeavesTheChildAtTheRootOfTheVolume(t *testing.T) {
 // that only arrives when the daemon exits — which is to say, never. It is
 // invisible interactively, where stdout is a terminal rather than a pipe, and
 // the daemon auto-starts from every command in the tree.
+//
+// It runs everywhere. The skip that stood here read "the spawner harness
+// re-execs this binary in a unix role", which was never true of the harness,
+// and this is the assertion that carries BEST to Windows: the question there is
+// handle inheritance rather than sessions, and a pipe handle duplicated into
+// the detached child holds the read end open exactly as an inherited descriptor
+// does. What it cannot prove there is that DETACHED_PROCESS took — Go hands
+// CreateProcess an explicit handle list, so this would pass with the creation
+// flags deleted — which is what TestSpawnLeavesTheChildWithNoConsole is for.
 func TestSpawnDoesNotLeaveTheChildHoldingOurStdout(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("the spawner harness re-execs this binary in a unix role")
-	}
 	dir := t.TempDir()
 	report := filepath.Join(dir, "child.txt")
 	// The signal files live OUTSIDE the directory t.TempDir will delete, and
@@ -209,23 +242,18 @@ func TestSpawnDoesNotLeaveTheChildHoldingOurStdout(t *testing.T) {
 // "./spawner" from a directory of its own: os.Executable still answers with an
 // absolute path, while os.Args[0] would be resolved against cmd.Dir, which
 // Spawn sets to the root of the volume.
+//
+// On Windows the same mistake is worse rather than equivalent: os/exec resolves
+// a relative Path against cmd.Dir through lookExtensions and syscall.StartProcess
+// absolutises it against that directory, so `os.Args[0]` there would be looked
+// for at C:\spawner.exe.
 func TestSpawnResolvesItsOwnPathRatherThanArgv0(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("the spawner harness re-execs this binary in a unix role")
-	}
-	self, err := os.Executable()
-	if err != nil {
-		t.Fatalf("os.Executable: %v", err)
-	}
-	launchDir := t.TempDir()
-	if err := os.Symlink(self, filepath.Join(launchDir, "spawner")); err != nil {
-		t.Skipf("this filesystem cannot symlink: %v", err)
-	}
+	launchDir, argv0 := secondNameForThisBinary(t)
 
 	dir := t.TempDir()
 	report := filepath.Join(dir, "child.txt")
 	gone := filepath.Join(dir, "spawner-reaped")
-	spawner := exec.Command("./spawner")
+	spawner := exec.Command(argv0)
 	spawner.Dir = launchDir
 	spawner.Env = append(os.Environ(),
 		roleEnv+"="+roleSpawner,
@@ -246,6 +274,80 @@ func TestSpawnResolvesItsOwnPathRatherThanArgv0(t *testing.T) {
 	report2 := readReport(t, report, 15*time.Second)
 	if report2["pid"] == "" {
 		t.Error("no child was started")
+	}
+}
+
+// secondNameForThisBinary copies the test binary into a directory of its own
+// and returns that directory together with the RELATIVE name to start it by.
+//
+// A copy, where a symlink stood before. Windows creates a symlink only for a
+// process holding SeCreateSymbolicLinkPrivilege or running with Developer Mode
+// on, so a symlink would send this test straight back to skipping on the
+// platform it was just enabled for — and a copy is exercised on every platform
+// rather than only on the one where the symlink happens to fail, which is the
+// same complaint that put this whole file in the queue.
+//
+// The .exe is not decoration. os/exec resolves a relative Path on Windows
+// through lookExtensions, which appends PATHEXT and treats a name that already
+// carries a listed extension as resolved; a file with no extension is not
+// executable there under any spelling.
+//
+// The directory is deliberately NOT t.TempDir(). The grandchild is still
+// running this image when the test returns, and Windows refuses to delete the
+// image of a running process — so the removal is retried, the way
+// internal/cclock's stealLock retries its own removal and for the same reason.
+func secondNameForThisBinary(t *testing.T) (dir, argv0 string) {
+	t.Helper()
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+	src, err := os.Open(self)
+	if err != nil {
+		t.Fatalf("opening this test binary: %v", err)
+	}
+	defer src.Close()
+
+	dir, err = os.MkdirTemp("", "ccdad-spawn-launch")
+	if err != nil {
+		t.Fatalf("creating the launch directory: %v", err)
+	}
+	t.Cleanup(func() { removeWhenTheChildLetsGo(t, dir) })
+
+	name := "spawner"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	dst, err := os.OpenFile(filepath.Join(dir, name), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o700)
+	if err != nil {
+		t.Fatalf("creating %s: %v", name, err)
+	}
+	if _, err := io.Copy(dst, src); err != nil {
+		_ = dst.Close()
+		t.Fatalf("copying this test binary: %v", err)
+	}
+	if err := dst.Close(); err != nil {
+		t.Fatalf("closing %s: %v", name, err)
+	}
+	return dir, "." + string(os.PathSeparator) + name
+}
+
+// removeWhenTheChildLetsGo deletes a directory holding the image of a process
+// this test started and cannot wait for. On Windows that deletion fails for as
+// long as the process runs, and the grandchild here exits on its own schedule —
+// bounded by the deadlines in runAsSpawnedDaemon, which is why this can be a
+// bounded retry rather than a leak.
+func removeWhenTheChildLetsGo(t *testing.T, dir string) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if err := os.RemoveAll(dir); err == nil {
+			return
+		} else if time.Now().After(deadline) {
+			t.Errorf("could not remove %s within 30s: %v — a process is still holding it", dir, err)
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

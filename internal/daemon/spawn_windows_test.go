@@ -29,8 +29,20 @@ func TestTheFlagLiteralsMatchTheWindowsDefinitions(t *testing.T) {
 // `GOOS=windows go vet ./...` and no further. It pins the flag set against
 // being emptied or widened, which is worth having because the alternative is
 // nothing at all — but it asserts a struct, not an operating system. Whether
-// DETACHED_PROCESS actually severs the console is what the post-release
-// install smoke suite is for.
+// DETACHED_PROCESS actually severs the console is TestSpawnLeavesTheChildWith
+// NoConsole below.
+//
+// This used to name the post-release install smoke suite instead, and that was
+// never true of it: nothing under .github/workflows mentions a console at all,
+// its only `daemon start` leg runs on ubuntu, and its Windows leg asks about
+// the version and the HKCU PATH write. The question had no owner until the
+// test below took it.
+//
+// CREATE_NEW_PROCESS_GROUP is still spelled and never observed, and that one
+// cannot be closed here: a process group is visible only through which
+// processes a console control event reaches, and DETACHED_PROCESS means there
+// is no console to send one from. The two flags are asked together and only
+// one of them can answer.
 func TestDetachSetsExactlyTheTwoCreationFlags(t *testing.T) {
 	cmd := exec.Command("cmd.exe")
 	if err := detach(cmd); err != nil {
@@ -46,5 +58,28 @@ func TestDetachSetsExactlyTheTwoCreationFlags(t *testing.T) {
 	if got := cmd.SysProcAttr.CreationFlags; got != want {
 		t.Errorf("CreationFlags = %#x, want %#x — DETACHED_PROCESS is what keeps the child alive "+
 			"when the console window closes, and the pair is deliberately exactly two", got, want)
+	}
+}
+
+// DETACHED_PROCESS observed rather than spelled.
+//
+// TestDetachSetsExactlyTheTwoCreationFlags above proves the flag reaches
+// SysProcAttr, and TestTheFlagLiteralsMatchTheWindowsDefinitions proves the
+// number is the right one. Neither proves the operating system acted on it, and
+// nothing else can: Go hands CreateProcess an explicit inherited-handle list,
+// so the pipe assertion in spawn_test.go — the closest thing to a behavioural
+// test Spawn has — would go green on Windows with both flags deleted.
+//
+// A console is what DETACHED_PROCESS takes away, so a console is what this
+// needs to take it away FROM. ensureConsole supplies one rather than asking
+// whether the runner brought one, for the reason written there.
+func TestSpawnLeavesTheChildWithNoConsole(t *testing.T) {
+	ensureConsole(t)
+
+	report, _ := spawnViaAChildThatExits(t)
+
+	if got := report["console"]; got != "false" {
+		t.Errorf("the detached child reports console=%q, want \"false\" — DETACHED_PROCESS did not take, "+
+			"so the daemon shares the console it was started from and dies with it on CTRL_CLOSE_EVENT", got)
 	}
 }
