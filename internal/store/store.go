@@ -413,8 +413,8 @@ func (s *Store) reindex() {
 // Disabled is a policy for the auto engine and NOT a lock: an explicit `ccdad
 // switch <account>` still works on a disabled account, because a user naming an
 // account by hand has said what they want more clearly than the flag has. The
-// bool exists so the caller can spend §9.3's exit 3 — "the world is already as
-// you asked" — rather than reporting a no-op as an action taken.
+// bool exists so the caller can spend the exit contract's exit 3 — "the world
+// is already as you asked" — rather than reporting a no-op as an action taken.
 func (s *Store) SetDisabled(uuid string, disabled bool) (changed bool, err error) {
 	err = s.mutate(func() error {
 		idx := -1

@@ -7,9 +7,9 @@ import (
 	"testing"
 )
 
-// TestReplaceRetryableWindowsErrnos pins the exact errno set §10.3 lists —
-// winerror 5, 32, 33 — and one neighbouring errno that must NOT be retried,
-// so a future edit cannot silently widen or narrow the retry set.
+// TestReplaceRetryableWindowsErrnos pins the exact errno set a replace retries
+// on — winerror 5, 32, 33 — and one neighbouring errno that must NOT be
+// retried, so a future edit cannot silently widen or narrow the retry set.
 func TestReplaceRetryableWindowsErrnos(t *testing.T) {
 	tests := []struct {
 		name string

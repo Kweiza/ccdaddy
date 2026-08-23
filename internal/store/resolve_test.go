@@ -121,9 +121,9 @@ func TestResolveEmptyReferenceIsNotFound(t *testing.T) {
 	}
 }
 
-// Spec §5.1 fixes the order: index, alias, email, uuid prefix. The three tests
-// below each hold one step of it against the step below, because nothing in the
-// fixture above has a token claimed by two axes.
+// The resolution order is fixed: index, alias, email, uuid prefix. The three
+// tests below each hold one step of it against the step below, because nothing
+// in the fixture above has a token claimed by two axes.
 
 // ValidateAlias forbids a purely numeric alias, but a hand-edited accounts.toml
 // can still carry one — and the index must win, which is the whole reason the
@@ -192,7 +192,7 @@ func TestResolveFindsAUUIDPrefixThatIsAllDigits(t *testing.T) {
 	}
 }
 
-// Spec §5.1 step 1 is "all digits", which "+2" is not.
+// Step 1 of the resolution order is "all digits", which "+2" is not.
 func TestResolveDoesNotReadASignedNumberAsAnIndex(t *testing.T) {
 	if _, err := Resolve(fixture(), "+2"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Resolve(\"+2\") = %v, want ErrNotFound", err)

@@ -110,8 +110,9 @@ func TestStatusRendersTheDashboard(t *testing.T) {
 	}
 }
 
-// §7.2. A row whose usage cannot be read is not an empty account, and cswap's
-// version of this bug parked its engine on the account that reset last.
+// Unknown is never zero. A row whose usage cannot be read is not an empty
+// account, and cswap's version of this bug parked its engine on the account
+// that reset last.
 func TestStatusRendersAnUnreadableAccountAsAQuestionMark(t *testing.T) {
 	isolate(t)
 	freezeClock(t, statusNow)
@@ -181,9 +182,10 @@ func TestAPresentWindowThatReportedNothingIsStillUnreadable(t *testing.T) {
 	}
 }
 
-// §7.4's budget is roughly 28-30 requests per identity per rolling HOUR, on a
-// sliding window, so one burst saturates the identity for a full hour. A
-// dashboard a user hammers must never be a source of those requests.
+// The usage endpoint's budget is roughly 28-30 requests per identity per
+// rolling HOUR, on a sliding window, so one burst saturates the identity for a
+// full hour. A dashboard a user hammers must never be a source of those
+// requests.
 func TestStatusNeverFetches(t *testing.T) {
 	isolate(t)
 	freezeClock(t, statusNow)
@@ -294,8 +296,8 @@ func TestStatusReportsAnUnprobeableLockAsUnknown(t *testing.T) {
 	}
 }
 
-// §7.5. A linear projection through bursty real usage is too rough to state as
-// fact in a table a human reads, so it is computed and kept to --json.
+// A linear projection through bursty real usage is too rough to state as fact
+// in a table a human reads, so it is computed and kept to --json.
 func TestTheProjectionIsJSONOnly(t *testing.T) {
 	isolate(t)
 	freezeClock(t, statusNow)
@@ -312,7 +314,7 @@ func TestTheProjectionIsJSONOnly(t *testing.T) {
 	_, human, _, _ := runRoot(t, "status")
 	for _, forbidden := range []string{"projectedExhaustion", "willLastToReset", "exhaust"} {
 		if strings.Contains(human, forbidden) {
-			t.Errorf("the human table mentions %q, which §7.5 keeps to --json:\n%s", forbidden, human)
+			t.Errorf("the human table mentions %q, which is kept to --json:\n%s", forbidden, human)
 		}
 	}
 
@@ -341,9 +343,9 @@ func TestTheProjectionIsJSONOnly(t *testing.T) {
 	}
 }
 
-// §7.5's suppression. In the first hours after a reset the elapsed time is tiny,
-// so almost any usage divides out as "far ahead" and the dashboard cries wolf
-// every Monday.
+// The pace reading is suppressed for the first 24 hours after a reset: the
+// elapsed time is tiny then, so almost any usage divides out as "far ahead" and
+// the dashboard cries wolf every Monday.
 func TestPaceIsSuppressedInTheFirstDayOfAWeeklyWindow(t *testing.T) {
 	isolate(t)
 	freezeClock(t, statusNow)
@@ -438,8 +440,8 @@ func TestStatusTakesNoArguments(t *testing.T) {
 	}
 }
 
-// §9.4: one object on stdout, human notices on stderr, so a --json caller
-// always receives exactly one document.
+// The --json contract: one object on stdout, human notices on stderr, so a
+// --json caller always receives exactly one document.
 func TestStatusJSONPutsNothingButTheObjectOnStdout(t *testing.T) {
 	isolate(t)
 	freezeClock(t, statusNow)

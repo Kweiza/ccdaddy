@@ -72,9 +72,10 @@ var ErrKeychainUnsupported = errors.New("the macOS Keychain does not exist on th
 // KeychainError is a `security` invocation that did not answer: not "the item
 // is not there", which is an answer, but "ccdad could not find out".
 //
-// The distinction is §8.2's, one layer down. A keychain that is locked and a
-// keychain with nothing in it produce the same silence, and treating the first
-// as the second reports a machine as clean while a stale credential sits on it.
+// A probe that could not answer is not an absence, the same rule daemon status
+// follows one layer up. A keychain that is locked and a keychain with nothing
+// in it produce the same silence, and treating the first as the second reports
+// a machine as clean while a stale credential sits on it.
 type KeychainError struct {
 	// Op is the security subcommand that failed.
 	Op string

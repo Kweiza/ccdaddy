@@ -19,8 +19,8 @@ import (
 // an NDJSON stream — and a package that printed would force one of them to
 // parse the other's sentences.
 type Evaluation struct {
-	// Plan is the ranking's answer. Its Action maps onto §9.3's exit codes:
-	// ActionSwitch is 0, ActionStay is 3, ActionBlocked is 4.
+	// Plan is the ranking's answer. Its Action maps onto the exit contract's
+	// codes: ActionSwitch is 0, ActionStay is 3, ActionBlocked is 4.
 	//
 	// Decided says whether the ranking ran at all, and reading Plan without it
 	// is the trap this field exists for: a zero Plan does not stringify to
@@ -43,15 +43,15 @@ type Evaluation struct {
 	LiveErr error
 	// NoReadings means nothing has ever been polled, so there is no evidence to
 	// choose on. Distinct from ActionBlocked, which is a choice that was made
-	// and came back empty — §9.3 reserves 4 for "wanted, but no viable target",
-	// and both end there, but only one of them is worth telling the user to run
-	// the daemon about.
+	// and came back empty — exit 4 is "wanted, but no viable target", and both
+	// end there, but only one of them is worth telling the user to run the
+	// daemon about.
 	NoReadings bool
 	// Forced reports that Force overrode an anti-flap hold.
 	Forced bool
 	// ConfigErr is a config file that could not be used; the built-in defaults
-	// were substituted. §7.6 rule 4: refusing to switch because a threshold was
-	// mistyped is a worse answer than switching on the documented default.
+	// were substituted. Refusing to switch because a threshold was mistyped is
+	// a worse answer than switching on the documented default.
 	ConfigErr error
 	// StateErr is engine state that could not be read; the pass ran with no
 	// cooldown and no quarantines.
@@ -71,31 +71,31 @@ type EvalOptions struct {
 	Strategy    strategy.Strategy
 	HasStrategy bool
 	// Model is the model the chosen account is about to run, as the user typed
-	// it. It narrows §7.1's ranking to the windows that bind for that model;
+	// it. It narrows the ranking to the windows that bind for that model;
 	// empty is the unqualified pass, which is what the daemon runs. There is no
 	// Has- flag beside it because there is no config key to override: an empty
 	// model IS the default, rather than the absence of an opinion.
 	Model string
-	// Force bypasses §7.2's margins, and only those. It never bypasses §7.3's
-	// credit gate: that one spends money, and a flag named "force" is not the
-	// two independent opt-ins §7.3 requires.
+	// Force bypasses the anti-flap margins, and only those. It never bypasses
+	// the credit gate: that one spends money, and a flag named "force" is not
+	// the two independent opt-ins a switch onto a credit account requires.
 	Force bool
 	// Now is the clock. Zero means time.Now.
 	Now time.Time
-	// Config supplies §7's knobs, and whatever went wrong getting them. The
-	// config it returns is used either way: that IS the warning contract.
+	// Config supplies the engine's knobs, and whatever went wrong getting them.
+	// The config it returns is used either way: that IS the warning contract.
 	//
 	// Nil reads the file and falls back to the built-in defaults, which is
 	// right for a one-shot — there is no previous config to keep. A daemon must
-	// pass config.Reloader.Reload instead: §7.6 rule 4 says an unusable file
-	// leaves the engine on the LAST CONFIG THAT PARSED, and silently reverting
-	// a tuned threshold to stock because somebody mistyped an edit is the
-	// failure that rule exists to prevent.
+	// pass config.Reloader.Reload instead: the last-good-config rule says an
+	// unusable file leaves the engine on the LAST CONFIG THAT PARSED, and
+	// silently reverting a tuned threshold to stock because somebody mistyped an
+	// edit is the failure that rule exists to prevent.
 	Config func() (config.Config, error)
 }
 
-// config resolves the §7 knobs. Both branches return a usable config; only the
-// error differs.
+// config resolves the engine's knobs. Both branches return a usable config;
+// only the error differs.
 func (o EvalOptions) config() (config.Config, error) {
 	if o.Config != nil {
 		return o.Config()
@@ -115,7 +115,7 @@ func (o EvalOptions) now() time.Time {
 }
 
 // Evaluate runs the engine once. It READS the usage cache and never fetches:
-// that is the same rule `ccdad list` follows (§9.1) and for the same reason —
+// that is the same rule `ccdad list` follows, and for the same reason —
 // /api/oauth/usage allows roughly 28-30 requests per identity per rolling hour
 // over a SLIDING window, so a command a user can run in a loop must not be a
 // way to spend it.
@@ -170,9 +170,9 @@ func Evaluate(s *store.Store, opts EvalOptions) (Evaluation, error) {
 	ev.StateErr = st.LoadError()
 	ev.LastSwitchAt, ev.LastSwitchTo = st.LastSwitch()
 
-	// A config that cannot be used is a warning, never a failure: §7.6 rule 4,
-	// because refusing to switch over a mistyped threshold stops the engine
-	// silently, which is the worse outcome.
+	// A config that cannot be used is a warning, never a failure, because
+	// refusing to switch over a mistyped threshold stops the engine silently,
+	// which is the worse outcome.
 	cfg, cerr := opts.config()
 	ev.ConfigErr = cerr
 
@@ -229,7 +229,7 @@ func anyReading(cands []strategy.Candidate) bool {
 
 // forceableTarget is the best account Force may move to: the top of the
 // ranking, when that is not already the live one. A credit account is never
-// returned, which is what keeps Force away from §7.3.
+// returned, which is what keeps Force away from the credit gate.
 func forceableTarget(plan strategy.Plan, liveUUID string) (strategy.Ranked, bool) {
 	if len(plan.Result.Order) == 0 {
 		return strategy.Ranked{}, false

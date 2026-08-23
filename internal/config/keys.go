@@ -2,9 +2,9 @@ package config
 
 // The key namespace, in one table.
 //
-// It is closed. `ccdad config set` refuses a name that is not here (§9.3's
-// exit 2, because an accepted typo is a config that silently does nothing), and
-// the loader ignores one so a newer ccdad's file cannot stop an older one. Both
+// It is closed. `ccdad config set` refuses a name that is not here (exit 2,
+// because an accepted typo is a config that silently does nothing), and the
+// loader ignores one so a newer ccdad's file cannot stop an older one. Both
 // answers come from this list, so a key cannot exist for one and not the other.
 //
 // NO SECRET IS SETTABLE. Nothing token-shaped may be added: this file is
@@ -21,7 +21,7 @@ const (
 	keyStrategy           = "strategy"
 	keyMaxAutoSpend       = "credit.max_auto_spend"
 
-	// creditSection is the one table §7 groups keys under.
+	// creditSection is the only sub-table; every other key is top-level.
 	creditSection = "credit"
 )
 

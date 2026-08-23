@@ -36,10 +36,9 @@ import (
 // shells. A guard that cannot fire is worse than none: it reads as though the
 // case had been considered.
 
-// The brief names the trap: `/home/u/.local/bin` is a substring of
-// `/home/u/.local/bin2`, so matching must be by whole component. These are the
-// cases a strings.Contains implementation gets wrong, plus the ones a naive
-// split gets wrong.
+// The trap: `/home/u/.local/bin` is a substring of `/home/u/.local/bin2`, so
+// matching must be by whole component. These are the cases a strings.Contains
+// implementation gets wrong, plus the ones a naive split gets wrong.
 func TestOnPathListMatchesWholeComponentsOnly(t *testing.T) {
 	const dir = "/home/u/.local/bin"
 	cases := []struct {
@@ -53,7 +52,7 @@ func TestOnPathListMatchesWholeComponentsOnly(t *testing.T) {
 		{"last of many", "/usr/bin:/home/u/.local/bin", true, ""},
 		{"middle", "/usr/bin:/home/u/.local/bin:/bin", true, ""},
 		{"longer sibling", "/home/u/.local/bin2", false,
-			"the brief's trap: a substring match says yes here and a component match says no"},
+			"the trap: a substring match says yes here and a component match says no"},
 		{"longer sibling among many", "/usr/bin:/home/u/.local/bin2:/bin", false, ""},
 		{"prefix of the entry", "/home/u/.local", false, "a parent directory is not the directory"},
 		{"entry is a prefix of ours", "/home/u/.local/bin/deeper", false, ""},
@@ -289,8 +288,8 @@ func TestSpliceBlockRewritesInPlaceAndReportsAnUnchangedFile(t *testing.T) {
 		t.Fatalf("spliceBlock =\n%q\nwant\n%q", got, want)
 	}
 
-	// The idempotence the brief calls the feature: run it twice, and the second
-	// run writes nothing at all.
+	// The idempotence that is the feature: run it twice, and the second run
+	// writes nothing at all.
 	again, changed, err := spliceBlock(got, fresh)
 	if err != nil {
 		t.Fatalf("spliceBlock (second run): %v", err)

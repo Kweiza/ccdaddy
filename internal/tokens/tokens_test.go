@@ -166,7 +166,7 @@ func TestRefreshWritesMillisecondsFromSeconds(t *testing.T) {
 		t.Errorf("stored expiry = %s, want about %s — seconds were written where milliseconds belong",
 			rec.ExpiresAt, want)
 	}
-	// §4.2 rule 3: fields the response did not speak to survive.
+	// The round-trip rule: fields the response did not speak to survive.
 	if rec.ClientID != "CID" {
 		t.Errorf("clientId was dropped; a revocation request needs it")
 	}
@@ -319,8 +319,9 @@ func TestExpiredLiveLoginIsNotRefreshed(t *testing.T) {
 	}
 }
 
-// The three outcomes §7.2 branches on. Only a rejected credential says anything
-// about the ACCOUNT; a plane and a 503 must not quarantine the fleet.
+// The three outcomes the anti-flap quarantine branches on. Only a rejected
+// credential says anything about the ACCOUNT; a plane and a 503 must not
+// quarantine the fleet.
 func TestFailureOutcomesAreDistinct(t *testing.T) {
 	isolate(t)
 

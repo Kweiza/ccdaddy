@@ -69,11 +69,11 @@ func TestDecideStaysWhenTheLiveAccountAlreadyTopsTheRanking(t *testing.T) {
 	want(t, p, ActionStay, ReasonAlreadyBest, "")
 }
 
-// ---- the paragraph under the table -----------------------------------------
+// ---- the flap-rate rule ----------------------------------------------------
 
-// The headline requirement of §7.2: "These bound the flap RATE; they do not
-// make a reverse move impossible. Headroom changes, so a target that burns down
-// must be able to lose its position."
+// The headline requirement of anti-flap: the margins bound the flap RATE; they
+// do not make a reverse move impossible. Headroom changes, so a target that
+// burns down must be able to lose its position.
 //
 // The naive implementation latches the chosen target until it is exhausted,
 // which passes every anti-flap test anyone would write and fails the product.
@@ -100,10 +100,10 @@ func TestAReverseMoveIsRefusedWhileTheBurnIsSmall(t *testing.T) {
 	want(t, p, ActionStay, ReasonHysteresis, "")
 }
 
-// §7.2's ratio is 2.0 and the spec's own gloss is "a reverse move needs a 4x
-// relative burn". That squaring is not a second mechanism: it falls out of
-// applying the same 2.0 to every move, so a round trip has to clear it twice in
-// opposite directions.
+// The headroom ratio is 2.0, and what it works out to is that a reverse move
+// needs a 4x relative burn. That squaring is not a second mechanism: it falls
+// out of applying the same 2.0 to every move, so a round trip has to clear it
+// twice in opposite directions.
 func TestTheHeadroomRatioMakesARoundTripCostFourfold(t *testing.T) {
 	st := NewState()
 
@@ -163,8 +163,9 @@ func TestAnUnreadableBaselineDoesNotBlockAMove(t *testing.T) {
 	want(t, p, ActionSwitch, ReasonBetterTarget, "b")
 }
 
-// §7.1 files "we have no idea" ahead of "we know it is spent". That is a maybe
-// worth trying, and a margin cannot be held against a number nobody has.
+// headroomTier files "we have no idea" ahead of "we know it is spent". That is
+// a maybe worth trying, and a margin cannot be held against a number nobody
+// has.
 func TestAnUntriedCandidateIsNotHeldToAMarginItHasNoNumberFor(t *testing.T) {
 	cands := []Candidate{hr("a", 5, time.Hour), sub("b", snap(unread(), unread()))}
 
@@ -231,7 +232,7 @@ func TestBeingOnTheBestAccountOutranksTheCooldown(t *testing.T) {
 // Quarantine filters the pool BEFORE the ranking. Rejecting the winner
 // afterwards would leave Result.Mode and AllOverThreshold answering about a
 // pool containing an account nothing can use — and here that is the difference
-// between §7.1's ordinary situation and its all-above-threshold one.
+// between the ranking's ordinary situation and its all-above-threshold one.
 func TestQuarantineChangesTheSituationTheRankingIsMadeIn(t *testing.T) {
 	st := NewState()
 	st.Quarantine("a", now, time.Hour, "dead refresh token")
@@ -327,10 +328,10 @@ func TestRecoveryHysteresisNeedsThreeHundredSeconds(t *testing.T) {
 	want(t, Decide(enough, opts(), Config{}, NewState(), "a"), ActionSwitch, ReasonBetterTarget, "b")
 }
 
-// §7.1 tiers this mode: an account returning inside the horizon beats one that
-// does not, whatever its headroom. That is a categorical difference, so no
-// margin measured in headroom may stand in front of it — which is exactly the
-// switch §7.1 says the engine has to make.
+// The recovery key tiers this mode: an account returning inside the horizon
+// beats one that does not, whatever its headroom. That is a categorical
+// difference, so no margin measured in headroom may stand in front of it —
+// which is exactly the switch the ranking exists to make.
 func TestReturningInsideTheHorizonNeedsNoHeadroomMargin(t *testing.T) {
 	cands := []Candidate{hr("a", 19, 2*time.Hour), hr("b", 1, 30*time.Minute)}
 
@@ -341,8 +342,8 @@ func TestReturningInsideTheHorizonNeedsNoHeadroomMargin(t *testing.T) {
 	want(t, p, ActionSwitch, ReasonBetterTarget, "b")
 }
 
-// Outside the horizon §7.1 orders on headroom again, so the margin goes back
-// onto that axis.
+// Outside the horizon the ranking orders on headroom again, so the margin goes
+// back onto that axis.
 func TestOutsideTheHorizonTheHeadroomMarginsApply(t *testing.T) {
 	shy := []Candidate{hr("a", 5, 3*time.Hour), hr("b", 12, 4*time.Hour)}
 	p := Decide(shy, opts(), Config{}, NewState(), "a")
@@ -399,7 +400,7 @@ func TestTheCreditPoolIsNotReachedWhileSubscriptionQuotaRemains(t *testing.T) {
 	p := Decide(cands, opts(), Config{MaxAutoSpend: 100}, NewState(), "a")
 	want(t, p, ActionStay, ReasonAlreadyBest, "")
 	if p.CreditConsulted {
-		t.Error("CreditConsulted = true; §7.3 reaches the credit pool only once subscription is EXHAUSTED")
+		t.Error("CreditConsulted = true; the credit gate is reached only once subscription is EXHAUSTED")
 	}
 	if p.SubscriptionExhausted {
 		t.Error("SubscriptionExhausted = true; a has room")
@@ -598,8 +599,8 @@ func TestCooldownHonoursAClockThatMovedBackwards(t *testing.T) {
 	}
 }
 
-// §7.2's cooldown exists to stop switch storms, and §8's daemon auto-restarts
-// from any CLI command. An in-memory cooldown would reset on every restart and
+// The cooldown exists to stop switch storms, and the daemon auto-restarts from
+// any CLI command. An in-memory cooldown would reset on every restart and
 // become the storm it exists to prevent.
 func TestTheCooldownSurvivesARestart(t *testing.T) {
 	isolate(t)
@@ -665,10 +666,11 @@ func TestWithStateWritesAPrivateFile(t *testing.T) {
 		t.Fatalf("stat: %v", err)
 	}
 	// Windows has no mode bits: os.Chmod there toggles the read-only attribute
-	// and Stat reports 0666 whatever the file was created with. §10.3 accepts
-	// that for v1 and relies on the inherited %USERPROFILE% ACL instead --
-	// which is a property of the directory, not of this file, and not
-	// something a Go test can assert here.
+	// and Stat reports 0666 whatever the file was created with. That is
+	// documented rather than fixed for v1, and the store relies on the
+	// inherited %USERPROFILE% ACL instead -- which is a property of the
+	// directory, not of this file, and not something a Go test can assert
+	// here.
 	if runtime.GOOS != "windows" {
 		if perm := info.Mode().Perm(); perm != 0o600 {
 			t.Errorf("mode = %v, want 0600", perm)
@@ -713,8 +715,8 @@ func TestWithStateLeavesTheFileAloneWhenFnFails(t *testing.T) {
 
 // A state file that cannot be read degrades towards MORE switching, never less:
 // a quarantine that cannot be read is not evidence that an account is dead, and
-// refusing to switch on a corrupt file parks the engine exactly the way §7.2
-// says never to.
+// refusing to switch on a corrupt file parks the engine exactly the way the
+// unknown-is-never-zero rule exists to stop.
 func TestACorruptStateFileDegradesToEmptyAndSaysSo(t *testing.T) {
 	root := isolate(t)
 	if err := os.WriteFile(filepath.Join(root, "strategy.json"), []byte("{not json"), 0o600); err != nil {
@@ -830,9 +832,10 @@ func TestQuarantineDefaultsItsLengthRatherThanExpiringImmediately(t *testing.T) 
 
 // ---- what may quarantine ---------------------------------------------------
 
-// §7.2 allows exactly one trigger. Firing on a transport failure quarantines
-// every account the first time the laptop sleeps; firing on a bad status does
-// it the first time Anthropic returns a 503.
+// The quarantine has exactly one trigger, a dead refresh token. Firing on a
+// transport failure quarantines every account the first time the laptop
+// sleeps; firing on a bad status does it the first time Anthropic returns a
+// 503.
 func TestOnlyADeadRefreshTokenQuarantines(t *testing.T) {
 	cases := []struct {
 		name string
@@ -985,7 +988,7 @@ func TestAnUnattributableLoginMatchesNoAccount(t *testing.T) {
 }
 
 // A quarantined account's quota is not spendable, so it cannot be what keeps
-// §7.3's credit pool closed. This is consistent with the rest of the pass:
+// the credit pool closed. This is consistent with the rest of the pass:
 // quarantine removes an account from the world. It does not weaken "fail closed
 // on money" either — that rule is about figures nobody could READ, and a
 // quarantine is a definite failure rather than an unknown.

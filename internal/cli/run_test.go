@@ -16,7 +16,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/store"
 )
 
-// §9.1 writes the command as `run <ACCOUNT> [claude args…]`, so the account is
+// The command is spelled `run <ACCOUNT> [claude args…]`, so the account is
 // mandatory. The check lives in Args rather than in RunE for the reason
 // switch.go's validators give: cobra's own arity errors are plain errors and
 // would exit 1, and 2 is reserved for exactly "a missing argument".
@@ -74,9 +74,9 @@ type claudeStub struct {
 	spec    launchSpec
 }
 
-// §9.1: "everything at or after ACCT goes to claude verbatim, hyphens
-// included". Cobra's default interspersed parsing refuses `-p` as an unknown
-// shorthand before RunE is ever reached, so this is the test that pins
+// Everything at or after ACCT goes to claude verbatim, hyphens included.
+// Cobra's default interspersed parsing refuses `-p` as an unknown shorthand
+// before RunE is ever reached, so this is the test that pins
 // SetInterspersed(false).
 func TestRunHandsEveryTokenAfterTheAccountToClaude(t *testing.T) {
 	isolate(t)
@@ -93,10 +93,10 @@ func TestRunHandsEveryTokenAfterTheAccountToClaude(t *testing.T) {
 	}
 }
 
-// §9.1: "A literal `--` immediately after ACCT is consumed and dropped."
-// pflag does not do this for us — measured, a `--` after the first positional
-// stays in args and ArgsLenAtDash() reports -1 — so it is stripped by hand, and
-// exactly once. The second separator is a real argument of claude's.
+// A literal `--` immediately after ACCT is consumed and dropped. pflag does
+// not do this for us — measured, a `--` after the first positional stays in
+// args and ArgsLenAtDash() reports -1 — so it is stripped by hand, and exactly
+// once. The second separator is a real argument of claude's.
 func TestRunDropsExactlyOneSeparatorAfterTheAccount(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -125,8 +125,8 @@ func TestRunDropsExactlyOneSeparatorAfterTheAccount(t *testing.T) {
 	}
 }
 
-// §5.1 forbids interactive disambiguation because "`ccdad run` ends in an exec
-// and callers need determinism", and every other account-taking command turns a
+// Ambiguity is never resolved interactively: `ccdad run` ends in an exec and
+// callers need determinism, and every other account-taking command turns a
 // resolution failure into exit 2. The second half of the assertion is the one
 // that matters: a reference ccdad could not resolve must not start anything.
 func TestRunRefusesAReferenceItCannotResolve(t *testing.T) {
@@ -167,9 +167,9 @@ func envOf(env []string, name string) (string, bool) {
 }
 
 // The whole point of the command: the child reads a credential home of its own,
-// so the live login is not what decides who the session is. §3.3 blesses
-// CLAUDE_SECURESTORAGE_CONFIG_DIR for this — it scopes credentials and their
-// locks and nothing else.
+// so the live login is not what decides who the session is.
+// CLAUDE_SECURESTORAGE_CONFIG_DIR is the narrowest lever for that — it scopes
+// credentials and their locks and nothing else.
 func TestRunPointsTheChildAtACredentialHomeOfItsOwn(t *testing.T) {
 	claude := isolate(t)
 	seedAccount(t, "u-1", "a@example.com")
@@ -224,12 +224,12 @@ func TestRunSeedsTheSessionWithTheChosenAccountsCredentials(t *testing.T) {
 }
 
 // A session credential home holds a live refresh token, so it gets the same
-// hygiene as the store: 0700 on the directory, 0600 on the file. §10.3 accepts
-// that Windows has no mode bits and relies on the inherited profile ACL, which
-// is why the assertion is unix-only.
+// hygiene as the store: 0700 on the directory, 0600 on the file. On Windows
+// chmod is a no-op and the protection is the ACL inherited from %USERPROFILE%
+// instead, which is why the assertion is unix-only.
 func TestRunGivesTheSessionThePrivateModesTheStoreUses(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("§10.3: no chmod on Windows; the inherited user-profile ACL is the v1 answer")
+		t.Skip("no chmod on Windows; the inherited user-profile ACL is the v1 answer")
 	}
 	isolate(t)
 	seedAccount(t, "u-1", "a@example.com")
@@ -299,8 +299,9 @@ func stubLookClaude(t *testing.T, path string) {
 }
 
 // `ccdad run` is a runner, so claude's status is the answer — the convention
-// env(1), nohup(1) and sudo(8) all follow. §9.3's closed table describes what
-// CCDAD does; past the launch there is no ccdad left to describe.
+// env(1), nohup(1) and sudo(8) all follow. The exit-code table describes what
+// ccdad does and carves `run` out by name (README, "Exit codes"); past the
+// launch there is no ccdad left to describe.
 func TestRunPropagatesClaudesExitStatus(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("/bin/sh is the stand-in binary here")
@@ -319,8 +320,8 @@ func TestRunPropagatesClaudesExitStatus(t *testing.T) {
 
 // A child killed by a signal has no exit status of its own — ProcessState
 // reports -1, and os.Exit(-1) exits 255. The shell convention is 128+N, and
-// 130 for SIGINT is the value §9.3 already names, so a Ctrl-C'd session reads
-// the same whether the shell reports it or ccdad does.
+// 130 for SIGINT is the value the exit contract already names, so a Ctrl-C'd
+// session reads the same whether the shell reports it or ccdad does.
 func TestRunReportsASignalKilledChildAsTheShellDoes(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows has no signals; a Ctrl-C'd child exits with STATUS_CONTROL_C_EXIT")
@@ -418,9 +419,11 @@ func TestRunAdoptsBackARefreshTokenTheSessionRotated(t *testing.T) {
 	}
 }
 
-// §10.3: "`claude` is a `.cmd` shim | exec.LookPath honors PATHEXT, but `.cmd`
-// targets go through cmd.exe with restrictive argument escaping — never pass a
-// prompt on argv on Windows."
+// `claude` is often npm's `.cmd` shim, and exec.LookPath honors PATHEXT, so
+// that is the path `ccdad run` gets back. A `.cmd` target runs through
+// cmd.exe, so an argument cmd.exe would re-interpret must never reach one on
+// argv: `run` resolves past a shim it recognises and launches the interpreter
+// directly, and refuses the argument when it cannot.
 //
 // Go builds a command line to CommandLineToArgvW rules and has no special case
 // for .bat/.cmd anywhere; cmd.exe does not parse by those rules. An argument
@@ -476,9 +479,9 @@ func TestRunRefusesAnArgumentACmdShimWouldReinterpret(t *testing.T) {
 	}
 }
 
-// --full-profile is the other half of the §13 Q1 decision: a whole config home
-// of its own rather than credentials alone, so the session keeps its MCP
-// logins.
+// `ccdad run` supports both credential roots, chosen by a flag, and
+// --full-profile is the other one: a whole config home of its own rather than
+// credentials alone, so the session keeps its MCP logins.
 //
 // The negative assertion is the load-bearing one. Claude Code resolves its
 // credential root as CLAUDE_SECURESTORAGE_CONFIG_DIR ?? CLAUDE_CONFIG_DIR ??
@@ -509,10 +512,10 @@ func TestRunFullProfileScopesTheConfigHomeAndLeavesCredentialsInside(t *testing.
 	}
 }
 
-// The flag belongs to ccdad and is only ccdad's BEFORE the account. §9.1 gives
-// everything at or after ACCT to claude, so the same spelling afterwards is a
-// claude argument — surprising enough that it is pinned rather than left to be
-// rediscovered as a bug report.
+// The flag belongs to ccdad and is only ccdad's BEFORE the account.
+// Everything at or after ACCT goes to claude, so the same spelling afterwards
+// is a claude argument — surprising enough that it is pinned rather than left
+// to be rediscovered as a bug report.
 func TestRunTreatsFullProfileAfterTheAccountAsClaudesArgument(t *testing.T) {
 	isolate(t)
 	seedAccount(t, "u-1", "a@example.com")
@@ -660,7 +663,7 @@ func TestRunDoesNotPassOnADefinedButEmptyConfigDir(t *testing.T) {
 
 // Where `--help` is decides whose help it is, and the answer surprises people:
 // before the account it is ccdad's, after it is claude's. That falls out of
-// §9.1's "everything at or after ACCT" rather than being a separate rule, and
+// the "everything at or after ACCT" rule rather than being a separate one, and
 // it is the reason DisableFlagParsing is the wrong tool — it would swallow
 // ccdad's own help along with everything else.
 func TestRunSplitsHelpAtTheAccount(t *testing.T) {

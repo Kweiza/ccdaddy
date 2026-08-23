@@ -11,9 +11,9 @@ import (
 //
 // It exists because Windows answers that question directly and Unix cannot:
 // OpenEvent returning ERROR_FILE_NOT_FOUND means no daemon ever created the
-// event, which is a negative answer to a probe (§9.3's exit 5) rather than a
-// failure. A signal sent to a pid has no equivalent — a pid either exists or
-// does not, and neither says whether the process is listening.
+// event, which is a negative answer to a probe (exit 5 in the exit contract)
+// rather than a failure. A signal sent to a pid has no equivalent — a pid
+// either exists or does not, and neither says whether the process is listening.
 var ErrNoShutdownListener = errors.New("nothing is listening for a shutdown request")
 
 // RequestShutdown asks the daemon at pid to stop, and returns as soon as the
@@ -54,7 +54,7 @@ func RequestShutdown(pid int) error {
 // user has to be told about, and `kill -9` is one command away when they decide
 // otherwise. Windows has no equivalent a user can safely reach for: `taskkill
 // /F` takes a pid and performs no cross-check whatsoever, which is precisely
-// the mistake §10.3 lists this against.
+// the mistake this exists against.
 //
 // Everything it needs to identify the daemon it recorded is read here rather
 // than passed in, so a caller cannot assemble a target that skips a check.

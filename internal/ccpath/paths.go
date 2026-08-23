@@ -141,13 +141,13 @@ func GlobalConfigPath() (string, error) {
 // this process resolves -- the `ccdad run --full-profile` profile, which is a
 // whole CLAUDE_CONFIG_DIR that only the child will ever have set.
 //
-// It cannot be folded into GlobalConfigPath, and the reason is §3.3's
-// asymmetry: with CLAUDE_CONFIG_DIR UNSET the two halves of that rule read
-// different directories -- the legacy file at <home>/.claude/.config.json and
-// the modern one at <home>/.claude.json -- so there is no single "config home"
-// to pass. With the variable SET they collapse to one, which is exactly the
-// case this function is for, and TestGlobalConfigPathInAgreesWithTheAmbientRule
-// pins that they agree there.
+// It cannot be folded into GlobalConfigPath, and the reason is the .claude.json
+// asymmetry that function works around: with CLAUDE_CONFIG_DIR UNSET the two
+// halves of that rule read different directories -- the legacy file at
+// <home>/.claude/.config.json and the modern one at <home>/.claude.json -- so
+// there is no single "config home" to pass. With the variable SET they collapse
+// to one, which is exactly the case this function is for, and
+// TestGlobalConfigPathInAgreesWithTheAmbientRule pins that they agree there.
 //
 // The legacy probe's Stat error is dropped for the same reason as above: "not
 // there" and "could not be statted" both mean the modern path is the answer.

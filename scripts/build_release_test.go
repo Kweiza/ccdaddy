@@ -17,7 +17,7 @@ import (
 	"testing"
 )
 
-// The six assets §11.5 ships. Both installers compute these names
+// The six assets a release ships. Both installers compute these names
 // independently, so this list is the contract between three files.
 var releaseAssets = []string{
 	"ccdad-darwin-amd64",
@@ -180,11 +180,11 @@ func TestBuildReleaseSumsFileIsTheFormatTheInstallersParse(t *testing.T) {
 	}
 }
 
-// The defect this pins is silent. §11.5 shipped `-X main.version=…`, and
-// cmd/ccdad/main.go declares no `version` symbol; the linker accepts an
-// unmatched -X without a warning, so the build succeeds, the release publishes,
-// and every binary reports "dev". Only running one and reading its version
-// catches it.
+// The defect this pins is silent. The obvious stamp, `-X main.version=…`,
+// names a symbol cmd/ccdad/main.go does not declare — the version lives in
+// internal/buildinfo — and the linker accepts an unmatched -X without a
+// warning, so the build succeeds, the release publishes, and every binary
+// reports "dev". Only running one and reading its version catches it.
 func TestBuildReleaseStampsTheVersionIntoTheBinary(t *testing.T) {
 	dist := buildRelease(t)
 

@@ -95,8 +95,7 @@ func TestSetupPathUsesAnExistingBashLoginFileRatherThanMakingAnother(t *testing.
 	}
 }
 
-// The idempotence the brief calls the feature, and the exit code that reports
-// it.
+// The idempotence that is the feature, and the exit code that reports it.
 func TestSetupPathRunTwiceLeavesOneBlockPerFileAndExitsThree(t *testing.T) {
 	home, _ := setupPathWorld(t, "/bin/bash")
 
@@ -237,8 +236,8 @@ func TestSetupPathShellFlagOverridesTheEnvironment(t *testing.T) {
 
 func TestSetupPathRejectsAShellFlagValueItCannotPlace(t *testing.T) {
 	// A value the user typed is a usage error; a $SHELL ccdad cannot place is
-	// not. §9.3 keeps 2 for usage alone so a script can tell a typo from a
-	// machine it cannot serve.
+	// not. The exit contract keeps 2 for usage alone so a script can tell a
+	// typo from a machine it cannot serve.
 	setupPathWorld(t, "/bin/bash")
 	code, _, _, top := runRoot(t, "setup-path", "--shell", "nonesuch")
 	if code != ExitUsage {

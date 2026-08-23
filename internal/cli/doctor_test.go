@@ -69,10 +69,11 @@ func seedHealthyMachine(t *testing.T) {
 	writeLiveFile(t, `{"claudeAiOauth":{"accessToken":"AT","refreshToken":"RT-uuid-a"}}`)
 }
 
-// §8.2's rule, one layer up: creating the lock file while checking for it
-// destroys the one piece of genuine evidence that no daemon ever started here.
-// store.Open would create the store directory too, which is why doctor does not
-// use it — a diagnostic that manufactures what it reports on is worthless.
+// The same rule the daemon singleton probe follows, one layer up: creating the
+// lock file while checking for it destroys the one piece of genuine evidence
+// that no daemon ever started here. store.Open would create the store directory
+// too, which is why doctor does not use it — a diagnostic that manufactures
+// what it reports on is worthless.
 func TestDoctorCreatesNothing(t *testing.T) {
 	isolate(t)
 	missing := filepath.Join(t.TempDir(), "never-created")
@@ -87,9 +88,9 @@ func TestDoctorCreatesNothing(t *testing.T) {
 	}
 }
 
-// §8.2 names this as doctor's job: a store that points at nothing is a
-// configuration question, and the singleton answers "not running" for it on
-// purpose rather than "cannot determine".
+// Naming a store that points at nothing is doctor's job: it is a configuration
+// question, and the singleton answers "not running" for it on purpose rather
+// than "cannot determine".
 //
 // It is a warning and not a failure because the two readings are
 // indistinguishable from here — a fresh install and a mistyped CCDAD_HOME
@@ -205,9 +206,9 @@ func TestDoctorTreatsAnAbsentDaemonAsHealthy(t *testing.T) {
 	}
 }
 
-// §4.3's "on startup" half — the only part of it that was still missing. Six
-// machine keys drifted in after clauth's one-key list was written, so this is
-// demonstrated drift rather than a hypothetical.
+// The unknown-key probe's "on startup" half — the only part of it that was
+// still missing. Six machine keys drifted in after clauth's one-key list was
+// written, so this is demonstrated drift rather than a hypothetical.
 func TestDoctorReportsUnknownCredentialKeys(t *testing.T) {
 	isolate(t)
 	seedHealthyMachine(t)
@@ -278,7 +279,7 @@ func TestDoctorIsQuietWithACleanEnvironment(t *testing.T) {
 
 func TestDoctorReportsLooseStorePermissions(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("§10.3: chmod is a no-op on Windows")
+		t.Skip("chmod is a no-op on Windows")
 	}
 	isolate(t)
 	seedHealthyMachine(t)
@@ -297,7 +298,7 @@ func TestDoctorReportsLooseStorePermissions(t *testing.T) {
 
 func TestDoctorReportsALooseCredentialFile(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("§10.3: chmod is a no-op on Windows")
+		t.Skip("chmod is a no-op on Windows")
 	}
 	isolate(t)
 	seedHealthyMachine(t)
@@ -320,7 +321,7 @@ func TestDoctorReportsALooseCredentialFile(t *testing.T) {
 
 func TestDoctorAcceptsATightStore(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("§10.3: chmod is a no-op on Windows")
+		t.Skip("chmod is a no-op on Windows")
 	}
 	isolate(t)
 	seedHealthyMachine(t)
@@ -406,9 +407,9 @@ func TestDoctorReportsACorruptUsageCache(t *testing.T) {
 	}
 }
 
-// §12's High-severity risk: Claude Code changes these internals between
-// releases. A credentials file ccdad cannot parse is the loudest form of that,
-// and switch deliberately refuses to repair one.
+// Claude Code changing these internals between releases is the risk doctor
+// exists against. A credentials file ccdad cannot parse is the loudest form of
+// that, and switch deliberately refuses to repair one.
 func TestDoctorReportsAnUnparseableCredentialsFile(t *testing.T) {
 	isolate(t)
 	seedHealthyMachine(t)
@@ -461,11 +462,12 @@ func TestDoctorHumanOutputNamesEveryCheck(t *testing.T) {
 	}
 }
 
-// §13 open question 4 is unsettled, so this ships report-only. A repair would
-// have to be a deliberate act behind a flag, and there is no flag.
+// Whether doctor should repair or only report is undecided, so it ships
+// report-only. A repair would have to be a deliberate act behind a flag, and
+// there is no flag.
 func TestDoctorRepairsNothing(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("§10.3: chmod is a no-op on Windows")
+		t.Skip("chmod is a no-op on Windows")
 	}
 	isolate(t)
 	seedHealthyMachine(t)
@@ -503,9 +505,9 @@ func TestDoctorTakesNoArguments(t *testing.T) {
 	}
 }
 
-// A broken config.toml is ignored SILENTLY by the engine — that is the whole
-// point of §8.4's "keep running on the last good config" — so doctor is where a
-// user finds out it has been doing nothing.
+// A broken config.toml is ignored SILENTLY by the engine — config.Reloader
+// hands back the last config that parsed rather than stopping the daemon — so
+// doctor is where a user finds out it has been doing nothing.
 func TestDoctorReportsAnUnusableConfigFile(t *testing.T) {
 	isolate(t)
 	seedHealthyMachine(t)
@@ -547,7 +549,7 @@ func TestDoctorTreatsAMissingConfigAsOrdinary(t *testing.T) {
 	}
 }
 
-// §12 lists unattended credit spend as a High risk, and doctor is where a user
+// Unattended credit spend is a high-severity risk, and doctor is where a user
 // checks what their machine will do while they are not watching.
 func TestDoctorSaysWhenUnattendedSpendingIsArmed(t *testing.T) {
 	isolate(t)
@@ -659,7 +661,7 @@ func TestDoctorReportsNoSessionsWhenTheContainerWasNeverCreated(t *testing.T) {
 // token inside a session would otherwise be reported as "ok".
 func TestDoctorFailsOnASessionDirectoryAnyoneCanRead(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("§10.3: chmod is a no-op on Windows")
+		t.Skip("chmod is a no-op on Windows")
 	}
 	isolate(t)
 	seedHealthyMachine(t)
@@ -758,10 +760,10 @@ type lockedKeychain struct{}
 func (lockedKeychain) Error() string  { return "security find-generic-password: keychain-locked" }
 func (lockedKeychain) Detail() string { return "the login keychain is locked, so ccdad cannot tell" }
 
-// §8.2's rule, at the level of one subprocess: a probe that could not answer is
-// not an absence. This is the failure mode that would make the whole check
-// worthless -- a machine with a stale credential AND a locked keychain reported
-// as having neither.
+// The same rule the daemon singleton probe follows, at the level of one
+// subprocess: a probe that could not answer is not an absence. This is the
+// failure mode that would make the whole check worthless -- a machine with a
+// stale credential AND a locked keychain reported as having neither.
 func TestDoctorTreatsAnUnreadableKeychainAsUnknown(t *testing.T) {
 	isolate(t)
 	seedHealthyMachine(t)

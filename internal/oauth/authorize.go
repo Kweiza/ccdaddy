@@ -41,9 +41,9 @@ type AuthorizeParams struct {
 // string has to match what the authorization server saw.
 //
 // port must come from a bound listener. A zero port means the bind failed and
-// the loopback path is disabled ([§6.4]), in which case the caller must not
-// build this URL at all: sending http://localhost:0/callback would turn a local
-// bug into an opaque 400 from the authorization server.
+// the loopback path is disabled, in which case the caller must not build this
+// URL at all: sending http://localhost:0/callback would turn a local bug into
+// an opaque 400 from the authorization server.
 func LoopbackRedirectURI(port int) string {
 	if port < 1 || port > 65535 {
 		panic(fmt.Sprintf("oauth: LoopbackRedirectURI called with port %d; the loopback listener is not bound", port))

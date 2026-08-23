@@ -227,9 +227,9 @@ func readExport(cmd *cobra.Command, path string) (exportPayload, error) {
 		return exportPayload{}, UsageError("that file is not a ccdad export: %v", err)
 	}
 	// Zero means the field was absent, which is what every JSON document that
-	// is not a ccdad export has. A HIGHER version is accepted: §9.4's contract
-	// is additive, so a newer export's extra fields are ignored rather than
-	// refused.
+	// is not a ccdad export has. A HIGHER version is accepted: the `--json`
+	// contract is additive, so a newer export's extra fields are ignored rather
+	// than refused.
 	if payload.SchemaVersion < 1 {
 		return exportPayload{}, UsageError("that file is not a ccdad export: it carries no schemaVersion")
 	}
@@ -300,11 +300,11 @@ func checkAliasCollisions(payload exportPayload, existing map[string]store.Accou
 // importSnapshot filters an imported blob down to what may be stored for ONE
 // account.
 //
-// §9.1 states the mcpOAuth rule for the live credentials file, and enforcing it
-// only there would be too late: a machine key that reached a per-account
-// snapshot would be merged into the live file by the next ordinary `ccdad
-// switch`, through a path with no rule on it. So the filter runs here, one
-// level earlier, at the boundary where the document becomes ccdad's data.
+// `ccdad import` never writes mcpOAuth into the live credentials file, and
+// enforcing that only there would be too late: a machine key that reached a
+// per-account snapshot would be merged into the live file by the next ordinary
+// `ccdad switch`, through a path with no rule on it. So the filter runs here,
+// one level earlier, at the boundary where the document becomes ccdad's data.
 //
 // cclink.Extract is the filter rather than a key list written out again — it is
 // the same deny-list Merge and Capture use, so a key Anthropic adds cannot be

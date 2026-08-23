@@ -39,9 +39,9 @@ func storeIsThere(t *testing.T) bool {
 	return err == nil
 }
 
-// §11.2 fix 6 points both installers at this command, and it deletes the live
-// OAuth refresh token of every managed account. It has to say what it is about
-// to destroy before it asks.
+// Both installers point at this command, and it deletes the live OAuth refresh
+// token of every managed account. It has to say what it is about to destroy
+// before it asks.
 func TestUninstallEnumeratesBeforeAsking(t *testing.T) {
 	isolate(t)
 	stubDaemonWorld(t, &fakeDaemon{})

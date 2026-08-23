@@ -22,8 +22,8 @@ import (
 // saveApiKey's `let r = !1; if (r) {...}`, which no build can enter, and that
 // call passes no item argument, so it would name the API-key item rather than
 // this one. The "-credentials" constant ships in both and is referenced by
-// nothing at all. §3.3 keeps this path for exactly two situations that outlive
-// that:
+// nothing at all. ccdad keeps this path for exactly two situations that
+// outlive that:
 //
 //   - a user still on a Keychain-era Claude Code, whose login lives in the
 //     Keychain and not in any file ccdad can read;
@@ -143,22 +143,20 @@ func CredentialKeychainItem() KeychainItem {
 	}
 }
 
-// keychainServiceName is qpt(), and it carries three things the spec's
-// one-line formula leaves out.
+// keychainServiceName is qpt(), and three things about it are easy to get
+// wrong.
 //
 // CLAUDE_SECURESTORAGE_CONFIG_DIR OUTRANKS CLAUDE_CONFIG_DIR, and completely.
-// §3.3's formula names only CLAUDE_CONFIG_DIR, but when the securestorage
-// variable is DEFINED it decides both halves on its own and CLAUDE_CONFIG_DIR
-// is not consulted at all -- which is the same asymmetry ccpath.CredentialHome
-// already has for the credential PATH, for the same reason: that variable
-// scopes credentials independently of everything else.
+// When the securestorage variable is DEFINED it decides both halves on its own
+// and CLAUDE_CONFIG_DIR is not consulted at all -- which is the same asymmetry
+// ccpath.CredentialHome already has for the credential PATH, for the same
+// reason: that variable scopes credentials independently of everything else.
 //
 // THE SUFFIX TEST IS TRUTHINESS, NOT DEFINEDNESS. Claude Code writes
 // `!process.env.CLAUDE_CONFIG_DIR`, so a variable that is set to the empty
 // string behaves exactly like an unset one and yields the UNSUFFIXED item.
 // Definedness and truthiness differ on precisely that value, and it is the one
-// a test isolate sets. The half of the spec's "definedness, not equality"
-// warning that does hold is the half it was written for: setting
+// a test isolate sets. It is not an EQUALITY test either: setting
 // CLAUDE_CONFIG_DIR to the literal default path still produces a suffixed item,
 // because the value is hashed rather than compared against anything.
 //
@@ -180,8 +178,8 @@ func keychainServiceName(env keychainEnv, item string) string {
 	return keychainBaseService + oauthFileSuffix(env.customOAuthURL) + item + tail
 }
 
-// oauthFileSuffix is al().OAUTH_FILE_SUFFIX, which the spec writes as an opaque
-// term and which is in fact one environment variable.
+// oauthFileSuffix is al().OAUTH_FILE_SUFFIX, which reads like an opaque
+// constant and is in fact decided by one environment variable.
 //
 // Claude Code's environment selector is a function that statically returns
 // "prod", so the "-staging-oauth" and "-local-oauth" suffixes it also knows are

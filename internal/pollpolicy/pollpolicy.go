@@ -1,13 +1,13 @@
-// Package pollpolicy is spec §7.4: when to poll /api/oauth/usage next.
+// Package pollpolicy decides when to poll /api/oauth/usage next.
 //
-// §12 says to port cswap's measured poll policy verbatim rather than reinvent
-// it, and the reason is the shape of the budget. The endpoint allows roughly
+// cswap's measured cadences are taken over verbatim rather than reinvented,
+// and the reason is the shape of the budget. The endpoint allows roughly
 // 28-30 requests per identity per rolling hour and it is a SLIDING WINDOW, not
 // a bucket: capacity returns only as old requests age out, so a burst saturates
 // the identity for up to a full hour and pausing does not give any of it back
 // early. A "sleep it off" recovery path is wrong by construction.
 //
-// Which makes an over-eager poller worse than no poller at all. §7.2's
+// Which makes an over-eager poller worse than no poller at all. The
 // unknown-is-never-zero rule means a blind engine cannot switch, so a fleet
 // that spent the hour's budget in a minute has not merely lost freshness — it
 // has parked the auto-switch engine until the window rolls.
@@ -29,9 +29,9 @@ import (
 	"time"
 )
 
-// §7.4's table, verbatim. Every behavioural test in this package is phrased in
-// terms of these, so a changed value moves the assertions with it — which is
-// why one test pins the numbers themselves.
+// The measured cadence table, verbatim. Every behavioural test in this package
+// is phrased in terms of these, so a changed value moves the assertions with
+// it — which is why one test pins the numbers themselves.
 const (
 	// ServeTTL is the age under which a reading is served from the cache with
 	// no fetch, `--refresh` included.
@@ -46,9 +46,9 @@ const (
 	ActiveMaxInterval = 300 * time.Second
 	// CandidateMaxInterval is an idle alternate.
 	CandidateMaxInterval = 600 * time.Second
-	// ExhaustedInterval keeps spent accounts polling. §7.4: quota can be
-	// granted or reset before the advertised timestamp, and decision-grade
-	// status must not age into "unavailable" while the scheduler waits.
+	// ExhaustedInterval keeps spent accounts polling: quota can be granted or
+	// reset before the advertised timestamp, and decision-grade status must not
+	// age into "unavailable" while the scheduler waits.
 	ExhaustedInterval = 600 * time.Second
 	// Post429MinInterval is the floor while any 429 was seen inside
 	// Recent429Window.
@@ -67,13 +67,14 @@ const (
 	// JitterFrac keeps independent processes out of lockstep.
 	JitterFrac = 0.1
 	// UrgentBandPct is how close to the threshold the active account must be
-	// for the urgent cadence. §7.4's table names it only in the urgentInterval
-	// row's prose ("within 15 pp of threshold"); it is a constant here for the
-	// same reason every other number in that table is one.
+	// for the urgent cadence. It is not a cadence of its own — it is half of the
+	// urgent rule, within 15 pp of threshold AND moving — so cswap's measured
+	// set carries it as prose rather than as a number. It is a constant here
+	// for the same reason every other measured number in this block is.
 	//
-	// The thirteenth row of that table, spendArmFraction, is not here: it
-	// belongs to §7.3's credit gate and already exists in internal/strategy.
-	// Re-spelling it would put one number in two places that must agree.
+	// spendArmFraction, from the same measured set, is not here: it belongs to
+	// the credit gate and already exists in internal/strategy. Re-spelling it
+	// would put one number in two places that must agree.
 	UrgentBandPct = 15.0
 )
 
@@ -100,10 +101,10 @@ type Reading struct {
 	// BindingPct is percent USED on the binding window, and Known whether it
 	// could be read at all.
 	//
-	// §7.2: unknown is never zero. As zero, an unreadable account looks
-	// maximally far from its threshold, and against a real previous sample it
-	// looks like an enormous move — so it would be polled on the wrong cadence
-	// in whichever direction happens to be worse.
+	// Unknown is never zero. As zero, an unreadable account looks maximally
+	// far from its threshold, and against a real previous sample it looks like
+	// an enormous move — so it would be polled on the wrong cadence in
+	// whichever direction happens to be worse.
 	BindingPct float64
 	Known      bool
 	// Exhausted means every window is spent.
@@ -117,7 +118,7 @@ type Input struct {
 	Active bool
 	// Reading is the sample just taken.
 	Reading Reading
-	// Threshold is §7.6's spent line, in percent.
+	// Threshold is the configured spent line, in percent.
 	Threshold float64
 }
 
@@ -222,8 +223,9 @@ func recent429(s State, now time.Time) bool {
 //
 // The urgent cadence is scaled like everything else, and it can still exceed
 // the allowance transiently on a group of one — 60 s is 60 requests an hour.
-// That is §7.4's own arithmetic and it is deliberate: urgency is a burst, not a
-// steady state, and AIMD is the backstop when it turns out to be one.
+// That overshoot is the urgent cadence's own arithmetic, and it is deliberate:
+// urgency is a burst, not a steady state, and AIMD is the backstop when it
+// turns out to be one.
 //
 // accounts below 1 means the caller has nothing to share among, which is the
 // unshared interval rather than a licence to poll as fast as possible.
@@ -244,8 +246,8 @@ func PerIdentity(d time.Duration, accounts int) time.Duration {
 //
 // Everything is bound by Post429MaxInterval, the endpoint's own request
 // included: without that bound a mistaken header parks an account for as long
-// as it says, and §7.4 wants exhausted and rate-limited accounts still polled
-// because quota can come back early.
+// as it says, and exhausted and rate-limited accounts are still polled because
+// quota can come back early.
 func RateLimited(s State, now time.Time, retryAfter time.Duration, hasRetryAfter bool) State {
 	next := s
 	next.LastRateLimited = now
@@ -267,13 +269,13 @@ func RateLimited(s State, now time.Time, retryAfter time.Duration, hasRetryAfter
 
 // RateLimitedUntil is the post-429 floor as an instant, for the caller that has
 // no cadence to ask Next() about: `ccdad list --refresh` is a button a hand
-// presses, not a scheduler, and §9.1 still holds it to §7.4's backoff.
+// presses, not a scheduler, and it is still held to the post-429 backoff.
 //
 // It is the LONGER of the flat floor and whatever AIMD has earned, measured
 // from the 429 itself rather than from the last reading. A failed poll leaves
-// the previous reading's timestamp alone — deliberately, because §7.2 keeps the
-// old evidence — so an age-based hold would expire the instant a 429 arrived
-// for an account whose last good reading was already stale.
+// the previous reading's timestamp alone — deliberately, since a failure must
+// not overwrite real evidence — so an age-based hold would expire the instant
+// a 429 arrived for an account whose last good reading was already stale.
 //
 // Recent429Window is not consulted, and that is not an omission: the hold can
 // never outlast it, because Post429MaxInterval clamps the earned backoff at

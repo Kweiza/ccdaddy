@@ -120,10 +120,10 @@ func TestImportOfAKnownAccountIsAnUpdate(t *testing.T) {
 	}
 }
 
-// The rule §9.1 states for the live credentials file, enforced one level
-// earlier: a machine key that reached a per-account snapshot would be merged
-// into the live file by the next ordinary switch, through a path with no rule
-// on it.
+// The rule that import never writes mcpOAuth into the live credentials file,
+// enforced one level earlier: a machine key that reached a per-account
+// snapshot would be merged into the live file by the next ordinary switch,
+// through a path with no rule on it.
 func TestImportStripsMachineKeysFromTheSnapshot(t *testing.T) {
 	isolate(t)
 	path := writeImportFile(t, `{
@@ -356,8 +356,9 @@ func TestImportOfAMetadataOnlyExport(t *testing.T) {
 	}
 }
 
-// §9.4's contract is additive: a newer export's extra fields are ignored, not
-// refused, or a backup becomes unreadable by the build that has to restore it.
+// The `--json` contract is additive: a newer export's extra fields are
+// ignored, not refused, or a backup becomes unreadable by the build that has
+// to restore it.
 func TestImportAcceptsANewerSchema(t *testing.T) {
 	isolate(t)
 	path := writeImportFile(t, `{

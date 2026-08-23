@@ -45,8 +45,8 @@ func TestFetchUsageParsesAResponse(t *testing.T) {
 
 // The usage call is NOT the profile call. Claude Code's own code sends
 // Authorization + Content-Type + anthropic-beta here and Cache-Control there;
-// spec §3.2's rule is to match the headers Claude Code sets and forge nothing
-// axios adds beneath them.
+// the rule is to match the headers Claude Code sets and forge nothing axios
+// adds beneath them.
 func TestFetchUsageSendsTheHeadersClaudeCodeSends(t *testing.T) {
 	var got http.Header
 	var path string
@@ -73,7 +73,7 @@ func TestFetchUsageSendsTheHeadersClaudeCodeSends(t *testing.T) {
 	}
 	// The literal, not the constant FetchUsage also reads: comparing BetaHeader
 	// against BetaHeader through an HTTP round trip can never fail for a wrong
-	// value. This is the string spec §3.2.1 fixes.
+	// value. `oauth-2025-04-20` is what Claude Code's own usage call sends.
 	if v := got.Get("anthropic-beta"); v != "oauth-2025-04-20" {
 		t.Errorf("anthropic-beta = %q, want oauth-2025-04-20", v)
 	}
@@ -89,7 +89,8 @@ func TestFetchUsageSendsTheHeadersClaudeCodeSends(t *testing.T) {
 	// Claude Code's own client sets a FOURTH first-party header here,
 	// `User-Agent: claude-cli/<version> (external, cli)`. ccdad deliberately
 	// does not send it: it names a Claude Code version ccdad is not, and
-	// pinning one is the lie §3.2 already refuses for axios's version string.
+	// pinning one is the same lie ccdad already refuses to tell for axios's
+	// version string.
 	if v := got.Get("User-Agent"); strings.Contains(v, "claude-cli") {
 		t.Errorf("User-Agent = %q; ccdad must not claim to be a Claude Code build", v)
 	}
@@ -190,12 +191,12 @@ func TestFetchUsageReportsAHardRateLimit(t *testing.T) {
 	}
 }
 
-// Retry-After is legally an HTTP-date as well as delta-seconds. Task 20
-// accepted only the integer form on the grounds that a date parsed against a
-// skewed clock is worse than no answer; §7.4 owns that judgement now, and it
-// resolves it by refusing a date already in the PAST rather than by refusing
-// the form. Discarding a legal header means ignoring a wait the endpoint asked
-// for, and the next request earns another 429.
+// Retry-After is legally an HTTP-date as well as delta-seconds. Accepting only
+// the integer form is defensible — a date parsed against a skewed clock is
+// worse than no answer — but the parser resolves that by refusing a date
+// already in the PAST rather than by refusing the form. Discarding a legal
+// header means ignoring a wait the endpoint asked for, and the next request
+// earns another 429.
 func TestFetchUsageReadsAnHTTPDateRetryAfter(t *testing.T) {
 	c := serve(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Retry-After", time.Now().Add(90*time.Second).UTC().Format(http.TimeFormat))

@@ -95,8 +95,10 @@ func TestSplitPasteRejectsMissingHalves(t *testing.T) {
 	}
 }
 
-// When the paste wins, the exchange must echo the MANUAL redirect URI. Spec §6.1
-// calls sending the other one the single rule that must not be got wrong.
+// When the paste wins, the exchange must echo the MANUAL redirect URI. The
+// redirect_uri sent at exchange time must match the one the authorize URL used
+// or the exchange fails with 400, which is the single rule that must not be got
+// wrong.
 func TestLoginPasteWinnerUsesManualRedirect(t *testing.T) {
 	client, probe := recordingTokenServer(t)
 
@@ -196,7 +198,8 @@ func TestLoginLoopbackWinnerUsesLoopbackRedirect(t *testing.T) {
 
 // A pasted state that does not match this attempt is rejected. Claude Code
 // discards the pasted state; ccdad validates it, which costs nothing and catches
-// a code pasted from a different window. Spec §6.4 makes this arm fatal.
+// a code pasted from a different window. This arm is fatal rather than a
+// re-prompt: a code carrying someone else's state is a possible CSRF.
 func TestLoginRejectsMismatchedPastedState(t *testing.T) {
 	client, _ := recordingTokenServer(t)
 	pasted := make(chan string, 1)
@@ -217,9 +220,9 @@ func TestLoginRejectsMismatchedPastedState(t *testing.T) {
 	}
 }
 
-// Spec §6.4 makes a paste without '#' a re-prompt, not an abort: the loopback
-// race may still be about to win, and a partial copy-paste is the likeliest user
-// error in this flow.
+// A paste without '#' is a re-prompt, not an abort: the loopback race may still
+// be about to win, and a partial copy-paste is the likeliest user error in this
+// flow.
 func TestLoginRepromptsOnAMalformedPaste(t *testing.T) {
 	client, probe := recordingTokenServer(t)
 
@@ -366,9 +369,10 @@ func TestLoginHonoursContextCancellation(t *testing.T) {
 	}
 }
 
-// A caller-supplied deadline is a timeout, not an interruption. Spec §9.3
-// reserves exit 130 for SIGINT and a supervisor keys on it, so collapsing the
-// two would report "the human pressed Ctrl-C" when nothing was interrupted.
+// A caller-supplied deadline is a timeout, not an interruption. The exit
+// contract reserves exit 130 for SIGINT and a supervisor keys on it, so
+// collapsing the two would report "the human pressed Ctrl-C" when nothing was
+// interrupted.
 func TestLoginContextDeadlineIsATimeoutNotAnInterrupt(t *testing.T) {
 	client, _ := recordingTokenServer(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
@@ -414,9 +418,9 @@ func TestLoginFailsFastWhenNeitherPathExists(t *testing.T) {
 	}
 }
 
-// Spec §6.6: Claude Code closes the loopback listener immediately at paste time,
-// not after the exchange. Nothing can legitimately arrive on it once a code is
-// in hand, and the exchange is a full network round trip.
+// Claude Code closes the loopback listener immediately at paste time, not after
+// the exchange. Nothing can legitimately arrive on it once a code is in hand,
+// and the exchange is a full network round trip.
 func TestLoginClosesTheListenerOnAPasteWin(t *testing.T) {
 	client, probe := recordingTokenServer(t)
 
@@ -525,8 +529,8 @@ func TestStdinPasteChannelIsBuffered(t *testing.T) {
 }
 
 // Blank lines are skipped and whitespace trimmed, and the reader keeps serving
-// lines after the first — spec §6.4's re-prompt has nothing to re-prompt into if
-// the reader retires after one paste.
+// lines after the first — the re-prompt on a malformed paste has nothing to
+// re-prompt into if the reader retires after one paste.
 func TestPasteFromKeepsReadingAfterTheFirstLine(t *testing.T) {
 	ch, stop := pasteFrom(strings.NewReader("\n   \n  CODE#STATE  \nSECOND#LINE\n"))()
 	defer stop()
@@ -544,10 +548,10 @@ func TestPasteFromKeepsReadingAfterTheFirstLine(t *testing.T) {
 }
 
 // The deadline is built once, outside the loop. Rebuilding it inside the select
-// restarts it on every turn — and the re-prompt path ([§6.4]) makes the loop
-// turn for real, so a pipe dribbling malformed pastes could push the deadline
-// out indefinitely. With the timer hoisted, a malformed paste consumes an
-// attempt without buying any time.
+// restarts it on every turn — and the re-prompt path makes the loop turn for
+// real, so a pipe dribbling malformed pastes could push the deadline out
+// indefinitely. With the timer hoisted, a malformed paste consumes an attempt
+// without buying any time.
 func TestAwaitWinnerDeadlineIsNotPushedOutByRepromptTurns(t *testing.T) {
 	pasteCh := make(chan string, 1)
 	stop := make(chan struct{})
@@ -601,12 +605,12 @@ func TestSplitPasteSplitsOnTheFirstHash(t *testing.T) {
 	}
 }
 
-// Spec §6.4 row 1: a machine that cannot bind loopback logs in by hand instead
-// of failing. TestLoginFailsFastWhenNeitherPathExists does not constrain this —
-// it asserts only that SOME error comes back when BOTH paths are gone, which a
-// bind site that returned its error would satisfy just as well. This is the
-// other half: the bind fails, stdin is a terminal, and the login still
-// completes against the manual redirect.
+// A machine that cannot bind loopback logs in by hand instead of failing.
+// TestLoginFailsFastWhenNeitherPathExists does not constrain this — it asserts
+// only that SOME error comes back when BOTH paths are gone, which a bind site
+// that returned its error would satisfy just as well. This is the other half:
+// the bind fails, stdin is a terminal, and the login still completes against
+// the manual redirect.
 func TestLoginDegradesToManualOnlyWhenTheLoopbackBindFails(t *testing.T) {
 	client, probe := recordingTokenServer(t)
 
@@ -683,11 +687,11 @@ func TestLoginDoesNotLaunchABrowserWhenOpenBrowserIsFalse(t *testing.T) {
 	}
 }
 
-// Spec §6.1 orders it "print the MANUAL url to stderr / open the browser at the
-// LOOPBACK url", and LoginOptions.Announce documents itself as firing "before
-// the browser opens". That ordering is the whole justification for the launch
-// being best-effort: the URL is already on screen, so a failed launch costs the
-// user a copy and paste and nothing more. Swapping the two is green.
+// The order is fixed: print the MANUAL url to stderr, then open the browser at
+// the LOOPBACK url — and LoginOptions.Announce documents itself as firing
+// "before the browser opens". That ordering is the whole justification for the
+// launch being best-effort: the URL is already on screen, so a failed launch
+// costs the user a copy and paste and nothing more. Swapping the two is green.
 func TestLoginAnnouncesTheManualURLBeforeLaunchingTheBrowser(t *testing.T) {
 	client, _ := recordingTokenServer(t)
 
@@ -719,12 +723,12 @@ func TestLoginAnnouncesTheManualURLBeforeLaunchingTheBrowser(t *testing.T) {
 	}
 }
 
-// Spec §6.1: one attempt generates ONE verifier/challenge and ONE state, and
-// builds TWO authorize URLs differing only in redirect_uri. The state twin is
-// pinned by construction — the listener validates the callback's state against
-// the attempt's — but the challenge is not, and a second NewPKCE() for the
-// loopback URL is green here while being a 400 on the loopback path against the
-// real endpoint.
+// One attempt generates ONE verifier/challenge and ONE state, and builds TWO
+// authorize URLs differing only in redirect_uri. The state twin is pinned by
+// construction — the listener validates the callback's state against the
+// attempt's — but the challenge is not, and a second NewPKCE() for the loopback
+// URL is green here while being a 400 on the loopback path against the real
+// endpoint.
 func TestLoginBuildsBothAuthorizeURLsFromOnePKCEPair(t *testing.T) {
 	client, probe := recordingTokenServer(t)
 

@@ -222,9 +222,10 @@ func rowFor(t *testing.T, out, label string) string {
 	return ""
 }
 
-// §9.1's usage columns. They read the same cache `status` reads, which is what
-// §8.4's "can never disagree" rests on, and the binding window is the one with
-// LEAST left rather than the first one the response happened to carry.
+// `list`'s usage columns. They read the same cache `status` reads, which is
+// what "`ccdad list` and `ccdad status --json` can never disagree" rests on,
+// and the binding window is the one with LEAST left rather than the first one
+// the response happened to carry.
 func TestListShowsTheHeadroomAndResetOfTheBindingWindow(t *testing.T) {
 	isolate(t)
 	freezeClock(t, listNow)
@@ -253,8 +254,8 @@ func TestListShowsTheHeadroomAndResetOfTheBindingWindow(t *testing.T) {
 	}
 }
 
-// §7.2, and the defect that parked cswap's engine: an account nobody could read
-// is not an account at 0%.
+// Unknown is never read as zero, and the defect that parked cswap's engine: an
+// account nobody could read is not an account at 0%.
 func TestListRendersAnUnreadableAccountAsAQuestionMark(t *testing.T) {
 	isolate(t)
 	freezeClock(t, listNow)
@@ -270,8 +271,8 @@ func TestListRendersAnUnreadableAccountAsAQuestionMark(t *testing.T) {
 	}
 }
 
-// §8.4: `ccdad list` and `ccdad status --json` can never disagree. The strongest
-// form of that is the one asserted here — the two commands emit the SAME usage
+// `ccdad list` and `ccdad status --json` can never disagree. The strongest form
+// of that is the one asserted here — the two commands emit the SAME usage
 // object, because they build it from the same cache through the same code.
 func TestListJSONCarriesTheSameUsageObjectStatusDoes(t *testing.T) {
 	isolate(t)
@@ -369,7 +370,7 @@ func snapshotUsing(now time.Time, used float64) *usage.Snapshot {
 	return &usage.Snapshot{FiveHour: usage.NewWindow(&used, &resets)}
 }
 
-// §9.1's one exception to "list never fetches".
+// The one exception to "list never fetches".
 func TestListRefreshFetchesAndShowsTheFreshReading(t *testing.T) {
 	isolate(t)
 	now := listNow
@@ -412,9 +413,9 @@ func TestListWithoutRefreshNeverFetches(t *testing.T) {
 	}
 }
 
-// §7.4's serveTTL, on the hand-held path. The endpoint's allowance is a sliding
-// window, so a user leaning on this flag must not be able to saturate an
-// identity for an hour.
+// The poll policy's serveTTL, on the hand-held path. The endpoint's allowance
+// is a sliding window, so a user leaning on this flag must not be able to
+// saturate an identity for an hour.
 func TestListRefreshInsideTheServeTTLMakesNoSecondRequest(t *testing.T) {
 	isolate(t)
 	now := listNow
@@ -470,8 +471,8 @@ func TestListRefreshHonoursThePost429FloorAndSaysSo(t *testing.T) {
 	}
 }
 
-// §9.4: every notice --refresh produces is a notice, so `--json` still puts
-// exactly one document on stdout.
+// Every notice --refresh produces is a notice, so `--json` still puts exactly
+// one document on stdout.
 func TestListRefreshJSONIsStillOneDocument(t *testing.T) {
 	isolate(t)
 	now := listNow
@@ -604,9 +605,9 @@ func TestTheAdviceToRunListRefreshNamesAFlagThatExists(t *testing.T) {
 	}
 }
 
-// The same §4.3 probe, on the other read command a supervisor scripts. `list`
-// and `which` publish it independently, so pinning one leaves the other free to
-// drop it.
+// The same unknown-key probe, on the other read command a supervisor scripts.
+// `list` and `which` publish it independently, so pinning one leaves the other
+// free to drop it.
 func TestListJSONCarriesTheUnknownKeyProbe(t *testing.T) {
 	isolate(t)
 	seedAccount(t, "u-1", "a@example.com")

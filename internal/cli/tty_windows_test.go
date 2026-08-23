@@ -110,7 +110,7 @@ func setConsoleMode(t *testing.T, f *os.File, mode uint32) {
 	}
 }
 
-// The whole point of §10.3: a classic conhost ships with
+// The whole point of the VT enable: a classic conhost ships with
 // ENABLE_VIRTUAL_TERMINAL_PROCESSING off, and until it is on, every escape
 // sequence ccdad prints arrives as literal text.
 //

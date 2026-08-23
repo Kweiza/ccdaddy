@@ -616,7 +616,7 @@ func TestOpenRefusesWhenTheHomeDirectoryCannotBeResolved(t *testing.T) {
 	}
 }
 
-// §6.5 makes `ccdad add` double as re-authentication, and the record a fresh
+// `ccdad add` doubles as re-authentication in place, and the record a fresh
 // login builds knows nothing about the user having held this account out of
 // auto-rotation. Idx, Alias and AddedAt were pinned; Disabled was not, so
 // dropping its carry silently returned a held-out account to the pool the next

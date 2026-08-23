@@ -451,12 +451,14 @@ func TestLoopLogsATickErrorAndCarriesOn(t *testing.T) {
 	}
 }
 
-func TestLoopCadenceIsWhatTheSpecSays(t *testing.T) {
+// The two cadences are pinned against literals, so shrinking either constant
+// cannot shrink the assertion that it is what it is.
+func TestLoopCadenceIsOneSecondAndRotationCheckIsFiveMinutes(t *testing.T) {
 	if tickInterval != time.Second {
-		t.Errorf("tickInterval = %v, want 1s (§8.4)", tickInterval)
+		t.Errorf("tickInterval = %v, want 1s", tickInterval)
 	}
 	if rotateCheckInterval != 5*time.Minute {
-		t.Errorf("rotateCheckInterval = %v, want 5m — §8.4's 300 ticks at 1 Hz, as wall clock", rotateCheckInterval)
+		t.Errorf("rotateCheckInterval = %v, want 5m — 300 ticks at the 1 s cadence, as wall clock", rotateCheckInterval)
 	}
 }
 

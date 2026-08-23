@@ -206,10 +206,10 @@ func TestATickDoesNotRefetchAFreshReading(t *testing.T) {
 	}
 }
 
-// §12, and the rule the daemon is where it will actually be broken: the poller
-// and the swap executor share this process. A fetch that ran with Claude Code's
-// refresh locks held stalls Claude Code's own token rotation for the length of
-// an HTTP round trip.
+// Never hold a Claude Code lock across a network call, and the daemon is where
+// that rule will actually be broken: the poller and the swap executor share
+// this process. A fetch that ran with Claude Code's refresh locks held stalls
+// Claude Code's own token rotation for the length of an HTTP round trip.
 //
 // The assertion is made from INSIDE the request handler, which is the only
 // place that can observe what is held while the call is in flight.
@@ -292,7 +292,7 @@ func lastSwitchOnDisk(t *testing.T) (time.Time, string) {
 
 // Only a REJECTED refresh token says anything about the account. Quarantining
 // on a transport failure takes the whole fleet out the first time a laptop
-// sleeps, which is §7.2's named defect.
+// sleeps.
 func TestOnlyARejectedCredentialQuarantinesAnAccount(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -417,9 +417,10 @@ func TestAccountsInOneOrganizationShareTheBudget(t *testing.T) {
 	}
 }
 
-// §8.4 and task 34's authority rule: quota lives in usage.json and nothing
-// else records it, so `list` and `status --json` cannot disagree about a
-// number by reading different files.
+// The authority rule, written out in daemon.Status's "Which file is
+// authoritative" comment: quota lives in usage.json and nothing else records
+// it, so `list` and `status --json` cannot disagree about a number by reading
+// different files.
 func TestTheSnapshotCarriesEngineStateAndNoQuota(t *testing.T) {
 	isolateEngine(t)
 	seedAccount(t, "u-1", "org-1")
@@ -489,9 +490,10 @@ func TestATickDoesNotWaitForItsPollers(t *testing.T) {
 	e.Wait()
 }
 
-// §7.6 rule 4: a broken hand-edit leaves the engine on the last config that
-// PARSED, not on the built-in defaults. A daemon that silently reverted a tuned
-// threshold to stock would keep switching, on the wrong numbers, saying nothing.
+// The last-good-config rule: a broken hand-edit leaves the engine on the last
+// config that PARSED, not on the built-in defaults. A daemon that silently
+// reverted a tuned threshold to stock would keep switching, on the wrong
+// numbers, saying nothing.
 func TestABrokenConfigEditLeavesTheEngineOnTheLastGoodOne(t *testing.T) {
 	isolateEngine(t)
 	seedAccount(t, "u-1", "org-1")

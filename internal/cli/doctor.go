@@ -26,23 +26,24 @@ import (
 )
 
 // Everything ccdad does is reverse-engineered against exactly one pinned Claude
-// Code, and §12 rates "Claude Code changes these internals between releases"
-// High. doctor is the mitigation: the only thing that tells a user their Claude
-// Code moved out from under ccdad BEFORE a switch destroys a credential.
+// Code, and the risk register rates "Claude Code changes these internals
+// between releases" High. doctor is the mitigation: the only thing that tells
+// a user their Claude Code moved out from under ccdad BEFORE a switch destroys
+// a credential.
 //
 // Two rules shape the whole file.
 //
-// The probe must not create what it probes. §8.2 is explicit that bringing the
-// daemon lock file into existence while checking for it destroys the one piece
-// of genuine evidence that no daemon ever started here — and the same argument
-// reaches the store directory, which is why nothing here calls store.Open:
-// store.Open does an MkdirAll, so a diagnostic built on it would manufacture the
-// very thing it was asked to report on. Every path below is stat-ed, and every
-// reader used is one that returns "absent" rather than creating.
+// The probe must not create what it probes. Bringing the daemon lock file into
+// existence while checking for it destroys the one piece of genuine evidence
+// that no daemon ever started here — and the same argument reaches the store
+// directory, which is why nothing here calls store.Open: store.Open does an
+// MkdirAll, so a diagnostic built on it would manufacture the very thing it was
+// asked to report on. Every path below is stat-ed, and every reader used is one
+// that returns "absent" rather than creating.
 //
-// And it reports; it does not repair. §13's fourth open question — report versus
-// repair — is unsettled, so there is deliberately no `--fix` and no code behind
-// one. A repair added later has to be an explicit act by the user.
+// And it reports; it does not repair. Whether doctor should attempt repairs or
+// only report is still undecided, so there is deliberately no `--fix` and no
+// code behind one. A repair added later has to be an explicit act by the user.
 //
 // The two checks this file once listed as absent — the leaked `ccdad run`
 // session directories, and the stale `Claude Code-credentials` keychain item —
@@ -62,8 +63,8 @@ const (
 	// levelFail is something that will bite. It is the only level that changes
 	// the exit code.
 	levelFail checkLevel = "fail"
-	// levelSkipped is a check that does not apply here — §10.3's file modes on
-	// Windows, or a check whose subject is missing.
+	// levelSkipped is a check that does not apply here — file modes on Windows,
+	// where chmod is a no-op, or a check whose subject is missing.
 	levelSkipped checkLevel = "skipped"
 )
 
@@ -179,10 +180,10 @@ func runChecks() []check {
 // checkStore reports where ccdad's own state lives, and whether it is there.
 //
 // A missing store is a WARNING, not a failure, and the wording carries both
-// readings on purpose. §8.2 makes the point one layer down: a fresh install and
-// a mistyped CCDAD_HOME are indistinguishable at this layer — both are an
-// *fs.PathError satisfying os.ErrNotExist — and making a new machine look broken
-// is the worse of the two mistakes.
+// readings on purpose. The daemon probe makes the same point one layer down: a
+// fresh install and a mistyped CCDAD_HOME are indistinguishable at this layer —
+// both are an *fs.PathError satisfying os.ErrNotExist — and making a new
+// machine look broken is the worse of the two mistakes.
 //
 // A RELATIVE store is a failure, because store.Open refuses one outright: it
 // would put a credentials tree in whatever directory ccdad happened to be run
@@ -207,11 +208,11 @@ func checkStore(root string) (check, bool) {
 
 // checkPermissions holds the store to 0700 and everything in it to 0600.
 //
-// §10.3: Windows gets no chmod and the ACL inherited from %USERPROFILE% is what
+// Windows gets no chmod and the ACL inherited from %USERPROFILE% is what
 // protects the files there, so this is skipped rather than guessed at.
 func checkPermissions(root string, usable bool) check {
 	if runtime.GOOS == "windows" {
-		return check{"permissions", levelSkipped, "§10.3: file modes are not how Windows protects these; the %USERPROFILE% ACL is"}
+		return check{"permissions", levelSkipped, "file modes are not how Windows protects these; the %USERPROFILE% ACL is"}
 	}
 	if !usable {
 		return check{"permissions", levelSkipped, "there is no store to check"}
@@ -270,8 +271,9 @@ func checkPermissions(root string, usable bool) check {
 // The question is not "is a daemon running". It is "do locks work on this
 // filesystem at all" — ENOLCK on an NFS or CIFS mount with no lock daemon — and
 // answering that with "no daemon" is precisely the `status || spawn` respawn
-// loop §9.3 introduced exit 5 to prevent. A doctor that made that mistake would
-// have reproduced clauth's bug inside the tool written to find it.
+// loop the exit contract introduced exit 5 to prevent. A doctor that made that
+// mistake would have reproduced clauth's bug inside the tool written to find
+// it.
 func checkLocks(report daemon.Report, probeErr error) check {
 	if probeErr != nil {
 		if errors.Is(probeErr, daemon.ErrLocksUnsupported) {
@@ -352,8 +354,8 @@ func checkUsageCache(usable bool) check {
 // and the level stays a warning; deciding which one it is belongs to the human
 // who knows whether they have a session open.
 //
-// Report-only, like every other check here. §13 open question 4 ships as
-// report-only and there is no --fix; deleting a directory that turns out to
+// Report-only, like every other check here, and for the reason the top of this
+// file gives: there is no --fix, and deleting a directory that turns out to
 // belong to a live session would take the credentials out from under it.
 func checkSessions(root string, usable bool) check {
 	if !usable {
@@ -399,8 +401,8 @@ func checkSessions(root string, usable bool) check {
 // looseSessions names every session directory or credential file that anyone
 // but the owner can read.
 //
-// §10.3: Windows has no mode bits and the inherited profile ACL is what
-// protects these, so there is nothing here to answer.
+// Windows has no mode bits and the inherited profile ACL is what protects
+// these, so there is nothing here to answer.
 func looseSessions(container string, names []string) []string {
 	if runtime.GOOS == "windows" {
 		return nil
@@ -456,11 +458,11 @@ func checkEngineState(usable bool) check {
 
 // checkConfig answers whether ~/.ccdad/config.toml is doing anything.
 //
-// This is the one check whose subject fails SILENTLY by design: §8.4 has the
-// daemon keep running on the last good config when an edit breaks the file,
-// which is right — a daemon that dies on a typo stops switching accounts — and
-// it means a user can edit a threshold, see no error anywhere, and have nothing
-// take effect. Here is where they find out.
+// This is the one check whose subject fails SILENTLY by design:
+// config.Reloader keeps the daemon on the last config that parsed when an edit
+// breaks the file, which is right — a daemon that dies on a typo stops
+// switching accounts — and it means a user can edit a threshold, see no error
+// anywhere, and have nothing take effect. Here is where they find out.
 //
 // A missing file is OK rather than a warning: the defaults are a complete
 // configuration and most machines never need one. An unusable file is a warning
@@ -491,8 +493,8 @@ func checkConfig(usable bool) check {
 		}
 	}
 	if cfg.MaxAutoSpend > 0 {
-		// Unattended spending is on. §12 lists it as a High risk and doctor is
-		// where a user checks what their machine will do without them.
+		// Unattended spending is on. The risk register rates it High, and
+		// doctor is where a user checks what their machine will do without them.
 		detail = fmt.Sprintf("%s — unattended credit spending is armed up to %v", path, cfg.MaxAutoSpend)
 	}
 	return check{"config", levelOK, detail}
@@ -587,7 +589,8 @@ func credentialHomeDrift(report daemon.Report, resolved string) string {
 			"restart it from an ordinary shell", recorded, resolved)
 }
 
-// checkClaudeCode is §12's actual mitigation: has Claude Code's layout moved.
+// checkClaudeCode is the risk register's actual mitigation: has Claude Code's
+// layout moved.
 //
 // cclink.Load's refusals ARE the drift signals — a symlink at the path, a file
 // over the 1 MiB cap, a body that is not JSON — and switch deliberately cannot
@@ -633,8 +636,8 @@ func scopedSessionNote() string {
 		session.describe())
 }
 
-// checkCredentialKeys is §4.3's "on startup" half, and the last part of §4.3
-// that was still missing.
+// checkCredentialKeys is the unknown-key probe's "on startup" half, and the
+// last part of that probe that was still missing.
 //
 // Unrecognised keys are a warning, not a failure: the swap is a DENY-list, so
 // anything ccdad has never heard of is preserved rather than destroyed. What
@@ -670,9 +673,9 @@ type keychainDetailer interface{ Detail() string }
 
 // checkKeychain looks for the credential item a Keychain-era Claude Code would
 // have written, which a DOWNGRADED Claude Code would still read in preference
-// to the file ccdad writes. §12 rates "Claude Code changes these internals
-// between releases" High and names doctor as the mitigation; this is the half
-// of §12 that points backwards rather than forwards.
+// to the file ccdad writes. The risk register rates "Claude Code changes these
+// internals between releases" High and names doctor as the mitigation; this is
+// the half of that mitigation which points backwards rather than forwards.
 //
 // It is the one check here that runs another program, and two properties keep
 // that honest. The lookup asks for the item's ATTRIBUTES and never its secret,
@@ -683,7 +686,7 @@ type keychainDetailer interface{ Detail() string }
 // Report-only, like the rest of the file. What it prints instead is the exact
 // `security` invocation that removes the item — deleting another program's
 // credential unasked is the most destructive thing ccdad could do on its own
-// initiative, and §13's fourth open question is still open.
+// initiative, and whether doctor should ever repair is still undecided.
 func checkKeychain() check {
 	present, item, err := keychainProbe(context.Background())
 
@@ -952,7 +955,7 @@ func checkProfiles(root string, usable bool) check {
 	// A warning, not a failure: nothing is broken by an orphan sitting there.
 	// What it costs is a stored API key with no account left to name it, which
 	// is worth a sentence and is not something to delete on ccdad's initiative
-	// — §13's fourth open question is still open and this file still reports.
+	// — whether doctor should ever repair is undecided, and this file reports.
 	return check{"profiles", levelWarn, fmt.Sprintf(
 		"%d profile director%s under %s belong%s to no account this store has (%s). Each may hold that "+
 			"account's API key in its own Claude Code config; `ccdad remove` no longer leaves these, so they "+
@@ -973,9 +976,9 @@ func checkProfiles(root string, usable bool) check {
 // It is never a failure, and that is a judgement about doctor's taxonomy rather
 // than a convenience: ccdad invoked by its absolute path works exactly as well,
 // so this does not meet this file's bar for levelFail ("something that will
-// bite"). It is also what lets the shared doctor and §9.4 fixtures stay as they
-// are — their binary lives in a t.TempDir() that is by construction not on
-// PATH, and a warning moves neither the exit code nor `ok`.
+// bite"). It is also what lets the shared doctor and `--json` contract
+// fixtures stay as they are — their binary lives in a t.TempDir() that is by
+// construction not on PATH, and a warning moves neither the exit code nor `ok`.
 //
 // It creates nothing: os.Executable, the live PATH, and a read of the startup
 // files setup-path would have written.

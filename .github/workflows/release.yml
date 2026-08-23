@@ -1,8 +1,8 @@
 # Publish a release: six bare binaries, a sums file, and a build-provenance
 # attestation over both.
 #
-# §11.4 makes enforced sha256sums plus keyless attestation the ENTIRE v1
-# authenticity story - there is no minisign and no self-update to fall back on
+# Enforced sha256sums plus keyless attestation are the ENTIRE v1 authenticity
+# story - there is no minisign and no self-update to fall back on
 # - so an attestation that is not produced beside the upload leaves a release
 # with integrity and no authenticity, and nothing downstream notices.
 #
@@ -154,9 +154,10 @@ jobs:
           gh release view "$TAG" --json assets --jq '.assets[].name'
 
   # The one thing that proves the installers work, and it can only run once
-  # something is published. §11.5 calls it "the highest-value test neither
-  # reference project has"; .github/workflows/install-smoke.yml is where it
-  # lives and where its trade-offs are written down.
+  # something is published: nothing else here runs a PUBLISHED installer
+  # against a PUBLISHED release on a real runner.
+  # .github/workflows/install-smoke.yml is where it lives and where its
+  # trade-offs are written down.
   #
   # Called as a job rather than left to `on: release: types: [published]` in
   # that file, for two reasons that each make the event useless here:

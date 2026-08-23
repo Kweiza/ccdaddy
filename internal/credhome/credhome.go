@@ -90,9 +90,9 @@ const (
 	OwnerFileName = "engine.owner"
 )
 
-// filePerm matches the rest of what ccdad writes. §10.3: Windows gets no chmod
-// and the inherited profile ACL is what protects these, so nothing may depend
-// on it there — which is also why doctor's check on these files reports no mode.
+// filePerm matches the rest of what ccdad writes. Windows gets no chmod and
+// the inherited profile ACL is what protects these, so nothing may depend on
+// it there — which is also why doctor's check on these files reports no mode.
 const filePerm = 0o600
 
 // Home is Claude Code's credential home, and it refuses a relative one.

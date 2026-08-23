@@ -9,8 +9,8 @@ import (
 	"time"
 )
 
-// daemon.log's size policy. §8.4 says "rotate daemon.log if large", which is not
-// a number; these are.
+// daemon.log's size policy. The tick loop rotates daemon.log "if large", which
+// is not a number; these are.
 //
 // 8 MiB is roughly a week of a chatty daemon at this tick rate, and three kept
 // generations bound the whole thing at 32 MiB — a cap that matters because
@@ -20,7 +20,7 @@ const (
 	keepRotated = 3
 )
 
-// logFilePerm matches the rest of the store. §10.3: no chmod on Windows.
+// logFilePerm matches the rest of the store. chmod is a no-op on Windows.
 const logFilePerm = 0o600
 
 // logTimeFormat is RFC 3339 to the millisecond. A daemon's log is read next to
@@ -30,10 +30,11 @@ const logTimeFormat = "2006-01-02T15:04:05.000Z07:00"
 
 // Logger is the daemon's log file.
 //
-// It is the fourth file in the store and the one §8.1's table deliberately does
-// not cover, because it has none of those constraints: it is NEVER locked and
-// NEVER read by the daemon itself. `ccdad daemon logs` reads it, and a reader
-// competing with a rotation is a reader's problem — nothing here waits for one.
+// It is the fourth file in the store and the one the three-file table in this
+// package's doc comment deliberately does not cover, because it has none of
+// those constraints: it is NEVER locked and NEVER read by the daemon itself.
+// `ccdad daemon logs` reads it, and a reader competing with a rotation is a
+// reader's problem — nothing here waits for one.
 //
 // One rule for whoever writes that reader: on Windows a handle opened without
 // FILE_SHARE_DELETE BLOCKS the rename below. Go's os.OpenFile passes
@@ -120,8 +121,8 @@ func (l *Logger) Printf(format string, a ...any) {
 // This is not decoration. A panic and a runtime fatal go STRAIGHT to descriptor
 // 2 without passing through any logger, and Spawn hands the child /dev/null on
 // all three descriptors — so without this, the only trace a crash will ever
-// leave is thrown away. §8.3 assigns the job to whoever owns the log, which is
-// this type, because rotation has to carry the redirect over to the new file.
+// leave is thrown away. The job belongs to whoever owns the log, which is this
+// type, because rotation has to carry the redirect over to the new file.
 func (l *Logger) CaptureStderr() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()

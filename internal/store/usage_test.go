@@ -50,9 +50,10 @@ func reopen(t *testing.T) *Store {
 }
 
 // Every production Classify call passes an empty UsageShape, so the window
-// evidence §5 makes primary has never once been consulted. A pure credit account
-// added by `ccdad add` is filed as a subscription and walks straight past the
-// credit gate — which is precisely the failure that gate exists to prevent.
+// evidence Classify makes primary has never once been consulted. A pure credit
+// account added by `ccdad add` is filed as a subscription and walks straight
+// past the credit gate — which is precisely the failure that gate exists to
+// prevent.
 func TestApplyUsageReclassifiesACreditAccountOnRealEvidence(t *testing.T) {
 	s := seed(t, identity.KindSubscription)
 
@@ -66,9 +67,9 @@ func TestApplyUsageReclassifiesACreditAccountOnRealEvidence(t *testing.T) {
 	}
 }
 
-// §5: an account that is both classifies as Subscription and keeps its credit
-// balance as a secondary axis. Windows win outright, because credits are not
-// spent while a window still has room.
+// An account that is both — a subscription with overage enabled — classifies
+// as Subscription and keeps its credit balance as a secondary axis. Windows
+// win outright, because credits are not spent while a window still has room.
 func TestApplyUsageKeepsWindowsPrimaryOverCredits(t *testing.T) {
 	s := seed(t, identity.KindCredit)
 	snap := subscriptionSnapshot()
@@ -268,8 +269,8 @@ func TestALegacyAccountsFileWithNoCreditFieldsStillReads(t *testing.T) {
 	}
 }
 
-// A credit balance that could not be read must not persist as zero: §7.3 branches
-// on used_credits being nil and fails closed on money.
+// A credit balance that could not be read must not persist as zero: the credit
+// gate branches on used_credits being nil and fails closed on money.
 func TestApplyUsageKeepsAnUnreadableBalanceUnread(t *testing.T) {
 	s := seed(t, identity.KindSubscription)
 

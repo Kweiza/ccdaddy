@@ -74,7 +74,7 @@ These are documented decisions. A report about one of them is welcome as an
 
 - **Windows file modes.** `chmod` is a no-op on Windows, so ccdad relies on the
   ACL inherited from `%USERPROFILE%`. A machine whose profile directory is
-  readable by other users leaks the store. Spec §10.3; there is no v1 fix.
+  readable by other users leaks the store. There is no v1 fix.
 - **Local access reads everything.** ccdad is not a vault. Anything running as
   the user can read `~/.ccdad`, exactly as it can read `~/.claude`. The threat
   model is other *users* and other *processes' mistakes*, not the user's own
@@ -85,7 +85,7 @@ These are documented decisions. A report about one of them is welcome as an
   downgraded Claude Code would prefer it, and prints the `security` command
   that removes it.
 - **Windows binaries are unsigned.** There is no Authenticode certificate yet
-  (spec §11.4 is an open question), so SmartScreen and some antivirus products
+  (whether to buy one is still open), so SmartScreen and some antivirus products
   will warn. Verify the download instead — see below.
 - **`ANTHROPIC_API_KEY` is not attributed.** `ccdad which` refuses to say which
   managed account an `ANTHROPIC_API_KEY` belongs to, because Claude Code gates
