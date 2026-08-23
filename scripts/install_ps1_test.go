@@ -179,6 +179,55 @@ func TestInstallPs1TellsAnErrorPageFromASumsFile(t *testing.T) {
 	}
 }
 
+// The entry install.ps1's own read makes possible, and used to miss.
+//
+// Add-CcdadToUserPath reads the value with DoNotExpandEnvironmentNames, which
+// is correct - writing an expanded PATH back would freeze every %VAR% in it to
+// today's value. But $Directory arrives fully expanded (Join-Path
+// $env:LOCALAPPDATA ...), so comparing only the raw text meant a user whose
+// Path held `%LOCALAPPDATA%\Programs\ccdad` failed the equality test and got a
+// second, expanded copy appended on EVERY install. It is also the copy `ccdad
+// uninstall` would then have to find.
+//
+// This is what caught it, and it runs on Linux: .NET's
+// ExpandEnvironmentVariables handles %VAR% syntax on every platform.
+func TestInstallPs1MatchesAPathEntryThatIsStillUnexpanded(t *testing.T) {
+	const local = `C:\Users\a\AppData\Local`
+	const dir = local + `\Programs\ccdad`
+	for _, tc := range []struct{ name, current string }{
+		{"the only entry", `%LOCALAPPDATA%\Programs\ccdad`},
+		{"among others", `C:\Windows;%LOCALAPPDATA%\Programs\ccdad;C:\Windows\System32`},
+		{"with a trailing backslash", `%LOCALAPPDATA%\Programs\ccdad\`},
+		// The PATH text's case is covered above by "among others" through the
+		// OrdinalIgnoreCase compare. The VARIABLE NAME's case (`%localappdata%`)
+		// deliberately is not: Windows resolves environment variables
+		// case-insensitively and Linux does not, so under pwsh here that row
+		// would assert the host's rule rather than the installer's. It is
+		// verified on Windows by the install-smoke workflow or not at all.
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := dotSource(t, "$env:LOCALAPPDATA = '"+local+"'; "+
+				"$r = Get-CcdadUpdatedPath -Current '"+tc.current+"' -Directory '"+dir+
+				"'; if ($null -eq $r) { 'NULL' } else { $r }")
+			if got != "NULL" {
+				t.Errorf("PATH %q already holds %q unexpanded, but install.ps1 appended a second copy: %q",
+					tc.current, dir, got)
+			}
+		})
+	}
+
+	// The mirror image, so this does not pass by matching everything: a
+	// different directory that merely expands to a near neighbour must still be
+	// appended -- and the entry that survives is written back UNEXPANDED, which
+	// is the property the raw read exists to protect.
+	got := dotSource(t, "$env:LOCALAPPDATA = '"+local+"'; "+
+		"$r = Get-CcdadUpdatedPath -Current '%LOCALAPPDATA%\\Programs\\ccdad2' -Directory '"+dir+
+		"'; if ($null -eq $r) { 'NULL' } else { $r }")
+	if want := `%LOCALAPPDATA%\Programs\ccdad2;` + dir; got != want {
+		t.Errorf("a longer sibling was treated as the entry: got %q, want %q", got, want)
+	}
+}
+
 // The decision half of the PATH write. The registry half - keeping the value
 // kind and reading with DoNotExpandEnvironmentNames - cannot be exercised off
 // Windows, which is why the decision was split out of it.
