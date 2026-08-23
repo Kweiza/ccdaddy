@@ -19,6 +19,22 @@ import (
 // Nothing in here may reach for path/filepath or os.PathListSeparator. Under
 // `go test` on Linux those answer '/' and ':' for BOTH rule sets, so a Windows
 // bug would pass here and ship.
+//
+// Two kinds of test are NOT here, and are in setuppath_unix_test.go behind
+// `!windows`, because they are not decisions at all. The POSIX-block tests
+// hand a real bash and dash a file to source, and a Windows ccdad never
+// sources one — it registers PATH in the registry. The XDG_CONFIG_HOME test
+// asserts that an absolute POSIX path is absolute, which filepath.IsAbs quite
+// correctly denies on Windows.
+//
+// They were here at first, and the Windows leg is what said so. Their guard
+// was an exec.LookPath on the shell, which reads as "skip where there is no
+// shell" and is not one on that runner: Git for Windows ships BOTH bash and
+// /usr/bin/dash, so the lookup succeeded for each, and the shell was then
+// handed a `t.TempDir()` spelled C:\Users\RUNNER~1\... , whose backslashes it
+// ate as escapes — `. C:UsersRUNNER~1AppData...: not found`, measured, in both
+// shells. A guard that cannot fire is worse than none: it reads as though the
+// case had been considered.
 
 // The brief names the trap: `/home/u/.local/bin` is a substring of
 // `/home/u/.local/bin2`, so matching must be by whole component. These are the
@@ -209,126 +225,6 @@ func TestUserPathWithoutDirRemovesEveryCopyAndNothingElse(t *testing.T) {
 			}
 		})
 	}
-}
-
-// The block is executed rather than merely spelled. Four of the defects this
-// shape exists to prevent — a duplicate on every source, the working directory
-// landing on PATH, an abort under `set -u`, and a directory with a `$` in it
-// corrupting the line — are invisible to a string comparison and obvious to a
-// shell. bash and dash are both here; every one of these runs in both.
-func sourceBlock(t *testing.T, shell, dir, initialPATH string, opts ...string) string {
-	t.Helper()
-	bin, err := exec.LookPath(shell)
-	if err != nil {
-		t.Skipf("%s is not installed", shell)
-	}
-	file := filepath.Join(t.TempDir(), "block.sh")
-	if err := os.WriteFile(file, []byte(renderBlock(dir, shellPOSIX)), 0o644); err != nil {
-		t.Fatalf("writing the block: %v", err)
-	}
-	script := strings.Join(opts, "\n") + "\n. " + file + "\n. " + file + "\n. " + file + "\nprintf %s \"$PATH\"\n"
-	cmd := exec.Command(bin, "-c", script)
-	// env -i: the block's behaviour must not depend on what the developer
-	// exports. The PATH under test is passed in explicitly, or left unset.
-	cmd.Env = []string{"PATH=" + initialPATH}
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("%s rejected the block: %v\n%s\n--- block ---\n%s", shell, err, out, renderBlock(dir, shellPOSIX))
-	}
-	return string(out)
-}
-
-func eachPOSIXShell(t *testing.T, run func(t *testing.T, shell string)) {
-	t.Helper()
-	for _, shell := range []string{"bash", "dash"} {
-		t.Run(shell, func(t *testing.T) { run(t, shell) })
-	}
-}
-
-func TestPOSIXBlockPrependsExactlyOnceHoweverOftenItIsSourced(t *testing.T) {
-	eachPOSIXShell(t, func(t *testing.T, shell string) {
-		got := sourceBlock(t, shell, "/opt/ccdad/bin", "/usr/bin:/bin")
-		if want := "/opt/ccdad/bin:/usr/bin:/bin"; got != want {
-			t.Errorf("PATH after sourcing the block three times = %q, want %q: an unguarded "+
-				"`export PATH=\"DIR:$PATH\"` compounds on every login and on every `. ~/.bashrc`", got, want)
-		}
-	})
-}
-
-func TestPOSIXBlockLeavesAnAlreadyRegisteredPATHExactlyAsItWas(t *testing.T) {
-	eachPOSIXShell(t, func(t *testing.T, shell string) {
-		got := sourceBlock(t, shell, "/opt/ccdad/bin", "/usr/bin:/opt/ccdad/bin:/bin")
-		if want := "/usr/bin:/opt/ccdad/bin:/bin"; got != want {
-			t.Errorf("PATH = %q, want %q: the guard must not reorder a PATH that already has the directory", got, want)
-		}
-	})
-}
-
-func TestPOSIXBlockNeverPutsTheWorkingDirectoryOnPATH(t *testing.T) {
-	// `export PATH="DIR:$PATH"` with PATH empty yields `DIR:`, and a trailing
-	// empty component means the WORKING DIRECTORY — so every rc file written
-	// that way runs `./ls` in any directory the user cd's into.
-	//
-	// The unset case is `unset PATH` INSIDE the script rather than an
-	// environment with no PATH, and the difference is not cosmetic: both bash
-	// and dash substitute a compiled-in default PATH at startup when the
-	// variable is absent, so an env-level fixture never reaches the branch
-	// under test. Verified — it produced the shell's default PATH, not the
-	// empty one this pins.
-	eachPOSIXShell(t, func(t *testing.T, shell string) {
-		for _, tc := range []struct {
-			name    string
-			initial string
-			opts    []string
-		}{
-			{name: "PATH empty", initial: ""},
-			{name: "PATH unset in the file", initial: "/usr/bin", opts: []string{"unset PATH"}},
-		} {
-			t.Run(tc.name, func(t *testing.T) {
-				got := sourceBlock(t, shell, "/opt/ccdad/bin", tc.initial, tc.opts...)
-				if want := "/opt/ccdad/bin"; got != want {
-					t.Errorf("PATH = %q, want %q — a trailing separator is an empty component, which means the "+
-						"working directory", got, want)
-				}
-			})
-		}
-	})
-}
-
-func TestPOSIXBlockSurvivesSetU(t *testing.T) {
-	// A user's own `set -u` earlier in the rc file turns an unguarded $PATH
-	// reference into an abort, which stops the rest of their startup file. The
-	// two cases differ in which expansion is exercised: with PATH set it is the
-	// `case` subject, with PATH unset it is both that and the value.
-	eachPOSIXShell(t, func(t *testing.T, shell string) {
-		for _, tc := range []struct {
-			name string
-			opts []string
-			want string
-		}{
-			{name: "PATH set", opts: []string{"set -u"}, want: "/opt/ccdad/bin:/usr/bin"},
-			{name: "PATH unset", opts: []string{"set -u", "unset PATH"}, want: "/opt/ccdad/bin"},
-		} {
-			t.Run(tc.name, func(t *testing.T) {
-				got := sourceBlock(t, shell, "/opt/ccdad/bin", "/usr/bin", tc.opts...)
-				if got != tc.want {
-					t.Errorf("PATH under `set -u` = %q, want %q", got, tc.want)
-				}
-			})
-		}
-	})
-}
-
-func TestPOSIXBlockQuotesADirectoryTheShellWouldOtherwiseInterpret(t *testing.T) {
-	// CCDAD_INSTALL_DIR is a free string. A `$` in it silently truncates the
-	// entry; a backtick executes a command at every shell start.
-	dir := "/opt/we$ird/`touch " + t.TempDir() + "/pwned`/bin"
-	eachPOSIXShell(t, func(t *testing.T, shell string) {
-		got := sourceBlock(t, shell, dir, "/usr/bin")
-		if want := dir + ":/usr/bin"; got != want {
-			t.Errorf("PATH = %q, want %q: the directory must survive interpolation verbatim", got, want)
-		}
-	})
 }
 
 // blockFor is the block these splice tests write, kept short so the fixtures
@@ -790,28 +686,6 @@ func TestSpliceBlockRefusesAStrayMarkerAboveARealBlock(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), setupPathBegin) {
 				t.Errorf("the error does not name the marker the user has to find: %v", err)
-			}
-		})
-	}
-}
-
-func TestConfigHomeIgnoresARelativeXDGConfigHome(t *testing.T) {
-	// `XDG_CONFIG_HOME=.config` and a quoted `~/.config` the shell never
-	// expanded are both common. Honouring either makes setup-path create
-	// ./.config/fish/config.fish under whatever directory the user was standing
-	// in, report success, and leave a file fish never reads and uninstall can
-	// never find.
-	home := t.TempDir()
-	for _, tc := range []struct{ name, value, want string }{
-		{"unset", "", filepath.Join(home, ".config")},
-		{"relative", ".config", filepath.Join(home, ".config")},
-		{"unexpanded tilde", "~/.config", filepath.Join(home, ".config")},
-		{"absolute", "/somewhere/cfg", "/somewhere/cfg"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("XDG_CONFIG_HOME", tc.value)
-			if got := configHome(home); got != tc.want {
-				t.Errorf("configHome with XDG_CONFIG_HOME=%q = %q, want %q", tc.value, got, tc.want)
 			}
 		})
 	}
