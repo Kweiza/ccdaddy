@@ -9,6 +9,7 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
+	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 )
@@ -34,9 +35,25 @@ func isolate(t *testing.T) {
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("CLAUDE_CONFIG_DIR", claude)
 	t.Setenv("CLAUDE_SECURESTORAGE_CONFIG_DIR", claude)
-	for _, v := range []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"} {
+	// Claude Code's auth environment, cleared for the reason internal/cli's
+	// isolate states: this package resolves BOTH axes now, so a developer who
+	// exports any of these gets answers out of this suite that CI never sees.
+	// The last four put the Anthropic CLI's profile walk inside the sandboxed
+	// HOME rather than in the developer's real ~/.config.
+	for _, v := range identity.AuthEnvironmentVars() {
 		t.Setenv(v, "")
 	}
+
+	// The two paths no t.Setenv can reach: Claude Code compiles them in as
+	// absolute literals outside the home directory. See internal/cli's isolate
+	// for the full reason. The directory is deliberately not created.
+	savedHostToken, savedHostKey := identity.HostOAuthTokenFile, identity.HostAPIKeyFile
+	t.Cleanup(func() {
+		identity.HostOAuthTokenFile, identity.HostAPIKeyFile = savedHostToken, savedHostKey
+	})
+	hostRemote := filepath.Join(t.TempDir(), "remote")
+	identity.HostOAuthTokenFile = filepath.Join(hostRemote, ".oauth_token")
+	identity.HostAPIKeyFile = filepath.Join(hostRemote, ".api_key")
 	if got := mustPath(ccpath.CredentialHome()); got != claude {
 		t.Fatalf("isolate: ccpath.CredentialHome() = %q, want %q — refusing to run unsandboxed", got, claude)
 	}
@@ -47,11 +64,30 @@ func credsPath(t *testing.T) string {
 	return mustPath(ccpath.CredentialsPath())
 }
 
+// liveLogin is the CREDENTIALS FILE holding a login, as distinct from oauthBlob,
+// which is a snapshot ccdad stored for an account. Both carry user:inference for
+// the same reason: without it Claude Code has no login at all, so a fixture
+// without it describes a machine none of these tests mean. Every test that
+// needs a live login goes through this rather than spelling the JSON, so the
+// next one cannot be written scope-less.
+func liveLogin(refresh string) cclink.Blob {
+	return cclink.Blob{"claudeAiOauth": json.RawMessage(
+		`{"accessToken":"AT","refreshToken":"` + refresh + `","scopes":["user:inference","user:profile"]}`)}
+}
+
 // oauthBlob is a stored snapshot anchored on a refresh token, which is what
 // attribution compares.
+//
+// IT CARRIES user:inference, and that is not decoration. Claude Code takes a
+// login as a credential only when its scopes contain that one -- a Console
+// sign-in leaves a well-formed record with an access token and without it, and
+// no session ever authenticates with that record. A fixture without the scope
+// describes a machine Claude Code would treat as having no login at all, which
+// is not the machine any of these tests mean.
 func oauthBlob(refresh string) cclink.Blob {
 	return cclink.Blob{"claudeAiOauth": json.RawMessage(
-		`{"accessToken":"AT-` + refresh + `","refreshToken":"` + refresh + `"}`)}
+		`{"accessToken":"AT-` + refresh + `","refreshToken":"` + refresh +
+			`","scopes":["user:inference","user:profile"]}`)}
 }
 
 // seed adds an account holding an ordinary browser login.
@@ -136,4 +172,24 @@ func lastSwitch(t *testing.T) (time.Time, string) {
 		t.Fatal(err)
 	}
 	return st.LastSwitch()
+}
+
+// oauthEnv is the OAuth axis a test starts from: the machine's, sandboxed by
+// isolate, with the apiKeyHelper left where Execute leaves it.
+//
+// It is a function rather than a value because the probe reads the environment
+// EACH TIME, and a package-level value would freeze whatever the first test to
+// run happened to see.
+func oauthEnv() identity.OAuthEnvironment { return identity.ProbeOAuthEnvironment() }
+
+// writeHostToken puts a token at the sandboxed stand-in for the path Claude
+// Code compiles in. isolate has already repointed the package var.
+func writeHostToken(t *testing.T, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(identity.HostOAuthTokenFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(identity.HostOAuthTokenFile, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
