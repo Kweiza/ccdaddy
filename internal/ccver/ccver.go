@@ -340,6 +340,16 @@ func Probe() (Install, error) {
 // names the session's own directory, so resolving ~/.claude/local through it
 // would look for an npm install inside a directory ccdad created seconds ago.
 // Claude Code's installation report joins homedir() for the same path.
+//
+// One divergence, recorded here because this is where it was measured and NOT
+// fixed here because it is not this package's to fix. Claude Code resolves its
+// home as `env.HOME ?? os.homedir()` — HOME FIRST, on every platform — while
+// ccpath.Home is os.UserHomeDir, which reads $HOME on Unix and %USERPROFILE% on
+// Windows. On Unix the two are the same value. On Windows they are not whenever
+// HOME is set, which a Git-for-Windows shell does. That reaches every path in
+// ccpath rather than only this fallback, so changing it is a change to where
+// ccdad believes the store, the config home and the credential home all live —
+// which needs the Windows runner the queue is already holding other items for.
 func fallbackLaunchers() []string {
 	home, err := ccpath.Home()
 	if err != nil {
