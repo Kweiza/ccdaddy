@@ -18,6 +18,23 @@ by `uuid` or `alias`.
 
 ### Added
 
+- **`ccdad setup-path` puts the binary's directory on your `PATH`.** It is the
+  answer to `ccdad: command not found` right after `curl | bash`, which has the
+  installer's own script on stdin and so cannot ask permission to edit a startup
+  file. It writes a marker-fenced block into the files your shell actually
+  reads — for bash that is `~/.bashrc` *and* your login file, because a login
+  shell reads only one of them and a terminal-emulator shell reads only the
+  other — and running it twice leaves one block. `--print` emits the same bytes
+  without writing. Exit `3` means nothing was written; it is keyed on what is
+  registered, never on the live `$PATH`, so a directory that is on `$PATH` only
+  because you pasted an `export` line still gets a durable registration. On
+  Windows there is no startup file: the directory goes into `HKCU\Environment`
+  with its value kind preserved and the change is broadcast, which is the same
+  write `install.ps1` performs. It never creates `~/.bash_profile` (that would
+  stop bash login shells from ever reading `~/.profile` again), and it refuses
+  rather than guessing for csh, for an unknown `$SHELL`, and for a Homebrew or
+  Scoop install whose `PATH` the package manager owns.
+
 - **Bare `ccdad` is the dashboard, behind a TTY gate.** With a terminal on both
   stdout and stdin it renders exactly what `ccdad status` renders, followed by a
   one-line footer of the top verbs, and it auto-starts the daemon for the same
@@ -106,6 +123,25 @@ by `uuid` or `alias`.
 
 ### Changed
 
+- **`ccdad uninstall` now removes the `PATH` entry ccdad registered**, on both
+  platforms. On Windows this was owed before `setup-path` existed:
+  `install.ps1` has written `HKCU\Environment\Path` since it shipped, and every
+  one-liner install left an entry pointing at a directory uninstall had just
+  emptied. What it removes is only what ccdad can prove it added: on Unix that
+  is what lies between ccdad's own markers, so a `PATH` line you wrote yourself
+  is never touched; on Windows there are no markers, so `setup-path` and
+  `install.ps1` now record the directory they added under
+  `HKCU\Software\ccdad`, and an entry with no such record is left in place and
+  named. That matters for a `go install` or a zip install, where the directory
+  is one you put on `PATH` yourself and holds your other tools. A startup file
+  whose fence is unterminated or doubled is reported and left alone rather than
+  guessed at, and the remaining files are still cleaned.
+
+- **`install.sh` points at `ccdad setup-path`** — by absolute path, because that
+  message only appears when the install directory is off `PATH` and a bare
+  `ccdad` would not resolve. The `export PATH=…` line is still printed
+  underneath, for the shell you are standing in.
+
 - **The per-model and per-surface weekly caps the usage endpoint reports in
   `limits[]` now rank, pace and display.** They were parsed and then ignored, so
   an account whose Fable or Cowork week was gone read as healthy; they now bind
@@ -115,6 +151,15 @@ by `uuid` or `alias`.
 - **A `limits[]` entry with no readable `percent` is unknown rather than 0%.**
   The schema writes the field non-null, but a body that omits it would otherwise
   have read as a window with everything left.
+
+### Fixed
+
+- **`install.ps1` no longer appends a duplicate `PATH` entry** on a machine
+  whose user `PATH` holds `%LOCALAPPDATA%\Programs\ccdad` unexpanded. It reads
+  the value raw — correctly, so that `%VAR%` references are not frozen to
+  today's expansion — but compared each component only as stored, against a
+  fully expanded install directory, so the entry never matched and a second copy
+  was appended on every install.
 
 ## [0.1.0] — 2026-08-23
 

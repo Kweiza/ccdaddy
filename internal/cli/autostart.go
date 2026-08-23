@@ -56,6 +56,11 @@ import (
 //   - `remove`, `export`, `import`, `config` and `uninstall`: administering
 //     ccdad is not using it, and `uninstall` in particular would start the
 //     process it is about to stop.
+//   - `setup-path`, which runs when `ccdad` does not resolve yet. Spawning a
+//     daemon from the command whose whole job is to make the NEXT terminal find
+//     the binary starts an engine for a machine that has not finished being set
+//     up, and it is the one command a user may run before they have added a
+//     single account.
 //   - `auto`, which IS the engine. Starting a daemon for it would hand the
 //     singleton to the daemon and make the continuous form refuse itself, and
 //     `auto --once` exists precisely so the engine can be run WITHOUT one.

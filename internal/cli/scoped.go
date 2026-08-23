@@ -257,6 +257,16 @@ var scopedSessionAllowed = map[string]bool{
 	"ccdad config list":  true,
 	"ccdad config path":  true,
 
+	// setup-path registers the directory holding the running binary into the
+	// user's shell configuration, or the Windows user environment. A session
+	// scopes Claude Code's credential and config homes and nothing else, so
+	// the answer here is the same inside one as outside it — and the binary
+	// whose directory it registers is this same ccdad either way. Its
+	// counterpart is `uninstall`, which IS refused, for a reason that has
+	// nothing to do with PATH: it deletes the store the session's own
+	// credentials live in.
+	"ccdad setup-path": true,
+
 	// The daemon verbs that do not start one. All three act on the machine's
 	// daemon through the pidfile under CCDAD_HOME, which is not scoped, so
 	// they do exactly what they say from in here.
