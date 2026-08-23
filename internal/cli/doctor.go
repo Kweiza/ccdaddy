@@ -48,7 +48,8 @@ import (
 // session directories, and the stale `Claude Code-credentials` keychain item —
 // are both here now, as checkSessions and checkKeychain. Neither changed the
 // report-only rule: checkKeychain finds the item and prints the `security`
-// command that removes it, rather than removing it.
+// command that removes it, rather than removing it — and says what running it
+// costs, which is the half that was missing.
 
 // checkLevel is how much a finding matters.
 type checkLevel string
@@ -680,10 +681,15 @@ type keychainDetailer interface{ Detail() string }
 // machine; and every spawn has a wall-clock deadline with a kill behind it,
 // because a locked keychain on a headless host does not fail, it waits.
 //
-// Report-only, like the rest of the file. What it prints instead is the exact
-// `security` invocation that removes the item — deleting another program's
-// credential unasked is the most destructive thing ccdad could do on its own
-// initiative, and §13's fourth open question is still open.
+// Report-only, like the rest of the file, and now for a measured reason rather
+// than a cautious one. cclink's keychain header records the read order: 2.1.112
+// and earlier read the keychain and fall back to the file, so deleting the item
+// is a REPAIR and not a logout. What deleting still costs is the login in the
+// item, which on such a machine is the live one — so the act needs a user who
+// knows that, which is what the detail below now says. §13's fourth open
+// question is still open, and doing this inside a switch would put a `security`
+// spawn in the credential-lock window on every macOS switch to serve a
+// population that shrinks with every release.
 func checkKeychain() check {
 	present, item, err := keychainProbe(context.Background())
 
@@ -707,12 +713,20 @@ func checkKeychain() check {
 		return check{"keychain", levelOK, fmt.Sprintf(
 			"no legacy %q item for %q", item.Service, item.Account)}
 	}
-	// A warning rather than a failure, and deliberately: no Claude Code that
-	// can be installed today reads this item, so nothing is broken right now.
-	// What it costs is a downgrade — after which switching accounts would
-	// appear to work and change nothing.
+	// A warning rather than a failure, and deliberately: 2.1.113 removed the
+	// backend, so on any Claude Code a user can install today nothing is broken
+	// right now. What it costs is a downgrade — or a pin to 2.1.112 or earlier,
+	// which is the same machine seen from the other side.
+	//
+	// The remedy carries its price now. The read order settles that deleting the
+	// item hands a keychain-era Claude Code back to the credentials file rather
+	// than logging it out — that much is safe — but the login INSIDE the item
+	// goes with it, and on a machine still running 2.1.112 or earlier that item
+	// is the live login rather than a leftover. Printing the command without
+	// that sentence was handing someone a way to lose an account ccdad may not
+	// hold.
 	return check{"keychain", levelWarn, fmt.Sprintf(
-		"a legacy keychain item %q for %q is still there; today's Claude Code ignores it, but a downgraded one would read it INSTEAD of the credentials file and every switch would silently do nothing. Remove it with: /usr/bin/security delete-generic-password -a %q -s %q",
+		"a legacy keychain item %q for %q is still there. Claude Code 2.1.112 and earlier read this item BEFORE the credentials file, so a downgraded (or pinned) Claude Code would read it INSTEAD of what ccdad writes and every switch would silently do nothing; 2.1.113 removed that backend, so today's Claude Code ignores the item entirely. Deleting it sends those older builds back to the credentials file rather than logging them out — but it destroys the login stored in it, and if this machine still runs 2.1.112 or earlier that IS its live login, so check that ccdad already holds the account first. Remove it with: /usr/bin/security delete-generic-password -a %q -s %q",
 		item.Service, item.Account, item.Account, item.Service)}
 }
 
