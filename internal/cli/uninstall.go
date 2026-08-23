@@ -144,7 +144,19 @@ func runUninstall(cmd *cobra.Command, assumeYes bool) error {
 	// something to do.
 	removableBinary := exeErr == nil && owner == ""
 
-	if !storeState.present && !removableBinary {
+	// What `ccdad setup-path` registered, if anything. Read before the prompt
+	// and before anything is deleted, for the same reason the accounts are: a
+	// user is being asked to confirm, and what they are confirming has to be on
+	// the screen. A read that fails — an rc file with a half-deleted fence — is
+	// reported and does not stop the uninstall, because a machine that cannot
+	// be tidied is still a machine the user asked to have ccdad removed from.
+	pathDir := ""
+	if exeErr == nil {
+		pathDir = filepath.Dir(exe)
+	}
+	pathPlaces, pathErr := pathRegistrations(pathDir)
+
+	if !storeState.present && !removableBinary && len(pathPlaces) == 0 {
 		fmt.Fprintln(out, "Nothing to uninstall: there is no ccdad store here"+describeBinary(exe, exeErr, owner)+".")
 		return WithCode(errSilent, ExitNothingToDo)
 	}
@@ -155,6 +167,12 @@ func runUninstall(cmd *cobra.Command, assumeYes bool) error {
 	current, hasLive := attributeLive(live, storeState.accounts, storeState.lookup)
 
 	enumerate(out, storeState, exe, exeErr, owner, current, hasLive)
+	for _, place := range pathPlaces {
+		fmt.Fprintf(out, "It will also remove ccdad's PATH entry from %s.\n", place)
+	}
+	if pathErr != nil {
+		fmt.Fprintf(out, "ccdad's PATH entry could not be inspected, and will be left in place: %v\n", pathErr)
+	}
 
 	if !assumeYes {
 		if !stdinIsTTY() {
@@ -212,10 +230,26 @@ func runUninstall(cmd *cobra.Command, assumeYes bool) error {
 	if hasLive {
 		fmt.Fprintf(out, "You are still logged in to Claude Code as %s; ccdad did not touch that.\n", current.Label())
 	}
-	// PATH is deliberately left alone. `ccdad setup-path` is a later task and
-	// nothing here registered one, so there is nothing to unregister — and
-	// editing a user's shell profile on the way out is exactly what §11.2 fix 5
-	// refuses to do on the way in.
+	// PATH last, and only what ccdad itself registered: `ccdad setup-path`
+	// writes a marker-fenced block on Unix and an HKCU\Environment entry on
+	// Windows, and install.ps1 has written that same registry entry since it
+	// shipped — so on Windows this was owed even before setup-path existed, and
+	// leaving it behind points a user's PATH at a binary that has just been
+	// deleted.
+	//
+	// It runs after the binary is gone because that is the order the user reads
+	// it in, and it WARNS rather than returning: someone whose store has
+	// already been deleted must not be left with a half-uninstalled machine
+	// because one startup file could not be rewritten. §11.2 fix 5 is not in
+	// tension with this — its reason is that `curl | bash` cannot prompt, and
+	// this command has both a prompt and a --yes.
+	if removed, err := unregisterPath(pathDir); err != nil {
+		fmt.Fprintf(out, "ccdad's PATH entry could not be removed: %v\n", err)
+	} else {
+		for _, place := range removed {
+			fmt.Fprintf(out, "Removed ccdad's PATH entry from %s.\n", place)
+		}
+	}
 	return nil
 }
 
