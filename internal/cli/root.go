@@ -26,20 +26,51 @@ func NewRootCmd() *cobra.Command {
 		Version:       buildinfo.String(),
 		SilenceUsage:  true,
 		SilenceErrors: true,
-		RunE: func(_ *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			// Subcommands are registered below, so Cobra's Find() intercepts an
 			// unknown subcommand before this RunE is ever reached. What is left
-			// is the bare `ccdad` slot, where a later task adds the TTY-aware
-			// dashboard-or-usage-error behaviour.
-			return nil
+			// is the bare `ccdad` slot (§9.2) — and the handful of shapes that
+			// LOOK dispatched and are not, which is why args is read here at
+			// all. See runBare.
+			return runBare(cmd, args)
 		},
 	}
+
+	// Cobra's mousetrap fires from ExecuteC on Windows, before argument parsing
+	// and before any RunE: a binary launched from Explorer prints
+	// MousetrapHelpText, sleeps MousetrapDisplayDuration (5s by default) and
+	// calls os.Exit(1). Two things are wrong with that here. It bypasses §9.2's
+	// gate entirely, so the one invocation shape that cannot reach the
+	// dashboard is the one Cobra intercepts before this binary has an opinion;
+	// and 1 means "runtime failure" under §9.3, which makes it the only exit
+	// code ccdad can produce that does not come from the exit contract.
+	// Emptying the text is Cobra's documented way to be told to skip it.
+	//
+	// What a double-clicked ccdad.exe gets instead is the honest answer: its
+	// console is a terminal on both axes, so the gate renders the dashboard —
+	// and the window closes when the process exits, which is what every console
+	// tool started that way does. Reached through the contract rather than
+	// around it.
+	cobra.MousetrapHelpText = ""
+
 	// Auto-start hangs off PersistentPreRun rather than PersistentPreRunE, and
 	// the missing E is the point: §8's auto-start must never fail the command
 	// it rode in on, and a hook with no error to return cannot be wired into
 	// one later. Which commands it actually acts for is autostart.go's
 	// allow-list; this is only where the tree offers it the chance.
-	root.PersistentPreRun = func(cmd *cobra.Command, _ []string) { autoStart(cmd) }
+	//
+	// Bare `ccdad` is the one command this hook deliberately does not act for,
+	// and it is on the allow-list all the same: §9.2's gate decides in RunE
+	// whether this invocation is a dashboard or a usage error, and a hook that
+	// ran first would spawn a daemon for `ccdad | head` too — a script that
+	// asked for nothing, got a 2, and left an engine behind. runBare calls the
+	// hook itself once it knows which half it is in.
+	root.PersistentPreRun = func(cmd *cobra.Command, _ []string) {
+		if cmd == root {
+			return
+		}
+		autoStart(cmd)
+	}
 
 	// Cobra reports a mistyped subcommand and a mistyped flag as plain errors.
 	// Both are usage errors under this binary's exit contract, so retag them at
@@ -48,10 +79,6 @@ func NewRootCmd() *cobra.Command {
 		return UsageError("%s", err.Error())
 	})
 
-	// Cobra's generated `completion` accepts an unknown shell by printing its
-	// own help and returning nil, which exits 0 and puts help text on stdout —
-	// a caller redirecting that into a completion file gets help text instead.
-	// A shell it cannot generate for is a usage error like any other.
 	root.AddCommand(newAddCmd())
 	root.AddCommand(newAddTokenCmd())
 	root.AddCommand(newWhichCmd())
@@ -138,6 +165,7 @@ func ExecuteCmd(root *cobra.Command) error {
 // shell already reports as 130.
 func Execute() ExitCode {
 	ignoreSIGPIPE()
+	enableConsoleVT(os.Args[1:])
 	return ExecuteWith(NewRootCmd(), os.Stderr)
 }
 
@@ -179,3 +207,74 @@ func isUnknownCommand(err error) bool {
 	msg := err.Error()
 	return strings.HasPrefix(msg, "unknown command")
 }
+
+// runBare is the bare `ccdad` slot: §9.2's gate, and the two answers behind it.
+//
+// The gate is stdout AND stdin, not either. Both have to be terminals because
+// both are what an interactive session is made of — a dashboard printed into a
+// pipe is data nobody asked for, and one printed to a terminal whose stdin is a
+// file is the first half of a TUI that can never read a key.
+//
+// The non-interactive answer is a usage ERROR rather than something useful, and
+// that is a decision about timing rather than about this release. This slot is
+// promised to a TUI. Anything printed here today that a script could read would
+// be a contract by the time the TUI arrives, so the only answer that keeps the
+// eventual change a widening rather than a break is the one no script can build
+// on. Every release that exits 0 here is a release such a script can be written
+// against.
+//
+// The interactive answer is `ccdad status` itself, through runStatus, and not a
+// second renderer that agrees with it today.
+func runBare(cmd *cobra.Command, args []string) error {
+	// Arguments first, because an argument is a usage error whatever the
+	// terminal says and the gate below would otherwise answer a different
+	// question about it.
+	//
+	// Reaching this with anything in args means Cobra's Find() did not treat it
+	// as a subcommand: stripFlags ends at `--` and skips both a lone `-` and an
+	// empty argument, so `ccdad -- list`, `ccdad -` and `ccdad ""` all arrive
+	// here with the word still in hand and nothing downstream that will ever
+	// see it. Rendering the dashboard for those reports success for a command
+	// that never ran, and — since the dashboard half auto-starts — leaves an
+	// engine behind for it.
+	if len(args) > 0 {
+		return bareUsage(cmd, "ccdad takes a command, not a bare argument (%q)", args[0])
+	}
+	if !stdoutIsTTY() || !stdinIsTTY() {
+		return bareUsage(cmd,
+			"bare `ccdad` opens the dashboard, which needs a terminal on stdin and stdout; name a command instead")
+	}
+	// See root.PersistentPreRun: this is the dashboard half of bare `ccdad`,
+	// and it auto-starts for exactly the reason `ccdad status` does — the user
+	// is looking at an engine that is not running.
+	autoStart(cmd)
+	if err := runStatus(cmd, false); err != nil {
+		return err
+	}
+	// On stdout, with the dashboard it belongs to. §9.4 keeps notices on stderr
+	// so that a --json document stands alone; this line is reachable only when
+	// stdout is a terminal, where there is no document and no consumer to
+	// protect.
+	fmt.Fprintf(cmd.OutOrStdout(), "\nVerbs: %s  (ccdad <verb> --help)\n", strings.Join(topVerbs, ", "))
+	return nil
+}
+
+// bareUsage is how the bare slot refuses: the usage text on stderr, and the
+// reason as a usage error.
+//
+// Printed here rather than left to Cobra: the root sets SilenceUsage, and
+// Cobra's Help and Usage writers default to OutOrStdout — which is the one
+// stream a non-interactive caller may be capturing. The reason comes back as an
+// error rather than being printed too, so that ExecuteWith gives it the same
+// `ccdad: ` prefix every other error in this binary gets and lands it after the
+// usage text, where a reader is looking.
+func bareUsage(cmd *cobra.Command, format string, a ...any) error {
+	fmt.Fprint(cmd.ErrOrStderr(), cmd.UsageString())
+	return UsageError(format, a...)
+}
+
+// topVerbs is §9.2's "one-line footer of the top verbs" — what a reader of the
+// dashboard does next, in the order they would need them: log an account in,
+// move to one, take one for a single session, hand the wheel to the engine,
+// see them all, find out what is wrong.
+var topVerbs = []string{"add", "switch", "run", "auto", "list", "doctor"}
