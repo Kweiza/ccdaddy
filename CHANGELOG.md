@@ -50,6 +50,16 @@ by `uuid` or `alias`.
 
 ### Fixed
 
+- **`ccdad run` on Windows no longer refuses an argument npm's shim would have
+  mangled.** When `claude` on PATH is npm's `claude.cmd`, `ccdad run acct -p
+  'fix&whoami'` was a usage error: Go emits an argument with no space or quote
+  RAW, and `cmd.exe` reads the ampersand as a command separator. ccdad now
+  reads the shim, and launches the interpreter it names — `node cli.js` —
+  directly, which takes `cmd.exe` out of the launch entirely. It does this only
+  where the refusal would otherwise fire, so a shim it cannot parse, an
+  interpreter that is not installed, or one that itself resolves to a `.cmd`
+  all keep the old behaviour rather than failing in a new way.
+
 - **`ccdad switch` typed inside a `ccdad run` session rewrote the session, not
   the live login.** A session is a whole Claude Code, and everything typed in
   it inherits the session's `CLAUDE_SECURESTORAGE_CONFIG_DIR`, so the switch
