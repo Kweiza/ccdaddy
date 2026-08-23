@@ -353,7 +353,20 @@ jobs:
             exit 0
           fi
 
-          case $out in
+          # Compared with both sides in forward slashes, because the two sides
+          # disagree about separators and neither is wrong. $installDir was
+          # built by rewriting $LOCALAPPDATA's backslashes, which is what the
+          # steps around it need in order to hand a path to Git Bash. What
+          # `setup-path --print` emits is filepath.Dir(os.Executable()), and on
+          # Windows filepath.Clean ends in FromSlash - so it is ALWAYS
+          # backslashed no matter how the binary was invoked. A raw substring
+          # test therefore cannot match on Windows, ever.
+          #
+          # It went unnoticed because it could not run: every release before
+          # v0.2.0 predates the command, so this step took the `exited $code`
+          # tolerance above and never reached the comparison. This release is
+          # the first one that gets here.
+          case ${out//\\//} in
           *"$installDir"*) ;;
           *)
             echo "$out"
