@@ -13,7 +13,7 @@ import (
 // dangerous sentence in the specification. It puts a process spawn on the hot
 // path of every invocation, including completion scripts and `go test`.
 //
-// Four rules hold it down, and each of them exists because of a specific way
+// Five rules hold it down, and each of them exists because of a specific way
 // this goes wrong:
 //
 //  1. An ALLOW-LIST, never a default-on hook. A command added later defaults to
@@ -27,6 +27,11 @@ import (
 //  4. Silent, and never a failure. One stray line on stdout breaks `ccdad list
 //     --json | jq`, and a daemon that will not start is a degraded mode rather
 //     than an error for a command that was not asking for one.
+//  5. Never into a credential home another store's engine already holds. A
+//     daemon refused there releases the singleton on its way out, so rule 2's
+//     probe stays negative and every allow-listed command below forks a child
+//     that dies at once — the same unbounded spawn rule 2 exists to stop,
+//     reached by a different door.
 //
 // The suppression under `go test` is the fourth thing, and it is a hard
 // requirement rather than a convenience: an unsuppressed spawn detaches a real
@@ -136,6 +141,22 @@ func maybeAutoStart(cmd *cobra.Command) {
 		// rule the daemon group is built on, on the hottest path there is:
 		// treating "cannot determine" as "not running" starts a daemon per
 		// invocation forever on a filesystem where locks do not work.
+		return
+	}
+	// Rule 5, and it is the same shape as rule 2: a fuse against an unbounded
+	// spawn rather than a policy decision.
+	//
+	// A daemon refused by the credential-home claim gives the SINGLETON back on
+	// its way out — the defer that releases it runs — so the probe above stays
+	// negative forever. Without this, every one of the allow-listed commands
+	// above forks a child that dies immediately, on every invocation, silently.
+	//
+	// Held-but-not-ours is the whole test, named or not: credhome.Acquire
+	// refuses on a claim it cannot attribute exactly as it refuses on one it
+	// can, because the lock is held either way. A probe that could not ANSWER is
+	// different and does not stop the spawn: the daemon degrades and keeps
+	// running in that case, so it takes the singleton and ends the loop itself.
+	if claim, cerr := credentialHomeClaim(); cerr == nil && claim.Held && !claim.Ours {
 		return
 	}
 	// The error is discarded, not ignored: rule 4. `ccdad doctor` and `ccdad

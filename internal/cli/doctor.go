@@ -17,6 +17,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/config"
+	"github.com/Kweiza/ccdaddy/internal/credhome"
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/usage"
@@ -151,6 +152,7 @@ func runChecks() []check {
 		checkEngineState(storeUsable),
 		checkConfig(storeUsable),
 		checkSessions(root, storeUsable),
+		checkCredentialHome(report),
 		checkClaudeCode(live, liveErr),
 		checkCredentialKeys(live, liveErr),
 		checkKeychain(),
@@ -478,6 +480,95 @@ func checkConfig(usable bool) check {
 		detail = fmt.Sprintf("%s — unattended credit spending is armed up to %v", path, cfg.MaxAutoSpend)
 	}
 	return check{"config", levelOK, detail}
+}
+
+// checkCredentialHome answers the question no other check can: is something
+// ELSE driving the Claude Code login this ccdad manages.
+//
+// The daemon singleton is keyed on the STORE, so two shells with different
+// CCDAD_HOME values each take their own and each write the same
+// .credentials.json. cclock serialises the writes, so nothing is corrupt and
+// nothing errors — the two engines simply undo each other's switches, and until
+// this check existed there was no line anywhere in the tree that said so.
+//
+// It reports, like everything else here, and it creates nothing: credhome.Probe
+// takes a SHARED try-lock with O_CREATE removed, so a machine where no engine
+// has ever run still has no lock file after `ccdad doctor`.
+//
+// It asserts no file modes. checkPermissions skips them on Windows because the
+// inherited profile ACL is what protects these files there, and a second check
+// contradicting that in the same output is worse than a gap.
+func checkCredentialHome(report daemon.Report) check {
+	claim, err := credentialHomeClaim()
+	switch {
+	case errors.Is(err, credhome.ErrLocksUnsupported):
+		// The same condition checkLocks names, on the OTHER filesystem. A local
+		// store with a network ~/.claude reaches this one with the singleton
+		// already taken, so the two are genuinely independent answers and the
+		// wording has to say which filesystem is meant.
+		return check{"credential-home", levelFail, fmt.Sprintf(
+			"the filesystem holding Claude Code's credential home cannot take a lock, so ccdad cannot tell "+
+				"whether a second store is driving this login: %v. An NFS or CIFS mount with no lock daemon "+
+				"does this; the engine keeps running, but unguarded", err)}
+	case err != nil:
+		return check{"credential-home", levelFail, fmt.Sprintf(
+			"the credential-home claim could not be probed: %v", err)}
+	}
+
+	detail := claim.Home
+	if drift := credentialHomeDrift(report, claim.Home); drift != "" {
+		return check{"credential-home", levelWarn, drift}
+	}
+	switch {
+	case !claim.Held:
+		return check{"credential-home", levelOK, detail + " — no ccdad engine is driving it"}
+	case claim.Ours:
+		return check{"credential-home", levelOK, fmt.Sprintf(
+			"%s — driven by this store's engine (pid %d)", detail, claim.Owner.PID)}
+	case !claim.Named:
+		// Held is a kernel fact and the name is not, so this is a warning about
+		// the NAME rather than about the claim. It is the transient state of an
+		// engine that has taken the claim and not yet written its document.
+		return check{"credential-home", levelWarn, fmt.Sprintf(
+			"%s is held by an engine that has not named itself (%v); if it persists, something is "+
+				"holding the claim and cannot write beside it", detail, claim.OwnerErr)}
+	}
+	return check{"credential-home", levelWarn, fmt.Sprintf(
+		"%s is driven by the ccdad store at %s (pid %d), not by this one. Two stores on one login undo "+
+			"each other's switches; point CLAUDE_CONFIG_DIR at a directory of this store's own, or stop "+
+			"that engine", detail, claim.Owner.Store, claim.Owner.PID)}
+}
+
+// credentialHomeDrift catches a running daemon that is managing a DIFFERENT
+// credential home from the one this shell resolves, and returns the sentence
+// for it or "".
+//
+// `ccdad run --full-profile` is how this happens without anybody doing anything
+// wrong: it points CLAUDE_CONFIG_DIR at a per-session directory and unsets
+// CLAUDE_SECURESTORAGE_CONFIG_DIR, so auto-start's scoped-credential refusal
+// does not fire, and a daemon started from inside such a session manages that
+// session's directory for the rest of its life. Every file on the machine looks
+// normal afterwards. The daemon's own published document is the only place the
+// two homes can be compared.
+func credentialHomeDrift(report daemon.Report, resolved string) string {
+	if report.State != daemon.DaemonRunning || !report.HasStatus {
+		return ""
+	}
+	recorded := report.Status.CredentialHome
+	// credhome.SamePath, never ==. ccdad manufactures the two spellings itself:
+	// daemon.ChildEnv pins an absolute, symlink-resolved CLAUDE_CONFIG_DIR into
+	// every daemon it spawns, while ccpath hands this shell's own spelling back
+	// untouched. A trailing slash is enough — filepath.Abs cleans it for the
+	// child and nothing cleans it here — and a string compare would then print
+	// this warning on every doctor run forever, telling the user to restart a
+	// daemon that is driving exactly the right directory.
+	if recorded == "" || credhome.SamePath(recorded, resolved) {
+		return ""
+	}
+	return fmt.Sprintf(
+		"the running daemon is driving %s, but this shell resolves %s — so its switches change a login "+
+			"nothing here reads. A daemon started from inside 'ccdad run --full-profile' does this; "+
+			"restart it from an ordinary shell", recorded, resolved)
 }
 
 // checkClaudeCode is §12's actual mitigation: has Claude Code's layout moved.

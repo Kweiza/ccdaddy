@@ -360,6 +360,16 @@ that does nothing.
 | `CLAUDE_CONFIG_DIR` | Claude Code's config root, honoured exactly as Claude Code honours it |
 | `CLAUDE_SECURESTORAGE_CONFIG_DIR` | Claude Code's credential root, which it scopes independently |
 
+These are two independent axes, and setting only the first is the trap.
+`CCDAD_HOME` moves ccdad's own state; it does **not** move the Claude Code login
+ccdad manages, which stays wherever `CLAUDE_CONFIG_DIR` (or
+`CLAUDE_SECURESTORAGE_CONFIG_DIR`) points. Two shells with different
+`CCDAD_HOME` values and the same credential root therefore run two engines over
+one login, and they undo each other's switches — nothing is corrupted, the
+account simply keeps changing back. ccdad refuses the second engine and
+`ccdad doctor` names the state, but the fix is to give each store its own
+`CLAUDE_CONFIG_DIR`.
+
 ## Scripting
 
 ### Exit codes
@@ -471,11 +481,12 @@ Start here:
 ccdad doctor
 ```
 
-Thirteen checks over the store, its permissions, whether file locking works on
+Fourteen checks over the store, its permissions, whether file locking works on
 this filesystem at all, the daemon's pidfile and status file, the usage cache,
-the engine state, the config, leftover session directories, Claude Code's
-credential file and its top-level keys, a stale legacy keychain item, and the
-environment variables that would make a switch a no-op.
+the engine state, the config, leftover session directories, whether a second
+ccdad store is driving the same Claude Code login, Claude Code's credential file
+and its top-level keys, a stale legacy keychain item, and the environment
+variables that would make a switch a no-op.
 
 It **reports**; it repairs nothing and creates nothing it is checking for — a
 diagnostic that manufactures the directory it was asked about is a diagnostic
@@ -490,6 +501,8 @@ Common answers it gives:
 | `fail locks` naming NFS or CIFS | The store is on a filesystem without working locks. Move `CCDAD_HOME` onto local storage |
 | `warn environment … CLAUDE_CODE_OAUTH_TOKEN` | Claude Code reads that instead of the credential file. An unattended switch is **refused** rather than made pointless — `ccdad auto` reports exit 4 |
 | `warn credential-keys` | Claude Code has added a key ccdad does not know. It is preserved, not destroyed — but please open an issue |
+| `warn credential-home` naming another store | Two `CCDAD_HOME` stores are driving one Claude Code login, and they undo each other's switches. Give one of them its own `CLAUDE_CONFIG_DIR`, or stop its engine |
+| `fail credential-home` naming NFS or CIFS | Claude Code's credential home is on a filesystem without working locks, so ccdad cannot tell whether a second store is driving this login. The engine keeps running, unguarded |
 
 ## Contributing
 

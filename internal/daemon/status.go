@@ -105,6 +105,18 @@ type Status struct {
 	// PID is informational. It is never liveness evidence: the process may have
 	// died and the number may have been recycled onto something unrelated.
 	PID int `json:"pid"`
+	// CredentialHome is the Claude Code credential home this daemon resolved at
+	// startup — the directory whose .credentials.json it rewrites.
+	//
+	// It is here because it is a fact about the daemon PROCESS and nothing else
+	// records it, which is this document's rule for what it owns. A daemon
+	// started from inside `ccdad run --full-profile` resolves a per-session
+	// directory rather than ~/.claude and then manages that one for the rest of
+	// its life; the daemon is behaving correctly and every other file on the
+	// machine looks normal, so a reader comparing this against its own
+	// resolution is the only way anyone finds out. `ccdad doctor` is that
+	// reader.
+	CredentialHome string `json:"credentialHome,omitempty"`
 	// StartedAt is when this daemon acquired the singleton.
 	StartedAt time.Time `json:"startedAt,omitzero"`
 	// Stopped marks the final document a daemon writes on its way out. It is
