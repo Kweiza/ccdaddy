@@ -13,6 +13,7 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
+	"github.com/Kweiza/ccdaddy/internal/ccver"
 	"github.com/Kweiza/ccdaddy/internal/store"
 )
 
@@ -976,5 +977,191 @@ func TestRunFullProfileWarnsWhenAnEarlierLoginWouldMakeTheKeyInert(t *testing.T)
 	// Not deleted: the login belongs to whoever made it in there.
 	if _, err := os.Stat(filepath.Join(profile, ccpath.CredentialsFile)); err != nil {
 		t.Fatalf("the profile's existing login was removed: %v", err)
+	}
+}
+
+// The default mode's scoping is inert on Claude Code 2.1.112 and earlier, and
+// this is what the command does about it. The user's ruling was to refuse:
+// continuing runs the session as the machine's LIVE login while ccdad reports
+// success, which is the one thing this command promises not to do.
+
+// The refusal itself. It is a usage error rather than a runtime one because the
+// caller can fix it with a flag, and nothing is started — the assertion on the
+// stub is not decoration: a check placed after the launch would satisfy the
+// exit code and still have run the session as the wrong account.
+func TestRunRefusesTheDefaultModeOnAKeychainEraClaudeCode(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "u-1", "a@example.com")
+	stub := stubClaude(t, ExitOK)
+	stubClaudeInstall(t, claudeVersion(2, 1, 112), nil)
+
+	code, _, errOut, top := runRoot(t, "run", "a@example.com")
+	if code != ExitUsage {
+		t.Fatalf("exit = %d (%s / %s), want %d", code, errOut, top, ExitUsage)
+	}
+	if stub.started {
+		t.Fatal("started a session that would have run as the machine's live login")
+	}
+	message := errOut + top
+	for _, want := range []string{
+		// Why, in the terms the user can check: the variable and the release
+		// it arrived in.
+		"CLAUDE_SECURESTORAGE_CONFIG_DIR",
+		"2.1.113",
+		// Which account they thought they were getting.
+		"a@example.com",
+		// The way out that works on THIS machine, and the way out that removes
+		// the problem.
+		"--full-profile",
+	} {
+		if !strings.Contains(message, want) {
+			t.Errorf("the refusal does not say %q:\n%s", want, message)
+		}
+	}
+}
+
+// The escape hatch has to actually work, or the refusal is a dead end.
+// --full-profile scopes CLAUDE_CONFIG_DIR, which every era of Claude Code reads,
+// so it is the one mode that still isolates on such a machine.
+func TestRunFullProfileStillRunsOnAKeychainEraClaudeCode(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "u-1", "a@example.com")
+	stub := stubClaude(t, ExitOK)
+	stubClaudeInstall(t, claudeVersion(2, 1, 112), nil)
+
+	code, _, errOut, top := runRoot(t, "run", "--full-profile", "a@example.com")
+	if code != ExitOK {
+		t.Fatalf("exit = %d (%s / %s), want 0 — --full-profile is the remedy the refusal names", code, errOut, top)
+	}
+	if !stub.started {
+		t.Fatal("no session was started")
+	}
+	if _, ok := envOf(stub.spec.Env, "CLAUDE_CONFIG_DIR"); !ok {
+		t.Error("the child was not given CLAUDE_CONFIG_DIR, which is the only scoping this build honours")
+	}
+}
+
+// The releases either side of the boundary, and the unreadable case, all in one
+// table so the refusal cannot quietly widen. The 2.1.113 row is the one that
+// matters most: an off-by-one on the boundary would refuse on the very release
+// that fixed the problem, which is every current machine.
+func TestRunRefusesOnlyWhatItMeasured(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		install ccver.Install
+	}{
+		{"the release that introduced the variable", claudeVersion(2, 1, 113)},
+		{"a current release", claudeVersion(2, 1, 241)},
+		// A refusal keyed on "ccdad could not tell" would break every machine
+		// whose install ccdad cannot classify, and those machines are fine.
+		{"an install ccdad could not classify", ccver.Install{Launcher: "/opt/weird/claude", Method: ccver.MethodUnknown}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolate(t)
+			seedAccount(t, "u-1", "a@example.com")
+			stub := stubClaude(t, ExitOK)
+			stubClaudeInstall(t, tc.install, nil)
+
+			code, _, errOut, top := runRoot(t, "run", "a@example.com")
+			if code != ExitOK {
+				t.Fatalf("exit = %d (%s / %s), want 0", code, errOut, top)
+			}
+			if !stub.started {
+				t.Fatal("no session was started")
+			}
+		})
+	}
+}
+
+// The version is read from the path PATH gave, and read BEFORE the cmd-shim
+// rewrite, so the verdict belongs to the claude this invocation is about to run
+// rather than to the interpreter ccdad ends up exec'ing on its behalf.
+//
+// The fixture is a real npm shim with an argument cmd.exe would re-split,
+// because that is the only way the ordering is observable: launchPastShim then
+// replaces `path` with node.exe, and a plain launcher never triggers it. Written
+// with an ordinary fixture this test passed with the whole block moved AFTER the
+// rewrite — it could not fail for the property it exists to pin.
+func TestRunDescribesTheClaudeItIsAboutToRunAndNotTheInterpreter(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "u-1", "a@example.com")
+	stub := stubClaude(t, ExitOK)
+	shim := installShim(t, "env-node.cmd")
+	stubFileExists(t, false)
+	stubLookProgram(t, `C:\Program Files\nodejs\node.exe`, nil)
+
+	var asked []string
+	saved := describeClaudeInstall
+	t.Cleanup(func() { describeClaudeInstall = saved })
+	describeClaudeInstall = func(path string) ccver.Install {
+		asked = append(asked, path)
+		return ccver.Install{Launcher: path}
+	}
+
+	if code, _, errOut, top := runRoot(t, "run", "1", "-p", "fix&whoami"); code != ExitOK {
+		t.Fatalf("exit = %d (%s / %s), want 0", code, errOut, top)
+	}
+	// The launch really did go past the shim, or the ordering below is not
+	// under test at all.
+	if stub.spec.Path != `C:\Program Files\nodejs\node.exe` {
+		t.Fatalf("launched %q — the shim rewrite did not happen, so this test proves nothing", stub.spec.Path)
+	}
+	if len(asked) != 1 {
+		t.Fatalf("described %v, want exactly one path", asked)
+	}
+	if asked[0] != shim {
+		t.Errorf("described %q, want the shim %q — node.exe has no Claude Code version, and asking about it "+
+			"would answer 'unknown' on every machine that goes past a shim", asked[0], shim)
+	}
+}
+
+// A setup-token account is NOT refused on a keychain-era build, and this is the
+// half the first version of the refusal got wrong.
+//
+// authorise scopes such an account with CLAUDE_CODE_OAUTH_TOKEN in the child's
+// environment and writes no credentials file at all. That variable predates
+// 2.1.113 by a long way, and this tree's own measurement is that Claude Code
+// prefers it over the stored login outright — so the session runs as the named
+// account on a 2.1.112 machine, and the refusal's stated failure mode ("claude
+// would read the machine's own credentials file") cannot happen to it.
+func TestRunDoesNotRefuseASetupTokenAccountOnAKeychainEraClaudeCode(t *testing.T) {
+	isolate(t)
+	seedTokenAccount(t, "u-1", "a@example.com", "setup-token", "sk-ant-oat-1")
+	stub := stubClaude(t, ExitOK)
+	stubClaudeInstall(t, claudeVersion(2, 1, 112), nil)
+
+	code, _, errOut, top := runRoot(t, "run", "1")
+	if code != ExitOK {
+		t.Fatalf("exit = %d (%s / %s), want 0 — a setup token is scoped by the environment, not by the "+
+			"credential home the era ignores", code, errOut, top)
+	}
+	if !stub.started {
+		t.Fatal("no session was started")
+	}
+	if got, ok := envOf(stub.spec.Env, "CLAUDE_CODE_OAUTH_TOKEN"); !ok || got != "sk-ant-oat-1" {
+		t.Errorf("CLAUDE_CODE_OAUTH_TOKEN = %q, %v; want the account's token — that is what scopes this session",
+			got, ok)
+	}
+}
+
+// An api-key account on a keychain-era build gets authorise's accurate refusal,
+// not the keychain one. Both are exit 2, so the level cannot tell them apart:
+// the assertion is on the sentence that only the right one carries.
+func TestRunGivesAnAPIKeyAccountItsOwnRefusalEvenOnAKeychainEraClaudeCode(t *testing.T) {
+	isolate(t)
+	seedTokenAccount(t, "u-1", "a@example.com", cclink.APIKeyKind, "sk-ant-api-1")
+	stubClaude(t, ExitOK)
+	stubClaudeInstall(t, claudeVersion(2, 1, 112), nil)
+
+	code, _, errOut, top := runRoot(t, "run", "1")
+	if code != ExitUsage {
+		t.Fatalf("exit = %d (%s / %s), want %d", code, errOut, top, ExitUsage)
+	}
+	message := errOut + top
+	if !strings.Contains(message, "API key account") {
+		t.Errorf("the api-key refusal was replaced by another one:\n%s", message)
+	}
+	if strings.Contains(message, "CLAUDE_SECURESTORAGE_CONFIG_DIR") {
+		t.Errorf("an api-key account was refused for the era instead of for its credential shape:\n%s", message)
 	}
 }

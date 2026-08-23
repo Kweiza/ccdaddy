@@ -17,6 +17,7 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
+	"github.com/Kweiza/ccdaddy/internal/ccver"
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/oauth"
@@ -133,7 +134,47 @@ func isolate(t *testing.T) string {
 	// every host, so the report does not depend on who ran it; a test that means
 	// to describe a machine with a keychain calls stubKeychain by name.
 	stubKeychain(t, false, cclink.KeychainItem{}, cclink.ErrKeychainUnsupported)
+
+	// WHICH Claude Code is installed is a fourth axis, and it hid behind the
+	// third: the keychain probe was stubbed and the version probe was not, so
+	// the suite still reached PATH and read the developer's own install. Not
+	// hypothetical -- the first run after doctor's keychain row learned to read
+	// a version got 2.1.241 off this machine and printed the post-2.1.113
+	// remedy, failing an assertion written about the other branch. On a machine
+	// with no claude the same test would have passed, which is the shape of an
+	// unsandboxed input that only fails for some developers.
+	//
+	// The default describes a machine with no claude on it, which is the one
+	// answer no host can contradict. A test that means to describe an install
+	// calls stubClaudeInstall by name.
+	stubClaudeInstall(t, ccver.Install{}, ccver.ErrNoClaudeCode)
 	return claude
+}
+
+// stubClaudeInstall describes the Claude Code installed on the machine one test
+// will see.
+//
+// Both seams together, deliberately. doctor probes PATH itself and `ccdad run`
+// describes the path it already resolved, so a test that set only one of them
+// would sandbox one command and leave the other reading the developer's
+// machine -- and run's is the one whose branch REFUSES to start.
+func stubClaudeInstall(t *testing.T, install ccver.Install, err error) {
+	t.Helper()
+	savedProbe, savedDescribe := probeClaudeInstall, describeClaudeInstall
+	t.Cleanup(func() { probeClaudeInstall, describeClaudeInstall = savedProbe, savedDescribe })
+	probeClaudeInstall = func() (ccver.Install, error) { return install, err }
+	describeClaudeInstall = func(string) ccver.Install { return install }
+}
+
+// claudeVersion is a described install at a version, for the tests whose whole
+// subject is which side of 2.1.113 the machine is on.
+func claudeVersion(major, minor, patch int) ccver.Install {
+	return ccver.Install{
+		Launcher: filepath.Join("/usr", "local", "bin", "claude"),
+		Method:   ccver.MethodNPM,
+		Version:  ccver.Version{Major: major, Minor: minor, Patch: patch},
+		Known:    true,
+	}
 }
 
 // stubKeychain describes the legacy macOS Keychain one doctor run will see.
