@@ -255,6 +255,67 @@ public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wP
     return $true
 }
 
+function Stop-CcdadDaemon {
+    <#
+    .SYNOPSIS
+        Ask an already-installed ccdad to stop its daemon before it is replaced.
+    .DESCRIPTION
+        The daemon is self-managed and holds a singleton lock, so leaving it
+        running means the OLD code keeps running indefinitely against the same
+        accounts. This invokes the OLD binary, which may predate the daemon
+        command group and answer `unknown command "daemon"` with exit 2, so its
+        exit code cannot be allowed to abort the upgrade.
+    #>
+    param([string]$Binary)
+
+    try {
+        & $Binary daemon stop 2>$null | Out-Null
+    } catch { }
+}
+
+function Install-CcdadBinary {
+    <#
+    .SYNOPSIS
+        Put the verified binary at $Target, getting a running one out of the
+        way first.
+    .DESCRIPTION
+        A function rather than six lines inside Invoke-CcdadInstall, and the
+        reason is that this is the ONLY part of this script whose behaviour
+        differs between "a file is there" and "a file is there and Windows has
+        it mapped into a live process". Left inline it could be reached only by
+        running the whole installer, which
+        scripts/install_ps1_test.go's driver refuses to do on Windows -- so the
+        one branch that has no meaning off Windows was the one branch no test
+        could execute. scripts/install_ps1_windows_test.go calls this directly,
+        against a real running image.
+
+        A running .exe cannot be overwritten or deleted, but it CAN be renamed,
+        and the rename is the step that matters: it takes the old code out of
+        the way so the new binary can land under the name PATH resolves. The
+        delete afterwards is best-effort by design -- it fails for exactly the
+        upgrade that needed the rename, and a leftover dotfile is not a reason
+        to fail an install that has otherwise succeeded.
+
+        The leftover is named and placed deliberately. It stays in the install
+        directory because a move to %TEMP% is routinely cross-volume, and a
+        cross-volume move is a copy, which a mapped image does not permit at
+        all. The random component is what lets a second upgrade run while an
+        earlier leftover is still held by a process that has not exited.
+    #>
+    param([string]$Source, [string]$Target)
+
+    if (Test-Path -LiteralPath $Target) {
+        $aside = Join-Path (Split-Path -Parent $Target) (".ccdad-old." + [System.IO.Path]::GetRandomFileName() + ".exe")
+        Move-Item -LiteralPath $Target -Destination $aside -Force
+        try {
+            Remove-Item -LiteralPath $aside -Force
+        } catch {
+            # Still running. It is out of the way, which is what mattered.
+        }
+    }
+    Move-Item -LiteralPath $Source -Destination $Target -Force
+}
+
 function Get-CcdadFile {
     param([string]$Uri, [string]$OutFile)
     Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing
@@ -328,26 +389,14 @@ function Invoke-CcdadInstall {
             try { Unblock-File -LiteralPath $assetPath } catch { }
         }
 
+        # The daemon first and separately: stopping it is about the OLD
+        # install, replacing the file is about this one, and only the first has
+        # anything to say when there is no old install to stop.
         $target = Join-Path $installDir 'ccdad.exe'
         if (Test-Path -LiteralPath $target) {
-            # The daemon is self-managed and holds a singleton lock, so leaving
-            # it running means the OLD code keeps running indefinitely. This
-            # invokes the OLD binary, which may predate the daemon command
-            # group and answer `unknown command "daemon"` with exit 2, so its
-            # exit code cannot be allowed to abort the upgrade.
-            try {
-                & $target daemon stop 2>$null | Out-Null
-            } catch { }
-            # A running .exe cannot be overwritten, but it CAN be renamed.
-            $aside = Join-Path $installDir (".ccdad-old." + [System.IO.Path]::GetRandomFileName() + ".exe")
-            Move-Item -LiteralPath $target -Destination $aside -Force
-            try {
-                Remove-Item -LiteralPath $aside -Force
-            } catch {
-                # Still running. It is out of the way, which is what mattered.
-            }
+            Stop-CcdadDaemon -Binary $target
         }
-        Move-Item -LiteralPath $assetPath -Destination $target -Force
+        Install-CcdadBinary -Source $assetPath -Target $target
 
         $version = 'ccdad'
         try { $version = (& $target --version 2>$null | Select-Object -First 1) } catch { }
