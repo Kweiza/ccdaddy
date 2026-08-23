@@ -16,6 +16,7 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
+	"github.com/Kweiza/ccdaddy/internal/ccver"
 	"github.com/Kweiza/ccdaddy/internal/store"
 )
 
@@ -60,6 +61,69 @@ var lookClaude = exec.LookPath
 // lookClaude so a test can describe the machine this exists for: one where
 // claude is a .cmd shim and node is a real executable somewhere else.
 var lookProgram = exec.LookPath
+
+// describeClaudeInstall names the version of the claude this command is about
+// to run. It is a var for the same reason lookClaude is one: the branch that
+// matters is a machine on the far side of 2.1.113, which no development machine
+// running a current release can reach.
+var describeClaudeInstall = ccver.Describe
+
+// refuseKeychainEra is the default mode's refusal on a Claude Code that does not
+// know the variable the default mode scopes with.
+//
+// The measurement, from cclink's keychain header and the item that filed this:
+// CLAUDE_SECURESTORAGE_CONFIG_DIR does not occur even ONCE in 2.1.112. It
+// arrived in 2.1.113, AFTER the keychain backend it nominally outranks was
+// already gone. So on such a build newSession's whole mechanism is a variable
+// nothing reads: claude falls through to the machine's own ~/.claude, the
+// session runs as the LIVE login, and ccdad reports success. That is the same
+// silent no-op as the keychain shadow, on the same population, and this command
+// exists to promise the opposite.
+//
+// Refusing rather than warning, because a warning that is scrolled past leaves
+// the user running the wrong account under a label that says otherwise — the
+// risk register's High, with a different subject. Refusing rather than silently
+// promoting to
+// --full-profile, because that mode creates persistent per-account state and
+// copies the config home, and changing a user's blast radius without being asked
+// is not a smaller decision than refusing.
+//
+// It fires ONLY on a version ccdad actually read. An install ccdad cannot
+// classify proceeds untouched: a refusal keyed on "ccdad could not tell" would
+// break machines that work, and doctor's claude-version row is the place that
+// reports a launcher it could not name.
+//
+// AND ONLY ON THE CREDENTIAL SHAPE THAT IS ACTUALLY DEFEATED, which is why it
+// takes the blob. Of authorise's three shapes only an OAuth LOGIN is scoped by
+// the credential home:
+//
+//   - setup-token accounts are scoped by CLAUDE_CODE_OAUTH_TOKEN in the child's
+//     environment, and ccdad writes no credentials file for them at all. That
+//     variable long predates 2.1.113, and this tree's own measurement is that
+//     Claude Code prefers it over the stored login outright — so such a session
+//     runs as the intended account on a keychain-era build, and refusing it
+//     would block a case that works while asserting a failure mode that cannot
+//     happen to it.
+//   - api-key accounts are refused by authorise itself, in its own words, and
+//     the era has nothing to do with why. Answering first with a keychain
+//     message would replace an accurate refusal with a misleading one.
+//
+// So a stored token record of either kind returns early and the two other
+// answers stand.
+func refuseKeychainEra(install ccver.Install, blob cclink.Blob, label string) error {
+	if !install.KeychainEra() {
+		return nil
+	}
+	if _, hasToken := cclink.TokenRecordOf(blob); hasToken {
+		return nil
+	}
+	return UsageError("%s does not know CLAUDE_SECURESTORAGE_CONFIG_DIR — the variable arrived in %s — so this "+
+		"session would not be scoped at all: %s's login is a credentials file, and claude would read the "+
+		"MACHINE's own file instead and run as the live login, while ccdad reported success. Run it with "+
+		"--full-profile, which scopes CLAUDE_CONFIG_DIR and does work on this build; or upgrade Claude Code to "+
+		"%s or later",
+		install, ccver.LastKeychainEra.NextPatch(), label, ccver.LastKeychainEra.NextPatch())
+}
 
 // startChild starts claude, waits for it, and reports its exit status. It is a
 // var because starting a real process is the one thing a test in this package
@@ -646,6 +710,12 @@ func newRunCmd() *cobra.Command {
 			"of its own holding only that account's login, which is the smallest blast radius\n" +
 			"available — at the cost that MCP logins do not come with it, because Claude Code\n" +
 			"keeps them in the same file.\n\n" +
+			"That default needs Claude Code 2.1.113 or later: the variable it scopes with\n" +
+			"did not exist before then, so on an older build the session would silently read\n" +
+			"the machine's own login. ccdad refuses to start rather than run as the wrong\n" +
+			"account, and names --full-profile, which scopes something every era reads. Only\n" +
+			"for accounts whose login is a credentials file: a setup-token account is scoped\n" +
+			"by CLAUDE_CODE_OAUTH_TOKEN instead, which every era reads, so it still runs.\n\n" +
 			"--full-profile gives the account a whole config home instead, kept between runs\n" +
 			"under the ccdad store, so its MCP logins and trust answers survive. It is seeded\n" +
 			"once from the live config home — top-level files only, never the project history —\n" +
@@ -669,9 +739,29 @@ func newRunCmd() *cobra.Command {
 				return UsageError("%s", err.Error())
 			}
 
+			// Read before the session directory is created rather than after,
+			// because the refusal below turns on which credential shape this
+			// account is — and a refusal that first made a directory holding
+			// nothing would be tidied by the defer, but only after the fact.
+			blob, err := s.Credentials(target.UUID)
+			if err != nil {
+				return err
+			}
+
 			path, err := lookClaude("claude")
 			if err != nil {
 				return err
+			}
+			// Described from the path PATH just gave, not probed independently:
+			// the version that matters is the one belonging to the binary this
+			// invocation is about to exec, and a second resolution could name a
+			// different one. Before the shim dance below for the same reason —
+			// launchPastShim replaces the path with an interpreter, which is
+			// node rather than claude.
+			if !fullProfile {
+				if err := refuseKeychainEra(describeClaudeInstall(path), blob, target.Label()); err != nil {
+					return err
+				}
 			}
 			tail := claudeArgs(args)
 			var shimEnv []string
@@ -717,10 +807,6 @@ func newRunCmd() *cobra.Command {
 						"'ccdad doctor' reports it.\n", session.home, err)
 				}
 			}()
-			blob, err := s.Credentials(target.UUID)
-			if err != nil {
-				return err
-			}
 			env, needsFile, err := authorise(cmd.ErrOrStderr(), session, blob, target.Label())
 			if err != nil {
 				return err
