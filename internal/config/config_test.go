@@ -1,13 +1,16 @@
 package config
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/strategy"
+	"github.com/Kweiza/ccdaddy/internal/usage"
 )
 
 // write puts a config.toml in an isolated CCDAD_HOME and returns the home.
@@ -33,7 +36,7 @@ func TestAMissingFileIsTheFullDefaultSet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() on a machine with no config file failed: %v", err)
 	}
-	if got != Defaults() {
+	if !got.Equal(Defaults()) {
 		t.Errorf("Load() = %+v, want the defaults %+v", got, Defaults())
 	}
 }
@@ -47,7 +50,7 @@ func TestAPartialConfigLeavesEveryOtherKeyAtItsDefault(t *testing.T) {
 	}
 	want := Defaults()
 	want.Threshold = 65
-	if got != want {
+	if !got.Equal(want) {
 		t.Errorf("Load() = %+v, want %+v", got, want)
 	}
 }
@@ -180,6 +183,11 @@ func TestAValueOfTheWrongTypeIsRefused(t *testing.T) {
 	if _, err := Parse([]byte(`cooldown = 300`)); err == nil {
 		t.Fatal("a bare-integer cooldown was accepted; durations are Go duration strings, and 300 is ambiguous between seconds and nanoseconds")
 	}
+	for _, body := range []string{`hover = "true"`, `probe_unknown = "false"`} {
+		if _, err := Parse([]byte(body)); err == nil {
+			t.Errorf("%s was accepted; go-toml will not decode a string into a bool, and a quoted bool is exactly how a user writes one by mistake", body)
+		}
+	}
 }
 
 // The defaults must be the SAME numbers the engine falls back to on its own, or
@@ -206,10 +214,33 @@ func TestTheDefaultsAreTheEnginesOwnDefaults(t *testing.T) {
 	if d.MaxAutoSpend != 0 {
 		t.Errorf("MaxAutoSpend = %v, want 0 — the explicit opt-in the credit gate requires", d.MaxAutoSpend)
 	}
+	if d.CreditThreshold != strategy.DefaultCreditThreshold {
+		t.Errorf("CreditThreshold = %v, want strategy.DefaultCreditThreshold %v", d.CreditThreshold, strategy.DefaultCreditThreshold)
+	}
+	if !d.ProbeUnknown {
+		t.Error("ProbeUnknown = false; an account whose window has never been used has no reading at all, and the probe is the only way to get one")
+	}
+	if d.Hover {
+		t.Error("Hover = true; a mode that overrides every tuning key has to be asked for")
+	}
+	if d.WindowThreshold != nil {
+		t.Errorf("WindowThreshold = %v, want nil — nil is 'every window uses threshold' and needs no allocation to say so", d.WindowThreshold)
+	}
+}
+
+// preempt_lead has no engine constant behind it, and that is the decision
+// rather than an omission: strategy reads a zero PreemptLead as the pre-emptive
+// switch off, so a default living there would turn the mechanism back on for a
+// caller that meant to leave it off. The number is config's own, and this is
+// the pin on it.
+func TestThePreemptLeadDefaultIsConfigsOwnNumber(t *testing.T) {
+	if got := Defaults().PreemptLead; got != 2*time.Minute {
+		t.Errorf("Defaults().PreemptLead = %v, want 2m — two urgent poll intervals, which is what is left for the switch to be decided and picked up after the horizon has counted the wait for the next reading", got)
+	}
 }
 
 func TestTheConfigCarriesIntoARankingPass(t *testing.T) {
-	cfg, err := Parse([]byte("threshold = 55.0\nstrategy = \"consume-first\"\n"))
+	cfg, err := Parse([]byte("threshold = 55.0\nstrategy = \"consume-first\"\npreempt_lead = \"90s\"\n[window_threshold]\nseven_day = 40.0\n[credit]\nthreshold = 65.0\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,6 +248,15 @@ func TestTheConfigCarriesIntoARankingPass(t *testing.T) {
 	o := cfg.RankOptions(now)
 	if o.Threshold != 55 || o.Strategy != strategy.StrategyConsumeFirst || !o.Now.Equal(now) {
 		t.Errorf("RankOptions() = %+v, want the file's threshold and strategy at now", o)
+	}
+	if o.CreditThreshold != 65 {
+		t.Errorf("RankOptions().CreditThreshold = %v, want 65", o.CreditThreshold)
+	}
+	if o.PreemptLead != 90*time.Second {
+		t.Errorf("RankOptions().PreemptLead = %v, want 90s; a lead the ranking never receives is pre-emption switched off by accident", o.PreemptLead)
+	}
+	if got := o.WindowThreshold[usage.WindowSevenDay]; got != 40 {
+		t.Errorf("RankOptions().WindowThreshold[seven_day] = %v, want 40; a per-window threshold the ranking never receives is a key that does nothing", got)
 	}
 }
 
@@ -368,7 +408,7 @@ func TestADeletedFileReturnsTheReloaderToTheDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reload() = %v; deleting the file is a legal edit", err)
 	}
-	if got != Defaults() {
+	if !got.Equal(Defaults()) {
 		t.Errorf("Reload() = %+v, want the defaults", got)
 	}
 }
@@ -442,7 +482,7 @@ func TestNoNonFiniteValueCanReachTheEngine(t *testing.T) {
 		if err == nil {
 			t.Fatalf("%q parsed", body)
 		}
-		if cfg != (Config{}) {
+		if !cfg.Equal(Config{}) {
 			t.Errorf("Parse(%q) returned %+v alongside its error; a refused file must yield nothing usable", body, cfg)
 		}
 	}
@@ -484,5 +524,184 @@ func TestATransientReadFailureIsNotRememberedOnceItClears(t *testing.T) {
 	}
 	if got.Threshold != 70 {
 		t.Errorf("Threshold = %v, want 70", got.Threshold)
+	}
+}
+
+func TestTheNewKeysAreParsedFromTheFile(t *testing.T) {
+	cfg, err := Parse([]byte(`
+preempt_lead = "90s"
+probe_unknown = false
+hover = true
+
+[window_threshold]
+five_hour = 85
+seven_day = 60
+"weekly_scoped:model:Opus 4.5" = 40
+
+[credit]
+threshold = 55.0
+`))
+	if err != nil {
+		t.Fatalf("Parse() = %v", err)
+	}
+	if cfg.PreemptLead != 90*time.Second {
+		t.Errorf("PreemptLead = %v, want 90s", cfg.PreemptLead)
+	}
+	if cfg.ProbeUnknown {
+		t.Error("ProbeUnknown = true; the file said false, and the default is the opposite of the file")
+	}
+	if !cfg.Hover {
+		t.Error("Hover = false; the file said true")
+	}
+	if cfg.CreditThreshold != 55 {
+		t.Errorf("CreditThreshold = %v, want 55", cfg.CreditThreshold)
+	}
+	want := map[usage.WindowName]float64{
+		usage.WindowFiveHour:           85,
+		usage.WindowSevenDay:           60,
+		"weekly_scoped:model:Opus 4.5": 40,
+	}
+	if !maps.Equal(cfg.WindowThreshold, want) {
+		t.Errorf("WindowThreshold = %v, want %v", cfg.WindowThreshold, want)
+	}
+}
+
+// The table is an OVERRIDE, not a replacement: a window with no key of its own
+// keeps using `threshold`. Without the fallback, writing one key would silently
+// set every other window to zero, which reads as "spent" for all of them.
+func TestAWindowWithNoKeyOfItsOwnFallsBackToTheGlobalThreshold(t *testing.T) {
+	cfg, err := Parse([]byte("threshold = 70.0\n[window_threshold]\nseven_day = 60.0\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	th := cfg.Thresholds()
+	if got := th.For(usage.WindowSevenDay); got != 60 {
+		t.Errorf("Thresholds().For(seven_day) = %v, want the key's own 60", got)
+	}
+	if got := th.For(usage.WindowFiveHour); got != 70 {
+		t.Errorf("Thresholds().For(five_hour) = %v, want the file's threshold 70", got)
+	}
+	if got := th.CreditThreshold(); got != strategy.DefaultCreditThreshold {
+		t.Errorf("Thresholds().CreditThreshold() = %v, want %v; the file said nothing about credits", got, strategy.DefaultCreditThreshold)
+	}
+	// A nil table has to answer the same way, since that is the state of every
+	// config that never mentions the section.
+	d := Defaults()
+	if got := d.Thresholds().For(usage.WindowFiveHour); got != d.Threshold {
+		t.Errorf("Defaults().Thresholds().For(five_hour) = %v, want %v; a nil table is not a missing answer", got, d.Threshold)
+	}
+}
+
+// go-toml decodes `five_hour = inf` into a float64 without complaint. An
+// infinite threshold makes that window's distance from its own floor infinite,
+// so the one window the user tightened becomes the one that can never bind.
+func TestAWindowThresholdIsHeldToTheSameRangeAsTheGlobalOne(t *testing.T) {
+	for _, body := range []string{
+		"[window_threshold]\nfive_hour = inf",
+		"[window_threshold]\nfive_hour = -inf",
+		"[window_threshold]\nfive_hour = nan",
+		"[window_threshold]\nfive_hour = 0.0",
+		"[window_threshold]\nfive_hour = -5.0",
+		"[window_threshold]\nfive_hour = 101.0",
+	} {
+		cfg, err := Parse([]byte(body))
+		if err == nil {
+			t.Errorf("%q was accepted", body)
+			continue
+		}
+		if !strings.Contains(err.Error(), "five_hour") {
+			t.Errorf("error = %q, want it to name the window whose value was refused", err)
+		}
+		if !cfg.Equal(Config{}) {
+			t.Errorf("Parse(%q) returned %+v alongside its error; a refused file must yield nothing usable", body, cfg)
+		}
+	}
+}
+
+func TestAnEmptyWindowThresholdTableIsTheSameAsNoTable(t *testing.T) {
+	cfg, err := Parse([]byte("[window_threshold]\n"))
+	if err != nil {
+		t.Fatalf("Parse() = %v; an empty table is a legal document", err)
+	}
+	if cfg.WindowThreshold != nil {
+		t.Errorf("WindowThreshold = %v, want nil — an empty table says every window uses `threshold`, which is what nil already says", cfg.WindowThreshold)
+	}
+	if !cfg.Equal(Defaults()) {
+		t.Errorf("Parse() = %+v, want the defaults", cfg)
+	}
+}
+
+// The reason the table is top-level and not `[threshold.window]`: `threshold`
+// is already a scalar and TOML forbids reopening that name as a table. Pinned
+// so the spelling nobody can have is not re-introduced.
+func TestThresholdCannotBeReopenedAsATable(t *testing.T) {
+	_, err := Parse([]byte("threshold = 80.0\n[threshold.window]\nfive_hour = 85\n"))
+	if err == nil {
+		t.Fatal("`threshold = 80` alongside [threshold.window] parsed; go-toml refuses a key that already exists as a value, which is why the per-window table needs its own top-level name")
+	}
+	if !strings.Contains(err.Error(), "threshold") {
+		t.Errorf("error = %q, want it to name the key that collides", err)
+	}
+}
+
+// preempt_lead is the one duration key whose ZERO is a value. The pre-emptive
+// switch is an opt-out a user may legitimately take — they would rather never
+// be moved early — where a zero cooldown is a switch storm and a zero
+// hysteresis is no margin at all. The last case pins that the difference did
+// not leak onto the anti-flap keys.
+func TestAZeroPreemptLeadIsPreemptionOffAndANegativeOneIsRefused(t *testing.T) {
+	cfg, err := Parse([]byte(`preempt_lead = "0s"`))
+	if err != nil {
+		t.Fatalf("Parse() = %v; zero is how a user switches the pre-emptive switch off", err)
+	}
+	if cfg.PreemptLead != 0 {
+		t.Errorf("PreemptLead = %v, want 0", cfg.PreemptLead)
+	}
+	if _, err := Parse([]byte(`preempt_lead = "-2m"`)); err == nil {
+		t.Error(`preempt_lead = "-2m" was accepted; a negative lead puts the switch after the exhaustion it exists to get ahead of`)
+	}
+	if _, err := Parse([]byte(`cooldown = "0s"`)); err == nil {
+		t.Error("cooldown = 0s was accepted; the zero that means off for preempt_lead must not have leaked onto the anti-flap keys")
+	}
+}
+
+// Equal replaced ==, which the compiler kept complete for free. Nothing keeps a
+// hand-written comparison complete, and the symptom of a forgotten field is
+// silent: two configs that differ report as the same one, so a reload decides
+// there is nothing to pick up.
+func TestEqualComparesEveryFieldOfConfig(t *testing.T) {
+	typ := reflect.TypeOf(Config{})
+	for i := range typ.NumField() {
+		mutated := Defaults()
+		f := reflect.ValueOf(&mutated).Elem().Field(i)
+		name := typ.Field(i).Name
+		switch f.Kind() {
+		case reflect.Float64:
+			f.SetFloat(f.Float() + 1)
+		case reflect.Int64:
+			f.SetInt(f.Int() + 1)
+		case reflect.Uint8:
+			f.SetUint(f.Uint() + 1)
+		case reflect.Bool:
+			f.SetBool(!f.Bool())
+		case reflect.Map:
+			f.Set(reflect.ValueOf(map[usage.WindowName]float64{usage.WindowFiveHour: 85}))
+		default:
+			t.Fatalf("Config.%s is a %s, which this gate cannot change on its own; teach it that kind before adding the field", name, f.Kind())
+		}
+		if Defaults().Equal(mutated) {
+			t.Errorf("Equal() reported two configs alike after changing %s; the field is missing from Equal", name)
+		}
+	}
+}
+
+// A nil map and an empty one both say "every window uses Threshold". Reporting
+// them as different configurations would have the daemon announce a config
+// change nobody made.
+func TestANilWindowThresholdEqualsAnEmptyOne(t *testing.T) {
+	empty := Defaults()
+	empty.WindowThreshold = map[usage.WindowName]float64{}
+	if !Defaults().Equal(empty) {
+		t.Error("Equal() separated a nil window table from an empty one; both mean every window uses `threshold`")
 	}
 }

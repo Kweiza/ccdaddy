@@ -2,13 +2,15 @@ package config
 
 import (
 	"errors"
-	"github.com/Kweiza/ccdaddy/internal/cclock"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Kweiza/ccdaddy/internal/cclock"
+	"github.com/Kweiza/ccdaddy/internal/strategy"
 )
 
 func TestAnIntegerLiteralIsAcceptedForAFloatKey(t *testing.T) {
@@ -34,7 +36,7 @@ func TestADocumentWithNoFileIsTheDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg != Defaults() {
+	if !cfg.Equal(Defaults()) {
 		t.Errorf("Config() = %+v, want the defaults", cfg)
 	}
 	if _, set, err := d.Value(keyThreshold); err != nil || set {
@@ -285,12 +287,15 @@ func TestEveryKeyCanBeSetAndReadBack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Config{
-		Threshold: 55, HysteresisPct: 12.5, HeadroomRatio: 3,
-		Cooldown: 7 * time.Minute, RecoveryHysteresis: 90 * time.Second,
-		Strategy: 1, MaxAutoSpend: 25,
-	}
-	if cfg != want {
+	want := Defaults()
+	want.Threshold = 55
+	want.HysteresisPct = 12.5
+	want.HeadroomRatio = 3
+	want.Cooldown = 7 * time.Minute
+	want.RecoveryHysteresis = 90 * time.Second
+	want.Strategy = strategy.StrategyConsumeFirst
+	want.MaxAutoSpend = 25
+	if !cfg.Equal(want) {
 		t.Errorf("Config() = %+v, want %+v", cfg, want)
 	}
 }

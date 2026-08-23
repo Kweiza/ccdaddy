@@ -40,7 +40,7 @@ func TestHeadroomBindsOnAScopedModelWindow(t *testing.T) {
 		Limits:   []usage.Limit{scoped("Fable", "", 95, 48*time.Hour)},
 	}
 
-	h := HeadroomOf(s)
+	h := HeadroomOf(s, thr())
 	if h.Pct != 5 {
 		t.Errorf("Pct = %v, want 5 — the per-model weekly cap is the window with the least left", h.Pct)
 	}
@@ -57,7 +57,7 @@ func TestHeadroomBindsOnAScopedSurfaceWindow(t *testing.T) {
 		Limits:   []usage.Limit{scoped("", "Claude Code", 97, 48*time.Hour)},
 	}
 
-	h := HeadroomOf(s)
+	h := HeadroomOf(s, thr())
 	if h.Pct != 3 {
 		t.Errorf("Pct = %v, want 3", h.Pct)
 	}
@@ -77,7 +77,7 @@ func TestAScopedWindowWithNoPercentDoesNotBind(t *testing.T) {
 		})},
 	}
 
-	h := HeadroomOf(s)
+	h := HeadroomOf(s, thr())
 	if h.Pct != 70 {
 		t.Errorf("Pct = %v, want 70 — five_hour still binds", h.Pct)
 	}
@@ -95,10 +95,10 @@ func TestModelNarrowsAwayAnotherFamilysScopedWindow(t *testing.T) {
 		Limits:   []usage.Limit{scoped("Fable", "", 95, 48*time.Hour)},
 	}
 
-	if h := HeadroomOf(s); h.Pct != 5 {
+	if h := HeadroomOf(s, thr()); h.Pct != 5 {
 		t.Fatalf("unqualified Pct = %v, want 5 — the control for this test", h.Pct)
 	}
-	h := HeadroomFor(s, "sonnet")
+	h := HeadroomFor(s, "sonnet", thr())
 	if h.Pct != 60 {
 		t.Errorf("Pct with --model sonnet = %v, want 60 — a Fable cap does not bind a Sonnet session", h.Pct)
 	}
@@ -132,7 +132,7 @@ func TestModelNarrowsTheFixedModelWindowsToo(t *testing.T) {
 			name = "unqualified"
 		}
 		t.Run(name, func(t *testing.T) {
-			h := HeadroomFor(s, tc.model)
+			h := HeadroomFor(s, tc.model, thr())
 			if h.Pct != tc.wantPct {
 				t.Errorf("Pct = %v, want %v", h.Pct, tc.wantPct)
 			}
@@ -151,7 +151,7 @@ func TestModelNeverNarrowsASurfaceWindow(t *testing.T) {
 		Limits:   []usage.Limit{scoped("", "Cowork", 95, 48*time.Hour)},
 	}
 
-	if h := HeadroomFor(s, "sonnet"); h.Pct != 5 {
+	if h := HeadroomFor(s, "sonnet", thr()); h.Pct != 5 {
 		t.Errorf("Pct = %v, want 5 — a surface cap survives --model", h.Pct)
 	}
 }
@@ -165,7 +165,7 @@ func TestAnUnplaceableNameNarrowsNothing(t *testing.T) {
 			SevenDay: win(10, 48*time.Hour),
 			Limits:   []usage.Limit{scoped("Zephyr 1", "", 95, 48*time.Hour)},
 		}
-		if h := HeadroomFor(s, "sonnet"); h.Pct != 5 {
+		if h := HeadroomFor(s, "sonnet", thr()); h.Pct != 5 {
 			t.Errorf("Pct = %v, want 5 — a model ccdad cannot place is not ruled out", h.Pct)
 		}
 	})
@@ -174,7 +174,7 @@ func TestAnUnplaceableNameNarrowsNothing(t *testing.T) {
 			SevenDay:     win(10, 48*time.Hour),
 			SevenDayOpus: win(99, 48*time.Hour),
 		}
-		if h := HeadroomFor(s, "zephyr"); h.Pct != 1 {
+		if h := HeadroomFor(s, "zephyr", thr()); h.Pct != 1 {
 			t.Errorf("Pct = %v, want 1 — an unplaceable --model must not widen the headroom", h.Pct)
 		}
 	})
@@ -195,10 +195,10 @@ func TestModelNeverLowersHeadroom(t *testing.T) {
 			scoped("Haiku 4.5", "", 80, 48*time.Hour),
 		},
 	}
-	base := HeadroomOf(s)
+	base := HeadroomOf(s, thr())
 
 	for _, m := range append(ModelFamilyNames(), "Claude Opus 4.5", "zephyr") {
-		h := HeadroomFor(s, m)
+		h := HeadroomFor(s, m, thr())
 		if !h.Known {
 			t.Fatalf("--model %q left the headroom unknown", m)
 		}

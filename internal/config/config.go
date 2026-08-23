@@ -21,15 +21,18 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/pelletier/go-toml/v2"
 
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
+	"github.com/Kweiza/ccdaddy/internal/usage"
 )
 
 // FileName is the config file's basename inside the ccdad store.
@@ -37,12 +40,18 @@ const FileName = "config.toml"
 
 // Config is the effective configuration: what the file says, over the defaults.
 //
-// It is a plain comparable struct with no pointers on purpose — absence is
-// resolved during parsing and never leaks out of this package, so no consumer
-// has to ask whether a field was set.
+// No field is a pointer, and that is the property being kept: absence is
+// resolved during parsing and never leaves this package, so no consumer has to
+// ask whether a field was set. WindowThreshold is a map and keeps the same
+// promise — a nil map is not "unset", it is every window using Threshold, which
+// is the answer a missing key gives too, so nothing downstream needs a nil
+// check.
+//
+// Being comparable with == was a CONSEQUENCE of having no pointers rather than
+// the goal, and the map ends it. Compare two configs with Equal.
 type Config struct {
 	// Threshold is the utilization percent above which an account counts as
-	// spent.
+	// spent, for any window with no threshold of its own.
 	Threshold float64
 	// HysteresisPct is the additive anti-flap margin, in points of headroom.
 	HysteresisPct float64
@@ -57,6 +66,74 @@ type Config struct {
 	// MaxAutoSpend is the credit gate's ceiling, in the currency's major unit.
 	// 0 refuses, and is the default.
 	MaxAutoSpend float64
+	// WindowThreshold is a threshold per window, overriding Threshold for the
+	// windows named in it. Nil is every window using Threshold.
+	//
+	// Nothing mutates it after Parse builds it, which is what makes handing the
+	// same map to the ranking safe where a Config crosses goroutines — the
+	// daemon copies the struct under a mutex, and copying a struct copies the
+	// map header, not the map.
+	WindowThreshold map[usage.WindowName]float64
+	// CreditThreshold is the utilization percent above which a credit-metered
+	// account counts as spent. It is a second number rather than Threshold
+	// because the two are different axes: credits are metered spending and a
+	// subscription window is metered quota, so a user who tightens one has said
+	// nothing about the other.
+	CreditThreshold float64
+	// PreemptLead is how far ahead of a projected exhaustion the engine
+	// switches, on top of the blind interval between two polls. 0 is the
+	// pre-emptive switch off, which is a value a user may choose.
+	PreemptLead time.Duration
+	// ProbeUnknown is whether the daemon may spend one turn against a window
+	// that has never been used, to get the reset time such a window reports as
+	// null.
+	ProbeUnknown bool
+	// Hover is the fully automatic mode: thresholds derived from pace, and
+	// every tuning key ignored.
+	Hover bool
+}
+
+// Equal is == for a Config, which the map field ended.
+//
+// The map compares by CONTENT, and a nil map equals an empty one: both say
+// "every window uses Threshold", so reporting them as different configurations
+// would have the daemon announce a config change nobody made.
+//
+// Every field is listed. TestEqualComparesEveryFieldOfConfig walks the struct
+// by reflection and fails on a field this method forgot, because the symptom of
+// a forgotten one is silent: a config change the reload path decides is not a
+// change.
+func (c Config) Equal(o Config) bool {
+	return c.Threshold == o.Threshold &&
+		c.HysteresisPct == o.HysteresisPct &&
+		c.HeadroomRatio == o.HeadroomRatio &&
+		c.Cooldown == o.Cooldown &&
+		c.RecoveryHysteresis == o.RecoveryHysteresis &&
+		c.Strategy == o.Strategy &&
+		c.MaxAutoSpend == o.MaxAutoSpend &&
+		c.CreditThreshold == o.CreditThreshold &&
+		c.PreemptLead == o.PreemptLead &&
+		c.ProbeUnknown == o.ProbeUnknown &&
+		c.Hover == o.Hover &&
+		maps.Equal(c.WindowThreshold, o.WindowThreshold)
+}
+
+// Thresholds is every threshold one ranking pass may consult, in one value.
+//
+// It is the accessor every consumer outside this package uses, and the three
+// fields are not read individually: a caller that took Threshold on its own
+// would be asking the old single-threshold question and would quietly disagree
+// with the engine the moment a user wrote one per-window key.
+//
+// The map is handed over rather than copied. The engine only reads it, nothing
+// mutates it after Parse built it, and a copy would allocate on every cadence
+// for a table that changes only when the file does.
+func (c Config) Thresholds() strategy.Thresholds {
+	return strategy.Thresholds{
+		Default:   c.Threshold,
+		PerWindow: c.WindowThreshold,
+		Credit:    c.CreditThreshold,
+	}
 }
 
 // StrategyConfig is the anti-flap half, in the shape strategy.Decide takes.
@@ -74,9 +151,21 @@ func (c Config) StrategyConfig() strategy.Config {
 //
 // Horizon is deliberately left at its zero value: no configuration key names
 // the horizon, so strategy.DefaultRecoveryHorizon stays the single place it is
-// decided.
+// decided. PreemptLead is the opposite case and is always carried: the engine
+// reads a zero as the pre-emptive switch OFF, so a lead left behind here would
+// silently disable a mechanism the user configured.
+//
+// WindowThreshold is handed over rather than copied, for the reason Thresholds
+// gives: the ranking only reads it and nothing mutates it after Parse.
 func (c Config) RankOptions(now time.Time) strategy.Options {
-	return strategy.Options{Now: now, Threshold: c.Threshold, Strategy: c.Strategy}
+	return strategy.Options{
+		Now:             now,
+		Threshold:       c.Threshold,
+		WindowThreshold: c.WindowThreshold,
+		CreditThreshold: c.CreditThreshold,
+		PreemptLead:     c.PreemptLead,
+		Strategy:        c.Strategy,
+	}
 }
 
 // Path is where the config lives.
@@ -116,17 +205,22 @@ func storeRoot() (string, error) {
 // cases decidable, so absence takes the default and an explicit 0 is validated
 // like any other value.
 type fileShape struct {
-	Threshold          *float64    `toml:"threshold"`
-	HysteresisPct      *float64    `toml:"hysteresis_pct"`
-	HeadroomRatio      *float64    `toml:"headroom_ratio"`
-	Cooldown           *string     `toml:"cooldown"`
-	RecoveryHysteresis *string     `toml:"recovery_hysteresis"`
-	Strategy           *string     `toml:"strategy"`
-	Credit             *creditFile `toml:"credit"`
+	Threshold          *float64           `toml:"threshold"`
+	HysteresisPct      *float64           `toml:"hysteresis_pct"`
+	HeadroomRatio      *float64           `toml:"headroom_ratio"`
+	Cooldown           *string            `toml:"cooldown"`
+	RecoveryHysteresis *string            `toml:"recovery_hysteresis"`
+	PreemptLead        *string            `toml:"preempt_lead"`
+	Strategy           *string            `toml:"strategy"`
+	ProbeUnknown       *bool              `toml:"probe_unknown"`
+	Hover              *bool              `toml:"hover"`
+	WindowThreshold    map[string]float64 `toml:"window_threshold"`
+	Credit             *creditFile        `toml:"credit"`
 }
 
 type creditFile struct {
 	MaxAutoSpend *float64 `toml:"max_auto_spend"`
+	Threshold    *float64 `toml:"threshold"`
 }
 
 // Parse turns a config document into the effective configuration.
@@ -159,6 +253,9 @@ func Parse(raw []byte) (Config, error) {
 	if err := applyDuration(&cfg.RecoveryHysteresis, f.RecoveryHysteresis, keyRecoveryHysteresis); err != nil {
 		return Config{}, err
 	}
+	if err := applyPreemptLead(&cfg.PreemptLead, f.PreemptLead); err != nil {
+		return Config{}, err
+	}
 	if f.Strategy != nil {
 		s, err := parseStrategy(*f.Strategy)
 		if err != nil {
@@ -166,8 +263,16 @@ func Parse(raw []byte) (Config, error) {
 		}
 		cfg.Strategy = s
 	}
-	if f.Credit != nil && f.Credit.MaxAutoSpend != nil {
+	applyBool(&cfg.ProbeUnknown, f.ProbeUnknown)
+	applyBool(&cfg.Hover, f.Hover)
+	if err := applyWindowThresholds(&cfg, f.WindowThreshold); err != nil {
+		return Config{}, err
+	}
+	if f.Credit != nil {
 		if err := applyFloat(&cfg.MaxAutoSpend, f.Credit.MaxAutoSpend, keyMaxAutoSpend, validMaxAutoSpend); err != nil {
+			return Config{}, err
+		}
+		if err := applyFloat(&cfg.CreditThreshold, f.Credit.Threshold, "credit.threshold", validThreshold); err != nil {
 			return Config{}, err
 		}
 	}
@@ -301,20 +406,100 @@ func applyFloat(dst *float64, v *float64, key string, valid func(float64) error)
 	return nil
 }
 
-// applyDuration overlays one optional duration, which is written as a Go
-// duration string ("5m", "300s").
+// parseConfigDuration is the form every duration key takes, and the one
+// sentence that explains it. A bare number is refused rather than guessed at:
+// TOML has no duration type and `cooldown = 300` is as readable as seconds as
+// it is as nanoseconds.
+func parseConfigDuration(key string, v string) (time.Duration, error) {
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return 0, fmt.Errorf("%s in %s: %q is not a duration; write it as a Go duration string such as \"5m\" or \"300s\"", key, FileName, v)
+	}
+	return d, nil
+}
+
+// applyPreemptLead overlays preempt_lead, the one duration key whose ZERO is a
+// value rather than a mechanism switched off.
 //
-// A bare number is refused rather than guessed at: TOML has no duration type,
-// `cooldown = 300` is as readable as seconds as it is as nanoseconds, and Go's
-// own time.Duration prints in the string form, so a value that round-trips
-// through `ccdad config get` reads the same as one a user typed.
+// The pre-emptive switch is an opt-out: a user may decide they would rather
+// never be moved off an account early, and 0 is how they say so. A cooldown or
+// a hysteresis has no such setting, which is why applyDuration refuses a zero
+// and this does not. A NEGATIVE lead is refused by both: it would put the
+// switch after the exhaustion it exists to get ahead of, which is not a shorter
+// lead but a nonsense one.
+func applyPreemptLead(dst *time.Duration, v *string) error {
+	const key = "preempt_lead"
+	if v == nil {
+		return nil
+	}
+	d, err := parseConfigDuration(key, *v)
+	if err != nil {
+		return err
+	}
+	if d < 0 {
+		return fmt.Errorf("%s in %s: %q is negative, and a lead that runs backwards would place the switch after the exhaustion it exists to get ahead of", key, FileName, *v)
+	}
+	*dst = d
+	return nil
+}
+
+// applyBool overlays one optional bool.
+//
+// It takes no validator and returns no error, unlike its float and duration
+// siblings: a bool has exactly two legal values, and the only way to write
+// anything else is a type go-toml refuses before Parse is ever called —
+// `hover = "true"` fails at Unmarshal the same way a quoted threshold does.
+func applyBool(dst *bool, v *bool) {
+	if v == nil {
+		return
+	}
+	*dst = *v
+}
+
+// applyWindowThresholds overlays the [window_threshold] table.
+//
+// Every value is validated exactly as `threshold` is, and that is not a
+// formality: go-toml decodes `five_hour = inf` into a float64 without
+// complaint, and an infinite threshold puts that window infinitely far from its
+// own floor, so the one window the user tightened becomes the one that can
+// never bind.
+//
+// The NAMES are not refused here. A key this build does not recognize has to
+// round-trip — a config written by a newer ccdad must leave an older one
+// running — so an unrecognized name is carried and simply never looked up,
+// which is the same answer the loader gives an unknown top-level key. Refusing
+// a name at the point a HUMAN types it is a different question with a different
+// answer, and it belongs where `ccdad config set` lives.
+//
+// Keys are visited in sorted order so a file with two bad values names the same
+// one on every run. Map iteration order would make the same command print a
+// different error each time it was run.
+func applyWindowThresholds(cfg *Config, table map[string]float64) error {
+	if len(table) == 0 {
+		return nil
+	}
+	out := make(map[usage.WindowName]float64, len(table))
+	for _, name := range slices.Sorted(maps.Keys(table)) {
+		v := table[name]
+		if err := validThreshold(v); err != nil {
+			return fmt.Errorf("window_threshold.%s in %s: %w", name, FileName, err)
+		}
+		out[usage.WindowName(name)] = v
+	}
+	cfg.WindowThreshold = out
+	return nil
+}
+
+// applyDuration keeps its own non-positive refusal, and the sentence is exact:
+// none of the keys that reach it has a disabled setting. A zero cooldown is a
+// switch storm and a zero hysteresis is no margin at all.
 func applyDuration(dst *time.Duration, v *string, key string) error {
 	if v == nil {
 		return nil
 	}
-	d, err := time.ParseDuration(*v)
+	d, err := parseConfigDuration(key, *v)
 	if err != nil {
-		return fmt.Errorf("%s in %s: %q is not a duration; write it as a Go duration string such as \"5m\" or \"300s\"", key, FileName, *v)
+		return err
 	}
 	if d <= 0 {
 		return fmt.Errorf("%s in %s: %q is not positive, and an anti-flap mechanism cannot be switched off", key, FileName, *v)
