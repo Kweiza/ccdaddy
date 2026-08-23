@@ -198,6 +198,38 @@ by `uuid` or `alias`.
   fully expanded install directory, so the entry never matched and a second copy
   was appended on every install.
 
+### Added
+
+- **`ccdad doctor` gains three checks — `path`, `profiles` and `api-key` — for
+  seventeen.** `path` answers `ccdad: command not found` by reading two facts
+  rather than one: whether the binary's directory is on the PATH of the shell
+  you are in, and whether `ccdad setup-path` has registered it in a startup
+  file. Those disagree in the ordinary case — a registration is written for a
+  NEW shell to read — and which of the two it is decides whether the remedy is
+  "open a new shell" or "run a command". It is never a failure: ccdad invoked by
+  its full path works exactly as well. `profiles` reports a `ccdad run
+  --full-profile` directory whose account is gone, which since profiles began
+  holding an api-key account's `primaryApiKey` is a stored credential nothing
+  else on the machine would mention again; it is a set difference against the
+  account list, so a profile in daily use is not reported at all. `api-key`
+  names which of Claude Code's five API-key sources would actually win, and
+  whether that win displaces the OAuth login.
+
+### Fixed
+
+- **`ccdad doctor` no longer reports `ok environment` while a switch is being
+  defeated.** The `environment` check looked at two variables —
+  `CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_API_KEY` — and printed "nothing set
+  that would make a switch a no-op" for a machine with `ANTHROPIC_AUTH_TOKEN` or
+  `CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR` set, both of which ccdad's own code
+  already counted as displacing an existing login. All four are named now. The
+  two remaining sources are not variables at all — the `apiKeyHelper` setting
+  and the key stored in `~/.claude.json` — and the new `api-key` check covers
+  them by running the resolver rather than by listing them, because the stored
+  key is the one source that does NOT displace a login and `ccdad switch` writes
+  it for every api-key account: a hazard list would have warned about ccdad's
+  own steady state forever.
+
 ## [0.1.0] — 2026-08-23
 
 The first release the install one-liners can reach: `v0.1.0-rc1` was a
