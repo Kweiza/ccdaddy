@@ -6,23 +6,60 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
 
-// Headroom is how much of an account's BINDING window is left, as a percent.
+// Headroom is how much of an account's BINDING window is left, and how far that
+// window is from the threshold it was given.
 //
 // It is deliberately not one window's number. An account carries a five-hour
-// window and several weekly ones, and the one that binds is whichever has least
-// left: ranking on five_hour alone hands work to an account whose weekly Opus
-// quota is gone, and it hits a hard limit one prompt later.
+// window and several weekly ones, and the one that binds is whichever is
+// closest to its own threshold: ranking on five_hour alone hands work to an
+// account whose weekly Opus quota is gone, and it hits a hard limit one prompt
+// later.
 type Headroom struct {
 	// Pct is 100 minus the binding window's utilization. It can go negative,
 	// and is kept that way: how far past its limit an account already is still
-	// orders it against other spent accounts.
+	// orders it against other spent accounts. This is the DISPLAY axis, the one
+	// `ccdad list`'s LEFT column prints, and it asks the same question of every
+	// window.
 	Pct float64
+	// Slack is the binding window's threshold minus its utilization, and it is
+	// the axis the ranking orders on.
+	//
+	// It stops agreeing with Pct the moment two windows carry different
+	// thresholds. An account at 55% of a weekly window whose threshold is 60 has
+	// 45 points of raw headroom and 5 points of slack; five is the distance that
+	// decides whether the next prompt trips a limit, and forty-five is the
+	// number that would have ranked it first.
+	Slack float64
+	// Threshold is the number Slack was measured against.
+	//
+	// It is carried rather than recovered as Slack+100-Pct: that identity is
+	// exact in arithmetic and not in float64, and this figure is printed. It is
+	// also the only way a consumer holding a Headroom alone can report the
+	// threshold — `ccdad auto --json` renders a ranked pool and never sees the
+	// bundle the pass was run with.
+	Threshold float64
 	// Known is false when no window reported a utilization. An account that
 	// could not be read is NOT an empty one, and treating it as one is the
 	// exact bug that parked cswap's engine permanently.
 	Known bool
-	// Binding names the window Pct came from.
+	// Binding names the window Pct, Slack and Threshold all came from: the one
+	// with the least slack. It is the ORDERING axis and the spent test, and the
+	// three figures describe ONE window deliberately, so that Slack is always
+	// Threshold minus that window's utilization.
 	Binding usage.WindowName
+	// Floor names the WEEKLY window the account is already past — the weekly
+	// with the least slack among those below zero — and HasFloor is whether
+	// there is one at all.
+	//
+	// It is the REPORTING axis, and it is separate from Binding because it
+	// answers a different question. Binding is what is tightest right now; Floor
+	// is what will still be tight in two days. An account whose five-hour window
+	// rolls over in eight minutes has not recovered while its weekly cap is
+	// blown until Friday, so a tripped weekly window is what a user has to be
+	// told about and what has to clear before the account is usable again. It
+	// never participates in ordering.
+	Floor    usage.WindowName
+	HasFloor bool
 }
 
 // modelFamilies are the family tokens ccdad can recognize inside a model name.
@@ -133,11 +170,12 @@ func bindingWindows(s *usage.Snapshot, model string) []usage.NamedWindow {
 
 // HeadroomOf finds the binding window for a session that has not named a model,
 // which is every caller that is reporting rather than choosing.
-func HeadroomOf(s *usage.Snapshot) Headroom {
-	return HeadroomFor(s, "")
+func HeadroomOf(s *usage.Snapshot, t Thresholds) Headroom {
+	return HeadroomFor(s, "", t)
 }
 
-// HeadroomFor finds the binding window for a session that will run model.
+// HeadroomFor finds the binding window for a session that will run model,
+// against that pass's own per-window thresholds.
 //
 // The set it ranges over excludes cinder_cove: that is a one-time credit grant
 // whose resets_at is an expiry, so a spent one would otherwise read as a
@@ -150,35 +188,51 @@ func HeadroomOf(s *usage.Snapshot) Headroom {
 // Windows tie on the first in the schema's own order, and the scoped ones come
 // after the fixed five in wire order, so the answer does not depend on map
 // iteration.
-func HeadroomFor(s *usage.Snapshot, model string) Headroom {
+func HeadroomFor(s *usage.Snapshot, model string, t Thresholds) Headroom {
 	out := Headroom{}
+	floorSlack := 0.0
 	for _, w := range bindingWindows(s, model) {
 		pct, ok := w.Percent()
 		if !ok {
 			continue
 		}
-		left := 100 - pct
-		if !out.Known || left < out.Pct {
-			out = Headroom{Pct: left, Known: true, Binding: w.Name}
+		thr := t.For(w.Name)
+		slack := thr - pct
+		// The !out.Known guard is what makes the first readable window win
+		// outright. out.Slack is zero before it, so a first window with any
+		// positive slack would otherwise never be taken.
+		if !out.Known || slack < out.Slack {
+			out.Pct, out.Slack, out.Threshold = 100-pct, slack, thr
+			out.Binding, out.Known = w.Name, true
+		}
+		// The weekly floor is picked up in the SAME pass rather than in a second
+		// one over a second window set, so there is no way for a window to be
+		// admitted to one and narrowed out of the other.
+		if slack < 0 && usage.IsWeekly(w.Name) && (!out.HasFloor || slack < floorSlack) {
+			out.Floor, floorSlack, out.HasFloor = w.Name, slack, true
 		}
 	}
 	return out
 }
 
-// recoveryOf is when the binding window rolls over: the moment the account stops
-// being the one that is spent. A window that reported no reset has no recovery,
-// which is not the same as recovering now.
+// recoveryOf is when the named window rolls over: the moment it stops holding
+// the account back. A window that reported no reset has no recovery, which is
+// not the same as recovering now.
+//
+// The name it is given is not always the binding one. A blown weekly window
+// still holds the account back after the five-hour window has come back, so
+// measure asks about the weekly floor when there is one.
 //
 // It searches ALL of the account's windows rather than the narrowed set the
 // headroom came from. The name it is given was produced by that narrowed set, so
 // the two agree; searching the wider one only means this function does not have
 // to be told which model the pass was for.
-func recoveryOf(s *usage.Snapshot, binding usage.WindowName) (t timeValue) {
+func recoveryOf(s *usage.Snapshot, clears usage.WindowName) (t timeValue) {
 	if s == nil {
 		return t
 	}
 	for _, w := range s.AllWindows() {
-		if w.Name != binding {
+		if w.Name != clears {
 			continue
 		}
 		if at, ok := w.Reset(); ok {

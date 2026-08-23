@@ -527,7 +527,7 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now time.Time,
 			entry.FetchedAt = now
 		}
 
-		h := strategy.HeadroomOf(entry.Snapshot)
+		h := strategy.HeadroomOf(entry.Snapshot, strategy.Thresholds{Default: cfg.Threshold})
 		reading := pollpolicy.Reading{Exhausted: exhausted(h, cfg)}
 		if snap != nil && h.Known {
 			reading.BindingPct, reading.Known = 100-h.Pct, true
@@ -653,7 +653,7 @@ func accountState(a store.Account, cache *usage.Cache, quarantined bool,
 		// Unknown is NOT an empty account, and it must never render as 0%.
 		return StateUnknown
 	}
-	h := strategy.HeadroomOf(entry.Snapshot)
+	h := strategy.HeadroomOf(entry.Snapshot, strategy.Thresholds{Default: cfg.Threshold})
 	if !h.Known {
 		return StateUnknown
 	}

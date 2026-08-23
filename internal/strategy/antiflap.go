@@ -25,8 +25,8 @@ import (
 
 const (
 	// DefaultHysteresisPct is the hysteresis margin, in percentage points of
-	// headroom: how far a candidate must beat the active account to displace
-	// it, which is what stops a ping-pong near the threshold.
+	// SLACK: how far a candidate must beat the active account to displace it,
+	// which is what stops a ping-pong near the threshold.
 	//
 	// The margin and its `hysteresis_pct` config key are settled; the number
 	// is not, so it is chosen here. Ten points is the smallest margin that
@@ -74,7 +74,7 @@ const (
 // and there is no way to switch one off at all. `ccdad config` supplies the
 // real values; these are what stands in when it has not.
 type Config struct {
-	// HysteresisPct is how many points of headroom a candidate must beat the
+	// HysteresisPct is how many points of SLACK a candidate must beat the
 	// active account by.
 	HysteresisPct float64
 	// HeadroomRatio is the multiplicative margin on the same axis.
@@ -510,16 +510,36 @@ func cooldownGate(res Result, activeUUID string, cfg Config, st *State, now time
 	return ReasonBetterTarget, false, time.Time{}
 }
 
-// headroomGate is the pair of margins on the headroom axis: an additive one in
-// points and a multiplicative one.
+// headroomGate is the pair of margins the headroom-ordered modes hold: an
+// additive one in points and a multiplicative one.
 //
-// The additive margin is what stops jitter near the threshold, where the
-// binding window can flip between two windows a point apart and move headroom
-// with no usage at all. The ratio is what makes a REVERSE move need a 4x
-// relative burn: it applies to every move, so a round trip has to clear it
-// twice in opposite directions.
+// The additive margin is what stops jitter near the threshold, where the binding
+// window can flip between two windows a point apart and move the figure with no
+// usage at all. The ratio is what makes a REVERSE move need a 4x relative burn:
+// it applies to every move, so a round trip has to clear it twice in opposite
+// directions.
 //
-// Neither margin latches. Both compare CURRENT headroom, so an account that
+// THE TWO RUN ON DIFFERENT AXES, and that is not an oversight.
+//
+// The additive margin runs on SLACK, the same axis the ranking ordered on.
+// Adding a constant to both sides of a subtraction changes nothing, so with one
+// threshold for every window this is exactly the comparison it has always been;
+// with a weekly window on a threshold of its own it measures the thing that now
+// decides, which is how much closer each account is to its OWN floor.
+//
+// The ratio runs on raw Pct. A ratio is not shift-invariant — 60/30 and 40/10
+// are not the same number — so moving it would change what the engine does for a
+// user who configured nothing, and it is undefined on the negative values the
+// slack axis produces routinely.
+//
+// The seam that leaves, documented rather than fixed: with a tight weekly floor
+// an account one point from that floor can still have forty points of raw
+// headroom, so a candidate the ranking prefers can clear the additive margin and
+// fail the ratio, and the engine stays. `ccdad switch --force` goes past it. A
+// user who tightens one window's threshold without lowering the ratio should
+// expect it.
+//
+// Neither margin latches. Both compare CURRENT figures, so an account that
 // burns down loses its position the moment the numbers say so — which is the
 // rule quoted at the top of this file, and the thing a latch-until-exhausted
 // implementation gets wrong while passing every test anyone would write for it.
@@ -536,7 +556,7 @@ func headroomGate(active, target Ranked, cfg Config) (Reason, bool, time.Time) {
 	if !target.Headroom.Known {
 		return ReasonBetterTarget, false, time.Time{}
 	}
-	if target.Headroom.Pct < active.Headroom.Pct+cfg.HysteresisPct {
+	if target.Headroom.Slack < active.Headroom.Slack+cfg.HysteresisPct {
 		return ReasonHysteresis, true, time.Time{}
 	}
 	// With an active account at or past its limit the ratio is trivially

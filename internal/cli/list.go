@@ -83,7 +83,7 @@ func newListCmd() *cobra.Command {
 			if cerr := cache.LoadError(); cerr != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "The usage cache could not be read: %v\n", cerr)
 			}
-			quota := quotaRows(visible, cache, active, hasActive, now)
+			quota := quotaRows(visible, cache, active, hasActive, now, rowThresholds(cmd, now))
 
 			if asJSON {
 				rows := make([]map[string]any, 0, len(visible))

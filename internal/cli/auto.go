@@ -462,6 +462,12 @@ func rankingJSON(order []strategy.Ranked) []map[string]any {
 		row := map[string]any{"uuid": r.UUID, "kind": r.Kind.String()}
 		if r.Headroom.Known {
 			row["headroomPct"] = r.Headroom.Pct
+			// The axis the order was actually made on. headroomPct alone cannot
+			// explain a pool ranked under a per-window table: two accounts can
+			// be ordered against 100 minus their utilization one way and against
+			// their own thresholds the other.
+			row["slack"] = r.Headroom.Slack
+			row["windowThreshold"] = r.Headroom.Threshold
 		}
 		if r.HasRecovery {
 			row["recoversAt"] = r.RecoversAt.UTC().Format(time.RFC3339)

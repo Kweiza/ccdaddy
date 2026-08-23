@@ -18,6 +18,16 @@ const (
 	// when it has not.
 	DefaultThreshold = 80.0
 
+	// DefaultCreditThreshold is the utilization percent above which a
+	// credit-metered account counts as spent.
+	//
+	// It matches DefaultThreshold because it answers the same question on a
+	// different meter — a share of a credit balance rather than of a plan
+	// window — and it is its own constant so that the two can be moved apart
+	// without the credit axis silently inheriting a change made for
+	// subscriptions.
+	DefaultCreditThreshold = 80.0
+
 	// DefaultRecoveryHorizon is how soon a spent account has to come back before
 	// "it comes back soon" outranks "it is less blown".
 	//
@@ -109,22 +119,53 @@ func (m Mode) String() string {
 }
 
 // Candidate is one account the engine may rank. It is deliberately not a
-// store.Account: ranking needs four facts, and taking only those keeps this
-// package independent of how accounts are persisted.
+// store.Account: ranking needs a handful of facts, and taking only those keeps
+// this package independent of how accounts are persisted.
 type Candidate struct {
 	UUID     string
 	Kind     identity.Kind
 	Disabled bool
+	// Primary marks a credit-metered account that is the seat's ordinary
+	// metering rather than an overage: it ranks with the subscriptions instead
+	// of waiting in the last-resort pool. Nothing sets it here; the flag is an
+	// account fact, read off the store.
+	Primary bool
 	// Usage is the account's most recent reading, or nil when there has never
 	// been one. Nil is UNKNOWN, never empty.
 	Usage *usage.Snapshot
+	// FetchedAt is when this reading was taken and NextPollAt when the next one
+	// is due. Both are copied from usage.Entry, and the gap between them is the
+	// interval during which the engine is blind: a projection that has to guess
+	// it would be guessing the one number the cache already knows.
+	FetchedAt  time.Time
+	NextPollAt time.Time
 }
 
 // Options configures one ranking pass.
 type Options struct {
 	Now time.Time
-	// Threshold is the utilization percent above which an account is spent.
+	// Threshold is the utilization percent above which an account is spent. It
+	// is the fallback for any window the table below does not name.
 	Threshold float64
+	// WindowThreshold is the threshold for a named window, for the windows that
+	// have one of their own. A window missing from it — and nil, which is every
+	// window missing — falls back to Threshold.
+	//
+	// It is keyed by the window name the wire uses, scoped names included, so
+	// the map a user's configuration builds needs no translation table between
+	// what was typed and what the snapshot reports.
+	WindowThreshold map[usage.WindowName]float64
+	// CreditThreshold is the utilization percent above which a credit-metered
+	// account counts as spent.
+	CreditThreshold float64
+	// PreemptLead is how far ahead of a projected exhaustion the engine moves.
+	//
+	// A zero switches pre-emption OFF, and that is a real answer rather than an
+	// omission: this is an opt-out a user may legitimately want, the same
+	// direction MaxAutoSpend already takes, and unlike an anti-flap margin it is
+	// not a mechanism that must never be switched off. The default lives in the
+	// configuration, which is the only thing that knows a user did not say.
+	PreemptLead time.Duration
 	// Horizon is how soon a recovery has to be to win its tier.
 	Horizon  time.Duration
 	Strategy Strategy
@@ -156,19 +197,15 @@ func (o Options) horizon() time.Duration {
 	return o.Horizon
 }
 
-// threshold defaults the same way Horizon does, and it matters more.
+// Thresholds is this pass's thresholds as one value, which is the shape every
+// consumer outside this package takes.
 //
-// A zero Threshold read literally means "over threshold if utilization > 0", so
-// an account with a single percent used counts as spent — which flows straight
-// into SubscriptionExhausted, the input that opens the credit gate. The zero
-// value of this struct would therefore fail OPEN on money, against everything
-// the credit gate stands for. Defaulting it makes the omission harmless
-// instead.
-func (o Options) threshold() float64 {
-	if o.Threshold <= 0 {
-		return DefaultThreshold
-	}
-	return o.Threshold
+// The defaulting lives in Thresholds rather than here, so there is one place a
+// zero can be turned into DefaultThreshold and no way for a caller to reach a
+// comparison with a bare zero — which would make an account at one percent read
+// as spent and open the credit gate.
+func (o Options) Thresholds() Thresholds {
+	return Thresholds{Default: o.Threshold, PerWindow: o.WindowThreshold, Credit: o.CreditThreshold}
 }
 
 // Ranked is a candidate with the figures the ranking used, so a caller can
@@ -229,14 +266,20 @@ func eligible(c Candidate) bool {
 	return !c.Disabled && c.Kind != identity.KindAPIKey
 }
 
-// overThreshold is three-valued on purpose. An account that could not be read is
-// neither over nor under, and folding that into a boolean is the bug that left
-// cswap parked on the account that reset last.
-func overThreshold(h Headroom, threshold float64) (over, known bool) {
+// Spent is whether an account is past a threshold on any window it carries.
+//
+// One test covers them all: a negative slack means the binding window is over
+// the threshold that window was given, and the binding window is the one with
+// the least slack, so every other window has slack to spare.
+//
+// It is three-valued on purpose. An account that could not be read is neither
+// spent nor unspent, and folding that into a boolean is the bug that left cswap
+// parked on the account that reset last.
+func Spent(h Headroom) (spent, known bool) {
 	if !h.Known {
 		return false, false
 	}
-	return 100-h.Pct > threshold, true
+	return h.Slack < 0, true
 }
 
 // weeklyResetOf is the soonest reset among the weekly windows, which is what
@@ -263,8 +306,16 @@ func weeklyResetOf(s *usage.Snapshot, model string) timeValue {
 }
 
 func measure(c Candidate, o Options) Ranked {
-	h := HeadroomFor(c.Usage, o.Model)
-	rec := recoveryOf(c.Usage, h.Binding)
+	h := HeadroomFor(c.Usage, o.Model, o.Thresholds())
+	// Recovery is the moment the account stops being spent, and that is not
+	// always the binding window's rollover. A blown WEEKLY window still holds the
+	// account back after the five-hour window has come back, so when there is one
+	// it is that floor which has to clear.
+	clears := h.Binding
+	if h.HasFloor {
+		clears = h.Floor
+	}
+	rec := recoveryOf(c.Usage, clears)
 	weekly := weeklyResetOf(c.Usage, o.Model)
 
 	r := Ranked{
@@ -304,7 +355,7 @@ func Rank(cands []Candidate, o Options) Result {
 		}
 		measured = append(measured, r)
 
-		if over, known := overThreshold(r.Headroom, o.threshold()); !known || !over {
+		if over, known := Spent(r.Headroom); !known || !over {
 			allOver = false
 		}
 	}
@@ -320,7 +371,7 @@ func Rank(cands []Candidate, o Options) Result {
 		sort.SliceStable(measured, func(i, j int) bool { return lessRecovery(measured[i], measured[j]) })
 	default:
 		res.Mode = ModeHeadroom
-		sort.SliceStable(measured, func(i, j int) bool { return lessHeadroom(measured[i], measured[j], o.threshold()) })
+		sort.SliceStable(measured, func(i, j int) bool { return lessHeadroom(measured[i], measured[j]) })
 	}
 	return res
 }
@@ -329,8 +380,8 @@ func Rank(cands []Candidate, o Options) Result {
 // and "we have no idea" and "we know it is spent" are three answers, not two.
 // The unknown sits between: a maybe beats a no, and trying it is how a pool of
 // unreadable accounts stops being a dead end.
-func headroomTier(r Ranked, threshold float64) int {
-	over, known := overThreshold(r.Headroom, threshold)
+func headroomTier(r Ranked) int {
+	over, known := Spent(r.Headroom)
 	switch {
 	case known && !over:
 		return 0
@@ -341,26 +392,34 @@ func headroomTier(r Ranked, threshold float64) int {
 	}
 }
 
-func lessHeadroom(a, b Ranked, threshold float64) bool {
-	if ta, tb := headroomTier(a, threshold), headroomTier(b, threshold); ta != tb {
+func lessHeadroom(a, b Ranked) bool {
+	if ta, tb := headroomTier(a), headroomTier(b); ta != tb {
 		return ta < tb
 	}
-	// Within a tier, more headroom first. An unknown tier has no headroom to
+	// Within a tier, more SLACK first — distance from each account's own
+	// threshold rather than from a shared 100. An unknown tier has no slack to
 	// compare, so both sides are zero and the uuid decides.
-	if a.Headroom.Known && b.Headroom.Known && a.Headroom.Pct != b.Headroom.Pct {
-		return a.Headroom.Pct > b.Headroom.Pct
+	if a.Headroom.Known && b.Headroom.Known && a.Headroom.Slack != b.Headroom.Slack {
+		return a.Headroom.Slack > b.Headroom.Slack
 	}
 	return a.UUID < b.UUID
 }
 
 // lessRecovery is the tiered recovery key:
 //
-//	{0, recoveryTS, -headroom}  // returns inside the horizon
-//	{1, -headroom, recoveryTS}  // does not
+//	{0, recoveryTS, -slack}  // returns inside the horizon
+//	{1, -slack, recoveryTS}  // does not
 //
-// The tier is what makes it work. A flat key compares a raw headroom against an
+// The tier is what makes it work. A flat key compares a raw slack against an
 // epoch second — 0-100 against ~1.7e9 — so magnitude decides and the engine
 // parks on whatever resets last.
+//
+// The quantity is SLACK rather than Pct so that both modes order on one axis.
+// Ordering on the display axis while the mode switch and the margins run on the
+// decision axis is the seam this whole change removes; at a single threshold the
+// two differ by a constant and the choice is invisible, and the moment a weekly
+// window carries a threshold of its own it is slack that says which account is
+// closer to its own floor.
 func lessRecovery(a, b Ranked) bool {
 	if a.ReturnsInsideHorizon != b.ReturnsInsideHorizon {
 		return a.ReturnsInsideHorizon
@@ -369,13 +428,13 @@ func lessRecovery(a, b Ranked) bool {
 		if !a.RecoversAt.Equal(b.RecoversAt) {
 			return a.RecoversAt.Before(b.RecoversAt)
 		}
-		if a.Headroom.Pct != b.Headroom.Pct {
-			return a.Headroom.Pct > b.Headroom.Pct
+		if a.Headroom.Slack != b.Headroom.Slack {
+			return a.Headroom.Slack > b.Headroom.Slack
 		}
 		return a.UUID < b.UUID
 	}
-	if a.Headroom.Pct != b.Headroom.Pct {
-		return a.Headroom.Pct > b.Headroom.Pct
+	if a.Headroom.Slack != b.Headroom.Slack {
+		return a.Headroom.Slack > b.Headroom.Slack
 	}
 	// An account with no recovery at all sorts after one that has a distant
 	// recovery: "sometime" is still more than "never said".
@@ -460,7 +519,7 @@ func SubscriptionExhausted(cands []Candidate, o Options) bool {
 		return true
 	}
 	for _, c := range subs {
-		over, known := overThreshold(HeadroomFor(c.Usage, o.Model), o.threshold())
+		over, known := Spent(HeadroomFor(c.Usage, o.Model, o.Thresholds()))
 		if !known || !over {
 			return false
 		}
