@@ -263,6 +263,10 @@ func newSwitchCmd() *cobra.Command {
 
 			noteCooldown(cmd, res.CooldownErr)
 			noteReleasedAPIKey(cmd, res)
+			// From the Result rather than a fresh probe: Execute decided it
+			// under Claude Code's credential locks, at the moment of the write,
+			// and re-asking here would answer about a different instant.
+			noteCredentialHomeClaim(cmd, res.Claim)
 
 			fmt.Fprintf(cmd.ErrOrStderr(), "Switched to %s.\n", target.Label())
 			// Claude Code reads CLAUDE_CODE_OAUTH_TOKEN in preference to the

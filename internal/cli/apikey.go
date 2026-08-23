@@ -11,6 +11,7 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
+	"github.com/Kweiza/ccdaddy/internal/credhome"
 	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/switcher"
@@ -114,6 +115,33 @@ func noteCooldown(cmd *cobra.Command, err error) {
 	}
 	fmt.Fprintf(cmd.ErrOrStderr(),
 		"note: %v; the daemon may switch again sooner than it should.\n", err)
+}
+
+// noteCredentialHomeClaim warns an ATTENDED caller that another ccdad store's
+// engine is driving this Claude Code login, and it never refuses.
+//
+// A human typed the command and is watching the result. The useful thing to
+// tell them is that the switch they just made will probably be undone within
+// the second — not that ccdad declined to do what they asked. The unattended
+// half of the same fact is switcher.Contended, which does stand down, because a
+// notice printed to a log nobody reads is not a notice.
+//
+// Every attended path that writes the live credentials file calls this, and
+// there are three: `ccdad switch`, its API-key form, and `ccdad add
+// --activate`. The first has the verdict already — Execute decided it under
+// Claude Code's credential locks — and the other two write the file without
+// ever constructing a switcher.Result, which is why this takes the verdict
+// rather than the Result.
+func noteCredentialHomeClaim(cmd *cobra.Command, v credhome.Verdict) {
+	switch {
+	case v.StandDown:
+		fmt.Fprintf(cmd.ErrOrStderr(),
+			"Note: the ccdad store at %s (pid %d) is also driving this Claude Code login, and will "+
+				"probably switch it back. Point CLAUDE_CONFIG_DIR at a directory of this store's own, "+
+				"or stop that engine.\n", v.Owner.Store, v.Owner.PID)
+	case v.Notice != "":
+		fmt.Fprintf(cmd.ErrOrStderr(), "note: %s\n", v.Notice)
+	}
 }
 
 // noteReleasedAPIKey reports what the executor did with a stored key. It never
@@ -241,6 +269,11 @@ func switchToAPIKey(cmd *cobra.Command, s *store.Store, target store.Account, ke
 			"and that login was NOT one ccdad manages — signing in again is the only way back to it.")
 	}
 	noteDisplacingAuth(cmd, key)
+	// Probed rather than carried: this path never constructs a switcher.Result,
+	// so there is no verdict decided under the lock to reuse. It runs after the
+	// write for the same reason the notes above do — the switch has happened,
+	// and this describes what will happen to it.
+	noteCredentialHomeClaim(cmd, credhome.Decide())
 	return nil
 }
 

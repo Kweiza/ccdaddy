@@ -12,6 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Kweiza/ccdaddy/internal/credhome"
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
@@ -101,7 +102,19 @@ func newAutoCmd() *cobra.Command {
 // being as the caller asked for it, which is exactly what §9.3 reserves 3 for —
 // and ErrSingletonHeld is a distinct sentinel from ErrLocksUnsupported for this
 // reason, so a filesystem with no working locks still reports a failure.
-func runAutoLoop(ctx context.Context, em *autoEmitter, s *store.Store, interval time.Duration) error {
+//
+// The credential-home claim is the second exclusion and a different question:
+// the singleton keeps two engines out of one STORE, and the claim keeps two
+// stores off one Claude Code login. Its refusal is 4 rather than 3, because
+// another store's engine driving this login is not the world being as the
+// caller asked — it is the state exit.go reserves 4 to alert on.
+//
+// The return is NAMED, and it has to be: the release defers below assign to it,
+// and with an unnamed return those assignments land in a dead local. That was
+// already true of the singleton's release before the claim was added — a
+// failure to give the singleton back was being discarded silently, which is the
+// one error on this path a next invocation actually trips over.
+func runAutoLoop(ctx context.Context, em *autoEmitter, s *store.Store, interval time.Duration) (err error) {
 	single, err := daemon.AcquireSingleton()
 	if errors.Is(err, daemon.ErrSingletonHeld) {
 		em.say("A ccdad daemon is already running the engine, so this would fight it for the cooldown.")
@@ -112,6 +125,25 @@ func runAutoLoop(ctx context.Context, em *autoEmitter, s *store.Store, interval 
 		return err
 	}
 	defer func() { err = errors.Join(err, single.Release()) }()
+
+	// The other axis, and the same policy the daemon applies: only an engine
+	// that demonstrably holds this credential home stops us. Everything else is
+	// reported and run through, because refusing on a filesystem that cannot
+	// lock would take `ccdad auto` away from every machine with a network home.
+	claim, claimErr := credhome.Acquire()
+	switch {
+	case errors.Is(claimErr, credhome.ErrClaimed):
+		em.say("%v", claimErr)
+		return WithCode(errSilent, ExitBlocked)
+	case claimErr != nil:
+		em.notice("running without the credential-home claim (%v); if a second ccdad store is "+
+			"driving this Claude Code login, nothing here will notice", claimErr)
+	default:
+		defer func() { err = errors.Join(err, claim.Release()) }()
+		if claim.OwnerErr != nil {
+			em.notice("holding the credential-home claim, but could not record who holds it: %v", claim.OwnerErr)
+		}
+	}
 
 	// A failing PASS does not stop the loop — the daemon's does not either, and
 	// a transient I/O error is not a reason to stop switching accounts. A
@@ -218,8 +250,34 @@ func autoPass(em *autoEmitter, s *store.Store) (ExitCode, error) {
 			"preference to the credentials file.")
 		em.say("Unset it, or nothing the engine does can change what a session authenticates as.")
 		return ExitBlocked, nil
+	case switcher.Contended:
+		// 4 for the same reason Overridden is 4: the engine wanted to move,
+		// cannot usefully do so, and the fix is the operator's. Not 3 — 3 means
+		// the world is already as the caller asked, and exit.go says operators
+		// may ignore it, which would make this the one state nobody hears about.
+		em.unchanged(res, "contended")
+		em.say("Not switching: the ccdad store at %s (pid %d) is driving this Claude Code login.",
+			res.Claim.Owner.Store, res.Claim.Owner.PID)
+		em.say("Two stores on one login undo each other's switches. Point CLAUDE_CONFIG_DIR at a " +
+			"directory of this store's own, or stop that engine.")
+		return ExitBlocked, nil
+	case switcher.Switched:
+		// Named rather than left to fall through. This switch has no default,
+		// so an Outcome added later would reach the lines below and report
+		// itself as a completed swap — a `{"kind":"switched"}` event and exit 0
+		// for a switch that never happened, to the one consumer that cannot see
+		// the machine. Adding a value to switcher.Outcome now breaks the build
+		// here instead, which is where it should break.
+	default:
+		return ExitFailure, fmt.Errorf("the switch reported an outcome this ccdad does not know (%d): %s",
+			res.Outcome, res.Outcome)
 	}
 
+	if res.Claim.Notice != "" {
+		// The claim could not be read definitively. That is never a reason to
+		// stand down — see credhome.Verdict — and always a reason to say so.
+		em.notice("%s", res.Claim.Notice)
+	}
 	if res.CooldownErr != nil {
 		em.notice("%v; the next evaluation may switch again sooner than it should", res.CooldownErr)
 	}

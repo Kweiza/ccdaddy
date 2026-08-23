@@ -7,6 +7,8 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/Kweiza/ccdaddy/internal/credhome"
 )
 
 // Options configures the daemon process.
@@ -100,10 +102,22 @@ func (o Options) now() time.Time {
 //  1. take the singleton — everything after this depends on being the only one;
 //  2. open daemon.log and point stderr at it, so a crash from here on leaves a
 //     trace instead of vanishing into the null device Spawn handed the child;
-//  3. sweep the status temp files a previous daemon's interrupted renames left;
-//  4. write the pidfile;
-//  5. publish a first status, so a `ccdad status` racing the start sees a daemon
+//  3. take the credential-home claim, which is the OTHER axis: the singleton
+//     keeps two daemons out of one store, and this keeps two stores off one
+//     Claude Code login. It comes after the log rather than beside the
+//     singleton because its refusal is the one a user has to read, and before
+//     step 2 there is nowhere to write it;
+//  4. sweep the status temp files a previous daemon's interrupted renames left;
+//  5. write the pidfile;
+//  6. publish a first status, so a `ccdad status` racing the start sees a daemon
 //     rather than nothing.
+//
+// Only ErrClaimed stops the daemon. Every other reason the claim could not be
+// taken — a filesystem that cannot lock, a credential home that cannot be
+// written — is logged and run through: refusing there would take ccdad away
+// from every machine with a network home, a configuration that works today, to
+// guard a hazard that needs a second store to exist at all. `ccdad doctor` is
+// where the degraded state is named.
 //
 // Shutdown is ONE path, and it is a stop channel rather than an exit. A handler
 // that calls os.Exit is not theoretical damage: a tick killed mid-swap abandons
@@ -132,6 +146,28 @@ func Run(ctx context.Context, o Options) (err error) {
 		log.Printf("stderr stays where it was: %v", cerr)
 	}
 	log.Printf("ccdad daemon up, pid %d", os.Getpid())
+
+	claim, claimErr := credhome.Acquire()
+	switch {
+	case errors.Is(claimErr, credhome.ErrClaimed):
+		// The one refusal. Two engines on one credential home do not corrupt
+		// anything — cclock serialises the writes — they simply undo each
+		// other's switches forever, which is worse than not running.
+		log.Printf("not starting: %v", claimErr)
+		return claimErr
+	case claimErr != nil:
+		log.Printf("running WITHOUT the credential-home claim: %v", claimErr)
+		log.Printf("if a second ccdad store is driving the same Claude Code login, " +
+			"nothing here will notice; 'ccdad doctor' reports this state")
+	default:
+		defer func() { err = errors.Join(err, claim.Release()) }()
+		if claim.OwnerErr != nil {
+			// Held, but anonymous. Another store's engine will stand down
+			// against it only if it can read this document, so say so.
+			log.Printf("holding the credential-home claim, but could not record who holds it: %v", claim.OwnerErr)
+		}
+	}
+
 	// Before the first tick, so nothing the engine decides is written to a log
 	// it does not have yet.
 	o.attach(log)
@@ -147,10 +183,19 @@ func Run(ctx context.Context, o Options) (err error) {
 	defer func() { err = errors.Join(err, ClearPID()) }()
 
 	startedAt := o.now()
+	// Resolved once, here, rather than per publish: every other path in this
+	// process derives its credential home from the same environment, and a
+	// document that re-resolved it each tick would describe a daemon that had
+	// changed its mind rather than one whose environment had.
+	//
+	// An unresolvable home leaves the field empty, which the reader treats as
+	// "this daemon did not say" rather than as ~/.claude.
+	credentialHome, _ := credhome.Home()
 	writer := NewStatusWriter()
 	publish := func(stopped bool) error {
 		s := o.snapshot()
 		s.PID = os.Getpid()
+		s.CredentialHome = credentialHome
 		s.StartedAt = startedAt
 		s.Stopped = stopped
 		_, werr := writer.Write(s, o.now())

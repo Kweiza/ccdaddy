@@ -13,6 +13,7 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
+	"github.com/Kweiza/ccdaddy/internal/credhome"
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
@@ -163,7 +164,12 @@ func runUninstall(cmd *cobra.Command, assumeYes bool) error {
 	// does not get to produce "nothing to uninstall" and exit 3 — that answer
 	// tells a script the machine is clean while a live block still names a
 	// binary about to be deleted.
-	if !storeState.present && !removableBinary && len(pathPlaces) == 0 && pathErr == nil {
+	// The credential-home residue counts. A user whose store is already gone
+	// would otherwise be told the machine is clean while ccdad's files sit in
+	// Claude Code's directory with no command that mentions them again.
+	claimDir, claimPresent := credentialHomeResidue()
+
+	if !storeState.present && !removableBinary && len(pathPlaces) == 0 && pathErr == nil && !claimPresent {
 		fmt.Fprintln(out, "Nothing to uninstall: there is no ccdad store here"+describeBinary(exe, exeErr, owner)+".")
 		return WithCode(errSilent, ExitNothingToDo)
 	}
@@ -204,6 +210,12 @@ func runUninstall(cmd *cobra.Command, assumeYes bool) error {
 			return fmt.Errorf("removing %s: %w", root, err)
 		}
 		fmt.Fprintf(out, "Removed %s.\n", root)
+	}
+
+	// After stopDaemon, so this store's own engine has already released the
+	// claim and the acquire below is uncontended in the ordinary case.
+	if claimPresent {
+		tidyCredentialHome(out, claimDir)
 	}
 
 	// A failure here must not strand a user whose store is already gone, so it
@@ -322,6 +334,63 @@ func inspectStore(root string) (storeInspection, error) {
 // enumerate says exactly what is about to be destroyed, before the question is
 // asked. A confirmation prompt with nothing above it is a prompt people say yes
 // to.
+// credentialHomeResidue reports ccdad's directory inside Claude Code's
+// credential home, and whether anything of ours is in it.
+//
+// It stats the LOCK file rather than the directory: an empty .ccdad/ left by
+// something else is not evidence that ccdad ran here, and this answer feeds the
+// "nothing to uninstall" predicate, which must not claim a machine is dirty on
+// the strength of a directory that could belong to anyone.
+//
+// It creates nothing, on any path.
+func credentialHomeResidue() (dir string, present bool) {
+	dir, err := credhome.Dir()
+	if err != nil {
+		return "", false
+	}
+	if _, err := os.Stat(filepath.Join(dir, credhome.LockFileName)); err != nil {
+		return dir, false
+	}
+	return dir, true
+}
+
+// tidyCredentialHome clears ccdad's owner record inside Claude Code's credential
+// home and REMOVES NOTHING.
+//
+// Not removing is the whole of it. The lock file is the exclusion that stops two
+// ccdad stores driving one Claude Code login, flock is per-inode, and unlinking
+// it while another store's engine holds it leaves that engine locking an
+// orphaned inode while the next one takes a fresh file — two engines, one login,
+// which is the state the file exists to prevent. This command stops THIS store's
+// daemon and has no authority over any other's; a second ccdad may still be
+// installed and running, and these files are that installation's too.
+//
+// The clearing is done by taking the claim and giving it straight back, rather
+// than by truncating the document directly. Truncating on the strength of a
+// probe is the race in miniature: the probe answers "free", another engine
+// acquires and writes its name, and the truncate then blanks the INCOMING
+// engine's record for the rest of its life. Holding the lock across the clear is
+// what makes the answer still true when it is acted on — and Release clears the
+// document as its first act, so acquiring and releasing IS the operation.
+func tidyCredentialHome(out io.Writer, dir string) {
+	claim, err := credhome.Acquire()
+	switch {
+	case errors.Is(err, credhome.ErrClaimed):
+		fmt.Fprintf(out, "%s was left in place: %v\n", dir, err)
+		return
+	case err != nil:
+		fmt.Fprintf(out, "%s was left in place; its owner record could not be cleared: %v\n", dir, err)
+		return
+	}
+	if rerr := claim.Release(); rerr != nil {
+		fmt.Fprintf(out, "%s was left in place; its owner record could not be cleared: %v\n", dir, rerr)
+		return
+	}
+	fmt.Fprintf(out, "Left %s in place, with its owner record cleared. Its lock file is never removed: "+
+		"deleting a lock file splits the exclusion it provides, and another ccdad store may still be "+
+		"using this one.\n", dir)
+}
+
 func enumerate(out io.Writer, s storeInspection, exe string, exeErr error, owner string,
 	current store.Account, hasLive bool) {
 	if s.present {
@@ -353,8 +422,9 @@ func enumerate(out io.Writer, s storeInspection, exe string, exeErr error, owner
 			fmt.Fprintf(out, "%d parallel session(s) have credentials under %s; a session still running "+
 				"will lose its login.\n", n, filepath.Join(s.root, SessionsDirName))
 		}
-		if len(s.accounts) > 0 {
-		}
+	}
+	if dir, present := credentialHomeResidue(); present {
+		fmt.Fprintf(out, "ccdad's claim files in %s will be LEFT in place; see the note after the removal.\n", dir)
 	}
 	switch {
 	case exeErr != nil:
