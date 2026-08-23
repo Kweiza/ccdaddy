@@ -429,12 +429,13 @@ func TestInstallShUpgradesOverABinaryWithNoDaemonCommand(t *testing.T) {
 // permission, and a startup file it guessed at is a file it can corrupt. It
 // prints a PATH warning and hands over a line to paste instead.
 //
-// It used to name `ccdad setup-path`, and this test pinned that. The command
-// does not exist in the tree: the installer's last instruction was one the
-// freshly installed binary answers with `unknown command "setup-path"`, which
-// is a worse ending than asking for a copy and paste. What is pinned now is
-// that the advice is ACTIONABLE — the real install directory, in a line the
-// user can run. Point both back at `ccdad setup-path` when that command lands.
+// It names `ccdad setup-path`, and by ABSOLUTE path. This arm of install.sh
+// fires precisely because the install directory is off PATH, so a bare `ccdad
+// setup-path` resolves to nothing — which is how this assertion got inverted
+// once already, back when the command did not exist and the installer's last
+// instruction was one the freshly installed binary answered with `unknown
+// command`. Both halves are pinned below: the command is named, and it is
+// named by a path that exists.
 func TestInstallShNeverEditsAShellProfile(t *testing.T) {
 	newFakeRelease(t)
 	home := t.TempDir()
@@ -470,11 +471,22 @@ func TestInstallShNeverEditsAShellProfile(t *testing.T) {
 	if !strings.Contains(out, "export PATH=") || !strings.Contains(out, dir) {
 		t.Errorf("install.sh said:\n%s\nwant an actionable PATH line naming %s, for an install dir off PATH", out, dir)
 	}
-	// The advice must not name a subcommand the binary does not have. This is
-	// the assertion the previous one was the inverse of, and it is the one that
-	// caught the defect.
-	if strings.Contains(out, "setup-path") {
-		t.Errorf("install.sh said:\n%s\nit points at `ccdad setup-path`, which is not a command in this tree", out)
+	// Named, and named by a path the reader can actually run. Matching the
+	// whole LINE rather than the whole output is what makes this fail for a
+	// bare `ccdad setup-path`, which is the shape that cannot work here.
+	pointer := ""
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "setup-path") {
+			pointer = line
+			break
+		}
+	}
+	if pointer == "" {
+		t.Errorf("install.sh said:\n%s\nwant it to point at `ccdad setup-path`, the command whose job "+
+			"this is, for an install dir off PATH", out)
+	} else if !strings.Contains(pointer, dir) {
+		t.Errorf("install.sh said:\n%s\nthe setup-path pointer does not name the binary by absolute path, "+
+			"and a bare `ccdad` cannot resolve on the very machine this arm fires for", pointer)
 	}
 	if !strings.Contains(out, "ccdad uninstall") {
 		t.Errorf("install.sh said:\n%s\nwant it to point uninstall at `ccdad uninstall`, "+

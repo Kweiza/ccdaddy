@@ -54,6 +54,13 @@ func homeDir() (string, error) {
 	return h, nil
 }
 
+// Home is the user's home directory, for the callers that need the directory
+// itself rather than a path derived from it -- `ccdad setup-path` writing a
+// shell startup file, and `ccdad uninstall` removing one. It is the same
+// resolution and the same error every other path in this package is built on,
+// exported so those two cannot grow a second, differently-sandboxed answer.
+func Home() (string, error) { return homeDir() }
+
 // nfc normalizes to NFC, as Claude Code does to every path it derives. This
 // matters on macOS, where the filesystem hands back decomposed forms.
 func nfc(s string) string { return norm.NFC.String(s) }
