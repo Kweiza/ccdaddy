@@ -644,6 +644,92 @@ func TestReAuthenticationKeepsAnAccountHeldOutOfRotation(t *testing.T) {
 	}
 }
 
+// primary decides whether the engine ranks an account beside the subscriptions
+// and whether the credit ceiling gates it at all. It is a fact about the
+// account rather than a tuning value, so it lives in accounts.toml and has to
+// come back the same on the next Open.
+func TestPrimaryIsWrittenAndReadBack(t *testing.T) {
+	dir := withStore(t)
+	s, _ := Open()
+	if err := s.Add(Account{UUID: "u-1", Kind: identity.KindCredit}, sampleCreds("a")); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, err := s.SetPrimary("u-1", true)
+	if err != nil {
+		t.Fatalf("SetPrimary = %v, want nil", err)
+	}
+	if !changed {
+		t.Fatal("SetPrimary reported no change on an account that was not primary")
+	}
+	if again, err := s.SetPrimary("u-1", true); err != nil || again {
+		t.Fatalf("SetPrimary twice = (%v, %v), want (false, nil) — the world is already as asked", again, err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(dir, "accounts.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "primary = true") {
+		t.Fatalf("accounts.toml does not carry the flag:\n%s", raw)
+	}
+
+	reopened, err := Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := reopened.Get("u-1"); !got.Primary {
+		t.Fatal("the flag did not survive a reopen")
+	}
+}
+
+// An ordinary account writes no key at all, which is what every other optional
+// field's omitempty tag buys: a file full of `primary = false` lines invites a
+// reader to think the absence of one somewhere means something different.
+func TestAnOrdinaryAccountWritesNoPrimaryKey(t *testing.T) {
+	dir := withStore(t)
+	s, _ := Open()
+	if err := s.Add(Account{UUID: "u-1"}, sampleCreds("a")); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(dir, "accounts.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "primary") {
+		t.Fatalf("accounts.toml carries a primary key for an account with no such flag:\n%s", raw)
+	}
+}
+
+// `ccdad add` doubles as re-authentication in place, and the record a fresh
+// login builds knows nothing about the user having armed this seat. Without the
+// carry, logging in again puts the account back behind credit.max_auto_spend —
+// which defaults to 0, so the account becomes permanently unusable and nothing
+// says why.
+func TestReAuthenticationKeepsAnAccountPrimary(t *testing.T) {
+	withStore(t)
+	s, _ := Open()
+	if err := s.Add(Account{UUID: "u-1", Email: "old@example.com", Primary: true}, sampleCreds("a")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.Add(Account{UUID: "u-1", Email: "new@example.com"}, sampleCreds("b")); err != nil {
+		t.Fatal(err)
+	}
+
+	got, ok := s.Get("u-1")
+	if !ok {
+		t.Fatal("Get(u-1) = false, want the re-authenticated account")
+	}
+	if got.Email != "new@example.com" {
+		t.Fatalf("Email = %q, want the refreshed value", got.Email)
+	}
+	if !got.Primary {
+		t.Fatal("Primary = false after re-authentication, want the seat still armed")
+	}
+}
+
 // An account with no credential file is a broken store, not an account with no
 // credentials: returning an empty blob and no error would hand a caller a
 // snapshot with no OAuth record in it, which the switcher reads as a credential

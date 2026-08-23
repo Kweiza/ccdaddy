@@ -445,7 +445,7 @@ func TestDoctorHumanOutputNamesEveryCheck(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit %d, want 0\n%s", code, stdout)
 	}
-	for _, name := range []string{"store", "path", "permissions", "locks", "pidfile", "status-file", "usage-cache", "engine-state", "config", "sessions", "profiles", "credential-home", "claude-code", "credential-keys", "keychain", "environment", "api-key"} {
+	for _, name := range []string{"store", "path", "permissions", "locks", "pidfile", "status-file", "usage-cache", "engine-state", "config", "sessions", "profiles", "primary-accounts", "credential-home", "claude-version", "claude-code", "credential-keys", "keychain", "environment", "api-key", "oauth-source"} {
 		if !strings.Contains(stdout, name) {
 			t.Errorf("the human report does not mention the %s check:\n%s", name, stdout)
 		}
@@ -1569,5 +1569,67 @@ func TestCLAUDECODESIMPLEZeroIsNotBareMode(t *testing.T) {
 	}
 	if !strings.Contains(r.detail(t, "oauth-source"), "login in the credentials file") {
 		t.Errorf("oauth-source does not name the login:\n%s", r.detail(t, "oauth-source"))
+	}
+}
+
+// primary turns the credit ceiling off for one account and nothing a person
+// routinely reads says so out loud — it has no column, no status line, and one
+// parenthesis on a listing. doctor is where a seat somebody armed months ago is
+// found without opening accounts.toml.
+func TestDoctorNamesThePrimaryAccounts(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+
+	_, r, _ := runDoctor(t)
+	if got := r.level(t, "primary-accounts"); got != "ok" {
+		t.Fatalf("primary-accounts = %q on a machine with none, want ok", got)
+	}
+	if detail := r.detail(t, "primary-accounts"); !strings.Contains(detail, "no account") {
+		t.Errorf("detail = %q, want it to say there are none", detail)
+	}
+
+	seedPrimaryCreditAccount(t, "u-seat", "seat@example.com")
+	code, r, _ := runDoctor(t)
+	if code != ExitOK {
+		t.Fatalf("doctor = %d, want 0 — an armed seat is a choice, not a fault", code)
+	}
+	detail := r.detail(t, "primary-accounts")
+	if !strings.Contains(detail, "seat@example.com") {
+		t.Errorf("detail = %q, want it to name the primary account", detail)
+	}
+	if !strings.Contains(detail, "max_auto_spend") {
+		t.Errorf("detail = %q, want it to say the credit ceiling does not hold the account back", detail)
+	}
+}
+
+// The rows that read the account list go through store.AccountsAt rather than
+// store.Open, and THIS is the state that tells the two apart: a store root that
+// is there with no credentials directory under it. Open would MkdirAll one and
+// chmod both, quietly repairing the damage the report was asked about, while
+// AccountsAt reads accounts.toml and creates nothing.
+//
+// TestDoctorCreatesNothing cannot reach this: it points CCDAD_HOME at a
+// directory that does not exist, so every store-reading row is skipped before
+// it can create anything and an Open in one of them is never executed.
+func TestDoctorDoesNotRepairTheStoreItIsReportingOn(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	seedPrimaryCreditAccount(t, "u-seat", "seat@example.com")
+	root := mustPath(ccpath.StoreHome())
+	// A profile directory, so the profiles row reaches its own read of the
+	// account list rather than stopping at the missing container. Both rows
+	// take the same route for the same reason, and only one of them is new.
+	if err := os.MkdirAll(filepath.Join(root, ProfilesDirName, "uuid-a"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	creds := filepath.Join(root, "credentials")
+	if err := os.RemoveAll(creds); err != nil {
+		t.Fatal(err)
+	}
+
+	runDoctor(t)
+
+	if _, err := os.Stat(creds); !os.IsNotExist(err) {
+		t.Fatalf("doctor re-created the credentials directory it was reporting on: %v", err)
 	}
 }

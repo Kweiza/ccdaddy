@@ -211,3 +211,29 @@ func TestExportOutWritesMode0600(t *testing.T) {
 		t.Fatal("a --full export to a file carries no credentials")
 	}
 }
+
+// primary decides whether an account is ranked beside the subscriptions and
+// whether the credit ceiling gates it, so an export that dropped it would
+// restore a machine that behaves differently from the one it was taken from —
+// silently, and only on the day the main pool runs out.
+func TestExportCarriesThePrimaryFlag(t *testing.T) {
+	isolate(t)
+	seedPrimaryCreditAccount(t, "u-1", "seat@example.com")
+	seedAccount(t, "u-2", "plain@example.com")
+
+	path := exportTo(t, "backup.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range decodeExport(t, string(raw)).Accounts {
+		if row.UUID == "u-1" && !row.Primary {
+			t.Error("the export does not carry the primary flag")
+		}
+		// Omitted rather than false for an ordinary account, which is the shape
+		// `disabled` already has in this payload.
+		if row.UUID == "u-2" && row.Primary {
+			t.Error("the export marked an ordinary account primary")
+		}
+	}
+}

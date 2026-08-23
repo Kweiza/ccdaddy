@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -141,9 +142,21 @@ func newListCmd() *cobra.Command {
 				if tier == "" {
 					tier = "-"
 				}
-				suffix := ""
+				// An account can carry both flags at once, and they say
+				// opposite things: primary is "ranked beside the
+				// subscriptions", disabled is "left out of rotation
+				// entirely". Printing only the first one found would hide
+				// whichever one the reader came looking for, half the time.
+				var flags []string
+				if a.Primary {
+					flags = append(flags, "primary")
+				}
 				if a.Disabled {
-					suffix = "  (disabled)"
+					flags = append(flags, "disabled")
+				}
+				suffix := ""
+				if len(flags) > 0 {
+					suffix = "  (" + strings.Join(flags, ", ") + ")"
 				}
 				fmt.Fprintf(w, "%s %d\t%s\t%s\t%s\t%s\t%s%s\n", marker, a.Idx, label, a.Kind,
 					tier, r.leftLabel(), r.resetsLabel(now), suffix)
