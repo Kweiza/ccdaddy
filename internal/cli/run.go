@@ -55,6 +55,11 @@ type launchSpec struct {
 // exercise the real launcher against a program it controls.
 var lookClaude = exec.LookPath
 
+// lookProgram resolves the INTERPRETER an npm shim names, and is separate from
+// lookClaude so a test can describe the machine this exists for: one where
+// claude is a .cmd shim and node is a real executable somewhere else.
+var lookProgram = exec.LookPath
+
 // startChild starts claude, waits for it, and reports its exit status. It is a
 // var because starting a real process is the one thing a test in this package
 // cannot arrange, which is the rule every other uncontrollable dependency here
@@ -380,6 +385,35 @@ func unsafeForCmdShim(path string, args []string) string {
 	return ""
 }
 
+// launchPastShim is the seam between `run` and cmdshim.go: it reads the shim
+// at path and says what to launch instead.
+//
+// Reached ONLY when the refusal would otherwise fire, and that narrowness is
+// deliberate rather than timid. Resolving past every shim would be the better
+// end state — it makes Go's escaping exactly right for every argument instead
+// of only the dangerous ones — but this code has never run on a Windows box,
+// and here the worst a parse bug can do is turn a refusal into a different
+// refusal. Widening it to every .cmd is one line, and belongs after a Windows
+// runner has exercised the narrow path.
+func launchPastShim(path string) (pastShim, error) {
+	text, err := readShim(path)
+	if err != nil {
+		return pastShim{}, err
+	}
+	shim, ok := parseNpmShim(text, shimDirOf(path))
+	if !ok {
+		return pastShim{}, fmt.Errorf("%s is not a shim ccdad recognises", shimBaseOf(path))
+	}
+	return resolvePastShim(shim, fileExists, lookProgram)
+}
+
+// fileExists is a var so a test can describe a node.exe beside a shim on a
+// machine that has neither.
+var fileExists = func(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
 // adoptBack copies a credential the session rotated back into the store.
 //
 // Claude Code refreshes inside the session's own credential home, and the
@@ -612,9 +646,17 @@ func newRunCmd() *cobra.Command {
 				return err
 			}
 			tail := claudeArgs(args)
+			var shimEnv []string
 			if bad := unsafeForCmdShim(path, tail); bad != "" {
-				return UsageError("%s is a cmd.exe shim, and cmd.exe would re-interpret %q rather than "+
-					"pass it on; quote it differently, or install the native claude.exe", path, bad)
+				past, err := launchPastShim(path)
+				if err != nil {
+					return UsageError("%s is a cmd.exe shim, and cmd.exe would re-interpret %q rather than "+
+						"pass it on. ccdad could not run its interpreter directly instead (%v); quote the "+
+						"argument differently, or install the native claude.exe", path, bad, err)
+				}
+				fmt.Fprintf(cmd.ErrOrStderr(), "note: %q would not survive %s, so ccdad is running %s directly.\n",
+					bad, shimBaseOf(path), shimBaseOf(past.path))
+				path, tail, shimEnv = past.path, append(past.args, tail...), past.env
 			}
 
 			newHome := newSession
@@ -661,6 +703,14 @@ func newRunCmd() *cobra.Command {
 				}
 			}
 
+			for _, kv := range shimEnv {
+				// A `#!/usr/bin/env FOO=bar node` shebang: the shim exports
+				// these before running anything, so a launch that goes past
+				// the shim has to carry them or the interpreter starts in an
+				// environment the package did not ask for.
+				name, value, _ := strings.Cut(kv, "=")
+				env = setEnv(env, name, value)
+			}
 			code, err := startChild(launchSpec{
 				Path: path,
 				Args: tail,
