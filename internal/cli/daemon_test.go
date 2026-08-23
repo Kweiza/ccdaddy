@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -624,6 +626,155 @@ func TestFollowLogPicksUpTheNewFileAfterARotation(t *testing.T) {
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatalf("followLog: %v", err)
+	}
+}
+
+// appendToDaemonLog adds to the log the way the daemon does, leaving what is
+// already there alone. Rewriting it would truncate first, and a follower that
+// caught the file at zero bytes would reset its position for a legitimate
+// reason -- which is the very thing the test below is trying to rule out.
+func appendToDaemonLog(t *testing.T, body string) {
+	t.Helper()
+	f, err := os.OpenFile(mustPath(daemon.LogPath()), os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString(body); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A retryable open holds the follower's position rather than resetting it.
+// Whether the file was replaced is precisely what is not known while it cannot
+// be opened, and guessing "replaced" replays the whole log into the user's
+// terminal for a rotation that never happened. The next open that succeeds
+// settles it by identity, which is what the uninterrupted path already does.
+func TestARetryableOpenErrorDoesNotReplayTheLog(t *testing.T) {
+	isolate(t)
+	writeDaemonLog(t, "first line\n")
+
+	held := errors.New("another process has the file")
+	var opens atomic.Int32
+	stubLogOpen(t,
+		func(name string) (*os.File, error) {
+			// The second poll, so the first line is already through and there
+			// is a position worth losing.
+			if opens.Add(1) == 2 {
+				return nil, &fs.PathError{Op: "open", Path: name, Err: held}
+			}
+			return os.Open(name)
+		},
+		func(err error) bool { return errors.Is(err, held) },
+	)
+
+	var out safeBuffer
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- followLog(ctx, &out, mustPath(daemon.LogPath()), 0, 5*time.Millisecond) }()
+
+	waitForOutput(t, &out, "first line")
+	appendToDaemonLog(t, "second line\n")
+	waitForOutput(t, &out, "second line")
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("followLog: %v", err)
+	}
+	if n := strings.Count(out.String(), "first line"); n != 1 {
+		t.Fatalf("the first line reached the follower %d times, want 1:\n%s", n, out.String())
+	}
+}
+
+// stubLogOpen swaps the follower's open and its retryable classifier together,
+// for the length of one test.
+//
+// Both at once, because either alone proves nothing: the errors this routing
+// exists for are Windows errnos, so a test that injected one would take the
+// non-retryable branch everywhere else, and a test that only swapped the
+// classifier would have no way to make the open fail in the first place.
+func stubLogOpen(t *testing.T, open func(string) (*os.File, error), retryable func(error) bool) {
+	t.Helper()
+	origOpen, origRetryable := openLogFile, logOpenRetryable
+	openLogFile, logOpenRetryable = open, retryable
+	t.Cleanup(func() { openLogFile, logOpenRetryable = origOpen, origRetryable })
+}
+
+// Opening the log while a rotation is in flight is where Windows answers
+// ERROR_SHARING_VIOLATION, ERROR_ACCESS_DENIED or ERROR_LOCK_VIOLATION -- an
+// antivirus scanner or the search indexer holding the file for a moment. None
+// of those is ErrNotExist, so treating them as fatal ends the follow for good:
+// the user watching `ccdad daemon logs --follow` gets silence from the
+// rotation onwards. A retryable open must leave the follower alive to try the
+// next poll.
+func TestFollowLogSurvivesARetryableOpenError(t *testing.T) {
+	isolate(t)
+	writeDaemonLog(t, "first line\n")
+
+	held := errors.New("another process has the file")
+	var opens atomic.Int32
+	stubLogOpen(t,
+		func(name string) (*os.File, error) {
+			if opens.Add(1) <= 3 {
+				return nil, &fs.PathError{Op: "open", Path: name, Err: held}
+			}
+			return os.Open(name)
+		},
+		func(err error) bool { return errors.Is(err, held) },
+	)
+
+	var out safeBuffer
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- followLog(ctx, &out, mustPath(daemon.LogPath()), 0, 5*time.Millisecond) }()
+
+	// Reported here rather than left to the wait below: if the retryable error
+	// is fatal the follower ends on its first poll, and naming that beats ten
+	// seconds spent waiting for output that is never coming.
+	select {
+	case err := <-done:
+		cancel()
+		t.Fatalf("the follower ended on a retryable open error: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	waitForOutput(t, &out, "first line")
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("followLog: %v", err)
+	}
+}
+
+// The other half of the routing, and the one that keeps the first from being
+// satisfied by swallowing everything: an open error that is NOT retryable still
+// ends the follow and still reaches the caller. A follower that retried, say,
+// a permission failure forever would hang with nothing on screen.
+func TestFollowLogEndsOnAnOpenErrorThatIsNotRetryable(t *testing.T) {
+	isolate(t)
+	writeDaemonLog(t, "first line\n")
+
+	wantErr := errors.New("the log is unreadable")
+	stubLogOpen(t,
+		func(string) (*os.File, error) { return nil, wantErr },
+		func(error) bool { return false },
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var out safeBuffer
+	done := make(chan error, 1)
+	go func() { done <- followLog(ctx, &out, mustPath(daemon.LogPath()), 0, 5*time.Millisecond) }()
+
+	// On a bare call this would hang rather than fail, and a follow that never
+	// ends is exactly the defect being ruled out -- so it is bounded here, and
+	// the timeout is the assertion.
+	select {
+	case err := <-done:
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("followLog = %v, want an error carrying %v", err, wantErr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("followLog is still running; an open error it cannot retry has to end the follow")
 	}
 }
 

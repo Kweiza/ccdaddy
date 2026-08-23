@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"errors"
 	"os"
 	"runtime"
 	"strconv"
@@ -126,6 +127,129 @@ func TestPostRotationWritesLandInTheNewFile(t *testing.T) {
 	}
 	if got := readFile(t, mustPath(LogPath())+".1"); strings.Contains(got, "after the rotation") {
 		t.Fatal("the post-rotation line landed in the rotated inode; the daemon never reopened")
+	}
+}
+
+// stubRename swaps the rotation's rename and its retryable classifier together,
+// for the length of one test. Both at once: the failures this retry exists for
+// are Windows errnos, so injecting one without also swapping the classifier
+// would take the give-up branch on every other platform.
+func stubRename(t *testing.T, rename func(string, string) error, retryable func(error) bool) {
+	t.Helper()
+	origRename, origRetryable := renameFile, renameRetryable
+	renameFile, renameRetryable = rename, retryable
+	t.Cleanup(func() { renameFile, renameRetryable = origRename, origRetryable })
+}
+
+// A rotation CLOSES the descriptor before it renames. A rename that then fails
+// must not be allowed to return before the log is open again: a closed l.f
+// swallows every later Printf silently, and it also fails the Stat that
+// RotateIfLarge starts with — so the daemon could never recover on the next
+// tick either. One rename that lost a race would cost the daemon its log for
+// the rest of the process's life.
+func TestARotationThatCannotRenameLeavesTheLogWritable(t *testing.T) {
+	isolate(t)
+	l := openTestLog(t, 64, 3)
+	l.Printf("%s", strings.Repeat("x", 200))
+
+	wantErr := errors.New("the rename cannot be done")
+	failing := true
+	stubRename(t,
+		func(from, to string) error {
+			if failing {
+				return wantErr
+			}
+			return os.Rename(from, to)
+		},
+		func(error) bool { return false },
+	)
+
+	if _, err := l.RotateIfLarge(); !errors.Is(err, wantErr) {
+		t.Fatalf("RotateIfLarge() = %v, want an error carrying %v", err, wantErr)
+	}
+
+	l.Printf("this line is after the failed rotation")
+	if got := readFile(t, mustPath(LogPath())); !strings.Contains(got, "after the failed rotation") {
+		t.Fatalf("the log stopped accepting writes after a failed rotation:\n%s", got)
+	}
+
+	// And the next tick has to be able to try again, which it cannot do while
+	// the descriptor it measures is closed.
+	failing = false
+	rotated, err := l.RotateIfLarge()
+	if err != nil {
+		t.Fatalf("the retry on the next tick = %v, want nil", err)
+	}
+	if !rotated {
+		t.Fatal("the log was over the cap and still was not rotated")
+	}
+}
+
+// The rename that matters is the live log's, and on Windows that is exactly
+// where an antivirus scanner or the search indexer answers with a sharing
+// violation. Giving up on the first one leaves the log over its cap and puts a
+// failure line in it on every tick from then on.
+func TestRotationRetriesARetryableRenameFailure(t *testing.T) {
+	isolate(t)
+	l := openTestLog(t, 64, 3)
+	l.Printf("%s", strings.Repeat("x", 200))
+
+	wantErr := errors.New("simulated transient rename failure")
+	calls := 0
+	stubRename(t,
+		func(from, to string) error {
+			if from == mustPath(LogPath()) {
+				if calls++; calls < 3 {
+					return wantErr
+				}
+			}
+			return os.Rename(from, to)
+		},
+		func(err error) bool { return errors.Is(err, wantErr) },
+	)
+
+	rotated, err := l.RotateIfLarge()
+	if err != nil {
+		t.Fatalf("RotateIfLarge() = %v, want nil once a retry succeeds", err)
+	}
+	if !rotated {
+		t.Fatal("a log over the cap was not rotated")
+	}
+	if calls != 3 {
+		t.Fatalf("the live log was renamed %d times, want 3", calls)
+	}
+	if !strings.Contains(readFile(t, mustPath(LogPath())+".1"), "xxx") {
+		t.Error("the rotated copy does not hold what the log held")
+	}
+}
+
+// The retry is BOUNDED. A rename that always fails must not spin forever —
+// RotateIfLarge is called from the tick loop, which has nothing else to do
+// while it waits — and must not give up after one attempt either. Both are
+// failure modes a broken loop could take.
+func TestRotationGivesUpAfterRotateAttempts(t *testing.T) {
+	isolate(t)
+	l := openTestLog(t, 64, 3)
+	l.Printf("%s", strings.Repeat("x", 200))
+
+	wantErr := errors.New("simulated permanent rename failure")
+	calls := 0
+	stubRename(t,
+		func(from, to string) error {
+			if from == mustPath(LogPath()) {
+				calls++
+				return wantErr
+			}
+			return os.Rename(from, to)
+		},
+		func(err error) bool { return errors.Is(err, wantErr) },
+	)
+
+	if _, err := l.RotateIfLarge(); !errors.Is(err, wantErr) {
+		t.Fatalf("RotateIfLarge() = %v, want an error carrying %v", err, wantErr)
+	}
+	if calls != rotateAttempts {
+		t.Fatalf("the live log was renamed %d times, want exactly rotateAttempts (%d)", calls, rotateAttempts)
 	}
 }
 

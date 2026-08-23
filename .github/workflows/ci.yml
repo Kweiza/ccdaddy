@@ -10,7 +10,7 @@
 #           for a while, and every one of those citations resolved for exactly
 #           one person.
 #   test    `go test ./... -race` on all three operating systems. Until this
-#           existed, `internal/cclink/atomic_windows.go` and every other
+#           existed, `internal/winerr/winerr_windows.go` and every other
 #           _windows.go file in the tree had never been compiled, let alone
 #           run: `GOOS=windows go build ./...` passing on a developer's Linux
 #           box is luck, not a gate, and it does not touch _test.go at all.
