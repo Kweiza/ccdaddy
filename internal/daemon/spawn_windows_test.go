@@ -29,8 +29,20 @@ func TestTheFlagLiteralsMatchTheWindowsDefinitions(t *testing.T) {
 // `GOOS=windows go vet ./...` and no further. It pins the flag set against
 // being emptied or widened, which is worth having because the alternative is
 // nothing at all — but it asserts a struct, not an operating system. Whether
-// DETACHED_PROCESS actually severs the console is what the post-release
-// install smoke suite is for.
+// DETACHED_PROCESS actually severs the console is TestSpawnLeavesTheChildWith
+// NoConsole below.
+//
+// This used to name the post-release install smoke suite instead, and that was
+// never true of it: nothing under .github/workflows mentions a console at all,
+// its only `daemon start` leg runs on ubuntu, and its Windows leg asks about
+// the version and the HKCU PATH write. The question had no owner until the
+// test below took it.
+//
+// CREATE_NEW_PROCESS_GROUP is still spelled and never observed, and that one
+// cannot be closed here: a process group is visible only through which
+// processes a console control event reaches, and DETACHED_PROCESS means there
+// is no console to send one from. The two flags are asked together and only
+// one of them can answer.
 func TestDetachSetsExactlyTheTwoCreationFlags(t *testing.T) {
 	cmd := exec.Command("cmd.exe")
 	if err := detach(cmd); err != nil {
