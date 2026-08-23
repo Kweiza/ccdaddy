@@ -108,11 +108,34 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+      # fish, so that the one shell dialect no development machine here can
+      # execute is executed somewhere. `ccdad setup-path` writes fish syntax
+      # into config.fish, and POSIX `export PATH=...` in that file is an error
+      # fish prints on EVERY shell start forever - strictly worse than not
+      # being on PATH - so the block's syntax is worth more than an assertion
+      # about its text. Linux only: one real run is what was missing, and
+      # brew-installing fish on the macOS runner buys a second copy of the same
+      # answer for minutes of build time.
+      - name: Install fish
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq fish
+          fish --version
+
       # -race needs cgo and therefore a C compiler. All three runner images
       # ship one (gcc on ubuntu, clang from the Command Line Tools on macOS,
       # mingw-w64 on windows); if a future image drops it, this job fails
       # loudly with "-race requires cgo" rather than quietly testing less.
+      #
+      # CCDAD_REQUIRE_FISH turns the fish test's skip into a failure on the leg
+      # that just installed fish. Without it the step above could stop working -
+      # a renamed package, an image change - and the suite would go back to
+      # skipping while still reporting green, which is the failure mode a
+      # t.Skip always has.
       - run: scripts/ci.sh test
+        env:
+          CCDAD_REQUIRE_FISH: ${{ runner.os == 'Linux' && '1' || '' }}
 
   cgo:
     name: six targets without cgo
