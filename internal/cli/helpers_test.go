@@ -43,6 +43,21 @@ func isolate(t *testing.T) string {
 	t.Setenv("CLAUDE_CONFIG_DIR", claude)
 	t.Setenv("CLAUDE_SECURESTORAGE_CONFIG_DIR", claude)
 
+	// The home directory is sandboxed HERE rather than in the tests that need
+	// it, and that placement is the whole protection. `ccdad setup-path` writes
+	// shell startup files under it and `ccdad uninstall` deletes blocks out of
+	// them, so a single test that constructs a command without a fake home
+	// edits the developer's real ~/.bashrc, ~/.profile or ~/.zshrc — including
+	// tests whose whole point is that they write nothing, since "writes
+	// nothing" is the property in flux while they are being made to pass.
+	// BOTH variables: os.UserHomeDir reads $HOME on Unix and %USERPROFILE% on
+	// Windows, so setting one sandboxes half the platforms.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("ZDOTDIR", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+
 	// The environment probes are stubbed for the same reason, and it is not
 	// hypothetical: a test that leaves browserAvailable real passes or hangs
 	// depending on whether the machine running it has a browser, and the hang

@@ -170,8 +170,18 @@ function Get-CcdadUpdatedPath {
     # default: this comparison decides whether a PATH entry gets duplicated,
     # and it should say which comparison it means. A trailing separator is not
     # part of the name Windows stores either.
+    # BOTH spellings, because the value is read unexpanded (see
+    # Add-CcdadToUserPath) while $Directory is fully expanded. Comparing only
+    # the raw text means a Path holding `%LOCALAPPDATA%\Programs\ccdad` never
+    # matches the expanded install directory, so every run appends another
+    # copy -- which is the opposite of what this function exists for. ccdad's
+    # own Go implementation (internal/cli/setuppath.go, matchesEntry) applies
+    # the same rule, and `ccdad uninstall` removes on it: a duplicate this
+    # missed would also be a duplicate uninstall could not find.
     foreach ($entry in $entries) {
-        if ([string]::Equals($entry.TrimEnd('\'), $Directory.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)) { return $null }
+        foreach ($form in @($entry, [Environment]::ExpandEnvironmentVariables($entry))) {
+            if ([string]::Equals($form.TrimEnd('\'), $Directory.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)) { return $null }
+        }
     }
     if ($entries.Count -eq 0) { return $Directory }
     return (($entries + $Directory) -join ';')
@@ -211,6 +221,22 @@ function Add-CcdadToUserPath {
         $key.SetValue('Path', $updated, $kind)
     } finally {
         $key.Close()
+    }
+
+    # Write down what was added, so `ccdad uninstall` can take back this entry
+    # and only this entry. A registry PATH component carries no evidence of who
+    # added it, and the install directory is routinely one the USER put on PATH
+    # (a zip install into their own tools directory, or %USERPROFILE%\go\bin
+    # from `go install`) -- removing it on ownership guessed from the binary's
+    # location breaks every other program in it. ccdad's Go implementation
+    # writes the same value from setup-path; the two must agree, because either
+    # may be the one that registered the entry uninstall later removes.
+    try {
+        $record = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Software\ccdad')
+        try { $record.SetValue('PathEntry', $Directory, [Microsoft.Win32.RegistryValueKind]::String) }
+        finally { $record.Close() }
+    } catch {
+        Write-Warning "PATH was updated but ccdad could not record it, so 'ccdad uninstall' will leave the entry in place. ($_)"
     }
 
     # Without this, only processes started after the next sign-out see it.
@@ -329,6 +355,14 @@ function Invoke-CcdadInstall {
 
         if (Add-CcdadToUserPath -Directory $installDir) {
             Write-Host "added $installDir to your user PATH; open a new terminal to pick it up"
+        } else {
+            # $false means the entry was already there, or the registry could
+            # not be opened. Only the second case needs the user, and pointing
+            # at `ccdad setup-path` covers it without this script having to tell
+            # the two apart: that command does the same write, reports which it
+            # was, and exits 3 when there was nothing to do.
+            Write-Host "if '$installDir' is not on your PATH in a new terminal, run:"
+            Write-Host "    & '$target' setup-path"
         }
         Write-Host "To remove ccdad later run 'ccdad uninstall', not a delete: there is a daemon"
         Write-Host "to stop, a token directory to clear and possibly an MCP entry to unwire."
