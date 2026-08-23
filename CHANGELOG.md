@@ -18,6 +18,16 @@ by `uuid` or `alias`.
 
 ### Added
 
+- **Bare `ccdad` is the dashboard, behind a TTY gate.** With a terminal on both
+  stdout and stdin it renders exactly what `ccdad status` renders, followed by a
+  one-line footer of the top verbs, and it auto-starts the daemon for the same
+  reason `ccdad status` does. Anywhere else — a pipe, a redirect, cron — it
+  prints usage on stderr and exits `2`, and starts nothing. The slot is promised
+  to a TUI, so an answer no script can build on is what keeps that change a
+  widening rather than a break. `ccdad -- list`, `ccdad -` and `ccdad ""` are
+  usage errors as well: those tokens are dropped before dispatch, so the command
+  written after them would never have run.
+
 - **`ccdad switch --model <name>` narrows the ranking.** The weekly caps scoped
   to other models stop counting against an account, so one whose Opus week is
   spent can still be chosen for a Sonnet session. It only ever raises an
