@@ -1293,18 +1293,37 @@ func TestDoctorPicksTheKeychainRemedyForTheEraTheMachineIsOn(t *testing.T) {
 		name          string
 		install       ccver.Install
 		want, notWant string
+		// pinsVersion says whether asserting the version string proves the
+		// remedy quotes the install ccdad READ. It is per-row because one
+		// branch's own static prose contains a version number, and there an
+		// assertion on it matches that prose and passes with the install
+		// dropped entirely -- a test that cannot fail.
+		pinsVersion bool
 	}{
 		{
-			name:    "keychain era: the item is the live login and deleting it undoes itself",
-			install: claudeVersion(2, 1, 112),
-			want:    "Do NOT delete it",
-			notWant: "nothing is broken right now",
+			name:        "keychain era: the item is the live login and deleting it undoes itself",
+			install:     claudeVersion(2, 1, 112),
+			want:        "Do NOT delete it",
+			notWant:     "nothing is broken right now",
+			pinsVersion: true,
 		},
 		{
-			name:    "after 2.1.113: nothing reads it, so removing it is cleanup",
-			install: claudeVersion(2, 1, 113),
-			want:    "nothing is broken right now",
-			notWant: "Do NOT delete it",
+			name:        "a current release: nothing reads it, so removing it is cleanup",
+			install:     claudeVersion(2, 1, 241),
+			want:        "nothing is broken right now",
+			notWant:     "Do NOT delete it",
+			pinsVersion: true,
+		},
+		{
+			// The boundary release itself is on the modern side. The version
+			// is NOT pinned here: this branch says "2.1.113 removed that
+			// backend" in its own words, so the assertion would match static
+			// text. Which branch was chosen is what this row is for.
+			name:        "the boundary release itself is treated as modern",
+			install:     claudeVersion(2, 1, 113),
+			want:        "nothing is broken right now",
+			notWant:     "Do NOT delete it",
+			pinsVersion: false,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1326,7 +1345,7 @@ func TestDoctorPicksTheKeychainRemedyForTheEraTheMachineIsOn(t *testing.T) {
 			}
 			// The version is named in the remedy itself. "An older Claude Code"
 			// is not actionable; the number ccdad read is.
-			if !strings.Contains(detail, tc.install.Version.String()) {
+			if tc.pinsVersion && !strings.Contains(detail, tc.install.Version.String()) {
 				t.Errorf("the remedy does not say which Claude Code it applies to:\n%s", detail)
 			}
 		})
@@ -1352,5 +1371,34 @@ func TestTheKeychainEraRemedyNamesItsCostBeforeItsCommand(t *testing.T) {
 	}
 	if cost > cmd {
 		t.Errorf("the command is offered before its caveat is named:\n%s", detail)
+	}
+}
+
+// A probe that could not LOOK is not a probe that looked and found nothing, and
+// doctor words them differently. The state is reachable rather than defensive:
+// ccpath.StoreHome returns from CCDAD_HOME without ever consulting the home
+// directory, so runChecks gets past its opening guard on a machine that has
+// CCDAD_HOME set and no resolvable HOME — and there ccver cannot even spell the
+// two fallback launcher paths, let alone stat them.
+func TestDoctorSaysWhenItCouldNotLookForAClaudeLauncher(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	stubClaudeInstall(t, ccver.Install{}, errors.New("ccdad cannot tell where your home directory is"))
+
+	code, report, _ := runDoctor(t)
+	if got := report.level(t, "claude-version"); got != "warn" {
+		t.Fatalf("claude-version = %q, want warn: %s", got, report.detail(t, "claude-version"))
+	}
+	if code != ExitOK {
+		t.Errorf("exit %d, want 0", code)
+	}
+	detail := report.detail(t, "claude-version")
+	if !strings.Contains(detail, "could not look for") {
+		t.Errorf("a failed search was reported as a completed one:\n%s", detail)
+	}
+	// The negative half, and the one that matters: doctor must not claim it
+	// searched ~/.local/bin and ~/.claude/local when it never resolved either.
+	if strings.Contains(detail, "on PATH") {
+		t.Errorf("doctor asserted a negative result for a search it did not perform:\n%s", detail)
 	}
 }

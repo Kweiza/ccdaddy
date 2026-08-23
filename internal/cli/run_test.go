@@ -1070,14 +1070,22 @@ func TestRunRefusesOnlyWhatItMeasured(t *testing.T) {
 	}
 }
 
-// The version is read from the path PATH gave, not probed independently, so the
-// verdict belongs to the binary this invocation is about to exec rather than to
-// whatever a second resolution would have found.
-func TestRunDescribesTheClaudeItIsAboutToRun(t *testing.T) {
+// The version is read from the path PATH gave, and read BEFORE the cmd-shim
+// rewrite, so the verdict belongs to the claude this invocation is about to run
+// rather than to the interpreter ccdad ends up exec'ing on its behalf.
+//
+// The fixture is a real npm shim with an argument cmd.exe would re-split,
+// because that is the only way the ordering is observable: launchPastShim then
+// replaces `path` with node.exe, and a plain launcher never triggers it. Written
+// with an ordinary fixture this test passed with the whole block moved AFTER the
+// rewrite — it could not fail for the property it exists to pin.
+func TestRunDescribesTheClaudeItIsAboutToRunAndNotTheInterpreter(t *testing.T) {
 	isolate(t)
 	seedAccount(t, "u-1", "a@example.com")
-	stubClaude(t, ExitOK)
-	resolved, _ := lookClaude("claude")
+	stub := stubClaude(t, ExitOK)
+	shim := installShim(t, "env-node.cmd")
+	stubFileExists(t, false)
+	stubLookProgram(t, `C:\Program Files\nodejs\node.exe`, nil)
 
 	var asked []string
 	saved := describeClaudeInstall
@@ -1087,10 +1095,70 @@ func TestRunDescribesTheClaudeItIsAboutToRun(t *testing.T) {
 		return ccver.Install{Launcher: path}
 	}
 
-	if code, _, errOut, top := runRoot(t, "run", "a@example.com"); code != ExitOK {
+	if code, _, errOut, top := runRoot(t, "run", "1", "-p", "fix&whoami"); code != ExitOK {
 		t.Fatalf("exit = %d (%s / %s), want 0", code, errOut, top)
 	}
-	if len(asked) != 1 || asked[0] != resolved {
-		t.Errorf("described %v, want exactly [%s] — the path the launcher resolved", asked, resolved)
+	// The launch really did go past the shim, or the ordering below is not
+	// under test at all.
+	if stub.spec.Path != `C:\Program Files\nodejs\node.exe` {
+		t.Fatalf("launched %q — the shim rewrite did not happen, so this test proves nothing", stub.spec.Path)
+	}
+	if len(asked) != 1 {
+		t.Fatalf("described %v, want exactly one path", asked)
+	}
+	if asked[0] != shim {
+		t.Errorf("described %q, want the shim %q — node.exe has no Claude Code version, and asking about it "+
+			"would answer 'unknown' on every machine that goes past a shim", asked[0], shim)
+	}
+}
+
+// A setup-token account is NOT refused on a keychain-era build, and this is the
+// half the first version of the refusal got wrong.
+//
+// authorise scopes such an account with CLAUDE_CODE_OAUTH_TOKEN in the child's
+// environment and writes no credentials file at all. That variable predates
+// 2.1.113 by a long way, and this tree's own measurement is that Claude Code
+// prefers it over the stored login outright — so the session runs as the named
+// account on a 2.1.112 machine, and the refusal's stated failure mode ("claude
+// would read the machine's own credentials file") cannot happen to it.
+func TestRunDoesNotRefuseASetupTokenAccountOnAKeychainEraClaudeCode(t *testing.T) {
+	isolate(t)
+	seedTokenAccount(t, "u-1", "a@example.com", "setup-token", "sk-ant-oat-1")
+	stub := stubClaude(t, ExitOK)
+	stubClaudeInstall(t, claudeVersion(2, 1, 112), nil)
+
+	code, _, errOut, top := runRoot(t, "run", "1")
+	if code != ExitOK {
+		t.Fatalf("exit = %d (%s / %s), want 0 — a setup token is scoped by the environment, not by the "+
+			"credential home the era ignores", code, errOut, top)
+	}
+	if !stub.started {
+		t.Fatal("no session was started")
+	}
+	if got, ok := envOf(stub.spec.Env, "CLAUDE_CODE_OAUTH_TOKEN"); !ok || got != "sk-ant-oat-1" {
+		t.Errorf("CLAUDE_CODE_OAUTH_TOKEN = %q, %v; want the account's token — that is what scopes this session",
+			got, ok)
+	}
+}
+
+// An api-key account on a keychain-era build gets authorise's accurate refusal,
+// not the keychain one. Both are exit 2, so the level cannot tell them apart:
+// the assertion is on the sentence that only the right one carries.
+func TestRunGivesAnAPIKeyAccountItsOwnRefusalEvenOnAKeychainEraClaudeCode(t *testing.T) {
+	isolate(t)
+	seedTokenAccount(t, "u-1", "a@example.com", cclink.APIKeyKind, "sk-ant-api-1")
+	stubClaude(t, ExitOK)
+	stubClaudeInstall(t, claudeVersion(2, 1, 112), nil)
+
+	code, _, errOut, top := runRoot(t, "run", "1")
+	if code != ExitUsage {
+		t.Fatalf("exit = %d (%s / %s), want %d", code, errOut, top, ExitUsage)
+	}
+	message := errOut + top
+	if !strings.Contains(message, "API key account") {
+		t.Errorf("the api-key refusal was replaced by another one:\n%s", message)
+	}
+	if strings.Contains(message, "CLAUDE_SECURESTORAGE_CONFIG_DIR") {
+		t.Errorf("an api-key account was refused for the era instead of for its credential shape:\n%s", message)
 	}
 }

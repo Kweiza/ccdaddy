@@ -35,7 +35,10 @@ by `uuid` or `alias`.
   switch and `ccdad run`'s default scoping is ignored, so a green report would
   be telling you the machine is fine while nothing ccdad does reaches Claude
   Code. A launcher it cannot classify is a warning, not a failure: ccdad not
-  being able to read an install is not the install being broken.
+  being able to read an install is not the install being broken — and on
+  Windows a native install reads that way by design, because the installer
+  writes the launcher as a *copy* of the versions binary rather than a symlink,
+  so the row says that rather than claiming it is not a native install.
 - **`ccdad doctor` gains three checks — `path`, `profiles` and `api-key` — for
   seventeen.** `path` answers `ccdad: command not found` by reading two facts
   rather than one: whether the binary's directory is on the PATH of the shell
@@ -67,8 +70,11 @@ by `uuid` or `alias`.
   scoping was inert: `claude` read the machine's own credentials file and the
   session ran as the LIVE login while ccdad reported success. The refusal is a
   usage error naming `--full-profile`, which scopes `CLAUDE_CONFIG_DIR` and does
-  work there. It fires only on a version ccdad actually read; an install it
-  cannot classify starts as before.
+  work there. It fires only on a version ccdad actually read, and only for
+  accounts whose login is a credentials file: a **setup-token** account is
+  scoped by `CLAUDE_CODE_OAUTH_TOKEN`, which every era reads and prefers over
+  the stored login, so those sessions still run; an **API-key** account keeps
+  its own, accurate refusal. An install ccdad cannot classify starts as before.
 
 ### Fixed
 
