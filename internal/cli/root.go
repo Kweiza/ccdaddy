@@ -112,6 +112,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newConfigCmd())
 	root.AddCommand(newExportCmd())
 	root.AddCommand(newImportCmd())
+	root.AddCommand(newBootstrapCmd())
 	root.AddCommand(newDoctorCmd())
 	root.AddCommand(newDaemonCmd())
 	root.AddCommand(newSetupPathCmd())

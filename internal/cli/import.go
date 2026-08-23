@@ -69,101 +69,7 @@ func newImportCmd() *cobra.Command {
 				return UsageError("%s", err.Error())
 			}
 
-			var (
-				imported []string
-				skipped  []string
-			)
-			err = store.WithStore(func(s *store.Store) error {
-				existing := map[string]store.Account{}
-				for _, a := range s.Accounts() {
-					existing[a.UUID] = a
-				}
-				if err := checkAliasCollisions(payload, existing); err != nil {
-					return UsageError("%s", err.Error())
-				}
-
-				type staged struct {
-					row   exportAccount
-					creds cclink.Blob
-				}
-				var batch []staged
-
-				for _, row := range payload.Accounts {
-					// idx is deliberately not carried: an account already here
-					// keeps the position it has, and a new one lands at the
-					// end. Imposing the exported order on a store that already
-					// has one would renumber accounts the import never
-					// mentioned.
-					_, known := existing[row.UUID]
-
-					creds := importSnapshot(row.Credentials)
-					switch {
-					case len(creds) > 0:
-						if known && !force && localCredentialIsNewer(s, row.UUID, creds) {
-							skipped = append(skipped, fmt.Sprintf(
-								"%s (the credentials here are newer; --force to overwrite them)", row.label()))
-							continue
-						}
-					case known:
-						// A metadata-only export can still carry an alias, a
-						// disabled flag and a tier. Keep what is already
-						// stored rather than blanking the account's login.
-						stored, err := s.Credentials(row.UUID)
-						if err != nil {
-							skipped = append(skipped, fmt.Sprintf("%s (%v)", row.label(), err))
-							continue
-						}
-						creds = stored
-					default:
-						skipped = append(skipped, fmt.Sprintf(
-							"%s (this export carries no credentials, and there is nothing here to attach them to)",
-							row.label()))
-						continue
-					}
-					batch = append(batch, staged{row: row, creds: creds})
-				}
-
-				// The aliases are cleared across the WHOLE batch before any of
-				// them is set, and the two passes are not tidiness. An import
-				// that hands account B the alias account A currently holds is
-				// legitimate — the document is the answer — but applied
-				// account-by-account it fails or succeeds depending on which of
-				// the two the array happens to list first.
-				for _, item := range batch {
-					acct := store.Account{
-						UUID:             item.row.UUID,
-						Email:            item.row.Email,
-						Kind:             identity.ParseKind(item.row.Kind),
-						Tier:             item.row.Tier,
-						RateLimitTier:    item.row.RateLimitTier,
-						OrganizationUUID: item.row.OrganizationUUID,
-						Disabled:         item.row.Disabled,
-						AddedAt:          item.row.AddedAt,
-					}
-					if err := s.Add(acct, item.creds); err != nil {
-						return err
-					}
-					// Add preserves the STORED alias and disabled flag over an
-					// incoming one — that is what makes it double as
-					// re-authentication — so both have to be applied after it,
-					// or an import could never change either.
-					if err := s.SetAlias(item.row.UUID, ""); err != nil {
-						return err
-					}
-					if _, err := s.SetDisabled(item.row.UUID, item.row.Disabled); err != nil {
-						return err
-					}
-				}
-				for _, item := range batch {
-					if item.row.Alias != "" {
-						if err := s.SetAlias(item.row.UUID, item.row.Alias); err != nil {
-							return err
-						}
-					}
-					imported = append(imported, item.row.label())
-				}
-				return nil
-			})
+			imported, skipped, err := applyImport(payload, force)
 			if err != nil {
 				return err
 			}
@@ -185,6 +91,127 @@ func newImportCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&force, "force", false, "overwrite credentials that are newer here than in the export")
 	return cmd
+}
+
+// applyImport is the transaction: one store mutation that adds or updates every
+// account the document carries.
+//
+// It is a function rather than the body of a RunE because `ccdad bootstrap`
+// applies the same document out of CCDAD_IMPORT, and three rules here are
+// exactly the ones that go silently wrong when they are written a second time —
+// local credentials newer than the document's are kept unless force says
+// otherwise, the aliases are cleared across the WHOLE batch before any of them
+// is set, and the two per-account flags have to be applied AFTER the add.
+//
+// The two slices are LABELS: an alias, an email address, or a uuid prefix, taken
+// out of the document. `ccdad import` prints them because a person named this
+// file on the command line. `ccdad bootstrap` counts them instead, because its
+// output is a container log.
+func applyImport(payload exportPayload, force bool) (imported, skipped []string, err error) {
+	err = store.WithStore(func(s *store.Store) error {
+		existing := map[string]store.Account{}
+		for _, a := range s.Accounts() {
+			existing[a.UUID] = a
+		}
+		if err := checkAliasCollisions(payload, existing); err != nil {
+			return UsageError("%s", err.Error())
+		}
+
+		type staged struct {
+			row   exportAccount
+			creds cclink.Blob
+		}
+		var batch []staged
+
+		for _, row := range payload.Accounts {
+			// idx is deliberately not carried: an account already here keeps
+			// the position it has, and a new one lands at the end. Imposing the
+			// exported order on a store that already has one would renumber
+			// accounts the import never mentioned.
+			_, known := existing[row.UUID]
+
+			creds := importSnapshot(row.Credentials)
+			switch {
+			case len(creds) > 0:
+				if known && !force && localCredentialIsNewer(s, row.UUID, creds) {
+					skipped = append(skipped, fmt.Sprintf(
+						"%s (the credentials here are newer; --force to overwrite them)", row.label()))
+					continue
+				}
+			case known:
+				// A metadata-only export can still carry an alias, the two
+				// per-account flags and a tier. Keep what is already stored
+				// rather than blanking the account's login.
+				stored, err := s.Credentials(row.UUID)
+				if err != nil {
+					skipped = append(skipped, fmt.Sprintf("%s (%v)", row.label(), err))
+					continue
+				}
+				creds = stored
+			default:
+				skipped = append(skipped, fmt.Sprintf(
+					"%s (this export carries no credentials, and there is nothing here to attach them to)",
+					row.label()))
+				continue
+			}
+			batch = append(batch, staged{row: row, creds: creds})
+		}
+
+		// The aliases are cleared across the WHOLE batch before any of them is
+		// set, and the two passes are not tidiness. An import that hands account
+		// B the alias account A currently holds is legitimate — the document is
+		// the answer — but applied account-by-account it fails or succeeds
+		// depending on which of the two the array happens to list first.
+		for _, item := range batch {
+			acct := store.Account{
+				UUID:             item.row.UUID,
+				Email:            item.row.Email,
+				Kind:             identity.ParseKind(item.row.Kind),
+				Tier:             item.row.Tier,
+				RateLimitTier:    item.row.RateLimitTier,
+				OrganizationUUID: item.row.OrganizationUUID,
+				Disabled:         item.row.Disabled,
+				Primary:          item.row.Primary,
+				AddedAt:          item.row.AddedAt,
+			}
+			// AddedAt is carried, and store.add keeps the STORED one when the
+			// uuid is already here — so a re-run of the same document cannot
+			// move an account's age, and a first import keeps the stamp the
+			// machine that wrote the document recorded.
+			if err := s.Add(acct, item.creds); err != nil {
+				return err
+			}
+			// Add preserves the STORED alias and the two per-account flags over
+			// incoming ones — that is what makes it double as
+			// re-authentication — so all three have to be applied after it, or
+			// an import could never change any of them. These three calls are
+			// the deciding write for an account already here AND for one that
+			// is not: Add appends the new record and they then set its flags on
+			// it, so the literal above only gives that record its first shape.
+			if err := s.SetAlias(item.row.UUID, ""); err != nil {
+				return err
+			}
+			if _, err := s.SetDisabled(item.row.UUID, item.row.Disabled); err != nil {
+				return err
+			}
+			if _, err := s.SetPrimary(item.row.UUID, item.row.Primary); err != nil {
+				return err
+			}
+		}
+		for _, item := range batch {
+			if item.row.Alias != "" {
+				if err := s.SetAlias(item.row.UUID, item.row.Alias); err != nil {
+					return err
+				}
+			}
+			imported = append(imported, item.row.label())
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return imported, skipped, nil
 }
 
 func (a exportAccount) label() string {
