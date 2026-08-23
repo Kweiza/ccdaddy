@@ -70,6 +70,12 @@ type EvalOptions struct {
 	// config's own key decides, which is the daemon's case.
 	Strategy    strategy.Strategy
 	HasStrategy bool
+	// Model is the model the chosen account is about to run, as the user typed
+	// it. It narrows §7.1's ranking to the windows that bind for that model;
+	// empty is the unqualified pass, which is what the daemon runs. There is no
+	// Has- flag beside it because there is no config key to override: an empty
+	// model IS the default, rather than the absence of an opinion.
+	Model string
 	// Force bypasses §7.2's margins, and only those. It never bypasses §7.3's
 	// credit gate: that one spends money, and a flag named "force" is not the
 	// two independent opt-ins §7.3 requires.
@@ -174,6 +180,7 @@ func Evaluate(s *store.Store, opts EvalOptions) (Evaluation, error) {
 	if opts.HasStrategy {
 		o.Strategy = opts.Strategy
 	}
+	o.Model = opts.Model
 	ev.Plan, ev.Decided = strategy.Decide(cands, o, cfg.StrategyConfig(), st, liveUUID), true
 
 	if ev.Plan.Action == strategy.ActionStay && opts.Force {

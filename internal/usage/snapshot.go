@@ -52,6 +52,13 @@ const (
 	WindowCinderCove        WindowName = "cinder_cove"
 )
 
+// Scoped reports whether this name belongs to a limits[] entry rather than to
+// one of the six keys the schema names. It is how a caller that has only a name
+// tells a per-model or per-surface weekly window from a fixed one.
+func (n WindowName) Scoped() bool {
+	return strings.HasPrefix(string(n), weeklyScopedKind+":")
+}
+
 // Window is one rate-limit window.
 //
 // Present records that the response carried the key at all, which is a separate
@@ -305,19 +312,72 @@ func (e ExtraUsage) Percent() (float64, bool) {
 // Limit is one entry of the limits[] array: a per-model or per-surface weekly
 // window the server reports alongside the fixed six.
 type Limit struct {
-	Kind    string
-	Group   string
-	Percent float64
+	Kind  string
+	Group string
 
 	ModelDisplayName   string
 	SurfaceDisplayName string
 
+	pct     float64
+	hasPct  bool
 	reset   time.Time
 	hasTime bool
 }
 
+// Percent is this limit's utilization as a percent of 0-100, and whether it was
+// reported. It is the same quantity a Window carries under `utilization`, in the
+// same unit: Claude Code's own projection of a limits[] entry is
+// `{utilization: n.percent, resets_at: n.resets_at}`.
+//
+// The schema writes `percent` as a plain non-null number, so on the WIRE this
+// value's tri-state is the presence of the entry rather than the nullability of
+// the field. It is still read tri-state here, for two reasons. A body that omits
+// the key unmarshals to 0 in Go, which reads as "0% used" — the one direction
+// that makes a spent account look fresh, and this is a value the ranking takes a
+// minimum over, so a fresh-looking entry is invisible rather than loud. And
+// Claude Code null-guards the value it derives from percent on both of its own
+// paths (`a.utilization === null` in formatRateLimits, `?? null` in the
+// model_scoped projection), so the null case is real one projection downstream.
+func (l Limit) Percent() (float64, bool) {
+	if !l.hasPct || !isFinite(l.pct) {
+		return 0, false
+	}
+	return l.pct, true
+}
+
 // Reset is when this limit rolls over, and whether it was reported.
 func (l Limit) Reset() (time.Time, bool) { return l.reset, l.hasTime }
+
+// LimitInput is what LimitFor takes, for the same reason NewWindow exists: the
+// tri-state fields are unexported, so a reading that did not come from a parsed
+// response needs a constructor. Percent is already a percent of 0-100 and is
+// not converted.
+type LimitInput struct {
+	Kind    string
+	Group   string
+	Model   string
+	Surface string
+
+	Percent  *float64
+	ResetsAt *time.Time
+}
+
+// LimitFor builds a Limit from already-normalized values.
+func LimitFor(in LimitInput) Limit {
+	l := Limit{
+		Kind:               in.Kind,
+		Group:              in.Group,
+		ModelDisplayName:   in.Model,
+		SurfaceDisplayName: in.Surface,
+	}
+	if in.Percent != nil {
+		l.pct, l.hasPct = *in.Percent, true
+	}
+	if in.ResetsAt != nil {
+		l.reset, l.hasTime = in.ResetsAt.UTC(), true
+	}
+	return l
+}
 
 // Snapshot is one reading of an account's usage.
 type Snapshot struct {
@@ -346,6 +406,98 @@ func (s *Snapshot) RateLimitWindows() []NamedWindow {
 		{WindowSevenDayOpus, s.SevenDayOpus},
 		{WindowSevenDaySonnet, s.SevenDaySonnet},
 	}
+}
+
+// weeklyScopedKind is the one limits[] kind Claude Code identifies as a
+// rate-limit window: its projection filters `kind === "weekly_scoped"` before it
+// reads percent and resets_at off an entry. Every other kind is ignored here,
+// and that is the cinder_cove rule one level down — an entry of an unknown kind
+// may be a one-time grant whose resets_at is an EXPIRY, and binding one would
+// park the engine waiting for a rollover that never comes.
+const weeklyScopedKind = "weekly_scoped"
+
+// ScopedWindow is one limits[] entry read as a window: a weekly cap the server
+// scopes to one model or one surface.
+//
+// Model and Surface are the scope's DISPLAY names, kept verbatim because that
+// is the only handle the wire gives them — there is no stable identifier in the
+// scope object. Both may be set; the entry is then named for its model, which is
+// the half Claude Code's own filter requires (`n.scope?.model`).
+type ScopedWindow struct {
+	NamedWindow
+	Model   string
+	Surface string
+}
+
+// ScopedWindows is the limits[] entries that can bind, in wire order.
+//
+// An entry with no scope name is dropped rather than kept under an empty one.
+// The scope object is nullable and BOTH of its halves are optional, so an entry
+// naming neither is legal wire; it says a weekly cap exists without saying what
+// it caps, which is nothing a ranking can attribute to a session.
+//
+// The synthetic name carries the scope's own kind as well as its display name,
+// so a model and a surface that share a display name stay two windows and a
+// caller looking a binding window back up by name finds the one that bound.
+func (s *Snapshot) ScopedWindows() []ScopedWindow {
+	if s == nil || len(s.Limits) == 0 {
+		return nil
+	}
+	out := make([]ScopedWindow, 0, len(s.Limits))
+	for _, l := range s.Limits {
+		if l.Kind != weeklyScopedKind {
+			continue
+		}
+		scope, name := "model", l.ModelDisplayName
+		if name == "" {
+			scope, name = "surface", l.SurfaceDisplayName
+		}
+		if name == "" {
+			continue
+		}
+		out = append(out, ScopedWindow{
+			NamedWindow: NamedWindow{
+				Name: WindowName(weeklyScopedKind + ":" + scope + ":" + name),
+				// Present is the entry's own existence. A scoped window whose
+				// percent could not be read is still a window that IS there,
+				// which is the same distinction Window.Present draws.
+				Window: Window{
+					Present: true,
+					pct:     l.pct,
+					hasPct:  l.hasPct,
+					reset:   l.reset,
+					hasTime: l.hasTime,
+				},
+			},
+			Model:   l.ModelDisplayName,
+			Surface: l.SurfaceDisplayName,
+		})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// AllWindows is every window an account can be ranked on: the five recurring
+// ones and the scoped weekly windows. It is what a caller holding a binding
+// window's NAME looks it up in — the ranking may narrow which of these bind for
+// a given session, but it never binds on a window that is not in here.
+func (s *Snapshot) AllWindows() []NamedWindow {
+	if s == nil {
+		return nil
+	}
+	fixed := s.RateLimitWindows()
+	scoped := s.ScopedWindows()
+	if len(scoped) == 0 {
+		return fixed
+	}
+	out := make([]NamedWindow, 0, len(fixed)+len(scoped))
+	out = append(out, fixed...)
+	for _, w := range scoped {
+		out = append(out, w.NamedWindow)
+	}
+	return out
 }
 
 // HasSubscriptionWindows reports whether the account carried any of the
@@ -411,10 +563,10 @@ type displayNameWire struct {
 }
 
 type limitWire struct {
-	Kind     string  `json:"kind"`
-	Group    string  `json:"group"`
-	Percent  float64 `json:"percent"`
-	ResetsAt *string `json:"resets_at"`
+	Kind     string   `json:"kind"`
+	Group    string   `json:"group"`
+	Percent  *float64 `json:"percent"`
+	ResetsAt *string  `json:"resets_at"`
 	Scope    *struct {
 		Model   *displayNameWire `json:"model"`
 		Surface *displayNameWire `json:"surface"`
@@ -523,7 +675,12 @@ func toLimits(in []limitWire) []Limit {
 	}
 	out := make([]Limit, 0, len(in))
 	for _, l := range in {
-		item := Limit{Kind: l.Kind, Group: l.Group, Percent: l.Percent}
+		item := Limit{Kind: l.Kind, Group: l.Group}
+		if l.Percent != nil {
+			// Stored verbatim, for the same reason toWindow stores utilization
+			// verbatim: the body is already a percent.
+			item.pct, item.hasPct = *l.Percent, true
+		}
 		item.reset, item.hasTime = parseReset(l.ResetsAt)
 		if l.Scope != nil {
 			if l.Scope.Model != nil {
@@ -660,7 +817,7 @@ func (l Limit) toWire() limitWire {
 	out := limitWire{
 		Kind:     l.Kind,
 		Group:    l.Group,
-		Percent:  l.Percent,
+		Percent:  fromFloat(l.pct, l.hasPct),
 		ResetsAt: fromTime(l.reset, l.hasTime),
 	}
 	if l.ModelDisplayName != "" || l.SurfaceDisplayName != "" {

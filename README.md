@@ -194,14 +194,25 @@ documents its own flags there.
 ### `ccdad switch`
 
 ```sh
-ccdad switch work                    # by alias
-ccdad switch --strategy headroom     # let the engine choose
+ccdad switch work                        # by alias
+ccdad switch --strategy headroom         # let the engine choose
+ccdad switch --strategy headroom \
+             --model sonnet              # ...for a Sonnet session
 ```
 
 With no account, `--strategy` runs the same ranking and the same anti-flap
 margins the daemon uses, against the same on-disk usage cache. It never polls
 on its own — run the daemon, or `ccdad list --refresh`, so there is something
 fresh to choose on.
+
+`--model` names the model the session will run, and **narrows** the ranking: the
+weekly caps scoped to other models stop counting against an account, so one
+whose Opus week is spent can still be chosen for a Sonnet session. It only ever
+raises an account's headroom. Caps that are not per-model — the five-hour and
+all-model weekly windows, and any cap scoped to a *surface* rather than a model —
+always count. Name a family (`opus`, `sonnet`, `haiku`, `fable`), with or
+without a version; a name `ccdad` cannot place is refused rather than quietly
+ignored.
 
 ## How the switch stays safe
 
@@ -338,11 +349,11 @@ Deliberate, and listed so you can tell a gap from a bug.
   and `primaryApiKey`; guessing would be worse than declining.
 - **`ccdad run` refuses API-key accounts**, and `--full-profile` is the mode
   that could serve them one day.
-- **`switch --model` has no effect yet**, and is accepted only together with
-  `--strategy` — on its own it is a usage error. The ranking already covers the
-  per-model Opus and Sonnet weekly windows, but it takes whichever window is
-  most binding rather than the one you name, so honouring the flag would mean
-  inventing a dimension.
+- **A weekly cap scoped to another *surface* still counts against an account.**
+  Claude Code is itself one surface, so a surface cap can be the very window
+  that binds a session, and the response gives no way to tell which surface name
+  is this client's own — so `ccdad` counts them all. `--model` narrows models,
+  never surfaces.
 - **`ccdad setup-path` does not exist.** The installers print a `PATH` line to
   paste instead.
 - **Windows file modes.** `chmod` is a no-op there, so the store relies on the
