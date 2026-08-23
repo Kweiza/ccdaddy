@@ -208,7 +208,7 @@ func engineCandidates(s *store.Store, accounts []store.Account, c *usage.Cache) 
 		if !Installable(s.Credentials(a.UUID)) {
 			continue
 		}
-		cand := strategy.Candidate{UUID: a.UUID, Kind: a.Kind, Disabled: a.Disabled}
+		cand := strategy.Candidate{UUID: a.UUID, Kind: a.Kind, Disabled: a.Disabled, Primary: a.Primary}
 		if e, ok := c.Get(a.UUID); ok {
 			cand.Usage = e.Snapshot
 		}
