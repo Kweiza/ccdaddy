@@ -24,6 +24,10 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/switcher"
 )
 
+// pastePrompt is printed by the announcement and again after every unreadable
+// line, so the two cannot drift into saying different things.
+const pastePrompt = "Paste code here: "
+
 // quarantineLiftTimeout bounds the wait for the engine state lock. The only
 // other writer is the daemon stamping a cooldown, which holds it for a
 // sub-second write, so this is generous already.
@@ -208,14 +212,25 @@ func runAdd(cmd *cobra.Command, opts addOptions) error {
 			}
 			fmt.Fprintf(stderr, "\n  %s\n\n", manualURL)
 			if canPaste {
-				fmt.Fprint(stderr, "Paste code here: ")
+				fmt.Fprint(stderr, pastePrompt)
 			} else {
 				fmt.Fprintln(stderr, "(stdin is not a terminal, so ccdad is waiting on the browser callback only.)")
 			}
 		},
+		// [§6.4] an unreadable paste is a re-prompt, not an abort: the loopback
+		// race may still be about to win. Without this the line is swallowed in
+		// silence and the user is left at a bare cursor with nothing saying
+		// ccdad is still waiting.
+		//
+		// The prompt is re-issued unconditionally rather than behind canPaste.
+		// This is reached only when a line arrived, and a line can only arrive
+		// from the Paste source, which exists only when stdin is a terminal.
+		Rejected: func(msg string) {
+			fmt.Fprintf(stderr, "\n%s\n%s", msg, pastePrompt)
+		},
 	})
 	if err != nil {
-		return loginError(err)
+		return loginError(stderr, err)
 	}
 
 	// The exchange response already carries the email, so labelling the account
@@ -385,7 +400,25 @@ func runAdd(cmd *cobra.Command, opts addOptions) error {
 // loginError maps the login sentinels onto the exit contract. An interrupted
 // login is SIGINT's code, not a generic failure, because a supervisor keys on
 // 130 to tell "the operator stopped it" from "it broke".
-func loginError(err error) error {
+//
+// It also carries out the other half of what parsing the authorize rejection
+// was for. The callback's own bytes are long gone by here — Rejection is a
+// closed enum and LogDetail is one of ccdad's own literals for it.
+//
+// UserMessage keeps declining and an upstream wobble apart on its own, and it
+// already carries retryability: the upstream arm ends "try again shortly". What
+// it fuses is RejectionRefused and RejectionUnrecognized, which share its
+// default arm — "Anthropic refused the login" is the whole of what a user sees
+// for either. Those are different problems: a refused authorize request means
+// the request ccdad sent was wrong and will be wrong again, while a code
+// outside RFC 6749's set means the endpoint said something ccdad does not
+// model, and its bytes are deliberately withheld. The spec code is the only
+// thing left that tells the two apart, so it goes to stderr beside the message.
+func loginError(stderr io.Writer, err error) error {
+	var rejected *oauth.RejectionError
+	if errors.As(err, &rejected) {
+		fmt.Fprintf(stderr, "note: the authorization callback reported %s.\n", rejected.LogDetail())
+	}
 	switch {
 	case errors.Is(err, oauth.ErrLoginInterrupted):
 		return WithCode(err, ExitInterrupted)

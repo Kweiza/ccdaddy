@@ -487,6 +487,60 @@ func TestAddTokenStoresTheAPIKeyKind(t *testing.T) {
 	}
 }
 
+// A setup token IS a bearer, and resolving it is the only way `add-token`
+// learns the real account uuid rather than filing it under a fabricated one.
+// Which token it sends was unpinned: hard-coding some other value in the
+// FetchProfile call left the whole suite green.
+func TestAddTokenResolvesTheTokenItWasGiven(t *testing.T) {
+	isolate(t)
+	stubEnvironment(t, false, false)
+	const token = "sk-ant-oat01-BEARERTEST"
+	var gotAuth string
+	stubProfile(t, func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		io.WriteString(w, profileJSON("acct-1", "a@example.com"))
+	})
+
+	if err, _, _ := runCmd(t, newAddTokenCmd(), token); err != nil {
+		t.Fatal(err)
+	}
+	if want := "Bearer " + token; gotAuth != want {
+		t.Fatalf("Authorization = %q, want %q — the account is only the token's if the token is what was asked about", gotAuth, want)
+	}
+}
+
+// --email is the only label an API-key account can have: no endpoint resolves
+// one to an account, so the alternative is the synthetic api-key-<hash> stand-in.
+// The flag appeared in no test at all.
+func TestAddTokenLabelsAnAPIKeyWithTheGivenEmail(t *testing.T) {
+	isolate(t)
+	stubEnvironment(t, false, false)
+
+	if err, _, _ := runCmd(t, newAddTokenCmd(), "sk-ant-api03-EMAILTEST", "--email", "me@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	s, _ := store.Open()
+	if got := s.Accounts()[0].Email; got != "me@example.com" {
+		t.Fatalf("stored Email = %q, want the label --email gave it", got)
+	}
+}
+
+// --alias on add-token was only ever given the invalid value "12", which the
+// validator refuses before anything stores it — so the flag's actual job was
+// unpinned.
+func TestAddTokenStoresAValidAlias(t *testing.T) {
+	isolate(t)
+	stubEnvironment(t, false, false)
+
+	if err, _, _ := runCmd(t, newAddTokenCmd(), "sk-ant-api03-ALIASTEST", "--alias", "work"); err != nil {
+		t.Fatal(err)
+	}
+	s, _ := store.Open()
+	if got := s.Accounts()[0].Alias; got != "work" {
+		t.Fatalf("stored Alias = %q, want the handle --alias gave it", got)
+	}
+}
+
 // A cancelled context must surface as SIGINT's code, not as a generic failure:
 // a supervisor keys on 130 to tell "the operator stopped it" from "it broke".
 // Without the root carrying a signal context this arm is unreachable, and
@@ -511,15 +565,46 @@ func TestAddOnACancelledContextExitsInterrupted(t *testing.T) {
 	}
 }
 
-// stubLogin makes the post-login half of `add` reachable. Everything that
-// decides what happens to a live credential lives there.
-func stubLogin(t *testing.T, tok *oauth.TokenResponse) {
+// announcedURL stands in for the manual authorize URL the real Login builds and
+// hands to Announce.
+const announcedURL = "https://claude.com/cai/oauth/authorize?state=STATE"
+
+// loginCapture records what `add` asked the login for.
+//
+// Those options are the command's ENTIRE instruction to oauth.Login, and a
+// wrong one is invisible downstream: the login succeeds either way and the
+// account is stored either way. A stub that discards them lets `--console`
+// authenticate against the subscription surface, `--no-browser` open a browser,
+// and the paste half of the race vanish, all with the whole suite green.
+type loginCapture struct{ calls []oauth.LoginOptions }
+
+// last is the options of the most recent login the command drove.
+func (c *loginCapture) last(t *testing.T) oauth.LoginOptions {
+	t.Helper()
+	if len(c.calls) == 0 {
+		t.Fatal("the login was never called")
+	}
+	return c.calls[len(c.calls)-1]
+}
+
+// stubLogin makes the post-login half of `add` reachable and records the
+// options it was given. Everything that decides what happens to a live
+// credential lives after the login.
+func stubLogin(t *testing.T, tok *oauth.TokenResponse) *loginCapture {
 	t.Helper()
 	restore := login
 	t.Cleanup(func() { login = restore })
-	login = func(context.Context, oauth.LoginOptions) (*oauth.LoginResult, error) {
+	rec := &loginCapture{}
+	login = func(_ context.Context, opts oauth.LoginOptions) (*oauth.LoginResult, error) {
+		rec.calls = append(rec.calls, opts)
+		// The real Login always announces before it waits, and Announce is the
+		// whole user-facing instruction block: the URL, and the line that says
+		// which of the two paths can still finish. A stub that skips it leaves
+		// every one of those lines unexecuted by any test.
+		opts.Announce(announcedURL)
 		return &oauth.LoginResult{Token: tok, ViaLoopback: true}, nil
 	}
+	return rec
 }
 
 func loginToken(uuid, email, refresh string) *oauth.TokenResponse {
@@ -530,6 +615,139 @@ func loginToken(uuid, email, refresh string) *oauth.TokenResponse {
 	tok.Account.UUID = uuid
 	tok.Account.EmailAddress = email
 	return tok
+}
+
+// Every flag `add` takes ends up in these five fields and nowhere else, so this
+// is the only place a wrong answer is observable. `--console` reaching the
+// subscription surface would mint a credential the user did not ask for and
+// report success; a dropped paste source would silently delete half of the race
+// this command's own --help calls its headline.
+func TestAddAsksTheLoginForWhatTheFlagsSay(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		args         []string
+		tty, browser bool
+		wantSurface  oauth.Surface
+		wantOpen     bool
+		wantPaste    bool
+		wantTimeout  time.Duration
+	}{
+		{
+			name: "the default is the subscription surface with both paths running",
+			tty:  true, browser: true,
+			wantSurface: oauth.SurfaceClaudeAI, wantOpen: true, wantPaste: true,
+			wantTimeout: oauth.DefaultLoginTimeout,
+		},
+		{
+			name: "--console authenticates against the Console surface",
+			args: []string{"--console"}, tty: true, browser: true,
+			wantSurface: oauth.SurfaceConsole, wantOpen: true, wantPaste: true,
+			wantTimeout: oauth.DefaultLoginTimeout,
+		},
+		{
+			name: "--no-browser leaves the browser shut on a machine that has one",
+			args: []string{"--no-browser"}, tty: true, browser: true,
+			wantSurface: oauth.SurfaceClaudeAI, wantOpen: false, wantPaste: true,
+			wantTimeout: oauth.DefaultLoginTimeout,
+		},
+		{
+			name: "a machine with no browser opens none",
+			tty:  true, browser: false,
+			wantSurface: oauth.SurfaceClaudeAI, wantOpen: false, wantPaste: true,
+			wantTimeout: oauth.DefaultLoginTimeout,
+		},
+		{
+			name: "stdin that is not a terminal removes the paste path",
+			tty:  false, browser: true,
+			wantSurface: oauth.SurfaceClaudeAI, wantOpen: true, wantPaste: false,
+			wantTimeout: oauth.DefaultLoginTimeout,
+		},
+		{
+			name: "--timeout is the deadline the login is given",
+			args: []string{"--timeout", "42s"}, tty: true, browser: true,
+			wantSurface: oauth.SurfaceClaudeAI, wantOpen: true, wantPaste: true,
+			wantTimeout: 42 * time.Second,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolate(t)
+			stubEnvironment(t, tc.tty, tc.browser)
+			stubProfile(t, func(w http.ResponseWriter, _ *http.Request) {
+				io.WriteString(w, profileJSON("acct-1", "a@example.com"))
+			})
+			rec := stubLogin(t, loginToken("acct-1", "a@example.com", "RT-1"))
+
+			if err, _, _ := runCmd(t, newAddCmd(), tc.args...); err != nil {
+				t.Fatal(err)
+			}
+
+			opts := rec.last(t)
+			if opts.Surface != tc.wantSurface {
+				t.Errorf("Surface = %v, want %v", opts.Surface, tc.wantSurface)
+			}
+			if opts.OpenBrowser != tc.wantOpen {
+				t.Errorf("OpenBrowser = %v, want %v", opts.OpenBrowser, tc.wantOpen)
+			}
+			if got := opts.Paste != nil; got != tc.wantPaste {
+				t.Errorf("a paste source was supplied = %v, want %v", got, tc.wantPaste)
+			}
+			if opts.Timeout != tc.wantTimeout {
+				t.Errorf("Timeout = %v, want %v", opts.Timeout, tc.wantTimeout)
+			}
+		})
+	}
+}
+
+// Announce is the whole user-facing instruction block, and which half of it
+// runs is decided by the machine rather than by a flag: a terminal is prompted
+// to paste, a pipe is told that only the browser callback can still finish. The
+// second line is what the isTTY helper was written for, and neither branch had
+// ever been executed by a test.
+func TestAddAnnouncesTheURLAndWhichPathCanFinish(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		tty, browser bool
+		want         []string
+		notWant      []string
+	}{
+		{
+			name: "a terminal is told where to paste",
+			tty:  true, browser: false,
+			want:    []string{announcedURL, "Visit this URL to sign in", pastePrompt},
+			notWant: []string{"Opening your browser"},
+		},
+		{
+			name: "a pipe is told the browser callback is the only path left",
+			tty:  false, browser: true,
+			want: []string{announcedURL, "Opening your browser to sign in.", "If it does not open",
+				"stdin is not a terminal, so ccdad is waiting on the browser callback only."},
+			notWant: []string{pastePrompt},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolate(t)
+			stubEnvironment(t, tc.tty, tc.browser)
+			stubProfile(t, func(w http.ResponseWriter, _ *http.Request) {
+				io.WriteString(w, profileJSON("acct-1", "a@example.com"))
+			})
+			stubLogin(t, loginToken("acct-1", "a@example.com", "RT-1"))
+
+			err, _, stderr := runCmd(t, newAddCmd())
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(stderr, want) {
+					t.Errorf("stderr = %q, want it to carry %q", stderr, want)
+				}
+			}
+			for _, notWant := range tc.notWant {
+				if strings.Contains(stderr, notWant) {
+					t.Errorf("stderr = %q, want it NOT to carry %q on this machine", stderr, notWant)
+				}
+			}
+		})
+	}
 }
 
 // Spec §9.1: add never switches unless --activate. The two halves are a matched
@@ -1137,6 +1355,97 @@ func TestAddOnALoginTimeoutFollowsTheSpecExitCode(t *testing.T) {
 	err, _, _ := runCmd(t, newAddCmd())
 	if got := CodeFor(err); got != ExitFailure {
 		t.Fatalf("CodeFor = %d, want %d (spec §6.4 assigns 1 to a timeout)", got, ExitFailure)
+	}
+}
+
+// §6.4 makes a paste without a '#' a re-prompt rather than an abort — the
+// loopback race may still be about to win. oauth.Login carries that machinery
+// and reports each unreadable line through LoginOptions.Rejected, so whether
+// the user sees anything at all is decided HERE, by whether `add` supplies the
+// callback. Without it a malformed paste is swallowed in silence and the
+// terminal just sits there.
+func TestAddRepromptsOnAPasteItCouldNotRead(t *testing.T) {
+	isolate(t)
+	stubEnvironment(t, true, false)
+	stubProfile(t, func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, profileJSON("acct-1", "a@example.com"))
+	})
+	restore := login
+	t.Cleanup(func() { login = restore })
+	// Mimics the real Login's order: announce, then report an unreadable line,
+	// then let the loopback win — which is exactly the sequence §6.4 describes.
+	login = func(_ context.Context, opts oauth.LoginOptions) (*oauth.LoginResult, error) {
+		if opts.Rejected == nil {
+			t.Fatal("add gave the login no Rejected callback, so an unreadable paste tells the user nothing")
+		}
+		opts.Announce("https://claude.ai/oauth/authorize?state=STATE")
+		opts.Rejected("that does not look like a full code")
+		return &oauth.LoginResult{Token: loginToken("acct-1", "a@example.com", "RT-1")}, nil
+	}
+
+	err, _, stderr := runCmd(t, newAddCmd())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stderr, "that does not look like a full code") {
+		t.Errorf("stderr = %q, want the reason the paste was not usable", stderr)
+	}
+	// Announce printed the first prompt; the rejection must re-issue it, or the
+	// user is left at a bare cursor with nothing saying ccdad is still waiting.
+	if got := strings.Count(stderr, "Paste code here: "); got < 2 {
+		t.Errorf("stderr = %q, want the paste prompt re-issued after the rejection (saw it %d time(s))", stderr, got)
+	}
+}
+
+// T10-6 parsed the callback's error parameter into a closed set precisely so a
+// caller could log the spec code with none of the browser's bytes reaching a
+// message — "so a caller can log LogDetail" is its stated purpose. Nothing
+// called it.
+//
+// The unrecognized row is the one that carries this test: RejectionRefused and
+// RejectionUnrecognized share UserMessage's default arm, so "Anthropic refused
+// the login" was the whole of what a user saw for either, and the spec code is
+// the only thing that says which. The other three rows are cheaper — their
+// canned messages already differ, as this test's own last assertion shows — and
+// they are here so that a LogDetail wired for one arm only cannot pass.
+func TestAddReportsTheRejectionDetailBehindTheCannedMessage(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		rejection oauth.AuthorizeRejection
+		want      string
+	}{
+		{"declined", oauth.RejectionDeclined, "access_denied"},
+		{"refused", oauth.RejectionRefused, "invalid_request"},
+		{"upstream", oauth.RejectionUpstream, "server_error"},
+		{"unrecognized", oauth.RejectionUnrecognized, "outside RFC 6749's set"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolate(t)
+			stubEnvironment(t, true, false)
+			restore := login
+			t.Cleanup(func() { login = restore })
+			login = func(context.Context, oauth.LoginOptions) (*oauth.LoginResult, error) {
+				return nil, &oauth.RejectionError{Rejection: tc.rejection}
+			}
+
+			err, _, stderr := runCmd(t, newAddCmd())
+			if err == nil {
+				t.Fatal("Execute() = nil, want the rejected login reported")
+			}
+			// §6.4's edge-case table assigns 1 to an OAuth error in the
+			// callback, alongside the timeout row this branch sits next to.
+			if got := CodeFor(err); got != ExitFailure {
+				t.Errorf("CodeFor = %d, want %d (spec §6.4 assigns 1 to a rejected callback)", got, ExitFailure)
+			}
+			if !strings.Contains(stderr, tc.want) {
+				t.Errorf("stderr = %q, want the spec code %q an operator can act on", stderr, tc.want)
+			}
+			// The canned user message is still what the command fails with; the
+			// detail is a note beside it, not a replacement for it.
+			if !strings.Contains(err.Error(), tc.rejection.UserMessage()) {
+				t.Errorf("error = %q, want the canned message %q", err, tc.rejection.UserMessage())
+			}
+		})
 	}
 }
 

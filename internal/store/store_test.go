@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pelletier/go-toml/v2"
+
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/identity"
 )
@@ -611,5 +613,116 @@ func TestOpenRefusesWhenTheHomeDirectoryCannotBeResolved(t *testing.T) {
 	}
 	if _, serr := os.Stat(".ccdad"); serr == nil {
 		t.Fatal("Open() created a relative .ccdad store in the working directory")
+	}
+}
+
+// §6.5 makes `ccdad add` double as re-authentication, and the record a fresh
+// login builds knows nothing about the user having held this account out of
+// auto-rotation. Idx, Alias and AddedAt were pinned; Disabled was not, so
+// dropping its carry silently returned a held-out account to the pool the next
+// time its owner logged in again.
+func TestReAuthenticationKeepsAnAccountHeldOutOfRotation(t *testing.T) {
+	withStore(t)
+	s, _ := Open()
+	if err := s.Add(Account{UUID: "u-1", Email: "old@example.com", Disabled: true}, sampleCreds("a")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.Add(Account{UUID: "u-1", Email: "new@example.com"}, sampleCreds("b")); err != nil {
+		t.Fatal(err)
+	}
+
+	got, ok := s.Get("u-1")
+	if !ok {
+		t.Fatal("Get(u-1) = false, want the re-authenticated account")
+	}
+	if got.Email != "new@example.com" {
+		t.Fatalf("Email = %q, want the refreshed value", got.Email)
+	}
+	if !got.Disabled {
+		t.Fatal("Disabled = false after re-authentication, want the account still held out of rotation")
+	}
+}
+
+// An account with no credential file is a broken store, not an account with no
+// credentials: returning an empty blob and no error would hand a caller a
+// snapshot with no OAuth record in it, which the switcher reads as a credential
+// that cannot identify itself.
+func TestCredentialsRefusesAnAccountWithNoStoredFile(t *testing.T) {
+	withStore(t)
+	s, _ := Open()
+
+	got, err := s.Credentials("u-1")
+	if err == nil {
+		t.Fatalf("Credentials(missing) = %v, nil, want it refused", got)
+	}
+	if !strings.Contains(err.Error(), "no stored credentials") {
+		t.Fatalf("err = %v, want it to name what is missing", err)
+	}
+}
+
+// The same for a file that exists and is not JSON. Silently treating it as
+// empty would let a corrupted credential be overwritten by a merge that thought
+// there was nothing to preserve.
+func TestCredentialsRefusesACorruptFile(t *testing.T) {
+	withStore(t)
+	s, _ := Open()
+	if err := s.Add(Account{UUID: "u-1"}, sampleCreds("a")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(s.credentialPath("u-1"), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.Credentials("u-1")
+	if err == nil {
+		t.Fatalf("Credentials(corrupt) = %v, nil, want it refused", got)
+	}
+	if !strings.Contains(err.Error(), "corrupt") {
+		t.Fatalf("err = %v, want it to say the stored record is corrupt", err)
+	}
+}
+
+// SetAlias documents an empty alias as the way to clear one, and that is the
+// only way back for a user who mistyped a handle they now cannot re-use
+// elsewhere: a duplicate is refused against the account still holding it.
+func TestSetAliasClearsWithAnEmptyValue(t *testing.T) {
+	withStore(t)
+	s, _ := Open()
+	if err := s.Add(Account{UUID: "u-1"}, sampleCreds("a")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetAlias("u-1", "work"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.SetAlias("u-1", ""); err != nil {
+		t.Fatalf("SetAlias(empty) = %v, want it to clear the alias", err)
+	}
+	if got, _ := s.Get("u-1"); got.Alias != "" {
+		t.Fatalf("Alias = %q, want it cleared", got.Alias)
+	}
+}
+
+// The version field is what lets a later release migrate rather than guess, and
+// it is only worth anything if it is actually written: a document that reads
+// back as version 0 is indistinguishable from one an unversioned build wrote.
+func TestAccountsFileCarriesItsSchemaVersion(t *testing.T) {
+	dir := withStore(t)
+	s, _ := Open()
+	if err := s.Add(Account{UUID: "u-1"}, sampleCreds("a")); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(dir, "accounts.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc file
+	if err := toml.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parsing accounts.toml: %v\n%s", err, raw)
+	}
+	if doc.Version != 1 {
+		t.Fatalf("version = %d, want 1: %s", doc.Version, raw)
 	}
 }
