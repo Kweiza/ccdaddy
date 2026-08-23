@@ -90,14 +90,36 @@ var describeClaudeInstall = ccver.Describe
 // classify proceeds untouched: a refusal keyed on "ccdad could not tell" would
 // break machines that work, and doctor's claude-version row is the place that
 // reports a launcher it could not name.
-func refuseKeychainEra(install ccver.Install, label string) error {
+//
+// AND ONLY ON THE CREDENTIAL SHAPE THAT IS ACTUALLY DEFEATED, which is why it
+// takes the blob. Of authorise's three shapes only an OAuth LOGIN is scoped by
+// the credential home:
+//
+//   - setup-token accounts are scoped by CLAUDE_CODE_OAUTH_TOKEN in the child's
+//     environment, and ccdad writes no credentials file for them at all. That
+//     variable long predates 2.1.113, and this tree's own measurement is that
+//     Claude Code prefers it over the stored login outright — so such a session
+//     runs as the intended account on a keychain-era build, and refusing it
+//     would block a case that works while asserting a failure mode that cannot
+//     happen to it.
+//   - api-key accounts are refused by authorise itself, in its own words, and
+//     the era has nothing to do with why. Answering first with a keychain
+//     message would replace an accurate refusal with a misleading one.
+//
+// So a stored token record of either kind returns early and the two other
+// answers stand.
+func refuseKeychainEra(install ccver.Install, blob cclink.Blob, label string) error {
 	if !install.KeychainEra() {
 		return nil
 	}
+	if _, hasToken := cclink.TokenRecordOf(blob); hasToken {
+		return nil
+	}
 	return UsageError("%s does not know CLAUDE_SECURESTORAGE_CONFIG_DIR — the variable arrived in %s — so this "+
-		"session would not be scoped at all: claude would read the machine's own credentials file and run as the "+
-		"LIVE login rather than as %s, and ccdad would report success. Run it with --full-profile, which scopes "+
-		"CLAUDE_CONFIG_DIR and does work on this build; or upgrade Claude Code to %s or later",
+		"session would not be scoped at all: %s's login is a credentials file, and claude would read the "+
+		"MACHINE's own file instead and run as the live login, while ccdad reported success. Run it with "+
+		"--full-profile, which scopes CLAUDE_CONFIG_DIR and does work on this build; or upgrade Claude Code to "+
+		"%s or later",
 		install, ccver.LastKeychainEra.NextPatch(), label, ccver.LastKeychainEra.NextPatch())
 }
 
@@ -689,7 +711,9 @@ func newRunCmd() *cobra.Command {
 			"That default needs Claude Code 2.1.113 or later: the variable it scopes with\n" +
 			"did not exist before then, so on an older build the session would silently read\n" +
 			"the machine's own login. ccdad refuses to start rather than run as the wrong\n" +
-			"account, and names --full-profile, which scopes something every era reads.\n\n" +
+			"account, and names --full-profile, which scopes something every era reads. Only\n" +
+			"for accounts whose login is a credentials file: a setup-token account is scoped\n" +
+			"by CLAUDE_CODE_OAUTH_TOKEN instead, which every era reads, so it still runs.\n\n" +
 			"--full-profile gives the account a whole config home instead, kept between runs\n" +
 			"under the ccdad store, so its MCP logins and trust answers survive. It is seeded\n" +
 			"once from the live config home — top-level files only, never the project history —\n" +
@@ -712,6 +736,15 @@ func newRunCmd() *cobra.Command {
 				return UsageError("%s", err.Error())
 			}
 
+			// Read before the session directory is created rather than after,
+			// because the refusal below turns on which credential shape this
+			// account is — and a refusal that first made a directory holding
+			// nothing would be tidied by the defer, but only after the fact.
+			blob, err := s.Credentials(target.UUID)
+			if err != nil {
+				return err
+			}
+
 			path, err := lookClaude("claude")
 			if err != nil {
 				return err
@@ -723,7 +756,7 @@ func newRunCmd() *cobra.Command {
 			// launchPastShim replaces the path with an interpreter, which is
 			// node rather than claude.
 			if !fullProfile {
-				if err := refuseKeychainEra(describeClaudeInstall(path), target.Label()); err != nil {
+				if err := refuseKeychainEra(describeClaudeInstall(path), blob, target.Label()); err != nil {
 					return err
 				}
 			}
@@ -771,10 +804,6 @@ func newRunCmd() *cobra.Command {
 						"'ccdad doctor' reports it.\n", session.home, err)
 				}
 			}()
-			blob, err := s.Credentials(target.UUID)
-			if err != nil {
-				return err
-			}
 			env, needsFile, err := authorise(cmd.ErrOrStderr(), session, blob, target.Label())
 			if err != nil {
 				return err

@@ -296,19 +296,21 @@ func TestDescribeCreatesNothing(t *testing.T) {
 	}
 }
 
-// The walk is bounded so that a launcher in an unrelated place stops rather than
-// reading a package.json out of every ancestor up to the filesystem root.
-func TestThePackageWalkIsBounded(t *testing.T) {
+// The CONTAINING walk is bounded, so a launcher deep inside an unrelated tree
+// stops rather than reading a package.json out of every ancestor up to the root.
+//
+// The manifest here is the "inside" shape -- an ancestor that IS the package
+// root -- because that is the only candidate that climbs at all now. Written
+// with the sideways shape, this test would pass without exercising any bound.
+func TestTheContainingWalkIsBounded(t *testing.T) {
 	root := t.TempDir()
+	write(t, filepath.Join(root, "package.json"), manifest(PackageName, "2.1.180"))
 	deep := root
 	for i := 0; i < maxPackageWalk+2; i++ {
 		deep = filepath.Join(deep, "d")
 	}
 	launcher := filepath.Join(deep, "claude")
 	write(t, launcher, "#!/bin/sh\n")
-	// The only manifest is further up than the bound allows.
-	write(t, filepath.Join(root, "node_modules", "@anthropic-ai", "claude-code", "package.json"),
-		manifest(PackageName, "2.1.180"))
 
 	if got := Describe(launcher); got.Known {
 		t.Fatalf("Describe walked past the %d-level bound and found %s", maxPackageWalk, got.Version)
@@ -407,6 +409,15 @@ func TestTheKeychainEraEndsAt2_1_112(t *testing.T) {
 // Probe answers from PATH when PATH has one, so ccdad names the claude a shell
 // would actually start rather than a copy it found by guessing.
 func TestProbePrefersWhatPATHNames(t *testing.T) {
+	// The home is sandboxed even though this test is about PATH, and that is
+	// the point: without it fallbackLaunchers resolves the DEVELOPER's real
+	// ~/.local/bin/claude, so reordering Probe to try the fallbacks first still
+	// passed on any machine with no native install -- every CI box. The same
+	// hazard the cli suite's isolate() was extended for, one package over.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
 	root := t.TempDir()
 	binary := filepath.Join(root, "share", "claude", "versions", "2.1.199")
 	write(t, binary, "ELF")
@@ -711,5 +722,210 @@ func TestALauncherThatIsTheBinaryIsNotRenderedAsAnArrowToItself(t *testing.T) {
 	}
 	if strings.Contains(got.String(), "->") {
 		t.Errorf("String() renders an arrow from a path to itself:\n%s", got.String())
+	}
+}
+
+// THE WORST DEFECT THIS BRANCH HAD, and the one the review found: an unrelated
+// ancestor's node_modules was credited to the launcher, with Known=true.
+//
+// The machine here is entirely healthy — the native 2.1.241 is installed and on
+// PATH through a wrapper the user wrote — but the project the wrapper lives in
+// pins an old CLI in its own node_modules. The sideways probe used to fire from
+// every one of eight ancestor levels, so that project's 2.1.100 became "the
+// installed Claude Code": inside the keychain era, so `ccdad run` refused to
+// start and doctor ruled `fail`, on a machine where everything works. Any
+// launcher that is neither a native symlink nor inside the package reaches
+// $HOME within eight levels, so $HOME/node_modules was enough to do it.
+func TestAnUnrelatedAncestorsPackageIsNotCreditedToTheLauncher(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "projects", "app")
+	// The project's own pinned copy, several levels above the launcher.
+	write(t, filepath.Join(project, "node_modules", "@anthropic-ai", "claude-code", "package.json"),
+		manifest(PackageName, "2.1.100"))
+	launcher := filepath.Join(project, "bin", "claude")
+	write(t, launcher, "#!/bin/sh\nexec \"$HOME/.local/bin/claude\" \"$@\"\n")
+
+	got := Describe(launcher)
+	if got.Known {
+		t.Fatalf("Describe credited an unrelated tree's %s to %s", got.Version, launcher)
+	}
+	// The consequence is what makes it critical rather than cosmetic.
+	if got.KeychainEra() {
+		t.Error("a healthy machine was classified as keychain-era, which refuses `ccdad run` and fails doctor")
+	}
+}
+
+// The same exposure one level up, which is the likeliest real shape: a shim
+// launcher (asdf, volta, mise, a hand-written wrapper) in a directory whose
+// PARENT happens to hold a node_modules with the package in it.
+func TestASiblingNodeModulesOneLevelUpIsNotCredited(t *testing.T) {
+	root := t.TempDir()
+	write(t, filepath.Join(root, "node_modules", "@anthropic-ai", "claude-code", "package.json"),
+		manifest(PackageName, "2.1.90"))
+	launcher := filepath.Join(root, "shims", "claude")
+	write(t, launcher, "#!/bin/sh\n")
+
+	if got := Describe(launcher); got.Known {
+		t.Fatalf("Describe credited %s from one level above the launcher", got.Version)
+	}
+}
+
+// A launcher that does not resolve is unknown, not healthy. os.Readlink reads
+// the link TEXT without stating what it points at, so a native launcher whose
+// versions entry has been deleted — a cleanup, a half-finished update — used to
+// report a confident version for a binary that is gone, on a machine where
+// claude cannot start at all.
+func TestADanglingNativeLauncherIsUnknownRatherThanHealthy(t *testing.T) {
+	root := t.TempDir()
+	versions := filepath.Join(root, ".local", "share", "claude", "versions")
+	if err := os.MkdirAll(versions, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	launcher := filepath.Join(root, ".local", "bin", "claude")
+	if err := os.MkdirAll(filepath.Dir(launcher), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The link is written; the target never exists.
+	symlink(t, filepath.Join(versions, "2.1.241"), launcher)
+
+	got := Describe(launcher)
+	if got.Known {
+		t.Fatalf("Describe reported %s for a launcher whose target is not there", got.Version)
+	}
+	if !strings.Contains(got.Why, launcher) {
+		t.Errorf("Why does not name the launcher that could not be resolved:\n%s", got.Why)
+	}
+}
+
+// The Windows native install, whose launcher is a COPY rather than a symlink:
+// measured in 2.1.241, the installer branches on startsWith("win32") and calls
+// copyFile, falling through to symlink only off Windows. No reading of the
+// bytes names the version — but "this is not a native install" is a wrong
+// answer where "this is a native install ccdad cannot pin to a version" is the
+// true one, and only the second sends the reader to the right place.
+//
+// Exercised on this platform rather than gated on GOOS, because the shape is
+// what matters: a build tag here would ship the branch unexercised on the
+// machine that runs the suite.
+func TestANativeLauncherThatIsACopyIsNamedAsOneAnyway(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_DATA_HOME", "")
+	versions := filepath.Join(home, ".local", "share", "claude", "versions")
+	write(t, filepath.Join(versions, "2.1.240"), "ELF")
+	write(t, filepath.Join(versions, "2.1.241"), "ELF")
+	launcher := filepath.Join(home, ".local", "bin", "claude.exe")
+	write(t, launcher, "ELF")
+
+	got := Describe(launcher)
+	if got.Known {
+		t.Fatalf("Describe named a version (%s) for a copy — nothing on disk says which one it is", got.Version)
+	}
+	if got.Method != MethodNative {
+		t.Fatalf("Method = %q, want %q — a copy of a versions binary is still a native install",
+			got.Method, MethodNative)
+	}
+	if !strings.Contains(got.Why, versions) {
+		t.Errorf("Why does not point at the directory the copy came from:\n%s", got.Why)
+	}
+	if strings.Contains(got.Why, "nor an npm install") {
+		t.Errorf("a native install was described as not being one:\n%s", got.Why)
+	}
+}
+
+// The same launcher path with no versions directory beside it is NOT a native
+// install, and must not be dressed up as one. Without this the branch above
+// would claim every ~/.local/bin/claude on earth.
+func TestALauncherInTheNativeDirectoryWithNoVersionsTreeIsStillUnknown(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_DATA_HOME", "")
+	launcher := filepath.Join(home, ".local", "bin", "claude")
+	write(t, launcher, "#!/bin/sh\n")
+
+	got := Describe(launcher)
+	if got.Method != MethodUnknown {
+		t.Errorf("Method = %q, want %q — there is no versions tree to be a copy of", got.Method, MethodUnknown)
+	}
+}
+
+// A launcher that is a symlink to something unrecognised has to say where it
+// went, not just where it started: the reader's next step is to look at the
+// target, and the target is the half only ccdad can see.
+func TestAnUnclassifiableSymlinkNamesWhatItResolvedTo(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "opt", "something", "claude-ish")
+	write(t, target, "#!/bin/sh\n")
+	launcher := filepath.Join(root, "bin", "claude")
+	if err := os.MkdirAll(filepath.Dir(launcher), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	symlink(t, target, launcher)
+
+	got := Describe(launcher)
+	if got.Known {
+		t.Fatalf("Describe named %s for an unrecognised target", got.Version)
+	}
+	if !strings.Contains(got.Why, target) {
+		t.Errorf("Why does not name what the launcher resolves to:\n%s", got.Why)
+	}
+}
+
+// "The fallbacks were searched and there was nothing" and "there was no home
+// directory, so neither path could even be spelled" are different answers, and
+// doctor words them differently. Collapsing them made doctor assert a negative
+// result for a search it never performed — and it is reachable, because
+// ccpath.StoreHome returns from CCDAD_HOME without ever consulting the home.
+func TestProbeDistinguishesAnUnsearchableHomeFromAnEmptyOne(t *testing.T) {
+	t.Setenv("HOME", "")
+	t.Setenv("USERPROFILE", "")
+	saved := lookPath
+	t.Cleanup(func() { lookPath = saved })
+	lookPath = func(string) (string, error) { return "", errors.New("not on PATH") }
+
+	_, err := Probe()
+	if err == nil {
+		t.Fatal("Probe() succeeded with no home directory")
+	}
+	if errors.Is(err, ErrNoClaudeCode) {
+		t.Error("an unsearchable home was reported as 'no claude launcher here', which is a result " +
+			"for a search that never happened")
+	}
+}
+
+// The claude-local trap, at the place where the name check is the ONLY thing
+// standing between it and a wrong version.
+//
+// TestTheClaudeLocalWrapperManifestIsNotMistakenForClaudeCode stopped proving
+// this once the sideways probe was restricted to the launcher's own directory:
+// with a healthy local install, that probe finds the RIGHT manifest before the
+// climb ever reaches the wrapper's. Deleting the name check then changed
+// nothing, which is a test that had quietly stopped constraining the guard it
+// was written for.
+//
+// The fixture that still reaches it is the local install whose node_modules is
+// gone — pruned, half-uninstalled, interrupted. The climb then arrives at
+// ~/.claude/local/package.json, which Claude Code's own local installer writes
+// as {"name":"claude-local","version":"0.0.1"}. Without the name check that is
+// "Claude Code 0.0.1": inside the keychain era, so doctor rules fail and `ccdad
+// run` refuses, over a manifest describing a two-line shell wrapper.
+func TestAPrunedLocalInstallDoesNotFallBackToTheWrapperManifest(t *testing.T) {
+	local := t.TempDir()
+	launcher := filepath.Join(local, "claude")
+	write(t, launcher, "#!/bin/sh\nexec \""+local+"/node_modules/.bin/claude\" \"$@\"\n")
+	write(t, filepath.Join(local, "package.json"), `{"name":"claude-local","version":"0.0.1","private":true}`)
+	// No node_modules: the sideways probe misses and the climb is what runs.
+
+	got := Describe(launcher)
+	if got.Version == (Version{0, 0, 1}) {
+		t.Fatalf("Describe reported the claude-local wrapper's own version as Claude Code's")
+	}
+	if got.Known {
+		t.Fatalf("Describe = %+v, want unknown — nothing here declares a Claude Code version", got)
+	}
+	if got.KeychainEra() {
+		t.Error("a wrapper manifest classified the machine as keychain-era")
 	}
 }

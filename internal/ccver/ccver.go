@@ -237,6 +237,19 @@ func Describe(launcher string) Install {
 		}
 	}
 
+	// A launcher that does not resolve is UNKNOWN, and this is checked before
+	// the one-level fallback below rather than after it. os.Readlink does not
+	// stat what it points at, so a dangling native launcher -- a versions entry
+	// deleted by a cleanup, a half-finished update -- would otherwise be read
+	// out of the link TEXT and reported as a healthy, known version for a
+	// binary that is not there. Nothing on that machine can start claude at
+	// all, and saying "ok, 2.1.241" is the confident wrong answer this package
+	// is built to avoid.
+	if realErr != nil {
+		in.Why = fmt.Sprintf("%s could not be resolved: %v", launcher, realErr)
+		return in
+	}
+
 	// The one readlink level is the FALLBACK, for the launcher whose versions
 	// entry points OUT of the versions directory: full resolution walks past
 	// the segment and loses the version, while the link the installer wrote
@@ -245,10 +258,6 @@ func Describe(launcher string) Install {
 		return in.native(target, version)
 	}
 
-	if realErr != nil {
-		in.Why = fmt.Sprintf("%s could not be resolved: %v", launcher, realErr)
-		return in
-	}
 	in.Target = real
 
 	if version, where, ok := npmVersion(real); ok {
@@ -261,9 +270,65 @@ func Describe(launcher string) Install {
 		return in
 	}
 
+	// A native install whose launcher is a COPY rather than a link, which is
+	// what Windows gets: measured in 2.1.241, the installer branches on
+	// `startsWith("win32")` and does copyFile(installPath, launcher), falling
+	// through to symlink() only off Windows. Neither of the two native paths
+	// above can see through a copy, and no honest reading of the bytes names
+	// the version -- but "this is not a native install" is a WRONG answer where
+	// "this is a native install ccdad cannot pin to a version" is the true one,
+	// and only the second sends the reader to the right place.
+	//
+	// Not gated on GOOS, so the Linux suite can exercise it, and because the
+	// shape is what matters rather than the platform.
+	if versions, ok := installedVersionsDir(); ok && sameDir(filepath.Dir(launcher), nativeLauncherDir()) {
+		in.Method = MethodNative
+		in.Why = fmt.Sprintf("%s is a native install whose launcher is a COPY of one of the binaries in %s "+
+			"rather than a symlink into it, which is what the installer writes on Windows — so nothing on disk "+
+			"says WHICH of them it is", launcher, versions)
+		return in
+	}
+
 	in.Why = fmt.Sprintf("%s is neither a symlink into a claude/versions directory nor an npm install of %s, "+
 		"so ccdad has no way to read its version without running it", displayPath(launcher, real), PackageName)
 	return in
+}
+
+// installedVersionsDir is Claude Code's G8n() -- <data home>/claude/versions --
+// when that directory is actually there. The data home is XDG_DATA_HOME, or
+// ~/.local/share, exactly as fpr() computes it.
+func installedVersionsDir() (string, bool) {
+	data := os.Getenv("XDG_DATA_HOME")
+	if data == "" {
+		home, err := ccpath.Home()
+		if err != nil {
+			return "", false
+		}
+		data = filepath.Join(home, ".local", "share")
+	}
+	dir := filepath.Join(data, "claude", "versions")
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() {
+		return "", false
+	}
+	return dir, true
+}
+
+// nativeLauncherDir is Claude Code's q1e() -- ~/.local/bin, on every platform.
+// It is HOME-relative rather than XDG_BIN_HOME-relative because q1e is.
+func nativeLauncherDir() string {
+	home, err := ccpath.Home()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".local", "bin")
+}
+
+// sameDir compares two directory paths. Both come from this machine, so
+// filepath.Clean is the right normaliser; an empty right-hand side never
+// matches, so an unresolvable home cannot make every launcher look native.
+func sameDir(a, b string) bool {
+	return b != "" && filepath.Clean(a) == filepath.Clean(b)
 }
 
 // native fills in a launcher that resolved into a claude/versions directory.
@@ -322,7 +387,16 @@ func Probe() (Install, error) {
 	if path, err := lookPath("claude"); err == nil {
 		return Describe(path), nil
 	}
-	for _, path := range fallbackLaunchers() {
+	fallbacks, err := fallbackLaunchers()
+	if err != nil {
+		// NOT ErrNoClaudeCode. "there is no claude in the two places the
+		// installers write one" is a result, and this is the absence of a
+		// search: without a home directory neither path could even be spelled.
+		// doctor words the two differently, and the difference is the whole
+		// reason this is not collapsed.
+		return Install{}, err
+	}
+	for _, path := range fallbacks {
 		info, err := os.Lstat(path)
 		if err != nil || info.IsDir() {
 			continue
@@ -350,10 +424,10 @@ func Probe() (Install, error) {
 // ccpath rather than only this fallback, so changing it is a change to where
 // ccdad believes the store, the config home and the credential home all live —
 // which needs the Windows runner the queue is already holding other items for.
-func fallbackLaunchers() []string {
+func fallbackLaunchers() ([]string, error) {
 	home, err := ccpath.Home()
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	names := []string{"claude"}
 	// The native launcher is claude.exe on Windows. exec.LookPath applies
@@ -366,7 +440,7 @@ func fallbackLaunchers() []string {
 		out = append(out, filepath.Join(home, ".local", "bin", name))
 	}
 	out = append(out, filepath.Join(home, ".claude", "local", "claude"))
-	return out
+	return out, nil
 }
 
 // nativeVersion is Claude Code's dan() predicate, read for the version it
@@ -421,11 +495,13 @@ func versionSegment(path string) (string, bool) {
 	return "", false
 }
 
-// maxPackageWalk bounds the climb from a launcher to the package that owns it.
-// A launcher sits at most a couple of levels inside its package or beside the
-// node_modules holding it; the bound is what stops a launcher in an unrelated
-// place from walking to the filesystem root reading files.
-const maxPackageWalk = 8
+// maxPackageWalk bounds the climb from a launcher to the package that CONTAINS
+// it. Two levels is every shape that exists: <pkg>/cli.js through 2.1.112 puts
+// the launcher in the package root, and <pkg>/bin/claude.exe from 2.1.113 puts
+// it one directory in. The third is slack.
+//
+// It used to be 8, and eight was not slack — it was exposure. See npmVersion.
+const maxPackageWalk = 3
 
 // maxPackageJSON caps a package.json read. npm's own manifests are kilobytes;
 // this is the same refusal cclink applies to the credentials file, for the same
@@ -433,31 +509,50 @@ const maxPackageWalk = 8
 // diagnostic should read into memory.
 const maxPackageJSON = 1 << 20
 
-// npmVersion walks up from a resolved launcher looking for Claude Code's own
-// package manifest, and returns the version it declares and the file it came
-// from.
+// npmVersion finds the Claude Code package a resolved launcher belongs to, and
+// returns the version it declares and the file that declared it.
 //
-// Two shapes at every level, because the launcher is inside the package on some
-// installs and beside the tree containing it on others:
+// TWO SHAPES, AND THEY GET DIFFERENT REACH. That asymmetry is the whole
+// function, and getting it wrong was this branch's worst defect.
 //
-//   - inside: an npm global bin symlink resolves to
+//   - INSIDE, which climbs. An npm global bin symlink resolves to
 //     <prefix>/lib/node_modules/@anthropic-ai/claude-code/cli.js (<=2.1.112) or
-//     .../bin/claude.exe (>=2.1.113), so an ancestor IS the package root.
-//   - beside: a Windows .cmd shim is not a symlink and stays at <prefix>, with
-//     the package under <prefix>/node_modules/. So is ~/.claude/local/claude,
-//     the sh script `claude install --local` writes, whose package sits in
-//     <local>/node_modules/.
+//     .../bin/claude.exe (>=2.1.113), so an ANCESTOR of the launcher is the
+//     package root. This is self-limiting: an ancestor only matches when the
+//     launcher genuinely lives inside that package.
+//
+//   - BESIDE, which does NOT climb. A Windows .cmd shim is not a symlink and
+//     stays at <prefix> with the package under <prefix>/node_modules/; so does
+//     ~/.claude/local/claude, the sh script `claude install --local` writes,
+//     whose package sits in <local>/node_modules/. In BOTH the package is in
+//     the launcher's OWN directory, so this candidate is tried at level 0 and
+//     nowhere else.
+//
+// Probing "beside" at every level was pure exposure with no install shape
+// behind it, and it produced the one outcome this package exists to prevent: a
+// WRONG version, returned with Known=true. A user with the native 2.1.241 who
+// puts a wrapper script at ~/projects/app/bin/claude, in a project that pins
+// @anthropic-ai/claude-code 2.1.100 in its own node_modules, got 2.1.100 --
+// which is inside the keychain era, so `ccdad run` refused to start and doctor
+// ruled `fail`, on a machine where everything works. Any launcher that is
+// neither a native symlink nor inside the package -- an asdf or volta shim, a
+// hand-written wrapper -- reached $HOME within the old eight levels, so
+// $HOME/node_modules/@anthropic-ai/claude-code was enough to do it.
+//
+// Note what is NOT the fix. Claude Code's own pan() requires the realpath to
+// end in .js or contain node_modules, and adopting that as a precondition would
+// reject both BESIDE shapes outright -- a .cmd shim and an sh script are
+// neither. Departing from pan() here is deliberate; the reach of the sideways
+// probe was the bug.
 func npmVersion(launcher string) (version, where string, ok bool) {
 	dir := filepath.Dir(launcher)
+	if v, found := readPackageVersion(besideManifest(dir)); found {
+		return v, besideManifest(dir), true
+	}
 	for i := 0; i < maxPackageWalk; i++ {
-		candidates := []string{
-			filepath.Join(dir, "package.json"),
-			filepath.Join(dir, "node_modules", filepath.FromSlash(PackageName), "package.json"),
-		}
-		for _, path := range candidates {
-			if v, found := readPackageVersion(path); found {
-				return v, path, true
-			}
+		path := filepath.Join(dir, "package.json")
+		if v, found := readPackageVersion(path); found {
+			return v, path, true
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
@@ -466,6 +561,11 @@ func npmVersion(launcher string) (version, where string, ok bool) {
 		dir = parent
 	}
 	return "", "", false
+}
+
+// besideManifest is the package manifest for a tree sitting in dir itself.
+func besideManifest(dir string) string {
+	return filepath.Join(dir, "node_modules", filepath.FromSlash(PackageName), "package.json")
 }
 
 // readPackageVersion reads a package.json and reports whether it is Claude
