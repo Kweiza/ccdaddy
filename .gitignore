@@ -1,3 +1,13 @@
 /dist/
 /ccdad
 /ccdad.exe
+
+# Claude Code's own files, anywhere in the tree. Nothing in this repository
+# writes one: the suite points every path at a temp directory, and a relative
+# store is refused outright. What did write them was a MUTATION run — a
+# deliberately broken build resolving the global config to a relative path —
+# and three reached a commit before a merge listing happened to name them.
+# They are credential-shaped and this repository is public, so no arrangement
+# of the tree makes one of them ours to track.
+.claude.json
+.credentials.json
