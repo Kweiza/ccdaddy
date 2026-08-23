@@ -48,6 +48,14 @@ type Account struct {
 	// Disabled holds an account out of auto-rotation while keeping it a valid
 	// explicit switch target.
 	Disabled bool `toml:"disabled,omitempty"`
+	// Primary marks an account whose credits are its ORDINARY metering rather
+	// than overage — an enterprise seat billed in credits and nothing else. It
+	// is ranked beside the subscription accounts instead of waiting in the
+	// last-resort credit pool, and credit.max_auto_spend does not gate it,
+	// because a ceiling that defaults to 0 would mean the seat could never be
+	// used at all. Typing the command that sets this IS the second opt-in that
+	// ceiling otherwise supplies.
+	Primary bool `toml:"primary,omitempty"`
 	// AddedAt is when ccdad first stored this account.
 	AddedAt time.Time `toml:"added_at"`
 	// Credit is the credit balance kept alongside the classification. An

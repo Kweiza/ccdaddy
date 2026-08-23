@@ -187,6 +187,7 @@ func runChecks() []check {
 		checkConfig(storeUsable),
 		checkSessions(root, storeUsable),
 		checkProfiles(root, storeUsable),
+		checkPrimary(root, storeUsable),
 		checkCredentialHome(report),
 		checkClaudeVersion(install, installErr),
 		checkClaudeCode(live, liveErr),
@@ -1217,6 +1218,46 @@ func checkProfiles(root string, usable bool) check {
 			"are from an older ccdad, a restored export, or a uuid that changed",
 		len(orphans), plural(len(orphans), "y", "ies"), container,
 		plural(len(orphans), "s", ""), strings.Join(orphans, ", "))}
+}
+
+// checkPrimary names the accounts marked primary, because that flag is the one
+// per-account setting that switches the credit ceiling OFF.
+//
+// It is levelOK either way, which matches how the config row reports an armed
+// max_auto_spend: armed spending is something a human typed, not a fault, and a
+// warning on a deliberate setting is a warning readers learn to skip past. What
+// this row is for is that the flag is nearly invisible everywhere else — one
+// parenthesis on a listing and a key in --json — so a seat armed months ago is
+// otherwise found only by opening accounts.toml.
+//
+// It creates nothing: store.AccountsAt performs the read Open would, without
+// Open's MkdirAll.
+func checkPrimary(root string, usable bool) check {
+	if !usable {
+		return check{"primary-accounts", levelSkipped, "there is no store to check"}
+	}
+	accounts, err := store.AccountsAt(root)
+	if err != nil {
+		// Answering "none are primary" out of a failed read would be exactly
+		// the reassuring lie this row exists to remove.
+		return check{"primary-accounts", levelFail, fmt.Sprintf("the account list cannot be read: %v", err)}
+	}
+	var marked []string
+	for _, a := range accounts {
+		if a.Primary {
+			marked = append(marked, a.Label())
+		}
+	}
+	if len(marked) == 0 {
+		return check{"primary-accounts", levelOK,
+			"no account is marked primary, so every credit account is behind the credit gate"}
+	}
+	sort.Strings(marked)
+	return check{"primary-accounts", levelOK, fmt.Sprintf(
+		"%d account%s marked primary and ranked beside the subscriptions (%s); "+
+			"credit.max_auto_spend does not hold %s back",
+		len(marked), plural(len(marked), " is", "s are"), strings.Join(marked, ", "),
+		plural(len(marked), "it", "them"))}
 }
 
 // checkPath answers whether typing `ccdad` in a new shell finds this binary.

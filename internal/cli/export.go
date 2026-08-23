@@ -53,6 +53,7 @@ type exportAccount struct {
 	RateLimitTier    string    `json:"rateLimitTier,omitempty"`
 	OrganizationUUID string    `json:"organizationUuid,omitempty"`
 	Disabled         bool      `json:"disabled,omitempty"`
+	Primary          bool      `json:"primary,omitempty"`
 	AddedAt          time.Time `json:"addedAt"`
 
 	// Credentials is the account's stored snapshot, present only with --full.
@@ -133,6 +134,7 @@ func newExportCmd() *cobra.Command {
 					RateLimitTier:    a.RateLimitTier,
 					OrganizationUUID: a.OrganizationUUID,
 					Disabled:         a.Disabled,
+					Primary:          a.Primary,
 					AddedAt:          a.AddedAt,
 				}
 				if full {
