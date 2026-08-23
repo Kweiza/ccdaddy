@@ -126,6 +126,11 @@ func newProfile(uuid string) (runSession, error) {
 	// away on the second one.
 	if errors.Is(statErr, os.ErrNotExist) {
 		if err := seedProfile(home); err != nil {
+			// The directory was created a moment ago, and its EXISTENCE is
+			// what tells the next run not to seed. Leaving it behind after a
+			// failed seed turns one refusal into a profile that is silently
+			// never seeded again.
+			_ = os.RemoveAll(home)
 			return runSession{}, err
 		}
 	}
@@ -260,6 +265,27 @@ func seedProfile(home string) error {
 	src, err := ccpath.ConfigHome()
 	if err != nil {
 		return err
+	}
+	// The source is resolved from the environment at CALL time, so inside a
+	// `ccdad run --full-profile` session it is the OUTER account's profile
+	// rather than the machine's configuration — and this copies top-level
+	// files, the global config among them. A nested run would therefore seed
+	// one account's profile from another's, carrying over its MCP servers, its
+	// trust answers and the primaryApiKey ccdad itself installs for an API-key
+	// account, into a directory nothing lists and `ccdad remove` never cleans.
+	//
+	// scopedSessionAllowed lets `ccdad run` through on the grounds that it
+	// REPLACES the scope it inherits rather than reading it. That is true of
+	// the variables handed to the child and false here, which is the whole
+	// reason this check exists rather than a comment saying it cannot happen.
+	//
+	// Only the CREATE is refused, which is what keeps it narrow: a profile
+	// that already exists is never re-seeded, so a nested run of an account
+	// that has been run before still works.
+	if root, rootErr := ccpath.StoreHome(); rootErr == nil && inside(root, src) {
+		return UsageError("this shell's Claude Code configuration is %s, which is inside ccdad's own store —\n"+
+			"seeding a new profile from it would copy another account's settings, and its API key, into this one.\n"+
+			"Run 'ccdad run --full-profile' from a shell outside the session, once, to create the profile", src)
 	}
 	entries, err := os.ReadDir(src)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
