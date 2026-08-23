@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -17,6 +19,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 	"github.com/Kweiza/ccdaddy/internal/identity"
+	"github.com/Kweiza/ccdaddy/internal/oauth"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
@@ -155,6 +158,12 @@ func profileJSON(uuid, email string) string {
 		`"organization":{"uuid":"org-1","organization_type":"claude_max","rate_limit_tier":"default_claude_max_20x","billing_type":"subscription"}}`
 }
 
+// explicitArgs is what SetArgs has to be handed. Cobra reads a nil slice as
+// "not set" and falls back to os.Args[1:] — the test binary's own command line
+// — so a test that passed no arguments would be running whatever `go test` was
+// invoked with. An empty non-nil slice is the "no arguments" it meant.
+func explicitArgs(args []string) []string { return append([]string{}, args...) }
+
 // runRoot drives the real command tree the way the binary does, so a test sees
 // the same exit code a caller would. The fourth return value is what
 // ExecuteWith itself printed, which is how a test tells a silent error from one
@@ -165,7 +174,7 @@ func runRoot(t *testing.T, args ...string) (code ExitCode, stdout, stderr, top s
 	var out, errOut, topBuf bytes.Buffer
 	root.SetOut(&out)
 	root.SetErr(&errOut)
-	root.SetArgs(args)
+	root.SetArgs(explicitArgs(args))
 	code = ExecuteWith(root, &topBuf)
 	return code, out.String(), errOut.String(), topBuf.String()
 }
@@ -177,7 +186,7 @@ func runCmd(t *testing.T, cmd *cobra.Command, args ...string) (error, string, st
 	var out, errOut bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&errOut)
-	cmd.SetArgs(args)
+	cmd.SetArgs(explicitArgs(args))
 	return cmd.Execute(), out.String(), errOut.String()
 }
 
@@ -296,5 +305,50 @@ func writeLiveFile(t *testing.T, raw string) {
 	t.Helper()
 	if err := os.WriteFile(mustPath(ccpath.CredentialsPath()), []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A nil args slice is not "no arguments" to cobra: it means "not set", and
+// Execute then falls back to os.Args[1:] — which under `go test` is the test
+// binary's own command line. Every test that supplies no arguments goes through
+// that path, and it works today only because pflag happens to swallow -test.*
+// flags. Anything else sitting on that line is parsed as ccdad's arguments.
+func TestNoArgumentsDoesNotInheritTheTestBinarysCommandLine(t *testing.T) {
+	isolate(t)
+	saved := os.Args
+	t.Cleanup(func() { os.Args = saved })
+	os.Args = []string{saved[0], "list", "--json"}
+
+	code, out, _, top := runRoot(t)
+	if code != ExitOK {
+		t.Fatalf("exit = %d (%s), want 0 for a bare ccdad", code, top)
+	}
+	if strings.Contains(out, "schemaVersion") {
+		t.Fatalf("stdout = %q, want nothing on it: the helper ran the test binary's own command line instead of the empty one it was given", out)
+	}
+}
+
+// runCmd's half of the same fallback, which the test above cannot reach: that
+// one drives the root, and every command test in this package that supplies no
+// arguments goes through runCmd instead. Reverting only runCmd's line leaves
+// the rest of the suite green, so without this the fix is half-pinned.
+func TestRunCmdWithNoArgumentsDoesNotInheritTheTestBinarysCommandLine(t *testing.T) {
+	isolate(t)
+	stubEnvironment(t, true, false)
+	stubProfile(t, func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, profileJSON("acct-1", "a@example.com"))
+	})
+	rec := stubLogin(t, loginToken("acct-1", "a@example.com", "RT-1"))
+	saved := os.Args
+	t.Cleanup(func() { os.Args = saved })
+	// A flag `add` really has, so the fallback would change the answer rather
+	// than being swallowed the way pflag swallows -test.* today.
+	os.Args = []string{saved[0], "--console"}
+
+	if err, _, _ := runCmd(t, newAddCmd()); err != nil {
+		t.Fatal(err)
+	}
+	if got := rec.last(t).Surface; got != oauth.SurfaceClaudeAI {
+		t.Fatalf("Surface = %v, want the subscription surface: runCmd ran the test binary's own command line instead of the empty one it was given", got)
 	}
 }
