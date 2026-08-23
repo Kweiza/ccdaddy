@@ -13,11 +13,11 @@ import (
 
 // Options configures the daemon process.
 //
-// Tick and Snapshot are injected because the engine they belong to — the poller
-// fleet, the scheduler, the switch executor — does not exist yet, and composing
-// this process afterwards, alongside all three, is how shutdown correctness gets
-// cut. Both have working zero values, so the process is complete and testable
-// before any of that lands.
+// Tick and Snapshot are injected rather than built here, because composing this
+// process alongside the engine they belong to — the poller fleet, the
+// scheduler, the switch executor — is how shutdown correctness gets cut. Both
+// have working zero values, so the process is complete and testable without any
+// of them. EngineOptions below is what wires in the real engine.
 type Options struct {
 	// Tick is the body of one iteration. It gets a context that is cancelled on
 	// shutdown as a courtesy; the loop waits for it to return regardless.
