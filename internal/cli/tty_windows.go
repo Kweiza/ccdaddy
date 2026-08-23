@@ -24,6 +24,13 @@ import (
 // restored on exit. A console object outlives the process that wrote to it, and
 // leaving VT processing ON is what every terminal ships with anyway; putting it
 // back would mean racing every other process sharing that console.
+//
+// The already-set early return is the one line here that no test reaches.
+// Deleting it leaves SetConsoleMode writing the value the mode already holds,
+// which every assertion in tty_windows_test.go still passes; it saves a syscall
+// and nothing observable rests on it. The other two branches do rest on
+// assertions there — in particular the OR, without which this would clear
+// ENABLE_PROCESSED_OUTPUT and ENABLE_WRAP_AT_EOL_OUTPUT on its way past.
 func setConsoleVT(f *os.File) error {
 	if f == nil {
 		return nil
