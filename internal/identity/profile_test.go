@@ -8,6 +8,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/Kweiza/ccdaddy/internal/oauth"
 )
 
 func testClient(t *testing.T, h http.HandlerFunc) *Client {
@@ -208,9 +211,25 @@ func TestFetchProfileCancelledContext(t *testing.T) {
 
 // The client carries its own deadline so a caller passing context.Background()
 // cannot hang forever on a stalled endpoint.
-func TestNewClientIsBounded(t *testing.T) {
-	if got := NewClient().HTTP.Timeout; got <= 0 {
-		t.Fatalf("NewClient().HTTP.Timeout = %v, want a bounded deadline", got)
+// The deadline is asserted as a VALUE, not merely as "bounded". Ten seconds is
+// a fidelity constant, not a taste: it is the `timeout:1e4` Claude Code's own
+// profile call passes (function KLt in the 2.1.238 bundle). Asserting `> 0`
+// left widening it to an hour green, and the literal is written out here rather
+// than read from profileTimeout for the reason const_test.go gives — comparing
+// a constant against itself would edit both sides at once.
+func TestNewClientMatchesClaudeCodesProfileTimeout(t *testing.T) {
+	if got := NewClient().HTTP.Timeout; got != 10*time.Second {
+		t.Fatalf("NewClient().HTTP.Timeout = %v, want 10s", got)
+	}
+}
+
+// Every other test in this file overwrites BaseURL to reach a local server, so
+// the default — the one a real `ccdad add` uses — was written by nothing and
+// read by nothing. An empty default would send the profile request to a
+// relative path and resolve every account to nobody.
+func TestNewClientDefaultsToTheAnthropicAPI(t *testing.T) {
+	if got := NewClient().BaseURL; got != oauth.APIBaseURL {
+		t.Fatalf("NewClient().BaseURL = %q, want %q", got, oauth.APIBaseURL)
 	}
 }
 
