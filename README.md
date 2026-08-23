@@ -1,3 +1,8 @@
+<p align="center">
+  <img src="assets/ccdaddy.png" width="760"
+       alt="Pixel-art wordmark reading CCDaddy (ccdad) over an amber terminal frame. Below it: four small Claude characters crowded together and, off to the right, a larger one in a hat and moustache pointing at them. The caption reads 'Hey, quota's down again? You were Yap-ping!' — the Daddy Daemon.">
+</p>
+
 # ccdaddy
 
 **Claude Code Daemon: Always Drilling, Don't Yap.** A single static binary,
@@ -5,15 +10,15 @@
 one *before* a rate limit stops you.
 
 [![ci](https://github.com/Kweiza/ccdaddy/actions/workflows/ci.yml/badge.svg)](https://github.com/Kweiza/ccdaddy/actions/workflows/ci.yml)
-[![release](https://img.shields.io/github/v/release/Kweiza/ccdaddy?include_prereleases&sort=semver)](https://github.com/Kweiza/ccdaddy/releases)
+[![release](https://img.shields.io/github/v/release/Kweiza/ccdaddy?sort=semver)](https://github.com/Kweiza/ccdaddy/releases)
 [![license](https://img.shields.io/github/license/Kweiza/ccdaddy)](LICENSE)
 
 ```console
 $ ccdad list
-  IDX  ACCOUNT                  TYPE          TIER
-* 1    work@example.com (work)  subscription  max
-  2    personal@example.com     subscription  pro
-  3    ci@example.org (ci)      api-key       -
+  IDX  ACCOUNT                  TYPE          TIER  LEFT  RESETS IN
+* 1    work@example.com (work)  subscription  max   18%   1h 14m
+  2    personal@example.com     subscription  pro   83%   4d 3h
+  3    ci@example.org (ci)      api-key       -     ?     -
 
 $ ccdad status
 Daemon:  running  pid 48213  up 2h 6m
@@ -82,24 +87,6 @@ irm https://raw.githubusercontent.com/Kweiza/ccdaddy/main/install.ps1 | iex
 
 PowerShell 7 needs neither line.
 
-> [!IMPORTANT]
-> **Those two commands do not work yet.** The only published build is
-> `v0.1.0-rc1`, which is a *prerelease*, and GitHub deliberately does not
-> answer `releases/latest` for a prerelease — so both installers abort with
-> "cannot download the checksum file", which is them failing closed rather
-> than installing something unverified. Until a stable tag is cut, pin the
-> version:
->
-> ```sh
-> curl -fsSL https://raw.githubusercontent.com/Kweiza/ccdaddy/main/install.sh \
->   | CCDAD_VERSION=v0.1.0-rc1 bash
-> ```
->
-> ```powershell
-> $env:CCDAD_VERSION = 'v0.1.0-rc1'
-> irm https://raw.githubusercontent.com/Kweiza/ccdaddy/main/install.ps1 | iex
-> ```
-
 ### Installer options
 
 Both installers take their options from the environment, because `curl | bash`
@@ -156,7 +143,7 @@ Not `rm` — there is a daemon to stop and a credential directory to clear.
 ```sh
 ccdad add work          # opens a browser; 'work' becomes the alias
 ccdad add personal
-ccdad list              # who is managed
+ccdad list              # who is managed, and how much quota each has left
 ccdad which             # who Claude Code is logged in as right now
 ccdad switch personal   # move the live login
 ccdad daemon start      # watch quota and switch automatically from now on
@@ -181,7 +168,7 @@ is a usage error rather than a silent hang. Pass the token, or `-`.
 |---|---|
 | `ccdad add [ALIAS]` | Log in through the browser and manage the account |
 | `ccdad add-token [TOKEN\|-]` | Register an `sk-ant-oat…` setup token or an `sk-ant-api…` key |
-| `ccdad list` | List managed accounts: index, alias, kind and plan tier |
+| `ccdad list` | List managed accounts and how much quota each has left |
 | `ccdad which` | Show which managed account Claude Code is logged in as |
 | `ccdad switch [ACCOUNT]` | Make an account the live login |
 | `ccdad run <ACCOUNT> [args…]` | Start a Claude Code session as an account, without changing the live login |
@@ -212,8 +199,9 @@ ccdad switch --strategy headroom     # let the engine choose
 ```
 
 With no account, `--strategy` runs the same ranking and the same anti-flap
-margins the daemon uses, against the same on-disk usage cache. It never polls —
-run `ccdad daemon start` first, so there is something fresh to choose on.
+margins the daemon uses, against the same on-disk usage cache. It never polls
+on its own — run the daemon, or `ccdad list --refresh`, so there is something
+fresh to choose on.
 
 ## How the switch stays safe
 
