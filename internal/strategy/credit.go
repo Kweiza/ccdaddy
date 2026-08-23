@@ -79,10 +79,12 @@ type CreditReason uint8
 const (
 	// CreditAllowed: there is armed room and both opt-ins are in place.
 	CreditAllowed CreditReason = iota
-	// CreditSubscriptionNotExhausted: it is not the credit pool's turn. Steps 1
-	// and 2 of the gate order — the credit pool is consulted only once the
-	// subscription pool is EXHAUSTED, not merely once it has failed hysteresis.
-	CreditSubscriptionNotExhausted
+	// CreditMainPoolNotExhausted: it is not the credit pool's turn. Steps 1 and
+	// 2 of the gate order -- the last-resort credit pool is consulted only once
+	// the MAIN pool is EXHAUSTED, not merely once its best candidate has failed
+	// hysteresis. The main pool is the subscription accounts and the credit
+	// seats marked primary.
+	CreditMainPoolNotExhausted
 	// CreditNotOptedIn: max_auto_spend is 0, which is the default.
 	CreditNotOptedIn
 	// CreditAccountDisabled: the account's own overage switch is off.
@@ -98,12 +100,19 @@ const (
 	CreditCeilingInvalid
 )
 
+// CreditSubscriptionNotExhausted is CreditMainPoolNotExhausted under the name
+// it had while the main pool was subscriptions and nothing else.
+//
+// Deprecated: use CreditMainPoolNotExhausted. Kept for one release for the same
+// reason SubscriptionExhausted is.
+const CreditSubscriptionNotExhausted = CreditMainPoolNotExhausted
+
 func (r CreditReason) String() string {
 	switch r {
 	case CreditAllowed:
 		return "allowed"
-	case CreditSubscriptionNotExhausted:
-		return "subscription quota remains"
+	case CreditMainPoolNotExhausted:
+		return "the main pool still has room"
 	case CreditNotOptedIn:
 		return "max_auto_spend is 0"
 	case CreditAccountDisabled:
@@ -138,27 +147,38 @@ type Decision struct {
 	DisabledReason string
 }
 
-// CreditGate is the last two steps of the credit gate, applied to one credit
-// account: when the configured ceiling is 0, its default, answer blocked —
-// exit 4 and a notification — rather than switch; and refuse when spend cannot
-// be read.
+// CreditGate is the last two steps of the credit gate, applied to one
+// LAST-RESORT credit account: when the configured ceiling is 0, its default,
+// answer blocked — exit 4 and a notification — rather than switch; and refuse
+// when spend cannot be read.
 //
-// subscriptionExhausted carries the first two steps — look for a target in the
-// subscription pool, and reach the credit pool only once that pool is
-// exhausted. It is supplied by the ranking pass: it must mean the subscription
-// pool has no viable target left, not that the best subscription candidate
-// merely failed hysteresis.
+// mainPoolExhausted carries the first two steps — look for a target in the
+// main pool, and reach the credit pool only once that pool is exhausted. It is
+// supplied by the ranking pass: it must mean the main pool has no viable target
+// left, not that its best candidate merely failed hysteresis.
+//
+// A PRIMARY credit account never reaches this function, and that is structural
+// rather than a branch: Rank puts one in Result.Order, so it is not in the pool
+// Decide walks and armedRoom is not computed for it. Removing the ceiling for
+// that one account is correct because max_auto_spend exists to bound OVERAGE --
+// spending beyond quota that is already paid for -- and a seat billed only in
+// credits has no such quota, so the ceiling would not be bounding an overage,
+// it would be refusing the account's only meter. For every other credit
+// account it is still two independent opt-ins: the account's own extra-usage
+// switch, checked below, and a ceiling a human wrote into config.toml. A
+// primary seat has two of its own -- the same extra-usage switch on the wire,
+// and a human typing `ccdad primary <ACCOUNT> on` at a named account.
 //
 // ceiling is passed in rather than read from config, so this package never
 // touches the config loader: it is max_auto_spend, 0 is its default, and Decide
 // is what copies it from Config.MaxAutoSpend.
-func CreditGate(e usage.ExtraUsage, ceiling float64, subscriptionExhausted bool) Decision {
+func CreditGate(e usage.ExtraUsage, ceiling float64, mainPoolExhausted bool) Decision {
 	d := Decision{DisabledReason: e.DisabledReason}
 
-	if !subscriptionExhausted {
+	if !mainPoolExhausted {
 		// Not actionable: there is still paid-for quota to use, so there is
 		// nothing here for the user to fix.
-		d.Reason = CreditSubscriptionNotExhausted
+		d.Reason = CreditMainPoolNotExhausted
 		return d
 	}
 
