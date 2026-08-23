@@ -19,6 +19,8 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/config"
 	"github.com/Kweiza/ccdaddy/internal/credhome"
 	"github.com/Kweiza/ccdaddy/internal/daemon"
+	"github.com/Kweiza/ccdaddy/internal/identity"
+	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
@@ -131,19 +133,31 @@ func newDoctorCmd() *cobra.Command {
 func runChecks() []check {
 	root, rootErr := ccpath.StoreHome()
 	if rootErr != nil {
-		// Every other check derives its path from this one, so there is nothing
-		// further to report and reporting each of them as "skipped" would bury
-		// the single fact that explains all of them. The fixed order the rest of
-		// this function keeps is a property of a run that got that far.
+		// Almost every other check derives its path from this one, so there is
+		// nothing further to report and reporting each of them as "skipped"
+		// would bury the single fact that explains all of them. The three that
+		// do NOT derive from it — path, api-key and environment — are suppressed
+		// here on the same argument rather than a different one: StoreHome fails
+		// when no home directory can be resolved at all, which is the same
+		// condition that leaves a binary off PATH and Claude Code's own config
+		// unlocatable, so their answers would be three more symptoms above the
+		// one cause. The fixed order the rest of this function keeps is a
+		// property of a run that got that far.
 		return []check{{"store", levelFail, rootErr.Error()}}
 	}
 	storeCheck, storeUsable := checkStore(root)
 
 	live, liveErr := cclink.Load()
+	// Read, never created: LoadGlobalConfig opens the file read-only and a
+	// missing one resolves to an empty config. This file's rule is that the
+	// probe must not CREATE what it probes, which is why store.Open is refused
+	// three lines down and this is not.
+	cfg, cfgErr := cclink.LoadGlobalConfig()
 	report, probeErr := observeDaemon()
 
 	return []check{
 		storeCheck,
+		checkPath(),
 		checkPermissions(root, storeUsable),
 		checkLocks(report, probeErr),
 		checkPidfile(storeUsable),
@@ -152,11 +166,13 @@ func runChecks() []check {
 		checkEngineState(storeUsable),
 		checkConfig(storeUsable),
 		checkSessions(root, storeUsable),
+		checkProfiles(root, storeUsable),
 		checkCredentialHome(report),
 		checkClaudeCode(live, liveErr),
 		checkCredentialKeys(live, liveErr),
 		checkKeychain(),
 		checkEnvironment(),
+		checkAPIKey(cfg, cfgErr),
 	}
 }
 
@@ -703,16 +719,40 @@ func checkKeychain() check {
 // checkEnvironment names the variables that make a switch pointless.
 //
 // Claude Code prefers CLAUDE_CODE_OAUTH_TOKEN over the stored login outright, so
-// with it set a switch writes a credentials file nothing reads. ANTHROPIC_API_KEY
-// competes with apiKeyHelper and the stored primaryApiKey in an order ccdad does
-// not model, which is also why `which` refuses to attribute it. switch.go warns
-// when the user tries; this says it first.
+// with it set a switch writes a credentials file nothing reads. The list is the
+// four ccdad's own `displacingAuth` already names, minus the apiKeyHelper
+// setting, which is not a variable:
+//
+//   - ANTHROPIC_AUTH_TOKEN, which the bundle carries beside CLAUDE_CODE_OAUTH_TOKEN
+//     in the list it attributes a session's credential to ("from
+//     ANTHROPIC_AUTH_TOKEN", "from CLAUDE_CODE_OAUTH_TOKEN").
+//   - ANTHROPIC_API_KEY.
+//   - CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR, which Claude Code reports under the
+//     SAME source name as ANTHROPIC_API_KEY, which is why identity's
+//     DisplacesOAuth puts it on that side too.
+//
+// The two this check does NOT name are files rather than variables — the
+// apiKeyHelper setting and primaryApiKey in ~/.claude.json — and which source
+// actually wins is a resolution rather than a list. checkAPIKey answers that,
+// and the two are read together. Reporting a variable here that the resolver
+// then reports as not winning is deliberate: this check answers "is anything
+// set that could defeat a switch", which is the question a user brings.
+//
+// switch.go warns about CLAUDE_CODE_OAUTH_TOKEN when the user tries, and only
+// about that one — the fuller list is `displacingAuth`, which runs AFTER an
+// API-key activation. For the other three, this is the only place that says so
+// before the switch rather than after it.
 //
 // The VALUES are never printed. A diagnostic is the output a user pastes into an
-// issue, and both of these are live credentials.
+// issue, and every one of these is a live credential.
 func checkEnvironment() check {
 	var hazards []string
-	for _, name := range []string{"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"} {
+	for _, name := range []string{
+		"CLAUDE_CODE_OAUTH_TOKEN",
+		"ANTHROPIC_AUTH_TOKEN",
+		"ANTHROPIC_API_KEY",
+		"CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
+	} {
 		if os.Getenv(name) != "" {
 			hazards = append(hazards, name)
 		}
@@ -746,7 +786,228 @@ func checkEnvironment() check {
 	if len(hazards) > 0 {
 		return check{"environment", levelWarn, fmt.Sprintf(
 			"%s set — Claude Code reads these instead of the credentials file, so a switch would have no effect%s",
-			strings.Join(hazards, " and "), suffix)}
+			joinAnd(hazards), suffix)}
 	}
 	return check{"environment", levelOK, "nothing set that would make a switch a no-op" + suffix}
+}
+
+// joinAnd is "a", "a and b", "a, b and c". It exists because checkEnvironment
+// now names four variables and `strings.Join(…, " and ")` reads as a chant once
+// there are more than two of them.
+func joinAnd(items []string) string {
+	switch len(items) {
+	case 0:
+		return ""
+	case 1:
+		return items[0]
+	}
+	return strings.Join(items[:len(items)-1], ", ") + " and " + items[len(items)-1]
+}
+
+// checkAPIKey answers which API key Claude Code would actually use, and whether
+// that displaces the login ccdad manages.
+//
+// checkEnvironment names the variables a user can see. This one runs identity's
+// resolver, because two of the five sources it models are not visible from the
+// environment at all — the apiKeyHelper setting, and primaryApiKey in
+// ~/.claude.json.
+//
+// Listing those five as hazards would be the wrong check, and this is the
+// reason the item that asked for one is not implemented that way. primaryApiKey
+// is the single source that does NOT displace an OAuth login — identity's
+// DisplacesOAuth reads `BE()`, which turns the gate off for the first five
+// sources and not for the stored key — and `ccdad switch` WRITES it for every
+// api-key account. A check that warned on it would warn on ccdad's own steady
+// state, on the machine of every user who has an api-key account, forever. What
+// matters is which source WINS, and whether that win makes a switch a no-op.
+//
+// It creates nothing, which is what lets it read two files the rest of this
+// command does not: LoadGlobalConfig opens read-only and resolves a missing
+// file to an empty config, and the helper probe is an os.ReadFile that skips
+// what it cannot read.
+//
+// The key is never printed, for checkEnvironment's reason.
+func checkAPIKey(cfg *cclink.GlobalConfig, cfgErr error) check {
+	// cfg is nil when the read failed, and claudeAPIKeyEnvironment takes that:
+	// the approval list and the stored key are simply absent.
+	env := claudeAPIKeyEnvironment(cfg)
+	_, source := env.Resolve()
+
+	if cfgErr != nil {
+		// Nothing else in this command reads ~/.claude.json, so an unreadable
+		// one would otherwise be invisible in the report. It is a warning
+		// rather than a failure because ccdad goes on working.
+		//
+		// The question this check exists for stays ANSWERABLE without the file,
+		// and saying "cannot tell" for both halves would be the weaker answer.
+		// Every displacing source is visible from the environment and the
+		// settings — and the one source the config carries, the stored key, is
+		// the one that never displaces. So whether a switch survives is
+		// certain; only WHICH source wins is not, because the approval list
+		// that decides between them lives in the file that could not be read.
+		if env.EnvKey != "" || env.FileDescriptorKey || env.Helper {
+			return check{"api-key", levelWarn, fmt.Sprintf(
+				"a key from the environment or an apiKeyHelper resolves ahead of the login, so a switch "+
+					"would write a file nothing reads. Which of them wins cannot be said, because %v", cfgErr)}
+		}
+		return check{"api-key", levelWarn, fmt.Sprintf(
+			"nothing that displaces a login is set, so a switch takes effect — but %v, so ccdad cannot "+
+				"say whether a key is stored in it", cfgErr)}
+	}
+
+	// The one state where the answer depends on how Claude Code is started, and
+	// it is reported rather than resolved: claudeAPIKeyEnvironment hard-codes
+	// Interactive because ccdad is being asked about a session that has not
+	// started yet, and picking one of the two answers would be wrong half the
+	// time. noteEnvKeyApproval says the same thing at the moment of a switch.
+	approval := ""
+	if env.EnvKeyNeedsApproval() {
+		approval = ". ANTHROPIC_API_KEY is set but is not in Claude Code's approved list, so an interactive " +
+			"session refuses it while `claude -p` uses it outright — the answer above is the interactive one"
+	}
+
+	switch {
+	case source == identity.APIKeyNone:
+		return check{"api-key", levelOK,
+			"no API key resolves, so Claude Code authenticates with the login in the credentials file" + approval}
+	case source.DisplacesOAuth():
+		return check{"api-key", levelWarn, fmt.Sprintf(
+			"Claude Code would take its key %s, and a key from there makes it ignore the credentials file "+
+				"entirely — so a switch would write a login nothing reads%s", "from "+source.String(), approval)}
+	}
+	// APIKeyManaged: the source ccdad itself writes for an api-key account.
+	// Saying so is the point rather than staying silent — it is the state a
+	// working api-key account leaves behind, and a user who found it in
+	// ~/.claude.json needs to be told it is not the thing breaking their switch.
+	return check{"api-key", levelOK, fmt.Sprintf(
+		"Claude Code would use %s, which does NOT displace a login — a switch still takes effect%s",
+		source.String(), approval)}
+}
+
+// checkProfiles reports a `ccdad run --full-profile` profile whose account is
+// gone.
+//
+// <store>/profiles/<uuid> is not scratch space: `ccdad run --full-profile`
+// writes an API-key account's primaryApiKey into that profile's own Claude Code
+// config, so an orphan is a credential nothing else on this machine would ever
+// mention again. `ccdad remove` deletes the profile and `uninstall` takes the
+// whole store, so the path that CREATES orphans going forward is closed. What
+// is left is a store restored from an export, an account removed by an older
+// ccdad, or a uuid that changed.
+//
+// It is a SET DIFFERENCE and not a count, and that is the whole design. A
+// profile whose account still exists is legitimate persistent state and is not
+// reported at all; a report that counted directories would tell every user of
+// --full-profile that their working setup is a problem.
+//
+// The account list comes from store.AccountsAt, never store.Open: Open does an
+// MkdirAll and this file's rule is that the probe must not create what it
+// probes. TestDoctorCreatesNothing is the test that keeps it that way.
+func checkProfiles(root string, usable bool) check {
+	if !usable {
+		return check{"profiles", levelSkipped, "there is no store to check"}
+	}
+	container := filepath.Join(root, ProfilesDirName)
+	entries, err := os.ReadDir(container)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			// The container is created by `run`, never by this probe.
+			return check{"profiles", levelOK, "no --full-profile profiles are stored here"}
+		}
+		return check{"profiles", levelFail, err.Error()}
+	}
+
+	accounts, err := store.AccountsAt(root)
+	if err != nil {
+		// Without the account list there is no set to difference against, and
+		// answering "no orphans" from a failed read would be the lie this check
+		// exists to remove.
+		return check{"profiles", levelFail, fmt.Sprintf(
+			"the profiles under %s cannot be matched against the account list: %v", container, err)}
+	}
+	known := make(map[string]struct{}, len(accounts))
+	for _, a := range accounts {
+		known[a.UUID] = struct{}{}
+	}
+
+	var orphans []string
+	for _, e := range entries {
+		// checkSessions's rule, for the same reason: Claude Code's legacy
+		// refresh lock is a directory named after its neighbour with ".lock"
+		// appended, and counting one as a profile would report an orphan for
+		// every profile in daily use.
+		if !e.IsDir() || strings.HasSuffix(e.Name(), ".lock") {
+			continue
+		}
+		if _, ok := known[e.Name()]; ok {
+			continue
+		}
+		orphans = append(orphans, e.Name())
+	}
+	if len(orphans) == 0 {
+		return check{"profiles", levelOK, "every profile here belongs to an account this store still has"}
+	}
+	sort.Strings(orphans)
+
+	// A warning, not a failure: nothing is broken by an orphan sitting there.
+	// What it costs is a stored API key with no account left to name it, which
+	// is worth a sentence and is not something to delete on ccdad's initiative
+	// — §13's fourth open question is still open and this file still reports.
+	return check{"profiles", levelWarn, fmt.Sprintf(
+		"%d profile director%s under %s belong%s to no account this store has (%s). Each may hold that "+
+			"account's API key in its own Claude Code config; `ccdad remove` no longer leaves these, so they "+
+			"are from an older ccdad, a restored export, or a uuid that changed",
+		len(orphans), plural(len(orphans), "y", "ies"), container,
+		plural(len(orphans), "s", ""), strings.Join(orphans, ", "))}
+}
+
+// checkPath answers whether typing `ccdad` in a new shell finds this binary.
+//
+// It reads TWO facts, because in the ordinary case they disagree: `ccdad
+// setup-path` writes a block into a startup file, and the PATH of the process
+// running doctor right now does not show it until a new shell has read that
+// file. Which of the two it is decides whether the advice is "open a new shell"
+// or "run a command", so reporting either alone would send half of the users
+// who need it to the wrong remedy.
+//
+// It is never a failure, and that is a judgement about doctor's taxonomy rather
+// than a convenience: ccdad invoked by its absolute path works exactly as well,
+// so this does not meet this file's bar for levelFail ("something that will
+// bite"). It is also what lets the shared doctor and §9.4 fixtures stay as they
+// are — their binary lives in a t.TempDir() that is by construction not on
+// PATH, and a warning moves neither the exit code nor `ok`.
+//
+// It creates nothing: os.Executable, the live PATH, and a read of the startup
+// files setup-path would have written.
+func checkPath() check {
+	exe, err := executablePath()
+	if err != nil {
+		return check{"path", levelWarn, fmt.Sprintf(
+			"ccdad cannot locate its own binary, so it cannot tell whether it is on PATH: %v", err)}
+	}
+	dir := filepath.Dir(exe)
+
+	// onPathList, not a hand-rolled split: it is setup-path's own decider, it
+	// matches whole components rather than substrings, and it is already tested
+	// against both platforms' rules.
+	if onPathList(os.Getenv("PATH"), dir, livePathRules) {
+		return check{"path", levelOK, fmt.Sprintf("%s is on PATH", dir)}
+	}
+
+	places, perr := pathRegistrations(dir)
+	if perr != nil {
+		// A scan that could not finish is not evidence that nothing is
+		// registered — the same rule uninstall applies to the same reader.
+		return check{"path", levelWarn, fmt.Sprintf(
+			"%s is not on this shell's PATH, and the startup files that would say otherwise could not be "+
+				"read: %v", dir, perr)}
+	}
+	if len(places) > 0 {
+		return check{"path", levelWarn, fmt.Sprintf(
+			"%s is not on THIS shell's PATH, but ccdad has registered it in %s — open a new shell, or "+
+				"source that file",
+			dir, joinAnd(places))}
+	}
+	return check{"path", levelWarn, fmt.Sprintf(
+		"%s is not on PATH, so `ccdad` only works by its full path. `%s setup-path` adds it", dir, exe)}
 }

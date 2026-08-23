@@ -442,7 +442,7 @@ func TestDoctorHumanOutputNamesEveryCheck(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit %d, want 0\n%s", code, stdout)
 	}
-	for _, name := range []string{"store", "permissions", "locks", "pidfile", "status-file", "usage-cache", "engine-state", "config", "sessions", "credential-home", "claude-code", "credential-keys", "keychain", "environment"} {
+	for _, name := range []string{"store", "path", "permissions", "locks", "pidfile", "status-file", "usage-cache", "engine-state", "config", "sessions", "profiles", "credential-home", "claude-code", "credential-keys", "keychain", "environment", "api-key"} {
 		if !strings.Contains(stdout, name) {
 			t.Errorf("the human report does not mention the %s check:\n%s", name, stdout)
 		}
@@ -825,4 +825,294 @@ func TestDoctorDeletesNoKeychainItem(t *testing.T) {
 	if len(asked) != 1 {
 		t.Fatalf("the keychain was consulted %d times, want exactly one attribute lookup", len(asked))
 	}
+}
+
+// The defect this file's newest checks were written for: `environment` printed
+// "nothing set that would make a switch a no-op" while looking at two of the
+// variables that make it one, so a machine with either of the other two got a
+// diagnostic that lied on the single question a user runs doctor to answer.
+func TestDoctorNamesEveryEnvironmentVariableThatDefeatsASwitch(t *testing.T) {
+	for _, name := range []string{"ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR"} {
+		t.Run(name, func(t *testing.T) {
+			isolate(t)
+			seedHealthyMachine(t)
+			t.Setenv(name, "the-live-credential")
+
+			_, r, _ := runDoctor(t)
+			detail := r.detail(t, "environment")
+			if got := r.level(t, "environment"); got != "warn" {
+				t.Errorf("environment = %q with %s set, want warn: %s", got, name, detail)
+			}
+			if !strings.Contains(detail, name) {
+				t.Errorf("the environment check does not name %s: %s", name, detail)
+			}
+			// Same rule as the two variables that were already covered: this is
+			// output a user pastes into an issue.
+			if strings.Contains(detail, "the-live-credential") {
+				t.Errorf("doctor printed a live credential: %s", detail)
+			}
+		})
+	}
+}
+
+// An apiKeyHelper is one of the two sources that are not environment variables
+// at all, so no widening of `environment` could ever have reached it. It
+// displaces the login outright, which makes it the loudest of the five.
+func TestDoctorReportsAnAPIKeyHelperThatDisplacesTheLogin(t *testing.T) {
+	claude := isolate(t)
+	seedHealthyMachine(t)
+	if err := os.WriteFile(filepath.Join(claude, "settings.json"),
+		[]byte(`{"apiKeyHelper":"/usr/local/bin/get-key"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, r, _ := runDoctor(t)
+	detail := r.detail(t, "api-key")
+	if got := r.level(t, "api-key"); got != "warn" {
+		t.Errorf("api-key = %q with an apiKeyHelper configured, want warn: %s", got, detail)
+	}
+	if !strings.Contains(detail, "apiKeyHelper") {
+		t.Errorf("the api-key check does not name the helper: %s", detail)
+	}
+}
+
+// The reason this check runs identity's resolver instead of listing the five
+// sources it models. `ccdad switch` WRITES primaryApiKey for every api-key
+// account, and it is the one source that does not displace an OAuth login — so
+// a hazard list would warn about ccdad's own steady state, on the machine of
+// every user who has an api-key account, forever.
+func TestDoctorDoesNotWarnAboutTheKeyCcdadItselfStores(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	if err := os.WriteFile(mustPath(ccpath.GlobalConfigPath()),
+		[]byte(`{"primaryApiKey":"sk-ant-api-STORED"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	code, r, _ := runDoctor(t)
+	detail := r.detail(t, "api-key")
+	if got := r.level(t, "api-key"); got != "ok" {
+		t.Errorf("api-key = %q for the key ccdad itself stores, want ok: %s", got, detail)
+	}
+	if strings.Contains(detail, "sk-ant-api-STORED") {
+		t.Errorf("doctor printed the stored key: %s", detail)
+	}
+	if code != ExitOK {
+		t.Errorf("exit %d for an ordinary api-key account, want 0", code)
+	}
+}
+
+// The one state where the answer depends on how Claude Code is started. doctor
+// is asked about a session that has not started yet, so it reports the split
+// rather than picking one of the two and being wrong half the time.
+func TestDoctorReportsTheUnapprovedEnvironmentKeyBothWays(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-api03-unapproved")
+
+	_, r, _ := runDoctor(t)
+	detail := r.detail(t, "api-key")
+	if !strings.Contains(detail, "claude -p") {
+		t.Errorf("the api-key check does not say the two start modes disagree: %s", detail)
+	}
+	if strings.Contains(detail, "sk-ant-api03-unapproved") {
+		t.Errorf("doctor printed a live key: %s", detail)
+	}
+}
+
+// <store>/profiles/<uuid> holds an api-key account's primaryApiKey in its own
+// Claude Code config. An orphan is therefore a credential that nothing else on
+// the machine would ever mention again.
+func TestDoctorReportsAProfileWhoseAccountIsGone(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	root := mustPath(ccpath.StoreHome())
+	if err := os.MkdirAll(filepath.Join(root, ProfilesDirName, "uuid-gone"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	code, r, _ := runDoctor(t)
+	detail := r.detail(t, "profiles")
+	if got := r.level(t, "profiles"); got != "warn" {
+		t.Errorf("profiles = %q with an orphan, want warn: %s", got, detail)
+	}
+	if !strings.Contains(detail, "uuid-gone") {
+		t.Errorf("the orphaned profile is not named: %s", detail)
+	}
+	if code != ExitOK {
+		t.Errorf("exit %d for an orphaned profile, want 0", code)
+	}
+}
+
+// This is what makes the check a set difference rather than a count of
+// directories: a profile whose account still exists is legitimate persistent
+// state, and reporting it would tell every `--full-profile` user that their
+// working setup is a problem.
+func TestDoctorDoesNotReportAProfileInDailyUse(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	root := mustPath(ccpath.StoreHome())
+	// seedHealthyMachine stores uuid-a, so this profile has an account.
+	if err := os.MkdirAll(filepath.Join(root, ProfilesDirName, "uuid-a"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Claude Code's legacy refresh lock is a directory named after its
+	// neighbour with ".lock" appended, created BESIDE it. Counting it would
+	// report an orphan for every profile in daily use.
+	if err := os.MkdirAll(filepath.Join(root, ProfilesDirName, "uuid-a.lock"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	_, r, _ := runDoctor(t)
+	if got := r.level(t, "profiles"); got != "ok" {
+		t.Errorf("profiles = %q for a profile whose account exists, want ok: %s", got, r.detail(t, "profiles"))
+	}
+}
+
+// "I typed ccdad and got command not found" is the class doctor answers, and it
+// now has a named remedy. It is never a FAILURE: ccdad invoked by its absolute
+// path works exactly as well, which is also what lets the shared fixtures keep
+// building their binary in a t.TempDir() that is by construction off PATH.
+func TestDoctorSaysTheBinaryIsNotOnPath(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	exe := fakeBinary(t)
+	stubExecutable(t, exe)
+	t.Setenv("PATH", t.TempDir())
+
+	code, r, _ := runDoctor(t)
+	detail := r.detail(t, "path")
+	if got := r.level(t, "path"); got != "warn" {
+		t.Errorf("path = %q for a binary off PATH, want warn: %s", got, detail)
+	}
+	if !strings.Contains(detail, "setup-path") {
+		t.Errorf("the path check does not name the remedy: %s", detail)
+	}
+	if code != ExitOK {
+		t.Errorf("exit %d for a binary off PATH, want 0 — this is not a failure", code)
+	}
+}
+
+func TestDoctorSaysTheBinaryIsOnPath(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	exe := fakeBinary(t)
+	stubExecutable(t, exe)
+	t.Setenv("PATH", filepath.Dir(exe))
+
+	_, r, _ := runDoctor(t)
+	if got := r.level(t, "path"); got != "ok" {
+		t.Errorf("path = %q for a binary on PATH, want ok: %s", got, r.detail(t, "path"))
+	}
+}
+
+// The two facts disagree in the ordinary case, which is why both are read:
+// `ccdad setup-path` writes a block a NEW shell reads, and the process running
+// doctor cannot see it. Reporting only the live PATH would tell a user to run
+// the command they have already run.
+func TestDoctorSeparatesARegisteredPathEntryFromALiveOne(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the registration is a registry value there; this writes an rc file")
+	}
+	isolate(t)
+	seedHealthyMachine(t)
+	exe := fakeBinary(t)
+	stubExecutable(t, exe)
+	t.Setenv("PATH", t.TempDir())
+
+	rc := filepath.Join(mustPath(ccpath.Home()), ".bashrc")
+	body := setupPathBegin + "\nexport PATH=\"" + filepath.Dir(exe) + ":$PATH\"\n" + setupPathEnd + "\n"
+	if err := os.WriteFile(rc, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, r, _ := runDoctor(t)
+	detail := r.detail(t, "path")
+	if got := r.level(t, "path"); got != "warn" {
+		t.Errorf("path = %q, want warn: %s", got, detail)
+	}
+	if !strings.Contains(detail, rc) {
+		t.Errorf("the path check does not name where the entry is registered: %s", detail)
+	}
+	if !strings.Contains(detail, "new shell") {
+		t.Errorf("the path check does not offer the remedy that fits a registered entry: %s", detail)
+	}
+	if strings.Contains(detail, "setup-path` adds it") {
+		t.Errorf("the path check told a user who has already run setup-path to run it again: %s", detail)
+	}
+}
+
+// Without the account list there is no set to difference against, and answering
+// "no orphans" out of a failed read would be exactly the lie this check exists
+// to remove — it would report a machine full of stranded API keys as clean.
+func TestDoctorRefusesToClearTheProfilesItCouldNotMatch(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	root := mustPath(ccpath.StoreHome())
+	if err := os.MkdirAll(filepath.Join(root, ProfilesDirName, "uuid-a"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "accounts.toml"), []byte("not toml{{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	code, r, _ := runDoctor(t)
+	if got := r.level(t, "profiles"); got != "fail" {
+		t.Errorf("profiles = %q when the account list could not be read, want fail: %s", got, r.detail(t, "profiles"))
+	}
+	if code == ExitOK {
+		t.Error("exit 0 while doctor could not answer the question it was asked")
+	}
+}
+
+// Nothing else in doctor reads ~/.claude.json, so an unreadable one used to be
+// invisible in the report. It is reported here — and the half of the answer
+// that does NOT depend on the file is still given, because saying "cannot tell"
+// for both halves would be the weaker diagnostic: every displacing source is
+// visible without the file, and the one source the file carries never displaces.
+func TestDoctorStillAnswersWithAnUnreadableClaudeConfig(t *testing.T) {
+	broken := func(t *testing.T) {
+		t.Helper()
+		if err := os.WriteFile(mustPath(ccpath.GlobalConfigPath()), []byte("{ this is not json"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("a displacing source is still certain", func(t *testing.T) {
+		claude := isolate(t)
+		seedHealthyMachine(t)
+		broken(t)
+		if err := os.WriteFile(filepath.Join(claude, "settings.json"),
+			[]byte(`{"apiKeyHelper":"/usr/local/bin/get-key"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		_, r, _ := runDoctor(t)
+		detail := r.detail(t, "api-key")
+		if got := r.level(t, "api-key"); got != "warn" {
+			t.Errorf("api-key = %q, want warn: %s", got, detail)
+		}
+		if !strings.Contains(detail, "nothing reads") {
+			t.Errorf("the check hedged on a verdict the unreadable file does not affect: %s", detail)
+		}
+	})
+
+	t.Run("and so is its absence", func(t *testing.T) {
+		isolate(t)
+		seedHealthyMachine(t)
+		broken(t)
+
+		code, r, _ := runDoctor(t)
+		detail := r.detail(t, "api-key")
+		if got := r.level(t, "api-key"); got != "warn" {
+			t.Errorf("api-key = %q, want warn: %s", got, detail)
+		}
+		if !strings.Contains(detail, "takes effect") {
+			t.Errorf("the check does not say a switch survives, which the file cannot change: %s", detail)
+		}
+		// A config ccdad cannot read is not a broken machine.
+		if code != ExitOK {
+			t.Errorf("exit %d for an unreadable ~/.claude.json, want 0", code)
+		}
+	})
 }
