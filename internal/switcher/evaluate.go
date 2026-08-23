@@ -211,6 +211,12 @@ func engineCandidates(s *store.Store, accounts []store.Account, c *usage.Cache) 
 		cand := strategy.Candidate{UUID: a.UUID, Kind: a.Kind, Disabled: a.Disabled, Primary: a.Primary}
 		if e, ok := c.Get(a.UUID); ok {
 			cand.Usage = e.Snapshot
+			// The two stamps the scheduler wrote. The pre-emptive switch
+			// projects across the gap between them, and taking it from the
+			// cache rather than from the clock is what makes that gap the
+			// engine's real blind interval — the 1800 s one a 429 earned
+			// included.
+			cand.FetchedAt, cand.NextPollAt = e.FetchedAt, e.NextPollAt
 		}
 		out = append(out, cand)
 	}
