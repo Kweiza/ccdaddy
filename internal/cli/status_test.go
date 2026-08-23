@@ -343,17 +343,22 @@ func TestTheProjectionIsJSONOnly(t *testing.T) {
 	}
 }
 
-// The pace reading is suppressed for the first 24 hours after a reset: the
-// elapsed time is tiny then, so almost any usage divides out as "far ahead" and
-// the dashboard cries wolf every Monday.
-func TestPaceIsSuppressedInTheFirstDayOfAWeeklyWindow(t *testing.T) {
+// The pace reading is suppressed for the first seventh of a window: elapsed time
+// is tiny then, so almost any usage divides out as "far ahead" and the dashboard
+// cries wolf every Monday. For a seven-day window that seventh is 24 hours; for
+// a five-hour window it is 43 minutes, which a fixed 24-hour rule could never
+// have expressed.
+func TestPaceIsSuppressedInTheFirstSeventhOfAWindow(t *testing.T) {
 	isolate(t)
 	freezeClock(t, statusNow)
 	seedAccount(t, "uuid-a", "work@example.com")
-	// The reset is six and a half days out, so only twelve hours have elapsed.
+	// The seven-day reset is six and a half days out, so twelve hours have run.
+	// The five-hour reset is four and three quarter hours out, so fifteen
+	// minutes have. Both are inside their own seventh.
 	seedUsageEntry(t, "uuid-a", usage.Entry{
 		FetchedAt: statusNow.Add(-time.Minute),
 		Snapshot: &usage.Snapshot{
+			FiveHour: window(30, statusNow.Add(4*time.Hour+45*time.Minute)),
 			SevenDay: window(30, statusNow.Add(6*24*time.Hour+12*time.Hour)),
 		},
 	})
@@ -362,12 +367,42 @@ func TestPaceIsSuppressedInTheFirstDayOfAWeeklyWindow(t *testing.T) {
 	row := accountRow(t, statusJSON(t, out), "uuid-a")
 	usageObj := row["usage"].(map[string]any)
 	if pace, ok := usageObj["pace"]; ok {
-		t.Errorf("pace was reported twelve hours into a weekly window: %v", pace)
+		t.Errorf("pace was reported inside the first seventh of both windows: %v", pace)
 	}
 
 	_, human, _, _ := runRoot(t, "status")
 	if strings.Contains(human, "ahead") {
-		t.Errorf("the table calls a twelve-hour-old window ahead of pace:\n%s", human)
+		t.Errorf("the table calls a window inside its own suppression ahead of pace:\n%s", human)
+	}
+}
+
+// A five-hour binding window carries a pace reading. This is the dashboard the
+// README shows at the top of the file, and until the suppression became a share
+// of the window rather than a fixed 24 hours the code could not produce it: a
+// five-hour window is never 24 hours old.
+func TestTheFiveHourWindowCarriesAPaceReading(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	seedAccount(t, "uuid-a", "work@example.com")
+	// Four hours into a five-hour window: 90% spent against 80% elapsed.
+	seedUsageEntry(t, "uuid-a", usage.Entry{
+		FetchedAt: statusNow.Add(-time.Minute),
+		Snapshot:  &usage.Snapshot{FiveHour: window(90, statusNow.Add(time.Hour))},
+	})
+
+	_, out, _, _ := runRoot(t, "status", "--json")
+	row := accountRow(t, statusJSON(t, out), "uuid-a")
+	pace, ok := row["usage"].(map[string]any)["pace"].(map[string]any)
+	if !ok {
+		t.Fatalf("no pace object: %v", row["usage"])
+	}
+	if _, ok := pace["five_hour"]; !ok {
+		t.Fatalf("--json carries no five_hour pace: %v", pace)
+	}
+
+	_, human, _, _ := runRoot(t, "status")
+	if !strings.Contains(human, "ahead") {
+		t.Errorf("the table does not call a five-hour window 90%% spent at 80%% elapsed ahead of pace:\n%s", human)
 	}
 }
 
