@@ -13,6 +13,7 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
+	"github.com/Kweiza/ccdaddy/internal/ccver"
 	"github.com/Kweiza/ccdaddy/internal/store"
 )
 
@@ -973,5 +974,123 @@ func TestRunFullProfileWarnsWhenAnEarlierLoginWouldMakeTheKeyInert(t *testing.T)
 	// Not deleted: the login belongs to whoever made it in there.
 	if _, err := os.Stat(filepath.Join(profile, ccpath.CredentialsFile)); err != nil {
 		t.Fatalf("the profile's existing login was removed: %v", err)
+	}
+}
+
+// The default mode's scoping is inert on Claude Code 2.1.112 and earlier, and
+// this is what the command does about it. The user's ruling was to refuse:
+// continuing runs the session as the machine's LIVE login while ccdad reports
+// success, which is the one thing this command promises not to do.
+
+// The refusal itself. It is a usage error rather than a runtime one because the
+// caller can fix it with a flag, and nothing is started — the assertion on the
+// stub is not decoration: a check placed after the launch would satisfy the
+// exit code and still have run the session as the wrong account.
+func TestRunRefusesTheDefaultModeOnAKeychainEraClaudeCode(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "u-1", "a@example.com")
+	stub := stubClaude(t, ExitOK)
+	stubClaudeInstall(t, claudeVersion(2, 1, 112), nil)
+
+	code, _, errOut, top := runRoot(t, "run", "a@example.com")
+	if code != ExitUsage {
+		t.Fatalf("exit = %d (%s / %s), want %d", code, errOut, top, ExitUsage)
+	}
+	if stub.started {
+		t.Fatal("started a session that would have run as the machine's live login")
+	}
+	message := errOut + top
+	for _, want := range []string{
+		// Why, in the terms the user can check: the variable and the release
+		// it arrived in.
+		"CLAUDE_SECURESTORAGE_CONFIG_DIR",
+		"2.1.113",
+		// Which account they thought they were getting.
+		"a@example.com",
+		// The way out that works on THIS machine, and the way out that removes
+		// the problem.
+		"--full-profile",
+	} {
+		if !strings.Contains(message, want) {
+			t.Errorf("the refusal does not say %q:\n%s", want, message)
+		}
+	}
+}
+
+// The escape hatch has to actually work, or the refusal is a dead end.
+// --full-profile scopes CLAUDE_CONFIG_DIR, which every era of Claude Code reads,
+// so it is the one mode that still isolates on such a machine.
+func TestRunFullProfileStillRunsOnAKeychainEraClaudeCode(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "u-1", "a@example.com")
+	stub := stubClaude(t, ExitOK)
+	stubClaudeInstall(t, claudeVersion(2, 1, 112), nil)
+
+	code, _, errOut, top := runRoot(t, "run", "--full-profile", "a@example.com")
+	if code != ExitOK {
+		t.Fatalf("exit = %d (%s / %s), want 0 — --full-profile is the remedy the refusal names", code, errOut, top)
+	}
+	if !stub.started {
+		t.Fatal("no session was started")
+	}
+	if _, ok := envOf(stub.spec.Env, "CLAUDE_CONFIG_DIR"); !ok {
+		t.Error("the child was not given CLAUDE_CONFIG_DIR, which is the only scoping this build honours")
+	}
+}
+
+// The releases either side of the boundary, and the unreadable case, all in one
+// table so the refusal cannot quietly widen. The 2.1.113 row is the one that
+// matters most: an off-by-one on the boundary would refuse on the very release
+// that fixed the problem, which is every current machine.
+func TestRunRefusesOnlyWhatItMeasured(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		install ccver.Install
+	}{
+		{"the release that introduced the variable", claudeVersion(2, 1, 113)},
+		{"a current release", claudeVersion(2, 1, 241)},
+		// A refusal keyed on "ccdad could not tell" would break every machine
+		// whose install ccdad cannot classify, and those machines are fine.
+		{"an install ccdad could not classify", ccver.Install{Launcher: "/opt/weird/claude", Method: ccver.MethodUnknown}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolate(t)
+			seedAccount(t, "u-1", "a@example.com")
+			stub := stubClaude(t, ExitOK)
+			stubClaudeInstall(t, tc.install, nil)
+
+			code, _, errOut, top := runRoot(t, "run", "a@example.com")
+			if code != ExitOK {
+				t.Fatalf("exit = %d (%s / %s), want 0", code, errOut, top)
+			}
+			if !stub.started {
+				t.Fatal("no session was started")
+			}
+		})
+	}
+}
+
+// The version is read from the path PATH gave, not probed independently, so the
+// verdict belongs to the binary this invocation is about to exec rather than to
+// whatever a second resolution would have found.
+func TestRunDescribesTheClaudeItIsAboutToRun(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "u-1", "a@example.com")
+	stubClaude(t, ExitOK)
+	resolved, _ := lookClaude("claude")
+
+	var asked []string
+	saved := describeClaudeInstall
+	t.Cleanup(func() { describeClaudeInstall = saved })
+	describeClaudeInstall = func(path string) ccver.Install {
+		asked = append(asked, path)
+		return ccver.Install{Launcher: path}
+	}
+
+	if code, _, errOut, top := runRoot(t, "run", "a@example.com"); code != ExitOK {
+		t.Fatalf("exit = %d (%s / %s), want 0", code, errOut, top)
+	}
+	if len(asked) != 1 || asked[0] != resolved {
+		t.Errorf("described %v, want exactly [%s] — the path the launcher resolved", asked, resolved)
 	}
 }

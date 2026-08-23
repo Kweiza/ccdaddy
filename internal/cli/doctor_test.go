@@ -11,6 +11,7 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
+	"github.com/Kweiza/ccdaddy/internal/ccver"
 	"github.com/Kweiza/ccdaddy/internal/config"
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 )
@@ -1157,4 +1158,187 @@ func TestDoctorStillAnswersWithAnUnreadableClaudeConfig(t *testing.T) {
 			t.Errorf("exit %d for an unreadable ~/.claude.json, want 0", code)
 		}
 	})
+}
+
+// The claude-version row, which is the whole point of the item this file's
+// keychain remedy was blocked on. Every case goes through stubClaudeInstall,
+// because the alternative -- letting the real probe read PATH -- makes the
+// answer depend on which Claude Code the developer happens to have, and that is
+// how the first run of the keychain test after this row landed failed.
+
+// The ordinary machine. A version doctor could not name was the defect; naming
+// it is the fix, and the method and path are named with it so a user who
+// disagrees can see which file ccdad read.
+func TestDoctorNamesTheInstalledClaudeCode(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	stubClaudeInstall(t, ccver.Install{
+		Launcher: "/home/u/.local/bin/claude",
+		Target:   "/home/u/.local/share/claude/versions/2.1.241",
+		Method:   ccver.MethodNative,
+		Version:  ccver.Version{Major: 2, Minor: 1, Patch: 241},
+		Known:    true,
+	}, nil)
+
+	code, report, _ := runDoctor(t)
+	if got := report.level(t, "claude-version"); got != "ok" {
+		t.Fatalf("claude-version = %q, want ok: %s", got, report.detail(t, "claude-version"))
+	}
+	if code != ExitOK {
+		t.Errorf("exit %d, want 0 — a current Claude Code is not a finding", code)
+	}
+	detail := report.detail(t, "claude-version")
+	for _, want := range []string{"2.1.241", "native", "/home/u/.local/bin/claude"} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("the detail does not carry %q:\n%s", want, detail)
+		}
+	}
+}
+
+// The machine ccdad cannot serve. It is a FAILURE rather than a warning, and
+// the exit code is asserted with the level for that reason: on such a build a
+// switch is a silent no-op and `ccdad run`'s default scoping is ignored, so a
+// report that came back green would be telling the user their machine is fine
+// while nothing ccdad does reaches Claude Code.
+func TestDoctorFailsOnAKeychainEraClaudeCode(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	stubClaudeInstall(t, claudeVersion(2, 1, 112), nil)
+
+	code, report, _ := runDoctor(t)
+	if got := report.level(t, "claude-version"); got != "fail" {
+		t.Fatalf("claude-version = %q, want fail: %s", got, report.detail(t, "claude-version"))
+	}
+	if code != ExitFailure {
+		t.Errorf("exit %d, want %d — only fail moves the exit code, and this is one", code, ExitFailure)
+	}
+	detail := report.detail(t, "claude-version")
+	for _, want := range []string{
+		"2.1.112",
+		// Both defeats, because they bite on different platforms: the keychain
+		// shadow only on macOS, the missing variable everywhere. A message that
+		// named one would read as inapplicable to half the affected machines.
+		"Keychain",
+		"CLAUDE_SECURESTORAGE_CONFIG_DIR",
+		// What to do, and what still works meanwhile. A failure with no
+		// remedy is the shape this file's keychain row was corrected from.
+		"2.1.113",
+		"--full-profile",
+	} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("the detail does not carry %q:\n%s", want, detail)
+		}
+	}
+}
+
+// A launcher found and not classified is neither of the two answers above, and
+// it must not be reported as either: a warn that read as "fine" would hide it,
+// and a fail would make an unclassifiable install look like a broken one.
+func TestDoctorWarnsWhenItCannotNameTheVersion(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	stubClaudeInstall(t, ccver.Install{
+		Launcher: "/opt/weird/claude",
+		Method:   ccver.MethodUnknown,
+		Why:      "/opt/weird/claude is neither a symlink into a claude/versions directory nor an npm install",
+	}, nil)
+
+	code, report, _ := runDoctor(t)
+	if got := report.level(t, "claude-version"); got != "warn" {
+		t.Fatalf("claude-version = %q, want warn: %s", got, report.detail(t, "claude-version"))
+	}
+	if code != ExitOK {
+		t.Errorf("exit %d, want 0 — ccdad not being able to classify an install is not the install being broken", code)
+	}
+	if detail := report.detail(t, "claude-version"); !strings.Contains(detail, "/opt/weird/claude") {
+		t.Errorf("the detail does not say what it could not read:\n%s", detail)
+	}
+}
+
+// No claude at all is its own row, and it is not a failure: ccdad is installed
+// before Claude Code on some machines, and a fresh one must not read as broken —
+// the judgement checkStore makes about a store that is not there yet.
+func TestDoctorWarnsWhenThereIsNoClaudeCode(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+
+	code, report, _ := runDoctor(t)
+	if got := report.level(t, "claude-version"); got != "warn" {
+		t.Fatalf("claude-version = %q, want warn: %s", got, report.detail(t, "claude-version"))
+	}
+	if code != ExitOK {
+		t.Errorf("exit %d, want 0", code)
+	}
+}
+
+// The remedy INVERTS across 2.1.113, and this is the assertion that pins it.
+// Both directions are asserted positively and negatively: the two branches are
+// both `warn` and both name the item and the command, so a test that only
+// checked the level, or only checked that its own sentence was present, would
+// pass against the branches swapped.
+func TestDoctorPicksTheKeychainRemedyForTheEraTheMachineIsOn(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		install       ccver.Install
+		want, notWant string
+	}{
+		{
+			name:    "keychain era: the item is the live login and deleting it undoes itself",
+			install: claudeVersion(2, 1, 112),
+			want:    "Do NOT delete it",
+			notWant: "nothing is broken right now",
+		},
+		{
+			name:    "after 2.1.113: nothing reads it, so removing it is cleanup",
+			install: claudeVersion(2, 1, 113),
+			want:    "nothing is broken right now",
+			notWant: "Do NOT delete it",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolate(t)
+			seedHealthyMachine(t)
+			stubClaudeInstall(t, tc.install, nil)
+			stubKeychain(t, true, cclink.KeychainItem{
+				Service: "Claude Code-credentials-aa3d8c96",
+				Account: "tester",
+			}, nil)
+
+			_, report, _ := runDoctor(t)
+			detail := report.detail(t, "keychain")
+			if !strings.Contains(detail, tc.want) {
+				t.Errorf("the detail does not carry %q:\n%s", tc.want, detail)
+			}
+			if strings.Contains(detail, tc.notWant) {
+				t.Errorf("the detail carries the OTHER era's remedy %q:\n%s", tc.notWant, detail)
+			}
+			// The version is named in the remedy itself. "An older Claude Code"
+			// is not actionable; the number ccdad read is.
+			if !strings.Contains(detail, tc.install.Version.String()) {
+				t.Errorf("the remedy does not say which Claude Code it applies to:\n%s", detail)
+			}
+		})
+	}
+}
+
+// The keychain-era remedy leads with the cost and does NOT lead with the
+// command, which is the property the row was corrected for once already. On this
+// machine the deletion destroys the live login and reverts within hours, so
+// anyone who reads far enough to copy the invocation has necessarily read that
+// first.
+func TestTheKeychainEraRemedyNamesItsCostBeforeItsCommand(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	stubClaudeInstall(t, claudeVersion(2, 1, 100), nil)
+	stubKeychain(t, true, cclink.KeychainItem{Service: "Claude Code-credentials-aa3d8c96", Account: "tester"}, nil)
+
+	_, report, _ := runDoctor(t)
+	detail := report.detail(t, "keychain")
+	cost, cmd := strings.Index(detail, "Do NOT delete it"), strings.Index(detail, "delete-generic-password")
+	if cost < 0 || cmd < 0 {
+		t.Fatalf("the detail is missing the caveat or the command:\n%s", detail)
+	}
+	if cost > cmd {
+		t.Errorf("the command is offered before its caveat is named:\n%s", detail)
+	}
 }
