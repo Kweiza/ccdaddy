@@ -26,8 +26,9 @@ var errSilent = errors.New("")
 //
 // §9.4 is one rule for every read command rather than a habit each of them
 // keeps, so it is asserted across the whole command tree in
-// json_contract_test.go — including that this function is the thing every
-// document comes out of.
+// json_contract_test.go — including that every document has the shape this
+// function gives it, which is how a command that stopped coming through here
+// gets noticed.
 func writeJSON(cmd *cobra.Command, payload any) error {
 	enc := json.NewEncoder(cmd.OutOrStdout())
 	enc.SetIndent("", "  ")

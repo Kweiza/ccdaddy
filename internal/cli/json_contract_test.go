@@ -155,6 +155,20 @@ func jsonContractCases() []jsonContractCase {
 		want:  ExitProbeNegative,
 		keys:  []string{"daemon"},
 	}, {
+		path: "daemon status",
+		name: "daemon status/cannot tell",
+		args: []string{"--json"},
+		// The third answer, and the one §9.3 split 5 off from 1 for: a lock
+		// that cannot be probed is not "no daemon". Nothing else in the package
+		// reaches this command's --json branch for it, so without this row the
+		// arm that keeps the answer silent AND non-zero is unexecuted code.
+		setup: func(t *testing.T) {
+			t.Helper()
+			stubDaemon(t, daemon.Report{State: daemon.DaemonUnknown}, daemon.ErrLocksUnsupported)
+		},
+		want: ExitFailure,
+		keys: []string{"daemon"},
+	}, {
 		path:  "doctor",
 		name:  "doctor/healthy",
 		args:  []string{"--json"},
@@ -205,9 +219,45 @@ func jsonContractCases() []jsonContractCase {
 		keys: []string{"path", "home", "exists"},
 	}, {
 		path:   "auto",
+		name:   "auto/switched",
 		args:   []string{"--once", "--json"},
 		setup:  twoAccountsOneBetter,
 		want:   ExitOK,
+		keys:   []string{"kind", "at"},
+		stream: true,
+	}, {
+		path: "auto",
+		name: "auto/nothing to do",
+		args: []string{"--once", "--json"},
+		// Already on the best account. §9.3's 3, and a rendered answer like any
+		// other: the stream carries the evaluation that reached it.
+		setup: func(t *testing.T) {
+			t.Helper()
+			seedAccount(t, "u-1", "a@example.com")
+			seedAccount(t, "u-2", "b@example.com")
+			if code, _, _, top := runRoot(t, "switch", "2"); code != ExitOK {
+				t.Fatalf("setup switch = %d (%s)", code, top)
+			}
+			seedUsage(t, "u-1", 10)
+			seedUsage(t, "u-2", 80)
+			clearCooldown(t)
+		},
+		want:   ExitNothingToDo,
+		keys:   []string{"kind", "at"},
+		stream: true,
+	}, {
+		path: "auto",
+		name: "auto/blocked",
+		args: []string{"--once", "--json"},
+		// Wanted to move and could not, for want of any reading to rank on.
+		// §9.3's 4 is the code a supervisor alerts on, which is the one this
+		// table can least afford to leave unpinned.
+		setup: func(t *testing.T) {
+			t.Helper()
+			seedAccount(t, "u-1", "a@example.com")
+			seedAccount(t, "u-2", "b@example.com")
+		},
+		want:   ExitBlocked,
 		keys:   []string{"kind", "at"},
 		stream: true,
 	}}
@@ -232,6 +282,13 @@ func inContractWorld(t *testing.T, c jsonContractCase, f func(t *testing.T)) {
 func TestJSONContractOneObjectPerReadCommand(t *testing.T) {
 	for _, c := range jsonContractCases() {
 		t.Run(c.title(), func(t *testing.T) {
+			// A row with no keys would satisfy this rule on schemaVersion
+			// alone, while the coverage test — which matches on path — still
+			// reported the tree fully covered. That is a row that looks like
+			// coverage and asserts nothing about the payload.
+			if len(c.keys) == 0 {
+				t.Fatalf("this row promises no keys, so it pins nothing a consumer reads")
+			}
 			inContractWorld(t, c, func(t *testing.T) {
 				code, stdout, _, top := runRoot(t, c.argv()...)
 				if code != c.want {
@@ -260,19 +317,28 @@ func TestJSONContractOneObjectPerReadCommand(t *testing.T) {
 // already says what happened — a caller reading stdout would otherwise get the
 // answer twice, in two formats, on two streams.
 func TestJSONContractNegativeAnswersStillCarryTheirPayload(t *testing.T) {
-	negatives := 0
+	negatives := map[string]bool{}
 	for _, c := range jsonContractCases() {
-		if c.want == ExitOK || c.stream {
+		if c.want == ExitOK {
 			continue
 		}
-		negatives++
+		negatives[c.path] = true
 		t.Run(c.title(), func(t *testing.T) {
 			inContractWorld(t, c, func(t *testing.T) {
 				code, stdout, _, top := runRoot(t, c.argv()...)
 				if code != c.want {
 					t.Fatalf("exit = %d, want %d (%s)", code, c.want, top)
 				}
-				requireContractKeys(t, decodeContractDocument(t, stdout), c.keys, "payload")
+				if c.stream {
+					// The stream's form of "the payload is still there": a
+					// non-zero `auto` still reports the evaluation that
+					// reached the answer, rather than going quiet on it.
+					for i, ev := range decodeContractStream(t, stdout) {
+						requireContractKeys(t, ev, c.keys, fmt.Sprintf("event %d", i+1))
+					}
+				} else {
+					requireContractKeys(t, decodeContractDocument(t, stdout), c.keys, "payload")
+				}
 				if top != "" {
 					t.Errorf("ExecuteWith also printed %q; a rendered answer is not a runtime failure, "+
 						"so it must come back as a silent error carrying its code", top)
@@ -280,12 +346,16 @@ func TestJSONContractNegativeAnswersStillCarryTheirPayload(t *testing.T) {
 			})
 		})
 	}
-	// Without this the rule passes vacuously the day the negative rows are
-	// dropped from the table, which is exactly the edit that would remove the
-	// asymmetry from the contract.
-	if negatives < 3 {
-		t.Fatalf("only %d negative-answer rows; which, daemon status and config get all answer 5 "+
-			"and each must be in the table", negatives)
+	// A COUNT here would pass vacuously in the one way that matters: the four
+	// commands below answer non-zero for four different reasons, so a guard
+	// that only counted rows would let `which` — the command this rule is
+	// named after — be deleted and stay green on the strength of the other
+	// three. Naming them is what makes the guard about coverage rather than
+	// about arithmetic.
+	for _, path := range []string{"which", "daemon status", "config get", "doctor", "auto"} {
+		if !negatives[path] {
+			t.Errorf("`ccdad %s` has a rendered non-zero answer and no negative row in the table", path)
+		}
 	}
 }
 
@@ -294,9 +364,12 @@ func TestJSONContractNegativeAnswersStillCarryTheirPayload(t *testing.T) {
 // running the human form, and a command that computed its exit code inside the
 // --json branch could disagree with itself for a whole release.
 //
-// Each half runs in its own world because two of these rows have side effects:
-// `auto --once` switches accounts, so a second run against the same machine
-// would answer 3 for reasons that have nothing to do with the flag.
+// Each half runs in its own world because the `auto` rows have side effects:
+// `auto --once` switches the live login, so a second run against the same
+// machine answers 3 for reasons that have nothing to do with the flag. Every
+// other row reads, and the writes in their setups are idempotent — but the
+// worlds are separate for all of them, because a rule that held only for the
+// rows someone remembered to classify is not a rule.
 func TestJSONContractDoesNotChangeTheExitCode(t *testing.T) {
 	for _, c := range jsonContractCases() {
 		t.Run(c.title(), func(t *testing.T) {
@@ -357,19 +430,16 @@ func TestJSONContractDocumentsAreIndented(t *testing.T) {
 // a blank line is not an NDJSON record, and a reader that skips them cannot
 // tell a gap from a dropped event.
 func TestJSONContractOnlyAutoIsLineOriented(t *testing.T) {
-	streams := 0
+	streams := map[string]bool{}
 	for _, c := range jsonContractCases() {
 		if !c.stream {
 			continue
 		}
-		streams++
+		streams[c.path] = true
 		t.Run(c.title(), func(t *testing.T) {
 			inContractWorld(t, c, func(t *testing.T) {
 				_, stdout, _, _ := runRoot(t, c.argv()...)
-				events := decodeContractStream(t, stdout)
-				if len(events) == 0 {
-					t.Fatal("the stream is empty; there is nothing to assert a shape about")
-				}
+				decodeContractStream(t, stdout)
 				for i, line := range strings.Split(strings.TrimRight(stdout, "\n"), "\n") {
 					if strings.HasPrefix(line, " ") {
 						t.Fatalf("line %d begins with a space, so the stream is indented — "+
@@ -379,8 +449,8 @@ func TestJSONContractOnlyAutoIsLineOriented(t *testing.T) {
 			})
 		})
 	}
-	if streams != 1 {
-		t.Fatalf("%d rows are marked as streams; §9.4 has exactly one exception and it is `auto --json`", streams)
+	if len(streams) != 1 || !streams["auto"] {
+		t.Fatalf("%v are marked as streams; §9.4 has exactly one exception and it is `auto --json`", streams)
 	}
 }
 
@@ -465,16 +535,24 @@ func TestJSONContractCoversEveryJSONCommand(t *testing.T) {
 	}
 }
 
-// jsonCommandPaths lists every command in the tree that declares a --json flag,
-// by path with the binary name stripped.
+// jsonCommandPaths lists every command in the tree that ACCEPTS --json, by path
+// with the binary name stripped.
 //
-// It reads Flags() on a tree that has never been executed, where that is
-// exactly the set of flags each command declared for itself: Cobra folds a
-// parent's persistent flags in during ParseFlags, so a walk over a tree that
-// had run would attribute an inherited flag to every child.
+// Accepts, not declares, and through LocalFlags/InheritedFlags rather than
+// Flags(): Cobra's Flags() is only the set built by Flags().XxxVar until
+// mergePersistentFlags has run, so a command that declared --json on its own
+// PersistentFlags() would be invisible to a walk over Flags() — a false
+// NEGATIVE, and the one direction that matters here, because it would let a
+// whole command escape the table without failing anything. LocalFlags and
+// InheritedFlags both run that merge, and between them they see a --json the
+// command declared either way and one it inherits from a group above it.
+//
+// Runnable is the second half: a group like `config` cannot emit a payload, so
+// a persistent --json declared there belongs to its children, which is exactly
+// where InheritedFlags puts it.
 func jsonCommandPaths(cmd *cobra.Command) []string {
 	var out []string
-	if cmd.Flags().Lookup("json") != nil {
+	if cmd.Runnable() && (cmd.LocalFlags().Lookup("json") != nil || cmd.InheritedFlags().Lookup("json") != nil) {
 		out = append(out, strings.TrimPrefix(cmd.CommandPath(), cmd.Root().Name()+" "))
 	}
 	for _, sub := range cmd.Commands() {
@@ -512,6 +590,12 @@ func decodeContractStream(t *testing.T, stdout string) []map[string]any {
 	t.Helper()
 	if strings.HasPrefix(strings.TrimSpace(stdout), "[") {
 		t.Fatalf("the stream is wrapped in an array; NDJSON is one object per line:\n%s", stdout)
+	}
+	// Said before the split, because splitting "" yields one empty line and the
+	// loop below would then blame a blank record for a stream that was never
+	// written at all — a muted command reported as a formatting bug.
+	if strings.TrimRight(stdout, "\n") == "" {
+		t.Fatal("the stream is empty; a rendered answer that emits no event has nothing for a consumer to read")
 	}
 	var events []map[string]any
 	for i, line := range strings.Split(strings.TrimRight(stdout, "\n"), "\n") {
