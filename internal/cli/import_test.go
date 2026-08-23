@@ -517,3 +517,22 @@ func TestImportClearsADisabledFlagTheDocumentDoesNotCarry(t *testing.T) {
 		t.Error("the account is still disabled after importing a document that does not carry the flag")
 	}
 }
+
+// The other half of the same rule. `ccdad import` was named on a command line
+// by a person who can act on the number, so it keeps saying which version the
+// document declares — the note moved out of readExport rather than away.
+func TestImportNamesTheSchemaVersionADocumentDeclares(t *testing.T) {
+	isolate(t)
+	path := writeImportFile(t, `{"schemaVersion":99,"full":true,"accounts":[
+	  {"uuid":"u-1","email":"one@example.com","kind":"subscription",
+	   "credentials":{"claudeAiOauth":{"accessToken":"AT","refreshToken":"RT-u-1"}}}]}`)
+
+	code, _, stderr, top := runRoot(t, "import", path)
+
+	if code != ExitOK {
+		t.Fatalf("exit = %d, want %d\nstderr: %s\ntop: %s", code, ExitOK, stderr, top)
+	}
+	if !strings.Contains(stderr, "schema 99") {
+		t.Errorf("stderr = %q, want it to name the version the document declares", stderr)
+	}
+}
