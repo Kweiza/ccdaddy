@@ -123,6 +123,10 @@ func runAsSpawnedDaemon() int {
 		"cwd=" + cwd,
 		"store=" + os.Getenv("CCDAD_HOME"),
 		"child=" + os.Getenv(ChildEnvVar),
+		// Always false off Windows, where a console is not a thing. On Windows
+		// it is the one field that reports what DETACHED_PROCESS actually did,
+		// rather than what it was spelled as.
+		"console=" + strconv.FormatBool(consoleAttached()),
 	}
 	if err := os.WriteFile(report, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 		return 4

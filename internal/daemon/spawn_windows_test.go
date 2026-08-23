@@ -48,3 +48,26 @@ func TestDetachSetsExactlyTheTwoCreationFlags(t *testing.T) {
 			"when the console window closes, and the pair is deliberately exactly two", got, want)
 	}
 }
+
+// DETACHED_PROCESS observed rather than spelled.
+//
+// TestDetachSetsExactlyTheTwoCreationFlags above proves the flag reaches
+// SysProcAttr, and TestTheFlagLiteralsMatchTheWindowsDefinitions proves the
+// number is the right one. Neither proves the operating system acted on it, and
+// nothing else can: Go hands CreateProcess an explicit inherited-handle list,
+// so the pipe assertion in spawn_test.go — the closest thing to a behavioural
+// test Spawn has — would go green on Windows with both flags deleted.
+//
+// A console is what DETACHED_PROCESS takes away, so a console is what this
+// needs to take it away FROM. ensureConsole supplies one rather than asking
+// whether the runner brought one, for the reason written there.
+func TestSpawnLeavesTheChildWithNoConsole(t *testing.T) {
+	ensureConsole(t)
+
+	report, _ := spawnViaAChildThatExits(t)
+
+	if got := report["console"]; got != "false" {
+		t.Errorf("the detached child reports console=%q, want \"false\" — DETACHED_PROCESS did not take, "+
+			"so the daemon shares the console it was started from and dies with it on CTRL_CLOSE_EVENT", got)
+	}
+}
