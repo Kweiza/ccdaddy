@@ -9,6 +9,7 @@
 #   vet    go vet ./... for the host
 #   test   go test ./... -race
 #   cgo    every release target builds and vets with CGO_ENABLED=0
+#   cites  no comment points at a document this repository does not contain
 #   all    all of the above, in that order
 #
 # `.github/workflows/ci.yml` calls these same subcommands, one per job, so a
@@ -21,8 +22,8 @@
 #
 # Two things that look like they belong here and do not:
 #
-#   * `CGO_ENABLED=0` at the top of this script. The plan's global constraint is
-#     "CGO_ENABLED=0 always", but `go test -race` refuses to run without cgo
+#   * `CGO_ENABLED=0` at the top of this script. Every released binary is built
+#     with it, but `go test -race` refuses to run without cgo
 #     ("go: -race requires cgo; enable cgo by setting CGO_ENABLED=1"), so a
 #     single exported value would silently turn one of the two checks off. The
 #     variable is therefore set per check and never at file scope.
@@ -40,10 +41,10 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
 cd -- "$repo_root"
 
-# §11.5's six, and the same list scripts/build-release.sh ships. They are
-# deliberately not shared through a third file: this one asks whether the tree
-# compiles for a target, that one names an asset, and a single list would make
-# every future divergence a conflict between two questions.
+# The six release targets, and the same list scripts/build-release.sh ships.
+# They are deliberately not shared through a third file: this one asks whether
+# the tree compiles for a target, that one names an asset, and a single list
+# would make every future divergence a conflict between two questions.
 targets="linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64"
 
 # Deliberately not a `local` in check_cgo with a RETURN trap: an EXIT trap runs
@@ -127,7 +128,7 @@ check_test() {
 	endgroup
 }
 
-# The §10.1 gate: "add a CI job that fails if any target needs CGO".
+# The CGO gate: this fails if any target needs CGO.
 #
 # `go build ./...` compiles every package, including the ones cmd/ccdad does
 # not import — which is the whole point on Windows, where internal/cclink's
@@ -172,21 +173,67 @@ check_cgo() {
 	echo "ci: six targets build, vet and record CGO_ENABLED=0" >&2
 }
 
+# Every comment must stand on its own.
+#
+# This tree was written against a design document that is NOT published and is
+# not going to be, and for a while its comments cited it by section — `§7.2`,
+# `§9.3` — and named internal work items: "the brief", "task 47". Every one of
+# those resolved for exactly one person. Stripping them out and writing the fact
+# in was a day of work across a hundred and forty files; this is what stops it
+# growing back one comment at a time.
+#
+# The gate is deliberately narrow: `§`, "the brief" and "task <n>" — the three
+# forms literal enough to grep for without false positives. Prose that merely
+# alludes to a document ("the spec fixes no number") is not greppable, so it is
+# a review question rather than a gate — CONTRIBUTING.md carries the rule.
+#
+# A section symbol pointing at a PUBLISHED standard is fine and several ship
+# here — `RFC 6749 §6` resolves for anyone with a browser, which is the whole
+# distinction this gate is drawing. Those lines are filtered out by name. Any
+# other exception belongs here too, in the open, rather than in a comment
+# nobody sees.
+#
+# Two files are excluded, and they are the two that DESCRIBE this rule: this
+# script, whose search pattern is the banned character, and CONTRIBUTING.md,
+# which shows contributors what not to write. A gate that cannot state what it
+# forbids is worse than the exclusion.
+check_cites() {
+	group "self-contained comments"
+	local hits
+	# The `grep -v` runs last, so a line carrying BOTH an RFC citation and a
+	# real one escapes. That trade is deliberate: the alternative is a lookbehind
+	# no portable grep has, and such a line has never existed here.
+	hits=$(git grep -nE '§|\b[Tt]he brief\b|\b[Tt]ask [0-9]+' -- \
+		'*.go' '*.sh' '*.ps1' '*.yml' '*.md' \
+		':!scripts/ci.sh' ':!CONTRIBUTING.md' |
+		grep -vE 'RFC [0-9]+ §' || true)
+	endgroup
+	if [ -n "$hits" ]; then
+		echo "ci: these comments point at something no reader outside this machine has:" >&2
+		echo "$hits" >&2
+		echo "ci: state the fact instead — see CONTRIBUTING.md, \"Style\"" >&2
+		return 1
+	fi
+	echo "ci: no comment cites a document this repository does not contain" >&2
+}
+
 run_check() {
 	case $1 in
 	fmt) check_fmt ;;
 	vet) check_vet ;;
 	test) check_test ;;
 	cgo) check_cgo ;;
+	cites) check_cites ;;
 	all)
 		check_fmt
 		check_vet
 		check_test
 		check_cgo
+		check_cites
 		;;
 	*)
 		echo "ci: unknown check: $1" >&2
-		echo "ci: usage: scripts/ci.sh [fmt|vet|test|cgo|all …]" >&2
+		echo "ci: usage: scripts/ci.sh [fmt|vet|test|cgo|cites|all …]" >&2
 		return 2
 		;;
 	esac
