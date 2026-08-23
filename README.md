@@ -481,12 +481,14 @@ Start here:
 ccdad doctor
 ```
 
-Fourteen checks over the store, its permissions, whether file locking works on
-this filesystem at all, the daemon's pidfile and status file, the usage cache,
-the engine state, the config, leftover session directories, whether a second
-ccdad store is driving the same Claude Code login, Claude Code's credential file
-and its top-level keys, a stale legacy keychain item, and the environment
-variables that would make a switch a no-op.
+Seventeen checks over the store, whether this binary is on your `PATH`, the
+store's permissions, whether file locking works on this filesystem at all, the
+daemon's pidfile and status file, the usage cache, the engine state, the config,
+leftover session directories, `--full-profile` profiles whose account is gone,
+whether a second ccdad store is driving the same Claude Code login, Claude
+Code's credential file and its top-level keys, a stale legacy keychain item, the
+environment variables that would make a switch a no-op, and which API key Claude
+Code would actually use.
 
 It **reports**; it repairs nothing and creates nothing it is checking for — a
 diagnostic that manufactures the directory it was asked about is a diagnostic
@@ -500,6 +502,9 @@ Common answers it gives:
 | `warn store … does not exist` | Either ccdad has never run here, or `CCDAD_HOME` points somewhere unintended |
 | `fail locks` naming NFS or CIFS | The store is on a filesystem without working locks. Move `CCDAD_HOME` onto local storage |
 | `warn environment … CLAUDE_CODE_OAUTH_TOKEN` | Claude Code reads that instead of the credential file. An unattended switch is **refused** rather than made pointless — `ccdad auto` reports exit 4 |
+| `warn path … is not on PATH` | `ccdad` only works by its full path. Run `ccdad setup-path`. If it says the entry is *registered*, the block is already written and you just need a new shell |
+| `warn api-key … makes it ignore the credentials file` | An `apiKeyHelper`, `ANTHROPIC_API_KEY` or a file-descriptor key wins over the login, so a switch writes a file nothing reads. The stored `~/.claude.json` key is **not** this — it does not displace a login, and ccdad writes it for every api-key account |
+| `warn profiles … belong to no account` | A `ccdad run --full-profile` directory outlived its account and may still hold that account's API key. `ccdad remove` no longer leaves these |
 | `warn credential-keys` | Claude Code has added a key ccdad does not know. It is preserved, not destroyed — but please open an issue |
 | `warn credential-home` naming another store | Two `CCDAD_HOME` stores are driving one Claude Code login, and they undo each other's switches. Give one of them its own `CLAUDE_CONFIG_DIR`, or stop its engine |
 | `fail credential-home` naming NFS or CIFS | Claude Code's credential home is on a filesystem without working locks, so ccdad cannot tell whether a second store is driving this login. The engine keeps running, unguarded |

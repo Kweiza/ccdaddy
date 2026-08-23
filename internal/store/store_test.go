@@ -726,3 +726,69 @@ func TestAccountsFileCarriesItsSchemaVersion(t *testing.T) {
 		t.Fatalf("version = %d, want 1: %s", doc.Version, raw)
 	}
 }
+
+// AccountsAt exists so `ccdad doctor` can have the account list without Open's
+// MkdirAll. A diagnostic that manufactures the store it is reporting on is
+// worthless, and this is the property that keeps it from doing so.
+func TestAccountsAtCreatesNothing(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "never-created")
+
+	accounts, err := AccountsAt(root)
+	if err != nil {
+		t.Fatalf("AccountsAt on a store that is not there: %v", err)
+	}
+	if len(accounts) != 0 {
+		t.Errorf("got %d accounts out of a store that does not exist", len(accounts))
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Errorf("AccountsAt created the store directory it was asked to read: %v", err)
+	}
+}
+
+// And it reads the same accounts Open would, so a caller that has to avoid Open
+// is not getting a different answer from the rest of the tree.
+func TestAccountsAtReadsWhatOpenWrote(t *testing.T) {
+	root := withStore(t)
+
+	s, err := Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add(Account{UUID: "uuid-a", Email: "a@example.com"}, sampleCreds("AT-a")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add(Account{UUID: "uuid-b", Email: "b@example.com"}, sampleCreds("AT-b")); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := AccountsAt(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := s.Accounts()
+	if len(got) != len(want) {
+		t.Fatalf("AccountsAt returned %d accounts, Open %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i].UUID != want[i].UUID || got[i].Email != want[i].Email {
+			t.Errorf("account %d = %+v, Open says %+v", i, got[i], want[i])
+		}
+	}
+}
+
+// A damaged accounts.toml must be an error rather than an empty list: doctor
+// differences the profiles against this, and "no accounts" out of a broken read
+// would report every profile on the machine as an orphan.
+func TestAccountsAtRefusesADamagedAccountsFile(t *testing.T) {
+	root := withStore(t)
+	if _, err := Open(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "accounts.toml"), []byte("this is not toml{{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := AccountsAt(root); err == nil {
+		t.Error("AccountsAt read a damaged accounts.toml as an empty store")
+	}
+}
