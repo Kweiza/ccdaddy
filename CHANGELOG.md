@@ -86,6 +86,14 @@ by `uuid` or `alias`.
   the file and label them "this machine's", so a backup taken from inside a
   session held the wrong secrets under the right name.
 
+- **`ccdad remove` now deletes the account's `--full-profile` profile.** Since
+  `ccdad run --full-profile` began writing an API-key account's key into
+  `<store>/profiles/<uuid>/.claude.json`, an orphaned profile is an orphaned
+  CREDENTIAL rather than stale configuration — and nothing cleaned one:
+  `uninstall` removes the whole store and `doctor` scans sessions only. The
+  profile is named in the confirmation, because it also holds the MCP logins
+  and trust answers that account accumulated.
+
 - **A nested `ccdad run --full-profile` no longer seeds one account's profile
   from another's.** A profile is seeded from `CLAUDE_CONFIG_DIR`, resolved when
   the profile is created — which inside a `--full-profile` session is the outer
