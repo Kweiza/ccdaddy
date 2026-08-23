@@ -439,7 +439,10 @@ type ScopedWindow struct {
 //
 // The synthetic name carries the scope's own kind as well as its display name,
 // so a model and a surface that share a display name stay two windows and a
-// caller looking a binding window back up by name finds the one that bound.
+// caller looking a binding window back up by name finds the one that bound. It
+// is built by ScopedWindowName, which is the same builder ValidWindowName
+// recognizes a name by, so nothing here can produce a name a caller holding
+// only the name would reject.
 func (s *Snapshot) ScopedWindows() []ScopedWindow {
 	if s == nil || len(s.Limits) == 0 {
 		return nil
@@ -449,16 +452,19 @@ func (s *Snapshot) ScopedWindows() []ScopedWindow {
 		if l.Kind != weeklyScopedKind {
 			continue
 		}
-		scope, name := "model", l.ModelDisplayName
-		if name == "" {
-			scope, name = "surface", l.SurfaceDisplayName
+		var name WindowName
+		for _, sc := range scopedWindowScopes {
+			if d := sc.Display(l); d != "" {
+				name = ScopedWindowName(sc.Name, d)
+				break
+			}
 		}
 		if name == "" {
 			continue
 		}
 		out = append(out, ScopedWindow{
 			NamedWindow: NamedWindow{
-				Name: WindowName(weeklyScopedKind + ":" + scope + ":" + name),
+				Name: name,
 				// Present is the entry's own existence. A scoped window whose
 				// percent could not be read is still a window that IS there,
 				// which is the same distinction Window.Present draws.
