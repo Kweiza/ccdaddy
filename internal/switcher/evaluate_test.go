@@ -125,3 +125,34 @@ func TestWithNoSourceAnUnusableFileFallsBackToTheDefaults(t *testing.T) {
 		t.Fatalf("target = %+v, want the engine still to have chosen", ev.Target)
 	}
 }
+
+// Candidate.Primary is what tells the engine that a credit-metered seat may be
+// ranked with the accounts whose quota is already paid for. The flag lives on
+// store.Account and the engine sees only a strategy.Candidate, so a projection
+// that drops it leaves the entire primary path dead in the shipped binary while
+// every unit test in internal/strategy still passes -- those build their
+// candidates by hand and never go through here.
+func TestTheProjectionCarriesThePrimaryFlag(t *testing.T) {
+	isolate(t)
+	seed(t, "u-1", "one@example.com")
+	seed(t, "u-2", "two@example.com")
+
+	s := openStore(t)
+	if _, err := s.SetPrimary("u-2", true); err != nil {
+		t.Fatal(err)
+	}
+
+	cache, err := usage.LoadCache()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cands := engineCandidates(s, s.Accounts(), cache)
+	if len(cands) != 2 {
+		t.Fatalf("engineCandidates() returned %d candidates, want both accounts", len(cands))
+	}
+	for _, c := range cands {
+		if want := c.UUID == "u-2"; c.Primary != want {
+			t.Errorf("%s: Primary = %v, want %v", c.UUID, c.Primary, want)
+		}
+	}
+}
