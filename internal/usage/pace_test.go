@@ -12,7 +12,10 @@ func weekly(pct float64, reset time.Time) Window {
 	return Window{Present: true, pct: pct, hasPct: true, reset: reset, hasTime: true}
 }
 
-var week = 7 * 24 * time.Hour
+var (
+	week     = 7 * 24 * time.Hour
+	fiveHour = 5 * time.Hour
+)
 
 func TestPaceComparesUsageAgainstElapsedTime(t *testing.T) {
 	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
@@ -82,36 +85,6 @@ func TestProjectionReportsAnOverspentWindowAsExhaustedNow(t *testing.T) {
 	}
 }
 
-// The 24-hour suppression is load-bearing: just after a reset, elapsed time is
-// tiny, so almost any usage reads as "far ahead" and the dashboard cries wolf
-// every Monday.
-func TestPaceIsSuppressedForTheFirstDayAfterAReset(t *testing.T) {
-	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
-
-	cases := []struct {
-		name    string
-		elapsed time.Duration
-		wantOK  bool
-	}{
-		{"one minute in", time.Minute, false},
-		{"just under a day", 24*time.Hour - time.Second, false},
-		{"exactly a day", 24 * time.Hour, true},
-		{"just over a day", 24*time.Hour + time.Second, true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			reset := now.Add(week - tc.elapsed)
-			p := PaceOf(WindowSevenDay, weekly(90, reset), now)
-			if got := p.OK(); got != tc.wantOK {
-				t.Fatalf("OK() = %v (reason %v), want %v", got, p.Reason, tc.wantOK)
-			}
-			if !tc.wantOK && p.Reason != PaceTooEarly {
-				t.Errorf("Reason = %v, want PaceTooEarly", p.Reason)
-			}
-		})
-	}
-}
-
 // A null or unparseable resets_at leaves elapsed unknowable. Pace must go quiet,
 // never divide by zero and never take the 1970 epoch as a window start — which
 // would report infinite overage on every account.
@@ -144,20 +117,22 @@ func TestPaceGoesQuietWithoutAUtilization(t *testing.T) {
 	}
 }
 
-// Pace is scoped to the weekly windows. The five-hour window is far too short
-// for a 24-hour suppression to leave anything, and cinder_cove is not a window
-// at all.
-func TestPaceOnlyAppliesToWeeklyWindows(t *testing.T) {
+// Pace covers every window ccdad has a length for. cinder_cove is the one
+// exception and always will be: its resets_at is an expiry rather than a
+// rollover, so there is no window start to measure elapsed time from.
+func TestPaceCoversEveryWindowWithAKnownLength(t *testing.T) {
 	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
 
-	for _, name := range []WindowName{WindowFiveHour, WindowCinderCove} {
-		p := PaceOf(name, weekly(50, now.Add(time.Hour)), now)
-		if p.OK() {
-			t.Errorf("%s: OK() = true; pace is a weekly-window measure", name)
-		}
-		if p.Reason != PaceNotWeekly {
-			t.Errorf("%s: Reason = %v, want PaceNotWeekly", name, p.Reason)
-		}
+	p := PaceOf(WindowCinderCove, weekly(50, now.Add(time.Hour)), now)
+	if p.OK() {
+		t.Error("cinder_cove: OK() = true; it has no window length to measure against")
+	}
+	if p.Reason != PaceNoWindowLength {
+		t.Errorf("cinder_cove: Reason = %v, want PaceNoWindowLength", p.Reason)
+	}
+
+	if p := PaceOf(WindowFiveHour, weekly(50, now.Add(time.Hour)), now); !p.OK() {
+		t.Errorf("five_hour: OK() = false (reason %v); a five-hour window paces", p.Reason)
 	}
 	for _, name := range []WindowName{WindowSevenDay, WindowSevenDayOAuthApps, WindowSevenDayOpus, WindowSevenDaySonnet} {
 		p := PaceOf(name, weekly(50, now.Add(week/2)), now)
@@ -192,6 +167,69 @@ func TestPaceCapsExpectedAtAFullWindow(t *testing.T) {
 	}
 	if p.ExpectedPct != 100 {
 		t.Errorf("ExpectedPct = %v, want 100 — a fully elapsed window expects the whole quota", p.ExpectedPct)
+	}
+}
+
+// The five-hour window paces too. Its length is 18000 s in the same table the
+// seven-day windows come from, so the only thing that ever stopped it was a
+// suppression written as a constant 24 hours instead of as a share of the
+// window.
+func TestPaceCoversTheFiveHourWindow(t *testing.T) {
+	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
+	// Four hours into a five-hour window: 80% of it has run.
+	p := PaceOf(WindowFiveHour, weekly(90, now.Add(time.Hour)), now)
+
+	if !p.OK() {
+		t.Fatalf("OK() = false, reason %v", p.Reason)
+	}
+	if p.ExpectedPct != 80 {
+		t.Errorf("ExpectedPct = %v, want 80 — four hours of five is four fifths of the quota", p.ExpectedPct)
+	}
+	if p.ActualPct != 90 {
+		t.Errorf("ActualPct = %v, want 90", p.ActualPct)
+	}
+	if !p.AheadOfPace {
+		t.Error("AheadOfPace = false; 90% spent against 80% elapsed is ahead")
+	}
+	if _, ok := p.Projection(); !ok {
+		t.Error("Projection() reported nothing for a five-hour window with a measurable burn")
+	}
+}
+
+// The suppression is a SHARE of the window, one seventh, and not a fixed 24
+// hours. A seventh reproduces the day a seven-day window was held quiet for
+// exactly (604800/7 = 86400) and gives the five-hour window about 43 minutes,
+// which is what lets a five-hour window pace at all.
+func TestPaceIsSuppressedForTheFirstSeventhOfAWindow(t *testing.T) {
+	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
+
+	cases := []struct {
+		name    string
+		window  WindowName
+		length  time.Duration
+		elapsed time.Duration
+		wantOK  bool
+	}{
+		{"weekly, one minute in", WindowSevenDay, week, time.Minute, false},
+		{"weekly, just under a day", WindowSevenDay, week, 24*time.Hour - time.Second, false},
+		{"weekly, exactly a day", WindowSevenDay, week, 24 * time.Hour, true},
+		{"weekly, just over a day", WindowSevenDay, week, 24*time.Hour + time.Second, true},
+		{"five-hour, one minute in", WindowFiveHour, fiveHour, time.Minute, false},
+		{"five-hour, just under a seventh", WindowFiveHour, fiveHour, fiveHour/7 - time.Nanosecond, false},
+		{"five-hour, exactly a seventh", WindowFiveHour, fiveHour, fiveHour / 7, true},
+		{"five-hour, an hour in", WindowFiveHour, fiveHour, time.Hour, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			reset := now.Add(tc.length - tc.elapsed)
+			p := PaceOf(tc.window, weekly(90, reset), now)
+			if got := p.OK(); got != tc.wantOK {
+				t.Fatalf("OK() = %v (reason %v), want %v", got, p.Reason, tc.wantOK)
+			}
+			if !tc.wantOK && p.Reason != PaceTooEarly {
+				t.Errorf("Reason = %v, want PaceTooEarly", p.Reason)
+			}
+		})
 	}
 }
 
@@ -247,10 +285,11 @@ func TestProjectionReportsNothingWhenPaceIsSuppressed(t *testing.T) {
 	}
 }
 
-// The projection stays --json-only. A linear extrapolation against bursty real
-// usage is too rough to present as fact, and the next reviewer's instinct is to
-// surface it "helpfully". Keeping it off Pace's own field set is what makes
-// that a deliberate act rather than an accident, and this test is the guard.
+// The projection stays out of every human-facing view. A linear extrapolation
+// against bursty real usage is too rough to present as fact, and the next
+// reviewer's instinct is to surface it "helpfully". Keeping it off Pace's own
+// field set is what makes that a deliberate act rather than an accident, and
+// this test is the guard.
 func TestPaceCarriesNoProjectionFields(t *testing.T) {
 	tp := reflect.TypeOf(Pace{})
 	for i := 0; i < tp.NumField(); i++ {
@@ -264,14 +303,15 @@ func TestPaceCarriesNoProjectionFields(t *testing.T) {
 		name := f.Name
 		for _, banned := range []string{"Project", "Exhaust", "WillLast"} {
 			if strings.Contains(name, banned) {
-				t.Errorf("Pace.%s: the projection is --json-only and must stay behind Pace.Projection(), "+
-					"so a human renderer ranging over Pace's fields cannot pick it up", name)
+				t.Errorf("Pace.%s: the projection is kept out of every human-facing view "+
+					"and must stay behind Pace.Projection(), so a renderer ranging over "+
+					"Pace's fields cannot pick it up", name)
 			}
 		}
 	}
 }
 
-func TestSnapshotPacesEveryWeeklyWindow(t *testing.T) {
+func TestSnapshotPacesEveryWindowItCanMeasure(t *testing.T) {
 	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
 	s := &Snapshot{
 		FiveHour:       weekly(10, now.Add(time.Hour)),
@@ -287,8 +327,8 @@ func TestSnapshotPacesEveryWeeklyWindow(t *testing.T) {
 	if p, ok := got[WindowSevenDayOpus]; !ok || p.AheadOfPace {
 		t.Errorf("Pace()[seven_day_opus] = %+v, %v; want a behind-pace reading", p, ok)
 	}
-	if _, ok := got[WindowFiveHour]; ok {
-		t.Error("Pace() included five_hour; pace is a weekly measure")
+	if p, ok := got[WindowFiveHour]; !ok || p.AheadOfPace {
+		t.Errorf("Pace()[five_hour] = %+v, %v; four hours into a five-hour window, 10%% spent is behind pace", p, ok)
 	}
 	if _, ok := got[WindowSevenDaySonnet]; ok {
 		t.Error("Pace() included a window the response never carried")
@@ -332,6 +372,11 @@ func TestPaceCoversTheScopedWindows(t *testing.T) {
 	if !IsWeekly("weekly_scoped:model:Fable") {
 		t.Error("a scoped window does not report as weekly")
 	}
+	// IsWeekly is a question about PERISHABILITY and is not the length table:
+	// five_hour has a length and paces, and is still not weekly quota. Merging
+	// the two would make every account's soonest "weekly" reset its five-hour
+	// rollover, and consume-first would spend against a cap that comes back in
+	// under five hours instead of the week's quota that is about to be lost.
 	if IsWeekly(WindowFiveHour) || IsWeekly(WindowCinderCove) {
 		t.Error("five_hour or cinder_cove reports as weekly")
 	}

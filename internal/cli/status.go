@@ -331,9 +331,10 @@ func (r statusRow) paceLabel() string {
 	}
 	p, ok := r.Pace[bw.Name]
 	if !ok {
-		// Either not a weekly window, or less than a day since its reset — in
-		// which case elapsed time is tiny and almost any usage divides out as
-		// "far ahead". Saying nothing is the deliberate answer.
+		// Either a window with no length to measure against, or less than a
+		// seventh of the window since its reset — in which case elapsed time is
+		// tiny and almost any usage divides out as "far ahead". Saying nothing
+		// is the deliberate answer.
 		return "-"
 	}
 	if p.AheadOfPace {
@@ -430,9 +431,9 @@ func usageJSON(r statusRow, now time.Time) map[string]any {
 			"actualPct":   p.ActualPct,
 			"aheadOfPace": p.AheadOfPace,
 		}
-		// The projection is --json-only. This is the one place in ccdad allowed
-		// to reach through Pace.Projection, and the human renderer above must
-		// never gain a second one.
+		// The projection is kept out of the human table. This is the only place
+		// in the CLI allowed to reach through Pace.Projection, and the human
+		// renderer above must never gain one.
 		if proj, ok := p.Projection(); ok {
 			entry["projectedExhaustionAt"] = proj.ExhaustionAt
 			entry["willLastToReset"] = proj.WillLastToReset
