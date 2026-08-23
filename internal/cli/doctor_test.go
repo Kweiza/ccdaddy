@@ -14,6 +14,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/ccver"
 	"github.com/Kweiza/ccdaddy/internal/config"
 	"github.com/Kweiza/ccdaddy/internal/daemon"
+	"github.com/Kweiza/ccdaddy/internal/identity"
 )
 
 // doctorReport is one run of the command, parsed out of --json.
@@ -67,7 +68,7 @@ func (r doctorReport) detail(t *testing.T, name string) string {
 func seedHealthyMachine(t *testing.T) {
 	t.Helper()
 	seedAccount(t, "uuid-a", "work@example.com")
-	writeLiveFile(t, `{"claudeAiOauth":{"accessToken":"AT","refreshToken":"RT-uuid-a"}}`)
+	writeLiveFile(t, liveLoginJSON("RT-uuid-a", ""))
 }
 
 // The same rule the daemon singleton probe follows, one layer up: creating the
@@ -1402,5 +1403,171 @@ func TestDoctorSaysWhenItCouldNotLookForAClaudeLauncher(t *testing.T) {
 	// searched ~/.local/bin and ~/.claude/local when it never resolved either.
 	if strings.Contains(detail, "on PATH") {
 		t.Errorf("doctor asserted a negative result for a search it did not perform:\n%s", detail)
+	}
+}
+
+// The queue item's headline, in doctor: a token a session host injected at a
+// path compiled into Claude Code outranks the login, and there is NO VARIABLE
+// to unset. A model built on an environment variable named CCR_OAUTH_TOKEN_FILE
+// — which is what the item asked for — would never fire on this machine.
+func TestDoctorReportsTheHostInjectedTokenFile(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	writeFile(t, identity.HostOAuthTokenFile, "sk-ant-oat-INJECTED")
+
+	_, r, _ := runDoctor(t)
+	detail := r.detail(t, "oauth-source")
+	if got := r.level(t, "oauth-source"); got != "warn" {
+		t.Fatalf("oauth-source = %q, want warn: %s", got, detail)
+	}
+	for _, want := range []string{identity.HostOAuthTokenFile, "check the host session", "no variable to unset"} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("oauth-source does not carry %q:\n%s", want, detail)
+		}
+	}
+	if strings.Contains(detail, "sk-ant-oat-INJECTED") {
+		t.Errorf("doctor printed the injected token:\n%s", detail)
+	}
+	// The environment row must NOT claim this one: it has no variable, and the
+	// row's OK sentence is about variables.
+	if got := r.level(t, "environment"); got != "ok" {
+		t.Errorf("environment = %q, want ok — nothing is SET on this machine: %s", got, r.detail(t, "environment"))
+	}
+}
+
+// The division of labour between the two rows, pinned. Without the word
+// "variable" in the environment row's OK sentence, that row keeps saying
+// "nothing set that would make a switch a no-op" on a machine whose live
+// credential is a host-injected file — the same lie the hazard list was widened
+// to stop telling, in a new place.
+func TestEnvironmentDoesNotClaimMoreThanItChecked(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	writeFile(t, identity.HostOAuthTokenFile, "sk-ant-oat-INJECTED")
+
+	_, r, _ := runDoctor(t)
+	env := r.detail(t, "environment")
+	if !strings.Contains(env, "no environment variable set") {
+		t.Errorf("the environment row claims more than it looked at:\n%s", env)
+	}
+	if got := r.level(t, "oauth-source"); got != "warn" {
+		t.Errorf("oauth-source = %q, want warn — it is the row that answers this", got)
+	}
+}
+
+// An empty host file is not a credential. Claude Code reads and trims, so zero
+// bytes give it nothing — and an in-progress write must not be reported as a
+// live token.
+func TestAnEmptyHostTokenFileIsNotACredential(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	writeFile(t, identity.HostOAuthTokenFile, "")
+
+	_, r, _ := runDoctor(t)
+	if got := r.level(t, "oauth-source"); got != "ok" {
+		t.Errorf("oauth-source = %q for a zero-byte host file, want ok: %s", got, r.detail(t, "oauth-source"))
+	}
+}
+
+// THE GAP THIS ITEM FOUND IN ALREADY-SHIPPED CODE. ccdad modelled
+// CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR and not the well-known file behind it, so
+// a machine with the file and no variable had a key that displaces the login
+// and a report that said nothing about it.
+func TestDoctorReportsAHostInjectedAPIKeyWithNoVariableSet(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	writeFile(t, identity.HostAPIKeyFile, "sk-ant-api03-INJECTED")
+
+	_, r, _ := runDoctor(t)
+	detail := r.detail(t, "api-key")
+	if got := r.level(t, "api-key"); got == "ok" {
+		t.Fatalf("api-key = ok on a machine with a host-injected key: %s", detail)
+	}
+	if !strings.Contains(detail, identity.HostAPIKeyFile) {
+		t.Errorf("the api-key row does not name the file that resolved:\n%s", detail)
+	}
+	if strings.Contains(detail, "sk-ant-api03-INJECTED") {
+		t.Errorf("doctor printed the injected key:\n%s", detail)
+	}
+}
+
+// A login object whose scopes do not carry user:inference is not a credential
+// to Claude Code, and saying only "no OAuth credential resolves" would read as
+// a bug in ccdad rather than as the actionable fact that the user has to sign
+// in again.
+func TestDoctorSaysAScopelessLoginResolvesNothing(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "uuid-a", "work@example.com")
+	writeLiveFile(t, `{"claudeAiOauth":{"accessToken":"AT","refreshToken":"RT-uuid-a","scopes":["org:create_api_key","user:profile"]}}`)
+
+	_, r, _ := runDoctor(t)
+	detail := r.detail(t, "oauth-source")
+	if got := r.level(t, "oauth-source"); got != "warn" {
+		t.Fatalf("oauth-source = %q, want warn: %s", got, detail)
+	}
+	if !strings.Contains(detail, "user:inference") {
+		t.Errorf("oauth-source does not name the scope that decides it:\n%s", detail)
+	}
+}
+
+// The bg-auth snapshot is the one state ccdad declines on — and it must neither
+// read the file nor delete it, which is what Claude Code's own reader does.
+func TestABgAuthSnapshotMakesTheAnswerADecline(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	snapshot := filepath.Join(t.TempDir(), "snapshot.json")
+	const body = `{"accessToken":"sk-ant-oat-SNAPSHOT"}`
+	writeFile(t, snapshot, body)
+	t.Setenv("CLAUDE_BG_AUTH_SNAPSHOT_PATH", snapshot)
+
+	_, r, _ := runDoctor(t)
+	detail := r.detail(t, "oauth-source")
+	if got := r.level(t, "oauth-source"); got != "warn" {
+		t.Fatalf("oauth-source = %q, want warn: %s", got, detail)
+	}
+	if strings.Contains(detail, "sk-ant-oat-SNAPSHOT") {
+		t.Errorf("doctor printed the snapshot's token:\n%s", detail)
+	}
+	got, err := os.ReadFile(snapshot)
+	if err != nil {
+		t.Fatalf("doctor deleted the snapshot Claude Code has not consumed yet: %v", err)
+	}
+	if string(got) != body {
+		t.Errorf("the snapshot changed under doctor: %q", got)
+	}
+}
+
+// The new probes stat two paths outside the home directory. Neither they nor
+// the directory above them may be created.
+func TestDoctorCreatesNeitherHostFile(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+
+	runDoctor(t)
+	for _, path := range []string{
+		identity.HostOAuthTokenFile,
+		identity.HostAPIKeyFile,
+		filepath.Dir(identity.HostOAuthTokenFile),
+	} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("doctor created %s (err=%v)", path, err)
+		}
+	}
+}
+
+// CLAUDE_CODE_SIMPLE=0 is not bare mode. Claude Code parses it with a
+// four-spelling truthiness test, and reading it as "any non-empty string" put
+// ccdad in a mode where the answer is "no credential" on a machine that has one.
+func TestCLAUDECODESIMPLEZeroIsNotBareMode(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	t.Setenv("CLAUDE_CODE_SIMPLE", "0")
+
+	_, r, _ := runDoctor(t)
+	if got := r.level(t, "oauth-source"); got != "ok" {
+		t.Fatalf("oauth-source = %q with CLAUDE_CODE_SIMPLE=0, want ok: %s", got, r.detail(t, "oauth-source"))
+	}
+	if !strings.Contains(r.detail(t, "oauth-source"), "login in the credentials file") {
+		t.Errorf("oauth-source does not name the login:\n%s", r.detail(t, "oauth-source"))
 	}
 }

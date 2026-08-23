@@ -72,15 +72,27 @@ func isolate(t *testing.T) string {
 	// ANTHROPIC_API_KEY in their shell would otherwise get answers out of this
 	// suite that CI never sees — and the failure would look like a flake in
 	// attribution rather than an unsandboxed input.
-	for _, v := range []string{
-		"ANTHROPIC_API_KEY",
-		"ANTHROPIC_AUTH_TOKEN",
-		"CLAUDE_CODE_OAUTH_TOKEN",
-		"CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
-		"CLAUDE_CODE_SIMPLE",
-	} {
+	for _, v := range identity.AuthEnvironmentVars() {
 		t.Setenv(v, "")
 	}
+
+	// THE TWO PATHS NO t.Setenv CAN REACH. Claude Code compiles in
+	// /home/claude/.claude/remote/.oauth_token and .api_key as literals: they
+	// are absolute, outside the home directory, and read on every machine.
+	// Without this the suite's answer depends on whether the box running it
+	// happens to have a /home/claude, and that failure reads as a flake rather
+	// than as an unsandboxed input.
+	//
+	// The directory is deliberately NOT created. A test that means to describe
+	// an injected token writes the file itself, exactly as the settings tests
+	// write a settings.json.
+	savedHostToken, savedHostKey := identity.HostOAuthTokenFile, identity.HostAPIKeyFile
+	t.Cleanup(func() {
+		identity.HostOAuthTokenFile, identity.HostAPIKeyFile = savedHostToken, savedHostKey
+	})
+	hostRemote := filepath.Join(t.TempDir(), "remote")
+	identity.HostOAuthTokenFile = filepath.Join(hostRemote, ".oauth_token")
+	identity.HostAPIKeyFile = filepath.Join(hostRemote, ".api_key")
 
 	// The project settings files resolve against the working directory, which
 	// under `go test` is this package's source tree. Empty them so the answer
@@ -275,11 +287,35 @@ func assertNoLiveCredentials(t *testing.T) {
 	}
 }
 
+// liveLoginJSON is the credentials file's claudeAiOauth object as raw JSON, for
+// the tests that write the file wholesale rather than through the store.
+//
+// It exists so those tests cannot spell a scope-less login by hand: see
+// credsFor for why user:inference decides whether Claude Code has a login at
+// all. extra is spliced in as further top-level keys, which is what the
+// unknown-key probes need.
+func liveLoginJSON(refresh, extra string) string {
+	body := `{"claudeAiOauth":{"accessToken":"AT","refreshToken":"` + refresh +
+		`","scopes":["user:inference","user:profile"]}`
+	if extra != "" {
+		body += "," + extra
+	}
+	return body + "}"
+}
+
 // credsFor builds a stored credential blob carrying a refresh token, which is
 // what attribution anchors on.
+//
+// IT CARRIES user:inference, and that is load-bearing rather than decorative.
+// Claude Code takes a login as a credential only when its scopes contain that
+// one -- a Console sign-in leaves a well-formed record with an access token and
+// without it, and no session ever authenticates with that record. A fixture
+// without the scope describes a machine with NO login, which is not the machine
+// any test using this means. Every login fixture in this package goes through
+// here so the next one cannot be written scope-less.
 func credsFor(refresh string) cclink.Blob {
 	return cclink.Blob{"claudeAiOauth": json.RawMessage(
-		`{"accessToken":"AT","refreshToken":"` + refresh + `"}`)}
+		`{"accessToken":"AT","refreshToken":"` + refresh + `","scopes":["user:inference","user:profile"]}`)}
 }
 
 func seedAccount(t *testing.T, uuid, email string) {
@@ -420,5 +456,18 @@ func TestRunCmdWithNoArgumentsDoesNotInheritTheTestBinarysCommandLine(t *testing
 	}
 	if got := rec.last(t).Surface; got != oauth.SurfaceClaudeAI {
 		t.Fatalf("Surface = %v, want the subscription surface: runCmd ran the test binary's own command line instead of the empty one it was given", got)
+	}
+}
+
+// writeFile writes a fixture file, making its directory first. It is for the
+// paths outside the sandboxed home that no t.Setenv can move -- see isolate's
+// note on the two host files.
+func writeFile(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }

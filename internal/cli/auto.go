@@ -247,9 +247,7 @@ func autoPass(em *autoEmitter, s *store.Store) (ExitCode, error) {
 		// 4, not 3. The engine wanted to move and cannot make any difference by
 		// moving, and the fix is one the operator has to make.
 		em.unchanged(res, "overridden")
-		em.say("Not switching: CLAUDE_CODE_OAUTH_TOKEN is set, and Claude Code reads it in " +
-			"preference to the credentials file.")
-		em.say("Unset it, or nothing the engine does can change what a session authenticates as.")
+		em.say("%s", switcher.DisplacementNote("Not switching: ", res))
 		return ExitBlocked, nil
 	case switcher.Contended:
 		// 4 for the same reason Overridden is 4: the engine wanted to move,

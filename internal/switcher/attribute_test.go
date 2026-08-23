@@ -2,6 +2,8 @@ package switcher
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -118,10 +120,10 @@ func TestAttributePrefersTheLoginOverAStoredAPIKey(t *testing.T) {
 		"u-login": oauthBlob("RT-ONE"),
 		"u-key":   apiKeyCreds("sk-ant-api03-STORED"),
 	}
-	live := cclink.Blob{"claudeAiOauth": json.RawMessage(`{"accessToken":"AT","refreshToken":"RT-ONE"}`)}
+	live := liveLogin("RT-ONE")
 	env := identity.APIKeyEnvironment{Interactive: true, ManagedKey: "sk-ant-api03-STORED"}
 
-	res := AttributeLogin(live, accounts, lookupFrom(stored), env)
+	res := AttributeLogin(live, accounts, lookupFrom(stored), env, oauthEnv())
 	if !res.OK || res.Account.UUID != "u-login" {
 		t.Fatalf("attributed to %+v via %q, want the login account", res.Account, res.Via)
 	}
@@ -134,7 +136,7 @@ func TestAttributeUsesTheStoredAPIKeyWhenThereIsNoLogin(t *testing.T) {
 	stored := map[string]cclink.Blob{"u-key": apiKeyCreds("sk-ant-api03-STORED")}
 	env := identity.APIKeyEnvironment{Interactive: true, ManagedKey: "sk-ant-api03-STORED"}
 
-	res := AttributeLogin(cclink.Blob{}, accounts, lookupFrom(stored), env)
+	res := AttributeLogin(cclink.Blob{}, accounts, lookupFrom(stored), env, oauthEnv())
 	if !res.OK || res.Account.UUID != "u-key" {
 		t.Fatalf("attributed to %+v via %q, want the api-key account", res.Account, res.Via)
 	}
@@ -153,14 +155,14 @@ func TestAttributeEnvAPIKeyDisplacesTheLogin(t *testing.T) {
 		"u-login": oauthBlob("RT-ONE"),
 		"u-key":   apiKeyCreds(key),
 	}
-	live := cclink.Blob{"claudeAiOauth": json.RawMessage(`{"accessToken":"AT","refreshToken":"RT-ONE"}`)}
+	live := liveLogin("RT-ONE")
 
 	env := identity.APIKeyEnvironment{
 		Interactive: true,
 		EnvKey:      key,
 		Approved:    []string{identity.APIKeyApproval(key)},
 	}
-	res := AttributeLogin(live, accounts, lookupFrom(stored), env)
+	res := AttributeLogin(live, accounts, lookupFrom(stored), env, oauthEnv())
 	if !res.OK || res.Account.UUID != "u-key" {
 		t.Fatalf("attributed to %+v via %q, want the api-key account", res.Account, res.Via)
 	}
@@ -170,7 +172,7 @@ func TestAttributeEnvAPIKeyDisplacesTheLogin(t *testing.T) {
 	// approval list is actually consulted: without it, both halves would
 	// attribute to the key.
 	env.Approved = nil
-	res = AttributeLogin(live, accounts, lookupFrom(stored), env)
+	res = AttributeLogin(live, accounts, lookupFrom(stored), env, oauthEnv())
 	if !res.OK || res.Account.UUID != "u-login" {
 		t.Fatalf("unapproved key attributed to %+v via %q, want the login account", res.Account, res.Via)
 	}
@@ -186,9 +188,9 @@ func TestAttributeEnvAPIKeyDisplacesTheLogin(t *testing.T) {
 func TestAttributeReportsAnApiKeyHelperRatherThanGuessing(t *testing.T) {
 	accounts := []store.Account{{UUID: "u-login", Email: "login@example.com", Idx: 1}}
 	stored := map[string]cclink.Blob{"u-login": oauthBlob("RT-ONE")}
-	live := cclink.Blob{"claudeAiOauth": json.RawMessage(`{"accessToken":"AT","refreshToken":"RT-ONE"}`)}
+	live := liveLogin("RT-ONE")
 
-	res := AttributeLogin(live, accounts, lookupFrom(stored), identity.APIKeyEnvironment{Interactive: true, Helper: true})
+	res := AttributeLogin(live, accounts, lookupFrom(stored), identity.APIKeyEnvironment{Interactive: true, Helper: true}, oauthEnv())
 	if res.OK {
 		t.Fatalf("attributed to %+v; the helper's key is one ccdad cannot see", res.Account)
 	}
@@ -199,4 +201,102 @@ func TestAttributeReportsAnApiKeyHelperRatherThanGuessing(t *testing.T) {
 
 func lookupFrom(stored map[string]cclink.Blob) func(string) (cclink.Blob, error) {
 	return func(uuid string) (cclink.Blob, error) { return stored[uuid], nil }
+}
+
+// THE TWO ARMS THAT STOP `which` ANSWERING WITH THE WRONG ACCOUNT, and neither
+// had a test: every other call in this file probes an empty sandbox, so they all
+// take the login or none arm.
+//
+// A host-injected token outranks the credentials file, and ccdad cannot say
+// WHOSE it is — the credential is in a file it must not read. Naming the file's
+// account there would name an account Claude Code is not using, which is the one
+// mistake this whole model exists to avoid.
+func TestAttributeNamesTheMechanismWhenItCannotNameTheAccount(t *testing.T) {
+	isolate(t)
+	accounts := []store.Account{{UUID: "u-login", Email: "login@example.com", Idx: 1}}
+	stored := map[string]cclink.Blob{"u-login": oauthBlob("RT-ONE")}
+	live := liveLogin("RT-ONE")
+	writeHostToken(t, "sk-ant-oat-INJECTED")
+
+	res := AttributeLogin(live, accounts, lookupFrom(stored),
+		identity.APIKeyEnvironment{Interactive: true}, oauthEnv())
+	if res.OK {
+		t.Fatalf("attributed to %+v — the credential is a file ccdad must not read", res.Account)
+	}
+	if !strings.Contains(res.Via, identity.HostOAuthTokenFile) {
+		t.Errorf("Via = %q, want the path that outranks the file", res.Via)
+	}
+}
+
+// The decline arm. A bg-auth snapshot is consumed by Claude Code before it looks
+// at anything else, and the fact that decides it is inside a credential — so
+// "which account is this" has no honest answer, and a guess is worst here.
+func TestAttributeDeclinesOnABgAuthSnapshot(t *testing.T) {
+	isolate(t)
+	accounts := []store.Account{{UUID: "u-login", Email: "login@example.com", Idx: 1}}
+	stored := map[string]cclink.Blob{"u-login": oauthBlob("RT-ONE")}
+	snapshot := filepath.Join(t.TempDir(), "snap.json")
+	if err := os.WriteFile(snapshot, []byte(`{"accessToken":"x"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLAUDE_BG_AUTH_SNAPSHOT_PATH", snapshot)
+
+	res := AttributeLogin(liveLogin("RT-ONE"), accounts, lookupFrom(stored),
+		identity.APIKeyEnvironment{Interactive: true}, oauthEnv())
+	if res.OK {
+		t.Fatalf("attributed to %+v on a machine ccdad cannot resolve", res.Account)
+	}
+	if !strings.Contains(res.Via, "cannot resolve") {
+		t.Errorf("Via = %q, want the decline", res.Via)
+	}
+}
+
+// The stand-down note is built from the SOURCE, not from a variable name. Three
+// of the sources it fires for have no variable, and the note used to tell every
+// one of them to unset CLAUDE_CODE_OAUTH_TOKEN.
+func TestDisplacementNoteNamesTheSourceAndNotAVariable(t *testing.T) {
+	hostFile := Result{EnvTokenWins: true, DisplacedBy: identity.OAuthHostTokenFile}
+	note := DisplacementNote("Not switching: ", hostFile)
+	if strings.Contains(note, "CLAUDE_CODE_OAUTH_TOKEN") {
+		t.Errorf("the note names a variable that is not set:\n%s", note)
+	}
+	for _, want := range []string{identity.HostOAuthTokenFile, "check the host session"} {
+		if !strings.Contains(note, want) {
+			t.Errorf("the note does not carry %q:\n%s", want, note)
+		}
+	}
+
+	// And the variable that IS one is still named.
+	envToken := Result{EnvTokenWins: true, DisplacedBy: identity.OAuthTokenEnv}
+	if got := DisplacementNote("Note: ", envToken); !strings.Contains(got, "CLAUDE_CODE_OAUTH_TOKEN") {
+		t.Errorf("the note drops the variable's name when there IS one:\n%s", got)
+	}
+
+	// The decline says it cannot tell rather than naming a source.
+	declined := Result{EnvTokenWins: true, DisplacedUnresolved: true}
+	if got := DisplacementNote("Not switching: ", declined); !strings.Contains(got, "cannot tell") {
+		t.Errorf("the decline does not say so:\n%s", got)
+	}
+}
+
+// The gate itself: a source with no variable behind it must stand the engine
+// down, because the swap succeeds and changes nothing.
+func TestUnattendedSwitchStandsDownForAHostInjectedToken(t *testing.T) {
+	isolate(t)
+	writeHostToken(t, "sk-ant-oat-INJECTED")
+
+	target := seed(t, "u-2", "two@example.com")
+	liveAs(t, "u-1")
+	seed(t, "u-1", "one@example.com")
+
+	res, err := Execute(openStore(t), Request{Target: target, LiveUUID: "u-1", Unattended: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Outcome != Overridden {
+		t.Fatalf("Outcome = %v, want Overridden — the engine would switch into the void", res.Outcome)
+	}
+	if res.DisplacedBy != identity.OAuthHostTokenFile {
+		t.Errorf("DisplacedBy = %v, want the host token file", res.DisplacedBy)
+	}
 }

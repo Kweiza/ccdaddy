@@ -278,8 +278,7 @@ func (e *Engine) act(s *store.Store, ev switcher.Evaluation) (switcher.Result, e
 		// sentence on every evaluation is how it stops being read.
 		if !e.saidOverridden {
 			e.saidOverridden = true
-			e.logf("not switching: CLAUDE_CODE_OAUTH_TOKEN is set, and Claude Code reads it in " +
-				"preference to the credentials file — nothing the engine does can change what a session uses")
+			e.logf("%s", switcher.DisplacementNote("not switching: ", res))
 		}
 		return res, nil
 	case switcher.Contended:
