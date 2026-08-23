@@ -315,13 +315,18 @@ func writeLiveFile(t *testing.T, raw string) {
 // flags. Anything else sitting on that line is parsed as ccdad's arguments.
 func TestNoArgumentsDoesNotInheritTheTestBinarysCommandLine(t *testing.T) {
 	isolate(t)
+	// Both axes stubbed so the expected code is a fact about this helper rather
+	// than about the machine: bare `ccdad` is §9.2's usage error with no
+	// terminal, and `go test` gives the binary a pipe while a developer running
+	// the compiled binary by hand gives it a console.
+	stubTTYs(t, false, false)
 	saved := os.Args
 	t.Cleanup(func() { os.Args = saved })
 	os.Args = []string{saved[0], "list", "--json"}
 
 	code, out, _, top := runRoot(t)
-	if code != ExitOK {
-		t.Fatalf("exit = %d (%s), want 0 for a bare ccdad", code, top)
+	if code != ExitUsage {
+		t.Fatalf("exit = %d (%s), want %d for a bare ccdad with no terminal", code, top, ExitUsage)
 	}
 	if strings.Contains(out, "schemaVersion") {
 		t.Fatalf("stdout = %q, want nothing on it: the helper ran the test binary's own command line instead of the empty one it was given", out)

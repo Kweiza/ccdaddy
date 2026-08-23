@@ -59,10 +59,17 @@ import (
 //   - `auto`, which IS the engine. Starting a daemon for it would hand the
 //     singleton to the daemon and make the continuous form refuse itself, and
 //     `auto --once` exists precisely so the engine can be run WITHOUT one.
-//   - bare `ccdad`. §9.2 gives that slot to a dashboard behind a TTY gate and a
-//     usage error otherwise, and which of those wants a daemon is that task's
-//     decision rather than one to make here in advance.
+//
+// Bare `ccdad` is the one entry that is here and is NOT started by the hook.
+// §9.2 gives that slot to a dashboard behind a TTY gate and a usage error
+// otherwise, and only the dashboard half wants a daemon: a hook firing before
+// the gate would spawn one for `ccdad | head` as well. root.PersistentPreRun
+// therefore skips the bare root and runBare calls the hook itself, which is
+// also why deleting the entry below does not merely narrow the policy — it
+// makes the dashboard the one place in the tree that asks for a daemon and is
+// refused.
 var autoStartCommands = map[string]bool{
+	"ccdad":           true,
 	"ccdad add":       true,
 	"ccdad add-token": true,
 	"ccdad list":      true,
