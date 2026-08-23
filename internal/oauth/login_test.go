@@ -2,6 +2,8 @@ package oauth
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -20,6 +22,7 @@ import (
 type tokenProbe struct {
 	mu          sync.Mutex
 	redirectURI string
+	verifier    string
 	calls       int
 	onExchange  func()
 }
@@ -28,6 +31,15 @@ func (p *tokenProbe) seen() (string, int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.redirectURI, p.calls
+}
+
+// exchangedVerifier is the code_verifier the exchange sent. It is the only
+// handle a test has on the PKCE pair Login generated, and so the only way to
+// tell one challenge from two.
+func (p *tokenProbe) exchangedVerifier() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.verifier
 }
 
 func (p *tokenProbe) hook(f func()) {
@@ -43,11 +55,13 @@ func recordingTokenServer(t *testing.T) (*Client, *tokenProbe) {
 		body, _ := io.ReadAll(r.Body)
 		var payload struct {
 			RedirectURI string `json:"redirect_uri"`
+			Verifier    string `json:"code_verifier"`
 		}
 		_ = json.Unmarshal(body, &payload)
 
 		p.mu.Lock()
 		p.redirectURI = payload.RedirectURI
+		p.verifier = payload.Verifier
 		p.calls++
 		hook := p.onExchange
 		p.mu.Unlock()
@@ -584,5 +598,261 @@ func TestSplitPasteSplitsOnTheFirstHash(t *testing.T) {
 	}
 	if state != "THE#STATE" {
 		t.Fatalf("state = %q, want the remainder after the first '#'", state)
+	}
+}
+
+// Spec §6.4 row 1: a machine that cannot bind loopback logs in by hand instead
+// of failing. TestLoginFailsFastWhenNeitherPathExists does not constrain this —
+// it asserts only that SOME error comes back when BOTH paths are gone, which a
+// bind site that returned its error would satisfy just as well. This is the
+// other half: the bind fails, stdin is a terminal, and the login still
+// completes against the manual redirect.
+func TestLoginDegradesToManualOnlyWhenTheLoopbackBindFails(t *testing.T) {
+	client, probe := recordingTokenServer(t)
+
+	announcedCh := make(chan string, 1)
+	pasted := make(chan string, 1)
+	go func() {
+		u, err := url.Parse(<-announcedCh)
+		if err != nil {
+			return // Login will time out and the test will say so
+		}
+		pasted <- "PASTED-CODE#" + u.Query().Get("state")
+	}()
+
+	res, err := Login(context.Background(), LoginOptions{
+		Timeout: 3 * time.Second,
+		// True, and it must still not launch: there is no loopback URL to
+		// launch, and the manual URL is not the browser's to open.
+		OpenBrowser: true,
+		Client:      client,
+		Announce:    func(u string) { announcedCh <- u },
+		Paste:       func() (<-chan string, func()) { return pasted, func() {} },
+		OpenURL: func(string) error {
+			t.Error("the browser was launched with no loopback listener bound")
+			return nil
+		},
+		listen: func(string) (*Listener, error) { return nil, errors.New("bind refused") },
+	})
+	if err != nil {
+		t.Fatalf("Login() = %v, want the login to survive a failed loopback bind", err)
+	}
+	if res.ViaLoopback {
+		t.Fatal("ViaLoopback = true, want false — no listener was ever bound")
+	}
+	if seen, calls := probe.seen(); seen != ManualRedirectURL || calls != 1 {
+		t.Fatalf("exchange redirect_uri = %q after %d calls, want %q once", seen, calls, ManualRedirectURL)
+	}
+}
+
+// OpenBrowser: false must actually suppress the launch. Dropping the flag from
+// the condition leaves the suite green, because every other test either injects
+// OpenURL with OpenBrowser true or sets OpenBrowser false and leaves OpenURL
+// nil — and in that second case the mutant calls the real browser.Open and
+// Login discards the error. On a machine with a browser, that mutant opens real
+// tabs during `go test`.
+func TestLoginDoesNotLaunchABrowserWhenOpenBrowserIsFalse(t *testing.T) {
+	client, _ := recordingTokenServer(t)
+
+	announcedCh := make(chan string, 1)
+	pasted := make(chan string, 1)
+	go func() {
+		u, err := url.Parse(<-announcedCh)
+		if err != nil {
+			return
+		}
+		pasted <- "PASTED-CODE#" + u.Query().Get("state")
+	}()
+
+	launched := false
+	_, err := Login(context.Background(), LoginOptions{
+		Timeout:     3 * time.Second,
+		OpenBrowser: false,
+		Client:      client,
+		Announce:    func(u string) { announcedCh <- u },
+		Paste:       func() (<-chan string, func()) { return pasted, func() {} },
+		// Called on Login's goroutine, which is this one, so a plain bool is
+		// safe here.
+		OpenURL: func(string) error { launched = true; return nil },
+	})
+	if err != nil {
+		t.Fatalf("Login() = %v, want nil", err)
+	}
+	if launched {
+		t.Fatal("the browser was launched with OpenBrowser: false")
+	}
+}
+
+// Spec §6.1 orders it "print the MANUAL url to stderr / open the browser at the
+// LOOPBACK url", and LoginOptions.Announce documents itself as firing "before
+// the browser opens". That ordering is the whole justification for the launch
+// being best-effort: the URL is already on screen, so a failed launch costs the
+// user a copy and paste and nothing more. Swapping the two is green.
+func TestLoginAnnouncesTheManualURLBeforeLaunchingTheBrowser(t *testing.T) {
+	client, _ := recordingTokenServer(t)
+
+	pasted := make(chan string, 1)
+	var events []string
+	_, err := Login(context.Background(), LoginOptions{
+		Timeout:     3 * time.Second,
+		OpenBrowser: true,
+		Client:      client,
+		Announce:    func(string) { events = append(events, "announce") },
+		Paste:       func() (<-chan string, func()) { return pasted, func() {} },
+		OpenURL: func(loopbackURL string) error {
+			events = append(events, "open")
+			// The state is taken from the URL under test rather than from the
+			// announcement, so this cannot deadlock when the order is wrong.
+			u, perr := url.Parse(loopbackURL)
+			if perr != nil {
+				return perr
+			}
+			pasted <- "PASTED-CODE#" + u.Query().Get("state")
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Login() = %v, want nil", err)
+	}
+	if len(events) != 2 || events[0] != "announce" || events[1] != "open" {
+		t.Fatalf("callbacks fired %v, want [announce open] — the URL must be on screen before the launch", events)
+	}
+}
+
+// Spec §6.1: one attempt generates ONE verifier/challenge and ONE state, and
+// builds TWO authorize URLs differing only in redirect_uri. The state twin is
+// pinned by construction — the listener validates the callback's state against
+// the attempt's — but the challenge is not, and a second NewPKCE() for the
+// loopback URL is green here while being a 400 on the loopback path against the
+// real endpoint.
+func TestLoginBuildsBothAuthorizeURLsFromOnePKCEPair(t *testing.T) {
+	client, probe := recordingTokenServer(t)
+
+	pasted := make(chan string, 1)
+	var manualURL, loopbackURL string
+	_, err := Login(context.Background(), LoginOptions{
+		Timeout:     3 * time.Second,
+		OpenBrowser: true,
+		Client:      client,
+		Announce:    func(u string) { manualURL = u },
+		Paste:       func() (<-chan string, func()) { return pasted, func() {} },
+		OpenURL: func(u string) error {
+			loopbackURL = u
+			parsed, perr := url.Parse(u)
+			if perr != nil {
+				return perr
+			}
+			pasted <- "PASTED-CODE#" + parsed.Query().Get("state")
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Login() = %v, want nil", err)
+	}
+
+	verifier := probe.exchangedVerifier()
+	if verifier == "" {
+		t.Fatal("the exchange sent no code_verifier")
+	}
+	sum := sha256.Sum256([]byte(verifier))
+	want := base64.RawURLEncoding.EncodeToString(sum[:])
+
+	var states []string
+	for _, tc := range []struct{ name, raw string }{
+		{"manual", manualURL},
+		{"loopback", loopbackURL},
+	} {
+		u, perr := url.Parse(tc.raw)
+		if perr != nil {
+			t.Fatalf("%s authorize URL %q does not parse: %v", tc.name, tc.raw, perr)
+		}
+		if got := u.Query().Get("code_challenge"); got != want {
+			t.Fatalf("%s authorize URL carries code_challenge %q, want %q — the S256 of the verifier the exchange sent", tc.name, got, want)
+		}
+		states = append(states, u.Query().Get("state"))
+	}
+	if states[0] != states[1] || states[0] == "" {
+		t.Fatalf("states = %q, want one non-empty value on both URLs", states)
+	}
+}
+
+// Timeout: 0 means DefaultLoginTimeout. Every other test sets Timeout
+// explicitly, so both ways of breaking this are green: substituting a tiny
+// constant, and dropping the defaulting altogether — which leaves a
+// zero-duration timer that fires on the first turn. Asserting the constant
+// itself would prove nothing about Login, so what is asserted is that an unset
+// Timeout does not expire underneath a login that is still waiting.
+func TestLoginWithoutATimeoutDoesNotExpireImmediately(t *testing.T) {
+	client, _ := recordingTokenServer(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(250 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	_, err := Login(ctx, LoginOptions{
+		OpenBrowser: false,
+		Client:      client,
+		Announce:    func(string) {},
+		Paste:       func() (<-chan string, func()) { return make(chan string), func() {} },
+	})
+	if errors.Is(err, ErrLoginTimeout) {
+		t.Fatalf("Login() = %v after %v with Timeout unset; the default deadline is not %v", err, time.Since(start), DefaultLoginTimeout)
+	}
+	if !errors.Is(err, ErrLoginInterrupted) {
+		t.Fatalf("Login() = %v, want ErrLoginInterrupted", err)
+	}
+}
+
+// The twin of TestLoginClosesTheListenerOnAPasteWin. A paste win closes the
+// listener early and by hand; a loopback win has only the deferred close, so
+// deleting that defer leaks a serving HTTP server and a bound port for the life
+// of the process — and leaves the suite green, because every other loopback
+// test stops caring once the token is in hand.
+func TestLoginClosesTheListenerOnALoopbackWin(t *testing.T) {
+	client, _ := recordingTokenServer(t)
+
+	var port int
+	res, err := Login(context.Background(), LoginOptions{
+		Timeout:     5 * time.Second,
+		OpenBrowser: true,
+		Client:      client,
+		Announce:    func(string) {},
+		OpenURL: func(loopbackURL string) error {
+			u, perr := url.Parse(loopbackURL)
+			if perr != nil {
+				return perr
+			}
+			q := u.Query()
+			redirect := q.Get("redirect_uri")
+			lu, perr := url.Parse(redirect)
+			if perr != nil {
+				return perr
+			}
+			port, perr = strconv.Atoi(lu.Port())
+			if perr != nil {
+				return perr
+			}
+			target := redirect + "?code=LOOPBACK-CODE&state=" + url.QueryEscape(q.Get("state"))
+			go func() {
+				if r, gerr := http.Get(target); gerr == nil {
+					r.Body.Close()
+				}
+			}()
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Login() = %v, want nil", err)
+	}
+	if !res.ViaLoopback {
+		t.Fatal("ViaLoopback = false, want true for a loopback callback")
+	}
+
+	conn, derr := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), time.Second)
+	if derr == nil {
+		conn.Close()
+		t.Fatalf("port %d is still bound after Login returned; the loopback listener was never closed", port)
 	}
 }

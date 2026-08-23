@@ -3,7 +3,10 @@ package browser
 import (
 	"errors"
 	"io/fs"
+	"os"
+	"runtime"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -181,10 +184,58 @@ func TestOpenReportsAnUnlaunchableBrowser(t *testing.T) {
 	}
 }
 
-// Available reads the real environment; it must answer without panicking. The
-// policy itself is covered by TestAvailablePolicy.
-func TestAvailableAnswers(t *testing.T) {
-	_ = Available()
+// TestAvailablePolicy covers the policy exhaustively; what is left over is the
+// wiring, and `func Available() bool { return true }` is green without this.
+// Both fixtures are host-independent by construction: an SSH session is refused
+// on every GOOS, because that arm is checked before the platforms that
+// otherwise always say yes; and a DISPLAY with no SSH is accepted on every
+// GOOS, either by the darwin/windows arm or by the display check itself.
+func TestAvailableReadsTheProcessEnvironment(t *testing.T) {
+	t.Setenv("SSH_TTY", "")
+	t.Setenv("WAYLAND_DISPLAY", "")
+	t.Setenv("DISPLAY", ":0")
+
+	t.Setenv("SSH_CONNECTION", "10.0.0.1 22 10.0.0.2 22")
+	if Available() {
+		t.Fatal("Available() = true inside an SSH session, want false — the display belongs to the machine the user is sitting at")
+	}
+
+	t.Setenv("SSH_CONNECTION", "")
+	if !Available() {
+		t.Fatal("Available() = false with DISPLAY set and no SSH session, want true")
+	}
+}
+
+// The other wrapper. `func isWSL() bool { return true }` is green without this,
+// and it would send every Linux launch through rundll32.exe.
+func TestIsWSLReadsTheProcessEnvironment(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		// /proc/version is another OS's file everywhere else, and isWSLFrom
+		// must not even read it.
+		if isWSL() {
+			t.Fatalf("isWSL() = true on %s, want false", runtime.GOOS)
+		}
+		return
+	}
+
+	t.Setenv("WSL_INTEROP", "")
+	t.Setenv("WSL_DISTRO_NAME", "Ubuntu")
+	if !isWSL() {
+		t.Fatal("isWSL() = false with WSL_DISTRO_NAME set, want true")
+	}
+
+	// With the environment cleared the answer comes from /proc/version, so the
+	// expectation has to come from the same place. That is deliberate rather
+	// than tautological: this arm is the wrapper's only binding to the real
+	// file, and mirroring the source is the only way to assert it without
+	// pinning the test to one kind of machine. On an ordinary Linux host it
+	// asserts false; on a genuine WSL host it asserts true.
+	t.Setenv("WSL_DISTRO_NAME", "")
+	data, err := os.ReadFile("/proc/version")
+	want := err == nil && strings.Contains(strings.ToLower(string(data)), "microsoft")
+	if got := isWSL(); got != want {
+		t.Fatalf("isWSL() = %v with the WSL environment cleared, want %v from /proc/version", got, want)
+	}
 }
 
 // Windows program paths routinely contain spaces and Windows has no BROWSER
