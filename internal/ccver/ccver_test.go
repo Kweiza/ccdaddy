@@ -9,6 +9,36 @@ import (
 	"testing"
 )
 
+// tempDir is tempDir(t) with the symlinks and short names taken out of it, and
+// EVERY fixture in this package goes through it.
+//
+// WHY IT IS A HELPER RATHER THAN A NORMALISATION AT EACH COMPARISON. Describe
+// reports Install.Target from filepath.EvalSymlinks, so a test that builds its
+// expectation from a RAW tempDir(t) is comparing two spellings of one file, and
+// the temp root is spelled differently on two of the three operating systems
+// this suite runs on:
+//
+//	macOS    /var/folders/... against the resolved /private/var/folders/...
+//	Windows  C:\Users\RUNNER~1\... against the expanded C:\Users\runneradmin\...
+//
+// Linux has neither, which is how four such assertions landed on main looking
+// green and turned the macos-latest and windows-latest legs red. Normalising at
+// each comparison would have fixed those four and left the fifth one to be
+// written wrong; resolving the ROOT once means no assertion in this file can be
+// asymmetric, whether or not it touches Target.
+//
+// Go's EvalSymlinks answers both spellings: the macOS one by following the
+// symlink, and the Windows one because its evalSymlinks runs every component
+// through FindFirstFile, which returns the long true-cased name.
+func tempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 // symlink makes a link, or says why the platform would not let it.
 //
 // Windows allows unprivileged symlinks only in Developer Mode, and a hard
@@ -43,7 +73,7 @@ func manifest(name, version string) string {
 // straight to <data home>/claude/versions/<VERSION>, and the version is the
 // name of the thing it points at.
 func TestNativeLauncherNamesItsVersion(t *testing.T) {
-	root := t.TempDir()
+	root := tempDir(t)
 	binary := filepath.Join(root, ".local", "share", "claude", "versions", "2.1.241")
 	write(t, binary, "ELF")
 	launcher := filepath.Join(root, ".local", "bin", "claude")
@@ -73,7 +103,7 @@ func TestNativeLauncherNamesItsVersion(t *testing.T) {
 // depending on where ccdad was started, which is the class of bug ccpath's
 // header is about.
 func TestNativeLauncherResolvesARelativeLinkAgainstItsOwnDirectory(t *testing.T) {
-	root := t.TempDir()
+	root := tempDir(t)
 	binary := filepath.Join(root, "share", "claude", "versions", "2.1.150")
 	write(t, binary, "ELF")
 	launcher := filepath.Join(root, "bin", "claude")
@@ -84,7 +114,7 @@ func TestNativeLauncherResolvesARelativeLinkAgainstItsOwnDirectory(t *testing.T)
 
 	// Somewhere that is NOT the link's directory, so a cwd-relative resolution
 	// resolves to a path that does not exist and cannot accidentally agree.
-	t.Chdir(t.TempDir())
+	t.Chdir(tempDir(t))
 
 	got := Describe(launcher)
 	if !got.Known || got.Version != (Version{2, 1, 150}) {
@@ -105,7 +135,7 @@ func TestNativeLauncherResolvesARelativeLinkAgainstItsOwnDirectory(t *testing.T)
 // An npm global install through 2.1.112: the bin entry is a symlink into
 // lib/node_modules, and the package root is an ancestor of what it points at.
 func TestNPMGlobalLauncherReadsTheePackageManifest(t *testing.T) {
-	prefix := t.TempDir()
+	prefix := tempDir(t)
 	pkg := filepath.Join(prefix, "lib", "node_modules", "@anthropic-ai", "claude-code")
 	write(t, filepath.Join(pkg, "cli.js"), "#!/usr/bin/env node\n")
 	write(t, filepath.Join(pkg, "package.json"), manifest(PackageName, "2.1.112"))
@@ -130,7 +160,7 @@ func TestNPMGlobalLauncherReadsTheePackageManifest(t *testing.T) {
 // the launcher's own directory would answer "unknown" for every current npm
 // install, which is most of them.
 func TestNPMLauncherIsFoundFromInsideTheBinDirectory(t *testing.T) {
-	prefix := t.TempDir()
+	prefix := tempDir(t)
 	pkg := filepath.Join(prefix, "lib", "node_modules", "@anthropic-ai", "claude-code")
 	write(t, filepath.Join(pkg, "bin", "claude.exe"), "MZ")
 	write(t, filepath.Join(pkg, "package.json"), manifest(PackageName, "2.1.241"))
@@ -147,7 +177,7 @@ func TestNPMLauncherIsFoundFromInsideTheBinDirectory(t *testing.T) {
 // purpose: the layout is the same shape wherever npm puts a shim, and gating it
 // on GOOS would leave it unexercised on the machine that runs this suite.
 func TestAShimBesideNodeModulesFindsThePackage(t *testing.T) {
-	prefix := t.TempDir()
+	prefix := tempDir(t)
 	write(t, filepath.Join(prefix, "claude.cmd"), "@ECHO off\n")
 	write(t, filepath.Join(prefix, "node_modules", "@anthropic-ai", "claude-code", "package.json"),
 		manifest(PackageName, "2.1.200"))
@@ -166,7 +196,7 @@ func TestAShimBesideNodeModulesFindsThePackage(t *testing.T) {
 // local install, which is on the keychain side of the boundary and would make
 // `ccdad run` refuse to start on a perfectly current machine.
 func TestTheClaudeLocalWrapperManifestIsNotMistakenForClaudeCode(t *testing.T) {
-	local := t.TempDir()
+	local := tempDir(t)
 	launcher := filepath.Join(local, "claude")
 	write(t, launcher, "#!/bin/sh\nexec \""+local+"/node_modules/.bin/claude\" \"$@\"\n")
 	write(t, filepath.Join(local, "package.json"), `{"name":"claude-local","version":"0.0.1","private":true}`)
@@ -186,7 +216,7 @@ func TestTheClaudeLocalWrapperManifestIsNotMistakenForClaudeCode(t *testing.T) {
 // warns instead of failing, and run starts instead of refusing -- so it has to
 // be reachable and has to say why.
 func TestAnUnclassifiableLauncherIsUnknownAndSaysWhy(t *testing.T) {
-	dir := t.TempDir()
+	dir := tempDir(t)
 	launcher := filepath.Join(dir, "claude")
 	write(t, launcher, "#!/bin/sh\nexec /somewhere/else\n")
 
@@ -211,7 +241,7 @@ func TestAnUnclassifiableLauncherIsUnknownAndSaysWhy(t *testing.T) {
 // because the remedy for it ("your launcher points somewhere odd") is different
 // from the remedy for "no claude here".
 func TestANonVersionDirectoryNameIsReportedRatherThanGuessed(t *testing.T) {
-	root := t.TempDir()
+	root := tempDir(t)
 	binary := filepath.Join(root, "share", "claude", "versions", "nightly")
 	write(t, binary, "ELF")
 	launcher := filepath.Join(root, "bin", "claude")
@@ -270,7 +300,7 @@ func TestTheVersionsDirectoryItselfCarriesNoVersion(t *testing.T) {
 // own, so a test run against a missing tree would pass even if every read here
 // were a create.
 func TestDescribeCreatesNothing(t *testing.T) {
-	root := t.TempDir()
+	root := tempDir(t)
 	launcher := filepath.Join(root, "bin", "claude")
 	write(t, launcher, "#!/bin/sh\n")
 	for _, dir := range []string{
@@ -303,7 +333,7 @@ func TestDescribeCreatesNothing(t *testing.T) {
 // root -- because that is the only candidate that climbs at all now. Written
 // with the sideways shape, this test would pass without exercising any bound.
 func TestTheContainingWalkIsBounded(t *testing.T) {
-	root := t.TempDir()
+	root := tempDir(t)
 	write(t, filepath.Join(root, "package.json"), manifest(PackageName, "2.1.180"))
 	deep := root
 	for i := 0; i < maxPackageWalk+2; i++ {
@@ -414,11 +444,11 @@ func TestProbePrefersWhatPATHNames(t *testing.T) {
 	// ~/.local/bin/claude, so reordering Probe to try the fallbacks first still
 	// passed on any machine with no native install -- every CI box. The same
 	// hazard the cli suite's isolate() was extended for, one package over.
-	home := t.TempDir()
+	home := tempDir(t)
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 
-	root := t.TempDir()
+	root := tempDir(t)
 	binary := filepath.Join(root, "share", "claude", "versions", "2.1.199")
 	write(t, binary, "ELF")
 	onPath := filepath.Join(root, "bin", "claude")
@@ -444,7 +474,7 @@ func TestProbePrefersWhatPATHNames(t *testing.T) {
 // and it is the state ccdad already reports on for its own binary. The fallback
 // is what stops doctor from telling that user "no Claude Code here".
 func TestProbeFallsBackToTheNativeLauncherLocation(t *testing.T) {
-	home := t.TempDir()
+	home := tempDir(t)
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	binary := filepath.Join(home, ".local", "share", "claude", "versions", "2.1.170")
@@ -474,7 +504,7 @@ func TestProbeFallsBackToTheNativeLauncherLocation(t *testing.T) {
 // The local installer's launcher, which is neither on PATH by default nor under
 // .local/bin.
 func TestProbeFallsBackToTheLocalInstallLauncher(t *testing.T) {
-	home := t.TempDir()
+	home := tempDir(t)
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	local := filepath.Join(home, ".claude", "local")
@@ -502,7 +532,7 @@ func TestProbeFallsBackToTheLocalInstallLauncher(t *testing.T) {
 // install -- the same class of wrong answer as the securestorage derivation that
 // made doctor report "no legacy item" from inside a scoped session.
 func TestTheLocalFallbackIgnoresCLAUDE_CONFIG_DIR(t *testing.T) {
-	home := t.TempDir()
+	home := tempDir(t)
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	local := filepath.Join(home, ".claude", "local")
@@ -512,7 +542,7 @@ func TestTheLocalFallbackIgnoresCLAUDE_CONFIG_DIR(t *testing.T) {
 
 	// A scoped session: CLAUDE_CONFIG_DIR points at an empty directory with no
 	// install under it at all.
-	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	t.Setenv("CLAUDE_CONFIG_DIR", tempDir(t))
 
 	saved := lookPath
 	t.Cleanup(func() { lookPath = saved })
@@ -531,7 +561,7 @@ func TestTheLocalFallbackIgnoresCLAUDE_CONFIG_DIR(t *testing.T) {
 // read it": doctor words the two rows differently and only one of them is about
 // a Claude Code that exists.
 func TestProbeReportsNoClaudeCodeDistinctly(t *testing.T) {
-	home := t.TempDir()
+	home := tempDir(t)
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 
@@ -548,7 +578,7 @@ func TestProbeReportsNoClaudeCodeDistinctly(t *testing.T) {
 // A directory named `claude` on PATH is not a launcher, and Describe would
 // happily walk up from it. The fallback loop skips directories for that reason.
 func TestProbeSkipsADirectoryNamedLikeALauncher(t *testing.T) {
-	home := t.TempDir()
+	home := tempDir(t)
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	if err := os.MkdirAll(filepath.Join(home, ".local", "bin", "claude"), 0o755); err != nil {
@@ -599,7 +629,7 @@ func TestStringNamesTheVersionMethodAndPath(t *testing.T) {
 // A manifest bigger than the cap is refused rather than read into memory, and
 // refusing means "no version here" rather than a partial parse.
 func TestAnOversizedManifestIsRefused(t *testing.T) {
-	prefix := t.TempDir()
+	prefix := tempDir(t)
 	pkg := filepath.Join(prefix, "node_modules", "@anthropic-ai", "claude-code")
 	body := `{"name":"` + PackageName + `","version":"2.1.180","pad":"` +
 		strings.Repeat("x", maxPackageJSON) + `"}`
@@ -617,7 +647,7 @@ func TestAnOversizedManifestIsRefused(t *testing.T) {
 // absence: "your launcher is not an npm install" sends a user looking in the
 // wrong place when the package is right there.
 func TestAClaudeCodeManifestWithNoVersionIsFoundButUnreadable(t *testing.T) {
-	prefix := t.TempDir()
+	prefix := tempDir(t)
 	write(t, filepath.Join(prefix, "node_modules", "@anthropic-ai", "claude-code", "package.json"),
 		`{"name":"`+PackageName+`","description":"no version field"}`)
 	launcher := filepath.Join(prefix, "claude")
@@ -643,7 +673,7 @@ func TestAClaudeCodeManifestWithNoVersionIsFoundButUnreadable(t *testing.T) {
 // A wrong version is strictly worse than an unknown one, which is why the fully
 // resolved chain is asked before the launcher's own link.
 func TestAChainedVersionsEntryNamesTheVersionThatActuallyRuns(t *testing.T) {
-	root := t.TempDir()
+	root := tempDir(t)
 	versions := filepath.Join(root, ".local", "share", "claude", "versions")
 	real := filepath.Join(versions, "2.1.241")
 	write(t, real, "ELF")
@@ -675,7 +705,7 @@ func TestAChainedVersionsEntryNamesTheVersionThatActuallyRuns(t *testing.T) {
 // loses the version; the launcher's own link still names what the installer
 // wrote, and that is the best answer available.
 func TestAVersionsEntryPointingOutsideStillNamesTheInstallersVersion(t *testing.T) {
-	root := t.TempDir()
+	root := tempDir(t)
 	elsewhere := filepath.Join(root, "opt", "claude-build", "claude")
 	write(t, elsewhere, "ELF")
 	versions := filepath.Join(root, ".local", "share", "claude", "versions")
@@ -692,7 +722,7 @@ func TestAVersionsEntryPointingOutsideStillNamesTheInstallersVersion(t *testing.
 	// nativeVersion's resolve-against-the-link's-directory is load-bearing. An
 	// absolute fixture here would leave that resolution unexercised.
 	symlink(t, filepath.Join("..", "share", "claude", "versions", "2.1.190"), launcher)
-	t.Chdir(t.TempDir())
+	t.Chdir(tempDir(t))
 
 	got := Describe(launcher)
 	if !got.Known || got.Version != (Version{2, 1, 190}) {
@@ -709,7 +739,7 @@ func TestAVersionsEntryPointingOutsideStillNamesTheInstallersVersion(t *testing.
 // is the single place that decides whether to print the arrow; Install.Target
 // always carries what the launcher resolved to.
 func TestALauncherThatIsTheBinaryIsNotRenderedAsAnArrowToItself(t *testing.T) {
-	root := t.TempDir()
+	root := tempDir(t)
 	launcher := filepath.Join(root, ".local", "share", "claude", "versions", "2.1.241")
 	write(t, launcher, "ELF")
 
@@ -737,7 +767,7 @@ func TestALauncherThatIsTheBinaryIsNotRenderedAsAnArrowToItself(t *testing.T) {
 // launcher that is neither a native symlink nor inside the package reaches
 // $HOME within eight levels, so $HOME/node_modules was enough to do it.
 func TestAnUnrelatedAncestorsPackageIsNotCreditedToTheLauncher(t *testing.T) {
-	root := t.TempDir()
+	root := tempDir(t)
 	project := filepath.Join(root, "projects", "app")
 	// The project's own pinned copy, several levels above the launcher.
 	write(t, filepath.Join(project, "node_modules", "@anthropic-ai", "claude-code", "package.json"),
@@ -759,7 +789,7 @@ func TestAnUnrelatedAncestorsPackageIsNotCreditedToTheLauncher(t *testing.T) {
 // launcher (asdf, volta, mise, a hand-written wrapper) in a directory whose
 // PARENT happens to hold a node_modules with the package in it.
 func TestASiblingNodeModulesOneLevelUpIsNotCredited(t *testing.T) {
-	root := t.TempDir()
+	root := tempDir(t)
 	write(t, filepath.Join(root, "node_modules", "@anthropic-ai", "claude-code", "package.json"),
 		manifest(PackageName, "2.1.90"))
 	launcher := filepath.Join(root, "shims", "claude")
@@ -776,7 +806,7 @@ func TestASiblingNodeModulesOneLevelUpIsNotCredited(t *testing.T) {
 // report a confident version for a binary that is gone, on a machine where
 // claude cannot start at all.
 func TestADanglingNativeLauncherIsUnknownRatherThanHealthy(t *testing.T) {
-	root := t.TempDir()
+	root := tempDir(t)
 	versions := filepath.Join(root, ".local", "share", "claude", "versions")
 	if err := os.MkdirAll(versions, 0o755); err != nil {
 		t.Fatal(err)
@@ -798,17 +828,116 @@ func TestADanglingNativeLauncherIsUnknownRatherThanHealthy(t *testing.T) {
 }
 
 // The Windows native install, whose launcher is a COPY rather than a symlink:
-// measured in 2.1.241, the installer branches on startsWith("win32") and calls
-// copyFile, falling through to symlink only off Windows. No reading of the
-// bytes names the version — but "this is not a native install" is a wrong
-// answer where "this is a native install ccdad cannot pin to a version" is the
-// true one, and only the second sends the reader to the right place.
+// measured in 2.1.241 and unchanged in 2.1.112, the installer branches on
+// startsWith("win32") and calls copyFile, falling through to symlink only off
+// Windows. Nothing on disk records which versions entry it took — so the answer
+// comes from the bytes, and this is the test that the answer is reached at all.
 //
 // Exercised on this platform rather than gated on GOOS, because the shape is
 // what matters: a build tag here would ship the branch unexercised on the
-// machine that runs the suite.
-func TestANativeLauncherThatIsACopyIsNamedAsOneAnyway(t *testing.T) {
-	home := t.TempDir()
+// machine that runs the suite. ccver_windows_test.go covers the half that is
+// genuinely about Windows, which is which HOME the launcher hangs off.
+func TestANativeLauncherThatIsACopyNamesItsVersionFromTheBytes(t *testing.T) {
+	home := tempDir(t)
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_DATA_HOME", "")
+	versions := filepath.Join(home, ".local", "share", "claude", "versions")
+	write(t, filepath.Join(versions, "2.1.240"), "ELF-240")
+	write(t, filepath.Join(versions, "2.1.241"), "ELF-241")
+	launcher := filepath.Join(home, ".local", "bin", "claude.exe")
+	write(t, launcher, "ELF-241")
+
+	got := Describe(launcher)
+	if !got.Known {
+		t.Fatalf("Describe could not name a copy whose bytes are one of the installed binaries: %s", got.Why)
+	}
+	if got.Version != (Version{2, 1, 241}) {
+		t.Errorf("Version = %s, want 2.1.241", got.Version)
+	}
+	if got.Method != MethodNative {
+		t.Errorf("Method = %q, want %q — a copy of a versions binary is still a native install",
+			got.Method, MethodNative)
+	}
+	if !got.Copied {
+		t.Errorf("Copied = false for a launcher that is a copy, so the report will claim it resolves somewhere")
+	}
+	if want := filepath.Join(versions, "2.1.241"); got.Target != want {
+		t.Errorf("Target = %q, want the binary the bytes came from %q", got.Target, want)
+	}
+}
+
+// THE CASE THAT RULES OUT EVERY CHEAPER SOURCE, and it is not hypothetical:
+// this machine's versions directory holds a 2.1.240 and a 2.1.241 of exactly
+// 342,636,848 bytes each with different sha256s.
+//
+// Claude Code compares SIZES to answer this question — its Windows update skips
+// the copy entirely when the sizes match, and its orphan cleanup protects every
+// same-size entry — so a size test would call this ambiguous, and "the newest
+// entry wins" would call it 2.1.241. Both are wrong, and wrong in the direction
+// that matters: the size-match skip is exactly why a Windows launcher can hold
+// an OLDER build than the newest thing installed, which is the machine this
+// fixture describes.
+func TestACopyIsNamedByItsContentAndNotByItsSize(t *testing.T) {
+	home := tempDir(t)
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_DATA_HOME", "")
+	versions := filepath.Join(home, ".local", "share", "claude", "versions")
+	// Same length, different bytes — the pair on the machine this was measured
+	// on, in miniature.
+	write(t, filepath.Join(versions, "2.1.240"), "ELF................240")
+	write(t, filepath.Join(versions, "2.1.241"), "ELF................241")
+	launcher := filepath.Join(home, ".local", "bin", "claude.exe")
+	write(t, launcher, "ELF................240")
+
+	got := Describe(launcher)
+	if !got.Known {
+		t.Fatalf("Describe could not tell two same-size binaries apart: %s", got.Why)
+	}
+	if got.Version != (Version{2, 1, 240}) {
+		t.Fatalf("Version = %s, want 2.1.240 — the launcher holds the OLDER build's bytes, which is what "+
+			"Claude Code's own size-match update skip leaves behind on Windows", got.Version)
+	}
+}
+
+// A copy whose bytes are none of the installed binaries. Reachable in the
+// ordinary way — the versions entry it came from was pruned, or the user put
+// their own claude.exe there — and it must read as "a native install ccdad
+// cannot pin to a version" rather than as a version or as no install at all,
+// because those three send a reader to three different places.
+func TestACopyMatchingNoInstalledBinaryIsUnknownAndSaysSo(t *testing.T) {
+	home := tempDir(t)
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_DATA_HOME", "")
+	versions := filepath.Join(home, ".local", "share", "claude", "versions")
+	write(t, filepath.Join(versions, "2.1.241"), "ELF-241")
+	launcher := filepath.Join(home, ".local", "bin", "claude.exe")
+	write(t, launcher, "SOMETHING ELSE ENTIRELY")
+
+	got := Describe(launcher)
+	if got.Known {
+		t.Fatalf("Describe named %s for a copy of nothing that is installed", got.Version)
+	}
+	if got.Method != MethodNative {
+		t.Fatalf("Method = %q, want %q", got.Method, MethodNative)
+	}
+	if !strings.Contains(got.Why, versions) {
+		t.Errorf("Why does not point at the directory the copy should have come from:\n%s", got.Why)
+	}
+	if strings.Contains(got.Why, "nor an npm install") {
+		t.Errorf("a native install was described as not being one:\n%s", got.Why)
+	}
+}
+
+// Two versions entries holding identical bytes: the launcher IS both, so the
+// build is known and the release name is not. Guessing between them would put a
+// version number on a coin flip, and this package's whole history is that a
+// wrong version is worse than an unknown one — it drives `ccdad run` to refuse
+// on a working machine.
+func TestACopyOfTwoIdenticalBinariesIsUnknownRatherThanGuessed(t *testing.T) {
+	home := tempDir(t)
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_DATA_HOME", "")
@@ -820,17 +949,262 @@ func TestANativeLauncherThatIsACopyIsNamedAsOneAnyway(t *testing.T) {
 
 	got := Describe(launcher)
 	if got.Known {
-		t.Fatalf("Describe named a version (%s) for a copy — nothing on disk says which one it is", got.Version)
+		t.Fatalf("Describe picked %s out of two byte-identical candidates", got.Version)
 	}
 	if got.Method != MethodNative {
-		t.Fatalf("Method = %q, want %q — a copy of a versions binary is still a native install",
-			got.Method, MethodNative)
+		t.Fatalf("Method = %q, want %q", got.Method, MethodNative)
 	}
-	if !strings.Contains(got.Why, versions) {
-		t.Errorf("Why does not point at the directory the copy came from:\n%s", got.Why)
+	for _, want := range []string{"2.1.240", "2.1.241", versions} {
+		if !strings.Contains(got.Why, want) {
+			t.Errorf("Why does not name %q, so the reader cannot see what ccdad could not choose between:\n%s",
+				want, got.Why)
+		}
 	}
-	if strings.Contains(got.Why, "nor an npm install") {
-		t.Errorf("a native install was described as not being one:\n%s", got.Why)
+}
+
+// The interrupted install's leftovers are not releases. The atomic move writes
+// <V>.tmp.<pid>.<millis>.<n> beside the versions entries and unlinks it on
+// failure, so a crash leaves a REAL binary under a name that is not a version —
+// and crediting the launcher to it would report ".tmp" as a release, or, worse,
+// silently accept whatever ParseVersion made of it.
+func TestAnInterruptedInstallsTempBinaryIsNotCreditedAsAVersion(t *testing.T) {
+	home := tempDir(t)
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_DATA_HOME", "")
+	versions := filepath.Join(home, ".local", "share", "claude", "versions")
+	write(t, filepath.Join(versions, "2.1.241.tmp.4321.1755900000000.1"), "ELF-241")
+	launcher := filepath.Join(home, ".local", "bin", "claude.exe")
+	write(t, launcher, "ELF-241")
+
+	got := Describe(launcher)
+	if got.Known {
+		t.Fatalf("Describe reported %s from a half-finished install's temp file", got.Version)
+	}
+	// Unknown alone does not pin the name filter -- native() would also refuse
+	// to parse ".tmp.4321..." and land on Known=false. What the filter decides
+	// is WHICH unknown: with it the reader is told the bytes matched nothing
+	// installed, and without it they are told a version directory is oddly
+	// named, about a launcher that resolves into no directory at all.
+	if strings.Contains(got.Why, ".tmp.") {
+		t.Errorf("Why credits the launcher to a temp file rather than saying its bytes matched no release:\n%s",
+			got.Why)
+	}
+}
+
+// THE INSTALLER RESERVES A VERSION NAME BEFORE IT HAS ANYTHING TO PUT IN IT:
+// writeFile(join(versions, <V>), "", {flag:"wx"}), then it downloads. So a
+// validly-named ZERO-BYTE versions entry exists for the whole download window
+// and survives an interrupted install — and on Windows the launcher can be empty
+// at the same moment, because the update renames the old claude.exe aside first
+// and the destination holds nothing until bytes land.
+//
+// Two empty files hold the same bytes. Without the guard that is a MATCH, and
+// the machine gets a confident wrong answer of the worst shape: pick a
+// reservation for 2.1.112 and doctor rules `fail` while `ccdad run` REFUSES to
+// start, both blaming a keychain-era Claude Code, on a machine whose actual
+// fault is that its launcher is empty. Claude Code's own two readers of this
+// directory refuse zero bytes for the same reason.
+func TestAnEmptyLauncherIsNotCreditedWithAReservedVersion(t *testing.T) {
+	home := tempDir(t)
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_DATA_HOME", "")
+	versions := filepath.Join(home, ".local", "share", "claude", "versions")
+	write(t, filepath.Join(versions, "2.1.112"), "")
+	launcher := filepath.Join(home, ".local", "bin", "claude.exe")
+	write(t, launcher, "")
+
+	got := Describe(launcher)
+	if got.Known {
+		t.Fatalf("Describe named %s for an EMPTY launcher — matched against a reservation the installer "+
+			"had not filled in yet", got.Version)
+	}
+	if got.KeychainEra() {
+		t.Fatal("KeychainEra() is true for an empty launcher, so `ccdad run` would refuse and blame the " +
+			"version on a machine whose launcher simply has no bytes")
+	}
+	if got.Method != MethodNative {
+		t.Errorf("Method = %q, want %q — it is still a native install, just a broken one", got.Method, MethodNative)
+	}
+	if !strings.Contains(got.Why, "EMPTY") {
+		t.Errorf("Why does not say the launcher is empty, so the reader is sent to the version instead of "+
+			"to the install:\n%s", got.Why)
+	}
+}
+
+// A reservation sitting beside the real binary must not cost the real match, and
+// that is the half that says ONE zero-byte guard is enough: a launcher with
+// bytes can never equal an empty file, so identifyCopy needs no second check in
+// the loop.
+//
+// What this does NOT pin, said out loud because a size check next to a version
+// invites the assumption: the size filter is cost, not correctness. Deleting it
+// leaves this test passing — sameContents rejects the empty candidate on length
+// — and only makes the reads longer.
+func TestAReservationIsNotAMatchForALauncherThatHasBytes(t *testing.T) {
+	home := tempDir(t)
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_DATA_HOME", "")
+	versions := filepath.Join(home, ".local", "share", "claude", "versions")
+	write(t, filepath.Join(versions, "2.1.112"), "")
+	write(t, filepath.Join(versions, "2.1.241"), "ELF-241")
+	launcher := filepath.Join(home, ".local", "bin", "claude.exe")
+	write(t, launcher, "ELF-241")
+
+	got := Describe(launcher)
+	if !got.Known {
+		t.Fatalf("a reservation beside the real binary made the real one unreadable: %s", got.Why)
+	}
+	if got.Version != (Version{2, 1, 241}) {
+		t.Fatalf("Version = %s, want 2.1.241", got.Version)
+	}
+}
+
+// THE PROPERTY THE ITEM BEHIND THIS WORK IS ABOUT, on every CI leg rather than
+// only the Windows one. The shape is a Windows install and the platform is not:
+// what matters is that a launcher named from its BYTES is Known, and that
+// KeychainEra() therefore fires — which is what makes `ccdad run` refuse and
+// doctor rule fail. Before the bytes were read this was Known=false on such a
+// machine, so the refusal never fired and the session ran as the live login.
+//
+// ccver_windows_test.go has the same property against a real Windows runner with
+// HOME and %USERPROFILE% apart; this one is here so the property is not resting
+// on one leg out of three.
+func TestACopyOfAKeychainEraBinaryIsInTheEra(t *testing.T) {
+	home := tempDir(t)
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_DATA_HOME", "")
+	versions := filepath.Join(home, ".local", "share", "claude", "versions")
+	write(t, filepath.Join(versions, "2.1.112"), "ELF-112")
+	launcher := filepath.Join(home, ".local", "bin", "claude.exe")
+	write(t, launcher, "ELF-112")
+
+	got := Describe(launcher)
+	if !got.KeychainEra() {
+		t.Fatalf("KeychainEra() = false for %s — the refusal `ccdad run` exists for does not fire: %s",
+			got, got.Why)
+	}
+}
+
+// XDG_DATA_HOME is where the binaries are, and the home-derived .local/share is
+// not — fpr() reads the variable first, so a machine that sets it has its
+// versions tree there and the launcher's copy came from THAT tree. A lookup that
+// went straight to <home>/.local/share would compare the launcher against
+// whatever an unused directory still held, which here is a different release
+// entirely.
+//
+// The related property this does NOT reach — that the launcher's home and the
+// versions tree's home must be the same one — needs two homes and therefore a
+// Windows runner; ccver_windows_test.go holds it.
+func TestTheVersionsTreeIsTheOneXDG_DATA_HOMENames(t *testing.T) {
+	home := tempDir(t)
+	elsewhere := tempDir(t)
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(elsewhere, ".local", "share"))
+	write(t, filepath.Join(elsewhere, ".local", "share", "claude", "versions", "2.1.241"), "ELF-241")
+	// The launcher's own home has a versions tree too, holding something else.
+	write(t, filepath.Join(home, ".local", "share", "claude", "versions", "2.1.112"), "ELF-112")
+	launcher := filepath.Join(home, ".local", "bin", "claude.exe")
+	write(t, launcher, "ELF-241")
+
+	got := Describe(launcher)
+	if !got.Known || got.Version != (Version{2, 1, 241}) {
+		t.Fatalf("Describe() = %s (known=%v), want 2.1.241 — XDG_DATA_HOME is where Claude Code puts the "+
+			"binaries, so it is the tree the launcher's copy came from: %s", got.Version, got.Known, got.Why)
+	}
+}
+
+// identifyCopy has to tell "this is not a match" from "I could not look", and
+// the two reach the same caller. Neither shape is reachable through Describe --
+// it only calls this after resolving the launcher and finding the versions
+// directory -- so they are exercised here rather than left as branches that
+// ship unrendered.
+func TestIdentifyCopySaysWhenItCouldNotLookRatherThanThatNothingMatched(t *testing.T) {
+	dir := tempDir(t)
+	versions := filepath.Join(dir, ".local", "share", "claude", "versions")
+	write(t, filepath.Join(versions, "2.1.241"), "ELF-241")
+	launcher := filepath.Join(dir, ".local", "bin", "claude.exe")
+	write(t, launcher, "ELF-241")
+
+	if match, why := identifyCopy(filepath.Join(dir, "absent.exe"), versions); why == "" {
+		t.Errorf("identifyCopy matched %q for a launcher that is not there", match)
+	} else if !strings.Contains(why, "could not be read") {
+		t.Errorf("a launcher that is not there reads as a failed match rather than a failed look:\n%s", why)
+	}
+	if match, why := identifyCopy(launcher, filepath.Join(dir, "no-such-versions")); why == "" {
+		t.Errorf("identifyCopy matched %q against a versions directory that is not there", match)
+	} else if !strings.Contains(why, "could not be listed") {
+		t.Errorf("an unlistable versions directory reads as a failed match rather than a failed look:\n%s", why)
+	}
+}
+
+// A copy renders without an arrow, and that is a claim about the machine rather
+// than a style preference: "->" says the launcher resolves to the target, so a
+// reader would conclude that removing the versions entry breaks claude. On
+// Windows, the one platform where launchers are copies, it does not.
+func TestStringRendersACopyWithoutAnArrow(t *testing.T) {
+	in := Install{
+		Launcher: `C:\Users\u\.local\bin\claude.exe`,
+		Target:   `C:\Users\u\.local\share\claude\versions\2.1.241`,
+		Method:   MethodNative,
+		Version:  Version{2, 1, 241},
+		Known:    true,
+		Copied:   true,
+	}
+	got := in.String()
+	if strings.Contains(got, "->") {
+		t.Errorf("String() rendered a copy as a resolution:\n%s", got)
+	}
+	for _, want := range []string{"2.1.241", "native", in.Launcher, in.Target, "copy"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("String() does not carry %q:\n%s", want, got)
+		}
+	}
+}
+
+// sameContents is the exactness the whole copy branch rests on, so its edges are
+// pinned here rather than only through Describe: a difference in the last byte,
+// a file that is a PREFIX of the other, and a length that lands exactly on the
+// chunk boundary — which is the one input where io.ReadFull ends with EOF and a
+// zero-length read rather than with ErrUnexpectedEOF.
+func TestSameContents(t *testing.T) {
+	dir := tempDir(t)
+	path := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		write(t, p, body)
+		return p
+	}
+	aligned := strings.Repeat("x", compareChunk)
+	for _, c := range []struct {
+		name string
+		a, b string
+		want bool
+	}{
+		{"identical", path("a", "hello"), path("b", "hello"), true},
+		{"last byte differs", path("c", "hellO"), path("d", "hellP"), false},
+		{"one is a prefix of the other", path("e", "hell"), path("f", "hello"), false},
+		{"both empty", path("g", ""), path("h", ""), true},
+		{"exactly one chunk", path("i", aligned), path("j", aligned), true},
+		{"one chunk against one chunk plus a byte", path("k", aligned), path("l", aligned+"!"), false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := sameContents(c.a, c.b)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != c.want {
+				t.Errorf("sameContents = %v, want %v", got, c.want)
+			}
+		})
+	}
+
+	if _, err := sameContents(filepath.Join(dir, "absent"), path("m", "x")); err == nil {
+		t.Error("sameContents reported on a file that is not there without an error — identifyCopy would " +
+			"then have to tell 'not a match' from 'could not look'")
 	}
 }
 
@@ -838,7 +1212,7 @@ func TestANativeLauncherThatIsACopyIsNamedAsOneAnyway(t *testing.T) {
 // install, and must not be dressed up as one. Without this the branch above
 // would claim every ~/.local/bin/claude on earth.
 func TestALauncherInTheNativeDirectoryWithNoVersionsTreeIsStillUnknown(t *testing.T) {
-	home := t.TempDir()
+	home := tempDir(t)
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_DATA_HOME", "")
@@ -855,7 +1229,7 @@ func TestALauncherInTheNativeDirectoryWithNoVersionsTreeIsStillUnknown(t *testin
 // went, not just where it started: the reader's next step is to look at the
 // target, and the target is the half only ccdad can see.
 func TestAnUnclassifiableSymlinkNamesWhatItResolvedTo(t *testing.T) {
-	root := t.TempDir()
+	root := tempDir(t)
 	target := filepath.Join(root, "opt", "something", "claude-ish")
 	write(t, target, "#!/bin/sh\n")
 	launcher := filepath.Join(root, "bin", "claude")
@@ -912,7 +1286,7 @@ func TestProbeDistinguishesAnUnsearchableHomeFromAnEmptyOne(t *testing.T) {
 // "Claude Code 0.0.1": inside the keychain era, so doctor rules fail and `ccdad
 // run` refuses, over a manifest describing a two-line shell wrapper.
 func TestAPrunedLocalInstallDoesNotFallBackToTheWrapperManifest(t *testing.T) {
-	local := t.TempDir()
+	local := tempDir(t)
 	launcher := filepath.Join(local, "claude")
 	write(t, launcher, "#!/bin/sh\nexec \""+local+"/node_modules/.bin/claude\" \"$@\"\n")
 	write(t, filepath.Join(local, "package.json"), `{"name":"claude-local","version":"0.0.1","private":true}`)
