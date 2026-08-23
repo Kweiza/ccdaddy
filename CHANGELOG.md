@@ -79,6 +79,59 @@ by `uuid` or `alias`.
   names which of Claude Code's five API-key sources would actually win, and
   whether that win displaces the OAuth login.
 
+- **`ccdad doctor` gains an `oauth-source` check, for nineteen.** It answers
+  which OAuth-shaped credential Claude Code would authenticate a session with,
+  which is a different question from `environment`'s "is anything set that could
+  defeat a switch" — and it is a question that check structurally cannot answer,
+  because not every source is a variable. A session host injects a token at
+  `/home/claude/.claude/remote/.oauth_token`, a path compiled into Claude Code
+  with nothing to unset and which `ccdad run` cannot scope around; an Anthropic
+  CLI profile under `~/.config/anthropic` is a directory. Both outrank the
+  login. So does `ANTHROPIC_AUTH_TOKEN`, which outranks `CLAUDE_CODE_OAUTH_TOKEN`
+  as well — the reverse of what this tree assumed in three places. The row warns
+  and never fails: on a hosted machine the injected token is the correct working
+  state, and failing there would hand a non-zero exit to every session working as
+  designed.
+- **A login whose scopes do not carry `user:inference` is not a credential, and
+  ccdad now says so.** Claude Code takes the credentials file's login only when
+  that scope is present, so a Console sign-in leaves a well-formed record that
+  authenticates nothing. ccdad used to read "is there a `claudeAiOauth` object"
+  and report the account as live.
+
+### Fixed
+
+- **A host-injected API key was invisible to every command.** Claude Code reads
+  `CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR` **or**, when that is unset,
+  `/home/claude/.claude/remote/.api_key` — one branch, two routes. ccdad modelled
+  only the variable, so on a machine with the file and no variable a key that
+  displaces the login was reported by nothing: `doctor`'s `api-key` row said no
+  key resolved, `ccdad which` named the login's account, and a switch wrote a
+  login nothing would read.
+- **`CLAUDE_CODE_SIMPLE=0` put ccdad in bare mode.** Claude Code parses that
+  variable with a four-spelling truthiness test (`1`, `true`, `yes`, `on`) and
+  ccdad tested it for non-emptiness, so setting it to `0` — the natural way to
+  turn something off — made ccdad report that no credential resolves on a machine
+  that has one.
+- **Every message about a displaced switch prescribed the wrong fix.** They said
+  "Unset CLAUDE_CODE_OAUTH_TOKEN" — for `ccdad switch`, for `ccdad auto`, for the
+  daemon's log, and for the note after an api-key switch. Three of the sources
+  that displace a switch have no variable at all, so that sentence sent a user
+  after something that is not set. All four now print Claude Code's own
+  per-source remedy; for a host-injected token that is "check the host session".
+- **`CLAUDE_CODE_REMOTE=0` made ccdad think it was inside a session host.** Claude
+  Code reads that variable through a typed accessor that declares it a boolean —
+  the same four-spelling test as `CLAUDE_CODE_SIMPLE` — and ccdad tested it for
+  presence. Believing a session is hosted SUPPRESSES `ANTHROPIC_AUTH_TOKEN` and
+  the `apiKeyHelper` and disqualifies an Anthropic CLI profile, so ccdad reported
+  the login as the winner while one of them was deciding the session. The same
+  accessor trims every string variable, so a variable set to spaces is now
+  correctly read as not set.
+- **`ccdad auto` and the daemon stand down for the whole displacing set.** The
+  unattended gate was keyed on `CLAUDE_CODE_OAUTH_TOKEN` alone, so on a machine
+  where anything else outranks the credentials file the engine switched, reported
+  success, and changed nothing about what a session authenticates as — on every
+  evaluation.
+
 ### Changed
 
 - **`ccdad doctor`'s stale-keychain-item remedy stops asking you which Claude

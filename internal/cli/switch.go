@@ -275,9 +275,10 @@ func newSwitchCmd() *cobra.Command {
 			// credentials file, so with that variable set the switch has done its
 			// work and still changed nothing about what Claude Code uses.
 			if res.EnvTokenWins {
-				fmt.Fprintln(cmd.ErrOrStderr(),
-					"Note: CLAUDE_CODE_OAUTH_TOKEN is set, and Claude Code reads it in preference to the credentials file. "+
-						"Unset it for this switch to take effect.")
+				// The source, not a variable name: three of the sources this
+				// fires for have no variable, and switcher.DisplacementNote is
+				// the one place that wording lives.
+				fmt.Fprintln(cmd.ErrOrStderr(), switcher.DisplacementNote("Note: ", res))
 			}
 			// Claude Code re-reads the credentials file on its next request, so a
 			// running session picks this up without a restart.

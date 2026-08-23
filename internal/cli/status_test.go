@@ -401,7 +401,7 @@ func TestStatusMarksTheActiveAccount(t *testing.T) {
 	// The live credentials file carries uuid-b's refresh token, which is what
 	// attribution anchors on — the same answer `which` and `list` give.
 	if err := os.WriteFile(claude+"/.credentials.json",
-		[]byte(`{"claudeAiOauth":{"accessToken":"AT","refreshToken":"RT-uuid-b"}}`), 0o600); err != nil {
+		[]byte(liveLoginJSON("RT-uuid-b", "")), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

@@ -70,11 +70,21 @@ func apiKeyHelperConfigured() bool {
 // being silently resolved one way.
 func claudeAPIKeyEnvironment(cfg *cclink.GlobalConfig) identity.APIKeyEnvironment {
 	env := identity.APIKeyEnvironment{
-		Bare:              os.Getenv("CLAUDE_CODE_SIMPLE") != "",
-		Interactive:       true,
-		EnvKey:            os.Getenv("ANTHROPIC_API_KEY"),
-		FileDescriptorKey: os.Getenv("CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR") != "",
-		Helper:            apiKeyHelperConfigured(),
+		// TruthyEnv rather than != "": Claude Code parses CLAUDE_CODE_SIMPLE
+		// with a four-spelling truthiness test, so CLAUDE_CODE_SIMPLE=0 put
+		// ccdad in bare mode -- where the answer is "no key" -- while Claude
+		// Code was resolving one normally.
+		Bare:        identity.TruthyEnv(os.Getenv("CLAUDE_CODE_SIMPLE")),
+		Interactive: true,
+		EnvKey:      os.Getenv("ANTHROPIC_API_KEY"),
+		// TWO ROUTES INTO ONE BRANCH. The descriptor variable is what ccdad
+		// modelled; the well-known file is the other half, and Claude Code
+		// reads it whenever the variable is unset. A machine with the file and
+		// no variable had a key that displaces the login and a report that said
+		// nothing about it.
+		FileDescriptorKey: os.Getenv("CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR") != "" ||
+			identity.HostAPIKeyFilePresent(),
+		Helper: apiKeyHelperConfigured(),
 	}
 	if cfg != nil {
 		env.Approved = cclink.ApprovedAPIKeys(cfg)
@@ -159,36 +169,102 @@ func noteReleasedAPIKey(cmd *cobra.Command, res switcher.Result) {
 	}
 }
 
+// claudeOAuthEnvironment is the OAuth axis for this process, with the one field
+// the probe leaves to its caller filled in.
+//
+// The apiKeyHelper lives in Claude Code's settings tree, whose project half
+// resolves against the working directory and already has a reader here. A
+// second probe inside internal/identity would be a second answer that can
+// disagree with the first.
+func claudeOAuthEnvironment() identity.OAuthEnvironment {
+	env := identity.ProbeOAuthEnvironment()
+	env.Helper = apiKeyHelperConfigured()
+	return env
+}
+
+// displacingSource is one credential Claude Code would use INSTEAD of a
+// primaryApiKey ccdad has just installed, with the remedy that actually applies
+// to it.
+//
+// It carries a remedy per source because the single template this used to print
+// said "Unset it", which is wrong for a file, wrong for a settings key and
+// wrong for an Anthropic CLI profile. Claude Code ships a per-source table and
+// ccdad mirrors it rather than inventing a second set of instructions for the
+// same user.
+type displacingSource struct {
+	// Key is what dedupe compares, and it is NOT Name. One thing -- the
+	// apiKeyHelper -- resolves on BOTH axes, and the two axes spell it
+	// differently ("apiKeyHelper" against "the apiKeyHelper command"), so a
+	// dedupe on the printed name never fired for the single case it exists for.
+	Key    string
+	Name   string
+	Remedy string
+}
+
 // displacingAuth names everything Claude Code would use INSTEAD of a
 // primaryApiKey ccdad has just installed.
 //
 // The stored key is the LOWEST-priority source Claude Code has -- `eB()` falls
-// back to it only after the environment variable, the file descriptor and the
-// helper, and `ua()` puts CLAUDE_CODE_OAUTH_TOKEN ahead of everything by
-// producing an OAuth token that keeps `BE()` on. So a machine with any of these
-// set can be switched successfully and go on authenticating as something else
-// entirely. Saying so at the moment of the switch is the difference between a
-// confusing afternoon and a one-line fix.
+// back to it only after the environment variable, the host-injected key and the
+// helper -- and the whole OAuth axis sits in front of it as well. So a machine
+// with any of these can be switched successfully and go on authenticating as
+// something else entirely. Saying so at the moment of the switch is the
+// difference between a confusing afternoon and a one-line fix.
 //
-// installed is the key just written, and an ANTHROPIC_API_KEY holding exactly
-// that value is not displacing anything -- it is the same account by another
-// route.
-func displacingAuth(installed string) []string {
-	var out []string
-	if os.Getenv("ANTHROPIC_AUTH_TOKEN") != "" {
-		out = append(out, "ANTHROPIC_AUTH_TOKEN")
+// IT IS TWO RESOLVERS NOW, NOT A LIST OF os.Getenv CALLS, and that is what the
+// item behind this change turned up: of the two sources it named, one is an
+// environment variable and the other is a FILE with no variable behind it. A
+// list can only name things that have names to unset.
+//
+// The OAuth axis is resolved against an EMPTY login, because the activation
+// this note follows has just cleared the login: anything the resolver still
+// names is something that outranks the key just written.
+//
+// installed is that key, and an ANTHROPIC_API_KEY holding exactly that value is
+// not displacing anything -- it is the same account by another route.
+func displacingAuth(installed string) []displacingSource {
+	var out []displacingSource
+	add := func(key, name, remedy string) {
+		for _, seen := range out {
+			if seen.Key == key {
+				return
+			}
+		}
+		out = append(out, displacingSource{key, name, remedy})
 	}
-	if env := os.Getenv("ANTHROPIC_API_KEY"); env != "" && env != installed {
-		out = append(out, "ANTHROPIC_API_KEY")
+
+	cfg, err := cclink.LoadGlobalConfig()
+	if err != nil {
+		cfg = nil
 	}
-	if os.Getenv("CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR") != "" {
-		out = append(out, "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR")
+	env := claudeAPIKeyEnvironment(cfg)
+	if key, source := env.Resolve(); source.DisplacesOAuth() && key != installed {
+		add("apikey:"+source.String(), source.String(), source.Remedy())
 	}
-	if os.Getenv("CLAUDE_CODE_OAUTH_TOKEN") != "" {
-		out = append(out, "CLAUDE_CODE_OAUTH_TOKEN")
+
+	// AN UNAPPROVED ANTHROPIC_API_KEY IS STILL A DISPLACER, and reporting only
+	// the winner lost it. claudeAPIKeyEnvironment asks the INTERACTIVE
+	// question, where an unapproved key falls through to every lower source --
+	// but `claude -p` takes it outright, ahead of the very key this note
+	// follows. The old list named the variable whenever it was set, and dropping
+	// that was a regression rather than a simplification.
+	if env.EnvKeyNeedsApproval() && strings.TrimSpace(env.EnvKey) != installed {
+		add("apikey:"+identity.APIKeyEnv.String(),
+			identity.APIKeyEnv.String()+" (which an interactive session ignores until you approve it, and "+
+				"`claude -p` uses outright)", identity.APIKeyEnv.Remedy())
 	}
-	if apiKeyHelperConfigured() {
-		out = append(out, "the apiKeyHelper setting")
+
+	source, ok := claudeOAuthEnvironment().Resolve(identity.Login{})
+	switch {
+	case !ok:
+		add("oauth:snapshot",
+			"a credential ccdad cannot resolve (CLAUDE_BG_AUTH_SNAPSHOT_PATH names a token snapshot "+
+				"Claude Code consumes before it looks at anything else)", "Check the host session that set it.")
+	case source == identity.OAuthHelper:
+		// The one source that reaches both resolvers, and the reason Key exists.
+		add("apikey:"+identity.APIKeyHelper.String(), source.String(), source.Remedy())
+	case source != identity.OAuthNone && source != identity.OAuthLogin:
+		add("oauth:"+source.SourceName(), source.String(), source.Remedy())
 	}
 	return out
 }
@@ -201,9 +277,18 @@ func noteDisplacingAuth(cmd *cobra.Command, installed string) {
 	if len(displacing) == 0 {
 		return
 	}
+	names := make([]string, 0, len(displacing))
+	for _, d := range displacing {
+		names = append(names, d.Name)
+	}
 	fmt.Fprintf(cmd.ErrOrStderr(),
-		"Note: Claude Code reads a stored API key LAST, and %s is set — that wins instead.\n"+
-			"Unset it for this switch to take effect.\n", strings.Join(displacing, ", "))
+		"Note: Claude Code reads a stored API key LAST, and %s resolves ahead of it — that wins instead.\n",
+		joinAnd(names))
+	for _, d := range displacing {
+		if d.Remedy != "" {
+			fmt.Fprintf(cmd.ErrOrStderr(), "  %s\n", d.Remedy)
+		}
+	}
 }
 
 // switchToAPIKey is the whole switch for an api-key account.
@@ -323,7 +408,7 @@ func attributeLive(live cclink.Blob, accounts []store.Account,
 	if err != nil {
 		cfg = nil
 	}
-	res := switcher.AttributeLogin(live, accounts, lookup, claudeAPIKeyEnvironment(cfg))
+	res := switcher.AttributeLogin(live, accounts, lookup, claudeAPIKeyEnvironment(cfg), claudeOAuthEnvironment())
 	return res.Account, res.OK
 }
 

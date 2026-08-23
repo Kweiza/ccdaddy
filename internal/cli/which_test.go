@@ -109,7 +109,7 @@ func TestWhichDoesNotFallBackWhenTheEnvTokenIsUnmanaged(t *testing.T) {
 func TestWhichJSONCarriesTheUnknownKeyProbe(t *testing.T) {
 	isolate(t)
 	seedAccount(t, "u-1", "a@example.com")
-	writeLiveFile(t, `{"claudeAiOauth":{"accessToken":"AT","refreshToken":"RT-u-1"},"somethingNew":{"a":1}}`)
+	writeLiveFile(t, liveLoginJSON("RT-u-1", `"somethingNew":{"a":1}`))
 
 	code, out, _, top := runRoot(t, "which", "--json")
 	if code != ExitOK {
