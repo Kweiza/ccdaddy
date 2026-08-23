@@ -315,13 +315,17 @@ func TestReleaseIsIdempotentAfterCompromise(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Held and refreshed first, then stolen through stealLock. The bare
+	// remove+recreate that stood here is what turned main red on
+	// windows-latest: with a 20 ms toucher against a ~15.6 ms clock the
+	// recreated directory kept landing on the same mtime tick as the touch
+	// before it, so lock.go's `owned` comparison answered "still mine" and no
+	// takeover was ever seen. The sleep separates acquire from the takeover;
+	// only stealLock's backdating separates it from the LAST TOUCH, which is
+	// the gap that decides this.
 	time.Sleep(50 * time.Millisecond)
-	if err := os.RemoveAll(dir); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	stealLock(t, dir)
+
 	select {
 	case <-lk.Compromised():
 	case <-time.After(time.Second):
@@ -390,18 +394,13 @@ func TestReleaseDetectsTakeoverTouchHasNotYetNoticed(t *testing.T) {
 	default:
 	}
 
-	// The same short sleep TestTouchDetectsTakeover uses: on this
-	// filesystem directory mtimes advance in coarse steps, so an
-	// instantaneous remove+recreate can otherwise land on the same mtime
-	// tick as the original -- which cannot happen for a real takeover,
-	// separated from the original by at least Stale.
-	time.Sleep(50 * time.Millisecond)
-	if err := os.RemoveAll(dir); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	// stealLock, not a bare remove+recreate: directory mtimes advance in
+	// coarse steps, so an instantaneous recreate can carry the very mtime the
+	// holder recorded -- which cannot happen for a real takeover, separated
+	// from the original by at least Stale. No toucher runs here (the interval
+	// is ten minutes), so the sleep the other takeover tests use would guard
+	// nothing; the backdating is what makes this unambiguous.
+	stealLock(t, dir)
 
 	if err := lk.Release(); !errors.Is(err, ErrCompromised) {
 		t.Fatalf("Release() = %v, want ErrCompromised even though touch's own ticker never fired", err)
