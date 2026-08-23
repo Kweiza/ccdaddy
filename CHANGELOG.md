@@ -29,16 +29,41 @@ by `uuid` or `alias`.
   not disturb its subject. `~/.claude.json` is not a source either —
   `lastOnboardingVersion` lagged the installed release by 118 patch versions on
   the machine this was written on.
+- **A Windows native install is named too, from the bytes of its launcher.**
+  There is no symlink to read there: the installer copies the versions binary to
+  `~/.local/bin/claude.exe`, and it records nowhere which one it took. ccdad
+  identifies it by comparing that launcher's CONTENT against the binaries still
+  in the versions directory — exact, and the only thing that is. Comparing
+  *sizes* is what Claude Code itself does, in its Windows update and again in
+  its orphan cleanup, and it is already wrong: two releases on the machine this
+  was written on are byte-for-byte the same LENGTH and different builds. That
+  size check is also why a Windows launcher can hold an older build than the
+  newest one installed — the update skips the copy when the sizes match — so
+  reading the bytes is the only way to name what actually runs. Without this,
+  `ccdad run`'s refusal never fired on Windows: a user on 2.1.112 or earlier got
+  a default-mode session that silently ran as the machine's live login, because
+  `CLAUDE_SECURESTORAGE_CONFIG_DIR` does not exist on those builds on any
+  platform. Two launchers that cannot be told apart, or a launcher matching
+  nothing installed, still read as "found an install and cannot name its
+  version" — a wrong version is worse than an unknown one, and it is the only
+  answer that makes ccdad refuse to start on a machine that works.
+- **ccdad looks for Claude Code under BOTH of the home directories it can be
+  installed in.** Claude Code resolves the home under `~/.local` as
+  `HOME ?? os.homedir()` and the home under `~/.claude` as a plain
+  `os.homedir()`. On Unix those are one directory. On Windows they part the
+  moment `HOME` is set — a Git-for-Windows shell sets it by default — so an
+  install performed from PowerShell lands under `%USERPROFILE%` and one
+  performed from an MSYS2 or Cygwin shell lands under `$HOME`, and Claude Code
+  itself installs under the first home while searching under the second. ccdad
+  searches both, and on Windows compares those paths case-insensitively, which
+  is how the filesystem compares them.
 - **`ccdad doctor` gains a `claude-version` check, for eighteen.** It names the
   version, how Claude Code was installed and which launcher it read, and it
   **fails** on 2.1.112 or earlier — the era where a keychain item shadows every
   switch and `ccdad run`'s default scoping is ignored, so a green report would
   be telling you the machine is fine while nothing ccdad does reaches Claude
   Code. A launcher it cannot classify is a warning, not a failure: ccdad not
-  being able to read an install is not the install being broken — and on
-  Windows a native install reads that way by design, because the installer
-  writes the launcher as a *copy* of the versions binary rather than a symlink,
-  so the row says that rather than claiming it is not a native install.
+  being able to read an install is not the install being broken.
 - **`ccdad doctor` gains three checks — `path`, `profiles` and `api-key` — for
   seventeen.** `path` answers `ccdad: command not found` by reading two facts
   rather than one: whether the binary's directory is on the PATH of the shell
