@@ -1269,6 +1269,18 @@ func TestDoctorWarnsWhenThereIsNoClaudeCode(t *testing.T) {
 	if code != ExitOK {
 		t.Errorf("exit %d, want 0", code)
 	}
+	// The level is NOT the behaviour here, and asserting it alone is a test that
+	// cannot fail: "there is no claude" and "the probe itself errored" are both
+	// warnings, and the second's message ("ccdad could not look for a claude
+	// launcher: ...") describes a broken probe rather than a machine with no
+	// Claude Code on it. Only the sentence tells them apart.
+	detail := report.detail(t, "claude-version")
+	if !strings.Contains(detail, "on PATH") {
+		t.Errorf("the detail does not say where it looked:\n%s", detail)
+	}
+	if strings.Contains(detail, "could not look for") {
+		t.Errorf("a machine with no Claude Code was reported as a failed probe:\n%s", detail)
+	}
 }
 
 // The remedy INVERTS across 2.1.113, and this is the assertion that pins it.

@@ -90,6 +90,16 @@ func TestNativeLauncherResolvesARelativeLinkAgainstItsOwnDirectory(t *testing.T)
 	if !got.Known || got.Version != (Version{2, 1, 150}) {
 		t.Fatalf("Describe = %+v, want 2.1.150 — a relative link must resolve against %s", got, filepath.Dir(launcher))
 	}
+	// The version alone does NOT prove the resolution happened: the segment scan
+	// finds "claude/versions/2.1.150" in the unresolved "../share/claude/..."
+	// just as well, so an implementation that never resolved would pass the
+	// assertion above. Target is the only output that differs, and doctor prints
+	// it -- a report naming "../share/claude/versions/2.1.150" is relative to a
+	// directory the reader has no way to know.
+	if got.Target != binary {
+		t.Errorf("Target = %q, want the resolved %q — the link was not resolved against its own directory",
+			got.Target, binary)
+	}
 }
 
 // An npm global install through 2.1.112: the bin entry is a symlink into
@@ -220,6 +230,22 @@ func TestANonVersionDirectoryNameIsReportedRatherThanGuessed(t *testing.T) {
 	}
 	if !strings.Contains(got.Why, "nightly") {
 		t.Errorf("Why does not name what it found:\n%s", got.Why)
+	}
+}
+
+// Two claude/versions runs in one path: one is context and one is the answer,
+// and the answer is the one nearest the file. It is reachable in the ordinary
+// way -- XDG_DATA_HOME pointed inside a directory that happens to be called
+// claude/versions -- and a first-match scan would return that outer directory's
+// next component as the version.
+func TestTheVersionNearestTheFileWins(t *testing.T) {
+	path := filepath.Join("home", "u", "claude", "versions", "data", "claude", "versions", "2.1.241")
+	got, ok := versionSegment(path)
+	if !ok {
+		t.Fatalf("versionSegment(%q) found nothing", path)
+	}
+	if got != "2.1.241" {
+		t.Errorf("versionSegment(%q) = %q, want 2.1.241 — the outer run is context, not the answer", path, got)
 	}
 }
 
@@ -596,5 +622,94 @@ func TestAClaudeCodeManifestWithNoVersionIsFoundButUnreadable(t *testing.T) {
 	}
 	if !strings.Contains(got.Why, "package.json") {
 		t.Errorf("Why does not name the manifest it read:\n%s", got.Why)
+	}
+}
+
+// The version has to name what RUNS, and one readlink level does not. A
+// versions/2.1.100 entry that is itself a link to versions/2.1.241 executes
+// 2.1.241 -- so answering 2.1.100 names a release the machine no longer has,
+// and on that number `ccdad run` would refuse to start and doctor would fail.
+// A wrong version is strictly worse than an unknown one, which is why the fully
+// resolved chain is asked before the launcher's own link.
+func TestAChainedVersionsEntryNamesTheVersionThatActuallyRuns(t *testing.T) {
+	root := t.TempDir()
+	versions := filepath.Join(root, ".local", "share", "claude", "versions")
+	real := filepath.Join(versions, "2.1.241")
+	write(t, real, "ELF")
+	// The stale entry, kept as a link to the current binary.
+	symlink(t, real, filepath.Join(versions, "2.1.100"))
+	launcher := filepath.Join(root, ".local", "bin", "claude")
+	if err := os.MkdirAll(filepath.Dir(launcher), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	symlink(t, filepath.Join(versions, "2.1.100"), launcher)
+
+	got := Describe(launcher)
+	if got.Version == (Version{2, 1, 100}) {
+		t.Fatalf("Describe named the link (2.1.100) rather than the binary it runs (2.1.241)")
+	}
+	if !got.Known || got.Version != (Version{2, 1, 241}) {
+		t.Fatalf("Describe = %+v, want 2.1.241: %s", got, got.Why)
+	}
+	// And the consequence, stated where it bites: 2.1.100 is inside the
+	// keychain era and 2.1.241 is not, so getting this wrong is a refusal on a
+	// machine that is fine.
+	if got.KeychainEra() {
+		t.Error("a current machine was classified as keychain-era")
+	}
+}
+
+// The fallback the ordering above must not break: a versions entry that points
+// OUT of the versions directory. Full resolution walks past the segment and
+// loses the version; the launcher's own link still names what the installer
+// wrote, and that is the best answer available.
+func TestAVersionsEntryPointingOutsideStillNamesTheInstallersVersion(t *testing.T) {
+	root := t.TempDir()
+	elsewhere := filepath.Join(root, "opt", "claude-build", "claude")
+	write(t, elsewhere, "ELF")
+	versions := filepath.Join(root, ".local", "share", "claude", "versions")
+	if err := os.MkdirAll(versions, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	symlink(t, elsewhere, filepath.Join(versions, "2.1.190"))
+	launcher := filepath.Join(root, ".local", "bin", "claude")
+	if err := os.MkdirAll(filepath.Dir(launcher), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// RELATIVE, and that is the point: this is the one path where the
+	// launcher's own link is what carries the version, so it is the only place
+	// nativeVersion's resolve-against-the-link's-directory is load-bearing. An
+	// absolute fixture here would leave that resolution unexercised.
+	symlink(t, filepath.Join("..", "share", "claude", "versions", "2.1.190"), launcher)
+	t.Chdir(t.TempDir())
+
+	got := Describe(launcher)
+	if !got.Known || got.Version != (Version{2, 1, 190}) {
+		t.Fatalf("Describe = %+v, want 2.1.190 — the one-level fallback is what keeps this answer: %s", got, got.Why)
+	}
+	if !filepath.IsAbs(got.Target) {
+		t.Errorf("Target = %q, want an absolute path — doctor prints it, and a path relative to a "+
+			"directory the reader cannot see is not an answer", got.Target)
+	}
+}
+
+// A launcher that IS the binary -- the versions entry itself put on PATH --
+// resolves to itself, and the report must not render that as "x -> x". String
+// is the single place that decides whether to print the arrow; Install.Target
+// always carries what the launcher resolved to.
+func TestALauncherThatIsTheBinaryIsNotRenderedAsAnArrowToItself(t *testing.T) {
+	root := t.TempDir()
+	launcher := filepath.Join(root, ".local", "share", "claude", "versions", "2.1.241")
+	write(t, launcher, "ELF")
+
+	got := Describe(launcher)
+	if !got.Known || got.Version != (Version{2, 1, 241}) {
+		t.Fatalf("Describe = %+v, want 2.1.241: %s", got, got.Why)
+	}
+	if got.Target != launcher {
+		t.Errorf("Target = %q, want %q — Target is what it resolved to, always", got.Target, launcher)
+	}
+	if strings.Contains(got.String(), "->") {
+		t.Errorf("String() renders an arrow from a path to itself:\n%s", got.String())
 	}
 }

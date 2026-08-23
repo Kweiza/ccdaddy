@@ -35,6 +35,13 @@
 // .../claude/versions/<VERSION>, so one readlink names it. An npm install of any
 // era resolves into node_modules, so the package's own package.json names it.
 //
+// One place this does MORE than dan: dan wants a boolean, so one readlink level
+// answers it, while a version has to name what actually runs. Describe therefore
+// reads the version off the fully resolved chain and keeps the one-level target
+// only as a fallback -- a versions/2.1.100 entry that is itself a link to
+// versions/2.1.241 runs 2.1.241, and naming the link would be a WRONG version
+// rather than an unknown one.
+//
 // To re-derive the layout against a newer build, take the byte offset first —
 // a regex with a multi-thousand-character lookbehind over 229 MB does not
 // return:
@@ -153,6 +160,13 @@ func (v Version) AtMost(o Version) bool { return v.Compare(o) <= 0 }
 // order 2.1.113-rc.1 BELOW 2.1.113, which for this package's one question would
 // be the wrong answer: a prerelease of the release that removed the keychain
 // backend does not have the keychain backend.
+//
+// That cut is also what makes strconv.Atoi safe to lean on here. Atoi accepts a
+// leading sign, so "2.1.-1" would otherwise parse to a negative patch -- but the
+// cut removes everything from the first '-' or '+' onward, so no sign ever
+// reaches it and the component comes back empty instead. A separate digit check
+// was written first and deleted: no input could distinguish it, which made it
+// dead code that read like a guard.
 func ParseVersion(s string) (Version, bool) {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -167,11 +181,6 @@ func ParseVersion(s string) (Version, bool) {
 	}
 	var v Version
 	for i, dst := range []*int{&v.Major, &v.Minor, &v.Patch} {
-		// strconv.Atoi accepts a leading sign, which no version carries and
-		// which would make "2.1.-1" parse. Reject anything that is not digits.
-		if parts[i] == "" || strings.IndexFunc(parts[i], func(r rune) bool { return r < '0' || r > '9' }) >= 0 {
-			return Version{}, false
-		}
 		n, err := strconv.Atoi(parts[i])
 		if err != nil {
 			return Version{}, false
@@ -186,8 +195,11 @@ type Install struct {
 	// Launcher is the path that named it — what PATH resolved, or the
 	// well-known location the fallback found.
 	Launcher string
-	// Target is where the launcher resolves to, when that is a different
-	// file. Empty when the launcher is the binary.
+	// Target is where the launcher resolves to. It EQUALS Launcher when the
+	// launcher is itself the binary, and is empty only when the path could not
+	// be resolved at all. Whether a report prints it is String's decision, not
+	// this field's: two places deciding the same thing is how one of them
+	// becomes unreachable.
 	Target string
 	// Method is how it was installed, as far as the layout shows.
 	Method Method
@@ -209,46 +221,35 @@ type Install struct {
 func Describe(launcher string) Install {
 	in := Install{Launcher: launcher, Method: MethodUnknown}
 
-	// Native first, and by Claude Code's own dan(): one readlink level,
-	// resolved against the link's own directory. Full symlink evaluation is
-	// tried second rather than first because a versions/<V> entry that is
-	// itself a link would resolve PAST the segment that carries the version.
+	real, realErr := filepath.EvalSymlinks(launcher)
+
+	// Native, and the FULLY RESOLVED path is asked first. dan() only needs a
+	// boolean, so one readlink level is enough for it; a VERSION has to name
+	// what actually runs, and those differ: a versions/2.1.100 entry that is
+	// itself a link to versions/2.1.241 executes 2.1.241, so answering 2.1.100
+	// would name a release this machine no longer has -- and a wrong version
+	// drives a refusal in `ccdad run` and a failure in doctor, which is worse
+	// than any "unknown". The last such segment on the chain wins, because it
+	// is the one nearest the bytes that run.
+	if realErr == nil {
+		if version, ok := versionSegment(real); ok {
+			return in.native(real, version)
+		}
+	}
+
+	// The one readlink level is the FALLBACK, for the launcher whose versions
+	// entry points OUT of the versions directory: full resolution walks past
+	// the segment and loses the version, while the link the installer wrote
+	// still names it.
 	if target, version, ok := nativeVersion(launcher); ok {
-		in.Target = target
-		in.Method = MethodNative
-		if v, parsed := ParseVersion(version); parsed {
-			in.Version, in.Known = v, true
-			return in
-		}
-		in.Why = fmt.Sprintf("its launcher points into %s, whose version directory is named %q rather than a version number",
-			filepath.Dir(target), version)
-		return in
+		return in.native(target, version)
 	}
 
-	real, err := filepath.EvalSymlinks(launcher)
-	if err != nil {
-		in.Why = fmt.Sprintf("%s could not be resolved: %v", launcher, err)
+	if realErr != nil {
+		in.Why = fmt.Sprintf("%s could not be resolved: %v", launcher, realErr)
 		return in
 	}
-	if real != launcher {
-		in.Target = real
-	}
-
-	// A Windows native install is reached here rather than above: Claude Code's
-	// dan() answers true on Windows without looking, because it cannot count on
-	// lstat there, and a launcher that is a copy rather than a link carries no
-	// version at all. EvalSymlinks does follow a Windows symlink or junction,
-	// so the ones that ARE links are still named.
-	if version, ok := versionSegment(real); ok {
-		in.Method = MethodNative
-		if v, parsed := ParseVersion(version); parsed {
-			in.Version, in.Known = v, true
-			return in
-		}
-		in.Why = fmt.Sprintf("its launcher resolves into %s, whose version directory is named %q rather than a version number",
-			filepath.Dir(real), version)
-		return in
-	}
+	in.Target = real
 
 	if version, where, ok := npmVersion(real); ok {
 		in.Method = MethodNPM
@@ -262,6 +263,24 @@ func Describe(launcher string) Install {
 
 	in.Why = fmt.Sprintf("%s is neither a symlink into a claude/versions directory nor an npm install of %s, "+
 		"so ccdad has no way to read its version without running it", displayPath(launcher, real), PackageName)
+	return in
+}
+
+// native fills in a launcher that resolved into a claude/versions directory.
+//
+// A version directory named something that is not a version is reported rather
+// than guessed at: the LAYOUT was recognised, so the remedy ("your launcher
+// points somewhere odd") differs from the remedy for a launcher with no layout
+// around it at all.
+func (in Install) native(target, version string) Install {
+	in.Method = MethodNative
+	in.Target = target
+	if v, parsed := ParseVersion(version); parsed {
+		in.Version, in.Known = v, true
+		return in
+	}
+	in.Why = fmt.Sprintf("its launcher resolves into %s, whose version directory is named %q rather than a version number",
+		filepath.Dir(target), version)
 	return in
 }
 
@@ -344,6 +363,12 @@ func fallbackLaunchers() []string {
 // implies: the launcher must be a symlink, and its target — resolved against
 // the link's own directory, exactly as dan() resolves it — must pass through a
 // claude/versions directory.
+// The Lstat is dan()'s own first clause and is kept for faithfulness rather than
+// for effect: measured by mutation, deleting it changes no observable answer on
+// this platform, because os.Readlink refuses a non-symlink two lines down and
+// the function returns false either way. It is recorded here so the next reader
+// does not delete it as dead code and does not write a test for it that cannot
+// fail -- it is a deliberate seam, not an untested branch.
 func nativeVersion(launcher string) (target, version string, ok bool) {
 	info, err := os.Lstat(launcher)
 	if err != nil || info.Mode()&os.ModeSymlink == 0 {
@@ -364,6 +389,11 @@ func nativeVersion(launcher string) (target, version string, ok bool) {
 
 // versionSegment finds a `claude/versions/<V>` run in a path and returns <V>.
 //
+// The LAST such run wins. A user whose data home is itself under a directory
+// called claude/versions -- or a resolved chain that passes through two of them
+// -- has one segment that is context and one that is the answer, and the answer
+// is always the one nearest the file.
+//
 // filepath is the right splitter here and only here: every path this sees comes
 // from a stat or a readlink on the RUNNING machine, so the separator the
 // package chose at build time is that machine's. Anything that parsed the other
@@ -373,7 +403,7 @@ func versionSegment(path string) (string, bool) {
 	parts := strings.Split(filepath.ToSlash(filepath.Clean(path)), "/")
 	// i+2 must be a real element: `.../claude/versions` with nothing after it
 	// is the directory itself, not a version in it.
-	for i := 0; i+2 < len(parts); i++ {
+	for i := len(parts) - 3; i >= 0; i-- {
 		if parts[i] == "claude" && parts[i+1] == "versions" && parts[i+2] != "" {
 			return parts[i+2], true
 		}
