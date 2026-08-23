@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -297,8 +298,11 @@ func TestParseRoundTripsLimits(t *testing.T) {
 		t.Fatalf("len(Limits) = %d, want 2", len(s.Limits))
 	}
 	first := s.Limits[0]
-	if first.Kind != "weekly_scoped" || first.Group != "model" || first.Percent != 12.5 {
-		t.Errorf("Limits[0] = %+v; want kind weekly_scoped, group model, percent 12.5", first)
+	if first.Kind != "weekly_scoped" || first.Group != "model" {
+		t.Errorf("Limits[0] = %+v; want kind weekly_scoped, group model", first)
+	}
+	if pct, ok := first.Percent(); !ok || pct != 12.5 {
+		t.Errorf("Limits[0].Percent() = %v, %v; want 12.5, true", pct, ok)
 	}
 	if first.ModelDisplayName != "Fable" {
 		t.Errorf("Limits[0].ModelDisplayName = %q, want %q", first.ModelDisplayName, "Fable")
@@ -643,5 +647,251 @@ func TestExtraUsageMoneyRefusesNonFiniteFigures(t *testing.T) {
 		if got, ok := e.Percent(); ok {
 			t.Errorf("Percent() = %v, ok = true for a wire value of %v", got, v)
 		}
+	}
+}
+
+// ---- limits[] as windows ----------------------------------------------------
+
+func scopedNames(ws []ScopedWindow) []string {
+	out := make([]string, 0, len(ws))
+	for _, w := range ws {
+		out = append(out, string(w.Name))
+	}
+	return out
+}
+
+// The whole point of ScopedWindows: a limits[] entry is a rate-limit window with
+// a scope, and it carries the same two quantities the fixed six do.
+func TestScopedWindowsReadsTheLimitsEntries(t *testing.T) {
+	ws := mustParse(t, realBody).ScopedWindows()
+
+	if len(ws) != 2 {
+		t.Fatalf("ScopedWindows() = %v, want the two limits[] entries", scopedNames(ws))
+	}
+
+	model := ws[0]
+	if model.Model != "Fable" || model.Surface != "" {
+		t.Errorf("ScopedWindows()[0] scope = model %q surface %q, want model Fable", model.Model, model.Surface)
+	}
+	if pct, ok := model.Percent(); !ok || pct != 12.5 {
+		t.Errorf("ScopedWindows()[0].Percent() = %v, %v; want 12.5, true — percent IS the window's utilization", pct, ok)
+	}
+	if at, ok := model.Reset(); !ok || !at.Equal(mustTime(t, "2026-08-27T00:00:00Z")) {
+		t.Errorf("ScopedWindows()[0].Reset() = %v, %v", at, ok)
+	}
+	if !model.Present {
+		t.Error("ScopedWindows()[0].Present = false; an entry that arrived is a window that is there")
+	}
+
+	surface := ws[1]
+	if surface.Surface != "Cowork" || surface.Model != "" {
+		t.Errorf("ScopedWindows()[1] scope = model %q surface %q, want surface Cowork", surface.Model, surface.Surface)
+	}
+	if at, ok := surface.Reset(); ok {
+		t.Errorf("ScopedWindows()[1].Reset() = %s, ok = true; a null resets_at is unknown", at)
+	}
+}
+
+// The scope object is nullable and BOTH halves are optional, so an entry naming
+// neither is legal wire. It must not panic, and it must not become a window
+// under an empty name — which would then be indistinguishable from any other
+// unnamed one.
+func TestScopedWindowsDropsAnEntryWithNoScopeName(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		scope string
+	}{
+		{"no scope key at all", ``},
+		{"scope null", `, "scope": null`},
+		{"scope with neither half", `, "scope": {}`},
+		{"scope with both halves null", `, "scope": {"model": null, "surface": null}`},
+		{"a display name that is empty", `, "scope": {"model": {"display_name": ""}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := `{"limits": [{"kind": "weekly_scoped", "group": "model", "percent": 99` + tc.scope + `}]}`
+			s := mustParse(t, body)
+			if len(s.Limits) != 1 {
+				t.Fatalf("the entry should still parse; Limits = %+v", s.Limits)
+			}
+			if ws := s.ScopedWindows(); len(ws) != 0 {
+				t.Errorf("ScopedWindows() = %v, want none — an unattributable cap is not a window", scopedNames(ws))
+			}
+		})
+	}
+}
+
+// weekly_scoped is the one kind Claude Code reads as a rate-limit window. An
+// entry of some other kind may be a one-time grant whose resets_at is an EXPIRY,
+// and binding one is the cinder_cove bug in a new costume.
+func TestScopedWindowsIgnoresAnUnknownKind(t *testing.T) {
+	s := mustParse(t, `{"limits": [
+	  {"kind": "one_time_grant", "group": "model", "percent": 99, "resets_at": "2026-12-31T00:00:00Z",
+	   "scope": {"model": {"display_name": "Opus 4.5"}}},
+	  {"kind": "weekly_scoped", "group": "model", "percent": 10, "resets_at": null,
+	   "scope": {"model": {"display_name": "Opus 4.5"}}}]}`)
+
+	ws := s.ScopedWindows()
+	if len(ws) != 1 {
+		t.Fatalf("ScopedWindows() = %v, want only the weekly_scoped entry", scopedNames(ws))
+	}
+	if pct, _ := ws[0].Percent(); pct != 10 {
+		t.Errorf("the surviving window reports %v%%, so the one_time_grant entry is the one that was kept", pct)
+	}
+}
+
+// A model and a surface can share a display name. They are two different caps,
+// and a caller that looks a binding window back up BY NAME has to find the one
+// that bound.
+func TestScopedWindowNamesSeparateAModelFromASurface(t *testing.T) {
+	s := mustParse(t, `{"limits": [
+	  {"kind": "weekly_scoped", "group": "model",   "percent": 10, "resets_at": null,
+	   "scope": {"model":   {"display_name": "Cowork"}}},
+	  {"kind": "weekly_scoped", "group": "surface", "percent": 20, "resets_at": null,
+	   "scope": {"surface": {"display_name": "Cowork"}}}]}`)
+
+	ws := s.ScopedWindows()
+	if len(ws) != 2 {
+		t.Fatalf("ScopedWindows() = %v, want both", scopedNames(ws))
+	}
+	if ws[0].Name == ws[1].Name {
+		t.Fatalf("both windows are named %q; a model and a surface sharing a display name would collide", ws[0].Name)
+	}
+	for _, w := range ws {
+		if !w.Name.Scoped() {
+			t.Errorf("Name %q does not report as scoped", w.Name)
+		}
+	}
+	for _, n := range []WindowName{WindowFiveHour, WindowSevenDayOpus, WindowCinderCove} {
+		if n.Scoped() {
+			t.Errorf("the fixed window %q reports as scoped", n)
+		}
+	}
+}
+
+// The schema writes percent as a non-null number, so this is drift — and it is
+// drift in the one direction that hides a spent account: a missing key
+// unmarshals to 0 in Go, which reads as a window with everything left.
+func TestLimitPercentIsUnknownRatherThanZero(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{"the key is missing", `{"limits": [{"kind": "weekly_scoped", "group": "model",
+		  "resets_at": null, "scope": {"model": {"display_name": "Fable"}}}]}`},
+		{"the key is null", `{"limits": [{"kind": "weekly_scoped", "group": "model", "percent": null,
+		  "resets_at": null, "scope": {"model": {"display_name": "Fable"}}}]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := mustParse(t, tc.body)
+			if len(s.Limits) != 1 {
+				t.Fatalf("Limits = %+v, want the one entry", s.Limits)
+			}
+			if pct, ok := s.Limits[0].Percent(); ok {
+				t.Errorf("Percent() = %v, true; an unread percent must not read as %v%% used", pct, pct)
+			}
+			ws := s.ScopedWindows()
+			if len(ws) != 1 {
+				t.Fatalf("ScopedWindows() = %v; the entry is still a window that exists", scopedNames(ws))
+			}
+			if _, ok := ws[0].Percent(); ok {
+				t.Error("the window reports a known utilization built out of nothing")
+			}
+		})
+	}
+}
+
+// The same guard Window.Percent carries, and for the same reason: a NaN reported
+// as KNOWN loses no comparison in the ranking and can hold first place.
+func TestLimitPercentRefusesANonFiniteValue(t *testing.T) {
+	for _, v := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		l := LimitFor(LimitInput{Kind: "weekly_scoped", Model: "Fable", Percent: &v})
+		if pct, ok := l.Percent(); ok {
+			t.Errorf("LimitFor(%v).Percent() = %v, true", v, pct)
+		}
+	}
+}
+
+func TestLimitForRoundTripsThroughTheCodec(t *testing.T) {
+	pct, at := 42.5, mustTime(t, "2026-08-27T00:00:00Z")
+	in := &Snapshot{Limits: []Limit{
+		LimitFor(LimitInput{Kind: "weekly_scoped", Group: "model", Model: "Fable", Percent: &pct, ResetsAt: &at}),
+		LimitFor(LimitInput{Kind: "weekly_scoped", Group: "surface", Surface: "Cowork"}),
+	}}
+	raw, err := json.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out Snapshot
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("%v\n%s", err, raw)
+	}
+	if len(out.Limits) != 2 {
+		t.Fatalf("Limits = %+v, want 2\n%s", out.Limits, raw)
+	}
+	if got, ok := out.Limits[0].Percent(); !ok || got != pct {
+		t.Errorf("Limits[0].Percent() = %v, %v; want %v, true", got, ok, pct)
+	}
+	if got, ok := out.Limits[0].Reset(); !ok || !got.Equal(at) {
+		t.Errorf("Limits[0].Reset() = %v, %v", got, ok)
+	}
+	// The unknown one has to survive as unknown, not as a zero.
+	if got, ok := out.Limits[1].Percent(); ok {
+		t.Errorf("Limits[1].Percent() = %v, true; an unknown percent came back known\n%s", got, raw)
+	}
+	if out.Limits[1].SurfaceDisplayName != "Cowork" {
+		t.Errorf("Limits[1].SurfaceDisplayName = %q", out.Limits[1].SurfaceDisplayName)
+	}
+}
+
+func TestAllWindowsIsTheFixedFivePlusTheScopedOnes(t *testing.T) {
+	s := mustParse(t, realBody)
+
+	all := s.AllWindows()
+	if len(all) != 7 {
+		t.Fatalf("AllWindows() has %d windows, want 5 fixed + 2 scoped", len(all))
+	}
+	for i, w := range s.RateLimitWindows() {
+		if all[i].Name != w.Name {
+			t.Fatalf("AllWindows()[%d] = %q, want the fixed windows first in schema order", i, all[i].Name)
+		}
+	}
+	if !all[5].Name.Scoped() || !all[6].Name.Scoped() {
+		t.Errorf("AllWindows() tail = %q, %q; want the scoped ones", all[5].Name, all[6].Name)
+	}
+	// cinder_cove is a one-time grant, not a window to rank on. It stays out of
+	// the widened set for the same reason it stays out of the narrow one.
+	for _, w := range all {
+		if w.Name == WindowCinderCove {
+			t.Error("AllWindows() carries cinder_cove")
+		}
+	}
+
+	if got := (&Snapshot{}).AllWindows(); len(got) != 5 {
+		t.Errorf("a snapshot with no limits has %d windows, want the fixed five", len(got))
+	}
+	var nilSnap *Snapshot
+	if got := nilSnap.AllWindows(); got != nil {
+		t.Errorf("nil.AllWindows() = %v, want nil", got)
+	}
+	if got := nilSnap.ScopedWindows(); got != nil {
+		t.Errorf("nil.ScopedWindows() = %v, want nil", got)
+	}
+}
+
+// Claude Code's own filter requires scope.model, so an entry carrying both is a
+// model window that also names where it applies.
+func TestScopedWindowPrefersTheModelWhenBothScopesAreSet(t *testing.T) {
+	s := mustParse(t, `{"limits": [{"kind": "weekly_scoped", "group": "model", "percent": 50, "resets_at": null,
+	  "scope": {"model": {"display_name": "Opus 4.5"}, "surface": {"display_name": "Cowork"}}}]}`)
+
+	ws := s.ScopedWindows()
+	if len(ws) != 1 {
+		t.Fatalf("ScopedWindows() = %v", scopedNames(ws))
+	}
+	if ws[0].Model != "Opus 4.5" || ws[0].Surface != "Cowork" {
+		t.Errorf("scope = model %q surface %q; both halves are kept", ws[0].Model, ws[0].Surface)
+	}
+	if name := string(ws[0].Name); !strings.Contains(name, "Opus 4.5") {
+		t.Errorf("Name = %q, want it named for the model", name)
 	}
 }

@@ -478,26 +478,85 @@ func TestSwitchRejectsTheTwoBadCombinations(t *testing.T) {
 	}
 }
 
-// --model is accepted alongside --strategy, and deliberately changes nothing:
-// §7.1's ranking has no model dimension, so honouring it would mean inventing
-// product.
-func TestSwitchAcceptsModelAlongsideStrategyAndIgnoresIt(t *testing.T) {
+// seedModelWindows puts a reading whose per-model weekly caps are what differ,
+// which is the axis --model narrows.
+func seedModelWindows(t *testing.T, uuid string, fiveHour, opus, sonnet float64) {
+	t.Helper()
+	resets := time.Now().Add(48 * time.Hour)
+	win := func(used float64) usage.Window { return usage.NewWindow(&used, &resets) }
+	snap := &usage.Snapshot{
+		FiveHour:       win(fiveHour),
+		SevenDayOpus:   win(opus),
+		SevenDaySonnet: win(sonnet),
+	}
+	if err := usage.WithCache(time.Second, func(c *usage.Cache) error {
+		c.Put(uuid, usage.Entry{Snapshot: snap, FetchedAt: time.Now()})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// --model narrows §7.1's ranking to the caps that bind for the model this
+// session will run. The control is the same fixture without the flag, which
+// picks the OTHER account — so this cannot pass by the flag being ignored.
+func TestSwitchModelNarrowsTheRanking(t *testing.T) {
+	setup := func(t *testing.T) {
+		isolate(t)
+		seedAccount(t, "u-1", "a@example.com")
+		seedAccount(t, "u-2", "b@example.com")
+		seedAccount(t, "u-3", "c@example.com")
+		if code, _, _, top := runRoot(t, "switch", "3"); code != ExitOK {
+			t.Fatalf("setup switch = %d (%s)", code, top)
+		}
+		// u-1's Opus week is gone and its Sonnet week is barely touched; u-2 is
+		// middling everywhere. u-3 is the live account and the worst of the
+		// three, so it is never the answer.
+		seedModelWindows(t, "u-1", 10, 99, 5)
+		seedModelWindows(t, "u-2", 50, 50, 40)
+		seedModelWindows(t, "u-3", 95, 95, 95)
+		clearCooldown(t)
+	}
+
+	t.Run("unqualified", func(t *testing.T) {
+		setup(t)
+		if code, _, errOut, top := runRoot(t, "switch", "--strategy", "headroom"); code != ExitOK {
+			t.Fatalf("exit = %d (%s / %s), want 0", code, errOut, top)
+		}
+		if got := liveUUIDOf(t); got != "u-2" {
+			t.Fatalf("chose %q, want u-2 — u-1's spent Opus week binds when no model is named", got)
+		}
+	})
+
+	t.Run("--model sonnet", func(t *testing.T) {
+		setup(t)
+		if code, _, errOut, top := runRoot(t, "switch", "--strategy", "headroom", "--model", "sonnet"); code != ExitOK {
+			t.Fatalf("exit = %d (%s / %s), want 0", code, errOut, top)
+		}
+		if got := liveUUIDOf(t); got != "u-1" {
+			t.Fatalf("chose %q, want u-1 — a spent Opus week does not bind a Sonnet session", got)
+		}
+	})
+}
+
+// A model name ccdad cannot place narrows nothing, so honouring it silently
+// would rank exactly as if the flag had not been typed while the user believed
+// they had excluded another model's spent cap.
+func TestSwitchRefusesAModelItCannotPlace(t *testing.T) {
 	isolate(t)
 	seedAccount(t, "u-1", "a@example.com")
-	seedAccount(t, "u-2", "b@example.com")
-	if code, _, _, top := runRoot(t, "switch", "1"); code != ExitOK {
-		t.Fatalf("setup switch = %d (%s)", code, top)
-	}
-	seedUsage(t, "u-1", 10)
-	seedUsage(t, "u-2", 80)
-	clearCooldown(t)
+	seedUsage(t, "u-1", 90)
 
-	if code, _, errOut, top := runRoot(t, "switch", "--strategy", "headroom", "--model", "opus"); code != ExitOK {
-		t.Fatalf("exit = %d (%s / %s), want 0", code, errOut, top)
+	code, _, _, top := runRoot(t, "switch", "--strategy", "headroom", "--model", "gpt-5")
+	if code != ExitUsage {
+		t.Fatalf("exit = %d, want %d", code, ExitUsage)
 	}
-	if got := liveUUIDOf(t); got != "u-2" {
-		t.Fatalf("live account = %q, want the same u-2 the ranking picks without --model", got)
+	for _, want := range []string{"gpt-5", "opus", "sonnet"} {
+		if !strings.Contains(top, want) {
+			t.Errorf("error %q should mention %q", top, want)
+		}
 	}
+	assertNoLiveCredentials(t)
 }
 
 // The message a user sees most often. "needs exactly one account" was false the

@@ -161,7 +161,11 @@ func (r statusRow) binding() (usage.NamedWindow, bool) {
 	if !r.HasEntry || !r.Headroom.Known {
 		return usage.NamedWindow{}, false
 	}
-	for _, w := range r.Entry.Snapshot.RateLimitWindows() {
+	// AllWindows, not RateLimitWindows: the binding window can be a per-model or
+	// per-surface weekly one out of limits[], and looking it up in the fixed five
+	// alone would leave both columns blank for an account whose headroom is
+	// perfectly well known.
+	for _, w := range r.Entry.Snapshot.AllWindows() {
 		if w.Name == r.Headroom.Binding {
 			return w, true
 		}
@@ -339,8 +343,12 @@ func usageJSON(r statusRow, now time.Time) map[string]any {
 		out["bindingWindow"] = string(r.Headroom.Binding)
 	}
 
+	// AllWindows, so that bindingWindow above always names a key that is in
+	// here: the window that binds can be a per-model or per-surface weekly one
+	// out of limits[], and a consumer resolving the name against the fixed five
+	// would find nothing for an account whose headroom is perfectly well known.
 	windows := map[string]any{}
-	for _, w := range r.Entry.Snapshot.RateLimitWindows() {
+	for _, w := range r.Entry.Snapshot.AllWindows() {
 		if !w.Present {
 			continue
 		}
