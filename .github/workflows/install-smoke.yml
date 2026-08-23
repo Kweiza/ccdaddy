@@ -271,6 +271,99 @@ jobs:
           fi
           scripts/smoke-version.sh "$TAG" "$bin"
 
+      # The command the installer's last line now points at, run against the
+      # binary that was actually published. Nothing else checks that the pointer
+      # resolves - and a pointer that does not is precisely why install.sh
+      # stopped naming this command once before.
+      #
+      # It tolerates a release that predates the command, the way the upgrade
+      # leg's `daemon status` probe does: until a tag carries setup-path, and
+      # for any run that pins an older CCDAD_VERSION, Cobra answers `unknown
+      # command` which the exit contract retags as the usage code 2. That is a
+      # ::notice about coverage, not a failure of this release.
+      #
+      # --print is the only mode safe to run here, and that is the point of
+      # asserting it: it must write NOTHING. The manifest around it is what
+      # proves that, because "it printed something" would pass for an
+      # implementation that also edited a startup file.
+      - name: Assert `setup-path --print` against the published binary
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            installDir=${LOCALAPPDATA//\\//}/Programs/ccdad
+            bin=$installDir/ccdad.exe
+          else
+            installDir=$HOME/.local/bin
+            bin=$installDir/ccdad
+          fi
+
+          manifest() {
+            for f in "$HOME"/.bashrc "$HOME"/.bash_profile "$HOME"/.bash_login \
+              "$HOME"/.profile "$HOME"/.zshrc "$HOME"/.zshenv \
+              "$HOME"/.config/zsh/.zshrc "$HOME"/.config/fish/config.fish; do
+              if [ -e "$f" ]; then
+                printf '%s %s\n' "$f" "$(cksum <"$f")"
+              else
+                printf '%s absent\n' "$f"
+              fi
+            done
+          }
+          before=$(manifest)
+
+          code=0
+          out=$("$bin" setup-path --print 2>/dev/null) || code=$?
+          if [ "$code" -ne 0 ]; then
+            echo "::notice title=setup-path is not in this release::\`$bin setup-path --print\` exited $code, so this release does not carry the command install.sh points at. Every other step in this leg ran."
+            exit 0
+          fi
+
+          case $out in
+          *"$installDir"*) ;;
+          *)
+            echo "$out"
+            echo "setup-path --print did not name the install directory $installDir, so the block it hands over registers the wrong path" >&2
+            exit 1
+            ;;
+          esac
+
+          after=$(manifest)
+          if [ "$before" != "$after" ]; then
+            diff <(printf '%s\n' "$before") <(printf '%s\n' "$after") || true
+            echo "setup-path --print edited a startup file; --print is the mode that writes nothing" >&2
+            exit 1
+          fi
+          echo "install-smoke: setup-path --print named $installDir and touched no startup file"
+
+      # --print must leave the registry alone too, and on Windows that is the
+      # half the manifest above cannot see.
+      - name: Assert `setup-path --print` wrote no registry entry
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $installDir = Join-Path $env:LOCALAPPDATA 'Programs\ccdad'
+          $bin = Join-Path $installDir 'ccdad.exe'
+
+          function Read-UserPath {
+            $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $false)
+            if ($null -eq $key) { return '' }
+            try {
+              if (-not ($key.GetValueNames() -contains 'Path')) { return '' }
+              return [string]$key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+            } finally { $key.Close() }
+          }
+          $before = Read-UserPath
+
+          & $bin setup-path --print > $null 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::notice title=setup-path is not in this release::'$bin setup-path --print' exited $LASTEXITCODE, so the registry half of this assertion did not run."
+            exit 0
+          }
+
+          $after = Read-UserPath
+          if ($after -cne $before) {
+            throw "setup-path --print changed HKCU\Environment\Path; --print is the mode that writes nothing"
+          }
+          Write-Host "install-smoke: setup-path --print left the user PATH untouched"
+
       - name: Assert the installer's PATH write
         if: runner.os == 'Windows'
         shell: powershell
@@ -328,7 +421,23 @@ jobs:
             throw "the installer dropped these entries from the user PATH: $($lost -join ', ')"
           }
 
-          Write-Host "install-smoke: the user PATH gained $installDir and nothing else, still $kindAfter"
+          # The ownership record, which is what makes `ccdad uninstall` safe on
+          # Windows: a registry PATH component carries no evidence of who added
+          # it, so removal is gated on this value rather than on the directory's
+          # contents. Without it the installer's entry is one uninstall can
+          # never prove is ccdad's, and it stays on the user's PATH forever.
+          $record = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\ccdad', $false)
+          if ($null -eq $record) { throw 'the installer left no HKCU\Software\ccdad key, so uninstall cannot prove the PATH entry is ccdad''s' }
+          try {
+            $entry = [string]$record.GetValue('PathEntry', '')
+          } finally {
+            $record.Close()
+          }
+          if (-not [string]::Equals($entry.TrimEnd('\'), $installDir.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)) {
+            throw "HKCU\Software\ccdad\PathEntry is '$entry', want '$installDir'"
+          }
+
+          Write-Host "install-smoke: the user PATH gained $installDir and nothing else, still $kindAfter, recorded as ccdad's"
 
   # One leg, on the cheapest runner. What it adds over the three above is §11.2
   # fix 3 - stop the daemon before replacing the binary, which clauth does not
