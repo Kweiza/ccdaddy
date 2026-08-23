@@ -76,6 +76,17 @@ func isolate(t *testing.T) string {
 		t.Setenv(v, "")
 	}
 
+	// CCDAD_IMPORT is cleared for the same reason as the block above, and it is
+	// ccdad's own. A developer with it exported would have `ccdad bootstrap`
+	// read their real export document into a t.TempDir() store — so the test
+	// that means to describe an UNSET variable would pass or fail depending on
+	// whose machine ran it, which is the shape of an unsandboxed input.
+	//
+	// Empty rather than unset, because there is no t.Unsetenv and because empty
+	// is what bootstrap already treats as "no document". A test that needs the
+	// variable genuinely absent calls unsetForTest.
+	t.Setenv("CCDAD_IMPORT", "")
+
 	// THE TWO PATHS NO t.Setenv CAN REACH. Claude Code compiles in
 	// /home/claude/.claude/remote/.oauth_token and .api_key as literals: they
 	// are absolute, outside the home directory, and read on every machine.
@@ -373,6 +384,23 @@ func seedCreditAccount(t *testing.T, uuid, email string) {
 		t.Fatal(err)
 	}
 	if err := s.Add(store.Account{UUID: uuid, Email: email, Kind: identity.KindCredit}, credsFor("RT-"+uuid)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// seedPrimaryCreditAccount stores a credit-metered seat already marked primary.
+// It is a fresh insert rather than an update for the same reason
+// seedDisabledAccount is: store.Add deliberately preserves the stored flag over
+// an incoming one.
+func seedPrimaryCreditAccount(t *testing.T, uuid, email string) {
+	t.Helper()
+	s, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add(store.Account{
+		UUID: uuid, Email: email, Kind: identity.KindCredit, Primary: true,
+	}, credsFor("RT-"+uuid)); err != nil {
 		t.Fatal(err)
 	}
 }

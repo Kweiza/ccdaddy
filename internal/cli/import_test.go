@@ -439,3 +439,100 @@ func TestImportClearsAnAliasTheDocumentDoesNotCarry(t *testing.T) {
 		t.Errorf("alias = %q, want it cleared to match the document", got.Alias)
 	}
 }
+
+// primary decides whether a credit-metered seat is ranked beside the
+// subscriptions and whether the money ceiling gates it, so a restore that
+// dropped it would rebuild a machine that behaves differently from the one it
+// was taken from — silently, and only on the day the main pool runs out.
+//
+// Both halves of the carry are asserted, because they are two different lines
+// of code. The store.Account literal is what puts the flag on an account this
+// machine has never seen; the SetPrimary call after the add is what puts it on
+// one that is already here, since store.Add deliberately preserves the STORED
+// flag over an incoming one. Without the second, an import could never turn
+// primary back OFF, which is the direction a restore of an older backup needs.
+func TestPrimarySurvivesAnExportAndImport(t *testing.T) {
+	isolate(t)
+	seedPrimaryCreditAccount(t, "u-1", "seat@example.com")
+	seedAccount(t, "u-2", "plain@example.com")
+	armed := exportTo(t, "armed.json")
+
+	// A machine that has never seen either account.
+	isolate(t)
+	if code, _, stderr, top := runRoot(t, "import", armed); code != ExitOK {
+		t.Fatalf("import = %d (%s%s)", code, stderr, top)
+	}
+	s, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Get("u-1"); !got.Primary {
+		t.Error("the imported seat is not primary; the restored machine keeps the credit ceiling the original did not have")
+	}
+	if got, _ := s.Get("u-2"); got.Primary {
+		t.Error("an ordinary account came back primary")
+	}
+
+	// And the other direction: a document that does not mark the account
+	// primary, imported over a store where it is.
+	isolate(t)
+	seedAccount(t, "u-1", "seat@example.com")
+	plain := exportTo(t, "plain.json")
+
+	isolate(t)
+	seedPrimaryCreditAccount(t, "u-1", "seat@example.com")
+	if code, _, stderr, top := runRoot(t, "import", plain); code != ExitOK {
+		t.Fatalf("import = %d (%s%s)", code, stderr, top)
+	}
+	reopened, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := reopened.Get("u-1"); got.Primary {
+		t.Error("the account is still primary after importing a document that does not mark it so")
+	}
+}
+
+// The disabled half of the same rule, which nothing pinned before. store.Add
+// preserves the STORED flag over an incoming one, so an import that did not
+// apply the flag after the add could never turn `disabled` back OFF: restoring
+// a backup taken before an account was held out of rotation would leave it held
+// out, and the document that says otherwise would be ignored in silence.
+func TestImportClearsADisabledFlagTheDocumentDoesNotCarry(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "u-1", "one@example.com")
+	path := exportTo(t, "before-it-was-held.json")
+
+	isolate(t)
+	seedDisabledAccount(t, "u-1", "one@example.com")
+	if code, _, stderr, top := runRoot(t, "import", path); code != ExitOK {
+		t.Fatalf("import = %d (%s%s)", code, stderr, top)
+	}
+
+	s, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Get("u-1"); got.Disabled {
+		t.Error("the account is still disabled after importing a document that does not carry the flag")
+	}
+}
+
+// The other half of the same rule. `ccdad import` was named on a command line
+// by a person who can act on the number, so it keeps saying which version the
+// document declares — the note moved out of readExport rather than away.
+func TestImportNamesTheSchemaVersionADocumentDeclares(t *testing.T) {
+	isolate(t)
+	path := writeImportFile(t, `{"schemaVersion":99,"full":true,"accounts":[
+	  {"uuid":"u-1","email":"one@example.com","kind":"subscription",
+	   "credentials":{"claudeAiOauth":{"accessToken":"AT","refreshToken":"RT-u-1"}}}]}`)
+
+	code, _, stderr, top := runRoot(t, "import", path)
+
+	if code != ExitOK {
+		t.Fatalf("exit = %d, want %d\nstderr: %s\ntop: %s", code, ExitOK, stderr, top)
+	}
+	if !strings.Contains(stderr, "schema 99") {
+		t.Errorf("stderr = %q, want it to name the version the document declares", stderr)
+	}
+}

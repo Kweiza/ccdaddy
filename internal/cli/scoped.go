@@ -246,10 +246,12 @@ var scopedSessionAllowed = map[string]bool{
 	// Code at all -- its own help says so about mcpOAuth, and it is true of
 	// every key.
 	"ccdad import":       true,
+	"ccdad bootstrap":    true,
 	"ccdad disable":      true,
 	"ccdad enable":       true,
 	"ccdad alias":        true,
 	"ccdad move":         true,
+	"ccdad primary":      true,
 	"ccdad config":       true,
 	"ccdad config get":   true,
 	"ccdad config set":   true,

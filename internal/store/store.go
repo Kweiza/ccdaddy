@@ -194,9 +194,9 @@ func (s *Store) Get(uuid string) (Account, bool) {
 // Add stores an account and its account-scoped credentials.
 //
 // Re-adding an existing uuid updates it in place: the fresh login replaces the
-// stored credentials while the alias and the display index — which belong to
-// the user, not to the login — survive. This is what makes `ccdad add` double
-// as re-authentication.
+// stored credentials while the alias, the display index and the two per-account
+// flags — disabled and primary, which belong to the user rather than to the
+// login — survive. This is what makes `ccdad add` double as re-authentication.
 func (s *Store) Add(a Account, creds cclink.Blob) error {
 	return s.mutate(func() error { return s.add(a, creds) })
 }
@@ -217,6 +217,7 @@ func (s *Store) add(a Account, creds cclink.Blob) error {
 		a.Alias = existing.Alias
 		a.AddedAt = existing.AddedAt
 		a.Disabled = existing.Disabled
+		a.Primary = existing.Primary
 	} else {
 		a.Idx = s.nextIdx()
 		if a.AddedAt.IsZero() {
@@ -429,6 +430,41 @@ func (s *Store) SetDisabled(uuid string, disabled bool) (changed bool, err error
 		}
 		changed = s.data.Accounts[idx].Disabled != disabled
 		s.data.Accounts[idx].Disabled = disabled
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return changed, nil
+}
+
+// SetPrimary marks an account as metered in credits BY DESIGN, or unmarks it,
+// and reports whether that was a change.
+//
+// It takes the caller's word and checks nothing about the account's kind. Kind
+// is re-derived from the last profile read on every load, so an account that
+// reads as subscription today can read as credit tomorrow; a store that refused
+// the flag on today's answer would make the setting depend on when it was
+// typed. Looking at the account, and explaining a refusal, belongs where there
+// is a user to explain it to.
+//
+// The bool is here for the same reason SetDisabled's is: a caller can spend the
+// exit contract's exit 3 — the world is already as you asked — rather than
+// reporting a no-op as an action taken.
+func (s *Store) SetPrimary(uuid string, primary bool) (changed bool, err error) {
+	err = s.mutate(func() error {
+		idx := -1
+		for i := range s.data.Accounts {
+			if s.data.Accounts[i].UUID == uuid {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			return fmt.Errorf("%w: %q", ErrNotFound, uuid)
+		}
+		changed = s.data.Accounts[idx].Primary != primary
+		s.data.Accounts[idx].Primary = primary
 		return nil
 	})
 	if err != nil {

@@ -59,6 +59,9 @@ func accountJSON(a store.Account) map[string]any {
 	if a.Disabled {
 		out["disabled"] = true
 	}
+	if a.Primary {
+		out["primary"] = true
+	}
 	return out
 }
 
