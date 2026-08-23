@@ -685,7 +685,8 @@ func checkClaudeCode(live cclink.Blob, err error) check {
 		return check{"claude-code", levelWarn, fmt.Sprintf(
 			"no login in %s — Claude Code has not logged in on this machine, or it keeps its credentials elsewhere%s", home, scope)}
 	}
-	return check{"claude-code", levelOK, fmt.Sprintf("%s reads as %d top-level keys%s", path, len(live), scope)}
+	return check{"claude-code", levelOK, fmt.Sprintf("%s reads as %d top-level %s%s",
+		path, len(live), plural(len(live), "key", "keys"), scope)}
 }
 
 // scopedSessionNote is the clause every credential answer in this report needs
