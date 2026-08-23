@@ -35,6 +35,19 @@ by `uuid` or `alias`.
   model name `ccdad` cannot place is now a usage error rather than a flag that
   silently did nothing.
 
+### Added
+
+- **`ccdad run --full-profile` serves API-key accounts.** Claude Code reads an
+  API key from `primaryApiKey` in its global config, not from a credential
+  home, so the default mode — which shares that file with the live session on
+  purpose — still refuses, and now names the flag that works instead of only
+  pointing at `ccdad switch`. Under `--full-profile` the key is written to the
+  profile's own global config and nothing outside the profile moves. The
+  `ANTHROPIC_API_KEY` route was measured and not taken: it is read outright by
+  `claude -p` but gated for an interactive session on an approval list in that
+  same config, and `--bare` bypasses the gate — one flag away from a different
+  answer.
+
 ### Fixed
 
 - **`ccdad switch` typed inside a `ccdad run` session rewrote the session, not

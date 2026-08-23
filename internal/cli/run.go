@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -87,6 +88,12 @@ type runSession struct {
 	// afterwards. A --full-profile profile is not: it is the accumulated state
 	// the mode exists to preserve.
 	ephemeral bool
+	// globalConfig is the Claude Code global config THIS MODE OWNS, or "" when
+	// the mode shares the machine's. Only --full-profile owns one, and owning
+	// it is what makes an API-key account runnable: the key lives in that file
+	// rather than in a credential home, so the default mode — which
+	// deliberately leaves the machine's copy shared — has nowhere to put one.
+	globalConfig string
 }
 
 // newProfile returns the persistent config home for an account, creating it on
@@ -118,7 +125,15 @@ func newProfile(uuid string) (runSession, error) {
 		}
 	}
 	env := unsetEnv(childEnv(), "CLAUDE_SECURESTORAGE_CONFIG_DIR")
-	return runSession{home: home, env: setEnv(env, "CLAUDE_CONFIG_DIR", home)}, nil
+	return runSession{
+		home: home,
+		env:  setEnv(env, "CLAUDE_CONFIG_DIR", home),
+		// Resolved with the same rule Claude Code applies inside the child,
+		// rather than spelled as <profile>/.claude.json: seedProfile copies
+		// top-level FILES, so on a machine with the legacy .config.json every
+		// profile has one — and Claude Code reads that in preference.
+		globalConfig: ccpath.GlobalConfigPathIn(home),
+	}, nil
 }
 
 // authorise decides how the child is told who it is, and reports whether a
@@ -135,28 +150,90 @@ func newProfile(uuid string) (runSession, error) {
 //     exactly this: "Run Claude Code with it exported for the session instead".
 //     Writing the stored record into a credentials file would put something in
 //     the session that looks like a login and is not one.
-//   - an API key is neither. Claude Code takes it from primaryApiKey in the
-//     GLOBAL config, and the environment variable it also reads is gated on an
-//     approval list that lives in that same shared file. The default mode
-//     deliberately shares it with the live session, so authorising an API-key
-//     account would mean writing the user's live configuration — which is the
-//     one thing this command promises not to do.
-func authorise(env []string, blob cclink.Blob, label string) ([]string, bool, error) {
+//   - an API key is neither: Claude Code takes it from primaryApiKey in the
+//     GLOBAL config, which is not a credential home at all. Which mode this is
+//     therefore decides the answer. The default mode leaves the machine's
+//     global config shared with the live session on purpose, so authorising an
+//     API-key account there would mean writing the user's live configuration —
+//     the one thing this command promises not to do — and it refuses, naming
+//     the flag that can. --full-profile owns a global config of its own, so
+//     there the key goes in and nothing outside the profile moves.
+//
+// The environment route was measured and rejected rather than overlooked.
+// ANTHROPIC_API_KEY is read outright by `claude -p`, and for an INTERACTIVE
+// session it is gated on the key's last 20 characters appearing in
+// customApiKeyResponses.approved in that same global config — so it would work
+// for one invocation shape and silently not for the other. Worse, `ccdad run
+// ACCT --bare`, or CLAUDE_CODE_SIMPLE in the environment, bypasses that gate
+// outright, which would make the behaviour depend on an argument ccdad
+// forwards without reading. Writing the approval needs the same config write
+// this takes anyway, so the environment route is more machinery for a worse
+// contract.
+func authorise(stderr io.Writer, session runSession, blob cclink.Blob, label string) ([]string, bool, error) {
 	rec, ok := cclink.TokenRecordOf(blob)
 	if !ok {
-		return env, true, nil
+		return session.env, true, nil
 	}
 	switch rec.Kind {
 	case "setup-token":
-		return setEnv(env, "CLAUDE_CODE_OAUTH_TOKEN", rec.Token), false, nil
+		return setEnv(session.env, "CLAUDE_CODE_OAUTH_TOKEN", rec.Token), false, nil
 	case cclink.APIKeyKind:
-		return nil, false, UsageError("%s is an API key account, and Claude Code reads an API key from "+
-			"its global config rather than from a credential home — which this command shares with the "+
-			"live session rather than rewriting. Use 'ccdad switch' for it, or run it by hand with "+
-			"ANTHROPIC_API_KEY exported", label)
+		if session.globalConfig == "" {
+			return nil, false, UsageError("%s is an API key account, and Claude Code reads an API key from "+
+				"its global config rather than from a credential home — which this mode shares with the live "+
+				"session rather than rewriting. Run it with --full-profile, which gives the session a global "+
+				"config of its own; or make it the live credential with 'ccdad switch'", label)
+		}
+		if err := installProfileAPIKey(session, rec.Token); err != nil {
+			return nil, false, err
+		}
+		noteInertProfileKey(stderr, session, label)
+		return session.env, false, nil
 	default:
 		return nil, false, UsageError("%s carries a %q credential ccdad does not know how to run", label, rec.Kind)
 	}
+}
+
+// installProfileAPIKey writes the account's key into the profile's own global
+// config, and only that file.
+//
+// UpdateGlobalConfigAt abandons a write that would leave the bytes unchanged,
+// so running the same account twice does not advance the mtime of a file
+// Claude Code watches.
+func installProfileAPIKey(session runSession, key string) error {
+	return cclink.UpdateGlobalConfigAt(session.globalConfig, func(g *cclink.GlobalConfig) error {
+		return cclink.SetPrimaryAPIKey(g, key)
+	})
+}
+
+// noteInertProfileKey warns when the profile already holds an OAuth login.
+//
+// primaryApiKey is INERT while a claudeAiOauth record sits in the credential
+// home — Claude Code binds anthropicAuthEnabled from the login and a stored
+// key does not affect it, which is why activateAPIKeyAccount clears the live
+// login as its second write. A profile is persistent, so a user who ran /login
+// inside an earlier session in this one left exactly that behind.
+//
+// The login is NOT removed. It is something the user made inside their own
+// profile, and deleting it so that ccdad's write takes effect is a worse
+// answer than saying so. Without this the session runs as the wrong identity
+// and reports nothing at all.
+func noteInertProfileKey(stderr io.Writer, session runSession, label string) {
+	creds := filepath.Join(session.home, ccpath.CredentialsFile)
+	raw, err := os.ReadFile(creds)
+	if err != nil {
+		return
+	}
+	var blob cclink.Blob
+	if err := json.Unmarshal(raw, &blob); err != nil {
+		return
+	}
+	if _, isLogin := blob["claudeAiOauth"]; !isLogin {
+		return
+	}
+	fmt.Fprintf(stderr, "warning: %s holds an OAuth login from an earlier session in this profile, and Claude Code "+
+		"reads it in preference to %s's API key. Remove that file, or sign out inside the session, for the key to "+
+		"take effect.\n", creds, label)
 }
 
 // seedProfile copies the user's own configuration into a new profile.
@@ -574,7 +651,7 @@ func newRunCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			env, needsFile, err := authorise(session.env, blob, target.Label())
+			env, needsFile, err := authorise(cmd.ErrOrStderr(), session, blob, target.Label())
 			if err != nil {
 				return err
 			}
