@@ -64,6 +64,17 @@ type Loop struct {
 	// first tick. Production leaves it nil; a test that arranges the clock needs
 	// to know the baseline was taken before it did, or the two race.
 	ready chan struct{}
+	// looped receives once at the END of every completed iteration, with the
+	// loop about to wait for its next tick. Production leaves it nil.
+	//
+	// The tick body finishing is NOT that moment, and the difference is the
+	// whole reason this exists: the rotation check below runs AFTER runTick
+	// returns, so a test that read rotation counts as soon as its body returned
+	// was reading them in a race with this loop. It lost often enough on
+	// windows-latest to fail TestASleepJumpProducesOneRotationCheckNotThousands
+	// with "rotation was checked 0 times", on a test with a fake clock and no
+	// timing in it at all.
+	looped chan<- struct{}
 
 	panics int
 }
@@ -158,6 +169,10 @@ func (l *Loop) Run(ctx context.Context) error {
 		if now := l.now(); !now.Before(nextRotate) {
 			l.checkRotation()
 			nextRotate = now.Add(l.rotateEvery())
+		}
+
+		if l.looped != nil {
+			l.looped <- struct{}{}
 		}
 	}
 }

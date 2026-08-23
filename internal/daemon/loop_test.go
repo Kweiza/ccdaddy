@@ -39,6 +39,7 @@ type harness struct {
 	clock    *fakeClock
 	ticks    chan time.Time
 	finished chan struct{}
+	looped   chan struct{}
 	cancel   context.CancelFunc
 	done     chan error
 	// atStart is how many rotation checks the loop had already made by the time
@@ -59,6 +60,7 @@ func newHarness(t *testing.T, behave func(ctx context.Context, call int) error) 
 		clock:    newClock(),
 		ticks:    make(chan time.Time),
 		finished: make(chan struct{}, 64),
+		looped:   make(chan struct{}, 64),
 		done:     make(chan error, 1),
 		behave:   behave,
 	}
@@ -79,6 +81,7 @@ func newHarness(t *testing.T, behave func(ctx context.Context, call int) error) 
 		Now:         h.clock.now,
 		RotateEvery: 5 * time.Minute,
 		ticks:       h.ticks,
+		looped:      h.looped,
 		ready:       make(chan struct{}),
 		rotate: func() (bool, error) {
 			h.mu.Lock()
@@ -107,8 +110,20 @@ func newHarness(t *testing.T, behave func(ctx context.Context, call int) error) 
 	return h
 }
 
-// tick delivers one tick and waits for the body to finish. A panicking body
-// still reaches its deferred report, so this does not hang on the panic tests.
+// tick delivers one tick and waits for the ITERATION to finish, not only the
+// body. A panicking body still reaches its deferred report, so this does not
+// hang on the panic tests.
+//
+// The second wait is the one that matters and it was missing. Run does its
+// rotation check after runTick returns, so a test that stopped at h.finished
+// resumed while the loop was still deciding whether to rotate — and every
+// assertion on a rotation count was a race the test usually won. It lost on
+// windows-latest.
+//
+// The give-up test is why h.done is a case here rather than a timeout: on the
+// tick that exhausts the panic budget, Run returns from inside the loop body
+// and no iteration is ever completed. The error goes back into the channel for
+// the test that is about to read it.
 func (h *harness) tick(t *testing.T) {
 	t.Helper()
 	select {
@@ -123,6 +138,13 @@ func (h *harness) tick(t *testing.T) {
 	case <-h.finished:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the tick body never finished")
+	}
+	select {
+	case <-h.looped:
+	case err := <-h.done:
+		h.done <- err
+	case <-time.After(5 * time.Second):
+		t.Fatal("the loop never came back round to wait for its next tick")
 	}
 }
 
