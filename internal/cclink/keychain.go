@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"os"
 	"os/user"
-	"path/filepath"
 	"strings"
 
 	"golang.org/x/text/unicode/norm"
@@ -41,13 +40,28 @@ import (
 //     appears to work and changes nothing.
 //   - DELETING the item redirects that Claude Code to the file rather than
 //     logging it out. That was the open question -- repair or credential loss --
-//     and the fallback settles it: it is a repair.
+//     and the fallback settles it in favour of repair.
 //
-// What deleting still costs, and why doctor hands over the command instead of
-// running it: on a machine actually running <=2.1.112 the item is not stale, it
-// is that Claude Code's LIVE login. Removing it is only free for a login ccdad
-// already holds. §12 rates destroying a credential during a switch High, and
-// nothing here is worth spending that on.
+// BUT THE REPAIR DOES NOT HOLD, and this is the half a reading of read() alone
+// misses. On a machine still running <=2.1.112 the very next credential write
+// -- an ordinary access-token refresh, so hours -- runs the combinator's
+// update(), which from 1.0.36 onward is:
+//
+//	update(K){let z=q.read(),Y=q.update(K);
+//	  if(Y.success){if(z===null)K.delete();return Y} ...}
+//
+// After the delete the keychain read returns null, so `security
+// add-generic-password -U` RE-CREATES the item and, because the pre-write read
+// was null, the FILE is unlinked. Within hours the shadowing item is back and
+// ccdad's .credentials.json is gone. Deleting is therefore cleanup on a machine
+// that has already moved to 2.1.113+ (nothing there can recreate it) and is NOT
+// a fix on one that has not -- there, the fix is to upgrade Claude Code. doctor
+// says exactly that, which is why it hands over the command rather than running
+// it.
+//
+// And on a machine actually running <=2.1.112 the item is not stale at all: it
+// is that Claude Code's LIVE login. §12 rates destroying a credential during a
+// switch High, and nothing here is worth spending that on.
 //
 // The other half of the same era, recorded because it looks like this file's
 // problem and is not: CLAUDE_SECURESTORAGE_CONFIG_DIR does not occur even once
@@ -136,35 +150,58 @@ type keychainEnv struct {
 // readKeychainEnv captures the environment once, so a service name and an
 // account name derived in the same call cannot straddle a change to it.
 func readKeychainEnv() keychainEnv {
-	dir, ok := os.LookupEnv("CLAUDE_CONFIG_DIR")
-	if ok && dir == "" {
-		home, _ := os.UserHomeDir()
-		dir = filepath.Join(home, ".claude")
-	}
 	return keychainEnv{
-		configDir:      dir,
+		configDir:      os.Getenv("CLAUDE_CONFIG_DIR"),
 		customOAuthURL: os.Getenv("CLAUDE_CODE_CUSTOM_OAUTH_URL"),
 		user:           os.Getenv("USER"),
 	}
 }
 
-// CredentialKeychainItem is the item a Keychain-era Claude Code would keep this
-// machine's OAuth login in, for the environment ccdad is running under.
+// CredentialKeychainItems is every name this machine's legacy OAuth item could
+// carry, most recent spelling first.
 //
-// It is a derivation, not a probe: it says what the item WOULD be called, and
-// says nothing about whether one exists. Nothing here touches the filesystem or
+// There is more than one because Claude Code changed how it hashed
+// CLAUDE_CONFIG_DIR mid-era: 2.1.38 and later normalize the value to NFC before
+// hashing, 1.0.30 through 2.1.37 hash the bytes as they came. A decomposed
+// value therefore names TWO different items depending on which build wrote it,
+// and probing only one of them is the same false "no legacy item" this
+// derivation was corrected to stop producing. They coincide -- one candidate --
+// whenever CLAUDE_CONFIG_DIR is unset or already composed, which is every
+// ordinary machine.
+//
+// The older eras are deliberately NOT candidates, and not merely because each
+// is another spawn. Before ~1.0.30 there was no hash at all and before 1.0.128
+// no OAUTH_FILE_SUFFIX, so their names are the UNSUFFIXED ones -- which on a
+// machine that sets CLAUDE_CONFIG_DIR or CLAUDE_CODE_CUSTOM_OAUTH_URL belong to
+// a different profile's login, not to this one. Probing them would report, and
+// invite deleting, somebody else's item. The NFC pair is the only split where
+// both spellings name the SAME logical item.
+//
+// It is a derivation, not a probe: it says what the items WOULD be called, and
+// says nothing about whether any exists. Nothing here touches the filesystem or
 // spawns anything, so it is safe to call on any platform and in any state.
-func CredentialKeychainItem() KeychainItem {
+func CredentialKeychainItems() []KeychainItem {
 	env := readKeychainEnv()
-	return KeychainItem{
-		Service: keychainServiceName(env, keychainCredentialsItem),
-		Account: keychainAccountName(env, osUsername),
+	account := keychainAccountName(env, osUsername)
+	names := keychainServiceNames(env, keychainCredentialsItem)
+	items := make([]KeychainItem, 0, len(names))
+	for _, name := range names {
+		items = append(items, KeychainItem{Service: name, Account: account})
 	}
+	return items
 }
+
+// CredentialKeychainItem is the name a CURRENT Claude Code's rules would give
+// the item -- the first candidate. Callers that intend to find an item that
+// exists want CredentialKeychainItems instead.
+func CredentialKeychainItem() KeychainItem { return CredentialKeychainItems()[0] }
 
 // keychainServiceName is the service attribute of the item, derived the way the
 // releases that WROTE one derived it -- 1.0.128 through 2.1.112, read out of
-// 2.1.112's bundle. (Before 1.0.128 the account was not computed in JS at all:
+// 2.1.112's bundle. One thing inside that span is NOT constant, and
+// keychainServiceNames is where it is handled: the config directory is hashed
+// as it came through 2.1.37 and NFC-normalized from 2.1.38 on. (Before 1.0.128
+// the account was not computed in JS at all:
 // the item name went into a SHELL string as a literal `$USER`, and there was no
 // OAUTH_FILE_SUFFIX before ~1.0.128 and no hash suffix before ~1.0.30. Those
 // eras name the same item as this one on any machine that sets neither
@@ -198,17 +235,40 @@ func CredentialKeychainItem() KeychainItem {
 // default path still produces a suffixed item, because the value is hashed
 // rather than compared against anything.
 //
-// THE HASHED STRING IS THE RAW VALUE, NFC-normalized -- not resolved, not
-// cleaned. A7() normalizes and otherwise hands back the variable untouched, and
-// the suffix only exists when the variable is truthy, so the two readings never
-// part company on a machine that has one.
-func keychainServiceName(env keychainEnv, item string) string {
-	tail := ""
-	if env.configDir != "" {
-		sum := sha256.Sum256([]byte(norm.NFC.String(env.configDir)))
-		tail = "-" + hex.EncodeToString(sum[:])[:8]
+// THE HASHED STRING IS THE RAW VALUE -- not resolved, not cleaned. A7() hands
+// the variable back untouched apart from normalization, and the suffix only
+// exists when the variable is truthy, so "the resolved config dir" and "the
+// variable" never part company on a machine that has one. Whether it is
+// normalized first is the one thing that DOES vary across the era; see
+// keychainServiceNames.
+func keychainServiceNames(env keychainEnv, item string) []string {
+	base := keychainBaseService + oauthFileSuffix(env.customOAuthURL) + item
+	if env.configDir == "" {
+		return []string{base}
 	}
-	return keychainBaseService + oauthFileSuffix(env.customOAuthURL) + item + tail
+	// NFC first: it is what 2.1.38..2.1.112 wrote, and the later half of the era
+	// is the likelier one to have left an item behind. The raw spelling is
+	// 1.0.30..2.1.37's, and it only differs at all for a value that was not
+	// already composed.
+	composed := norm.NFC.String(env.configDir)
+	names := []string{base + keychainHashSuffix(composed)}
+	if env.configDir != composed {
+		names = append(names, base+keychainHashSuffix(env.configDir))
+	}
+	return names
+}
+
+// keychainServiceName is the first of those, which is the name a current Claude
+// Code's rules would produce.
+func keychainServiceName(env keychainEnv, item string) string {
+	return keychainServiceNames(env, item)[0]
+}
+
+// keychainHashSuffix is the eight hex characters Claude Code appends, over
+// whatever string its era decided to hash.
+func keychainHashSuffix(hashed string) string {
+	sum := sha256.Sum256([]byte(hashed))
+	return "-" + hex.EncodeToString(sum[:])[:8]
 }
 
 // oauthFileSuffix is al().OAUTH_FILE_SUFFIX, which the spec writes as an opaque

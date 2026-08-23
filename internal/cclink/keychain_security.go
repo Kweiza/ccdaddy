@@ -217,19 +217,28 @@ func (it KeychainItem) Read(ctx context.Context) (string, bool, error) {
 // caller asked for a state, not for an event.
 //
 // NOTHING IN ccdad CALLS THIS, and that is now a ruling rather than a gap.
-// §3.3's use (b) proposed deleting the item during a switch, and the fact it
-// waited on is settled: <=2.1.112 reads the keychain and FALLS BACK to the
-// credentials file, so the delete is a repair and not a logout. It still does
-// not ship inside a switch, for two reasons the measurement supplied rather
-// than removed. 2.1.113 dropped the backend, so on every Claude Code a user can
-// install today the item is inert and the spawn would buy nothing while sitting
-// inside the credential-lock window on every macOS switch. And where it is NOT
-// inert -- a machine still on <=2.1.112 -- the item is that Claude Code's live
-// login, so deleting it unasked is §12's "destroying a credential on every
-// switch" with a different subject; making it safe needs the item READ and
-// attributed against the store first, which is a second spawn, this time one
-// that decrypts. doctor names the item and hands over the command instead, and
-// now says what running it costs.
+// §3.3's use (b) proposed deleting the item during a switch. The fact it waited
+// on is settled -- <=2.1.112 reads the keychain and FALLS BACK to the
+// credentials file, so the delete redirects rather than logs out -- and the
+// measurement then supplied three reasons not to ship it anyway:
+//
+//   - 2.1.113 dropped the backend, so on every Claude Code a user can install
+//     today the item is inert. The spawn would buy nothing while sitting inside
+//     the credential-lock window of every macOS switch.
+//   - Where it is NOT inert, the item is that Claude Code's live login, so
+//     deleting it unasked is §12's "destroying a credential on every switch"
+//     with a different subject. Making it safe needs the item READ and
+//     attributed against the store first -- a second spawn, and one that
+//     decrypts.
+//   - AND IT WOULD NOT EVEN WORK THERE. From 1.0.36 the combinator's update()
+//     deletes the credentials file whenever the pre-write keychain read came
+//     back empty, so the next token refresh after a delete recreates the item
+//     AND unlinks the file ccdad had just redirected Claude Code to. A switch
+//     that repairs a machine for a few hours and then costs it the file is not
+//     a repair. On such a machine the fix is upgrading Claude Code.
+//
+// doctor names the item, hands over the command, and says which of those two
+// machines the command is for.
 func (it KeychainItem) Delete(ctx context.Context) error {
 	res, err := runSecurity(ctx, "delete-generic-password", "-a", it.Account, "-s", it.Service)
 	if err != nil {
@@ -242,16 +251,45 @@ func (it KeychainItem) Delete(ctx context.Context) error {
 		Op: "delete-generic-password", failure: classifyKeychainError(res.stderr), stderr: res.stderr}
 }
 
-// CredentialKeychainItemPresent is the doctor probe: derive the item this
-// environment would use, and ask whether it is there without decrypting it.
+// KeychainLookup is what a probe for the legacy credential item found.
+type KeychainLookup struct {
+	// Present is whether one of the candidate names is on the keychain.
+	Present bool
+
+	// Item is the candidate that was found, or the first one when none was.
+	Item KeychainItem
+
+	// Checked is every name that was looked for, in order. A report that says
+	// "nothing there" has to be able to say what it looked for, and on a
+	// decomposed CLAUDE_CONFIG_DIR that is two names rather than one.
+	Checked []KeychainItem
+}
+
+// ProbeCredentialKeychainItem is the doctor probe: derive the names this
+// environment's item could carry and ask whether any of them is there, without
+// decrypting anything.
 //
-// The item is returned alongside the answer so a report can name what it found
-// -- the service name is derived from environment variables, so a user who did
-// not expect a suffixed item learns from the name why.
-func CredentialKeychainItemPresent(ctx context.Context) (bool, KeychainItem, error) {
-	item := CredentialKeychainItem()
-	present, err := item.Present(ctx)
-	return present, item, err
+// The candidates are tried in order and the FIRST hit wins, so a machine that
+// somehow has both spellings is reported as the newer one -- which is the one a
+// Claude Code new enough to have written both would read. A probe that fails is
+// returned as an error rather than continued past: "the keychain is locked" is
+// not "the item is not under this name", and answering the second question with
+// the first is the mistake this whole check exists to avoid.
+func ProbeCredentialKeychainItem(ctx context.Context) (KeychainLookup, error) {
+	items := CredentialKeychainItems()
+	out := KeychainLookup{Item: items[0], Checked: items}
+	for _, item := range items {
+		present, err := item.Present(ctx)
+		if err != nil {
+			out.Item = item
+			return out, err
+		}
+		if present {
+			out.Present, out.Item = true, item
+			return out, nil
+		}
+	}
+	return out, nil
 }
 
 // LoadKeychainCredentials reads the login a Keychain-era Claude Code would be

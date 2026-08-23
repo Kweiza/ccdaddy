@@ -47,13 +47,26 @@ by `uuid` or `alias`.
   non-ASCII letter in it, `doctor` looked under `claude-code-user` while the real
   item sat under the real name.
 
-- **`ccdad doctor` says what removing that item costs, before it offers the
-  command.** Claude Code 2.1.112 and earlier read the keychain item *before*
-  `.credentials.json` and fall back to the file when it is absent, so deleting it
-  hands those builds back to what ccdad writes rather than logging them out — but
-  it destroys the login stored in the item, and on a machine still running
-  ≤ 2.1.112 that item *is* the live login. The check now names both version
-  numbers and states the cost ahead of the `security` invocation.
+- **The legacy item is looked for under both spellings a keychain-era Claude
+  Code could have written.** 2.1.38 started NFC-normalizing `CLAUDE_CONFIG_DIR`
+  before hashing it into the item's name; 1.0.30 through 2.1.37 hashed the bytes
+  as they came. A decomposed value therefore has an item under each digest
+  depending on which build wrote it, and `doctor` probed only the composed one —
+  a third false "no legacy item", from the same cause as the other two. Both are
+  derived now, composed first, and they collapse to a single lookup whenever the
+  variable is unset or already composed, which is every ordinary machine.
+
+- **`ccdad doctor` says which machine the removal command is for, before it
+  offers the command.** Claude Code 2.1.112 and earlier read the keychain item
+  *before* `.credentials.json` and fall back to the file when it is absent, so
+  deleting it does redirect those builds — but not durably. From 1.0.36 a
+  successful keychain write deletes the credentials file whenever the pre-write
+  keychain read was empty, which after a deletion it always is, so the next
+  access-token refresh recreates the item and unlinks ccdad's file with it. On
+  2.1.113 or later the removal is clean-up nothing can undo; on 2.1.112 or
+  earlier it is not a fix at all and the item *is* the live login, so the answer
+  there is to upgrade Claude Code. The check now names both version numbers and
+  says all of this ahead of the `security` invocation.
 
 - **`ccdad doctor` no longer reports `ok environment` while a switch is being
   defeated.** The `environment` check looked at two variables —
