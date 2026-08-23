@@ -42,16 +42,19 @@
 #
 # ---------------------------------- what a green run does not cover
 #
-# Three of the six published assets are never installed, and a checkmark will be
+# Two of the six published assets are never installed, and a checkmark will be
 # read as an all-clear over all six unless it is said out loud - which the
 # resolve job repeats as a run annotation, because the header is not what anyone
 # reads once the checkmark is there:
 #
 #   ccdad-darwin-amd64   GitHub's macOS runners are arm64.
 #   ccdad-windows-arm64  GitHub's Windows runners are amd64.
-#   ccdad-linux-arm64    ubuntu-latest is amd64. This is the one that could be
-#                        closed cheaply - `ubuntu-24.04-arm` is free for public
-#                        repositories - if the three-leg shape is ever revisited.
+#
+# Both reasons above are facts about the runner images on offer rather than
+# choices, so neither entry is closable the way ccdad-linux-arm64 was: that one
+# was the third on this list until a dispatch proved the `ubuntu-24.04-arm`
+# label resolves for this repository, which is the only thing that was ever in
+# doubt about it.
 name: install-smoke
 
 on:
@@ -66,6 +69,19 @@ on:
       tag:
         description: The published tag to install, for example v1.2.3.
         required: true
+        type: string
+      previous:
+        description: >-
+          Upgrade from this tag instead of the release before `tag`. Leave it
+          empty for a real re-test. It exists because the upgrade leg's daemon
+          assertion self-skips against a predecessor with no `daemon` command,
+          and the only such predecessor is the one N-1 happens to resolve to
+          today - so without an override that assertion cannot be exercised at
+          all until another release is published. Setting it to `tag` itself is
+          legitimate and is how the handover gets tested: install.sh has no
+          "already at this version" shortcut, so it stops the running daemon and
+          replaces the binary exactly as a real upgrade does.
+        required: false
         type: string
   release:
     types: [published]
@@ -150,15 +166,26 @@ jobs:
 
       # Empty on the first release, which turns the upgrade leg off rather than
       # failing it. scripts/previous-release.sh says why.
+      #
+      # The override is dispatch-only: `inputs` is empty for the release event,
+      # and workflow_call does not declare it, so release.yml can never reach
+      # this branch and a real release always asks the API.
       - id: previous
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.target.outputs.tag }}
-        run: scripts/previous-release.sh "$TAG" >>"$GITHUB_OUTPUT"
+          OVERRIDE: ${{ inputs.previous }}
+        run: |
+          if [ -n "$OVERRIDE" ]; then
+            echo "::notice title=The upgrade leg's predecessor was chosen by hand::This run upgrades from $OVERRIDE, not from whatever release precedes $TAG. It says nothing about which release a user actually upgrades from."
+            printf 'previous=%s\n' "$OVERRIDE" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          scripts/previous-release.sh "$TAG" >>"$GITHUB_OUTPUT"
 
       - name: Say what this run does not cover
         run: |
-          echo "::notice title=Install smoke covers three of six release assets::Installed here: ccdad-linux-amd64, ccdad-darwin-arm64, ccdad-windows-amd64. Never installed: ccdad-darwin-amd64 (GitHub's macOS runners are arm64), ccdad-windows-arm64 (its Windows runners are amd64), ccdad-linux-arm64 (ubuntu-latest is amd64)."
+          echo "::notice title=Install smoke covers four of six release assets::Installed here: ccdad-linux-amd64, ccdad-linux-arm64, ccdad-darwin-arm64, ccdad-windows-amd64. Never installed: ccdad-darwin-amd64 (GitHub's macOS runners are arm64), ccdad-windows-arm64 (its Windows runners are amd64)."
 
   fresh:
     name: fresh install (${{ matrix.os }})
@@ -166,12 +193,22 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
-      # §11.5, and the reason the matrix is worth having: one OS failing is
-      # information about that OS, and cancelling the other two throws it away
+      # §11.5, and the reason the matrix is worth having: one leg failing is
+      # information about that platform, and cancelling the rest throws it away
       # at exactly the moment it is most wanted.
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # ubuntu-24.04-arm is here rather than named as a gap because a dispatch
+        # proved the label resolves for this repository. That was the whole
+        # blocker: a label GitHub does not recognise is a job that queues and
+        # never starts, which would turn every future release's smoke red for a
+        # reason that has nothing to do with the release.
+        #
+        # Nothing below branches on the label, and it does not need to. The
+        # steps ask $RUNNER_OS, which is Linux for both Ubuntu legs, and the
+        # thing actually under test - install.sh choosing an asset - reads
+        # `uname -m`, so the arm leg is what makes it pick ccdad-linux-arm64.
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v7
 
@@ -352,9 +389,28 @@ jobs:
           }
           $before = Read-UserPath
 
+          # The tolerance below has to be reached before it can tolerate
+          # anything, and in its first form it never was. An Actions
+          # `shell: powershell` step runs under $ErrorActionPreference = 'Stop',
+          # and under Stop a native command whose stderr is merged into the
+          # pipeline raises a TERMINATING NativeCommandError - so a release
+          # without the command killed this script on the invocation line,
+          # before $LASTEXITCODE was ever read, and took the PATH-write
+          # assertion after it down as a skip. That is the single highest-value
+          # thing this leg does, and no run had executed it.
+          #
+          # The bash twin of this tolerance is written `2>/dev/null || code=$?`
+          # and is fine, because a shell does not turn stderr into an
+          # exception. The asymmetry is the whole reason this survived review,
+          # and it is why the preference is dropped for exactly one line rather
+          # than for the step: everything after it should still fail loudly.
+          $eap = $ErrorActionPreference
+          $ErrorActionPreference = 'Continue'
           & $bin setup-path --print > $null 2>&1
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "::notice title=setup-path is not in this release::'$bin setup-path --print' exited $LASTEXITCODE, so the registry half of this assertion did not run."
+          $code = $LASTEXITCODE
+          $ErrorActionPreference = $eap
+          if ($code -ne 0) {
+            Write-Host "::notice title=setup-path is not in this release::'$bin setup-path --print' exited $code, so the registry half of this assertion did not run."
             exit 0
           }
 
