@@ -133,8 +133,9 @@ func TestUserPathWithDirAppendsOnlyWhenTheEntryIsMissing(t *testing.T) {
 	}, {
 		name: "already there, spelled with %LOCALAPPDATA%", current: `%LOCALAPPDATA%\Programs\ccdad`,
 		wantUpdated: "", wantChanged: false,
-		why: "install.ps1:207 reads the value unexpanded and install.ps1:174 compares it against an " +
-			"expanded directory, so it appends a second, expanded copy on every install. Do not copy that",
+		why: "install.ps1 shipped reading the value unexpanded and comparing it against an expanded " +
+			"directory, so it appended a second, expanded copy on every install. Both apply this rule now, " +
+			"and they must not drift apart",
 	}, {
 		name: "surviving %VAR% entries are written back unexpanded", current: `%SystemRoot%\system32;C:\Windows`,
 		wantUpdated: `%SystemRoot%\system32;C:\Windows;` + dir, wantChanged: true,
@@ -580,6 +581,12 @@ func TestTargetFilesPicksTheFilesTheShellActuallyReads(t *testing.T) {
 	}, {
 		name: "fish with XDG_CONFIG_HOME", shell: shellFish, env: map[string]string{"XDG_CONFIG_HOME": "@/xdg"},
 		want: []string{"@/xdg/fish/config.fish"},
+	}, {
+		name: "bash with both a .bash_profile and a .bash_login", shell: shellBash,
+		seed: []string{".bash_profile", ".bash_login", ".profile"},
+		want: []string{".bashrc", ".bash_profile"},
+		why: "bash reads the FIRST of the three that exists, so the order is the whole rule; with the scan " +
+			"reversed the block lands in a file bash never reaches while .bash_profile is there",
 	}}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -676,5 +683,128 @@ func TestFishBlockRunsUnderFish(t *testing.T) {
 	}
 	if want := "/opt/ccdad/bin:/usr/bin:/bin"; string(out) != want {
 		t.Errorf("PATH after sourcing the fish block three times = %q, want %q", out, want)
+	}
+}
+
+// shellFor's whole domain. Without this the POSIX aliases, plain csh and both
+// name-stripping rules can be deleted with the suite still green — and a
+// /bin/dash login shell (most Debian service accounts, and `docker exec` in a
+// slim image) would be told ccdad does not know how to write a startup file for
+// it, while --shell sh, which the flag's own help advertises, became a usage
+// error.
+func TestShellForReadsEveryNameItAdvertises(t *testing.T) {
+	cases := []struct {
+		name string
+		want shellKind
+		why  string
+	}{
+		{"bash", shellBash, ""},
+		{"/bin/bash", shellBash, "a $SHELL is a path, not a bare name"},
+		{"-bash", shellBash, "a login shell's argv[0] is conventionally the name with a leading hyphen"},
+		{"/usr/local/bin/BASH", shellBash, "case is not part of which shell this is"},
+		{"zsh", shellZsh, ""},
+		{"/usr/bin/zsh", shellZsh, ""},
+		{"fish", shellFish, ""},
+		{"/opt/homebrew/bin/fish", shellFish, "Homebrew's fish is not in /usr/bin"},
+		{"sh", shellPOSIX, ""},
+		{"dash", shellPOSIX, "Debian's /bin/sh, and the login shell of most service accounts"},
+		{"ash", shellPOSIX, ""},
+		{"ksh", shellPOSIX, ""},
+		{"ksh93", shellPOSIX, ""},
+		{"mksh", shellPOSIX, ""},
+		{"pdksh", shellPOSIX, ""},
+		{"busybox", shellPOSIX, ""},
+		{"csh", shellCsh, "csh shares no PATH syntax with the block, so it must not fall into the POSIX arm"},
+		{"tcsh", shellCsh, ""},
+		{"", shellUnknown, "an unset $SHELL is not a shell to guess at"},
+		{"nu", shellUnknown, ""},
+		{"pwsh.exe", shellUnknown, "the .exe is stripped, and pwsh is still not a shell this writes files for"},
+		{"powershell", shellUnknown, ""},
+	}
+	for _, tc := range cases {
+		if got := shellFor(tc.name); got != tc.want {
+			t.Errorf("shellFor(%q) = %v, want %v%s", tc.name, got, tc.want, because(tc.why))
+		}
+	}
+}
+
+// A commented-out or negated ZDOTDIR must not refuse: the refusal has no way
+// through — from a zsh prompt the environment is identical — so a bare-word
+// match locks a perfectly serveable user out of the write path forever.
+func TestAssignsZDOTDIRWantsAnAssignmentNotTheWord(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"an export", "export ZDOTDIR=$HOME/.config/zsh\n", true},
+		{"a bare assignment", "ZDOTDIR=$HOME/.config/zsh\n", true},
+		{"indented", "\t  export ZDOTDIR=/x\n", true},
+		{"among other lines", "setopt no_beep\nZDOTDIR=/x\nexport LANG=C\n", true},
+		{"commented out", "# export ZDOTDIR=\"$HOME/.config/zsh\"   # I turned this off\n", false},
+		{"a comment about it", "# ZDOTDIR is not used here; my config lives in ~/.zshrc\n", false},
+		{"unset", "unset ZDOTDIR\n", false},
+		{"only mentioned in a conditional test", "[[ -n $ZDOTDIR ]] && echo relocated\n", false},
+		{"empty", "", false},
+	}
+	for _, tc := range cases {
+		if got := assignsZDOTDIR([]byte(tc.body)); got != tc.want {
+			t.Errorf("assignsZDOTDIR(%q) = %v, want %v", tc.body, got, tc.want)
+		}
+	}
+}
+
+// A stray opening marker ABOVE a real block. Taking the real block's END as the
+// stray's close makes the "block" span every line between them — and removal
+// deletes that span, so the user's aliases and `source ~/.secrets` go with it.
+func TestSpliceBlockRefusesAStrayMarkerAboveARealBlock(t *testing.T) {
+	block := blockFor("/opt/ccdad/bin")
+	existing := "export EDITOR=vim\n" +
+		setupPathBegin + "\n" +
+		"export AWS_PROFILE=work\n" +
+		"alias k=kubectl\n" +
+		block
+	for _, tc := range []struct {
+		name string
+		run  func() ([]byte, bool, error)
+	}{
+		{"splice", func() ([]byte, bool, error) { return spliceBlock([]byte(existing), block) }},
+		{"remove", func() ([]byte, bool, error) { return removeBlockFrom([]byte(existing)) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, changed, err := tc.run()
+			if err == nil {
+				t.Fatalf("accepted a file with a stray opening marker above a real block, and returned:\n%q\n"+
+					"the user's own lines between the two markers are inside what removal deletes", got)
+			}
+			if changed {
+				t.Error("reported a change alongside the refusal")
+			}
+			if !strings.Contains(err.Error(), setupPathBegin) {
+				t.Errorf("the error does not name the marker the user has to find: %v", err)
+			}
+		})
+	}
+}
+
+func TestConfigHomeIgnoresARelativeXDGConfigHome(t *testing.T) {
+	// `XDG_CONFIG_HOME=.config` and a quoted `~/.config` the shell never
+	// expanded are both common. Honouring either makes setup-path create
+	// ./.config/fish/config.fish under whatever directory the user was standing
+	// in, report success, and leave a file fish never reads and uninstall can
+	// never find.
+	home := t.TempDir()
+	for _, tc := range []struct{ name, value, want string }{
+		{"unset", "", filepath.Join(home, ".config")},
+		{"relative", ".config", filepath.Join(home, ".config")},
+		{"unexpanded tilde", "~/.config", filepath.Join(home, ".config")},
+		{"absolute", "/somewhere/cfg", "/somewhere/cfg"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("XDG_CONFIG_HOME", tc.value)
+			if got := configHome(home); got != tc.want {
+				t.Errorf("configHome with XDG_CONFIG_HOME=%q = %q, want %q", tc.value, got, tc.want)
+			}
+		})
 	}
 }

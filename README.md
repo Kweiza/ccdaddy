@@ -242,8 +242,10 @@ reads, and running it twice leaves one block:
 - **sh, dash, ksh** — `~/.profile`.
 - **csh, tcsh** — not written. The line is printed for you to add.
 - **Windows** — no startup file: the install directory goes into
-  `HKCU\Environment` with its value kind preserved, and the change is broadcast
-  to running programs. This is the same write `install.ps1` performs.
+  `HKCU\Environment` with its value kind preserved, the change is broadcast to
+  running programs, and what was added is recorded under `HKCU\Software\ccdad`
+  so `ccdad uninstall` can take back that entry and only that entry. This is the
+  same write `install.ps1` performs.
 
 The block guards itself, so sourcing it twice cannot duplicate a `PATH` entry,
 and it is written so that an empty `PATH` never gains an empty component — which
@@ -256,8 +258,13 @@ only because you pasted an `export` line into the shell you are standing in has
 no durable registration at all, and reporting "already on PATH" there would send
 you away with the next terminal still failing.
 
-`ccdad uninstall` removes the block, and removes only what is between ccdad's
-markers. A `PATH` line you wrote yourself is never touched.
+`ccdad uninstall` takes it back, and takes back only what ccdad can prove it
+added: on Unix that is what lies between ccdad's markers, so a `PATH` line you
+wrote yourself is never touched; on Windows there are no markers, so
+`setup-path` and `install.ps1` record the directory they added under
+`HKCU\Software\ccdad` and an entry with no such record is left alone and named.
+That matters for a `go install` or a zip install, where the directory is one you
+put on `PATH` yourself and it holds your other tools.
 
 ## How the switch stays safe
 

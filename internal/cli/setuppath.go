@@ -22,8 +22,9 @@ import (
 // in the build-tagged pair beside it. That split is not tidiness: the decision
 // is where duplicate PATH entries and missed removals come from, and this
 // package's tests run on Linux while half the decisions are Windows's.
-// install.ps1 made the same call first, and its comment says why
-// (install.ps1:157-163).
+// install.ps1 made the same call first, and Get-CcdadUpdatedPath's own
+// .DESCRIPTION says why. (Names, not line numbers: the citations in this file
+// were stale within one branch.)
 //
 // The rule that keeps the PATH-list half honest: pathRules and everything that
 // consults it are plain `strings` work over ':' , ';' and '\\' as literals.
@@ -121,14 +122,14 @@ func onPathList(list, dir string, r pathRules) bool {
 // matchesEntry reports whether one stored user-PATH component names dir, under
 // r's rules, comparing the component BOTH as stored and as expanded.
 //
-// The second comparison is the one install.ps1 is missing. It reads the value
-// with DoNotExpandEnvironmentNames (install.ps1:207) — correctly, because
-// writing back an expanded PATH would bake today's values in forever — and
-// then compares each component against a fully expanded install directory
-// (install.ps1:174, built at :247 from `Join-Path $env:LOCALAPPDATA`). A user
-// whose Path holds `%LOCALAPPDATA%\Programs\ccdad` therefore fails the
-// equality test and gets a second, expanded copy appended on every install.
-// That defect is fixed there; this is the rule it is fixed TO.
+// The second comparison is the one install.ps1 shipped without. Add-CcdadToUserPath
+// reads the value with DoNotExpandEnvironmentNames — correctly, because writing
+// back an expanded PATH would bake today's values in forever — and
+// Get-CcdadUpdatedPath then compared each component against a fully expanded
+// install directory. A user whose Path held `%LOCALAPPDATA%\Programs\ccdad`
+// therefore failed the equality test and got a second, expanded copy appended
+// on every install. Both now apply this rule; they must not drift apart, since
+// either may be the one that registered the entry uninstall later removes.
 func matchesEntry(entry, dir string, r pathRules, expand func(string) string) bool {
 	if r.same(entry, dir) {
 		return true
@@ -280,8 +281,10 @@ func quoteDouble(s string, chars string) string {
 // renderBlock is the exact bytes `setup-path` writes into a startup file, and
 // the exact bytes `--print` emits. One function, because a preview that shows
 // something other than what the writer writes has stopped previewing — and
-// because `ccdad setup-path --print >> ~/.zshrc` has to produce a block a later
-// run can find and rewrite in place.
+// because a block pasted from --print has to be one a later run can find and
+// rewrite in place. (Pasted at the END of the file: a `>>` onto a file with no
+// trailing newline glues the first marker onto the last line, which breaks that
+// line and hides the block. The stderr notice says so.)
 //
 // It returns "" for a dialect that has no block: csh and unknown are refusals,
 // decided by the caller, not silently-empty writes.
@@ -370,6 +373,17 @@ func findBlocks(lines []string) ([]blockRange, error) {
 		}
 		end := -1
 		for j := i + 1; j < len(lines); j++ {
+			// A second opening marker before the first one closes. Taking the
+			// later END as this block's close would make the "block" span every
+			// line between the two openers — and removal DELETES that span, so
+			// a stray marker a user left above their own aliases takes those
+			// aliases with it. Refuse, like the unterminated case below.
+			if isMarker(lines[j], setupPathBegin) {
+				return nil, fmt.Errorf(
+					"line %d opens a ccdad block with %q and line %d opens another before it closes with %q; "+
+						"delete whichever marker is stray and run this again",
+					i+1, setupPathBegin, j+1, setupPathEnd)
+			}
 			if isMarker(lines[j], setupPathEnd) {
 				end = j
 				break
@@ -442,18 +456,15 @@ func spliceBlock(existing []byte, block string) ([]byte, bool, error) {
 		out = append(out, block)
 	} else {
 		// The first block's position is kept, so a user who moved it above
-		// something that depends on PATH keeps that ordering.
+		// something that depends on PATH keeps that ordering. No index shift is
+		// needed: findBlocks returns disjoint ranges in ascending order, so
+		// every range cut here begins after found[0] ends, and cut's blank-line
+		// drop cannot reach found[0] either — the line before a later block is
+		// at the earliest found[0]'s END marker, which is not blank.
 		kept := cut(lines, found[1:])
-		shift := 0
-		for _, r := range found[1:] {
-			if r.begin < found[0].begin {
-				shift += r.end - r.begin + 1
-			}
-		}
-		first := blockRange{begin: found[0].begin - shift, end: found[0].end - shift}
-		out = append(out, kept[:first.begin]...)
+		out = append(out, kept[:found[0].begin]...)
 		out = append(out, block)
-		out = append(out, kept[first.end+1:]...)
+		out = append(out, kept[found[0].end+1:]...)
 	}
 
 	joined := []byte(strings.Join(out, ""))
@@ -461,7 +472,9 @@ func spliceBlock(existing []byte, block string) ([]byte, bool, error) {
 }
 
 // removeBlockFrom is spliceBlock's inverse: every ccdad block goes, and every
-// other byte stays. It is what `ccdad uninstall` calls, which is why "no block
+// other byte stays — with one licensed exception, which the round-trip test
+// pins: a file that did not end in a newline keeps the one appending had to
+// add, because removal cannot tell it from the user's own. It is what `ccdad uninstall` calls, which is why "no block
 // here" has to come back as false rather than as an unchanged rewrite — a
 // rewrite of a file ccdad never wrote is exactly what it must not do.
 func removeBlockFrom(existing []byte) ([]byte, bool, error) {
@@ -519,23 +532,20 @@ func targetFiles(k shellKind) ([]string, error) {
 			// makes a file zsh will never read and reports success for it, so
 			// this refuses instead — and the way through is to run it from a
 			// zsh prompt, where ZDOTDIR is exported.
-			if body, err := os.ReadFile(filepath.Join(home, ".zshenv")); err == nil &&
-				bytes.Contains(body, []byte("ZDOTDIR")) {
+			zshenv := filepath.Join(home, ".zshenv")
+			if body, err := os.ReadFile(zshenv); err == nil && assignsZDOTDIR(body) {
 				return nil, WithCode(fmt.Errorf(
-					"%s sets ZDOTDIR, so zsh reads its configuration from somewhere other than %s, "+
-						"and ccdad cannot see where from here; run `ccdad setup-path` from a zsh prompt "+
-						"(where ZDOTDIR is exported), or use `ccdad setup-path --print`",
-					filepath.Join(home, ".zshenv"), home), ExitBlocked)
+					"%s assigns ZDOTDIR, so zsh may read its configuration from somewhere other than %s, "+
+						"and ccdad cannot evaluate that file to find out; re-run as "+
+						"`ZDOTDIR=<that directory> ccdad setup-path`, or use `ccdad setup-path --print` "+
+						"and paste the block into the .zshrc zsh actually reads",
+					zshenv, home), ExitBlocked)
 			}
 			zdotdir = home
 		}
 		return []string{filepath.Join(zdotdir, ".zshrc")}, nil
 	case shellFish:
-		config := os.Getenv("XDG_CONFIG_HOME")
-		if config == "" {
-			config = filepath.Join(home, ".config")
-		}
-		return []string{filepath.Join(config, "fish", "config.fish")}, nil
+		return []string{filepath.Join(configHome(home), "fish", "config.fish")}, nil
 	case shellPOSIX:
 		return []string{filepath.Join(home, ".profile")}, nil
 	}
@@ -565,10 +575,10 @@ func newSetupPathCmd() *cobra.Command {
 			"right after an install: `curl | bash` has the installer's own script on stdin,\n" +
 			"so the installer cannot ask, and a startup file it guessed at is a file it can\n" +
 			"corrupt.\n\n" +
-			"Running it twice leaves one block. Editing inside the block is not durable —\n" +
-			"a later run rewrites what is between the markers, and `ccdad uninstall`\n" +
-			"removes it. Nothing outside the markers is ever touched.\n\n" +
-			"Use --print to see the block without writing anything.",
+			"Running it twice changes nothing the second time, and `ccdad uninstall` takes\n" +
+			"back exactly what it registered.\n\n" + setupPathPlatformHelp +
+			"\nUse --print to see what registration looks like on this platform, without\n" +
+			"writing anything.",
 		Args:          usageArgs(cobra.NoArgs),
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -577,7 +587,7 @@ func newSetupPathCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&opts.print, "print", false,
-		"print the block that would be written, and write nothing")
+		"print what would be registered, and write nothing")
 	setupPathFlags(cmd, &opts)
 	return cmd
 }
@@ -608,6 +618,16 @@ func runSetupPath(cmd *cobra.Command, opts setupPathOptions) error {
 		return err
 	}
 	if opts.print {
+		if owner := packageManagerOwning(exe); owner != "" {
+			// The write path refuses this install; the print path must not
+			// quietly hand over the block it refused. On Linux os.Executable is
+			// fully resolved, so the directory below is a VERSIONED one — a
+			// user who pastes it has a dead PATH entry the next time the
+			// package manager upgrades ccdad.
+			fmt.Fprintf(cmd.ErrOrStderr(),
+				"Note: %s installed ccdad at %s and manages its PATH — run %s instead of pasting this.\n",
+				owner, exe, shellenvHint(owner))
+		}
 		return setupPathPrint(cmd, dir, opts)
 	}
 
@@ -618,7 +638,16 @@ func runSetupPath(cmd *cobra.Command, opts setupPathOptions) error {
 	if owner := packageManagerOwning(exe); owner != "" {
 		out := cmd.ErrOrStderr()
 		if onPathList(os.Getenv("PATH"), dir, livePathRules) {
-			fmt.Fprintf(out, "%s installed ccdad at %s, and %s is already on your PATH.\n", owner, exe, dir)
+			// The ONE place exit 3 is decided by the live PATH, and it is not
+			// an exception to the registration rule but a case the rule has no
+			// reading for: ccdad registers nothing for a package-manager
+			// install in either branch, so there is no registration state to
+			// key on. The message says that out loud, because a user whose
+			// shell has `brew shellenv` only in the session they are standing
+			// in would otherwise read this as "you are set up".
+			fmt.Fprintf(out, "%s installed ccdad at %s, and %s is already on this shell's PATH, "+
+				"so ccdad registered nothing. If a new terminal cannot find ccdad, %s puts it there — "+
+				"run %s.\n", owner, exe, dir, owner, shellenvHint(owner))
 			return WithCode(errSilent, ExitNothingToDo)
 		}
 		fmt.Fprintf(out, "%s installed ccdad at %s, so %s manages its PATH — run %s.\n",
@@ -636,4 +665,40 @@ func shellenvHint(owner string) string {
 		return "`scoop reset ccdad`"
 	}
 	return "`eval \"$(brew shellenv)\"` from your shell startup file"
+}
+
+// configHome is $XDG_CONFIG_HOME, or ~/.config.
+//
+// A RELATIVE value is ignored. The XDG spec says the variable must hold an
+// absolute path, and the common typos (`XDG_CONFIG_HOME=.config`, or a quoted
+// `~/.config` the shell never expanded) would otherwise make setup-path create
+// `./.config/fish/config.fish` under whatever directory the user happened to be
+// standing in, report success, and leave a file fish never reads and uninstall
+// can never find again.
+func configHome(home string) string {
+	if config := os.Getenv("XDG_CONFIG_HOME"); filepath.IsAbs(config) {
+		return config
+	}
+	return filepath.Join(home, ".config")
+}
+
+// assignsZDOTDIR reports whether a .zshenv contains a line that ASSIGNS
+// ZDOTDIR, rather than merely containing the word.
+//
+// The distinction is the difference between a refusal that protects someone and
+// one that locks them out: a commented-out `# export ZDOTDIR=...`, an `unset
+// ZDOTDIR`, or a comment saying ZDOTDIR is deliberately unused would all match
+// the bare word, and the refusal it triggers has no way through — from a zsh
+// prompt the environment is identical, so the command would refuse forever for
+// a user whose ~/.zshrc was the right answer all along.
+func assignsZDOTDIR(body []byte) bool {
+	for _, line := range strings.Split(string(body), "\n") {
+		line = strings.TrimLeft(line, " \t")
+		line = strings.TrimPrefix(line, "export ")
+		line = strings.TrimLeft(line, " \t")
+		if strings.HasPrefix(line, "ZDOTDIR=") {
+			return true
+		}
+	}
+	return false
 }

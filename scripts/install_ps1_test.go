@@ -158,6 +158,37 @@ func TestInstallPs1ExtractsOnlyAnExactlyMatchingSumsLine(t *testing.T) {
 	}
 }
 
+// The installer's last instruction has to be one the reader can run. Its
+// install.sh twin (TestInstallShNeverEditsAShellProfile) pins the same shape:
+// a bare `ccdad setup-path` cannot resolve on a machine whose install directory
+// is not yet on PATH.
+func TestInstallPs1PointsAtSetupPathByPath(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("..", "install.ps1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Comment lines are skipped: the script explains the command as well as
+	// printing it, and only what it PRINTS is the user's instruction.
+	pointer := ""
+	for _, line := range strings.Split(string(body), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		if strings.Contains(line, "setup-path") {
+			pointer = line
+			break
+		}
+	}
+	if pointer == "" {
+		t.Fatal("install.ps1 never points at `ccdad setup-path`, so a user whose PATH write failed " +
+			"is told nothing about the command that would fix it")
+	}
+	if !strings.Contains(pointer, "$target") && !strings.Contains(pointer, "$installDir") {
+		t.Errorf("install.ps1 says:\n%s\nthe setup-path pointer does not name the binary by path, and a "+
+			"bare `ccdad` cannot resolve on the machine this branch fires for", pointer)
+	}
+}
+
 func TestInstallPs1TellsAnErrorPageFromASumsFile(t *testing.T) {
 	const good = "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234"
 	for _, tc := range []struct {
@@ -225,6 +256,35 @@ func TestInstallPs1MatchesAPathEntryThatIsStillUnexpanded(t *testing.T) {
 		"'; if ($null -eq $r) { 'NULL' } else { $r }")
 	if want := `%LOCALAPPDATA%\Programs\ccdad2;` + dir; got != want {
 		t.Errorf("a longer sibling was treated as the entry: got %q, want %q", got, want)
+	}
+}
+
+// install.ps1 must record the entry it added, or `ccdad uninstall` leaves it
+// behind: a registry PATH component carries no evidence of who put it there,
+// so removal is gated on the record rather than on the directory's contents.
+// The two writers -- this script and internal/cli's registerUserPath -- must
+// write the same value under the same key, because either may be the one that
+// registered the entry uninstall later removes.
+func TestInstallPs1RecordsThePathEntryItAdded(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("..", "install.ps1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`CreateSubKey('Software\ccdad')`, `SetValue('PathEntry'`} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("install.ps1 does not %s; every entry it adds becomes one `ccdad uninstall` "+
+				"cannot prove is ccdad's, so it is left on the user's PATH forever", want)
+		}
+	}
+	// The Go side, so the two cannot drift apart without a test saying so.
+	goBody, err := os.ReadFile(filepath.Join("..", "internal", "cli", "setuppath_windows.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`Software\ccdad`, `pathEntryValue = "PathEntry"`} {
+		if !strings.Contains(string(goBody), want) {
+			t.Errorf("setuppath_windows.go does not carry %s, so it no longer agrees with install.ps1", want)
+		}
 	}
 }
 
