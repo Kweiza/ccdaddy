@@ -16,6 +16,8 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-08-23
+
 ### Added
 
 - **One engine per Claude Code login.** `CCDAD_HOME` and `CLAUDE_CONFIG_DIR` are
@@ -78,7 +80,6 @@ by `uuid` or `alias`.
   model name `ccdad` cannot place is now a usage error rather than a flag that
   silently did nothing.
 
-### Added
 
 - **`ccdad run --full-profile` serves API-key accounts.** Claude Code reads an
   API key from `primaryApiKey` in its global config, not from a credential
@@ -90,6 +91,37 @@ by `uuid` or `alias`.
   `claude -p` but gated for an interactive session on an approval list in that
   same config, and `--bare` bypasses the gate — one flag away from a different
   answer.
+
+### Changed
+
+- **`ccdad uninstall` now removes the `PATH` entry ccdad registered**, on both
+  platforms. On Windows this was owed before `setup-path` existed:
+  `install.ps1` has written `HKCU\Environment\Path` since it shipped, and every
+  one-liner install left an entry pointing at a directory uninstall had just
+  emptied. What it removes is only what ccdad can prove it added: on Unix that
+  is what lies between ccdad's own markers, so a `PATH` line you wrote yourself
+  is never touched; on Windows there are no markers, so `setup-path` and
+  `install.ps1` now record the directory they added under
+  `HKCU\Software\ccdad`, and an entry with no such record is left in place and
+  named. That matters for a `go install` or a zip install, where the directory
+  is one you put on `PATH` yourself and holds your other tools. A startup file
+  whose fence is unterminated or doubled is reported and left alone rather than
+  guessed at, and the remaining files are still cleaned.
+
+- **`install.sh` points at `ccdad setup-path`** — by absolute path, because that
+  message only appears when the install directory is off `PATH` and a bare
+  `ccdad` would not resolve. The `export PATH=…` line is still printed
+  underneath, for the shell you are standing in.
+
+- **The per-model and per-surface weekly caps the usage endpoint reports in
+  `limits[]` now rank, pace and display.** They were parsed and then ignored, so
+  an account whose Fable or Cowork week was gone read as healthy; they now bind
+  headroom like any other window, feed `consume-first`, carry a pace reading,
+  and appear in `status --json` under `windows`. A cap of any other kind, or one
+  whose scope names neither a model nor a surface, is still ignored.
+- **A `limits[]` entry with no readable `percent` is unknown rather than 0%.**
+  The schema writes the field non-null, but a body that omits it would otherwise
+  have read as a window with everything left.
 
 ### Fixed
 
@@ -147,38 +179,6 @@ by `uuid` or `alias`.
   already exists still works, and a nested run inside a default-mode session —
   which does not redirect `CLAUDE_CONFIG_DIR` — is unaffected.
 
-### Changed
-
-- **`ccdad uninstall` now removes the `PATH` entry ccdad registered**, on both
-  platforms. On Windows this was owed before `setup-path` existed:
-  `install.ps1` has written `HKCU\Environment\Path` since it shipped, and every
-  one-liner install left an entry pointing at a directory uninstall had just
-  emptied. What it removes is only what ccdad can prove it added: on Unix that
-  is what lies between ccdad's own markers, so a `PATH` line you wrote yourself
-  is never touched; on Windows there are no markers, so `setup-path` and
-  `install.ps1` now record the directory they added under
-  `HKCU\Software\ccdad`, and an entry with no such record is left in place and
-  named. That matters for a `go install` or a zip install, where the directory
-  is one you put on `PATH` yourself and holds your other tools. A startup file
-  whose fence is unterminated or doubled is reported and left alone rather than
-  guessed at, and the remaining files are still cleaned.
-
-- **`install.sh` points at `ccdad setup-path`** — by absolute path, because that
-  message only appears when the install directory is off `PATH` and a bare
-  `ccdad` would not resolve. The `export PATH=…` line is still printed
-  underneath, for the shell you are standing in.
-
-- **The per-model and per-surface weekly caps the usage endpoint reports in
-  `limits[]` now rank, pace and display.** They were parsed and then ignored, so
-  an account whose Fable or Cowork week was gone read as healthy; they now bind
-  headroom like any other window, feed `consume-first`, carry a pace reading,
-  and appear in `status --json` under `windows`. A cap of any other kind, or one
-  whose scope names neither a model nor a surface, is still ignored.
-- **A `limits[]` entry with no readable `percent` is unknown rather than 0%.**
-  The schema writes the field non-null, but a body that omits it would otherwise
-  have read as a window with everything left.
-
-### Fixed
 
 - **`ccdad auto --json` no longer reports a stand-down as a completed switch.**
   The outcome switch had no `default`, so any outcome it did not name fell
@@ -289,6 +289,7 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Kweiza/ccdaddy/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Kweiza/ccdaddy/compare/v0.1.0-rc1...v0.1.0
 [0.1.0-rc1]: https://github.com/Kweiza/ccdaddy/releases/tag/v0.1.0-rc1
