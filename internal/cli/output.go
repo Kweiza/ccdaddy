@@ -17,6 +17,18 @@ var errSilent = errors.New("")
 
 // writeJSON emits one object on stdout. Human notices go to stderr, so a
 // --json caller always receives exactly one document.
+//
+// The indentation is a decision, not a default: it is what jq-shaped consumers
+// read and what a line-oriented one cannot, which is exactly why §9.4's one
+// exception — `auto`'s NDJSON stream — must never come through here. A stream
+// encoded by this helper arrives as `{`, `  "kind": …`, `}`, and `head -1`
+// returns an opening brace.
+//
+// §9.4 is one rule for every read command rather than a habit each of them
+// keeps, so it is asserted across the whole command tree in
+// json_contract_test.go — including that every document has the shape this
+// function gives it, which is how a command that stopped coming through here
+// gets noticed.
 func writeJSON(cmd *cobra.Command, payload any) error {
 	enc := json.NewEncoder(cmd.OutOrStdout())
 	enc.SetIndent("", "  ")
