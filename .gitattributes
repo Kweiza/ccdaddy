@@ -4,3 +4,10 @@
 # inside a PNG and corrupts it. The README banner is the first binary this
 # repository has ever tracked; say so rather than trust the heuristic.
 *.png binary
+
+# The npm shim fixtures are byte-exact output from npm's own generator, and
+# their CRLF line endings are the thing under test: a real claude.cmd has them,
+# and `eol=lf` above would quietly convert the fixtures to something npm never
+# writes. Same reasoning as the PNG — say what the file is rather than let the
+# heuristic guess.
+internal/cli/testdata/cmdshim/*.cmd -text

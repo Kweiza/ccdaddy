@@ -305,8 +305,25 @@ ccdad store between runs, so its MCP logins and trust answers survive. It is
 seeded once from your live config home — top-level files only, never project
 history.
 
+It is also the only mode that can run an **API-key account**. Claude Code reads
+an API key from `primaryApiKey` in its global config rather than from a
+credential home, and the default mode leaves that file shared with your live
+session on purpose — so there is nowhere to put one without changing your
+machine. A profile owns a global config of its own, and the key goes there and
+nowhere else. The default mode refuses and says so.
+
 The exit status is `claude`'s, not ccdad's. A session killed by a signal
 reports 128 plus the signal number, as a shell would.
+
+**Inside a session, the commands that write Claude Code's own state refuse.** A
+session is a whole Claude Code, and everything you — or the model — type in
+there inherits the session's credential home. `ccdad switch`, `auto`, `add`,
+`add-token`, `remove`, `uninstall` and `ccdad daemon start` would act on the
+session's copy while reporting they had changed the live login, so they exit
+`2` and name the session instead. Reads are untouched: `list`, `which`,
+`status`, `doctor` and `export` answer for the shell you are in, and `ccdad
+doctor` says which session that is. Run the refused ones from a shell outside
+the session.
 
 ## Configuration
 
@@ -399,8 +416,6 @@ Deliberate, and listed so you can tell a gap from a bug.
 - **`ccdad which` does not attribute `ANTHROPIC_API_KEY`.** Claude Code gates
   that variable on an approved-suffix list and races it against `apiKeyHelper`
   and `primaryApiKey`; guessing would be worse than declining.
-- **`ccdad run` refuses API-key accounts**, and `--full-profile` is the mode
-  that could serve them one day.
 - **A weekly cap scoped to another *surface* still counts against an account.**
   Claude Code is itself one surface, so a surface cap can be the very window
   that binds a session, and the response gives no way to tell which surface name
@@ -408,6 +423,11 @@ Deliberate, and listed so you can tell a gap from a bug.
   never surfaces.
 - **Windows file modes.** `chmod` is a no-op there, so the store relies on the
   ACL inherited from `%USERPROFILE%`. Windows binaries are also unsigned.
+- **`ccdad run` reads npm's `claude.cmd` when it has to.** If `claude` on your
+  PATH is npm's batch shim, an argument containing `& | < > ^ % "` cannot pass
+  through `cmd.exe` intact — so ccdad launches the interpreter the shim names
+  instead. A shim it does not recognise still gets the old refusal, which names
+  the argument.
 - **The macOS Keychain is not used**, because Claude Code no longer uses it.
   `ccdad doctor` reports a *stale* keychain item, since a downgraded Claude
   Code would still read one.

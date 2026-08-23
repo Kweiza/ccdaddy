@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -54,6 +55,11 @@ type launchSpec struct {
 // exercise the real launcher against a program it controls.
 var lookClaude = exec.LookPath
 
+// lookProgram resolves the INTERPRETER an npm shim names, and is separate from
+// lookClaude so a test can describe the machine this exists for: one where
+// claude is a .cmd shim and node is a real executable somewhere else.
+var lookProgram = exec.LookPath
+
 // startChild starts claude, waits for it, and reports its exit status. It is a
 // var because starting a real process is the one thing a test in this package
 // cannot arrange, which is the rule every other uncontrollable dependency here
@@ -87,6 +93,12 @@ type runSession struct {
 	// afterwards. A --full-profile profile is not: it is the accumulated state
 	// the mode exists to preserve.
 	ephemeral bool
+	// globalConfig is the Claude Code global config THIS MODE OWNS, or "" when
+	// the mode shares the machine's. Only --full-profile owns one, and owning
+	// it is what makes an API-key account runnable: the key lives in that file
+	// rather than in a credential home, so the default mode — which
+	// deliberately leaves the machine's copy shared — has nowhere to put one.
+	globalConfig string
 }
 
 // newProfile returns the persistent config home for an account, creating it on
@@ -114,11 +126,24 @@ func newProfile(uuid string) (runSession, error) {
 	// away on the second one.
 	if errors.Is(statErr, os.ErrNotExist) {
 		if err := seedProfile(home); err != nil {
+			// The directory was created a moment ago, and its EXISTENCE is
+			// what tells the next run not to seed. Leaving it behind after a
+			// failed seed turns one refusal into a profile that is silently
+			// never seeded again.
+			_ = os.RemoveAll(home)
 			return runSession{}, err
 		}
 	}
 	env := unsetEnv(childEnv(), "CLAUDE_SECURESTORAGE_CONFIG_DIR")
-	return runSession{home: home, env: setEnv(env, "CLAUDE_CONFIG_DIR", home)}, nil
+	return runSession{
+		home: home,
+		env:  setEnv(env, "CLAUDE_CONFIG_DIR", home),
+		// Resolved with the same rule Claude Code applies inside the child,
+		// rather than spelled as <profile>/.claude.json: seedProfile copies
+		// top-level FILES, so on a machine with the legacy .config.json every
+		// profile has one — and Claude Code reads that in preference.
+		globalConfig: ccpath.GlobalConfigPathIn(home),
+	}, nil
 }
 
 // authorise decides how the child is told who it is, and reports whether a
@@ -135,28 +160,90 @@ func newProfile(uuid string) (runSession, error) {
 //     exactly this: "Run Claude Code with it exported for the session instead".
 //     Writing the stored record into a credentials file would put something in
 //     the session that looks like a login and is not one.
-//   - an API key is neither. Claude Code takes it from primaryApiKey in the
-//     GLOBAL config, and the environment variable it also reads is gated on an
-//     approval list that lives in that same shared file. The default mode
-//     deliberately shares it with the live session, so authorising an API-key
-//     account would mean writing the user's live configuration — which is the
-//     one thing this command promises not to do.
-func authorise(env []string, blob cclink.Blob, label string) ([]string, bool, error) {
+//   - an API key is neither: Claude Code takes it from primaryApiKey in the
+//     GLOBAL config, which is not a credential home at all. Which mode this is
+//     therefore decides the answer. The default mode leaves the machine's
+//     global config shared with the live session on purpose, so authorising an
+//     API-key account there would mean writing the user's live configuration —
+//     the one thing this command promises not to do — and it refuses, naming
+//     the flag that can. --full-profile owns a global config of its own, so
+//     there the key goes in and nothing outside the profile moves.
+//
+// The environment route was measured and rejected rather than overlooked.
+// ANTHROPIC_API_KEY is read outright by `claude -p`, and for an INTERACTIVE
+// session it is gated on the key's last 20 characters appearing in
+// customApiKeyResponses.approved in that same global config — so it would work
+// for one invocation shape and silently not for the other. Worse, `ccdad run
+// ACCT --bare`, or CLAUDE_CODE_SIMPLE in the environment, bypasses that gate
+// outright, which would make the behaviour depend on an argument ccdad
+// forwards without reading. Writing the approval needs the same config write
+// this takes anyway, so the environment route is more machinery for a worse
+// contract.
+func authorise(stderr io.Writer, session runSession, blob cclink.Blob, label string) ([]string, bool, error) {
 	rec, ok := cclink.TokenRecordOf(blob)
 	if !ok {
-		return env, true, nil
+		return session.env, true, nil
 	}
 	switch rec.Kind {
 	case "setup-token":
-		return setEnv(env, "CLAUDE_CODE_OAUTH_TOKEN", rec.Token), false, nil
+		return setEnv(session.env, "CLAUDE_CODE_OAUTH_TOKEN", rec.Token), false, nil
 	case cclink.APIKeyKind:
-		return nil, false, UsageError("%s is an API key account, and Claude Code reads an API key from "+
-			"its global config rather than from a credential home — which this command shares with the "+
-			"live session rather than rewriting. Use 'ccdad switch' for it, or run it by hand with "+
-			"ANTHROPIC_API_KEY exported", label)
+		if session.globalConfig == "" {
+			return nil, false, UsageError("%s is an API key account, and Claude Code reads an API key from "+
+				"its global config rather than from a credential home — which this mode shares with the live "+
+				"session rather than rewriting. Run it with --full-profile, which gives the session a global "+
+				"config of its own; or make it the live credential with 'ccdad switch'", label)
+		}
+		if err := installProfileAPIKey(session, rec.Token); err != nil {
+			return nil, false, err
+		}
+		noteInertProfileKey(stderr, session, label)
+		return session.env, false, nil
 	default:
 		return nil, false, UsageError("%s carries a %q credential ccdad does not know how to run", label, rec.Kind)
 	}
+}
+
+// installProfileAPIKey writes the account's key into the profile's own global
+// config, and only that file.
+//
+// UpdateGlobalConfigAt abandons a write that would leave the bytes unchanged,
+// so running the same account twice does not advance the mtime of a file
+// Claude Code watches.
+func installProfileAPIKey(session runSession, key string) error {
+	return cclink.UpdateGlobalConfigAt(session.globalConfig, func(g *cclink.GlobalConfig) error {
+		return cclink.SetPrimaryAPIKey(g, key)
+	})
+}
+
+// noteInertProfileKey warns when the profile already holds an OAuth login.
+//
+// primaryApiKey is INERT while a claudeAiOauth record sits in the credential
+// home — Claude Code binds anthropicAuthEnabled from the login and a stored
+// key does not affect it, which is why activateAPIKeyAccount clears the live
+// login as its second write. A profile is persistent, so a user who ran /login
+// inside an earlier session in this one left exactly that behind.
+//
+// The login is NOT removed. It is something the user made inside their own
+// profile, and deleting it so that ccdad's write takes effect is a worse
+// answer than saying so. Without this the session runs as the wrong identity
+// and reports nothing at all.
+func noteInertProfileKey(stderr io.Writer, session runSession, label string) {
+	creds := filepath.Join(session.home, ccpath.CredentialsFile)
+	raw, err := os.ReadFile(creds)
+	if err != nil {
+		return
+	}
+	var blob cclink.Blob
+	if err := json.Unmarshal(raw, &blob); err != nil {
+		return
+	}
+	if _, isLogin := blob["claudeAiOauth"]; !isLogin {
+		return
+	}
+	fmt.Fprintf(stderr, "warning: %s holds an OAuth login from an earlier session in this profile, and Claude Code "+
+		"reads it in preference to %s's API key. Remove that file, or sign out inside the session, for the key to "+
+		"take effect.\n", creds, label)
 }
 
 // seedProfile copies the user's own configuration into a new profile.
@@ -178,6 +265,27 @@ func seedProfile(home string) error {
 	src, err := ccpath.ConfigHome()
 	if err != nil {
 		return err
+	}
+	// The source is resolved from the environment at CALL time, so inside a
+	// `ccdad run --full-profile` session it is the OUTER account's profile
+	// rather than the machine's configuration — and this copies top-level
+	// files, the global config among them. A nested run would therefore seed
+	// one account's profile from another's, carrying over its MCP servers, its
+	// trust answers and the primaryApiKey ccdad itself installs for an API-key
+	// account, into a directory nothing lists and `ccdad remove` never cleans.
+	//
+	// scopedSessionAllowed lets `ccdad run` through on the grounds that it
+	// REPLACES the scope it inherits rather than reading it. That is true of
+	// the variables handed to the child and false here, which is the whole
+	// reason this check exists rather than a comment saying it cannot happen.
+	//
+	// Only the CREATE is refused, which is what keeps it narrow: a profile
+	// that already exists is never re-seeded, so a nested run of an account
+	// that has been run before still works.
+	if root, rootErr := ccpath.StoreHome(); rootErr == nil && inside(root, src) {
+		return UsageError("this shell's Claude Code configuration is %s, which is inside ccdad's own store —\n"+
+			"seeding a new profile from it would copy another account's settings, and its API key, into this one.\n"+
+			"Run 'ccdad run --full-profile' from a shell outside the session, once, to create the profile", src)
 	}
 	entries, err := os.ReadDir(src)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -301,6 +409,35 @@ func unsafeForCmdShim(path string, args []string) string {
 		}
 	}
 	return ""
+}
+
+// launchPastShim is the seam between `run` and cmdshim.go: it reads the shim
+// at path and says what to launch instead.
+//
+// Reached ONLY when the refusal would otherwise fire, and that narrowness is
+// deliberate rather than timid. Resolving past every shim would be the better
+// end state — it makes Go's escaping exactly right for every argument instead
+// of only the dangerous ones — but this code has never run on a Windows box,
+// and here the worst a parse bug can do is turn a refusal into a different
+// refusal. Widening it to every .cmd is one line, and belongs after a Windows
+// runner has exercised the narrow path.
+func launchPastShim(path string) (pastShim, error) {
+	text, err := readShim(path)
+	if err != nil {
+		return pastShim{}, err
+	}
+	shim, ok := parseNpmShim(text, shimDirOf(path))
+	if !ok {
+		return pastShim{}, fmt.Errorf("%s is not a shim ccdad recognises", shimBaseOf(path))
+	}
+	return resolvePastShim(shim, fileExists, lookProgram)
+}
+
+// fileExists is a var so a test can describe a node.exe beside a shim on a
+// machine that has neither.
+var fileExists = func(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // adoptBack copies a credential the session rotated back into the store.
@@ -535,9 +672,17 @@ func newRunCmd() *cobra.Command {
 				return err
 			}
 			tail := claudeArgs(args)
+			var shimEnv []string
 			if bad := unsafeForCmdShim(path, tail); bad != "" {
-				return UsageError("%s is a cmd.exe shim, and cmd.exe would re-interpret %q rather than "+
-					"pass it on; quote it differently, or install the native claude.exe", path, bad)
+				past, err := launchPastShim(path)
+				if err != nil {
+					return UsageError("%s is a cmd.exe shim, and cmd.exe would re-interpret %q rather than "+
+						"pass it on. ccdad could not run its interpreter directly instead (%v); quote the "+
+						"argument differently, or install the native claude.exe", path, bad, err)
+				}
+				fmt.Fprintf(cmd.ErrOrStderr(), "note: %q would not survive %s, so ccdad is running %s directly.\n",
+					bad, shimBaseOf(path), shimBaseOf(past.path))
+				path, tail, shimEnv = past.path, append(past.args, tail...), past.env
 			}
 
 			newHome := newSession
@@ -574,7 +719,7 @@ func newRunCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			env, needsFile, err := authorise(session.env, blob, target.Label())
+			env, needsFile, err := authorise(cmd.ErrOrStderr(), session, blob, target.Label())
 			if err != nil {
 				return err
 			}
@@ -584,6 +729,14 @@ func newRunCmd() *cobra.Command {
 				}
 			}
 
+			for _, kv := range shimEnv {
+				// A `#!/usr/bin/env FOO=bar node` shebang: the shim exports
+				// these before running anything, so a launch that goes past
+				// the shim has to carry them or the interpreter starts in an
+				// environment the package did not ask for.
+				name, value, _ := strings.Cut(kv, "=")
+				env = setEnv(env, name, value)
+			}
 			code, err := startChild(launchSpec{
 				Path: path,
 				Args: tail,

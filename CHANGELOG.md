@@ -52,6 +52,75 @@ by `uuid` or `alias`.
   model name `ccdad` cannot place is now a usage error rather than a flag that
   silently did nothing.
 
+### Added
+
+- **`ccdad run --full-profile` serves API-key accounts.** Claude Code reads an
+  API key from `primaryApiKey` in its global config, not from a credential
+  home, so the default mode — which shares that file with the live session on
+  purpose — still refuses, and now names the flag that works instead of only
+  pointing at `ccdad switch`. Under `--full-profile` the key is written to the
+  profile's own global config and nothing outside the profile moves. The
+  `ANTHROPIC_API_KEY` route was measured and not taken: it is read outright by
+  `claude -p` but gated for an interactive session on an approval list in that
+  same config, and `--bare` bypasses the gate — one flag away from a different
+  answer.
+
+### Fixed
+
+- **`ccdad run` on Windows no longer refuses an argument npm's shim would have
+  mangled.** When `claude` on PATH is npm's `claude.cmd`, `ccdad run acct -p
+  'fix&whoami'` was a usage error: Go emits an argument with no space or quote
+  RAW, and `cmd.exe` reads the ampersand as a command separator. ccdad now
+  reads the shim, and launches the interpreter it names — `node cli.js` —
+  directly, which takes `cmd.exe` out of the launch entirely. It does this only
+  where the refusal would otherwise fire, so a shim it cannot parse, an
+  interpreter that is not installed, or one that itself resolves to a `.cmd`
+  all keep the old behaviour rather than failing in a new way.
+
+- **`ccdad switch` typed inside a `ccdad run` session rewrote the session, not
+  the live login.** A session is a whole Claude Code, and everything typed in
+  it inherits the session's `CLAUDE_SECURESTORAGE_CONFIG_DIR`, so the switch
+  wrote `<session>/.credentials.json`, printed `Switched to`, changed nothing
+  outside the session, and replaced the session's own login with another
+  account's — in a directory `run` deletes on the way out. The commands that
+  write Claude Code's state, delete the store the session lives in, or leave a
+  daemon behind carrying the session's scope now exit `2` and name the session:
+  `switch`, `auto`, `add`, `add-token`, `remove`, `uninstall`, `daemon start`
+  and `daemon restart`. Reads still run, and `ccdad doctor` now says which
+  session it is inside rather than reporting the session's credentials file as
+  the live login.
+
+- **Auto-start could still spawn a daemon inside a `--full-profile` session.**
+  The existing guard read `CLAUDE_SECURESTORAGE_CONFIG_DIR`, which that mode
+  removes rather than sets — so a daemon born there was pinned to the profile
+  and managed it for the rest of its life. An ordinary `CLAUDE_CONFIG_DIR` of
+  your own is still not a reason to refuse; only a config home ccdad created
+  for a run is.
+
+- **`ccdad export --include-mcp` no longer speaks for the machine from inside a
+  session.** Neither when there are none to include, nor — the half that
+  matters — when there ARE: it used to write the session's own MCP logins into
+  the file and label them "this machine's", so a backup taken from inside a
+  session held the wrong secrets under the right name.
+
+- **`ccdad remove` now deletes the account's `--full-profile` profile.** Since
+  `ccdad run --full-profile` began writing an API-key account's key into
+  `<store>/profiles/<uuid>/.claude.json`, an orphaned profile is an orphaned
+  CREDENTIAL rather than stale configuration — and nothing cleaned one:
+  `uninstall` removes the whole store and `doctor` scans sessions only. The
+  profile is named in the confirmation, because it also holds the MCP logins
+  and trust answers that account accumulated.
+
+- **A nested `ccdad run --full-profile` no longer seeds one account's profile
+  from another's.** A profile is seeded from `CLAUDE_CONFIG_DIR`, resolved when
+  the profile is created — which inside a `--full-profile` session is the outer
+  account's profile, not the machine's configuration. Creating a profile there
+  copied that account's settings and its `primaryApiKey` into a second
+  account's profile, at a path nothing lists and `ccdad remove` does not clean.
+  Only the CREATE is refused, so a nested run of an account whose profile
+  already exists still works, and a nested run inside a default-mode session —
+  which does not redirect `CLAUDE_CONFIG_DIR` — is unaffected.
+
 ### Changed
 
 - **`ccdad uninstall` now removes the `PATH` entry ccdad registered**, on both
