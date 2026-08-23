@@ -1402,14 +1402,15 @@ func TestAddRepromptsOnAPasteItCouldNotRead(t *testing.T) {
 }
 
 // The callback's error parameter is parsed into a closed set precisely so a
-// caller could log the spec code with none of the browser's bytes reaching a
-// message; that is the stated purpose of RejectionError in
+// caller could log the OAuth error code with none of the browser's bytes
+// reaching a message; that is the stated purpose of RejectionError in
 // internal/oauth/callback.go. Nothing called LogDetail until `add` did.
 //
 // The unrecognized row is the one that carries this test: RejectionRefused and
 // RejectionUnrecognized share UserMessage's default arm, so "Anthropic refused
-// the login" was the whole of what a user saw for either, and the spec code is
-// the only thing that says which. The other three rows are cheaper — their
+// the login" was the whole of what a user saw for either, and the OAuth error
+// code is the only thing that says which. The other three rows are cheaper —
+// their
 // canned messages already differ, as this test's own last assertion shows — and
 // they are here so that a LogDetail wired for one arm only cannot pass.
 func TestAddReportsTheRejectionDetailBehindTheCannedMessage(t *testing.T) {
@@ -1442,7 +1443,7 @@ func TestAddReportsTheRejectionDetailBehindTheCannedMessage(t *testing.T) {
 				t.Errorf("CodeFor = %d, want %d (a rejected callback is exit 1)", got, ExitFailure)
 			}
 			if !strings.Contains(stderr, tc.want) {
-				t.Errorf("stderr = %q, want the spec code %q an operator can act on", stderr, tc.want)
+				t.Errorf("stderr = %q, want the OAuth error code %q an operator can act on", stderr, tc.want)
 			}
 			// The canned user message is still what the command fails with; the
 			// detail is a note beside it, not a replacement for it.

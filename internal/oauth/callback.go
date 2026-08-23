@@ -65,8 +65,8 @@ func (r AuthorizeRejection) UserMessage() string {
 	}
 }
 
-// LogDetail is the spec code for an operator log — always one of our own
-// literals, never the browser's bytes.
+// LogDetail is the OAuth error code for an operator log — always one of our
+// own literals, never the browser's bytes.
 func (r AuthorizeRejection) LogDetail() string {
 	switch r {
 	case RejectionDeclined:
@@ -85,7 +85,7 @@ func (r AuthorizeRejection) LogDetail() string {
 // Parsing into a closed set is only worth doing if the parsed value survives to
 // the caller: this is what lets a login report WHY it failed without any
 // upstream byte ever reaching a message. Error() is the canned user text;
-// LogDetail() is the spec code for an operator log.
+// LogDetail() is the OAuth error code for an operator log.
 type RejectionError struct{ Rejection AuthorizeRejection }
 
 func (e *RejectionError) Error() string     { return e.Rejection.UserMessage() }
