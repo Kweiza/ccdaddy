@@ -223,6 +223,22 @@ function Add-CcdadToUserPath {
         $key.Close()
     }
 
+    # Write down what was added, so `ccdad uninstall` can take back this entry
+    # and only this entry. A registry PATH component carries no evidence of who
+    # added it, and the install directory is routinely one the USER put on PATH
+    # (a zip install into their own tools directory, or %USERPROFILE%\go\bin
+    # from `go install`) -- removing it on ownership guessed from the binary's
+    # location breaks every other program in it. ccdad's Go implementation
+    # writes the same value from setup-path; the two must agree, because either
+    # may be the one that registered the entry uninstall later removes.
+    try {
+        $record = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Software\ccdad')
+        try { $record.SetValue('PathEntry', $Directory, [Microsoft.Win32.RegistryValueKind]::String) }
+        finally { $record.Close() }
+    } catch {
+        Write-Warning "PATH was updated but ccdad could not record it, so 'ccdad uninstall' will leave the entry in place. ($_)"
+    }
+
     # Without this, only processes started after the next sign-out see it.
     try {
         if (-not ('CcdadNative.Win32' -as [type])) {

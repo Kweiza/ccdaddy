@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"syscall"
+	"unicode/utf16"
 	"unsafe"
 
 	"github.com/spf13/cobra"
@@ -26,6 +28,14 @@ import (
 
 // livePathRules reads %PATH% as cmd.exe and PowerShell do.
 var livePathRules = windowsPathRules
+
+// setupPathPlatformHelp is the half of --help that is only true here. There is
+// no startup file and no marker block on Windows: the entry goes into the user
+// PATH in the registry, and ccdad writes down that it put it there so that
+// uninstall can take back that entry and only that entry.
+const setupPathPlatformHelp = "It adds the directory to your user PATH in the registry and tells running\n" +
+	"programs about the change. --print shows a PowerShell line that lasts only for\n" +
+	"the current session; the registration this command makes is permanent.\n"
 
 // setupPathFlags adds nothing on Windows: there is no shell whose startup file
 // is being written, so --shell would be a flag that is accepted and ignored.
@@ -85,11 +95,15 @@ func withUserPath(decide func(current string, expand func(string) string) (strin
 	if !changed {
 		return false, nil
 	}
-	if len(updated) > maxEnvironmentValue {
+	// Counted in UTF-16 code units plus the terminator, which is what Windows
+	// stores and what RegSetValueEx is handed. len() would count UTF-8 bytes,
+	// so a user with CJK directories on their PATH would be refused a write
+	// that fits — and told a "character" count that is not one.
+	if n := len(utf16.Encode([]rune(updated))) + 1; n > maxEnvironmentValue {
 		return false, fmt.Errorf(
 			"your user PATH would be %d characters, past the %d a process environment can hold; "+
 				"ccdad will not truncate it — remove some entries first",
-			len(updated), maxEnvironmentValue)
+			n-1, maxEnvironmentValue)
 	}
 
 	switch kind {
@@ -115,19 +129,99 @@ func expandRegistryString(s string) string {
 	return expanded
 }
 
+// The record of what ccdad put on the user PATH, and the whole reason removal
+// is safe here.
+//
+// Unix has the marker fence: a block is ccdad's because ccdad's markers are
+// around it. A registry PATH component carries no such evidence — it is a bare
+// directory string — so removing "the directory the binary is in" would strip
+// entries ccdad never added. That is not a corner case, it is the ordinary one:
+// `go install` puts ccdad.exe in %USERPROFILE%\go\bin beside every other Go
+// tool the user has, a zip install goes wherever the user already keeps their
+// tools, and both directories are on PATH because the USER put them there.
+// Removing that on uninstall breaks every unrelated program in it.
+//
+// So registration writes down what it added, and removal takes back only that.
+// An entry ccdad did not record is left alone and said so, which is the safe
+// direction: a stale PATH entry costs a lookup, a deleted one costs the user
+// their toolchain.
+var ccdadSubkey = `Software\ccdad`
+
+const pathEntryValue = "PathEntry"
+
+// recordPathEntry remembers the directory ccdad just added.
+func recordPathEntry(dir string) error {
+	key, _, err := registry.CreateKey(environmentRoot, ccdadSubkey, registry.SET_VALUE)
+	if err != nil {
+		return fmt.Errorf(`recording the PATH entry under HKCU\%s: %w`, ccdadSubkey, err)
+	}
+	defer key.Close()
+	return key.SetStringValue(pathEntryValue, dir)
+}
+
+// recordedPathEntry is the directory ccdad recorded adding, if any.
+func recordedPathEntry() (string, bool) {
+	key, err := registry.OpenKey(environmentRoot, ccdadSubkey, registry.QUERY_VALUE)
+	if err != nil {
+		return "", false
+	}
+	defer key.Close()
+	dir, _, err := key.GetStringValue(pathEntryValue)
+	if err != nil || dir == "" {
+		return "", false
+	}
+	return dir, true
+}
+
+func forgetPathEntry() {
+	key, err := registry.OpenKey(environmentRoot, ccdadSubkey, registry.SET_VALUE)
+	if err != nil {
+		return
+	}
+	defer key.Close()
+	_ = key.DeleteValue(pathEntryValue)
+}
+
+// ccdadAddedPathEntry reports whether ccdad recorded adding exactly dir.
+// Compared under the same rules as the PATH components themselves, so a
+// trailing backslash or a difference in case still matches.
+func ccdadAddedPathEntry(dir string) bool {
+	recorded, ok := recordedPathEntry()
+	return ok && windowsPathRules.same(recorded, dir)
+}
+
 // registerUserPath and unregisterUserPath are the two halves `setup-path` and
 // `uninstall` call. They are two functions rather than one with a mode because
 // they disagree at both ends — see userPathWithDir and userPathWithoutDir.
 func registerUserPath(dir string) (bool, error) {
-	return withUserPath(func(current string, expand func(string) string) (string, bool) {
+	added, err := withUserPath(func(current string, expand func(string) string) (string, bool) {
 		return userPathWithDir(current, dir, expand)
 	})
+	if err != nil || !added {
+		// Deliberately NOT recorded when the entry was already there. A user
+		// whose %USERPROFILE%\go\bin is on PATH because they put it there runs
+		// setup-path, gets exit 3, and must not thereby hand ccdad permission
+		// to delete that entry later.
+		return added, err
+	}
+	if err := recordPathEntry(dir); err != nil {
+		return true, err
+	}
+	return true, nil
 }
 
 func unregisterUserPath(dir string) (bool, error) {
-	return withUserPath(func(current string, expand func(string) string) (string, bool) {
+	if !ccdadAddedPathEntry(dir) {
+		return false, nil
+	}
+	removed, err := withUserPath(func(current string, expand func(string) string) (string, bool) {
 		return userPathWithoutDir(current, dir, expand)
 	})
+	if err != nil {
+		return removed, err
+	}
+	forgetPathEntry()
+	return removed, nil
 }
 
 // broadcastEnvChange tells running processes the environment changed. Without
@@ -174,6 +268,20 @@ func sendSettingChange() error {
 	// GetLastError unconditionally and it is documented as always non-nil, so
 	// consulting callErr first reports every successful broadcast as a failure.
 	if ret == 0 {
+		// LazyProc.Call builds callErr from GetLastError unconditionally and it
+		// is documented as always non-nil, so on a failure that did not set one
+		// it is Errno(0) — which formats as "The operation completed
+		// successfully" and would send a bug report in exactly the wrong
+		// direction. Replaced with what is actually known.
+		//
+		// The remaining error text is best-effort and says so here rather than
+		// pretending otherwise: last-error is per-OS-thread, and clearing it
+		// before the call would only be sound with runtime.LockOSThread held
+		// across both calls, which is not worth taking for a warning that
+		// costs the user one new terminal.
+		if errno, ok := callErr.(syscall.Errno); ok && errno == 0 {
+			return errors.New("a window on the desktop did not answer within 5s")
+		}
 		return callErr
 	}
 	return nil
@@ -232,7 +340,7 @@ func setupPathApply(cmd *cobra.Command, dir string, _ setupPathOptions) error {
 // only ccdad's by virtue of being the directory ccdad is installed in, so an
 // unknown dir finds nothing.
 func pathRegistrations(dir string) ([]string, error) {
-	if dir == "" {
+	if dir == "" || !ccdadAddedPathEntry(dir) {
 		return nil, nil
 	}
 	key, err := registry.OpenKey(environmentRoot, environmentSubkey, registry.QUERY_VALUE)
@@ -255,6 +363,16 @@ func pathRegistrations(dir string) ([]string, error) {
 // longer there.
 func unregisterPath(dir string) ([]string, error) {
 	if dir == "" {
+		return nil, nil
+	}
+	if !ccdadAddedPathEntry(dir) {
+		// Silent when there is nothing on PATH to talk about; otherwise say why
+		// it is being left, so a user who expected it gone knows to remove it.
+		if onPathList(os.Getenv("PATH"), dir, livePathRules) {
+			return nil, fmt.Errorf(
+				"%s is on your PATH, but ccdad has no record of putting it there, so it is left alone "+
+					"(remove it yourself if you want it gone)", dir)
+		}
 		return nil, nil
 	}
 	removed, err := unregisterUserPath(dir)

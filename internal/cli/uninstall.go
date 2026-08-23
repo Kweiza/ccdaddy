@@ -156,7 +156,14 @@ func runUninstall(cmd *cobra.Command, assumeYes bool) error {
 	}
 	pathPlaces, pathErr := pathRegistrations(pathDir)
 
-	if !storeState.present && !removableBinary && len(pathPlaces) == 0 {
+	if pathErr != nil {
+		fmt.Fprintf(out, "Some startup files could not be inspected for a ccdad PATH entry: %v\n", pathErr)
+	}
+	// A scan that could not finish is not evidence of an empty machine, so it
+	// does not get to produce "nothing to uninstall" and exit 3 — that answer
+	// tells a script the machine is clean while a live block still names a
+	// binary about to be deleted.
+	if !storeState.present && !removableBinary && len(pathPlaces) == 0 && pathErr == nil {
 		fmt.Fprintln(out, "Nothing to uninstall: there is no ccdad store here"+describeBinary(exe, exeErr, owner)+".")
 		return WithCode(errSilent, ExitNothingToDo)
 	}
@@ -169,9 +176,6 @@ func runUninstall(cmd *cobra.Command, assumeYes bool) error {
 	enumerate(out, storeState, exe, exeErr, owner, current, hasLive)
 	for _, place := range pathPlaces {
 		fmt.Fprintf(out, "It will also remove ccdad's PATH entry from %s.\n", place)
-	}
-	if pathErr != nil {
-		fmt.Fprintf(out, "ccdad's PATH entry could not be inspected, and will be left in place: %v\n", pathErr)
 	}
 
 	if !assumeYes {
@@ -243,12 +247,15 @@ func runUninstall(cmd *cobra.Command, assumeYes bool) error {
 	// because one startup file could not be rewritten. §11.2 fix 5 is not in
 	// tension with this — its reason is that `curl | bash` cannot prompt, and
 	// this command has both a prompt and a --yes.
-	if removed, err := unregisterPath(pathDir); err != nil {
-		fmt.Fprintf(out, "ccdad's PATH entry could not be removed: %v\n", err)
-	} else {
-		for _, place := range removed {
-			fmt.Fprintf(out, "Removed ccdad's PATH entry from %s.\n", place)
-		}
+	removed, err := unregisterPath(pathDir)
+	// What WAS removed is printed whatever else happened. Reporting only the
+	// failure leaves a user believing nothing changed while several of their
+	// startup files have in fact been rewritten.
+	for _, place := range removed {
+		fmt.Fprintf(out, "Removed ccdad's PATH entry from %s.\n", place)
+	}
+	if err != nil {
+		fmt.Fprintf(out, "ccdad's PATH entry could not be removed everywhere, so some of it is still there: %v\n", err)
 	}
 	return nil
 }

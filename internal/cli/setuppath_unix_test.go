@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -542,5 +543,343 @@ func TestSetupPathKeepsAStartupFilesPermissions(t *testing.T) {
 				t.Errorf("the block never arrived:\n%s", body)
 			}
 		})
+	}
+}
+
+// --print's dialect, over the shells. Asserting only bash left the branch that
+// matters unpinned: the two refusal messages both send the user here, and a
+// fish user who is handed the POSIX block pastes syntax fish rejects on every
+// shell start forever.
+func TestSetupPathPrintEmitsTheDialectOfTheShellItNames(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		shell string
+		flag  []string
+		want  func(dir string) string
+	}{
+		{name: "bash from $SHELL", shell: "/bin/bash", want: func(d string) string { return renderBlock(d, shellBash) }},
+		{name: "fish from $SHELL", shell: "/usr/bin/fish", want: func(d string) string { return renderBlock(d, shellFish) }},
+		{name: "sh from $SHELL", shell: "/bin/dash", want: func(d string) string { return renderBlock(d, shellPOSIX) }},
+		{name: "csh from $SHELL", shell: "/bin/tcsh", want: func(d string) string { return cshLine(d) + "\n" }},
+		{name: "--shell wins", shell: "/bin/bash", flag: []string{"--shell", "fish"},
+			want: func(d string) string { return renderBlock(d, shellFish) }},
+		{name: "no $SHELL falls back to the portable form", shell: "",
+			want: func(d string) string { return renderBlock(d, shellPOSIX) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, dir := setupPathWorld(t, tc.shell)
+			code, stdout, _, top := runRoot(t, append([]string{"setup-path", "--print"}, tc.flag...)...)
+			if code != ExitOK {
+				t.Fatalf("--print = %d, want %d\n%s", code, ExitOK, top)
+			}
+			if want := tc.want(dir); stdout != want {
+				t.Errorf("--print emitted\n%q\nwant\n%q", stdout, want)
+			}
+		})
+	}
+}
+
+// A shell the USER named is a typo, not an undetectable machine. Falling back
+// to the portable form here exits 0 and hands a fish user POSIX syntax, while
+// the same typo without --print is a usage error.
+func TestSetupPathPrintRejectsAShellFlagValueItCannotPlace(t *testing.T) {
+	setupPathWorld(t, "/usr/bin/fish")
+	code, stdout, _, top := runRoot(t, "setup-path", "--print", "--shell", "fsh")
+	if code != ExitUsage {
+		t.Fatalf("--print --shell fsh = %d, want %d (the same as without --print)\n%s", code, ExitUsage, top)
+	}
+	if stdout != "" {
+		t.Errorf("a rejected --shell still produced something to paste:\n%s", stdout)
+	}
+}
+
+// The recipe both refusals point at: paste what --print emits, and a later run
+// must find it rather than appending a second registration.
+func TestSetupPathPrintOutputIsABlockALaterRunOwns(t *testing.T) {
+	home, dir := setupPathWorld(t, "/bin/zsh")
+	rc := filepath.Join(home, ".zshrc")
+	_, stdout, _, _ := runRoot(t, "setup-path", "--print")
+	if err := os.WriteFile(rc, []byte("export EDITOR=vi\n"+stdout), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	code, _, errOut, _ := runRoot(t, "setup-path")
+	if code != ExitNothingToDo {
+		t.Fatalf("setup-path after pasting --print's output = %d, want %d: the pasted block was not "+
+			"recognised, so this run added a second registration\n%s", code, ExitNothingToDo, errOut)
+	}
+	if n := strings.Count(read(t, rc), setupPathBegin); n != 1 {
+		t.Errorf("~/.zshrc holds %d blocks, want 1", n)
+	}
+	if !strings.Contains(read(t, rc), dir) {
+		t.Error("the pasted block does not name the directory")
+	}
+}
+
+func TestSetupPathExitsThreeQuietlyWhenTheShellHasAlreadyReadTheFile(t *testing.T) {
+	// The fourth cell of the exit table: registered AND live. Telling this user
+	// "this shell has not read that file yet" sends them round a loop they have
+	// already completed.
+	_, dir := setupPathWorld(t, "/bin/zsh")
+	if code, _, errOut, _ := runRoot(t, "setup-path"); code != ExitOK {
+		t.Fatalf("first run = %d\n%s", code, errOut)
+	}
+	t.Setenv("PATH", dir+":/usr/bin:/bin")
+
+	code, _, errOut, _ := runRoot(t, "setup-path")
+	if code != ExitNothingToDo {
+		t.Fatalf("second run with the directory on PATH = %d, want %d\n%s", code, ExitNothingToDo, errOut)
+	}
+	if strings.Contains(errOut, "has not read that file yet") {
+		t.Errorf("told a shell that demonstrably has the directory on PATH that it has not read the file:\n%s", errOut)
+	}
+	if !strings.Contains(errOut, "already registers") {
+		t.Errorf("exit 3 with nothing said about why:\n%s", errOut)
+	}
+}
+
+func TestSetupPathRefusesToReplaceADanglingSymlink(t *testing.T) {
+	// ~/.zshrc points into a dotfiles repository that has not been cloned or
+	// stowed yet. Renaming over the link replaces it with a regular file and
+	// reports "Created"; the user's next `stow`/`chezmoi apply` then fails on a
+	// target that is no longer a symlink, and their real zshrc never lands.
+	home, _ := setupPathWorld(t, "/bin/zsh")
+	link := filepath.Join(home, ".zshrc")
+	missing := filepath.Join(t.TempDir(), "dotfiles", "zshrc")
+	if err := os.Symlink(missing, link); err != nil {
+		t.Fatal(err)
+	}
+
+	code, _, _, top := runRoot(t, "setup-path")
+	if code != ExitFailure {
+		t.Fatalf("setup-path on a dangling symlink = %d, want %d\n%s", code, ExitFailure, top)
+	}
+	info, err := os.Lstat(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("the dangling symlink was replaced by a regular file")
+	}
+	if !strings.Contains(top, missing) {
+		t.Errorf("the refusal does not name the missing target, so the user cannot fix it:\n%s", top)
+	}
+}
+
+// One bad candidate must not stop the others being cleaned, and uninstall must
+// not report a clean machine while a live block remains.
+func TestUninstallCleansEveryOtherStartupFileWhenOneIsUnusable(t *testing.T) {
+	home, _ := setupPathWorld(t, "/bin/zsh")
+	stubDaemonWorld(t, &fakeDaemon{})
+	if code, _, errOut, _ := runRoot(t, "setup-path"); code != ExitOK {
+		t.Fatalf("setup-path = %d\n%s", code, errOut)
+	}
+	zshrc := filepath.Join(home, ".zshrc")
+
+	// ~/.bashrc holds a half-deleted fence and sorts BEFORE ~/.zshrc in the
+	// candidate list, so an early return hides the real block entirely.
+	bashrc := filepath.Join(home, ".bashrc")
+	stray := "a=1\n" + setupPathBegin + "\nb=2\n"
+	if err := os.WriteFile(bashrc, []byte(stray), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A directory and a FIFO among the candidates: the first used to abort the
+	// scan with EISDIR, the second used to block os.ReadFile forever.
+	if err := os.Mkdir(filepath.Join(home, ".profile"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(filepath.Join(home, ".bash_profile"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newUninstallCmd()
+	err, _, errOut := runCmd(t, cmd, "--yes")
+	if err != nil {
+		t.Fatalf("uninstall: %v\n%s", err, errOut)
+	}
+	if body := read(t, zshrc); strings.Contains(body, setupPathBegin) {
+		t.Errorf("the ~/.zshrc block survived because an earlier candidate failed:\n%s", body)
+	}
+	// Both lines by their own words. Asserting only that the path appears
+	// anywhere in the output cannot fail: the pre-prompt enumeration names the
+	// same file, so a run that removed the block and never said so still
+	// matched.
+	if want := "Removed ccdad's PATH entry from " + zshrc; !strings.Contains(errOut, want) {
+		t.Errorf("uninstall never reported the removal it performed (%q):\n%s", want, errOut)
+	}
+	if want := "It will also remove ccdad's PATH entry from " + zshrc; !strings.Contains(errOut, want) {
+		t.Errorf("the pre-prompt enumeration never named %s, so a prompted user would confirm without "+
+			"being told this file changes — the scan stopped at the earlier bad candidate:\n%s", zshrc, errOut)
+	}
+	if !strings.Contains(errOut, bashrc) {
+		t.Errorf("uninstall did not name the file it could not clean:\n%s", errOut)
+	}
+	if body := read(t, bashrc); body != stray {
+		t.Errorf("the file with the stray marker was rewritten anyway:\n%s", body)
+	}
+}
+
+func TestUninstallWithAnUnreadableStartupFileIsNotNothingToDo(t *testing.T) {
+	// A scan that could not finish is not evidence of an empty machine. Exit 3
+	// here tells a script the machine is clean while a live block remains.
+	home, _ := setupPathWorld(t, "/bin/zsh")
+	stubDaemonWorld(t, &fakeDaemon{})
+	// The ONLY ccdad-shaped thing on this machine is a file the scan cannot
+	// read. That is the fixture that separates the two implementations: with
+	// the scan's error ignored, the list of places is empty and uninstall
+	// answers "nothing to uninstall" with exit 3 — telling a script the machine
+	// is clean when ccdad has no idea whether it is.
+	bashrc := filepath.Join(home, ".bashrc")
+	stray := "a=1\n" + setupPathBegin + "\nb=2\n"
+	if err := os.WriteFile(bashrc, []byte(stray), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Nothing else to uninstall: no store, and a binary Homebrew owns.
+	brew := filepath.Join(t.TempDir(), "homebrew")
+	t.Setenv("HOMEBREW_PREFIX", brew)
+	stubExecutable(t, filepath.Join(brew, "bin", "ccdad"))
+
+	cmd := newUninstallCmd()
+	err, _, errOut := runCmd(t, cmd, "--yes")
+	if CodeFor(err) == ExitNothingToDo {
+		t.Fatalf("uninstall answered %d (nothing to do) while a startup file could not be scanned "+
+			"for a ccdad block:\n%s", ExitNothingToDo, errOut)
+	}
+	if err != nil {
+		t.Fatalf("uninstall: %v\n%s", err, errOut)
+	}
+	if !strings.Contains(errOut, bashrc) {
+		t.Errorf("the scan failure was swallowed; the user is never told which file to look at:\n%s", errOut)
+	}
+	if body := read(t, bashrc); body != stray {
+		t.Errorf("the unreadable file was rewritten anyway:\n%s", body)
+	}
+}
+
+// The fast, deterministic half of the non-regular-file rule. The FIFO in
+// TestUninstallCleansEveryOtherStartupFileWhenOneIsUnusable is the real-world
+// proof, but it kills a wrong implementation by HANGING, which is a bad way for
+// a suite to fail. This one answers in microseconds.
+func TestIsStartupFileAcceptsOnlyFilesItCanSafelyRewrite(t *testing.T) {
+	dir := t.TempDir()
+	regular := filepath.Join(dir, "regular")
+	if err := os.WriteFile(regular, []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(regular, link); err != nil {
+		t.Fatal(err)
+	}
+	dangling := filepath.Join(dir, "dangling")
+	if err := os.Symlink(filepath.Join(dir, "gone"), dangling); err != nil {
+		t.Fatal(err)
+	}
+	fifo := filepath.Join(dir, "fifo")
+	if err := syscall.Mkfifo(fifo, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name string
+		path string
+		want bool
+		why  string
+	}{
+		{"a regular file", regular, true, ""},
+		{"a symlink to one", link, true, "a dotfiles repository is still a startup file"},
+		{"a directory", dir, false, "os.ReadFile answers EISDIR, which used to abort the whole scan"},
+		{"a fifo", fifo, false, "os.ReadFile on a named pipe blocks forever, with no output and no way out but Ctrl-C"},
+		{"a dangling symlink", dangling, false, ""},
+		{"nothing at all", filepath.Join(dir, "absent"), false, ""},
+	}
+	for _, tc := range cases {
+		if got := isStartupFile(tc.path); got != tc.want {
+			t.Errorf("isStartupFile(%s) = %v, want %v%s", tc.name, got, tc.want, because(tc.why))
+		}
+	}
+}
+
+// --print must not quietly hand over the block the write path refuses. On Linux
+// os.Executable is fully resolved, so a Homebrew binary's directory is a
+// VERSIONED one: a user who pastes it has a dead PATH entry the next time the
+// package manager upgrades ccdad.
+func TestSetupPathPrintWarnsForAPackageManagerInstall(t *testing.T) {
+	setupPathWorld(t, "/bin/bash")
+	brew := filepath.Join(t.TempDir(), "homebrew")
+	t.Setenv("HOMEBREW_PREFIX", brew)
+	stubExecutable(t, filepath.Join(brew, "Cellar", "ccdad", "0.3.1", "bin", "ccdad"))
+
+	code, stdout, errOut, _ := runRoot(t, "setup-path", "--print")
+	if code != ExitOK {
+		t.Fatalf("--print = %d, want %d", code, ExitOK)
+	}
+	if !strings.Contains(errOut, "brew shellenv") {
+		t.Errorf("--print handed over a block for a Homebrew install without naming Homebrew's own "+
+			"instruction, while `ccdad setup-path` refuses the same install outright:\n%s", errOut)
+	}
+	if stdout == "" {
+		t.Error("--print stopped printing; the note is a note, not a refusal")
+	}
+}
+
+// setup-path writes the files of the shell it was told about; uninstall may run
+// under a different one. Without the cross-shell scan the blocks survive and
+// the command still reports a clean uninstall.
+func TestUninstallFindsBlocksWrittenUnderOtherShells(t *testing.T) {
+	home, _ := setupPathWorld(t, "/bin/bash")
+	stubDaemonWorld(t, &fakeDaemon{})
+	for _, shell := range []string{"bash", "fish"} {
+		if code, _, errOut, _ := runRoot(t, "setup-path", "--shell", shell); code != ExitOK {
+			t.Fatalf("setup-path --shell %s = %d\n%s", shell, code, errOut)
+		}
+	}
+	written := []string{
+		filepath.Join(home, ".bashrc"),
+		filepath.Join(home, ".profile"),
+		filepath.Join(home, ".config", "fish", "config.fish"),
+	}
+
+	// Uninstalling from a zsh prompt, which wrote none of them.
+	t.Setenv("SHELL", "/bin/zsh")
+	cmd := newUninstallCmd()
+	err, _, errOut := runCmd(t, cmd, "--yes")
+	if err != nil {
+		t.Fatalf("uninstall: %v\n%s", err, errOut)
+	}
+	for _, path := range written {
+		if body := read(t, path); strings.Contains(body, setupPathBegin) {
+			t.Errorf("%s still holds a ccdad block after uninstall:\n%s", path, body)
+		}
+		if !strings.Contains(errOut, path) {
+			t.Errorf("uninstall never named %s:\n%s", path, errOut)
+		}
+	}
+}
+
+// A ZDOTDIR user's real .zshrc, which uninstall only reaches because the XDG
+// default is scanned unconditionally: $ZDOTDIR is normally exported from
+// ~/.zshenv, which an uninstall run from bash never sees.
+func TestUninstallFindsAZdotdirBlockWithoutTheVariable(t *testing.T) {
+	home, _ := setupPathWorld(t, "/bin/zsh")
+	stubDaemonWorld(t, &fakeDaemon{})
+	zdot := filepath.Join(home, ".config", "zsh")
+	t.Setenv("ZDOTDIR", zdot)
+	if code, _, errOut, _ := runRoot(t, "setup-path"); code != ExitOK {
+		t.Fatalf("setup-path = %d\n%s", code, errOut)
+	}
+	rc := filepath.Join(zdot, ".zshrc")
+	if !strings.Contains(read(t, rc), setupPathBegin) {
+		t.Fatalf("setup-path did not write %s", rc)
+	}
+
+	// Uninstall from a shell that never exported ZDOTDIR.
+	t.Setenv("ZDOTDIR", "")
+	t.Setenv("SHELL", "/bin/bash")
+	cmd := newUninstallCmd()
+	if err, _, errOut := runCmd(t, cmd, "--yes"); err != nil {
+		t.Fatalf("uninstall: %v\n%s", err, errOut)
+	}
+	if body := read(t, rc); strings.Contains(body, setupPathBegin) {
+		t.Errorf("%s still holds a ccdad block; every new zsh terminal keeps prepending a directory "+
+			"whose binary was just deleted:\n%s", rc, body)
 	}
 }

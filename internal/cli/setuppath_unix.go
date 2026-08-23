@@ -23,6 +23,14 @@ import (
 // livePathRules reads $PATH as this platform's shell does.
 var livePathRules = unixPathRules
 
+// setupPathPlatformHelp is the half of --help that is only true here. The
+// Windows binary has no startup file and no markers, so a shared paragraph
+// describing them would send a Windows user looking for a fenced block that
+// does not exist.
+const setupPathPlatformHelp = "It writes a marker-fenced block into the startup files your shell reads, and\n" +
+	"nothing outside those markers is ever touched. Editing inside the block is\n" +
+	"not durable: a later run rewrites what is between the markers.\n"
+
 // setupPathFlags adds the flags that only exist here. --shell exists because
 // shell detection genuinely can fail — $SHELL is unset under some daemons,
 // containers and CI — and without it such a user has no way to proceed but to
@@ -30,7 +38,7 @@ var livePathRules = unixPathRules
 // there rather than being accepted and ignored.
 func setupPathFlags(cmd *cobra.Command, opts *setupPathOptions) {
 	cmd.Flags().StringVar(&opts.shell, "shell", "",
-		"the shell to set up: bash, zsh, fish or sh (default: $SHELL)")
+		"shell to set up: bash, zsh, fish, sh (default: $SHELL)")
 	_ = cmd.RegisterFlagCompletionFunc("shell",
 		func(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective) {
 			return []string{"bash", "zsh", "fish", "sh"}, cobra.ShellCompDirectiveNoFileComp
@@ -84,9 +92,19 @@ func resolveShell(opts setupPathOptions) (shellKind, string, error) {
 func setupPathPrint(cmd *cobra.Command, dir string, opts setupPathOptions) error {
 	k, source, err := resolveShell(opts)
 	if err != nil {
-		// --print is total: an unknown shell still gets the portable form,
-		// which is the one install.sh has always printed. Refusing here would
-		// leave the user who cannot be detected with no way at all.
+		// --print is total for a machine ccdad cannot READ: an undetectable
+		// $SHELL still gets the portable form, which is the one install.sh has
+		// always printed, because refusing there leaves that user with nothing.
+		//
+		// A value the user TYPED is the opposite case and must not be
+		// swallowed. `--print --shell fsh` falling back to sh hands a fish user
+		// POSIX syntax to paste into config.fish, which fish then errors on at
+		// every shell start — the exact outcome the closed shell table exists
+		// to prevent — and it exits 0 while the same typo without --print is a
+		// usage error.
+		if IsUsageError(err) {
+			return err
+		}
 		k, source = shellPOSIX, "no shell detected, so this is the portable sh form"
 	}
 	if k == shellCsh {
@@ -95,8 +113,10 @@ func setupPathPrint(cmd *cobra.Command, dir string, opts setupPathOptions) error
 		return nil
 	}
 	fmt.Fprint(cmd.OutOrStdout(), renderBlock(dir, k))
-	fmt.Fprintf(cmd.ErrOrStderr(), "The block above is for %s (%s). It writes nothing on its own; "+
-		"append it to a startup file, or run `ccdad setup-path` to have ccdad do it.\n", k, source)
+	fmt.Fprintf(cmd.ErrOrStderr(), "The block above is for %s (%s). It writes nothing on its own. "+
+		"Run `ccdad setup-path` to have ccdad place it, or paste it at the END of a startup file — "+
+		"appending it to a file that does not end in a newline glues the first marker onto the last "+
+		"line, which breaks that line and hides the block from a later run.\n", k, source)
 	return nil
 }
 
@@ -215,10 +235,7 @@ func pathCandidates() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	config := os.Getenv("XDG_CONFIG_HOME")
-	if config == "" {
-		config = filepath.Join(home, ".config")
-	}
+	config := configHome(home)
 	candidates := []string{
 		filepath.Join(home, ".bashrc"),
 		filepath.Join(home, ".bash_profile"),
@@ -226,12 +243,33 @@ func pathCandidates() ([]string, error) {
 		filepath.Join(home, ".profile"),
 		filepath.Join(home, ".zshrc"),
 		filepath.Join(home, ".zshenv"),
+		// The XDG location a ZDOTDIR user almost always points at,
+		// UNCONDITIONALLY. $ZDOTDIR is normally exported from ~/.zshenv, which
+		// an uninstall run from bash, from an installer or from a Makefile
+		// never sees — so scanning only when the variable happens to be in the
+		// environment leaves the block setup-path wrote there behind, unnamed
+		// in the preview and unremoved, still prepending a directory whose
+		// binary has just been deleted.
+		filepath.Join(config, "zsh", ".zshrc"),
 		filepath.Join(config, "fish", "config.fish"),
 	}
 	if zdotdir := os.Getenv("ZDOTDIR"); zdotdir != "" {
 		candidates = append(candidates, filepath.Join(zdotdir, ".zshrc"))
 	}
 	return candidates, nil
+}
+
+// isStartupFile reports whether a candidate is something ccdad may read and
+// rewrite: a regular file, or a symlink resolving to one.
+//
+// os.Stat is deliberate — it follows the link, so a dotfiles repository is
+// still a startup file, and it does NOT open, so a named pipe answers here
+// instead of blocking a later os.ReadFile forever. A directory, a FIFO, a
+// device and a dangling symlink are all "not a startup file", which is a skip
+// rather than the error that would otherwise abort the scan.
+func isStartupFile(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
 }
 
 // pathRegistrations names the startup files that currently carry a ccdad
@@ -251,20 +289,30 @@ func pathRegistrations(_ string) ([]string, error) {
 		return nil, err
 	}
 	var found []string
+	var failures []error
 	for _, path := range candidates {
+		if !isStartupFile(path) {
+			continue
+		}
 		body, err := os.ReadFile(path)
 		if err != nil {
+			failures = append(failures, err)
 			continue
 		}
 		blocks, err := findBlocks(splitKeep(body))
 		if err != nil {
-			return found, fmt.Errorf("%s: %w", path, err)
+			failures = append(failures, fmt.Errorf("%s: %w", path, err))
+			continue
 		}
 		if len(blocks) > 0 {
 			found = append(found, path)
 		}
 	}
-	return found, nil
+	// Every candidate is looked at, and the failures are joined rather than
+	// returned at the first one. Stopping early is how one stray marker in
+	// ~/.bashrc hides the real block in a file that sorts after it — which
+	// uninstall then reports as a clean removal.
+	return found, errors.Join(failures...)
 }
 
 // unregisterPath takes ccdad's block back out of every startup file that has
@@ -274,22 +322,27 @@ func unregisterPath(_ string) (removed []string, err error) {
 	if err != nil {
 		return nil, err
 	}
+	var failures []error
 	for _, path := range candidates {
 		gone, err := removeRC(path)
 		if err != nil {
-			return removed, err
+			failures = append(failures, err)
+			continue
 		}
 		if gone {
 			removed = append(removed, path)
 		}
 	}
-	return removed, nil
+	return removed, errors.Join(failures...)
 }
 
 // removeRC takes ccdad's block out of one startup file, leaving every other
 // byte as it was. A file with no block of ours is not rewritten at all --
 // rewriting a file ccdad never wrote is the one thing removal must not do.
 func removeRC(path string) (bool, error) {
+	if !isStartupFile(path) {
+		return false, nil
+	}
 	existing, err := os.ReadFile(path)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
@@ -324,6 +377,18 @@ func replaceFile(path string, content []byte) error {
 	target := path
 	if resolved, err := filepath.EvalSymlinks(path); err == nil {
 		target = resolved
+	} else if info, lerr := os.Lstat(path); lerr == nil && info.Mode()&os.ModeSymlink != 0 {
+		// A symlink whose target does not exist — a dotfiles repository that
+		// has not been cloned or stowed yet, or a volume that is not mounted.
+		// Renaming over it would replace the LINK with a regular file and
+		// report "Created", and the user's next `stow` or `chezmoi apply`
+		// fails on a target that is no longer a symlink. Refuse instead: what
+		// is broken is the link, and ccdad cannot know where it was meant to
+		// point.
+		dest, _ := os.Readlink(path)
+		return fmt.Errorf("%s is a symlink to %s, which does not exist; "+
+			"ccdad will not replace the link with a file — restore the target (or remove the link) and run this again",
+			path, dest)
 	}
 
 	mode := fs.FileMode(0o644)

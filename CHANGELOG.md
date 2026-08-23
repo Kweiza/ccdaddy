@@ -58,9 +58,15 @@ by `uuid` or `alias`.
   platforms. On Windows this was owed before `setup-path` existed:
   `install.ps1` has written `HKCU\Environment\Path` since it shipped, and every
   one-liner install left an entry pointing at a directory uninstall had just
-  emptied. Only what is between ccdad's own markers is removed — a `PATH` line
-  you wrote yourself is never touched, and a block whose interior no longer
-  matches is reported rather than deleted.
+  emptied. What it removes is only what ccdad can prove it added: on Unix that
+  is what lies between ccdad's own markers, so a `PATH` line you wrote yourself
+  is never touched; on Windows there are no markers, so `setup-path` and
+  `install.ps1` now record the directory they added under
+  `HKCU\Software\ccdad`, and an entry with no such record is left in place and
+  named. That matters for a `go install` or a zip install, where the directory
+  is one you put on `PATH` yourself and holds your other tools. A startup file
+  whose fence is unterminated or doubled is reported and left alone rather than
+  guessed at, and the remaining files are still cleaned.
 
 - **`install.sh` points at `ccdad setup-path`** — by absolute path, because that
   message only appears when the install directory is off `PATH` and a bare
