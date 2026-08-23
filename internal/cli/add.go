@@ -36,7 +36,7 @@ const quarantineLiftTimeout = 5 * time.Second
 
 // liftQuarantine clears an auto-switch quarantine after a successful add.
 //
-// §7.2's quarantine fires on a dead refresh token, and re-authenticating is the
+// The quarantine fires on a dead refresh token, and re-authenticating is the
 // only thing that fixes one. store.Add updates an existing uuid IN PLACE, so
 // without this the user logs in again, is told it worked, and the engine goes
 // on refusing to use the account with nothing anywhere saying why.
@@ -218,8 +218,8 @@ func runAdd(cmd *cobra.Command, opts addOptions) error {
 				fmt.Fprintln(stderr, "(stdin is not a terminal, so ccdad is waiting on the browser callback only.)")
 			}
 		},
-		// [§6.4] an unreadable paste is a re-prompt, not an abort: the loopback
-		// race may still be about to win. Without this the line is swallowed in
+		// An unreadable paste is a re-prompt, not an abort: the loopback race
+		// may still be about to win. Without this the line is swallowed in
 		// silence and the user is left at a bare cursor with nothing saying
 		// ccdad is still waiting.
 		//
@@ -248,7 +248,7 @@ func runAdd(cmd *cobra.Command, opts addOptions) error {
 		// No usage call has been made, so UsageShape is empty by fact rather
 		// than by omission: Classify reads that as "no window evidence" and
 		// only a metered billing_type can still make it credit. An overage
-		// switch on a subscription org is not evidence (spec §5).
+		// switch on a subscription org is not evidence.
 		Kind: identity.Classify(profile, identity.UsageShape{}, false),
 	}
 	if profile != nil {
@@ -282,11 +282,11 @@ func runAdd(cmd *cobra.Command, opts addOptions) error {
 		return err
 	}
 
-	// add doubles as re-authentication (spec §6.5). When the account being
+	// add doubles as re-authentication in place. When the account being
 	// re-authenticated is the one already in the live file, its other
 	// account-scoped keys — trustedDeviceToken, enterpriseGateway, designOauth —
 	// are sitting there and are cheap to keep. Losing them costs a device-cap
-	// slot and a gateway re-trust (spec §4.1).
+	// slot and a gateway re-trust.
 	//
 	// Whether the live file IS this account is decided by comparing its OAuth
 	// record against the one this account last stored, and NOT by
@@ -379,7 +379,7 @@ func runAdd(cmd *cobra.Command, opts addOptions) error {
 	fmt.Fprintf(stderr, "\n%s %s (%s, index %d).\n", verb, saved.Label(), saved.Kind, saved.Idx)
 
 	if opts.activate {
-		// --activate IS a switch, so spec §4.3's drift probe belongs here too.
+		// --activate IS a switch, so the unknown-key probe belongs here too.
 		if unknown := cclink.UnknownKeys(live); len(unknown) > 0 {
 			fmt.Fprintf(stderr,
 				"note: unrecognized keys in the credentials file are being preserved unchanged: %s\n",
@@ -428,11 +428,11 @@ func loginError(stderr io.Writer, err error) error {
 	case errors.Is(err, oauth.ErrLoginInterrupted):
 		return WithCode(err, ExitInterrupted)
 	case errors.Is(err, oauth.ErrLoginTimeout):
-		// Spec §6.4's edge-case table assigns 1 to a timeout, by name. Exit 4
-		// is arguably the better fit for "wanted, no viable target", but the
-		// spec is the binding authority and a silent divergence in an exit code
-		// is exactly what the contract exists to prevent. Raise it there first
-		// if it should change.
+		// The exit contract makes a login timeout a runtime failure, exit 1.
+		// Exit 4 is arguably the better fit for "wanted, no viable target", but
+		// a silent divergence in an exit code is exactly what the contract
+		// exists to prevent. Raise it against README's "Exit codes" first if it
+		// should change.
 		return WithCode(err, ExitFailure)
 	}
 	return err
@@ -528,10 +528,10 @@ func aliasIsFree(alias string) error {
 //
 // prior is the account's previously stored claudeAiOauth, or nil. Fields it
 // carries that this exchange did not return are preserved rather than dropped:
-// spec §4.2 rule 3 names refreshTokenExpiresAt, rateLimitTier and clientId as
-// the three clauth destroyed, and clientId is what a revocation request needs.
-// Replacing the record wholesale on every `ccdad add` would reintroduce that
-// exact failure one layer above cclink.
+// clauth's typed struct destroyed refreshTokenExpiresAt, rateLimitTier and
+// clientId on every re-serialize, and clientId is what a revocation request
+// needs. Replacing the record wholesale on every `ccdad add` would reintroduce
+// that exact failure one layer above cclink.
 func credentialBlob(tok *oauth.TokenResponse, profile *identity.Profile, prior cclink.Blob) (cclink.Blob, error) {
 	payload := map[string]any{}
 	if raw, ok := prior["claudeAiOauth"]; ok {
@@ -551,9 +551,9 @@ func credentialBlob(tok *oauth.TokenResponse, profile *identity.Profile, prior c
 	// `d = Boolean((IZ(f.scopes) || f.subscriptionType) && !f.clientId)` and
 	// only when d is true does it send the curated refresh scope set. A
 	// synthesized clientId flips d to false, making Claude Code refresh with
-	// the raw stored scopes including org:create_api_key — the exact scope
-	// spec §3.1 says the refresh grant drops. A clientId that a non-default
-	// client really did store survives through the prior merge above.
+	// the raw stored scopes including org:create_api_key — the exact scope the
+	// refresh grant drops. A clientId that a non-default client really did
+	// store survives through the prior merge above.
 	if tok.RefreshTokenExpiresIn > 0 {
 		payload["refreshTokenExpiresAt"] = now + tok.RefreshTokenExpiresIn*1000
 	}

@@ -98,7 +98,7 @@ func TestSnapshotRoundTripKeepsUnknownsUnknown(t *testing.T) {
 		t.Error("a null utilization came back as a value")
 	}
 	if _, ok := got.ExtraUsage.UsedCredits(); ok {
-		t.Error("a null used_credits came back as a value; §7.3 fails closed on money")
+		t.Error("a null used_credits came back as a value; unknown spend is not $0")
 	}
 	if got.SevenDay.Present {
 		t.Error("an absent window came back present")
@@ -252,7 +252,7 @@ func keysOf(m map[string]json.RawMessage) []string {
 
 // A torn or hand-mangled file degrades every entry to UNKNOWN — no entries at
 // all — rather than to zero, which would read as "every account is empty" and
-// park the engine (§7.2).
+// park the engine.
 func TestCacheDegradesACorruptFileToUnknown(t *testing.T) {
 	dir := isolate(t)
 	if err := os.WriteFile(filepath.Join(dir, "usage.json"), []byte(`{"accounts": {"a": `), 0o600); err != nil {
@@ -418,10 +418,10 @@ func TestCacheWritesAtomically(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Windows has no mode bits: os.Chmod there toggles the read-only attribute
-	// and Stat reports 0666 whatever the file was created with. §10.3 accepts
-	// that for v1 and relies on the inherited %USERPROFILE% ACL instead --
-	// which is a property of the directory, not of this file, and not
-	// something a Go test can assert here.
+	// and Stat reports 0666 whatever the file was created with. That is
+	// documented rather than fixed in v1, and the store relies on the inherited
+	// %USERPROFILE% ACL instead -- which is a property of the directory, not of
+	// this file, and not something a Go test can assert here.
 	if runtime.GOOS != "windows" {
 		if perm := info.Mode().Perm(); perm != 0o600 {
 			t.Errorf("usage.json mode = %o, want 600", perm)

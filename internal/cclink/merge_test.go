@@ -41,9 +41,9 @@ func TestAccountScopedSetMatchesClaudeCodePrune(t *testing.T) {
 }
 
 // The drift-detection list deserves the same pin as AccountScopedKeys: it is
-// the sole input to the unknown-key probe spec 4.3 requires on every switch,
-// so a typo here makes ccdad warn about legitimate keys forever.
-func TestKnownMachineKeysMatchesSpec(t *testing.T) {
+// the sole input to the unknown-key probe that runs on every switch, so a typo
+// here makes ccdad warn about legitimate keys forever.
+func TestKnownMachineKeysIsTheSevenMachineScopedKeys(t *testing.T) {
 	want := []string{
 		"coworkRemoteDevice", "gatewayTrust", "mcpOAuth", "mcpOAuthClientConfig",
 		"mcpXaaIdp", "mcpXaaIdpConfig", "pluginSecrets",
@@ -55,11 +55,11 @@ func TestKnownMachineKeysMatchesSpec(t *testing.T) {
 	}
 }
 
-// Spec 4.1's own headline claim: twelve top-level keys, five account-scoped
+// .credentials.json has twelve top-level keys, not two: five account-scoped
 // and seven machine-scoped.
-func TestKeyListsCoverAllTwelveSpecKeys(t *testing.T) {
+func TestKeyListsCoverAllTwelveTopLevelKeys(t *testing.T) {
 	if got := len(AccountScopedKeys) + len(KnownMachineKeys); got != 12 {
-		t.Fatalf("spec 4.1 names 12 top-level keys; have %d", got)
+		t.Fatalf(".credentials.json has 12 top-level keys; have %d", got)
 	}
 }
 
@@ -218,10 +218,10 @@ func TestUnknownKeysReportsOnlyUnrecognized(t *testing.T) {
 }
 
 // coworkRemoteDevice is keyed by organization uuid and holds a device private
-// key minted on THIS machine. Merge unions rather than replaces (spec 4.2.1)
-// as defence-in-depth, not because the shipped pipeline needs it: Extract
-// never puts this key in a snapshot (see its doc comment), so incoming here
-// is hand-built, not something Extract can produce. It guards a source of
+// key minted on THIS machine. Merge unions rather than replaces as
+// defence-in-depth, not because the shipped pipeline needs it: Extract never
+// puts this key in a snapshot (see its doc comment), so incoming here is
+// hand-built, not something Extract can produce. It guards a source of
 // incoming that does not occur in the pipeline today — a hand-built call, or
 // an export written by some future version of ccdad — so that even then, a
 // wholesale replace cannot destroy the live machine's other-organization
@@ -336,8 +336,8 @@ func TestMergeCoworkRemoteDeviceDoesNotHTMLEscape(t *testing.T) {
 // deliberately removed. This behaviour is emergent from the deny-list itself
 // (already exercised by TestMergePreservesMachineScopedKeys and
 // TestMergeDropsAccountScopedKeysAbsentFromIncoming); this is a named
-// regression guard for the specific key spec 4.2.2 calls out, not a test of a
-// distinct code path.
+// regression guard for gatewayTrust in particular, not a test of a distinct
+// code path.
 func TestMergePropagatesGatewayTrustAbsence(t *testing.T) {
 	live := blob(t, map[string]string{"claudeAiOauth": `{"accessToken":"old"}`})
 	incoming := blob(t, map[string]string{

@@ -346,8 +346,8 @@ func TestGlobalConfigPathInAgreesWithTheAmbientRule(t *testing.T) {
 	}
 }
 
-// §3.3's legacy form wins when it is there, and it is there in a profile more
-// often than anywhere: seedProfile copies top-level FILES out of the live
+// The legacy .config.json wins when it is there, and it is there in a profile
+// more often than anywhere: seedProfile copies top-level FILES out of the live
 // config home, so a machine with a .config.json puts one in every profile it
 // creates. Writing <profile>/.claude.json on such a machine would write a file
 // Claude Code never reads.

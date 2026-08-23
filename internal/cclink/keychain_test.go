@@ -46,18 +46,18 @@ func TestKeychainServiceName(t *testing.T) {
 			want: "Claude Code-credentials",
 		},
 		{
-			// §3.3's first trap. This value IS the default config home, and it
-			// still produces a suffixed item, because the value is hashed
-			// rather than compared against anything.
+			// This value IS the default config home, and it still produces a
+			// suffixed item, because the value is hashed rather than compared
+			// against anything.
 			name: "CLAUDE_CONFIG_DIR set to the literal default still suffixes",
 			env:  keychainEnv{configDir: "/home/tester/.claude"},
 			want: "Claude Code-credentials-b2e2cf9d",
 		},
 		{
-			// §3.3's second trap, in the two shapes a path resolver would
-			// erase. A trailing slash and a "./" segment name the same
-			// directory and hash differently, so anything that cleans, resolves
-			// or realpaths the value before hashing lands on the wrong item.
+			// The hashed string is the raw value, in the two shapes a path
+			// resolver would erase: a trailing slash and a "./" segment name
+			// the same directory and hash differently, so anything that cleans,
+			// resolves or realpaths the value first lands on the wrong item.
 			name: "a trailing slash is part of the hashed string",
 			env:  keychainEnv{configDir: "/home/tester/.claude/"},
 			want: "Claude Code-credentials-6211cf53",
@@ -248,7 +248,8 @@ func TestCredentialKeychainItemReadsTheEnvironment(t *testing.T) {
 
 // The same trap as the table's second case, but reached the way a user reaches
 // it: CCDAD's own isolate helpers set CLAUDE_CONFIG_DIR to a real directory, and
-// pointing it at the default one is the mistake §3.3 warns about.
+// pointing it at the default one is the mistake -- the item is suffixed
+// anyway.
 func TestCredentialKeychainItemSuffixesEvenAtTheDefaultPath(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))

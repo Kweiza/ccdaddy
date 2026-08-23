@@ -67,7 +67,8 @@ func (e *StatusError) Error() string {
 }
 
 // RetryAfter is the wait the endpoint asked for, and whether it asked at all.
-// §7.4's AIMD backoff needs the difference: an absent header is not a zero wait.
+// The poll policy's AIMD backoff needs the difference: an absent header is not
+// a zero wait.
 func (e *StatusError) RetryAfter() (time.Duration, bool) {
 	return e.retryAfter, e.hasRetryAfter
 }
@@ -133,14 +134,14 @@ func (c *Client) FetchUsage(ctx context.Context, accessToken string) (*Snapshot,
 	// through this client — and Accept is only ever added by axios.
 	//
 	// ccdad matches three of the four and DECLINES the User-Agent, which is a
-	// deliberate exception to §3.2's "match what Claude Code's own code sets"
-	// rule rather than an oversight. That header names a Claude Code version
-	// ccdad is not, so sending it is the same pinned-version lie §3.2 refuses
-	// for `axios/1.15.2`: it would go stale on Claude Code's next release and it
-	// would misreport which client made the request. Go contributes
-	// `User-Agent: Go-http-client/1.1` instead, so ccdad's request stays
-	// distinguishable on the wire — which is the honest outcome, and the same
-	// call ccdad already makes on the token endpoint.
+	// deliberate exception to the rule of matching what Claude Code's own code
+	// sets rather than an oversight. That header names a Claude Code version
+	// ccdad is not, so sending it is the same pinned-version lie ccdad already
+	// refuses for `axios/1.15.2`: it would go stale on Claude Code's next
+	// release and it would misreport which client made the request. Go
+	// contributes `User-Agent: Go-http-client/1.1` instead, so ccdad's request
+	// stays distinguishable on the wire — which is the honest outcome, and the
+	// same call ccdad already makes on the token endpoint.
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("anthropic-beta", BetaHeader)

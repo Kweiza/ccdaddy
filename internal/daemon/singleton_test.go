@@ -17,11 +17,10 @@ import (
 // opens with os.O_CREATE by default, so this is one SetFlag away from being
 // wrong, and being wrong is invisible: the probe still answers "not running",
 // it just destroys the missing-file evidence for every probe afterwards.
-// §8.2 fixes both numbers: "a starting daemon must retry a lost race (3
-// attempts, 100 ms apart)". The behavioural assertions elsewhere cannot pin
-// the delay on their own, because any assertion phrased in terms of the
-// constant shrinks with it.
-func TestTheRetryMatchesTheSpecificationsNumbers(t *testing.T) {
+// A starting daemon must retry a lost race: 3 attempts, 100 ms apart. The
+// behavioural assertions elsewhere cannot pin the delay on their own, because
+// any assertion phrased in terms of the constant shrinks with it.
+func TestTheRetryIsThreeAttemptsAHundredMillisecondsApart(t *testing.T) {
 	if acquireAttempts != 3 {
 		t.Errorf("acquireAttempts = %d, want 3", acquireAttempts)
 	}
@@ -220,11 +219,11 @@ func TestASecondProcessHoldingTheSingletonIsSeenAndLocksUsOut(t *testing.T) {
 		t.Fatalf("AcquireSingleton() = %v, want ErrSingletonHeld — a lost race has to be tellable "+
 			"from a filesystem that cannot lock, or `auto` cannot refuse and `daemon status` cannot pick an exit code", err)
 	}
-	// §8.2 says three attempts a hundred milliseconds apart, so two waits
-	// before the verdict. Asserted against acquireRetryBudget, which is a
-	// literal: `elapsed >= 2*acquireRetryDelay` would shrink along with the
-	// constant it is supposed to be pinning, and a one-millisecond delay would
-	// pass it while collapsing the window a starting daemon needs.
+	// Three attempts a hundred milliseconds apart, so two waits before the
+	// verdict. Asserted against acquireRetryBudget, which is a literal:
+	// `elapsed >= 2*acquireRetryDelay` would shrink along with the constant it
+	// is supposed to be pinning, and a one-millisecond delay would pass it
+	// while collapsing the window a starting daemon needs.
 	if elapsed := time.Since(start); elapsed < acquireRetryBudget {
 		t.Errorf("AcquireSingleton gave up after %s, want at least %s — a probe momentarily OWNS the lock it reads, "+
 			"so a daemon starting alongside one loses a race it should win", elapsed, acquireRetryBudget)

@@ -15,7 +15,7 @@ import (
 // repository is developed on, so without a seam here the whole mechanism would
 // ship unexecuted and be discovered broken by a user.
 
-// shutdownEventPrefix is §8.4's `Local\ccdad-shutdown-<hash>`.
+// shutdownEventPrefix is the shutdown event's `Local\ccdad-shutdown-<hash>`.
 //
 // `Local\` is a per-SESSION namespace, and that is a real limitation rather
 // than an implementation detail: a daemon started inside an RDP session cannot
@@ -116,7 +116,7 @@ const (
 // daemon that was recorded, and says why not when it is not.
 //
 // TerminateProcess on a recycled pid kills an innocent process — that is the
-// entire hazard §10.3 lists this cross-check against, and it is not remote: a
+// entire hazard this cross-check exists against, and it is not remote: a
 // daemon that crashed hours ago leaves its pid in the pidfile, and Windows
 // reissues pids aggressively.
 //

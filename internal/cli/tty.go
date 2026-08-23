@@ -38,13 +38,13 @@ var consoleVT = setConsoleVT
 // enableConsoleVT gives this process's stdout ANSI escape processing, unless
 // this process is the daemon. args is os.Args[1:].
 //
-// §10.3 is explicit that the VT enable is "console only, never in the daemon",
-// and the daemon is reached through exactly one argument: Spawn re-execs `ccdad
-// <daemon.RunArg>`. It would in fact be a no-op through THAT path — Spawn
-// points the child's stdout at os.DevNull, which has no console mode — but that
-// is a fact about the spawn path rather than about this one, and a daemon
-// started any other way (a supervisor, a developer, a future launcher) would
-// inherit a console whose mode is none of its business.
+// The VT enable is console only, never in the daemon, and the daemon is reached
+// through exactly one argument: Spawn re-execs `ccdad <daemon.RunArg>`. It
+// would in fact be a no-op through THAT path — Spawn points the child's stdout
+// at os.DevNull, which has no console mode — but that is a fact about the spawn
+// path rather than about this one, and a daemon started any other way (a
+// supervisor, a developer, a future launcher) would inherit a console whose
+// mode is none of its business.
 func enableConsoleVT(args []string) {
 	if len(args) > 0 && args[0] == daemon.RunArg {
 		return

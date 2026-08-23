@@ -68,8 +68,7 @@ func isMeteredBilling(s string) bool {
 //
 // Subscription windows win outright: an account with an active five-hour or
 // seven-day window is ranked on those windows, even when overage credits are
-// also enabled, because credits are not spent while a window still has room
-// (spec §5).
+// also enabled, because credits are not spent while a window still has room.
 //
 // The default when there is no evidence is KindSubscription, deliberately.
 // Guessing KindCredit for an account we cannot read would put it on the far

@@ -404,10 +404,10 @@ func TestDoctorSaysWhichSessionItIsInside(t *testing.T) {
 
 // A read whose ANSWER changes inside a session is allowed to run, and has to
 // stop making a claim it can no longer support. `export --include-mcp` is the
-// only path by which mcpOAuth leaves the machine (§9.1), and the default
-// session mode scopes mcpOAuth away with the credentials (§3.3) — so in here
-// the empty answer says nothing about the machine, and "there are no MCP
-// logins on this machine" is how someone loses their backup.
+// only path by which mcpOAuth leaves the machine, and the default session
+// mode scopes mcpOAuth away with the credentials — so in here the empty answer
+// says nothing about the machine, and "there are no MCP logins on this
+// machine" is how someone loses their backup.
 func TestExportDoesNotClaimTheMachineHasNoMCPLoginsFromInsideASession(t *testing.T) {
 	isolate(t)
 	seedAccount(t, "acct-1", "a@example.com")

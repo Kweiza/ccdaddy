@@ -183,9 +183,9 @@ func setupPathApply(cmd *cobra.Command, dir string, opts setupPathOptions) error
 		// exists to prevent: the user who pasted an export line into their
 		// running shell would be told "already on PATH" and get no durable
 		// registration at all, so the next terminal says `command not found`
-		// again. §9.3 settles it — 3 is "the world is already as you asked",
-		// and a user who asked for durable registration and has none is not in
-		// that world.
+		// again. The exit contract settles it — 3 is "the world is already
+		// as you asked", and a user who asked for durable registration and
+		// has none is not in that world.
 		if !onPath {
 			fmt.Fprintf(out, "Nothing to do. This shell has not read that file yet — "+
 				"open a new terminal, or run `. %s`.\n", files[len(files)-1])

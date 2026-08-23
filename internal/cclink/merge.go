@@ -11,10 +11,11 @@ import (
 // Machine-scoped keys are excluded, with no exception: live is authoritative
 // for machine state, and a snapshot must be safe to carry to another machine,
 // because `export` writes snapshots to a file and `import` can restore them
-// there. Two of the seven machine keys make that concrete:
+// there. Two keys carry a device identity, and only one is machine-scoped:
 //
-//   - trustedDeviceToken is device-bound; the spec requires it "stripped from
-//     any cross-machine export."
+//   - trustedDeviceToken is per device AND per account, and Claude Code's own
+//     re-login prune settles the tie by deleting it — so ccdad classifies it
+//     with the account, and a snapshot does carry it.
 //   - coworkRemoteDevice is the stronger form of the same hazard. It holds a
 //     P-256 private key minted on THIS machine plus a server-side device
 //     registration named after THIS machine's hostname (Claude Code's own
@@ -48,8 +49,8 @@ func Extract(live Blob) Blob {
 // presents A's device under B's identity.
 //
 // coworkRemoteDevice is unioned per organization sub-key rather than replaced
-// wholesale (spec 4.2.1), with live winning on any collision — see
-// unionObjects. This is defence-in-depth, not a path Extract can exercise:
+// wholesale, with live winning on any collision — see unionObjects. This is
+// defence-in-depth, not a path Extract can exercise:
 // Extract deliberately never puts coworkRemoteDevice in a snapshot (see its
 // doc comment), so an incoming blob built by this package from a live file can
 // never carry the key. The union guards against any OTHER source of incoming

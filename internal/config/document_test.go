@@ -109,7 +109,7 @@ func TestANestedKeyLandsInItsOwnTable(t *testing.T) {
 	}
 }
 
-// §4.2 rule 3, applied to this file: decoding into a typed struct and
+// The round-trip rule, applied to this file: decoding into a typed struct and
 // re-marshalling would silently delete a key a newer ccdad wrote.
 func TestSettingOneKeyPreservesEverythingTheDocumentAlreadyHeld(t *testing.T) {
 	d, err := ParseDocument([]byte("threshold = 70\nfuture_knob = 3\n\n[future]\nkeep = \"me\"\n"))
@@ -194,10 +194,10 @@ func TestWithDocumentWritesTheFileAtomicallyAndPrivately(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Windows has no mode bits: os.Chmod there toggles the read-only attribute
-	// and Stat reports 0666 whatever the file was created with. §10.3 accepts
-	// that for v1 and relies on the inherited %USERPROFILE% ACL instead --
-	// which is a property of the directory, not of this file, and not
-	// something a Go test can assert here.
+	// and Stat reports 0666 whatever the file was created with. v1 relies on
+	// the inherited %USERPROFILE% ACL instead -- which is a property of the
+	// directory, not of this file, and not something a Go test can assert
+	// here.
 	if runtime.GOOS != "windows" {
 		if perm := info.Mode().Perm(); perm != 0o600 {
 			t.Errorf("mode = %v, want 0600", perm)

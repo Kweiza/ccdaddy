@@ -11,7 +11,7 @@ import (
 )
 
 // removeSelf gets the running binary out of the way on Windows, where a process
-// cannot delete its own image (§10.3).
+// cannot delete its own image.
 //
 // It is two steps, and the FIRST one is the one that matters. A running .exe
 // cannot be deleted but CAN be renamed, so moving it aside takes it off PATH

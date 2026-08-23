@@ -73,7 +73,7 @@ func TestConfigPathAnswersInJSON(t *testing.T) {
 	}
 }
 
-// §9.3: a negative answer to a probe is 5, not 1 and not 2.
+// Under the exit contract a negative answer to a probe is 5, not 1 and not 2.
 func TestGettingAnUnsetKeyIsTheProbeNegative(t *testing.T) {
 	isolate(t)
 
@@ -138,8 +138,8 @@ func TestSetThenGetRoundTripsAValue(t *testing.T) {
 	}
 }
 
-// An accepted typo is a config that silently does nothing, which is §9.3's
-// whole argument for keeping 2 usage-only.
+// An accepted typo is a config that silently does nothing, which is the exit
+// contract's whole argument for keeping 2 usage-only.
 func TestSettingAnUnknownKeyIsAUsageError(t *testing.T) {
 	isolate(t)
 
@@ -208,8 +208,8 @@ func TestUnsettingAnUnknownKeyIsAUsageError(t *testing.T) {
 	}
 }
 
-// §4.2 rule 3's shape: a key a newer ccdad wrote must survive an older one's
-// write, or an upgrade silently deletes settings.
+// The round-trip rule's shape: a key a newer ccdad wrote must survive an older
+// one's write, or an upgrade silently deletes settings.
 func TestAKeyThisReleaseDoesNotKnowSurvivesASet(t *testing.T) {
 	isolate(t)
 	writeConfig(t, "future_knob = 3\n\n[future]\nkeep = \"me\"\n")
@@ -239,10 +239,10 @@ func TestTheConfigFileIsWrittenPrivately(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Windows has no mode bits: os.Chmod there toggles the read-only attribute
-	// and Stat reports 0666 whatever the file was created with. §10.3 accepts
-	// that for v1 and relies on the inherited %USERPROFILE% ACL instead --
-	// which is a property of the directory, not of this file, and not
-	// something a Go test can assert here.
+	// and Stat reports 0666 whatever the file was created with. That is
+	// documented rather than fixed for v1, and the store relies on the
+	// inherited %USERPROFILE% ACL instead -- which is a property of the
+	// directory, not of this file, and not something a Go test can assert here.
 	if runtime.GOOS != "windows" {
 		if perm := info.Mode().Perm(); perm != 0o600 {
 			t.Errorf("mode = %v, want 0600", perm)
@@ -364,7 +364,8 @@ func TestGetTakesExactlyOneKey(t *testing.T) {
 // The engine has to actually read this file, or `ccdad config set` is a text
 // editor with extra steps. max_auto_spend is the sharpest proof available: the
 // default of 0 blocks the move with exit 4, and nothing but this file can raise
-// it — §7.3 refuses to take a flag for it.
+// it — the credit gate takes no flag for it, so that arming it stays two
+// independent acts.
 func TestATargetlessSwitchSpendsOnlyWhatTheConfigFileAllows(t *testing.T) {
 	setup := func(t *testing.T) {
 		t.Helper()
@@ -445,8 +446,8 @@ func TestSetEchoesTheValueItActuallyStored(t *testing.T) {
 }
 
 // The threshold decides whether the subscription pool counts as EXHAUSTED,
-// which is the input that opens §7.3's credit gate — so a threshold read from
-// the file changes what a targetless switch does, and one that is ignored does
+// which is the input that opens the credit gate — so a threshold read from the
+// file changes what a targetless switch does, and one that is ignored does
 // not.
 func TestTheConfiguredThresholdReachesTheRankingPass(t *testing.T) {
 	isolate(t)

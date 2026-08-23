@@ -8,10 +8,10 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 )
 
-// §8's "Auto-started by any ccdad command when no daemon is up" is the feature
-// — §1.1 priority 2 is automatic switching with nothing to run — and the most
-// dangerous sentence in the specification. It puts a process spawn on the hot
-// path of every invocation, including completion scripts and `go test`.
+// Auto-starting a daemon from any ccdad command when none is up is the feature
+// — automatic switching with nothing for the user to run is the whole point —
+// and the most dangerous thing in this program. It puts a process spawn on the
+// hot path of every invocation, including completion scripts and `go test`.
 //
 // Five rules hold it down, and each of them exists because of a specific way
 // this goes wrong:
@@ -55,8 +55,9 @@ import (
 //     it. `stop` would resurrect exactly what it just stopped. `start` and
 //     `restart` do their own spawning, with a wait auto-start deliberately does
 //     not have.
-//   - `doctor`, which must not create what it is checking for. §8.2 says so
-//     about the lock file and doctor.go repeats it for the store directory.
+//   - `doctor`, which must not create what it is checking for. The singleton
+//     probe holds the same line about the lock file, and doctor.go repeats it
+//     for the store directory.
 //   - `completion`, which is a daemon per TAB press.
 //   - `remove`, `export`, `import`, `config` and `uninstall`: administering
 //     ccdad is not using it, and `uninstall` in particular would start the
@@ -71,13 +72,12 @@ import (
 //     `auto --once` exists precisely so the engine can be run WITHOUT one.
 //
 // Bare `ccdad` is the one entry that is here and is NOT started by the hook.
-// §9.2 gives that slot to a dashboard behind a TTY gate and a usage error
-// otherwise, and only the dashboard half wants a daemon: a hook firing before
-// the gate would spawn one for `ccdad | head` as well. root.PersistentPreRun
-// therefore skips the bare root and runBare calls the hook itself, which is
-// also why deleting the entry below does not merely narrow the policy — it
-// makes the dashboard the one place in the tree that asks for a daemon and is
-// refused.
+// That slot is a dashboard behind a TTY gate and a usage error otherwise, and
+// only the dashboard half wants a daemon: a hook firing before the gate would
+// spawn one for `ccdad | head` as well. root.PersistentPreRun therefore skips
+// the bare root and runBare calls the hook itself, which is also why deleting
+// the entry below does not merely narrow the policy — it makes the dashboard
+// the one place in the tree that asks for a daemon and is refused.
 var autoStartCommands = map[string]bool{
 	"ccdad":           true,
 	"ccdad add":       true,

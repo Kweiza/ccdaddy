@@ -11,9 +11,9 @@ import (
 )
 
 // realBody is a full usage response in the shape Claude Code 2.1.239 parses.
-// Every field the bundle's zod object names is present, including the two the
-// spec's four-field summary omits (cinder_cove and extra_usage.disabled_reason),
-// plus one unknown key per object so the passthrough tolerance is exercised.
+// Every field the bundle's zod object names is present — all eight top-level
+// keys, cinder_cove among them, and extra_usage's own disabled_reason — plus
+// one unknown key per object so the passthrough tolerance is exercised.
 const realBody = `{
   "five_hour":            {"utilization": 92.5, "resets_at": "2026-08-22T09:00:00.000Z"},
   "seven_day":            {"utilization": 41,   "resets_at": "2026-08-27T00:00:00Z", "surprise": 1},
@@ -109,8 +109,8 @@ func TestParseKeepsAPresentButEmptyWindowPresent(t *testing.T) {
 	}
 }
 
-// The exact cswap bug spec §7.2 names: a window that cannot be read is not an
-// empty account, and a missing reset is not "resets now".
+// The exact cswap bug: a window that cannot be read is not an empty account,
+// and a missing reset is not "resets now".
 func TestParseNeverReadsUnknownAsZero(t *testing.T) {
 	s := mustParse(t, `{"five_hour": {"utilization": null, "resets_at": null}}`)
 
@@ -221,8 +221,8 @@ func TestParseRoundTripsExtraUsage(t *testing.T) {
 	}
 }
 
-// §7.3 branches on `s.Used == nil` and must never see a zero standing in for a
-// figure the wire did not send: fail closed on money.
+// The credit gate branches on `s.Used == nil` and must never see a zero
+// standing in for a figure the wire did not send: fail closed on money.
 func TestParseKeepsUnreadableSpendUnknown(t *testing.T) {
 	s := mustParse(t, `{"extra_usage": {"is_enabled": true, "monthly_limit": null,
 	                                    "used_credits": null, "utilization": null}}`)
@@ -341,8 +341,8 @@ func TestRateLimitWindowsExcludesCinderCove(t *testing.T) {
 	}
 }
 
-// Classification (task 29) asks exactly one thing of a snapshot: did the account
-// report the windows a subscription is metered by?
+// Classification asks exactly one thing of a snapshot: did the account report
+// the windows a subscription is metered by?
 func TestHasSubscriptionWindows(t *testing.T) {
 	cases := []struct {
 		name string

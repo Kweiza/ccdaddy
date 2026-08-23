@@ -131,15 +131,6 @@ contents; keep it that way.
   frequently the only record of a decision.
 - **English throughout**, in code, comments, commit messages and documentation.
 
-## A thing you should know before reading the comments
-
-The code refers to a design specification by section — `§3.3`, `§8.2`,
-`§13 Q4`. **That document is not in this repository.** It is a working file
-outside version control, so those references currently resolve only for the
-maintainer. This is a known rough edge for outside contributors; if a section
-reference is blocking you, ask in the issue and the relevant part will be
-quoted or published.
-
 ## What happens to your pull request
 
 One maintainer, so: an acknowledgement quickly, a real review when there is

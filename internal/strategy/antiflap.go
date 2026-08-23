@@ -7,9 +7,11 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
 
-// Spec §7.2, anti-flap, and the gate order §7.3 puts around it.
+// Anti-flap, and the gate order the credit gate puts around it.
 //
-// The table is the easy half. The paragraph under it is the specification:
+// The five mechanisms are the easy half: a hysteresis margin, a cooldown, a
+// quarantine on a dead refresh token, a recovery margin, and a headroom ratio.
+// The rule over them is the hard half:
 //
 //	These bound the flap RATE; they do not make a reverse move impossible.
 //	Headroom changes, so a target that burns down must be able to lose its
@@ -22,39 +24,40 @@ import (
 // that a changing headroom can cross back over.
 
 const (
-	// DefaultHysteresisPct is §7.2's hysteresis margin, in percentage points of
-	// headroom.
+	// DefaultHysteresisPct is the hysteresis margin, in percentage points of
+	// headroom: how far a candidate must beat the active account to displace
+	// it, which is what stops a ping-pong near the threshold.
 	//
-	// The spec fixes the mechanism and names the config key but never fixes the
-	// number, so it is chosen here. Ten points is the smallest margin that
+	// The margin and its `hysteresis_pct` config key are settled; the number
+	// is not, so it is chosen here. Ten points is the smallest margin that
 	// actually does the job it is named for: the binding window can change
 	// between two readings — an account whose five_hour and seven_day are a
 	// point apart flips between them — and that alone moves headroom by a few
 	// points with no usage at all. A margin under that noise floor lets the
 	// engine ping-pong across the threshold on jitter, which is the one thing
-	// this row exists to prevent.
+	// this margin exists to prevent.
 	DefaultHysteresisPct = 10.0
 
-	// DefaultHeadroomRatio is §7.2's 2.0. A candidate must have twice the
-	// active account's headroom, which is what makes a REVERSE move need a 4x
-	// relative burn: the forward move already required 2x in the other
-	// direction, so the ratio between the two has to swing by 2x2. That
-	// squaring is the whole point, and it falls out of applying the same 2.0 to
-	// every move rather than out of remembering which account was left.
+	// DefaultHeadroomRatio is 2.0. A candidate must have twice the active
+	// account's headroom, which is what makes a REVERSE move need a 4x relative
+	// burn: the forward move already required 2x in the other direction, so the
+	// ratio between the two has to swing by 2x2. That squaring is the whole point,
+	// and it falls out of applying the same 2.0 to every move rather than out of
+	// remembering which account was left.
 	DefaultHeadroomRatio = 2.0
 
-	// DefaultCooldown is §7.2's 5 min.
+	// DefaultCooldown is the 5-minute minimum gap between two switches, the
+	// mechanism against switch storms.
 	DefaultCooldown = 5 * time.Minute
 
-	// DefaultRecoveryHysteresis is §7.2's 300 s. It is the margin on the
-	// RECOVERY axis, for the all-above-threshold mode where §7.1 ranks by
-	// soonest recovery: comparing headroom there would gate on a number the
-	// order did not use.
+	// DefaultRecoveryHysteresis is 300 s. It is the margin on the RECOVERY
+	// axis, for the all-above-threshold mode that ranks by soonest recovery:
+	// comparing headroom there would gate on a number the order did not use.
 	DefaultRecoveryHysteresis = 300 * time.Second
 
 	// DefaultQuarantine is how long a dead refresh token holds an account out.
 	//
-	// The spec fixes no expiry, so it is chosen here. An hour matches
+	// No expiry is fixed for it, so it is chosen here. An hour matches
 	// DefaultRecoveryHorizon and is short enough that a MISCLASSIFIED failure
 	// costs an hour rather than a day; a genuinely dead token costs one wasted
 	// refresh an hour, which is nothing. Only re-authentication actually fixes
@@ -63,13 +66,13 @@ const (
 	DefaultQuarantine = time.Hour
 )
 
-// Config is §7.2's table, as knobs.
+// Config is the anti-flap set, as knobs.
 //
 // Every field defaults when it is not positive, so the ZERO VALUE of this
 // struct is the full default set. That direction is deliberate: an
 // under-populated Config must never read as "every anti-flap mechanism off",
-// and §7.2 lists no way to switch one off at all. `ccdad config` (task 47)
-// supplies the real values; until it does these are them.
+// and there is no way to switch one off at all. `ccdad config` supplies the
+// real values; these are what stands in when it has not.
 type Config struct {
 	// HysteresisPct is how many points of headroom a candidate must beat the
 	// active account by.
@@ -82,9 +85,9 @@ type Config struct {
 	RecoveryHysteresis time.Duration
 	// QuarantineFor is how long a dead refresh token holds an account out.
 	QuarantineFor time.Duration
-	// MaxAutoSpend is §7.3's ceiling, in the currency's major unit. Its default
-	// is 0 — the explicit opt-in — so unlike every other field here a zero is
-	// honoured rather than replaced.
+	// MaxAutoSpend is the credit gate's ceiling, in the currency's major unit.
+	// Its default is 0 — the explicit opt-in — so unlike every other field here
+	// a zero is honoured rather than replaced.
 	MaxAutoSpend float64
 }
 
@@ -116,8 +119,8 @@ const (
 	// ActionSwitch is a move to Plan.Target.
 	ActionSwitch
 	// ActionBlocked is "a move was wanted and there is no viable target",
-	// exit 4. §9.3's 3-versus-4 line is the actionability line, and this is the
-	// side the user has to do something about.
+	// exit 4. The 3-versus-4 line in the exit contract is the actionability
+	// line, and this is the side the user has to do something about.
 	ActionBlocked
 )
 
@@ -135,8 +138,8 @@ func (a Action) String() string {
 
 // Reason is why the engine answered as it did. Every value has a name because
 // every one of them reaches a user through `ccdad auto --json` or a
-// notification, and "no switch" with no reason is the cswap behaviour §9.3
-// exists to fix.
+// notification, and "no switch" with no reason is the cswap behaviour the
+// exit contract exists to fix.
 type Reason uint8
 
 const (
@@ -160,8 +163,8 @@ const (
 	ReasonAllQuarantined
 	// ReasonAllExhausted: every account is spent and there is no credit pool.
 	ReasonAllExhausted
-	// ReasonCreditGate: the credit pool was reached and §7.3 refused it. The
-	// gate's own answer is in Plan.Credit.
+	// ReasonCreditGate: the credit pool was reached and the credit gate refused
+	// it. The gate's own answer is in Plan.Credit.
 	ReasonCreditGate
 	// ReasonNoSubscriptionRoom: the engine is on a credit account and no
 	// subscription account has room to go back to. Staying is right; moving to
@@ -214,7 +217,8 @@ type Plan struct {
 	// Quarantined lists the eligible accounts held out of the pass, in uuid
 	// order.
 	Quarantined []string
-	// SubscriptionExhausted is §7.3 step 2's answer, reported so a caller can
+	// SubscriptionExhausted answers "is the subscription pool spent", which is
+	// the only thing that opens the credit pool. Reported so a caller can
 	// say why the credit pool was or was not consulted.
 	SubscriptionExhausted bool
 	// Credit is the gate's answer, set only when the credit pool was reached.
@@ -231,7 +235,8 @@ type Plan struct {
 	HasRetryAt bool
 }
 
-// Decide is §7.2 and §7.3's gate order over one ranking pass.
+// Decide is the anti-flap margins and the credit gate's order over one
+// ranking pass.
 //
 // activeUUID must be the account in the LIVE CREDENTIALS FILE, derived by
 // attributing that file against the stored credentials. It must NOT be
@@ -308,10 +313,9 @@ func Decide(cands []Candidate, o Options, cfg Config, st *State, activeUUID stri
 		}
 	}
 
-	// §7.3 step 1: the subscription pool first. The one situation where it is
-	// skipped is an engine already on a credit account with no subscription
-	// room to return to — moving there would end the session on a spent
-	// account and buy nothing.
+	// The subscription pool first. The one situation where it is skipped is an
+	// engine already on a credit account with no subscription room to return to —
+	// moving there would end the session on a spent account and buy nothing.
 	if len(res.Order) > 0 && !(activeIsCredit && subExhausted) {
 		best := res.Order[0]
 		if !isActive(best.UUID, activeUUID) {
@@ -330,7 +334,7 @@ func Decide(cands []Candidate, o Options, cfg Config, st *State, activeUUID stri
 		}
 		// Already on the best subscription account. That is the end of it
 		// unless the whole pool is spent, which is the only thing that opens
-		// §7.3 step 2.
+		// the credit pool.
 		if !subExhausted {
 			plan.Action = ActionStay
 			plan.Reason = ReasonAlreadyBest
@@ -340,13 +344,14 @@ func Decide(cands []Candidate, o Options, cfg Config, st *State, activeUUID stri
 
 	if activeIsCredit {
 		// Staying is not a switch, so the gate is not re-run against the
-		// account already in use: §7.3 decides what may be SWITCHED TO.
+		// account already in use: the credit gate decides what may be
+		// SWITCHED TO.
 		plan.Action = ActionStay
 		plan.Reason = ReasonNoSubscriptionRoom
 		return plan
 	}
 
-	// §7.3 steps 2-4: the credit pool, and only now.
+	// The credit pool, and only now.
 	if len(res.Credit) == 0 {
 		plan.Action = ActionBlocked
 		plan.Reason = ReasonAllExhausted
@@ -355,7 +360,7 @@ func Decide(cands []Candidate, o Options, cfg Config, st *State, activeUUID stri
 
 	// Result.Credit is ordered by most armed room, uuid last, and this walks it
 	// in that order — so the first account it reaches is the one with the most
-	// money armed under §7.3's cap.
+	// money armed under the credit gate's cap.
 	var firstRefusal Decision
 	for _, r := range res.Credit {
 		c := byUUID[r.UUID]
@@ -369,12 +374,12 @@ func Decide(cands []Candidate, o Options, cfg Config, st *State, activeUUID stri
 		}
 		plan.CreditConsulted = true
 		plan.Credit = d
-		// The cooldown, and ONLY the cooldown. §7.2's other margins are
+		// The cooldown, and ONLY the cooldown. The other margins are
 		// comparisons between two accounts metered the same way, and a credit
 		// account carries no plan windows at all: its headroom is permanently
 		// unknown and it never recovers, so a headroom or recovery margin
 		// against it would be arithmetic on a number that does not exist.
-		// What makes this move safe is §7.3's gate, which has already run.
+		// What makes this move safe is the credit gate, which has already run.
 		if reason, blocked, retry := cooldownGate(res, activeUUID, cfg, st, o.Now); blocked {
 			plan.Action = ActionStay
 			plan.Reason = reason
@@ -440,7 +445,7 @@ func gate(res Result, target Ranked, activeUUID string, cfg Config, st *State, n
 	// tier, which is only true because the better tier sorts first.
 	switch res.Mode {
 	case ModeRecovery:
-		// §7.1 tiers this mode: an account returning inside the horizon beats
+		// This mode is tiered: an account returning inside the horizon beats
 		// one that does not, whatever its headroom. So a target that returns
 		// inside the horizon got in front on the RECOVERY instant — whether it
 		// outranked another near-tier account or a far-tier one — and that is
@@ -464,12 +469,12 @@ func gate(res Result, target Ranked, activeUUID string, cfg Config, st *State, n
 		}
 		// A target OUTSIDE the horizon can only have outranked an active
 		// account that is also outside it, because the near tier sorts first.
-		// §7.1 orders that tier on headroom, so the headroom margins apply.
+		// That tier is ordered on headroom, so the headroom margins apply.
 		return headroomGate(active, target, cfg)
 
 	case ModeConsumeFirst:
-		// Ranked by soonest weekly reset, so the margin goes on that axis. The
-		// spec fixes no number for it — consume-first is not in §7.2's table —
+		// Ranked by soonest weekly reset, so the margin goes on that axis. No
+		// number is fixed for it — consume-first has no margin of its own —
 		// and RecoveryHysteresis is borrowed rather than a second knob
 		// invented: it is the same question, "is this timestamp meaningfully
 		// sooner", on a quantity that moves even more slowly.
@@ -488,7 +493,7 @@ func gate(res Result, target Ranked, activeUUID string, cfg Config, st *State, n
 	}
 }
 
-// cooldownGate is §7.2's 5-minute cooldown.
+// cooldownGate is the 5-minute cooldown.
 //
 // It bounds churn BETWEEN TWO USABLE ACCOUNTS. With nothing usable underneath —
 // the live login is not a managed account at all, or it is disabled, or it is
@@ -516,18 +521,18 @@ func cooldownGate(res Result, activeUUID string, cfg Config, st *State, now time
 //
 // Neither margin latches. Both compare CURRENT headroom, so an account that
 // burns down loses its position the moment the numbers say so — which is the
-// paragraph under §7.2's table, and the thing a latch-until-exhausted
+// rule quoted at the top of this file, and the thing a latch-until-exhausted
 // implementation gets wrong while passing every test anyone would write for it.
 func headroomGate(active, target Ranked, cfg Config) (Reason, bool, time.Time) {
 	// No baseline figure to hold a margin against. Moving to an account we can
 	// measure beats staying on one we cannot, and refusing here is how a pool
-	// of unreadable accounts becomes a dead end (§7.2).
+	// of unreadable accounts becomes a dead end.
 	if !active.Headroom.Known {
 		return ReasonBetterTarget, false, time.Time{}
 	}
 	// The candidate is the unmeasurable one. It is ahead of the active account
-	// only because §7.1 files "we have no idea" ahead of "we know it is spent",
-	// and that is a maybe worth trying rather than a figure to compare.
+	// only because headroomTier files "we have no idea" ahead of "we know it is
+	// spent", and that is a maybe worth trying rather than a figure to compare.
 	if !target.Headroom.Known {
 		return ReasonBetterTarget, false, time.Time{}
 	}

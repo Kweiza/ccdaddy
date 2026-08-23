@@ -17,8 +17,8 @@ import (
 // The on-disk usage cache: one document the daemon writes and every CLI
 // invocation reads.
 //
-// It is what makes §8.4's "`ccdad list` and `ccdad status --json` can never
-// disagree" true, and it is the only thing standing between a scripted
+// It is what keeps `ccdad list` and `ccdad status --json` from ever
+// disagreeing, and it is the only thing standing between a scripted
 // `ccdad list` and the endpoint's 28-30 requests per identity per rolling hour.
 // That budget is a SLIDING WINDOW, so a burst saturates the identity for up to a
 // full hour and pausing does not give the capacity back early — which is why
@@ -26,10 +26,10 @@ import (
 // issued.
 
 const (
-	// ServeTTL is spec §7.4's serveTTL: a reading younger than this is served
-	// from the cache with no fetch, `--refresh` included.
+	// ServeTTL is the poll policy's serveTTL: a reading younger than this is
+	// served from the cache with no fetch, `--refresh` included.
 	//
-	// It is an alias rather than a second spelling. §7.4 lives in
+	// It is an alias rather than a second spelling. The policy lives in
 	// internal/pollpolicy; a cache that carried its own copy of the number
 	// would be one edit away from serving readings the scheduler thinks are
 	// already stale.
@@ -65,8 +65,8 @@ func cacheLockPath() (string, error) {
 }
 
 // PollState is the poll policy's per-account state, persisted so that restarting
-// ccdad does not reset a backoff that a 429 earned. §7.4 owns what these mean;
-// the cache only carries them across a process boundary.
+// ccdad does not reset a backoff that a 429 earned. The policy owns what these
+// mean; the cache only carries them across a process boundary.
 type PollState struct {
 	// Interval is the cadence currently in force, after any AIMD increase.
 	Interval time.Duration `json:"interval,omitempty"`
@@ -74,10 +74,10 @@ type PollState struct {
 	// which is not the same as "an hour ago".
 	LastRateLimited time.Time `json:"last_rate_limited,omitempty"`
 	// LastBindingPct is the previous sample's binding utilization, and
-	// HasLastBinding whether there was one. §7.4 detects movement by comparing
-	// against it, so it is persisted for the same reason the backoff is: a
-	// restarted daemon with no baseline sees no movement, and one that treated
-	// "no baseline" as movement would drop the whole fleet to the urgent
+	// HasLastBinding whether there was one. The poll policy detects movement by
+	// comparing against it, so it is persisted for the same reason the backoff
+	// is: a restarted daemon with no baseline sees no movement, and one that
+	// treated "no baseline" as movement would drop the whole fleet to the urgent
 	// cadence on every start.
 	LastBindingPct float64 `json:"last_binding_pct,omitempty"`
 	HasLastBinding bool    `json:"has_last_binding,omitempty"`
@@ -199,8 +199,8 @@ func storeRoot() (string, error) {
 // version of the document or another, never a torn one. A file that is
 // unreadable ANYWAY — hand-edited, truncated by a full disk, written by a future
 // version — degrades to an empty cache, which reads as UNKNOWN for every
-// account. It must never degrade to zero: an unread account is not an empty one
-// (§7.2), and cswap's version of this bug parked its engine permanently.
+// account. It must never degrade to zero: an unread account is not an empty
+// one, and cswap's version of this bug parked its engine permanently.
 func LoadCache() (*Cache, error) {
 	root, err := storeRoot()
 	if err != nil {

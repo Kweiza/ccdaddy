@@ -29,9 +29,9 @@ func NewRootCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Subcommands are registered below, so Cobra's Find() intercepts an
 			// unknown subcommand before this RunE is ever reached. What is left
-			// is the bare `ccdad` slot (§9.2) — and the handful of shapes that
-			// LOOK dispatched and are not, which is why args is read here at
-			// all. See runBare.
+			// is the bare `ccdad` slot — and the handful of shapes that LOOK
+			// dispatched and are not, which is why args is read here at all.
+			// See runBare.
 			return runBare(cmd, args)
 		},
 	}
@@ -39,11 +39,12 @@ func NewRootCmd() *cobra.Command {
 	// Cobra's mousetrap fires from ExecuteC on Windows, before argument parsing
 	// and before any RunE: a binary launched from Explorer prints
 	// MousetrapHelpText, sleeps MousetrapDisplayDuration (5s by default) and
-	// calls os.Exit(1). Two things are wrong with that here. It bypasses §9.2's
-	// gate entirely, so the one invocation shape that cannot reach the
-	// dashboard is the one Cobra intercepts before this binary has an opinion;
-	// and 1 means "runtime failure" under §9.3, which makes it the only exit
-	// code ccdad can produce that does not come from the exit contract.
+	// calls os.Exit(1). Two things are wrong with that here. It bypasses the TTY
+	// gate on bare `ccdad` entirely, so the one invocation shape that cannot
+	// reach the dashboard is the one Cobra intercepts before this binary has an
+	// opinion; and 1 means "runtime failure" in the exit-code table, which makes
+	// it the only exit code ccdad can produce that does not come from the exit
+	// contract.
 	// Emptying the text is Cobra's documented way to be told to skip it.
 	//
 	// What a double-clicked ccdad.exe gets instead is the honest answer: its
@@ -63,15 +64,15 @@ func NewRootCmd() *cobra.Command {
 	// command that writes Claude Code's own state writes the SESSION's copy
 	// and reports success.
 	//
-	// §8's auto-start must still never fail the command it rode in on, and
-	// that rule now rests on autoStart's signature rather than on this hook's:
-	// it returns NOTHING, so no later change here can wire it into an error
-	// without changing the hook's own type. Which commands it acts for is
-	// autostart.go's allow-list; this is only where the tree offers it the
-	// chance.
+	// Auto-start must still never fail the command it rode in on — rule 4 of
+	// the five in autostart.go — and that rule now rests on autoStart's
+	// signature rather than on this hook's: it returns NOTHING, so no later
+	// change here can wire it into an error without changing the hook's own
+	// type. Which commands it acts for is autostart.go's allow-list; this is
+	// only where the tree offers it the chance.
 	//
 	// Bare `ccdad` is the one command auto-start deliberately does not act
-	// for, and it is on the allow-list all the same: §9.2's gate decides in
+	// for, and it is on the allow-list all the same: the TTY gate decides in
 	// RunE whether this invocation is a dashboard or a usage error, and a hook
 	// that ran first would spawn a daemon for `ccdad | head` too — a script
 	// that asked for nothing, got a 2, and left an engine behind. runBare
@@ -224,7 +225,8 @@ func isUnknownCommand(err error) bool {
 	return strings.HasPrefix(msg, "unknown command")
 }
 
-// runBare is the bare `ccdad` slot: §9.2's gate, and the two answers behind it.
+// runBare is the bare `ccdad` slot: the TTY gate, and the two answers
+// behind it.
 //
 // The gate is stdout AND stdin, not either. Both have to be terminals because
 // both are what an interactive session is made of — a dashboard printed into a
@@ -267,10 +269,10 @@ func runBare(cmd *cobra.Command, args []string) error {
 	if err := runStatus(cmd, false); err != nil {
 		return err
 	}
-	// On stdout, with the dashboard it belongs to. §9.4 keeps notices on stderr
-	// so that a --json document stands alone; this line is reachable only when
-	// stdout is a terminal, where there is no document and no consumer to
-	// protect.
+	// On stdout, with the dashboard it belongs to. The --json contract keeps
+	// notices on stderr so that a --json document stands alone; this line is
+	// reachable only when stdout is a terminal, where there is no document and
+	// no consumer to protect.
 	fmt.Fprintf(cmd.OutOrStdout(), "\nVerbs: %s  (ccdad <verb> --help)\n", strings.Join(topVerbs, ", "))
 	return nil
 }
@@ -289,7 +291,7 @@ func bareUsage(cmd *cobra.Command, format string, a ...any) error {
 	return UsageError(format, a...)
 }
 
-// topVerbs is §9.2's "one-line footer of the top verbs" — what a reader of the
+// topVerbs is the one-line footer behind the TTY gate — what a reader of the
 // dashboard does next, in the order they would need them: log an account in,
 // move to one, take one for a single session, hand the wheel to the engine,
 // see them all, find out what is wrong.

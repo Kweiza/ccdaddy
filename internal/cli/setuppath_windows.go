@@ -61,7 +61,7 @@ const maxEnvironmentValue = 32767
 // withUserPath opens HKCU\Environment, hands the current Path and its value
 // kind to decide, and writes back whatever decide returns — with the SAME kind.
 //
-// The kind is the trap §11.3 names. [Environment]::SetEnvironmentVariable and
+// The kind is the trap. [Environment]::SetEnvironmentVariable and
 // registry.SetStringValue both write REG_SZ, and a Path that was REG_EXPAND_SZ
 // loses %VAR% expansion for every entry in it the moment one of those runs.
 // Go's advantage over PowerShell here is that reading is already raw:

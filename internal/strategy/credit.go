@@ -7,7 +7,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
 
-// Spec §7.3, the credit gate.
+// The credit gate.
 //
 // Subscription quota is already paid for; credits cost money. This is the only
 // place in ccdad where a bug spends the user's, so every branch here fails
@@ -18,8 +18,8 @@ import (
 // lands exactly on the ceiling.
 const spendArmFraction = 0.90
 
-// SpendInfo is the credit axis, in the shape §7.3's function takes. Limit and
-// Used are pointers because the wire declares both nullable and the difference
+// SpendInfo is the credit axis, in the shape CreditRoom takes. Limit and Used
+// are pointers because the wire declares both nullable and the difference
 // between "not reported" and "zero" is the difference between refusing and
 // spending.
 type SpendInfo struct {
@@ -34,8 +34,8 @@ type SpendInfo struct {
 	Used *float64
 }
 
-// CreditRoom is §7.3's function, unchanged except that the spec's local `cap` is
-// named `capacity` here so it does not shadow the builtin.
+// CreditRoom is the room calculation. Its local is named `capacity` rather than
+// `cap` so it does not shadow the builtin.
 //
 // The IsInf and IsNaN checks are load-bearing, not decoration. `max_auto_spend =
 // inf` is valid TOML, and an infinite ceiling with no account cap yields
@@ -62,10 +62,10 @@ func CreditRoom(s SpendInfo, ceiling float64) (float64, bool) {
 	// in ccdad where a wrong answer spends the user's money, and darwin/arm64
 	// and linux/arm64 are two of the six shipped targets.
 	//
-	// An explicit conversion is the one thing the spec says forbids the
-	// fusion, which makes all six targets agree. Measured: green on amd64,
-	// red on macos-latest (arm64), where CreditRoom(limit 100, used 80) came
-	// back as 10.000000000000002.
+	// An explicit conversion is the one thing Go says forbids the fusion,
+	// which makes all six targets agree. Measured: green on amd64, red on
+	// macos-latest (arm64), where CreditRoom(limit 100, used 80) came back as
+	// 10.000000000000002.
 	room := float64(spendArmFraction*capacity) - *s.Used
 	// A NaN anywhere in the account's own figures reaches here as a NaN room,
 	// and `room > 0` is false for it — which is the fail-closed answer.
@@ -128,7 +128,7 @@ type Decision struct {
 	Reason CreditReason
 	// Blocked marks a refusal the user should act on: exit 4 and a
 	// notification, never a silent exit 3. cswap conflates these two and a
-	// money-blocked engine becomes invisible to cron (§9.3).
+	// money-blocked engine becomes invisible to cron.
 	Blocked bool
 	// Room is the armed spend left, when there is any.
 	Room float64
@@ -138,14 +138,20 @@ type Decision struct {
 	DisabledReason string
 }
 
-// CreditGate applies §7.3's four steps to one credit account.
+// CreditGate is the last two steps of the credit gate, applied to one credit
+// account: when the configured ceiling is 0, its default, answer blocked —
+// exit 4 and a notification — rather than switch; and refuse when spend cannot
+// be read.
 //
-// subscriptionExhausted is steps 1 and 2, supplied by the ranking pass: it must
-// mean the subscription pool has no viable target left, not that the best
-// subscription candidate merely failed hysteresis.
+// subscriptionExhausted carries the first two steps — look for a target in the
+// subscription pool, and reach the credit pool only once that pool is
+// exhausted. It is supplied by the ranking pass: it must mean the subscription
+// pool has no viable target left, not that the best subscription candidate
+// merely failed hysteresis.
 //
-// ceiling is passed in rather than read from config so this lands without
-// waiting on `ccdad config`; it is max_auto_spend, and 0 is its default.
+// ceiling is passed in rather than read from config, so this package never
+// touches the config loader: it is max_auto_spend, 0 is its default, and Decide
+// is what copies it from Config.MaxAutoSpend.
 func CreditGate(e usage.ExtraUsage, ceiling float64, subscriptionExhausted bool) Decision {
 	d := Decision{DisabledReason: e.DisabledReason}
 

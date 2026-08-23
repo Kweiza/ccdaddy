@@ -3,7 +3,7 @@
 //
 // The one thing this package exists to get right is that every number it
 // carries is TRI-STATE. A window that could not be read is not an empty
-// account, and a reset that was not reported is not "resets now" (spec §7.2).
+// account, and a reset that was not reported is not "resets now".
 // cswap got this wrong once and a single expired token parked its engine on the
 // account that reset last, so nothing here returns a bare float64.
 //
@@ -263,11 +263,12 @@ var zeroDecimalCurrencies = map[string]bool{"JPY": true, "KRW": true, "VND": tru
 //
 // THE OTHER 100x TRAP, and it is the one that spends money. extra_usage's
 // monthly_limit and used_credits arrive in the currency's MINOR unit — cents for
-// USD — while spec §5's max_auto_spend is dollars. Claude Code's formatter `Zm`
-// proves it by dividing by 100 before rendering either figure, and its own test
-// double maps `spendLimitCents -> monthly_limit` and `usedCents -> used_credits`
-// with no conversion at all. Comparing the two units directly makes a $0.60
-// spend look like $60 against a $50 ceiling and blocks the engine at 1.2% of the
+// USD — while the credit gate's max_auto_spend (README, "Configuration") is
+// dollars. Claude Code's formatter `Zm` proves it by dividing by 100 before
+// rendering either figure, and its own test double maps
+// `spendLimitCents -> monthly_limit` and `usedCents -> used_credits` with no
+// conversion at all. Comparing the two units directly makes a $0.60 spend look
+// like $60 against a $50 ceiling and blocks the engine at 1.2% of the
 // authorized budget; in the other direction an account's own cap stops binding.
 //
 // An unreported or unrecognized currency is treated as a two-decimal one, which
@@ -280,9 +281,9 @@ func (e ExtraUsage) majorUnits(minor float64) float64 {
 }
 
 // MonthlyLimit is the account's own spend cap IN MAJOR UNITS — dollars for USD —
-// and whether one was reported. A null limit means unlimited, which §7.3 reads
-// as "no account cap" and falls back to the configured ceiling; it does not mean
-// a cap of zero.
+// and whether one was reported. A null limit means unlimited, which the credit
+// gate reads as "no account cap" and falls back to the configured ceiling; it
+// does not mean a cap of zero.
 func (e ExtraUsage) MonthlyLimit() (float64, bool) {
 	if !e.hasLimit || !isFinite(e.limit) {
 		return 0, false
@@ -291,8 +292,8 @@ func (e ExtraUsage) MonthlyLimit() (float64, bool) {
 }
 
 // UsedCredits is the money already spent, in major units, and whether it could
-// be read at all. §7.3 refuses to switch when this is unknown: fail closed on
-// money.
+// be read at all. The credit gate refuses to switch when this is unknown: fail
+// closed on money.
 func (e ExtraUsage) UsedCredits() (float64, bool) {
 	if !e.hasUsed || !isFinite(e.used) {
 		return 0, false

@@ -11,14 +11,14 @@ import (
 
 // ApplyUsage records a SUCCESSFUL usage reading against an account: it revises
 // the account's Kind if the reading is evidence, and refreshes the credit
-// balance §5 keeps as a secondary axis.
+// balance the account keeps alongside it as a secondary axis.
 //
-// Taking a non-nil *usage.Snapshot is the whole point of the signature. Both
-// production Classify calls pass an empty UsageShape today, so the window
-// evidence §5 makes primary has never once been consulted — and the fix must not
-// be a function that can be handed "no reading" and quietly apply Classify's
-// no-evidence default. A failed poll has nothing to pass here, and passing nil
-// is refused rather than treated as an empty reading.
+// Taking a non-nil *usage.Snapshot is the whole point of the signature. The
+// Classify calls in `ccdad add` and `add-token` all pass an empty UsageShape,
+// so the window evidence Classify makes primary is never consulted there — and
+// the fix must not be a function that can be handed "no reading" and quietly
+// apply Classify's no-evidence default. A failed poll has nothing to pass here,
+// and passing nil is refused rather than treated as an empty reading.
 //
 // The read-modify-write runs under the store lock like every other mutator, so
 // the daemon applying a poll result and a CLI adding an account cannot lose

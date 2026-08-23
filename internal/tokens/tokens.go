@@ -4,8 +4,8 @@
 // It exists because polling N accounts means holding N valid bearers, and every
 // stored access token expires in about eight hours. Without it, `oauth.Refresh`
 // has no production caller at all: every inactive account answers "unknown"
-// after the first day, and §7.2's unknown-is-not-zero rule then leaves the
-// engine with nothing it may rank.
+// after the first day, and the unknown-is-not-zero rule then leaves the engine
+// with nothing it may rank.
 //
 // It is its own package rather than a corner of internal/usage or
 // internal/store. It is a TOKEN-endpoint concern, not a usage-endpoint one, and
@@ -41,7 +41,7 @@ const DefaultLockTimeout = 9 * time.Second
 var (
 	// ErrRejected means the token endpoint refused the stored refresh token
 	// itself. This is the ONLY failure that says anything about the account,
-	// and the only one §7.2 may quarantine on.
+	// and the only one the anti-flap quarantine may trigger on.
 	ErrRejected = errors.New("the stored refresh token was rejected")
 
 	// ErrUnavailable means the endpoint could not be reached or would not
@@ -94,9 +94,10 @@ func New() *Source {
 // the pre-rotation token, which this package never writes — would log the user
 // out at Claude Code's very next refresh. The three ways out are: write the
 // live file too (this package exists precisely so polling does not have to),
-// hold Claude Code's lock across the network call (§12 forbids it), or leave
-// the live login to Claude Code, which already rotates it correctly and under
-// its own locks.
+// hold Claude Code's lock across the network call (cclock forbids that: Claude
+// Code refreshes under those same locks, so holding one stalls it for a full
+// round trip), or leave the live login to Claude Code, which already rotates
+// it correctly and under its own locks.
 //
 // So for the live login this reads what Claude Code has, adopts it into the
 // stored snapshot so a later `ccdad switch` back is not carrying a dead token,
@@ -359,8 +360,8 @@ func parseRecord(raw json.RawMessage) (record, bool) {
 // apply folds a token response into the stored record, preserving every field
 // the response did not speak to.
 //
-// §4.2 rule 3: decode as map[string]json.RawMessage and replace only what is
-// being changed. clauth's typed struct drops refreshTokenExpiresAt,
+// The round-trip rule: decode as map[string]json.RawMessage and replace only
+// what is being changed. clauth's typed struct drops refreshTokenExpiresAt,
 // rateLimitTier and clientId on every re-serialize, and clientId is what a
 // revocation request needs.
 func (rec record) apply(fresh *oauth.TokenResponse, now time.Time) (json.RawMessage, error) {

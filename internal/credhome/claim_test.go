@@ -98,10 +98,9 @@ func TestASecondAcquireInOneProcessIsNotBlamedOnAnother(t *testing.T) {
 	}
 }
 
-// doctor and the auto-start hook both probe on the hot path, and §8.2's rule is
-// that a probe must never create what it measures: a lock file that exists is
-// evidence an engine ran here, and manufacturing it destroys that evidence for
-// good.
+// doctor and the auto-start hook both probe on the hot path, and a probe must
+// never create what it measures: a lock file that exists is evidence an engine
+// ran here, and manufacturing it destroys that evidence for good.
 //
 // The credential home is DELETED first. Every fixture in this tree pre-creates
 // it, so an assertion written against the ordinary fixture could only ever pass.
@@ -564,9 +563,9 @@ func TestAClaimSurvivesAnOwnerDocumentItCouldNotWrite(t *testing.T) {
 	}
 }
 
-// §8.2's window, on this lock. A probe momentarily OWNS the lock it reads, so an
-// engine starting alongside `ccdad doctor` or an auto-start hook would lose a
-// race it should win without the retry.
+// Three attempts, 100 ms apart, on this lock. A probe momentarily OWNS the lock
+// it reads, so an engine starting alongside `ccdad doctor` or an auto-start
+// hook would lose a race it should win without the retry.
 //
 // Pinned against LITERALS. `acquireAttempts > 1` passes for any value including
 // the one that collapses the window the constants exist to create — the same

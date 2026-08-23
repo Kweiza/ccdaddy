@@ -119,7 +119,7 @@ func TestSmokeVersionRejects(t *testing.T) {
 			want:     "reports version 1.2.3; the release says 1.2.4",
 		},
 		{
-			// §11.5's silent defect: `-X main.version=…` names a symbol that
+			// The silent defect: `-X main.version=…` names a symbol that
 			// does not exist, the linker says nothing, and every binary in the
 			// release answers this.
 			name:     "the binary was never stamped",
@@ -156,7 +156,7 @@ func TestSmokeVersionRejects(t *testing.T) {
 		},
 		{
 			// An installed binary that cannot run is the failure this whole
-			// workflow exists to catch — §11.5's stripped darwin/arm64 asset is
+			// workflow exists to catch — a stripped darwin/arm64 asset is
 			// SIGKILLed with no diagnostic, and this is where that surfaces.
 			name:     "the binary will not run",
 			expected: "v1.2.3",
