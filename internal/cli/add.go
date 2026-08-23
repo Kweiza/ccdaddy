@@ -417,8 +417,9 @@ func runAdd(cmd *cobra.Command, opts addOptions) error {
 // for either. Those are different problems: a refused authorize request means
 // the request ccdad sent was wrong and will be wrong again, while a code
 // outside RFC 6749's set means the endpoint said something ccdad does not
-// model, and its bytes are deliberately withheld. The spec code is the only
-// thing left that tells the two apart, so it goes to stderr beside the message.
+// model, and its bytes are deliberately withheld. The OAuth error code is the
+// only thing left that tells the two apart, so it goes to stderr beside the
+// message.
 func loginError(stderr io.Writer, err error) error {
 	var rejected *oauth.RejectionError
 	if errors.As(err, &rejected) {
