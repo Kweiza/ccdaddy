@@ -63,7 +63,7 @@ func TestHeadroomIsTheMinimumAcrossWindows(t *testing.T) {
 		SevenDaySonnet: win(20, 48*time.Hour),
 	}
 
-	h := HeadroomOf(s)
+	h := HeadroomOf(s, thr())
 	if !h.Known {
 		t.Fatal("Known = false")
 	}
@@ -78,7 +78,7 @@ func TestHeadroomIsTheMinimumAcrossWindows(t *testing.T) {
 func TestHeadroomIgnoresWindowsThatReportedNothing(t *testing.T) {
 	s := &usage.Snapshot{FiveHour: win(40, time.Hour), SevenDay: unread()}
 
-	h := HeadroomOf(s)
+	h := HeadroomOf(s, thr())
 	if !h.Known || h.Pct != 60 {
 		t.Errorf("HeadroomOf() = %+v; want 60 from the one window that answered", h)
 	}
@@ -89,7 +89,7 @@ func TestHeadroomIgnoresWindowsThatReportedNothing(t *testing.T) {
 
 func TestHeadroomIsUnknownWhenNoWindowAnswered(t *testing.T) {
 	for _, s := range []*usage.Snapshot{nil, {}, {FiveHour: unread(), SevenDay: unread()}} {
-		if h := HeadroomOf(s); h.Known {
+		if h := HeadroomOf(s, thr()); h.Known {
 			t.Errorf("HeadroomOf(%+v).Known = true; an unread account is not an empty one", s)
 		}
 	}
@@ -101,7 +101,7 @@ func TestHeadroomIsUnknownWhenNoWindowAnswered(t *testing.T) {
 func TestHeadroomIgnoresCinderCove(t *testing.T) {
 	s := &usage.Snapshot{FiveHour: win(10, time.Hour), CinderCove: win(100, 30*24*time.Hour)}
 
-	h := HeadroomOf(s)
+	h := HeadroomOf(s, thr())
 	if h.Pct != 90 || h.Binding != usage.WindowFiveHour {
 		t.Errorf("HeadroomOf() = %+v; cinder_cove is a one-time credit and must not bind the ranking", h)
 	}
@@ -110,7 +110,7 @@ func TestHeadroomIgnoresCinderCove(t *testing.T) {
 func TestHeadroomKeepsAnOverspentWindowNegative(t *testing.T) {
 	s := &usage.Snapshot{FiveHour: win(140, time.Hour)}
 
-	h := HeadroomOf(s)
+	h := HeadroomOf(s, thr())
 	if !h.Known || h.Pct != -40 {
 		t.Errorf("HeadroomOf() = %+v, want -40 — how far past the limit an account is still orders it", h)
 	}
@@ -193,9 +193,9 @@ func TestRankStaysInHeadroomModeWhenOnlyUnknownsAreLeft(t *testing.T) {
 func TestRankPrefersTheSoonestRecoveryWhenEveryoneIsOverThreshold(t *testing.T) {
 	cands := []Candidate{
 		// Blown hardest, but back in eight minutes.
-		sub("soon", snap(win(99, 8*time.Minute), win(99, 48*time.Hour))),
+		sub("soon", snap(win(99, 8*time.Minute), win(50, 48*time.Hour))),
 		// Barely over, but not back for two days.
-		sub("later", snap(win(85, 40*time.Hour), win(85, 40*time.Hour))),
+		sub("later", snap(win(85, 40*time.Hour), win(50, 48*time.Hour))),
 	}
 
 	r := Rank(cands, opts())
@@ -239,8 +239,8 @@ func TestRankOrdersInsideTheHorizonBySoonestThenByHeadroom(t *testing.T) {
 // case where the two disagree is the one that pins the order of the key.
 func TestRankInsideTheHorizonPrefersTheSoonestEvenWhenItIsMoreBlown(t *testing.T) {
 	cands := []Candidate{
-		sub("aaa-roomier-later", snap(win(85, 30*time.Minute), win(85, 48*time.Hour))),
-		sub("zzz-blown-sooner", snap(win(99, 5*time.Minute), win(99, 48*time.Hour))),
+		sub("aaa-roomier-later", snap(win(85, 30*time.Minute), win(50, 48*time.Hour))),
+		sub("zzz-blown-sooner", snap(win(99, 5*time.Minute), win(50, 48*time.Hour))),
 	}
 
 	eq(t, order(Rank(cands, opts())), []string{"zzz-blown-sooner", "aaa-roomier-later"})
@@ -461,8 +461,8 @@ func credit(uuid string, s *usage.Snapshot) Candidate {
 // credit gate: subscription quota first, credit as a last resort.
 func TestRankKeepsCreditAccountsOffTheHeadroomAxis(t *testing.T) {
 	cands := []Candidate{
-		sub("soon", snap(win(99, 8*time.Minute), win(99, 48*time.Hour))),
-		sub("later", snap(win(85, 40*time.Hour), win(85, 40*time.Hour))),
+		sub("soon", snap(win(99, 8*time.Minute), win(50, 48*time.Hour))),
+		sub("later", snap(win(85, 40*time.Hour), win(50, 48*time.Hour))),
 		credit("money", nil),
 	}
 
@@ -524,8 +524,8 @@ func TestRankReadsTheConfiguredThreshold(t *testing.T) {
 func TestRankReadsTheConfiguredHorizon(t *testing.T) {
 	// Back in 30 minutes: inside the default hour, outside a 15-minute horizon.
 	cands := []Candidate{
-		sub("aaa-roomier-later", snap(win(85, 30*time.Minute), win(85, 48*time.Hour))),
-		sub("zzz-blown-sooner", snap(win(99, 5*time.Minute), win(99, 48*time.Hour))),
+		sub("aaa-roomier-later", snap(win(85, 30*time.Minute), win(50, 48*time.Hour))),
+		sub("zzz-blown-sooner", snap(win(99, 5*time.Minute), win(50, 48*time.Hour))),
 	}
 
 	o := opts()
@@ -555,7 +555,7 @@ func TestRankDefaultsAnOmittedThresholdRatherThanReadingItAsZero(t *testing.T) {
 }
 
 func TestRankDefaultsAnOmittedHorizon(t *testing.T) {
-	cands := []Candidate{sub("a", snap(win(99, 30*time.Minute), win(99, 48*time.Hour)))}
+	cands := []Candidate{sub("a", snap(win(99, 30*time.Minute), win(50, 48*time.Hour)))}
 
 	r := Rank(cands, Options{Now: now})
 	if len(r.Order) != 1 || !r.Order[0].ReturnsInsideHorizon {
