@@ -15,6 +15,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/cclock"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
+	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/oauth"
 	"github.com/Kweiza/ccdaddy/internal/pollpolicy"
 	"github.com/Kweiza/ccdaddy/internal/store"
@@ -41,18 +42,37 @@ func isolateEngine(t *testing.T) {
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("CLAUDE_CONFIG_DIR", claude)
 	t.Setenv("CLAUDE_SECURESTORAGE_CONFIG_DIR", claude)
-	for _, v := range []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"} {
+	// THE THIRD CALLER OF switcher.Execute, and the one that was two variables
+	// behind. Execute resolves BOTH of Claude Code's credential axes now, so
+	// this suite reads about fifteen variables and two absolute paths; without
+	// the sandbox a developer who exports any of them gets answers CI never
+	// sees, and the failure reads as a flake in the engine.
+	for _, v := range identity.AuthEnvironmentVars() {
 		t.Setenv(v, "")
 	}
+
+	// The two paths no t.Setenv can reach: Claude Code compiles them in as
+	// absolute literals outside the home directory. Deliberately not created.
+	savedHostToken, savedHostKey := identity.HostOAuthTokenFile, identity.HostAPIKeyFile
+	t.Cleanup(func() {
+		identity.HostOAuthTokenFile, identity.HostAPIKeyFile = savedHostToken, savedHostKey
+	})
+	hostRemote := filepath.Join(t.TempDir(), "remote")
+	identity.HostOAuthTokenFile = filepath.Join(hostRemote, ".oauth_token")
+	identity.HostAPIKeyFile = filepath.Join(hostRemote, ".api_key")
 	if got := mustPath(ccpath.CredentialHome()); got != claude {
 		t.Fatalf("isolateEngine: CredentialHome() = %q, want %q — refusing to run unsandboxed", got, claude)
 	}
 }
 
+// It carries user:inference because Claude Code takes a login as a credential
+// only when its scopes do: a record without it authenticates nothing, so a
+// fixture without it describes a machine with no login at all.
 func oauthBlob(refresh string) cclink.Blob {
 	return cclink.Blob{"claudeAiOauth": json.RawMessage(
 		`{"accessToken":"AT-` + refresh + `","refreshToken":"` + refresh + `","expiresAt":` +
-			fmt.Sprint(tickEpoch.Add(8*time.Hour).UnixMilli()) + `}`)}
+			fmt.Sprint(tickEpoch.Add(8*time.Hour).UnixMilli()) +
+			`,"scopes":["user:inference","user:profile"]}`)}
 }
 
 func seedAccount(t *testing.T, uuid, org string) store.Account {

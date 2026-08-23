@@ -24,6 +24,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
+	"github.com/Kweiza/ccdaddy/internal/switcher"
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
 
@@ -193,6 +194,7 @@ func runChecks() []check {
 		checkKeychain(install),
 		checkEnvironment(),
 		checkAPIKey(cfg, cfgErr),
+		checkOAuthSource(live, liveErr),
 	}
 }
 
@@ -863,14 +865,17 @@ func keychainNameList(items []cclink.KeychainItem) string {
 
 // checkEnvironment names the variables that make a switch pointless.
 //
-// Claude Code prefers CLAUDE_CODE_OAUTH_TOKEN over the stored login outright, so
-// with it set a switch writes a credentials file nothing reads. The list is the
-// four ccdad's own `displacingAuth` already names, minus the apiKeyHelper
-// setting, which is not a variable:
+// Each of these outranks the stored login, so with one set a switch writes a
+// credentials file nothing reads. The list is every VARIABLE ccdad knows to be
+// a displacer -- `displacingAuth` names more than this, because it resolves
+// both axes and some of what wins is a file or a setting rather than a
+// variable:
 //
 //   - ANTHROPIC_AUTH_TOKEN, which the bundle carries beside CLAUDE_CODE_OAUTH_TOKEN
 //     in the list it attributes a session's credential to ("from
-//     ANTHROPIC_AUTH_TOKEN", "from CLAUDE_CODE_OAUTH_TOKEN").
+//     ANTHROPIC_AUTH_TOKEN", "from CLAUDE_CODE_OAUTH_TOKEN"). It outranks
+//     CLAUDE_CODE_OAUTH_TOKEN, which is the reverse of the order this comment
+//     used to imply -- see internal/identity/oauth.go.
 //   - ANTHROPIC_API_KEY.
 //   - CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR, which Claude Code reports under the
 //     SAME source name as ANTHROPIC_API_KEY, which is why identity's
@@ -890,6 +895,19 @@ func keychainNameList(items []cclink.KeychainItem) string {
 //
 // The VALUES are never printed. A diagnostic is the output a user pastes into an
 // issue, and every one of these is a live credential.
+//
+// TWO THINGS THIS ROW CANNOT SAY, and the oauth-source row below is where they
+// are said. The first: not every source is a variable. A session host injects a
+// token at a path compiled into Claude Code, and an Anthropic CLI profile is a
+// directory -- neither has a name to unset, and listing them here would tell a
+// user to unset something that does not exist. The second: two of the variables
+// above INVERT on a session host, because Claude Code skips ANTHROPIC_AUTH_TOKEN
+// and the apiKeyHelper when it believes it is inside one. This row over-reports
+// there, which is the direction it already errs in on purpose.
+//
+// Its OK sentence says "no environment VARIABLE", and the word is load-bearing:
+// without it the row claims more than it looked at, which is exactly the lie
+// the hazard list was widened to stop telling.
 func checkEnvironment() check {
 	var hazards []string
 	for _, name := range []string{
@@ -897,6 +915,7 @@ func checkEnvironment() check {
 		"ANTHROPIC_AUTH_TOKEN",
 		"ANTHROPIC_API_KEY",
 		"CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
+		"CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
 	} {
 		if os.Getenv(name) != "" {
 			hazards = append(hazards, name)
@@ -933,7 +952,101 @@ func checkEnvironment() check {
 			"%s set — Claude Code reads these instead of the credentials file, so a switch would have no effect%s",
 			joinAnd(hazards), suffix)}
 	}
-	return check{"environment", levelOK, "nothing set that would make a switch a no-op" + suffix}
+	return check{"environment", levelOK, "no environment variable set that would make a switch a no-op" + suffix}
+}
+
+// checkOAuthSource answers which OAuth-shaped credential Claude Code would
+// authenticate a session with, and it is a row rather than a sentence inside
+// `environment` because it answers a different question: not "is anything set
+// that could defeat a switch" but "what actually wins".
+//
+// WHY THE EARLIER FIVE-SOURCE RULING DOES NOT BAR THIS ROW. That ruling refused
+// a list of API-key sources because primaryApiKey is one ccdad WRITES for every
+// api-key account, so the list would have warned about ccdad's own steady state
+// forever -- TestDoctorDoesNotWarnAboutTheKeyCcdadItselfStores is that
+// regression. Nothing here is written by ccdad: not the host's token file, not
+// the descriptor, not an Anthropic CLI profile. The one source on this axis
+// ccdad does write is the login, and the login is this row's OK answer. The
+// next reviewer should not refuse this by analogy.
+//
+// EVERY BRANCH IS A WARNING, NEVER A FAILURE. levelFail is the only level that
+// changes the exit code, and on the machine where the host's token file is
+// normal -- a CCR-hosted session -- that file is the correct working state.
+// Failing there would hand exit 1 to every hosted session that is working as
+// designed.
+//
+// scopedSessionNote is appended to the three outcomes that describe the
+// CREDENTIALS FILE, and to no others. Inside a `ccdad run` session that file is
+// the session's own copy; every other source's subject is the machine's however
+// the session was started, and the clause would soften a sentence that is true
+// of it.
+//
+// No value is printed on any branch. Every source here names a live credential.
+func checkOAuthSource(live cclink.Blob, liveErr error) check {
+	// AN UNREADABLE CREDENTIALS FILE STILL ANSWERS MOST OF THIS. The login is
+	// the resolver's LAST branch, so every source above it is decidable without
+	// the file -- and those are the sources with no variable behind them, which
+	// no other row can name. Declining outright used to hand the user off to the
+	// environment row, which this file's own comment says cannot cover them.
+	login := switcher.LoginOf(live)
+	if liveErr != nil {
+		login = identity.Login{}
+	}
+	source, ok := claudeOAuthEnvironment().Resolve(login)
+	if !ok {
+		return check{"oauth-source", levelWarn,
+			"CLAUDE_BG_AUTH_SNAPSHOT_PATH names a token snapshot, and Claude Code consumes it before it " +
+				"looks at anything else on this axis — so which credential a session ends up on cannot be " +
+				"said from here. Reading the snapshot to find out would mean reading a credential, and the " +
+				"first `claude` that starts deletes it. Check the host session that set the variable"}
+	}
+
+	switch source {
+	case identity.OAuthLogin:
+		return check{"oauth-source", levelOK,
+			"Claude Code would authenticate with the login in the credentials file" + scopedSessionNote()}
+	case identity.OAuthNone:
+		// With the file unreadable this is "nothing ABOVE the login wins", not
+		// "nothing wins" -- the last branch is the one that could not be
+		// decided, and saying otherwise would assert a negative about a file
+		// ccdad could not open.
+		if liveErr != nil {
+			return check{"oauth-source", levelWarn, fmt.Sprintf(
+				"nothing outranks the credentials file, but that file cannot be read (%v) — so whether Claude "+
+					"Code has an OAuth credential at all cannot be said from here. The claude-code row is "+
+					"where that file's own fault is reported", liveErr)}
+		}
+		// A login OBJECT with no user:inference scope is not a credential, and
+		// the distinction is the whole reason this branch is split. Claude Code
+		// takes a login only when its scopes carry that one, so a Console
+		// sign-in leaves a well-formed record in the file that authenticates
+		// nothing -- and "no OAuth credential resolves" on its own reads as a
+		// bug in ccdad rather than as the actionable fact it is.
+		if _, hasRecord := live["claudeAiOauth"]; hasRecord && !login.SignsInForInference() {
+			return check{"oauth-source", levelWarn,
+				"the credentials file holds a login, but its scopes do not carry user:inference — Claude " +
+					"Code takes a login as a credential only when they do, so no OAuth credential resolves " +
+					"at all. Sign in again with `ccdad login`" + scopedSessionNote()}
+		}
+		return check{"oauth-source", levelOK,
+			"no OAuth credential resolves, so nothing here would displace a login a switch installs" +
+				scopedSessionNote()}
+	}
+
+	detail := fmt.Sprintf(
+		"Claude Code would take its OAuth credential from %s, and it reads that BEFORE the login in the "+
+			"credentials file — so a switch would write a login nothing reads. %s",
+		source, source.Remedy())
+	if source == identity.OAuthHostTokenFile {
+		// The one source with no variable to unset and no way for ccdad to
+		// scope around it: `ccdad run` scopes CLAUDE_CONFIG_DIR and
+		// CLAUDE_SECURESTORAGE_CONFIG_DIR, and this path reads neither.
+		detail += " There is no variable to unset: the path is compiled into Claude Code, and `ccdad run` " +
+			"does not scope around it either — that path ignores CLAUDE_CONFIG_DIR and " +
+			"CLAUDE_SECURESTORAGE_CONFIG_DIR. Claude Code reports such a session's credential as " +
+			source.SourceName()
+	}
+	return check{"oauth-source", levelWarn, detail}
 }
 
 // joinAnd is "a", "a and b", "a, b and c". It exists because checkEnvironment

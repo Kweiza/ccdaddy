@@ -38,7 +38,7 @@ func newWhichCmd() *cobra.Command {
 				cfg = nil
 			}
 			env := claudeAPIKeyEnvironment(cfg)
-			res := switcher.AttributeLogin(live, s.Accounts(), s.Credentials, env)
+			res := switcher.AttributeLogin(live, s.Accounts(), s.Credentials, env, claudeOAuthEnvironment())
 
 			if asJSON {
 				payload := map[string]any{"schemaVersion": 1, "attributed": res.OK, "via": res.Via}

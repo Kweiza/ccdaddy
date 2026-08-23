@@ -3,11 +3,11 @@ package switcher
 import (
 	"errors"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/credhome"
+	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 )
@@ -98,7 +98,7 @@ func (o Outcome) String() string {
 	case Raced:
 		return "the live login changed while the switch was being decided"
 	case Overridden:
-		return "CLAUDE_CODE_OAUTH_TOKEN is set, so a switch would change nothing"
+		return "another OAuth source outranks the credentials file, so a switch would change nothing"
 	case Contended:
 		return "another ccdad store's engine is driving this Claude Code login"
 	case Switched:
@@ -151,9 +151,27 @@ type Result struct {
 	// found, read from the file that was actually merged. Merge preserves them;
 	// the operator still needs to know a new key exists.
 	UnknownKeys []string
-	// EnvTokenWins reports that CLAUDE_CODE_OAUTH_TOKEN is set. Attended, the
-	// swap still happened and this is the reason it appears not to have.
+	// EnvTokenWins reports that SOMETHING outranks the credentials file on
+	// Claude Code's OAuth axis, so the swap changed nothing about what a session
+	// authenticates as. Attended, the swap still happened and this is the reason
+	// it appears not to have.
+	//
+	// It was one variable once, and the name is kept because the outcome it
+	// drives is. What it is NOT any more is a variable: DisplacedBy names the
+	// source, and three of the sources it can name have no variable at all --
+	// printing "unset CLAUDE_CODE_OAUTH_TOKEN" for those is the failure this
+	// field's own consumers were widened to stop.
 	EnvTokenWins bool
+	// DisplacedBy is the source that outranks the file, valid when EnvTokenWins.
+	// It is what every message about this state must be written from: it carries
+	// its own wording and its own remedy, and they differ per source.
+	DisplacedBy identity.OAuthSource
+	// DisplacedUnresolved reports that ccdad DECLINED rather than named a
+	// source -- the bg-auth snapshot, which is a credential ccdad refuses to
+	// read and which Claude Code consumes before anything else. The swap is
+	// stood down for it because "cannot tell" and "something wins" have the same
+	// consequence for an unattended engine.
+	DisplacedUnresolved bool
 	// ClearedKey reports that ccdad's own stored primaryApiKey was removed from
 	// Claude Code's config, and ClearedKeyOwner whose it was.
 	ClearedKey      bool
@@ -223,12 +241,29 @@ func Execute(s *store.Store, req Request) (Result, error) {
 		return res, fmt.Errorf("%s: %w", req.Target.Label(), ErrNoLogin)
 	}
 
-	// Claude Code reads CLAUDE_CODE_OAUTH_TOKEN in preference to the credentials
-	// file, so with it set the swap succeeds and changes nothing about what the
-	// session authenticates as. Attended that is a note printed once to somebody
+	// Several things outrank the credentials file, so with any of them present
+	// the swap succeeds and changes nothing about what the session
+	// authenticates as. Attended that is a note printed once to somebody
 	// reading it; unattended it is an engine switching into the void on every
 	// evaluation, which has to stop rather than accumulate.
-	res.EnvTokenWins = os.Getenv("CLAUDE_CODE_OAUTH_TOKEN") != ""
+	//
+	// RESOLVED AGAINST A WORKING LOGIN, not against the one in the file. This
+	// runs BEFORE the swap and the swap is about to write a login, so whether
+	// that write survives cannot depend on what the file holds now -- a machine
+	// whose current login is scope-less would otherwise resolve to "no source"
+	// and the engine would switch into a void it had just been told about.
+	//
+	// The apiKeyHelper is left unfilled, as this package has no reader for
+	// Claude Code's settings tree. That is unchanged from when this line read
+	// one variable: the gate never saw a helper, and doctor is where one is
+	// reported.
+	oauthSource, resolved := identity.ProbeOAuthEnvironment().Resolve(identity.UsableLogin)
+	res.DisplacedUnresolved = !resolved
+	res.EnvTokenWins = !resolved ||
+		(oauthSource != identity.OAuthNone && oauthSource != identity.OAuthLogin)
+	if resolved {
+		res.DisplacedBy = oauthSource
+	}
 	if res.EnvTokenWins && req.Unattended {
 		res.Outcome = Overridden
 		return res, nil

@@ -9,7 +9,6 @@ package switcher
 
 import (
 	"encoding/json"
-	"os"
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/identity"
@@ -104,6 +103,33 @@ type Attribution struct {
 	Via string
 }
 
+// LoginOf reads the credentials file as the two fields the OAuth resolver's
+// last branch tests, and nothing else.
+//
+// It lives here rather than in internal/identity because that package must not
+// depend on the one that reads and writes Claude Code's files -- the same rule
+// that made APIKeyApproval a duplicated three lines rather than an import.
+//
+// The access token is reduced to a BOOL and never carried further: the question
+// is whether one exists, and passing a live bearer token around to answer that
+// is what this tree's credentials rule forbids. A record that will not parse is
+// the zero Login, which is the right answer for it -- cclink's loader is where
+// a malformed credentials file is reported, not here.
+func LoginOf(live cclink.Blob) identity.Login {
+	raw, ok := live["claudeAiOauth"]
+	if !ok {
+		return identity.Login{}
+	}
+	var record struct {
+		AccessToken string   `json:"accessToken"`
+		Scopes      []string `json:"scopes"`
+	}
+	if err := json.Unmarshal(raw, &record); err != nil {
+		return identity.Login{}
+	}
+	return identity.Login{HasAccessToken: record.AccessToken != "", Scopes: record.Scopes}
+}
+
 // AttributeLogin answers "which managed account is Claude Code actually using".
 //
 // It models Claude Code's two competing axes in the order Claude Code resolves
@@ -113,14 +139,19 @@ type Attribution struct {
 //     turns the OAuth path off entirely (`BE()`), so it is asked first. The
 //     credentials file must not even be consulted then: reporting its account
 //     would name one Claude Code is not using.
-//   - Otherwise the OAuth axis answers, in `ua()`'s own order —
-//     CLAUDE_CODE_OAUTH_TOKEN first, the credentials file second.
+//   - Otherwise the OAuth axis answers, in ITS OWN resolver's order. That order
+//     is not "the environment token, then the file": ANTHROPIC_AUTH_TOKEN
+//     outranks CLAUDE_CODE_OAUTH_TOKEN, a session host can inject a token at a
+//     path with no variable behind it, an Anthropic CLI profile sits in front
+//     of the file, and the file itself counts only when its scopes carry
+//     user:inference. identity/oauth.go is that model; this function renders
+//     it.
 //   - Only when the OAuth axis has nothing does a STORED primaryApiKey become
 //     the credential. It is Claude Code's lowest-priority source, and treating
 //     it as the answer while a login exists is the single mistake this whole
 //     model exists to avoid.
 func AttributeLogin(live cclink.Blob, accounts []store.Account,
-	lookup Lookup, env identity.APIKeyEnvironment) Attribution {
+	lookup Lookup, env identity.APIKeyEnvironment, oauthEnv identity.OAuthEnvironment) Attribution {
 
 	key, source := env.Resolve()
 
@@ -139,22 +170,34 @@ func AttributeLogin(live cclink.Blob, accounts []store.Account,
 		return Attribution{Via: source.String()}
 	}
 
-	if envToken := os.Getenv("CLAUDE_CODE_OAUTH_TOKEN"); envToken != "" {
+	oauthSource, resolved := oauthEnv.Resolve(LoginOf(live))
+	switch {
+	case !resolved:
+		// The one state the OAuth model declines on. Naming a source would be a
+		// guess about a credential ccdad refuses to read, and "which account is
+		// this" is the question a wrong guess is worst for.
+		return Attribution{Via: "a credential ccdad cannot resolve"}
+	case oauthSource == identity.OAuthTokenEnv:
+		// The one OAuth source ccdad can attribute to an ACCOUNT, because it is
+		// the one it stores credentials under.
 		for _, a := range accounts {
 			stored, err := lookup(a.UUID)
 			if err != nil {
 				continue
 			}
-			if rec, ok := cclink.TokenRecordOf(stored); ok && rec.Token == envToken {
-				return Attribution{Account: a, OK: true, Via: "CLAUDE_CODE_OAUTH_TOKEN"}
+			if rec, ok := cclink.TokenRecordOf(stored); ok && rec.Token == oauthEnv.TokenEnv {
+				return Attribution{Account: a, OK: true, Via: oauthSource.SourceName()}
 			}
 		}
-		return Attribution{Via: "CLAUDE_CODE_OAUTH_TOKEN"}
-	}
-
-	if _, hasOAuth := live["claudeAiOauth"]; hasOAuth {
+		return Attribution{Via: oauthSource.SourceName()}
+	case oauthSource == identity.OAuthLogin:
 		acct, ok := AttributeFile(live, accounts, lookup)
 		return Attribution{Account: acct, OK: ok, Via: "the Claude Code credentials file"}
+	case oauthSource != identity.OAuthNone:
+		// Everything else on this axis is a mechanism ccdad can name and an
+		// account it cannot: the credential is behind a descriptor, in a file
+		// it must not read, or another program's entirely.
+		return Attribution{Via: oauthSource.String()}
 	}
 
 	// No login anywhere, so Claude Code falls through to its stored key.
@@ -182,4 +225,31 @@ func APIKeyOwner(accounts []store.Account, lookup Lookup, key string) (store.Acc
 		}
 	}
 	return store.Account{}, false
+}
+
+// DisplacementNote is the ONE sentence every caller prints when a switch is
+// outranked, built from the source rather than from a variable name.
+//
+// It exists because widening the gate without widening its messages is what
+// this function was added to repair: the gate had grown from one environment
+// variable to six sources, three of which have no variable, while four call
+// sites went on telling the user to unset CLAUDE_CODE_OAUTH_TOKEN. A single
+// renderer is what stops the fifth from being written that way.
+//
+// lead is the caller's own opening ("Note: " for an attended switch, "not
+// switching: " for the engine), because the two differ in tense and nothing
+// else.
+func DisplacementNote(lead string, res Result) string {
+	if res.DisplacedUnresolved {
+		return lead + "CLAUDE_BG_AUTH_SNAPSHOT_PATH names a token snapshot, and Claude Code consumes it " +
+			"before it looks at the credentials file — so a switch may change nothing, and ccdad cannot " +
+			"tell from here. Check the host session that set it."
+	}
+	note := lead + "Claude Code takes its OAuth credential from " + res.DisplacedBy.String() +
+		", and it reads that before the credentials file — so a switch changes nothing about what a " +
+		"session authenticates as."
+	if remedy := res.DisplacedBy.Remedy(); remedy != "" {
+		note += " " + remedy
+	}
+	return note
 }
