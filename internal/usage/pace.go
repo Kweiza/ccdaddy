@@ -2,31 +2,67 @@ package usage
 
 import "time"
 
-// Weekly windows carry an expected-versus-actual reading once the week is
-// about a day old, and a linear projection that stays --json-only.
+// Every window ccdad knows a length for carries an expected-versus-actual
+// reading once enough of that window has run, plus a linear projection that
+// stays out of the human views.
 //
 // The suppression is the load-bearing part. In the first hours after a reset
 // elapsed time is tiny, so almost any usage divides out as "far ahead" and a
 // dashboard built on it cries wolf every Monday.
 
-// paceMinElapsed is how much of a window must have run before its pace means
-// anything.
-const paceMinElapsed = 24 * time.Hour
+// paceSuppressionDivisor is the share of a window that has to run before its
+// pace means anything: one seventh of the window's own length.
+//
+// A seventh is not a new number. It reproduces the 24 hours a seven-day window
+// was held quiet for exactly (604800/7 = 86400), and applied to the five-hour
+// window it gives 2571 s — 42 minutes and 51 seconds.
+//
+// Those 43 minutes cannot hide the case this measure exists for. Reaching 95%
+// of a five-hour quota inside the first seventh of it means burning at more than
+// six times the rate the window allows, and an account doing that is already
+// past every threshold ccdad ships with: the ranking has moved off it on the
+// ordinary spent-account path long before an extrapolation would have had
+// anything left to add.
+const paceSuppressionDivisor = 7
 
-// weeklyWindow is how long a seven-day window runs, from the bundle's own table
-// (`windowSeconds: 604800`; five_hour is 18000 there, and cinder_cove has no
-// length at all because its resets_at is an expiry).
-const weeklyWindow = 7 * 24 * time.Hour
+// windowLength is how long a window runs, from the bundle's own windowSeconds
+// table: 18000 for five_hour and 604800 for every seven-day window. A scoped
+// window is weekly by construction, because ScopedWindows admits a limits[]
+// entry only when its kind is weekly_scoped.
+//
+// cinder_cove is absent, and that is why this is a lookup rather than a
+// subtraction: it has no length in that table because its resets_at is an EXPIRY
+// rather than a rollover, so measuring elapsed time against it would pace a
+// countdown to deletion.
+//
+// This is deliberately not IsWeekly with a length bolted onto it. IsWeekly
+// answers a different question — does this quota expire weekly — and the ranking
+// asks it of the same names to find the perishable quota consume-first spends
+// first. Folding five_hour into that would send consume-first chasing a
+// five-hour rollover as though it were a week's quota about to be lost.
+func windowLength(n WindowName) (time.Duration, bool) {
+	switch n {
+	case WindowFiveHour:
+		return 5 * time.Hour, true
+	case WindowSevenDay, WindowSevenDayOAuthApps, WindowSevenDayOpus, WindowSevenDaySonnet:
+		return 7 * 24 * time.Hour, true
+	}
+	if n.Scoped() {
+		return 7 * 24 * time.Hour, true
+	}
+	return 0, false
+}
 
-// IsWeekly reports whether a window is one of the seven-day family, which is
-// the only family pace is scoped to. A five-hour window is shorter than the
-// suppression period, so pacing it would produce nothing but suppressed
-// readings.
+// IsWeekly reports whether a window's quota is the seven-day kind. It is a
+// question about PERISHABILITY, not about length: the ranking asks it to find
+// the quota consume-first should spend before it expires, and a five-hour
+// rollover is not quota anyone can lose. Pace is no longer scoped to it —
+// windowLength is the lookup that decides what can be paced.
 //
 // Every SCOPED window is weekly by construction: ScopedWindows admits a limits[]
 // entry only when its kind is weekly_scoped. It is exported because the ranking
-// asks the same question of the same names — consume-first spends the quota that
-// expires soonest — and two copies of this list would drift.
+// asks the same question of the same names, and two copies of this list would
+// drift.
 func IsWeekly(n WindowName) bool {
 	switch n {
 	case WindowSevenDay, WindowSevenDayOAuthApps, WindowSevenDayOpus, WindowSevenDaySonnet:
@@ -47,9 +83,11 @@ const (
 	// Taking the zero time here would put the start in 1970 and report
 	// effectively infinite overage on every account.
 	PaceNoReset
-	// PaceNotWeekly: pace is a weekly-window measure.
-	PaceNotWeekly
-	// PaceTooEarly: less than a day since the reset.
+	// PaceNoWindowLength: ccdad has no length for this window, so there is no
+	// elapsed share to compute. cinder_cove is the case — its resets_at is an
+	// expiry — along with any window name a later release adds.
+	PaceNoWindowLength
+	// PaceTooEarly: less than a seventh of the window has run.
 	PaceTooEarly
 	// PaceWindowNotStarted: the reset is further out than the window is long,
 	// so either the local clock or the endpoint's is wrong. There is no elapsed
@@ -65,23 +103,21 @@ func (r PaceReason) String() string {
 		return "no utilization"
 	case PaceNoReset:
 		return "no reset timestamp"
-	case PaceNotWeekly:
-		return "not a weekly window"
+	case PaceNoWindowLength:
+		return "no known length for this window"
 	case PaceTooEarly:
-		return "less than a day since the reset"
+		return "less than a seventh of the window has run"
 	case PaceWindowNotStarted:
 		return "the window has not started"
 	}
 	return "unknown"
 }
 
-// Pace is how one weekly window's consumption compares with the time elapsed in
-// it.
+// Pace is how one window's consumption compares with the time elapsed in it.
 //
 // It deliberately carries no projection fields. projectedExhaustionAt and
-// willLastToReset are --json-only, out of every human-facing view, and the way
-// to make that stick is to keep them off the struct a renderer ranges over —
-// see Projection.
+// willLastToReset stay out of every human-facing view, and the way to make that
+// stick is to keep them off the struct a renderer ranges over — see Projection.
 type Pace struct {
 	Reason PaceReason
 	// ExpectedPct is the share of the window that has elapsed, as a percent.
@@ -101,10 +137,10 @@ func (p Pace) OK() bool { return p.Reason == PaceOK }
 
 // Projection is a linear extrapolation of the current burn.
 //
-// It is --json-only: real usage is bursty, and a straight line through it is
-// too rough to state as fact in a table a human reads. It is reachable only
-// through Pace.Projection, so surfacing it in `list` or `status` has to be a
-// deliberate act.
+// It stays out of every HUMAN-FACING view: real usage is bursty, and a straight
+// line through it is too rough to state as fact in a table a person reads. It is
+// reachable only through Pace.Projection, so putting it in front of a person has
+// to be a deliberate act.
 type Projection struct {
 	// ExhaustionAt is when the window hits 100% at the current rate.
 	ExhaustionAt time.Time
@@ -112,9 +148,9 @@ type Projection struct {
 	WillLastToReset bool
 }
 
-// Projection is the --json-only extrapolation, and whether there was one to
-// make. It reports nothing when pace itself is suppressed: the first day's
-// numbers are exactly the ones too noisy to extrapolate from.
+// Projection is the extrapolation, and whether there was one to make. It reports
+// nothing when pace itself is suppressed: the numbers from a window's first
+// seventh are exactly the ones too noisy to extrapolate from.
 func (p Pace) Projection() (Projection, bool) {
 	if !p.hasProjection {
 		return Projection{}, false
@@ -124,8 +160,9 @@ func (p Pace) Projection() (Projection, bool) {
 
 // PaceOf measures one window against the clock.
 func PaceOf(name WindowName, w Window, now time.Time) Pace {
-	if !IsWeekly(name) {
-		return Pace{Reason: PaceNotWeekly}
+	length, ok := windowLength(name)
+	if !ok {
+		return Pace{Reason: PaceNoWindowLength}
 	}
 	actual, ok := w.Percent()
 	if !ok {
@@ -136,21 +173,21 @@ func PaceOf(name WindowName, w Window, now time.Time) Pace {
 		return Pace{Reason: PaceNoReset}
 	}
 
-	start := reset.Add(-weeklyWindow)
+	start := reset.Add(-length)
 	elapsed := now.Sub(start)
 	if elapsed < 0 {
 		return Pace{Reason: PaceWindowNotStarted}
 	}
-	if elapsed < paceMinElapsed {
+	if elapsed < length/paceSuppressionDivisor {
 		return Pace{Reason: PaceTooEarly}
 	}
 	// A reset already in the past is a window the endpoint has not rolled over
 	// yet. Capping keeps expected at a full quota rather than running past it.
-	if elapsed > weeklyWindow {
-		elapsed = weeklyWindow
+	if elapsed > length {
+		elapsed = length
 	}
 
-	expected := float64(elapsed) / float64(weeklyWindow) * 100
+	expected := float64(elapsed) / float64(length) * 100
 	p := Pace{
 		Reason:      PaceOK,
 		ExpectedPct: expected,
@@ -173,11 +210,11 @@ func PaceOf(name WindowName, w Window, now time.Time) Pace {
 	return p
 }
 
-// Pace measures every weekly window the response actually carried, the scoped
-// ones included: an account whose binding cap is a per-model weekly one would
-// otherwise get no pace reading at all, which is the account the reading is most
-// useful for. Windows that were absent, or that have nothing to say, are left out
-// rather than reported as a zero reading.
+// Pace measures every window the response actually carried and ccdad knows a
+// length for, the scoped ones included: an account whose binding cap is a
+// per-model weekly one would otherwise get no pace reading at all, which is the
+// account the reading is most useful for. Windows that were absent, or that have
+// nothing to say, are left out rather than reported as a zero reading.
 func (s *Snapshot) Pace(now time.Time) map[WindowName]Pace {
 	out := map[WindowName]Pace{}
 	for _, nw := range s.AllWindows() {
