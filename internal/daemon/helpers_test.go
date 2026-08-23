@@ -4,20 +4,52 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/Kweiza/ccdaddy/internal/ccpath"
+	"github.com/Kweiza/ccdaddy/internal/credhome"
 )
 
-// isolate points the store at a directory of this test's own, the way every
-// other package in this tree does. CCDAD_HOME is read by ccpath.StoreHome, so
-// unlike HOME it is honoured on every platform.
+// isolate points BOTH homes this package resolves at directories of this test's
+// own.
+//
+// CCDAD_HOME alone was enough while the daemon touched nothing but its own
+// store. It is not any more: Run claims the CREDENTIAL home too, and that
+// resolves through CLAUDE_SECURESTORAGE_CONFIG_DIR ?? CLAUDE_CONFIG_DIR ??
+// ~/.claude — none of which CCDAD_HOME reaches. A suite that sandboxes only the
+// store would take an flock inside the developer's real ~/.claude and write a
+// file next to their live .credentials.json.
+//
+// HOME and USERPROFILE are both set because os.UserHomeDir reads $HOME on Unix
+// and %USERPROFILE% on Windows: setting one sandboxes half the platforms.
+//
+// The assertion at the end is what keeps this honest, and internal/switcher's
+// isolate carries the same one for the same reason. A variable that stops being
+// read, or a resolution order that changes, turns this helper into a no-op in
+// silence — and the first thing to notice would be a developer's own login.
 func isolate(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("CCDAD_HOME", dir)
+
+	home := t.TempDir()
+	claude := filepath.Join(home, ".claude")
+	if err := os.MkdirAll(claude, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", claude)
+	t.Setenv("CLAUDE_SECURESTORAGE_CONFIG_DIR", claude)
+
+	if got := mustPath(ccpath.CredentialHome()); got != claude {
+		t.Fatalf("isolate: ccpath.CredentialHome() = %q, want %q — refusing to run unsandboxed", got, claude)
+	}
 	return dir
 }
 
@@ -249,4 +281,37 @@ func waitFor(t *testing.T, path string, within time.Duration) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatalf("%s never appeared within %s", path, within)
+}
+
+// claimHeldByAnotherStore describes a machine where a DIFFERENT ccdad store's
+// engine is already driving this credential home.
+//
+// Only the kernel lock is stood in for. The owner document is real, written to
+// the real path, and read back by the real reader — so what these tests
+// exercise is the wiring and the words, which is what lives in this package.
+// That a claim actually excludes a second process is a kernel fact, and
+// internal/credhome proves it against a real second process, because a fake
+// cannot establish one.
+func claimHeldByAnotherStore(t *testing.T, store string) {
+	t.Helper()
+	home, err := credhome.Home()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(home, credhome.DirName)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Sprintf(`{"schemaVersion":%d,"store":%q,"pid":%d}`+"\n",
+		credhome.OwnerSchemaVersion, store, os.Getpid()+1)
+	if err := os.WriteFile(filepath.Join(dir, credhome.OwnerFileName), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	restore := credhome.SetTryLockForTest(func(string, bool) (bool, func() error, error) {
+		// Contention is (false, nil) and never an error — the shape the real
+		// primitive uses, and the one a gate written as `if err != nil` gets
+		// wrong.
+		return false, nil, nil
+	})
+	t.Cleanup(restore)
 }

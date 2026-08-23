@@ -17,6 +17,7 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/browser"
 	"github.com/Kweiza/ccdaddy/internal/cclink"
+	"github.com/Kweiza/ccdaddy/internal/credhome"
 	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/oauth"
 	"github.com/Kweiza/ccdaddy/internal/store"
@@ -391,6 +392,10 @@ func runAdd(cmd *cobra.Command, opts addOptions) error {
 			return err
 		}
 		fmt.Fprintf(stderr, "Switched to %s.\n", saved.Label())
+		// --activate writes the live credentials file without going through
+		// switcher.Execute, so the claim has to be asked here or this is the
+		// one attended write that never mentions a second store's engine.
+		noteCredentialHomeClaim(cmd, credhome.Decide())
 	} else {
 		fmt.Fprintf(stderr, "Run 'ccdad switch %d' to use it.\n", saved.Idx)
 	}

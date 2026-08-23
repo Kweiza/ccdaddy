@@ -442,9 +442,21 @@ func TestDoctorHumanOutputNamesEveryCheck(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit %d, want 0\n%s", code, stdout)
 	}
-	for _, name := range []string{"store", "permissions", "locks", "pidfile", "status-file", "usage-cache", "engine-state", "config", "sessions", "claude-code", "credential-keys", "keychain", "environment"} {
+	for _, name := range []string{"store", "permissions", "locks", "pidfile", "status-file", "usage-cache", "engine-state", "config", "sessions", "credential-home", "claude-code", "credential-keys", "keychain", "environment"} {
 		if !strings.Contains(stdout, name) {
 			t.Errorf("the human report does not mention the %s check:\n%s", name, stdout)
+		}
+	}
+
+	// And the same question asked structurally, because the list above is
+	// hand-kept and asserts CONTAINMENT: a check added to runChecks and not to
+	// that literal is a gap this test would otherwise pass straight over. The
+	// JSON report is generated from the same slice, so anything it names must
+	// appear on the human path too.
+	_, report, _ := runDoctor(t)
+	for name := range report.checks {
+		if !strings.Contains(stdout, name) {
+			t.Errorf("the %s check is in the JSON report and not in the human one:\n%s", name, stdout)
 		}
 	}
 }
