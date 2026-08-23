@@ -254,6 +254,13 @@ ccdad store between runs, so its MCP logins and trust answers survive. It is
 seeded once from your live config home — top-level files only, never project
 history.
 
+It is also the only mode that can run an **API-key account**. Claude Code reads
+an API key from `primaryApiKey` in its global config rather than from a
+credential home, and the default mode leaves that file shared with your live
+session on purpose — so there is nowhere to put one without changing your
+machine. A profile owns a global config of its own, and the key goes there and
+nowhere else. The default mode refuses and says so.
+
 The exit status is `claude`'s, not ccdad's. A session killed by a signal
 reports 128 plus the signal number, as a shell would.
 
@@ -358,8 +365,6 @@ Deliberate, and listed so you can tell a gap from a bug.
 - **`ccdad which` does not attribute `ANTHROPIC_API_KEY`.** Claude Code gates
   that variable on an approved-suffix list and races it against `apiKeyHelper`
   and `primaryApiKey`; guessing would be worse than declining.
-- **`ccdad run` refuses API-key accounts**, and `--full-profile` is the mode
-  that could serve them one day.
 - **A weekly cap scoped to another *surface* still counts against an account.**
   Claude Code is itself one surface, so a surface cap can be the very window
   that binds a session, and the response gives no way to tell which surface name

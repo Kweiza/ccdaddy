@@ -377,3 +377,66 @@ func TestClearPrimaryAPIKeyLeavesTheApproval(t *testing.T) {
 		t.Fatalf("approved = %v, want the entry left in place", approved)
 	}
 }
+
+// UpdateGlobalConfigAt is the whole reason `ccdad run --full-profile` can
+// serve an API-key account, and the property that makes it safe is negative:
+// the file the caller named is the ONLY one it writes. A variant that
+// re-resolved ccpath.GlobalConfigPath() anywhere inside would pass every
+// positive assertion and quietly rewrite the user's live configuration.
+func TestUpdateGlobalConfigAtWritesTheNamedFileAndNoOther(t *testing.T) {
+	live := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", live)
+	livePath := filepath.Join(live, ".claude.json")
+	if err := os.WriteFile(livePath, []byte(`{"numStartups":7}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(livePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	other := filepath.Join(t.TempDir(), ".claude.json")
+	if err := UpdateGlobalConfigAt(other, func(g *GlobalConfig) error {
+		return SetPrimaryAPIKey(g, "sk-ant-api-PROFILE")
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := LoadGlobalConfigAt(other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key, ok := PrimaryAPIKey(got); !ok || key != "sk-ant-api-PROFILE" {
+		t.Errorf("primaryApiKey at %s = %q (set: %v), want the key that was written", other, key, ok)
+	}
+	after, err := os.ReadFile(livePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("the live config was rewritten\nbefore: %s\nafter:  %s", before, after)
+	}
+}
+
+// The lock is named after the config PATH, so locking a profile's config locks
+// the file the Claude Code inside that profile would lock. Asserted through
+// the lock directory rather than through an outcome, because two processes
+// locking different files exclude nothing and every single-process test passes
+// either way.
+func TestUpdateGlobalConfigAtLocksTheFileItWrites(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	profile := filepath.Join(t.TempDir(), ".claude.json")
+
+	var seen string
+	if err := UpdateGlobalConfigAt(profile, func(g *GlobalConfig) error {
+		if _, err := os.Stat(profile + ".lock"); err == nil {
+			seen = profile + ".lock"
+		}
+		return SetPrimaryAPIKey(g, "sk-ant-api-X")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if seen == "" {
+		t.Fatalf("no lock was held at %s.lock while its config was being rewritten", profile)
+	}
+}

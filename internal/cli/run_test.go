@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -799,5 +800,178 @@ func TestRunDoesNotAdoptALoginBackIntoATokenAccount(t *testing.T) {
 	}
 	if _, ok := blob["claudeAiOauth"]; ok {
 		t.Errorf("a session's own login was attached to a setup-token account: %v", blob)
+	}
+}
+
+// liveGlobalConfig is what a test reads to prove `run` made no live mutation.
+// A missing file reads as "" so the assertion works on a machine Claude Code
+// has never been configured on, which is where a first `ccdad run` happens.
+func liveGlobalConfig(t *testing.T) string {
+	t.Helper()
+	raw, err := os.ReadFile(mustPath(ccpath.GlobalConfigPath()))
+	if errors.Is(err, os.ErrNotExist) {
+		return ""
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+// An API key is primaryApiKey in a GLOBAL config, so the mode that owns a
+// global config is the mode that can serve one. --full-profile owns one; this
+// is the account shape `run` used to refuse outright.
+func TestRunFullProfileServesAnAPIKeyAccount(t *testing.T) {
+	claude := isolate(t)
+	seedTokenAccount(t, "u-1", "a@example.com", cclink.APIKeyKind, "sk-ant-api-XYZ")
+	if err := os.WriteFile(filepath.Join(claude, ".claude.json"), []byte(`{"numStartups":7}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before := liveGlobalConfig(t)
+	stub := stubClaude(t, ExitOK)
+
+	code, _, errOut, top := runRoot(t, "run", "--full-profile", "1")
+	if code != ExitOK {
+		t.Fatalf("exit = %d (%s / %s), want 0", code, errOut, top)
+	}
+	if !stub.started {
+		t.Fatal("no session was started for an API-key account under --full-profile")
+	}
+
+	profile, ok := envOf(stub.spec.Env, "CLAUDE_CONFIG_DIR")
+	if !ok {
+		t.Fatal("the child was given no CLAUDE_CONFIG_DIR")
+	}
+	cfg, err := cclink.LoadGlobalConfigAt(ccpath.GlobalConfigPathIn(profile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key, keyed := cclink.PrimaryAPIKey(cfg); !keyed || key != "sk-ant-api-XYZ" {
+		t.Errorf("the profile's primaryApiKey = %q (set: %v), want the account's stored key", key, keyed)
+	}
+	// The whole promise of the command, on the file this change taught it to
+	// write. A resolver that fell back to the ambient path would satisfy every
+	// assertion above and fail this one.
+	if after := liveGlobalConfig(t); after != before {
+		t.Fatalf("the live global config was rewritten\nbefore: %s\nafter:  %s", before, after)
+	}
+	// And no credentials file, for the reason the setup-token branch gives:
+	// writing the stored record into one puts something in the session that
+	// looks like a login and is not one. Here it would also make the key
+	// ccdad just installed inert.
+	if _, err := os.Stat(filepath.Join(profile, ccpath.CredentialsFile)); !os.IsNotExist(err) {
+		t.Errorf("wrote a credentials file for an API-key account (stat err: %v)", err)
+	}
+}
+
+// The warning is about a LOGIN, and a profile's credentials file is not
+// necessarily one: a session that used an MCP server but never signed in
+// leaves an mcpOAuth behind with no claudeAiOauth beside it. Warning there
+// would tell the user their key is inert when it is the credential Claude Code
+// is about to use.
+func TestRunFullProfileDoesNotWarnAboutACredentialsFileThatHoldsNoLogin(t *testing.T) {
+	isolate(t)
+	seedTokenAccount(t, "u-1", "a@example.com", cclink.APIKeyKind, "sk-ant-api-XYZ")
+	profile := filepath.Join(mustPath(ccpath.StoreHome()), ProfilesDirName, "u-1")
+	if err := os.MkdirAll(profile, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(profile, ccpath.CredentialsFile),
+		[]byte(`{"mcpOAuth":{"srv":{"accessToken":"MCP"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stubClaude(t, ExitOK)
+
+	code, _, errOut, top := runRoot(t, "run", "--full-profile", "1")
+	if code != ExitOK {
+		t.Fatalf("exit = %d (%s / %s), want 0", code, errOut, top)
+	}
+	if strings.Contains(errOut, "reads it in preference") {
+		t.Fatalf("warned that the key was inert behind a file holding no login:\n%s", errOut)
+	}
+}
+
+// Claude Code reads the legacy <config home>/.config.json in preference when
+// it is there, and seedProfile copies top-level FILES — so on a machine that
+// has one, every profile has one. A key written to <profile>/.claude.json
+// there goes into a file the session never reads, and the session runs
+// unauthenticated while ccdad reports success.
+func TestRunFullProfilePutsTheKeyInTheFileTheProfileActuallyReads(t *testing.T) {
+	claude := isolate(t)
+	seedTokenAccount(t, "u-1", "a@example.com", cclink.APIKeyKind, "sk-ant-api-XYZ")
+	if err := os.WriteFile(filepath.Join(claude, ".config.json"), []byte(`{"numStartups":3}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stub := stubClaude(t, ExitOK)
+
+	if code, _, errOut, top := runRoot(t, "run", "--full-profile", "1"); code != ExitOK {
+		t.Fatalf("exit = %d (%s / %s), want 0", code, errOut, top)
+	}
+	profile, _ := envOf(stub.spec.Env, "CLAUDE_CONFIG_DIR")
+	legacy := filepath.Join(profile, ".config.json")
+	cfg, err := cclink.LoadGlobalConfigAt(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key, ok := cclink.PrimaryAPIKey(cfg); !ok || key != "sk-ant-api-XYZ" {
+		t.Errorf("primaryApiKey in %s = %q (set: %v); the key went somewhere the session does not read", legacy, key, ok)
+	}
+}
+
+// The default mode still refuses, and the refusal has to name the way out.
+// "Use 'ccdad switch'" was the whole answer before, and it is the wrong one
+// for someone who asked for a session precisely because they did not want to
+// move the live login.
+func TestRunStillRefusesAnAPIKeyAccountInTheDefaultModeAndNamesTheFlag(t *testing.T) {
+	claude := isolate(t)
+	seedTokenAccount(t, "u-1", "a@example.com", cclink.APIKeyKind, "sk-ant-api-XYZ")
+	if err := os.WriteFile(filepath.Join(claude, ".claude.json"), []byte(`{"numStartups":7}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before := liveGlobalConfig(t)
+	stub := stubClaude(t, ExitOK)
+
+	code, _, errOut, top := runRoot(t, "run", "1")
+	if code != ExitUsage {
+		t.Fatalf("exit = %d (%s / %s), want %d", code, errOut, top, ExitUsage)
+	}
+	if got := top + errOut; !strings.Contains(got, "--full-profile") {
+		t.Errorf("the refusal does not name the mode that can serve it: %q", got)
+	}
+	if stub.started {
+		t.Error("started a session that would not have been authenticated as that account")
+	}
+	if after := liveGlobalConfig(t); after != before {
+		t.Fatalf("the refusing path still wrote the live global config\nbefore: %s\nafter:  %s", before, after)
+	}
+}
+
+// A profile is persistent, so an OAuth login left in it by an earlier session
+// — a /login typed inside one — outlives that session and makes primaryApiKey
+// inert. ccdad writes the key anyway and says so, rather than deleting a login
+// the user made inside their own profile.
+func TestRunFullProfileWarnsWhenAnEarlierLoginWouldMakeTheKeyInert(t *testing.T) {
+	isolate(t)
+	seedTokenAccount(t, "u-1", "a@example.com", cclink.APIKeyKind, "sk-ant-api-XYZ")
+	profile := filepath.Join(mustPath(ccpath.StoreHome()), ProfilesDirName, "u-1")
+	if err := os.MkdirAll(profile, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(profile, ccpath.CredentialsFile),
+		[]byte(`{"claudeAiOauth":{"accessToken":"AT","refreshToken":"RT"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stubClaude(t, ExitOK)
+
+	code, _, errOut, top := runRoot(t, "run", "--full-profile", "1")
+	if code != ExitOK {
+		t.Fatalf("exit = %d (%s / %s), want 0", code, errOut, top)
+	}
+	if !strings.Contains(errOut, "reads it in preference") {
+		t.Fatalf("no warning that the key is inert behind a login already in the profile:\n%s", errOut)
+	}
+	// Not deleted: the login belongs to whoever made it in there.
+	if _, err := os.Stat(filepath.Join(profile, ccpath.CredentialsFile)); err != nil {
+		t.Fatalf("the profile's existing login was removed: %v", err)
 	}
 }
