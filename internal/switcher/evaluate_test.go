@@ -26,6 +26,58 @@ func seedReading(t *testing.T, uuid string, headroom float64) {
 	}
 }
 
+// seedBurning caches a reading three hours into a five-hour window — 1472
+// seconds from the limit at 88% — together with the poll interval the scheduler
+// would have written beside it.
+func seedBurning(t *testing.T, uuid string, pct float64, now time.Time, interval time.Duration) {
+	t.Helper()
+	resets := now.Add(2 * time.Hour)
+	snap := &usage.Snapshot{FiveHour: usage.NewWindow(&pct, &resets)}
+	if err := usage.WithCache(time.Second, func(c *usage.Cache) error {
+		c.Put(uuid, usage.Entry{Snapshot: snap, FetchedAt: now, NextPollAt: now.Add(interval)})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The pre-emptive switch reads two stamps the SCHEDULER wrote — when a reading
+// was taken and when the next one is due — so they have to survive the trip from
+// the usage cache into the engine. Nothing else in the ranking reads either, so
+// dropping them here is invisible in every other test and shows up only as an
+// account cut off mid-session.
+//
+// It also pins the other half of the seam: no strategy option is set here, so
+// the 2 minute lead this depends on has to arrive from the config defaults
+// through RankOptions. A lead that stopped being carried would land as a stay.
+func TestEvaluateCarriesThePollStampsIntoTheEngine(t *testing.T) {
+	isolate(t)
+	seed(t, "u-1", "one@example.com")
+	seed(t, "u-2", "two@example.com")
+	liveAs(t, "u-1")
+
+	// After the seeds, so neither reading is older than its account's AddedAt
+	// and Prune keeps both.
+	now := time.Now().UTC()
+	// u-1 is 1472 seconds from its limit and the next poll is 1800 seconds out —
+	// the ceiling a 429 imposes — so the engine is blind straight past it. u-2 is
+	// one point under its threshold, which clears neither ordinary margin.
+	seedBurning(t, "u-1", 88, now, 1800*time.Second)
+	seedBurning(t, "u-2", 79, now, 1800*time.Second)
+
+	ev, err := Evaluate(openStore(t), EvalOptions{Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev.Plan.Action != strategy.ActionSwitch || ev.Plan.Reason != strategy.ReasonProjectedExhaustion {
+		t.Fatalf("Action = %v, Reason = %v; want a switch on the projection — the stamps did not reach the ranking",
+			ev.Plan.Action, ev.Plan.Reason)
+	}
+	if !ev.HasTarget || ev.Target.UUID != "u-2" {
+		t.Fatalf("Target = %q (%v), want u-2", ev.Target.UUID, ev.HasTarget)
+	}
+}
+
 func writeConfigFile(t *testing.T, body string) {
 	t.Helper()
 	path := mustPath(config.Path())
