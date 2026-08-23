@@ -101,7 +101,7 @@ by `uuid` or `alias`.
   on Windows when it shipped — and the reason expired rather than being argued
   away: the Windows leg of CI has been green with it since `72e3f61`.
 
-  **Nothing that worked before can stop working.** When the shim cannot be
+  **A shim ccdad cannot read still runs.** When the shim cannot be
   resolved — a `.cmd` npm did not write, an unmodelled `%VAR%`, an interpreter
   that is not installed or that resolves to another `.cmd`, the no-shebang shape
   `cmd.exe` runs by file association — the launch goes through the shim exactly

@@ -515,11 +515,27 @@ func unsafeForCmdShim(args []string) string {
 // reason has expired rather than been argued away: `test (windows-latest)` has
 // been green with cmdshim_windows_test.go in it since main 72e3f61.
 //
-// What did NOT widen is the failure behaviour, and that is the half keeping
-// this from being a regression. When resolution fails, the caller refuses only
-// the argument cmd.exe would have eaten and otherwise launches the shim as it
-// always did — so a parse bug here still cannot break an invocation that works
-// today. It can only fail to improve one.
+// What did NOT widen is the failure behaviour: when resolution ERRORS, the
+// caller refuses only the argument cmd.exe would have eaten and otherwise
+// launches the shim as it always did. A parse that gives up costs a launch
+// nothing it had.
+//
+// A parse that SUCCEEDS on a wrong model is the class the widening genuinely
+// changed, and the narrow shape's "it can only turn a refusal into a different
+// refusal" does not survive here — that held because resolution ran only on
+// invocations already bound for a refusal, and every .cmd launch consumes the
+// result now. Two things bound it, and neither is a reason to look away.
+// parseNpmShim refuses outright whatever it does not model: a missing
+// preamble, an unmodelled %VAR%, a quote inside a token. The leniency it does
+// have — accepting a shim that carries EXTRA lines and silently dropping them
+// — was measured rather than assumed harmless: the generated shim runs
+// `endLocal` in the same &-chain and BEFORE `"%_prog%"`, so a variable such a
+// line set is already gone by the time the child starts. (That is also why
+// resolvePastShim reimplements the .js refusal instead of trusting the shim's
+// own PATHEXT line, which the same endLocal discards.) What is left is a
+// hand-edit that survives npm regenerating the file AND does something other
+// than set a variable. A narrow gap, and a real one rather than a proved
+// impossibility.
 func launchPastShim(path string) (pastShim, error) {
 	text, err := readShim(path)
 	if err != nil {
