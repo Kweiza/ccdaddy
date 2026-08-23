@@ -103,7 +103,8 @@ it appends the install directory to the user `PATH` in the registry and
 broadcasts the change, so a new shell has it. **`install.sh` does not touch a
 shell profile** — the script itself is on stdin under `curl | bash`, so it
 cannot ask permission, and a startup file guessed at is a startup file that can
-be corrupted. It prints the `export PATH=…` line for you to paste instead.
+be corrupted. It points at [`ccdad setup-path`](#ccdad-setup-path), and prints the
+`export PATH=…` line underneath for the shell you are standing in.
 
 ### Verifying the download
 
@@ -182,6 +183,7 @@ is a usage error rather than a silent hang. Pass the token, or `-`.
 | `ccdad export`, `import` | Move the account store between machines |
 | `ccdad remove` | Stop managing an account and delete its stored credentials |
 | `ccdad doctor` | Check the layout ccdad depends on, and the hazards around it |
+| `ccdad setup-path` | Put the directory holding `ccdad` on your `PATH`, durably |
 | `ccdad uninstall` | Stop the daemon, delete the store, remove the binary |
 
 Anywhere a command takes an `ACCOUNT`, it accepts a display index, an alias, an
@@ -214,6 +216,48 @@ all-model weekly windows, and any cap scoped to a *surface* rather than a model 
 always count. Name a family (`opus`, `sonnet`, `haiku`, `fable`), with or
 without a version; a name `ccdad` cannot place is refused rather than quietly
 ignored.
+
+### `ccdad setup-path`
+
+The answer to `ccdad: command not found` right after an install. `curl | bash`
+has the installer's own script on stdin, so `install.sh` cannot ask permission
+to edit a startup file, and a file it guessed at is a file it can corrupt — so
+it hands the job to a command you run yourself.
+
+```sh
+ccdad setup-path            # register it
+ccdad setup-path --print    # show the block, write nothing
+```
+
+It writes a marker-fenced block into the startup files your shell actually
+reads, and running it twice leaves one block:
+
+- **bash** — `~/.bashrc` *and* your login file (the first of `~/.bash_profile`,
+  `~/.bash_login`, `~/.profile` that exists). Both, because a login shell reads
+  only the second and a terminal-emulator shell reads only the first. It never
+  *creates* `~/.bash_profile`: doing so would stop bash login shells from ever
+  reading `~/.profile` again.
+- **zsh** — `$ZDOTDIR/.zshrc`, else `~/.zshrc`.
+- **fish** — `$XDG_CONFIG_HOME/fish/config.fish`, else `~/.config/fish/config.fish`.
+- **sh, dash, ksh** — `~/.profile`.
+- **csh, tcsh** — not written. The line is printed for you to add.
+- **Windows** — no startup file: the install directory goes into
+  `HKCU\Environment` with its value kind preserved, and the change is broadcast
+  to running programs. This is the same write `install.ps1` performs.
+
+The block guards itself, so sourcing it twice cannot duplicate a `PATH` entry,
+and it is written so that an empty `PATH` never gains an empty component — which
+would put the working directory on `PATH`.
+
+Exit `3` means nothing was written, which is either "already registered" or
+"already registered, and this shell has not read the file yet". It is keyed on
+what is *registered*, never on the live `$PATH`: a directory that is on `$PATH`
+only because you pasted an `export` line into the shell you are standing in has
+no durable registration at all, and reporting "already on PATH" there would send
+you away with the next terminal still failing.
+
+`ccdad uninstall` removes the block, and removes only what is between ccdad's
+markers. A `PATH` line you wrote yourself is never touched.
 
 ## How the switch stays safe
 
@@ -355,8 +399,6 @@ Deliberate, and listed so you can tell a gap from a bug.
   that binds a session, and the response gives no way to tell which surface name
   is this client's own — so `ccdad` counts them all. `--model` narrows models,
   never surfaces.
-- **`ccdad setup-path` does not exist.** The installers print a `PATH` line to
-  paste instead.
 - **Windows file modes.** `chmod` is a no-op there, so the store relies on the
   ACL inherited from `%USERPROFILE%`. Windows binaries are also unsigned.
 - **The macOS Keychain is not used**, because Claude Code no longer uses it.

@@ -13,11 +13,13 @@
 #
 # `curl | bash` puts the script itself on stdin, so nothing here may read from
 # stdin: no prompts, no `read`, and therefore no offer to edit a shell profile.
-# The PATH note at the end exists because of that. It prints the export line
-# rather than naming `ccdad setup-path`: that command is not in the tree yet,
-# and an installer whose last instruction is `unknown command` is worse than
-# one that asks for a copy and paste. Point it back at setup-path when that
-# command lands.
+# The PATH note at the end exists because of that, and it names `ccdad
+# setup-path` -- the command whose whole job is this, which knows which startup
+# files the user's shell actually reads and writes a marker-fenced block that a
+# second run rewrites in place. It is named by ABSOLUTE path, because this arm
+# fires precisely when the install directory is off PATH, so a bare `ccdad`
+# would not resolve. The export line stays underneath it for the reader who
+# wants their current shell fixed this second.
 #
 # This is the only thing verifying the download, so every failure to verify is
 # an abort, never a warning. There are three distinct ones: the checksum file
@@ -176,7 +178,11 @@ case ":${PATH:-}:" in
 	info ""
 	info "$INSTALL_DIR is not on your PATH. This installer never edits a shell"
 	info "profile — it cannot ask, and guessing at a startup file is how"
-	info "installers corrupt them. Add this to your shell profile:"
+	info "installers corrupt them. ccdad will do it once you ask it to:"
+	info ""
+	info "    \"$TARGET\" setup-path"
+	info ""
+	info "or, to fix just this shell right now:"
 	info ""
 	info "    export PATH=\"$INSTALL_DIR:\$PATH\""
 	;;
