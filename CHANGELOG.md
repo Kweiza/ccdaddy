@@ -35,6 +35,39 @@ by `uuid` or `alias`.
 
 ### Fixed
 
+- **The legacy keychain item is derived the way the builds that WROTE one
+  derived it.** ccdad was using the formula carried by today's Claude Code,
+  where `CLAUDE_SECURESTORAGE_CONFIG_DIR` outranks `CLAUDE_CONFIG_DIR` and the
+  account is validated against `^[a-zA-Z0-9._-]+$`. That code is dead — it has
+  never written an item — and the variable does not occur even once in 2.1.112,
+  the last release that read the Keychain at all. Two false "no legacy item"
+  answers came out of it: inside a `ccdad run` session, which sets that variable
+  by design, `doctor` hashed the session's credential directory and looked for an
+  item that cannot exist; and on a machine whose username has a space or a
+  non-ASCII letter in it, `doctor` looked under `claude-code-user` while the real
+  item sat under the real name.
+
+- **The legacy item is looked for under both spellings a keychain-era Claude
+  Code could have written.** 2.1.38 started NFC-normalizing `CLAUDE_CONFIG_DIR`
+  before hashing it into the item's name; 1.0.30 through 2.1.37 hashed the bytes
+  as they came. A decomposed value therefore has an item under each digest
+  depending on which build wrote it, and `doctor` probed only the composed one —
+  a third false "no legacy item", from the same cause as the other two. Both are
+  derived now, composed first, and they collapse to a single lookup whenever the
+  variable is unset or already composed, which is every ordinary machine.
+
+- **`ccdad doctor` says which machine the removal command is for, before it
+  offers the command.** Claude Code 2.1.112 and earlier read the keychain item
+  *before* `.credentials.json` and fall back to the file when it is absent, so
+  deleting it does redirect those builds — but not durably. From 1.0.36 a
+  successful keychain write deletes the credentials file whenever the pre-write
+  keychain read was empty, which after a deletion it always is, so the next
+  access-token refresh recreates the item and unlinks ccdad's file with it. On
+  2.1.113 or later the removal is clean-up nothing can undo; on 2.1.112 or
+  earlier it is not a fix at all and the item *is* the live login, so the answer
+  there is to upgrade Claude Code. The check now names both version numbers and
+  says all of this ahead of the `security` invocation.
+
 - **`ccdad doctor` no longer reports `ok environment` while a switch is being
   defeated.** The `environment` check looked at two variables —
   `CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_API_KEY` — and printed "nothing set
