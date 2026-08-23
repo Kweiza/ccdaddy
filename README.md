@@ -166,6 +166,7 @@ is a usage error rather than a silent hang. Pass the token, or `-`.
 
 | Command | What it does |
 |---|---|
+| `ccdad` | The dashboard, at a terminal. In a pipe, a redirect or cron it is usage on stderr and exit `2` |
 | `ccdad add [ALIAS]` | Log in through the browser and manage the account |
 | `ccdad add-token [TOKEN\|-]` | Register an `sk-ant-oat…` setup token or an `sk-ant-api…` key |
 | `ccdad list` | List managed accounts and how much quota each has left |
