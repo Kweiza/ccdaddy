@@ -12,6 +12,7 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/credhome"
 	"github.com/Kweiza/ccdaddy/internal/daemon"
+	"github.com/Kweiza/ccdaddy/internal/winerr"
 )
 
 // The daemon group is where the exit taxonomy earns the two codes it added to
@@ -593,10 +594,16 @@ func tailLines(body []byte, n int) []byte {
 // It opens and closes the file on every poll instead of holding it, which is
 // what carries it through the daemon's log rotation. A follower that keeps the
 // handle goes on reading the RENAMED inode — every line after the first
-// rotation silently lost, forever — and on Windows a handle opened without
-// FILE_SHARE_DELETE blocks the rename outright, wedging rotation for as long as
-// the follower is attached. Go's os.Open does pass share-delete, so only the
-// first of those is live here; the fix for it happens to be the fix for both.
+// rotation silently lost, forever — and on Windows it also blocks the rename
+// outright, wedging rotation for as long as the follower is attached:
+// os.Open goes through syscall.Open, which asks for FILE_SHARE_READ and
+// FILE_SHARE_WRITE and NOT FILE_SHARE_DELETE. Opening per poll answers both.
+//
+// Per-poll opening does not make the two sides miss each other, it only makes
+// the window small. A poll's brief handle can still catch a rename, which is
+// why a rotator retries; a rename in flight can still catch a poll's open,
+// which is why pumpLog treats a retryable open error as "try the next poll"
+// rather than as the end of the follow.
 //
 // Rotation is detected by file IDENTITY rather than by a shrinking size. A
 // daemon that rotates and then writes more than the old offset within one poll
@@ -617,14 +624,39 @@ func followLog(ctx context.Context, w io.Writer, path string, from int64, interv
 	}
 }
 
+// openLogFile and logOpenRetryable are seams, swapped together, so a test can
+// drive the follower's open failures without depending on a Windows errno.
+// Injecting the errno alone would prove nothing off Windows, where the real
+// classifier answers no to everything; injecting the classifier alone leaves no
+// way to make the open fail.
+var (
+	openLogFile      = os.Open
+	logOpenRetryable = winerr.Retryable
+)
+
 // pumpLog copies whatever is past offset and reports where to resume.
 func pumpLog(w io.Writer, path string, offset int64, seen os.FileInfo) (int64, os.FileInfo, error) {
-	f, err := os.Open(path)
+	f, err := openLogFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			// Rotated away and not recreated yet. The next poll reads the new
 			// file from the top.
 			return 0, nil, nil
+		}
+		if logOpenRetryable(err) {
+			// Someone else has the file for a moment -- on Windows, the
+			// antivirus scanner or the search indexer that meets the rotation.
+			// Wait for the next poll rather than ending, and hold the position
+			// rather than resetting it: whether the file was replaced is not
+			// known yet, and the next open that succeeds settles that by
+			// identity, exactly as an uninterrupted poll would.
+			//
+			// Unbounded, like the branch above it. This loop IS the retry, and
+			// a log that has become permanently unreadable is not a case this
+			// needs to catch: `daemon logs` reads the whole file before it ever
+			// starts following, so a standing permission problem is reported
+			// there, before the first poll.
+			return offset, seen, nil
 		}
 		return offset, seen, fmt.Errorf("reading %s: %w", path, err)
 	}
