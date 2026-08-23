@@ -650,7 +650,28 @@ func runRootTo(t *testing.T, stdout io.Writer, args ...string) (code ExitCode, s
 // process and cannot be asserted by constructing a value.
 const pipeRoleEnv = "CCDAD_TEST_PIPE_ARGV"
 
+// argvRoleEnv turns a re-executed copy of this binary into a program that
+// records the argument vector it was actually given, into the file the
+// variable names. cmdshim_windows_test.go uses it as a stand-in for node: what
+// an argument looks like AFTER Windows has parsed the command line is not
+// something any in-process assertion can reach.
+//
+// It writes to a file rather than to stdout because runChild hands the child
+// the real os.Stdout, and swapping that out under a running test to read one
+// line back is a larger intrusion than an extra environment variable.
+const argvRoleEnv = "CCDAD_TEST_ARGV_ECHO"
+
 func TestMain(m *testing.M) {
+	if out := os.Getenv(argvRoleEnv); out != "" {
+		enc, err := json.Marshal(os.Args[1:])
+		if err != nil {
+			os.Exit(70)
+		}
+		if err := os.WriteFile(out, enc, 0o600); err != nil {
+			os.Exit(71)
+		}
+		os.Exit(0)
+	}
 	if argv := os.Getenv(pipeRoleEnv); argv != "" {
 		// Execute() itself, not a re-implementation of it. ignoreSIGPIPE is
 		// called from inside Execute and nowhere else, so a role that called it

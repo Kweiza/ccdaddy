@@ -328,3 +328,36 @@ func TestResolversDoNotNeedAHomeWhenTheEnvironmentSuppliesOne(t *testing.T) {
 		}
 	}
 }
+
+// GlobalConfigPathIn exists because `ccdad run --full-profile` has a config
+// home no variable in THIS process points at. It must give the answer Claude
+// Code will give once CLAUDE_CONFIG_DIR points there in the child — so the two
+// functions are asserted against each other rather than against a spelling.
+func TestGlobalConfigPathInAgreesWithTheAmbientRule(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+
+	want, err := GlobalConfigPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := GlobalConfigPathIn(dir); got != want {
+		t.Fatalf("GlobalConfigPathIn(%q) = %q, want the ambient answer %q", dir, got, want)
+	}
+}
+
+// §3.3's legacy form wins when it is there, and it is there in a profile more
+// often than anywhere: seedProfile copies top-level FILES out of the live
+// config home, so a machine with a .config.json puts one in every profile it
+// creates. Writing <profile>/.claude.json on such a machine would write a file
+// Claude Code never reads.
+func TestGlobalConfigPathInPrefersTheLegacyFileWhenItExists(t *testing.T) {
+	dir := t.TempDir()
+	legacy := filepath.Join(dir, ".config.json")
+	if err := os.WriteFile(legacy, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := GlobalConfigPathIn(dir); got != legacy {
+		t.Fatalf("GlobalConfigPathIn = %q, want the legacy %q", got, legacy)
+	}
+}

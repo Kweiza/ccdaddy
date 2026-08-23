@@ -53,23 +53,38 @@ func NewRootCmd() *cobra.Command {
 	// around it.
 	cobra.MousetrapHelpText = ""
 
-	// Auto-start hangs off PersistentPreRun rather than PersistentPreRunE, and
-	// the missing E is the point: §8's auto-start must never fail the command
-	// it rode in on, and a hook with no error to return cannot be wired into
-	// one later. Which commands it actually acts for is autostart.go's
-	// allow-list; this is only where the tree offers it the chance.
+	// Two hooks in one function, because cobra will only run one: it walks up
+	// from the command to the first parent carrying a persistent pre-run, and
+	// PersistentPreRunE wins over PersistentPreRun on the same command. Two
+	// fields here would mean the second one silently never fires.
 	//
-	// Bare `ccdad` is the one command this hook deliberately does not act for,
-	// and it is on the allow-list all the same: §9.2's gate decides in RunE
-	// whether this invocation is a dashboard or a usage error, and a hook that
-	// ran first would spawn a daemon for `ccdad | head` too — a script that
-	// asked for nothing, got a 2, and left an engine behind. runBare calls the
-	// hook itself once it knows which half it is in.
-	root.PersistentPreRun = func(cmd *cobra.Command, _ []string) {
+	// The refusal comes first, because it decides whether this command may act
+	// on the world at all. See scoped.go: inside a `ccdad run` session, a
+	// command that writes Claude Code's own state writes the SESSION's copy
+	// and reports success.
+	//
+	// §8's auto-start must still never fail the command it rode in on, and
+	// that rule now rests on autoStart's signature rather than on this hook's:
+	// it returns NOTHING, so no later change here can wire it into an error
+	// without changing the hook's own type. Which commands it acts for is
+	// autostart.go's allow-list; this is only where the tree offers it the
+	// chance.
+	//
+	// Bare `ccdad` is the one command auto-start deliberately does not act
+	// for, and it is on the allow-list all the same: §9.2's gate decides in
+	// RunE whether this invocation is a dashboard or a usage error, and a hook
+	// that ran first would spawn a daemon for `ccdad | head` too — a script
+	// that asked for nothing, got a 2, and left an engine behind. runBare
+	// calls the hook itself once it knows which half it is in.
+	root.PersistentPreRunE = func(cmd *cobra.Command, _ []string) error {
+		if err := refuseInsideScopedSession(cmd); err != nil {
+			return err
+		}
 		if cmd == root {
-			return
+			return nil
 		}
 		autoStart(cmd)
+		return nil
 	}
 
 	// Cobra reports a mistyped subcommand and a mistyped flag as plain errors.

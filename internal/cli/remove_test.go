@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Kweiza/ccdaddy/internal/cclink"
+	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/store"
 )
 
@@ -106,5 +108,71 @@ func TestRemoveWarnsWhenTheAccountWasLive(t *testing.T) {
 	}
 	if !strings.Contains(errOut, "still the live") {
 		t.Fatalf("stderr = %q, want a warning that the login is still installed", errOut)
+	}
+}
+
+// `ccdad run --full-profile` writes an API-key account's primaryApiKey into
+// <store>/profiles/<uuid>/.claude.json, so an orphaned profile is an orphaned
+// CREDENTIAL and not stale configuration. Nothing else cleans one: uninstall
+// removes the whole store, and doctor scans sessions only — so `remove`, whose
+// own help promises to "delete its stored credentials", has to.
+func TestRemoveDeletesTheAccountsFullProfileToo(t *testing.T) {
+	isolate(t)
+	seedTokenAccount(t, "u-1", "a@example.com", cclink.APIKeyKind, "sk-ant-api-XYZ")
+	profile := filepath.Join(mustPath(ccpath.StoreHome()), ProfilesDirName, "u-1")
+	if err := os.MkdirAll(profile, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(profile, ccpath.GlobalConfigFile),
+		[]byte(`{"primaryApiKey":"sk-ant-api-XYZ"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	code, _, stderr, top := runRoot(t, "remove", "1", "--yes")
+	if code != ExitOK {
+		t.Fatalf("exit = %d (%s / %s), want 0", code, stderr, top)
+	}
+	if _, err := os.Stat(profile); !os.IsNotExist(err) {
+		t.Fatalf("%s survived the removal (stat err: %v); the account's API key is still on disk", profile, err)
+	}
+	if !strings.Contains(stderr, profile) {
+		t.Errorf("the removal never says the profile went: %q", stderr)
+	}
+}
+
+// The non-interactive refusal has to name what it is about to delete, or a
+// script author reading it does not know a profile is in scope.
+func TestRemoveNamesTheProfileInTheConfirmationItDemands(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "u-1", "a@example.com")
+	profile := filepath.Join(mustPath(ccpath.StoreHome()), ProfilesDirName, "u-1")
+	if err := os.MkdirAll(profile, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	code, _, stderr, top := runRoot(t, "remove", "1")
+	if code != ExitUsage {
+		t.Fatalf("exit = %d (%s / %s), want %d", code, stderr, top, ExitUsage)
+	}
+	if got := top + stderr; !strings.Contains(got, profile) {
+		t.Errorf("the confirmation does not name the profile it would delete: %q", got)
+	}
+	if _, err := os.Stat(profile); err != nil {
+		t.Fatalf("a refused removal deleted the profile anyway: %v", err)
+	}
+}
+
+// An account that has never been run with --full-profile has no profile, and
+// the removal must not invent a sentence about one.
+func TestRemoveSaysNothingAboutAProfileThatDoesNotExist(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "u-1", "a@example.com")
+
+	code, _, stderr, top := runRoot(t, "remove", "1", "--yes")
+	if code != ExitOK {
+		t.Fatalf("exit = %d (%s / %s), want 0", code, stderr, top)
+	}
+	if strings.Contains(stderr, "profile") {
+		t.Errorf("the removal mentions a profile that was never created: %q", stderr)
 	}
 }

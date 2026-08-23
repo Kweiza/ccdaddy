@@ -203,6 +203,13 @@ func LoadGlobalConfig() (*GlobalConfig, error) {
 	return loadGlobalConfigFrom(path)
 }
 
+// LoadGlobalConfigAt reads a named global config -- the `ccdad run
+// --full-profile` profile's own, which no environment variable in THIS process
+// points at.
+func LoadGlobalConfigAt(path string) (*GlobalConfig, error) {
+	return loadGlobalConfigFrom(path)
+}
+
 func loadGlobalConfigFrom(path string) (*GlobalConfig, error) {
 	// Opened WITHOUT the credentials file's O_NOFOLLOW refusal, and that is a
 	// deliberate difference rather than an oversight. Claude Code writes this
@@ -239,8 +246,22 @@ func loadGlobalConfigFrom(path string) (*GlobalConfig, error) {
 // mutate returning an error abandons the write and leaves the file untouched.
 // So does mutate leaving the document byte-identical: a switch that changes
 // nothing must not advance the file's mtime, because Claude Code watches it.
-func UpdateGlobalConfig(mutate func(*GlobalConfig) error) (err error) {
-	held, aerr := cclock.AcquireGlobalConfig(GlobalConfigLockTimeout)
+func UpdateGlobalConfig(mutate func(*GlobalConfig) error) error {
+	path, err := ccpath.GlobalConfigPath()
+	if err != nil {
+		return err
+	}
+	return UpdateGlobalConfigAt(path, mutate)
+}
+
+// UpdateGlobalConfigAt is UpdateGlobalConfig against a named config file, for
+// the one caller that has a config home no environment variable in this
+// process points at: a `ccdad run --full-profile` profile.
+//
+// It reads the path back out of the lock rather than using its argument, so
+// the file that is written and the file that is locked cannot drift apart.
+func UpdateGlobalConfigAt(configPath string, mutate func(*GlobalConfig) error) (err error) {
+	held, aerr := cclock.AcquireGlobalConfigAt(configPath, GlobalConfigLockTimeout)
 	if aerr != nil {
 		return globalConfigLockError(aerr)
 	}

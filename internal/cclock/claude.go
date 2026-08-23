@@ -311,6 +311,19 @@ func AcquireGlobalConfig(timeout time.Duration) (*Held, error) {
 	if err != nil {
 		return nil, err
 	}
+	return AcquireGlobalConfigAt(path, timeout)
+}
+
+// AcquireGlobalConfigAt is AcquireGlobalConfig against a named config file.
+//
+// Nothing about the lock changes with the path, and that is worth stating
+// because it looks like it should: the lock's NAME is `${configPath}.lock`, so
+// locking a `ccdad run --full-profile` profile's own config locks exactly the
+// file the Claude Code inside that profile would lock, with the same stale
+// window. The profile is not a file only one process touches -- Claude Code
+// rewrites its config constantly, on every startup counter and every project
+// entry -- so the lock means there what it means anywhere.
+func AcquireGlobalConfigAt(path string, timeout time.Duration) (*Held, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("creating the directory for %s: %w", filepath.Base(path), err)
 	}
