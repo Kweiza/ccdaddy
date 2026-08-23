@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -19,7 +20,7 @@ import (
 //	sha256("/home/tester/.claude/")[0:8]    = 6211cf53
 //	sha256("/home/tester/./.claude")[0:8]   = f1df102a
 //	sha256("/tmp/cc")[0:8]                  = aa3d8c96
-//	sha256("/tmp/secure")[0:8]              = 7f494bd1
+//	sha256("/tmp/secure")[0:8]              = 7f494bd1   <- must never appear
 //	sha256(NFC("/tmp/café"))[0:8]           = 0873cca0
 //	sha256(NFD("/tmp/café"))[0:8]           = 16eb4464   <- must never appear
 
@@ -90,30 +91,11 @@ func TestKeychainServiceName(t *testing.T) {
 			want: "Claude Code-credentials",
 		},
 		{
-			// CLAUDE_SECURESTORAGE_CONFIG_DIR decides both halves alone. The
-			// digest here is /tmp/secure's; /tmp/cc's aa3d8c96 must not appear,
-			// which is why both variables are set to different directories.
-			name: "CLAUDE_SECURESTORAGE_CONFIG_DIR outranks CLAUDE_CONFIG_DIR",
-			env: keychainEnv{
-				secureStorageDir: "/tmp/secure", secureStorageSet: true,
-				configDir: "/tmp/cc",
-			},
-			want: "Claude Code-credentials-7f494bd1",
-		},
-		{
-			// Defined-but-empty selects the DEFAULT secure store, whose item is
-			// the unsuffixed one -- and it does so even with CLAUDE_CONFIG_DIR
-			// set, which is the case a "definedness of CLAUDE_CONFIG_DIR"
-			// reading gets wrong in both directions at once.
-			name: "an empty CLAUDE_SECURESTORAGE_CONFIG_DIR selects the default store",
-			env: keychainEnv{
-				secureStorageDir: "", secureStorageSet: true,
-				configDir: "/tmp/cc",
-			},
-			want: "Claude Code-credentials",
-		},
-		{
-			name: "CLAUDE_CONFIG_DIR decides when the securestorage variable is absent",
+			// CLAUDE_CONFIG_DIR is the only directory this derivation reads.
+			// The struct has no securestorage field to set, which is the point:
+			// no release that ever wrote one of these items read that variable,
+			// so there is nothing here for it to outrank.
+			name: "CLAUDE_CONFIG_DIR decides the hash",
 			env:  keychainEnv{configDir: "/tmp/cc"},
 			want: "Claude Code-credentials-aa3d8c96",
 		},
@@ -197,23 +179,33 @@ func TestKeychainAccountName(t *testing.T) {
 			user: "", osUsr: failing, want: "claude-code-user",
 		},
 		{
-			// The pattern is applied to whichever source answered. A $USER with
-			// a space in it is rejected...
-			name: "a $USER failing the pattern falls back",
-			user: "al ice", osUsr: answers("bob"), want: "claude-code-user",
+			// An OS that answers with nothing is the catch too: `security -a ""`
+			// is not a lookup, and this is the branch a pattern check used to
+			// cover by accident.
+			name: "an OS name that is empty falls back",
+			user: "", osUsr: answers(""), want: "claude-code-user",
 		},
 		{
-			// ...and so is an unusable name the OS supplied, which is the case
-			// that proves the check is not simply an "is $USER set" test.
-			name: "an OS name failing the pattern falls back",
-			user: "", osUsr: answers("Bad Name"), want: "claude-code-user",
+			// NOT rewritten to the constant, and this is the correction. The
+			// releases that wrote these items ran `process.env.USER ||
+			// os.userInfo().username` through no pattern at all, so a name with
+			// a space in it is the name on the item. Only the dead builder in
+			// today's binary validates, and it has never written one.
+			name: "a $USER with a space is the account, not the fallback",
+			user: "al ice", osUsr: answers("bob"), want: "al ice",
 		},
 		{
-			name: "a non-ASCII name falls back",
-			user: "유저", osUsr: answers("bob"), want: "claude-code-user",
+			// The same for a name the OS supplied, which is the case that proves
+			// the rule is about the SOURCE order and not about the characters.
+			name: "an OS name with a space is used as it is",
+			user: "", osUsr: answers("Bad Name"), want: "Bad Name",
 		},
 		{
-			name: "dots, underscores and hyphens are allowed",
+			name: "a non-ASCII name is used as it is",
+			user: "유저", osUsr: answers("bob"), want: "유저",
+		},
+		{
+			name: "dots, underscores and hyphens are ordinary",
 			user: "a.b_c-d1", osUsr: failing, want: "a.b_c-d1",
 		},
 	}
@@ -238,11 +230,33 @@ func TestCredentialKeychainItemReadsTheEnvironment(t *testing.T) {
 	t.Setenv("USER", "tester")
 
 	got := CredentialKeychainItem()
-	if want := "Claude Code-credentials-7f494bd1"; got.Service != want {
+	if want := "Claude Code-credentials-aa3d8c96"; got.Service != want {
 		t.Fatalf("Service = %q, want %q", got.Service, want)
+	}
+	// The named negative. /tmp/secure's digest is what the dead 2.1.113+ builder
+	// would produce here, and it names an item no Claude Code has ever written:
+	// CLAUDE_SECURESTORAGE_CONFIG_DIR does not occur once in 2.1.112, the last
+	// release that read the keychain at all. `ccdad run` sets this variable, so
+	// this is the exact shape of the false "no legacy item" it used to cause.
+	if strings.Contains(got.Service, "7f494bd1") {
+		t.Fatalf("Service = %q: derived from CLAUDE_SECURESTORAGE_CONFIG_DIR", got.Service)
 	}
 	if got.Account != "tester" {
 		t.Fatalf("Account = %q, want %q", got.Account, "tester")
+	}
+}
+
+// The securestorage variable set ALONE must not suffix anything: with
+// CLAUDE_CONFIG_DIR absent the item is the unsuffixed one, which is what a
+// <=2.1.112 Claude Code launched inside a default `ccdad run` session reads.
+func TestCredentialKeychainItemIgnoresTheSecureStorageVariable(t *testing.T) {
+	t.Setenv("CLAUDE_SECURESTORAGE_CONFIG_DIR", "/tmp/secure")
+	t.Setenv("USER", "tester")
+	unsetEnv(t, "CLAUDE_CONFIG_DIR")
+	unsetEnv(t, "CLAUDE_CODE_CUSTOM_OAUTH_URL")
+
+	if got := CredentialKeychainItem().Service; got != "Claude Code-credentials" {
+		t.Fatalf("Service = %q, want %q", got, "Claude Code-credentials")
 	}
 }
 

@@ -723,10 +723,25 @@ func TestDoctorReportsAStaleKeychainItem(t *testing.T) {
 		"Claude Code-credentials-aa3d8c96",
 		"tester",
 		"downgraded",
+		// The boundary, both sides of it. "A downgraded Claude Code" is not
+		// actionable on its own: a user cannot tell whether the build they have
+		// is one, and the answer is a version number that was measured rather
+		// than guessed.
+		"2.1.112",
+		"2.1.113",
+		// And what the command costs. See below for why this one is ordered.
+		"destroys the login",
 	} {
 		if !strings.Contains(detail, want) {
 			t.Errorf("the detail does not mention %q:\n%s", want, detail)
 		}
+	}
+	// The price comes BEFORE the command, not after it. Someone who reads far
+	// enough to copy the invocation has necessarily already read what it takes
+	// with it — which is the whole difference between a remedy and a way to lose
+	// an account ccdad does not hold.
+	if cost, cmd := strings.Index(detail, "destroys the login"), strings.Index(detail, "delete-generic-password"); cost > cmd {
+		t.Errorf("the command is offered before its cost is named:\n%s", detail)
 	}
 }
 

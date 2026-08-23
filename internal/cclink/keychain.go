@@ -5,50 +5,71 @@ import (
 	"encoding/hex"
 	"os"
 	"os/user"
-	"regexp"
 	"strings"
 
 	"golang.org/x/text/unicode/norm"
 )
 
-// Legacy macOS Keychain support, and it is legacy in the strongest sense: no
-// Claude Code this project has ever been able to run reads or writes these
-// items.
+// Legacy macOS Keychain support. "Legacy" here has a date on it now rather than
+// an open end: 2.1.112 (2026-04-16) is the LAST Claude Code whose credential
+// store reads these items, and 2.1.113 (2026-04-17) removed the backend
+// outright. Every release from 2.1.113 on -- 2.1.222, 2.1.238, 2.1.240, 2.1.241
+// -- names its secure-storage backend "plaintext" and reads .credentials.json.
+// The boundary was measured, not inferred: every published release from 2.1.112
+// to 2.1.129 was fetched and searched for the backend, and it disappears at
+// exactly 2.1.113.
 //
-// 2.1.222, 2.1.238 and 2.1.240 all name their secure-storage backend
-// "plaintext" and read .credentials.json. The service-name builder below is
-// still compiled into 2.1.238 and 2.1.240, byte-for-byte the same logic under
-// different minified names -- but in BOTH of them its only call site is inside
-// saveApiKey's `let r = !1; if (r) {...}`, which no build can enter, and that
-// call passes no item argument, so it would name the API-key item rather than
-// this one. The "-credentials" constant ships in both and is referenced by
-// nothing at all. §3.3 keeps this path for exactly two situations that outlive
-// that:
+// THE READ ORDER, which is the fact everything else here turns on. Every release
+// from 0.2.125 through 2.1.112 wraps the keychain in the SAME combinator, and
+// the body does not change once across that span:
 //
-//   - a user still on a Keychain-era Claude Code, whose login lives in the
-//     Keychain and not in any file ccdad can read;
-//   - a stale item left behind on a machine that has since moved to the file.
-//     Nothing reads it today, but a DOWNGRADED Claude Code would, and it would
-//     shadow whatever ccdad had written -- a switch that appears to work and
-//     changes nothing.
+//	{name:`${A.name}-with-${B.name}-fallback`,
+//	 read(){let Q=A.read();if(Q!=null)return Q;return B.read()||{}}, ...}
+//	function GP(){if(process.platform==="darwin")return <combinator>;return <file>}
 //
-// WHERE TO RE-CHECK THIS. Do NOT search for the "-credentials" constant: it is
-// unreferenced, so its minified name has one hit in a 229 MB binary and the
-// obvious conclusion -- that the derivation is gone -- is wrong. Search for the
-// FUNCTION instead, by its body rather than its name, which changes every
-// release (`qpt` in 2.1.238, `xht` in 2.1.240):
+// Keychain FIRST, then the file. Never keychain-only. Two consequences, and they
+// are the two §3.3 kept this path for:
+//
+//   - An item that is present SHADOWS whatever ccdad writes to
+//     .credentials.json, so on a machine running <=2.1.112 a ccdad switch
+//     appears to work and changes nothing.
+//   - DELETING the item redirects that Claude Code to the file rather than
+//     logging it out. That was the open question -- repair or credential loss --
+//     and the fallback settles it: it is a repair.
+//
+// What deleting still costs, and why doctor hands over the command instead of
+// running it: on a machine actually running <=2.1.112 the item is not stale, it
+// is that Claude Code's LIVE login. Removing it is only free for a login ccdad
+// already holds. §12 rates destroying a credential during a switch High, and
+// nothing here is worth spending that on.
+//
+// The other half of the same era, recorded because it looks like this file's
+// problem and is not: CLAUDE_SECURESTORAGE_CONFIG_DIR does not occur even once
+// in 2.1.112, so on such a machine `ccdad run`'s default scoping is ignored too
+// and the session reads the machine's own credentials file.
+//
+// WHERE TO RE-CHECK ALL OF THIS. npm carries every release, and up to 2.1.112
+// the tarball still contains a readable `package/cli.js`:
+//
+//	npm pack @anthropic-ai/claude-code@2.1.112
+//	tar -xzOf anthropic-ai-claude-code-2.1.112.tgz package/cli.js > cc.js
+//	grep -aoP 'name:"plaintext".{0,1800}' cc.js | head -1
+//
+// From 2.1.113 the package is a launcher and the code ships as a native binary
+// in @anthropic-ai/claude-code-<platform>; `tar -xzO | tr -d '\000'` over that
+// gives the same searchable JS (see claude-code-oauth-ground-truth for the
+// dd/tr recipe against an installed copy).
+//
+// Do NOT search for the "-credentials" constant in a current build: it is
+// unreferenced there, so its minified name has one hit in a 229 MB binary and
+// the obvious conclusion -- that the derivation is gone -- is wrong. Search for
+// the FUNCTION by its body rather than its name, which changes every release
+// (`qpt` in 2.1.238, `xht` in 2.1.240):
 //
 //	grep -aoP '.{0,300}CLAUDE_SECURESTORAGE_CONFIG_DIR,r=t.{0,400}'
 //
-// against the extracted bundle (see claude-code-oauth-ground-truth for the
-// dd/tr recipe). What it finds, in both versions:
-//
-//	function qpt(e=""){
-//	  let t=process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR,
-//	      r=t!==void 0?!t:!process.env.CLAUDE_CONFIG_DIR,
-//	      n=t!==void 0?t.normalize("NFC"):An(),
-//	      o=r?"":`-${sha256(n).hex.substring(0,8)}`;
-//	  return `Claude Code${al().OAUTH_FILE_SUFFIX}${e}${o}`}
+// What that finds is the DEAD builder, and it is not the one this file
+// implements -- keychainServiceName says why.
 //
 // The pure derivation lives in this file and the spawns live in
 // keychain_security.go, so everything with a decision in it is reachable from a
@@ -78,11 +99,6 @@ const (
 	keychainFallbackAccount = "claude-code-user"
 )
 
-// keychainAccountPattern is Claude Code's CVb/qwb, and it is applied to the
-// resolved username rather than only to $USER: a name that fails it becomes the
-// fallback even when the operating system is the one that supplied it.
-var keychainAccountPattern = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
-
 // KeychainItem names one generic-password item: the two attributes that
 // identify it to `security`, and the only two ccdad ever needs to spell.
 type KeychainItem struct {
@@ -98,14 +114,9 @@ type KeychainItem struct {
 // directory. clauth calls canonicalize() before hashing and is wrong about this;
 // cswap hashes the raw value and is right.
 type keychainEnv struct {
-	// secureStorageDir is CLAUDE_SECURESTORAGE_CONFIG_DIR's value, and
-	// secureStorageSet is whether it is present in the environment at all.
-	// The two are separate because Claude Code's own test is neither purely
-	// definedness nor purely emptiness -- see keychainServiceName.
-	secureStorageDir string
-	secureStorageSet bool
-
-	// configDir is CLAUDE_CONFIG_DIR's value. Its definedness is never asked.
+	// configDir is CLAUDE_CONFIG_DIR's value, and it is the ONLY directory
+	// variable in this derivation. CLAUDE_SECURESTORAGE_CONFIG_DIR is not read
+	// here on purpose -- see keychainServiceName.
 	configDir string
 
 	// customOAuthURL is CLAUDE_CODE_CUSTOM_OAUTH_URL's value, which is the one
@@ -119,13 +130,10 @@ type keychainEnv struct {
 // readKeychainEnv captures the environment once, so a service name and an
 // account name derived in the same call cannot straddle a change to it.
 func readKeychainEnv() keychainEnv {
-	secure, secureSet := os.LookupEnv("CLAUDE_SECURESTORAGE_CONFIG_DIR")
 	return keychainEnv{
-		secureStorageDir: secure,
-		secureStorageSet: secureSet,
-		configDir:        os.Getenv("CLAUDE_CONFIG_DIR"),
-		customOAuthURL:   os.Getenv("CLAUDE_CODE_CUSTOM_OAUTH_URL"),
-		user:             os.Getenv("USER"),
+		configDir:      os.Getenv("CLAUDE_CONFIG_DIR"),
+		customOAuthURL: os.Getenv("CLAUDE_CODE_CUSTOM_OAUTH_URL"),
+		user:           os.Getenv("USER"),
 	}
 }
 
@@ -143,38 +151,46 @@ func CredentialKeychainItem() KeychainItem {
 	}
 }
 
-// keychainServiceName is qpt(), and it carries three things the spec's
-// one-line formula leaves out.
+// keychainServiceName is the service attribute of the item, derived the way the
+// releases that WROTE one derived it -- 1.0.128 through 2.1.112, read out of
+// 2.1.112's bundle:
 //
-// CLAUDE_SECURESTORAGE_CONFIG_DIR OUTRANKS CLAUDE_CONFIG_DIR, and completely.
-// §3.3's formula names only CLAUDE_CONFIG_DIR, but when the securestorage
-// variable is DEFINED it decides both halves on its own and CLAUDE_CONFIG_DIR
-// is not consulted at all -- which is the same asymmetry ccpath.CredentialHome
-// already has for the credential PATH, for the same reason: that variable
-// scopes credentials independently of everything else.
+//	function Fh(q=""){let K=A7(),
+//	    z=!process.env.CLAUDE_CONFIG_DIR?"":`-${sha256(K).hex.substring(0,8)}`;
+//	  return `Claude Code${r7().OAUTH_FILE_SUFFIX}${q}${z}`}
+//	A7 = memo(()=>(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(),".claude")).normalize("NFC"))
+//
+// CLAUDE_SECURESTORAGE_CONFIG_DIR IS NOT PART OF IT, and this is the correction
+// that matters. Today's dead builder lets that variable outrank
+// CLAUDE_CONFIG_DIR and decide the hash on its own -- but the variable does not
+// occur even ONCE in 2.1.112, the last release with a live keychain. No build
+// that could have written one of these items had ever heard of it, so a name
+// derived from it names an item that cannot exist.
+//
+// It is not a harmless extra either: `ccdad run` sets that variable by design
+// (§13 Q1), so the old reading made `ccdad doctor` inside a run session look for
+// a hash of the SESSION's credential directory and report "no legacy item" with
+// certainty while the real one sat under the unsuffixed name. Reading it the
+// keychain era's way makes both questions agree -- what wrote the item, and what
+// a <=2.1.112 Claude Code launched in THIS environment would read.
 //
 // THE SUFFIX TEST IS TRUTHINESS, NOT DEFINEDNESS. Claude Code writes
-// `!process.env.CLAUDE_CONFIG_DIR`, so a variable that is set to the empty
-// string behaves exactly like an unset one and yields the UNSUFFIXED item.
-// Definedness and truthiness differ on precisely that value, and it is the one
-// a test isolate sets. The half of the spec's "definedness, not equality"
-// warning that does hold is the half it was written for: setting
-// CLAUDE_CONFIG_DIR to the literal default path still produces a suffixed item,
-// because the value is hashed rather than compared against anything.
+// `!process.env.CLAUDE_CONFIG_DIR`, so a variable set to the empty string
+// behaves exactly like an unset one and yields the UNSUFFIXED item. Definedness
+// and truthiness differ on precisely that value, and it is the one a test
+// isolate sets. The half of §3.3's "definedness, not equality" warning that does
+// hold is the half it was written for: setting CLAUDE_CONFIG_DIR to the literal
+// default path still produces a suffixed item, because the value is hashed
+// rather than compared against anything.
 //
-// THE HASHED STRING IS THE RAW VALUE, NFC-normalized. See keychainEnv.
+// THE HASHED STRING IS THE RAW VALUE, NFC-normalized -- not resolved, not
+// cleaned. A7() normalizes and otherwise hands back the variable untouched, and
+// the suffix only exists when the variable is truthy, so the two readings never
+// part company on a machine that has one.
 func keychainServiceName(env keychainEnv, item string) string {
-	var hashed string
-	var suffixed bool
-	if env.secureStorageSet {
-		hashed, suffixed = env.secureStorageDir, env.secureStorageDir != ""
-	} else {
-		hashed, suffixed = env.configDir, env.configDir != ""
-	}
-
 	tail := ""
-	if suffixed {
-		sum := sha256.Sum256([]byte(norm.NFC.String(hashed)))
+	if env.configDir != "" {
+		sum := sha256.Sum256([]byte(norm.NFC.String(env.configDir)))
 		tail = "-" + hex.EncodeToString(sum[:])[:8]
 	}
 	return keychainBaseService + oauthFileSuffix(env.customOAuthURL) + item + tail
@@ -216,22 +232,28 @@ var osUsername = func() (string, error) {
 	return u.Username, nil
 }
 
-// keychainAccountName is Claude Code's getUsername(): $USER, then the operating
-// system, then a constant -- and the pattern is applied to whichever of those
-// answered, so an unusable name from the OS falls back just as an unusable
-// $USER does. An OS lookup that fails is treated as an empty answer, which the
-// pattern then rejects, which is how Claude Code's try/catch behaves too.
+// keychainAccountName is the account attribute a Keychain-era Claude Code put
+// on the item, which is `process.env.USER || os.userInfo().username` inside a
+// try/catch whose only other answer is the constant.
+//
+// THERE IS NO PATTERN HERE, and there used to be. Today's dead builder validates
+// the name against ^[a-zA-Z0-9._-]+$ and rewrites anything else to
+// "claude-code-user"; NO release that ever wrote one of these items did. Keeping
+// that check would make ccdad look for "claude-code-user" on exactly the machines
+// whose item is under a real name with a space or a non-ASCII letter in it -- a
+// false "no legacy item" from the one diagnostic that exists to find it.
+//
+// An OS lookup that fails, or that answers with nothing, takes the constant:
+// that is Claude Code's catch, and `security -a ""` is not a lookup anyone
+// wants ccdad to spell.
 func keychainAccountName(env keychainEnv, osUser func() (string, error)) string {
-	name := env.user
-	if name == "" {
-		if fromOS, err := osUser(); err == nil {
-			name = fromOS
-		}
+	if env.user != "" {
+		return env.user
 	}
-	if !keychainAccountPattern.MatchString(name) {
-		return keychainFallbackAccount
+	if fromOS, err := osUser(); err == nil && fromOS != "" {
+		return fromOS
 	}
-	return name
+	return keychainFallbackAccount
 }
 
 // keychainFailure is why a `security` invocation did not answer. It exists so

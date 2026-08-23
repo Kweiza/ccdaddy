@@ -35,6 +35,26 @@ by `uuid` or `alias`.
 
 ### Fixed
 
+- **The legacy keychain item is derived the way the builds that WROTE one
+  derived it.** ccdad was using the formula carried by today's Claude Code,
+  where `CLAUDE_SECURESTORAGE_CONFIG_DIR` outranks `CLAUDE_CONFIG_DIR` and the
+  account is validated against `^[a-zA-Z0-9._-]+$`. That code is dead — it has
+  never written an item — and the variable does not occur even once in 2.1.112,
+  the last release that read the Keychain at all. Two false "no legacy item"
+  answers came out of it: inside a `ccdad run` session, which sets that variable
+  by design, `doctor` hashed the session's credential directory and looked for an
+  item that cannot exist; and on a machine whose username has a space or a
+  non-ASCII letter in it, `doctor` looked under `claude-code-user` while the real
+  item sat under the real name.
+
+- **`ccdad doctor` says what removing that item costs, before it offers the
+  command.** Claude Code 2.1.112 and earlier read the keychain item *before*
+  `.credentials.json` and fall back to the file when it is absent, so deleting it
+  hands those builds back to what ccdad writes rather than logging them out — but
+  it destroys the login stored in the item, and on a machine still running
+  ≤ 2.1.112 that item *is* the live login. The check now names both version
+  numbers and states the cost ahead of the `security` invocation.
+
 - **`ccdad doctor` no longer reports `ok environment` while a switch is being
   defeated.** The `environment` check looked at two variables —
   `CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_API_KEY` — and printed "nothing set
