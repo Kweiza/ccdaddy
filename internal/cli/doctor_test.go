@@ -722,10 +722,52 @@ func TestDoctorReportsAStaleKeychainItem(t *testing.T) {
 		"delete-generic-password",
 		"Claude Code-credentials-aa3d8c96",
 		"tester",
-		"downgraded",
+		// The boundary, both sides of it. "An older Claude Code" is not
+		// actionable on its own: a user cannot tell whether the build they have
+		// is one, and the answer is a version number that was measured rather
+		// than guessed.
+		"2.1.112",
+		"2.1.113",
+		// The half that was missing, and the one that matters most. On a
+		// machine still reading the keychain, deleting the item is not a fix at
+		// all: the next credential write puts it back and takes the credentials
+		// file with it, because that era's update() deletes the file whenever
+		// the pre-write keychain read came back empty.
+		"recreates it and deletes the credentials file",
+		"upgrade Claude Code instead",
 	} {
 		if !strings.Contains(detail, want) {
 			t.Errorf("the detail does not mention %q:\n%s", want, detail)
+		}
+	}
+	// The caveat comes BEFORE the command, not after it. Someone who reads far
+	// enough to copy the invocation has necessarily already read the case in
+	// which running it makes things worse — which is the whole difference
+	// between a remedy and a way to lose the login and the file at once.
+	if cost, cmd := strings.Index(detail, "recreates it"), strings.Index(detail, "delete-generic-password"); cost > cmd {
+		t.Errorf("the command is offered before its caveat is named:\n%s", detail)
+	}
+}
+
+// A decomposed CLAUDE_CONFIG_DIR splits the item into two names, and a clean
+// answer has to say it looked for both. Naming one of them would be the same
+// half-answer as the securestorage derivation this check was corrected from:
+// certain, specific, and about a name Claude Code never wrote.
+func TestDoctorNamesEveryKeychainNameItCheckedFor(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	composed := cclink.KeychainItem{Service: "Claude Code-credentials-0873cca0", Account: "tester"}
+	raw := cclink.KeychainItem{Service: "Claude Code-credentials-16eb4464", Account: "tester"}
+	stubKeychainCandidates(t, false, composed, []cclink.KeychainItem{composed, raw}, nil)
+
+	_, report, _ := runDoctor(t)
+	if got := report.level(t, "keychain"); got != "ok" {
+		t.Fatalf("keychain level = %q, want ok", got)
+	}
+	detail := report.detail(t, "keychain")
+	for _, want := range []string{composed.Service, raw.Service} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("the clean answer does not name %q as checked:\n%s", want, detail)
 		}
 	}
 }
@@ -816,9 +858,9 @@ func TestDoctorDeletesNoKeychainItem(t *testing.T) {
 	var asked []string
 	saved := keychainProbe
 	t.Cleanup(func() { keychainProbe = saved })
-	keychainProbe = func(context.Context) (bool, cclink.KeychainItem, error) {
+	keychainProbe = func(context.Context) (cclink.KeychainLookup, error) {
 		asked = append(asked, "probe")
-		return true, item, nil
+		return cclink.KeychainLookup{Present: true, Item: item, Checked: []cclink.KeychainItem{item}}, nil
 	}
 
 	runDoctor(t)
