@@ -16,7 +16,26 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **`ccdad switch --model <name>` narrows the ranking.** The weekly caps scoped
+  to other models stop counting against an account, so one whose Opus week is
+  spent can still be chosen for a Sonnet session. It only ever raises an
+  account's headroom, it narrows `consume-first` as well as `headroom`, and a
+  model name `ccdad` cannot place is now a usage error rather than a flag that
+  silently did nothing.
+
+### Changed
+
+- **The per-model and per-surface weekly caps the usage endpoint reports in
+  `limits[]` now rank, pace and display.** They were parsed and then ignored, so
+  an account whose Fable or Cowork week was gone read as healthy; they now bind
+  headroom like any other window, feed `consume-first`, carry a pace reading,
+  and appear in `status --json` under `windows`. A cap of any other kind, or one
+  whose scope names neither a model nor a surface, is still ignored.
+- **A `limits[]` entry with no readable `percent` is unknown rather than 0%.**
+  The schema writes the field non-null, but a body that omits it would otherwise
+  have read as a window with everything left.
 
 ## [0.1.0] — 2026-08-23
 

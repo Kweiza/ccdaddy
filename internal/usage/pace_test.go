@@ -294,3 +294,45 @@ func TestSnapshotPacesEveryWeeklyWindow(t *testing.T) {
 		t.Error("Pace() included a window the response never carried")
 	}
 }
+
+// An account whose binding cap is a per-model weekly one is exactly the account
+// a pace reading is most useful for, so limits[] has to reach §7.5 too.
+func TestPaceCoversTheScopedWindows(t *testing.T) {
+	now := mustTime(t, "2026-08-24T00:00:00Z")
+	reset := mustTime(t, "2026-08-27T00:00:00Z")
+	pct := 90.0
+
+	snap := &Snapshot{
+		SevenDay: NewWindow(&pct, &reset),
+		Limits: []Limit{
+			LimitFor(LimitInput{Kind: "weekly_scoped", Group: "model", Model: "Fable",
+				Percent: &pct, ResetsAt: &reset}),
+			// A five-hour-shaped cap cannot arrive here: usage admits only
+			// weekly_scoped entries, so every scoped window is paceable.
+			LimitFor(LimitInput{Kind: "weekly_scoped", Group: "surface", Surface: "Cowork",
+				Percent: &pct, ResetsAt: &reset}),
+		},
+	}
+
+	got := snap.Pace(now)
+	for _, name := range []WindowName{
+		WindowSevenDay,
+		"weekly_scoped:model:Fable",
+		"weekly_scoped:surface:Cowork",
+	} {
+		p, ok := got[name]
+		if !ok {
+			t.Fatalf("Pace() has no reading for %q: %v", name, got)
+		}
+		if !p.OK() || !p.AheadOfPace {
+			t.Errorf("Pace()[%q] = %+v; 90%% spent four days into a week is ahead of pace", name, p)
+		}
+	}
+
+	if !IsWeekly("weekly_scoped:model:Fable") {
+		t.Error("a scoped window does not report as weekly")
+	}
+	if IsWeekly(WindowFiveHour) || IsWeekly(WindowCinderCove) {
+		t.Error("five_hour or cinder_cove reports as weekly")
+	}
+}
