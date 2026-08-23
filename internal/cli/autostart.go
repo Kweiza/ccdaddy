@@ -22,8 +22,12 @@ import (
 //     <something>`, so one missing guard spawns as fast as the operating system
 //     allows: the hidden `__daemon` entrypoint is not on the allow-list, and
 //     daemon.ChildEnvVar marks every process ccdad started, whatever it runs.
-//  3. Never into a credential environment scoped to one terminal — see the
-//     CLAUDE_SECURESTORAGE_CONFIG_DIR check below.
+//  3. Never into a credential environment scoped to one terminal. That is TWO
+//     checks below rather than one, and reading only the first is how a reader
+//     concludes this hole is still open: CLAUDE_SECURESTORAGE_CONFIG_DIR being
+//     DEFINED, and — because `ccdad run --full-profile` REMOVES that variable
+//     and scopes with CLAUDE_CONFIG_DIR instead — a config home inside this
+//     store's own sessions or profiles container, which scoped.go answers.
 //  4. Silent, and never a failure. One stray line on stdout breaks `ccdad list
 //     --json | jq`, and a daemon that will not start is a degraded mode rather
 //     than an error for a command that was not asking for one.
