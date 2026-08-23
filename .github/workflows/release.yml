@@ -152,3 +152,30 @@ jobs:
           fi
           gh release upload "$TAG" dist/* --clobber
           gh release view "$TAG" --json assets --jq '.assets[].name'
+
+  # The one thing that proves the installers work, and it can only run once
+  # something is published. §11.5 calls it "the highest-value test neither
+  # reference project has"; .github/workflows/install-smoke.yml is where it
+  # lives and where its trade-offs are written down.
+  #
+  # Called as a job rather than left to `on: release: types: [published]` in
+  # that file, for two reasons that each make the event useless here:
+  #
+  #   * The release above is created with the repository's GITHUB_TOKEN, and
+  #     events triggered by that token do not start workflow runs. The workflow
+  #     would never fire, and nothing would say so.
+  #   * The event arrives at `gh release create`, which is the step BEFORE
+  #     `gh release upload`. A run started by it would race the assets it is
+  #     supposed to install.
+  #
+  # A red smoke does not un-publish anything - by here the tag is public - but
+  # it is the difference between finding out from CI and finding out from a
+  # user whose install one-liner did nothing.
+  smoke:
+    name: Post-release install smoke
+    needs: publish
+    permissions:
+      contents: read
+    uses: ./.github/workflows/install-smoke.yml
+    with:
+      tag: ${{ github.ref_name }}
