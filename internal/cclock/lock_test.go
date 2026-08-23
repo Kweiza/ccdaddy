@@ -149,9 +149,25 @@ func TestReleaseIsIdempotent(t *testing.T) {
 // "Compromised() did not close after the lock directory was taken over".
 // Backdating is unambiguous, and it is also what a real takeover looks like: a
 // waiter only steals a lock whose mtime is already older than Stale.
+//
+// And the backdating has to be checked, not just written. touch() reads the
+// mtime, decides "still mine", writes its own, and re-reads -- four syscalls,
+// not one. A takeover that lands entirely between the first read and the write
+// is therefore stamped with `now` by the holder AFTERWARDS, and the holder then
+// records that same value as the mtime it believes it owns. Every later tick
+// agrees, so the takeover is not detected late: it is never detected at all,
+// and the test fails on its one-second budget. Observed once in roughly fifty
+// runs on a tree that already backdated. So the stamp is rewritten until it has
+// survived untouched for longer than a toucher's interval, which is this
+// package's own rule about arrangements that silently do not take.
+//
+// settleWindow is comfortably longer than the 20 ms TouchInterval every
+// takeover test here uses. A test that wants a slower toucher has to widen it.
+const settleWindow = 150 * time.Millisecond
+
 func stealLock(t *testing.T, dir string) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for {
 		err := os.RemoveAll(dir)
 		if err == nil {
@@ -165,9 +181,34 @@ func stealLock(t *testing.T, dir string) {
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
+
+	// mkdir stamps the new directory with `now`, so the first pass through here
+	// always writes. A holder that has noticed stops touching, and the stamp
+	// settles on the next check; a holder that was fooled by the window above
+	// keeps writing, and each rewrite is what makes its NEXT tick disagree with
+	// the mtime it recorded -- so this converges rather than spinning.
 	stolen := time.Now().Add(-time.Second)
-	if err := os.Chtimes(dir, stolen, stolen); err != nil {
-		t.Fatal(err)
+	var settled time.Time
+	for {
+		info, err := os.Stat(dir)
+		if err != nil {
+			t.Fatalf("stat of the stolen %s: %v", dir, err)
+		}
+		switch {
+		case info.ModTime().After(stolen):
+			if err := os.Chtimes(dir, stolen, stolen); err != nil {
+				t.Fatal(err)
+			}
+			settled = time.Time{}
+		case settled.IsZero():
+			settled = time.Now()
+		case time.Since(settled) >= settleWindow:
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the holder kept re-stamping %s, so the takeover could never be made visible to it", dir)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
