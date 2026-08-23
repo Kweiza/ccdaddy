@@ -603,3 +603,30 @@ func TestTheAdviceToRunListRefreshNamesAFlagThatExists(t *testing.T) {
 		}
 	}
 }
+
+// The same §4.3 probe, on the other read command a supervisor scripts. `list`
+// and `which` publish it independently, so pinning one leaves the other free to
+// drop it.
+func TestListJSONCarriesTheUnknownKeyProbe(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "u-1", "a@example.com")
+	writeLiveFile(t, `{"claudeAiOauth":{"accessToken":"AT","refreshToken":"RT-u-1"},"somethingNew":{"a":1}}`)
+
+	code, out, _, top := runRoot(t, "list", "--json")
+	if code != ExitOK {
+		t.Fatalf("exit = %d (%s), want 0", code, top)
+	}
+	var payload struct {
+		ActiveUUID  string   `json:"activeUuid"`
+		UnknownKeys []string `json:"unknownKeys"`
+	}
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatalf("--json output is not valid JSON: %v\n%s", err, out)
+	}
+	if payload.ActiveUUID != "u-1" {
+		t.Fatalf("activeUuid = %q, want the live login to be attributed: %s", payload.ActiveUUID, out)
+	}
+	if len(payload.UnknownKeys) != 1 || payload.UnknownKeys[0] != "somethingNew" {
+		t.Fatalf("unknownKeys = %v, want [somethingNew]", payload.UnknownKeys)
+	}
+}

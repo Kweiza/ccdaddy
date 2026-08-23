@@ -100,3 +100,32 @@ func TestWhichDoesNotFallBackWhenTheEnvTokenIsUnmanaged(t *testing.T) {
 		t.Fatalf("stderr = %q", errOut)
 	}
 }
+
+// §4.3's drift probe has a machine-readable half, and it is the half that
+// matters: an unrecognized key in the credentials file is the one signal that
+// Claude Code has grown something ccdad does not model. The key could be
+// deleted from this payload with the whole suite green, so nothing scripted was
+// guarding it.
+func TestWhichJSONCarriesTheUnknownKeyProbe(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "u-1", "a@example.com")
+	writeLiveFile(t, `{"claudeAiOauth":{"accessToken":"AT","refreshToken":"RT-u-1"},"somethingNew":{"a":1}}`)
+
+	code, out, _, top := runRoot(t, "which", "--json")
+	if code != ExitOK {
+		t.Fatalf("exit = %d (%s), want 0: the live login is the seeded account", code, top)
+	}
+	var payload struct {
+		Attributed  bool     `json:"attributed"`
+		UnknownKeys []string `json:"unknownKeys"`
+	}
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatalf("--json output is not valid JSON: %v\n%s", err, out)
+	}
+	if !payload.Attributed {
+		t.Fatalf("attributed = false, want the seeded account: %s", out)
+	}
+	if len(payload.UnknownKeys) != 1 || payload.UnknownKeys[0] != "somethingNew" {
+		t.Fatalf("unknownKeys = %v, want [somethingNew]", payload.UnknownKeys)
+	}
+}
