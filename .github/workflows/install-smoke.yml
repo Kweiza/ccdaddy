@@ -1,0 +1,468 @@
+# The only test that proves the installers work.
+#
+# Everything else about §11 is checked against a release that does not exist:
+# scripts/install_sh_test.go and scripts/install_ps1_test.go serve their own
+# assets from a local HTTP server, which is the right way to pin the parsing and
+# the fail-closed branches and can say nothing at all about the real thing. This
+# workflow runs the PUBLISHED installer against a PUBLISHED release, on real
+# runners, and asserts that the binary which lands answers for the version it
+# claims to be. §11.5 calls it "the highest-value test neither reference project
+# has".
+#
+# ---------------------------------- why this is a reusable workflow and not
+#                                    `on: release` alone
+#
+# `.github/workflows/release.yml` creates the release with the repository's
+# GITHUB_TOKEN, and events triggered by that token do not start workflow runs.
+# `on: release: types: [published]` would therefore NEVER fire for a release
+# this repository publishes: the file would sit here looking correct and running
+# never, which is worse than not having it at all. So release.yml calls this as
+# a job.
+#
+# Being a job also removes a race the event has even where it does fire.
+# `release published` arrives at `gh release create`, and release.yml uploads
+# the assets in the step AFTER that one - so a smoke test started by the event
+# races the upload and aborts on a sums file that is not there yet. With
+# `needs: publish` the upload has already finished.
+#
+# `on: release` is kept for the one case the token rule does not cover: a
+# release a HUMAN publishes through the web UI, which is not the token's doing
+# and does fire. workflow_dispatch is how a finished release gets re-tested.
+#
+# ---------------------------------- which installer is under test
+#
+# The one at raw.githubusercontent.com/<repo>/main/install.sh: §11.1's
+# documented one-liner, which is the artifact users actually execute. It is NOT
+# the tagged copy, so a release cut from a commit whose installer differs from
+# main is tested against a script that did not ship with it. That is the
+# deliberate half of the trade: the failure worth being loud about is "the
+# command in the README is broken today", and a red leg here means exactly that
+# even when the published binaries are fine. Every leg prints the sha256 of the
+# script it fetched, so a run records which bytes it ran.
+#
+# ---------------------------------- what a green run does not cover
+#
+# Three of the six published assets are never installed, and a checkmark will be
+# read as an all-clear over all six unless it is said out loud - which the
+# resolve job repeats as a run annotation, because the header is not what anyone
+# reads once the checkmark is there:
+#
+#   ccdad-darwin-amd64   GitHub's macOS runners are arm64.
+#   ccdad-windows-arm64  GitHub's Windows runners are amd64.
+#   ccdad-linux-arm64    ubuntu-latest is amd64. This is the one that could be
+#                        closed cheaply - `ubuntu-24.04-arm` is free for public
+#                        repositories - if the three-leg shape is ever revisited.
+name: install-smoke
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: The published tag to install, for example v1.2.3.
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The published tag to install, for example v1.2.3.
+        required: true
+        type: string
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+# No concurrency group on purpose. Nothing here writes anything, runs for
+# different tags are independent, and a run cancelled to make way for another
+# proves nothing about either release.
+
+# One place, because the alternative is remembering it per step: without an
+# explicit shell, Actions runs `run:` blocks on Windows through PowerShell. The
+# one step that WANTS PowerShell says so for itself.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  resolve:
+    name: Resolve the release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.target.outputs.tag }}
+      version: ${{ steps.gate.outputs.version }}
+      pin: ${{ steps.latest.outputs.pin }}
+      previous: ${{ steps.previous.outputs.previous }}
+    steps:
+      # Three triggers, one answer: `inputs` is empty for the release event and
+      # `github.event.release` is empty for the other two.
+      - id: target
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          tag=${INPUT_TAG:-$RELEASE_TAG}
+          if [ -z "$tag" ]; then
+            echo "install-smoke: no tag to install" >&2
+            exit 1
+          fi
+          printf 'tag=%s\n' "$tag" >>"$GITHUB_OUTPUT"
+
+      # The workflow's own commit, NOT the tag. What the scripts below are is
+      # the smoke harness, not the thing being smoke-tested; checking out the
+      # tag would make a dispatch against an old release run that release's
+      # harness, and against a release that predates these scripts it would find
+      # none at all. When release.yml calls this, the two are the same commit.
+      - uses: actions/checkout@v7
+
+      # The release's own rule rather than a second copy of it: this is the
+      # script whose output release.yml passed to build-release.sh as VERSION,
+      # so what is asserted here cannot drift from what was stamped there. It
+      # also refuses a tag that is not strict semver, which is the right answer
+      # for a dispatch with a typo in it.
+      - id: gate
+        env:
+          TAG: ${{ steps.target.outputs.tag }}
+        run: scripts/tag-gate.sh "$TAG" >>"$GITHUB_OUTPUT"
+
+      # Does github.com/<repo>/releases/latest/download resolve to THIS tag?
+      # Only then can a leg run the documented one-liner with nothing pinned,
+      # which is the path every user takes and therefore the one worth
+      # exercising. It does not resolve for a prerelease - release.yml marks
+      # those, and marking is the whole mechanism that keeps them off the
+      # default install - and it does not resolve at all on a repository whose
+      # only releases are prereleases, where the endpoint is a 404. Asking is
+      # cheaper than inferring and is right in all three cases.
+      - id: latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.target.outputs.tag }}
+        run: |
+          latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name 2>/dev/null || true)
+          if [ "$latest" = "$TAG" ]; then
+            echo "install-smoke: latest resolves to $TAG — the legs run the one-liner unpinned" >&2
+            printf 'pin=\n' >>"$GITHUB_OUTPUT"
+          else
+            echo "install-smoke: latest is ${latest:-nothing}, not $TAG — the legs pin CCDAD_VERSION" >&2
+            printf 'pin=%s\n' "$TAG" >>"$GITHUB_OUTPUT"
+          fi
+
+      # Empty on the first release, which turns the upgrade leg off rather than
+      # failing it. scripts/previous-release.sh says why.
+      - id: previous
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.target.outputs.tag }}
+        run: scripts/previous-release.sh "$TAG" >>"$GITHUB_OUTPUT"
+
+      - name: Say what this run does not cover
+        run: |
+          echo "::notice title=Install smoke covers three of six release assets::Installed here: ccdad-linux-amd64, ccdad-darwin-arm64, ccdad-windows-amd64. Never installed: ccdad-darwin-amd64 (GitHub's macOS runners are arm64), ccdad-windows-arm64 (its Windows runners are amd64), ccdad-linux-arm64 (ubuntu-latest is amd64)."
+
+  fresh:
+    name: fresh install (${{ matrix.os }})
+    needs: resolve
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      # §11.5, and the reason the matrix is worth having: one OS failing is
+      # information about that OS, and cancelling the other two throws it away
+      # at exactly the moment it is most wanted.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+
+      # Which bytes this run executed. main moves, so a run that goes red six
+      # months from now is otherwise about a script nobody can identify.
+      - name: Record the installer under test
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          name=install.sh
+          if [ "$RUNNER_OS" = Windows ]; then
+            name=install.ps1
+          fi
+          url=https://raw.githubusercontent.com/$REPO/main/$name
+          curl -fsSL "$url" -o installer.copy
+          echo "install-smoke: $url"
+          sha256sum installer.copy 2>/dev/null || shasum -a 256 installer.copy
+
+      # install.ps1's PATH write is the one thing in either installer that no
+      # test can reach. scripts/install_ps1_test.go skips its whole driver on
+      # Windows deliberately: Add-CcdadToUserPath appends to the real
+      # HKCU\Environment, so `go test ./...` on a contributor's machine would
+      # leave one t.TempDir() in their PATH per run, permanently, and broadcast
+      # it into effect. This runner is disposable, so here it can run for real -
+      # and here is the only place §11.3's two landmines are ever executed. The
+      # decision they guard, Get-CcdadUpdatedPath, is unit-tested off Windows;
+      # the registry round-trip around it is not, and that is what these two
+      # steps read. Inline rather than in a script with a test of its own,
+      # because a test for it would be this workflow.
+      - name: Record the user PATH before installing
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $kind = 'absent'
+          $value = ''
+          $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $false)
+          if ($null -ne $key) {
+            try {
+              if ($key.GetValueNames() -contains 'Path') {
+                $kind = [string]$key.GetValueKind('Path')
+                # DoNotExpandEnvironmentNames, so a %VAR% entry is recorded as
+                # itself rather than as today's expansion. That is the shape the
+                # installer writes back in, and therefore the shape the
+                # comparison afterwards has to be in.
+                $value = [string]$key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+              }
+            } finally {
+              $key.Close()
+            }
+          }
+          # Through files and WriteAllText rather than $GITHUB_ENV: Windows
+          # PowerShell 5.1 writes UTF-16 by default, which corrupts that file,
+          # and a PATH is exactly the kind of value worth round-tripping byte
+          # for byte.
+          [System.IO.File]::WriteAllText((Join-Path $env:RUNNER_TEMP 'user-path-kind.txt'), $kind)
+          [System.IO.File]::WriteAllText((Join-Path $env:RUNNER_TEMP 'user-path-value.txt'), $value)
+
+      # §11.1's one-liner, and the pipe is load-bearing rather than decorative:
+      # `curl | bash` puts the script itself on stdin, which is the constraint
+      # install.sh is written around, and a leg that saved it to a file first
+      # would hand it a stdin it never has in real life. The repository is an
+      # environment variable and not `${{ }}` inside the command for the reason
+      # release.yml gives: `${{ }}` substitutes before bash sees the line.
+      - name: Install
+        if: runner.os != 'Windows'
+        env:
+          CCDAD_VERSION: ${{ needs.resolve.outputs.pin }}
+          REPO: ${{ github.repository }}
+        run: curl -fsSL "https://raw.githubusercontent.com/$REPO/main/install.sh" | bash
+
+      - name: Install
+        if: runner.os == 'Windows'
+        # Windows PowerShell 5.1, which is what a stock Windows has and what
+        # install.ps1 is written for, down to the TLS 1.2 line and the
+        # ASCII-only rule. `shell: pwsh` would test PowerShell 7 instead, which
+        # is not what someone installing ccdad for the first time is running.
+        shell: powershell
+        env:
+          CCDAD_VERSION: ${{ needs.resolve.outputs.pin }}
+          REPO: ${{ github.repository }}
+        run: irm "https://raw.githubusercontent.com/$env:REPO/main/install.ps1" | iex
+
+      - name: Assert the version that landed
+        env:
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          # Both installers' DEFAULT directories, deliberately: a leg that
+          # pointed CCDAD_INSTALL_DIR somewhere convenient would stop testing
+          # the location every user gets, and on the POSIX legs it would also
+          # skip the PATH warning that location exists to produce.
+          # $LOCALAPPDATA arrives from Windows with backslashes, which the msys
+          # layer under Git Bash does not resolve consistently.
+          if [ "$RUNNER_OS" = Windows ]; then
+            bin=${LOCALAPPDATA//\\//}/Programs/ccdad/ccdad.exe
+          else
+            bin=$HOME/.local/bin/ccdad
+          fi
+          scripts/smoke-version.sh "$TAG" "$bin"
+
+      - name: Assert the installer's PATH write
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $installDir = Join-Path $env:LOCALAPPDATA 'Programs\ccdad'
+          $kindBefore = [System.IO.File]::ReadAllText((Join-Path $env:RUNNER_TEMP 'user-path-kind.txt'))
+          $valueBefore = [System.IO.File]::ReadAllText((Join-Path $env:RUNNER_TEMP 'user-path-value.txt'))
+
+          $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $false)
+          if ($null -eq $key) { throw 'HKCU\Environment could not be opened for reading' }
+          try {
+            if (-not ($key.GetValueNames() -contains 'Path')) {
+              throw 'the installer left no Path value in HKCU\Environment'
+            }
+            $kindAfter = [string]$key.GetValueKind('Path')
+            $valueAfter = [string]$key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+          } finally {
+            $key.Close()
+          }
+
+          function Split-PathValue([string]$v) {
+            if ([string]::IsNullOrEmpty($v)) { return @() }
+            return @($v.Split(';') | Where-Object { $_ -ne '' })
+          }
+          $before = Split-PathValue $valueBefore
+          $after = Split-PathValue $valueAfter
+
+          # Landmine 2: [Environment]::SetEnvironmentVariable writes REG_SZ, and
+          # writing that over a REG_EXPAND_SZ value silently destroys %VAR%
+          # expansion for every entry in it - including entries that have
+          # nothing to do with ccdad.
+          if ($kindBefore -ne 'absent' -and $kindAfter -cne $kindBefore) {
+            throw "HKCU\Environment\Path was $kindBefore and is now $kindAfter - every %VAR% entry in it just stopped expanding"
+          }
+
+          # Landmine 1: $env:Path is Machine+User concatenated, so reading it
+          # and writing it back to User scope duplicates the entire machine PATH
+          # into the user's, permanently, and the next installer to do the same
+          # doubles it again. Asked as "what appeared" rather than by looking
+          # for one known machine entry, so any shape of it is caught. This is
+          # deliberately not a recomputation of Get-CcdadUpdatedPath: a
+          # recomputation would agree with the installer about a wrong answer.
+          $added = @($after | Where-Object { $before -notcontains $_ })
+          if ($added.Count -eq 0) {
+            throw "the installer added nothing to the user PATH, so $installDir is not on it"
+          }
+          if ($added.Count -gt 1) {
+            throw "the installer added $($added.Count) entries to the user PATH, want only ${installDir}: $($added -join ', ')"
+          }
+          if (-not [string]::Equals($added[0].TrimEnd('\'), $installDir.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)) {
+            throw "the installer added '$($added[0])' to the user PATH, want '$installDir'"
+          }
+          $lost = @($before | Where-Object { $after -notcontains $_ })
+          if ($lost.Count -ne 0) {
+            throw "the installer dropped these entries from the user PATH: $($lost -join ', ')"
+          }
+
+          Write-Host "install-smoke: the user PATH gained $installDir and nothing else, still $kindAfter"
+
+  # One leg, on the cheapest runner. What it adds over the three above is §11.2
+  # fix 3 - stop the daemon before replacing the binary, which clauth does not
+  # need because launchd owns its process and ccdad does because its daemon is
+  # self-managed and holds a singleton lock.
+  #
+  # install.ps1's upgrade path is NOT covered and is the first thing to add if
+  # this ever grows a second upgrade leg: a running .exe cannot be overwritten
+  # at all, so it renames the old one aside and deletes it, which is real work
+  # that only Windows does.
+  upgrade:
+    name: upgrade over ${{ needs.resolve.outputs.previous }}
+    needs: resolve
+    # The first release has nothing to upgrade from.
+    if: needs.resolve.outputs.previous != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Record the installer under test
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          url=https://raw.githubusercontent.com/$REPO/main/install.sh
+          curl -fsSL "$url" -o installer.copy
+          echo "install-smoke: $url"
+          sha256sum installer.copy
+
+      - name: Install the previous release
+        env:
+          CCDAD_VERSION: ${{ needs.resolve.outputs.previous }}
+          REPO: ${{ github.repository }}
+        run: curl -fsSL "https://raw.githubusercontent.com/$REPO/main/install.sh" | bash
+
+      # Also the only exercise CCDAD_VERSION gets: the fresh legs run unpinned
+      # whenever `latest` lets them.
+      - name: Assert the previous release landed
+        env:
+          PREV: ${{ needs.resolve.outputs.previous }}
+        run: scripts/smoke-version.sh "$PREV" "$HOME/.local/bin/ccdad"
+
+      - name: Start a daemon for the upgrade to strand
+        env:
+          PREV: ${{ needs.resolve.outputs.previous }}
+        run: |
+          ccdad=$HOME/.local/bin/ccdad
+
+          # The previous release may predate the daemon command group -
+          # v0.1.0-rc1 does, v0.1.0 does not - and install.sh already
+          # contemplates exactly that:
+          # it treats a non-zero `daemon stop` as "nothing to stop" rather than
+          # aborting the upgrade. Asking is safe because `daemon status` is a
+          # probe and is deliberately off the auto-start allow-list, so it never
+          # starts what it is probing. 0 is running and 5 is not running;
+          # anything else is a binary with no such command, where 2 is Cobra's
+          # unknown subcommand retagged as a usage error.
+          code=0
+          "$ccdad" daemon status >/dev/null 2>&1 || code=$?
+          case $code in
+          0 | 5) ;;
+          *)
+            echo "::notice title=Upgrade leg could not test the daemon handover::$PREV has no 'daemon' command (exit $code), so the assertion that an upgrade stops the old daemon did not run in this release's smoke test. Every other step in this leg did."
+            echo "OLD_DAEMON_PID=" >>"$GITHUB_ENV"
+            exit 0
+            ;;
+          esac
+
+          "$ccdad" daemon start
+          # `daemon start` waits for the SINGLETON, and the status document is
+          # published a moment after that lock is taken - so the pid can be
+          # missing for a poll or two on a daemon that is already up.
+          pid=
+          for _ in $(seq 1 40); do
+            pid=$("$ccdad" daemon status --json | jq -r '.daemon.pid // empty')
+            [ -z "$pid" ] || break
+            sleep 0.25
+          done
+          case $pid in
+          '' | *[!0-9]*)
+            echo "install-smoke: no pid in 'ccdad daemon status --json' after starting a daemon" >&2
+            "$ccdad" daemon status --json >&2 || true
+            exit 1
+            ;;
+          esac
+          kill -0 "$pid"
+          echo "install-smoke: the daemon to strand is pid $pid"
+          echo "OLD_DAEMON_PID=$pid" >>"$GITHUB_ENV"
+
+      - name: Install this release over it
+        env:
+          CCDAD_VERSION: ${{ needs.resolve.outputs.pin }}
+          REPO: ${{ github.repository }}
+        run: curl -fsSL "https://raw.githubusercontent.com/$REPO/main/install.sh" | bash
+
+      - name: Assert the new version replaced it
+        env:
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: scripts/smoke-version.sh "$TAG" "$HOME/.local/bin/ccdad"
+
+      # Without this the leg proves nothing the fresh legs do not: the binary
+      # would be new, the version would be right, and the old daemon would still
+      # be running old code against the same accounts.
+      - name: Assert the old daemon went with it
+        run: |
+          ccdad=$HOME/.local/bin/ccdad
+
+          if [ -n "${OLD_DAEMON_PID:-}" ]; then
+            # install.sh runs the OLD binary's `daemon stop`, which polls the
+            # singleton rather than returning the moment it asks - so the
+            # process should already be gone. Polled anyway: "the lock was
+            # released" and "the process exited" are microseconds apart, and a
+            # bare check would be flaky about which one it caught.
+            gone=
+            for _ in $(seq 1 40); do
+              if ! kill -0 "$OLD_DAEMON_PID" 2>/dev/null; then
+                gone=yes
+                break
+              fi
+              sleep 0.25
+            done
+            if [ -z "$gone" ]; then
+              echo "install-smoke: pid $OLD_DAEMON_PID survived the upgrade — the old daemon is running old code" >&2
+              exit 1
+            fi
+            echo "install-smoke: pid $OLD_DAEMON_PID went with the upgrade"
+          fi
+
+          # And nothing holds the singleton now. 5 is a definite "not running",
+          # which is the whole reason it is not 1: 1 would also be returned by a
+          # daemon that is up and a lock that cannot be read.
+          code=0
+          "$ccdad" daemon status || code=$?
+          if [ "$code" -ne 5 ]; then
+            echo "install-smoke: 'ccdad daemon status' exited $code after the upgrade, want 5 (not running)" >&2
+            exit 1
+          fi
