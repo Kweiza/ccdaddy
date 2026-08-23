@@ -669,6 +669,14 @@ func setupPathHome(t *testing.T, seed ...string) string {
 func TestFishBlockRunsUnderFish(t *testing.T) {
 	bin, err := exec.LookPath("fish")
 	if err != nil {
+		// CI installs fish on the Linux leg and sets this, so that the step
+		// silently breaking — a renamed package, a changed image — turns this
+		// back into a skip that still reports green. A skip is the one test
+		// result that looks like coverage and is not.
+		if os.Getenv("CCDAD_REQUIRE_FISH") != "" {
+			t.Fatal("CCDAD_REQUIRE_FISH is set but fish is not on PATH; the fish block would go back to " +
+				"being asserted as text and never executed")
+		}
 		t.Skip("fish is not installed; the fish block is asserted as text and never executed here")
 	}
 	file := filepath.Join(t.TempDir(), "block.fish")
