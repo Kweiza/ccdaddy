@@ -77,8 +77,9 @@ func TestEnableReturnsAnAccountToRotation(t *testing.T) {
 	}
 }
 
-// Disabling every account is a completed action, not §9.3's 4: nothing was
-// blocked. The engine reports having nothing to rotate to when it next looks.
+// Disabling every account is a completed action, not the exit contract's 4:
+// nothing was blocked. The engine reports having nothing to rotate to when it
+// next looks.
 func TestDisablingTheLastAccountIsStillSuccess(t *testing.T) {
 	isolate(t)
 	seedAccount(t, "u-1", "one@example.com")
@@ -227,7 +228,7 @@ func TestAliasClear(t *testing.T) {
 	}
 }
 
-// §5.1 forbids a leading '-' so an alias can never be read as a flag. pflag
+// An alias may not start with '-', so it can never be read as a flag. pflag
 // parses before Args runs, so without this the user is told about a shorthand
 // flag they never typed.
 func TestAliasLeadingHyphenNamesTheRule(t *testing.T) {

@@ -20,7 +20,7 @@ func at(s string) time.Time {
 }
 
 // readRaw returns status.json as a generic map, which is how an external
-// consumer of the §9.4 contract sees it.
+// consumer of the `--json` contract sees it.
 func readRaw(t *testing.T) map[string]any {
 	t.Helper()
 	body, err := os.ReadFile(mustPath(StatusPath()))
@@ -219,7 +219,7 @@ func TestStatusWriterRepublishesWhenTheFileWasTruncated(t *testing.T) {
 
 func TestStatusFileIsPrivate(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("§10.3: chmod is a no-op on Windows and nothing may depend on the mode")
+		t.Skip("chmod is a no-op on Windows and nothing may depend on the mode")
 	}
 	isolate(t)
 	if err := os.MkdirAll(filepath.Dir(mustPath(StatusPath())), 0o700); err != nil {
@@ -249,10 +249,10 @@ func TestStatusWriterCreatesTheStore(t *testing.T) {
 	}
 }
 
-// §9.4's contract is additive, and the reason it has to be right in v1 is that
-// an upgrade leaves an old daemon running against a new CLI until something
-// stops it. Both directions are the same requirement: ignore what you do not
-// know.
+// The `--json` contract is additive, and the reason it has to be right in v1
+// is that an upgrade leaves an old daemon running against a new CLI until
+// something stops it. Both directions are the same requirement: ignore what
+// you do not know.
 func TestReadStatusIgnoresUnknownFields(t *testing.T) {
 	isolate(t)
 	if err := os.MkdirAll(filepath.Dir(mustPath(StatusPath())), 0o700); err != nil {

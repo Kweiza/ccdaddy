@@ -35,7 +35,7 @@ const (
 	// RejectionRefused means the authorize REQUEST was refused, so a retry
 	// sends the same thing again and fails the same way.
 	RejectionRefused
-	// RejectionUnrecognized is an error value outside the spec's set — the case
+	// RejectionUnrecognized is an error value outside RFC 6749's set — the case
 	// where the bytes are least trustworthy, so none are kept.
 	RejectionUnrecognized
 )

@@ -17,7 +17,8 @@ import (
 
 // defaultPollTimeout bounds one poll end to end: a token round trip plus the
 // usage call. It is generous because the alternative to waiting is an account
-// that reads as UNKNOWN, and §7.2 says an unknown account cannot be ranked.
+// that reads as UNKNOWN — unknown headroom is never read as zero, so the
+// account falls into a tier of its own with no figure to compare it on.
 const defaultPollTimeout = 45 * time.Second
 
 // cacheTimeout bounds the wait for the usage cache's own lock. Every writer is
@@ -28,7 +29,7 @@ const cacheTimeout = 5 * time.Second
 // stateTimeout bounds the wait for the engine state lock.
 const stateTimeout = 5 * time.Second
 
-// Engine is §8.4's tick body: the poller fleet, the scheduler, and the
+// Engine is the tick loop's body: the poller fleet, the scheduler, and the
 // unattended switch.
 //
 // One rule shapes the whole type. The tick NEVER waits on the network. It
@@ -50,7 +51,7 @@ type Engine struct {
 	// describe an endpoint's behaviour without one.
 	AccessToken func(ctx context.Context, uuid string) (string, error)
 	FetchUsage  func(ctx context.Context, accessToken string) (*usage.Snapshot, error)
-	// Now is the clock, and Rand the jitter source §7.4 wants.
+	// Now is the clock, and Rand the jitter source the poll policy wants.
 	Now  func() time.Time
 	Rand func() float64
 	// PollTimeout bounds one poll. Zero means defaultPollTimeout.
@@ -72,8 +73,9 @@ type Engine struct {
 	// Snapshot also reaches.
 	//
 	// They suppress the repeat of the notices that would otherwise be logged on
-	// every evaluation for as long as the machine stays as it is. §7's engine is
-	// a 1 Hz loop; a warning it re-emits every second is a warning nobody reads.
+	// every evaluation for as long as the machine stays as it is. The tick loop
+	// runs about once a second; a warning it re-emits every second is a warning
+	// nobody reads.
 	//
 	// saidClaimNotice holds the TEXT rather than a flag, because that notice can
 	// change while remaining a notice — an unreadable owner document becoming an
@@ -87,8 +89,9 @@ type Engine struct {
 }
 
 // pollRecord is what the last poll attempt of an account produced. It lives
-// here rather than in the cache because it is engine state, and task 34's
-// authority rule gives engine state to status.json alone.
+// here rather than in the cache because it is engine state, and the rule that
+// every field has exactly one authoritative file gives engine state to
+// status.json alone.
 type pollRecord struct {
 	at   time.Time
 	err  string
@@ -138,9 +141,9 @@ func (e *Engine) logf(format string, a ...any) {
 	}
 }
 
-// Config is the §7 knobs currently in force, and ConfigError whatever went
-// wrong last reading them. Both are for the operator's benefit; the engine has
-// already used the config either way.
+// Config is the auto-switch engine's knobs currently in force, and ConfigError
+// whatever went wrong last reading them. Both are for the operator's benefit;
+// the engine has already used the config either way.
 func (e *Engine) Config() config.Config {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -182,7 +185,7 @@ func (e *Engine) Snapshot() Status {
 	return out
 }
 
-// Tick is one iteration of §8.4.
+// Tick is one iteration of the tick loop.
 func (e *Engine) Tick(ctx context.Context) error {
 	now := e.now()
 	s, err := store.Open()
@@ -191,9 +194,9 @@ func (e *Engine) Tick(ctx context.Context) error {
 	}
 	accounts := s.Accounts()
 
-	// §8.4's "pick up external config changes", read once per tick and shared
-	// by the scheduler and the decision. Reload never fails usefully: it
-	// returns the config to run on plus a warning, and §7.6 rule 4 makes the
+	// External config changes, picked up once per tick and shared by the
+	// scheduler and the decision. Reload never fails usefully: it returns the
+	// config to run on plus a warning, and the last-good-config rule makes the
 	// warning the whole point — a broken hand-edit leaves the engine on the
 	// last config that PARSED rather than reverting a tuned threshold to stock.
 	cfg, cfgErr := e.reloader.Reload()
@@ -220,7 +223,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 
 	res, swapErr := e.act(s, ev)
 	// Dispatched AFTER the decision, and handed the live account rather than
-	// looking it up. §7.4's cadence branches on which account is active, and a
+	// looking it up. The poll cadence branches on which account is active, and a
 	// poller that read that from the engine's published state would be racing
 	// the publish this same tick is about to do — the account's very first poll
 	// would take the active cadence or the candidate one depending on which
@@ -450,7 +453,7 @@ func (e *Engine) handleFailure(a store.Account, cfg config.Config, err error,
 		return
 
 	case errors.Is(err, tokens.ErrLiveTokenStale):
-		// §7.2 UNKNOWN, and NOT an endpoint failure. Claude Code is the one
+		// This is UNKNOWN, and NOT an endpoint failure. Claude Code is the one
 		// that rotates the live login, and an eight-hour-old token means Claude
 		// Code has not run in eight hours — so there is no session whose
 		// rotation is urgent, and this must not feed AIMD or quarantine
@@ -473,9 +476,9 @@ func (e *Engine) handleFailure(a store.Account, cfg config.Config, err error,
 
 	// Everything else: a transport failure, a 503, a 401 from the usage
 	// endpoint. None of them is evidence about the account, and quarantining on
-	// one turns a single outage into a manual re-login for every account —
-	// §7.2's named defect. Only a REJECTED refresh token qualifies, and
-	// ClassifyRefresh is the only thing allowed to say so.
+	// one turns a single outage into a manual re-login for every account. Only
+	// a REJECTED refresh token qualifies, and ClassifyRefresh is the only thing
+	// allowed to say so.
 	if strategy.ClassifyRefresh(err).Quarantines() {
 		e.quarantine(a.UUID, cfg, now)
 	}
@@ -498,10 +501,10 @@ func (e *Engine) quarantine(uuid string, cfg config.Config, now time.Time) {
 // commit writes the reading and the next schedule. snap is nil for a poll that
 // produced no reading, and adjust is the rate-limit rule when there was one.
 //
-// A failed poll never erases the last good reading. §7.2: an account that could
-// not be read is UNKNOWN, and an unknown one that used to have evidence still
-// has that evidence — throwing it away would make one bad minute look like a
-// fresh account with no history.
+// A failed poll never erases the last good reading: an account that could not
+// be read is UNKNOWN, and an unknown one that used to have evidence still has
+// that evidence — throwing it away would make one bad minute look like a fresh
+// account with no history.
 func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now time.Time,
 	identitySize int, cfg config.Config, active bool,
 	adjust func(pollpolicy.State) pollpolicy.State) {
@@ -564,9 +567,9 @@ func pollStateOf(e usage.Entry) pollpolicy.State {
 	}
 }
 
-// exhausted is §7.4's "every window spent", read off the binding one: the
-// binding window is whichever has least left, so an account over the threshold
-// there is over it everywhere that matters.
+// exhausted is "every window spent", read off the binding one: the binding
+// window is whichever has least left, so an account over the threshold there is
+// over it everywhere that matters.
 func exhausted(h strategy.Headroom, cfg config.Config) bool {
 	if !h.Known {
 		return false
@@ -598,7 +601,7 @@ func (e *Engine) record(uuid string, at time.Time, err error) {
 }
 
 // publish builds the status document. It carries engine state and NOTHING a
-// reader could take a quota number from: §8.4's promise that `list` and `status
+// reader could take a quota number from: the promise that `list` and `status
 // --json` can never disagree only holds while every figure has exactly one
 // authoritative file, and quota's is usage.json.
 func (e *Engine) publish(accounts []store.Account, cache *usage.Cache,
@@ -647,7 +650,7 @@ func accountState(a store.Account, cache *usage.Cache, quarantined bool,
 	}
 	entry, ok := cache.Get(a.UUID)
 	if !ok || entry.Snapshot == nil {
-		// §7.2: NOT an empty account, and it must never render as 0%.
+		// Unknown is NOT an empty account, and it must never render as 0%.
 		return StateUnknown
 	}
 	h := strategy.HeadroomOf(entry.Snapshot)

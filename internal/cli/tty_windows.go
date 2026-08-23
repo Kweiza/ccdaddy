@@ -8,7 +8,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// setConsoleVT turns on ANSI escape processing for f's console (§10.3).
+// setConsoleVT turns on ANSI escape processing for f's console.
 //
 // A Windows console does not interpret escape sequences unless
 // ENABLE_VIRTUAL_TERMINAL_PROCESSING is set on the handle, and the flag is off

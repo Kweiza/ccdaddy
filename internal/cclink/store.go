@@ -123,14 +123,14 @@ func loadFrom(path string) (Blob, error) {
 // Neither check triggers a rollback. With a same-directory atomic rename
 // there is no partially-written state to restore, and if Claude Code wrote
 // after us, a blind restore would clobber ITS write instead of preventing
-// damage. This is what satisfies spec 4.4 step 7 ("on any failure after
-// step 5 begins, restore from the pre-write snapshot") for a compromise: the
-// step is vacuous here, because the one case with lingering state to worry
-// about is exactly the case a restore would make worse. The caller gets the
-// error and should re-read and verify rather than assume either side's
-// state.
+// damage. This is what satisfies the rollback rule -- on any failure once
+// the write has begun, restore from the pre-write snapshot -- for a
+// compromise: the rule is vacuous here, because the one case with lingering
+// state to worry about is exactly the case a restore would make worse. The
+// caller gets the error and should re-read and verify rather than assume
+// either side's state.
 //
-// Activate does not itself surface unrecognized top-level keys (spec 4.3's
+// Activate does not itself surface unrecognized top-level keys (the
 // unknown-key probe). That is deferred to the CLI layer: it already holds
 // the live Blob via Load and can call UnknownKeys directly, without widening
 // this function's signature for every caller that does not need the result.

@@ -368,7 +368,7 @@ func TestDaemonExitMatrix(t *testing.T) {
 	}
 }
 
-// The idiom §9.3 introduced exit 5 for, executed. It is only safe while 5 means
+// The idiom exit 5 was introduced for, executed. It is only safe while 5 means
 // a definite no: fold "cannot determine" into it and this loop spawns a daemon
 // per invocation forever on an NFS mount with no lock daemon.
 func TestStatusThenStartIsSafeWhenTheLockCannotBeProbed(t *testing.T) {
@@ -554,8 +554,8 @@ func TestStopEscalatesAfterTheWaitOnAPlatformThatCan(t *testing.T) {
 	}
 }
 
-// §9.4: a --json caller receives exactly one object on stdout. The exit code is
-// the other half of the answer and stays non-zero — emitting {"running":false}
+// A --json caller receives exactly one object on stdout. The exit code is the
+// other half of the answer and stays non-zero — emitting {"running":false}
 // with exit 0 rebuilds the ambiguity the code split exists to remove.
 func TestDaemonStatusJSONStillExitsNonZero(t *testing.T) {
 	isolate(t)
@@ -601,10 +601,10 @@ func TestDaemonStatusJSONMatchesTheDashboardShape(t *testing.T) {
 	}
 }
 
-// §8.4 rotates daemon.log out from under any reader. A follower that keeps the
-// file open across that keeps reading the RENAMED inode: every line after the
-// first rotation is silently lost, and on Windows a handle opened without
-// share-delete blocks the rename outright.
+// The daemon rotates daemon.log out from under any reader. A follower that
+// keeps the file open across that keeps reading the RENAMED inode: every line
+// after the first rotation is silently lost, and on Windows a handle opened
+// without share-delete blocks the rename outright.
 func TestFollowLogPicksUpTheNewFileAfterARotation(t *testing.T) {
 	isolate(t)
 	writeDaemonLog(t, "first line\n")

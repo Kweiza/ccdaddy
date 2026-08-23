@@ -49,8 +49,8 @@ func TestCodeForPlainError(t *testing.T) {
 
 // The numeric values ARE the contract. Every other assertion in this package
 // compares a produced constant against the same constant, which cannot notice a
-// renumbering — and spec §9.3 exists precisely because cswap collapsed two
-// meanings onto one number.
+// renumbering — and the exit contract exists precisely because cswap collapsed
+// two meanings onto one number.
 func TestExitCodeLiterals(t *testing.T) {
 	want := map[ExitCode]int{
 		ExitOK: 0, ExitFailure: 1, ExitUsage: 2, ExitNothingToDo: 3,

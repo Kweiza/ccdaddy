@@ -2,7 +2,7 @@
 // singleton that decides whether one is running, and the detached spawn that
 // starts one.
 //
-// §8.1's layout is three files with no overlap in how they are used, and the
+// The layout is three files with no overlap in how they are used, and the
 // split is not stylistic. Windows LockFileEx locks are MANDATORY rather than
 // advisory, so a read overlapping a range another handle holds exclusively
 // fails with ERROR_LOCK_VIOLATION. The universal Unix idiom — lock the pidfile,
@@ -17,7 +17,7 @@
 //	~/.ccdad/status.json   never locked; temp + atomic rename per tick; read
 //	                       freely
 //
-// daemon.log is a fourth file the spec's table does not name. It is never
+// daemon.log is a fourth file the table above does not name. It is never
 // locked and never read by the daemon itself; it exists here so the layout
 // stays in one place, which is what `ccdad doctor` checks for drift against.
 package daemon

@@ -158,8 +158,8 @@ func TestCreditGateAllowsAnArmedAccountOnceSubscriptionIsExhausted(t *testing.T)
 
 // Step 3: max_auto_spend of 0 is the default, and it means exit 4 and a
 // notification — never a silent no-op. Reporting "nothing to do" here is the
-// exact cswap conflation §9.3 calls out, and it turns a money-blocked engine
-// into something a cron job cannot see.
+// exact cswap conflation the exit contract exists to fix, and it turns a
+// money-blocked engine into something a cron job cannot see.
 func TestCreditGateBlocksLoudlyWhenSpendingIsNotOptedIn(t *testing.T) {
 	g := CreditGate(enabledExtra(f(10000), f(0)), 0, true)
 

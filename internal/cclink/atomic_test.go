@@ -212,8 +212,8 @@ func TestWriteFileAtomicReaderNeverSeesPartialFile(t *testing.T) {
 			if err := WriteFileAtomic(path, payload, 0o600); err != nil {
 				// On Windows this is not necessarily a defect. The reader
 				// below reopens the file forever, and every reopen leaves the
-				// replaced name delete-pending for a moment; §10.3 sizes the
-				// bounded retry for a TRANSIENT antivirus or indexer handle,
+				// replaced name delete-pending for a moment; the bounded
+				// retry is sized for a TRANSIENT antivirus or indexer handle,
 				// not for a reader that never stops. Recorded and reported
 				// after the wait, where it becomes a skip rather than a
 				// failure — the property under test is what the reader saw,
@@ -232,8 +232,8 @@ func TestWriteFileAtomicReaderNeverSeesPartialFile(t *testing.T) {
 	// BLOCKING the replace, but the replaced file then sits delete-pending
 	// until that handle closes, and MoveFileEx onto a name in that state
 	// answers ERROR_ACCESS_DENIED. A reader that reopens with no pause at all
-	// keeps the name permanently in it, and the writer spends all ten of the
-	// bounded retries §10.3 sizes for a TRANSIENT antivirus handle against
+	// keeps the name permanently in it, and the writer spends all ten of its
+	// bounded retries, sized for a TRANSIENT antivirus handle, against
 	// interference that never stops. Measured: this test failed on
 	// windows-latest with "replacing .credentials.json: Access is denied".
 	//

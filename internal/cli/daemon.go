@@ -14,8 +14,8 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 )
 
-// The daemon group is where §9.3's exit taxonomy earns the two codes it added
-// to the reference tools' sets, so the mapping is the contract here and the
+// The daemon group is where the exit taxonomy earns the two codes it added to
+// the reference tools' sets, so the mapping is the contract here and the
 // commands are what serve it:
 //
 //	status   0 running · 5 not running · 1 cannot determine
@@ -34,8 +34,8 @@ import (
 // error, which is why "cannot determine" never reaches a spawn or a signal.
 //
 // 3 rather than 5 for "already running" and "nothing to stop" is the other half
-// of §9.3: 3 means the world is already as you asked and 5 is a negative answer
-// to a probe. Only `status` and `logs` are probes.
+// of the taxonomy: 3 means the world is already as you asked and 5 is a
+// negative answer to a probe. Only `status` and `logs` are probes.
 var (
 	// singletonHeld is the liveness authority for start, stop and restart. They
 	// do not need the published document, and Observe would read it anyway.
@@ -62,8 +62,8 @@ var (
 	// loaded machine is wasted on every idle one, and a sleep short enough to
 	// feel quick is a restart whose new daemon races the old one for the
 	// singleton and loses. Ten seconds is the outer bound because the thing
-	// being waited for is a tick that must finish — §8.4's tick executes a
-	// credential swap, and cutting one short is what abandons Claude Code's
+	// being waited for is a tick that must finish — the daemon's tick executes
+	// a credential swap, and cutting one short is what abandons Claude Code's
 	// lock directories.
 	daemonPollInterval = 50 * time.Millisecond
 	daemonWaitTimeout  = 10 * time.Second
@@ -591,9 +591,9 @@ func tailLines(body []byte, n int) []byte {
 // followLog prints what is appended to path until ctx is cancelled.
 //
 // It opens and closes the file on every poll instead of holding it, which is
-// what carries it through §8.4's rotation. A follower that keeps the handle
-// goes on reading the RENAMED inode — every line after the first rotation
-// silently lost, forever — and on Windows a handle opened without
+// what carries it through the daemon's log rotation. A follower that keeps the
+// handle goes on reading the RENAMED inode — every line after the first
+// rotation silently lost, forever — and on Windows a handle opened without
 // FILE_SHARE_DELETE blocks the rename outright, wedging rotation for as long as
 // the follower is attached. Go's os.Open does pass share-delete, so only the
 // first of those is live here; the fix for it happens to be the fix for both.

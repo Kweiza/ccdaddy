@@ -55,8 +55,8 @@ func TestExportDefaultCarriesNoCredentials(t *testing.T) {
 	}
 }
 
-// §5.1: idx recompacts on every removal, so an export carrying it would
-// reproduce a stale ordinal on the machine it is imported into.
+// idx recompacts on every removal, so an export carrying it would reproduce a
+// stale ordinal on the machine it is imported into.
 func TestExportOmitsIdx(t *testing.T) {
 	isolate(t)
 	stubStdoutTTY(t, false)
@@ -69,8 +69,8 @@ func TestExportOmitsIdx(t *testing.T) {
 	}
 }
 
-// §4.3: the drift probe belongs in the artifact, not only on stderr — the
-// artifact is what outlives the terminal it was taken in.
+// The unknown-key drift probe belongs in the artifact, not only on stderr —
+// the artifact is what outlives the terminal it was taken in.
 func TestExportSurfacesUnknownCredentialKeys(t *testing.T) {
 	isolate(t)
 	stubStdoutTTY(t, false)
@@ -87,10 +87,11 @@ func TestExportSurfacesUnknownCredentialKeys(t *testing.T) {
 	}
 }
 
-// §9.1 puts three conditions on --include-mcp and they are enforced together.
-// The flag on its own is a usage error rather than a silent upgrade to --full:
-// the difference between the two payloads is every MCP client secret on the
-// machine.
+// Three conditions ride together on --include-mcp: it needs --full, it warns
+// loudly on stderr, and it is the only path by which mcpOAuth leaves the
+// machine. The flag on its own is a usage error rather than a silent upgrade
+// to --full: the difference between the two payloads is every MCP client
+// secret on the machine.
 func TestIncludeMCPRequiresFull(t *testing.T) {
 	isolate(t)
 	stubStdoutTTY(t, false)
@@ -130,8 +131,8 @@ func TestIncludeMCPWarnsLoudlyAndCarriesBothHalves(t *testing.T) {
 	if payload.Machine == nil {
 		t.Fatal("the payload carries no machine block")
 	}
-	// §4.1: mcpOAuthClientConfig is the client-secret half. Carrying only the
-	// token half leaves MCP logins that cannot refresh.
+	// mcpOAuthClientConfig is the client-secret half. Carrying only the token
+	// half leaves MCP logins that cannot refresh.
 	if !strings.Contains(string(payload.Machine.MCPOAuth), "MCP-AT") {
 		t.Error("mcpOAuth is missing from the machine block")
 	}

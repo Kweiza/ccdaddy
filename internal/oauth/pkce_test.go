@@ -94,8 +94,9 @@ func TestNewPKCEVerifierIsHighEntropy(t *testing.T) {
 	}
 }
 
-// The type promises the verifier is never logged. Enforce it: Task 11 puts a
-// PKCE inside a login struct that may well end up in a debug line or an error.
+// The type promises the verifier is never logged. Enforce it: a PKCE is
+// carried through a whole login attempt, and any value on that path may well
+// end up in a debug line or an error.
 func TestNewPKCEDoesNotLeakVerifierWhenPrinted(t *testing.T) {
 	p, err := NewPKCE()
 	if err != nil {

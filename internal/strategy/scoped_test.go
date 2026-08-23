@@ -144,7 +144,7 @@ func TestModelNarrowsTheFixedModelWindowsToo(t *testing.T) {
 }
 
 // A surface cap is not a model cap. Naming a model says nothing about it, so it
-// keeps binding — the deliberate seam in §7.1's rule.
+// keeps binding — the deliberate seam in the --model narrowing rule.
 func TestModelNeverNarrowsASurfaceWindow(t *testing.T) {
 	s := &usage.Snapshot{
 		SevenDay: win(10, 48*time.Hour),
@@ -347,7 +347,7 @@ func TestRankNarrowsTheWholePassWithTheModelOption(t *testing.T) {
 // SubscriptionExhausted opens the credit gate, so it has to ask the same
 // question the ranking does: an account that is only out of ANOTHER model's
 // quota is not exhausted for this session, and spending money on it would be
-// §7.3 failing open.
+// the gate failing open.
 func TestSubscriptionExhaustedNarrowsWithTheModel(t *testing.T) {
 	cands := []Candidate{sub("u-1", &usage.Snapshot{
 		FiveHour:       win(10, time.Hour),

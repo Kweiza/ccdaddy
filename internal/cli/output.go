@@ -19,13 +19,13 @@ var errSilent = errors.New("")
 // --json caller always receives exactly one document.
 //
 // The indentation is a decision, not a default: it is what jq-shaped consumers
-// read and what a line-oriented one cannot, which is exactly why §9.4's one
-// exception — `auto`'s NDJSON stream — must never come through here. A stream
-// encoded by this helper arrives as `{`, `  "kind": …`, `}`, and `head -1`
-// returns an opening brace.
+// read and what a line-oriented one cannot, which is exactly why the one
+// exception to the `--json` contract — `auto`'s NDJSON stream — must never
+// come through here. A stream encoded by this helper arrives as `{`,
+// `  "kind": …`, `}`, and `head -1` returns an opening brace.
 //
-// §9.4 is one rule for every read command rather than a habit each of them
-// keeps, so it is asserted across the whole command tree in
+// The `--json` contract is one rule for every read command rather than a habit
+// each of them keeps, so it is asserted across the whole command tree in
 // json_contract_test.go — including that every document has the shape this
 // function gives it, which is how a command that stopped coming through here
 // gets noticed.
@@ -41,8 +41,8 @@ func writeJSON(cmd *cobra.Command, payload any) error {
 // accountJSON renders an account for a --json payload.
 //
 // uuid leads because it is the key; idx is included for display but `ccdad
-// --help` states, as spec §5.1 requires, that it is an ordinal rather than a
-// key — and no payload is ever keyed on it.
+// --help` states, in its stability contract, that it is an ordinal rather than
+// a key — and no payload is ever keyed on it.
 func accountJSON(a store.Account) map[string]any {
 	out := map[string]any{
 		"uuid":  a.UUID,

@@ -139,8 +139,8 @@ func TestLoopbackRedirectURI(t *testing.T) {
 	}
 }
 
-// A zero port means the loopback listener never bound, a case §6.4 explicitly
-// contemplates. Building the URL anyway would send http://localhost:0/callback
+// A zero port means the loopback listener never bound, so the login degrades to
+// manual-only. Building the URL anyway would send http://localhost:0/callback
 // and turn a local bug into an opaque 400 from the authorization server.
 func TestLoopbackRedirectURIRejectsAnUnboundPort(t *testing.T) {
 	for _, port := range []int{0, -1, 65536} {

@@ -20,11 +20,11 @@ func envVarFor(kind string) string {
 	return "CLAUDE_CODE_OAUTH_TOKEN"
 }
 
-// chooseTarget is the targetless grammar: the engine picks, under §7.2's
-// margins and §7.3's gate. The decision itself is switcher.Evaluate — the same
-// call `ccdad auto` and the daemon make, because the moment there are two
-// copies the hand-verified path and the unattended path diverge. What stays
-// here is the wording.
+// chooseTarget is the targetless grammar: the engine picks, under the
+// anti-flap margins and the credit gate. The decision itself is
+// switcher.Evaluate — the same call `ccdad auto` and the daemon make, because
+// the moment there are two copies the hand-verified path and the unattended
+// path diverge. What stays here is the wording.
 func chooseTarget(cmd *cobra.Command, s *store.Store, strategyName, model string, force bool) (store.Account, error) {
 	stderr := cmd.ErrOrStderr()
 
@@ -50,7 +50,8 @@ func chooseTarget(cmd *cobra.Command, s *store.Store, strategyName, model string
 		fmt.Fprintf(stderr, "note: %v; using the built-in defaults.\n", ev.ConfigErr)
 	}
 	if ev.Forced {
-		// --force is the explicit bypass of §7.2's margins, and only of those.
+		// --force is the explicit bypass of the anti-flap margins, and only
+		// of those.
 		fmt.Fprintf(stderr, "note: --force is overriding the anti-flap hold (%s).\n", ev.Plan.Reason)
 	}
 	if ev.NoReadings {
@@ -99,9 +100,10 @@ func atMostOneAccount(verb string) cobra.PositionalArgs {
 	}
 }
 
-// checkSwitchFlags is spec §9.1's two rejections. They are asymmetric and easy
-// to invert, so they are written out one per branch rather than folded together:
-// --strategy is refused WITH an explicit target, --model WITHOUT --strategy.
+// checkSwitchFlags opens with the two flag rejections that are asymmetric and
+// easy to invert, so they are written out one per branch rather than folded
+// together: --strategy is refused WITH an explicit target, --model WITHOUT
+// --strategy. The rest of the function is ordinary argument checking.
 func checkSwitchFlags(args []string, strategyName, model string) error {
 	if strategyName != "" && len(args) == 1 {
 		return UsageError("switch --strategy picks the account itself, so it cannot be given one as well; " +
@@ -239,10 +241,10 @@ func newSwitchCmd() *cobra.Command {
 			res, err := switcher.Execute(s, switcher.Request{
 				Target: target, LiveUUID: liveUUID, Force: force,
 			})
-			// Spec §4.3: drift in the credentials file is demonstrated, not
-			// hypothetical — six machine keys appeared after clauth's carry list
-			// was written. Merge preserves what it does not recognize, but the
-			// operator still needs to know a new key exists.
+			// The unknown-key probe: drift in the credentials file is
+			// demonstrated, not hypothetical — six machine keys appeared after
+			// clauth's carry list was written. Merge preserves what it does not
+			// recognize, but the operator still needs to know a new key exists.
 			//
 			// Reported for a merge that happened, and for one that failed part
 			// way, because the keys are in the file either way. NOT for a no-op:

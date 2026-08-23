@@ -13,8 +13,8 @@ import (
 )
 
 // StatusSchemaVersion is the version stamped into every document this binary
-// writes. §9.4's contract is ADDITIVE: fields are added, never repurposed or
-// removed, so a reader of any vintage can read a document of any vintage by
+// writes. The `--json` contract is ADDITIVE: fields are added, never repurposed
+// or removed, so a reader of any vintage can read a document of any vintage by
 // ignoring what it does not recognise. Bumping this number is therefore not how
 // a field is added — it is how a reader is told that something it may care
 // about is new, and nothing in ccdad refuses a document on the strength of it.
@@ -26,7 +26,7 @@ import (
 // document. Both directions have to work on the day of the upgrade.
 const StatusSchemaVersion = 1
 
-// statusFilePerm matches the rest of the store. §10.3: Windows gets no chmod,
+// statusFilePerm matches the rest of the store. chmod is a no-op on Windows,
 // so this is a Unix-only property and nothing may depend on it.
 const statusFilePerm = 0o600
 
@@ -42,14 +42,14 @@ const (
 	// StateCandidate is a healthy account the engine could switch to.
 	StateCandidate AccountState = "candidate"
 	// StateExhausted is over the threshold, and still polled: quota can be
-	// granted or reset before the advertised timestamp (§7.4).
+	// granted or reset before the advertised timestamp.
 	StateExhausted AccountState = "exhausted"
-	// StateQuarantined is held out of rotation by §7.2's dead-refresh-token rule.
+	// StateQuarantined is held out of rotation by a dead refresh token.
 	StateQuarantined AccountState = "quarantined"
 	// StateDisabled was taken out of rotation by the user.
 	StateDisabled AccountState = "disabled"
 	// StateUnknown is an account whose usage could not be read. It is NOT an
-	// empty account (§7.2), and it must never render as 0%.
+	// empty account, and it must never render as 0%.
 	StateUnknown AccountState = "unknown"
 )
 
@@ -74,12 +74,12 @@ type AccountStatus struct {
 //
 // # Which file is authoritative
 //
-// §8.4 claims `ccdad list` and `ccdad status --json` can never disagree because
-// the daemon and the CLI read the same cache. That is a claim about usage.json,
-// not about this file, and it only stays true if it is enforced here: if this
-// document also carried utilization percentages, a reader taking quota from
-// status.json while `list` takes it from usage.json would disagree with itself
-// mid-tick, for no reason other than which file it happened to open.
+// `ccdad list` and `ccdad status --json` can never disagree, because the daemon
+// and the CLI read the same cache. That is a claim about usage.json, not about
+// this file, and it only stays true if it is enforced here: if this document
+// also carried utilization percentages, a reader taking quota from status.json
+// while `list` takes it from usage.json would disagree with itself mid-tick,
+// for no reason other than which file it happened to open.
 //
 // So the rule is that every field has exactly ONE authoritative file:
 //
@@ -218,12 +218,12 @@ func (w *StatusWriter) onDisk() bool {
 // "hardening" here would break every older reader the first time a field is
 // added, and it is one line away at all times.
 //
-// It takes NO LOCK, and must not grow one. §8.1 puts this file in the
-// never-locked column, and on Windows LockFileEx locks are MANDATORY: a reader
-// holding one makes the daemon's next rename fail outright. The write is a
-// rename, so a reader sees one whole version of the document or another — and
-// catching the pre-rename inode is legitimate rather than something to guard
-// against.
+// It takes NO LOCK, and must not grow one. The three-file store layout in this
+// package's doc comment puts this file in the never-locked column, and on
+// Windows LockFileEx locks are MANDATORY: a reader holding one makes the
+// daemon's next rename fail outright. The write is a rename, so a reader sees
+// one whole version of the document or another — and catching the pre-rename
+// inode is legitimate rather than something to guard against.
 func ReadStatus() (Status, bool, error) {
 	root, err := storeRoot()
 	if err != nil {
@@ -285,8 +285,8 @@ func SweepStatusTemps() error {
 	return nil
 }
 
-// DaemonState is the answer to "is a daemon running", with the third outcome
-// §8.2 requires.
+// DaemonState is the answer to "is a daemon running", with the third outcome a
+// probe that could not answer requires: "cannot tell" is not "no".
 type DaemonState uint8
 
 const (

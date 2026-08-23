@@ -37,11 +37,11 @@ func writeConfigFile(t *testing.T, body string) {
 	}
 }
 
-// §7.6 rule 4 says an unusable config leaves the engine on the LAST CONFIG THAT
-// PARSED, with a warning — and falling back to the built-in defaults is not
-// that. It is the right answer for a one-shot, which has no previous config to
-// keep, and the wrong one for the daemon, whose thresholds would silently jump
-// back to stock the moment somebody mistyped an edit.
+// The last-good-config rule says an unusable config leaves the engine on the
+// LAST CONFIG THAT PARSED, with a warning — and falling back to the built-in
+// defaults is not that. It is the right answer for a one-shot, which has no
+// previous config to keep, and the wrong one for the daemon, whose thresholds
+// would silently jump back to stock the moment somebody mistyped an edit.
 //
 // So the source is a parameter. Supplied, it is authoritative and the file on
 // disk is not read at all.

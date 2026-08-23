@@ -18,7 +18,9 @@ import (
 // one exists on exactly one platform and this project is developed on another.
 // Build-tagging the spawns to darwin would have shipped the deadline, the kill
 // and the exit-code mapping completely unexercised -- which is the entire
-// substance of the file, and the half of it the brief calls out as dangerous.
+// substance of the file, and the dangerous part of it: a locked keychain on a
+// headless session does not fail, it blocks on an unlock dialog nobody will
+// answer, so a spawn with no deadline never returns.
 //
 // The fixture is this test binary re-executed in a role, the same shape
 // internal/daemon uses. A shell script would have been shorter and would have
@@ -224,10 +226,10 @@ func TestPresentReportsAbsence(t *testing.T) {
 	}
 }
 
-// A locked keychain must not read as a clean machine. This is §8.2's "cannot
-// tell is not no" at the level of one exit code, and it is the mistake that
-// would make the whole check worthless: a machine with a stale credential and a
-// locked keychain would be reported as having neither.
+// A locked keychain must not read as a clean machine. This is "cannot tell is
+// not no" at the level of one exit code, and it is the mistake that would make
+// the whole check worthless: a machine with a stale credential and a locked
+// keychain would be reported as having neither.
 func TestPresentTreatsALockedKeychainAsUnknown(t *testing.T) {
 	fakeSecurity{
 		exit:   1,

@@ -45,7 +45,7 @@ func TestFetchProfileParsesAccountAndOrganization(t *testing.T) {
 		t.Fatalf("FetchProfile() = %v, want nil", err)
 	}
 	if gotMethod != http.MethodGet {
-		t.Fatalf("method = %q, want GET (spec §3.2)", gotMethod)
+		t.Fatalf("method = %q, want GET", gotMethod)
 	}
 	if gotPath != "/api/oauth/profile" {
 		t.Fatalf("path = %q, want /api/oauth/profile", gotPath)
@@ -67,9 +67,9 @@ func TestFetchProfileParsesAccountAndOrganization(t *testing.T) {
 	if got.OrganizationType != "claude_max" || got.RateLimitTier != "default_claude_max_20x" {
 		t.Fatalf("organization = %+v", got)
 	}
-	// OrganizationUUID is load-bearing: the ambiguous-email error in spec §5.1
-	// lists each candidate's organization, so dropping it degrades that error
-	// with nothing else failing.
+	// OrganizationUUID is load-bearing: the ambiguous-email error lists each
+	// candidate's organization, so dropping it degrades that error with nothing
+	// else failing.
 	if got.OrganizationUUID != "org-1" {
 		t.Fatalf("OrganizationUUID = %q, want org-1", got.OrganizationUUID)
 	}

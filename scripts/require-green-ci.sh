@@ -33,9 +33,9 @@
 #   * Wait on `workflow_run`. It does not fire usefully for a tag push, and a
 #     tag is a different ref from the branch CI ran on. The check has to be by
 #     commit, because the commit is the same object under both refs.
-#   * Re-run the matrix here. §11.5 is explicit that the OS matrix is for tests
-#     and the release is one runner; duplicating it doubles the slowest part of
-#     a release and still proves nothing about the branch.
+#   * Re-run the matrix here. The OS matrix is for tests and the release builds
+#     on one runner; duplicating it doubles the slowest part of a release and
+#     still proves nothing about the branch.
 #   * Offer a human override for a RED run. A red CI plus a human in a hurry is
 #     the exact combination the gate exists for, and an input that skips it is
 #     an input someone will pass. The supported answer to "CI never ran on this

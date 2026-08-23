@@ -2,8 +2,8 @@ package usage
 
 import "time"
 
-// Spec §7.5. Weekly windows carry an expected-versus-actual reading once the
-// week is about a day old, and a linear projection that stays --json-only.
+// Weekly windows carry an expected-versus-actual reading once the week is
+// about a day old, and a linear projection that stays --json-only.
 //
 // The suppression is the load-bearing part. In the first hours after a reset
 // elapsed time is tiny, so almost any usage divides out as "far ahead" and a
@@ -18,9 +18,10 @@ const paceMinElapsed = 24 * time.Hour
 // length at all because its resets_at is an expiry).
 const weeklyWindow = 7 * 24 * time.Hour
 
-// IsWeekly reports whether a window is one of the seven-day family, which is the
-// only family §7.5 paces. A five-hour window is shorter than the suppression
-// period, so pacing it would produce nothing but suppressed readings.
+// IsWeekly reports whether a window is one of the seven-day family, which is
+// the only family pace is scoped to. A five-hour window is shorter than the
+// suppression period, so pacing it would produce nothing but suppressed
+// readings.
 //
 // Every SCOPED window is weekly by construction: ScopedWindows admits a limits[]
 // entry only when its kind is weekly_scoped. It is exported because the ranking
@@ -77,9 +78,10 @@ func (r PaceReason) String() string {
 // Pace is how one weekly window's consumption compares with the time elapsed in
 // it.
 //
-// It deliberately carries no projection fields. §7.5 keeps projectedExhaustionAt
-// and willLastToReset out of every human-facing view, and the way to make that
-// stick is to keep them off the struct a renderer ranges over — see Projection.
+// It deliberately carries no projection fields. projectedExhaustionAt and
+// willLastToReset are --json-only, out of every human-facing view, and the way
+// to make that stick is to keep them off the struct a renderer ranges over —
+// see Projection.
 type Pace struct {
 	Reason PaceReason
 	// ExpectedPct is the share of the window that has elapsed, as a percent.
@@ -99,10 +101,10 @@ func (p Pace) OK() bool { return p.Reason == PaceOK }
 
 // Projection is a linear extrapolation of the current burn.
 //
-// It is --json-only by spec §7.5: real usage is bursty, and a straight line
-// through it is too rough to state as fact in a table a human reads. It is
-// reachable only through Pace.Projection, so surfacing it in `list` or `status`
-// has to be a deliberate act.
+// It is --json-only: real usage is bursty, and a straight line through it is
+// too rough to state as fact in a table a human reads. It is reachable only
+// through Pace.Projection, so surfacing it in `list` or `status` has to be a
+// deliberate act.
 type Projection struct {
 	// ExhaustionAt is when the window hits 100% at the current rate.
 	ExhaustionAt time.Time

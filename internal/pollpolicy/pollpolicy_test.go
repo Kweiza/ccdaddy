@@ -9,11 +9,11 @@ import (
 
 var epoch = time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
 
-// The numbers are the whole point of this package: §12 says to port cswap's
-// measured poll policy verbatim, and every behavioural test below is phrased in
-// terms of these, so any assertion would shrink along with a changed constant.
-// This is the one test that cannot.
-func TestTheConstantsAreSpecSevenPointFours(t *testing.T) {
+// The numbers are the whole point of this package: they are cswap's measured
+// poll policy taken over verbatim, and every behavioural test below is phrased
+// in terms of these, so any assertion would shrink along with a changed
+// constant. This is the one test that cannot.
+func TestTheConstantsAreThePollPolicyTable(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		got  time.Duration
@@ -59,7 +59,8 @@ func sample(pct float64) Reading { return Reading{BindingPct: pct, Known: true} 
 func unknown() Reading           { return Reading{} }
 func seen(pct float64) State     { return State{LastBindingPct: pct, HasLastBinding: true} }
 
-// §7.4's four cadences, plus the two the table names only in prose.
+// The four cadences the measured table names outright, plus the two it names
+// only in prose.
 func TestTheCadenceMatchesTheSituation(t *testing.T) {
 	const threshold = 80
 
@@ -111,10 +112,10 @@ func TestTheCadenceMatchesTheSituation(t *testing.T) {
 			want: MinInterval,
 		},
 		{
-			// §7.4: exhausted accounts keep polling, because quota can be
-			// granted or reset before the advertised timestamp and
-			// decision-grade status must not age into "unavailable" while the
-			// scheduler waits.
+			// Exhausted accounts keep polling, because quota can be granted
+			// or reset before the advertised timestamp and decision-grade
+			// status must not age into "unavailable" while the scheduler
+			// waits.
 			name: "exhausted, and still polled",
 			s:    seen(100),
 			in:   Input{Now: epoch, Reading: Reading{BindingPct: 100, Known: true, Exhausted: true}, Threshold: threshold},
@@ -149,7 +150,7 @@ func TestTheFirstPollIsNotMovement(t *testing.T) {
 	}
 }
 
-// §7.2's unknown-is-never-zero rule, applied to the cadence. A reading that
+// The unknown-is-never-zero rule, applied to the cadence. A reading that
 // could not be taken is not 0% used: as zero it looks maximally far from the
 // threshold, and against a previous real sample it looks like a huge move.
 func TestAnUnreadableSampleIsNeitherZeroNorMovement(t *testing.T) {

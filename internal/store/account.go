@@ -50,23 +50,24 @@ type Account struct {
 	Disabled bool `toml:"disabled,omitempty"`
 	// AddedAt is when ccdad first stored this account.
 	AddedAt time.Time `toml:"added_at"`
-	// Credit is the credit balance kept alongside the classification. §5: an
-	// account that is both classifies as Subscription and keeps its credit
-	// balance as a SECONDARY axis, because credits are not spent while a
-	// subscription window still has room — but the engine still has to know
-	// what is there when that window runs out.
+	// Credit is the credit balance kept alongside the classification. An
+	// account that is both — a subscription with overage enabled — classifies
+	// as Subscription and keeps its credit balance as a SECONDARY axis,
+	// because credits are not spent while a subscription window still has
+	// room — but the engine still has to know what is there when that window
+	// runs out.
 	Credit CreditBalance `toml:"credit,omitempty"`
 }
 
 // CreditBalance is what a usage reading last said about an account's overage
 // credits.
 //
-// The two figures are pointers because §7.3 branches on used_credits being nil
-// and fails closed on money: a balance that could not be read must never persist
-// as "$0 spent, full cap available". State is a string rather than a typed enum
-// so that reading an accounts.toml stays free of the usage package; callers turn
-// it back into one with usage.ParseExtraUsageState, which reads anything it does
-// not recognize as unknown.
+// The two figures are pointers because the credit gate branches on used_credits
+// being nil and fails closed on money: a balance that could not be read must
+// never persist as "$0 spent, full cap available". State is a string rather
+// than a typed enum so that reading an accounts.toml stays free of the usage
+// package; callers turn it back into one with usage.ParseExtraUsageState, which
+// reads anything it does not recognize as unknown.
 type CreditBalance struct {
 	// State is usage.ExtraUsageState's name: enabled, disabled, blocked, or
 	// empty for an account no reading has covered yet.

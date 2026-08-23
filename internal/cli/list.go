@@ -67,15 +67,15 @@ func newListCmd() *cobra.Command {
 				visible = append(visible, a)
 			}
 
-			// §9.1's sole exception to "list never fetches", and it happens
-			// BEFORE the cache is read so the listing renders what it just
-			// took rather than what it found on the way in.
+			// The sole exception to "list never fetches", and it happens BEFORE
+			// the cache is read so the listing renders what it just took rather
+			// than what it found on the way in.
 			if refresh {
 				refreshUsage(cmd, s, visible, active, hasActive, now)
 			}
 
 			// The quota half, from the cache `status` reads and no other
-			// source. Without --refresh, list still never fetches (§9.1).
+			// source. Without --refresh, list still never fetches.
 			cache, err := usage.LoadCache()
 			if err != nil {
 				return err
@@ -91,9 +91,9 @@ func newListCmd() *cobra.Command {
 					row := accountJSON(r.Account)
 					row["active"] = r.Active
 					// The same object `ccdad status --json` publishes, built by
-					// the same function from the same cache. §8.4's "can never
-					// disagree" is a property of there being one of these, not
-					// of two of them being written carefully.
+					// the same function from the same cache. That they can never
+					// disagree is a property of there being one of these, not of
+					// two of them being written carefully.
 					if u := usageJSON(r, now); u != nil {
 						row["usage"] = u
 					}
@@ -158,7 +158,7 @@ func newListCmd() *cobra.Command {
 	return cmd
 }
 
-// refreshUsage is `--refresh`: §9.1's one exception to "list never fetches".
+// refreshUsage is `--refresh`: the one exception to "list never fetches".
 //
 // It refreshes the rows this listing is about to PRINT and no others. The
 // endpoint's allowance belongs to an identity and only recovers as old requests
@@ -168,20 +168,20 @@ func newListCmd() *cobra.Command {
 // rather than to show, keeps polling everything on its own schedule.
 //
 // Every failure here is a notice and none of them is the command's exit code.
-// The listing still rendered, which is what `ccdad list` was asked for, and
-// §7.4 makes "no fetch happened" an ordinary outcome rather than a fault — a
-// script that went red because one of five accounts was inside its serveTTL
-// would go red most of the time. A caller that needs to know how fresh a number
-// is reads `usage.fetchedAt` out of --json, which is the machine-readable
-// answer to exactly that question.
+// The listing still rendered, which is what `ccdad list` was asked for, and the
+// poll policy makes "no fetch happened" an ordinary outcome rather than a
+// fault — a script that went red because one of five accounts was inside its
+// serveTTL would go red most of the time. A caller that needs to know how fresh
+// a number is reads `usage.fetchedAt` out of --json, which is the
+// machine-readable answer to exactly that question.
 func refreshUsage(cmd *cobra.Command, s *store.Store, want []store.Account,
 	active store.Account, hasActive bool, now time.Time) {
 
 	errw := cmd.ErrOrStderr()
 	cfg, err := config.Load()
 	if err != nil {
-		// §7.6 rule 4, as `auto` applies it: a mistyped threshold must not stop
-		// the work. Threshold only decides this account's next cadence here.
+		// A mistyped threshold must not stop the work, exactly as `auto` treats
+		// one. Threshold only decides this account's next cadence here.
 		fmt.Fprintf(errw, "note: %v; refreshing on the built-in defaults\n", err)
 		cfg = config.Defaults()
 	}

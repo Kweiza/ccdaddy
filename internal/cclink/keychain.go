@@ -33,7 +33,7 @@ import (
 // execFile rather than a shell.
 //
 // Keychain FIRST, then the file. Never keychain-only. Two consequences, and they
-// are the two §3.3 kept this path for:
+// are the two this path is kept for:
 //
 //   - An item that is present SHADOWS whatever ccdad writes to
 //     .credentials.json, so on a machine running <=2.1.112 a ccdad switch
@@ -60,8 +60,9 @@ import (
 // it.
 //
 // And on a machine actually running <=2.1.112 the item is not stale at all: it
-// is that Claude Code's LIVE login. §12 rates destroying a credential during a
-// switch High, and nothing here is worth spending that on.
+// is that Claude Code's LIVE login. Destroying a credential during a switch is
+// the highest-rated risk this tool carries, and nothing here is worth spending
+// that on.
 //
 // The other half of the same era, recorded because it looks like this file's
 // problem and is not: CLAUDE_SECURESTORAGE_CONFIG_DIR does not occur even once
@@ -219,8 +220,9 @@ func CredentialKeychainItem() KeychainItem { return CredentialKeychainItems()[0]
 // that could have written one of these items had ever heard of it, so a name
 // derived from it names an item that cannot exist.
 //
-// It is not a harmless extra either: `ccdad run` sets that variable by design
-// (§13 Q1), so the old reading made `ccdad doctor` inside a run session look for
+// It is not a harmless extra either: `ccdad run` sets that variable by design —
+// it is how a session's credentials are scoped — so the old reading made `ccdad
+// doctor` inside a run session look for
 // a hash of the SESSION's credential directory and report "no legacy item" with
 // certainty while the real one sat under the unsuffixed name. Reading it the
 // keychain era's way makes both questions agree -- what wrote the item, and what
@@ -230,10 +232,9 @@ func CredentialKeychainItem() KeychainItem { return CredentialKeychainItems()[0]
 // `!process.env.CLAUDE_CONFIG_DIR`, so a variable set to the empty string
 // behaves exactly like an unset one and yields the UNSUFFIXED item. Definedness
 // and truthiness differ on precisely that value, and it is the one a test
-// isolate sets. The half of §3.3's "definedness, not equality" warning that does
-// hold is the half it was written for: setting CLAUDE_CONFIG_DIR to the literal
-// default path still produces a suffixed item, because the value is hashed
-// rather than compared against anything.
+// isolate sets. It is not an EQUALITY test either: setting CLAUDE_CONFIG_DIR to
+// the literal default path still produces a suffixed item, because the value is
+// hashed rather than compared against anything.
 //
 // THE HASHED STRING IS THE RAW VALUE -- not resolved, not cleaned. A7() hands
 // the variable back untouched apart from normalization, and the suffix only
@@ -271,8 +272,8 @@ func keychainHashSuffix(hashed string) string {
 	return "-" + hex.EncodeToString(sum[:])[:8]
 }
 
-// oauthFileSuffix is al().OAUTH_FILE_SUFFIX, which the spec writes as an opaque
-// term and which is in fact one environment variable.
+// oauthFileSuffix is al().OAUTH_FILE_SUFFIX, which reads like an opaque
+// constant and is in fact decided by one environment variable.
 //
 // Claude Code's environment selector is a function that statically returns
 // "prod", so the "-staging-oauth" and "-local-oauth" suffixes it also knows are

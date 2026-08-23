@@ -249,9 +249,10 @@ func (p RefreshParams) refreshScopes() []string {
 // That is a policy about which accounts are worth refreshing, and it belongs to
 // whoever decides to refresh, not to the client that performs one.
 func (c *Client) Refresh(ctx context.Context, p RefreshParams) (*TokenResponse, error) {
-	// Posting an empty refresh token earns a 400 invalid_grant, which is the
-	// signal §7.2 quarantines on — so the laziest mistake a caller can make
-	// would read as a dead account. Refuse it before it reaches the network.
+	// Posting an empty refresh token earns a 400 invalid_grant, the one signal
+	// the anti-flap quarantine fires on — so the laziest mistake a caller can
+	// make would read as a dead account. Refuse it before it reaches the
+	// network.
 	if p.RefreshToken == "" {
 		return nil, fmt.Errorf("refreshing requires a refresh token")
 	}
@@ -331,7 +332,7 @@ func (c *Client) post(ctx context.Context, body map[string]string) (*TokenRespon
 		return nil, fmt.Errorf("building token request: %w", err)
 	}
 	// Content-Type and nothing else, matching what Claude Code's exchange sets
-	// in its own code (spec §3.2).
+	// in its own code.
 	//
 	// That does NOT make the request indistinguishable on the wire, and it is
 	// not meant to. Claude Code posts through axios, whose node adapter adds
@@ -392,7 +393,7 @@ func (c *Client) post(ctx context.Context, body map[string]string) (*TokenRespon
 // `code: typeof r === "string" ? r : (r && typeof r === "object" ? r.type : undefined)`,
 // so an endpoint answering {"error":{"type":"invalid_grant"}} is a dead refresh
 // token to Claude Code; reading only the string shape would miss it and leave
-// §7.2's quarantine signal unfired.
+// the anti-flap quarantine's one signal unfired.
 //
 // Only a member of the closed set is ever returned — an unrecognised code
 // becomes "" — so no byte of the response body escapes and TokenError keeps its
