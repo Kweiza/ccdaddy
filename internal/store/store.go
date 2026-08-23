@@ -154,6 +154,26 @@ func (s *Store) load() error {
 	return nil
 }
 
+// AccountsAt reads a store's accounts WITHOUT creating any part of it.
+//
+// Open is the ordinary entry point and it is the wrong one for a diagnostic:
+// it does an MkdirAll and two Chmods, which is right for every caller that is
+// about to write and manufactures the very thing `ccdad doctor` was asked to
+// report on. This is the same read Open performs, with the creation and the
+// mode tightening left out — a store that is not there yields no accounts
+// rather than being brought into existence.
+//
+// It takes the root rather than resolving one so the caller that already
+// resolved it does not resolve it twice and risk answering about a different
+// directory than the rest of its report.
+func AccountsAt(root string) ([]Account, error) {
+	s := &Store{root: root}
+	if err := s.load(); err != nil {
+		return nil, err
+	}
+	return s.Accounts(), nil
+}
+
 // Accounts returns the managed accounts in display order.
 func (s *Store) Accounts() []Account {
 	out := make([]Account, len(s.data.Accounts))
