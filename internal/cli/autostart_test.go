@@ -87,6 +87,8 @@ func TestAutoStartDoesNotFireForCommandsThatMustNotHaveOne(t *testing.T) {
 		{[]string{"doctor"}, "a diagnostic must not create what it is checking for"},
 		{[]string{"completion", "bash"}, "a daemon per TAB press"},
 		{[]string{"remove", "nobody"}, "deleting an account is not a reason to start an engine"},
+		{[]string{"primary", "nobody", "on"}, "setting an account's money policy is administering ccdad " +
+			"rather than using it, and the engine reads the flag on its next tick either way"},
 		{[]string{"setup-path"}, "the command that runs before `ccdad` even resolves must not spawn an " +
 			"engine for a machine that has no accounts yet"},
 		{[]string{daemon.RunArg}, "the child is itself ccdad, so this one is a fork bomb rather than a bug"},
