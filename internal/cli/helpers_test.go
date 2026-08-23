@@ -139,10 +139,18 @@ func isolate(t *testing.T) string {
 // stubKeychain describes the legacy macOS Keychain one doctor run will see.
 func stubKeychain(t *testing.T, present bool, item cclink.KeychainItem, err error) {
 	t.Helper()
+	stubKeychainCandidates(t, present, item, []cclink.KeychainItem{item}, err)
+}
+
+// stubKeychainCandidates is the same seam for the case that has more than one
+// candidate name -- a decomposed CLAUDE_CONFIG_DIR, where the item ccdad is
+// looking for has two spellings and the report has to name both.
+func stubKeychainCandidates(t *testing.T, present bool, item cclink.KeychainItem, checked []cclink.KeychainItem, err error) {
+	t.Helper()
 	saved := keychainProbe
 	t.Cleanup(func() { keychainProbe = saved })
-	keychainProbe = func(context.Context) (bool, cclink.KeychainItem, error) {
-		return present, item, err
+	keychainProbe = func(context.Context) (cclink.KeychainLookup, error) {
+		return cclink.KeychainLookup{Present: present, Item: item, Checked: checked}, err
 	}
 }
 

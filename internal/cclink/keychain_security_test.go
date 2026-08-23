@@ -476,25 +476,97 @@ func TestLoadKeychainCredentialsRefusesNonJSON(t *testing.T) {
 // The item a probe reports on is the one this environment derives, not a
 // hardcoded name -- otherwise a user with CLAUDE_CONFIG_DIR set would be told
 // about an item Claude Code never wrote.
-func TestCredentialKeychainItemPresentUsesTheDerivedItem(t *testing.T) {
+func TestProbeCredentialKeychainItemUsesTheDerivedItem(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", "/tmp/cc")
 	unsetEnv(t, "CLAUDE_SECURESTORAGE_CONFIG_DIR")
 	t.Setenv("CLAUDE_CODE_CUSTOM_OAUTH_URL", "")
 	t.Setenv("USER", "tester")
 	argv := fakeSecurity{exit: 0}.install(t)
 
-	present, item, err := CredentialKeychainItemPresent(context.Background())
+	found, err := ProbeCredentialKeychainItem(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !present {
-		t.Fatal("present = false, want true")
+	if !found.Present {
+		t.Fatal("Present = false, want true")
 	}
-	if want := "Claude Code-credentials-aa3d8c96"; item.Service != want {
-		t.Fatalf("item.Service = %q, want %q", item.Service, want)
+	if want := "Claude Code-credentials-aa3d8c96"; found.Item.Service != want {
+		t.Fatalf("Item.Service = %q, want %q", found.Item.Service, want)
+	}
+	// One candidate, so one spawn. A composed value must not cost the second
+	// lookup the decomposed case needs.
+	if len(found.Checked) != 1 {
+		t.Fatalf("Checked = %v, want exactly one candidate", found.Checked)
 	}
 	want := []string{"find-generic-password", "-a", "tester", "-s", "Claude Code-credentials-aa3d8c96"}
 	if got := recordedArgv(t, argv); !reflect.DeepEqual(got, want) {
 		t.Fatalf("argv = %q, want %q", got, want)
+	}
+}
+
+// The defect the era measurement turned up: 1.0.30 through 2.1.37 hashed
+// CLAUDE_CONFIG_DIR as it came, and only 2.1.38 started normalizing to NFC. A
+// decomposed value therefore has an item under EACH digest depending on which
+// build wrote it, and a probe that tried only the composed one answered "no
+// legacy item" with certainty about a name it had never looked for.
+//
+// The fixture answers 44 (absent) for every lookup, so the assertion is on what
+// was ASKED. `security` is invoked twice and the second invocation carries the
+// raw digest, which is the one a machine on 1.0.30-2.1.37 wrote.
+func TestProbeCredentialKeychainItemTriesBothSpellingsOfADecomposedPath(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", nfdCafe)
+	unsetEnv(t, "CLAUDE_SECURESTORAGE_CONFIG_DIR")
+	t.Setenv("CLAUDE_CODE_CUSTOM_OAUTH_URL", "")
+	t.Setenv("USER", "tester")
+	argv := fakeSecurity{exit: securityNotFoundCode}.install(t)
+
+	found, err := ProbeCredentialKeychainItem(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found.Present {
+		t.Fatal("Present = true for a fixture that reports absence")
+	}
+	var got []string
+	for _, item := range found.Checked {
+		got = append(got, item.Service)
+	}
+	want := []string{"Claude Code-credentials-0873cca0", "Claude Code-credentials-16eb4464"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Checked = %q, want %q", got, want)
+	}
+	// And the second name really reached `security` rather than only appearing
+	// in the report. The fixture truncates its argv file on every run, so what
+	// is left is the LAST invocation -- which must be the raw-digest lookup.
+	wantArgv := []string{"find-generic-password", "-a", "tester", "-s", "Claude Code-credentials-16eb4464"}
+	if got := recordedArgv(t, argv); !reflect.DeepEqual(got, wantArgv) {
+		t.Fatalf("the last spawn was %q, want %q", got, wantArgv)
+	}
+}
+
+// A probe that could not answer must stop, not fall through to the next
+// candidate. "The keychain is locked" is not "the item is not under this name",
+// and a loop that kept going would turn one unanswerable lookup into a
+// confident "no legacy item" -- the exact failure mode the multi-candidate
+// probe was added to remove, reintroduced by the fix for it.
+func TestProbeCredentialKeychainItemStopsAtAnUnanswerableLookup(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", nfdCafe)
+	unsetEnv(t, "CLAUDE_SECURESTORAGE_CONFIG_DIR")
+	t.Setenv("CLAUDE_CODE_CUSTOM_OAUTH_URL", "")
+	t.Setenv("USER", "tester")
+	argv := fakeSecurity{exit: 1, stderr: "The user name or passphrase you entered is not correct."}.install(t)
+
+	found, err := ProbeCredentialKeychainItem(context.Background())
+	if err == nil {
+		t.Fatal("err = nil for a lookup that could not answer")
+	}
+	if found.Present {
+		t.Fatal("Present = true alongside an error")
+	}
+	// The FIRST name is what ran, and nothing after it. If the loop had
+	// continued, the fixture's last argv would name the raw digest.
+	want := []string{"find-generic-password", "-a", "tester", "-s", "Claude Code-credentials-0873cca0"}
+	if got := recordedArgv(t, argv); !reflect.DeepEqual(got, want) {
+		t.Fatalf("argv = %q, want %q — the probe continued past an error", got, want)
 	}
 }
