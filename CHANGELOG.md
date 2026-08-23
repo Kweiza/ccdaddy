@@ -80,8 +80,21 @@ by `uuid` or `alias`.
   your own is still not a reason to refuse; only a config home ccdad created
   for a run is.
 
-- **`ccdad export --include-mcp` no longer says "there are no MCP logins on
-  this machine"** when run from inside a session, which does not carry them.
+- **`ccdad export --include-mcp` no longer speaks for the machine from inside a
+  session.** Neither when there are none to include, nor — the half that
+  matters — when there ARE: it used to write the session's own MCP logins into
+  the file and label them "this machine's", so a backup taken from inside a
+  session held the wrong secrets under the right name.
+
+- **A nested `ccdad run --full-profile` no longer seeds one account's profile
+  from another's.** A profile is seeded from `CLAUDE_CONFIG_DIR`, resolved when
+  the profile is created — which inside a `--full-profile` session is the outer
+  account's profile, not the machine's configuration. Creating a profile there
+  copied that account's settings and its `primaryApiKey` into a second
+  account's profile, at a path nothing lists and `ccdad remove` does not clean.
+  Only the CREATE is refused, so a nested run of an account whose profile
+  already exists still works, and a nested run inside a default-mode session —
+  which does not redirect `CLAUDE_CONFIG_DIR` — is unaffected.
 
 ### Changed
 

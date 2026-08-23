@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -37,16 +36,6 @@ import (
 // The narrowness is load-bearing in the other direction too. The whole test
 // suite runs with a scoped credential home (see isolate), and a DEFINED test
 // here would refuse every command in it.
-
-// goos is runtime.GOOS behind a variable so the Windows half of relInside is
-// reachable from a test on any host.
-//
-// It is not a build tag, and that is the point: filepath picks its separator
-// at BUILD time, so a _windows.go file holding this logic would ship the
-// case-folding decision unexercised by the machine that runs the tests. What a
-// variable cannot fake is the separator, which is why the fold is the only
-// thing gated on it.
-var goos = runtime.GOOS
 
 // scopedSession is a `ccdad run` session this process is running INSIDE.
 type scopedSession struct {
@@ -136,8 +125,18 @@ func inside(container, path string) bool {
 // is a function: "<store>/sessions-old" has "<store>/sessions" as a string
 // prefix and is a different directory, which is the bug every containment
 // check written with HasPrefix has.
+//
+// Rel also settles the case question, which is worth writing down because an
+// earlier version of this file hand-folded the paths on Windows and its
+// comment said Rel does not fold. It does: Rel compares every element with
+// sameWord, and sameWord is `a == b` in path_unix.go and strings.EqualFold in
+// path_windows.go (checked in the Go tree, not reasoned about). So Rel is
+// case-insensitive exactly where the platform is, and a manual fold was both
+// redundant and — on a Linux build with goos forced to "windows" — the only
+// thing its own test was exercising. TestWindowsASessionSpeltInADifferentCase
+// asserts the real behaviour, on the platform that has it.
 func relInside(container, path string) bool {
-	rel, err := filepath.Rel(fold(container), fold(path))
+	rel, err := filepath.Rel(container, path)
 	if err != nil {
 		return false
 	}
@@ -145,16 +144,6 @@ func relInside(container, path string) bool {
 	// treating it as one would refuse a user who scoped a shell at ccdad's own
 	// sessions directory -- an odd thing to do, but theirs to do.
 	return rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
-}
-
-// fold normalises a path for comparison. Windows compares paths without regard
-// to case and filepath.Rel does not, so the two disagree about whether
-// C:\Users\x\.ccdad\sessions contains C:\USERS\X\.CCDAD\SESSIONS\acct-1.
-func fold(path string) string {
-	if goos == "windows" {
-		return strings.ToLower(path)
-	}
-	return path
 }
 
 // scopedSessionRefusals are the commands that must not run inside a `ccdad
@@ -237,9 +226,18 @@ var scopedSessionAllowed = map[string]bool{
 	"ccdad doctor": true,
 	"ccdad export": true,
 
-	// run does not read the scope it inherits, it REPLACES it: newSession and
-	// newProfile both set the child's variables outright. A session inside a
-	// session is two independent sessions.
+	// run REPLACES the scope in the child it launches: newSession and
+	// newProfile both set the child's variables outright, so a session inside
+	// a session is two independent sessions.
+	//
+	// It does not follow that run ignores the scope in its OWN process, and an
+	// earlier version of this comment claimed it did. seedProfile reads
+	// ccpath.ConfigHome() at call time, so creating a profile from inside a
+	// --full-profile session would have seeded it from the OUTER account's
+	// profile — carrying that account's primaryApiKey into this one's. That is
+	// refused in seedProfile, where the read happens, rather than by moving
+	// the whole command here: the other three shapes of `ccdad run` are safe
+	// in a session and useful in one.
 	"ccdad run": true,
 
 	// These write only ccdad's own store, which CCDAD_HOME points at and a

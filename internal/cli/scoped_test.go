@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 )
@@ -278,26 +279,6 @@ func TestTheSessionsContainerItselfIsNotASession(t *testing.T) {
 	}
 }
 
-// Windows compares paths case-insensitively and filepath.Rel does not. The
-// branch is unreachable on the machine this is written on, so it is gated on a
-// package variable rather than on runtime.GOOS -- otherwise it would ship
-// having never been executed, which is the failure mode a build tag has here.
-func TestWindowsMatchesASessionSpeltInADifferentCase(t *testing.T) {
-	isolate(t)
-	saved := goos
-	t.Cleanup(func() { goos = saved })
-	goos = "windows"
-
-	container := filepath.Join(mustPath(ccpath.StoreHome()), SessionsDirName)
-	if !inside(container, filepath.Join(strings.ToUpper(container), "acct-1-1")) {
-		t.Fatal("an upper-cased session path was not recognised on Windows")
-	}
-	goos = "linux"
-	if inside(container, filepath.Join(strings.ToUpper(container), "acct-1-1")) {
-		t.Fatal("an upper-cased session path was folded on a case-sensitive platform")
-	}
-}
-
 // The property autostart.go's allow-list gets from BEING an allow-list, on a
 // rule whose natural shape is a deny-list: a command added later cannot
 // default to "allowed inside a session" silently, because it has no verdict at
@@ -441,4 +422,159 @@ func TestExportDoesNotClaimTheMachineHasNoMCPLoginsFromInsideASession(t *testing
 	if !strings.Contains(stderr, home) {
 		t.Fatalf("export never says which session it is speaking from:\n%s\n%s", stderr, top)
 	}
+}
+
+// The review's finding, pinned. `ccdad run` is allow-listed inside a session
+// on the grounds that it replaces the scope in the CHILD — which is true, and
+// says nothing about what it reads in its own process. seedProfile resolves
+// ccpath.ConfigHome() at call time, so creating a profile from inside a
+// --full-profile session seeded it from the OUTER account's profile, carrying
+// that account's primaryApiKey into this one's config: a credential in a file
+// the user never named, at a path nothing lists and `ccdad remove` never
+// cleans.
+func TestANestedFullProfileRunWillNotSeedOneAccountsProfileFromAnothers(t *testing.T) {
+	isolate(t)
+	seedTokenAccount(t, "u-1", "a@example.com", cclink.APIKeyKind, "sk-ant-api-KEY-A")
+	seedAccount(t, "u-2", "b@example.com")
+	stubClaude(t, ExitOK)
+
+	// Stand where the Bash tool inside `ccdad run --full-profile u-1` stands.
+	outer := enterFullProfileSession(t, "u-1")
+	if err := os.WriteFile(filepath.Join(outer, ccpath.GlobalConfigFile),
+		[]byte(`{"primaryApiKey":"sk-ant-api-KEY-A"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	code, _, stderr, top := runRoot(t, "run", "--full-profile", "2")
+	if code != ExitUsage {
+		t.Fatalf("exit = %d (%s / %s), want %d", code, stderr, top, ExitUsage)
+	}
+	if got := top + stderr; !strings.Contains(got, "inside ccdad's own store") {
+		t.Errorf("the refusal does not say what is wrong with the source: %q", got)
+	}
+
+	// And the half that turns one refusal into a permanent defect: the profile
+	// directory is created before the seed, and its existence is what tells
+	// the NEXT run not to seed. Left behind, u-2's profile would be silently
+	// unseeded forever.
+	inner := filepath.Join(mustPath(ccpath.StoreHome()), ProfilesDirName, "u-2")
+	if _, err := os.Stat(inner); !os.IsNotExist(err) {
+		t.Fatalf("%s was left behind after the seed was refused (stat err: %v); the next run would skip seeding it", inner, err)
+	}
+}
+
+// The narrowness of that refusal, which is the half that keeps it usable: a
+// profile that already exists is never re-seeded, so nothing needs to be read
+// and a nested run of an account that has been run before still works.
+func TestANestedRunStillWorksForAProfileThatAlreadyExists(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "u-1", "a@example.com")
+	seedAccount(t, "u-2", "b@example.com")
+	stub := stubClaude(t, ExitOK)
+	if err := os.MkdirAll(filepath.Join(mustPath(ccpath.StoreHome()), ProfilesDirName, "u-2"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	enterFullProfileSession(t, "u-1")
+
+	if code, _, stderr, top := runRoot(t, "run", "--full-profile", "2"); code != ExitOK {
+		t.Fatalf("exit = %d (%s / %s), want 0", code, stderr, top)
+	}
+	if !stub.started {
+		t.Error("no session was started for a profile that needed no seeding")
+	}
+}
+
+// A DEFAULT-mode session leaves CLAUDE_CONFIG_DIR alone, so ConfigHome is the
+// machine's and seeding is correct. Refusing there would break the ordinary
+// nested run for no reason — which is what a check written on "am I in a
+// session" rather than "is my source inside the store" would have done.
+func TestANestedRunSeedsNormallyFromInsideADefaultModeSession(t *testing.T) {
+	claude := isolate(t)
+	seedAccount(t, "u-1", "a@example.com")
+	seedAccount(t, "u-2", "b@example.com")
+	stub := stubClaude(t, ExitOK)
+	if err := os.WriteFile(filepath.Join(claude, "settings.json"), []byte(`{"theme":"dark"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	enterRunSession(t, "u-1")
+
+	if code, _, stderr, top := runRoot(t, "run", "--full-profile", "2"); code != ExitOK {
+		t.Fatalf("exit = %d (%s / %s), want 0", code, stderr, top)
+	}
+	profile, _ := envOf(stub.spec.Env, "CLAUDE_CONFIG_DIR")
+	if _, err := os.Stat(filepath.Join(profile, "settings.json")); err != nil {
+		t.Fatalf("the profile was not seeded from the machine's config home: %v", err)
+	}
+}
+
+// The review's second finding. The session note landed on the arm that says
+// "there are none", and not on the arm that actually WRITES a secret into the
+// export and calls it the machine's.
+func TestExportSaysWhoseMCPLoginsItIsCarryingFromInsideASession(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "u-1", "a@example.com")
+	home := enterRunSession(t, "u-1")
+	// What Claude Code leaves the moment one MCP server is authenticated
+	// inside the session: run.go says mcpOAuth lives in .credentials.json
+	// under the credential root, which in here is the session.
+	if err := os.WriteFile(filepath.Join(home, ccpath.CredentialsFile),
+		[]byte(`{"claudeAiOauth":{"accessToken":"AT","refreshToken":"RT"},`+
+			`"mcpOAuth":{"srv":{"accessToken":"SESSION-MCP-SECRET"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "backup.json")
+
+	_, _, stderr, _ := runRoot(t, "export", "--full", "--include-mcp", "--out", out)
+
+	if strings.Contains(stderr, "this machine's MCP server logins") {
+		t.Fatalf("the export called the session's MCP logins the machine's:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, home) {
+		t.Fatalf("the export never says which session it spoke for:\n%s", stderr)
+	}
+	// The secret really is in the file — this is a labelling defect, not a
+	// leak, and a test that did not confirm the write would pass against an
+	// export that had silently stopped carrying anything.
+	raw, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "SESSION-MCP-SECRET") {
+		t.Fatal("the export carried no MCP logins at all, so the warning under test never fired")
+	}
+}
+
+// doctor's "no login" branch carries the same scope note as its OK branch, and
+// nothing reached it: an API-key account under --full-profile has no
+// credentials file at all, which is exactly that branch.
+func TestDoctorNamesTheSessionEvenWhenThereIsNoLoginInIt(t *testing.T) {
+	isolate(t)
+	seedTokenAccount(t, "u-1", "a@example.com", cclink.APIKeyKind, "sk-ant-api-XYZ")
+	home := enterFullProfileSession(t, "u-1")
+
+	_, stdout, _, _ := runRoot(t, "doctor", "--json")
+
+	var report struct {
+		Checks []struct {
+			Name   string `json:"name"`
+			Level  string `json:"level"`
+			Detail string `json:"detail"`
+		} `json:"checks"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &report); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range report.Checks {
+		if c.Name != "claude-code" {
+			continue
+		}
+		if !strings.Contains(c.Detail, "no login") {
+			t.Fatalf("this fixture no longer reaches the no-login branch: %q", c.Detail)
+		}
+		if !strings.Contains(c.Detail, "ccdad run") || !strings.Contains(c.Detail, home) {
+			t.Fatalf("the no-login branch does not say the directory is a session: %q", c.Detail)
+		}
+		return
+	}
+	t.Fatal("doctor emitted no claude-code check")
 }

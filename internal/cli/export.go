@@ -162,27 +162,40 @@ func newExportCmd() *cobra.Command {
 			}
 			if includeMCP {
 				payload.Machine = machineKeysOf(live)
-				if payload.Machine == nil {
-					// "on this machine" is a claim about the machine, and
-					// inside a `ccdad run` session it is a claim this command
-					// cannot make: the default mode scopes mcpOAuth away with
-					// the credentials (§3.3's named cost), so an empty answer
-					// in here says nothing about what the live login carries.
-					// Someone backing their MCP logins up from inside a
-					// session would otherwise be told there were none.
-					if session, inSession := currentScopedSession(); inSession {
-						fmt.Fprintf(cmd.ErrOrStderr(),
-							"note: this shell is inside a `ccdad run` session (%s), which does not carry the machine's "+
-								"MCP logins — so there are none to include HERE. Export from a shell outside the session "+
-								"to capture them.\n", session.describe())
-					} else {
-						fmt.Fprintln(cmd.ErrOrStderr(), "note: there are no MCP logins on this machine to include.")
-					}
-				} else {
-					fmt.Fprintln(cmd.ErrOrStderr(),
-						"WARNING: this export carries this machine's MCP server logins, client secrets included. "+
+				// "this machine's" is a claim about the machine, and inside a
+				// `ccdad run` session it is a claim this command cannot make.
+				// machineKeysOf reads cclink.Load(), which resolves the
+				// credential home at call time — so in here it answers for
+				// the session, never for the machine.
+				//
+				// BOTH arms need it, and the empty one is the less important
+				// of the two: that one merely says "none". This one WRITES a
+				// secret into the export and tells the user it is the
+				// machine's, which is how somebody ends up with a backup that
+				// does not hold what they backed it up for.
+				session, inSession := currentScopedSession()
+				whose := "this machine's"
+				if inSession {
+					whose = "this `ccdad run` session's"
+				}
+				switch {
+				case payload.Machine == nil && inSession:
+					fmt.Fprintf(cmd.ErrOrStderr(),
+						"note: this shell is inside a `ccdad run` session (%s), which does not carry the machine's "+
+							"MCP logins — so there are none to include HERE. Export from a shell outside the session "+
+							"to capture them.\n", session.describe())
+				case payload.Machine == nil:
+					fmt.Fprintln(cmd.ErrOrStderr(), "note: there are no MCP logins on this machine to include.")
+				default:
+					fmt.Fprintf(cmd.ErrOrStderr(),
+						"WARNING: this export carries %s MCP server logins, client secrets included. "+
 							"They are not scoped to any account and are not encrypted here. "+
-							"Treat the file as a credential: keep it at 0600, do not commit it, and delete it once restored.")
+							"Treat the file as a credential: keep it at 0600, do not commit it, and delete it once restored.\n", whose)
+					if inSession {
+						fmt.Fprintf(cmd.ErrOrStderr(),
+							"note: those are the session's (%s), NOT the machine's. Export from a shell outside "+
+								"the session to capture the machine's.\n", session.describe())
+					}
 				}
 			}
 
