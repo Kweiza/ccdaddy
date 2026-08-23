@@ -128,6 +128,15 @@ type Options struct {
 	// Horizon is how soon a recovery has to be to win its tier.
 	Horizon  time.Duration
 	Strategy Strategy
+	// Model is the model the session about to run will use, as the user typed
+	// it. Empty is the unqualified pass — every window binds — and is what the
+	// daemon and every reporting caller use. A named model narrows the ranking
+	// to the windows that bind for it; see bindingWindows for §7.1's rule.
+	//
+	// It is a free string rather than a parsed family because the refusal for a
+	// name ccdad cannot place belongs at the CLI, where there is a user to tell.
+	// Reaching the engine, an unplaceable name simply narrows nothing.
+	Model string
 	// MaxAutoSpend is §7.3's ceiling, and it is here for ONE reason: the credit
 	// pool is ordered by armed room, and room cannot be computed without it.
 	//
@@ -227,18 +236,16 @@ func overThreshold(h Headroom, threshold float64) (over, known bool) {
 	return 100-h.Pct > threshold, true
 }
 
-// weeklyResetOf is the soonest reset among the seven-day windows, which is what
+// weeklyResetOf is the soonest reset among the weekly windows, which is what
 // consume-first spends against.
-func weeklyResetOf(s *usage.Snapshot) timeValue {
+//
+// It reads the same narrowed set the headroom does, so --model means one thing
+// in both strategies: a session that named Sonnet does not go chasing an Opus
+// cap's expiry, because that is not quota it is going to spend.
+func weeklyResetOf(s *usage.Snapshot, model string) timeValue {
 	var out timeValue
-	if s == nil {
-		return out
-	}
-	for _, w := range s.RateLimitWindows() {
-		switch w.Name {
-		case usage.WindowSevenDay, usage.WindowSevenDayOAuthApps,
-			usage.WindowSevenDayOpus, usage.WindowSevenDaySonnet:
-		default:
+	for _, w := range bindingWindows(s, model) {
+		if !usage.IsWeekly(w.Name) {
 			continue
 		}
 		at, ok := w.Reset()
@@ -253,9 +260,9 @@ func weeklyResetOf(s *usage.Snapshot) timeValue {
 }
 
 func measure(c Candidate, o Options) Ranked {
-	h := HeadroomOf(c.Usage)
+	h := HeadroomFor(c.Usage, o.Model)
 	rec := recoveryOf(c.Usage, h.Binding)
-	weekly := weeklyResetOf(c.Usage)
+	weekly := weeklyResetOf(c.Usage, o.Model)
 
 	r := Ranked{
 		UUID:           c.UUID,
@@ -450,7 +457,7 @@ func SubscriptionExhausted(cands []Candidate, o Options) bool {
 		return true
 	}
 	for _, c := range subs {
-		over, known := overThreshold(HeadroomOf(c.Usage), o.threshold())
+		over, known := overThreshold(HeadroomFor(c.Usage, o.Model), o.threshold())
 		if !known || !over {
 			return false
 		}

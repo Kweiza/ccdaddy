@@ -18,15 +18,20 @@ const paceMinElapsed = 24 * time.Hour
 // length at all because its resets_at is an expiry).
 const weeklyWindow = 7 * 24 * time.Hour
 
-// isWeekly reports whether a window is one of the seven-day family, which is the
+// IsWeekly reports whether a window is one of the seven-day family, which is the
 // only family §7.5 paces. A five-hour window is shorter than the suppression
 // period, so pacing it would produce nothing but suppressed readings.
-func isWeekly(n WindowName) bool {
+//
+// Every SCOPED window is weekly by construction: ScopedWindows admits a limits[]
+// entry only when its kind is weekly_scoped. It is exported because the ranking
+// asks the same question of the same names — consume-first spends the quota that
+// expires soonest — and two copies of this list would drift.
+func IsWeekly(n WindowName) bool {
 	switch n {
 	case WindowSevenDay, WindowSevenDayOAuthApps, WindowSevenDayOpus, WindowSevenDaySonnet:
 		return true
 	}
-	return false
+	return n.Scoped()
 }
 
 // PaceReason says why a pace reading is or is not available. Every non-OK value
@@ -117,7 +122,7 @@ func (p Pace) Projection() (Projection, bool) {
 
 // PaceOf measures one window against the clock.
 func PaceOf(name WindowName, w Window, now time.Time) Pace {
-	if !isWeekly(name) {
+	if !IsWeekly(name) {
 		return Pace{Reason: PaceNotWeekly}
 	}
 	actual, ok := w.Percent()
@@ -166,12 +171,14 @@ func PaceOf(name WindowName, w Window, now time.Time) Pace {
 	return p
 }
 
-// Pace measures every weekly window the response actually carried. Windows that
-// were absent, or that have nothing to say, are left out rather than reported as
-// a zero reading.
+// Pace measures every weekly window the response actually carried, the scoped
+// ones included: an account whose binding cap is a per-model weekly one would
+// otherwise get no pace reading at all, which is the account the reading is most
+// useful for. Windows that were absent, or that have nothing to say, are left out
+// rather than reported as a zero reading.
 func (s *Snapshot) Pace(now time.Time) map[WindowName]Pace {
 	out := map[WindowName]Pace{}
-	for _, nw := range s.RateLimitWindows() {
+	for _, nw := range s.AllWindows() {
 		// A window the response never carried has no utilization, so PaceOf
 		// reports PaceNoUtilization and this filter drops it — no separate
 		// presence check is needed, and one would be unreachable.

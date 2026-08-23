@@ -497,3 +497,53 @@ func TestHumanDurationReadsAtEveryScale(t *testing.T) {
 		}
 	}
 }
+
+// The binding window can be a per-model or per-surface weekly cap out of
+// limits[]. Both columns read the binding window, and a lookup that only knows
+// the fixed five leaves them blank for an account whose headroom is known — and
+// publishes a bindingWindow name that resolves to nothing.
+func TestStatusRendersAScopedBindingWindow(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	seedAccount(t, "uuid-a", "work@example.com")
+	resets := statusNow.Add(30 * time.Hour)
+	pct := 93.0
+	seedUsageEntry(t, "uuid-a", usage.Entry{
+		FetchedAt: statusNow.Add(-time.Minute),
+		Snapshot: &usage.Snapshot{
+			FiveHour: window(20, statusNow.Add(time.Hour)),
+			Limits: []usage.Limit{usage.LimitFor(usage.LimitInput{
+				Kind: "weekly_scoped", Group: "model", Model: "Fable",
+				Percent: &pct, ResetsAt: &resets,
+			})},
+		},
+	})
+
+	_, human, _, _ := runRoot(t, "status")
+	if !strings.Contains(human, "93%") {
+		t.Errorf("the scoped cap that binds is not in the USED column:\n%s", human)
+	}
+	if strings.Contains(human, "20%") {
+		t.Errorf("five_hour is rendered although the scoped cap is the one that binds:\n%s", human)
+	}
+
+	_, out, _, _ := runRoot(t, "status", "--json")
+	usageObj, ok := accountRow(t, statusJSON(t, out), "uuid-a")["usage"].(map[string]any)
+	if !ok {
+		t.Fatal("no usage object")
+	}
+	name, _ := usageObj["bindingWindow"].(string)
+	if name != "weekly_scoped:model:Fable" {
+		t.Fatalf("bindingWindow = %q, want the scoped cap", name)
+	}
+	if got := usageObj["headroomPct"]; got != 7.0 {
+		t.Errorf("headroomPct = %v, want 7", got)
+	}
+	windows, ok := usageObj["windows"].(map[string]any)
+	if !ok {
+		t.Fatalf("no windows object: %v", usageObj)
+	}
+	if _, ok := windows[name]; !ok {
+		t.Errorf("bindingWindow names %q, which is not one of the published windows %v", name, windows)
+	}
+}

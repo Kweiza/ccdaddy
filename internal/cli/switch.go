@@ -25,7 +25,7 @@ func envVarFor(kind string) string {
 // call `ccdad auto` and the daemon make, because the moment there are two
 // copies the hand-verified path and the unattended path diverge. What stays
 // here is the wording.
-func chooseTarget(cmd *cobra.Command, s *store.Store, strategyName string, force bool) (store.Account, error) {
+func chooseTarget(cmd *cobra.Command, s *store.Store, strategyName, model string, force bool) (store.Account, error) {
 	stderr := cmd.ErrOrStderr()
 
 	// Parsed, not defaulted: checkSwitchFlags has already refused an unknown
@@ -34,7 +34,7 @@ func chooseTarget(cmd *cobra.Command, s *store.Store, strategyName string, force
 	// the config's own strategy key reaches the daemon rather than this command.
 	chosen, _ := strategy.ParseStrategy(strategyName)
 	ev, err := switcher.Evaluate(s, switcher.EvalOptions{
-		Strategy: chosen, HasStrategy: true, Force: force,
+		Strategy: chosen, HasStrategy: true, Force: force, Model: model,
 	})
 	if err != nil {
 		return store.Account{}, err
@@ -110,6 +110,16 @@ func checkSwitchFlags(args []string, strategyName, model string) error {
 	if model != "" && strategyName == "" {
 		return UsageError("switch --model only means something alongside --strategy")
 	}
+	if model != "" {
+		// Refused here rather than absorbed by the engine. A name ccdad cannot
+		// place narrows nothing, so honouring it silently would rank exactly as
+		// if the flag had not been typed — and the user would be told nothing
+		// while believing they had excluded another model's spent cap.
+		if _, ok := strategy.ModelFamily(model); !ok {
+			return UsageError("cannot tell which model family %q is: name one of %s, "+
+				"with or without a version", model, strings.Join(strategy.ModelFamilyNames(), ", "))
+		}
+	}
 	if strategyName == "" {
 		if len(args) == 0 {
 			// The targetless grammar exists, but it is the --strategy one.
@@ -138,8 +148,10 @@ func newSwitchCmd() *cobra.Command {
 			"With no ACCOUNT, --strategy lets the auto-switch engine choose, under the same\n" +
 			"anti-flap margins the daemon uses and reading the same on-disk usage cache.\n" +
 			"It never polls: run the daemon, or 'ccdad list --refresh', to freshen the cache.\n\n" +
-			"--model is accepted for forward compatibility and currently changes nothing:\n" +
-			"the ranking has no model dimension yet, so honouring it would mean inventing one.",
+			"--model names the model the session will run, which NARROWS the ranking: the\n" +
+			"weekly caps scoped to other models stop counting against an account, so one\n" +
+			"whose Opus week is spent can still be chosen for a Sonnet session. Caps that\n" +
+			"are not per-model always count.",
 		Args:          atMostOneAccount("switch"),
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -193,7 +205,7 @@ func newSwitchCmd() *cobra.Command {
 					return UsageError("%s", err.Error())
 				}
 			} else {
-				target, err = chooseTarget(cmd, s, strategyName, force)
+				target, err = chooseTarget(cmd, s, strategyName, model, force)
 				if err != nil {
 					return err
 				}
@@ -271,6 +283,6 @@ func newSwitchCmd() *cobra.Command {
 	cmd.Flags().StringVar(&strategyName, "strategy", "",
 		"let the engine choose the account: one of "+strings.Join(strategy.StrategyNames(), ", ")+" (no ACCOUNT)")
 	cmd.Flags().StringVar(&model, "model", "",
-		"reserved; accepted only alongside --strategy and currently has no effect on the ranking")
+		"the model this session will run: ignore other models' weekly caps when ranking (needs --strategy)")
 	return cmd
 }
