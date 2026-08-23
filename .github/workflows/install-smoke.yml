@@ -515,10 +515,15 @@ jobs:
   # does not need because launchd owns its process and ccdad does because its
   # daemon is self-managed and holds a singleton lock.
   #
-  # install.ps1's upgrade path is NOT covered and is the first thing to add if
-  # this ever grows a second upgrade leg: a running .exe cannot be overwritten
-  # at all, so it renames the old one aside and deletes it, which is real work
-  # that only Windows does.
+  # install.ps1's upgrade path is not covered HERE, and the part of it that only
+  # Windows can answer no longer needs a leg: Install-CcdadBinary was split out
+  # of Invoke-CcdadInstall so that scripts/install_ps1_windows_test.go can call
+  # it against a REAL running image on ci.yml's windows-latest leg, where the
+  # plain overwrite is asserted to be refused before the rename-aside is asked
+  # to succeed. What a second upgrade leg would add over that is the published
+  # installer replacing a published release on a machine nobody prepared, which
+  # is the same argument the fresh Windows leg above makes for itself -- worth
+  # having, and a runner-cost decision rather than a gap.
   upgrade:
     name: upgrade over ${{ needs.resolve.outputs.previous }}
     needs: resolve

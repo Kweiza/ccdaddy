@@ -78,6 +78,19 @@ by `uuid` or `alias`.
 
 ### Fixed
 
+- **A Windows uninstall that could not schedule its own cleanup no longer
+  reports that the binary could not be removed.** Removing the running binary
+  is two steps on Windows and they fail separately: renaming the .exe aside —
+  which is what stops `ccdad` resolving — needs no privilege, while the
+  reboot-time delete that tidies the leftover writes to a machine-scoped
+  registry key and needs administrator rights. The second step failing is the
+  ordinary outcome for every install that did not need elevation in the first
+  place, and the line printed for it began `… could not be removed`, which
+  sends a user looking for a binary that is no longer at that path, or
+  reinstalling over a machine that is already clean. It now says the binary is
+  gone from that path and names the single leftover file, which is all that is
+  actually left.
+
 - **The legacy keychain item is derived the way the builds that WROTE one
   derived it.** ccdad was using the formula carried by today's Claude Code,
   where `CLAUDE_SECURESTORAGE_CONFIG_DIR` outranks `CLAUDE_CONFIG_DIR` and the

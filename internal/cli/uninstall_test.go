@@ -13,8 +13,17 @@ import (
 
 // stubExecutable points the uninstaller at a binary of the test's own, so that
 // a test of "delete the binary" does not delete the test binary.
+//
+// It also holds the HKLM seam, because on Windows "delete the binary" is a
+// rename plus a MOVEFILE_DELAY_UNTIL_REBOOT that writes the MACHINE's
+// PendingFileRenameOperations. Every test below reaches that line on the
+// windows-latest leg, so without the quarantine `go test ./...` queues one
+// reboot-time delete per test into the registry of whatever machine ran it.
+// uninstall_windows_test.go is where the real call is exercised, once, and
+// takes its own entry back.
 func stubExecutable(t *testing.T, path string) string {
 	t.Helper()
+	quarantineDelayedDelete(t)
 	saved := executablePath
 	t.Cleanup(func() { executablePath = saved })
 	executablePath = func() (string, error) { return path, nil }

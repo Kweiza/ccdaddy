@@ -233,10 +233,30 @@ func runUninstall(cmd *cobra.Command, assumeYes bool) error {
 		fmt.Fprintf(out, "%s owns %s, so it was left alone — remove it with %s.\n", owner, exe, uninstallHint(owner))
 	default:
 		scheduled, err := removeSelf(exe)
+		// Four arms for three outcomes, because on Windows the two halves of
+		// removeSelf fail separately: the rename that takes ccdad off PATH
+		// needs no privilege, and the reboot-time delete that tidies the
+		// leftover needs administrator rights. An uninstall run by a standard
+		// user — which is every install that did not need elevation in the
+		// first place — lands in the first arm.
 		switch {
+		case err != nil && scheduled:
+			// "could not be removed" would be false in the way that matters
+			// here: `ccdad` has already stopped resolving. A user told
+			// otherwise goes looking for a binary that is no longer at that
+			// path, or reinstalls over a machine that is already clean. What
+			// is actually left is one dotfile, and the error names it.
+			fmt.Fprintf(out, "%s is gone from that path, but a leftover could not be cleaned up: %v\n", exe, err)
 		case err != nil:
 			fmt.Fprintf(out, "%s could not be removed: %v\n", exe, err)
 		case scheduled:
+			// Windows, always. A process cannot delete its own image there, so
+			// removeSelf renames it aside whether or not anything else is
+			// running — `scheduled` is not a fallback it sometimes takes. The
+			// arm below is every other platform, which unlinks the file and
+			// keeps running out of the inode. Neither is dead code: they are
+			// one answer each, and uninstall_windows_test.go and
+			// uninstall_other.go are what pin them that way.
 			fmt.Fprintf(out, "%s is running, so it was renamed aside and is scheduled for deletion at the next restart.\n", exe)
 		default:
 			fmt.Fprintf(out, "Removed %s.\n", exe)
