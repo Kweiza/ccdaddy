@@ -66,15 +66,22 @@ type Engine struct {
 	inFlight map[string]struct{}
 	polls    map[string]pollRecord
 	status   Status
-	// saidOverridden is touched only from Tick, which Loop runs one at a time,
-	// so it is deliberately outside the mutex above: the fields under it are
-	// the ones a poller goroutine or Snapshot also reaches.
+	// saidOverridden, saidContended and saidClaimNotice are touched only from
+	// Tick, which Loop runs one at a time, so they are deliberately outside the
+	// mutex above: the fields under it are the ones a poller goroutine or
+	// Snapshot also reaches.
 	//
-	// It suppresses the repeat of the one notice that would
-	// otherwise be logged on every evaluation for as long as the environment
-	// stays as it is. §7's engine is a 1 Hz loop; a warning it re-emits every
-	// second is a warning nobody reads.
-	saidOverridden bool
+	// They suppress the repeat of the notices that would otherwise be logged on
+	// every evaluation for as long as the machine stays as it is. §7's engine is
+	// a 1 Hz loop; a warning it re-emits every second is a warning nobody reads.
+	//
+	// saidClaimNotice holds the TEXT rather than a flag, because that notice can
+	// change while remaining a notice — an unreadable owner document becoming an
+	// unlockable filesystem is a different fact about the same claim, and
+	// latching on a bool would print only whichever came first.
+	saidOverridden  bool
+	saidContended   bool
+	saidClaimNotice string
 
 	wg sync.WaitGroup
 }
@@ -272,10 +279,33 @@ func (e *Engine) act(s *store.Store, ev switcher.Evaluation) (switcher.Result, e
 				"preference to the credentials file — nothing the engine does can change what a session uses")
 		}
 		return res, nil
+	case switcher.Contended:
+		// Latched for the same reason Overridden is: this state persists until
+		// somebody changes a machine, and it is reached at 1 Hz.
+		//
+		// A daemon that HOLDS the claim never gets here — its own claim answers
+		// "mine" — so reaching this at all means this daemon is running
+		// degraded, without the claim, while another store's engine has it.
+		// That is worth one loud line.
+		if !e.saidContended {
+			e.saidContended = true
+			e.logf("stood down: the ccdad store at %s (pid %d) is driving this Claude Code login, "+
+				"and this daemon does not hold the claim on it. Two stores on one login undo each "+
+				"other's switches; point CLAUDE_CONFIG_DIR at a directory of this store's own, or "+
+				"stop that engine", res.Claim.Owner.Store, res.Claim.Owner.PID)
+		}
+		return res, nil
 	case switcher.Raced:
 		e.logf("stood down: the live login changed while the switch was being decided")
 		return res, nil
 	}
+	if n := res.Claim.Notice; n != "" && n != e.saidClaimNotice {
+		e.saidClaimNotice = n
+		e.logf("%s", n)
+	} else if n == "" {
+		e.saidClaimNotice = ""
+	}
+	e.saidContended = false
 	e.saidOverridden = false
 	if res.CooldownErr != nil {
 		e.logf("%v", res.CooldownErr)

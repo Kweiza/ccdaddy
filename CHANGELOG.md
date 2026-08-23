@@ -18,6 +18,32 @@ by `uuid` or `alias`.
 
 ### Added
 
+- **One engine per Claude Code login.** `CCDAD_HOME` and `CLAUDE_CONFIG_DIR` are
+  independent axes, and moving only the first is the trap: two shells with
+  different stores and the same credential root each took their own daemon
+  singleton and both rewrote the same `.credentials.json`. Nothing was
+  corrupted — the writes are serialised — the two engines simply undid each
+  other's switches, and no command anywhere said so. ccdad now takes a second
+  exclusion on the CREDENTIAL home (`<credential home>/.ccdad/engine.lock`, with
+  `engine.owner` beside it naming the store that holds it, unlocked so it stays
+  readable on Windows where locks are mandatory). A second store's daemon
+  refuses to start and names the store that has it; `ccdad auto` refuses with
+  exit `4`; `ccdad auto --once`, which holds no lock of its own, stands down
+  inside the switch executor; auto-start stops spawning children that would
+  immediately die. An attended `ccdad switch` is never refused — a human typed
+  it — but it says which engine is about to undo it. A filesystem that cannot
+  lock the credential home DEGRADES rather than refusing: the engine keeps
+  running unguarded, and `ccdad doctor` names that. Neither file is ever
+  removed, including by `ccdad uninstall`, because deleting a lock file splits
+  the exclusion it provides and another ccdad store may still be using it.
+
+- **`ccdad doctor` gains a `credential-home` check** — the fourteenth. It reports
+  which credential home this shell resolves, whether an engine is driving it and
+  which store that engine belongs to, and it catches the case nothing else can:
+  a running daemon whose recorded credential home differs from the one you
+  resolve, which is what a daemon started from inside `ccdad run --full-profile`
+  looks like from outside.
+
 - **`ccdad setup-path` puts the binary's directory on your `PATH`.** It is the
   answer to `ccdad: command not found` right after `curl | bash`, which has the
   installer's own script on stdin and so cannot ask permission to edit a startup
@@ -84,6 +110,17 @@ by `uuid` or `alias`.
   have read as a window with everything left.
 
 ### Fixed
+
+- **`ccdad auto --json` no longer reports a stand-down as a completed switch.**
+  The outcome switch had no `default`, so any outcome it did not name fell
+  through to the success path and emitted `{"kind":"switched"}` with exit `0` —
+  to the one consumer that cannot see the machine. It now names every outcome
+  and fails loudly on one it does not know.
+
+- **`ccdad auto` no longer discards a failure to release the daemon singleton.**
+  Its release ran in a deferred closure assigning to an UNNAMED return value, so
+  the assignment went to a dead local and the error vanished. A lock that could
+  not be given back is precisely the error the next invocation trips over.
 
 - **`install.ps1` no longer appends a duplicate `PATH` entry** on a machine
   whose user `PATH` holds `%LOCALAPPDATA%\Programs\ccdad` unexpanded. It reads

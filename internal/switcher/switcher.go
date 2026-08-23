@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
+	"github.com/Kweiza/ccdaddy/internal/credhome"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 )
@@ -80,6 +81,14 @@ const (
 	// Overridden: CLAUDE_CODE_OAUTH_TOKEN is set, so the swap would change
 	// nothing about what Claude Code uses. Unattended callers only.
 	Overridden
+	// Contended: another ccdad STORE's engine is driving this credential home,
+	// so an unattended swap stood down rather than undo its work — which it
+	// would then undo back, forever. Unattended callers only; see credhome.
+	//
+	// Appended at the end of this block on purpose. Nothing persists these
+	// numbers today, and appending is what keeps that true if something ever
+	// does.
+	Contended
 )
 
 func (o Outcome) String() string {
@@ -90,6 +99,8 @@ func (o Outcome) String() string {
 		return "the live login changed while the switch was being decided"
 	case Overridden:
 		return "CLAUDE_CODE_OAUTH_TOKEN is set, so a switch would change nothing"
+	case Contended:
+		return "another ccdad store's engine is driving this Claude Code login"
 	case Switched:
 		return "switched"
 	default:
@@ -154,11 +165,30 @@ type Result struct {
 	// completed swap as a failure.
 	CooldownErr error
 	KeyErr      error
+
+	// Claim is what the credential-home claim said at the moment of the write.
+	//
+	// Unattended, a StandDown here IS the Contended outcome and nothing was
+	// written. Attended it is a warning and the swap happened anyway: a human
+	// typed the command and is watching, and the useful thing to tell them is
+	// that another store's engine is likely to switch it back — not to refuse.
+	//
+	// Its Notice is set when the claim could not be read definitively, which is
+	// never a reason to stand down and always a reason to say something.
+	Claim credhome.Verdict
 }
 
 // activateWith is the locked read-decide-write, as a var so a test can describe
 // a lock takeover without arranging one.
 var activateWith = cclink.ActivateWith
+
+// claimVerdict asks who is driving this credential home, as a var so a test can
+// describe a second store's engine without starting one.
+//
+// The stub is a convenience for the OUTCOME tests here, not evidence that the
+// mechanism works: internal/credhome proves that against a real second process,
+// because a claim is a kernel fact and a fake cannot establish one.
+var claimVerdict = credhome.Decide
 
 // Execute performs the swap: the whole sequence, for both callers.
 //
@@ -224,6 +254,22 @@ func Execute(s *store.Store, req Request) (Result, error) {
 		}
 		if res.LiveKnown && res.Live.UUID == req.Target.UUID && !req.Force {
 			res.Outcome = AlreadyOn
+			return nil, cclink.ErrNoChange
+		}
+		// Decided HERE, under Claude Code's credential locks, for the reason
+		// the doc comment gives about the other two preconditions: this call
+		// may have waited up to cclink.LockTimeout for each of three locks, and
+		// an answer read before that wait is an answer about a machine that has
+		// had half a minute to change.
+		//
+		// Before the LiveUUID precondition, not after. When another store's
+		// engine holds the claim it is also the likeliest reason the live login
+		// moved, and "another engine is driving this login" is the answer that
+		// tells the operator what to do; "the login changed underneath us" only
+		// describes the symptom.
+		res.Claim = claimVerdict()
+		if req.Unattended && res.Claim.StandDown {
+			res.Outcome = Contended
 			return nil, cclink.ErrNoChange
 		}
 		if req.Unattended && observed != req.LiveUUID {

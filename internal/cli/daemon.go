@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Kweiza/ccdaddy/internal/credhome"
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 )
 
@@ -319,6 +320,9 @@ func newDaemonRestartCmd() *cobra.Command {
 // status` reporting 5 — the daemon is real, it just has not reached its first
 // lock yet. The wait is what makes the two commands compose.
 func startDaemon(cmd *cobra.Command) error {
+	if err := refuseAClaimedCredentialHome(cmd); err != nil {
+		return err
+	}
 	if err := spawnDaemon(); err != nil {
 		return err
 	}
@@ -332,6 +336,65 @@ func startDaemon(cmd *cobra.Command) error {
 	}
 	fmt.Fprintf(cmd.ErrOrStderr(), "Started the ccdad daemon%s.\n", runningPIDSuffix())
 	return nil
+}
+
+// credentialHomeClaim is the probe, as a seam, so a test can describe another
+// store's engine without starting one.
+var credentialHomeClaim = credhome.ProbeSettled
+
+// refuseAClaimedCredentialHome stops a start that would immediately be refused
+// by the child, and it has to happen HERE rather than in daemon.Run.
+//
+// Two things make the parent the only place this answer is usable. Spawn
+// detaches the child and releases the process, so nothing the child returns
+// reaches this command — its refusal would go to daemon.log and nowhere else.
+// And the child takes the SINGLETON before the claim, holding it for the whole
+// ~200 ms claim retry while it is being refused: waitForSingleton polls every
+// 50 ms, sees it held, and `daemon start` prints "Started the ccdad daemon."
+// and exits 0 for a process that is already dead.
+//
+// It refuses with 4, not 3. `ccdad daemon status; [ $? -eq 5 ] && ccdad daemon
+// start` is the supervisor idiom this file's exit split exists for, and 3 is
+// the code exit.go tells operators to ignore — so 3 here is that loop spinning
+// forever on a machine nobody is told about. 4 is "wanted, blocked, alert on
+// this", which is exactly the situation.
+//
+// The test is HELD-AND-NOT-OURS, named or not, and it has to match what the
+// child will actually do: credhome.Acquire refuses a claim it cannot attribute
+// exactly as it refuses one it can, because the lock is held either way. A
+// parent that started the daemon on a nameless holder would be printing
+// "starting anyway" over a child that is already doomed — which is this
+// function's whole failure mode, reached by the other door.
+//
+// The probe is the SETTLED one for that reason. Held-but-unnamed is transient
+// by construction, and refusing a start on a microsecond of a departing
+// engine's shutdown would be its own defect.
+//
+// A probe that could not ANSWER is different and starts the daemon: the daemon
+// degrades rather than refusing on that, so the refusal would be made on behalf
+// of a child that would have run.
+func refuseAClaimedCredentialHome(cmd *cobra.Command) error {
+	out := cmd.ErrOrStderr()
+	s, err := credentialHomeClaim()
+	switch {
+	case err != nil:
+		fmt.Fprintf(out, "ccdad could not tell whether another store's engine is driving "+
+			"Claude Code's credential home (%v); starting anyway.\n", err)
+		return nil
+	case !s.Held, s.Ours:
+		return nil
+	case !s.Named:
+		fmt.Fprintf(out, "Not starting: an engine that will not name itself is already driving %s (%v).\n",
+			s.Home, s.OwnerErr)
+		fmt.Fprintln(out, "Two stores on one Claude Code login undo each other's switches. Point "+
+			"CLAUDE_CONFIG_DIR at a directory of this store's own, or stop that engine.")
+		return WithCode(errSilent, ExitBlocked)
+	}
+	fmt.Fprintf(out, "Not starting: the ccdad store at %s (pid %d) is already driving %s.\n",
+		s.Owner.Store, s.Owner.PID, s.Home)
+	fmt.Fprintln(out, "Two stores on one Claude Code login undo each other's switches. Point "+
+		"CLAUDE_CONFIG_DIR at a directory of this store's own, or stop that engine.")
+	return WithCode(errSilent, ExitBlocked)
 }
 
 // stopDaemon asks a running daemon to stop and waits for the singleton to
