@@ -377,6 +377,23 @@ func seedCreditAccount(t *testing.T, uuid, email string) {
 	}
 }
 
+// seedPrimaryCreditAccount stores a credit-metered seat already marked primary.
+// It is a fresh insert rather than an update for the same reason
+// seedDisabledAccount is: store.Add deliberately preserves the stored flag over
+// an incoming one.
+func seedPrimaryCreditAccount(t *testing.T, uuid, email string) {
+	t.Helper()
+	s, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add(store.Account{
+		UUID: uuid, Email: email, Kind: identity.KindCredit, Primary: true,
+	}, credsFor("RT-"+uuid)); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // addLiveKey adds a top-level key to the live credentials file, standing in for
 // something Claude Code earned during use rather than at login.
 func addLiveKey(t *testing.T, key, rawValue string) {

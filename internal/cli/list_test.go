@@ -631,3 +631,56 @@ func TestListJSONCarriesTheUnknownKeyProbe(t *testing.T) {
 		t.Fatalf("unknownKeys = %v, want [somethingNew]", payload.UnknownKeys)
 	}
 }
+
+// The flag has no column of its own, so --json is where a script reads it and
+// a parenthesis is where a person does. Both are asserted because they come
+// from two different pieces of code, and only one of them is shared with
+// `ccdad status`.
+func TestListReportsAPrimaryAccount(t *testing.T) {
+	isolate(t)
+	seedPrimaryCreditAccount(t, "u-1", "seat@example.com")
+	seedAccount(t, "u-2", "plain@example.com")
+
+	_, out, _, _ := runRoot(t, "list")
+	if !strings.Contains(out, "(primary)") {
+		t.Errorf("the listing does not mark the primary account:\n%s", out)
+	}
+
+	_, jsonOut, _, _ := runRoot(t, "list", "--json")
+	payload := statusJSON(t, jsonOut)
+	if got := accountRow(t, payload, "u-1")["primary"]; got != true {
+		t.Errorf("u-1 primary = %v, want true", got)
+	}
+	// Omitted rather than false for an ordinary account, which is the shape
+	// `disabled` already has: a key present on every row is a key a consumer
+	// reads as carrying information.
+	if _, present := accountRow(t, payload, "u-2")["primary"]; present {
+		t.Errorf("an ordinary account carries a primary key: %v", accountRow(t, payload, "u-2"))
+	}
+}
+
+// Both flags at once, which is the case the suffix block was rewritten for. The
+// two say opposite things — primary is "ranked beside the subscriptions",
+// disabled is "left out of rotation entirely" — so a listing that printed only
+// the first one it found would hide whichever one the reader came looking for,
+// half the time. Nothing asserted the disabled suffix at all before this.
+func TestListReportsBothPerAccountFlagsAtOnce(t *testing.T) {
+	isolate(t)
+	seedPrimaryCreditAccount(t, "u-1", "seat@example.com")
+	if code, _, _, top := runRoot(t, "disable", "1"); code != ExitOK {
+		t.Fatalf("disable = %d (%s)", code, top)
+	}
+
+	_, out, _, _ := runRoot(t, "list", "--all")
+	if !strings.Contains(out, "(primary, disabled)") {
+		t.Fatalf("the listing does not carry both flags:\n%s", out)
+	}
+
+	// And the ordinary single-flag rendering is still exactly one word in
+	// parentheses, with no stray separator.
+	isolate(t)
+	seedDisabledAccount(t, "u-2", "held@example.com")
+	if _, out, _, _ := runRoot(t, "list", "--all"); !strings.Contains(out, "(disabled)") {
+		t.Fatalf("the listing does not mark a disabled account:\n%s", out)
+	}
+}
