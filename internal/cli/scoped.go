@@ -240,6 +240,13 @@ var scopedSessionAllowed = map[string]bool{
 	// in a session and useful in one.
 	"ccdad run": true,
 
+	// probe builds the same kind of session run does and sets the child's
+	// variables outright, so a probe inside a session is an independent session.
+	// It never seeds a profile, which is the one thing run does that reads the
+	// scope it inherits, so the trap seedProfile refuses cannot be reached from
+	// here at all.
+	"ccdad probe": true,
+
 	// These write only ccdad's own store, which CCDAD_HOME points at and a
 	// session does not scope. import is the one worth naming: it sounds like
 	// the most destructive of them and never installs a credential into Claude
