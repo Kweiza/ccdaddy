@@ -43,7 +43,21 @@ const (
 	StateCandidate AccountState = "candidate"
 	// StateExhausted is over the threshold, and still polled: quota can be
 	// granted or reset before the advertised timestamp.
+	//
+	// It does NOT mean the account is empty. The threshold is a number the user
+	// chose -- or, under hover, a pace target derived from how far through its
+	// window the account is -- and an account past it routinely has quota left.
+	// StateEmpty is the other fact.
 	StateExhausted AccountState = "exhausted"
+	// StateEmpty is an account with a window that has nothing left in it at all.
+	//
+	// It is a separate value rather than a harder shade of exhausted because the
+	// two drive different decisions: exhausted means the engine would rather not
+	// spend this account, empty means it CANNOT -- the next prompt gets a 429.
+	// Under hover the gap between them is wide, and publishing one word for both
+	// is what had ccdad reporting five accounts "exhausted" while they held
+	// between a fifth and a half of their week.
+	StateEmpty AccountState = "empty"
 	// StateQuarantined is held out of rotation by a dead refresh token.
 	StateQuarantined AccountState = "quarantined"
 	// StateDisabled was taken out of rotation by the user.

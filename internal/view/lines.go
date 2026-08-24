@@ -81,7 +81,7 @@ func DescribeRunning(report daemon.Report, now time.Time) string {
 func ModeLine(m strategy.Mode) string {
 	switch m {
 	case strategy.ModeRecovery:
-		return "Mode:    recovery  (every account is over its threshold; ranking by soonest reset inside an hour, by headroom past it)"
+		return "Mode:    recovery  (every account is over its threshold; empty accounts last, then soonest reset inside an hour, then slack)"
 	case strategy.ModeConsumeFirst:
 		return "Mode:    consume-first  (spending perishable weekly quota before it expires)"
 	default:

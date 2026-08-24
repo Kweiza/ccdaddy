@@ -447,6 +447,14 @@ of the two independent opt-ins unattended overage requires, and a mode cannot
 supply an opt-in on your behalf. `primary` and `disabled` are facts about an
 account rather than tuning.
 
+**And its thresholds do not open the credit pool.** The question "is the free
+pool finished, may the paid one be reached" is asked against the threshold *you*
+configured, never against the one hover derived. Hover's figure is a pace target
+computed from how far through its window each account is — with six accounts a
+fortnight into a week it can sit at 31 — and reading it there would start buying
+credits with two thirds of the week's subscription quota unspent, on a number you
+never saw.
+
 The threshold it picks is a pace target rather than a number. Each window gets
 the share of *itself* that has already elapsed, plus one account's slice of what
 is left, capped at 99 — where *usable* means an account the engine could actually
@@ -740,6 +748,25 @@ different questions: an account fifteen points clear of its five-hour line is a
 better target than one five points from its weekly floor, even though the second
 has more quota left on paper.
 
+**One thing outranks slack: having nothing left.** Past a threshold and *empty*
+are two different facts, and ccdad keeps two words for them. Slack says whether
+an account should go on spending; it cannot say whether it *can*, and under
+`hover` the two come apart badly. Hover caps a derived threshold at 99, so an
+account at 100% is measured against 99 and reports a slack of `-1` — the best
+figure in a pool where an account with half its week unspent, but early enough to
+be judged harshly, reports `-22`. Ranked on slack alone the empty account wins
+and the engine hands the session to the one account that cannot serve it.
+
+So an account with a window at 100% is filed behind every account that still has
+something, in both orders, and the anti-flap margins do not hold the engine on
+one: the margin runs on slack, which saturates there, so no candidate could ever
+clear it. The cooldown still applies. `ccdad status` and `ccdad status --json`
+report the two states separately — `exhausted` is past its threshold, `empty` has
+nothing left.
+
+The same rule reads a credit-metered seat's allowance rather than a plan window,
+so an enterprise seat that has spent its credits is filed the same way.
+
 **With no `[window_threshold]` table nothing changes.** Every window on `80`
 makes slack the old headroom shifted by a constant, so the order and the
 spent/not-spent verdict are identical to every release before this one. There is
@@ -796,6 +823,13 @@ question it is asking: instead of "who has the most room", it ranks by **who
 comes back first**, inside a one-hour horizon, and by who has the most slack left
 outside it. The hour is fixed and there is no key for it.
 
+An account that is actually *empty* — some window of it at 100% — sorts behind
+every account that still has something, ahead of both of those keys. The soonest
+reset belongs to the window that has been running longest, which is the window
+most likely to be the one that ran out, so without this the mode hands the
+session to the single account that cannot serve it and the user waits out the
+horizon for a switch that was available immediately.
+
 `ccdad status` prints the mode on every run where a ranking could be made —
 `headroom` and `consume-first` name themselves the same way, and the line is
 absent only when nothing has ever been polled. In this mode it reads:
@@ -803,7 +837,7 @@ absent only when nothing has ever been polled. In this mode it reads:
 ```console
 Daemon:  running  pid 48213  up 2h06m
 Active:  work@example.com (work)
-Mode:    recovery  (every account is over its threshold; ranking by soonest reset inside an hour, by headroom past it)
+Mode:    recovery  (every account is over its threshold; empty accounts last, then soonest reset inside an hour, then slack)
 ```
 
 `ccdad status --json` carries the same answer as `mode`, and `ccdad auto --json`
@@ -989,7 +1023,8 @@ last-resort pool's axis.
 A primary account is metered on credits rather than on a plan window, so it
 reports no reset time and never has a recovery to rank on. In recovery mode that
 puts it behind every account known to come back inside the hour; against the ones
-that come back later it is ranked on slack like any other. A credit utilization
+that come back later it is ranked on slack like any other — unless its credits
+are gone, which files it behind everything that has any. A credit utilization
 that could not be read is unknown — not spent, not empty — and because a primary
 seat is in the main pool, one it cannot read keeps the last-resort credit pool
 closed for everyone.

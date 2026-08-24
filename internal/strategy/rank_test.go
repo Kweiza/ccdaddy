@@ -250,12 +250,32 @@ func TestRankTiersRecoveryInsideTheHorizonAboveHeadroom(t *testing.T) {
 	cands := []Candidate{
 		// Outside the horizon, but far less blown.
 		sub("less-blown-later", snap(win(81, 5*time.Hour), win(81, 5*time.Hour))),
-		// Inside the horizon, and blown hardest of all.
-		sub("wrecked-sooner", snap(win(100, 30*time.Minute), win(100, 30*time.Minute))),
+		// Inside the horizon, and blown hardest -- but not empty.
+		sub("wrecked-sooner", snap(win(99, 30*time.Minute), win(99, 30*time.Minute))),
 	}
 
 	r := Rank(cands, opts())
 	eq(t, order(r), []string{"wrecked-sooner", "less-blown-later"})
+}
+
+// The one thing that outranks a soon recovery: having nothing left at all.
+//
+// Recovery order files the soonest reset first, and the soonest reset belongs
+// to the window that has been running longest -- which is the window most
+// likely to be the one that ran out. Without this the mode hands the session to
+// the single account that cannot serve it, and the user waits out the horizon
+// for a switch that was available immediately.
+func TestRankRecoveryPutsAnEmptyAccountLastEvenWhenItReturnsSoonest(t *testing.T) {
+	cands := []Candidate{
+		// Nothing left, back in half an hour.
+		sub("empty-sooner", snap(win(100, 30*time.Minute), win(100, 30*time.Minute))),
+		// Past its threshold, but nineteen points still in it, and not back for
+		// five hours.
+		sub("past-line-but-usable", snap(win(81, 5*time.Hour), win(81, 5*time.Hour))),
+	}
+
+	r := Rank(cands, opts())
+	eq(t, order(r), []string{"past-line-but-usable", "empty-sooner"})
 }
 
 func TestRankOrdersInsideTheHorizonBySoonestThenByHeadroom(t *testing.T) {
