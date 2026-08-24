@@ -155,9 +155,12 @@ and `irm | iex` cannot pass arguments.
 | `CCDAD_BASE_URL` | Download origin, for mirrors | GitHub releases |
 
 The two differ on `PATH`, deliberately. **`install.ps1` registers it for you**:
-it appends the install directory to the user `PATH` in the registry and
-broadcasts the change, so a new shell has it. **`install.sh` does not touch a
-shell profile** — the script itself is on stdin under `curl | bash`, so it
+it appends the install directory to the user `PATH` in the registry, broadcasts
+the change so a new shell has it, and also updates the running session's own
+`PATH` — `irm | iex` evaluates the script in your current shell, not a child
+process, so `ccdad` works right there without opening a new window.
+**`install.sh` does not touch a shell profile** — the script itself is on
+stdin under `curl | bash`, so it
 cannot ask permission, and a startup file guessed at is a startup file that can
 be corrupted. It points at [`ccdad setup-path`](#ccdad-setup-path), and prints the
 `export PATH=…` line underneath for the shell you are standing in.

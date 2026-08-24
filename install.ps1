@@ -402,15 +402,27 @@ function Invoke-CcdadInstall {
         try { $version = (& $target --version 2>$null | Select-Object -First 1) } catch { }
         Write-Host "installed $version to $target"
 
-        if (Add-CcdadToUserPath -Directory $installDir) {
-            Write-Host "added $installDir to your user PATH; open a new terminal to pick it up"
+        $addedToRegistry = Add-CcdadToUserPath -Directory $installDir
+
+        # The registry write above only reaches processes started after it -
+        # this one is running INSIDE the caller's own session (`irm | iex`
+        # evaluates the script in the current scope, not a child process), so
+        # without also updating $env:Path here, `ccdad` stays unresolved in
+        # this very window until the reader opens a new one. $env: is a direct
+        # view of the process environment block regardless of scope, so this
+        # takes effect immediately and needs no broadcast.
+        $sessionPath = Get-CcdadUpdatedPath -Current $env:Path -Directory $installDir
+        if ($null -ne $sessionPath) { $env:Path = $sessionPath }
+
+        if ($addedToRegistry) {
+            Write-Host "added $installDir to your user PATH; ccdad is ready to use right here, and new terminals will have it too"
         } else {
             # $false means the entry was already there, or the registry could
             # not be opened. Only the second case needs the user, and pointing
             # at `ccdad setup-path` covers it without this script having to tell
             # the two apart: that command does the same write, reports which it
             # was, and exits 3 when there was nothing to do.
-            Write-Host "if '$installDir' is not on your PATH in a new terminal, run:"
+            Write-Host "ccdad is ready to use right here. If '$installDir' is not on your PATH in a NEW terminal, run:"
             Write-Host "    & '$target' setup-path"
         }
         Write-Host "To remove ccdad later run 'ccdad uninstall', not a delete: there is a daemon"
