@@ -57,24 +57,39 @@ func preemptHorizon(c Candidate, lead time.Duration) (time.Duration, bool) {
 	return blind + lead, true
 }
 
-// projectedExhaustion reports whether one window's current burn reaches 100%
-// within horizon of now.
+// projectedExhaustion reports whether any window that binds reaches 100% within
+// horizon of now.
 //
-// It asks usage.PaceOf for the extrapolation rather than dividing here, so the
+// It reads the window that RUNS OUT FIRST, which is deliberately not the window
+// the ranking orders on. Ordering is on slack — the distance to a window's own
+// configured threshold — while a session is ended by whichever window reaches
+// 100% soonest, and the two are the same window only when the burn rates match.
+// They never match: a five-hour window is 33.6 times shorter than a weekly one,
+// so the same amount of work climbs it that much faster. Reading only the
+// least-slack window leaves the engine sitting on an account whose five-hour cap
+// lands in ten minutes because its weekly cap is nearer its threshold.
+//
+// The set is bindingWindows and not every window the response carried, and that
+// is what keeps the widening honest: it is exactly the set the slack minimum is
+// taken over, so a per-model weekly cap belonging to another family cannot
+// pre-empt a session that will never touch it.
+//
+// It asks usage.PaceOf for each extrapolation rather than dividing here, so the
 // engine and `ccdad status --json` read ONE projection and cannot come to two
 // different answers about the same account. That includes the suppression: a
 // window inside its first seventh has numbers too noisy to extrapolate from, and
-// this reads that as "no", never as "not yet".
-func projectedExhaustion(s *usage.Snapshot, binding usage.WindowName, now time.Time, horizon time.Duration) bool {
-	for _, w := range s.AllWindows() {
-		if w.Name != binding {
-			continue
-		}
+// this reads that as "say nothing about this window", never as "not yet" and
+// never as a reason to stop asking about the others.
+func projectedExhaustion(s *usage.Snapshot, model string, now time.Time, horizon time.Duration) bool {
+	deadline := now.Add(horizon)
+	for _, w := range bindingWindows(s, model) {
 		proj, ok := usage.PaceOf(w.Name, w.Window, now).Projection()
 		if !ok {
-			return false
+			continue
 		}
-		return !proj.ExhaustionAt.After(now.Add(horizon))
+		if !proj.ExhaustionAt.After(deadline) {
+			return true
+		}
 	}
 	return false
 }
@@ -126,17 +141,19 @@ func preempt(byUUID map[string]Candidate, res Result, activeUUID string, o Optio
 	}
 	ranked, ok := find(res, activeUUID)
 	if !ok || !ranked.Headroom.Known {
-		// An account nobody could read has no binding window and no burn. That
-		// is already the case the ordinary margins hand to a readable candidate,
-		// and inventing a projection for it would be arithmetic on a number that
-		// does not exist.
+		// find answers the question byUUID cannot: whether the live account is
+		// in the pass at all, rather than held out of it by a quarantine. And an
+		// account nobody could read has no burn to extend — that is already the
+		// case the ordinary margins hand to a readable candidate, and inventing
+		// a projection for it would be arithmetic on a number that does not
+		// exist.
 		return Ranked{}, false
 	}
 	horizon, ok := preemptHorizon(active, o.PreemptLead)
 	if !ok {
 		return Ranked{}, false
 	}
-	if !projectedExhaustion(active.Usage, ranked.Headroom.Binding, o.Now, horizon) {
+	if !projectedExhaustion(active.Usage, o.Model, o.Now, horizon) {
 		return Ranked{}, false
 	}
 	return preemptTarget(res, activeUUID)

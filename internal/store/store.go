@@ -49,6 +49,10 @@ type Store struct {
 	// inTx marks a mutator running inside a WithStore callback, where the lock
 	// is already held and the save belongs to the transaction. See mutate.
 	inTx bool
+	// undo is what this transaction has changed in the credentials directory,
+	// in the order it changed it. mutate replays it backwards when the
+	// transaction fails. See rollback.
+	undo []credentialUndo
 }
 
 // reservedDeviceNames are the Windows device names a file cannot be called.
@@ -227,7 +231,10 @@ func (s *Store) add(a Account, creds cclink.Blob) error {
 
 	// The credential write comes first, and memory is touched only once it has
 	// succeeded. The other order leaves an account with no credentials in the
-	// in-memory store, which any later save() would then persist.
+	// in-memory store, which any later save() would then persist. What the
+	// order costs — a credential file already on disk when a LATER step of the
+	// transaction fails — is what writeCredentials journals and rollback pays
+	// back.
 	if err := s.writeCredentials(a.UUID, creds); err != nil {
 		return err
 	}
@@ -267,8 +274,19 @@ func (s *Store) remove(uuid string) error {
 	// of Add's reason: the other order would drop the account from
 	// accounts.toml on the next Save while its credential file survived as an
 	// orphan holding a live token.
+	//
+	// The content is read BEFORE the delete, because mutate restores
+	// accounts.toml by never writing it: without the bytes in hand, a
+	// transaction that fails after this point leaves the document still naming
+	// an account with nothing to log in as. A file that was not there is
+	// nothing to put back, so a failed read is not an error here — the delete
+	// below already decides that.
+	prior, priorErr := os.ReadFile(s.credentialPath(uuid))
 	if err := os.Remove(s.credentialPath(uuid)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("removing stored credentials: %w", err)
+	}
+	if priorErr == nil {
+		s.undo = append(s.undo, credentialUndo{uuid: uuid, prior: prior})
 	}
 
 	s.data.Accounts = append(s.data.Accounts[:idx], s.data.Accounts[idx+1:]...)
@@ -373,7 +391,88 @@ func (s *Store) writeCredentials(uuid string, creds cclink.Blob) error {
 	if err != nil {
 		return fmt.Errorf("encoding credentials: %w", err)
 	}
-	return cclink.WriteFileAtomic(s.credentialPath(uuid), encoded, 0o600)
+	path := s.credentialPath(uuid)
+	// A CREATION is journaled and an overwrite is not, and that distinction is
+	// the whole rule — rollback states it. A file that is already there belongs
+	// to an account accounts.toml already names; a file that is not is one only
+	// this transaction can be answerable for.
+	//
+	// Recorded before the write rather than after it because the reversal is
+	// idempotent: a write that fails leaves the os.Remove nothing to find.
+	if _, statErr := os.Stat(path); errors.Is(statErr, os.ErrNotExist) {
+		s.undo = append(s.undo, credentialUndo{uuid: uuid, created: true})
+	}
+	return cclink.WriteFileAtomic(path, encoded, 0o600)
+}
+
+// credentialUndo reverses one change a transaction made to the credentials
+// directory. Exactly one of the two fields carries it: created says this
+// transaction brought the file into existence, and prior is what the file held
+// before this transaction deleted it.
+type credentialUndo struct {
+	uuid    string
+	created bool
+	prior   []byte
+}
+
+// rollback puts back what a failed transaction changed outside accounts.toml.
+//
+// mutate restores the document by never writing it, and until this the
+// guarantee stopped at the document: the credentials directory is not inside
+// that atomic write. A batch refused on the fourth of five accounts left the
+// first three credential files on disk with no accounts.toml naming them —
+// each holding a live refresh token, each invisible to `ccdad list`, `ccdad
+// remove` and `ccdad doctor`, because all three read the document.
+//
+// It reverses two of the three changes a transaction can make to that
+// directory, and the one it leaves alone is deliberate:
+//
+//   - a file the transaction CREATED is removed. That file is the leak: no
+//     account names it, so nothing else will ever find it.
+//   - a file the transaction DELETED is written back, or accounts.toml is left
+//     naming an account whose credentials are gone — a switch that logs the
+//     user out.
+//   - a file the transaction only OVERWROTE is left exactly as the transaction
+//     left it. `ccdad run` carries a session's refreshed claudeAiOauth back
+//     into the store through Add on every ordinary run, so the bytes an
+//     overwrite replaced are a login the provider has already rotated away.
+//     The account is still named by the document either way — nothing is
+//     hidden and nothing is missing — while putting the old bytes back would
+//     trade a leak nobody has for an account that can no longer authenticate.
+//     The cost is stated rather than hidden: a refused transaction can leave an
+//     already-stored account holding credentials it did not have before.
+//
+// The in-memory copy is re-read for the same reason the files are: add appends
+// to the slice once the file is down, so a save that failed leaves this process
+// holding an account the document does not have.
+//
+// Every reversal is attempted even after an earlier one failed, and the errors
+// go back to the caller: a reversal that did not happen IS the leak still being
+// there, and nothing further up is in a position to name the file.
+func (s *Store) rollback() error {
+	var errs []error
+	for i := len(s.undo) - 1; i >= 0; i-- {
+		u := s.undo[i]
+		path := s.credentialPath(u.uuid)
+		if u.created {
+			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+				errs = append(errs, fmt.Errorf(
+					"this run left stored credentials at %s that no account names; "+
+						"they hold a live token, so delete that file: %w", path, err))
+			}
+			continue
+		}
+		if err := cclink.WriteFileAtomic(path, u.prior, 0o600); err != nil {
+			errs = append(errs, fmt.Errorf(
+				"%q is still in the store but its stored credentials could not be put back at %s; "+
+					"re-run 'ccdad add' for it: %w", u.uuid, path, err))
+		}
+	}
+	s.undo = nil
+	if err := s.load(); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
 }
 
 func (s *Store) nextIdx() int {
