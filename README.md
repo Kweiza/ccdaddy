@@ -311,8 +311,10 @@ as `fail claude-version`.
 
 That refusal is only for accounts whose login is a credentials file. A
 **setup-token** account is scoped by `CLAUDE_CODE_OAUTH_TOKEN` in the session's
-environment instead — a variable every era of Claude Code reads, and prefers over
-the stored login — so those sessions run on an old build and are not refused.
+environment instead — a variable every era of Claude Code reads, and one it
+prefers over the stored login — so an old build cannot defeat that scoping and
+the version refusal never reaches those accounts. Preferred over the login is not
+preferred over everything, which is what the third refusal below is about.
 
 `--full-profile` gives the account a whole config home instead, kept under the
 ccdad store between runs, so its MCP logins and trust answers survive. It is
@@ -325,6 +327,31 @@ credential home, and the default mode leaves that file shared with your live
 session on purpose — so there is nowhere to put one without changing your
 machine. A profile owns a global config of its own, and the key goes there and
 nowhere else. The default mode refuses and says so.
+
+**`ccdad run` also refuses when your own shell already carries a credential
+Claude Code reads before the session's.** Claude Code reads a stored login last,
+so a token, a key, a helper or a host-injected file already in the environment
+you launch from outranks the login ccdad just installed: the session would
+authenticate as that credential while ccdad reported success. It applies in
+**both** modes — `--full-profile` scopes a different directory, not the
+environment, which is inherited either way.
+
+ccdad refuses rather than removing the offending variable. Stripping would make
+the guarantee true for the sources that *are* variables and leave it false for
+the ones that are not, and silently overriding something you exported on purpose
+is the same harm this command exists to prevent, pointed the other way. There is
+no flag to override it, because the shell already has one: the refusal names
+`env -u VAR ccdad run …` where there is a variable to unset, and Claude Code's
+own remedy where there is not. It names the source it found rather than listing
+them, so what you read is what ccdad measured. It fires before ccdad creates the
+session's credential home or a `--full-profile` profile, so a refused run leaves
+nothing behind to clean up. Exit `2`, like the other two refusals.
+
+A `CLAUDE_CODE_OAUTH_TOKEN` already exported in your shell is **not** one of
+these for a setup-token account: ccdad sets that variable to the account's own
+token for the session it starts, so the session runs as the account you named.
+For an account whose credential is a login it is one, because Claude Code reads
+that variable before any credentials file.
 
 The exit status is `claude`'s, not ccdad's. A session killed by a signal
 reports 128 plus the signal number, as a shell would.
@@ -352,19 +379,305 @@ hysteresis_pct         10        default
 headroom_ratio         2         default
 cooldown               5m0s      default
 recovery_hysteresis    5m0s      default
+preempt_lead           2m0s      default
 strategy               headroom  default
+probe_unknown          true      default
+hover                  false     default
+credit.threshold       80        default
 credit.max_auto_spend  0         default
 ```
 
 `credit.max_auto_spend` defaults to `0`, and that is the point: an account
 billed by credit is a **last resort**. Subscription quota is spent first,
 unattended spending needs two independent opt-ins, and a switch that cannot
-read the current spend fails closed rather than guessing.
+read the current spend fails closed rather than guessing. `credit.threshold` is
+a different number for a different kind of account, and
+[Credit-metered accounts](#credit-metered-accounts) is what it does.
+
+`window_threshold` is a table rather than a key, and the listing above shows a
+row only for the windows your file actually names. There is no default row,
+because a window can be named after a model or a surface the server invented —
+the legal names are not a list ccdad can print in advance. A window with no
+entry of its own is measured against the top-level `threshold`. Setting one is
+`ccdad config set window_threshold.seven_day 60`, and
+[Per-window thresholds](#per-window-thresholds) is what it changes.
+
+`probe_unknown` defaults to `true`, and it is the one default that **spends your
+quota without being asked**. A window that has never been used reports no reset
+time, so it has no pace, nothing to rank on, and no way to get one except to
+spend against it — so ccdad runs a single one-turn `claude` request against such
+an account and schedules a poll a minute later. Set it to `false` and an account
+with no reading simply stays unknown, which files it in the middle of the
+ranking rather than at either end. `hover` defaults to `false`; turning it on
+hands every threshold and every anti-flap margin to the engine, which derives
+them from each window's own elapsed fraction instead of reading them from this
+file.
 
 Keys this version does not recognise are left alone rather than deleted, so a
 file written by a newer release survives an older one. Trying to *set* an
 unknown key is still an error — a typo that is quietly accepted is a setting
-that does nothing.
+that does nothing. Inside `window_threshold` the same rule applies one level
+down: a name that is not a window ccdad could rank is refused by `config set`
+with exit `2`, and a well-formed name this build does not know round-trips
+through the file untouched.
+
+### Per-window thresholds
+
+One threshold for every window says "80% used is spent" whether the window comes
+back in four hours or in six days. `[window_threshold]` gives each window its own
+line:
+
+```toml
+threshold = 80              # the default for any window with no key of its own
+
+[window_threshold]
+five_hour = 85
+seven_day = 60
+seven_day_opus = 50
+"weekly_scoped:model:Opus 4.5" = 40
+```
+
+A key inside the table has to name a window ccdad can rank: one of `five_hour`,
+`seven_day`, `seven_day_oauth_apps`, `seven_day_opus`, `seven_day_sonnet`, or a
+scoped weekly cap beginning `weekly_scoped:model:` or `weekly_scoped:surface:`.
+Anything else is refused with exit `2` and the reason, because a threshold on a
+name nothing reports is a setting that silently does nothing. `cinder_cove` is
+refused too even though it is a real window: its reset time is an expiry rather
+than a rollover, so it is never ranked and a threshold on it would never be
+consulted.
+
+Two rules follow from the table:
+
+- **An account is spent when any window ccdad ranks is past its own threshold.**
+  The weekly cap over 60 marks the account spent whatever the five-hour window
+  says, and the five-hour cap over 85 marks it spent whatever the week says.
+  Past means strictly past: sitting exactly on a threshold is not over it.
+- **When a weekly cap is over, that is the one the account is reported
+  against.** The `WINDOW` column, the `RESETS IN` beside it and `bindingWindow`
+  in `ccdad status --json` all name it, because it is the one that will not come
+  back for days: telling you to wait eight minutes for a five-hour rollover,
+  when the week is gone until Friday, is the wrong answer. If more than one
+  weekly cap is over, the one with the least slack is named.
+
+**Reporting and ordering are two different questions.** The figures an account
+is ranked with — its slack, the percentage left, and the threshold those came
+from — are always taken from the window with the *least slack*, whichever family
+it belongs to. So an account can be reported against its weekly cap and ranked
+on its five-hour one in the same pass, and the window in `WINDOW` need not be the
+one that decided where the account sits in the list. `ccdad status --json` and
+`ccdad list --json` publish `slack` and `windowThreshold` per account, which are
+the numbers the ordering was actually made on, and `ccdad auto --json` carries
+the same two on every row of its `order[]`.
+
+The weekly rule is not inert everywhere, though. In the ordinary order it moves
+nothing. Once every account is spent the ranking switches to recovery order
+(below), and a blown weekly cap is then what an account has to *wait out* — so
+an account whose five-hour window rolls over in ten minutes still ranks behind
+one that is genuinely back inside the hour.
+
+Slack is `threshold − used`, for whichever window has least. The engine orders on
+it rather than on raw percent left, because with a tight weekly floor those are
+different questions: an account fifteen points clear of its five-hour line is a
+better target than one five points from its weekly floor, even though the second
+has more quota left on paper.
+
+**With no `[window_threshold]` table nothing changes.** Every window on `80`
+makes slack the old headroom shifted by a constant, so the order and the
+spent/not-spent verdict are identical to every release before this one. There is
+a test that pins it.
+
+**One seam worth knowing about before you tighten a window.** `hysteresis_pct`
+moved onto the slack axis with the ranking. `headroom_ratio` did not — a ratio is
+not shift-invariant and is undefined on a negative slack, so it still measures
+raw percent left. Set `seven_day = 60` and an account sitting at 59% is one point
+from that floor while still showing 41 points of raw headroom, so
+`headroom_ratio` (default `2`) can refuse a switch the ranking wanted. If you
+tighten a window threshold and the engine stops moving, **set `headroom_ratio` to
+`1`**, which switches that margin off; `1` is the lowest value the config
+accepts, because anything less would let an account with less headroom displace
+the live one. `hover` is not a second answer to this, it is the same one applied
+for you — it sets the ratio to `1` itself. `ccdad switch --force` overrides the
+hold for one switch.
+
+**A weekly cap ccdad cannot name.** The usage endpoint files a scoped weekly cap
+under a scope key, and ccdad names two of them, `model` and `surface`. That
+schema is not a closed contract, so a cap can arrive under a key this build has
+never seen. ccdad keeps such a cap rather than dropping it — you can see it in
+the `windows` map of `ccdad status --json` — but it does **not** rank it, because
+ccdad cannot state what it caps. Writing a threshold on its name is how you say
+you know: add
+
+```toml
+[window_threshold]
+"weekly_scoped:region:eu" = 60
+```
+
+to `config.toml` **by hand** — quoted, because the name carries colons — and it
+joins the ranking from the next reading that carries it. `ccdad config set` will
+not write that line: with no reading in hand it cannot tell a scope the server
+really sends from a typo, so it refuses both. For the same reason `ccdad config
+list` reports the key as one it does not know; the value is being read
+regardless. Removing the line is how you turn it back off — a `0` is refused, not
+an opt-out.
+
+A cap ccdad cannot name **at all** — no display name, and no scope key it can
+build a name from — produces no window and cannot be opted into. It is counted
+instead: `ccdad status --json` carries `unnamableWeeklyCaps` on the account's
+`usage` object, written only when it is not zero. Absence means zero rather than
+an older ccdad. There is nothing to do about a non-zero value except know that
+the account is carrying quota this build has no handle on.
+
+### When every account is over its threshold
+
+Nothing is left to switch *to*, and the engine does not stop. It changes the
+question it is asking: instead of "who has the most room", it ranks by **who
+comes back first**, inside a one-hour horizon, and by who has the most slack left
+outside it. The hour is fixed and there is no key for it.
+
+`ccdad status` names it:
+
+```console
+Daemon:  running  pid 48213  up 2h 6m
+Active:  work@example.com (work)
+Mode:    recovery  (every account is over its threshold; ranking by soonest reset inside an hour, by headroom past it)
+```
+
+`ccdad status --json` carries the same answer as `mode`, and `ccdad auto --json`
+has always emitted it on its `evaluated` events. The key is absent rather than
+`headroom` when no ranking could run, so a script cannot mistake "never polled"
+for "plenty of room".
+
+The pool this is about is the accounts still in the running: the subscription
+accounts plus any credit seat marked primary, minus anything a recent failure has
+quarantined. Last-resort credit accounts are not in it — they are metered in
+money and have no plan window, so their headroom is unknown forever and counting
+them would put this mode permanently out of reach.
+
+One account that could not be read holds the engine out of this mode. An
+unreadable account is neither spent nor unspent, and treating it as spent is how
+an engine parks itself permanently on one expired token.
+
+If you have set `strategy` to `consume-first`, that is the mode you get instead,
+whatever the thresholds say: it is a different question — spend perishable weekly
+quota before it expires — and it is answered first.
+
+### Switching before the limit, not after it
+
+A switch that happens when an account reads 100% happens too late: the session is
+already refused. So the engine projects.
+
+```
+horizon   = the interval ccdad is blind for  +  preempt_lead  (default 2m)
+projected = used now  +  burn rate × horizon
+```
+
+The blind interval is the gap between when the current reading was **taken** and
+when the scheduler means to poll again — the two stamps in the cache, not the
+clock — so it is the engine's real exposure rather than a constant. If any window
+that binds the model on the active account projects to 100% at or before the end
+of it, and some other account still has room, the engine moves.
+
+It reads **the window that runs out first**, which is deliberately not the window
+the ranking orders on. Those are different windows whenever burn rates differ,
+and they always differ: a five-hour window is thirty-three times shorter than a
+weekly one, so an account whose weekly cap binds at one point of slack thirty-
+eight hours out would sit unswitched while its five-hour cap cut the session in
+fourteen minutes.
+
+The projection runs ahead of every margin that compares two accounts as they
+stand — `hysteresis_pct` and `headroom_ratio` — because a comparison that is
+about to be false is not a reason to stay. It does **not** override the cooldown,
+which is the only thing bounding a switch storm; when the projection fires and
+the cooldown holds it, what you are told is the cooldown. And it cannot reach the
+credit pool at all: a pre-emptive move walks the subscription ranking only.
+
+The rule corrects itself, which is why the horizon is the real poll interval
+rather than a constant. Polling every 60 s gives a short horizon and the switch
+lands late and close to the limit, wasting almost nothing. Polling every 1800 s —
+where a `429` backoff puts it — gives a long horizon and the switch lands early.
+**Polling is blocked; the session is not.**
+
+Set `preempt_lead` to `0` and the projection is off entirely. That is a supported
+answer, not a broken one: the ordinary margins still run. The exception is
+`hover`, which derives its own lead from the widest poll gap it has actually
+observed, held between 60 s and 10 minutes, and stops reading the key — so
+turning pre-emption off means leaving hover off too.
+
+**The danger band, and what it actually buys.** At or above 95% used on the
+binding window — 95% of the endpoint's limit, not of your threshold — the account
+Claude Code is logged in as polls every 60 s, is exempted from sharing its
+identity's budget, and has its reading kept fresh for 30 s instead of 180 so the
+daemon's own gate cannot refuse two polls out of three. Every other account on
+that identity is held back to about 30 minutes meanwhile. It needs a reading that
+was actually taken: a poll that failed says nothing about the account and does
+not put it in the band. Read honestly:
+
+- `/api/oauth/usage` allows roughly **28-30 requests per identity per rolling
+  hour**, over a sliding window — capacity comes back only as old requests age
+  out, so a burst saturates the identity for up to a full hour and waiting gives
+  none of it back early.
+- 60 s is already about twice that allowance, and it is the floor. No rule goes
+  below it: a `429` imposes a 360-second floor and an estimate that multiplies by
+  1.5 each time up to 1800 s, and the estimate always wins — one `429` alone puts
+  the next poll 540 s out. On a three-account identity that is about twenty-seven
+  minutes blind at 97%, at the moment it can least be afforded.
+- On a **shared identity** the exemption is at least a threefold gain: the urgent
+  cadence divided three ways is 180 s each, and the band hands the undivided 60 s
+  to the one account a session is running against. Sharing is all the exemption
+  changes, so on a **solo identity it changes nothing** — 60 s was already the
+  answer there. The rest of the band still applies on a solo identity.
+
+So the band moves the identity's budget onto the one account a session can be cut
+off on, and it does spend more of it — the live account goes from at most 20
+requests an hour to 60, while the alternates it stands down give back fewer than
+that. What it refuses to do is hand 60 s to everyone on the identity, which would
+be 180 requests an hour against an allowance of 28-30. The projection above is
+what keeps a session alive; the band only narrows its error bars.
+
+`ccdad list --refresh` is deliberately not shortened — the hand-held path still
+serves any reading under 180 s old — so a scripted refresh cannot reach the
+endpoint six times as often on the one account where a `429` costs most.
+
+### Credit-metered accounts
+
+By default an account billed in credits is a **last resort**: it is kept out of
+the main ranking and ordered in a pool of its own, by how much spend the ceiling
+arms rather than by headroom, and the engine reaches that pool only once every
+account in the main pool is known to be spent. Reaching one then needs two
+independent opt-ins — the account's own extra-usage setting, and
+`credit.max_auto_spend` raised above `0`. That is right when credits are overage
+on top of a subscription: quota already paid for should be spent first.
+
+It is wrong for an enterprise seat that is metered in credits and nothing else.
+There is no subscription quota to prefer, and a gate that defaults to `0` means
+the account can never be used at all.
+
+```sh
+ccdad primary work on
+```
+
+marks that account as one. A primary account is ranked alongside the subscription
+accounts on `credit.threshold − extra_usage.utilization`, and
+`credit.max_auto_spend` no longer gates it — **the flag is the opt-in**, typed by
+a human. Turning it on prints what it costs before it writes, so someone who
+typed it by mistake reads it while the flag is still off; turning it off writes
+without a notice, because there is nothing to warn about. Its money figures are
+not consulted on this path at all: `monthly_limit` and `used_credits` stay the
+last-resort pool's axis.
+
+A primary account is metered on credits rather than on a plan window, so it
+reports no reset time and never has a recovery to rank on. In recovery mode that
+puts it behind every account known to come back inside the hour; against the ones
+that come back later it is ranked on slack like any other. A credit utilization
+that could not be read is unknown — not spent, not empty — and because a primary
+seat is in the main pool, one it cannot read keeps the last-resort credit pool
+closed for everyone.
+
+`ccdad list` shows the flag as a suffix, `ccdad list --json`, `ccdad status
+--json` and `ccdad which --json` carry `primary` on the account object, `ccdad
+export` carries it too so it survives a move between machines, and `ccdad doctor`
+names every account holding it — because "this account can spend money
+unattended" is not a fact that should live only in a file.
 
 ### Environment
 
@@ -397,7 +710,7 @@ nothing failed and `1` when something did — a warning is not a failure — and
 |---|---|
 | `0` | The requested action was taken |
 | `1` | Runtime failure — network, I/O, lock contention, token refresh |
-| `2` | **Usage error only** — a bad flag, a bad combination, an unknown account |
+| `2` | **Usage error only** — a bad flag, a bad combination, an unknown account, or `ccdad run` refusing to start a session that would authenticate as something other than the account you named |
 | `3` | Understood, nothing to do (already on that account; daemon already stopped) |
 | `4` | Blocked: wanted to act, no viable target (everything exhausted, credit gate refused, or another OAuth source outranks the credentials file) |
 | `5` | A negative answer to a probe (no daemon running; nothing attributable) |
@@ -435,8 +748,10 @@ Deliberate, and listed so you can tell a gap from a bug.
   There is no launchd, systemd or Windows service unit in v1.
 - **A setup token cannot be activated.** Claude Code reads one from
   `CLAUDE_CODE_OAUTH_TOKEN` only, never from the credential file, so there is
-  nothing for `ccdad` to install. Export the variable and run Claude Code
-  yourself. API keys *can* be activated, with `--activate`.
+  nothing for `ccdad switch` to install. `ccdad run ACCOUNT` does set the
+  variable for the session it starts, so that path works today; it is the live
+  login that a setup token cannot become. API keys *can* be activated, with
+  `--activate`.
 - **`ccdad which` does not attribute `ANTHROPIC_API_KEY`.** Claude Code gates
   that variable on an approved-suffix list and races it against `apiKeyHelper`
   and `primaryApiKey`; guessing would be worse than declining.
