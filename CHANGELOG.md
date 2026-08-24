@@ -184,52 +184,6 @@ by `uuid` or `alias`.
   SIGKILL and power loss cannot be closed at all. Like every row here it
   reports: it will not delete a file the store cannot explain.
 
-### Fixed
-
-- **`doctor`'s credential-home drift warning blamed a cause the tree prevents.**
-  It named `ccdad run --full-profile` as how a daemon comes to be driving a
-  different Claude Code credential home from the shell reading the report —
-  which auto-start has refused since it gained its containment test. The cause
-  that IS still reachable, and deliberately so, is a credential home the user
-  pointed somewhere themselves, through `CLAUDE_SECURESTORAGE_CONFIG_DIR` or
-  `CLAUDE_CONFIG_DIR`. That mattered beyond the wording: the comment above the
-  check was the only written reason it exists, so a reader who noticed the cited
-  cause was prevented had an argument for deleting a check that is still needed.
-  The row also told a user inside a `ccdad run` session to restart the daemon,
-  where the daemon is not the side that moved and `ccdad daemon restart` is
-  refused in that very shell; it now says that instead.
-- **A host-injected API key was invisible to every command.** Claude Code reads
-  `CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR` **or**, when that is unset,
-  `/home/claude/.claude/remote/.api_key` — one branch, two routes. ccdad modelled
-  only the variable, so on a machine with the file and no variable a key that
-  displaces the login was reported by nothing: `doctor`'s `api-key` row said no
-  key resolved, `ccdad which` named the login's account, and a switch wrote a
-  login nothing would read.
-- **`CLAUDE_CODE_SIMPLE=0` put ccdad in bare mode.** Claude Code parses that
-  variable with a four-spelling truthiness test (`1`, `true`, `yes`, `on`) and
-  ccdad tested it for non-emptiness, so setting it to `0` — the natural way to
-  turn something off — made ccdad report that no credential resolves on a machine
-  that has one.
-- **Every message about a displaced switch prescribed the wrong fix.** They said
-  "Unset CLAUDE_CODE_OAUTH_TOKEN" — for `ccdad switch`, for `ccdad auto`, for the
-  daemon's log, and for the note after an api-key switch. Three of the sources
-  that displace a switch have no variable at all, so that sentence sent a user
-  after something that is not set. All four now print Claude Code's own
-  per-source remedy; for a host-injected token that is "check the host session".
-- **`CLAUDE_CODE_REMOTE=0` made ccdad think it was inside a session host.** Claude
-  Code reads that variable through a typed accessor that declares it a boolean —
-  the same four-spelling test as `CLAUDE_CODE_SIMPLE` — and ccdad tested it for
-  presence. Believing a session is hosted SUPPRESSES `ANTHROPIC_AUTH_TOKEN` and
-  the `apiKeyHelper` and disqualifies an Anthropic CLI profile, so ccdad reported
-  the login as the winner while one of them was deciding the session. The same
-  accessor trims every string variable, so a variable set to spaces is now
-  correctly read as not set.
-- **`ccdad auto` and the daemon stand down for the whole displacing set.** The
-  unattended gate was keyed on `CLAUDE_CODE_OAUTH_TOKEN` alone, so on a machine
-  where anything else outranks the credentials file the engine switched, reported
-  success, and changed nothing about what a session authenticates as — on every
-  evaluation.
-
 ### Changed
 
 - **Near the limit, the identity spends its budget on the account that can be cut
@@ -312,6 +266,50 @@ by `uuid` or `alias`.
   its own, accurate refusal. An install ccdad cannot classify starts as before.
 
 ### Fixed
+
+- **`doctor`'s credential-home drift warning blamed a cause the tree prevents.**
+  It named `ccdad run --full-profile` as how a daemon comes to be driving a
+  different Claude Code credential home from the shell reading the report —
+  which auto-start has refused since it gained its containment test. The cause
+  that IS still reachable, and deliberately so, is a credential home the user
+  pointed somewhere themselves, through `CLAUDE_SECURESTORAGE_CONFIG_DIR` or
+  `CLAUDE_CONFIG_DIR`. That mattered beyond the wording: the comment above the
+  check was the only written reason it exists, so a reader who noticed the cited
+  cause was prevented had an argument for deleting a check that is still needed.
+  The row also told a user inside a `ccdad run` session to restart the daemon,
+  where the daemon is not the side that moved and `ccdad daemon restart` is
+  refused in that very shell; it now says that instead.
+- **A host-injected API key was invisible to every command.** Claude Code reads
+  `CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR` **or**, when that is unset,
+  `/home/claude/.claude/remote/.api_key` — one branch, two routes. ccdad modelled
+  only the variable, so on a machine with the file and no variable a key that
+  displaces the login was reported by nothing: `doctor`'s `api-key` row said no
+  key resolved, `ccdad which` named the login's account, and a switch wrote a
+  login nothing would read.
+- **`CLAUDE_CODE_SIMPLE=0` put ccdad in bare mode.** Claude Code parses that
+  variable with a four-spelling truthiness test (`1`, `true`, `yes`, `on`) and
+  ccdad tested it for non-emptiness, so setting it to `0` — the natural way to
+  turn something off — made ccdad report that no credential resolves on a machine
+  that has one.
+- **Every message about a displaced switch prescribed the wrong fix.** They said
+  "Unset CLAUDE_CODE_OAUTH_TOKEN" — for `ccdad switch`, for `ccdad auto`, for the
+  daemon's log, and for the note after an api-key switch. Three of the sources
+  that displace a switch have no variable at all, so that sentence sent a user
+  after something that is not set. All four now print Claude Code's own
+  per-source remedy; for a host-injected token that is "check the host session".
+- **`CLAUDE_CODE_REMOTE=0` made ccdad think it was inside a session host.** Claude
+  Code reads that variable through a typed accessor that declares it a boolean —
+  the same four-spelling test as `CLAUDE_CODE_SIMPLE` — and ccdad tested it for
+  presence. Believing a session is hosted SUPPRESSES `ANTHROPIC_AUTH_TOKEN` and
+  the `apiKeyHelper` and disqualifies an Anthropic CLI profile, so ccdad reported
+  the login as the winner while one of them was deciding the session. The same
+  accessor trims every string variable, so a variable set to spaces is now
+  correctly read as not set.
+- **`ccdad auto` and the daemon stand down for the whole displacing set.** The
+  unattended gate was keyed on `CLAUDE_CODE_OAUTH_TOKEN` alone, so on a machine
+  where anything else outranks the credentials file the engine switched, reported
+  success, and changed nothing about what a session authenticates as — on every
+  evaluation.
 
 - **A Windows uninstall that could not schedule its own cleanup no longer
   reports that the binary could not be removed.** Removing the running binary
