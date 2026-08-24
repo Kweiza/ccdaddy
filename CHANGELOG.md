@@ -18,6 +18,63 @@ by `uuid` or `alias`.
 
 ### Added
 
+- **`ccdad probe`, for a window that has never been used.** Such a window
+  reports no reset time, so it has no pace, no projection and nothing to rank
+  on, and the only way to get one is to spend against it: the endpoint reports a
+  reset only once something has. The probe runs `claude -p "hi" --max-turns 1`
+  in a throwaway credential home — `ccdad run`'s own scoping, from the same code
+  — and discards the session, so the live login is never touched and a session
+  in flight is never interrupted. It does not poll afterwards: the probe spends
+  inference budget and an unscheduled poll would spend the usage budget too for
+  a reading that is not there yet, so the poll that reads what it woke replaces
+  that tick's poll and lands a minute later. `probe_unknown` defaults to true
+  and the first probe of an invocation says on stderr that it is spending your
+  quota. `--model` picks the window as well as the model, by family. An account
+  whose credential is a setup token or an API key is never probed — no refresh
+  grant means no reading could ever be taken for it — and neither is a window
+  that already reports a reset; a probe is attempted at most once every six
+  hours per account, counting every attempt rather than only the failures, and
+  `--force` bypasses those last two and never the first. With no `claude` on
+  `PATH` the daemon warns once per daemon lifetime and the account keeps no
+  reset time, which is the state this command exists to end.
+- **`ccdad hover on|off|status`.** Hover computes every threshold from pace —
+  the share of a window that has elapsed, plus `100 / usable accounts`, capped
+  at 99 — and sets its own anti-flap margins, dropping the multiplicative
+  `headroom_ratio` entirely because that margin runs on raw headroom while the
+  ranking orders on slack, and the two disagree hardest exactly where hover
+  operates. A window with no elapsed share falls back to 80 and queues a probe;
+  a primary credit seat, which has no window at all, is held to a fixed 95.
+  `ccdad config list` grows a `HOVER` column marking each overridden key
+  `overriding` rather than hiding it. It does NOT override
+  `credit.max_auto_spend`, `primary` or `disabled`: two independent opt-ins for
+  unattended spending is a rule rather than a knob, and the other two are facts
+  about an account. `ccdad hover status` prints every threshold it chose, the
+  share elapsed and the utilization it compared against, and the slack between
+  them, because an omakase mode is only acceptable if the numbers are visible;
+  it answers `5` rather than `0` when hover is off and prints the table anyway,
+  so `ccdad hover status >/dev/null || ccdad hover on` is correct.
+- **`ccdad bootstrap`, and a reference `Dockerfile` with its entrypoint.**
+  `ccdad add-token` is not enough to provision a container: a setup token and an
+  API key are both stored without a `claudeAiOauth` record, there is no refresh
+  grant behind either, and the daemon can therefore never read that account's
+  usage — so it is stored, usable as a credential, and can never be ranked,
+  which is the entire product missing. `bootstrap` reads `CCDAD_IMPORT` — a
+  path, or `-` for stdin — and imports a `ccdad export --full` document
+  idempotently under `ccdad import`'s own validation, including the rule that
+  newer local credentials are not overwritten without `--force`. Unset and empty
+  are both a silent no-op with exit `0`, so an entrypoint may call it
+  unconditionally, and it never answers `3` — the store carrying the document's
+  accounts is the outcome either way, and a caller under `set -e` would refuse
+  to start the container on every restart after the first. The document's
+  contents never reach a log or an error message, including the reason it
+  refused one. The image carries node, `@anthropic-ai/claude-code` and `ccdad`,
+  and sets `CCDAD_HOME` and `CLAUDE_CONFIG_DIR` both, because they are
+  independent axes and setting only the first leaves the Claude Code login
+  inside the layer while the store sits on the volume. The entrypoint tolerates
+  exit `3` from `ccdad daemon start` and nothing else, by number and re-raising
+  the rest: `3` means a daemon is already running, while `1` and `4` mean the
+  container would come up with no engine behind it. Nothing publishes the image
+  — there is no GHCR job and the release workflow is untouched.
 - **A threshold per window, and a ranking axis that measures the right
   distance.** `[window_threshold]` in `config.toml` gives `five_hour`,
   `seven_day` and every scoped weekly cap a line of its own; a window with no
