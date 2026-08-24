@@ -878,3 +878,214 @@ func TestAccountsAtRefusesADamagedAccountsFile(t *testing.T) {
 		t.Error("AccountsAt read a damaged accounts.toml as an empty store")
 	}
 }
+
+// The credential rollback. These four sit here rather than in lock_test.go
+// because what they pin is the credentials directory, not the lock: mutate's
+// failure path restores accounts.toml by never writing it, and until the
+// journal in store.go that guarantee stopped at the document.
+//
+// A batch refused on the fourth of five accounts left the first three
+// credential files on disk with no accounts.toml naming them — each holding a
+// live refresh token, each invisible to `ccdad list`, `ccdad remove` and
+// `ccdad doctor`, which all read the document.
+func TestAFailedTransactionRemovesTheCredentialFileItCreated(t *testing.T) {
+	dir := withStore(t)
+
+	seed, err := Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := seed.Add(Account{UUID: "u-1"}, sampleCreds("AT-1")); err != nil {
+		t.Fatal(err)
+	}
+
+	boom := errors.New("boom")
+	err = WithStore(func(s *Store) error {
+		if err := s.Add(Account{UUID: "u-2"}, sampleCreds("AT-2")); err != nil {
+			return err
+		}
+		return boom
+	})
+	if !errors.Is(err, boom) {
+		t.Fatalf("WithStore() = %v, want the callback's error", err)
+	}
+
+	orphan := filepath.Join(dir, credentialsDir, "u-2.json")
+	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+		t.Errorf("a refused transaction left a live refresh token at %s with no account naming it", orphan)
+	}
+	kept := filepath.Join(dir, credentialsDir, "u-1.json")
+	if _, err := os.Stat(kept); err != nil {
+		t.Errorf("the rollback took the credentials of an account it never touched: %v", err)
+	}
+}
+
+// The other half of the same guarantee, and the direction that logs a user
+// out: remove deletes the credential file BEFORE it drops the account, so a
+// transaction that fails afterwards leaves accounts.toml naming an account
+// whose credentials are gone.
+func TestAFailedTransactionPutsBackTheCredentialFileItDeleted(t *testing.T) {
+	dir := withStore(t)
+
+	seed, err := Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := seed.Add(Account{UUID: "u-1"}, sampleCreds("AT-1")); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, credentialsDir, "u-1.json")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	boom := errors.New("boom")
+	err = WithStore(func(s *Store) error {
+		if err := s.Remove("u-1"); err != nil {
+			return err
+		}
+		return boom
+	})
+	if !errors.Is(err, boom) {
+		t.Fatalf("WithStore() = %v, want the callback's error", err)
+	}
+
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("the account is still in accounts.toml but its credentials are gone: %v", err)
+	}
+	if string(after) != string(before) {
+		t.Errorf("restored credentials = %s, want %s", after, before)
+	}
+}
+
+// The deliberate exception, and it is not an oversight. `ccdad run` carries a
+// session's refreshed claudeAiOauth back into the store through Add on every
+// ordinary run, so the bytes an overwrite replaced are a login the provider
+// has already rotated away. Putting them back would trade a leak nobody has
+// for an account that can no longer authenticate — and the account is still
+// named by accounts.toml either way, so nothing is hidden and nothing is
+// missing.
+func TestAFailedTransactionKeepsCredentialsItOnlyOverwrote(t *testing.T) {
+	dir := withStore(t)
+
+	seed, err := Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := seed.Add(Account{UUID: "u-1"}, sampleCreds("AT-OLD")); err != nil {
+		t.Fatal(err)
+	}
+
+	boom := errors.New("boom")
+	err = WithStore(func(s *Store) error {
+		acct, ok := s.Get("u-1")
+		if !ok {
+			return errors.New("fixture: the seeded account is not there")
+		}
+		if err := s.Add(acct, sampleCreds("AT-NEW")); err != nil {
+			return err
+		}
+		return boom
+	})
+	if !errors.Is(err, boom) {
+		t.Fatalf("WithStore() = %v, want the callback's error", err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(dir, credentialsDir, "u-1.json"))
+	if err != nil {
+		t.Fatalf("the rollback removed a file it had only overwritten: %v", err)
+	}
+	if !strings.Contains(string(raw), "AT-NEW") {
+		t.Errorf("stored credentials = %s, want the newer login kept", raw)
+	}
+}
+
+// The callback is not the only way a transaction fails. save() writes
+// accounts.toml last, so an unwritable store root refuses the document AFTER
+// every credential file is already down — which is the shape ENOSPC has, and
+// this machine's disk is the reason the item exists.
+func TestAFailedSaveRemovesTheCredentialFileItCreated(t *testing.T) {
+	skipIfPermissionsAreMeaningless(t)
+	dir := withStore(t)
+
+	if _, err := Open(); err != nil {
+		t.Fatal(err)
+	}
+
+	err := WithStore(func(s *Store) error {
+		if err := s.Add(Account{UUID: "u-1"}, sampleCreds("AT-1")); err != nil {
+			return err
+		}
+		// Only the root: the credentials directory stays writable, so the
+		// rollback can still act while the document cannot be written.
+		return os.Chmod(dir, 0o500)
+	})
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	if err == nil {
+		t.Fatal("WithStore() = nil, want the unwritable store root to fail the save")
+	}
+
+	orphan := filepath.Join(dir, credentialsDir, "u-1.json")
+	if _, statErr := os.Stat(orphan); !os.IsNotExist(statErr) {
+		t.Errorf("a transaction whose save failed left a live refresh token at %s: %v", orphan, err)
+	}
+}
+
+// A reversal that did not happen is the leak still being there, so it is part
+// of the answer rather than a detail swallowed on the way out.
+func TestRollbackSaysWhichCredentialFileItCouldNotRemove(t *testing.T) {
+	skipIfPermissionsAreMeaningless(t)
+	dir := withStore(t)
+
+	if _, err := Open(); err != nil {
+		t.Fatal(err)
+	}
+	creds := filepath.Join(dir, credentialsDir)
+	t.Cleanup(func() { _ = os.Chmod(creds, 0o700) })
+
+	boom := errors.New("boom")
+	err := WithStore(func(s *Store) error {
+		if err := s.Add(Account{UUID: "u-1"}, sampleCreds("AT-1")); err != nil {
+			return err
+		}
+		if err := os.Chmod(creds, 0o500); err != nil {
+			return err
+		}
+		return boom
+	})
+	if !errors.Is(err, boom) {
+		t.Fatalf("WithStore() = %v, want the callback's error kept", err)
+	}
+	orphan := filepath.Join(creds, "u-1.json")
+	if !strings.Contains(err.Error(), orphan) {
+		t.Errorf("WithStore() = %v, want it to name the file it could not remove (%s)", err, orphan)
+	}
+}
+
+// The in-memory half of the same guarantee. add appends to the slice once the
+// credential file is down, so a transaction that fails after that point leaves
+// THIS PROCESS naming an account accounts.toml does not have — and the next
+// mutate is the only thing that would have cleared it. A Store outlives one
+// transaction in `ccdad run` and in the daemon, and a phantom account there is
+// a switch onto credentials the rollback has just deleted.
+func TestAFailedTransactionLeavesNoPhantomAccountInThisProcess(t *testing.T) {
+	withStore(t)
+
+	boom := errors.New("boom")
+	var captured *Store
+	err := WithStore(func(s *Store) error {
+		captured = s
+		if err := s.Add(Account{UUID: "u-1"}, sampleCreds("AT-1")); err != nil {
+			return err
+		}
+		return boom
+	})
+	if !errors.Is(err, boom) {
+		t.Fatalf("WithStore() = %v, want the callback's error", err)
+	}
+	if got := captured.Accounts(); len(got) != 0 {
+		t.Errorf("Accounts() = %+v, want none: a refused transaction left this process holding an account the document does not have", got)
+	}
+}

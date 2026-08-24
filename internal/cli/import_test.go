@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
+	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/store"
 )
 
@@ -534,5 +535,55 @@ func TestImportNamesTheSchemaVersionADocumentDeclares(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "schema 99") {
 		t.Errorf("stderr = %q, want it to name the version the document declares", stderr)
+	}
+}
+
+// The all-or-nothing promise stopped at accounts.toml. A row that fails AFTER
+// its store.Add — an I/O failure on the fourth of five credential writes, not
+// a defect in the document — left every row before it on disk as a credential
+// file no accounts.toml named: a live refresh token that `ccdad list`, `ccdad
+// remove` and `ccdad doctor` cannot see, because all three read the document.
+//
+// The failure is injected by putting a DIRECTORY where the second account's
+// credential file goes, so the atomic write's rename cannot land on it. It
+// stands in for the reachable causes — ENOSPC, EIO, a mode the store did not
+// set — and is the only one a test can produce without adding a seam to the
+// store for its own sake.
+func TestImportLeavesNoCredentialFileWhenTheBatchFailsAfterTheAdd(t *testing.T) {
+	const leaked = "RT-DO-NOT-LEAVE-THIS-BEHIND"
+	isolate(t)
+	home := mustPath(ccpath.StoreHome())
+	if err := os.MkdirAll(filepath.Join(home, "credentials", "u-b.json"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	path := writeImportFile(t, fmt.Sprintf(`{
+	  "schemaVersion": 1, "full": true,
+	  "accounts": [
+	    {"uuid":"u-a","email":"a@example.com","kind":"subscription",
+	      "credentials":{"claudeAiOauth":{"accessToken":"AT","refreshToken":%q}}},
+	    {"uuid":"u-b","email":"b@example.com","kind":"subscription",
+	      "credentials":{"claudeAiOauth":{"accessToken":"AT","refreshToken":"RT-b"}}}
+	  ]
+	}`, leaked))
+
+	code, _, _, top := runRoot(t, "import", path)
+	if code != ExitFailure {
+		t.Fatalf("import = %d (%s), want %d: the machine is what is wrong, not the document", code, top, ExitFailure)
+	}
+
+	orphan := filepath.Join(home, "credentials", "u-a.json")
+	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+		t.Errorf("a refused import left a live refresh token at %s with no account naming it", orphan)
+	}
+	s, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Accounts(); len(got) != 0 {
+		t.Errorf("accounts = %+v; a refused import wrote part of itself", got)
+	}
+	if strings.Contains(top, leaked) {
+		t.Errorf("the refusal repeated a refresh token out of the document:\n%s", top)
 	}
 }
