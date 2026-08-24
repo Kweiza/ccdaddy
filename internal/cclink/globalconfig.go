@@ -18,7 +18,7 @@ import (
 // This file handles Claude Code's OTHER file: ~/.claude.json, the general
 // config. It is not the credential store and must not be treated like one.
 //
-// ccdad touches exactly two of its keys, both on the API-key path:
+// ccdad touches exactly three of its keys:
 //
 //	primaryApiKey          the key Claude Code uses when nothing higher-priority
 //	                       resolves -- its `/login` "managed key" slot
@@ -26,6 +26,15 @@ import (
 //	                       characters of each key the user has agreed to, and an
 //	                       interactive Claude Code refuses an ANTHROPIC_API_KEY
 //	                       whose suffix is not in it
+//	oauthAccount           the profile Claude Code displays for the live OAuth
+//	                       login -- accountUuid, emailAddress, and the fields
+//	                       around them. Claude Code's own token-refresh handler
+//	                       enriches this object's COSMETIC fields but never
+//	                       rewrites accountUuid, emailAddress, or
+//	                       organizationUuid once one is cached, so a switch
+//	                       that only replaces the credentials file leaves this
+//	                       naming whoever was live before -- forever, not just
+//	                       until the next refresh. See oauthaccount.go.
 //
 // Everything else in the file is the user's: project history, onboarding state,
 // tips, counters. A wholesale replace would destroy all of it, so every write

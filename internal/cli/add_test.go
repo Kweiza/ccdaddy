@@ -851,6 +851,36 @@ func TestAddWithActivateWritesTheLiveFile(t *testing.T) {
 	}
 }
 
+// --activate writes the live credentials file without going through
+// switcher.Execute, so it has to keep ~/.claude.json's oauthAccount in sync
+// itself. Without it, a machine's very first `ccdad add --activate` leaves
+// Claude Code displaying no account at all, or whichever account it happened
+// to be logged in as before, forever.
+func TestAddWithActivateUpdatesOAuthAccount(t *testing.T) {
+	isolate(t)
+	stubEnvironment(t, true, false)
+	stubLogin(t, loginToken("acct-1", "a@example.com", "RT-1"))
+	stubProfile(t, func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, profileJSON("acct-1", "a@example.com"))
+	})
+
+	if err, _, _ := runCmd(t, newAddCmd(), "--activate"); err != nil {
+		t.Fatalf("Execute() = %v, want nil", err)
+	}
+
+	cfg, err := cclink.LoadGlobalConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, ok := cclink.OAuthAccountSnapshot(cfg)
+	if !ok {
+		t.Fatal("--activate did not write an oauthAccount")
+	}
+	if uuid, _ := cclink.OAuthAccountUUID(raw); uuid != "acct-1" {
+		t.Fatalf("oauthAccount names %q, want acct-1", uuid)
+	}
+}
+
 // add doubles as re-authentication. Re-authenticating the account that is
 // currently live must keep the other account-scoped keys that are sitting in
 // the live file: losing trustedDeviceToken costs a device-cap slot and losing

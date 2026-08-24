@@ -258,6 +258,7 @@ func newSwitchCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			noteProfileSync(cmd, res.ProfileSyncErr)
 			if res.Outcome == switcher.AlreadyOn {
 				fmt.Fprintf(cmd.ErrOrStderr(), "Already on %s.\n", target.Label())
 				return WithCode(errSilent, ExitNothingToDo)

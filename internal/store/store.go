@@ -470,6 +470,26 @@ func (s *Store) setAlias(uuid, alias string) error {
 	return nil
 }
 
+// SetOAuthAccountSnapshot records the oauthAccount object Claude Code held
+// for this account in ~/.claude.json at the moment a switch displaced it as
+// the live login. See switcher.SyncGlobalConfigIdentity, the only caller.
+func (s *Store) SetOAuthAccountSnapshot(uuid string, snapshot json.RawMessage) error {
+	return s.mutate(func() error { return s.setOAuthAccountSnapshot(uuid, snapshot) })
+}
+
+func (s *Store) setOAuthAccountSnapshot(uuid string, snapshot json.RawMessage) error {
+	if _, ok := s.Get(uuid); !ok {
+		return fmt.Errorf("%w: %q", ErrNotFound, uuid)
+	}
+	for i := range s.data.Accounts {
+		if s.data.Accounts[i].UUID == uuid {
+			s.data.Accounts[i].OAuthAccountSnapshot = string(snapshot)
+			break
+		}
+	}
+	return nil
+}
+
 // Credentials returns an account's stored account-scoped keys.
 func (s *Store) Credentials(uuid string) (cclink.Blob, error) {
 	// Checked here too, so a hand-edited accounts.toml cannot make this read an

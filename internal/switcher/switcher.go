@@ -1,6 +1,7 @@
 package switcher
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -177,12 +178,18 @@ type Result struct {
 	ClearedKey      bool
 	ClearedKeyOwner store.Account
 
-	// CooldownErr and KeyErr are failures that happened AFTER the credentials
-	// file was written. They are reported rather than returned: the switch is
-	// on disk by then, and turning either into Execute's error would report a
-	// completed swap as a failure.
+	// CooldownErr, KeyErr, and ProfileSyncErr are failures that happened AFTER
+	// the credentials file was written. They are reported rather than
+	// returned: the switch is on disk by then, and turning any of them into
+	// Execute's error would report a completed swap as a failure.
 	CooldownErr error
 	KeyErr      error
+	// ProfileSyncErr is a failure to keep ~/.claude.json's oauthAccount
+	// pointed at Target -- see SyncGlobalConfigIdentity. Left nil (and
+	// SyncGlobalConfigIdentity never called) when EnvTokenWins: something
+	// else is what a session actually authenticates as, and writing Target's
+	// identity there would misdescribe it.
+	ProfileSyncErr error
 
 	// Claim is what the credential-home claim said at the moment of the write.
 	//
@@ -316,6 +323,15 @@ func Execute(s *store.Store, req Request) (Result, error) {
 	if errors.Is(err, cclink.ErrNoChange) {
 		// A takeover joined onto a stand-down is not damage: nothing was
 		// written, so there is no write for another process to have raced.
+		if res.Outcome == AlreadyOn && !res.EnvTokenWins {
+			// The credentials file already named Target before this call, but
+			// ~/.claude.json's cached display may still name whoever was live
+			// before THAT switch -- Claude Code never self-corrects it (see
+			// SyncGlobalConfigIdentity). Checking on every AlreadyOn, not only
+			// a real Switched, is the only path that ever fixes it once it has
+			// drifted.
+			res.ProfileSyncErr = SyncGlobalConfigIdentity(s, req.Target, res.Live, res.LiveKnown)
+		}
 		return res, nil
 	}
 	if err != nil {
@@ -328,7 +344,77 @@ func Execute(s *store.Store, req Request) (Result, error) {
 	}
 	res.CooldownErr = RecordSwitch(req.Target.UUID)
 	res.ClearedKeyOwner, res.ClearedKey, res.KeyErr = releaseManagedAPIKey(s)
+	if !res.EnvTokenWins {
+		res.ProfileSyncErr = SyncGlobalConfigIdentity(s, req.Target, res.Live, res.LiveKnown)
+	}
 	return res, nil
+}
+
+// SyncGlobalConfigIdentity keeps ~/.claude.json's oauthAccount pointed at
+// whichever account this call just confirmed live -- target.
+//
+// Claude Code's own token-refresh handler enriches oauthAccount's cosmetic
+// fields (displayName, billingType, the trial and onboarding flags...) but
+// never rewrites accountUuid, emailAddress, or organizationUuid once the
+// object exists (see cclink's oauthaccount.go). A switch that only replaces
+// the credentials file therefore leaves Claude Code DISPLAYING whoever was
+// live before, forever -- even though the credentials file, and everything
+// Claude Code actually authenticates and meters with, is already target's.
+//
+// If target has never been synced before, oauthAccount is reset to a minimal
+// object naming just who it is; if a real snapshot was captured the last time
+// ccdad switched away from target, that exact object is restored instead.
+// Either way, if the object already names target, it is left untouched --
+// touching it here would discard any cosmetic enrichment Claude Code's own
+// refresh has since added, for no gain.
+//
+// previousLive and previousLiveKnown are what the caller believes was live
+// immediately before this call; Execute already decides this under Claude
+// Code's credential locks. They are used only to decide whose snapshot to
+// back the displaced object up as, so target's own correctness never depends
+// on a caller supplying them -- a caller that cannot loses only that
+// courtesy. It is exported for the one other attended path that installs a
+// login without going through Execute: `ccdad add --activate`.
+func SyncGlobalConfigIdentity(s *store.Store, target, previousLive store.Account, previousLiveKnown bool) error {
+	var captured json.RawMessage
+	var capturedUUID string
+
+	err := cclink.UpdateGlobalConfig(func(g *cclink.GlobalConfig) error {
+		raw, hadCaptured := cclink.OAuthAccountSnapshot(g)
+		if hadCaptured {
+			if uuid, ok := cclink.OAuthAccountUUID(raw); ok {
+				captured, capturedUUID = raw, uuid
+				if uuid == target.UUID {
+					return nil
+				}
+			}
+		}
+		if target.OAuthAccountSnapshot != "" {
+			return cclink.RestoreOAuthAccountSnapshot(g, json.RawMessage(target.OAuthAccountSnapshot))
+		}
+		return cclink.ResetOAuthAccountIdentity(g, target.UUID, target.Email,
+			target.OrganizationUUID, target.Tier, target.RateLimitTier)
+	})
+	if err != nil {
+		return err
+	}
+
+	// The backup is only trustworthy when the captured object actually named
+	// previousLive: with this fix rolling out onto a machine whose display has
+	// been stale across SEVERAL real switches already, the object captured
+	// here can belong to an account further back than previousLive, and
+	// filing it under previousLive's slot would plant a wrong accountUuid
+	// there for a future restore to reinstall.
+	if capturedUUID == "" || capturedUUID != previousLive.UUID {
+		return nil
+	}
+	if !previousLiveKnown || previousLive.UUID == target.UUID {
+		return nil
+	}
+	if previousLive.OAuthAccountSnapshot == string(captured) {
+		return nil
+	}
+	return s.SetOAuthAccountSnapshot(previousLive.UUID, captured)
 }
 
 // RecordSwitch stamps the anti-flap cooldown after a swap has succeeded.

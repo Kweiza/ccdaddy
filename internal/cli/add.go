@@ -396,6 +396,13 @@ func runAdd(cmd *cobra.Command, opts addOptions) error {
 		// switcher.Execute, so the claim has to be asked here or this is the
 		// one attended write that never mentions a second store's engine.
 		noteCredentialHomeClaim(cmd, credhome.Decide())
+		// Same reason: ~/.claude.json's cached display of who is live needs the
+		// same fix switcher.Execute gets. previousLiveKnown is false rather than
+		// resolved from `live` above -- this account is new, so there is no
+		// snapshot of its own to restore either way, and losing the backup
+		// courtesy for whoever WAS live costs nothing switcher.Execute's next
+		// real switch will not recover on its own.
+		noteProfileSync(cmd, switcher.SyncGlobalConfigIdentity(s, saved, store.Account{}, false))
 	} else {
 		fmt.Fprintf(stderr, "Run 'ccdad switch %d' to use it.\n", saved.Idx)
 	}
