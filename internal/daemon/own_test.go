@@ -2,11 +2,38 @@ package daemon
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
+
+// pollRecorder is the set of tokens the fake fetcher was asked for.
+//
+// It is guarded, and that is not defensiveness. The engine dispatches ONE
+// GOROUTINE PER ACCOUNT (see dispatch), so a bare map written from the fetcher
+// is a write race the moment a test seeds two accounts -- which is what both
+// tests below do, and what the race detector reported here.
+type pollRecorder struct {
+	mu   sync.Mutex
+	seen map[string]bool
+}
+
+func (p *pollRecorder) saw(token string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.seen == nil {
+		p.seen = map[string]bool{}
+	}
+	p.seen[token] = true
+}
+
+func (p *pollRecorder) has(token string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.seen[token]
+}
 
 // seedElsewhere stores an account and hands it to another machine's ccdad.
 func seedElsewhere(t *testing.T, uuid, org string) {
@@ -41,17 +68,17 @@ func TestAnAccountAnotherMachineOwnsIsNotPolled(t *testing.T) {
 	seedElsewhere(t, "u-2", "org-2")
 	liveAs(t, "u-1")
 
-	polled := map[string]bool{}
+	var polled pollRecorder
 	e := engineFor(t, tokensAreFine, func(_ context.Context, token string) (*usage.Snapshot, error) {
-		polled[token] = true
+		polled.saw(token)
 		return snapshotWith(20), nil
 	})
 	tick(t, e)
 
-	if !polled["AT-u-1"] {
+	if !polled.has("AT-u-1") {
 		t.Error("this machine's own account was not polled")
 	}
-	if polled["AT-u-2"] {
+	if polled.has("AT-u-2") {
 		t.Error("an account another machine drives was polled, spending a budget shared " +
 			"with the machine that is actually using it")
 	}
@@ -74,14 +101,14 @@ func TestTheLiveAccountIsPolledEvenWhenAnotherMachineOwnsIt(t *testing.T) {
 	// is the ordinary state right after a split is declared.
 	liveAs(t, "u-2")
 
-	polled := map[string]bool{}
+	var polled pollRecorder
 	e := engineFor(t, tokensAreFine, func(_ context.Context, token string) (*usage.Snapshot, error) {
-		polled[token] = true
+		polled.saw(token)
 		return snapshotWith(20), nil
 	})
 	tick(t, e)
 
-	if !polled["AT-u-2"] {
+	if !polled.has("AT-u-2") {
 		t.Error("the live account went unread because another machine owns it, which " +
 			"leaves the engine with no baseline for the one account a session runs on")
 	}
