@@ -2,12 +2,15 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/daemon"
+	"github.com/Kweiza/ccdaddy/internal/store"
+	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
 
@@ -41,6 +44,22 @@ func stubDaemon(t *testing.T, r daemon.Report, err error) {
 
 func window(pct float64, reset time.Time) usage.Window {
 	return usage.NewWindow(&pct, &reset)
+}
+
+// seedAccountAddedAt is seedAccount with the stamp under the test's control. It
+// matters wherever a fixture reaches the ENGINE rather than only the cache: a
+// reading older than its account's AddedAt is pruned as one that belonged to a
+// previous login at the same uuid, and a frozen clock in the past makes every
+// reading look exactly like that.
+func seedAccountAddedAt(t *testing.T, uuid, email string, at time.Time) {
+	t.Helper()
+	s, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add(store.Account{UUID: uuid, Email: email, AddedAt: at}, credsFor("RT-"+uuid)); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func seedUsageEntry(t *testing.T, uuid string, e usage.Entry) {
@@ -632,5 +651,156 @@ func TestStatusReportsATrippedWeeklyCapRatherThanTheTightestWindow(t *testing.T)
 	}
 	if got := usageObj["headroomPct"]; got != 5.0 {
 		t.Errorf("headroomPct = %v, want 5", got)
+	}
+}
+
+// Under hover the engine ranks on thresholds it derived from each window's own
+// elapsed share and the size of the pool, and the dashboard has to report those.
+// A row measured against the number still sitting in the config file has a slack
+// that is arithmetic the engine never did, and it can name a different binding
+// window as well, because the binding window is the one with the least slack and
+// slack moves with the threshold. Hover's whole claim is that an automatic mode
+// a user cannot audit is one they have to take on trust.
+func TestStatusAndListReportTheThresholdsHoverRankedOn(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	// 43% of a seven-day window gone, with two accounts to divide what is left
+	// between: 43 + 100/2 = 93, where the configured default is 80.
+	reset := statusNow.Add(time.Duration(0.57 * float64(7*24*time.Hour)))
+	// Added BEFORE the frozen clock, because the engine prunes a reading older
+	// than its account's AddedAt as one that belonged to a previous login at the
+	// same uuid -- and seedAccount stamps that from the real clock.
+	for uuid, email := range map[string]string{"uuid-a": "work@example.com", "uuid-b": "alt@example.com"} {
+		seedAccountAddedAt(t, uuid, email, statusNow.Add(-24*time.Hour))
+	}
+	for uuid, pct := range map[string]float64{"uuid-a": 95, "uuid-b": 41} {
+		seedUsageEntry(t, uuid, usage.Entry{
+			FetchedAt: statusNow.Add(-time.Minute),
+			Snapshot:  &usage.Snapshot{SevenDay: window(pct, reset)},
+		})
+	}
+	if code, _, errOut, _ := runRoot(t, "config", "set", "hover", "true"); code != 0 {
+		t.Fatalf("config set hover true exited %v: %s", code, errOut)
+	}
+
+	// Both commands, because they share one builder and the property worth
+	// pinning is that they cannot disagree.
+	for _, name := range []string{"status", "list"} {
+		t.Run(name, func(t *testing.T) {
+			_, out, _, _ := runRoot(t, name, "--json")
+			u, ok := accountRow(t, statusJSON(t, out), "uuid-a")["usage"].(map[string]any)
+			if !ok {
+				t.Fatalf("no usage object in %s --json:\n%s", name, out)
+			}
+			if got := u["windowThreshold"]; got != 93.0 {
+				t.Errorf("windowThreshold = %v, want the 93 hover derived rather than the configured 80", got)
+			}
+			if got := u["slack"]; got != -2.0 {
+				t.Errorf("slack = %v, want -2, which is 93 against 95%% used", got)
+			}
+		})
+	}
+}
+
+// stubEnginePlan replaces the engine seam. An evaluation that cannot be made is
+// not something a test can arrange with a store and a cache.
+func stubEnginePlan(t *testing.T, fn func(*store.Store, time.Time) (strategy.Plan, error)) {
+	t.Helper()
+	saved := enginePlan
+	t.Cleanup(func() { enginePlan = saved })
+	enginePlan = fn
+}
+
+// With hover off the dashboard is what it always was: a read of the cache and
+// the config, and no evaluation at all. `ccdad status` is what a user reaches
+// for when something is already wrong, and running the whole engine to render it
+// puts the store, the engine state and a ranking pass between them and an
+// answer that never needed any of it.
+func TestTheDashboardDoesNotRunTheEngineWithHoverOff(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	seedAccountAddedAt(t, "uuid-a", "work@example.com", statusNow.Add(-24*time.Hour))
+	seedUsageEntry(t, "uuid-a", usage.Entry{
+		FetchedAt: statusNow.Add(-time.Minute),
+		Snapshot:  &usage.Snapshot{SevenDay: window(95, statusNow.Add(40*time.Hour))},
+	})
+
+	asked := false
+	stubEnginePlan(t, func(*store.Store, time.Time) (strategy.Plan, error) {
+		asked = true
+		return strategy.Plan{}, nil
+	})
+
+	if _, out, _, _ := runRoot(t, "status", "--json"); out == "" {
+		t.Fatal("status --json emitted nothing")
+	}
+	if asked {
+		t.Error("the dashboard ran an engine evaluation with hover off; the configured bundle needs none")
+	}
+}
+
+// An engine that cannot be asked is a notice, never a blank dashboard. The rows
+// fall back to the configured bundle because that is the last table anyone can
+// name, and the note is what stops the number being read as hover's.
+func TestTheDashboardSaysSoWhenHoversThresholdsCannotBeRead(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	seedAccountAddedAt(t, "uuid-a", "work@example.com", statusNow.Add(-24*time.Hour))
+	seedUsageEntry(t, "uuid-a", usage.Entry{
+		FetchedAt: statusNow.Add(-time.Minute),
+		Snapshot:  &usage.Snapshot{SevenDay: window(95, statusNow.Add(40*time.Hour))},
+	})
+	if code, _, errOut, _ := runRoot(t, "config", "set", "hover", "true"); code != 0 {
+		t.Fatalf("config set hover true exited %v: %s", code, errOut)
+	}
+	stubEnginePlan(t, func(*store.Store, time.Time) (strategy.Plan, error) {
+		return strategy.Plan{}, errors.New("the account store could not be read")
+	})
+
+	code, out, errOut, _ := runRoot(t, "status", "--json")
+	if code != 0 {
+		t.Fatalf("status exited %v; a dashboard renders whatever else is wrong", code)
+	}
+	if !strings.Contains(errOut, "the account store could not be read") {
+		t.Errorf("nothing on stderr names why hover's own thresholds are missing:\n%s", errOut)
+	}
+	u, ok := accountRow(t, statusJSON(t, out), "uuid-a")["usage"].(map[string]any)
+	if !ok {
+		t.Fatalf("no usage object:\n%s", out)
+	}
+	if got := u["windowThreshold"]; got != 80.0 {
+		t.Errorf("windowThreshold = %v, want the configured 80 the note points at", got)
+	}
+}
+
+// A row the dashboard renders and the engine discarded. `status` reports every
+// account from the cache; the engine prunes a reading older than its account's
+// AddedAt, so with only such readings it makes no pass and there is no derived
+// table at all. What the row must NOT be measured against is `threshold`, which
+// is the first key hover stops reading -- so the configured 60 here is the wrong
+// answer and hover's own 80 for an account it never saw is the right one.
+func TestARowTheHoverPassNeverSawIsMeasuredAsHoverWouldMeasureIt(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	// Added AFTER the reading was taken, which is what makes the engine treat
+	// it as a previous login's quota and prune it.
+	seedAccountAddedAt(t, "uuid-a", "work@example.com", statusNow.Add(time.Hour))
+	seedUsageEntry(t, "uuid-a", usage.Entry{
+		FetchedAt: statusNow.Add(-time.Minute),
+		Snapshot:  &usage.Snapshot{SevenDay: window(95, statusNow.Add(40*time.Hour))},
+	})
+	for _, kv := range [][2]string{{"hover", "true"}, {"threshold", "60"}} {
+		if code, _, errOut, _ := runRoot(t, "config", "set", kv[0], kv[1]); code != 0 {
+			t.Fatalf("config set %s %s exited %v: %s", kv[0], kv[1], code, errOut)
+		}
+	}
+
+	_, out, _, _ := runRoot(t, "status", "--json")
+	u, ok := accountRow(t, statusJSON(t, out), "uuid-a")["usage"].(map[string]any)
+	if !ok {
+		t.Fatalf("no usage object:\n%s", out)
+	}
+	if got := u["windowThreshold"]; got != 80.0 {
+		t.Errorf("windowThreshold = %v, want 80 -- hover ignores `threshold`, so the configured 60 is a number nothing would have used", got)
 	}
 }
