@@ -379,6 +379,9 @@ func (e *Engine) act(s *store.Store, ev switcher.Evaluation) (switcher.Result, e
 	if res.KeyErr != nil {
 		e.logf("the API key in Claude Code's config could not be cleared: %v", res.KeyErr)
 	}
+	if res.ProfileSyncErr != nil {
+		e.logf("Claude Code's displayed account name could not be updated: %v", res.ProfileSyncErr)
+	}
 	return res, nil
 }
 

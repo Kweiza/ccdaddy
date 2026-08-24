@@ -45,6 +45,14 @@ type Account struct {
 	// one. The ambiguous-email error names it, so a user with the same address
 	// in two organizations can tell the candidates apart.
 	OrganizationUUID string `toml:"organization_uuid,omitempty"`
+	// OAuthAccountSnapshot is the exact oauthAccount object Claude Code held
+	// in ~/.claude.json for this account, captured by ccdad the moment a
+	// switch displaced it as the live login. A later switch back restores it
+	// verbatim, because reconstructing it from the fields above would drop
+	// everything the profile lookup above never asked for -- displayName,
+	// billingType, the trial and onboarding flags. Empty for an account
+	// ccdad has never switched AWAY from; see switcher.SyncGlobalConfigIdentity.
+	OAuthAccountSnapshot string `toml:"oauth_account_snapshot,omitempty"`
 	// Disabled holds an account out of auto-rotation while keeping it a valid
 	// explicit switch target.
 	Disabled bool `toml:"disabled,omitempty"`

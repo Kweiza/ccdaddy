@@ -155,6 +155,40 @@ func readLive(t *testing.T) []byte {
 	return raw
 }
 
+func globalConfigPath(t *testing.T) string {
+	t.Helper()
+	return mustPath(ccpath.GlobalConfigPath())
+}
+
+// writeGlobalConfig replaces ~/.claude.json wholesale, the sandboxed test
+// stand-in for it.
+func writeGlobalConfig(t *testing.T, body string) {
+	t.Helper()
+	if err := os.WriteFile(globalConfigPath(t), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// readOAuthAccount reads back the oauthAccount object ~/.claude.json holds
+// after a switch, decoded to a plain map so a test can assert on individual
+// fields without caring about key order.
+func readOAuthAccount(t *testing.T) map[string]any {
+	t.Helper()
+	g, err := cclink.LoadGlobalConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, ok := cclink.OAuthAccountSnapshot(g)
+	if !ok {
+		t.Fatal("readOAuthAccount: ~/.claude.json has no oauthAccount")
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
 func openStore(t *testing.T) *store.Store {
 	t.Helper()
 	s, err := store.Open()

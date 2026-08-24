@@ -238,6 +238,9 @@ func autoPass(em *autoEmitter, s *store.Store) (ExitCode, error) {
 	case switcher.AlreadyOn:
 		em.unchanged(res, "already-on")
 		em.say("Already on %s.", ev.Target.Label())
+		if res.ProfileSyncErr != nil {
+			em.notice("%v; Claude Code's displayed account name may still name the previous login", res.ProfileSyncErr)
+		}
 		return ExitNothingToDo, nil
 	case switcher.Raced:
 		em.unchanged(res, "raced")
@@ -283,6 +286,9 @@ func autoPass(em *autoEmitter, s *store.Store) (ExitCode, error) {
 	if res.KeyErr != nil {
 		em.notice("the API key stored in Claude Code's config could not be cleared (%v); "+
 			"it stays inert while this login is live", res.KeyErr)
+	}
+	if res.ProfileSyncErr != nil {
+		em.notice("%v; Claude Code's displayed account name may still name the previous login", res.ProfileSyncErr)
 	}
 	em.switched(res)
 	em.say("Switched to %s.", res.Target.Label())

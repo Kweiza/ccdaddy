@@ -154,6 +154,19 @@ func noteCredentialHomeClaim(cmd *cobra.Command, v credhome.Verdict) {
 	}
 }
 
+// noteProfileSync reports a failure to keep ~/.claude.json's displayed
+// account name aligned with the login that was just installed. It never fails
+// the command: the credentials file already reflects the switch by the time
+// this runs, so the account displayed by Claude Code catching up is a
+// courtesy, not the thing that just succeeded or failed.
+func noteProfileSync(cmd *cobra.Command, err error) {
+	if err == nil {
+		return
+	}
+	fmt.Fprintf(cmd.ErrOrStderr(),
+		"note: %v; Claude Code's displayed account name may still name the previous login.\n", err)
+}
+
 // noteReleasedAPIKey reports what the executor did with a stored key. It never
 // fails the command: the login it was clearing the way for is already installed
 // by the time this runs.

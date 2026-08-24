@@ -16,6 +16,24 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A switch now keeps `~/.claude.json`'s displayed account name in sync with
+  the credentials file it just installed.** Claude Code caches the live
+  login's profile there as `oauthAccount`, and its own token-refresh handler
+  never rewrites `accountUuid`, `emailAddress`, or `organizationUuid` once one
+  is cached — only cosmetic fields get refreshed, and only when the cached
+  object already looks complete enough that it skips re-fetching altogether.
+  A switch that only replaced the credentials file therefore left Claude Code
+  displaying whoever was live before, forever: the session authenticated and
+  metered as the new account from its very first request, but nothing ever
+  told the user so — usage tracked one account while the name on screen still
+  read another. Every path that installs a login — `ccdad switch`, `ccdad
+  auto`, the daemon, and `ccdad add --activate` — now corrects it: restoring
+  the real object Claude Code wrote the last time this account was live, when
+  one was captured, or writing a minimal identity and letting Claude Code's
+  own refresh fill in the rest when none was.
+
 ## [0.4.0] — 2026-08-24
 
 Two fixes, no new surface. `ccdad list`'s LEFT column stopped reading `?` for
