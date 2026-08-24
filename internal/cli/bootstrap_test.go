@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -449,5 +450,138 @@ func TestBootstrapNotesANewerSchemaWithoutQuotingIt(t *testing.T) {
 	}
 	if strings.Contains(stdout+stderr+top, "99") {
 		t.Errorf("bootstrap quoted the document's schema version:\n%s", stdout+stderr+top)
+	}
+}
+
+// The container half of the same transport. A GitHub secret holds one line of
+// base64, the entrypoint pipes it in, and CCDAD_IMPORT names stdin — so the
+// secret is never on the container's disk and never in its environ.
+func TestBootstrapReadsABase64Document(t *testing.T) {
+	isolate(t)
+	body := base64.StdEncoding.EncodeToString([]byte(`{
+	  "schemaVersion": 1, "full": true,
+	  "accounts": [{"uuid":"u-1","email":"one@example.com","kind":"subscription",
+	    "credentials":{"claudeAiOauth":{"accessToken":"AT","refreshToken":"RT-u-1"}}}]
+	}`))
+
+	t.Run("from a file", func(t *testing.T) {
+		isolate(t)
+		t.Setenv("CCDAD_IMPORT", writeImportFile(t, body+"\n"))
+		if code, _, stderr, top := runRoot(t, "bootstrap"); code != ExitOK {
+			t.Fatalf("exit = %d, want %d\nstderr: %s\ntop: %s", code, ExitOK, stderr, top)
+		}
+		if got := accountCount(t); got != 1 {
+			t.Fatalf("the store holds %d account(s), want the one in the document", got)
+		}
+	})
+
+	t.Run("from stdin", func(t *testing.T) {
+		isolate(t)
+		t.Setenv("CCDAD_IMPORT", "-")
+		root := NewRootCmd()
+		root.SetIn(strings.NewReader(body + "\n"))
+		root.SetArgs(explicitArgs([]string{"bootstrap"}))
+		var out, errOut, top bytes.Buffer
+		root.SetOut(&out)
+		root.SetErr(&errOut)
+		if code := ExecuteWith(root, &top); code != ExitOK {
+			t.Fatalf("exit = %d, want %d\nstderr: %s\ntop: %s", code, ExitOK, errOut.String(), top.String())
+		}
+		if got := accountCount(t); got != 1 {
+			t.Fatalf("the store holds %d account(s), want the one piped in", got)
+		}
+	})
+}
+
+// The rule that already covered a malformed JSON document has to cover a
+// base64 one, and the base64 path is the harder half: the bytes the parser
+// then chokes on came out of a DECODER, so a message quoting them would print
+// something the file itself does not visibly contain.
+func TestBootstrapDoesNotDescribeWhatCameOutOfTheDecoder(t *testing.T) {
+	isolate(t)
+	t.Setenv("CCDAD_IMPORT",
+		writeImportFile(t, base64.StdEncoding.EncodeToString([]byte("RT-DO-NOT-LOG-THIS"))))
+
+	code, stdout, stderr, top := runRoot(t, "bootstrap")
+
+	said := stdout + stderr + top
+	if code != ExitUsage {
+		t.Errorf("exit = %d, want %d: the document is what is wrong\n%s", code, ExitUsage, said)
+	}
+	if strings.Contains(said, "RT-DO-NOT-LOG-THIS") {
+		t.Errorf("bootstrap logged what the decoder produced:\n%s", said)
+	}
+	if strings.Contains(said, "invalid character") {
+		t.Errorf("bootstrap repeated the parser's reading of the decoded document:\n%s", said)
+	}
+	if !strings.Contains(said, "CCDAD_IMPORT") {
+		t.Errorf("the refusal never names the variable that carried the document:\n%s", said)
+	}
+}
+
+// The variable takes a PATH. Setting it to the document is the mistake
+// `--base64` invented — a JSON export is kilobytes over many lines and nobody
+// pastes one into a variable, while a single line is exactly what a secret
+// store hands back — and the cost of taking it is the whole document, refresh
+// tokens included, printed into a container log by os.Open's *os.PathError.
+func TestBootstrapRefusesTheDocumentInTheVariableWithoutRepeatingIt(t *testing.T) {
+	document := `{"schemaVersion":1,"full":true,"accounts":[{"uuid":"u-1","kind":"subscription",` +
+		`"credentials":{"claudeAiOauth":{"refreshToken":"RT-DO-NOT-LOG-THIS"}}}]}`
+
+	for _, tc := range []struct{ name, value string }{
+		{"base64", base64.StdEncoding.EncodeToString([]byte(document))},
+		{"base64 with a trailing newline", base64.StdEncoding.EncodeToString([]byte(document)) + "\n"},
+		{"the json itself", document},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolate(t)
+			t.Setenv("CCDAD_IMPORT", tc.value)
+
+			code, stdout, stderr, top := runRoot(t, "bootstrap")
+
+			said := stdout + stderr + top
+			if code != ExitUsage {
+				t.Errorf("exit = %d, want %d: the variable holds the wrong kind of thing\n%s", code, ExitUsage, said)
+			}
+			if strings.Contains(said, "RT-DO-NOT-LOG-THIS") {
+				t.Errorf("bootstrap printed the refresh token out of the variable:\n%s", said)
+			}
+			if strings.Contains(said, tc.value) {
+				t.Errorf("bootstrap printed the variable's value back:\n%s", said)
+			}
+			if !strings.Contains(said, "PATH") {
+				t.Errorf("the refusal never says what the variable should hold instead:\n%s", said)
+			}
+			if accountCount(t) != 0 {
+				t.Error("the refusal imported something anyway")
+			}
+		})
+	}
+}
+
+// The value is not repeated even when it IS a path, because the guard above
+// only recognizes the documents it can parse: a truncated blob, or one with a
+// stray character in it, reaches os.Open and would come back inside a
+// *os.PathError. What the operator cannot get anywhere else is the errno; the
+// value is in their own compose file.
+func TestBootstrapDoesNotRepeatThePathItCouldNotOpen(t *testing.T) {
+	isolate(t)
+	missing := filepath.Join(t.TempDir(), "RT-LOOKS-LIKE-A-SECRET.json")
+	t.Setenv("CCDAD_IMPORT", missing)
+
+	code, stdout, stderr, top := runRoot(t, "bootstrap")
+
+	said := stdout + stderr + top
+	if code != ExitFailure {
+		t.Errorf("exit = %d, want %d: a mount that did not happen is a runtime failure", code, ExitFailure)
+	}
+	if strings.Contains(said, missing) {
+		t.Errorf("bootstrap printed the variable's value back:\n%s", said)
+	}
+	if !strings.Contains(said, "no such file or directory") {
+		t.Errorf("the errno is the part the operator cannot get anywhere else, and it is missing:\n%s", said)
+	}
+	if !strings.Contains(said, "CCDAD_IMPORT") {
+		t.Errorf("the refusal never names the variable:\n%s", said)
 	}
 }

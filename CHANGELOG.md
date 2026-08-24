@@ -37,6 +37,27 @@ by `uuid` or `alias`.
   switch are all statements about the live login. `ccdad own` with no arguments
   prints the split; `--clear` gives every account back.
 
+- **`ccdad export --base64` writes the document as one unwrapped line, and
+  `import` and `bootstrap` read either form.** A GitHub Actions secret, a
+  `.env` entry and most CI secret stores hold a single string, so a JSON
+  document pasted into one arrives with its newlines intact and breaks the file
+  it landed in. The workaround was `base64 -w0`, whose `-w0` is easy to forget
+  and whose absence surfaces as a failed deployment rather than as a failed
+  command.
+
+  Nothing has to be told which form a document is in: a ccdad export is a JSON
+  object and so begins with `{`, which is in neither base64 alphabet, so one
+  byte decides it. The decoder is deliberately permissive about everything
+  underneath — whitespace anywhere in the blob is ignored, so a document that
+  went through `base64` without `-w0` and came back wrapped at 76 columns still
+  imports, and the url-safe alphabet and absent padding are both read.
+
+  `--base64` is an encoding and not encryption, and nothing about the guards
+  moved: `--out` still writes `0600`, `--full` to a terminal is still refused
+  (the refusal now says why base64 does not change that), and `CCDAD_IMPORT`
+  still names a path or `-` and never the document, because its value is
+  visible in `docker inspect` and in `/proc/<pid>/environ`.
+
 ### Changed
 
 - **The danger band now polls at 180 s instead of 60 s, and no longer shortens
@@ -64,8 +85,17 @@ by `uuid` or `alias`.
   the case the pre-emptive switch exists to prevent: the projection is overtaken
   between two readings and the switch lands after the session was already cut
   off. An explicit `preempt_lead` in `config.toml` is unaffected.
-
 ### Fixed
+
+- **`ccdad bootstrap` no longer prints `CCDAD_IMPORT`'s value into the container
+  log.** The variable holds a path, and the value reached `os.Open`, whose
+  `*os.PathError` carries it back verbatim — the one error path in that command
+  that did not go through its "describe nothing out of the document" rule. An
+  operator who set the variable to the document rather than to a path therefore
+  logged every refresh token in it. `--base64` is what made that mistake
+  plausible, by producing a document that fits in a variable at all, so the
+  command now recognizes a document there and refuses it by name, and reports a
+  path it could not open with the errno alone.
 
 - **The daemon no longer overwrites a Claude Code login it cannot name, and no
   longer installs one Claude Code would refresh on sight.** Together these were

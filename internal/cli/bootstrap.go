@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -21,7 +22,11 @@ func newBootstrapCmd() *cobra.Command {
 		Use:   "bootstrap",
 		Short: "Import the accounts named by CCDAD_IMPORT, if any",
 		Long: "Import the accounts named by CCDAD_IMPORT: a path to a document written by\n" +
-			"'ccdad export', or '-' to read stdin.\n\n" +
+			"'ccdad export', or '-' to read stdin. Either form may hold the JSON document or\n" +
+			"one line of the base64 'ccdad export --base64' writes; which one it is is\n" +
+			"detected. CCDAD_IMPORT itself is always a path or '-' and never the document:\n" +
+			"a value here is visible in 'docker inspect' and in /proc/<pid>/environ, and a\n" +
+			"base64 document is a secret exactly as much as a plain one is.\n\n" +
 			"With the variable unset or empty this does nothing and exits 0, so a container\n" +
 			"entrypoint can run it unconditionally. It is idempotent: an account already\n" +
 			"here at that uuid is updated, one that is not is added, and an account's age is\n" +
@@ -59,17 +64,33 @@ func runBootstrap(cmd *cobra.Command, force bool) error {
 		return nil
 	}
 
+	// A value that IS the document rather than a path to one is refused before
+	// anything tries to open it, because os.Open's *os.PathError carries that
+	// value back verbatim — so without this, every refresh token in the
+	// document is printed into a container log, through the one error path in
+	// this command that does not go through refuseBootstrapDocument.
+	//
+	// The mistake only became plausible with `ccdad export --base64`. A JSON
+	// document is kilobytes over many lines and nobody pastes one into a
+	// variable; a single line is exactly the shape a secret store hands back,
+	// and the shape this command's own help now tells people to produce.
+	// Making it convenient is what obliges this to expect it in the wrong slot.
+	if isExportDocument(path) {
+		return UsageError("%s holds the document itself. It takes a PATH to one, or `-` to read stdin: "+
+			"a value here is visible in `docker inspect` and in /proc/<pid>/environ, and --base64 is an "+
+			"encoding rather than encryption. Write it to a file and point %s at that, or pipe it in "+
+			"with %s=-", bootstrapEnvVar, bootstrapEnvVar, bootstrapEnvVar)
+	}
+
 	payload, err := readExport(cmd, path)
 	if IsUsageError(err) {
-		// readExport's usage errors are the ones that describe the FILE:
+		// readExport's usage errors are the ones that describe the DOCUMENT:
 		// json.Unmarshal names the byte it choked on, so a document that is
 		// nothing but a refresh token comes back as "invalid character 'R'".
-		// Its other errors are an *os.PathError or a size, which name a path
-		// and a number rather than anything inside the document.
 		return refuseBootstrapDocument()
 	}
 	if err != nil {
-		return err
+		return refuseBootstrapPath(err)
 	}
 	if payload.SchemaVersion > exportSchemaVersion {
 		// The fact without the number. An operator whose image is older than
@@ -126,4 +147,31 @@ func refuseBootstrapDocument() error {
 	return UsageError("%s does not name a usable ccdad export. Run `ccdad import` against that "+
 		"document from a shell to see what is wrong with it; this command will not describe a "+
 		"file holding refresh tokens into a log", bootstrapEnvVar)
+}
+
+// refuseBootstrapPath re-reports a failure to open or read the document
+// WITHOUT repeating the value it was handed.
+//
+// os.Open's *os.PathError carries that value verbatim, and the value came out
+// of an environment variable an operator may have set to something that is not
+// a path at all — a truncated blob, a document with one stray character, any
+// shape the guard in runBootstrap did not recognize as a document. This
+// command's output is a container log, so the errno travels and the value does
+// not.
+//
+// Nothing diagnostic is lost by dropping it. The operator wrote that value; it
+// is in their compose file and `docker inspect` reads it back to them. The
+// errno is the part they cannot get anywhere else, and it is the part kept.
+//
+// `ccdad import` still names the path it could not open, and the split is the
+// point: there a person typed the path and is standing at the terminal.
+func refuseBootstrapPath(err error) error {
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) {
+		return fmt.Errorf("%s does not name a document this process can open (%v). It takes a path, "+
+			"or `-` to read stdin", bootstrapEnvVar, pathErr.Err)
+	}
+	// Everything else readExport fails with names a size or a stdin read.
+	// Neither carries the value.
+	return err
 }

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -78,6 +79,7 @@ func newExportCmd() *cobra.Command {
 	var (
 		full       bool
 		includeMCP bool
+		b64        bool
 		out        string
 	)
 
@@ -92,7 +94,12 @@ func newExportCmd() *cobra.Command {
 			"--include-mcp additionally carries this machine's MCP server logins. It\n" +
 			"requires --full and is the only path by which they leave the machine.\n" +
 			"'ccdad import' never installs them; restoring MCP logins is deliberately a\n" +
-			"manual act.",
+			"manual act.\n\n" +
+			"--base64 writes the same document as one unwrapped line, which is the shape a\n" +
+			"GitHub secret, a '.env' entry or any other single-string transport can carry.\n" +
+			"'ccdad import' and 'ccdad bootstrap' read either form without being told which.\n" +
+			"base64 is an encoding and not encryption: a --full document is exactly as much\n" +
+			"of a secret encoded as it is plain.",
 		Args:          usageArgs(cobra.NoArgs),
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -107,9 +114,14 @@ func newExportCmd() *cobra.Command {
 			if includeMCP && !full {
 				return UsageError("--include-mcp carries this machine's MCP logins, so it needs --full as well")
 			}
+			// --base64 does not soften this and is named in the refusal on
+			// purpose. It is the flag somebody reaches for when they want to
+			// print a secret and feel safe about it, so a guard that let it
+			// through would read as the answer to the warning it silenced.
 			if full && out == "" && stdoutIsTTY() {
-				return UsageError("a --full export holds live refresh tokens; write it to a file with --out PATH, " +
-					"or redirect stdout somewhere that is not a terminal")
+				return UsageError("a --full export holds live refresh tokens, and --base64 is an encoding, " +
+					"not encryption; write it to a file with --out PATH, or send it somewhere that is not a " +
+					"terminal — `ccdad export --full --base64 | gh secret set NAME`")
 			}
 
 			s, err := store.Open()
@@ -207,6 +219,19 @@ func newExportCmd() *cobra.Command {
 				return fmt.Errorf("encoding the export: %w", err)
 			}
 			encoded = append(encoded, '\n')
+			if b64 {
+				// The trailing newline goes INSIDE the encoding, so decoding
+				// this output reproduces the plain document byte for byte —
+				// `ccdad export --base64 | base64 -d > f.json` and
+				// `ccdad export --out f.json` write the same file.
+				//
+				// The newline appended after it is the only one in the output,
+				// and it is outside. `base64` wraps at 76 columns unless it is
+				// given -w0, and a wrapped blob breaks the `.env` line it was
+				// pasted into — at the far end of a deployment, where nobody
+				// reruns it by hand. EncodeToString never wraps.
+				encoded = append([]byte(base64.StdEncoding.EncodeToString(encoded)), '\n')
+			}
 
 			if out != "" {
 				// 0600 through the atomic writer, for the reason --out exists
@@ -224,6 +249,7 @@ func newExportCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&full, "full", false, "include each account's stored credentials")
 	cmd.Flags().BoolVar(&includeMCP, "include-mcp", false, "also include this machine's MCP logins (requires --full)")
+	cmd.Flags().BoolVar(&b64, "base64", false, "write the document as one line of base64 (an encoding, not encryption)")
 	cmd.Flags().StringVar(&out, "out", "", "write to PATH at mode 0600 instead of stdout")
 	return cmd
 }
