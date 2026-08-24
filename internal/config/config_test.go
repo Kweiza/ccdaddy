@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Kweiza/ccdaddy/internal/pollpolicy"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
@@ -234,9 +235,24 @@ func TestTheDefaultsAreTheEnginesOwnDefaults(t *testing.T) {
 // switch off, so a default living there would turn the mechanism back on for a
 // caller that meant to leave it off. The number is config's own, and this is
 // the pin on it.
+// The lead is derived from the cadence an AT-RISK account actually polls at, and
+// that is the danger band's, not the urgent path's. It used to be two minutes on
+// the reading that 60 s was the fastest an account near its ceiling would see;
+// when the band moved to pollpolicy.DangerInterval a two-minute lead became
+// shorter than one poll interval, which is the case defaults.go has always said
+// the mechanism exists to prevent — the projection overtaken between two readings
+// and the switch landing after the session was already cut off.
 func TestThePreemptLeadDefaultIsConfigsOwnNumber(t *testing.T) {
-	if got := Defaults().PreemptLead; got != 2*time.Minute {
-		t.Errorf("Defaults().PreemptLead = %v, want 2m — two urgent poll intervals, which is what is left for the switch to be decided and picked up after the horizon has counted the wait for the next reading", got)
+	got := Defaults().PreemptLead
+	if want := 6 * time.Minute; got != want {
+		t.Errorf("Defaults().PreemptLead = %v, want %v — two of the cadence an at-risk "+
+			"account polls at, which is what is left for the switch to be decided and picked "+
+			"up after the horizon has counted the wait for the next reading", got, want)
+	}
+	if got < pollpolicy.DangerInterval {
+		t.Errorf("Defaults().PreemptLead = %v is shorter than the %v cadence an account "+
+			"near its ceiling polls at, so the projection is overtaken between two readings",
+			got, pollpolicy.DangerInterval)
 	}
 }
 

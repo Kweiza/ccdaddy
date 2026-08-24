@@ -140,6 +140,14 @@ func newListCmd() *cobra.Command {
 				if a.Disabled {
 					flags = append(flags, "disabled")
 				}
+				// Spelled as a machine and not as a policy, because that is
+				// what it is: nothing is wrong with the account, it is just
+				// not this machine's to drive. A reader who sees an account
+				// that never gets chosen and no reason beside it goes looking
+				// for the reason in the wrong place.
+				if a.Elsewhere {
+					flags = append(flags, "another machine")
+				}
 				suffix := ""
 				if len(flags) > 0 {
 					suffix = "  (" + strings.Join(flags, ", ") + ")"

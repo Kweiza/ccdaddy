@@ -89,15 +89,29 @@ const (
 	// moves. This is a band around the second, which is why it is a constant
 	// rather than a second knob.
 	DangerBandPct = 95.0
-	// DangerServeTTL is how long a reading taken inside the danger band may be
-	// served before another poll is worth a request.
+	// DangerInterval is the cadence inside the danger band, and it is the one
+	// number in this block that is NOT cswap's.
 	//
-	// ServeTTL is 180 s and the band asks for a poll every 60 s. Leaving the TTL
-	// alone would have the scheduler's own freshness gate refuse two of every
-	// three polls the band just asked for: the cadence would exist in the schedule
-	// and nowhere else, and every consumer would still read a three-minute-old
-	// number.
-	DangerServeTTL = 30 * time.Second
+	// It used to be UrgentInterval, and that was the bug. 60 s is 60 requests an
+	// hour against an allowance of roughly 28-30, the band carries no movement
+	// requirement, and Share() exempts it — so a live account parked at 96 % on a
+	// single-member identity sat at twice the endpoint's whole budget for as long
+	// as it stayed there, with nothing anywhere to bring it back down. cswap's
+	// only 60 s path is gated on `moving`, which is self-limiting: sustaining it
+	// would need 60 pp of movement inside a 15 pp band, so it is a burst of about
+	// fifteen requests and then the account leaves the band. This one was not.
+	//
+	// It is MinInterval, so the band is now the fastest SUSTAINABLE cadence
+	// rather than the fastest one. That is a real loss of freshness against the
+	// old value and a deliberate one: a poller that 429s stops reporting at all,
+	// and the unknown-is-never-zero rule then parks the engine — so the band's
+	// own purpose is what a 429 destroys first.
+	//
+	// What the band still buys is the ordering below, and that is most of what it
+	// was for: an account inside the band would otherwise take ExhaustedInterval
+	// or CandidateMaxInterval, both 600 s, so this is still 3.3x the freshness on
+	// the one account a session can be cut off on.
+	DangerInterval = MinInterval
 )
 
 // State is one account's polling history. The caller carries it across calls
@@ -187,7 +201,72 @@ func Next(s State, in Input, rnd float64) (time.Time, State) {
 		next.Interval = 0
 	}
 
+	// The floor is LAST, and that ordering is the whole of its value.
+	//
+	// Everything above is policy: a rule that decides an account deserves a
+	// faster cadence. This is structure — the rate the endpoint will actually
+	// bear, which no policy may argue its way past. The danger band already got
+	// past it once, sustained 60 requests an hour on a 28-30 allowance, and shipped
+	// through a table-test suite because every test asserted the band's cadence in
+	// isolation and none asserted the RATE. Both reference implementations arrived
+	// at the same shape independently: cswap clamps its exhausted floor with a
+	// final max() that nothing can reorder past, and quota-board re-checks its
+	// 180 s inside due() where no policy value is in scope at all.
+	//
+	// UrgentInterval is deliberately exempt, and it is the only exemption. Its
+	// AND — moving, and within 15 pp of threshold — is self-limiting: holding it
+	// for an hour would need 60 pp of movement inside a 15 pp band, so it is a
+	// burst of about fifteen requests that ends when the account leaves the band,
+	// and that fits the headroom the sustained rate leaves. A floor that clamped
+	// it too would delete cswap's one documented exception for no budget gained.
+	d = sustained(d, in, moving)
+
 	return in.Now.Add(jitter(d, rnd)), next
+}
+
+// sustained clamps a cadence to the rate the endpoint will actually bear.
+//
+// No rule above it may schedule faster than MinInterval unless it is the one
+// self-limiting exemption. Every rule above it is POLICY — a reason an account
+// deserves to be read sooner — and policy is what got this wrong: the danger band
+// asked for 60 s, carried no movement gate, was exempt from Share(), and so held
+// 60 requests an hour against an allowance of 28-30 for as long as an account sat
+// in the band. It shipped through a table-test suite because every band test
+// asserted the cadence, which is a number, and none asserted the rate.
+//
+// Both reference implementations arrived at this shape independently. cswap ends
+// its planner with a final max() against the exhausted floor that nothing can be
+// ordered past, and quota-board re-checks its 180 s floor inside due(), where no
+// policy value is in scope to argue with it.
+//
+// A mutation deleting this clamp SURVIVES today, and that is expected rather than
+// a gap in the tests: base() no longer returns anything under MinInterval except
+// on the exempt path, so the clamp is currently unreachable from Next(). It is
+// kept, and tested directly instead, because its value is exactly that it holds
+// for a rule nobody has written yet — a floor that only exists as long as every
+// author remembers it is not a floor. TestTheSustainedFloorHoldsWhateverThePolicy
+// AsksFor is the test whose failure requires this function.
+func sustained(d time.Duration, in Input, moving bool) time.Duration {
+	if d < MinInterval && !urgent(in, moving) {
+		return MinInterval
+	}
+	return d
+}
+
+// urgent is the one cadence allowed below the sustained floor: the active
+// account both moving and close to its threshold.
+//
+// Its AND is what makes the exemption affordable. Holding 60 s for an hour would
+// take 60 pp of movement inside a 15 pp band, so it is a burst of about fifteen
+// requests that ends when the account leaves the band — which fits the headroom
+// the sustained rate leaves. cswap's only sub-floor path is gated the same way,
+// and that gate is why cswap never needed a clamp of its own here.
+//
+// It is spelled out rather than read off base()'s return value because the two
+// are different questions: base() answers "how fast", and a cadence that happens
+// to equal UrgentInterval for some other reason has not earned the exemption.
+func urgent(in Input, moving bool) bool {
+	return in.Active && !in.Reading.Exhausted && !InDangerBand(in) && moving && nearThreshold(in)
 }
 
 // base is the cadence before any rate-limit rule.
@@ -206,7 +285,11 @@ func base(in Input, moving bool) time.Duration {
 		// idle" stops being a fair description of an account five points out.
 		// Idle is a claim about the last interval, not the next one, and a paused
 		// session that resumes can spend the whole distance between two polls.
-		return UrgentInterval
+		//
+		// What the branch returns is DangerInterval and NOT UrgentInterval: the
+		// ordering is the part worth keeping, the 60 s was the part that spent
+		// twice the endpoint's allowance with no movement gate to end it.
+		return DangerInterval
 	}
 	if in.Reading.Exhausted {
 		// Deliberately ahead of the urgent rule. An exhausted active account
@@ -339,12 +422,18 @@ func Share(d time.Duration, accounts int, in Input) time.Duration {
 // ServeTTLFor is how long the reading just taken may be served before another
 // poll is worth a request. A scheduler records it WITH the reading, so the rule
 // lives here once instead of being re-derived by every gate that has to honour
-// it — and so it survives a restart, which is what stops the first tick after
-// one from re-clamping the band to the flat 180 s.
+// it.
+//
+// It is FLAT, and the parameter it ignores is the point. The band used to shorten
+// it to 30 s so that the scheduler's own freshness gate would stop refusing two of
+// every three polls the band asked for — which is to say the one gate standing
+// between a cadence bug and the endpoint's hourly allowance was being unlocked by
+// the rule it was meant to bound. quota-board re-enforces its floor in four
+// independent places and cswap calls SERVE_TTL_S "the maximum sustained rate on
+// one token regardless of how many surfaces are open"; a TTL any policy can
+// rewrite is not a floor. Keeping the signature leaves the caller's shape alone
+// and leaves one place to put a per-reading rule back if one is ever earned.
 func ServeTTLFor(in Input) time.Duration {
-	if InDangerBand(in) {
-		return DangerServeTTL
-	}
 	return ServeTTL
 }
 

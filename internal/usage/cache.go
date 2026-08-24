@@ -142,10 +142,22 @@ func (e Entry) FreshWithin(now time.Time, ttl time.Duration) bool {
 // hour, on exactly the account where a 429 is most expensive.
 func (e Entry) Fresh(now time.Time) bool { return e.FreshWithin(now, ServeTTL) }
 
-// ScheduledTTL is the TTL the scheduler wrote with this reading, or ServeTTL
-// when it wrote none.
+// ScheduledTTL is the TTL that gates the next scheduled poll of this reading.
+//
+// It is the flat ServeTTL, and a SHORTER persisted value is ignored. The field
+// still exists and still round-trips, because the file is written by one version
+// of ccdad and read by another and an unknown-shaped row must not become an
+// error — but the danger band used to write 30 s here, and every cache on every
+// machine that has been in the band is carrying those rows right now. A build
+// that merely stopped WRITING the short TTL would keep honouring the one already
+// on disk until that account's next successful poll, which is precisely the poll
+// the short TTL is letting through too early.
+//
+// A LONGER persisted value is honoured, because a future ccdad that slows a
+// reading down is telling this one something it does not know, and the safe
+// direction for an unknown is the slower one.
 func (e Entry) ScheduledTTL() time.Duration {
-	if e.ServeTTL > 0 {
+	if e.ServeTTL > ServeTTL {
 		return e.ServeTTL
 	}
 	return ServeTTL

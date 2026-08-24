@@ -56,6 +56,29 @@ type Account struct {
 	// Disabled holds an account out of auto-rotation while keeping it a valid
 	// explicit switch target.
 	Disabled bool `toml:"disabled,omitempty"`
+	// Elsewhere says another machine's ccdad owns this account, so this one
+	// neither ranks it nor polls it.
+	//
+	// It is a SECOND flag rather than a use of Disabled, and the difference is
+	// the one that matters across machines. Disabled is a statement about the
+	// account -- do not rotate into this one -- and a disabled account is still
+	// polled, because `ccdad switch` can still name it and a named switch wants
+	// a fresh reading. Elsewhere is a statement about THIS MACHINE: the account
+	// is somebody else's to drive, so a reading taken here buys nothing and
+	// spends a budget that is shared with whoever is driving it.
+	//
+	// Why the flag exists at all: two ccdad installs reading the same accounts
+	// rank them with the same pure function and the same uuid tie-break, so they
+	// converge on the same target and stack two machines' inference onto one
+	// five-hour window while the rest of the pool sits idle. Nothing can
+	// coordinate that at runtime -- every lock in this tree and in both
+	// reference projects is a local flock -- so the partition has to be declared.
+	//
+	// The live account is the documented exception on the poll path: an account
+	// this machine did not choose can still be the one Claude Code is logged in
+	// as, and going blind on the live login is how the engine loses its
+	// hysteresis baseline.
+	Elsewhere bool `toml:"elsewhere,omitempty"`
 	// Primary marks an account whose credits are its ORDINARY metering rather
 	// than overage — an enterprise seat billed in credits and nothing else. It
 	// is ranked beside the subscription accounts instead of waiting in the

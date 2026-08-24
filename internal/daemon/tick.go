@@ -496,6 +496,25 @@ func (e *Engine) dispatch(ctx context.Context, s *store.Store, accounts []store.
 		if !pollable(s, a) {
 			continue
 		}
+		// An account another machine owns is not this machine's to read on a
+		// cadence. The reading spends a budget shared with whoever IS driving
+		// it, and this machine can never rank it, so the request buys nothing.
+		//
+		// The gate is HERE and not in pollable() on purpose: pollable is also
+		// the hand-held refresh path's gate, and a human who names an account
+		// has said what they want more clearly than the flag has -- the same
+		// reading `ccdad switch` already gives a Disabled account. Only the
+		// unattended cadence is withheld.
+		//
+		// The live account is the exception, and it is not a courtesy: the
+		// hysteresis baseline, the threshold test and the pre-emption projection
+		// are all statements about the account Claude Code is logged in as.
+		// Going blind on that one makes every tick the no-baseline case, which
+		// the anti-flap cooldown is deliberately exempt from -- so the machine
+		// would name a target every tick.
+		if a.Elsewhere && !(activeKnown && a.UUID == active) {
+			continue
+		}
 		entry, has := cache.Get(a.UUID)
 		if !due(entry, has, now, a.UUID == active) {
 			continue
@@ -583,10 +602,11 @@ func pollable(s *store.Store, a store.Account) bool {
 // between a busy fleet and the endpoint's hourly allowance, and the schedule that
 // poll set.
 //
-// The TTL is the ENTRY's rather than the flat one, because the danger band cuts
-// it to 30 s. Under the flat 180 s, a band asking for a poll every 60 s would
-// have two of every three refused right here, and the tighter cadence would exist
-// in the schedule and nowhere else.
+// The TTL is read through ScheduledTTL, which is the flat ServeTTL unless a
+// future version wrote a LONGER one. It used to be the entry's own, so that the
+// danger band's 30 s could unlock this gate for the band's 60 s cadence — which
+// made the one structural bound on the hourly allowance a value the policy could
+// rewrite. It cannot any more, and the band no longer asks it to.
 //
 // live is passed in because a stand-down written for the account that WAS live
 // must not hold the one that is now.

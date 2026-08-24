@@ -168,6 +168,11 @@ func (r Row) StatusFlags() string {
 	if r.Account.Disabled {
 		return "  (disabled)"
 	}
+	// An account another machine drives is never chosen here either, and the
+	// dashboard is where a reader asks why nothing is rotating to it.
+	if r.Account.Elsewhere {
+		return "  (another machine)"
+	}
 	return ""
 }
 

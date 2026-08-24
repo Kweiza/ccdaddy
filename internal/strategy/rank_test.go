@@ -130,6 +130,40 @@ func TestRankExcludesAPIKeyAndDisabledAccounts(t *testing.T) {
 	eq(t, order(Rank(cands, opts())), []string{"keep"})
 }
 
+// An account another machine's ccdad drives is ranked out exactly like a disabled
+// one, and for a reason that has nothing to do with the account.
+//
+// Ranking is a pure function of readings the SERVER shares between machines, and
+// every comparator ends in a uuid tie-break, so two installs given the same pool
+// name the same target and stack two sessions' inference onto one five-hour
+// window while the rest of the pool sits idle. No lock in this tree crosses a
+// machine boundary, so the split has to be declared and then honoured here.
+func TestRankExcludesAccountsAnotherMachineOwns(t *testing.T) {
+	// The roomiest account by a distance, which is what makes the exclusion the
+	// only thing that can keep it out of first place.
+	cands := []Candidate{
+		sub("mine", snap(win(60, time.Hour), win(60, 48*time.Hour))),
+		{UUID: "theirs", Kind: identity.KindSubscription, Elsewhere: true,
+			Usage: snap(win(1, time.Hour), win(1, 48*time.Hour))},
+	}
+
+	eq(t, order(Rank(cands, opts())), []string{"mine"})
+}
+
+// And it does not hold the pool open either: an account this machine cannot
+// switch to is not a reason to keep waiting instead of entering recovery.
+func TestAnAccountAnotherMachineOwnsDoesNotHoldThePoolOpen(t *testing.T) {
+	cands := []Candidate{
+		sub("spent", snap(win(99, time.Hour), win(99, 48*time.Hour))),
+		{UUID: "theirs", Kind: identity.KindSubscription, Elsewhere: true,
+			Usage: snap(win(1, time.Hour), win(1, 48*time.Hour))},
+	}
+	if !Rank(cands, opts()).AllOverThreshold {
+		t.Error("AllOverThreshold = false — an account this machine may not switch to " +
+			"was counted as room it has")
+	}
+}
+
 // ---- the ordinary situation ------------------------------------------------
 
 func TestRankPrefersTheMostHeadroomWhenSomeoneHasRoom(t *testing.T) {

@@ -256,6 +256,7 @@ var scopedSessionAllowed = map[string]bool{
 	"ccdad bootstrap":    true,
 	"ccdad disable":      true,
 	"ccdad enable":       true,
+	"ccdad own":          true,
 	"ccdad alias":        true,
 	"ccdad move":         true,
 	"ccdad primary":      true,

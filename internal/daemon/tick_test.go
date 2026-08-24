@@ -1061,9 +1061,13 @@ func seedDisabled(t *testing.T, uuid, org string) {
 }
 
 // The danger band, end to end. Three accounts share one organization, so the
-// ordinary rules put the live one on 3 x 60 s; five points from the endpoint's
-// refusal that is two thirds of the remaining room spent unread.
-func TestTheLiveAccountInTheDangerBandPollsEveryMinuteUnshared(t *testing.T) {
+// ordinary rules would divide the live one's cadence three ways; five points from
+// the endpoint's refusal that is two thirds of the remaining room spent unread.
+//
+// The number is DangerInterval and not UrgentInterval: the exemption from the
+// identity divisor is what the band buys, not a cadence below the rate the
+// endpoint sustains.
+func TestTheLiveAccountInTheDangerBandPollsUnshared(t *testing.T) {
 	isolateEngine(t)
 	seedAccount(t, "u-1", "org-shared")
 	seedDisabled(t, "u-2", "org-shared")
@@ -1086,20 +1090,21 @@ func TestTheLiveAccountInTheDangerBandPollsEveryMinuteUnshared(t *testing.T) {
 	if !ok {
 		t.Fatal("the tick cached no reading")
 	}
-	if want := tickEpoch.Add(pollpolicy.UrgentInterval); !got.NextPollAt.Equal(want) {
+	if want := tickEpoch.Add(pollpolicy.DangerInterval); !got.NextPollAt.Equal(want) {
 		t.Fatalf("NextPollAt = %s, want %s — three accounts share this identity and the "+
 			"account a session is running against is the one exemption", got.NextPollAt, want)
 	}
-	if got.ServeTTL != pollpolicy.DangerServeTTL {
-		t.Fatalf("ServeTTL = %s, want %s", got.ServeTTL, pollpolicy.DangerServeTTL)
+	if got.ServeTTL != pollpolicy.ServeTTL {
+		t.Fatalf("ServeTTL = %s, want the flat %s — the band no longer unlocks the "+
+			"freshness gate that bounds the hourly allowance", got.ServeTTL, pollpolicy.ServeTTL)
 	}
 
 	// And the cadence is real rather than only written down: the second poll
-	// lands a minute later, which the flat 180 s serve TTL would have refused.
-	now = tickEpoch.Add(pollpolicy.UrgentInterval + time.Second)
+	// lands one interval later, past both the schedule and the freshness gate.
+	now = tickEpoch.Add(pollpolicy.DangerInterval + time.Second)
 	tick(t, e)
 	if n := live.get(); n != 2 {
-		t.Fatalf("the live account was polled %d times, want 2 — the 60 s cadence was "+
+		t.Fatalf("the live account was polled %d times, want 2 — the band's cadence was "+
 			"clamped by the serve TTL", n)
 	}
 	if l := liveUUID(t); l != "u-1" {
@@ -1158,7 +1163,7 @@ func TestTheDangerBandStandsTheRestOfTheIdentityDown(t *testing.T) {
 	// The band recommits every 60 s, so a renewal on each one would move the
 	// deadline away faster than the clock reaches it and the alternate would
 	// never be polled at all.
-	now = tickEpoch.Add(pollpolicy.UrgentInterval + time.Second)
+	now = tickEpoch.Add(pollpolicy.DangerInterval + time.Second)
 	tick(t, e)
 	sib, _ = cacheEntry(t, "u-2")
 	if !sib.StandDownUntil.Equal(pushed) {
