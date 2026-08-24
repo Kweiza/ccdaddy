@@ -78,14 +78,30 @@ import (
 //
 // From 2.1.113 the package is a launcher and the code ships as a native binary
 // in @anthropic-ai/claude-code-<platform>; `tar -xzO | tr -d '\000'` over that
-// gives the same searchable JS (see claude-code-oauth-ground-truth for the
-// dd/tr recipe against an installed copy).
+// gives the same searchable JS. An INSTALLED copy needs no download at all --
+// the same bundle sits readable inside the executable, and stripping the NUL
+// padding is the whole extraction:
+//
+//	tr -d '\000' < ~/.local/share/claude/versions/<version> > cc.js
+//
+// Written down here rather than pointed at, and re-run rather than copied: on
+// 2026-08-24 against the installed 2.1.241 -- 342,636,848 bytes, sha256
+// 0771bd86..., the size and digest ccver.go records for that release -- it
+// yields the 229 MB of searchable text the paragraph below counts hits in, and
+// the grep below finds its one hit there. Budget ~18s per pattern at that size.
+//
+// FOR MORE THAN ONE QUESTION, NARROW FIRST. The bundle begins at byte
+// 307,481,166 in that build, so `dd if=<version> bs=1M skip=290 count=50` puts
+// it in a 36 MB window the same greps answer in under a second. The offset is
+// per-release and must not be carried forward: the identical marker sits at
+// 262,636,955 in the 2.1.222 installed beside it. Ask the build in hand for its
+// own with `grep -abo 'name:"plaintext"' <version> | head -1`.
 //
 // Do NOT search for the "-credentials" constant in a current build: it is
 // unreferenced there, so its minified name has one hit in a 229 MB binary and
 // the obvious conclusion -- that the derivation is gone -- is wrong. Search for
 // the FUNCTION by its body rather than its name, which changes every release
-// (`qpt` in 2.1.238, `xht` in 2.1.240):
+// (`qpt` in 2.1.238, `xht` in 2.1.240 and still `xht` in 2.1.241):
 //
 //	grep -aoP '.{0,300}CLAUDE_SECURESTORAGE_CONFIG_DIR,r=t.{0,400}'
 //

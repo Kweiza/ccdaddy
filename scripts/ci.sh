@@ -197,16 +197,76 @@ check_cgo() {
 # script, whose search pattern is the banned character, and CONTRIBUTING.md,
 # which shows contributors what not to write. A gate that cannot state what it
 # forbids is worse than the exclusion.
+# The file set both shapes below are searched over. An ARRAY rather than the
+# space-separated string `targets` is: these are git pathspecs, and `*.md`
+# unquoted would be expanded by the shell into the four .md files at the
+# repository root before git ever saw the pattern.
+#
+# Three files are excluded and all three for ONE reason: they have to contain
+# the very strings this check fails on. ci.sh holds the patterns, ci_sh_test.go
+# holds the fixtures that prove they fire, and CONTRIBUTING.md quotes them while
+# stating the rule. The cost is real and worth naming: a genuinely unreachable
+# citation written inside one of those three is not caught by anything.
+cites_paths=('*.go' '*.sh' '*.ps1' '*.yml' '*.md'
+	':!scripts/ci.sh' ':!scripts/ci_sh_test.go' ':!CONTRIBUTING.md')
+
+# The SPELLED shape: three literals, each of which is how one class of
+# unreachable reference was actually written here.
+cites_spelled='§|\b[Tt]he brief\b|\b[Tt]ask [0-9]+'
+
+# The POINTED shape, and it is the one that got past the first. `§`, "the
+# brief" and "task n" are SPELLINGS -- a literal catches each. A document
+# referred to by its bare NAME has no spelling to key on, so what is left to key
+# on is the pointing phrase in front of it plus a target shaped like a slug:
+# "see claude-code-oauth-ground-truth", which is how the one that got through
+# was written. It sat in internal/cclink/keychain.go, pointing at a file in one
+# person's notes directory, and the measurement it pointed at is now in that
+# header instead.
+#
+# MEASURED ON THIS TREE, because a pattern nobody counted is a pattern nobody
+# knows the cost of: the phrase-plus-slug form matched exactly one line, that
+# one. The slug half WITHOUT the pointing phrase matched 29, nearly all of them
+# ordinary hyphenated English -- "read-decide-merge-write",
+# "sibling-temp-file-then-rename", "error-to-exit-code" -- which is why the
+# phrase is required rather than the shape alone.
+cites_pointer='\b([Ss]ee|[Pp]er|[Rr]efer to|[Dd]escribed in|[Dd]ocumented in) [a-z0-9]+(-[a-z0-9]+){2,}'
+
 check_cites() {
 	group "self-contained comments"
-	local hits
+	local spelled pointers unresolved line targets target hits
 	# The `grep -v` runs last, so a line carrying BOTH an RFC citation and a
 	# real one escapes. That trade is deliberate: the alternative is a lookbehind
 	# no portable grep has, and such a line has never existed here.
-	hits=$(git grep -nE '§|\b[Tt]he brief\b|\b[Tt]ask [0-9]+' -- \
-		'*.go' '*.sh' '*.ps1' '*.yml' '*.md' \
-		':!scripts/ci.sh' ':!CONTRIBUTING.md' |
+	spelled=$(git grep -nE "$cites_spelled" -- "${cites_paths[@]}" |
 		grep -vE 'RFC [0-9]+ §' || true)
+
+	# A POINTER WHOSE TARGET THIS REPOSITORY CONTAINS IS ALLOWED, and that is
+	# the rule rather than a concession to it: CONTRIBUTING.md's "Style" permits
+	# a comment to point at a file in this tree. Without this arm the gate would
+	# fail on "see gen-cmd-shim-fixtures" the first time somebody wrote it, and
+	# a gate that fails on correct code is a gate somebody switches off.
+	unresolved=
+	if pointers=$(git grep -nE "$cites_pointer" -- "${cites_paths[@]}"); then
+		while IFS= read -r line; do
+			# Every target on the line, not the first: one unresolvable
+			# pointer is enough, and taking only `head -1` would let a
+			# second pointer on the same line through.
+			targets=$(printf '%s\n' "$line" | grep -oE "$cites_pointer" |
+				sed -E 's/.*[[:space:]]//')
+			for target in $targets; do
+				if git ls-files | grep -qE "(^|/)${target}(\.[A-Za-z0-9]+)?\$"; then
+					continue
+				fi
+				unresolved="${unresolved}${line}
+"
+				break
+			done
+		done <<EOF
+$pointers
+EOF
+	fi
+
+	hits=$(printf '%s\n%s' "$spelled" "$unresolved" | grep -v '^$' || true)
 	endgroup
 	if [ -n "$hits" ]; then
 		echo "ci: these comments point at something no reader outside this machine has:" >&2
