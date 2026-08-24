@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -423,6 +424,9 @@ func warmupNote(w strategy.HoverWindow, facts warmupFacts) string {
 }
 
 // short is a duration a person reads at a glance rather than one Go printed.
+//
+// The trailing "0s" is trimmed because Duration.String() writes "5m0s" for five
+// minutes, and a note is a sentence rather than a field dump.
 func short(d time.Duration) string {
 	if d < 0 {
 		d = 0
@@ -430,7 +434,7 @@ func short(d time.Duration) string {
 	if d < time.Minute {
 		return fmt.Sprintf("%ds", int(d.Round(time.Second)/time.Second))
 	}
-	return d.Round(time.Minute).String()
+	return strings.TrimSuffix(d.Round(time.Minute).String(), "0s")
 }
 
 // clock is a local wall time, because the reader is deciding whether to wait for
