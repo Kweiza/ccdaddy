@@ -537,6 +537,8 @@ Common answers it gives:
 | `warn credential-keys` | Claude Code has added a key ccdad does not know. It is preserved, not destroyed — but please open an issue |
 | `warn credential-home` naming another store | Two `CCDAD_HOME` stores are driving one Claude Code login, and they undo each other's switches. Give one of them its own `CLAUDE_CONFIG_DIR`, or stop its engine |
 | `fail credential-home` naming NFS or CIFS | Claude Code's credential home is on a filesystem without working locks, so ccdad cannot tell whether a second store is driving this login. The engine keeps running, unguarded |
+| `warn credential-home … the running daemon is driving` | The daemon is writing a different credential home from the one this shell resolves, so its switches change a login nothing here reads. It was started from a shell that resolved a different home — `CLAUDE_SECURESTORAGE_CONFIG_DIR` decides that when it is defined, `CLAUDE_CONFIG_DIR` otherwise. Restart it from the shell whose configuration you want it to serve. Inside a `ccdad run` session the two differ by design, and the row says so rather than telling you to restart anything |
+| `warn credential-files … belong to no account` | A file under the store's `credentials/` holds a live refresh token that `accounts.toml` does not name, so `list`, `remove` and the account rows above cannot see it. The path is in the message. Delete it once you have looked — `doctor` never will |
 
 ## Contributing
 
