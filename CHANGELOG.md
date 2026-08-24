@@ -60,6 +60,48 @@ by `uuid` or `alias`.
 
 ### Changed
 
+- **A probe now restarts a stopped clock at its rollover, not six hours later.**
+  A probe is not a way to learn a reset time; it is a warm-up. A five-hour
+  window is anchored at *first use* and does not stretch when more is spent
+  against it, so a clock started early is elapsed time you get for free —
+  exhaust a window four hours in and you wait an hour instead of five. The old
+  gate was a flat six hours since the last attempt, and against a five-hour
+  window that leaves the clock stopped for an hour of every cycle, in the hour
+  right after the rollover where starting it is worth the most. Measured before
+  the change: about 4.2–4.6 hours of stopped clock per account per day.
+  A window whose reset has passed now gets exactly one probe per rollover, with
+  no interval in it at all; everything else backs off 15m, 1h, 2h, 4h and then
+  six hours, so an account nothing can wake is still never tried more often than
+  it used to be, while a *transient* failure recovers in about an hour rather
+  than six. The next poll is aimed at the rollover instead of the idle cadence.
+  Whether a probe worked is decided by the next reading rather than by the exit
+  code — a turn can be billed and still exit non-zero, and the two are
+  indistinguishable from outside — and never by the poll one minute after the
+  probe, because the measured lag from turn to reported reset is 61–62 s against
+  a 60 s poll.
+  **Behaviour change to watch for:** `ccdad probe` now spends a turn on a window
+  whose reset has already passed, where it used to refuse with "already reports
+  a reset time"; and a row can appear stopped in `ccdad hover status` for about
+  a minute once per rollover, which is the gap the warm-up closes.
+- **`ccdad hover status` says what will actually happen to a stopped clock.**
+  It used to print "(no reset yet; a probe is queued)" from a flag that meant
+  only "this window named no reset" — so it said *queued* while the gate
+  forbade probing, on the live account the engine refuses by design, on a
+  machine with no Claude Code, and on accounts whose probes failed every cycle.
+  It now reports the state the daemon computes from the same predicate: queued
+  for a named time, sent, waiting for the reading, backing off after probes that
+  woke nothing, spent for this rollover, held, never, off, or impossible. The
+  `--json` payload gains an additive `warmup` object; `probeWanted` keeps its
+  key and its meaning. `probe.last_error` — recorded since probing existed and
+  read by nothing — is finally shown, so an account whose probes fail every
+  cycle no longer looks exactly like one waiting its turn.
+- **A probe is declined where the turn could be billed to credits.** Nothing in
+  the probe path consulted the credit axis, and a just-rolled-over five-hour
+  window reads as stopped however spent the rest of the account is. A probe is
+  now refused when a window is at 100% and the account's overage switch is not
+  demonstrably off. Being past hover's *pace* threshold is not being out of
+  quota, and does not refuse.
+
 - **The danger band now polls at 180 s instead of 60 s, and no longer shortens
   its own freshness gate.** At or above 95% of a window the live account was
   polling every 60 s with its reading kept fresh for only 30 s — 60 requests an

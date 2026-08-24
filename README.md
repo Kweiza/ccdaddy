@@ -233,7 +233,7 @@ is a usage error rather than a silent hang. Pass the token, or `-`.
 | `ccdad which` | Show which managed account Claude Code is logged in as |
 | `ccdad switch [ACCOUNT]` | Make an account the live login |
 | `ccdad run <ACCOUNT> [args…]` | Start a Claude Code session as an account, without changing the live login |
-| `ccdad probe <ACCOUNT>` | Spend one tiny request so a window with no reading gets a reset time |
+| `ccdad probe <ACCOUNT>` | Spend one tiny request to start a window's clock early |
 | `ccdad auto` | Run the auto-switch engine, once or continuously |
 | `ccdad hover on\|off\|status` | Hand every threshold and every margin to the engine |
 | `ccdad status` | The engine dashboard: quota used, window, reset, pace — read from disk |
@@ -332,10 +332,13 @@ put on `PATH` yourself and it holds your other tools.
 
 ### `ccdad probe`
 
-An account that has never used a window reports no reset time for it, so it has
-no pace, no projection, and nothing for the engine to rank on. Polling does not
-fix it: the endpoint reports a reset only once something has been spent against
-the window. This spends the smallest thing that counts.
+A five-hour window is anchored at *first use* and does not stretch when more is
+spent against it, so a clock started early is elapsed time the account gets for
+free: exhaust a window four hours in and you wait an hour, exhaust one that
+started when you did and you wait five. A window with no clock running also has
+no pace, no projection, and nothing for the engine to rank on, and polling does
+not fix that — the endpoint reports a reset only once something has been spent.
+This spends the smallest thing that counts, to start the clock.
 
 ```sh
 ccdad probe work                 # wake this account's five-hour window
@@ -372,12 +375,17 @@ too — `ccdad run`'s own displaced-credential check, unconditionally, because
 that variable is what claude actually authenticates the child with, ahead of
 the scoped credentials file the probe seeds; without this the turn is spent
 against whatever account the variable names while the account you asked to
-probe is stamped as done. A window that already reports a reset has nothing to
-wake. And a probe is attempted at most once every six hours per account —
-counting every attempt, not only the failures, because a probe that
-"succeeded" and still left the window without a reset is exactly the case a
-failure-only gate would spin on. `--force` bypasses the last two and never the
-first three. `ccdad probe --all` skips disabled accounts, since a reading for
+probe is stamped as done. A window whose clock is already running — a reset
+still in the *future* — has nothing to start; one whose reset has passed is a
+clock that ran down, and that is the ordinary case rather than a refusal. That
+one gets exactly one probe per rollover. A window whose probes wake nothing
+backs off instead: 15m, 1h, 2h, 4h and then six hours between attempts, which is
+what a probe used to cost unconditionally, so an account nothing can wake is
+never tried more often than before. The verdict is taken from the window and
+never from the exit code — a turn can be billed and still fail, and the two look
+identical from outside — so it is the *next reading* that decides, ten minutes
+on, and never the poll a minute after the probe. `--force` bypasses the last two
+and never the first three. `ccdad probe --all` skips disabled accounts, since a reading for
 one the engine will not switch to buys nothing; a disabled account named
 explicitly is still probed, because that is a human asking.
 
@@ -389,7 +397,12 @@ running on: that is the one probe that duplicates work outright and the one that
 could cut the session off, and `ccdad probe <ACCOUNT>` stays available to a human
 who wants it now. It does not poll straight afterwards either — the probe has
 already spent inference budget and the reading is not there yet, so the poll that
-reads what it woke replaces this tick's poll and lands a minute later.
+reads what it woke replaces this tick's poll and lands a minute later. It aims
+the poll *after* that at the moment the clock it just started will run down, so
+the next one begins seconds after the rollover rather than whenever the idle
+cadence next happens to look. And it declines outright on an account with a
+window at 100% whose overage switch is not demonstrably off, because a turn there
+can be billed to credits and unattended spending takes its own two opt-ins.
 
 ### `ccdad hover`
 
@@ -452,12 +465,15 @@ already 80% elapsed, so with five accounts or fewer it lands on 99 too, which is
 right — it resets within the hour anyway; with eight it is 92.
 
 A window with no elapsed share to derive from takes a fixed 80 instead, and that
-covers two cases. One is a window nothing has ever been spent against, which
-reports no reset at all — `ccdad hover status` marks that row as the one a probe
-would fix, and hover forces `probe_unknown` back on so the engine's own probe
-path spends the turn; hover queues nothing itself. The other is a reset further
-out than the window is long, which is a clock the probe cannot fix, so that row
-carries no mark. A primary credit seat has no window and no reset either, so it
+covers two cases. One is a window with no clock running, which reports no reset
+at all — hover forces `probe_unknown` back on so the engine's own probe path
+starts it, and `ccdad hover status` says on that row what the engine will
+actually do about it and when: queued for a named time, sent, waiting for the
+reading that judges it, backing off after warm-ups that woke nothing, or held
+because nothing on this machine can run one. Hover queues nothing itself; the
+table and the daemon read the same predicate, so it cannot promise a turn the
+engine would decline. The other is a reset further out than the window is long,
+which is a clock no probe can fix, so that row carries no mark. A primary credit seat has no window and no reset either, so it
 is held to a fixed 95 — credits do not come back at all, and the last few points
 are the ones worth keeping for a session already running.
 
