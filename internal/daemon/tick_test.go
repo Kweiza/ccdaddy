@@ -1388,10 +1388,16 @@ func TestTheDaemonProbesAnUnspentWindowEvenWhenADifferentOneBindsTighter(t *test
 	}
 }
 
-// A probe that fails must not be retried at the tick loop's cadence: it spends
-// the account's own quota every time. The stamp the engine writes before the
-// spawn is what holds the gate even for a spawn that never started.
-func TestTheDaemonDoesNotProbeAnAccountAgainForSixHours(t *testing.T) {
+// A warm-up that wakes nothing must not be retried at the tick loop's cadence:
+// it spends the account's own quota every time. The stamp the engine writes
+// before the spawn is what holds the gate even for a spawn that never started,
+// and the ladder is what decides for how long.
+//
+// The two edges are the ones that matter. The floor is the span in which no
+// verdict can exist yet, so nothing may pace on one. The ceiling is
+// ProbeRetryAfter, which is what the flat gate this replaced cost — an account
+// nothing can wake must never be attempted MORE often than before.
+func TestTheDaemonDoesNotRetryAWarmUpAtTheTickCadence(t *testing.T) {
 	isolateEngine(t)
 	seedAccount(t, "u-1", "org-1")
 	seedLiveHolder(t, "u-live")
@@ -1408,14 +1414,15 @@ func TestTheDaemonDoesNotProbeAnAccountAgainForSixHours(t *testing.T) {
 	if len(*probes) != 1 {
 		t.Fatalf("probes = %+v after the first tick, want exactly one", *probes)
 	}
-	// An hour on, with the reading still carrying no reset: still held.
-	now = tickEpoch.Add(time.Hour)
+	// Inside the settle floor, with the reading still carrying no reset: held,
+	// and held by the floor rather than by any verdict — none can exist yet.
+	now = tickEpoch.Add(usage.ProbeSettleGap - time.Minute)
 	tick(t, e)
 	if len(*probes) != 1 {
-		t.Fatalf("probes = %+v an hour later, want the first one only", *probes)
+		t.Fatalf("probes = %+v inside the settle floor, want the first one only", *probes)
 	}
-	// Past the gate, and open again on its own — a probe that failed once must
-	// not be abandoned forever either.
+	// Past every rung, and open again on its own — a warm-up that failed once
+	// must not be abandoned forever either.
 	now = tickEpoch.Add(usage.ProbeRetryAfter + time.Minute)
 	tick(t, e)
 	if len(*probes) != 2 {
@@ -1739,12 +1746,18 @@ func TestAnAccountIsNotProbedWhileItsOwnPollIsStillRunning(t *testing.T) {
 	isolateEngine(t)
 	seedAccount(t, "u-1", "org-1")
 	seedLiveHolder(t, "u-live")
-	// Probe-due on every axis except the six-hour gate, which opens between the
-	// two ticks below.
+	// Probe-due on every axis except the ladder's floor, which opens BETWEEN the
+	// two ticks below. The offset is one minute inside ProbeSettleGap rather
+	// than a round number on purpose: a fixture that sat past every rung would
+	// let the first tick probe, and the test would then be asserting nothing
+	// about the in-flight claim at all.
 	seedEntry(t, "u-1", usage.Entry{
 		Snapshot:  unusedWindow(),
 		FetchedAt: tickEpoch.Add(-10 * time.Minute),
-		Probe:     usage.ProbeState{LastAttemptAt: tickEpoch.Add(-usage.ProbeRetryAfter + time.Minute)},
+		Probe: usage.ProbeState{
+			LastAttemptAt: tickEpoch.Add(-usage.ProbeSettleGap + time.Minute),
+			Window:        usage.WindowFiveHour,
+		},
 	})
 
 	release := make(chan struct{})
@@ -1762,8 +1775,8 @@ func TestAnAccountIsNotProbedWhileItsOwnPollIsStillRunning(t *testing.T) {
 	if err := e.Tick(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	// The second is past the six-hour gate, so nothing but the in-flight poll
-	// stands between this account and a probe.
+	// The second is past the ladder's floor, so nothing but the in-flight poll
+	// stands between this account and a warm-up.
 	now = tickEpoch.Add(2 * time.Minute)
 	if err := e.Tick(context.Background()); err != nil {
 		t.Fatal(err)
@@ -1850,13 +1863,13 @@ func TestProbeDueRefusesAnUnknownLiveAccountAndNotMerelyAnEmptyOne(t *testing.T)
 	cfg := config.Defaults()
 
 	thresholds := configuredThresholds(cfg)
-	if _, want := e.probeDue(a, entry, cfg, thresholds, tickEpoch, "", false, nil); want {
+	if _, _, want := e.probeDue(a, entry, cfg, thresholds, tickEpoch, "", false, nil); want {
 		t.Error("probed while which account is live could not be worked out")
 	}
-	if _, want := e.probeDue(a, entry, cfg, thresholds, tickEpoch, "", true, nil); !want {
+	if _, _, want := e.probeDue(a, entry, cfg, thresholds, tickEpoch, "", true, nil); !want {
 		t.Error("refused to probe on a machine where nothing is live, which is the safe case")
 	}
-	if _, want := e.probeDue(a, entry, cfg, thresholds, tickEpoch, "u-1", true, nil); want {
+	if _, _, want := e.probeDue(a, entry, cfg, thresholds, tickEpoch, "u-1", true, nil); want {
 		t.Error("probed the live account")
 	}
 }
@@ -1890,7 +1903,7 @@ func TestTheDaemonDoesNotProbeAWindowThatHasAlreadyBeenSpentAgainst(t *testing.T
 }
 
 // The attempt is stamped BEFORE the probe is started, so a probe that fails to
-// start still consumes the six-hour budget. Without that order an unstartable
+// start still consumes a rung of the ladder. Without that order an unstartable
 // probe is attempted on every tick, forever.
 func TestAProbeThatFailsToStartStillConsumesTheBudget(t *testing.T) {
 	isolateEngine(t)
@@ -1919,10 +1932,10 @@ func TestAProbeThatFailsToStartStillConsumesTheBudget(t *testing.T) {
 		t.Fatalf("Probe.LastAttemptAt = %s after a spawn that failed, want %s — an "+
 			"unstartable probe would be attempted on every tick forever", got.Probe.LastAttemptAt, tickEpoch)
 	}
-	now = tickEpoch.Add(usage.ProbeRetryAfter - time.Minute)
+	now = tickEpoch.Add(usage.ProbeSettleGap - time.Minute)
 	tick(t, e)
 	if n := attempts.get(); n != 1 {
-		t.Fatalf("the engine tried %d probes inside the six-hour gate, want 1", n)
+		t.Fatalf("the engine tried %d probes inside the ladder's floor, want 1", n)
 	}
 }
 

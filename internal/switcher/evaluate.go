@@ -224,6 +224,10 @@ func engineCandidates(s *store.Store, accounts []store.Account, c *usage.Cache) 
 			// engine's real blind interval — the 1800 s one a 429 earned
 			// included.
 			cand.FetchedAt, cand.NextPollAt = e.FetchedAt, e.NextPollAt
+			// The warm-up's own record travels with them: hover's table
+			// reports what the daemon would do about a stopped clock, and it
+			// can only do that from the state the daemon gates on.
+			cand.Probe = e.Probe
 		}
 		out = append(out, cand)
 	}

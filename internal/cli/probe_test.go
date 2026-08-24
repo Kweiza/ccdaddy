@@ -193,7 +193,7 @@ func TestProbeRefusesWhatItCannotOrNeedNotProbe(t *testing.T) {
 		},
 		args: []string{"probe", "1"},
 		want: ExitNothingToDo,
-		says: "already reports a reset time",
+		says: "clock is already running",
 	}, {
 		name:  "an account reference that does not resolve",
 		setup: func(t *testing.T) { seedUnprobed(t, "u-1", "a@example.com") },
@@ -310,8 +310,13 @@ func TestProbeRefusesWhenTheShellsAuthTokenOutranksTheNamedAccount(t *testing.T)
 // A probe spends the account's own quota, so a probe that fails must not be
 // retried at whatever cadence its caller runs at. The gate counts ATTEMPTS
 // rather than failures, because a probe that "worked" and left the window
-// without a reset is the case that would otherwise spin.
-func TestAFailedProbeIsNotAttemptedAgainForSixHours(t *testing.T) {
+// without a reset is the case that would otherwise spin — and the exit code
+// cannot tell the two apart, which is why nothing schedules on it.
+//
+// What holds this one is the ladder's FLOOR rather than a verdict: `ccdad probe`
+// takes no reading, so nothing has judged the attempt yet, and the floor is
+// exactly the span in which nothing can have.
+func TestAFailedProbeIsHeldByTheLaddersFloor(t *testing.T) {
 	isolate(t)
 	freezeClock(t, probeNow)
 	seedUnprobed(t, "u-1", "a@example.com")
@@ -336,15 +341,16 @@ func TestAFailedProbeIsNotAttemptedAgainForSixHours(t *testing.T) {
 			"inference budget the probe just spent", entry.NextPollAt, want)
 	}
 
-	// An hour later: still held.
-	freezeClock(t, probeNow.Add(time.Hour))
+	// Inside the ladder's floor — the span in which no reading can yet have said
+	// whether the turn worked — it is still held.
+	freezeClock(t, probeNow.Add(usage.ProbeSettleGap-time.Minute))
 	second := stubClaude(t, ExitOK)
 	code, _, errOut, top := runRoot(t, "probe", "1")
 	if code != ExitNothingToDo {
 		t.Fatalf("exit = %d (%s / %s), want %d", code, errOut, top, ExitNothingToDo)
 	}
 	if second.started {
-		t.Fatal("a second probe was spent an hour after the first")
+		t.Fatal("a second probe was spent inside the ladder's floor")
 	}
 	if !strings.Contains(errOut+top, "--force") {
 		t.Errorf("the refusal does not name the way through it:\n%s%s", errOut, top)

@@ -144,6 +144,13 @@ type Candidate struct {
 	// it would be guessing the one number the cache already knows.
 	FetchedAt  time.Time
 	NextPollAt time.Time
+	// Probe is what the last warm-up of this account did, copied from
+	// usage.Entry for the same reason the two stamps above are: `ccdad hover
+	// status` renders what the warm-up loop would do about each row, and a table
+	// that derived that from anything but the daemon's own inputs would be a
+	// second implementation of the gate, free to drift from the one that spends
+	// the quota.
+	Probe usage.ProbeState
 }
 
 // Options configures one ranking pass.
