@@ -271,6 +271,37 @@ by `uuid` or `alias`.
 
 ### Fixed
 
+- **`ccdad config list` called the one unknown key it reads "ignored".** A weekly
+  cap filed under a scope key this build cannot name is carried but left out of
+  the ranking, and a `[window_threshold]` entry naming that window is the opt-in
+  that puts it in — the only one, since `ccdad config set` refuses a scope it
+  cannot verify against a reading it does not have. So the key is unknown to the
+  config surface and live to the engine at once, and it was being reported under
+  the note that says such keys "are being ignored (not deleted)". A user who had
+  just hand-written the line ran `config list` to check their work and was told
+  by ccdad that it does nothing. It now gets a note of its own saying it is read
+  and when it takes effect, and the sentence about ignored keys keeps naming the
+  ones that really are — a misspelled window name still lands there, because no
+  reading ever produces it. `usage.ErrUnknownScope` existed for exactly this
+  distinction and had no consumer; it has one now.
+
+- **Every poll cadence was exact arithmetic, so a fleet that paused together came
+  back together.** `internal/pollpolicy` spreads each interval it returns by up
+  to a tenth either way, and it takes the sample as an argument so the whole
+  policy stays a pure function -- `Next`'s own comment says the caller passes
+  `rand.Float64()`. No caller did. `NewEngine` left the field nil, and a nil
+  source is not "no jitter": the accessor answers with the midpoint, at which the
+  spread is the identity. Every guard in that package was unreachable code while
+  reading, in every comment, as though it were working. The one construction site
+  a shipped binary reaches now supplies `math/rand/v2`'s `Float64`, which is safe
+  for the concurrent use polling makes of it. What this was always for: several
+  daemons restarted across machines, or a laptop waking with three accounts on
+  one identity, share a budget of roughly 28-30 requests per rolling hour, and
+  returning in lockstep empties it in one burst. Two tests that assert an exact
+  next-poll deadline now fix the sample beside the clock they already fixed,
+  which is the midpoint they were silently relying on, so what they assert is
+  unchanged.
+
 - **`doctor`'s credential-home drift warning blamed a cause the tree prevents.**
   It named `ccdad run --full-profile` as how a daemon comes to be driving a
   different Claude Code credential home from the shell reading the report —

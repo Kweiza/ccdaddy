@@ -230,6 +230,20 @@ func newConfigListCmd() *cobra.Command {
 					"note: %s carries keys this ccdad does not know, and they are being ignored (not deleted): %v\n",
 					config.FileName, unknown)
 			}
+			// Reported apart from the line above, and never inside it. These
+			// keys are unknown to this command -- get, set and unset all refuse
+			// them -- and read by the engine at the same time, which is the
+			// whole shape of the opt-in. A user who has just hand-written one
+			// runs this to check their work, and "being ignored" is the answer
+			// that would send them to look for a mistake they did not make.
+			if opted := d.OptedInWindows(); len(opted) > 0 {
+				fmt.Fprintf(cmd.ErrOrStderr(),
+					"note: %s sets a threshold on a weekly cap scoped to a key this ccdad does not name, "+
+						"which is how such a window joins the ranking — it is being read, and it takes effect "+
+						"from the next reading that carries that window. Edit the file to change it; "+
+						"'ccdad config get/set/unset' cannot name it: %v\n",
+					config.FileName, opted)
+			}
 
 			if cfg.Hover {
 				fmt.Fprint(cmd.ErrOrStderr(),

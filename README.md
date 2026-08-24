@@ -526,10 +526,11 @@ you know: add
 to `config.toml` **by hand** — quoted, because the name carries colons — and it
 joins the ranking from the next reading that carries it. `ccdad config set` will
 not write that line: with no reading in hand it cannot tell a scope the server
-really sends from a typo, so it refuses both. `ccdad config list` then lists the key
-under its note about keys this ccdad does not know, and that note says they are
-being ignored — true of every other unknown key and not of this one, because the
-loader carries a `window_threshold` entry whatever its name is. Removing the line is how you turn it back off — a `0` is refused, not
+really sends from a typo, so it refuses both. `ccdad config list` names such an
+entry in a note of its own, separate from the one about keys that really are
+ignored, and says it is being read — the loader carries a `window_threshold`
+entry whatever its name is. A window name that is simply misspelled gets the
+ignored note instead, which is the honest answer: no reading ever produces it. Removing the line is how you turn it back off — a `0` is refused, not
 an opt-out.
 
 A cap ccdad cannot name **at all** — no display name, and no scope key it can
@@ -636,9 +637,16 @@ not put it in the band. Read honestly:
   hour**, over a sliding window — capacity comes back only as old requests age
   out, so a burst saturates the identity for up to a full hour and waiting gives
   none of it back early.
-- 60 s is already about twice that allowance, and it is the floor. No rule goes
-  below it: a `429` imposes a 360-second floor and an estimate that multiplies by
-  1.5 each time up to 1800 s, and the estimate always outruns the floor — one
+- 60 s is already about twice that allowance, and it is the floor every *rule*
+  respects: nothing in the policy returns less, and both the per-identity
+  division and the post-429 backoff can only lengthen it. One thing does move in
+  the shorter direction — every interval is spread by up to a tenth either way,
+  so an individual poll lands between 54 and 66 seconds. That spread is not a
+  tuning knob, it is what stops daemons which paused together from coming back
+  together: a laptop waking, or a fleet restarting across machines, would
+  otherwise empty the shared hourly budget in a single burst. A `429` imposes a
+  360-second floor and an estimate that multiplies by 1.5 each time up to
+  1800 s, and the estimate always outruns the floor — one
   `429` alone earns 540 s. It costs more than that, because a failed poll is not
   a reading: the band lapses with it and the account drops back to the cadence a
   spent account gets, divided across its identity. On three accounts that is
