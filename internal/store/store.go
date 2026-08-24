@@ -216,11 +216,28 @@ func AccountsFileAt(root string) string {
 // answer — "nothing is orphaned", said out of a read that failed, is precisely
 // the reassuring lie the caller exists to remove.
 //
-// The rule is a file named exactly <uuid>.json, which is credentialPath's rule
-// read backwards. Anything else in that directory is not a credential file this
-// store wrote: an interrupted WriteFileAtomic leaves <name>.tmp-* beside its
-// target, and calling that stem a uuid would send the user looking for an
-// account that never existed.
+// The rule is a file named <uuid>.json, which is credentialPath's rule read
+// backwards, with two departures both of which are about not lying to the
+// caller. The suffix is matched WITHOUT case, on every platform, because
+// macOS and Windows hand credentialPath a file called uuid.JSON when it asks
+// for uuid.json -- so on those a case-sensitive test would skip a credential
+// file the store itself reads -- and because a store is one rsync away from
+// being opened on another platform, which is the argument ValidateUUID's
+// device-name check already makes. And each survivor is os.Stat-ed: ReadDir
+// does not follow symlinks, so a dangling link or a directory named
+// <uuid>.json reads as a file here, and the caller says of everything in this
+// list that it holds a live refresh token at 0600 and can be deleted.
+//
+// The Stat is also the only thing standing between this and a torn answer. The
+// listing and the account read are two syscalls with no lock across them, and a
+// concurrent `ccdad remove` completing in between leaves a uuid in neither --
+// gone from the document and gone from the disk -- which without the Stat is
+// reported as an orphan pointing at nothing.
+//
+// Anything else in the directory is not a credential file this store wrote: an
+// interrupted WriteFileAtomic leaves <name>.tmp-* beside its target, and
+// calling that stem a uuid would send the user looking for an account that
+// never existed.
 func OrphanCredentialsAt(root string) ([]string, error) {
 	dir := CredentialsDirAt(root)
 	entries, err := os.ReadDir(dir)
@@ -229,34 +246,49 @@ func OrphanCredentialsAt(root string) ([]string, error) {
 			// The directory is created by Open, never by this read.
 			return nil, nil
 		}
-		return nil, err
+		return nil, fmt.Errorf("reading %s: %w", dir, err)
 	}
 	accounts, err := AccountsAt(root)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reading the account list: %w", err)
 	}
 	named := make(map[string]struct{}, len(accounts))
 	for _, a := range accounts {
 		named[a.UUID] = struct{}{}
 	}
 
+	const suffix = ".json"
 	var orphans []string
 	for _, e := range entries {
-		if e.IsDir() {
+		name := e.Name()
+		// EqualFold on the extension, so uuid.JSON is seen; and Ext rather
+		// than a TrimSuffix, so uuid.json.tmp-1234 is not.
+		if !strings.EqualFold(filepath.Ext(name), suffix) {
 			continue
 		}
-		uuid := strings.TrimSuffix(e.Name(), ".json")
-		// TrimSuffix returns its input unchanged when the suffix is not there,
-		// so this is the "was it <uuid>.json at all" test. An empty stem — a
-		// file called exactly ".json" — is not a uuid either.
-		if uuid == e.Name() || uuid == "" {
+		uuid := name[:len(name)-len(suffix)]
+		if uuid == "" {
 			continue
 		}
 		if _, ok := named[uuid]; ok {
 			continue
 		}
-		orphans = append(orphans, filepath.Join(dir, e.Name()))
+		path := filepath.Join(dir, name)
+		// Not e.IsDir(): a DirEntry answers about the LINK. Anything that is
+		// not a regular file once resolved is dropped rather than reported,
+		// because every sentence built from this list is about a file with a
+		// token in it.
+		if info, statErr := os.Stat(path); statErr != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		orphans = append(orphans, path)
 	}
+	// os.ReadDir already returns its entries sorted by filename and every path
+	// here shares one directory, so this sorts nothing today -- removing it
+	// breaks no test, and that is disclosed rather than hidden. It stays
+	// because the docstring promises an order to a caller that joins the list
+	// into one sentence, and the promise should survive a later change to how
+	// the list is built rather than depending on a detail of ReadDir.
 	sort.Strings(orphans)
 	return orphans, nil
 }
