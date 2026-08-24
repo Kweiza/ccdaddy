@@ -243,7 +243,7 @@ is a usage error rather than a silent hang. Pass the token, or `-`.
 | `ccdad disable`, `enable` | Hold an account out of automatic rotation, or return it |
 | `ccdad own [ACCOUNT...]` | Declare which accounts THIS machine drives — see [Running ccdad on more than one machine](#running-ccdad-on-more-than-one-machine) |
 | `ccdad primary <ACCOUNT> on\|off` | Rank a credit-metered seat with the subscriptions, and let it spend unattended |
-| `ccdad export`, `import` | Move the account store between machines |
+| `ccdad export`, `import` | Move the account store between machines; `--base64` writes one line for a secret store |
 | `ccdad bootstrap` | Import an account document named by `CCDAD_IMPORT`; a no-op when it is unset — see [Containers](#containers) |
 | `ccdad remove` | Stop managing an account and delete its stored credentials |
 | `ccdad doctor` | Check the layout ccdad depends on, and the hazards around it |
@@ -1066,7 +1066,9 @@ runs it before it starts the engine.
 
 **Never put it in an environment variable inline.** `-e CCDAD_IMPORT="$(cat
 backup.json)"` is visible in `docker inspect`, and in `/proc/<pid>/environ` to
-anything else in the namespace. Mount it read-only and point the variable at the
+anything else in the namespace. `ccdad bootstrap` refuses a `CCDAD_IMPORT` that
+holds a document instead of a path, and never prints the value back either way —
+its output is a container log. Mount it read-only and point the variable at the
 path:
 
 ```sh
@@ -1093,6 +1095,37 @@ container is **not** overwritten by the older one in the document — pass
 when `CCDAD_IMPORT` is not set at all, and it prints nothing out of the document,
 including when it refuses one: run `ccdad import` against the file from a shell
 to find out what is wrong with it.
+
+### A secret store carries one line, so `--base64` writes one
+
+A GitHub Actions secret, a `.env` entry and most CI secret stores hold a single
+string. A JSON document pasted into one arrives with its newlines intact and
+breaks the file it landed in. `--base64` writes the same document as one
+unwrapped line:
+
+```sh
+ccdad export --full --base64 --out export.b64   # 0600, one line, no wrapping
+gh secret set CCDAD_EXPORT < export.b64
+```
+
+`import` and `bootstrap` read either form and are not told which — they sniff
+it, because a ccdad export is a JSON object and so begins with `{`, which is in
+neither base64 alphabet. Whitespace inside the blob is ignored, so a document
+that went through `base64` without `-w0` and came back wrapped at 76 columns
+still imports, and the url-safe alphabet and missing padding are both accepted:
+
+```yaml
+- run: echo "${{ secrets.CCDAD_EXPORT }}" | ccdad bootstrap
+  env:
+    CCDAD_IMPORT: "-"
+```
+
+**`--base64` is an encoding, not encryption.** The blob is exactly as much of a
+secret as the JSON it holds, which is why `--out` still writes it `0600`, why
+`--full --base64` to a terminal is still refused, and why `CCDAD_IMPORT` still
+takes a path or `-` and never the document itself — a one-line document is
+temptingly easy to paste into the variable, so `bootstrap` recognizes one there
+and refuses it by name rather than by echoing it.
 
 ### `/data` must be a volume
 

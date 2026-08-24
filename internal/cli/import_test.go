@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -585,5 +587,152 @@ func TestImportLeavesNoCredentialFileWhenTheBatchFailsAfterTheAdd(t *testing.T) 
 	}
 	if strings.Contains(top, leaked) {
 		t.Errorf("the refusal repeated a refresh token out of the document:\n%s", top)
+	}
+}
+
+// The transport --base64 exists for: the document goes into a GitHub secret or
+// a `.env` line as one string, and comes back out the far end as accounts.
+func TestImportRoundTripsABase64Export(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "u-1", "one@example.com")
+	stubStdoutTTY(t, true)
+	path := filepath.Join(t.TempDir(), "backup.b64")
+	if code, _, _, top := runRoot(t, "export", "--full", "--base64", "--out", path); code != ExitOK {
+		t.Fatalf("export = %d (%s)", code, top)
+	}
+
+	// A second machine: a fresh store.
+	t.Setenv("CCDAD_HOME", filepath.Join(t.TempDir(), "ccdad2"))
+
+	code, _, stderr, top := runRoot(t, "import", path)
+	if code != ExitOK {
+		t.Fatalf("import of a base64 document = %d (%s)\nstderr: %s", code, top, stderr)
+	}
+	s, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Accounts()) != 1 {
+		t.Fatalf("accounts = %+v, want the one in the document", s.Accounts())
+	}
+	creds, err := s.Credentials("u-1")
+	if err != nil {
+		t.Fatalf("the imported account has no credentials: %v", err)
+	}
+	if !strings.Contains(string(creds["claudeAiOauth"]), "RT-u-1") {
+		t.Errorf("credentials = %s, want the exported snapshot", creds["claudeAiOauth"])
+	}
+}
+
+// Every shape a base64 document arrives in, because the tool that produced it
+// is not always ccdad. The wrapped row is why this is permissive at all:
+// `base64` wraps at 76 columns unless it is given -w0, and a restore that
+// failed over a line break is a deploy that fails where nobody can retry it by
+// hand. Whitespace is not data here, so all of it is dropped.
+func TestImportAcceptsEveryBase64Shape(t *testing.T) {
+	document := `{"schemaVersion":1,"full":true,` +
+		// This field is ignored by the reader and is here for the encoder: it
+		// pushes bytes into the document that base64 renders as '+' and '/',
+		// which are the two characters separating the standard alphabet from
+		// the url-safe one. Without them the url rows below would be testing
+		// the standard alphabet under another name.
+		`"note":"￿￿￿￿",` +
+		`"accounts":[{"uuid":"u-1","email":"one@example.com","kind":"subscription",` +
+		`"credentials":{"claudeAiOauth":{"accessToken":"AT","refreshToken":"RT-u-1"}}}]}`
+
+	std := base64.StdEncoding.EncodeToString([]byte(document))
+	if !strings.Contains(std, "+") || !strings.Contains(std, "/") {
+		t.Fatalf("this document does not exercise the two characters that separate the alphabets:\n%s", std)
+	}
+
+	for _, tc := range []struct{ name, body string }{
+		{"padded standard alphabet", std},
+		{"unpadded standard alphabet", base64.RawStdEncoding.EncodeToString([]byte(document))},
+		{"padded url alphabet", base64.URLEncoding.EncodeToString([]byte(document))},
+		{"unpadded url alphabet", base64.RawURLEncoding.EncodeToString([]byte(document))},
+		{"wrapped at 76 columns", wrapAt(std, 76)},
+		// Spaces and tabs are the rows that defend the whitespace loop in
+		// decodeBase64Document. Go's own decoder already skips '\r' and '\n',
+		// so the wrapped row above passes with or without that loop and proves
+		// nothing about it. Interior spaces are the realistic shape: an
+		// unquoted `echo $VAR` collapses a wrapped blob's newlines into them,
+		// and so does a YAML folded scalar.
+		{"wrapped and space-joined", strings.ReplaceAll(wrapAt(std, 76), "\n", " ")},
+		{"wrapped and tab-joined", strings.ReplaceAll(wrapAt(std, 76), "\n", "\t")},
+		{"trailing newline", std + "\n"},
+		{"leading and trailing whitespace", "  \n\t" + std + " \n\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolate(t)
+			code, _, stderr, top := runRoot(t, "import", writeImportFile(t, tc.body))
+			if code != ExitOK {
+				t.Fatalf("import = %d (%s)\nstderr: %s", code, top, stderr)
+			}
+			if got := accountCount(t); got != 1 {
+				t.Fatalf("the store holds %d account(s), want the one in the document", got)
+			}
+		})
+	}
+}
+
+// wrapAt breaks a string every n characters, the way `base64` does without -w0.
+func wrapAt(s string, n int) string {
+	var lines []string
+	for len(s) > n {
+		lines = append(lines, s[:n])
+		s = s[n:]
+	}
+	return strings.Join(append(lines, s), "\n")
+}
+
+// '-' for stdin carries a base64 document too, which is the form that never
+// touches the importing machine's disk.
+func TestImportReadsBase64FromStdin(t *testing.T) {
+	isolate(t)
+	body := base64.StdEncoding.EncodeToString([]byte(`{"schemaVersion":1,"full":true,"accounts":[
+	  {"uuid":"u-1","email":"one@example.com","kind":"subscription",
+	   "credentials":{"claudeAiOauth":{"accessToken":"AT","refreshToken":"RT-u-1"}}}]}`))
+
+	root := NewRootCmd()
+	root.SetIn(strings.NewReader(body + "\n"))
+	root.SetArgs(explicitArgs([]string{"import", "-"}))
+	var out, errOut, top bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&errOut)
+
+	if code := ExecuteWith(root, &top); code != ExitOK {
+		t.Fatalf("exit = %d, want %d\nstderr: %s\ntop: %s", code, ExitOK, errOut.String(), top.String())
+	}
+	if got := accountCount(t); got != 1 {
+		t.Fatalf("the store holds %d account(s), want the one piped in", got)
+	}
+}
+
+// A document that is neither form has to say so as both, because "not JSON" on
+// its own sends the reader looking for a JSON mistake in a file that was never
+// meant to hold JSON.
+func TestImportRefusesADocumentThatIsNeitherJSONNorBase64(t *testing.T) {
+	isolate(t)
+
+	code, _, _, top := runRoot(t, "import", writeImportFile(t, "not a document, and not base64 either!"))
+	if code != ExitUsage {
+		t.Fatalf("exit = %d, want %d (%s)", code, ExitUsage, top)
+	}
+	if !strings.Contains(top, "base64") {
+		t.Errorf("the refusal %q never mentions the other form it tried", top)
+	}
+}
+
+// An empty file used to come back as "unexpected end of JSON input", which is
+// the parser describing a document that is not there.
+func TestImportRefusesAnEmptyDocument(t *testing.T) {
+	isolate(t)
+
+	code, _, _, top := runRoot(t, "import", writeImportFile(t, "  \n\n"))
+	if code != ExitUsage {
+		t.Fatalf("exit = %d, want %d (%s)", code, ExitUsage, top)
+	}
+	if !strings.Contains(top, "empty") {
+		t.Errorf("the refusal %q does not say the file is empty", top)
 	}
 }

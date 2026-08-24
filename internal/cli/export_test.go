@@ -1,9 +1,12 @@
 package cli
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -235,5 +238,138 @@ func TestExportCarriesThePrimaryFlag(t *testing.T) {
 		if row.UUID == "u-2" && row.Primary {
 			t.Error("the export marked an ordinary account primary")
 		}
+	}
+}
+
+// --base64 is the form that survives a GitHub secret, a `.env` line, and every
+// other transport that carries one string and no newlines. The invariant that
+// makes it safe to reason about: what comes back out of the decoder is the
+// document the plain export would have written, to the byte.
+//
+// exportedAt is the one field that cannot match, because the two runs happen at
+// two times. It is dropped from both sides rather than stubbed: a clock seam
+// added for one assertion is a seam every later change has to keep honest.
+func TestExportBase64DecodesToThePlainDocument(t *testing.T) {
+	isolate(t)
+	stubStdoutTTY(t, false)
+	seedAccount(t, "u-1", "one@example.com")
+	seedAccount(t, "u-2", "two@example.com")
+
+	_, plain, _, _ := runRoot(t, "export")
+	code, encoded, _, top := runRoot(t, "export", "--base64")
+	if code != ExitOK {
+		t.Fatalf("export --base64 = %d (%s), want 0", code, top)
+	}
+
+	decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(encoded))
+	if err != nil {
+		t.Fatalf("the --base64 output is not standard base64 (%v):\n%s", err, encoded)
+	}
+	if got, want := withoutExportedAt(t, string(decoded)), withoutExportedAt(t, plain); got != want {
+		t.Fatalf("decoding --base64 does not reproduce the plain export:\n got %s\nwant %s", got, want)
+	}
+	// The framing travels too, so `ccdad export --base64 | base64 -d > f.json`
+	// and `ccdad export --out f.json` produce the same file.
+	if !strings.HasSuffix(string(decoded), "\n") {
+		t.Error("the decoded document does not end in a newline, but the plain one does")
+	}
+}
+
+// exportedAtField matches the one field two runs of `export` cannot agree on.
+var exportedAtField = regexp.MustCompile(`"exportedAt": "[^"]*"`)
+
+// withoutExportedAt blanks that field TEXTUALLY, leaving every other byte where
+// it was: indentation, key order and the trailing newline all survive, which is
+// what makes the caller's comparison the byte-for-byte one it claims to be.
+// Round-tripping through map[string]any instead would compare JSON values and
+// silently stop defending the framing.
+func withoutExportedAt(t *testing.T, document string) string {
+	t.Helper()
+	blanked := exportedAtField.ReplaceAllString(document, `"exportedAt": ""`)
+	if blanked == document {
+		t.Fatalf("nothing matched exportedAt, so this comparison is not doing what it claims:\n%s", document)
+	}
+	return blanked
+}
+
+// `base64` wraps at 76 columns unless it is given -w0, and a wrapped blob
+// breaks the `.env` line it was pasted into — at the far end of a deployment,
+// where nobody reruns it by hand. ccdad never wraps.
+func TestExportBase64IsOneUnwrappedLine(t *testing.T) {
+	isolate(t)
+	stubStdoutTTY(t, false)
+	for i := 0; i < 12; i++ {
+		seedAccount(t, fmt.Sprintf("u-%d", i), fmt.Sprintf("%d@example.com", i))
+	}
+
+	_, stdout, _, _ := runRoot(t, "export", "--base64")
+	if len(stdout) < 400 {
+		t.Fatalf("the payload is too short to say anything about wrapping:\n%s", stdout)
+	}
+	if strings.Count(stdout, "\n") != 1 || !strings.HasSuffix(stdout, "\n") {
+		t.Fatalf("--base64 wrote %d newline(s), want exactly one and at the end",
+			strings.Count(stdout, "\n"))
+	}
+}
+
+// The refusal has to survive --base64, and it has to say why. base64 is
+// exactly what somebody reaches for when they want to print a secret and feel
+// safe about it, so a guard that let the flag through would be worse than no
+// guard: it would look like the answer to the warning it silenced.
+func TestFullBase64ExportToATerminalIsRefused(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "u-1", "one@example.com")
+	stubStdoutTTY(t, true)
+
+	code, stdout, _, top := runRoot(t, "export", "--full", "--base64")
+	if code != ExitUsage {
+		t.Fatalf("export --full --base64 to a terminal = %d, want %d", code, ExitUsage)
+	}
+	if stdout != "" {
+		t.Fatalf("the refusal wrote a payload anyway:\n%s", stdout)
+	}
+	if !strings.Contains(top, "not encryption") {
+		t.Errorf("the refusal %q does not say that base64 is not encryption", top)
+	}
+	if !strings.Contains(top, "--out") {
+		t.Errorf("the refusal %q does not say how to write the file", top)
+	}
+}
+
+func TestExportBase64OutWritesOneLineAt0600(t *testing.T) {
+	isolate(t)
+	stubStdoutTTY(t, true)
+	seedAccount(t, "u-1", "one@example.com")
+
+	path := filepath.Join(t.TempDir(), "backup.b64")
+	code, _, _, top := runRoot(t, "export", "--full", "--base64", "--out", path)
+	if code != ExitOK {
+		t.Fatalf("export --full --base64 --out = %d (%s), want 0", code, top)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Errorf("%s is %04o, want 0600 — base64 is not encryption, so the mode still carries the secret",
+			path, info.Mode().Perm())
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(raw), "\n") != 1 || !strings.HasSuffix(string(raw), "\n") {
+		t.Errorf("the file holds %d newline(s), want exactly one and at the end",
+			strings.Count(string(raw), "\n"))
+	}
+	decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(raw)))
+	if err != nil {
+		t.Fatalf("the file is not base64: %v", err)
+	}
+	payload := decodeExport(t, string(decoded))
+	if !payload.Full || payload.Accounts[0].Credentials == nil {
+		t.Fatal("a --full --base64 export carries no credentials")
 	}
 }

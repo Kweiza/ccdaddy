@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,9 +16,14 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/store"
 )
 
-// maxImportSize caps how much of an import file is read. It is a document
+// maxImportSize caps how much of an import file is READ. It is a document
 // someone hands this process, so its length is not ours to trust; the cap is
 // generous enough for a store with hundreds of accounts.
+//
+// It counts the bytes on disk rather than the JSON they carry, so a base64
+// document's effective ceiling is three quarters of this. That is deliberate:
+// the cap exists to bound what an untrusted file can make this process
+// allocate, and the encoded form is what it allocates.
 const maxImportSize = 16 << 20
 
 func newImportCmd() *cobra.Command {
@@ -26,7 +33,8 @@ func newImportCmd() *cobra.Command {
 		Use:   "import <PATH>",
 		Short: "Load accounts from a document written by 'ccdad export'",
 		Long: "Load accounts from a document written by 'ccdad export'. PATH may be '-' to\n" +
-			"read stdin.\n\n" +
+			"read stdin, and may hold either the JSON document or one line of the base64\n" +
+			"'ccdad export --base64' writes — the form is detected, not declared.\n\n" +
 			"uuid is the key, so an account already here is updated to match the document\n" +
 			"rather than duplicated — an alias the document does not carry is cleared — and\n" +
 			"the display order is re-derived, since an imported idx would be a stale ordinal.\n\n" +
@@ -283,8 +291,21 @@ func readExport(cmd *cobra.Command, path string) (exportPayload, error) {
 		return exportPayload{}, fmt.Errorf("that file is larger than %d bytes, which no ccdad export is", maxImportSize)
 	}
 
+	document, wasBase64, err := decodeExportDocument(raw)
+	if err != nil {
+		return exportPayload{}, err
+	}
+
 	var payload exportPayload
-	if err := json.Unmarshal(raw, &payload); err != nil {
+	if err := json.Unmarshal(document, &payload); err != nil {
+		if wasBase64 {
+			// Which half failed is the whole message here. The file on disk
+			// contains none of the bytes this parser is complaining about, so
+			// "not JSON" on its own points the reader at a file they can open
+			// and see nothing wrong with.
+			return exportPayload{}, UsageError(
+				"that file is not a ccdad export: it decoded from base64, but what came out is not JSON: %v", err)
+		}
 		return exportPayload{}, UsageError("that file is not a ccdad export: %v", err)
 	}
 	// Zero means the field was absent, which is what every JSON document that
@@ -301,6 +322,90 @@ func readExport(cmd *cobra.Command, path string) (exportPayload, error) {
 		return exportPayload{}, UsageError("that file is not a ccdad export: it carries no schemaVersion")
 	}
 	return payload, nil
+}
+
+// decodeExportDocument returns the JSON inside raw — which is either the
+// document itself or one line of base64 holding it — and says which it was.
+//
+// The two forms cannot be confused, so this sniffs rather than trying one and
+// falling back to the other: a ccdad export is a JSON OBJECT, so the plain form
+// always begins with '{', and '{' is in neither base64 alphabet. One byte
+// decides it. A fallback would instead report whichever attempt happened to
+// fail last, which for a corrupt JSON document is a complaint about base64.
+func decodeExportDocument(raw []byte) (document []byte, wasBase64 bool, err error) {
+	trimmed := bytes.TrimSpace(raw)
+	switch {
+	case len(trimmed) == 0:
+		// Answered here rather than left to the parser, whose "unexpected end
+		// of JSON input" is a description of a document that is not there.
+		return nil, false, UsageError("that file is empty, and no ccdad export is")
+	case trimmed[0] == '{':
+		return raw, false, nil
+	}
+	decoded, err := decodeBase64Document(trimmed)
+	if err != nil {
+		// Both forms are named, because "not JSON" alone sends the reader
+		// looking for a JSON mistake in a file that was never meant to hold
+		// any. base64's own error names an input OFFSET and never a byte out
+		// of the document, which is what makes it safe to repeat.
+		return nil, true, UsageError(
+			"that file is not a ccdad export: it does not begin with '{', and it is not base64 either (%v)", err)
+	}
+	return decoded, true, nil
+}
+
+// isExportDocument reports whether s is an export DOCUMENT rather than a path
+// to one.
+//
+// It is readExport's own sniff plus one more requirement: what comes out has to
+// be a JSON OBJECT, which every ccdad export is and which a path that happens
+// to be spelled entirely in base64 characters is not. Without that requirement
+// a path decoding to the bytes "123" would answer yes, because a bare number is
+// valid JSON.
+//
+// `ccdad bootstrap` is the caller, and it asks because its variable holds a
+// path while its output is a container log — see the comment there.
+func isExportDocument(s string) bool {
+	document, _, err := decodeExportDocument([]byte(s))
+	if err != nil {
+		return false
+	}
+	document = bytes.TrimSpace(document)
+	return len(document) > 0 && document[0] == '{' && json.Valid(document)
+}
+
+// decodeBase64Document decodes one base64 document in whatever shape the tool
+// that wrote it produced.
+//
+// It is deliberately permissive, and each concession is here because the
+// refusal it replaces would land somewhere expensive:
+//
+//   - EVERY whitespace byte is dropped, not only the trailing one. `base64`
+//     wraps at 76 columns unless it is given -w0, and the machine that finds
+//     out is the one running the deployment, not the one that wrote the file.
+//     Whitespace is not data in base64, so dropping it loses nothing.
+//   - BOTH alphabets are read. '-' and '_' are the url-safe alphabet's two
+//     characters and appear in no standard-alphabet encoding, so their
+//     presence is the answer — again a decision rather than a second attempt.
+//   - PADDING is stripped and the Raw encodings do the work, so a padded
+//     document and an unpadded one take one path instead of two.
+//
+// Being permissive costs nothing downstream: what comes out still has to parse
+// as JSON and still has to carry a schemaVersion before it is an export.
+func decodeBase64Document(b []byte) ([]byte, error) {
+	compact := make([]byte, 0, len(b))
+	for _, c := range b {
+		switch c {
+		case ' ', '\t', '\r', '\n', '\v', '\f':
+		default:
+			compact = append(compact, c)
+		}
+	}
+	enc := base64.RawStdEncoding
+	if bytes.ContainsAny(compact, "-_") {
+		enc = base64.RawURLEncoding
+	}
+	return enc.DecodeString(string(bytes.TrimRight(compact, "=")))
 }
 
 // validateExport judges everything that can be judged from the document alone,
