@@ -16,6 +16,33 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-08-25
+
+The release that makes a pool safe to drive from more than one machine, and
+stops the daemon logging you out of Claude Code. `ccdad own` declares the split,
+which is the one piece of multi-machine setup ccdad cannot infer for you: its
+target is a pure function of readings the *server* shares between your machines,
+while every lock it holds is a file lock on one of them. Underneath, three fixes
+end a loop that could get a whole token family rejected — a login the store
+cannot name is its own state now rather than "nobody is live", nothing is
+installed inside Claude Code's own refresh window, and ccdad rotates the live
+credential itself instead of reacting to a rotation it did not perform. Under
+`hover`, an account with nothing left no longer outranks the accounts that still
+hold quota, and the pre-emptive switch — which a derived threshold had quietly
+made unable to fire at all — fires again.
+
+Three things worth knowing before they surprise you. **The danger band now polls
+at 180 s rather than 60 s, and `preempt_lead` defaults to 6 minutes rather than
+2**: at or above 95% of a window the live account was making 60 requests an hour
+against an endpoint allowance of roughly 28–30, and a 2-minute lead against the
+cadence that replaces it would have been shorter than a single poll. **`ccdad
+probe` now spends a turn on a window whose reset has already passed**, where it
+used to refuse with "already reports a reset time" — a probe is a warm-up, not a
+way to learn a reset time, and the flat six-hour gate left roughly 4.2–4.6 hours
+of stopped clock per account per day. And **`ccdad bootstrap` refuses a
+`CCDAD_IMPORT` that holds a document rather than a path**, which `export
+--base64` is what made plausible.
+
 ### Added
 
 - **`ccdad own` declares which accounts a machine drives**, which is the one
