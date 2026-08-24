@@ -231,6 +231,12 @@ func acquireLock(path string) (release func() error, err error) {
 // so a second acquisition from the same process blocks against the first
 // exactly as another process's would. Not saving is what makes a multi-step
 // callback land as one write.
+//
+// A FAILURE — from fn or from the save — is reversed rather than merely not
+// written. Not writing accounts.toml restores the document, and the document
+// is not the whole store: Add puts a credential file down before it touches
+// memory, so the credentials directory has to be walked back by hand. That is
+// Store.rollback, which also states the one change it deliberately leaves.
 func (s *Store) mutate(fn func() error) (err error) {
 	if s.inTx {
 		return fn()
@@ -249,12 +255,19 @@ func (s *Store) mutate(fn func() error) (err error) {
 		return err
 	}
 	s.inTx = true
-	defer func() { s.inTx = false }()
+	// The journal is cleared on the way OUT rather than on the way in: every
+	// path that sets inTx registers this defer with it, so a transaction never
+	// starts holding the previous one's entries and there is no second, dead
+	// assignment here pretending to guard against it.
+	defer func() { s.inTx = false; s.undo = nil }()
 
 	if err := fn(); err != nil {
-		return err
+		return errors.Join(err, s.rollback())
 	}
-	return s.save()
+	if err := s.save(); err != nil {
+		return errors.Join(err, s.rollback())
+	}
+	return nil
 }
 
 // WithStore runs fn against the store under the cross-process lock and writes
@@ -265,12 +278,19 @@ func (s *Store) mutate(fn func() error) (err error) {
 // not need this; a caller importing five accounts does, or an alias collision
 // on the fourth leaves three written and two not, with no rollback.
 //
-// fn returning an error leaves accounts.toml exactly as it was. It does NOT
-// undo anything fn did outside the file — Add writes a credential file before
-// touching memory — so a failed callback can leave a credential file with no
-// account naming it. That is the same direction Add already fails in on its
-// own, and it is the safe one: an orphan credential file is inert, while an
-// account with no credentials is a switch that logs the user out.
+// fn returning an error leaves accounts.toml exactly as it was, and now the
+// credentials directory with it: mutate replays what the transaction wrote
+// there, backwards, through Store.rollback. A batch that fails on the fourth
+// of five accounts — an I/O failure on that credential write, which is what
+// remains once a caller has judged its document up front — leaves neither
+// three accounts in the file nor three credential files beside it. The second
+// was the worse half: a live refresh token that `ccdad list`, `ccdad remove`
+// and `ccdad doctor` could not see, because all three read the file.
+//
+// One change is deliberately NOT reversed: the content of a credential file
+// the transaction only overwrote. rollback says why, and the cost is real —
+// an account that was already stored can come out of a refused transaction
+// holding credentials it did not have going in.
 func WithStore(fn func(*Store) error) error {
 	s, err := Open()
 	if err != nil {
