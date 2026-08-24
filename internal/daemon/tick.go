@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -51,6 +52,11 @@ type Engine struct {
 	// describe an endpoint's behaviour without one.
 	AccessToken func(ctx context.Context, uuid string) (string, error)
 	FetchUsage  func(ctx context.Context, accessToken string) (*usage.Snapshot, error)
+	// SpawnProbe starts one probe and returns without waiting for it. It is a
+	// func for the same reason the two above are: starting a process is the
+	// thing a test in this package cannot arrange. Nil means the package's own
+	// SpawnProbe.
+	SpawnProbe func(uuid, model string) error
 	// Now is the clock, and Rand the jitter source the poll policy wants.
 	Now  func() time.Time
 	Rand func() float64
@@ -84,6 +90,11 @@ type Engine struct {
 	saidOverridden  bool
 	saidContended   bool
 	saidClaimNotice string
+	// saidNoClaude and saidProbeSpends are the probe's two once-per-lifetime
+	// lines, held here for the reason the three above are: this loop runs about
+	// once a second, and a machine with no Claude Code on it stays that way.
+	saidNoClaude    bool
+	saidProbeSpends bool
 
 	wg sync.WaitGroup
 }
@@ -93,9 +104,16 @@ type Engine struct {
 // every field has exactly one authoritative file gives engine state to
 // status.json alone.
 type pollRecord struct {
-	at   time.Time
-	err  string
+	at  time.Time
+	err string
+	// next is the schedule this account's OWN poll earned, and hold a
+	// stand-down another account's poll wrote. They are two fields for the
+	// reason usage.Entry keeps them apart: different writers, and the stand-down
+	// does not apply to whichever account is live right now. Folding them here
+	// would publish a stand-down written for an account's predecessor as that
+	// account's own deadline, for as long as half an hour after it became live.
 	next time.Time
+	hold time.Time
 }
 
 // NewEngine wires the real token source and usage client.
@@ -178,8 +196,16 @@ func (e *Engine) Snapshot() Status {
 			continue
 		}
 		out.Accounts[i].LastPollAt, out.Accounts[i].LastPollError = rec.at, rec.err
-		if !rec.next.IsZero() {
-			out.Accounts[i].NextPollAt = rec.next
+		// The same rule usage.Entry.PollAt applies, applied at READ time rather
+		// than when the record was written: whether an account is live changes
+		// after a switch, and a stand-down recorded while it was an alternate
+		// must stop applying the moment it stops being one.
+		next := rec.next
+		if out.Accounts[i].UUID != out.ActiveUUID && rec.hold.After(next) {
+			next = rec.hold
+		}
+		if !next.IsZero() {
+			out.Accounts[i].NextPollAt = next
 		}
 	}
 	return out
@@ -217,7 +243,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 		Config: func() (config.Config, error) { return cfg, cfgErr },
 	})
 	if evErr != nil {
-		e.publish(accounts, cache, ev, cfg)
+		e.publish(accounts, cache, ev, cfg, quarantinedSet(ev))
 		return evErr
 	}
 
@@ -232,8 +258,10 @@ func (e *Engine) Tick(ctx context.Context) error {
 	// Taking it from the evaluation also means a swap performed a moment ago is
 	// already reflected: the account that just became live is polled as the
 	// live one, this tick rather than next.
-	e.dispatch(ctx, s, accounts, cache, cfg, now, activeAfter(ev, res))
-	e.publish(accounts, cache, ev, cfg)
+	active, activeKnown := activeAfter(ev, res)
+	quarantined := quarantinedSet(ev)
+	e.dispatch(ctx, s, accounts, cache, cfg, now, active, activeKnown, quarantined)
+	e.publish(accounts, cache, ev, cfg, quarantined)
 
 	if swapErr != nil {
 		return swapErr
@@ -245,15 +273,29 @@ func (e *Engine) Tick(ctx context.Context) error {
 }
 
 // activeAfter is the account Claude Code is logged in as once this tick's swap
-// has been accounted for.
-func activeAfter(ev switcher.Evaluation, res switcher.Result) string {
+// has been accounted for, and whether that could be established at all.
+//
+// The second value is not decoration. AttributeFile matches the live file by
+// REFRESH TOKEN, and the server rotates that token whenever anything refreshes,
+// so "which account is live could not be worked out" is a state a working
+// machine reaches — and it is not the same fact as "no account is live".
+// Collapsing the two into an empty uuid makes every comparison against it fail
+// open, which for the probe means spending a turn against the account a session
+// is running on: the one probe that can revoke the token that session is using.
+//
+// Execute's answer is preferred over the evaluation's because it was taken under
+// the claim lock, after the evaluation and after any swap.
+func activeAfter(ev switcher.Evaluation, res switcher.Result) (string, bool) {
 	if res.Outcome == switcher.Switched {
-		return res.Target.UUID
+		return res.Target.UUID, true
+	}
+	if res.LiveKnown {
+		return res.Live.UUID, true
 	}
 	if ev.LiveKnown {
-		return ev.Live.UUID
+		return ev.Live.UUID, true
 	}
-	return ""
+	return "", false
 }
 
 // act executes the plan, when the plan is to move.
@@ -321,21 +363,46 @@ func (e *Engine) act(s *store.Store, ev switcher.Evaluation) (switcher.Result, e
 // dispatch starts a poll for every account that is due, and returns without
 // waiting for any of them.
 func (e *Engine) dispatch(ctx context.Context, s *store.Store, accounts []store.Account,
-	cache *usage.Cache, cfg config.Config, now time.Time, active string) {
+	cache *usage.Cache, cfg config.Config, now time.Time, active string, activeKnown bool,
+	quarantined map[string]bool) {
 
-	sizes := identitySizes(accounts)
+	members := identityMembers(accounts)
 	for _, a := range accounts {
 		if !pollable(s, a) {
 			continue
 		}
 		entry, has := cache.Get(a.UUID)
-		if !due(entry, has, now) {
+		if !due(entry, has, now, a.UUID == active) {
 			continue
 		}
 		if !e.claim(a.UUID) {
 			// A poll from an earlier tick is still running. Starting a second
 			// one would spend the identity's budget twice for one reading and
 			// race two writers into the same cache row.
+			//
+			// Ahead of the PROBE decision as well, and not only the poll. That
+			// poll has not committed yet, and when it does it writes an ordinary
+			// cadence over the one-minute schedule RecordProbe leaves behind —
+			// so the poll meant to read what the probe woke would land ten
+			// minutes out instead of one, on a turn of quota already spent.
+			continue
+		}
+		// A probe REPLACES this tick's poll rather than being scheduled beside
+		// it, and the ordering is what makes that true: the account is one a
+		// poller was about to reach, so nothing is polled more often because of a
+		// probe, and the entry's reading is already older than the serve TTL —
+		// which is what lets the poll a minute out actually happen instead of
+		// being held at the freshness floor.
+		//
+		// Only a probe that was actually QUEUED replaces the poll, which is why
+		// the claim is released here rather than in probeNow. One the daemon
+		// could not start — no Claude Code on this PATH — replaces nothing, and
+		// skipping the poll for it as well would leave an account unread forever:
+		// the reading is what says the window still has no reset, so a tick that
+		// never refreshes it can never find out that it does.
+		if model, want := e.probeDue(a, entry, cfg, now, active, activeKnown, quarantined); want &&
+			e.probeNow(a, model, now) {
+			e.release(a.UUID)
 			continue
 		}
 		e.wg.Add(1)
@@ -344,7 +411,7 @@ func (e *Engine) dispatch(ctx context.Context, s *store.Store, accounts []store.
 			defer e.release(a.UUID)
 			// Discarded: a tick reports through the status document, and
 			// the failure is already in this account's pollRecord.
-			_ = e.poll(ctx, a, cfg, sizes[identityOf(a)], a.UUID == active)
+			_ = e.poll(ctx, a, cfg, members[identityOf(a)], a.UUID == active)
 		}(a)
 	}
 }
@@ -360,10 +427,14 @@ func identityOf(a store.Account) string {
 	return "org:" + a.OrganizationUUID
 }
 
-func identitySizes(accounts []store.Account) map[string]int {
-	out := make(map[string]int, len(accounts))
+// identityMembers maps each identity to every account that draws on it. The
+// scheduler needs both halves: HOW MANY accounts share the budget, which is the
+// divisor, and WHICH ones, because the danger band holds the others back.
+func identityMembers(accounts []store.Account) map[string][]string {
+	out := make(map[string][]string, len(accounts))
 	for _, a := range accounts {
-		out[identityOf(a)]++
+		id := identityOf(a)
+		out[id] = append(out[id], a.UUID)
 	}
 	return out
 }
@@ -382,20 +453,198 @@ func pollable(s *store.Store, a store.Account) bool {
 	return hasOAuth
 }
 
-// due applies both gates: serveTTL, which is the same rule the read path
-// enforces and the only thing standing between a busy fleet and the endpoint's
-// hourly allowance, and the schedule the last poll set.
-func due(e usage.Entry, has bool, now time.Time) bool {
+// due applies both gates: the serve TTL the last poll chose for this reading,
+// which is the same rule the read path enforces and the only thing standing
+// between a busy fleet and the endpoint's hourly allowance, and the schedule that
+// poll set.
+//
+// The TTL is the ENTRY's rather than the flat one, because the danger band cuts
+// it to 30 s. Under the flat 180 s, a band asking for a poll every 60 s would
+// have two of every three refused right here, and the tighter cadence would exist
+// in the schedule and nowhere else.
+//
+// live is passed in because a stand-down written for the account that WAS live
+// must not hold the one that is now.
+func due(e usage.Entry, has bool, now time.Time, live bool) bool {
 	if !has {
 		return true
 	}
-	if e.Fresh(now) {
+	if e.FreshWithin(now, e.ScheduledTTL()) {
 		return false
 	}
-	if e.NextPollAt.IsZero() {
+	at := e.PollAt(live)
+	if at.IsZero() {
 		return true
 	}
-	return !now.Before(e.NextPollAt)
+	return !now.Before(at)
+}
+
+// probeDue reports whether this tick should spend a turn of an account's own
+// quota to give its binding window a reset time, and which model family the turn
+// has to be spent against to reach that window.
+//
+// Every condition is a way this goes wrong without it:
+//
+//   - probe_unknown off is the user saying not to spend their quota unasked.
+//   - a disabled account is one the engine will not switch to, so a reading for
+//     it buys nothing and the quota would be spent for nobody. A QUARANTINED one
+//     is the same sentence: it is out of rotation, and the only thing that ever
+//     quarantines is a refresh token the endpoint has already rejected — which is
+//     the very credential a probe would seed its Claude Code with. That errand
+//     cannot authenticate, so it would fail every six hours forever.
+//   - an unreadable account is one no window reported a utilization for. That is
+//     an account nothing could be read from rather than one with an unused
+//     window, and the answer to it is another poll, not a turn of quota.
+//   - a binding window that already reports a reset has nothing to wake, and this
+//     is the condition that stops the probe recurring once it has worked.
+//   - a binding window with utilization ABOVE zero has been spent against, so a
+//     reading that also carries no reset is a contradiction rather than an unused
+//     window. See the guard itself.
+//   - the six-hour gate is what keeps a probe that FAILS — a login prompt, a
+//     model outage — from being retried at this loop's 1 Hz.
+//
+// The live account is skipped, and that is the one exclusion worth spelling out.
+// It is the account something else is already spending against, so a probe of it
+// is the one probe that duplicates work outright — and it is the one that can
+// break a session in flight: a probe runs its own Claude Code out of its own
+// credential home holding the SAME OAuth login, and the server rotates the
+// refresh token whenever either of them refreshes, revoking the copy the live
+// session is using. What happens instead is nothing: the window gets its reset
+// time from the user's own next turn, which is the event a probe is standing in
+// for, and `ccdad probe <account>` stays available to a human who wants it now.
+func (e *Engine) probeDue(a store.Account, entry usage.Entry, cfg config.Config,
+	now time.Time, active string, activeKnown bool, quarantined map[string]bool) (string, bool) {
+
+	if !cfg.ProbeUnknown || a.Disabled || quarantined[a.UUID] {
+		return "", false
+	}
+	// Which account is live has to be KNOWN, not merely unequal. An empty active
+	// uuid is "could not be worked out" as well as "nobody", and the two have
+	// opposite answers here: the first is the state where a probe is most
+	// dangerous, because the account it would run against may be the one Claude
+	// Code is logged in as. Nothing is lost by waiting — an engine that cannot
+	// name the live account is about to switch, and a switch names it.
+	if !activeKnown || a.UUID == active {
+		return "", false
+	}
+	h := strategy.HeadroomOf(entry.Snapshot, cfg.Thresholds())
+	if !h.Known {
+		return "", false
+	}
+	if _, has := entry.Snapshot.ResetFor(h.Binding); has {
+		return "", false
+	}
+	// The window has to be UNSPENT as well as reset-less, and those are two
+	// different readings. The endpoint answers null for resets_at until something
+	// has actually been spent against the window, so utilization above zero with
+	// no reset is not an unused window at all — in practice it is a resets_at
+	// this build could not parse, which the snapshot parser degrades to "no
+	// reset" deliberately. A probe wakes nothing there, the next reading carries
+	// the same unparseable time, and the account would spend a turn of its own
+	// quota every six hours for as long as the drift lasted.
+	//
+	// Pct is 100 minus utilization, so this is utilization at or below zero.
+	if h.Pct < 100 {
+		return "", false
+	}
+	if !entry.MayProbe(now) {
+		return "", false
+	}
+	return probeModel(h.Binding), true
+}
+
+// probeModel is the model family a turn must be spent against to reach one
+// window, or "" when any model reaches it.
+//
+// A model-scoped weekly window arrives named for its scope's DISPLAY name —
+// "Opus 4.5" — and ModelFamily is what already reduces one of those to the token
+// a --model argument is written with. Only the DISPLAY half is handed to it, and
+// that is the whole point of taking the name apart rather than matching over it:
+// ModelFamily is a substring match, the full name carries the scope KEY, and a
+// deployment whose keys include one like sonnet_tier would otherwise have a
+// family read out of a string that names no model at all — a turn of quota spent
+// against a window nobody asked about.
+//
+// Everything else gets "", meaning any model reaches it: the turn is spent on
+// whatever claude defaults to, which still wakes the five-hour window and is the
+// honest answer for a scope ccdad cannot name.
+//
+// What this cannot express is a model VERSION. A cap scoped to "Opus 4.1" is
+// probed with --model opus, which claude resolves to whatever it calls opus
+// today, and if that is a different build the turn lands on a different window.
+// The six-hour gate is what bounds that: MayProbe counts every ATTEMPT and not
+// only the failures, precisely so a probe that wakes nothing costs four turns a
+// day rather than one per cadence.
+func probeModel(w usage.WindowName) string {
+	switch w {
+	case usage.WindowSevenDayOpus:
+		return "opus"
+	case usage.WindowSevenDaySonnet:
+		return "sonnet"
+	}
+	// The prefix is asked for rather than spelled, so this cannot drift from the
+	// one place a scoped name is assembled.
+	prefix := string(usage.ScopedWindowName(usage.ScopeModel, ""))
+	display, ok := strings.CutPrefix(string(w), prefix)
+	if !ok {
+		return ""
+	}
+	if family, ok := strategy.ModelFamily(display); ok {
+		return family
+	}
+	return ""
+}
+
+// probeNow queues one probe and moves the poll that will read it out of the way.
+// It reports whether the attempt was RECORDED, which is what makes it safe for
+// the caller to skip this tick's poll: a recorded attempt has already scheduled
+// that poll a minute out, and an unrecorded one has scheduled nothing.
+func (e *Engine) probeNow(a store.Account, model string, now time.Time) bool {
+	// Asked here rather than once per tick: this is reached only for an account
+	// that is otherwise worth probing, which after the first successful probe is
+	// no account at all. The child inherits this process's PATH through ChildEnv,
+	// so what resolves here is what will resolve there.
+	//
+	// Asked BEFORE the attempt is recorded, and that order is deliberate: a
+	// machine with no Claude Code on it has not made a failed attempt — nothing
+	// was tried and nothing was spent — so it must not consume the six-hour
+	// budget, or the account stays unknown for six hours after claude is finally
+	// installed.
+	if err := ProbeAvailable(); err != nil {
+		if !e.saidNoClaude {
+			e.saidNoClaude = true
+			e.logf("not probing: %v. An account whose window has never been used stays "+
+				"unknown — no reset time, no pace, no projection. Install Claude Code, or "+
+				"set probe_unknown = false to stop looking", err)
+		}
+		return false
+	}
+	if !e.saidProbeSpends {
+		e.saidProbeSpends = true
+		e.logf("probing accounts whose binding window reports no reset time. A probe SPENDS that " +
+			"account's own quota — one turn of Claude Code — because the endpoint reports no reset " +
+			"until something has been spent against the window. Set probe_unknown = false to stop.")
+	}
+	// Stamped BEFORE the spawn, and that order is the whole gate. The child is a
+	// separate process, so a spawn that never starts would otherwise leave the
+	// account probe-due on the very next tick, forever. The child stamps again
+	// once it knows the outcome; both writers go through the cache's own lock and
+	// the later one lands last.
+	if err := usage.RecordProbe(cacheTimeout, a.UUID, now, nil); err != nil {
+		e.logf("recording %s's probe failed: %v", a.UUID, err)
+		return false
+	}
+	if err := e.spawnProbe(a.UUID, model); err != nil {
+		e.logf("probing %s failed to start: %v", a.UUID, err)
+	}
+	return true
+}
+
+func (e *Engine) spawnProbe(uuid, model string) error {
+	if e.SpawnProbe != nil {
+		return e.SpawnProbe(uuid, model)
+	}
+	return SpawnProbe(uuid, model)
 }
 
 func (e *Engine) claim(uuid string) bool {
@@ -418,7 +667,7 @@ func (e *Engine) release(uuid string) {
 // its only output is the cache, the engine state, and this account's
 // pollRecord; the returned error is for Refresh, which has a caller waiting to
 // be told what happened rather than a status document to publish into.
-func (e *Engine) poll(ctx context.Context, a store.Account, cfg config.Config, identitySize int, active bool) error {
+func (e *Engine) poll(ctx context.Context, a store.Account, cfg config.Config, identity []string, active bool) error {
 	ctx, cancel := context.WithTimeout(ctx, e.pollTimeout())
 	defer cancel()
 
@@ -434,17 +683,17 @@ func (e *Engine) poll(ctx context.Context, a store.Account, cfg config.Config, i
 	now := e.now()
 	e.record(a.UUID, now, err)
 	if err != nil {
-		e.handleFailure(a, cfg, err, now, identitySize, active)
+		e.handleFailure(a, cfg, err, now, identity, active)
 		return err
 	}
-	e.commit(a, snap, now, identitySize, cfg, active, nil)
+	e.commit(a, snap, now, identity, cfg, active, nil)
 	return nil
 }
 
 // handleFailure decides what a failed poll means. Only ONE of the failures says
 // anything about the account.
 func (e *Engine) handleFailure(a store.Account, cfg config.Config, err error,
-	now time.Time, identitySize int, active bool) {
+	now time.Time, identity []string, active bool) {
 	switch {
 	case errors.Is(err, tokens.ErrNoOAuthCredential):
 		// Nothing to poll with, and pollable() should already have caught it.
@@ -457,7 +706,7 @@ func (e *Engine) handleFailure(a store.Account, cfg config.Config, err error,
 		// Code has not run in eight hours — so there is no session whose
 		// rotation is urgent, and this must not feed AIMD or quarantine
 		// anything. It reschedules at the ordinary cadence and waits.
-		e.commit(a, nil, now, identitySize, cfg, active, nil)
+		e.commit(a, nil, now, identity, cfg, active, nil)
 		return
 
 	case errors.Is(err, usage.ErrRateLimited):
@@ -467,7 +716,7 @@ func (e *Engine) handleFailure(a store.Account, cfg config.Config, err error,
 		if errors.As(err, &se) {
 			retry, hasRetry = se.RetryAfter()
 		}
-		e.commit(a, nil, now, identitySize, cfg, active, func(st pollpolicy.State) pollpolicy.State {
+		e.commit(a, nil, now, identity, cfg, active, func(st pollpolicy.State) pollpolicy.State {
 			return pollpolicy.RateLimited(st, now, retry, hasRetry)
 		})
 		return
@@ -481,7 +730,7 @@ func (e *Engine) handleFailure(a store.Account, cfg config.Config, err error,
 	if strategy.ClassifyRefresh(err).Quarantines() {
 		e.quarantine(a.UUID, cfg, now)
 	}
-	e.commit(a, nil, now, identitySize, cfg, active, nil)
+	e.commit(a, nil, now, identity, cfg, active, nil)
 }
 
 func (e *Engine) quarantine(uuid string, cfg config.Config, now time.Time) {
@@ -505,9 +754,12 @@ func (e *Engine) quarantine(uuid string, cfg config.Config, now time.Time) {
 // that evidence — throwing it away would make one bad minute look like a fresh
 // account with no history.
 func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now time.Time,
-	identitySize int, cfg config.Config, active bool,
+	identity []string, cfg config.Config, active bool,
 	adjust func(pollpolicy.State) pollpolicy.State) {
 
+	// Resolved once, before the cache callback: it is read twice inside and the
+	// value is the same for the whole call.
+	thr := cfg.Thresholds()
 	err := usage.WithCache(cacheTimeout, func(c *usage.Cache) error {
 		entry, had := c.Get(a.UUID)
 		state := pollStateOf(entry)
@@ -526,31 +778,103 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now time.Time,
 			entry.FetchedAt = now
 		}
 
-		h := strategy.HeadroomOf(entry.Snapshot, cfg.Thresholds())
+		h := strategy.HeadroomOf(entry.Snapshot, thr)
 		reading := pollpolicy.Reading{Exhausted: exhausted(h)}
 		if snap != nil && h.Known {
 			reading.BindingPct, reading.Known = 100-h.Pct, true
 		}
-		at, next := pollpolicy.Next(state, pollpolicy.Input{
-			Now:       now,
-			Active:    active,
-			Reading:   reading,
-			Threshold: cfg.Threshold,
-		}, e.rand())
+		in := pollpolicy.Input{
+			Now:     now,
+			Active:  active,
+			Reading: reading,
+			// The BINDING window's own floor, and not the fallback. BindingPct
+			// is measured on the binding window, and the urgent band is "within
+			// 15 points of the threshold": comparing that reading against a
+			// different window's number puts the band 20 points out of place for
+			// an account whose weekly floor is 60 while the fallback is 80, and
+			// the account is then polled at the idle cadence through the exact
+			// span the band exists to cover.
+			//
+			// An unreadable account has an empty Binding, and Thresholds.For
+			// answers Default for a window it has no key for, so that case keeps
+			// the fallback — and nearThreshold ignores it anyway while
+			// Reading.Known is false.
+			Threshold: thr.For(h.Binding),
+		}
+		at, next := pollpolicy.Next(state, in, e.rand())
 
 		// The allowance belongs to the identity, so the cadence is divided
 		// among the accounts that share one — otherwise two accounts in an
 		// organization each poll at the single-account rate and the pair spends
-		// twice the budget.
-		entry.NextPollAt = now.Add(pollpolicy.PerIdentity(at.Sub(now), identitySize))
+		// twice the budget. Share is what carries the danger band's one
+		// exemption; PerIdentity would divide the cadence that must not be
+		// divided.
+		entry.NextPollAt = now.Add(pollpolicy.Share(at.Sub(now), len(identity), in))
+		entry.ServeTTL = pollpolicy.ServeTTLFor(in)
 		entry.Poll = usage.PollState{Interval: next.Interval, LastRateLimited: next.LastRateLimited}
 		entry.Poll.LastBindingPct, entry.Poll.HasLastBinding = next.LastBindingPct, next.HasLastBinding
+		// entry.StandDownUntil is read and written back untouched, and that is
+		// what makes the two writers safe: this account's poll never edits the
+		// field its identity's live account owns, so the order the two goroutines
+		// finish in cannot change the outcome.
 		c.Put(a.UUID, entry)
+		// The two are recorded apart for the reason the entry keeps them apart:
+		// whether this account is live is a fact about now, and the reader
+		// applies it.
 		e.scheduled(a.UUID, entry.NextPollAt)
+		e.stoodDown(a.UUID, entry.StandDownUntil)
+		if pollpolicy.InDangerBand(in) {
+			e.standDown(c, identity, a.UUID, now)
+		}
 		return nil
 	})
 	if err != nil {
 		e.logf("recording %s's reading failed: %v", a.UUID, err)
+	}
+}
+
+// standDown pushes every other account on one identity to the congestion ceiling
+// while the live one is inside the danger band.
+//
+// It writes StandDownUntil and never NextPollAt, because the two are different
+// facts with different writers: the schedule an account's own poll earned —
+// including whatever floor a 429 bought it — belongs to that poll, and this runs
+// from somebody else's. usage.Entry.PollAt takes the later of the two, so a
+// stand-down can hold an account back and can never let one out early.
+//
+// An account with NO entry is skipped rather than given one. It has never been
+// read, which makes it the account on this identity the engine can least afford
+// to leave unrankable, and one request buys a candidate to switch to; a
+// stand-down written over the top of nothing buys half an hour of the same
+// blindness.
+func (e *Engine) standDown(c *usage.Cache, identity []string, live string, now time.Time) {
+	for _, uuid := range identity {
+		if uuid == live {
+			continue
+		}
+		entry, ok := c.Get(uuid)
+		if !ok {
+			continue
+		}
+		if now.Before(entry.StandDownUntil) {
+			// Already standing down, and NOT renewed. This is the difference
+			// between yielding a share of the budget and never being polled
+			// again: the band recommits every 60 s, so a deadline pushed forward
+			// on every one of those moves away faster than the clock approaches
+			// it, and an alternate would go unread for as long as the live
+			// account stayed in the band — which is exactly the span in which
+			// the engine needs an alternate it can rank. Renewing only once the
+			// previous one has expired is the two requests an hour that keep it
+			// rankable, which is what a stand-down was defined to be.
+			//
+			// It also subsumes the guard this replaces: from a deadline already
+			// past, now plus a jittered ceiling is always later, so a stand-down
+			// can never move backwards.
+			continue
+		}
+		entry.StandDownUntil = pollpolicy.StandDownUntil(now, e.rand())
+		c.Put(uuid, entry)
+		e.stoodDown(uuid, entry.StandDownUntil)
 	}
 }
 
@@ -594,6 +918,16 @@ func (e *Engine) scheduled(uuid string, at time.Time) {
 	e.polls[uuid] = rec
 }
 
+// stoodDown records a stand-down against an account, whoever wrote it. Snapshot
+// applies it only while that account is not the live one.
+func (e *Engine) stoodDown(uuid string, at time.Time) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	rec := e.polls[uuid]
+	rec.hold = at
+	e.polls[uuid] = rec
+}
+
 func (e *Engine) record(uuid string, at time.Time, err error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -609,13 +943,20 @@ func (e *Engine) record(uuid string, at time.Time, err error) {
 // reader could take a quota number from: the promise that `list` and `status
 // --json` can never disagree only holds while every figure has exactly one
 // authoritative file, and quota's is usage.json.
-func (e *Engine) publish(accounts []store.Account, cache *usage.Cache,
-	ev switcher.Evaluation, cfg config.Config) {
-
-	quarantined := make(map[string]bool, len(ev.Plan.Quarantined))
+// quarantinedSet is the accounts this pass is holding out of rotation, as a
+// lookup. It is built once per tick because both the scheduler and the status
+// document ask about it, and a second walk of the same slice is a second place
+// for the two to disagree.
+func quarantinedSet(ev switcher.Evaluation) map[string]bool {
+	out := make(map[string]bool, len(ev.Plan.Quarantined))
 	for _, uuid := range ev.Plan.Quarantined {
-		quarantined[uuid] = true
+		out[uuid] = true
 	}
+	return out
+}
+
+func (e *Engine) publish(accounts []store.Account, cache *usage.Cache,
+	ev switcher.Evaluation, cfg config.Config, quarantined map[string]bool) {
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -632,9 +973,12 @@ func (e *Engine) publish(accounts []store.Account, cache *usage.Cache,
 		// The cache's own deadline is the fallback, and it is the one that
 		// matters on a fresh start: it is what the PREVIOUS daemon scheduled,
 		// and honouring it is what stops a restart loop from re-polling every
-		// account immediately.
+		// account immediately. A stand-down is part of that answer for every
+		// account except the live one, exactly as it is for dispatch — a
+		// document that said 60 s about an account the dispatcher will not touch
+		// for half an hour is the disagreement this document exists to prevent.
 		if entry, ok := cache.Get(a.UUID); ok {
-			row.NextPollAt = entry.NextPollAt
+			row.NextPollAt = entry.PollAt(a.UUID == status.ActiveUUID)
 		}
 		row.State = accountState(a, cache, quarantined[a.UUID], status.ActiveUUID, cfg)
 		status.Accounts = append(status.Accounts, row)
@@ -645,6 +989,10 @@ func (e *Engine) publish(accounts []store.Account, cache *usage.Cache,
 func accountState(a store.Account, cache *usage.Cache, quarantined bool,
 	activeUUID string, cfg config.Config) AccountState {
 
+	// There is no case for the primary flag, and its absence is the decision:
+	// primary says where the engine RANKS an account, never that it should be
+	// left alone. Giving it an arm here would publish a usable seat as though its
+	// owner had held it out of rotation.
 	switch {
 	case a.Disabled:
 		return StateDisabled

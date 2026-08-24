@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/Kweiza/ccdaddy/internal/cclock"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
+	"github.com/Kweiza/ccdaddy/internal/pollpolicy"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -176,10 +177,12 @@ func TestCacheRoundTripsAnEntry(t *testing.T) {
 
 	err := WithCache(time.Second, func(c *Cache) error {
 		c.Put("acct-1", Entry{
-			Snapshot:   mustParse(t, realBody),
-			FetchedAt:  now,
-			NextPollAt: now.Add(3 * time.Minute),
-			Poll:       PollState{Interval: 180 * time.Second, LastRateLimited: now.Add(-time.Hour)},
+			Snapshot:       mustParse(t, realBody),
+			FetchedAt:      now,
+			NextPollAt:     now.Add(3 * time.Minute),
+			StandDownUntil: now.Add(30 * time.Minute),
+			ServeTTL:       pollpolicy.DangerServeTTL,
+			Poll:           PollState{Interval: 180 * time.Second, LastRateLimited: now.Add(-time.Hour)},
 		})
 		return nil
 	})
@@ -203,6 +206,13 @@ func TestCacheRoundTripsAnEntry(t *testing.T) {
 	}
 	if !e.NextPollAt.Equal(now.Add(3 * time.Minute)) {
 		t.Errorf("NextPollAt = %s", e.NextPollAt)
+	}
+	if !e.StandDownUntil.Equal(now.Add(30 * time.Minute)) {
+		t.Errorf("StandDownUntil = %s — a restart would poll an account that yielded its share", e.StandDownUntil)
+	}
+	if e.ServeTTL != pollpolicy.DangerServeTTL {
+		t.Errorf("ServeTTL = %s, want %s — a restart would re-clamp the band to the flat TTL",
+			e.ServeTTL, pollpolicy.DangerServeTTL)
 	}
 	if e.Poll.Interval != 180*time.Second {
 		t.Errorf("Poll.Interval = %v, want 180s — a restart must not reset a backoff", e.Poll.Interval)
@@ -563,5 +573,64 @@ func TestWithCacheKeepsTheCallbacksError(t *testing.T) {
 	err := WithCache(time.Second, func(c *Cache) error { return boom })
 	if !errors.Is(err, boom) {
 		t.Errorf("error = %v, want boom", err)
+	}
+}
+
+// A stand-down and the schedule a poll earned are DIFFERENT facts with different
+// writers: one is written by another account's poll, the other by this account's
+// own, and folding them into one field would let whichever goroutine finished
+// last erase the other. Both apply, and the later one wins.
+func TestAStandDownAndAnEarnedScheduleBothApply(t *testing.T) {
+	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
+
+	pushed := Entry{NextPollAt: now.Add(15 * time.Minute), StandDownUntil: now.Add(30 * time.Minute)}
+	if got := pushed.PollAt(false); !got.Equal(now.Add(30 * time.Minute)) {
+		t.Errorf("PollAt = %s, want the stand-down at %s", got, now.Add(30*time.Minute))
+	}
+	// A 429's floor is longer than the stand-down here, and a stand-down must
+	// never shorten one: that would poll straight through the backoff.
+	backedOff := Entry{NextPollAt: now.Add(45 * time.Minute), StandDownUntil: now.Add(30 * time.Minute)}
+	if got := backedOff.PollAt(false); !got.Equal(now.Add(45 * time.Minute)) {
+		t.Errorf("PollAt = %s, want the earned backoff at %s", got, now.Add(45*time.Minute))
+	}
+	// The live account is never held by one. A stand-down is written for the
+	// accounts that do not matter right now, and a switch changes which one that
+	// is — holding the account that just became live would blind the engine on
+	// the only account a session can be cut off on, for half an hour.
+	if got := pushed.PollAt(true); !got.Equal(now.Add(15 * time.Minute)) {
+		t.Errorf("PollAt = %s, want the live account's own schedule %s", got, now.Add(15*time.Minute))
+	}
+	if got := (Entry{StandDownUntil: now.Add(30 * time.Minute)}).PollAt(true); !got.IsZero() {
+		t.Errorf("PollAt = %s, want no schedule at all for a live account that has none", got)
+	}
+}
+
+// The scheduler's TTL and the hand-held gate are two different numbers on
+// purpose. The scheduler's is what the danger band shortens; the hand-held gate
+// is the only rate bound `--refresh` has, and shortening THAT would let a
+// scripted refresh reach the endpoint six times as often as before, on exactly
+// the account where a 429 costs the most.
+func TestTheScheduledTTLIsTheEntrysAndTheHandHeldGateIsNot(t *testing.T) {
+	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
+	minuteOld := now.Add(-time.Minute)
+
+	if got := (Entry{FetchedAt: minuteOld}).ScheduledTTL(); got != ServeTTL {
+		t.Errorf("ScheduledTTL = %s, want the package default %s — an entry written "+
+			"before this field existed has no opinion, which is not 'stale immediately'", got, ServeTTL)
+	}
+	band := Entry{FetchedAt: minuteOld, ServeTTL: pollpolicy.DangerServeTTL}
+	if got := band.ScheduledTTL(); got != pollpolicy.DangerServeTTL {
+		t.Errorf("ScheduledTTL = %s, want %s", got, pollpolicy.DangerServeTTL)
+	}
+	if band.FreshWithin(now, band.ScheduledTTL()) {
+		t.Error("a 60 s reading is still fresh under a 30 s TTL, so the band's cadence would be refused")
+	}
+	if !band.Fresh(now) {
+		t.Error("the hand-held gate moved with the scheduler's TTL")
+	}
+	// An entry dated in the future is a clock that moved backwards, not a fresh
+	// reading, under any TTL.
+	if (Entry{FetchedAt: now.Add(time.Hour)}).FreshWithin(now, ServeTTL) {
+		t.Error("a reading from the future was served as fresh")
 	}
 }
