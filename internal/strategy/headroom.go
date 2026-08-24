@@ -39,6 +39,21 @@ type Headroom struct {
 	// threshold — `ccdad auto --json` renders a ranked pool and never sees the
 	// bundle the pass was run with.
 	Threshold float64
+	// MinPct is the LEAST raw room any binding window has, and MinWindow names
+	// it. It is a SEPARATE figure from Pct and it has to be.
+	//
+	// Pct is read off the window with the least SLACK, and once windows carry
+	// thresholds of their own those are two different windows. A five-hour
+	// window three percent into its cycle sits under a threshold of twenty and
+	// binds at 25% used, while the weekly one behind it is at 95% under a
+	// threshold of ninety-nine: Pct reports the five-hour window's 75 points
+	// while the weekly is what will actually stop the session eight prompts
+	// later. Slack is the right answer to "which window is this account closest
+	// to breaching"; it is the wrong answer to "how much work can this account
+	// still take", and this field is the second question asked in its own
+	// terms.
+	MinPct    float64
+	MinWindow usage.WindowName
 	// Known is false when no window reported a utilization. An account that
 	// could not be read is NOT an empty one, and treating it as one is the
 	// exact bug that parked cswap's engine permanently.
@@ -252,6 +267,12 @@ func HeadroomFor(s *usage.Snapshot, model string, t Thresholds) Headroom {
 		}
 		thr := t.For(w.Name)
 		slack := thr - pct
+		// Taken BEFORE the binding test below sets Known, so the first readable
+		// window seeds the minimum rather than being compared against a zero
+		// that no window reported.
+		if room := 100 - pct; !out.Known || room < out.MinPct {
+			out.MinPct, out.MinWindow = room, w.Name
+		}
 		// The !out.Known guard is what makes the first readable window win
 		// outright. out.Slack is zero before it, so a first window with any
 		// positive slack would otherwise never be taken.

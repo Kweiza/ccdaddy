@@ -313,6 +313,36 @@ func Spent(h Headroom) (spent, known bool) {
 	return h.Slack < 0, true
 }
 
+// OutOfQuota is whether some window this account carries has nothing left in it
+// at all -- not "past the number it was given", which is Spent, but empty.
+//
+// The two questions were one question for as long as every window shared one
+// threshold: at a flat 80, slack is raw room shifted by twenty, so "past its
+// threshold" and "nearly empty" ordered accounts identically and one predicate
+// answered both. Per-window thresholds broke that, and hover derives a fresh
+// per-window table on every tick, so under hover they are never the same
+// question again.
+//
+// What makes them come apart at the top is the cap. Hover's threshold is
+// min(HoverCap, elapsed + share), so an account at 100% late in its window is
+// measured against 99 and reports a slack of -1 -- the least negative figure in
+// a pool where an account with half its week still unspent, but early enough
+// that its threshold is 31, reports -22. Ranked on slack the empty account wins,
+// and the engine hands the session to the one account that cannot serve it.
+//
+// It reads MinPct rather than Pct for the reason MinPct exists: Pct describes
+// whichever window is tightest on the SLACK axis, and the window that is empty
+// is not always that one.
+//
+// Three-valued for the same reason Spent is. An account nobody could read is
+// not an empty one.
+func OutOfQuota(h Headroom) (out, known bool) {
+	if !h.Known {
+		return false, false
+	}
+	return h.MinPct <= 0, true
+}
+
 // weeklyResetOf is the soonest reset among the weekly windows, which is what
 // consume-first spends against.
 //
@@ -391,6 +421,8 @@ func creditHeadroom(c Candidate, o Options) Headroom {
 	thr := o.Thresholds().CreditThreshold()
 	return Headroom{
 		Pct:       100 - pct,
+		MinPct:    100 - pct,
+		MinWindow: creditWindow,
 		Slack:     thr - pct,
 		Threshold: thr,
 		Known:     true,
@@ -490,11 +522,22 @@ func Rank(cands []Candidate, o Options) Result {
 	return res
 }
 
-// headroomTier separates three kinds of candidate, because "we know it has room"
-// and "we have no idea" and "we know it is spent" are three answers, not two.
-// The unknown sits between: a maybe beats a no, and trying it is how a pool of
-// unreadable accounts stops being a dead end.
+// headroomTier separates four kinds of candidate, because "we know it has room"
+// and "we have no idea" and "we know it is past its pace" and "we know it is
+// empty" are four answers, not two. The unknown sits second: a maybe beats a no,
+// and trying it is how a pool of unreadable accounts stops being a dead end.
+//
+// The last tier is categorical on purpose, and it is the one place in the
+// ranking where raw room outranks pace outright. Every other comparison here is
+// a judgement about which account SHOULD spend next; this one is about which
+// account CAN, and no amount of being nicely on pace makes a window with nothing
+// left in it able to serve a prompt. Keeping it as a tier rather than folding it
+// into the slack comparison is what stops the cap at HoverCap from letting an
+// empty account outrank a roomy one by a point of arithmetic.
 func headroomTier(r Ranked) int {
+	if empty, known := OutOfQuota(r.Headroom); known && empty {
+		return 3
+	}
 	over, known := Spent(r.Headroom)
 	switch {
 	case known && !over:
@@ -504,6 +547,22 @@ func headroomTier(r Ranked) int {
 	default:
 		return 2
 	}
+}
+
+// emptyTier is headroomTier's last distinction on its own, for the recovery
+// order -- which tiers on the recovery instant instead and so cannot reach
+// headroomTier for the rest.
+//
+// It is separate rather than shared because the two orders disagree about
+// everything else: recovery deliberately files a spent account that comes back
+// inside the hour ahead of one that does not, which headroomTier would rank the
+// other way round. The only thing they must agree on is that an empty account
+// goes last.
+func emptyTier(r Ranked) int {
+	if empty, known := OutOfQuota(r.Headroom); known && empty {
+		return 1
+	}
+	return 0
 }
 
 func lessHeadroom(a, b Ranked) bool {
@@ -535,6 +594,15 @@ func lessHeadroom(a, b Ranked) bool {
 // window carries a threshold of its own it is slack that says which account is
 // closer to its own floor.
 func lessRecovery(a, b Ranked) bool {
+	// Ahead of the recovery instant, because recovery order otherwise ranks an
+	// empty account FIRST exactly when it is most wrong to: the soonest reset
+	// belongs to the window that has been running longest, which is the window
+	// most likely to be the one that ran out. An account that comes back in an
+	// hour is a good target; an account that comes back in an hour AND has
+	// nothing left until then is not somewhere to send the next prompt.
+	if ta, tb := emptyTier(a), emptyTier(b); ta != tb {
+		return ta < tb
+	}
 	if a.ReturnsInsideHorizon != b.ReturnsInsideHorizon {
 		return a.ReturnsInsideHorizon
 	}
@@ -631,6 +699,15 @@ func lessConsumeFirst(a, b Ranked) bool {
 // spent, and the fail-closed direction on money is to keep using what is
 // already bought rather than to start spending because one poll failed. A pool
 // with nothing in it is exhausted trivially.
+//
+// The test is OutOfQuota and NOT Spent, and on this path the difference is
+// money. Spent asks whether an account is past the number it was given, and
+// under hover that number is a PACE target -- so a pool of six accounts every
+// one of which is merely running ahead of schedule answers "exhausted" while
+// carrying, between them, a fifth of a week of quota already paid for. Opening
+// the last-resort pool there starts buying credits to avoid spending
+// subscription quota that nobody is going to get back. The gate may only open
+// once the free quota is actually gone.
 func MainPoolExhausted(cands []Candidate, o Options) bool {
 	main := make([]Candidate, 0, len(cands))
 	for _, c := range cands {

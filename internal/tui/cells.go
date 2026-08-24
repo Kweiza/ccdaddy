@@ -108,6 +108,8 @@ func stateCell(s daemon.AccountState) (glyph, text string, style lipgloss.Style)
 		return "+", "candidate", styleCandidate
 	case daemon.StateExhausted:
 		return "!", "exhausted", styleExhausted
+	case daemon.StateEmpty:
+		return "0", "empty", styleExhausted
 	case daemon.StateQuarantined:
 		return "x", "quarantined", styleQuarantined
 	case daemon.StateDisabled:

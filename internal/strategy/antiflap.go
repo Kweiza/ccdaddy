@@ -300,13 +300,30 @@ func Decide(cands []Candidate, o Options, cfg Config, st *State, activeUUID stri
 	// would install a pass of its own, and the anti-flap set below has to be
 	// derived from the same pool the ranking ran on: a second pass would set a
 	// pre-emptive lead from accounts the ranking never considered.
+	// Asked BEFORE hover is installed, and the order is the whole point.
+	//
+	// This is the question that opens the LAST-RESORT CREDIT POOL, which is the
+	// one decision in ccdad that spends the user's money. Hover derives a
+	// threshold per window per tick out of how far through its window each
+	// account is -- a PACE target, not a stop line -- so a pool of six accounts
+	// every one of which is merely running ahead of schedule answers "spent"
+	// while carrying a fifth of a week of quota between them, already paid for.
+	// Opening the paid pool there buys credits to avoid spending subscription
+	// quota nobody is going to get back.
+	//
+	// HoverThresholds already refuses to supply the opt-in a scoped weekly cap
+	// needs, on the ground that hover overrides numbers a user typed but may not
+	// consent on their behalf. Money is that rule's strongest case: the
+	// configured threshold IS the user saying where they want to stop, and only
+	// a number they chose may authorise a purchase.
+	subExhausted := MainPoolExhausted(pool, o)
+
 	o = o.withHover(pool)
 	if o.hover != nil {
 		cfg = HoverConfig(cfg)
 	}
 
 	res := Rank(pool, o)
-	subExhausted := SubscriptionExhausted(pool, o)
 	plan := Plan{
 		Result:                res,
 		Quarantined:           held,
@@ -478,6 +495,25 @@ func gate(res Result, target Ranked, activeUUID string, cfg Config, st *State, n
 	if !hasBaseline {
 		// Nothing to hold a margin against. cooldownGate has already said this
 		// is not a state to sit in.
+		return ReasonBetterTarget, false, time.Time{}
+	}
+
+	// The live account has nothing left in it. Every margin below asks whether
+	// the candidate is enough BETTER to be worth the disruption of moving, and
+	// that question has no content here: staying costs the user the session.
+	//
+	// It is not a convenience. The additive margin runs on slack, and slack
+	// SATURATES for an empty account -- hover measures one against a threshold
+	// capped at HoverCap, so the worst it can report is -1, while a candidate
+	// with a fifth of its week left but early enough to be judged harshly
+	// reports -33. No candidate can clear a five-point margin against -1, so
+	// without this the ranking correctly files the empty account last and the
+	// gate then refuses every move off it, forever. The ratio already carried
+	// this reasoning for its own axis; the margin needs it for the other.
+	//
+	// The cooldown is deliberately still in force: it ran above, and a switch
+	// storm is a different failure that nothing here bounds.
+	if empty, known := OutOfQuota(active.Headroom); known && empty {
 		return ReasonBetterTarget, false, time.Time{}
 	}
 

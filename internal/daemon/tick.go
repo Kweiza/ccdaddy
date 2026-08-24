@@ -1146,6 +1146,17 @@ func exhausted(h strategy.Headroom) bool {
 	return spent
 }
 
+// empty is "some window this account carries has nothing left in it", which is
+// a different fact from exhausted and is published under its own name.
+//
+// It delegates for the same reason exhausted does: the raw-versus-pace
+// distinction has exactly one implementation in the ranking, and a second
+// spelling here would be the copy that drifts.
+func empty(h strategy.Headroom) bool {
+	out, _ := strategy.OutOfQuota(h)
+	return out
+}
+
 // scheduled records the deadline a poll just set. The snapshot takes it from
 // here rather than from the cache because a poll dispatched by this tick
 // finishes AFTER the tick published — the tick never waits — so a snapshot
@@ -1279,6 +1290,11 @@ func accountState(a store.Account, cache *usage.Cache, quarantined bool,
 	h := strategy.HeadroomOf(entry.Snapshot, thresholds(a.UUID))
 	if !h.Known {
 		return StateUnknown
+	}
+	// Empty is tested first: an empty account is necessarily past its threshold
+	// too, and the more specific answer is the one worth publishing.
+	if empty(h) {
+		return StateEmpty
 	}
 	if exhausted(h) {
 		return StateExhausted

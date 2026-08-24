@@ -319,10 +319,14 @@ func TestHoverIgnoresTheTuningAndNotTheMoneyGate(t *testing.T) {
 
 	o := opts()
 	o.Hover = true
-	// Deliberately hostile tuning: a threshold that would call the account
-	// healthy, a margin nothing could clear, and a cooldown longer than the
-	// pass. Every one of them is a key hover overrides.
-	o.Threshold = 99
+	// Deliberately hostile ANTI-FLAP tuning: a margin nothing could clear and a
+	// cooldown longer than the pass. Both are keys hover overrides.
+	//
+	// The threshold is NOT hostile here, and that is the change. It is the one
+	// number that still governs the money question -- see the case below -- so
+	// leaving it at 99 would stop this pass before it ever reached the gate,
+	// and the gate is what this case is about.
+	o.Threshold = 90
 	tuned := Config{HysteresisPct: 90, HeadroomRatio: 5, Cooldown: time.Hour}
 
 	// max_auto_spend is 0, and the seat is not primary.
@@ -338,8 +342,44 @@ func TestHoverIgnoresTheTuningAndNotTheMoneyGate(t *testing.T) {
 	seat.Primary = true
 	p = Decide([]Candidate{spent, seat}, o, tuned, NewState(), "c")
 	want(t, p, ActionStay, ReasonAlreadyBest, "")
+
 	p = Decide([]Candidate{spent, seat}, o, tuned, NewState(), "a")
 	want(t, p, ActionSwitch, ReasonBetterTarget, "c")
+}
+
+// Hover's threshold may not open the paid pool.
+//
+// Hover derives a threshold from how far through its window an account is: a
+// PACE target, not a stop line, and one nobody typed. The account below is two
+// points past that derived figure and nine points short of the number the user
+// actually chose. Reading hover's figure here would start buying credits while
+// nine points of paid-for subscription quota sat unspent -- and would do it on
+// a number the user never saw, which is exactly the consent HoverThresholds
+// already refuses to invent for a scoped weekly cap.
+func TestHoverThresholdDoesNotOpenTheCreditPool(t *testing.T) {
+	// 43% of the week gone with two usable accounts puts hover's threshold at
+	// 93. The user's own threshold is 99. Utilization is 95: past hover's,
+	// short of theirs.
+	spent := sub("a", &usage.Snapshot{
+		SevenDay: elapsedWindow(7*24*time.Hour, 0.43, 95),
+	})
+	seat := creditWith("c", usage.ExtraUsageFor(usage.ExtraUsageInput{
+		State:        usage.ExtraUsageEnabled,
+		Currency:     "USD",
+		MonthlyLimit: pf(10000),
+		UsedCredits:  pf(0),
+		Utilization:  pf(41),
+	}))
+
+	o := opts()
+	o.Hover = true
+	o.Threshold = 99
+
+	p := Decide([]Candidate{spent, seat}, o, Config{MaxAutoSpend: 500}, NewState(), "a")
+	if p.CreditConsulted {
+		t.Errorf("the credit pool was consulted: hover's pace threshold must not authorise a purchase")
+	}
+	want(t, p, ActionStay, ReasonAlreadyBest, "")
 }
 
 // The plan hover ran on is reported, because an automatic mode a user cannot
