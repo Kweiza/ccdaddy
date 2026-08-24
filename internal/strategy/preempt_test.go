@@ -122,10 +122,10 @@ func TestPreemptionNeedsACandidateWithSlack(t *testing.T) {
 	}
 }
 
-// The projection runs on the BINDING window, so a second window with room does
-// not talk the engine out of a move. The window with the least left is the one
-// that ends a session.
-func TestPreemptionProjectsTheBindingWindow(t *testing.T) {
+// A second window with room does not talk the engine out of a move. The rule is
+// "does ANY binding window run out inside the horizon", so a healthy weekly cap
+// beside a five-hour one about to land is not an argument against switching.
+func TestAWindowWithRoomDoesNotTalkPreemptionOutOfAMove(t *testing.T) {
 	live := polled(sub("a-live", &usage.Snapshot{
 		FiveHour: win(88, 2*time.Hour),
 		SevenDay: win(20, 4*24*time.Hour),
@@ -222,19 +222,18 @@ func TestPreemptionSaysNoWhenThereIsNoProjectionToRead(t *testing.T) {
 	want(t, p, ActionStay, ReasonHysteresis, "")
 }
 
-// The projection reads the BINDING window and no other, which is the rule as
-// approved: the window with the least slack is the one the ranking, the report
-// and this decision all speak about, and letting a second window fire here would
-// pre-empt on a cap that does not bind for the model about to run.
+// The projection reads the window that RUNS OUT FIRST, which is not the window
+// the ranking orders on. Ordering is on slack — how close a window is to its own
+// configured threshold — and a session is ended by whichever window reaches 100%
+// soonest. The two part company whenever burn rates differ, and they always
+// differ: a five-hour window is 33.6 times shorter than a weekly one, so it
+// climbs that much faster from the same amount of work.
 //
-// It has a seam, recorded here because it is reachable rather than theoretical.
-// Binding is the window with the least SLACK; the window that ends a session is
-// the one that reaches 100% SOONEST, and the two part company whenever burn
-// rates differ — a five-hour window always burns faster than a weekly one. Here
-// a-live's weekly window binds at 1 point of slack and is 38 hours from its
-// limit, while its five-hour window has 2 points of slack and 846 seconds. The
-// engine stays, which is the approved rule rather than an oversight in it.
-func TestPreemptionProjectsOnlyTheBindingWindow(t *testing.T) {
+// Here a-live's weekly window has the LEAST slack, 1 point, and is 38 hours from
+// its limit. Its five-hour window has more slack, 2 points, and 846 seconds. The
+// weekly window is the one the ranking speaks about; the five-hour one is the one
+// that cuts the session, and it is the one this reads.
+func TestPreemptionProjectsTheWindowThatRunsOutFirst(t *testing.T) {
 	live := polled(sub("a-live", &usage.Snapshot{
 		// 3000 s into a five-hour window, past the 2571 s at which pace answers.
 		FiveHour: win(78, 15000*time.Second),
@@ -243,7 +242,50 @@ func TestPreemptionProjectsOnlyTheBindingWindow(t *testing.T) {
 	room := polled(burning("b-room", 75), 1800*time.Second)
 
 	p := Decide([]Candidate{live, room}, preemptOpts(), Config{}, NewState(), "a-live")
-	want(t, p, ActionStay, ReasonHysteresis, "")
+	want(t, p, ActionSwitch, ReasonProjectedExhaustion, "b-room")
+}
+
+// A window that says nothing must not stop the scan. Most accounts carry a
+// five-hour window, but an account that reports only a weekly cap has four empty
+// windows ahead of the one that matters — and a scan that gave up on the first
+// silent window would never pre-empt that account at all.
+//
+// The weekly cap here is a day into its week at 98%, which is 1763 seconds from
+// its limit and the fastest a WEEKLY window can be while still past the seventh
+// at which pace starts answering.
+func TestPreemptionKeepsScanningPastAWindowThatSaysNothing(t *testing.T) {
+	live := polled(sub("a-live", &usage.Snapshot{SevenDay: win(98, 518400*time.Second)}), 1800*time.Second)
+	room := polled(burning("b-room", 79), 1800*time.Second)
+
+	p := Decide([]Candidate{live, room}, preemptOpts(), Config{}, NewState(), "a-live")
+	want(t, p, ActionSwitch, ReasonProjectedExhaustion, "b-room")
+}
+
+// Reading every window that runs out is not reading every window. The set is the
+// one that BINDS for the model about to run, exactly the set the slack minimum is
+// taken over — so a per-model weekly cap belonging to another family still
+// cannot move this engine, however fast it is burning.
+//
+// Without that narrowing a user who runs only Sonnet would be pre-empted off an
+// account by a Fable cap that will never touch the session.
+func TestPreemptionIgnoresAWindowThatDoesNotBindTheModel(t *testing.T) {
+	// The Fable cap is 100000 s into its week at 99%, so it is 1010 s from its
+	// limit — inside the 1920 s horizon. five_hour is 16 hours from its own.
+	live := polled(sub("a-live", &usage.Snapshot{
+		FiveHour: win(20, time.Hour),
+		Limits:   []usage.Limit{scoped("Fable", "", 99, 504800*time.Second)},
+	}), 1800*time.Second)
+	room := polled(burning("b-room", 79), 1800*time.Second)
+	cands := []Candidate{live, room}
+
+	// The control: unqualified, the Fable cap binds and the projection fires.
+	want(t, Decide(cands, preemptOpts(), Config{}, NewState(), "a-live"),
+		ActionSwitch, ReasonProjectedExhaustion, "b-room")
+
+	o := preemptOpts()
+	o.Model = "sonnet"
+	want(t, Decide(cands, o, Config{}, NewState(), "a-live"),
+		ActionStay, ReasonAlreadyBest, "")
 }
 
 // A projection is about the live account and the move it asks for is AWAY from
