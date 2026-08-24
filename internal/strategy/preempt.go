@@ -72,7 +72,10 @@ func preemptHorizon(c Candidate, lead time.Duration) (time.Duration, bool) {
 // The set is bindingWindows and not every window the response carried, and that
 // is what keeps the widening honest: it is exactly the set the slack minimum is
 // taken over, so a per-model weekly cap belonging to another family cannot
-// pre-empt a session that will never touch it.
+// pre-empt a session that will never touch it. That is why the thresholds come
+// in rather than being defaulted here — the set depends on them, and a bundle
+// built for convenience at this one call site would project over windows the
+// ranking never ordered on, or miss one it did.
 //
 // It asks usage.PaceOf for each extrapolation rather than dividing here, so the
 // engine and `ccdad status --json` read ONE projection and cannot come to two
@@ -80,9 +83,9 @@ func preemptHorizon(c Candidate, lead time.Duration) (time.Duration, bool) {
 // window inside its first seventh has numbers too noisy to extrapolate from, and
 // this reads that as "say nothing about this window", never as "not yet" and
 // never as a reason to stop asking about the others.
-func projectedExhaustion(s *usage.Snapshot, model string, now time.Time, horizon time.Duration) bool {
+func projectedExhaustion(s *usage.Snapshot, model string, now time.Time, horizon time.Duration, t Thresholds) bool {
 	deadline := now.Add(horizon)
-	for _, w := range bindingWindows(s, model) {
+	for _, w := range bindingWindows(s, model, t) {
 		proj, ok := usage.PaceOf(w.Name, w.Window, now).Projection()
 		if !ok {
 			continue
@@ -153,7 +156,7 @@ func preempt(byUUID map[string]Candidate, res Result, activeUUID string, o Optio
 	if !ok {
 		return Ranked{}, false
 	}
-	if !projectedExhaustion(active.Usage, o.Model, o.Now, horizon) {
+	if !projectedExhaustion(active.Usage, o.Model, o.Now, horizon, o.Thresholds()) {
 		return Ranked{}, false
 	}
 	return preemptTarget(res, activeUUID)
