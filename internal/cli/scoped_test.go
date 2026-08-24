@@ -173,6 +173,7 @@ func TestReadsAndStoreOnlyCommandsStillRunInsideARunSession(t *testing.T) {
 		{"primary", []string{"primary", "a@example.com", "on"}},
 		{"bootstrap", []string{"bootstrap"}},
 		{"config list", []string{"config", "list"}},
+		{"hover status", []string{"hover", "status"}},
 		{"daemon status", []string{"daemon", "status"}},
 		{"daemon logs", []string{"daemon", "logs"}},
 	} {

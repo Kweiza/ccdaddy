@@ -264,6 +264,26 @@ func jsonContractCases() []jsonContractCase {
 		want:   ExitBlocked,
 		keys:   []string{"kind", "at"},
 		stream: true,
+	}, {
+		path: "hover",
+		name: "hover/on",
+		args: []string{"status", "--json"},
+		setup: func(t *testing.T) {
+			t.Helper()
+			seedHealthyMachine(t)
+			writeConfig(t, "hover = true\n")
+		},
+		want: ExitOK,
+		keys: []string{"hover", "usableAccounts", "windows"},
+	}, {
+		path: "hover",
+		name: "hover/off",
+		// The mode is off, which is a negative answer to a probe rather than a
+		// failure: the payload is still written, and the exit code is still 5.
+		setup: seedHealthyMachine,
+		args:  []string{"status", "--json"},
+		want:  ExitProbeNegative,
+		keys:  []string{"hover", "usableAccounts", "windows"},
 	}}
 }
 
@@ -356,7 +376,7 @@ func TestJSONContractNegativeAnswersStillCarryTheirPayload(t *testing.T) {
 	// named after — be deleted and stay green on the strength of the other
 	// three. Naming them is what makes the guard about coverage rather than
 	// about arithmetic.
-	for _, path := range []string{"which", "daemon status", "config get", "doctor", "auto"} {
+	for _, path := range []string{"which", "daemon status", "config get", "doctor", "auto", "hover"} {
 		if !negatives[path] {
 			t.Errorf("`ccdad %s` has a rendered non-zero answer and no negative row in the table", path)
 		}

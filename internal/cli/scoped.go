@@ -266,6 +266,13 @@ var scopedSessionAllowed = map[string]bool{
 	"ccdad config list":  true,
 	"ccdad config path":  true,
 
+	// hover writes one key of config.toml and reads the usage cache and the
+	// engine state, all of which live under CCDAD_HOME. A session scopes Claude
+	// Code's credential and config homes and nothing else, so all three verbs
+	// answer the same in here as outside -- which is why they share one verdict
+	// rather than being split by whether they write.
+	"ccdad hover": true,
+
 	// setup-path registers the directory holding the running binary into the
 	// user's shell configuration, or the Windows user environment. A session
 	// scopes Claude Code's credential and config homes and nothing else, so
