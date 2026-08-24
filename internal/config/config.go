@@ -91,6 +91,18 @@ type Config struct {
 	// Hover is the fully automatic mode: thresholds derived from pace, and
 	// every tuning key ignored.
 	Hover bool
+	// MCPSwitchWithoutElicitation allows ccdad's MCP server to rewrite the live
+	// login on a client that cannot ask the person at the keyboard first.
+	//
+	// It is the only field here the engine never reads, and the reason it lives
+	// in this file rather than in an option the caller passes is the threat it
+	// answers: a model reaches that server through tool arguments and through
+	// nothing else, so a permission that can only be granted by editing this
+	// file -- or by an environment variable on the server's own process -- is
+	// one the model cannot grant itself in the call it is making.
+	//
+	// It defaults to false, which refuses.
+	MCPSwitchWithoutElicitation bool
 }
 
 // Equal is == for a Config, which the map field ended.
@@ -115,6 +127,7 @@ func (c Config) Equal(o Config) bool {
 		c.PreemptLead == o.PreemptLead &&
 		c.ProbeUnknown == o.ProbeUnknown &&
 		c.Hover == o.Hover &&
+		c.MCPSwitchWithoutElicitation == o.MCPSwitchWithoutElicitation &&
 		maps.Equal(c.WindowThreshold, o.WindowThreshold)
 }
 
@@ -211,17 +224,24 @@ func storeRoot() (string, error) {
 // cases decidable, so absence takes the default and an explicit 0 is validated
 // like any other value.
 type fileShape struct {
-	Threshold          *float64           `toml:"threshold"`
-	HysteresisPct      *float64           `toml:"hysteresis_pct"`
-	HeadroomRatio      *float64           `toml:"headroom_ratio"`
-	Cooldown           *string            `toml:"cooldown"`
-	RecoveryHysteresis *string            `toml:"recovery_hysteresis"`
-	PreemptLead        *string            `toml:"preempt_lead"`
-	Strategy           *string            `toml:"strategy"`
-	ProbeUnknown       *bool              `toml:"probe_unknown"`
-	Hover              *bool              `toml:"hover"`
-	WindowThreshold    map[string]float64 `toml:"window_threshold"`
-	Credit             *creditFile        `toml:"credit"`
+	Threshold          *float64 `toml:"threshold"`
+	HysteresisPct      *float64 `toml:"hysteresis_pct"`
+	HeadroomRatio      *float64 `toml:"headroom_ratio"`
+	Cooldown           *string  `toml:"cooldown"`
+	RecoveryHysteresis *string  `toml:"recovery_hysteresis"`
+	PreemptLead        *string  `toml:"preempt_lead"`
+	Strategy           *string  `toml:"strategy"`
+	ProbeUnknown       *bool    `toml:"probe_unknown"`
+	Hover              *bool    `toml:"hover"`
+
+	// Apart from the rest because it is the one key here that is not an engine
+	// knob, and a pointer for the same reason as the others: absence has to be
+	// distinguishable from an explicit false, which is a person taking the
+	// permission back rather than never having granted it.
+	MCPSwitchWithoutElicitation *bool `toml:"mcp_switch_without_elicitation"`
+
+	WindowThreshold map[string]float64 `toml:"window_threshold"`
+	Credit          *creditFile        `toml:"credit"`
 }
 
 type creditFile struct {
@@ -271,6 +291,7 @@ func Parse(raw []byte) (Config, error) {
 	}
 	applyBool(&cfg.ProbeUnknown, f.ProbeUnknown)
 	applyBool(&cfg.Hover, f.Hover)
+	applyBool(&cfg.MCPSwitchWithoutElicitation, f.MCPSwitchWithoutElicitation)
 	if err := applyWindowThresholds(&cfg, f.WindowThreshold); err != nil {
 		return Config{}, err
 	}

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -483,7 +484,8 @@ func TestTheKeySetIsClosed(t *testing.T) {
 	want := []string{
 		"threshold", "hysteresis_pct", "headroom_ratio",
 		"cooldown", "recovery_hysteresis", "preempt_lead", "strategy",
-		"probe_unknown", "hover", "credit.threshold", "credit.max_auto_spend",
+		"probe_unknown", "hover", "mcp_switch_without_elicitation",
+		"credit.threshold", "credit.max_auto_spend",
 	}
 	got := Keys()
 	if len(got) != len(want) {
@@ -492,6 +494,17 @@ func TestTheKeySetIsClosed(t *testing.T) {
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("Keys() = %v, want %v", got, want)
+		}
+	}
+
+	// The two keys this package exports by name for another package to print.
+	// An exported constant that drifted from the namespace would have the
+	// printing package naming a key `ccdad config set` then refuses, and the
+	// caller's own assertion could not see it: it compares the constant with
+	// itself.
+	for _, exported := range []string{KeyHover, KeyMCPSwitchWithoutElicitation} {
+		if !slices.Contains(Keys(), exported) {
+			t.Errorf("the exported key %q is not in the settable namespace: %v", exported, Keys())
 		}
 	}
 

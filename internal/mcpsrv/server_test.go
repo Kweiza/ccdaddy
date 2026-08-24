@@ -116,6 +116,16 @@ func newTestServer(t *testing.T, e func([]string) (int, string, string)) *mcp.Se
 // exactly one copy of.
 func connectToServer(t *testing.T, srv *mcp.Server) *mcp.ClientSession {
 	t.Helper()
+	return connectClient(t, srv, nil)
+}
+
+// connectClient is connectToServer with the client's own options, which is what
+// a test needs when the property under test is something the CLIENT declares --
+// whether it can put a question in front of the person at the keyboard, above
+// all. Options and no options share this body so that the ordering rule above
+// keeps having exactly one copy.
+func connectClient(t *testing.T, srv *mcp.Server, opts *mcp.ClientOptions) *mcp.ClientSession {
+	t.Helper()
 	ctx := t.Context()
 
 	ct, st := mcp.NewInMemoryTransports()
@@ -125,7 +135,7 @@ func connectToServer(t *testing.T, srv *mcp.Server) *mcp.ClientSession {
 	}
 	t.Cleanup(func() { _ = ss.Close() })
 
-	cs, err := mcp.NewClient(&mcp.Implementation{Name: "ccdad-test-client", Version: "0.0.0-test"}, nil).Connect(ctx, ct, nil)
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "ccdad-test-client", Version: "0.0.0-test"}, opts).Connect(ctx, ct, nil)
 	if err != nil {
 		t.Fatalf("connecting the client: %v", err)
 	}

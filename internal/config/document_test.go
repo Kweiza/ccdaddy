@@ -276,6 +276,8 @@ func TestEveryKeyCanBeSetAndReadBack(t *testing.T) {
 		keyHover:              "true",
 		keyCreditThreshold:    "70",
 		keyMaxAutoSpend:       "25",
+
+		keyMCPSwitchWithoutElicitation: "true",
 	}
 	d := newDocument()
 	for _, k := range Keys() {
@@ -324,6 +326,8 @@ func TestEveryKeyCanBeSetAndReadBack(t *testing.T) {
 		CreditThreshold:    70,
 		MaxAutoSpend:       25,
 		WindowThreshold:    map[usage.WindowName]float64{usage.WindowFiveHour: 85},
+
+		MCPSwitchWithoutElicitation: true,
 	}
 	// Equal rather than ==: Config carries the per-window table now, and a
 	// struct holding a map is not comparable at all.
@@ -348,6 +352,8 @@ func TestTheEffectiveValueOfEveryKeyIsFormattable(t *testing.T) {
 		keyHover:              "false",
 		keyCreditThreshold:    "80",
 		keyMaxAutoSpend:       "0",
+
+		keyMCPSwitchWithoutElicitation: "false",
 	}
 	for _, k := range Keys() {
 		if _, named := want[k]; !named {

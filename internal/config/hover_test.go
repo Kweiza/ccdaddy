@@ -95,4 +95,13 @@ func TestEveryKeyIsClassifiedAgainstHover(t *testing.T) {
 	if HoverOverrides(keyMaxAutoSpend) {
 		t.Fatal("hover overrides the credit ceiling; fully automatic must not become fully automatic spending")
 	}
+	// The same argument reached from a different surface. hover is a policy for
+	// the switching ENGINE; this key says whether an MCP client may move the
+	// live login without asking the person at the keyboard, and a mode that
+	// derived it would be deciding on their behalf that unattended also means
+	// unconfirmed. The classification is what the test above cannot see: it
+	// asks only that every key is in exactly one of the two tables.
+	if HoverOverrides(keyMCPSwitchWithoutElicitation) {
+		t.Fatal("hover overrides the MCP confirm permission; a mode must not grant a permission on the person's behalf")
+	}
 }
