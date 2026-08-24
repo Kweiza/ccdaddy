@@ -1,0 +1,10 @@
+# An allow-list, because the build context is everything the Dockerfile CAN
+# copy: the whole working tree, ignored and untracked files included. The .git
+# directory alone is 16 MB in this checkout — history the image has no use for —
+# and a working tree also carries whatever local directories its owner keeps in
+# it, none of which the build has any business reading. The image needs two
+# files. Anything added to the repository later is excluded until somebody says
+# otherwise here, which is the direction that fails safe.
+*
+!ccdad
+!ccdad-entrypoint
