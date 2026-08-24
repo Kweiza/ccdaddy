@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -51,6 +53,19 @@ type launchSpec struct {
 	Args []string
 	// Env is the COMPLETE child environment. ccdad never mutates its own.
 	Env []string
+	// Timeout bounds the child. Zero is no bound, which is what `run` needs: a
+	// session lasts as long as the human at the keyboard makes it last, and a
+	// runner that killed one at a deadline would be the worst kind of surprise.
+	// A caller that hands claude ccdad's OWN arguments rather than a user's has
+	// nobody at the keyboard and must set one.
+	Timeout time.Duration
+	// Silent sends the child's three descriptors to the null device instead of
+	// ccdad's. `run` must never set it — it exists to hand the terminal over,
+	// and a pipe there strips the TTY and puts Claude Code into
+	// non-interactive mode. A caller whose child is a one-turn transaction sets
+	// it, because the answer is not the point and words on stdout are a
+	// contract every other command in this tree keeps clean.
+	Silent bool
 }
 
 // lookClaude resolves the claude binary on PATH. It is a var so a test can
@@ -696,15 +711,35 @@ func setEnv(env []string, name, value string) []string {
 // *os.File straight to the child and replaces anything else with a pipe, which
 // would strip the TTY and put Claude Code into non-interactive mode.
 func runChild(spec launchSpec) (ExitCode, error) {
-	cmd := exec.Command(spec.Path, spec.Args...)
+	ctx := context.Background()
+	if spec.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, spec.Timeout)
+		defer cancel()
+	}
+	cmd := exec.CommandContext(ctx, spec.Path, spec.Args...)
 	cmd.Env = spec.Env
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if spec.Silent {
+		devnull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+		if err != nil {
+			return ExitFailure, fmt.Errorf("opening %s: %w", os.DevNull, err)
+		}
+		defer devnull.Close()
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = devnull, devnull, devnull
+	}
 
 	if err := cmd.Run(); err != nil {
 		var exit *exec.ExitError
 		if !errors.As(err, &exit) {
 			return ExitFailure, fmt.Errorf("starting %s: %w", filepath.Base(spec.Path), err)
 		}
+	}
+	// Asked AFTER the wait, because a child killed by the deadline exits with a
+	// signal status and exitStatus would report that as 137 — a number that says
+	// the machine killed it and not that ccdad did.
+	if ctx.Err() != nil {
+		return ExitFailure, fmt.Errorf("%s did not finish within %s", filepath.Base(spec.Path), spec.Timeout)
 	}
 	return exitStatus(cmd.ProcessState), nil
 }

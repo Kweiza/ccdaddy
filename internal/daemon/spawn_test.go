@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -403,5 +404,49 @@ func TestSpawnReportsAPlatformItCannotDetachOn(t *testing.T) {
 		if err != nil {
 			t.Errorf("detach() = %v on %s, want nil", err, runtime.GOOS)
 		}
+	}
+}
+
+// The daemon and `ccdad probe` share one spelling of this command line through
+// the constants above, and this is the assertion that the spelling the daemon
+// builds is the one the command declares. A rename that touched only one side
+// would leave a daemon spawning a usage error, silently, forever.
+func TestTheProbeArgvIsTheOneTheCommandDeclares(t *testing.T) {
+	want := []string{ProbeArg, "--" + ProbeUUIDFlag, "u-1", "--" + ProbeForceFlag, "--" + ProbeModelFlag, "opus"}
+	got := probeArgv("u-1", "opus")
+	if !slices.Equal(got, want) {
+		t.Fatalf("probe argv = %q, want %q", got, want)
+	}
+	// No --model when there is no family to name: an empty flag value is a model
+	// named "" rather than the default one.
+	plain := probeArgv("u-1", "")
+	for _, a := range plain {
+		if a == "--"+ProbeModelFlag {
+			t.Fatalf("probe argv = %q, want no --%s when no family was chosen", plain, ProbeModelFlag)
+		}
+	}
+}
+
+// Whether this machine has Claude Code on it is not something a test can
+// arrange, so the resolver is a var and this is the test that says so. The
+// daemon asks BEFORE it stamps an attempt, so the answer has to be an error it
+// can read rather than a spawn that fails later.
+func TestProbeAvailableSaysWhatIsMissing(t *testing.T) {
+	saved := lookClaude
+	t.Cleanup(func() { lookClaude = saved })
+	lookClaude = func(string) (string, error) {
+		return "", errors.New(`exec: "claude": executable file not found in $PATH`)
+	}
+	err := ProbeAvailable()
+	if err == nil {
+		t.Fatal("ProbeAvailable said a machine with no claude on it could probe")
+	}
+	if !strings.Contains(err.Error(), "claude") {
+		t.Errorf("the answer does not name what is missing: %v", err)
+	}
+
+	lookClaude = func(string) (string, error) { return "/usr/local/bin/claude", nil }
+	if err := ProbeAvailable(); err != nil {
+		t.Errorf("ProbeAvailable = %v on a machine that has claude", err)
 	}
 }

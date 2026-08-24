@@ -93,6 +93,11 @@ type Entry struct {
 	// NextPollAt is when the scheduler intends to poll again.
 	NextPollAt time.Time `json:"next_poll_at,omitempty"`
 	Poll       PollState `json:"poll,omitempty"`
+	// Probe is what the last probe of this account did. A probe spends the
+	// account's own quota, so its schedule is persisted for the same reason
+	// Poll's backoff is: a stamp that did not survive the process is a budget
+	// that resets every time ccdad restarts.
+	Probe ProbeState `json:"probe,omitempty"`
 }
 
 // Age is how old the reading is, and whether that could be worked out at all. An

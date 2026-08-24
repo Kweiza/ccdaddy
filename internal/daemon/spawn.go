@@ -17,6 +17,21 @@ import (
 // the namespace a user could type by accident.
 const RunArg = "__daemon"
 
+// ProbeArg and the three flag names are the command line one probe is run
+// with. They live here for the same reason RunArg does: internal/cli imports
+// internal/daemon and never the reverse, so this package is the only place a
+// name can be shared by the command that DECLARES the flag and the code that
+// SPELLS it. Two copies of a flag name is a rename that silently stops working.
+//
+// The names are written without their leading dashes because that is the form
+// cobra's Flags() takes; the caller that builds an argv adds them.
+const (
+	ProbeArg       = "probe"
+	ProbeUUIDFlag  = "uuid"
+	ProbeModelFlag = "model"
+	ProbeForceFlag = "force"
+)
+
 // Windows process creation flags, as literals so that a test on any platform
 // can assert their values; spawn_windows.go is the only consumer, and a test
 // there checks them against the syscall package's own constants — which is the
@@ -113,5 +128,90 @@ func Spawn() error {
 	if err := cmd.Process.Release(); err != nil {
 		return fmt.Errorf("releasing the daemon's process handle: %w", err)
 	}
+	return nil
+}
+
+// lookClaude resolves the Claude Code a probe would run. It is a var for the
+// same reason every other uncontrollable dependency in this tree is one: whether
+// a machine has claude on it is not something a test can arrange, and a suite
+// that read the real PATH would probe on a developer's laptop and not on CI.
+var lookClaude = exec.LookPath
+
+// ProbeAvailable reports whether this machine can run a probe at all.
+//
+// Asked separately from SpawnProbe, and that separation is the point. A caller
+// records the attempt against the account's six-hour budget BEFORE it spawns —
+// otherwise a spawn that never starts leaves the account probe-due on the very
+// next cadence, forever. A machine with no Claude Code on it is not a failed
+// attempt, though: nothing was spent and nothing was tried, so it must not
+// consume that budget or the account stays unknown for six hours after claude is
+// finally installed. Asking first is what keeps those two apart.
+func ProbeAvailable() error {
+	if _, err := lookClaude("claude"); err != nil {
+		return fmt.Errorf("a probe runs one turn of Claude Code, and `claude` is not on this PATH: %w", err)
+	}
+	return nil
+}
+
+// probeArgv is the command line one probe is run with. It is a function of its
+// own so a test can assert the spelling without starting a process.
+//
+// --force is not a caller being pushy. An unattended caller has already applied
+// both gates that flag bypasses — it checked the window it cares about for a
+// reset and it has just stamped the attempt itself — so a child that re-applied
+// them would find the stamp written a moment earlier and refuse every probe the
+// daemon ever asks for.
+func probeArgv(uuid, model string) []string {
+	args := []string{ProbeArg, "--" + ProbeUUIDFlag, uuid, "--" + ProbeForceFlag}
+	if model != "" {
+		args = append(args, "--"+ProbeModelFlag, model)
+	}
+	return args
+}
+
+// SpawnProbe starts one `ccdad probe` and returns without waiting for it.
+//
+// A separate PROCESS rather than a function call, and the reason is the import
+// direction stated above RunArg. A probe's mechanics are `ccdad run`'s — an
+// ephemeral credential home, the account's stored login seeded into it, the
+// adopt-back that carries a rotated refresh token home before the directory is
+// deleted — and all of that lives in internal/cli, which imports this package
+// and never the reverse. Re-execing the same binary is what lets the daemon have
+// that code rather than a second copy of it, and it buys two more things: a
+// claude that hangs cannot stall the tick loop, and a probe that crashes takes
+// nothing with it.
+//
+// The child is NOT detached. A probe is the daemon's own errand and should die
+// with it, unlike the daemon itself, which has to outlive the terminal it was
+// born in. Waited for on a goroutine of its own for the same reason: not waiting
+// leaves a zombie per probe until the daemon exits, and waiting here would put a
+// whole Claude Code turn on a roughly 1 Hz tick loop. `ccdad probe` gives its
+// claude a deadline of its own, so this goroutine cannot outlive it.
+func SpawnProbe(uuid, model string) error {
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locating the ccdad binary: %w", err)
+	}
+	env, err := ChildEnv()
+	if err != nil {
+		return err
+	}
+	devnull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+	if err != nil {
+		return fmt.Errorf("opening %s: %w", os.DevNull, err)
+	}
+	defer devnull.Close()
+
+	cmd := exec.Command(exe, probeArgv(uuid, model)...)
+	cmd.Env = env
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = devnull, devnull, devnull
+	// The same reason Spawn moves: the daemon has already left whatever
+	// directory it was started from, and a relative working directory would
+	// resolve against a different one in the child.
+	cmd.Dir = filepath.VolumeName(exe) + string(os.PathSeparator)
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("starting the probe: %w", err)
+	}
+	go func() { _ = cmd.Wait() }()
 	return nil
 }
