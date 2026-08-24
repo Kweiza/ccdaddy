@@ -886,6 +886,20 @@ weekly one, so an account whose weekly cap binds at one point of slack thirty-
 eight hours out would sit unswitched while its five-hour cap cut the session in
 fourteen minutes.
 
+Where it goes is the best-ranked account that is not the live one, is not
+**empty**, and is not itself projected to run out inside the same horizon —
+moving from an account that stops working in five minutes to one that stops in
+six buys nothing and spends the cooldown. An account whose usage poller is
+sitting on a `429` is taken only when nothing cleaner is on offer: the throttle
+means its reading cannot be refreshed, which is a reason to prefer a candidate
+ccdad can still see, and never a reason to call it spent.
+
+That last set of tests replaced a requirement for positive **slack**, which said
+the same thing only while thresholds were numbers you typed. Under `hover` the
+threshold is a pace target, an ordinary pool is negative across the board, and
+the requirement meant this rule could not fire at all — silently, while accounts
+still held quota.
+
 The projection runs ahead of every margin that compares two accounts as they
 stand — `hysteresis_pct` and `headroom_ratio` — because a comparison that is
 about to be false is not a reason to stay. It does **not** override the cooldown,

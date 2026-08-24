@@ -228,6 +228,9 @@ func engineCandidates(s *store.Store, accounts []store.Account, c *usage.Cache) 
 			// reports what the daemon would do about a stopped clock, and it
 			// can only do that from the state the daemon gates on.
 			cand.Probe = e.Probe
+			// The poller's own 429 record. The pre-emptive switch is its only
+			// reader; Candidate.LastRateLimited says why it is not a tier.
+			cand.LastRateLimited = e.Poll.LastRateLimited
 		}
 		out = append(out, cand)
 	}

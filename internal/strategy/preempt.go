@@ -3,6 +3,7 @@ package strategy
 import (
 	"time"
 
+	"github.com/Kweiza/ccdaddy/internal/pollpolicy"
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
 
@@ -98,27 +99,91 @@ func projectedExhaustion(s *usage.Snapshot, model string, now time.Time, horizon
 }
 
 // preemptTarget is where a pre-emptive move goes: the best-ranked account that
-// is not the live one and still has slack under its own thresholds.
+// is not the live one and is somewhere the session can actually keep running.
 //
-// Slack rather than headroom, because an account already past one of its own
-// window thresholds is not somewhere to run to — that move trades one limit for
-// another and spends the cooldown doing it.
+// It used to require POSITIVE SLACK, on the reasoning that an account already
+// past one of its own window thresholds is not somewhere to run to. That holds
+// for a threshold a person typed. It does not hold for hover, which derives a
+// threshold from how far through its window each account is -- a PACE target --
+// and under which an ordinary pool is negative across the board. The measured
+// consequence: on the pool of 2026-08-24 all six accounts were negative, so this
+// rule, the one that exists to move a session before its account hits a hard
+// limit, could not fire AT ALL while five accounts still held quota.
+//
+// Three tests replace it, each the narrowest statement of one thing that would
+// waste the move:
+//
+//   - Not EMPTY. This is what positive slack was reaching for and is now sayable
+//     directly. It is strictly weaker: any account with positive slack sorts
+//     into the roomy tier ahead of every spent one, so wherever such a candidate
+//     exists this still reaches it first. The change only adds candidates where
+//     there were none.
+//   - Not itself about to run out, asked with the SAME projection the live
+//     account was judged by, over the candidate own blind interval. Moving from
+//     an account that exhausts in five minutes to one that exhausts in six
+//     trades one cut-off session for another and spends the cooldown doing it.
+//   - Not one whose poller is throttled, PREFERABLY. A 429 on the usage endpoint
+//     says the reading cannot be refreshed, never that the account is spent, so
+//     it is a preference and not a filter: a throttled candidate is remembered
+//     and returned when nothing cleaner turns up. A filter would hand this rule
+//     a fresh way to fire never, which is the bug being fixed.
 //
 // It walks Result.Order and never Result.Credit, and that is how the credit gate
 // stays out of this: a pre-emptive move cannot reach a credit account at all, so
 // there is no gate here to bypass and none re-implemented. An engine that runs
 // out of subscription room still opens the credit pool the ordinary way, through
 // the gate, once the account it is on is actually spent.
-func preemptTarget(res Result, activeUUID string) (Ranked, bool) {
+func preemptTarget(byUUID map[string]Candidate, res Result, activeUUID string, o Options) (Ranked, bool) {
+	var throttled Ranked
+	hasThrottled := false
 	for _, r := range res.Order {
-		if isActive(r.UUID, activeUUID) {
+		if isActive(r.UUID, activeUUID) || !r.Headroom.Known {
 			continue
 		}
-		if r.Headroom.Known && r.Headroom.Slack > 0 {
-			return r, true
+		if empty, known := OutOfQuota(r.Headroom); known && empty {
+			continue
 		}
+		c, ok := byUUID[r.UUID]
+		if !ok {
+			// Ranked with no candidate behind it. Nothing can be projected for
+			// it, so it is not somewhere this rule may send a session.
+			continue
+		}
+		// A candidate with no provenance yields no horizon, and that is read as
+		// "cannot say" rather than "will run out": the emptiness test above has
+		// already done the work that matters, and refusing here would narrow the
+		// rule for the accounts it knows least about.
+		if horizon, ok := preemptHorizon(c, o.PreemptLead); ok &&
+			projectedExhaustion(c.Usage, o.Model, o.Now, horizon, o.thresholdsFor(c)) {
+			continue
+		}
+		if recentlyRateLimited(c, o.Now) {
+			if !hasThrottled {
+				throttled, hasThrottled = r, true
+			}
+			continue
+		}
+		return r, true
+	}
+	if hasThrottled {
+		return throttled, true
 	}
 	return Ranked{}, false
+}
+
+// recentlyRateLimited is whether this account's USAGE POLLER took a 429 inside
+// the endpoint's own saturation horizon.
+//
+// pollpolicy owns that horizon and it is imported rather than restated: the span
+// is a property of the endpoint the poller measured, and two copies would drift
+// the moment one is retuned. The zero time is NEVER, which Sub would otherwise
+// read as about two thousand years ago -- true, but only by accident, and the
+// explicit test says which answer is meant.
+func recentlyRateLimited(c Candidate, now time.Time) bool {
+	if c.LastRateLimited.IsZero() {
+		return false
+	}
+	return now.Sub(c.LastRateLimited) < pollpolicy.Recent429Window
 }
 
 // preempt is the whole rule, or the report that it does not fire.
@@ -159,5 +224,5 @@ func preempt(byUUID map[string]Candidate, res Result, activeUUID string, o Optio
 	if !projectedExhaustion(active.Usage, o.Model, o.Now, horizon, o.Thresholds()) {
 		return Ranked{}, false
 	}
-	return preemptTarget(res, activeUUID)
+	return preemptTarget(byUUID, res, activeUUID, o)
 }

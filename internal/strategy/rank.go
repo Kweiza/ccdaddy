@@ -151,6 +151,24 @@ type Candidate struct {
 	// second implementation of the gate, free to drift from the one that spends
 	// the quota.
 	Probe usage.ProbeState
+	// LastRateLimited is when the USAGE POLLER last took a 429 for this account,
+	// zero for never.
+	//
+	// It is not evidence that the account is out of quota, and nothing here may
+	// treat it as such. The throttle is on /api/oauth/usage, and the sharper of
+	// the two experiments on record found a Retry-After of 0 scoped to the
+	// ACCESS TOKEN rather than to the account -- so a 429 here can be an
+	// artefact of the token ccdad happens to be polling with. Filing a throttled
+	// account as spent is the cswap failure this package warns about in three
+	// other places: unreadable is not empty.
+	//
+	// What it does mean is that the reading will not be refreshed soon: the poll
+	// policy floors the cadence at Post429MinInterval and lets it climb to
+	// Post429MaxInterval. So it is read in exactly one place -- the pre-emptive
+	// switch, which is the rule that acts on a PROJECTION rather than on a
+	// figure, and which therefore has something to lose by running to an account
+	// whose numbers it cannot check.
+	LastRateLimited time.Time
 }
 
 // Options configures one ranking pass.

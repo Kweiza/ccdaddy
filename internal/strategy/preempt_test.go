@@ -98,21 +98,45 @@ func TestPreemptionNeverReachesTheCreditPool(t *testing.T) {
 	want(t, p, ActionBlocked, ReasonCreditGate, "")
 }
 
-// The projection is not a reason on its own. With every candidate past its own
-// threshold there is nowhere to go, and moving would trade one limit for another
-// while spending the cooldown on it.
+// The projection is not a reason on its own. With every candidate ALSO running
+// out inside the same horizon there is nowhere to go, and moving would trade one
+// cut-off session for another while spending the cooldown on it.
 //
-// It is asserted twice: against the literal answer, and against the SAME pool
-// decided with the lead removed. The second one is what keeps the case honest —
-// it says pre-emption changed nothing here, rather than that some other rule
-// happens to land on the same verdict.
-func TestPreemptionNeedsACandidateWithSlack(t *testing.T) {
+// This used to be phrased as "no candidate has positive slack", which said the
+// same thing only while thresholds were numbers a person typed; hover derives a
+// pace target instead, under which no candidate ever has positive slack and the
+// whole rule went silent. The bar is now what it was always reaching for.
+//
+// The margin is genuinely narrow — b runs out at 1908 s against a 1920 s horizon
+// — and it has to be, because b must ALSO outrank a for the ordinary path to be
+// the hysteresis hold this case is about. So the projection is asserted
+// DIRECTLY rather than left to be inferred from the verdict: without that, a
+// horizon that drifted twelve seconds would leave this test passing for the
+// opposite reason and saying nothing.
+//
+// The verdict is then asserted twice: against the literal answer, and against
+// the SAME pool decided with the lead removed. The second one is what keeps the
+// case honest — it says pre-emption changed nothing here, rather than that some
+// other rule happens to land on the same verdict.
+func TestPreemptionNeedsACandidateNotAlsoRunningOut(t *testing.T) {
 	cands := []Candidate{
 		polled(burning("a-live", 88), 1800*time.Second),
 		polled(burning("b-spent", 85), 1800*time.Second),
 	}
 
-	armed := Decide(cands, preemptOpts(), Config{}, NewState(), "a-live")
+	o := preemptOpts()
+	for _, c := range cands {
+		horizon, ok := preemptHorizon(c, o.PreemptLead)
+		if !ok {
+			t.Fatalf("%s has no horizon; the fixture lost its provenance", c.UUID)
+		}
+		if !projectedExhaustion(c.Usage, o.Model, o.Now, horizon, o.Thresholds()) {
+			t.Fatalf("%s is NOT projected to run out inside %v; this case no longer says "+
+				"what it claims — it is meant to be a pool with nowhere to go", c.UUID, horizon)
+		}
+	}
+
+	armed := Decide(cands, o, Config{}, NewState(), "a-live")
 	want(t, armed, ActionStay, ReasonHysteresis, "")
 
 	off := Decide(cands, opts(), Config{}, NewState(), "a-live")
