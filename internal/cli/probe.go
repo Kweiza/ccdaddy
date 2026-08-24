@@ -116,9 +116,9 @@ func credentialWord(kind string) string {
 // a window that already reports a reset time is the world already being how the
 // caller asked for it. A --all pass reads both as a note and moves on.
 //
-// The order is the order of finality, and the first two are the ones --force may
-// not bypass. The credential test comes first because every usage window ccdad
-// can read comes from an OAuth login's refresh grant — the poller skips an
+// The order is the order of finality, and the first three are the ones --force
+// may not bypass. The credential test comes first because every usage window
+// ccdad can read comes from an OAuth login's refresh grant — the poller skips an
 // account with no claudeAiOauth record every cadence — so a probe of a
 // setup-token or API-key account spends real quota for a reading nothing could
 // ever take. The keychain-era test comes second, and it is checked HERE rather
@@ -128,6 +128,15 @@ func credentialWord(kind string) string {
 // login and spend the wrong account's quota while ccdad recorded a probe of this
 // one. refuseKeychainEra returns early for a token record, which is why the
 // credential test above it is the one that answers those accounts.
+//
+// The displaced-auth test comes third, for the same reason as the second: an
+// ANTHROPIC_AUTH_TOKEN or CLAUDE_CODE_OAUTH_TOKEN already exported in this
+// shell is what claude actually authenticates the child with, ahead of the
+// scoped credentials file this probe seeds — so the turn would be spent
+// against whatever account that variable names while ccdad stamped THIS one as
+// probed and started it on a six-hour cooldown for a reading it never took.
+// `ccdad run`'s launch refuses the identical condition unconditionally (never
+// gated by --full-profile); a probe's own scoping is no less exposed to it.
 func probeSkip(a store.Account, blob cclink.Blob, entry usage.Entry, o probeOptions) (string, bool) {
 	if rec, isToken := cclink.TokenRecordOf(blob); isToken {
 		return fmt.Sprintf("%s's credential is %s rather than an OAuth login, and every usage window ccdad "+
@@ -136,6 +145,9 @@ func probeSkip(a store.Account, blob cclink.Blob, entry usage.Entry, o probeOpti
 	}
 	if kerr := refuseKeychainEra(describeClaudeInstall(o.claude), blob, a.Label()); kerr != nil {
 		return kerr.Error(), true
+	}
+	if derr := refuseDisplacedAuth(claudeOAuthEnvironment(), blob, a.Label()); derr != nil {
+		return derr.Error(), true
 	}
 	if o.force {
 		return "", false

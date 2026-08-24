@@ -278,6 +278,35 @@ func TestProbeRefusesOnAKeychainEraClaudeCodeRatherThanSpendingTheWrongQuota(t *
 	}
 }
 
+// A shell that already exports ANTHROPIC_AUTH_TOKEN outranks the scoped
+// credentials file a probe seeds, the same way it outranks `ccdad run`'s. Left
+// unchecked, the turn is spent against whatever account that token names while
+// ccdad stamps the NAMED account as probed and starts it on a six-hour
+// cooldown for a reading it never took — and --force must not be a way past
+// it, because forcing does not change which account the turn is spent on.
+func TestProbeRefusesWhenTheShellsAuthTokenOutranksTheNamedAccount(t *testing.T) {
+	isolate(t)
+	freezeClock(t, probeNow)
+	seedUnprobed(t, "u-1", "a@example.com")
+	stub := stubClaude(t, ExitOK)
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "sk-ant-someone-elses")
+
+	code, _, errOut, top := runRoot(t, "probe", "1", "--force")
+	if code != ExitUsage {
+		t.Fatalf("exit = %d (%s / %s), want %d — the turn would have been spent as that token", code, errOut, top, ExitUsage)
+	}
+	if stub.started {
+		t.Error("claude was started — a probe of the wrong account is not a probe")
+	}
+	message := errOut + top
+	if !strings.Contains(message, "ANTHROPIC_AUTH_TOKEN") {
+		t.Errorf("the refusal does not name the source that wins:\n%s", message)
+	}
+	if entry, ok := cachedEntry(t, "u-1"); ok && !entry.Probe.LastAttemptAt.IsZero() {
+		t.Error("the named account was stamped as probed for a turn spent on someone else's quota")
+	}
+}
+
 // A probe spends the account's own quota, so a probe that fails must not be
 // retried at whatever cadence its caller runs at. The gate counts ATTEMPTS
 // rather than failures, because a probe that "worked" and left the window
