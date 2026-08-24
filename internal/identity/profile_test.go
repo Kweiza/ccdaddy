@@ -130,13 +130,24 @@ func TestFetchProfile401IsUnauthorized(t *testing.T) {
 	}
 }
 
-func TestFetchProfile403IsUnauthorized(t *testing.T) {
+// A 403 is a scope answer, not a dead token, and the two need different
+// handling: a token `claude setup-token` minted authenticates perfectly well
+// and simply does not carry user:profile, so a caller that folds this into
+// ErrUnauthorized refuses a working credential and tells the user to check it.
+func TestFetchProfile403IsForbiddenNotUnauthorized(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 	})
 
-	if _, err := c.FetchProfile(context.Background(), "TOKEN"); !errors.Is(err, ErrUnauthorized) {
-		t.Fatalf("err = %v, want it to unwrap to ErrUnauthorized", err)
+	_, err := c.FetchProfile(context.Background(), "TOKEN")
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("err = %v, want it to unwrap to ErrForbidden", err)
+	}
+	if errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("err = %v, a scope refusal must not read as a rejected credential", err)
+	}
+	if !strings.Contains(err.Error(), "403") {
+		t.Fatalf("err = %q, want it to name the status", err)
 	}
 }
 

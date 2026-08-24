@@ -733,6 +733,25 @@ func runAddToken(cmd *cobra.Command, token string, isAPIKey bool, email, alias s
 			// create a managed account under a fabricated uuid that can never be
 			// reconciled with a real one.
 			return UsageError("that token was rejected by Anthropic; check it and try again")
+		case errors.Is(err, identity.ErrForbidden):
+			// The ORDINARY answer for a setup token rather than a fault, which
+			// is why it is not a refusal. The lookup is scoped and
+			// `claude setup-token` does not grant that scope, so this arm is the
+			// one every setup token takes -- and while a 403 folded into
+			// ErrUnauthorized, the arm above refused all of them, with a message
+			// that blamed a token that works.
+			//
+			// What the refusal costs is the account's IDENTITY, not its
+			// usability: the token still authenticates a session, which is what
+			// `ccdad run` needs. So the account is stored under the synthetic
+			// label below and the cost is named here rather than discovered
+			// later from a store full of token-<hash> rows.
+			fmt.Fprintf(stderr,
+				"note: Anthropic refused the profile lookup for this token on scope; it asks for "+
+					"user:profile or user:office.\nccdad cannot read the account's uuid, email or tier, "+
+					"so it is stored under a synthetic label -- pass --email to give it one you will "+
+					"recognise.\nThe token still works with 'ccdad run'; it can never be ranked or "+
+					"switched to.\n")
 		case err != nil:
 			fmt.Fprintf(stderr, "warning: could not resolve the token to an account (%v); storing it under a synthetic label\n", err)
 		default:
