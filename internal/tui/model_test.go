@@ -1103,6 +1103,50 @@ func TestTheLinesTheLoopReadAreTheLinesTheScreenDraws(t *testing.T) {
 	}
 }
 
+// The [D] screen may produce NEITHER half of the credential-home warning for
+// itself: this process's own resolution is an environment read and the
+// comparison is a filesystem one. Both come down through Options and this file
+// is the only thing that carries them across, so a dropped field here switches
+// the warning off with nothing else in the tree failing.
+func TestTheDaemonScreenIsHandedBothHalvesOfTheCredentialHomeWarning(t *testing.T) {
+	snap := fixtureSnapshot(daemon.Report{
+		State:     daemon.DaemonRunning,
+		HasStatus: true,
+		Status: daemon.Status{
+			PID:            8123,
+			StartedAt:      fixtureNow.Add(-2 * time.Hour),
+			CredentialHome: "/home/u/.claude",
+		},
+	})
+	open := func(t *testing.T, fill func(*Options)) string {
+		t.Helper()
+		o := fixtureOptions()
+		o.Load = func(time.Time) (view.Snapshot, error) { return snap, nil }
+		fill(&o)
+		a := appAt(t, o, 113, 40)
+		a, _, _ = a.key(keyPress("d"))
+		return a.body()
+	}
+
+	drifted := open(t, func(o *Options) {
+		o.CredentialHome = "/home/somebody/.config/claude"
+		o.SamePath = func(a, b string) bool { return a == b }
+	})
+	if !strings.Contains(drifted, "different logins") {
+		t.Fatalf("Options.CredentialHome never reached the screen, so the warning it exists for is off:\n%s", drifted)
+	}
+
+	// The same two homes, and a comparison that knows they are one directory.
+	// This is the half a passed-through CredentialHome alone would get wrong.
+	spelled := open(t, func(o *Options) {
+		o.CredentialHome = "/home/u/.claude/"
+		o.SamePath = func(a, b string) bool { return strings.TrimSuffix(a, "/") == strings.TrimSuffix(b, "/") }
+	})
+	if strings.Contains(spelled, "different logins") {
+		t.Fatalf("Options.SamePath never reached the screen, so two spellings of one directory read as a disagreement:\n%s", spelled)
+	}
+}
+
 // A lock that could not be probed disables the start key, and that is a fact
 // about the lock rather than about which screen is showing -- so the one full
 // help view in this program must not offer it either.

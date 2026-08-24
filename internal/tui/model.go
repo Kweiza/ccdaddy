@@ -295,30 +295,27 @@ func (a App) body() string {
 // daemonScreen is the [D] screen with everything it may not read for itself
 // handed to it.
 //
-// CredentialHome is deliberately left empty, and the reason is not the one it
-// looks like. That field wants THIS process's own resolution of the Claude
-// Code credential home, to warn when it differs from the one the daemon
-// published. Resolving it is one leaf call and this file could make it.
-//
-// What stops it is the COMPARISON on the other side. ccdad manufactures two
-// spellings of that path itself -- every daemon it spawns is handed an
-// absolute, symlink-resolved one, while a shell's own spelling comes back
-// untouched -- so a trailing slash or a symlink is enough to make two names
-// for one directory. The screen compares them as strings, and `doctor`, which
-// asks the same question, learned not to: it compares them as paths, with the
-// reason written beside it. Filling this field without moving that comparison
-// would print "the two manage different logins" at a user whose daemon is
-// driving exactly the right one.
-//
-// Empty omits the warning, which is the right answer for a caller that cannot
-// answer honestly.
+// The credential home arrives in TWO pieces, and that is what makes the
+// warning it feeds safe to turn on. One is this process's own resolution,
+// which is an environment read and therefore package cli's to make. The other
+// is the comparison: ccdad manufactures two spellings of that path itself --
+// every daemon it spawns is handed an absolute, symlink-resolved one, while a
+// shell's own spelling comes back untouched -- so a trailing slash or a
+// symlink makes two names for one directory, and answering honestly means
+// asking the filesystem. `doctor` asks the same question through
+// internal/credhome and says beside it what a string compare would cost: the
+// warning printed on every run forever, at a user whose daemon is driving
+// exactly the right directory. Neither half may be produced here, so both come
+// down through Options and this file only carries them across.
 func (a App) daemonScreen() daemonScreen {
 	return daemonScreen{
-		Report: a.m.Snap.Report,
-		Rows:   a.m.Snap.Rows,
-		Log:    a.log,
-		Now:    a.m.Snap.Now,
-		LogErr: a.logErr,
+		Report:         a.m.Snap.Report,
+		Rows:           a.m.Snap.Rows,
+		Log:            a.log,
+		Now:            a.m.Snap.Now,
+		LogErr:         a.logErr,
+		CredentialHome: a.opts.CredentialHome,
+		SamePath:       a.opts.SamePath,
 	}
 }
 

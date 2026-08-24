@@ -6,6 +6,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Kweiza/ccdaddy/internal/ccpath"
+	"github.com/Kweiza/ccdaddy/internal/credhome"
 	"github.com/Kweiza/ccdaddy/internal/tui"
 	"github.com/Kweiza/ccdaddy/internal/view"
 )
@@ -106,5 +108,27 @@ func tuiOptions(cmd *cobra.Command) tui.Options {
 		// through here.
 		Out:       colorWriter(cmd.OutOrStdout()),
 		StderrTTY: stderrIsTTY(),
+		// The [D] screen's credential-home warning, in the two pieces package
+		// tui may not produce for itself: this process's own resolution, which
+		// is an environment read, and the comparison, which is a filesystem
+		// one. An unresolvable home is left empty, which omits the warning --
+		// the honest answer for a caller that cannot answer.
+		CredentialHome: credentialHomeOrEmpty(),
+		SamePath:       credhome.SamePath,
 	}
+}
+
+// credentialHomeOrEmpty is ccpath.CredentialHome with its error spent here.
+//
+// A home that cannot be resolved has nothing to compare, and the [D] screen's
+// contract for that is an empty string rather than a sentence: it is one line
+// on a screen full of them, and the ways this fails -- no home directory at all
+// -- are already reported by every other row in `ccdad doctor` in words that
+// say what to do about it.
+func credentialHomeOrEmpty() string {
+	home, err := ccpath.CredentialHome()
+	if err != nil {
+		return ""
+	}
+	return home
 }

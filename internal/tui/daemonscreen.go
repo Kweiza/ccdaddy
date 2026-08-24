@@ -32,6 +32,10 @@ type daemonScreen struct {
 	// directory for the rest of its life, and every other file on the machine
 	// looks normal — comparing the two is the only way anyone finds out.
 	CredentialHome string
+	// SamePath is how the two are compared. See driftsFrom: this screen may
+	// not make that comparison itself, and making it as strings is a bug
+	// rather than an approximation.
+	SamePath func(a, b string) bool
 }
 
 // Keys is the base map with the start key disabled when the lock could not be
@@ -124,11 +128,36 @@ func (d daemonScreen) liveness() []string {
 
 	if s.CredentialHome != "" {
 		out = append(out, "  credential home "+s.CredentialHome)
-		if d.CredentialHome != "" && d.CredentialHome != s.CredentialHome {
+		if d.driftsFrom(s.CredentialHome) {
 			out = append(out, "  this ccdad resolves "+d.CredentialHome+" instead, so the two manage different logins")
 		}
 	}
 	return out
+}
+
+// driftsFrom reports whether this process resolves a DIFFERENT credential home
+// from the one the daemon published.
+//
+// It is SamePath and never ==, and that is the whole reason this predicate has
+// a name. ccdad manufactures the two spellings itself -- daemon.ChildEnv pins
+// an absolute, symlink-resolved path into every daemon it spawns, while a
+// shell's own spelling comes back untouched -- so a trailing slash or a symlink
+// is enough to make two names for one directory. `doctor` asks this same
+// question and learned it the same way: a string compare there would print the
+// warning on every run forever, telling the user to restart a daemon that is
+// driving exactly the right directory. This screen is where a reader goes to
+// find out whether their daemon is healthy, so a false warning here costs more
+// than it does in a report of thirty rows.
+//
+// A caller that supplied neither the resolution nor the comparison cannot
+// answer, and no warning is the honest answer for a caller that cannot. It is
+// deliberately NOT the other way round: guessing "they differ" from a missing
+// input is how the false warning gets shipped by a different door.
+func (d daemonScreen) driftsFrom(published string) bool {
+	if d.CredentialHome == "" || d.SamePath == nil {
+		return false
+	}
+	return !d.SamePath(d.CredentialHome, published)
 }
 
 // lastDecision is the engine's own record of what it did last, resolved
