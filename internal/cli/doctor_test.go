@@ -1103,8 +1103,20 @@ func TestDoctorRefusesToClearTheProfilesItCouldNotMatch(t *testing.T) {
 	}
 
 	code, r, _ := runDoctor(t)
-	if got := r.level(t, "profiles"); got != "fail" {
-		t.Errorf("profiles = %q when the account list could not be read, want fail: %s", got, r.detail(t, "profiles"))
+	// It skips rather than failing on its own account, and that is not a
+	// softening: the cause is one document, and it is named once at fail level
+	// on the accounts-file row that gates this one. What this test forbids is
+	// unchanged — an "ok" here would say every profile is matched out of a read
+	// that never happened — and the exit code is still 1.
+	if got := r.level(t, "profiles"); got != string(levelSkipped) {
+		t.Errorf("profiles = %q when the account list could not be read, want skipped: %s", got, r.detail(t, "profiles"))
+	}
+	if got := r.level(t, "accounts-file"); got != string(levelFail) {
+		t.Errorf("accounts-file = %q for an accounts.toml that does not parse, want fail: %s",
+			got, r.detail(t, "accounts-file"))
+	}
+	if !strings.Contains(r.detail(t, "profiles"), "accounts-file") {
+		t.Errorf("the skipped profiles row does not point at the row carrying the cause: %s", r.detail(t, "profiles"))
 	}
 	if code == ExitOK {
 		t.Error("exit 0 while doctor could not answer the question it was asked")
@@ -1724,10 +1736,21 @@ func TestDoctorWillNotClearTheCredentialFilesRowFromADamagedDocument(t *testing.
 		t.Fatal(err)
 	}
 
-	_, r, _ := runDoctor(t)
-	if got := r.level(t, "credential-files"); got != string(levelFail) {
-		t.Errorf("level = %q, want fail from an accounts.toml that cannot be read: %s",
+	code, r, _ := runDoctor(t)
+	// Skipped, with the failure on the row that owns the cause. The forbidden
+	// answer is the reassuring one -- "every stored credential file belongs to
+	// an account this store still has", said out of a document that did not
+	// parse -- and it is still forbidden.
+	if got := r.level(t, "credential-files"); got != string(levelSkipped) {
+		t.Errorf("level = %q, want skipped from an accounts.toml that cannot be read: %s",
 			got, r.detail(t, "credential-files"))
+	}
+	if got := r.level(t, "accounts-file"); got != string(levelFail) {
+		t.Errorf("accounts-file = %q, want fail from an accounts.toml that cannot be read: %s",
+			got, r.detail(t, "accounts-file"))
+	}
+	if code == ExitOK {
+		t.Error("exit 0 while the account list could not be read at all")
 	}
 }
 
@@ -1770,4 +1793,126 @@ func TestDoctorCountsSeveralOrphanedCredentialFilesGrammatically(t *testing.T) {
 			t.Errorf("detail does not read %q for three files: %s", want, d)
 		}
 	}
+}
+
+// A deleted accounts.toml used to read as a store with no accounts, and that
+// was the charitable description of it. Every row that takes a set difference
+// against the account list read the empty list as the truth, so the
+// credential-files row turned every login on the machine into an orphan and
+// ended its sentence with "Delete them once you have looked". This is the test
+// that ccdad no longer tells a user whose document was deleted to destroy the
+// only copies of the logins they can still recover from.
+func TestDoctorNamesADeletedAccountsFileRatherThanCallingEveryLoginALeak(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	root := mustPath(ccpath.StoreHome())
+	if err := os.Remove(filepath.Join(root, "accounts.toml")); err != nil {
+		t.Fatal(err)
+	}
+
+	code, r, _ := runDoctor(t)
+
+	if got := r.level(t, "accounts-file"); got != string(levelFail) {
+		t.Fatalf("accounts-file = %q for a deleted document with credentials still beside it, want fail: %s",
+			got, r.detail(t, "accounts-file"))
+	}
+	detail := r.detail(t, "accounts-file")
+	for _, want := range []string{"accounts.toml", "uuid-a.json", "Do NOT delete", "ccdad import"} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("the accounts-file detail does not read %q: %s", want, detail)
+		}
+	}
+
+	if got := r.level(t, "credential-files"); got != string(levelSkipped) {
+		t.Errorf("credential-files = %q with no account list to match against, want skipped: %s",
+			got, r.detail(t, "credential-files"))
+	}
+	// The whole point, and it is asserted across the WHOLE report rather than on
+	// the one row: the destructive remedy has to be absent everywhere, not
+	// moved. "once you have looked" is the tail of checkCredentialFiles's
+	// "Delete them once you have looked", matched instead of the bare verb
+	// because the accounts-file row above legitimately says "Do NOT delete".
+	for _, c := range runChecks() {
+		if strings.Contains(c.Detail, "once you have looked") {
+			t.Errorf("%s still tells the user to delete a credential file after the document was deleted: %s",
+				c.Name, c.Detail)
+		}
+	}
+	if code == ExitOK {
+		t.Error("exit 0 while ccdad had lost its entire account list")
+	}
+}
+
+// The gate is "is the account list the truth", not "does the file exist", and
+// the difference is every fresh install. A machine nobody has added an account
+// to has no document either, and its empty list IS the truth — so the three
+// rows below must go on answering there rather than turning into "skipped" on
+// every new machine.
+func TestDoctorDoesNotCallAFreshStoreADeletedOne(t *testing.T) {
+	isolate(t)
+	root := mustPath(ccpath.StoreHome())
+	if err := os.MkdirAll(filepath.Join(root, "credentials"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	code, r, _ := runDoctor(t)
+
+	if got := r.level(t, "accounts-file"); got != string(levelOK) {
+		t.Errorf("accounts-file = %q on a store nothing has been added to, want ok: %s",
+			got, r.detail(t, "accounts-file"))
+	}
+	if got := r.detail(t, "accounts-file"); !strings.Contains(got, "nothing has been added on this machine") {
+		t.Errorf("the accounts-file detail does not say the store is simply new: %s", got)
+	}
+	for _, name := range []string{"profiles", "primary-accounts", "credential-files"} {
+		if got := r.level(t, name); got == string(levelSkipped) {
+			t.Errorf("%s = skipped on a fresh machine, want a real answer: %s", name, r.detail(t, name))
+		}
+	}
+	if code != ExitOK {
+		t.Errorf("exit %d on a store that is merely new", code)
+	}
+}
+
+// Both arms of both plurals, because one arm alone reads correctly for the
+// count it was written against and a transposed pair is invisible until a user
+// with exactly one account reads "1 credential files sit". plural's own comment
+// is about this, and the last four guards in this file that went unkilled by
+// mutation were all of this shape.
+func TestDoctorCountsTheAccountListAndTheStrandedFilesGrammatically(t *testing.T) {
+	t.Run("one of each", func(t *testing.T) {
+		isolate(t)
+		seedAccount(t, "uuid-a", "work@example.com")
+		_, r, _ := runDoctor(t)
+		if got := r.detail(t, "accounts-file"); !strings.Contains(got, "names 1 account") ||
+			strings.Contains(got, "names 1 accounts") {
+			t.Errorf("the accounts-file detail miscounts one account: %s", got)
+		}
+
+		if err := os.Remove(filepath.Join(mustPath(ccpath.StoreHome()), "accounts.toml")); err != nil {
+			t.Fatal(err)
+		}
+		_, r, _ = runDoctor(t)
+		if got := r.detail(t, "accounts-file"); !strings.Contains(got, "1 credential file still sits") {
+			t.Errorf("the accounts-file detail miscounts one stranded file: %s", got)
+		}
+	})
+
+	t.Run("two of each", func(t *testing.T) {
+		isolate(t)
+		seedAccount(t, "uuid-a", "work@example.com")
+		seedAccount(t, "uuid-b", "home@example.com")
+		_, r, _ := runDoctor(t)
+		if got := r.detail(t, "accounts-file"); !strings.Contains(got, "names 2 accounts") {
+			t.Errorf("the accounts-file detail miscounts two accounts: %s", got)
+		}
+
+		if err := os.Remove(filepath.Join(mustPath(ccpath.StoreHome()), "accounts.toml")); err != nil {
+			t.Fatal(err)
+		}
+		_, r, _ = runDoctor(t)
+		if got := r.detail(t, "accounts-file"); !strings.Contains(got, "2 credential files still sit") {
+			t.Errorf("the accounts-file detail miscounts two stranded files: %s", got)
+		}
+	})
 }

@@ -160,6 +160,11 @@ func runChecks() []check {
 		return []check{{"store", levelFail, rootErr.Error()}}
 	}
 	storeCheck, storeUsable := checkStore(root)
+	// The account list is probed once and its verdict passed to the three rows
+	// that take a set difference against it, rather than each of them deciding
+	// for itself. Three independent decisions about one document is three
+	// chances for them to disagree inside a single report.
+	accountsCheck, accountsUsable := checkAccountsFile(root, storeUsable)
 
 	live, liveErr := cclink.Load()
 	// Read, never created: LoadGlobalConfig opens the file read-only and a
@@ -186,9 +191,10 @@ func runChecks() []check {
 		checkEngineState(storeUsable),
 		checkConfig(storeUsable),
 		checkSessions(root, storeUsable),
-		checkProfiles(root, storeUsable),
-		checkPrimary(root, storeUsable),
-		checkCredentialFiles(root, storeUsable),
+		accountsCheck,
+		checkProfiles(root, storeUsable, accountsUsable),
+		checkPrimary(root, storeUsable, accountsUsable),
+		checkCredentialFiles(root, storeUsable, accountsUsable),
 		checkCredentialHome(report),
 		checkClaudeVersion(install, installErr),
 		checkClaudeCode(live, liveErr),
@@ -1197,6 +1203,102 @@ func checkAPIKey(cfg *cclink.GlobalConfig, cfgErr error) check {
 		source.String(), approval)}
 }
 
+// checkAccountsFile answers whether ccdad still has an account list, and it is
+// the row the three set-differences below hang off.
+//
+// THE STATE IT EXISTS FOR. store.load treats a missing accounts.toml as an
+// empty store and returns no error — which is right for the store, because a
+// machine where nothing has been added yet is exactly that, and wrong for a
+// diagnostic, because a machine whose document was deleted is exactly that too
+// and the two are the same bytes. `ccdad list` prints nothing, `ccdad switch`
+// has nothing to switch to, `ccdad status` shows an empty engine, and not one
+// line anywhere says the document is gone.
+//
+// AND UNTIL THIS ROW EXISTED THE REPORT WAS WORSE THAN SILENT. Every check that
+// takes a set difference against the account list — profiles, primary-accounts,
+// credential-files — reads that empty list as the truth. So a deleted document
+// turns every credential file in the store into an orphan, and the
+// credential-files row's remedy is "Delete <paths> once you have looked". A
+// user whose accounts.toml was deleted was being told by `ccdad doctor` to
+// delete every login they had left. That is why this row comes BEFORE those
+// three and gates them, rather than sitting beside them saying the same thing
+// in a fourth sentence.
+//
+// THE GATE IS "IS THE ACCOUNT LIST THE TRUTH", NOT "DOES THE FILE EXIST", and
+// the difference is a fresh install. No document and no stored credentials is a
+// machine nobody has added an account to: the empty list IS the truth there,
+// the three rows below answer correctly from it, and turning them into
+// "skipped" on every new machine would cost real signal to describe a state
+// that is not a problem. No document WITH credential files beside it is the
+// deleted case, and only that one closes the gate.
+//
+// Credential files are the only evidence read, deliberately. Profile
+// directories would be a second signal, and taking it would mean respelling
+// checkProfiles' entry rules here — the .lock suffix, the IsDir test — which is
+// the duplicate store.go's own accessors were introduced to remove. One
+// evidence, named, and store.OrphanCredentialsAt is the same reader
+// credential-files uses, so the two rows cannot come to different conclusions
+// about the same directory.
+//
+// It creates nothing: a stat, and the two readers that take a root and open
+// nothing.
+func checkAccountsFile(root string, usable bool) (check, bool) {
+	if !usable {
+		return check{"accounts-file", levelSkipped, "there is no store to check"}, false
+	}
+	path := store.AccountsFileAt(root)
+
+	_, statErr := os.Stat(path)
+	switch {
+	case statErr == nil:
+		accounts, err := store.AccountsAt(root)
+		if err != nil {
+			// Named once here rather than three times below. The three rows
+			// that would each have reported this as their own failure now skip
+			// and point at this one, so the report carries one cause instead of
+			// three symptoms.
+			return check{"accounts-file", levelFail, fmt.Sprintf(
+				"%s is there but cannot be read, so ccdad has no account list at all: %v", path, err)}, false
+		}
+		return check{"accounts-file", levelOK, fmt.Sprintf(
+			"%s names %d account%s", path, len(accounts), plural(len(accounts), "", "s"))}, true
+	case !errors.Is(statErr, os.ErrNotExist):
+		return check{"accounts-file", levelFail, fmt.Sprintf("%s cannot be read: %v", path, statErr)}, false
+	}
+
+	stranded, err := store.OrphanCredentialsAt(root)
+	if err != nil {
+		// The document is missing AND the evidence that would say whether that
+		// matters cannot be gathered. Answering "nothing has been added here"
+		// from a read that failed is the reassuring lie this row exists to
+		// remove, which is the refusal checkProfiles and checkPrimary already
+		// make one directory over.
+		return check{"accounts-file", levelFail, fmt.Sprintf(
+			"%s does not exist, and %s cannot be read to tell whether that is a new machine or a deleted "+
+				"account list: %v", path, store.CredentialsDirAt(root), err)}, false
+	}
+	if len(stranded) == 0 {
+		return check{"accounts-file", levelOK, fmt.Sprintf(
+			"%s does not exist yet, and no credentials are stored beside it — nothing has been added on this machine",
+			path)}, true
+	}
+
+	return check{"accounts-file", levelFail, fmt.Sprintf(
+		"%s is GONE, and %d credential file%s still %s beside it (%s). ccdad keeps its whole account list in "+
+			"that one document, so every account on this machine is now invisible: `ccdad list` is empty and "+
+			"`ccdad switch` has nothing to switch to. Do NOT delete those files — each is a login you can "+
+			"still recover. Put the document back from a backup, `ccdad import` an export, or run `ccdad add` "+
+			"once per account",
+		path, len(stranded), plural(len(stranded), "", "s"), plural(len(stranded), "sits", "sit"),
+		strings.Join(stranded, ", "))}, false
+}
+
+// noAccountList is what the three set-difference rows say when
+// checkAccountsFile has closed the gate. They cannot answer without a
+// trustworthy account list, and answering anyway is how a deleted document
+// became advice to delete a login.
+const noAccountList = "the account list cannot be trusted, so nothing can be matched against it — see the accounts-file row"
+
 // checkProfiles reports a `ccdad run --full-profile` profile whose account is
 // gone.
 //
@@ -1216,9 +1318,12 @@ func checkAPIKey(cfg *cclink.GlobalConfig, cfgErr error) check {
 // The account list comes from store.AccountsAt, never store.Open: Open does an
 // MkdirAll and this file's rule is that the probe must not create what it
 // probes. TestDoctorCreatesNothing is the test that keeps it that way.
-func checkProfiles(root string, usable bool) check {
+func checkProfiles(root string, usable, accountsUsable bool) check {
 	if !usable {
 		return check{"profiles", levelSkipped, "there is no store to check"}
+	}
+	if !accountsUsable {
+		return check{"profiles", levelSkipped, noAccountList}
 	}
 	container := filepath.Join(root, ProfilesDirName)
 	entries, err := os.ReadDir(container)
@@ -1288,15 +1393,19 @@ func checkProfiles(root string, usable bool) check {
 //
 // It is NOT a report about the past, and the tempting summary that it is would
 // be wrong. adfdbb5 made the store transaction reverse the credential files a
-// REFUSED batch wrote, which closes the error path and only that one: rollback
-// runs from mutate's error return rather than from a defer, and `add` puts the
-// credential file down before the document is saved, so a process that dies in
-// that window still leaves one. Ctrl-C during a multi-account `ccdad import` is
-// the ordinary form of it -- root.go deliberately does not trap SIGINT outside
-// the login wait -- and SIGKILL and power loss are not closable at all. Add the
-// two states adfdbb5 cannot reach backwards into, a store written by a build
-// older than it and a reversal whose own os.Remove was refused, and this row
-// has permanent work. Every one of those is silent without it.
+// REFUSED batch wrote, which closed the error path and only that one. The
+// reversal now runs from a defer rather than from that one return, and the
+// transaction holds SIGINT for the span of its own write, so the two ways a
+// user actually reached this state -- a panic, and Ctrl-C partway through a
+// multi-account `ccdad import` -- are closed too.
+//
+// What is left is not closable at any price. SIGKILL and a power cut take the
+// process out between any two instructions with the credential file down and
+// the document unwritten, and internal/store/interrupt.go names the one signal
+// deliberately left untrapped beside them. Add the two states no reversal can
+// reach backwards into -- a store written by a build older than all of this,
+// and a reversal whose own os.Remove was itself refused -- and this row has
+// permanent work. Every one of those is silent without it.
 //
 // A warning rather than a failure, and a report rather than a repair — this
 // file's second rule, and the place it is most tempting to break. Deleting a
@@ -1306,9 +1415,12 @@ func checkProfiles(root string, usable bool) check {
 //
 // It creates nothing: store.OrphanCredentialsAt reads the directory and the
 // document the way AccountsAt does, without Open's MkdirAll.
-func checkCredentialFiles(root string, usable bool) check {
+func checkCredentialFiles(root string, usable, accountsUsable bool) check {
 	if !usable {
 		return check{"credential-files", levelSkipped, "there is no store to check"}
+	}
+	if !accountsUsable {
+		return check{"credential-files", levelSkipped, noAccountList}
 	}
 	orphans, err := store.OrphanCredentialsAt(root)
 	if err != nil {
@@ -1346,9 +1458,12 @@ func checkCredentialFiles(root string, usable bool) check {
 //
 // It creates nothing: store.AccountsAt performs the read Open would, without
 // Open's MkdirAll.
-func checkPrimary(root string, usable bool) check {
+func checkPrimary(root string, usable, accountsUsable bool) check {
 	if !usable {
 		return check{"primary-accounts", levelSkipped, "there is no store to check"}
+	}
+	if !accountsUsable {
+		return check{"primary-accounts", levelSkipped, noAccountList}
 	}
 	accounts, err := store.AccountsAt(root)
 	if err != nil {
