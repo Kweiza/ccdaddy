@@ -15,6 +15,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/cclock"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
+	"github.com/Kweiza/ccdaddy/internal/config"
 	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/oauth"
 	"github.com/Kweiza/ccdaddy/internal/pollpolicy"
@@ -718,5 +719,187 @@ func TestRunHandsTheEngineTheDaemonLog(t *testing.T) {
 	}
 	if !containsFold(string(raw), "the engine spoke") {
 		t.Fatalf("daemon.log does not carry what the engine logged:\n%s", raw)
+	}
+}
+
+// windowsUsed builds a reading with both floors a threshold table can move
+// independently. snapshotWith sets the five-hour window alone, so it cannot
+// express the account this file has to get right: fine on one axis and spent on
+// the other.
+func windowsUsed(fiveHour, sevenDay float64) *usage.Snapshot {
+	fiveHourResets := tickEpoch.Add(time.Hour)
+	weeklyResets := tickEpoch.Add(72 * time.Hour)
+	return &usage.Snapshot{
+		FiveHour: usage.NewWindow(&fiveHour, &fiveHourResets),
+		SevenDay: usage.NewWindow(&sevenDay, &weeklyResets),
+	}
+}
+
+func stateOf(t *testing.T, s Status, uuid string) AccountState {
+	t.Helper()
+	for _, a := range s.Accounts {
+		if a.UUID == uuid {
+			return a.State
+		}
+	}
+	t.Fatalf("no account %q in the published status: %+v", uuid, s.Accounts)
+	return ""
+}
+
+// An account can be spent by its WEEKLY floor while its five-hour window is
+// nowhere near its own. The daemon carried its own copy of the over-threshold
+// rule, and that copy knew one number, so it published this account as a healthy
+// candidate while the engine ranked it as spent.
+//
+// End to end through the published document, which is the half a direct call to
+// accountState cannot reach: what a dashboard reads is the status the tick
+// publishes, not the helper it publishes from.
+func TestAnAccountOverItsWeeklyFloorIsPublishedAsExhausted(t *testing.T) {
+	isolateEngine(t)
+	seedAccount(t, "u-1", "org-1")
+	seedAccount(t, "u-2", "org-2")
+	liveAs(t, "u-1")
+	writeConfig(t, "threshold = 80\n\n[window_threshold]\nfive_hour = 85\nseven_day = 60\n")
+
+	e := engineFor(t, tokensAreFine, func(_ context.Context, token string) (*usage.Snapshot, error) {
+		if token == "AT-u-2" {
+			// Seventy-five points of five-hour room against a floor of 85, and
+			// ten points PAST a weekly floor of 60.
+			return windowsUsed(10, 70), nil
+		}
+		return windowsUsed(5, 5), nil
+	})
+	// The first tick dispatches the polls and publishes before either lands, so
+	// a state that comes off the cache is the tick after.
+	tick(t, e)
+	tick(t, e)
+
+	snap := e.Snapshot()
+	if got := stateOf(t, snap, "u-2"); got != StateExhausted {
+		t.Fatalf("u-2 = %q, want %q — seven_day is 70%% used against a floor of 60", got, StateExhausted)
+	}
+	if got := stateOf(t, snap, "u-1"); got != StateActive {
+		t.Fatalf("u-1 = %q, want %q — it is the live login and it has room", got, StateActive)
+	}
+}
+
+// The daemon publishes StateExhausted and the engine decides what is spent, and
+// those were two pieces of arithmetic in two packages. This is the gate on there
+// being one: over a table of readings, the published state and the ranking's own
+// verdict have to be the same answer.
+func TestTheDaemonAndTheEngineCannotDisagreeAboutSpent(t *testing.T) {
+	isolateEngine(t)
+	cfg := config.Defaults()
+	cfg.Threshold = 80
+	cfg.WindowThreshold = map[usage.WindowName]float64{
+		usage.WindowFiveHour: 85,
+		usage.WindowSevenDay: 60,
+	}
+
+	cases := []struct {
+		name               string
+		fiveHour, sevenDay float64
+	}{
+		{"neither floor reached", 10, 10},
+		{"over the weekly floor only", 10, 70},
+		{"over the five-hour floor only", 90, 10},
+		{"over both", 90, 70},
+		{"on the weekly floor exactly", 10, 60},
+		{"a point past the weekly floor", 10, 61},
+		{"past the fallback and under both floors of its own", 82, 55},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			snap := windowsUsed(tc.fiveHour, tc.sevenDay)
+			cache, err := usage.LoadCache()
+			if err != nil {
+				t.Fatal(err)
+			}
+			cache.Put("u-1", usage.Entry{Snapshot: snap, FetchedAt: tickEpoch})
+
+			// activeUUID is empty so the active case cannot answer ahead of the
+			// verdict under test.
+			state := accountState(store.Account{UUID: "u-1"}, cache, false, "", cfg)
+
+			// One candidate, so AllOverThreshold is exactly "this account is
+			// known and spent" — the engine's own answer, reached without
+			// touching the daemon's.
+			res := strategy.Rank([]strategy.Candidate{{
+				UUID: "u-1", Kind: identity.KindSubscription, Usage: snap,
+			}}, cfg.RankOptions(tickEpoch))
+
+			if got := state == StateExhausted; got != res.AllOverThreshold {
+				t.Fatalf("the daemon says exhausted=%v (state %q) and the engine says spent=%v",
+					got, state, res.AllOverThreshold)
+			}
+		})
+	}
+}
+
+// seedEntry puts one row into the usage cache directly, so a test can describe a
+// reading the daemon has already taken without pretending to take it.
+func seedEntry(t *testing.T, uuid string, e usage.Entry) {
+	t.Helper()
+	if err := usage.WithCache(cacheTimeout, func(c *usage.Cache) error {
+		c.Put(uuid, e)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The urgent band is "within 15 points of the threshold", and the threshold it
+// means is the BINDING window's own. The cadence used to be handed the global
+// fallback instead, which is a different number the moment a window carries one:
+// an account whose weekly floor is 60 against a fallback of 80 had the band
+// placed 20 points too high, so it was polled at the ordinary cadence through
+// the exact span the band exists to cover.
+//
+// Nobody would have noticed. This decides a poll interval, not a switch, and the
+// published state is right either way — which is why the assertion is on the
+// schedule rather than on anything a user reads.
+func TestThePollCadenceReadsTheBindingWindowsOwnThreshold(t *testing.T) {
+	isolateEngine(t)
+	a := store.Account{UUID: "acct-1"}
+
+	// ACTIVE and MOVING, because the urgent rule is an AND of both halves plus
+	// the band: without the movement the account gets ActiveMaxInterval whatever
+	// the threshold is, and the two answers would be identical for opposite
+	// reasons.
+	nextPollAfter := func(cfg config.Config) time.Time {
+		t.Helper()
+		seedEntry(t, a.UUID, usage.Entry{
+			Snapshot:  windowsUsed(10, 45),
+			FetchedAt: tickEpoch.Add(-time.Hour),
+			Poll:      usage.PollState{LastBindingPct: 45, HasLastBinding: true},
+		})
+		e := NewEngine()
+		e.commit(a, windowsUsed(10, 50), tickEpoch, 1, cfg, true, nil)
+		entry, ok := cacheEntry(t, a.UUID)
+		if !ok {
+			t.Fatal("commit() wrote no cache entry")
+		}
+		return entry.NextPollAt
+	}
+
+	// seven_day is 50% used, five_hour 10%. Under the table below seven_day has
+	// 10 points of slack against five_hour's 70, so it binds — and 50 is 5
+	// points inside a band that reaches down to 45.
+	tuned := nextPollAfter(config.Config{
+		Threshold:       80,
+		WindowThreshold: map[usage.WindowName]float64{usage.WindowSevenDay: 60},
+	})
+	if want := tickEpoch.Add(pollpolicy.UrgentInterval); !tuned.Equal(want) {
+		t.Errorf("the next poll is %v, want %v — 50%% used is 10 points from a floor of 60, "+
+			"which is inside the urgent band; measured against the fallback of 80 it is 30 points out",
+			tuned, want)
+	}
+
+	// The fallback still reaches every window that has no entry of its own, so
+	// the same reading with no table is genuinely outside the band.
+	bare := nextPollAfter(config.Config{Threshold: 80})
+	if want := tickEpoch.Add(pollpolicy.MinInterval); !bare.Equal(want) {
+		t.Errorf("with no table the next poll is %v, want %v — 50%% used against a threshold "+
+			"of 80 is moving but not near it", bare, want)
 	}
 }

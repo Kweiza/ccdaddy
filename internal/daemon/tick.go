@@ -508,6 +508,9 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now time.Time,
 	identitySize int, cfg config.Config, active bool,
 	adjust func(pollpolicy.State) pollpolicy.State) {
 
+	// Resolved once, before the cache callback: it is read twice inside and the
+	// value is the same for the whole call.
+	thr := cfg.Thresholds()
 	err := usage.WithCache(cacheTimeout, func(c *usage.Cache) error {
 		entry, had := c.Get(a.UUID)
 		state := pollStateOf(entry)
@@ -526,17 +529,30 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now time.Time,
 			entry.FetchedAt = now
 		}
 
-		h := strategy.HeadroomOf(entry.Snapshot, cfg.Thresholds())
+		h := strategy.HeadroomOf(entry.Snapshot, thr)
 		reading := pollpolicy.Reading{Exhausted: exhausted(h)}
 		if snap != nil && h.Known {
 			reading.BindingPct, reading.Known = 100-h.Pct, true
 		}
-		at, next := pollpolicy.Next(state, pollpolicy.Input{
-			Now:       now,
-			Active:    active,
-			Reading:   reading,
-			Threshold: cfg.Threshold,
-		}, e.rand())
+		in := pollpolicy.Input{
+			Now:     now,
+			Active:  active,
+			Reading: reading,
+			// The BINDING window's own floor, and not the fallback. BindingPct
+			// is measured on the binding window, and the urgent band is "within
+			// 15 points of the threshold": comparing that reading against a
+			// different window's number puts the band 20 points out of place for
+			// an account whose weekly floor is 60 while the fallback is 80, and
+			// the account is then polled at the idle cadence through the exact
+			// span the band exists to cover.
+			//
+			// An unreadable account has an empty Binding, and Thresholds.For
+			// answers Default for a window it has no key for, so that case keeps
+			// the fallback — and nearThreshold ignores it anyway while
+			// Reading.Known is false.
+			Threshold: thr.For(h.Binding),
+		}
+		at, next := pollpolicy.Next(state, in, e.rand())
 
 		// The allowance belongs to the identity, so the cadence is divided
 		// among the accounts that share one — otherwise two accounts in an
