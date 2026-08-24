@@ -16,6 +16,15 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-08-24
+
+Two fixes, no new surface. `ccdad list`'s LEFT column stopped reading `?` for
+every credit-metered account — the money axis `list --json` already exposed
+now renders in the human table too. And `install.ps1` leaves the window it
+ran in already usable: the PATH write it makes to the registry only ever
+reached terminals opened afterwards, so the one running the installer itself
+needed a restart it no longer does.
+
 ### Fixed
 
 - **`ccdad list`'s LEFT column no longer reads `?` for every credit-metered
