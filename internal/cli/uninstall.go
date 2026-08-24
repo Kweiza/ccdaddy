@@ -37,10 +37,19 @@ import (
 // named on the way out, because every other one has just become unreachable.
 
 // accountsFileName and credentialsDirName are internal/store's, spelled out
-// here because store exports no path accessor and its Open does an MkdirAll — a
-// command that must never create what it is about to delete cannot go through
-// it to ask. doctor.go spells the same two for the same reason, and the tests
-// below fail on their own spelling rather than passing while checking nothing.
+// here rather than read from it. The original reason was that store exported no
+// path accessor and its Open does an MkdirAll — a command that must never create
+// what it is about to delete cannot go through Open to ask — and half of that
+// has since stopped being true: store exports CredentialsDirAt and
+// AccountsFileAt, and neither resolves nor creates anything, so this could
+// switch onto them.
+//
+// It deliberately does not. What is under test here is that a DELETER names its
+// own targets: a command that asked the store where to delete would agree with
+// the store by construction, and the tests below would pass while checking
+// nothing. doctor.go made the opposite call for the opposite reason and now
+// uses the accessors, keeping only its glob hand-spelled — the file it is
+// looking for is one the store would never have written.
 const (
 	accountsFileName   = "accounts.toml"
 	credentialsDirName = "credentials"

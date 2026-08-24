@@ -1089,3 +1089,223 @@ func TestAFailedTransactionLeavesNoPhantomAccountInThisProcess(t *testing.T) {
 		t.Errorf("Accounts() = %+v, want none: a refused transaction left this process holding an account the document does not have", got)
 	}
 }
+
+// The two path accessors exist so `ccdad doctor` can name these files without
+// respelling the naming rule: checkPermissions used to spell both out and its
+// comment said why — "store exports no path accessors and opening it would
+// create the tree". They are pinned against what Open actually writes, because
+// an accessor that agreed only with itself would be the same gap under a new
+// name.
+func TestThePathAccessorsNameWhatOpenWrites(t *testing.T) {
+	root := withStore(t)
+	s, err := Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add(Account{UUID: "uuid-a", Email: "work@example.com"}, sampleCreds("AT-a")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(filepath.Join(CredentialsDirAt(root), "uuid-a.json")); err != nil {
+		t.Errorf("CredentialsDirAt does not name the directory Add wrote into: %v", err)
+	}
+	if _, err := os.Stat(AccountsFileAt(root)); err != nil {
+		t.Errorf("AccountsFileAt does not name the document save wrote: %v", err)
+	}
+}
+
+// OrphanCredentialsAt is doctor's only route into the credentials directory,
+// and it follows AccountsAt's rule rather than Open's: a store that is not
+// there yields nothing rather than being brought into existence.
+func TestOrphanCredentialsAtCreatesNothing(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "never-created")
+
+	orphans, err := OrphanCredentialsAt(root)
+	if err != nil {
+		t.Fatalf("OrphanCredentialsAt on a store that is not there: %v", err)
+	}
+	if len(orphans) != 0 {
+		t.Errorf("orphans = %v, want none from a store that does not exist", orphans)
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Errorf("OrphanCredentialsAt created the store directory it was asked to read: %v", err)
+	}
+}
+
+// The leak: a credential file a refused transaction left behind on a build
+// older than the rollback journal, holding a live refresh token at 0600 that
+// accounts.toml does not name. `ccdad list`, `ccdad remove` and doctor's
+// account rows all read the document, so an orphan is invisible to every one
+// of them, indefinitely.
+func TestOrphanCredentialsAtNamesACredentialFileNoAccountHas(t *testing.T) {
+	root := withStore(t)
+	s, err := Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add(Account{UUID: "uuid-a", Email: "work@example.com"}, sampleCreds("AT-a")); err != nil {
+		t.Fatal(err)
+	}
+	leaked := filepath.Join(root, "credentials", "uuid-gone.json")
+	if err := os.WriteFile(leaked, []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	orphans, err := OrphanCredentialsAt(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(orphans) != 1 || orphans[0] != leaked {
+		t.Errorf("orphans = %v, want exactly [%s] — uuid-a is named by the document", orphans, leaked)
+	}
+}
+
+// An interrupted atomic write leaves `<name>.tmp-*` beside the file it was
+// replacing — WriteFileAtomic's own suffix, so this is reachable rather than
+// hypothetical. The stem is not a uuid, and reporting it as one would send the
+// user looking for an account that never existed. The rule is a file named
+// exactly <uuid>.json.
+func TestOrphanCredentialsAtIgnoresAnInterruptedAtomicWrite(t *testing.T) {
+	root := withStore(t)
+	if _, err := Open(); err != nil {
+		t.Fatal(err)
+	}
+	scratch := filepath.Join(root, "credentials", "uuid-a.json.tmp-1234")
+	if err := os.WriteFile(scratch, []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	orphans, err := OrphanCredentialsAt(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(orphans) != 0 {
+		t.Errorf("orphans = %v, want none — a half-written temporary file is not an account", orphans)
+	}
+}
+
+// Answering "nothing is orphaned" out of a read that failed is exactly the
+// reassuring lie this is built to remove, and it is the rule checkProfiles and
+// checkPrimary already state one layer up.
+func TestOrphanCredentialsAtRefusesADamagedAccountsFile(t *testing.T) {
+	root := withStore(t)
+	if _, err := Open(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "accounts.toml"), []byte("this is not toml"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := OrphanCredentialsAt(root); err == nil {
+		t.Error("OrphanCredentialsAt answered from an accounts.toml it could not parse")
+	}
+}
+
+// A DirEntry does not follow a symlink, so a name ending in .json that is not a
+// file at all still reads as one here. Every shape below is reachable in a
+// directory the user can write to, and the sentence doctor builds from this
+// list says the path holds a live refresh token at 0600 and can be deleted --
+// which about a dangling link is false twice over. checkPermissions walks the
+// same directory with os.Stat for exactly this reason.
+func TestOrphanCredentialsAtReportsOnlyFilesThatAreReallyThere(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating a symlink needs a privilege the test runner may not hold on Windows")
+	}
+	root := withStore(t)
+	if _, err := Open(); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(root, "credentials")
+	if err := os.Symlink(filepath.Join(t.TempDir(), "no-such-target"), filepath.Join(dir, "dangling.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), filepath.Join(dir, "alinkedcdir.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "aplaindir.json"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	orphans, err := OrphanCredentialsAt(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(orphans) != 0 {
+		t.Errorf("orphans = %v, want none — not one of those is a credential file holding a token", orphans)
+	}
+}
+
+// The docstring calls the order a contract, and doctor joins the list into one
+// sentence: an unstable order makes two runs of a report meant to diff cleanly
+// disagree for no reason at all.
+func TestOrphanCredentialsAtSortsWhatItReturns(t *testing.T) {
+	root := withStore(t)
+	if _, err := Open(); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(root, "credentials")
+	for _, name := range []string{"uuid-c.json", "uuid-a.json", "uuid-b.json"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(`{}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	orphans, err := OrphanCredentialsAt(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Join([]string{
+		filepath.Join(dir, "uuid-a.json"),
+		filepath.Join(dir, "uuid-b.json"),
+		filepath.Join(dir, "uuid-c.json"),
+	}, "|")
+	if got := strings.Join(orphans, "|"); got != want {
+		t.Errorf("orphans =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// A file called exactly `.json` has no uuid in front of it. Reporting one would
+// name an account that cannot exist, in a sentence telling the user to go and
+// look for it.
+func TestOrphanCredentialsAtIgnoresAFileWithNothingInFrontOfJSON(t *testing.T) {
+	root := withStore(t)
+	if _, err := Open(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "credentials", ".json"), []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	orphans, err := OrphanCredentialsAt(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(orphans) != 0 {
+		t.Errorf("orphans = %v, want none — there is no uuid in front of that suffix", orphans)
+	}
+}
+
+// `uuid-x.JSON` is a file the store itself reads back on macOS and Windows,
+// where the filesystem ignores case: credentialPath asks for uuid-x.json and
+// gets handed this. Skipping it there would leave a live credential file this
+// row can never name. The suffix test is case-insensitive on EVERY platform,
+// for the reason ValidateUUID checks Windows device names on every platform —
+// a store is one rsync away from being opened somewhere else.
+func TestOrphanCredentialsAtNamesAnUppercaseSuffixToo(t *testing.T) {
+	root := withStore(t)
+	if _, err := Open(); err != nil {
+		t.Fatal(err)
+	}
+	upper := filepath.Join(root, "credentials", "uuid-x.JSON")
+	if err := os.WriteFile(upper, []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	orphans, err := OrphanCredentialsAt(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(orphans) != 1 || orphans[0] != upper {
+		t.Errorf("orphans = %v, want exactly [%s]", orphans, upper)
+	}
+}

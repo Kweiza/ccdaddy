@@ -182,10 +182,21 @@ func TestDoctorReportsAFreeCredentialHome(t *testing.T) {
 	}
 }
 
-// The drift `ccdad run --full-profile` produces: the daemon is driving a
-// per-session directory while this shell resolves ~/.claude, so its switches
-// change a login nothing here reads. Every file on the machine looks normal;
-// the daemon's own published document is the only place the two can be compared.
+// The daemon is driving the credential home it was born in while this shell
+// resolves another, so its switches change a login nothing here reads. Every
+// file on the machine looks normal; the daemon's own published document is the
+// only place the two can be compared.
+//
+// What this fixture exercises is the COMPARISON and not the cause. The daemon's
+// recorded home is a stub, and the home this shell resolves comes from
+// isolate's CLAUDE_SECURESTORAGE_CONFIG_DIR — the variable ccpath.CredentialHome
+// reads first — rather than from the CLAUDE_CONFIG_DIR the prose case names.
+// Reproducing a cause would take a daemon that outlived the shell that spawned
+// it, and the causes are pinned where they live: scoped_test.go's
+// TestAutoStartStillFiresWithAnOrdinaryConfigDirOverride holds that an
+// ordinary override still reaches this state, which is what keeps this check
+// load-bearing, and TestAutoStartRefusesInsideAFullProfileSession holds that
+// `ccdad run --full-profile` has not since 3d9d2d6.
 func TestDoctorCatchesADaemonDrivingADifferentCredentialHome(t *testing.T) {
 	isolate(t)
 	seedHealthyMachine(t)
@@ -201,6 +212,25 @@ func TestDoctorCatchesADaemonDrivingADifferentCredentialHome(t *testing.T) {
 	}
 	if d := r.detail(t, "credential-home"); !strings.Contains(d, "/somewhere/else") {
 		t.Errorf("detail does not name the home the daemon is actually driving: %s", d)
+	}
+	// The sentence must not send the user hunting for a cause they cannot have
+	// hit on a current build. This is the whole of the defect the queue item
+	// describes: the remedy after the semicolon stays correct while the
+	// diagnosis in front of it names something the tree now prevents, and
+	// nothing else in this package pins the prose.
+	if d := r.detail(t, "credential-home"); strings.Contains(d, "--full-profile") {
+		t.Errorf("the drift sentence still blames a spawn autostart refuses since 3d9d2d6: %s", d)
+	}
+	// The item asked for two things and the line above is only the first of
+	// them. Deleting the diagnosis altogether would satisfy a one-word
+	// blacklist while losing the half that makes the row actionable, and
+	// naming a session without using the flag's name would satisfy it while
+	// blaming the prevented cause again.
+	if d := r.detail(t, "credential-home"); !strings.Contains(d, "CLAUDE_CONFIG_DIR") {
+		t.Errorf("the drift sentence no longer names a cause the user can act on: %s", d)
+	}
+	if d := r.detail(t, "credential-home"); strings.Contains(d, "session") {
+		t.Errorf("outside a session the row blames a `ccdad run` session, which auto-start refuses: %s", d)
 	}
 }
 
@@ -464,5 +494,63 @@ func TestAutoRunsUnguardedWhenTheClaimCannotBeTaken(t *testing.T) {
 	// refusal wearing a notice.
 	if got := liveUUIDOf(t); got != "u-2" {
 		t.Errorf("live account = %q, want u-2 — the degraded loop never acted", got)
+	}
+}
+
+// Inside a `ccdad run` session the daemon and this shell resolve different
+// credential homes BY DESIGN — that is the whole of what a session is — and the
+// daemon is not the side that moved. Telling that user to restart it is wrong
+// twice: it names the wrong side as the fault, and `ccdad daemon restart` is
+// refused in this very shell, so the instruction cannot be carried out at all.
+// The other credential rows in this report already carry scopedSessionNote for
+// exactly this reason; this one did not.
+func TestDoctorDoesNotBlameTheDaemonForADriftThisShellCaused(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	// The store root out of the environment isolate set, not through the
+	// resolver doctor uses: a fixture that asked production where to look would
+	// follow it to the wrong place rather than failing.
+	session := filepath.Join(os.Getenv("CCDAD_HOME"), SessionsDirName, "uuid-a-123")
+	if err := os.MkdirAll(session, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLAUDE_SECURESTORAGE_CONFIG_DIR", session)
+	stubDaemon(t, daemon.Report{
+		State:     daemon.DaemonRunning,
+		HasStatus: true,
+		Status:    daemon.Status{SchemaVersion: 1, PID: 4242, CredentialHome: "/the/machines/claude"},
+	}, nil)
+
+	d := func() string { _, r, _ := runDoctor(t); return r.detail(t, "credential-home") }()
+	if strings.Contains(d, "restart it") {
+		t.Errorf("the row prescribes a daemon restart that this very shell refuses: %s", d)
+	}
+	if !strings.Contains(d, "session") {
+		t.Errorf("the row does not say that this shell is the scoped side: %s", d)
+	}
+}
+
+// Inside a `ccdad run` session the two homes differ by design, and the row says
+// so in its own words. Leaving it at warn would put a warning on every doctor
+// run inside every session — which is how a reader learns to skip a row — and
+// would contradict the sentence beside it, which says nothing here is broken.
+func TestTheDriftRowIsNotAWarningWhenTheSessionIsTheReasonForIt(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	session := filepath.Join(os.Getenv("CCDAD_HOME"), SessionsDirName, "uuid-a-123")
+	if err := os.MkdirAll(session, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLAUDE_SECURESTORAGE_CONFIG_DIR", session)
+	stubDaemon(t, daemon.Report{
+		State:     daemon.DaemonRunning,
+		HasStatus: true,
+		Status:    daemon.Status{SchemaVersion: 1, PID: 4242, CredentialHome: "/the/machines/claude"},
+	}, nil)
+
+	_, r, _ := runDoctor(t)
+	if got := r.level(t, "credential-home"); got != string(levelOK) {
+		t.Errorf("level = %q, want ok — the row's own detail says nothing here is broken: %s",
+			got, r.detail(t, "credential-home"))
 	}
 }
