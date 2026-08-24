@@ -76,6 +76,28 @@ const (
 	// the credit gate and already exists in internal/strategy. Re-spelling it
 	// would put one number in two places that must agree.
 	UrgentBandPct = 15.0
+	// DangerBandPct is where the live account stops sharing its identity's
+	// budget. Five points of a five-hour window is under three minutes of a busy
+	// session, which is less than the 180 s an alternate is already allowed to go
+	// unread — so past this line the fleet's freshness is worth less than the one
+	// account a session can be cut off on.
+	//
+	// It is a distance from 100 and NOT from Threshold, and that is the whole
+	// distinction it exists to draw: Threshold is where ccdad decided an account
+	// should stop being used, and 100 is where the endpoint refuses. UrgentBandPct
+	// is a band around the first, which is why it moves when a window's threshold
+	// moves. This is a band around the second, which is why it is a constant
+	// rather than a second knob.
+	DangerBandPct = 95.0
+	// DangerServeTTL is how long a reading taken inside the danger band may be
+	// served before another poll is worth a request.
+	//
+	// ServeTTL is 180 s and the band asks for a poll every 60 s. Leaving the TTL
+	// alone would have the scheduler's own freshness gate refuse two of every
+	// three polls the band just asked for: the cadence would exist in the schedule
+	// and nowhere else, and every consumer would still read a three-minute-old
+	// number.
+	DangerServeTTL = 30 * time.Second
 )
 
 // State is one account's polling history. The caller carries it across calls
@@ -118,7 +140,20 @@ type Input struct {
 	Active bool
 	// Reading is the sample just taken.
 	Reading Reading
-	// Threshold is the configured spent line, in percent.
+	// Threshold is the spent line this reading is measured against, in percent,
+	// for the BINDING window the reading came from.
+	//
+	// One number, resolved by the caller. With a weekly floor at 60 and a
+	// five-hour line at 85, what belongs here is whichever of the two the binding
+	// window carries — not the global fallback, which at 80 would put every rule
+	// phrased around this field twenty points out of place on that weekly floor.
+	// The resolution is deliberately not here: this package imports nothing but
+	// the standard library, which is what makes every rule in it table-testable
+	// with no clock, no cache and no config.
+	//
+	// It is not what the danger band is measured against. DangerBandPct is a
+	// distance from 100 because 100 is where the endpoint refuses; this is only
+	// where ccdad decided to stop.
 	Threshold float64
 }
 
@@ -157,6 +192,22 @@ func Next(s State, in Input, rnd float64) (time.Time, State) {
 
 // base is the cadence before any rate-limit rule.
 func base(in Input, moving bool) time.Duration {
+	if InDangerBand(in) {
+		// Ahead of BOTH rules below, and each override is deliberate.
+		//
+		// Ahead of Exhausted, because Exhausted is measured against the spent
+		// line the caller chose: at a threshold of 80 every account inside the
+		// band is also exhausted, so an exhausted-first order would make the band
+		// unreachable in exactly the case it exists for. "Nothing left to watch
+		// tick down" is a true statement about the threshold and a false one
+		// about the five points left before the endpoint refuses.
+		//
+		// Ahead of the movement AND, because "merely close to its limit and
+		// idle" stops being a fair description of an account five points out.
+		// Idle is a claim about the last interval, not the next one, and a paused
+		// session that resumes can spend the whole distance between two polls.
+		return UrgentInterval
+	}
 	if in.Reading.Exhausted {
 		// Deliberately ahead of the urgent rule. An exhausted active account
 		// has nothing left to watch tick down, so polling it every minute buys
@@ -189,6 +240,22 @@ func nearThreshold(in Input) bool {
 		return false
 	}
 	return in.Reading.BindingPct >= in.Threshold-UrgentBandPct
+}
+
+// InDangerBand reports whether this is the LIVE account at or above
+// DangerBandPct on its binding window.
+//
+// Only the live account, because the band spends most of an identity's budget
+// on one account and the only account worth that is the one a session is
+// running against; an alternate at 97% is a candidate nobody will pick, not an
+// emergency. An unreadable sample is never in the band, for the same reason it
+// is never near the threshold: unknown is not a percentage, and reading it as
+// one would silence a whole identity on no evidence at all.
+func InDangerBand(in Input) bool {
+	if !in.Active || !in.Reading.Known {
+		return false
+	}
+	return in.Reading.BindingPct >= DangerBandPct
 }
 
 // movement compares the sample against its predecessor. No predecessor is not
@@ -227,6 +294,11 @@ func recent429(s State, now time.Time) bool {
 // urgency is a burst, not a steady state, and AIMD is the backstop when it
 // turns out to be one.
 //
+// The one cadence that is NOT divided is the live account's inside the danger
+// band, and that exemption lives in Share rather than here: this function is
+// the division and nothing else, so a caller that wants the division does not
+// also buy a policy decision it did not ask about.
+//
 // accounts below 1 means the caller has nothing to share among, which is the
 // unshared interval rather than a licence to poll as fast as possible.
 func PerIdentity(d time.Duration, accounts int) time.Duration {
@@ -234,6 +306,63 @@ func PerIdentity(d time.Duration, accounts int) time.Duration {
 		return d
 	}
 	return d * time.Duration(accounts)
+}
+
+// Share is PerIdentity with the danger band's one exemption applied, and it is
+// what a scheduler should call. The exemption and the division are two halves
+// of one rule; a caller reaching for PerIdentity directly would divide the
+// single cadence that must not be divided.
+//
+// The arithmetic, stated because it is the reason the band is shaped this way
+// and not a more generous way. The endpoint allows roughly 28-30 requests per
+// identity per rolling hour over a SLIDING window, so capacity comes back only
+// as old requests age out. UrgentInterval is already 60 s — 60 requests an
+// hour, a deliberate transient overshoot even on an identity of one. The
+// exemption gives an identity of three that same 60 s on the ONE account that
+// matters: a threefold freshness gain there, against the 180 s three accounts
+// sharing the urgent cadence would each get, and exactly nothing on an identity
+// of one, where 60 s was already the answer.
+//
+// It must never go below 60 s. That is twice the allowance already; a 429 then
+// imposes the 360 s Post429MinInterval floor on top of an AIMD estimate that
+// climbs to the 1800 s ceiling, so an account that earns one at 97% is blind
+// for six minutes at the moment it can least afford to be. What actually keeps
+// a session alive is switching before the projection lands; this only narrows
+// that projection's error bars.
+func Share(d time.Duration, accounts int, in Input) time.Duration {
+	if InDangerBand(in) {
+		return d
+	}
+	return PerIdentity(d, accounts)
+}
+
+// ServeTTLFor is how long the reading just taken may be served before another
+// poll is worth a request. A scheduler records it WITH the reading, so the rule
+// lives here once instead of being re-derived by every gate that has to honour
+// it — and so it survives a restart, which is what stops the first tick after
+// one from re-clamping the band to the flat 180 s.
+func ServeTTLFor(in Input) time.Duration {
+	if InDangerBand(in) {
+		return DangerServeTTL
+	}
+	return ServeTTL
+}
+
+// StandDownUntil is when an account that yielded its share of the identity's
+// budget may be polled again. rnd is a uniform sample in [0,1), as in Next.
+//
+// It is Post429MaxInterval because that is the longest cadence this package
+// already trusts an account to survive on, and a stand-down is the same
+// congestion decision a 429 forces, made one request early instead of one 429
+// late. It is not "stop": an account nobody polls is an account nobody can
+// rank, and the accounts standing down are exactly the ones the engine will
+// want to switch TO — two requests an hour each is what keeps them rankable.
+//
+// The caller takes the LATER of this and whatever schedule the account had
+// already earned, so a stand-down can hold an account back and can never let
+// one out early — in particular it can never shorten a 429's floor.
+func StandDownUntil(now time.Time, rnd float64) time.Time {
+	return now.Add(jitter(Post429MaxInterval, rnd))
 }
 
 // RateLimited records a 429 and applies AIMD's multiplicative increase.
