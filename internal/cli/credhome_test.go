@@ -214,18 +214,17 @@ func TestDoctorCatchesADaemonDrivingADifferentCredentialHome(t *testing.T) {
 		t.Errorf("detail does not name the home the daemon is actually driving: %s", d)
 	}
 	// The sentence must not send the user hunting for a cause they cannot have
-	// hit on a current build. This is the whole of the defect the queue item
-	// describes: the remedy after the semicolon stays correct while the
-	// diagnosis in front of it names something the tree now prevents, and
-	// nothing else in this package pins the prose.
+	// hit on a current build: the remedy after the semicolon stays correct
+	// while the diagnosis in front of it names something the tree now
+	// prevents, and nothing else in this package pins the prose.
 	if d := r.detail(t, "credential-home"); strings.Contains(d, "--full-profile") {
 		t.Errorf("the drift sentence still blames a spawn autostart refuses since 3d9d2d6: %s", d)
 	}
-	// The item asked for two things and the line above is only the first of
-	// them. Deleting the diagnosis altogether would satisfy a one-word
-	// blacklist while losing the half that makes the row actionable, and
-	// naming a session without using the flag's name would satisfy it while
-	// blaming the prevented cause again.
+	// Deleting the diagnosis altogether would satisfy the assertion above
+	// while losing the half that makes the row actionable, and naming a
+	// session without using the flag's name would satisfy it while blaming the
+	// prevented cause again — so a cause the user CAN act on has to survive
+	// too.
 	if d := r.detail(t, "credential-home"); !strings.Contains(d, "CLAUDE_CONFIG_DIR") {
 		t.Errorf("the drift sentence no longer names a cause the user can act on: %s", d)
 	}

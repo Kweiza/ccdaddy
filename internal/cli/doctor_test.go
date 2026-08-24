@@ -1418,10 +1418,10 @@ func TestDoctorSaysWhenItCouldNotLookForAClaudeLauncher(t *testing.T) {
 	}
 }
 
-// The queue item's headline, in doctor: a token a session host injected at a
-// path compiled into Claude Code outranks the login, and there is NO VARIABLE
-// to unset. A model built on an environment variable named CCR_OAUTH_TOKEN_FILE
-// — which is what the item asked for — would never fire on this machine.
+// A token a session host injected at a path compiled into Claude Code
+// outranks the login, and there is NO VARIABLE to unset. A model built on an
+// environment variable named CCR_OAUTH_TOKEN_FILE would never fire on this
+// machine.
 func TestDoctorReportsTheHostInjectedTokenFile(t *testing.T) {
 	isolate(t)
 	seedHealthyMachine(t)
