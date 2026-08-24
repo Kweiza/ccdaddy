@@ -420,18 +420,19 @@ seeing the effect of explains itself:
 
 ```console
 $ ccdad config list
-KEY                    VALUE     SOURCE   HOVER
-threshold              80        default  overriding
-hysteresis_pct         10        default  overriding
-headroom_ratio         2         default  overriding
-cooldown               5m0s      default  overriding
-recovery_hysteresis    5m0s      default  overriding
-preempt_lead           2m0s      default  overriding
-strategy               headroom  default  overriding
-probe_unknown          true      default  overriding
-hover                  true      file     honoured
-credit.threshold       80        default  overriding
-credit.max_auto_spend  0         default  honoured
+KEY                             VALUE     SOURCE   HOVER
+threshold                       80        default  overriding
+hysteresis_pct                  10        default  overriding
+headroom_ratio                  2         default  overriding
+cooldown                        5m0s      default  overriding
+recovery_hysteresis             5m0s      default  overriding
+preempt_lead                    6m0s      default  overriding
+strategy                        headroom  default  overriding
+probe_unknown                   true      default  overriding
+hover                           true      file     honoured
+mcp_switch_without_elicitation  false     default  honoured
+credit.threshold                80        default  overriding
+credit.max_auto_spend           0         default  honoured
 ```
 
 One `window_threshold` entry is still read for something other than its number.
@@ -630,18 +631,19 @@ No credential ever goes in it — this is the file people paste into bug reports
 
 ```console
 $ ccdad config list
-KEY                    VALUE     SOURCE
-threshold              80        default
-hysteresis_pct         10        default
-headroom_ratio         2         default
-cooldown               5m0s      default
-recovery_hysteresis    5m0s      default
-preempt_lead           2m0s      default
-strategy               headroom  default
-probe_unknown          true      default
-hover                  false     default
-credit.threshold       80        default
-credit.max_auto_spend  0         default
+KEY                             VALUE     SOURCE
+threshold                       80        default
+hysteresis_pct                  10        default
+headroom_ratio                  2         default
+cooldown                        5m0s      default
+recovery_hysteresis             5m0s      default
+preempt_lead                    6m0s      default
+strategy                        headroom  default
+probe_unknown                   true      default
+hover                           false     default
+mcp_switch_without_elicitation  false     default
+credit.threshold                80        default
+credit.max_auto_spend           0         default
 ```
 
 `credit.max_auto_spend` defaults to `0`, and that is the point: an account
@@ -869,7 +871,7 @@ A switch that happens when an account reads 100% happens too late: the session i
 already refused. So the engine projects.
 
 ```
-horizon   = the interval ccdad is blind for  +  preempt_lead  (default 2m)
+horizon   = the interval ccdad is blind for  +  preempt_lead  (default 6m)
 projected = used now  +  burn rate × horizon
 ```
 

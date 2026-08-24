@@ -28,8 +28,17 @@ const (
 	keyStrategy           = "strategy"
 	keyProbeUnknown       = "probe_unknown"
 	keyHover              = "hover"
-	keyCreditThreshold    = "credit.threshold"
-	keyMaxAutoSpend       = "credit.max_auto_spend"
+
+	// keyMCPSwitchWithoutElicitation is the only key in this file that governs
+	// no part of the switching engine. It is here, in the file a person edits
+	// by hand, precisely BECAUSE of what it governs: it is one of the two ways
+	// the person at the keyboard allows ccdad's MCP server to move the live
+	// login on a client that cannot ask them first, and the whole value of it
+	// is that a model talking to that server has no way to write it.
+	keyMCPSwitchWithoutElicitation = "mcp_switch_without_elicitation"
+
+	keyCreditThreshold = "credit.threshold"
+	keyMaxAutoSpend    = "credit.max_auto_spend"
 
 	// creditSection and windowThresholdSection are the two tables keys nest
 	// under; every other key is top-level.
@@ -49,6 +58,13 @@ const (
 	// place and forgotten in the other.
 	windowThresholdPrefix = windowThresholdSection + "."
 )
+
+// KeyMCPSwitchWithoutElicitation is the second key a package outside this one
+// names directly. internal/mcpsrv prints it in the refusal a model reads when
+// nobody can be asked to confirm a switch, and a name spelled twice is exactly
+// the drift keys.go exists to prevent -- here it would print a key that
+// `ccdad config set` then refuses.
+const KeyMCPSwitchWithoutElicitation = keyMCPSwitchWithoutElicitation
 
 // Keys lists every settable key this release knows by name, in file order,
 // which is also the order `ccdad config list` prints them in. A CLI builds its
@@ -71,6 +87,7 @@ func Keys() []string {
 		keyStrategy,
 		keyProbeUnknown,
 		keyHover,
+		keyMCPSwitchWithoutElicitation,
 		keyCreditThreshold,
 		keyMaxAutoSpend,
 	}

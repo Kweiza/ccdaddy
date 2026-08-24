@@ -71,5 +71,10 @@ func Defaults() Config {
 		PreemptLead:        defaultPreemptLead,
 		ProbeUnknown:       true,
 		Hover:              false,
+		// False refuses. The one thing this key must never do is arrive
+		// switched on for someone who has not read what it is: it is the
+		// permission that lets an MCP client rewrite the live login without
+		// asking the person at the keyboard.
+		MCPSwitchWithoutElicitation: false,
 	}
 }

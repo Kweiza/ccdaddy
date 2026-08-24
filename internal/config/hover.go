@@ -58,9 +58,15 @@ var hoverOverrides = map[string]bool{
 // opt-ins and this is one of them. An opt-in a mode supplies on the user's
 // behalf is not an opt-in, so "fully automatic" stops short of "fully automatic
 // spending". hover is here because it is the switch itself.
+//
+// mcp_switch_without_elicitation is here because hover is a policy for the
+// SWITCHING ENGINE and this key is a permission for a different surface
+// entirely. A mode that derived it would be deciding, on the user's behalf,
+// that an unattended switch may also be an unconfirmed one.
 var hoverHonours = map[string]bool{
-	keyMaxAutoSpend: true,
-	keyHover:        true,
+	keyMaxAutoSpend:                true,
+	keyHover:                       true,
+	keyMCPSwitchWithoutElicitation: true,
 }
 
 // HoverOverrides reports whether hover derives this key's value for itself,

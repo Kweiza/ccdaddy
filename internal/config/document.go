@@ -345,7 +345,7 @@ func coerce(key, value string) (any, error) {
 			return nil, err
 		}
 		return s.String(), nil
-	case keyProbeUnknown, keyHover:
+	case keyProbeUnknown, keyHover, keyMCPSwitchWithoutElicitation:
 		return coerceBool(key, value)
 	}
 	return nil, unknownKey(key)
@@ -430,6 +430,8 @@ func (c Config) Value(key string) (string, error) {
 		return format(c.ProbeUnknown), nil
 	case keyHover:
 		return format(c.Hover), nil
+	case keyMCPSwitchWithoutElicitation:
+		return format(c.MCPSwitchWithoutElicitation), nil
 	case keyCreditThreshold:
 		return format(c.CreditThreshold), nil
 	case keyMaxAutoSpend:
