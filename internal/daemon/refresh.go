@@ -99,7 +99,7 @@ func (e *Engine) Refresh(ctx context.Context, s *store.Store, want []store.Accou
 	now := e.now()
 	// Sized over EVERY account, not over `want`. The allowance belongs to the
 	// identity, so an account left out of the listing still draws on it.
-	sizes := identitySizes(s.Accounts())
+	members := identityMembers(s.Accounts())
 
 	var wg sync.WaitGroup
 	for i := range want {
@@ -127,7 +127,7 @@ func (e *Engine) Refresh(ctx context.Context, s *store.Store, want []store.Accou
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if perr := e.poll(ctx, a, cfg, sizes[identityOf(a)], a.UUID == active); perr != nil {
+			if perr := e.poll(ctx, a, cfg, members[identityOf(a)], a.UUID == active); perr != nil {
 				res.State, res.Err = RefreshFailed, perr
 				return
 			}

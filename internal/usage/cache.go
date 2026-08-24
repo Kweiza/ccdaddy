@@ -98,6 +98,19 @@ type Entry struct {
 	// Poll's backoff is: a stamp that did not survive the process is a budget
 	// that resets every time ccdad restarts.
 	Probe ProbeState `json:"probe,omitempty"`
+	// StandDownUntil is how long this account has yielded its share of the
+	// identity's budget to the one a session is actually running against.
+	//
+	// It is a SEPARATE field from NextPollAt because it has a different writer:
+	// another account's poll sets it, while NextPollAt is set by this account's
+	// own. One field would mean whichever of the two goroutines finished last
+	// erased the other's decision — including a 429's floor.
+	StandDownUntil time.Time `json:"stand_down_until,omitempty"`
+	// ServeTTL is how long this reading may be served before another poll is
+	// worth a request. Zero means the package default: an entry written before
+	// this field existed has no opinion, and no opinion must not read as "stale
+	// immediately".
+	ServeTTL time.Duration `json:"serve_ttl,omitempty"`
 }
 
 // Age is how old the reading is, and whether that could be worked out at all. An
@@ -111,10 +124,48 @@ func (e Entry) Age(now time.Time) (time.Duration, bool) {
 	return d, true
 }
 
-// Fresh reports whether this reading may be served without a fetch.
-func (e Entry) Fresh(now time.Time) bool {
+// FreshWithin reports whether this reading is younger than ttl. An entry dated
+// in the future is a clock that moved backwards rather than a fresh reading, so
+// it is fresh under no ttl at all.
+func (e Entry) FreshWithin(now time.Time, ttl time.Duration) bool {
 	age, ok := e.Age(now)
-	return ok && age < ServeTTL
+	return ok && age < ttl
+}
+
+// Fresh reports whether this reading may be served without a fetch.
+//
+// It is the flat ServeTTL and deliberately NOT ScheduledTTL. This is the gate on
+// the HAND-HELD path — `ccdad list --refresh`, through MayFetch — where it is
+// the only rate bound there is, since that path ignores nextPollAt on purpose.
+// Serving the scheduler's shortened TTL here would let a scripted refresh reach
+// the endpoint six times as often as before, against an allowance of 28-30 an
+// hour, on exactly the account where a 429 is most expensive.
+func (e Entry) Fresh(now time.Time) bool { return e.FreshWithin(now, ServeTTL) }
+
+// ScheduledTTL is the TTL the scheduler wrote with this reading, or ServeTTL
+// when it wrote none.
+func (e Entry) ScheduledTTL() time.Duration {
+	if e.ServeTTL > 0 {
+		return e.ServeTTL
+	}
+	return ServeTTL
+}
+
+// PollAt is when the scheduler intends to poll this account next: the schedule
+// its own last poll earned, or a stand-down another account's poll wrote,
+// whichever is LATER. Both are real, and neither cancels the other.
+//
+// live exempts the account Claude Code is logged in as, and that exemption is
+// what makes a stand-down safe to persist at all. A stand-down is written for
+// the accounts that do not matter right now; a switch changes which account that
+// is, and holding the newly live one to a stand-down written for its predecessor
+// would blind the engine on the only account a session can be cut off on, for as
+// long as half an hour.
+func (e Entry) PollAt(live bool) time.Time {
+	if !live && e.StandDownUntil.After(e.NextPollAt) {
+		return e.StandDownUntil
+	}
+	return e.NextPollAt
 }
 
 // cacheFile is the on-disk shape.
