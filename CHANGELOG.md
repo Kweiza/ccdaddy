@@ -16,6 +16,13 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-08-24
+
+One fix, no new surface. A switch always pointed the credentials file at the
+right account; `~/.claude.json`'s cached display of who that was did not,
+because Claude Code's own refresh never corrects it once an account is
+cached there. Every path that installs a login fixes it now.
+
 ### Fixed
 
 - **A switch now keeps `~/.claude.json`'s displayed account name in sync with
