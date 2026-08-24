@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"math/rand/v2"
 	"strings"
 	"sync"
 	"time"
@@ -116,13 +117,24 @@ type pollRecord struct {
 	hold time.Time
 }
 
-// NewEngine wires the real token source and usage client.
+// NewEngine wires the real token source, usage client and jitter source.
+//
+// Rand is set HERE and nowhere else, because this is the only constructor a
+// shipped binary reaches: pollpolicy takes its randomness as an argument to stay
+// a pure function, so a nil source is not "no jitter", it is the midpoint
+// sample -- and jitter(d, 0.5) is d exactly. Leaving it nil made every plus or
+// minus ten percent guard in that package unreachable code while reading, in
+// every comment, as though it were working.
+//
+// math/rand/v2's package-level Float64 is safe for concurrent use, which this
+// needs: polls run one goroutine per account.
 func NewEngine() *Engine {
 	src := tokens.New()
 	client := usage.NewClient()
 	return &Engine{
 		AccessToken: src.AccessToken,
 		FetchUsage:  client.FetchUsage,
+		Rand:        rand.Float64,
 		reloader:    config.NewReloader(),
 		inFlight:    map[string]struct{}{},
 		polls:       map[string]pollRecord{},

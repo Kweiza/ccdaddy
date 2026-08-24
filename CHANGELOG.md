@@ -271,6 +271,23 @@ by `uuid` or `alias`.
 
 ### Fixed
 
+- **Every poll cadence was exact arithmetic, so a fleet that paused together came
+  back together.** `internal/pollpolicy` spreads each interval it returns by up
+  to a tenth either way, and it takes the sample as an argument so the whole
+  policy stays a pure function -- `Next`'s own comment says the caller passes
+  `rand.Float64()`. No caller did. `NewEngine` left the field nil, and a nil
+  source is not "no jitter": the accessor answers with the midpoint, at which the
+  spread is the identity. Every guard in that package was unreachable code while
+  reading, in every comment, as though it were working. The one construction site
+  a shipped binary reaches now supplies `math/rand/v2`'s `Float64`, which is safe
+  for the concurrent use polling makes of it. What this was always for: several
+  daemons restarted across machines, or a laptop waking with three accounts on
+  one identity, share a budget of roughly 28-30 requests per rolling hour, and
+  returning in lockstep empties it in one burst. Two tests that assert an exact
+  next-poll deadline now fix the sample beside the clock they already fixed,
+  which is the midpoint they were silently relying on, so what they assert is
+  unchanged.
+
 - **`doctor`'s credential-home drift warning blamed a cause the tree prevents.**
   It named `ccdad run --full-profile` as how a daemon comes to be driving a
   different Claude Code credential home from the shell reading the report —
