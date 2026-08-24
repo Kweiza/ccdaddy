@@ -66,6 +66,27 @@ const (
 // cut, which is the least that still answers "what can I press".
 const minKeybarWidth = 7
 
+// cursorMark is the row the reader is pointing at, and noCursor is the value
+// that says nobody is pointing at all.
+//
+// The mark lives in the two-column cell in front of the index, which is the
+// only column with room and is already spent on the live account. Where the
+// two meet, the LIVE ACCOUNT WINS: that mark answers "which login would a
+// session get", which is a fact about the credential, while the cursor answers
+// "where did I leave the highlight a moment ago", which the reader already
+// knows. The cost is that the cursor is invisible while it sits on the live
+// row, and it is stated rather than hidden.
+//
+// noCursor is out of range on purpose. This page is drawn by two callers with
+// two meanings -- an event loop, where a cursor is what the switch key opens
+// on, and the one-shot below, which writes once into a pipe where nothing is
+// selecting anything -- and an index no row can have is how the second one
+// says so without Model growing a field to hold the distinction.
+const (
+	cursorMark = ">"
+	noCursor   = -1
+)
+
 // refreshFailed prefixes the notice a failed reload leaves behind. It is a
 // constant because AfterLoad below removes its own previous notice before
 // adding a new one, and matching on a prefix is how a page that has failed to
@@ -313,10 +334,13 @@ func (m Model) tableBlock(l Layout, inner int) []string {
 	}
 
 	data := make([][]string, 0, len(shown)+1)
-	for _, r := range shown {
+	for at, r := range shown {
 		cells := make([]string, len(cols))
 		for i, c := range cols {
-			cells[i] = m.cell(c, r, l)
+			// The row's own index in Snap.Rows, not its index in the window:
+			// the cursor is a position in the table and the window is a view
+			// onto it, and the two differ by Top the moment scrolling starts.
+			cells[i] = m.cell(c, r, l, m.Top+at)
 		}
 		data = append(data, cells)
 	}
@@ -452,10 +476,10 @@ func (m Model) markerRow(cols []Column, l Layout, text string) []string {
 // column a user reads immediately before pressing a hotkey that can move a
 // credential, and an alias-only label leaves someone who has aliased two
 // accounts unable to tell which address is which.
-func (m Model) cell(c Column, r view.Row, l Layout) string {
+func (m Model) cell(c Column, r view.Row, l Layout, at int) string {
 	switch c {
 	case ColIdx:
-		return r.Marker() + " " + idxCell(r)
+		return m.markerCell(r, at) + " " + idxCell(r)
 	case ColAccount:
 		return accountCell(r.ListLabel(), l.AccountWide)
 	case ColType:
@@ -483,6 +507,18 @@ func (m Model) cell(c Column, r view.Row, l Layout) string {
 		return leftCell(r)
 	}
 	return ""
+}
+
+// markerCell is the one column in front of the index: the live account, the
+// row the cursor is on, or neither.
+//
+// See cursorMark above for why the live account wins where they meet, and why
+// a page nobody is pointing at draws no cursor at all.
+func (m Model) markerCell(r view.Row, at int) string {
+	if !r.Active && at == m.Cursor {
+		return cursorMark
+	}
+	return r.Marker()
 }
 
 // headerName is the heading each column carries. USED and LEFT are separate
@@ -538,7 +574,12 @@ func Render(o Options) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	page := newModel(snap, oneShotWidth, unboundedHeight).Body()
+	m := newModel(snap, oneShotWidth, unboundedHeight)
+	// Nobody is pointing at anything in a pipe. Without this the first row of
+	// every redirected render would carry a selection marker put there by a
+	// reader who is not present.
+	m.Cursor = noCursor
+	page := m.Body()
 	if o.Out != nil {
 		if _, err := io.WriteString(o.Out, page+"\n"); err != nil {
 			return page, err
