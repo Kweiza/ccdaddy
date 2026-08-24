@@ -182,10 +182,17 @@ func TestDoctorReportsAFreeCredentialHome(t *testing.T) {
 	}
 }
 
-// The drift `ccdad run --full-profile` produces: the daemon is driving a
-// per-session directory while this shell resolves ~/.claude, so its switches
-// change a login nothing here reads. Every file on the machine looks normal;
-// the daemon's own published document is the only place the two can be compared.
+// The drift a CLAUDE_CONFIG_DIR the USER set produces: the daemon is driving
+// the directory it was born in while this shell resolves another one, so its
+// switches change a login nothing here reads. Every file on the machine looks
+// normal; the daemon's own published document is the only place the two can be
+// compared.
+//
+// `ccdad run --full-profile` USED to reach this state the same way and no
+// longer does — auto-start's rule 3 gained a containment test at 3d9d2d6 and
+// scopedSessionRefusals covers the daemon verbs a human types. An ordinary
+// override is deliberately still allowed to reach it, which is what keeps this
+// check load-bearing rather than dead.
 func TestDoctorCatchesADaemonDrivingADifferentCredentialHome(t *testing.T) {
 	isolate(t)
 	seedHealthyMachine(t)
@@ -201,6 +208,14 @@ func TestDoctorCatchesADaemonDrivingADifferentCredentialHome(t *testing.T) {
 	}
 	if d := r.detail(t, "credential-home"); !strings.Contains(d, "/somewhere/else") {
 		t.Errorf("detail does not name the home the daemon is actually driving: %s", d)
+	}
+	// The sentence must not send the user hunting for a cause they cannot have
+	// hit on a current build. This is the whole of the defect the queue item
+	// describes: the remedy after the semicolon stays correct while the
+	// diagnosis in front of it names something the tree now prevents, and
+	// nothing else in this package pins the prose.
+	if d := r.detail(t, "credential-home"); strings.Contains(d, "--full-profile") {
+		t.Errorf("the drift sentence still blames a spawn autostart refuses since 3d9d2d6: %s", d)
 	}
 }
 
