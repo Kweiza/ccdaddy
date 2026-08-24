@@ -704,19 +704,56 @@ func TestStatusAndListReportTheThresholdsHoverRankedOn(t *testing.T) {
 
 // stubEnginePlan replaces the engine seam. An evaluation that cannot be made is
 // not something a test can arrange with a store and a cache.
-func stubEnginePlan(t *testing.T, fn func(*store.Store, time.Time) (strategy.Plan, error)) {
+func stubEnginePlan(t *testing.T, fn func(*store.Store, time.Time) (strategy.Plan, bool, error)) {
 	t.Helper()
 	saved := enginePlan
 	t.Cleanup(func() { enginePlan = saved })
 	enginePlan = fn
 }
 
-// With hover off the dashboard is what it always was: a read of the cache and
-// the config, and no evaluation at all. `ccdad status` is what a user reaches
-// for when something is already wrong, and running the whole engine to render it
-// puts the store, the engine state and a ranking pass between them and an
-// answer that never needed any of it.
-func TestTheDashboardDoesNotRunTheEngineWithHoverOff(t *testing.T) {
+// The dashboard asks the engine EXACTLY ONCE, hover or no hover.
+//
+// It used to ask only under hover, on the ground that the rows never needed a
+// ranking pass. Naming the mode is a second question, and it is one the cache
+// cannot answer at all — so the pass now always runs. What this pins is the
+// count, because the failure it replaces is worse than the cost: two passes, one
+// for the thresholds and one for the mode, would give `status` a second source
+// for a number it already had, and two sources are how `list` and `status`
+// start disagreeing.
+func TestTheDashboardAsksTheEngineExactlyOnce(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	seedAccountAddedAt(t, "uuid-a", "work@example.com", statusNow.Add(-24*time.Hour))
+	seedUsageEntry(t, "uuid-a", usage.Entry{
+		FetchedAt: statusNow.Add(-time.Minute),
+		Snapshot:  &usage.Snapshot{SevenDay: window(95, statusNow.Add(40*time.Hour))},
+	})
+
+	for _, hover := range []string{"false", "true"} {
+		t.Run("hover="+hover, func(t *testing.T) {
+			if code, _, errOut, _ := runRoot(t, "config", "set", "hover", hover); code != 0 {
+				t.Fatalf("config set hover %s exited %v: %s", hover, code, errOut)
+			}
+			asked := 0
+			stubEnginePlan(t, func(*store.Store, time.Time) (strategy.Plan, bool, error) {
+				asked++
+				return strategy.Plan{}, true, nil
+			})
+
+			if _, out, _, _ := runRoot(t, "status", "--json"); out == "" {
+				t.Fatal("status --json emitted nothing")
+			}
+			if asked != 1 {
+				t.Errorf("the dashboard made %d engine evaluations, want exactly 1", asked)
+			}
+		})
+	}
+}
+
+// `ccdad list` keeps the older contract, and that is the whole reason the two
+// commands do not share a call site: nothing in the listing needs a ranking
+// pass, and it has no mode line to put a second question behind.
+func TestTheListingDoesNotRunTheEngineWithHoverOff(t *testing.T) {
 	isolate(t)
 	freezeClock(t, statusNow)
 	seedAccountAddedAt(t, "uuid-a", "work@example.com", statusNow.Add(-24*time.Hour))
@@ -726,16 +763,44 @@ func TestTheDashboardDoesNotRunTheEngineWithHoverOff(t *testing.T) {
 	})
 
 	asked := false
-	stubEnginePlan(t, func(*store.Store, time.Time) (strategy.Plan, error) {
+	stubEnginePlan(t, func(*store.Store, time.Time) (strategy.Plan, bool, error) {
 		asked = true
-		return strategy.Plan{}, nil
+		return strategy.Plan{}, true, nil
 	})
 
-	if _, out, _, _ := runRoot(t, "status", "--json"); out == "" {
-		t.Fatal("status --json emitted nothing")
+	if _, out, _, _ := runRoot(t, "list", "--json"); out == "" {
+		t.Fatal("list --json emitted nothing")
 	}
 	if asked {
-		t.Error("the dashboard ran an engine evaluation with hover off; the configured bundle needs none")
+		t.Error("the listing ran an engine evaluation with hover off; the configured bundle needs none")
+	}
+}
+
+// An engine that could not be asked leaves the Mode line off, and SAYS so. A
+// line that simply disappears reads as "the engine has nothing to say" rather
+// than "it could not be asked", and those want different things from a reader.
+func TestTheDashboardSaysSoWhenTheModeCannotBeRead(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	stubDaemon(t, daemon.Report{State: daemon.DaemonStopped}, nil)
+	seedAccountAddedAt(t, "uuid-a", "a@example.com", statusNow.Add(-time.Hour))
+	seedUsageEntry(t, "uuid-a", usage.Entry{
+		FetchedAt: statusNow.Add(-time.Minute),
+		Snapshot:  &usage.Snapshot{FiveHour: window(92, statusNow.Add(40*time.Minute))},
+	})
+	stubEnginePlan(t, func(*store.Store, time.Time) (strategy.Plan, bool, error) {
+		return strategy.Plan{}, false, errors.New("the engine state could not be read")
+	})
+
+	code, stdout, errOut, _ := runRoot(t, "status")
+	if code != ExitOK {
+		t.Fatalf("exit %d; a dashboard renders whatever else is wrong\n%s", code, stdout)
+	}
+	if strings.Contains(stdout, "Mode:") {
+		t.Errorf("the dashboard named a mode it could not compute:\n%s", stdout)
+	}
+	if !strings.Contains(errOut, "the engine state could not be read") {
+		t.Errorf("nothing on stderr says why the mode is missing:\n%s", errOut)
 	}
 }
 
@@ -753,16 +818,24 @@ func TestTheDashboardSaysSoWhenHoversThresholdsCannotBeRead(t *testing.T) {
 	if code, _, errOut, _ := runRoot(t, "config", "set", "hover", "true"); code != 0 {
 		t.Fatalf("config set hover true exited %v: %s", code, errOut)
 	}
-	stubEnginePlan(t, func(*store.Store, time.Time) (strategy.Plan, error) {
-		return strategy.Plan{}, errors.New("the account store could not be read")
+	stubEnginePlan(t, func(*store.Store, time.Time) (strategy.Plan, bool, error) {
+		return strategy.Plan{}, false, errors.New("the account store could not be read")
 	})
 
 	code, out, errOut, _ := runRoot(t, "status", "--json")
 	if code != 0 {
 		t.Fatalf("status exited %v; a dashboard renders whatever else is wrong", code)
 	}
-	if !strings.Contains(errOut, "the account store could not be read") {
+	// The HOVER sentence specifically, not merely the error text. `status` also
+	// reports that a failed evaluation cost it the Mode line, and that notice
+	// carries the same error -- so asserting the error alone stopped
+	// distinguishing "the rows are not hover's numbers" from "there is no mode
+	// line", which are different things to tell a user.
+	if !strings.Contains(errOut, "hover is on, but the thresholds it derived could not be read") {
 		t.Errorf("nothing on stderr names why hover's own thresholds are missing:\n%s", errOut)
+	}
+	if !strings.Contains(errOut, "the account store could not be read") {
+		t.Errorf("the notice does not carry the underlying error:\n%s", errOut)
 	}
 	u, ok := accountRow(t, statusJSON(t, out), "uuid-a")["usage"].(map[string]any)
 	if !ok {
@@ -802,5 +875,130 @@ func TestARowTheHoverPassNeverSawIsMeasuredAsHoverWouldMeasureIt(t *testing.T) {
 	}
 	if got := u["windowThreshold"]; got != 80.0 {
 		t.Errorf("windowThreshold = %v, want 80 -- hover ignores `threshold`, so the configured 60 is a number nothing would have used", got)
+	}
+}
+
+// Recovery mode reverses the sort: every account is known to be over its
+// threshold, so the engine stops ranking by how much is left and starts ranking
+// by which one comes back first. The table looks identical either way — same
+// columns, same percentages — so a dashboard that does not name the mode gives a
+// user staring at five accounts at 95% no way to tell an engine that is still
+// working from an engine that has given up.
+//
+// The accounts are seeded BEFORE the reading, not with seedAccount: an entry
+// older than its account's AddedAt is pruned as a previous login's quota, and
+// seedAccount stamps AddedAt from the real clock while this test's clock is
+// frozen in the past. Every fixture here reaches the ENGINE, not just the cache.
+func TestStatusNamesTheModeWhenEveryAccountIsOverThreshold(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	stubDaemon(t, daemon.Report{State: daemon.DaemonStopped}, nil)
+	// 92% used against the default threshold of 80: both accounts are KNOWN to
+	// be over, which is the only state that reaches recovery. One unreadable
+	// account would be enough to hold the engine in headroom mode.
+	for _, uuid := range []string{"uuid-a", "uuid-b"} {
+		seedAccountAddedAt(t, uuid, uuid+"@example.com", statusNow.Add(-time.Hour))
+		seedUsageEntry(t, uuid, usage.Entry{
+			FetchedAt: statusNow.Add(-time.Minute),
+			Snapshot:  &usage.Snapshot{FiveHour: window(92, statusNow.Add(40*time.Minute))},
+		})
+	}
+
+	code, stdout, _, _ := runRoot(t, "status")
+	if code != ExitOK {
+		t.Fatalf("exit %d, want 0\n%s", code, stdout)
+	}
+	if !strings.Contains(stdout, "Mode:    recovery") {
+		t.Errorf("the dashboard does not name the recovery mode:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "every account is over its threshold") {
+		t.Errorf("the dashboard names the mode without saying what put it there:\n%s", stdout)
+	}
+}
+
+// The ordinary case still says which question is being asked, because "recovery"
+// only means something to a reader who has seen the other answer.
+func TestStatusNamesTheHeadroomModeToo(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	stubDaemon(t, daemon.Report{State: daemon.DaemonStopped}, nil)
+	seedAccountAddedAt(t, "uuid-a", "a@example.com", statusNow.Add(-time.Hour))
+	seedUsageEntry(t, "uuid-a", usage.Entry{
+		FetchedAt: statusNow.Add(-time.Minute),
+		Snapshot:  &usage.Snapshot{FiveHour: window(12, statusNow.Add(40*time.Minute))},
+	})
+
+	_, stdout, _, _ := runRoot(t, "status")
+	if !strings.Contains(stdout, "Mode:    headroom") {
+		t.Errorf("the dashboard does not name the headroom mode:\n%s", stdout)
+	}
+}
+
+// A machine that has never been polled has no ranking to report. The line is
+// left OFF rather than defaulted, because strategy.Mode's zero value stringifies
+// to "headroom" — a plausible answer rather than an empty one, which is exactly
+// the trap switcher.Evaluation.Decided exists to close.
+func TestStatusOmitsTheModeWhenNothingHasEverBeenPolled(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	stubDaemon(t, daemon.Report{State: daemon.DaemonStopped}, nil)
+	seedAccountAddedAt(t, "uuid-a", "a@example.com", statusNow.Add(-time.Hour))
+
+	_, stdout, _, _ := runRoot(t, "status")
+	if strings.Contains(stdout, "Mode:") {
+		t.Errorf("the dashboard claims a mode with no reading behind it:\n%s", stdout)
+	}
+}
+
+// A script watching for the engine to give up reads this rather than parsing the
+// table. The key is CONDITIONAL — absent when no ranking ran — for the same
+// reason usageJSON returns nil for an account with no reading: an absent key
+// cannot be mistaken for an answer, and "headroom" is a real answer. `ccdad auto
+// --json` already publishes it under the same name and with the same guard.
+func TestStatusJSONCarriesTheModeOnlyWhenARankingRan(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	stubDaemon(t, daemon.Report{State: daemon.DaemonStopped}, nil)
+	seedAccountAddedAt(t, "uuid-a", "a@example.com", statusNow.Add(-time.Hour))
+
+	_, blind, _, _ := runRoot(t, "status", "--json")
+	if _, ok := statusJSON(t, blind)["mode"]; ok {
+		t.Error("status --json reports a mode with no reading behind it")
+	}
+
+	seedUsageEntry(t, "uuid-a", usage.Entry{
+		FetchedAt: statusNow.Add(-time.Minute),
+		Snapshot:  &usage.Snapshot{FiveHour: window(92, statusNow.Add(40*time.Minute))},
+	})
+	_, out, _, _ := runRoot(t, "status", "--json")
+	if got := statusJSON(t, out)["mode"]; got != "recovery" {
+		t.Errorf("mode = %v, want recovery", got)
+	}
+}
+
+// The third mode is a strategy a user asked for rather than a situation the
+// engine discovered, and it is answered BEFORE recovery: an account can be over
+// every threshold and still be ranked on which weekly window expires soonest.
+// Without this the dashboard would call that pass "recovery" and send a reader
+// looking for a shortage that is not what the engine is acting on.
+func TestStatusNamesTheConsumeFirstMode(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	stubDaemon(t, daemon.Report{State: daemon.DaemonStopped}, nil)
+	if code, _, errOut, _ := runRoot(t, "config", "set", "strategy", "consume-first"); code != 0 {
+		t.Fatalf("config set strategy consume-first exited %v: %s", code, errOut)
+	}
+	seedAccountAddedAt(t, "uuid-a", "a@example.com", statusNow.Add(-time.Hour))
+	seedUsageEntry(t, "uuid-a", usage.Entry{
+		FetchedAt: statusNow.Add(-time.Minute),
+		Snapshot:  &usage.Snapshot{SevenDay: window(40, statusNow.Add(40*time.Hour))},
+	})
+
+	_, stdout, _, _ := runRoot(t, "status")
+	if !strings.Contains(stdout, "Mode:    consume-first") {
+		t.Errorf("the dashboard does not name the consume-first mode:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "perishable") {
+		t.Errorf("the dashboard names the mode without saying what it is spending:\n%s", stdout)
 	}
 }

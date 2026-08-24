@@ -18,6 +18,81 @@ by `uuid` or `alias`.
 
 ### Added
 
+- **A threshold per window, and a ranking axis that measures the right
+  distance.** `[window_threshold]` in `config.toml` gives `five_hour`,
+  `seven_day` and every scoped weekly cap a line of its own; a window with no
+  entry of its own uses `threshold`, which is unchanged. An account is spent when
+  ANY window ccdad ranks is past its own threshold, and when a weekly cap is the
+  one over, that is the cap the account is reported against — it is the one that
+  will not come back for days. Reporting is nearly all that rule changes: the
+  figures are still taken from the window with the least slack, whichever family
+  it belongs to. Not quite all, and the exception is worth knowing — once every
+  account is spent the ranking asks which one comes back first, and a blown
+  weekly cap is then what an account has to wait out, so it ranks behind one
+  whose five-hour window is genuinely back inside the hour. The engine orders on
+  `threshold − used` rather than on raw percent left, because with a tight weekly
+  floor those stop being the same question: an account one point from its weekly
+  floor still carries forty-one points of raw headroom. With no
+  `[window_threshold]` table the axis is the old one shifted by a constant, so
+  the order and every spent verdict are byte-identical to 0.2.0; a test pins
+  that, because it is what lets the change land without re-tuning every anti-flap
+  default. `slack` and `windowThreshold` are published per account by `ccdad
+  status --json`, `ccdad list --json` and every row of `ccdad auto --json`'s
+  `order[]`, so a consumer can explain the ordering rather than only observe it.
+  `headroom_ratio` deliberately did NOT move onto the new axis — a ratio is not
+  shift-invariant and is undefined on a negative slack — so tightening a weekly
+  threshold can leave it holding back a switch the ranking wanted. Setting
+  `headroom_ratio = 1` switches that margin off, and `1` is the lowest value the
+  config accepts.
+- **A weekly cap filed under a scope this build cannot name is kept, and can be
+  opted into the ranking.** ccdad names two scope keys on a `weekly_scoped`
+  entry, `model` and `surface`, because those are the two Claude Code's usage
+  schema names — but that schema is not a closed contract, so a third is legal
+  wire. Such a cap used to be dropped. It is now carried and shown in the
+  `windows` map of `ccdad status --json`, and left OUT of the ranking, because
+  ccdad cannot state what it caps. Writing `window_threshold."weekly_scoped:<scope>:<display>"`
+  into `config.toml` by hand is the opt-in and the only one — `ccdad config set`
+  refuses the name, since with no reading in hand it cannot tell a scope the
+  server really sends from a typo. A cap ccdad cannot name at all produces no
+  window and cannot be opted into; `ccdad status --json` counts those as
+  `unnamableWeeklyCaps` on the account's usage object, written only when it is
+  not zero, so a script must read absence as zero rather than as an older ccdad.
+- **`ccdad status` names the mode the engine is in.** When every account still in
+  the pool is known to be over its threshold the ranking reverses — soonest reset
+  first inside an hour, most slack outside it — and the table looks exactly the
+  same either way. It now says `Mode: recovery` and why, and `status --json`
+  carries it as `mode`. The key is absent rather than defaulted when no ranking
+  could run: `strategy.Mode`'s zero value stringifies to `headroom`, so a report
+  built from a pass that never happened does not look empty, it looks wrong.
+- **`ccdad primary <ACCOUNT> on|off`, for a seat that is metered in credits and
+  nothing else.** A credit account is a last resort by default and
+  `credit.max_auto_spend` gates it, because credits are normally overage on top
+  of quota already paid for. For an enterprise seat with no subscription behind
+  it that premise is false, and a gate defaulting to `0` means the account can
+  never be used. `primary` ranks it alongside the subscription pool on
+  `credit.threshold − extra_usage.utilization` and turns the money gate off for
+  that account only — the flag IS the second opt-in, typed by a human, and
+  turning it ON says what it costs before it writes. The money figures are not
+  read on this path at all. The flag travels: `ccdad export` carries it, so a
+  seat armed on one machine arrives armed on the next, and `ccdad doctor` names
+  every account holding it.
+- **`preempt_lead`, and a switch that happens before the limit rather than after
+  it.** The engine projects the active account forward over its own blind
+  interval — the gap between when the current reading was taken and when the
+  scheduler means to poll again, plus `preempt_lead` (default `2m`) — and moves
+  if any window that binds the model reaches 100% inside it while some other
+  account still has room. It reads the window that RUNS OUT FIRST rather than the
+  one the ranking orders on, because those differ whenever burn rates do: an
+  account whose weekly cap binds thirty-eight hours out would otherwise sit
+  unswitched while its five-hour cap cut the session. It runs ahead of
+  `hysteresis_pct` and `headroom_ratio`, which compare two accounts as they
+  stand; it is behind the cooldown, which is the only thing bounding a switch
+  storm, and it cannot reach the credit pool at all. The rule self-corrects
+  because the horizon is the real poll interval: at 60 s it switches late and
+  wastes nothing, and at the 1800 s a `429` imposes it switches early — polling
+  is blocked, the session is not. `preempt_lead = 0` turns it off, except under
+  `hover`, which derives its own lead and stops reading the key.
+
 - **ccdad can name the Claude Code that is installed, and does it without
   running one.** A new `internal/ccver` reads the version off the install layout
   — a native launcher is a symlink into `<data home>/claude/versions/<VERSION>`,
@@ -109,6 +184,91 @@ by `uuid` or `alias`.
   SIGKILL and power loss cannot be closed at all. Like every row here it
   reports: it will not delete a file the store cannot explain.
 
+### Changed
+
+- **Near the limit, the identity spends its budget on the account that can be cut
+  off.** At or above 95% used on the binding window — 95% of where the endpoint
+  refuses, not of where you set `threshold` — the account Claude Code is logged
+  in as polls every 60 s, is exempt from sharing its identity's allowance, and
+  has the freshness gate the scheduler writes with its reading cut to 30 s
+  instead of 180, without which the daemon's own gate would refuse two of every
+  three polls the band just asked for. Every other account on that identity is
+  held back to about thirty minutes meanwhile, and only ever later: a `429`'s own
+  floor still stands. It needs a reading that was actually taken — a failed poll
+  says nothing about the account and does not put it in the band. Stated
+  honestly, this does spend more of the identity's allowance rather than merely
+  moving it: the live account goes from at most 20 requests an hour to 60, and
+  the alternates give back less than that. The exemption itself is worth exactly
+  the size of the identity — twofold on two accounts, threefold on three — and
+  nothing at all on an identity of one, where 60 s was already the answer. What
+  it refuses to do is hand 60 s to everyone on the identity, which would be 180 requests an hour against an
+  allowance of roughly 28-30 per rolling hour. 60 s stays the floor: a `429`
+  imposes a 360-second floor and an estimate that multiplies by 1.5 up to 1800 s,
+  and the estimate always outruns that floor, so one `429` alone earns 540 s. It
+  costs more, because a failed poll is not a reading — the band lapses with it
+  and the account drops back to the cadence a spent account gets, divided across
+  its identity, which is thirty minutes blind on three accounts at 97%. The
+  hand-held path is deliberately not shortened; `ccdad list --refresh` still
+  serves any reading under 180 s old.
+- **The daemon and the engine now answer one "is this account spent" question.**
+  `internal/daemon/tick.go` carried its own copy of the comparison, so the moment
+  a window could carry a threshold of its own the daemon would have gone on
+  publishing an exhausted state for an account the engine considered fine, and
+  the poll cadence would have tightened around the wrong number. There is one
+  implementation now and the daemon calls it, reading the whole threshold table
+  rather than the single fallback key. This is the first test coverage that state
+  has ever had.
+- **`strategy.SubscriptionExhausted` is now `MainPoolExhausted`.** The predicate
+  that opens the last-resort credit pool has to count primary credit seats: one
+  with room means the main pool is not exhausted, and opening the overage pool
+  while paid-for capacity sits unused is precisely what the gate order exists to
+  prevent. The rule is otherwise unchanged — an unreadable account still holds
+  the pool open, and a primary seat nobody can read holds it open for everyone —
+  the old function stays for one release as a deprecated alias, and the key
+  `ccdad auto --json` emits keeps its spelling, `subscriptionExhausted`, so no
+  script breaks.
+
+- **`ccdad doctor`'s stale-keychain-item remedy stops asking you which Claude
+  Code you are on.** The remedy inverts across 2.1.113 — after it, deleting the
+  item is cleanup; before it, the item is your live login and the next token
+  refresh recreates it and deletes `.credentials.json` with it — and the row
+  used to print both and leave you to decide. It now reads the version and gives
+  the one that applies, leading with the cost rather than the command. Only an
+  install ccdad could not classify still gets both.
+- **`ccdad run` launches past npm's `claude.cmd` for every invocation, not only
+  the ones it had to.** Resolution shipped narrow: ccdad read the shim and ran
+  `node cli.js` directly only where the alternative was refusing an argument
+  `cmd.exe` would have eaten, so `ccdad run acct -p 'fix&whoami'` went to the
+  interpreter and `ccdad run acct -p 'summarize this'` went through
+  `cmd.exe` — the same command taking two routes depending on the text of a
+  prompt. It is now the extension alone that decides: a `.cmd` or `.bat` target
+  is resolved past, and Go's escaping is then exactly right for every argument
+  instead of approximately right for the harmless ones. `cmd.exe` leaves the
+  launch entirely. The narrow shape was deliberate — none of the parser had run
+  on Windows when it shipped — and the reason expired rather than being argued
+  away: the Windows leg of CI has been green with it since `72e3f61`.
+
+  **A shim ccdad cannot read still runs.** When the shim cannot be
+  resolved — a `.cmd` npm did not write, an unmodelled `%VAR%`, an interpreter
+  that is not installed or that resolves to another `.cmd`, the no-shebang shape
+  `cmd.exe` runs by file association — the launch goes through the shim exactly
+  as it always did, and only an argument `cmd.exe` would re-interpret is still
+  refused. The `note:` line naming the substituted interpreter now prints only
+  on that rescue, where it explains something; the ordinary launch is silent.
+
+- **`ccdad run` refuses in its default mode on Claude Code 2.1.112 or earlier.**
+  That mode scopes with `CLAUDE_SECURESTORAGE_CONFIG_DIR`, which does not occur
+  even once in 2.1.112 — the variable arrived in 2.1.113, after the keychain
+  backend it nominally outranks was already gone. So on such a build the
+  scoping was inert: `claude` read the machine's own credentials file and the
+  session ran as the LIVE login while ccdad reported success. The refusal is a
+  usage error naming `--full-profile`, which scopes `CLAUDE_CONFIG_DIR` and does
+  work there. It fires only on a version ccdad actually read, and only for
+  accounts whose login is a credentials file: a **setup-token** account is
+  scoped by `CLAUDE_CODE_OAUTH_TOKEN`, which every era reads and prefers over
+  the stored login, so those sessions still run; an **API-key** account keeps
+  its own, accurate refusal. An install ccdad cannot classify starts as before.
+
 ### Fixed
 
 - **`doctor`'s credential-home drift warning blamed a cause the tree prevents.**
@@ -154,51 +314,6 @@ by `uuid` or `alias`.
   where anything else outranks the credentials file the engine switched, reported
   success, and changed nothing about what a session authenticates as — on every
   evaluation.
-
-### Changed
-
-- **`ccdad doctor`'s stale-keychain-item remedy stops asking you which Claude
-  Code you are on.** The remedy inverts across 2.1.113 — after it, deleting the
-  item is cleanup; before it, the item is your live login and the next token
-  refresh recreates it and deletes `.credentials.json` with it — and the row
-  used to print both and leave you to decide. It now reads the version and gives
-  the one that applies, leading with the cost rather than the command. Only an
-  install ccdad could not classify still gets both.
-- **`ccdad run` launches past npm's `claude.cmd` for every invocation, not only
-  the ones it had to.** Resolution shipped narrow: ccdad read the shim and ran
-  `node cli.js` directly only where the alternative was refusing an argument
-  `cmd.exe` would have eaten, so `ccdad run acct -p 'fix&whoami'` went to the
-  interpreter and `ccdad run acct -p 'summarize this'` went through
-  `cmd.exe` — the same command taking two routes depending on the text of a
-  prompt. It is now the extension alone that decides: a `.cmd` or `.bat` target
-  is resolved past, and Go's escaping is then exactly right for every argument
-  instead of approximately right for the harmless ones. `cmd.exe` leaves the
-  launch entirely. The narrow shape was deliberate — none of the parser had run
-  on Windows when it shipped — and the reason expired rather than being argued
-  away: the Windows leg of CI has been green with it since `72e3f61`.
-
-  **A shim ccdad cannot read still runs.** When the shim cannot be
-  resolved — a `.cmd` npm did not write, an unmodelled `%VAR%`, an interpreter
-  that is not installed or that resolves to another `.cmd`, the no-shebang shape
-  `cmd.exe` runs by file association — the launch goes through the shim exactly
-  as it always did, and only an argument `cmd.exe` would re-interpret is still
-  refused. The `note:` line naming the substituted interpreter now prints only
-  on that rescue, where it explains something; the ordinary launch is silent.
-
-- **`ccdad run` refuses in its default mode on Claude Code 2.1.112 or earlier.**
-  That mode scopes with `CLAUDE_SECURESTORAGE_CONFIG_DIR`, which does not occur
-  even once in 2.1.112 — the variable arrived in 2.1.113, after the keychain
-  backend it nominally outranks was already gone. So on such a build the
-  scoping was inert: `claude` read the machine's own credentials file and the
-  session ran as the LIVE login while ccdad reported success. The refusal is a
-  usage error naming `--full-profile`, which scopes `CLAUDE_CONFIG_DIR` and does
-  work there. It fires only on a version ccdad actually read, and only for
-  accounts whose login is a credentials file: a **setup-token** account is
-  scoped by `CLAUDE_CODE_OAUTH_TOKEN`, which every era reads and prefers over
-  the stored login, so those sessions still run; an **API-key** account keeps
-  its own, accurate refusal. An install ccdad cannot classify starts as before.
-
-### Fixed
 
 - **A Windows uninstall that could not schedule its own cleanup no longer
   reports that the binary could not be removed.** Removing the running binary
