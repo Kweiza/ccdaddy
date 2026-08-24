@@ -94,6 +94,8 @@ func TestAutoStartDoesNotFireForCommandsThatMustNotHaveOne(t *testing.T) {
 		{[]string{daemon.RunArg}, "the child is itself ccdad, so this one is a fork bomb rather than a bug"},
 		{[]string{"run", "nobody"}, "run exports a scoped credential home into its child, and a daemon " +
 			"auto-started before that would manage the live one while the user is deliberately elsewhere"},
+		{[]string{"probe", "nobody"}, "a probe is the engine's errand and the daemon re-execs it, so " +
+			"auto-starting here leaves the recursion guard as the only fuse"},
 	}
 	for _, tc := range cases {
 		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
