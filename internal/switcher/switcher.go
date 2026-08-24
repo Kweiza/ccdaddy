@@ -90,6 +90,14 @@ const (
 	// numbers today, and appending is what keeps that true if something ever
 	// does.
 	Contended
+	// Stale: the target's stored credential sits inside the window Claude Code
+	// refreshes in, and no refresh could move it out. Nothing was written.
+	Stale
+	// Unattributed: the credentials file holds an OAuth login this store
+	// cannot name, and the caller did not establish that it is foreign. An
+	// unattended swap stands down rather than write over what may be a managed
+	// account mid-rotation. Unattended callers only.
+	Unattributed
 )
 
 func (o Outcome) String() string {
@@ -102,6 +110,10 @@ func (o Outcome) String() string {
 		return "another OAuth source outranks the credentials file, so a switch would change nothing"
 	case Contended:
 		return "another ccdad store's engine is driving this Claude Code login"
+	case Stale:
+		return "that account's stored login is one Claude Code would refresh on sight, and refreshing it here did not succeed"
+	case Unattributed:
+		return "the credentials file holds a login this store cannot name, and overwriting it could take down an account mid-rotation"
 	case Switched:
 		return "switched"
 	default:
@@ -135,6 +147,52 @@ type Request struct {
 	// Force installs the target even when it is already live. It bypasses the
 	// already-on answer and nothing else.
 	Force bool
+
+	// Now is the clock the staleness precondition reads. Nil is time.Now.
+	Now func() time.Time
+
+	// Freshen refreshes the target's stored credential and returns what to
+	// install in its place. It is called ONLY when the stored one sits inside
+	// cclink.SelfRefreshThreshold, and never for the account the caller
+	// believes is already live.
+	//
+	// It is a hook rather than a direct call into the token machinery for two
+	// reasons. It reaches the network, and this package's whole ordering
+	// discipline is that the network is touched BEFORE Claude Code's
+	// credential locks are taken (cclink.ActivateWith says why); putting it
+	// behind a field keeps that visible at the one place it is invoked. And a
+	// caller with no way to refresh — a test, an offline path — gets the
+	// refusal rather than a package that quietly grew a dependency on the
+	// token endpoint.
+	//
+	// Nil means "cannot refresh", which is a refusal, not permission to
+	// install what is stored.
+	Freshen func(uuid string) (cclink.Blob, error)
+
+	// LiveForeign says the caller POSITIVELY established that the login in the
+	// credentials file belongs to no account this store manages -- it resolved
+	// the token's owner and the answer was somebody else.
+	//
+	// It is not "the file did not match a stored snapshot". That is the state
+	// a managed account is in the moment Claude Code rotates its refresh token,
+	// and an unattended swap that reads it as "nobody is live" installs over a
+	// running session. Only a caller that has RESOLVED the login may set this,
+	// and setting it without resolving reintroduces the loop by hand.
+	//
+	// Attended callers do not need it: a human is watching, so an unnameable
+	// login is something to report rather than a reason to refuse.
+	//
+	// It is a finding about the file the caller READ, so it is checked against
+	// the file under the lock like LiveUUID is: a file that has become a
+	// managed account's since then is a race, not a foreign login.
+	LiveForeign bool
+}
+
+func (r Request) now() time.Time {
+	if r.Now != nil {
+		return r.Now()
+	}
+	return time.Now()
 }
 
 // Result is what happened, in facts rather than sentences. The caller owns the
@@ -146,8 +204,14 @@ type Result struct {
 	Target store.Account
 	// Live is who the credentials file attributed to under the lock, and
 	// LiveKnown whether it attributed at all.
+	//
+	// LiveState is the same read without the collapse, and it is the one a
+	// decision to WRITE has to consult: LiveKnown false spans both "nobody is
+	// logged in" and "a login this store cannot name", which want opposite
+	// answers.
 	Live      store.Account
 	LiveKnown bool
+	LiveState LiveState
 	// UnknownKeys are the unrecognized top-level keys the unknown-key probe
 	// found, read from the file that was actually merged. Merge preserves them;
 	// the operator still needs to know a new key exists.
@@ -177,6 +241,12 @@ type Result struct {
 	// Claude Code's config, and ClearedKeyOwner whose it was.
 	ClearedKey      bool
 	ClearedKeyOwner store.Account
+
+	// FreshenErr is why the Stale outcome could not be repaired, when a
+	// Freshen hook was wired and failed. Nil with a Stale outcome means either
+	// no hook was wired or the refresh succeeded and still came back inside
+	// Claude Code's refresh window.
+	FreshenErr error
 
 	// CooldownErr, KeyErr, and ProfileSyncErr are failures that happened AFTER
 	// the credentials file was written. They are reported rather than
@@ -276,6 +346,43 @@ func Execute(s *store.Store, req Request) (Result, error) {
 		return res, nil
 	}
 
+	// The staleness precondition, and it runs HERE: after the displacement
+	// gate, so a swap that was going to change nothing does not spend a
+	// refresh grant to do it, and before activateWith, because Freshen reaches
+	// the network and cclink.ActivateWith forbids that under Claude Code's
+	// credential locks.
+	//
+	// Installing a credential inside Claude Code's own refresh window is what
+	// turns one swap into a loop. Claude Code refreshes it on sight, the
+	// rotation moves the refresh token out from under the copy in ccdad's
+	// store, AttributeFile stops matching, the next evaluation reads "nobody
+	// is live", and the same dead snapshot goes back in. Every pass re-presents
+	// a superseded grant until the server rejects the family and BOTH sides are
+	// logged out.
+	//
+	// The target the caller believes is already live is exempt, and that is
+	// not an optimisation. Refreshing that account here would rotate the grant
+	// underneath a running session — the hazard the whole path is built to
+	// avoid — for a call whose answer is about to be AlreadyOn anyway.
+	if req.LiveUUID != req.Target.UUID && cclink.WouldSelfRefresh(creds, req.now()) {
+		if req.Freshen == nil {
+			res.Outcome = Stale
+			return res, nil
+		}
+		fresh, ferr := req.Freshen(req.Target.UUID)
+		// A failed refresh is not this call's error to report. The account is
+		// simply not installable right now, which is an outcome the caller
+		// acts on by choosing someone else — turning it into an error would
+		// make the daemon log a failure every tick for a state that repairs
+		// itself on the next poll.
+		if ferr != nil || cclink.WouldSelfRefresh(fresh, req.now()) {
+			res.Outcome = Stale
+			res.FreshenErr = ferr
+			return res, nil
+		}
+		creds = fresh
+	}
+
 	accounts := s.Accounts()
 	err = activateWith(func(live cclink.Blob) (cclink.Blob, error) {
 		res.UnknownKeys = cclink.UnknownKeys(live)
@@ -288,7 +395,8 @@ func Execute(s *store.Store, req Request) (Result, error) {
 		// It is also the only acceptable hysteresis baseline. store.go
 		// documents ActiveUUID as a display HINT that goes stale the moment the
 		// user runs /login inside Claude Code.
-		res.Live, res.LiveKnown = AttributeFile(live, accounts, s.Credentials)
+		res.Live, res.LiveState = LiveStateOf(live, accounts, s.Credentials)
+		res.LiveKnown = res.LiveState == LiveManaged
 
 		observed := ""
 		if res.LiveKnown {
@@ -316,6 +424,20 @@ func Execute(s *store.Store, req Request) (Result, error) {
 		}
 		if req.Unattended && observed != req.LiveUUID {
 			res.Outcome = Raced
+			return nil, cclink.ErrNoChange
+		}
+		// After the race check, not before, and the order carries the meaning.
+		// Reaching here means the file is in the state the caller decided
+		// against; the question left is whether that state is one an
+		// unattended swap may overwrite.
+		//
+		// It may not, unless the caller resolved the login and found it
+		// foreign. The equality above cannot stand in for this: an
+		// unattributable file gives observed == "" and a caller that could not
+		// attribute either passes LiveUUID == "", so the two agree and the
+		// guard waves through the one write that must never happen.
+		if req.Unattended && res.LiveState == LiveUnattributed && !req.LiveForeign {
+			res.Outcome = Unattributed
 			return nil, cclink.ErrNoChange
 		}
 		return creds, nil

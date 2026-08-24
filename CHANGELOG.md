@@ -16,6 +16,32 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The daemon no longer overwrites a Claude Code login it cannot name, and no
+  longer installs one Claude Code would refresh on sight.** Together these were
+  a loop that ended in being logged out of Claude Code entirely. Attribution
+  matches the credentials file to an account by its refresh token; Claude Code
+  rotates that token whenever it refreshes the live login itself, so the moment
+  it did, the file matched no stored snapshot. That was read as *nobody is
+  live* — which removes the hysteresis baseline and, with it, the anti-flap
+  cooldown — so the engine installed the account's pre-rotation snapshot over
+  Claude Code's fresh one. Because that snapshot's access token had already
+  expired, Claude Code refreshed again immediately, and the cycle repeated
+  every few minutes, re-presenting a superseded refresh token until the server
+  rejected the whole family.
+
+  Three things changed. A credentials file holding a login this store cannot
+  name is now its own state rather than the same answer as an empty file, and
+  an unattended swap stands down on it. The daemon resolves such a login
+  against the profile endpoint first: if it belongs to a managed account, the
+  rotated pair is adopted back into that account's stored snapshot and the
+  engine has a baseline again; if it belongs to nobody this store manages, the
+  swap proceeds; if the endpoint cannot answer, nothing is written, because
+  offline is not evidence about whose login it is. And no swap will install a
+  credential inside Claude Code's own five-minute refresh window — it is
+  refreshed first, and refused if that is not possible.
+
 ## [0.4.2] — 2026-08-24
 
 One fix, no new surface. Under `hover`, `ccdad hover status` could mark an

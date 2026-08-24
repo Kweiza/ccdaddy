@@ -35,8 +35,14 @@ type Evaluation struct {
 	HasTarget bool
 	// Live is the account the credentials FILE names, which is the hysteresis
 	// baseline and the value an unattended swap is conditional on.
+	//
+	// LiveState is the same read kept at three values rather than two. An
+	// unattended caller needs it: LiveKnown false spans a machine with nobody
+	// logged in and a machine whose live login this store cannot name, and only
+	// the first of those is safe to overwrite.
 	Live      store.Account
 	LiveKnown bool
+	LiveState LiveState
 	// LiveErr is a live file that could not be read. It is not fatal: the
 	// baseline is lost, so every candidate is compared against nothing, and
 	// this is the state where moving to a known-good account matters most.
@@ -133,7 +139,8 @@ func Evaluate(s *store.Store, opts EvalOptions) (Evaluation, error) {
 		ev.LiveErr = err
 		live = nil
 	}
-	ev.Live, ev.LiveKnown = AttributeFile(live, accounts, s.Credentials)
+	ev.Live, ev.LiveState = LiveStateOf(live, accounts, s.Credentials)
+	ev.LiveKnown = ev.LiveState == LiveManaged
 	liveUUID := ""
 	if ev.LiveKnown {
 		liveUUID = ev.Live.UUID

@@ -8,7 +8,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/config"
+	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/pollpolicy"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
@@ -53,6 +55,18 @@ type Engine struct {
 	// describe an endpoint's behaviour without one.
 	AccessToken func(ctx context.Context, uuid string) (string, error)
 	FetchUsage  func(ctx context.Context, accessToken string) (*usage.Snapshot, error)
+	// Freshen refreshes one account's stored credential so a swap does not
+	// install a login Claude Code would rotate on sight. Nil means a stale
+	// credential is refused rather than repaired, which is the safe direction
+	// and the one a test gets by default.
+	Freshen func(ctx context.Context, uuid string) (cclink.Blob, error)
+	// ResolveOwner names the account an access token belongs to, by asking the
+	// profile endpoint. It is the oracle resolveLive turns on, and the only
+	// thing allowed to say a login is somebody else's: nothing on disk can tell
+	// a rotated managed account from an unmanaged one. Nil means every
+	// unnameable login reads as unresolved, which stands the swap down — the
+	// safe direction, and the one a test gets by default.
+	ResolveOwner func(ctx context.Context, accessToken string) (string, error)
 	// SpawnProbe starts one probe and returns without waiting for it. It is a
 	// func for the same reason the two above are: starting a process is the
 	// thing a test in this package cannot arrange. Nil means the package's own
@@ -96,6 +110,16 @@ type Engine struct {
 	// once a second, and a machine with no Claude Code on it stays that way.
 	saidNoClaude    bool
 	saidProbeSpends bool
+	// saidStale holds the UUID whose stale-credential refusal has been logged,
+	// not a flag, for the reason saidClaimNotice holds text: a second account
+	// going stale is a different fact about a different account, and a bool
+	// would report only whichever reached the top of the ranking first.
+	saidStale string
+	// saidUnattributed latches the stand-down on a login that could not be
+	// resolved. Reached at 1 Hz for as long as the endpoint is unreachable,
+	// which on a laptop that lost its connection is every tick until it comes
+	// back.
+	saidUnattributed bool
 
 	wg sync.WaitGroup
 }
@@ -132,13 +156,32 @@ func NewEngine() *Engine {
 	src := tokens.New()
 	client := usage.NewClient()
 	return &Engine{
-		AccessToken: src.AccessToken,
-		FetchUsage:  client.FetchUsage,
-		Rand:        rand.Float64,
-		reloader:    config.NewReloader(),
-		inFlight:    map[string]struct{}{},
-		polls:       map[string]pollRecord{},
-		cfg:         config.Defaults(),
+		AccessToken:  src.AccessToken,
+		Freshen:      src.Freshen,
+		ResolveOwner: ownerResolver(identity.NewClient()),
+		FetchUsage:   client.FetchUsage,
+		Rand:         rand.Float64,
+		reloader:     config.NewReloader(),
+		inFlight:     map[string]struct{}{},
+		polls:        map[string]pollRecord{},
+		cfg:          config.Defaults(),
+	}
+}
+
+// freshen adapts the engine's refresher to the hook switcher.Execute takes.
+//
+// The context is the TICK's, and bounded by the same pollTimeout one poll gets:
+// a refresh that hangs must not hold the swap open past the tick that asked for
+// it. Nil Freshen stays nil rather than becoming a func that returns an error,
+// so Execute's own "cannot refresh" branch is the one that reports it.
+func (e *Engine) freshen(ctx context.Context) func(string) (cclink.Blob, error) {
+	if e.Freshen == nil {
+		return nil
+	}
+	return func(uuid string) (cclink.Blob, error) {
+		ctx, cancel := context.WithTimeout(ctx, e.pollTimeout())
+		defer cancel()
+		return e.Freshen(ctx, uuid)
 	}
 }
 
@@ -262,7 +305,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 		return evErr
 	}
 
-	res, swapErr := e.act(s, ev)
+	res, swapErr := e.act(ctx, s, ev)
 	// Dispatched AFTER the decision, and handed the live account rather than
 	// looking it up. The poll cadence branches on which account is active, and a
 	// poller that read that from the engine's published state would be racing
@@ -321,7 +364,7 @@ func activeAfter(ev switcher.Evaluation, res switcher.Result) (string, bool) {
 }
 
 // act executes the plan, when the plan is to move.
-func (e *Engine) act(s *store.Store, ev switcher.Evaluation) (switcher.Result, error) {
+func (e *Engine) act(ctx context.Context, s *store.Store, ev switcher.Evaluation) (switcher.Result, error) {
 	if ev.NoReadings || ev.Plan.Action != strategy.ActionSwitch || !ev.HasTarget {
 		return switcher.Result{}, nil
 	}
@@ -329,8 +372,47 @@ func (e *Engine) act(s *store.Store, ev switcher.Evaluation) (switcher.Result, e
 	if ev.LiveKnown {
 		live = ev.Live.UUID
 	}
+	// A login the file cannot name is resolved BEFORE the swap, not read as
+	// "nobody is live". Claude Code rotating a managed account's refresh token
+	// leaves exactly this state, and the engine used to answer it by installing
+	// over the session that caused it.
+	//
+	// The oracle either repairs the store — the rotated pair goes back into its
+	// account's snapshot, and this tick continues with a baseline again — or it
+	// establishes that the login is somebody else's, which is a machine ccdad
+	// exists to move off. Anything else stands the swap down; Execute enforces
+	// that too, and this is where it is decided with a name attached.
+	foreign := false
+	if ev.LiveState == switcher.LiveUnattributed {
+		owner, verdict := e.resolveLive(ctx, s)
+		switch verdict {
+		case liveAdopted:
+			live = owner.UUID
+			if e.saidUnattributed {
+				e.saidUnattributed = false
+				e.logf("adopted the login Claude Code rotated for %s; it is live again by name", owner.Label())
+			}
+		case liveForeign:
+			foreign = true
+		default:
+			if !e.saidUnattributed {
+				e.saidUnattributed = true
+				e.logf("not switching: the credentials file holds a login this store cannot name and " +
+					"the profile endpoint could not say whose it is. Overwriting it could revoke an " +
+					"account mid-rotation, so nothing is written until it can be named")
+			}
+			return switcher.Result{Outcome: switcher.Unattributed, Target: ev.Target}, nil
+		}
+	} else {
+		e.saidUnattributed = false
+	}
 	res, err := switcher.Execute(s, switcher.Request{
-		Target: ev.Target, LiveUUID: live, Unattended: true,
+		Target: ev.Target, LiveUUID: live, Unattended: true, LiveForeign: foreign,
+		// The engine's clock, not the swap's own: every other decision this
+		// tick is dated from it, and a staleness answer taken from a
+		// different clock is a different tick's answer.
+		Now:     e.now,
+		Freshen: e.freshen(ctx),
 	})
 	if err != nil {
 		return res, err
@@ -364,7 +446,25 @@ func (e *Engine) act(s *store.Store, ev switcher.Evaluation) (switcher.Result, e
 	case switcher.Raced:
 		e.logf("stood down: the live login changed while the switch was being decided")
 		return res, nil
+	case switcher.Stale:
+		// Latched PER ACCOUNT, like saidClaimNotice rather than like
+		// saidOverridden: this state lasts until that account's next poll
+		// refreshes its grant, which is minutes away, and the tick loop runs at
+		// about 1 Hz. A bool would also hide the second account going stale
+		// behind the first.
+		if e.saidStale != res.Target.UUID {
+			e.saidStale = res.Target.UUID
+			if res.FreshenErr != nil {
+				e.logf("not switching to %s: its stored login is one Claude Code would refresh on "+
+					"sight, and refreshing it here failed: %v", res.Target.Label(), res.FreshenErr)
+			} else {
+				e.logf("not switching to %s: its stored login is one Claude Code would refresh on sight",
+					res.Target.Label())
+			}
+		}
+		return res, nil
 	}
+	e.saidStale = ""
 	if n := res.Claim.Notice; n != "" && n != e.saidClaimNotice {
 		e.saidClaimNotice = n
 		e.logf("%s", n)

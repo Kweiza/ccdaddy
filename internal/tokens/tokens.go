@@ -408,3 +408,29 @@ func isLiveLogin(rec record, live cclink.Blob) bool {
 	}
 	return false
 }
+
+// Freshen refreshes an account's stored credential and returns the snapshot a
+// switch should install in its place.
+//
+// It exists because a switch and a poll want the same work and stop at
+// different places: the poll wants a bearer, the switch wants the RECORD, and
+// the record is what AccessToken leaves behind in the store rather than what it
+// returns. So this runs the same path and reads the result back, instead of a
+// second refresh-and-save that could disagree with the first.
+//
+// THE LIVE LOGIN IS NOT REFRESHED HERE either, and it does not need its own
+// branch to be safe: AccessToken answers ErrLiveTokenStale for a live account
+// whose token has expired, which arrives at the caller as a refusal to switch
+// rather than as a rotation performed behind a running session. switcher's own
+// exemption for the account it believes is live is the first line of that
+// defence; this is the second, and the one that holds when the belief is stale.
+func (s *Source) Freshen(ctx context.Context, uuid string) (cclink.Blob, error) {
+	if _, err := s.AccessToken(ctx, uuid); err != nil {
+		return nil, err
+	}
+	st, err := store.Open()
+	if err != nil {
+		return nil, err
+	}
+	return st.Credentials(uuid)
+}
