@@ -36,7 +36,7 @@ func TestTheDaemonMeasuresAgainstThePerWindowTable(t *testing.T) {
 	a := store.Account{UUID: "acct-1"}
 
 	bare := config.Config{Threshold: 80}
-	if got := accountState(a, cache, false, "", bare); got != StateCandidate {
+	if got := accountState(a, cache, false, "", configuredThresholds(bare)); got != StateCandidate {
 		t.Fatalf("accountState() with no table = %q, want %q — 70%% used is under the default threshold", got, StateCandidate)
 	}
 
@@ -44,7 +44,7 @@ func TestTheDaemonMeasuresAgainstThePerWindowTable(t *testing.T) {
 		Threshold:       80,
 		WindowThreshold: map[usage.WindowName]float64{usage.WindowSevenDay: 60},
 	}
-	if got := accountState(a, cache, false, "", tuned); got != StateExhausted {
+	if got := accountState(a, cache, false, "", configuredThresholds(tuned)); got != StateExhausted {
 		t.Errorf("accountState() with seven_day capped at 60 = %q, want %q — the daemon must measure each window against the threshold the ranking measures it against", got, StateExhausted)
 	}
 }
@@ -68,7 +68,7 @@ func TestTheDaemonPollCadenceMeasuresAgainstThePerWindowTable(t *testing.T) {
 		t.Helper()
 		e := NewEngine()
 		e.Rand = midJitter
-		e.commit(a, perWindowSnapshot(), tickEpoch, []string{a.UUID}, cfg, true, nil)
+		e.commit(a, perWindowSnapshot(), tickEpoch, []string{a.UUID}, configuredThresholds(cfg), true, nil)
 		var at time.Time
 		if err := usage.WithCache(cacheTimeout, func(c *usage.Cache) error {
 			entry, ok := c.Get(a.UUID)
