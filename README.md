@@ -504,16 +504,16 @@ Start here:
 ccdad doctor
 ```
 
-Nineteen checks over the store, whether this binary is on your `PATH`, the
+Twenty-one checks over the store, whether this binary is on your `PATH`, the
 store's permissions, whether file locking works on this filesystem at all, the
 daemon's pidfile and status file, the usage cache, the engine state, the config,
 leftover session directories, `--full-profile` profiles whose account is gone,
-whether a second ccdad store is driving the same Claude Code login, which Claude
-Code is installed and whether ccdad's model fits it, Claude Code's credential
-file and its top-level keys, a stale legacy keychain item, the
-environment variables that would make a switch a no-op, which API key Claude
-Code would actually use, and which OAuth source it would take a session's
-credential from.
+the accounts marked primary, stored credential files no account names, whether a
+second ccdad store is driving the same Claude Code login, which Claude Code is
+installed and whether ccdad's model fits it, Claude Code's credential file and
+its top-level keys, a stale legacy keychain item, the environment variables that
+would make a switch a no-op, which API key Claude Code would actually use, and
+which OAuth source it would take a session's credential from.
 
 It **reports**; it repairs nothing and creates nothing it is checking for — a
 diagnostic that manufactures the directory it was asked about is a diagnostic
