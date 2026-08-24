@@ -178,6 +178,15 @@ type Options struct {
 	// name ccdad cannot place belongs at the CLI, where there is a user to tell.
 	// Reaching the engine, an unplaceable name simply narrows nothing.
 	Model string
+	// Hover replaces every threshold in this struct with one derived per account
+	// and per window. It is a mode rather than a knob, so it is a plain bool with
+	// no default to fall back to.
+	Hover bool
+	// hover is the pass Hover asked for, installed by withHover. It is
+	// unexported because it can only be built from the POOL -- a caller cannot
+	// set it, and one that could would be setting a table for accounts the
+	// ranking never saw.
+	hover *HoverPlan
 	// MaxAutoSpend is the credit gate's ceiling, and it is here for ONE reason:
 	// the credit pool is ordered by armed room, and room cannot be computed
 	// without it.
@@ -378,7 +387,10 @@ func creditHeadroom(c Candidate, o Options) Headroom {
 }
 
 func measure(c Candidate, o Options) Ranked {
-	h := HeadroomFor(c.Usage, o.Model, o.Thresholds())
+	// thresholdsFor rather than Thresholds: under hover the table is derived
+	// per account, and it is the same call below so the two window sets this
+	// function reads cannot be built from different tables.
+	h := HeadroomFor(c.Usage, o.Model, o.thresholdsFor(c))
 	// A primary seat is metered in credits rather than in plan windows, so it
 	// is ranked on the credit allowance instead. This is a reassignment rather
 	// than a second opinion: such a seat carries no plan windows, so the line
@@ -399,7 +411,7 @@ func measure(c Candidate, o Options) Ranked {
 		clears = h.Floor
 	}
 	rec := recoveryOf(c.Usage, clears)
-	weekly := weeklyResetOf(c.Usage, o.Model, o.Thresholds())
+	weekly := weeklyResetOf(c.Usage, o.Model, o.thresholdsFor(c))
 
 	r := Ranked{
 		UUID:           c.UUID,
@@ -419,6 +431,7 @@ func measure(c Candidate, o Options) Ranked {
 
 // Rank orders the eligible accounts, best first. It does not reorder its input.
 func Rank(cands []Candidate, o Options) Result {
+	o = o.withHover(cands)
 	measured := make([]Ranked, 0, len(cands))
 	credit := make([]Ranked, 0)
 	// True until some MAIN-POOL candidate turns out not to be known-and-over.
