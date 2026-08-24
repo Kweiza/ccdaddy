@@ -16,6 +16,14 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.4.2] — 2026-08-24
+
+One fix, no new surface. Under `hover`, `ccdad hover status` could mark an
+account's five-hour window `(no reset yet; a probe is queued)` while the
+daemon's own probe never actually queued one - it looked at whichever window
+currently bound tightest and stopped there, and that was often a different,
+already-resolved window.
+
 ### Fixed
 
 - **The daemon's automatic probe now wakes any of an account's windows that
