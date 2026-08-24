@@ -183,6 +183,12 @@ func (r Row) ListLabel() string {
 	return fmt.Sprintf("%s (%s)", r.Account.Email, r.Account.Alias)
 }
 
+// TypeLabel has no caller inside package cli today, and never will: both
+// `status`'s renderStatus and `list` pass r.Account.Kind straight to a `%s`
+// verb and let Stringer run, since that produces the identical bytes with one
+// less method call in the diff. It exists for a renderer that cannot lean on
+// Stringer -- a terminal UI measuring a column's width needs an actual string
+// to measure, not a value it can only format and then measure the result of.
 func (r Row) TypeLabel() string { return r.Account.Kind.String() }
 
 func (r Row) TierLabel() string {
