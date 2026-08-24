@@ -36,6 +36,36 @@ func deliverAt(before, onClose bool) func() *interruptWatch {
 	}
 }
 
+// TestCloseObservesASignalThatArrivesDuringUnhook pins close()'s own contract
+// directly, rather than through mutate. mutate's defer calls close() a second
+// time no matter what the explicit call at the commit point returned, and that
+// redundancy is real: it means a reordering inside close() alone does not
+// change mutate's OUTPUT, because the second call papers over the first one's
+// mistake. It would still be a bug in close() as a primitive — signal.Stop's
+// own quiesce guarantee is that a signal already being routed to the channel is
+// delivered before Stop returns, and a drain taken before that call misses
+// exactly the signal the guarantee exists to catch. This test is what makes
+// that promise close()'s own, checkable without mutate's second chance
+// standing in front of it.
+//
+// The fake's unhook is where the signal becomes visible, which is what a real
+// signal arriving mid-quiesce looks like from close()'s point of view: absent
+// when asked, present once the call that is supposed to wait for it returns.
+func TestCloseObservesASignalThatArrivesDuringUnhook(t *testing.T) {
+	ch := make(chan os.Signal, 1)
+	w := &interruptWatch{ch: ch, unhook: func() {
+		select {
+		case ch <- os.Interrupt:
+		default:
+		}
+	}}
+
+	if got := w.close(); !got {
+		t.Fatal("close() = false for a signal that arrived during unhook, want true: " +
+			"draining before unhooking discards exactly the delivery signal.Stop's quiesce exists to catch")
+	}
+}
+
 // TestASignalMidTransactionTakesTheCredentialFileBackOffTheDisk is the defect
 // this guard exists to close, in the shape a user meets it: Ctrl-C partway
 // through a multi-account import, with the first credential file already down
