@@ -1,0 +1,37 @@
+#!/bin/sh
+# The container's first process. Three steps in an order that matters: the
+# accounts have to exist before an engine can rank them, and the engine has to
+# be running before the command this container was started for asks Claude Code
+# for anything.
+set -e
+
+# Unconditional, because CCDAD_IMPORT unset or empty is a silent no-op that
+# exits 0. An entrypoint that tested the variable itself would be a second copy
+# of that rule, in a language with no tests here — and it would be the copy that
+# is wrong, because empty and unset have to behave alike and a shell makes it
+# easy to handle only one of them.
+ccdad bootstrap
+
+# Exit 3 from `daemon start` means one is already running, which is the ordinary
+# state whenever /data is shared with a second container. Under `set -e` a bare
+# call would stop this container from ever running its own command over a state
+# that is not a problem.
+#
+# Tolerated by CODE rather than with `|| true`, and that is the point of the
+# lines: 1 means the daemon could not start and 4 means another store's engine
+# is already driving this login. A container that carries on from either has no
+# auto-switching, which is the whole reason it exists.
+#
+# The status is captured and re-raised rather than written as
+# `ccdad daemon start || [ "$?" -eq 3 ]`. That shorter form loses the number:
+# `set -e` then exits with the status of the failed `[`, which is 1, so a 4
+# would reach a process manager as a 1 and a restart policy would treat "two
+# engines over one login" as an ordinary crash.
+ccdad daemon start || {
+	status=$?
+	[ "$status" -eq 3 ] || exit "$status"
+}
+
+# exec, so the container's exit status is the command's and there is one process
+# in the namespace rather than a shell waiting on one.
+exec "$@"
