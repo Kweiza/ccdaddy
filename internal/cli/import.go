@@ -65,11 +65,13 @@ func newImportCmd() *cobra.Command {
 			}
 
 			// Everything that can be judged from the document alone is judged
-			// before anything is written. store.Add writes a credential file
-			// before it touches memory and SetAlias validates on the way in, so
-			// a batch that fails on the fourth of five accounts would otherwise
-			// leave three credential files behind with no accounts.toml naming
-			// them.
+			// before anything is written, and that is still worth doing now
+			// that the store reverses a batch it could not finish: a refusal
+			// here names the row and the rule, while a reversal can only say
+			// that the machine failed. The store's rollback is the recovery
+			// for what CANNOT be judged from the document — an I/O failure on
+			// the fourth of five credential writes — and not a reason to stop
+			// judging the document.
 			if err := validateExport(payload); err != nil {
 				return UsageError("%s", err.Error())
 			}
