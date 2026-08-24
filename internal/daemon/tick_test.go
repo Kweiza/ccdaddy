@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -874,7 +875,7 @@ func TestThePollCadenceReadsTheBindingWindowsOwnThreshold(t *testing.T) {
 			Poll:      usage.PollState{LastBindingPct: 45, HasLastBinding: true},
 		})
 		e := NewEngine()
-		e.commit(a, windowsUsed(10, 50), tickEpoch, 1, cfg, true, nil)
+		e.commit(a, windowsUsed(10, 50), tickEpoch, []string{a.UUID}, cfg, true, nil)
 		entry, ok := cacheEntry(t, a.UUID)
 		if !ok {
 			t.Fatal("commit() wrote no cache entry")
@@ -901,5 +902,183 @@ func TestThePollCadenceReadsTheBindingWindowsOwnThreshold(t *testing.T) {
 	if want := tickEpoch.Add(pollpolicy.MinInterval); !bare.Equal(want) {
 		t.Errorf("with no table the next poll is %v, want %v — 50%% used against a threshold "+
 			"of 80 is moving but not near it", bare, want)
+	}
+}
+
+// seedDisabled stores an account that can never be a switch target. It is still
+// polled and still draws on its identity's budget: dispatch asks pollable(),
+// which is about credentials, and nothing else.
+func seedDisabled(t *testing.T, uuid, org string) {
+	t.Helper()
+	a := seedAccount(t, uuid, org)
+	s, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SetDisabled(a.UUID, true); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The danger band, end to end. Three accounts share one organization, so the
+// ordinary rules put the live one on 3 x 60 s; five points from the endpoint's
+// refusal that is two thirds of the remaining room spent unread.
+func TestTheLiveAccountInTheDangerBandPollsEveryMinuteUnshared(t *testing.T) {
+	isolateEngine(t)
+	seedAccount(t, "u-1", "org-shared")
+	seedDisabled(t, "u-2", "org-shared")
+	seedDisabled(t, "u-3", "org-shared")
+	liveAs(t, "u-1")
+
+	var live atomicCounter
+	now := tickEpoch
+	e := engineFor(t, tokensAreFine, func(_ context.Context, token string) (*usage.Snapshot, error) {
+		if token == "AT-u-1" {
+			live.inc()
+			return snapshotWith(97), nil
+		}
+		return snapshotWith(20), nil
+	})
+	e.Now = func() time.Time { return now }
+	tick(t, e)
+
+	got, ok := cacheEntry(t, "u-1")
+	if !ok {
+		t.Fatal("the tick cached no reading")
+	}
+	if want := tickEpoch.Add(pollpolicy.UrgentInterval); !got.NextPollAt.Equal(want) {
+		t.Fatalf("NextPollAt = %s, want %s — three accounts share this identity and the "+
+			"account a session is running against is the one exemption", got.NextPollAt, want)
+	}
+	if got.ServeTTL != pollpolicy.DangerServeTTL {
+		t.Fatalf("ServeTTL = %s, want %s", got.ServeTTL, pollpolicy.DangerServeTTL)
+	}
+
+	// And the cadence is real rather than only written down: the second poll
+	// lands a minute later, which the flat 180 s serve TTL would have refused.
+	now = tickEpoch.Add(pollpolicy.UrgentInterval + time.Second)
+	tick(t, e)
+	if n := live.get(); n != 2 {
+		t.Fatalf("the live account was polled %d times, want 2 — the 60 s cadence was "+
+			"clamped by the serve TTL", n)
+	}
+	if l := liveUUID(t); l != "u-1" {
+		t.Fatalf("live = %q, want u-1 — the engine switched, so nothing above was about the band", l)
+	}
+}
+
+// The other half of the reallocation. While the live account is in the band the
+// rest of its identity yields, because the budget is per identity and 60 s on
+// one account is most of it.
+func TestTheDangerBandStandsTheRestOfTheIdentityDown(t *testing.T) {
+	isolateEngine(t)
+	seedAccount(t, "u-1", "org-shared")
+	seedDisabled(t, "u-2", "org-shared")
+	seedDisabled(t, "u-solo", "org-alone")
+	liveAs(t, "u-1")
+
+	now := tickEpoch
+	e := engineFor(t, tokensAreFine, func(_ context.Context, token string) (*usage.Snapshot, error) {
+		if token == "AT-u-1" {
+			return snapshotWith(97), nil
+		}
+		return snapshotWith(20), nil
+	})
+	e.Now = func() time.Time { return now }
+
+	// The first tick gives every account an entry. The second is the one that
+	// matters: only the live account is due by then, so nothing else is writing.
+	tick(t, e)
+	second := tickEpoch.Add(pollpolicy.UrgentInterval + time.Second)
+	now = second
+	tick(t, e)
+
+	sib, ok := cacheEntry(t, "u-2")
+	if !ok {
+		t.Fatal("the account sharing the identity has no entry")
+	}
+	if want := second.Add(pollpolicy.Post429MaxInterval); !sib.StandDownUntil.Equal(want) {
+		t.Fatalf("StandDownUntil = %s, want %s", sib.StandDownUntil, want)
+	}
+	// The schedule its own poll earned is untouched. A stand-down that overwrote
+	// it would overwrite a 429's floor with something shorter.
+	if want := tickEpoch.Add(2 * pollpolicy.CandidateMaxInterval); !sib.NextPollAt.Equal(want) {
+		t.Fatalf("NextPollAt = %s, want the %s its own poll set", sib.NextPollAt, want)
+	}
+	// An account on a different identity draws on a different budget and has
+	// nothing to yield.
+	other, ok := cacheEntry(t, "u-solo")
+	if !ok {
+		t.Fatal("the account on the other identity has no entry")
+	}
+	if !other.StandDownUntil.IsZero() {
+		t.Fatalf("StandDownUntil = %s on another identity, want none", other.StandDownUntil)
+	}
+}
+
+// A stand-down is written for the accounts that do not matter right now, and a
+// switch changes which one that is. The account Claude Code is logged in as is
+// never held by one — it is the only account a session can be cut off on.
+func TestTheLiveAccountIsNeverHeldByAStandDown(t *testing.T) {
+	isolateEngine(t)
+	seedAccount(t, "u-1", "org-shared")
+	seedAccount(t, "u-2", "org-shared")
+	liveAs(t, "u-2")
+
+	stood := tickEpoch.Add(pollpolicy.Post429MaxInterval)
+	seedEntry(t, "u-1", usage.Entry{
+		Snapshot: snapshotWith(50), FetchedAt: tickEpoch.Add(-time.Hour), StandDownUntil: stood,
+	})
+	seedEntry(t, "u-2", usage.Entry{
+		Snapshot: snapshotWith(5), FetchedAt: tickEpoch.Add(-time.Hour), StandDownUntil: stood,
+	})
+
+	var one, two atomicCounter
+	e := engineFor(t, tokensAreFine, func(_ context.Context, token string) (*usage.Snapshot, error) {
+		if token == "AT-u-1" {
+			one.inc()
+			return snapshotWith(50), nil
+		}
+		two.inc()
+		return snapshotWith(5), nil
+	})
+	tick(t, e)
+
+	if n := two.get(); n != 1 {
+		t.Fatalf("the live account was polled %d times, want 1 — a stand-down written for "+
+			"its predecessor blinded the engine on it", n)
+	}
+	if n := one.get(); n != 0 {
+		t.Fatalf("a stood-down account was polled %d times, want 0", n)
+	}
+}
+
+// Unknown is never 97. A poll that failed says nothing about the account, and a
+// failure that stood the identity down would silence every alternate for half an
+// hour on no evidence — at the exact moment the engine needs one to switch to.
+func TestAFailedPollNeverStandsTheIdentityDown(t *testing.T) {
+	isolateEngine(t)
+	seedAccount(t, "u-1", "org-shared")
+	seedDisabled(t, "u-2", "org-shared")
+	liveAs(t, "u-1")
+
+	// The live account was inside the band when it was last read, and the poll
+	// about to run does not answer. Its alternate's reading is fresh, so nothing
+	// but a stand-down could move that one's schedule.
+	seedEntry(t, "u-1", usage.Entry{Snapshot: snapshotWith(97), FetchedAt: tickEpoch.Add(-time.Hour)})
+	seedEntry(t, "u-2", usage.Entry{Snapshot: snapshotWith(10), FetchedAt: tickEpoch})
+
+	e := engineFor(t, tokensAreFine, func(context.Context, string) (*usage.Snapshot, error) {
+		return nil, errors.New("the usage endpoint did not answer")
+	})
+	tick(t, e)
+
+	sib, _ := cacheEntry(t, "u-2")
+	if !sib.StandDownUntil.IsZero() {
+		t.Fatalf("StandDownUntil = %s, want none — a failed poll stood the identity down", sib.StandDownUntil)
+	}
+	got, _ := cacheEntry(t, "u-1")
+	if got.ServeTTL != pollpolicy.ServeTTL {
+		t.Fatalf("ServeTTL = %s, want the ordinary %s", got.ServeTTL, pollpolicy.ServeTTL)
 	}
 }

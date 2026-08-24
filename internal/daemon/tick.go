@@ -323,13 +323,13 @@ func (e *Engine) act(s *store.Store, ev switcher.Evaluation) (switcher.Result, e
 func (e *Engine) dispatch(ctx context.Context, s *store.Store, accounts []store.Account,
 	cache *usage.Cache, cfg config.Config, now time.Time, active string) {
 
-	sizes := identitySizes(accounts)
+	members := identityMembers(accounts)
 	for _, a := range accounts {
 		if !pollable(s, a) {
 			continue
 		}
 		entry, has := cache.Get(a.UUID)
-		if !due(entry, has, now) {
+		if !due(entry, has, now, a.UUID == active) {
 			continue
 		}
 		if !e.claim(a.UUID) {
@@ -344,7 +344,7 @@ func (e *Engine) dispatch(ctx context.Context, s *store.Store, accounts []store.
 			defer e.release(a.UUID)
 			// Discarded: a tick reports through the status document, and
 			// the failure is already in this account's pollRecord.
-			_ = e.poll(ctx, a, cfg, sizes[identityOf(a)], a.UUID == active)
+			_ = e.poll(ctx, a, cfg, members[identityOf(a)], a.UUID == active)
 		}(a)
 	}
 }
@@ -360,10 +360,14 @@ func identityOf(a store.Account) string {
 	return "org:" + a.OrganizationUUID
 }
 
-func identitySizes(accounts []store.Account) map[string]int {
-	out := make(map[string]int, len(accounts))
+// identityMembers maps each identity to every account that draws on it. The
+// scheduler needs both halves: HOW MANY accounts share the budget, which is the
+// divisor, and WHICH ones, because the danger band holds the others back.
+func identityMembers(accounts []store.Account) map[string][]string {
+	out := make(map[string][]string, len(accounts))
 	for _, a := range accounts {
-		out[identityOf(a)]++
+		id := identityOf(a)
+		out[id] = append(out[id], a.UUID)
 	}
 	return out
 }
@@ -382,20 +386,30 @@ func pollable(s *store.Store, a store.Account) bool {
 	return hasOAuth
 }
 
-// due applies both gates: serveTTL, which is the same rule the read path
-// enforces and the only thing standing between a busy fleet and the endpoint's
-// hourly allowance, and the schedule the last poll set.
-func due(e usage.Entry, has bool, now time.Time) bool {
+// due applies both gates: the serve TTL the last poll chose for this reading,
+// which is the same rule the read path enforces and the only thing standing
+// between a busy fleet and the endpoint's hourly allowance, and the schedule that
+// poll set.
+//
+// The TTL is the ENTRY's rather than the flat one, because the danger band cuts
+// it to 30 s. Under the flat 180 s, a band asking for a poll every 60 s would
+// have two of every three refused right here, and the tighter cadence would exist
+// in the schedule and nowhere else.
+//
+// live is passed in because a stand-down written for the account that WAS live
+// must not hold the one that is now.
+func due(e usage.Entry, has bool, now time.Time, live bool) bool {
 	if !has {
 		return true
 	}
-	if e.Fresh(now) {
+	if e.FreshWithin(now, e.ScheduledTTL()) {
 		return false
 	}
-	if e.NextPollAt.IsZero() {
+	at := e.PollAt(live)
+	if at.IsZero() {
 		return true
 	}
-	return !now.Before(e.NextPollAt)
+	return !now.Before(at)
 }
 
 func (e *Engine) claim(uuid string) bool {
@@ -418,7 +432,7 @@ func (e *Engine) release(uuid string) {
 // its only output is the cache, the engine state, and this account's
 // pollRecord; the returned error is for Refresh, which has a caller waiting to
 // be told what happened rather than a status document to publish into.
-func (e *Engine) poll(ctx context.Context, a store.Account, cfg config.Config, identitySize int, active bool) error {
+func (e *Engine) poll(ctx context.Context, a store.Account, cfg config.Config, identity []string, active bool) error {
 	ctx, cancel := context.WithTimeout(ctx, e.pollTimeout())
 	defer cancel()
 
@@ -434,17 +448,17 @@ func (e *Engine) poll(ctx context.Context, a store.Account, cfg config.Config, i
 	now := e.now()
 	e.record(a.UUID, now, err)
 	if err != nil {
-		e.handleFailure(a, cfg, err, now, identitySize, active)
+		e.handleFailure(a, cfg, err, now, identity, active)
 		return err
 	}
-	e.commit(a, snap, now, identitySize, cfg, active, nil)
+	e.commit(a, snap, now, identity, cfg, active, nil)
 	return nil
 }
 
 // handleFailure decides what a failed poll means. Only ONE of the failures says
 // anything about the account.
 func (e *Engine) handleFailure(a store.Account, cfg config.Config, err error,
-	now time.Time, identitySize int, active bool) {
+	now time.Time, identity []string, active bool) {
 	switch {
 	case errors.Is(err, tokens.ErrNoOAuthCredential):
 		// Nothing to poll with, and pollable() should already have caught it.
@@ -457,7 +471,7 @@ func (e *Engine) handleFailure(a store.Account, cfg config.Config, err error,
 		// Code has not run in eight hours — so there is no session whose
 		// rotation is urgent, and this must not feed AIMD or quarantine
 		// anything. It reschedules at the ordinary cadence and waits.
-		e.commit(a, nil, now, identitySize, cfg, active, nil)
+		e.commit(a, nil, now, identity, cfg, active, nil)
 		return
 
 	case errors.Is(err, usage.ErrRateLimited):
@@ -467,7 +481,7 @@ func (e *Engine) handleFailure(a store.Account, cfg config.Config, err error,
 		if errors.As(err, &se) {
 			retry, hasRetry = se.RetryAfter()
 		}
-		e.commit(a, nil, now, identitySize, cfg, active, func(st pollpolicy.State) pollpolicy.State {
+		e.commit(a, nil, now, identity, cfg, active, func(st pollpolicy.State) pollpolicy.State {
 			return pollpolicy.RateLimited(st, now, retry, hasRetry)
 		})
 		return
@@ -481,7 +495,7 @@ func (e *Engine) handleFailure(a store.Account, cfg config.Config, err error,
 	if strategy.ClassifyRefresh(err).Quarantines() {
 		e.quarantine(a.UUID, cfg, now)
 	}
-	e.commit(a, nil, now, identitySize, cfg, active, nil)
+	e.commit(a, nil, now, identity, cfg, active, nil)
 }
 
 func (e *Engine) quarantine(uuid string, cfg config.Config, now time.Time) {
@@ -505,7 +519,7 @@ func (e *Engine) quarantine(uuid string, cfg config.Config, now time.Time) {
 // that evidence — throwing it away would make one bad minute look like a fresh
 // account with no history.
 func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now time.Time,
-	identitySize int, cfg config.Config, active bool,
+	identity []string, cfg config.Config, active bool,
 	adjust func(pollpolicy.State) pollpolicy.State) {
 
 	// Resolved once, before the cache callback: it is read twice inside and the
@@ -557,16 +571,62 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now time.Time,
 		// The allowance belongs to the identity, so the cadence is divided
 		// among the accounts that share one — otherwise two accounts in an
 		// organization each poll at the single-account rate and the pair spends
-		// twice the budget.
-		entry.NextPollAt = now.Add(pollpolicy.PerIdentity(at.Sub(now), identitySize))
+		// twice the budget. Share is what carries the danger band's one
+		// exemption; PerIdentity would divide the cadence that must not be
+		// divided.
+		entry.NextPollAt = now.Add(pollpolicy.Share(at.Sub(now), len(identity), in))
+		entry.ServeTTL = pollpolicy.ServeTTLFor(in)
 		entry.Poll = usage.PollState{Interval: next.Interval, LastRateLimited: next.LastRateLimited}
 		entry.Poll.LastBindingPct, entry.Poll.HasLastBinding = next.LastBindingPct, next.HasLastBinding
+		// entry.StandDownUntil is read and written back untouched, and that is
+		// what makes the two writers safe: this account's poll never edits the
+		// field its identity's live account owns, so the order the two goroutines
+		// finish in cannot change the outcome.
 		c.Put(a.UUID, entry)
-		e.scheduled(a.UUID, entry.NextPollAt)
+		e.scheduled(a.UUID, entry.PollAt(active))
+		if pollpolicy.InDangerBand(in) {
+			e.standDown(c, identity, a.UUID, now)
+		}
 		return nil
 	})
 	if err != nil {
 		e.logf("recording %s's reading failed: %v", a.UUID, err)
+	}
+}
+
+// standDown pushes every other account on one identity to the congestion ceiling
+// while the live one is inside the danger band.
+//
+// It writes StandDownUntil and never NextPollAt, because the two are different
+// facts with different writers: the schedule an account's own poll earned —
+// including whatever floor a 429 bought it — belongs to that poll, and this runs
+// from somebody else's. usage.Entry.PollAt takes the later of the two, so a
+// stand-down can hold an account back and can never let one out early.
+//
+// An account with NO entry is skipped rather than given one. It has never been
+// read, which makes it the account on this identity the engine can least afford
+// to leave unrankable, and one request buys a candidate to switch to; a
+// stand-down written over the top of nothing buys half an hour of the same
+// blindness.
+func (e *Engine) standDown(c *usage.Cache, identity []string, live string, now time.Time) {
+	for _, uuid := range identity {
+		if uuid == live {
+			continue
+		}
+		entry, ok := c.Get(uuid)
+		if !ok {
+			continue
+		}
+		at := pollpolicy.StandDownUntil(now, e.rand())
+		if !at.After(entry.StandDownUntil) {
+			// Jitter can land a later push slightly earlier than the one before
+			// it. A stand-down that moved backwards would let an account out
+			// while the band that silenced it is still on.
+			continue
+		}
+		entry.StandDownUntil = at
+		c.Put(uuid, entry)
+		e.scheduled(uuid, entry.PollAt(false))
 	}
 }
 
@@ -648,9 +708,12 @@ func (e *Engine) publish(accounts []store.Account, cache *usage.Cache,
 		// The cache's own deadline is the fallback, and it is the one that
 		// matters on a fresh start: it is what the PREVIOUS daemon scheduled,
 		// and honouring it is what stops a restart loop from re-polling every
-		// account immediately.
+		// account immediately. A stand-down is part of that answer for every
+		// account except the live one, exactly as it is for dispatch — a
+		// document that said 60 s about an account the dispatcher will not touch
+		// for half an hour is the disagreement this document exists to prevent.
 		if entry, ok := cache.Get(a.UUID); ok {
-			row.NextPollAt = entry.NextPollAt
+			row.NextPollAt = entry.PollAt(a.UUID == status.ActiveUUID)
 		}
 		row.State = accountState(a, cache, quarantined[a.UUID], status.ActiveUUID, cfg)
 		status.Accounts = append(status.Accounts, row)
