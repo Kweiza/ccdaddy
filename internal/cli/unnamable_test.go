@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/usage"
+	"github.com/Kweiza/ccdaddy/internal/view"
 )
 
 // A weekly_scoped entry the wire gave no handle for is dropped everywhere: it is
@@ -21,7 +22,7 @@ func TestTheStatusPayloadReportsAWeeklyCapItCouldNotName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	row := statusRow{HasEntry: true, Entry: usage.Entry{Snapshot: snap, FetchedAt: time.Unix(0, 0).UTC()}}
+	row := view.Row{HasEntry: true, Entry: usage.Entry{Snapshot: snap, FetchedAt: time.Unix(0, 0).UTC()}}
 
 	out := usageJSON(row, time.Unix(0, 0).UTC())
 	if got, ok := out["unnamableWeeklyCaps"]; !ok || got != 1 {
@@ -44,7 +45,7 @@ func TestAnOrdinaryReadingCarriesNoUnnamableCount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	row := statusRow{HasEntry: true, Entry: usage.Entry{Snapshot: snap, FetchedAt: time.Unix(0, 0).UTC()}}
+	row := view.Row{HasEntry: true, Entry: usage.Entry{Snapshot: snap, FetchedAt: time.Unix(0, 0).UTC()}}
 
 	if _, ok := usageJSON(row, time.Unix(0, 0).UTC())["unnamableWeeklyCaps"]; ok {
 		t.Error("unnamableWeeklyCaps is present on a reading with nothing to report")

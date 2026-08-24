@@ -13,6 +13,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/usage"
+	"github.com/Kweiza/ccdaddy/internal/view"
 )
 
 // newEngine builds the poller `--refresh` borrows. It is a seam for the same
@@ -84,7 +85,7 @@ func newListCmd() *cobra.Command {
 			if cerr := cache.LoadError(); cerr != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "The usage cache could not be read: %v\n", cerr)
 			}
-			quota := quotaRows(visible, cache, active, hasActive, now, rowThresholds(cmd, s, now))
+			quota := view.Rows(visible, cache, active, hasActive, now, rowThresholds(cmd, s, now))
 
 			if asJSON {
 				rows := make([]map[string]any, 0, len(visible))
@@ -131,17 +132,6 @@ func newListCmd() *cobra.Command {
 				if r.Active {
 					marker = "*"
 				}
-				// Both the address and the handle, which is NOT Account.Label():
-				// that one returns the alias alone, and a listing is where a
-				// user learns which alias belongs to which address.
-				label := a.Email
-				if a.Alias != "" {
-					label = fmt.Sprintf("%s (%s)", a.Email, a.Alias)
-				}
-				tier := a.Tier
-				if tier == "" {
-					tier = "-"
-				}
 				// An account can carry both flags at once, and they say
 				// opposite things: primary is "ranked beside the
 				// subscriptions", disabled is "left out of rotation
@@ -158,8 +148,8 @@ func newListCmd() *cobra.Command {
 				if len(flags) > 0 {
 					suffix = "  (" + strings.Join(flags, ", ") + ")"
 				}
-				fmt.Fprintf(w, "%s %d\t%s\t%s\t%s\t%s\t%s%s\n", marker, a.Idx, label, a.Kind,
-					tier, r.leftLabel(), r.resetsLabel(now), suffix)
+				fmt.Fprintf(w, "%s %d\t%s\t%s\t%s\t%s\t%s%s\n", marker, a.Idx, r.ListLabel(), a.Kind,
+					r.TierLabel(), r.LeftLabel(), r.ResetsLabel(now), suffix)
 			}
 			return w.Flush()
 		},
