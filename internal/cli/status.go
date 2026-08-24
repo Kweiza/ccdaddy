@@ -583,6 +583,38 @@ func usageJSON(r statusRow, now time.Time) map[string]any {
 	if len(pace) > 0 {
 		out["pace"] = pace
 	}
+	if credit := creditJSON(r.Entry.Snapshot.ExtraUsage); credit != nil {
+		out["credit"] = credit
+	}
+	return out
+}
+
+// creditJSON is the credit axis a reading carried, or nil when the reading
+// had none — which is every account whose organization never turned overage
+// on, credit-metered or not. monthlyLimit and usedCredits are each omitted
+// rather than written as zero when the wire did not report them, for the same
+// reason the credit gate itself fails closed on a nil Used: an unreported cap
+// is not a cap of zero, and an unreadable spend is not a spend of zero.
+func creditJSON(e usage.ExtraUsage) map[string]any {
+	if !e.Present {
+		return nil
+	}
+	out := map[string]any{"state": e.State.String()}
+	if e.Currency != "" {
+		out["currency"] = e.Currency
+	}
+	if limit, ok := e.MonthlyLimit(); ok {
+		out["monthlyLimit"] = limit
+	}
+	if used, ok := e.UsedCredits(); ok {
+		out["usedCredits"] = used
+	}
+	if pct, ok := e.Percent(); ok {
+		out["utilizationPct"] = pct
+	}
+	if e.DisabledReason != "" {
+		out["disabledReason"] = e.DisabledReason
+	}
 	return out
 }
 

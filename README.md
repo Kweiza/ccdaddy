@@ -939,6 +939,30 @@ export` carries it too so it survives a move between machines, and `ccdad doctor
 names every account holding it — because "this account can spend money
 unattended" is not a fact that should live only in a file.
 
+`ccdad list --json` and `ccdad status --json` also carry a `usage.credit`
+object on any account whose latest reading had overage switched on — primary
+or not, since the axis is what the wire reported rather than something only a
+primary account can have:
+
+```json
+{
+  "credit": {
+    "state": "enabled",
+    "currency": "USD",
+    "monthlyLimit": 100,
+    "usedCredits": 25.5,
+    "utilizationPct": 25.5
+  }
+}
+```
+
+`monthlyLimit` and `usedCredits` are already converted to the currency's major
+unit — the one `max_auto_spend` is written in — and either is absent rather than
+`0` when the wire did not report it: an unreported cap is not a cap of zero,
+and an unreadable spend is not a spend of zero. `state` is `enabled`,
+`disabled`, `blocked`, or `unknown`; `disabledReason` is added when an
+organization refused overage and named why.
+
 ### Environment
 
 | Variable | Effect |

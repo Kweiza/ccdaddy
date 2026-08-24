@@ -315,6 +315,60 @@ func TestListJSONOmitsUsageForAnAccountWithNoReading(t *testing.T) {
 	}
 }
 
+// A reading whose organization has overage switched on carries the credit axis
+// alongside the window figures, and list --json is where a script reads it:
+// there is no other command that prints monthlyLimit or usedCredits at all.
+func TestListJSONCarriesTheCreditAxisWhenAReadingHasOne(t *testing.T) {
+	isolate(t)
+	freezeClock(t, listNow)
+	limit, used := 10000.0, 2550.0 // cents: a $100 cap, $25.50 spent
+	seedAccount(t, "u-1", "a@example.com")
+	seedUsageEntry(t, "u-1", usage.Entry{
+		FetchedAt: listNow.Add(-90 * time.Second),
+		Snapshot: &usage.Snapshot{
+			FiveHour: window(20, listNow.Add(30*time.Minute)),
+			ExtraUsage: usage.ExtraUsageFor(usage.ExtraUsageInput{
+				State: usage.ExtraUsageEnabled, Currency: "USD",
+				MonthlyLimit: &limit, UsedCredits: &used,
+			}),
+		},
+	})
+
+	_, out, _, _ := runRoot(t, "list", "--json")
+	usageObj, _ := accountRow(t, statusJSON(t, out), "u-1")["usage"].(map[string]any)
+	credit, _ := usageObj["credit"].(map[string]any)
+	if credit == nil {
+		t.Fatalf("usage.credit is absent, want the extra_usage axis:\n%s", out)
+	}
+	if credit["state"] != "enabled" || credit["currency"] != "USD" {
+		t.Fatalf("credit = %v, want state=enabled currency=USD", credit)
+	}
+	// MonthlyLimit and UsedCredits arrive on the wire in cents; the JSON figures
+	// are in the currency's major unit, the same conversion max_auto_spend uses.
+	if credit["monthlyLimit"] != 100.0 || credit["usedCredits"] != 25.5 {
+		t.Fatalf("credit = %v, want monthlyLimit=100 usedCredits=25.5", credit)
+	}
+}
+
+// An account whose reading never carried extra_usage — no organization ever
+// turned overage on for it — must not grow a `credit` key at all: a present
+// object, even an empty one, would read as "this account has a credit axis".
+func TestListJSONOmitsCreditWhenTheReadingHasNone(t *testing.T) {
+	isolate(t)
+	freezeClock(t, listNow)
+	seedAccount(t, "u-1", "a@example.com")
+	seedUsageEntry(t, "u-1", usage.Entry{
+		FetchedAt: listNow.Add(-90 * time.Second),
+		Snapshot:  &usage.Snapshot{FiveHour: window(20, listNow.Add(30*time.Minute))},
+	})
+
+	_, out, _, _ := runRoot(t, "list", "--json")
+	usageObj, _ := accountRow(t, statusJSON(t, out), "u-1")["usage"].(map[string]any)
+	if credit, ok := usageObj["credit"]; ok {
+		t.Fatalf("usage.credit = %v, want the key absent when the reading carried no extra_usage", credit)
+	}
+}
+
 // The ACCOUNT column carries both the address and the alias. Account.Label()
 // returns the alias ALONE, which is right where one account is being named and
 // wrong here: a listing is where a user learns which handle is which address.
