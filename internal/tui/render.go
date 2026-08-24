@@ -390,6 +390,16 @@ func cellStyle(shown []view.Row, cols []Column, row, col, last int) lipgloss.Sty
 // At the scrolling rung the last visible line is spent naming what is off the
 // page rather than on one more account: a table that silently stops at the
 // bottom of the terminal is one a user reads as complete.
+//
+// With room for exactly ONE row, that trade inverts and the row wins. Two of
+// the ladder's rules meet at that size and disagree: the scrolling rung says
+// to show the height minus two and spend the last line on the count, which at
+// three rows leaves no account on screen at all, while the never-dropped list
+// says at least one account row survives every rung. The list wins, because a
+// dashboard with a header, a count of four and no accounts has stopped being a
+// dashboard — and j/k, which the count advertises, would have nothing to move
+// through. The cost is real and is stated rather than hidden: at exactly three
+// rows there is nowhere left to say that more exist.
 func (m Model) window(l Layout) (rows []view.Row, more int) {
 	all := m.Snap.Rows
 	if l.VisibleRows >= len(all) {
@@ -402,10 +412,15 @@ func (m Model) window(l Layout) (rows []view.Row, more int) {
 	if top > len(all) {
 		top = len(all)
 	}
-	n := l.VisibleRows - 1
-	if n < 0 {
-		n = 0
+	if l.VisibleRows < 2 {
+		n := l.VisibleRows
+		if top+n > len(all) {
+			n = len(all) - top
+		}
+		return all[top : top+n], 0
 	}
+	// One line off the visible count, spent on the count itself.
+	n := l.VisibleRows - 1
 	if top+n > len(all) {
 		n = len(all) - top
 	}
