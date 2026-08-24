@@ -297,3 +297,21 @@ func TestCreditGateDoesNotDivideAZeroDecimalCurrency(t *testing.T) {
 		t.Errorf("Room = %v, want 13000 — 90%% of ¥20000, less ¥5000", g.Room)
 	}
 }
+
+// The reason a refusal names has to be true of the pool that actually held the
+// gate shut. With a primary seat in the main pool there may be no subscription
+// account anywhere in the store, and "subscription quota remains" then sends a
+// user looking for an account they do not have.
+func TestTheGateNamesTheMainPoolWhenItIsNotItsTurn(t *testing.T) {
+	g := CreditGate(enabledExtra(f(10000), f(0)), 100, false)
+
+	if g.Reason != CreditMainPoolNotExhausted {
+		t.Errorf("Reason = %v, want CreditMainPoolNotExhausted", g.Reason)
+	}
+	if got := g.Reason.String(); got != "the main pool still has room" {
+		t.Errorf("Reason.String() = %q, want it to name the pool that is actually holding the gate shut", got)
+	}
+	if CreditSubscriptionNotExhausted != CreditMainPoolNotExhausted {
+		t.Error("the kept name answers for a different reason; it must forward for one release")
+	}
+}

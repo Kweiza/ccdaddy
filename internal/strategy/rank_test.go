@@ -673,3 +673,226 @@ func TestTheCreditOrderUsesTheSmallerOfTheAccountLimitAndTheCeiling(t *testing.T
 	}
 	eq(t, creditOrder(r), []string{"aaa-big-limit", "zzz-small-limit"})
 }
+
+// ---- a primary credit seat --------------------------------------------------
+
+// primarySeat builds a credit-metered seat the user has marked primary, at pct
+// percent of its credit allowance.
+//
+// The money figures are filled in DELIBERATELY, and to a shape that prices
+// nothing like pct: a $100 cap with $80 already spent arms $10 of room, which
+// is not equal to any utilization this file passes in. A ranking that reads
+// them instead of extra_usage.utilization therefore cannot produce a passing
+// answer by coincidence.
+func primarySeat(uuid string, pct float64) Candidate {
+	c := credit(uuid, &usage.Snapshot{ExtraUsage: usage.ExtraUsageFor(usage.ExtraUsageInput{
+		State: usage.ExtraUsageEnabled, Currency: "USD",
+		MonthlyLimit: pf(10000), UsedCredits: pf(8000), Utilization: &pct,
+	})})
+	c.Primary = true
+	return c
+}
+
+// primarySeatUnread is the same seat with a utilization nothing could read: the
+// money figures came back and the one number this axis runs on did not.
+func primarySeatUnread(uuid string) Candidate {
+	c := credit(uuid, &usage.Snapshot{ExtraUsage: usage.ExtraUsageFor(usage.ExtraUsageInput{
+		State: usage.ExtraUsageEnabled, Currency: "USD",
+		MonthlyLimit: pf(10000), UsedCredits: pf(8000),
+	})})
+	c.Primary = true
+	return c
+}
+
+// Two accounts identical but for the flag, at the ceiling's default of 0. The
+// flag is the whole difference: one is ranked with the accounts whose quota is
+// already paid for, the other stays in the last-resort pool where a ceiling of
+// 0 arms nothing at all.
+//
+// A seat billed only in credits has no subscription quota to prefer, so the
+// last-resort pool is the wrong pool for it -- the engine would reach it only
+// once everything else was spent, and only under a ceiling whose default means
+// never.
+func TestTheFlagIsWhatMovesASeatOutOfTheLastResortPool(t *testing.T) {
+	seat := primarySeat("seat", 10)
+	other := primarySeat("other", 10)
+	other.Primary = false
+
+	// opts() leaves MaxAutoSpend at 0, which is the default and the refusal.
+	r := Rank([]Candidate{seat, other}, opts())
+
+	eq(t, order(r), []string{"seat"})
+	eq(t, creditOrder(r), []string{"other"})
+	if r.Order[0].HasCreditRoom || r.Order[0].CreditRoom != 0 {
+		t.Errorf("CreditRoom = %v (has = %v), want none armed: max_auto_spend does not bound a primary seat",
+			r.Order[0].CreditRoom, r.Order[0].HasCreditRoom)
+	}
+	if r.Credit[0].HasCreditRoom {
+		t.Error("the unflagged twin armed room at max_auto_spend = 0, which is the ceiling's refusal")
+	}
+}
+
+// The seat's axis is extra_usage.utilization and nothing else. The money
+// figures are the last-resort pool's axis and stay there -- and utilization is
+// already a percent on the wire, so the minor-unit conversion the money figures
+// go through cannot reach this path at all.
+func TestAPrimaryCreditSeatIsRankedOnItsCreditUtilization(t *testing.T) {
+	cands := []Candidate{
+		sub("plan", snap(win(70, time.Hour), win(70, 48*time.Hour))),
+		primarySeat("seat", 10),
+	}
+
+	r := Rank(cands, opts())
+
+	eq(t, order(r), []string{"seat", "plan"})
+	seat := r.Order[0]
+	if !seat.Headroom.Known {
+		t.Fatal("Headroom.Known = false for a seat that reported 10% of its allowance used")
+	}
+	if seat.Headroom.Pct != 90 {
+		t.Errorf("Headroom.Pct = %v, want 90 -- 100 minus utilization, not a figure derived from the money",
+			seat.Headroom.Pct)
+	}
+	if seat.Headroom.Slack != 70 {
+		t.Errorf("Headroom.Slack = %v, want 70 -- the default credit threshold of 80, minus 10", seat.Headroom.Slack)
+	}
+	if seat.Headroom.Binding != creditWindow {
+		t.Errorf("Binding = %q, want %q", seat.Headroom.Binding, creditWindow)
+	}
+	// Threshold is the number Slack was measured against, and `ccdad status
+	// --json` prints it as windowThreshold beside slack. Left at zero it would
+	// print a pair that cannot be arithmetic on each other: 0 - 10 is not 70.
+	if seat.Headroom.Threshold != DefaultCreditThreshold {
+		t.Errorf("Headroom.Threshold = %v, want the credit threshold Slack was measured against (%v)",
+			seat.Headroom.Threshold, DefaultCreditThreshold)
+	}
+	if seat.HasRecovery {
+		t.Error("HasRecovery = true; a credit allowance names no time at which it comes back")
+	}
+}
+
+// A credit allowance has no reset, so a primary seat can never say when it
+// returns. In recovery mode that puts it in the far tier, and behind an account
+// at the same headroom that DID name a time: "sometime" is more than "never
+// said", and a seat that never says it is the one thing waiting cannot fix.
+func TestASpentPrimarySeatSortsBehindAnAccountThatNamedAReturnTime(t *testing.T) {
+	// Both are 97% used, so neither headroom nor slack can separate them and
+	// the recovery key decides. The plan account's reset is outside the
+	// one-hour horizon, which is the tier a seat with no reset is compared in.
+	cands := []Candidate{
+		primarySeat("seat", 97),
+		sub("plan", snap(win(97, 40*time.Hour), win(97, 40*time.Hour))),
+	}
+
+	r := Rank(cands, opts())
+
+	if r.Mode != ModeRecovery {
+		t.Fatalf("Mode = %v, want recovery -- both accounts are known to be over their own threshold", r.Mode)
+	}
+	eq(t, order(r), []string{"plan", "seat"})
+}
+
+// credit.threshold is its own number, and not threshold: it is measured on a
+// different meter, and a user who tightens a weekly floor has said nothing
+// about how far into a credit allowance the engine may go.
+func TestRankReadsTheConfiguredCreditThreshold(t *testing.T) {
+	// 60% of the allowance used: over a credit threshold of 50, under the
+	// default of 80.
+	cands := []Candidate{primarySeat("seat", 60)}
+
+	o := opts()
+	o.CreditThreshold = 50
+	if r := Rank(cands, o); !r.AllOverThreshold || r.Mode != ModeRecovery {
+		t.Errorf("credit threshold 50: AllOverThreshold = %v, Mode = %v; want true/recovery",
+			r.AllOverThreshold, r.Mode)
+	}
+	// Omitted, which must DEFAULT rather than read literally: a zero would call
+	// a seat with 1% of its credits used spent, which is the input that opens
+	// the pool that costs money.
+	o.CreditThreshold = 0
+	if r := Rank(cands, o); r.AllOverThreshold || r.Mode != ModeHeadroom {
+		t.Errorf("credit threshold omitted: AllOverThreshold = %v, Mode = %v; want false/headroom",
+			r.AllOverThreshold, r.Mode)
+	}
+}
+
+// The predicate that opens the last-resort credit pool has to count the seats
+// that are now in the main pool. A primary seat with room means the main pool
+// is not exhausted, and opening the overage pool while paid-for capacity sits
+// unused is exactly what the gate order exists to prevent.
+func TestMainPoolExhaustedCountsPrimaryCreditSeats(t *testing.T) {
+	spentPlan := sub("plan", snap(win(99, time.Hour), win(99, 48*time.Hour)))
+	cases := []struct {
+		name  string
+		cands []Candidate
+		want  bool
+	}{
+		{"a primary seat with room holds the pool shut", []Candidate{spentPlan, primarySeat("seat", 10)}, false},
+		{"a spent primary seat does not", []Candidate{spentPlan, primarySeat("seat", 99)}, true},
+		{"an unreadable primary seat holds it shut", []Candidate{spentPlan, primarySeatUnread("seat")}, false},
+		{"a last-resort credit account still does not count", []Candidate{spentPlan, creditRoom("money", 10000, 0)}, true},
+		{"a primary seat can be the whole main pool", []Candidate{primarySeat("seat", 10)}, false},
+		{"and a disabled one is not in it", []Candidate{spentPlan, disabledPrimarySeat("off")}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := MainPoolExhausted(tc.cands, opts()); got != tc.want {
+				t.Errorf("MainPoolExhausted() = %v, want %v", got, tc.want)
+			}
+			// The old name answers for one release, so a caller that has not
+			// been updated cannot silently start asking a different question.
+			if got := SubscriptionExhausted(tc.cands, opts()); got != tc.want {
+				t.Errorf("SubscriptionExhausted() = %v, want %v -- the kept name must answer for the same pool",
+					got, tc.want)
+			}
+		})
+	}
+}
+
+// disabledPrimarySeat is a primary seat the user has held out of rotation.
+// Nothing may rank it, so nothing may count it as capacity either.
+func disabledPrimarySeat(uuid string) Candidate {
+	c := primarySeat(uuid, 10)
+	c.Disabled = true
+	return c
+}
+
+// An unreadable seat is a MAYBE. Filing it as spent would strand an account
+// that may be fine; filing it as empty would send the engine to the account
+// nobody could measure, ahead of one known to have room. The middle tier is
+// where a maybe belongs, and it is where an unreadable subscription account
+// already goes.
+func TestAnUnreadablePrimarySeatIsAMaybeRatherThanASpentAccount(t *testing.T) {
+	cands := []Candidate{
+		sub("room", snap(win(10, time.Hour), win(10, 48*time.Hour))),
+		primarySeatUnread("seat"),
+		sub("spent", snap(win(99, time.Hour), win(99, 48*time.Hour))),
+	}
+
+	r := Rank(cands, opts())
+
+	eq(t, order(r), []string{"room", "seat", "spent"})
+	if r.AllOverThreshold {
+		t.Error("AllOverThreshold = true; a seat nothing could read is neither over nor under")
+	}
+}
+
+// The flag selects a meter. An account that is not on that meter is ranked
+// exactly as it was, so setting it on a subscription account -- which `ccdad
+// primary` deliberately allows, because a classification is revised from every
+// reading -- can never move that account's position.
+func TestThePrimaryFlagOnASubscriptionAccountChangesNothing(t *testing.T) {
+	plan := sub("plan", snap(win(70, time.Hour), win(70, 48*time.Hour)))
+	flagged := plan
+	flagged.Primary = true
+
+	base, marked := Rank([]Candidate{plan}, opts()), Rank([]Candidate{flagged}, opts())
+
+	if base.Order[0].Headroom != marked.Order[0].Headroom {
+		t.Errorf("Headroom = %+v with the flag and %+v without: the flag selects the credit meter, "+
+			"and a subscription account is not on it", marked.Order[0].Headroom, base.Order[0].Headroom)
+	}
+	if len(marked.Credit) != 0 {
+		t.Errorf("Credit = %v; the flag must not move a subscription account into the credit pool", creditOrder(marked))
+	}
+}

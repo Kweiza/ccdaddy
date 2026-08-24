@@ -187,6 +187,8 @@ type Options struct {
 	// on one ceiling while the gate decided on another would walk to a first
 	// choice the gate then refuses. 0 is the default and arms nothing, which
 	// leaves the pool in the uuid order it had before this field existed.
+	//
+	// It does not bound a primary credit account; see Candidate.Primary.
 	MaxAutoSpend float64
 }
 
@@ -230,28 +232,34 @@ type Ranked struct {
 	// HasCreditRoom is whether there is any. False covers every refusal the
 	// gate would make — no ceiling configured, overage switched off, spend
 	// unreadable, the armed cap spent — so it is not a claim that the account
-	// has none, only that none can be armed right now.
+	// has none, only that none can be armed right now. It is also false for a
+	// PRIMARY credit seat, where no room was priced at all: Rank routes such a
+	// seat into Result.Order and the ceiling never applied to it.
 	HasCreditRoom bool
 }
 
 // Result is one ranking pass.
 type Result struct {
-	// Order is the SUBSCRIPTION pool, best first.
+	// Order is the MAIN POOL, best first: the subscription accounts and the
+	// credit seats marked primary, ranked together.
 	Order []Ranked
-	// Credit is the credit accounts, in uuid order. They are not ranked here
-	// and never appear in Order: a credit account is metered in money and
-	// carries no plan windows, so its headroom is permanently unknown — which
-	// would file it in the "we have no idea" tier, ahead of every account known
-	// to be spent, and make the engine's best candidate the one that costs
-	// money. A credit account is a last resort, and the gate, not this
-	// comparator, is what decides whether one may be used.
+	// Credit is the last-resort credit accounts, ordered by most armed room;
+	// see lessCredit. They are not ranked on headroom and never appear in
+	// Order: such an account is metered in money and carries no plan windows,
+	// so its headroom is permanently unknown — which would file it in the "we
+	// have no idea" tier, ahead of every account known to be spent, and make
+	// the engine's best candidate the one that costs money. A credit account is
+	// a last resort, and the gate, not this comparator, is what decides whether
+	// one may be used. A credit account the user marked primary is NOT here: it
+	// is in Order, ranked on the credit utilization that is its ordinary meter.
 	Credit []Ranked
-	// AllOverThreshold is true only when every SUBSCRIPTION candidate is KNOWN
+	// AllOverThreshold is true only when every MAIN-POOL candidate is KNOWN
 	// to be over threshold. An account that could not be read makes it false:
 	// it is neither over nor under, and letting one expired token decide this
-	// is how cswap's engine came to park itself permanently. Credit accounts
-	// are excluded, or a registered credit account's permanently unknown
-	// headroom would pin this to false and make ModeRecovery unreachable.
+	// is how cswap's engine came to park itself permanently. Last-resort credit
+	// accounts are excluded, or a registered credit account's permanently
+	// unknown headroom would pin this to false and make ModeRecovery
+	// unreachable.
 	AllOverThreshold bool
 	Mode             Mode
 }
@@ -260,8 +268,10 @@ type Result struct {
 // happens. KindAPIKey has no quota concept, so there is nothing to compare it
 // on; a disabled account is held out of auto-rotation by the user.
 //
-// KindCredit IS eligible — it is a real switch target — but it is ranked on the
-// credit axis rather than on headroom; see Result.Credit.
+// KindCredit IS eligible — it is a real switch target — but it is ranked on
+// money in its own pool unless the user marked it primary, in which case it is
+// ranked on its credit utilization in the main pool. eligible itself does not
+// change: primary decides WHICH axis, never WHETHER.
 func eligible(c Candidate) bool {
 	return !c.Disabled && c.Kind != identity.KindAPIKey
 }
@@ -305,8 +315,81 @@ func weeklyResetOf(s *usage.Snapshot, model string, t Thresholds) timeValue {
 	return out
 }
 
+// primaryCredit reports whether this candidate is a credit-metered seat the
+// user has marked primary.
+//
+// The Kind test is half the predicate on purpose. Primary is stored per account
+// and survives a reclassification, so it can be set on an account that is not,
+// or not yet, metered in credits. There it means nothing: the ceiling it
+// removes only ever applied to a credit account, and the meter it selects is
+// not the one such an account runs on.
+func primaryCredit(c Candidate) bool {
+	return c.Primary && c.Kind == identity.KindCredit
+}
+
+// creditWindow is the binding-window name a primary seat reports. It is
+// extra_usage's own key on the wire, and it is deliberately NOT one of the six
+// window names: a caller looking it up in Snapshot.AllWindows finds nothing,
+// which is the true answer -- there is no window behind it and no reset, so
+// recoveryOf answers "no recovery" without needing to be told about this axis.
+const creditWindow usage.WindowName = "extra_usage"
+
+// creditHeadroom is the axis a PRIMARY credit seat is ranked on.
+//
+// It reads extra_usage.utilization and nothing else. That figure is already a
+// percent of 0-100 on the wire and is never converted, so the minor-unit
+// conversion monthly_limit and used_credits go through cannot reach this path
+// -- and those two are not read here at all, because a seat billed only in
+// credits has no overage to price.
+//
+// The result is comparable with a subscription account's slack because it is
+// the same quantity: how many points are left before the meter that binds this
+// account reaches its configured stop. That commensurability is the whole claim
+// the primary flag makes.
+//
+// Threshold is filled in for the same reason HeadroomFor fills it: it is the
+// number Slack was measured against, `ccdad status --json` prints the two side
+// by side as windowThreshold and slack, and a zero there would print a pair
+// that is not arithmetic on each other.
+//
+// A utilization that could not be read leaves Known false, which files the seat
+// in the middle tier exactly as an unreadable subscription account -- not
+// spent, and not empty. The cost is one switch onto a seat that may turn out to
+// have nothing left, which is the cost an unreadable subscription account
+// already carries, and the alternative is a pool of unreadable accounts that is
+// a dead end.
+func creditHeadroom(c Candidate, o Options) Headroom {
+	var e usage.ExtraUsage
+	if c.Usage != nil {
+		e = c.Usage.ExtraUsage
+	}
+	pct, ok := e.Percent()
+	if !ok {
+		return Headroom{}
+	}
+	thr := o.Thresholds().CreditThreshold()
+	return Headroom{
+		Pct:       100 - pct,
+		Slack:     thr - pct,
+		Threshold: thr,
+		Known:     true,
+		Binding:   creditWindow,
+	}
+}
+
 func measure(c Candidate, o Options) Ranked {
 	h := HeadroomFor(c.Usage, o.Model, o.Thresholds())
+	// A primary seat is metered in credits rather than in plan windows, so it
+	// is ranked on the credit allowance instead. This is a reassignment rather
+	// than a second opinion: such a seat carries no plan windows, so the line
+	// above found nothing for it and everything below still works off h --
+	// recoveryOf looks for a window named extra_usage and finds none, so it
+	// answers "no recovery", which is true of a credit allowance, and
+	// weeklyResetOf ranges over an account carrying no plan windows at all and
+	// answers the same way.
+	if primaryCredit(c) {
+		h = creditHeadroom(c, o)
+	}
 	// Recovery is the moment the account stops being spent, and that is not
 	// always the binding window's rollover. A blown WEEKLY window still holds the
 	// account back after the five-hour window has come back, so when there is one
@@ -338,7 +421,7 @@ func measure(c Candidate, o Options) Ranked {
 func Rank(cands []Candidate, o Options) Result {
 	measured := make([]Ranked, 0, len(cands))
 	credit := make([]Ranked, 0)
-	// True until some SUBSCRIPTION candidate turns out not to be known-and-over.
+	// True until some MAIN-POOL candidate turns out not to be known-and-over.
 	// An account that could not be read counts against it: it is neither over
 	// nor under, and letting one expired token answer this is how cswap's engine
 	// came to park itself permanently.
@@ -348,7 +431,13 @@ func Rank(cands []Candidate, o Options) Result {
 			continue
 		}
 		r := measure(c, o)
-		if c.Kind == identity.KindCredit {
+		// A credit account that is NOT primary is the last resort: metered in
+		// money, ordered by armed room, behind the credit gate. armedRoom is
+		// not computed for a primary seat and the gate never sees one, because
+		// the ceiling it prices bounds an OVERAGE -- spending past quota that
+		// is already paid for -- and a seat billed only in credits has no such
+		// quota for its credits to be an overage of.
+		if c.Kind == identity.KindCredit && !c.Primary {
 			r.CreditRoom, r.HasCreditRoom = armedRoom(c, o.MaxAutoSpend)
 			credit = append(credit, r)
 			continue
@@ -472,9 +561,13 @@ func lessCredit(a, b Ranked) bool {
 // order agrees with the decision by construction: every refusal the gate makes
 // — the account's own overage switch, the organization's block, an unreadable
 // spend, an invalid ceiling — lands here as "no room" without this file
-// re-stating any of them. subscriptionExhausted is true because this asks what
-// the gate WOULD say when it is the credit pool's turn; whether it is that
-// pool's turn is Decide's question, not the comparator's.
+// re-stating any of them. mainPoolExhausted is true because this asks what the
+// gate WOULD say when it is the credit pool's turn; whether it is that pool's
+// turn is Decide's question, not the comparator's.
+//
+// It is never reached for a primary credit account: Rank routes one into the
+// main pool above, so the ceiling this prices is not applied to the one kind of
+// account for which that ceiling has no meaning.
 func armedRoom(c Candidate, ceiling float64) (float64, bool) {
 	var e usage.ExtraUsage
 	if c.Usage != nil {
@@ -500,29 +593,54 @@ func lessConsumeFirst(a, b Ranked) bool {
 	return a.UUID < b.UUID
 }
 
-// SubscriptionExhausted answers step 2 of the credit gate: may the credit pool
-// be considered at all?
+// MainPoolExhausted answers step 2 of the credit gate: may the LAST-RESORT
+// credit pool be considered at all?
 //
-// Only subscription accounts count. An account that could not be read holds the
-// pool OPEN — it is not known to be spent, and the fail-closed direction on
-// money is to keep using quota that is already paid for rather than to start
-// spending because one poll failed. A pool with no subscription accounts in it
-// is exhausted trivially.
-func SubscriptionExhausted(cands []Candidate, o Options) bool {
-	subs := make([]Candidate, 0, len(cands))
+// The main pool is what Rank puts in Result.Order: the subscription accounts,
+// and the credit seats marked primary. A primary seat with room means the pool
+// is not exhausted, because its credits are quota the user is already paying
+// for -- spending overage while it sits unused is the exact inversion the gate
+// order exists to prevent.
+//
+// An account that could not be read holds the pool OPEN. It is not known to be
+// spent, and the fail-closed direction on money is to keep using what is
+// already bought rather than to start spending because one poll failed. A pool
+// with nothing in it is exhausted trivially.
+func MainPoolExhausted(cands []Candidate, o Options) bool {
+	main := make([]Candidate, 0, len(cands))
 	for _, c := range cands {
-		if eligible(c) && c.Kind == identity.KindSubscription {
-			subs = append(subs, c)
+		if !eligible(c) {
+			continue
+		}
+		if c.Kind == identity.KindSubscription || primaryCredit(c) {
+			main = append(main, c)
 		}
 	}
-	if len(subs) == 0 {
+	if len(main) == 0 {
 		return true
 	}
-	for _, c := range subs {
-		over, known := Spent(HeadroomFor(c.Usage, o.Model, o.Thresholds()))
-		if !known || !over {
+	for _, c := range main {
+		// measure is the ONE place that chooses which axis a candidate is
+		// ranked on -- plan windows, or the credit allowance for a primary
+		// seat -- so this asks it rather than choosing again here. "Is this
+		// account spent" already has more than one implementation in this
+		// tree; a second copy of "on which axis" would be the next one, and it
+		// would be the copy that silently drops the --model narrowing.
+		spent, known := Spent(measure(c, o).Headroom)
+		if !known || !spent {
 			return false
 		}
 	}
 	return true
+}
+
+// SubscriptionExhausted is MainPoolExhausted under the name it had while the
+// main pool was subscriptions and nothing else.
+//
+// Deprecated: use MainPoolExhausted. It is kept for one release so a caller
+// that has not been updated -- internal/strategy/antiflap.go among them --
+// keeps compiling and keeps getting the same answer, rather than a name that
+// quietly means less than it used to.
+func SubscriptionExhausted(cands []Candidate, o Options) bool {
+	return MainPoolExhausted(cands, o)
 }

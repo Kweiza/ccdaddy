@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"maps"
 	"os"
 	"path/filepath"
@@ -325,6 +326,20 @@ func TestUnknownKeysReachesInsideAKnownSection(t *testing.T) {
 	if len(unknown) != 2 || unknown[0] != "credit.future_credit" || unknown[1] != "future" {
 		t.Errorf("UnknownKeys() = %v, want [credit.future_credit future]", unknown)
 	}
+
+	// window_threshold is the second section this release nests keys under,
+	// and the same rule reaches inside it: a name that is not a window is
+	// reported by its dotted name, while the windows themselves are not
+	// reported at all. Before it was a known section the whole table was
+	// reported as one unrecognized key, so `ccdad doctor` told the user a
+	// working config was being ignored.
+	unknown, err = UnknownKeys([]byte("[window_threshold]\nfive_hour = 85\n\"weekly_scoped:model:Opus 4.5\" = 40\ncinder_cove = 50\nthirty_day = 60\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unknown) != 2 || unknown[0] != "window_threshold.cinder_cove" || unknown[1] != "window_threshold.thirty_day" {
+		t.Errorf("UnknownKeys() = %v, want [window_threshold.cinder_cove window_threshold.thirty_day]", unknown)
+	}
 }
 
 func TestAnUnreadableConfigIsAnErrorRatherThanSilentDefaults(t *testing.T) {
@@ -451,7 +466,8 @@ func TestASameSizeEditInsideOneTimestampTickIsPickedUp(t *testing.T) {
 func TestTheKeySetIsClosed(t *testing.T) {
 	want := []string{
 		"threshold", "hysteresis_pct", "headroom_ratio",
-		"cooldown", "recovery_hysteresis", "strategy", "credit.max_auto_spend",
+		"cooldown", "recovery_hysteresis", "preempt_lead", "strategy",
+		"probe_unknown", "hover", "credit.threshold", "credit.max_auto_spend",
 	}
 	got := Keys()
 	if len(got) != len(want) {
@@ -461,6 +477,58 @@ func TestTheKeySetIsClosed(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("Keys() = %v, want %v", got, want)
 		}
+	}
+
+	// window_threshold is the one settable name the list above cannot carry: a
+	// scoped window is named after a model or a surface the server invented, so
+	// the legal names are not knowable in advance. It is closed one level down
+	// instead, by what a window may be called. Without this half the list would
+	// no longer describe the whole surface and the gate would be pinning half a
+	// namespace.
+	d := newDocument()
+	if err := d.Set("window_threshold.five_hour", "85"); err != nil {
+		t.Errorf("Set(window_threshold.five_hour) = %v, want it accepted", err)
+	}
+	for _, key := range []string{
+		"window_threshold.typo", // not a window
+		"window_threshold",      // the table itself is not a value
+		"credit.future",         // the other section stays closed by name
+		"future.a",              // and no third section is open
+	} {
+		if err := d.Set(key, "1"); !errors.Is(err, ErrUnknownKey) {
+			t.Errorf("Set(%s) = %v, want ErrUnknownKey", key, err)
+		}
+	}
+}
+
+// Every window the ranking can bind on has to be one a threshold can be
+// attached to, or the config offers a knob for some windows and silently not
+// for others.
+//
+// The refusal is rendered once and checked against each of them: a window that
+// is settable and a refusal that does not name it are the same defect seen from
+// two sides, because the refusal is the only place a user finds the key.
+func TestEveryRankedWindowIsSettableAndCinderCoveIsNot(t *testing.T) {
+	refusal := unknownKey(windowThresholdSection + ".typo").Error()
+	for _, name := range usage.RateLimitWindowNames() {
+		key := windowThresholdSection + "." + string(name)
+		if !isKnownKey(key) {
+			t.Errorf("%s is a window the ranking binds on and %s is refused", name, key)
+		}
+		if !strings.Contains(refusal, string(name)) {
+			t.Errorf("the refusal message does not name %s, so a user cannot find the key from it", name)
+		}
+	}
+	if isKnownKey(windowThresholdSection + "." + string(usage.WindowCinderCove)) {
+		t.Errorf("%s is settable; its resets_at is an expiry, so nothing ranks it and a threshold on it would do nothing",
+			usage.WindowCinderCove)
+	}
+	// cinder_cove's own refusal is a different sentence from a misspelling's,
+	// and flattening the two would tell a user to check their spelling of a
+	// name they spelled correctly.
+	if got := unknownKey(windowThresholdSection + "." + string(usage.WindowCinderCove)).Error(); !strings.Contains(got, "expiry") {
+		t.Errorf("refusing %s says %q; it has to say what the window IS rather than that it is misspelled",
+			usage.WindowCinderCove, got)
 	}
 }
 
