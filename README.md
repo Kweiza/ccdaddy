@@ -21,7 +21,7 @@ $ ccdad list
   3    ci@example.org (ci)      api-key       -     ?     -
 
 $ ccdad status
-Daemon:  running  pid 48213  up 2h 6m
+Daemon:  running  pid 48213  up 2h06m
 Active:  work@example.com (work)
 
   IDX  ACCOUNT                  TYPE          USED  WINDOW     RESETS IN  PACE     AGE
@@ -329,12 +329,15 @@ machine. A profile owns a global config of its own, and the key goes there and
 nowhere else. The default mode refuses and says so.
 
 **`ccdad run` also refuses when your own shell already carries a credential
-Claude Code reads before the session's.** Claude Code reads a stored login last,
-so a token, a key, a helper or a host-injected file already in the environment
-you launch from outranks the login ccdad just installed: the session would
-authenticate as that credential while ccdad reported success. It applies in
-**both** modes — `--full-profile` scopes a different directory, not the
-environment, which is inherited either way.
+Claude Code reads before the session's.** Claude Code reads a stored login last on the
+OAuth axis, so a token, a helper, an Anthropic CLI profile or a host-injected
+file already in the environment you launch from outranks the login ccdad just
+installed: the session would authenticate as that credential while ccdad reported
+success. It applies in **both** modes — `--full-profile` scopes a different
+directory, not the environment, which is inherited either way. An
+`ANTHROPIC_API_KEY` wins on a different axis that this refusal does not read, so
+a key exported in your shell can still take the session; `ccdad doctor`'s
+`api-key` row is what reports that one.
 
 ccdad refuses rather than removing the offending variable. Stripping would make
 the guarantee true for the sources that *are* variables and leave it false for
@@ -406,12 +409,17 @@ entry of its own is measured against the top-level `threshold`. Setting one is
 quota without being asked**. A window that has never been used reports no reset
 time, so it has no pace, nothing to rank on, and no way to get one except to
 spend against it — so ccdad runs a single one-turn `claude` request against such
-an account and schedules a poll a minute later. Set it to `false` and an account
-with no reading simply stays unknown, which files it in the middle of the
-ranking rather than at either end. `hover` defaults to `false`; turning it on
+an account and schedules a poll a minute later. Set it to `false` and the window
+never gains one: an unused window still reads as nothing spent, so the account
+keeps the most slack in the pool and sits at the FRONT of the ordinary ranking.
+What it has no answer for is pace, the projection, and where it belongs once
+every account is spent. `hover` defaults to `false`; turning it on
 hands every threshold and every anti-flap margin to the engine, which derives
 them from each window's own elapsed fraction instead of reading them from this
-file.
+file. It takes `strategy` and `probe_unknown` with them, and it forces
+`probe_unknown` back **on**: a window nothing has ever spent against reports no
+elapsed share, so hover has nothing to derive a threshold from until a turn wakes
+it. `credit.max_auto_spend` is the one number hover leaves alone.
 
 Keys this version does not recognise are left alone rather than deleted, so a
 file written by a newer release survives an older one. Trying to *set* an
@@ -465,9 +473,11 @@ from — are always taken from the window with the *least slack*, whichever fami
 it belongs to. So an account can be reported against its weekly cap and ranked
 on its five-hour one in the same pass, and the window in `WINDOW` need not be the
 one that decided where the account sits in the list. `ccdad status --json` and
-`ccdad list --json` publish `slack` and `windowThreshold` per account, which are
-the numbers the ordering was actually made on, and `ccdad auto --json` carries
-the same two on every row of its `order[]`.
+`ccdad list --json` publish `slack` and `windowThreshold` on each account's
+`usage` object — the numbers the ordering was actually made on — and `ccdad auto
+--json` carries the same two on every row of its `order[]`. An account whose
+reading could not be taken carries neither, exactly as it carries no
+`headroomPct`: unknown is never rendered as a number.
 
 The weekly rule is not inert everywhere, though. In the ordinary order it moves
 nothing. Once every account is spent the ranking switches to recovery order
@@ -496,8 +506,9 @@ tighten a window threshold and the engine stops moving, **set `headroom_ratio` t
 `1`**, which switches that margin off; `1` is the lowest value the config
 accepts, because anything less would let an account with less headroom displace
 the live one. `hover` is not a second answer to this, it is the same one applied
-for you — it sets the ratio to `1` itself. `ccdad switch --force` overrides the
-hold for one switch.
+for you — it sets the ratio to `1` itself. `ccdad switch --strategy headroom
+--force` overrides the hold for one switch; `--force` reaches the margins only on
+the targetless grammar, so a bare `ccdad switch --force` is a usage error.
 
 **A weekly cap ccdad cannot name.** The usage endpoint files a scoped weekly cap
 under a scope key, and ccdad names two of them, `model` and `surface`. That
@@ -515,9 +526,10 @@ you know: add
 to `config.toml` **by hand** — quoted, because the name carries colons — and it
 joins the ranking from the next reading that carries it. `ccdad config set` will
 not write that line: with no reading in hand it cannot tell a scope the server
-really sends from a typo, so it refuses both. For the same reason `ccdad config
-list` reports the key as one it does not know; the value is being read
-regardless. Removing the line is how you turn it back off — a `0` is refused, not
+really sends from a typo, so it refuses both. `ccdad config list` then lists the key
+under its note about keys this ccdad does not know, and that note says they are
+being ignored — true of every other unknown key and not of this one, because the
+loader carries a `window_threshold` entry whatever its name is. Removing the line is how you turn it back off — a `0` is refused, not
 an opt-out.
 
 A cap ccdad cannot name **at all** — no display name, and no scope key it can
@@ -534,10 +546,12 @@ question it is asking: instead of "who has the most room", it ranks by **who
 comes back first**, inside a one-hour horizon, and by who has the most slack left
 outside it. The hour is fixed and there is no key for it.
 
-`ccdad status` names it:
+`ccdad status` prints the mode on every run where a ranking could be made —
+`headroom` and `consume-first` name themselves the same way, and the line is
+absent only when nothing has ever been polled. In this mode it reads:
 
 ```console
-Daemon:  running  pid 48213  up 2h 6m
+Daemon:  running  pid 48213  up 2h06m
 Active:  work@example.com (work)
 Mode:    recovery  (every account is over its threshold; ranking by soonest reset inside an hour, by headroom past it)
 ```
@@ -548,8 +562,9 @@ has always emitted it on its `evaluated` events. The key is absent rather than
 for "plenty of room".
 
 The pool this is about is the accounts still in the running: the subscription
-accounts plus any credit seat marked primary, minus anything a recent failure has
-quarantined. Last-resort credit accounts are not in it — they are metered in
+accounts plus any credit seat marked primary, minus anything a rejected refresh
+token has quarantined. A failed poll is not one of those: it leaves the account
+unreadable, which holds the engine OUT of this mode rather than out of the pool. Last-resort credit accounts are not in it — they are metered in
 money and have no plan window, so their headroom is unknown forever and counting
 them would put this mode permanently out of reach.
 
@@ -559,7 +574,10 @@ an engine parks itself permanently on one expired token.
 
 If you have set `strategy` to `consume-first`, that is the mode you get instead,
 whatever the thresholds say: it is a different question — spend perishable weekly
-quota before it expires — and it is answered first.
+quota before it expires — and it is answered first. Not under `hover`, which
+stops reading the key and ranks on headroom: a window close to its reset already
+carries a high derived threshold, so hover puts the perishable-quota answer on
+the slack axis instead of into a mode of its own.
 
 ### Switching before the limit, not after it
 
@@ -588,8 +606,10 @@ The projection runs ahead of every margin that compares two accounts as they
 stand — `hysteresis_pct` and `headroom_ratio` — because a comparison that is
 about to be false is not a reason to stay. It does **not** override the cooldown,
 which is the only thing bounding a switch storm; when the projection fires and
-the cooldown holds it, what you are told is the cooldown. And it cannot reach the
-credit pool at all: a pre-emptive move walks the subscription ranking only.
+the cooldown holds it, what you are told is the cooldown. It cannot reach the
+last-resort credit pool at all — a pre-emptive move walks the main ranking only,
+which is the subscription accounts plus any credit seat marked primary, and it
+can land on one of those like any other.
 
 The rule corrects itself, which is why the horizon is the real poll interval
 rather than a constant. Polling every 60 s gives a short horizon and the switch
@@ -618,12 +638,15 @@ not put it in the band. Read honestly:
   none of it back early.
 - 60 s is already about twice that allowance, and it is the floor. No rule goes
   below it: a `429` imposes a 360-second floor and an estimate that multiplies by
-  1.5 each time up to 1800 s, and the estimate always wins — one `429` alone puts
-  the next poll 540 s out. On a three-account identity that is about twenty-seven
-  minutes blind at 97%, at the moment it can least be afforded.
-- On a **shared identity** the exemption is at least a threefold gain: the urgent
-  cadence divided three ways is 180 s each, and the band hands the undivided 60 s
-  to the one account a session is running against. Sharing is all the exemption
+  1.5 each time up to 1800 s, and the estimate always outruns the floor — one
+  `429` alone earns 540 s. It costs more than that, because a failed poll is not
+  a reading: the band lapses with it and the account drops back to the cadence a
+  spent account gets, divided across its identity. On three accounts that is
+  thirty minutes blind at 97%, at the moment it can least be afforded.
+- On a **shared identity** the exemption is worth exactly the size of the
+  identity: the urgent cadence divided two ways is 120 s and divided three ways
+  is 180 s, and the band hands the undivided 60 s to the one account a session is
+  running against. Sharing is all the exemption
   changes, so on a **solo identity it changes nothing** — 60 s was already the
   answer there. The rest of the band still applies on a solo identity.
 
@@ -710,7 +733,7 @@ nothing failed and `1` when something did — a warning is not a failure — and
 |---|---|
 | `0` | The requested action was taken |
 | `1` | Runtime failure — network, I/O, lock contention, token refresh |
-| `2` | **Usage error only** — a bad flag, a bad combination, an unknown account, or `ccdad run` refusing to start a session that would authenticate as something other than the account you named |
+| `2` | **Usage errors, and `ccdad run`'s refusals** — a bad flag, a bad combination, an unknown account, or a session `ccdad run` will not start because it would authenticate as something other than the account you named. `ccdad auto` and `ccdad switch` report that same displaced credential as `4`, because for them it is a blocked action rather than a command that cannot be run |
 | `3` | Understood, nothing to do (already on that account; daemon already stopped) |
 | `4` | Blocked: wanted to act, no viable target (everything exhausted, credit gate refused, or another OAuth source outranks the credentials file) |
 | `5` | A negative answer to a probe (no daemon running; nothing attributable) |

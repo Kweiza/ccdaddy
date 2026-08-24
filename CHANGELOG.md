@@ -198,12 +198,16 @@ by `uuid` or `alias`.
   says nothing about the account and does not put it in the band. Stated
   honestly, this does spend more of the identity's allowance rather than merely
   moving it: the live account goes from at most 20 requests an hour to 60, and
-  the alternates give back less than that. What it refuses to do is hand 60 s to
-  everyone on the identity, which would be 180 requests an hour against an
+  the alternates give back less than that. The exemption itself is worth exactly
+  the size of the identity — twofold on two accounts, threefold on three — and
+  nothing at all on an identity of one, where 60 s was already the answer. What
+  it refuses to do is hand 60 s to everyone on the identity, which would be 180 requests an hour against an
   allowance of roughly 28-30 per rolling hour. 60 s stays the floor: a `429`
   imposes a 360-second floor and an estimate that multiplies by 1.5 up to 1800 s,
-  and the estimate always wins, so one `429` alone puts the next poll 540 s out —
-  about twenty-seven minutes blind on a three-account identity at 97%. The
+  and the estimate always outruns that floor, so one `429` alone earns 540 s. It
+  costs more, because a failed poll is not a reading — the band lapses with it
+  and the account drops back to the cadence a spent account gets, divided across
+  its identity, which is thirty minutes blind on three accounts at 97%. The
   hand-held path is deliberately not shortened; `ccdad list --refresh` still
   serves any reading under 180 s old.
 - **The daemon and the engine now answer one "is this account spent" question.**
