@@ -526,10 +526,11 @@ you know: add
 to `config.toml` **by hand** — quoted, because the name carries colons — and it
 joins the ranking from the next reading that carries it. `ccdad config set` will
 not write that line: with no reading in hand it cannot tell a scope the server
-really sends from a typo, so it refuses both. `ccdad config list` then lists the key
-under its note about keys this ccdad does not know, and that note says they are
-being ignored — true of every other unknown key and not of this one, because the
-loader carries a `window_threshold` entry whatever its name is. Removing the line is how you turn it back off — a `0` is refused, not
+really sends from a typo, so it refuses both. `ccdad config list` names such an
+entry in a note of its own, separate from the one about keys that really are
+ignored, and says it is being read — the loader carries a `window_threshold`
+entry whatever its name is. A window name that is simply misspelled gets the
+ignored note instead, which is the honest answer: no reading ever produces it. Removing the line is how you turn it back off — a `0` is refused, not
 an opt-out.
 
 A cap ccdad cannot name **at all** — no display name, and no scope key it can

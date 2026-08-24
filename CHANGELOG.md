@@ -271,6 +271,20 @@ by `uuid` or `alias`.
 
 ### Fixed
 
+- **`ccdad config list` called the one unknown key it reads "ignored".** A weekly
+  cap filed under a scope key this build cannot name is carried but left out of
+  the ranking, and a `[window_threshold]` entry naming that window is the opt-in
+  that puts it in — the only one, since `ccdad config set` refuses a scope it
+  cannot verify against a reading it does not have. So the key is unknown to the
+  config surface and live to the engine at once, and it was being reported under
+  the note that says such keys "are being ignored (not deleted)". A user who had
+  just hand-written the line ran `config list` to check their work and was told
+  by ccdad that it does nothing. It now gets a note of its own saying it is read
+  and when it takes effect, and the sentence about ignored keys keeps naming the
+  ones that really are — a misspelled window name still lands there, because no
+  reading ever produces it. `usage.ErrUnknownScope` existed for exactly this
+  distinction and had no consumer; it has one now.
+
 - **Every poll cadence was exact arithmetic, so a fleet that paused together came
   back together.** `internal/pollpolicy` spreads each interval it returns by up
   to a tenth either way, and it takes the sample as an argument so the whole

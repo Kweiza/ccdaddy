@@ -685,3 +685,57 @@ func TestTheNewScalarKeysAreSettableFromTheCLI(t *testing.T) {
 		}
 	}
 }
+
+// A window_threshold key naming a scope this build does not know is the one
+// unknown key that IS being read: it is how a weekly cap filed under a scope
+// ccdad cannot name joins the ranking, and writing it by hand is the only way in
+// because `config set` refuses a scope it cannot verify. Filing it under the
+// note that says unknown keys "are being ignored" tells a user who just followed
+// the README that the setting they typed does nothing.
+func TestConfigListDoesNotCallAnOptedInWindowIgnored(t *testing.T) {
+	isolate(t)
+	writeConfig(t, "future_key = 'x'\n\n[window_threshold]\n'weekly_scoped:region:eu' = 60.0\n")
+
+	code, _, errOut, _ := runRoot(t, "config", "list")
+	if code != ExitOK {
+		t.Fatalf("exit %d, want 0: %s", code, errOut)
+	}
+	ignored, opted := "", ""
+	for _, line := range strings.Split(errOut, "\n") {
+		switch {
+		case strings.Contains(line, "being ignored"):
+			ignored = line
+		case strings.Contains(line, "weekly_scoped:region:eu") && !strings.Contains(line, "being ignored"):
+			opted = line
+		}
+	}
+	if strings.Contains(ignored, "weekly_scoped:region:eu") {
+		t.Errorf("the opted-in window is filed under the ignored note, which is the one thing it is not:\n%s", ignored)
+	}
+	if !strings.Contains(ignored, "future_key") {
+		t.Errorf("a genuinely unknown key stopped being reported:\n%s", errOut)
+	}
+	if opted == "" {
+		t.Fatalf("nothing names the opted-in window outside the ignored note:\n%s", errOut)
+	}
+	// The wording IS the fix, so it is pinned rather than left to taste. A note
+	// that names the key without saying it is live leaves the reader exactly
+	// where the ignored sentence left them.
+	if !strings.Contains(opted, "being read") {
+		t.Errorf("the note names the opted-in window without saying it is being read:\n%s", opted)
+	}
+}
+
+// A window_threshold key that is simply a typo is NOT an opt-in and must keep
+// the old answer. No reading ever produces a window called `sevenday`, so that
+// entry really is ignored, and telling a user it is live would be the same
+// defect pointed the other way.
+func TestConfigListStillCallsAMisspelledWindowIgnored(t *testing.T) {
+	isolate(t)
+	writeConfig(t, "[window_threshold]\nsevenday = 60.0\n")
+
+	_, _, errOut, _ := runRoot(t, "config", "list")
+	if !strings.Contains(errOut, "being ignored") || !strings.Contains(errOut, "sevenday") {
+		t.Errorf("a misspelled window name is no longer reported as ignored:\n%s", errOut)
+	}
+}
