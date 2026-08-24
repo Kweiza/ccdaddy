@@ -271,6 +271,36 @@ by `uuid` or `alias`.
 
 ### Fixed
 
+- **A killed `ccdad import` or `ccdad add` could leave a live refresh token no
+  account named.** `add` writes an account's credential file before the
+  document that names it is saved, and the reversal for a refused transaction
+  ran from `mutate`'s error return rather than from a `defer` — so a process
+  that left any other way, a panic or Ctrl-C partway through a multi-account
+  import being the ordinary form, kept the file: invisible to `ccdad list`,
+  `ccdad remove` and every account row `ccdad doctor` prints, because all of
+  them read `accounts.toml` and an orphan is by definition a uuid it does not
+  carry. The reversal now runs from leaving the transaction, and it holds
+  SIGINT for the span of its own write — the door users actually use — so
+  Ctrl-C there is a reversal and exit 130, not a leak. `root.go`'s refusal to
+  trap SIGINT process-wide stands: the span is disk-only work with the
+  cross-process lock already held across it, and it ends before the
+  transaction returns. SIGKILL and a power cut are not closable at any price;
+  `doctor`'s `credential-files` row still reports whatever gets past this.
+
+- **A deleted `accounts.toml` read as a store with no accounts, and `doctor`
+  told a user to delete every login they had left because of it.** Every check
+  that takes a set difference against the account list — `profiles`,
+  `primary-accounts`, `credential-files` — read the empty list produced by a
+  missing document as the truth, so a deleted document turned every stored
+  credential file into an orphan and the `credential-files` row's remedy is
+  "Delete them once you have looked". A new `accounts-file` row notices the
+  document is gone while credential files still sit beside it, fails loudly
+  with the opposite advice — put the document back, do not touch the files —
+  and gates the three rows below it so they report "cannot be trusted" rather
+  than a reassuring answer built on no evidence. A fresh install, which has
+  neither the document nor any credentials, is unaffected: that row reads `ok`
+  and the three below it answer normally, exactly as before.
+
 - **`ccdad config list` called the one unknown key it reads "ignored".** A weekly
   cap filed under a scope key this build cannot name is carried but left out of
   the ranking, and a `[window_threshold]` entry naming that window is the opt-in
