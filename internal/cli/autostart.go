@@ -66,11 +66,22 @@ import (
 //   - `remove`, `export`, `import`, `config` and `uninstall`: administering
 //     ccdad is not using it, and `uninstall` in particular would start the
 //     process it is about to stop.
+//   - `primary`, for the same reason: setting an account's money policy is
+//     administering ccdad rather than using it, and the engine reads the flag
+//     on its next tick either way, whether or not one is already running.
+//   - `hover`, because this map is keyed by command path — listing it would
+//     auto-start a daemon for the verb that turns the mode off, and `ccdad
+//     hover off` is the one moment a stray daemon is least welcome.
 //   - `probe`, which is the engine's own errand rather than a user using their
 //     accounts, and which a daemon RE-EXECS. An entry here would leave the
 //     recursion guard as the only thing between a probe and an unbounded spawn,
 //     and it would mean a `ccdad probe --all` on a machine with no engine spent
 //     quota and left a process behind for it.
+//   - `bootstrap`, which a container entrypoint runs before it starts the
+//     daemon itself. An entry here would spawn an engine over a store that has
+//     not finished importing — or, off a container, one nobody asked to run —
+//     and it would then race the entrypoint's own `daemon start` for the
+//     singleton a moment later.
 //   - `setup-path`, which runs when `ccdad` does not resolve yet. Spawning a
 //     daemon from the command whose whole job is to make the NEXT terminal find
 //     the binary starts an engine for a machine that has not finished being set
