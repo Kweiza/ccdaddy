@@ -212,7 +212,16 @@ cites_paths=('*.go' '*.sh' '*.ps1' '*.yml' '*.md'
 
 # The SPELLED shape: three literals, each of which is how one class of
 # unreachable reference was actually written here.
-cites_spelled='§|\b[Tt]he brief\b|\b[Tt]ask [0-9]+'
+#
+# NO \b. It is a GNU extension outside a bracket expression, not POSIX ERE, and
+# macOS's git — built against the system regex library, not glibc's — treats it
+# as a literal 'b' rather than a boundary, so `\bthe brief\b` becomes "bthe
+# briefb" and never matches. That silently disabled this whole check on the
+# macOS leg of CI: every case that expects a MISS still misses, by coincidence,
+# and only the ones that expect a HIT go quiet. Measured on this tree with \b
+# dropped: the same four lines match as matched with it, because nothing here
+# has "the brief" or "task N" as a substring of a longer word.
+cites_spelled='§|[Tt]he brief|[Tt]ask [0-9]+'
 
 # The POINTED shape, and it is the one that got past the first. `§`, "the
 # brief" and "task n" are SPELLINGS -- a literal catches each. A document
@@ -229,7 +238,13 @@ cites_spelled='§|\b[Tt]he brief\b|\b[Tt]ask [0-9]+'
 # ordinary hyphenated English -- "read-decide-merge-write",
 # "sibling-temp-file-then-rename", "error-to-exit-code" -- which is why the
 # phrase is required rather than the shape alone.
-cites_pointer='\b([Ss]ee|[Pp]er|[Rr]efer to|[Dd]escribed in|[Dd]ocumented in) [a-z0-9]+(-[a-z0-9]+){2,}'
+#
+# NO leading \b, for the reason cites_spelled above has none: macOS's git reads
+# it as a literal 'b', not a boundary, which made this whole arm a silent no-op
+# on that leg — `pointers=$(git grep ...)` never matched, so the loop below it
+# never ran and unresolved stayed empty no matter what the tree contained.
+# Measured with it dropped: still zero matches over this tree, same as with it.
+cites_pointer='([Ss]ee|[Pp]er|[Rr]efer to|[Dd]escribed in|[Dd]ocumented in) [a-z0-9]+(-[a-z0-9]+){2,}'
 
 check_cites() {
 	group "self-contained comments"
