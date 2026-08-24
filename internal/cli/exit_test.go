@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+
+	"github.com/Kweiza/ccdaddy/internal/store"
 )
 
 func TestCodeForNil(t *testing.T) {
@@ -69,5 +71,26 @@ func TestExitCodeLiterals(t *testing.T) {
 			t.Fatalf("two exit codes share the value %d", int(code))
 		}
 		seen[int(code)] = true
+	}
+}
+
+// An interrupted store write is the one Ctrl-C in this binary that the shell
+// never sees as a signal: the transaction holds SIGINT for the span of its own
+// write, so the process is not killed and the exit code has to come from here.
+func TestCodeForAnInterruptedStoreWrite(t *testing.T) {
+	err := fmt.Errorf("importing accounts: %w", store.ErrInterrupted)
+	if got := CodeFor(err); got != ExitInterrupted {
+		t.Fatalf("CodeFor(interrupted) = %d, want %d", got, ExitInterrupted)
+	}
+}
+
+// An explicit tag still wins. A command that has already decided what its own
+// interruption means — `add` returns ExitInterrupted for a cancelled login —
+// must not have that answer replaced by this mapping, and a command that tags
+// something else must not have it replaced either.
+func TestAnExplicitCodeOutranksTheInterruptMapping(t *testing.T) {
+	err := WithCode(fmt.Errorf("%w", store.ErrInterrupted), ExitNothingToDo)
+	if got := CodeFor(err); got != ExitNothingToDo {
+		t.Fatalf("CodeFor(coded interrupted) = %d, want %d", got, ExitNothingToDo)
 	}
 }

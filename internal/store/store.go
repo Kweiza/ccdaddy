@@ -205,10 +205,11 @@ func AccountsFileAt(root string) string {
 // Such a file is a leak that nothing else on the machine can find. `ccdad
 // list`, `ccdad remove` and doctor's account rows all read accounts.toml, and
 // an orphan is by definition a uuid the document does not carry — so it sits
-// there holding a live refresh token at 0600, indefinitely. rollback closed the
-// way they are MADE; it does nothing for a store that already has one, left by
-// a build older than that commit or by a reversal whose os.Remove was itself
-// refused.
+// there holding a live refresh token at 0600, indefinitely. rollback narrowed
+// the way they are MADE — it runs from a defer now, and mutate holds SIGINT
+// across the write — but it did not close it, because SIGKILL and a power cut
+// are not closable, and it does nothing at all for a store that already has
+// one, left by an older build or by a reversal whose os.Remove was refused.
 //
 // It reads the way AccountsAt does and for the same reason: a store that is not
 // there yields no orphans rather than being brought into existence by the probe

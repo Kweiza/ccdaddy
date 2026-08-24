@@ -237,6 +237,39 @@ func acquireLock(path string) (release func() error, err error) {
 // is not the whole store: Add puts a credential file down before it touches
 // memory, so the credentials directory has to be walked back by hand. That is
 // Store.rollback, which also states the one change it deliberately leaves.
+//
+// The reversal runs from LEAVING this function rather than from the two error
+// returns that used to carry it, and that is not tidiness. A return is one way
+// out of a transaction and never was the only one: a panic in fn unwinds past
+// an error return and left the credential file on disk, and so would any early
+// return a later edit adds without noticing that it owes rollback a call. The
+// journal now empties itself the same way it is cleared, which is the property
+// the old shape had to be remembered to keep.
+//
+// A SIGNAL is the way out that a defer cannot reach on its own, and it is the
+// one users actually hit — Ctrl-C partway through a multi-account `ccdad
+// import` — so the transaction holds SIGINT for its own span. interrupt.go
+// carries the whole argument: why the span is this small, why SIGTERM and
+// SIGHUP are deliberately left, and why root.go's refusal to trap SIGINT
+// process-wide is not contradicted by this. Three things about it are this
+// function's own, and they are visible in the order the defers are registered
+// rather than in any comment:
+//
+//   - The watch is taken BEFORE the load, so no part of the transaction runs
+//     with the signal at its default disposition.
+//   - It is closed AFTER the reversal, because a process killed halfway through
+//     rollback leaves exactly the half-reversed credentials directory the
+//     reversal exists to prevent. Defers run last-registered-first, so the
+//     watch's close is registered before the reversal's defer and therefore
+//     runs after it.
+//   - The signal is checked between fn and the save, never after a save that
+//     succeeded. Once the document is written the transaction is committed and
+//     consistent, and reversing it then would delete credential files the
+//     document now names.
+//
+// What cannot be closed at any price is still open: SIGKILL and a power cut
+// take the process out between any two instructions. doctor's credential-files
+// row reports the residue, and says so in its own comment.
 func (s *Store) mutate(fn func() error) (err error) {
 	if s.inTx {
 		return fn()
@@ -251,6 +284,20 @@ func (s *Store) mutate(fn func() error) (err error) {
 	// cause of every failure after it.
 	defer func() { err = errors.Join(err, release()) }()
 
+	committed, reported := false, false
+	w := watchInterrupt()
+	// The backstop for the one rule interrupt.go states: a signal whose default
+	// disposition this function removed is always reported, never dropped. The
+	// two ordinary outcomes report themselves below and set reported; this
+	// covers the path where the transaction was already failing for its own
+	// reason, so that a run the user stopped never exits saying only "I/O
+	// error" about a write they cancelled.
+	defer func() {
+		if w.close() && !reported {
+			err = errors.Join(err, interruptedErr(committed))
+		}
+	}()
+
 	if err := s.load(); err != nil {
 		return err
 	}
@@ -259,13 +306,37 @@ func (s *Store) mutate(fn func() error) (err error) {
 	// path that sets inTx registers this defer with it, so a transaction never
 	// starts holding the previous one's entries and there is no second, dead
 	// assignment here pretending to guard against it.
-	defer func() { s.inTx = false; s.undo = nil }()
+	//
+	// And the reversal is here rather than at the returns, so that it also runs
+	// for a panic and for whatever exit the next edit invents. Assigning to err
+	// during a panic changes nothing — the panic carries on past it — but the
+	// credential file still comes back off the disk, which is the half that
+	// matters.
+	defer func() {
+		s.inTx = false
+		if !committed {
+			err = errors.Join(err, s.rollback())
+		}
+		s.undo = nil
+	}()
 
 	if err := fn(); err != nil {
-		return errors.Join(err, s.rollback())
+		return err
+	}
+	if w.seen() {
+		reported = true
+		return interruptedErr(false)
 	}
 	if err := s.save(); err != nil {
-		return errors.Join(err, s.rollback())
+		return err
+	}
+	committed = true
+	// Closed here rather than left to the defer because its answer is the
+	// return value: a signal that landed inside the save is on the far side of
+	// the commit, and the user has to be told the change stands.
+	if w.close() {
+		reported = true
+		return interruptedErr(true)
 	}
 	return nil
 }
@@ -291,6 +362,12 @@ func (s *Store) mutate(fn func() error) (err error) {
 // the transaction only overwrote. rollback says why, and the cost is real —
 // an account that was already stored can come out of a refused transaction
 // holding credentials it did not have going in.
+//
+// A batch STOPPED rather than refused is reversed the same way. Ctrl-C partway
+// through `ccdad import` used to be the ordinary way to leave a live refresh
+// token nothing on the machine could find; mutate holds SIGINT for the span of
+// the write, and the error it returns wraps ErrInterrupted so the command exits
+// 130 rather than reporting an I/O failure for something the user cancelled.
 func WithStore(fn func(*Store) error) error {
 	s, err := Open()
 	if err != nil {
