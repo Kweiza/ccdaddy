@@ -415,10 +415,52 @@ func renderStatus(cmd *cobra.Command, report daemon.Report, rows []statusRow,
 //
 // Never "0%" for an account that could not be read.
 func (r statusRow) leftLabel() string {
-	if !r.Headroom.Known {
-		return unreadable
+	if r.Headroom.Known {
+		return fmt.Sprintf("%.0f%%", r.Headroom.Pct)
 	}
-	return fmt.Sprintf("%.0f%%", r.Headroom.Pct)
+	// Headroom is computed from the five subscription windows alone (see
+	// strategy.HeadroomFor) and is never Known for a seat with none, which is
+	// every enterprise/pay-as-you-go account KindCredit names — not just an
+	// account that failed to poll. Reading the credit axis instead of printing
+	// "?" for the whole class is safe because it is read-only display: it is
+	// the SAME extra_usage the credit gate prices a switch against
+	// (internal/strategy/credit.go), never a second source for the number.
+	if label, ok := r.creditLeftLabel(); ok {
+		return label
+	}
+	return unreadable
+}
+
+// creditLeftLabel is leftLabel's credit-axis fallback: the remaining amount
+// and, when the account reports both figures, the used/limit pair beside it —
+// the two things a LEFT column showing nothing but "?" was hiding entirely.
+func (r statusRow) creditLeftLabel() (string, bool) {
+	if !r.HasEntry {
+		return "", false
+	}
+	e := r.Entry.Snapshot.ExtraUsage
+	if !e.Present {
+		return "", false
+	}
+	used, hasUsed := e.UsedCredits()
+	limit, hasLimit := e.MonthlyLimit()
+	switch {
+	case hasUsed && hasLimit:
+		return fmt.Sprintf("%s/%s used, %s left (%s)",
+			e.AmountString(used), e.AmountString(limit), e.AmountString(limit-used), e.CurrencyCode()), true
+	case hasUsed:
+		// Limit is nil, which means the ACCOUNT sets no cap of its own (the
+		// credit gate then falls back to the configured ceiling) — there is no
+		// account-side number to show a remainder against, so this says used
+		// and stops rather than inventing a denominator.
+		return fmt.Sprintf("%s used, no account limit (%s)", e.AmountString(used), e.CurrencyCode()), true
+	}
+	// Neither money figure was on the wire; extra_usage.utilization was the
+	// only readable axis. Still worth a real number over "?".
+	if pct, ok := e.Percent(); ok {
+		return fmt.Sprintf("%.0f%% left", 100-pct), true
+	}
+	return "", false
 }
 
 // resetsLabel is when the reported window rolls over, as a span. Both tables

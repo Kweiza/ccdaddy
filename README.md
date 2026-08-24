@@ -966,6 +966,15 @@ and an unreadable spend is not a spend of zero. `state` is `enabled`,
 `disabled`, `blocked`, or `unknown`; `disabledReason` is added when an
 organization refused overage and named why.
 
+The human `ccdad list` table has nowhere to put those figures on a credit-only
+account — it carries no five-hour or seven-day window, so there is no headroom
+for LEFT to report — and the column used to read `?` for the whole class.
+It now falls back to the same `usage.credit` reading: with both money figures
+on the wire it prints `used/limit`, e.g. `25.50/100.00 used, 74.50 left
+(USD)`; with only `usedCredits` it prints what was spent and says the account
+sets no limit of its own; `?` is still what an account that failed to poll at
+all shows.
+
 ### Environment
 
 | Variable | Effect |
