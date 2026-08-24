@@ -88,7 +88,6 @@ const probeRan = "the probe handler ran"
 // a name of the test's choosing -- including names no ccdad tool will ever have.
 func callThroughGate(t *testing.T, name, rawArgs string) (*mcp.CallToolResult, error) {
 	t.Helper()
-	ctx := t.Context()
 
 	srv := mcp.NewServer(implementation("0.0.0-test"), &mcp.ServerOptions{})
 	mcp.AddTool(srv, &mcp.Tool{
@@ -99,25 +98,9 @@ func callThroughGate(t *testing.T, name, rawArgs string) (*mcp.CallToolResult, e
 	})
 	installGate(srv)
 
-	ct, st := mcp.NewInMemoryTransports()
-	// THE SERVER CONNECTS FIRST. The in-memory pair is a synchronous pipe with
-	// no buffer, so a client that connects first blocks writing its handshake
-	// to nobody and the test hangs rather than fails.
-	ss, err := srv.Connect(ctx, st, nil)
-	if err != nil {
-		t.Fatalf("connecting the server: %v", err)
-	}
-	t.Cleanup(func() { _ = ss.Close() })
-
-	cs, err := mcp.NewClient(&mcp.Implementation{Name: "ccdad-gate-test", Version: "0.0.0-test"}, nil).Connect(ctx, ct, nil)
-	if err != nil {
-		t.Fatalf("connecting the client: %v", err)
-	}
-	t.Cleanup(func() { _ = cs.Close() })
-
 	// json.RawMessage rather than a map: the arguments have to reach the wire
 	// exactly as written, including the shapes no typed value can express.
-	return cs.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: json.RawMessage(rawArgs)})
+	return connectToServer(t, srv).CallTool(t.Context(), &mcp.CallToolParams{Name: name, Arguments: json.RawMessage(rawArgs)})
 }
 
 // contentText joins the text a result carries. A refusal is text content and
@@ -130,4 +113,45 @@ func contentText(res *mcp.CallToolResult) string {
 		}
 	}
 	return b.String()
+}
+
+// The mirror of the command tree's own totality gate: every REGISTERED tool has
+// a class. A tool added later gets NO verdict rather than a permissive one.
+func TestEveryRegisteredToolHasAClassVerdict(t *testing.T) {
+	srv := mcp.NewServer(implementation("0.0.0-test"), &mcp.ServerOptions{})
+	if err := Register(srv, func([]string) (int, string, string) { return 0, "", "" }); err != nil {
+		t.Fatal(err)
+	}
+
+	var missing []string
+	for _, name := range registeredToolNames(t, srv) {
+		if _, ok := classOf(name); !ok {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		t.Errorf("no class verdict for: %s\nAdd each to toolClass as read, store, credential or daemon.",
+			strings.Join(missing, ", "))
+	}
+}
+
+// registeredToolNames asks the server what it offers, over the wire, the way a
+// client would. There is no way to read a server's tools without connecting to
+// one, and asking through the protocol is the more honest question anyway: it
+// is the list a client actually sees.
+//
+// The iterator rather than a single list call, because it follows the cursor.
+// A page-sized list would pass today and silently stop covering the tail on the
+// day this server has more tools than one page holds.
+func registeredToolNames(t *testing.T, srv *mcp.Server) []string {
+	t.Helper()
+	cs := connectToServer(t, srv)
+	var names []string
+	for tool, err := range cs.Tools(t.Context(), nil) {
+		if err != nil {
+			t.Fatalf("listing tools: %v", err)
+		}
+		names = append(names, tool.Name)
+	}
+	return names
 }
