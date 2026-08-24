@@ -192,10 +192,11 @@ func TestDoctorReportsAFreeCredentialHome(t *testing.T) {
 // isolate's CLAUDE_SECURESTORAGE_CONFIG_DIR — the variable ccpath.CredentialHome
 // reads first — rather than from the CLAUDE_CONFIG_DIR the prose case names.
 // Reproducing a cause would take a daemon that outlived the shell that spawned
-// it, and the causes are pinned where they live: autostart's own tests hold
-// that an ordinary override still reaches this state, which is what keeps this
-// check load-bearing, and that `ccdad run --full-profile` has not since
-// 3d9d2d6.
+// it, and the causes are pinned where they live: scoped_test.go's
+// TestAutoStartStillFiresWithAnOrdinaryConfigDirOverride holds that an
+// ordinary override still reaches this state, which is what keeps this check
+// load-bearing, and TestAutoStartRefusesInsideAFullProfileSession holds that
+// `ccdad run --full-profile` has not since 3d9d2d6.
 func TestDoctorCatchesADaemonDrivingADifferentCredentialHome(t *testing.T) {
 	isolate(t)
 	seedHealthyMachine(t)
@@ -219,6 +220,17 @@ func TestDoctorCatchesADaemonDrivingADifferentCredentialHome(t *testing.T) {
 	// nothing else in this package pins the prose.
 	if d := r.detail(t, "credential-home"); strings.Contains(d, "--full-profile") {
 		t.Errorf("the drift sentence still blames a spawn autostart refuses since 3d9d2d6: %s", d)
+	}
+	// The item asked for two things and the line above is only the first of
+	// them. Deleting the diagnosis altogether would satisfy a one-word
+	// blacklist while losing the half that makes the row actionable, and
+	// naming a session without using the flag's name would satisfy it while
+	// blaming the prevented cause again.
+	if d := r.detail(t, "credential-home"); !strings.Contains(d, "CLAUDE_CONFIG_DIR") {
+		t.Errorf("the drift sentence no longer names a cause the user can act on: %s", d)
+	}
+	if d := r.detail(t, "credential-home"); strings.Contains(d, "session") {
+		t.Errorf("outside a session the row blames a `ccdad run` session, which auto-start refuses: %s", d)
 	}
 }
 
@@ -515,5 +527,30 @@ func TestDoctorDoesNotBlameTheDaemonForADriftThisShellCaused(t *testing.T) {
 	}
 	if !strings.Contains(d, "session") {
 		t.Errorf("the row does not say that this shell is the scoped side: %s", d)
+	}
+}
+
+// Inside a `ccdad run` session the two homes differ by design, and the row says
+// so in its own words. Leaving it at warn would put a warning on every doctor
+// run inside every session — which is how a reader learns to skip a row — and
+// would contradict the sentence beside it, which says nothing here is broken.
+func TestTheDriftRowIsNotAWarningWhenTheSessionIsTheReasonForIt(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	session := filepath.Join(os.Getenv("CCDAD_HOME"), SessionsDirName, "uuid-a-123")
+	if err := os.MkdirAll(session, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLAUDE_SECURESTORAGE_CONFIG_DIR", session)
+	stubDaemon(t, daemon.Report{
+		State:     daemon.DaemonRunning,
+		HasStatus: true,
+		Status:    daemon.Status{SchemaVersion: 1, PID: 4242, CredentialHome: "/the/machines/claude"},
+	}, nil)
+
+	_, r, _ := runDoctor(t)
+	if got := r.level(t, "credential-home"); got != string(levelOK) {
+		t.Errorf("level = %q, want ok — the row's own detail says nothing here is broken: %s",
+			got, r.detail(t, "credential-home"))
 	}
 }

@@ -562,7 +562,17 @@ func checkCredentialHome(report daemon.Report) check {
 
 	detail := claim.Home
 	if drift := credentialHomeDrift(report, claim.Home); drift != "" {
-		return check{"credential-home", levelWarn, drift}
+		// Inside a `ccdad run` session the two homes differ BY DESIGN, and the
+		// sentence drift returns there says exactly that. A warning would land
+		// on every doctor run inside every session, which is how a reader
+		// learns to skip a row, and it would contradict its own detail. levelOK
+		// with a detail worth reading is the judgement checkPrimary already
+		// makes about a deliberate setting.
+		level := levelWarn
+		if _, inSession := currentScopedSession(); inSession {
+			level = levelOK
+		}
+		return check{"credential-home", level, drift}
 	}
 	switch {
 	case !claim.Held:
@@ -589,16 +599,26 @@ func checkCredentialHome(report daemon.Report) check {
 // for it or "".
 //
 // A credential home the USER pointed somewhere is how this happens without
-// anybody doing anything wrong, and it is deliberately not prevented. Either
-// variable does it, in ccpath.CredentialHome's order:
-// CLAUDE_SECURESTORAGE_CONFIG_DIR when it is defined, and CLAUDE_CONFIG_DIR
-// otherwise. An ordinary override is not a `ccdad run` session — scoped.go
-// takes a shell the user scoped themselves at its word, and refusing to
-// auto-start there would turn the feature off for everyone who keeps their
-// Claude Code configuration somewhere else. So a daemon born in such a shell
-// pins that home for life, a later shell without the override resolves a
-// different one, every file on the machine looks normal afterwards, and the
-// daemon's own published document is the only place the two can be compared.
+// anybody doing anything wrong. The two variables reach it by different routes
+// and only one of them is unattended, which is worth keeping straight:
+//
+//   - CLAUDE_CONFIG_DIR on its own is NOT a reason to refuse an auto-start, and
+//     rule 3 says why in as many words: it is where a great many people keep
+//     their Claude Code configuration, and refusing there would turn the
+//     feature off for all of them. So `ccdad list` in such a shell can spawn a
+//     daemon that pins that home for life, with nobody having typed anything
+//     about daemons.
+//   - CLAUDE_SECURESTORAGE_CONFIG_DIR does not auto-start at all: rule 3
+//     refuses whenever it is DEFINED. Reaching this state through it takes a
+//     human typing `ccdad daemon start`, which is allowed outside a session
+//     because a shell the user scoped themselves has told ccdad where its live
+//     login is.
+//
+// Either way a later shell without the override resolves a different home,
+// every file on the machine looks normal afterwards, and the daemon's own
+// published document is the only place the two can be compared. This row cannot
+// tell the two routes apart — it compares two resolved paths — which is why it
+// names both.
 //
 // `ccdad run --full-profile` USED to reach here the same way and no longer
 // does: auto-start's rule 3 gained a containment test at 3d9d2d6, and
@@ -638,9 +658,11 @@ func credentialHomeDrift(report daemon.Report, resolved string) string {
 	return fmt.Sprintf(
 		"the running daemon is driving %s, but this shell resolves %s — so its switches change a login "+
 			"nothing here reads. A daemon started from a shell that resolved a different credential home "+
-			"does this, which CLAUDE_SECURESTORAGE_CONFIG_DIR decides when it is defined and "+
-			"CLAUDE_CONFIG_DIR decides otherwise; restart it from the shell whose configuration you want "+
-			"it to serve", recorded, resolved)
+			"does this. CLAUDE_SECURESTORAGE_CONFIG_DIR names that home when it is set to a directory, "+
+			"CLAUDE_CONFIG_DIR names it when that one is unset, and an EMPTY "+
+			"CLAUDE_SECURESTORAGE_CONFIG_DIR sends Claude Code to ~/.claude rather than to either; "+
+			"restart the daemon from the shell whose configuration you want it to serve",
+		recorded, resolved)
 }
 
 // probeClaudeInstall is doctor's window onto which Claude Code is installed. It
@@ -1293,8 +1315,10 @@ func checkCredentialFiles(root string, usable bool) check {
 		// Answering "nothing is orphaned" from a failed read would be the
 		// reassuring lie this row exists to remove — checkProfiles and
 		// checkPrimary refuse the same way for the same reason.
+		// store says which of the two reads failed; naming only the matching
+		// here would report a directory that cannot be opened as a mismatch.
 		return check{"credential-files", levelFail, fmt.Sprintf(
-			"the stored credential files cannot be matched against the account list: %v", err)}
+			"the stored credential files cannot be checked against the account list: %v", err)}
 	}
 	if len(orphans) == 0 {
 		return check{"credential-files", levelOK,

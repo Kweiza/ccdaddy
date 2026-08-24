@@ -1730,3 +1730,44 @@ func TestDoctorWillNotClearTheCredentialFilesRowFromADamagedDocument(t *testing.
 			got, r.detail(t, "credential-files"))
 	}
 }
+
+// The count and the words around it are built by hand out of six Sprintf
+// arguments, and "1 credential files belong" is the kind of thing that makes a
+// reader stop believing the rest of the sentence — plural's own comment says
+// so. Both arms are pinned because only the pair of them catches a transposed
+// argument: one arm alone reads correctly for the count it was written against.
+func TestDoctorCountsOneOrphanedCredentialFileGrammatically(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	dir := filepath.Join(mustPath(ccpath.StoreHome()), "credentials")
+	if err := os.WriteFile(filepath.Join(dir, "uuid-gone.json"), []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, r, _ := runDoctor(t)
+	d := r.detail(t, "credential-files")
+	for _, want := range []string{"1 credential file belongs", "does not name it", "Delete it"} {
+		if !strings.Contains(d, want) {
+			t.Errorf("detail does not read %q for one file: %s", want, d)
+		}
+	}
+}
+
+func TestDoctorCountsSeveralOrphanedCredentialFilesGrammatically(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	dir := filepath.Join(mustPath(ccpath.StoreHome()), "credentials")
+	for _, name := range []string{"uuid-x.json", "uuid-y.json", "uuid-z.json"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(`{}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	_, r, _ := runDoctor(t)
+	d := r.detail(t, "credential-files")
+	for _, want := range []string{"3 credential files belong", "does not name them", "Delete them"} {
+		if !strings.Contains(d, want) {
+			t.Errorf("detail does not read %q for three files: %s", want, d)
+		}
+	}
+}

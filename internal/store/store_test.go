@@ -1200,3 +1200,112 @@ func TestOrphanCredentialsAtRefusesADamagedAccountsFile(t *testing.T) {
 		t.Error("OrphanCredentialsAt answered from an accounts.toml it could not parse")
 	}
 }
+
+// A DirEntry does not follow a symlink, so a name ending in .json that is not a
+// file at all still reads as one here. Every shape below is reachable in a
+// directory the user can write to, and the sentence doctor builds from this
+// list says the path holds a live refresh token at 0600 and can be deleted --
+// which about a dangling link is false twice over. checkPermissions walks the
+// same directory with os.Stat for exactly this reason.
+func TestOrphanCredentialsAtReportsOnlyFilesThatAreReallyThere(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating a symlink needs a privilege the test runner may not hold on Windows")
+	}
+	root := withStore(t)
+	if _, err := Open(); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(root, "credentials")
+	if err := os.Symlink(filepath.Join(t.TempDir(), "no-such-target"), filepath.Join(dir, "dangling.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), filepath.Join(dir, "alinkedcdir.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "aplaindir.json"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	orphans, err := OrphanCredentialsAt(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(orphans) != 0 {
+		t.Errorf("orphans = %v, want none — not one of those is a credential file holding a token", orphans)
+	}
+}
+
+// The docstring calls the order a contract, and doctor joins the list into one
+// sentence: an unstable order makes two runs of a report meant to diff cleanly
+// disagree for no reason at all.
+func TestOrphanCredentialsAtSortsWhatItReturns(t *testing.T) {
+	root := withStore(t)
+	if _, err := Open(); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(root, "credentials")
+	for _, name := range []string{"uuid-c.json", "uuid-a.json", "uuid-b.json"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(`{}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	orphans, err := OrphanCredentialsAt(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Join([]string{
+		filepath.Join(dir, "uuid-a.json"),
+		filepath.Join(dir, "uuid-b.json"),
+		filepath.Join(dir, "uuid-c.json"),
+	}, "|")
+	if got := strings.Join(orphans, "|"); got != want {
+		t.Errorf("orphans =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// A file called exactly `.json` has no uuid in front of it. Reporting one would
+// name an account that cannot exist, in a sentence telling the user to go and
+// look for it.
+func TestOrphanCredentialsAtIgnoresAFileWithNothingInFrontOfJSON(t *testing.T) {
+	root := withStore(t)
+	if _, err := Open(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "credentials", ".json"), []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	orphans, err := OrphanCredentialsAt(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(orphans) != 0 {
+		t.Errorf("orphans = %v, want none — there is no uuid in front of that suffix", orphans)
+	}
+}
+
+// `uuid-x.JSON` is a file the store itself reads back on macOS and Windows,
+// where the filesystem ignores case: credentialPath asks for uuid-x.json and
+// gets handed this. Skipping it there would leave a live credential file this
+// row can never name. The suffix test is case-insensitive on EVERY platform,
+// for the reason ValidateUUID checks Windows device names on every platform —
+// a store is one rsync away from being opened somewhere else.
+func TestOrphanCredentialsAtNamesAnUppercaseSuffixToo(t *testing.T) {
+	root := withStore(t)
+	if _, err := Open(); err != nil {
+		t.Fatal(err)
+	}
+	upper := filepath.Join(root, "credentials", "uuid-x.JSON")
+	if err := os.WriteFile(upper, []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	orphans, err := OrphanCredentialsAt(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(orphans) != 1 || orphans[0] != upper {
+		t.Errorf("orphans = %v, want exactly [%s]", orphans, upper)
+	}
+}
