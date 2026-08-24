@@ -125,6 +125,11 @@ type Candidate struct {
 	UUID     string
 	Kind     identity.Kind
 	Disabled bool
+	// Elsewhere marks an account another machine's ccdad owns. It is ranked out
+	// exactly like Disabled, and it is a separate field for the same reason it
+	// is a separate flag on the account: the two answer different questions, and
+	// a listing that folds them prints the wrong reason beside the row.
+	Elsewhere bool
 	// Primary marks a credit-metered account that is the seat's ordinary
 	// metering rather than an overage: it ranks with the subscriptions instead
 	// of waiting in the last-resort pool. Nothing sets it here; the flag is an
@@ -282,7 +287,7 @@ type Result struct {
 // ranked on its credit utilization in the main pool. eligible itself does not
 // change: primary decides WHICH axis, never WHETHER.
 func eligible(c Candidate) bool {
-	return !c.Disabled && c.Kind != identity.KindAPIKey
+	return !c.Disabled && !c.Elsewhere && c.Kind != identity.KindAPIKey
 }
 
 // Spent is whether an account is past a threshold on any window it carries.

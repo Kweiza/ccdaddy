@@ -362,11 +362,25 @@ func (s *Store) add(a Account, creds cclink.Blob) error {
 		a.AddedAt = existing.AddedAt
 		a.Disabled = existing.Disabled
 		a.Primary = existing.Primary
+		a.Elsewhere = existing.Elsewhere
 	} else {
 		a.Idx = s.nextIdx()
 		if a.AddedAt.IsZero() {
 			a.AddedAt = time.Now().UTC()
 		}
+		// A machine that has declared a partition gets the SAFE default for an
+		// account it has never been told about: somebody else's. The other
+		// default is the bug the partition exists to prevent -- add the same
+		// account on two machines and both would immediately rank it, which is
+		// the convergence Elsewhere is there to stop, reintroduced by the one
+		// path nobody thinks about after setting the partition once.
+		//
+		// Keyed on whether a partition EXISTS rather than on a stored mode, so
+		// there is one fact on disk and not two that can disagree. A store where
+		// nothing is Elsewhere owns everything, which is every store that has
+		// never run `ccdad own` and therefore every store that existed before
+		// this flag did.
+		a.Elsewhere = s.partitioned()
 	}
 
 	// The credential write comes first, and memory is touched only once it has
@@ -693,6 +707,71 @@ func (s *Store) SetDisabled(uuid string, disabled bool) (changed bool, err error
 	})
 	if err != nil {
 		return false, err
+	}
+	return changed, nil
+}
+
+// partitioned reports whether this machine has declared an owned set at all.
+//
+// It reads the accounts rather than a mode flag for the reason add() gives: one
+// fact on disk cannot disagree with itself. It runs under the caller's lock.
+func (s *Store) partitioned() bool {
+	for i := range s.data.Accounts {
+		if s.data.Accounts[i].Elsewhere {
+			return true
+		}
+	}
+	return false
+}
+
+// SetOwned declares the accounts this machine drives, and reports how many rows
+// changed.
+//
+// It is transactional over the WHOLE list and not a per-account setter, because
+// the partition is one statement: every uuid named is owned here, every uuid not
+// named belongs to another machine. A per-account toggle would let a user own
+// account 3 on both machines by forgetting to run the other half, which is the
+// failure the flag exists to prevent and is invisible until a five-hour window
+// burns twice as fast.
+//
+// An empty owned set clears the partition -- this machine owns everything again,
+// the state every store is in before `ccdad own` is first run. It is spelled as
+// the empty set rather than as a separate verb so that "own nothing" cannot be
+// typed by accident: the CLI requires --clear for it.
+//
+// Every uuid must resolve, and nothing is written unless all of them do. A
+// partial application would leave the machine owning a set the user did not ask
+// for, which is worse than refusing.
+func (s *Store) SetOwned(uuids []string) (changed int, err error) {
+	err = s.mutate(func() error {
+		owned := make(map[string]bool, len(uuids))
+		for _, u := range uuids {
+			found := false
+			for i := range s.data.Accounts {
+				if s.data.Accounts[i].UUID == u {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return fmt.Errorf("%w: %q", ErrNotFound, u)
+			}
+			owned[u] = true
+		}
+		changed = 0
+		for i := range s.data.Accounts {
+			// The empty set is "own everything", so an absent uuid is only
+			// Elsewhere when there is a set to be absent from.
+			want := len(uuids) > 0 && !owned[s.data.Accounts[i].UUID]
+			if s.data.Accounts[i].Elsewhere != want {
+				changed++
+			}
+			s.data.Accounts[i].Elsewhere = want
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
 	}
 	return changed, nil
 }

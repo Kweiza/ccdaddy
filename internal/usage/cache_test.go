@@ -5,7 +5,6 @@ import (
 	"errors"
 	"github.com/Kweiza/ccdaddy/internal/cclock"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
-	"github.com/Kweiza/ccdaddy/internal/pollpolicy"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -181,7 +180,7 @@ func TestCacheRoundTripsAnEntry(t *testing.T) {
 			FetchedAt:      now,
 			NextPollAt:     now.Add(3 * time.Minute),
 			StandDownUntil: now.Add(30 * time.Minute),
-			ServeTTL:       pollpolicy.DangerServeTTL,
+			ServeTTL:       2 * ServeTTL,
 			Poll:           PollState{Interval: 180 * time.Second, LastRateLimited: now.Add(-time.Hour)},
 		})
 		return nil
@@ -210,9 +209,9 @@ func TestCacheRoundTripsAnEntry(t *testing.T) {
 	if !e.StandDownUntil.Equal(now.Add(30 * time.Minute)) {
 		t.Errorf("StandDownUntil = %s — a restart would poll an account that yielded its share", e.StandDownUntil)
 	}
-	if e.ServeTTL != pollpolicy.DangerServeTTL {
-		t.Errorf("ServeTTL = %s, want %s — a restart would re-clamp the band to the flat TTL",
-			e.ServeTTL, pollpolicy.DangerServeTTL)
+	if e.ServeTTL != 2*ServeTTL {
+		t.Errorf("ServeTTL = %s, want %s — the field must round-trip, so a ccdad that "+
+			"slows a reading down can tell an older one about it", e.ServeTTL, 2*ServeTTL)
 	}
 	if e.Poll.Interval != 180*time.Second {
 		t.Errorf("Poll.Interval = %v, want 180s — a restart must not reset a backoff", e.Poll.Interval)
@@ -605,12 +604,21 @@ func TestAStandDownAndAnEarnedScheduleBothApply(t *testing.T) {
 	}
 }
 
-// The scheduler's TTL and the hand-held gate are two different numbers on
-// purpose. The scheduler's is what the danger band shortens; the hand-held gate
-// is the only rate bound `--refresh` has, and shortening THAT would let a
-// scripted refresh reach the endpoint six times as often as before, on exactly
-// the account where a 429 costs the most.
-func TestTheScheduledTTLIsTheEntrysAndTheHandHeldGateIsNot(t *testing.T) {
+// A short serve_ttl left on disk by an older ccdad is IGNORED, and that is the
+// half of the danger-band fix that lives out here.
+//
+// The band used to write 30 s into this field so the scheduler's own freshness
+// gate would stop refusing two of every three polls it asked for — which made the
+// one structural bound on the hourly allowance a value the policy could rewrite.
+// Every cache on every machine that has been in the band is carrying those rows
+// right now, so a build that merely stopped WRITING the short TTL would keep
+// honouring the one already on disk until the account's next successful poll —
+// which is the very poll the short TTL lets through too early.
+//
+// A LONGER value is still honoured: a future ccdad slowing a reading down is
+// telling this one something it does not know, and the safe direction for an
+// unknown is the slower one.
+func TestAShortServeTTLLeftByAnOlderCcdadIsIgnored(t *testing.T) {
 	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
 	minuteOld := now.Add(-time.Minute)
 
@@ -618,14 +626,21 @@ func TestTheScheduledTTLIsTheEntrysAndTheHandHeldGateIsNot(t *testing.T) {
 		t.Errorf("ScheduledTTL = %s, want the package default %s — an entry written "+
 			"before this field existed has no opinion, which is not 'stale immediately'", got, ServeTTL)
 	}
-	band := Entry{FetchedAt: minuteOld, ServeTTL: pollpolicy.DangerServeTTL}
-	if got := band.ScheduledTTL(); got != pollpolicy.DangerServeTTL {
-		t.Errorf("ScheduledTTL = %s, want %s", got, pollpolicy.DangerServeTTL)
+	// 30 s is the exact value the danger band used to persist.
+	stale := Entry{FetchedAt: minuteOld, ServeTTL: 30 * time.Second}
+	if got := stale.ScheduledTTL(); got != ServeTTL {
+		t.Errorf("ScheduledTTL = %s, want the flat %s — a 30 s row written by an older "+
+			"ccdad would otherwise keep unlocking the gate it was written to unlock", got, ServeTTL)
 	}
-	if band.FreshWithin(now, band.ScheduledTTL()) {
-		t.Error("a 60 s reading is still fresh under a 30 s TTL, so the band's cadence would be refused")
+	if !stale.FreshWithin(now, stale.ScheduledTTL()) {
+		t.Error("a 60 s reading is stale under the flat TTL, so the old short TTL is still in force")
 	}
-	if !band.Fresh(now) {
+	longer := Entry{FetchedAt: minuteOld, ServeTTL: 2 * ServeTTL}
+	if got := longer.ScheduledTTL(); got != 2*ServeTTL {
+		t.Errorf("ScheduledTTL = %s, want %s — a longer TTL is a slower cadence and the "+
+			"safe direction for a value this build does not understand", got, 2*ServeTTL)
+	}
+	if !stale.Fresh(now) {
 		t.Error("the hand-held gate moved with the scheduler's TTL")
 	}
 	// An entry dated in the future is a clock that moved backwards, not a fresh

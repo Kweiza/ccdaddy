@@ -16,6 +16,55 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+### Added
+
+- **`ccdad own` declares which accounts a machine drives**, which is the one
+  piece of multi-machine setup ccdad cannot do for you. The engine's target is a
+  pure function of usage readings the *server* shares between your machines, and
+  every comparator ends in the same tie-break, so two installs given the same
+  pool pick the same account at the same moment: both sessions burn one
+  five-hour window at twice the rate and hit a rate limit while the rest of the
+  pool sits idle. Nothing detected it, because the 429 lands on the session
+  rather than on the poller — every lock ccdad holds is a file lock on one
+  machine, and the same is true of both projects it was written against.
+
+  Run `ccdad own <ACCOUNT...>` on each machine with a set that does not overlap.
+  An account this machine does not own is neither rotated into nor polled on a
+  cadence, and an account added later belongs to another machine by default, so
+  a split declared once stays declared. `ccdad switch` and `ccdad list
+  --refresh` still work on one by name. The account Claude Code is logged in as
+  is always polled, owned or not: ccdad's thresholds, hysteresis and pre-emptive
+  switch are all statements about the live login. `ccdad own` with no arguments
+  prints the split; `--clear` gives every account back.
+
+### Changed
+
+- **The danger band now polls at 180 s instead of 60 s, and no longer shortens
+  its own freshness gate.** At or above 95% of a window the live account was
+  polling every 60 s with its reading kept fresh for only 30 s — 60 requests an
+  hour against an endpoint allowance of roughly 28-30. Unlike the urgent
+  cadence, which needs the account to be *moving* and so ends on its own, the
+  band had no such gate and no per-identity division to soften it, so an account
+  parked in the band held twice the budget for as long as it sat there. A poller
+  that gets rate-limited stops reporting, and an unreadable account cannot be
+  ranked — so the overspend defeated exactly what the band exists for.
+
+  The band keeps what it was actually for: it still sits ahead of the exhausted
+  rule and still skips the per-identity divisor, so an account inside it polls at
+  180 s where it would otherwise take 600 s. The sustained rate is now a floor
+  applied after every other rule rather than a value each rule is trusted to
+  respect, which is the shape both `cswap` and `quota-board` arrived at
+  independently. A short `serve_ttl` already written into `~/.ccdad/usage.json`
+  by an earlier version is ignored on read, so the change takes effect on the
+  first tick rather than after each account's next poll.
+
+- **`preempt_lead` now defaults to 6 minutes rather than 2.** It is two of the
+  cadence an at-risk account actually polls at, and that cadence moved. Left at
+  2 minutes the lead would have been shorter than one poll interval, which is
+  the case the pre-emptive switch exists to prevent: the projection is overtaken
+  between two readings and the switch lands after the session was already cut
+  off. An explicit `preempt_lead` in `config.toml` is unaffected.
+
 ### Fixed
 
 - **The daemon no longer overwrites a Claude Code login it cannot name, and no

@@ -241,6 +241,7 @@ is a usage error rather than a silent hang. Pass the token, or `-`.
 | `ccdad config get\|set\|unset\|list\|path` | Read and write `~/.ccdad/config.toml` |
 | `ccdad alias`, `move` | Give an account a handle; reorder the display |
 | `ccdad disable`, `enable` | Hold an account out of automatic rotation, or return it |
+| `ccdad own [ACCOUNT...]` | Declare which accounts THIS machine drives — see [Running ccdad on more than one machine](#running-ccdad-on-more-than-one-machine) |
 | `ccdad primary <ACCOUNT> on\|off` | Rank a credit-metered seat with the subscriptions, and let it spend unattended |
 | `ccdad export`, `import` | Move the account store between machines |
 | `ccdad bootstrap` | Import an account document named by `CCDAD_IMPORT`; a no-op when it is unset — see [Containers](#containers) |
@@ -858,48 +859,89 @@ turning pre-emption off means leaving hover off too.
 
 **The danger band, and what it actually buys.** At or above 95% used on the
 binding window — 95% of the endpoint's limit, not of your threshold — the account
-Claude Code is logged in as polls every 60 s, is exempted from sharing its
-identity's budget, and has its reading kept fresh for 30 s instead of 180 so the
-daemon's own gate cannot refuse two polls out of three. Every other account on
-that identity is held back to about 30 minutes meanwhile. It needs a reading that
-was actually taken: a poll that failed says nothing about the account and does
-not put it in the band. Read honestly:
+Claude Code is logged in as is exempted from sharing its identity's budget and
+polls every 180 s regardless of how many accounts that identity carries. It needs
+a reading that was actually taken: a poll that failed says nothing about the
+account and does not put it in the band. Read honestly:
 
 - `/api/oauth/usage` allows roughly **28-30 requests per identity per rolling
   hour**, over a sliding window — capacity comes back only as old requests age
   out, so a burst saturates the identity for up to a full hour and waiting gives
   none of it back early.
-- 60 s is already about twice that allowance, and it is the floor every *rule*
-  respects: nothing in the policy returns less, and both the per-identity
-  division and the post-429 backoff can only lengthen it. One thing does move in
-  the shorter direction — every interval is spread by up to a tenth either way,
-  so an individual poll lands between 54 and 66 seconds. That spread is not a
-  tuning knob, it is what stops daemons which paused together from coming back
-  together: a laptop waking, or a fleet restarting across machines, would
-  otherwise empty the shared hourly budget in a single burst. A `429` imposes a
-  360-second floor and an estimate that multiplies by 1.5 each time up to
-  1800 s, and the estimate always outruns the floor — one
-  `429` alone earns 540 s. It costs more than that, because a failed poll is not
-  a reading: the band lapses with it and the account drops back to the cadence a
-  spent account gets, divided across its identity. On three accounts that is
-  thirty minutes blind at 97%, at the moment it can least be afforded.
-- On a **shared identity** the exemption is worth exactly the size of the
-  identity: the urgent cadence divided two ways is 120 s and divided three ways
-  is 180 s, and the band hands the undivided 60 s to the one account a session is
-  running against. Sharing is all the exemption
-  changes, so on a **solo identity it changes nothing** — 60 s was already the
-  answer there. The rest of the band still applies on a solo identity.
+- 180 s is 20 requests an hour, which fits inside that with headroom to spare, and
+  it is a **floor no rule may argue past**. Both the per-identity division and the
+  post-429 backoff can only lengthen it. One thing does move in the shorter
+  direction — every interval is spread by up to a tenth either way, so an
+  individual poll lands between 162 and 198 seconds. That spread is not a tuning
+  knob, it is what stops daemons which paused together from coming back together:
+  a laptop waking, or a fleet restarting across machines, would otherwise empty
+  the shared hourly budget in a single burst. A `429` imposes a 360-second floor
+  and an estimate that multiplies by 1.5 each time up to 1800 s, and the estimate
+  always outruns the floor — one `429` alone earns 540 s.
+- What the band buys is the **ordering**, not a faster clock. An account inside it
+  would otherwise take the exhausted or candidate cadence, both 600 s, so this is
+  3.3x the freshness on the one account a session can be cut off on. On a shared
+  identity it also skips the divisor: three accounts on one identity would put the
+  live one on 540 s, and the band holds it at 180 s while the alternates stand
+  down to about thirty minutes.
 
-So the band moves the identity's budget onto the one account a session can be cut
-off on, and it does spend more of it — the live account goes from at most 20
-requests an hour to 60, while the alternates it stands down give back fewer than
-that. What it refuses to do is hand 60 s to everyone on the identity, which would
-be 180 requests an hour against an allowance of 28-30. The projection above is
-what keeps a session alive; the band only narrows its error bars.
+The band used to poll every 60 s and shorten its own freshness gate to 30 s to
+let that through. That was 60 requests an hour against an allowance of 28-30 —
+twice the budget, held for as long as an account sat in the band, with no movement
+requirement to end it and, on a single-account identity, no division to soften it.
+It is fixed, and the shape of the fix is worth stating because it is the shape
+both `cswap` and `quota-board` arrived at independently: **the sustained rate is
+structure, not policy.** A rule may ask for any cadence it likes and the floor
+holds it, in one place, after every other rule has had its say. A floor that only
+holds as long as every author remembers it is not a floor.
 
-`ccdad list --refresh` is deliberately not shortened — the hand-held path still
-serves any reading under 180 s old — so a scripted refresh cannot reach the
-endpoint six times as often on the one account where a `429` costs most.
+The one exemption is the urgent cadence — the live account both *moving* and
+within 15 points of its threshold — which still polls at 60 s. That one is
+self-limiting: sustaining it for an hour would take 60 points of movement inside a
+15-point band, so it is a burst of about fifteen requests and then the account
+leaves the band on its own.
+
+`ccdad list --refresh` is deliberately not shortened either — the hand-held path
+serves any reading under 180 s old — so a scripted refresh cannot outrun the same
+allowance on the one account where a `429` costs most.
+
+### Running ccdad on more than one machine
+
+**Declare which accounts each machine drives, with `ccdad own`.** This is the one
+piece of multi-machine setup ccdad cannot do for you, and skipping it is the
+failure it exists to prevent.
+
+Ranking is a pure function of readings the *server* shares between your machines,
+and every comparator ends in the same tie-break. Two installs given the same pool
+therefore pick the same target at the same moment: both sessions land on one
+account, burn its five-hour window twice as fast, and hit a rate limit while the
+rest of the pool sits idle. Nothing detects it at runtime — every lock ccdad holds
+is a file lock on one machine, and the same is true of both projects it was
+written against.
+
+```console
+$ # on the laptop
+$ ccdad own work@example.com personal@example.com
+This machine drives: personal@example.com, work@example.com
+Another machine drives: ci@example.org, spare@example.com
+
+$ # on the desktop, the other half
+$ ccdad own ci@example.org spare@example.com
+```
+
+An account this machine does not own is neither rotated into nor polled on a
+cadence, and **an account added later belongs to another machine by default** —
+declaring a split once is meant to stay declared. Two things still work by name,
+because naming an account by hand says what you want more clearly than the split
+does: `ccdad switch` activates one, and `ccdad list --refresh` reads one.
+
+The live account is always polled even when another machine owns it. ccdad's
+thresholds, its anti-flap hysteresis and its pre-emptive switch are all statements
+about the account Claude Code is logged in as, and a machine blind to its own live
+login has no baseline to make them from.
+
+Run `ccdad own` with no arguments to see the current split, and `ccdad own
+--clear` to give every account back to this machine.
 
 ### Credit-metered accounts
 

@@ -28,7 +28,7 @@ func TestTheConstantsAreThePollPolicyTable(t *testing.T) {
 		{"Post429MinInterval", Post429MinInterval, 360 * time.Second},
 		{"Post429MaxInterval", Post429MaxInterval, 1800 * time.Second},
 		{"Recent429Window", Recent429Window, 3600 * time.Second},
-		{"DangerServeTTL", DangerServeTTL, 30 * time.Second},
+		{"DangerInterval", DangerInterval, 180 * time.Second},
 	} {
 		if c.got != c.want {
 			t.Errorf("%s = %s, want %s", c.name, c.got, c.want)
@@ -463,7 +463,7 @@ func TestTheHandHeldFloorIsTheLongerOfTheFloorAndTheEarnedBackoff(t *testing.T) 
 // the session and the endpoint's refusal — less than one busy turn — so the
 // account a session is running against stops sharing its identity's budget and
 // polls at the floor.
-func TestTheDangerBandPollsTheLiveAccountAtTheFloor(t *testing.T) {
+func TestTheDangerBandPollsTheLiveAccountAtTheSustainedFloor(t *testing.T) {
 	const threshold = 80
 
 	for _, c := range []struct {
@@ -479,7 +479,7 @@ func TestTheDangerBandPollsTheLiveAccountAtTheFloor(t *testing.T) {
 			name: "active at the band and idle",
 			s:    seen(97),
 			in:   Input{Now: epoch, Active: true, Reading: sample(97), Threshold: threshold},
-			want: UrgentInterval,
+			want: DangerInterval,
 		},
 		{
 			name: "active a tenth of a point below the band",
@@ -495,7 +495,7 @@ func TestTheDangerBandPollsTheLiveAccountAtTheFloor(t *testing.T) {
 			name: "active exactly on the line",
 			s:    seen(95),
 			in:   Input{Now: epoch, Active: true, Reading: sample(95), Threshold: threshold},
-			want: UrgentInterval,
+			want: DangerInterval,
 		},
 		{
 			// The band is ahead of the exhausted rule deliberately. Exhausted is
@@ -505,7 +505,7 @@ func TestTheDangerBandPollsTheLiveAccountAtTheFloor(t *testing.T) {
 			name: "active, at the band, and over the spent line",
 			s:    seen(97),
 			in:   Input{Now: epoch, Active: true, Reading: Reading{BindingPct: 97, Known: true, Exhausted: true}, Threshold: threshold},
-			want: UrgentInterval,
+			want: DangerInterval,
 		},
 		{
 			// The band is a distance from 100 and not from Threshold, so a tight
@@ -521,7 +521,7 @@ func TestTheDangerBandPollsTheLiveAccountAtTheFloor(t *testing.T) {
 			name: "the same tight threshold, inside the band",
 			s:    seen(96),
 			in:   Input{Now: epoch, Active: true, Reading: Reading{BindingPct: 96, Known: true, Exhausted: true}, Threshold: 40},
-			want: UrgentInterval,
+			want: DangerInterval,
 		},
 		{
 			// Nobody is spending an alternate, so its freshness is worth no more
@@ -581,11 +581,11 @@ func TestTheDangerBandIsExemptFromTheIdentityShare(t *testing.T) {
 	band := Input{Now: epoch, Active: true, Reading: sample(97), Threshold: 80}
 	idle := Input{Now: epoch, Reading: sample(10), Threshold: 80}
 
-	if got := Share(UrgentInterval, 3, band); got != UrgentInterval {
-		t.Errorf("the live account of three, in the band = %s, want %s", got, UrgentInterval)
+	if got := Share(DangerInterval, 3, band); got != DangerInterval {
+		t.Errorf("the live account of three, in the band = %s, want %s", got, DangerInterval)
 	}
-	if got := Share(UrgentInterval, 1, band); got != UrgentInterval {
-		t.Errorf("a sole account in the band = %s, want %s", got, UrgentInterval)
+	if got := Share(DangerInterval, 1, band); got != DangerInterval {
+		t.Errorf("a sole account in the band = %s, want %s", got, DangerInterval)
 	}
 	if got, want := Share(CandidateMaxInterval, 3, idle), 3*CandidateMaxInterval; got != want {
 		t.Errorf("an alternate on a three-account identity = %s, want %s", got, want)
@@ -603,12 +603,12 @@ func TestTheDangerBandIsExemptFromTheIdentityShare(t *testing.T) {
 // just asked for, so the cadence would exist in the schedule and nowhere else.
 func TestTheBandShortensTheServeTTLAndNothingElseDoes(t *testing.T) {
 	band := Input{Now: epoch, Active: true, Reading: sample(97), Threshold: 80}
-	if got := ServeTTLFor(band); got != DangerServeTTL {
-		t.Errorf("ServeTTLFor in the band = %s, want %s", got, DangerServeTTL)
+	if got := ServeTTLFor(band); got != ServeTTL {
+		t.Errorf("ServeTTLFor in the band = %s, want %s", got, ServeTTL)
 	}
-	if DangerServeTTL >= UrgentInterval {
-		t.Errorf("DangerServeTTL = %s is not under the %s cadence it has to admit",
-			DangerServeTTL, UrgentInterval)
+	if DangerInterval < ServeTTL {
+		t.Errorf("DangerInterval = %s is under the %s freshness gate, so the band's own "+
+			"polls would be refused by it", DangerInterval, ServeTTL)
 	}
 	for _, c := range []struct {
 		name string
@@ -648,30 +648,80 @@ func TestAStandDownIsTheCongestionCeilingWithJitter(t *testing.T) {
 	}
 }
 
+// The measured allowance the whole package is sized against: roughly 28-30
+// requests per identity per rolling hour, on a sliding window. 28 is the low end
+// and therefore the one an assertion should use.
+const measuredHourlyAllowance = 28
+
+// The band must not exceed the rate the endpoint will actually sustain, and this
+// is the test that was missing.
+//
+// The bug it exists for: the band returned UrgentInterval, carried no movement
+// requirement, and was exempt from Share(), so a live account parked at 96% on a
+// single-member identity polled every 60 s -- 60 requests an hour against an
+// allowance of 28-30 -- for as long as it stayed parked, with nothing in the
+// package to bring it back down. Every existing band test asserted the cadence in
+// isolation, which is a number, and none asserted the RATE, which is the thing
+// the endpoint actually refuses. So the whole suite passed.
+//
+// It is phrased as a full simulated hour, with the FASTEST jitter sample on every
+// step, on the worst case the package allows: a solo identity, so Share() divides
+// by one and its band exemption is moot either way; never rate-limited, so no
+// post-429 floor is doing the work; and parked, so nothing moves the account out
+// of the band.
+func TestTheBandNeverExceedsTheSustainedAllowanceOnASoloIdentity(t *testing.T) {
+	in := Input{Now: epoch, Active: true, Reading: sample(97), Threshold: 80}
+	st := seen(97)
+
+	polls := 0
+	for now := epoch; now.Before(epoch.Add(time.Hour)); {
+		in.Now = now
+		// rnd 0 is the fastest end of the jitter, so this counts the most polls
+		// the policy can produce in an hour rather than an average one.
+		at, next := Next(st, in, 0)
+		st = next
+		if !at.After(now) {
+			t.Fatalf("the schedule did not advance past %s", now)
+		}
+		now = at
+		polls++
+	}
+	if polls > measuredHourlyAllowance {
+		t.Errorf("a parked live account in the band makes %d requests an hour, want at most %d "+
+			"-- the endpoint's own allowance", polls, measuredHourlyAllowance)
+	}
+	// Share() cannot be credited with any of that: on a group of one the cadence
+	// itself has to fit.
+	if got := Share(DangerInterval, 1, in); got != DangerInterval {
+		t.Errorf("Share on a solo identity = %s, want the undivided %s", got, DangerInterval)
+	}
+}
+
 // The band REALLOCATES an identity's budget; it does not multiply it. The one
-// account that gets faster is the one a session is running against, it never
-// gets faster than UrgentInterval, and every other account on the identity gets
-// slower. The allowance is roughly 28-30 requests per identity per rolling hour
-// over a sliding window, so anything else spends an hour of capacity on
-// accounts nobody is using and recovers none of it early.
+// account that gets faster is the one a session is running against, and every
+// other account on the identity gets slower.
+//
+// What this no longer asserts is that the live account reaches UrgentInterval.
+// That WAS the overshoot, and the old version of this test said so itself -- "the
+// overshoot UrgentInterval already commits to on an identity of ONE" -- while
+// asserting around it rather than against it.
 func TestTheDangerBandReallocatesTheIdentityBudget(t *testing.T) {
 	const accounts = 3
 	perHour := func(d time.Duration) float64 { return float64(time.Hour) / float64(d) }
 
-	// Out of the band, at the fastest the ordinary rules go: live, inside the
-	// 15 pp urgent band, and moving.
-	out := Input{Now: epoch, Active: true, Reading: sample(70), Threshold: 80}
-	liveOut := Share(interval(t, seen(66), out), accounts, out)
-
 	in := Input{Now: epoch, Active: true, Reading: sample(97), Threshold: 80}
 	liveIn := Share(interval(t, seen(97), in), accounts, in)
 
-	if liveIn != UrgentInterval {
-		t.Fatalf("in the band the live account polls every %s, want exactly %s — below "+
-			"that is more than twice the hourly allowance for a single account", liveIn, UrgentInterval)
+	if liveIn != DangerInterval {
+		t.Fatalf("in the band the live account polls every %s, want exactly %s", liveIn, DangerInterval)
 	}
-	if liveIn >= liveOut {
-		t.Fatalf("the band bought nothing: %s in, %s out", liveIn, liveOut)
+	// The band's remaining value is that it beats the 600 s cadence an account
+	// inside it would otherwise take. Against the urgent path it is deliberately
+	// SLOWER, so the only comparison that means anything is against the cadence
+	// the band actually replaces.
+	if liveIn >= ExhaustedInterval {
+		t.Fatalf("the band bought nothing over the exhausted cadence: %s in, %s out",
+			liveIn, ExhaustedInterval)
 	}
 	// The alternates pay for it. A stand-down is never faster than the cadence it
 	// replaces, which is what makes this a reallocation.
@@ -681,13 +731,47 @@ func TestTheDangerBandReallocatesTheIdentityBudget(t *testing.T) {
 	if sibling < siblingOut {
 		t.Fatalf("a stand-down of %s is faster than the %s cadence it replaces", sibling, siblingOut)
 	}
-	// And the identity's total is the overshoot UrgentInterval already commits to
-	// on an identity of ONE, plus two alternates at the ceiling — not three
-	// accounts at the urgent cadence, which is what handing the band to everybody
-	// on the identity would cost.
+	// The identity's total now fits the measured allowance outright, which is the
+	// property the old arithmetic could only approach from above.
 	total := perHour(liveIn) + (accounts-1)*perHour(sibling)
-	if naive := accounts * perHour(UrgentInterval); total >= naive {
-		t.Fatalf("the identity makes %.0f requests an hour inside the band, want well under %.0f",
-			total, naive)
+	if total > measuredHourlyAllowance {
+		t.Fatalf("the identity makes %.1f requests an hour inside the band, want at most %d",
+			total, measuredHourlyAllowance)
+	}
+}
+
+// The sustained floor holds whatever the policy asks for, and this is the test
+// whose failure requires the clamp to exist.
+//
+// It calls sustained() directly and not through Next(), on purpose. base() no
+// longer produces a sub-floor cadence off the exempt path, so there is no Input
+// that reaches the clamp from outside — and a floor that is only proved by the
+// rules that happen to respect it today is proved by nothing. The `d` values here
+// are what a future rule would hand it.
+func TestTheSustainedFloorHoldsWhateverThePolicyAsksFor(t *testing.T) {
+	// Live, moving, and inside the 15 pp band: the one exemption.
+	exempt := Input{Now: epoch, Active: true, Reading: sample(70), Threshold: 80}
+	// Live and parked in the danger band: fast, and NOT exempt. This is the
+	// combination that spent twice the allowance.
+	band := Input{Now: epoch, Active: true, Reading: sample(97), Threshold: 80}
+	idle := Input{Now: epoch, Reading: sample(10), Threshold: 80}
+
+	for _, c := range []struct {
+		name   string
+		d      time.Duration
+		in     Input
+		moving bool
+		want   time.Duration
+	}{
+		{"a rule asking for a second, on an idle candidate", time.Second, idle, false, MinInterval},
+		{"a rule asking for the old band cadence", UrgentInterval, band, false, MinInterval},
+		{"the same, with the account also moving", UrgentInterval, band, true, MinInterval},
+		{"the exempt urgent path keeps its cadence", UrgentInterval, exempt, true, UrgentInterval},
+		{"the floor itself is not raised", MinInterval, idle, false, MinInterval},
+		{"a slower rule is left alone", ExhaustedInterval, idle, false, ExhaustedInterval},
+	} {
+		if got := sustained(c.d, c.in, c.moving); got != c.want {
+			t.Errorf("%s: sustained(%s) = %s, want %s", c.name, c.d, got, c.want)
+		}
 	}
 }

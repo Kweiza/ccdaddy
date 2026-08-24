@@ -9,18 +9,26 @@ import (
 // defaultPreemptLead is how far ahead of a projected exhaustion the engine
 // switches, on top of the blind interval between two polls.
 //
-// Two minutes is two urgent poll intervals — pollpolicy.UrgentInterval is 60 s,
-// the fastest cadence the endpoint's roughly 28-30 requests per identity per
-// rolling hour will bear. The horizon already counts the time until the next
-// reading; this is what is left over for the switch to be decided, written, and
-// picked up by the next session to start. A lead shorter than one poll interval
-// would routinely be overtaken between two readings, which is the case the
-// whole mechanism exists for.
+// Six minutes is two of the cadence an at-risk account actually polls at.
+//
+// The number is derived, and the derivation is the point. It used to be two
+// minutes, on the reading that the fastest cadence an at-risk account sees is
+// pollpolicy.UrgentInterval at 60 s. That stopped being true when the danger
+// band — the cadence a live account close to its window's ceiling is actually
+// on — moved from 60 s to pollpolicy.DangerInterval at 180 s. Left at two
+// minutes the lead would be SHORTER than one poll interval, which this comment
+// has always said is the case the whole mechanism exists to prevent: the
+// projection is then routinely overtaken between two readings and the switch
+// lands after the session has already been cut off.
+//
+// The horizon already counts the time until the next reading; this is what is
+// left over for the switch to be decided, written, and picked up by the next
+// session to start.
 //
 // It lives HERE and not in the engine. strategy reads a zero PreemptLead as the
 // pre-emptive switch off, so a default constant on that side would turn the
 // mechanism back on for a caller that meant to leave it off.
-const defaultPreemptLead = 2 * time.Minute
+const defaultPreemptLead = 6 * time.Minute
 
 // The defaults are the ENGINE's own defaults, never a second copy of them.
 //

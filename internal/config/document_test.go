@@ -342,7 +342,7 @@ func TestTheEffectiveValueOfEveryKeyIsFormattable(t *testing.T) {
 		keyHeadroomRatio:      "2",
 		keyCooldown:           "5m0s",
 		keyRecoveryHysteresis: "5m0s",
-		keyPreemptLead:        "2m0s",
+		keyPreemptLead:        "6m0s",
 		keyStrategy:           "headroom",
 		keyProbeUnknown:       "true",
 		keyHover:              "false",

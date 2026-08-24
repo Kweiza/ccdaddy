@@ -249,8 +249,8 @@ func (d daemonScreen) cadence() []string {
 			span(pollpolicy.ExhaustedInterval)),
 		fmt.Sprintf("  after a rate-limit refusal: %s up to %s",
 			span(pollpolicy.Post429MinInterval), span(pollpolicy.Post429MaxInterval)),
-		fmt.Sprintf("  cache served under %s, or %s above %.0f%% of a window",
-			span(pollpolicy.ServeTTL), span(pollpolicy.DangerServeTTL), pollpolicy.DangerBandPct),
+		fmt.Sprintf("  cache served under %s; above %.0f%% of a window the live account polls at %s",
+			span(pollpolicy.ServeTTL), pollpolicy.DangerBandPct, span(pollpolicy.DangerInterval)),
 		fmt.Sprintf("  with %d accounts on one identity, effectively %s apiece",
 			len(d.Rows), span(pollpolicy.PerIdentity(pollpolicy.MinInterval, len(d.Rows)))),
 	}
