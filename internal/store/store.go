@@ -211,9 +211,10 @@ func AccountsFileAt(root string) string {
 // are not closable, and it does nothing at all for a store that already has
 // one, left by an older build or by a reversal whose os.Remove was refused.
 //
-// It reads the way AccountsAt does and for the same reason: a store that is not
-// there yields no orphans rather than being brought into existence by the probe
-// asking about it. An unreadable accounts.toml is an ERROR rather than an empty
+// It reads under the store lock, unlike AccountsAt, and unlike its own first
+// draft: see the lock paragraph below. A store that is not there still yields
+// no orphans rather than being brought into existence by the probe asking
+// about it. An unreadable accounts.toml is an ERROR rather than an empty
 // answer — "nothing is orphaned", said out of a read that failed, is precisely
 // the reassuring lie the caller exists to remove.
 //
@@ -229,17 +230,40 @@ func AccountsFileAt(root string) string {
 // <uuid>.json reads as a file here, and the caller says of everything in this
 // list that it holds a live refresh token at 0600 and can be deleted.
 //
-// The Stat is also the only thing standing between this and a torn answer. The
-// listing and the account read are two syscalls with no lock across them, and a
-// concurrent `ccdad remove` completing in between leaves a uuid in neither --
-// gone from the document and gone from the disk -- which without the Stat is
-// reported as an orphan pointing at nothing.
+// The Stat is also the only thing standing between this and a torn answer over
+// a REMOVE: the listing and the account read are two syscalls, and a concurrent
+// `ccdad remove` completing between them leaves a uuid in neither -- gone from
+// the document and gone from the disk -- which without the Stat is reported as
+// an orphan pointing at nothing.
+//
+// The lock closes the opposite direction, an ADD or an IMPORT: Store.add writes
+// a credential file before the document names it (store.go's own mutate
+// re-reads accounts.toml inside the lock precisely because of that ordering),
+// so a lockless read here can see the new file and the old document in the
+// same instant and call a credential about to be claimed an orphan -- and
+// doctor's own text for this row says to delete it. Held for the read the same
+// way mutate holds it for a write, that instant cannot be observed: the
+// listing and the document are both from the same committed state, whichever
+// one that is. A root with no store yet -- no lock file's directory to open --
+// answers what it already did: no orphans rather than a store the probe
+// brought into existence.
 //
 // Anything else in the directory is not a credential file this store wrote: an
 // interrupted WriteFileAtomic leaves <name>.tmp-* beside its target, and
 // calling that stem a uuid would send the user looking for an account that
 // never existed.
 func OrphanCredentialsAt(root string) ([]string, error) {
+	release, err := acquireLock(filepath.Join(root, lockFileName))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			// Nothing to open the lock file's directory. The directory is
+			// created by Open, never by this read.
+			return nil, nil
+		}
+		return nil, fmt.Errorf("locking %s: %w", root, err)
+	}
+	defer release()
+
 	dir := CredentialsDirAt(root)
 	entries, err := os.ReadDir(dir)
 	if err != nil {

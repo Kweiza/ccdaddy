@@ -1413,8 +1413,15 @@ func checkProfiles(root string, usable, accountsUsable bool) check {
 // exactly when a user wants to look before anything else does, and the token in
 // it may be the only copy of a login they still want.
 //
-// It creates nothing: store.OrphanCredentialsAt reads the directory and the
-// document the way AccountsAt does, without Open's MkdirAll.
+// It creates no STORE: store.OrphanCredentialsAt still reads the directory and
+// the document without Open's MkdirAll, so a root that is not there yields no
+// orphans rather than being brought into existence. It does now take the store
+// lock — mutate's own re-read-inside-the-lock ordering is what this row used
+// to race, so a probe caught between Add writing a credential file and the
+// document that names it could call the file an orphan — which can create the
+// zero-byte lock marker on a store old enough to have gone without one, and
+// can hold this check for up to the lock's own timeout behind a live
+// transaction. Both are store.OrphanCredentialsAt's comment to make in full.
 func checkCredentialFiles(root string, usable, accountsUsable bool) check {
 	if !usable {
 		return check{"credential-files", levelSkipped, "there is no store to check"}
