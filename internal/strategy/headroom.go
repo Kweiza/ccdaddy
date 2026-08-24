@@ -268,6 +268,32 @@ func HeadroomFor(s *usage.Snapshot, model string, t Thresholds) Headroom {
 	return out
 }
 
+// UnwakenWindow is the first window in an account's own candidate set — the
+// same set HeadroomFor ranges over — that has never been spent against and
+// carries no reset, or false when there is none.
+//
+// It does not stop at the single BINDING window the way HeadroomFor does. An
+// account's five-hour window can sit at 0% with no reset while a weekly cap
+// binds tighter and already has one of its own: from the ranking's point of
+// view that account has pace already, but the five-hour window's reset is
+// still missing, and a probe exists to fetch exactly that — `ccdad hover
+// status` marks such a row probe-worthy on this same reasoning, so the two
+// must agree on what counts. Ties resolve on the schema's own order, the same
+// way HeadroomFor's do, which in practice means the plain five-hour window —
+// first in wire order — wins over a weekly one when both qualify.
+func UnwakenWindow(s *usage.Snapshot, model string, t Thresholds) (usage.WindowName, bool) {
+	for _, w := range bindingWindows(s, model, t) {
+		pct, ok := w.Percent()
+		if !ok || pct != 0 {
+			continue
+		}
+		if _, has := w.Reset(); !has {
+			return w.Name, true
+		}
+	}
+	return "", false
+}
+
 // recoveryOf is when the named window rolls over: the moment it stops holding
 // the account back. A window that reported no reset has no recovery, which is
 // not the same as recovering now.
