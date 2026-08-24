@@ -97,9 +97,32 @@ by `uuid` or `alias`.
   that scope is present, so a Console sign-in leaves a well-formed record that
   authenticates nothing. ccdad used to read "is there a `claudeAiOauth` object"
   and report the account as live.
+- **`ccdad doctor` gains a `credential-files` check, for twenty-one.** It names
+  a stored `<uuid>.json` that `accounts.toml` does not, with its path. Such a
+  file holds a live refresh token at 0600 and no command a user would reach for
+  can find it: `ccdad list`, `ccdad remove` and doctor's own account rows all
+  read the document, and an orphan is by definition a uuid the document does not
+  carry. The store's transaction rollback closes the way a REFUSED batch makes
+  one, and only that — the rollback runs from the mutator's error return rather
+  than from a `defer`, and the credential file is written before the document is
+  saved, so Ctrl-C during a multi-account `ccdad import` still leaves one, and
+  SIGKILL and power loss cannot be closed at all. Like every row here it
+  reports: it will not delete a file the store cannot explain.
 
 ### Fixed
 
+- **`doctor`'s credential-home drift warning blamed a cause the tree prevents.**
+  It named `ccdad run --full-profile` as how a daemon comes to be driving a
+  different Claude Code credential home from the shell reading the report —
+  which auto-start has refused since it gained its containment test. The cause
+  that IS still reachable, and deliberately so, is a credential home the user
+  pointed somewhere themselves, through `CLAUDE_SECURESTORAGE_CONFIG_DIR` or
+  `CLAUDE_CONFIG_DIR`. That mattered beyond the wording: the comment above the
+  check was the only written reason it exists, so a reader who noticed the cited
+  cause was prevented had an argument for deleting a check that is still needed.
+  The row also told a user inside a `ccdad run` session to restart the daemon,
+  where the daemon is not the side that moved and `ccdad daemon restart` is
+  refused in that very shell; it now says that instead.
 - **A host-injected API key was invisible to every command.** Claude Code reads
   `CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR` **or**, when that is unset,
   `/home/claude/.claude/remote/.api_key` — one branch, two routes. ccdad modelled
