@@ -51,6 +51,11 @@ type Engine struct {
 	// describe an endpoint's behaviour without one.
 	AccessToken func(ctx context.Context, uuid string) (string, error)
 	FetchUsage  func(ctx context.Context, accessToken string) (*usage.Snapshot, error)
+	// SpawnProbe starts one probe and returns without waiting for it. It is a
+	// func for the same reason the two above are: starting a process is the
+	// thing a test in this package cannot arrange. Nil means the package's own
+	// SpawnProbe.
+	SpawnProbe func(uuid, model string) error
 	// Now is the clock, and Rand the jitter source the poll policy wants.
 	Now  func() time.Time
 	Rand func() float64
@@ -84,6 +89,11 @@ type Engine struct {
 	saidOverridden  bool
 	saidContended   bool
 	saidClaimNotice string
+	// saidNoClaude and saidProbeSpends are the probe's two once-per-lifetime
+	// lines, held here for the reason the three above are: this loop runs about
+	// once a second, and a machine with no Claude Code on it stays that way.
+	saidNoClaude    bool
+	saidProbeSpends bool
 
 	wg sync.WaitGroup
 }
@@ -332,6 +342,23 @@ func (e *Engine) dispatch(ctx context.Context, s *store.Store, accounts []store.
 		if !due(entry, has, now, a.UUID == active) {
 			continue
 		}
+		// A probe REPLACES this tick's poll rather than being scheduled beside
+		// it, and the ordering is what makes that true: the account is one a
+		// poller was about to reach, so nothing is polled more often because of a
+		// probe, and the entry's reading is already older than the serve TTL —
+		// which is what lets the poll a minute out actually happen instead of
+		// being held at the freshness floor.
+		//
+		// Only a probe that was actually QUEUED replaces the poll. One the daemon
+		// could not start — no Claude Code on this PATH — replaces nothing, and
+		// skipping the poll for it as well would leave an account unread forever:
+		// the reading is what says the window still has no reset, so a tick that
+		// never refreshes it can never find out that it does.
+		if model, want := e.probeDue(a, entry, cfg, now, active); want {
+			if e.probeNow(a, model, now) {
+				continue
+			}
+		}
 		if !e.claim(a.UUID) {
 			// A poll from an earlier tick is still running. Starting a second
 			// one would spend the identity's budget twice for one reading and
@@ -410,6 +437,127 @@ func due(e usage.Entry, has bool, now time.Time, live bool) bool {
 		return true
 	}
 	return !now.Before(at)
+}
+
+// probeDue reports whether this tick should spend a turn of an account's own
+// quota to give its binding window a reset time, and which model family the turn
+// has to be spent against to reach that window.
+//
+// Every condition is a way this goes wrong without it:
+//
+//   - probe_unknown off is the user saying not to spend their quota unasked.
+//   - a disabled account is one the engine will not switch to, so a reading for
+//     it buys nothing and the quota would be spent for nobody.
+//   - an unreadable account is one no window reported a utilization for. That is
+//     an account nothing could be read from rather than one with an unused
+//     window, and the answer to it is another poll, not a turn of quota.
+//   - a binding window that already reports a reset has nothing to wake, and this
+//     is the condition that stops the probe recurring once it has worked.
+//   - the six-hour gate is what keeps a probe that FAILS — a login prompt, a
+//     model outage — from being retried at this loop's 1 Hz.
+//
+// The live account is skipped, and that is the one exclusion worth spelling out.
+// It is the account something else is already spending against, so a probe of it
+// is the one probe that duplicates work outright — and it is the one that can
+// break a session in flight: a probe runs its own Claude Code out of its own
+// credential home holding the SAME OAuth login, and the server rotates the
+// refresh token whenever either of them refreshes, revoking the copy the live
+// session is using. What happens instead is nothing: the window gets its reset
+// time from the user's own next turn, which is the event a probe is standing in
+// for, and `ccdad probe <account>` stays available to a human who wants it now.
+func (e *Engine) probeDue(a store.Account, entry usage.Entry, cfg config.Config,
+	now time.Time, active string) (string, bool) {
+
+	if !cfg.ProbeUnknown || a.Disabled || a.UUID == active {
+		return "", false
+	}
+	h := strategy.HeadroomOf(entry.Snapshot, cfg.Thresholds())
+	if !h.Known {
+		return "", false
+	}
+	if _, has := entry.Snapshot.ResetFor(h.Binding); has {
+		return "", false
+	}
+	if !entry.MayProbe(now) {
+		return "", false
+	}
+	return probeModel(h.Binding), true
+}
+
+// probeModel is the model family a turn must be spent against to reach one
+// window, or "" when any model reaches it.
+//
+// A scoped weekly window arrives named for its scope's DISPLAY name — "Opus 4.5"
+// — and ModelFamily is what already reduces one of those to the token a --model
+// argument is written with. A window it cannot reduce gets "": the turn is then
+// spent on whatever claude defaults to, which still wakes the five-hour window
+// and is the honest answer for a scope ccdad cannot name.
+func probeModel(w usage.WindowName) string {
+	switch w {
+	case usage.WindowSevenDayOpus:
+		return "opus"
+	case usage.WindowSevenDaySonnet:
+		return "sonnet"
+	}
+	if !w.Scoped() {
+		return ""
+	}
+	if family, ok := strategy.ModelFamily(string(w)); ok {
+		return family
+	}
+	return ""
+}
+
+// probeNow queues one probe and moves the poll that will read it out of the way.
+// It reports whether the attempt was RECORDED, which is what makes it safe for
+// the caller to skip this tick's poll: a recorded attempt has already scheduled
+// that poll a minute out, and an unrecorded one has scheduled nothing.
+func (e *Engine) probeNow(a store.Account, model string, now time.Time) bool {
+	// Asked here rather than once per tick: this is reached only for an account
+	// that is otherwise worth probing, which after the first successful probe is
+	// no account at all. The child inherits this process's PATH through ChildEnv,
+	// so what resolves here is what will resolve there.
+	//
+	// Asked BEFORE the attempt is recorded, and that order is deliberate: a
+	// machine with no Claude Code on it has not made a failed attempt — nothing
+	// was tried and nothing was spent — so it must not consume the six-hour
+	// budget, or the account stays unknown for six hours after claude is finally
+	// installed.
+	if err := ProbeAvailable(); err != nil {
+		if !e.saidNoClaude {
+			e.saidNoClaude = true
+			e.logf("not probing: %v. An account whose window has never been used stays "+
+				"unknown — no reset time, no pace, no projection. Install Claude Code, or "+
+				"set probe_unknown = false to stop looking", err)
+		}
+		return false
+	}
+	if !e.saidProbeSpends {
+		e.saidProbeSpends = true
+		e.logf("probing accounts whose binding window reports no reset time. A probe SPENDS that " +
+			"account's own quota — one turn of Claude Code — because the endpoint reports no reset " +
+			"until something has been spent against the window. Set probe_unknown = false to stop.")
+	}
+	// Stamped BEFORE the spawn, and that order is the whole gate. The child is a
+	// separate process, so a spawn that never starts would otherwise leave the
+	// account probe-due on the very next tick, forever. The child stamps again
+	// once it knows the outcome; both writers go through the cache's own lock and
+	// the later one lands last.
+	if err := usage.RecordProbe(cacheTimeout, a.UUID, now, nil); err != nil {
+		e.logf("recording %s's probe failed: %v", a.UUID, err)
+		return false
+	}
+	if err := e.spawnProbe(a.UUID, model); err != nil {
+		e.logf("probing %s failed to start: %v", a.UUID, err)
+	}
+	return true
+}
+
+func (e *Engine) spawnProbe(uuid, model string) error {
+	if e.SpawnProbe != nil {
+		return e.SpawnProbe(uuid, model)
+	}
+	return SpawnProbe(uuid, model)
 }
 
 func (e *Engine) claim(uuid string) bool {
@@ -724,6 +872,10 @@ func (e *Engine) publish(accounts []store.Account, cache *usage.Cache,
 func accountState(a store.Account, cache *usage.Cache, quarantined bool,
 	activeUUID string, cfg config.Config) AccountState {
 
+	// There is no case for the primary flag, and its absence is the decision:
+	// primary says where the engine RANKS an account, never that it should be
+	// left alone. Giving it an arm here would publish a usable seat as though its
+	// owner had held it out of rotation.
 	switch {
 	case a.Disabled:
 		return StateDisabled
