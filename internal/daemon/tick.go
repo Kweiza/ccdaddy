@@ -255,7 +255,10 @@ func (e *Engine) Tick(ctx context.Context) error {
 		Config: func() (config.Config, error) { return cfg, cfgErr },
 	})
 	if evErr != nil {
-		e.publish(accounts, cache, ev, cfg, quarantinedSet(ev))
+		// The configured table, not hoverThresholds(cfg, ev): a failed
+		// evaluation is the one case where ev.Plan cannot be trusted for
+		// anything it did not itself set, including whether Hover ran.
+		e.publish(accounts, cache, ev, configuredThresholds(cfg), quarantinedSet(ev))
 		return evErr
 	}
 
@@ -272,8 +275,15 @@ func (e *Engine) Tick(ctx context.Context) error {
 	// live one, this tick rather than next.
 	active, activeKnown := activeAfter(ev, res)
 	quarantined := quarantinedSet(ev)
-	e.dispatch(ctx, s, accounts, cache, cfg, now, active, activeKnown, quarantined)
-	e.publish(accounts, cache, ev, cfg, quarantined)
+	// The same table `ev` was just ranked against, not a second one rebuilt from
+	// cfg. Under hover the two disagree on purpose — hover's threshold divides
+	// the pool by the accounts THIS pass judged usable, which dispatch and
+	// publish cannot see from cfg alone — and a rebuilt table would publish a
+	// candidate the ranking had already excluded, poll it at the wrong cadence,
+	// and probe the wrong binding window.
+	thresholds := hoverThresholds(cfg, ev)
+	e.dispatch(ctx, s, accounts, cache, cfg, thresholds, now, active, activeKnown, quarantined)
+	e.publish(accounts, cache, ev, thresholds, quarantined)
 
 	if swapErr != nil {
 		return swapErr
@@ -375,8 +385,8 @@ func (e *Engine) act(s *store.Store, ev switcher.Evaluation) (switcher.Result, e
 // dispatch starts a poll for every account that is due, and returns without
 // waiting for any of them.
 func (e *Engine) dispatch(ctx context.Context, s *store.Store, accounts []store.Account,
-	cache *usage.Cache, cfg config.Config, now time.Time, active string, activeKnown bool,
-	quarantined map[string]bool) {
+	cache *usage.Cache, cfg config.Config, thresholds func(uuid string) strategy.Thresholds,
+	now time.Time, active string, activeKnown bool, quarantined map[string]bool) {
 
 	members := identityMembers(accounts)
 	for _, a := range accounts {
@@ -412,7 +422,7 @@ func (e *Engine) dispatch(ctx context.Context, s *store.Store, accounts []store.
 		// skipping the poll for it as well would leave an account unread forever:
 		// the reading is what says the window still has no reset, so a tick that
 		// never refreshes it can never find out that it does.
-		if model, want := e.probeDue(a, entry, cfg, now, active, activeKnown, quarantined); want &&
+		if model, want := e.probeDue(a, entry, cfg, thresholds, now, active, activeKnown, quarantined); want &&
 			e.probeNow(a, model, now) {
 			e.release(a.UUID)
 			continue
@@ -423,7 +433,7 @@ func (e *Engine) dispatch(ctx context.Context, s *store.Store, accounts []store.
 			defer e.release(a.UUID)
 			// Discarded: a tick reports through the status document, and
 			// the failure is already in this account's pollRecord.
-			_ = e.poll(ctx, a, cfg, members[identityOf(a)], a.UUID == active)
+			_ = e.poll(ctx, a, cfg, thresholds, members[identityOf(a)], a.UUID == active)
 		}(a)
 	}
 }
@@ -525,6 +535,7 @@ func due(e usage.Entry, has bool, now time.Time, live bool) bool {
 // time from the user's own next turn, which is the event a probe is standing in
 // for, and `ccdad probe <account>` stays available to a human who wants it now.
 func (e *Engine) probeDue(a store.Account, entry usage.Entry, cfg config.Config,
+	thresholds func(uuid string) strategy.Thresholds,
 	now time.Time, active string, activeKnown bool, quarantined map[string]bool) (string, bool) {
 
 	if !cfg.ProbeUnknown || a.Disabled || quarantined[a.UUID] {
@@ -539,7 +550,11 @@ func (e *Engine) probeDue(a store.Account, entry usage.Entry, cfg config.Config,
 	if !activeKnown || a.UUID == active {
 		return "", false
 	}
-	h := strategy.HeadroomOf(entry.Snapshot, cfg.Thresholds())
+	// thresholds(a.UUID), not cfg.Thresholds(): under hover the binding window
+	// — and so the window a probe would wake — is chosen against the same
+	// per-account table the ranking used, not the raw config bundle hover
+	// otherwise ignores.
+	h := strategy.HeadroomOf(entry.Snapshot, thresholds(a.UUID))
 	if !h.Known {
 		return "", false
 	}
@@ -676,7 +691,8 @@ func (e *Engine) release(uuid string) {
 // its only output is the cache, the engine state, and this account's
 // pollRecord; the returned error is for Refresh, which has a caller waiting to
 // be told what happened rather than a status document to publish into.
-func (e *Engine) poll(ctx context.Context, a store.Account, cfg config.Config, identity []string, active bool) error {
+func (e *Engine) poll(ctx context.Context, a store.Account, cfg config.Config,
+	thresholds func(uuid string) strategy.Thresholds, identity []string, active bool) error {
 	ctx, cancel := context.WithTimeout(ctx, e.pollTimeout())
 	defer cancel()
 
@@ -692,16 +708,17 @@ func (e *Engine) poll(ctx context.Context, a store.Account, cfg config.Config, i
 	now := e.now()
 	e.record(a.UUID, now, err)
 	if err != nil {
-		e.handleFailure(a, cfg, err, now, identity, active)
+		e.handleFailure(a, cfg, thresholds, err, now, identity, active)
 		return err
 	}
-	e.commit(a, snap, now, identity, cfg, active, nil)
+	e.commit(a, snap, now, identity, thresholds, active, nil)
 	return nil
 }
 
 // handleFailure decides what a failed poll means. Only ONE of the failures says
 // anything about the account.
-func (e *Engine) handleFailure(a store.Account, cfg config.Config, err error,
+func (e *Engine) handleFailure(a store.Account, cfg config.Config,
+	thresholds func(uuid string) strategy.Thresholds, err error,
 	now time.Time, identity []string, active bool) {
 	switch {
 	case errors.Is(err, tokens.ErrNoOAuthCredential):
@@ -715,7 +732,7 @@ func (e *Engine) handleFailure(a store.Account, cfg config.Config, err error,
 		// Code has not run in eight hours — so there is no session whose
 		// rotation is urgent, and this must not feed AIMD or quarantine
 		// anything. It reschedules at the ordinary cadence and waits.
-		e.commit(a, nil, now, identity, cfg, active, nil)
+		e.commit(a, nil, now, identity, thresholds, active, nil)
 		return
 
 	case errors.Is(err, usage.ErrRateLimited):
@@ -725,7 +742,7 @@ func (e *Engine) handleFailure(a store.Account, cfg config.Config, err error,
 		if errors.As(err, &se) {
 			retry, hasRetry = se.RetryAfter()
 		}
-		e.commit(a, nil, now, identity, cfg, active, func(st pollpolicy.State) pollpolicy.State {
+		e.commit(a, nil, now, identity, thresholds, active, func(st pollpolicy.State) pollpolicy.State {
 			return pollpolicy.RateLimited(st, now, retry, hasRetry)
 		})
 		return
@@ -739,7 +756,7 @@ func (e *Engine) handleFailure(a store.Account, cfg config.Config, err error,
 	if strategy.ClassifyRefresh(err).Quarantines() {
 		e.quarantine(a.UUID, cfg, now)
 	}
-	e.commit(a, nil, now, identity, cfg, active, nil)
+	e.commit(a, nil, now, identity, thresholds, active, nil)
 }
 
 func (e *Engine) quarantine(uuid string, cfg config.Config, now time.Time) {
@@ -763,12 +780,15 @@ func (e *Engine) quarantine(uuid string, cfg config.Config, now time.Time) {
 // that evidence — throwing it away would make one bad minute look like a fresh
 // account with no history.
 func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now time.Time,
-	identity []string, cfg config.Config, active bool,
+	identity []string, thresholds func(uuid string) strategy.Thresholds, active bool,
 	adjust func(pollpolicy.State) pollpolicy.State) {
 
 	// Resolved once, before the cache callback: it is read twice inside and the
-	// value is the same for the whole call.
-	thr := cfg.Thresholds()
+	// value is the same for the whole call. thresholds(a.UUID) rather than
+	// cfg.Thresholds() so that under hover the poll cadence and the Exhausted
+	// status below are measured against the same per-account table the ranking
+	// just used, not the raw config bundle hover otherwise ignores.
+	thr := thresholds(a.UUID)
 	err := usage.WithCache(cacheTimeout, func(c *usage.Cache) error {
 		entry, had := c.Get(a.UUID)
 		state := pollStateOf(entry)
@@ -956,6 +976,36 @@ func (e *Engine) record(uuid string, at time.Time, err error) {
 // lookup. It is built once per tick because both the scheduler and the status
 // document ask about it, and a second walk of the same slice is a second place
 // for the two to disagree.
+// configuredThresholds is every account's answer when hover is off, or when
+// there is no evaluation this tick trusts enough to derive one from: the
+// config bundle, unchanged for every uuid.
+func configuredThresholds(cfg config.Config) func(uuid string) strategy.Thresholds {
+	thr := cfg.Thresholds()
+	return func(string) strategy.Thresholds { return thr }
+}
+
+// hoverThresholds is the one table this tick's dispatch, commit, probeDue and
+// publish all measure against.
+//
+// internal/cli/status.go's rowThresholds solves the identical problem for
+// rendering — route through the engine's own HoverPlan when hover is on,
+// because hover divides the quota by a pool (usable, non-quarantined
+// accounts) that only a ranking pass knows — and this is the same fix for the
+// daemon's own scheduling and state-publishing paths, which had never made
+// that call at all: they read cfg.Thresholds() directly, so hover changed what
+// `ccdad auto` ranked on without changing what the daemon polled on, probed
+// on, or reported as engine.state.
+//
+// ev.Plan.Hover is nil when hover is on but the pass never ran — nothing has
+// been polled yet — and the configured bundle is the only answer there is
+// nothing to derive one from.
+func hoverThresholds(cfg config.Config, ev switcher.Evaluation) func(uuid string) strategy.Thresholds {
+	if !cfg.Hover || ev.Plan.Hover == nil {
+		return configuredThresholds(cfg)
+	}
+	return ev.Plan.Hover.For
+}
+
 func quarantinedSet(ev switcher.Evaluation) map[string]bool {
 	out := make(map[string]bool, len(ev.Plan.Quarantined))
 	for _, uuid := range ev.Plan.Quarantined {
@@ -965,7 +1015,7 @@ func quarantinedSet(ev switcher.Evaluation) map[string]bool {
 }
 
 func (e *Engine) publish(accounts []store.Account, cache *usage.Cache,
-	ev switcher.Evaluation, cfg config.Config, quarantined map[string]bool) {
+	ev switcher.Evaluation, thresholds func(uuid string) strategy.Thresholds, quarantined map[string]bool) {
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -989,14 +1039,14 @@ func (e *Engine) publish(accounts []store.Account, cache *usage.Cache,
 		if entry, ok := cache.Get(a.UUID); ok {
 			row.NextPollAt = entry.PollAt(a.UUID == status.ActiveUUID)
 		}
-		row.State = accountState(a, cache, quarantined[a.UUID], status.ActiveUUID, cfg)
+		row.State = accountState(a, cache, quarantined[a.UUID], status.ActiveUUID, thresholds)
 		status.Accounts = append(status.Accounts, row)
 	}
 	e.status = status
 }
 
 func accountState(a store.Account, cache *usage.Cache, quarantined bool,
-	activeUUID string, cfg config.Config) AccountState {
+	activeUUID string, thresholds func(uuid string) strategy.Thresholds) AccountState {
 
 	// There is no case for the primary flag, and its absence is the decision:
 	// primary says where the engine RANKS an account, never that it should be
@@ -1015,7 +1065,7 @@ func accountState(a store.Account, cache *usage.Cache, quarantined bool,
 		// Unknown is NOT an empty account, and it must never render as 0%.
 		return StateUnknown
 	}
-	h := strategy.HeadroomOf(entry.Snapshot, cfg.Thresholds())
+	h := strategy.HeadroomOf(entry.Snapshot, thresholds(a.UUID))
 	if !h.Known {
 		return StateUnknown
 	}

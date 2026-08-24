@@ -835,7 +835,7 @@ func TestTheDaemonAndTheEngineCannotDisagreeAboutSpent(t *testing.T) {
 
 			// activeUUID is empty so the active case cannot answer ahead of the
 			// verdict under test.
-			state := accountState(store.Account{UUID: "u-1"}, cache, false, "", cfg)
+			state := accountState(store.Account{UUID: "u-1"}, cache, false, "", configuredThresholds(cfg))
 
 			// One candidate, so AllOverThreshold is exactly "this account is
 			// known and spent" — the engine's own answer, reached without
@@ -849,6 +849,123 @@ func TestTheDaemonAndTheEngineCannotDisagreeAboutSpent(t *testing.T) {
 					got, state, res.AllOverThreshold)
 			}
 		})
+	}
+}
+
+// The same disagreement TestTheDaemonAndTheEngineCannotDisagreeAboutSpent
+// closes for the configured threshold, reopened under hover: accountState()
+// used to read cfg.Thresholds() directly, which hover never touches, so the
+// published engine.state answered against the number hover had already
+// replaced.
+//
+// Two usable accounts (both carry a reading, neither disabled, quarantined or
+// api-key), so hover's share is 100/2 = 50. u-1's five_hour window is 15
+// minutes into 5 hours — ExpectedPct 5 — so hover's threshold is 5+50 = 55 and
+// 60% used is spent (slack -5). The RAW config threshold is 80, under which
+// the same 60% reads as healthy (slack +20) — the gap this test is closing.
+func TestAccountStateUnderHoverMatchesTheRankingHoverJustRan(t *testing.T) {
+	isolateEngine(t)
+	writeConfig(t, "hover = true\n")
+	seedAccount(t, "u-1", "org-shared")
+	seedAccount(t, "u-2", "org-shared")
+
+	u1Pct := 60.0
+	u1Reset := tickEpoch.Add(4*time.Hour + 45*time.Minute)
+	seedEntry(t, "u-1", usage.Entry{
+		Snapshot:  &usage.Snapshot{FiveHour: usage.NewWindow(&u1Pct, &u1Reset)},
+		FetchedAt: tickEpoch,
+	})
+	u2Pct := 10.0
+	u2Reset := tickEpoch.Add(time.Hour)
+	seedEntry(t, "u-2", usage.Entry{
+		Snapshot:  &usage.Snapshot{FiveHour: usage.NewWindow(&u2Pct, &u2Reset)},
+		FetchedAt: tickEpoch,
+	})
+
+	e := engineFor(t, tokensAreFine, func(context.Context, string) (*usage.Snapshot, error) {
+		t.Fatal("both readings are already fresh; a tick that fetches is not measuring the cached ones this test set up")
+		return nil, nil
+	})
+	tick(t, e)
+
+	var got AccountState
+	var found bool
+	for _, row := range e.Snapshot().Accounts {
+		if row.UUID == "u-1" {
+			got, found = row.State, true
+		}
+	}
+	if !found {
+		t.Fatal("u-1 has no published row")
+	}
+	if got != StateExhausted {
+		t.Errorf("engine.state for u-1 = %q, want %q — hover's own ranking pass already excludes it "+
+			"(60%% against hover's derived threshold of 55); the raw config threshold of 80 would call "+
+			"it healthy, which is the disagreement the daemon must not publish", got, StateExhausted)
+	}
+}
+
+// commit's own consumer of the same table, mirroring
+// TestThePollCadenceReadsTheBindingWindowsOwnThreshold's shape: the same
+// reading, committed once against the raw configured bundle and once against
+// the table hover would have derived for it, must schedule two different
+// polls. Equal schedules would mean commit() ignores the resolver it is
+// handed and always measures the same number.
+//
+// u-1 is ACTIVE on purpose: exhausted is checked ahead of the active branch in
+// pollpolicy's own cadence rule, but CandidateMaxInterval and
+// ExhaustedInterval happen to both be 600s — an inactive fixture would pass
+// whether or not the fix worked, for a coincidence that has nothing to do
+// with hover. Active splits them: ActiveMaxInterval (300s, healthy) against
+// ExhaustedInterval (600s, spent).
+//
+// Going through commit() directly, not a whole Tick(), is deliberate: a tick
+// also runs switcher.Execute, which could move the live account out from
+// under u-1 depending on which one hover judges healthiest, and this test is
+// about commit()'s resolver, not about who gets switched to.
+func TestThePollCadenceMovesWhenHoverMovesAnAccountToSpent(t *testing.T) {
+	isolateEngine(t)
+	a := store.Account{UUID: "acct-1"}
+	u1Pct := 60.0
+	u1Reset := tickEpoch.Add(4*time.Hour + 45*time.Minute)
+	snap := &usage.Snapshot{FiveHour: usage.NewWindow(&u1Pct, &u1Reset)}
+
+	// Two usable accounts is the fixture accountState's hover test above
+	// already reasons through: ExpectedPct 5, share 100/2 = 50, hover's
+	// threshold 55 against 60% used is spent (slack -5); the raw config
+	// threshold of 80 is healthy (slack +20).
+	raw := configuredThresholds(config.Config{Threshold: 80})
+	hoverDerived := func(string) strategy.Thresholds {
+		return strategy.Thresholds{Default: 80, PerWindow: map[usage.WindowName]float64{usage.WindowFiveHour: 55}}
+	}
+
+	nextPollAfter := func(thresholds func(string) strategy.Thresholds) time.Time {
+		t.Helper()
+		e := NewEngine()
+		e.Rand = midJitter
+		e.commit(a, snap, tickEpoch, []string{a.UUID}, thresholds, true, nil)
+		entry, ok := cacheEntry(t, a.UUID)
+		if !ok {
+			t.Fatal("commit() wrote no cache entry")
+		}
+		return entry.NextPollAt
+	}
+
+	withRaw := nextPollAfter(raw)
+	withHover := nextPollAfter(hoverDerived)
+
+	if withRaw.Equal(withHover) {
+		t.Errorf("NextPollAt is %s for both the raw table and hover's, so commit() measured the "+
+			"same 60%% against the same threshold both times — it never asked the resolver it was "+
+			"handed", withRaw)
+	}
+	if want := tickEpoch.Add(pollpolicy.ActiveMaxInterval); !withRaw.Equal(want) {
+		t.Errorf("against the raw config threshold of 80, NextPollAt = %s, want %s "+
+			"(ActiveMaxInterval) — 60%% used is healthy", withRaw, want)
+	}
+	if want := tickEpoch.Add(pollpolicy.ExhaustedInterval); !withHover.Equal(want) {
+		t.Errorf("against hover's derived threshold of 55, NextPollAt = %s, want %s "+
+			"(ExhaustedInterval) — 60%% used is spent", withHover, want)
 	}
 }
 
@@ -891,7 +1008,7 @@ func TestThePollCadenceReadsTheBindingWindowsOwnThreshold(t *testing.T) {
 		})
 		e := NewEngine()
 		e.Rand = midJitter
-		e.commit(a, windowsUsed(10, 50), tickEpoch, []string{a.UUID}, cfg, true, nil)
+		e.commit(a, windowsUsed(10, 50), tickEpoch, []string{a.UUID}, configuredThresholds(cfg), true, nil)
 		entry, ok := cacheEntry(t, a.UUID)
 		if !ok {
 			t.Fatal("commit() wrote no cache entry")
@@ -1686,13 +1803,14 @@ func TestProbeDueRefusesAnUnknownLiveAccountAndNotMerelyAnEmptyOne(t *testing.T)
 	entry := usage.Entry{Snapshot: unusedWindow(), FetchedAt: tickEpoch.Add(-10 * time.Minute)}
 	cfg := config.Defaults()
 
-	if _, want := e.probeDue(a, entry, cfg, tickEpoch, "", false, nil); want {
+	thresholds := configuredThresholds(cfg)
+	if _, want := e.probeDue(a, entry, cfg, thresholds, tickEpoch, "", false, nil); want {
 		t.Error("probed while which account is live could not be worked out")
 	}
-	if _, want := e.probeDue(a, entry, cfg, tickEpoch, "", true, nil); !want {
+	if _, want := e.probeDue(a, entry, cfg, thresholds, tickEpoch, "", true, nil); !want {
 		t.Error("refused to probe on a machine where nothing is live, which is the safe case")
 	}
-	if _, want := e.probeDue(a, entry, cfg, tickEpoch, "u-1", true, nil); want {
+	if _, want := e.probeDue(a, entry, cfg, thresholds, tickEpoch, "u-1", true, nil); want {
 		t.Error("probed the live account")
 	}
 }
@@ -1848,9 +1966,11 @@ func TestThePublishedScheduleIsTheOneTheDispatcherWillHonour(t *testing.T) {
 		return switcher.Evaluation{Live: store.Account{UUID: uuid}, LiveKnown: true}
 	}
 
+	thresholds := configuredThresholds(cfg)
+
 	// A restart: the cache is all there is, and the account is an alternate.
 	restarted := NewEngine()
-	restarted.publish(accounts, cache, live("u-1"), cfg, nil)
+	restarted.publish(accounts, cache, live("u-1"), thresholds, nil)
 	if got := nextPollOf(t, restarted.Snapshot(), "u-2"); !got.Equal(stood) {
 		t.Errorf("a restarted daemon published %s for a stood-down alternate, want %s — "+
 			"the dispatcher will not touch it until then", got, stood)
@@ -1861,8 +1981,8 @@ func TestThePublishedScheduleIsTheOneTheDispatcherWillHonour(t *testing.T) {
 	e := NewEngine()
 	e.Now = func() time.Time { return tickEpoch }
 	e.Rand = func() float64 { return 0.5 }
-	e.commit(accounts[0], snapshotWith(20), tickEpoch, []string{"u-2"}, cfg, false, nil)
-	e.publish(accounts, cache, live("u-1"), cfg, nil)
+	e.commit(accounts[0], snapshotWith(20), tickEpoch, []string{"u-2"}, thresholds, false, nil)
+	e.publish(accounts, cache, live("u-1"), thresholds, nil)
 	if got := nextPollOf(t, e.Snapshot(), "u-2"); !got.Equal(stood) {
 		t.Errorf("published %s for a stood-down alternate this process polled, want %s", got, stood)
 	}
@@ -1874,7 +1994,7 @@ func TestThePublishedScheduleIsTheOneTheDispatcherWillHonour(t *testing.T) {
 		t.Fatal(err)
 	}
 	entry, _ := reloaded.Get("u-2")
-	e.publish(accounts, reloaded, live("u-2"), cfg, nil)
+	e.publish(accounts, reloaded, live("u-2"), thresholds, nil)
 	if got := nextPollOf(t, e.Snapshot(), "u-2"); !got.Equal(entry.NextPollAt) {
 		t.Errorf("published %s for the account that is now live, want the %s its own poll "+
 			"earned — a stand-down written for its predecessor does not hold it", got, entry.NextPollAt)

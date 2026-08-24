@@ -127,7 +127,12 @@ func (e *Engine) Refresh(ctx context.Context, s *store.Store, want []store.Accou
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if perr := e.poll(ctx, a, cfg, members[identityOf(a)], a.UUID == active); perr != nil {
+			// The configured bundle, not the tick's hoverThresholds: a
+			// hand-held refresh has no switcher.Evaluation to derive hover's
+			// per-account table from — asking for one would be the ranking
+			// pass this button is not a substitute for — so it measures the
+			// same way `ccdad auto`'s own poll does whenever it cannot ask.
+			if perr := e.poll(ctx, a, cfg, configuredThresholds(cfg), members[identityOf(a)], a.UUID == active); perr != nil {
 				res.State, res.Err = RefreshFailed, perr
 				return
 			}
