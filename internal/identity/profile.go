@@ -29,6 +29,15 @@ const (
 // an account.
 var ErrUnauthorized = errors.New("the profile endpoint rejected the token")
 
+// ErrForbidden is a 403, and it is deliberately NOT ErrUnauthorized -- the same
+// split internal/usage already makes, for a reason this endpoint makes sharper.
+// A token minted by `claude setup-token` authenticates perfectly well and is
+// refused here on SCOPE: the lookup asks for any_of(user:profile, user:office)
+// and that token carries neither. Folding the two together makes every setup
+// token read as a dead credential, which is the one kind of token
+// `ccdad add-token` exists to register.
+var ErrForbidden = errors.New("the profile endpoint refused this credential")
+
 // StatusError is a non-200 from the profile endpoint. It carries the status and
 // nothing else: the token is a live credential and the body is upstream text.
 type StatusError struct{ Status int }
@@ -37,12 +46,16 @@ func (e *StatusError) Error() string {
 	return fmt.Sprintf("the profile endpoint refused the request (HTTP %d)", e.Status)
 }
 
-// Unwrap reports a rejected credential as ErrUnauthorized so a caller can tell
-// "this token is dead" from "the endpoint is having a bad day" without
-// inspecting the number.
+// Unwrap separates the three answers a caller acts on differently, so none of
+// them needs to inspect the number: a 401 is a credential the endpoint will not
+// accept at all, a 403 is one it accepts and will not answer THIS question for,
+// and everything else is the endpoint having a bad day.
 func (e *StatusError) Unwrap() error {
-	if e.Status == http.StatusUnauthorized || e.Status == http.StatusForbidden {
+	switch e.Status {
+	case http.StatusUnauthorized:
 		return ErrUnauthorized
+	case http.StatusForbidden:
+		return ErrForbidden
 	}
 	return nil
 }

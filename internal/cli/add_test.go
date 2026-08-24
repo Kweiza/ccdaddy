@@ -388,6 +388,37 @@ func TestAddTokenRefusesACredentialTheAPIRejected(t *testing.T) {
 	}
 }
 
+// A 403 from the profile endpoint is the ORDINARY answer for a setup token,
+// not a broken one. `claude setup-token` mints a credential that does not carry
+// user:profile, so the lookup is refused on scope for every token this command
+// exists to register -- and folding that into "rejected" made add-token unable
+// to store a single one of them. The token still authenticates a session, which
+// is what `ccdad run` needs, so it is stored under a synthetic label with the
+// reason named.
+func TestAddTokenStoresASetupTokenRefusedOnScope(t *testing.T) {
+	isolate(t)
+	stubEnvironment(t, false, false)
+
+	stubProfile(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	})
+
+	err, _, stderr := runCmd(t, newAddTokenCmd(), "sk-ant-oat01-SCOPED")
+	if err != nil {
+		t.Fatalf("Execute() = %v, want a scope refusal to still store the account", err)
+	}
+	s, _ := store.Open()
+	if n := len(s.Accounts()); n != 1 {
+		t.Fatalf("Accounts() = %d, want the account stored under a synthetic label", n)
+	}
+	if !strings.Contains(stderr, "user:profile") {
+		t.Fatalf("stderr = %q, want it to name the scope the lookup needs", stderr)
+	}
+	if strings.Contains(stderr, "check it and try again") {
+		t.Fatalf("stderr = %q, want it not to blame a token that works", stderr)
+	}
+}
+
 // A 5xx is not a dead token: the account is still stored, under a synthetic
 // label, so a headless machine with a flaky network is not blocked.
 func TestAddTokenStoresOnATransientProfileFailure(t *testing.T) {
