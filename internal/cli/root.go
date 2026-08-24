@@ -251,16 +251,13 @@ func isUnknownCommand(err error) bool {
 // pipe is data nobody asked for, and one printed to a terminal whose stdin is a
 // file is the first half of a TUI that can never read a key.
 //
-// The non-interactive answer is a usage ERROR rather than something useful, and
-// that is a decision about timing rather than about this release. This slot is
-// promised to a TUI. Anything printed here today that a script could read would
-// be a contract by the time the TUI arrives, so the only answer that keeps the
-// eventual change a widening rather than a break is the one no script can build
-// on. Every release that exits 0 here is a release such a script can be written
-// against.
-//
-// The interactive answer is `ccdad status` itself, through runStatus, and not a
+// The interactive answer is `ccdad tui` itself, through runTui, and not a
 // second renderer that agrees with it today.
+//
+// The non-interactive answer stays a usage ERROR, and that is what made handing
+// this slot to the dashboard a widening rather than a break: every release
+// before it refused to print anything a script could read here, so no script
+// can have come to depend on what this slot did.
 func runBare(cmd *cobra.Command, args []string) error {
 	// Arguments first, because an argument is a usage error whatever the
 	// terminal says and the gate below would otherwise answer a different
@@ -281,18 +278,10 @@ func runBare(cmd *cobra.Command, args []string) error {
 			"bare `ccdad` opens the dashboard, which needs a terminal on stdin and stdout; name a command instead")
 	}
 	// See root.PersistentPreRun: this is the dashboard half of bare `ccdad`,
-	// and it auto-starts for exactly the reason `ccdad status` does — the user
-	// is looking at an engine that is not running.
+	// and it auto-starts for exactly the reason `ccdad tui` does — the user is
+	// looking at an engine that is not running.
 	autoStart(cmd)
-	if err := runStatus(cmd, false); err != nil {
-		return err
-	}
-	// On stdout, with the dashboard it belongs to. The --json contract keeps
-	// notices on stderr so that a --json document stands alone; this line is
-	// reachable only when stdout is a terminal, where there is no document and
-	// no consumer to protect.
-	fmt.Fprintf(cmd.OutOrStdout(), "\nVerbs: %s  (ccdad <verb> --help)\n", strings.Join(topVerbs, ", "))
-	return nil
+	return runTui(cmd, nil)
 }
 
 // bareUsage is how the bare slot refuses: the usage text on stderr, and the
@@ -308,9 +297,3 @@ func bareUsage(cmd *cobra.Command, format string, a ...any) error {
 	fmt.Fprint(cmd.ErrOrStderr(), cmd.UsageString())
 	return UsageError(format, a...)
 }
-
-// topVerbs is the one-line footer behind the TTY gate — what a reader of the
-// dashboard does next, in the order they would need them: log an account in,
-// move to one, take one for a single session, hand the wheel to the engine,
-// see them all, find out what is wrong.
-var topVerbs = []string{"add", "switch", "run", "auto", "list", "doctor"}

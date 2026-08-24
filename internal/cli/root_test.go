@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/buildinfo"
 	"github.com/Kweiza/ccdaddy/internal/daemon"
+	"github.com/Kweiza/ccdaddy/internal/tui"
 )
 
 func TestRootVersionFlag(t *testing.T) {
@@ -195,6 +197,16 @@ func TestBareCcdadIsADashboardOnlyWhenStdoutAndStdinAreBothTTYs(t *testing.T) {
 			stubDaemon(t, daemon.Report{State: daemon.DaemonStopped}, nil)
 			seedAccount(t, "uuid-a", "work@example.com")
 			stubTTYs(t, tc.stdout, tc.stdin)
+			// The both-TTY row takes the interactive branch now, which after
+			// the flip means a REAL tea.Program against an os.Stdin `go test`
+			// does not have -- it hangs or errors depending on the platform.
+			// The seam is stubbed for every row so no row can ever open one,
+			// and the row's own assertion is unchanged: the canned output is
+			// what a dashboard would have put on screen.
+			stubProgram(t, func(o tui.Options) error {
+				_, err := fmt.Fprintln(o.Out, "work@example.com")
+				return err
+			})
 
 			code, stdout, stderr, top := runRoot(t)
 			if code != tc.want {
@@ -216,52 +228,81 @@ func TestBareCcdadIsADashboardOnlyWhenStdoutAndStdinAreBothTTYs(t *testing.T) {
 	}
 }
 
-// The interactive half is `status` itself, not a second renderer that agrees
-// with it today. runStatus exists factored out for exactly this, and the
-// assertion is equality rather than a keyword: a near-copy would pass any
-// "contains a table" check and then drift on the first change to either.
-func TestBareCcdadRendersTheStatusDashboardItselfPlusAFooter(t *testing.T) {
+// The interactive half is `ccdad tui` itself, not a second renderer that agrees
+// with it today. runTui exists factored out for exactly this, and the assertion
+// is equality rather than a keyword: a near-copy would pass any "contains a
+// table" check and then drift on the first change to either.
+//
+// Neither invocation opens a Program, and the reason is the stub rather than
+// the harness. An earlier draft of this task claimed the test's buffered stdout
+// was enough -- it is not: the split reads the two stubbed package vars and
+// never the concrete type behind cmd.OutOrStdout(). What the stub gives back is
+// better than a rendering anyway: the Options each entry point built, which is
+// the whole of what the dashboard is a function of.
+//
+// The stdout assertion is the "and nothing else" half. Equal Options would
+// still be equal for a runBare that rendered the dashboard AND printed a footer
+// under it, which is exactly what this slot did until this release.
+func TestBareCcdadRendersTheDashboardItselfAndNothingElse(t *testing.T) {
 	isolate(t)
 	freezeClock(t, statusNow)
 	stubDaemon(t, daemon.Report{State: daemon.DaemonStopped}, nil)
 	seedAccount(t, "uuid-a", "work@example.com")
 	stubTTYs(t, true, true)
 
-	_, viaStatus, _, _ := runRoot(t, "status")
-	code, bare, _, top := runRoot(t)
-	if code != ExitOK {
-		t.Fatalf("bare ccdad = %d (%s), want %d", code, top, ExitOK)
-	}
-	if !strings.HasPrefix(bare, viaStatus) {
-		t.Fatalf("bare ccdad is not the status dashboard.\nbare:\n%s\nstatus:\n%s", bare, viaStatus)
-	}
-	footer := strings.TrimPrefix(bare, viaStatus)
-	for _, verb := range topVerbs {
-		if !strings.Contains(footer, verb) {
-			t.Fatalf("the footer does not name %q:\n%s", verb, footer)
+	const wrote = "<<the program owned the terminal>>\n"
+	page := func(t *testing.T, args ...string) string {
+		t.Helper()
+		var got tui.Options
+		stubProgram(t, func(o tui.Options) error {
+			got = o
+			_, err := io.WriteString(o.Out, wrote)
+			return err
+		})
+		code, stdout, _, top := runRoot(t, args...)
+		if code != ExitOK {
+			t.Fatalf("`ccdad %s` = %d (%s), want %d", strings.Join(args, " "), code, top, ExitOK)
 		}
+		if got.Load == nil {
+			t.Fatalf("`ccdad %s` never reached the dashboard at all", strings.Join(args, " "))
+		}
+		if stdout != wrote {
+			t.Fatalf("`ccdad %s` wrote something besides the dashboard:\n%q", strings.Join(args, " "), stdout)
+		}
+		// The page as a string. Out has already been spent on the line above,
+		// and Render skips a nil one.
+		got.Out = nil
+		body, err := tui.Render(got)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return body
 	}
-	if lines := strings.Count(strings.TrimSpace(footer), "\n"); lines != 0 {
-		t.Fatalf("the footer must be ONE line; got %d:\n%s", lines+1, footer)
+
+	bare, viaVerb := page(t), page(t, "tui")
+	if bare != viaVerb {
+		t.Fatalf("bare ccdad is not `ccdad tui`.\nbare:\n%s\ntui:\n%s", bare, viaVerb)
 	}
 }
 
-// A footer that names a verb the binary does not have is worse than no footer,
-// and nothing else in the tree would notice: it is a string, printed to a
+// A footer that offers a key the model does not handle is worse than no footer,
+// and nothing else in the tree would notice: it is a string, painted on a
 // terminal, that no other test reads.
-func TestTheDashboardFooterNamesOnlyRealCommands(t *testing.T) {
-	root := NewRootCmd()
-	// A for-all over an empty list is vacuously true, and so is the loop in the
-	// dashboard test above: emptying topVerbs ships a footer reading `Verbs:  `
-	// past both of them. The footer names THE TOP VERBS, so the list having
-	// members is part of what is being checked, not a precondition.
-	if len(topVerbs) == 0 {
-		t.Fatal("topVerbs is empty, so this test and the footer both assert nothing")
+//
+// The keybar replaced a `Verbs:` line naming six commands, and this test
+// replaced that line's own test rather than being deleted with it. The
+// non-empty check is not a precondition, it is half of what is being checked: a
+// for-all over an empty list is vacuously true, so emptying the key map would
+// ship a blank keybar past this AND past the equality test above it, which is
+// the defect the deleted test's comment named.
+func TestTheKeybarOffersOnlyKeysTheDashboardHandles(t *testing.T) {
+	bindings := tui.DefaultKeys().ShortHelp()
+	if len(bindings) == 0 {
+		t.Fatal("the key map is empty, so this test and the keybar both assert nothing")
 	}
-	for _, verb := range topVerbs {
-		found, _, err := root.Find([]string{verb})
-		if err != nil || found == root {
-			t.Fatalf("the footer offers `ccdad %s`, which is not a command", verb)
+	for _, b := range bindings {
+		if !tui.Handles(b) {
+			t.Fatalf("the keybar offers %q, which the dashboard does nothing with", b.Help().Key)
 		}
 	}
 }
@@ -298,10 +339,15 @@ func TestAnExplicitHelpOrVersionIsAnsweredWithNoTerminal(t *testing.T) {
 	}
 }
 
-// autostart.go left this decision to this task. The dashboard is `ccdad status`
-// under another name and status IS on the allow-list, so the interactive half
-// starts an engine for the same reason it does — and the usage-error half must
-// not, or `ccdad | head` in a script spawns a daemon while returning 2.
+// autostart.go left this decision to this task. The dashboard is `ccdad tui`
+// under another name and `tui` IS on the allow-list, for the same reason
+// `status` is, so the interactive half starts an engine — and the usage-error
+// half must not, or `ccdad | head` in a script spawns a daemon while
+// returning 2.
+//
+// The property has not moved with the renderer, and this is the test that stops
+// the dashboard becoming the one place in the tree that asks for a daemon and
+// is refused.
 func TestBareCcdadAutoStartsOnlyOnTheDashboardHalf(t *testing.T) {
 	cases := []struct {
 		name          string
@@ -318,6 +364,7 @@ func TestBareCcdadAutoStartsOnlyOnTheDashboardHalf(t *testing.T) {
 			f := stubDaemonWorld(t, &fakeDaemon{})
 			enableAutoStart(t)
 			stubTTYs(t, tc.stdout, tc.stdin)
+			stubProgram(t, func(tui.Options) error { return nil })
 
 			runRoot(t)
 			if f.spawns != tc.want {
