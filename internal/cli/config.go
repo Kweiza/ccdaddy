@@ -231,10 +231,21 @@ func newConfigListCmd() *cobra.Command {
 					config.FileName, unknown)
 			}
 
+			if cfg.Hover {
+				fmt.Fprint(cmd.ErrOrStderr(),
+					"note: hover is on, so the keys marked 'overriding' below are not being read; "+
+						"their values are derived per account and per window. "+
+						"Run 'ccdad hover status' to see the numbers in force.\n")
+			}
+
 			type row struct {
 				Key    string `json:"key"`
 				Value  string `json:"value"`
 				Source string `json:"source"`
+				// Overridden is omitted when false, the way an account's
+				// `disabled` is: a key hover leaves alone is the ordinary case,
+				// and the contract is additive.
+				Overridden bool `json:"overriddenByHover,omitempty"`
 			}
 			// The document's own list, not the fixed one: window_threshold
 			// takes a key per window and only the file knows which windows it
@@ -254,7 +265,12 @@ func newConfigListCmd() *cobra.Command {
 				if set {
 					source = "file"
 				}
-				rows = append(rows, row{Key: key, Value: value, Source: source})
+				rows = append(rows, row{
+					Key:        key,
+					Value:      value,
+					Source:     source,
+					Overridden: cfg.Hover && config.HoverOverrides(key),
+				})
 			}
 
 			if asJSON {
@@ -265,6 +281,7 @@ func newConfigListCmd() *cobra.Command {
 				payload := map[string]any{
 					"schemaVersion": 1,
 					"path":          path,
+					"hover":         cfg.Hover,
 					"keys":          rows,
 				}
 				if len(unknown) > 0 {
@@ -274,9 +291,26 @@ func newConfigListCmd() *cobra.Command {
 			}
 
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "KEY\tVALUE\tSOURCE")
+			if !cfg.Hover {
+				fmt.Fprintln(w, "KEY\tVALUE\tSOURCE")
+				for _, r := range rows {
+					fmt.Fprintf(w, "%s\t%s\t%s\n", r.Key, r.Value, r.Source)
+				}
+				return w.Flush()
+			}
+			// The fourth column exists only under hover. With hover off it would
+			// carry the same word on every row, and a column that says nothing
+			// costs width and invites a reader to look for a meaning it does not
+			// have. SOURCE stays one word for the same reason it is a separate
+			// column: it answers where a number came from, not whether anything
+			// is reading it.
+			fmt.Fprintln(w, "KEY\tVALUE\tSOURCE\tHOVER")
 			for _, r := range rows {
-				fmt.Fprintf(w, "%s\t%s\t%s\n", r.Key, r.Value, r.Source)
+				verdict := "honoured"
+				if r.Overridden {
+					verdict = "overriding"
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", r.Key, r.Value, r.Source, verdict)
 			}
 			return w.Flush()
 		},
