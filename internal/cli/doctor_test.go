@@ -445,7 +445,7 @@ func TestDoctorHumanOutputNamesEveryCheck(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit %d, want 0\n%s", code, stdout)
 	}
-	for _, name := range []string{"store", "path", "permissions", "locks", "pidfile", "status-file", "usage-cache", "engine-state", "config", "sessions", "profiles", "primary-accounts", "credential-home", "claude-version", "claude-code", "credential-keys", "keychain", "environment", "api-key", "oauth-source"} {
+	for _, name := range []string{"store", "path", "permissions", "locks", "pidfile", "status-file", "usage-cache", "engine-state", "config", "sessions", "profiles", "primary-accounts", "credential-files", "credential-home", "claude-version", "claude-code", "credential-keys", "keychain", "environment", "api-key", "oauth-source"} {
 		if !strings.Contains(stdout, name) {
 			t.Errorf("the human report does not mention the %s check:\n%s", name, stdout)
 		}
@@ -1631,5 +1631,102 @@ func TestDoctorDoesNotRepairTheStoreItIsReportingOn(t *testing.T) {
 
 	if _, err := os.Stat(creds); !os.IsNotExist(err) {
 		t.Fatalf("doctor re-created the credentials directory it was reporting on: %v", err)
+	}
+}
+
+// The orphan credential file: one written by a build older than the rollback
+// journal, or left by a rollback whose os.Remove was refused and whose error
+// the user did not act on. It holds a live refresh token at 0600 under
+// credentials/, and nothing on the machine can find it — `ccdad list`, `ccdad
+// remove` and doctor's own account rows all read accounts.toml, and an orphan
+// is by definition a uuid the document does not carry.
+//
+// The path is spelled out here rather than taken from store's accessor on
+// purpose: a test that asked production for the directory would pass while
+// checking nothing if that directory ever moved. checkPermissions's glob makes
+// the same argument.
+func TestDoctorNamesACredentialFileNoAccountNames(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	root := mustPath(ccpath.StoreHome())
+	leaked := filepath.Join(root, "credentials", "uuid-gone.json")
+	if err := os.WriteFile(leaked, []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, r, _ := runDoctor(t)
+	if got := r.level(t, "credential-files"); got != string(levelWarn) {
+		t.Fatalf("level = %q, want warn: %s", got, r.detail(t, "credential-files"))
+	}
+	d := r.detail(t, "credential-files")
+	if !strings.Contains(d, "uuid-gone") {
+		t.Errorf("detail does not name the orphaned uuid: %s", d)
+	}
+	if !strings.Contains(d, leaked) {
+		t.Errorf("detail does not give the path of the file holding the token: %s", d)
+	}
+}
+
+// A machine whose credential files are all accounted for says so, rather than
+// staying silent: the row has to be readable as evidence, and a check that only
+// speaks up when something is wrong cannot be distinguished from one that is
+// not running.
+func TestDoctorSaysSoWhenEveryCredentialFileIsNamed(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+
+	_, r, _ := runDoctor(t)
+	if got := r.level(t, "credential-files"); got != string(levelOK) {
+		t.Errorf("level = %q, want ok on a store with no orphan: %s", got, r.detail(t, "credential-files"))
+	}
+}
+
+// doctor reports; it does not repair. A file holding a live token is exactly
+// where a user wants to look before anything else does, and deleting a file
+// the store cannot explain is not ccdad's call to make on its own initiative.
+func TestDoctorDoesNotDeleteAnOrphanedCredentialFile(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	root := mustPath(ccpath.StoreHome())
+	leaked := filepath.Join(root, "credentials", "uuid-gone.json")
+	if err := os.WriteFile(leaked, []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	runDoctor(t)
+	if _, err := os.Stat(leaked); err != nil {
+		t.Errorf("doctor removed the credential file it was asked to report on: %v", err)
+	}
+}
+
+// A store that is not there is a fresh machine, not a broken one — the
+// judgement checkStore makes and every store-derived row repeats.
+func TestDoctorSkipsTheCredentialFilesRowWithNoStore(t *testing.T) {
+	isolate(t)
+	t.Setenv("CCDAD_HOME", filepath.Join(t.TempDir(), "never-created"))
+
+	_, r, _ := runDoctor(t)
+	if got := r.level(t, "credential-files"); got != string(levelSkipped) {
+		t.Errorf("level = %q, want skipped when there is no store: %s", got, r.detail(t, "credential-files"))
+	}
+}
+
+// A row that answers out of a read it could not perform is worse than no row.
+// accounts.toml is what says which uuids are accounted for, so a document that
+// cannot be parsed leaves this question unanswerable — and "every credential
+// file belongs to an account" is the one answer here that must never be
+// guessed. checkProfiles and checkPrimary refuse the same way.
+func TestDoctorWillNotClearTheCredentialFilesRowFromADamagedDocument(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	root := mustPath(ccpath.StoreHome())
+	if err := os.WriteFile(filepath.Join(root, "accounts.toml"), []byte("this is not toml"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, r, _ := runDoctor(t)
+	if got := r.level(t, "credential-files"); got != string(levelFail) {
+		t.Errorf("level = %q, want fail from an accounts.toml that cannot be read: %s",
+			got, r.detail(t, "credential-files"))
 	}
 }

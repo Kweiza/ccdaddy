@@ -1089,3 +1089,114 @@ func TestAFailedTransactionLeavesNoPhantomAccountInThisProcess(t *testing.T) {
 		t.Errorf("Accounts() = %+v, want none: a refused transaction left this process holding an account the document does not have", got)
 	}
 }
+
+// The two path accessors exist so `ccdad doctor` can name these files without
+// respelling the naming rule: checkPermissions used to spell both out and its
+// comment said why — "store exports no path accessors and opening it would
+// create the tree". They are pinned against what Open actually writes, because
+// an accessor that agreed only with itself would be the same gap under a new
+// name.
+func TestThePathAccessorsNameWhatOpenWrites(t *testing.T) {
+	root := withStore(t)
+	s, err := Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add(Account{UUID: "uuid-a", Email: "work@example.com"}, sampleCreds("AT-a")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(filepath.Join(CredentialsDirAt(root), "uuid-a.json")); err != nil {
+		t.Errorf("CredentialsDirAt does not name the directory Add wrote into: %v", err)
+	}
+	if _, err := os.Stat(AccountsFileAt(root)); err != nil {
+		t.Errorf("AccountsFileAt does not name the document save wrote: %v", err)
+	}
+}
+
+// OrphanCredentialsAt is doctor's only route into the credentials directory,
+// and it follows AccountsAt's rule rather than Open's: a store that is not
+// there yields nothing rather than being brought into existence.
+func TestOrphanCredentialsAtCreatesNothing(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "never-created")
+
+	orphans, err := OrphanCredentialsAt(root)
+	if err != nil {
+		t.Fatalf("OrphanCredentialsAt on a store that is not there: %v", err)
+	}
+	if len(orphans) != 0 {
+		t.Errorf("orphans = %v, want none from a store that does not exist", orphans)
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Errorf("OrphanCredentialsAt created the store directory it was asked to read: %v", err)
+	}
+}
+
+// The leak: a credential file a refused transaction left behind on a build
+// older than the rollback journal, holding a live refresh token at 0600 that
+// accounts.toml does not name. `ccdad list`, `ccdad remove` and doctor's
+// account rows all read the document, so an orphan is invisible to every one
+// of them, indefinitely.
+func TestOrphanCredentialsAtNamesACredentialFileNoAccountHas(t *testing.T) {
+	root := withStore(t)
+	s, err := Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add(Account{UUID: "uuid-a", Email: "work@example.com"}, sampleCreds("AT-a")); err != nil {
+		t.Fatal(err)
+	}
+	leaked := filepath.Join(root, "credentials", "uuid-gone.json")
+	if err := os.WriteFile(leaked, []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	orphans, err := OrphanCredentialsAt(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(orphans) != 1 || orphans[0] != leaked {
+		t.Errorf("orphans = %v, want exactly [%s] — uuid-a is named by the document", orphans, leaked)
+	}
+}
+
+// An interrupted atomic write leaves `<name>.tmp-*` beside the file it was
+// replacing — WriteFileAtomic's own suffix, so this is reachable rather than
+// hypothetical. The stem is not a uuid, and reporting it as one would send the
+// user looking for an account that never existed. The rule is a file named
+// exactly <uuid>.json.
+func TestOrphanCredentialsAtIgnoresAnInterruptedAtomicWrite(t *testing.T) {
+	root := withStore(t)
+	if _, err := Open(); err != nil {
+		t.Fatal(err)
+	}
+	scratch := filepath.Join(root, "credentials", "uuid-a.json.tmp-1234")
+	if err := os.WriteFile(scratch, []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	orphans, err := OrphanCredentialsAt(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(orphans) != 0 {
+		t.Errorf("orphans = %v, want none — a half-written temporary file is not an account", orphans)
+	}
+}
+
+// Answering "nothing is orphaned" out of a read that failed is exactly the
+// reassuring lie this is built to remove, and it is the rule checkProfiles and
+// checkPrimary already state one layer up.
+func TestOrphanCredentialsAtRefusesADamagedAccountsFile(t *testing.T) {
+	root := withStore(t)
+	if _, err := Open(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "accounts.toml"), []byte("this is not toml"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := OrphanCredentialsAt(root); err == nil {
+		t.Error("OrphanCredentialsAt answered from an accounts.toml it could not parse")
+	}
+}

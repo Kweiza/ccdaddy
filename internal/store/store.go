@@ -178,6 +178,86 @@ func AccountsAt(root string) ([]Account, error) {
 	return s.Accounts(), nil
 }
 
+// CredentialsDirAt and AccountsFileAt name a store's two on-disk parts without
+// resolving, creating or opening anything.
+//
+// They exist because `ccdad doctor` had no way to say these paths. It spelled
+// both out itself and recorded why — "store exports no path accessors and
+// opening it would create the tree" — which was true and is the kind of
+// duplicate that goes wrong quietly: a diagnostic holding its own copy of a
+// naming rule keeps reporting on a directory the store has stopped using, and
+// answers "nothing is wrong" from it.
+func CredentialsDirAt(root string) string {
+	return filepath.Join(root, credentialsDir)
+}
+
+// AccountsFileAt names the document. See CredentialsDirAt.
+func AccountsFileAt(root string) string {
+	return filepath.Join(root, accountsFile)
+}
+
+// OrphanCredentialsAt returns the paths of credential files under root that no
+// account names, sorted.
+//
+// Such a file is a leak that nothing else on the machine can find. `ccdad
+// list`, `ccdad remove` and doctor's account rows all read accounts.toml, and
+// an orphan is by definition a uuid the document does not carry — so it sits
+// there holding a live refresh token at 0600, indefinitely. rollback closed the
+// way they are MADE; it does nothing for a store that already has one, left by
+// a build older than that commit or by a reversal whose os.Remove was itself
+// refused.
+//
+// It reads the way AccountsAt does and for the same reason: a store that is not
+// there yields no orphans rather than being brought into existence by the probe
+// asking about it. An unreadable accounts.toml is an ERROR rather than an empty
+// answer — "nothing is orphaned", said out of a read that failed, is precisely
+// the reassuring lie the caller exists to remove.
+//
+// The rule is a file named exactly <uuid>.json, which is credentialPath's rule
+// read backwards. Anything else in that directory is not a credential file this
+// store wrote: an interrupted WriteFileAtomic leaves <name>.tmp-* beside its
+// target, and calling that stem a uuid would send the user looking for an
+// account that never existed.
+func OrphanCredentialsAt(root string) ([]string, error) {
+	dir := CredentialsDirAt(root)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			// The directory is created by Open, never by this read.
+			return nil, nil
+		}
+		return nil, err
+	}
+	accounts, err := AccountsAt(root)
+	if err != nil {
+		return nil, err
+	}
+	named := make(map[string]struct{}, len(accounts))
+	for _, a := range accounts {
+		named[a.UUID] = struct{}{}
+	}
+
+	var orphans []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		uuid := strings.TrimSuffix(e.Name(), ".json")
+		// TrimSuffix returns its input unchanged when the suffix is not there,
+		// so this is the "was it <uuid>.json at all" test. An empty stem — a
+		// file called exactly ".json" — is not a uuid either.
+		if uuid == e.Name() || uuid == "" {
+			continue
+		}
+		if _, ok := named[uuid]; ok {
+			continue
+		}
+		orphans = append(orphans, filepath.Join(dir, e.Name()))
+	}
+	sort.Strings(orphans)
+	return orphans, nil
+}
+
 // Accounts returns the managed accounts in display order.
 func (s *Store) Accounts() []Account {
 	out := make([]Account, len(s.data.Accounts))
