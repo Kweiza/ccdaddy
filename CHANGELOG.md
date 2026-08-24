@@ -44,11 +44,12 @@ by `uuid` or `alias`.
 - **`ccdad hover on|off|status`.** Hover computes every threshold from pace —
   the share of a window that has elapsed, plus `100 / usable accounts` — usable
   meaning not disabled, not an api-key account, carrying a reading and not
-  quarantined — capped at 99, and sets its own anti-flap margins, dropping the multiplicative
-  `headroom_ratio` entirely because that margin runs on raw headroom while the
-  ranking orders on slack, and the two disagree hardest exactly where hover
-  operates. A window with no elapsed share falls back to 80, and where the reason
-  is that nothing has ever been spent against it, hover forces `probe_unknown`
+  quarantined — capped at 99, and sets its own anti-flap margins, dropping the
+  multiplicative `headroom_ratio` entirely because that margin runs on raw
+  headroom while the ranking orders on slack, and the two disagree hardest
+  exactly where hover operates. A window with no elapsed share falls back to
+  80, and where the reason is that nothing has ever been spent against it,
+  hover forces `probe_unknown`
   back on so the engine's own probe path spends the turn — hover queues nothing
   itself; a primary credit seat, which has no window at all, is held to a fixed
   95. `ccdad config list` grows a `HOVER` column marking each overridden key
