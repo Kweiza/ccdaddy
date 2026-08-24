@@ -542,16 +542,70 @@ func (s *Snapshot) UnknownScopeWindows() []ScopedWindow {
 	}
 	var out []ScopedWindow
 	for _, l := range s.Limits {
-		if l.Kind != weeklyScopedKind || len(l.OtherScopes) == 0 {
+		if l.Kind != weeklyScopedKind {
 			continue
 		}
 		if _, _, ok := namedScopeOf(l); ok {
 			continue
 		}
-		key := slices.Sorted(maps.Keys(l.OtherScopes))[0]
-		out = append(out, scopedWindowOf(l, key, l.OtherScopes[key]))
+		if scope, display, ok := unknownScopeOf(l); ok {
+			out = append(out, scopedWindowOf(l, scope, display))
+		}
 	}
 	return out
+}
+
+// unknownScopeOf is the scope an entry is named by when this build names none of
+// its scopes: the first, in sorted key order, a window can actually be ADDRESSED
+// under. A key with no display half, or one carrying a colon, or an empty one
+// builds a string no threshold can be set on, so it is passed over rather than
+// used — and an entry offering no usable key at all answers false, which is the
+// entry UnnamableLimits counts.
+//
+// Sorted rather than map order because the choice has to be the same on every
+// call far more than it has to be any particular one: the ranking ties on the
+// first window in order, and a name that moved between calls would move the
+// answer with it.
+func unknownScopeOf(l Limit) (scope, display string, ok bool) {
+	for _, key := range slices.Sorted(maps.Keys(l.OtherScopes)) {
+		if d := l.OtherScopes[key]; d != "" && namableScopeKey(key) {
+			return key, d, true
+		}
+	}
+	return "", "", false
+}
+
+// UnnamableLimits is how many weekly_scoped entries produced no window at all:
+// the wire said a weekly cap exists and gave nothing to name it by, so there is
+// no key a threshold could be set on and no row a report could carry.
+//
+// It is a count and not a list because there is nothing to list — the entries
+// have no names, which is the whole of what is wrong with them.
+//
+// Every part of dropping such an entry is deliberate. ScopedWindows has always
+// left out a cap it cannot attribute, because a cap ccdad cannot describe is not
+// one it can tell a user it switched away for. But deliberate and INVISIBLE are
+// different things, and a weekly cap the ranking cannot see is the exact failure
+// the rest of this file exists to prevent. A non-zero count is the operator's
+// only sign that the wire is carrying quota this build has no handle on.
+func (s *Snapshot) UnnamableLimits() int {
+	if s == nil {
+		return 0
+	}
+	n := 0
+	for _, l := range s.Limits {
+		if l.Kind != weeklyScopedKind {
+			continue
+		}
+		if _, _, ok := namedScopeOf(l); ok {
+			continue
+		}
+		if _, _, ok := unknownScopeOf(l); ok {
+			continue
+		}
+		n++
+	}
+	return n
 }
 
 // AllWindows is every window an account can be ranked on: the five recurring
