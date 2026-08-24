@@ -890,6 +890,7 @@ func TestThePollCadenceReadsTheBindingWindowsOwnThreshold(t *testing.T) {
 			Poll:      usage.PollState{LastBindingPct: 45, HasLastBinding: true},
 		})
 		e := NewEngine()
+		e.Rand = midJitter
 		e.commit(a, windowsUsed(10, 50), tickEpoch, []string{a.UUID}, cfg, true, nil)
 		entry, ok := cacheEntry(t, a.UUID)
 		if !ok {
@@ -1879,3 +1880,62 @@ func TestThePublishedScheduleIsTheOneTheDispatcherWillHonour(t *testing.T) {
 			"earned — a stand-down written for its predecessor does not hold it", got, entry.NextPollAt)
 	}
 }
+
+// The poll policy takes its randomness as an argument so that the whole policy
+// stays a pure function -- Next's own comment says "the caller passes
+// rand.Float64()" -- and NewEngine is the only caller a shipped binary ever
+// constructs. With Rand left nil the accessor answers with the midpoint 0.5,
+// and jitter(d, 0.5) is d exactly: every guard in pollpolicy is then
+// unreachable code, and a fleet that paused together comes back together.
+func TestNewEngineSuppliesAJitterSource(t *testing.T) {
+	e := NewEngine()
+	if e.Rand == nil {
+		t.Fatal("NewEngine leaves Rand nil, so every jittered interval is the identity and the spread exists only in the comments")
+	}
+	seen := map[float64]struct{}{}
+	for i := 0; i < 64; i++ {
+		v := e.rand()
+		if v < 0 || v >= 1 {
+			t.Fatalf("rand() = %v, want a sample in [0,1) -- jitter clamps outside it, so an out-of-range source silently pins the spread to one end", v)
+		}
+		seen[v] = struct{}{}
+	}
+	if len(seen) < 2 {
+		t.Errorf("64 samples produced %d distinct value, which is the constant source this replaces", len(seen))
+	}
+}
+
+// The property the jitter exists for, stated as what an operator would see. Two
+// daemons on two machines, restarted together and handed identical inputs, must
+// not choose the same deadline -- they share one per-identity budget of roughly
+// 28-30 requests an hour, and coming back in lockstep empties it in one burst.
+func TestTwoDaemonsHandedTheSameInputsDoNotPickTheSameDeadline(t *testing.T) {
+	a, b := NewEngine(), NewEngine()
+	in := pollpolicy.Input{
+		Now:       time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC),
+		Active:    true,
+		Reading:   pollpolicy.Reading{BindingPct: 40, Known: true},
+		Threshold: 80,
+	}
+	const rounds = 32
+	agreed := 0
+	for i := 0; i < rounds; i++ {
+		atA, _ := pollpolicy.Next(pollpolicy.State{}, in, a.rand())
+		atB, _ := pollpolicy.Next(pollpolicy.State{}, in, b.rand())
+		if atA.Equal(atB) {
+			agreed++
+		}
+	}
+	if agreed == rounds {
+		t.Errorf("two daemons agreed on the deadline all %d times; a fleet that paused together comes back in one burst", rounds)
+	}
+}
+
+// midJitter is the sample a test asserting an EXACT deadline has to fix, for the
+// same reason it fixes the clock. NewEngine supplies real randomness now, so
+// pollpolicy spreads every interval by up to a tenth and no exact time survives
+// a run. 0.5 is the midpoint, where jitter is the identity -- which is what
+// every deadline in this file was computed against back when the source was nil,
+// so pinning it here changes what the tests assert not at all and only says out
+// loud which sample they were always relying on.
+func midJitter() float64 { return 0.5 }

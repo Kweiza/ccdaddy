@@ -636,9 +636,16 @@ not put it in the band. Read honestly:
   hour**, over a sliding window — capacity comes back only as old requests age
   out, so a burst saturates the identity for up to a full hour and waiting gives
   none of it back early.
-- 60 s is already about twice that allowance, and it is the floor. No rule goes
-  below it: a `429` imposes a 360-second floor and an estimate that multiplies by
-  1.5 each time up to 1800 s, and the estimate always outruns the floor — one
+- 60 s is already about twice that allowance, and it is the floor every *rule*
+  respects: nothing in the policy returns less, and both the per-identity
+  division and the post-429 backoff can only lengthen it. One thing does move in
+  the shorter direction — every interval is spread by up to a tenth either way,
+  so an individual poll lands between 54 and 66 seconds. That spread is not a
+  tuning knob, it is what stops daemons which paused together from coming back
+  together: a laptop waking, or a fleet restarting across machines, would
+  otherwise empty the shared hourly budget in a single burst. A `429` imposes a
+  360-second floor and an estimate that multiplies by 1.5 each time up to
+  1800 s, and the estimate always outruns the floor — one
   `429` alone earns 540 s. It costs more than that, because a failed poll is not
   a reading: the band lapses with it and the account drops back to the cadence a
   spent account gets, divided across its identity. On three accounts that is
