@@ -285,10 +285,11 @@ ccdad probe --all
 ```
 
 It runs `claude -p "hi" --max-turns 1` in a throwaway credential home — the same
-scoping `ccdad run` uses, written from the same code — and deletes the session
-afterwards. **The live login is never touched and a session in flight is never
-interrupted.** `--max-turns 1` is what stops a model that reaches for a tool
-from turning one word into a run of turns.
+`CLAUDE_SECURESTORAGE_CONFIG_DIR` scoping `ccdad run` uses, out of the same code
+— then carries any login that turn refreshed back into the store and deletes the
+session directory. **The live credentials file is never written**, which a test
+pins on its bytes across a probe. `--max-turns 1` is what stops a model that
+reaches for a tool from turning one word into a run of turns.
 
 It spends your quota. That is the trade, and it is said on stderr the first time
 an invocation is about to spend it — once per command, not once per account.
@@ -334,9 +335,9 @@ ccdad hover status
 ```
 
 Hover hands the tuning to the engine. It stops reading `threshold`,
-`window_threshold`, `credit.threshold`, `strategy`, `probe_unknown`,
-`preempt_lead`, `hysteresis_pct`, `headroom_ratio`, `cooldown` and
-`recovery_hysteresis` — and `ccdad config list` grows a `HOVER` column marking
+`hysteresis_pct`, `headroom_ratio`, `cooldown`, `recovery_hysteresis`,
+`preempt_lead`, `strategy`, `probe_unknown`, `credit.threshold` and every
+`window_threshold` entry — and `ccdad config list` grows a `HOVER` column marking
 each of them, rather than hiding the row, so a number you tuned and then stopped
 seeing the effect of explains itself:
 
@@ -356,6 +357,13 @@ credit.threshold       80        default  overriding
 credit.max_auto_spend  0         default  honoured
 ```
 
+One `window_threshold` entry is still read for something other than its number.
+A weekly cap scoped to a key this build cannot name is ranked only because a
+positive entry opted it in, and that opt-in survives hover — hover replaces the
+threshold, not the decision to measure the window at all. Such a key never
+appears as a row in `ccdad config list`, marked or otherwise; it gets a note on
+stderr instead, because `ccdad config set` cannot name it either.
+
 **It does not override `credit.max_auto_spend`, `primary` or `disabled`.** Fully
 automatic must not quietly become fully automatic *spending*: the ceiling is one
 of the two independent opt-ins unattended overage requires, and a mode cannot
@@ -364,23 +372,30 @@ account rather than tuning.
 
 The threshold it picks is a pace target rather than a number. Each window gets
 the share of *itself* that has already elapsed, plus one account's slice of what
-is left, capped at 99:
+is left, capped at 99 — where *usable* means an account the engine could actually
+hand the work to: not disabled, not an api-key account, carrying a usage reading,
+and not currently quarantined.
 
 ```text
 threshold = elapsed% of this window + 100 / usable accounts,   at most 99
 ```
 
-Four accounts three days into a weekly window gives 68 — 43% elapsed plus 25 —
-so an account running ahead of pace hands the work on while the others are
-behind it. One account left gives 99: there is nobody to hand it to, so spend
-what is there. A five-hour window four hours in is already 80% elapsed, so with
-five accounts or fewer it lands on 99 as well, which is right — it resets within
-the hour anyway. A window with no elapsed share at all has no pace to derive
-from: it falls back to 80 and, if the reason is that nothing has ever been spent
-against it, queues a probe, which is what removes the fallback on the next
-cadence. A primary credit seat has no window and no reset either, so it is held
-to a fixed 95 — credits do not come back at all, and the last few points are the
-ones worth keeping for a session already running.
+A weekly window 43% elapsed — three days into a week — with four accounts gives
+68, which is 43 plus 25: an account running ahead of that pace hands the work on
+while the others are behind it. One account left gives 99, because there is
+nobody to hand it to, so spend what is there. A five-hour window four hours in is
+already 80% elapsed, so with five accounts or fewer it lands on 99 too, which is
+right — it resets within the hour anyway; with eight it is 92.
+
+A window with no elapsed share to derive from takes a fixed 80 instead, and that
+covers two cases. One is a window nothing has ever been spent against, which
+reports no reset at all — `ccdad hover status` marks that row as the one a probe
+would fix, and hover forces `probe_unknown` back on so the engine's own probe
+path spends the turn; hover queues nothing itself. The other is a reset further
+out than the window is long, which is a clock the probe cannot fix, so that row
+carries no mark. A primary credit seat has no window and no reset either, so it
+is held to a fixed 95 — credits do not come back at all, and the last few points
+are the ones worth keeping for a session already running.
 
 Hover also sets its own anti-flap margins: `hysteresis_pct = 5`, no
 multiplicative `headroom_ratio`, a two-minute cooldown, a five-minute recovery

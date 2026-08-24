@@ -23,13 +23,17 @@ by `uuid` or `alias`.
   on, and the only way to get one is to spend against it: the endpoint reports a
   reset only once something has. The probe runs `claude -p "hi" --max-turns 1`
   in a throwaway credential home — `ccdad run`'s own scoping, from the same code
-  — and discards the session, so the live login is never touched and a session
-  in flight is never interrupted. It does not poll afterwards: the probe spends
+  — then carries any login that turn refreshed back into the store and deletes
+  the session directory. The live credentials file is never written, and a test
+  pins that on its bytes. The daemon additionally never probes the account that
+  is live, because that probe is the one that can revoke the refresh token an
+  in-flight session is using. It does not poll afterwards: the probe spends
   inference budget and an unscheduled poll would spend the usage budget too for
   a reading that is not there yet, so the poll that reads what it woke replaces
   that tick's poll and lands a minute later. `probe_unknown` defaults to true
   and the first probe of an invocation says on stderr that it is spending your
-  quota. `--model` picks the window as well as the model, by family. An account
+  quota; the daemon writes the same fact to `ccdad daemon logs` once per daemon
+  lifetime. `--model` picks the window as well as the model, by family. An account
   whose credential is a setup token or an API key is never probed — no refresh
   grant means no reading could ever be taken for it — and neither is a window
   that already reports a reset; a probe is attempted at most once every six
@@ -38,14 +42,20 @@ by `uuid` or `alias`.
   `PATH` the daemon warns once per daemon lifetime and the account keeps no
   reset time, which is the state this command exists to end.
 - **`ccdad hover on|off|status`.** Hover computes every threshold from pace —
-  the share of a window that has elapsed, plus `100 / usable accounts`, capped
-  at 99 — and sets its own anti-flap margins, dropping the multiplicative
+  the share of a window that has elapsed, plus `100 / usable accounts` — usable
+  meaning not disabled, not an api-key account, carrying a reading and not
+  quarantined — capped at 99, and sets its own anti-flap margins, dropping the multiplicative
   `headroom_ratio` entirely because that margin runs on raw headroom while the
   ranking orders on slack, and the two disagree hardest exactly where hover
-  operates. A window with no elapsed share falls back to 80 and queues a probe;
-  a primary credit seat, which has no window at all, is held to a fixed 95.
-  `ccdad config list` grows a `HOVER` column marking each overridden key
-  `overriding` rather than hiding it. It does NOT override
+  operates. A window with no elapsed share falls back to 80, and where the reason
+  is that nothing has ever been spent against it, hover forces `probe_unknown`
+  back on so the engine's own probe path spends the turn — hover queues nothing
+  itself; a primary credit seat, which has no window at all, is held to a fixed
+  95. `ccdad config list` grows a `HOVER` column marking each overridden key
+  `overriding` rather than hiding it. The one thing a `window_threshold` entry
+  is still read for is the decision it opts into: a weekly cap scoped to a key
+  this build cannot name is ranked only because that entry exists, and hover
+  replaces its number rather than that. It does NOT override
   `credit.max_auto_spend`, `primary` or `disabled`: two independent opt-ins for
   unattended spending is a rule rather than a knob, and the other two are facts
   about an account. `ccdad hover status` prints every threshold it chose, the
