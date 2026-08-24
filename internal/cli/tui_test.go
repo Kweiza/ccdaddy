@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/charmbracelet/colorprofile"
 
+	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 	"github.com/Kweiza/ccdaddy/internal/tui"
 	"github.com/Kweiza/ccdaddy/internal/view"
@@ -361,6 +363,40 @@ func TestEveryFieldPackageTuiCannotReadForItselfIsFilledIn(t *testing.T) {
 	}
 	if !snap.Now.Equal(statusNow) {
 		t.Fatalf("Options.Now = %v, want the frozen clock %v: the page must not read a second one", snap.Now, statusNow)
+	}
+}
+
+// The [D] screen's credential-home warning is on, and these are the two halves
+// package tui may not produce for itself: this process's own resolution, which
+// is an environment read, and the comparison, which is a filesystem one.
+//
+// The comparison is credhome.SamePath and never ==, which is the same call
+// `doctor` makes for the reason written beside it: ccdad manufactures the two
+// spellings itself -- daemon.ChildEnv pins an absolute, symlink-resolved path
+// into every daemon it spawns while ccpath hands this shell's own spelling back
+// untouched -- so a trailing slash is enough to make a string compare tell a
+// user their daemon is driving the wrong directory when it is driving exactly
+// the right one. That would be a permanent false warning on the one screen a
+// reader opens to find out whether their daemon is healthy.
+func TestTheDashboardComparesCredentialHomesAsPathsAndNotAsStrings(t *testing.T) {
+	claude := isolate(t)
+	o := tuiOptions(NewRootCmd())
+
+	if o.CredentialHome != mustPath(ccpath.CredentialHome()) {
+		t.Fatalf("Options.CredentialHome = %q, want this process's own resolution %q",
+			o.CredentialHome, mustPath(ccpath.CredentialHome()))
+	}
+	if o.SamePath == nil {
+		t.Fatal("Options.SamePath is nil, so the [D] screen has no way to compare and the warning stays off forever")
+	}
+	// The spelling a daemon would have been handed, against the one this shell
+	// resolves. A string compare calls these two different directories.
+	if !o.SamePath(claude, claude+string(filepath.Separator)) {
+		t.Fatal("two spellings of one directory were called a disagreement; " +
+			"this is a `doctor` restart instruction printed at a healthy daemon, forever")
+	}
+	if o.SamePath(claude, filepath.Join(claude, "somewhere-else")) {
+		t.Fatal("two genuinely different directories were called the same, which is the warning switched off")
 	}
 }
 

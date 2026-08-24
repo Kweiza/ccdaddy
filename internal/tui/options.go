@@ -41,4 +41,29 @@ type Options struct {
 	// child os.Stderr rather than the Program's own output, so under a
 	// redirect the prompt would vanish while the dashboard sat blank.
 	StderrTTY bool
+	// CredentialHome is THIS process's own resolution of the Claude Code
+	// credential home, for the [D] screen to compare against the one the
+	// daemon published. A daemon started from a shell that resolved a
+	// different one manages that directory for the rest of its life and every
+	// other file on the machine looks normal; comparing the two is the only
+	// way anyone finds out.
+	//
+	// Empty is a legitimate value -- a caller that could not resolve one --
+	// and it omits the warning rather than guessing.
+	CredentialHome string
+	// SamePath reports whether two spellings name one directory.
+	//
+	// It is injected rather than called, and that is not ceremony. ccdad
+	// manufactures the two spellings of that path itself: daemon.ChildEnv pins
+	// an absolute, symlink-resolved one into every daemon it spawns, while a
+	// shell's own spelling comes back untouched, so a trailing slash or a
+	// symlink is enough to make two names for one directory. Answering it
+	// honestly therefore means asking the FILESYSTEM, which is exactly what
+	// nothing in this package may do. `doctor` asks the same question and
+	// reaches internal/credhome for the answer; package cli hands that same
+	// function down here.
+	//
+	// nil means the caller cannot compare paths, which omits the warning for
+	// the same reason an empty CredentialHome does.
+	SamePath func(a, b string) bool
 }

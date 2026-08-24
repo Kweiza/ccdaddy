@@ -240,6 +240,49 @@ func TestACredentialHomeThatDisagreesWithThisProcessIsNamed(t *testing.T) {
 	}
 }
 
+// The warning is off for a caller that cannot answer, and it is off in BOTH
+// directions of "cannot": no resolution to compare, and no way to compare it.
+//
+// This is the failure the whole injection exists to prevent, reached from the
+// inside. ccdad manufactures two spellings of this path itself, so a screen
+// that treated a missing comparison as "they differ" would tell a user whose
+// daemon is driving exactly the right directory to go and restart it -- on the
+// one screen a reader opens to find out whether their daemon is healthy.
+func TestTheCredentialHomeWarningIsOffForACallerThatCannotAnswer(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		with func(daemonScreen) daemonScreen
+	}{
+		{"no resolution of its own", func(d daemonScreen) daemonScreen {
+			d.CredentialHome = ""
+			return d
+		}},
+		{"no way to compare two spellings", func(d daemonScreen) daemonScreen {
+			d.CredentialHome = "/home/somebody/.config/claude"
+			d.SamePath = nil
+			return d
+		}},
+		{"two spellings of one directory", func(d daemonScreen) daemonScreen {
+			d.CredentialHome = "/home/u/.claude/"
+			d.SamePath = func(a, b string) bool { return strings.TrimSuffix(a, "/") == strings.TrimSuffix(b, "/") }
+			return d
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := tc.with(runningScreen(t)).Body(120, 40)
+			if strings.Contains(body, "different logins") {
+				t.Fatalf("the screen warned about a disagreement it was in no position to find:\n%s", body)
+			}
+			// The daemon's own published home is a fact it read from the
+			// document, and it stays on the screen whether or not this process
+			// can say anything about it.
+			if !strings.Contains(body, "credential home /home/u/.claude") {
+				t.Fatalf("the published credential home went missing with the warning:\n%s", body)
+			}
+		})
+	}
+}
+
 // The screen obeys the size it was given, and says how much it could not show
 // rather than stopping at the bottom of the terminal in silence.
 func TestTheScreenFitsTheSizeItWasGivenAndSaysWhatItCutAway(t *testing.T) {
@@ -295,6 +338,11 @@ func runningScreen(t *testing.T) daemonScreen {
 		Log:            []string{"12:00:00 polled work@example.com", "12:00:01 nothing to do"},
 		Now:            statusNow,
 		CredentialHome: "/home/u/.claude",
+		// A pure predicate, so this package's tests stay string comparisons.
+		// The real one asks the filesystem, which is why it is injected at all;
+		// that it is credhome.SamePath rather than == is pinned where the
+		// injection happens, in internal/cli.
+		SamePath: func(a, b string) bool { return a == b },
 	}
 }
 
