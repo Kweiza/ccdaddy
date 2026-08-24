@@ -110,12 +110,19 @@ type Status struct {
 	//
 	// It is here because it is a fact about the daemon PROCESS and nothing else
 	// records it, which is this document's rule for what it owns. A daemon
-	// started from inside `ccdad run --full-profile` resolves a per-session
-	// directory rather than ~/.claude and then manages that one for the rest of
-	// its life; the daemon is behaving correctly and every other file on the
-	// machine looks normal, so a reader comparing this against its own
-	// resolution is the only way anyone finds out. `ccdad doctor` is that
-	// reader.
+	// started from a shell that resolved a credential home of its own -- which
+	// CLAUDE_SECURESTORAGE_CONFIG_DIR decides when it is defined and
+	// CLAUDE_CONFIG_DIR decides otherwise -- manages that directory rather than
+	// ~/.claude for the rest of its life; the daemon is behaving correctly and
+	// every other file on the machine looks normal, so a reader comparing this
+	// against its own resolution is the only way anyone finds out. `ccdad
+	// doctor` is that reader, in its credential-home row.
+	//
+	// `ccdad run --full-profile` used to be the example here and is no longer
+	// reachable: auto-start refuses inside a `ccdad run` session, and the daemon
+	// verbs that would start one by hand are refused there too. An override the
+	// user set themselves is deliberately still allowed, which is what keeps
+	// this field load-bearing.
 	CredentialHome string `json:"credentialHome,omitempty"`
 	// StartedAt is when this daemon acquired the singleton.
 	StartedAt time.Time `json:"startedAt,omitzero"`
