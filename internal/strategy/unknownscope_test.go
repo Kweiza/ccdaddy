@@ -180,3 +180,42 @@ func TestAnOptedInUnknownScopeWindowIsAWeeklyResetLikeAnyOther(t *testing.T) {
 		t.Errorf("weeklyResetOf() without the opt-in = %v, want the seven_day reset — an unnamed scope must not reach this pass either", bare.at)
 	}
 }
+
+// The pre-emptive projection reads bindingWindows, and that set now depends on
+// the threshold table. A window the opt-in put into the ranking has to be in the
+// set the projection runs over too, or the engine orders on one set of windows
+// and decides when to move on another — the divergence projectedExhaustion's own
+// comment says the shared set exists to prevent.
+//
+// It runs through Decide rather than calling projectedExhaustion, because the
+// defect this guards is a Thresholds built for convenience AT THE CALL SITE. A
+// test of the function alone cannot see one, and this is already the third
+// caller to need the bundle threaded — the fourth will compile perfectly without
+// it.
+//
+// The numbers are chosen so ONLY the projection can move this engine. a-live's
+// five-hour window still binds the ranking at 88% (slack -8, against the region
+// window's 0.1), so the opt-in changes no ordering; b-room sits one point under
+// its threshold, which clears neither ordinary margin. And the region window
+// runs out in 584 s against the five-hour window's 1472 s, inside a 720 s
+// horizon that the five-hour window alone never reaches.
+func TestTheProjectionSeesAWindowTheOptInPutIntoTheRanking(t *testing.T) {
+	base := preemptPool(600 * time.Second)
+	live := base[0]
+	live.Usage = &usage.Snapshot{
+		FiveHour: win(88, 2*time.Hour),
+		Limits:   []usage.Limit{unknownScoped("region", "eu", 99.9, 6*time.Hour)},
+	}
+	pool := []Candidate{live, base[1]}
+
+	// 100 rather than 50: the window must be IN the ranking without being over
+	// its own threshold, or the ordinary rule would switch first and this would
+	// pass without the projection ever running.
+	o := preemptOpts()
+	o.WindowThreshold = map[usage.WindowName]float64{"weekly_scoped:region:eu": 100}
+	want(t, Decide(pool, o, Config{}, NewState(), "a-live"), ActionSwitch, ReasonProjectedExhaustion, "b-room")
+
+	// Without the opt-in the region window is in no set at all, and the
+	// five-hour window does not reach the horizon.
+	want(t, Decide(pool, preemptOpts(), Config{}, NewState(), "a-live"), ActionStay, ReasonHysteresis, "")
+}
