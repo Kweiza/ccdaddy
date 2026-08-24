@@ -298,9 +298,9 @@ func Spent(h Headroom) (spent, known bool) {
 // It reads the same narrowed set the headroom does, so --model means one thing
 // in both strategies: a session that named Sonnet does not go chasing an Opus
 // cap's expiry, because that is not quota it is going to spend.
-func weeklyResetOf(s *usage.Snapshot, model string) timeValue {
+func weeklyResetOf(s *usage.Snapshot, model string, t Thresholds) timeValue {
 	var out timeValue
-	for _, w := range bindingWindows(s, model) {
+	for _, w := range bindingWindows(s, model, t) {
 		if !usage.IsWeekly(w.Name) {
 			continue
 		}
@@ -399,7 +399,7 @@ func measure(c Candidate, o Options) Ranked {
 		clears = h.Floor
 	}
 	rec := recoveryOf(c.Usage, clears)
-	weekly := weeklyResetOf(c.Usage, o.Model)
+	weekly := weeklyResetOf(c.Usage, o.Model, o.Thresholds())
 
 	r := Ranked{
 		UUID:           c.UUID,

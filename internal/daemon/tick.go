@@ -526,8 +526,8 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now time.Time,
 			entry.FetchedAt = now
 		}
 
-		h := strategy.HeadroomOf(entry.Snapshot, strategy.Thresholds{Default: cfg.Threshold})
-		reading := pollpolicy.Reading{Exhausted: exhausted(h, cfg)}
+		h := strategy.HeadroomOf(entry.Snapshot, cfg.Thresholds())
+		reading := pollpolicy.Reading{Exhausted: exhausted(h)}
 		if snap != nil && h.Known {
 			reading.BindingPct, reading.Known = 100-h.Pct, true
 		}
@@ -567,13 +567,19 @@ func pollStateOf(e usage.Entry) pollpolicy.State {
 }
 
 // exhausted is "every window spent", read off the binding one: the binding
-// window is whichever has least left, so an account over the threshold there is
-// over it everywhere that matters.
-func exhausted(h strategy.Headroom, cfg config.Config) bool {
-	if !h.Known {
-		return false
-	}
-	return 100-h.Pct > cfg.Threshold
+// window is whichever has least SLACK, so an account past the threshold there is
+// past it everywhere that matters.
+//
+// It delegates rather than comparing here. The same question used to be asked in
+// its own words on this line, against cfg.Threshold alone, and that answered a
+// different question the moment a window could carry a threshold of its own or a
+// scope could be opted into the ranking: the daemon would publish a state for an
+// account measured against numbers, and a window set, the engine never used.
+// Two spellings of one rule diverge silently, and this one has no user watching
+// it — it decides a poll cadence and a status column, not a switch.
+func exhausted(h strategy.Headroom) bool {
+	spent, _ := strategy.Spent(h)
+	return spent
 }
 
 // scheduled records the deadline a poll just set. The snapshot takes it from
@@ -652,11 +658,11 @@ func accountState(a store.Account, cache *usage.Cache, quarantined bool,
 		// Unknown is NOT an empty account, and it must never render as 0%.
 		return StateUnknown
 	}
-	h := strategy.HeadroomOf(entry.Snapshot, strategy.Thresholds{Default: cfg.Threshold})
+	h := strategy.HeadroomOf(entry.Snapshot, cfg.Thresholds())
 	if !h.Known {
 		return StateUnknown
 	}
-	if exhausted(h, cfg) {
+	if exhausted(h) {
 		return StateExhausted
 	}
 	return StateCandidate
