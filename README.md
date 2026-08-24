@@ -20,6 +20,61 @@ $ ccdad list
   2    personal@example.com     subscription  pro   83%   4d 3h
   3    ci@example.org (ci)      api-key       -     ?     -
 
+$ ccdad list --json
+{
+  "schemaVersion": 1,
+  "accounts": [
+    {
+      "uuid": "0d9e4e6a-1f1a-4b5e-9c3a-2f7b6a1d8e40",
+      "idx": 1,
+      "email": "work@example.com",
+      "alias": "work",
+      "kind": "subscription",
+      "tier": "max",
+      "active": true,
+      "usage": {
+        "fetchedAt": "2026-08-24T05:45:10Z",
+        "ageSeconds": 41,
+        "headroomPct": 18,
+        "slack": -2,
+        "windowThreshold": 80,
+        "bindingWindow": "five_hour",
+        "windows": {
+          "five_hour": { "utilizationPct": 82, "resetsAt": "2026-08-24T06:59:51Z" }
+        }
+      }
+    },
+    {
+      "uuid": "5b2c7f31-8a4d-4c9e-9d0a-3e6f1b2c9a71",
+      "idx": 2,
+      "email": "personal@example.com",
+      "kind": "subscription",
+      "tier": "pro",
+      "active": false,
+      "usage": {
+        "fetchedAt": "2026-08-24T05:45:10Z",
+        "ageSeconds": 41,
+        "headroomPct": 83,
+        "slack": 63,
+        "windowThreshold": 80,
+        "bindingWindow": "seven_day",
+        "windows": {
+          "seven_day": { "utilizationPct": 17, "resetsAt": "2026-08-28T08:45:51Z" }
+        }
+      }
+    },
+    {
+      "uuid": "c1a8e2d4-6b3f-4a1e-8c5d-9f0b7e2a3c62",
+      "idx": 3,
+      "email": "ci@example.org",
+      "alias": "ci",
+      "kind": "api-key",
+      "active": false
+    }
+  ],
+  "activeUuid": "0d9e4e6a-1f1a-4b5e-9c3a-2f7b6a1d8e40"
+}
+
 $ ccdad status
 Daemon:  running  pid 48213  up 2h06m
 Active:  work@example.com (work)
