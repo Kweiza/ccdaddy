@@ -14,6 +14,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/ccver"
+	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/store"
 )
 
@@ -1149,9 +1150,14 @@ func TestRunDescribesTheClaudeItIsAboutToRunAndNotTheInterpreter(t *testing.T) {
 // authorise scopes such an account with CLAUDE_CODE_OAUTH_TOKEN in the child's
 // environment and writes no credentials file at all. That variable predates
 // 2.1.113 by a long way, and this tree's own measurement is that Claude Code
-// prefers it over the stored login outright — so the session runs as the named
+// prefers it over the stored LOGIN outright — so the session runs as the named
 // account on a 2.1.112 machine, and the refusal's stated failure mode ("claude
 // would read the machine's own credentials file") cannot happen to it.
+//
+// Beating the login is not beating everything: ANTHROPIC_AUTH_TOKEN is read one
+// branch earlier and takes such a session from it on every build. That is
+// refuseDisplacedAuth's subject, and isolate() empties the variable, which is
+// why this test describes the era and only the era.
 func TestRunDoesNotRefuseASetupTokenAccountOnAKeychainEraClaudeCode(t *testing.T) {
 	isolate(t)
 	seedTokenAccount(t, "u-1", "a@example.com", "setup-token", "sk-ant-oat-1")
@@ -1191,5 +1197,183 @@ func TestRunGivesAnAPIKeyAccountItsOwnRefusalEvenOnAKeychainEraClaudeCode(t *tes
 	}
 	if strings.Contains(message, "CLAUDE_SECURESTORAGE_CONFIG_DIR") {
 		t.Errorf("an api-key account was refused for the era instead of for its credential shape:\n%s", message)
+	}
+}
+
+// A shell that already exports ANTHROPIC_AUTH_TOKEN outranks the login this
+// session was built to scope, and the session would authenticate as that token
+// while ccdad reported success.
+//
+// The assertion is not only the exit code: `run` has three refusals now and all
+// three are exit 2, so the level cannot tell them apart. What only this one
+// carries is the variable's name and the escape hatch.
+func TestRunRefusesWhenTheShellsAuthTokenOutranksTheSessionsLogin(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "u-1", "a@example.com")
+	stub := stubClaude(t, ExitOK)
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "sk-ant-someone-elses")
+
+	code, _, errOut, top := runRoot(t, "run", "1")
+	if code != ExitUsage {
+		t.Fatalf("exit = %d (%s / %s), want %d — the session would have run as that token", code, errOut, top, ExitUsage)
+	}
+	message := errOut + top
+	if !strings.Contains(message, "ANTHROPIC_AUTH_TOKEN") {
+		t.Errorf("the refusal does not name the source that wins:\n%s", message)
+	}
+	if !strings.Contains(message, "env -u ANTHROPIC_AUTH_TOKEN") {
+		t.Errorf("the refusal does not say how to start this one session anyway:\n%s", message)
+	}
+	if stub.started {
+		t.Error("claude was started — a refusal that still runs the session is not a refusal")
+	}
+}
+
+// The same shell, and an account whose credential is a setup token rather than
+// a login. The keychain-era carve-out above lets this shape through, and it
+// must not let this one through: CLAUDE_CODE_OAUTH_TOKEN is the branch BELOW
+// ANTHROPIC_AUTH_TOKEN, so exporting the account's token does not win.
+func TestRunRefusesASetupTokenAccountWhenTheShellsAuthTokenOutranksIt(t *testing.T) {
+	isolate(t)
+	seedTokenAccount(t, "u-1", "a@example.com", "setup-token", "sk-ant-oat-1")
+	stub := stubClaude(t, ExitOK)
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "sk-ant-someone-elses")
+
+	code, _, errOut, top := runRoot(t, "run", "1")
+	if code != ExitUsage {
+		t.Fatalf("exit = %d (%s / %s), want %d", code, errOut, top, ExitUsage)
+	}
+	if stub.started {
+		t.Error("claude was started as somebody else's token")
+	}
+}
+
+// A CLAUDE_CODE_OAUTH_TOKEN already in the shell outranks a LOGIN, so a login
+// account is refused for it.
+func TestRunRefusesALoginAccountWhenTheShellExportsAnOAuthToken(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "u-1", "a@example.com")
+	stub := stubClaude(t, ExitOK)
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat-someone-elses")
+
+	code, _, errOut, top := runRoot(t, "run", "1")
+	if code != ExitUsage {
+		t.Fatalf("exit = %d (%s / %s), want %d", code, errOut, top, ExitUsage)
+	}
+	if !strings.Contains(errOut+top, "CLAUDE_CODE_OAUTH_TOKEN") {
+		t.Errorf("the refusal does not name the source that wins:\n%s", errOut+top)
+	}
+	if stub.started {
+		t.Error("claude was started")
+	}
+}
+
+// …and the SAME variable in the same shell is not a displacer for a setup-token
+// account, because ccdad overwrites it with that account's own token. This is
+// the case a refusal keyed on the variable being PRESENT would break, and it
+// would break it silently — the session it blocks is one that works today.
+func TestRunOverwritesTheShellsOAuthTokenForASetupTokenAccount(t *testing.T) {
+	isolate(t)
+	seedTokenAccount(t, "u-1", "a@example.com", "setup-token", "sk-ant-oat-mine")
+	stub := stubClaude(t, ExitOK)
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat-someone-elses")
+
+	code, _, errOut, top := runRoot(t, "run", "1")
+	if code != ExitOK {
+		t.Fatalf("exit = %d (%s / %s), want 0 — ccdad sets this variable itself for such an account",
+			code, errOut, top)
+	}
+	if got, ok := envOf(stub.spec.Env, "CLAUDE_CODE_OAUTH_TOKEN"); !ok || got != "sk-ant-oat-mine" {
+		t.Errorf("CLAUDE_CODE_OAUTH_TOKEN = %q, %v; want the account's own token", got, ok)
+	}
+}
+
+// A source with no variable behind it gets the remedy that applies to IT, and
+// not an `env -u` for a name that is not a variable. The host token file is the
+// clearest of the three: Claude Code reads that path on every machine when the
+// descriptor variable is unset, and there is nothing to unset.
+func TestRunRefusesForAHostTokenFileWithoutOfferingEnvU(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "u-1", "a@example.com")
+	stub := stubClaude(t, ExitOK)
+	if err := os.MkdirAll(filepath.Dir(identity.HostOAuthTokenFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(identity.HostOAuthTokenFile, []byte("injected-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	code, _, errOut, top := runRoot(t, "run", "1")
+	if code != ExitUsage {
+		t.Fatalf("exit = %d (%s / %s), want %d", code, errOut, top, ExitUsage)
+	}
+	message := errOut + top
+	if !strings.Contains(message, identity.HostOAuthTokenFile) {
+		t.Errorf("the refusal does not name the file that wins:\n%s", message)
+	}
+	if strings.Contains(message, "env -u") {
+		t.Errorf("the refusal offers to unset a variable that does not exist:\n%s", message)
+	}
+	if stub.started {
+		t.Error("claude was started")
+	}
+}
+
+// --full-profile scopes a different DIRECTORY; it does not scope the
+// environment, which is os.Environ() in either mode. The refusal therefore
+// covers both — and it lands before the profile exists, because a refusal that
+// first created persistent per-account state would leave the user something to
+// clean up for a session that never started.
+func TestRunRefusesUnderFullProfileAndLeavesNoProfileBehind(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "u-1", "a@example.com")
+	stub := stubClaude(t, ExitOK)
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "sk-ant-someone-elses")
+
+	code, _, errOut, top := runRoot(t, "run", "--full-profile", "1")
+	if code != ExitUsage {
+		t.Fatalf("exit = %d (%s / %s), want %d", code, errOut, top, ExitUsage)
+	}
+	if stub.started {
+		t.Error("claude was started")
+	}
+	profile := filepath.Join(mustPath(ccpath.StoreHome()), ProfilesDirName, "u-1")
+	if _, err := os.Stat(profile); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("os.Stat(%s) = %v, want it never to have been created", profile, err)
+	}
+}
+
+// The refusal runs before the credential home is made, for the reason
+// refuseKeychainEra's own placement gives: a refusal that first created a
+// directory holding a live refresh token is tidied by the defer, but only after
+// the fact.
+func TestRunRefusesBeforeItCreatesASessionDirectory(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "u-1", "a@example.com")
+	stubClaude(t, ExitOK)
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "sk-ant-someone-elses")
+
+	if code, _, errOut, top := runRoot(t, "run", "1"); code != ExitUsage {
+		t.Fatalf("exit = %d (%s / %s), want %d", code, errOut, top, ExitUsage)
+	}
+	container := filepath.Join(mustPath(ccpath.StoreHome()), SessionsDirName)
+	if _, err := os.Stat(container); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("os.Stat(%s) = %v, want no session container at all", container, err)
+	}
+}
+
+// An empty shell is the case every other test in this file describes, and it is
+// asserted once here so that a gate which refused EVERYTHING would fail
+// something that says so rather than only failing the rest by accident.
+func TestRunStartsWhenNothingInTheShellOutranksTheAccount(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "u-1", "a@example.com")
+	stub := stubClaude(t, ExitOK)
+
+	if code, _, errOut, top := runRoot(t, "run", "1"); code != ExitOK {
+		t.Fatalf("exit = %d (%s / %s), want 0", code, errOut, top)
+	}
+	if !stub.started {
+		t.Fatal("no session was started")
 	}
 }
