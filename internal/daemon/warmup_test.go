@@ -276,3 +276,32 @@ func TestWarmClampKeepsTheTargetPollReachable(t *testing.T) {
 		})
 	}
 }
+
+// The money refusal, at the decision itself. A warm-up is one turn nobody asked
+// for, and on an account with a window at 100% it can be billed to credits.
+func TestTheDaemonDoesNotWarmAnAccountWhoseTurnCouldBeBilledToCredits(t *testing.T) {
+	isolateEngine(t)
+	seedAccount(t, "u-1", "org-1")
+	seedLiveHolder(t, "u-live")
+	idle, gone := 0.0, 100.0
+	at := tickEpoch.Add(3 * 24 * time.Hour)
+	seedEntry(t, "u-1", usage.Entry{
+		FetchedAt: tickEpoch.Add(-10 * time.Minute),
+		Snapshot: &usage.Snapshot{
+			FiveHour:   usage.NewWindow(&idle, nil),
+			SevenDay:   usage.NewWindow(&gone, &at),
+			ExtraUsage: usage.ExtraUsage{Present: true, State: usage.ExtraUsageEnabled},
+		},
+	})
+
+	e := engineFor(t, tokensAreFine, func(context.Context, string) (*usage.Snapshot, error) {
+		return unusedWindow(), nil
+	})
+	probes := stubProbe(t, e)
+	tick(t, e)
+
+	if len(*probes) != 0 {
+		t.Fatalf("probes = %+v — this account's weekly window is gone and its overage switch "+
+			"is on, so the turn could be billed to credits", *probes)
+	}
+}

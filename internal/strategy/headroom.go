@@ -328,6 +328,55 @@ func ColdWindow(s *usage.Snapshot, model string, t Thresholds, now time.Time) (u
 	return "", time.Time{}, false
 }
 
+// WarmUpWouldSpendCredits reports whether spending one turn on this account
+// could land on METERED CREDITS rather than on quota already paid for.
+//
+// It is the one gate the warm-up loop shares with the credit gate's reasoning,
+// and it is here rather than in the daemon so that `ccdad hover status` refuses
+// on the same predicate it refuses on. Fully automatic must not become fully
+// automatic SPENDING: the ceiling and the account's own overage switch are the
+// two independent opt-ins unattended overage requires, and a mode cannot supply
+// either on the user's behalf — least of all a mode whose whole job is to spend
+// small turns nobody asked for one at a time.
+//
+// Two conditions, and the first is the narrow one on purpose. A turn only
+// reaches credits when there is no subscription quota LEFT, which is a window at
+// 100%, not a window past the pace threshold hover derived for it: an account
+// 80% through its week against a 46% pace target has a fifth of its quota in
+// hand and the turn lands on that. Reading "past its threshold" as "out" here
+// would have stopped warming five of the six accounts on the fleet this was
+// written against, which is most of the benefit for none of the risk.
+//
+// The second fails closed the way credit.go's every branch does. Only an
+// account whose overage is demonstrably off — Disabled, or Blocked by an org or
+// seat policy — is evidence that a turn CANNOT be billed. Unknown is not, and an
+// unread extra_usage is the state a bug looks like.
+func WarmUpWouldSpendCredits(s *usage.Snapshot, model string, t Thresholds) bool {
+	if s == nil || !capped(s, model, t) {
+		return false
+	}
+	switch s.ExtraUsage.State {
+	case usage.ExtraUsageDisabled, usage.ExtraUsageBlocked:
+		return false
+	}
+	return true
+}
+
+// capped reports whether any window this account is measured on has nothing left
+// in it.
+//
+// Every window rather than the binding one: HeadroomFor picks the least SLACK,
+// which under a derived per-window threshold is not the most spent window, and
+// the question here is about quota rather than about pace.
+func capped(s *usage.Snapshot, model string, t Thresholds) bool {
+	for _, w := range bindingWindows(s, model, t) {
+		if pct, ok := w.Percent(); ok && pct >= 100 {
+			return true
+		}
+	}
+	return false
+}
+
 // NextResetAmong is the earliest FUTURE rollover among an account's candidate
 // windows, or false when no window has one.
 //
