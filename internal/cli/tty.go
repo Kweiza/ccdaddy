@@ -19,6 +19,17 @@ import (
 // umask away from being readable by everyone on the machine.
 var stdoutIsTTY = func() bool { return isTTY(os.Stdout) }
 
+// stderrIsTTY reports whether this process's stderr is a terminal.
+//
+// One decision hangs on it, and it is a refusal. The terminal dashboard's
+// add-account key hands the terminal to a child `ccdad add`, and bubbletea
+// gives that child os.Stderr -- not the program's own output -- as its stderr.
+// `ccdad add` writes every line of its prose there: the login URL, the paste
+// instructions, the re-prompt. Under `ccdad 2>/dev/null` the child would sit
+// waiting for a code the user was never shown, behind a dashboard that had
+// vanished. The key refuses instead, and names the redirect.
+var stderrIsTTY = func() bool { return isTTY(os.Stderr) }
+
 // isTTY reports whether f is an interactive terminal.
 //
 // Two decisions hang on this. A non-TTY stdin cannot supply a pasted code, so
