@@ -26,8 +26,8 @@ go build ./cmd/ccdad
 Go 1.26.4 or newer — `go.mod` is the authority, and CI reads the version from
 it.
 
-There is nothing else to install. The project has eight third-party modules,
-all Go, and it builds `CGO_ENABLED=0` on every target.
+There is nothing else to install. The project's third-party modules are all Go,
+and it builds `CGO_ENABLED=0` on every target. `go.mod` is the authority.
 
 **Point it away from your real accounts while you work.** `CCDAD_HOME` moves
 ccdad's own store; `CLAUDE_CONFIG_DIR` and `CLAUDE_SECURESTORAGE_CONFIG_DIR`
