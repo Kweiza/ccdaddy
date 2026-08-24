@@ -19,6 +19,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/ccver"
+	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/store"
 )
 
@@ -118,7 +119,10 @@ var describeClaudeInstall = ccver.Describe
 //     Claude Code prefers it over the stored login outright — so such a session
 //     runs as the intended account on a keychain-era build, and refusing it
 //     would block a case that works while asserting a failure mode that cannot
-//     happen to it.
+//     happen to it. "Prefers it over the stored LOGIN" is the whole of that
+//     claim and not a general one: ANTHROPIC_AUTH_TOKEN sits one branch above
+//     the variable and beats it on every build there has ever been. That is
+//     refuseDisplacedAuth's subject and it is not this refusal's.
 //   - api-key accounts are refused by authorise itself, in its own words, and
 //     the era has nothing to do with why. Answering first with a keychain
 //     message would replace an accurate refusal with a misleading one.
@@ -138,6 +142,150 @@ func refuseKeychainEra(install ccver.Install, blob cclink.Blob, label string) er
 		"--full-profile, which scopes CLAUDE_CONFIG_DIR and does work on this build; or upgrade Claude Code to "+
 		"%s or later",
 		install, ccver.LastKeychainEra.NextPatch(), label, ccver.LastKeychainEra.NextPatch())
+}
+
+// refuseDisplacedAuth is the refusal for a shell whose own environment already
+// carries a credential Claude Code reads BEFORE the one this session installs.
+//
+// WHAT THIS COMMAND INHERITS. childEnv is os.Environ() with one variable
+// removed, so every auth variable in the caller's shell reaches the child
+// untouched. That would cost nothing if the credential ccdad installs were read
+// first, and internal/identity/oauth.go's header says it is read LAST: of the
+// resolver's eight branches the stored login is the seventh, with
+// ANTHROPIC_AUTH_TOKEN second, CLAUDE_CODE_OAUTH_TOKEN third, a host-injected
+// token file fourth, the apiKeyHelper fifth and an Anthropic CLI profile sixth.
+// A session started from a shell exporting ANTHROPIC_AUTH_TOKEN therefore ran
+// as that token whatever account was named — and this command's own --help
+// asserted the opposite in so many words.
+//
+// REFUSING RATHER THAN STRIPPING, and that is a decision about what `ccdad run`
+// PROMISES rather than a limit on what it could do. Removing the variables would
+// make the guarantee true for the three sources that ARE variables and leave it
+// false for the three that are not, which is a worse contract than either honest
+// one. And silently overriding an explicit export is the same class of harm this
+// command exists to prevent, pointed the other way: whoever typed
+// `ANTHROPIC_AUTH_TOKEN=… ccdad run` meant it.
+//
+// Refusing rather than warning, for the reason refuseKeychainEra states in full
+// a few lines above: a warning that is scrolled past leaves the user running the
+// wrong account under a label that says otherwise.
+//
+// THE ESCAPE HATCH IS NOT A FLAG, because the shell already ships one. For a
+// variable the message names `env -u`, which drops it for this invocation and
+// for nothing else. For a source that is not a variable there is nothing to
+// unset, and the remedy is Claude Code's own, reproduced by
+// identity.OAuthSource.Remedy() rather than invented a second time here.
+//
+// WHICH SOURCE IS OURS is the same split authorise makes, which is why this
+// takes the blob:
+//
+//   - an OAuth login is written into the session's credential home, so ccdad's
+//     source is the last branch and everything above it displaces. The login is
+//     resolved as identity.UsableLogin rather than from the blob, for the reason
+//     that value exists: the question is whether a WORKING login would survive,
+//     and the answer must not depend on the scopes of the record about to be
+//     written.
+//   - a setup-token account is exported as CLAUDE_CODE_OAUTH_TOKEN, so ccdad's
+//     source is the third branch and only bare mode and ANTHROPIC_AUTH_TOKEN
+//     beat it. TokenEnv is overwritten with the account's own token because that
+//     is what the CHILD will carry; reading this shell's value would answer
+//     about the wrong process.
+//   - an API-key account is not on this axis at all, so ccdad's source is
+//     "none" — Claude Code reads a stored key only once nothing on the OAuth
+//     axis resolves. The default mode refuses such an account in authorise's own
+//     words, and --full-profile puts the key in the profile's global config.
+//   - any other stored kind is authorise's to refuse BY NAME. Answering here
+//     first would replace an accurate refusal with a misleading one, which is
+//     the mistake refuseKeychainEra's api-key arm already records.
+//
+// ONE APPROXIMATION, stated rather than hidden. env.Helper is read from the
+// settings tree THIS process resolves. That is exactly the child's tree in the
+// default mode, and under --full-profile it is the tree the profile was seeded
+// from — so a user who edited apiKeyHelper inside a profile after its first run
+// is answered about the machine's setting instead. Reading the profile's own
+// copy would mean creating the profile before deciding whether to refuse, and a
+// refusal that first made persistent per-account state is the worse trade.
+func refuseDisplacedAuth(env identity.OAuthEnvironment, blob cclink.Blob, label string) error {
+	ours, login := identity.OAuthLogin, identity.UsableLogin
+	if rec, ok := cclink.TokenRecordOf(blob); ok {
+		switch rec.Kind {
+		case "setup-token":
+			ours, login = identity.OAuthTokenEnv, identity.Login{}
+			env.TokenEnv = rec.Token
+		case cclink.APIKeyKind:
+			ours, login = identity.OAuthNone, identity.Login{}
+		default:
+			return nil
+		}
+	}
+	source, resolved := env.Resolve(login)
+	switch {
+	case !resolved:
+		return UsageError("CLAUDE_BG_AUTH_SNAPSHOT_PATH names a token snapshot in this shell, and Claude Code "+
+			"consumes it before it looks at anything else — so ccdad cannot tell whether this session would "+
+			"run as %s. Check the host session that set it, or start this one with "+
+			"'env -u CLAUDE_BG_AUTH_SNAPSHOT_PATH ccdad run …'", label)
+	case source == ours:
+		return nil
+	case env.Bare:
+		// Tested before the sentence below because bare mode is not a competing
+		// credential: CLAUDE_CODE_SIMPLE makes Claude Code take no OAuth
+		// credential at all, so "it reads that one first" would describe a
+		// source that is not there.
+		return UsageError("CLAUDE_CODE_SIMPLE is set in this shell, and Claude Code reads no OAuth credential "+
+			"at all in that mode — so this session would not authenticate as %s. Unset it, or start this one "+
+			"with 'env -u CLAUDE_CODE_SIMPLE ccdad run …'", label)
+	}
+	// The sentence is switcher.DisplacementNote's, and deliberately so: a user
+	// who has seen that one out of `ccdad switch` is reading about the same
+	// resolver here. Its shape also survives the source that carries an
+	// apposition -- "<path>, the file a session host injects a token into" --
+	// which "from X rather than from Y" does not.
+	note := fmt.Sprintf("Claude Code takes its OAuth credential from %s, and it reads that before %s — so this "+
+		"session would run as that credential rather than as %s, while ccdad reported success.",
+		source.String(), scopedSourceName(ours), label)
+	if remedy := source.Remedy(); remedy != "" {
+		note += " " + remedy
+	}
+	if v := unsettableSource(source); v != "" {
+		note += fmt.Sprintf(" For one session: env -u %s ccdad run …", v)
+	}
+	return UsageError("%s", note)
+}
+
+// scopedSourceName names the source THIS session provides, for the second half
+// of that sentence.
+//
+// Not OAuthSource.String(), which describes a source FOUND on the machine and
+// would say "the login in the credentials file" — leaving the reader of a
+// refusal about scoping to wonder which credentials file is meant, when the
+// answer is the whole point of the command.
+func scopedSourceName(s identity.OAuthSource) string {
+	switch s {
+	case identity.OAuthTokenEnv:
+		return "the CLAUDE_CODE_OAUTH_TOKEN ccdad exports for that account"
+	case identity.OAuthNone:
+		return "the API key in this session's own config"
+	default:
+		return "the login ccdad writes into this session's credential home"
+	}
+}
+
+// unsettableSource is the environment variable behind a source, or "" for the
+// four that have none.
+//
+// It filters SourceName() rather than carrying a second table, and the filter
+// is the point: CCR_OAUTH_TOKEN_FILE, apiKeyHelper and profile are names Claude
+// Code prints for a file, a setting and another program's configuration.
+// Telling a user to `env -u` one of them would send them after a variable that
+// does not exist, which is the error internal/identity/oauth.go's header was
+// written to stop being repeated.
+func unsettableSource(s identity.OAuthSource) string {
+	switch s {
+	case identity.OAuthAuthTokenEnv, identity.OAuthTokenEnv, identity.OAuthTokenDescriptor:
+		return s.SourceName()
+	}
+	return ""
 }
 
 // startChild starts claude, waits for it, and reports its exit status. It is a
@@ -239,7 +387,10 @@ func newProfile(uuid string) (runSession, error) {
 //     not save it. switch REFUSES such an account and its refusal prescribes
 //     exactly this: "Run Claude Code with it exported for the session instead".
 //     Writing the stored record into a credentials file would put something in
-//     the session that looks like a login and is not one.
+//     the session that looks like a login and is not one. Setting the variable
+//     is not the same as winning with it: ANTHROPIC_AUTH_TOKEN is read one
+//     branch earlier and takes the session from it, which is why
+//     refuseDisplacedAuth runs before any of this.
 //   - an API key is neither: Claude Code takes it from primaryApiKey in the
 //     GLOBAL config, which is not a credential home at all. Which mode this is
 //     therefore decides the answer. The default mode leaves the machine's
@@ -799,8 +950,17 @@ func newRunCmd() *cobra.Command {
 			"did not exist before then, so on an older build the session would silently read\n" +
 			"the machine's own login. ccdad refuses to start rather than run as the wrong\n" +
 			"account, and names --full-profile, which scopes something every era reads. Only\n" +
-			"for accounts whose login is a credentials file: a setup-token account is scoped\n" +
-			"by CLAUDE_CODE_OAUTH_TOKEN instead, which every era reads, so it still runs.\n\n" +
+			"for accounts whose login is a credentials file: a setup-token account is\n" +
+			"exported as CLAUDE_CODE_OAUTH_TOKEN, which every era reads, so no era can\n" +
+			"defeat it.\n\n" +
+			"The rest of the environment is inherited, and Claude Code reads a stored login\n" +
+			"LAST. ANTHROPIC_AUTH_TOKEN, a host-injected token file, an apiKeyHelper and an\n" +
+			"Anthropic CLI profile all outrank it, and ANTHROPIC_AUTH_TOKEN outranks\n" +
+			"CLAUDE_CODE_OAUTH_TOKEN in turn — so a shell carrying one of them would run the\n" +
+			"session as that credential whatever account was named. ccdad refuses rather\n" +
+			"than starting it; it does not delete the variable for you, because a command\n" +
+			"that silently overrode an explicit export would be the same surprise pointed\n" +
+			"the other way. The refusal names the source and how to drop it for one run.\n\n" +
 			"--full-profile gives the account a whole config home instead, kept between runs\n" +
 			"under the ccdad store, so its MCP logins and trust answers survive. It is seeded\n" +
 			"once from the live config home — top-level files only, never the project history —\n" +
@@ -847,6 +1007,12 @@ func newRunCmd() *cobra.Command {
 				if err := refuseKeychainEra(describeClaudeInstall(path), blob, target.Label()); err != nil {
 					return err
 				}
+			}
+			// Both modes, unlike the refusal above. --full-profile scopes a
+			// different directory; it does not scope the ENVIRONMENT, which is
+			// os.Environ() in either case.
+			if err := refuseDisplacedAuth(claudeOAuthEnvironment(), blob, target.Label()); err != nil {
+				return err
 			}
 			tail := claudeArgs(args)
 			var shimEnv []string
