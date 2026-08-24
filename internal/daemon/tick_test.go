@@ -53,6 +53,17 @@ func isolateEngine(t *testing.T) {
 		t.Setenv(v, "")
 	}
 
+	// Whether this machine has Claude Code on it is a fourth axis, and it is the
+	// one that would SPAWN something: a tick that decided to probe would re-exec
+	// the real binary against a t.TempDir() the framework is about to delete. The
+	// default describes a machine with no claude, which is the one answer no host
+	// can contradict; a test that means to probe calls stubProbe by name.
+	savedLook := lookClaude
+	t.Cleanup(func() { lookClaude = savedLook })
+	lookClaude = func(string) (string, error) {
+		return "", errors.New(`exec: "claude": executable file not found in $PATH`)
+	}
+
 	// The two paths no t.Setenv can reach: Claude Code compiles them in as
 	// absolute literals outside the home directory. Deliberately not created.
 	savedHostToken, savedHostKey := identity.HostOAuthTokenFile, identity.HostAPIKeyFile
@@ -371,10 +382,14 @@ func TestAnAccountWithNoOAuthCredentialIsNeverPolled(t *testing.T) {
 		t.Error("a token account was polled")
 		return nil, nil
 	})
+	probes := stubProbe(t, e)
 	tick(t, e)
 
 	if _, ok := cacheEntry(t, "u-key"); ok {
 		t.Fatal("a token account got a cache entry")
+	}
+	if len(*probes) != 0 {
+		t.Fatalf("a token account was probed (%+v); nothing could ever read the window that would wake", *probes)
 	}
 }
 
@@ -1080,5 +1095,344 @@ func TestAFailedPollNeverStandsTheIdentityDown(t *testing.T) {
 	got, _ := cacheEntry(t, "u-1")
 	if got.ServeTTL != pollpolicy.ServeTTL {
 		t.Fatalf("ServeTTL = %s, want the ordinary %s", got.ServeTTL, pollpolicy.ServeTTL)
+	}
+}
+
+// unusedWindow is what the endpoint reports for a window nothing has ever been
+// spent against: a utilization it can name and no reset time at all. snapshotWith
+// cannot express it — that helper always names a reset — and this is the exact
+// condition a probe exists to remove.
+func unusedWindow() *usage.Snapshot {
+	zero := 0.0
+	return &usage.Snapshot{FiveHour: usage.NewWindow(&zero, nil)}
+}
+
+// seedLiveHolder puts a live account beside the one a test means to probe,
+// holding a reading identical to it.
+//
+// Without one the engine SWITCHES to the account under test, and then never
+// probes it. That is the right behaviour — an account whose window has never
+// been used is at 0% of it, which is the most slack there is, so it wins a pool
+// with nobody else in it, and the live account gets its reset time from the
+// user's own next turn rather than from a probe. It is just not the behaviour
+// these tests are about. A holder on an identical reading ties with it, and a tie
+// does not clear the hysteresis margin, so nothing moves.
+func seedLiveHolder(t *testing.T, uuid string) {
+	t.Helper()
+	seedAccount(t, uuid, "org-live")
+	liveAs(t, uuid)
+	seedEntry(t, uuid, usage.Entry{Snapshot: unusedWindow(), FetchedAt: tickEpoch})
+}
+
+// probeCall is one probe the engine asked for.
+type probeCall struct{ uuid, model string }
+
+// stubProbe records what the engine would have spawned, and puts a claude on
+// this machine's PATH for the duration.
+//
+// No mutex: probes are decided in dispatch, which runs on the tick goroutine and
+// nowhere else, unlike the polls dispatch hands to goroutines.
+func stubProbe(t *testing.T, e *Engine) *[]probeCall {
+	t.Helper()
+	saved := lookClaude
+	t.Cleanup(func() { lookClaude = saved })
+	lookClaude = func(string) (string, error) { return filepath.Join(t.TempDir(), "claude"), nil }
+
+	var calls []probeCall
+	e.SpawnProbe = func(uuid, model string) error {
+		calls = append(calls, probeCall{uuid, model})
+		return nil
+	}
+	return &calls
+}
+
+// The feature in one assertion. An account holding a reading whose binding window
+// reports no reset time is unrankable — no reset, no pace, no projection — and
+// the only thing that changes that is spending against the window.
+//
+// The second half is the part that is easy to get wrong: the tick must NOT also
+// poll. The probe has already spent the inference budget, and a poll now would
+// spend the usage budget for a reading the endpoint does not have yet.
+func TestTheDaemonProbesAnAccountWhoseBindingWindowHasNoResetTime(t *testing.T) {
+	isolateEngine(t)
+	seedAccount(t, "u-1", "org-1")
+	seedLiveHolder(t, "u-live")
+	seedEntry(t, "u-1", usage.Entry{Snapshot: unusedWindow(), FetchedAt: tickEpoch.Add(-10 * time.Minute)})
+
+	e := engineFor(t, tokensAreFine, func(context.Context, string) (*usage.Snapshot, error) {
+		t.Error("the tick polled the account it had just probed; the reading is not there yet")
+		return nil, nil
+	})
+	probes := stubProbe(t, e)
+	tick(t, e)
+
+	if len(*probes) != 1 || (*probes)[0].uuid != "u-1" {
+		t.Fatalf("probes = %+v, want exactly one for u-1", *probes)
+	}
+	got, ok := cacheEntry(t, "u-1")
+	if !ok {
+		t.Fatal("the probe left no cache row, so it would be queued again on the next tick")
+	}
+	if !got.Probe.LastAttemptAt.Equal(tickEpoch) {
+		t.Fatalf("Probe.LastAttemptAt = %s, want the engine's clock %s", got.Probe.LastAttemptAt, tickEpoch)
+	}
+	if want := tickEpoch.Add(usage.ProbePollDelay); !got.NextPollAt.Equal(want) {
+		t.Fatalf("NextPollAt = %s, want %s — a poll now spends the usage budget for a "+
+			"reading the endpoint does not have yet", got.NextPollAt, want)
+	}
+	if got.Snapshot == nil {
+		t.Fatal("the probe erased the reading that told it to probe")
+	}
+}
+
+// The condition that stops the probe recurring once it has worked: a window that
+// reports a reset time has nothing left to wake, and probing it would spend quota
+// on every cadence forever.
+func TestTheDaemonDoesNotProbeAWindowThatAlreadyReportsAReset(t *testing.T) {
+	isolateEngine(t)
+	seedAccount(t, "u-1", "org-1")
+	seedEntry(t, "u-1", usage.Entry{Snapshot: snapshotWith(30), FetchedAt: tickEpoch.Add(-10 * time.Minute)})
+
+	e := engineFor(t, tokensAreFine, func(context.Context, string) (*usage.Snapshot, error) {
+		return snapshotWith(30), nil
+	})
+	probes := stubProbe(t, e)
+	tick(t, e)
+
+	if len(*probes) != 0 {
+		t.Fatalf("probes = %+v, want none — that window already reports a reset", *probes)
+	}
+}
+
+// A probe that fails must not be retried at the tick loop's cadence: it spends
+// the account's own quota every time. The stamp the engine writes before the
+// spawn is what holds the gate even for a spawn that never started.
+func TestTheDaemonDoesNotProbeAnAccountAgainForSixHours(t *testing.T) {
+	isolateEngine(t)
+	seedAccount(t, "u-1", "org-1")
+	seedLiveHolder(t, "u-live")
+	seedEntry(t, "u-1", usage.Entry{Snapshot: unusedWindow(), FetchedAt: tickEpoch.Add(-10 * time.Minute)})
+
+	now := tickEpoch
+	e := engineFor(t, tokensAreFine, func(context.Context, string) (*usage.Snapshot, error) {
+		return unusedWindow(), nil
+	})
+	e.Now = func() time.Time { return now }
+	probes := stubProbe(t, e)
+
+	tick(t, e)
+	if len(*probes) != 1 {
+		t.Fatalf("probes = %+v after the first tick, want exactly one", *probes)
+	}
+	// An hour on, with the reading still carrying no reset: still held.
+	now = tickEpoch.Add(time.Hour)
+	tick(t, e)
+	if len(*probes) != 1 {
+		t.Fatalf("probes = %+v an hour later, want the first one only", *probes)
+	}
+	// Past the gate, and open again on its own — a probe that failed once must
+	// not be abandoned forever either.
+	now = tickEpoch.Add(usage.ProbeRetryAfter + time.Minute)
+	tick(t, e)
+	if len(*probes) != 2 {
+		t.Fatalf("probes = %+v after the gate lifted, want two", *probes)
+	}
+}
+
+// The switch that turns the whole thing off, and the account state that opts out
+// of it without any configuration at all.
+func TestTheDaemonProbesNothingItWasToldNotTo(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(t *testing.T)
+		cfg   string
+	}{
+		{"probe_unknown = false", func(t *testing.T) { seedAccount(t, "u-1", "org-1") }, "probe_unknown = false\n"},
+		{"a disabled account", func(t *testing.T) { seedDisabled(t, "u-1", "org-1") }, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateEngine(t)
+			tc.setup(t)
+			// The holder is what makes "no probe" mean the switch under test
+			// rather than the account simply having become live.
+			seedLiveHolder(t, "u-live")
+			if tc.cfg != "" {
+				writeConfig(t, tc.cfg)
+			}
+			seedEntry(t, "u-1", usage.Entry{Snapshot: unusedWindow(), FetchedAt: tickEpoch.Add(-10 * time.Minute)})
+
+			e := engineFor(t, tokensAreFine, func(context.Context, string) (*usage.Snapshot, error) {
+				return unusedWindow(), nil
+			})
+			probes := stubProbe(t, e)
+			tick(t, e)
+
+			if len(*probes) != 0 {
+				t.Fatalf("probes = %+v, want none", *probes)
+			}
+		})
+	}
+}
+
+// The account Claude Code is logged in as is the one something else is already
+// spending against, so probing it is the one probe that duplicates work — and the
+// one that can revoke the refresh token the live session is using, because the
+// probe's own Claude Code holds the same login in a different credential home and
+// the server rotates on refresh. Nothing happens instead: the window gets its
+// reset from the user's own next turn.
+func TestTheDaemonNeverProbesTheAccountThatIsLive(t *testing.T) {
+	isolateEngine(t)
+	seedAccount(t, "u-1", "org-1")
+	seedAccount(t, "u-2", "org-2")
+	liveAs(t, "u-1")
+	for _, uuid := range []string{"u-1", "u-2"} {
+		seedEntry(t, uuid, usage.Entry{Snapshot: unusedWindow(), FetchedAt: tickEpoch.Add(-10 * time.Minute)})
+	}
+
+	e := engineFor(t, tokensAreFine, func(context.Context, string) (*usage.Snapshot, error) {
+		return unusedWindow(), nil
+	})
+	probes := stubProbe(t, e)
+	tick(t, e)
+
+	for _, c := range *probes {
+		if c.uuid == "u-1" {
+			t.Fatalf("probed the live account: %+v", *probes)
+		}
+	}
+	if len(*probes) != 1 || (*probes)[0].uuid != "u-2" {
+		t.Fatalf("probes = %+v, want exactly one for the account that is not live", *probes)
+	}
+}
+
+// A per-model weekly window is only woken by a turn spent against that model, so
+// the family the engine derives from the binding window is the whole difference
+// between a probe that works and one that spends quota for nothing.
+func TestTheDaemonAsksForTheModelTheBindingWindowNeeds(t *testing.T) {
+	isolateEngine(t)
+	seedAccount(t, "u-1", "org-1")
+	seedLiveHolder(t, "u-live")
+	// Least slack is what binds. five_hour is 5% used and names a reset, the Opus
+	// week is 40% used and names none — so at one threshold for every window the
+	// Opus week binds, and the probe has to ask for Opus or it spends a turn
+	// against the wrong window entirely.
+	used, spent := 5.0, 40.0
+	resets := tickEpoch.Add(time.Hour)
+	seedEntry(t, "u-1", usage.Entry{
+		FetchedAt: tickEpoch.Add(-10 * time.Minute),
+		Snapshot: &usage.Snapshot{
+			FiveHour:     usage.NewWindow(&used, &resets),
+			SevenDayOpus: usage.NewWindow(&spent, nil),
+		},
+	})
+
+	e := engineFor(t, tokensAreFine, func(context.Context, string) (*usage.Snapshot, error) {
+		t.Error("the tick polled the account it had just probed")
+		return nil, nil
+	})
+	probes := stubProbe(t, e)
+	tick(t, e)
+
+	if len(*probes) != 1 {
+		t.Fatalf("probes = %+v, want exactly one", *probes)
+	}
+	if (*probes)[0].model != "opus" {
+		t.Fatalf("probe model = %q, want \"opus\" — the weekly Opus window is the one with no reset",
+			(*probes)[0].model)
+	}
+}
+
+// A machine with no Claude Code stays that way, and this loop runs about once a
+// second. One line, once, saying what the daemon cannot do and how to stop it
+// looking — and no attempt recorded, so the account is probed the moment claude
+// appears rather than six hours later.
+//
+// The account is still POLLED on a machine that cannot probe, which is what the
+// second tick below is standing on: a probe the daemon could not start replaces
+// nothing, and skipping the poll too would leave an account that later gets a
+// reset time of its own unread forever.
+func TestNoClaudeOnPATHIsSaidOnceAndSpendsNoBudget(t *testing.T) {
+	isolateEngine(t)
+	seedAccount(t, "u-1", "org-1")
+	seedLiveHolder(t, "u-live")
+	seedEntry(t, "u-1", usage.Entry{Snapshot: unusedWindow(), FetchedAt: tickEpoch.Add(-10 * time.Minute)})
+
+	var lines []string
+	var polls atomicCounter
+	now := tickEpoch
+	e := engineFor(t, tokensAreFine, func(_ context.Context, token string) (*usage.Snapshot, error) {
+		if token == "AT-u-1" {
+			polls.inc()
+		}
+		return unusedWindow(), nil
+	})
+	e.Now = func() time.Time { return now }
+	e.Log = func(format string, a ...any) { lines = append(lines, fmt.Sprintf(format, a...)) }
+	e.SpawnProbe = func(string, string) error {
+		t.Error("a probe was started on a machine with no claude on it")
+		return nil
+	}
+	// isolateEngine already describes a machine with no claude; stated here
+	// because this test is ABOUT that machine rather than merely sandboxed on it.
+
+	tick(t, e)
+	// Far enough on that the account is due again, so the second tick genuinely
+	// reaches the decision rather than being turned away at the freshness gate.
+	now = tickEpoch.Add(pollpolicy.CandidateMaxInterval + time.Minute)
+	tick(t, e)
+
+	said := 0
+	for _, l := range lines {
+		if containsFold(l, "not probing") {
+			said++
+		}
+	}
+	if said != 1 {
+		t.Fatalf("the daemon said it could not probe %d times over two ticks, want 1:\n%v", said, lines)
+	}
+	got, _ := cacheEntry(t, "u-1")
+	if !got.Probe.LastAttemptAt.IsZero() {
+		t.Fatalf("a probe that never ran consumed the six-hour budget (%s)", got.Probe.LastAttemptAt)
+	}
+	// The poll is what a probe replaces, so a probe that never started replaces
+	// nothing. Skipping it as well would be the worse bug: the reading is the
+	// only thing that says the window still has no reset, so an account never
+	// polled again could never be found to have got one.
+	if n := polls.get(); n == 0 {
+		t.Fatal("the account was neither probed nor polled, so nothing will ever read it again")
+	}
+}
+
+// The user's quota is being spent on their behalf, so it is said out loud —
+// once, because this loop runs at 1 Hz and a line it repeats is a line nobody
+// reads.
+func TestTheFirstAutomaticProbeSaysItSpendsTheUsersQuota(t *testing.T) {
+	isolateEngine(t)
+	seedAccount(t, "u-1", "org-1")
+	seedAccount(t, "u-2", "org-2")
+	seedLiveHolder(t, "u-live")
+	for _, uuid := range []string{"u-1", "u-2"} {
+		seedEntry(t, uuid, usage.Entry{Snapshot: unusedWindow(), FetchedAt: tickEpoch.Add(-10 * time.Minute)})
+	}
+
+	var lines []string
+	e := engineFor(t, tokensAreFine, func(context.Context, string) (*usage.Snapshot, error) {
+		return unusedWindow(), nil
+	})
+	e.Log = func(format string, a ...any) { lines = append(lines, fmt.Sprintf(format, a...)) }
+	probes := stubProbe(t, e)
+	tick(t, e)
+
+	if len(*probes) != 2 {
+		t.Fatalf("probes = %+v, want two", *probes)
+	}
+	said := 0
+	for _, l := range lines {
+		if containsFold(l, "SPENDS that account's own quota") {
+			said++
+		}
+	}
+	if said != 1 {
+		t.Fatalf("the quota line appeared %d times for two probes, want 1:\n%v", said, lines)
 	}
 }
