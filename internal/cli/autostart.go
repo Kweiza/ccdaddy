@@ -91,6 +91,18 @@ import (
 //     singleton to the daemon and make the continuous form refuse itself, and
 //     `auto --once` exists precisely so the engine can be run WITHOUT one.
 //
+// `ccdad tui` is here, and that is a decision MADE rather than one made by
+// omission: this map has no totality test, so an unlisted command silently
+// never spawns and nothing in the tree ever says the question was asked. The
+// dashboard is `ccdad status` under another name, `status` is above, and the
+// person opening it is doing exactly what the paragraph at the top of this
+// list describes -- looking at an engine that is not running. The
+// counter-argument is real and is written here rather than left in nobody's
+// head: off a terminal `ccdad tui > file` renders once and exits 0, and the
+// hook fires before that render, so a redirected invocation spawns a daemon
+// too. That is the shape `ccdad status > file` already has, and it is accepted
+// for the same reason.
+//
 // Bare `ccdad` is the one entry that is here and is NOT started by the hook.
 // That slot is a dashboard behind a TTY gate and a usage error otherwise, and
 // only the dashboard half wants a daemon: a hook firing before the gate would
@@ -104,6 +116,7 @@ var autoStartCommands = map[string]bool{
 	"ccdad add-token": true,
 	"ccdad list":      true,
 	"ccdad status":    true,
+	"ccdad tui":       true,
 	"ccdad switch":    true,
 	"ccdad which":     true,
 }

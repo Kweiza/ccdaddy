@@ -167,6 +167,7 @@ func TestReadsAndStoreOnlyCommandsStillRunInsideARunSession(t *testing.T) {
 		{"list", []string{"list"}},
 		{"which", []string{"which"}},
 		{"status", []string{"status"}},
+		{"tui", []string{"tui"}},
 		{"doctor", []string{"doctor"}},
 		{"alias", []string{"alias", "acct-1", "one"}},
 		{"disable", []string{"disable", "acct-1"}},

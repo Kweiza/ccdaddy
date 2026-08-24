@@ -226,6 +226,18 @@ var scopedSessionAllowed = map[string]bool{
 	"ccdad doctor": true,
 	"ccdad export": true,
 
+	// The terminal dashboard reads the same three documents `status` does,
+	// through the same function, so its answer is the true one for the shell it
+	// was asked in exactly as `list` and `which` are.
+	//
+	// It is allowed BECAUSE every key that changes something re-enters this
+	// tree through a fresh root and inherits that command's own verdict: a
+	// switch from the dashboard runs `ccdad switch`, which is refused above,
+	// and the dashboard renders the refusal in that command's own words. If
+	// that ever stops being true -- if a key calls an internal directly --
+	// this entry flips to a refusal in the same commit.
+	"ccdad tui": true,
+
 	// run REPLACES the scope in the child it launches: newSession and
 	// newProfile both set the child's variables outright, so a session inside
 	// a session is two independent sessions.
