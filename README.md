@@ -42,6 +42,7 @@ endorsed by, or supported by Anthropic.
 - [How the switch stays safe](#how-the-switch-stays-safe)
 - [Running sessions side by side](#running-sessions-side-by-side)
 - [Configuration](#configuration)
+- [Containers](#containers)
 - [Scripting](#scripting)
 - [What is not here yet](#what-is-not-here-yet)
 - [Building from source](#building-from-source)
@@ -174,13 +175,17 @@ is a usage error rather than a silent hang. Pass the token, or `-`.
 | `ccdad which` | Show which managed account Claude Code is logged in as |
 | `ccdad switch [ACCOUNT]` | Make an account the live login |
 | `ccdad run <ACCOUNT> [args…]` | Start a Claude Code session as an account, without changing the live login |
+| `ccdad probe <ACCOUNT>` | Spend one tiny request so a window with no reading gets a reset time |
 | `ccdad auto` | Run the auto-switch engine, once or continuously |
+| `ccdad hover on\|off\|status` | Hand every threshold and every margin to the engine |
 | `ccdad status` | The engine dashboard: quota used, window, reset, pace — read from disk |
 | `ccdad daemon start\|stop\|restart\|status\|logs` | Drive the background daemon directly |
 | `ccdad config get\|set\|unset\|list\|path` | Read and write `~/.ccdad/config.toml` |
 | `ccdad alias`, `move` | Give an account a handle; reorder the display |
 | `ccdad disable`, `enable` | Hold an account out of automatic rotation, or return it |
+| `ccdad primary <ACCOUNT> on\|off` | Rank a credit-metered seat with the subscriptions, and let it spend unattended |
 | `ccdad export`, `import` | Move the account store between machines |
+| `ccdad bootstrap` | Import an account document named by `CCDAD_IMPORT`; a no-op when it is unset — see [Containers](#containers) |
 | `ccdad remove` | Stop managing an account and delete its stored credentials |
 | `ccdad doctor` | Check the layout ccdad depends on, and the hazards around it |
 | `ccdad setup-path` | Put the directory holding `ccdad` on your `PATH`, durably |
@@ -265,6 +270,152 @@ wrote yourself is never touched; on Windows there are no markers, so
 `HKCU\Software\ccdad` and an entry with no such record is left alone and named.
 That matters for a `go install` or a zip install, where the directory is one you
 put on `PATH` yourself and it holds your other tools.
+
+### `ccdad probe`
+
+An account that has never used a window reports no reset time for it, so it has
+no pace, no projection, and nothing for the engine to rank on. Polling does not
+fix it: the endpoint reports a reset only once something has been spent against
+the window. This spends the smallest thing that counts.
+
+```sh
+ccdad probe work                 # wake this account's five-hour window
+ccdad probe work --model opus    # wake its Opus weekly cap instead
+ccdad probe --all
+```
+
+It runs `claude -p "hi" --max-turns 1` in a throwaway credential home — the same
+scoping `ccdad run` uses, written from the same code — and deletes the session
+afterwards. **The live login is never touched and a session in flight is never
+interrupted.** `--max-turns 1` is what stops a model that reaches for a tool
+from turning one word into a run of turns.
+
+It spends your quota. That is the trade, and it is said on stderr the first time
+an invocation is about to spend it — once per command, not once per account.
+`probe_unknown` defaults to `true` and `hover` forces it back on; see
+[Configuration](#configuration) for turning it off.
+
+`--model` names a model *family* (`opus`, `sonnet`, and so on) and chooses the
+window as well as the model: with it the turn is spent against that family's
+weekly cap, without it against the five-hour window every account has. A name
+carrying no family ccdad knows still wakes the five-hour window, which is the
+only one such a probe could honestly promise.
+
+Four things are refused rather than spent on. An account whose credential is a
+setup token or an API key has no OAuth refresh grant, so no reading could ever
+be taken for it and the quota would go nowhere. A Claude Code old enough to
+predate `CLAUDE_SECURESTORAGE_CONFIG_DIR` is refused for the reason
+[What is not here yet](#what-is-not-here-yet) gives: the child would run as the
+machine's *live* login and spend the wrong account's quota. A window that
+already reports a reset has nothing to wake. And a probe is attempted at most
+once every six hours per account — counting every attempt, not only the
+failures, because a probe that "succeeded" and still left the window without a
+reset is exactly the case a failure-only gate would spin on. `--force` bypasses
+the last two and never the first two. `ccdad probe --all` skips disabled
+accounts, since a reading for one the engine will not switch to buys nothing; a
+disabled account named explicitly is still probed, because that is a human
+asking.
+
+Exit `3` when no account needed one, `1` when every probe attempted failed, and
+`2` with no `claude` on `PATH`. The daemon runs the same probe on its own, and
+there a missing `claude` is a warning once per daemon lifetime and an account
+that keeps no reset time. The daemon also never probes the account a session is
+running on: that is the one probe that duplicates work outright and the one that
+could cut the session off, and `ccdad probe <ACCOUNT>` stays available to a human
+who wants it now. It does not poll straight afterwards either — the probe has
+already spent inference budget and the reading is not there yet, so the poll that
+reads what it woke replaces this tick's poll and lands a minute later.
+
+### `ccdad hover`
+
+```sh
+ccdad hover on
+ccdad hover status
+```
+
+Hover hands the tuning to the engine. It stops reading `threshold`,
+`window_threshold`, `credit.threshold`, `strategy`, `probe_unknown`,
+`preempt_lead`, `hysteresis_pct`, `headroom_ratio`, `cooldown` and
+`recovery_hysteresis` — and `ccdad config list` grows a `HOVER` column marking
+each of them, rather than hiding the row, so a number you tuned and then stopped
+seeing the effect of explains itself:
+
+```console
+$ ccdad config list
+KEY                    VALUE     SOURCE   HOVER
+threshold              80        default  overriding
+hysteresis_pct         10        default  overriding
+headroom_ratio         2         default  overriding
+cooldown               5m0s      default  overriding
+recovery_hysteresis    5m0s      default  overriding
+preempt_lead           2m0s      default  overriding
+strategy               headroom  default  overriding
+probe_unknown          true      default  overriding
+hover                  true      file     honoured
+credit.threshold       80        default  overriding
+credit.max_auto_spend  0         default  honoured
+```
+
+**It does not override `credit.max_auto_spend`, `primary` or `disabled`.** Fully
+automatic must not quietly become fully automatic *spending*: the ceiling is one
+of the two independent opt-ins unattended overage requires, and a mode cannot
+supply an opt-in on your behalf. `primary` and `disabled` are facts about an
+account rather than tuning.
+
+The threshold it picks is a pace target rather than a number. Each window gets
+the share of *itself* that has already elapsed, plus one account's slice of what
+is left, capped at 99:
+
+```text
+threshold = elapsed% of this window + 100 / usable accounts,   at most 99
+```
+
+Four accounts three days into a weekly window gives 68 — 43% elapsed plus 25 —
+so an account running ahead of pace hands the work on while the others are
+behind it. One account left gives 99: there is nobody to hand it to, so spend
+what is there. A five-hour window four hours in is already 80% elapsed, so with
+five accounts or fewer it lands on 99 as well, which is right — it resets within
+the hour anyway. A window with no elapsed share at all has no pace to derive
+from: it falls back to 80 and, if the reason is that nothing has ever been spent
+against it, queues a probe, which is what removes the fallback on the next
+cadence. A primary credit seat has no window and no reset either, so it is held
+to a fixed 95 — credits do not come back at all, and the last few points are the
+ones worth keeping for a session already running.
+
+Hover also sets its own anti-flap margins: `hysteresis_pct = 5`, no
+multiplicative `headroom_ratio`, a two-minute cooldown, a five-minute recovery
+hysteresis, and a pre-emption lead taken from the widest poll gap actually
+observed instead of from the file. The ratio is dropped because it runs on raw
+headroom while the ranking orders on slack, and the two disagree hardest exactly
+where hover operates.
+
+`ccdad hover status` prints, per account and per window, the share elapsed, the
+utilization, the threshold hover computed and the slack between the last two —
+every input to the formula beside its output, so the arithmetic can be checked
+rather than accepted:
+
+```console
+$ ccdad hover status
+Hover:   on
+Pool:    3 usable accounts, so each threshold is the share of its own window that
+         has elapsed, plus 100/3 points, capped at 99.
+
+  IDX  ACCOUNT            WINDOW       ELAPSED  UTIL  THRESHOLD  SLACK
+* 1    work@example.com   five_hour    80%      12%   99%        +87
+* 1    work@example.com   seven_day    43%      52%   76%        +24
+  2    spare@example.com  five_hour    80%      74%   99%        +25
+  2    spare@example.com  seven_day    43%      31%   76%        +45
+  3    seat@example.com   extra_usage  -        61%   95%        +34  (primary, metered in credits)
+```
+
+`*` marks the account Claude Code is logged in as, `-` in ELAPSED is a window
+with no reset to measure a share against, and SLACK is `THRESHOLD − UTIL` — the
+number the ranking actually orders on.
+
+It answers `0` when hover is on and `5` when it is off, printing the table
+either way — so `ccdad hover status >/dev/null || ccdad hover on` is correct,
+and the numbers hover *would* choose are visible to somebody still deciding. An
+omakase mode is only acceptable if you can see what it chose.
 
 ## How the switch stays safe
 
@@ -409,7 +560,8 @@ entry of its own is measured against the top-level `threshold`. Setting one is
 quota without being asked**. A window that has never been used reports no reset
 time, so it has no pace, nothing to rank on, and no way to get one except to
 spend against it — so ccdad runs a single one-turn `claude` request against such
-an account and schedules a poll a minute later. Set it to `false` and the window
+an account and schedules a poll a minute later; [`ccdad probe`](#ccdad-probe) is
+the same thing on request. Set it to `false` and the window
 never gains one: an unused window still reads as nothing spent, so the account
 keeps the most slack in the pool and sits at the FRONT of the ordinary ranking.
 What it has no answer for is pace, the projection, and where it belongs once
@@ -419,7 +571,9 @@ them from each window's own elapsed fraction instead of reading them from this
 file. It takes `strategy` and `probe_unknown` with them, and it forces
 `probe_unknown` back **on**: a window nothing has ever spent against reports no
 elapsed share, so hover has nothing to derive a threshold from until a turn wakes
-it. `credit.max_auto_spend` is the one number hover leaves alone.
+it. `credit.max_auto_spend` is the one number hover leaves alone, and
+[`ccdad hover`](#ccdad-hover) is the command that turns it on and shows every
+number it chose.
 
 Keys this version does not recognise are left alone rather than deleted, so a
 file written by a newer release survives an older one. Trying to *set* an
@@ -728,6 +882,105 @@ account simply keeps changing back. ccdad refuses the second engine and
 `ccdad doctor` names the state, but the fix is to give each store its own
 `CLAUDE_CONFIG_DIR`.
 
+## Containers
+
+There is no published image. The `Dockerfile` at the root of this repository is a
+reference: build it from a binary you built.
+
+```sh
+CGO_ENABLED=0 GOOS=linux go build -o ccdad ./cmd/ccdad
+docker build -t ccdaddy .
+```
+
+It carries node, `@anthropic-ai/claude-code` and `ccdad`, so a session runs
+inside it with no further setup.
+
+### `add-token` is not enough
+
+Worth knowing before you build a provisioning script around it. A `sk-ant-oat…`
+setup token and an `sk-ant-api…` key are both stored **without** a
+`claudeAiOauth` record — there is no refresh grant behind either — so the daemon
+skips the account on every poll and nothing ever produces a reading to rank it
+on. Such an account is stored, and it is usable as a credential, and it can
+**never be ranked**. A container provisioned that way has no auto-switching at
+all, which is the entire product, and nothing in `ccdad list` says so.
+
+What carries a rankable account is `ccdad export --full`. `ccdad bootstrap`
+reads one from `CCDAD_IMPORT` — a path, or `-` for stdin — and the entrypoint
+runs it before it starts the engine.
+
+### That document holds refresh tokens
+
+**Never put it in an environment variable inline.** `-e CCDAD_IMPORT="$(cat
+backup.json)"` is visible in `docker inspect`, and in `/proc/<pid>/environ` to
+anything else in the namespace. Mount it read-only and point the variable at the
+path:
+
+```sh
+ccdad export --full --out backup.json
+docker run -d --name ccdad \
+  -v ccdad-data:/data \
+  -v "$PWD/backup.json:/run/secrets/ccdad-export:ro" \
+  -e CCDAD_IMPORT=/run/secrets/ccdad-export \
+  ccdaddy ccdad daemon logs --follow
+```
+
+or pipe it through `-`, and the container never has it on disk at all:
+
+```sh
+ccdad export --full | docker run -i --rm \
+  -v ccdad-data:/data -e CCDAD_IMPORT=- ccdaddy ccdad list
+```
+
+`ccdad bootstrap` is idempotent, so running it on every start is the intended
+use: an account already there at that uuid is updated, one that is not is added,
+and an account's age is not moved by a re-run. A credential refreshed inside the
+container is **not** overwritten by the older one in the document — pass
+`--force` if that is what you want. It exits `0` when there was nothing to do and
+when `CCDAD_IMPORT` is not set at all, and it prints nothing out of the document,
+including when it refuses one: run `ccdad import` against the file from a shell
+to find out what is wrong with it.
+
+### `/data` must be a volume
+
+Without one, every restart loses the account store, the usage cache and the
+anti-flap state, and re-imports from the secret. The cache is the expensive half:
+the usage endpoint allows roughly 28-30 requests per identity per rolling hour,
+so a container that starts cold spends that budget again from zero.
+
+### Both path variables are set, on purpose
+
+`CCDAD_HOME` and `CLAUDE_CONFIG_DIR` are independent axes — see
+[Environment](#environment) — and the image sets both. Setting only the first
+would move ccdad's store onto the volume and leave the Claude Code login inside
+the image layer, so two containers sharing one volume would run two engines over
+one login and undo each other's switches.
+
+### What the entrypoint does
+
+```sh
+ccdad bootstrap                 # a no-op unless CCDAD_IMPORT is set
+ccdad daemon start || {         # 3 means one is already running
+	status=$?
+	[ "$status" -eq 3 ] || exit "$status"
+}
+exec "$@"
+```
+
+Exit `3` is tolerated by number rather than with `|| true`, and the status is
+captured and re-raised rather than written as the shorter
+`ccdad daemon start || [ "$?" -eq 3 ]`: under `set -e` that form exits with the
+status of the failed `[`, which is `1`, so a `4` — another store's engine is
+already driving this login — would reach a restart policy as an ordinary crash.
+`1` and `4` both mean the container would come up with no engine behind it, and
+neither is tolerated.
+
+The command is `exec`'d, so the container's exit status is its own. Do not make
+that command `ccdad auto`: the daemon already holds the engine singleton, and
+the continuous form of `auto` answers `3` when it does. `sh` is the default, and
+`ccdad daemon logs --follow` is the long-running command to give it when you
+want the container to stay up on its own.
+
 ## Scripting
 
 ### Exit codes
@@ -744,15 +997,16 @@ nothing failed and `1` when something did — a warning is not a failure — and
 | `2` | **Usage errors, and `ccdad run`'s refusals** — a bad flag, a bad combination, an unknown account, or a session `ccdad run` will not start because it would authenticate as something other than the account you named. `ccdad auto` and `ccdad switch` report that same displaced credential as `4`, because for them it is a blocked action rather than a command that cannot be run |
 | `3` | Understood, nothing to do (already on that account; daemon already stopped) |
 | `4` | Blocked: wanted to act, no viable target (everything exhausted, credit gate refused, or another OAuth source outranks the credentials file) |
-| `5` | A negative answer to a probe (no daemon running; nothing attributable) |
+| `5` | A negative answer to a question, not a failure to answer it — no daemon running, nothing attributable, hover off when `ccdad hover status` asked. It has nothing to do with the `ccdad probe` command, which reports under the codes above like any other action |
 | `130` | SIGINT |
 
 `3` versus `4` is the actionability line — **alert on `4`, ignore `3`** — and
 `2` is kept exclusively for usage errors so a cron job can tell a typo from a
 no-op. `5` exists so `ccdad daemon status; [ $? -eq 5 ] && ccdad daemon start`
-is safe: "no daemon" and "cannot determine whether there is a daemon" are
-different answers, and a supervisor that conflates them respawns forever on a
-filesystem where locks do not work.
+and `ccdad hover status >/dev/null || ccdad hover on` are both safe: "no
+daemon" and "cannot determine whether there is a daemon" are different
+answers, and a supervisor that conflates them respawns forever on a filesystem
+where locks do not work.
 
 A closed pipe is not an error: `ccdad list --json | head -1` exits `0`.
 
