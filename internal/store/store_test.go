@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pelletier/go-toml/v2"
 
@@ -1129,6 +1130,80 @@ func TestOrphanCredentialsAtCreatesNothing(t *testing.T) {
 	}
 	if _, err := os.Stat(root); !os.IsNotExist(err) {
 		t.Errorf("OrphanCredentialsAt created the store directory it was asked to read: %v", err)
+	}
+}
+
+// mutate's own ordering — Add writes a credential file before the document
+// names it, and re-reads the document inside the lock precisely because a
+// write can land in between — is the same window a lockless read tears: the
+// listing sees u-1's file, the document has not been re-read to see u-1's
+// account yet, and a probe caught in that instant used to call the file an
+// orphan. Held under the same lock a write takes, the instant cannot be
+// observed: OrphanCredentialsAt waits for the transaction to either commit
+// (asserted here) or reverse, and answers from whichever the lock's release
+// actually left.
+func TestOrphanCredentialsAtWaitsOutAnInFlightAddRatherThanTearingItsRead(t *testing.T) {
+	root := withStore(t)
+	s, err := Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add(Account{UUID: "u-0", Email: "a@example.com"}, sampleCreds("AT-u-0")); err != nil {
+		t.Fatal(err)
+	}
+
+	// The exact moment mutate can leave an Add in: u-1's credential file is on
+	// disk and the document does not name u-1 yet. The lock stands in for the
+	// span mutate would hold across writing both.
+	if err := os.WriteFile(filepath.Join(CredentialsDirAt(root), "u-1.json"),
+		[]byte(`{"claudeAiOauth":{"accessToken":"AT-u-1"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	release, err := acquireLock(filepath.Join(root, lockFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type result struct {
+		orphans []string
+		err     error
+	}
+	done := make(chan result, 1)
+	go func() {
+		orphans, err := OrphanCredentialsAt(root)
+		done <- result{orphans, err}
+	}()
+
+	// A real chance to reach acquireLock and block on it, so a race where the
+	// goroutine reads before the lock is even taken cannot pass by luck.
+	time.Sleep(20 * time.Millisecond)
+
+	// The commit: the document now names u-1, exactly as Add's own save would
+	// leave it, and only then is the lock released.
+	doc := file{Version: 1, Accounts: []Account{
+		{UUID: "u-0", Email: "a@example.com"},
+		{UUID: "u-1", Email: "b@example.com"},
+	}}
+	encoded, err := toml.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(AccountsFileAt(root), encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	release()
+
+	select {
+	case r := <-done:
+		if r.err != nil {
+			t.Fatalf("OrphanCredentialsAt: %v", r.err)
+		}
+		if len(r.orphans) != 0 {
+			t.Errorf("orphans = %v, want none — u-1's credential file was read as an orphan mid-transaction, "+
+				"before the document that names it was committed", r.orphans)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("OrphanCredentialsAt never returned after the lock was released — it did not wait for it at all")
 	}
 }
 
