@@ -9,13 +9,17 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// readToolNames is the class this file is about: the five verbs that answer a
+// question and change nothing ccdad owns.
+var readToolNames = []string{"list", "status", "which", "doctor", "config_get"}
+
 // tools/list is the contract a client sees before it calls anything. The five
 // reads have to be there, described, and shaped so that an invented argument is
 // refused rather than ignored.
 func TestToolsListOffersTheFiveReadsWithTheirSchemas(t *testing.T) {
 	tools := offeredTools(t)
 
-	for _, name := range []string{"list", "status", "which", "doctor", "config_get"} {
+	for _, name := range readToolNames {
 		tool, ok := tools[name]
 		if !ok {
 			t.Errorf("tools/list does not offer %q", name)
@@ -32,6 +36,15 @@ func TestToolsListOffersTheFiveReadsWithTheirSchemas(t *testing.T) {
 		// ignored, which is the difference between a typo and a wrong answer.
 		if s.AdditionalProperties == nil || !bytesAreFalse(s.AdditionalProperties) {
 			t.Errorf("%q accepts additional properties; an invented argument would be ignored instead of refused", name)
+		}
+	}
+
+	// The three that take nothing declare NO properties, not merely nothing
+	// required: an optional argument would be accepted, ignored by a handler
+	// that never reads it, and offered to the model as one it may pass.
+	for _, name := range []string{"status", "which", "doctor"} {
+		if s := schemaOf(t, tools[name]); len(s.Properties) != 0 {
+			t.Errorf("%q declares %v; it takes no arguments", name, propertyNames(s))
 		}
 	}
 
@@ -54,20 +67,20 @@ func TestToolsListOffersTheFiveReadsWithTheirSchemas(t *testing.T) {
 // looking for the two keys is the only way to see it -- a nil pointer is
 // omitted from the wire entirely, and what the client then reads is the
 // protocol's default rather than the author's intent.
+//
+// The five reads by NAME rather than every tool this server offers. The three
+// other classes answer these same two keys differently and truthfully, and each
+// asserts its own; a loop over all of them here would have to be widened into
+// agreeing with whatever the newest class happens to declare.
 func TestEveryReadToolDeclaresBothPointerAnnotationsExplicitly(t *testing.T) {
-	for name, tool := range offeredTools(t) {
-		if tool.Annotations == nil {
+	tools := offeredTools(t)
+	for _, name := range readToolNames {
+		tool := tools[name]
+		if tool == nil || tool.Annotations == nil {
 			t.Errorf("%q carries no annotations at all, so every hint on it defaults", name)
 			continue
 		}
-		raw, err := json.Marshal(tool.Annotations)
-		if err != nil {
-			t.Fatalf("marshalling %q annotations: %v", name, err)
-		}
-		var wire map[string]json.RawMessage
-		if err := json.Unmarshal(raw, &wire); err != nil {
-			t.Fatalf("reading %q annotations back: %v", name, err)
-		}
+		wire := annotationsOnTheWire(t, name, tool)
 		for _, key := range []string{"destructiveHint", "openWorldHint"} {
 			got, ok := wire[key]
 			if !ok {
@@ -82,6 +95,23 @@ func TestEveryReadToolDeclaresBothPointerAnnotationsExplicitly(t *testing.T) {
 			t.Errorf("%q is not marked read-only", name)
 		}
 	}
+}
+
+// annotationsOnTheWire is one tool's annotations as the CLIENT receives them,
+// which is the only place a nil pointer is distinguishable from an explicit
+// false: nil is omitted from the JSON entirely, and what the client reads for
+// an omitted hint is the protocol's default of true.
+func annotationsOnTheWire(t *testing.T, name string, tool *mcp.Tool) map[string]json.RawMessage {
+	t.Helper()
+	raw, err := json.Marshal(tool.Annotations)
+	if err != nil {
+		t.Fatalf("marshalling %q annotations: %v", name, err)
+	}
+	var wire map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		t.Fatalf("reading %q annotations back: %v", name, err)
+	}
+	return wire
 }
 
 // The whole reason the protocol library was taken rather than hand-rolled: a
@@ -222,6 +252,17 @@ func schemaOf(t *testing.T, tool *mcp.Tool) wireSchema {
 }
 
 func bytesAreFalse(raw json.RawMessage) bool { return string(raw) == "false" }
+
+// propertyNames is for the failure message when a property nobody meant to
+// declare turns up in a schema.
+func propertyNames(s wireSchema) []string {
+	names := make([]string, 0, len(s.Properties))
+	for name := range s.Properties {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return names
+}
 
 // callTool calls one tool on a fully composed server -- tools, gate and all --
 // over the real wire, and refuses to let a protocol error pass as a result.
