@@ -104,15 +104,33 @@ func runStatus(cmd *cobra.Command, asJSON bool) error {
 		engine[a.UUID] = a
 	}
 
-	rows := quotaRows(accounts, cache, active, hasActive, now, rowThresholds(cmd, s, now))
+	// ONE evaluation, and both answers come out of it. The dashboard used to ask
+	// the engine only when hover was on; naming the mode is a second question it
+	// cannot answer from the cache, so the pass now always runs — and running it
+	// twice, once for the thresholds and once for the mode, is how `status` would
+	// acquire a second source for a number it already had.
+	cfg := rowConfig(cmd)
+	plan, decided, planErr := enginePlan(s, now)
+	if planErr != nil {
+		// Said out loud: the Mode line simply disappears otherwise, which reads
+		// as "the engine has nothing to say" rather than "it could not be asked".
+		fmt.Fprintf(cmd.ErrOrStderr(), "The engine could not be asked which mode it is ranking in: %v\n", planErr)
+	}
+	var mode strategy.Mode
+	hasMode := false
+	if decided {
+		mode, hasMode = plan.Result.Mode, true
+	}
+
+	rows := quotaRows(accounts, cache, active, hasActive, now, thresholdsFrom(cmd, cfg, now, plan, planErr))
 	for i := range rows {
 		rows[i].Engine = engine[rows[i].Account.UUID]
 	}
 
 	if asJSON {
-		return writeJSON(cmd, statusPayload(report, probeErr, rows, active, hasActive, now))
+		return writeJSON(cmd, statusPayload(report, probeErr, rows, active, hasActive, mode, hasMode, now))
 	}
-	return renderStatus(cmd, report, rows, now)
+	return renderStatus(cmd, report, rows, mode, hasMode, now)
 }
 
 // quotaRows pairs every account with its cached reading.
@@ -145,12 +163,38 @@ func quotaRows(accounts []store.Account, cache *usage.Cache, active store.Accoun
 //
 // It is a package var because a test that wants a particular plan should not
 // have to arrange a store, a cache and an on-disk cooldown to get one.
-var enginePlan = func(s *store.Store, now time.Time) (strategy.Plan, error) {
+//
+// The second return is switcher.Evaluation.Decided, and dropping it was a trap:
+// a zero Plan does not stringify to nothing, it stringifies to plausible values.
+// Mode(0) is "headroom", so a caller that read Mode off a pass that never ran
+// would print a real answer nobody computed. Every caller here needs the bit,
+// which is why it rides with the plan rather than being asked for separately.
+var enginePlan = func(s *store.Store, now time.Time) (strategy.Plan, bool, error) {
 	ev, err := switcher.Evaluate(s, switcher.EvalOptions{Now: now})
 	if err != nil {
-		return strategy.Plan{}, err
+		return strategy.Plan{}, false, err
 	}
-	return ev.Plan, nil
+	return ev.Plan, ev.Decided, nil
+}
+
+// modeLine is the ranking mode with the question it is asking. Recovery is the
+// one a user needs told: the columns are identical to the ordinary case, so
+// nothing else on the dashboard distinguishes "the engine is ranking by soonest
+// reset because everything is spent" from "the engine has nothing to do".
+//
+// The label column is nine characters wide, matching the Daemon: and Active:
+// lines above it. No branch may contain the substring "exhaust": the human table
+// keeps the projection to --json, and TestTheProjectionIsJSONOnly fails on that
+// word appearing anywhere in stdout.
+func modeLine(m strategy.Mode) string {
+	switch m {
+	case strategy.ModeRecovery:
+		return "Mode:    recovery  (every account is over its threshold; ranking by soonest reset inside an hour, by headroom past it)"
+	case strategy.ModeConsumeFirst:
+		return "Mode:    consume-first  (spending perishable weekly quota before it expires)"
+	default:
+		return "Mode:    headroom  (at least one account has room, or could not be read)"
+	}
 }
 
 // rowThresholds is what `status` and `list` measure their rows against: one
@@ -176,21 +220,45 @@ var enginePlan = func(s *store.Store, now time.Time) (strategy.Plan, error) {
 // An engine that cannot be asked is the same kind of notice, and it falls back
 // to the configured bundle because that is the last table anyone can name.
 func rowThresholds(cmd *cobra.Command, s *store.Store, now time.Time) func(uuid string) strategy.Thresholds {
+	cfg := rowConfig(cmd)
+	if !cfg.RankOptions(now).Hover {
+		// `list` asks the engine only when hover is on, because with hover off
+		// the configured bundle answers every row and an evaluation would be a
+		// ranking pass nothing reads. `status` is the one that always asks, and
+		// it has a second question to put.
+		return thresholdsFrom(cmd, cfg, now, strategy.Plan{}, nil)
+	}
+	plan, _, err := enginePlan(s, now)
+	return thresholdsFrom(cmd, cfg, now, plan, err)
+}
+
+// rowConfig is the config the rows are measured against, with the one notice a
+// config that cannot be used earns. A dashboard that refused to render because a
+// threshold was mistyped is a worse answer than one rendered against the
+// documented defaults, which is the same call `ccdad auto` makes.
+func rowConfig(cmd *cobra.Command) config.Config {
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "note: %v; the rows are measured against the built-in thresholds\n", err)
-		cfg = config.Defaults()
+		return config.Defaults()
 	}
+	return cfg
+}
+
+// thresholdsFrom is rowThresholds without the fetch, so a caller that has
+// already asked the engine does not ask it twice. The plan is read only when
+// hover is on; with hover off it is ignored entirely, including its error.
+func thresholdsFrom(cmd *cobra.Command, cfg config.Config, now time.Time,
+	plan strategy.Plan, planErr error) func(uuid string) strategy.Thresholds {
+
 	o := cfg.RankOptions(now)
 	configured := func(string) strategy.Thresholds { return o.Thresholds() }
 	if !o.Hover {
 		return configured
 	}
-
-	plan, err := enginePlan(s, now)
-	if err != nil {
+	if planErr != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(),
-			"note: hover is on, but the thresholds it derived could not be read (%v); the rows are measured against the configured ones\n", err)
+			"note: hover is on, but the thresholds it derived could not be read (%v); the rows are measured against the configured ones\n", planErr)
 		return configured
 	}
 	if plan.Hover == nil {
@@ -224,8 +292,10 @@ type statusRow struct {
 // days: an account whose five-hour window rolls over in eight minutes is still
 // unusable until Friday, and naming the five-hour window would tell the user to
 // wait eight minutes for it. Ordering still runs on Headroom.Slack, which is the
-// tightest window whichever family it belongs to; this rule moves no account in
-// the ranking.
+// tightest window whichever family it belongs to, so this rule moves no account
+// in the ordinary order. It is not inert in RECOVERY order: what an account has
+// to wait out is the weekly floor, so the same field decides whether it counts
+// as returning inside the horizon.
 func (r statusRow) reportedName() usage.WindowName {
 	if r.Headroom.HasFloor {
 		return r.Headroom.Floor
@@ -259,7 +329,8 @@ func (r statusRow) reported() (usage.NamedWindow, bool) {
 	return usage.NamedWindow{}, false
 }
 
-func renderStatus(cmd *cobra.Command, report daemon.Report, rows []statusRow, now time.Time) error {
+func renderStatus(cmd *cobra.Command, report daemon.Report, rows []statusRow,
+	mode strategy.Mode, hasMode bool, now time.Time) error {
 	out := cmd.OutOrStdout()
 
 	switch report.State {
@@ -289,7 +360,11 @@ func renderStatus(cmd *cobra.Command, report daemon.Report, rows []statusRow, no
 			activeLabel = r.Account.Label()
 		}
 	}
-	fmt.Fprintf(out, "Active:  %s\n\n", activeLabel)
+	fmt.Fprintf(out, "Active:  %s\n", activeLabel)
+	if hasMode {
+		fmt.Fprintln(out, modeLine(mode))
+	}
+	fmt.Fprintln(out)
 
 	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "  IDX\tACCOUNT\tTYPE\tUSED\tWINDOW\tRESETS IN\tPACE\tAGE")
@@ -390,7 +465,9 @@ func (r statusRow) paceLabel() string {
 	return "on pace"
 }
 
-func statusPayload(report daemon.Report, probeErr error, rows []statusRow, active store.Account, hasActive bool, now time.Time) map[string]any {
+func statusPayload(report daemon.Report, probeErr error, rows []statusRow,
+	active store.Account, hasActive bool, mode strategy.Mode, hasMode bool,
+	now time.Time) map[string]any {
 	// The daemon half is daemonJSON's, and `ccdad daemon status --json` nests
 	// the same object under the same key: two commands describing one daemon
 	// must not describe it two ways.
@@ -416,6 +493,13 @@ func statusPayload(report daemon.Report, probeErr error, rows []statusRow, activ
 	}
 	if hasActive {
 		payload["activeUuid"] = active.UUID
+	}
+	// Conditional, like every other key here that stands for a reading: absent
+	// means no ranking ran, and a consumer that saw "headroom" could not tell that
+	// from an engine with room to spare. auto.go publishes the same key behind the
+	// same guard.
+	if hasMode {
+		payload["mode"] = mode.String()
 	}
 	return payload
 }
