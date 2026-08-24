@@ -12,6 +12,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
+	"github.com/Kweiza/ccdaddy/internal/switcher"
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
 
@@ -103,7 +104,7 @@ func runStatus(cmd *cobra.Command, asJSON bool) error {
 		engine[a.UUID] = a
 	}
 
-	rows := quotaRows(accounts, cache, active, hasActive, now, rowThresholds(cmd, now))
+	rows := quotaRows(accounts, cache, active, hasActive, now, rowThresholds(cmd, s, now))
 	for i := range rows {
 		rows[i].Engine = engine[rows[i].Account.UUID]
 	}
@@ -124,14 +125,14 @@ func runStatus(cmd *cobra.Command, asJSON bool) error {
 // Engine state is deliberately NOT filled in here. It comes from status.json,
 // which is the daemon's own document and no part of what `list` reports.
 func quotaRows(accounts []store.Account, cache *usage.Cache, active store.Account,
-	hasActive bool, now time.Time, thresholds strategy.Thresholds) []statusRow {
+	hasActive bool, now time.Time, thresholds func(uuid string) strategy.Thresholds) []statusRow {
 
 	rows := make([]statusRow, 0, len(accounts))
 	for _, a := range accounts {
 		row := statusRow{Account: a, Active: hasActive && a.UUID == active.UUID}
 		if entry, ok := cache.Get(a.UUID); ok && entry.Snapshot != nil {
 			row.Entry, row.HasEntry = entry, true
-			row.Headroom = strategy.HeadroomOf(entry.Snapshot, thresholds)
+			row.Headroom = strategy.HeadroomOf(entry.Snapshot, thresholds(a.UUID))
 			row.Pace = entry.Snapshot.Pace(now)
 		}
 		rows = append(rows, row)
@@ -139,23 +140,69 @@ func quotaRows(accounts []store.Account, cache *usage.Cache, active store.Accoun
 	return rows
 }
 
-// rowThresholds is what `status` and `list` measure their rows against.
+// enginePlan is the decision the engine would make right now, asked for rather
+// than reconstructed.
+//
+// It is a package var because a test that wants a particular plan should not
+// have to arrange a store, a cache and an on-disk cooldown to get one.
+var enginePlan = func(s *store.Store, now time.Time) (strategy.Plan, error) {
+	ev, err := switcher.Evaluate(s, switcher.EvalOptions{Now: now})
+	if err != nil {
+		return strategy.Plan{}, err
+	}
+	return ev.Plan, nil
+}
+
+// rowThresholds is what `status` and `list` measure their rows against: one
+// bundle per account, because under hover there is no single one.
 //
 // It goes through RankOptions rather than reading the threshold keys itself, so
 // the number a row is reported against is the number the engine ranked on. Two
 // constructions of the same bundle would agree until the day one of them was
 // changed.
 //
+// Under hover that rule is what forces the whole engine to be asked. Hover
+// derives a threshold per account from how far through its own window each one
+// is AND from how many accounts are left to share the remainder with, and that
+// pool is not the account list this command renders: it excludes an account
+// whose credentials cannot be installed and one that is quarantined, neither of
+// which is visible from here. A table built locally would divide the quota by a
+// different count and print numbers wrong in a new way rather than in the old
+// one, so the plan the engine actually made is what supplies them.
+//
 // A config that cannot be used is a notice and not a failure: refusing to render
 // a dashboard because a threshold was mistyped is a worse answer than rendering
 // it against the documented defaults, which is the same call `ccdad auto` makes.
-func rowThresholds(cmd *cobra.Command, now time.Time) strategy.Thresholds {
+// An engine that cannot be asked is the same kind of notice, and it falls back
+// to the configured bundle because that is the last table anyone can name.
+func rowThresholds(cmd *cobra.Command, s *store.Store, now time.Time) func(uuid string) strategy.Thresholds {
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "note: %v; the rows are measured against the built-in thresholds\n", err)
 		cfg = config.Defaults()
 	}
-	return cfg.RankOptions(now).Thresholds()
+	o := cfg.RankOptions(now)
+	configured := func(string) strategy.Thresholds { return o.Thresholds() }
+	if !o.Hover {
+		return configured
+	}
+
+	plan, err := enginePlan(s, now)
+	if err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(),
+			"note: hover is on, but the thresholds it derived could not be read (%v); the rows are measured against the configured ones\n", err)
+		return configured
+	}
+	if plan.Hover == nil {
+		// Hover is on and the engine made no pass, which is what "nothing has
+		// ever been polled" looks like from here: there was no pool to divide.
+		// Every row is then unread and none of them reaches a threshold at all,
+		// so what this answers is only what hover answers for an account it has
+		// never seen.
+		var none strategy.HoverPlan
+		return none.For
+	}
+	return plan.Hover.For
 }
 
 // statusRow is one account with everything the dashboard knows about it, from
