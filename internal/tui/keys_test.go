@@ -1,0 +1,85 @@
+package tui
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/charmbracelet/x/ansi"
+)
+
+// help.SetWidth is not a bound. shouldAddItem returns "add it anyway" when the
+// item overflows AND the ellipsis also does not fit, and the loop then keeps
+// adding every remaining binding. Measured on this 53-wide keybar: SetWidth(30)
+// gave 28, SetWidth(37) gave 53 and SetWidth(45) gave 53. Truncation is
+// non-monotone and it overflows, so the two widths that were measured to fail
+// are the two this test names.
+func TestTheKeybarNeverExceedsTheWidthItWasGiven(t *testing.T) {
+	h, k := newHelp(), DefaultKeys()
+	for _, w := range []int{20, 30, 37, 45, 53, 80, 113} {
+		got := keybar(h, k, w)
+		if n := ansi.StringWidth(got); n > w {
+			t.Errorf("keybar at width %d is %d columns wide: %q", w, n, got)
+		}
+	}
+}
+
+// help truncates from the RIGHT, so the last binding is the first casualty.
+// Quit must never be it: a user stranded in a full-screen program with no
+// advertised way out is a worse failure than a missing list toggle, and the
+// table already is the list.
+func TestQuitOutlivesListInTheKeybar(t *testing.T) {
+	order := DefaultKeys().ShortHelp()
+	iq, il := -1, -1
+	for i, b := range order {
+		switch b.Help().Key {
+		case "q":
+			iq = i
+		case "l":
+			il = i
+		}
+	}
+	if iq < 0 || il < 0 {
+		t.Fatal("the keybar does not offer both q and l")
+	}
+	if iq > il {
+		t.Fatalf("q is at %d and l at %d: help drops from the right, so this strands the user", iq, il)
+	}
+}
+
+// TestQuitOutlivesListInTheKeybar checks ShortHelp's ORDER; this checks the
+// actual RENDERED bar, because the order alone does not say at which widths q
+// really survives -- that depends on how many columns the bindings ahead of
+// it cost too. Measured directly against keybar()'s output: q is entirely
+// absent below width 45 (at 37, for instance, the bar cuts off inside "c
+// strategy" and never reaches q at all) and present at 45 and every width
+// from there up to the full 53. Below 45, every truncated rendering must end
+// in the ".." tail -- the visual cue that something was cut, which an empty
+// tail silently omitted at exactly the widths this task exists to fix.
+func TestTheKeybarShowsQAsSoonAsItFitsAndFlagsWhenItCuts(t *testing.T) {
+	h, k := newHelp(), DefaultKeys()
+	for _, w := range []int{45, 53, 80, 113} {
+		got := keybar(h, k, w)
+		if !strings.Contains(got, "q ") {
+			t.Errorf("keybar at width %d does not show q: %q", w, got)
+		}
+	}
+	for _, w := range []int{20, 30, 37} {
+		got := keybar(h, k, w)
+		if !strings.HasSuffix(got, "..") {
+			t.Errorf("keybar at width %d was cut but does not end in the ellipsis tail: %q", w, got)
+		}
+	}
+}
+
+// help's own separator is U+2022 and its ellipsis is U+2026. This binary emits
+// no non-ASCII byte, and a terminal on a code page that lacks either renders a
+// replacement glyph in the middle of the one line telling a user how to leave.
+func TestTheKeybarIsSevenBitAscii(t *testing.T) {
+	for _, w := range []int{37, 53, 113} {
+		for _, r := range keybar(newHelp(), DefaultKeys(), w) {
+			if r > 127 {
+				t.Fatalf("keybar at width %d carries %q (U+%04X)", w, r, r)
+			}
+		}
+	}
+}
