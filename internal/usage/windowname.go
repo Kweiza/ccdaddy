@@ -1,6 +1,7 @@
 package usage
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -91,21 +92,37 @@ func RateLimitWindowNames() []WindowName {
 	return out
 }
 
+// ErrUnknownScope marks the one refusal that is an OPT-IN rather than a
+// rejection: a well-formed scoped name filed under a scope key this build does
+// not name.
+//
+// It is a refusal because no reading this build takes produces that window, so
+// ValidWindowName cannot answer nil and let a caller believe the name is live.
+// It is distinguishable because a caller that OFFERS the opt-in still has to
+// refuse an outright misspelling, and the two arrive here looking identical:
+// nothing without a reading in hand can tell weekly_scoped:region:eu from
+// weekly_scoped:modle:Fable. A caller that offers the opt-in says so; a caller
+// that does not treats this as any other refusal.
+//
+// The opt-in itself is a window_threshold entry naming the window. The config
+// loader carries such an entry whatever its name is, so the opt-in works from a
+// hand-written file today; this error is the shape a prompt needs to offer it.
+var ErrUnknownScope = errors.New("the window is scoped to a key this build does not name")
+
 // ValidWindowName reports why n is not a window a threshold may be set on, and
 // nil when it is one.
 //
 // It returns an error rather than a bool because every caller has a user to
-// tell, and the refusals are three different sentences. Two of them are not
-// "that is not a window name": cinder_cove's name is perfectly real, so saying
-// that would be a lie, and a bare scoped prefix is a name whose SHAPE is right
-// and whose display half is missing. A misspelling and a scope no reading can
-// carry do share the third sentence, because the guidance back is the same one:
-// here is the set of names that exist.
+// tell, and the refusals are four different sentences. Only one of them is "that
+// is not a window name". cinder_cove's name is perfectly real and only its
+// rollover is not, so saying that would be a lie. A scoped name with no display
+// half has the right SHAPE and nothing to attribute. And a scoped name under a
+// key this build does not know is the one that wraps ErrUnknownScope, because
+// the answer a caller wants there is "not yet" rather than "no".
 //
 // It is deliberately narrower than WindowName.Scoped(), which tests only the
-// weekly_scoped: prefix and therefore answers true for weekly_scoped:region:eu.
-// ScopedWindows can never build that name, so a threshold under it would be a
-// setting nothing ever reads.
+// weekly_scoped: prefix and therefore answers true for weekly_scoped: and
+// weekly_scoped:region:. Neither is a name any reading can produce.
 func ValidWindowName(n WindowName) error {
 	for _, known := range rateLimitWindowNames {
 		if n == known {
@@ -117,19 +134,35 @@ func ValidWindowName(n WindowName) error {
 	if n == WindowCinderCove {
 		return fmt.Errorf("%q is a one-time credit grant whose resets_at is an expiry rather than a rollover, so it is never ranked and a threshold on it would never be read", n)
 	}
-	for _, sc := range scopedWindowScopes {
-		prefix := scopedPrefix(sc.Name)
-		if !strings.HasPrefix(string(n), prefix) {
-			continue
-		}
-		// An entry naming no scope is dropped by ScopedWindows — an
-		// unattributable cap is not a window — so a bare prefix names one that
-		// can never exist.
-		if len(n) == len(prefix) {
-			return fmt.Errorf("%q names no scope: %s must be followed by the display name the cap is scoped to", n, prefix)
-		}
-		return nil
+	// The scoped shape is parsed once and generically rather than tried against
+	// each known prefix in turn, because a name under an UNKNOWN scope has to
+	// reach a sentence of its own — and a loop over the known scopes can only
+	// ever fall through to the sentence for a name that has no shape at all.
+	rest, scoped := strings.CutPrefix(string(n), weeklyScopedKind+":")
+	if !scoped {
+		return unknownWindowName(n)
 	}
+	scope, display, split := strings.Cut(rest, ":")
+	if !split || scope == "" {
+		return unknownWindowName(n)
+	}
+	if display == "" {
+		// ScopedWindows drops an entry it cannot attribute, so a name with
+		// nothing after the scope names a window that can never exist.
+		return fmt.Errorf("%q names no display name: %s must be followed by the display name the cap is scoped to", n, scopedPrefix(scope))
+	}
+	for _, sc := range scopedWindowScopes {
+		if scope == sc.Name {
+			return nil
+		}
+	}
+	return fmt.Errorf("%q is filed under the scope %q, which this build names no window under: it ranks only once a reading actually carries that scope, and until one does a threshold on it applies to nothing: %w", n, scope, ErrUnknownScope)
+}
+
+// unknownWindowName is the sentence for a name with no shape this package can
+// place. It lists what does exist, because rejecting a name without offering one
+// leaves the user nowhere to go.
+func unknownWindowName(n WindowName) error {
 	return fmt.Errorf("%q is not a window name: it must be one of %s, or a scoped weekly name beginning %s",
 		n, fixedWindowNameList(), scopedPrefixList())
 }
