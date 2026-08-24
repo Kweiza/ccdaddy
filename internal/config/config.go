@@ -157,6 +157,11 @@ func (c Config) StrategyConfig() strategy.Config {
 //
 // WindowThreshold is handed over rather than copied, for the reason Thresholds
 // gives: the ranking only reads it and nothing mutates it after Parse.
+//
+// Hover is carried through rather than resolved here. The mode's effect depends
+// on the POOL -- how many accounts have a reading, and how far through its own
+// window each one is -- and this package has neither. All that travels is the
+// bit; the engine derives everything from it.
 func (c Config) RankOptions(now time.Time) strategy.Options {
 	return strategy.Options{
 		Now:             now,
@@ -165,6 +170,7 @@ func (c Config) RankOptions(now time.Time) strategy.Options {
 		CreditThreshold: c.CreditThreshold,
 		PreemptLead:     c.PreemptLead,
 		Strategy:        c.Strategy,
+		Hover:           c.Hover,
 	}
 }
 
@@ -374,8 +380,11 @@ func (r *Reloader) Reload() (Config, error) {
 		r.parseErr = err
 		return r.current, err
 	}
-	r.current, r.parseErr = cfg, nil
-	return cfg, nil
+	// Effective, not the parsed value. Hover forces probe_unknown on, and the
+	// daemon reads its whole configuration through this call, so this is the one
+	// place that override has to be applied for the probe path to see it.
+	r.current, r.parseErr = cfg.Effective(), nil
+	return r.current, nil
 }
 
 // readConfig reads the raw document, refusing a relative store root.
