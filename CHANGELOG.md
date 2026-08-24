@@ -16,6 +16,28 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`ccdad list`'s LEFT column no longer reads `?` for every credit-metered
+  account.** Headroom is computed from the five subscription windows alone,
+  and an enterprise or pay-as-you-go seat carries none of them, so LEFT used
+  to render the same "unreadable" mark a failed poll gets — for the whole
+  class, not just the accounts that actually failed to poll. It now falls
+  back to the same `extra_usage` reading `list --json`'s `usage.credit`
+  already carried: with both money figures on the wire it prints
+  `used/limit`, e.g. `25.50/100.00 used, 74.50 left (USD)`; with only the used
+  figure it says what was spent and that the account sets no limit of its
+  own. `?` is still exactly what an account that failed to poll shows.
+
+- **`install.ps1` makes `ccdad` usable in the same PowerShell window the
+  installer ran in, without opening a new one.** `irm | iex` evaluates the
+  script inside the caller's own session rather than a child process, but the
+  installer only ever wrote the new PATH entry to the registry and broadcast
+  the change — which reaches processes started afterwards, not the one
+  already running the install. It now also updates that session's own
+  `$env:Path`, so `ccdad --version` resolves right after the one-liner
+  finishes instead of needing a fresh terminal.
+
 ## [0.3.0] — 2026-08-24
 
 Four new commands and an axis change underneath them. `probe` wakes a window
