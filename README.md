@@ -302,20 +302,25 @@ weekly cap, without it against the five-hour window every account has. A name
 carrying no family ccdad knows still wakes the five-hour window, which is the
 only one such a probe could honestly promise.
 
-Four things are refused rather than spent on. An account whose credential is a
+Five things are refused rather than spent on. An account whose credential is a
 setup token or an API key has no OAuth refresh grant, so no reading could ever
 be taken for it and the quota would go nowhere. A Claude Code old enough to
 predate `CLAUDE_SECURESTORAGE_CONFIG_DIR` is refused for the reason
 [What is not here yet](#what-is-not-here-yet) gives: the child would run as the
-machine's *live* login and spend the wrong account's quota. A window that
-already reports a reset has nothing to wake. And a probe is attempted at most
-once every six hours per account — counting every attempt, not only the
-failures, because a probe that "succeeded" and still left the window without a
-reset is exactly the case a failure-only gate would spin on. `--force` bypasses
-the last two and never the first two. `ccdad probe --all` skips disabled
-accounts, since a reading for one the engine will not switch to buys nothing; a
-disabled account named explicitly is still probed, because that is a human
-asking.
+machine's *live* login and spend the wrong account's quota. A shell that
+already exports `ANTHROPIC_AUTH_TOKEN` or `CLAUDE_CODE_OAUTH_TOKEN` is refused
+too — `ccdad run`'s own displaced-credential check, unconditionally, because
+that variable is what claude actually authenticates the child with, ahead of
+the scoped credentials file the probe seeds; without this the turn is spent
+against whatever account the variable names while the account you asked to
+probe is stamped as done. A window that already reports a reset has nothing to
+wake. And a probe is attempted at most once every six hours per account —
+counting every attempt, not only the failures, because a probe that
+"succeeded" and still left the window without a reset is exactly the case a
+failure-only gate would spin on. `--force` bypasses the last two and never the
+first three. `ccdad probe --all` skips disabled accounts, since a reading for
+one the engine will not switch to buys nothing; a disabled account named
+explicitly is still probed, because that is a human asking.
 
 Exit `3` when no account needed one, `1` when every probe attempted failed, and
 `2` with no `claude` on `PATH`. The daemon runs the same probe on its own, and
