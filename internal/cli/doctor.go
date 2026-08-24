@@ -188,6 +188,7 @@ func runChecks() []check {
 		checkSessions(root, storeUsable),
 		checkProfiles(root, storeUsable),
 		checkPrimary(root, storeUsable),
+		checkCredentialFiles(root, storeUsable),
 		checkCredentialHome(report),
 		checkClaudeVersion(install, installErr),
 		checkClaudeCode(live, liveErr),
@@ -242,8 +243,8 @@ func checkPermissions(root string, usable bool) check {
 
 	var loose []string
 	want := map[string]fs.FileMode{
-		root:                               0o700,
-		filepath.Join(root, "credentials"): 0o700,
+		root:                         0o700,
+		store.CredentialsDirAt(root): 0o700,
 	}
 	for path, mode := range want {
 		info, err := os.Stat(path)
@@ -262,12 +263,15 @@ func checkPermissions(root string, usable bool) check {
 	// Every file that holds a token, by glob rather than through the store: the
 	// point is to see what is on disk, not what ccdad believes it wrote.
 	//
-	// The two names are store's and are spelled out here because store exports
-	// no path accessors and opening it would create the tree. If they ever
-	// change, TestDoctorReportsALooseCredentialFile fails on its own glob rather
-	// than passing while checking nothing.
-	files, _ := filepath.Glob(filepath.Join(root, "credentials", "*"))
-	files = append(files, filepath.Join(root, "accounts.toml"))
+	// The two names are store's, and store says them itself now: the accessors
+	// resolve nothing and open nothing, which is the property that had kept
+	// them out of here. The GLOB stays a glob — this check's whole subject is a
+	// file on disk that the store would not have written, so it must not ask
+	// the store what to look at. If the names ever move,
+	// TestDoctorReportsALooseCredentialFile fails on its own hand-spelled glob
+	// rather than passing while checking nothing.
+	files, _ := filepath.Glob(filepath.Join(store.CredentialsDirAt(root), "*"))
+	files = append(files, store.AccountsFileAt(root))
 	for _, path := range files {
 		info, err := os.Stat(path)
 		if err != nil || info.IsDir() {
@@ -1225,6 +1229,57 @@ func checkProfiles(root string, usable bool) check {
 			"are from an older ccdad, a restored export, or a uuid that changed",
 		len(orphans), plural(len(orphans), "y", "ies"), container,
 		plural(len(orphans), "s", ""), strings.Join(orphans, ", "))}
+}
+
+// checkCredentialFiles reports a stored credential file that no account names.
+//
+// It is the mirror of checkProfiles, one directory over and with more at stake:
+// a leaked profile holds an API key, and a leaked credential file holds a live
+// refresh token at 0600. Nothing else on the machine can find one. `ccdad
+// list`, `ccdad remove` and the account rows in this very report all read
+// accounts.toml, and an orphan is by definition a uuid that document does not
+// carry — so the file that leaks is invisible to every command a user would
+// reach for, indefinitely.
+//
+// This is a report about the PAST. The store transaction reverses the
+// credential files a refused batch wrote (adfdbb5), so the way these are made
+// is closed; what that commit cannot do is anything about a store that already
+// has one, left by a build older than it, or by a reversal whose own os.Remove
+// was refused and whose error the user did not act on. Without this row those
+// two states are permanent and silent.
+//
+// A warning rather than a failure, and a report rather than a repair — this
+// file's second rule, and the place it is most tempting to break. Deleting a
+// file the store cannot explain is not ccdad's call: a half-restored store is
+// exactly when a user wants to look before anything else does, and the token in
+// it may be the only copy of a login they still want.
+//
+// It creates nothing: store.OrphanCredentialsAt reads the directory and the
+// document the way AccountsAt does, without Open's MkdirAll.
+func checkCredentialFiles(root string, usable bool) check {
+	if !usable {
+		return check{"credential-files", levelSkipped, "there is no store to check"}
+	}
+	orphans, err := store.OrphanCredentialsAt(root)
+	if err != nil {
+		// Answering "nothing is orphaned" from a failed read would be the
+		// reassuring lie this row exists to remove — checkProfiles and
+		// checkPrimary refuse the same way for the same reason.
+		return check{"credential-files", levelFail, fmt.Sprintf(
+			"the stored credential files cannot be matched against the account list: %v", err)}
+	}
+	if len(orphans) == 0 {
+		return check{"credential-files", levelOK,
+			"every stored credential file belongs to an account this store still has"}
+	}
+	return check{"credential-files", levelWarn, fmt.Sprintf(
+		"%d credential file%s belong%s to no account this store has (%s). Each holds a live refresh token "+
+			"at 0600, and nothing on this machine can find it: `ccdad list` and `ccdad remove` read "+
+			"accounts.toml, which is exactly what does not name %s. Delete %s once you have looked; doctor "+
+			"reports and never removes",
+		len(orphans), plural(len(orphans), "", "s"), plural(len(orphans), "s", ""),
+		strings.Join(orphans, ", "), plural(len(orphans), "it", "them"),
+		plural(len(orphans), "it", "them"))}
 }
 
 // checkPrimary names the accounts marked primary, because that flag is the one
