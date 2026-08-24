@@ -98,6 +98,9 @@ func TestAutoStartDoesNotFireForCommandsThatMustNotHaveOne(t *testing.T) {
 			"auto-started before that would manage the live one while the user is deliberately elsewhere"},
 		{[]string{"probe", "nobody"}, "a probe is the engine's errand and the daemon re-execs it, so " +
 			"auto-starting here leaves the recursion guard as the only fuse"},
+		{[]string{"bootstrap"}, "a container entrypoint runs bootstrap before it starts the daemon " +
+			"itself, so an entry here would spawn one over a store that has not finished importing " +
+			"and then race the entrypoint's own daemon start for the singleton"},
 	}
 	for _, tc := range cases {
 		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
