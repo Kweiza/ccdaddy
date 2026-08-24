@@ -1096,3 +1096,26 @@ func TestTheOveragePoolStaysShutWhileAPrimarySeatHasRoom(t *testing.T) {
 		t.Error("the last-resort credit pool was opened while paid-for capacity sat unused")
 	}
 }
+
+// 1.0 is the config file's own way of saying "no multiplicative margin", and it
+// has to be exactly that. The ratio runs on RAW headroom while the ranking now
+// orders on SLACK, so at 1.0 what would survive is not a margin: it is a second,
+// unnamed rule that the target must also have no less raw headroom than the
+// account it displaces. That is precisely what a user who wrote 1.0 asked to be
+// rid of, and it is the rule hover has to be free of -- a tight weekly floor is
+// exactly where the two axes disagree.
+func TestARatioOfOneIsNoMultiplicativeMarginAtAll(t *testing.T) {
+	cfg := Config{HysteresisPct: 1, HeadroomRatio: 1}
+	// a is one point from a weekly floor of 60 and still shows 41 points of raw
+	// headroom. b is the better candidate on the axis the ranking used and has
+	// LESS raw headroom, so the ratio at 1.0 is the only thing refusing.
+	cands := []Candidate{
+		sub("a", &usage.Snapshot{SevenDay: win(59, 48*time.Hour)}),
+		sub("b", &usage.Snapshot{SevenDay: win(20, 48*time.Hour), FiveHour: win(60, time.Hour)}),
+	}
+	o := opts()
+	o.WindowThreshold = map[usage.WindowName]float64{usage.WindowSevenDay: 60}
+
+	p := Decide(cands, o, cfg, NewState(), "a")
+	want(t, p, ActionSwitch, ReasonBetterTarget, "b")
+}

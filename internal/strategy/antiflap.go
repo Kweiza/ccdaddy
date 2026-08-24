@@ -229,6 +229,10 @@ type Plan struct {
 	// the only thing that opens the credit pool. Reported so a caller can
 	// say why the credit pool was or was not consulted.
 	SubscriptionExhausted bool
+	// Hover is the pass the thresholds came from, set only when hover was on.
+	// nil is what says the mode was not in force; `ccdad hover status` reads
+	// this rather than deriving a second table of its own.
+	Hover *HoverPlan
 	// Credit is the gate's answer, set only when the credit pool was reached.
 	Credit Decision
 	// CreditConsulted records that it was reached at all, because a refusing
@@ -292,12 +296,22 @@ func Decide(cands []Candidate, o Options, cfg Config, st *State, activeUUID stri
 	}
 	sort.Strings(held)
 
+	// Installed ONCE, here, over the pool quarantine has already filtered. Rank
+	// would install a pass of its own, and the anti-flap set below has to be
+	// derived from the same pool the ranking ran on: a second pass would set a
+	// pre-emptive lead from accounts the ranking never considered.
+	o = o.withHover(pool)
+	if o.hover != nil {
+		cfg = HoverConfig(cfg)
+	}
+
 	res := Rank(pool, o)
 	subExhausted := SubscriptionExhausted(pool, o)
 	plan := Plan{
 		Result:                res,
 		Quarantined:           held,
 		SubscriptionExhausted: subExhausted,
+		Hover:                 o.hover,
 	}
 
 	if len(res.Order) == 0 && len(res.Credit) == 0 {
@@ -590,7 +604,15 @@ func headroomGate(active, target Ranked, cfg Config) (Reason, bool, time.Time) {
 	// With an active account at or past its limit the ratio is trivially
 	// satisfied, which is correct: there is nothing left to be twice as much
 	// as, and the additive margin above has already done the work.
-	if target.Headroom.Pct < cfg.HeadroomRatio*active.Headroom.Pct {
+	//
+	// A ratio of 1.0 skips the check outright rather than applying an identity.
+	// This runs on RAW headroom while the ranking orders on slack, so at 1.0 the
+	// surviving comparison is not a margin -- it is an unnamed extra rule that
+	// the target must also have no less raw headroom than the account it
+	// displaces, which is exactly what writing 1.0 asks to be rid of. The two
+	// axes disagree most under a tight weekly floor, where an account one point
+	// from that floor still shows forty points of raw headroom.
+	if cfg.HeadroomRatio > 1 && target.Headroom.Pct < cfg.HeadroomRatio*active.Headroom.Pct {
 		return ReasonHeadroomRatio, true, time.Time{}
 	}
 	return ReasonBetterTarget, false, time.Time{}
