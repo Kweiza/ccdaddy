@@ -23,7 +23,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
+	"slices"
 	"strings"
 	"time"
 )
@@ -318,6 +320,14 @@ type Limit struct {
 
 	ModelDisplayName   string
 	SurfaceDisplayName string
+	// OtherScopes is every scope key this build does not name, by key, with the
+	// scope's display name for a value. Claude Code types the scope object as
+	// {model?, surface?} and names no third key, but every level of that schema
+	// is a passthrough, so a key added server-side is legal wire. Dropping one at
+	// the decode would make a weekly cap the session is subject to invisible
+	// rather than merely unranked, and the ranking would spend against quota it
+	// could not see.
+	OtherScopes map[string]string
 
 	pct     float64
 	hasPct  bool
@@ -358,6 +368,9 @@ type LimitInput struct {
 	Group   string
 	Model   string
 	Surface string
+	// OtherScopes is the scope keys this build does not name; see
+	// Limit.OtherScopes.
+	OtherScopes map[string]string
 
 	Percent  *float64
 	ResetsAt *time.Time
@@ -370,6 +383,9 @@ func LimitFor(in LimitInput) Limit {
 		Group:              in.Group,
 		ModelDisplayName:   in.Model,
 		SurfaceDisplayName: in.Surface,
+	}
+	if len(in.OtherScopes) > 0 {
+		l.OtherScopes = maps.Clone(in.OtherScopes)
 	}
 	if in.Percent != nil {
 		l.pct, l.hasPct = *in.Percent, true
@@ -428,6 +444,11 @@ type ScopedWindow struct {
 	NamedWindow
 	Model   string
 	Surface string
+	// Scope is the scope KEY the entry was filed under and the name was built
+	// from: ScopeModel, ScopeSurface, or — for a window that came back from
+	// UnknownScopeWindows — a key this build does not name. It is what tells the
+	// two apart once only the window is in hand.
+	Scope string
 }
 
 // ScopedWindows is the limits[] entries that can bind, in wire order.
@@ -452,36 +473,83 @@ func (s *Snapshot) ScopedWindows() []ScopedWindow {
 		if l.Kind != weeklyScopedKind {
 			continue
 		}
-		var name WindowName
-		for _, sc := range scopedWindowScopes {
-			if d := sc.Display(l); d != "" {
-				name = ScopedWindowName(sc.Name, d)
-				break
-			}
-		}
-		if name == "" {
+		scope, display, ok := namedScopeOf(l)
+		if !ok {
 			continue
 		}
-		out = append(out, ScopedWindow{
-			NamedWindow: NamedWindow{
-				Name: name,
-				// Present is the entry's own existence. A scoped window whose
-				// percent could not be read is still a window that IS there,
-				// which is the same distinction Window.Present draws.
-				Window: Window{
-					Present: true,
-					pct:     l.pct,
-					hasPct:  l.hasPct,
-					reset:   l.reset,
-					hasTime: l.hasTime,
-				},
-			},
-			Model:   l.ModelDisplayName,
-			Surface: l.SurfaceDisplayName,
-		})
+		out = append(out, scopedWindowOf(l, scope, display))
 	}
 	if len(out) == 0 {
 		return nil
+	}
+	return out
+}
+
+// namedScopeOf is the scope this build names an entry by, in the order the scope
+// table declares: a model display name wins when an entry carries both. It
+// answers false for an entry naming no scope this build knows, which is the one
+// question ScopedWindows and UnknownScopeWindows split on, so neither can claim
+// an entry the other also claims.
+func namedScopeOf(l Limit) (scope, display string, ok bool) {
+	for _, sc := range scopedWindowScopes {
+		if d := sc.Display(l); d != "" {
+			return sc.Name, d, true
+		}
+	}
+	return "", "", false
+}
+
+// scopedWindowOf reads one limits[] entry as a window under the given scope.
+func scopedWindowOf(l Limit, scope, display string) ScopedWindow {
+	return ScopedWindow{
+		NamedWindow: NamedWindow{
+			Name: ScopedWindowName(scope, display),
+			// Present is the entry's own existence. A scoped window whose
+			// percent could not be read is still a window that IS there,
+			// which is the same distinction Window.Present draws.
+			Window: Window{
+				Present: true,
+				pct:     l.pct,
+				hasPct:  l.hasPct,
+				reset:   l.reset,
+				hasTime: l.hasTime,
+			},
+		},
+		Model:   l.ModelDisplayName,
+		Surface: l.SurfaceDisplayName,
+		Scope:   scope,
+	}
+}
+
+// UnknownScopeWindows is the limits[] entries this build cannot attribute: a
+// weekly cap filed under a scope key it does not name, and under no key it does.
+//
+// They are kept OUT of ScopedWindows, and therefore out of the set the engine
+// binds on, for the reason an entry naming no scope at all has always been
+// dropped — a cap ccdad cannot describe is not one it can tell a user it
+// switched away for. But they are not discarded either: a user who knows what
+// the scope means can set a threshold on the name and put it into the ranking,
+// and nothing can be tuned that cannot first be seen.
+//
+// One ENTRY is one window even when it carries several unnamed scopes, because
+// one entry is one cap; ranking it twice would double-count the same quota. The
+// key is chosen in sorted order rather than in map order, so the same reading
+// names the same window on every call — the ranking ties on the first window in
+// order, and a tie that moved between calls would move the answer with it.
+func (s *Snapshot) UnknownScopeWindows() []ScopedWindow {
+	if s == nil || len(s.Limits) == 0 {
+		return nil
+	}
+	var out []ScopedWindow
+	for _, l := range s.Limits {
+		if l.Kind != weeklyScopedKind || len(l.OtherScopes) == 0 {
+			continue
+		}
+		if _, _, ok := namedScopeOf(l); ok {
+			continue
+		}
+		key := slices.Sorted(maps.Keys(l.OtherScopes))[0]
+		out = append(out, scopedWindowOf(l, key, l.OtherScopes[key]))
 	}
 	return out
 }
@@ -496,12 +564,20 @@ func (s *Snapshot) AllWindows() []NamedWindow {
 	}
 	fixed := s.RateLimitWindows()
 	scoped := s.ScopedWindows()
-	if len(scoped) == 0 {
+	// The unnamed-scope windows are in here even though they do not bind by
+	// default. This is the set a caller holding only a NAME looks a window up
+	// in, and the opt-in can put one of them into the ranking — leaving them out
+	// would have status report a binding window its own renderer cannot find.
+	unknown := s.UnknownScopeWindows()
+	if len(scoped) == 0 && len(unknown) == 0 {
 		return fixed
 	}
-	out := make([]NamedWindow, 0, len(fixed)+len(scoped))
+	out := make([]NamedWindow, 0, len(fixed)+len(scoped)+len(unknown))
 	out = append(out, fixed...)
 	for _, w := range scoped {
+		out = append(out, w.NamedWindow)
+	}
+	for _, w := range unknown {
 		out = append(out, w.NamedWindow)
 	}
 	return out
@@ -570,14 +646,118 @@ type displayNameWire struct {
 }
 
 type limitWire struct {
-	Kind     string   `json:"kind"`
-	Group    string   `json:"group"`
-	Percent  *float64 `json:"percent"`
-	ResetsAt *string  `json:"resets_at"`
-	Scope    *struct {
-		Model   *displayNameWire `json:"model"`
-		Surface *displayNameWire `json:"surface"`
-	} `json:"scope"`
+	Kind     string     `json:"kind"`
+	Group    string     `json:"group"`
+	Percent  *float64   `json:"percent"`
+	ResetsAt *string    `json:"resets_at"`
+	Scope    *scopeWire `json:"scope"`
+}
+
+// scopeWire is a limits[] entry's scope object. It is decoded key by key rather
+// than by field tags because the schema is a passthrough: a scope key this build
+// does not name is legal wire, and a decode that knows only two fields discards
+// it without a trace.
+//
+// A key whose value is not an object carrying a non-empty display_name is left
+// out rather than failing the document. It names nothing, and one unreadable
+// scope must not cost the five windows that parsed.
+type scopeWire struct {
+	Model   *displayNameWire
+	Surface *displayNameWire
+	Other   map[string]string
+}
+
+func (w *scopeWire) UnmarshalJSON(b []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+	for key, v := range raw {
+		switch key {
+		case ScopeModel, ScopeSurface:
+			// A key this build NAMES is held to the schema, and a shape it
+			// cannot read fails the document rather than reading as absent.
+			// That is not tidiness: on the wire an unreadable scope says a cap
+			// exists and refuses to say what it caps, and reading it as absent
+			// is the one direction that makes a spent account look fresh. The
+			// tolerance below is for keys this build has no schema for.
+			var d displayNameWire
+			if err := json.Unmarshal(v, &d); err != nil {
+				return err
+			}
+			if d.DisplayName == "" {
+				continue
+			}
+			if key == ScopeModel {
+				w.Model = &displayNameWire{DisplayName: d.DisplayName}
+			} else {
+				w.Surface = &displayNameWire{DisplayName: d.DisplayName}
+			}
+		default:
+			display, ok := unknownScopeDisplay(v)
+			if !ok || !namableScopeKey(key) {
+				continue
+			}
+			if w.Other == nil {
+				w.Other = make(map[string]string, len(raw))
+			}
+			w.Other[key] = display
+		}
+	}
+	return nil
+}
+
+// unknownScopeDisplay is the handle a scope key this build has no schema for
+// offers, and whether it offers one at all.
+//
+// Two shapes are read. {"display_name": "..."} is the one both named scopes use,
+// and a key added later is likeliest to follow its neighbours. A bare string is
+// the other shape a scope has ever plausibly taken, and it is just as usable a
+// handle. Anything else — an object with no display name, a number, a list —
+// gives nothing to name a window by, and a window with no name is one no
+// threshold can ever address, so it is left out rather than carried nameless.
+//
+// Failing the document over one of these is the thing NOT to do: the schema is a
+// passthrough, so a shape this build has never seen is legal wire, and throwing
+// away the five windows that parsed to punish it is the larger mistake.
+func unknownScopeDisplay(v json.RawMessage) (string, bool) {
+	var d displayNameWire
+	if err := json.Unmarshal(v, &d); err == nil && d.DisplayName != "" {
+		return d.DisplayName, true
+	}
+	var bare string
+	if err := json.Unmarshal(v, &bare); err == nil && bare != "" {
+		return bare, true
+	}
+	return "", false
+}
+
+// namableScopeKey reports whether a window named under this scope key can be
+// read back out of its own name. ScopedWindowName joins the key and the display
+// half with a colon and ValidWindowName splits on the FIRST one, so a key
+// carrying a colon of its own produces a name that means something else on the
+// way back — {"model:x": {"display_name": "y"}} and a model called "x:y" build
+// the identical string, and one threshold would then govern two caps. An empty
+// key splits to an empty scope, which is not a name either.
+func namableScopeKey(key string) bool {
+	return key != "" && !strings.Contains(key, ":")
+}
+
+// MarshalJSON writes the scope back as the object it arrived as. Go renders a
+// map in sorted key order, so the encoding is byte-stable and a cached entry
+// re-read is the entry that was written.
+func (w scopeWire) MarshalJSON() ([]byte, error) {
+	out := make(map[string]displayNameWire, 2+len(w.Other))
+	if w.Model != nil {
+		out[ScopeModel] = *w.Model
+	}
+	if w.Surface != nil {
+		out[ScopeSurface] = *w.Surface
+	}
+	for k, v := range w.Other {
+		out[k] = displayNameWire{DisplayName: v}
+	}
+	return json.Marshal(out)
 }
 
 // wire mirrors the whole response. Every unknown key is ignored, which is what
@@ -695,6 +875,9 @@ func toLimits(in []limitWire) []Limit {
 			}
 			if l.Scope.Surface != nil {
 				item.SurfaceDisplayName = l.Scope.Surface.DisplayName
+			}
+			if len(l.Scope.Other) > 0 {
+				item.OtherScopes = maps.Clone(l.Scope.Other)
 			}
 		}
 		out = append(out, item)
@@ -827,16 +1010,16 @@ func (l Limit) toWire() limitWire {
 		Percent:  fromFloat(l.pct, l.hasPct),
 		ResetsAt: fromTime(l.reset, l.hasTime),
 	}
-	if l.ModelDisplayName != "" || l.SurfaceDisplayName != "" {
-		out.Scope = &struct {
-			Model   *displayNameWire `json:"model"`
-			Surface *displayNameWire `json:"surface"`
-		}{}
+	if l.ModelDisplayName != "" || l.SurfaceDisplayName != "" || len(l.OtherScopes) > 0 {
+		out.Scope = &scopeWire{}
 		if l.ModelDisplayName != "" {
 			out.Scope.Model = &displayNameWire{DisplayName: l.ModelDisplayName}
 		}
 		if l.SurfaceDisplayName != "" {
 			out.Scope.Surface = &displayNameWire{DisplayName: l.SurfaceDisplayName}
+		}
+		if len(l.OtherScopes) > 0 {
+			out.Scope.Other = maps.Clone(l.OtherScopes)
 		}
 	}
 	return out

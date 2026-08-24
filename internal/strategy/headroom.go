@@ -140,7 +140,15 @@ func fixedWindowFamily(n usage.WindowName) (string, bool) {
 // window that binds a ccdad session, and the wire gives no way to tell which
 // surface name is this client's own. That last one is the deliberate seam here —
 // it means a spent cap on some other surface reads as a spent account.
-func bindingWindows(s *usage.Snapshot, model string) []usage.NamedWindow {
+//
+// One kind of window is added rather than narrowed, and only on the user's say
+// so: a weekly cap filed under a scope key this build does not name. It is real
+// quota and it is carried all the way here, but ccdad cannot state what it caps,
+// so binding on it by default would have an account report a window whose
+// meaning nobody can give. A threshold naming it in the per-window table IS the
+// say so, and nothing else is: consent is per window, because a table set for
+// five_hour is not a statement about a scope the user has never seen.
+func bindingWindows(s *usage.Snapshot, model string, t Thresholds) []usage.NamedWindow {
 	if s == nil {
 		return nil
 	}
@@ -150,7 +158,8 @@ func bindingWindows(s *usage.Snapshot, model string) []usage.NamedWindow {
 	}
 	fixed := s.RateLimitWindows()
 	scoped := s.ScopedWindows()
-	out := make([]usage.NamedWindow, 0, len(fixed)+len(scoped))
+	unknown := s.UnknownScopeWindows()
+	out := make([]usage.NamedWindow, 0, len(fixed)+len(scoped)+len(unknown))
 	for _, w := range fixed {
 		if fam, ok := fixedWindowFamily(w.Name); ok && narrow && fam != want {
 			continue
@@ -163,6 +172,21 @@ func bindingWindows(s *usage.Snapshot, model string) []usage.NamedWindow {
 				continue
 			}
 		}
+		out = append(out, w.NamedWindow)
+	}
+	for _, w := range unknown {
+		// The map is read directly rather than through Thresholds.For, which
+		// answers the default for a window with no entry and so cannot tell an
+		// opted-in window from any other. The positivity test is the one For
+		// applies: it treats a non-positive entry as the same omission, and a
+		// gate that read consent where For reads omission would admit a window
+		// and then measure it against a threshold nobody set for it.
+		if v, opted := t.PerWindow[w.Name]; !opted || v <= 0 {
+			continue
+		}
+		// No model narrowing: an unnamed scope has no model half to compare, and
+		// dropping it because the family is unreadable would undo the opt-in the
+		// user just gave.
 		out = append(out, w.NamedWindow)
 	}
 	return out
@@ -191,7 +215,7 @@ func HeadroomOf(s *usage.Snapshot, t Thresholds) Headroom {
 func HeadroomFor(s *usage.Snapshot, model string, t Thresholds) Headroom {
 	out := Headroom{}
 	floorSlack := 0.0
-	for _, w := range bindingWindows(s, model) {
+	for _, w := range bindingWindows(s, model, t) {
 		pct, ok := w.Percent()
 		if !ok {
 			continue
