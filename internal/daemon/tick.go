@@ -588,11 +588,8 @@ func (e *Engine) probeDue(a store.Account, entry usage.Entry, cfg config.Config,
 // only the failures, precisely so a probe that wakes nothing costs four turns a
 // day rather than one per cadence.
 func probeModel(w usage.WindowName) string {
-	switch w {
-	case usage.WindowSevenDayOpus:
-		return "opus"
-	case usage.WindowSevenDaySonnet:
-		return "sonnet"
+	if family, ok := strategy.FixedWindowFamily(w); ok {
+		return family
 	}
 	// The prefix is asked for rather than spelled, so this cannot drift from the
 	// one place a scoped name is assembled.

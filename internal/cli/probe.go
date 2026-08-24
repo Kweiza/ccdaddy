@@ -88,11 +88,8 @@ func probeWindow(model string) usage.WindowName {
 	if !ok {
 		return usage.WindowFiveHour
 	}
-	switch family {
-	case "opus":
-		return usage.WindowSevenDayOpus
-	case "sonnet":
-		return usage.WindowSevenDaySonnet
+	if w, ok := strategy.WindowForFixedFamily(family); ok {
+		return w
 	}
 	return usage.WindowFiveHour
 }
