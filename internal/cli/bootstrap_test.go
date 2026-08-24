@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -578,10 +579,30 @@ func TestBootstrapDoesNotRepeatThePathItCouldNotOpen(t *testing.T) {
 	if strings.Contains(said, missing) {
 		t.Errorf("bootstrap printed the variable's value back:\n%s", said)
 	}
-	if !strings.Contains(said, "no such file or directory") {
+	if !strings.Contains(said, errnoOf(t, missing)) {
 		t.Errorf("the errno is the part the operator cannot get anywhere else, and it is missing:\n%s", said)
 	}
 	if !strings.Contains(said, "CCDAD_IMPORT") {
 		t.Errorf("the refusal never names the variable:\n%s", said)
 	}
+}
+
+// errnoOf is the platform's own text for "that path is not there", taken from
+// the platform rather than written down here. One ENOENT reads "no such file or
+// directory" on Unix and "The system cannot find the file specified." on
+// Windows, so a literal in the assertion above is a statement about where the
+// suite happened to run -- and it passed everywhere the suite usually runs,
+// which is how it reached main red on the one runner nobody watches.
+func errnoOf(t *testing.T, missing string) string {
+	t.Helper()
+	f, err := os.Open(missing)
+	if err == nil {
+		f.Close()
+		t.Fatalf("%s exists, so there is no errno to compare against", missing)
+	}
+	var pathErr *os.PathError
+	if !errors.As(err, &pathErr) {
+		t.Fatalf("opening a missing path gave %T, not a *os.PathError: %v", err, err)
+	}
+	return pathErr.Err.Error()
 }
