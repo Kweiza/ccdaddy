@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -311,10 +312,17 @@ func TestHoverStatusWithTheModeOffStillShowsTheNumbers(t *testing.T) {
 	}
 }
 
-// A window nothing has ever spent against reports no reset, so there is no share
-// of it elapsed and no pace. It falls back rather than being reported as freshly
-// reset, and it is marked as the one thing that can fix it.
-func TestHoverStatusMarksAWindowThatNeedsAProbe(t *testing.T) {
+// A window with quota already spent against it and STILL no reset time is the
+// one shape a warm-up cannot answer: the reset is one this build could not read,
+// and another turn buys the same unreadable field back. strategy.ColdWindow has
+// never targeted it — it requires 0% for the never-spent arm — so the table must
+// not promise a warm-up here.
+//
+// This test used to assert the opposite. It asserted the literal string "a probe
+// is queued" on exactly this row, which is how the defect survived: the note was
+// rendered from ProbeWanted alone, ProbeWanted is "named no reset" and nothing
+// more, and the daemon's own gate had a condition the note could not see.
+func TestHoverStatusPromisesNoWarmUpForAWindowThatIsAlreadyInUse(t *testing.T) {
 	isolate(t)
 	freezeClock(t, hoverEpoch)
 	writeConfig(t, "hover = true\n")
@@ -329,8 +337,11 @@ func TestHoverStatusMarksAWindowThatNeedsAProbe(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit = %d (%s)", code, top)
 	}
-	if !strings.Contains(stdout, "a probe is queued") {
-		t.Errorf("stdout does not say a probe is what fixes this row:\n%s", stdout)
+	if strings.Contains(stdout, "warm-up at") || strings.Contains(stdout, "probe is queued") {
+		t.Errorf("stdout promises a warm-up for a window no warm-up targets:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "a warm-up cannot fix that") {
+		t.Errorf("stdout does not say why this row cannot be fixed:\n%s", stdout)
 	}
 	if !strings.Contains(stdout, "80%") {
 		t.Errorf("stdout does not carry the fallback threshold:\n%s", stdout)
@@ -357,8 +368,89 @@ func TestHoverStatusMarksAWindowThatNeedsAProbe(t *testing.T) {
 	if _, ok := payload.Windows[0]["expectedPct"]; ok {
 		t.Errorf("expectedPct is present for a window with no reset: %+v", payload.Windows[0])
 	}
+	// probeWanted keeps its own meaning — "this window named no reset" — and its
+	// key, because that is a true and useful thing to say. What must not appear
+	// is the warmup object, which is the one that answers "will anything happen".
 	if payload.Windows[0]["probeWanted"] != true {
-		t.Errorf("probeWanted is not set on the row a probe would fix: %+v", payload.Windows[0])
+		t.Errorf("probeWanted is not set on a row that named no reset: %+v", payload.Windows[0])
+	}
+	if _, ok := payload.Windows[0]["warmup"]; ok {
+		t.Errorf("warmup is present on a row no warm-up targets: %+v", payload.Windows[0])
+	}
+}
+
+// The row a warm-up DOES target: a five-hour window nothing has ever spent
+// against. The note names an instant rather than a promise, and the JSON carries
+// the state a caller can branch on without matching English.
+func TestHoverStatusQueuesAWarmUpForAStoppedClock(t *testing.T) {
+	isolate(t)
+	freezeClock(t, hoverEpoch)
+	stubProbeAvailable(t, nil)
+	writeConfig(t, "hover = true\n")
+	seedHoverAccount(t, "u-1", "fresh@example.com")
+	// A second account holding the live login. Without one, which account is
+	// live cannot be worked out, and the daemon refuses every warm-up in that
+	// state — so the table would honestly say "held" and this test would be
+	// asserting the wrong sentence.
+	seedHoverAccount(t, "u-2", "live@example.com")
+	seedLiveAs(t, "u-2")
+	seedUsageEntry(t, "u-2", usage.Entry{
+		FetchedAt: hoverEpoch,
+		Snapshot:  &usage.Snapshot{FiveHour: window(4, hoverEpoch.Add(4*time.Hour))},
+	})
+	idle, spent := 0.0, 30.0
+	seedUsageEntry(t, "u-1", usage.Entry{
+		FetchedAt:  hoverEpoch,
+		NextPollAt: hoverEpoch.Add(7 * time.Minute),
+		Snapshot: &usage.Snapshot{
+			FiveHour: usage.NewWindow(&idle, nil),
+			SevenDay: usage.NewWindow(&spent, nil),
+		},
+	})
+
+	code, stdout, _, top := runRoot(t, "hover", "status")
+	if code != ExitOK {
+		t.Fatalf("exit = %d (%s)", code, top)
+	}
+	// The scheduler's own next look, not the instant the gate opens: a warm-up
+	// runs on a tick where the account is poll-due as well as eligible, and the
+	// gate here is open already.
+	if want := "warm-up at " + hoverEpoch.Add(7*time.Minute).Local().Format("15:04"); !strings.Contains(stdout, want) {
+		t.Errorf("stdout does not name when the warm-up will run (%q):\n%s", want, stdout)
+	}
+	// One note per account, on the row ColdWindow targets. The seven-day window
+	// named no reset too, and saying it is behind the five-hour one is not the
+	// same as promising it a turn of its own.
+	if !strings.Contains(stdout, "aims at five_hour first") {
+		t.Errorf("the second stopped clock does not say what it is behind:\n%s", stdout)
+	}
+
+	_, stdout, _, _ = runRoot(t, "hover", "status", "--json")
+	var payload struct {
+		Windows []map[string]any `json:"windows"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+		t.Fatalf("stdout is not one JSON object: %v\n%s", err, stdout)
+	}
+	warmups := 0
+	for _, w := range payload.Windows {
+		obj, ok := w["warmup"].(map[string]any)
+		if !ok {
+			continue
+		}
+		warmups++
+		if w["window"] != string(usage.WindowFiveHour) {
+			t.Errorf("the warmup object is on %v rather than the five-hour window", w["window"])
+		}
+		if obj["state"] != "queued" {
+			t.Errorf("state = %v, want queued: %+v", obj["state"], obj)
+		}
+		if _, ok := obj["at"]; !ok {
+			t.Errorf("a queued warm-up names no instant: %+v", obj)
+		}
+	}
+	if warmups != 1 {
+		t.Errorf("warmup objects = %d, want exactly one — a warm-up is one turn aimed at one window", warmups)
 	}
 }
 
@@ -496,5 +588,56 @@ func TestListReportsTheOverriddenKeysInJSON(t *testing.T) {
 	}
 	if marked["hover"] {
 		t.Error("hover marked itself as overridden")
+	}
+}
+
+// stubProbeAvailable says whether this machine has a Claude Code to warm with,
+// rather than letting the answer depend on the PATH of the host running the
+// suite.
+func stubProbeAvailable(t *testing.T, err error) {
+	t.Helper()
+	saved := probeAvailable
+	t.Cleanup(func() { probeAvailable = saved })
+	probeAvailable = func() error { return err }
+}
+
+// seedLiveAs writes Claude Code's credentials file holding one stored account's
+// login, which is what makes switcher.Evaluate able to name the live account.
+func seedLiveAs(t *testing.T, uuid string) {
+	t.Helper()
+	writeLiveFile(t, `{"claudeAiOauth":{"accessToken":"AT-`+uuid+`","refreshToken":"RT-`+uuid+`"}}`)
+}
+
+// Nothing on this machine can warm anything, and the table must say so once
+// rather than promising a turn per row. The daemon deliberately records NOTHING
+// in this state — a machine with no Claude Code has made no attempt and must not
+// consume a rung — so there is no stamp to read and the command has to look.
+func TestHoverStatusSaysWhenNothingCanBeWarmed(t *testing.T) {
+	isolate(t)
+	freezeClock(t, hoverEpoch)
+	stubProbeAvailable(t, errors.New("`claude` is not on this PATH"))
+	writeConfig(t, "hover = true\n")
+	seedHoverAccount(t, "u-1", "fresh@example.com")
+	seedHoverAccount(t, "u-2", "live@example.com")
+	seedLiveAs(t, "u-2")
+	idle := 0.0
+	seedUsageEntry(t, "u-1", usage.Entry{
+		FetchedAt: hoverEpoch,
+		Snapshot:  &usage.Snapshot{FiveHour: usage.NewWindow(&idle, nil)},
+	})
+	seedUsageEntry(t, "u-2", usage.Entry{
+		FetchedAt: hoverEpoch,
+		Snapshot:  &usage.Snapshot{FiveHour: window(4, hoverEpoch.Add(4*time.Hour))},
+	})
+
+	code, stdout, _, top := runRoot(t, "hover", "status")
+	if code != ExitOK {
+		t.Fatalf("exit = %d (%s)", code, top)
+	}
+	if strings.Contains(stdout, "warm-up at") {
+		t.Errorf("stdout promises a warm-up on a machine that cannot run one:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "not on this PATH") {
+		t.Errorf("stdout does not say why nothing can be warmed:\n%s", stdout)
 	}
 }

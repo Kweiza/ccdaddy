@@ -149,18 +149,55 @@ func probeSkip(a store.Account, blob cclink.Blob, entry usage.Entry, o probeOpti
 	if o.force {
 		return "", false
 	}
-	if _, has := entry.Snapshot.ResetFor(o.window); has {
-		return fmt.Sprintf("%s's %s window already reports a reset time, so a probe has nothing to wake; "+
-			"pass --%s to spend the quota anyway", a.Label(), o.window, daemon.ProbeForceFlag), false
+	// A FUTURE reset, not merely a reset. A window whose reported rollover has
+	// already passed is a window whose clock ran down — the reading is simply
+	// older than the event — and that is exactly the window a warm-up is for.
+	// Refusing it on "it reports a reset time" would refuse the common case.
+	at, has := entry.Snapshot.ResetFor(o.window)
+	if has && at.After(o.now) {
+		return fmt.Sprintf("%s's %s clock is already running and rolls over at %s, so a warm-up has nothing "+
+			"to start; pass --%s to spend the quota anyway",
+			a.Label(), o.window, at.Format(time.RFC3339), daemon.ProbeForceFlag), false
 	}
-	if !entry.MayProbe(o.now) {
-		next := entry.Probe.LastAttemptAt.Add(usage.ProbeRetryAfter)
-		return fmt.Sprintf("%s was probed at %s, and a probe is attempted at most once every %s, so the next "+
-			"one may run at %s; pass --%s to spend the quota now",
-			a.Label(), entry.Probe.LastAttemptAt.Format(time.RFC3339), usage.ProbeRetryAfter,
-			next.Format(time.RFC3339), daemon.ProbeForceFlag), false
+	if !entry.MayProbe(o.now, o.window, at, has) {
+		return warmUpHeldBack(a, entry, at, has, o), false
 	}
 	return "", false
+}
+
+// warmUpHeldBack is why the gate refused, in the gate's own terms.
+//
+// The three sentences are the three states, and they are kept apart because a
+// user reads them for different reasons. A rollover already warmed is the
+// mechanism working and needs no action. A verdict not yet in is a wait of
+// minutes. A streak is the one that means something is wrong, and it is the only
+// one that names a count — which is also the first place ProbeState.LastError
+// has ever been shown to anybody.
+func warmUpHeldBack(a store.Account, entry usage.Entry, rollover time.Time, has bool, o probeOptions) string {
+	last := entry.Probe.LastAttemptAt.Format(time.RFC3339)
+	streak := entry.Probe.Strikes(o.window)
+	if has && streak == 0 {
+		return fmt.Sprintf("%s's %s rolled over at %s and was warmed at %s, and one warm-up per rollover is "+
+			"the whole budget; pass --%s to spend the quota now",
+			a.Label(), o.window, rollover.Format(time.RFC3339), last, daemon.ProbeForceFlag)
+	}
+	next := entry.Probe.NextAttemptAt(o.window).Format(time.RFC3339)
+	if streak == 0 {
+		return fmt.Sprintf("%s was warmed at %s and the reading that says whether it worked is not in yet, so "+
+			"the next one may run at %s; pass --%s to spend the quota now",
+			a.Label(), last, next, daemon.ProbeForceFlag)
+	}
+	plural := "s"
+	if streak == 1 {
+		plural = ""
+	}
+	why := ""
+	if entry.Probe.LastError != "" {
+		why = fmt.Sprintf(" (the last one reported: %s)", entry.Probe.LastError)
+	}
+	return fmt.Sprintf("%s's last %d warm-up%s of %s woke nothing%s, so the next one may run at %s; "+
+		"pass --%s to spend the quota now",
+		a.Label(), streak, plural, o.window, why, next, daemon.ProbeForceFlag)
 }
 
 // probeQuotaNoticer returns a function that says a probe spends the account's
@@ -238,7 +275,7 @@ func probeOne(cmd *cobra.Command, a store.Account, blob cclink.Blob, o probeOpti
 	// Stamped whatever happened, and before the error is returned: the six-hour
 	// gate exists for the failures, and a failure that did not record the
 	// attempt would be retried at the caller's own cadence forever.
-	if rerr := usage.RecordProbe(probeCacheTimeout, a.UUID, timeNow(), cerr); rerr != nil {
+	if rerr := usage.RecordProbe(probeCacheTimeout, a.UUID, timeNow(), o.window, cerr); rerr != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "note: %s's probe could not be recorded (%v); it may be attempted "+
 			"again sooner than it should be.\n", a.Label(), rerr)
 	}
@@ -266,10 +303,11 @@ func newProbeCmd() *cobra.Command {
 			"--model names the family the turn is spent against, which is how a per-model weekly\n" +
 			"window is woken: 'opus' and 'sonnet' wake theirs, and any other name still wakes the\n" +
 			"five-hour window every account has.\n\n" +
-			"An account that already reports a reset time for that window is not probed, and a\n" +
-			"probe is attempted at most once every " + usage.ProbeRetryAfter.String() + " per account. --force spends the quota\n" +
-			"through both of those; it does not make an account without an OAuth login probeable,\n" +
-			"because nothing could read the result.",
+			"An account whose clock for that window is already running is not probed. A window\n" +
+			"that has rolled over gets one warm-up per rollover, and one whose warm-ups wake\n" +
+			"nothing backs off 15m, 1h, 2h, 4h and then " + usage.ProbeRetryAfter.String() + " between attempts. --force spends\n" +
+			"the quota through all of that; it does not make an account without an OAuth login\n" +
+			"probeable, because nothing could read the result.",
 		Args:          usageArgs(cobra.MaximumNArgs(1)),
 		SilenceUsage:  true,
 		SilenceErrors: true,

@@ -116,10 +116,79 @@ type HoverWindow struct {
 	// ProbeWanted marks a window that reported no reset. It is a rendering
 	// fact, not a queue: hover forces probe_unknown on and the engine's own
 	// probe path is what spends the turn that wakes the window.
+	//
+	// Warmup below is the one that answers "will anything actually happen", and
+	// the two are kept apart deliberately. This field's name and its JSON key
+	// have always meant "this window named no reset", which is a true and useful
+	// thing to say; what was wrong was the renderer printing "a probe is queued"
+	// from it.
 	ProbeWanted bool
+	// Warmup is what the warm-up loop would do about this row, and it is set on
+	// exactly one row per account.
+	Warmup Warmup
 	// Credit marks the one row that is not a window: a primary credit seat's
 	// own metering.
 	Credit bool
+}
+
+// Warmup is what the warm-up loop would do about one row, as far as the ranking
+// package can see it.
+//
+// It is filled for exactly one window per account — the one ColdWindow targets —
+// and left zero everywhere else, because a warm-up is one turn aimed at one
+// window and a table that marked every stopped clock would promise a turn per
+// row.
+//
+// What is deliberately NOT here is the half the daemon knows and this package
+// does not: which account is live, whether probe_unknown is on, whether there is
+// a Claude Code on this PATH. `ccdad hover status` layers those on top. The
+// split is what keeps the gate itself in one place — the parts that could drift
+// are the parts nobody duplicated.
+type Warmup struct {
+	// Target marks the row a warm-up would aim at.
+	Target bool
+	// RolledOver is whether the clock is stopped because it RAN DOWN, as against
+	// never having been started. The two read differently to a user: one is the
+	// ordinary end of a cycle, the other is an account nothing has ever used.
+	RolledOver bool
+	// Eligible is whether the gate would let the turn be spent now.
+	Eligible bool
+	// PollAt is when the scheduler next intends to look at this account, copied
+	// from the cache. An eligible warm-up does not run at the instant the gate
+	// opens; it runs on the next tick where the account is also poll-due, and a
+	// table that named the gate's instant would be early by up to a poll
+	// interval every time.
+	PollAt time.Time
+	// NextAt is when the backoff opens. Zero means no backoff is holding it —
+	// either nothing is, or what is holding it is "one warm-up per rollover",
+	// which has no instant to name because the next rollover has not been
+	// scheduled by anything yet.
+	NextAt time.Time
+	// Streak is how many consecutive warm-ups of this window woke nothing.
+	Streak int
+	// LastAttemptAt and LastError are the last attempt's stamp and its report.
+	// LastError is shown and never gated on; usage.ProbeState says why.
+	LastAttemptAt time.Time
+	LastError     string
+}
+
+// warmupFor is the state of one account's warm-up, for the window ColdWindow
+// picked. It asks usage.ProbeState the same question the daemon asks, through
+// the same method, so the table cannot promise a turn the gate would refuse.
+func warmupFor(p usage.ProbeState, w usage.WindowName, rollover, pollAt, now time.Time) Warmup {
+	out := Warmup{
+		Target:        true,
+		RolledOver:    !rollover.IsZero(),
+		PollAt:        pollAt,
+		Streak:        p.Strikes(w),
+		LastAttemptAt: p.LastAttemptAt,
+		LastError:     p.LastError,
+	}
+	out.Eligible = p.MayProbe(now, w, rollover, out.RolledOver)
+	if !out.Eligible && !(out.RolledOver && out.Streak == 0) {
+		out.NextAt = p.NextAttemptAt(w)
+	}
+	return out
 }
 
 // HoverPlan is one hover pass over one pool.
@@ -196,6 +265,11 @@ func HoverThresholds(cands []Candidate, o Options) HoverPlan {
 		// bindingWindows, so the set hover derives thresholds for is exactly
 		// the set the ranking measures against -- cinder_cove excluded, and the
 		// model narrowing applied once rather than twice.
+		// The row a warm-up would aim at, decided ONCE per account and by the
+		// same function the daemon's probeDue calls. Asking per row would let
+		// the table mark a window the loop never targets.
+		cold, rollover, isCold := ColdWindow(c.Usage, o.Model, configured, o.Now)
+
 		per := map[usage.WindowName]float64{}
 		for _, w := range bindingWindows(c.Usage, o.Model, configured) {
 			pct, ok := w.Percent()
@@ -218,6 +292,9 @@ func HoverThresholds(cands []Candidate, o Options) HoverPlan {
 			// fix it. Only the window nothing has ever spent against is marked.
 			if _, hasReset := w.Reset(); !hasReset {
 				row.ProbeWanted = true
+			}
+			if isCold && w.Name == cold {
+				row.Warmup = warmupFor(c.Probe, cold, rollover, c.NextPollAt, o.Now)
 			}
 			row.Slack = row.Threshold - pct
 			per[w.Name] = row.Threshold

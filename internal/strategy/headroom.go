@@ -2,6 +2,7 @@ package strategy
 
 import (
 	"strings"
+	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
@@ -268,30 +269,86 @@ func HeadroomFor(s *usage.Snapshot, model string, t Thresholds) Headroom {
 	return out
 }
 
-// UnwakenWindow is the first window in an account's own candidate set — the
-// same set HeadroomFor ranges over — that has never been spent against and
-// carries no reset, or false when there is none.
+// neverSpent reports whether a window has never been spent against: nothing
+// used and no reset time to show for it.
+//
+// The utilization test is not redundant with the reset test. A window reporting
+// a percentage above zero and NO reset is not an unused window — it is a
+// resets_at this build could not read — and spending a turn on it would buy the
+// same unreadable field back, once per rung of the ladder, forever.
+func neverSpent(w usage.NamedWindow) bool {
+	pct, ok := w.Percent()
+	if !ok || pct != 0 {
+		return false
+	}
+	_, has := w.Reset()
+	return !has
+}
+
+// ColdWindow is the first window in an account's own candidate set — the same
+// set HeadroomFor ranges over — whose clock is not running, together with the
+// rollover the reading reported for it and whether there was one.
+//
+// A five-hour window is anchored at first use and does not stretch when more is
+// spent against it, so a clock started early is elapsed time the account gets
+// for free — that is what a warm-up buys, and this names the window that has
+// none running.
+//
+// There are two ways to have no clock, and both are here because a warm-up
+// answers both:
+//
+//   - NEVER SPENT: nothing used, no reset. This is the original question, and
+//     the one an account added five minutes ago asks.
+//   - ROLLED OVER: the reading carries a reset that has already PASSED. The
+//     window ran down; the cached reading is simply older than the event. This
+//     arm is why the warm-up can land on the same tick as the poll that finds
+//     the window cold — without it the daemon must wait for one poll to write
+//     {0, null} and then for the NEXT poll's tick to notice, and both intervals
+//     are the ten-minute idle cadence.
+//
+// A window at more than 0% with no reset is in neither arm; neverSpent says why.
 //
 // It does not stop at the single BINDING window the way HeadroomFor does. An
-// account's five-hour window can sit at 0% with no reset while a weekly cap
-// binds tighter and already has one of its own: from the ranking's point of
-// view that account has pace already, but the five-hour window's reset is
-// still missing, and a probe exists to fetch exactly that — `ccdad hover
-// status` marks such a row probe-worthy on this same reasoning, so the two
-// must agree on what counts. Ties resolve on the schema's own order, the same
-// way HeadroomFor's do, which in practice means the plain five-hour window —
-// first in wire order — wins over a weekly one when both qualify.
-func UnwakenWindow(s *usage.Snapshot, model string, t Thresholds) (usage.WindowName, bool) {
+// account's five-hour window can sit with no clock while a weekly cap binds
+// tighter and has a running one of its own: from the ranking's point of view
+// that account has pace already, but the five-hour clock is still stopped, and
+// stopping is what costs lockout later. Ties resolve on the schema's own order,
+// the same way HeadroomFor's do, which in practice means the plain five-hour
+// window — first in wire order — wins over a weekly one when both qualify, and
+// that is the window worth having.
+func ColdWindow(s *usage.Snapshot, model string, t Thresholds, now time.Time) (usage.WindowName, time.Time, bool) {
 	for _, w := range bindingWindows(s, model, t) {
-		pct, ok := w.Percent()
-		if !ok || pct != 0 {
-			continue
+		if neverSpent(w) {
+			return w.Name, time.Time{}, true
 		}
-		if _, has := w.Reset(); !has {
-			return w.Name, true
+		if at, has := w.Reset(); has && !at.After(now) {
+			return w.Name, at, true
 		}
 	}
-	return "", false
+	return "", time.Time{}, false
+}
+
+// NextResetAmong is the earliest FUTURE rollover among an account's candidate
+// windows, or false when no window has one.
+//
+// FUTURE, and over the whole candidate set rather than the binding window: the
+// caller is scheduling the poll that will find a clock stopped, and the binding
+// window is routinely a weekly one whose reset is days out while the five-hour
+// clock this exists to restart runs down within hours. A reset already in the
+// past is not a schedule either — it is the event that has already happened, and
+// ColdWindow is what answers for it.
+func NextResetAmong(s *usage.Snapshot, model string, t Thresholds, now time.Time) (time.Time, bool) {
+	out, found := time.Time{}, false
+	for _, w := range bindingWindows(s, model, t) {
+		at, has := w.Reset()
+		if !has || !at.After(now) {
+			continue
+		}
+		if !found || at.Before(out) {
+			out, found = at, true
+		}
+	}
+	return out, found
 }
 
 // recoveryOf is when the named window rolls over: the moment it stops holding

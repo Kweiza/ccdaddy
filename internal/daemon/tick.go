@@ -544,8 +544,8 @@ func (e *Engine) dispatch(ctx context.Context, s *store.Store, accounts []store.
 		// skipping the poll for it as well would leave an account unread forever:
 		// the reading is what says the window still has no reset, so a tick that
 		// never refreshes it can never find out that it does.
-		if model, want := e.probeDue(a, entry, cfg, thresholds, now, active, activeKnown, quarantined); want &&
-			e.probeNow(a, model, now) {
+		if w, model, want := e.probeDue(a, entry, cfg, thresholds, now, active, activeKnown, quarantined); want &&
+			e.probeNow(a, w, model, now) {
 			e.release(a.UUID)
 			continue
 		}
@@ -625,34 +625,42 @@ func due(e usage.Entry, has bool, now time.Time, live bool) bool {
 }
 
 // probeDue reports whether this tick should spend a turn of an account's own
-// quota to wake one of its windows, and which model family the turn has to be
-// spent against to reach that window.
+// quota to start one of its windows' clocks, which window that is, and which
+// model family the turn has to be spent against to reach it.
 //
 // Every condition is a way this goes wrong without it:
 //
 //   - probe_unknown off is the user saying not to spend their quota unasked.
-//   - a disabled account is one the engine will not switch to, so a reading for
-//     it buys nothing and the quota would be spent for nobody. A QUARANTINED one
-//     is the same sentence: it is out of rotation, and the only thing that ever
-//     quarantines is a refresh token the endpoint has already rejected — which is
-//     the very credential a probe would seed its Claude Code with. That errand
-//     cannot authenticate, so it would fail every six hours forever.
-//   - an account with no unwaken window is either unreadable — nothing to poll
-//     rather than an unused window, and the answer to that is another poll, not
-//     a turn of quota — or one where every window either has a reset already or
-//     has been spent against with none, which UnwakenWindow's own doc explains.
-//   - the six-hour gate is what keeps a probe that FAILS — a login prompt, a
-//     model outage — from being retried at this loop's 1 Hz.
+//   - a disabled account is one the engine will not switch to, so a warm clock
+//     for it buys nothing and the quota would be spent for nobody. A QUARANTINED
+//     one is the same sentence: it is out of rotation, and the only thing that
+//     ever quarantines is a refresh token the endpoint has already rejected —
+//     which is the very credential a probe would seed its Claude Code with. That
+//     errand cannot authenticate, so it would fail every rung forever.
+//   - an account with no cold window is either unreadable — nothing to poll
+//     rather than a stopped clock, and the answer to that is another poll, not a
+//     turn of quota — or one where every window's clock is already running,
+//     which ColdWindow's own doc explains.
+//   - the ladder is what keeps a probe that FAILS — a login prompt, a model
+//     outage — from being retried at this loop's 1 Hz.
+//
+// The rollover instant ColdWindow reports is handed to MayProbe rather than
+// discarded, and that is the whole shape of the change this function carries.
+// The old gate was one interval since the last attempt, which cannot express the
+// thing that actually paces a healthy account: its own five-hour window running
+// down. Six hours against a five-hour window left the clock stopped for an hour
+// of every cycle — about 4.2-4.6 hours a day per account, measured — and it was
+// stopped in the hour right after the rollover, when starting it is worth the
+// most. MayProbe's rollover arm is "one attempt per rollover" with no interval
+// in it at all.
 //
 // It does not stop at the account's BINDING window. strategy.HeadroomOf picks
 // the single window with the least slack, because that is the one the ranking
-// cares about — but an untouched five-hour window can sit beside a weekly cap
-// that binds tighter and already has its own reset, and the five-hour window's
-// missing reset does not stop being missing because something else happens to
-// bind right now. `ccdad hover status` marks that row probe-worthy on exactly
-// this reasoning (strategy.HoverWindow.ProbeWanted), so the daemon's own probe
-// path has to agree with what it tells the user is queued, not with a narrower
-// question the ranking asks for a different reason.
+// cares about — but a five-hour window can have a stopped clock beside a weekly
+// cap that binds tighter and has a running one of its own, and the five-hour
+// clock is the one whose lockout a warm-up shortens. `ccdad hover status` reads
+// the same ColdWindow and the same gate (strategy.HoverWindow.Warmup), so what
+// the table says is queued and what this fires on cannot drift.
 //
 // The live account is skipped, and that is the one exclusion worth spelling out.
 // It is the account something else is already spending against, so a probe of it
@@ -660,15 +668,15 @@ func due(e usage.Entry, has bool, now time.Time, live bool) bool {
 // break a session in flight: a probe runs its own Claude Code out of its own
 // credential home holding the SAME OAuth login, and the server rotates the
 // refresh token whenever either of them refreshes, revoking the copy the live
-// session is using. What happens instead is nothing: the window gets its reset
-// time from the user's own next turn, which is the event a probe is standing in
-// for, and `ccdad probe <account>` stays available to a human who wants it now.
+// session is using. What happens instead is nothing: the window gets its clock
+// from the user's own next turn, which is the event a warm-up stands in for, and
+// `ccdad probe <account>` stays available to a human who wants it now.
 func (e *Engine) probeDue(a store.Account, entry usage.Entry, cfg config.Config,
 	thresholds func(uuid string) strategy.Thresholds,
-	now time.Time, active string, activeKnown bool, quarantined map[string]bool) (string, bool) {
+	now time.Time, active string, activeKnown bool, quarantined map[string]bool) (usage.WindowName, string, bool) {
 
 	if !cfg.ProbeUnknown || a.Disabled || quarantined[a.UUID] {
-		return "", false
+		return "", "", false
 	}
 	// Which account is live has to be KNOWN, not merely unequal. An empty active
 	// uuid is "could not be worked out" as well as "nobody", and the two have
@@ -677,20 +685,20 @@ func (e *Engine) probeDue(a store.Account, entry usage.Entry, cfg config.Config,
 	// Code is logged in as. Nothing is lost by waiting — an engine that cannot
 	// name the live account is about to switch, and a switch names it.
 	if !activeKnown || a.UUID == active {
-		return "", false
+		return "", "", false
 	}
 	// thresholds(a.UUID), not cfg.Thresholds(): under hover the candidate window
-	// set — and so the window a probe would wake — is chosen against the same
+	// set — and so the window a warm-up would start — is chosen against the same
 	// per-account table the ranking used, not the raw config bundle hover
 	// otherwise ignores.
-	w, ok := strategy.UnwakenWindow(entry.Snapshot, "", thresholds(a.UUID))
+	w, rollover, ok := strategy.ColdWindow(entry.Snapshot, "", thresholds(a.UUID), now)
 	if !ok {
-		return "", false
+		return "", "", false
 	}
-	if !entry.MayProbe(now) {
-		return "", false
+	if !entry.MayProbe(now, w, rollover, !rollover.IsZero()) {
+		return "", "", false
 	}
-	return probeModel(w), true
+	return w, probeModel(w), true
 }
 
 // probeModel is the model family a turn must be spent against to reach one
@@ -712,9 +720,11 @@ func (e *Engine) probeDue(a store.Account, entry usage.Entry, cfg config.Config,
 // What this cannot express is a model VERSION. A cap scoped to "Opus 4.1" is
 // probed with --model opus, which claude resolves to whatever it calls opus
 // today, and if that is a different build the turn lands on a different window.
-// The six-hour gate is what bounds that: MayProbe counts every ATTEMPT and not
-// only the failures, precisely so a probe that wakes nothing costs four turns a
-// day rather than one per cadence.
+// The ladder is what bounds that, and it is why usage.ProbeState.ColdStreaks is
+// keyed per window rather than per account: a window in this state is judged
+// ineffective by every reading that follows a warm-up of it, climbs to the
+// six-hour ceiling, and stays there — while the five-hour window beside it keeps
+// its own clean record and its own rollover-paced schedule.
 func probeModel(w usage.WindowName) string {
 	if family, ok := strategy.FixedWindowFamily(w); ok {
 		return family
@@ -736,22 +746,23 @@ func probeModel(w usage.WindowName) string {
 // It reports whether the attempt was RECORDED, which is what makes it safe for
 // the caller to skip this tick's poll: a recorded attempt has already scheduled
 // that poll a minute out, and an unrecorded one has scheduled nothing.
-func (e *Engine) probeNow(a store.Account, model string, now time.Time) bool {
+func (e *Engine) probeNow(a store.Account, w usage.WindowName, model string, now time.Time) bool {
 	// Asked here rather than once per tick: this is reached only for an account
-	// that is otherwise worth probing, which after the first successful probe is
-	// no account at all. The child inherits this process's PATH through ChildEnv,
-	// so what resolves here is what will resolve there.
+	// that is otherwise worth warming, which on a healthy fleet is one account
+	// at a time. The child inherits this process's PATH through ChildEnv, so what
+	// resolves here is what will resolve there.
 	//
 	// Asked BEFORE the attempt is recorded, and that order is deliberate: a
 	// machine with no Claude Code on it has not made a failed attempt — nothing
-	// was tried and nothing was spent — so it must not consume the six-hour
-	// budget, or the account stays unknown for six hours after claude is finally
+	// was tried and nothing was spent — so it must not consume a rung of the
+	// ladder, or the account's clock stays stopped long after claude is finally
 	// installed.
 	if err := ProbeAvailable(); err != nil {
 		if !e.saidNoClaude {
 			e.saidNoClaude = true
-			e.logf("not probing: %v. An account whose window has never been used stays "+
-				"unknown — no reset time, no pace, no projection. Install Claude Code, or "+
+			e.logf("not probing: %v. An account whose window has no clock running stays "+
+				"unknown — no reset time, no pace, no projection — and pays a full five hours "+
+				"of lockout the first time it is used. Install Claude Code, or "+
 				"set probe_unknown = false to stop looking", err)
 		}
 		return false
@@ -766,8 +777,9 @@ func (e *Engine) probeNow(a store.Account, model string, now time.Time) bool {
 	// separate process, so a spawn that never starts would otherwise leave the
 	// account probe-due on the very next tick, forever. The child stamps again
 	// once it knows the outcome; both writers go through the cache's own lock and
-	// the later one lands last.
-	if err := usage.RecordProbe(cacheTimeout, a.UUID, now, nil); err != nil {
+	// the later one lands last. Neither stamp advances a streak — the reading
+	// does, in commit — so the double write cannot count one attempt twice.
+	if err := usage.RecordProbe(cacheTimeout, a.UUID, now, w, nil); err != nil {
 		e.logf("recording %s's probe failed: %v", a.UUID, err)
 		return false
 	}
@@ -909,6 +921,14 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now time.Time,
 			state = adjust(state)
 		}
 
+		// The verdict on the last warm-up, taken BEFORE FetchedAt is moved: it
+		// is the stamp that says whether this reading is one the warm-up has
+		// been waiting for. Judged is where the rule lives; what matters here is
+		// only that it runs on every commit, including the ones with no reading
+		// at all, and that it runs exactly once per attempt because this same
+		// callback then writes the FetchedAt that ends the wait.
+		entry.Probe = entry.Probe.Judged(entry.FetchedAt, snap, now)
+
 		if snap != nil {
 			entry.Snapshot, entry.FetchedAt = snap, now
 		} else if !had {
@@ -953,6 +973,20 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now time.Time,
 		// divided.
 		entry.NextPollAt = now.Add(pollpolicy.Share(at.Sub(now), len(identity), in))
 		entry.ServeTTL = pollpolicy.ServeTTLFor(in)
+		// Aim the next look at the moment a clock runs down, so the tick that
+		// finds the window cold is the one just after the rollover rather than
+		// one the idle cadence happens to land later. Without this the warm-up
+		// waits for a poll to DISCOVER the cold window and then for the next due
+		// tick to act on it, and both intervals are the ten-minute idle cadence:
+		// about 900 s of stopped clock per cycle, all of it in the minutes right
+		// after the reset.
+		//
+		// StandDownUntil is deliberately not touched, and Entry.PollAt still
+		// takes the later of the two. So this is a guarantee that the clock is
+		// restarted at rollover UNLESS the endpoint is refusing us — congestion
+		// outranks the clock, which is the same order every other schedule here
+		// obeys.
+		entry.NextPollAt = warmClamp(entry.NextPollAt, e.warmTarget(entry.Snapshot, thr, now), now, entry.ScheduledTTL())
 		entry.Poll = usage.PollState{Interval: next.Interval, LastRateLimited: next.LastRateLimited}
 		entry.Poll.LastBindingPct, entry.Poll.HasLastBinding = next.LastBindingPct, next.HasLastBinding
 		// entry.StandDownUntil is read and written back untouched, and that is
@@ -973,6 +1007,61 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now time.Time,
 	if err != nil {
 		e.logf("recording %s's reading failed: %v", a.UUID, err)
 	}
+}
+
+// warmTarget is when the next of this account's clocks runs down, plus the
+// margin that keeps the reading aimed at it from arriving before the rollover
+// it is aimed at. Zero means there is nothing to aim at.
+//
+// Zero is the ordinary answer for the account this exists to serve, and that is
+// not a contradiction: an account whose five-hour clock is already stopped has
+// no future rollover to schedule against, and it does not need one — it is
+// probe-due on this very tick. The schedule matters for the account whose clock
+// is RUNNING, which is the one that will go cold later and unattended.
+//
+// The margin is jittered across [ProbeWakeMargin, 2*ProbeWakeMargin) because
+// rollover instants cluster: a fleet warmed in one batch rolls over in one
+// batch — the live one warmed three accounts within 19 minutes — and the anchors
+// themselves land on ten-minute boundaries. An unjittered margin would put
+// several `claude -p` children on the same second.
+func (e *Engine) warmTarget(s *usage.Snapshot, thr strategy.Thresholds, now time.Time) time.Time {
+	at, ok := strategy.NextResetAmong(s, "", thr, now)
+	if !ok {
+		return time.Time{}
+	}
+	return at.Add(usage.ProbeWakeMargin + time.Duration(e.rand()*float64(usage.ProbeWakeMargin)))
+}
+
+// warmClamp is the next poll instant, given the one the cadence chose and the
+// one a rollover wants.
+//
+// Three cases, and the middle one is the only surprising one:
+//
+//   - the cadence would look at or after the target: take the target. This is
+//     the ordinary idle account, whose ten-minute cadence would otherwise walk
+//     past the rollover.
+//   - the cadence would look shortly BEFORE the target: pull that look back so
+//     the reading it takes is a full ttl old by the time the target arrives.
+//     Without this the poll at the target is refused by due()'s own freshness
+//     floor — the reading is younger than ScheduledTTL — and the warm-up slips a
+//     whole interval on roughly a third of cycles. The pull-back is skipped when
+//     it would land in the past, because a reading taken now cannot be made
+//     older by scheduling.
+//   - the cadence would look long before the target: leave it. Its reading will
+//     have aged past the floor on its own.
+//
+// A zero target means there is nothing to aim at and the cadence stands.
+func warmClamp(natural, target, now time.Time, ttl time.Duration) time.Time {
+	if target.IsZero() {
+		return natural
+	}
+	if !natural.Before(target) {
+		return target
+	}
+	if pull := target.Add(-ttl); natural.After(pull) && pull.After(now) {
+		return pull
+	}
+	return natural
 }
 
 // standDown pushes every other account on one identity to the congestion ceiling
