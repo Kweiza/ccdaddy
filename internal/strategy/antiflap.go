@@ -170,6 +170,12 @@ const (
 	// subscription account has room to go back to. Staying is right; moving to
 	// a spent subscription account would break the session for nothing.
 	ReasonNoSubscriptionRoom
+	// ReasonProjectedExhaustion: the live account's binding window is projected
+	// to reach its limit before the next reading lands, and some candidate still
+	// has slack. Appended LAST on purpose — nothing persists these values, but
+	// renumbering an enum that a report and a notification both name is a diff
+	// nobody can review.
+	ReasonProjectedExhaustion
 )
 
 func (r Reason) String() string {
@@ -198,6 +204,8 @@ func (r Reason) String() string {
 		return "the credit gate refused"
 	case ReasonNoSubscriptionRoom:
 		return "no subscription account has room"
+	case ReasonProjectedExhaustion:
+		return "the live account is projected to hit its limit before the next reading"
 	}
 	return "unknown"
 }
@@ -311,6 +319,26 @@ func Decide(cands []Candidate, o Options, cfg Config, st *State, activeUUID stri
 			activeIsCredit = true
 			break
 		}
+	}
+
+	// The projection, ahead of every margin that compares the two accounts as
+	// they stand right now. Those margins are measuring a comparison that is
+	// about to be false, so hysteresis_pct and headroom_ratio are overridden
+	// here — but the cooldown is not, because a switch storm is a different
+	// failure and the cooldown is the only thing that bounds it.
+	if target, moving := preempt(byUUID, res, activeUUID, o); moving {
+		if reason, blocked, retry := cooldownGate(res, activeUUID, cfg, st, o.Now); blocked {
+			plan.Action = ActionStay
+			plan.Reason = reason
+			if !retry.IsZero() {
+				plan.RetryAt, plan.HasRetryAt = retry, true
+			}
+			return plan
+		}
+		plan.Action = ActionSwitch
+		plan.Reason = ReasonProjectedExhaustion
+		plan.Target = target
+		return plan
 	}
 
 	// The subscription pool first. The one situation where it is skipped is an

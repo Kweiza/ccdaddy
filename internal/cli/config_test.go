@@ -160,10 +160,16 @@ func TestSettingAnUnknownKeyIsAUsageError(t *testing.T) {
 func TestNoSecretShapedKeyIsSettable(t *testing.T) {
 	isolate(t)
 
-	for _, key := range []string{"token", "api_key", "oauth_token", "credit.token"} {
+	for _, key := range []string{"token", "api_key", "oauth_token", "credit.token", "window_threshold.token"} {
 		if code, _, _, _ := runRoot(t, "config", "set", key, "sk-live-1"); code != ExitUsage {
 			t.Errorf("set %s exit = %d, want %d", key, code, ExitUsage)
 		}
+	}
+	// The free-form section opens no hole of its own: the NAME has to be a
+	// window and the VALUE has to be a utilization percent, so there is nowhere
+	// in it to put a string at all.
+	if code, _, _, _ := runRoot(t, "config", "set", "window_threshold.five_hour", "sk-live-1"); code != ExitUsage {
+		t.Errorf("set a token as a window threshold exit = %d, want %d", code, ExitUsage)
 	}
 }
 
@@ -252,7 +258,7 @@ func TestTheConfigFileIsWrittenPrivately(t *testing.T) {
 
 func TestListShowsEveryKeyAndWhereItsValueCameFrom(t *testing.T) {
 	isolate(t)
-	writeConfig(t, "threshold = 55\n")
+	writeConfig(t, "threshold = 55\n\n[window_threshold]\nfive_hour = 85\n")
 
 	code, stdout, _, _ := runRoot(t, "config", "list")
 	if code != ExitOK {
@@ -263,6 +269,15 @@ func TestListShowsEveryKeyAndWhereItsValueCameFrom(t *testing.T) {
 			t.Errorf("listing omits %q:\n%s", key, stdout)
 		}
 	}
+	// The window rows come from the document rather than from the fixed list,
+	// and a listing that showed only the fixed half would hide the number the
+	// engine is actually ranking that window on.
+	if !strings.Contains(stdout, "window_threshold.five_hour") {
+		t.Errorf("listing omits the window the file sets:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "85") {
+		t.Errorf("listing does not show the window's value:\n%s", stdout)
+	}
 	if !strings.Contains(stdout, "55") {
 		t.Errorf("listing does not show the configured value:\n%s", stdout)
 	}
@@ -271,9 +286,33 @@ func TestListShowsEveryKeyAndWhereItsValueCameFrom(t *testing.T) {
 	}
 }
 
+// A window with no key of its own is ranked against the top-level threshold, so
+// there is nothing to print for it. A placeholder row would name a key `ccdad
+// config unset` could not remove.
+func TestListPrintsNoWindowRowUntilTheFileNamesOne(t *testing.T) {
+	isolate(t)
+	// A header with nothing under it, which is what a hand edit that removed
+	// the last window leaves behind.
+	writeConfig(t, "threshold = 55\n\n[window_threshold]\n")
+
+	code, stdout, stderr, _ := runRoot(t, "config", "list")
+	if code != ExitOK {
+		t.Fatalf("exit = %d", code)
+	}
+	if strings.Contains(stdout, "window_threshold") {
+		t.Errorf("the listing invented a row for a window nothing has set:\n%s", stdout)
+	}
+	if strings.Contains(stderr, "window_threshold") {
+		t.Errorf("stderr = %q; an empty table of a section this ccdad knows is not an unknown key", stderr)
+	}
+	if rows := strings.Count(strings.TrimSpace(stdout), "\n"); rows != len(config.Keys()) {
+		t.Errorf("listing has %d rows under the header, want the %d fixed keys:\n%s", rows, len(config.Keys()), stdout)
+	}
+}
+
 func TestListAnswersInJSON(t *testing.T) {
 	isolate(t)
-	writeConfig(t, "threshold = 55\nfuture_knob = 1\n")
+	writeConfig(t, "threshold = 55\nfuture_knob = 1\n\n[window_threshold]\nfive_hour = 85\nthirty_day = 5\n")
 
 	code, stdout, stderr, _ := runRoot(t, "config", "list", "--json")
 	if code != ExitOK {
@@ -292,14 +331,21 @@ func TestListAnswersInJSON(t *testing.T) {
 	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
 		t.Fatalf("stdout is not one JSON object: %v\n%s", err, stdout)
 	}
-	if payload.SchemaVersion != 1 || len(payload.Keys) != len(config.Keys()) {
+	// The fixed keys, and one row for the single window this file names. The
+	// other window name is not one this ccdad has, so it is reported as ignored
+	// rather than ranked.
+	if payload.SchemaVersion != 1 || len(payload.Keys) != len(config.Keys())+1 {
 		t.Fatalf("payload = %+v", payload)
 	}
 	if payload.Keys[0].Key != "threshold" || payload.Keys[0].Value != "55" || payload.Keys[0].Source != "file" {
 		t.Errorf("first key = %+v, want threshold 55 from the file", payload.Keys[0])
 	}
-	if len(payload.UnknownKeys) != 1 || payload.UnknownKeys[0] != "future_knob" {
-		t.Errorf("unknownKeys = %v, want [future_knob]", payload.UnknownKeys)
+	last := payload.Keys[len(payload.Keys)-1]
+	if last.Key != "window_threshold.five_hour" || last.Value != "85" || last.Source != "file" {
+		t.Errorf("last key = %+v, want window_threshold.five_hour 85 from the file", last)
+	}
+	if len(payload.UnknownKeys) != 2 || payload.UnknownKeys[0] != "future_knob" || payload.UnknownKeys[1] != "window_threshold.thirty_day" {
+		t.Errorf("unknownKeys = %v, want [future_knob window_threshold.thirty_day]", payload.UnknownKeys)
 	}
 	if strings.Contains(stderr, "future_knob") == false {
 		t.Errorf("stderr = %q, want the ignored key called out as a human notice too", stderr)
@@ -343,6 +389,20 @@ func TestSettingIntoAFileThatStaysInvalidWarnsLoudly(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "hysteresis_pct") {
 		t.Errorf("stderr = %q, want the problem that is still in the file", stderr)
+	}
+
+	// The same for a window threshold, which reaches the echo through a
+	// document whose Config() fails: the value reported is the one the file now
+	// holds, read back, and not the string that was typed.
+	code, _, stderr, _ = runRoot(t, "config", "set", "window_threshold.five_hour", "85.0")
+	if code != ExitOK {
+		t.Fatalf("exit = %d", code)
+	}
+	if !strings.Contains(stderr, "hysteresis_pct") {
+		t.Errorf("stderr = %q, want the problem that is still in the file", stderr)
+	}
+	if !strings.Contains(stderr, "window_threshold.five_hour = 85\n") {
+		t.Errorf("stderr = %q, want the stored 85 echoed rather than the typed 85.0", stderr)
 	}
 }
 
@@ -477,7 +537,7 @@ func TestTheConfiguredThresholdReachesTheRankingPass(t *testing.T) {
 // in force when nothing of the sort is happening.
 func TestListShowsTheDefaultsWhenTheFileCannotBeUsed(t *testing.T) {
 	isolate(t)
-	writeConfig(t, "hysteresis_pct = 0\nthreshold = 55\n")
+	writeConfig(t, "hysteresis_pct = 0\nthreshold = 55\n\n[window_threshold]\nfive_hour = 85\n")
 
 	code, stdout, stderr, _ := runRoot(t, "config", "list")
 	if code != ExitOK {
@@ -486,10 +546,142 @@ func TestListShowsTheDefaultsWhenTheFileCannotBeUsed(t *testing.T) {
 	if !strings.Contains(stderr, "hysteresis_pct") {
 		t.Errorf("stderr = %q, want the value that made the file unusable", stderr)
 	}
-	if strings.Contains(stdout, "55") {
+	if strings.Contains(stdout, "55") || strings.Contains(stdout, "85") {
 		t.Errorf("the listing shows a value the engine is not using:\n%s", stdout)
 	}
 	if !strings.Contains(stdout, "80") {
 		t.Errorf("the listing does not show the default the engine IS using:\n%s", stdout)
+	}
+	// The window row is still listed, because the file still names that window
+	// and the row is where the user reads what the engine is doing with it:
+	// falling back to the built-in threshold until the file is fixed.
+	if !strings.Contains(stdout, "window_threshold.five_hour") {
+		t.Errorf("the listing dropped the window the file names:\n%s", stdout)
+	}
+}
+
+// The dotted key works end to end, and unsetting it returns the window to the
+// top-level threshold rather than to a number of its own.
+func TestAWindowThresholdRoundTripsThroughTheCLI(t *testing.T) {
+	isolate(t)
+
+	code, _, stderr, top := runRoot(t, "config", "set", "window_threshold.five_hour", "85.0")
+	if code != ExitOK {
+		t.Fatalf("set exit = %d (%s)", code, top)
+	}
+	if !strings.Contains(stderr, "window_threshold.five_hour = 85\n") {
+		t.Errorf("stderr = %q, want the stored 85 echoed rather than the typed 85.0", stderr)
+	}
+
+	code, stdout, _, _ := runRoot(t, "config", "get", "window_threshold.five_hour")
+	if code != ExitOK || strings.TrimSpace(stdout) != "85" {
+		t.Fatalf("get = %d, %q; want exit 0 and 85", code, strings.TrimSpace(stdout))
+	}
+
+	if code, _, _, _ := runRoot(t, "config", "unset", "window_threshold.five_hour"); code != ExitOK {
+		t.Fatalf("unset exit = %d", code)
+	}
+	code, _, stderr, _ = runRoot(t, "config", "get", "window_threshold.five_hour")
+	if code != ExitProbeNegative {
+		t.Errorf("get after unset exit = %d, want %d", code, ExitProbeNegative)
+	}
+	if !strings.Contains(stderr, "80") {
+		t.Errorf("stderr = %q, want the top-level threshold it falls back to", stderr)
+	}
+}
+
+// A name that is not a window is a typo, and a typo that is accepted is a
+// threshold that silently governs nothing.
+func TestAWindowNameThatIsNotAWindowIsAUsageError(t *testing.T) {
+	isolate(t)
+
+	for _, key := range []string{
+		"window_threshold.typo",
+		// A window the endpoint really reports, and still refused: its
+		// resets_at is an expiry, so nothing ranks it.
+		"window_threshold.cinder_cove",
+		// The table itself is not a value.
+		"window_threshold",
+	} {
+		if code, _, _, top := runRoot(t, "config", "set", key, "85"); code != ExitUsage {
+			t.Errorf("set %s exit = %d, want %d (%s)", key, code, ExitUsage, top)
+		}
+		if code, _, _, _ := runRoot(t, "config", "get", key); code != ExitUsage {
+			t.Errorf("get %s exit = %d, want %d", key, code, ExitUsage)
+		}
+	}
+	if _, err := os.Stat(configPath(t)); !os.IsNotExist(err) {
+		t.Error("a refused set created the config file")
+	}
+
+	// The refusal has to name the windows that do exist: the list of top-level
+	// keys is no help when the key is in the right table already.
+	_, _, _, top := runRoot(t, "config", "set", "window_threshold.typo", "85")
+	if !strings.Contains(top, "five_hour") || !strings.Contains(top, "weekly_scoped:model:") {
+		t.Errorf("stderr = %q, want the window names and the scoped prefixes listed", top)
+	}
+	// cinder_cove is refused for what it IS rather than for how it is spelled,
+	// so it does not get the misspelling's sentence.
+	_, _, _, top = runRoot(t, "config", "set", "window_threshold.cinder_cove", "85")
+	if !strings.Contains(top, "expiry") {
+		t.Errorf("stderr = %q, want the reason cinder_cove is never ranked", top)
+	}
+}
+
+// The four scalars this release adds are settable from the CLI. Until they were
+// in the key set every one of these was exit 2, and a feature whose knob cannot
+// be turned is a feature nobody can reach.
+func TestTheNewScalarKeysAreSettableFromTheCLI(t *testing.T) {
+	isolate(t)
+
+	for _, tc := range [][2]string{
+		{"hover", "true"},
+		{"probe_unknown", "false"},
+		{"preempt_lead", "90s"},
+		{"credit.threshold", "70"},
+	} {
+		key, value := tc[0], tc[1]
+		if code, _, _, top := runRoot(t, "config", "set", key, value); code != ExitOK {
+			t.Fatalf("set %s %s exit = %d (%s)", key, value, code, top)
+		}
+	}
+
+	// A duration is stored canonically, exactly as cooldown is, so the very
+	// next get cannot contradict the set.
+	code, stdout, _, _ := runRoot(t, "config", "get", "preempt_lead")
+	if code != ExitOK || strings.TrimSpace(stdout) != "1m30s" {
+		t.Errorf("get preempt_lead = %d, %q; want exit 0 and 1m30s", code, strings.TrimSpace(stdout))
+	}
+	code, stdout, _, _ = runRoot(t, "config", "get", "hover")
+	if code != ExitOK || strings.TrimSpace(stdout) != "true" {
+		t.Errorf("get hover = %d, %q; want exit 0 and true", code, strings.TrimSpace(stdout))
+	}
+	code, stdout, _, _ = runRoot(t, "config", "get", "probe_unknown")
+	if code != ExitOK || strings.TrimSpace(stdout) != "false" {
+		t.Errorf("get probe_unknown = %d, %q; want exit 0 and false", code, strings.TrimSpace(stdout))
+	}
+
+	// Zero is how the pre-emptive switch is turned off, and it is a value a
+	// user may choose rather than a mechanism being disabled. Refusing it here
+	// would leave hand-editing the file as the only way to say so.
+	if code, _, _, top := runRoot(t, "config", "set", "preempt_lead", "0"); code != ExitOK {
+		t.Errorf("set preempt_lead 0 exit = %d, want %d (%s)", code, ExitOK, top)
+	}
+	code, stdout, _, _ = runRoot(t, "config", "get", "preempt_lead")
+	if code != ExitOK || strings.TrimSpace(stdout) != "0s" {
+		t.Errorf("get preempt_lead = %d, %q; want exit 0 and 0s", code, strings.TrimSpace(stdout))
+	}
+	// A negative lead is not a shorter one: it would put the switch after the
+	// exhaustion it exists to get ahead of.
+	if code, _, _, _ := runRoot(t, "config", "set", "preempt_lead", "-2m"); code != ExitUsage {
+		t.Errorf("set preempt_lead -2m exit = %d, want %d", code, ExitUsage)
+	}
+
+	// TOML has no `yes` literal, so accepting one would write a file the loader
+	// then refuses wholesale.
+	for _, value := range []string{"yes", "on", "sure"} {
+		if code, _, _, _ := runRoot(t, "config", "set", "hover", value); code != ExitUsage {
+			t.Errorf("set hover %s exit = %d, want %d", value, code, ExitUsage)
+		}
 	}
 }

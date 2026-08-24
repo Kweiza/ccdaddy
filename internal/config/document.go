@@ -14,6 +14,7 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/cclock"
+	"github.com/Kweiza/ccdaddy/internal/usage"
 )
 
 // The writable half of config.toml, for `ccdad config set|unset`.
@@ -128,6 +129,42 @@ func (d *Document) UnknownKeys() []string {
 	return out
 }
 
+// Keys is every key `ccdad config list` prints for THIS document: the ones
+// Keys() names, and the window thresholds the document itself carries.
+//
+// The second half cannot come from a list. A scoped window is named after a
+// model or a surface the server invented, so the set of legal names is open and
+// only the file knows which of them are in use. A document that names no window
+// therefore adds no row at all rather than a placeholder row for a key nothing
+// has set — which would be a row `ccdad config unset` could not remove.
+//
+// A name in the table that is not a window is left out here and reported by
+// UnknownKeys instead, which is the answer an unknown top-level key already
+// gets: it round-trips, it is ignored, and it is named once. That omission is
+// load-bearing rather than tidy — `ccdad config list` calls Config.Value on
+// every key it is handed and returns the error, so offering one would turn a
+// forward-compatible file into a failed command.
+func (d *Document) Keys() []string {
+	keys := Keys()
+	table, isTable := d.raw[windowThresholdSection].(map[string]any)
+	if !isTable {
+		return keys
+	}
+	windows := make([]string, 0, len(table))
+	for name := range table {
+		if key := windowThresholdPrefix + name; isKnownKey(key) {
+			windows = append(windows, key)
+		}
+	}
+	// Sorted, because a map has no order: two runs of `ccdad config list` over
+	// one unchanged file would otherwise print its rows in two different
+	// orders.
+	sort.Strings(windows)
+	// Keys() hands back a fresh slice on every call, so appending to it cannot
+	// alias the fixed list.
+	return append(keys, windows...)
+}
+
 // Value is the key's value AS THE FILE HOLDS IT, and whether the file holds one
 // at all. `ccdad config get` answers exit 5 on the false, which the exit
 // contract reserves for a negative answer to a probe rather than a failure.
@@ -218,8 +255,14 @@ func (d *Document) locate(key string, create bool) (map[string]any, string) {
 // coerce turns a command-line string into the value the file should carry,
 // applying the same validation the loader applies to what it reads.
 func coerce(key, value string) (any, error) {
+	// A per-window threshold is held to the same bounds as the top-level one it
+	// falls back to, so no window can be given a number the loader would refuse
+	// for `threshold` itself.
+	if _, ok := windowOf(key); ok {
+		return coerceFloat(key, value, validThreshold)
+	}
 	switch key {
-	case keyThreshold:
+	case keyThreshold, keyCreditThreshold:
 		return coerceFloat(key, value, validThreshold)
 	case keyHysteresisPct:
 		return coerceFloat(key, value, validHysteresisPct)
@@ -235,14 +278,43 @@ func coerce(key, value string) (any, error) {
 		// Stored canonically, so `config get` reads back what `config set`
 		// meant rather than what it was typed as.
 		return d.String(), nil
+	case keyPreemptLead:
+		// A duration like the two above, and NOT the same rule: zero is how
+		// the pre-emptive switch is turned off, while a zero cooldown is an
+		// anti-flap mechanism disabled. So it runs the overlay Parse runs for
+		// this key rather than the one Parse runs for those — a `config set`
+		// stricter than the loader would refuse the one value that documents
+		// the feature's own off switch and leave a hand edit as the only way
+		// to write it.
+		var d time.Duration
+		if err := applyPreemptLead(&d, &value); err != nil {
+			return nil, err
+		}
+		return d.String(), nil
 	case keyStrategy:
 		s, err := parseStrategy(value)
 		if err != nil {
 			return nil, err
 		}
 		return s.String(), nil
+	case keyProbeUnknown, keyHover:
+		return coerceBool(key, value)
 	}
 	return nil, unknownKey(key)
+}
+
+// coerceBool stores a real boolean rather than the string that was typed, so
+// the file always reads `hover = true` whichever spelling was given.
+//
+// `yes` and `on` are not among the spellings ParseBool takes, and that is the
+// right answer here rather than a gap: TOML has no such literal, so accepting
+// one would write a file the loader then refuses wholesale.
+func coerceBool(key, value string) (any, error) {
+	b, err := strconv.ParseBool(strings.TrimSpace(value))
+	if err != nil {
+		return nil, fmt.Errorf("%s: %q is not a boolean; write true or false", key, value)
+	}
+	return b, nil
 }
 
 func coerceFloat(key, value string, valid func(float64) error) (any, error) {
@@ -281,6 +353,16 @@ func format(v any) string {
 // `ccdad config list` prints these, so every key has an answer whether or not
 // the file mentions it.
 func (c Config) Value(key string) (string, error) {
+	if window, ok := windowOf(key); ok {
+		if v, set := c.WindowThreshold[window]; set {
+			return format(v), nil
+		}
+		// The per-window default IS `threshold`: a window with no key of its
+		// own is ranked against the top-level number, so reporting anything
+		// else here would name a value the engine never uses. Reading the nil
+		// map above is the ordinary state and is safe.
+		return format(c.Threshold), nil
+	}
 	switch key {
 	case keyThreshold:
 		return format(c.Threshold), nil
@@ -292,8 +374,16 @@ func (c Config) Value(key string) (string, error) {
 		return c.Cooldown.String(), nil
 	case keyRecoveryHysteresis:
 		return c.RecoveryHysteresis.String(), nil
+	case keyPreemptLead:
+		return c.PreemptLead.String(), nil
 	case keyStrategy:
 		return c.Strategy.String(), nil
+	case keyProbeUnknown:
+		return format(c.ProbeUnknown), nil
+	case keyHover:
+		return format(c.Hover), nil
+	case keyCreditThreshold:
+		return format(c.CreditThreshold), nil
 	case keyMaxAutoSpend:
 		return format(c.MaxAutoSpend), nil
 	}
@@ -301,6 +391,23 @@ func (c Config) Value(key string) (string, error) {
 }
 
 func unknownKey(key string) error {
+	if name, inSection := strings.CutPrefix(key, windowThresholdPrefix); inSection {
+		// The list of top-level keys is no help for this one: the key is in the
+		// right table already and it is the WINDOW that is not one. The whole
+		// sentence comes from the validator, which renders it from the same two
+		// tables it checks against — so the names offered here cannot drift
+		// from the names a threshold may actually be set on, and cinder_cove
+		// keeps its own sentence about being an expiry rather than being told
+		// it is misspelled.
+		//
+		// The err != nil guard is what makes a well-formed window name that
+		// reaches here anyway fall through to the list of top-level keys: a
+		// nil wrapped by %w prints %!w(<nil>) and would leave the refusal
+		// saying nothing at all.
+		if err := usage.ValidWindowName(usage.WindowName(name)); err != nil {
+			return fmt.Errorf("%w %q: %w", ErrUnknownKey, key, err)
+		}
+	}
 	return fmt.Errorf("%w %q: one of %s", ErrUnknownKey, key, joinNames(Keys()))
 }
 

@@ -553,7 +553,7 @@ func TestActionsAndReasonsAllHaveNames(t *testing.T) {
 	if got := Action(200).String(); got != "unknown" {
 		t.Errorf("Action(200) = %q, want unknown", got)
 	}
-	for r := ReasonBetterTarget; r <= ReasonNoSubscriptionRoom; r++ {
+	for r := ReasonBetterTarget; r <= ReasonProjectedExhaustion; r++ {
 		if r.String() == "unknown" {
 			t.Errorf("Reason(%d) has no name", r)
 		}
@@ -1044,5 +1044,55 @@ func TestTheConfiguredCeilingWinsOverOneLeftInTheRankingOptions(t *testing.T) {
 	want(t, p, ActionSwitch, ReasonBetterTarget, "zzz-large-cap")
 	if len(p.Result.Credit) == 0 || !p.Result.Credit[0].HasCreditRoom {
 		t.Fatal("the ranking armed nothing; Decide did not carry the configured ceiling into the pass")
+	}
+}
+
+// The other half of the same obligation, where "usable" and "refused" are
+// actions rather than pool membership. max_auto_spend = 0 is the default, and
+// it is the one Config field withDefaults does not replace.
+func TestMaxAutoSpendRefusesTheTwinAndNotThePrimarySeat(t *testing.T) {
+	seat := primarySeat("seat", 10)
+	other := primarySeat("other", 10)
+	other.Primary = false
+
+	p := Decide([]Candidate{seat, other}, opts(), Config{}, NewState(), "")
+	want(t, p, ActionSwitch, ReasonBetterTarget, "seat")
+	if p.CreditConsulted {
+		t.Error("the last-resort pool was consulted while a usable primary seat sat in the main pool")
+	}
+
+	// The same account without the flag, alone so nothing shadows it.
+	q := Decide([]Candidate{other}, opts(), Config{}, NewState(), "")
+	want(t, q, ActionBlocked, ReasonCreditGate, "")
+	if q.Credit.Reason != CreditNotOptedIn {
+		t.Errorf("Credit.Reason = %v, want the ceiling's own refusal", q.Credit.Reason)
+	}
+
+	// And the flagged seat alone is still usable at that same ceiling.
+	if s := Decide([]Candidate{seat}, opts(), Config{}, NewState(), ""); s.Action != ActionSwitch {
+		t.Errorf("Action = %v (%v), want a switch onto the primary seat at max_auto_spend = 0", s.Action, s.Reason)
+	}
+}
+
+// The defect the pool predicate closes, end to end: the engine is on a primary
+// seat that still has credits, a subscription account beside it is spent, and
+// an armed overage account waits behind them both. Counting only subscription
+// accounts answers "the main pool is exhausted", opens the last-resort pool and
+// starts spending money while capacity the user already paid for sits unused.
+func TestTheOveragePoolStaysShutWhileAPrimarySeatHasRoom(t *testing.T) {
+	cands := []Candidate{
+		hr("plan", 1, 4*time.Hour),
+		primarySeat("seat", 10),
+		creditRoom("money", 10000, 0),
+	}
+
+	p := Decide(cands, opts(), Config{MaxAutoSpend: 100}, NewState(), "seat")
+
+	want(t, p, ActionStay, ReasonAlreadyBest, "")
+	if p.SubscriptionExhausted {
+		t.Error("SubscriptionExhausted = true while a primary seat has 70 points of slack")
+	}
+	if p.CreditConsulted {
+		t.Error("the last-resort credit pool was opened while paid-for capacity sat unused")
 	}
 }
