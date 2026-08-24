@@ -12,6 +12,7 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/credhome"
 	"github.com/Kweiza/ccdaddy/internal/daemon"
+	"github.com/Kweiza/ccdaddy/internal/view"
 	"github.com/Kweiza/ccdaddy/internal/winerr"
 )
 
@@ -180,7 +181,7 @@ func runDaemonStatus(cmd *cobra.Command, asJSON bool) error {
 	} else {
 		switch report.State {
 		case daemon.DaemonRunning:
-			fmt.Fprintln(cmd.OutOrStdout(), "ccdad daemon: "+describeRunning(report))
+			fmt.Fprintln(cmd.OutOrStdout(), "ccdad daemon: "+view.DescribeRunning(report, timeNow()))
 		case daemon.DaemonStopped:
 			fmt.Fprintln(cmd.OutOrStdout(), "ccdad daemon: not running")
 		}
@@ -202,19 +203,6 @@ func runDaemonStatus(cmd *cobra.Command, asJSON bool) error {
 		}
 		return fmt.Errorf("cannot tell whether a daemon is running: %w", probeErr)
 	}
-}
-
-// describeRunning is the one-line human form of a live daemon.
-func describeRunning(report daemon.Report) string {
-	line := "running"
-	if report.HasStatus && report.Status.PID != 0 {
-		line += fmt.Sprintf(" (pid %d", report.Status.PID)
-		if !report.Status.StartedAt.IsZero() {
-			line += ", up " + humanDuration(timeNow().Sub(report.Status.StartedAt))
-		}
-		line += ")"
-	}
-	return line
 }
 
 // daemonJSON renders the daemon half of a payload. `ccdad status --json` nests
