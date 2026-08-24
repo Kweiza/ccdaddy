@@ -271,6 +271,67 @@ func TestListRendersAnUnreadableAccountAsAQuestionMark(t *testing.T) {
 	}
 }
 
+// A credit-metered seat — the enterprise and pay-as-you-go accounts KindCredit
+// names — carries no five_hour or seven_day window at all, so Headroom is
+// never Known for it and LEFT used to print "?" for the whole class rather
+// than for the accounts that actually failed to poll. With both money figures
+// on the wire, LEFT reports the remaining amount and the used/limit pair.
+func TestListShowsRemainingCreditWhenBothFiguresAreKnown(t *testing.T) {
+	isolate(t)
+	freezeClock(t, listNow)
+	seedTieredAccount(t, "u-1", "a@example.com", identity.KindCredit, "")
+	limit, used := 10000.0, 2550.0 // cents: a $100 cap, $25.50 spent
+	seedUsageEntry(t, "u-1", usage.Entry{
+		FetchedAt: listNow.Add(-90 * time.Second),
+		Snapshot: &usage.Snapshot{
+			ExtraUsage: usage.ExtraUsageFor(usage.ExtraUsageInput{
+				State: usage.ExtraUsageEnabled, Currency: "USD",
+				MonthlyLimit: &limit, UsedCredits: &used,
+			}),
+		},
+	})
+
+	_, out, _, top := runRoot(t, "list")
+	row := rowFor(t, out, "a@example.com")
+	if strings.Contains(row, "?") {
+		t.Errorf("a credit account with a readable balance still renders '?' (%s):\n%s", top, row)
+	}
+	if !strings.Contains(row, "74.50") {
+		t.Errorf("the row does not carry the remaining amount ($100 cap - $25.50 spent):\n%s", row)
+	}
+	if !strings.Contains(row, "25.50/100.00") {
+		t.Errorf("the row does not carry the used/limit pair:\n%s", row)
+	}
+}
+
+// An account whose organization set no cap of its own has nothing to show a
+// remainder against, so LEFT says what was spent and stops rather than
+// inventing a denominator.
+func TestListShowsCreditUsedWithNoAccountLimit(t *testing.T) {
+	isolate(t)
+	freezeClock(t, listNow)
+	seedTieredAccount(t, "u-1", "a@example.com", identity.KindCredit, "")
+	used := 500.0 // cents: $5.00 spent, no monthly_limit on the wire
+	seedUsageEntry(t, "u-1", usage.Entry{
+		FetchedAt: listNow.Add(-90 * time.Second),
+		Snapshot: &usage.Snapshot{
+			ExtraUsage: usage.ExtraUsageFor(usage.ExtraUsageInput{
+				State: usage.ExtraUsageEnabled, Currency: "USD",
+				UsedCredits: &used,
+			}),
+		},
+	})
+
+	_, out, _, _ := runRoot(t, "list")
+	row := rowFor(t, out, "a@example.com")
+	if !strings.Contains(row, "5.00 used") {
+		t.Errorf("the row does not carry the used amount:\n%s", row)
+	}
+	if !strings.Contains(row, "no account limit") {
+		t.Errorf("the row does not say there is no account limit:\n%s", row)
+	}
+}
+
 // `ccdad list` and `ccdad status --json` can never disagree. The strongest form
 // of that is the one asserted here — the two commands emit the SAME usage
 // object, because they build it from the same cache through the same code.

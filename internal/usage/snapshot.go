@@ -312,6 +312,29 @@ func (e ExtraUsage) Percent() (float64, bool) {
 	return e.pct, true
 }
 
+// AmountString renders a MAJOR-UNIT figure — used, limit, or their difference —
+// the way this account's own currency writes amounts: two decimals, except the
+// zero-decimal currencies (see zeroDecimalCurrencies), which never had a minor
+// unit to round to. It carries no currency code of its own, so a caller
+// printing several figures side by side names the currency once.
+func (e ExtraUsage) AmountString(major float64) string {
+	if zeroDecimalCurrencies[strings.ToUpper(strings.TrimSpace(e.Currency))] {
+		return fmt.Sprintf("%.0f", major)
+	}
+	return fmt.Sprintf("%.2f", major)
+}
+
+// CurrencyCode is the ISO code AmountString's figures are in, defaulting to USD
+// for the same reason majorUnits does: an unreported currency is Claude Code's
+// own default (`tse.currency ?? "USD"`), not evidence of a two-decimal one only.
+func (e ExtraUsage) CurrencyCode() string {
+	c := strings.ToUpper(strings.TrimSpace(e.Currency))
+	if c == "" {
+		return "USD"
+	}
+	return c
+}
+
 // Limit is one entry of the limits[] array: a per-model or per-surface weekly
 // window the server reports alongside the fixed six.
 type Limit struct {
