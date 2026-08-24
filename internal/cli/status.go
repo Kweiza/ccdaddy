@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Kweiza/ccdaddy/internal/buildinfo"
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/config"
 	"github.com/Kweiza/ccdaddy/internal/daemon"
@@ -27,10 +28,9 @@ var timeNow = time.Now
 // command must not fall over on.
 var observeDaemon = daemon.Observe
 
-// unreadable and humanDuration keep their names inside package cli: see
-// internal/view/row.go and internal/view/lines.go, which now own both.
-const unreadable = view.Unreadable
-
+// humanDuration keeps its name inside package cli: see internal/view/lines.go,
+// which now owns it, and status_test.go's TestHumanDurationReadsAtEveryScale,
+// which still calls it directly by that name.
 var humanDuration = view.HumanDuration
 
 func newStatusCmd() *cobra.Command {
@@ -195,6 +195,7 @@ func loadSnapshot(cmd *cobra.Command, now time.Time) (snap view.Snapshot, probeE
 		Strategy:    cfg.Strategy.String(),
 		Mode:        mode,
 		HasMode:     hasMode,
+		Version:     buildinfo.Version,
 		Notices:     notices,
 	}, probeErr, nil
 }

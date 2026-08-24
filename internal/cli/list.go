@@ -128,10 +128,6 @@ func newListCmd() *cobra.Command {
 			fmt.Fprintln(w, "  IDX\tACCOUNT\tTYPE\tTIER\tLEFT\tRESETS IN")
 			for _, r := range quota {
 				a := r.Account
-				marker := " "
-				if r.Active {
-					marker = "*"
-				}
 				// An account can carry both flags at once, and they say
 				// opposite things: primary is "ranked beside the
 				// subscriptions", disabled is "left out of rotation
@@ -148,7 +144,7 @@ func newListCmd() *cobra.Command {
 				if len(flags) > 0 {
 					suffix = "  (" + strings.Join(flags, ", ") + ")"
 				}
-				fmt.Fprintf(w, "%s %d\t%s\t%s\t%s\t%s\t%s%s\n", marker, a.Idx, r.ListLabel(), a.Kind,
+				fmt.Fprintf(w, "%s %d\t%s\t%s\t%s\t%s\t%s%s\n", r.Marker(), a.Idx, r.ListLabel(), a.Kind,
 					r.TierLabel(), r.LeftLabel(), r.ResetsLabel(now), suffix)
 			}
 			return w.Flush()

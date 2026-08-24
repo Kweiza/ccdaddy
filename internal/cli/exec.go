@@ -21,8 +21,8 @@ import (
 //
 // The three refusals, stated once here rather than repeated by every future
 // caller of this seam: never omit SetArgs; never omit SetOut/SetErr --
-// cmd.OutOrStdout() defaults to os.Stdout, and there are 27
-// OutOrStdout/ErrOrStderr call sites that will take it; never call
+// cmd.OutOrStdout() defaults to os.Stdout, and most of this package's output
+// goes through OutOrStdout/ErrOrStderr, which will take it; never call
 // cli.Execute() in a handler -- it reads os.Args, calls ignoreSIGPIPE(), and
 // passes os.Stdout to enableConsoleVT, all three of which are process-wide.
 func freshRootExec(parent *cobra.Command) view.Exec {

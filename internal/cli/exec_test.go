@@ -55,6 +55,29 @@ func TestFreshRootExecReportsANonZeroExitAndKeepsStderrSeparate(t *testing.T) {
 	}
 }
 
+// SetErr is the refusal the other two tests cannot exercise: every command in
+// the tree sets SilenceErrors, so cobra never writes an actual error to the
+// root's error writer -- ExecuteWith reports failures through its own `top`
+// buffer instead, and root.SetErr could be deleted with every other test in
+// this file still green. What only SetErr catches is a NOTICE -- something a
+// command writes to cmd.ErrOrStderr() without it being an error, the way an
+// empty store's `status` does.
+func TestFreshRootExecCapturesANoticeOnlySetErrCanReach(t *testing.T) {
+	isolate(t)
+
+	parent := &cobra.Command{}
+	parent.SetContext(context.Background())
+	exec := freshRootExec(parent)
+
+	code, _, stderr := exec([]string{"status"})
+	if code != int(ExitOK) {
+		t.Fatalf("code = %d, want %d: status is a dashboard, not a probe", code, ExitOK)
+	}
+	if !strings.Contains(stderr, "No accounts yet") {
+		t.Fatalf("stderr = %q, want the empty-store notice", stderr)
+	}
+}
+
 // The refusal this seam exists to enforce: argv is never nil, so a fresh root
 // never falls back to cobra's os.Args[1:] default -- which for a long-lived
 // process (an MCP server, a re-entrant TUI keypress) would re-run the parent
