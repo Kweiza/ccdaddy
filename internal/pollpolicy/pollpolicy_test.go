@@ -28,6 +28,7 @@ func TestTheConstantsAreThePollPolicyTable(t *testing.T) {
 		{"Post429MinInterval", Post429MinInterval, 360 * time.Second},
 		{"Post429MaxInterval", Post429MaxInterval, 1800 * time.Second},
 		{"Recent429Window", Recent429Window, 3600 * time.Second},
+		{"DangerServeTTL", DangerServeTTL, 30 * time.Second},
 	} {
 		if c.got != c.want {
 			t.Errorf("%s = %s, want %s", c.name, c.got, c.want)
@@ -44,6 +45,9 @@ func TestTheConstantsAreThePollPolicyTable(t *testing.T) {
 	}
 	if UrgentBandPct != 15.0 {
 		t.Errorf("UrgentBandPct = %v, want 15.0", UrgentBandPct)
+	}
+	if DangerBandPct != 95.0 {
+		t.Errorf("DangerBandPct = %v, want 95.0", DangerBandPct)
 	}
 }
 
@@ -123,10 +127,12 @@ func TestTheCadenceMatchesTheSituation(t *testing.T) {
 		},
 		{
 			// The active account being exhausted does not make it urgent: there
-			// is nothing left to watch tick down.
+			// is nothing left to watch tick down BELOW the danger band, where
+			// "exhausted" means past the number the user chose rather than past
+			// the one the endpoint enforces.
 			name: "exhausted and active",
-			s:    seen(99),
-			in:   Input{Now: epoch, Active: true, Reading: Reading{BindingPct: 100, Known: true, Exhausted: true}, Threshold: threshold},
+			s:    seen(84),
+			in:   Input{Now: epoch, Active: true, Reading: Reading{BindingPct: 85, Known: true, Exhausted: true}, Threshold: threshold},
 			want: ExhaustedInterval,
 		},
 	}
@@ -450,5 +456,238 @@ func TestTheHandHeldFloorIsTheLongerOfTheFloorAndTheEarnedBackoff(t *testing.T) 
 				t.Errorf("until = %s, want %s", at, c.want)
 			}
 		})
+	}
+}
+
+// The danger band. At 95% of the binding window there are five points between
+// the session and the endpoint's refusal — less than one busy turn — so the
+// account a session is running against stops sharing its identity's budget and
+// polls at the floor.
+func TestTheDangerBandPollsTheLiveAccountAtTheFloor(t *testing.T) {
+	const threshold = 80
+
+	for _, c := range []struct {
+		name string
+		s    State
+		in   Input
+		want time.Duration
+	}{
+		{
+			// Idle, and urgent anyway. The AND that keeps an idle account off the
+			// urgent cadence is a statement about an account with room, and five
+			// points is not room.
+			name: "active at the band and idle",
+			s:    seen(97),
+			in:   Input{Now: epoch, Active: true, Reading: sample(97), Threshold: threshold},
+			want: UrgentInterval,
+		},
+		{
+			name: "active a tenth of a point below the band",
+			s:    seen(94.9),
+			in:   Input{Now: epoch, Active: true, Reading: sample(94.9), Threshold: threshold},
+			want: ActiveMaxInterval,
+		},
+		{
+			// The band is a threshold, not a strict inequality dressed up as
+			// one: the line itself is inside it. Five points left is the case
+			// the number was chosen for, so the account that has exactly five
+			// cannot be the one it excludes.
+			name: "active exactly on the line",
+			s:    seen(95),
+			in:   Input{Now: epoch, Active: true, Reading: sample(95), Threshold: threshold},
+			want: UrgentInterval,
+		},
+		{
+			// The band is ahead of the exhausted rule deliberately. Exhausted is
+			// measured against the caller's spent line, so at a threshold of 80
+			// every account inside the band is also exhausted and the other order
+			// would make the band unreachable in its own case.
+			name: "active, at the band, and over the spent line",
+			s:    seen(97),
+			in:   Input{Now: epoch, Active: true, Reading: Reading{BindingPct: 97, Known: true, Exhausted: true}, Threshold: threshold},
+			want: UrgentInterval,
+		},
+		{
+			// The band is a distance from 100 and not from Threshold, so a tight
+			// weekly floor does not drag it down with it. At a threshold of 40,
+			// 92% is fifty-two points past the spent line and still eight points
+			// of real room — the exhausted cadence, not the emergency one.
+			name: "a tight window threshold does not move the band",
+			s:    seen(92),
+			in:   Input{Now: epoch, Active: true, Reading: Reading{BindingPct: 92, Known: true, Exhausted: true}, Threshold: 40},
+			want: ExhaustedInterval,
+		},
+		{
+			name: "the same tight threshold, inside the band",
+			s:    seen(96),
+			in:   Input{Now: epoch, Active: true, Reading: Reading{BindingPct: 96, Known: true, Exhausted: true}, Threshold: 40},
+			want: UrgentInterval,
+		},
+		{
+			// Nobody is spending an alternate, so its freshness is worth no more
+			// than any other candidate's — and the band costs the whole identity's
+			// budget.
+			name: "a candidate at the band",
+			s:    seen(97),
+			in:   Input{Now: epoch, Reading: sample(97), Threshold: threshold},
+			want: CandidateMaxInterval,
+		},
+		{
+			// Unknown is never 97, for the same reason it is never 0.
+			name: "active and unreadable",
+			s:    seen(97),
+			in:   Input{Now: epoch, Active: true, Reading: unknown(), Threshold: threshold},
+			want: ActiveMaxInterval,
+		},
+		{
+			// And the rule is that the sample was not TAKEN, not that it came
+			// back as zero. A Reading carrying a percentage it could not
+			// confirm is the shape the zero value happens to hide: with the
+			// Known guard gone this reads as 97 and puts a whole identity on
+			// the emergency cadence on no evidence at all.
+			name: "active, unreadable, and carrying a stale percentage",
+			s:    seen(97),
+			in:   Input{Now: epoch, Active: true, Reading: Reading{BindingPct: 97}, Threshold: threshold},
+			want: ActiveMaxInterval,
+		},
+		{
+			// The one rule the band must never beat. Buying a shorter interval
+			// with a 429 buys Post429MinInterval — six minutes blind at 97%, which
+			// is the opposite of what the band is for.
+			name: "at the band with a 429 inside the window",
+			s:    State{LastBindingPct: 97, HasLastBinding: true, LastRateLimited: epoch},
+			in:   Input{Now: epoch, Active: true, Reading: sample(97), Threshold: threshold},
+			want: Post429MinInterval,
+		},
+		{
+			name: "at the band with an earned backoff longer than the floor",
+			s:    State{LastBindingPct: 97, HasLastBinding: true, LastRateLimited: epoch, Interval: 900 * time.Second},
+			in:   Input{Now: epoch, Active: true, Reading: sample(97), Threshold: threshold},
+			want: 900 * time.Second,
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := interval(t, c.s, c.in); got != c.want {
+				t.Fatalf("interval = %s, want %s", got, c.want)
+			}
+		})
+	}
+}
+
+// The exemption, and its bound. The band hands the identity's urgent cadence to
+// the one account a session is running against; on an identity of one it
+// changes nothing, because 60 s was already the answer there.
+func TestTheDangerBandIsExemptFromTheIdentityShare(t *testing.T) {
+	band := Input{Now: epoch, Active: true, Reading: sample(97), Threshold: 80}
+	idle := Input{Now: epoch, Reading: sample(10), Threshold: 80}
+
+	if got := Share(UrgentInterval, 3, band); got != UrgentInterval {
+		t.Errorf("the live account of three, in the band = %s, want %s", got, UrgentInterval)
+	}
+	if got := Share(UrgentInterval, 1, band); got != UrgentInterval {
+		t.Errorf("a sole account in the band = %s, want %s", got, UrgentInterval)
+	}
+	if got, want := Share(CandidateMaxInterval, 3, idle), 3*CandidateMaxInterval; got != want {
+		t.Errorf("an alternate on a three-account identity = %s, want %s", got, want)
+	}
+	// The exemption belongs to the BAND and not to the live account. Being live
+	// and near the threshold is the ordinary urgent case, and it is still shared.
+	near := Input{Now: epoch, Active: true, Reading: sample(90), Threshold: 80}
+	if got, want := Share(UrgentInterval, 3, near), 3*UrgentInterval; got != want {
+		t.Errorf("a live account below the band = %s, want the shared %s", got, want)
+	}
+}
+
+// The reading taken inside the band has to age out on the band's own clock. A
+// 180 s serve TTL over a 60 s cadence refuses two of every three polls the band
+// just asked for, so the cadence would exist in the schedule and nowhere else.
+func TestTheBandShortensTheServeTTLAndNothingElseDoes(t *testing.T) {
+	band := Input{Now: epoch, Active: true, Reading: sample(97), Threshold: 80}
+	if got := ServeTTLFor(band); got != DangerServeTTL {
+		t.Errorf("ServeTTLFor in the band = %s, want %s", got, DangerServeTTL)
+	}
+	if DangerServeTTL >= UrgentInterval {
+		t.Errorf("DangerServeTTL = %s is not under the %s cadence it has to admit",
+			DangerServeTTL, UrgentInterval)
+	}
+	for _, c := range []struct {
+		name string
+		in   Input
+	}{
+		{"a live account below the band", Input{Now: epoch, Active: true, Reading: sample(90), Threshold: 80}},
+		{"an alternate at the band", Input{Now: epoch, Reading: sample(97), Threshold: 80}},
+		{"a live account that could not be read", Input{Now: epoch, Active: true, Reading: unknown(), Threshold: 80}},
+	} {
+		if got := ServeTTLFor(c.in); got != ServeTTL {
+			t.Errorf("%s: ServeTTLFor = %s, want the ordinary %s", c.name, got, ServeTTL)
+		}
+	}
+}
+
+// A stand-down is a congestion decision made one request early rather than one
+// 429 late, so it is the congestion ceiling. It is not "stop": an account nobody
+// polls is an account nobody can rank, and the accounts standing down are
+// exactly the ones the engine will want to switch to.
+func TestAStandDownIsTheCongestionCeilingWithJitter(t *testing.T) {
+	if got, want := StandDownUntil(epoch, 0.5).Sub(epoch), Post429MaxInterval; got != want {
+		t.Fatalf("stand-down = %s, want %s", got, want)
+	}
+	low, high := StandDownUntil(epoch, 0), StandDownUntil(epoch, 1)
+	if !low.After(epoch) {
+		t.Fatalf("a stand-down landed at or before now: %s", low)
+	}
+	// Jittered for the reason every other cadence here is: an identity stood down
+	// by one poll would otherwise come back all in the same second. Both bounds
+	// are asserted, because a ceiling on the spread is satisfied perfectly by
+	// there being no spread — which is the one outcome this rule exists to stop.
+	if !high.After(low) {
+		t.Fatalf("stand-downs at rnd 0 and rnd 1 both landed on %s, want them spread", low)
+	}
+	if spread, ceiling := high.Sub(low), time.Duration(2*JitterFrac*float64(Post429MaxInterval)); spread > ceiling {
+		t.Fatalf("spread = %s, want at most %s", spread, ceiling)
+	}
+}
+
+// The band REALLOCATES an identity's budget; it does not multiply it. The one
+// account that gets faster is the one a session is running against, it never
+// gets faster than UrgentInterval, and every other account on the identity gets
+// slower. The allowance is roughly 28-30 requests per identity per rolling hour
+// over a sliding window, so anything else spends an hour of capacity on
+// accounts nobody is using and recovers none of it early.
+func TestTheDangerBandReallocatesTheIdentityBudget(t *testing.T) {
+	const accounts = 3
+	perHour := func(d time.Duration) float64 { return float64(time.Hour) / float64(d) }
+
+	// Out of the band, at the fastest the ordinary rules go: live, inside the
+	// 15 pp urgent band, and moving.
+	out := Input{Now: epoch, Active: true, Reading: sample(70), Threshold: 80}
+	liveOut := Share(interval(t, seen(66), out), accounts, out)
+
+	in := Input{Now: epoch, Active: true, Reading: sample(97), Threshold: 80}
+	liveIn := Share(interval(t, seen(97), in), accounts, in)
+
+	if liveIn != UrgentInterval {
+		t.Fatalf("in the band the live account polls every %s, want exactly %s — below "+
+			"that is more than twice the hourly allowance for a single account", liveIn, UrgentInterval)
+	}
+	if liveIn >= liveOut {
+		t.Fatalf("the band bought nothing: %s in, %s out", liveIn, liveOut)
+	}
+	// The alternates pay for it. A stand-down is never faster than the cadence it
+	// replaces, which is what makes this a reallocation.
+	idle := Input{Now: epoch, Reading: sample(10), Threshold: 80}
+	siblingOut := Share(interval(t, seen(10), idle), accounts, idle)
+	sibling := StandDownUntil(epoch, 0.5).Sub(epoch)
+	if sibling < siblingOut {
+		t.Fatalf("a stand-down of %s is faster than the %s cadence it replaces", sibling, siblingOut)
+	}
+	// And the identity's total is the overshoot UrgentInterval already commits to
+	// on an identity of ONE, plus two alternates at the ceiling — not three
+	// accounts at the urgent cadence, which is what handing the band to everybody
+	// on the identity would cost.
+	total := perHour(liveIn) + (accounts-1)*perHour(sibling)
+	if naive := accounts * perHour(UrgentInterval); total >= naive {
+		t.Fatalf("the identity makes %.0f requests an hour inside the band, want well under %.0f",
+			total, naive)
 	}
 }
