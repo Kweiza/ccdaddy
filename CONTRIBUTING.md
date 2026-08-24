@@ -134,7 +134,11 @@ contents; keep it that way.
   is not going to be, so every one of those references was worth nothing to the
   person actually reading the code. State the fact instead.
   `scripts/ci.sh cites` fails the build on `§`, on "the brief", and on
-  "task *n*".
+  "task *n*" — and on a pointing phrase ("see", "per", "refer to", "described
+  in", "documented in") in front of a hyphenated name this repository does not
+  contain. That last one is there because a private note was once cited by
+  name rather than by section, and a bare name has no spelling for a literal
+  to catch. Pointing at a file that *is* in the tree is fine and stays fine.
 - **Commit messages are imperative and explain themselves.** Look at
   `git log` — the subject says what the commit does, and the body says why,
   what was considered, and what was deliberately left alone. That body is
