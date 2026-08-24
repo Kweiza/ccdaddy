@@ -265,9 +265,10 @@ func checkPermissions(root string, usable bool) check {
 	//
 	// The two names are store's, and store says them itself now: the accessors
 	// resolve nothing and open nothing, which is the property that had kept
-	// them out of here. The GLOB stays a glob — this check's whole subject is a
-	// file on disk that the store would not have written, so it must not ask
-	// the store what to look at. If the names ever move,
+	// them out of here. What stays local is the ENUMERATION -- store is asked
+	// where to look and never what is there, because this check's whole subject
+	// is a file on disk the store would not have written, and a listing that
+	// came from the store could not contain one. If the names ever move,
 	// TestDoctorReportsALooseCredentialFile fails on its own hand-spelled glob
 	// rather than passing while checking nothing.
 	files, _ := filepath.Glob(filepath.Join(store.CredentialsDirAt(root), "*"))
@@ -587,20 +588,25 @@ func checkCredentialHome(report daemon.Report) check {
 // credential home from the one this shell resolves, and returns the sentence
 // for it or "".
 //
-// A CLAUDE_CONFIG_DIR the USER set is how this happens without anybody doing
-// anything wrong, and it is deliberately not prevented: an ordinary override is
-// not a `ccdad run` session, and refusing to auto-start there would turn the
-// feature off for everyone who keeps their Claude Code configuration somewhere
-// else. So a daemon born in such a shell pins that home for life, and a later
-// shell without the override resolves a different one. Every file on the
-// machine looks normal afterwards, and the daemon's own published document is
-// the only place the two homes can be compared.
+// A credential home the USER pointed somewhere is how this happens without
+// anybody doing anything wrong, and it is deliberately not prevented. Either
+// variable does it, in ccpath.CredentialHome's order:
+// CLAUDE_SECURESTORAGE_CONFIG_DIR when it is defined, and CLAUDE_CONFIG_DIR
+// otherwise. An ordinary override is not a `ccdad run` session — scoped.go
+// takes a shell the user scoped themselves at its word, and refusing to
+// auto-start there would turn the feature off for everyone who keeps their
+// Claude Code configuration somewhere else. So a daemon born in such a shell
+// pins that home for life, a later shell without the override resolves a
+// different one, every file on the machine looks normal afterwards, and the
+// daemon's own published document is the only place the two can be compared.
 //
 // `ccdad run --full-profile` USED to reach here the same way and no longer
-// does: auto-start's rule 3 gained a containment test at 3d9d2d6 and
-// scopedSessionRefusals covers the daemon verbs a human types. Do not read the
-// prevented cause as evidence that this check is dead — the route above has
-// nothing preventing it, and this row is the only place it is ever named.
+// does: auto-start's rule 3 gained a containment test at 3d9d2d6, and
+// scopedSessionRefusals covers the verbs that START a daemon (`daemon start`,
+// `daemon restart`, and the hidden `__daemon`) — the read-only daemon verbs are
+// allowed in a session and always were. Do not read the prevented cause as
+// evidence that this check is dead: the routes above have nothing preventing
+// them, and this row is the only place they are ever named.
 func credentialHomeDrift(report daemon.Report, resolved string) string {
 	if report.State != daemon.DaemonRunning || !report.HasStatus {
 		return ""
@@ -616,10 +622,25 @@ func credentialHomeDrift(report daemon.Report, resolved string) string {
 	if recorded == "" || credhome.SamePath(recorded, resolved) {
 		return ""
 	}
+	// Inside a `ccdad run` session the two homes differ BY DESIGN and the
+	// daemon is not the side that moved -- this shell is. Prescribing a restart
+	// there is wrong twice: it names the wrong side as the fault, and
+	// scopedSessionRefusals refuses `ccdad daemon restart` in this very shell,
+	// so the instruction cannot be carried out either. Every other credential
+	// row in this report already carries scopedSessionNote for that reason, and
+	// this one -- the only row that hands out an instruction -- did not.
+	if note := scopedSessionNote(); note != "" {
+		return fmt.Sprintf(
+			"the running daemon is driving %s and this shell resolves %s%s. The daemon is serving the "+
+				"machine's login and this shell deliberately is not, so nothing here is broken; read "+
+				"this row from an ordinary shell", recorded, resolved, note)
+	}
 	return fmt.Sprintf(
 		"the running daemon is driving %s, but this shell resolves %s — so its switches change a login "+
-			"nothing here reads. A daemon started from a shell with a different CLAUDE_CONFIG_DIR does "+
-			"this; restart it from the shell whose configuration you want it to serve", recorded, resolved)
+			"nothing here reads. A daemon started from a shell that resolved a different credential home "+
+			"does this, which CLAUDE_SECURESTORAGE_CONFIG_DIR decides when it is defined and "+
+			"CLAUDE_CONFIG_DIR decides otherwise; restart it from the shell whose configuration you want "+
+			"it to serve", recorded, resolved)
 }
 
 // probeClaudeInstall is doctor's window onto which Claude Code is installed. It
@@ -1234,19 +1255,26 @@ func checkProfiles(root string, usable bool) check {
 // checkCredentialFiles reports a stored credential file that no account names.
 //
 // It is the mirror of checkProfiles, one directory over and with more at stake:
-// a leaked profile holds an API key, and a leaked credential file holds a live
-// refresh token at 0600. Nothing else on the machine can find one. `ccdad
-// list`, `ccdad remove` and the account rows in this very report all read
-// accounts.toml, and an orphan is by definition a uuid that document does not
-// carry — so the file that leaks is invisible to every command a user would
-// reach for, indefinitely.
+// a leaked profile MAY hold an API key, and a leaked credential file always
+// holds a live refresh token at 0600. No command a user would reach for can
+// find one. `ccdad list`, `ccdad remove` and the account rows in this very
+// report all read accounts.toml, and an orphan is by definition a uuid that
+// document does not carry — so it stays invisible to every one of them,
+// indefinitely. The permissions row above is the sole exception and not a
+// substitute: it globs the same directory, so it names an orphan only when that
+// orphan's mode is ALSO wrong, and says nothing about the ones at 0600.
 //
-// This is a report about the PAST. The store transaction reverses the
-// credential files a refused batch wrote (adfdbb5), so the way these are made
-// is closed; what that commit cannot do is anything about a store that already
-// has one, left by a build older than it, or by a reversal whose own os.Remove
-// was refused and whose error the user did not act on. Without this row those
-// two states are permanent and silent.
+// It is NOT a report about the past, and the tempting summary that it is would
+// be wrong. adfdbb5 made the store transaction reverse the credential files a
+// REFUSED batch wrote, which closes the error path and only that one: rollback
+// runs from mutate's error return rather than from a defer, and `add` puts the
+// credential file down before the document is saved, so a process that dies in
+// that window still leaves one. Ctrl-C during a multi-account `ccdad import` is
+// the ordinary form of it -- root.go deliberately does not trap SIGINT outside
+// the login wait -- and SIGKILL and power loss are not closable at all. Add the
+// two states adfdbb5 cannot reach backwards into, a store written by a build
+// older than it and a reversal whose own os.Remove was refused, and this row
+// has permanent work. Every one of those is silent without it.
 //
 // A warning rather than a failure, and a report rather than a repair — this
 // file's second rule, and the place it is most tempting to break. Deleting a

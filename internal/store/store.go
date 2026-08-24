@@ -181,12 +181,15 @@ func AccountsAt(root string) ([]Account, error) {
 // CredentialsDirAt and AccountsFileAt name a store's two on-disk parts without
 // resolving, creating or opening anything.
 //
-// They exist because `ccdad doctor` had no way to say these paths. It spelled
-// both out itself and recorded why — "store exports no path accessors and
-// opening it would create the tree" — which was true and is the kind of
-// duplicate that goes wrong quietly: a diagnostic holding its own copy of a
-// naming rule keeps reporting on a directory the store has stopped using, and
-// answers "nothing is wrong" from it.
+// They exist because `ccdad doctor` had no way to say these two paths. It
+// spelled both out itself and recorded why — "store exports no path accessors
+// and opening it would create the tree" — which was the wrong generalisation
+// from a true difficulty: LockPath was already exported, for this exact reason
+// and saying so in its own comment, and what the credentials directory and the
+// document lacked was an accessor of their own rather than a policy against
+// having one. The duplicate is the kind that goes wrong quietly: a diagnostic
+// holding its own copy of a naming rule keeps reporting on a directory the
+// store has stopped using, and answers "nothing is wrong" from it.
 func CredentialsDirAt(root string) string {
 	return filepath.Join(root, credentialsDir)
 }

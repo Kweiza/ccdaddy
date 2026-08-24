@@ -182,17 +182,20 @@ func TestDoctorReportsAFreeCredentialHome(t *testing.T) {
 	}
 }
 
-// The drift a CLAUDE_CONFIG_DIR the USER set produces: the daemon is driving
-// the directory it was born in while this shell resolves another one, so its
-// switches change a login nothing here reads. Every file on the machine looks
-// normal; the daemon's own published document is the only place the two can be
-// compared.
+// The daemon is driving the credential home it was born in while this shell
+// resolves another, so its switches change a login nothing here reads. Every
+// file on the machine looks normal; the daemon's own published document is the
+// only place the two can be compared.
 //
-// `ccdad run --full-profile` USED to reach this state the same way and no
-// longer does — auto-start's rule 3 gained a containment test at 3d9d2d6 and
-// scopedSessionRefusals covers the daemon verbs a human types. An ordinary
-// override is deliberately still allowed to reach it, which is what keeps this
-// check load-bearing rather than dead.
+// What this fixture exercises is the COMPARISON and not the cause. The daemon's
+// recorded home is a stub, and the home this shell resolves comes from
+// isolate's CLAUDE_SECURESTORAGE_CONFIG_DIR — the variable ccpath.CredentialHome
+// reads first — rather than from the CLAUDE_CONFIG_DIR the prose case names.
+// Reproducing a cause would take a daemon that outlived the shell that spawned
+// it, and the causes are pinned where they live: autostart's own tests hold
+// that an ordinary override still reaches this state, which is what keeps this
+// check load-bearing, and that `ccdad run --full-profile` has not since
+// 3d9d2d6.
 func TestDoctorCatchesADaemonDrivingADifferentCredentialHome(t *testing.T) {
 	isolate(t)
 	seedHealthyMachine(t)
@@ -479,5 +482,38 @@ func TestAutoRunsUnguardedWhenTheClaimCannotBeTaken(t *testing.T) {
 	// refusal wearing a notice.
 	if got := liveUUIDOf(t); got != "u-2" {
 		t.Errorf("live account = %q, want u-2 — the degraded loop never acted", got)
+	}
+}
+
+// Inside a `ccdad run` session the daemon and this shell resolve different
+// credential homes BY DESIGN — that is the whole of what a session is — and the
+// daemon is not the side that moved. Telling that user to restart it is wrong
+// twice: it names the wrong side as the fault, and `ccdad daemon restart` is
+// refused in this very shell, so the instruction cannot be carried out at all.
+// The other credential rows in this report already carry scopedSessionNote for
+// exactly this reason; this one did not.
+func TestDoctorDoesNotBlameTheDaemonForADriftThisShellCaused(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	// The store root out of the environment isolate set, not through the
+	// resolver doctor uses: a fixture that asked production where to look would
+	// follow it to the wrong place rather than failing.
+	session := filepath.Join(os.Getenv("CCDAD_HOME"), SessionsDirName, "uuid-a-123")
+	if err := os.MkdirAll(session, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLAUDE_SECURESTORAGE_CONFIG_DIR", session)
+	stubDaemon(t, daemon.Report{
+		State:     daemon.DaemonRunning,
+		HasStatus: true,
+		Status:    daemon.Status{SchemaVersion: 1, PID: 4242, CredentialHome: "/the/machines/claude"},
+	}, nil)
+
+	d := func() string { _, r, _ := runDoctor(t); return r.detail(t, "credential-home") }()
+	if strings.Contains(d, "restart it") {
+		t.Errorf("the row prescribes a daemon restart that this very shell refuses: %s", d)
+	}
+	if !strings.Contains(d, "session") {
+		t.Errorf("the row does not say that this shell is the scoped side: %s", d)
 	}
 }
