@@ -614,3 +614,96 @@ func fixtureOptions() Options {
 		Out:  io.Discard,
 	}
 }
+
+// The keys that move the cursor have to move something a reader can see. On a
+// page where every row fits there is no scrolling to reveal it, so the marker
+// is the only evidence the keystroke did anything at all -- and it is the only
+// way to know which account the switch key is about to offer first.
+func TestTheCursorIsDrawnOnTheRowItIsOn(t *testing.T) {
+	m := fixtureModel(113, 26)
+	m.Cursor = 1
+
+	lines := strings.Split(m.Body(), "\n")
+	var marked []string
+	for _, line := range lines {
+		if strings.Contains(line, cursorMark+" 2 ") {
+			marked = append(marked, line)
+		}
+	}
+	if len(marked) != 1 {
+		t.Fatalf("the cursor is drawn on %d rows, want exactly the one it is on:\n%s", len(marked), m.Body())
+	}
+	if strings.Count(m.Body(), cursorMark+" ") != 1 {
+		t.Errorf("more than one row carries a cursor:\n%s", m.Body())
+	}
+
+	// And it costs no width: the marker column was already there.
+	for i, line := range lines {
+		if ansi.StringWidth(line) > 113 {
+			t.Fatalf("row %d is %d columns wide with a cursor drawn", i, ansi.StringWidth(line))
+		}
+	}
+}
+
+// The live account wins the column where the two meet. That mark answers which
+// login a session would get, which is a fact about the credential; the cursor
+// answers where the reader left the highlight, which the reader already knows.
+// The cost -- an invisible cursor on the live row -- is real and is the reason
+// this is pinned rather than left to whoever reads the switch next.
+func TestTheLiveAccountKeepsTheMarkerWhenTheCursorIsOnIt(t *testing.T) {
+	m := fixtureModel(113, 26)
+	m.Cursor = 0 // the fixture pool's first row is the live account
+
+	body := m.Body()
+	if !strings.Contains(body, "* 1 ") {
+		t.Fatalf("the live account lost its marker to the cursor:\n%s", body)
+	}
+	if strings.Contains(body, cursorMark+" 1 ") {
+		t.Fatalf("the cursor took the live account's marker:\n%s", body)
+	}
+}
+
+// Nobody is pointing at anything in a pipe. The one-shot render answers
+// `ccdad tui > file` and bare `ccdad` off a terminal, and a selection marker
+// there was put on the row by a reader who is not present.
+func TestTheOneShotRenderDrawsNoCursor(t *testing.T) {
+	// The live account is deliberately NOT the first row here: with the marker
+	// suppressed the first row would otherwise be indistinguishable from a row
+	// that simply has no marks on it, and the test would pass for a bug.
+	snap := fixtureSnapshot(fixtureReport(113, 26))
+	snap.Rows[0].Active = false
+	snap.Rows[2].Active = true
+
+	page, err := Render(Options{
+		Load: func(time.Time) (view.Snapshot, error) { return snap, nil },
+		Now:  func() time.Time { return fixtureNow },
+		Out:  io.Discard,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(page, cursorMark+" ") {
+		t.Fatalf("the one-shot render drew a cursor:\n%s", page)
+	}
+	// The live account's own marker is untouched by the same change.
+	if !strings.Contains(page, "* 3 ") {
+		t.Fatalf("the one-shot render lost the live account's marker:\n%s", page)
+	}
+}
+
+// Once the table scrolls, the cursor's index into the rows and the row's
+// position on the screen differ by Top. A marker drawn against the screen
+// position marks whichever account happens to be that far down instead -- and
+// the switch key would then offer one account while the page pointed at
+// another.
+func TestTheCursorFollowsTheRowAndNotTheScreenPositionOnceItScrolls(t *testing.T) {
+	m := fixtureModel(80, 5)
+	m.Top, m.Cursor = 2, 3
+	body := m.Body()
+	if !strings.Contains(body, cursorMark+" 4 ") {
+		t.Fatalf("the cursor is not on the row it indexes:\n%s", body)
+	}
+	if strings.Contains(body, cursorMark+" 3 ") {
+		t.Fatalf("the cursor is drawn against the screen position rather than the row:\n%s", body)
+	}
+}
