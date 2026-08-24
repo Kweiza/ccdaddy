@@ -181,9 +181,21 @@ func ExecuteCmd(root *cobra.Command) error {
 // actually watch the context can then do anything about it — which turned
 // Ctrl-C into a no-op on `switch` waiting for a credential lock and on
 // `add-token` blocked reading stdin, where the process had to be killed
-// outright. The trap is installed by `add` alone, for the span of its own
-// blocking login; everywhere else Ctrl-C keeps its default meaning, which the
-// shell already reports as 130.
+// outright.
+//
+// The refusal is about DURATION AND REACH, not about the mechanism, and three
+// places in the tree hold SIGINT for a bounded span on exactly that reading.
+// `add` holds it for its own blocking login, `auto` for its tick — both because
+// the thing they are in the middle of is worse to abandon than to unwind — and
+// internal/store holds it for the span of one transaction's write, because a
+// process killed between the credential file and the document it belongs to
+// leaves a live refresh token nothing on the machine can find. None of the
+// three outlives what it is protecting, and none of them turns Ctrl-C into a
+// no-op: each one stops, and each one exits 130.
+//
+// Everywhere else — which is almost everywhere, since a store write is a
+// handful of file operations — Ctrl-C keeps its default meaning, and the shell
+// reports the same 130 without this binary being involved at all.
 func Execute() ExitCode {
 	ignoreSIGPIPE()
 	enableConsoleVT(os.Args[1:])

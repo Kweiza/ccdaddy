@@ -4,6 +4,8 @@ package cli
 import (
 	"errors"
 	"fmt"
+
+	"github.com/Kweiza/ccdaddy/internal/store"
 )
 
 // ExitCode is the process exit status. The contract is global: every command
@@ -64,8 +66,8 @@ func WithCode(err error, code ExitCode) error {
 	return &codedError{err: err, code: code}
 }
 
-// CodeFor maps an error to its exit code. An explicit tag wins; a usage error
-// is next; anything else is a runtime failure.
+// CodeFor maps an error to its exit code. An explicit tag wins; an interrupted
+// store write is next; then a usage error; anything else is a runtime failure.
 func CodeFor(err error) ExitCode {
 	if err == nil {
 		return ExitOK
@@ -73,6 +75,22 @@ func CodeFor(err error) ExitCode {
 	var coded *codedError
 	if errors.As(err, &coded) {
 		return coded.code
+	}
+	// A store transaction holds SIGINT for the span of its own write, so a
+	// Ctrl-C that lands there does not reach the process's default disposition
+	// and cannot become 130 the way every other Ctrl-C in this binary does —
+	// the shell never sees a signalled process. Mapped here rather than tagged
+	// with WithCode at each call site because the transaction is reached from
+	// `add`, `import`, `bootstrap`, `remove`, `alias`, `run`, the token refresh
+	// and the daemon's tick, and the one that forgot the tag would be the one
+	// reporting a cancelled import as a runtime failure.
+	//
+	// It adds nothing to the contract above: 130 is already ExitInterrupted and
+	// already means exactly this. See internal/store/interrupt.go for why only
+	// SIGINT is held, and for the two opposite sentences the store attaches
+	// depending on which side of the commit the signal landed on.
+	if errors.Is(err, store.ErrInterrupted) {
+		return ExitInterrupted
 	}
 	if IsUsageError(err) {
 		return ExitUsage
