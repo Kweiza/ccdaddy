@@ -66,6 +66,11 @@ import (
 //   - `remove`, `export`, `import`, `config` and `uninstall`: administering
 //     ccdad is not using it, and `uninstall` in particular would start the
 //     process it is about to stop.
+//   - `probe`, which is the engine's own errand rather than a user using their
+//     accounts, and which a daemon RE-EXECS. An entry here would leave the
+//     recursion guard as the only thing between a probe and an unbounded spawn,
+//     and it would mean a `ccdad probe --all` on a machine with no engine spent
+//     quota and left a process behind for it.
 //   - `setup-path`, which runs when `ccdad` does not resolve yet. Spawning a
 //     daemon from the command whose whole job is to make the NEXT terminal find
 //     the binary starts an engine for a machine that has not finished being set

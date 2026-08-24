@@ -251,17 +251,13 @@ func HeadroomFor(s *usage.Snapshot, model string, t Thresholds) Headroom {
 // headroom came from. The name it is given was produced by that narrowed set, so
 // the two agree; searching the wider one only means this function does not have
 // to be told which model the pass was for.
-func recoveryOf(s *usage.Snapshot, clears usage.WindowName) (t timeValue) {
-	if s == nil {
-		return t
-	}
-	for _, w := range s.AllWindows() {
-		if w.Name != clears {
-			continue
-		}
-		if at, ok := w.Reset(); ok {
-			return timeValue{at: at, ok: true}
-		}
-	}
-	return t
+//
+// The search itself is Snapshot.ResetFor, which the probe needs for the same
+// question — is there a reset time for this window at all — and which is
+// nil-safe on its own, so the guard this function used to carry is inside it.
+// What is left here is the ranking's own vocabulary: a timeValue rather than a
+// comma-ok pair.
+func recoveryOf(s *usage.Snapshot, clears usage.WindowName) timeValue {
+	at, ok := s.ResetFor(clears)
+	return timeValue{at: at, ok: ok}
 }
