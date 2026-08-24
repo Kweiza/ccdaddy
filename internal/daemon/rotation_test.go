@@ -3,6 +3,7 @@ package daemon
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/usage"
@@ -195,4 +197,56 @@ func TestAdoptionWritesOnlyTheAccountTheOracleNamed(t *testing.T) {
 		bytes.Contains(kept["claudeAiOauth"], []byte("rotated")) {
 		t.Fatalf("adoption wrote u-2's rotated login into u-1's snapshot: %s", kept["claudeAiOauth"])
 	}
+}
+
+// store.Add replaces the credential file wholesale, so adoption has to overlay
+// rather than write in place. `ccdad add` carries the same warning: without it,
+// taking a refreshed token costs the account every other key it had stored.
+func TestAdoptionKeepsWhatTheAccountAlreadyHeld(t *testing.T) {
+	isolateEngine(t)
+	seedAccount(t, "u-1", "org-1")
+	seedAccount(t, "u-2", "org-2")
+
+	s, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, err := s.Credentials("u-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	held[cclink.TokenKey] = json.RawMessage(`{"kind":"api-key","token":"sk-ant-api-KEEP"}`)
+	acct, _ := s.Get("u-1")
+	if err := s.Add(acct, held); err != nil {
+		t.Fatal(err)
+	}
+
+	liveAsRotated(t, "u-1")
+	srv, fetch := usageByToken("u-1")
+	defer srv.Close()
+	e := engineFor(t, tokensAreFine, fetch)
+	e.ResolveOwner = func(context.Context, string) (string, error) { return "u-1", nil }
+
+	tick(t, e)
+	tick(t, e)
+
+	after, err := mustStore(t).Credentials("u-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(after["claudeAiOauth"], []byte("RT-u-1-rotated")) {
+		t.Fatalf("the rotated pair was not adopted: %s", after["claudeAiOauth"])
+	}
+	if !bytes.Contains(after[cclink.TokenKey], []byte("sk-ant-api-KEEP")) {
+		t.Fatalf("adoption dropped the account's stored api-key record: %v", after)
+	}
+}
+
+func mustStore(t *testing.T) *store.Store {
+	t.Helper()
+	s, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
 }

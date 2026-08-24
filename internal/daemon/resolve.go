@@ -77,10 +77,33 @@ func (e *Engine) resolveLive(ctx context.Context, s *store.Store) (store.Account
 	if !managed {
 		return store.Account{}, liveForeign
 	}
-	// Extract, not the live blob whole: a stored snapshot holds the
-	// account-scoped keys and nothing else, and carrying this machine's device
-	// identity into one is what Extract's own doc comment forbids.
-	if err := s.Add(owner, cclink.Extract(live)); err != nil {
+	// Overlaid onto what the account already holds, not written in its place.
+	// store.Add replaces the credential file WHOLESALE -- `ccdad add` carries
+	// the same warning for the same reason -- so handing it Extract(live)
+	// alone would delete this account's stored api-key record along with any
+	// account-scoped key the live file happens not to carry, as the price of
+	// adopting a refreshed token.
+	//
+	// Extract rather than the live blob whole for the other half of it: a
+	// stored snapshot holds the account-scoped keys and nothing else, and
+	// carrying this machine's device identity into one is what Extract's own
+	// doc comment forbids.
+	next, err := s.Credentials(owner.UUID)
+	if err != nil {
+		e.logf("could not read %s's stored login to adopt into it: %v", owner.Label(), err)
+		return store.Account{}, liveUnresolved
+	}
+	adopted := cclink.Blob{}
+	for k, v := range next {
+		adopted[k] = v
+	}
+	// The live file wins on every account-scoped key, and that is the point:
+	// the oracle has just established these are this account's, and they are a
+	// generation ahead of what the store holds.
+	for k, v := range cclink.Extract(live) {
+		adopted[k] = v
+	}
+	if err := s.Add(owner, adopted); err != nil {
 		// The rotated pair is still in the live file and the account is still
 		// live, so nothing is lost but the repair. Reported as unresolved
 		// because that is what it leaves behind: a file this store still
