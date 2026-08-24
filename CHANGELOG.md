@@ -127,6 +127,47 @@ by `uuid` or `alias`.
   the case the pre-emptive switch exists to prevent: the projection is overtaken
   between two readings and the switch lands after the session was already cut
   off. An explicit `preempt_lead` in `config.toml` is unaffected.
+
+- **An account with nothing left now sorts behind every account that still has
+  something, and the engine no longer parks on it.** `Spent` answered two
+  different questions — *past the threshold it was given* and *has nothing
+  left* — and those order a pool identically only while every window shares one
+  flat threshold. `hover` derives a fresh threshold per window per tick, and the
+  99% cap inverts the two at the top: an account at 100% late in its window is
+  measured against 99 and reports a slack of −1, the least negative figure in a
+  pool where an account with half its week unspent, but early enough that its
+  threshold is 31, reports −22. Ranked on slack the empty account won outright —
+  on a six-account pool the engine switched onto the one hard-limited account
+  from every other account and then answered "every account is spent" while five
+  accounts held between a fifth and a half of their week.
+
+  Being out of quota is its own question now, asked of the least raw room any
+  binding window has rather than of slack, and it sorts such an account behind
+  every account that has something in both the headroom and the recovery orders.
+  The anti-flap margin runs on slack, which saturates there, so it could hold the
+  engine on an empty account forever; it no longer does. The cooldown is
+  unchanged. A credit-metered seat that has spent its allowance is read the same
+  way. The credit gate still reads the *configured* threshold and never hover's
+  derived one — a pace target nobody typed must not authorise a purchase.
+
+- **The pre-emptive switch can fire under `hover`.** It required a candidate with
+  positive slack, which reads correctly while a threshold is a number someone
+  typed: an account past its own line is not somewhere to run to. Hover types no
+  numbers — it derives a pace target from how far through its window each account
+  is — and under it an ordinary pool is negative across the board, so the one
+  rule that exists to move a session *before* its account hits a hard limit could
+  not fire at all, silently, while five accounts still held quota.
+
+  The bar is now three narrower ones. The candidate must not be *empty*, which is
+  strictly weaker than positive slack and so only adds candidates where there
+  were none. It must not itself be projected to run out inside the same horizon,
+  asked with the projection the live account was judged by — moving from an
+  account that stops working in five minutes to one that stops in six buys
+  nothing and spends the cooldown. And it is *preferably* not one whose usage
+  poller is sitting on a 429: preferably, because a 429 on the usage endpoint can
+  be scoped to the access token rather than to the account, so refusing on it
+  would hand the rule a fresh way to fire never.
+
 ### Fixed
 
 - **`ccdad bootstrap` no longer prints `CCDAD_IMPORT`'s value into the container
