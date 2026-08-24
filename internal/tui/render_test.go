@@ -211,12 +211,12 @@ func TestThePageRendersByteForByteAtEveryLadderRung(t *testing.T) {
 	}
 }
 
-// Every fixture fits in the terminal it was planned for. The height ladder
+// Every page fits in the terminal it was planned for. The height ladder
 // computes a budget and the renderer spends it, and nothing else compares the
 // two -- a block emitted outside the budget, or a rung that saves the wrong
 // number of rows, shows up here and nowhere else.
 func TestEveryFixtureFitsTheTerminalItWasPlannedFor(t *testing.T) {
-	for _, tc := range []struct{ w, h int }{{113, 26}, {80, 24}, {80, 13}, {56, 10}, {43, 9}} {
+	for _, tc := range []struct{ w, h int }{{113, 26}, {80, 24}, {80, 13}, {56, 10}, {43, 9}, {80, 20}, {80, 5}, {35, 3}} {
 		got := len(strings.Split(fixtureModel(tc.w, tc.h).Body(), "\n"))
 		if got > tc.h {
 			t.Errorf("at %dx%d the page is %d rows, which is %d more than the terminal has", tc.w, tc.h, got, got-tc.h)
@@ -278,6 +278,48 @@ func TestBelowTheFloorsThePageRendersWhatItNeeds(t *testing.T) {
 	}
 	for _, tc := range []struct{ w, h int }{{0, 0}, {1, 1}, {-1, -1}} {
 		fixtureModel(tc.w, tc.h).Body() // must not panic
+	}
+}
+
+// The scrolling rung. A table that stops at the bottom of the terminal is one
+// a reader takes for the whole list, so the last visible line names what is
+// off the page instead of carrying one more account.
+func TestTheScrollingRungNamesWhatIsOffThePage(t *testing.T) {
+	m := fixtureModel(80, 5)
+	body := m.Body()
+	lines := strings.Split(body, "\n")
+	if len(lines) != 5 {
+		t.Fatalf("at 80x5 the page is %d rows:\n%s", len(lines), body)
+	}
+	if !strings.Contains(body, "+2 more") {
+		t.Fatalf("two accounts fell off the page and nothing said so:\n%s", body)
+	}
+	if !strings.Contains(body, "(j/k)") {
+		t.Fatalf("the count does not say how to reach the rest:\n%s", body)
+	}
+	if !strings.Contains(body, "work@example.com") {
+		t.Fatalf("the rung spent the page on a count and drew no accounts:\n%s", body)
+	}
+}
+
+// With room for exactly one row the trade inverts: the account wins and the
+// count is what goes. A header, a count of four and no accounts at all has
+// stopped being a dashboard -- and j/k, which the count advertises, would have
+// had nothing to move through.
+func TestWithRoomForOneRowTheAccountWinsAndTheCountGoes(t *testing.T) {
+	body := fixtureModel(35, 3).Body()
+	lines := strings.Split(body, "\n")
+	if len(lines) != 3 {
+		t.Fatalf("at 35x3 the page is %d rows:\n%s", len(lines), body)
+	}
+	if strings.Contains(body, "more") {
+		t.Fatalf("the one row left was spent on a count instead of an account:\n%s", body)
+	}
+	// The address is cut to the ACCOUNT column's hard floor at this width, so
+	// the head is what there is to look for -- which is the half the
+	// head-preserving truncation exists to keep.
+	if !strings.Contains(body, "work@examp") {
+		t.Fatalf("the never-dropped account row was dropped:\n%s", body)
 	}
 }
 
