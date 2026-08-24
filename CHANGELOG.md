@@ -42,6 +42,18 @@ by `uuid` or `alias`.
   credential inside Claude Code's own five-minute refresh window — it is
   refreshed first, and refused if that is not possible.
 
+- **ccdad now rotates the live login itself, ahead of Claude Code, instead of
+  waiting for Claude Code to do it.** This is the preventive half of the fix
+  above: rather than guarding against a rotation ccdad did not perform, there
+  is no longer a rotation ccdad did not perform. Claude Code refreshes a
+  credential only inside its own five-minute window and skips the refresh
+  entirely outside it, so ccdad now refreshes the live account in the band
+  between that window and thirty minutes before expiry — where nothing is
+  racing — and writes the new pair to both the credentials file and its own
+  stored snapshot. Inside Claude Code's window the grant is still Claude
+  Code's to spend and ccdad does not touch it; a rotation that fails changes
+  nothing, since the token in hand is by definition still valid.
+
 ## [0.4.2] — 2026-08-24
 
 One fix, no new surface. Under `hover`, `ccdad hover status` could mark an

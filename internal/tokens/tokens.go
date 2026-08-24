@@ -57,7 +57,9 @@ var (
 	ErrNoOAuthCredential = errors.New("that account has no OAuth login to refresh")
 
 	// ErrLiveTokenStale means the account is the LIVE Claude Code login and its
-	// token has expired. ccdad deliberately does not refresh that one; see
+	// token has reached Claude Code's own refresh window. ccdad rotates the
+	// live login only ABOVE that window; inside it the grant is Claude Code's
+	// to spend, and a second spender there revokes one of the two. See
 	// AccessToken.
 	ErrLiveTokenStale = errors.New("the live Claude Code login's token has expired, and Claude Code is the one that rotates it")
 )
@@ -88,31 +90,42 @@ func New() *Source {
 
 // AccessToken returns a usable bearer for one managed account.
 //
-// THE ACTIVE ACCOUNT IS NOT REFRESHED HERE, and that is the central decision.
-// Rotating a refresh token revokes the old one, so refreshing the account
-// Claude Code is logged in as — while leaving the live credentials file holding
-// the pre-rotation token, which this package never writes — would log the user
-// out at Claude Code's very next refresh. The three ways out are: write the
-// live file too (this package exists precisely so polling does not have to),
-// hold Claude Code's lock across the network call (cclock forbids that: Claude
-// Code refreshes under those same locks, so holding one stalls it for a full
-// round trip), or leave the live login to Claude Code, which already rotates
-// it correctly and under its own locks.
+// THE LIVE ACCOUNT IS THE WHOLE DESIGN HERE, and what it turns on is WHEN.
+// Rotating a refresh token revokes the old one, so two rotations of the same
+// login race, and the loser's copy is dead. That left three ways out: write the
+// live file too, hold Claude Code's lock across the network call (cclock
+// forbids that — Claude Code refreshes under those same locks, so holding one
+// stalls it for a full round trip), or leave the live login to Claude Code.
 //
-// So for the live login this reads what Claude Code has, adopts it into the
-// stored snapshot so a later `ccdad switch` back is not carrying a dead token,
-// and returns it. Claude Code's `.oauth_refresh.lock` IS taken for that read —
-// it is the only thing that stops the read landing between Claude Code's write
-// of a new access token and its write of the matching refresh token. An
-// INACTIVE account takes no Claude Code lock at all: nothing in ~/.claude is
-// being read or written for it, and taking a lock over a file that is not
-// involved would stall Claude Code for no reason.
+// This used to take the third, and the third is what broke. Claude Code rotates
+// correctly and under its own locks, but it leaves ccdad's stored snapshot a
+// generation behind — and a snapshot that no longer matches the file is a
+// snapshot nothing can attribute, which the engine then read as "nobody is
+// live" and installed straight back over the running session.
 //
-// A live login whose token has already expired answers ErrLiveTokenStale rather
-// than being refreshed. Claude Code refreshes it the next time it runs, and
-// this Source adopts the result on the next tick — and an eight-hour-old live
-// token means Claude Code has not run in eight hours, so there is no session
-// whose rotation is urgent.
+// So it takes the first, on a schedule that makes the race impossible rather
+// than merely unlikely. Claude Code refreshes only inside its own five-minute
+// window (cclink.SelfRefreshThreshold); ccdad refreshes only in the band ABOVE
+// that window and below LiveRefreshLead, where Claude Code's own gate answers
+// "not_needed" every time it looks. One rotation, performed by whichever side
+// owns that stretch of the token's life, written to both copies. See
+// refreshLive for the ordering, which still never puts a network call under a
+// Claude Code lock.
+//
+// Below the band the login is Claude Code's: this reads what Claude Code has,
+// adopts it into the stored snapshot so a later `ccdad switch` back is not
+// carrying a dead token, and returns it. Claude Code's `.oauth_refresh.lock` IS
+// taken for that read — it is the only thing that stops the read landing
+// between Claude Code's write of a new access token and its write of the
+// matching refresh token. An INACTIVE account takes no Claude Code lock at all:
+// nothing in ~/.claude is being read or written for it, and taking a lock over
+// a file that is not involved would stall Claude Code for no reason.
+//
+// A live login already inside Claude Code's window answers ErrLiveTokenStale
+// rather than being refreshed. Claude Code refreshes it the next time it runs,
+// and this Source adopts the result on the next tick — and reaching that window
+// at all means Claude Code has not run since the band opened, so there is no
+// session whose rotation is urgent.
 func (s *Source) AccessToken(ctx context.Context, uuid string) (string, error) {
 	st, err := store.Open()
 	if err != nil {
@@ -132,7 +145,7 @@ func (s *Source) AccessToken(ctx context.Context, uuid string) (string, error) {
 	// as inactive — which is the branch that touches nothing in ~/.claude.
 	live, _ := cclink.Load()
 	if isLiveLogin(rec, live) {
-		return s.liveToken(uuid, rec)
+		return s.liveToken(ctx, uuid, rec)
 	}
 
 	if !s.expired(rec) {
@@ -142,7 +155,7 @@ func (s *Source) AccessToken(ctx context.Context, uuid string) (string, error) {
 }
 
 // liveToken answers for the account Claude Code is logged in as.
-func (s *Source) liveToken(uuid string, stored record) (string, error) {
+func (s *Source) liveToken(ctx context.Context, uuid string, stored record) (string, error) {
 	lockDir, err := cclock.OAuthRefreshLockDir()
 	if err != nil {
 		return "", err
@@ -181,7 +194,109 @@ func (s *Source) liveToken(uuid string, stored record) (string, error) {
 	if s.expired(current) {
 		return "", fmt.Errorf("%w: %q", ErrLiveTokenStale, uuid)
 	}
+	// Ahead of Claude Code, or not at all. See refreshLive.
+	if s.dueForLiveRefresh(current) {
+		return s.refreshLive(ctx, uuid, current)
+	}
 	return current.AccessToken, nil
+}
+
+// LiveRefreshLead is how far ahead of expiry ccdad rotates the LIVE login
+// itself, and it is the whole preventive half of this package.
+//
+// The band it opens is (cclink.SelfRefreshThreshold, LiveRefreshLead]. Below
+// the floor the login belongs to Claude Code: it is inside Claude Code's own
+// refresh window, Claude Code is about to spend the grant under its own locks,
+// and a second spender there is the double-refresh hazard. Above the ceiling
+// there is nothing to do. Between them Claude Code has no reason to refresh at
+// all — its gate returns "not_needed" on every look — so the rotation can be
+// performed once, written to both copies, and never race anything.
+//
+// That is what makes the difference between guarding against the loop and
+// preventing it. The guards elsewhere stop a rotation ccdad did not perform
+// from destroying an account; this stops the rotation from being one ccdad did
+// not perform.
+//
+// Thirty minutes, against a five-minute floor, leaves a twenty-five minute band
+// on an eight-hour token. The live account is polled far more often than that,
+// so the band is entered and acted on long before it closes, and a machine
+// asleep across the whole band simply wakes to Claude Code's own refresh and
+// the adoption path — which is the behaviour this had before.
+const LiveRefreshLead = 30 * time.Minute
+
+// dueForLiveRefresh reports whether the live login sits in that band.
+//
+// A record with no expiry answers false, for expired's reason: there is no
+// deadline to get ahead of, and rotating on every poll because a field is
+// missing would burn the token endpoint.
+func (s *Source) dueForLiveRefresh(rec record) bool {
+	if rec.ExpiresAt.IsZero() {
+		return false
+	}
+	return !s.now().Add(LiveRefreshLead).Before(rec.ExpiresAt)
+}
+
+// refreshLive rotates the live login and writes the result to BOTH copies.
+//
+// Writing both is the point, and it is the option the old comment on
+// AccessToken listed and declined. Declining it left Claude Code to rotate the
+// live login alone, which it does correctly — and which leaves ccdad's stored
+// snapshot a generation behind, unable to name the file it is looking at. The
+// cost of that showed up as the engine installing the stale snapshot back over
+// the fresh one.
+//
+// The ordering rule is unchanged and is what makes this safe: the POST happens
+// with NO Claude Code lock held. The lock is taken twice around it instead,
+// once for the read that decides and once for the write that lands, which is
+// the same shape cclink.ActivateWith already has.
+//
+// The write is conditional on the live file still holding the exact grant that
+// was spent. If it does not, something else rotated in the meantime and this
+// call cannot tell whose login is in the file now — writing there could install
+// one account's pair over another's. The minted pair still goes to the STORE,
+// so nothing is lost: the next tick finds a file it cannot name, resolves it,
+// and adopts whatever is really there.
+//
+// A failed rotation is not an error to the caller. The access token in hand is
+// still valid — that is what being above the floor means — so the poll this was
+// called for proceeds, and Claude Code refreshes at its own threshold as it
+// always did.
+func (s *Source) refreshLive(ctx context.Context, uuid string, current record) (string, error) {
+	fresh, err := s.Client.Refresh(ctx, oauth.RefreshParams{
+		RefreshToken:     current.RefreshToken,
+		StoredScopes:     current.Scopes,
+		SubscriptionType: current.SubscriptionType,
+		ClientID:         current.ClientID,
+	})
+	if err != nil {
+		return current.AccessToken, nil
+	}
+	updated, err := current.apply(fresh, s.now())
+	if err != nil {
+		return current.AccessToken, nil
+	}
+
+	// The live file first, under the lock, conditional on the grant that was
+	// spent still being the one in it. cclink.ActivateWith is the locked
+	// read-decide-write; ErrNoChange from the decision leaves the file alone.
+	werr := activateWith(func(live cclink.Blob) (cclink.Blob, error) {
+		at, ok := recordOf(live)
+		if !ok || at.RefreshToken != current.RefreshToken {
+			return nil, cclink.ErrNoChange
+		}
+		next := cclink.Extract(live)
+		next["claudeAiOauth"] = updated
+		return next, nil
+	})
+	// The store second, and unconditionally on the live write: a pair that was
+	// minted and not recorded is a pair nothing can ever use again.
+	if serr := s.save(uuid, updated, current.RefreshToken); serr != nil {
+		return current.AccessToken, nil
+	}
+	if werr != nil && !errors.Is(werr, cclink.ErrNoChange) {
+		return current.AccessToken, nil
+	}
+	return fresh.AccessToken, nil
 }
 
 // refresh trades an inactive account's stored refresh token for a new pair.
@@ -434,3 +549,7 @@ func (s *Source) Freshen(ctx context.Context, uuid string) (cclink.Blob, error) 
 	}
 	return st.Credentials(uuid)
 }
+
+// activateWith is cclink's locked read-decide-write, as a var so a test can
+// describe a live file that moved under the lock without arranging one.
+var activateWith = cclink.ActivateWith
