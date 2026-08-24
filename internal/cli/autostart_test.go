@@ -91,6 +91,8 @@ func TestAutoStartDoesNotFireForCommandsThatMustNotHaveOne(t *testing.T) {
 			"rather than using it, and the engine reads the flag on its next tick either way"},
 		{[]string{"setup-path"}, "the command that runs before `ccdad` even resolves must not spawn an " +
 			"engine for a machine that has no accounts yet"},
+		{[]string{"hover", "off"}, "the allow-list is keyed by command path, so listing hover would " +
+			"auto-start a daemon for the verb that turns the mode off"},
 		{[]string{daemon.RunArg}, "the child is itself ccdad, so this one is a fork bomb rather than a bug"},
 		{[]string{"run", "nobody"}, "run exports a scoped credential home into its child, and a daemon " +
 			"auto-started before that would manage the live one while the user is deliberately elsewhere"},

@@ -60,3 +60,39 @@ func TestTheReloaderHandsBackTheEffectiveConfig(t *testing.T) {
 		t.Error("Reload().ProbeUnknown = false under hover; the engine's probe path never sees the override")
 	}
 }
+
+// Every key is classified against hover, the same way every command in the tree
+// is classified against a `ccdad run` session: a key added later has NO verdict
+// rather than a permissive one, and this fails until someone writes one down.
+//
+// The permissive default is the dangerous direction. An unclassified key reads
+// as honoured, so a tuning value hover silently overrides would be printed as in
+// force forever, and a new money key would be printed as overridden when it is
+// not.
+func TestEveryKeyIsClassifiedAgainstHover(t *testing.T) {
+	var missing, both []string
+	for _, key := range Keys() {
+		over, honoured := HoverOverrides(key), hoverHonours[key]
+		switch {
+		case over && honoured:
+			both = append(both, key)
+		case !over && !honoured:
+			missing = append(missing, key)
+		}
+	}
+	if len(missing) > 0 {
+		t.Errorf("no hover verdict for: %v\nAdd each to hoverOverrides (hover derives it) "+
+			"or to hoverHonours (hover reads it).", missing)
+	}
+	if len(both) > 0 {
+		t.Errorf("classified twice: %v", both)
+	}
+	// The free-form section, which Keys() does not enumerate key by key.
+	if !HoverOverrides(windowThresholdSection + ".five_hour") {
+		t.Error("a per-window threshold is not marked as overridden")
+	}
+	// Two independent opt-ins, and hover supplies neither of them.
+	if HoverOverrides(keyMaxAutoSpend) {
+		t.Fatal("hover overrides the credit ceiling; fully automatic must not become fully automatic spending")
+	}
+}
