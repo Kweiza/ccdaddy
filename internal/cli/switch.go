@@ -240,6 +240,7 @@ func newSwitchCmd() *cobra.Command {
 			// than refuses. Its Unattended half is the daemon's.
 			res, err := switcher.Execute(s, switcher.Request{
 				Target: target, LiveUUID: liveUUID, Force: force,
+				Freshen: freshenWith(cmd.Context()),
 			})
 			// The unknown-key probe: drift in the credentials file is
 			// demonstrated, not hypothetical — six machine keys appeared after
@@ -262,6 +263,22 @@ func newSwitchCmd() *cobra.Command {
 			if res.Outcome == switcher.AlreadyOn {
 				fmt.Fprintf(cmd.ErrOrStderr(), "Already on %s.\n", target.Label())
 				return WithCode(errSilent, ExitNothingToDo)
+			}
+			// Refused, not failed: nothing was written, and the account is
+			// installable again as soon as its grant is refreshed. Reported
+			// with the reason because "switch failed" sends the user to
+			// re-login, which is the one repair this state does not need.
+			if res.Outcome == switcher.Stale {
+				fmt.Fprintf(cmd.ErrOrStderr(),
+					"Not switching to %s: its stored login is one Claude Code would refresh on sight.\n",
+					target.Label())
+				if res.FreshenErr != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "  Refreshing it failed: %v\n", res.FreshenErr)
+				}
+				fmt.Fprintln(cmd.ErrOrStderr(),
+					"  Installing it would hand Claude Code a rotation that moves the refresh token\n"+
+						"  out from under ccdad's copy. Try `ccdad list --refresh` first.")
+				return WithCode(errSilent, ExitBlocked)
 			}
 
 			noteCooldown(cmd, res.CooldownErr)

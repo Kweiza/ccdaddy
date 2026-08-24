@@ -74,11 +74,63 @@ func CredentialIdentity(b cclink.Blob) string {
 	return ""
 }
 
+// LiveState is what the credentials file holds, in the three answers a swap
+// needs to tell apart.
+//
+// AttributeFile used to return two, and collapsing the last two into one bool
+// is what let the engine overwrite a running session's login. "No login in the
+// file" and "a login this store cannot name" have OPPOSITE answers for an
+// unattended swap: the first is a machine with nothing to lose, and the second
+// is very often a managed account whose refresh token Claude Code has just
+// rotated — installing over it re-presents a superseded grant and takes the
+// whole family down with it.
+//
+// The same distinction is already drawn, correctly, one package over: the
+// daemon's probeDue refuses to spend quota against an account when the live one
+// "could not be worked out", for exactly this reason. This type is that rule
+// given a name so the swap path can hold it too.
+type LiveState uint8
+
+const (
+	// LiveNone: the file carries no OAuth login at all. Nobody is logged in,
+	// and a swap has nothing to overwrite.
+	LiveNone LiveState = iota
+	// LiveManaged: the file's login is one of this store's accounts.
+	LiveManaged
+	// LiveUnattributed: the file carries an OAuth login that matches no stored
+	// snapshot. It may be an account nothing here manages, or it may be a
+	// managed account that has rotated since ccdad last saw it, and the file
+	// alone cannot say which.
+	LiveUnattributed
+)
+
+func (s LiveState) String() string {
+	switch s {
+	case LiveNone:
+		return "no login"
+	case LiveManaged:
+		return "a managed account"
+	case LiveUnattributed:
+		return "a login this store cannot name"
+	}
+	return "unknown"
+}
+
 // AttributeFile matches the live credentials file against the managed accounts.
+//
+// The bool answers "is this a managed account", which is what a caller that
+// only needs a name wants. A caller deciding whether to WRITE the file wants
+// LiveStateOf instead: false here spans both LiveNone and LiveUnattributed.
 func AttributeFile(live cclink.Blob, accounts []store.Account, lookup Lookup) (store.Account, bool) {
+	a, state := LiveStateOf(live, accounts, lookup)
+	return a, state == LiveManaged
+}
+
+// LiveStateOf is AttributeFile without the collapse.
+func LiveStateOf(live cclink.Blob, accounts []store.Account, lookup Lookup) (store.Account, LiveState) {
 	liveID := CredentialIdentity(live)
 	if liveID == "" {
-		return store.Account{}, false
+		return store.Account{}, LiveNone
 	}
 	for _, a := range accounts {
 		stored, err := lookup(a.UUID)
@@ -86,10 +138,10 @@ func AttributeFile(live cclink.Blob, accounts []store.Account, lookup Lookup) (s
 			continue
 		}
 		if CredentialIdentity(stored) == liveID {
-			return a, true
+			return a, LiveManaged
 		}
 	}
-	return store.Account{}, false
+	return store.Account{}, LiveUnattributed
 }
 
 // Attribution is what AttributeLogin learned: the account, and how Claude Code

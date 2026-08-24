@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -227,3 +228,37 @@ func writeHostToken(t *testing.T, body string) {
 		t.Fatal(err)
 	}
 }
+
+// seedExpiring adds an account whose stored login sits inside Claude Code's own
+// refresh threshold, which is what a credential looks like after it has sat in
+// the store unpolled for its whole eight-hour life.
+func seedExpiring(t *testing.T, uuid, email string, until time.Duration) store.Account {
+	t.Helper()
+	s, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := store.Account{UUID: uuid, Email: email}
+	if err := s.Add(a, expiringBlob("RT-"+uuid, until)); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := s.Get(uuid)
+	if !ok {
+		t.Fatalf("seedExpiring: %s did not land in the store", uuid)
+	}
+	return got
+}
+
+// expiringBlob is oauthBlob with an expiry on it, relative to fixedNow.
+func expiringBlob(refresh string, until time.Duration) cclink.Blob {
+	return cclink.Blob{"claudeAiOauth": json.RawMessage(
+		`{"accessToken":"AT-` + refresh + `","refreshToken":"` + refresh +
+			`","scopes":["user:inference","user:profile"],"expiresAt":` +
+			strconv.FormatInt(fixedNow.Add(until).UnixMilli(), 10) + `}`)}
+}
+
+// fixedNow is the instant the staleness tests reckon from, so a fixture's
+// expiry is a fact about the test rather than about when it ran.
+var fixedNow = time.Unix(1_700_000_000, 0)
+
+func at(now time.Time) func() time.Time { return func() time.Time { return now } }

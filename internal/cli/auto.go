@@ -56,7 +56,7 @@ func newAutoCmd() *cobra.Command {
 				return err
 			}
 			if once {
-				code, err := autoPass(em, s)
+				code, err := autoPass(cmd.Context(), em, s)
 				if err != nil {
 					return err
 				}
@@ -154,8 +154,8 @@ func runAutoLoop(ctx context.Context, em *autoEmitter, s *store.Store, interval 
 	defer stop()
 	loop := &daemon.Loop{
 		Interval: interval,
-		Tick: func(context.Context) error {
-			_, perr := autoPass(em, s)
+		Tick: func(ctx context.Context) error {
+			_, perr := autoPass(ctx, em, s)
 			if em.err != nil {
 				stop()
 				return em.err
@@ -179,7 +179,7 @@ func runAutoLoop(ctx context.Context, em *autoEmitter, s *store.Store, interval 
 // there is no exit to give it to — and reports through the event stream
 // instead, which is why the code is a return value rather than an error: an
 // error here would mean the pass failed, and "nothing to do" is not a failure.
-func autoPass(em *autoEmitter, s *store.Store) (ExitCode, error) {
+func autoPass(ctx context.Context, em *autoEmitter, s *store.Store) (ExitCode, error) {
 	ev, err := switcher.Evaluate(s, switcher.EvalOptions{})
 	if err != nil {
 		return ExitFailure, err
@@ -225,6 +225,7 @@ func autoPass(em *autoEmitter, s *store.Store) (ExitCode, error) {
 	}
 	res, err := switcher.Execute(s, switcher.Request{
 		Target: ev.Target, LiveUUID: live, Unattended: true,
+		Freshen: freshenWith(ctx),
 	})
 	if len(res.UnknownKeys) > 0 && (res.Outcome == switcher.Switched || err != nil) {
 		em.notice("unrecognized keys in the credentials file are being preserved unchanged: %s",
@@ -251,6 +252,22 @@ func autoPass(em *autoEmitter, s *store.Store) (ExitCode, error) {
 		// moving, and the fix is one the operator has to make.
 		em.unchanged(res, "overridden")
 		em.say("%s", switcher.DisplacementNote("Not switching: ", res))
+		return ExitBlocked, nil
+	case switcher.Stale:
+		// 4, with Overridden and Contended, rather than 3. The engine wanted to
+		// move and did not, so the world is NOT as the caller asked -- and an
+		// operator running this from cron is exactly who needs to hear that the
+		// account it would have moved to is carrying a login Claude Code would
+		// rotate on sight.
+		em.unchanged(res, "stale")
+		em.say("Not switching to %s: its stored login is one Claude Code would refresh on sight.",
+			ev.Target.Label())
+		if res.FreshenErr != nil {
+			em.notice("refreshing it failed: %v", res.FreshenErr)
+		}
+		em.say("Installing it would hand Claude Code a rotation that moves the refresh token out " +
+			"from under ccdad's copy. Its next poll refreshes the grant; `ccdad list --refresh` " +
+			"does it now.")
 		return ExitBlocked, nil
 	case switcher.Contended:
 		// 4 for the same reason Overridden is 4: the engine wanted to move,

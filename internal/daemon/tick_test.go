@@ -178,6 +178,13 @@ func engineFor(t *testing.T, token func(context.Context, string) (string, error)
 	e.Rand = func() float64 { return 0.5 }
 	e.AccessToken = token
 	e.FetchUsage = fetch
+	// Both are nilled rather than stubbed, and NewEngine wires both to the
+	// real endpoints. Nil is the refusing default for each — a stale
+	// credential is not installed, an unnameable login is not overwritten — so
+	// a test that wants either behaviour asks for it by name, and one that does
+	// not cannot reach the network by forgetting to.
+	e.Freshen = nil
+	e.ResolveOwner = nil
 	return e
 }
 
