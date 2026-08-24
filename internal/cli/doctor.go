@@ -583,13 +583,20 @@ func checkCredentialHome(report daemon.Report) check {
 // credential home from the one this shell resolves, and returns the sentence
 // for it or "".
 //
-// `ccdad run --full-profile` is how this happens without anybody doing anything
-// wrong: it points CLAUDE_CONFIG_DIR at a per-session directory and unsets
-// CLAUDE_SECURESTORAGE_CONFIG_DIR, so auto-start's scoped-credential refusal
-// does not fire, and a daemon started from inside such a session manages that
-// session's directory for the rest of its life. Every file on the machine looks
-// normal afterwards. The daemon's own published document is the only place the
-// two homes can be compared.
+// A CLAUDE_CONFIG_DIR the USER set is how this happens without anybody doing
+// anything wrong, and it is deliberately not prevented: an ordinary override is
+// not a `ccdad run` session, and refusing to auto-start there would turn the
+// feature off for everyone who keeps their Claude Code configuration somewhere
+// else. So a daemon born in such a shell pins that home for life, and a later
+// shell without the override resolves a different one. Every file on the
+// machine looks normal afterwards, and the daemon's own published document is
+// the only place the two homes can be compared.
+//
+// `ccdad run --full-profile` USED to reach here the same way and no longer
+// does: auto-start's rule 3 gained a containment test at 3d9d2d6 and
+// scopedSessionRefusals covers the daemon verbs a human types. Do not read the
+// prevented cause as evidence that this check is dead — the route above has
+// nothing preventing it, and this row is the only place it is ever named.
 func credentialHomeDrift(report daemon.Report, resolved string) string {
 	if report.State != daemon.DaemonRunning || !report.HasStatus {
 		return ""
@@ -607,8 +614,8 @@ func credentialHomeDrift(report daemon.Report, resolved string) string {
 	}
 	return fmt.Sprintf(
 		"the running daemon is driving %s, but this shell resolves %s — so its switches change a login "+
-			"nothing here reads. A daemon started from inside 'ccdad run --full-profile' does this; "+
-			"restart it from an ordinary shell", recorded, resolved)
+			"nothing here reads. A daemon started from a shell with a different CLAUDE_CONFIG_DIR does "+
+			"this; restart it from the shell whose configuration you want it to serve", recorded, resolved)
 }
 
 // probeClaudeInstall is doctor's window onto which Claude Code is installed. It
