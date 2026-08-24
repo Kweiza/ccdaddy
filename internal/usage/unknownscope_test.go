@@ -323,3 +323,57 @@ func TestUnknownScopeWindowsIgnoresAnUnknownKind(t *testing.T) {
 		t.Errorf("UnknownScopeWindows() = %v, want none — an entry of an unknown kind may be a grant whose resets_at is an expiry", scopedNames(un))
 	}
 }
+
+// The decode filters unusable scope keys out, so these guards are only reachable
+// through LimitFor — which is how every test fixture and every caller outside
+// this package builds a Limit. A guard nothing can reach from the wire is still
+// a guard the constructor can walk into.
+func TestAnEntryBuiltWithAnUnusableScopeKeyNamesNothingAndIsCounted(t *testing.T) {
+	for name, scopes := range map[string]map[string]string{
+		"no display half":  {"region": ""},
+		"colon in the key": {"model:x": "y"},
+		"empty key":        {"": "eu"},
+	} {
+		s := &Snapshot{Limits: []Limit{LimitFor(LimitInput{
+			Kind: "weekly_scoped", OtherScopes: scopes,
+		})}}
+		if ws := s.UnknownScopeWindows(); len(ws) != 0 {
+			t.Errorf("%s: UnknownScopeWindows() = %v, want none", name, scopedNames(ws))
+		}
+		if n := s.UnnamableLimits(); n != 1 {
+			t.Errorf("%s: UnnamableLimits() = %d, want 1 — a cap dropped without a count is a cap dropped silently", name, n)
+		}
+	}
+}
+
+// A usable key is taken even when an unusable one sorts ahead of it. Indexing
+// the sorted list at zero would name the window after the key that offers
+// nothing and throw away the one that offers a handle.
+func TestAUsableScopeKeyIsTakenOverAnUnusableOneThatSortsFirst(t *testing.T) {
+	s := &Snapshot{Limits: []Limit{LimitFor(LimitInput{
+		Kind:        "weekly_scoped",
+		OtherScopes: map[string]string{"aaa": "", "region": "eu"},
+	})}}
+
+	ws := s.UnknownScopeWindows()
+	if len(ws) != 1 || ws[0].Name != "weekly_scoped:region:eu" {
+		t.Errorf("UnknownScopeWindows() = %v, want weekly_scoped:region:eu — aaa sorts first and names nothing", scopedNames(ws))
+	}
+	if n := s.UnnamableLimits(); n != 0 {
+		t.Errorf("UnnamableLimits() = %d, want 0 — the entry did produce a window", n)
+	}
+}
+
+// Counting on no reading, and counting an entry of a kind that is not a weekly
+// window, are the two ways this number lies in the quiet direction and the loud
+// one.
+func TestUnnamableLimitsCountsOnlyWeeklyEntriesAndSurvivesNoSnapshot(t *testing.T) {
+	var none *Snapshot
+	if n := none.UnnamableLimits(); n != 0 {
+		t.Errorf("UnnamableLimits() on a nil snapshot = %d, want 0", n)
+	}
+	s := &Snapshot{Limits: []Limit{LimitFor(LimitInput{Kind: "one_time_grant"})}}
+	if n := s.UnnamableLimits(); n != 0 {
+		t.Errorf("UnnamableLimits() = %d, want 0 — an entry of an unknown kind is not a weekly window this build lost", n)
+	}
+}

@@ -423,6 +423,15 @@ func usageJSON(r statusRow, now time.Time) map[string]any {
 	if len(windows) > 0 {
 		out["windows"] = windows
 	}
+	// A weekly cap the wire gave nothing to name cannot be in `windows`: there
+	// is no key to file it under, and none a threshold could be set on either.
+	// The count is the only place it is visible at all, and without it the
+	// reading would say an account has quota nobody can see it does not have.
+	// It is emitted only when non-zero, so an ordinary payload does not carry a
+	// field that is always 0.
+	if n := r.Entry.Snapshot.UnnamableLimits(); n > 0 {
+		out["unnamableWeeklyCaps"] = n
+	}
 
 	pace := map[string]any{}
 	for name, p := range r.Pace {
