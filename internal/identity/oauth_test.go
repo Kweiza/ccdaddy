@@ -83,8 +83,8 @@ func TestTheHostedEntrypointsAreASetAndNotAPrefix(t *testing.T) {
 	}
 }
 
-// The descriptor outranks the login, which is the whole reason the queue item
-// was filed: without it a switch writes a login nothing reads.
+// The descriptor outranks the login: without it a switch writes a login
+// nothing reads.
 func TestTheOAuthDescriptorOutranksTheLogin(t *testing.T) {
 	env := OAuthEnvironment{TokenDescriptor: true}
 	if got, _ := env.Resolve(login()); got != OAuthTokenDescriptor {
@@ -92,8 +92,8 @@ func TestTheOAuthDescriptorOutranksTheLogin(t *testing.T) {
 	}
 }
 
-// The half the queue item got wrong: this source has NO environment variable.
-// BT() reaches it when the descriptor variable is unset and the well-known file
+// This source has NO environment variable behind it. BT() reaches it when the
+// descriptor variable is unset and the well-known file
 // has bytes — so a model built on a variable named CCR_OAUTH_TOKEN_FILE would
 // never fire at all.
 func TestTheHostTokenFileIsASourceWithNoVariableBehindIt(t *testing.T) {

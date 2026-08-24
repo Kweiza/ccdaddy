@@ -40,13 +40,12 @@ import (
 // scope -- leaves Claude Code with no OAuth credential at all while a
 // perfectly well-formed claudeAiOauth record sits in the file.
 //
-// "CCR_OAUTH_TOKEN_FILE" IS NOT AN ENVIRONMENT VARIABLE, and the queue item
-// that commissioned this file said it was. Every occurrence in the bundle is
-// the source NAME compared against BT().source, or a case in the remedy table;
-// there is no process.env read of it anywhere. Its subject is a path compiled
-// into Claude Code as a literal. Telling a user to unset it would send them
-// after a variable that does not exist, which is why SourceName and String are
-// two different methods.
+// "CCR_OAUTH_TOKEN_FILE" IS NOT AN ENVIRONMENT VARIABLE. Every occurrence in
+// the bundle is the source NAME compared against BT().source, or a case in the
+// remedy table; there is no process.env read of it anywhere. Its subject is a
+// path compiled into Claude Code as a literal. Telling a user to unset it
+// would send them after a variable that does not exist, which is why
+// SourceName and String are two different methods.
 
 // OAuthSource names where Claude Code would take a session's OAuth-shaped
 // credential from. The order is BT()'s own.
