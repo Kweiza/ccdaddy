@@ -16,6 +16,20 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The daemon's automatic probe now wakes any of an account's windows that
+  has never been spent against, not only the one currently binding.** An
+  account can carry an untouched five-hour window beside a weekly cap that
+  binds tighter and already has its own reset; `probeDue` used to look at
+  `HeadroomOf`'s single binding window alone, see the weekly one already had
+  a reset, and give up before ever considering the five-hour window — so an
+  account `ccdad hover status` marked `(no reset yet; a probe is queued)`
+  could sit that way forever under `hover`. It now scans the same candidate
+  window set hover status derives its note from and probes the first unspent,
+  reset-less one, in schema order — ordinarily the five-hour window, matching
+  what `ccdad probe <account>` already wakes by default.
+
 ## [0.4.1] — 2026-08-24
 
 One fix, no new surface. A switch always pointed the credentials file at the

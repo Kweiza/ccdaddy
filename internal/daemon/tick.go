@@ -505,8 +505,8 @@ func due(e usage.Entry, has bool, now time.Time, live bool) bool {
 }
 
 // probeDue reports whether this tick should spend a turn of an account's own
-// quota to give its binding window a reset time, and which model family the turn
-// has to be spent against to reach that window.
+// quota to wake one of its windows, and which model family the turn has to be
+// spent against to reach that window.
 //
 // Every condition is a way this goes wrong without it:
 //
@@ -517,16 +517,22 @@ func due(e usage.Entry, has bool, now time.Time, live bool) bool {
 //     quarantines is a refresh token the endpoint has already rejected — which is
 //     the very credential a probe would seed its Claude Code with. That errand
 //     cannot authenticate, so it would fail every six hours forever.
-//   - an unreadable account is one no window reported a utilization for. That is
-//     an account nothing could be read from rather than one with an unused
-//     window, and the answer to it is another poll, not a turn of quota.
-//   - a binding window that already reports a reset has nothing to wake, and this
-//     is the condition that stops the probe recurring once it has worked.
-//   - a binding window with utilization ABOVE zero has been spent against, so a
-//     reading that also carries no reset is a contradiction rather than an unused
-//     window. See the guard itself.
+//   - an account with no unwaken window is either unreadable — nothing to poll
+//     rather than an unused window, and the answer to that is another poll, not
+//     a turn of quota — or one where every window either has a reset already or
+//     has been spent against with none, which UnwakenWindow's own doc explains.
 //   - the six-hour gate is what keeps a probe that FAILS — a login prompt, a
 //     model outage — from being retried at this loop's 1 Hz.
+//
+// It does not stop at the account's BINDING window. strategy.HeadroomOf picks
+// the single window with the least slack, because that is the one the ranking
+// cares about — but an untouched five-hour window can sit beside a weekly cap
+// that binds tighter and already has its own reset, and the five-hour window's
+// missing reset does not stop being missing because something else happens to
+// bind right now. `ccdad hover status` marks that row probe-worthy on exactly
+// this reasoning (strategy.HoverWindow.ProbeWanted), so the daemon's own probe
+// path has to agree with what it tells the user is queued, not with a narrower
+// question the ranking asks for a different reason.
 //
 // The live account is skipped, and that is the one exclusion worth spelling out.
 // It is the account something else is already spending against, so a probe of it
@@ -553,34 +559,18 @@ func (e *Engine) probeDue(a store.Account, entry usage.Entry, cfg config.Config,
 	if !activeKnown || a.UUID == active {
 		return "", false
 	}
-	// thresholds(a.UUID), not cfg.Thresholds(): under hover the binding window
-	// — and so the window a probe would wake — is chosen against the same
+	// thresholds(a.UUID), not cfg.Thresholds(): under hover the candidate window
+	// set — and so the window a probe would wake — is chosen against the same
 	// per-account table the ranking used, not the raw config bundle hover
 	// otherwise ignores.
-	h := strategy.HeadroomOf(entry.Snapshot, thresholds(a.UUID))
-	if !h.Known {
-		return "", false
-	}
-	if _, has := entry.Snapshot.ResetFor(h.Binding); has {
-		return "", false
-	}
-	// The window has to be UNSPENT as well as reset-less, and those are two
-	// different readings. The endpoint answers null for resets_at until something
-	// has actually been spent against the window, so utilization above zero with
-	// no reset is not an unused window at all — in practice it is a resets_at
-	// this build could not parse, which the snapshot parser degrades to "no
-	// reset" deliberately. A probe wakes nothing there, the next reading carries
-	// the same unparseable time, and the account would spend a turn of its own
-	// quota every six hours for as long as the drift lasted.
-	//
-	// Pct is 100 minus utilization, so this is utilization at or below zero.
-	if h.Pct < 100 {
+	w, ok := strategy.UnwakenWindow(entry.Snapshot, "", thresholds(a.UUID))
+	if !ok {
 		return "", false
 	}
 	if !entry.MayProbe(now) {
 		return "", false
 	}
-	return probeModel(h.Binding), true
+	return probeModel(w), true
 }
 
 // probeModel is the model family a turn must be spent against to reach one

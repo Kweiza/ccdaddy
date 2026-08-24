@@ -1342,6 +1342,40 @@ func TestTheDaemonDoesNotProbeAWindowThatAlreadyReportsAReset(t *testing.T) {
 	}
 }
 
+// The production shape this guards: a five-hour window nothing has ever spent
+// against, sitting beside a weekly window that already binds tighter AND
+// already has its own reset. HeadroomOf's Binding names the weekly window
+// here, but the five-hour window's missing reset is no less missing for it —
+// hover status marks that row probe-worthy on exactly this reasoning, and the
+// engine has to agree with its own status output.
+func TestTheDaemonProbesAnUnspentWindowEvenWhenADifferentOneBindsTighter(t *testing.T) {
+	isolateEngine(t)
+	seedAccount(t, "u-1", "org-1")
+	seedLiveHolder(t, "u-live")
+	unspent, spent := 0.0, 70.0
+	weeklyResets := tickEpoch.Add(72 * time.Hour)
+	seedEntry(t, "u-1", usage.Entry{
+		FetchedAt: tickEpoch.Add(-10 * time.Minute),
+		Snapshot: &usage.Snapshot{
+			FiveHour: usage.NewWindow(&unspent, nil),
+			SevenDay: usage.NewWindow(&spent, &weeklyResets),
+		},
+	})
+
+	e := engineFor(t, tokensAreFine, func(context.Context, string) (*usage.Snapshot, error) {
+		t.Error("the tick polled the account it had just probed; the reading is not there yet")
+		return nil, nil
+	})
+	probes := stubProbe(t, e)
+	tick(t, e)
+
+	if len(*probes) != 1 || (*probes)[0].uuid != "u-1" {
+		t.Fatalf("probes = %+v, want exactly one for u-1 — its five-hour window has never been "+
+			"spent and carries no reset, even though the weekly window binds tighter and already "+
+			"has one", *probes)
+	}
+}
+
 // A probe that fails must not be retried at the tick loop's cadence: it spends
 // the account's own quota every time. The stamp the engine writes before the
 // spawn is what holds the gate even for a spawn that never started.
