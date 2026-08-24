@@ -109,14 +109,18 @@ func (d *Document) Encode() ([]byte, error) {
 	return out, nil
 }
 
-// UnknownKeys lists the keys this release does not know, in dotted sorted form.
+// UnknownKeys lists the keys this release does not know AND does not read, in
+// dotted sorted form. Its whole use is a notice telling a reader those keys are
+// being ignored, so a key that is in fact read may not appear here — see
+// OptedInWindows for the one kind that is.
 func (d *Document) UnknownKeys() []string {
 	out := []string{}
 	for name, value := range d.raw {
 		if table, isTable := value.(map[string]any); isTable && isKnownSection(name) {
 			for sub := range table {
-				if !isKnownKey(name + "." + sub) {
-					out = append(out, name+"."+sub)
+				key := name + "." + sub
+				if !isKnownKey(key) && !optedInWindow(key) {
+					out = append(out, key)
 				}
 			}
 			continue
@@ -129,6 +133,48 @@ func (d *Document) UnknownKeys() []string {
 	return out
 }
 
+// OptedInWindows lists the window_threshold keys this release cannot validate
+// and reads anyway, in dotted sorted form.
+//
+// They are the exception to everything UnknownKeys says. A weekly cap filed
+// under a scope key this build does not name is carried but left OUT of the
+// ranking, because ccdad cannot state what such a cap covers; a threshold naming
+// that window is the opt-in, and the only one, since `ccdad config set` refuses
+// a scope it cannot verify. So the key is unknown to the config surface and live
+// to the engine at the same time, and reporting it as ignored tells a user who
+// just typed it that it does nothing.
+func (d *Document) OptedInWindows() []string {
+	table, isTable := d.raw[windowThresholdSection].(map[string]any)
+	if !isTable {
+		return nil
+	}
+	out := []string{}
+	for name := range table {
+		if key := windowThresholdPrefix + name; optedInWindow(key) {
+			out = append(out, key)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// optedInWindow reports whether a key names a window this release cannot
+// validate but the ranking still reads.
+//
+// It asks usage.ValidWindowName for the REASON rather than going through
+// windowOf, which answers a bool: three of that function's four refusals mean
+// the entry is dead — a name no reading produces, cinder_cove, a scoped name
+// with no display half — and only ErrUnknownScope means "not yet". Widening
+// windowOf to carry the reason would push that distinction onto every caller
+// that only wants the gate.
+func optedInWindow(key string) bool {
+	name, inSection := strings.CutPrefix(key, windowThresholdPrefix)
+	if !inSection {
+		return false
+	}
+	return errors.Is(usage.ValidWindowName(usage.WindowName(name)), usage.ErrUnknownScope)
+}
+
 // Keys is every key `ccdad config list` prints for THIS document: the ones
 // Keys() names, and the window thresholds the document itself carries.
 //
@@ -138,9 +184,11 @@ func (d *Document) UnknownKeys() []string {
 // therefore adds no row at all rather than a placeholder row for a key nothing
 // has set — which would be a row `ccdad config unset` could not remove.
 //
-// A name in the table that is not a window is left out here and reported by
-// UnknownKeys instead, which is the answer an unknown top-level key already
-// gets: it round-trips, it is ignored, and it is named once. That omission is
+// A name in the table that is not a window is left out here and named in a
+// notice instead. For most of them that notice is UnknownKeys', the answer an
+// unknown top-level key already gets: it round-trips, it is ignored, and it is
+// named once. A scoped name under a key this build does not know is the
+// exception and gets its own, because that one IS read — see OptedInWindows. That omission is
 // load-bearing rather than tidy — `ccdad config list` calls Config.Value on
 // every key it is handed and returns the error, so offering one would turn a
 // forward-compatible file into a failed command.
