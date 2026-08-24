@@ -992,6 +992,19 @@ func TestTheDangerBandStandsTheRestOfTheIdentityDown(t *testing.T) {
 	seedDisabled(t, "u-solo", "org-alone")
 	liveAs(t, "u-1")
 
+	// Both alternates already hold a fresh reading, so neither is due and the
+	// only writer is the live account's own poll. An account with NO entry is
+	// skipped by a stand-down, and on a first tick whether it has one yet is a
+	// race between two pollers.
+	earned := tickEpoch.Add(2 * pollpolicy.CandidateMaxInterval)
+	seedEntry(t, "u-2", usage.Entry{
+		Snapshot: snapshotWith(20), FetchedAt: tickEpoch, NextPollAt: earned,
+	})
+	seedEntry(t, "u-solo", usage.Entry{
+		Snapshot: snapshotWith(20), FetchedAt: tickEpoch,
+		NextPollAt: tickEpoch.Add(pollpolicy.CandidateMaxInterval),
+	})
+
 	now := tickEpoch
 	e := engineFor(t, tokensAreFine, func(_ context.Context, token string) (*usage.Snapshot, error) {
 		if token == "AT-u-1" {
@@ -1000,25 +1013,32 @@ func TestTheDangerBandStandsTheRestOfTheIdentityDown(t *testing.T) {
 		return snapshotWith(20), nil
 	})
 	e.Now = func() time.Time { return now }
-
-	// The first tick gives every account an entry. The second is the one that
-	// matters: only the live account is due by then, so nothing else is writing.
-	tick(t, e)
-	second := tickEpoch.Add(pollpolicy.UrgentInterval + time.Second)
-	now = second
 	tick(t, e)
 
 	sib, ok := cacheEntry(t, "u-2")
 	if !ok {
 		t.Fatal("the account sharing the identity has no entry")
 	}
-	if want := second.Add(pollpolicy.Post429MaxInterval); !sib.StandDownUntil.Equal(want) {
-		t.Fatalf("StandDownUntil = %s, want %s", sib.StandDownUntil, want)
+	pushed := tickEpoch.Add(pollpolicy.Post429MaxInterval)
+	if !sib.StandDownUntil.Equal(pushed) {
+		t.Fatalf("StandDownUntil = %s, want %s", sib.StandDownUntil, pushed)
 	}
 	// The schedule its own poll earned is untouched. A stand-down that overwrote
 	// it would overwrite a 429's floor with something shorter.
-	if want := tickEpoch.Add(2 * pollpolicy.CandidateMaxInterval); !sib.NextPollAt.Equal(want) {
-		t.Fatalf("NextPollAt = %s, want the %s its own poll set", sib.NextPollAt, want)
+	if !sib.NextPollAt.Equal(earned) {
+		t.Fatalf("NextPollAt = %s, want the %s it came in with", sib.NextPollAt, earned)
+	}
+
+	// A second band commit a minute later does NOT push the deadline out again.
+	// The band recommits every 60 s, so a renewal on each one would move the
+	// deadline away faster than the clock reaches it and the alternate would
+	// never be polled at all.
+	now = tickEpoch.Add(pollpolicy.UrgentInterval + time.Second)
+	tick(t, e)
+	sib, _ = cacheEntry(t, "u-2")
+	if !sib.StandDownUntil.Equal(pushed) {
+		t.Fatalf("StandDownUntil = %s after a second band commit, want the original %s — "+
+			"a renewed stand-down never expires", sib.StandDownUntil, pushed)
 	}
 	// An account on a different identity draws on a different budget and has
 	// nothing to yield.
@@ -1312,17 +1332,18 @@ func TestTheDaemonAsksForTheModelTheBindingWindowNeeds(t *testing.T) {
 	isolateEngine(t)
 	seedAccount(t, "u-1", "org-1")
 	seedLiveHolder(t, "u-live")
-	// Least slack is what binds. five_hour is 5% used and names a reset, the Opus
-	// week is 40% used and names none — so at one threshold for every window the
-	// Opus week binds, and the probe has to ask for Opus or it spends a turn
-	// against the wrong window entirely.
-	used, spent := 5.0, 40.0
+	// Least slack is what binds, and a window nothing has been spent against is
+	// at 0% — the most slack there is at one threshold for every window. A floor
+	// of its own is what makes an unused window bind, which is also the only
+	// configuration in which this account is worth probing at all.
+	writeConfig(t, "threshold = 80\n\n[window_threshold]\nseven_day_opus = 10\n")
+	used, unspent := 5.0, 0.0
 	resets := tickEpoch.Add(time.Hour)
 	seedEntry(t, "u-1", usage.Entry{
 		FetchedAt: tickEpoch.Add(-10 * time.Minute),
 		Snapshot: &usage.Snapshot{
 			FiveHour:     usage.NewWindow(&used, &resets),
-			SevenDayOpus: usage.NewWindow(&spent, nil),
+			SevenDayOpus: usage.NewWindow(&unspent, nil),
 		},
 	})
 
@@ -1434,5 +1455,427 @@ func TestTheFirstAutomaticProbeSaysItSpendsTheUsersQuota(t *testing.T) {
 	}
 	if said != 1 {
 		t.Fatalf("the quota line appeared %d times for two probes, want 1:\n%v", said, lines)
+	}
+}
+
+// A stand-down is a yield, not a stop. The band recommits every 60 s for as long
+// as the live account stays inside it, so a deadline renewed on every one of
+// those would move away faster than the clock reaches it and the alternate would
+// go permanently unread — the accounts standing down being exactly the ones the
+// engine will want to switch TO, that is the band blinding the engine to the
+// escape it exists to buy time for.
+func TestAStoodDownAccountIsStillPolledAboutTwiceAnHour(t *testing.T) {
+	isolateEngine(t)
+	seedAccount(t, "u-1", "org-shared")
+	seedDisabled(t, "u-2", "org-shared")
+	liveAs(t, "u-1")
+
+	var alt atomicCounter
+	now := tickEpoch
+	e := engineFor(t, tokensAreFine, func(_ context.Context, token string) (*usage.Snapshot, error) {
+		if token == "AT-u-1" {
+			return snapshotWith(97), nil
+		}
+		alt.inc()
+		return snapshotWith(20), nil
+	})
+	e.Now = func() time.Time { return now }
+
+	// Two hours at the tick loop's own cadence, coarsened to 30 s so the test is
+	// arithmetic rather than four thousand ticks.
+	const span = 2 * time.Hour
+	for at := time.Duration(0); at <= span; at += 30 * time.Second {
+		now = tickEpoch.Add(at)
+		tick(t, e)
+	}
+
+	// Its own cadence is 2 x 600 s and the stand-down is 1800 s, so it comes back
+	// on the stand-down: once at t=0 and then about every half hour.
+	if n := alt.get(); n < 3 {
+		t.Fatalf("the alternate was polled %d times in two hours, want at least 3 — "+
+			"a stand-down that is renewed on every band commit never expires", n)
+	}
+	sib, _ := cacheEntry(t, "u-2")
+	if age := now.Sub(sib.FetchedAt); age > pollpolicy.Post429MaxInterval+pollpolicy.CandidateMaxInterval {
+		t.Fatalf("the alternate's reading is %s old at the end of the run — the engine "+
+			"cannot rank the account it is being held back for", age)
+	}
+	if l := liveUUID(t); l != "u-1" {
+		t.Fatalf("live = %q, want u-1", l)
+	}
+}
+
+// A stand-down written while an account was an alternate must stop being
+// published as that account's own deadline the moment it becomes live, because
+// the dispatcher stops applying it at exactly that moment. A status document
+// that says half an hour about an account the daemon will poll in ten minutes is
+// the same disagreement, in the other direction, that this document exists to
+// prevent.
+func TestAStandDownIsNotPublishedForTheAccountThatBecameLive(t *testing.T) {
+	isolateEngine(t)
+	seedAccount(t, "u-1", "org-shared")
+	// Disabled, so the engine cannot switch to it on its own while it is the
+	// alternate — the switch below is the user's, and an account taken out of
+	// rotation while ccdad is logged in as it is an ordinary state.
+	seedDisabled(t, "u-2", "org-shared")
+	liveAs(t, "u-1")
+
+	earned := tickEpoch.Add(pollpolicy.CandidateMaxInterval)
+	seedEntry(t, "u-2", usage.Entry{
+		Snapshot: snapshotWith(20), FetchedAt: tickEpoch, NextPollAt: earned,
+	})
+
+	now := tickEpoch
+	e := engineFor(t, tokensAreFine, func(_ context.Context, token string) (*usage.Snapshot, error) {
+		if token == "AT-u-1" {
+			return snapshotWith(97), nil
+		}
+		return snapshotWith(20), nil
+	})
+	e.Now = func() time.Time { return now }
+	tick(t, e)
+
+	sib, _ := cacheEntry(t, "u-2")
+	if sib.StandDownUntil.IsZero() {
+		t.Fatal("the alternate was never stood down, so this test is not about anything")
+	}
+	// It is the alternate, so the stand-down IS its deadline.
+	if got := nextPollOf(t, e.Snapshot(), "u-2"); !got.Equal(sib.StandDownUntil) {
+		t.Fatalf("published nextPollAt = %s for a stood-down alternate, want %s", got, sib.StandDownUntil)
+	}
+
+	// Now it is live. The dispatcher stops honouring the stand-down here, and so
+	// must the document.
+	liveAs(t, "u-2")
+	now = tickEpoch.Add(time.Second)
+	tick(t, e)
+	if got := nextPollOf(t, e.Snapshot(), "u-2"); !got.Equal(earned) {
+		t.Fatalf("published nextPollAt = %s for the account that just became live, want the "+
+			"%s its own poll earned — the dispatcher will reach it then", got, earned)
+	}
+}
+
+func nextPollOf(t *testing.T, s Status, uuid string) time.Time {
+	t.Helper()
+	for _, a := range s.Accounts {
+		if a.UUID == uuid {
+			return a.NextPollAt
+		}
+	}
+	t.Fatalf("no account %q in the published status", uuid)
+	return time.Time{}
+}
+
+// A probe and a poll of the same account must not be in flight together. The
+// poll was dispatched by an earlier tick and has not committed; when it does it
+// writes an ordinary cadence over the one-minute schedule the probe just bought,
+// so the poll meant to read what the probe woke lands ten minutes out instead of
+// one — on a turn of quota already spent.
+func TestAnAccountIsNotProbedWhileItsOwnPollIsStillRunning(t *testing.T) {
+	isolateEngine(t)
+	seedAccount(t, "u-1", "org-1")
+	seedLiveHolder(t, "u-live")
+	// Probe-due on every axis except the six-hour gate, which opens between the
+	// two ticks below.
+	seedEntry(t, "u-1", usage.Entry{
+		Snapshot:  unusedWindow(),
+		FetchedAt: tickEpoch.Add(-10 * time.Minute),
+		Probe:     usage.ProbeState{LastAttemptAt: tickEpoch.Add(-usage.ProbeRetryAfter + time.Minute)},
+	})
+
+	release := make(chan struct{})
+	now := tickEpoch
+	e := engineFor(t, tokensAreFine, func(_ context.Context, token string) (*usage.Snapshot, error) {
+		if token == "AT-u-1" {
+			<-release
+		}
+		return unusedWindow(), nil
+	})
+	e.Now = func() time.Time { return now }
+	probes := stubProbe(t, e)
+
+	// The first tick dispatches a poll that never finishes.
+	if err := e.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// The second is past the six-hour gate, so nothing but the in-flight poll
+	// stands between this account and a probe.
+	now = tickEpoch.Add(2 * time.Minute)
+	if err := e.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(*probes); n != 0 {
+		t.Fatalf("probes = %+v while a poll of the same account was in flight", *probes)
+	}
+	close(release)
+	e.Wait()
+}
+
+// A quarantined account is out of rotation, and the only thing that quarantines
+// is a refresh token the endpoint has already rejected — which is the very
+// credential a probe would seed its Claude Code with. The errand cannot
+// authenticate, so it would be sent, and fail, every six hours forever.
+func TestTheDaemonNeverProbesAQuarantinedAccount(t *testing.T) {
+	isolateEngine(t)
+	seedAccount(t, "u-1", "org-1")
+	seedLiveHolder(t, "u-live")
+	seedEntry(t, "u-1", usage.Entry{Snapshot: unusedWindow(), FetchedAt: tickEpoch.Add(-10 * time.Minute)})
+	if err := strategy.WithState(stateTimeout, func(st *strategy.State) error {
+		st.Quarantine("u-1", tickEpoch, time.Hour, strategy.RefreshDead.String())
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	e := engineFor(t, tokensAreFine, func(context.Context, string) (*usage.Snapshot, error) {
+		return unusedWindow(), nil
+	})
+	probes := stubProbe(t, e)
+	tick(t, e)
+
+	if len(*probes) != 0 {
+		t.Fatalf("probes = %+v, want none — that account's refresh grant is the one the "+
+			"endpoint already rejected", *probes)
+	}
+}
+
+// "Which account is live could not be worked out" is not "no account is live".
+// AttributeFile matches the credentials file by refresh token and the server
+// rotates that token on every refresh, so attribution lapses on exactly the
+// account a session is running against — and a probe of that one is the probe
+// that can revoke the token the session is using.
+func TestTheDaemonNeverProbesWhenItCannotTellWhichAccountIsLive(t *testing.T) {
+	isolateEngine(t)
+	seedAccount(t, "u-1", "org-1")
+	seedEntry(t, "u-1", usage.Entry{Snapshot: unusedWindow(), FetchedAt: tickEpoch.Add(-10 * time.Minute)})
+	// A live login whose refresh token matches nothing in the store: the shape a
+	// rotation leaves behind. And an OAuth token in the environment, which is
+	// what stops the engine from resolving the ambiguity by switching — an
+	// unattended swap stands down under an override, so the daemon runs a whole
+	// tick without ever learning who is live. That is the state under test.
+	body := `{"claudeAiOauth":{"accessToken":"AT-rotated","refreshToken":"RT-u-1-rotated"}}`
+	if err := os.WriteFile(mustPath(ccpath.CredentialsPath()), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat-overriding")
+
+	e := engineFor(t, tokensAreFine, func(context.Context, string) (*usage.Snapshot, error) {
+		return unusedWindow(), nil
+	})
+	probes := stubProbe(t, e)
+	tick(t, e)
+
+	if l := liveUUID(t); l != "" {
+		t.Fatalf("the fixture attributes to %q, so this test is not about an unattributable login", l)
+	}
+	if len(*probes) != 0 {
+		t.Fatalf("probes = %+v while the live account was unknown — one of them may be it", *probes)
+	}
+}
+
+// The same guard at the decision itself, because the end-to-end fixture above
+// has to arrange a machine that cannot resolve the ambiguity by switching, and
+// an edit that made the guard depend on the empty uuid rather than on the flag
+// would still pass it.
+func TestProbeDueRefusesAnUnknownLiveAccountAndNotMerelyAnEmptyOne(t *testing.T) {
+	isolateEngine(t)
+	e := NewEngine()
+	e.Now = func() time.Time { return tickEpoch }
+	a := store.Account{UUID: "u-1"}
+	entry := usage.Entry{Snapshot: unusedWindow(), FetchedAt: tickEpoch.Add(-10 * time.Minute)}
+	cfg := config.Defaults()
+
+	if _, want := e.probeDue(a, entry, cfg, tickEpoch, "", false, nil); want {
+		t.Error("probed while which account is live could not be worked out")
+	}
+	if _, want := e.probeDue(a, entry, cfg, tickEpoch, "", true, nil); !want {
+		t.Error("refused to probe on a machine where nothing is live, which is the safe case")
+	}
+	if _, want := e.probeDue(a, entry, cfg, tickEpoch, "u-1", true, nil); want {
+		t.Error("probed the live account")
+	}
+}
+
+// The endpoint answers null for resets_at until something has been spent, so a
+// window that is 40% used and still names no reset is not an unused window. In
+// practice it is a resets_at this build could not parse, which the snapshot
+// parser degrades to "no reset" on purpose — and the next reading carries the
+// same unparseable time, so a probe here spends a turn of the user's quota every
+// six hours for as long as the drift lasts.
+func TestTheDaemonDoesNotProbeAWindowThatHasAlreadyBeenSpentAgainst(t *testing.T) {
+	isolateEngine(t)
+	seedAccount(t, "u-1", "org-1")
+	seedLiveHolder(t, "u-live")
+	spent := 40.0
+	seedEntry(t, "u-1", usage.Entry{
+		FetchedAt: tickEpoch.Add(-10 * time.Minute),
+		Snapshot:  &usage.Snapshot{FiveHour: usage.NewWindow(&spent, nil)},
+	})
+
+	e := engineFor(t, tokensAreFine, func(context.Context, string) (*usage.Snapshot, error) {
+		return unusedWindow(), nil
+	})
+	probes := stubProbe(t, e)
+	tick(t, e)
+
+	if len(*probes) != 0 {
+		t.Fatalf("probes = %+v — 40%% of that window has been spent, so the missing reset "+
+			"is a reading this build could not parse and no turn of quota will change it", *probes)
+	}
+}
+
+// The attempt is stamped BEFORE the probe is started, so a probe that fails to
+// start still consumes the six-hour budget. Without that order an unstartable
+// probe is attempted on every tick, forever.
+func TestAProbeThatFailsToStartStillConsumesTheBudget(t *testing.T) {
+	isolateEngine(t)
+	seedAccount(t, "u-1", "org-1")
+	seedLiveHolder(t, "u-live")
+	seedEntry(t, "u-1", usage.Entry{Snapshot: unusedWindow(), FetchedAt: tickEpoch.Add(-10 * time.Minute)})
+
+	var attempts atomicCounter
+	now := tickEpoch
+	e := engineFor(t, tokensAreFine, func(context.Context, string) (*usage.Snapshot, error) {
+		return unusedWindow(), nil
+	})
+	e.Now = func() time.Time { return now }
+	stubProbe(t, e)
+	e.SpawnProbe = func(string, string) error {
+		attempts.inc()
+		return errors.New("fork/exec: resource temporarily unavailable")
+	}
+
+	tick(t, e)
+	if n := attempts.get(); n != 1 {
+		t.Fatalf("the engine tried %d probes on the first tick, want 1", n)
+	}
+	got, _ := cacheEntry(t, "u-1")
+	if !got.Probe.LastAttemptAt.Equal(tickEpoch) {
+		t.Fatalf("Probe.LastAttemptAt = %s after a spawn that failed, want %s — an "+
+			"unstartable probe would be attempted on every tick forever", got.Probe.LastAttemptAt, tickEpoch)
+	}
+	now = tickEpoch.Add(usage.ProbeRetryAfter - time.Minute)
+	tick(t, e)
+	if n := attempts.get(); n != 1 {
+		t.Fatalf("the engine tried %d probes inside the six-hour gate, want 1", n)
+	}
+}
+
+// probeModel hands ModelFamily the DISPLAY half of a scoped name and never the
+// whole thing. ModelFamily is a substring match and the full name carries the
+// scope KEY, so a deployment whose keys name a model would otherwise have a
+// family read out of a string that names no model at all — and the probe would
+// spend a turn against a window nobody asked about.
+func TestTheProbeModelIsReadFromTheScopeDisplayNameAlone(t *testing.T) {
+	for _, tc := range []struct {
+		window usage.WindowName
+		want   string
+	}{
+		{usage.WindowFiveHour, ""},
+		{usage.WindowSevenDay, ""},
+		{usage.WindowSevenDayOAuthApps, ""},
+		{usage.WindowSevenDayOpus, "opus"},
+		{usage.WindowSevenDaySonnet, "sonnet"},
+		{usage.ScopedWindowName(usage.ScopeModel, "Opus 4.5"), "opus"},
+		{usage.ScopedWindowName(usage.ScopeModel, "Sonnet 4.5"), "sonnet"},
+		{usage.ScopedWindowName(usage.ScopeModel, "Team plan"), ""},
+		// A SURFACE scope names no model, and its display name is free text that
+		// may contain one.
+		{usage.ScopedWindowName(usage.ScopeSurface, "Claude Code"), ""},
+		{usage.ScopedWindowName(usage.ScopeSurface, "Opus workbench"), ""},
+		// The scope key itself is free text on the wire, and it is the half that
+		// must never reach the matcher.
+		{usage.WindowName("weekly_scoped:sonnet_tier:Team"), ""},
+	} {
+		t.Run(string(tc.window), func(t *testing.T) {
+			if got := probeModel(tc.window); got != tc.want {
+				t.Fatalf("probeModel(%q) = %q, want %q", tc.window, got, tc.want)
+			}
+		})
+	}
+}
+
+// The live account never writes a stand-down against itself. usage.Entry.PollAt
+// ignores one while the account is live, so nothing happens today — and then a
+// switch happens, and the account that was just switched AWAY from is held for
+// up to half an hour at the one moment its recovery is worth watching for.
+func TestTheLiveAccountDoesNotStandItselfDown(t *testing.T) {
+	isolateEngine(t)
+	seedAccount(t, "u-1", "org-shared")
+	seedDisabled(t, "u-2", "org-shared")
+	liveAs(t, "u-1")
+	seedEntry(t, "u-2", usage.Entry{Snapshot: snapshotWith(20), FetchedAt: tickEpoch})
+
+	e := engineFor(t, tokensAreFine, func(_ context.Context, token string) (*usage.Snapshot, error) {
+		if token == "AT-u-1" {
+			return snapshotWith(97), nil
+		}
+		return snapshotWith(20), nil
+	})
+	tick(t, e)
+
+	sib, _ := cacheEntry(t, "u-2")
+	if sib.StandDownUntil.IsZero() {
+		t.Fatal("nothing stood down, so this test is not about anything")
+	}
+	got, _ := cacheEntry(t, "u-1")
+	if !got.StandDownUntil.IsZero() {
+		t.Fatalf("the live account stood itself down until %s — the moment it is switched "+
+			"away from, that holds it for half an hour on the one reading worth watching", got.StandDownUntil)
+	}
+}
+
+// The published deadline is the one the DISPATCHER will honour, which means the
+// stand-down applies to an alternate and never to the live account. Both halves
+// of the answer are checked: the cache, which is what a daemon that has just
+// restarted has, and the engine's own record of what this process scheduled.
+func TestThePublishedScheduleIsTheOneTheDispatcherWillHonour(t *testing.T) {
+	isolateEngine(t)
+	accounts := []store.Account{{UUID: "u-2"}}
+	cfg := config.Defaults()
+	earned := tickEpoch.Add(pollpolicy.CandidateMaxInterval)
+	stood := tickEpoch.Add(pollpolicy.Post429MaxInterval)
+	seedEntry(t, "u-2", usage.Entry{
+		Snapshot: snapshotWith(20), FetchedAt: tickEpoch,
+		NextPollAt: earned, StandDownUntil: stood,
+	})
+	cache, err := usage.LoadCache()
+	if err != nil {
+		t.Fatal(err)
+	}
+	live := func(uuid string) switcher.Evaluation {
+		return switcher.Evaluation{Live: store.Account{UUID: uuid}, LiveKnown: true}
+	}
+
+	// A restart: the cache is all there is, and the account is an alternate.
+	restarted := NewEngine()
+	restarted.publish(accounts, cache, live("u-1"), cfg, nil)
+	if got := nextPollOf(t, restarted.Snapshot(), "u-2"); !got.Equal(stood) {
+		t.Errorf("a restarted daemon published %s for a stood-down alternate, want %s — "+
+			"the dispatcher will not touch it until then", got, stood)
+	}
+
+	// This process polled it while it was an alternate, and it is an alternate
+	// still: the stand-down is the answer either way.
+	e := NewEngine()
+	e.Now = func() time.Time { return tickEpoch }
+	e.Rand = func() float64 { return 0.5 }
+	e.commit(accounts[0], snapshotWith(20), tickEpoch, []string{"u-2"}, cfg, false, nil)
+	e.publish(accounts, cache, live("u-1"), cfg, nil)
+	if got := nextPollOf(t, e.Snapshot(), "u-2"); !got.Equal(stood) {
+		t.Errorf("published %s for a stood-down alternate this process polled, want %s", got, stood)
+	}
+
+	// And now it is live. The dispatcher stops honouring the stand-down here, so
+	// the record this process kept must stop reporting it.
+	reloaded, err := usage.LoadCache()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, _ := reloaded.Get("u-2")
+	e.publish(accounts, reloaded, live("u-2"), cfg, nil)
+	if got := nextPollOf(t, e.Snapshot(), "u-2"); !got.Equal(entry.NextPollAt) {
+		t.Errorf("published %s for the account that is now live, want the %s its own poll "+
+			"earned — a stand-down written for its predecessor does not hold it", got, entry.NextPollAt)
 	}
 }
