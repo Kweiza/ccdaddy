@@ -147,6 +147,11 @@ type HoverWindow struct {
 type Warmup struct {
 	// Target marks the row a warm-up would aim at.
 	Target bool
+	// Credits marks the one refusal that is about money: a turn spent here
+	// could be billed to metered credits, which unattended spending's two
+	// opt-ins do not cover. WarmUpWouldSpendCredits is the predicate, and the
+	// daemon refuses on the same call.
+	Credits bool
 	// RolledOver is whether the clock is stopped because it RAN DOWN, as against
 	// never having been started. The two read differently to a user: one is the
 	// ordinary end of a cycle, the other is an account nothing has ever used.
@@ -175,9 +180,10 @@ type Warmup struct {
 // warmupFor is the state of one account's warm-up, for the window ColdWindow
 // picked. It asks usage.ProbeState the same question the daemon asks, through
 // the same method, so the table cannot promise a turn the gate would refuse.
-func warmupFor(p usage.ProbeState, w usage.WindowName, rollover, pollAt, now time.Time) Warmup {
+func warmupFor(p usage.ProbeState, w usage.WindowName, rollover, pollAt, now time.Time, credits bool) Warmup {
 	out := Warmup{
 		Target:        true,
+		Credits:       credits,
 		RolledOver:    !rollover.IsZero(),
 		PollAt:        pollAt,
 		Streak:        p.Strikes(w),
@@ -269,6 +275,7 @@ func HoverThresholds(cands []Candidate, o Options) HoverPlan {
 		// same function the daemon's probeDue calls. Asking per row would let
 		// the table mark a window the loop never targets.
 		cold, rollover, isCold := ColdWindow(c.Usage, o.Model, configured, o.Now)
+		credits := WarmUpWouldSpendCredits(c.Usage, o.Model, configured)
 
 		per := map[usage.WindowName]float64{}
 		for _, w := range bindingWindows(c.Usage, o.Model, configured) {
@@ -294,7 +301,7 @@ func HoverThresholds(cands []Candidate, o Options) HoverPlan {
 				row.ProbeWanted = true
 			}
 			if isCold && w.Name == cold {
-				row.Warmup = warmupFor(c.Probe, cold, rollover, c.NextPollAt, o.Now)
+				row.Warmup = warmupFor(c.Probe, cold, rollover, c.NextPollAt, o.Now, credits)
 			}
 			row.Slack = row.Threshold - pct
 			per[w.Name] = row.Threshold

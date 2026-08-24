@@ -691,8 +691,17 @@ func (e *Engine) probeDue(a store.Account, entry usage.Entry, cfg config.Config,
 	// set — and so the window a warm-up would start — is chosen against the same
 	// per-account table the ranking used, not the raw config bundle hover
 	// otherwise ignores.
-	w, rollover, ok := strategy.ColdWindow(entry.Snapshot, "", thresholds(a.UUID), now)
+	thr := thresholds(a.UUID)
+	w, rollover, ok := strategy.ColdWindow(entry.Snapshot, "", thr, now)
 	if !ok {
+		return "", "", false
+	}
+	// The one refusal that is about money rather than about clocks. A turn spent
+	// on an account with nothing left in a window can be billed to metered
+	// credits, and unattended overage takes two independent opt-ins that a warm
+	// clock is not one of. It is asked here rather than left to the child so that
+	// the table and the daemon refuse on the same predicate.
+	if strategy.WarmUpWouldSpendCredits(entry.Snapshot, "", thr) {
 		return "", "", false
 	}
 	if !entry.MayProbe(now, w, rollover, !rollover.IsZero()) {

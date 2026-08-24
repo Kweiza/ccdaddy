@@ -345,6 +345,8 @@ func warmupState(w strategy.HoverWindow, facts warmupFacts) string {
 		return "never"
 	case !facts.probeOn:
 		return "off"
+	case w.Warmup.Credits:
+		return "credits"
 	case !w.Warmup.LastAttemptAt.IsZero() &&
 		facts.now.Sub(w.Warmup.LastAttemptAt) < usage.ProbePollDelay:
 		return "sent"
@@ -399,6 +401,8 @@ func warmupNote(w strategy.HoverWindow, facts warmupFacts) string {
 		return "  (no clock running; the live account is never warmed — its own next turn starts it)"
 	case "off":
 		return "  (no clock running; probe_unknown is off, so nothing will start it)"
+	case "credits":
+		return "  (no clock running; a window here is spent, so a warm-up could be billed to credits)"
 	case "sent":
 		ago := facts.now.Sub(w.Warmup.LastAttemptAt)
 		return fmt.Sprintf("  (warmed %s ago; reading due in %s)",

@@ -108,3 +108,63 @@ func TestNextResetAmongTakesTheEarliestFutureRollover(t *testing.T) {
 		}
 	})
 }
+
+// spent is a window with nothing left in it.
+func spent() usage.Window { return win(100, 20*time.Minute) }
+
+// A warm-up spends a turn, and a turn against an account with nothing left in a
+// window can be billed to metered credits. Unattended overage takes two
+// independent opt-ins and a warm clock is not one of them.
+func TestWarmUpWouldSpendCreditsRefusesOnlyWhereQuotaIsActuallyGone(t *testing.T) {
+	overage := func(state usage.ExtraUsageState) usage.ExtraUsage {
+		return usage.ExtraUsage{Present: true, State: state}
+	}
+	full := Thresholds{Default: 80}
+
+	t.Run("past the pace threshold is not out of quota", func(t *testing.T) {
+		// 80% of the week against a 46% pace target: a fifth of the quota is
+		// still in hand and the turn lands on it. Reading "past its threshold"
+		// as "out" would stop warming most of a busy fleet for no risk at all.
+		s := snap(noReset(0), win(80, 3*24*time.Hour))
+		s.ExtraUsage = overage(usage.ExtraUsageEnabled)
+		if WarmUpWouldSpendCredits(s, "", Thresholds{Default: 46}) {
+			t.Error("refused an account with 20% of its weekly quota left")
+		}
+	})
+
+	t.Run("a window at 100% with overage on", func(t *testing.T) {
+		s := snap(noReset(0), spent())
+		s.ExtraUsage = overage(usage.ExtraUsageEnabled)
+		if !WarmUpWouldSpendCredits(s, "", full) {
+			t.Error("a turn here could be billed to credits and was not refused")
+		}
+	})
+
+	t.Run("a window at 100% with overage unknown fails closed", func(t *testing.T) {
+		// An unread extra_usage is the state a bug looks like, and credit.go's
+		// every branch leans the same way: unknown is the side that does not
+		// spend.
+		s := snap(noReset(0), spent())
+		if !WarmUpWouldSpendCredits(s, "", full) {
+			t.Error("an unread overage switch was read as evidence that a turn cannot be billed")
+		}
+	})
+
+	for _, state := range []usage.ExtraUsageState{usage.ExtraUsageDisabled, usage.ExtraUsageBlocked} {
+		t.Run("a window at 100% with overage "+state.String(), func(t *testing.T) {
+			// Nothing can be billed, so the turn simply fails — which the
+			// backoff ladder already answers, at no cost but a wasted attempt.
+			s := snap(noReset(0), spent())
+			s.ExtraUsage = overage(state)
+			if WarmUpWouldSpendCredits(s, "", full) {
+				t.Errorf("refused a warm-up on an account whose overage is %s", state)
+			}
+		})
+	}
+
+	t.Run("no reading is not a spent one", func(t *testing.T) {
+		if WarmUpWouldSpendCredits(nil, "", full) {
+			t.Error("an account nothing has read was refused as though it were spent")
+		}
+	})
+}
