@@ -16,6 +16,28 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-08-24
+
+Four new commands and an axis change underneath them. `probe` wakes a window
+that has never been used, `hover` derives every threshold from pace instead of
+reading one from the file, `primary` lets a credit-metered seat rank alongside
+the subscriptions, and `bootstrap` — with a reference `Dockerfile` — makes a
+container provisionable in one step. The ranking itself now orders on slack
+(`threshold − used`, per window) rather than raw headroom, which is what makes
+per-window thresholds and pre-emptive switching possible; at default
+configuration the order and every spent verdict are byte-identical to 0.2.0, so
+an upgrade with no `[window_threshold]` table set changes nothing about which
+account is chosen.
+
+Two things worth knowing before they surprise you. `ccdad run` now refuses when
+the caller's own shell already carries a credential that outranks the one it
+just installed — a session that used to authenticate as the wrong account while
+ccdad reported success now says so instead and exits `2`. And poll intervals are
+jittered by up to a tenth now rather than exact: `NewEngine` had never actually
+wired the spread `internal/pollpolicy`'s own tests assumed, so several accounts
+or daemons that paused together came back together and could empty an
+identity's request budget in one burst.
+
 ### Added
 
 - **`ccdad probe`, for a window that has never been used.** Such a window
