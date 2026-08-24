@@ -105,15 +105,44 @@ func ModelFamilyNames() []string {
 	return out
 }
 
-// fixedWindowFamily is the family a FIXED window is scoped to. It is written out
-// rather than derived from the window's name, so that a future window whose key
-// happens to contain a family token does not become model-scoped by accident.
-func fixedWindowFamily(n usage.WindowName) (string, bool) {
+// FixedWindowFamily is the family a FIXED window is scoped to. It is written
+// out rather than derived from the window's name, so that a future window
+// whose key happens to contain a family token does not become model-scoped by
+// accident.
+//
+// This is the one place the correspondence is spelled. internal/daemon's
+// probeModel and internal/cli's probeWindow both go through it — the first
+// forward, the second through WindowForFixedFamily's reverse table — rather
+// than each carrying its own switch, which is how the same two cases used to
+// drift out of sync silently: a family added here without a matching case
+// there left a probe that woke nothing and cost a turn every six hours,
+// forever, with no test able to see the other switch at all.
+func FixedWindowFamily(n usage.WindowName) (string, bool) {
 	switch n {
 	case usage.WindowSevenDayOpus:
 		return "opus", true
 	case usage.WindowSevenDaySonnet:
 		return "sonnet", true
+	}
+	return "", false
+}
+
+// fixedWindows is every window FixedWindowFamily answers for. Listed once so
+// WindowForFixedFamily's reverse lookup and TestFixedWindowFamilyAndItsReverseAgree
+// both walk it, rather than either repeating FixedWindowFamily's own cases.
+var fixedWindows = []usage.WindowName{usage.WindowSevenDayOpus, usage.WindowSevenDaySonnet}
+
+// WindowForFixedFamily is FixedWindowFamily's reverse: the fixed window one
+// family's turn has to be spent against to reach it. A family FixedWindowFamily
+// does not answer for is refused here too — a --model naming a real family
+// with no fixed window of its own still falls through to the caller's own
+// five-hour fallback, which is the honest answer for a family this build
+// cannot scope.
+func WindowForFixedFamily(family string) (usage.WindowName, bool) {
+	for _, n := range fixedWindows {
+		if fam, _ := FixedWindowFamily(n); fam == family {
+			return n, true
+		}
 	}
 	return "", false
 }
@@ -161,7 +190,7 @@ func bindingWindows(s *usage.Snapshot, model string, t Thresholds) []usage.Named
 	unknown := s.UnknownScopeWindows()
 	out := make([]usage.NamedWindow, 0, len(fixed)+len(scoped)+len(unknown))
 	for _, w := range fixed {
-		if fam, ok := fixedWindowFamily(w.Name); ok && narrow && fam != want {
+		if fam, ok := FixedWindowFamily(w.Name); ok && narrow && fam != want {
 			continue
 		}
 		out = append(out, w)

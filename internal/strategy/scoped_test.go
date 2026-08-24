@@ -246,6 +246,30 @@ func TestModelFamilyNamesIsACopy(t *testing.T) {
 	}
 }
 
+// FixedWindowFamily and WindowForFixedFamily are the one place this repo
+// spells the fixed-window↔model-family correspondence — internal/daemon's
+// probeModel and internal/cli's probeWindow both call through here rather
+// than each carrying its own switch, so a family added to one side and not
+// the other is a compile-time-invisible gap this test is what catches: a
+// probe that would silently wake nothing and cost a turn every six hours,
+// forever.
+func TestFixedWindowFamilyAndItsReverseAgreeOverEveryFixedWindow(t *testing.T) {
+	for _, n := range usage.RateLimitWindowNames() {
+		family, isFixed := FixedWindowFamily(n)
+		if !isFixed {
+			continue
+		}
+		back, ok := WindowForFixedFamily(family)
+		if !ok {
+			t.Errorf("FixedWindowFamily(%q) = %q, but WindowForFixedFamily(%q) answers false", n, family, family)
+			continue
+		}
+		if back != n {
+			t.Errorf("FixedWindowFamily(%q) = %q, and WindowForFixedFamily(%q) = %q — the round trip does not return %q", n, family, family, back, n)
+		}
+	}
+}
+
 // ---- the scoped windows reach the rest of the ranking -----------------------
 
 // Recovery mode ranks on when the BINDING window rolls over. Looking that reset
