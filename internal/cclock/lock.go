@@ -255,43 +255,97 @@ func (l *Lock) touch(every time.Duration) {
 		case <-l.stop:
 			return
 		case <-t.C:
-			info, err := statLock(l.dir)
-			if err != nil {
-				l.markLost() // removed outright; we no longer hold anything
-				return
-			}
-			l.mu.Lock()
-			owned := info.ModTime().Equal(l.mtime)
-			l.mu.Unlock()
-			if !owned {
+			if !l.reassert() {
 				l.markLost()
 				return
 			}
-			now := time.Now()
-			if err := os.Chtimes(l.dir, now, now); err != nil {
-				l.markLost()
-				return
-			}
-			// Read back what actually landed on disk rather than trusting
-			// `now`: a coarse-granularity filesystem may store a rounded
-			// value. If that read-back cannot be verified even after
-			// retrying, we no longer know our own mtime and must not keep
-			// asserting ownership on unverified state: silently keeping the
-			// stale in-memory value would make the *next* tick's comparison
-			// fail against the (genuinely changed, just unread) on-disk
-			// value and manufacture a false compromise for a lock nobody
-			// actually stole. Fail closed instead -- a lock whose ownership
-			// cannot be verified must not keep being asserted.
-			info, err = statLock(l.dir)
-			if err != nil {
-				l.markLost()
-				return
-			}
-			l.mu.Lock()
-			l.mtime = info.ModTime()
-			l.mu.Unlock()
 		}
 	}
+}
+
+// reassert is one tick: verify this holder still owns the directory, then
+// advance its mtime and record what landed. It reports whether ownership
+// survived; the caller marks the lock lost when it did not.
+//
+// The whole body runs under l.mu, and that width is the point rather than an
+// accident. Between the Chtimes below and the read-back that follows it, the
+// directory on disk carries an mtime this Lock has not recorded yet -- so any
+// other goroutine comparing the two, which is exactly what Owned does, would
+// find them unequal and report a takeover that never happened. Marking a lock
+// lost is irreversible, so that false positive would end the hold outright.
+// Narrower locking around l.mtime alone leaves that window open.
+func (l *Lock) reassert() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	info, err := statLock(l.dir)
+	if err != nil {
+		return false // removed outright; we no longer hold anything
+	}
+	if !info.ModTime().Equal(l.mtime) {
+		return false
+	}
+	now := time.Now()
+	if err := os.Chtimes(l.dir, now, now); err != nil {
+		return false
+	}
+	// Read back what actually landed on disk rather than trusting `now`: a
+	// coarse-granularity filesystem may store a rounded value. If that
+	// read-back cannot be verified even after retrying, we no longer know our
+	// own mtime and must not keep asserting ownership on unverified state:
+	// silently keeping the stale in-memory value would make the *next* tick's
+	// comparison fail against the (genuinely changed, just unread) on-disk
+	// value and manufacture a false compromise for a lock nobody actually
+	// stole. Fail closed instead -- a lock whose ownership cannot be verified
+	// must not keep being asserted.
+	info, err = statLock(l.dir)
+	if err != nil {
+		return false
+	}
+	l.mtime = info.ModTime()
+	return true
+}
+
+// Owned reports, synchronously and right now, whether this holder still owns
+// its lock directory: a stat of the directory compared against the mtime this
+// holder last confirmed. It is the same check Release performs, made available
+// BEFORE a write instead of after one.
+//
+// Compromised() alone is not enough for a caller whose critical section is
+// longer than an instant. That channel is closed by the touch goroutine on its
+// own ticker, so a takeover can be up to one TouchInterval old before it is
+// visible there -- and a holder that was suspended and has just resumed can
+// reach its write before that goroutine is next scheduled at all, no matter how
+// short the interval is. A caller that must not overwrite a newer holder's work
+// calls this immediately before writing.
+//
+// It narrows that window; it cannot close it. Nothing here makes the check and
+// the caller's write one atomic operation, so a takeover landing between the
+// two still overwrites. What is left is the few microseconds between a stat and
+// the write that follows it, rather than seconds of a ticker that has not run.
+//
+// A negative answer also marks the lock lost, so a caller separately watching
+// Compromised() sees the same event rather than silence, and Release goes on to
+// leave the directory alone: it belongs to the new owner now. A nil Lock owns
+// nothing.
+func (l *Lock) Owned() bool {
+	if l == nil {
+		return false
+	}
+	select {
+	case <-l.lost:
+		return false
+	default:
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	info, err := statLock(l.dir)
+	if err != nil || !info.ModTime().Equal(l.mtime) {
+		l.markLost()
+		return false
+	}
+	return true
 }
 
 // markLost records that this holder no longer owns the lock directory. It is

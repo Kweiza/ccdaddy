@@ -1,5 +1,7 @@
 package history
 
+import "testing"
+
 // mustPath unwraps a ccdad path resolver in a test.
 //
 // Every resolver returns an error only when the home directory cannot be
@@ -12,4 +14,16 @@ func mustPath(path string, err error) string {
 		panic("test fixture: a ccdad path could not be resolved: " + err.Error())
 	}
 	return path
+}
+
+// mustLoad reads the series back, failing the test if it cannot. Every caller
+// has just written the document it is reading, so a load error there is a
+// broken fixture and not a case under test.
+func mustLoad(t *testing.T) *History {
+	t.Helper()
+	h, err := LoadHistory()
+	if err != nil {
+		t.Fatalf("LoadHistory() = %v", err)
+	}
+	return h
 }
