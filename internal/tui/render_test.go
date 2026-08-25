@@ -767,13 +767,100 @@ func fixtureFleet() forecast.Fleet {
 			Verdict: forecast.VerdictRunsDry, DryAt: dry, HasDryAt: true,
 		},
 		Both: forecast.Axis{Verdict: forecast.VerdictRunsDry, DryAt: dry, HasDryAt: true},
+
+		// The seat counts a forecast of a fleet in this state carries, rather
+		// than zeroes. A known basis is exactly the condition the seat search
+		// runs under, so a Fleet with a basis and no counts is one the forecast
+		// cannot produce, and a fixture in a state nothing reaches would pin the
+		// renderer against a page nobody sees.
+		//
+		// Nine against five is short by four, and short is the only thing this
+		// fleet can be: the search counts upward only from a size whose own run
+		// went dry, which is what the verdicts above say happened.
+		AccountsUsable: 5,
+		AccountsNeeded: 9,
+		HasNeeded:      true,
+		NeededBy:       usage.WindowSevenDay,
+		HasNeededBy:    true,
+	}
+}
+
+// fixtureHoldingFleet is the same measurement over a fleet that survives the
+// horizon: five accounts where three of them would do.
+//
+// It carries a seat count on purpose. The full form of that count is printed by
+// `ccdad runway` and names the spare seats; the one-line summary this page draws
+// is asserted below to leave them out, and a fixture with no count at all would
+// pass that assertion for the wrong reason -- by having nothing to leave out.
+func fixtureHoldingFleet() forecast.Fleet {
+	return forecast.Fleet{
+		Basis: forecast.Basis{
+			Window: 4 * time.Hour, Observed: 3*time.Hour + 51*time.Minute, Known: true,
+		},
+		FiveHour: forecast.Axis{Verdict: forecast.VerdictHolds},
+		Weekly:   forecast.Axis{Verdict: forecast.VerdictHolds},
+		Both:     forecast.Axis{Verdict: forecast.VerdictHolds},
+
+		AccountsUsable: 5,
+		AccountsNeeded: 3,
+		HasNeeded:      true,
+	}
+}
+
+// The dashboard names how many accounts a short fleet needs, and it spells none
+// of that here: the clause arrives inside view.RunwayLine, which `ccdad status`
+// and `ccdad list` render as well. Three surfaces and one wording -- a page that
+// assembled its own would be a fourth, free to say something different about the
+// same fleet.
+//
+// A fleet that HOLDS carries no seat count at all, and the second half asserts
+// the page rather than the rule. Its answer is already the word "holds", and
+// this line is read at a glance beside Active: and Mode:, where a clause spent
+// on good news is a clause the short case needed.
+//
+// What refuses it there is view.RunwayLine's own holding wording, which answers
+// before any seat clause is reached; view.RunwayNeedSegment's rule -- a count
+// that is not larger than the fleet says nothing -- decides the other way in,
+// where the fleet run holds and an axis is still undecided, and it is pinned in
+// internal/view beside the function. Measured: taking that rule out leaves this
+// test green and reddens the one there. What this asserts is the whole page, and
+// "need" catches both wordings a seat count could arrive in -- the summary's own
+// "need 3 (2 more)" and the block form's "3 needed to hold at this rate", which
+// would be the shape of a dashboard that drew the runway command's line instead
+// of the summary.
+//
+// Rendered at 113 columns rather than at the 80x24 design target because the
+// whole line is what is being read: a short fleet's line is 91 columns and comes
+// back cut at 80, with the cue that says so. That cut is a separate question and
+// TestTheRunwayLineIsCutToTheFrameRatherThanWrappingIt asks it, at 80 and at
+// four other widths.
+func TestTheDashboardLineNamesTheSeatsOnlyAShortFleetNeeds(t *testing.T) {
+	short := fixtureModel(113, 24)
+	short.Snap.Forecast, short.Snap.HasForecast = fixtureFleet(), true
+	if body := short.Body(); !strings.Contains(body, "need 9 (4 more)") {
+		t.Errorf("a fleet of five that needs nine drew no seat count:\n%s", body)
+	}
+
+	holding := fixtureModel(113, 24)
+	holding.Snap.Forecast, holding.Snap.HasForecast = fixtureHoldingFleet(), true
+	body := holding.Body()
+	if !strings.Contains(body, "Runway: holds on both axes at this rate  ·  basis 3h51m") {
+		t.Fatalf("the holding fixture drew no runway line, or drew a different one:\n%s", body)
+	}
+	if strings.Contains(body, "need") {
+		t.Errorf("a fleet that holds spent part of the page on seats it does not need:\n%s", body)
 	}
 }
 
 // fixtureRunwayLine is what the fleet above renders to, spelled out here rather
 // than computed, so this file pins the bytes on the page and not the agreement
 // of one function with itself.
-const fixtureRunwayLine = "Runway: 7d dry 2026-03-06 14:00 UTC (2d2h)  ·  5h holds  ·  basis 3h51m"
+//
+// Ninety-one columns, which is wider than the 80-column design target: a short
+// fleet's line names the seats it needs, and at 80 the page hands back the first
+// 78 columns of this with a cue on the end. The whole string is the pin, so the
+// test that looks for it renders wide enough to hold it.
+const fixtureRunwayLine = "Runway: 7d dry 2026-03-06 14:00 UTC (2d2h)  ·  5h holds  ·  need 9 (4 more)  ·  basis 3h51m"
 
 // A populated forecast that the Snapshot does not claim moves no golden. All
 // seven whole-page fixtures are compared byte for byte, and every one of them
@@ -835,8 +922,14 @@ func TestAForecastTheSnapshotDoesNotClaimMovesNoGolden(t *testing.T) {
 // The note line's own position is asserted elsewhere to be directly above the
 // column header, so the two orderings together fix all three lines: header,
 // runway, note, table.
+//
+// 113 columns rather than the 80x24 design target, because the needle is the
+// whole line and a short fleet's line is 91 columns wide. At 80 it is cut, and a
+// test that searched for the cut form would be pinning the truncator's arithmetic
+// in a test about row order. Nothing here depends on the width: the four lines
+// are drawn in the same order at every rung that draws them.
 func TestTheRunwayLineSitsUnderTheHeaderLineAndAboveTheNote(t *testing.T) {
-	m := fixtureModel(80, 24)
+	m := fixtureModel(113, 24)
 	m.Snap.Forecast, m.Snap.HasForecast = fixtureFleet(), true
 	m.Snap.Notices = []string{"hover thresholds could not be read"}
 

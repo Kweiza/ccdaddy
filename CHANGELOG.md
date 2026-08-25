@@ -61,14 +61,45 @@ by `uuid` or `alias`.
   is a percentage that fell or a reset that moved forward by at least half the
   window's length.
 
+  **It also answers how many accounts would be enough.** An `Accounts:` line
+  under the axis block reads `5 usable, 9 needed to hold at this rate  (4
+  more)`, and a fleet that already holds gets the same search downward — `3
+  needed … (2 to spare)` — so slack is a figure rather than a feeling. The count
+  comes from the same simulation the verdicts do, re-run with seats the fleet
+  does not have yet appended, and never from burn divided by replenishment: two
+  mechanisms would be free to print "runs dry" and "you have enough accounts" on
+  adjacent lines. It is measured at the upper end of the band for the reason
+  "holds" is, so it is the number that is provably enough; which of the two axes
+  asked for the extra seat is measured too, and reported. The search stops at
+  256 and says `more than 256`, because past that the answer is a measurement
+  problem rather than a purchase.
+
+  Making that answerable fixed a real fleet as well as a hypothetical one. A
+  window at 0% whose reading carried no `resets_at` has never been spent
+  against, and the model froze it — supplying its hundred points once and never
+  again. That is what a fresh account is made of, and it is also an account
+  added an hour ago and not yet used: the runway understated a pool its owner
+  had just enlarged. Such a window now starts its cycle when something first
+  burns it, which is what the endpoint does. A window *above* zero with no reset
+  is the other state and is unchanged — that is a `resets_at` this build could
+  not read, not an unused window, and freezing it can only shorten the runway.
+
   The same measurement appears as one `Runway:` line under `ccdad status`, under
   `ccdad list` and on the terminal dashboard, as a `forecast` object in all
   three `--json` payloads, and as a `runway` tool in the MCP server — which
-  still has no verb to launch it. `ccdad doctor` gains
+  still has no verb to launch it. That one-line summary gains `· need 9 (4
+  more)` when the fleet is short and nothing when it holds, and the `fleet`
+  object gains `accountsUsable`, `accountsNeeded` and `accountsNeededBy`, the
+  last two absent rather than zero when there was no basis to search from.
+  `ccdad runway --json --out PATH` writes the document to a file at mode `0600`
+  with nothing on stdout, the way `ccdad export --out` does; `--out` without
+  `--json` is a usage error, because this command has two representations and a
+  destination does not choose between them. `ccdad doctor` gains
   a `history` check — an absent file is fine, an unparseable one is a warning —
   and `ccdad uninstall` counts the file among the markers that identify a ccdad
   store, so a directory holding only this one is still recognised rather than
   refused as somebody else's.
+
 ### Fixed
 
 - **The dashboards name hover rather than the strategy hover overrode.** Hover
