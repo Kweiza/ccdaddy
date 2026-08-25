@@ -18,24 +18,36 @@ by `uuid` or `alias`.
 
 ### Fixed
 
-- **The `Runway:` line ran off the side of a narrow terminal.** It measures 139
-  display columns on a live fleet and the terminal reading it is commonly 80, so
-  the terminal folded it wherever its own right edge fell — on that measurement,
-  inside `2026-08-26 17:21 KST`. The clauses of that line are separated by a
-  middot, which makes a fold landing between two of them indistinguishable from
-  one landing inside a date.
+- **`ccdad status`'s labelled block ran off the side of a narrow terminal.**
+  Measured on an 80-column terminal against a live fleet: `Runway:` 139 display
+  columns, `Mode:` 124 in recovery, `Hover:` 100 whenever hover is on. The
+  terminal folded each of them wherever its own right edge fell — mid-word,
+  mid-sentence, and on the runway line inside `2026-08-26 17:21 KST`.
 
-  `ccdad status` and `ccdad list` now fold it at its own separators and hang
-  every line after the first under the first clause; a line that continues ends
-  on the separator it broke at, so a finished line and a continued one can be
-  told apart. Nothing is dropped. A clause wider than the terminal overflows
-  rather than being cut, because this line ends in an absolute moment and a
-  span, and a cut through either reads as a shorter date rather than as a line
-  that did not fit. A destination that is not a terminal — a pipe, a redirect,
-  the file behind `>` — has no width, and receives the line exactly as it did
-  before, byte for byte. The dashboard has always cut this line at its own edge
-  and is unchanged: a page has a right edge it cannot spend, and a scrollback
-  has one it can.
+  All four labelled lines — `Daemon:`, `Active:`, `Hover:`, `Mode:` — and the
+  `Runway:` line now wrap to the terminal and hang every line after the first
+  under the value, nine columns in, so a continuation cannot be read as another
+  label. `ccdad list` folds its own runway line the same way.
+
+  The two wraps are separate on purpose. The labelled lines are prose and break
+  at spaces. The runway line is a row of values whose spaces are inside them —
+  a break at the one in `2026-08-26 08:19 KST` would produce a date that is not
+  a date — so it breaks only at its own `·` separators, and a line that
+  continues ends on the separator it broke at, which is how a continued line
+  can be told from a finished one.
+
+  Nothing is dropped at any width. A word, or a runway clause, wider than the
+  terminal takes its own line and overflows rather than being cut: cutting
+  produces a shorter value that reads as real, which is the one thing worse
+  than a line that does not fit. A destination that is not a terminal — a pipe,
+  a redirect, the file behind `>` — has no width, and receives every one of
+  these lines exactly as it did before, byte for byte. The dashboard has always
+  cut this line at its own edge and is unchanged: a page has a right edge it
+  cannot spend, and a scrollback has one it can.
+
+  The account table below the block is NOT covered by this. Its rows measured 84
+  columns on the same run and it is built by a tabwriter: narrowing a table
+  means dropping columns, which is a different decision.
 
 - **0.7.0's own notes said the MCP server could not be launched. It can, and
   has been able to since 0.6.0.** The entry above describes the new `runway`
