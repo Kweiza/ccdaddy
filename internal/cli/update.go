@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -293,20 +294,81 @@ func runUpdate(cmd *cobra.Command, opts updateOptions) error {
 
 	// ---- nothing above this line touches the network ----
 
+	client := release.NewClient()
+	base := release.BaseURL()
+
+	// Step 6.
+	if !pinned {
+		ctx, cancel := context.WithTimeout(cmd.Context(), metadataTimeout)
+		tag, err := client.Latest(ctx)
+		cancel()
+		if err != nil {
+			return rep.emit(cmd, opts.asJSON, ExitFailure, "resolve-failed",
+				fmt.Sprintf("ccdad could not work out which release is latest: %v", err))
+		}
+		// Latest already re-parsed and re-stringified this, and it is parsed
+		// again rather than trusted so that a tag becomes a Version on ONE line
+		// whichever of the two sources it came from.
+		v, ok := release.ParseTag(tag)
+		if !ok {
+			return rep.emit(cmd, opts.asJSON, ExitFailure, "resolve-failed",
+				fmt.Sprintf("ccdad could not read %q as a release tag.", tag))
+		}
+		want = v
+	}
+	rep.hasTag, rep.tag, rep.targetVersion = true, want.Tag(), want.String()
+	rep.resolvedLatest = !pinned
+
+	// Steps 7 and 8 compare PARSED versions, never strings. A hand-built stamp
+	// of v0.6.1 makes the string form compute "vv0.6.1" and miss "already
+	// current" — build-release.sh strips the v only in the branch that DERIVES
+	// a version, so an explicit VERSION=v0.6.1 is stamped with it.
+	//
+	// An unparseable running version falls through to the download rather than
+	// claiming currency: "I cannot compare these" is not "you are up to date".
+	running, runningOK := release.ParseTag(buildinfo.Version)
+	rep.updateAvailable = !runningOK || want.Compare(running) > 0
+	if runningOK && !pinned {
+		switch {
+		case want.Compare(running) == 0:
+			// Step 7. Exit 3 and not 5: 3 is "the world is already how you
+			// asked", which is the same reading that gives `daemon stop` a 3
+			// with nothing to stop, and it is what makes
+			// `ccdad update --check && ccdad update` compose.
+			//
+			// Skipped when --version is explicit, because
+			// `ccdad update --version <what I am on>` is how a user re-fetches
+			// and re-verifies a binary they suspect.
+			return rep.emit(cmd, opts.asJSON, ExitNothingToDo, "already-current",
+				fmt.Sprintf("ccdad %s is the latest release, and it is what is running here.", want))
+		case want.Compare(running) < 0:
+			// Step 8. The tag arrived over an unauthenticated channel, and the
+			// signature only binds CONTENT to a NAME — so an origin that
+			// chooses what to serve can answer with an older release whose bugs
+			// are public and pass every check. Naming the tag is the consent
+			// that unlocks it; there is no prompt, because there is nothing
+			// here to destroy.
+			return rep.emit(cmd, opts.asJSON, ExitBlocked, "rollback",
+				fmt.Sprintf("The origin says the latest release is %s, which is older than the %s running here. "+
+					"Nothing was downloaded. Pass --version %s if that is really what you want.",
+					want.Tag(), running, want.Tag()))
+		}
+	}
+
 	// ---------------------------- BEGIN PLACEHOLDER ----------------------------
 	// Everything from this comment down to END PLACEHOLDER is scaffolding, and
 	// it is meant to be deleted WHOLE — comment, blank assignments and return
-	// together. Whoever writes the rest of the algorithm (resolving the
-	// release, verifying its signature against keys, downloading the asset into
-	// staging and moving it over target) replaces this block; leaving the
-	// comment behind would leave it sitting above live code, describing
-	// something that is no longer true.
+	// together. Whoever writes the rest of the algorithm (downloading the
+	// checksum file and its signature, verifying that signature against keys,
+	// downloading the asset into staging and moving it over target) replaces
+	// this block; leaving the comment behind would leave it sitting above live
+	// code, describing something that is no longer true.
 	//
 	// It exists so this command RUNS while the rest is still being written: it
-	// reports the pre-flight facts and stops. The two blank assignments are
-	// what keep the compiler quiet about values only the later steps read.
-	// Nothing asserts on any of it.
-	_, _ = want, pinned
+	// reports what it has resolved and stops. The blank assignments are what
+	// keep the compiler quiet about values only the later steps read. Nothing
+	// asserts on any of it.
+	_, _ = client, base
 	_ = staging
 	return rep.emit(cmd, opts.asJSON, ExitOK, "", "")
 	// ----------------------------- END PLACEHOLDER -----------------------------
