@@ -203,20 +203,84 @@ be corrupted. It points at [`ccdad setup-path`](#ccdad-setup-path), and prints t
 
 ### Verifying the download
 
-Every release publishes `sha256sums.txt`, which the installers enforce, and a
-keyless build-provenance attestation:
+Every release publishes three things you can check, and they are independent
+claims rather than layers of one:
+
+| Artifact | What it proves |
+|---|---|
+| `sha256sums.txt` | the bytes you have are the bytes that were published — both installers enforce it and abort rather than warn |
+| `sha256sums.txt.minisig` | those checksums were signed by this repository's release key, for the release the signature names |
+| a keyless build-provenance attestation | the binaries came out of this repository's own workflow |
+
+The signature is the one you can check offline, with the stock
+[minisign](https://jedisct1.github.io/minisign/) tool and the public key
+committed at the root of this repository as `ccdaddy.pub`:
+
+```sh
+tag=v0.7.0
+base=https://github.com/Kweiza/ccdaddy/releases/download/$tag
+curl -fsSLO "$base/sha256sums.txt"
+curl -fsSLO "$base/sha256sums.txt.minisig"
+curl -fsSLO https://raw.githubusercontent.com/Kweiza/ccdaddy/main/ccdaddy.pub
+
+minisign -Vm sha256sums.txt -p ccdaddy.pub
+sha256sum --ignore-missing -c sha256sums.txt   # macOS: shasum -a 256 --ignore-missing -c
+```
+
+`minisign -Vm` prints two lines:
+
+```
+Signature and comment signature verified
+Trusted comment: file:sha256sums.txt	ccdaddy:v0.7.0
+```
+
+**Read the second one.** The `ccdaddy:` field names the release the signature
+was made for, and that is what is worth reading: `sha256sums.txt` itself
+carries no version, so an old release's checksums and its signature stay a
+genuine, correctly signed pair forever, and this line is what tells you which
+release they are a pair *for*. The `.minisig` file also holds an *untrusted*
+comment above this one — run `cat sha256sums.txt.minisig` to see it — which
+minisign never authenticates, so it can say anything and the verify command
+does not print it.
+
+**Do not pass `-H`.** It means "require a prehashed signature" and rejects the
+legacy form published here, failing with `Legacy (non-prehashed) signature
+found` — a message that names the signature, not your command, so it reads as
+though the release is broken rather than as though a flag needs to come off.
+Plain `-V` accepts it.
+
+If verification fails, minisign says why when it can: a key id mismatch names
+both ids. But a public key that differs from `ccdaddy.pub` only in its key
+material, not its key id — the shape of a mistyped paste, not a wrong
+download — fails with the same generic `Signature verification failed` a
+tampered file gets. Compare the key you used against `ccdaddy.pub` in this
+repository before treating that message as a bad release rather than a bad
+paste.
+
+`ccdaddy.pub` is committed here rather than only served from a page, so you can
+compare it against the key compiled into a binary you already trust:
+
+```sh
+grep -Faq "$(sed -n 2p ccdaddy.pub)" "$(command -v ccdad)" && echo "same key"
+```
+
+The attestation is a separate check with separate tooling:
 
 ```sh
 gh attestation verify ccdad-linux-amd64 --repo Kweiza/ccdaddy
 ```
 
+It covers `sha256sums.txt.minisig` too, because the signature is produced
+before the attestation step runs. The reverse is not true — the signature says
+nothing about the attestation — so they are two claims, not one that reinforces
+the other.
+
 Windows binaries are not Authenticode-signed yet, so SmartScreen will warn.
-The attestation is the thing to check.
 
 Each release also carries `LICENSE`, `NOTICE` and `THIRD-PARTY-LICENSES.txt`
 as assets, hashed into the same `sha256sums.txt` and covered by the same
-attestation — so a binary downloaded on its own still arrives with the notices
-the modules inside it require.
+signature and the same attestation — so a binary downloaded on its own still
+arrives with the notices the modules inside it require.
 
 ### Upgrading
 

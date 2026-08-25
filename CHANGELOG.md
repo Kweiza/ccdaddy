@@ -100,6 +100,21 @@ by `uuid` or `alias`.
   store, so a directory holding only this one is still recognised rather than
   refused as somebody else's.
 
+- **Releases are signed.** Every release now publishes
+  `sha256sums.txt.minisig` beside its checksums: a minisign signature over the
+  sums file, made with a key whose public half is committed at the repository
+  root as `ccdaddy.pub`. Checksums say a download is intact; the signature says
+  it is ours. Check it with the stock `minisign -Vm sha256sums.txt -p
+  ccdaddy.pub` — and read the `Trusted comment:` line, which names the release
+  the signature was made for. That field exists because `sha256sums.txt` carries
+  no version of its own, so without it an old release's checksums and signature
+  would stay a genuine, correctly signed pair forever and could be served as a
+  new release. Do not pass `-H`: it requires a prehashed signature and rejects
+  the legacy form published here. One signature over the sums file rather than
+  six over the binaries, because six signatures are six chances to ship five.
+  Nothing in ccdad consumes the signature yet; the verifier ships now so that
+  signed releases exist before anything requires one.
+
 ### Fixed
 
 - **The dashboards name hover rather than the strategy hover overrode.** Hover

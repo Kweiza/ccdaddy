@@ -98,6 +98,25 @@ Every release publishes `sha256sums.txt`, and both installers **refuse to
 install anything they cannot verify against it** — a missing or malformed sums
 file aborts rather than falling back.
 
+Every release also publishes `sha256sums.txt.minisig`, a minisign signature
+over that file, made with a key whose public half is committed at the root of
+this repository as `ccdaddy.pub`. Checksums prove a download is intact; the
+signature is what proves it is ours, and it can be checked offline:
+
+```
+minisign -Vm sha256sums.txt -p ccdaddy.pub
+```
+
+Read the `Trusted comment:` line it prints — it names the release the
+signature was made for, which is what stops an old, genuinely signed release
+from being served as a new one. Do not pass `-H`: it fails with `Legacy
+(non-prehashed) signature found`, which names the signature rather than the
+flag; drop `-H` and it verifies. And before reporting a bad signature: a
+public key that differs from `ccdaddy.pub` only in its key material, not its
+key id, fails with the same generic `Signature verification failed` a
+tampered file gets — compare the key you used against `ccdaddy.pub` before
+treating that message as a finding.
+
 Every release also carries a keyless build-provenance attestation, so you can
 check that a binary came out of this repository's own workflow:
 
