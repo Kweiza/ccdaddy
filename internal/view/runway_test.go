@@ -310,3 +310,169 @@ func TestTheCreditCellsRefuseRatherThanDefault(t *testing.T) {
 		t.Errorf("RunwayCreditVerdict = %q, want %q", got, want)
 	}
 }
+
+// The accounts line has one form per state the search can end in, and the
+// parenthetical is the actionable half: it is present exactly when there is
+// something to act on and absent when the fleet already sits on the answer.
+//
+// The unknown count is "?" and never "-". The number exists -- every fleet has
+// a smallest size that holds -- and what happened is that nobody could measure
+// it. A reader shown "-" would be told the quantity does not exist here and
+// would stop looking for the history that would produce it.
+func TestTheAccountsLineHasOneFormPerState(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		f    forecast.Fleet
+		want string
+	}{
+		{
+			name: "short",
+			f: forecast.Fleet{
+				AccountsUsable: 5,
+				AccountsNeeded: 9, HasNeeded: true,
+			},
+			want: "5 usable, 9 needed to hold at this rate  (4 more)",
+		},
+		{
+			name: "holding with room",
+			f: forecast.Fleet{
+				AccountsUsable: 5,
+				AccountsNeeded: 3, HasNeeded: true,
+			},
+			want: "5 usable, 3 needed to hold at this rate  (2 to spare)",
+		},
+		{
+			name: "holding exactly",
+			f: forecast.Fleet{
+				AccountsUsable: 5,
+				AccountsNeeded: 5, HasNeeded: true,
+			},
+			want: "5 usable, 5 needed to hold at this rate",
+		},
+		{
+			// HasNeeded false is the only thing that decides this: the search
+			// answers nothing rather than one when it has no rate to search
+			// against, and a fleet told it needs one account on no evidence
+			// would be told to cancel four.
+			name: "no basis",
+			f:    forecast.Fleet{AccountsUsable: 5},
+			want: "5 usable, ? needed  (not enough history)",
+		},
+		{
+			// The bound is not a count somebody can go and buy, so it is never
+			// rendered as one. "256 needed  (251 more)" would name a purchase
+			// that does not fix the fleet.
+			name: "capped",
+			f: forecast.Fleet{
+				AccountsUsable: 5,
+				AccountsNeeded: 256, HasNeeded: true, NeededCapped: true,
+			},
+			want: "5 usable, more than 256 needed to hold at this rate",
+		},
+		{
+			// A fleet the search reached its ceiling on can be no smaller than
+			// the ceiling and still not hold, and then the count equals the
+			// usable one. "256 usable, 256 needed to hold at this rate" would
+			// report a fleet that holds, which is the opposite of what the
+			// search found.
+			name: "capped at the fleet's own size",
+			f: forecast.Fleet{
+				AccountsUsable: 256,
+				AccountsNeeded: 256, HasNeeded: true, NeededCapped: true,
+			},
+			want: "256 usable, more than 256 needed to hold at this rate",
+		},
+		{
+			// Nothing the rotation can reach is nothing to report a seat count
+			// about. The basis line above already carries how many accounts
+			// there are and why none of them qualified.
+			name: "no usable accounts",
+			f:    forecast.Fleet{},
+			want: "",
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := view.RunwayAccounts(c.f); got != c.want {
+				t.Errorf("RunwayAccounts =\n\t%q\nwant\n\t%q", got, c.want)
+			}
+		})
+	}
+	// Spelled against the constants as well as against the literals above, so
+	// that swapping the two glyphs fails here even if somebody redefines one.
+	noBasis := view.RunwayAccounts(forecast.Fleet{AccountsUsable: 5})
+	if !strings.Contains(noBasis, view.Unreadable) {
+		t.Errorf("RunwayAccounts(no basis) = %q, which does not carry %q", noBasis, view.Unreadable)
+	}
+	if strings.Contains(noBasis, view.NoQuantity) {
+		t.Errorf("RunwayAccounts(no basis) = %q, which says the count does not exist; it exists and was not measured", noBasis)
+	}
+}
+
+// The dashboard clause is carried only by a fleet that is SHORT. A fleet that
+// holds already has its answer in the word "holds", and a summary line that
+// also spent a clause on good news would be spending it on the line where the
+// short case needs the room.
+func TestTheSummaryClauseIsCarriedOnlyByAShortFleet(t *testing.T) {
+	short := forecast.Fleet{AccountsUsable: 5, AccountsNeeded: 9, HasNeeded: true}
+	if got, want := view.RunwayNeedSegment(short), "need 9 (4 more)"; got != want {
+		t.Errorf("RunwayNeedSegment(short) = %q, want %q", got, want)
+	}
+	// A bound says how much is not enough, which the short fleet's reader still
+	// needs, and it says it without naming a number of seats to buy.
+	capped := forecast.Fleet{AccountsUsable: 5, AccountsNeeded: 256, HasNeeded: true, NeededCapped: true}
+	if got, want := view.RunwayNeedSegment(capped), "need more than 256"; got != want {
+		t.Errorf("RunwayNeedSegment(capped) = %q, want %q", got, want)
+	}
+	for _, c := range []struct {
+		name string
+		f    forecast.Fleet
+	}{
+		{"holding with room", forecast.Fleet{AccountsUsable: 5, AccountsNeeded: 3, HasNeeded: true}},
+		{"holding exactly", forecast.Fleet{AccountsUsable: 5, AccountsNeeded: 5, HasNeeded: true}},
+		{"no basis", forecast.Fleet{AccountsUsable: 5}},
+		{"no usable accounts", forecast.Fleet{}},
+	} {
+		if got := view.RunwayNeedSegment(c.f); got != "" {
+			t.Errorf("RunwayNeedSegment(%s) = %q, want %q", c.name, got, "")
+		}
+	}
+}
+
+// The clause reaches status, list and the dashboard because it is part of the
+// one line all three render, and it sits between the verdicts and the basis:
+// after what happened, before the evidence, which is the order the rest of the
+// line is already in.
+func TestTheRunwayLineCarriesTheNeedOfAShortFleet(t *testing.T) {
+	now := time.Date(2026, 8, 24, 23, 10, 0, 0, time.UTC)
+	kst := time.FixedZone("KST", 9*3600)
+	dry := time.Date(2026, 8, 27, 5, 10, 0, 0, time.UTC)
+	f := forecast.Fleet{
+		Basis:    forecast.Basis{Observed: 3*time.Hour + 51*time.Minute, Known: true},
+		FiveHour: forecast.Axis{Verdict: forecast.VerdictHolds},
+		Weekly: forecast.Axis{
+			Verdict: forecast.VerdictRunsDry, DryAt: dry, HasDryAt: true,
+		},
+		Both:           forecast.Axis{Verdict: forecast.VerdictRunsDry, DryAt: dry, HasDryAt: true},
+		AccountsUsable: 5,
+		AccountsNeeded: 9, HasNeeded: true,
+	}
+	got := view.RunwayLine(f, now, kst)
+	want := "7d dry 2026-08-27 14:10 KST (2d6h)  ·  5h holds  ·  need 9 (4 more)  ·  basis 3h51m"
+	if got != want {
+		t.Fatalf("RunwayLine =\n\t%q\nwant\n\t%q", got, want)
+	}
+
+	// The same fleet holding, with slack to spare: the line says so and spends
+	// no clause on the slack.
+	holding := forecast.Fleet{
+		Basis:          forecast.Basis{Observed: 3*time.Hour + 51*time.Minute, Known: true},
+		FiveHour:       forecast.Axis{Verdict: forecast.VerdictHolds},
+		Weekly:         forecast.Axis{Verdict: forecast.VerdictHolds},
+		Both:           forecast.Axis{Verdict: forecast.VerdictHolds},
+		AccountsUsable: 5,
+		AccountsNeeded: 3, HasNeeded: true,
+	}
+	if got, want := view.RunwayLine(holding, now, kst), "holds on both axes at this rate  ·  basis 3h51m"; got != want {
+		t.Fatalf("RunwayLine(holding) =\n\t%q\nwant\n\t%q", got, want)
+	}
+}
