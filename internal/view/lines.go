@@ -2,7 +2,10 @@ package view
 
 import (
 	"fmt"
+	"strings"
 	"time"
+
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
@@ -106,4 +109,116 @@ func ModeLine(m strategy.Mode) string {
 // lines it stacks with.
 func HoverLine() string {
 	return "Hover:   on  (every threshold derived per account; 'ccdad hover status' prints the numbers in force)"
+}
+
+// WrapLabeled folds one line of the labelled block -- Daemon:, Active:, Hover:,
+// Mode: -- onto width display columns, breaking at spaces and hanging every
+// line after the first under the value.
+//
+// Measured on an 80-column terminal against a live fleet: Mode: is 124 display
+// columns in recovery and Hover: is 100 whenever hover is on, so the terminal
+// folded both wherever its own right edge fell -- mid-word, mid-clause,
+// sometimes inside a quoted command a reader was meant to type.
+//
+// It is a SEPARATE function from RunwayWrap, and the difference is not
+// duplication. These lines are prose and break at spaces; the runway line is a
+// row of values whose spaces are inside them, and a break at the one in
+// `2026-08-26 08:19 KST` would produce a date that is not a date. Each knows
+// where its own line may be cut, and neither may be pointed at the other's.
+// What they share is the hanging alignment, which is `hang` below.
+//
+// The label is found rather than passed, because these lines arrive with it
+// already spelled: the block's contract is a name, a colon, and padding to nine
+// columns, and that is what this looks for. A line with no colon has no label
+// and no indent, which is the honest rendering of a line this block did not
+// produce.
+//
+// A width of zero -- every writer that is not a terminal -- returns the line
+// exactly as its builder spelled it, and so does a terminal too narrow to hold
+// the label, where there is no room to hang anything in.
+func WrapLabeled(line string, width int) string {
+	label, value := splitLabel(line)
+	room := width - ansi.StringWidth(label)
+	if room <= 0 || value == "" {
+		return line
+	}
+	return hang(label, wrapWords(value, room))
+}
+
+// splitLabel divides a labelled line at the first colon and the padding that
+// follows it. The padding goes with the LABEL: it is what the value is aligned
+// to, so a continuation line is indented by exactly what the first line spent
+// before its own first word.
+func splitLabel(line string) (label, value string) {
+	i := strings.IndexByte(line, ':')
+	if i < 0 {
+		return "", line
+	}
+	j := i + 1
+	for j < len(line) && line[j] == ' ' {
+		j++
+	}
+	return line[:j], line[j:]
+}
+
+// wrapWords packs s onto lines of at most room display columns, breaking only
+// between words.
+//
+// The whitespace between two words travels WITH the following word rather than
+// being normalised, because these lines use it: `recovery  (every account...`
+// separates the answer from the parenthetical explaining it, the same job the
+// runway line gives its separator. A wrapper that rewrote runs of spaces as one
+// would erase that distinction on every line that still fits, which is most of
+// them.
+//
+// A word wider than the room gets its own line and overflows. Cutting it would
+// turn a path, a URL or an account label into a shorter one that looks just as
+// real -- the same reason the runway line's clauses are atomic.
+func wrapWords(s string, room int) []string {
+	var lines []string
+	cur := ""
+	for i := 0; i < len(s); {
+		j := i
+		for j < len(s) && s[j] == ' ' {
+			j++
+		}
+		k := j
+		for k < len(s) && s[k] != ' ' {
+			k++
+		}
+		gap, word := s[i:j], s[j:k]
+		i = k
+		switch {
+		case word == "":
+			// Trailing whitespace belongs to no word, and a line ending in it
+			// is a fold the reader pays for and cannot see.
+		case cur == "":
+			cur = word
+		case ansi.StringWidth(cur)+ansi.StringWidth(gap)+ansi.StringWidth(word) <= room:
+			cur += gap + word
+		default:
+			lines = append(lines, cur)
+			cur = word
+		}
+	}
+	return append(lines, cur)
+}
+
+// hang puts label on the first line and indents every line after it by the
+// label's own display width, so the block reads as one value under one name
+// rather than as several unnamed lines.
+//
+// It is shared by the two wraps in this package because the ALIGNMENT is the
+// half they genuinely have in common; where each of them may break its line is
+// the half that must stay apart.
+func hang(label string, lines []string) string {
+	indent := strings.Repeat(" ", ansi.StringWidth(label))
+	for i := range lines {
+		if i == 0 {
+			lines[i] = label + lines[i]
+			continue
+		}
+		lines[i] = indent + lines[i]
+	}
+	return strings.Join(lines, "\n")
 }

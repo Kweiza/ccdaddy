@@ -182,15 +182,7 @@ func RunwayWrap(label, line string, width int) string {
 		folded = append(folded, tok)
 	}
 
-	indent := strings.Repeat(" ", ansi.StringWidth(label))
-	for i := range folded {
-		if i == 0 {
-			folded[i] = label + folded[i]
-			continue
-		}
-		folded[i] = indent + folded[i]
-	}
-	return strings.Join(folded, "\n")
+	return hang(label, folded)
 }
 
 // fleetSegment is the both-axes-at-once answer, and it is reported only when
