@@ -78,6 +78,29 @@ type Headroom struct {
 	// never participates in ordering.
 	Floor    usage.WindowName
 	HasFloor bool
+	// FloorSlack and FloorThreshold are the FLOOR window's own pair: the
+	// threshold that window was given, and that threshold minus its
+	// utilization. They mean nothing when HasFloor is false and are left at
+	// zero there, exactly as Floor itself is.
+	//
+	// They are here because Slack and Threshold above are assigned off BINDING
+	// in one statement, and the moment there is a floor those two names
+	// describe two different windows. Every human view resolves the window it
+	// reports through Floor -- a blown weekly is what a user has to be told
+	// about -- and then has nothing but Slack to reach for, which is a number
+	// measured on some other window entirely. The live shape: a five-hour
+	// window 85% elapsed at 98% used binds with 3.667 of slack while the weekly
+	// beside it is 92% elapsed with nothing left in it, reporting 8.667 against
+	// a pace target of 108.667. A bar drawn at the weekly's 100% and coloured
+	// from the binding window's 3.667 is a full bar that says "plenty of room".
+	//
+	// Taken in the pass that already computes them rather than recovered by a
+	// second one. A second pass would have to rebuild the window set, and then
+	// there is a way for a window to be admitted to one and narrowed out of the
+	// other -- which is the same failure the floor selection sits inside this
+	// loop to avoid.
+	FloorSlack     float64
+	FloorThreshold float64
 }
 
 // modelFamilies are the family tokens ccdad can recognize inside a model name.
@@ -315,6 +338,11 @@ func HeadroomFor(s *usage.Snapshot, model string, t Thresholds) Headroom {
 				(empty == floorEmpty && slack < floorSlack)
 			if better {
 				out.Floor, floorSlack, floorEmpty, out.HasFloor = w.Name, slack, empty, true
+				// The reported pair is taken HERE, at the moment the window is
+				// selected, so it can never describe a window other than the one
+				// out.Floor names. Recovering it afterwards would mean a second
+				// lookup keyed on a name, and a lookup can miss.
+				out.FloorSlack, out.FloorThreshold = slack, thr
 			}
 		}
 	}
