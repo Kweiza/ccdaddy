@@ -25,10 +25,8 @@ var windowsAssets = []string{
 // behind Test-CcdadOnWindows, which is exactly why that seam exists.
 func powershell(t *testing.T) string {
 	t.Helper()
-	for _, name := range []string{"pwsh", "powershell"} {
-		if p, err := exec.LookPath(name); err == nil {
-			return p
-		}
+	if p := powershellPath(); p != "" {
+		return p
 	}
 	t.Skip("neither pwsh nor powershell is installed")
 	return ""
