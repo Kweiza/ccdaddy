@@ -20,7 +20,7 @@ const (
 // toolClass is the verdict for every tool this server may run, and the refusal
 // for every tool it may not.
 //
-// It is complete: all fifteen entries are written together, because the
+// It is complete: all sixteen entries are written together, because the
 // classification IS the boundary and splitting it across commits splits the
 // review of it. Eight ccdad verbs are deliberately absent -- add, add-token,
 // run, export, import, uninstall, setup-path and bootstrap -- and their absence
@@ -37,6 +37,7 @@ var toolClass = map[string]toolKind{
 	"which":      classRead,
 	"doctor":     classRead,
 	"config_get": classRead,
+	"runway":     classRead,
 
 	"enable":  classStore,
 	"disable": classStore,

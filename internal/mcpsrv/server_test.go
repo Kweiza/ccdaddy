@@ -69,7 +69,7 @@ func TestTheServerAdvertisesNoCapabilityItDoesNotImplement(t *testing.T) {
 		t.Errorf("the server advertises prompts or resources it has none of: %+v", caps)
 	}
 	if caps.Tools == nil {
-		t.Error("the server advertises no tools capability, and it has fifteen tools to offer")
+		t.Error("the server advertises no tools capability, and it has sixteen tools to offer")
 	}
 }
 
