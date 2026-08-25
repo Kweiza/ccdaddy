@@ -914,13 +914,14 @@ func TestScopedWindowPrefersTheModelWhenBothScopesAreSet(t *testing.T) {
 // currency arrives as the bare uppercase ISO code, which is the form
 // majorUnits's zero-decimal lookup expects after normalising.
 //
-// What it does NOT settle, and cannot: whether the money fields are minor
-// units. used equals the limit exactly here, so the ratio is 1 whether these
-// are cents or dollars, and no arithmetic on one reading can separate them. The
-// case for cents stays what majorUnits already documents -- Claude Code's
-// formatter divides by 100 before rendering either figure -- with the
-// observation added that $466.00 is a monthly cap a person sets and $46,600.00
-// is not.
+// It also settles the minor-unit question, though not by arithmetic on the
+// reading: used equals the limit exactly here, so the ratio is 1 whether these
+// are cents or dollars, and no sum over one sample separates them. It is
+// settled by the only evidence that could -- the account holder, who states the
+// cap on this account is $466.00. The wire says 46600. The money fields are
+// therefore minor units, which is what majorUnits has always assumed from
+// Claude Code's formatter dividing by 100, and it is now a measured fact rather
+// than an inference from somebody else's code.
 const liveCreditBody = `{"extra_usage": {"is_enabled": true, "monthly_limit": 46600,
                                          "used_credits": 46600, "utilization": 100,
                                          "currency": "USD", "disabled_reason": null}}`
