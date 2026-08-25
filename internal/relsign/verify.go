@@ -157,7 +157,13 @@ func Verify(keys []PublicKey, content, minisig []byte, wantRelease string) error
 	var key PublicKey
 	found := false
 	for _, k := range keys {
-		if k.KeyNum == s.keyNum {
+		// len(k.Key) is checked here, not assumed: PublicKey's fields are
+		// exported and every key Keys() produces is the right size, but
+		// nothing in this package stops a caller building one from anywhere
+		// else. ed25519.Verify panics on a key that is not exactly
+		// PublicKeySize, and a lookup that fed it one on a KeyNum match alone
+		// would turn a malformed trust root into a crash instead of a refusal.
+		if k.KeyNum == s.keyNum && len(k.Key) == ed25519.PublicKeySize {
 			key = k
 			found = true
 			break

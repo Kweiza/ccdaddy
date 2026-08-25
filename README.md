@@ -227,6 +227,14 @@ minisign -Vm sha256sums.txt -p ccdaddy.pub
 sha256sum --ignore-missing -c sha256sums.txt   # macOS: shasum -a 256 --ignore-missing -c
 ```
 
+**The `curl` for `ccdaddy.pub` above is the convenient path, not the strong
+one.** Fetching the key from `raw.githubusercontent.com` at verification time
+checks that GitHub agrees with itself, which is not what a signature is for.
+Its value is against everything else in the path a download can take: a
+mirror, a CDN, a release asset swapped after publishing. If you already hold a
+clone of this repository, use the `ccdaddy.pub` in it instead of fetching a
+fresh copy.
+
 `minisign -Vm` prints two lines:
 
 ```
