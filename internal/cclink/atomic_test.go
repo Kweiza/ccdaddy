@@ -343,3 +343,69 @@ func TestWriteFileAtomicGivesUpAfterReplaceAttempts(t *testing.T) {
 		t.Fatalf("rename called %d times, want exactly replaceAttempts (%d)", calls, replaceAttempts)
 	}
 }
+
+// TestTempPatternIsTheOnlySpellingOfTheTempName pins the property that makes an
+// orphan sweeper somewhere else in the tree correct: the string WriteFileAtomic
+// hands to os.CreateTemp IS the string TempPattern returns.
+//
+// This is not a tautology. The pattern used to be a literal here and a second
+// literal in daemon.SweepStatusTemps, under a comment asserting they were the
+// same — and nothing executed that assertion. Changing the one in this file
+// left every test in the repository green while the sweep collected nothing.
+func TestTempPatternIsTheOnlySpellingOfTheTempName(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "status.json")
+
+	orig := createTemp
+	t.Cleanup(func() { createTemp = orig })
+	var gotPattern, gotName string
+	createTemp = func(d, pattern string) (*os.File, error) {
+		gotPattern = pattern
+		f, err := orig(d, pattern)
+		if f != nil {
+			gotName = filepath.Base(f.Name())
+		}
+		return f, err
+	}
+
+	if err := WriteFileAtomic(path, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if want := TempPattern(path); gotPattern != want {
+		t.Errorf("WriteFileAtomic created its temp with pattern %q, want TempPattern's %q — "+
+			"a sweeper globbing TempPattern would miss every orphan this writer strands", gotPattern, want)
+	}
+	// And the pattern really does read as a glob over what it produced:
+	// os.CreateTemp and filepath.Match agree on `*`, which is what lets one
+	// string be both the writer's pattern and the sweeper's.
+	ok, err := filepath.Match(TempPattern(path), gotName)
+	if err != nil {
+		t.Fatalf("TempPattern(%q) is not a valid glob: %v", path, err)
+	}
+	if !ok {
+		t.Errorf("the temp file %q does not match TempPattern %q", gotName, TempPattern(path))
+	}
+}
+
+// TestTempPatternCannotMatchTheFileItProtects guards the other side of the
+// sweeper. A sweeper deletes everything its glob matches, so a TempPattern that
+// also matched the target would make the daemon delete status.json at every
+// startup. `filepath.Base(path)+"*"` is one deleted character away and would do
+// exactly that, to the file the atomic write exists to protect.
+func TestTempPatternCannotMatchTheFileItProtects(t *testing.T) {
+	// The two the daemon actually sweeps, and the two dotfile targets, whose
+	// leading dot is the case a naive prefix rule gets wrong.
+	for _, name := range []string{"status.json", "history.json", ".credentials.json", ".claude.json"} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join("store", name)
+			ok, err := filepath.Match(TempPattern(path), name)
+			if err != nil {
+				t.Fatalf("TempPattern(%q) is not a valid glob: %v", path, err)
+			}
+			if ok {
+				t.Errorf("TempPattern(%q) = %q matches the target itself — a sweeper globbing it "+
+					"would delete the very file the write was protecting", path, TempPattern(path))
+			}
+		})
+	}
+}

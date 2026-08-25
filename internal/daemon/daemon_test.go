@@ -130,7 +130,7 @@ func TestRunSweepsOrphanedStatusTemps(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	orphan := filepath.Join(dir, "status.json.tmp-orphaned")
+	orphan := filepath.Join(dir, orphanTemp(t, StatusFileName, "orphaned"))
 	if err := os.WriteFile(orphan, []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}

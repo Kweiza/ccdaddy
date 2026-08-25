@@ -298,8 +298,12 @@ func SweepStatusTemps() error {
 	}
 	var errs []error
 	for _, name := range []string{StatusFileName, history.FileName} {
-		// The pattern is WriteFileAtomic's own: filepath.Base(path) + ".tmp-*".
-		matches, gerr := filepath.Glob(filepath.Join(root, name+".tmp-*"))
+		// The glob is DERIVED from the writer's own pattern rather than
+		// spelled again here. It was a second literal once, under a comment
+		// asserting it matched WriteFileAtomic's — and nothing executed that
+		// assertion, so changing the writer's left this sweeping nothing with
+		// every test in the repository still green.
+		matches, gerr := filepath.Glob(filepath.Join(root, cclink.TempPattern(name)))
 		if gerr != nil {
 			// Glob only fails on a malformed pattern, and both of these are
 			// built from constants.
