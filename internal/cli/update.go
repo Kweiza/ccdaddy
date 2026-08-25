@@ -3,8 +3,10 @@ package cli
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -45,8 +47,10 @@ const (
 	// an over-long body reaches the verifier and is refused for its own stated
 	// reason rather than arriving pre-truncated and failing on a line count.
 	maxSigBytes = 64 << 10
-	// maxAssetBytes: every released ccdad is under four megabytes on all six
-	// targets. This is not a fit — it is the ceiling that stops a hostile
+	// maxAssetBytes: every released ccdad is between eleven and fourteen
+	// megabytes on all six targets, built with the flags
+	// scripts/build-release.sh passes. This is not a fit — it is the ceiling
+	// that stops a hostile
 	// origin streaming into a directory on the user's PATH forever. It is far
 	// above the measurement deliberately: the digest decides whether the bytes
 	// are right, and a cap chosen from today's size would refuse a future
@@ -473,9 +477,9 @@ func runUpdate(cmd *cobra.Command, opts updateOptions) error {
 	// makes the final move a same-directory rename: /tmp is a different
 	// filesystem on most distributions, a cross-device move degrades to a copy,
 	// and a copy over a running binary is ETXTBSY.
-	staged := filepath.Join(staging, asset)
+	stagedPath := filepath.Join(staging, asset)
 	ctx, cancel = context.WithTimeout(cmd.Context(), assetTimeout)
-	gotHash, n, err := client.Download(ctx, dl+"/"+asset, staged, maxAssetBytes)
+	gotHash, n, err := client.Download(ctx, dl+"/"+asset, stagedPath, maxAssetBytes)
 	cancel()
 	if err != nil {
 		return rep.emit(cmd, opts.asJSON, updateReasonCode("download-asset"), "download-asset",
@@ -506,7 +510,12 @@ func runUpdate(cmd *cobra.Command, opts updateOptions) error {
 	// invitation. Here sha256sums.txt verified — what failed to match is the
 	// ASSET, and re-running minisign on the checksum file would succeed and say
 	// nothing at all about that.
-	if gotHash != wantHash {
+	//
+	// The comparison is also the CONSTRUCTOR of the handle everything below
+	// uses, so the steps that run and install the file cannot be pointed at a
+	// path whose digest was never compared: see stagedAsset.
+	staged, matched := acceptStaged(stagedPath, gotHash, wantHash)
+	if !matched {
 		return rep.emit(cmd, opts.asJSON, updateReasonCode("checksum"), "checksum",
 			fmt.Sprintf("%s does not match the checksum %s publishes for it.\n"+
 				"  published %s\n  downloaded %s\n"+
@@ -547,8 +556,10 @@ func runUpdate(cmd *cobra.Command, opts updateOptions) error {
 	}
 	rep.daemonWasRunning = wasRunning
 
-	// Step 20.
-	if err := replaceBinary(staged, target); err != nil {
+	// Step 20, through the handle rather than through a path, so the bytes are
+	// re-hashed against the digest the signed row named at the moment they are
+	// moved into place.
+	if err := staged.replaceInto(target); err != nil {
 		return rep.emit(cmd, opts.asJSON, updateReasonCode("replace-failed"), "replace-failed",
 			fmt.Sprintf("ccdad could not put the new binary in place: %v", err))
 	}
@@ -649,15 +660,19 @@ func updateReasonCode(reason string) ExitCode {
 // TestTheSmokeRunPassesNothingButTheVersionFlag holding up that --version is
 // really the argv this passes. The child carries ChildEnvVar as well, so the
 // recursion guard would hold even if that ever changed.
-func smokeStaged(parent context.Context, staged string, want release.Version) error {
+func smokeStaged(parent context.Context, staged stagedAsset, want release.Version) error {
+	path, intact := staged.pathIfIntact()
+	if !intact {
+		return fmt.Errorf("%s is no longer the file whose checksum was compared", staged.path)
+	}
 	ctx, cancel := context.WithTimeout(parent, smokeTimeout)
 	defer cancel()
 
-	c := exec.CommandContext(ctx, staged, "--version")
+	c := exec.CommandContext(ctx, path, "--version")
 	c.Env = append(os.Environ(), daemon.ChildEnvVar+"=1")
 	out, err := c.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("`%s --version` did not run: %w", staged, err)
+		return fmt.Errorf("`%s --version` did not run: %w", path, err)
 	}
 	// Contains rather than an exact match, because the version line also
 	// carries a commit. This is a smoke test and not a verification: the digest
@@ -665,9 +680,96 @@ func smokeStaged(parent context.Context, staged string, want release.Version) er
 	// asked here is whether they run at all.
 	if !strings.Contains(string(out), want.String()) {
 		return fmt.Errorf("`%s --version` printed %q, which does not name %s",
-			staged, strings.TrimSpace(string(out)), want)
+			path, strings.TrimSpace(string(out)), want)
 	}
 	return nil
+}
+
+// stagedAsset is the downloaded release asset after its digest matched the row
+// the signature covered, and it is the only thing the two steps below it — the
+// smoke run and the replacement — will accept.
+//
+// It is verifiedSums' shape applied to the second handoff. The two halves are
+// not interchangeable, and the load-bearing one is the DIGEST:
+//
+// pathIfIntact RE-HASHES the file on every read and compares against the digest
+// taken when it was accepted, so bytes that changed after the check fail closed
+// however they changed and whatever line reached them. That is what actually
+// guards this. Overwriting the staged file with a megabyte of zeroes
+// immediately before the replacement left the whole internal/cli package green,
+// with `--json` reporting "updated": true on a machine then running bytes
+// nothing had checked.
+//
+// The TYPE is the ergonomic half and it is worth much less. acceptStaged is the
+// only thing that builds a non-zero one of these, and it builds one only when
+// the digests match, so at the two call sites below a bare path does not
+// typecheck — but stagedPath is still a local string in runUpdate and this
+// field is visible to every file in the package, and Go cannot hide either from
+// this package. It stops the change nobody meant to make; it does not stop the
+// one somebody sets out to make.
+//
+// Both reads FAIL CLOSED into refusals this command already has — the smoke
+// run's and the replacement's — rather than inventing a reason for a state that
+// is unreachable in shipped code, which would then have to live in
+// updateReasonCode and in every failure-arm assertion.
+//
+// The cost is two extra passes over the asset. Measured with crypto/sha256 over
+// a file the size a released ccdad actually is — the six targets build to
+// 11.7-13.1 MiB under the flags scripts/build-release.sh passes — one pass is
+// about 32 ms, so 65 ms on a run that already makes three HTTPS round trips and
+// downloads those same megabytes. The alternative is trusting that no line
+// added later ever touches the file between the digest and the rename, and that
+// is the trust this command was already found not to deserve.
+type stagedAsset struct {
+	path string
+	// digest is lowercase hex, which is what release.ExpectedHash yields and
+	// what (*release.Client).Download returns, so the two sides of the
+	// comparison are the same spelling by construction.
+	digest string
+}
+
+// acceptStaged compares what was downloaded against the signed row, and is the
+// only thing that produces a usable stagedAsset.
+func acceptStaged(path, gotHash, wantHash string) (stagedAsset, bool) {
+	if gotHash != wantHash {
+		return stagedAsset{}, false
+	}
+	return stagedAsset{path: path, digest: wantHash}, true
+}
+
+// pathIfIntact hands back the path only while the file is still the bytes the
+// signed row named.
+//
+// The zero stagedAsset is never intact: its path is "", which does not open.
+// So a caller that ignored acceptStaged's second return still cannot get a path
+// out of the handle it got.
+func (a stagedAsset) pathIfIntact() (string, bool) {
+	f, err := os.Open(a.path)
+	if err != nil {
+		return "", false
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", false
+	}
+	if hex.EncodeToString(h.Sum(nil)) != a.digest {
+		return "", false
+	}
+	return a.path, true
+}
+
+// replaceInto moves the staged file over target, re-checking it first.
+//
+// The check is here rather than at the call site so that replaceBinary — which
+// is platform-split and takes two plain paths — cannot be reached with anything
+// but a file whose digest has just been compared.
+func (a stagedAsset) replaceInto(target string) error {
+	path, intact := a.pathIfIntact()
+	if !intact {
+		return fmt.Errorf("%s is no longer the file whose checksum was compared", a.path)
+	}
+	return replaceBinary(path, target)
 }
 
 // updateDistrust is the shared body of the DISTRUST remedy: what a user is told

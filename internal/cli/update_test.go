@@ -460,6 +460,24 @@ func TestUpdatePreflightRefusalsTouchNoNetwork(t *testing.T) {
 		want:   ExitFailure,
 		reason: "no-executable-path",
 		human:  "ccdad cannot tell where its own binary is (no /proc on this machine)",
+	}, {
+		// The SECOND way that reason is produced, and it is a different line
+		// with a different message: os.Executable answered, and the path it
+		// answered with does not resolve. A row of its own because with only
+		// the one above, both of this arm's literals can be changed to anything
+		// at all and the suite stays green.
+		name: "the binary is named but does not resolve",
+		arrange: func(t *testing.T, _ string) {
+			saved := executablePath
+			t.Cleanup(func() { executablePath = saved })
+			// A path under a directory that was never created, so EvalSymlinks
+			// fails on a name os.Executable was perfectly willing to hand back.
+			gone := filepath.Join(t.TempDir(), "deleted-underneath-us", "ccdad")
+			executablePath = func() (string, error) { return gone, nil }
+		},
+		want:   ExitFailure,
+		reason: "no-executable-path",
+		human:  "to a real file",
 	}} {
 		t.Run(c.name, func(t *testing.T) {
 			target, f, _ := updateWorld(t, "0.6.1", "v0.7.0")
@@ -825,6 +843,40 @@ func assertBinaryUntouched(t *testing.T, target string) {
 	}
 }
 
+// assertBinaryInstalled is the other half of the same idea, and it is the only
+// end-to-end statement about the file that was actually put in place: it is the
+// asset the origin served, byte for byte, and it can be executed.
+//
+// A length comparison stood here first, and it passes for a megabyte of zeroes
+// written over the staged file after its digest was checked — which is the
+// whole distance between "an update ran" and "the bytes that were verified are
+// the bytes now on disk". The mode is asserted separately because a digest says
+// nothing about one, and a ccdad that lands without the execute bit is as
+// broken as one that lands with the wrong bytes.
+func assertBinaryInstalled(t *testing.T, target string) {
+	t.Helper()
+	installed, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("reading the installed binary at %s: %v", target, err)
+	}
+	if got, want := sha256.Sum256(installed), sha256.Sum256(stagedAssetBody(t)); got != want {
+		t.Errorf("the file at %s hashes to %x, want %x — what was installed is not what was digested",
+			target, got, want)
+	}
+	if runtime.GOOS == "windows" {
+		// A mode is not an ACL: Go reports a synthetic 0666/0777 here, so the
+		// bit says nothing about whether the file can be executed.
+		return
+	}
+	fi, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm()&0o111 == 0 {
+		t.Errorf("the installed binary is mode %v, which nothing can execute", fi.Mode().Perm())
+	}
+}
+
 // A release that publishes no signature is a deliberate choice somewhere, so
 // "re-run the installer" is the correct remedy for it. A signature the origin
 // could not serve is not a fact about the release at all — and reporting it as
@@ -1033,7 +1085,9 @@ func TestUpdateAcceptsASignatureFromEitherPinnedKey(t *testing.T) {
 			if code != ExitOK {
 				t.Fatalf("exit = %d, want 0 (%s)", code, top)
 			}
-			_ = target
+			// Exit 0 alone would also be true of a run that verified against
+			// either key and then installed nothing.
+			assertBinaryInstalled(t, target)
 		})
 	}
 }
@@ -1513,6 +1567,11 @@ func TestUpdateRefusesAChecksumMismatch(t *testing.T) {
 	// changes, so the row is genuine and the bytes are not what it names.
 	body := append(stagedAssetBody(t), []byte("\n// tampered\n")...)
 	f.put(release.Asset(), body)
+	// A tampered asset must never be EXECUTED, and the smoke run is the only
+	// thing here that would. The asset is a copy of this test binary with bytes
+	// appended, which an ELF loader ignores, so it would run if it were reached.
+	ran := filepath.Join(t.TempDir(), "childrecord")
+	t.Setenv(updateAssetRoleEnvFile, ran)
 
 	code, stdout, _, _ := runRoot(t, "update", "--json")
 	if code != ExitBlocked {
@@ -1521,7 +1580,26 @@ func TestUpdateRefusesAChecksumMismatch(t *testing.T) {
 	if got := decodePayload(t, stdout)["reason"]; got != "checksum" {
 		t.Errorf("reason = %v, want %q", got, "checksum")
 	}
+	if _, err := os.Stat(ran); err == nil {
+		t.Error("the asset was executed after its digest did not match; nothing whose checksum " +
+			"failed may be run, and the smoke run is the one step that would run it")
+	}
 	assertBinaryUntouched(t, target)
+
+	// The REMEDY, which nothing asserted. A checksum mismatch is a tamper
+	// failure and the installers check checksums and not signatures, so routing
+	// the user to one sends them down the single path that will accept the
+	// altered release. The verification tests pin that split for the arms
+	// updateVerifyFailure produces; this arm is not one of them, and the
+	// sentence it must never carry is the same sentence.
+	_, _, stderr, _ := runRoot(t, "update")
+	if strings.Contains(stderr, "Re-run the installer") {
+		t.Errorf("stderr = %q; a checksum mismatch must not send the user to an installer that "+
+			"checks checksums and not signatures", stderr)
+	}
+	if !strings.Contains(stderr, "re-running the installer would not help") {
+		t.Errorf("stderr = %q, want the distrust remedy to say why the installer is not the answer", stderr)
+	}
 }
 
 // Under a megabyte is a proxy or an error page, not a ccdad — and the size gate
@@ -1757,10 +1835,7 @@ func TestUpdateStopsTheDaemonAndStartsItFromTheNewBinary(t *testing.T) {
 		t.Errorf("currentVersion = %v, want %q — it is the RUNNING process's version and does not "+
 			"change when updated is true", got, "0.6.1")
 	}
-	body, err := os.ReadFile(target)
-	if err != nil || len(body) < release.MinAssetBytes {
-		t.Errorf("the binary at %s was not replaced (%d bytes, %v)", target, len(body), err)
-	}
+	assertBinaryInstalled(t, target)
 }
 
 func TestUpdateStartsNoDaemonWhenThereWasNone(t *testing.T) {
@@ -1815,7 +1890,23 @@ func TestUpdateReportsAFailedRestartAndStillSucceeds(t *testing.T) {
 	if got := payload["daemonRestarted"]; got != false {
 		t.Errorf("daemonRestarted = %v, want false", got)
 	}
-	_ = stderr
+	// The notice is a `say`, so --json silences it and the run above can never
+	// see it. Without the flag the user has to be told: "daemonRestarted": false
+	// is the whole of the answer to a script, and nothing at all to somebody
+	// reading a terminal who now has no daemon.
+	if strings.Contains(stderr, "could not be restarted") {
+		t.Errorf("--json printed the restart notice on stderr:\n%s", stderr)
+	}
+	// A second run needs a second daemon: the first one really did stop it, so
+	// without this there is nothing running to fail to restart.
+	stubUpdateDaemon(t, true).spawnErr = errors.New("fork failed")
+	_, _, stderr, _ = runRoot(t, "update")
+	if !strings.Contains(stderr, "could not be restarted") {
+		t.Errorf("stderr = %q, want it to say the daemon did not come back", stderr)
+	}
+	if !strings.Contains(stderr, "allowed to start one") {
+		t.Errorf("stderr = %q, want it to say what will bring the daemon back", stderr)
+	}
 }
 
 // A replacement that cannot happen is exit 1 and leaves the old binary in
@@ -1958,7 +2049,9 @@ func TestThePathNoteFiresOnceWhenTheDirectoryIsNotOnPath(t *testing.T) {
 	if !strings.Contains(stderr, "setup-path") {
 		t.Errorf("stderr = %q, want the note to name the command that fixes it", stderr)
 	}
-	_ = target
+	// The note is advice about a binary that WAS replaced, so the replacement
+	// has to have happened for the sentence to mean what it says.
+	assertBinaryInstalled(t, target)
 }
 
 // `update` is allowed inside a `ccdad run` session, because it writes only the
@@ -1999,8 +2092,13 @@ func TestUpdateRunsInsideAScopedSessionAndLeavesTheDaemonStopped(t *testing.T) {
 			if got := payload["daemonRestarted"]; got != false {
 				t.Errorf("daemonRestarted = %v, want false", got)
 			}
-			_ = stderr
-			_ = target
+			// The skip is a `say`, so --json owes the same silence here as
+			// everywhere else: the payload is the answer and stderr carries
+			// none of the prose this command owns.
+			if strings.Contains(stderr, "stay stopped") {
+				t.Errorf("--json printed the scoped-session notice on stderr:\n%s", stderr)
+			}
+			assertBinaryInstalled(t, target)
 		})
 	}
 }
