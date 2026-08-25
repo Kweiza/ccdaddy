@@ -16,7 +16,7 @@
 //
 // Usage:
 //
-//	go run ./scripts/minisign-sign -G [-p ccdaddy.pub] [-s ccdaddy.key]
+//	go run ./scripts/minisign-sign -G [-p ccdaddy.pub] -s "$HOME/ccdaddy-release.key"
 //	go run ./scripts/minisign-sign -m dist/sha256sums.txt -t v0.7.0 -o dist/sha256sums.txt.minisig
 //
 // In signing mode the secret key comes from MINISIGN_SECRET_KEY -- the second
@@ -50,7 +50,7 @@ func run(args []string, getenv func(string) string, stderr io.Writer) error {
 	var (
 		gen = fs.Bool("G", false, "generate a keypair instead of signing")
 		pub = fs.String("p", "ccdaddy.pub", "public key file: written by -G, read back for self-verification when signing")
-		sec = fs.String("s", "", "secret key file (-G writes it; signing reads "+secretEnvVar+" when this is empty)")
+		sec = fs.String("s", "", "secret key file (required with -G, which refuses to default one into the repository; signing reads "+secretEnvVar+" when this is empty)")
 		msg = fs.String("m", "", "file to sign")
 		tag = fs.String("t", "", "release tag the signature is for, e.g. v0.7.0")
 		out = fs.String("o", "", "signature file to write (default: the -m file plus .minisig)")
@@ -62,15 +62,22 @@ func run(args []string, getenv func(string) string, stderr io.Writer) error {
 		return fmt.Errorf("unexpected argument %q", fs.Arg(0))
 	}
 	if *gen {
+		// No in-tree default. This repository is public, ccdaddy.pub belongs at
+		// its root, and any fixed name for the secret half would put both files
+		// beside each other unless the caller overrides it -- which is the
+		// invitation a maintainer skipping the flag would walk straight into.
+		// Requiring -s makes the caller name a path outside the tree instead of
+		// trusting them to remember to.
+		if *sec == "" {
+			return errors.New(`-G requires -s, e.g. -s "$HOME/ccdaddy-release.key": ` +
+				"the secret key must never default into this repository")
+		}
 		return generateKeypair(*pub, *sec, stderr)
 	}
 	return sign(*msg, *tag, *out, *pub, *sec, getenv, stderr)
 }
 
 func generateKeypair(pubPath, secPath string, stderr io.Writer) error {
-	if secPath == "" {
-		secPath = "ccdaddy.key"
-	}
 	pubFile, secFile, err := relsign.GenerateKey()
 	if err != nil {
 		return err

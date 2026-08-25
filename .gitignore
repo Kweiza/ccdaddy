@@ -2,6 +2,16 @@
 /ccdad
 /ccdad.exe
 
+# The release signing secret scripts/minisign-sign -G writes. -G itself now
+# refuses to run without an explicit -s, but that only stops a bare
+# invocation -- a maintainer following the usual pairing with ccdaddy.pub
+# could still point -s at this directory by habit. That key is the trust
+# root every future ccdad checks a release against; a copy that reaches a
+# commit here once is a rotation across every install already in the field,
+# and this repository is public, so no arrangement of the tree makes it
+# ours to track.
+ccdaddy.key
+
 # Claude Code's own files, anywhere in the tree. Nothing in this repository
 # writes one: the suite points every path at a temp directory, and a relative
 # store is refused outright. What did write them was a MUTATION run — a

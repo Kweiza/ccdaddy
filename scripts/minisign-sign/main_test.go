@@ -51,6 +51,19 @@ func TestGenerateWritesBothFilesAndRefusesToClobber(t *testing.T) {
 	}
 }
 
+// The refusal this test pins is what keeps a secret key from ever landing at
+// the repository root: -G must fail before it writes anything, not merely
+// write somewhere safer by default.
+func TestGenerateRefusesWithoutASecretPath(t *testing.T) {
+	err := run([]string{"-G"}, noEnv, io.Discard)
+	if err == nil {
+		t.Fatal("-G with no -s did not fail")
+	}
+	if !strings.Contains(err.Error(), "-s") {
+		t.Fatalf("error = %v, want it to mention -s", err)
+	}
+}
+
 func TestSignModeRoundTripsAndSelfVerifies(t *testing.T) {
 	dir, pub, sec := generate(t)
 	msg := filepath.Join(dir, "sha256sums.txt")
