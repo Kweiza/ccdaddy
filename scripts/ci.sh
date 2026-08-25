@@ -10,6 +10,7 @@
 #   test   go test ./... -race
 #   cgo    every release target builds and vets with CGO_ENABLED=0
 #   cites  no comment points at a document this repository does not contain
+#   plugin the plugin manifests, checked by the tool that owns their schema
 #   all    all of the above, in that order
 #
 # `.github/workflows/ci.yml` calls these same subcommands, one per job, so a
@@ -50,10 +51,17 @@ targets="linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows
 # Deliberately not a `local` in check_cgo with a RETURN trap: an EXIT trap runs
 # after the function has returned, where a local is already out of scope and
 # `set -u` turns the cleanup itself into the script's error.
+# Two variables, ONE trap. `trap … EXIT` replaces the handler rather than adding
+# to it — bash keeps one per signal — so a second trap installed for the plugin
+# check would silently stop the cgo directory from ever being removed.
 cgo_tmp=
+plugin_tmp=
 cleanup() {
 	if [ -n "$cgo_tmp" ]; then
 		rm -rf -- "$cgo_tmp"
+	fi
+	if [ -n "$plugin_tmp" ]; then
+		rm -rf -- "$plugin_tmp"
 	fi
 	return 0
 }
@@ -292,6 +300,61 @@ EOF
 	echo "ci: no comment cites a document this repository does not contain" >&2
 }
 
+# The plugin manifests, checked by the tool that owns their schema.
+#
+# A schema written here would be this repository's belief about somebody else's
+# schema, and it would drift with nothing to say so. So this shells out, and the
+# version it shells out to is PINNED in .github/workflows/ci.yml: an unpinned
+# install takes whatever is newest, and a warning added in any Claude Code
+# release would then fail the release gate on a commit that changed nothing.
+#
+# Two paths, not one. The first validates the marketplace and recurses into the
+# entry's plugin manifest. The second is the guard for a mistyped source: a
+# source naming a directory that is not there passes the first silently, with
+# nothing validated at all.
+#
+# Then the smoke, which is the only thing anywhere that proves Claude Code reads
+# these manifests the way this repository believes it does: the validator never
+# opens the file the plugin manifest names, and an inline server object reports
+# zero servers in the plugin UI while the server actually runs. Installing into a
+# throwaway config directory and asking how many servers were found is what
+# separates those. It needs no credentials and no ccdad binary — a server that
+# cannot be executed is still a server that was FOUND, and whether `ccdad mcp`
+# speaks the protocol is proven by the Go suite instead.
+check_plugin() {
+	if ! command -v claude >/dev/null 2>&1; then
+		if [ -n "${CCDAD_REQUIRE_CLAUDE:-}" ]; then
+			echo "ci: CCDAD_REQUIRE_CLAUDE is set and claude is not on PATH; the plugin manifests would go back to being validated by nobody while this still reported green" >&2
+			return 1
+		fi
+		echo "ci: claude is not installed; the plugin manifests are validated by nothing here" >&2
+		return 0
+	fi
+
+	group "claude plugin validate --strict"
+	claude plugin validate --strict .
+	claude plugin validate --strict plugins
+	endgroup
+
+	plugin_tmp=$(mktemp -d)
+	local details
+	group "the installed plugin declares its server"
+	CLAUDE_CONFIG_DIR=$plugin_tmp claude plugin marketplace add "$repo_root"
+	CLAUDE_CONFIG_DIR=$plugin_tmp claude plugin install ccdad@ccdaddy
+	details=$(CLAUDE_CONFIG_DIR=$plugin_tmp claude plugin details ccdad@ccdaddy)
+	endgroup
+	case $details in
+	*"MCP servers (1)"*) ;;
+	*)
+		echo "ci: the installed plugin declares no MCP server; the manifest names a file Claude Code did not read:" >&2
+		echo "$details" >&2
+		return 1
+		;;
+	esac
+
+	echo "ci: both manifests validate --strict, and the installed plugin declares one MCP server" >&2
+}
+
 run_check() {
 	case $1 in
 	fmt) check_fmt ;;
@@ -299,16 +362,20 @@ run_check() {
 	test) check_test ;;
 	cgo) check_cgo ;;
 	cites) check_cites ;;
+	plugin) check_plugin ;;
 	all)
 		check_fmt
 		check_vet
 		check_test
 		check_cgo
 		check_cites
+		# Last, because it is the only check that can legitimately skip and a
+		# skip printed last is the one still on the reader's screen.
+		check_plugin
 		;;
 	*)
 		echo "ci: unknown check: $1" >&2
-		echo "ci: usage: scripts/ci.sh [fmt|vet|test|cgo|cites|all …]" >&2
+		echo "ci: usage: scripts/ci.sh [fmt|vet|test|cgo|cites|plugin|all …]" >&2
 		return 2
 		;;
 	esac
