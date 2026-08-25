@@ -524,16 +524,55 @@ func runUpdate(cmd *cobra.Command, opts updateOptions) error {
 			fmt.Sprintf("The downloaded %s will not run on this machine: %v\nNothing was replaced.", asset, err))
 	}
 
+	// Step 19. stopDaemon has already printed its own arm, and its error is
+	// deliberately NOT wrapped: CodeFor's errors.As unwraps through fmt.Errorf,
+	// so a wrapped sentinel keeps its own code and its own silence and the
+	// wrapping sentence is never printed. The code is flattened to 1 on
+	// purpose — "the daemon would not stop" is something ccdad itself could not
+	// do, whatever the singleton's own taxonomy called it.
+	//
+	// It happens before the replacement rather than after, because replacing
+	// the binary under a live daemon leaves the OLD daemon running old code and
+	// holding the singleton indefinitely. install.sh stops it for exactly this
+	// reason.
+	wasRunning, err := stopDaemon(cmd)
+	if err != nil {
+		human := ""
+		if !errors.Is(err, errSilent) {
+			human = fmt.Sprintf("The ccdad daemon could not be stopped (%v), so the binary was left alone.", err)
+		}
+		return rep.emit(cmd, opts.asJSON, ExitFailure, "daemon", human)
+	}
+	rep.daemonWasRunning = wasRunning
+
+	// Step 20.
+	if err := replaceBinary(staged, target); err != nil {
+		return rep.emit(cmd, opts.asJSON, ExitFailure, "replace-failed",
+			fmt.Sprintf("ccdad could not put the new binary in place: %v", err))
+	}
+	rep.updated = true
+
+	// Step 21. From the path just written. A failure to restart is reported and
+	// does NOT fail the command: the binary is already replaced, and the next
+	// ccdad command that is allowed to auto-start one will bring it back.
+	if wasRunning {
+		if err := startDaemonFrom(cmd, target); err != nil {
+			say(cmd, opts.asJSON, "The ccdad daemon could not be restarted (%v); "+
+				"the next ccdad command that is allowed to start one will.", err)
+		} else {
+			rep.daemonRestarted = true
+		}
+	}
+
 	// ---------------------------- BEGIN PLACEHOLDER ----------------------------
 	// Everything from this comment down to END PLACEHOLDER is scaffolding, and
 	// it is meant to be deleted WHOLE — comment and return together. Whoever
-	// writes the rest of the algorithm (stopping the daemon, moving the staged
-	// file over target and starting the daemon again from it) replaces this
-	// block; leaving the comment behind would leave it sitting above live code,
-	// describing something that is no longer true.
+	// writes the last step, which is what the user is told the command did,
+	// replaces this block; leaving the comment behind would leave it sitting
+	// above live code, describing something that is no longer true.
 	//
-	// It exists so this command RUNS while the rest is still being written: it
-	// reports what it has verified and stops. Nothing asserts on it.
+	// It exists so this command RUNS while that is still being written: the
+	// work above has happened and nothing reports it. Nothing asserts on it.
 	return rep.emit(cmd, opts.asJSON, ExitOK, "", "")
 	// ----------------------------- END PLACEHOLDER -----------------------------
 }

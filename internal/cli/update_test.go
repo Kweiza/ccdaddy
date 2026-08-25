@@ -1630,3 +1630,137 @@ func TestCobraAnswersVersionBeforeAnyPersistentHook(t *testing.T) {
 		t.Errorf("--version printed %q, want it to name %q", out.String(), buildinfo.String())
 	}
 }
+
+func TestUpdateStopsTheDaemonAndStartsItFromTheNewBinary(t *testing.T) {
+	target, _, _ := updateWorld(t, "0.6.1", "v0.7.0")
+	d := stubUpdateDaemon(t, true)
+
+	code, stdout, _, top := runRoot(t, "update", "--json")
+	if code != ExitOK {
+		t.Fatalf("exit = %d, want 0 (%s)", code, top)
+	}
+	if len(d.signalled) == 0 {
+		t.Error("the daemon was never asked to stop; it would go on running old code and holding the singleton")
+	}
+	if d.spawns != 1 {
+		t.Fatalf("spawns = %d, want 1", d.spawns)
+	}
+	if got := d.spawnedFrom[0]; got != target {
+		t.Errorf("the daemon was started from %q, want %q — the point of the parameter is that the "+
+			"process that comes back is the file that was just verified", got, target)
+	}
+	// The size AT THE MOMENT OF THE SPAWN, which is the only way to see that
+	// the restart happened after the replacement rather than before it. The
+	// path string alone is the same either way, and so are the target's bytes
+	// once the run has finished.
+	if got := d.sizeAtSpawn[0]; got < release.MinAssetBytes {
+		t.Errorf("the file at %s was %d bytes when the daemon was started from it; the old binary was "+
+			"still there, so the daemon came back on the code the update was replacing", target, got)
+	}
+	payload := decodePayload(t, stdout)
+	if got := payload["updated"]; got != true {
+		t.Errorf("updated = %v, want true", got)
+	}
+	if got := payload["daemonRestarted"]; got != true {
+		t.Errorf("daemonRestarted = %v, want true", got)
+	}
+	if got := payload["currentVersion"]; got != "0.6.1" {
+		t.Errorf("currentVersion = %v, want %q — it is the RUNNING process's version and does not "+
+			"change when updated is true", got, "0.6.1")
+	}
+	body, err := os.ReadFile(target)
+	if err != nil || len(body) < release.MinAssetBytes {
+		t.Errorf("the binary at %s was not replaced (%d bytes, %v)", target, len(body), err)
+	}
+}
+
+func TestUpdateStartsNoDaemonWhenThereWasNone(t *testing.T) {
+	_, _, _ = updateWorld(t, "0.6.1", "v0.7.0")
+	d := stubUpdateDaemon(t, false)
+
+	code, stdout, _, top := runRoot(t, "update", "--json")
+	if code != ExitOK {
+		t.Fatalf("exit = %d, want 0 (%s)", code, top)
+	}
+	if d.spawns != 0 {
+		t.Errorf("spawns = %d, want 0 — a machine whose daemon was not up must not gain one from an update", d.spawns)
+	}
+	if _, ok := decodePayload(t, stdout)["daemonRestarted"]; ok {
+		t.Error("payload carries daemonRestarted, and there was no daemon to restart")
+	}
+}
+
+// A daemon that will not stop is exit 1, and the error is NOT wrapped: CodeFor
+// unwraps through fmt.Errorf, so a wrapped sentinel would keep its own code and
+// its own silence and the wrapping sentence would never be printed.
+func TestUpdateRefusesWhenTheDaemonWillNotStop(t *testing.T) {
+	target, _, _ := updateWorld(t, "0.6.1", "v0.7.0")
+	d := stubUpdateDaemon(t, true)
+	d.shutdownErr = errors.New("the shutdown request went nowhere")
+
+	code, stdout, _, _ := runRoot(t, "update", "--json")
+	if code != ExitFailure {
+		t.Fatalf("exit = %d, want %d", code, ExitFailure)
+	}
+	if got := decodePayload(t, stdout)["reason"]; got != "daemon" {
+		t.Errorf("reason = %v, want %q", got, "daemon")
+	}
+	assertBinaryUntouched(t, target)
+}
+
+// The binary is already replaced by the time the restart is attempted, so a
+// failure to restart is reported and does not fail the command.
+func TestUpdateReportsAFailedRestartAndStillSucceeds(t *testing.T) {
+	_, _, _ = updateWorld(t, "0.6.1", "v0.7.0")
+	d := stubUpdateDaemon(t, true)
+	d.spawnErr = errors.New("fork failed")
+
+	code, stdout, stderr, _ := runRoot(t, "update", "--json")
+	if code != ExitOK {
+		t.Fatalf("exit = %d, want 0 — the binary is already replaced", code)
+	}
+	payload := decodePayload(t, stdout)
+	if got := payload["updated"]; got != true {
+		t.Errorf("updated = %v, want true", got)
+	}
+	if got := payload["daemonRestarted"]; got != false {
+		t.Errorf("daemonRestarted = %v, want false", got)
+	}
+	_ = stderr
+}
+
+// A replacement that cannot happen is exit 1 and leaves the old binary in
+// place. The staged file is removed out from under the rename to arrange it,
+// which is the only failure the caller can produce on demand.
+func TestUpdateReportsAFailedReplacement(t *testing.T) {
+	target, _, _ := updateWorld(t, "0.6.1", "v0.7.0")
+	d := stubUpdateDaemon(t, true)
+	// The staging directory is swept the moment the daemon stops, so the
+	// rename that follows has nothing to move.
+	d.onShutdown = func() {
+		matches, _ := filepath.Glob(filepath.Join(filepath.Dir(target), ".ccdad-update.*"))
+		for _, m := range matches {
+			_ = os.RemoveAll(m)
+		}
+	}
+
+	code, stdout, _, _ := runRoot(t, "update", "--json")
+	if code != ExitFailure {
+		t.Fatalf("exit = %d, want %d", code, ExitFailure)
+	}
+	payload := decodePayload(t, stdout)
+	if got := payload["reason"]; got != "replace-failed" {
+		t.Errorf("reason = %v, want %q", got, "replace-failed")
+	}
+	// The one arm the failure-arm table excludes by name, so this is the only
+	// place anything asserts it. A run that set updated before the replacement
+	// reports a successful update to every script reading --json, on a machine
+	// whose binary is still the old one.
+	if got := payload["updated"]; got != false {
+		t.Errorf("updated = %v, want false — the replacement is what did not happen", got)
+	}
+	body, err := os.ReadFile(target)
+	if err != nil || string(body) != "the old ccdad\n" {
+		t.Errorf("the old binary is gone (%q, %v); a failed replacement must leave the machine as it was", body, err)
+	}
+}

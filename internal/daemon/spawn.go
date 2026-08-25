@@ -47,7 +47,9 @@ const (
 	flagCreateNewProcessGroup = 0x00000200
 )
 
-// Spawn starts a detached daemon and returns without waiting for it.
+// SpawnFrom starts a detached daemon from exe and returns without waiting for
+// it. exe may be "", which means "resolve it with os.Executable", and that is
+// what Spawn below passes.
 //
 // Three rules, all of which have their own failure mode:
 //
@@ -93,10 +95,12 @@ const (
 // than in the parent. That same inheritance is why auto-start must be
 // suppressed under `go test`: an unsuppressed spawn detaches a daemon pinned to
 // a t.TempDir() that is about to be deleted underneath it.
-func Spawn() error {
-	exe, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("locating the ccdad binary: %w", err)
+func SpawnFrom(exe string) error {
+	if exe == "" {
+		var err error
+		if exe, err = os.Executable(); err != nil {
+			return fmt.Errorf("locating the ccdad binary: %w", err)
+		}
 	}
 	env, err := ChildEnv()
 	if err != nil {
@@ -130,6 +134,17 @@ func Spawn() error {
 	}
 	return nil
 }
+
+// Spawn starts a detached daemon from this binary, which is SpawnFrom("").
+//
+// The parameter exists for `ccdad update`: it has just written a new binary and
+// wants the process that comes back to be THAT file rather than whatever
+// os.Executable resolves to a moment later. It is not required for correctness,
+// and rule 3 above says why — os.Executable hands exec a path STRING that is
+// re-resolved at fork time, so a rename-over is already invisible to a later
+// spawn. What it removes is the last step of indirection between the bytes that
+// were just verified and the process now running them.
+func Spawn() error { return SpawnFrom("") }
 
 // lookClaude resolves the Claude Code a probe would run. It is a var for the
 // same reason every other uncontrollable dependency in this tree is one: whether

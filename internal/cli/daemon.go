@@ -42,7 +42,7 @@ var (
 	// singletonHeld is the liveness authority for start, stop and restart. They
 	// do not need the published document, and Observe would read it anyway.
 	singletonHeld = daemon.SingletonHeld
-	spawnDaemon   = daemon.Spawn
+	spawnDaemon   = daemon.SpawnFrom
 	// requestShutdown delivers the stop; it never waits for it. What proves the
 	// daemon went is the singleton, polled below.
 	requestShutdown = daemon.RequestShutdown
@@ -302,17 +302,25 @@ func newDaemonRestartCmd() *cobra.Command {
 	}
 }
 
-// startDaemon spawns a detached daemon and waits for it to take the singleton.
+func startDaemon(cmd *cobra.Command) error { return startDaemonFrom(cmd, "") }
+
+// startDaemonFrom spawns a detached daemon from exe and waits for it to take
+// the singleton. "" means "resolve it the way Spawn always did", which is what
+// startDaemon above passes and what every caller but one wants.
 //
 // Waiting is not politeness. Spawn returns as soon as the process is started,
 // and a `daemon start` that returned there would be followed by a `daemon
 // status` reporting 5 — the daemon is real, it just has not reached its first
 // lock yet. The wait is what makes the two commands compose.
-func startDaemon(cmd *cobra.Command) error {
+//
+// `ccdad update` is the one caller that names a file: it has just written a new
+// binary and restarts from that exact path rather than from whatever
+// os.Executable resolves to a moment later.
+func startDaemonFrom(cmd *cobra.Command, exe string) error {
 	if err := refuseAClaimedCredentialHome(cmd); err != nil {
 		return err
 	}
-	if err := spawnDaemon(); err != nil {
+	if err := spawnDaemon(exe); err != nil {
 		return err
 	}
 	up, err := waitForSingleton(true)

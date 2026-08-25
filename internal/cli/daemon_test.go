@@ -59,6 +59,15 @@ type fakeDaemon struct {
 	// heldAtSpawn records whether the singleton was still held each time spawn
 	// was called. restart's whole contract is that it never is.
 	heldAtSpawn []bool
+	// spawnedFrom records the executable each spawn was asked for. "" is
+	// "resolve it yourself", which is what every call site but `update` passes.
+	spawnedFrom []string
+	// sizeAtSpawn is the size of the file each spawn was pointed at, read AT
+	// the moment spawn was called, and -1 when it was not pointed at one. The
+	// moment is the whole of it: `update` claims to restart the daemon from the
+	// file it just wrote, and a path string is the same before and after the
+	// replacement, as are the target's bytes once the run has finished.
+	sizeAtSpawn []int64
 
 	// takeAfter is how many probes a freshly spawned daemon takes to reach its
 	// first lock. Zero is up instantly, which no real daemon is: Spawn returns
@@ -96,8 +105,16 @@ func (f *fakeDaemon) probe() (bool, error) {
 	return f.held, nil
 }
 
-func (f *fakeDaemon) spawn() error {
+func (f *fakeDaemon) spawn(exe string) error {
 	f.spawns++
+	f.spawnedFrom = append(f.spawnedFrom, exe)
+	size := int64(-1)
+	if exe != "" {
+		if fi, err := os.Stat(exe); err == nil {
+			size = fi.Size()
+		}
+	}
+	f.sizeAtSpawn = append(f.sizeAtSpawn, size)
 	f.heldAtSpawn = append(f.heldAtSpawn, f.held)
 	if f.spawnErr != nil {
 		return f.spawnErr
