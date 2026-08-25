@@ -1,0 +1,323 @@
+package cli
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
+
+	"github.com/spf13/cobra"
+
+	"github.com/Kweiza/ccdaddy/internal/buildinfo"
+	"github.com/Kweiza/ccdaddy/internal/release"
+	"github.com/Kweiza/ccdaddy/internal/relsign"
+)
+
+// releaseKeys is the trust root this build verifies against.
+//
+// It is a package var of the shape uninstall.go's executablePath established,
+// and for the same reason: production never reassigns it, and the suite points
+// it at a key generated in-process so that the update tests do not need the
+// maintainer's secret. relsign holds the real root as a CONST — -ldflags -X
+// patches string variables and build-release.sh already patches two of them, so
+// a trust root a link line could swap would not be pinned at all.
+var releaseKeys = relsign.Keys
+
+const (
+	// updateStagePattern is the staging directory beside the binary. The
+	// .ccdad-update. prefix keeps a crashed update distinguishable from a
+	// crashed install, whose scratch directory is .ccdad-install.XXXXXX in the
+	// same place.
+	updateStagePattern = ".ccdad-update.*"
+
+	// maxSumsBytes: the real file is nine rows of about a hundred bytes. A
+	// megabyte is three orders of magnitude of headroom and still refuses a
+	// proxy that answers with a whole web page, which is the failure it is for.
+	maxSumsBytes = 1 << 20
+	// maxSigBytes sits ABOVE the verifier's own 16 KiB refusal on purpose, so
+	// an over-long body reaches the verifier and is refused for its own stated
+	// reason rather than arriving pre-truncated and failing on a line count.
+	maxSigBytes = 64 << 10
+	// maxAssetBytes: every released ccdad is under four megabytes on all six
+	// targets. This is not a fit — it is the ceiling that stops a hostile
+	// origin streaming into a directory on the user's PATH forever. It is far
+	// above the measurement deliberately: the digest decides whether the bytes
+	// are right, and a cap chosen from today's size would refuse a future
+	// target that links cgo.
+	maxAssetBytes = 256 << 20
+
+	// metadataTimeout bounds the redirect and the two sub-kilobyte fetches. It
+	// bounds connection setup and a stalled read, not a transfer.
+	metadataTimeout = 30 * time.Second
+	// assetTimeout bounds the asset: four megabytes in ten minutes is about
+	// 7 KB/s, a bad tethered link rather than a stalled one. It is a CONTEXT
+	// deadline and not an http.Client.Timeout, because a whole-request clock
+	// kills a slow but healthy download.
+	assetTimeout = 10 * time.Minute
+	// smokeTimeout bounds `<staged> --version`. Cobra prints a version and
+	// exits; anything that has not done so in fifteen seconds is not a ccdad.
+	smokeTimeout = 15 * time.Second
+)
+
+type updateOptions struct {
+	check   bool
+	version string
+	asJSON  bool
+}
+
+func newUpdateCmd() *cobra.Command {
+	var opts updateOptions
+
+	cmd := &cobra.Command{
+		Use: "update",
+		// The first alias in the tree. Cobra resolves it before the root's
+		// unknown-command retag, and every table in the tree is keyed on
+		// CommandPath(), so it costs no row anywhere.
+		Aliases: []string{"upgrade"},
+		Short:   "Replace this ccdad binary with the latest signed release",
+		Long: "It resolves the latest release, downloads sha256sums.txt and its minisign\n" +
+			"signature, verifies that signature against a key compiled into this binary, and\n" +
+			"only THEN reads the checksum row for this platform. The asset is downloaded\n" +
+			"beside the binary, checked for size and digest, run once, and renamed over this\n" +
+			"file.\n\n" +
+			"There is no --no-verify and no --insecure. A mirror that does not carry the\n" +
+			"signature and an attacker who removed it are the same bytes on the wire.\n\n" +
+			"There is no prompt and no --yes either, because nothing here is destroyed.\n" +
+			"Naming a tag with --version IS the consent for a downgrade.\n\n" +
+			"--check stops before the download, so it answers everything a full run answers\n" +
+			"except the three things only the asset can tell you: its size, its checksum, and\n" +
+			"whether it runs on this machine. It still creates and removes a directory beside\n" +
+			"the binary, so its answer about writability is the real one.\n\n" +
+			"A Homebrew or Scoop install is refused rather than replaced: that binary belongs\n" +
+			"to the package manager, and replacing it in place leaves the manager believing\n" +
+			"something else is installed.\n\n" +
+			"The architecture is always the one this binary was built for, so an amd64 build\n" +
+			"under Rosetta or Windows-on-ARM stays on amd64. Re-run the installer to move.",
+		Args:          usageArgs(cobra.NoArgs),
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runUpdate(cmd, opts)
+		},
+	}
+	cmd.Flags().BoolVar(&opts.check, "check", false, "report whether an update is available and replace nothing")
+	cmd.Flags().StringVar(&opts.version, "version", "", "install this release tag instead of the latest, e.g. v1.2.3")
+	cmd.Flags().BoolVar(&opts.asJSON, "json", false, "emit a machine-readable object on stdout")
+	return cmd
+}
+
+// updateReport accumulates what the run has learned, so that a refusal at any
+// step writes exactly the facts that were true when it fired.
+type updateReport struct {
+	// current is the RUNNING process's version, and it does not change when
+	// updated becomes true: the pair "currentVersion":"0.6.1","updated":true is
+	// correct and means "0.6.1 replaced itself".
+	current string
+
+	hasPaths   bool
+	target     string
+	invokedDir string
+	onPath     bool
+
+	hasTag bool
+	tag    string
+	// targetVersion, never latestVersion: under --version v0.5.0 a field called
+	// latestVersion would hold an older version than the one running.
+	// resolvedLatest is what tells a consumer which question was answered.
+	targetVersion   string
+	resolvedLatest  bool
+	updateAvailable bool
+
+	updated bool
+
+	daemonWasRunning bool
+	daemonRestarted  bool
+}
+
+func (r *updateReport) payload(reason string) map[string]any {
+	out := map[string]any{
+		"schemaVersion":  1,
+		"currentVersion": r.current,
+		"updated":        r.updated,
+	}
+	if r.hasPaths {
+		out["path"] = r.target
+		out["installDir"] = r.invokedDir
+		out["onPath"] = r.onPath
+	}
+	if r.hasTag {
+		out["tag"] = r.tag
+		out["targetVersion"] = r.targetVersion
+		out["resolvedLatest"] = r.resolvedLatest
+		out["updateAvailable"] = r.updateAvailable
+	}
+	// Only when there WAS a daemon: false here means the restart was skipped or
+	// failed, and on a machine whose daemon was never up that would be a
+	// sentence about nothing.
+	if r.daemonWasRunning {
+		out["daemonRestarted"] = r.daemonRestarted
+	}
+	if reason != "" {
+		out["reason"] = reason
+	}
+	return out
+}
+
+// emit writes the run's answer and returns the error that carries its exit code.
+//
+// --json changes the representation and never the answer, so the exit code is
+// identical with and without it, and the human words are suppressed rather than
+// printed beside the payload.
+//
+// The returned error is deliberately the SILENT sentinel: the words are already
+// on the screen. No caller may wrap it — CodeFor's errors.As unwraps through
+// fmt.Errorf, so a wrapped sentinel keeps its own code and its own silence and
+// the wrapping sentence is never printed.
+func (r *updateReport) emit(cmd *cobra.Command, asJSON bool, code ExitCode, reason, human string) error {
+	if asJSON {
+		if err := writeJSON(cmd, r.payload(reason)); err != nil {
+			return err
+		}
+	} else if human != "" {
+		fmt.Fprintln(cmd.ErrOrStderr(), human)
+	}
+	if code == ExitOK {
+		return nil
+	}
+	return WithCode(errSilent, code)
+}
+
+// say prints one progress line, and nothing at all under --json.
+//
+// stopDaemon and startDaemonFrom print their own lines and are not routed
+// through here. Those go to stderr, which the --json contract leaves alone.
+func say(cmd *cobra.Command, asJSON bool, format string, a ...any) {
+	if asJSON {
+		return
+	}
+	fmt.Fprintf(cmd.ErrOrStderr(), format+"\n", a...)
+}
+
+func runUpdate(cmd *cobra.Command, opts updateOptions) error {
+	rep := &updateReport{current: buildinfo.Version}
+
+	// Step 0. Normalized ONCE, here, so that `--version 1.2.3` and
+	// `--version v1.2.3` are the same request all the way down to the trusted
+	// comment. Without it a user's missing v fails later as "signed for a
+	// different release", which is the tamper remedy, for a typo.
+	//
+	// Changed() rather than a non-empty string, so `--version ""` is the
+	// argument error it is rather than silently meaning "latest".
+	var want release.Version
+	pinned := cmd.Flags().Changed("version")
+	if pinned {
+		v, ok := release.ParseTag(opts.version)
+		if !ok {
+			return UsageError("--version wants a release tag such as v1.2.3 or 1.2.3, not %q", opts.version)
+		}
+		want = v
+	}
+
+	// Step 1. Two paths, and they are not the same path.
+	exe, err := executablePath()
+	if err != nil {
+		return rep.emit(cmd, opts.asJSON, ExitFailure, "no-executable-path",
+			fmt.Sprintf("ccdad cannot tell where its own binary is (%v), so it cannot replace it.", err))
+	}
+	// invokedDir is UNRESOLVED, and it is the only correct input to the PATH
+	// note: a real path under /opt is not on PATH even when the ~/.local/bin
+	// symlink that found it is. Warning about the resolved directory would cry
+	// wolf on exactly the symlinked installs this command supports.
+	invokedDir := filepath.Dir(exe)
+	// target is RESOLVED. os.Executable is already fully resolved on Linux and
+	// is the invocation path on macOS, so without this an update on macOS
+	// replaces a SYMLINK — orphaning the real binary and reverting on the
+	// user's next command. ccdadDir deliberately does not resolve, and that is
+	// right for the question IT answers; it is wrong here.
+	target, err := filepath.EvalSymlinks(exe)
+	if err != nil {
+		return rep.emit(cmd, opts.asJSON, ExitFailure, "no-executable-path",
+			fmt.Sprintf("ccdad cannot resolve %s to a real file (%v), so it cannot replace it.", exe, err))
+	}
+	// The staging directory is the target's own directory, which is what makes
+	// the final move a same-directory rename by construction.
+	stageDir := filepath.Dir(target)
+	rep.hasPaths, rep.target, rep.invokedDir = true, target, invokedDir
+	rep.onPath = onPathList(os.Getenv("PATH"), invokedDir, livePathRules)
+
+	// Step 2. An empty trust root refuses to self-update: fail closed. This
+	// asks the seam rather than relsign.Enforced(), which answers the same
+	// question about the compile-time constant — going through the seam is what
+	// lets the suite describe a build with no key at all, and what stops every
+	// update test depending on whether a key has been generated yet.
+	keys := releaseKeys()
+	if len(keys) == 0 {
+		return rep.emit(cmd, opts.asJSON, ExitBlocked, "no-pinned-key",
+			"This ccdad was built with no release key, so it cannot verify an update. "+
+				"Re-run the installer from the project's README to get a build that can.")
+	}
+
+	// Step 3. A dev build has no released version to compare against, and
+	// replacing it would throw away whatever it was built from.
+	if buildinfo.Version == "dev" {
+		return rep.emit(cmd, opts.asJSON, ExitBlocked, "dev-build",
+			"This is a development build, so there is no released version to update from. "+
+				"Re-run the installer from the project's README to get a released one.")
+	}
+
+	// Step 4. packageManagerOwning is uninstall's, unchanged. It knows Homebrew
+	// and Scoop, matched segment-wise, and it does not know winget, nix, apt or
+	// MacPorts — teaching it those is uninstall's decision as much as this
+	// command's and belongs in its own change. It is asked about the RESOLVED
+	// path, because a /usr/local/bin symlink resolves into the Cellar and the
+	// Cellar is what names the manager.
+	if owner := packageManagerOwning(target); owner != "" {
+		return rep.emit(cmd, opts.asJSON, ExitBlocked, "package-manager",
+			fmt.Sprintf("%s installed ccdad at %s and owns that file. Run %s instead: replacing it here "+
+				"would leave %s believing something else is installed.", owner, target, upgradeHint(owner), owner))
+	}
+
+	// Step 5. The writability probe and the staging directory in ONE syscall,
+	// which is the analogue of install.sh's mktemp -d inside the install
+	// directory. It asks the right question: what is being predicted is a
+	// rename WITHIN this directory, which needs rights on the directory and not
+	// on the target file. It must come after step 4, because a Homebrew Cellar
+	// is routinely writable by its owner and the reason to refuse there is not
+	// permission.
+	staging, err := os.MkdirTemp(stageDir, updateStagePattern)
+	if err != nil {
+		return rep.emit(cmd, opts.asJSON, ExitBlocked, "not-writable",
+			fmt.Sprintf("ccdad cannot write to %s (%v), so it cannot stage a replacement there.", stageDir, err))
+	}
+	defer os.RemoveAll(staging)
+
+	// ---- nothing above this line touches the network ----
+
+	// ---------------------------- BEGIN PLACEHOLDER ----------------------------
+	// Everything from this comment down to END PLACEHOLDER is scaffolding, and
+	// it is meant to be deleted WHOLE — comment, blank assignments and return
+	// together. Whoever writes the rest of the algorithm (resolving the
+	// release, verifying its signature against keys, downloading the asset into
+	// staging and moving it over target) replaces this block; leaving the
+	// comment behind would leave it sitting above live code, describing
+	// something that is no longer true.
+	//
+	// It exists so this command RUNS while the rest is still being written: it
+	// reports the pre-flight facts and stops. The two blank assignments are
+	// what keep the compiler quiet about values only the later steps read.
+	// Nothing asserts on any of it.
+	_, _ = want, pinned
+	_ = staging
+	return rep.emit(cmd, opts.asJSON, ExitOK, "", "")
+	// ----------------------------- END PLACEHOLDER -----------------------------
+}
+
+// upgradeHint is the package manager's own upgrade command. uninstallHint is
+// the same shape for the other verb; the two are separate because a user
+// reading "run brew uninstall" when they asked to upgrade would do it.
+func upgradeHint(owner string) string {
+	if owner == "Scoop" {
+		return "'scoop update ccdad'"
+	}
+	return "'brew upgrade ccdad'"
+}
