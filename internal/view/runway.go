@@ -61,6 +61,9 @@ const runwaySep = "  ·  "
 // third verdict on a summary that already carries two and that agrees with them
 // on every ordinary fleet; leaving it out when it disagrees would let "holds on
 // both axes" stand over a fleet the arithmetic says empties.
+//
+// A fleet that cannot hold also carries how many accounts would -- see
+// RunwayNeedSegment for why only that fleet does.
 func RunwayLine(f forecast.Fleet, now time.Time, loc *time.Location) string {
 	if !f.Basis.Known {
 		return ""
@@ -90,12 +93,18 @@ func RunwayLine(f forecast.Fleet, now time.Time, loc *time.Location) string {
 		return 0
 	})
 
-	parts := make([]string, 0, 4)
+	// Five: the fleet run, two axes, the seat count and the basis.
+	parts := make([]string, 0, 5)
 	if seg, ok := fleetSegment(f, now, loc); ok {
 		parts = append(parts, seg)
 	}
 	for _, a := range axes {
 		parts = append(parts, axisSegment(a.label, a.axis, now, loc))
+	}
+	// After the verdicts and before the evidence: what happened, then what it
+	// would take, then what it was measured from.
+	if seg := RunwayNeedSegment(f); seg != "" {
+		parts = append(parts, seg)
 	}
 	parts = append(parts, runwayBasis(f))
 	return strings.Join(parts, runwaySep)
@@ -308,4 +317,86 @@ func RunwayCreditVerdict(c forecast.CreditFleet, now time.Time, loc *time.Locati
 // parentheses is what makes the date usable without arithmetic.
 func runsDryAt(at, now time.Time, loc *time.Location) string {
 	return fmt.Sprintf("runs dry %s  (in %s)", Timestamp(at, loc), HumanDuration(at.Sub(now)))
+}
+
+// RunwayAccounts is the seat-count line under the axis block: how many accounts
+// the run had to work with, how many it would take to survive the horizon at
+// the measured rate, and the difference between the two.
+//
+// It answers the axis block's question from the other end. The rows above say
+// how much is left and when it runs out; this says how many seats it would take
+// for it not to. Both come from the same runs, so a reader can never be told
+// "runs dry" and "you have enough accounts" on adjacent lines.
+//
+// The parenthetical is the actionable half and is present exactly when there is
+// something to act on: a fleet already sitting on the smallest count that holds
+// gets the count and nothing after it. The gap before it is two spaces, matching
+// the dry moments in the block above, which a reader scans down the same column.
+//
+// An unmeasured count is Unreadable and never NoQuantity. Every fleet has a
+// smallest size that holds -- supply is linear in the seat count and burn is not
+// a function of the fleet -- so the number exists and what failed was the
+// measuring. NoQuantity would say there is no such number and stop a reader
+// looking for the history that produces it.
+//
+// A fleet with no usable accounts gets no line at all. "0 usable, ? needed" is a
+// sentence about a fleet the rotation cannot reach, and the basis line above it
+// already carries how many accounts there are and why none of them counted.
+func RunwayAccounts(f forecast.Fleet) string {
+	if f.AccountsUsable == 0 {
+		return ""
+	}
+	head := fmt.Sprintf("%d usable, ", f.AccountsUsable)
+	switch {
+	case !f.HasNeeded:
+		return head + Unreadable + " needed  (not enough history)"
+	case f.NeededCapped:
+		// The search reached its ceiling without finding a count that holds, so
+		// the figure is a bound and is worded as one. Rendering it as a count --
+		// with a parenthetical naming that many seats to buy -- would name a
+		// purchase that does not fix the fleet, and a fleet already at or above
+		// the ceiling would read as one that holds.
+		return head + fmt.Sprintf("more than %d needed to hold at this rate", f.AccountsNeeded)
+	}
+	line := head + fmt.Sprintf("%d needed to hold at this rate", f.AccountsNeeded)
+	switch {
+	case f.AccountsNeeded > f.AccountsUsable:
+		line += fmt.Sprintf("  (%d more)", f.AccountsNeeded-f.AccountsUsable)
+	case f.AccountsNeeded < f.AccountsUsable:
+		line += fmt.Sprintf("  (%d to spare)", f.AccountsUsable-f.AccountsNeeded)
+	}
+	return line
+}
+
+// RunwayNeedSegment is the seat count as one clause of RunwayLine, and it is
+// carried only by a fleet that is SHORT.
+//
+// A fleet that holds already has its answer in the word "holds", and the slack
+// it has on top of that is a block-level figure rather than a dashboard one: the
+// summary line is read at a glance beside Daemon:, Active: and Mode:, and a
+// clause spent on good news is a clause the short case needed. The full form,
+// spare count and all, is in RunwayAccounts.
+//
+// The parenthetical here is one space, not the two RunwayAccounts uses. The
+// clauses of this line are already held apart by their own separator, and a
+// second wide gap inside one of them would read as a third clause.
+//
+// RunwayLine's both-axes-hold branch does not call this, and it does not need
+// to: a fleet whose runs all hold was answered by a search counting downward, so
+// its count is at most its usable seats. A fleet that claimed both -- holding
+// and short -- would be a contradiction the run cannot produce, and printing
+// both halves of it on one line is not an improvement on printing one.
+func RunwayNeedSegment(f forecast.Fleet) string {
+	if !f.HasNeeded {
+		return ""
+	}
+	if f.NeededCapped {
+		// A bound still tells a short fleet's reader that the shortfall is not
+		// one they can count, which is the thing this clause exists to say.
+		return fmt.Sprintf("need more than %d", f.AccountsNeeded)
+	}
+	if f.AccountsNeeded <= f.AccountsUsable {
+		return ""
+	}
+	return fmt.Sprintf("need %d (%d more)", f.AccountsNeeded, f.AccountsNeeded-f.AccountsUsable)
 }
