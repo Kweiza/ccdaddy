@@ -692,7 +692,8 @@ func scrolled(m Model) Model {
 	// happens to hold at the current offset.
 	probe := m
 	probe.Top = 0
-	shown, _ := probe.window(Plan(m.Set, m.Width, m.Height, n, len(m.Snap.Notices) > 0))
+	shown, _ := probe.window(Plan(m.Set, m.Width, m.Height, n,
+		len(m.Snap.Notices) > 0, m.runwayLine() != ""))
 	room := len(shown)
 	if room < 1 {
 		room = 1
