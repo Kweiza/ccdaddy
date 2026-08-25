@@ -156,6 +156,18 @@ func sign(msgPath, tag, outPath, pubPath, secPath string, getenv func(string) st
 	}
 
 	if err := os.WriteFile(outPath, sig, 0o644); err != nil {
+		// WriteFile uses O_TRUNC, truncating the file before writing. If the write
+		// fails (disk full, I/O error), a truncated file is left at outPath. Clean
+		// it up so the directory is restored to its state before the attempt.
+		//
+		// A process killed mid-write never reaches this line, so a truncated file
+		// can be left behind. It is still not published — .github/workflows/release.yml
+		// runs Build, Sign, Attest, and Publish as sequential steps with no
+		// continue-on-error between them, so a step that dies takes the job with it
+		// and the upload never runs. That protection is fragile: someone adding
+		// if: always() to Publish or reordering steps would remove it without
+		// touching this file.
+		os.Remove(outPath)
 		return err
 	}
 	fmt.Fprintf(stderr, "minisign-sign: signed %s as %s for %s\n", msgPath, outPath, tag)
