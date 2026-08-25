@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/daemon"
+	"github.com/Kweiza/ccdaddy/internal/forecast"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 )
 
@@ -28,6 +29,22 @@ type Snapshot struct {
 	HasMode     bool
 	Version     string   // buildinfo.String()'s first field, or a test constant
 	Notices     []string // everything cli would have written to stderr
+
+	// Forecast is the measured burn and what it implies, and HasForecast is
+	// whether one could be produced at all.
+	//
+	// The pair is a tri-state and not a nilable pointer, for the reason the
+	// fields above it are: a dashboard reads this struct and must never be able
+	// to dereference its way into a panic on a machine that has been recording
+	// for ten minutes. HasForecast false is "no measurement", never "a fleet
+	// burning nothing" -- the zero Fleet's verdicts are all VerdictUnknown, so
+	// a renderer that ignored the flag would still print no promise.
+	//
+	// Package cli computes it, as it computes everything else here, so the same
+	// value reaches the dashboard and the command line and no number is derived
+	// in two places.
+	Forecast    forecast.Fleet
+	HasForecast bool
 }
 
 // StrategyLabel is the strategy in FORCE, which under hover is not the one in
