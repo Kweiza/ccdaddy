@@ -135,10 +135,16 @@ contents; keep it that way.
   person actually reading the code. State the fact instead.
   `scripts/ci.sh cites` fails the build on `§`, on "the brief", and on
   "task *n*" — and on a pointing phrase ("see", "per", "refer to", "described
-  in", "documented in") in front of a hyphenated name this repository does not
-  contain. That last one is there because a private note was once cited by
-  name rather than by section, and a bare name has no spelling for a literal
-  to catch. Pointing at a file that *is* in the tree is fine and stays fine.
+  in", "documented in") in front of either a hyphenated name or a document
+  path this repository does not contain. The name form is there because a
+  private note was once cited by name rather than by section, and a bare name
+  has no spelling for a literal to catch. The path form is there because that
+  is how a plan is actually cited — `see docs/plans/2026-08-25-a-thing.md` —
+  and the name pattern cannot see it: the slash ends the token before the
+  pattern has matched anything. `docs/` is not in this repository and never
+  has been, so a reference to one resolves for exactly the person whose
+  machine it is on. Pointing at a file that *is* in the tree is fine and stays
+  fine, in either form.
 - **The 7-bit rule is `internal/tui` and `internal/view` only.** Those two
   packages draw a terminal page whose frame is measured in columns, and their
   golden fixtures compare raw bytes — so a character that is one column wide

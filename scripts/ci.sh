@@ -201,19 +201,16 @@ check_cgo() {
 # other exception belongs here too, in the open, rather than in a comment
 # nobody sees.
 #
-# Two files are excluded, and they are the two that DESCRIBE this rule: this
-# script, whose search pattern is the banned character, and CONTRIBUTING.md,
-# which shows contributors what not to write. A gate that cannot state what it
-# forbids is worse than the exclusion.
-# The file set both shapes below are searched over. An ARRAY rather than the
-# space-separated string `targets` is: these are git pathspecs, and `*.md`
-# unquoted would be expanded by the shell into the four .md files at the
+# The file set all three shapes below are searched over. An ARRAY rather than
+# the space-separated string `targets` is: these are git pathspecs, and `*.md`
+# unquoted would be expanded by the shell into the five .md files at the
 # repository root before git ever saw the pattern.
 #
 # Three files are excluded and all three for ONE reason: they have to contain
 # the very strings this check fails on. ci.sh holds the patterns, ci_sh_test.go
 # holds the fixtures that prove they fire, and CONTRIBUTING.md quotes them while
-# stating the rule. The cost is real and worth naming: a genuinely unreachable
+# stating the rule — and a gate that cannot state what it forbids is worse than
+# the exclusion. The cost is real and worth naming: a genuinely unreachable
 # citation written inside one of those three is not caught by anything.
 cites_paths=('*.go' '*.sh' '*.ps1' '*.yml' '*.md'
 	':!scripts/ci.sh' ':!scripts/ci_sh_test.go' ':!CONTRIBUTING.md')
@@ -254,9 +251,49 @@ cites_spelled='§|[Tt]he brief|[Tt]ask [0-9]+'
 # Measured with it dropped: still zero matches over this tree, same as with it.
 cites_pointer='([Ss]ee|[Pp]er|[Rr]efer to|[Dd]escribed in|[Dd]ocumented in) [a-z0-9]+(-[a-z0-9]+){2,}'
 
+# The POINTED shape written as a PATH, and the reason the shape above cannot see
+# it: that pattern keys on a slug immediately after the pointing phrase, and
+# `docs/plans/2026-08-25-self-upgrade.md` ends its first token at the slash
+# before a single hyphen group has matched. Nothing in it matches, so a plan
+# cited the way a plan is actually cited walked straight through -- which is how
+# several comments here came to satisfy this gate while pointing at a file no
+# reader outside one machine has.
+#
+# `docs/` is the case that matters and it is not a guess: it is in
+# .git/info/exclude, and `git log --all --diff-filter=A -- 'docs/*'` is empty,
+# so no commit in this repository has ever carried a file under it.
+#
+# MEASURED ON THIS TREE, because a pattern nobody counted is a pattern nobody
+# knows the cost of. A pattern that flagged ANY unresolved path matched six
+# lines and four of them were correct: `os/types_windows.go` is the Go standard
+# library, `tools/call` is a method name on the wire, `internal/cli` is a
+# directory, and `internal/identity/oauth.go.` is a real file with the
+# sentence's full stop stuck to it. This gate is about DOCUMENTS -- whether a
+# comment names a code path correctly is a different question with a different
+# owner -- so the target must look like one: under `docs/`, or ending `.md`.
+# Restricted that way it matches exactly one line here, `See SECURITY.md.` in
+# .github/ISSUE_TEMPLATE/config.yml, and that one resolves.
+cites_docpath='([Ss]ee|[Pp]er|[Rr]efer to|[Dd]escribed in|[Dd]ocumented in) (docs/[A-Za-z0-9._/-]+|[A-Za-z0-9._/-]+\.md)'
+
+# tracked_has answers whether the repository contains this exact path.
+#
+# Deliberately not `git ls-files | grep -qxF`. That is the pipeline the comment
+# above `go version -m` in check_cgo warns about: grep exits at the first match,
+# the writer dies of SIGPIPE, and `pipefail` turns a pointer that RESOLVED into
+# a failed script. The existing arm below has that shape and has never fired,
+# because the list is smaller than a pipe buffer -- which is luck, not a reason
+# to write a second one.
+tracked=
+tracked_has() {
+	case $'\n'"$tracked"$'\n' in
+	*$'\n'"$1"$'\n'*) return 0 ;;
+	esac
+	return 1
+}
+
 check_cites() {
 	group "self-contained comments"
-	local spelled pointers unresolved line targets target hits
+	local spelled pointers unresolved line targets target hits docpaths
 	# The `grep -v` runs last, so a line carrying BOTH an RFC citation and a
 	# real one escapes. That trade is deliberate: the alternative is a lookbehind
 	# no portable grep has, and such a line has never existed here.
@@ -289,7 +326,33 @@ $pointers
 EOF
 	fi
 
-	hits=$(printf '%s\n%s' "$spelled" "$unresolved" | grep -v '^$' || true)
+	# A DOCUMENT POINTED AT BY PATH, resolved exactly rather than by suffix: a
+	# path names one file, and `(^|/)name` matching would let `docs/x.md`
+	# resolve against an unrelated `vendor/docs/x.md`.
+	tracked=$(git ls-files)
+	docpaths=
+	if pointers=$(git grep -nE "$cites_docpath" -- "${cites_paths[@]}"); then
+		while IFS= read -r line; do
+			# The trailing punctuation strip is load-bearing and has a line in
+			# this tree behind it: `See SECURITY.md.` ends a sentence, and
+			# taking the last token whole yields `SECURITY.md.`, which resolves
+			# to nothing and would fail a correct file.
+			targets=$(printf '%s\n' "$line" | grep -oE "$cites_docpath" |
+				sed -E 's/.*[[:space:]]//; s/[].,;:)"'"'"']+$//')
+			for target in $targets; do
+				if tracked_has "$target"; then
+					continue
+				fi
+				docpaths="${docpaths}${line}
+"
+				break
+			done
+		done <<EOF
+$pointers
+EOF
+	fi
+
+	hits=$(printf '%s\n%s\n%s' "$spelled" "$unresolved" "$docpaths" | grep -v '^$' || true)
 	endgroup
 	if [ -n "$hits" ]; then
 		echo "ci: these comments point at something no reader outside this machine has:" >&2
