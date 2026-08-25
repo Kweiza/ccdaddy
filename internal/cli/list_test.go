@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -13,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Kweiza/ccdaddy/internal/daemon"
+	"github.com/Kweiza/ccdaddy/internal/history"
 	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/pollpolicy"
 	"github.com/Kweiza/ccdaddy/internal/store"
@@ -872,5 +874,212 @@ func TestTheHoverNoteIsNotPrintedAboveAnEmptyListing(t *testing.T) {
 	}
 	if strings.Contains(errOut, note) {
 		t.Errorf("the all-disabled listing credits hover for a column it never drew:\n%s", errOut)
+	}
+}
+
+// runwayLineOf is the one summary line out of a rendered page, whichever
+// command rendered it. It is a helper rather than an inlined loop because two
+// tests below compare the line ACROSS commands, and a comparison whose two
+// halves were extracted by two loops would pass on a difference in the loops.
+func runwayLineOf(t *testing.T, out string) string {
+	t.Helper()
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "Runway:") {
+			return line
+		}
+	}
+	t.Fatalf("no runway line in:\n%s", out)
+	return ""
+}
+
+// A page with no rows on it carries no summary either, and the case that pins
+// that is the one where the fleet IS measurable.
+//
+// An empty store proves nothing on its own: it has no accounts, so it has no
+// basis, so view.RunwayLine returns "" and the line would be absent wherever
+// the print was placed. A store whose every account is disabled is the
+// separating fixture — the measurement is known and the listing still returns
+// before the table — and it is what fails if the print moves above that early
+// return. `ccdad list` printing a summary with nothing under it would also
+// break the older promise that an empty listing puts nothing at all on stdout.
+func TestAnEmptyStoreStillPrintsNoRunwayLine(t *testing.T) {
+	t.Run("no accounts at all", func(t *testing.T) {
+		isolate(t)
+		freezeClock(t, statusNow)
+
+		_, out, _, top := runRoot(t, "list")
+		if out != "" {
+			t.Fatalf("stdout = %q (%s), want nothing at all", out, top)
+		}
+	})
+
+	t.Run("every account disabled, with a measured fleet behind them", func(t *testing.T) {
+		isolate(t)
+		freezeClock(t, statusNow)
+		seedBurningFleet(t)
+		for _, idx := range []string{"1", "2"} {
+			if code, _, errOut, _ := runRoot(t, "disable", idx); code != ExitOK {
+				t.Fatalf("disable %s = %d (%s)", idx, code, errOut)
+			}
+		}
+		// The fixture is checked before it is used: if this fleet measured
+		// nothing, the assertion below would hold against an implementation
+		// that prints the line in the wrong place.
+		if _, all, _, _ := runRoot(t, "list", "--all"); !strings.Contains(all, "Runway:") {
+			t.Fatalf("the fixture states no runway even with rows, so the assertion below asserts nothing:\n%s", all)
+		}
+
+		_, out, _, _ := runRoot(t, "list")
+		if out != "" {
+			t.Fatalf("stdout = %q, want nothing: a summary with no rows under it is not a listing", out)
+		}
+	})
+}
+
+// The summary comes after the table, and only when there is a measurement
+// behind it.
+//
+// Placement is not cosmetic here. The rows go through a tabwriter, which holds
+// every line until Flush, so anything written to the same stream before that
+// call comes out ABOVE the table however far down the function it sits — which
+// would put the summary where list_test.go's rowFor scans for account rows and
+// change which line it matches.
+func TestTheRunwayLineFollowsTheTable(t *testing.T) {
+	t.Run("with a series", func(t *testing.T) {
+		isolate(t)
+		freezeClock(t, statusNow)
+		seedBurningFleet(t)
+
+		_, out, _, top := runRoot(t, "list")
+		lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+		runway, lastRow := -1, -1
+		for i, l := range lines {
+			switch {
+			case strings.HasPrefix(l, "Runway:"):
+				runway = i
+			case strings.Contains(l, "@example.com"):
+				lastRow = i
+			}
+		}
+		if runway < 0 {
+			t.Fatalf("no runway line at all (%s):\n%s", top, out)
+		}
+		if lastRow < 0 {
+			t.Fatalf("no account rows to place it against:\n%s", out)
+		}
+		if runway < lastRow {
+			t.Fatalf("the runway line is above the table, where an account row is looked for:\n%s", out)
+		}
+		// The span the rates were measured over rides on the line: a verdict
+		// from two hours of evidence and one from four support different
+		// claims, and only the reader can weigh that. It also pins that a real
+		// forecast reached the renderer rather than a zero value, which would
+		// print a line saying nothing with perfect confidence.
+		if got := lines[runway]; !strings.Contains(got, "basis 2h00m") {
+			t.Errorf("the line states no basis: %q", got)
+		}
+	})
+
+	t.Run("without one", func(t *testing.T) {
+		isolate(t)
+		freezeClock(t, statusNow)
+		// One reading and nothing older than it: the machine that has been
+		// recording for ten minutes.
+		seedAccountAddedAt(t, "uuid-a", "a@example.com", runwayAddedAt)
+		seedUsageEntry(t, "uuid-a", usage.Entry{
+			FetchedAt: statusNow,
+			Snapshot:  &usage.Snapshot{SevenDay: window(48, runwayWeeklyReset)},
+		})
+
+		_, out, _, _ := runRoot(t, "list")
+		if !strings.Contains(out, "a@example.com") {
+			t.Fatalf("the listing itself is missing, so the absence below is not the one under test:\n%s", out)
+		}
+		if strings.Contains(out, "Runway:") {
+			t.Errorf("a runway was stated with no reading behind it:\n%s", out)
+		}
+
+		_, jsonOut, _, _ := runRoot(t, "list", "--json")
+		if f, ok := statusJSON(t, jsonOut)["forecast"]; ok {
+			t.Errorf("forecast = %v was published on a machine with nothing measured; absent and zero are different answers", f)
+		}
+	})
+}
+
+// One fleet, one measurement, however it is asked for.
+//
+// The disabled account is the whole fixture. `--all` is a filter on the
+// LISTING, and a filter on a listing must not move a burn rate: the accounts
+// this measurement is taken over are the store's, not the rows about to be
+// printed. Without a disabled account in the store the two sets are the same
+// slice and an implementation that measured the wrong one would look right.
+//
+// The same figure has to come back from `ccdad status`, which is what makes
+// this one number rather than two that currently agree.
+//
+// The payload half is the load-bearing one, measured rather than assumed: with
+// the forecast built from the visible rows instead of the store's accounts, the
+// two rendered lines stayed IDENTICAL — half a fleet burning half as fast runs
+// dry at the same moment, and the line carries verdicts rather than rates. Only
+// the basis and the points under it moved, and only --json carries those.
+func TestListAndStatusStateOneRunway(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	seedBurningFleet(t)
+	if code, _, errOut, _ := runRoot(t, "disable", "2"); code != ExitOK {
+		t.Fatalf("disable = %d (%s)", code, errOut)
+	}
+
+	_, listed, _, _ := runRoot(t, "list")
+	_, all, _, _ := runRoot(t, "list", "--all")
+	_, dashboard, _, _ := runRoot(t, "status")
+	line := runwayLineOf(t, listed)
+	if got := runwayLineOf(t, all); got != line {
+		t.Errorf("--all changed the measurement:\n%q\n%q", line, got)
+	}
+	if got := runwayLineOf(t, dashboard); got != line {
+		t.Errorf("`ccdad list` and `ccdad status` state different runways:\n%q\n%q", line, got)
+	}
+
+	_, listOut, _, _ := runRoot(t, "list", "--json")
+	_, statusOut, _, _ := runRoot(t, "status", "--json")
+	listForecast, ok := statusJSON(t, listOut)["forecast"]
+	if !ok {
+		t.Fatalf("list --json publishes no forecast:\n%s", listOut)
+	}
+	if !reflect.DeepEqual(listForecast, statusJSON(t, statusOut)["forecast"]) {
+		t.Errorf("the two payloads describe one fleet two ways:\n%v\n%v",
+			listForecast, statusJSON(t, statusOut)["forecast"])
+	}
+}
+
+// A series that cannot be read costs the rates and nothing else, and the
+// listing says so out loud. A summary that simply vanished would read as a
+// fleet with nothing to report rather than as a file nobody could open, and
+// those two want different things from a reader: one is a quiet week, the other
+// is a store to go and look at.
+func TestListSaysSoWhenTheSeriesCannotBeRead(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	seedBurningFleet(t)
+	// Truncated JSON rather than an unreadable mode: a parse failure is the one
+	// a real store reaches after a crash mid-write, and it is the case where
+	// every level the table prints is still perfectly readable from the cache.
+	if err := os.WriteFile(mustPath(history.Path()), []byte("{\"accounts\":"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	code, out, errOut, top := runRoot(t, "list")
+	if code != ExitOK {
+		t.Fatalf("exit %d (%s); a listing renders whatever else is wrong\n%s", code, top, out)
+	}
+	if !strings.Contains(errOut, history.FileName) {
+		t.Errorf("stderr names no file that could not be read:\n%s", errOut)
+	}
+	if strings.Contains(out, "Runway:") {
+		t.Errorf("a runway was stated from a series that could not be read:\n%s", out)
+	}
+	if !strings.Contains(out, "a@example.com") {
+		t.Errorf("the rows the usage cache still answers for were dropped with it:\n%s", out)
 	}
 }
