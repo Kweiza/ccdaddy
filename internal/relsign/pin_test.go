@@ -49,9 +49,10 @@ func TestThePinnedKeyIsTheKeyCommittedAtTheRoot(t *testing.T) {
 		return k.KeyNum == committed.KeyNum && k.Key.Equal(committed.Key)
 	}
 	if !slices.ContainsFunc(Keys(), same) {
-		// %x formats the [8]byte array directly; there is no separate hex-encoding
-		// helper in this package (verify.go's own key-id error does the same).
-		t.Fatalf("the key in ccdaddy.pub (id %x) is not in this build's trust root; "+
-			"paste the SECOND line of ccdaddy.pub into publicKeys in keys.go", committed.KeyNum)
+		// keyIDHex, not %x: this is the id ccdaddy.pub's own comment line
+		// prints, and a maintainer diagnosing this failure needs to compare
+		// the two by eye.
+		t.Fatalf("the key in ccdaddy.pub (id %s) is not in this build's trust root; "+
+			"paste the SECOND line of ccdaddy.pub into publicKeys in keys.go", keyIDHex(committed.KeyNum))
 	}
 }
