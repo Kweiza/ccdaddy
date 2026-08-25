@@ -18,6 +18,25 @@ by `uuid` or `alias`.
 
 ### Fixed
 
+- **The `Runway:` line ran off the side of a narrow terminal.** It measures 139
+  display columns on a live fleet and the terminal reading it is commonly 80, so
+  the terminal folded it wherever its own right edge fell — on that measurement,
+  inside `2026-08-26 17:21 KST`. The clauses of that line are separated by a
+  middot, which makes a fold landing between two of them indistinguishable from
+  one landing inside a date.
+
+  `ccdad status` and `ccdad list` now fold it at its own separators and hang
+  every line after the first under the first clause; a line that continues ends
+  on the separator it broke at, so a finished line and a continued one can be
+  told apart. Nothing is dropped. A clause wider than the terminal overflows
+  rather than being cut, because this line ends in an absolute moment and a
+  span, and a cut through either reads as a shorter date rather than as a line
+  that did not fit. A destination that is not a terminal — a pipe, a redirect,
+  the file behind `>` — has no width, and receives the line exactly as it did
+  before, byte for byte. The dashboard has always cut this line at its own edge
+  and is unchanged: a page has a right edge it cannot spend, and a scrollback
+  has one it can.
+
 - **0.7.0's own notes said the MCP server could not be launched. It can, and
   has been able to since 0.6.0.** The entry above describes the new `runway`
   measurement as reaching "a `runway` tool in the MCP server — which still has
