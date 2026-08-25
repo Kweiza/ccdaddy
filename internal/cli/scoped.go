@@ -243,6 +243,12 @@ var scopedSessionAllowed = map[string]bool{
 	"ccdad doctor": true,
 	"ccdad export": true,
 
+	// runway reads the usage cache and the recorded series, both of which live
+	// under CCDAD_HOME. A session scopes Claude Code's credential and config
+	// homes and nothing else, so the fleet it measures is the same fleet from
+	// in here as from outside, and it writes nothing at all.
+	"ccdad runway": true,
+
 	// The terminal dashboard reads the same three documents `status` does,
 	// through the same function, so its answer is the true one for the shell it
 	// was asked in exactly as `list` and `which` are.

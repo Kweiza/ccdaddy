@@ -111,6 +111,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newMoveCmd())
 	root.AddCommand(newPrimaryCmd())
 	root.AddCommand(newStatusCmd())
+	root.AddCommand(newRunwayCmd())
 	root.AddCommand(newTuiCmd())
 	root.AddCommand(newConfigCmd())
 	root.AddCommand(newHoverCmd())

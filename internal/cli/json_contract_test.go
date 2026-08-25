@@ -172,6 +172,16 @@ func jsonContractCases() []jsonContractCase {
 		want: ExitFailure,
 		keys: []string{"daemon"},
 	}, {
+		path: "runway",
+		args: []string{"--json"},
+		// A machine with no series behind it, which is the row that matters:
+		// `forecast` is promised unconditionally, so it has to be here on the
+		// document that has the least to say. A row seeded with a measured
+		// fleet would pass while the key vanished on every cold machine.
+		setup: seedHealthyMachine,
+		want:  ExitOK,
+		keys:  []string{"forecast"},
+	}, {
 		path:  "doctor",
 		name:  "doctor/healthy",
 		args:  []string{"--json"},

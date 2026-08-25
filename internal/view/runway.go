@@ -166,3 +166,130 @@ func axisSegment(label string, a forecast.Axis, now time.Time, loc *time.Locatio
 // of evidence and four hours of it support very different claims, and the
 // reader is the one who has to weigh that.
 func runwayBasis(f forecast.Fleet) string { return "basis " + HumanDuration(f.Basis.Observed) }
+
+// The runway cells. `ccdad runway` draws two blocks of them and the axis block
+// is read against the per-account block below it, so every glyph in both has to
+// mean the same thing in both. They live here, beside RunwayLine, so a renderer
+// that grows a third block later cannot spell "could not be read" a second way.
+//
+// Rates are one decimal place. The endpoint reports whole percents, so the
+// second decimal of a rate derived from them is noise -- and a band whose ends
+// differ by more than a tenth is already reported as a band, by the verdict
+// rather than by the cell.
+
+// RunwayBurn is a measured consumption rate, in percentage points per hour.
+//
+// Low is what is printed and High is not: the upper bound is what a claim of
+// "holds" had to survive, so it belongs to the verdict cell rather than to this
+// one, and printing an interval in a column that is meant to be added up would
+// make the column unaddable.
+//
+// A band that cleared no gate is Unreadable and never 0.0. A measured zero, on
+// the other hand, IS a reading -- the account was up, was polled, and did not
+// burn -- and one live login at a time means most per-account rows carry one.
+func RunwayBurn(b forecast.Band) string {
+	if !b.Known {
+		return Unreadable
+	}
+	return fmt.Sprintf("%.1f pp/h", b.Low)
+}
+
+// RunwayReplenish is what an axis gives back, in percentage points per hour. It
+// always exists for a window axis: an axis with no accounts replenishes at
+// zero, which is a true statement about an empty fleet rather than a reading
+// nobody could take.
+func RunwayReplenish(perHour float64) string { return fmt.Sprintf("%.1f pp/h", perHour) }
+
+// RunwayCreditReplenish is the credit row's replenishment cell, and it is a
+// function taking nothing because the answer never varies: the endpoint reports
+// no renewal boundary for paid usage, so there is no quantity here to read.
+// That is NoQuantity and not Unreadable -- a reader told "?" would go looking
+// for a renewal rate that does not exist.
+func RunwayCreditReplenish() string { return NoQuantity }
+
+// RunwayVerdict is an axis's answer as a cell: whether the fleet holds at the
+// measured rate, and when it does not, the moment it empties.
+//
+// An undecided axis renders Unreadable rather than either answer. The two runs
+// of the band disagreeing means the evidence does not carry a claim, and both
+// "holds" and a date would be claims.
+func RunwayVerdict(a forecast.Axis, now time.Time, loc *time.Location) string {
+	switch a.Verdict {
+	case forecast.VerdictRunsDry:
+		if !a.HasDryAt {
+			// Unreachable through forecast.Of, which sets the verdict and the
+			// moment together, and rendered as the bare verdict anyway: a fleet
+			// dated to the year 1 is a worse answer than an undated one.
+			return "runs dry"
+		}
+		return runsDryAt(a.DryAt, now, loc)
+	case forecast.VerdictHolds:
+		return "holds"
+	default:
+		return Unreadable
+	}
+}
+
+// RunwayLeft is how much of an account's binding window is left, in percentage
+// points and bare. No percent sign: the column is headed LEFT, it is summed
+// into the fleet's points on the line above the table, and a percentage there
+// would be read against the wrong window -- the one the account is REPORTED on
+// elsewhere is not always this one.
+func RunwayLeft(pct float64) string { return fmt.Sprintf("%.0f", pct) }
+
+// RunwayEmpty is when the simulation first found one account out.
+//
+// "now" comes first, ahead of any recorded moment, because it is a fact about
+// this minute rather than a projection: an account that is out already must not
+// be rendered as a date the reader could decide to wait for.
+//
+// An account the run never found out is Unreadable. The run declining to empty
+// an account is not the run promising it survives -- the axis may simply have
+// held, or the band may have decided nothing.
+func RunwayEmpty(r forecast.AccountRow, now time.Time, loc *time.Location) string {
+	switch {
+	case r.OutNow:
+		return "now"
+	case r.HasEmpty:
+		return Timestamp(r.EmptyAt, loc)
+	default:
+		return Unreadable
+	}
+}
+
+// RunwayCreditBurn is the fleet's paid spend, in the currency's major unit per
+// hour with the code beside it. Two decimals, because the unit is money; the
+// code, because amounts in two currencies do not add and a bare figure invites
+// a reader to add them anyway.
+//
+// A figure that could not be assembled is Unreadable, never zero. Every way it
+// can fail -- mixed currencies, an uncapped account that is spending, no
+// measured spend at all -- is a reason to say nothing rather than to report a
+// fleet spending nothing, which would lengthen a runway made of money.
+func RunwayCreditBurn(c forecast.CreditFleet) string {
+	if !c.Known {
+		return Unreadable
+	}
+	return fmt.Sprintf("%.2f %s/h", c.SpendPerHour, c.Currency)
+}
+
+// RunwayCreditVerdict is when the fleet's paid balance reaches zero, or
+// Unreadable when the figure was refused.
+//
+// It means something different from the two window rows above it and the
+// command says so in prose beside the block: those ask whether resets replenish
+// faster than the fleet spends, and this is a balance divided by a rate with
+// nothing coming back.
+func RunwayCreditVerdict(c forecast.CreditFleet, now time.Time, loc *time.Location) string {
+	if !c.Known {
+		return Unreadable
+	}
+	return runsDryAt(c.DryAt, now, loc)
+}
+
+// runsDryAt is the one wording for "empties at this moment", so the axis rows
+// and the credit row under them cannot phrase one answer two ways. The span in
+// parentheses is what makes the date usable without arithmetic.
+func runsDryAt(at, now time.Time, loc *time.Location) string {
+	return fmt.Sprintf("runs dry %s  (in %s)", Timestamp(at, loc), HumanDuration(at.Sub(now)))
+}
