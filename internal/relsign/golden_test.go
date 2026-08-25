@@ -109,9 +109,6 @@ func dropPrefix(t *testing.T, sig []byte, line int) []byte {
 	return joinSig(l)
 }
 
-// pad grows the body past the bound with junk AFTER a complete, valid
-// signature: the bound has to be applied before the body is split, so a
-// well-formed prefix must not save it.
 // bloat grows a signature past a byte bound from INSIDE its trusted comment.
 // Appending to the end instead would only add a fifth line, and the line-count
 // check would then reject the file whether or not the size bound exists -- so
@@ -142,10 +139,14 @@ func TestGoldenSignaturesFromTheStockTool(t *testing.T) {
 		// wantMsg is set only on the one row where the sentinel is not enough
 		// to tell two error paths apart: ErrAlgorithm wraps both a recognized
 		// prehashed tag and a wholly unknown one, but only the former carries
-		// a remedy worth printing. A change that deletes the return statement
-		// producing that remedy, leaving the tag to fall into the generic
+		// a remedy worth printing. A change that deletes the whole `case
+		// algPrehashed:` clause, leaving the tag to fall into the generic
 		// default case, still satisfies errors.Is(err, ErrAlgorithm) -- so
-		// only a message check catches it.
+		// only a message check catches it. Deleting just the return statement
+		// inside that case is a different mutation and not this one: an empty
+		// case in Go is a no-op, not a fall-through, so execution would leave
+		// the switch having done nothing and this row would fail on the
+		// sentinel too, before the message is ever compared.
 		wantMsg string
 	}{
 		{"the signature a release publishes", []PublicKey{release}, sums, valid, goldenTag, nil, ""},
@@ -160,6 +161,17 @@ func TestGoldenSignaturesFromTheStockTool(t *testing.T) {
 		{"one flipped content byte", []PublicKey{release}, flipByte(sums, 3), valid, goldenTag, ErrSignature, ""},
 		{"one flipped signature byte", []PublicKey{release}, sums, flipSigByte(t, valid), goldenTag, ErrSignature, ""},
 		{"a tampered trusted comment", []PublicKey{release}, sums, retag(t, valid, "v9.9.9"), "v9.9.9", ErrSignature, ""},
+		// Same retag, but asking for the release the file was ACTUALLY signed
+		// for. The row above can't tell the two ed25519 checks apart from the
+		// trusted-comment check, because the wanted tag matches the tampered
+		// one either way it is ordered. This one can: with the global
+		// signature checked before the trusted comment is read, the bad
+		// comment breaks that signature and this returns ErrSignature. Read
+		// the comment before verifying it, and the same bytes name a release
+		// that was never asked for, and this returns ErrRelease instead --
+		// the wrong sentinel, pointed at the wrong remedy.
+		{"a tampered trusted comment, asking for the real release",
+			[]PublicKey{release}, sums, retag(t, valid, "v9.9.9"), goldenTag, ErrSignature, ""},
 		{"the prehashed algorithm", []PublicKey{release}, sums, prehash(t, valid), goldenTag, ErrAlgorithm, "install the current release with the installer"},
 		{"CRLF line endings", []PublicKey{release}, sums, []byte(strings.ReplaceAll(string(valid), "\n", "\r\n")), goldenTag, nil, ""},
 		{"a fifth line", []PublicKey{release}, sums, append(append([]byte{}, valid...), "extra\n"...), goldenTag, ErrMalformed, ""},

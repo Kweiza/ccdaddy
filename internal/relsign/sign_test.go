@@ -120,7 +120,11 @@ func secondLine(t *testing.T, file string) string {
 	t.Helper()
 	lines := strings.Split(strings.TrimRight(file, "\n"), "\n")
 	if len(lines) != 2 {
-		t.Fatalf("file has %d lines, want 2:\n%s", len(lines), file)
+		// The length, not the body: this helper is also called on the SECRET
+		// file GenerateKey produced, and that body is an ed25519 private key.
+		// It is an ephemeral per-run key, not the release key, but a test
+		// failure is not the place to start printing key material anyway.
+		t.Fatalf("file has %d lines, want 2 (%d bytes total)", len(lines), len(file))
 	}
 	if !strings.HasPrefix(lines[0], untrustedPrefix) {
 		t.Fatalf("line 1 = %q, want an untrusted comment", lines[0])
