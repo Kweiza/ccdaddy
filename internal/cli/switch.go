@@ -49,6 +49,26 @@ func chooseTarget(cmd *cobra.Command, s *store.Store, strategyName, model string
 	if ev.ConfigErr != nil {
 		fmt.Fprintf(stderr, "note: %v; using the built-in defaults.\n", ev.ConfigErr)
 	}
+	// Hover derives the ranking for itself, so the strategy this command was
+	// given never reached it: Options.withHover overwrites Strategy with
+	// headroom before Rank runs, which is what makes the flag rank exactly as
+	// if it had not been typed.
+	//
+	// This is the rule checkSwitchFlags already applies to an unplaceable
+	// --model, and it is SHARPER here: --strategy is mandatory for the
+	// targetless grammar, so under hover every attended switch types a value the
+	// engine drops. Refusing is not available for that same reason -- it would
+	// leave no way to run a targetless `ccdad switch` at all while hover is on
+	// -- so the flag is honoured as far as it goes and the override is named.
+	//
+	// Plan.Hover is the signal rather than a second read of the config, because
+	// it reports the pass THIS answer came from. Where no pass ran there was no
+	// ranking for the flag to have been dropped out of, and the two sentences
+	// the caller gets instead already say so.
+	if ev.Plan.Hover != nil {
+		fmt.Fprintf(stderr, "note: hover is on and derives the ranking for itself, so --strategy %s was not applied. "+
+			"Name an account to choose one yourself, or run 'ccdad hover off' to hand the ranking back.\n", strategyName)
+	}
 	if ev.Forced {
 		// --force is the explicit bypass of the anti-flap margins, and only
 		// of those.
@@ -153,7 +173,11 @@ func newSwitchCmd() *cobra.Command {
 			"--model names the model the session will run, which NARROWS the ranking: the\n" +
 			"weekly caps scoped to other models stop counting against an account, so one\n" +
 			"whose Opus week is spent can still be chosen for a Sonnet session. Caps that\n" +
-			"are not per-model always count.",
+			"are not per-model always count.\n\n" +
+			"While hover is on it derives the ranking for itself, so the strategy named here\n" +
+			"is not applied and the switch says so on stderr. --strategy is still required by\n" +
+			"the targetless grammar; name an ACCOUNT to choose one yourself, or turn hover\n" +
+			"off to hand the ranking back.",
 		Args:          atMostOneAccount("switch"),
 		SilenceUsage:  true,
 		SilenceErrors: true,
