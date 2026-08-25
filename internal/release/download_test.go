@@ -84,6 +84,35 @@ func TestDownloadRefusesAnOverLongBodyAndLeavesNoFile(t *testing.T) {
 	}
 }
 
+// The over-long-body test above never reaches the io.Copy error branch: a
+// body that is merely longer than the limit still arrives whole, so io.Copy
+// returns nil and the refusal happens at the length check AFTER it. A real
+// multi-megabyte asset is far more likely to fail by the connection resetting
+// mid-transfer, which IS the io.Copy error branch, and nothing exercised it:
+// deleting os.Remove(dest) from the copy-error path alone left a truncated
+// file on disk with the whole suite reporting ok.
+func TestDownloadRemovesAPartialFileOnAConnectionReset(t *testing.T) {
+	c, base := serve(t, func(w http.ResponseWriter, _ *http.Request) {
+		// A declared Content-Length longer than what is actually written is
+		// what makes the client's Body.Read return io.ErrUnexpectedEOF rather
+		// than a clean nil once the connection drops; panicking with
+		// http.ErrAbortHandler is the documented way to end a handler's
+		// connection early without net/http logging it as a crash.
+		w.Header().Set("Content-Length", "10000")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(strings.Repeat("x", 21)))
+		w.(http.Flusher).Flush()
+		panic(http.ErrAbortHandler)
+	})
+	dest := filepath.Join(t.TempDir(), "asset")
+	if _, _, err := c.Download(context.Background(), base+"/a", dest, 1<<20); err == nil {
+		t.Fatal("Download() accepted a stream that reset mid-transfer")
+	}
+	if _, err := os.Stat(dest); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("a reset download left %s behind (stat said %v)", dest, err)
+	}
+}
+
 func TestDownloadReportsAStatus(t *testing.T) {
 	c, base := serve(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
