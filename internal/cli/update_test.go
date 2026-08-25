@@ -864,8 +864,11 @@ func assertBinaryInstalled(t *testing.T, target string) {
 			target, got, want)
 	}
 	if runtime.GOOS == "windows" {
-		// A mode is not an ACL: Go reports a synthetic 0666/0777 here, so the
-		// bit says nothing about whether the file can be executed.
+		// A mode is not an ACL. os.Stat synthesises a regular file's mode from
+		// the read-only attribute alone — 0444 when it is set and 0666 when it
+		// is not, per os/types_windows.go — so no execute bit is ever reported
+		// and the check below would fire on every Windows run. Whether the file
+		// can be executed is not a question a mode answers here.
 		return
 	}
 	fi, err := os.Stat(target)
@@ -1900,7 +1903,13 @@ func TestUpdateReportsAFailedRestartAndStillSucceeds(t *testing.T) {
 	// A second run needs a second daemon: the first one really did stop it, so
 	// without this there is nothing running to fail to restart.
 	stubUpdateDaemon(t, true).spawnErr = errors.New("fork failed")
-	_, _, stderr, _ = runRoot(t, "update")
+	// The exit code is checked here too. Without it these two assertions can
+	// fire for a run that failed somewhere else entirely, and complain about
+	// the daemon while stderr holds a refusal about something quite different.
+	code, _, stderr, top := runRoot(t, "update")
+	if code != ExitOK {
+		t.Fatalf("second run exit = %d, want 0 (%s)", code, top)
+	}
 	if !strings.Contains(stderr, "could not be restarted") {
 		t.Errorf("stderr = %q, want it to say the daemon did not come back", stderr)
 	}
@@ -1914,15 +1923,19 @@ func TestUpdateReportsAFailedRestartAndStillSucceeds(t *testing.T) {
 // which is the only failure the caller can produce on demand.
 func TestUpdateReportsAFailedReplacement(t *testing.T) {
 	target, _, _ := updateWorld(t, "0.6.1", "v0.7.0")
-	d := stubUpdateDaemon(t, true)
 	// The staging directory is swept the moment the daemon stops, so the
-	// rename that follows has nothing to move.
-	d.onShutdown = func() {
-		matches, _ := filepath.Glob(filepath.Join(filepath.Dir(target), ".ccdad-update.*"))
-		for _, m := range matches {
-			_ = os.RemoveAll(m)
+	// rename that follows has nothing to move. Arranged as a closure because
+	// each run needs its own daemon: the first one really does stop the fake,
+	// and a second run would then never reach the shutdown that sweeps.
+	sweepOnShutdown := func() {
+		stubUpdateDaemon(t, true).onShutdown = func() {
+			matches, _ := filepath.Glob(filepath.Join(filepath.Dir(target), ".ccdad-update.*"))
+			for _, m := range matches {
+				_ = os.RemoveAll(m)
+			}
 		}
 	}
+	sweepOnShutdown()
 
 	code, stdout, _, _ := runRoot(t, "update", "--json")
 	if code != ExitFailure {
@@ -1942,6 +1955,72 @@ func TestUpdateReportsAFailedReplacement(t *testing.T) {
 	body, err := os.ReadFile(target)
 	if err != nil || string(body) != "the old ccdad\n" {
 		t.Errorf("the old binary is gone (%q, %v); a failed replacement must leave the machine as it was", body, err)
+	}
+
+	// The WORDS, which nothing pinned and which regressed once already. The
+	// file being gone is the ordinary cause of this arm, and the two facts a
+	// user needs are which file could not be moved and where it was going.
+	// Neither the OS's own phrasing nor its errno is asserted, because those
+	// differ between Unix and Windows for the same condition.
+	sweepOnShutdown()
+	_, _, stderr, _ := runRoot(t, "update")
+	if !strings.Contains(stderr, target) {
+		t.Errorf("stderr = %q, want it to name %s, which is where the binary was going", stderr, target)
+	}
+	if !strings.Contains(stderr, ".ccdad-update.") {
+		t.Errorf("stderr = %q, want it to name the staged file that could not be moved", stderr)
+	}
+	// And it must NOT say the file was altered. A swept staging directory is a
+	// machine condition, not tampering, and this arm is the likeliest place a
+	// user meets a failed replacement at all.
+	if strings.Contains(stderr, "hashes to the checksum") {
+		t.Errorf("stderr = %q; a file that is simply gone must not be reported as one that was "+
+			"altered under the check", stderr)
+	}
+}
+
+// The other way the replacement fails, and the one the re-hash exists for: the
+// staged file is rewritten after its digest was compared and after the smoke
+// run executed it.
+//
+// The daemon's shutdown is the seam. It fires at step 19, between the smoke run
+// and the rename, which is exactly the window a later line would be added into
+// — and the window the guard closes.
+func TestUpdateRefusesAStagedFileRewrittenAfterItsChecksumWasCompared(t *testing.T) {
+	target, _, _ := updateWorld(t, "0.6.1", "v0.7.0")
+	d := stubUpdateDaemon(t, true)
+	rewritten := 0
+	d.onShutdown = func() {
+		matches, _ := filepath.Glob(filepath.Join(filepath.Dir(target), ".ccdad-update.*", release.Asset()))
+		for _, m := range matches {
+			if os.WriteFile(m, []byte("bytes that were never digested\n"), 0o755) == nil {
+				rewritten++
+			}
+		}
+	}
+
+	code, stdout, _, _ := runRoot(t, "update", "--json")
+	if rewritten == 0 {
+		t.Fatal("the staged asset was never found, so this test arranged nothing")
+	}
+	if code != ExitFailure {
+		t.Fatalf("exit = %d, want %d", code, ExitFailure)
+	}
+	payload := decodePayload(t, stdout)
+	if got := payload["reason"]; got != "replace-failed" {
+		t.Errorf("reason = %v, want %q", got, "replace-failed")
+	}
+	if got := payload["updated"]; got != false {
+		t.Errorf("updated = %v, want false — nothing was installed", got)
+	}
+	assertBinaryUntouched(t, target)
+
+	// This one IS the altered case, so it gets the sentence the arm above must
+	// never carry.
+	stubUpdateDaemon(t, true).onShutdown = d.onShutdown
+	_, _, stderr, _ := runRoot(t, "update")
+	if !strings.Contains(stderr, "hashes to the checksum") {
+		t.Errorf("stderr = %q, want it to say the staged file no longer matches what was compared", stderr)
 	}
 }
 
