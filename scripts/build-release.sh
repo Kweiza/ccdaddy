@@ -90,7 +90,12 @@ notices="LICENSE NOTICE THIRD-PARTY-LICENSES.txt"
 # run produced. An asset left over from an earlier run with a different target
 # list would otherwise be hashed into the sums file and then attested and
 # published, with nothing in the release that explains where it came from.
-rm -f -- "$dist"/ccdad-* "$dist"/sha256sums.txt
+#
+# The signature is swept too even though this script never produces one: it is
+# written into this same directory by the release workflow, and a stale one left
+# beside a fresh sums file is worse than a missing one -- `gh release upload
+# dist/*` would publish a signature over checksums that no longer exist.
+rm -f -- "$dist"/ccdad-* "$dist"/sha256sums.txt "$dist"/sha256sums.txt.minisig
 for notice in $notices; do
 	rm -f -- "$dist/$notice"
 done
