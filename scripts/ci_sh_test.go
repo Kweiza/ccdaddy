@@ -377,6 +377,90 @@ func TestCICitesDoesNotReportACodePathThatIsNotADocument(t *testing.T) {
 	}
 }
 
+// A document this repository HAS, named the way a person names it. Resolving a
+// bare name only at the repository root failed this: `.github/PULL_REQUEST_-
+// TEMPLATE.md` is tracked, `see PULL_REQUEST_TEMPLATE.md` was reported as
+// "something no reader outside this machine has", and CONTRIBUTING.md promises
+// the opposite. The slug arm has always resolved a bare name this way.
+func TestCICitesAllowsADocumentTrackedOutsideTheRepositoryRoot(t *testing.T) {
+	root := throwawayRepo(t, map[string]string{
+		".github/PULL_REQUEST_TEMPLATE.md": "# what a pull request should say\n",
+		"internal/x/x.go": "package x\n\n// The checklist is not repeated here: " +
+			"see PULL_REQUEST_TEMPLATE.md for it.\nfunc X() {}\n",
+	})
+
+	out, code := runCI(t, root, "cites")
+	if code != 0 {
+		t.Fatalf("exit %d, want 0 — the document is tracked, in .github/\n%s", code, out)
+	}
+}
+
+// A PATH is matched whole, and this is the implementation that shape rules out:
+// resolving by suffix. `docs/x.md` must not be answered by an unrelated
+// `vendor/docs/x.md` that happens to end the same way.
+func TestCICitesResolvesADocumentPathWholeAndNotBySuffix(t *testing.T) {
+	root := throwawayRepo(t, map[string]string{
+		"vendor/docs/plans/a-thing.md": "# somebody else's copy\n",
+		"internal/x/x.go": "package x\n\n// The order is set out elsewhere: " +
+			"see docs/plans/a-thing.md for it.\nfunc X() {}\n",
+	})
+
+	out, code := runCI(t, root, "cites")
+	if code != 1 {
+		t.Fatalf("exit %d, want 1 — this repository has no docs/plans/a-thing.md\n%s", code, out)
+	}
+}
+
+// The pointing phrase is required, not the target shape alone. This is the
+// docpath arm's analogue of the ordinary-hyphenated-English test, and without
+// it the phrase could be dropped from the pattern with every other test green
+// while two correct lines in this repository went red.
+func TestCICitesDoesNotReportADocumentPathWithNoPointingPhrase(t *testing.T) {
+	root := throwawayRepo(t, map[string]string{
+		"internal/x/x.go": "package x\n\n// The generator writes docs/plans/a-thing.md " +
+			"and README.md into the output directory.\nfunc X() {}\n",
+	})
+
+	out, code := runCI(t, root, "cites")
+	if code != 0 {
+		t.Fatalf("exit %d, want 0 — naming a path is not pointing a reader at it\n%s", code, out)
+	}
+}
+
+// `.mdx` is not `.md`. Without a boundary after the extension the pattern
+// matches the prefix, and a correct citation of a tracked file is reported
+// under a name nobody wrote.
+func TestCICitesDoesNotTruncateALongerExtensionToMarkdown(t *testing.T) {
+	root := throwawayRepo(t, map[string]string{
+		"notes/guide.mdx": "# a document with a longer extension\n",
+		"internal/x/x.go": "package x\n\n// The walkthrough lives elsewhere: " +
+			"see notes/guide.mdx for it.\nfunc X() {}\n",
+	})
+
+	out, code := runCI(t, root, "cites")
+	if code != 0 {
+		t.Fatalf("exit %d, want 0 — the file is tracked and its name is not guide.md\n%s", code, out)
+	}
+}
+
+// One line is one problem. A hyphenated document name ending in `.md` trips the
+// slug arm, which stops before the extension, AND the path arm -- and the same
+// file:line printed twice reads as two things to go and fix.
+func TestCICitesPrintsALineOnceWhenBothArmsFlagIt(t *testing.T) {
+	root := throwawayRepo(t, map[string]string{
+		"internal/x/x.go": "package x\n\n// The measurement is not repeated here: " +
+			"see some-other-notes-file.md for it.\nfunc X() {}\n",
+	})
+
+	out, code := runCI(t, root, "cites")
+	if code != 1 {
+		t.Fatalf("exit %d, want 1\n%s", code, out)
+	}
+	if n := strings.Count(out, "some-other-notes-file.md for it."); n != 1 {
+		t.Errorf("the offending line is printed %d times, want 1:\n%s", n, out)
+	}
+}
+
 // runCIWithEnv is runCI with the child's environment named explicitly. The
 // plugin check branches on whether `claude` is on PATH, and a test that cannot
 // control PATH describes the developer's machine rather than the check.
