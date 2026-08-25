@@ -283,7 +283,7 @@ func signFor(t *testing.T, f *fakeRelease, sign signFunc, tag string) {
 }
 
 // stubUpdateDaemon describes the daemon this update meets, and stubs the
-// credential-home probe that startDaemonFrom runs first — a real probe answers
+// credential-home probe that startDaemon runs first — a real probe answers
 // from whatever is on the machine, which is not something a test can arrange.
 //
 // updateWorld installs the "no daemon" answer, so a test that reaches the end
@@ -367,6 +367,13 @@ func TestUpdatePreflightRefusalsTouchNoNetwork(t *testing.T) {
 		arrange func(t *testing.T, target string)
 		want    ExitCode
 		reason  string
+		// human is a fragment of what the SAME refusal says with no --json,
+		// and it is the only assertion in this file about the words a person
+		// reads. Every other test here passes the flag, so without it the
+		// whole human surface is unasserted: the branch that prints at all,
+		// the stream it prints on, and — the one that would actually hurt —
+		// which package-manager command the message names.
+		human string
 	}{{
 		name: "no key is pinned into this build",
 		arrange: func(t *testing.T, _ string) {
@@ -376,11 +383,13 @@ func TestUpdatePreflightRefusalsTouchNoNetwork(t *testing.T) {
 		},
 		want:   ExitBlocked,
 		reason: "no-pinned-key",
+		human:  "This ccdad was built with no release key, so it cannot verify an update.",
 	}, {
 		name:    "a dev build",
 		arrange: func(t *testing.T, _ string) { stubVersion(t, "dev") },
 		want:    ExitBlocked,
 		reason:  "dev-build",
+		human:   "This is a development build, so there is no released version to update from.",
 	}, {
 		name: "a Homebrew-owned binary",
 		arrange: func(t *testing.T, target string) {
@@ -388,6 +397,23 @@ func TestUpdatePreflightRefusalsTouchNoNetwork(t *testing.T) {
 		},
 		want:   ExitBlocked,
 		reason: "package-manager",
+		// The VERB, not just the manager. upgradeHint sits next to
+		// uninstallHint, they differ by one word, and a message that told
+		// someone to run `brew uninstall` when they asked to upgrade would be
+		// obeyed.
+		human: "Run 'brew upgrade ccdad' instead",
+	}, {
+		// The other half of upgradeHint. It is a row of its own rather than a
+		// note on the one above because with a single package manager in the
+		// table, deleting the Scoop branch leaves the function answering
+		// Homebrew for everything and the suite stays green.
+		name: "a Scoop-owned binary",
+		arrange: func(t *testing.T, target string) {
+			t.Setenv("SCOOP", filepath.Dir(target))
+		},
+		want:   ExitBlocked,
+		reason: "package-manager",
+		human:  "Run 'scoop update ccdad' instead",
 	}, {
 		name: "the binary cannot be located",
 		arrange: func(t *testing.T, _ string) {
@@ -397,6 +423,7 @@ func TestUpdatePreflightRefusalsTouchNoNetwork(t *testing.T) {
 		},
 		want:   ExitFailure,
 		reason: "no-executable-path",
+		human:  "ccdad cannot tell where its own binary is (no /proc on this machine)",
 	}} {
 		t.Run(c.name, func(t *testing.T) {
 			target, f, _ := updateWorld(t, "0.6.1", "v0.7.0")
@@ -414,12 +441,41 @@ func TestUpdatePreflightRefusalsTouchNoNetwork(t *testing.T) {
 				t.Errorf("payload carries a tag (%v); a pre-flight refusal happens before "+
 					"there is a release to have an opinion about", payload)
 			}
+			// The paths are carried only once they are KNOWN, which is why the
+			// report holds them behind a flag instead of emitting the zero
+			// value: the one refusal that fires before the binary is located
+			// must not answer "path": "". Written as a comparison rather than
+			// two arms so that neither half can be dropped without the other
+			// noticing.
+			if _, ok := payload["path"]; ok == (c.reason == "no-executable-path") {
+				t.Errorf("path present = %v under reason %q; every refusal that got far enough "+
+					"to locate the binary carries it, and no other does", ok, c.reason)
+			}
 			if got, want := payload["currentVersion"], "0.6.1"; got != want && c.reason != "dev-build" {
 				t.Errorf("currentVersion = %v, want %q — it is always present", got, want)
 			}
 			if got := payload["updated"]; got != false {
 				t.Errorf("updated = %v, want false — it is always present", got)
 			}
+
+			// The same refusal without the flag. The flag changes the
+			// representation and never the answer, so the code repeats — and
+			// stdout stays EMPTY, because the human surface belongs on stderr
+			// and a payload sharing that stream with a friendly sentence is
+			// the one thing the --json contract forbids.
+			code, stdout, stderr, _ := runRoot(t, "update")
+			if code != c.want {
+				t.Fatalf("without --json exit = %d, want %d", code, c.want)
+			}
+			if stdout != "" {
+				t.Errorf("stdout = %q; the words go to stderr", stdout)
+			}
+			if !strings.Contains(stderr, c.human) {
+				t.Errorf("stderr = %q, want it to contain %q", stderr, c.human)
+			}
+
+			// Last, so it covers BOTH runs: neither representation of a
+			// pre-flight refusal is allowed to reach the origin.
 			if asked := f.asked(); len(asked) != 0 {
 				t.Errorf("origin saw %v, want no request at all", asked)
 			}
@@ -506,8 +562,18 @@ func TestUpdatePayloadCarriesBothPathsOncePathsAreKnown(t *testing.T) {
 	if _, ok := payload["onPath"]; !ok {
 		t.Error("payload carries no onPath, and the paths are known")
 	}
-	if _, ok := payload["installDir"]; !ok {
-		t.Error("payload carries no installDir, and the paths are known")
+	// installDir by VALUE, and asked of executablePath rather than derived
+	// from target. The stub is a package var and is still installed here, so
+	// the unresolved spelling is available to this test without the fixture
+	// having to hand it back — and it is the only spelling that is correct on
+	// a machine whose temp directory is a symlink, where filepath.Dir(target)
+	// is the resolved directory and would assert the opposite of the rule.
+	invoked, err := executablePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := payload["installDir"], filepath.Dir(invoked); got != want {
+		t.Errorf("installDir = %v, want %q", got, want)
 	}
 }
 

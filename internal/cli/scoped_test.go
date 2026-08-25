@@ -177,6 +177,12 @@ func TestReadsAndStoreOnlyCommandsStillRunInsideARunSession(t *testing.T) {
 		{"hover status", []string{"hover", "status"}},
 		{"daemon status", []string{"daemon", "status"}},
 		{"daemon logs", []string{"daemon", "logs"}},
+		// update replaces the ccdad BINARY, which a session does not scope --
+		// and nine lines of scoped.go argue that verdict while nothing tested
+		// it. A rejected tag is what makes the row cheap and keeps it valid:
+		// the command returns at its first step, so this asserts the gate and
+		// nothing downstream of it, and it reaches no origin.
+		{"update", []string{"update", "--version", "zzz"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			isolate(t)
