@@ -486,6 +486,46 @@ func TestRunwayRendersTheCreditsItMeasured(t *testing.T) {
 	if !hasRow(squeezedLines(out), "Credits 2.00 USD/h - runs dry ") {
 		t.Errorf("no measured credit row in:\n%s", out)
 	}
+
+	// The same measurement through the other half of this command, because the
+	// two halves are published by different code and only one of them was
+	// pinned. Elsewhere in this file the credit object is asserted ABSENT on a
+	// fleet with no readable paid usage, which is the fail-closed side of the
+	// rule; a payload that never published the object at all would satisfy that
+	// assertion perfectly. This is the side that says the key exists when the
+	// money was read, and `ccdad status --json` and `ccdad list --json` carry
+	// this same object under this same key.
+	code, doc, _, top := runRoot(t, "runway", "--json")
+	if code != ExitOK {
+		t.Fatalf("code = %v, want ExitOK (%s)", code, top)
+	}
+	var parsed struct {
+		Forecast struct {
+			Credit *struct {
+				Currency     string  `json:"currency"`
+				SpendPerHour float64 `json:"spendPerHour"`
+				DryAt        string  `json:"dryAt"`
+			} `json:"credit"`
+		} `json:"forecast"`
+	}
+	if err := json.Unmarshal([]byte(doc), &parsed); err != nil {
+		t.Fatalf("stdout is not one document: %v\n%s", err, doc)
+	}
+	credit := parsed.Forecast.Credit
+	if credit == nil {
+		t.Fatalf("no credit object on a fleet whose paid usage was read:\n%s", doc)
+	}
+	// The currency is carried rather than assumed: a figure of 2.00 means
+	// nothing without it, and nothing in this payload names a default one.
+	if credit.Currency != "USD" {
+		t.Errorf("credit.currency = %q, want the currency the account reported", credit.Currency)
+	}
+	if credit.SpendPerHour != 2 {
+		t.Errorf("credit.spendPerHour = %v, want the two an hour the row above renders", credit.SpendPerHour)
+	}
+	if credit.DryAt == "" {
+		t.Error("credit.dryAt is empty; the balance runs out at a moment and the row above prints it")
+	}
 }
 
 // An account the rotation cannot switch to is not the fleet's runway.

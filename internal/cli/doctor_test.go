@@ -450,6 +450,49 @@ func TestDoctorReportsACorruptHistory(t *testing.T) {
 	}
 }
 
+// A document that cannot be READ at all splits the two rows apart: the series
+// fails and the usage cache only warns, on one and the same breakage.
+//
+// That is deliberate and it is the opposite of what the two do on a document
+// that cannot be PARSED, where both warn. The difference is what the loss costs.
+// usage.LoadCache degrades an unreadable cache to an empty one and reports it
+// through LoadError, because the next poll rewrites the file and every account
+// reads as unknown in the meantime — recoverable without a human. history's
+// WithHistory reloads before it writes and returns that error instead of saving,
+// so an unreadable history.json is never replaced by the next poll: it stops
+// accumulating until somebody moves it aside, and no other surface would ever
+// say so. A reader of these two rows will notice the asymmetry, so it is pinned
+// here rather than left to look like an oversight in whichever row they read
+// second.
+//
+// A directory where the file belongs, rather than chmod 0000: it is unreadable
+// for root as well, and containerised CI runs as root.
+func TestDoctorFailsOnAnUnreadableHistoryAndWarnsOnAnUnreadableCache(t *testing.T) {
+	for _, tc := range []struct {
+		file, check, level string
+		code               ExitCode
+	}{
+		{"history.json", "history", "fail", ExitFailure},
+		{"usage.json", "usage-cache", "warn", ExitOK},
+	} {
+		t.Run(tc.file, func(t *testing.T) {
+			isolate(t)
+			seedHealthyMachine(t)
+			if err := os.Mkdir(filepath.Join(mustPath(ccpath.StoreHome()), tc.file), 0o700); err != nil {
+				t.Fatal(err)
+			}
+
+			code, r, _ := runDoctor(t)
+			if got := r.level(t, tc.check); got != tc.level {
+				t.Errorf("%s = %q, want %q: %s", tc.check, got, tc.level, r.detail(t, tc.check))
+			}
+			if code != tc.code {
+				t.Errorf("doctor exited %v on an unreadable %s, want %v", code, tc.file, tc.code)
+			}
+		})
+	}
+}
+
 // Claude Code changing these internals between releases is the risk doctor
 // exists against. A credentials file ccdad cannot parse is the loudest form of
 // that, and switch deliberately refuses to repair one.

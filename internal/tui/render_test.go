@@ -880,31 +880,49 @@ func TestTheRunwayLineSitsUnderTheHeaderLineAndAboveTheNote(t *testing.T) {
 // it bites: with four accounts and a runway line the ladder drops the figure
 // block and lands on exactly twenty, so one wrapped row is one row over.
 //
+// The heights walk the rungs the line is taken away at, not just the one it
+// survives. Twenty is where it is kept with the figure block dropped; nineteen,
+// sixteen and twelve are the first height below each of the next three rungs for
+// this fixture's four rows, measured. A page rendered only at twenty pins the
+// renderer where the ladder's verdict happens to be true, and a renderer that
+// consulted the WORDING rather than the plan — drawing whenever the line is
+// non-empty — passes every one of those assertions while putting twenty rows in
+// a nineteen-row terminal, seventeen in a sixteen and thirteen in a twelve. That
+// is the same one-row overrun as the wrap above, arriving from the other side,
+// and the equality below is what tells the two apart: the page draws the line
+// exactly when Plan budgeted a row for it.
+//
 // This is also the one line on the page that carries a non-ASCII byte: the
 // shared wording separates its clauses with U+00B7, one display column wide,
 // which is what the width functions here measure and what the count below
 // compares against.
 func TestTheRunwayLineIsCutToTheFrameRatherThanWrappingIt(t *testing.T) {
-	const height = 20
-	for _, w := range []int{113, 80, 56, 43, 35} {
-		m := fixtureModel(w, height)
-		m.Snap.Forecast, m.Snap.HasForecast = fixtureFleet(), true
-		body := m.Body()
-		if strings.ContainsRune(body, 0x1b) {
-			t.Fatalf("at %d columns the page with a runway line carries an escape byte", w)
-		}
-		lines := strings.Split(body, "\n")
-		if len(lines) > height {
-			t.Errorf("at %dx%d the page with a runway line is %d rows, %d more than the terminal has:\n%s",
-				w, height, len(lines), len(lines)-height, body)
-		}
-		for i, line := range lines {
-			if got := ansi.StringWidth(line); got > w {
-				t.Errorf("at %d columns line %d is %d columns wide: %q", w, i, got, line)
+	for _, height := range []int{20, 19, 16, 12} {
+		for _, w := range []int{113, 80, 56, 43, 35} {
+			m := fixtureModel(w, height)
+			m.Snap.Forecast, m.Snap.HasForecast = fixtureFleet(), true
+			body := m.Body()
+			if strings.ContainsRune(body, 0x1b) {
+				t.Fatalf("at %dx%d the page with a runway line carries an escape byte", w, height)
 			}
-		}
-		if !strings.Contains(body, "Runway: ") {
-			t.Errorf("at %d columns the runway line vanished entirely rather than being cut", w)
+			lines := strings.Split(body, "\n")
+			if len(lines) > height {
+				t.Errorf("at %dx%d the page with a runway line is %d rows, %d more than the terminal has:\n%s",
+					w, height, len(lines), len(lines)-height, body)
+			}
+			for i, line := range lines {
+				if got := ansi.StringWidth(line); got > w {
+					t.Errorf("at %dx%d line %d is %d columns wide: %q", w, height, i, got, line)
+				}
+			}
+			// len(m.Snap.Rows) rather than a literal, and false for the notice,
+			// because Body plans with exactly those: a mismatch here would
+			// compare the page against a layout nobody rendered.
+			want := Plan(m.Set, w, height, len(m.Snap.Rows), false, true).Runway
+			if got := strings.Contains(body, "Runway: "); got != want {
+				t.Errorf("at %dx%d the page draws a runway line: %v; the height ladder budgeted a row for one: %v:\n%s",
+					w, height, got, want, body)
+			}
 		}
 	}
 }

@@ -326,12 +326,18 @@ func TestStatusReportsAnUnprobeableLockAsUnknown(t *testing.T) {
 // because it is measured — several readings taken over hours, with the span
 // they cover printed beside the answer.
 //
-// This test used to forbid the bare substring "exhaust" anywhere in human
-// stdout. With two projections in the tree that proxy no longer separates the
-// one that was refused from the one that was approved, so what it stood for is
-// asserted directly: on a machine carrying BOTH, the single-reading
-// projection's identifiers and the moment it extrapolated to stay off stdout,
-// and --json still carries them.
+// The bare substring "exhaust" is the oldest assertion here and it stays, with
+// two narrower ones added beside it. A second projection in the tree does not
+// blunt it, measured: nothing the approved line prints contains the substring —
+// the shared wording spells "dry", "holds", "cannot tell yet" and "basis" — and
+// this table's columns are IDX through AGE, none of which is a projected
+// moment. So it still separates the refused projection from the approved one,
+// and it is the only assertion here that would catch a leak spelled as a
+// relative span, which is how every moment on this table is rendered.
+//
+// The two beside it rule out what a substring cannot. The key names catch a
+// payload field copied verbatim onto stdout, and the rendered timestamp catches
+// a column that printed the extrapolated moment under some other heading.
 func TestTheSingleReadingProjectionIsStillJSONOnly(t *testing.T) {
 	isolate(t)
 	freezeClock(t, statusNow)
@@ -347,7 +353,7 @@ func TestTheSingleReadingProjectionIsStillJSONOnly(t *testing.T) {
 	if !strings.Contains(human, "Runway:") {
 		t.Fatalf("no measured line on stdout, so nothing below separates the approved projection from the refused one:\n%s", human)
 	}
-	for _, forbidden := range []string{"projectedExhaustionAt", "willLastToReset"} {
+	for _, forbidden := range []string{"exhaust", "projectedExhaustionAt", "willLastToReset"} {
 		if strings.Contains(human, forbidden) {
 			t.Errorf("the human dashboard mentions %q, which is kept to --json:\n%s", forbidden, human)
 		}
