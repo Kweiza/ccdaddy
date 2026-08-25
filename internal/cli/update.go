@@ -564,17 +564,20 @@ func runUpdate(cmd *cobra.Command, opts updateOptions) error {
 		}
 	}
 
-	// ---------------------------- BEGIN PLACEHOLDER ----------------------------
-	// Everything from this comment down to END PLACEHOLDER is scaffolding, and
-	// it is meant to be deleted WHOLE — comment and return together. Whoever
-	// writes the last step, which is what the user is told the command did,
-	// replaces this block; leaving the comment behind would leave it sitting
-	// above live code, describing something that is no longer true.
-	//
-	// It exists so this command RUNS while that is still being written: the
-	// work above has happened and nothing reports it. Nothing asserts on it.
+	// Step 22. The absolute path is printed because it is the fact a user needs
+	// when the version does not appear to change.
+	say(cmd, opts.asJSON, "Replaced %s: %s -> %s", target, rep.current, want)
+
+	// The note is computed against invokedDir and not against the directory the
+	// file actually lives in. It is more load-bearing here than in install.sh:
+	// an update that is off PATH replaces one binary while `ccdad` keeps
+	// resolving to an older one somewhere else, and the user sees a successful
+	// update and no change at all.
+	if !rep.onPath {
+		say(cmd, opts.asJSON, "%s is not on your PATH, so `ccdad` may still resolve to another "+
+			"binary. Run `%s setup-path`.", invokedDir, target)
+	}
 	return rep.emit(cmd, opts.asJSON, ExitOK, "", "")
-	// ----------------------------- END PLACEHOLDER -----------------------------
 }
 
 // upgradeHint is the package manager's own upgrade command. uninstallHint is

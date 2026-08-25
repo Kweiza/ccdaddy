@@ -1764,3 +1764,110 @@ func TestUpdateReportsAFailedReplacement(t *testing.T) {
 		t.Errorf("the old binary is gone (%q, %v); a failed replacement must leave the machine as it was", body, err)
 	}
 }
+
+func TestUpdatePrintsWhatItDid(t *testing.T) {
+	target, _, _ := updateWorld(t, "0.6.1", "v0.7.0")
+	_ = stubUpdateDaemon(t, true)
+
+	code, _, stderr, top := runRoot(t, "update")
+	if code != ExitOK {
+		t.Fatalf("exit = %d, want 0 (%s)", code, top)
+	}
+	for _, line := range []string{
+		"Stopped the ccdad daemon",
+		"Verified sha256sums.txt against ccdad's release key.",
+		"Replaced " + target + ": 0.6.1 -> 0.7.0",
+		"Started the ccdad daemon",
+	} {
+		if !strings.Contains(stderr, line) {
+			t.Errorf("stderr does not contain %q.\n%s", line, stderr)
+		}
+	}
+}
+
+// Everything the command says goes to stderr, and --json silences the prose it
+// owns. stdout is the payload and nothing else, which the tree-wide contract
+// test also pins.
+func TestUpdateJSONSaysNothingItselfOnStderr(t *testing.T) {
+	_, _, _ = updateWorld(t, "0.6.1", "v0.7.0")
+	_ = stubUpdateDaemon(t, true)
+
+	code, stdout, stderr, _ := runRoot(t, "update", "--json")
+	if code != ExitOK {
+		t.Fatalf("exit = %d, want 0", code)
+	}
+	if strings.Contains(stderr, "Replaced ") || strings.Contains(stderr, "Verified ") {
+		t.Errorf("--json printed the human prose on stderr:\n%s", stderr)
+	}
+	if len(decodePayload(t, stdout)) == 0 {
+		t.Error("no payload on stdout")
+	}
+}
+
+// The PATH note is computed against the UNRESOLVED directory. An install that
+// is a symlink on PATH pointing at a real file under /opt is the shape this
+// exists for: warning about /opt would train the user to ignore the one message
+// that matters.
+func TestThePathNoteIsComputedFromTheDirectoryTheInvocationCameFrom(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating a symlink needs a privilege the runner does not grant; the note's input is the same code either way")
+	}
+	isolate(t)
+	t.Setenv("HOMEBREW_PREFIX", "")
+	t.Setenv("SCOOP", "")
+	stubVersion(t, "0.6.1")
+
+	realDir := t.TempDir() // never on PATH
+	linkDir := t.TempDir() // on PATH
+	real := filepath.Join(realDir, "ccdad")
+	if err := os.WriteFile(real, []byte("the old ccdad\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(linkDir, "ccdad")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks are not available here: %v", err)
+	}
+	saved := executablePath
+	t.Cleanup(func() { executablePath = saved })
+	executablePath = func() (string, error) { return link, nil }
+	t.Setenv("PATH", linkDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	newFakeRelease(t, "v0.7.0")
+	_ = stubUpdateDaemon(t, false)
+
+	code, _, stderr, top := runRoot(t, "update")
+	if code != ExitOK {
+		t.Fatalf("exit = %d, want 0 (%s)", code, top)
+	}
+	if strings.Contains(stderr, "not on your PATH") {
+		t.Errorf("the PATH note fired for a symlinked install that IS on PATH:\n%s", stderr)
+	}
+	resolved, err := filepath.EvalSymlinks(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stderr, "Replaced "+resolved) {
+		t.Errorf("stderr = %q, want the RESOLVED file to be the one named as replaced", stderr)
+	}
+}
+
+// And the arm that must fire, exactly once. An update that is off PATH replaces
+// one binary while `ccdad` keeps resolving to an older one somewhere else, and
+// the user sees a successful update and no change.
+func TestThePathNoteFiresOnceWhenTheDirectoryIsNotOnPath(t *testing.T) {
+	target, _, _ := updateWorld(t, "0.6.1", "v0.7.0")
+	_ = stubUpdateDaemon(t, false)
+	t.Setenv("PATH", filepath.Join(t.TempDir(), "somewhere-else"))
+
+	code, _, stderr, top := runRoot(t, "update")
+	if code != ExitOK {
+		t.Fatalf("exit = %d, want 0 (%s)", code, top)
+	}
+	if n := strings.Count(stderr, "not on your PATH"); n != 1 {
+		t.Errorf("the PATH note appeared %d times, want 1:\n%s", n, stderr)
+	}
+	if !strings.Contains(stderr, "setup-path") {
+		t.Errorf("stderr = %q, want the note to name the command that fixes it", stderr)
+	}
+	_ = target
+}
