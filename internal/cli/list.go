@@ -3,7 +3,6 @@ package cli
 import (
 	"fmt"
 	"strings"
-	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -179,8 +178,8 @@ func newListCmd() *cobra.Command {
 					"note: hover is on; LEFT is how much of the window is left, and which window a row reports is chosen by the thresholds hover derived per account rather than by a value in config.toml. 'ccdad hover status' prints them.")
 			}
 
-			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "  IDX\tACCOUNT\tTYPE\tTIER\tLEFT\tRESETS IN")
+			out, pal := renderTarget(cmd)
+			cells := make([][]string, 0, len(quota))
 			for _, r := range quota {
 				a := r.Account
 				// An account can carry both flags at once, and they say
@@ -207,18 +206,31 @@ func newListCmd() *cobra.Command {
 				if len(flags) > 0 {
 					suffix = "  (" + strings.Join(flags, ", ") + ")"
 				}
-				fmt.Fprintf(w, "%s %d\t%s\t%s\t%s\t%s\t%s%s\n", r.Marker(), a.Idx, r.ListLabel(), a.Kind,
-					r.TierLabel(), r.LeftLabel(), r.ResetsLabel(now), suffix)
+				// The flags ride on the RESETS IN cell rather than in a column
+				// of their own, which is what the %s%s in the format string
+				// this replaced was doing. A column would align them, and a
+				// suffix that belongs to one account reads better beside that
+				// account's own reset than at a fixed offset far to its right.
+				cells = append(cells, []string{
+					fmt.Sprintf("%s %d", r.Marker(), a.Idx), r.ListLabel(), a.Kind.String(),
+					r.TierLabel(), r.LeftLabel(), r.ResetsLabel(now) + suffix,
+				})
 			}
-			if err := w.Flush(); err != nil {
+			if err := columns(out, []string{"  IDX", "ACCOUNT", "TYPE", "TIER", "LEFT", "RESETS IN"},
+				cells, quotaCellStyle(pal, quota, 4, view.Row.LeftLabel)); err != nil {
 				return err
 			}
 			// After the table, and after the early return above it, which is
 			// what keeps a listing with no rows from carrying a summary of
-			// them. Position is what decides that and nothing else does: the
-			// tabwriter holds every row until Flush, so a line written to the
-			// same stream at any earlier point comes out ABOVE the table, where
-			// list_test.go's rowFor scans for account rows.
+			// them. Position is what decides that, and now it decides it
+			// plainly: columns() writes when it is called, so a line written
+			// after it comes out after it, where list_test.go's rowFor has
+			// already stopped scanning for account rows. The tabwriter this
+			// replaced buffered every row until Flush, which meant a line
+			// written at ANY earlier point still landed above the table -- the
+			// ordering was the same and the reason was not, and a reader who
+			// moves this line is now moving the bytes rather than only the
+			// source.
 			//
 			// The empty string is the gate. view.RunwayLine returns one when
 			// there is no measurement, and that is how this renderer, `ccdad
@@ -229,12 +241,31 @@ func newListCmd() *cobra.Command {
 			// touches no environment, so the caller nearest the reader chooses
 			// the zone, and view.Timestamp always prints which one it was.
 			//
-			// The width is the writer's, and zero for anything that is not a
-			// terminal; see outWidth. `ccdad status` folds the same line the
-			// same way, and both leave it alone when nobody is watching.
+			// The width is the terminal's, and zero for anything that is not
+			// one; see outWidth. `ccdad status` folds the same line the same
+			// way, and both leave it alone when nobody is watching.
+			//
+			// Measured on cmd.OutOrStdout() and NOT on out, which is the same
+			// destination wearing a palette. outWidth answers by asserting
+			// *os.File, out is colorWriter's wrapper around one, and a wrapper
+			// fails that assertion -- so a width read off it is 0 on every
+			// terminal there is and the fold silently stops happening, on a
+			// branch where nothing else about the line changed. Nothing catches
+			// that: git merges the two edits without a word, every test in this
+			// package stubs the outWidth seam, and the only reader who can see
+			// it is a person at an 80-column window. See TestWidthIsMeasuredOn
+			// TheFileAndNotTheDecoratedWriter, which is what turns the next such
+			// merge red.
+			//
+			// The rejected alternative was an Unwrap() io.Writer on
+			// colorWriter's type with outWidth following the chain. That is a
+			// general mechanism -- one every future decorator would have to
+			// remember to implement, and one that quietly re-enables the fold
+			// for a wrapper that genuinely does change the usable width -- put
+			// behind two call sites. A palette does not change how wide the
+			// terminal is, so the width is taken from the thing that has one.
 			if line := view.RunwayLine(f, now, time.Local); line != "" {
-				w := cmd.OutOrStdout()
-				fmt.Fprintf(w, "\n%s\n", view.RunwayWrap("Runway:  ", line, outWidth(w)))
+				fmt.Fprintf(out, "\n%s\n", view.RunwayWrap("Runway:  ", line, outWidth(cmd.OutOrStdout())))
 			}
 			return nil
 		},

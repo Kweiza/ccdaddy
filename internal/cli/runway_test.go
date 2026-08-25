@@ -212,10 +212,10 @@ func TestRunwayRendersTheMeasuredFleet(t *testing.T) {
 		t.Fatalf("code = %v, want ExitOK (%s)", code, top)
 	}
 	// The two header lines are this file's own formatting and are asserted
-	// byte for byte. The table rows below go through a tabwriter, whose column
-	// widths are arithmetic over the whole block, so they are compared with
-	// runs of spaces collapsed: what is being pinned is which cell carries
-	// which figure, not how wide the widest email address was.
+	// byte for byte. The table rows below go through columns(), whose widths
+	// are arithmetic over the whole block, so they are compared with runs of
+	// spaces collapsed: what is pinned is which cell carries which figure, not
+	// how wide the widest email address was.
 	for _, want := range []string{
 		"Basis:   the last 2h00m  (2 accounts, 10 readings, 0 unreadable)",
 		"Fleet:   104 of 200 points left on the weekly axis",
@@ -257,7 +257,7 @@ func TestRunwayRendersTheMeasuredFleet(t *testing.T) {
 }
 
 // squeezedLines is stdout with every run of whitespace inside a line collapsed
-// to one space, so a tabwriter's padding does not have to be recomputed by hand
+// to one space, so the table's padding does not have to be recomputed by hand
 // in every assertion above.
 func squeezedLines(out string) []string {
 	var lines []string
@@ -754,11 +754,12 @@ func runwayFleetObject(t *testing.T) map[string]any {
 // count from a second mechanism would be free to say "you have enough accounts"
 // under a row that says "runs dry".
 //
-// Position is asserted rather than presence alone. Everything above the rows
-// goes to the same stream and the rows go through a tabwriter that holds them
-// until Flush, so a line written anywhere before that call still lands above the
-// table; what the position in the function decides is which side of the axis
-// block's prose it falls on.
+// Position is asserted rather than presence alone. columns() writes the two
+// tables when it is called, so a line lands above the per-account table because
+// it is written above it -- the tabwriter this replaced buffered until Flush
+// and put a line written at ANY earlier point in the same place, which made the
+// ordering true for a reason the source did not show. What the position in the
+// function decides is which side of the axis block's prose it falls on.
 func TestRunwayRendersTheAccountsLineUnderTheAxisBlock(t *testing.T) {
 	isolate(t)
 	freezeClock(t, statusNow)

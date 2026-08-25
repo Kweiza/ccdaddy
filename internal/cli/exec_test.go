@@ -138,3 +138,42 @@ func TestFreshRootExecPropagatesTheParentsContext(t *testing.T) {
 		t.Error("the fresh root's context does not carry a value set on the parent's")
 	}
 }
+
+// "internal/mcpsrv is excluded by name" is not exclusion, and this is the test
+// that says so. colorprofile gates its NO_COLOR early return on the destination
+// being a terminal, so NO_COLOR does not beat CLICOLOR_FORCE off one: measured,
+// NO_COLOR=1 CLICOLOR_FORCE=1 into a bytes.Buffer resolves ANSI256. A developer
+// or a CI runner that exports CLICOLOR_FORCE would otherwise put SGR bytes
+// inside every MCP tool result and inside every echo of a mutating keypress in
+// the dashboard, and a JSON tool result is the one consumer with no way to
+// object. The exclusion is therefore structural -- the fresh root resolves the
+// None theme whatever the writer and whatever the environment -- and that is
+// what this asserts, with both variables set the wrong way round.
+func TestTheMCPSeamEmitsNoEscapeByteWithColourForced(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	seedBurningFleet(t)
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("TTY_FORCE", "1")
+	t.Setenv("CLICOLOR_FORCE", "1")
+	t.Setenv("NO_COLOR", "1")
+
+	exec := freshRootExec(NewRootCmd())
+	for _, argv := range [][]string{{"status"}, {"list"}, {"doctor"}, {"daemon", "status"}} {
+		_, stdout, stderr := exec(argv)
+		if strings.ContainsRune(stdout, 0x1b) {
+			t.Errorf("`%s` wrote an escape byte into a tool result: %q", strings.Join(argv, " "), stdout)
+		}
+		if strings.ContainsRune(stderr, 0x1b) {
+			t.Errorf("`%s` wrote an escape byte onto the seam's stderr: %q", strings.Join(argv, " "), stderr)
+		}
+	}
+	// The control the assertion above needs: the same commands, the same
+	// environment, through the ordinary root, DO carry colour. Without it this
+	// test passes just as happily against a build where colour was never wired
+	// up at all.
+	if _, out, _, _ := runRoot(t, "status"); !strings.ContainsRune(out, 0x1b) {
+		t.Fatalf("the ordinary root emitted no escape byte either, so the MCP "+
+			"assertion above proves nothing:\n%q", out)
+	}
+}

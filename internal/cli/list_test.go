@@ -989,11 +989,9 @@ func TestAnEmptyStoreStillPrintsNoRunwayLine(t *testing.T) {
 // The summary comes after the table, and only when there is a measurement
 // behind it.
 //
-// Placement is not cosmetic here. The rows go through a tabwriter, which holds
-// every line until Flush, so anything written to the same stream before that
-// call comes out ABOVE the table however far down the function it sits — which
-// would put the summary where list_test.go's rowFor scans for account rows and
-// change which line it matches.
+// Placement is not cosmetic here. columns() writes where it is called, so a
+// summary written before it would land where list_test.go's rowFor scans for
+// account rows and change which line it matches.
 func TestTheRunwayLineFollowsTheTable(t *testing.T) {
 	t.Run("with a series", func(t *testing.T) {
 		isolate(t)

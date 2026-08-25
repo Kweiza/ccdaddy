@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -223,7 +222,7 @@ func fleetForecast(accounts []store.Account, cache *usage.Cache, now time.Time) 
 // renderRunway draws the human answer: the basis it was measured from, the
 // fleet's remaining points, one row per axis and one row per account.
 //
-// The two blocks are separate tabwriters on purpose. They describe different
+// The two blocks are separate tables on purpose. They describe different
 // things and share no column, so aligning them together would pad the axis rows
 // out to the width of an email address.
 func renderRunway(cmd *cobra.Command, f forecast.Fleet, accounts []store.Account, now time.Time) error {
@@ -281,18 +280,14 @@ func renderRunway(cmd *cobra.Command, f forecast.Fleet, accounts []store.Account
 	loc := time.Local
 
 	fmt.Fprintln(out)
-	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "  AXIS\tBURN\tREPLENISHES\tVERDICT")
-	fmt.Fprintf(w, "  5-hour\t%s\t%s\t%s\n",
-		view.RunwayBurn(f.FiveHour.Burn), view.RunwayReplenish(f.FiveHour.Replenish),
-		view.RunwayVerdict(f.FiveHour, now, loc))
-	fmt.Fprintf(w, "  7-day\t%s\t%s\t%s\n",
-		view.RunwayBurn(f.Weekly.Burn), view.RunwayReplenish(f.Weekly.Replenish),
-		view.RunwayVerdict(f.Weekly, now, loc))
-	fmt.Fprintf(w, "  Credits\t%s\t%s\t%s\n",
-		view.RunwayCreditBurn(f.Credit), view.RunwayCreditReplenish(),
-		view.RunwayCreditVerdict(f.Credit, now, loc))
-	if err := w.Flush(); err != nil {
+	if err := columns(out, []string{"  AXIS", "BURN", "REPLENISHES", "VERDICT"}, [][]string{
+		{"  5-hour", view.RunwayBurn(f.FiveHour.Burn), view.RunwayReplenish(f.FiveHour.Replenish),
+			view.RunwayVerdict(f.FiveHour, now, loc)},
+		{"  7-day", view.RunwayBurn(f.Weekly.Burn), view.RunwayReplenish(f.Weekly.Replenish),
+			view.RunwayVerdict(f.Weekly, now, loc)},
+		{"  Credits", view.RunwayCreditBurn(f.Credit), view.RunwayCreditReplenish(),
+			view.RunwayCreditVerdict(f.Credit, now, loc)},
+	}, nil); err != nil {
 		return err
 	}
 	// The credit row means something different from the two above it, and a
@@ -311,8 +306,7 @@ func renderRunway(cmd *cobra.Command, f forecast.Fleet, accounts []store.Account
 	for _, a := range accounts {
 		labels[a.UUID] = a
 	}
-	rw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(rw, "  IDX\tACCOUNT\tWINDOW\tLEFT\tBURN\tEMPTY")
+	cells := make([][]string, 0, len(f.Rows))
 	for _, r := range f.Rows {
 		// The forecast knows uuids and nothing else, so the label is resolved
 		// here. An account the store cannot name is still rowed under its uuid:
@@ -324,10 +318,15 @@ func renderRunway(cmd *cobra.Command, f forecast.Fleet, accounts []store.Account
 			idx, label = fmt.Sprintf("%d", a.Idx), a.Label()
 		}
 		window, left, burn := view.RunwayRowCells(r)
-		fmt.Fprintf(rw, "  %s\t%s\t%s\t%s\t%s\t%s\n", idx, label, window,
-			left, burn, view.RunwayEmpty(r, now, loc))
+		// The two leading spaces are part of the IDX cell, exactly as they were
+		// part of the format string this replaced: they indent the block under
+		// the basis lines above it, and the header cell carries the same two so
+		// the column measures the same.
+		cells = append(cells, []string{
+			"  " + idx, label, window, left, burn, view.RunwayEmpty(r, now, loc),
+		})
 	}
-	return rw.Flush()
+	return columns(out, []string{"  IDX", "ACCOUNT", "WINDOW", "LEFT", "BURN", "EMPTY"}, cells, nil)
 }
 
 // runwayBasisLine is the evidence the answer rests on, printed above it so a
