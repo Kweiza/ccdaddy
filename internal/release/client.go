@@ -2,11 +2,14 @@ package release
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 
 	"github.com/Kweiza/ccdaddy/internal/buildinfo"
@@ -209,4 +212,72 @@ func (c *Client) Latest(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("%s redirected to %s, whose last segment is not a version", u, target.Path)
 	}
 	return v.Tag(), nil
+}
+
+// Download streams a URL into dest, returning the lowercase hex sha256 of what
+// arrived and how many bytes it was.
+//
+// The body goes through the hasher on its way to disk rather than being
+// buffered and hashed afterwards: the asset is megabytes, and a version that
+// read it into memory first would hold the whole thing twice.
+//
+// This step owns the file's durability and its mode, because it is the code
+// holding the open handle. Sync before close, then Chmod EXPLICITLY after the
+// close — a create mode is masked by umask, and install.sh's bare chmod 0755
+// defeats umask deliberately. Whatever renames this file afterwards therefore
+// does renames and nothing else.
+//
+// A failed download removes dest. A partial file left in a directory on the
+// user's PATH under a plausible name is worse than no file.
+func (c *Client) Download(ctx context.Context, rawURL, dest string, limit int64) (string, int64, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return "", 0, fmt.Errorf("building a request for %s: %w", rawURL, err)
+	}
+	req.Header.Set("User-Agent", userAgent())
+	resp, err := c.follow.Do(req)
+	if err != nil {
+		return "", 0, fmt.Errorf("fetching %s: %w", rawURL, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", 0, &StatusError{URL: rawURL, Status: resp.StatusCode}
+	}
+
+	f, err := os.Create(dest)
+	if err != nil {
+		return "", 0, fmt.Errorf("creating %s: %w", dest, err)
+	}
+	discard := func(cause error) (string, int64, error) {
+		_ = f.Close()
+		_ = os.Remove(dest)
+		return "", 0, cause
+	}
+
+	h := sha256.New()
+	// limit+1 so an over-long body is REFUSED rather than truncated into
+	// something that would then be checksummed as if it were whole.
+	n, err := io.Copy(io.MultiWriter(f, h), io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		return discard(fmt.Errorf("downloading %s: %w", rawURL, err))
+	}
+	if n > limit {
+		return discard(fmt.Errorf("%s is larger than %d bytes, which is not the asset it claims to be", rawURL, limit))
+	}
+	if err := f.Sync(); err != nil {
+		return discard(fmt.Errorf("flushing %s: %w", dest, err))
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(dest)
+		return "", 0, fmt.Errorf("closing %s: %w", dest, err)
+	}
+	// On Windows this is a near no-op — access is the inherited ACL and
+	// execution is decided by the extension — and it is called unconditionally
+	// anyway, because a build tag for a call that cannot fail there would be a
+	// second file to keep in step for nothing.
+	if err := os.Chmod(dest, 0o755); err != nil {
+		_ = os.Remove(dest)
+		return "", 0, fmt.Errorf("making %s executable: %w", dest, err)
+	}
+	return hex.EncodeToString(h.Sum(nil)), n, nil
 }
