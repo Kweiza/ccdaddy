@@ -37,8 +37,8 @@ func newConfigCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "config",
 		Short: "Read and write ~/.ccdad/config.toml",
-		Long: "The auto-switch engine's knobs: thresholds, anti-flap margins, the\n" +
-			"strategy, and the credit ceiling.\n\n" +
+		Long: "The auto-switch engine's knobs — thresholds, anti-flap margins, the strategy\n" +
+			"and the credit ceiling — and how ccdad's own screens are drawn.\n\n" +
 			"Keys this ccdad does not know are left alone rather than deleted, so a file\n" +
 			"written by a newer release survives an older one. Setting one is still a\n" +
 			"usage error: a typo that is quietly accepted is a setting that does nothing.\n\n" +
@@ -46,6 +46,12 @@ func newConfigCmd() *cobra.Command {
 			"window_threshold.five_hour, window_threshold.seven_day and the rest. A window\n" +
 			"with no key of its own uses the top-level threshold, and 'ccdad config list'\n" +
 			"shows a row for each window the file names and none before it names one.\n\n" +
+			"[tui] is the display half and governs nothing the daemon does. tui.theme takes\n" +
+			"auto, dark, light, ansi or none; tui.glyphs takes auto, unicode or ascii. Both\n" +
+			"default to auto, which measures the terminal instead of guessing at it: the\n" +
+			"background's darkness for the palette, the console's code page for the glyphs.\n" +
+			"They are keys rather than flags because a terminal is a property of the\n" +
+			"machine, and a flag would have to be retyped on every run.\n\n" +
 			"No credential belongs here. This file is plain text and is what people paste\n" +
 			"into a bug report; tokens live in the store's credentials directory.",
 		Args:          usageArgs(cobra.NoArgs),

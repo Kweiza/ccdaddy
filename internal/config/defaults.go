@@ -55,6 +55,13 @@ const defaultPreemptLead = 6 * time.Minute
 // unconditional. Hover is OFF because it overrides every number the user
 // tuned, and a mode that ignores the config file has to be asked for.
 //
+// TUITheme and TUIGlyphs are answers in a third shape. Their real default is a
+// MEASUREMENT of the terminal that will draw the screen -- how dark its
+// background is, what its console code page says it can carry -- and this
+// function has no terminal. `auto` is the word that says "measure it", so it is
+// the honest default rather than a placeholder standing in for one. Naming a
+// palette here would be one machine's answer written down for every machine.
+//
 // WindowThreshold is deliberately absent. Nil IS the default — every window
 // using Threshold — and an empty map here would allocate one per call to say
 // the same thing.
@@ -76,5 +83,7 @@ func Defaults() Config {
 		// permission that lets an MCP client rewrite the live login without
 		// asking the person at the keyboard.
 		MCPSwitchWithoutElicitation: false,
+		TUITheme:                    defaultTUITheme,
+		TUIGlyphs:                   defaultTUIGlyphs,
 	}
 }

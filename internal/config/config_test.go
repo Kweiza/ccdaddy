@@ -486,6 +486,7 @@ func TestTheKeySetIsClosed(t *testing.T) {
 		"cooldown", "recovery_hysteresis", "preempt_lead", "strategy",
 		"probe_unknown", "hover", "mcp_switch_without_elicitation",
 		"credit.threshold", "credit.max_auto_spend",
+		"tui.theme", "tui.glyphs",
 	}
 	got := Keys()
 	if len(got) != len(want) {
@@ -518,11 +519,19 @@ func TestTheKeySetIsClosed(t *testing.T) {
 	if err := d.Set("window_threshold.five_hour", "85"); err != nil {
 		t.Errorf("Set(window_threshold.five_hour) = %v, want it accepted", err)
 	}
+	// The third table, and the first one that governs nothing the engine does.
+	// It is closed by NAME the way [credit] is -- every key under it is in the
+	// list above -- which is why isKnownKey needs no `tui.` arm to match the
+	// `window_threshold.` one.
+	if err := d.Set("tui.theme", "dark"); err != nil {
+		t.Errorf("Set(tui.theme) = %v, want it accepted", err)
+	}
 	for _, key := range []string{
 		"window_threshold.typo", // not a window
 		"window_threshold",      // the table itself is not a value
 		"credit.future",         // the other section stays closed by name
-		"future.a",              // and no third section is open
+		"tui.future",            // and so does the display one
+		"future.a",              // and no fourth section is open
 	} {
 		if err := d.Set(key, "1"); !errors.Is(err, ErrUnknownKey) {
 			t.Errorf("Set(%s) = %v, want ErrUnknownKey", key, err)
@@ -781,6 +790,11 @@ func TestEqualComparesEveryFieldOfConfig(t *testing.T) {
 			f.SetUint(f.Uint() + 1)
 		case reflect.Bool:
 			f.SetBool(!f.Bool())
+		case reflect.String:
+			// A name key. The gate needs a DIFFERENT value, not a legal one --
+			// Equal compares and never validates -- so appending is enough, and
+			// stays right as names are added on either side.
+			f.SetString(f.String() + "-changed")
 		case reflect.Map:
 			f.Set(reflect.ValueOf(map[usage.WindowName]float64{usage.WindowFiveHour: 85}))
 		default:

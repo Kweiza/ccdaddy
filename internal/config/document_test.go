@@ -278,6 +278,12 @@ func TestEveryKeyCanBeSetAndReadBack(t *testing.T) {
 		keyMaxAutoSpend:       "25",
 
 		keyMCPSwitchWithoutElicitation: "true",
+
+		// Neither is the default, for the reason the booleans above are not: a
+		// key set to the value it already had would pass this test without the
+		// set having landed anywhere.
+		keyTUITheme:  "dark",
+		keyTUIGlyphs: "ascii",
 	}
 	d := newDocument()
 	for _, k := range Keys() {
@@ -328,6 +334,8 @@ func TestEveryKeyCanBeSetAndReadBack(t *testing.T) {
 		WindowThreshold:    map[usage.WindowName]float64{usage.WindowFiveHour: 85},
 
 		MCPSwitchWithoutElicitation: true,
+		TUITheme:                    "dark",
+		TUIGlyphs:                   "ascii",
 	}
 	// Equal rather than ==: Config carries the per-window table now, and a
 	// struct holding a map is not comparable at all.
@@ -354,6 +362,9 @@ func TestTheEffectiveValueOfEveryKeyIsFormattable(t *testing.T) {
 		keyMaxAutoSpend:       "0",
 
 		keyMCPSwitchWithoutElicitation: "false",
+
+		keyTUITheme:  "auto",
+		keyTUIGlyphs: "auto",
 	}
 	for _, k := range Keys() {
 		if _, named := want[k]; !named {
