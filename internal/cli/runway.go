@@ -272,6 +272,25 @@ func renderRunway(cmd *cobra.Command, f forecast.Fleet, accounts []store.Account
 		"  spends it. Credits do not reset: that row is a balance divided by a rate,\n"+
 		"  with nothing coming back.")
 
+	// The seat count, under the block it answers from the other end: those rows
+	// say when the fleet runs out, and this says how many accounts it would take
+	// for it not to. Both are the same runs asked different questions, so a
+	// reader can never be told "runs dry" and "you have enough accounts" on two
+	// adjacent lines.
+	//
+	// "Accounts:" is nine characters, the same width as the "Basis:" and
+	// "Fleet:" label fields at the top of the page. The two spaces after it are
+	// this page's own separator, the gap that holds "runs dry <moment>" apart
+	// from "(in 2d6h)" in the block above and the count apart from "(4 more)" in
+	// this line.
+	//
+	// The empty string is the gate. view.RunwayAccounts returns one for a fleet
+	// the rotation cannot reach, and reading that is what keeps this renderer
+	// from carrying a second opinion about when there is nothing to say.
+	if line := view.RunwayAccounts(f); line != "" {
+		fmt.Fprintf(out, "\nAccounts:  %s\n", line)
+	}
+
 	if len(f.Rows) == 0 {
 		return nil
 	}
@@ -354,12 +373,18 @@ func forecastJSON(f forecast.Fleet) map[string]any {
 		basis["windowSeconds"] = int(f.Basis.Window.Seconds())
 		basis["observedSeconds"] = int(f.Basis.Observed.Seconds())
 		out["axes"] = map[string]any{
-			"five_hour": axisJSON(f.FiveHour),
-			"weekly":    axisJSON(f.Weekly),
+			axisKeyFiveHour: axisJSON(f.FiveHour),
+			axisKeyWeekly:   axisJSON(f.Weekly),
 		}
 	}
 
-	fleet := map[string]any{}
+	fleet := map[string]any{
+		// Unconditional, like the basis counts above and unlike everything else
+		// in this object: a count of zero is a reading. The run had this many
+		// accounts to work with whether or not it had any history to measure
+		// them over, so this is never the figure that went missing.
+		"accountsUsable": f.AccountsUsable,
+	}
 	if f.PointsTotal > 0 {
 		fleet["pointsLeft"] = f.PointsLeft
 		fleet["pointsTotal"] = f.PointsTotal
@@ -371,9 +396,24 @@ func forecastJSON(f forecast.Fleet) map[string]any {
 	if f.Both.HasDryAt {
 		fleet["dryAt"] = f.Both.DryAt
 	}
-	if len(fleet) > 0 {
-		out["fleet"] = fleet
+	// Absent when there was no basis to search from, never zero. A fleet that
+	// needs no more accounts and a fleet nobody measured must not read the same,
+	// and one of the two is a reason to go and buy nothing.
+	if f.HasNeeded {
+		fleet["accountsNeeded"] = f.AccountsNeeded
+		if f.NeededCapped {
+			// The search reached its ceiling without finding a count that
+			// holds, so the figure above is a BOUND and means "more than this".
+			// Publishing the count on its own would hand a consumer a number to
+			// act on that no run ever found a holding fleet at, and buying that
+			// many seats would not fix the fleet.
+			fleet["accountsNeededCapped"] = true
+		}
+		if key, ok := axisKey(f.NeededBy); ok && f.HasNeededBy {
+			fleet["accountsNeededBy"] = key
+		}
 	}
+	out["fleet"] = fleet
 	if !f.Credit.Known {
 		// Money fails closed: a balance that could not be assembled is absent,
 		// never zero. A zero spend rate published here would read as a fleet
@@ -386,6 +426,32 @@ func forecastJSON(f forecast.Fleet) map[string]any {
 		"dryAt":        f.Credit.DryAt,
 	}
 	return out
+}
+
+// The two names this payload spells its axes with, in one place because they
+// are used twice: as the keys of the `axes` object and as the value naming
+// which axis asked for the seats. A second spelling of either would let a
+// consumer be handed an axis name that is not a key of the axes beside it.
+//
+// The weekly one is not seven_day. That axis is a SET of windows all metering
+// one consumption -- seven_day, the opus and sonnet caps, the oauth-apps cap --
+// and seven_day is only the window its replenishment figure is measured on.
+const (
+	axisKeyFiveHour = "five_hour"
+	axisKeyWeekly   = "weekly"
+)
+
+// axisKey is how the payload names the axis a window belongs to. A window that
+// is neither axis's representative is not an axis, and the caller publishes
+// nothing rather than a name no key matches.
+func axisKey(n usage.WindowName) (string, bool) {
+	switch n {
+	case usage.WindowFiveHour:
+		return axisKeyFiveHour, true
+	case usage.WindowSevenDay:
+		return axisKeyWeekly, true
+	}
+	return "", false
 }
 
 // axisJSON is one axis. `holds` is ABSENT rather than false when the two runs
