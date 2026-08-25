@@ -752,7 +752,7 @@ func assertCursorIsDrawn(t *testing.T, m Model, width, height int) {
 	if m.Cursor < 0 || m.Cursor >= n {
 		t.Fatalf("%dx%d: the cursor is at %d with %d rows", width, height, m.Cursor, n)
 	}
-	l := Plan(m.Set, m.Width, m.Height, n, len(m.Snap.Notices) > 0)
+	l := Plan(m.Set, m.Width, m.Height, n, len(m.Snap.Notices) > 0, m.runwayLine() != "")
 	if l.TooNarrow || l.TooShort {
 		return
 	}

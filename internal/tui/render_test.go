@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/Kweiza/ccdaddy/internal/daemon"
+	"github.com/Kweiza/ccdaddy/internal/forecast"
 	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
@@ -743,5 +744,191 @@ func TestTheStrategyPickerStillMarksTheConfiguredEntryUnderHover(t *testing.T) {
 	}
 	if got := a.pick.items[a.pick.current].label; got != "consume-first" {
 		t.Errorf("the picker marks %q as current, want the configured consume-first", got)
+	}
+}
+
+// fixtureFleet is a measured fleet that has something to say: the weekly axis
+// empties at a fixed moment and the five-hour one holds at the measured rate.
+//
+// Every moment in it is derived from fixtureNow, whose zone is UTC, and the
+// dashboard renders in the zone its Snapshot's clock was read in — so the line
+// below is the same string on a machine in Seoul and on one in CI with TZ
+// unset. A fleet built from time.Now() would render a different hour in each.
+func fixtureFleet() forecast.Fleet {
+	// Fifty hours out, so the rendered span is a whole "2d2h" that can be
+	// checked by hand against the absolute moment printed beside it.
+	dry := fixtureNow.Add(50 * time.Hour)
+	return forecast.Fleet{
+		Basis: forecast.Basis{
+			Window: 4 * time.Hour, Observed: 3*time.Hour + 51*time.Minute, Known: true,
+		},
+		FiveHour: forecast.Axis{Verdict: forecast.VerdictHolds},
+		Weekly: forecast.Axis{
+			Verdict: forecast.VerdictRunsDry, DryAt: dry, HasDryAt: true,
+		},
+		Both: forecast.Axis{Verdict: forecast.VerdictRunsDry, DryAt: dry, HasDryAt: true},
+	}
+}
+
+// fixtureRunwayLine is what the fleet above renders to, spelled out here rather
+// than computed, so this file pins the bytes on the page and not the agreement
+// of one function with itself.
+const fixtureRunwayLine = "Runway: 7d dry 2026-03-06 14:00 UTC (2d2h)  ·  5h holds  ·  basis 3h51m"
+
+// A populated forecast that the Snapshot does not claim moves no golden. All
+// seven whole-page fixtures are compared byte for byte, and every one of them
+// was drawn on a machine with no history behind it — which is the state of
+// every machine for the first hours after a release that starts recording.
+//
+// HasForecast is what decides, and this is the test that makes the conditional
+// a decision rather than an accident: the Fleet handed to each page below is
+// fully populated and says the fleet runs dry, so an implementation that drew
+// the line off the Fleet's own contents instead of off the flag is caught here.
+//
+// Three of the seven catch it, measured rather than assumed: 113x26, 80x24 and
+// the 80x20 notice page. The other four are shorter than 20 rows, where the
+// height ladder has already dropped the runway line for reasons of its own, so
+// they would look identical under that mutation and rule nothing out. They are
+// walked anyway — the four that cannot see this failure are exactly the four
+// that would see a runway line drawn at a rung that is supposed to have taken
+// it away.
+func TestAForecastTheSnapshotDoesNotClaimMovesNoGolden(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		width, height int
+		prep          func(*Model)
+		want          string
+	}{
+		{"the full page with every column", 113, 26, nil, fixtureAFullPage},
+		{"the design target, figures dropped", 80, 24, nil, fixtureBDesignTarget},
+		{"wordmark and tagline dropped", 80, 13, nil, fixtureCShort},
+		{"the frame dropped", 56, 10, nil, fixtureDNarrow},
+		{"the gauge collapsed", 43, 9, nil, fixtureECollapsed},
+		{"one notice", 80, 20, func(m *Model) {
+			m.Snap.Notices = []string{"hover thresholds could not be read"}
+		}, fixtureFWithNotice},
+		{"zero accounts", 80, 13, func(m *Model) { m.Snap.Rows = nil }, fixtureGZeroAccounts},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := fixtureModel(tc.width, tc.height)
+			if tc.prep != nil {
+				tc.prep(&m)
+			}
+			m.Snap.Forecast = fixtureFleet()
+			m.Snap.HasForecast = false
+			got := m.Body()
+			if got != tc.want {
+				t.Fatalf("Body() at %dx%d with an unclaimed forecast:\ngot:\n%s\nwant:\n%s",
+					tc.width, tc.height, got, tc.want)
+			}
+			if strings.Contains(got, "Runway") {
+				t.Fatalf("a page with HasForecast false drew a runway line anyway:\n%s", got)
+			}
+		})
+	}
+}
+
+// With a forecast behind it the line appears, directly under the
+// Active/Strategy/Mode line and above everything about the rows — the position
+// `ccdad status` gives it, among the labels rather than among the accounts.
+//
+// The note line's own position is asserted elsewhere to be directly above the
+// column header, so the two orderings together fix all three lines: header,
+// runway, note, table.
+func TestTheRunwayLineSitsUnderTheHeaderLineAndAboveTheNote(t *testing.T) {
+	m := fixtureModel(80, 24)
+	m.Snap.Forecast, m.Snap.HasForecast = fixtureFleet(), true
+	m.Snap.Notices = []string{"hover thresholds could not be read"}
+
+	lines := strings.Split(m.Body(), "\n")
+	at := func(needle string) int {
+		for i, line := range lines {
+			if strings.Contains(line, needle) {
+				return i
+			}
+		}
+		return -1
+	}
+	header, runway, note, table := at("Active: "), at(fixtureRunwayLine), at("note: "), at("IDX ACCOUNT")
+	if runway < 0 {
+		t.Fatalf("a claimed forecast drew no runway line, or drew a different one:\n%s", m.Body())
+	}
+	if header < 0 || note < 0 || table < 0 {
+		t.Fatalf("header=%d note=%d table=%d; the page is not the one this asserts about:\n%s",
+			header, note, table, m.Body())
+	}
+	if runway != header+1 {
+		t.Errorf("the runway line is at %d and the header line at %d; it belongs directly under the labels", runway, header)
+	}
+	if note != runway+1 || table != note+1 {
+		t.Errorf("runway=%d note=%d table=%d; want the note between the runway line and the column header",
+			runway, note, table)
+	}
+}
+
+// The runway line is cut to the frame like every other line, with a cue that
+// says so. This is the longest line the page can carry — an absolute moment, a
+// span, and two more clauses after them — so it is the first one to overrun a
+// narrow terminal.
+//
+// The row count is the assertion that matters, and the width check beside it is
+// NOT a substitute for it: measured, an overlong line does not render overlong.
+// A bordered lipgloss box SOFT-WRAPS content too wide for it, so the line comes
+// out as two rows that are each inside the frame, every width assertion passes,
+// and the page is one row taller than the height ladder budgeted for. At 43
+// columns the wrap was reproduced before this was written. Twenty rows is where
+// it bites: with four accounts and a runway line the ladder drops the figure
+// block and lands on exactly twenty, so one wrapped row is one row over.
+//
+// This is also the one line on the page that carries a non-ASCII byte: the
+// shared wording separates its clauses with U+00B7, one display column wide,
+// which is what the width functions here measure and what the count below
+// compares against.
+func TestTheRunwayLineIsCutToTheFrameRatherThanWrappingIt(t *testing.T) {
+	const height = 20
+	for _, w := range []int{113, 80, 56, 43, 35} {
+		m := fixtureModel(w, height)
+		m.Snap.Forecast, m.Snap.HasForecast = fixtureFleet(), true
+		body := m.Body()
+		if strings.ContainsRune(body, 0x1b) {
+			t.Fatalf("at %d columns the page with a runway line carries an escape byte", w)
+		}
+		lines := strings.Split(body, "\n")
+		if len(lines) > height {
+			t.Errorf("at %dx%d the page with a runway line is %d rows, %d more than the terminal has:\n%s",
+				w, height, len(lines), len(lines)-height, body)
+		}
+		for i, line := range lines {
+			if got := ansi.StringWidth(line); got > w {
+				t.Errorf("at %d columns line %d is %d columns wide: %q", w, i, got, line)
+			}
+		}
+		if !strings.Contains(body, "Runway: ") {
+			t.Errorf("at %d columns the runway line vanished entirely rather than being cut", w)
+		}
+	}
+}
+
+// The zone the page prints a moment in is the Snapshot's, not this process's.
+//
+// Nothing in this package reads the environment, so there is no time.Local to
+// reach for here: the caller read the clock and its location came with it. The
+// assertion is the whole point of that rule — a page that resolved the zone
+// itself would render the author's hour in the author's terminal and a
+// different hour in CI, where nothing sets TZ, and no fixture could pin either.
+func TestTheRunwayLineRendersInTheSnapshotsOwnZone(t *testing.T) {
+	kst := time.FixedZone("KST", 9*3600)
+	m := fixtureModel(113, 24)
+	m.Snap.Now = fixtureNow.In(kst)
+	m.Snap.Forecast, m.Snap.HasForecast = fixtureFleet(), true
+
+	body := m.Body()
+	// fixtureFleet's dry moment is 2026-03-06 14:00 UTC, which is 23:00 the
+	// same day nine hours east.
+	if !strings.Contains(body, "2026-03-06 23:00 KST") {
+		t.Fatalf("the page did not render the dry moment in the Snapshot's zone:\n%s", body)
+	}
+	if strings.Contains(body, "UTC") {
+		t.Fatalf("the page rendered a zone the Snapshot's clock was not read in:\n%s", body)
 	}
 }

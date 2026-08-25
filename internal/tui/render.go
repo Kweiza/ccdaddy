@@ -134,7 +134,13 @@ func (m Model) Body() string {
 	if rows < 1 {
 		rows = 1
 	}
-	l := Plan(m.Set, m.Width, m.Height, rows, len(m.Snap.Notices) > 0)
+	// Asked for before the layout is planned, because whether the line exists
+	// decides how many rows the page needs, and the width it is cut to does
+	// not: the wording is the same at every terminal size and only the cut
+	// moves. Asking once also means the height budget and the page below it
+	// cannot disagree about whether there is a line.
+	runway := m.runwayLine()
+	l := Plan(m.Set, m.Width, m.Height, rows, len(m.Snap.Notices) > 0, runway != "")
 	if l.TooNarrow || l.TooShort {
 		return m.floors(l)
 	}
@@ -184,6 +190,27 @@ func (m Model) Body() string {
 	if l.Header {
 		add(m.headerLine(inner))
 	}
+	if l.Runway {
+		// Under the labels and above everything about the rows, which is where
+		// `ccdad status` puts the same wording: it is an answer about the fleet,
+		// like Active and Mode above it, and not a column of the table.
+		//
+		// The label is "Runway: " with one space, matching the header line
+		// directly above it, rather than the nine-column "Runway:  " that
+		// command uses to line up with a Daemon: and an Active: label this page
+		// draws nowhere.
+		//
+		// truncateCue rather than a bare cut, for the reason the header line
+		// uses one: this line ends in an absolute moment and a span, and a date
+		// cut mid-value reads as a date rather than as a line that did not fit.
+		//
+		// It carries a non-ASCII byte, and it is the only line here that does
+		// so by design: the shared wording separates its clauses with U+00B7,
+		// one display column wide and measured as one by every width function
+		// in this package. Every string this package spells itself is still
+		// ASCII, and the note line's bytes come from whoever wrote the notice.
+		add(truncateCue("Runway: "+runway, inner))
+	}
 	if l.Notice {
 		add(noticeLine(m.Snap.Notices, inner))
 	}
@@ -213,6 +240,31 @@ func (m Model) floors(l Layout) string {
 		lines = append(lines, truncate("ccdad needs 3 rows", m.Width))
 	}
 	return strings.Join(append(lines, m.footer(m.Width)), "\n")
+}
+
+// runwayLine is the measured-burn summary this page draws, or "" when there is
+// nothing to say.
+//
+// Two gates, and neither subsumes the other. HasForecast says whether the
+// caller produced a forecast at all; view.RunwayLine's empty string says
+// whether the one it produced has anything worth a line, which it does not for
+// a fleet with no basis. Dropping the flag would draw a line off a Fleet the
+// Snapshot never claimed -- a value left in the struct by an earlier load --
+// and dropping the string would draw the label with nothing after it.
+//
+// The zone comes off Snap.Now rather than from time.Local, and that is not a
+// convenience. Nothing in this package reads the environment: that is what
+// makes the whole page a pure function of a Snapshot somebody else built, and
+// what lets the fixtures be compared as whole strings. Snap.Now was read by the
+// caller with the clock nearest the reader, so its location is the reader's
+// own. A page that resolved the zone itself would print one hour in the
+// author's terminal and another in CI, where nothing sets TZ, and no fixture
+// could pin either.
+func (m Model) runwayLine() string {
+	if !m.Snap.HasForecast {
+		return ""
+	}
+	return view.RunwayLine(m.Snap.Forecast, m.Snap.Now, m.Snap.Now.Location())
 }
 
 // headerLine is who is live, what the engine is set to, and what it decided.

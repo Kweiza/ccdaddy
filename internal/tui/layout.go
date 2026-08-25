@@ -42,6 +42,7 @@ type Layout struct {
 
 	Wordmark, Tagline, Figures bool
 	Notice                     bool // the "note: ..." line; see Plan's notice parameter
+	Runway                     bool // the "Runway: ..." line; see Plan's runway parameter
 	Border, Blanks             bool
 	Title, Header              bool // Header is the Active/Strategy/Mode line
 
@@ -94,15 +95,24 @@ const (
 	tierFootprint = 8
 )
 
-// Plan reads nothing and calls nothing: it is a pure function of the five
-// arguments, so the same (set, width, height, rows, notice) always answers
-// the same way and a test can walk every boundary without a terminal.
+// Plan reads nothing and calls nothing: it is a pure function of the six
+// arguments, so the same (set, width, height, rows, notice, runway) always
+// answers the same way and a test can walk every boundary without a terminal.
 //
 // notice is whether Snapshot.Notices is non-empty. Plan has no other way to
 // find out: it takes no Snapshot, so a caller with a notice to show has to
 // say so directly. A page with a notice needs one more row than the same
 // page without one — the notice line itself — and that row is spent or
 // reclaimed by the height ladder exactly like any other block.
+//
+// runway is whether there is a runway line to draw — the measured-burn summary,
+// which exists only once enough readings have been recorded to give a rate, and
+// is therefore absent on every machine for the first hours after it starts
+// recording. It arrives as a bool for the reason notice does, and it costs the
+// same one row. It is deliberately NOT folded into fixedRows below: that
+// constant is the sum of every UNCONDITIONAL row, and raising it would shift
+// every threshold on the height ladder for pages that draw no runway line at
+// all.
 //
 // The defect this guards against was reproduced before this existed: with
 // ACCOUNT computed as "whatever's left" independently at every width, going
@@ -113,7 +123,7 @@ const (
 // while columns are added back one at a time, and to only let it grow once
 // every optional column for the current table is already on the page — so
 // crossing a column threshold can never claim width ACCOUNT already had.
-func Plan(set ColumnSet, width, height, rows int, notice bool) Layout {
+func Plan(set ColumnSet, width, height, rows int, notice, runway bool) Layout {
 	var l Layout
 
 	// 35x3 is the stated minimum viable size: below either dimension the page
@@ -129,7 +139,7 @@ func Plan(set ColumnSet, width, height, rows int, notice bool) Layout {
 	}
 
 	planWidth(&l, set, width)
-	planHeight(&l, height, rows, notice)
+	planHeight(&l, height, rows, notice, runway)
 
 	return l
 }
@@ -263,14 +273,15 @@ func withoutColumns(cols []Column, drop ...Column) []Column {
 // blank, figures 6 rows plus its blank, the border 2 rows, the two remaining
 // blank separators, the one-row title and the Active/Strategy/Mode line.
 // Fixed rows total 22, independent of the account row count -- N of those is
-// added on top, in planHeight, never folded into this constant. The notice
-// line is not part of the fixed 22 either: it exists only when
-// Snapshot.Notices is non-empty, which is exactly what Plan's notice
-// parameter says.
+// added on top, in planHeight, never folded into this constant. Neither the
+// notice line nor the runway line is part of the fixed 22 either: each exists
+// only when Plan is told it does, which is exactly what Plan's notice and
+// runway parameters say.
 const (
 	fixedRows      = 22
 	saveFigures    = 7 // 6 rows plus its blank
 	saveNotice     = 1 // the "note: ..." line, when notice is true
+	saveRunway     = 1 // the "Runway: ..." line, when runway is true
 	saveTagline    = 3 // 2 rows plus its blank
 	saveWordmark   = 4 // 5 rows down to titleLine's 1
 	saveBorder     = 2
@@ -288,6 +299,14 @@ const (
 // after the figure block and before the tagline is even considered, so a
 // tight terminal never has to carry both a figure and a notice.
 //
+// The runway line sits one rung below the notice, which decides what happens at
+// the single height where exactly one of the two fits: the note gives and the
+// runway line stays. Both cost one row and the ladder had to order them. The
+// note is a report ABOUT the reading -- something could not be read -- and the
+// runway line is the reading's conclusion, when the fleet stops working. A
+// dashboard that dropped the conclusion to keep a caveat about it would be
+// keeping the footnote and throwing away the sentence.
+//
 // Title and Wordmark can both be true at once, and that is not redundant:
 // while Wordmark is true the version string rides on the wordmark's own last
 // row for free (Fixture A draws "ccdad v0.2.0" directly after the glyph, on
@@ -296,15 +315,19 @@ const (
 // -- once Wordmark is false. Title=false on its own therefore only ever
 // happens after Wordmark is already false: it means the version string is
 // gone from the page entirely, not that it moved.
-func planHeight(l *Layout, height, rows int, notice bool) {
+func planHeight(l *Layout, height, rows int, notice, runway bool) {
 	l.Wordmark, l.Tagline, l.Figures = true, true, true
 	l.Notice = notice
+	l.Runway = runway
 	l.Border, l.Blanks = true, true
 	l.Title, l.Header = true, true
 
 	need := fixedRows + rows
 	if notice {
 		need += saveNotice
+	}
+	if runway {
+		need += saveRunway
 	}
 
 	if need > height {
@@ -314,6 +337,10 @@ func planHeight(l *Layout, height, rows int, notice bool) {
 	if l.Notice && need > height {
 		need -= saveNotice
 		l.Notice = false
+	}
+	if l.Runway && need > height {
+		need -= saveRunway
+		l.Runway = false
 	}
 	if need > height {
 		need -= saveTagline
