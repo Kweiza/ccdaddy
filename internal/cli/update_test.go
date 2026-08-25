@@ -920,3 +920,63 @@ func TestUpdateAcceptsASignatureFromEitherPinnedKey(t *testing.T) {
 		})
 	}
 }
+
+// A signature says WHO wrote the bytes and never WHAT they are, so a correctly
+// signed HTML page is still an HTML page.
+func TestUpdateRefusesACorrectlySignedNonSumsFile(t *testing.T) {
+	target, f, sign := updateWorld(t, "0.6.1", "v0.7.0")
+	page := []byte("<!doctype html>\n<html><body>502 Bad Gateway</body></html>\n")
+	f.put("sha256sums.txt", page)
+	f.put("sha256sums.txt.minisig", sign(page, "v0.7.0"))
+
+	code, stdout, _, _ := runRoot(t, "update", "--json")
+	if code != ExitBlocked {
+		t.Fatalf("exit = %d, want %d", code, ExitBlocked)
+	}
+	if got := decodePayload(t, stdout)["reason"]; got != "shape" {
+		t.Errorf("reason = %v, want %q", got, "shape")
+	}
+	assertBinaryUntouched(t, target)
+}
+
+// A well-shaped file that does not list this platform is a different refusal
+// from one that is not a sums file, and the remedies differ: this one is "the
+// release does not carry your target", not "somebody tampered".
+func TestUpdateRefusesAReleaseThatDoesNotCarryThisAsset(t *testing.T) {
+	target, f, sign := updateWorld(t, "0.6.1", "v0.7.0")
+	// Every notice file and one binary for a platform this is not, correctly
+	// signed. The three notice rows are inert under anchored matching, which is
+	// what makes this a "not listed" rather than a "shape".
+	sums := sumsFor(map[string][]byte{
+		"ccdad-plan9-mips":         []byte("not this machine\n"),
+		"LICENSE":                  []byte("license\n"),
+		"NOTICE":                   []byte("notice\n"),
+		"THIRD-PARTY-LICENSES.txt": []byte("notices\n"),
+	})
+	f.put("sha256sums.txt", sums)
+	f.put("sha256sums.txt.minisig", sign(sums, "v0.7.0"))
+
+	code, stdout, _, top := runRoot(t, "update", "--json")
+	if code != ExitBlocked {
+		t.Fatalf("exit = %d, want %d (%s)", code, ExitBlocked, top)
+	}
+	if got := decodePayload(t, stdout)["reason"]; got != "not-listed" {
+		t.Errorf("reason = %v, want %q", got, "not-listed")
+	}
+	assertBinaryUntouched(t, target)
+}
+
+// The message has to name the asset, because the user's next question is
+// "which file did you want?" and the answer is a platform triple they cannot
+// derive from anything else on the screen.
+func TestNotListedNamesTheAsset(t *testing.T) {
+	_, f, sign := updateWorld(t, "0.6.1", "v0.7.0")
+	sums := sumsFor(map[string][]byte{"LICENSE": []byte("license\n")})
+	f.put("sha256sums.txt", sums)
+	f.put("sha256sums.txt.minisig", sign(sums, "v0.7.0"))
+
+	_, _, stderr, _ := runRoot(t, "update")
+	if !strings.Contains(stderr, release.Asset()) {
+		t.Errorf("stderr = %q, want it to name %q", stderr, release.Asset())
+	}
+}
