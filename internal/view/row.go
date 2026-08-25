@@ -29,6 +29,15 @@ import (
 // account look empty.
 const Unreadable = "?"
 
+// NoQuantity is what a cell renders when the quantity does not exist here, as
+// against Unreadable's "somebody tried to read it and could not". The two are
+// different verdicts and both appear in one rendered row: an account with no
+// cached reading has an unknown percentage and no window to name, so its USED
+// cell is "?" and its WINDOW cell is "-". Collapsing them would tell a reader
+// that a quantity which cannot exist merely went unread, and send them looking
+// for the reading.
+const NoQuantity = "-"
+
 // Row is one account with everything the dashboard knows about it, from each
 // field's one authoritative source.
 type Row struct {
@@ -144,7 +153,7 @@ func (r Row) UsedLabel() string {
 func (r Row) WindowLabel() string {
 	bw, ok := r.Reported()
 	if !ok {
-		return "-"
+		return NoQuantity
 	}
 	return string(bw.Name)
 }
@@ -198,7 +207,7 @@ func (r Row) TypeLabel() string { return r.Account.Kind.String() }
 
 func (r Row) TierLabel() string {
 	if r.Account.Tier == "" {
-		return "-"
+		return NoQuantity
 	}
 	return r.Account.Tier
 }
@@ -273,11 +282,11 @@ func (r Row) creditLeftLabel() (string, bool) {
 func (r Row) ResetsLabel(now time.Time) string {
 	bw, ok := r.Reported()
 	if !ok {
-		return "-"
+		return NoQuantity
 	}
 	reset, ok := bw.Reset()
 	if !ok {
-		return "-"
+		return NoQuantity
 	}
 	return HumanDuration(reset.Sub(now))
 }
@@ -296,7 +305,7 @@ func (r Row) ResetsLabel(now time.Time) string {
 func (r Row) PaceLabel() string {
 	bw, ok := r.Reported()
 	if !ok {
-		return "-"
+		return NoQuantity
 	}
 	p, ok := r.Pace[bw.Name]
 	if !ok {
@@ -304,7 +313,7 @@ func (r Row) PaceLabel() string {
 		// seventh of the window since its reset — in which case elapsed time is
 		// tiny and almost any usage divides out as "far ahead". Saying nothing
 		// is the deliberate answer.
-		return "-"
+		return NoQuantity
 	}
 	if p.AheadOfPace {
 		return "ahead"
