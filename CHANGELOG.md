@@ -16,6 +16,54 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **0.7.0's own notes said the MCP server could not be launched. It can, and
+  has been able to since 0.6.0.** The entry above describes the new `runway`
+  measurement as reaching "a `runway` tool in the MCP server — which still has
+  no verb to launch it", and README's *What is not here yet* carried the same
+  claim in a stronger form. Both are false: `ccdad mcp` is registered on the
+  root command, is printed by `ccdad --help`, serves sixteen tools over a real
+  stdio handshake, and is documented in this file's own [0.6.0] entry and in
+  README's commands table. The 0.7.0 entry is left as it was published — a
+  changelog that edits its own history is worth less than one that admits to
+  it — and README, which describes the present rather than the past, is
+  corrected: the bullet is gone, because nothing it claimed to be missing is.
+
+  The sentence was written against a survey of the tree taken about six hours
+  before the commit that used it, and `ccdad mcp` landed in between. What made
+  it survive review is that no test reads this file and none reads README, so a
+  false sentence about a shipped verb costs nothing until somebody believes it.
+
+- **The MCP tool table said fifteen tools and did not list `runway`.** The
+  release's headline feature was absent from the only table describing what a
+  Claude Code session can call. Sixteen, and it is a read. The count in the
+  gate's own map and its test were correct throughout; only the prose was not.
+
+- **`ccdad list` said LEFT was measured against hover's derived thresholds.** It
+  is not, and never was: LEFT is `100 −` the reported window's utilization, with
+  no threshold in it. What the derived thresholds decide is *which* window binds
+  and therefore which one each row reports. A reader who did the subtraction the
+  old sentence invited would have read a row showing 38% as 38 points of margin
+  against a threshold of 99. The note now says the true thing, and a test pins
+  the arithmetic rather than the wording.
+
+- **The 0.7.0 entry's disk figure named the wrong cadence, and its retention
+  derivation was a step short.** 250–430 KB for six accounts is what the series
+  costs at the *fastest* cadence the poll policy permits — the 180 s floor — not
+  at the normal one; at the 600 s idle cadence it is roughly a quarter of that,
+  and the live store measured 32 KB for six accounts over 3 h 51 m. The eight
+  hours of retention is not "the longest gap the poll policy can leave a
+  six-account identity" but the four-hour measurement span *plus* that gap
+  (3 h 18 m), rounded up to the next whole hour.
+
+- **Every released heading in this file now has a link definition, and
+  `[Unreleased]` compares against the last tag.** The reference block had not
+  moved since 0.2.0, so `[Unreleased]` offered a diff five releases wide and the
+  headings for 0.3.0 through 0.7.0 rendered as literal bracketed text linking
+  nowhere. A test now fails on a heading with no definition, which is the only
+  thing that will keep it from drifting again.
+
 ## [0.7.0] — 2026-08-25
 
 Two things ccdad could not do before. It can now measure how fast the fleet is
@@ -1428,7 +1476,15 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/Kweiza/ccdaddy/compare/v0.6.1...v0.7.0
+[0.6.1]: https://github.com/Kweiza/ccdaddy/compare/v0.6.0...v0.6.1
+[0.6.0]: https://github.com/Kweiza/ccdaddy/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/Kweiza/ccdaddy/compare/v0.4.2...v0.5.0
+[0.4.2]: https://github.com/Kweiza/ccdaddy/compare/v0.4.1...v0.4.2
+[0.4.1]: https://github.com/Kweiza/ccdaddy/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/Kweiza/ccdaddy/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/Kweiza/ccdaddy/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Kweiza/ccdaddy/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Kweiza/ccdaddy/compare/v0.1.0-rc1...v0.1.0
 [0.1.0-rc1]: https://github.com/Kweiza/ccdaddy/releases/tag/v0.1.0-rc1
