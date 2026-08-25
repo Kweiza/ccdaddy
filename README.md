@@ -268,6 +268,21 @@ tampered file gets. Compare the key you used against `ccdaddy.pub` in this
 repository before treating that message as a bad release rather than a bad
 paste.
 
+`ccdaddy.pub` is committed here rather than only served from a page, so you can
+compare it against the key compiled into a binary you already trust:
+
+```sh
+grep -Faq "$(sed -n 2p ccdaddy.pub)" "$(command -v ccdad)" \
+  && echo "same key" || echo "no key found; this build predates ccdad update"
+```
+
+A plain `grep -q … && echo` would print nothing both when the key differs and
+when this build carries no key at all, and those are different things to be
+told in a section that exists to answer "is this tampering?" — the second arm
+names the build-predates-it case so the first arm can mean only one thing:
+the keys actually differ. A build predates `ccdad update` when it was built
+before this command shipped; nothing else compiles the key in.
+
 The attestation is a separate check with separate tooling:
 
 ```sh
@@ -288,11 +303,24 @@ arrives with the notices the modules inside it require.
 
 ### Upgrading
 
-Re-run the same one-liner. Both installers stop the running daemon before
-replacing the binary and neither restarts it: it comes back on the next command
-that is allowed to auto-start one — bare `ccdad`, `add`, `add-token`, `list`,
-`status`, `switch` or `which`. `ccdad daemon status` is not one of them, on
-purpose, so a supervisor loop cannot start what it was only asked to look at.
+```sh
+ccdad update
+```
+
+It verifies a signature over the release's `sha256sums.txt` before it replaces
+anything — see [`ccdad update`](#ccdad-update) for what it refuses and why.
+
+Re-running the one-liner still works, and it is the way onto a **different
+architecture**: `ccdad update` always fetches the asset for the architecture
+this binary was built for, so an amd64 build under Rosetta or Windows-on-ARM
+stays on amd64.
+
+Both installers stop the running daemon before replacing the binary and neither
+restarts it: it comes back on the next command that is allowed to auto-start
+one — bare `ccdad`, `add`, `add-token`, `list`, `status`, `tui`, `switch` or
+`which`. `ccdad daemon status` is not one of them, on purpose, so a supervisor
+loop cannot start what it was only asked to look at. `ccdad update` does
+restart it, from the binary it has just written.
 
 ### Removing it
 
@@ -356,6 +384,7 @@ is a usage error rather than a silent hang. Pass the token, or `-`.
 | `ccdad remove` | Stop managing an account and delete its stored credentials |
 | `ccdad doctor` | Check the layout ccdad depends on, and the hazards around it |
 | `ccdad setup-path` | Put the directory holding `ccdad` on your `PATH`, durably |
+| `ccdad update` | Verify and install the latest signed release; `--check` only looks |
 | `ccdad uninstall` | Stop the daemon, delete the store, remove the binary |
 
 Anywhere a command takes an `ACCOUNT`, it accepts a display index, an alias, an
@@ -797,6 +826,50 @@ do:
 3. **Windows.** `>` in Windows PowerShell 5.1 — the version that ships with the
    operating system — writes UTF-16 with a byte-order mark, and the result is
    not the document.
+
+### `ccdad update`
+
+```sh
+ccdad update                    # verify, then replace this binary
+ccdad update --check            # is there one? change nothing
+ccdad update --version v0.6.1   # pin a tag, including an older one
+```
+
+It downloads `sha256sums.txt` and `sha256sums.txt.minisig`, checks the signature
+against a public key compiled into this binary, and only then reads the checksum
+row for this platform. The order matters: a checksum file whose shape has been
+inspected is still a file somebody else wrote.
+
+A release whose signature does not verify is refused, and the message
+deliberately does **not** tell you to re-run the installer. Neither installer
+checks a signature, so that would be the one path that accepts the altered
+release, on checksums the same attacker controls. The refusals that *are* a
+choice somebody made — a release with no signature, one signed by a key this
+build predates — do name the installer.
+
+There is no `--no-verify` and no `--yes`. A mirror that does not carry the
+signature and an attacker who removed it are the same bytes on the wire, and
+naming a tag with `--version` is the consent for a downgrade. Without
+`--version`, a release older than the one running is refused.
+
+`--check` stops before the download, so it answers everything a full run answers
+except three things only the asset can tell you: its size, its checksum, and
+whether it runs on this machine. It is not read-only — it creates and removes a
+directory beside the binary, which is what makes its answer about writability a
+real one.
+
+The daemon is stopped first and started again from the new binary. Inside a
+`ccdad run` session it is stopped and **not** restarted — a daemon spawned from
+inside a session would manage that session's credential directory for the rest
+of its life — and the next ccdad command in a normal shell brings it back.
+
+A Homebrew or Scoop install is refused rather than replaced: run
+`brew upgrade ccdad` or `scoop update ccdad`, which own that binary and its
+`PATH` entry.
+
+Exit codes follow the tree-wide contract. `0` replaced it, or `--check` found
+one; `3` you are already on it; `4` the release was refused; `1` ccdad could not
+do it. With `--json` every non-zero answer carries a `reason`.
 
 ## The dashboard
 
