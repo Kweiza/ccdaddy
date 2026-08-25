@@ -257,13 +257,6 @@ tampered file gets. Compare the key you used against `ccdaddy.pub` in this
 repository before treating that message as a bad release rather than a bad
 paste.
 
-`ccdaddy.pub` is committed here rather than only served from a page, so you can
-compare it against the key compiled into a binary you already trust:
-
-```sh
-grep -Faq "$(sed -n 2p ccdaddy.pub)" "$(command -v ccdad)" && echo "same key"
-```
-
 The attestation is a separate check with separate tooling:
 
 ```sh
