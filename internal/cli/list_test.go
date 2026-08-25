@@ -799,3 +799,78 @@ func TestListReportsBothPerAccountFlagsAtOnce(t *testing.T) {
 		t.Fatalf("the listing does not mark a disabled account:\n%s", out)
 	}
 }
+
+// `ccdad list` measures LEFT against the thresholds hover DERIVED, and it used
+// to do that silently. A reader who set threshold = 80 and sees a row held to 93
+// has no way to tell a defect from a mode doing exactly what it promised, and
+// the listing is where an account is chosen.
+//
+// The note is on stderr, so a piped listing is unchanged, and it is human-only:
+// --json already carries the real per-row windowThreshold, which is a better
+// answer than a sentence about a column that document does not have.
+func TestListSaysWhenItsNumbersCameFromHover(t *testing.T) {
+	isolate(t)
+	freezeClock(t, listNow)
+	seedAccount(t, "u-1", "a@example.com")
+	seedUsageEntry(t, "u-1", usage.Entry{
+		FetchedAt: listNow.Add(-90 * time.Second),
+		Snapshot:  &usage.Snapshot{SevenDay: window(62, listNow.Add(2*time.Hour))},
+	})
+
+	const note = "hover is on"
+	if _, _, errOut, _ := runRoot(t, "list"); strings.Contains(errOut, note) {
+		t.Errorf("the listing credits hover with hover off:\n%s", errOut)
+	}
+
+	if code, _, errOut, _ := runRoot(t, "config", "set", "hover", "true"); code != 0 {
+		t.Fatalf("config set hover true exited %v: %s", code, errOut)
+	}
+
+	code, stdout, errOut, _ := runRoot(t, "list")
+	if code != ExitOK {
+		t.Fatalf("exit %d, want 0\n%s", code, stdout)
+	}
+	if !strings.Contains(errOut, note) {
+		t.Errorf("the listing does not say its numbers came from hover:\n%s", errOut)
+	}
+	if !strings.Contains(errOut, "LEFT") {
+		t.Errorf("the listing credits hover without naming the column it moved:\n%s", errOut)
+	}
+	if strings.Contains(stdout, note) {
+		t.Errorf("the note reached stdout, where a piped listing would parse it:\n%s", stdout)
+	}
+
+	if _, _, jsonErr, _ := runRoot(t, "list", "--json"); strings.Contains(jsonErr, note) {
+		t.Errorf("--json carries a note about a LEFT column it does not have:\n%s", jsonErr)
+	}
+}
+
+// The note describes a COLUMN, so a listing that drew no table must not carry
+// it. Above "No accounts yet" it explains the provenance of numbers that are not
+// there, and the two sentences together read as though something was hidden.
+func TestTheHoverNoteIsNotPrintedAboveAnEmptyListing(t *testing.T) {
+	isolate(t)
+	freezeClock(t, listNow)
+	if code, _, errOut, _ := runRoot(t, "config", "set", "hover", "true"); code != 0 {
+		t.Fatalf("config set hover true exited %v: %s", code, errOut)
+	}
+
+	const note = "hover is on"
+	if _, _, errOut, _ := runRoot(t, "list"); strings.Contains(errOut, note) {
+		t.Errorf("an empty listing credits hover for a column it never drew:\n%s", errOut)
+	}
+
+	// The OTHER empty listing, which leaves by a different return: accounts
+	// exist, and every one of them is held out of rotation.
+	seedAccount(t, "u-1", "a@example.com")
+	if code, _, errOut, _ := runRoot(t, "disable", "a@example.com"); code != 0 {
+		t.Fatalf("disable exited %v: %s", code, errOut)
+	}
+	_, _, errOut, _ := runRoot(t, "list")
+	if !strings.Contains(errOut, "Every account is disabled") {
+		t.Fatalf("the all-disabled listing was not arranged:\n%s", errOut)
+	}
+	if strings.Contains(errOut, note) {
+		t.Errorf("the all-disabled listing credits hover for a column it never drew:\n%s", errOut)
+	}
+}

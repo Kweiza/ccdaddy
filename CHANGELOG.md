@@ -16,6 +16,24 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The dashboards name hover rather than the strategy hover overrode.** Hover
+  derives every threshold for itself and forces the ranking strategy to
+  `headroom`, and `ccdad config list` has always marked the key `overriding`.
+  The dashboard header did not: bare `ccdad` and `ccdad tui` printed
+  `Strategy: consume-first` for a value nothing was reading, which is precisely
+  what hover being OFF looks like. The header now reads `Strategy: hover`.
+  `ccdad status` gains a `Hover:` line, placed above the `Mode:` line it
+  explains — the mode reads `headroom` under hover because hover forced it, so a
+  reader who configured consume-first was being shown a mode they never asked
+  for with no reason for it anywhere on the page. `ccdad status --json` carries
+  `hover: true` while it is on, under the rule `unnamableWeeklyCaps` already
+  follows: absent when it is the boring default, so the contract stays additive
+  and `schemaVersion` stays 1. `ccdad list` says on stderr that its LEFT column
+  was measured against thresholds hover derived, because a row held to 93 with
+  `threshold = 80` in the file is otherwise indistinguishable from a defect.
+
 ## [0.6.1] — 2026-08-25
 
 Hover promised to hold every account to the share of its own window that had

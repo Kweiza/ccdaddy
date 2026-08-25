@@ -707,3 +707,41 @@ func TestTheCursorFollowsTheRowAndNotTheScreenPositionOnceItScrolls(t *testing.T
 		t.Fatalf("the cursor is drawn against the screen position rather than the row:\n%s", body)
 	}
 }
+
+// The header names the strategy in FORCE, and under hover that is not the one in
+// the file: strategy.Options' withHover pass overrides the key. Printing the
+// file's value there is the defect this test exists for -- a reader who had set
+// consume-first saw consume-first and concluded hover was off.
+func TestTheHeaderNamesHoverRatherThanTheStrategyHoverOverrode(t *testing.T) {
+	snap := fixtureSnapshot(fixtureReport(113, 26))
+	snap.Strategy, snap.Hover = "consume-first", true
+
+	page := newModel(snap, 113, 26).Body()
+	if !strings.Contains(page, "Strategy: hover") {
+		t.Errorf("the header does not name hover:\n%s", page)
+	}
+	if strings.Contains(page, "consume-first") {
+		t.Errorf("the header prints a strategy hover overrode:\n%s", page)
+	}
+}
+
+// The picker still marks the configured strategy while hover is on, and that is
+// the reason Snapshot keeps that value beside the label rather than being
+// overwritten with "hover". Setting the key under hover is a legitimate "set it
+// for later" -- `ccdad config list` marks it overriding -- and a picker with
+// nothing marked would have been this fix's own regression.
+func TestTheStrategyPickerStillMarksTheConfiguredEntryUnderHover(t *testing.T) {
+	snap := fixtureSnapshot(fixtureReport(113, 26))
+	snap.Strategy, snap.Hover = "consume-first", true
+	o := fixtureOptions()
+	o.Load = func(time.Time) (view.Snapshot, error) { return snap, nil }
+
+	a := appAt(t, o, 113, 26)
+	a, _, _ = a.key(keyPress("c"))
+	if a.pick.current < 0 {
+		t.Fatal("the strategy picker marks nothing as current under hover")
+	}
+	if got := a.pick.items[a.pick.current].label; got != "consume-first" {
+		t.Errorf("the picker marks %q as current, want the configured consume-first", got)
+	}
+}

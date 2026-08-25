@@ -217,6 +217,10 @@ func (m Model) floors(l Layout) string {
 
 // headerLine is who is live, what the engine is set to, and what it decided.
 //
+// The Strategy clause is Snap.StrategyLabel() and never Snap.Strategy: under
+// hover the configured strategy has stopped being read, and naming it here made
+// a page under a fully automatic mode look exactly like one that was not.
+//
 // The Mode clause is present only when the pass Decided. A zero Plan does not
 // stringify to nothing — it stringifies to plausible values, and the zero Mode
 // is "headroom" — so a line built from a pass that never ran would print a
@@ -226,7 +230,7 @@ func (m Model) floors(l Layout) string {
 // keybar does: a line cut mid-value leaves "Strategy: he", which reads as a
 // strategy named "he" rather than as a line that did not fit.
 func (m Model) headerLine(width int) string {
-	line := "Active: " + m.Snap.ActiveLabel + "  |  Strategy: " + m.Snap.Strategy
+	line := "Active: " + m.Snap.ActiveLabel + "  |  Strategy: " + m.Snap.StrategyLabel()
 	if m.Snap.HasMode {
 		line += "  |  Mode: " + m.Snap.Mode.String()
 	}

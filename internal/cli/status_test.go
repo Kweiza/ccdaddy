@@ -1002,3 +1002,70 @@ func TestStatusNamesTheConsumeFirstMode(t *testing.T) {
 		t.Errorf("the dashboard names the mode without saying what it is spending:\n%s", stdout)
 	}
 }
+
+// `ccdad status` says when hover is on, and it is the one line that explains
+// every other number on the page. Without it the dashboard is actively
+// misleading under hover: the Mode line names headroom because hover FORCED
+// headroom, so a reader who configured consume-first sees a mode they did not
+// ask for and nothing anywhere saying why.
+//
+// The line is printed only when hover is ON. Absence is unambiguous here --
+// hover off is the default and the configured numbers are the ones in force --
+// which is what separates this from the Mode line, where a missing value would
+// have been defaulted to a plausible answer nobody computed.
+func TestStatusSaysWhenHoverIsOn(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	stubDaemon(t, daemon.Report{State: daemon.DaemonStopped}, nil)
+	seedAccountAddedAt(t, "uuid-a", "a@example.com", statusNow.Add(-time.Hour))
+	seedUsageEntry(t, "uuid-a", usage.Entry{
+		FetchedAt: statusNow.Add(-time.Minute),
+		Snapshot:  &usage.Snapshot{FiveHour: window(12, statusNow.Add(40*time.Minute))},
+	})
+
+	_, off, _, _ := runRoot(t, "status")
+	if strings.Contains(off, "Hover:") {
+		t.Errorf("the dashboard reports hover with hover off:\n%s", off)
+	}
+
+	if code, _, errOut, _ := runRoot(t, "config", "set", "hover", "true"); code != 0 {
+		t.Fatalf("config set hover true exited %v: %s", code, errOut)
+	}
+	code, on, _, _ := runRoot(t, "status")
+	if code != ExitOK {
+		t.Fatalf("exit %d, want 0\n%s", code, on)
+	}
+	if !strings.Contains(on, "Hover:   on") {
+		t.Errorf("the dashboard does not say hover is on:\n%s", on)
+	}
+	if !strings.Contains(on, "ccdad hover status") {
+		t.Errorf("the dashboard says hover is on without saying where its numbers can be read:\n%s", on)
+	}
+}
+
+// A script that wants to know whether the thresholds on the wire were derived or
+// configured reads this rather than parsing the table.
+//
+// The key is CONDITIONAL for the reason unnamableWeeklyCaps is: an ordinary
+// payload does not carry a field that is always the boring default. The contract
+// is additive, so schemaVersion stays 1 and a consumer that has never heard of
+// the key is unaffected.
+func TestStatusJSONCarriesHoverOnlyWhenItIsOn(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	stubDaemon(t, daemon.Report{State: daemon.DaemonStopped}, nil)
+	seedAccountAddedAt(t, "uuid-a", "a@example.com", statusNow.Add(-time.Hour))
+
+	_, off, _, _ := runRoot(t, "status", "--json")
+	if _, ok := statusJSON(t, off)["hover"]; ok {
+		t.Error("status --json carries a hover key with hover off")
+	}
+
+	if code, _, errOut, _ := runRoot(t, "config", "set", "hover", "true"); code != 0 {
+		t.Fatalf("config set hover true exited %v: %s", code, errOut)
+	}
+	_, on, _, _ := runRoot(t, "status", "--json")
+	if got := statusJSON(t, on)["hover"]; got != true {
+		t.Errorf("hover = %v, want true", got)
+	}
+}

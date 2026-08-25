@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/daemon"
+	"github.com/Kweiza/ccdaddy/internal/strategy"
 )
 
 // DaemonUnknown is the zero value by design and it is the DEFAULT arm rather
@@ -47,5 +48,44 @@ func TestTheTwoDaemonWordingsStayTwo(t *testing.T) {
 	}
 	if !strings.Contains(dl, "4242") || !strings.Contains(dr, "4242") {
 		t.Errorf("both wordings should still name the pid: DaemonLine=%q DescribeRunning=%q", dl, dr)
+	}
+}
+
+// The label column is nine characters wide across every line the dashboard
+// stacks, and Hover: joins Daemon:, Active: and Mode: in it. It is measured
+// rather than asserted as a literal, because a line that sets its own width is
+// the failure: one value out of the column reads as a different table.
+func TestTheHoverLineStandsInTheSameLabelColumnAsTheRest(t *testing.T) {
+	lines := map[string]string{
+		"Daemon": DaemonLine(daemon.Report{State: daemon.DaemonStopped}, time.Time{}),
+		"Mode":   ModeLine(strategy.ModeHeadroom),
+		"Hover":  HoverLine(),
+	}
+	want := valueColumn(lines["Daemon"])
+	for _, name := range []string{"Mode", "Hover"} {
+		if got := valueColumn(lines[name]); got != want {
+			t.Errorf("%s's value starts at column %d, want %d to match Daemon's: %q", name, got, want, lines[name])
+		}
+	}
+}
+
+// valueColumn is where a dashboard line's VALUE begins: past the colon, and past
+// the padding that lines the column up.
+func valueColumn(line string) int {
+	colon := strings.Index(line, ":")
+	if colon < 0 {
+		return -1
+	}
+	rest := line[colon+1:]
+	return colon + 1 + len(rest) - len(strings.TrimLeft(rest, " "))
+}
+
+// The line says where the derived numbers can be read. "on" by itself leaves a
+// reader who has just seen a threshold they never set with nowhere to go, and
+// the whole argument for handing the wheel over is that nothing is hidden.
+func TestTheHoverLineSaysWhereTheDerivedNumbersCanBeRead(t *testing.T) {
+	line := HoverLine()
+	if !strings.Contains(line, "ccdad hover status") {
+		t.Errorf("HoverLine() = %q, want it to name the command that prints the numbers in force", line)
 	}
 }
