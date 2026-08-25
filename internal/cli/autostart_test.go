@@ -117,6 +117,24 @@ func TestAutoStartDoesNotFireForCommandsThatMustNotHaveOne(t *testing.T) {
 	}
 }
 
+// `ccdad mcp` is deliberately not on the allow-list, and this pins the MAP
+// rather than a run.
+//
+// The table above cannot hold it. The server blocks on stdin, so the only
+// shapes of it that return are a help flag and a bad argument — and cobra
+// answers both several steps before it reaches any persistent pre-run hook, so
+// a row driving either would spawn nothing whether or not the entry existed.
+// This assertion fails the moment somebody adds it, which is the whole
+// property the allow-list is for.
+func TestTheMCPServerIsNotOnTheAutoStartAllowList(t *testing.T) {
+	if autoStartCommands["ccdad mcp"] {
+		t.Error("`ccdad mcp` is on the auto-start allow-list. The client starts and restarts the " +
+			"server on its own schedule, so an entry here spawns a daemon every time that happens, " +
+			"before any tool is called — and the tools that DO auto-start reach the hook through " +
+			"the command tree anyway, one fresh root per call")
+	}
+}
+
 // The recursion test the task asks for, run through the child's OWN entrypoint:
 // whatever else is true, `ccdad __daemon` must start nothing.
 func TestTheDaemonChildStartsNoDaemonOfItsOwn(t *testing.T) {

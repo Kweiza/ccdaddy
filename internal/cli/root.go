@@ -119,6 +119,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newBootstrapCmd())
 	root.AddCommand(newDoctorCmd())
 	root.AddCommand(newDaemonCmd())
+	root.AddCommand(newMCPCmd())
 	root.AddCommand(newSetupPathCmd())
 	root.AddCommand(newUninstallCmd())
 	// Hidden, and registered on the root rather than under `daemon`: Spawn

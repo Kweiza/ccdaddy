@@ -675,6 +675,19 @@ func runRootTo(t *testing.T, stdout io.Writer, args ...string) (code ExitCode, s
 // process and cannot be asserted by constructing a value.
 const pipeRoleEnv = "CCDAD_TEST_PIPE_ARGV"
 
+// mcpRoleEnv turns a re-executed copy of this binary into the ccdad binary
+// running `ccdad mcp`, so one test can drive the real server over a real pipe
+// through the protocol library's own command transport. Some guarantees are
+// properties of a real process -- that nothing but protocol reaches stdout,
+// that the handshake completes against a client that did not build the server
+// -- and cannot be asserted by constructing a value.
+//
+// It is a role of its own rather than a reuse of the pipe role above: that one
+// splits its argument line on whitespace to pin a broken-pipe behaviour, and
+// the two fixtures answer different questions. A change to either would
+// otherwise silently alter the other.
+const mcpRoleEnv = "CCDAD_TEST_MCP_SERVER"
+
 // argvRoleEnv turns a re-executed copy of this binary into a program that
 // records the argument vector it was actually given, into the file the
 // variable names. cmdshim_windows_test.go uses it as a stand-in for node: what
@@ -696,6 +709,10 @@ func TestMain(m *testing.M) {
 			os.Exit(71)
 		}
 		os.Exit(0)
+	}
+	if os.Getenv(mcpRoleEnv) != "" {
+		os.Args = []string{os.Args[0], "mcp"}
+		os.Exit(int(Execute()))
 	}
 	if argv := os.Getenv(pipeRoleEnv); argv != "" {
 		// Execute() itself, not a re-implementation of it. ignoreSIGPIPE is
