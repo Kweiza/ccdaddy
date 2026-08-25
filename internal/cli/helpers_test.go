@@ -87,6 +87,15 @@ func isolate(t *testing.T) string {
 	// variable genuinely absent calls unsetForTest.
 	t.Setenv("CCDAD_IMPORT", "")
 
+	// CLAUDE_PLUGIN_ROOT is Claude Code's, and it is set for exactly one thing:
+	// a server the PLUGIN launched. `ccdad doctor` reads it to say which
+	// spelling this machine's MCP tools have, so a developer running the suite
+	// from inside a plugin-launched shell would get a row CI never sees --
+	// which is the same unsandboxed-input shape as the block above, arriving
+	// through somebody else's variable. The two tests that care about it set it
+	// themselves.
+	t.Setenv("CLAUDE_PLUGIN_ROOT", "")
+
 	// THE TWO PATHS NO t.Setenv CAN REACH. Claude Code compiles in
 	// /home/claude/.claude/remote/.oauth_token and .api_key as literals: they
 	// are absolute, outside the home directory, and read on every machine.
