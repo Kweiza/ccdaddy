@@ -38,11 +38,16 @@ const (
 // from the current snapshot, the rollover that reading reported, and how long
 // the window runs.
 //
-// A zero reset means the reading carried none. That window still burns; it
-// simply never rolls over, so it can only shorten a runway. A length of zero
-// means this release knows no length for the window, which is cinder_cove's
-// case -- its resets_at is an expiry rather than a rollover, and rolling it over
-// would invent an endless series of grants that never arrive.
+// A zero reset means the reading carried none, and what that means depends on
+// the level. ABOVE zero it is a resets_at this build could not read: the window
+// still burns and simply never rolls over, so it can only shorten a runway. AT
+// zero the window has never been spent against, and spend starts its cycle at
+// the first charge that lands on it, which is what the endpoint does and what
+// the fleet's newest account looks like.
+//
+// A length of zero means this release knows no length for the window, which is
+// cinder_cove's case -- its resets_at is an expiry rather than a rollover, and
+// rolling it over would invent an endless series of grants that never arrive.
 type simWindow struct {
 	pct    float64
 	reset  time.Time
@@ -215,8 +220,12 @@ func simulateScoped(accounts []simAccount, rates map[usage.WindowName]float64, s
 			// a time would produce the same answer more slowly.
 			break
 		}
+		// spend is handed the instant the interval BEGINS, and the clock is
+		// advanced after it rather than before: a window whose cycle starts in
+		// this interval starts it at its first charge, and the first charge
+		// lands at t.
+		spend(&state[live], rates, inScope, t, dt, end)
 		t = t.Add(dt)
-		spend(&state[live], rates, inScope, dt, end)
 		rollDue(state, t)
 		recordEmpty(state, emptyAt, t)
 	}
@@ -349,6 +358,11 @@ func nextEvent(state []simAccount, live int, rates map[usage.WindowName]float64,
 // fact refills in forty minutes, and would then report that axis dry while the
 // run over both axes -- strictly more burn and strictly more ways to end --
 // reported the same fleet holding, an ordering the arithmetic does not permit.
+//
+// A zero reset is skipped because it names no rollover: either the reading
+// carried a resets_at this build could not read, or the window has never been
+// spent and has no cycle yet. Starting one here would hand a rollover to every
+// account in the fleet for merely being looked at, spent or not.
 func nextRollover(state []simAccount, after, deadline time.Time) (time.Time, bool) {
 	var out time.Time
 	found := false
@@ -375,6 +389,9 @@ func nextRollover(state []simAccount, after, deadline time.Time) (time.Time, boo
 // every window: an account is out while any window of it is at 100, so a window
 // nothing rolls back holds that account out of service for the whole horizon.
 // Scope says what burns, not whose clock runs.
+//
+// A zero reset is skipped for the reason nextRollover skips it: it names no
+// rollover, and a cycle may only start where a charge lands, which is spend.
 //
 // Whole lengths rather than one, because an interval can span several: a weekly
 // axis stepping past a five-hour window crosses eight of its boundaries at once,
@@ -403,19 +420,34 @@ func rollDue(state []simAccount, t time.Time) {
 // early, which on a six-account fleet is the difference between an hour and an
 // evening.
 //
+// A window at zero with no reset has never been spent against, and an interval
+// that charges it is the moment that changes: the endpoint starts a window's
+// clock at its first charge, so the model starts it at t. Without this a fresh
+// account -- one added an hour ago and not yet used -- supplies its hundred
+// points once and never again. It is deliberately not done in rollDue,
+// catchUpResets or nextRollover, which run over every window of every account
+// on every step: a cycle started in any of them would be handed to accounts
+// nothing has touched. A window ABOVE zero with no reset is the other state and
+// keeps the other rule, stated on simWindow.
+//
 // end is set to exactly 100 rather than left to the arithmetic. Multiplying a
 // rate by an interval derived from that same rate does not land on 100; it lands
 // within a few parts in 10^16, and a residue that size leaves the account usable
 // with a room of 10^-14, makes the next interval 10^-16 hours long, and the run
 // crawls forward in steps too small to see instead of finishing. The clamp is
 // the same defence for the windows that did not end the interval.
-func spend(a *simAccount, rates map[usage.WindowName]float64, inScope map[usage.WindowName]bool, dt time.Duration, end usage.WindowName) {
+func spend(a *simAccount, rates map[usage.WindowName]float64, inScope map[usage.WindowName]bool, t time.Time, dt time.Duration, end usage.WindowName) {
 	hours := dt.Hours()
 	for n, w := range a.windows {
 		if !inScope[n] {
 			continue
 		}
 		if rate := rates[n]; rate > 0 {
+			// Inside the rate test, because a rate of zero charges nothing and
+			// a window nothing charged has not been spent.
+			if w.reset.IsZero() && w.pct == 0 {
+				w.reset = t.Add(w.length)
+			}
 			w.pct += rate * hours
 		}
 		if n == end || w.pct > 100 {

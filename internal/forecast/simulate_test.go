@@ -167,6 +167,112 @@ func TestAWindowWithNoResetIsBurnedNotFrozen(t *testing.T) {
 	}
 }
 
+// A window at zero with no reported reset has never been spent against, and its
+// cycle starts the moment something first spends it -- which is what the
+// endpoint does: a window's clock starts at its first charge. Freezing it
+// instead models an account that supplies its hundred points once and never
+// again, which throws a fresh account's whole quota away. An account added an
+// hour ago and not yet used reads exactly like this.
+//
+// This fixture and the one below differ in one field, the level, because that
+// is the field the rule turns on.
+func TestANeverSpentWindowStartsItsCycleWhenItIsFirstBurned(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	accts := []simAccount{{
+		uuid: "fresh", idx: 1,
+		windows: map[usage.WindowName]simWindow{
+			usage.WindowFiveHour: {pct: 0, length: 5 * time.Hour}, // zero reset: never spent
+		},
+	}}
+	// 20 points an hour is exactly one account's five-hour supply, so a window
+	// that rolls over holds for ever and one that does not is spent in five
+	// hours and never comes back.
+	rates := map[usage.WindowName]float64{usage.WindowFiveHour: 20}
+	_, dry, _ := runBounded(t, func() (time.Time, bool, map[string]time.Time) {
+		return simulate(accts, rates, now)
+	})
+	if dry {
+		t.Fatal("a fresh account supplied its window once and never again; a window nothing has spent starts its cycle when it is first burned")
+	}
+}
+
+// The other half of that rule, and it does not move: a window ABOVE zero with
+// no reset is a resets_at this build could not read, not an unused window. It
+// is burned and never rolled over, which can only shorten a runway -- the
+// fail-closed direction, and the one this package chose.
+//
+// It takes two accounts to measure. A run reports the fleet dry the moment its
+// own burn leaves nobody able to take work, so on a lone frozen account the
+// rollover a wrong implementation invented would arrive after the answer was
+// already given, and the fixture would pass either way. Here the second account
+// is still alive when that invented rollover would land: uuid-frozen is spent
+// two hours in and never returns, uuid-rolling runs the fleet on to 5h30m, and
+// a build that started uuid-frozen's cycle at its first charge would hand it a
+// rollover at 5h and hold for ever at a rate two accounts can just about carry.
+func TestASpentWindowWithNoResetIsStillFrozen(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	accts := []simAccount{
+		{uuid: "uuid-frozen", idx: 1, windows: map[usage.WindowName]simWindow{
+			usage.WindowFiveHour: {pct: 20, length: 5 * time.Hour}, // zero reset, 80 points of room
+		}},
+		{uuid: "uuid-rolling", idx: 2, windows: map[usage.WindowName]simWindow{
+			usage.WindowFiveHour: {pct: 30, reset: now.Add(3 * time.Hour), length: 5 * time.Hour},
+		}},
+	}
+	// 40 points an hour is what two five-hour windows supply between them, so
+	// the verdict turns on whether the frozen one is one of the two.
+	rates := map[usage.WindowName]float64{usage.WindowFiveHour: 40}
+	dryAt, dry, _ := runBounded(t, func() (time.Time, bool, map[string]time.Time) {
+		return simulate(accts, rates, now)
+	})
+	// 80 points on the frozen account and 70 + 100 on the rolling one, at 40 an
+	// hour, with one rollover three hours in.
+	want := now.Add(5*time.Hour + 30*time.Minute)
+	if !dry || !dryAt.Equal(want) {
+		t.Fatalf("dry = %v at %v; want true at %v -- a reset nobody could read became capacity nobody could prove", dry, dryAt.Sub(now), want.Sub(now))
+	}
+}
+
+// A cycle starts where a charge lands and nowhere else. rollDue, catchUpResets
+// and nextRollover each run over every window of every account on every step,
+// so a cycle started in any of them belongs to accounts nothing has touched --
+// an idle seat handed a rollover it never earned, which is capacity invented
+// out of nothing on the axis this package fails closed on.
+//
+// Asserted on the state rather than on a verdict, because an account nothing
+// ever chooses neither burns nor supplies: its invented rollover moves no
+// answer, which is precisely why nothing but a state assertion can see it.
+func TestAnAccountNothingHasSpentIsNeverHandedARollover(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	idle := []simAccount{{
+		uuid: "idle", idx: 1,
+		windows: map[usage.WindowName]simWindow{
+			usage.WindowFiveHour: {pct: 0, length: 5 * time.Hour}, // zero reset: never spent
+		},
+	}}
+	catchUpResets(idle, now)
+	// One call, at the far end of the run: rollDue's effect does not depend on
+	// how many times it is called, so this is every step of the horizon at once.
+	rollDue(idle, now.Add(horizon))
+	if got := idle[0].windows[usage.WindowFiveHour].reset; !got.IsZero() {
+		t.Fatalf("an account nothing spent was given a cycle starting %v; only a charge starts one", got.Sub(now))
+	}
+	if at, has := nextRollover(idle, now, now.Add(horizon)); has {
+		t.Fatalf("a window nothing has spent reported a rollover at %v", at.Sub(now))
+	}
+	// And the fourth place, inside spend itself: a rate of zero charges
+	// nothing, so an interval that spends this account still leaves the window
+	// unspent. A window at a zero rate is not a corner -- it is every window
+	// the fleet has no measured rate for.
+	spend(&idle[0],
+		map[usage.WindowName]float64{usage.WindowFiveHour: 0},
+		map[usage.WindowName]bool{usage.WindowFiveHour: true},
+		now, time.Hour, "")
+	if got := idle[0].windows[usage.WindowFiveHour].reset; !got.IsZero() {
+		t.Fatalf("a window charged nothing was given a cycle starting %v", got.Sub(now))
+	}
+}
+
 // A rate of zero is a rate. A window at zero rate never reaches 100 and must
 // contribute NO event rather than an infinite one: time.Duration(math.Inf(1))
 // is a large NEGATIVE count on the platforms this ships to, so an infinite
