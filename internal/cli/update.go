@@ -192,7 +192,7 @@ func (r *updateReport) emit(cmd *cobra.Command, asJSON bool, code ExitCode, reas
 
 // say prints one progress line, and nothing at all under --json.
 //
-// stopDaemon and startDaemonFrom print their own lines and are not routed
+// stopDaemon and startDaemon print their own lines and are not routed
 // through here. Those go to stderr, which the --json contract leaves alone.
 func say(cmd *cobra.Command, asJSON bool, format string, a ...any) {
 	if asJSON {
