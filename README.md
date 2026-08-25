@@ -272,9 +272,12 @@ paste.
 compare it against the key compiled into a binary you already trust:
 
 ```sh
-ccdad_bin=$(command -v ccdad) || { echo "no ccdad on PATH"; exit 1; }
-grep -Faq "$(sed -n 2p ccdaddy.pub)" "$ccdad_bin" \
-  && echo "same key" || echo "no key found; this build predates ccdad update"
+if ccdad_bin=$(command -v ccdad); then
+  grep -Faq "$(sed -n 2p ccdaddy.pub)" "$ccdad_bin" \
+    && echo "same key" || echo "no key found; this build predates ccdad update"
+else
+  echo "no ccdad on PATH"
+fi
 ```
 
 The `command -v` is a separate step because it can fail. Inlined, a machine
