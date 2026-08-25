@@ -687,3 +687,100 @@ func TestTheOneShotPageResolvesAutoThroughTheBackgroundQuery(t *testing.T) {
 		})
 	}
 }
+
+// Model.Body is the surface carrying the most paint, and until this test it was
+// the only painted surface in the package with no strip-equality gate and no
+// width gate of its own. The [D] screen has one, the keybar has one, and the
+// panel and the picker have their width bounds; the main page had neither.
+//
+// Two assertions, and neither subsumes the other.
+//
+// The FIRST is the one the whole fixture strategy rests on: ansi.Strip of the
+// painted page equals the colourless page byte for byte. Forty-one assertions
+// in render_test.go and fourteen in model_test.go read raw rendered bytes with
+// no strip anywhere, and every one of them is sound only because the None theme
+// emits nothing -- but "emits nothing" is a claim about a theme, while "the
+// paint changed no text" is a claim about the RENDERER, and it is the second
+// that a misplaced Render breaks. A style applied to a joined multi-line block
+// would right-pad four rows of the wordmark and this would catch it; a style
+// applied around a truncation would move where the cut lands and this would
+// catch that too.
+//
+// The SECOND is the width bound, and it is why this page in particular needs
+// one. This is the only surface in the package where escapes now sit INSIDE a
+// table cell: the gauge is built as "[" + ViewAs(...) + "] " + pct, and progress
+// paints fill and track as two separate Render calls, so the SGR bytes are in
+// the cell string before lipgloss/table ever measures it. Nothing else here
+// exercises that library's own column arithmetic against a styled cell. It is
+// asserted as EQUALITY wherever the page is framed, not merely as a bound: a
+// bordered box makes every line the same width, so a framed page that is merely
+// "not too wide" is a page whose frame has come apart on one side.
+//
+// Framing is read off the plain page with golden_test.go's own frameClass and
+// linesCarrying rather than by asking the height ladder a second time, so this
+// test and the ladder-profile test agree about what a framed page is by
+// construction instead of by two copies of the same arithmetic.
+//
+// The table walks the width ladder at every rung that changes the COLUMN SET --
+// full, WINDOW gone, TYPE gone, AUTO gone, STATE gone, the gauge collapsed, the
+// floor -- and above the top rung as well, where ACCOUNT grows to its maximum.
+// The heights are chosen so that each of the blocks the height ladder drops is
+// dropped somewhere in the table, including the rung that takes the frame away,
+// because an equality assertion that only ever ran on framed pages would never
+// have exercised its other arm.
+func TestPaintingThePageChangesNoByteOfItsTextAndNoColumnOfItsWidth(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		w, h int
+		prep func(*Model)
+	}{
+		{"every column and all the chrome", 113, 26, nil},
+		{"ACCOUNT grown past the top rung", 160, 26, nil},
+		{"WINDOW dropped", 91, 26, nil},
+		{"TYPE dropped, figures gone", 77, 24, nil},
+		{"AUTO dropped", 71, 20, nil},
+		{"STATE dropped, the gauge still drawn", 56, 16, nil},
+		{"the frame dropped", 56, 10, nil},
+		{"the gauge collapsed", 43, 12, nil},
+		{"the smallest page that still renders", 35, 3, nil},
+		{"a notice, which is painted as a whole line", 80, 20, func(m *Model) {
+			m.Snap.Notices = []string{"hover thresholds could not be read"}
+		}},
+		{"a runway line, whose bytes are not this package's", 113, 24, func(m *Model) {
+			m.Snap.Forecast, m.Snap.HasForecast = fixtureFleet(), true
+		}},
+		{"zero accounts, so the marker row is the only row", 80, 13, func(m *Model) {
+			m.Snap.Rows = nil
+		}},
+		{"more rows than fit, so the marker row sits under them", 113, 5, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			plain, dark := fixtureModel(tc.w, tc.h), darkModel(tc.w, tc.h)
+			if tc.prep != nil {
+				tc.prep(&plain)
+				tc.prep(&dark)
+			}
+			plainBody, darkBody := plain.Body(), dark.Body()
+
+			if got := ansi.Strip(darkBody); got != plainBody {
+				t.Fatalf("painting the page changed its text at %dx%d:\n painted+stripped:\n%s\n plain:\n%s",
+					tc.w, tc.h, got, plainBody)
+			}
+
+			plainLines := strings.Split(plainBody, "\n")
+			framed := linesCarrying(plainLines, frameClass(plain.Glyphs)) == len(plainLines)
+			for i, line := range strings.Split(darkBody, "\n") {
+				got := ansi.StringWidth(line)
+				if got > tc.w {
+					t.Errorf("at %dx%d the painted line %d is %d columns wide, %d more than the terminal has: %q",
+						tc.w, tc.h, i, got, got-tc.w, line)
+					continue
+				}
+				if framed && got != tc.w {
+					t.Errorf("at %dx%d the painted line %d is %d columns inside a %d-column frame, so the frame is ragged: %q",
+						tc.w, tc.h, i, got, tc.w, line)
+				}
+			}
+		})
+	}
+}
