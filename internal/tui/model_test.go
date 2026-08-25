@@ -156,6 +156,17 @@ func TestTheContentTickAdvancesTheMomentThePageDescribes(t *testing.T) {
 // to say that no fourth way got in -- a package named here that is not on the
 // pure list has to be listed call by call.
 func TestNothingInTheLoopEverFetches(t *testing.T) {
+	// The pure list is packages with no way to reach the world at all, so no
+	// call into one of them can be a fetch and none has to be listed by name.
+	//
+	// internal/theme is on it because it is a leaf that imports image/color and
+	// lipgloss and nothing else: every exported name is either a constant or a
+	// total function over a Name and a bool. In particular theme.Pick is the
+	// arm that resolves theme.Auto once the terminal has ANSWERED -- the
+	// question was asked by the library, off a Cmd, and arrived here as a
+	// message. Resolving an answer somebody else obtained is not a read, and
+	// the thing this test exists to forbid, a query issued from inside the
+	// loop, is exactly what routing it through Init's Cmd avoids.
 	pure := map[string]bool{
 		"errors":                    true,
 		"fmt":                       true,
@@ -163,7 +174,8 @@ func TestNothingInTheLoopEverFetches(t *testing.T) {
 		"time":                      true,
 		"charm.land/bubbles/v2/key": true,
 		"charm.land/bubbletea/v2":   true,
-		"github.com/Kweiza/ccdaddy/internal/view": true,
+		"github.com/Kweiza/ccdaddy/internal/theme": true,
+		"github.com/Kweiza/ccdaddy/internal/view":  true,
 	}
 	// Every name this package reaches for outside the pure list, one at a
 	// time. TailLog is the bounded log read -- the whole of this package's own

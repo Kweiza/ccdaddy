@@ -9,6 +9,7 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 	"github.com/Kweiza/ccdaddy/internal/pollpolicy"
+	"github.com/Kweiza/ccdaddy/internal/theme"
 	"github.com/Kweiza/ccdaddy/internal/view"
 )
 
@@ -41,6 +42,16 @@ type daemonScreen struct {
 	// nothing. A screen that picked its own set would print one state alphabet
 	// while the table one keypress away printed another.
 	Glyphs Glyphs
+	// Pal is the theme the page this screen was opened from is drawing in. It
+	// arrives rather than being resolved here for the same reason the log
+	// arrives as lines: nothing in this package may probe a terminal, and a
+	// screen that picked its own theme would be a second answer to a question
+	// the program has already asked once.
+	//
+	// Its zero value is the None palette, which is what every struct literal
+	// that predates this field carries and what keeps those literals rendering
+	// exactly what they rendered before.
+	Pal theme.Palette
 }
 
 // Keys is the base map with the start key disabled when the lock could not be
@@ -208,11 +219,17 @@ func (d daemonScreen) pollSchedule() []string {
 	cols := make([][4]string, len(accounts))
 	var wide [4]int
 	for i, a := range accounts {
-		glyph, text, _ := stateCell(d.Glyphs, a.State)
+		glyph, text, role := stateCell(d.Glyphs, a.State)
 		state := text
 		if glyph != "" {
 			state = glyph + " " + text
 		}
+		// Painted here, BEFORE the width is taken. Every measurement in this
+		// block is ansi.StringWidth already, so the escape bytes cost the column
+		// nothing and the padding lands outside them -- which is what keeps a
+		// painted cell and an unpainted one the same number of columns in the
+		// same block.
+		state = d.Pal.Style(role).Render(state)
 		poll := "last poll -"
 		if !a.LastPollAt.IsZero() {
 			poll = "last poll " + d.ago(a.LastPollAt)

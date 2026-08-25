@@ -177,11 +177,19 @@ func TestTheCollapsedGaugeIsTheBarePercentageAndKeepsTheAbsenceRule(t *testing.T
 	}
 }
 
-// The styles are all their zero value in this task -- lipgloss v2 has no
-// auto-adaptive fallback, so the concrete colours are a later commit's call.
-// This pins that the plain path emits no escape byte today, so that later
-// commit cannot slip one into a fixture without this test turning red.
+// The cells this package builds by hand carry no escape byte under the None
+// theme, and the state cell's ROLE is now checked through a rendered style
+// rather than through the text alone.
+//
+// The third return used to be dropped on the floor here, justified by a claim
+// that lipgloss v2 has no auto-adaptive fallback. What v2 removed is the global
+// renderer -- a Style consults nothing about the terminal on its own, so the
+// background-darkness boolean is threaded in from the program -- and that claim
+// was measured wrong: with a colour on the active state, this test went on
+// passing. That is exactly the shape of gate that keeps passing after somebody
+// starts painting the cell it was watching, so it renders the style now.
 func TestThePlainPathEmitsNoEscapeByte(t *testing.T) {
+	pal := theme.Of(theme.None)
 	g := newGauge(UnicodeGlyphs)
 	rows := []view.Row{rowAtPercent(0), rowAtPercent(87), rowAtPercent(100), rowWithNoEntry(), enabledRow(), disabledRow()}
 	for _, r := range rows {
@@ -192,7 +200,7 @@ func TestThePlainPathEmitsNoEscapeByte(t *testing.T) {
 			accountCell(r.ListLabel(), 20, UnicodeGlyphs.Cue),
 		} {
 			if strings.ContainsRune(cell, 0x1b) {
-				t.Fatalf("cell %q carries an escape byte on the plain, uncoloured path", cell)
+				t.Fatalf("cell %q carries an escape byte under the None theme", cell)
 			}
 		}
 	}
@@ -200,9 +208,9 @@ func TestThePlainPathEmitsNoEscapeByte(t *testing.T) {
 		daemon.StateActive, daemon.StateCandidate, daemon.StateExhausted,
 		daemon.StateQuarantined, daemon.StateDisabled, daemon.StateUnknown, "",
 	} {
-		glyph, text, _ := stateCell(UnicodeGlyphs, s)
-		if strings.ContainsRune(glyph, 0x1b) || strings.ContainsRune(text, 0x1b) {
-			t.Fatalf("stateCell(%q) carries an escape byte on the plain, uncoloured path", s)
+		glyph, text, role := stateCell(UnicodeGlyphs, s)
+		if styled := pal.Style(role).Render(text); strings.ContainsRune(glyph, 0x1b) || strings.ContainsRune(styled, 0x1b) {
+			t.Fatalf("stateCell(%q) carries an escape byte under the None theme", s)
 		}
 	}
 }
