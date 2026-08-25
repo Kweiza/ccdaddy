@@ -849,9 +849,8 @@ func isNoColor(c color.Color) bool {
 }
 
 // DarkBackground answers whether this process's terminal has a dark
-// background: for the one-shot page below, and for the one-shot listings in
-// package cli, which reads this same var rather than writing a second query.
-// Every clause of it is a bound rather than a preference.
+// background, for the one-shot page below and for nothing else. Every clause of
+// it is a bound rather than a preference.
 //
 // It asks only when stdin AND stdout are terminals, and that guard has to be
 // the CALLER'S. On Windows lipgloss opens CONIN$ and CONOUT$ explicitly when
@@ -859,20 +858,32 @@ func isNoColor(c color.Color) bool {
 // `ccdad status > file` from a scheduled task would sit in raw mode waiting for
 // a reply from nobody.
 //
-// It asks at most once per process, because the query puts stdin into raw mode
-// with a deferred restore and blocks up to two seconds on a terminal that
-// answers neither OSC 11 nor DA1. Twice is four seconds before a table appears.
+// It asks at most once per process, because one ask is already the most
+// expensive line in this binary. lipgloss's BackgroundColor loops over stdin
+// AND stdout and runs both legs even where they are the same file -- there is
+// no in == out guard to fall through -- at a two-second timeout each, so a
+// single call puts stdin into raw mode with a deferred restore and blocks FOUR
+// seconds on a terminal that answers neither OSC 11 nor DA1. Twice is eight.
 //
 // It answers dark when it did not ask, which is the same default the
 // interactive half takes when a multiplexer eats the reply. A default that is
 // DEFINED rather than awaited is what keeps the two surfaces from disagreeing
 // on a terminal that never answers.
 //
-// It is a package var because no test has a terminal, and it is EXPORTED for
-// the same reason it is cached: package cli's one-shot tables need this answer
-// too, and a second sync.OnceValue over there would be a second two-second
-// budget and a second thing every test in that package had to remember to stub.
-// It is never reached from the daemon, which renders nothing.
+// It is a package var because no test has a terminal, and it is EXPORTED with
+// no reader outside this package left, which is a state worth explaining
+// instead of tidying. Package cli's one-shot tables did read it, on the
+// argument that one cache beats two; the argument was wrong on its own numbers,
+// because a sync.OnceValue is once per PROCESS and every one of those listings
+// is its own process, so `ccdad list` paid the full four seconds under the
+// default theme on a terminal that never answers. They take the same defined
+// dark default this function returns when it declines to ask, and the thing
+// that keeps them off this name is a syntax walk in that package which spells
+// the name out. Unexporting would make that walk unreadable -- a ban on
+// something the compiler already refuses teaches nobody what the cost was --
+// and it would be a change to this page's own mechanism made for a reason that
+// belongs to a different one. It is never reached from the daemon, which
+// renders nothing.
 var DarkBackground = sync.OnceValue(func() bool {
 	if !isTerminal(os.Stdin) || !isTerminal(os.Stdout) {
 		return true
@@ -903,8 +914,20 @@ func Render(o Options) (string, error) {
 	// the configured word, and this is the branch the query is scoped to: a
 	// redirected page has no Update to answer a BackgroundColorMsg, so this is
 	// its only chance to ask, and resolving in tuiOptions would have moved the
-	// two-second wait onto the interactive branch instead -- the one path that
-	// must not block.
+	// FOUR-second wait onto the interactive branch instead -- the one path that
+	// must not block. Four and not two, because the library runs the query
+	// against stdin and then against stdout, two seconds a leg.
+	//
+	// In a shipping binary this line has never actually paid it, and that is
+	// worth knowing before anyone reaches for the same call somewhere cheaper
+	// looking. runTui reaches Render only when stdout or stdin is NOT a
+	// terminal, and DarkBackground declines to ask unless both are, so the
+	// guard has closed on every invocation that has ever got here. The ask
+	// stays rather than being cut, because the guard belongs to DarkBackground
+	// and the caller set is not this function's to freeze -- a second caller
+	// with two terminals and no event loop is exactly the case it is written
+	// for -- but nobody should read this as a cost the redirected page is
+	// paying today.
 	//
 	// paletteFor stays the answer for every other name INCLUDING the empty one,
 	// and the guard is why. theme.Pick resolves an unrecognised name -- the

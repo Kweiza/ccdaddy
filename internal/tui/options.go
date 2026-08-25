@@ -97,8 +97,10 @@ type Options struct {
 	// request into the batch its event loop already sends and handling the
 	// reply as a message, blocking for nothing. A one-shot render asks
 	// synchronously and pays the full price: raw mode on stdin, a request
-	// written to stdout, and up to two seconds of waiting on a terminal that
-	// answers neither that request nor the identity one it falls back to. Those
+	// written to stdout, and up to FOUR seconds of waiting on a terminal that
+	// answers neither that request nor the identity one it falls back to -- the
+	// library runs the whole query twice, once per stdio end, two seconds a
+	// leg, whether or not the two ends are the same file. Those
 	// prices are only payable by whoever knows which path is running, and the
 	// caller building this struct does not: it builds one Options and hands it
 	// to whichever half the terminals turn out to justify.

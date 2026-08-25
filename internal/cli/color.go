@@ -9,7 +9,6 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/config"
 	"github.com/Kweiza/ccdaddy/internal/theme"
-	"github.com/Kweiza/ccdaddy/internal/tui"
 )
 
 // colorWriter is the one place in this binary that decides whether an
@@ -19,8 +18,13 @@ import (
 // It exists because lipgloss v2's Render() emits truecolor unconditionally.
 // The v1 global renderer that stripped colour off a pipe is gone, so a
 // rendering handed straight to os.Stdout writes escape bytes into every
-// redirected invocation and every CI log. Until this file, this repository
-// emitted no escape byte at all.
+// redirected invocation and every CI log. When this file landed there was not
+// one escape byte anywhere in the tree, which is what made the writer cheap to
+// get right and impossible to notice; that is no longer the state of anything.
+// The four surfaces that call renderTarget below -- list, status, doctor and
+// the daemon summary -- and every screen of the dashboard now paint from
+// internal/theme, so this writer is the whole reason
+// `ccdad list > accounts.txt` is still a file of plain text.
 //
 // The profile writer downgrades to whatever the destination can carry, which
 // for a bytes.Buffer or a redirected file is nothing. It reads NO_COLOR and
@@ -75,7 +79,7 @@ func renderTarget(cmd *cobra.Command) (io.Writer, theme.Palette) {
 
 // resolvePalette is the configured theme, as a package var for the same reason
 // colorWriter is one: the decision has to be observable from a test rather than
-// delegated to a file on disk and a query to a terminal that no test has.
+// delegated to a file on disk.
 //
 // A bad value in the file is not this function's failure to report. config.Load
 // already validates tui.theme against theme.Names() and every caller of a
@@ -87,35 +91,50 @@ func renderTarget(cmd *cobra.Command) (io.Writer, theme.Palette) {
 // that read the store, the usage cache and the daemon's status file already;
 // one more small read is not what makes them slow, and a cache here would be a
 // second copy of a value config.Load is the single source of.
+//
+// AUTO IS ANSWERED HERE AND NEVER ASKED, and the number is the whole argument.
+// lipgloss's BackgroundColor loops over stdin AND stdout and runs both legs
+// even when they are the same file -- there is no in == out guard to fall
+// through -- at a two-second timeout each, so ONE call costs FOUR seconds on a
+// terminal that answers neither OSC 11 nor DA1. Measured against a silent pty
+// with a seeded store, with this function still asking: `list` 4.06 s, `status` 4.08 s, `doctor` 4.10 s,
+// `daemon status` 4.07 s, against 0.08 s apiece once `tui.theme = none` takes
+// the branch above. Halving it is not available, and caching it is worth
+// nothing -- which is the trap this function was in. A sync.OnceValue is once
+// per PROCESS, every one of these commands IS its own process, so the cache was
+// filled and thrown away inside a single invocation that would otherwise have
+// cost a tenth of a second. The rationale that shared it said as much and did
+// not notice: it justified one cache over two because "a process that rendered
+// a listing and then a dashboard would pay four seconds", which is the price of
+// one query.
+//
+// So the rule the dashboard already lives by is taken here too: a default that
+// is DEFINED beats a default that is awaited. The interactive page takes dark
+// when a multiplexer eats the reply, the one-shot page takes dark when stdio is
+// not a terminal, and a listing takes dark full stop. What that costs is a
+// reader on a light terminal who never opens config.toml, and the cost is one
+// line -- `theme = "light"` under `[tui]`, once per machine, and every listing
+// is right for the life of it. What it buys back is every piped, scripted and
+// CI invocation on an emulator that ignores the query: none of them was ever
+// going to be shown a colour, and all of them paid four seconds for one.
+//
+// COLORFGBG would answer this for free on the terminals that export it, and it
+// is deliberately not read. It is a new detection mechanism -- its own parsing,
+// its own wrong answers on the terminals that set it stale, its own tests --
+// and reaching for one to close a latency defect is how a fix turns into a
+// feature nobody reviewed.
 var resolvePalette = func() theme.Palette {
 	name := theme.Name(config.Defaults().TUITheme)
 	if cfg, err := config.Load(); err == nil {
 		name = theme.Name(cfg.TUITheme)
 	}
-	// The guard is a cost bound, not a shortcut: Pick's arguments are evaluated
-	// before it is called, so passing darkBackground() unconditionally would
-	// pay for the query on every theme including the three that ignore it.
 	if name != theme.Auto {
 		return theme.Of(name)
 	}
-	return theme.Pick(theme.Auto, darkBackground())
+	// theme.Of and not theme.Pick, and the difference is not a matter of taste.
+	// Pick's second argument is what a terminal ANSWERED, and no terminal is
+	// being asked on this path; handing it a hardcoded true would read to the
+	// next person as an answer somebody obtained cheaply, which is exactly the
+	// impression that has to be impossible to form here.
+	return theme.Of(theme.Dark)
 }
-
-// darkBackground is the one-shot background query, and it is package tui's
-// DarkBackground rather than a second query written on this side.
-//
-// It is a var so this package's tests can replace it, and it POINTS AT the
-// other package's seam instead of duplicating it for a reason that outranks
-// tidiness. The query puts stdin into raw mode with a deferred restore and
-// blocks up to two seconds on a terminal that answers neither OSC 11 nor DA1.
-// Two sync.OnceValues in two packages are two caches and two budgets: a process
-// that rendered a listing and then a dashboard would pay four seconds, and a
-// test in this package that forgot to stub its own private copy would take raw
-// mode away from whoever was watching `go test ./internal/cli/` in a terminal.
-//
-// Every bound the query needs -- terminals on both ends of stdio, at most once
-// per process, dark when it did not ask -- is stated where it is implemented,
-// in internal/tui. Restating them here would be a second place for them to
-// drift apart, and the drift would be invisible until somebody was staring at a
-// grey page wondering which half had answered.
-var darkBackground = tui.DarkBackground

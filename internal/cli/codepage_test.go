@@ -10,12 +10,24 @@ import (
 // Which invocations consult the console output code page, through the seam --
 // and startup does not, which is what keeps it out of the daemon.
 //
-// Nothing in the tree reads consoleUTF8 yet but this file. The glyph set that
-// resolves `auto` against it lands next, and it will read it from tuiOptions,
-// per render, behind the stdout-and-stdin gate. This test is the fence that
-// goes up first, because the tempting place to put a second capability probe
-// is beside the first one -- enableConsoleVT(os.Args[1:]) in Execute -- and
-// that line runs for every invocation this binary has, the daemon's included.
+// consoleUTF8 has exactly one production caller, tuiOptions, which puts the
+// answer into tui.Options for the glyph picker to resolve `auto` against. That
+// call sits BEFORE the stdout-and-stdin gate and not behind it: runTui asks the
+// two terminal questions and then builds one Options for whichever half it
+// chose, so the code page is read once per invocation that reaches the
+// dashboard, on the interactive branch and the redirected one alike.
+//
+// That is the right shape rather than a leak. The vocabulary has to be the same
+// on a page a reader scrolls and a page a reader pipes, and a probe that ran on
+// only one branch would be two answers to one question -- with the one nobody
+// measured left to a default. What the gate decides is which HALF renders, not
+// what this console is.
+//
+// The fence is around the invocations that are not that one, and it went up
+// before the caller existed, because the tempting place to put a second
+// capability probe is beside the first one -- enableConsoleVT(os.Args[1:]) in
+// Execute -- and that line runs for every invocation this binary has, the
+// daemon's included.
 //
 // A daemon reading the code page would be a process with a redirected stdout
 // and no glyph to draw asking a question about a window it does not own, and
