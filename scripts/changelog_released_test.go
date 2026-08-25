@@ -122,25 +122,44 @@ func TestNoReleasedSectionHasChangedSinceItWasCut(t *testing.T) {
 		want[fields[1]] = fields[0]
 	}
 
+	for _, p := range releasedSumProblems(versions, digests, want) {
+		t.Error(p)
+	}
+}
+
+// releasedSumProblems is the comparison itself, lifted out of the test that
+// runs it so that the REPORT can be tested and not merely the digest.
+//
+// It is worth the extra name. With the comparison inline, deleting the arm
+// that reports a moved digest left the whole suite green: every fixture in it
+// fed the digest function directly, and nothing asked what the gate said. That
+// is the shape a gate fails in — the check is correct and nobody is holding it.
+func releasedSumProblems(versions []string, digests, want map[string]string) []string {
+	var out []string
 	for _, v := range versions {
 		switch {
 		case want[v] == "":
-			t.Errorf("`## [%s]` has no digest in %s.\n"+
-				"If you are cutting a release, regenerate the file in the same commit.", v, releasedSums)
+			out = append(out, fmt.Sprintf(
+				"`## [%s]` has no digest in %s.\n"+
+					"If you are cutting a release, regenerate the file in the same commit.",
+				v, releasedSums))
 		case want[v] != digests[v]:
-			t.Errorf("`## [%s]` no longer matches the bytes it was released with.\n"+
-				"  recorded %s\n  now      %s\n"+
-				"A released section is immutable. The usual cause is a rebase across a release\n"+
-				"cut: git merges CHANGELOG.md cleanly and drops your new entry inside the\n"+
-				"released section instead of `[Unreleased]`. Move it up to `[Unreleased]`.",
-				v, want[v], digests[v])
+			out = append(out, fmt.Sprintf(
+				"`## [%s]` no longer matches the bytes it was released with.\n"+
+					"  recorded %s\n  now      %s\n"+
+					"A released section is immutable. The usual cause is a rebase across a release\n"+
+					"cut: git merges CHANGELOG.md cleanly and drops your new entry inside the\n"+
+					"released section instead of `[Unreleased]`. Move it up to `[Unreleased]`.",
+				v, want[v], digests[v]))
 		}
 	}
 	for v := range want {
 		if digests[v] == "" {
-			t.Errorf("%s records `## [%s]`, which CHANGELOG.md no longer has.", releasedSums, v)
+			out = append(out, fmt.Sprintf(
+				"%s records `## [%s]`, which CHANGELOG.md no longer has.", releasedSums, v))
 		}
 	}
+	return out
 }
 
 // splice returns body with line inserted directly after the first line that
@@ -217,5 +236,77 @@ func TestALinkDefinitionAddedInsideAReleasedSectionMovesNoDigest(t *testing.T) {
 				"changelog_links_test.go owns that block; this one must not.",
 				v, before[v], after[v])
 		}
+	}
+}
+
+// recorded reads the committed table the gate compares against.
+func recorded(t *testing.T) map[string]string {
+	t.Helper()
+	body, err := os.ReadFile(filepath.FromSlash(releasedSums))
+	if err != nil {
+		t.Fatalf("reading %s: %v", releasedSums, err)
+	}
+	out := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(string(body)), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			t.Fatalf("%s: malformed line %q", releasedSums, line)
+		}
+		out[fields[1]] = fields[0]
+	}
+	return out
+}
+
+// What a reader actually gets. `012d65b0` polluted one section and left ten
+// alone, and a report that named all eleven would be no better than the diff
+// nobody ran.
+func TestTheReportNamesOnlyTheSectionWhoseDigestMoved(t *testing.T) {
+	polluted := splice(t, changelog(t), "## [0.7.0]", "- **A bullet a rebase dropped in here.**")
+	versions, digests := releasedDigests(polluted)
+
+	problems := releasedSumProblems(versions, digests, recorded(t))
+
+	if len(problems) != 1 {
+		t.Fatalf("got %d problem(s), want exactly 1:\n%s", len(problems), strings.Join(problems, "\n"))
+	}
+	if !strings.Contains(problems[0], "`## [0.7.0]`") {
+		t.Errorf("the report does not name the section a reader has to fix:\n%s", problems[0])
+	}
+	if !strings.Contains(problems[0], "[Unreleased]") {
+		t.Errorf("the report does not say where the entry belongs instead:\n%s", problems[0])
+	}
+}
+
+// The cut path. A new heading with no digest must say what to do, because the
+// person who sees it is mid-release and the answer is one command.
+func TestTheReportAsksForARegenerationWhenASectionHasNoRecord(t *testing.T) {
+	versions, digests := releasedDigests(changelog(t))
+	want := recorded(t)
+	delete(want, "0.7.0")
+
+	problems := releasedSumProblems(versions, digests, want)
+
+	if len(problems) != 1 {
+		t.Fatalf("got %d problem(s), want exactly 1:\n%s", len(problems), strings.Join(problems, "\n"))
+	}
+	if !strings.Contains(problems[0], "no digest in") {
+		t.Errorf("a section with no record is not reported as one:\n%s", problems[0])
+	}
+}
+
+// The other direction, which is what a reverted or renamed heading looks like.
+// Without this arm the table could name a section nobody has and stay green.
+func TestTheReportNamesARecordWhoseSectionIsGone(t *testing.T) {
+	versions, digests := releasedDigests(changelog(t))
+	want := recorded(t)
+	want["9.9.9"] = strings.Repeat("0", 64)
+
+	problems := releasedSumProblems(versions, digests, want)
+
+	if len(problems) != 1 {
+		t.Fatalf("got %d problem(s), want exactly 1:\n%s", len(problems), strings.Join(problems, "\n"))
+	}
+	if !strings.Contains(problems[0], "9.9.9") {
+		t.Errorf("a record with no section is not reported as one:\n%s", problems[0])
 	}
 }
