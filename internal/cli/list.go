@@ -91,6 +91,24 @@ func newListCmd() *cobra.Command {
 			cfg := rowConfig(cmd)
 			quota := view.Rows(visible, cache, active, hasActive, now, rowThresholds(cmd, cfg, s, now))
 
+			// The same measurement `ccdad status` renders and publishes, taken
+			// by the same function from the same two documents: two commands
+			// reading one store must not describe one measurement two ways.
+			//
+			// It is measured over the STORE's accounts and not over the rows
+			// about to be printed. --all is a filter on a listing, and a filter
+			// on a listing may not move a fleet's burn rate; measuring `visible`
+			// would also make this key disagree with the identical key on
+			// `ccdad status --json`, which sees every account.
+			//
+			// A series that cannot be read costs the rates and nothing else, so
+			// it is a notice here exactly as an unreadable cache is: `ccdad
+			// list` is what a user reaches for when something is already wrong.
+			f, historyNotice := fleetForecast(accounts, cache, now)
+			if historyNotice != "" {
+				fmt.Fprint(cmd.ErrOrStderr(), historyNotice)
+			}
+
 			if asJSON {
 				rows := make([]map[string]any, 0, len(visible))
 				for _, r := range quota {
@@ -108,6 +126,15 @@ func newListCmd() *cobra.Command {
 				payload := map[string]any{"schemaVersion": 1, "accounts": rows}
 				if hasActive {
 					payload["activeUuid"] = active.UUID
+				}
+				// Conditional, like activeUuid above and like `mode` on the
+				// status payload: absent means nothing was measured, and an
+				// object of zeros would read as a fleet burning nothing. It is
+				// forecastJSON's object rather than a second spelling of it,
+				// so `ccdad runway --json`, `ccdad status --json` and this
+				// carry one document under one key.
+				if f.Basis.Known {
+					payload["forecast"] = forecastJSON(f)
 				}
 				if unknown := cclink.UnknownKeys(live); len(unknown) > 0 {
 					payload["unknownKeys"] = unknown
@@ -176,7 +203,28 @@ func newListCmd() *cobra.Command {
 				fmt.Fprintf(w, "%s %d\t%s\t%s\t%s\t%s\t%s%s\n", r.Marker(), a.Idx, r.ListLabel(), a.Kind,
 					r.TierLabel(), r.LeftLabel(), r.ResetsLabel(now), suffix)
 			}
-			return w.Flush()
+			if err := w.Flush(); err != nil {
+				return err
+			}
+			// After the table, and after the early return above it, which is
+			// what keeps a listing with no rows from carrying a summary of
+			// them. Position is what decides that and nothing else does: the
+			// tabwriter holds every row until Flush, so a line written to the
+			// same stream at any earlier point comes out ABOVE the table, where
+			// list_test.go's rowFor scans for account rows.
+			//
+			// The empty string is the gate. view.RunwayLine returns one when
+			// there is no measurement, and that is how this renderer, `ccdad
+			// status` and the dashboard all decline the line without each
+			// carrying its own idea of when there is nothing to say.
+			//
+			// time.Local, because a person is reading it. internal/forecast
+			// touches no environment, so the caller nearest the reader chooses
+			// the zone, and view.Timestamp always prints which one it was.
+			if line := view.RunwayLine(f, now, time.Local); line != "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "\nRunway:  %s\n", line)
+			}
+			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit a machine-readable object on stdout")
