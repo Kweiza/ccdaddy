@@ -273,6 +273,13 @@ var zeroDecimalCurrencies = map[string]bool{"JPY": true, "KRW": true, "VND": tru
 // like $60 against a $50 ceiling and blocks the engine at 1.2% of the
 // authorized budget; in the other direction an account's own cap stops binding.
 //
+// CONFIRMED against a live account on 2026-08-25, which until then it had not
+// been: an account whose holder puts its cap at $466.00 reports monthly_limit
+// 46600 and used_credits 46600. The reading itself cannot prove this -- used
+// equals the limit there, so the ratio is 1 either way -- and the confirmation
+// comes from the person who set the cap. TestTheLiveCreditReadingParsesAsThisPackageAssumed
+// pins the reading.
+//
 // An unreported or unrecognized currency is treated as a two-decimal one, which
 // is what Claude Code does (`tse.currency ?? "USD"`).
 func (e ExtraUsage) majorUnits(minor float64) float64 {
