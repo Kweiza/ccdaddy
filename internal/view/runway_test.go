@@ -439,9 +439,15 @@ func TestTheSummaryClauseIsCarriedOnlyByAShortFleet(t *testing.T) {
 }
 
 // The clause reaches status, list and the dashboard because it is part of the
-// one line all three render, and it sits between the verdicts and the basis:
-// after what happened, before the evidence, which is the order the rest of the
-// line is already in.
+// one line all three render, and it sits LAST, after the basis.
+//
+// That order is about the frame rather than about reading: the dashboard cuts
+// this line from the right, and at its 80-column design target a short fleet's
+// line is too long to fit, so the last clause is the one that goes. It must not
+// be the evidence -- a verdict with no basis beside it is the output this whole
+// measurement refuses to produce, and the dashboard prints the span nowhere
+// else. It is pinned there by TestTheRunwayLineKeepsItsBasisWhenTheFrameCutsIt
+// in internal/tui, which renders the cut page; this asserts the bytes.
 func TestTheRunwayLineCarriesTheNeedOfAShortFleet(t *testing.T) {
 	now := time.Date(2026, 8, 24, 23, 10, 0, 0, time.UTC)
 	kst := time.FixedZone("KST", 9*3600)
@@ -457,7 +463,7 @@ func TestTheRunwayLineCarriesTheNeedOfAShortFleet(t *testing.T) {
 		AccountsNeeded: 9, HasNeeded: true,
 	}
 	got := view.RunwayLine(f, now, kst)
-	want := "7d dry 2026-08-27 14:10 KST (2d6h)  ·  5h holds  ·  need 9 (4 more)  ·  basis 3h51m"
+	want := "7d dry 2026-08-27 14:10 KST (2d6h)  ·  5h holds  ·  basis 3h51m  ·  need 9 (4 more)"
 	if got != want {
 		t.Fatalf("RunwayLine =\n\t%q\nwant\n\t%q", got, want)
 	}

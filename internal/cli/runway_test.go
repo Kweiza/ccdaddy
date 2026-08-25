@@ -823,6 +823,52 @@ func TestAFleetThatIsExactlyBigEnoughGetsNoParenthetical(t *testing.T) {
 	}
 }
 
+// A machine with readable accounts and no history prints the seat count too,
+// with "?" where the figure would be. That page has no axis block on it -- the
+// command stops after the basis and the points, because a table of question
+// marks under a "VERDICT" heading looks like an answer -- and the seat count is
+// the one cell below that stop which still has something true to say: the usable
+// count is read off the current snapshots, exactly like the points line above
+// it.
+//
+// It is asserted here and not in internal/view because the view cannot see this
+// failure. The form renders correctly from a Fleet in a unit test while the
+// command returns before it ever asks for one, which is what an earlier build
+// did: the branch was covered, the string was pinned, and no user could reach
+// the line.
+//
+// "?" and not "-": the number exists -- every fleet has a smallest size that
+// holds -- and what failed was the measuring.
+func TestTheSeatCountIsPrintedOnAMachineWithNoBasis(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	seedAccountAddedAt(t, "uuid-a", "a@example.com", runwayAddedAt)
+	// A current reading and no history at all: one poll has landed, and a rate
+	// needs several spread over time.
+	seedUsageEntry(t, "uuid-a", usage.Entry{
+		FetchedAt: statusNow,
+		Snapshot: &usage.Snapshot{
+			FiveHour: window(18, runwayFiveReset),
+			SevenDay: window(48, runwayWeeklyReset),
+		},
+	})
+
+	code, out, _, top := runRoot(t, "runway")
+	if code != ExitOK {
+		t.Fatalf("code = %v, want ExitOK (%s)", code, top)
+	}
+	if !strings.Contains(out, "Basis:   nothing measured yet") {
+		t.Fatalf("the fixture measured something, so the page below is not the one under assertion:\n%s", out)
+	}
+	const want = "Accounts:  1 usable, ? needed  (not enough history)"
+	if !strings.Contains(out, want) {
+		t.Errorf("stdout carries no %q:\n%s", want, out)
+	}
+	if strings.Contains(out, "VERDICT") {
+		t.Errorf("a machine with no readings drew the verdict table anyway:\n%s", out)
+	}
+}
+
 // accountsNeeded is omitted when there is no basis, never zeroed: a consumer
 // cannot tell a fleet that needs no more accounts from a fleet nobody measured,
 // and one of those two is a reason to go and buy nothing.

@@ -859,8 +859,13 @@ func TestTheDashboardLineNamesTheSeatsOnlyAShortFleetNeeds(t *testing.T) {
 // Ninety-one columns, which is wider than the 80-column design target: a short
 // fleet's line names the seats it needs, and at 80 the page hands back the first
 // 78 columns of this with a cue on the end. The whole string is the pin, so the
-// test that looks for it renders wide enough to hold it.
-const fixtureRunwayLine = "Runway: 7d dry 2026-03-06 14:00 UTC (2d2h)  ·  5h holds  ·  need 9 (4 more)  ·  basis 3h51m"
+// test that looks for it renders wide enough to hold it, and the cut form is
+// asserted separately by TestTheRunwayLineKeepsItsBasisWhenTheFrameCutsIt.
+//
+// The seat count is last for that reason. The frame eats the tail, and the
+// clause the page can spare is the one `ccdad runway` prints in full -- not the
+// basis, which is on this line and nowhere else on this page.
+const fixtureRunwayLine = "Runway: 7d dry 2026-03-06 14:00 UTC (2d2h)  ·  5h holds  ·  basis 3h51m  ·  need 9 (4 more)"
 
 // A populated forecast that the Snapshot does not claim moves no golden. All
 // seven whole-page fixtures are compared byte for byte, and every one of them
@@ -1017,6 +1022,42 @@ func TestTheRunwayLineIsCutToTheFrameRatherThanWrappingIt(t *testing.T) {
 					w, height, got, want, body)
 			}
 		}
+	}
+}
+
+// The frame cuts a line from the right, so the last clause is the first
+// casualty -- and on this line the evidence must not be it. A verdict with no
+// basis beside it is the output the measurement refuses to produce: a rate read
+// for twenty minutes and one read for four hours support very different claims,
+// and this page carries the span on this line and nowhere else. The seat count
+// is the clause that can be spared, because `ccdad runway` prints it in full and
+// prints the spare case this line never carries at all.
+//
+// Eighty columns is the design target and the width where it bites: a short
+// fleet's line is 91 columns, so at 80 something has to go. Measured: with the
+// seat clause last, "basis 3h51m" is inside the frame; with it between the
+// verdicts and the basis, as an earlier build had it, the basis is off the page
+// entirely and every width and row assertion beside this one still passes.
+func TestTheRunwayLineKeepsItsBasisWhenTheFrameCutsIt(t *testing.T) {
+	m := fixtureModel(80, 24)
+	m.Snap.Forecast, m.Snap.HasForecast = fixtureFleet(), true
+
+	var line string
+	for _, l := range strings.Split(m.Body(), "\n") {
+		if strings.Contains(l, "Runway: ") {
+			line = l
+		}
+	}
+	if line == "" {
+		t.Fatalf("no runway line at 80x24:\n%s", m.Body())
+	}
+	// Without this the test would pass on a page that was never cut, which is a
+	// different page from the one under assertion.
+	if strings.Contains(line, fixtureRunwayLine) {
+		t.Fatalf("the whole line fitted an 80-column frame, so nothing here is about the cut: %q", line)
+	}
+	if !strings.Contains(line, "basis 3h51m") {
+		t.Errorf("the frame cut the evidence off the line and kept the rest:\n\t%q", line)
 	}
 }
 
