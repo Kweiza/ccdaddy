@@ -68,6 +68,21 @@ func TestParseSignatureGrammar(t *testing.T) {
 			fourLines(untrustedPrefix+"x", b64n(sigLen), trustedPrefix+tc, b64n(63)),
 			ErrMalformed, "",
 		},
+		{
+			"line 2 is one byte over",
+			fourLines(untrustedPrefix+"x", b64n(sigLen+1), trustedPrefix+tc, b64n(64)),
+			ErrMalformed, "",
+		},
+		{
+			"line 4 is one byte over",
+			fourLines(untrustedPrefix+"x", b64n(sigLen), trustedPrefix+tc, b64n(65)),
+			ErrMalformed, "",
+		},
+		{
+			"four lines but total exceeds maxSigBytes",
+			fourLines(untrustedPrefix+"x", b64n(sigLen), trustedPrefix+tc+strings.Repeat(" ", maxSigBytes), b64n(64)),
+			ErrMalformed, "",
+		},
 		{"one byte over the bound", good + strings.Repeat("x", maxSigBytes+1-len(good)), ErrMalformed, ""},
 		{"empty", "", ErrMalformed, ""},
 	}
