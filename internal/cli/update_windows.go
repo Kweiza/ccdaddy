@@ -44,12 +44,15 @@ import (
 // routinely on another volume; a cross-volume move is a copy, and a mapped
 // image does not permit one.
 //
-// Mark-of-the-Web needs no handling. install.ps1 runs Unblock-File after its
-// own Move-Item, because a rename carries a file's alternate data streams
-// along with it and the zone marking would otherwise survive that move. The
-// path here never creates one to carry: net/http into os.Create into io.Copy
-// is CreateFileW and WriteFile and nothing else, so staged never has a
-// Zone.Identifier stream for the later os.Rename to preserve.
+// Mark-of-the-Web needs no handling. install.ps1 runs Unblock-File on the
+// asset BEFORE Install-CcdadBinary's Move-Item, and says why right above that
+// call: the marking survives a move, so it has to be stripped first or
+// SmartScreen acts on it the first time the binary runs. Here there is
+// nothing to strip: net/http into os.Create into io.Copy is CreateFileW and
+// WriteFile and nothing else, so staged never has a Zone.Identifier stream in
+// the first place. (That "never creates one" claim is about the download
+// path, not about this function -- internal/release proves it directly,
+// against a real fetch, rather than this comment asserting it.)
 func replaceBinary(staged, target string) error {
 	// aside is set below when something already occupies target; the
 	// rollback branch after the second rename reads it.

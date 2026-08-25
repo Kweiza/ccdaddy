@@ -193,8 +193,17 @@ func TestWindowsAFailedSecondRenameRestoresTheOldBinary(t *testing.T) {
 	}
 }
 
-// Mark-of-the-Web, with a positive control so it cannot pass by Go simply being
-// unable to address an alternate data stream on this filesystem.
+// Mark-of-the-Web. This is a CHARACTERIZATION test, not a proof that
+// replaceBinary strips a marking: staged is written with os.WriteFile below,
+// so it never carries a Zone.Identifier stream to begin with, and no
+// implementation -- rename, copy, WriteFileAtomic, any of them -- could make
+// the assertion below find one. What it pins is narrower and still real: the
+// replaced file at target carries no marking either, so nothing between
+// staging and target adds one. The claim that actually rules out a bad
+// implementation -- that Download's own write path never creates a marking
+// in the first place, where a shell-out to curl.exe or BITS would -- is
+// proved directly in internal/release's TestDownloadLeavesNoZoneIdentifier,
+// against a real fetch, which is the only place it can be.
 func TestWindowsTheReplacedBinaryCarriesNoZoneIdentifier(t *testing.T) {
 	dir := t.TempDir()
 
