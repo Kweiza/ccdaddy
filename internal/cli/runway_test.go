@@ -424,3 +424,105 @@ func TestRunwayWithNoAccountsSaysSoAndStillAnswers(t *testing.T) {
 		t.Errorf("stderr = %q, which does not say what to do about it", errOut)
 	}
 }
+
+// seedPaidAccount is one account with paid usage switched on: a hundred-dollar
+// monthly cap, fifty of it already spent, and a series in which the spend rose
+// a dollar every half hour for the last two.
+//
+// It spells both money representations on purpose. The wire reports MINOR units
+// and usage.ExtraUsage converts them; history.json stores what that conversion
+// returned, in major ones. A fixture that used one figure for both would pass
+// against an arithmetic that divided by a hundred once too often or not at all.
+func seedPaidAccount(t *testing.T, uuid, email string) {
+	t.Helper()
+	seedAccountWithTier(t, uuid, email, runwayTier, runwayAddedAt)
+	limit, used := 10000.0, 5000.0 // cents: a $100 cap, $50 spent
+	seedUsageEntry(t, uuid, usage.Entry{
+		FetchedAt: statusNow,
+		Snapshot: &usage.Snapshot{
+			FiveHour: window(18, runwayFiveReset),
+			SevenDay: window(48, runwayWeeklyReset),
+			ExtraUsage: usage.ExtraUsageFor(usage.ExtraUsageInput{
+				State: usage.ExtraUsageEnabled, Currency: "USD",
+				MonthlyLimit: &limit, UsedCredits: &used,
+			}),
+		},
+	})
+	major := 100.0
+	var samples []history.Sample
+	for i := 4; i >= 0; i-- {
+		at := statusNow.Add(-time.Duration(i) * 30 * time.Minute)
+		spent := 14 - float64(i)
+		samples = append(samples, history.Sample{
+			At: at,
+			Windows: map[usage.WindowName]history.Reading{
+				usage.WindowFiveHour: {Pct: 18 - float64(i), Reset: runwayFiveReset},
+				usage.WindowSevenDay: {Pct: 48 - float64(i), Reset: runwayWeeklyReset},
+			},
+			Credit: &history.Credit{Used: spent, Limit: &major, Currency: "USD"},
+		})
+	}
+	seedHistory(t, uuid, samples...)
+}
+
+// The credit row, measured end to end: the balance off the current snapshot,
+// the spend rate off the series, and a date that is the first divided by the
+// second. Nothing else on this page is money, and money is the one quantity
+// this repository fails closed on — every unit test around it works on
+// hand-built halves, and only a rendered row can show the two were joined.
+func TestRunwayRendersTheCreditsItMeasured(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	seedPaidAccount(t, "uuid-a", "a@example.com")
+
+	code, out, _, top := runRoot(t, "runway")
+	if code != ExitOK {
+		t.Fatalf("code = %v, want ExitOK (%s)", code, top)
+	}
+	// Four dollars over the two hours observed is two an hour, and the fifty
+	// dollars left of the cap last twenty-five of them. The middle cell stays
+	// "-": credits have no renewal boundary to read, which is a different
+	// answer from one that could not be read.
+	if !hasRow(squeezedLines(out), "Credits 2.00 USD/h - runs dry ") {
+		t.Errorf("no measured credit row in:\n%s", out)
+	}
+}
+
+// An account the rotation cannot switch to is not the fleet's runway.
+//
+// A disabled seat is polled on cadence, has a cache entry and has a recorded
+// series, so nothing about the evidence marks it: only the store's own flag
+// does. Counting it doubles this fixture's points and pushes the moment the
+// fleet empties most of a day out — an over-promise on the headline figure of
+// this command, made of quota no switch can reach.
+func TestRunwayLeavesAnAccountOutOfRotationOutOfTheFleet(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	seedBurningFleet(t)
+	if code, _, errOut, _ := runRoot(t, "disable", "2"); code != ExitOK {
+		t.Fatalf("disable 2 = %d (%s)", code, errOut)
+	}
+
+	code, out, _, top := runRoot(t, "runway")
+	if code != ExitOK {
+		t.Fatalf("code = %v, want ExitOK (%s)", code, top)
+	}
+	// Half the points of the two-account fixture, and the basis says where the
+	// other account went: it is in the store and out of the rotation, so no
+	// figure on this page covers it.
+	for _, want := range []string{
+		"Fleet:   52 of 100 points left on the weekly axis",
+		"Basis:   the last 2h00m  (2 accounts, 5 readings, 0 unreadable, 1 not in rotation)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout carries no %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "b@example.com") {
+		t.Errorf("the disabled account has a row of its own:\n%s", out)
+	}
+	// And the axis figures are one account's, not two.
+	if !hasRow(squeezedLines(out), "7-day 2.0 pp/h 0.6 pp/h runs dry ") {
+		t.Errorf("the weekly axis still carries both accounts' burn:\n%s", out)
+	}
+}

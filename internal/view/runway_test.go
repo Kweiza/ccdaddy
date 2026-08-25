@@ -204,6 +204,29 @@ func TestTheLeftCellCarriesNoPercentSign(t *testing.T) {
 	}
 }
 
+// An account with no weekly window gets "-" in all three weekly cells, not "?".
+// The account was read; this quantity does not exist for it. Filling the cells
+// from its five-hour window instead would put a five-hour room and a five-hour
+// rate into a column summed into the weekly axis above, and the same prompt
+// moves those two figures at very different speeds.
+func TestTheWeeklyCellsSayNoQuantityRatherThanBorrowAnotherWindow(t *testing.T) {
+	weekly := forecast.AccountRow{
+		Window: "seven_day", HasWindow: true, Left: 52,
+		Burn: forecast.Band{Low: 2, High: 2.5, Known: true},
+	}
+	w, l, b := view.RunwayRowCells(weekly)
+	if w != "seven_day" || l != "52" || b != "2.0 pp/h" {
+		t.Errorf("RunwayRowCells(weekly) = %q/%q/%q, want seven_day/52/2.0 pp/h", w, l, b)
+	}
+	// The same account minus its weekly window: the five-hour figures it does
+	// have are deliberately present in the value and must not reach the row.
+	none := forecast.AccountRow{Left: 60, Burn: forecast.Band{Low: 7.5, Known: true}}
+	w, l, b = view.RunwayRowCells(none)
+	if w != view.NoQuantity || l != view.NoQuantity || b != view.NoQuantity {
+		t.Errorf("RunwayRowCells(no weekly window) = %q/%q/%q, want %q in all three", w, l, b, view.NoQuantity)
+	}
+}
+
 // Three states, three renderings. An account already out is "now", which is a
 // fact about this minute; an account the run found out later gets that moment;
 // an account the run never found out gets "?", because the run deciding nothing

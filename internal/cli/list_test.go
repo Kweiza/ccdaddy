@@ -892,16 +892,16 @@ func runwayLineOf(t *testing.T, out string) string {
 	return ""
 }
 
-// A page with no rows on it carries no summary either, and the case that pins
-// that is the one where the fleet IS measurable.
+// A page with no rows on it carries no summary either — and neither does a
+// page whose every row is out of the rotation.
 //
-// An empty store proves nothing on its own: it has no accounts, so it has no
-// basis, so view.RunwayLine returns "" and the line would be absent wherever
-// the print was placed. A store whose every account is disabled is the
-// separating fixture — the measurement is known and the listing still returns
-// before the table — and it is what fails if the print moves above that early
-// return. `ccdad list` printing a summary with nothing under it would also
-// break the older promise that an empty listing puts nothing at all on stdout.
+// A measurable fleet behind an EMPTY listing is not a state this build can
+// reach: the listing hides only disabled accounts, the measurement covers only
+// the accounts the rotation can reach, and a disabled account is in neither. So
+// the placement of the print — after the early return, after the table — is
+// pinned by TestTheRunwayLineFollowsTheTable below, and what is pinned here is
+// the fail-closed half: a fleet the engine cannot switch to has no runway, and
+// --all showing its rows must not put one on the screen.
 func TestAnEmptyStoreStillPrintsNoRunwayLine(t *testing.T) {
 	t.Run("no accounts at all", func(t *testing.T) {
 		isolate(t)
@@ -913,7 +913,7 @@ func TestAnEmptyStoreStillPrintsNoRunwayLine(t *testing.T) {
 		}
 	})
 
-	t.Run("every account disabled, with a measured fleet behind them", func(t *testing.T) {
+	t.Run("every account disabled, with readings behind them", func(t *testing.T) {
 		isolate(t)
 		freezeClock(t, statusNow)
 		seedBurningFleet(t)
@@ -922,11 +922,16 @@ func TestAnEmptyStoreStillPrintsNoRunwayLine(t *testing.T) {
 				t.Fatalf("disable %s = %d (%s)", idx, code, errOut)
 			}
 		}
-		// The fixture is checked before it is used: if this fleet measured
-		// nothing, the assertion below would hold against an implementation
-		// that prints the line in the wrong place.
-		if _, all, _, _ := runRoot(t, "list", "--all"); !strings.Contains(all, "Runway:") {
-			t.Fatalf("the fixture states no runway even with rows, so the assertion below asserts nothing:\n%s", all)
+		// --all is a filter on a listing, so it shows them; it is not a
+		// statement about what the engine can do with them. Every one of these
+		// seats is held out of rotation by the user, so there is no quota here
+		// the fleet can spend and no claim to make about how long it lasts.
+		_, all, _, _ := runRoot(t, "list", "--all")
+		if !strings.Contains(all, "(disabled)") {
+			t.Fatalf("the fixture no longer lists disabled accounts, so the assertion below asserts nothing:\n%s", all)
+		}
+		if strings.Contains(all, "Runway:") {
+			t.Errorf("a fleet the rotation cannot reach was given a runway:\n%s", all)
 		}
 
 		_, out, _, _ := runRoot(t, "list")

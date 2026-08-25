@@ -237,6 +237,22 @@ func RunwayVerdict(a forecast.Axis, now time.Time, loc *time.Location) string {
 // elsewhere is not always this one.
 func RunwayLeft(pct float64) string { return fmt.Sprintf("%.0f", pct) }
 
+// RunwayRowCells is one account row's three weekly cells -- the window its
+// points are counted on, the room left in it, and this account's own measured
+// burn -- rendered together because they stand or fall together.
+//
+// An account whose response carried no weekly window at all gets NoQuantity in
+// all three and not Unreadable. Nothing failed to be read: the account was
+// read, and this quantity does not exist for it. Borrowing its five-hour window
+// instead would put a five-hour room and a five-hour rate into a column that is
+// summed into the weekly axis above it, and those are two different quantities.
+func RunwayRowCells(r forecast.AccountRow) (window, left, burn string) {
+	if !r.HasWindow {
+		return NoQuantity, NoQuantity, NoQuantity
+	}
+	return string(r.Window), RunwayLeft(r.Left), RunwayBurn(r.Burn)
+}
+
 // RunwayEmpty is when the simulation first found one account out.
 //
 // "now" comes first, ahead of any recorded moment, because it is a fact about

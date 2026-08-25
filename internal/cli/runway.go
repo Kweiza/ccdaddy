@@ -9,6 +9,7 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/forecast"
 	"github.com/Kweiza/ccdaddy/internal/history"
+	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/usage"
 	"github.com/Kweiza/ccdaddy/internal/view"
@@ -127,7 +128,16 @@ func fleetForecast(accounts []store.Account, cache *usage.Cache, now time.Time) 
 		// string for two seats on plans of very different sizes, and the
 		// question here is whether these accounts' percentage points are the
 		// same size as each other.
-		input := forecast.Input{UUID: a.UUID, Idx: a.Idx, Tier: a.RateLimitTier}
+		//
+		// Eligible is the engine's own rule, copied because this package is
+		// where the store is readable and the forecast is where it is not:
+		// eligible() in internal/strategy/rank.go is the one statement of what
+		// the rotation can hand work to, and a runway that counted an account
+		// no switch can reach would promise quota the fleet cannot spend.
+		input := forecast.Input{
+			UUID: a.UUID, Idx: a.Idx, Tier: a.RateLimitTier,
+			Eligible: !a.Disabled && !a.Elsewhere && a.Kind != identity.KindAPIKey,
+		}
 		if e, ok := cache.Get(a.UUID); ok {
 			input.Snapshot = e.Snapshot
 		}
@@ -215,8 +225,9 @@ func renderRunway(cmd *cobra.Command, f forecast.Fleet, accounts []store.Account
 		if known {
 			idx, label = fmt.Sprintf("%d", a.Idx), a.Label()
 		}
-		fmt.Fprintf(rw, "  %s\t%s\t%s\t%s\t%s\t%s\n", idx, label, string(r.Window),
-			view.RunwayLeft(r.Left), view.RunwayBurn(r.Burn), view.RunwayEmpty(r, now, loc))
+		window, left, burn := view.RunwayRowCells(r)
+		fmt.Fprintf(rw, "  %s\t%s\t%s\t%s\t%s\t%s\n", idx, label, window,
+			left, burn, view.RunwayEmpty(r, now, loc))
 	}
 	return rw.Flush()
 }
@@ -230,10 +241,18 @@ func runwayBasisLine(f forecast.Fleet) string {
 	if f.Basis.Known {
 		span = "the last " + view.HumanDuration(f.Basis.Observed)
 	}
-	return fmt.Sprintf("Basis:   %s  (%d %s, %d %s, %d unreadable)", span,
+	line := fmt.Sprintf("Basis:   %s  (%d %s, %d %s, %d unreadable", span,
 		f.Basis.Accounts, plural(f.Basis.Accounts, "account", "accounts"),
 		f.Basis.Readings, plural(f.Basis.Readings, "reading", "readings"),
 		f.Basis.Unreadable)
+	// Only when there are any, and only here. The count is what explains a
+	// fleet whose account total is larger than the rows under it: those
+	// accounts are in the store and out of the rotation, so their quota is not
+	// the fleet's to spend and none of these figures covers them.
+	if f.Basis.Ineligible > 0 {
+		line += fmt.Sprintf(", %d not in rotation", f.Basis.Ineligible)
+	}
+	return line + ")"
 }
 
 // forecastJSON is the `forecast` object, and it is the SAME object `ccdad
@@ -253,6 +272,11 @@ func forecastJSON(f forecast.Fleet) map[string]any {
 		"accounts":   f.Basis.Accounts,
 		"unmeasured": f.Basis.Unmeasured,
 		"unreadable": f.Basis.Unreadable,
+		// Unconditional like the counts above it, because a count of zero is a
+		// reading. `accounts` less unmeasured, unreadable and this is what was
+		// actually measured, and a consumer can only check that subtraction if
+		// none of the three can go missing.
+		"ineligible": f.Basis.Ineligible,
 	}
 	out := map[string]any{"basis": basis}
 	if f.Basis.Known {
