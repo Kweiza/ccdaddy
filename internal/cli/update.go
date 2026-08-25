@@ -556,7 +556,31 @@ func runUpdate(cmd *cobra.Command, opts updateOptions) error {
 	// does NOT fail the command: the binary is already replaced, and the next
 	// ccdad command that is allowed to auto-start one will bring it back.
 	if wasRunning {
-		if err := startDaemonFrom(cmd, target); err != nil {
+		// The one part of this command that would not be safe inside a `ccdad
+		// run` session, which is why the command as a whole is on the allowed
+		// side of the scoped-session table and only this is skipped.
+		//
+		// daemon.ChildEnv makes both path variables absolute and
+		// symlink-resolved before handing them on, so a daemon spawned in here
+		// does not merely leak the scope, it PINS it: that daemon manages a
+		// session directory for the rest of its life, and keeps managing it
+		// after `run` has deleted it. `ccdad daemon start` and `daemon restart`
+		// are refused outright for exactly this.
+		//
+		// The alternative — leave the daemon running rather than stopping it —
+		// was considered and rejected. It keeps the machine switching accounts
+		// during the session, but the old daemon then holds the singleton
+		// indefinitely and the machine runs old code until somebody restarts it
+		// by hand. Stopping converges on its own; not stopping does not.
+		//
+		// Nothing inside the session can quietly undo the skip: auto-start
+		// refuses to spawn into either kind of scoped shell, so the first
+		// allow-listed command in an unscoped shell is what brings a daemon
+		// back, on the new binary.
+		if _, inSession := currentScopedSession(); inSession {
+			say(cmd, opts.asJSON, "The ccdad daemon is stopped and will stay stopped for this `ccdad run` session.")
+			say(cmd, opts.asJSON, "Run any ccdad command from a normal shell to bring it back on the new version.")
+		} else if err := startDaemonFrom(cmd, target); err != nil {
 			say(cmd, opts.asJSON, "The ccdad daemon could not be restarted (%v); "+
 				"the next ccdad command that is allowed to start one will.", err)
 		} else {
