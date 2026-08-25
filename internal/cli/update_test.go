@@ -714,3 +714,58 @@ func assertBinaryUntouched(t *testing.T, target string) {
 		t.Errorf("staging directories left behind: %v", leftovers)
 	}
 }
+
+// A release that publishes no signature is a deliberate choice somewhere, so
+// "re-run the installer" is the correct remedy for it. A signature the origin
+// could not serve is not a fact about the release at all — and reporting it as
+// a tamper verdict would let a flaky origin manufacture a permanent-looking one.
+func TestUpdateTellsAnUnsignedReleaseFromABrokenOrigin(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		file   string
+		status int
+		want   ExitCode
+		reason string
+	}{
+		{"no signature published", "sha256sums.txt.minisig", http.StatusNotFound, ExitBlocked, "unsigned-release"},
+		{"the signature would not serve", "sha256sums.txt.minisig", http.StatusInternalServerError, ExitFailure, "download-sums"},
+		{"the signature timed out as a 502", "sha256sums.txt.minisig", http.StatusBadGateway, ExitFailure, "download-sums"},
+		{"no sums file at all", "sha256sums.txt", http.StatusNotFound, ExitFailure, "download-sums"},
+		{"the sums file would not serve", "sha256sums.txt", http.StatusInternalServerError, ExitFailure, "download-sums"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			target, f, _ := updateWorld(t, "0.6.1", "v0.7.0")
+			f.setStatus(c.file, c.status)
+
+			code, stdout, _, _ := runRoot(t, "update", "--json")
+			if code != c.want {
+				t.Fatalf("exit = %d, want %d", code, c.want)
+			}
+			payload := decodePayload(t, stdout)
+			if got := payload["reason"]; got != c.reason {
+				t.Errorf("reason = %v, want %q", got, c.reason)
+			}
+			// A tag IS in hand here: the refusal happened after discovery.
+			if got := payload["tag"]; got != "v0.7.0" {
+				t.Errorf("tag = %v, want %q — the payload carries the tag once one is resolved", got, "v0.7.0")
+			}
+			assertBinaryUntouched(t, target)
+		})
+	}
+}
+
+// The unsigned-release remedy names the installer, because an unsigned release
+// is a choice somebody made rather than an attack. The tamper remedies must
+// not, and that split is tested where each reason is produced.
+func TestUnsignedReleaseNamesTheInstaller(t *testing.T) {
+	_, f, _ := updateWorld(t, "0.6.1", "v0.7.0")
+	f.setStatus("sha256sums.txt.minisig", http.StatusNotFound)
+
+	code, _, stderr, _ := runRoot(t, "update")
+	if code != ExitBlocked {
+		t.Fatalf("exit = %d, want %d", code, ExitBlocked)
+	}
+	if !strings.Contains(stderr, "Re-run the installer") {
+		t.Errorf("stderr = %q, want it to send the user to the installer for an unsigned release", stderr)
+	}
+}

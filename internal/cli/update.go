@@ -2,7 +2,9 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"time"
@@ -355,20 +357,51 @@ func runUpdate(cmd *cobra.Command, opts updateOptions) error {
 		}
 	}
 
+	dl := release.DownloadBase(base, want.Tag())
+
+	// Step 9.
+	ctx, cancel := context.WithTimeout(cmd.Context(), metadataTimeout)
+	sums, err := client.Get(ctx, dl+"/sha256sums.txt", maxSumsBytes)
+	cancel()
+	if err != nil {
+		return rep.emit(cmd, opts.asJSON, ExitFailure, "download-sums",
+			fmt.Sprintf("ccdad could not download the checksum file for %s: %v", want.Tag(), err))
+	}
+
+	// Step 10. The two arms are DIFFERENT failures, and the split is the whole
+	// reason StatusError carries a code. A 404 means the release genuinely
+	// carries no signature, which is a refusal the user can act on and whose
+	// remedy IS the installer. A timeout, a 500 or a DNS failure says nothing
+	// about the release, and reporting it as a tamper verdict would let a flaky
+	// origin manufacture a permanent-looking one.
+	ctx, cancel = context.WithTimeout(cmd.Context(), metadataTimeout)
+	sig, err := client.Get(ctx, dl+"/sha256sums.txt.minisig", maxSigBytes)
+	cancel()
+	if err != nil {
+		var status *release.StatusError
+		if errors.As(err, &status) && status.Status == http.StatusNotFound {
+			return rep.emit(cmd, opts.asJSON, ExitBlocked, "unsigned-release",
+				fmt.Sprintf("Release %s publishes no signature, so ccdad will not install it. "+
+					"Re-run the installer from the project's README if you mean to move to it anyway.", want.Tag()))
+		}
+		return rep.emit(cmd, opts.asJSON, ExitFailure, "download-sums",
+			fmt.Sprintf("ccdad could not download the signature for %s: %v", want.Tag(), err))
+	}
+
 	// ---------------------------- BEGIN PLACEHOLDER ----------------------------
 	// Everything from this comment down to END PLACEHOLDER is scaffolding, and
 	// it is meant to be deleted WHOLE — comment, blank assignments and return
-	// together. Whoever writes the rest of the algorithm (downloading the
-	// checksum file and its signature, verifying that signature against keys,
-	// downloading the asset into staging and moving it over target) replaces
-	// this block; leaving the comment behind would leave it sitting above live
-	// code, describing something that is no longer true.
+	// together. Whoever writes the rest of the algorithm (verifying the
+	// signature against keys, reading this platform's row out of the checksum
+	// file, downloading the asset into staging and moving it over target)
+	// replaces this block; leaving the comment behind would leave it sitting
+	// above live code, describing something that is no longer true.
 	//
 	// It exists so this command RUNS while the rest is still being written: it
 	// reports what it has resolved and stops. The blank assignments are what
 	// keep the compiler quiet about values only the later steps read. Nothing
 	// asserts on any of it.
-	_, _ = client, base
+	_, _ = sums, sig
 	_ = staging
 	return rep.emit(cmd, opts.asJSON, ExitOK, "", "")
 	// ----------------------------- END PLACEHOLDER -----------------------------
