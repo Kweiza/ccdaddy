@@ -247,38 +247,21 @@ jobs:
         run: |
           set -euo pipefail
           rel=$RUNNER_TEMP/rel
-          minisign -V -p ccdaddy.pub -m "$rel/sha256sums.txt" -x "$rel/sha256sums.txt.minisig" | tee "$rel/verified.txt"
+          # The rule lives in the script, not in this block, because it is
+          # subtle enough to deserve a test and a `run:` block cannot have one.
+          # minisign answers "is this signature authentic"; the script adds "and
+          # is it the release I asked for", which is the check that stops an
+          # origin serving an older release's genuine, correctly signed pair.
+          scripts/verify-release-signature.sh "$TAG" ccdaddy.pub "$rel/sha256sums.txt" "$rel/sha256sums.txt.minisig"
 
-          # minisign answers "is this signature authentic". It does not answer
-          # "is this the release I asked for", and the two come apart: an origin
-          # that chooses what to serve can hand back an OLDER release's genuine,
-          # correctly signed pair with every signature check passing. The
-          # release name lives in the trusted comment, which the second
-          # signature covers -- so it is text an attacker chose until the line
-          # above returned, and worth reading only now.
-          tc=$(sed -n 's/^Trusted comment: //p' "$rel/verified.txt")
-          if [ -z "$tc" ]; then
-            echo "install-smoke: minisign verified and printed no trusted comment" >&2
-            exit 1
-          fi
-          # Exactly one tab-separated field equal to ccdaddy:<tag>, which is the
-          # rule internal/relsign enforces; the two must not disagree about what
-          # a valid release is. -F because the tag is data -- read as a pattern,
-          # ccdaddy:v1.2.3 also matches ccdaddy:v1x2x3, and every tag this
-          # project cuts has dots in it. install.ps1 escapes for the same reason.
-          n=$(printf '%s' "$tc" | tr '\t' '\n' | grep -Fxc -- "ccdaddy:$TAG" || true)
-          if [ "$n" != 1 ]; then
-            printf 'install-smoke: the trusted comment %s does not name %s exactly once\n' "$tc" "$TAG" >&2
-            exit 1
-          fi
-          echo "install-smoke: the stock minisign accepts $TAG's checksums against ccdaddy.pub" >&2
-
-      # A step that runs minisign and reports success has so far proved that
-      # minisign ran. These prove it LOOKED. Without them a wrong flag -- a
+      # Two controls, because everything above has so far proved that minisign
+      # ran. These prove it LOOKED, against the artifact this release actually
+      # published rather than against a fixture. Without them a wrong flag -- a
       # message that is not the file downloaded, a key that is not the one
-      # committed -- passes this job forever, which is the failure this whole
-      # job was added to stop happening somewhere else.
+      # committed -- passes this job forever.
       - name: Prove the verification can fail
+        env:
+          TAG: ${{ needs.resolve.outputs.tag }}
         run: |
           set -euo pipefail
           rel=$RUNNER_TEMP/rel
@@ -289,19 +272,19 @@ jobs:
           # passes, nothing is binding the checksums to the signature.
           cp "$rel/sha256sums.txt" "$ctl/tampered.txt"
           printf 'tampered\n' >>"$ctl/tampered.txt"
-          if minisign -V -p ccdaddy.pub -m "$ctl/tampered.txt" -x "$rel/sha256sums.txt.minisig" >/dev/null 2>&1; then
-            echo "install-smoke: minisign accepted a sums file with a line appended to it" >&2
+          if scripts/verify-release-signature.sh "$TAG" ccdaddy.pub "$ctl/tampered.txt" "$rel/sha256sums.txt.minisig" >/dev/null 2>&1; then
+            echo "install-smoke: a sums file with a line appended to it was accepted" >&2
             exit 1
           fi
 
           # Two: the real content and signature under a key that is not ours.
-          # If this passes, -p is not being consulted and the check above would
-          # take anybody's signature. Generated here rather than committed, so
-          # this control cannot be broken by tidying a fixture directory
-          # somewhere else in the tree.
+          # If this passes, the public key is not being consulted and the check
+          # above would take anybody's signature. Generated here rather than
+          # committed, so this control cannot be broken by tidying a fixture
+          # directory somewhere else in the tree.
           minisign -G -W -p "$ctl/other.pub" -s "$ctl/other.key" >/dev/null
-          if minisign -V -p "$ctl/other.pub" -m "$rel/sha256sums.txt" -x "$rel/sha256sums.txt.minisig" >/dev/null 2>&1; then
-            echo "install-smoke: minisign accepted our signature under a key that is not ours" >&2
+          if scripts/verify-release-signature.sh "$TAG" "$ctl/other.pub" "$rel/sha256sums.txt" "$rel/sha256sums.txt.minisig" >/dev/null 2>&1; then
+            echo "install-smoke: our signature was accepted under a key that is not ours" >&2
             exit 1
           fi
           echo "install-smoke: both controls were refused, so the verification above was doing work" >&2

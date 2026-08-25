@@ -118,37 +118,51 @@ func TestInstallSmokeSignatureLegFailsLoudly(t *testing.T) {
 	if strings.Contains(job, "continue-on-error") {
 		t.Error("continue-on-error turns the one proof the pipeline works into a notice")
 	}
+	// Scanning for the verification command by name rather than for `minisign`:
+	// the verification moved into a script, and a scan for `minisign -V` went
+	// quietly vacuous the moment it did — it matched nothing and reported
+	// success, which is the same failure this test exists to catch one level up.
+	verifications := 0
 	for _, line := range strings.Split(job, "\n") {
-		if !strings.Contains(line, "minisign -V") {
+		if !strings.Contains(line, "verify-release-signature.sh") {
 			continue
 		}
+		verifications++
+		// The two controls INVERT the script — they require it to fail — so
+		// they legitimately appear inside an `if`. What may never appear is a
+		// soft arm that lets a failure through as a message.
 		if strings.Contains(line, "|| true") || strings.Contains(line, "|| echo") {
 			t.Errorf("a verification that cannot fail is not a verification: %q", strings.TrimSpace(line))
 		}
 	}
+	if verifications == 0 {
+		t.Error("the job runs no verification at all, so this test was passing over nothing")
+	}
 }
 
 // minisign answers "is this signature authentic", never "is this the release I
-// asked for". The trusted comment carries the release name and is covered by
-// the second signature, so it is trustworthy once minisign returns — but an
-// origin that chooses what to serve can hand back an older release's genuine,
-// correctly signed pair, every signature check passing. internal/relsign closes
-// that with an exact tab-separated field match, and this job has to close it
-// the same way or the two disagree about what a valid release is.
-func TestInstallSmokeBindsTheSignatureToTheTag(t *testing.T) {
+// asked for". An origin that chooses what to serve can hand back an older
+// release's genuine, correctly signed pair with every signature check passing,
+// and sha256sums.txt carries no version of its own to tell them apart.
+//
+// That rule is NOT written in this workflow. It lives in
+// scripts/verify-release-signature.sh, which has its own test — including the
+// case a substring test gets wrong, driven against real minisign 0.11
+// signatures. What this asserts is that the job delegates to it rather than
+// growing a second copy of the rule inside a `run:` block, where nothing could
+// test it.
+func TestInstallSmokeDelegatesTheReleaseBindingToTheTestedScript(t *testing.T) {
 	job := signatureJob(t)
 
-	if !strings.Contains(job, "Trusted comment") {
-		t.Error("the job never reads the trusted comment, so it cannot tell this release from any other correctly signed one")
+	if !strings.Contains(job, "scripts/verify-release-signature.sh") {
+		t.Error("the job does not call scripts/verify-release-signature.sh, so the release-binding rule is either missing or re-implemented untested")
 	}
-	if !strings.Contains(job, `"ccdaddy:$TAG"`) {
-		t.Error("the release field must be matched as ccdaddy:<tag>, the same field internal/relsign reads")
-	}
-	// -F, because the tag is data. `ccdaddy:v1.2.3` read as a pattern also
-	// matches `ccdaddy:v1x2x3`, and the dot is in every tag this project cuts.
-	// install.ps1 escapes for the same reason, one line away in the same repo.
-	if !strings.Contains(job, "grep -Fxc") {
-		t.Error("the trusted-comment match must be a fixed-string, whole-line match; a regex makes the dots in a tag into wildcards")
+	// A second copy of the rule inline is the thing to catch: it would drift
+	// from the script's, and only the script's has a test.
+	for _, inline := range []string{"Trusted comment", "grep -Fxc"} {
+		if strings.Contains(job, inline) {
+			t.Errorf("the job carries its own copy of the trusted-comment rule (%q); the script owns it", inline)
+		}
 	}
 }
 
