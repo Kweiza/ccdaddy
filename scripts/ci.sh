@@ -287,12 +287,13 @@ cites_docpath='([Ss]ee|[Pp]er|[Rr]efer to|[Dd]escribed in|[Dd]ocumented in) (doc
 
 # tracked_has answers whether the repository contains this exact path.
 #
-# Deliberately not `git ls-files | grep -qxF`. That is the pipeline the comment
-# above `go version -m` in check_cgo warns about: grep exits at the first match,
-# the writer dies of SIGPIPE, and `pipefail` turns a pointer that RESOLVED into
-# a failed script. The existing arm below has that shape and has never fired,
-# because the list is smaller than a pipe buffer -- which is luck, not a reason
-# to write a second one.
+# Matched in the shell rather than through `git ls-files | grep -q`. That is the
+# pipeline the comment above `go version -m` in check_cgo warns about: grep
+# exits at the first match, the writer dies of SIGPIPE, and `pipefail` turns a
+# pointer that RESOLVED into a failed script. The slug arm was written that way
+# and never fired only because this repository's file list is smaller than a
+# pipe buffer; it reads the same list from a here-string now, which is the same
+# question asked without a writer to kill.
 tracked=
 tracked_has() {
 	case $1 in
@@ -320,6 +321,8 @@ tracked_has() {
 check_cites() {
 	group "self-contained comments"
 	local spelled pointers unresolved line targets target hits docpaths
+	# Read once, and matched below without a pipe. See tracked_has.
+	tracked=$(git ls-files)
 	# The `grep -v` runs last, so a line carrying BOTH an RFC citation and a
 	# real one escapes. That trade is deliberate: the alternative is a lookbehind
 	# no portable grep has, and such a line has never existed here.
@@ -340,7 +343,7 @@ check_cites() {
 			targets=$(printf '%s\n' "$line" | grep -oE "$cites_pointer" |
 				sed -E 's/.*[[:space:]]//')
 			for target in $targets; do
-				if git ls-files | grep -qE "(^|/)${target}(\.[A-Za-z0-9]+)?\$"; then
+				if grep -qE "(^|/)${target}(\.[A-Za-z0-9]+)?\$" <<<"$tracked"; then
 					continue
 				fi
 				unresolved="${unresolved}${line}
@@ -355,7 +358,6 @@ EOF
 	# A DOCUMENT POINTED AT BY PATH, resolved exactly rather than by suffix: a
 	# path names one file, and `(^|/)name` matching would let `docs/x.md`
 	# resolve against an unrelated `vendor/docs/x.md`.
-	tracked=$(git ls-files)
 	docpaths=
 	if pointers=$(git grep -nE "$cites_docpath" -- "${cites_paths[@]}"); then
 		while IFS= read -r line; do
