@@ -980,3 +980,185 @@ func TestNotListedNamesTheAsset(t *testing.T) {
 		t.Errorf("stderr = %q, want it to name %q", stderr, release.Asset())
 	}
 }
+
+// A bad signature over ENTIRELY CORRECT checksums.
+//
+// The sums file here is byte-for-byte the real one: it passes the shape check,
+// it lists this asset, and its digest is the digest of the asset the origin is
+// serving. The ONLY thing wrong with it is that the signature beside it does
+// not cover it — which is exactly the state an attacker who can serve bytes but
+// cannot sign them produces.
+//
+// This is the canonical case rather than the ordering proof. It fails ONE gate,
+// so every ordering of the three gates reports the same reason for it; the
+// fixtures that fail TWO gates at once are the ones that separate the orderings,
+// and they are below.
+func TestUpdateRefusesABadSignatureOverPerfectlyCorrectChecksums(t *testing.T) {
+	target, f, sign := updateWorld(t, "0.6.1", "v0.7.0")
+
+	realSums := f.get("sha256sums.txt")
+	if !release.SumsLookLikeSums(realSums) {
+		t.Fatal("the fixture's sums file does not pass the shape check, so this test proves nothing")
+	}
+	if _, ok := release.ExpectedHash(realSums, release.Asset()); !ok {
+		t.Fatal("the fixture's sums file does not list this asset, so this test proves nothing")
+	}
+	// The sums file is left exactly as it is. Only the signature is replaced,
+	// with a genuine signature over other bytes.
+	f.put("sha256sums.txt.minisig", sign([]byte("bytes this signature really does cover"), "v0.7.0"))
+
+	code, stdout, _, _ := runRoot(t, "update", "--json")
+	if code != ExitBlocked {
+		t.Fatalf("exit = %d, want %d", code, ExitBlocked)
+	}
+	payload := decodePayload(t, stdout)
+	if got := payload["reason"]; got != "signature" {
+		t.Errorf("reason = %v, want %q", got, "signature")
+	}
+	if got := payload["updated"]; got != false {
+		t.Errorf("updated = %v, want false", got)
+	}
+	assertBinaryUntouched(t, target)
+
+	// A guard for the download rather than a proof about it: runUpdate does not
+	// fetch the asset at all yet, so nothing can make this fire today. It is
+	// here so that whoever adds the fetch cannot add it above the verification
+	// without a red test.
+	for _, p := range f.asked() {
+		if strings.HasSuffix(p, "/"+release.Asset()) {
+			t.Errorf("the origin was asked for %s; the signature check must come before anything "+
+				"in the sums file is believed.\nrequests: %v", release.Asset(), f.asked())
+		}
+	}
+}
+
+// The ordering proof.
+//
+// A fixture that fails exactly ONE of the three gates cannot tell their
+// orderings apart: whichever gate runs first, the single bad thing is the only
+// thing any ordering can report, so all of them agree. Every row here fails TWO
+// gates at once, and the reason it reports is the NAME OF THE GATE THAT RAN
+// FIRST — which is the only way a test in this file can observe the order.
+//
+// The three rows rule out the three wrong orderings between them: a run that
+// checks the shape before the signature reports `shape` for the first row, one
+// that reads the row before the signature reports `not-listed` for the second,
+// and one that reads the row before checking the shape reports `not-listed` for
+// the third.
+func TestUpdateReportsWhicheverGateRanFirst(t *testing.T) {
+	// A proxy's sign-in page: not a checksum file, and it lists nothing.
+	page := []byte("<!doctype html>\n<html><body>sign-in required</body></html>\n")
+	// Well-shaped and correctly formed, carrying one binary for a platform this
+	// is not: it passes the shape check and fails the lookup.
+	otherPlatform := sumsFor(map[string][]byte{
+		"ccdad-plan9-mips": []byte("not this machine\n"),
+		"LICENSE":          []byte("license\n"),
+	})
+	// The bytes a wrong signature really covers. Anything that is not the sums
+	// file will do; naming them makes the fixture readable.
+	elsewhere := []byte("bytes this signature really does cover")
+
+	for _, c := range []struct {
+		name string
+		sums []byte
+		// signOver is what the signature beside the sums file actually covers.
+		// Passing the sums file itself makes the signature correct.
+		signOver []byte
+		reason   string
+	}{{
+		name:     "a page whose signature covers other bytes",
+		sums:     page,
+		signOver: elsewhere,
+		reason:   "signature",
+	}, {
+		name:     "a sums file for another platform whose signature covers other bytes",
+		sums:     otherPlatform,
+		signOver: elsewhere,
+		reason:   "signature",
+	}, {
+		// The remedy, not the download, is what this row decides: "this is not
+		// a checksum file" is the more useful of the two facts and the one
+		// that names a proxy, where `not-listed` would send a user behind a
+		// captive portal hunting for a platform the release does not carry.
+		name:     "a correctly signed page, which also lists nothing",
+		sums:     page,
+		signOver: page,
+		reason:   "shape",
+	}} {
+		t.Run(c.name, func(t *testing.T) {
+			target, f, sign := updateWorld(t, "0.6.1", "v0.7.0")
+			f.put("sha256sums.txt", c.sums)
+			f.put("sha256sums.txt.minisig", sign(c.signOver, "v0.7.0"))
+
+			code, stdout, _, _ := runRoot(t, "update", "--json")
+			if code != ExitBlocked {
+				t.Fatalf("exit = %d, want %d", code, ExitBlocked)
+			}
+			if got := decodePayload(t, stdout)["reason"]; got != c.reason {
+				t.Errorf("reason = %v, want %q — this fixture fails more than one gate, so the "+
+					"reason names which gate ran first", got, c.reason)
+			}
+			assertBinaryUntouched(t, target)
+		})
+	}
+}
+
+// The other half of the ordering, and it decides a remedy rather than a
+// download: a file that is neither a sums file nor lists this asset must report
+// SHAPE, because "this is not a checksum file" is the more useful of the two
+// facts and the one that names a proxy.
+func TestUpdateReportsShapeBeforeListing(t *testing.T) {
+	_, f, sign := updateWorld(t, "0.6.1", "v0.7.0")
+	page := []byte("<!doctype html>\n<html><body>sign-in required</body></html>\n")
+	f.put("sha256sums.txt", page)
+	f.put("sha256sums.txt.minisig", sign(page, "v0.7.0"))
+
+	_, stdout, _, _ := runRoot(t, "update", "--json")
+	if got := decodePayload(t, stdout)["reason"]; got != "shape" {
+		t.Errorf("reason = %v, want %q — an HTML page also fails to list the asset, and shape is "+
+			"the answer that names what actually happened", got, "shape")
+	}
+}
+
+// The replay: the origin claims a release that does not exist and serves the
+// genuine, correctly signed pair from an older one. Every ed25519 check passes.
+// The trusted comment is the only thing left, and it must be what refuses —
+// with `wrong-release` and not with `signature`, or the refusal was luck.
+func TestUpdateRefusesAReplayedOlderPair(t *testing.T) {
+	target, f, sign := updateWorld(t, "0.6.1", "v0.7.0")
+	f.setTag("v9.9.9")
+	// The pair from v0.6.1: a real sums file with a real signature over it,
+	// whose trusted comment names v0.6.1 and nothing else.
+	older := sumsFor(map[string][]byte{
+		release.Asset(): []byte("an older release's binary\n"),
+		"LICENSE":       []byte("license\n"),
+	})
+	f.put("sha256sums.txt", older)
+	f.put("sha256sums.txt.minisig", sign(older, "v0.6.1"))
+
+	code, stdout, _, _ := runRoot(t, "update", "--json")
+	if code != ExitBlocked {
+		t.Fatalf("exit = %d, want %d", code, ExitBlocked)
+	}
+	if got := decodePayload(t, stdout)["reason"]; got != "wrong-release" {
+		t.Errorf("reason = %v, want %q — the signature itself is genuine, so anything else here "+
+			"means the trusted comment was not what refused", got, "wrong-release")
+	}
+	assertBinaryUntouched(t, target)
+}
+
+// The exact-field rule, which is what makes the trusted comment worth having:
+// a substring match is true of ccdaddy:v1.2.30 for a request for v1.2.3.
+func TestUpdateDoesNotAcceptATrustedCommentThatMerelyContainsTheTag(t *testing.T) {
+	target, f, sign := updateWorld(t, "1.2.2", "v1.2.3")
+	f.put("sha256sums.txt.minisig", sign(f.get("sha256sums.txt"), "v1.2.30"))
+
+	code, stdout, _, _ := runRoot(t, "update", "--json")
+	if code != ExitBlocked {
+		t.Fatalf("exit = %d, want %d", code, ExitBlocked)
+	}
+	if got := decodePayload(t, stdout)["reason"]; got != "wrong-release" {
+		t.Errorf("reason = %v, want %q", got, "wrong-release")
+	}
+	assertBinaryUntouched(t, target)
+}
