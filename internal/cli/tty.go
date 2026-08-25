@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"io"
 	"os"
 
 	"golang.org/x/term"
@@ -29,6 +30,47 @@ var stdoutIsTTY = func() bool { return isTTY(os.Stdout) }
 // waiting for a code the user was never shown, behind a dashboard that had
 // vanished. The key refuses instead, and names the redirect.
 var stderrIsTTY = func() bool { return isTTY(os.Stderr) }
+
+// outWidth is how many display columns w has, and 0 when it has none.
+//
+// It is measured on the WRITER rather than on os.Stdout, because the writer is
+// what the answer is about: `ccdad status > file` and `ccdad status | less`
+// both hand this a destination whose width is not the terminal's, and a
+// redirect that folded its output to whatever the window happened to be would
+// put a line break inside a file whose reader is elsewhere. A *bytes.Buffer --
+// what every test renders into -- reports none for the same reason, which is
+// what keeps the unfolded rendering the default everywhere it is read as data.
+//
+// Zero is also what an error reports. There is nothing a user could do with a
+// failed ioctl and nothing ccdad would do differently: the line comes out as
+// one, exactly as it did before any of this existed.
+//
+// A package var, not a call, for the reason stdoutIsTTY gives: a real terminal
+// is not something a test can arrange, and the rendering that hangs on this is
+// the one the item exists about.
+//
+// GetSize IS the terminal predicate here, and there is deliberately no isTTY
+// ahead of it: a descriptor with no window size is not a terminal for the only
+// purpose this function has. Measured -- with such a guard in place and then
+// removed, every test in this package passes either way, including the one that
+// hands this a regular file, because GetSize refuses that file too.
+//
+// The type assertion stays, and it is NOT the same case. Without it this would
+// reach Fd() on a nil *os.File and depend on that returning an invalid
+// descriptor rather than panicking. That is os.File's implementation and not
+// its contract: no test here can see the difference, and a future standard
+// library is under no obligation to keep it.
+var outWidth = func(w io.Writer) int {
+	f, ok := w.(*os.File)
+	if !ok {
+		return 0
+	}
+	cols, _, err := term.GetSize(int(f.Fd()))
+	if err != nil {
+		return 0
+	}
+	return cols
+}
 
 // isTTY reports whether f is an interactive terminal.
 //

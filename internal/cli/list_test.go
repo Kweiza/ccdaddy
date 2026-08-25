@@ -1133,3 +1133,26 @@ func TestListSaysSoWhenTheSeriesCannotBeRead(t *testing.T) {
 		t.Errorf("the rows the usage cache still answers for were dropped with it:\n%s", out)
 	}
 }
+
+// `ccdad list` prints the same summary under its own table, from its own
+// Fprintf. Two print sites carrying one wording is what view.RunwayLine exists
+// to make safe, and a fold taught to one of them and not the other is exactly
+// the drift it exists to prevent -- so the assertion is not that this folds,
+// but that it folds IDENTICALLY.
+func TestTheListRunwayLineFoldsExactlyAsStatusDoes(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	seedBurningFleet(t)
+
+	stubOutWidth(t, 60)
+	_, list, _, _ := runRoot(t, "list")
+	_, status, _, _ := runRoot(t, "status")
+
+	listed := runwayBlockOf(t, list)
+	if len(listed) < 2 {
+		t.Fatalf("the listing's line did not fold at 60 columns:\n%s", strings.Join(listed, "\n"))
+	}
+	if got, want := strings.Join(listed, "\n"), strings.Join(runwayBlockOf(t, status), "\n"); got != want {
+		t.Errorf("the two commands fold one line two ways:\nlist:\n%s\nstatus:\n%s", got, want)
+	}
+}
