@@ -469,6 +469,9 @@ func TestLockNilReceiverIsSafe(t *testing.T) {
 		t.Fatal("nil Lock Compromised() closed, want a channel that never fires")
 	case <-time.After(20 * time.Millisecond):
 	}
+	if lk.Owned() {
+		t.Fatal("nil Lock Owned() = true; a lock that was never acquired owns nothing")
+	}
 }
 
 // The staleness rule has two halves and only the positive one was pinned: the
@@ -538,5 +541,91 @@ func TestAcquireReportsWhyAStaleLockCouldNotBeRemoved(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "could not be removed") {
 		t.Fatalf("error = %q, want it to name the removal failure rather than only the timeout", err)
+	}
+}
+
+// Owned answers from a stat taken now, not from the touch goroutine's ticker.
+// A ten-minute interval guarantees that goroutine never runs during this test,
+// so anything Owned notices it noticed by itself -- which is the whole reason
+// the method exists: a caller about to overwrite a shared file cannot wait a
+// touch interval to find out the file is no longer its to write.
+func TestOwnedSeesATakeoverTouchHasNotYetNoticed(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "x.lock")
+
+	lk, err := Acquire(dir, Options{Stale: time.Hour, Timeout: time.Second, TouchInterval: 10 * time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !lk.Owned() {
+		t.Fatal("Owned() = false immediately after Acquire()")
+	}
+
+	stealLock(t, dir)
+
+	if lk.Owned() {
+		t.Fatal("Owned() = true after the directory was taken over, and touch's ticker cannot have fired")
+	}
+	select {
+	case <-lk.Compromised():
+	default:
+		t.Fatal("Compromised() did not close even though Owned() reported the takeover")
+	}
+	if err := lk.Release(); !errors.Is(err, ErrCompromised) {
+		t.Fatalf("Release() = %v, want ErrCompromised", err)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("lock directory missing after a compromised hold, want it left for the new owner: %v", err)
+	}
+}
+
+// The toucher rewrites the mtime and then reads back what landed, and between
+// those two the directory carries a value the Lock has not recorded. Owned must
+// not read that gap as a takeover: marking a lock lost is irreversible, so a
+// false positive here ends a hold that nothing interfered with.
+//
+// The gap is a stat wide in production, which is far too narrow to hit on
+// purpose, so the stat is made slow instead. The call sequence is fixed:
+// Acquire takes one baseline stat, then each tick stats to check ownership and
+// stats again to read back its own write. The third call is therefore the
+// read-back, and holding it open is what puts the directory and the Lock in
+// disagreement for long enough to ask.
+func TestOwnedIsNotFooledByTheToucherMidTouch(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "x.lock")
+
+	var mu sync.Mutex
+	calls := 0
+	inReadBack := make(chan struct{})
+	t.Cleanup(setStatLockForTest(func(d string) (os.FileInfo, error) {
+		mu.Lock()
+		calls++
+		n := calls
+		mu.Unlock()
+		info, err := defaultStatLock(d)
+		if n == 3 {
+			close(inReadBack)
+			time.Sleep(300 * time.Millisecond)
+		}
+		return info, err
+	}))
+
+	lk, err := Acquire(dir, Options{Stale: time.Minute, Timeout: time.Second, TouchInterval: 20 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lk.Release() })
+
+	select {
+	case <-inReadBack:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the toucher never reached its read-back stat; the call sequence this test keys on has changed")
+	}
+
+	if !lk.Owned() {
+		t.Fatal("Owned() = false while the lock's own toucher was mid-touch; nothing took this lock")
+	}
+	select {
+	case <-lk.Compromised():
+		t.Fatal("Compromised() closed while the lock's own toucher was mid-touch")
+	default:
 	}
 }

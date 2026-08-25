@@ -51,25 +51,67 @@ const (
 	// a live holder's lock goes stale by its own definition between two touches.
 	lockStale = 30 * time.Second
 
-	// retain is how far back samples are kept.
+	// measuredSpan is how far back a burn rate is measured, and the figure
+	// retain is sized against: a rate over the trailing four hours needs a
+	// sample at or before the four-hour mark, not merely one inside it, so
+	// retention has to reach further back than the measurement does.
 	//
-	// The rate is measured over four hours. The longest gap the poller can leave
-	// is pollpolicy.Post429MaxInterval (1800 s) jittered up by pollpolicy's
-	// JitterFrac to about 1980 s, and pollpolicy.Share multiplies an ordinary
-	// cadence by the number of accounts sharing one identity. Four hours plus
-	// one such gap is 4 h 33 m, so six hours brackets the measurement window at
-	// both ends with room to spare.
+	// It is declared rather than left inside retain's reasoning so that the
+	// bound and the test that checks the bound name one figure between them.
+	// Nothing in this package measures anything; retention simply cannot be
+	// sized without knowing this.
+	measuredSpan = 4 * time.Hour
+
+	// maxIdentityAccounts is how many accounts sharing one identity retain and
+	// maxSamples are sized for. Six is the largest pool this tree has been run
+	// against.
+	maxIdentityAccounts = 6
+
+	// retain is how far back samples are kept: measuredSpan plus the longest
+	// gap the poller can leave, so the oldest end of the window still has a
+	// sample bracketing it after the worst possible silence.
 	//
-	// It is deliberately NOT derived from the 600 s idle cadence: that is not
-	// the longest interval the poller reaches, and sizing against it would drop
-	// the oldest end of the window on any fleet that has just been rate limited.
-	retain = 6 * time.Hour
+	// That gap is NOT pollpolicy's largest interval. The ceiling AIMD parks a
+	// repeatedly rate-limited account at is Post429MaxInterval, 1800 s, and
+	// pollpolicy.Next jitters it up by JitterFrac before returning it -- 1980 s
+	// at the top of the band. But the daemon then passes that already-jittered
+	// figure to pollpolicy.Share, which multiplies it by the number of accounts
+	// on one identity, because the endpoint's allowance belongs to the identity
+	// and not to the account, and nothing clamps the product. Six accounts is
+	// therefore 11880 s, 3 h 18 m, between two consecutive readings of any one
+	// of them. Four hours plus that is 7 h 18 m; eight hours is the next whole
+	// hour above it. TestRetainCoversTheLongestGapThePolicyPermits recomputes
+	// the gap through those two functions rather than from their inputs, so a
+	// rule change inside either one fails rather than silently invalidating this
+	// paragraph.
+	//
+	// An identity larger than six leaves a longer gap than this and loses the
+	// oldest end of the window. The measurement is then made over a shorter span
+	// than four hours, which is a narrower answer rather than a wrong one.
+	//
+	// It is deliberately not derived from the 600 s idle cadence: that is not
+	// the longest interval the poller reaches, and sizing against it drops the
+	// oldest end of the window on any fleet that has just been rate limited --
+	// exactly when a burn rate is worth having.
+	retain = 8 * time.Hour
 
 	// maxSamples is a hard bound no cadence can argue past, so a poller that
-	// somehow polls far faster than the policy permits cannot grow this file
-	// without limit. Six hours at pollpolicy.MinInterval (180 s) is 120 samples;
-	// 512 leaves four times that headroom and still caps the document at roughly
-	// 150 KB for six accounts.
+	// somehow ran far faster than the policy permits could not grow this file
+	// without limit. It is not the bound that normally bites: pollpolicy's
+	// sustained floor is MinInterval, 180 s, so eight hours of the fastest
+	// permitted polling is 160 samples per account, and reaching 512 would take
+	// a reading every 56 s.
+	//
+	// The sizes are measured by encoding this document's own shape rather than
+	// estimated, and TestTheDocumentSizeAtTheCapIsWhatMaxSamplesClaims keeps
+	// measuring them: a sample costs 267 bytes carrying three windows and a
+	// credit, 455 carrying all six the usage schema names. Six accounts at 160
+	// samples each is therefore 250-430 KB, and six accounts pinned at this cap
+	// would be 0.8-1.3 MB -- more again on a plan that reports scoped weekly
+	// caps too, whose names are longer than the fixed ones. That upper figure is
+	// why the cap is a cap and not a target: LoadHistory reads and unmarshals
+	// the whole document, with no lock and no partial read, on every command
+	// that forecasts.
 	maxSamples = 512
 )
 
@@ -359,6 +401,21 @@ func (h *History) save(root string) error {
 // appended. Abandoning the write instead is safe because Put is keyed on
 // (uuid, At): re-applying the lost sample duplicates nothing.
 //
+// That check is cclock's Owned, which stats the lock directory synchronously,
+// and NOT a select on Compromised(). Compromised() is closed by cclock's touch
+// goroutine on its own ticker, so a takeover can be a whole touch interval old
+// before it appears there, and a process that was suspended mid-transaction can
+// reach this point before that goroutine is next scheduled at all -- which is
+// precisely the stalled writer this ordering exists to stop. A stat answers
+// about now.
+//
+// It narrows the window rather than closing it: nothing makes the check and the
+// rename one atomic operation, so a takeover landing between them still
+// overwrites. What is left is the microseconds of a stat and a rename instead of
+// seconds of an unticked timer. Closing it completely needs a lock the operating
+// system enforces on the file itself, which is not what Claude Code's own mkdir
+// mutex is, and interoperating with that mutex is why this package uses it.
+//
 // fn returning an error leaves the file exactly as it was: a poll that failed
 // halfway must not persist half a reading.
 func WithHistory(timeout time.Duration, fn func(*History) error) (err error) {
@@ -377,12 +434,11 @@ func WithHistory(timeout time.Duration, fn func(*History) error) (err error) {
 	if aerr != nil {
 		return fmt.Errorf("locking the usage history: %w", aerr)
 	}
-	// Release's return value is part of the answer, not noise. cclock detects a
-	// takeover two ways, and the one Release performs -- a synchronous re-stat
-	// of the lock directory -- is the only one that can see a takeover in the
-	// window between the touch goroutine's last tick and now. It also reports a
-	// lock directory that could not be removed, which would otherwise block
-	// every other writer silently until the stale threshold elapsed.
+	// Release's return value is part of the answer, not noise. It reports a
+	// takeover that landed after the ownership check below -- the only window
+	// that check leaves open -- and it reports a lock directory that could not
+	// be removed, which would otherwise block every other writer silently until
+	// the stale threshold elapsed.
 	defer func() { err = errors.Join(err, lock.Release()) }()
 
 	h, err := LoadHistory()
@@ -392,10 +448,8 @@ func WithHistory(timeout time.Duration, fn func(*History) error) (err error) {
 	if err := fn(h); err != nil {
 		return err
 	}
-	select {
-	case <-lock.Compromised():
+	if !lock.Owned() {
 		return fmt.Errorf("writing %s: %w", FileName, cclock.ErrCompromised)
-	default:
 	}
 	return h.save(root)
 }
