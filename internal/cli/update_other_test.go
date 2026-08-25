@@ -97,11 +97,13 @@ func TestReplaceBinaryKeepsTheStagedMode(t *testing.T) {
 	if err := os.WriteFile(staged, []byte("new"), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	// Load-bearing, not redundant with the mode WriteFile was just given: a
-	// restrictive process umask (022, and CI runners often set one) masks
-	// bits out of WriteFile's requested mode, so without this explicit
-	// Chmod staged could end up at 0o750&^022 and the assertion below would
-	// be checking a mode nothing actually asked for.
+	// Load-bearing, not redundant with the mode WriteFile was just given, but
+	// only under a STRICTER umask than the common 022: 0o750&^0o022 == 0o750,
+	// since 022 clears only the group-write and other-write bits and 0o750
+	// has neither set. A umask of 0o077 -- one a security-conscious shell or
+	// CI runner may set -- clears every group and other bit instead, so
+	// WriteFile alone would leave staged at 0o750&^0o077 == 0o700 and this
+	// Chmod is what pulls the group-read/execute bits back.
 	if err := os.Chmod(staged, 0o750); err != nil {
 		t.Fatal(err)
 	}
