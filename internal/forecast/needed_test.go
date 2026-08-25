@@ -13,39 +13,52 @@ import (
 // and a fleet carrying both would be free to print "runs dry" and "you have
 // enough accounts" on adjacent lines.
 //
-// The two disagree whenever an account supplies replenishment it cannot
-// deliver. Here four of the six accounts are out on the weekly axis and nothing
-// brings them back, so the comparison counts six accounts' five-hour supply --
-// 6 x 100/5 h = 120 points an hour against 30 burned, which reads as "no more
-// accounts needed at all" -- while the rotation can only ever reach two of
-// them. Five accounts of this fleet run dry; it needs all six.
+// The two disagree whenever an account supplies replenishment it cannot deliver.
+// Four of the six accounts here are out on the weekly axis and nothing brings
+// them back, so the closed form counts six seats' five-hour supply and the
+// rotation can only ever reach two of them.
+//
+// The fleet is deliberately SHORT, so the answer comes from appending seats the
+// fleet does not have. That is what keeps this test a test of the MECHANISM: the
+// upward search never slices the fleet, so nothing here turns on which of its own
+// accounts a downward search would have dropped first. A fixture that held would
+// be answered by that ordering instead, and would fail a pure-simulation build
+// that ordered seats the other way -- accusing it of being the comparison for a
+// reason that has nothing to do with the comparison.
+//
+// The arithmetic: 49.125 points an hour burned, one account replenishes 20, so
+// the closed form asks for ceil(49.125/20) = 3. The run asks for 7, because four
+// of the fleet's six seats supply nothing and it takes three live ones to carry
+// the rate.
 func TestNeededIsASimulationResultAndNotTheComparison(t *testing.T) {
 	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
 	fiveReset := now.Add(5 * time.Hour)
 	in := make([]Input, 0, 6)
 	for i := range 6 {
-		// Nineteen points over the four-hour span on every account: 114 points
-		// filled is 28.5 an hour, and six contributors put the upper bound the
-		// search runs at at (114+6)/4 = 30 exactly.
+		// 31.75 points over the four-hour span on every account: 190.5 points
+		// filled is 47.625 an hour, and six contributors put the upper bound the
+		// search runs at at (190.5+6)/4 = 49.125.
 		snap := &usage.Snapshot{FiveHour: usage.NewWindow(pf(0), pt(fiveReset))}
 		if i >= 2 {
-			// Out on the weekly axis, with a reading that carried no
-			// resets_at. Such a window is burned and never rolled over, so
-			// these four are out for the whole horizon -- and it is their
-			// WEEKLY window that strands them, so the five-hour run cannot
-			// hand them work either.
+			// Out on the weekly axis, with a reading that carried no resets_at.
+			// Such a window is burned and never rolled over, so these four are
+			// out for the whole horizon -- and it is their WEEKLY window that
+			// strands them, so the five-hour run cannot hand them work either.
 			snap.SevenDay = usage.NewWindow(pf(100), nil)
 		}
 		in = append(in, Input{
 			UUID: fmt.Sprintf("uuid-%d", i), Idx: i + 1, Eligible: true,
 			Snapshot: snap,
-			Series:   weeklySeries(now, 4*time.Hour, []float64{0, 9.5, 19}, fiveReset, usage.WindowFiveHour),
+			Series:   weeklySeries(now, 4*time.Hour, []float64{0, 15.875, 31.75}, fiveReset, usage.WindowFiveHour),
 		})
 	}
 	f := Of(in, now)
 
-	if f.FiveHour.Burn.High != 30 {
-		t.Fatalf("five-hour burn band = %v/%v, want an upper bound of 30", f.FiveHour.Burn.Low, f.FiveHour.Burn.High)
+	if f.FiveHour.Burn.High != 49.125 {
+		t.Fatalf("five-hour burn band = %v/%v, want an upper bound of 49.125", f.FiveHour.Burn.Low, f.FiveHour.Burn.High)
+	}
+	if f.Both.Verdict != VerdictRunsDry {
+		t.Fatalf("Both.Verdict = %v, want VerdictRunsDry -- this fixture is about a fleet that has to be given seats it does not have", f.Both.Verdict)
 	}
 	if f.AccountsUsable != 6 {
 		t.Fatalf("AccountsUsable = %d, want 6 -- an account that is out is still one the run had to work with", f.AccountsUsable)
@@ -53,8 +66,8 @@ func TestNeededIsASimulationResultAndNotTheComparison(t *testing.T) {
 	if !f.HasNeeded {
 		t.Fatal("HasNeeded = false on a measured fleet")
 	}
-	if f.AccountsNeeded <= 2 {
-		t.Fatalf("AccountsNeeded = %d; burn divided by one account's replenishment is 30/20 = 2, and the run needs more than that because four of the six seats supply nothing", f.AccountsNeeded)
+	if f.AccountsNeeded != 7 {
+		t.Fatalf("AccountsNeeded = %d, want 7; burn divided by one account's replenishment is 49.125/20 = 3, and the run needs four seats more than that because four of the six it has supply nothing", f.AccountsNeeded)
 	}
 }
 
@@ -296,5 +309,185 @@ func TestAFleetWithNoBasisReportsNoCountRatherThanZero(t *testing.T) {
 	}
 	if f.HasNeededBy || f.NeededCapped {
 		t.Errorf("HasNeededBy = %v and NeededCapped = %v, want both false where there was nothing to search", f.HasNeededBy, f.NeededCapped)
+	}
+}
+
+// AccountsUsable counts the accounts the ROTATION can reach and nobody else. It
+// is the left half of the rendered accounts line and the denominator the
+// parenthetical is read against, so an account counted into it that the run
+// never had is a seat the fleet does not have -- and the figure understates how
+// many the owner must go and buy, which is fail-open on the one number this
+// feature exists to print.
+//
+// Three populations, all non-empty here, because len(inputs), len(readable) and
+// len(usable) are the same number on any fleet where they are not: an ineligible
+// account is quota the rotation cannot switch to, and an account with no
+// readable window is quota nobody can see. Input.Eligible's zero value excludes
+// for that reason.
+//
+// The subtraction is asserted beside the count because it is the cross-check the
+// field's own documentation offers and the one a consumer of the JSON is told to
+// make. Neither PointsTotal nor a replenishment denominator is that check --
+// uuid-five below carries a five-hour window and no weekly one, so it is in this
+// count and in neither of those.
+func TestAccountsUsableCountsOnlyTheSeatsTheRotationHad(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	fiveReset, weeklyReset := now.Add(5*time.Hour), now.Add(168*time.Hour)
+	fiveSeries := weeklySeries(now, 4*time.Hour, []float64{0, 5, 10}, fiveReset, usage.WindowFiveHour)
+
+	in := []Input{
+		// Two seats the run had: eligible, readable, on both axes.
+		{UUID: "uuid-a", Idx: 1, Eligible: true, Snapshot: &usage.Snapshot{
+			FiveHour: usage.NewWindow(pf(10), pt(fiveReset)),
+			SevenDay: usage.NewWindow(pf(10), pt(weeklyReset)),
+		}, Series: fiveSeries},
+		{UUID: "uuid-b", Idx: 2, Eligible: true, Snapshot: &usage.Snapshot{
+			FiveHour: usage.NewWindow(pf(10), pt(fiveReset)),
+			SevenDay: usage.NewWindow(pf(10), pt(weeklyReset)),
+		}, Series: fiveSeries},
+		// A third, carrying five_hour and no weekly window at all. It is a seat
+		// the run had, and it is in neither PointsTotal nor the weekly
+		// replenishment denominator.
+		{UUID: "uuid-five", Idx: 3, Eligible: true, Snapshot: &usage.Snapshot{
+			FiveHour: usage.NewWindow(pf(10), pt(fiveReset)),
+		}, Series: fiveSeries},
+		// No snapshot: readable of nothing. Never chosen as live, so counting
+		// it would promise capacity nobody can see.
+		{UUID: "uuid-unreadable", Idx: 4, Eligible: true},
+		// Perfectly readable and the rotation cannot switch to it, which is
+		// unreachable by a different route and by the same amount.
+		{UUID: "uuid-ineligible", Idx: 5, Snapshot: &usage.Snapshot{
+			FiveHour: usage.NewWindow(pf(10), pt(fiveReset)),
+			SevenDay: usage.NewWindow(pf(10), pt(weeklyReset)),
+		}, Series: fiveSeries},
+	}
+	f := Of(in, now)
+
+	if f.AccountsUsable != 3 {
+		t.Errorf("AccountsUsable = %d, want 3 of %d inputs -- one is ineligible and one is readable of nothing, and neither is a seat the run had", f.AccountsUsable, len(in))
+	}
+	if f.Basis.Accounts != 5 || f.Basis.Unreadable != 1 || f.Basis.Ineligible != 1 {
+		t.Fatalf("Basis = %d accounts, %d unreadable, %d ineligible; want 5, 1, 1", f.Basis.Accounts, f.Basis.Unreadable, f.Basis.Ineligible)
+	}
+	if got := f.Basis.Accounts - f.Basis.Unreadable - f.Basis.Ineligible; f.AccountsUsable != got {
+		t.Errorf("AccountsUsable = %d and the basis subtracts to %d; the two are the cross-check a consumer is told to make", f.AccountsUsable, got)
+	}
+	// The two figures a reader must NOT check it against, pinned so that the
+	// documented non-identity stays a measured fact rather than a claim.
+	if f.PointsTotal/100 == float64(f.AccountsUsable) {
+		t.Errorf("PointsTotal is %v over %d usable accounts; this fixture exists because an account with no weekly window is in one count and not the other", f.PointsTotal, f.AccountsUsable)
+	}
+	if f.Weekly.Replenish == replenish(f.AccountsUsable, usage.WindowSevenDay) {
+		t.Errorf("the weekly replenishment is measured over %d accounts, the same as AccountsUsable; the fixture's five-hour-only account is meant to separate them", f.AccountsUsable)
+	}
+}
+
+// The search is bounded in WORK and not only in its answer, and that is a
+// separate promise from maxNeeded's. One question here is a whole run of the
+// rotation over the candidate fleet, and a run costs time that grows faster than
+// the fleet it is handed -- so a walk that added one seat per question would
+// spend the ceiling's worth of the most expensive runs there are. Every command
+// that prints a fleet measures one of these synchronously and the dashboard
+// remeasures on a timer, so the cost is paid in front of a person.
+//
+// Both halves are swept across every threshold the predicate could have, because
+// a bound that holds on one fixture is a bound nobody has measured. The answer is
+// asserted alongside the count of questions: a search that got cheap by
+// answering a different question is not the trade being made here.
+func TestTheSearchAsksALogarithmicNumberOfQuestions(t *testing.T) {
+	// Twice the base-two logarithm of the ceiling: the doubling ladder takes at
+	// most log2 rungs to bracket an answer and the halving takes at most log2
+	// more to find it inside the bracket. 2 x log2(256) = 16.
+	const ceiling, budget = 256, 16
+
+	t.Run("climbing", func(t *testing.T) {
+		for want := 2; want <= ceiling; want++ {
+			calls := 0
+			// A fleet of one that does not hold, and a threshold that walks
+			// across the whole range: supply rises with the count, so the
+			// predicate is false below the threshold and true from it up.
+			got, capped := climb(1, ceiling, func(n int) bool { calls++; return n >= want })
+			if got != want || capped {
+				t.Fatalf("climb found %d (capped %v), want %d -- the ladder has to land on the smallest count that holds, not merely on one that does", got, capped, want)
+			}
+			if calls > budget {
+				t.Fatalf("climb asked the run %d questions to find %d; the budget is %d, and a walk of one seat per question would ask %d", calls, want, budget, want-1)
+			}
+		}
+	})
+
+	t.Run("descending", func(t *testing.T) {
+		for want := 1; want <= ceiling; want++ {
+			calls := 0
+			got := descend(ceiling, func(n int) bool { calls++; return n >= want })
+			if got != want {
+				t.Fatalf("descend found %d, want %d -- the smallest count that still holds is what the spare figure is read off", got, want)
+			}
+			if calls > budget {
+				t.Fatalf("descend asked the run %d questions to find %d; the budget is %d", calls, want, budget)
+			}
+		}
+	})
+
+	// A fleet nothing inside the ceiling can carry is reported as the ceiling
+	// and flagged, and it costs a ladder rather than a walk to find that out.
+	calls := 0
+	got, capped := climb(1, ceiling, func(int) bool { calls++; return false })
+	if got != ceiling || !capped {
+		t.Errorf("climb over a predicate nothing satisfies returned %d (capped %v), want %d and true", got, capped, ceiling)
+	}
+	if calls > budget {
+		t.Errorf("climb asked %d questions to reach the ceiling; the budget is %d", calls, budget)
+	}
+}
+
+// Counting downward drops the fleet's ROOMIEST seats and keeps its tightest, and
+// that ordering is a decision about money rather than an implementation detail.
+// The count it produces is the count a reader stops paying for, and the seats
+// that look spare on any one reading are the ones whose reset this build could
+// not read -- a field that was missing from one response, not an account that is
+// permanently gone. Keeping the tightest answers "how few accounts hold at this
+// rate whichever ones I keep"; keeping the roomiest would answer "how few hold if
+// the ones I give up are exactly the spent ones", which is advice nobody can act
+// on and which invites cancelling a subscription on the strength of a field
+// nobody read.
+//
+// This is asserted on its own because the mechanism test above cannot see it: its
+// fleet is short, so it is answered by appending seats and never by dropping
+// them. Without this fixture the drop order is unpinned in both directions.
+//
+// Three accounts at 30 points an hour. Two are readable and empty; the third's
+// five-hour window reads 100 with no resets_at, so nothing inside the horizon
+// brings it back. Two live seats replenish 40 and carry the rate; one replenishes
+// 20 and does not. Keeping the roomiest two would report that this fleet holds on
+// two of its three and has one to spare.
+func TestTheDownwardSearchKeepsTheFleetsTightestSeats(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	fiveReset := now.Add(5 * time.Hour)
+	// 39 points over the four-hour span on each of three accounts: 117 filled is
+	// 29.25 an hour, and three contributors put the upper bound at (117+3)/4 = 30.
+	series := weeklySeries(now, 4*time.Hour, []float64{0, 19.5, 39}, fiveReset, usage.WindowFiveHour)
+	in := make([]Input, 0, 3)
+	for i := range 3 {
+		snap := &usage.Snapshot{FiveHour: usage.NewWindow(pf(0), pt(fiveReset))}
+		if i == 2 {
+			// Spent, with a resets_at this build could not read.
+			snap = &usage.Snapshot{FiveHour: usage.NewWindow(pf(100), nil)}
+		}
+		in = append(in, Input{UUID: fmt.Sprintf("uuid-%d", i), Idx: i + 1, Eligible: true, Snapshot: snap, Series: series})
+	}
+	f := Of(in, now)
+
+	if f.FiveHour.Burn.High != 30 {
+		t.Fatalf("five-hour burn band = %v/%v, want an upper bound of 30", f.FiveHour.Burn.Low, f.FiveHour.Burn.High)
+	}
+	if f.Both.Verdict != VerdictHolds {
+		t.Fatalf("Both.Verdict = %v, want VerdictHolds -- a fleet that does not hold is answered by appending seats and never by dropping them", f.Both.Verdict)
+	}
+	if f.AccountsUsable != 3 {
+		t.Fatalf("AccountsUsable = %d, want 3", f.AccountsUsable)
+	}
+	if f.AccountsNeeded != 3 {
+		t.Fatalf("AccountsNeeded = %d of %d usable, want 3 and no spare; dropping the tightest seat first reports one to spare, which tells an owner to stop paying for an account whose reset was merely unreadable", f.AccountsNeeded, f.AccountsUsable)
 	}
 }

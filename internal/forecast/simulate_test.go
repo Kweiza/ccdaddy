@@ -174,25 +174,49 @@ func TestAWindowWithNoResetIsBurnedNotFrozen(t *testing.T) {
 // again, which throws a fresh account's whole quota away. An account added an
 // hour ago and not yet used reads exactly like this.
 //
+// Two rates, because a cycle has a start INSTANT and not merely a start. The
+// rule is reset = t + length, and the wrong instant next to it -- reset = t,
+// the cycle starting at the charge rather than one length after it -- is
+// fail-open by a whole window: it hands the window a rollover at the end of
+// every interval. A rate of exactly 20 points an hour cannot see that at all.
+// One account's five-hour window supplies 20, so the first interval is
+// 100/20 = 5 h, exactly one length, and the two rules put the rollover at the
+// same instant. Both rates below are off that point on purpose.
+//
 // This fixture and the one below differ in one field, the level, because that
 // is the field the rule turns on.
 func TestANeverSpentWindowStartsItsCycleWhenItIsFirstBurned(t *testing.T) {
 	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
-	accts := []simAccount{{
-		uuid: "fresh", idx: 1,
-		windows: map[usage.WindowName]simWindow{
-			usage.WindowFiveHour: {pct: 0, length: 5 * time.Hour}, // zero reset: never spent
-		},
-	}}
-	// 20 points an hour is exactly one account's five-hour supply, so a window
-	// that rolls over holds for ever and one that does not is spent in five
-	// hours and never comes back.
-	rates := map[usage.WindowName]float64{usage.WindowFiveHour: 20}
-	_, dry, _ := runBounded(t, func() (time.Time, bool, map[string]time.Time) {
-		return simulate(accts, rates, now)
+	fresh := func() []simAccount {
+		return []simAccount{{
+			uuid: "fresh", idx: 1,
+			windows: map[usage.WindowName]simWindow{
+				usage.WindowFiveHour: {pct: 0, length: 5 * time.Hour}, // zero reset: never spent
+			},
+		}}
+	}
+
+	// Above one account's supply, so the account is spent before its cycle
+	// closes and the moment it is spent at is the moment the cycle started.
+	// 100/25 = 4 h, and the cycle that started at t = now closes an hour later
+	// -- too late to save it. A build that started the cycle AT the charge
+	// would roll the window over at 4 h and answer 9 h instead.
+	fastAt, fastDry, _ := runBounded(t, func() (time.Time, bool, map[string]time.Time) {
+		return simulate(fresh(), map[usage.WindowName]float64{usage.WindowFiveHour: 25}, now)
 	})
-	if dry {
-		t.Fatal("a fresh account supplied its window once and never again; a window nothing has spent starts its cycle when it is first burned")
+	if want := now.Add(4 * time.Hour); !fastDry || !fastAt.Equal(want) {
+		t.Fatalf("at 25 points an hour: dry = %v at %v, want true at %v -- the cycle starts one window length after the first charge, not at it",
+			fastDry, fastAt.Sub(now), want.Sub(now))
+	}
+
+	// Below one account's supply, so a cycle that starts at all carries the
+	// account for ever: 100/15 = 6h40m to spend against a rollover at 5 h. A
+	// build that froze the window instead reports dry at 6h40m.
+	_, slowDry, _ := runBounded(t, func() (time.Time, bool, map[string]time.Time) {
+		return simulate(fresh(), map[usage.WindowName]float64{usage.WindowFiveHour: 15}, now)
+	})
+	if slowDry {
+		t.Fatal("at 15 points an hour: a fresh account supplied its window once and never again; a window nothing has spent starts its cycle when it is first burned")
 	}
 }
 
