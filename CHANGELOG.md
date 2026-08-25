@@ -34,6 +34,18 @@ by `uuid` or `alias`.
   was measured against thresholds hover derived, because a row held to 93 with
   `threshold = 80` in the file is otherwise indistinguishable from a defect.
 
+- **`ccdad switch --strategy` says when hover discarded it.** Hover derives the
+  ranking for itself, and `Options.withHover` overwrites the strategy with
+  `headroom` before the pass runs — so the flag ranked exactly as though it had
+  never been typed, and the command printed only `Switched to …`. It now names
+  the override on stderr. This is the rule `switch` already applies to an
+  unplaceable `--model`, and it bites harder here: `--strategy` is *required* by
+  the targetless grammar, so under hover every attended `ccdad switch` types a
+  value the engine drops. Refusing the flag is not available for that same
+  reason — it would leave no way to run a targetless switch at all while hover is
+  on — so the note points at the two things that do work: name an account, or
+  turn hover off.
+
 ## [0.6.1] — 2026-08-25
 
 Hover promised to hold every account to the share of its own window that had

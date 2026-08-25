@@ -1060,3 +1060,55 @@ func TestSwitchToAnAPIKeyWarnsWhenItRemovesAnUnmanagedLogin(t *testing.T) {
 		t.Fatalf("stderr = %q, want no warning for a login ccdad can restore", errOut)
 	}
 }
+
+// Hover DISCARDS the strategy this command was given: Options.withHover
+// overwrites it with headroom before the ranking runs, which
+// TestHoverOverridesTheConfiguredStrategy pins in the strategy package. The
+// command used to say nothing about it, so a user who typed consume-first read
+// only "Switched to ..." and had no way to learn their flag never applied.
+//
+// It is the same failure checkSwitchFlags already refuses an unplaceable
+// --model for, in that function's own words: honouring it silently "would rank
+// exactly as if the flag had not been typed -- and the user would be told
+// nothing while believing they had excluded another model's spent cap". It is
+// sharper here, because --strategy is MANDATORY for the targetless grammar: under
+// hover every attended targetless switch types a value the engine then drops.
+//
+// Refusing is not available as an answer for that same reason -- it would leave
+// no way to run `ccdad switch` at all while hover is on -- so the flag is
+// honoured as far as it goes and the override is named.
+func TestSwitchSaysWhenHoverDiscardedTheStrategyItWasGiven(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "u-1", "a@example.com")
+	seedAccount(t, "u-2", "b@example.com")
+	if code, _, _, top := runRoot(t, "switch", "1"); code != ExitOK {
+		t.Fatalf("setup switch = %d (%s)", code, top)
+	}
+	seedWeekly(t, "u-1", 40, 12*time.Hour)
+	seedWeekly(t, "u-2", 95, 6*24*time.Hour)
+
+	const note = "hover is on"
+	clearCooldown(t)
+	if _, stdout, errOut, _ := runRoot(t, "switch", "--strategy", "consume-first"); strings.Contains(errOut+stdout, note) {
+		t.Errorf("switch blamed hover with hover off:\n%s%s", errOut, stdout)
+	}
+
+	if code, _, errOut, _ := runRoot(t, "config", "set", "hover", "true"); code != ExitOK {
+		t.Fatalf("config set hover true exited %v: %s", code, errOut)
+	}
+
+	clearCooldown(t)
+	_, stdout, errOut, _ := runRoot(t, "switch", "--strategy", "consume-first")
+	if !strings.Contains(errOut, note) {
+		t.Errorf("switch did not say hover had discarded the strategy it was given:\n%s", errOut)
+	}
+	// Named, not merely alluded to. "hover overrides some things" sends a reader
+	// to the documentation; naming the flag they typed answers them where they
+	// are standing.
+	if !strings.Contains(errOut, "consume-first") {
+		t.Errorf("switch blamed hover without naming the flag that was dropped:\n%s", errOut)
+	}
+	if strings.Contains(stdout, note) {
+		t.Errorf("the note reached stdout, which is where a scripted switch reads its answer:\n%s", stdout)
+	}
+}
