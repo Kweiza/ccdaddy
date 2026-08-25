@@ -218,6 +218,38 @@ func TestUninstallRemovesAStoreWithNoAccountsYet(t *testing.T) {
 	}
 }
 
+// The series is a top-level entry nothing but ccdad writes, so it is evidence
+// the directory is a ccdad store — and it can be the only one left. accounts.toml
+// is absent until an account is saved, and a machine whose daemon has since been
+// stopped has no lock, pid, log or status file either. A marker set that omitted
+// it would refuse such a directory as "not a ccdad store" and leave it behind
+// with nothing else in the tree that ever cleans it up.
+//
+// The name is hand-spelled here on purpose. The command reads it from the owning
+// package's exported basename, and a test that did the same would agree with the
+// implementation by construction rather than check it.
+func TestUninstallRemovesAStoreWhoseOnlyMarkerIsTheHistory(t *testing.T) {
+	isolate(t)
+	stubDaemonWorld(t, &fakeDaemon{})
+	stubEnvironment(t, false, false)
+	fakeBinary(t)
+	root := mustPath(ccpath.StoreHome())
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "history.json"), []byte(`{"version":1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	code, _, errOut, top := runRoot(t, "uninstall", "--yes")
+	if code != ExitOK {
+		t.Fatalf("exit = %d, want %d\n%s%s", code, ExitOK, errOut, top)
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Errorf("the store survived: %v", err)
+	}
+}
+
 // Nothing to uninstall is 3, not 1: a second `ccdad uninstall` in a script is a
 // no-op rather than a failure.
 func TestUninstallOnAMachineWithNoStoreIsExitThree(t *testing.T) {
