@@ -18,28 +18,14 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
 
-const (
-	// rateWindow is how far back the burn rate is measured.
-	//
-	// It makes the rate a speedometer rather than an odometer, and that is the
-	// trade being made knowingly: four idle hours read as "holds" and four hard
-	// hours read as "dry in two days", and both are honest reports of the last
-	// four hours rather than of the week. Every surface that prints the figure
-	// prints the span and the reading count beside it for exactly that reason.
-	//
-	// Four hours is where an ordinary cadence clears the contribution gates
-	// below with room. The poller's sustained floor is 180 s, which offers
-	// eighty readings inside the window; at the other end AIMD parks a
-	// repeatedly rate-limited account near 1800 s before jitter, and the daemon
-	// multiplies that by the number of accounts sharing one identity, which can
-	// push a single account's interval past an hour. No span guarantees three
-	// readings -- minSamples is what carries that guarantee -- so this figure is
-	// chosen for the ordinary case and the gates refuse the rest.
-	// internal/history sizes its retention against the same four hours and keeps
-	// six, so that the far end of this window still has a reading bracketing it
-	// after the longest silence the poller can leave.
-	rateWindow = 4 * time.Hour
+// The span a rate is measured over is history.MeasuredSpan, and this package
+// deliberately does not restate it. Retention is sized against that same figure,
+// so a second copy here would let the measurement outgrow the samples kept for
+// it -- silently, because a measurement whose oldest end has been pruned away
+// simply reports a shorter span rather than an error. The measuring rules that
+// are this package's own are the gates below.
 
+const (
 	// minSamples is three because two samples hold one difference, and one
 	// difference of a whole-percent field cannot be told from a single
 	// quantisation step: an account that burned nothing and an account that
@@ -200,10 +186,10 @@ func windowRate(series []history.Sample, name usage.WindowName, from, to time.Ti
 // project one account's forty-minute burst as though the whole fleet had
 // sustained it for four hours; dividing one sum of points by one span does not.
 //
-// span is an argument rather than rateWindow because the fleet has usually not
-// been observed for the whole window -- a daemon started twenty minutes ago has
-// twenty minutes of evidence -- and dividing that consumption by four hours
-// would report a sixth of the rate that was actually measured.
+// span is an argument rather than history.MeasuredSpan because the fleet has
+// usually not been observed for the whole window -- a daemon started twenty
+// minutes ago has twenty minutes of evidence -- and dividing that consumption by
+// four hours would report a sixth of the rate that was actually measured.
 //
 // High carries one quantisation step for each contributing account-window,
 // because the endpoint reports whole percents and every contributor's own figure

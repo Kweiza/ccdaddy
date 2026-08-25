@@ -51,23 +51,41 @@ const (
 	// a live holder's lock goes stale by its own definition between two touches.
 	lockStale = 30 * time.Second
 
-	// measuredSpan is how far back a burn rate is measured, and the figure
-	// retain is sized against: a rate over the trailing four hours needs a
-	// sample at or before the four-hour mark, not merely one inside it, so
-	// retention has to reach further back than the measurement does.
+	// MeasuredSpan is how far back a burn rate is measured. It is exported
+	// because two rules depend on it and they must not be able to disagree:
+	// internal/forecast measures over exactly this span, and retain below is
+	// sized against it. A second declaration of four hours in the measuring
+	// package would drift the first time either figure moved, and the drift
+	// would be silent -- a longer measurement over unchanged retention simply
+	// loses the oldest end of its own window and reports a narrower span with
+	// no error anywhere.
 	//
-	// It is declared rather than left inside retain's reasoning so that the
-	// bound and the test that checks the bound name one figure between them.
-	// Nothing in this package measures anything; retention simply cannot be
-	// sized without knowing this.
-	measuredSpan = 4 * time.Hour
+	// Nothing in this package measures anything. The figure lives here because
+	// retention cannot be sized without it and it can be: the measuring package
+	// already imports this one, and the reverse would be a cycle.
+	//
+	// Four hours makes the rate a speedometer rather than an odometer, and that
+	// is the trade being made knowingly: four idle hours read as "holds" and
+	// four hard hours read as "dry in two days", and both are honest reports of
+	// the last four hours rather than of the week. Every surface that prints
+	// the figure prints the span and the reading count beside it for exactly
+	// that reason. It is also where an ordinary cadence clears the measuring
+	// package's contribution gates with room -- the poller's sustained floor is
+	// 180 s, which offers eighty readings inside the window -- while no span at
+	// all guarantees the three readings a rate needs, which is why that package
+	// carries a count gate as well.
+	//
+	// A rate over the trailing four hours needs a sample at or before the
+	// four-hour mark, not merely one inside it, so retention has to reach
+	// further back than the measurement does.
+	MeasuredSpan = 4 * time.Hour
 
 	// maxIdentityAccounts is how many accounts sharing one identity retain and
 	// maxSamples are sized for. Six is the largest pool this tree has been run
 	// against.
 	maxIdentityAccounts = 6
 
-	// retain is how far back samples are kept: measuredSpan plus the longest
+	// retain is how far back samples are kept: MeasuredSpan plus the longest
 	// gap the poller can leave, so the oldest end of the window still has a
 	// sample bracketing it after the worst possible silence.
 	//
