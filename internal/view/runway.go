@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/Kweiza/ccdaddy/internal/forecast"
 )
 
@@ -114,6 +116,81 @@ func RunwayLine(f forecast.Fleet, now time.Time, loc *time.Location) string {
 		parts = append(parts, seg)
 	}
 	return strings.Join(parts, runwaySep)
+}
+
+// runwayBreak is what a folded line ends on, and runwayGap is what rejoins two
+// clauses that stayed together. Both are derived from runwaySep rather than
+// spelled again: the separator's spaces are load bearing -- a middot with none
+// reads as a decimal point -- and a copy of them here would go stale the first
+// time that constant was tuned, silently, because the joined line and the
+// folded one would still each look right on their own.
+var (
+	runwayBreak = strings.TrimRight(runwaySep, " ")
+	runwayGap   = runwaySep[len(runwayBreak):]
+)
+
+// RunwayWrap folds the runway line onto width display columns, breaking only
+// at its own separators and hanging every line after the first under the first
+// clause.
+//
+// A width of zero means the caller does not know one -- a pipe, a redirect, the
+// buffer a test renders into -- and returns the line exactly as it was joined,
+// byte for byte. That is the case every non-terminal writer takes, and it is
+// what keeps this function out of the way of everything that reads the output
+// as data.
+//
+// The width arrives as a PARAMETER for the reason the zone does: nothing in
+// this package may read the environment, and the terminal is environment. The
+// caller nearest the reader measures it.
+//
+// Clauses are atomic. A clause wider than the room gets its own line and is
+// allowed to overflow rather than be cut, because this line ends in an absolute
+// moment and a span: `2026-08-26 08:1` reads as a shorter date, not as a line
+// that did not fit. The dashboard cuts because a page has a right edge it
+// cannot spend; a scrollback has one it can. That is the whole of why these two
+// renderers of one wording answer this differently, and it is not drift.
+//
+// Every width here is a display column count. The separator is U+00B7 -- one
+// column, two bytes -- so a byte count is wrong by the number of separators on
+// the line, which is the number that grows as the line gets longer.
+func RunwayWrap(label, line string, width int) string {
+	clauses := strings.Split(line, runwaySep)
+	room := width - ansi.StringWidth(label)
+	if room <= 0 || len(clauses) < 2 {
+		return label + line
+	}
+
+	// Each clause carries the separator that FOLLOWS it, so that the trailing
+	// "  ·" of a line that breaks is inside the measurement that decided to
+	// break there. Reserving it afterwards would let a line that just fit
+	// overrun by exactly the marker that says it continues.
+	tokens := make([]string, 0, len(clauses))
+	for i, c := range clauses {
+		if i < len(clauses)-1 {
+			c += runwayBreak
+		}
+		tokens = append(tokens, c)
+	}
+
+	folded := []string{tokens[0]}
+	for _, tok := range tokens[1:] {
+		last := len(folded) - 1
+		if ansi.StringWidth(folded[last])+ansi.StringWidth(runwayGap)+ansi.StringWidth(tok) <= room {
+			folded[last] += runwayGap + tok
+			continue
+		}
+		folded = append(folded, tok)
+	}
+
+	indent := strings.Repeat(" ", ansi.StringWidth(label))
+	for i := range folded {
+		if i == 0 {
+			folded[i] = label + folded[i]
+			continue
+		}
+		folded[i] = indent + folded[i]
+	}
+	return strings.Join(folded, "\n")
 }
 
 // fleetSegment is the both-axes-at-once answer, and it is reported only when

@@ -7,9 +7,12 @@
 package view_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/Kweiza/ccdaddy/internal/forecast"
 	"github.com/Kweiza/ccdaddy/internal/view"
@@ -480,5 +483,150 @@ func TestTheRunwayLineCarriesTheNeedOfAShortFleet(t *testing.T) {
 	}
 	if got, want := view.RunwayLine(holding, now, kst), "holds on both axes at this rate  ·  basis 3h51m"; got != want {
 		t.Fatalf("RunwayLine(holding) =\n\t%q\nwant\n\t%q", got, want)
+	}
+}
+
+// The line is 139 display columns on a live fleet and the terminal that reads
+// it is 80. Left alone the terminal folds it wherever the 80th column happens
+// to land, which on that measurement was inside `2026-08-26 17:21 KST` -- and
+// the clauses are separated by a middot, so a fold that lands between two of
+// them is indistinguishable from one that lands inside one.
+//
+// What is asserted here is the invariant, not a golden block: every line fits,
+// no clause is lost, and a reader can tell a continued line from a finished
+// one. A fixture would pin the greedy packing as well, and the packing is the
+// half that is allowed to change.
+func TestTheRunwayLineFoldsAtItsOwnSeparatorsAndNowhereElse(t *testing.T) {
+	const label = "Runway:  "
+	const width = 80
+	line := "5h+7d dry 2026-08-26 08:19 KST (11h21m)  ·  7d dry 2026-08-26 17:21 KST (20h23m)" +
+		"  ·  5h holds  ·  basis 3h57m  ·  need 14 (8 more)"
+
+	got := view.RunwayWrap(label, line, width)
+	lines := strings.Split(got, "\n")
+	if len(lines) < 2 {
+		t.Fatalf("a %d-column line did not fold at %d columns:\n%s", ansi.StringWidth(label+line), width, got)
+	}
+	for i, l := range lines {
+		if w := ansi.StringWidth(l); w > width {
+			t.Errorf("line %d is %d columns wide, over the %d it was given:\n%s", i, w, width, got)
+		}
+	}
+	if !strings.HasPrefix(lines[0], label) {
+		t.Errorf("the first line does not carry the label:\n%s", got)
+	}
+	// The label is nine columns and the clauses under it line up with the first
+	// one, not with the left margin: a continuation flush against `Runway:`
+	// reads as another labelled line of the block above it.
+	for i, l := range lines[1:] {
+		if !strings.HasPrefix(l, strings.Repeat(" ", len(label))) || strings.HasPrefix(l, strings.Repeat(" ", len(label)+1)) {
+			t.Errorf("continuation line %d is not hung under the first clause: %q", i+1, l)
+		}
+	}
+	// A line that continues says so. Ending a folded line on a clause boundary
+	// with nothing there is the ambiguity this whole test exists about: the
+	// reader cannot tell it from a line that simply ended.
+	for i, l := range lines[:len(lines)-1] {
+		if !strings.HasSuffix(l, "  ·") {
+			t.Errorf("folded line %d does not end on the separator it broke at: %q", i, l)
+		}
+	}
+	if strings.HasSuffix(lines[len(lines)-1], "·") {
+		t.Errorf("the last line ends on a separator, promising a clause that is not there: %q", lines[len(lines)-1])
+	}
+	if got, want := wrapClauses(t, got, label), strings.Split(line, "  ·  "); !slices.Equal(got, want) {
+		t.Errorf("the fold changed the clauses:\ngot  %q\nwant %q", got, want)
+	}
+}
+
+// The empty width is what every non-terminal writer reports -- a pipe, a
+// redirect, the buffer a test renders into -- and there the line has to come
+// out exactly as it did before this function existed. It is also what a
+// terminal too narrow to hold the label reports, and folding into no room at
+// all produces a column of single characters.
+func TestAnUnknownWidthLeavesTheRunwayLineExactlyAsItWas(t *testing.T) {
+	const label = "Runway:  "
+	line := "5h+7d dry 2026-08-26 08:19 KST (11h21m)  ·  basis 3h57m  ·  need 14 (8 more)"
+	for _, width := range []int{0, -1, 9, 3} {
+		if got, want := view.RunwayWrap(label, line, width), label+line; got != want {
+			t.Errorf("RunwayWrap(width=%d) =\n\t%q\nwant\n\t%q", width, got, want)
+		}
+	}
+}
+
+// A clause is atomic. The line ends in an absolute moment and a span, and a cut
+// through either reads as a shorter moment rather than as a line that did not
+// fit -- `2026-08-26 08:1` is a date. Overflowing is visible and honest;
+// cutting is neither, which is why the dashboard, which must cut, appends "..".
+func TestAClauseWiderThanTheTerminalOverflowsRatherThanBeingCut(t *testing.T) {
+	const label = "Runway:  "
+	const long = "5h+7d dry 2026-08-26 08:19 KST (11h21m)"
+	got := view.RunwayWrap(label, long+"  ·  basis 3h57m", 24)
+	if !strings.Contains(got, long) {
+		t.Fatalf("the clause was cut rather than allowed to overflow:\n%s", got)
+	}
+	for _, l := range strings.Split(got, "\n") {
+		if strings.Contains(l, "..") {
+			t.Errorf("a truncation cue leaked into the CLI rendering: %q", l)
+		}
+	}
+}
+
+// The separator is U+00B7: one display column, two bytes. Every width here is
+// therefore a column count, and a byte count is wrong by exactly the number of
+// separators on the line -- which is the number that grows as the line gets
+// longer. This width is one the line fits by columns and does not fit by
+// bytes, so it fails against len() and passes against a display width.
+func TestTheFoldCountsDisplayColumnsAndNotBytes(t *testing.T) {
+	const label = "Runway:  "
+	line := "AAAA  ·  BBBB"
+	width := len(label) + ansi.StringWidth(line)
+	if len(line) == ansi.StringWidth(line) {
+		t.Fatalf("the fixture carries no multi-byte separator, so it rules nothing out: %q", line)
+	}
+	if got, want := view.RunwayWrap(label, line, width), label+line; got != want {
+		t.Errorf("a line that fits by columns was folded:\ngot  %q\nwant %q", got, want)
+	}
+}
+
+// wrapClauses recovers the clauses from a wrapped block: the label off the
+// first line, the hanging indent off the rest, and the separator off both
+// forms it takes.
+func wrapClauses(t *testing.T, block, label string) []string {
+	t.Helper()
+	var out []string
+	for i, l := range strings.Split(block, "\n") {
+		if i == 0 {
+			l = strings.TrimPrefix(l, label)
+		} else {
+			l = strings.TrimPrefix(l, strings.Repeat(" ", len(label)))
+		}
+		l = strings.TrimSuffix(l, "  ·")
+		out = append(out, strings.Split(l, "  ·  ")...)
+	}
+	return out
+}
+
+// The "  ·" a folded line ends on is three columns the line did not have when
+// the decision to break was taken -- unless the measurement carries it. A fit
+// test that weighs a clause and appends the marker afterwards decides on five
+// columns and spends eight, so a line that "just fit" comes out up to three
+// columns over and folds again in the terminal, which is the whole defect.
+//
+// This width is inside that band: the two leading clauses fit by the cheap
+// arithmetic and do not fit by the honest one.
+func TestTheSeparatorAFoldedLineEndsOnIsInsideTheMeasurement(t *testing.T) {
+	const label = "Runway:  " // nine columns, so the room below is 21
+	const width = 30
+	line := strings.Join([]string{"AAAAAAAAAA", "BBBBB", "CC"}, "  ·  ")
+
+	got := view.RunwayWrap(label, line, width)
+	for i, l := range strings.Split(got, "\n") {
+		if w := ansi.StringWidth(l); w > width {
+			t.Errorf("line %d is %d columns, over the %d it was given -- the break marker was not weighed:\n%s", i, w, width, got)
+		}
+	}
+	if c := wrapClauses(t, got, label); !slices.Equal(c, []string{"AAAAAAAAAA", "BBBBB", "CC"}) {
+		t.Errorf("the fold changed the clauses: %q", c)
 	}
 }
