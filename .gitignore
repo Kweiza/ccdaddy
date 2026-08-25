@@ -11,3 +11,10 @@
 # of the tree makes one of them ours to track.
 .claude.json
 .credentials.json
+
+# Claude Code's worktree scratch space. A subagent given an isolated checkout
+# gets one here, and a run that dies before its cleanup leaves the directory
+# behind — registered as a git worktree, so it shows up as untracked content in
+# the main tree and lands in a `git add -A` if nobody is looking. Nothing in it
+# is ours to track; `git worktree remove --force` is how one is cleared.
+.claude/
