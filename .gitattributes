@@ -11,3 +11,11 @@
 # writes. Same reasoning as the PNG — say what the file is rather than let the
 # heuristic guess.
 internal/cli/testdata/cmdshim/*.cmd -text
+
+# The release-signature fixtures are byte-exact. An ed25519 signature covers the
+# signed file's exact bytes — its final newline included — so `eol=lf` above
+# converting one line ending would turn a valid golden signature into a test
+# that fails, on whichever checkout applied the filter and nowhere else. Same
+# reasoning as the npm shim fixtures: say what the file is rather than let the
+# heuristic guess.
+internal/relsign/testdata/** -text
