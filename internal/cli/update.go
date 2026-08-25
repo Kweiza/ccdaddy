@@ -429,6 +429,39 @@ func runUpdate(cmd *cobra.Command, opts updateOptions) error {
 				"Check https://github.com/Kweiza/ccdaddy/releases for what it does carry.", want.Tag(), asset))
 	}
 
+	// Step 14, and its POSITION is the whole of it. A --check that answered
+	// "available" for a release the run would refuse on signature, shape or
+	// listing would be worse than no --check: it must fail everything the full
+	// run fails except what only downloading can find. Stopping here means the
+	// asset's size, its digest and whether it runs are genuinely out of reach,
+	// which is what --help says rather than leaving the user to discover.
+	//
+	// It is not a read-only command: the staging directory above was created
+	// and will be removed, which is what makes its answer about writability the
+	// real one.
+	//
+	// The wording branches on rep.updateAvailable rather than being printed
+	// unconditionally, because step 7 is SKIPPED when --version is explicit:
+	// `ccdad update --check --version <the tag already running>` reaches here
+	// with nothing newer to offer, and a fixed sentence would answer
+	// "ccdad 0.7.0 is available; this is 0.7.0" and exit 0. That request is a
+	// legitimate one — it is how a user asks whether a specific release still
+	// verifies — so the answer is re-worded rather than refused.
+	if opts.check {
+		if rep.updateAvailable {
+			say(cmd, opts.asJSON, "ccdad %s is available; this is %s.", want, rep.current)
+			say(cmd, opts.asJSON, "Run `ccdad update` to install it. Its size, its checksum and whether it "+
+				"runs on this machine are only known once it has been downloaded.")
+		} else {
+			say(cmd, opts.asJSON, "ccdad %s verifies, and it is not newer than the %s running here.",
+				want, rep.current)
+			say(cmd, opts.asJSON, "Run `ccdad update --version %s` to fetch and re-verify it anyway. Its size, "+
+				"its checksum and whether it runs on this machine are only known once it has been "+
+				"downloaded.", want.Tag())
+		}
+		return rep.emit(cmd, opts.asJSON, ExitOK, "", "")
+	}
+
 	// ---------------------------- BEGIN PLACEHOLDER ----------------------------
 	// Everything from this comment down to END PLACEHOLDER is scaffolding, and
 	// it is meant to be deleted WHOLE — comment, blank assignments and return

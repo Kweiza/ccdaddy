@@ -1228,3 +1228,168 @@ func TestUpdateDoesNotAcceptATrustedCommentThatMerelyContainsTheTag(t *testing.T
 	}
 	assertBinaryUntouched(t, target)
 }
+
+// --check is exit 0 for "there is one" and exit 3 for "you are on it". Exit 5
+// is deliberately unused: a negative answer here is "the world is already how
+// you asked", which is what 3 means, and `ccdad update --check && ccdad update`
+// is the idiom that reading exists for.
+func TestCheckReportsAvailableWithoutDownloadingTheAsset(t *testing.T) {
+	target, f, _ := updateWorld(t, "0.6.1", "v0.7.0")
+
+	code, stdout, _, top := runRoot(t, "update", "--check", "--json")
+	if code != ExitOK {
+		t.Fatalf("exit = %d, want 0 (%s)", code, top)
+	}
+	payload := decodePayload(t, stdout)
+	if got := payload["updateAvailable"]; got != true {
+		t.Errorf("updateAvailable = %v, want true", got)
+	}
+	if got := payload["updated"]; got != false {
+		t.Errorf("updated = %v, want false — --check replaces nothing", got)
+	}
+	if got := payload["tag"]; got != "v0.7.0" {
+		t.Errorf("tag = %v, want %q", got, "v0.7.0")
+	}
+	for _, p := range f.asked() {
+		if strings.HasSuffix(p, "/"+release.Asset()) {
+			t.Errorf("--check downloaded %s; it stops before the megabytes on purpose", release.Asset())
+		}
+	}
+	assertBinaryUntouched(t, target)
+}
+
+func TestCheckOnTheCurrentVersionIsExitThree(t *testing.T) {
+	_, _, _ = updateWorld(t, "0.7.0", "v0.7.0")
+
+	code, stdout, _, _ := runRoot(t, "update", "--check", "--json")
+	if code != ExitNothingToDo {
+		t.Fatalf("exit = %d, want %d", code, ExitNothingToDo)
+	}
+	if got := decodePayload(t, stdout)["reason"]; got != "already-current" {
+		t.Errorf("reason = %v, want %q", got, "already-current")
+	}
+}
+
+// The position of the return is the point. A --check that answered "available"
+// for a release the run would refuse on signature, shape or listing would be
+// worse than no --check at all.
+func TestCheckFailsEverythingAFullRunFailsBeforeTheDownload(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		arrange func(t *testing.T, f *fakeRelease, sign signFunc)
+		want    ExitCode
+		reason  string
+	}{{
+		name: "a bad signature",
+		arrange: func(_ *testing.T, f *fakeRelease, sign signFunc) {
+			f.put("sha256sums.txt.minisig", sign([]byte("other bytes"), "v0.7.0"))
+		},
+		want:   ExitBlocked,
+		reason: "signature",
+	}, {
+		name: "a signed page that is not a sums file",
+		arrange: func(_ *testing.T, f *fakeRelease, sign signFunc) {
+			page := []byte("<!doctype html>\n")
+			f.put("sha256sums.txt", page)
+			f.put("sha256sums.txt.minisig", sign(page, "v0.7.0"))
+		},
+		want:   ExitBlocked,
+		reason: "shape",
+	}, {
+		name: "a release that does not carry this asset",
+		arrange: func(_ *testing.T, f *fakeRelease, sign signFunc) {
+			sums := sumsFor(map[string][]byte{"LICENSE": []byte("license\n")})
+			f.put("sha256sums.txt", sums)
+			f.put("sha256sums.txt.minisig", sign(sums, "v0.7.0"))
+		},
+		want:   ExitBlocked,
+		reason: "not-listed",
+	}, {
+		name: "no signature published",
+		arrange: func(_ *testing.T, f *fakeRelease, _ signFunc) {
+			f.setStatus("sha256sums.txt.minisig", http.StatusNotFound)
+		},
+		want:   ExitBlocked,
+		reason: "unsigned-release",
+	}} {
+		t.Run(c.name, func(t *testing.T) {
+			_, f, sign := updateWorld(t, "0.6.1", "v0.7.0")
+			c.arrange(t, f, sign)
+
+			code, stdout, _, _ := runRoot(t, "update", "--check", "--json")
+			if code != c.want {
+				t.Fatalf("exit = %d, want %d", code, c.want)
+			}
+			if got := decodePayload(t, stdout)["reason"]; got != c.reason {
+				t.Errorf("reason = %v, want %q", got, c.reason)
+			}
+		})
+	}
+}
+
+// --check is not a read-only command, and the help says so: it creates and
+// removes a staging directory, which is what makes its answer about writability
+// the real one rather than a guess.
+func TestCheckStillProbesWritability(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a mode is not an ACL: chmod 0500 does not stop a write here, so this arm cannot be arranged")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores the mode bits, so no chmod can make a directory unwritable for this process")
+	}
+	target, _, _ := updateWorld(t, "0.6.1", "v0.7.0")
+	dir := filepath.Dir(target)
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	code, stdout, _, _ := runRoot(t, "update", "--check", "--json")
+	if code != ExitBlocked {
+		t.Fatalf("exit = %d, want %d", code, ExitBlocked)
+	}
+	if got := decodePayload(t, stdout)["reason"]; got != "not-writable" {
+		t.Errorf("reason = %v, want %q", got, "not-writable")
+	}
+}
+
+// --version skips step 7, so --check on the tag already running gets here with
+// nothing newer to offer. It must not answer "0.7.0 is available; this is
+// 0.7.0", which is the sentence an unconditional line produces.
+func TestCheckOnAPinnedTagThatIsNotNewerDoesNotClaimOneIsAvailable(t *testing.T) {
+	_, _, _ = updateWorld(t, "0.7.0", "v0.7.0")
+
+	code, stdout, _, top := runRoot(t, "update", "--check", "--version", "v0.7.0", "--json")
+	if code != ExitOK {
+		t.Fatalf("exit = %d, want 0 (%s) — --version is the consent that makes this a legal request", code, top)
+	}
+	if got := decodePayload(t, stdout)["updateAvailable"]; got != false {
+		t.Errorf("updateAvailable = %v, want false", got)
+	}
+
+	_, _, stderr, _ := runRoot(t, "update", "--check", "--version", "v0.7.0")
+	if strings.Contains(stderr, "is available") {
+		t.Errorf("stderr = %q; nothing newer exists, so nothing is available", stderr)
+	}
+}
+
+// The three things --check cannot know, named on the screen rather than left
+// for the user to be surprised by.
+//
+// "is available" is asserted alongside them, and it is the half that pins the
+// DIRECTION. Every other word here appears in the not-newer wording too, so
+// without it a --check that told a machine running 0.6.1 that 0.7.0 "verifies,
+// and is not newer than the 0.6.1 running here" would satisfy this test.
+func TestCheckNamesWhatItCannotAnswer(t *testing.T) {
+	_, _, _ = updateWorld(t, "0.6.1", "v0.7.0")
+
+	code, _, stderr, _ := runRoot(t, "update", "--check")
+	if code != ExitOK {
+		t.Fatalf("exit = %d, want 0", code)
+	}
+	for _, word := range []string{"0.7.0", "0.6.1", "size", "checksum", "is available"} {
+		if !strings.Contains(stderr, word) {
+			t.Errorf("stderr = %q, want it to mention %q", stderr, word)
+		}
+	}
+}
