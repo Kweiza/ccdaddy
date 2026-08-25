@@ -430,10 +430,18 @@ func checkUsageCache(usable bool) check {
 // no error, so the probe cannot bring into existence the evidence it is being
 // asked to report on.
 //
-// A parse failure is a warning and a read failure is a failure, which is the
-// same split checkUsageCache makes and for the same reason: unreadable bytes
-// are a broken machine, while unparseable ones are a file the next write
-// replaces.
+// A parse failure is a warning and a read failure is a failure, and that second
+// half is a DEPARTURE from the row above rather than an echo of it.
+// checkUsageCache cannot reach levelFail on a damaged file at all, because
+// usage.LoadCache treats bytes it cannot read exactly like bytes it cannot
+// parse — unknown, not fatal — since the next poll rewrites the cache either
+// way, so both conditions arrive here through LoadError as a warning.
+// history.LoadHistory returns its read failures instead, and this row passes
+// them on at levelFail, because nothing rewrites an unreadable series:
+// WithHistory reloads before it writes and returns that same error rather than
+// saving, so the file stops accumulating until a human moves it aside. Two rows
+// differing on one breakage looks like an oversight, which is why the
+// difference is written down here and pinned by a test.
 func checkHistory(usable bool) check {
 	if !usable {
 		return check{"history", levelSkipped, "there is no store to check"}
