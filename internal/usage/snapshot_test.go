@@ -895,3 +895,56 @@ func TestScopedWindowPrefersTheModelWhenBothScopesAreSet(t *testing.T) {
 		t.Errorf("Name = %q, want it named for the model", name)
 	}
 }
+
+// liveCreditBody is the first extra_usage reading with credits ENABLED that
+// this repository has ever seen, recorded verbatim from the endpoint on
+// 2026-08-25. Every other credit fixture in this file is a body somebody wrote
+// from the schema; this one is what actually arrived.
+//
+// It settles two things no written fixture could:
+//
+// utilization is a percent of 0-100, not a 0-1 fraction. This API sends BOTH
+// representations -- the anthropic-ratelimit-unified-* headers use the
+// fraction, which is why WindowFromHeader multiplies by 100 -- and until this
+// reading, the claim that extra_usage uses the other one rested on the schema
+// comment alone. Here the account is fully consumed and the field reads 100.
+// Had it read 1, every percentage this package derives from paid usage was
+// wrong by two orders of magnitude and nothing in the tree would have said so.
+//
+// currency arrives as the bare uppercase ISO code, which is the form
+// majorUnits's zero-decimal lookup expects after normalising.
+//
+// What it does NOT settle, and cannot: whether the money fields are minor
+// units. used equals the limit exactly here, so the ratio is 1 whether these
+// are cents or dollars, and no arithmetic on one reading can separate them. The
+// case for cents stays what majorUnits already documents -- Claude Code's
+// formatter divides by 100 before rendering either figure -- with the
+// observation added that $466.00 is a monthly cap a person sets and $46,600.00
+// is not.
+const liveCreditBody = `{"extra_usage": {"is_enabled": true, "monthly_limit": 46600,
+                                         "used_credits": 46600, "utilization": 100,
+                                         "currency": "USD", "disabled_reason": null}}`
+
+func TestTheLiveCreditReadingParsesAsThisPackageAssumed(t *testing.T) {
+	s := mustParse(t, liveCreditBody)
+
+	if got := s.ExtraUsage.State; got != ExtraUsageEnabled {
+		t.Errorf("State = %v, want %v -- is_enabled true is the only credit evidence there is", got, ExtraUsageEnabled)
+	}
+	if got := s.ExtraUsage.Currency; got != "USD" {
+		t.Errorf("Currency = %q, want %q", got, "USD")
+	}
+	// 46600 on the wire, 466 in major units. This is the first time the
+	// conversion has run against a figure the endpoint actually sent.
+	if got, ok := s.ExtraUsage.UsedCredits(); !ok || got != 466 {
+		t.Errorf("UsedCredits() = %v, %v; want 466 from the wire's 46600", got, ok)
+	}
+	if got, ok := s.ExtraUsage.MonthlyLimit(); !ok || got != 466 {
+		t.Errorf("MonthlyLimit() = %v, %v; want 466 from the wire's 46600", got, ok)
+	}
+	// 100, not 1. The account is at its cap, which is what makes this reading
+	// able to tell the two representations apart at all.
+	if got, ok := s.ExtraUsage.Percent(); !ok || got != 100 {
+		t.Errorf("Percent() = %v, %v; want 100 -- a 0-1 fraction would read 1 here", got, ok)
+	}
+}
