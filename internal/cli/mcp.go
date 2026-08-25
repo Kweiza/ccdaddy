@@ -19,7 +19,7 @@ import (
 // fires only for a command that declares the flag, which is why it stays
 // silent here.
 func newMCPCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "mcp",
 		Short: "Serve ccdad's tools to Claude Code over the Model Context Protocol",
 		Long: "Serve ccdad's tools to Claude Code over the Model Context Protocol.\n\n" +
@@ -59,4 +59,11 @@ func newMCPCmd() *cobra.Command {
 			return mcpsrv.Serve(cmd.Context(), srv)
 		},
 	}
+	// The two halves of the registration. They are subcommands of the server
+	// rather than of the root because what they configure IS this command --
+	// and both are refused inside a `ccdad run` session, out of scoped.go's
+	// map, under exactly these two paths.
+	cmd.AddCommand(newMCPInstallCmd())
+	cmd.AddCommand(newMCPUninstallCmd())
+	return cmd
 }
