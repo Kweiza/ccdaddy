@@ -408,19 +408,41 @@ func runUpdate(cmd *cobra.Command, opts updateOptions) error {
 	}
 	say(cmd, opts.asJSON, "Verified sha256sums.txt against ccdad's release key.")
 
+	// Step 12. Verified, and still possibly an HTML page: a signature says who
+	// wrote the bytes and never what they are.
+	if !release.SumsLookLikeSums(sums) {
+		return rep.emit(cmd, opts.asJSON, ExitBlocked, "shape",
+			fmt.Sprintf("The checksum file for %s carries no checksums at all, so ccdad will not install it. "+
+				"It came correctly signed, which makes this worse rather than better. "+
+				"Check https://github.com/Kweiza/ccdaddy/releases, and read the file yourself with "+
+				"`minisign -Vm sha256sums.txt`.", want.Tag()))
+	}
+
+	// Step 13. Not being listed is its own refusal and its own remedy: the
+	// release simply does not carry this platform, which is a fact about the
+	// release rather than a suspicion about it.
+	asset := release.Asset()
+	wantHash, listed := release.ExpectedHash(sums, asset)
+	if !listed {
+		return rep.emit(cmd, opts.asJSON, ExitBlocked, "not-listed",
+			fmt.Sprintf("Release %s does not publish %s, so there is nothing here for this machine. "+
+				"Check https://github.com/Kweiza/ccdaddy/releases for what it does carry.", want.Tag(), asset))
+	}
+
 	// ---------------------------- BEGIN PLACEHOLDER ----------------------------
 	// Everything from this comment down to END PLACEHOLDER is scaffolding, and
-	// it is meant to be deleted WHOLE — comment, blank assignment and return
-	// together. Whoever writes the rest of the algorithm (checking the shape of
-	// the verified checksum file, reading this platform's row out of it,
-	// downloading the asset into staging and moving it over target) replaces
-	// this block; leaving the comment behind would leave it sitting above live
-	// code, describing something that is no longer true.
+	// it is meant to be deleted WHOLE — comment, blank assignments and return
+	// together. Whoever writes the rest of the algorithm (downloading the asset
+	// into staging, checking its size and digest against wantHash, running it
+	// once and moving it over target) replaces this block; leaving the comment
+	// behind would leave it sitting above live code, describing something that
+	// is no longer true.
 	//
 	// It exists so this command RUNS while the rest is still being written: it
-	// reports what it has verified and stops. The blank assignment is what
-	// keeps the compiler quiet about a value only the later steps read. Nothing
+	// reports what it has verified and stops. The blank assignments are what
+	// keep the compiler quiet about values only the later steps read. Nothing
 	// asserts on any of it.
+	_, _ = asset, wantHash
 	_ = staging
 	return rep.emit(cmd, opts.asJSON, ExitOK, "", "")
 	// ----------------------------- END PLACEHOLDER -----------------------------
