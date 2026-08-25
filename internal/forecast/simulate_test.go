@@ -203,16 +203,20 @@ func TestAnAccountOutOnTheOtherAxisSuppliesNothingToThisOne(t *testing.T) {
 	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
 	accts := make([]simAccount, 0, 6)
 	for i := range 6 {
-		fiveHour := 0.0
+		five := simWindow{pct: 0, reset: now.Add(4 * time.Hour), length: 5 * time.Hour}
 		if i >= 2 {
-			// Out on the five-hour axis, and staying out: that window is not in
-			// this run's scope, so nothing in the run rolls it back.
-			fiveHour = 100
+			// Out on the five-hour axis and staying out, and what strands it is
+			// a reading that carried no resets_at -- not this run's scope.
+			// A window outside the scope still rolls over on time, so a fixture
+			// that leaned on scope to keep these four out would be asserting a
+			// rule the run does not have and would go green for the wrong
+			// reason.
+			five = simWindow{pct: 100, length: 5 * time.Hour}
 		}
 		accts = append(accts, simAccount{
 			uuid: fmt.Sprintf("uuid-%d", i), idx: i + 1,
 			windows: map[usage.WindowName]simWindow{
-				usage.WindowFiveHour: {pct: fiveHour, reset: now.Add(4 * time.Hour), length: 5 * time.Hour},
+				usage.WindowFiveHour: five,
 				usage.WindowSevenDay: {pct: 0, reset: now.Add(24 * time.Hour), length: 7 * 24 * time.Hour},
 			},
 		})
@@ -265,6 +269,14 @@ func TestAnUnreadableAccountIsNotUsable(t *testing.T) {
 // The utilization is NOT reset by that repair. The level is what was read; only
 // the schedule is inferred, and granting quota nobody observed is the fail-open
 // half of this.
+//
+// One account burning 40 points per hour against a window that hands back 100
+// every five hours takes 20 and spends 40, so the fleet does run dry, and both
+// figures asserted below are the same moment: the fleet is dry when its last
+// account goes out, and here there is only the one. Without the repair the
+// account's first interval ends on a rollover that was hiding in the past, so
+// its level is wiped before anything records it as out and both figures move to
+// 3h30m.
 func TestAResetAlreadyPastStillRollsTheWindowOver(t *testing.T) {
 	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
 	accts := []simAccount{{
@@ -276,16 +288,17 @@ func TestAResetAlreadyPastStillRollsTheWindowOver(t *testing.T) {
 		},
 	}}
 	rates := map[usage.WindowName]float64{usage.WindowFiveHour: 40}
-	_, dry, emptyAt := runBounded(t, func() (time.Time, bool, map[string]time.Time) {
+	dryAt, dry, emptyAt := runBounded(t, func() (time.Time, bool, map[string]time.Time) {
 		return simulate(accts, rates, now)
 	})
 	// 10 points of room at 40 points per hour is fifteen minutes, so the account
-	// empties before its boundary and the run must still see it recover.
-	if got, ok := emptyAt["uuid-a"]; !ok || !got.Equal(now.Add(15*time.Minute)) {
-		t.Errorf("emptyAt[uuid-a] = %v, %v; want %v", got, ok, now.Add(15*time.Minute))
+	// empties a quarter of an hour before the boundary the repair inferred.
+	want := now.Add(15 * time.Minute)
+	if got, ok := emptyAt["uuid-a"]; !ok || !got.Equal(want) {
+		t.Errorf("emptyAt[uuid-a] = %v, %v; want %v", got, ok, want)
 	}
-	if dry {
-		t.Fatal("a five-hour window whose reset was stale was reported never to roll over again")
+	if !dry || !dryAt.Equal(want) {
+		t.Fatalf("dry = %v at %v; want true at %v -- the fleet is dry when its last account goes out", dry, dryAt, want)
 	}
 }
 
@@ -346,5 +359,164 @@ func TestARolloverThatRestoresNobodyIsNotARecovery(t *testing.T) {
 	}
 	if !dryAt.Equal(now) {
 		t.Fatalf("dry at %v, want %v -- the fleet stopped being able to take work now, not at the last five-hour rollover before the horizon", dryAt.Sub(now), time.Duration(0))
+	}
+}
+
+// A fleet that burns faster than its windows refill is judged by that fact, not
+// by where the horizon happens to fall.
+//
+// One account with a five-hour window takes 100 points every five hours and this
+// one spends them in an hour, so it is out for four hours in every five and the
+// run has to say so. What it may not do is walk from stall to recovery to stall
+// until the horizon stops it and then report whichever of those it was standing
+// in: a run that does reports "holds" when the horizon lands mid-burn and "runs
+// dry" thirteen days out when it lands mid-stall, for the same fleet at the same
+// rate, with the reset's phase deciding which. Every phase below produces the
+// same verdict and a moment inside the first two hours, and the fleet's moment
+// is its last account's own -- there is one account here, so the two figures are
+// the same number and a run that answered them differently would be reporting a
+// fleet that ran out 334 hours after the only account in it did.
+func TestACyclingFleetIsJudgedByItsBurnAndNotByThePhaseOfAReset(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	for phase := 1; phase <= 5; phase++ {
+		accts := []simAccount{{
+			uuid: "uuid-a", idx: 1,
+			windows: map[usage.WindowName]simWindow{
+				usage.WindowFiveHour: {pct: 0, reset: now.Add(time.Duration(phase) * time.Hour), length: 5 * time.Hour},
+			},
+		}}
+		// 100 points per hour against a window worth 20 points per hour.
+		rates := map[usage.WindowName]float64{usage.WindowFiveHour: 100}
+		dryAt, dry, emptyAt := runBounded(t, func() (time.Time, bool, map[string]time.Time) {
+			return simulate(accts, rates, now)
+		})
+		if !dry {
+			t.Errorf("reset at now+%dh: dry = false; a fleet spending five times what it is given holds at no phase", phase)
+			continue
+		}
+		if got, ok := emptyAt["uuid-a"]; !ok || !got.Equal(dryAt) {
+			t.Errorf("reset at now+%dh: the fleet ran dry at %v and its only account at %v, %v", phase, dryAt, got, ok)
+		}
+		if got := dryAt.Sub(now); got > 2*time.Hour {
+			t.Errorf("reset at now+%dh: dry after %v; the account cannot take work past its first hour, so any answer near the horizon is the horizon's answer and not the fleet's", phase, got)
+		}
+	}
+}
+
+// A window outside the run's scope still rolls over, because a window's clock
+// runs whether or not this run is measuring it.
+//
+// Freezing it instead strands every account whose out-of-scope window happens to
+// be spent -- the ordinary state of a rotation, not a corner -- and the fleet
+// below shows what that costs. Every account is out on the five-hour axis and
+// has four fifths of its weekly quota untouched; each five-hour window rolls
+// over inside four hours. A weekly run that froze them would find nobody usable
+// for a fortnight and report the weekly axis dry this minute, while the run over
+// both axes, which burns strictly more and has strictly more ways to end,
+// reported the same fleet holding. No fleet can be drier under fewer
+// constraints, so the two answers together are not a pessimistic reading, they
+// are an impossible one.
+func TestAWindowOutsideTheRunsScopeStillRollsOver(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	accts := make([]simAccount, 0, 6)
+	for i := range 6 {
+		accts = append(accts, simAccount{
+			uuid: fmt.Sprintf("uuid-%d", i), idx: i + 1,
+			windows: map[usage.WindowName]simWindow{
+				usage.WindowFiveHour: {pct: 100, reset: now.Add(time.Duration(40*(i+1)) * time.Minute), length: 5 * time.Hour},
+				usage.WindowSevenDay: {pct: 20, reset: now.Add(3 * 24 * time.Hour), length: 7 * 24 * time.Hour},
+			},
+		})
+	}
+	rates := map[usage.WindowName]float64{usage.WindowFiveHour: 20, usage.WindowSevenDay: 3}
+	weeklyAt, weeklyDry, _ := runBounded(t, func() (time.Time, bool, map[string]time.Time) {
+		return simulateScoped(accts, rates, []usage.WindowName{usage.WindowSevenDay}, now)
+	})
+	bothAt, bothDry, _ := runBounded(t, func() (time.Time, bool, map[string]time.Time) {
+		return simulate(accts, rates, now)
+	})
+	if weeklyDry {
+		t.Errorf("the weekly axis ran dry at %v for a fleet with 480 of 600 weekly points left, whose five-hour windows all roll over within four hours", weeklyAt.Sub(now))
+	}
+	if bothDry && !weeklyDry {
+		t.Fatal("both axes together ran dry and the weekly axis alone did not; the fixture no longer measures the ordering")
+	}
+	if weeklyDry && (!bothDry || bothAt.After(weeklyAt)) {
+		t.Errorf("the weekly axis alone ran dry at %v and both axes together at %v (dry = %v); a run under fewer constraints cannot run out first",
+			weeklyAt.Sub(now), bothAt.Sub(now), bothDry)
+	}
+}
+
+// A fleet rate that does not divide 100 into a whole number of nanoseconds must
+// still finish the account it is spending.
+//
+// The interval to a window's fill is derived from the very rate the burn is then
+// applied at, and time.Duration truncates it, so the product comes back a few
+// parts in 10^16 short of 100 rather than on it. That residue leaves the account
+// usable with a room of 10^-13, makes the next interval round to zero
+// nanoseconds, and parks the run on one instant forever. Every other fixture
+// here runs at 100, 40, 30, 10, 3 or 1 points per hour, and every one of those
+// divides 100 exactly, so the arithmetic lands on the limit by luck and the
+// defence that catches the rest is never the reason any of them terminates. 7 is
+// the smallest whole rate that does not.
+func TestAFleetRateThatDoesNotDivideOneHundredStillFinishesTheAccount(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	accts := []simAccount{{
+		uuid: "uuid-a", idx: 1,
+		windows: map[usage.WindowName]simWindow{
+			// Reset outside the horizon: nothing replenishes, so the only thing
+			// that can end this run is the account reaching its limit.
+			usage.WindowSevenDay: {pct: 0, reset: now.Add(20 * 24 * time.Hour), length: 7 * 24 * time.Hour},
+		},
+	}}
+	rates := map[usage.WindowName]float64{usage.WindowSevenDay: 7}
+	dryAt, dry, _ := runBounded(t, func() (time.Time, bool, map[string]time.Time) {
+		return simulate(accts, rates, now)
+	})
+	if !dry {
+		t.Fatal("dry = false")
+	}
+	// The truncation is the point, so the expected moment is not exact either;
+	// a millisecond is nine orders of magnitude above the residue and nine below
+	// the interval being checked.
+	hours := 100.0 / 7.0
+	want := time.Duration(hours * float64(time.Hour))
+	if got := dryAt.Sub(now); got < want-time.Millisecond || got > want+time.Millisecond {
+		t.Fatalf("dry after %v, want %v", got, want)
+	}
+}
+
+// A rollover ends an interval without ending an account, so the interval it wins
+// names no window.
+//
+// Naming one sets that window to exactly 100 and hands the fleet a bill the
+// interval never ran up. The shape that shows it needs three things at once: a
+// rollover has to win the interval, the window that would have been named has to
+// be a different one, and nothing may roll that other window back at the same
+// instant. Here the five-hour window rolls over an hour in while the weekly
+// window -- ten points from spent at one point per hour, so ten hours away -- is
+// what the interval was measured to. A run that named it would empty this
+// account nine hours early, on quota it had not spent.
+func TestARolloverEndsAnIntervalWithoutSpendingTheWindowItDidNotReach(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	accts := []simAccount{{
+		uuid: "uuid-a", idx: 1,
+		windows: map[usage.WindowName]simWindow{
+			// A tenth of a point per hour is 1000 hours to the limit, well past
+			// the horizon, so this window contributes a rollover and no fill.
+			usage.WindowFiveHour: {pct: 0, reset: now.Add(time.Hour), length: 5 * time.Hour},
+			usage.WindowSevenDay: {pct: 90, reset: now.Add(10 * 24 * time.Hour), length: 7 * 24 * time.Hour},
+		},
+	}}
+	rates := map[usage.WindowName]float64{usage.WindowFiveHour: 0.1, usage.WindowSevenDay: 1}
+	dryAt, dry, emptyAt := runBounded(t, func() (time.Time, bool, map[string]time.Time) {
+		return simulate(accts, rates, now)
+	})
+	want := now.Add(10 * time.Hour)
+	if got, ok := emptyAt["uuid-a"]; !ok || !got.Equal(want) {
+		t.Errorf("emptyAt[uuid-a] = %v, %v; want %v -- ten points at a point an hour", got, ok, want)
+	}
+	if !dry || !dryAt.Equal(want) {
+		t.Fatalf("dry = %v at %v; want true at %v", dry, dryAt, want)
 	}
 }

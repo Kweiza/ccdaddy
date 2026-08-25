@@ -127,13 +127,23 @@ func simulate(accounts []simAccount, rates map[usage.WindowName]float64, now tim
 // simulateScoped runs the rotation with only the named windows burning and only
 // they ending the run.
 //
-// dryAt and dry are the fleet's answer: the moment no account can take work and
-// none recovers before the horizon. emptyAt names, per account uuid, the first
-// moment the run saw that account out -- now, for one that starts out. An
-// unreadable account never appears there: it ran out of nothing, and naming a
-// moment for it would report a fact about a fleet that was never read.
+// dryAt and dry are the fleet's answer: the first moment the run's own burn left
+// no account able to take work. A fleet that was already out before the run
+// applied anything is not that -- the rate did not cause it and may not be
+// judged by it -- so from that state the run walks the rollovers instead, and
+// only a fleet nothing inside the horizon brings back is dry at `now`.
 //
-// Scope decides what burns; usability is fleet-wide in both entry points.
+// emptyAt names, per account uuid, the first moment the run saw that account out
+// -- now, for one that starts out. An unreadable account never appears there: it
+// ran out of nothing, and naming a moment for it would report a fact about a
+// fleet that was never read. Where every account goes out once and stays out,
+// dryAt is the last of these -- the fleet is dry when its last account is --
+// but the two are recorded independently, because an account that empties, is
+// rolled over and empties again is named at the earlier of its own moments.
+//
+// Scope decides what burns and what ends the run. Usability is fleet-wide in
+// both entry points, and so is the clock: every window rolls over on time
+// whether or not this run is measuring it.
 func simulateScoped(accounts []simAccount, rates map[usage.WindowName]float64, scope []usage.WindowName, now time.Time) (time.Time, bool, map[string]time.Time) {
 	// The run spends its own copy. Three scopes at both ends of the measured
 	// band are six runs over one fleet, and a run that burned its argument would
@@ -153,11 +163,29 @@ func simulateScoped(accounts []simAccount, rates map[usage.WindowName]float64, s
 	for !t.After(deadline) {
 		live, ok := chooseLive(state)
 		if !ok {
-			// Nobody can take work. This is not the answer yet: a fleet with
-			// every account out is the ordinary end state of a rotation, and on
-			// the five-hour axis it clears within five hours. Reporting it as
-			// the runway would answer a question about this minute rather than
-			// about whether the rate is sustainable.
+			if t.After(now) {
+				// The run's own burn emptied the fleet, and that is the answer
+				// to the question the run was asked. Nothing in this loop takes
+				// quota away except spend -- a rollover only ever gives quota
+				// back -- so no account being able to take work at a moment
+				// later than now is a state the rate under test produced.
+				//
+				// Walking on to the next rollover here instead would hand the
+				// verdict to that rollover's phase. A fleet burning faster than
+				// its windows refill stalls and recovers over and over, and the
+				// run would report whichever stall the horizon happened to cut
+				// it off in -- or, if the horizon fell in the middle of a burn
+				// rather than a stall, report that the fleet holds. One hour of
+				// reset phase decided both, and the moment reported could be
+				// the far end of the horizon for a fleet that first ran out an
+				// hour in.
+				return t, true, emptyAt
+			}
+			// t is still now, so the fleet was already out before the run
+			// applied anything: this is a fact about this minute and not about
+			// the rate, which has not been given the chance to cause it. A
+			// fleet with every account out is the ordinary end state of a
+			// rotation, and on the five-hour axis it clears within five hours.
 			//
 			// So walk the rollovers until one of them puts an account back in
 			// service. Rollovers that do not are walked THROUGH rather than
@@ -166,14 +194,13 @@ func simulateScoped(accounts []simAccount, rates map[usage.WindowName]float64, s
 			// those every five hours: stopping at the first rollover of any kind
 			// would report "holds" for any fleet at all, so long as one
 			// five-hour reset was readable.
-			stalled := t
 			for {
-				next, has := nextRollover(state, inScope, t, deadline)
+				next, has := nextRollover(state, t, deadline)
 				if !has {
-					return stalled, true, emptyAt
+					return now, true, emptyAt
 				}
 				t = next
-				rollDue(state, inScope, t)
+				rollDue(state, t)
 				if _, back := chooseLive(state); back {
 					break
 				}
@@ -190,7 +217,7 @@ func simulateScoped(accounts []simAccount, rates map[usage.WindowName]float64, s
 		}
 		t = t.Add(dt)
 		spend(&state[live], rates, inScope, dt, end)
-		rollDue(state, inScope, t)
+		rollDue(state, t)
 		recordEmpty(state, emptyAt, t)
 	}
 	return time.Time{}, false, emptyAt
@@ -263,7 +290,7 @@ func chooseLive(state []simAccount) (int, bool) {
 
 // nextEvent is the interval to the next thing that changes the fleet: the live
 // account's earliest in-scope window reaching 100 at that window name's fleet
-// rate, or the next rollover among the windows in scope, whichever is sooner.
+// rate, or the next rollover anywhere in the fleet, whichever is sooner.
 //
 // end names the window that reached 100, and is empty when a rollover won.
 //
@@ -299,7 +326,7 @@ func nextEvent(state []simAccount, live int, rates map[usage.WindowName]float64,
 			dt, end, found = d, n, true
 		}
 	}
-	if next, has := nextRollover(state, inScope, t, deadline); has {
+	if next, has := nextRollover(state, t, deadline); has {
 		if d := next.Sub(t); !found || d < dt {
 			// A rollover ends the interval without ending an account, so no
 			// window is named: naming one here would set it to exactly 100 and
@@ -311,16 +338,23 @@ func nextEvent(state []simAccount, live int, rates map[usage.WindowName]float64,
 }
 
 // nextRollover is the earliest reset strictly after `after` and no later than
-// the deadline, across every account's in-scope windows.
+// the deadline, across every window of every account.
 //
-// Rollovers are looked for across the whole fleet, not just the live account:
-// a window's clock runs whether or not anyone is spending against it.
-func nextRollover(state []simAccount, inScope map[usage.WindowName]bool, after, deadline time.Time) (time.Time, bool) {
+// Rollovers are looked for across the whole fleet, not just the live account: a
+// window's clock runs whether or not anyone is spending against it. They are
+// looked for across every window rather than the run's scope for the same
+// reason -- scope decides what burns and what ends the run, and it cannot decide
+// what time does. A run over one axis that froze the other axis's windows would
+// hold an account out of service for a whole fortnight over a window that in
+// fact refills in forty minutes, and would then report that axis dry while the
+// run over both axes -- strictly more burn and strictly more ways to end --
+// reported the same fleet holding, an ordering the arithmetic does not permit.
+func nextRollover(state []simAccount, after, deadline time.Time) (time.Time, bool) {
 	var out time.Time
 	found := false
 	for i := range state {
-		for n, w := range state[i].windows {
-			if !inScope[n] || w.length <= 0 || w.reset.IsZero() {
+		for _, w := range state[i].windows {
+			if w.length <= 0 || w.reset.IsZero() {
 				continue
 			}
 			if !w.reset.After(after) || w.reset.After(deadline) {
@@ -334,18 +368,22 @@ func nextRollover(state []simAccount, inScope map[usage.WindowName]bool, after, 
 	return out, found
 }
 
-// rollDue rolls over every in-scope window whose reset has arrived: the level
-// goes to zero and the reset advances by whole lengths until it is in the
-// future again.
+// rollDue rolls over every window whose reset has arrived: the level goes to
+// zero and the reset advances by whole lengths until it is in the future again.
+//
+// Every window, in the run's scope or not, because usability is measured over
+// every window: an account is out while any window of it is at 100, so a window
+// nothing rolls back holds that account out of service for the whole horizon.
+// Scope says what burns, not whose clock runs.
 //
 // Whole lengths rather than one, because an interval can span several: a weekly
 // axis stepping past a five-hour window crosses eight of its boundaries at once,
 // and advancing by a single length would leave the window rolling over
 // repeatedly in the past.
-func rollDue(state []simAccount, inScope map[usage.WindowName]bool, t time.Time) {
+func rollDue(state []simAccount, t time.Time) {
 	for i := range state {
 		for n, w := range state[i].windows {
-			if !inScope[n] || w.length <= 0 || w.reset.IsZero() || w.reset.After(t) {
+			if w.length <= 0 || w.reset.IsZero() || w.reset.After(t) {
 				continue
 			}
 			w.pct = 0

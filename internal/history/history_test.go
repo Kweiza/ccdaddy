@@ -221,9 +221,9 @@ func TestRetainCoversTheLongestGapThePolicyPermits(t *testing.T) {
 	}
 	gap := pollpolicy.Share(at.Sub(now), maxIdentityAccounts, in)
 
-	if want := measuredSpan + gap; retain < want {
+	if want := MeasuredSpan + gap; retain < want {
 		t.Fatalf("retain = %v, want at least %v (%v of window plus a %v gap for %d accounts on one identity)",
-			retain, want, measuredSpan, gap, maxIdentityAccounts)
+			retain, want, MeasuredSpan, gap, maxIdentityAccounts)
 	}
 }
 
