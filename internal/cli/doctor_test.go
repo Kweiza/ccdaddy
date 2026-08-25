@@ -1916,3 +1916,80 @@ func TestDoctorCountsTheAccountListAndTheStrandedFilesGrammatically(t *testing.T
 		}
 	})
 }
+
+// The row exists because the two spellings are not interchangeable and nothing
+// else in the tree ever says which one a machine has. CLAUDE_PLUGIN_ROOT is set
+// by Claude Code for a plugin-launched server and by nothing else, so when this
+// row is produced by `ccdad doctor` running as an MCP tool it answers the
+// question the caller actually has: what are my own tools called.
+func TestDoctorSaysTheToolsArePluginSpeltWhenThePluginLaunchedThisCcdad(t *testing.T) {
+	isolate(t)
+	t.Setenv("CLAUDE_PLUGIN_ROOT", t.TempDir())
+
+	got := checkMCPTools()
+	if got.Level != levelOK {
+		t.Errorf("level = %q, want ok; this row reports and never judges", got.Level)
+	}
+	if !strings.Contains(got.Detail, "mcp__plugin_ccdad_ccdad__") {
+		t.Errorf("the row does not name the plugin spelling:\n%s", got.Detail)
+	}
+	if strings.Contains(got.Detail, "no ccdad plugin is installed") {
+		t.Errorf("the row fell through to the registry while running AS the plugin:\n%s", got.Detail)
+	}
+}
+
+// The ordinary shell, on a machine with no plugin: the answer is the bare
+// spelling, and it is the one a user writing a permission rule needs.
+func TestDoctorNamesTheBareToolSpellingWhenNoPluginIsInstalled(t *testing.T) {
+	isolate(t)
+	t.Setenv("CLAUDE_PLUGIN_ROOT", "")
+
+	got := checkMCPTools()
+	if got.Level != levelOK {
+		t.Errorf("level = %q, want ok", got.Level)
+	}
+	if !strings.Contains(got.Detail, "mcp__ccdad__") {
+		t.Errorf("the row does not name the bare spelling:\n%s", got.Detail)
+	}
+	if strings.Contains(got.Detail, "mcp__plugin_ccdad_ccdad__") {
+		t.Errorf("the row claims the plugin spelling on a machine with no plugin:\n%s", got.Detail)
+	}
+}
+
+// A plugin installed and this ccdad NOT launched by it -- the shell case that
+// matters, because it is where somebody is about to run `ccdad mcp install`
+// and rename every tool they have written a rule for.
+func TestDoctorWarnsInProseThatInstallingWouldRenameThePluginsTools(t *testing.T) {
+	claude := isolate(t)
+	t.Setenv("CLAUDE_PLUGIN_ROOT", "")
+	writeInstalledPlugins(t, claude,
+		`{"version":2,"plugins":{"ccdad@my-own-mirror":[{"scope":"user"}]}}`)
+
+	got := checkMCPTools()
+	if got.Level != levelOK {
+		t.Errorf("level = %q, want ok; a plugin being installed is not a fault", got.Level)
+	}
+	for _, want := range []string{"ccdad@my-own-mirror", "mcp__plugin_ccdad_ccdad__", "mcp__ccdad__"} {
+		if !strings.Contains(got.Detail, want) {
+			t.Errorf("the row does not name %q:\n%s", want, got.Detail)
+		}
+	}
+}
+
+// The row travels in the real report, not only when called directly -- and it
+// is the last one, because it was appended rather than inserted. The order is
+// fixed so that two runs are diffable, and appending is the only edit that
+// cannot reorder somebody else's row.
+func TestTheMCPToolsRowIsInTheReportDoctorActuallyPrints(t *testing.T) {
+	isolate(t)
+	stubDaemonWorld(t, &fakeDaemon{})
+	seedAccount(t, "uuid-aaaa-0001", "work@example.com")
+
+	code, stdout, _, top := runRoot(t, "doctor", "--json")
+	if code != ExitOK && code != ExitFailure {
+		t.Fatalf("doctor = %d (%s)", code, top)
+	}
+	if !strings.Contains(stdout, `"mcp-tools"`) {
+		t.Errorf("the mcp-tools row is not in the report:\n%s", stdout)
+	}
+}

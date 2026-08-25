@@ -203,7 +203,47 @@ func runChecks() []check {
 		checkEnvironment(),
 		checkAPIKey(cfg, cfgErr),
 		checkOAuthSource(live, liveErr),
+		checkMCPTools(),
 	}
+}
+
+// checkMCPTools names which spelling this machine's ccdad MCP tools have.
+//
+// There are two, and they are not interchangeable: a server registered by
+// `ccdad mcp install` produces mcp__ccdad__<tool>, and the same server reached
+// through the plugin produces mcp__plugin_ccdad_ccdad__<tool>. A permission
+// rule, hook matcher or allowed-tools entry written for one silently never
+// fires under the other, so which one a machine has is worth a row.
+//
+// CLAUDE_PLUGIN_ROOT is the cheapest discriminator there is: Claude Code sets
+// it for a plugin-launched server and for nothing else. It is unset in an
+// ordinary shell, which is why the row falls back to the plugin registry there
+// -- and it is SET when this row is produced by `ccdad doctor` running as an
+// MCP tool, which is the case where the answer is being read by the thing
+// calling the tools.
+//
+// It is always ok and never a warning. Saying that BOTH registrations exist
+// would mean reading Claude Code's own config as well, and a second reader of
+// that document is how two readers come to disagree about it. The collision is
+// warned about where it is created, by the command that creates it.
+func checkMCPTools() check {
+	if root := os.Getenv("CLAUDE_PLUGIN_ROOT"); root != "" {
+		return check{"mcp-tools", levelOK,
+			"this ccdad was launched by the plugin, so its tools are named mcp__plugin_ccdad_ccdad__*"}
+	}
+	installs := installedCcdadPlugins()
+	if len(installs) == 0 {
+		return check{"mcp-tools", levelOK,
+			"no ccdad plugin is installed; a server registered by `ccdad mcp install` has tools named mcp__ccdad__*"}
+	}
+	keys := make([]string, 0, len(installs))
+	for _, p := range installs {
+		keys = append(keys, p.Key)
+	}
+	return check{"mcp-tools", levelOK, fmt.Sprintf(
+		"the ccdad plugin is installed (%s), so its tools are named mcp__plugin_ccdad_ccdad__* — "+
+			"`ccdad mcp install` would replace it and rename them to mcp__ccdad__*",
+		strings.Join(keys, ", "))}
 }
 
 // checkStore reports where ccdad's own state lives, and whether it is there.

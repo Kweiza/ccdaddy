@@ -250,13 +250,16 @@ func runMCPInstall(cmd *cobra.Command, scope mcpScope) error {
 	}
 
 	warnIfCcdadDoesNotResolve(cmd)
-	// TODO(P2): call warnPluginCollision(cmd.ErrOrStderr(), installedCcdadPlugins(), scope) here.
-	// A file-scope entry silently SUPPRESSES the plugin's server -- the
-	// de-duplication is on the endpoint, so renaming changes nothing -- and the
-	// detector and its wording belong to the plugin plan, which also adds a
-	// doctor row for it. Deliberately not reimplemented here: two copies of one
-	// installed_plugins.json reader is the duplication that plan exists to
-	// prevent.
+	// The collision, and this is the only place it can be said: a manifest
+	// cannot run code, and the server is not where a registration decision is
+	// made. It is on the branch that WROTE a file, after the write succeeded --
+	// never on --print-config, which mutates nothing, and never on the
+	// already-registered branch, which returned above. The exit code does not
+	// move: a warning is not a failure.
+	//
+	// cmd.ErrOrStderr(), never os.Stderr, so the TUI and the MCP server capture
+	// it like every other line this package writes.
+	warnPluginCollision(cmd.ErrOrStderr(), installedCcdadPlugins(), string(scope))
 	return nil
 }
 
