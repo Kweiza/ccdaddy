@@ -1,0 +1,114 @@
+package relsign
+
+import (
+	"crypto/ed25519"
+	"encoding/base64"
+	"errors"
+	"strings"
+	"testing"
+)
+
+// secBody assembles the base64 body of a secret key file's second line, so a
+// case can bend exactly one field.
+func secBody(alg string, keyNum [8]byte, priv []byte) string {
+	raw := append([]byte(alg), keyNum[:]...)
+	raw = append(raw, priv...)
+	return base64.StdEncoding.EncodeToString(raw)
+}
+
+func TestParseSecretKey(t *testing.T) {
+	_, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	num := [8]byte{2, 4, 6, 8, 10, 12, 14, 16}
+
+	tests := []struct {
+		name string
+		body string
+		want error
+	}{
+		{"a real key", secBody("Ed", num, priv), nil},
+		{"surrounding whitespace", " " + secBody("Ed", num, priv) + "\n", nil},
+		{"the prehashed algorithm", secBody("ED", num, priv), ErrAlgorithm},
+		{"one byte short", secBody("Ed", num, priv[:63]), ErrMalformed},
+		{"not base64", "!!" + secBody("Ed", num, priv), ErrMalformed},
+		{"empty", "", ErrMalformed},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ParseSecretKey(tc.body)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("ParseSecretKey() error = %v, want %v", err, tc.want)
+			}
+			if tc.want != nil {
+				return
+			}
+			if got.KeyNum != num {
+				t.Errorf("KeyNum = %x, want %x", got.KeyNum, num)
+			}
+			if !got.Key.Equal(priv) {
+				t.Error("the ed25519 key does not round-trip")
+			}
+		})
+	}
+}
+
+func TestSignRoundTripsThroughVerify(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	num := [8]byte{3, 1, 4, 1, 5, 9, 2, 6}
+	sk, err := ParseSecretKey(secBody("Ed", num, priv))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("0123456789abcdef  ccdad-linux-amd64\n")
+
+	sig, err := sk.Sign(content, TrustedComment("v1.2.3"))
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimSuffix(string(sig), "\n"), "\n")
+	if len(lines) != 4 {
+		t.Fatalf("Sign wrote %d lines, want 4:\n%s", len(lines), sig)
+	}
+	if !strings.HasPrefix(lines[0], untrustedPrefix) {
+		t.Errorf("line 1 = %q, want an untrusted comment", lines[0])
+	}
+	if want := trustedPrefix + TrustedComment("v1.2.3"); lines[2] != want {
+		t.Errorf("line 3 = %q, want %q", lines[2], want)
+	}
+	if !strings.HasSuffix(string(sig), "\n") {
+		t.Error("Sign did not end the file with a newline")
+	}
+
+	keys := []PublicKey{{KeyNum: num, Key: pub}}
+	if err := Verify(keys, content, sig, "v1.2.3"); err != nil {
+		t.Fatalf("Verify of a freshly signed file: %v", err)
+	}
+	if err := Verify(keys, content, sig, "v1.2.4"); !errors.Is(err, ErrRelease) {
+		t.Fatalf("Verify against the wrong tag = %v, want %v", err, ErrRelease)
+	}
+}
+
+// A newline in the trusted comment would end line 3 early and turn one
+// signature into a five-line file -- silently, at signing time, discovered by
+// whoever tried to install the release.
+func TestSignRefusesALineBreakInTheTrustedComment(t *testing.T) {
+	_, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sk, err := ParseSecretKey(secBody("Ed", [8]byte{1}, priv))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []string{"a\nb", "a\rb", "a\n"} {
+		if _, err := sk.Sign([]byte("x"), tc); !errors.Is(err, ErrMalformed) {
+			t.Errorf("Sign(%q) = %v, want %v", tc, err, ErrMalformed)
+		}
+	}
+}
