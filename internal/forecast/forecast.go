@@ -176,6 +176,49 @@ type Fleet struct {
 	PointsLeft  float64
 	PointsTotal float64
 
+	// AccountsUsable is how many accounts the run had to work with: the ones
+	// that are eligible for the rotation and have at least one readable
+	// window. An account that is out right now is one of them -- being spent
+	// is a fact about this minute, and its quota comes back -- and it is the
+	// same set PointsTotal counts a hundred points for and the same set the
+	// replenishment figures are measured over, so a reader can check one
+	// against the other.
+	AccountsUsable int
+
+	// AccountsNeeded is the smallest fleet size at which BOTH axes survive the
+	// horizon, found by re-running the rotation with hypothetical accounts
+	// appended -- one mechanism answering a third question, not a second
+	// mechanism free to disagree with the first two on the same page.
+	//
+	// It counts accounts on the plan the fleet already has, so the tier notice
+	// applies to it: on a fleet whose plans disagree, "one more account" is not
+	// a unit.
+	//
+	// HasNeeded is false when there was no basis to search from, and the figure
+	// is then ABSENT rather than zero: a fleet that needs no more accounts and
+	// a fleet nobody measured must never read the same.
+	AccountsNeeded int
+	HasNeeded      bool
+
+	// NeededBy names the axis that set the figure -- the one whose own run was
+	// still failing at the count below it. It carries that axis's
+	// representative window name, five_hour or seven_day, the same two the
+	// replenishment figures are measured on.
+	//
+	// Which axis it is is MEASURED. The two axes imply counts in the ratio of
+	// their measured rates against 20 and 100/168 points an hour, and nothing
+	// in the design fixes which is larger. HasNeededBy is false when the count
+	// below the answer failed on both axes, or on neither -- there the figure
+	// came from the two together and naming one of them would invent a fact.
+	NeededBy    usage.WindowName
+	HasNeededBy bool
+
+	// NeededCapped is true when the search reached its bound without finding a
+	// count that holds. AccountsNeeded is then the bound itself and means "more
+	// than this": a fleet that appears to need that many accounts has a
+	// measurement problem rather than a purchasing one.
+	NeededCapped bool
+
 	// Rows is one line per readable account, ordered by EmptyAt ascending and
 	// then by the account's index, so the account that goes first reads first.
 	// PointsTotal is 100 times the rows with a weekly window, which is not
@@ -343,6 +386,17 @@ func Of(in []Input, now time.Time) Fleet {
 	f.FiveHour = decide(f.FiveHour, sim, lowRates, highRates, five, now, anyKnown(rates, five))
 	f.Weekly = decide(f.Weekly, sim, lowRates, highRates, weekly, now, anyKnown(rates, weekly))
 	f.Both = decide(f.Both, sim, lowRates, highRates, both, now, f.Basis.Known)
+
+	// How many accounts it would take is the same runs asked once more, with
+	// seats the fleet does not have yet appended. It is answered here, beside
+	// the verdicts, because it has to be the same mechanism: a count from
+	// anywhere else would be free to disagree with the verdict printed above
+	// it.
+	f.AccountsUsable = len(sim)
+	needed := needFor(sim, highRates, five, weekly, both, now, f.Basis.Known)
+	f.AccountsNeeded, f.HasNeeded = needed.count, needed.has
+	f.NeededBy, f.HasNeededBy = needed.by, needed.hasBy
+	f.NeededCapped = needed.capped
 
 	// The rows come out of the fleet run at the low end of the band. That run
 	// is the one whose dry moment is reported when both ends agree, so the last
