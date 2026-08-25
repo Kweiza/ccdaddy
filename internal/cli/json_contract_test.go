@@ -731,6 +731,23 @@ const updateAssetRoleEnv = "CCDAD_TEST_UPDATE_ASSET"
 // printing, which is a staged binary that runs and is not a ccdad.
 const updateAssetRoleFail = "fail"
 
+// updateAssetRoleEnvFile, when set, makes the staged-asset role record how it
+// was invoked into the file this names.
+//
+// It writes to a file for the reason argvRoleEnv does: the child's stdout
+// belongs to whoever ran it — here it is what the smoke run reads the version
+// line out of — and swapping that out under a running test is a larger
+// intrusion than an extra variable.
+const updateAssetRoleEnvFile = "CCDAD_TEST_UPDATE_ASSET_ENVFILE"
+
+// updateAssetRecord is what that file holds. Both halves exist only inside the
+// child: the smoke run is a real exec, so neither the environment it was handed
+// nor the argument vector it was given can be observed in this process.
+type updateAssetRecord struct {
+	ChildEnv string   `json:"childEnv"`
+	Argv     []string `json:"argv"`
+}
+
 func TestMain(m *testing.M) {
 	// The staged release asset. `ccdad update` EXECUTES what it downloaded
 	// before it installs it, and the only file that is both a real executable
@@ -738,6 +755,21 @@ func TestMain(m *testing.M) {
 	// this test binary. The value is what it prints; a role that must fail
 	// instead prints nothing and exits non-zero.
 	if v := os.Getenv(updateAssetRoleEnv); v != "" {
+		// Before the fail check, so the record is written on both arms: what
+		// was asked of the child is worth pinning whether or not the child is
+		// pretending to be a binary that cannot answer.
+		if out := os.Getenv(updateAssetRoleEnvFile); out != "" {
+			enc, err := json.Marshal(updateAssetRecord{
+				ChildEnv: os.Getenv(daemon.ChildEnvVar),
+				Argv:     os.Args[1:],
+			})
+			if err != nil {
+				os.Exit(70)
+			}
+			if err := os.WriteFile(out, enc, 0o600); err != nil {
+				os.Exit(71)
+			}
+		}
 		if v == updateAssetRoleFail {
 			os.Exit(9)
 		}
