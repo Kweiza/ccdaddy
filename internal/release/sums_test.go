@@ -34,6 +34,11 @@ func TestSumsLookLikeSums(t *testing.T) {
 		{"a tab", "aa00000000000000000000000000000000000000000000000000000000000000\tccdad-linux-amd64\n", false},
 		{"uppercase hex", "AA00000000000000000000000000000000000000000000000000000000000000  ccdad-linux-amd64\n", false},
 		{"63 digits", "a0000000000000000000000000000000000000000000000000000000000000  ccdad-linux-amd64\n", false},
+		// {64} without an upper bound (e.g. {64,}) still matches the first 64
+		// of these 65 digits followed by the two spaces one further along,
+		// which is exactly what this row supplies: a false positive that
+		// only a fixture past 64 digits can expose.
+		{"65 digits", "aa000000000000000000000000000000000000000000000000000000000000000  ccdad-linux-amd64\n", false},
 		{"leading text on the line", "note: aa00000000000000000000000000000000000000000000000000000000000000  ccdad-linux-amd64\n", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -108,5 +113,15 @@ func TestShapeAndListingAreSeparateQuestions(t *testing.T) {
 	}
 	if !SumsLookLikeSums([]byte(goodSums)) {
 		t.Fatal("a real sums file failed the shape check, so 'not listed' can never be reached")
+	}
+	// Shape asks about the FILE; ExpectedHash asks about one asset's ROW. A
+	// file that lists only some other asset is well-shaped and must still
+	// pass here, or SumsLookLikeSums could be built by delegating to
+	// ExpectedHash for one fixed asset name -- collapsing the two questions
+	// this test exists to keep apart, and reporting a real (if foreign)
+	// sums file as though it were the html/empty/malformed case above.
+	onlyAnotherAsset := []byte("aa00000000000000000000000000000000000000000000000000000000000000  ccdad-windows-arm64.exe\n")
+	if !SumsLookLikeSums(onlyAnotherAsset) {
+		t.Fatal("a well-shaped file naming only another asset failed the shape check")
 	}
 }

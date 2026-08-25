@@ -35,8 +35,9 @@ func DownloadBase(base, tag string) string {
 // runtime.GOOS and runtime.GOARCH, with one consequence worth stating: an amd64
 // binary running under Rosetta or Windows-on-ARM updates to amd64 forever,
 // while install.ps1's own detection would pick arm64. So `update` and the
-// installer disagree exactly on the machines emulation exists for, and the
-// README names the installer as the way to change architecture.
+// installer disagree exactly on the machines emulation exists for; getting
+// off the wrong architecture means re-running the installer instead of
+// running `update`, and nothing in this repository writes that down yet.
 func Asset() string { return assetName(runtime.GOOS, runtime.GOARCH) }
 
 // assetName is Asset with the platform as a parameter, so all six targets are

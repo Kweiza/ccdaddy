@@ -9,21 +9,38 @@ import (
 // archives, .exe on Windows only, over exactly six targets. A divergence here
 // downloads the wrong file or nothing at all.
 func TestAssetNameCoversTheSixReleaseTargets(t *testing.T) {
-	for _, c := range []struct{ goos, goarch, want string }{
+	cases := []struct{ goos, goarch, want string }{
 		{"linux", "amd64", "ccdad-linux-amd64"},
 		{"linux", "arm64", "ccdad-linux-arm64"},
 		{"darwin", "amd64", "ccdad-darwin-amd64"},
 		{"darwin", "arm64", "ccdad-darwin-arm64"},
 		{"windows", "amd64", "ccdad-windows-amd64.exe"},
 		{"windows", "arm64", "ccdad-windows-arm64.exe"},
-	} {
+	}
+	for _, c := range cases {
 		t.Run(c.goos+"/"+c.goarch, func(t *testing.T) {
 			if got := assetName(c.goos, c.goarch); got != c.want {
 				t.Errorf("assetName(%q, %q) = %q, want %q", c.goos, c.goarch, got, c.want)
 			}
 		})
 	}
-	if got, want := Asset(), assetName(runtime.GOOS, runtime.GOARCH); got != want {
+	// want is looked up in the table above rather than computed by calling
+	// assetName(runtime.GOOS, runtime.GOARCH) a second time: that call is
+	// exactly what Asset's own body does, so comparing Asset() against it
+	// would agree with whatever Asset() returns regardless of whether Asset
+	// is correct. The literal below does not go through Asset or assetName
+	// at all.
+	var want string
+	for _, c := range cases {
+		if c.goos == runtime.GOOS && c.goarch == runtime.GOARCH {
+			want = c.want
+			break
+		}
+	}
+	if want == "" {
+		t.Fatalf("host triple %s/%s is not one of the six release targets; extend the table above", runtime.GOOS, runtime.GOARCH)
+	}
+	if got := Asset(); got != want {
 		t.Errorf("Asset() = %q, want %q — Asset must name the build it is compiled into", got, want)
 	}
 }
