@@ -155,11 +155,18 @@ func newListCmd() *cobra.Command {
 				return nil
 			}
 
-			// LEFT is measured against the thresholds hover DERIVED, and saying
-			// nothing about that is how a mode doing exactly what it promised
-			// reads as a defect: a user who set threshold = 80 and finds a row
-			// held to 93 has nothing to tell the two apart, and the listing is
-			// where an account gets chosen.
+			// Which window LEFT reports is chosen by the thresholds hover
+			// DERIVED, and saying nothing about that is how a mode doing exactly
+			// what it promised reads as a defect: a user who set threshold = 80
+			// and finds a row reported against a window held to 93 has nothing to
+			// tell the two apart, and the listing is where an account gets chosen.
+			//
+			// What hover moves here is that CHOICE, not the figure. LEFT is
+			// Headroom.Pct, which is 100 minus the reported window's utilization
+			// and has no threshold in it. The note used to say the number was
+			// measured against the derived thresholds, which would have a reader
+			// take LEFT = 11% as eleven points of margin on a row the same binary
+			// prints a threshold of 99 for.
 			//
 			// It sits here rather than beside the config read, past both empty
 			// returns, because it is a note about a COLUMN: printed above "No
@@ -169,7 +176,7 @@ func newListCmd() *cobra.Command {
 			// sentence about a column that document does not have.
 			if cfg.Hover {
 				fmt.Fprintln(cmd.ErrOrStderr(),
-					"note: hover is on; LEFT is measured against the thresholds hover derived per account, not against a value in config.toml. 'ccdad hover status' prints them.")
+					"note: hover is on; LEFT is how much of the window is left, and which window a row reports is chosen by the thresholds hover derived per account rather than by a value in config.toml. 'ccdad hover status' prints them.")
 			}
 
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)

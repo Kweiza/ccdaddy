@@ -847,6 +847,51 @@ func TestListSaysWhenItsNumbersCameFromHover(t *testing.T) {
 	}
 }
 
+// What hover moves in this table is the CHOICE of window, not the figure, and
+// the note has to say the true one. LEFT is Headroom.Pct -- 100 minus the
+// reported window's utilization -- and no threshold enters it.
+//
+// The test above pins that the note EXISTS and names LEFT. Neither of those
+// constrains what it claims, which is how a note saying the number was
+// "measured against the thresholds hover derived" stood while the same command
+// printed 38% for a window held to 99: a reader doing the subtraction the
+// sentence invited gets 61 points of margin that are not there.
+func TestTheHoverNoteDoesNotClaimLeftIsMeasuredAgainstAThreshold(t *testing.T) {
+	isolate(t)
+	freezeClock(t, listNow)
+	seedAccount(t, "u-1", "a@example.com")
+	seedUsageEntry(t, "u-1", usage.Entry{
+		FetchedAt: listNow.Add(-90 * time.Second),
+		Snapshot:  &usage.Snapshot{SevenDay: window(62, listNow.Add(2*time.Hour))},
+	})
+	if code, _, errOut, _ := runRoot(t, "config", "set", "hover", "true"); code != 0 {
+		t.Fatalf("config set hover true exited %v: %s", code, errOut)
+	}
+
+	_, stdout, errOut, _ := runRoot(t, "list")
+
+	// The arithmetic the note must not misdescribe: 100 - 62, with hover on and
+	// whatever threshold it derived. If LEFT were threshold-relative this cell
+	// would move when the threshold did; it does not, and that is the whole
+	// content of the correction.
+	if row := rowFor(t, stdout, "a@example.com"); !strings.Contains(row, "38%") {
+		t.Fatalf("LEFT is not 100 minus the window's utilization:\n%s", row)
+	}
+
+	// "measured against" is the specific false claim. A note that says the
+	// number is relative to a threshold is wrong however it spells it, so the
+	// assertion is on the shape of the claim rather than on one sentence.
+	for _, wrong := range []string{"LEFT is measured against", "measured against the thresholds"} {
+		if strings.Contains(errOut, wrong) {
+			t.Errorf("the note still claims LEFT is threshold-relative (%q):\n%s", wrong, errOut)
+		}
+	}
+	// It must still say what hover DID move, or it explains nothing.
+	if !strings.Contains(errOut, "which window") {
+		t.Errorf("the note does not say that hover chooses which window a row reports:\n%s", errOut)
+	}
+}
+
 // The note describes a COLUMN, so a listing that drew no table must not carry
 // it. Above "No accounts yet" it explains the provenance of numbers that are not
 // there, and the two sentences together read as though something was hidden.

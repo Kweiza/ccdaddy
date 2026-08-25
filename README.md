@@ -101,9 +101,12 @@ $ ccdad list --json
       }
     },
     "fleet": {
+      "accountsNeeded": 7,
+      "accountsNeededBy": "weekly",
+      "accountsUsable": 2,
+      "dryAt": "2026-08-25T20:53:44.285714285Z",
       "pointsLeft": 137,
-      "pointsTotal": 200,
-      "dryAt": "2026-08-25T20:53:44.285714285Z"
+      "pointsTotal": 200
     }
   }
 }
@@ -710,13 +713,14 @@ measured at the *upper* end of the band, for the same reason `holds` is: the
 figure has to be one that is provably enough, and being told to buy six and
 running dry on six is the failure worth being conservative about.
 
-Four forms, and no fifth:
+Five forms, and no sixth:
 
 | The fleet | The line |
 |---|---|
 | Is short | `5 usable, 9 needed to hold at this rate  (4 more)` |
 | Holds, with room to spare | `5 usable, 3 needed to hold at this rate  (2 to spare)` |
 | Holds exactly | `5 usable, 5 needed to hold at this rate` |
+| Needs more than the search will look for | `5 usable, more than 256 needed to hold at this rate` |
 | Has no basis to search from | `5 usable, ? needed  (not enough history)` |
 
 That last form is most of the page on a machine that has been recording for ten
@@ -849,11 +853,11 @@ a machine's logins rather than a repository's, so machine-wide is the honest
 default here. Running the installer twice is exit `3` and one entry; an entry
 pointing somewhere else is rewritten and both endpoints are printed.
 
-Fifteen tools, in four classes:
+Sixteen tools, in four classes:
 
 | Class | Tools | What it can do |
 |---|---|---|
-| read | `list`, `status`, `which`, `doctor`, `config_get` | Answers a question and changes nothing ccdad owns. Three of them may start the background daemon, and say so |
+| read | `list`, `status`, `which`, `doctor`, `config_get`, `runway` | Answers a question and changes nothing ccdad owns. Three of them may start the background daemon, and say so |
 | store | `enable`, `disable`, `alias`, `move`, `primary` | Writes ccdad's own account file. Never Claude Code's login |
 | credential | `switch` | Rewrites the live login. **Asks the person at the keyboard first**, through the client's own confirmation prompt, and refuses on a client that cannot ask |
 | daemon | `daemon_start`, `daemon_stop`, `daemon_restart`, `daemon_status` | Drives the background process, which outlives the session that started it |
@@ -1676,12 +1680,6 @@ This is printed by `ccdad --help` too. It is the one promise made before 1.0.
 
 Deliberate, and listed so you can tell a gap from a bug.
 
-- **The MCP server has no verb to start it.** `internal/mcpsrv` exists and
-  serves six read tools — `list`, `status`, `which`, `doctor`, `config_get` and
-  `runway` — alongside the account mutators and the daemon controls, but nothing
-  on the command line launches it, so it is reachable only from its own tests. The terminal dashboard, which used to
-  be listed here beside it, is written: run `ccdad` with no arguments, or `ccdad
-  tui`.
 - **No OS service integration.** The daemon manages itself — a detached
   process, a `flock` singleton, a pidfile, auto-started by any `ccdad` command.
   There is no launchd, systemd or Windows service unit in v1.
