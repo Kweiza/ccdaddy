@@ -69,8 +69,22 @@ func TestInstallSmokeVerifiesThePublishedSignature(t *testing.T) {
 	}
 	// Verifying against a key fetched from the same release would be a round
 	// trip: whatever signed it would be accepted by whatever shipped with it.
-	if strings.Contains(job, "releases/download/$TAG/ccdaddy.pub") {
-		t.Error("the key must come from the checkout, never from the release under test")
+	// Stated as a property of every -p in the job rather than as one URL,
+	// because the URL is not the only way to reach a downloaded key — and the
+	// first version of this test named the URL and was satisfied by
+	// `-p "$rel/ccdaddy.pub"`.
+	for _, line := range strings.Split(job, "\n") {
+		i := strings.Index(line, "-p ")
+		if i < 0 {
+			continue
+		}
+		key := strings.Fields(line[i+len("-p "):])
+		if len(key) == 0 {
+			continue
+		}
+		if strings.Contains(key[0], "$rel") || strings.Contains(key[0], "/rel/") {
+			t.Errorf("the key is read out of the download directory: %q — it must come from the checkout, never from the release under test", strings.TrimSpace(line))
+		}
 	}
 }
 
