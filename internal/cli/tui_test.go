@@ -428,8 +428,9 @@ func TestTheDashboardReadsThePackageClockAndNotASecondOne(t *testing.T) {
 //
 // Both terminals are stubbed present on purpose. That is the exact shape under
 // which a tuiOptions that resolved "auto" for itself would put stdin into raw
-// mode and block for up to two seconds waiting to be told what colour the
-// background is -- on the branch that opens a live program, which is the one
+// mode and block for up to four seconds waiting to be told what colour the
+// background is -- two per stdio end, both legs run -- on the branch that opens
+// a live program, which is the one
 // path in this binary that must never block, and never on the redirected branch
 // that the synchronous ask is actually scoped to. An implementation that
 // resolved would redden both rows below on the VALUE rather than by hanging,

@@ -639,9 +639,10 @@ func TestAnOptionsWithNoThemeStaysUnpaintedWhenTheTerminalAnswers(t *testing.T) 
 //
 // The seam is a package var because no test has a terminal, and what
 // DarkBackground does without one is precisely what must never happen inside
-// `go test` -- term.MakeRaw on stdin, and up to two seconds of waiting on a
-// terminal that answers nothing. The `asked` flag is half of every case: a
-// Render that queried unconditionally would spend two seconds resolving
+// `go test` -- term.MakeRaw on stdin, and up to four seconds of waiting on a
+// terminal that answers nothing, since lipgloss runs the query once per stdio
+// end at two seconds each. The `asked` flag is half of every case: a Render
+// that queried unconditionally would spend those four seconds resolving
 // `tui.theme = none`, and a Render that queried on nothing would leave every
 // light-terminal user on the dark palette with no way to find out.
 func TestTheOneShotPageResolvesAutoThroughTheBackgroundQuery(t *testing.T) {

@@ -144,10 +144,13 @@ func tuiOptions(cmd *cobra.Command) tui.Options {
 		// syscall answer, which is the only one of the three package tui could
 		// not have obtained for itself.
 		//
-		// Nothing in package tui reads any of them today. They are wired now so
-		// that the commit which paints with them changes rendering and nothing
-		// else, and so the code-page read is not left in the tree with no
-		// production caller.
+		// All three are read now, and by both halves of that package. glyphsFor
+		// turns GlyphSet and ConsoleUTF8 into the vocabulary the frame, the
+		// gauge and the state markers draw from; Theme reaches paletteFor on
+		// the one-shot page and again in newApp, where the live program is
+		// built. That they are read is what makes the paragraph above a rule
+		// with something at stake rather than a description of three unused
+		// fields.
 		Theme:       configuredTheme(cfg.TUITheme),
 		GlyphSet:    cfg.TUIGlyphs,
 		ConsoleUTF8: consoleUTF8(),

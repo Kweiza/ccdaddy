@@ -10,14 +10,18 @@ import (
 	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/Kweiza/ccdaddy/internal/theme"
 	"github.com/Kweiza/ccdaddy/internal/view"
 )
 
 // lipgloss v2's Render() emits truecolor whatever the destination is: the v1
 // global renderer that stripped it off a pipe is gone. One forgotten writer
 // therefore puts escape bytes into every redirected invocation and every CI
-// log, and nothing else in this repository would notice -- there is not one ESC
-// byte in the tree today.
+// log, and nothing else in this repository would notice. That was easy to see
+// when there was not one ESC byte in the tree; it is the harder case now that
+// list, status, doctor, the daemon summary and every screen of the dashboard
+// emit them by design, because a leak no longer stands out against a tree that
+// emits none -- it looks exactly like the surfaces that are working.
 func TestAColouredRenderReachesABufferWithNoEscapeBytes(t *testing.T) {
 	isolate(t)
 	var buf bytes.Buffer
@@ -84,6 +88,53 @@ func TestNoColorStripsEvenWhereColourWouldOtherwiseBeAllowed(t *testing.T) {
 	}
 	if w.Profile > colorprofile.ASCII {
 		t.Fatalf("NO_COLOR=1 left the profile at %v, which still carries colour", w.Profile)
+	}
+}
+
+// `tui.theme = auto` is answered from a DEFINITION and never from the terminal.
+// That is the rule that keeps a one-shot listing off a query which costs four
+// seconds on an emulator that ignores it -- two per stdio end, both legs run,
+// once per process, and every one of these commands is its own process.
+//
+// The whole vocabulary is in the table and not auto alone, because the defect
+// this replaces was not "auto is wrong", it was "one spelling of five reached
+// for a runtime answer while the other four did not". A fix that special-cased
+// auto and left `dark` resolving through a terminal question would block just
+// the same, and the row that would catch it is the row that looks redundant.
+//
+// Dark is the answer because dark is what the query itself returns when it
+// declines to ask, which the redirected dashboard page and an interactive one
+// inside a multiplexer both already take. One default, defined once, is what
+// stops three surfaces on the same terminal from disagreeing about what nobody
+// answered.
+//
+// This says what gets PRINTED. The syntax walk in appearance_test.go says the
+// query is not reached, and neither test subsumes the other: a package that
+// resolved auto to Light would pass the walk, and a package that asked the
+// terminal and was told dark would pass this.
+func TestTheConfiguredThemeResolvesWithoutAskingTheTerminal(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want theme.Name
+	}{
+		{"no [tui] table at all, which is the default nobody changes", "", theme.Dark},
+		{"auto, spelled out", "[tui]\ntheme = \"auto\"\n", theme.Dark},
+		{"dark", "[tui]\ntheme = \"dark\"\n", theme.Dark},
+		{"light", "[tui]\ntheme = \"light\"\n", theme.Light},
+		{"ansi", "[tui]\ntheme = \"ansi\"\n", theme.ANSI},
+		{"none", "[tui]\ntheme = \"none\"\n", theme.None},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolate(t)
+			if tc.body != "" {
+				writeConfig(t, tc.body)
+			}
+			if got := resolvePalette().Name(); got != tc.want {
+				t.Fatalf("the configured theme resolved to the %v palette, want %v: a listing "+
+					"answers auto with the defined dark default and asks nothing", got, tc.want)
+			}
+		})
 	}
 }
 

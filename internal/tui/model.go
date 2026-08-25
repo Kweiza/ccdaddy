@@ -216,9 +216,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// theme.Auto, and this is the only place the interactive page ever
 		// learns it is running on a light terminal. Package cli does not
 		// resolve it first, deliberately: resolving in tuiOptions would put the
-		// two-second raw-mode query on the branch where both stdio ends are
+		// four-second raw-mode query on the branch where both stdio ends are
 		// terminals, which is the interactive one, and that is the single path
-		// this program must never block on.
+		// this program must never block on. Four rather than two because
+		// lipgloss runs the query twice, against stdin and then against stdout,
+		// at a two-second timeout each and with no guard for the two being one
+		// file.
 		//
 		// Auto is the only name this answer may move, and the guard is not an
 		// optimisation. theme.Pick hands back the named theme for every other

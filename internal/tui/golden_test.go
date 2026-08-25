@@ -51,15 +51,24 @@ var wroteGolden = map[string]string{}
 
 // checkGolden compares a rendered page against the file that holds it.
 //
-// The page is stripped of escape sequences before the comparison, and today
-// that is a no-op: nothing in this package emits one yet, which the two
-// escape-byte tests still assert directly. It is here because the colours
-// arrive next and a fixture that carried SGR bytes would pin the exact
-// truecolor spelling of every role, so that a palette change nobody meant to
-// review would arrive as seven unreadable diffs. Stripping is what lets the
-// goldens keep answering the question they were written for -- where does every
-// character sit -- and leaves the question of which role was painted on which
-// cell to the tests that ask it directly.
+// The page is stripped of escape sequences before the comparison, and on the
+// seven pages that reach here the strip still removes nothing -- but the reason
+// has moved, and the difference is the whole of what a reader needs to know.
+// It is no longer that this package emits no escape byte: it emits them on five
+// screens now, which TestTheNoneThemeEmitsNoEscapeBytesAndTheDarkThemeDoes
+// asserts in both directions. What is true is narrower and is a fact about the
+// FIXTURE: every page compared here is built by fixtureModel, fixtureModel
+// carries the None palette, and under None every role answers NoColor and
+// Palette.Style hands back a style with no foreground set, so there is nothing
+// for ansi.Strip to take off.
+//
+// The strip stays, and it is not dead weight. It is what stops that narrow fact
+// from being load-bearing: a fixture rebuilt under any other palette would pin
+// the exact truecolor spelling of every role into testdata, and a palette
+// change nobody meant to review would then arrive as seven unreadable diffs.
+// Stripping is what lets the goldens go on answering the question they were
+// written for -- where does every character sit -- and leaves which role was
+// painted on which cell to the tests that ask that directly.
 func checkGolden(t *testing.T, name, page string) {
 	t.Helper()
 	got := ansi.Strip(page)

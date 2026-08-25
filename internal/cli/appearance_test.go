@@ -54,34 +54,44 @@ func TestTheConsoleAnswerReachesTheOptionsUnchanged(t *testing.T) {
 }
 
 // Nothing in this package asks the terminal what colour its background is, and
-// this walks the package's own syntax to say so rather than trusting anyone to
+// nothing in it reaches for an answer somebody else asked for either. This
+// walks the package's own syntax to say so rather than trusting anyone to
 // remember.
 //
-// That call is the most expensive line available to this binary: it puts stdin
-// into raw mode with a deferred restore, writes a request to stdout, and blocks
-// for up to two seconds on a terminal that answers neither it nor the identity
-// query it falls back to. On Windows it goes further and opens the attached
-// console explicitly when stdio is redirected, rather than declining -- so it
-// will cheerfully interrogate a console the invocation is not writing one byte
-// to, and whatever guard exists is the caller's alone.
+// That call is the most expensive line available to this binary. It puts stdin
+// into raw mode with a deferred restore, writes a request to stdout, and waits
+// -- and it does that TWICE. lipgloss's BackgroundColor loops over stdin and
+// then stdout and runs both legs even where the two are the same file, with no
+// in == out guard, at a two-second timeout each. FOUR seconds, on any terminal
+// that answers neither the request nor the identity query it falls back to. On
+// Windows it goes further and opens the attached console explicitly when stdio
+// is redirected, rather than declining -- so it will cheerfully interrogate a
+// console the invocation is not writing one byte to, and whatever guard exists
+// is the caller's alone.
 //
-// It is paid ONCE PER PROCESS, and it is paid through the seam internal/tui
-// exports rather than by anyone writing the call themselves. tui.DarkBackground
-// is a sync.OnceValue wrapping the query with the guard it needs -- terminals
-// required on both ends of stdio, dark returned when it declined to ask -- and
-// package cli reaches that one answer through the darkBackground var in
-// color.go, which POINTS AT it. The event loop does not pay it at all, because
-// the reply reaches a live program as a message.
+// DarkBackground is on the list beside the library's own names, and it is the
+// entry with a measurement behind it. This package used to reach it, through a
+// var in color.go that pointed at package tui's sync.OnceValue, on the argument
+// that one cache beats two. The argument refuted itself on its own numbers: a
+// cache is once per PROCESS, and every one-shot listing IS its own process, so
+// nothing was ever cached and the full price was paid per invocation. Measured
+// on a silent pty under the default `tui.theme = auto`: `list` 4.06 s,
+// `status` 4.08 s, `doctor` 4.10 s, `daemon status` 4.07 s, against 0.08 s
+// apiece with `theme = none`. Those commands take the defined dark default now
+// -- the same answer the query itself gives when it declines to ask -- and
+// `tui.theme = light` is the one line that answers for a reader who wants
+// otherwise.
 //
-// That is why this ban survives package cli acquiring a caller. It never
-// forbade package cli from KNOWING the answer; it forbids package cli from
-// ASKING for it a second time. Two queries in two packages are two caches and
-// two two-second budgets: a process that rendered a listing and then a
-// dashboard would pay four seconds, and a second one written here would land on
-// whichever branch its author happened to guard -- most likely the branch where
-// both ends are terminals, which is the live-program path that must never
-// block, leaving the redirected path it was scoped to never asking. One query,
-// behind one guard, in the package that owns the terminal.
+// So the ban is no longer only "do not write the query here". It is "do not go
+// and get that answer at all", and the two halves are not the same rule: the
+// first stops a second raw-mode call landing on whichever branch its author
+// happened to guard, most likely the branch where both ends are terminals,
+// which is the live-program path that must never block; the second stops a
+// listing paying four seconds through somebody else's cache for a colour no
+// pipe was ever going to show. The interactive dashboard still resolves auto,
+// and still does it the only way that costs nothing: the reply reaches a live
+// program as a message its event loop already asked for, in package tui, where
+// every clause of the query's guard is stated as well.
 //
 // This is a walk and not a grep because the naive form is not the only form: a
 // query parked in a package-level value and reached through the name reads as
@@ -93,6 +103,7 @@ func TestNothingInThisPackageAsksTheTerminalWhatColourItsBackgroundIs(t *testing
 		"HasDarkBackground":  true,
 		"HasLightBackground": true,
 		"BackgroundColor":    true,
+		"DarkBackground":     true,
 	}
 
 	entries, err := os.ReadDir(".")
@@ -117,10 +128,12 @@ func TestNothingInThisPackageAsksTheTerminalWhatColourItsBackgroundIs(t *testing
 			if !is || !forbidden[s.Sel.Name] {
 				return true
 			}
-			t.Errorf("%s reaches %s: the terminal's background colour is queried once per "+
-				"process, by tui.DarkBackground, under the guard that lives with it -- a "+
-				"caller in this package reaches that answer through the darkBackground var "+
-				"in color.go and never asks again", fset.Position(s.Pos()), s.Sel.Name)
+			t.Errorf("%s reaches %s: a one-shot listing takes the defined dark default and "+
+				"asks nothing. The query costs four seconds on a terminal that does not "+
+				"answer -- two per stdio end, both legs run -- and it is paid once per "+
+				"process, which for these commands is once per invocation. The interactive "+
+				"dashboard resolves auto from a message in package tui, at no cost at all",
+				fset.Position(s.Pos()), s.Sel.Name)
 			return true
 		})
 	}
