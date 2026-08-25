@@ -50,11 +50,10 @@ const (
 	// maxAssetBytes: every released ccdad is between eleven and fourteen
 	// megabytes on all six targets, built with the flags
 	// scripts/build-release.sh passes. This is not a fit — it is the ceiling
-	// that stops a hostile
-	// origin streaming into a directory on the user's PATH forever. It is far
-	// above the measurement deliberately: the digest decides whether the bytes
-	// are right, and a cap chosen from today's size would refuse a future
-	// target that links cgo.
+	// that stops a hostile origin streaming into a directory on the user's PATH
+	// forever. It is far above the measurement deliberately: the digest decides
+	// whether the bytes are right, and a cap chosen from today's size would
+	// refuse a future target that links cgo.
 	maxAssetBytes = 256 << 20
 
 	// metadataTimeout bounds the redirect and the two sub-kilobyte fetches. It
@@ -661,9 +660,12 @@ func updateReasonCode(reason string) ExitCode {
 // really the argv this passes. The child carries ChildEnvVar as well, so the
 // recursion guard would hold even if that ever changed.
 func smokeStaged(parent context.Context, staged stagedAsset, want release.Version) error {
-	path, intact := staged.pathIfIntact()
-	if !intact {
-		return fmt.Errorf("%s is no longer the file whose checksum was compared", staged.path)
+	// Re-checked here as well as at the replacement, because this step EXECUTES
+	// the file: running bytes whose digest was never compared is the worse half
+	// of the same mistake.
+	path, err := staged.pathIfIntact()
+	if err != nil {
+		return fmt.Errorf("re-checking %s before running it: %w", staged.path, err)
 	}
 	ctx, cancel := context.WithTimeout(parent, smokeTimeout)
 	defer cancel()
@@ -708,10 +710,13 @@ func smokeStaged(parent context.Context, staged stagedAsset, want release.Versio
 // this package. It stops the change nobody meant to make; it does not stop the
 // one somebody sets out to make.
 //
-// Both reads FAIL CLOSED into refusals this command already has — the smoke
-// run's and the replacement's — rather than inventing a reason for a state that
-// is unreachable in shipped code, which would then have to live in
-// updateReasonCode and in every failure-arm assertion.
+// Both reads FAIL CLOSED into arms this command already has: `smoke`, which is
+// a refusal at exit 4, and `replace-failed`, which is a failure at exit 1. The
+// two halves of updateReasonCode's split, and named that way because in this
+// command's vocabulary a refusal is 4 and calling both of them refusals would
+// be wrong about one. Neither read invents a reason of its own, which would
+// have to live in updateReasonCode and in every failure-arm assertion for a
+// state unreachable in shipped code.
 //
 // The cost is two extra passes over the asset. Measured with crypto/sha256 over
 // a file the size a released ccdad actually is — the six targets build to
@@ -737,37 +742,60 @@ func acceptStaged(path, gotHash, wantHash string) (stagedAsset, bool) {
 	return stagedAsset{path: path, digest: wantHash}, true
 }
 
+// errStagedAltered is the staged file no longer hashing to what was compared
+// against the signed row.
+//
+// It is a sentinel of its own because it is NOT the same news as a file that
+// would not open or would not read. Those are ordinary machine conditions — the
+// staging directory swept out from under the run, a permission lost — and the
+// commonest of them by far is the file simply being gone. Reporting one of
+// those in these words would accuse the user's machine of the single thing this
+// whole command exists to detect, and would do it on the most likely path.
+var errStagedAltered = errors.New("the staged file no longer hashes to the checksum that was compared")
+
 // pathIfIntact hands back the path only while the file is still the bytes the
 // signed row named.
 //
-// The zero stagedAsset is never intact: its path is "", which does not open.
-// So a caller that ignored acceptStaged's second return still cannot get a path
-// out of the handle it got.
-func (a stagedAsset) pathIfIntact() (string, bool) {
+// An open or a read that failed is returned as it came: the operating system
+// has already said which file and why, in words this function cannot improve
+// on. Only a digest that does not match is errStagedAltered.
+//
+// The zero stagedAsset is never intact, twice over: os.Open("") fails on every
+// platform, and a 64-character lowercase hex digest cannot equal "". So a
+// caller that ignored acceptStaged's second return still cannot get a path out
+// of the handle it got.
+func (a stagedAsset) pathIfIntact() (string, error) {
 	f, err := os.Open(a.path)
 	if err != nil {
-		return "", false
+		return "", err
 	}
 	defer f.Close()
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
-		return "", false
+		return "", fmt.Errorf("reading %s: %w", a.path, err)
 	}
 	if hex.EncodeToString(h.Sum(nil)) != a.digest {
-		return "", false
+		return "", errStagedAltered
 	}
-	return a.path, true
+	return a.path, nil
 }
 
 // replaceInto moves the staged file over target, re-checking it first.
 //
-// The check is here rather than at the call site so that replaceBinary — which
-// is platform-split and takes two plain paths — cannot be reached with anything
-// but a file whose digest has just been compared.
+// The check sits at the top of this function rather than at the call site so
+// that the ordinary path cannot skip it. It is NOT unreachable otherwise:
+// replaceBinary is a package-level function taking two plain paths, and any
+// file in package cli can call it directly — which is the same limit the
+// stagedAsset header states about the type. This stops the change nobody meant
+// to make.
+//
+// The error keeps the shape replaceBinary's own has, naming the file that could
+// not be moved and where it was going, because a user whose update failed needs
+// both and the wrapped cause alone carries at most one.
 func (a stagedAsset) replaceInto(target string) error {
-	path, intact := a.pathIfIntact()
-	if !intact {
-		return fmt.Errorf("%s is no longer the file whose checksum was compared", a.path)
+	path, err := a.pathIfIntact()
+	if err != nil {
+		return fmt.Errorf("moving %s into place at %s: %w", a.path, target, err)
 	}
 	return replaceBinary(path, target)
 }
