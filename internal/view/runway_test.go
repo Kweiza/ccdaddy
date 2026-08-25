@@ -630,3 +630,113 @@ func TestTheSeparatorAFoldedLineEndsOnIsInsideTheMeasurement(t *testing.T) {
 		t.Errorf("the fold changed the clauses: %q", c)
 	}
 }
+
+// The runway line is not the only one in that block too wide for the terminal
+// it is read on. Measured on the same 80-column run that filed the runway
+// defect: Mode: 124 display columns, Hover: 100. They fold in the terminal for
+// the same reason and read badly for a different one -- these are prose, so a
+// fold lands mid-sentence rather than mid-value.
+//
+// The two wraps are separate functions on purpose and this test is where that
+// shows: this one breaks at spaces, which is right for a sentence and would be
+// wrong for the runway line, where the space inside `2026-08-26 08:19 KST` is
+// not a place a break may land.
+func TestALabelledLineWrapsUnderItsOwnLabel(t *testing.T) {
+	const width = 80
+	line := "Mode:    recovery  (every account is over its threshold; empty accounts last, " +
+		"then soonest reset inside an hour, then slack)"
+
+	got := view.WrapLabeled(line, width)
+	lines := strings.Split(got, "\n")
+	if len(lines) < 2 {
+		t.Fatalf("a %d-column line did not wrap at %d:\n%s", ansi.StringWidth(line), width, got)
+	}
+	for i, l := range lines {
+		if w := ansi.StringWidth(l); w > width {
+			t.Errorf("line %d is %d columns, over the %d it was given:\n%s", i, w, width, got)
+		}
+		if strings.HasSuffix(l, " ") {
+			t.Errorf("line %d ends in whitespace, which is a fold the reader pays for twice: %q", i, l)
+		}
+	}
+	if !strings.HasPrefix(lines[0], "Mode:    ") {
+		t.Errorf("the label did not stay on the first line:\n%s", got)
+	}
+	// Nine columns: the label field Daemon:, Active:, Hover: and Mode: are all
+	// padded to. A continuation flush left reads as another label.
+	for i, l := range lines[1:] {
+		if !strings.HasPrefix(l, "         ") || strings.HasPrefix(l, "          ") {
+			t.Errorf("continuation %d is not hung under the value: %q", i+1, l)
+		}
+	}
+	// Nothing added, nothing dropped, nothing reordered. The words are the
+	// sentence; where the breaks fall is this function's business and may move.
+	if got, want := strings.Join(strings.Fields(got), " "), strings.Join(strings.Fields(line), " "); got != want {
+		t.Errorf("the wrap changed the words:\ngot  %q\nwant %q", got, want)
+	}
+}
+
+// The spacing inside a labelled line is not decoration: `recovery  (every ...`
+// separates the answer from the parenthetical that explains it, exactly as the
+// runway line's separator does. A wrapper that normalises whitespace loses that
+// distinction everywhere the line still fits.
+func TestALabelledWrapKeepsTheSpacingInsideALine(t *testing.T) {
+	line := "Mode:    consume-first  (spending perishable weekly quota before it expires)"
+	if got := view.WrapLabeled(line, 200); got != line {
+		t.Errorf("a line that fits was rewritten:\n\t%q", got)
+	}
+	// And when it does wrap, the run that stays inside a line stays intact.
+	got := view.WrapLabeled(line, 60)
+	if !strings.Contains(got, "consume-first  (spending") {
+		t.Errorf("the double space between the mode and its reason was normalised:\n%s", got)
+	}
+}
+
+// A word wider than the room gets its own line and overflows, for the reason
+// the runway line's clauses do: a cut through a value produces a shorter value
+// rather than a visible signal that something did not fit. A path, a URL and an
+// account label are all one word and all longer than a narrow terminal.
+func TestAWordWiderThanTheTerminalOverflowsRatherThanBeingCut(t *testing.T) {
+	const word = "/home/somebody/.local/share/ccdad/an-account-label-nobody-expected"
+	got := view.WrapLabeled("Active:  "+word+" (work)", 30)
+	if !strings.Contains(got, word) {
+		t.Fatalf("the word was cut:\n%s", got)
+	}
+	if strings.Contains(got, "..") && !strings.Contains(word, "..") {
+		t.Errorf("a truncation cue leaked in:\n%s", got)
+	}
+}
+
+// Every writer that is not a terminal reports no width, and there the line has
+// to come out exactly as its builder spelled it. So does a terminal too narrow
+// to hold the label, where wrapping into no room produces a column of words.
+func TestAnUnknownWidthLeavesALabelledLineExactlyAsItWas(t *testing.T) {
+	line := "Hover:   on  (every threshold derived per account; 'ccdad hover status' prints the numbers in force)"
+	for _, width := range []int{0, -1, 9, 4} {
+		if got := view.WrapLabeled(line, width); got != line {
+			t.Errorf("WrapLabeled(width=%d) =\n\t%q\nwant\n\t%q", width, got, line)
+		}
+	}
+	// A line with no label at all is not something this block produces, but a
+	// wrap that mangled one would be a silent way to find out.
+	if got := view.WrapLabeled("no label here", 0); got != "no label here" {
+		t.Errorf("an unlabelled line at width 0 = %q", got)
+	}
+}
+
+// Columns, not bytes. Nothing these three builders spell is multi-byte today,
+// which is exactly why this is pinned here rather than left to be discovered:
+// the account label on the Active: line is whoever's mail address it is, and
+// the notice text is whatever the notice said.
+func TestALabelledWrapCountsDisplayColumnsAndNotBytes(t *testing.T) {
+	// Six characters, twelve bytes, six columns: the label field's own width.
+	const value = "ÄÖÜäöü"
+	line := "Active:  " + value + " x"
+	width := len("Active:  ") + ansi.StringWidth(value+" x")
+	if len(line) == ansi.StringWidth(line) {
+		t.Fatalf("the fixture is pure ASCII, so it rules nothing out: %q", line)
+	}
+	if got := view.WrapLabeled(line, width); got != line {
+		t.Errorf("a line that fits by columns was wrapped:\n\t%q", got)
+	}
+}
