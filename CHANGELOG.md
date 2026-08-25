@@ -42,6 +42,113 @@ by `uuid` or `alias`.
   checksums the same attacker controls. The daemon is stopped first and started
   again from the new binary; inside a `ccdad run` session it is stopped and left
   stopped, and the next ccdad command in a normal shell brings it back.
+- **Two more keys for what the terminal output looks like, `tui.theme` and
+  `tui.glyphs`.** They join `mcp_switch_without_elicitation` as keys that
+  govern a surface rather than the engine, and hover honours both rather than
+  deriving them — hover is a policy for which account is live, and nothing
+  about how a screen is painted follows from that. `tui.theme` takes `auto`,
+  `dark`, `light`, `ansi` or `none`; `tui.glyphs` takes `auto`, `unicode` or
+  `ascii`. Both default to `auto`.
+
+  `theme=auto` asks the terminal for its background colour once per process
+  and resolves to `dark` or `light`. It never resolves to `ansi`: fitting a
+  24-bit colour to whatever a lower-colour terminal can show already happens
+  on every render, so a terminal that cannot carry the full palette gets a
+  downgrade of the same design rather than a different one. `ansi` is the
+  opt-in for a user who would rather their own terminal theme owned the
+  sixteen standard slots, and `none` emits no escape byte at all — the same
+  thing `NO_COLOR` gets on a terminal, and what `ccdad mcp` gets
+  unconditionally, regardless of what the environment says.
+
+  `glyphs=auto` resolves to `ascii` on a Windows console whose output code
+  page is not 65001, and whenever `RUNEWIDTH_EASTASIAN` is set — that
+  variable makes eight of the frame and gauge glyphs two columns wide, and
+  every page here is drawn to a measured width. An explicit value wins in
+  both directions: `unicode` on a console that cannot carry it ships
+  mojibake, and that is the user's own choice to make; `ascii` on a UTF-8
+  console ships the plain `+--+` frame on request. Detection only ever
+  resolves `auto`.
+
+### Changed
+
+- **The dashboard and every one-shot table are in colour now, and the frame,
+  the gauges and the state markers are drawn with box-drawing characters.**
+  This is the deliverable, not a side effect: `tui.theme` defaults to `auto`,
+  which resolves to the dark palette on the overwhelming majority of
+  terminals, and the glyph set changes under every existing user whose
+  console can carry UTF-8. `ccdad config set tui.theme none` and
+  `ccdad config set tui.glyphs ascii` put the old page back, separately.
+
+  Two written comments held the plain page in place for several releases and
+  both were false. The first said lipgloss v2 has no auto-adaptive fallback;
+  what v2 actually removed is the global renderer, so the background-darkness
+  boolean has to be threaded in from the program rather than consulted
+  implicitly by a style, and every piece needed to do that was already in the
+  pinned versions. The second said this repository emits no non-ASCII byte.
+  Measured over string literals in shipped non-test Go, it emits 106 em
+  dashes and 4 ellipses from 101 lines, most of them out of `ccdad doctor`
+  and `ccdad run`. The real rule was package-local to `internal/tui` and
+  `internal/view`, enforced by golden fixtures comparing bytes, and it is
+  written down in `CONTRIBUTING.md` now rather than inferred from a diff.
+
+  **The layout did not move.** The width ladder and the height ladder keep
+  every rung and every constant they had, because the fixtures compare the
+  coloured render with its escape sequences stripped, and that strip is
+  byte-for-byte identical to the uncoloured render — through the styled
+  table, a bordered frame around styled content, and the keybar. The one
+  setting that would widen these glyphs to two columns selects the ASCII set
+  instead of widening the frame.
+
+  **Colour is never the only thing carrying a distinction.** Every state
+  keeps a glyph everywhere and keeps its word wherever the STATE column
+  survives — which is not everywhere: `ccdad list` and `ccdad status` carry
+  no STATE column at any width, so the exhausted verdict is not painted at
+  all rather than painted where nothing else says it. That is the reason
+  there is no daltonised theme here, and the reason it is a defensible one:
+  under simulated protanopia, deuteranopia and tritanopia at full severity,
+  every pair of the five state roles stays at least 10 dE00 apart in both
+  palettes. Deuteranopia binds tightest, at 10.25, and it clears without the
+  glyph's help.
+
+  **`text/tabwriter` is gone from the one-shot tables that used it**,
+  replaced by a column helper that measures display width instead of rune
+  count. This is not cosmetic and it is the reason the change is larger than
+  a palette: tabwriter cannot see an SGR escape, so the moment one cell is
+  coloured its column is padded for the escape bytes too, and the wrong way
+  round — a styled cell counts as wide and gets less padding than the bare
+  cell beside it. Measured on three ACCOUNT cells of which only the header
+  was styled: the column came out 9 display columns wide on the header row
+  and 31 on both data rows, a destroyed table, and in the piped case rather
+  than the terminal one, because colour is stripped downstream of the
+  layout — a redirected invocation got the wrecked padding with none of the
+  colour that would explain it. The replacement is also East-Asian-width
+  aware, which fixes a second, older bug: measured on an ACCOUNT column
+  holding a fifteen-character ASCII address beside a three-character Hangul
+  name, it starts the next column at display column 17 on both rows;
+  tabwriter started it at 17 on the ASCII row and 20 on the Hangul one,
+  hanging that row three columns right of the ones around it.
+
+  **On Windows the console code page is read and never written.**
+  `GetConsoleOutputCP` operates on the process's attached console, not on a
+  handle, so a redirected `ccdad list > out.txt` launched from a console
+  still has one — and setting the code page would reinterpret every
+  non-ASCII byte every other process writes to that window for the rest of
+  its life. A Korean user on `chcp 949` running `ccdad status` once would get
+  mojibake out of everything else in that shell afterwards, including
+  whatever `ccdad run` execs. So a non-UTF-8 console gets the ASCII glyphs
+  and keeps its code page. A successful read proves capability and not
+  outcome: a legacy conhost with a raster font draws boxes at 65001 exactly
+  as it did at 437, which is what `tui.glyphs=ascii` is for; a redirected
+  file that would have carried Unicode perfectly well is the cost of the
+  fallback going the other way, and `tui.glyphs=unicode` overrides it by
+  name.
+
+  Nothing machine-readable changed. `--json` bypasses the colour writer on
+  every command that has one, `ccdad mcp` resolves the `none` theme at the
+  command tree's root rather than by being excluded by name — `NO_COLOR`
+  does not beat `CLICOLOR_FORCE` off a terminal, so an environment carrying
+  the force variable would otherwise have put escape bytes into MCP tool
+  results — and stderr stays plain everywhere.
 
 ### Fixed
 

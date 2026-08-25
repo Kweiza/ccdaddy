@@ -579,6 +579,8 @@ hover                           true      file     honoured
 mcp_switch_without_elicitation  false     default  honoured
 credit.threshold                80        default  overriding
 credit.max_auto_spend           0         default  honoured
+tui.theme                       auto      default  honoured
+tui.glyphs                      auto      default  honoured
 ```
 
 One `window_threshold` entry is still read for something other than its number.
@@ -915,6 +917,15 @@ fixed order, and below 35 columns or 3 rows it says what it needs instead of
 drawing a page nobody can read. With stdout redirected it renders once and
 exits 0, so `ccdad tui > page.txt` is a snapshot rather than a hang.
 
+It is in colour, and the frame, the gauges and the state markers are drawn
+with box-drawing characters. If yours shows boxes where those should be — a
+font without them, or a Windows console on a code page other than 65001 —
+`ccdad config set tui.glyphs ascii` puts the plain `+--+` frame and the
+`[#####.....]` gauges back, and `ccdad config set tui.theme none` turns
+colour off without touching the glyphs. `NO_COLOR` does the same for one run.
+Nothing on the page needs colour to be read: every state keeps its own glyph
+at every width, and its word wherever the STATE column still fits.
+
 ## Claude Code's own tools
 
 `ccdad mcp` serves ccdad's commands to Claude Code over the Model Context
@@ -1115,6 +1126,8 @@ hover                           false     default
 mcp_switch_without_elicitation  false     default
 credit.threshold                80        default
 credit.max_auto_spend           0         default
+tui.theme                       auto      default
+tui.glyphs                      auto      default
 ```
 
 `credit.max_auto_spend` defaults to `0`, and that is the point: an account
@@ -1163,6 +1176,34 @@ for the machine. On a client that *can* ask, you are still asked even with the
 key granted: it is a fallback, not an override. Hover honours it rather than
 deriving it, because hover is a policy for the switching engine and a mode that
 supplied this one would be deciding that unattended also means unconfirmed.
+
+`tui.theme` and `tui.glyphs` are the other two keys here that govern a surface
+instead of the engine. They change what `ccdad tui`, bare `ccdad`, and the
+`status`, `list`, `doctor` and `daemon status` tables look like, and nothing
+about which account gets switched to or when.
+
+`tui.theme` takes `auto`, `dark`, `light`, `ansi` or `none`, and defaults to
+`auto` — which asks the terminal for its background colour once per process
+and resolves to `dark` or `light`. It never resolves to `ansi`, because
+fitting a 24-bit palette to a 256- or 16-colour terminal happens on every
+render anyway; `ansi` is the opposite choice, for a user who would rather
+their own terminal theme owned the sixteen standard slots. `none` emits no
+escape byte at all.
+
+`tui.glyphs` takes `auto`, `unicode` or `ascii`, and also defaults to `auto`
+— which resolves to `ascii` on a Windows console whose output code page is
+not 65001, and whenever `RUNEWIDTH_EASTASIAN` is set, because that variable
+makes eight of the frame and gauge glyphs two columns wide and every page
+here is drawn to a measured width. ccdad **reads** that code page and never
+sets it: the output code page belongs to a console shared with every other
+process attached to it, and changing it for one `ccdad status` would garble
+every non-ASCII byte anything else wrote to that window afterwards. An
+explicit value wins in both directions — `unicode` on a console that cannot
+carry it ships mojibake, and that is your call to make.
+
+Neither key is read by the daemon, which draws nothing, and neither reaches
+`ccdad mcp`, whose tool results are plain text by construction rather than by
+exclusion. `--json` is unaffected on every command that has it.
 
 Keys this version does not recognise are left alone rather than deleted, so a
 file written by a newer release survives an older one. Trying to *set* an
