@@ -1183,12 +1183,39 @@ instead of the engine. They change what `ccdad tui`, bare `ccdad`, and the
 about which account gets switched to or when.
 
 `tui.theme` takes `auto`, `dark`, `light`, `ansi` or `none`, and defaults to
-`auto` — which asks the terminal for its background colour once per process
-and resolves to `dark` or `light`. It never resolves to `ansi`, because
-fitting a 24-bit palette to a 256- or 16-colour terminal happens on every
-render anyway; `ansi` is the opposite choice, for a user who would rather
-their own terminal theme owned the sixteen standard slots. `none` emits no
-escape byte at all.
+`auto`. What `auto` resolves to depends on which surface is asking, and the
+split is deliberate rather than an inconsistency to route around.
+
+An owned `ccdad tui` — stdin and stdout both terminals — really does ask: it
+requests the background colour once, through bubbletea's own
+`tea.BackgroundColorMsg`, asynchronously, and keeps drawing with the dark
+default while the reply is in flight. A terminal that never answers just
+keeps that default; nothing in the dashboard blocks waiting for the question.
+
+`ccdad list`, `status`, `doctor`, `daemon status`, and `ccdad tui` with either
+stream redirected never ask at all — `auto` resolves straight to `dark`, full
+stop. The reason is the query's cost, not a shortcut taken for its own sake:
+lipgloss's background probe runs against stdin and then against stdout, two
+seconds each with no guard for the two being the same file, so a terminal
+that answers neither OSC 11 nor DA1 makes the ask cost four seconds flat. A
+live dashboard can absorb that once, because it asks on the way in and then
+runs for minutes — four seconds disappears into a program a user is about to
+sit in front of. A listing that would otherwise print in thirty milliseconds
+cannot, and caching the answer does not rescue it: each one-shot command is
+its own process, so a per-process cache is filled and thrown away inside the
+single invocation it was meant to amortise across. Measured against a silent
+pty: `ccdad list` cost 4.05s with the query still in place, 0.03s without it.
+Dark without asking is the only version of `auto` that keeps these commands
+at their ordinary speed.
+
+The cost of that default is a listing that opens dark-toned on a light
+terminal for anyone who never opens `config.toml`. `ccdad config set
+tui.theme light` is the one-line, once-per-machine fix; `dark`, `ansi` and
+`none` are there for the same reason, on the same command. `tui.theme` never
+resolves to `ansi` on its own, because fitting a 24-bit palette to a 256- or
+16-colour terminal happens on every render anyway; `ansi` is the opposite
+choice, for a user who would rather their own terminal theme owned the
+sixteen standard slots. `none` emits no escape byte at all.
 
 `tui.glyphs` takes `auto`, `unicode` or `ascii`, and also defaults to `auto`
 — which resolves to `ascii` on a Windows console whose output code page is
