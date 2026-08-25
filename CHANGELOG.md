@@ -16,6 +16,16 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`usage.PaceOf` no longer reports an exhaustion in the past for a very
+  distant projection.** The seconds were converted to a `time.Duration` before
+  being multiplied by `time.Second`, so the product overflowed `int64` past
+  ~9.22e9 s and wrapped: a seven-day window 65% elapsed at 0.003% used reported
+  exhaustion in **1857** and `willLastToReset = false`, the exact opposite of the
+  truth, and that answer reaches a switch decision through the pre-emptive rule.
+  It saturates now.
+
 ## [0.6.0] — 2026-08-25
 
 Three things the design spec named "extras, in order: TUI, MCP, GUI widget" —

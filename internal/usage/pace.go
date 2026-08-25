@@ -1,6 +1,9 @@
 package usage
 
-import "time"
+import (
+	"math"
+	"time"
+)
 
 // Every window ccdad knows a length for carries an expected-versus-actual
 // reading once enough of that window has run, plus a linear projection that
@@ -24,6 +27,12 @@ import "time"
 // ordinary spent-account path long before an extrapolation would have had
 // anything left to add.
 const paceSuppressionDivisor = 7
+
+// maxDurationSeconds is the largest whole number of seconds a time.Duration can
+// carry, which is what a projection has to be held under before it is converted.
+// It is written as the division the conversion inverts, so the bound cannot
+// drift from the arithmetic it bounds.
+const maxDurationSeconds = int64(math.MaxInt64) / int64(time.Second)
 
 // windowLength is how long a window runs, from the bundle's own windowSeconds
 // table: 18000 for five_hour and 604800 for every seven-day window. A scoped
@@ -203,7 +212,20 @@ func PaceOf(name WindowName, w Window, now time.Time) Pace {
 		if remaining < 0 {
 			remaining = 0
 		}
-		p.exhaustionAt = now.Add(time.Duration(remaining/perSecond) * time.Second)
+		// Clamped BEFORE the conversion. time.Duration(secs) * time.Second
+		// overflows int64 once secs passes about 9.22e9, and an overflow here
+		// does not merely lose precision -- it wraps the instant into the PAST
+		// and flips willLastToReset to false, which is the opposite of the
+		// truth and reaches a switch decision through projectedExhaustion. A
+		// seven-day window 65% elapsed at 0.003% used reported an exhaustion in
+		// 1857 before this clamp. Saturating instead says "further out than this
+		// type can express", which every reader of the field already treats as
+		// "not soon".
+		secs := remaining / perSecond
+		if max := float64(maxDurationSeconds); secs > max {
+			secs = max
+		}
+		p.exhaustionAt = now.Add(time.Duration(secs) * time.Second)
 		p.willLastToReset = !p.exhaustionAt.Before(reset)
 		p.hasProjection = true
 	}
