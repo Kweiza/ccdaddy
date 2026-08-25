@@ -63,9 +63,11 @@ type Headroom struct {
 	// three figures describe ONE window deliberately, so that Slack is always
 	// Threshold minus that window's utilization.
 	Binding usage.WindowName
-	// Floor names the WEEKLY window the account is already past — the weekly
-	// with the least slack among those below zero — and HasFloor is whether
-	// there is one at all.
+	// Floor names the WEEKLY window that has to clear before this account is
+	// usable again, and HasFloor is whether there is one at all. Two kinds
+	// qualify — one past the number it was given, and one with nothing left in
+	// it — and an empty one wins over a merely-tripped one. HeadroomFor's own
+	// loop spells out why it takes both.
 	//
 	// It is the REPORTING axis, and it is separate from Binding because it
 	// answers a different question. Binding is what is tightest right now; Floor
@@ -259,7 +261,7 @@ func HeadroomOf(s *usage.Snapshot, t Thresholds) Headroom {
 // iteration.
 func HeadroomFor(s *usage.Snapshot, model string, t Thresholds) Headroom {
 	out := Headroom{}
-	floorSlack := 0.0
+	floorSlack, floorEmpty := 0.0, false
 	for _, w := range bindingWindows(s, model, t) {
 		pct, ok := w.Percent()
 		if !ok {
@@ -283,8 +285,37 @@ func HeadroomFor(s *usage.Snapshot, model string, t Thresholds) Headroom {
 		// The weekly floor is picked up in the SAME pass rather than in a second
 		// one over a second window set, so there is no way for a window to be
 		// admitted to one and narrowed out of the other.
-		if slack < 0 && usage.IsWeekly(w.Name) && (!out.HasFloor || slack < floorSlack) {
-			out.Floor, floorSlack, out.HasFloor = w.Name, slack, true
+		//
+		// Two ways to be a floor, and the second is purely ADDITIVE: every
+		// window that qualified before still qualifies, so a user who set a
+		// weekly threshold of their own sees exactly what they saw.
+		//
+		//   - PAST THE NUMBER IT WAS GIVEN. This is the configured-threshold
+		//     reading and it is the right one there: a threshold a person typed
+		//     IS the line past which they consider the account unusable, so a
+		//     weekly at 85 under a threshold of 80 has to clear before the
+		//     account is theirs to use again.
+		//   - EMPTY. Under hover no threshold is a stop line -- it is a pace
+		//     target -- so "past it" says nothing about whether the account is
+		//     usable, and the test above answers on a figure that moves with the
+		//     SIZE OF THE POOL. Worse, a pace target runs past 100 late in a
+		//     window, so a weekly with nothing left in it reported POSITIVE
+		//     slack and was not a floor at all. That is the case this arm is
+		//     for, and it is the one that matters: a blown weekly holds the
+		//     account back until it rolls, whatever any threshold says.
+		empty := pct >= 100
+		if (slack < 0 || empty) && usage.IsWeekly(w.Name) {
+			// An EMPTY floor outranks one that is merely past its number,
+			// whatever the slack says. Least-slack alone is the wrong key once
+			// the two arms can both fire: a blown weekly reporting +8 of slack
+			// against a pace target above 100 would lose to one five points past
+			// its threshold and still holding quota, and it is the blown one
+			// that decides when the account comes back.
+			better := !out.HasFloor || (empty && !floorEmpty) ||
+				(empty == floorEmpty && slack < floorSlack)
+			if better {
+				out.Floor, floorSlack, floorEmpty, out.HasFloor = w.Name, slack, empty, true
+			}
 		}
 	}
 	return out

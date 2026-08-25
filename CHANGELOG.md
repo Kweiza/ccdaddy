@@ -42,6 +42,18 @@ by `uuid` or `alias`.
   account would report positive slack, land in the roomy tier ahead of every
   account that actually has quota, and, because `allOver` is built from this
   predicate, take recovery mode away from the whole pool.
+- **A weekly window with nothing left in it counts as the account's floor even
+  when its pace target is above 100.** `Headroom.Floor` — the weekly that has to
+  clear before an account is usable again — was selected by "past the number it
+  was given", which under hover is a *pace* target rather than a stop line, and
+  one that runs past 100 late in a window. So a blown weekly reported positive
+  slack and was not a floor at all, and `RecoversAt` then named whichever window
+  happened to bind: an account whose week is gone for thirteen hours was reported
+  as coming back in forty-five minutes, on the strength of a five-hour window.
+  The test is now "past its number **or** empty", which is purely additive — every
+  window that was a floor still is, so a configured `window_threshold` behaves
+  exactly as before — and an empty floor outranks a merely-tripped one, because
+  it is the empty one that decides when the account returns.
 - **`usage.PaceOf` no longer reports an exhaustion in the past for a very
   distant projection.** The seconds were converted to a `time.Duration` before
   being multiplied by `time.Second`, so the product overflowed `int64` past
