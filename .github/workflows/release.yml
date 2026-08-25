@@ -1,10 +1,17 @@
-# Publish a release: six bare binaries, a sums file, and a build-provenance
-# attestation over both.
+# Publish a release: six bare binaries, a sums file, a minisign signature over
+# that sums file, and a build-provenance attestation over all of them.
 #
-# Enforced sha256sums plus keyless attestation are the ENTIRE v1 authenticity
-# story - there is no minisign and no self-update to fall back on
-# - so an attestation that is not produced beside the upload leaves a release
-# with integrity and no authenticity, and nothing downstream notices.
+# Three claims, and they are independent rather than layered. sha256sums.txt
+# says the bytes are intact; sha256sums.txt.minisig says those checksums were
+# signed by this repository's release key, for the release its trusted comment
+# names; the attestation says the binaries came out of this workflow. The
+# signature is the one a human can check offline, with the stock minisign tool
+# and the public key committed at the repository root as ccdaddy.pub.
+#
+# Nothing in a shipped ccdad consumes the signature yet, and it is published
+# first on purpose: a verifier baked into a binary can only ever look at
+# releases cut after it, so the signature has to exist before anything requires
+# one.
 #
 # Nothing here publishes until .github/workflows/ci.yml has gone green on the
 # tagged commit: see the gate job below.
@@ -120,6 +127,36 @@ jobs:
           VERSION: ${{ needs.gate.outputs.version }}
           COMMIT: ${{ github.sha }}
         run: scripts/build-release.sh
+
+      # Between the build and the attestation, and both halves of that matter.
+      # After the build because sha256sums.txt has to be final; before the
+      # attestation because `subject-path: dist/*` then covers the signature
+      # too. `gh release upload "$TAG" dist/*` picks the new file up unchanged.
+      #
+      # The signer is a package main in this repository rather than a
+      # `minisign -S` line, and the reason is a flag: the stock tool signs
+      # PREHASHED unless it is given -l, and a prehashed signature is one every
+      # published ccdad refuses. Fixing the mode in internal/relsign removes the
+      # command line the flag could be dropped from -- and removes the need for
+      # minisign to be installed on this runner at all.
+      #
+      # It is not called from scripts/build-release.sh, so a developer can run
+      # that script with no secret and get byte-identical output.
+      #
+      # There is no `if:` guard and no soft failure. A release that published
+      # unsigned because a secret was missing would split the fleet in a way
+      # that is only visible in users' update logs. A fork pushing a v* tag
+      # without the secret gets a red publish job; that is stated and accepted.
+      - name: Sign the checksums
+        env:
+          # Through the environment, never interpolated into the run: block --
+          # the same rule the gate job states above for the tag name.
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          TAG: ${{ github.ref_name }}
+        # -p is the key committed in this tree: the signer verifies what it just
+        # produced against it, so a repository secret that is not the key ccdad
+        # carries fails here rather than on every user's machine.
+        run: go run ./scripts/minisign-sign -m dist/sha256sums.txt -t "$TAG" -o dist/sha256sums.txt.minisig -p ccdaddy.pub
 
       # Attest what is about to be uploaded, in this job, before uploading.
       # Attesting a rebuilt copy produces digests that `gh attestation verify`
