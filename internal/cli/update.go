@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/Kweiza/ccdaddy/internal/buildinfo"
+	"github.com/Kweiza/ccdaddy/internal/daemon"
 	"github.com/Kweiza/ccdaddy/internal/release"
 	"github.com/Kweiza/ccdaddy/internal/relsign"
 )
@@ -508,20 +511,29 @@ func runUpdate(cmd *cobra.Command, opts updateOptions) error {
 				updateDistrust+".", asset, want.Tag(), wantHash, gotHash))
 	}
 
+	// Step 18 executes the binary that is about to become ccdad. Two of the six
+	// published assets have never been executed by any CI leg — the install
+	// smoke never runs ccdad-darwin-amd64 or ccdad-windows-arm64, because
+	// GitHub's macOS runners are arm64 and its Windows runners are amd64 — and
+	// this is the first thing that hands them out unattended. A
+	// wrong-architecture asset fails to exec, which is exactly the failure this
+	// catches. It proves the asset runs on the machine about to use it; it
+	// proves nothing about whether it was ever tested.
+	if err := smokeStaged(cmd.Context(), staged, want); err != nil {
+		return rep.emit(cmd, opts.asJSON, ExitBlocked, "smoke",
+			fmt.Sprintf("The downloaded %s will not run on this machine: %v\nNothing was replaced.", asset, err))
+	}
+
 	// ---------------------------- BEGIN PLACEHOLDER ----------------------------
 	// Everything from this comment down to END PLACEHOLDER is scaffolding, and
-	// it is meant to be deleted WHOLE — comment, blank assignment and return
-	// together. Whoever writes the rest of the algorithm (running the staged
-	// file once, stopping the daemon, moving the file over target and starting
-	// the daemon again) replaces this block; leaving the comment behind would
-	// leave it sitting above live code, describing something that is no longer
-	// true.
+	// it is meant to be deleted WHOLE — comment and return together. Whoever
+	// writes the rest of the algorithm (stopping the daemon, moving the staged
+	// file over target and starting the daemon again from it) replaces this
+	// block; leaving the comment behind would leave it sitting above live code,
+	// describing something that is no longer true.
 	//
 	// It exists so this command RUNS while the rest is still being written: it
-	// reports what it has verified and stops. The blank assignment is what
-	// keeps the compiler quiet about a value only the later steps read. Nothing
-	// asserts on any of it.
-	_ = staged
+	// reports what it has verified and stops. Nothing asserts on it.
 	return rep.emit(cmd, opts.asJSON, ExitOK, "", "")
 	// ----------------------------- END PLACEHOLDER -----------------------------
 }
@@ -534,6 +546,38 @@ func upgradeHint(owner string) string {
 		return "'scoop update ccdad'"
 	}
 	return "'brew upgrade ccdad'"
+}
+
+// smokeStaged runs the staged binary once and requires it to name the release
+// that was asked for.
+//
+// Nothing the child does can start a daemon. Measured against cobra 1.10.2:
+// Command.execute answers the --version flag and returns before it walks up to
+// any persistent pre-run, so neither the auto-start hook nor the scoped-session
+// refusal fires — and TestCobraAnswersVersionBeforeAnyPersistentHook is what
+// holds that up rather than this comment, with
+// TestTheSmokeRunPassesNothingButTheVersionFlag holding up that --version is
+// really the argv this passes. The child carries ChildEnvVar as well, so the
+// recursion guard would hold even if that ever changed.
+func smokeStaged(parent context.Context, staged string, want release.Version) error {
+	ctx, cancel := context.WithTimeout(parent, smokeTimeout)
+	defer cancel()
+
+	c := exec.CommandContext(ctx, staged, "--version")
+	c.Env = append(os.Environ(), daemon.ChildEnvVar+"=1")
+	out, err := c.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("`%s --version` did not run: %w", staged, err)
+	}
+	// Contains rather than an exact match, because the version line also
+	// carries a commit. This is a smoke test and not a verification: the digest
+	// has already decided that these are the published bytes, and what is being
+	// asked here is whether they run at all.
+	if !strings.Contains(string(out), want.String()) {
+		return fmt.Errorf("`%s --version` printed %q, which does not name %s",
+			staged, strings.TrimSpace(string(out)), want)
+	}
+	return nil
 }
 
 // updateDistrust is the shared body of the DISTRUST remedy: what a user is told

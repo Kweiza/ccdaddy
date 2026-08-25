@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -19,8 +20,11 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/spf13/cobra"
+
 	"github.com/Kweiza/ccdaddy/internal/buildinfo"
 	"github.com/Kweiza/ccdaddy/internal/credhome"
+	"github.com/Kweiza/ccdaddy/internal/daemon"
 	"github.com/Kweiza/ccdaddy/internal/release"
 	"github.com/Kweiza/ccdaddy/internal/relsign"
 )
@@ -1510,5 +1514,119 @@ func TestUpdateDoesNotFoldTheCaseOfADigest(t *testing.T) {
 	}
 	if got := decodePayload(t, stdout)["reason"]; got != "shape" {
 		t.Errorf("reason = %v, want %q — an uppercase digest is not a checksum row at all", got, "shape")
+	}
+}
+
+// The staged binary is run before it is installed, because two of the six
+// published assets have never been executed by any CI leg: the install smoke
+// never runs the darwin/amd64 or the windows/arm64 one, since GitHub's macOS
+// runners are arm64 and its Windows runners are amd64. `ccdad update` is the
+// first thing that hands those out unattended, and a wrong-architecture asset
+// fails to exec — which is exactly what this catches.
+func TestUpdateRefusesAStagedBinaryThatWillNotRun(t *testing.T) {
+	target, _, _ := updateWorld(t, "0.6.1", "v0.7.0")
+	t.Setenv(updateAssetRoleEnv, updateAssetRoleFail)
+
+	code, stdout, _, _ := runRoot(t, "update", "--json")
+	if code != ExitBlocked {
+		t.Fatalf("exit = %d, want %d", code, ExitBlocked)
+	}
+	if got := decodePayload(t, stdout)["reason"]; got != "smoke" {
+		t.Errorf("reason = %v, want %q", got, "smoke")
+	}
+	assertBinaryUntouched(t, target)
+}
+
+// It must exit 0 AND name the release that was asked for. A binary that runs
+// and is some other ccdad is not the one that was verified.
+func TestUpdateRefusesAStagedBinaryThatNamesAnotherRelease(t *testing.T) {
+	target, _, _ := updateWorld(t, "0.6.1", "v0.7.0")
+	t.Setenv(updateAssetRoleEnv, "ccdad version 9.9.9 (deadbeef)")
+
+	code, stdout, _, _ := runRoot(t, "update", "--json")
+	if code != ExitBlocked {
+		t.Fatalf("exit = %d, want %d", code, ExitBlocked)
+	}
+	if got := decodePayload(t, stdout)["reason"]; got != "smoke" {
+		t.Errorf("reason = %v, want %q", got, "smoke")
+	}
+	assertBinaryUntouched(t, target)
+}
+
+// smokeRunRecord runs one update and hands back how the staged binary was
+// actually invoked, as the child itself saw it.
+//
+// Nothing in-process can answer that: the smoke run is a real exec, and the two
+// things worth pinning about it — the environment it was handed and the
+// argument vector it was given — exist only inside that child.
+func smokeRunRecord(t *testing.T) updateAssetRecord {
+	t.Helper()
+	seen := filepath.Join(t.TempDir(), "childrecord")
+	t.Setenv(updateAssetRoleEnvFile, seen)
+
+	if code, _, _, top := runRoot(t, "update"); code != ExitOK {
+		t.Fatalf("exit = %d, want 0 (%s)", code, top)
+	}
+	raw, err := os.ReadFile(seen)
+	if err != nil {
+		t.Fatalf("the staged binary was never run: %v", err)
+	}
+	var rec updateAssetRecord
+	if err := json.Unmarshal(raw, &rec); err != nil {
+		t.Fatalf("decoding %q: %v", raw, err)
+	}
+	return rec
+}
+
+// The child is marked with the recursion guard, belt to the braces of cobra's
+// own short-circuit below.
+func TestTheSmokeRunMarksTheChildAsCcdadsOwn(t *testing.T) {
+	_, _, _ = updateWorld(t, "0.6.1", "v0.7.0")
+
+	if got := smokeRunRecord(t).ChildEnv; got != "1" {
+		t.Errorf("%s = %q in the child, want %q", daemon.ChildEnvVar, got, "1")
+	}
+}
+
+// And the argv, which is the half the cobra argument below is only sound FOR.
+// `--version` is the one flag cobra answers before it walks up to a persistent
+// hook; a smoke run that passed `run` or `daemon start` instead would start
+// something on a machine that only asked whether a download executes.
+func TestTheSmokeRunPassesNothingButTheVersionFlag(t *testing.T) {
+	_, _, _ = updateWorld(t, "0.6.1", "v0.7.0")
+
+	if got := smokeRunRecord(t).Argv; !slices.Equal(got, []string{"--version"}) {
+		t.Errorf("the staged binary was run as %q, want exactly %q", got, []string{"--version"})
+	}
+}
+
+// The braces themselves: cobra answers --version before it walks up to any
+// persistent hook, so the smoke run cannot fire the auto-start hook or the
+// scoped-session refusal. This is verified rather than assumed — a smoke run
+// that spawned a daemon would be a worse bug than the one it prevents.
+func TestCobraAnswersVersionBeforeAnyPersistentHook(t *testing.T) {
+	isolate(t)
+	root := NewRootCmd()
+	inner := root.PersistentPreRunE
+	fired := 0
+	root.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		fired++
+		return inner(cmd, args)
+	}
+
+	var out, errOut, topBuf bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&errOut)
+	root.SetArgs([]string{"--version"})
+	if code := ExecuteWith(root, &topBuf); code != ExitOK {
+		t.Fatalf("`ccdad --version` exit = %d (%s)", code, topBuf.String())
+	}
+	if fired != 0 {
+		t.Fatalf("the persistent hook fired %d time(s) for --version. `ccdad update` runs the "+
+			"staged binary with exactly that flag on the strength of it NOT firing, and a smoke "+
+			"run that spawns a daemon is a worse bug than the one it prevents", fired)
+	}
+	if !strings.Contains(out.String(), buildinfo.String()) {
+		t.Errorf("--version printed %q, want it to name %q", out.String(), buildinfo.String())
 	}
 }
