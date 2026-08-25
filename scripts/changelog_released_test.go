@@ -303,6 +303,46 @@ func splice(t *testing.T, body, after, line string) string {
 	return ""
 }
 
+// spliceBefore is splice, inserting above the matched line instead of below it.
+// It is what puts a fixture at the END of a section rather than the start.
+func spliceBefore(t *testing.T, body, before, block string) string {
+	t.Helper()
+	lines := strings.Split(body, "\n")
+	for i, l := range lines {
+		if strings.Contains(l, before) {
+			out := append([]string{}, lines[:i]...)
+			out = append(out, strings.Split(block, "\n")...)
+			return strings.Join(append(out, lines[i:]...), "\n")
+		}
+	}
+	t.Fatalf("no line containing %q in CHANGELOG.md", before)
+	return ""
+}
+
+// A `## ` heading that is not a release still ends the section above it, and
+// what it introduces belongs to no release. Without this the prose under a
+// `## Notes` written at the bottom of `## [0.7.0]` would be digested as part of
+// 0.7.0, and editing it later would report a released section as changed.
+//
+// The rule was stated in a comment here before anything held it: removing it
+// left every other test in this file green.
+func TestANonReleaseHeadingEndsTheSectionAboveIt(t *testing.T) {
+	body := changelog(t)
+	before := digestsByVersion(releasedSections(body))
+
+	edited := spliceBefore(t, body, "## [0.6.1]",
+		"## Notes\n\nSomething written under a heading that is not a release.\n")
+	after := digestsByVersion(releasedSections(edited))
+
+	if after["0.7.0"] != before["0.7.0"] {
+		t.Errorf("`## [0.7.0]` swallowed the prose under a `## Notes` heading below it: %s -> %s",
+			before["0.7.0"], after["0.7.0"])
+	}
+	if after["0.6.1"] != before["0.6.1"] {
+		t.Errorf("`## [0.6.1]` moved: %s -> %s", before["0.6.1"], after["0.6.1"])
+	}
+}
+
 // The accident itself, in one line. `012d65b0` did it with 117.
 func TestABulletDroppedIntoAReleasedSectionChangesItsDigest(t *testing.T) {
 	body := changelog(t)
