@@ -509,3 +509,208 @@ func TestUpdatePayloadCarriesBothPathsOncePathsAreKnown(t *testing.T) {
 		t.Error("payload carries no installDir, and the paths are known")
 	}
 }
+
+func TestUpdateResolvesTheLatestTag(t *testing.T) {
+	_, f, _ := updateWorld(t, "0.6.1", "v0.7.0")
+
+	code, stdout, _, top := runRoot(t, "update", "--json")
+	if code != ExitOK {
+		t.Fatalf("exit = %d, want 0 (%s)", code, top)
+	}
+	payload := decodePayload(t, stdout)
+	for k, want := range map[string]any{
+		"tag":             "v0.7.0",
+		"targetVersion":   "0.7.0",
+		"currentVersion":  "0.6.1",
+		"resolvedLatest":  true,
+		"updateAvailable": true,
+	} {
+		if got := payload[k]; got != want {
+			t.Errorf("%s = %v, want %v", k, got, want)
+		}
+	}
+	if !slices.Contains(f.asked(), "/latest") {
+		t.Errorf("origin saw %v, want a request for /latest", f.asked())
+	}
+}
+
+// A pinned tag is the user's answer, so discovery is not run at all — one fewer
+// request, and one fewer thing an origin gets to decide.
+func TestUpdateWithAPinnedVersionNeverAsksWhichIsLatest(t *testing.T) {
+	_, f, sign := updateWorld(t, "0.6.1", "v0.7.0")
+	// The trusted comment binds the release, so the pair has to name the tag
+	// being asked for. Without this the run is refused as `wrong-release`,
+	// which is correct behaviour and not what this test is about.
+	signFor(t, f, sign, "v0.9.0")
+
+	code, stdout, _, top := runRoot(t, "update", "--version", "v0.9.0", "--json")
+	if code != ExitOK {
+		t.Fatalf("exit = %d, want 0 (%s)", code, top)
+	}
+	payload := decodePayload(t, stdout)
+	if got := payload["tag"]; got != "v0.9.0" {
+		t.Errorf("tag = %v, want %q", got, "v0.9.0")
+	}
+	if got := payload["resolvedLatest"]; got != false {
+		t.Errorf("resolvedLatest = %v, want false — the tag came from the flag", got)
+	}
+	if slices.Contains(f.asked(), "/latest") {
+		t.Errorf("origin saw %v; a pinned tag must not ask which release is latest", f.asked())
+	}
+}
+
+// Normalized once, at step 0, so both spellings are one request all the way
+// down to the trusted comment the signature binds.
+func TestUpdateNormalizesThePinnedVersion(t *testing.T) {
+	for _, spelling := range []string{"1.2.3", "v1.2.3", "  v1.2.3  "} {
+		t.Run(spelling, func(t *testing.T) {
+			_, f, sign := updateWorld(t, "0.6.1", "v0.7.0")
+			signFor(t, f, sign, "v1.2.3")
+			_, stdout, _, _ := runRoot(t, "update", "--version", spelling, "--json")
+			if got := decodePayload(t, stdout)["tag"]; got != "v1.2.3" {
+				t.Errorf("tag = %v, want %q", got, "v1.2.3")
+			}
+		})
+	}
+}
+
+// Exit 3 rather than 5: "the world is already how you asked" is what 3 means in
+// this binary, and it is the reading `ccdad update --check && ccdad update`
+// depends on.
+func TestUpdateIsAlreadyCurrent(t *testing.T) {
+	_, f, _ := updateWorld(t, "0.7.0", "v0.7.0")
+
+	code, stdout, _, _ := runRoot(t, "update", "--json")
+	if code != ExitNothingToDo {
+		t.Fatalf("exit = %d, want %d", code, ExitNothingToDo)
+	}
+	payload := decodePayload(t, stdout)
+	if got := payload["reason"]; got != "already-current" {
+		t.Errorf("reason = %v, want %q", got, "already-current")
+	}
+	if got := payload["updateAvailable"]; got != false {
+		t.Errorf("updateAvailable = %v, want false", got)
+	}
+	if slices.Contains(f.asked(), "/download/v0.7.0/sha256sums.txt") {
+		t.Errorf("origin saw %v; nothing should be downloaded once the answer is known", f.asked())
+	}
+}
+
+// A stamp of "v0.6.1" is a real shape: build-release.sh strips the v only in
+// the branch that DERIVES a version, so an explicit VERSION=v0.6.1 is stamped
+// with it. Compared as strings, that computes "vv0.6.1" and misses.
+func TestUpdateComparesParsedVersionsNotStrings(t *testing.T) {
+	_, _, _ = updateWorld(t, "v0.6.1", "v0.6.1")
+
+	code, stdout, _, _ := runRoot(t, "update", "--json")
+	if code != ExitNothingToDo {
+		t.Fatalf("exit = %d, want %d — a v-prefixed stamp is still the same version", code, ExitNothingToDo)
+	}
+	if got := decodePayload(t, stdout)["reason"]; got != "already-current" {
+		t.Errorf("reason = %v, want %q", got, "already-current")
+	}
+}
+
+// The second lock on a tag that arrived over an unauthenticated channel: an
+// origin that chooses what to serve can answer with an OLD release whose bugs
+// are public, and every signature check on that pair would pass.
+func TestUpdateRefusesARollbackUnlessTheUserAskedForOne(t *testing.T) {
+	target, f, sign := updateWorld(t, "0.7.0", "v0.6.1")
+	// The origin is serving a genuine v0.6.1 release, signature and all: the
+	// refusal below is about the VERSION being older and nothing else.
+	signFor(t, f, sign, "v0.6.1")
+
+	code, stdout, _, _ := runRoot(t, "update", "--json")
+	if code != ExitBlocked {
+		t.Fatalf("exit = %d, want %d", code, ExitBlocked)
+	}
+	if got := decodePayload(t, stdout)["reason"]; got != "rollback" {
+		t.Errorf("reason = %v, want %q", got, "rollback")
+	}
+	assertBinaryUntouched(t, target)
+
+	// The same tag, named by the user, is not refused. Naming it IS the consent.
+	code, _, _, top := runRoot(t, "update", "--version", "v0.6.1", "--json")
+	if code != ExitOK {
+		t.Fatalf("exit = %d with --version, want 0 (%s)", code, top)
+	}
+}
+
+// --version <what I am on> is how a user re-fetches and re-verifies a binary
+// they suspect, which is why step 7 is skipped when the tag is explicit.
+func TestUpdateWithTheRunningVersionPinnedRefetches(t *testing.T) {
+	_, _, _ = updateWorld(t, "0.7.0", "v0.7.0")
+
+	code, stdout, _, top := runRoot(t, "update", "--version", "v0.7.0", "--json")
+	if code != ExitOK {
+		t.Fatalf("exit = %d, want 0 (%s)", code, top)
+	}
+	if got := decodePayload(t, stdout)["updateAvailable"]; got != false {
+		t.Errorf("updateAvailable = %v, want false — nothing newer exists, and the run happens anyway", got)
+	}
+}
+
+// "I cannot compare these" is not "you are up to date".
+//
+// Four dot-separated fields, which ParseTag refuses outright. A hyphenated
+// pre-release such as 2026.08.25-nightly would NOT do: that one parses, and the
+// test would then be exercising the ordinary newer-than path.
+func TestUpdateWithAnUnparseableRunningVersionDoesNotClaimCurrency(t *testing.T) {
+	_, _, _ = updateWorld(t, "2026.08.25.1", "v0.7.0")
+
+	code, _, _, top := runRoot(t, "update", "--json")
+	if code != ExitOK {
+		t.Fatalf("exit = %d, want 0 (%s) — an unreadable running version falls through to the download", code, top)
+	}
+}
+
+// Discovery that cannot produce a candidate at all is exit 1, not 4: there is
+// no release yet to have an opinion about.
+func TestUpdateResolveFailures(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		arrange func(f *fakeRelease)
+	}{
+		{"a 200 where a redirect was expected", func(f *fakeRelease) { f.setTag("") }},
+		{"a location with no tag segment", func(f *fakeRelease) { f.setLocation("/releases/latest") }},
+		{"a last segment that is not a version", func(f *fakeRelease) { f.setTag("latest") }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			target, f, _ := updateWorld(t, "0.6.1", "v0.7.0")
+			c.arrange(f)
+
+			code, stdout, _, _ := runRoot(t, "update", "--json")
+			if code != ExitFailure {
+				t.Fatalf("exit = %d, want %d", code, ExitFailure)
+			}
+			payload := decodePayload(t, stdout)
+			if got := payload["reason"]; got != "resolve-failed" {
+				t.Errorf("reason = %v, want %q", got, "resolve-failed")
+			}
+			if _, ok := payload["tag"]; ok {
+				t.Errorf("payload carries a tag (%v) for a discovery that produced none", payload)
+			}
+			assertBinaryUntouched(t, target)
+		})
+	}
+}
+
+// assertBinaryUntouched is the property every refusal in this file shares: the
+// old binary is exactly as it was, and nothing was staged beside it.
+func assertBinaryUntouched(t *testing.T, target string) {
+	t.Helper()
+	body, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("the binary at %s is gone: %v", target, err)
+	}
+	if string(body) != "the old ccdad\n" {
+		t.Errorf("the binary at %s was replaced", target)
+	}
+	leftovers, err := filepath.Glob(filepath.Join(filepath.Dir(target), ".ccdad-update.*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(leftovers) != 0 {
+		t.Errorf("staging directories left behind: %v", leftovers)
+	}
+}
