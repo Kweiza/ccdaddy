@@ -16,6 +16,17 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-08-25
+
+Hover promised to hold every account to the share of its own window that had
+elapsed, and a clamp on the derived threshold meant it did not. The clamp landed
+on whichever account was furthest through its own window -- the one whose quota
+expires soonest, and the one the pace target exists to send work to -- and above
+it the elapsed term was thrown away and the pool was ordered on raw utilization
+instead. Measured on three accounts resetting one, three and five days out,
+taking the clamp off halved how far the fleet drifted from its own pace lines,
+on fewer switches rather than more.
+
 ### Fixed
 
 - **Hover no longer clamps a derived threshold, and that is what makes it hold
