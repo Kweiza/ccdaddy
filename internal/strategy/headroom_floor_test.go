@@ -1,11 +1,18 @@
 package strategy
 
 import (
+	"math"
 	"testing"
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
+
+// nearly compares a figure this file states as a worked example to three
+// decimals. The thresholds here are 100/6 arithmetic, so an exact literal would
+// be a transcription of float64's rounding rather than of the example, and a
+// reader could not check it against the sentence above it.
+func nearly(got, want float64) bool { return math.Abs(got-want) < 0.001 }
 
 // A weekly window with nothing left in it is what holds an account back, and
 // under hover it says so on NO threshold at all: the pace target of a window far
@@ -40,6 +47,22 @@ func TestABlownWeeklyIsAFloorEvenWithAPaceTargetAbove100(t *testing.T) {
 	if !r.Headroom.HasFloor || r.Headroom.Floor != usage.WindowSevenDay {
 		t.Fatalf("Floor = %q (has %v), want seven_day: it is the window with nothing left in it",
 			r.Headroom.Floor, r.Headroom.HasFloor)
+	}
+	// The two pairs, side by side, because that is the whole point of carrying
+	// the second one: Binding and Floor are different windows here, and a
+	// reader that resolves the window through Floor and the number through
+	// Slack reads a weekly with nothing left in it as three points of room.
+	if r.Headroom.Binding != usage.WindowFiveHour {
+		t.Fatalf("Binding = %q, want five_hour: 3.667 of slack is tighter than the weekly's 8.667",
+			r.Headroom.Binding)
+	}
+	if !nearly(r.Headroom.Slack, 3.667) || !nearly(r.Headroom.Threshold, 101.667) {
+		t.Errorf("binding pair = (%v, %v), want (3.667, 101.667): five_hour 98%% used against 85 elapsed plus a 16.667 share",
+			r.Headroom.Slack, r.Headroom.Threshold)
+	}
+	if !nearly(r.Headroom.FloorSlack, 8.667) || !nearly(r.Headroom.FloorThreshold, 108.667) {
+		t.Errorf("floor pair = (%v, %v), want (8.667, 108.667): seven_day 100%% used against 92 elapsed plus the same share",
+			r.Headroom.FloorSlack, r.Headroom.FloorThreshold)
 	}
 	// The five-hour window resets in 45 minutes and the weekly in over thirteen
 	// hours. Recovery has to name the second.

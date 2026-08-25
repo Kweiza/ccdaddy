@@ -119,6 +119,66 @@ func (r Row) Reported() (usage.NamedWindow, bool) {
 	return usage.NamedWindow{}, false
 }
 
+// ReportedSlack is the slack and the threshold of the window Reported()
+// resolves: the FLOOR pair when there is a floor, the BINDING pair otherwise.
+// It mirrors ReportedName exactly, and that is the whole of its job.
+//
+// It exists because Headroom.Slack and Headroom.Threshold are assigned off the
+// binding window in one statement, while ReportedName answers the floor when
+// there is one -- so a caller pairing the two is describing two windows and
+// saying it is describing one. The bar a dashboard draws is filled from
+// Reported(); colouring it from Headroom.Slack paints a weekly with nothing
+// left in it as roomy, on the strength of a five-hour window that happened to
+// bind three points under its own pace target.
+//
+// Nothing is derived a second time here. Both pairs were computed by
+// strategy.HeadroomFor in one pass over one window set, and this only chooses
+// between them: recomputing slack from a utilization and a threshold read back
+// out of the snapshot would be a second implementation of the ranking's own
+// arithmetic, living in the package whose entire reason for existing is that
+// there is ONE of each of these.
+//
+// ok mirrors Reported()'s ok rather than Headroom.Known, and the two can
+// differ: headroom is perfectly well known for an account whose reported name
+// is missing from AllWindows. A row rendering "?" for its window while showing
+// a slack figure beside it invites a reader to trust a number about a window
+// that is not on the screen.
+func (r Row) ReportedSlack() (slack, threshold float64, ok bool) {
+	if _, ok := r.Reported(); !ok {
+		return 0, 0, false
+	}
+	if r.Headroom.HasFloor {
+		return r.Headroom.FloorSlack, r.Headroom.FloorThreshold, true
+	}
+	return r.Headroom.Slack, r.Headroom.Threshold, true
+}
+
+// Empty is whether some window this account carries has nothing left in it at
+// all, and whether that could be established.
+//
+// It is an ACCOUNT-level question and deliberately not a question about the
+// window this row happens to report. A blown FIVE-HOUR window can never be a
+// floor -- strategy admits a floor only for a window usage.IsWeekly answers
+// for -- so when a weekly binds on slack the reported window is that weekly and
+// the empty five-hour window is invisible to anything that only looks at what
+// the bar draws. The live shape: five_hour at 100% used and 95% elapsed beside
+// seven_day at 40% used and 30% elapsed. The weekly binds, there is no floor,
+// the bar reads 40%, and every window-level test on the reported window calls
+// the account healthy while it cannot serve a single prompt.
+//
+// It DELEGATES rather than restating the predicate, because "nothing left" is
+// not "past the number it was given": under hover a threshold is a pace target
+// and runs above 100 late in a window, so an empty window reports positive
+// slack. That distinction has exactly one implementation, in
+// strategy.OutOfQuota, and the daemon's own empty() delegates to it for the
+// same reason -- a second spelling is the copy that drifts, and this one would
+// drift where a user is looking.
+//
+// Three-valued for the reason the whole package is: an account nobody could
+// read is not an empty one, and folding that into a bare bool is the bug that
+// parked cswap's engine on the account that reset last.
+func (r Row) Empty() (empty, known bool) { return strategy.OutOfQuota(r.Headroom) }
+
 // Marker is the active-row marker: the character `status` and `list` both
 // already print in front of the IDX column.
 func (r Row) Marker() string {
