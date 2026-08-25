@@ -347,6 +347,10 @@ func coerce(key, value string) (any, error) {
 		return s.String(), nil
 	case keyProbeUnknown, keyHover, keyMCPSwitchWithoutElicitation:
 		return coerceBool(key, value)
+	case keyTUITheme:
+		return coerceName(key, value, validTheme)
+	case keyTUIGlyphs:
+		return coerceName(key, value, validGlyphs)
 	}
 	return nil, unknownKey(key)
 }
@@ -363,6 +367,22 @@ func coerceBool(key, value string) (any, error) {
 		return nil, fmt.Errorf("%s: %q is not a boolean; write true or false", key, value)
 	}
 	return b, nil
+}
+
+// coerceName stores one of a fixed set of words, trimmed.
+//
+// It trims where the loader does not, and the asymmetry is the point rather
+// than an oversight: this value arrived through a shell, which can attach a
+// space nobody typed -- `ccdad config set tui.theme " dark"` out of a variable
+// that had one -- while a space in the file is a hand edit, and a hand edit
+// that says something unusable is worth reporting rather than repairing behind
+// the user's back.
+func coerceName(key, value string, valid func(string) error) (any, error) {
+	name := strings.TrimSpace(value)
+	if err := valid(name); err != nil {
+		return nil, fmt.Errorf("%s: %w", key, err)
+	}
+	return name, nil
 }
 
 func coerceFloat(key, value string, valid func(float64) error) (any, error) {
@@ -432,6 +452,10 @@ func (c Config) Value(key string) (string, error) {
 		return format(c.Hover), nil
 	case keyMCPSwitchWithoutElicitation:
 		return format(c.MCPSwitchWithoutElicitation), nil
+	case keyTUITheme:
+		return c.TUITheme, nil
+	case keyTUIGlyphs:
+		return c.TUIGlyphs, nil
 	case keyCreditThreshold:
 		return format(c.CreditThreshold), nil
 	case keyMaxAutoSpend:

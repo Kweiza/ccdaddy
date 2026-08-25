@@ -103,6 +103,24 @@ type Config struct {
 	//
 	// It defaults to false, which refuses.
 	MCPSwitchWithoutElicitation bool
+	// TUITheme is which palette ccdad's own screens paint with, held as a
+	// STRING rather than as the palette package's own type.
+	//
+	// The string is the deliberate half. A typed field would make this package
+	// the one that decides what a theme IS, and it is not: resolving `auto`
+	// needs the terminal's background, which the daemon that loads this file has
+	// never looked at and must not look at -- it has no terminal, and a daemon
+	// that queried one would be answering a question about a screen nobody is
+	// watching. So the file's answer travels as the word the user wrote, and the
+	// command that owns a terminal turns it into a palette. What this package
+	// owes is that the word is one the palette layer will accept, which is what
+	// validTheme checks at the moment the word arrives.
+	TUITheme string
+	// TUIGlyphs is which glyph set those screens draw with: auto, unicode or
+	// ascii. It is a string for the reason above and for one more: `auto`
+	// resolves against the console's code page and against an environment
+	// variable read once at process start, and the daemon has neither.
+	TUIGlyphs string
 }
 
 // Equal is == for a Config, which the map field ended.
@@ -128,6 +146,8 @@ func (c Config) Equal(o Config) bool {
 		c.ProbeUnknown == o.ProbeUnknown &&
 		c.Hover == o.Hover &&
 		c.MCPSwitchWithoutElicitation == o.MCPSwitchWithoutElicitation &&
+		c.TUITheme == o.TUITheme &&
+		c.TUIGlyphs == o.TUIGlyphs &&
 		maps.Equal(c.WindowThreshold, o.WindowThreshold)
 }
 
@@ -242,11 +262,24 @@ type fileShape struct {
 
 	WindowThreshold map[string]float64 `toml:"window_threshold"`
 	Credit          *creditFile        `toml:"credit"`
+
+	// TUI is a pointer to a table rather than two pointers at top level, and
+	// absence has to be decidable at both levels: an absent [tui] and a [tui]
+	// that names only one of its two keys are different documents, and the key
+	// that was not written keeps its own default in each of them. Without the
+	// table here the loader would report `auto` for a file that says `ansi`,
+	// and `ccdad config list` would print the default beside the word `file`.
+	TUI *tuiFile `toml:"tui"`
 }
 
 type creditFile struct {
 	MaxAutoSpend *float64 `toml:"max_auto_spend"`
 	Threshold    *float64 `toml:"threshold"`
+}
+
+type tuiFile struct {
+	Theme  *string `toml:"theme"`
+	Glyphs *string `toml:"glyphs"`
 }
 
 // Parse turns a config document into the effective configuration.
@@ -300,6 +333,14 @@ func Parse(raw []byte) (Config, error) {
 			return Config{}, err
 		}
 		if err := applyFloat(&cfg.CreditThreshold, f.Credit.Threshold, keyCreditThreshold, validThreshold); err != nil {
+			return Config{}, err
+		}
+	}
+	if f.TUI != nil {
+		if err := applyString(&cfg.TUITheme, f.TUI.Theme, keyTUITheme, validTheme); err != nil {
+			return Config{}, err
+		}
+		if err := applyString(&cfg.TUIGlyphs, f.TUI.Glyphs, keyTUIGlyphs, validGlyphs); err != nil {
 			return Config{}, err
 		}
 	}
@@ -484,6 +525,25 @@ func applyBool(dst *bool, v *bool) {
 		return
 	}
 	*dst = *v
+}
+
+// applyString overlays one optional string onto its default, validating it
+// first. It is applyFloat's shape for the keys whose values are NAMES.
+//
+// It does not trim, and that is the difference from coerceName on the writing
+// side. A value that came through a shell can carry a space nobody typed, so
+// `ccdad config set` trims; a space in the FILE is a hand edit that meant
+// something, and repairing it silently would have the same document read one
+// way through the loader and another way through the CLI.
+func applyString(dst *string, v *string, key string, valid func(string) error) error {
+	if v == nil {
+		return nil
+	}
+	if err := valid(*v); err != nil {
+		return fmt.Errorf("%s in %s: %w", key, FileName, err)
+	}
+	*dst = *v
+	return nil
 }
 
 // applyWindowThresholds overlays the [window_threshold] table.

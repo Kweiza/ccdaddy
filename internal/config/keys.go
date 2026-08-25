@@ -40,8 +40,11 @@ const (
 	keyCreditThreshold = "credit.threshold"
 	keyMaxAutoSpend    = "credit.max_auto_spend"
 
-	// creditSection and windowThresholdSection are the two tables keys nest
-	// under; every other key is top-level.
+	keyTUITheme  = "tui.theme"
+	keyTUIGlyphs = "tui.glyphs"
+
+	// creditSection, windowThresholdSection and tuiSection are the three tables
+	// keys nest under; every other key is top-level.
 	creditSection = "credit"
 
 	// windowThresholdSection carries one threshold per rate-limit window. It is
@@ -57,6 +60,29 @@ const (
 	// predicate and the refusal cut on it, so the dot cannot be attached in one
 	// place and forgotten in the other.
 	windowThresholdPrefix = windowThresholdSection + "."
+
+	// tuiSection is the third table, and the first one that governs no part of
+	// the switching engine. Opening it needed an argument, because a namespace
+	// is only closed if every widening of it has one, and "the file already has
+	// tables" is not that argument.
+	//
+	// The argument is that a terminal's colours and its glyph repertoire are
+	// properties of the MACHINE rather than of one invocation. A flag would have
+	// to be retyped on every run and would be missing the moment a script forgot
+	// it; an environment variable would be invisible to `ccdad config list`,
+	// which is the one place a user goes to ask what is in force. So they belong
+	// in the file -- and once they are in the file they need a table, because
+	// bare `theme` and `glyphs` at top level would read as settings for the
+	// daemon, which is exactly what they are not.
+	//
+	// It is closed by NAME, the way [credit] is. Both of its keys are in Keys(),
+	// so isKnownKey matches them whole and needs no prefix arm; only
+	// window_threshold is closed one level down, and only because a scoped
+	// window's name is invented by the server.
+	//
+	// The rule at the top of this file is not relaxed for a display table.
+	// Nothing under it is a credential and nothing under it may become one.
+	tuiSection = "tui"
 )
 
 // KeyMCPSwitchWithoutElicitation is the second key a package outside this one
@@ -69,8 +95,11 @@ const KeyMCPSwitchWithoutElicitation = keyMCPSwitchWithoutElicitation
 // Keys lists every settable key this release knows by name, in file order,
 // which is also the order `ccdad config list` prints them in. A CLI builds its
 // help and its error messages from this, so a key added here cannot be
-// forgotten in either. The top-level keys come first and the credit table last,
-// so the listing groups the sub-table the way a hand-written file does.
+// forgotten in either. The top-level keys come first and the two tables that
+// can name their keys in advance follow, so the listing groups each sub-table
+// the way a hand-written file does. [tui] is last because it is the group that
+// governs nothing the daemon does: a reader scanning the listing for the
+// engine's settings reaches the end of them before the display ones start.
 //
 // It is not the whole settable surface. window_threshold takes one key per
 // rate-limit window and a scoped window is named after a model or a surface the
@@ -90,6 +119,8 @@ func Keys() []string {
 		keyMCPSwitchWithoutElicitation,
 		keyCreditThreshold,
 		keyMaxAutoSpend,
+		keyTUITheme,
+		keyTUIGlyphs,
 	}
 }
 
@@ -132,5 +163,5 @@ func windowOf(key string) (usage.WindowName, bool) {
 // naming `[future].a` and `[future].b` separately says nothing more than
 // naming `future` once.
 func isKnownSection(name string) bool {
-	return name == creditSection || name == windowThresholdSection
+	return name == creditSection || name == windowThresholdSection || name == tuiSection
 }

@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"github.com/Kweiza/ccdaddy/internal/config"
+	"github.com/Kweiza/ccdaddy/internal/theme"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -737,5 +738,55 @@ func TestConfigListStillCallsAMisspelledWindowIgnored(t *testing.T) {
 	_, _, errOut, _ := runRoot(t, "config", "list")
 	if !strings.Contains(errOut, "being ignored") || !strings.Contains(errOut, "sevenday") {
 		t.Errorf("a misspelled window name is no longer reported as ignored:\n%s", errOut)
+	}
+}
+
+// The display keys are the group in this file that governs nothing the daemon
+// does, and they are refused for a bad value exactly as an engine knob is:
+// exit 2, because an accepted typo is a setting that silently does nothing and
+// cron cannot see the difference.
+func TestADisplayKeyRefusesAnUnpaintableValue(t *testing.T) {
+	isolate(t)
+
+	for _, bad := range [][2]string{
+		{"tui.theme", "puce"},
+		{"tui.glyphs", "emoji"},
+	} {
+		code, _, stderr, _ := runRoot(t, "config", "set", bad[0], bad[1])
+		if code != ExitUsage {
+			t.Errorf("set %s %s = %d, want %d; stderr %q", bad[0], bad[1], code, ExitUsage, stderr)
+		}
+	}
+	// And a good value lands, so the refusals above are the validator speaking
+	// rather than a key the CLI never wired up at all.
+	if code, _, stderr, _ := runRoot(t, "config", "set", "tui.theme", "light"); code != ExitOK {
+		t.Fatalf("set tui.theme light = %d; stderr %q", code, stderr)
+	}
+	code, stdout, _, _ := runRoot(t, "config", "get", "tui.theme")
+	if code != ExitOK || strings.TrimSpace(stdout) != "light" {
+		t.Errorf("get tui.theme = %d, %q; want exit 0 and light", code, strings.TrimSpace(stdout))
+	}
+}
+
+// The help is where a user finds the spellings, so every name the palette layer
+// accepts has to appear in it. Asserting against theme.Names() rather than
+// against a second list is what stops a name added there from being one nothing
+// ever tells anybody exists.
+func TestTheConfigHelpNamesEveryThemeAndGlyphSet(t *testing.T) {
+	isolate(t)
+
+	code, stdout, _, _ := runRoot(t, "config", "--help")
+	if code != ExitOK {
+		t.Fatalf("config --help = %d", code)
+	}
+	for _, n := range theme.Names() {
+		if !strings.Contains(stdout, string(n)) {
+			t.Errorf("the config help does not name the theme %q:\n%s", n, stdout)
+		}
+	}
+	for _, n := range []string{"auto", "unicode", "ascii"} {
+		if !strings.Contains(stdout, n) {
+			t.Errorf("the config help does not name the glyph set %q:\n%s", n, stdout)
+		}
 	}
 }

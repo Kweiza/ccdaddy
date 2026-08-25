@@ -63,10 +63,19 @@ var hoverOverrides = map[string]bool{
 // SWITCHING ENGINE and this key is a permission for a different surface
 // entirely. A mode that derived it would be deciding, on the user's behalf,
 // that an unattended switch may also be an unconfirmed one.
+//
+// The two display keys are here because hover is a policy for WHICH ACCOUNT is
+// live, and nothing about how a screen is painted follows from that. A mode
+// that derived them would be answering a question about the user's terminal out
+// of a fact about their quota, and `ccdad config list` would then mark a theme
+// the user chose as one hover had taken over -- which would be a lie in the
+// column whose whole job is to say what is being read.
 var hoverHonours = map[string]bool{
 	keyMaxAutoSpend:                true,
 	keyHover:                       true,
 	keyMCPSwitchWithoutElicitation: true,
+	keyTUITheme:                    true,
+	keyTUIGlyphs:                   true,
 }
 
 // HoverOverrides reports whether hover derives this key's value for itself,
