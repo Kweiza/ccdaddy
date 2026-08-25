@@ -30,6 +30,25 @@ func TestLatestReadsTheRedirect(t *testing.T) {
 		{"a segment merely containing tag", http.StatusFound, "/releases/nottag/v1.2.3", ""},
 		{"a last segment that is not a version", http.StatusFound, "/releases/tag/latest", ""},
 		{"a last segment that is a path", http.StatusFound, "/releases/tag/v1.2.3%2F..%2F..", ""},
+		// Pins "unescaped AFTER the split" specifically: a %2F standing in
+		// for the segment separator itself. Splitting the DECODED path
+		// instead of EscapedPath would read this as ["releases", "tag",
+		// "v9.9.9"] — segment before last equal to "tag" — and hand back
+		// v9.9.9 as though the origin had actually named a release tag,
+		// rather than smuggled one past the segment check with an encoded
+		// slash. The two-dots case above does not pin this: decoding it
+		// early still leaves the segment before last as "..", which is not
+		// "tag" either, so that mutation stays green under it for the wrong
+		// reason.
+		{"an encoded tag segment separator", http.StatusFound, "/releases/tag%2Fv9.9.9", ""},
+		// A 200 that DOES carry a Location must still be refused by the
+		// status-range guard, not merely happen to fail because these other
+		// 200/500 rows carry no Location at all: with no Location value they
+		// would fail on the empty-Location check just as well, so deleting
+		// the status-range guard entirely leaves the suite green while a 200
+		// carrying a real-looking Location would then be accepted as the
+		// published latest release.
+		{"a 200 with a Location header is still not a redirect", http.StatusOK, "/releases/tag/v9.9.9", ""},
 		{"a 500", http.StatusInternalServerError, "", ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {

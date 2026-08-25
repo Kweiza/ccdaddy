@@ -79,11 +79,26 @@ func NewClient() *Client {
 // newTransport clones the stdlib transport, which is the idiom internal/usage
 // already uses and it is there so HTTPS_PROXY keeps working.
 //
-// http.DefaultTransport.Clone() does not compile: DefaultTransport is declared
-// as a RoundTripper, so the type assertion is part of the idiom rather than
-// defensive noise.
-func newTransport() *http.Transport {
-	tr := http.DefaultTransport.(*http.Transport).Clone()
+// The comma-ok form, not a bare assertion — and http.RoundTripper as the
+// return type, not *http.Transport. internal/oauth/token.go faces the
+// identical hazard, something in the process having replaced
+// http.DefaultTransport with another RoundTripper, and its own comment gives
+// the reason to leave Transport nil rather than assert and panic: a version
+// check is no more entitled than a login to bring the whole process down over
+// a RoundTripper it does not own. The return type is what makes "leave it
+// nil" actually true: a nil *http.Transport handed to an http.RoundTripper
+// field is Go's typed-nil trap — a non-nil interface wrapping a nil pointer —
+// and http.Client's own "Transport == nil, fall back to DefaultTransport"
+// check would never fire, moving the panic from construction to the first
+// request instead of removing it. Returning the untyped nil literal from a
+// function declared to return the interface avoids that; returning a nil
+// *http.Transport variable through the same interface would not.
+func newTransport() http.RoundTripper {
+	tr, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return nil
+	}
+	tr = tr.Clone()
 	if tr.TLSClientConfig == nil {
 		tr.TLSClientConfig = &tls.Config{}
 	}
