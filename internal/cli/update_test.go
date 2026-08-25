@@ -57,6 +57,11 @@ type fakeRelease struct {
 	// status overrides the answer for one base name, so "the signature is not
 	// published" and "the origin is broken" can be told apart.
 	status map[string]int
+	// after, when a name is armed, is the body every request for it AFTER the
+	// first is answered with. Nil until oneShot arms something, and a read of a
+	// nil map is a miss — so an origin nobody armed answers exactly as it did
+	// before this field existed.
+	after map[string][]byte
 }
 
 // Everything under the one mutex, including the reads — which is what get
@@ -91,6 +96,13 @@ func (f *fakeRelease) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	// A name armed by oneShot serves what it always served ONCE, and the armed
+	// body from then on. body was read above the swap, so the request that
+	// springs the trap is still the one that gets the original.
+	if second, armed := f.after[name]; armed {
+		f.files[name] = second
+		delete(f.after, name)
+	}
 	_, _ = w.Write(body)
 }
 
@@ -104,6 +116,26 @@ func (f *fakeRelease) put(name string, body []byte) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.files[name] = body
+}
+
+// oneShot arms name to serve its current body once and second from then on.
+//
+// It is what makes it observable that a run reads its data out of the SAME
+// download it authenticated. While an origin repeats itself, a run that
+// verifies one copy of a file and then reads a row out of a second copy is
+// indistinguishable from a correct one: the copies are equal, so no assertion
+// about content can separate them.
+//
+// The map is built here rather than in newFakeRelease, so that arming stays
+// something a test asks for — every fixture that never calls this keeps a nil
+// map and the serving path it always had.
+func (f *fakeRelease) oneShot(name string, second []byte) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.after == nil {
+		f.after = map[string][]byte{}
+	}
+	f.after[name] = second
 }
 
 // get is the read half, and it is the reason the sentence above is true of the
@@ -729,9 +761,16 @@ func TestUpdateWithTheRunningVersionPinnedRefetches(t *testing.T) {
 func TestUpdateWithAnUnparseableRunningVersionDoesNotClaimCurrency(t *testing.T) {
 	_, _, _ = updateWorld(t, "2026.08.25.1", "v0.7.0")
 
-	code, _, _, top := runRoot(t, "update", "--json")
+	code, stdout, _, top := runRoot(t, "update", "--json")
 	if code != ExitOK {
 		t.Fatalf("exit = %d, want 0 (%s) — an unreadable running version falls through to the download", code, top)
+	}
+	// The exit code alone does not pin this arm. `--check` and every consumer
+	// of the payload read updateAvailable, and reporting false for a version
+	// nothing could parse IS the claim of currency this test forbids.
+	if got := decodePayload(t, stdout)["updateAvailable"]; got != true {
+		t.Errorf("updateAvailable = %v, want true — ccdad cannot compare these, and "+
+			"\"I cannot compare these\" is not \"you are up to date\"", got)
 	}
 }
 
@@ -939,6 +978,14 @@ func TestUpdateVerificationFailuresEachHaveTheirOwnReasonAndRemedy(t *testing.T)
 			if !c.namesInstaller && !strings.Contains(stderr, "minisign -Vm") {
 				t.Errorf("stderr = %q, want a tamper remedy that names `minisign -Vm`", stderr)
 			}
+			// The verification line is the one security assurance this command
+			// makes to a user, and a refusal must not carry it. Printing it
+			// before the check rather than after leaves every verdict correct
+			// and every message a lie, which no assertion on a reason or an
+			// exit code can see.
+			if strings.Contains(stderr, "Verified sha256sums.txt") {
+				t.Errorf("stderr = %q, want no verification line on an arm that refused", stderr)
+			}
 		})
 	}
 }
@@ -1090,10 +1137,10 @@ func TestUpdateRefusesABadSignatureOverPerfectlyCorrectChecksums(t *testing.T) {
 	}
 	assertBinaryUntouched(t, target)
 
-	// A guard for the download rather than a proof about it: runUpdate does not
-	// fetch the asset at all yet, so nothing can make this fire today. It is
-	// here so that whoever adds the fetch cannot add it above the verification
-	// without a red test.
+	// The asset was never even requested, which is the difference between a
+	// refusal and a refusal that arrived too late: a run that reached the
+	// download had already treated an unverified file as data, and had already
+	// spent the transfer finding out.
 	for _, p := range f.asked() {
 		if strings.HasSuffix(p, "/"+release.Asset()) {
 			t.Errorf("the origin was asked for %s; the signature check must come before anything "+
@@ -1110,11 +1157,12 @@ func TestUpdateRefusesABadSignatureOverPerfectlyCorrectChecksums(t *testing.T) {
 // gates at once, and the reason it reports is the NAME OF THE GATE THAT RAN
 // FIRST — which is the only way a test in this file can observe the order.
 //
-// The three rows rule out the three wrong orderings between them: a run that
-// checks the shape before the signature reports `shape` for the first row, one
-// that reads the row before the signature reports `not-listed` for the second,
-// and one that reads the row before checking the shape reports `not-listed` for
-// the third.
+// Three gates have five wrong orderings, and what the three rows below pin is
+// the three PAIRWISE INVERSIONS — which between them rule out all five, because
+// every wrong ordering inverts at least one pair. A run that checks the shape
+// before the signature reports `shape` for the first row, one that reads the
+// row before the signature reports `not-listed` for the second, and one that
+// reads the row before checking the shape reports `not-listed` for the third.
 func TestUpdateReportsWhicheverGateRanFirst(t *testing.T) {
 	// A proxy's sign-in page: not a checksum file, and it lists nothing.
 	page := []byte("<!doctype html>\n<html><body>sign-in required</body></html>\n")
@@ -1173,10 +1221,50 @@ func TestUpdateReportsWhicheverGateRanFirst(t *testing.T) {
 	}
 }
 
+// The gates run in the right order, and they all run over the SAME BYTES.
+//
+// Order and buffer identity are different properties, and every test above pins
+// only the first. A run that verified one download of sha256sums.txt and then
+// read its row out of a SECOND download would satisfy all of them while
+// ExpectedHash ran on bytes nothing had authenticated — a retry, a re-read for
+// `--check`, or a helper that took the download base instead of the verified
+// bytes would each do it, and each would ship green.
+//
+// So this origin hands over the real checksum file once and a proxy's sign-in
+// page to anyone who asks again. One request is the assertion; the page is what
+// makes a second request fail loudly rather than silently.
+func TestUpdateReadsTheRowOutOfTheBytesItVerified(t *testing.T) {
+	_, f, _ := updateWorld(t, "0.6.1", "v0.7.0")
+	f.oneShot("sha256sums.txt", []byte("<!doctype html>\n<html><body>sign-in required</body></html>\n"))
+
+	code, _, _, top := runRoot(t, "update", "--json")
+	if code != ExitOK {
+		t.Fatalf("exit = %d, want 0 (%s) — something read the checksum file a second time and got the page", code, top)
+	}
+	asked := 0
+	for _, p := range f.asked() {
+		if path.Base(p) == "sha256sums.txt" {
+			asked++
+		}
+	}
+	if asked != 1 {
+		t.Errorf("the origin was asked for sha256sums.txt %d times, want exactly 1 — the bytes the "+
+			"signature covered are the only bytes anything after it may read.\nrequests: %v",
+			asked, f.asked())
+	}
+}
+
 // The other half of the ordering, and it decides a remedy rather than a
 // download: a file that is neither a sums file nor lists this asset must report
 // SHAPE, because "this is not a checksum file" is the more useful of the two
 // facts and the one that names a proxy.
+//
+// The WEAKEST of the three tests that say so, and it cannot go red on its own:
+// TestUpdateRefusesACorrectlySignedNonSumsFile runs the same fixture and
+// asserts the exit code and the binary too, and the third row of the table
+// above asserts the same reason with the sharper message. It is kept because it
+// is the one of the three that says in its name what the ordering IS, and a
+// reader looking for that property finds this before either of the others.
 func TestUpdateReportsShapeBeforeListing(t *testing.T) {
 	_, f, sign := updateWorld(t, "0.6.1", "v0.7.0")
 	page := []byte("<!doctype html>\n<html><body>sign-in required</body></html>\n")
