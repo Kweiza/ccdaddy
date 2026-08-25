@@ -1319,3 +1319,108 @@ func TestTheRunwayLineIsFoldedToTheTerminalItIsPrintedOn(t *testing.T) {
 		t.Errorf("the fold changed what the line says:\ngot  %s\nwant %s", got, want)
 	}
 }
+
+// The runway line was the one that got filed, and it was not the only one over
+// the edge: on the same 80-column run, Mode: measured 124 display columns and
+// Hover: 100. A block where two of four lines fold and two do not is worse than
+// one where all four do, because the reader cannot tell which line they are
+// looking at the end of.
+//
+// The table below the block is deliberately NOT covered here. It is a
+// tabwriter, its rows measured 84 columns on that same run, and a table cannot
+// be word-wrapped -- narrowing one means dropping columns, which is a different
+// decision with a different owner.
+func TestEveryLabelledLineFitsTheTerminalItIsPrintedOn(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	seedBurningFleet(t)
+	// Hover on, because the Hover: line is printed only then and it is the
+	// second-widest line this block has. Without it this test would cover
+	// three of the four labels and read as though it covered all of them.
+	if code, _, errOut, _ := runRoot(t, "hover", "on"); code != ExitOK {
+		t.Fatalf("hover on = %d (%s)", code, errOut)
+	}
+
+	// Thirty-six rather than the eighty the defect was filed at, because at
+	// eighty this fixture's Daemon: (59 display columns), Active: (37) and
+	// Mode: (72) all fit and only Hover: would be exercised -- measured. At
+	// thirty-six all four are over and every one of the four call sites is
+	// load bearing.
+	const width = 36
+
+	_, wide, _, _ := runRoot(t, "status")
+	block := labelBlockOf(t, wide)
+	// Each label named explicitly. A block that stopped printing one of these
+	// would otherwise quietly shrink what this test covers.
+	for _, label := range []string{"Daemon:", "Active:", "Hover:", "Mode:", "Runway:"} {
+		if !strings.HasPrefix(strings.Join(block, "\n"), label) && !strings.Contains(strings.Join(block, "\n"), "\n"+label) {
+			t.Fatalf("no %s line in the block, so this test no longer covers it:\n%s", label, wide)
+		}
+	}
+	over := 0
+	for _, l := range block {
+		if ansi.StringWidth(l) > width {
+			over++
+		}
+	}
+	// All five, and the count is named rather than "at least one": a fixture
+	// that drifted narrow would otherwise leave this test passing over lines it
+	// no longer exercises, which is how it read before it was measured.
+	if over != 5 {
+		t.Fatalf("%d of this fixture's %d block lines are over %d columns, want all 5, so the assertion below is weaker than it reads:\n%s", over, len(block), width, wide)
+	}
+
+	stubOutWidth(t, width)
+	_, narrow, _, _ := runRoot(t, "status")
+	narrowBlock := labelBlockOf(t, narrow)
+	for i, l := range proseOf(narrowBlock) {
+		// A single word wider than the terminal is allowed through: cutting a
+		// path or an account label produces a shorter one that reads as real.
+		if w := ansi.StringWidth(l); w > width && len(strings.Fields(l)) > 1 {
+			t.Errorf("line %d is %d columns on a %d-column terminal:\n%s", i, w, width, strings.Join(narrowBlock, "\n"))
+		}
+	}
+	// Wrapping is not rewriting. The block says the same words in the same
+	// order at both widths.
+	if got, want := strings.Join(strings.Fields(strings.Join(narrowBlock, " ")), " "),
+		strings.Join(strings.Fields(strings.Join(block, " ")), " "); got != want {
+		t.Errorf("the wrap changed what the block says:\ngot  %q\nwant %q", got, want)
+	}
+}
+
+// labelBlockOf is the labelled block at the top of `ccdad status`: everything
+// above the blank line that separates it from the table. The blank line is the
+// separator the renderer actually writes, so this follows the rendering rather
+// than a list of label names that would go stale the next time one is added.
+func labelBlockOf(t *testing.T, out string) []string {
+	t.Helper()
+	var block []string
+	for _, l := range strings.Split(out, "\n") {
+		if strings.TrimSpace(l) == "" {
+			if len(block) == 0 {
+				continue
+			}
+			return block
+		}
+		block = append(block, l)
+	}
+	if block == nil {
+		t.Fatalf("no labelled block in:\n%s", out)
+	}
+	return block
+}
+
+// proseOf is the block without its runway line and that line's continuations.
+// The runway line is in this block and is wrapped by a different function under
+// a different rule -- its clauses are atomic and one of them alone can be wider
+// than a narrow terminal, which is a deliberate overflow rather than a line
+// that did not fit. TestTheRunwayLineIsFoldedToTheTerminalItIsPrintedOn is
+// where that one is measured.
+func proseOf(block []string) []string {
+	for i, l := range block {
+		if strings.HasPrefix(l, "Runway:") {
+			return block[:i]
+		}
+	}
+	return block
+}
