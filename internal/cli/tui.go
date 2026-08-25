@@ -8,6 +8,7 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/credhome"
+	"github.com/Kweiza/ccdaddy/internal/theme"
 	"github.com/Kweiza/ccdaddy/internal/tui"
 	"github.com/Kweiza/ccdaddy/internal/view"
 )
@@ -89,7 +90,29 @@ func runTui(cmd *cobra.Command, _ []string) error {
 // `status`'s read sequence out for this, and a second read order here would be
 // a second chance to derive a number differently -- which json_contract_test's
 // walk of the cobra tree would never see, because a renderer is not a command.
+//
+// The appearance crosses here UNRESOLVED, in three raw answers rather than one
+// decision, and that is the sharpest rule this function holds. Two of them are
+// the config file's own words carried across untouched, auto included; the
+// third is a syscall about this process's attached console, which is the single
+// appearance fact package tui cannot obtain for itself. Working out what auto
+// means is that package's job, on the path it turns out to be on -- a live
+// program learns it from a message and blocks for nothing, a one-shot render
+// asks for it synchronously behind its own guard. Deciding it HERE would put
+// the synchronous ask on the branch where both terminals are present, which is
+// the live-program branch, and leave the redirected branch never asking.
+//
+// The config is read a second time here, and on purpose. loadSnapshot reads it
+// too, but it reads it on every refresh tick from inside the event loop, and
+// the appearance is fixed for the process's lifetime: a theme that changed
+// under a running Program would repaint half a frame in the old palette with
+// the other half already measured against the new one. Reading it once, at the
+// moment the two halves are configured, is what makes the answer stable. Its
+// notice is dropped because loadSnapshot's own call produces exactly the same
+// sentence in the place the page already draws it from -- printing it twice
+// would tell a user with an unreadable config file about it twice per tick.
 func tuiOptions(cmd *cobra.Command) tui.Options {
+	cfg, _ := configOrDefaults()
 	return tui.Options{
 		Load: func(now time.Time) (view.Snapshot, error) {
 			// probeErr is dropped rather than folded into the error. It is the
@@ -115,6 +138,19 @@ func tuiOptions(cmd *cobra.Command) tui.Options {
 		// the honest answer for a caller that cannot answer.
 		CredentialHome: credentialHomeOrEmpty(),
 		SamePath:       credhome.SamePath,
+		// The appearance, as three answers and no decisions. Theme and GlyphSet
+		// are what the file said, converted but not resolved -- auto is a
+		// legitimate value on both, and the ordinary one. ConsoleUTF8 is the
+		// syscall answer, which is the only one of the three package tui could
+		// not have obtained for itself.
+		//
+		// Nothing in package tui reads any of them today. They are wired now so
+		// that the commit which paints with them changes rendering and nothing
+		// else, and so the code-page read is not left in the tree with no
+		// production caller.
+		Theme:       configuredTheme(cfg.TUITheme),
+		GlyphSet:    cfg.TUIGlyphs,
+		ConsoleUTF8: consoleUTF8(),
 	}
 }
 
@@ -131,4 +167,32 @@ func credentialHomeOrEmpty() string {
 		return ""
 	}
 	return home
+}
+
+// configuredTheme is the theme name the config file spells, as a theme.Name.
+//
+// It converts and it does not resolve. theme.Auto goes in and theme.Auto comes
+// out, which is the entire point of the seam this feeds: what auto MEANS is a
+// question about the terminal, it has two different answers depending on which
+// half of the dashboard is running, and this function is called before either
+// half has been chosen.
+//
+// The one judgement it makes is what to do with a spelling internal/theme does
+// not recognise, and the answer is auto -- not the zero Name, and the
+// difference between those two is a whole page. The zero Name means "nobody
+// said" downstream and paints nothing at all, so a typo that fell through to it
+// would answer a mistyped config file with a permanently monochrome dashboard
+// that never mentions why, on a machine where every other reading of the file
+// is fine. Auto answers it with the default that saying nothing would have got,
+// which is what a user who mistyped a value was reaching for. The validator
+// refuses the typo where it is written through `ccdad config set`; this arm is
+// for a file edited by hand afterwards, and for the day the validator and the
+// parser disagree about a spelling -- which is exactly the day this must not
+// turn into silence.
+func configuredTheme(configured string) theme.Name {
+	n, ok := theme.Parse(configured)
+	if !ok {
+		return theme.Auto
+	}
+	return n
 }

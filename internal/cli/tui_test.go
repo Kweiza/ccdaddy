@@ -13,6 +13,7 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/daemon"
+	"github.com/Kweiza/ccdaddy/internal/theme"
 	"github.com/Kweiza/ccdaddy/internal/tui"
 	"github.com/Kweiza/ccdaddy/internal/view"
 )
@@ -353,6 +354,14 @@ func TestEveryFieldPackageTuiCannotReadForItselfIsFilledIn(t *testing.T) {
 	if o.Out == nil {
 		t.Fatal("Options.Out is nil: the one-shot render has nowhere to write")
 	}
+	if o.Theme == "" {
+		t.Fatal("Options.Theme is the zero Name, which means `nobody said` and paints " +
+			"nothing at all: `ccdad tui` would run permanently monochrome and never say why")
+	}
+	if o.GlyphSet == "" {
+		t.Fatal("Options.GlyphSet is empty: the page has no vocabulary to draw from and " +
+			"no word for the default either, so the glyph picker cannot even ask")
+	}
 
 	snap, err := o.Load(o.Now())
 	if err != nil {
@@ -411,5 +420,79 @@ func TestTheDashboardReadsThePackageClockAndNotASecondOne(t *testing.T) {
 	o := tuiOptions(NewRootCmd())
 	if got := o.Now(); !got.Equal(pinned) {
 		t.Fatalf("Options.Now() = %v, want %v", got, pinned)
+	}
+}
+
+// The configured value crosses the seam UNRESOLVED, and this is the assertion
+// the whole commit exists for.
+//
+// Both terminals are stubbed present on purpose. That is the exact shape under
+// which a tuiOptions that resolved "auto" for itself would put stdin into raw
+// mode and block for up to two seconds waiting to be told what colour the
+// background is -- on the branch that opens a live program, which is the one
+// path in this binary that must never block, and never on the redirected branch
+// that the synchronous ask is actually scoped to. An implementation that
+// resolved would redden both rows below on the VALUE rather than by hanging,
+// because "auto" would have arrived as "dark" or "light" and "auto" would have
+// arrived as "unicode" or "ascii".
+func TestTheConfiguredAppearanceCrossesTheSeamUnresolved(t *testing.T) {
+	isolate(t)
+	writeConfig(t, "[tui]\ntheme = \"auto\"\nglyphs = \"auto\"\n")
+	stubTTYs(t, true, true)
+
+	o := tuiOptions(NewRootCmd())
+	if o.Theme != theme.Auto {
+		t.Fatalf("Options.Theme = %q, want %q: package cli answered a question about the "+
+			"terminal's own background that belongs to the event loop and to the one-shot "+
+			"render, and answered it before it knows which of the two it is on", o.Theme, theme.Auto)
+	}
+	if o.GlyphSet != "auto" {
+		t.Fatalf("Options.GlyphSet = %q, want \"auto\": collapsing it here makes the glyph "+
+			"picker's auto arm unreachable in a shipping binary, and that arm is the only "+
+			"place the east-asian width fallback lives", o.GlyphSet)
+	}
+}
+
+// An explicit spelling crosses untouched too, which is the same property read
+// from the other end: this seam carries what the file said, and it neither
+// resolves a question nor second-guesses an answer.
+//
+// A user who wrote `light` on a dark terminal has overruled every detector in
+// this binary, in the one direction that has no other escape hatch -- a
+// multiplexer that swallows the background request answers dark forever, and
+// there is nothing else such a user could type.
+func TestTheDashboardCarriesTheThemeAndGlyphSetTheConfigurationNames(t *testing.T) {
+	isolate(t)
+	writeConfig(t, "[tui]\ntheme = \"light\"\nglyphs = \"ascii\"\n")
+	stubTTYs(t, false, false)
+
+	o := tuiOptions(NewRootCmd())
+	if o.Theme != theme.Light {
+		t.Fatalf("Options.Theme = %q, want %q: the page would paint in a theme the user "+
+			"did not choose", o.Theme, theme.Light)
+	}
+	if o.GlyphSet != "ascii" {
+		t.Fatalf("Options.GlyphSet = %q, want \"ascii\": an explicit set is an instruction, "+
+			"not a suggestion the console gets to overrule", o.GlyphSet)
+	}
+}
+
+// A spelling internal/theme does not recognise resolves to auto, and NOT to the
+// zero Name. The difference between those two is a page.
+//
+// The zero Name means "nobody said" downstream and renders with no colour
+// whatsoever, so a typo that fell through to it would answer a mistyped config
+// file with a permanently monochrome dashboard that never mentions why. Auto
+// answers it with the default the same file would have got by saying nothing,
+// which is what a user who mistyped a value was trying to configure. `ccdad
+// config set` refuses the typo at the point of writing; this row is a file
+// edited by hand afterwards.
+func TestAThemeNobodyCanSpellFallsToAutoAndNotToTheColourlessName(t *testing.T) {
+	isolate(t)
+	writeConfig(t, "[tui]\ntheme = \"chartreuse\"\n")
+	stubTTYs(t, false, false)
+
+	if o := tuiOptions(NewRootCmd()); o.Theme != theme.Auto {
+		t.Fatalf("Options.Theme = %q for an unspellable theme, want %q", o.Theme, theme.Auto)
 	}
 }
