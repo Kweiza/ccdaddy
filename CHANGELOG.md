@@ -16,6 +16,59 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+### Added
+
+- **`ccdad runway` measures how fast the accounts are actually spending, and
+  says when that runs out.** Every surface before this one reported a level —
+  how much of a window is gone right now — and a level cannot tell you whether
+  you are an hour away from a stop or three days. The daemon was already taking
+  the readings; nothing was keeping them. It now appends each one to
+  `~/.ccdad/history.json`, and `runway` measures the last four hours of them.
+  No extra request is made against the usage endpoint and no cadence changed:
+  the file is written from the one place a fresh reading was already being
+  stored.
+
+  The answers come from running the rotation forward — one live login at a
+  time, spending at the measured rate, taking each window's rollover as it
+  arrives — rather than from comparing a burn rate against a replenishment
+  rate. The two disagree often enough to matter, because replenishment counts
+  accounts that are already out on the other axis and windows that reported no
+  reset at all, and a run of the rotation reaches neither. So an axis whose
+  arithmetic looks comfortable can still empty, and the table prints the
+  comparison beside the verdict rather than as it.
+
+  Unknown is never zero anywhere in this. A machine that has been recording for
+  ten minutes is told it has no basis, rather than handed a burn of 0.0 and a
+  runway of forever; the rate is absent from `--json` rather than present as a
+  zero. Money fails closed the same way: a credit figure that cannot be
+  assembled — two accounts billing in different currencies, an uncapped account
+  that is spending — refuses instead of defaulting, because every default there
+  makes the runway longer than it is.
+
+  **One measurement is worth writing down, because it would have passed the
+  whole suite.** The first design detected a window's rollover by asking whether
+  its `resets_at` had changed. It changes on every poll. Two readings of the
+  same account and the same window, taken 72 minutes apart on 2026-08-25, agreed
+  on the minute and the second and disagreed in the microseconds — `.308482` and
+  `.320288`. Three windows read out of a single response cluster their fractions
+  within a few hundred microseconds of each other although their anchors are
+  days apart, so the sub-second part is coming from the server's clock at
+  request time and not from the window. Under an
+  equality test every consecutive pair straddles a boundary, every segment holds
+  one reading, and the measured rate is 0.0 pp/h for every account and every
+  window, permanently, while the command prints "holds" over a pool being
+  drained. Recorded resets are therefore truncated to the minute, and a rollover
+  is a percentage that fell or a reset that moved forward by at least half the
+  window's length.
+
+  The same measurement appears as one `Runway:` line under `ccdad status`, under
+  `ccdad list` and on the terminal dashboard, as a `forecast` object in all
+  three `--json` payloads, and as a `runway` tool in the MCP server — which
+  still has no verb to launch it. `ccdad doctor` gains
+  a `history` check — an absent file is fine, an unparseable one is a warning —
+  and `ccdad uninstall` counts the file among the markers that identify a ccdad
+  store, so a directory holding only this one is still recognised rather than
+  refused as somebody else's.
 ### Fixed
 
 - **The dashboards name hover rather than the strategy hover overrode.** Hover

@@ -16,9 +16,11 @@ one *before* a rate limit stops you.
 ```console
 $ ccdad list
   IDX  ACCOUNT                  TYPE          TIER  LEFT  RESETS IN
-* 1    work@example.com (work)  subscription  max   18%   1h 14m
-  2    personal@example.com     subscription  pro   83%   4d 3h
+* 1    work@example.com (work)  subscription  max   18%   1h14m
+  2    personal@example.com     subscription  pro   83%   4d3h
   3    ci@example.org (ci)      api-key       -     ?     -
+
+Runway:  7d dry 2026-08-25 20:53 UTC (1d15h)  ·  5h holds  ·  basis 4h00m
 
 $ ccdad list --json
 {
@@ -72,17 +74,49 @@ $ ccdad list --json
       "active": false
     }
   ],
-  "activeUuid": "0d9e4e6a-1f1a-4b5e-9c3a-2f7b6a1d8e40"
+  "activeUuid": "0d9e4e6a-1f1a-4b5e-9c3a-2f7b6a1d8e40",
+  "forecast": {
+    "basis": {
+      "windowSeconds": 14400,
+      "observedSeconds": 14400,
+      "readings": 18,
+      "accounts": 3,
+      "unmeasured": 0,
+      "unreadable": 0,
+      "ineligible": 1
+    },
+    "axes": {
+      "five_hour": {
+        "burnPpPerHour": 8,
+        "burnPpPerHourHigh": 8.5,
+        "replenishPpPerHour": 40,
+        "holds": true
+      },
+      "weekly": {
+        "burnPpPerHour": 3.5,
+        "burnPpPerHourHigh": 4,
+        "replenishPpPerHour": 1.1904761904761905,
+        "holds": false,
+        "dryAt": "2026-08-25T20:53:44.285714285Z"
+      }
+    },
+    "fleet": {
+      "pointsLeft": 137,
+      "pointsTotal": 200,
+      "dryAt": "2026-08-25T20:53:44.285714285Z"
+    }
+  }
 }
 
 $ ccdad status
 Daemon:  running  pid 48213  up 2h06m
 Active:  work@example.com (work)
+Runway:  7d dry 2026-08-25 20:53 UTC (1d15h)  ·  5h holds  ·  basis 4h00m
 
   IDX  ACCOUNT                  TYPE          USED  WINDOW     RESETS IN  PACE     AGE
-* 1    work@example.com (work)  subscription  82%   five_hour  1h 14m     ahead    41s
-  2    personal@example.com     subscription  17%   seven_day  4d 3h      on pace  2m
-  3    ci@example.org (ci)      api-key       -     -          -          -        -
+* 1    work@example.com (work)  subscription  82%   five_hour  1h14m      ahead    41s
+  2    personal@example.com     subscription  17%   seven_day  4d3h       on pace  2m
+  3    ci@example.org (ci)      api-key       ?     -          -          -        ?
 ```
 
 `ccdad` is an unofficial, third-party tool. It is not affiliated with,
@@ -240,6 +274,7 @@ is a usage error rather than a silent hang. Pass the token, or `-`.
 | `ccdad auto` | Run the auto-switch engine, once or continuously |
 | `ccdad hover on\|off\|status` | Hand every threshold and every margin to the engine |
 | `ccdad status` | The engine dashboard: quota used, window, reset, pace — read from disk |
+| `ccdad runway` | How fast the accounts are spending quota, and when it runs out — measured from readings already taken |
 | `ccdad daemon start\|stop\|restart\|status\|logs` | Drive the background daemon directly |
 | `ccdad mcp` | Serve ccdad's tools to Claude Code over the Model Context Protocol. Claude Code starts it; you do not |
 | `ccdad mcp install\|uninstall` | Register that server with Claude Code, or take it back out |
@@ -552,6 +587,78 @@ either way — so `ccdad hover status >/dev/null || ccdad hover on` is correct,
 and the numbers hover *would* choose are visible to somebody still deciding. An
 omakase mode is only acceptable if you can see what it chose.
 
+### `ccdad runway`
+
+`ccdad status` reports levels: how much of each window is spent right now. A
+level cannot tell you whether that is an hour of work away from a stop or three
+days. `ccdad runway` reports the *slope* — how fast the accounts have actually
+been spending — and what it implies.
+
+The daemon was already taking these readings; now it keeps them, in
+`~/.ccdad/history.json`. The rate is measured over the last four hours of them.
+Nothing here fetches: it costs no request against the usage endpoint, and it
+does not start a daemon to answer a question about the past.
+
+```console
+$ ccdad runway
+Basis:   the last 4h00m  (3 accounts, 18 readings, 0 unreadable, 1 not in rotation)
+Fleet:   137 of 200 points left on the weekly axis
+
+  AXIS     BURN      REPLENISHES  VERDICT
+  5-hour   8.0 pp/h  40.0 pp/h    holds
+  7-day    3.5 pp/h  1.2 pp/h     runs dry 2026-08-25 20:53 UTC  (in 1d15h)
+  Credits  ?         -            ?
+
+  The two window rows ask whether resets give quota back faster than the fleet
+  spends it. Credits do not reset: that row is a balance divided by a rate,
+  with nothing coming back.
+
+  IDX  ACCOUNT               WINDOW     LEFT  BURN      EMPTY
+  2    personal@example.com  seven_day  83    0.5 pp/h  2026-08-25 20:28 UTC
+  1    work                  seven_day  54    3.0 pp/h  2026-08-25 20:53 UTC
+```
+
+**The basis is printed above the answer, on purpose.** A four-hour rate is a
+speedometer: twenty minutes of readings and four hours of them support very
+different claims, and you are the one who has to weigh that. `not in rotation`
+counts the accounts no switch can reach — disabled, owned by another machine,
+or an API key — because their quota is not the pool's to spend and none of the
+figures above covers them.
+
+**A verdict is a simulation, not a subtraction.** `REPLENISHES` is what an axis
+gives back when every account's window rolls over on time. It explains the
+verdict rather than deciding it, and it is deliberately generous: it counts
+accounts that are already out on the *other* axis, and windows that reported no
+reset at all. The verdict comes from running the rotation forward instead — one
+live login at a time, spending at the measured rate, taking each rollover as it
+arrives — which is how an axis whose replenishment looks ample can still run
+dry.
+
+**Rates are per axis, and the axes are never added.** A percentage point of a
+five-hour window and a point of a weekly one are different quantities, so there
+is a rate per row and no total. Both are percentage points per hour, `pp/h`.
+
+**`?` is unknown and never zero.** A machine that has been recording for ten
+minutes is told so, rather than handed a burn of nothing and a runway of
+forever; nothing is projected from a single reading. The same rule covers the
+money row — a credit spend that cannot be assembled prints `?` rather than a
+figure, because every default available there would only lengthen a runway made
+of money. It reads `?` above for the ordinary reason: no account in the pool is
+metered in credits. It also refuses when two accounts bill in different
+currencies, since those amounts do not add, and when an account with no monthly
+limit is spending, since a pool with no bottom cannot be given a date. The `-`
+beside it is the other verdict, and it is not the same one: paid usage reports
+no renewal boundary at all, so that quantity does not exist here rather than
+failing to be read.
+
+If the accounts are on different plan tiers, a note on stderr says so. A
+percentage point of a Pro window and a point of a Max window are not the same
+amount of work, and every sum above adds them anyway.
+
+`ccdad status`, `ccdad list` and the terminal dashboard carry the same
+measurement as a single `Runway:` line, and print no line at all when there is
+no basis for one. `ccdad runway --json`, `ccdad status --json` and `ccdad list
+--json` publish the identical object under `forecast`.
 ## The dashboard
 
 `ccdad tui` opens the interactive dashboard: the accounts, their quota, the
@@ -1434,6 +1541,12 @@ This is printed by `ccdad --help` too. It is the one promise made before 1.0.
 
 Deliberate, and listed so you can tell a gap from a bug.
 
+- **The MCP server has no verb to start it.** `internal/mcpsrv` exists and
+  serves six read tools — `list`, `status`, `which`, `doctor`, `config_get` and
+  `runway` — alongside the account mutators and the daemon controls, but nothing
+  on the command line launches it, so it is reachable only from its own tests. The terminal dashboard, which used to
+  be listed here beside it, is written: run `ccdad` with no arguments, or `ccdad
+  tui`.
 - **No OS service integration.** The daemon manages itself — a detached
   process, a `flock` singleton, a pidfile, auto-started by any `ccdad` command.
   There is no launchd, systemd or Windows service unit in v1.
