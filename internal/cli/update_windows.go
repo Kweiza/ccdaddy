@@ -5,7 +5,9 @@ package cli
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 )
@@ -15,15 +17,18 @@ import (
 // that matters.
 //
 // It is a port of install.ps1's Install-CcdadBinary plus a rollback the
-// original does not need. install.ps1 removes the aside immediately, and that
-// is right there: a fresh install that fails should leave the machine as it
-// found it. Here the user had a working binary a moment ago, so the aside IS
-// the rollback target, and deleting it first would destroy exactly the file the
-// rollback needs. The delete therefore comes AFTER the second rename, and it is
-// still best-effort: it fails for precisely the upgrade that needed the rename,
-// because the old process still holds the image. Every upgrade over a live
-// process leaves a .ccdad-old.*.exe behind, nothing sweeps them, and uninstall
-// does not know the name — it uses a different one. That is accepted.
+// original does not have. install.ps1's own aside dance is gated on
+// Test-Path -LiteralPath $Target, so it runs only in the same case this
+// function handles -- a binary already at the destination -- and never on a
+// fresh install. In that case it deletes the aside immediately, before the
+// second Move-Item lands the new binary; a failure on that second move then
+// has nothing to restore from, because the working copy is already gone.
+// That is the same rollback hole this function closes: the delete here
+// happens AFTER the second rename succeeds, and it is still best-effort --
+// it fails for precisely the upgrade that needed the rename, because the old
+// process still holds the image. Every upgrade over a live process leaves a
+// .ccdad-old.*.exe behind, nothing sweeps them, and uninstall does not know
+// the name — it uses a different one. That is accepted.
 //
 // cclink.WriteFileAtomic looks like exactly the right function and is a trap.
 // Its retry loop classifies errors through winerr.Retryable, which reports true
@@ -33,26 +38,34 @@ import (
 // fails anyway. Two secondary reasons, true on Unix as well: its signature
 // takes the whole file as a []byte, and its temporary name is
 // cclink.TempPattern(target) — filepath.Base plus the suffix, so ccdad.exe.tmp-*
-// and not ccdad.tmp-*, which is a name it cannot produce. Spell it with the
-// helper rather than by hand; the writer and daemon.SweepStatusTemps each held
-// their own copy of that suffix once, and changing one left the suite green
-// with the sweep collecting nothing. The temp is also a
-// non-dotfile briefly sitting in a directory on the user's PATH.
+// and not ccdad.tmp-*, which is a name it cannot produce.
 //
 // The aside stays in the install directory rather than %TEMP%, which is
 // routinely on another volume; a cross-volume move is a copy, and a mapped
 // image does not permit one.
 //
-// Mark-of-the-Web needs no handling. install.ps1 runs Unblock-File because the
-// zone marking survives its move; the path here is net/http into os.Create into
-// io.Copy — CreateFileW and WriteFile and nothing else — so no Zone.Identifier
-// stream is ever created, and os.Rename preserves none.
+// Mark-of-the-Web needs no handling. install.ps1 runs Unblock-File after its
+// own Move-Item, because a rename carries a file's alternate data streams
+// along with it and the zone marking would otherwise survive that move. The
+// path here never creates one to carry: net/http into os.Create into io.Copy
+// is CreateFileW and WriteFile and nothing else, so staged never has a
+// Zone.Identifier stream for the later os.Rename to preserve.
 func replaceBinary(staged, target string) error {
+	// aside is set below when something already occupies target; the
+	// rollback branch after the second rename reads it.
 	aside := ""
-	// Lstat rather than Stat: a dangling symlink at the target is still an
-	// entry that has to be moved out of the way, and Stat would report it
-	// missing and then fail the rename.
-	if _, err := os.Lstat(target); err == nil {
+
+	// Lstat rather than Stat: on Windows a dangling symlink or junction at
+	// the target is still a directory entry, and Lstat reports it as
+	// present where Stat would follow it, find nothing at the resolved
+	// path, and report the target itself as absent -- which would skip the
+	// aside step and rename straight over the stale link instead of moving
+	// it out of the way first. The rename that follows succeeds either way:
+	// like POSIX rename(2), it replaces the link entry itself and does not
+	// dereference it.
+	_, lstatErr := os.Lstat(target)
+	switch {
+	case lstatErr == nil:
 		suffix, err := randomSuffix()
 		if err != nil {
 			return err
@@ -62,16 +75,32 @@ func replaceBinary(staged, target string) error {
 		// collide. os.CreateTemp is not a substitute: it CREATES the file, and
 		// renaming onto a name it just created races itself.
 		aside = filepath.Join(filepath.Dir(target), ".ccdad-old."+suffix+".exe")
-		// Declared before the branch so the rollback below can see it.
 		if err := os.Rename(target, aside); err != nil {
 			return fmt.Errorf("moving %s aside: %w", target, err)
 		}
+	case errors.Is(lstatErr, fs.ErrNotExist):
+		// Nothing at target; the plain rename below is all that is needed.
+	default:
+		// A permissions error on the install directory, surfaced here
+		// instead of a dozen lines down as a failure on the SECOND rename,
+		// whose message would name staged and target and say nothing about
+		// the real cause.
+		return fmt.Errorf("checking for an existing binary at %s: %w", target, lstatErr)
 	}
+
 	if err := os.Rename(staged, target); err != nil {
 		if aside != "" {
 			// Put it back. A machine with no ccdad at all is a worse outcome
-			// than a machine still running the old one.
-			_ = os.Rename(aside, target)
+			// than a machine still running the old one. If the rollback
+			// itself fails, the working binary is stranded at aside rather
+			// than silently lost -- name that path in the error so the user
+			// can recover it by hand, the choice uninstall_windows.go makes
+			// for its own privileged step when it can fail after the point
+			// of no return.
+			if rollbackErr := os.Rename(aside, target); rollbackErr != nil {
+				return fmt.Errorf("moving %s into place at %s: %w (and restoring the previous binary from %s also failed: %v; move it back by hand)",
+					staged, target, err, aside, rollbackErr)
+			}
 		}
 		return fmt.Errorf("moving %s into place at %s: %w", staged, target, err)
 	}

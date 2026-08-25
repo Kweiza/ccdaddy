@@ -198,11 +198,12 @@ func TestWindowsAFailedSecondRenameRestoresTheOldBinary(t *testing.T) {
 func TestWindowsTheReplacedBinaryCarriesNoZoneIdentifier(t *testing.T) {
 	dir := t.TempDir()
 
-	// The control. If this fails, the test below is checking nothing — and it
-	// must fail LOUDLY rather than skip: GitHub's Windows runners give NTFS
-	// for both the workspace and TEMP, so alternate data streams are always
-	// available here, and a t.Skipf would let a real filesystem change silently
-	// turn this test into one that always reports success without looking.
+	// The positive control. If this fails, the test below is checking
+	// nothing — and it must fail LOUDLY rather than skip: GitHub's Windows
+	// runners give NTFS for both the workspace and TEMP, so alternate data
+	// streams are always available here, and a t.Skipf would let a real
+	// filesystem change silently turn this test into one that always
+	// reports success without looking.
 	control := filepath.Join(dir, "control.exe")
 	if err := os.WriteFile(control, []byte("x"), 0o755); err != nil {
 		t.Fatal(err)
@@ -214,6 +215,29 @@ func TestWindowsTheReplacedBinaryCarriesNoZoneIdentifier(t *testing.T) {
 		t.Fatalf("a Zone.Identifier written by this test cannot be read back (%v); the assertion below would be vacuous", err)
 	}
 
+	// The negative control, and the one the original version of this test
+	// was missing: proof that the probe below can report ABSENCE, not just
+	// presence. Both os.Stat calls above pass in a world where
+	// GetFileAttributesEx answers for the base file and ignores the stream
+	// component entirely -- that is not ruled out anywhere; Go's standard
+	// library carries no test of ADS-path behaviour at all. A probe that
+	// cannot tell absent from present would make the real assertion below
+	// pass for a binary that in fact carries a zone marking, which is a
+	// false negative on `replaceBinary` and a false accusation of a comment
+	// in update_windows.go that is actually correct.
+	//
+	// os.Open is used here and below instead of os.Stat, because os.Open
+	// reaches CreateFileW directly, which is unambiguously stream-aware:
+	// opening path:Stream opens that stream specifically and reports
+	// ERROR_FILE_NOT_FOUND when it does not exist. That is a stronger
+	// guarantee than anything documented for GetFileAttributesEx.
+	if f, err := os.Open(control + ":No.Such.Stream"); !errors.Is(err, fs.ErrNotExist) {
+		if err == nil {
+			_ = f.Close()
+		}
+		t.Fatalf("the probe cannot tell an absent stream from a present one (%v), so the assertion below would be vacuous", err)
+	}
+
 	staged := filepath.Join(dir, "staged.exe")
 	if err := os.WriteFile(staged, []byte("the new ccdad"), 0o755); err != nil {
 		t.Fatal(err)
@@ -222,12 +246,12 @@ func TestWindowsTheReplacedBinaryCarriesNoZoneIdentifier(t *testing.T) {
 	if err := replaceBinary(staged, target); err != nil {
 		t.Fatalf("replaceBinary(): %v", err)
 	}
-	if _, err := os.Stat(target + ":Zone.Identifier"); !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("the replaced binary carries a zone marking (stat said %v); install.ps1 runs "+
+	f, err := os.Open(target + ":Zone.Identifier")
+	if err == nil {
+		_ = f.Close()
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the replaced binary carries a zone marking (open said %v); install.ps1 runs "+
 			"Unblock-File for this and the Go path is supposed not to need it", err)
 	}
-	// longPath is used nowhere above, and that is deliberate: nothing here
-	// compares a path against a spelling Windows chose. Keep it referenced so a
-	// later assertion that DOES need it does not have to rediscover it.
-	_ = longPath
 }

@@ -80,6 +80,13 @@ func TestReplaceBinaryWorksWhereAWriteOverALiveImageDoesNot(t *testing.T) {
 
 // The mode arrives with the file, because the download step chmods it after
 // closing it. replaceBinary must not quietly reset it.
+//
+// Staged is written at 0o750, not the 0o755 an implementation might
+// hardcode instead of propagating: with 0o755 on both sides, a
+// replaceBinary that ignores the staged file's mode and just chmods the
+// target to 0o755 by itself would satisfy this test by coincidence. 0o750
+// is not a mode replaceBinary or anything downstream produces on its own,
+// so matching it can only mean the mode really travelled with the file.
 func TestReplaceBinaryKeepsTheStagedMode(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "ccdad")
@@ -87,10 +94,15 @@ func TestReplaceBinaryKeepsTheStagedMode(t *testing.T) {
 	if err := os.WriteFile(target, []byte("old"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(staged, []byte("new"), 0o755); err != nil {
+	if err := os.WriteFile(staged, []byte("new"), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(staged, 0o755); err != nil {
+	// Load-bearing, not redundant with the mode WriteFile was just given: a
+	// restrictive process umask (022, and CI runners often set one) masks
+	// bits out of WriteFile's requested mode, so without this explicit
+	// Chmod staged could end up at 0o750&^022 and the assertion below would
+	// be checking a mode nothing actually asked for.
+	if err := os.Chmod(staged, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	if err := replaceBinary(staged, target); err != nil {
@@ -100,8 +112,8 @@ func TestReplaceBinaryKeepsTheStagedMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o755 {
-		t.Errorf("mode = %v, want -rwxr-xr-x", info.Mode().Perm())
+	if info.Mode().Perm() != 0o750 {
+		t.Errorf("mode = %v, want -rwxr-x---", info.Mode().Perm())
 	}
 }
 
