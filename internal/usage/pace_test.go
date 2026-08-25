@@ -381,3 +381,30 @@ func TestPaceCoversTheScopedWindows(t *testing.T) {
 		t.Error("five_hour or cinder_cove reports as weekly")
 	}
 }
+
+// A projection far enough out overflows the conversion to time.Duration, and an
+// overflow here does not lose precision -- it wraps the instant into the PAST
+// and flips WillLastToReset to the opposite of the truth. That answer reaches a
+// switch decision through strategy's projectedExhaustion, so it has to saturate
+// rather than wrap.
+func TestAVeryDistantProjectionSaturatesRatherThanWrapping(t *testing.T) {
+	now := time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC)
+	length := 7 * 24 * time.Hour
+	// 65% of the way through the week, with almost nothing spent: the burn rate
+	// extrapolates centuries out.
+	reset := now.Add(length - time.Duration(0.65*float64(length)))
+	pct := 0.003
+	p := PaceOf(WindowSevenDay, NewWindow(&pct, &reset), now)
+
+	proj, ok := p.Projection()
+	if !ok {
+		t.Fatal("no projection; this test needs one to overflow")
+	}
+	if !proj.ExhaustionAt.After(now) {
+		t.Errorf("ExhaustionAt = %v, which is before now (%v): the conversion wrapped",
+			proj.ExhaustionAt, now)
+	}
+	if !proj.WillLastToReset {
+		t.Errorf("WillLastToReset = false at %v%% used; the window outlasts its reset by centuries", pct)
+	}
+}
