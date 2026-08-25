@@ -109,4 +109,47 @@ func (s SecretKey) Sign(content []byte, trustedComment string) ([]byte, error) {
 	return []byte(b.String()), nil
 }
 
-var _ = rand.Reader // used by GenerateKey, added in the next task
+// GenerateKey returns the two full file bodies for a fresh release keypair: the
+// public key in minisign's own format, and the secret key in this repository's
+// (SecretKey's comment explains why they differ).
+//
+// It exists because the maintainer machine does not have minisign installed,
+// and requiring a package manager to bootstrap this repository's own key would
+// put a third party between the repository and its trust root.
+//
+// NO PASSWORD. A password stored in the same secret store as the key it
+// protects protects against nothing, and it adds a stdin prompt that hangs on
+// the non-tty a release job runs on.
+func GenerateKey() (pubFile, secFile string, err error) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return "", "", err
+	}
+	// ONE key id, used by both halves. Two draws would produce a pair whose
+	// signatures the pair's own public key rejects with ErrKeyID -- a failure
+	// that looks exactly like tampering and would be discovered at a release.
+	var keyNum [8]byte
+	if _, err := rand.Read(keyNum[:]); err != nil {
+		return "", "", err
+	}
+
+	pubBody := make([]byte, 0, pubKeyLen)
+	pubBody = append(pubBody, algLegacy...)
+	pubBody = append(pubBody, keyNum[:]...)
+	pubBody = append(pubBody, pub...)
+
+	secBody := make([]byte, 0, secKeyLen)
+	secBody = append(secBody, algLegacy...)
+	secBody = append(secBody, keyNum[:]...)
+	secBody = append(secBody, priv...)
+
+	id := keyIDHex(keyNum)
+	// "minisign public key" rather than a name of this repository's own: the
+	// stock loader skips this line entirely, and the phrasing is what a human
+	// expects to see at the top of a .pub file.
+	pubFile = untrustedPrefix + "minisign public key " + id + "\n" +
+		base64.StdEncoding.EncodeToString(pubBody) + "\n"
+	secFile = untrustedPrefix + "ccdaddy release secret key " + id + "\n" +
+		base64.StdEncoding.EncodeToString(secBody) + "\n"
+	return pubFile, secFile, nil
+}

@@ -112,3 +112,63 @@ func TestSignRefusesALineBreakInTheTrustedComment(t *testing.T) {
 		}
 	}
 }
+
+// secondLine is how both file bodies are consumed everywhere else: the pin
+// test reads it out of ccdaddy.pub, and the release job reads it out of a
+// repository secret.
+func secondLine(t *testing.T, file string) string {
+	t.Helper()
+	lines := strings.Split(strings.TrimRight(file, "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("file has %d lines, want 2:\n%s", len(lines), file)
+	}
+	if !strings.HasPrefix(lines[0], untrustedPrefix) {
+		t.Fatalf("line 1 = %q, want an untrusted comment", lines[0])
+	}
+	return lines[1]
+}
+
+func TestGenerateKeyProducesAMatchingPair(t *testing.T) {
+	pubFile, secFile, err := GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+
+	pk, err := ParsePublicKey(secondLine(t, pubFile))
+	if err != nil {
+		t.Fatalf("the generated public key does not parse: %v", err)
+	}
+	sk, err := ParseSecretKey(secondLine(t, secFile))
+	if err != nil {
+		t.Fatalf("the generated secret key does not parse: %v", err)
+	}
+	if pk.KeyNum != sk.KeyNum {
+		t.Fatalf("key ids differ: public %x, secret %x", pk.KeyNum, sk.KeyNum)
+	}
+	if !strings.Contains(pubFile, keyIDHex(pk.KeyNum)) {
+		t.Errorf("the public key's comment does not carry its own key id %s", keyIDHex(pk.KeyNum))
+	}
+
+	content := []byte("0123456789abcdef  ccdad-linux-amd64\n")
+	sig, err := sk.Sign(content, TrustedComment("v1.2.3"))
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	if err := Verify([]PublicKey{pk}, content, sig, "v1.2.3"); err != nil {
+		t.Fatalf("a freshly generated pair does not verify its own signature: %v", err)
+	}
+}
+
+func TestGenerateKeyIsDifferentEveryTime(t *testing.T) {
+	a, _, err := GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _, err := GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a == b {
+		t.Fatal("two calls produced the same public key")
+	}
+}
