@@ -139,6 +139,33 @@ contents; keep it that way.
   contain. That last one is there because a private note was once cited by
   name rather than by section, and a bare name has no spelling for a literal
   to catch. Pointing at a file that *is* in the tree is fine and stays fine.
+- **The 7-bit rule is `internal/tui` and `internal/view` only.** Those two
+  packages draw a terminal page whose frame is measured in columns, and their
+  golden fixtures compare raw bytes — so a character that is one column wide
+  on your machine and two under `RUNEWIDTH_EASTASIAN`, or that a console on a
+  code page other than 65001 cannot carry, breaks a frame rather than a
+  sentence. Every glyph either package emits comes out of the `Glyphs` value
+  the model was built with, and there are two sets, unicode and ascii: pick
+  from them rather than typing a character into a cell. The fixtures are the
+  whole enforcement. There is deliberately no linter, because the rule is not
+  repository-wide, and a repository-wide one would have to be wrong about a
+  hundred lines to be right about the frame: measured over string literals in
+  shipped non-test Go, this tree emits 106 em dashes across 101 lines and 4
+  ellipses, most of them from `internal/cli/doctor.go` and
+  `internal/cli/run.go`. Those are prose, they are correct, and "fixing" one
+  back to a hyphen changes nothing for the better. A comment in `internal/tui`
+  once claimed the whole repository emitted no non-ASCII byte; it was wrong
+  by well over a hundred characters at the time, and it is the reason this
+  bullet exists.
+
+  The one exemption inside those two packages is narrower still: a frame
+  corner, a rule or a gauge cell may be drawn at two columns wide under
+  `RUNEWIDTH_EASTASIAN` without breaking a measured width, because a frame is
+  drawn to a width it was told rather than packed against neighbouring text.
+  That exemption is closed at exactly eight characters — four corners, two
+  rules, two gauge cells — and it stays closed because `PickGlyphs` falls
+  back to the ASCII set for any process running with that mode on, so the
+  exemption never has to widen a frame it did not already draw at that width.
 - **Commit messages are imperative and explain themselves.** Look at
   `git log` — the subject says what the commit does, and the body says why,
   what was considered, and what was deliberately left alone. That body is
