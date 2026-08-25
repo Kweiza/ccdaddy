@@ -462,21 +462,66 @@ func runUpdate(cmd *cobra.Command, opts updateOptions) error {
 		return rep.emit(cmd, opts.asJSON, ExitOK, "", "")
 	}
 
+	// ---- from here on, the megabytes ----
+
+	// Step 15. Into the staging directory beside the target, which is what
+	// makes the final move a same-directory rename: /tmp is a different
+	// filesystem on most distributions, a cross-device move degrades to a copy,
+	// and a copy over a running binary is ETXTBSY.
+	staged := filepath.Join(staging, asset)
+	ctx, cancel = context.WithTimeout(cmd.Context(), assetTimeout)
+	gotHash, n, err := client.Download(ctx, dl+"/"+asset, staged, maxAssetBytes)
+	cancel()
+	if err != nil {
+		return rep.emit(cmd, opts.asJSON, ExitFailure, "download-asset",
+			fmt.Sprintf("ccdad could not download %s: %v", asset, err))
+	}
+
+	// Step 16. Before the digest, so that a correctly-checksummed error page is
+	// reported as what it is. install.sh applies the same floor for the same
+	// reason, and the two must not drift.
+	if n < release.MinAssetBytes {
+		return rep.emit(cmd, opts.asJSON, ExitBlocked, "size",
+			fmt.Sprintf("%s downloaded as %d bytes, which is not a ccdad binary — a proxy or an error page. "+
+				"Nothing was replaced.", asset, n))
+	}
+
+	// Step 17. Case-sensitive, never EqualFold: both sides are lowercase hex by
+	// construction, and a fold would accept a row an attacker re-cased.
+	//
+	// The remedy is built from updateDistrust, which is the same constant
+	// updateVerifyFailure's distrust remedy is built from — so the compiler
+	// keeps the two from drifting instead of a comment claiming they have not.
+	// A checksum mismatch is a tamper failure, and the installers check
+	// checksums and not signatures, so it must never contain the sentence
+	// "Re-run the installer": that spelling is what the verification tests
+	// assert on to tell the two remedies apart.
+	//
+	// The one sentence it does not share is the `minisign -Vm sha256sums.txt`
+	// invitation. Here sha256sums.txt verified — what failed to match is the
+	// ASSET, and re-running minisign on the checksum file would succeed and say
+	// nothing at all about that.
+	if gotHash != wantHash {
+		return rep.emit(cmd, opts.asJSON, ExitBlocked, "checksum",
+			fmt.Sprintf("%s does not match the checksum %s publishes for it.\n"+
+				"  published %s\n  downloaded %s\n"+
+				updateDistrust+".", asset, want.Tag(), wantHash, gotHash))
+	}
+
 	// ---------------------------- BEGIN PLACEHOLDER ----------------------------
 	// Everything from this comment down to END PLACEHOLDER is scaffolding, and
-	// it is meant to be deleted WHOLE — comment, blank assignments and return
-	// together. Whoever writes the rest of the algorithm (downloading the asset
-	// into staging, checking its size and digest against wantHash, running it
-	// once and moving it over target) replaces this block; leaving the comment
-	// behind would leave it sitting above live code, describing something that
-	// is no longer true.
+	// it is meant to be deleted WHOLE — comment, blank assignment and return
+	// together. Whoever writes the rest of the algorithm (running the staged
+	// file once, stopping the daemon, moving the file over target and starting
+	// the daemon again) replaces this block; leaving the comment behind would
+	// leave it sitting above live code, describing something that is no longer
+	// true.
 	//
 	// It exists so this command RUNS while the rest is still being written: it
-	// reports what it has verified and stops. The blank assignments are what
-	// keep the compiler quiet about values only the later steps read. Nothing
+	// reports what it has verified and stops. The blank assignment is what
+	// keeps the compiler quiet about a value only the later steps read. Nothing
 	// asserts on any of it.
-	_, _ = asset, wantHash
-	_ = staging
+	_ = staged
 	return rep.emit(cmd, opts.asJSON, ExitOK, "", "")
 	// ----------------------------- END PLACEHOLDER -----------------------------
 }
@@ -491,6 +536,17 @@ func upgradeHint(owner string) string {
 	return "'brew upgrade ccdad'"
 }
 
+// updateDistrust is the shared body of the DISTRUST remedy: what a user is told
+// when the release itself cannot be believed.
+//
+// It is a constant rather than a sentence written twice because two arms hand it
+// out — updateVerifyFailure below, and the checksum mismatch in runUpdate — and
+// a divergence between them would be a difference in what ccdad says about the
+// same class of failure, with nothing able to go red for it.
+const updateDistrust = "This release cannot be trusted, and re-running the installer would not help: " +
+	"the installers check checksums and not signatures. Take it up at " +
+	"https://github.com/Kweiza/ccdaddy/releases"
+
 // updateVerifyFailure maps a verification failure to its reason and the remedy
 // the user is given.
 //
@@ -504,9 +560,10 @@ func upgradeHint(owner string) string {
 // rather than an attack — for those the installer IS the way forward.
 func updateVerifyFailure(err error) (reason, remedy string) {
 	const reinstall = "Re-run the installer from the project's README to move to a release this build can verify."
-	const distrust = "This release cannot be trusted, and re-running the installer would not help: " +
-		"the installers check checksums and not signatures. Take it up at " +
-		"https://github.com/Kweiza/ccdaddy/releases, and check the file yourself with `minisign -Vm sha256sums.txt`."
+	// The invitation to check the file is this arm's alone: here it is
+	// sha256sums.txt itself that failed to verify, so re-running minisign over
+	// it is exactly the thing that shows the user what ccdad saw.
+	const distrust = updateDistrust + ", and check the file yourself with `minisign -Vm sha256sums.txt`."
 
 	switch {
 	case errors.Is(err, relsign.ErrKeyID):
