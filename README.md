@@ -463,13 +463,25 @@ never saw.
 
 The threshold it picks is a pace target rather than a number. Each window gets
 the share of *itself* that has already elapsed, plus one account's slice of what
-is left, capped at 99 — where *usable* means an account the engine could actually
-hand the work to: not disabled, not an api-key account, carrying a usage reading,
-and not currently quarantined.
+is left — where *usable* means an account the engine could actually hand the work
+to: not disabled, not an api-key account, carrying a usage reading, and not
+currently quarantined.
 
 ```text
-threshold = elapsed% of this window + 100 / usable accounts,   at most 99
+threshold = elapsed% of this window + 100 / usable accounts
 ```
+
+**It is not capped, and a target above 100 is meaningful.** A window far enough
+through its own cycle earns more than 100, which reads as *no restraint*: there
+is nobody to hand the work to, so nothing is being held back. Clamping it used to
+seem safe and was not — the clamp fires on whichever account is furthest through
+its own window, which is exactly the account whose quota expires soonest, and
+above the clamp the elapsed term is gone and the pool is ordered on raw
+utilization instead of on pace. Measured on three accounts resetting one, three
+and five days out, the clamp doubled how far the fleet drifted from its own pace
+lines *and* cost more switches doing it. The human table still stops at `100%`
+and says so in a footer; `--json` carries the real figure, because `slack` is
+measured against it.
 
 A weekly window 43% elapsed — three days into a week — with four accounts gives
 68, which is 43 plus 25: an account running ahead of that pace hands the work on
@@ -491,12 +503,17 @@ which is a clock no probe can fix, so that row carries no mark. A primary credit
 is held to a fixed 95 — credits do not come back at all, and the last few points
 are the ones worth keeping for a session already running.
 
-Hover also sets its own anti-flap margins: `hysteresis_pct = 5`, no
+Hover also sets its own anti-flap margins: `hysteresis_pct = 3`, no
 multiplicative `headroom_ratio`, a two-minute cooldown, a five-minute recovery
 hysteresis, and a pre-emption lead taken from the widest poll gap actually
 observed instead of from the file. The ratio is dropped because it runs on raw
 headroom while the ranking orders on slack, and the two disagree hardest exactly
-where hover operates.
+where hover operates. The margin is `3` rather than the stock `10` because
+hover's thresholds move: two accounts binding on windows of the same length have
+thresholds that rise at the same rate, so the gap between their slacks does not
+close with time at all — only burn closes it, on the very account the margin is
+holding you to. A margin above the spread a real pool shows will sit on an
+account with ten points left while one with thirty waits.
 
 `ccdad hover status` prints, per account and per window, the share elapsed, the
 utilization, the threshold hover computed and the slack between the last two —
@@ -507,19 +524,28 @@ rather than accepted:
 $ ccdad hover status
 Hover:   on
 Pool:    3 usable accounts, so each threshold is the share of its own window that
-         has elapsed, plus 100/3 points, capped at 99.
+         has elapsed, plus 100/3 points. A window far enough through its own
+         cycle earns more than 100, which means no restraint -- there is nobody
+         to hand the work to. This column stops at 100; --json carries the rest.
 
   IDX  ACCOUNT            WINDOW       ELAPSED  UTIL  THRESHOLD  SLACK
-* 1    work@example.com   five_hour    80%      12%   99%        +87
+* 1    work@example.com   five_hour    80%      12%   100%       +101
 * 1    work@example.com   seven_day    43%      52%   76%        +24
-  2    spare@example.com  five_hour    80%      74%   99%        +25
+  2    spare@example.com  five_hour    80%      74%   100%       +39
   2    spare@example.com  seven_day    43%      31%   76%        +45
   3    seat@example.com   extra_usage  -        61%   95%        +34  (primary, metered in credits)
+
+2 row(s) show 100% because their pace target ran past it: far enough
+through their own cycle that nothing is being held back. SLACK is measured on
+the real figure, so those rows do not subtract; `ccdad hover status --json`
+carries it.
 ```
 
 `*` marks the account Claude Code is logged in as, `-` in ELAPSED is a window
 with no reset to measure a share against, and SLACK is `THRESHOLD − UTIL` — the
-number the ranking actually orders on.
+number the ranking actually orders on. On the rows the footer names, THRESHOLD is
+the ceiling rather than the derived figure, so those two columns do not subtract;
+SLACK is always the real one, because it is what the engine ordered on.
 
 It answers `0` when hover is on and `5` when it is off, printing the table
 either way — so `ccdad hover status >/dev/null || ccdad hover on` is correct,

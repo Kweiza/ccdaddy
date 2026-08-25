@@ -24,14 +24,39 @@ import (
 // holding quota back buys nothing.
 
 const (
-	// HoverCap is the highest threshold hover will set.
+	// HoverDisplayCap is the highest threshold a HUMAN table prints. Nothing
+	// clamps the derived figure itself any more; see the note below.
 	//
-	// It is 99 rather than 100 because a threshold of 100 is not crossed until
-	// the account is completely out, and by then the session has already been
-	// cut off. The last point is the room the pre-emptive switch needs: it
-	// requires some candidate with POSITIVE slack, and at a threshold of 100
-	// every account at its limit has exactly zero.
-	HoverCap = 99.0
+	// A derived threshold used to be clamped to 99 on the reasoning that a
+	// threshold of 100 is not crossed until the account is completely out. That
+	// reasoning was sound and the clamp was still wrong, because of WHICH
+	// account it lands on: the clamp fires when the elapsed share plus the pool
+	// share exceeds the cap, which is to say on whichever account is furthest
+	// through its own window -- exactly the account whose quota expires soonest
+	// and which the pace target exists to send work to. Above that line the
+	// threshold was a flat 99 and the slack collapsed to 99 - utilization, with
+	// the elapsed term thrown away, so the pool was ordered on raw utilization
+	// for precisely the accounts that mattered most.
+	//
+	// It was measured rather than argued. Three accounts with weekly resets one,
+	// three and five days out, driven through Decide on thirty-minute ticks for
+	// five days: the clamp was live on 240 of 240 ticks, and on every single
+	// tick where the ranking failed to put the neediest account first, that
+	// account was the clamped one. The same loop ordered directly on the pace
+	// deficit settled to a spread of 3.5 points; hover under the clamp
+	// oscillated between 17 and 41, for the same number of switches.
+	//
+	// What made the clamp look load-bearing was that "empty implies spent"
+	// rested on it: 100 > 99 guarantees a used-up account reports negative
+	// slack. That now holds structurally instead -- see Spent, which reads
+	// MinPct -- so the clamp has nothing left to carry.
+	//
+	// Uncapped, a threshold above 100 is a real and readable statement: there is
+	// nobody to hand the work to, so nothing is being held back. The human table
+	// still prints 100 as its ceiling, because a percentage above 100 reads as a
+	// bug to everyone who has not read this comment; `--json` carries the true
+	// figure, because a machine consumer checks slack against it.
+	HoverDisplayCap = 100.0
 
 	// HoverFallbackThreshold is what a window with no elapsed share gets: one
 	// that reported no reset, and one whose reset is further out than the
@@ -53,14 +78,28 @@ const (
 	// subscription window's last few points are gone in hours anyway.
 	HoverCreditThreshold = 95.0
 
-	// HoverHysteresisPct is 5 rather than the stock 10 because hover's
+	// HoverHysteresisPct is 3 rather than the stock 10 because hover's
 	// thresholds MOVE. Every window's threshold rises as the window elapses, so
 	// a margin sized for a static threshold holds the engine on an account
-	// whose slack the passing of time is already eroding. Five points is half
-	// the stock margin and still above the noise floor that one was sized
-	// against -- a binding window flipping between two windows a point apart,
-	// which moves headroom by a few points with no usage at all.
-	HoverHysteresisPct = 5.0
+	// whose slack the passing of time is already eroding.
+	//
+	// Three rather than the five it was first set to, because five turned out
+	// to sit ABOVE the spread a real pool shows. Two accounts whose binding
+	// windows are the same LENGTH have thresholds that rise at the same rate,
+	// so the gap between their slacks does not close with time at all: only
+	// burn closes it, and the burn is on the account the margin is holding the
+	// engine on. The fleet of 2026-08-25 sat four points apart under a
+	// five-point margin, live account at ten points of raw room and the
+	// candidate at thirty -- so the margin spent the difference on the emptier
+	// of the two and only released once the live account was a point nearer its
+	// limit. TestTheHoverMarginIsUnderTheSpreadARealPoolShows is that pool.
+	//
+	// Three is still above the noise floor the stock margin was sized against
+	// -- a binding window flipping between two windows a point apart, which
+	// moves headroom by a point or two with no usage at all. What bounds the
+	// flap RATE is HoverCooldown below, which is the mechanism for that job; a
+	// margin sized to do it as well is a margin that strands quota.
+	HoverHysteresisPct = 3.0
 
 	// HoverHeadroomRatio is 1.0, which is "no multiplicative margin".
 	//
@@ -289,10 +328,9 @@ func HoverThresholds(cands []Candidate, o Options) HoverPlan {
 			row.ExpectedPct, row.HasExpected = usage.ExpectedPct(w.Name, w.Window, o.Now)
 			row.Threshold = HoverFallbackThreshold
 			if row.HasExpected {
+				// Deliberately unclamped; HoverDisplayCap says why, and the
+				// renderer is what holds the printed figure to 100.
 				row.Threshold = row.ExpectedPct + share
-				if row.Threshold > HoverCap {
-					row.Threshold = HoverCap
-				}
 			}
 			// A window that named its reset and still has no share elapsed is a
 			// clock problem, and spending a turn of the user's quota would not

@@ -441,6 +441,42 @@ func short(d time.Duration) string {
 // it and does so on their own clock.
 func clock(t time.Time) string { return t.Local().Format("15:04") }
 
+// displayThreshold is the derived pace target as a HUMAN table prints it.
+//
+// The derived figure is unclamped -- HoverDisplayCap's own comment says why the
+// clamp had to come out of the ranking -- but a percentage above 100 reads as a
+// bug to a person who has not read that comment, so the column stops at 100. The
+// SLACK column beside it is not clamped and must not be: it is the quantity the
+// engine actually ordered on, and a table that showed a doctored version of the
+// decision axis would be worse than one whose two columns do not subtract.
+// thresholdCeilingFooter is what tells the reader when that has happened.
+func displayThreshold(v float64) float64 {
+	if v > strategy.HoverDisplayCap {
+		return strategy.HoverDisplayCap
+	}
+	return v
+}
+
+// thresholdCeilingFooter names the rows whose printed threshold is the ceiling
+// rather than the figure the ranking used, so `threshold - util = slack` failing
+// to hold on those rows is explained rather than discovered.
+func thresholdCeilingFooter(out io.Writer, plan strategy.HoverPlan) {
+	n := 0
+	for _, row := range plan.Windows {
+		if row.Threshold > strategy.HoverDisplayCap {
+			n++
+		}
+	}
+	if n == 0 {
+		return
+	}
+	fmt.Fprintf(out, "\n%d row(s) show %.0f%% because their pace target ran past it: far enough\n",
+		n, strategy.HoverDisplayCap)
+	fmt.Fprintf(out, "through their own cycle that nothing is being held back. SLACK is measured on\n")
+	fmt.Fprintf(out, "the real figure, so those rows do not subtract; `ccdad hover status --json`\n")
+	fmt.Fprintf(out, "carries it.\n")
+}
+
 // renderHoverStatus is the human table. Every column is an INPUT to the formula
 // except the last two, which are its output and the comparison it feeds -- so a
 // reader can check the arithmetic rather than being asked to accept it.
@@ -450,8 +486,11 @@ func renderHoverStatus(cmd *cobra.Command, on bool, plan strategy.HoverPlan,
 	out := cmd.OutOrStdout()
 	fmt.Fprintf(out, "Hover:   %s\n", onOff(on))
 	fmt.Fprintf(out, "Pool:    %d usable accounts, so each threshold is the share of its own window that\n", plan.Usable)
-	fmt.Fprintf(out, "         has elapsed, plus 100/%d points, capped at %.0f.\n\n",
-		max(plan.Usable, 1), strategy.HoverCap)
+	fmt.Fprintf(out, "         has elapsed, plus 100/%d points. A window far enough through its own\n",
+		max(plan.Usable, 1))
+	fmt.Fprintf(out, "         cycle earns more than 100, which means no restraint -- there is nobody\n")
+	fmt.Fprintf(out, "         to hand the work to. This column stops at %.0f; --json carries the rest.\n\n",
+		strategy.HoverDisplayCap)
 
 	if len(plan.Windows) == 0 {
 		return nil
@@ -509,11 +548,12 @@ func renderHoverStatus(cmd *cobra.Command, on bool, plan strategy.HoverPlan,
 		}
 		fmt.Fprintf(w, "%s %d\t%s\t%s\t%s\t%.0f%%\t%.0f%%\t%+.0f%s\n",
 			marker, a.Idx, a.Label(), row.Window, elapsed,
-			row.Utilization, row.Threshold, row.Slack, note)
+			row.Utilization, displayThreshold(row.Threshold), row.Slack, note)
 	}
 	if err := w.Flush(); err != nil {
 		return err
 	}
+	thresholdCeilingFooter(out, plan)
 	warmupFooters(out, plan, byUUID, facts)
 	return nil
 }

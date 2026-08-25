@@ -85,21 +85,24 @@ func TestHoverDerivesEveryThresholdFromTheClockAndThePool(t *testing.T) {
 		accounts: 4,
 		want:     68,
 	}, {
-		// Nobody to hand to. Spend everything that is left.
+		// Nobody to hand to. Spend everything that is left -- and the figure
+		// says so by running past 100, which is what "no restraint" looks like
+		// once nothing clamps it. 43 elapsed plus the whole 100 of the share.
 		name:     "one account left",
 		window:   usage.WindowSevenDay,
 		length:   week,
 		share:    0.43,
 		accounts: 1,
-		want:     99,
+		want:     143,
 	}, {
-		// It resets within the hour, so holding quota back buys nothing.
+		// It resets within the hour, so holding quota back buys nothing: 80
+		// elapsed plus half the pool's share.
 		name:     "a five-hour window 80% elapsed with two accounts",
 		window:   usage.WindowFiveHour,
 		length:   five,
 		share:    0.80,
 		accounts: 2,
-		want:     99,
+		want:     130,
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
 			pool := hoverPool(t, tc.accounts, tc.window, elapsedWindow(tc.length, tc.share, 10))
@@ -422,6 +425,53 @@ func TestHoverConfigReplacesTheMarginsAndNotTheCeiling(t *testing.T) {
 	}
 	if got.MaxAutoSpend != 25 {
 		t.Errorf("MaxAutoSpend = %v, want 25 left exactly as the file set it", got.MaxAutoSpend)
+	}
+}
+
+// fleetOf20260825 is the pool `ccdad hover status` printed on 2026-08-25: six
+// accounts, every one of them past the pace target hover derived for it, so the
+// pass runs in recovery mode and nobody returns inside the horizon.
+//
+// The two that matter are 4-ejalrnrmf and 5-junseong. Both bind on seven_day, so
+// their thresholds rise at exactly the same rate and the four points between
+// their slacks are FROZEN against the clock -- the only thing that closes that
+// gap is the live account spending another point, which is a point spent on the
+// account holding ten of raw room rather than the one holding thirty.
+func fleetOf20260825() []Candidate {
+	return []Candidate{
+		hoverAt("1-official", 0.92, 100),   // 0 points left, slack -1 under the cap
+		hoverAt("2-kweizaa", 0.33, 85),     // 15 left, slack -35.33
+		hoverAt("3-tlfyvhsdlek", 0.17, 64), // 36 left, slack -30.33
+		hoverAt("4-ejalrnrmf", 0.38, 70),   // 30 left, slack -15.33
+		hoverAt("5-junseong", 0.54, 90),    // 10 left, slack -19.33
+		hoverAt("6-chan", 0.37, 80),        // 20 left, slack -26.33
+	}
+}
+
+// The margin has to sit UNDER the spread a real pool shows, or it strands the
+// engine on the emptier account for as long as the gap stays frozen.
+func TestTheHoverMarginIsUnderTheSpreadARealPoolShows(t *testing.T) {
+	p := Decide(fleetOf20260825(), hoverOpts(), Config{}, NewState(), "5-junseong")
+
+	// Stated rather than assumed: if the fixture ever drifts, the failure should
+	// name the gap and not just the verdict.
+	active, ok := find(p.Result, "5-junseong")
+	if !ok {
+		t.Fatal("the live account is not in the pass")
+	}
+	best := p.Result.Order[0]
+	if best.UUID != "4-ejalrnrmf" {
+		t.Fatalf("best = %q, want 4-ejalrnrmf: the pool this test is about is not the pool it ranked", best.UUID)
+	}
+	if gap := best.Headroom.Slack - active.Headroom.Slack; gap < HoverHysteresisPct {
+		t.Fatalf("gap = %.2f points, margin = %.2f: the margin is back above the spread", gap, HoverHysteresisPct)
+	}
+	if p.Action != ActionSwitch {
+		t.Errorf("action = %s (%s), want switch off the account with ten points of room "+
+			"onto the one with thirty", p.Action, p.Reason)
+	}
+	if p.Target.UUID != "4-ejalrnrmf" {
+		t.Errorf("target = %q, want 4-ejalrnrmf", p.Target.UUID)
 	}
 }
 

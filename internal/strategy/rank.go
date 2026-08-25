@@ -324,11 +324,19 @@ func eligible(c Candidate) bool {
 // It is three-valued on purpose. An account that could not be read is neither
 // spent nor unspent, and folding that into a boolean is the bug that left cswap
 // parked on the account that reset last.
+// The MinPct clause states "empty implies spent" STRUCTURALLY rather than
+// leaving it to arithmetic on a threshold constant. It used to be free: hover
+// clamped every threshold below 100, so a used-up window could only ever report
+// negative slack. With the clamp gone a window at 100% late in its own cycle is
+// measured against a pace target above 100 and reports POSITIVE slack -- which
+// would file an account with nothing in it in the roomy tier, and, because
+// allOver is built from this predicate, would make ModeRecovery unreachable for
+// the whole pool on the strength of one such account.
 func Spent(h Headroom) (spent, known bool) {
 	if !h.Known {
 		return false, false
 	}
-	return h.Slack < 0, true
+	return h.Slack < 0 || h.MinPct <= 0, true
 }
 
 // OutOfQuota is whether some window this account carries has nothing left in it
@@ -341,12 +349,12 @@ func Spent(h Headroom) (spent, known bool) {
 // per-window table on every tick, so under hover they are never the same
 // question again.
 //
-// What makes them come apart at the top is the cap. Hover's threshold is
-// min(HoverCap, elapsed + share), so an account at 100% late in its window is
-// measured against 99 and reports a slack of -1 -- the least negative figure in
-// a pool where an account with half its week still unspent, but early enough
-// that its threshold is 31, reports -22. Ranked on slack the empty account wins,
-// and the engine hands the session to the one account that cannot serve it.
+// What makes them come apart at the top is that hover's threshold is a PACE
+// TARGET and nothing clamps it. A window far enough through its own cycle is
+// measured against a figure above 100, so an account with one point left reports
+// POSITIVE slack and lands in the roomy tier ahead of an account holding sixty.
+// Ranked on slack alone the near-empty account wins, and the engine hands the
+// session to the one account that cannot serve it.
 //
 // It reads MinPct rather than Pct for the reason MinPct exists: Pct describes
 // whichever window is tightest on the SLACK axis, and the window that is empty
