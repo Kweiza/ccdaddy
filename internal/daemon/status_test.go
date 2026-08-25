@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Kweiza/ccdaddy/internal/history"
 )
 
 func at(s string) time.Time {
@@ -386,12 +388,15 @@ func TestSweepStatusTempsRemovesOrphansAndNothingElse(t *testing.T) {
 		t.Fatal(err)
 	}
 	keep := map[string]string{
-		"status.json":      `{"schemaVersion":1}`,
-		"ccdad.pid":        "1\n",
-		"ccdad.lock":       "",
-		"usage.json":       "{}",
-		"usage.json.tmp-1": "{}",
-		"history.json":     "{}",
+		"status.json":  `{"schemaVersion":1}`,
+		"ccdad.pid":    "1\n",
+		"ccdad.lock":   "",
+		"usage.json":   "{}",
+		"history.json": "{}",
+		// The cache's own orphan, named the way its writer would name it, so
+		// the "left alone" half of this test is about a file the sweeper could
+		// really have taken rather than a string that no longer resembles one.
+		orphanTemp(t, "usage.json", "1"): "{}",
 	}
 	for name, body := range keep {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
@@ -399,11 +404,11 @@ func TestSweepStatusTempsRemovesOrphansAndNothingElse(t *testing.T) {
 		}
 	}
 	orphans := []string{
-		"status.json.tmp-1", "status.json.tmp-987654321",
+		orphanTemp(t, StatusFileName, "1"), orphanTemp(t, StatusFileName, "987654321"),
 		// The series is the other file with no sweeper of its own. Its temps
 		// are collected here and usage.json's deliberately are not, so a test
 		// that named only status.json's could not tell the two apart.
-		"history.json.tmp-4242",
+		orphanTemp(t, history.FileName, "4242"),
 	}
 	for _, name := range orphans {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte("{}"), 0o600); err != nil {

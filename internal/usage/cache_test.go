@@ -3,6 +3,7 @@ package usage
 import (
 	"encoding/json"
 	"errors"
+	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/cclock"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"os"
@@ -417,8 +418,11 @@ func TestCacheWritesAtomically(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Matched against the writer's own pattern rather than a hand-spelled
+	// ".tmp-": a literal here goes vacuous the moment cclink renames its temp,
+	// and a check that stopped being able to fail would report success.
 	for _, e := range entries {
-		if strings.Contains(e.Name(), ".tmp-") {
+		if ok, _ := filepath.Match(cclink.TempPattern(CacheFileName), e.Name()); ok {
 			t.Errorf("a temp file survived the write: %s", e.Name())
 		}
 	}

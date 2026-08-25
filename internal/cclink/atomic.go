@@ -24,6 +24,34 @@ const (
 // in this package assigns to it outside a test.
 var createTemp = os.CreateTemp
 
+// tempSuffix is the tail of the temp file's name. It is spelled once, here,
+// and reached only through TempPattern.
+const tempSuffix = ".tmp-*"
+
+// TempPattern returns the name of the sibling temp file WriteFileAtomic writes
+// beside path, as a pattern.
+//
+// The returned string is simultaneously an os.CreateTemp pattern and a
+// filepath.Glob pattern — both read `*` as "the part that varies" — and that is
+// the whole point of exporting it. A rename that never completed strands the
+// temp file, and whatever collects those orphans has to name them;
+// daemon.SweepStatusTemps is the one that does. Deriving its glob from here
+// rather than spelling the suffix a second time is what stops the writer and
+// the sweeper from drifting apart. They were two literals under a comment
+// claiming they were one, nothing executed that claim, and changing the
+// writer's left the whole suite green with the sweep collecting nothing.
+//
+// It takes the full path rather than a base name so a caller cannot hand it the
+// wrong half; only the base is used, so the result names one directory entry
+// and never contains a separator.
+//
+// The two readings part company for a base name holding a glob metacharacter —
+// `*`, `?`, `[` — which os.CreateTemp takes literally and filepath.Match does
+// not. Nothing sweeps such a file: the only sweeper names its files with
+// constants, and the two callers that take a path from the user
+// (`export --out`, `runway --out`) have no sweeper at all.
+func TempPattern(path string) string { return filepath.Base(path) + tempSuffix }
+
 // renameFile is a seam so a test can drive the replace-retry loop with a
 // deterministic failure sequence instead of depending on an actual Windows
 // sharing violation.
@@ -57,11 +85,12 @@ var syncFile = (*os.File).Sync
 // file open when the rename is attempted; that is retried per winerr.Retryable.
 // If the temp file itself is still held after every retry, it can survive as
 // an orphan — accepted here, since guarding against it needs a second retry
-// loop for a rarer failure than the one this function already handles.
+// loop for a rarer failure than the one this function already handles. An
+// orphan is named by TempPattern, which is what a sweeper globs.
 func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
 
-	tmp, err := createTemp(dir, filepath.Base(path)+".tmp-*")
+	tmp, err := createTemp(dir, TempPattern(path))
 	if err != nil {
 		return fmt.Errorf("creating temp file beside %s: %w", filepath.Base(path), err)
 	}

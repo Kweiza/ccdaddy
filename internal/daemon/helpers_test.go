@@ -11,9 +11,35 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/credhome"
 )
+
+// orphanTemp spells one concrete instance of the temp file cclink's atomic
+// write strands beside file, DERIVED from that writer's own pattern rather
+// than hand-spelled.
+//
+// The distinction is the whole reason this helper exists. These fixtures used
+// to be literals — "status.json.tmp-1" — so they stood for the writer's output
+// only as long as somebody kept them in step by hand. Nobody did, and nobody
+// could have noticed: with the fixture and the sweeper each holding their own
+// copy of the suffix, changing the WRITER's left every test in the repository
+// green while SweepStatusTemps collected nothing.
+//
+// The substitution mirrors os.CreateTemp's own rule — the LAST `*` is the one
+// that gives way to the varying part — so a pattern that ever grows a second
+// one keeps producing a name the real writer could have produced.
+func orphanTemp(t *testing.T, file, vary string) string {
+	t.Helper()
+	pattern := cclink.TempPattern(file)
+	i := strings.LastIndex(pattern, "*")
+	if i < 0 {
+		t.Fatalf("cclink.TempPattern(%q) = %q, which has no * for os.CreateTemp to fill in — "+
+			"an orphan named from it could not be one the writer produces", file, pattern)
+	}
+	return pattern[:i] + vary + pattern[i+1:]
+}
 
 // isolate points BOTH homes this package resolves at directories of this test's
 // own.

@@ -1235,17 +1235,20 @@ func TestOrphanCredentialsAtNamesACredentialFileNoAccountHas(t *testing.T) {
 	}
 }
 
-// An interrupted atomic write leaves `<name>.tmp-*` beside the file it was
-// replacing — WriteFileAtomic's own suffix, so this is reachable rather than
-// hypothetical. The stem is not a uuid, and reporting it as one would send the
-// user looking for an account that never existed. The rule is a file named
-// exactly <uuid>.json.
+// An interrupted atomic write leaves a temp file beside the one it was
+// replacing. The fixture is named through cclink.TempPattern rather than
+// spelled out, which is what keeps "reachable rather than hypothetical" true:
+// a hand-written name stands for the writer's output only until the writer
+// changes, and nothing would report that it had stopped standing for anything.
+// The stem is not a uuid, and reporting it as one would send the user looking
+// for an account that never existed. The rule is a file named exactly
+// <uuid>.json.
 func TestOrphanCredentialsAtIgnoresAnInterruptedAtomicWrite(t *testing.T) {
 	root := withStore(t)
 	if _, err := Open(); err != nil {
 		t.Fatal(err)
 	}
-	scratch := filepath.Join(root, "credentials", "uuid-a.json.tmp-1234")
+	scratch := filepath.Join(root, "credentials", strings.Replace(cclink.TempPattern("uuid-a.json"), "*", "1234", 1))
 	if err := os.WriteFile(scratch, []byte(`{}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
