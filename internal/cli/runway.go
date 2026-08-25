@@ -242,7 +242,36 @@ func renderRunway(cmd *cobra.Command, f forecast.Fleet, accounts []store.Account
 	if f.PointsTotal > 0 {
 		fmt.Fprintf(out, "Fleet:   %.0f of %.0f points left on the weekly axis\n", f.PointsLeft, f.PointsTotal)
 	}
+	// The seat count, as its own stanza. It is read off the CURRENT snapshots
+	// like the points line above it, so a machine with no series at all still
+	// has one to print -- and printing it there is the point: "?" says the
+	// number exists and the measuring is what failed, which is not what a fleet
+	// needing no more accounts would say.
+	//
+	// Where it sits is what the basis changes. With one it goes under the axis
+	// block, which it answers from the other end: those rows say when the fleet
+	// runs out and this says how many accounts it would take for it not to. Both
+	// are the same runs asked different questions, so a reader can never be told
+	// "runs dry" and "you have enough accounts" on two adjacent lines. Without a
+	// basis there is no such block, and it is the last thing the page can say.
+	//
+	// "Accounts:" is nine characters, the same width as the "Basis:" and
+	// "Fleet:" label fields at the top of the page. The two spaces after it are
+	// this page's own separator, the gap that holds "runs dry <moment>" apart
+	// from "(in 2d6h)" in the block above and the count apart from "(4 more)" in
+	// this line.
+	//
+	// The empty string is the gate. view.RunwayAccounts returns one for a fleet
+	// the rotation cannot reach, and reading that is what keeps this renderer
+	// from carrying a second opinion about when there is nothing to say.
+	writeAccounts := func() {
+		if line := view.RunwayAccounts(f); line != "" {
+			fmt.Fprintf(out, "\nAccounts:  %s\n", line)
+		}
+	}
+
 	if !f.Basis.Known {
+		writeAccounts()
 		return nil
 	}
 
@@ -272,24 +301,7 @@ func renderRunway(cmd *cobra.Command, f forecast.Fleet, accounts []store.Account
 		"  spends it. Credits do not reset: that row is a balance divided by a rate,\n"+
 		"  with nothing coming back.")
 
-	// The seat count, under the block it answers from the other end: those rows
-	// say when the fleet runs out, and this says how many accounts it would take
-	// for it not to. Both are the same runs asked different questions, so a
-	// reader can never be told "runs dry" and "you have enough accounts" on two
-	// adjacent lines.
-	//
-	// "Accounts:" is nine characters, the same width as the "Basis:" and
-	// "Fleet:" label fields at the top of the page. The two spaces after it are
-	// this page's own separator, the gap that holds "runs dry <moment>" apart
-	// from "(in 2d6h)" in the block above and the count apart from "(4 more)" in
-	// this line.
-	//
-	// The empty string is the gate. view.RunwayAccounts returns one for a fleet
-	// the rotation cannot reach, and reading that is what keeps this renderer
-	// from carrying a second opinion about when there is nothing to say.
-	if line := view.RunwayAccounts(f); line != "" {
-		fmt.Fprintf(out, "\nAccounts:  %s\n", line)
-	}
+	writeAccounts()
 
 	if len(f.Rows) == 0 {
 		return nil

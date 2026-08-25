@@ -93,7 +93,7 @@ func RunwayLine(f forecast.Fleet, now time.Time, loc *time.Location) string {
 		return 0
 	})
 
-	// Five: the fleet run, two axes, the seat count and the basis.
+	// Five: the fleet run, two axes, the basis and the seat count.
 	parts := make([]string, 0, 5)
 	if seg, ok := fleetSegment(f, now, loc); ok {
 		parts = append(parts, seg)
@@ -101,12 +101,18 @@ func RunwayLine(f forecast.Fleet, now time.Time, loc *time.Location) string {
 	for _, a := range axes {
 		parts = append(parts, axisSegment(a.label, a.axis, now, loc))
 	}
-	// After the verdicts and before the evidence: what happened, then what it
-	// would take, then what it was measured from.
+	// The basis first and the seat count LAST, which is not a reading order --
+	// it is which clause the frame is allowed to eat. The dashboard cuts this
+	// line from the right at its own width, and at the 80-column design target a
+	// short fleet's line does not fit, so whatever is last is the casualty. The
+	// evidence must not be: a verdict with no basis beside it is the one output
+	// this measurement refuses to produce, and the dashboard prints the span
+	// nowhere else on the page. The seat count is recoverable -- `ccdad runway`
+	// prints it in full, with the spare case this clause never carries.
+	parts = append(parts, runwayBasis(f))
 	if seg := RunwayNeedSegment(f); seg != "" {
 		parts = append(parts, seg)
 	}
-	parts = append(parts, runwayBasis(f))
 	return strings.Join(parts, runwaySep)
 }
 

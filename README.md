@@ -654,6 +654,12 @@ Four forms, and no fifth:
 | Holds exactly | `5 usable, 5 needed to hold at this rate` |
 | Has no basis to search from | `5 usable, ? needed  (not enough history)` |
 
+That last form is most of the page on a machine that has been recording for ten
+minutes. There is no axis block for the line to sit under, so it follows
+`Fleet:` and the command stops there: how many accounts the pool has to work
+with is read off the current readings like the points above it, and it is only
+the search for a count that needs history.
+
 Which axis asks for the extra seat is measured rather than assumed — the two
 imply different counts, and which is larger depends on the ratio of the two
 measured rates. The search stops at 256 accounts and prints `more than 256`
