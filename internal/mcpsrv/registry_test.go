@@ -40,12 +40,15 @@ func TestEveryClassifiedToolIsActuallyRegistered(t *testing.T) {
 // register is not read as a smaller surface.
 //
 // The two tests above and beside this one are each one-directional and both
-// pass on a server offering only the five reads, as long as the map named only
-// those five: they check that the two sets AGREE, not how big they are. Fifteen
-// is the number the four classes were argued for as a whole, and a change to it
-// is a change to what this server may do.
-func TestTheServerOffersExactlyTheFifteenToolsTheClassMapNames(t *testing.T) {
-	const want = 15
+// pass on a server offering only the reads, as long as the map named only
+// those: they check that the two sets AGREE, not how big they are. The count is
+// the number the four classes were argued for as a whole, and a change to it is
+// a change to what this server may do.
+//
+// It was fifteen and is sixteen: `runway` joined the reads, deliberately, and
+// this line is where that was declared rather than absorbed.
+func TestTheServerOffersExactlyTheSixteenToolsTheClassMapNames(t *testing.T) {
+	const want = 16
 
 	if len(toolClass) != want {
 		t.Errorf("toolClass classifies %d tools, want %d; the classification IS the boundary, "+
