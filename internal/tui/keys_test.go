@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/Kweiza/ccdaddy/internal/theme"
 )
 
 // help.SetWidth is not a bound. shouldAddItem returns "add it anyway" when the
@@ -14,9 +16,9 @@ import (
 // non-monotone and it overflows, so the two widths that were measured to fail
 // are the two this test names.
 func TestTheKeybarNeverExceedsTheWidthItWasGiven(t *testing.T) {
-	h, k := newHelp(), DefaultKeys()
+	h, k := newHelp(UnicodeGlyphs.Cue, theme.Of(theme.None)), DefaultKeys()
 	for _, w := range []int{20, 30, 37, 45, 53, 80, 113} {
-		got := keybar(h, k, w)
+		got := keybar(h, k, w, UnicodeGlyphs.Cue)
 		if n := ansi.StringWidth(got); n > w {
 			t.Errorf("keybar at width %d is %d columns wide: %q", w, n, got)
 		}
@@ -56,27 +58,31 @@ func TestQuitOutlivesListInTheKeybar(t *testing.T) {
 // in the ".." tail -- the visual cue that something was cut, which an empty
 // tail silently omitted at exactly the widths this task exists to fix.
 func TestTheKeybarShowsQAsSoonAsItFitsAndFlagsWhenItCuts(t *testing.T) {
-	h, k := newHelp(), DefaultKeys()
+	h, k := newHelp(UnicodeGlyphs.Cue, theme.Of(theme.None)), DefaultKeys()
 	for _, w := range []int{45, 53, 80, 113} {
-		got := keybar(h, k, w)
+		got := keybar(h, k, w, UnicodeGlyphs.Cue)
 		if !strings.Contains(got, "q ") {
 			t.Errorf("keybar at width %d does not show q: %q", w, got)
 		}
 	}
 	for _, w := range []int{20, 30, 37} {
-		got := keybar(h, k, w)
-		if !strings.HasSuffix(got, "..") {
-			t.Errorf("keybar at width %d was cut but does not end in the ellipsis tail: %q", w, got)
+		got := keybar(h, k, w, UnicodeGlyphs.Cue)
+		if !strings.HasSuffix(got, UnicodeGlyphs.Cue) {
+			t.Errorf("keybar at width %d was cut but does not end in the cue: %q", w, got)
 		}
 	}
 }
 
-// help's own separator is U+2022 and its ellipsis is U+2026. This binary emits
-// no non-ASCII byte, and a terminal on a code page that lacks either renders a
-// replacement glyph in the middle of the one line telling a user how to leave.
+// help's own separator is U+2022 and its ellipsis is U+2026. The keybar stays
+// 7-bit ASCII even now that the page around it draws box characters and blocks
+// on purpose, and the reason is local to this line: every character it emits
+// that is not a binding's own name is either a separator or a cut cue, and both
+// are ASCII in both glyph sets. A terminal on a code page that lacks either
+// would render a replacement glyph in the middle of the one line telling a user
+// how to leave.
 func TestTheKeybarIsSevenBitAscii(t *testing.T) {
 	for _, w := range []int{37, 53, 113} {
-		for _, r := range keybar(newHelp(), DefaultKeys(), w) {
+		for _, r := range keybar(newHelp(UnicodeGlyphs.Cue, theme.Of(theme.None)), DefaultKeys(), w, UnicodeGlyphs.Cue) {
 			if r > 127 {
 				t.Fatalf("keybar at width %d carries %q (U+%04X)", w, r, r)
 			}

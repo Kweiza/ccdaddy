@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/Kweiza/ccdaddy/internal/strategy"
+	"github.com/Kweiza/ccdaddy/internal/theme"
 	"github.com/Kweiza/ccdaddy/internal/view"
 )
 
@@ -42,6 +43,11 @@ type picker struct {
 	// rather than hidden: "you are here" is the fact that makes the rest of
 	// the list mean something.
 	current int
+	// glyphs is this page's vocabulary, carried so the picker's cursor is the
+	// same character as the table's. Two lists that a user moves through with
+	// the same keys and that point with two different characters is the drift
+	// this whole set exists to remove.
+	glyphs Glyphs
 }
 
 // switchPicker offers every account as a switch target, in the table's order.
@@ -56,8 +62,8 @@ type picker struct {
 // A disabled account is still offered. Disabled holds an account out of
 // AUTOMATIC rotation and is not a lock: an explicit switch still activates
 // one, and hiding it here would make the dashboard disagree with the command.
-func switchPicker(rows []view.Row, cursor int) picker {
-	p := picker{title: "Switch to which account?", current: -1}
+func switchPicker(rows []view.Row, cursor int, g Glyphs) picker {
+	p := picker{title: "Switch to which account?", current: -1, glyphs: g}
 	for i, r := range rows {
 		if r.Active {
 			p.current = i
@@ -82,8 +88,8 @@ func switchPicker(rows []view.Row, cursor int) picker {
 // headroom, recovery and consume-first read like a set of three, but recovery
 // is an OUTCOME the ranking reports rather than a setting anyone chooses, and
 // offering it would let a user ask for a state instead of a policy.
-func strategyPicker(current string) picker {
-	p := picker{title: "Rank accounts by which strategy?", current: -1}
+func strategyPicker(current string, g Glyphs) picker {
+	p := picker{title: "Rank accounts by which strategy?", current: -1, glyphs: g}
 	for i, name := range strategy.StrategyNames() {
 		if name == current {
 			p.current = i
@@ -131,13 +137,26 @@ func (p picker) Chosen() []string {
 // Body is the picker as a block of text, every line cut to the width it was
 // given. Two markers, in two fixed columns so the labels line up: the cursor,
 // and the value already in force.
-func (p picker) Body(width int) string {
+//
+// The cursor comes from the glyph set and the in-force mark does not, and the
+// asymmetry is the same one the table makes. "Where is the highlight" is this
+// screen's own fact and moves with the vocabulary; "which value is already in
+// force" is the same claim the table's live marker makes about an account, and
+// that one is spelled "*" wherever it appears in this binary.
+//
+// pal is taken and NOT read, for one commit. This screen has the two roles the
+// table has -- the value in force, and everything else -- and the commit that
+// paints them writes those two lines here and moves no caller. Declaring the
+// parameter with the glyph swap rather than with the colours is what keeps the
+// two changes separable: a glyph failure that only reproduces on one operating
+// system has to be bisectable without a palette in the same commit.
+func (p picker) Body(width int, pal theme.Palette) string {
 	lines := make([]string, 0, len(p.items)+2)
 	lines = append(lines, p.title)
 	for i, it := range p.items {
 		cursor, mark := "  ", "  "
 		if i == p.cursor {
-			cursor = "> "
+			cursor = p.glyphs.Cursor + " "
 		}
 		if i == p.current {
 			mark = "* "

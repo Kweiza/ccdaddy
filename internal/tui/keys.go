@@ -4,6 +4,8 @@ import (
 	"charm.land/bubbles/v2/help"
 	"charm.land/bubbles/v2/key"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/Kweiza/ccdaddy/internal/theme"
 )
 
 // KeyMap is every binding the dashboard answers to. Add through List are the
@@ -67,22 +69,38 @@ func (k KeyMap) FullHelp() [][]key.Binding {
 	}
 }
 
-// newHelp is help.New with its two non-ASCII defaults overridden:
-// ShortSeparator is U+2022 by default and Ellipsis is U+2026. This binary
-// emits no non-ASCII byte, so both become plain ASCII.
+// newHelp is help.New with its two Unicode defaults overridden: ShortSeparator
+// is U+2022 and Ellipsis is U+2026 out of the box, and neither is a character
+// this line can afford. The separator is drawn between every pair of bindings
+// on the one line that tells a user how to leave a full-screen program, and the
+// ellipsis is the cut cue -- both land on measured column boundaries, and both
+// are ambiguous-width, so on a machine in east-asian width mode they would each
+// silently cost a column the footer had already spent.
 //
-// help.New's default Styles carry truecolor foreground colours, which render
-// as SGR escape bytes even though the only difference between a key and its
+// The cue is the page's own rather than a literal here, because the keybar and
+// the header line are cut by the same page and a reader who learns what a cut
+// looks like in one place should not have to learn it again in the other.
+//
+// help.New's default Styles carry truecolor foreground colours, which render as
+// SGR escape bytes even though the only difference between a key and its
 // description here is which characters they are. This repository's rendered
-// output is compared as plain strings -- in the tests that read keybar()
-// today and in every golden fixture still to come -- so the styles are
-// zeroed rather than left at their default. A zero lipgloss.Style is exactly
-// what NewStyle() itself returns, so this asks for no styling the same way
-// the library would if asked for none.
-func newHelp() help.Model {
+// output is compared as plain strings -- in the tests that read keybar() and in
+// every golden page under testdata -- so the styles are zeroed rather than left
+// at their default. A zero lipgloss.Style is exactly what NewStyle() returns,
+// so this asks for no styling the same way the library would if asked for none.
+//
+// pal is taken and NOT read, and it is declared now rather than in the commit
+// that reads it. Zeroing those Styles is a colour decision made here and
+// nowhere else -- a key and its description are the two roles this line has --
+// so the commit that gives the page a palette fills those two fields in and
+// moves no caller. A parameter added later is a parameter every call site in
+// this package moves for twice, and the reason the glyphs and the colours are
+// two commits at all is that a glyph failure which reproduces on one operating
+// system has to stay bisectable on its own.
+func newHelp(cue string, pal theme.Palette) help.Model {
 	h := help.New()
 	h.ShortSeparator = "  "
-	h.Ellipsis = ".."
+	h.Ellipsis = cue
 	h.Styles = help.Styles{}
 	return h
 }
@@ -94,17 +112,19 @@ func newHelp() help.Model {
 // also does not fit, and the loop then keeps adding every remaining binding, so
 // truncation is non-monotone and overflows. The wrap is the bound.
 //
-// The tail passed to Truncate is "..", matching h.Ellipsis: help's own
-// ellipsis logic already adds ".." at some widths (20, 30) but not at 37 or
-// 45, where shouldAddItem's overflow is what this function exists to catch --
-// an empty tail there cut a binding with no visual cue that anything had been
-// cut. Truncating from the right means the ORDER of ShortHelp buys q one more
-// rung before that truncation reaches it; it is not a guarantee q survives
-// every width, only that it is never the first binding lost.
+// The tail passed to Truncate is the same argument h.Ellipsis was built from,
+// which is what makes the two agree by construction rather than by two literals
+// that matched when they were written: help's own ellipsis logic already adds
+// the cue at some widths (20, 30) but not at 37 or 45, where shouldAddItem's
+// overflow is what this function exists to catch -- an empty tail there cut a
+// binding with no visual cue that anything had been cut. Truncating from the
+// right means the ORDER of ShortHelp buys q one more rung before that
+// truncation reaches it; it is not a guarantee q survives every width, only
+// that it is never the first binding lost.
 //
 // help.Model has no exported Width field, only a private one reached through
 // SetWidth, which is why this calls the setter rather than assigning to one.
-func keybar(h help.Model, k KeyMap, width int) string {
+func keybar(h help.Model, k KeyMap, width int, cue string) string {
 	h.SetWidth(width)
-	return ansi.Truncate(h.ShortHelpView(k.ShortHelp()), width, "..")
+	return ansi.Truncate(h.ShortHelpView(k.ShortHelp()), width, cue)
 }

@@ -1,0 +1,12 @@
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ccdad v0.2.0                                                                  │
+│                                                                              │
+│Active: work@example.com (work)  |  Strategy: headroom  |  Mode: headroom     │
+│IDX ACCOUNT               USED               RESETS IN  STATE        AUTO     │
+│* 1 work@example.com (..  [█████████▒]  87%  1h22m      ▪ active     yes      │
+│  2 enterprise@co.exam..  [██████████] 100%  5m         ✗ exhausted  no       │
+│  3 spare@example.com     [█████▒▒▒▒▒]  52%  4h11m      ◉ candidate  yes      │
+│  4 keyonly@example.co..  ?                  -          ◌ unknown    yes      │
+│                                                                              │
+│a add  s switch  d daemon  c strategy  q quit  l list          Daemon: unknown│
+╰──────────────────────────────────────────────────────────────────────────────╯

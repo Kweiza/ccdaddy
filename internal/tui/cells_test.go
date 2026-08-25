@@ -7,6 +7,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
+	"github.com/Kweiza/ccdaddy/internal/theme"
 	"github.com/Kweiza/ccdaddy/internal/usage"
 	"github.com/Kweiza/ccdaddy/internal/view"
 )
@@ -19,7 +20,7 @@ import (
 //
 // There are TWO absences here and they arrive by different routes.
 func TestAnAccountThatCouldNotBeReadRendersAQuestionMarkAndNoBar(t *testing.T) {
-	g := newGauge()
+	g := newGauge(UnicodeGlyphs)
 	for _, tc := range []struct {
 		name string
 		row  view.Row
@@ -33,7 +34,7 @@ func TestAnAccountThatCouldNotBeReadRendersAQuestionMarkAndNoBar(t *testing.T) {
 			if got != view.Unreadable {
 				t.Fatalf("usedCell = %q, want exactly %q", got, view.Unreadable)
 			}
-			if strings.ContainsAny(got, "#.[]") {
+			if strings.ContainsAny(got, "█▒[]") {
 				t.Fatalf("usedCell = %q: a bracket implies a reading, and there was none", got)
 			}
 		})
@@ -43,8 +44,8 @@ func TestAnAccountThatCouldNotBeReadRendersAQuestionMarkAndNoBar(t *testing.T) {
 // The other half. Zero is a READING and must render as one, or the fix for the
 // test above is "never draw a bar".
 func TestAnAccountAtZeroPercentStillRendersAnEmptyBarAndNotAQuestionMark(t *testing.T) {
-	got := usedCell(rowAtPercent(0), newGauge())
-	want := "[..........]   0%"
+	got := usedCell(rowAtPercent(0), newGauge(UnicodeGlyphs))
+	want := "[▒▒▒▒▒▒▒▒▒▒]   0%"
 	if got != want {
 		t.Fatalf("usedCell(0%%) = %q, want %q", got, want)
 	}
@@ -55,19 +56,52 @@ func TestAnAccountAtZeroPercentStillRendersAnEmptyBarAndNotAQuestionMark(t *test
 // The document contract is additive and guarantees a newer daemon publishing a
 // state this binary has never heard of, on upgrade day.
 //
-// stateCell's third return isn't asserted here: lipgloss.Style carries a
-// []color.Color field (border blending) and a func field, so it has no ==
-// and every style var is today's identical lipgloss.NewStyle() zero value
-// anyway -- colour is a later commit's call, per the task. glyph and text
-// already prove the value was carried through rather than silently zeroed,
-// which is the failure this test exists to catch.
+// stateCell's third return IS asserted, in the test below, and that is new:
+// it used to be a lipgloss.Style, which carries a []color.Color field and a
+// func field and therefore has no ==, so a test could only ever check that two
+// styles were both the zero value -- which is to say it could check nothing at
+// all while every style var in cells.go was unset. It is a theme.Role now,
+// which is an int.
 func TestAStateThisBinaryHasNeverHeardOfIsCarriedThroughAndNeverReadsAsActive(t *testing.T) {
-	glyph, text, _ := stateCell(daemon.AccountState("draining"))
-	if glyph != "?" {
-		t.Errorf("glyph = %q, want %q", glyph, "?")
+	glyph, text, _ := stateCell(UnicodeGlyphs, daemon.AccountState("draining"))
+	if glyph != UnicodeGlyphs.Unknown {
+		t.Errorf("glyph = %q, want %q", glyph, UnicodeGlyphs.Unknown)
 	}
 	if text != "draining" {
 		t.Errorf("text = %q, want the raw value carried through", text)
+	}
+}
+
+// Which colour each state will be painted in, asserted by VALUE, one commit
+// before anything paints it. This is the whole reason stateCell hands back a
+// role rather than a style: the mapping from a state to its emphasis is a
+// decision, and a decision that no test can compare is a decision that drifts.
+//
+// StateEmpty and StateExhausted share a role deliberately -- both mean "there
+// is nothing left here", and the WORD beside the glyph is what tells them
+// apart. Disabled, Unknown, the never-published empty state and the
+// unrecognised fallthrough all share the muted role for the same kind of
+// reason: none of them is a quota fact, and painting four different colours for
+// four flavours of "no engine opinion" spends the reader's attention on the
+// column that has the least to say.
+func TestEveryStateNamesTheRoleItWillBePaintedIn(t *testing.T) {
+	for _, tc := range []struct {
+		state daemon.AccountState
+		role  theme.Role
+	}{
+		{daemon.StateActive, theme.RoleActive},
+		{daemon.StateCandidate, theme.RoleCandidate},
+		{daemon.StateExhausted, theme.RoleExhausted},
+		{daemon.StateEmpty, theme.RoleExhausted},
+		{daemon.StateQuarantined, theme.RoleQuarantined},
+		{daemon.StateDisabled, theme.RoleMuted},
+		{daemon.StateUnknown, theme.RoleMuted},
+		{"", theme.RoleMuted},
+		{daemon.AccountState("draining"), theme.RoleMuted},
+	} {
+		if _, _, got := stateCell(UnicodeGlyphs, tc.state); got != tc.role {
+			t.Errorf("stateCell(%q) names role %d, want role %d", tc.state, got, tc.role)
+		}
 	}
 }
 
@@ -75,7 +109,7 @@ func TestAStateThisBinaryHasNeverHeardOfIsCarriedThroughAndNeverReadsAsActive(t 
 // filled from a map lookup that returns the zero value on a miss, so an account
 // no daemon has ever published carries "".
 func TestAnAccountNoDaemonHasEverPublishedRendersADashAndNoGlyph(t *testing.T) {
-	glyph, text, _ := stateCell("")
+	glyph, text, _ := stateCell(UnicodeGlyphs, "")
 	if glyph != "" || text != "-" {
 		t.Fatalf("stateCell(\"\") = (%q, %q), want (\"\", \"-\")", glyph, text)
 	}
@@ -89,7 +123,7 @@ func TestEveryAccountStateHasItsOwnCell(t *testing.T) {
 		daemon.StateActive, daemon.StateCandidate, daemon.StateExhausted,
 		daemon.StateQuarantined, daemon.StateDisabled, daemon.StateUnknown,
 	} {
-		glyph, text, _ := stateCell(s)
+		glyph, text, _ := stateCell(UnicodeGlyphs, s)
 		if text != string(s) {
 			t.Errorf("stateCell(%q) text = %q, want the state's own name", s, text)
 		}
@@ -115,18 +149,19 @@ func TestAutoIsARotationPolicyAndNotAStrategyName(t *testing.T) {
 	}
 }
 
-// Head-preserving with an ASCII suffix, because the head is where the local
-// part of an address is and that is what tells two accounts apart. The suffix
-// is ".." and not a Unicode ellipsis: this repository emits zero non-ASCII
-// bytes and a box-drawing or ellipsis character is a Windows code-page bet
-// nobody has made.
+// Head-preserving, because the head is where the local part of an address is
+// and that is what tells two accounts apart. The cue is the page's own, not a
+// literal spelled a second time here: it is two ASCII characters in both glyph
+// sets, and it stays that way because a cue is emitted at a measured column
+// boundary, where the Unicode ellipsis costs two columns on a machine in
+// east-asian width mode and one everywhere else.
 func TestALongAddressLosesItsTailAndKeepsItsHead(t *testing.T) {
-	got := accountCell("enterprise@co.example.com", 22)
+	got := accountCell("enterprise@co.example.com", 22, UnicodeGlyphs.Cue)
 	if len([]rune(got)) != 22 {
 		t.Fatalf("accountCell(..., 22) is %d runes wide: %q", len([]rune(got)), got)
 	}
-	if !strings.HasSuffix(got, "..") || !strings.HasPrefix(got, "enterprise@") {
-		t.Fatalf("accountCell = %q, want a kept head and a \"..\" tail", got)
+	if !strings.HasSuffix(got, UnicodeGlyphs.Cue) || !strings.HasPrefix(got, "enterprise@") {
+		t.Fatalf("accountCell = %q, want a kept head and a %q tail", got, UnicodeGlyphs.Cue)
 	}
 }
 
@@ -147,14 +182,14 @@ func TestTheCollapsedGaugeIsTheBarePercentageAndKeepsTheAbsenceRule(t *testing.T
 // This pins that the plain path emits no escape byte today, so that later
 // commit cannot slip one into a fixture without this test turning red.
 func TestThePlainPathEmitsNoEscapeByte(t *testing.T) {
-	g := newGauge()
+	g := newGauge(UnicodeGlyphs)
 	rows := []view.Row{rowAtPercent(0), rowAtPercent(87), rowAtPercent(100), rowWithNoEntry(), enabledRow(), disabledRow()}
 	for _, r := range rows {
 		for _, cell := range []string{
 			usedCell(r, g),
 			usedCellCollapsed(r),
 			autoCell(r),
-			accountCell(r.ListLabel(), 20),
+			accountCell(r.ListLabel(), 20, UnicodeGlyphs.Cue),
 		} {
 			if strings.ContainsRune(cell, 0x1b) {
 				t.Fatalf("cell %q carries an escape byte on the plain, uncoloured path", cell)
@@ -165,7 +200,7 @@ func TestThePlainPathEmitsNoEscapeByte(t *testing.T) {
 		daemon.StateActive, daemon.StateCandidate, daemon.StateExhausted,
 		daemon.StateQuarantined, daemon.StateDisabled, daemon.StateUnknown, "",
 	} {
-		glyph, text, _ := stateCell(s)
+		glyph, text, _ := stateCell(UnicodeGlyphs, s)
 		if strings.ContainsRune(glyph, 0x1b) || strings.ContainsRune(text, 0x1b) {
 			t.Fatalf("stateCell(%q) carries an escape byte on the plain, uncoloured path", s)
 		}
