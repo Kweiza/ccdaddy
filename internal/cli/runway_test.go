@@ -678,3 +678,325 @@ func TestOutDoesNotChangeThePlainJSONAnswer(t *testing.T) {
 		t.Errorf("a run that named no file reported writing one:\n%s", errOut)
 	}
 }
+
+// seedAccountClimbingAt is one account polled every half hour for the last two
+// hours, whose two axes climb at the two rates named.
+//
+// It exists beside seedBurningAccount because that fixture's two axes climb
+// TOGETHER, and which axis a fleet needs its next account for is decided by the
+// ratio between them: an account gives the five-hour axis 20 points an hour back
+// and the weekly axis 100/168, so the two axes ask for the same number of
+// accounts exactly when the five-hour rate is 33.6 times the weekly one. A
+// fixture that could not move that ratio could not put two fleets on opposite
+// sides of it.
+//
+// The five-hour window starts empty and the weekly one at 40, so that a
+// five-hour rate steep enough to bind does not walk the account to 100 inside
+// the observed two hours. That would measure a fleet that had lost a seat rather
+// than one that is spending.
+func seedAccountClimbingAt(t *testing.T, uuid, email string, fivePerHour, weeklyPerHour float64) {
+	t.Helper()
+	const fiveFrom, weeklyFrom = 0.0, 40.0
+	seedAccountWithTier(t, uuid, email, runwayTier, runwayAddedAt)
+	var samples []history.Sample
+	for i := 4; i >= 0; i-- {
+		at := statusNow.Add(-time.Duration(i) * 30 * time.Minute)
+		// Five readings thirty minutes apart span two hours, so the rate this
+		// produces is exact: Σ max(0, Δ) over that span is the figure asked for.
+		elapsed := 2 - float64(i)/2
+		samples = append(samples, history.Sample{At: at, Windows: map[usage.WindowName]history.Reading{
+			usage.WindowFiveHour: {Pct: fiveFrom + elapsed*fivePerHour, Reset: runwayFiveReset},
+			usage.WindowSevenDay: {Pct: weeklyFrom + elapsed*weeklyPerHour, Reset: runwayWeeklyReset},
+		}})
+	}
+	seedHistory(t, uuid, samples...)
+	// The cache and the newest sample agree because they are the same reading.
+	// The cache is authoritative for every level and the series for nothing but
+	// slopes, so a fixture whose two disagreed would be a machine that cannot
+	// exist.
+	seedUsageEntry(t, uuid, usage.Entry{
+		FetchedAt: statusNow,
+		Snapshot: &usage.Snapshot{
+			FiveHour: window(fiveFrom+2*fivePerHour, runwayFiveReset),
+			SevenDay: window(weeklyFrom+2*weeklyPerHour, runwayWeeklyReset),
+		},
+	})
+}
+
+// runwayFleetObject is the `fleet` object of one `ccdad runway --json` run.
+func runwayFleetObject(t *testing.T) map[string]any {
+	t.Helper()
+	code, out, _, top := runRoot(t, "runway", "--json")
+	if code != ExitOK {
+		t.Fatalf("code = %v, want ExitOK (%s)", code, top)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(out), &doc); err != nil {
+		t.Fatalf("stdout is not one document: %v\n%s", err, out)
+	}
+	f, ok := doc["forecast"].(map[string]any)
+	if !ok {
+		t.Fatalf("no forecast object:\n%s", out)
+	}
+	fleet, ok := f["fleet"].(map[string]any)
+	if !ok {
+		t.Fatalf("no fleet object:\n%s", out)
+	}
+	return fleet
+}
+
+// The seat count, rendered under the axis block and above the per-account
+// table.
+//
+// It answers that block from the other end: those rows say when the fleet runs
+// out, and this says how many accounts it would take for it not to. Both come
+// out of the same runs, which is why they can be read against each other -- a
+// count from a second mechanism would be free to say "you have enough accounts"
+// under a row that says "runs dry".
+//
+// Position is asserted rather than presence alone. Everything above the rows
+// goes to the same stream and the rows go through a tabwriter that holds them
+// until Flush, so a line written anywhere before that call still lands above the
+// table; what the position in the function decides is which side of the axis
+// block's prose it falls on.
+func TestRunwayRendersTheAccountsLineUnderTheAxisBlock(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	seedBurningFleet(t)
+
+	code, out, _, top := runRoot(t, "runway")
+	if code != ExitOK {
+		t.Fatalf("code = %v, want ExitOK (%s)", code, top)
+	}
+	// Two accounts, and the weekly axis is the one that cannot hold: the fleet
+	// spends 5 points an hour at the upper bound of the band and an account
+	// gives back 100/168 = 0.595, so nine seats supply 5.36 and eight supply
+	// 4.76.
+	const want = "Accounts:  2 usable, 9 needed to hold at this rate  (7 more)"
+	if !strings.Contains(out, want) {
+		t.Errorf("stdout carries no %q:\n%s", want, out)
+	}
+
+	lines := strings.Split(out, "\n")
+	accounts, prose, table := -1, -1, -1
+	for i, l := range lines {
+		switch {
+		case strings.HasPrefix(l, "Accounts:"):
+			accounts = i
+		case strings.Contains(l, "Credits do not reset"):
+			prose = i
+		case strings.Contains(l, "IDX"):
+			table = i
+		}
+	}
+	if accounts < 0 || prose < 0 || table < 0 {
+		t.Fatalf("accounts = %d, prose = %d, table = %d; one of the three blocks is missing:\n%s",
+			accounts, prose, table, out)
+	}
+	if accounts < prose || accounts > table {
+		t.Errorf("the accounts line is not between the axis block and the per-account table:\n%s", out)
+	}
+}
+
+// The exact form of a fleet that is already the smallest one that holds: the
+// count and nothing after it. The parenthetical is the actionable half, and
+// there is nothing here to act on.
+func TestAFleetThatIsExactlyBigEnoughGetsNoParenthetical(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	// One account whose two axes did not move. Its measured burn is zero and
+	// its upper bound is one quantisation step over two hours -- 0.5 points an
+	// hour -- which both axes give back faster than, so the fleet holds and the
+	// search downward stops at the one seat it has.
+	seedAccountClimbingAt(t, "uuid-a", "a@example.com", 0, 0)
+
+	code, out, _, top := runRoot(t, "runway")
+	if code != ExitOK {
+		t.Fatalf("code = %v, want ExitOK (%s)", code, top)
+	}
+	const want = "Accounts:  1 usable, 1 needed to hold at this rate"
+	if !strings.Contains(out, want) {
+		t.Errorf("stdout carries no %q:\n%s", want, out)
+	}
+	if strings.Contains(out, "to spare") || strings.Contains(out, "more)") {
+		t.Errorf("a fleet sitting on the smallest count that holds was given a parenthetical:\n%s", out)
+	}
+}
+
+// accountsNeeded is omitted when there is no basis, never zeroed: a consumer
+// cannot tell a fleet that needs no more accounts from a fleet nobody measured,
+// and one of those two is a reason to go and buy nothing.
+//
+// accountsUsable is published either way, because it is a count that was always
+// readable -- the run had that many accounts to work with whether or not it had
+// any history to measure them over.
+func TestTheFleetObjectCarriesTheAccountCountsOnlyWhenMeasured(t *testing.T) {
+	t.Run("measured", func(t *testing.T) {
+		isolate(t)
+		freezeClock(t, statusNow)
+		seedBurningFleet(t)
+
+		fleet := runwayFleetObject(t)
+		if fleet["accountsUsable"] != float64(2) {
+			t.Errorf("accountsUsable = %v, want the two accounts the run worked with", fleet["accountsUsable"])
+		}
+		needed, ok := fleet["accountsNeeded"].(float64)
+		if !ok {
+			t.Fatalf("fleet = %v, which carries no accountsNeeded for a fleet that was measured", fleet)
+		}
+		if needed <= 2 {
+			t.Errorf("accountsNeeded = %v on a fleet whose weekly axis runs dry with two", needed)
+		}
+		if fleet["accountsNeededBy"] != "weekly" {
+			t.Errorf("accountsNeededBy = %v, want the axis that asked for the seats", fleet["accountsNeededBy"])
+		}
+	})
+
+	t.Run("nothing measured", func(t *testing.T) {
+		isolate(t)
+		freezeClock(t, statusNow)
+		// One reading and nothing older than it: the machine that has been
+		// recording for ten minutes. The account is perfectly readable, so the
+		// count of seats exists; the slope does not.
+		seedAccountAddedAt(t, "uuid-a", "a@example.com", runwayAddedAt)
+		seedUsageEntry(t, "uuid-a", usage.Entry{
+			FetchedAt: statusNow,
+			Snapshot: &usage.Snapshot{
+				FiveHour: window(18, runwayFiveReset),
+				SevenDay: window(48, runwayWeeklyReset),
+			},
+		})
+
+		fleet := runwayFleetObject(t)
+		if fleet["accountsUsable"] != float64(1) {
+			t.Errorf("accountsUsable = %v, want the one readable account", fleet["accountsUsable"])
+		}
+		for _, key := range []string{"accountsNeeded", "accountsNeededBy"} {
+			if v, ok := fleet[key]; ok {
+				t.Errorf("%s = %v on a fleet with no basis; absent and zero are different answers", key, v)
+			}
+		}
+	})
+}
+
+// accountsNeededBy names the axis that asked for the seats, and which axis that
+// is is MEASURED. An account gives the five-hour axis 20 points an hour back and
+// the weekly axis 100/168, so the two axes want the same number of accounts
+// exactly when the five-hour rate is 168/5 = 33.6 times the weekly one. These
+// two fleets sit on either side of that ratio.
+//
+// The value is spelled the way the sibling `axes` object spells its keys, so it
+// is a key into that object rather than a second vocabulary for one axis.
+func TestTheBindingAxisIsReportedAndCanBeEither(t *testing.T) {
+	t.Run("weekly", func(t *testing.T) {
+		isolate(t)
+		freezeClock(t, statusNow)
+		// Both axes at 2 points an hour per account: a ratio of 1, far under
+		// 33.6, so the weekly axis runs out of accounts first.
+		seedBurningFleet(t)
+
+		if got := runwayFleetObject(t)["accountsNeededBy"]; got != "weekly" {
+			t.Errorf("accountsNeededBy = %v, want weekly: the five-hour axis holds on the seats the fleet has", got)
+		}
+	})
+
+	t.Run("five_hour", func(t *testing.T) {
+		isolate(t)
+		freezeClock(t, statusNow)
+		// 30 points an hour on the five-hour axis against a weekly axis that
+		// did not move: a ratio far over 33.6. One account gives back 20 an
+		// hour, so the five-hour axis asks for a second seat while the weekly
+		// axis holds on one.
+		seedAccountClimbingAt(t, "uuid-a", "a@example.com", 30, 0)
+
+		fleet := runwayFleetObject(t)
+		if got := fleet["accountsNeededBy"]; got != "five_hour" {
+			t.Errorf("accountsNeededBy = %v, want five_hour on a fleet burning 30 points an hour against 20 back", got)
+		}
+		if got := fleet["accountsNeeded"]; got != float64(2) {
+			t.Errorf("accountsNeeded = %v, want 2: the band's upper bound is 30.5 an hour and two seats give back 40", got)
+		}
+	})
+}
+
+// A search that reached its bound publishes the bound AND says it is one. The
+// count on its own would be a number a consumer could act on, and acting on it
+// buys that many accounts for a fleet the run never found a holding size for.
+func TestASearchThatReachedItsBoundIsPublishedAsABound(t *testing.T) {
+	capped, ok := forecastJSON(forecast.Fleet{
+		Basis:          forecast.Basis{Known: true},
+		AccountsUsable: 3, AccountsNeeded: 256, HasNeeded: true, NeededCapped: true,
+	})["fleet"].(map[string]any)
+	if !ok {
+		t.Fatal("no fleet object")
+	}
+	if capped["accountsNeeded"] != 256 {
+		t.Errorf("accountsNeeded = %v, want the bound the search stopped at", capped["accountsNeeded"])
+	}
+	if capped["accountsNeededCapped"] != true {
+		t.Errorf("fleet = %v, which publishes a bound as though it were a count", capped)
+	}
+
+	found, ok := forecastJSON(forecast.Fleet{
+		Basis:          forecast.Basis{Known: true},
+		AccountsUsable: 3, AccountsNeeded: 9, HasNeeded: true,
+	})["fleet"].(map[string]any)
+	if !ok {
+		t.Fatal("no fleet object")
+	}
+	if v, ok := found["accountsNeededCapped"]; ok {
+		t.Errorf("accountsNeededCapped = %v on a search that found an answer; the flag is the exception, not a field", v)
+	}
+}
+
+// The one-line summary `ccdad status` and `ccdad list` share carries the seat
+// count only when the fleet is SHORT. A fleet that holds already has its answer
+// in the word "holds", and a line read at a glance beside Daemon: and Active:
+// cannot spend a clause on good news.
+//
+// Both surfaces render through view.RunwayLine, so this pins that they picked
+// the clause up rather than that they each grew one.
+func TestTheSummaryLineNamesTheNeedOnlyForAFleetThatCannotHold(t *testing.T) {
+	t.Run("short", func(t *testing.T) {
+		isolate(t)
+		freezeClock(t, statusNow)
+		seedBurningFleet(t)
+
+		for _, cmd := range []string{"status", "list"} {
+			_, out, _, top := runRoot(t, cmd)
+			line := runwaySummaryLine(t, out)
+			if !strings.Contains(line, "need 9 (7 more)") {
+				t.Errorf("%s (%s): the line names no seat count: %q", cmd, top, line)
+			}
+		}
+	})
+
+	t.Run("holding", func(t *testing.T) {
+		isolate(t)
+		freezeClock(t, statusNow)
+		seedAccountClimbingAt(t, "uuid-a", "a@example.com", 0, 0)
+
+		for _, cmd := range []string{"status", "list"} {
+			_, out, _, top := runRoot(t, cmd)
+			line := runwaySummaryLine(t, out)
+			if !strings.Contains(line, "holds on both axes") {
+				t.Fatalf("%s (%s): the fixture no longer holds, so the absence below is not the one under test: %q", cmd, top, line)
+			}
+			if strings.Contains(line, "need") {
+				t.Errorf("%s: a fleet that holds was told how many accounts it needs: %q", cmd, line)
+			}
+		}
+	})
+}
+
+// runwaySummaryLine is the one line beginning "Runway:" in a rendered page.
+func runwaySummaryLine(t *testing.T, out string) string {
+	t.Helper()
+	for _, l := range strings.Split(out, "\n") {
+		if strings.HasPrefix(l, "Runway:") {
+			return l
+		}
+	}
+	t.Fatalf("no runway line at all:\n%s", out)
+	return ""
+}
