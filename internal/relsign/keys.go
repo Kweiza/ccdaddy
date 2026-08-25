@@ -22,7 +22,7 @@ import (
 // Rotation is a LIST, not a swap. A release ships a build carrying both the old
 // key and the new one; only once enough of the fleet is on that build does a
 // later release drop the old key and sign with the new one alone.
-const publicKeys = ""
+const publicKeys = "RWQK6tfAhUXwnOHpNCIXckioTq9R0GZG9V+bdf4pEgpmsBd10em0AVhl"
 
 var parsedKeys = mustParseKeys(publicKeys)
 

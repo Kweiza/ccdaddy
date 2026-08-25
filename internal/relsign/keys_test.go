@@ -74,6 +74,10 @@ func TestKeysHandsOutACopyAndEnforcementFollowsTheList(t *testing.T) {
 	// The trust root must not be reachable through the value handed out. One
 	// stray index assignment anywhere in the tree would otherwise rewrite what
 	// every later verification runs against.
+	//
+	// Compares KeyNum, not the whole PublicKey, because PublicKey.Key is an
+	// ed25519.PublicKey -- a slice -- which makes PublicKey itself
+	// non-comparable: `Keys()[0] == PublicKey{}` does not compile.
 	got := Keys()
 	got[0] = PublicKey{}
 	if Keys()[0].KeyNum == [8]byte{} {
