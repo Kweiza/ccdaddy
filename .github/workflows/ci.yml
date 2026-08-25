@@ -1,6 +1,6 @@
 # The gate every commit passes before a tag can publish it.
 #
-# Three jobs, and each one exists because something in this repository is
+# Four jobs, and each one exists because something in this repository is
 # otherwise compiled by nothing, run by nobody, or readable by no one outside
 # this machine:
 #
@@ -16,6 +16,14 @@
 #           box is luck, not a gate, and it does not touch _test.go at all.
 #   cgo     no target may need CGO: all six cross-compile with CGO_ENABLED=0,
 #           and this job fails if that stops being true.
+#   plugin  the Claude Code plugin manifests, checked by the tool that owns
+#           their schema and then installed into a throwaway config directory,
+#           so that the server they declare is proven to have been FOUND. A
+#           schema written in this repository would be this repository's belief
+#           about somebody else's schema, and it would drift with nothing to say
+#           so. The claude version is pinned: an unpinned install takes whatever
+#           is newest, and a warning added in any release would then fail the
+#           release gate on a commit that changed nothing.
 #
 # `cites` rides in the `check` job rather than taking a runner of its own: it is
 # a `git grep` and wants no toolchain, so a fourth job would spend a whole
@@ -162,3 +170,43 @@ jobs:
         with:
           go-version-file: go.mod
       - run: scripts/ci.sh cgo
+
+  plugin:
+    name: plugin manifests
+    # See the `pull_request:` note above: a same-repository pull request is
+    # already covered by its push run.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      # No setup-go on purpose: this job needs no toolchain, and giving it one
+      # invites it to grow a build. Whether `ccdad mcp` speaks the protocol is
+      # proven by the test job, on three operating systems.
+      #
+      # The version is a literal and never `stable` or `latest` - the installer
+      # validates its positional argument against a semver-or-channel pattern
+      # and exits 1 otherwise. It is the release the manifests in this
+      # repository were measured against, one broken manifest at a time, so
+      # that what this job enforces and what somebody checked are the same
+      # thing. Bumping it is its own commit, so that a new validator rule is
+      # attributable and one `git revert` undoes it. If upstream stops serving
+      # this version, bump the pin - never disable the job and never add
+      # continue-on-error, because a gate that can be switched off under time
+      # pressure is a gate that is off.
+      - name: Install Claude Code
+        run: |
+          curl -fsSL https://claude.ai/install.sh | bash -s 2.1.243
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - run: claude --version
+      # CCDAD_REQUIRE_CLAUDE turns the check's skip into a failure on the leg
+      # that just installed claude. Without it the step above could stop working
+      # and the check would go back to validating nothing while reporting green.
+      #
+      # No continue-on-error, ever: the run would still conclude `success` and
+      # the release gate reads that conclusion, so the job would un-gate itself.
+      - run: scripts/ci.sh plugin
+        env:
+          CCDAD_REQUIRE_CLAUDE: 1

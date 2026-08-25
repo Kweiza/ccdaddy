@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -247,5 +248,279 @@ func TestCICitesDoesNotReportOrdinaryHyphenatedEnglish(t *testing.T) {
 	out, code := runCI(t, root, "cites")
 	if code != 0 {
 		t.Fatalf("exit %d, want 0 — this tree writes English that way everywhere\n%s", code, out)
+	}
+}
+
+// runCIWithEnv is runCI with the child's environment named explicitly. The
+// plugin check branches on whether `claude` is on PATH, and a test that cannot
+// control PATH describes the developer's machine rather than the check.
+func runCIWithEnv(t *testing.T, root string, env []string, args ...string) (string, int) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("ci.sh is invoked by path here, which Git Bash cannot resolve")
+	}
+	script := filepath.Join(root, "scripts", "ci.sh")
+	cmd := exec.Command("bash", append([]string{script}, args...)...)
+	cmd.Dir = t.TempDir()
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	code := 0
+	if err != nil {
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) {
+			t.Fatalf("running ci.sh %v: %v\n%s", args, err, out)
+		}
+		code = exit.ExitCode()
+	}
+	return string(out), code
+}
+
+// A PATH with no claude on it. The installer puts claude under $HOME/.local/bin
+// and never in /usr/bin or /bin, so this is the deterministic way to describe a
+// machine that has not got one -- which is most developers' machines and is the
+// case the skip exists for.
+func envWithoutClaude(t *testing.T, extra ...string) []string {
+	t.Helper()
+	return append([]string{"PATH=/usr/bin:/bin", "HOME=" + t.TempDir()}, extra...)
+}
+
+// A fake claude that records its argv and answers the smoke question, so a test
+// can assert that the check LOOKED at something. A check that has quietly
+// stopped looking still reports success, which is what this whole file is for.
+func fakeClaude(t *testing.T, log string, exitCode int) []string {
+	t.Helper()
+	dir := t.TempDir()
+	body := "#!/bin/sh\n" +
+		"printf '%s\\n' \"$*\" >>'" + log + "'\n" +
+		// The config directory the check handed us, so a test can check it was
+		// a throwaway one AND that the throwaway was thrown away.
+		"if [ -n \"${CLAUDE_CONFIG_DIR:-}\" ]; then printf 'CFG %s\\n' \"$CLAUDE_CONFIG_DIR\" >>'" + log + "'; fi\n" +
+		"case \"$1 $2\" in 'plugin details') echo 'MCP servers (1)  ccdad' ;; esac\n" +
+		"exit " + strconv.Itoa(exitCode) + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return []string{"PATH=" + dir + ":/usr/bin:/bin", "HOME=" + t.TempDir()}
+}
+
+func TestCIPluginSkipsLoudlyWhenClaudeIsNotInstalled(t *testing.T) {
+	root, err := filepath.Abs("..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, code := runCIWithEnv(t, root, envWithoutClaude(t), "plugin")
+	if code != 0 {
+		t.Fatalf("exit %d, want 0 -- a developer without claude still has to be able to run ci.sh\n%s", code, out)
+	}
+	if !strings.Contains(out, "claude is not installed") {
+		t.Errorf("the skip is silent, which is the one result that looks like coverage and is not:\n%s", out)
+	}
+}
+
+func TestCIPluginFailsWhenClaudeIsRequiredAndAbsent(t *testing.T) {
+	root, err := filepath.Abs("..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, code := runCIWithEnv(t, root, envWithoutClaude(t, "CCDAD_REQUIRE_CLAUDE=1"), "plugin")
+	if code != 1 {
+		t.Fatalf("exit %d, want 1 -- on the leg that just installed claude, a skip means the install "+
+			"step broke and the manifests went back to being validated by nobody\n%s", code, out)
+	}
+	if !strings.Contains(out, "CCDAD_REQUIRE_CLAUDE") {
+		t.Errorf("the failure does not name the variable that caused it:\n%s", out)
+	}
+}
+
+func TestCIPluginValidatesBothTheMarketplaceAndThePluginDirectory(t *testing.T) {
+	root, err := filepath.Abs("..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := filepath.Join(t.TempDir(), "argv")
+	out, code := runCIWithEnv(t, root, fakeClaude(t, log, 0), "plugin")
+	if code != 0 {
+		t.Fatalf("exit %d, want 0\n%s", code, out)
+	}
+	recorded, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatalf("the check never invoked claude at all: %v", err)
+	}
+	for _, want := range []string{"plugin validate --strict .", "plugin validate --strict plugins"} {
+		if !strings.Contains(string(recorded), want) {
+			t.Errorf("claude was never asked %q; a source naming a directory that is not there "+
+				"passes the marketplace validate silently, with nothing validated:\n%s", want, recorded)
+		}
+	}
+	// And the smoke, which is the only leg that proves Claude Code READ the
+	// file the manifest names rather than merely liking the manifest's shape.
+	for _, want := range []string{"plugin marketplace add", "plugin install ccdad@ccdaddy", "plugin details ccdad@ccdaddy"} {
+		if !strings.Contains(string(recorded), want) {
+			t.Errorf("the smoke leg never ran %q:\n%s", want, recorded)
+		}
+	}
+}
+
+func TestCIPluginFailsWhenTheValidatorDoes(t *testing.T) {
+	root, err := filepath.Abs("..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := filepath.Join(t.TempDir(), "argv")
+	out, code := runCIWithEnv(t, root, fakeClaude(t, log, 1), "plugin")
+	if code == 0 {
+		t.Fatalf("exit 0 with a validator that refused; the check swallows its own answer\n%s", out)
+	}
+}
+
+// The discriminator itself. An inline server object in plugin.json validates,
+// installs, runs -- and reports MCP servers (0), because Claude Code never
+// counted it. That number is the only observable difference between the form
+// this repository ships and the form it deliberately does not, so a check that
+// stopped reading it would pass on the wrong manifest.
+func TestCIPluginFailsWhenTheInstalledPluginDeclaresNoServer(t *testing.T) {
+	root, err := filepath.Abs("..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	body := "#!/bin/sh\n" +
+		"case \"$1 $2\" in 'plugin details') echo 'MCP servers (0)' ;; esac\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env := []string{"PATH=" + dir + ":/usr/bin:/bin", "HOME=" + t.TempDir()}
+
+	out, code := runCIWithEnv(t, root, env, "plugin")
+	if code == 0 {
+		t.Fatalf("exit 0 for a plugin declaring no MCP server; the smoke leg is not reading its answer\n%s", out)
+	}
+	if !strings.Contains(out, "declares no MCP server") {
+		t.Errorf("the failure does not say what was wrong:\n%s", out)
+	}
+}
+
+// The smoke leg installs a plugin, and it must do that somewhere that is not
+// the developer's own Claude Code and is not left behind afterwards. Both
+// halves are asserted here because the second is the one nothing else would
+// notice: a leaked mktemp directory is invisible until a machine runs out of
+// them.
+//
+// The cleanup it depends on is shared with the cgo check through ONE `trap …
+// EXIT` handler, because bash keeps one handler per signal and a second trap
+// would silently replace the first. That is exactly the kind of arrangement
+// that works until somebody tidies it, so it is pinned rather than commented.
+func TestThePluginCheckInstallsIntoAThrowawayConfigDirectoryAndRemovesIt(t *testing.T) {
+	root, err := filepath.Abs("..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := filepath.Join(t.TempDir(), "argv")
+	out, code := runCIWithEnv(t, root, fakeClaude(t, log, 0), "plugin")
+	if code != 0 {
+		t.Fatalf("exit %d, want 0\n%s", code, out)
+	}
+	recorded, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cfg string
+	for _, line := range strings.Split(string(recorded), "\n") {
+		if after, ok := strings.CutPrefix(line, "CFG "); ok {
+			cfg = after
+			break
+		}
+	}
+	if cfg == "" {
+		t.Fatalf("the smoke leg ran with no CLAUDE_CONFIG_DIR, so it installed into whatever "+
+			"Claude Code the machine already has:\n%s", recorded)
+	}
+	if strings.HasPrefix(cfg, root) {
+		t.Errorf("the throwaway config directory is inside the repository: %s", cfg)
+	}
+	if _, err := os.Stat(cfg); !os.IsNotExist(err) {
+		t.Errorf("%s survived the run; the cleanup trap did not remove it (stat err: %v)", cfg, err)
+	}
+}
+
+// Every check the usage block names, `all` runs.
+//
+// This reads the script instead of executing it, and the reason is arithmetic:
+// `all` is gofmt, vet, the whole race suite and six cross-compiles, minutes of
+// work to re-prove what the CI jobs prove on every push. What can be checked
+// for nothing is the composition -- and a check wired into the dispatch and
+// forgotten in `all` runs for nobody who types the default, which is everybody
+// running this before a push.
+func TestEveryCheckTheUsageNamesIsAlsoRunByAll(t *testing.T) {
+	root, err := filepath.Abs("..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(root, "scripts", "ci.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(raw)
+
+	allArm, ok := betweenOnce(script, "\tall)\n", "\t\t;;\n")
+	if !ok {
+		t.Fatal("the `all)` arm is not where this test expects it; re-locate it by content")
+	}
+	for _, name := range []string{"fmt", "vet", "test", "cgo", "cites", "plugin"} {
+		if !strings.Contains(script, "\t"+name+") check_"+name+" ;;") {
+			t.Errorf("`%s` is named in the usage block but has no dispatch arm", name)
+			continue
+		}
+		if !strings.Contains(allArm, "check_"+name+"\n") {
+			t.Errorf("`all` does not run check_%s; a default run therefore skips it:\n%s", name, allArm)
+		}
+	}
+}
+
+// betweenOnce returns the text between the first open and the next close, and
+// reports whether both were found.
+func betweenOnce(s, open, close string) (string, bool) {
+	i := strings.Index(s, open)
+	if i < 0 {
+		return "", false
+	}
+	rest := s[i+len(open):]
+	j := strings.Index(rest, close)
+	if j < 0 {
+		return "", false
+	}
+	return rest[:j], true
+}
+
+// ONE `trap … EXIT` in the whole script, which is the assertion the comment
+// beside `cleanup` asks for and that no behavioural test can make.
+//
+// bash keeps one handler per signal, so a trap installed by a new check does
+// not chain — it REPLACES the one already there, and the check whose temp
+// directory the old handler removed silently stops being cleaned up. Measured:
+// giving the plugin check its own trap leaves every other test in this file
+// green, because a check that installs its own trap does clean up after
+// itself. Only counting them sees it.
+func TestTheScriptInstallsExactlyOneExitTrap(t *testing.T) {
+	root, err := filepath.Abs("..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(root, "scripts", "ci.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var traps []string
+	for _, line := range strings.Split(string(raw), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "trap ") && strings.HasSuffix(trimmed, "EXIT") {
+			traps = append(traps, trimmed)
+		}
+	}
+	if len(traps) != 1 {
+		t.Errorf("ci.sh installs %d EXIT traps (%v); a second one replaces the first rather than "+
+			"chaining, so whatever the first cleaned up stops being cleaned up. Add an arm to "+
+			"cleanup instead.", len(traps), traps)
 	}
 }
