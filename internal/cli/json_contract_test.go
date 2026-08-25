@@ -294,6 +294,19 @@ func jsonContractCases() []jsonContractCase {
 		args:  []string{"status", "--json"},
 		want:  ExitProbeNegative,
 		keys:  []string{"hover", "usableAccounts", "windows"},
+	}, {
+		path: "update",
+		args: []string{"--json"},
+		// The dev-build refusal is the arm this table can reach with no origin
+		// at all: it fires before the network, writes its payload, exits 4, and
+		// returns an error that is already silent.
+		setup: func(t *testing.T) {
+			t.Helper()
+			_ = stubReleaseKeys(t)
+			stubVersion(t, "dev")
+		},
+		want: ExitBlocked,
+		keys: []string{"currentVersion", "updated", "reason"},
 	}}
 }
 
@@ -709,7 +722,28 @@ const mcpRoleEnv = "CCDAD_TEST_MCP_SERVER"
 // line back is a larger intrusion than an extra environment variable.
 const argvRoleEnv = "CCDAD_TEST_ARGV_ECHO"
 
+// updateAssetRoleEnv turns a re-executed copy of this binary into the release
+// asset `ccdad update` has just staged. json_contract_test.go owns the roles
+// for this package, so the branch lives in its TestMain.
+const updateAssetRoleEnv = "CCDAD_TEST_UPDATE_ASSET"
+
+// updateAssetRoleFail is the value that makes the role exit non-zero without
+// printing, which is a staged binary that runs and is not a ccdad.
+const updateAssetRoleFail = "fail"
+
 func TestMain(m *testing.M) {
+	// The staged release asset. `ccdad update` EXECUTES what it downloaded
+	// before it installs it, and the only file that is both a real executable
+	// on all three operating systems and able to answer --version is a copy of
+	// this test binary. The value is what it prints; a role that must fail
+	// instead prints nothing and exits non-zero.
+	if v := os.Getenv(updateAssetRoleEnv); v != "" {
+		if v == updateAssetRoleFail {
+			os.Exit(9)
+		}
+		fmt.Println(v)
+		os.Exit(0)
+	}
 	if out := os.Getenv(argvRoleEnv); out != "" {
 		enc, err := json.Marshal(os.Args[1:])
 		if err != nil {

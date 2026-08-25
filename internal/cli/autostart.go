@@ -63,9 +63,9 @@ import (
 //     probe holds the same line about the lock file, and doctor.go repeats it
 //     for the store directory.
 //   - `completion`, which is a daemon per TAB press.
-//   - `remove`, `export`, `import`, `config` and `uninstall`: administering
-//     ccdad is not using it, and `uninstall` in particular would start the
-//     process it is about to stop.
+//   - `remove`, `export`, `import`, `config`, `uninstall` and `update`:
+//     administering ccdad is not using it, and `uninstall` and `update` in
+//     particular would start the process they are about to stop.
 //   - `primary`, for the same reason: setting an account's money policy is
 //     administering ccdad rather than using it, and the engine reads the flag
 //     on its next tick either way, whether or not one is already running.

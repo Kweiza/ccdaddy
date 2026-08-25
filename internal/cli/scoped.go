@@ -319,6 +319,15 @@ var scopedSessionAllowed = map[string]bool{
 	// credentials live in.
 	"ccdad setup-path": true,
 
+	// update writes the ccdad BINARY, which is not scoped by a session: a
+	// session scopes Claude Code's credential and config homes and nothing
+	// else. The one part that would not be safe is the daemon restart at the
+	// end, and that is skipped in here rather than the whole command being
+	// refused — daemon.ChildEnv makes both path variables absolute and
+	// symlink-resolved before handing them on, so a daemon spawned from inside
+	// a session does not merely leak the scope, it PINS it.
+	"ccdad update": true,
+
 	// The daemon verbs that do not start one. All three act on the machine's
 	// daemon through the pidfile under CCDAD_HOME, which is not scoped, so
 	// they do exactly what they say from in here.
