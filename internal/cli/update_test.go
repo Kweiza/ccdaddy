@@ -1393,3 +1393,122 @@ func TestCheckNamesWhatItCannotAnswer(t *testing.T) {
 		}
 	}
 }
+
+// reseal replaces the asset and re-signs a sums file that matches it, which is
+// what an origin serving a different binary honestly would look like. Every
+// test below needs it because the digest is checked against a SIGNED row: an
+// asset changed on its own fails on the digest, and this helper is for the
+// cases that are about something else.
+func reseal(t *testing.T, f *fakeRelease, sign signFunc, tag string, body []byte) {
+	t.Helper()
+	sums := sumsFor(map[string][]byte{
+		release.Asset():            body,
+		"LICENSE":                  []byte("license\n"),
+		"NOTICE":                   []byte("notice\n"),
+		"THIRD-PARTY-LICENSES.txt": []byte("notices\n"),
+	})
+	f.put(release.Asset(), body)
+	f.put("sha256sums.txt", sums)
+	f.put("sha256sums.txt.minisig", sign(sums, tag))
+}
+
+// A signed row and an asset that does not match it. This is the failure the
+// checksum exists for, and it must never be reported as a network problem.
+func TestUpdateRefusesAChecksumMismatch(t *testing.T) {
+	target, f, _ := updateWorld(t, "0.6.1", "v0.7.0")
+	// The sums file and its signature are left alone; only the served asset
+	// changes, so the row is genuine and the bytes are not what it names.
+	body := append(stagedAssetBody(t), []byte("\n// tampered\n")...)
+	f.put(release.Asset(), body)
+
+	code, stdout, _, _ := runRoot(t, "update", "--json")
+	if code != ExitBlocked {
+		t.Fatalf("exit = %d, want %d", code, ExitBlocked)
+	}
+	if got := decodePayload(t, stdout)["reason"]; got != "checksum" {
+		t.Errorf("reason = %v, want %q", got, "checksum")
+	}
+	assertBinaryUntouched(t, target)
+}
+
+// Under a megabyte is a proxy or an error page, not a ccdad — and the size gate
+// comes BEFORE the digest, so a correctly-checksummed error page is reported as
+// what it is.
+func TestUpdateRefusesAnUndersizedAsset(t *testing.T) {
+	target, f, sign := updateWorld(t, "0.6.1", "v0.7.0")
+	reseal(t, f, sign, "v0.7.0", []byte("<html>sign in to continue</html>\n"))
+
+	code, stdout, _, _ := runRoot(t, "update", "--json")
+	if code != ExitBlocked {
+		t.Fatalf("exit = %d, want %d", code, ExitBlocked)
+	}
+	if got := decodePayload(t, stdout)["reason"]; got != "size" {
+		t.Errorf("reason = %v, want %q — the digest of that page is correct, and it is still not a ccdad", got, "size")
+	}
+	assertBinaryUntouched(t, target)
+}
+
+// The ORDER of the two gates, which the test above cannot see.
+//
+// That one reseals, so its tiny page has a correct digest and the digest gate
+// would pass it either way: swapping the two checks leaves it green and still
+// reporting `size`. This fixture fails BOTH gates at once — a tiny page the
+// signed row does not name — so the reason it reports is the name of the gate
+// that ran first, which is the only way a test here can observe the order.
+func TestUpdateReportsSizeBeforeChecksumWhenTheAssetFailsBoth(t *testing.T) {
+	target, f, _ := updateWorld(t, "0.6.1", "v0.7.0")
+	// The sums file and its signature are untouched, so the signed row still
+	// names the real asset's digest and this page matches nothing.
+	f.put(release.Asset(), []byte("<html>sign in to continue</html>\n"))
+
+	code, stdout, _, _ := runRoot(t, "update", "--json")
+	if code != ExitBlocked {
+		t.Fatalf("exit = %d, want %d", code, ExitBlocked)
+	}
+	if got := decodePayload(t, stdout)["reason"]; got != "size" {
+		t.Errorf("reason = %v, want %q — a thirty-byte page is an error page whatever its digest says, "+
+			"and `checksum` here means the digest gate ran first", got, "size")
+	}
+	assertBinaryUntouched(t, target)
+}
+
+// An asset that will not download at all is something ccdad could not do, not
+// something the origin served that ccdad refuses: exit 1.
+func TestUpdateReportsAnAssetThatWillNotDownload(t *testing.T) {
+	for _, status := range []int{http.StatusNotFound, http.StatusInternalServerError} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			target, f, _ := updateWorld(t, "0.6.1", "v0.7.0")
+			f.setStatus(release.Asset(), status)
+
+			code, stdout, _, _ := runRoot(t, "update", "--json")
+			if code != ExitFailure {
+				t.Fatalf("exit = %d, want %d", code, ExitFailure)
+			}
+			if got := decodePayload(t, stdout)["reason"]; got != "download-asset" {
+				t.Errorf("reason = %v, want %q", got, "download-asset")
+			}
+			assertBinaryUntouched(t, target)
+		})
+	}
+}
+
+// The digest is compared case-sensitively, and both sides are lowercase hex by
+// construction. This pins that an uppercase row does not become a match: it
+// fails to be found at all, which is the anchored-row rule, and the run reports
+// not-listed rather than quietly folding.
+func TestUpdateDoesNotFoldTheCaseOfADigest(t *testing.T) {
+	_, f, sign := updateWorld(t, "0.6.1", "v0.7.0")
+	body := stagedAssetBody(t)
+	sum := sha256.Sum256(body)
+	sums := []byte(strings.ToUpper(hex.EncodeToString(sum[:])) + "  " + release.Asset() + "\n")
+	f.put("sha256sums.txt", sums)
+	f.put("sha256sums.txt.minisig", sign(sums, "v0.7.0"))
+
+	code, stdout, _, _ := runRoot(t, "update", "--json")
+	if code != ExitBlocked {
+		t.Fatalf("exit = %d, want %d", code, ExitBlocked)
+	}
+	if got := decodePayload(t, stdout)["reason"]; got != "shape" {
+		t.Errorf("reason = %v, want %q — an uppercase digest is not a checksum row at all", got, "shape")
+	}
+}
