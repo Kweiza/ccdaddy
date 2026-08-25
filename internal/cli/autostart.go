@@ -200,5 +200,5 @@ func maybeAutoStart(cmd *cobra.Command) {
 	// The error is discarded, not ignored: rule 4. `ccdad doctor` and `ccdad
 	// status` are where a daemon that will not start is reported, and both say
 	// so from evidence rather than from a message this path could have printed.
-	_ = spawnDaemon()
+	_ = spawnDaemon("")
 }

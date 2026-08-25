@@ -43,7 +43,7 @@ func TestIsolateSuppressesAutoStart(t *testing.T) {
 	spawns := 0
 	saved := spawnDaemon
 	t.Cleanup(func() { spawnDaemon = saved })
-	spawnDaemon = func() error { spawns++; return nil }
+	spawnDaemon = func(string) error { spawns++; return nil }
 	// isolate also scopes the credential environment, which the policy refuses
 	// on its own. Unscope it, so this proves the HOOK is suppressed rather than
 	// that the policy happened to decline.
