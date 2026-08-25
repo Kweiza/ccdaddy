@@ -1,0 +1,19 @@
+╭──────────────────────────────────────────────────────────────────────────────╮
+│  ___ ___ ___          _    _                                                 │
+│ / __/ __|   \ __ _ __| |__| |_  _                                            │
+│| (_| (__| |) / _' / _' / _' | || |                                           │
+│ \___\___|___/\__,_\__,_\__,_|\_, |                                           │
+│                              |__/   ccdad v0.2.0                             │
+│                                                                              │
+│Quota down again? You were 'Yap'-ping.                                        │
+│                      -- 'Daddy' Daemon                                       │
+│                                                                              │
+│Active: work@example.com (work)  |  Strategy: headroom  |  Mode: headroom     │
+│IDX ACCOUNT               USED               RESETS IN  STATE        AUTO     │
+│* 1 work@example.com (..  [█████████▒]  87%  1h22m      ▪ active     yes      │
+│  2 enterprise@co.exam..  [██████████] 100%  5m         ✗ exhausted  no       │
+│  3 spare@example.com     [█████▒▒▒▒▒]  52%  4h11m      ◉ candidate  yes      │
+│  4 keyonly@example.co..  ?                  -          ◌ unknown    yes      │
+│                                                                              │
+│a add  s switch  d daemon  c strategy  q quit  l list      Daemon: not running│
+╰──────────────────────────────────────────────────────────────────────────────╯

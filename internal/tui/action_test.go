@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/Kweiza/ccdaddy/internal/theme"
 	"github.com/Kweiza/ccdaddy/internal/view"
 )
 
@@ -18,7 +19,7 @@ import (
 func TestTheSwitchPickerPassesAFullUuidAndNeverTheDisplayOrdinal(t *testing.T) {
 	rows := fixtureRows()
 	for i := range rows {
-		argv := switchPicker(rows, i).Chosen()
+		argv := switchPicker(rows, i, UnicodeGlyphs).Chosen()
 		if len(argv) != 2 || argv[0] != "switch" {
 			t.Fatalf("Chosen() = %v, want [switch <uuid>]", argv)
 		}
@@ -34,7 +35,7 @@ func TestTheSwitchPickerPassesAFullUuidAndNeverTheDisplayOrdinal(t *testing.T) {
 // The picker names the target the way the table does, or a user who aliased two
 // accounts cannot tell which address they are about to move to.
 func TestThePickerNamesTargetsTheWayTheTableDoes(t *testing.T) {
-	body := switchPicker(fixtureRows(), 0).Body(60)
+	body := switchPicker(fixtureRows(), 0, UnicodeGlyphs).Body(60, theme.Of(theme.None))
 	if !strings.Contains(body, "work@example.com (work)") {
 		t.Fatalf("the picker does not name the account as the table does:\n%s", body)
 	}
@@ -48,7 +49,7 @@ func TestTheSwitchPickerStillOffersAnAccountHeldOutOfRotation(t *testing.T) {
 	if !rows[1].Account.Disabled {
 		t.Fatal("the fixture pool no longer has a disabled account, so this proves nothing")
 	}
-	if got := len(switchPicker(rows, 0).items); got != len(rows) {
+	if got := len(switchPicker(rows, 0, UnicodeGlyphs).items); got != len(rows) {
 		t.Fatalf("the picker offers %d of %d accounts", got, len(rows))
 	}
 }
@@ -58,8 +59,8 @@ func TestTheSwitchPickerStillOffersAnAccountHeldOutOfRotation(t *testing.T) {
 // (headroom/recovery/consume-first) is an OUTCOME rather than a setting and
 // appears only in the header line.
 func TestTheStrategyPickerOffersTwoValuesAndMarksTheCurrentOne(t *testing.T) {
-	p := strategyPicker("headroom")
-	body := p.Body(60)
+	p := strategyPicker("headroom", UnicodeGlyphs)
+	body := p.Body(60, theme.Of(theme.None))
 	for _, want := range []string{"headroom", "consume-first"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the picker does not offer %q:\n%s", want, body)
@@ -79,7 +80,7 @@ func TestTheStrategyPickerOffersTwoValuesAndMarksTheCurrentOne(t *testing.T) {
 // its way. A picker that ran an argv the tree does not answer to would report a
 // usage error for a key the dashboard offered.
 func TestTheStrategyPickerWritesThroughTheConfigCommand(t *testing.T) {
-	p := strategyPicker("headroom")
+	p := strategyPicker("headroom", UnicodeGlyphs)
 	got := strings.Join(p.Move(1).Chosen(), " ")
 	if got != "config set strategy consume-first" {
 		t.Fatalf("Chosen() = %q, want the config command that owns this key", got)
@@ -90,7 +91,7 @@ func TestTheStrategyPickerWritesThroughTheConfigCommand(t *testing.T) {
 // first item: "you are here" is a claim, and making it about an arbitrary row
 // is worse than not making it.
 func TestAnUnrecognisedCurrentStrategyMarksNothing(t *testing.T) {
-	if body := strategyPicker("something-else").Body(60); strings.Contains(body, "*") {
+	if body := strategyPicker("something-else", UnicodeGlyphs).Body(60, theme.Of(theme.None)); strings.Contains(body, "*") {
 		t.Fatalf("an unknown current value still marked a row:\n%s", body)
 	}
 }
@@ -100,7 +101,7 @@ func TestAnUnrecognisedCurrentStrategyMarksNothing(t *testing.T) {
 // looking at when they let go -- on a list where enter moves a credential.
 func TestTheCursorStopsAtTheEndsRatherThanWrapping(t *testing.T) {
 	rows := fixtureRows()
-	p := switchPicker(rows, 0)
+	p := switchPicker(rows, 0, UnicodeGlyphs)
 	if got := p.Move(-1).cursor; got != 0 {
 		t.Errorf("up from the top landed on %d, want 0", got)
 	}
@@ -112,11 +113,11 @@ func TestTheCursorStopsAtTheEndsRatherThanWrapping(t *testing.T) {
 // An empty store is a real state -- a fresh install -- and it reaches the
 // picker as a list with nothing in it rather than as a panic.
 func TestAPickerOverAnEmptyStoreChoosesNothingAndSaysSo(t *testing.T) {
-	p := switchPicker(nil, 0)
+	p := switchPicker(nil, 0, UnicodeGlyphs)
 	if got := p.Chosen(); got != nil {
 		t.Fatalf("Chosen() over an empty store = %v, want nil", got)
 	}
-	if body := p.Body(60); !strings.Contains(body, "nothing to choose from") {
+	if body := p.Body(60, theme.Of(theme.None)); !strings.Contains(body, "nothing to choose from") {
 		t.Fatalf("an empty picker rendered no explanation:\n%s", body)
 	}
 }
@@ -208,7 +209,7 @@ func TestThePickerNeverExceedsTheWidthItWasGiven(t *testing.T) {
 	rows := append(fixtureRows(), view.Row{})
 	rows[len(rows)-1].Account.Email = strings.Repeat("long", 30) + "@example.com"
 	for _, width := range []int{20, 40, 60} {
-		for i, line := range strings.Split(switchPicker(rows, 0).Body(width), "\n") {
+		for i, line := range strings.Split(switchPicker(rows, 0, UnicodeGlyphs).Body(width, theme.Of(theme.None)), "\n") {
 			if got := ansi.StringWidth(line); got > width {
 				t.Errorf("at width %d line %d is %d columns: %q", width, i, got, line)
 			}

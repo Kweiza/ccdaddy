@@ -4,9 +4,18 @@ package tui
 // wordmark, tagline and figures are the page's decorative chrome: hand-written
 // Go string constants, one entry per row, and nothing else. There is no
 // generator — no figlet dependency, no font file — because a generator would
-// put a build step in front of a decoration. Every one of them is 7-bit
-// ASCII: this repository emits no non-ASCII byte today, and a box-drawing or
-// half-block glyph is a Windows code-page bet nobody has made.
+// put a build step in front of a decoration.
+//
+// Every one of them is 7-bit ASCII, and it stays that way even now that the
+// page around it draws box-drawing and block characters on purpose. This is
+// ART, measured in columns by a transcription somebody did by hand, and the
+// height ladder's row budget and the frame's width are both arithmetic over the
+// sizes below. A block character inside one of these rows would measure one
+// column on most machines and two on a machine whose width engine was started
+// in east-asian mode, so the drawing would change shape with an environment
+// variable — and the glyph set that fixes that for the frame and the gauge
+// cannot fix it here, because these rows are not a vocabulary with two
+// spellings. They are one drawing.
 var wordmark = []string{
 	`  ___ ___ ___          _    _        `,
 	` / __/ __|   \ __ _ __| |__| |_  _   `,

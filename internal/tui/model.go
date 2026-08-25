@@ -170,7 +170,7 @@ const neverLoaded = "could not read the accounts, and there is no earlier readin
 // something to draw, and until both have arrived the floors render what the
 // page needs rather than a made-up size.
 func newApp(o Options) App {
-	return App{m: newModel(view.Snapshot{}, 0, 0), opts: o}
+	return App{m: newModel(view.Snapshot{}, 0, 0, paletteFor(o.Theme), glyphsFor(o)), opts: o}
 }
 
 // Init loads once and starts both clocks.
@@ -277,7 +277,7 @@ func (a App) View() tea.View {
 func (a App) body() string {
 	switch a.scr {
 	case screenPicker:
-		return fit(a.pick.Body(a.m.Width), a.m.Width, a.m.Height)
+		return fit(a.pick.Body(a.m.Width, a.m.Pal), a.m.Width, a.m.Height)
 	case screenPanel:
 		text := a.note
 		if text == "" {
@@ -316,6 +316,7 @@ func (a App) daemonScreen() daemonScreen {
 		LogErr:         a.logErr,
 		CredentialHome: a.opts.CredentialHome,
 		SamePath:       a.opts.SamePath,
+		Glyphs:         a.m.Glyphs,
 	}
 }
 
@@ -441,12 +442,12 @@ func (a App) pageKey(msg tea.KeyPressMsg, k KeyMap) (App, tea.Cmd, bool) {
 		return a, tea.ExecProcess(c, func(err error) tea.Msg { return addFinishedMsg{err: err} }), true
 
 	case key.Matches(msg, k.Switch):
-		a.pick = switchPicker(a.m.Snap.Rows, a.m.Cursor)
+		a.pick = switchPicker(a.m.Snap.Rows, a.m.Cursor, a.m.Glyphs)
 		a.scr = screenPicker
 		return a, nil, true
 
 	case key.Matches(msg, k.Strategy):
-		a.pick = strategyPicker(a.m.Snap.Strategy)
+		a.pick = strategyPicker(a.m.Snap.Strategy, a.m.Glyphs)
 		a.scr = screenPicker
 		return a, nil, true
 
@@ -523,7 +524,7 @@ func probes() []App {
 	base.m.Snap.Report.State = daemon.DaemonRunning
 
 	pick := base
-	pick.scr, pick.pick = screenPicker, switchPicker(nil, 0)
+	pick.scr, pick.pick = screenPicker, switchPicker(nil, 0, base.m.Glyphs)
 	panel := base
 	panel.scr = screenPanel
 	engine := base

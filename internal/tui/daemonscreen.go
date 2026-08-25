@@ -36,6 +36,11 @@ type daemonScreen struct {
 	// not make that comparison itself, and making it as strings is a bug
 	// rather than an approximation.
 	SamePath func(a, b string) bool
+	// Glyphs is the page's vocabulary, carried here rather than chosen here for
+	// the reason everything else on this screen is handed in: this type reads
+	// nothing. A screen that picked its own set would print one state alphabet
+	// while the table one keypress away printed another.
+	Glyphs Glyphs
 }
 
 // Keys is the base map with the start key disabled when the lock could not be
@@ -69,7 +74,7 @@ func (d daemonScreen) Body(width, height int) string {
 	// carries the same two-character cue the keybar does: a silently halved
 	// path or error reads as a whole one.
 	for i := range lines {
-		lines[i] = truncateCue(lines[i], width)
+		lines[i] = truncateCue(lines[i], width, d.Glyphs.Cue)
 	}
 	// What does not fit is counted rather than dropped in silence: a screen
 	// that stops at the bottom of the terminal is one a reader takes for the
@@ -203,7 +208,7 @@ func (d daemonScreen) pollSchedule() []string {
 	cols := make([][4]string, len(accounts))
 	var wide [4]int
 	for i, a := range accounts {
-		glyph, text, _ := stateCell(a.State)
+		glyph, text, _ := stateCell(d.Glyphs, a.State)
 		state := text
 		if glyph != "" {
 			state = glyph + " " + text

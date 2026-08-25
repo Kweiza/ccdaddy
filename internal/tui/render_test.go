@@ -14,6 +14,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
+	"github.com/Kweiza/ccdaddy/internal/theme"
 	"github.com/Kweiza/ccdaddy/internal/usage"
 	"github.com/Kweiza/ccdaddy/internal/view"
 )
@@ -22,138 +23,15 @@ import (
 // every release reddens the golden.
 const fixtureVersion = "v0.2.0"
 
-var fixtureAFullPage = fixture(`
-+---------------------------------------------------------------------------------------------------------------+
-|  ___ ___ ___          _    _                                                                                  |
-| / __/ __|   \ __ _ __| |__| |_  _                                                                             |
-|| (_| (__| |) / _' / _' / _' | || |                                                                            |
-| \___\___|___/\__,_\__,_\__,_|\_, |                                                                            |
-|                              |__/   ccdad v0.2.0                                                              |
-|                                                                                                               |
-|Quota down again? You were 'Yap'-ping.                                                                         |
-|                      -- 'Daddy' Daemon                                                                        |
-|                                                                                                               |
-|  ____     ____     ____             ________                                                                  |
-| / oo \   / oo \   / oo \           | o    o |                                                                 |
-||  __  | |  __  | |  __  |         _|__ >< __|_                                                                |
-|| |  | | | |  | | | |  | |        |   ~~~~~~~  |                                                               |
-||_|  |_| |_|  |_| |_|  |_|        |___________|                                                                |
-|  ||||     ||||     ||||             ||     ||                                                                 |
-|                                                                                                               |
-|Active: work@example.com (work)  |  Strategy: headroom  |  Mode: headroom                                      |
-|IDX ACCOUNT               TYPE          USED               WINDOW          RESETS IN  STATE        AUTO        |
-|* 1 work@example.com (..  subscription  [#########.]  87%  five_hour       1h22m      * active     yes         |
-|  2 enterprise@co.exam..  credit        [##########] 100%  seven_day_opus  5m         ! exhausted  no          |
-|  3 spare@example.com     subscription  [#####.....]  52%  five_hour       4h11m      + candidate  yes         |
-|  4 keyonly@example.co..  api-key       ?                  -               -          ? unknown    yes         |
-|                                                                                                               |
-|a add  s switch  d daemon  c strategy  q quit  l list                      Daemon: running (pid 8123, up 2h05m)|
-+---------------------------------------------------------------------------------------------------------------+`)
-
-var fixtureBDesignTarget = fixture(`
-+------------------------------------------------------------------------------+
-|  ___ ___ ___          _    _                                                 |
-| / __/ __|   \ __ _ __| |__| |_  _                                            |
-|| (_| (__| |) / _' / _' / _' | || |                                           |
-| \___\___|___/\__,_\__,_\__,_|\_, |                                           |
-|                              |__/   ccdad v0.2.0                             |
-|                                                                              |
-|Quota down again? You were 'Yap'-ping.                                        |
-|                      -- 'Daddy' Daemon                                       |
-|                                                                              |
-|Active: work@example.com (work)  |  Strategy: headroom  |  Mode: headroom     |
-|IDX ACCOUNT               USED               RESETS IN  STATE        AUTO     |
-|* 1 work@example.com (..  [#########.]  87%  1h22m      * active     yes      |
-|  2 enterprise@co.exam..  [##########] 100%  5m         ! exhausted  no       |
-|  3 spare@example.com     [#####.....]  52%  4h11m      + candidate  yes      |
-|  4 keyonly@example.co..  ?                  -          ? unknown    yes      |
-|                                                                              |
-|a add  s switch  d daemon  c strategy  q quit  l list      Daemon: not running|
-+------------------------------------------------------------------------------+`)
-
-var fixtureCShort = fixture(`
-+------------------------------------------------------------------------------+
-|ccdad v0.2.0                                                                  |
-|                                                                              |
-|Active: work@example.com (work)  |  Strategy: headroom  |  Mode: headroom     |
-|IDX ACCOUNT               USED               RESETS IN  STATE        AUTO     |
-|* 1 work@example.com (..  [#########.]  87%  1h22m      * active     yes      |
-|  2 enterprise@co.exam..  [##########] 100%  5m         ! exhausted  no       |
-|  3 spare@example.com     [#####.....]  52%  4h11m      + candidate  yes      |
-|  4 keyonly@example.co..  ?                  -          ? unknown    yes      |
-|                                                                              |
-|a add  s switch  d daemon  c strategy  q quit  l list          Daemon: unknown|
-+------------------------------------------------------------------------------+`)
-
-var fixtureDNarrow = fixture(`
-ccdad v0.2.0
-
-Active: work@example.com (work)  |  Strategy: headroom..
-IDX ACCOUNT               USED               RESETS IN
-* 1 work@example.com (..  [#########.]  87%  1h22m    
-  2 enterprise@co.exam..  [##########] 100%  5m       
-  3 spare@example.com     [#####.....]  52%  4h11m    
-  4 keyonly@example.co..  ?                  -        
-
-a add  s switch  d daemon  c strategy .. Daemon: unknown`)
-
-var fixtureECollapsed = fixture(`
-ccdad v0.2.0
-Active: work@example.com (work)  |  Strat..
-IDX ACCOUNT               USED  RESETS IN
-* 1 work@example.com (..  87%   1h22m    
-  2 enterprise@co.exam..  100%  5m       
-  3 spare@example.com     52%   4h11m    
-  4 keyonly@example.co..  ?     -        
-a add  s switch  d daemon ..Daemon: unknown`)
-
-var fixtureFWithNotice = fixture(`
-+------------------------------------------------------------------------------+
-|  ___ ___ ___          _    _                                                 |
-| / __/ __|   \ __ _ __| |__| |_  _                                            |
-|| (_| (__| |) / _' / _' / _' | || |                                           |
-| \___\___|___/\__,_\__,_\__,_|\_, |                                           |
-|                              |__/   ccdad v0.2.0                             |
-|                                                                              |
-|Quota down again? You were 'Yap'-ping.                                        |
-|                      -- 'Daddy' Daemon                                       |
-|                                                                              |
-|Active: work@example.com (work)  |  Strategy: headroom  |  Mode: headroom     |
-|note: hover thresholds could not be read                                      |
-|IDX ACCOUNT               USED               RESETS IN  STATE        AUTO     |
-|* 1 work@example.com (..  [#########.]  87%  1h22m      * active     yes      |
-|  2 enterprise@co.exam..  [##########] 100%  5m         ! exhausted  no       |
-|  3 spare@example.com     [#####.....]  52%  4h11m      + candidate  yes      |
-|  4 keyonly@example.co..  ?                  -          ? unknown    yes      |
-|                                                                              |
-|a add  s switch  d daemon  c strategy  q quit  l list          Daemon: unknown|
-+------------------------------------------------------------------------------+`)
-
-var fixtureGZeroAccounts = fixture(`
-+------------------------------------------------------------------------------+
-|  ___ ___ ___          _    _                                                 |
-| / __/ __|   \ __ _ __| |__| |_  _                                            |
-|| (_| (__| |) / _' / _' / _' | || |                                           |
-| \___\___|___/\__,_\__,_\__,_|\_, |                                           |
-|                              |__/   ccdad v0.2.0                             |
-|                                                                              |
-|Active: work@example.com (work)  |  Strategy: headroom  |  Mode: headroom     |
-|IDX ACCOUNT               USED  RESETS IN  STATE  AUTO                        |
-|    no accounts                                                               |
-|                                                                              |
-|a add  s switch  d daemon  c strategy  q quit  l list          Daemon: unknown|
-+------------------------------------------------------------------------------+`)
-
-// fixture is the page a raw literal below holds. The literal starts with a
-// newline because the alternative is a first row jammed against the backtick,
-// where nothing lines up and a missing leading space is invisible; this takes
-// that newline back off.
-func fixture(page string) string { return strings.TrimPrefix(page, "\n") }
-
-// The seven pages below were pasted from the compiled renderer, not written
-// by hand and not edited toward what they were expected to say: a golden a
-// human wrote is a golden that agrees with whoever wrote it last. Regenerating
-// one means printing Body() at that size and pasting the bytes back.
+// The seven pages live under testdata and are regenerated with -update rather
+// than retyped: `go test ./internal/tui -run TestThePage -update -count=1`
+// writes each file from what the renderer produced, and the diff it leaves is
+// reviewed like any other change to a file. One of them, the 80x24 design
+// target, was drawn BY HAND first and then checked against the renderer, which
+// is the opposite discipline and is used exactly once: a golden a human writes
+// is a golden that agrees with whoever wrote it last, so the hand-drawn page is
+// the acceptance criterion for the glyph swap and every other page is a
+// transcription of what the renderer then did.
 //
 // THE FIXTURE-DIFF LEDGER. The reference blocks these pages replace were
 // drawn by a probe that predates the width ladder, the height ladder and the
@@ -195,19 +73,16 @@ func TestThePageRendersByteForByteAtEveryLadderRung(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
 		width, height int
-		want          string
+		file          string
 	}{
-		{"the full page with every column", 113, 26, fixtureAFullPage},
-		{"the design target, figures dropped", 80, 24, fixtureBDesignTarget},
-		{"wordmark and tagline dropped", 80, 13, fixtureCShort},
-		{"the frame dropped", 56, 10, fixtureDNarrow},
-		{"the gauge collapsed", 43, 9, fixtureECollapsed},
+		{"the full page with every column", 113, 26, goldenFullPage},
+		{"the design target, figures dropped", 80, 24, goldenDesignTarget},
+		{"wordmark and tagline dropped", 80, 13, goldenShort},
+		{"the frame dropped", 56, 10, goldenNarrow},
+		{"the gauge collapsed", 43, 9, goldenCollapsed},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := fixtureModel(tc.width, tc.height).Body()
-			if got != tc.want {
-				t.Fatalf("Body() at %dx%d:\ngot:\n%s\nwant:\n%s", tc.width, tc.height, got, tc.want)
-			}
+			checkGolden(t, tc.file, fixtureModel(tc.width, tc.height).Body())
 		})
 	}
 }
@@ -377,9 +252,7 @@ func TestANonEmptyNoticeRendersDirectlyAboveTheColumnHeader(t *testing.T) {
 			}
 		}
 	}
-	if got != fixtureFWithNotice {
-		t.Fatalf("Body() with one notice:\ngot:\n%s\nwant:\n%s", got, fixtureFWithNotice)
-	}
+	checkGolden(t, goldenNotice, got)
 }
 
 // More notices than the one line can carry are counted rather than dropped: a
@@ -409,7 +282,7 @@ func TestAnEmptyNoticesRendersNoLineAndNoGap(t *testing.T) {
 		t.Fatalf("an empty Notices rendered a note line anyway:\n%s", got)
 	}
 	var want []string
-	for _, line := range strings.Split(fixtureFWithNotice, "\n") {
+	for _, line := range strings.Split(readGolden(t, goldenNotice), "\n") {
 		if !strings.Contains(line, "note: ") {
 			want = append(want, line)
 		}
@@ -430,9 +303,7 @@ func TestZeroAccountsRendersAnExplicitRowNotAnEmptyBox(t *testing.T) {
 	if !strings.Contains(got, "no accounts") {
 		t.Fatalf("zero accounts did not render an explicit row:\n%s", got)
 	}
-	if got != fixtureGZeroAccounts {
-		t.Fatalf("Body() with zero accounts:\ngot:\n%s\nwant:\n%s", got, fixtureGZeroAccounts)
-	}
+	checkGolden(t, goldenZeroAccounts, got)
 }
 
 // A load that fails mid-session -- accounts.toml deleted, a contended lock --
@@ -603,16 +474,33 @@ func fixtureSnapshot(report daemon.Report) view.Snapshot {
 	}
 }
 
+// fixtureModel is the page every golden below was drawn from. It names the
+// theme and the glyph set EXPLICITLY, and neither may become a default.
+//
+// theme.None because a fixture compares bytes and a palette that resolved
+// itself would paint them. UnicodeGlyphs because detection must not reach a
+// test at all: under `go test` on Windows this process's stdout is a captured
+// pipe rather than a console, the code-page read answers "cannot carry UTF-8",
+// and every page below would come out in the ASCII vocabulary -- turning the
+// whole fixture set red on the one leg of CI that gates a release.
 func fixtureModel(width, height int) Model {
-	return newModel(fixtureSnapshot(fixtureReport(width, height)), width, height)
+	return fixtureModelGlyphs(width, height, UnicodeGlyphs)
+}
+
+// fixtureModelGlyphs is the same page with the vocabulary named, for the tests
+// that are about the vocabulary itself.
+func fixtureModelGlyphs(width, height int, g Glyphs) Model {
+	return newModel(fixtureSnapshot(fixtureReport(width, height)), width, height, theme.Of(theme.None), g)
 }
 
 func fixtureOptions() Options {
 	snap := fixtureSnapshot(fixtureReport(113, 26))
 	return Options{
-		Load: func(time.Time) (view.Snapshot, error) { return snap, nil },
-		Now:  func() time.Time { return fixtureNow },
-		Out:  io.Discard,
+		Load:     func(time.Time) (view.Snapshot, error) { return snap, nil },
+		Now:      func() time.Time { return fixtureNow },
+		Out:      io.Discard,
+		Theme:    theme.None,
+		GlyphSet: "unicode",
 	}
 }
 
@@ -627,14 +515,14 @@ func TestTheCursorIsDrawnOnTheRowItIsOn(t *testing.T) {
 	lines := strings.Split(m.Body(), "\n")
 	var marked []string
 	for _, line := range lines {
-		if strings.Contains(line, cursorMark+" 2 ") {
+		if strings.Contains(line, m.Glyphs.Cursor+" 2 ") {
 			marked = append(marked, line)
 		}
 	}
 	if len(marked) != 1 {
 		t.Fatalf("the cursor is drawn on %d rows, want exactly the one it is on:\n%s", len(marked), m.Body())
 	}
-	if strings.Count(m.Body(), cursorMark+" ") != 1 {
+	if strings.Count(m.Body(), m.Glyphs.Cursor+" ") != 1 {
 		t.Errorf("more than one row carries a cursor:\n%s", m.Body())
 	}
 
@@ -659,7 +547,7 @@ func TestTheLiveAccountKeepsTheMarkerWhenTheCursorIsOnIt(t *testing.T) {
 	if !strings.Contains(body, "* 1 ") {
 		t.Fatalf("the live account lost its marker to the cursor:\n%s", body)
 	}
-	if strings.Contains(body, cursorMark+" 1 ") {
+	if strings.Contains(body, m.Glyphs.Cursor+" 1 ") {
 		t.Fatalf("the cursor took the live account's marker:\n%s", body)
 	}
 }
@@ -676,14 +564,16 @@ func TestTheOneShotRenderDrawsNoCursor(t *testing.T) {
 	snap.Rows[2].Active = true
 
 	page, err := Render(Options{
-		Load: func(time.Time) (view.Snapshot, error) { return snap, nil },
-		Now:  func() time.Time { return fixtureNow },
-		Out:  io.Discard,
+		Load:     func(time.Time) (view.Snapshot, error) { return snap, nil },
+		Now:      func() time.Time { return fixtureNow },
+		Out:      io.Discard,
+		Theme:    theme.None,
+		GlyphSet: "unicode",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(page, cursorMark+" ") {
+	if strings.Contains(page, UnicodeGlyphs.Cursor+" ") {
 		t.Fatalf("the one-shot render drew a cursor:\n%s", page)
 	}
 	// The live account's own marker is untouched by the same change.
@@ -701,10 +591,10 @@ func TestTheCursorFollowsTheRowAndNotTheScreenPositionOnceItScrolls(t *testing.T
 	m := fixtureModel(80, 5)
 	m.Top, m.Cursor = 2, 3
 	body := m.Body()
-	if !strings.Contains(body, cursorMark+" 4 ") {
+	if !strings.Contains(body, m.Glyphs.Cursor+" 4 ") {
 		t.Fatalf("the cursor is not on the row it indexes:\n%s", body)
 	}
-	if strings.Contains(body, cursorMark+" 3 ") {
+	if strings.Contains(body, m.Glyphs.Cursor+" 3 ") {
 		t.Fatalf("the cursor is drawn against the screen position rather than the row:\n%s", body)
 	}
 }
@@ -717,7 +607,7 @@ func TestTheHeaderNamesHoverRatherThanTheStrategyHoverOverrode(t *testing.T) {
 	snap := fixtureSnapshot(fixtureReport(113, 26))
 	snap.Strategy, snap.Hover = "consume-first", true
 
-	page := newModel(snap, 113, 26).Body()
+	page := newModel(snap, 113, 26, theme.Of(theme.None), UnicodeGlyphs).Body()
 	if !strings.Contains(page, "Strategy: hover") {
 		t.Errorf("the header does not name hover:\n%s", page)
 	}
@@ -889,17 +779,17 @@ func TestAForecastTheSnapshotDoesNotClaimMovesNoGolden(t *testing.T) {
 		name          string
 		width, height int
 		prep          func(*Model)
-		want          string
+		file          string
 	}{
-		{"the full page with every column", 113, 26, nil, fixtureAFullPage},
-		{"the design target, figures dropped", 80, 24, nil, fixtureBDesignTarget},
-		{"wordmark and tagline dropped", 80, 13, nil, fixtureCShort},
-		{"the frame dropped", 56, 10, nil, fixtureDNarrow},
-		{"the gauge collapsed", 43, 9, nil, fixtureECollapsed},
+		{"the full page with every column", 113, 26, nil, goldenFullPage},
+		{"the design target, figures dropped", 80, 24, nil, goldenDesignTarget},
+		{"wordmark and tagline dropped", 80, 13, nil, goldenShort},
+		{"the frame dropped", 56, 10, nil, goldenNarrow},
+		{"the gauge collapsed", 43, 9, nil, goldenCollapsed},
 		{"one notice", 80, 20, func(m *Model) {
 			m.Snap.Notices = []string{"hover thresholds could not be read"}
-		}, fixtureFWithNotice},
-		{"zero accounts", 80, 13, func(m *Model) { m.Snap.Rows = nil }, fixtureGZeroAccounts},
+		}, goldenNotice},
+		{"zero accounts", 80, 13, func(m *Model) { m.Snap.Rows = nil }, goldenZeroAccounts},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := fixtureModel(tc.width, tc.height)
@@ -909,10 +799,7 @@ func TestAForecastTheSnapshotDoesNotClaimMovesNoGolden(t *testing.T) {
 			m.Snap.Forecast = fixtureFleet()
 			m.Snap.HasForecast = false
 			got := m.Body()
-			if got != tc.want {
-				t.Fatalf("Body() at %dx%d with an unclaimed forecast:\ngot:\n%s\nwant:\n%s",
-					tc.width, tc.height, got, tc.want)
-			}
+			checkGolden(t, tc.file, got)
 			if strings.Contains(got, "Runway") {
 				t.Fatalf("a page with HasForecast false drew a runway line anyway:\n%s", got)
 			}
@@ -990,10 +877,13 @@ func TestTheRunwayLineSitsUnderTheHeaderLineAndAboveTheNote(t *testing.T) {
 // and the equality below is what tells the two apart: the page draws the line
 // exactly when Plan budgeted a row for it.
 //
-// This is also the one line on the page that carries a non-ASCII byte: the
-// shared wording separates its clauses with U+00B7, one display column wide,
-// which is what the width functions here measure and what the count below
-// compares against.
+// This is also the one line on the page whose bytes above 0x7F came from a
+// VALUE rather than from this package's own vocabulary: the shared wording
+// separates its clauses with U+00B7, one display column wide, which is what the
+// width functions here measure and what the count below compares against. The
+// frame, the gauge and the state column are drawn from the glyph set and are
+// this package's own choice; this line's characters are whoever computed the
+// forecast's.
 func TestTheRunwayLineIsCutToTheFrameRatherThanWrappingIt(t *testing.T) {
 	for _, height := range []int{20, 19, 16, 12} {
 		for _, w := range []int{113, 80, 56, 43, 35} {
@@ -1082,5 +972,29 @@ func TestTheRunwayLineRendersInTheSnapshotsOwnZone(t *testing.T) {
 	}
 	if strings.Contains(body, "UTC") {
 		t.Fatalf("the page rendered a zone the Snapshot's clock was not read in:\n%s", body)
+	}
+}
+
+// The count of what is off the page says WHICH WAY, and that is a change this
+// commit makes on purpose rather than a glyph substitution. window() slices,
+// so the rows it is not showing can be above the window as easily as below it
+// -- press j to the bottom of a long list and every hidden row is above -- and
+// a bare "+2 more" reads as "below" to everyone who has ever seen one.
+func TestTheCountOfHiddenRowsSaysWhichWayTheyLie(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		top  int
+		want string
+	}{
+		{"at the top, everything hidden is below", 0, UnicodeGlyphs.MoreBelow + " +2 more  (j/k)"},
+		{"scrolled to the bottom, everything hidden is above", 2, UnicodeGlyphs.MoreAbove + " +2 more  (j/k)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := fixtureModel(80, 5)
+			m.Top = tc.top
+			if body := m.Body(); !strings.Contains(body, tc.want) {
+				t.Fatalf("the scrolled page does not carry %q:\n%s", tc.want, body)
+			}
+		})
 	}
 }

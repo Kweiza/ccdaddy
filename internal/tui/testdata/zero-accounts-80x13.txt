@@ -1,0 +1,13 @@
+╭──────────────────────────────────────────────────────────────────────────────╮
+│  ___ ___ ___          _    _                                                 │
+│ / __/ __|   \ __ _ __| |__| |_  _                                            │
+│| (_| (__| |) / _' / _' / _' | || |                                           │
+│ \___\___|___/\__,_\__,_\__,_|\_, |                                           │
+│                              |__/   ccdad v0.2.0                             │
+│                                                                              │
+│Active: work@example.com (work)  |  Strategy: headroom  |  Mode: headroom     │
+│IDX ACCOUNT               USED  RESETS IN  STATE  AUTO                        │
+│    no accounts                                                               │
+│                                                                              │
+│a add  s switch  d daemon  c strategy  q quit  l list          Daemon: unknown│
+╰──────────────────────────────────────────────────────────────────────────────╯

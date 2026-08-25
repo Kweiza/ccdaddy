@@ -184,7 +184,8 @@ func TestA429BadgeShowsItsAgeWhenLastRateLimitedIsSet(t *testing.T) {
 // to prevent.
 func TestTheDaemonScreenPrintsNoQuotaFigure(t *testing.T) {
 	body := runningScreen(t).Body(160, 40)
-	for _, quota := range []string{"87%", "52%", "100%", "1h22m", "4h11m", "[#########"} {
+	gauge := "[" + strings.Repeat(string(UnicodeGlyphs.GaugeFull), 9)
+	for _, quota := range []string{"87%", "52%", "100%", "1h22m", "4h11m", gauge} {
 		if strings.Contains(body, quota) {
 			t.Errorf("the daemon screen carries %q, which belongs to the usage cache", quota)
 		}
@@ -194,7 +195,7 @@ func TestTheDaemonScreenPrintsNoQuotaFigure(t *testing.T) {
 // A machine where no daemon has ever run says so, rather than printing a page
 // of empty fields that reads as a daemon with nothing to report.
 func TestAMachineWithNoPublishedDocumentSaysSo(t *testing.T) {
-	d := daemonScreen{Report: daemon.Report{State: daemon.DaemonStopped}, Now: statusNow}
+	d := daemonScreen{Report: daemon.Report{State: daemon.DaemonStopped}, Now: statusNow, Glyphs: UnicodeGlyphs}
 	body := d.Body(100, 40)
 	if !strings.Contains(body, "no daemon has ever published") {
 		t.Fatalf("an unpublished machine rendered no explanation:\n%s", body)
@@ -211,6 +212,7 @@ func TestADamagedDocumentStillReportsLiveness(t *testing.T) {
 	d := daemonScreen{
 		Report: daemon.Report{State: daemon.DaemonRunning, StatusErr: errors.New("status.json: unexpected end of JSON input")},
 		Now:    statusNow,
+		Glyphs: UnicodeGlyphs,
 	}
 	body := d.Body(100, 40)
 	if !strings.Contains(body, "running") {
@@ -343,6 +345,7 @@ func runningScreen(t *testing.T) daemonScreen {
 		// that it is credhome.SamePath rather than == is pinned where the
 		// injection happens, in internal/cli.
 		SamePath: func(a, b string) bool { return a == b },
+		Glyphs:   UnicodeGlyphs,
 	}
 }
 
