@@ -1871,3 +1871,98 @@ func TestThePathNoteFiresOnceWhenTheDirectoryIsNotOnPath(t *testing.T) {
 	}
 	_ = target
 }
+
+// `update` is allowed inside a `ccdad run` session, because it writes only the
+// ccdad BINARY and a session scopes Claude Code's credential and config homes
+// and nothing else. The one part that would not be safe is the restart, and it
+// is skipped in here rather than the whole command being refused.
+func TestUpdateRunsInsideAScopedSessionAndLeavesTheDaemonStopped(t *testing.T) {
+	for _, enter := range []struct {
+		name string
+		fn   func(*testing.T, string) string
+	}{
+		{"a run session", enterRunSession},
+		{"a --full-profile session", enterFullProfileSession},
+	} {
+		t.Run(enter.name, func(t *testing.T) {
+			target, _, _ := updateWorld(t, "0.6.1", "v0.7.0")
+			d := stubUpdateDaemon(t, true)
+			enter.fn(t, "acct-1")
+
+			code, stdout, stderr, top := runRoot(t, "update", "--json")
+			if code != ExitOK {
+				t.Fatalf("exit = %d, want 0 (%s) — update is on the allowed side of the "+
+					"scoped-session table, not the refused side", code, top)
+			}
+			if len(d.signalled) == 0 {
+				t.Error("the daemon was not stopped; leaving it running keeps the machine on old " +
+					"code until somebody restarts it by hand, which is the alternative that was rejected")
+			}
+			if d.spawns != 0 {
+				t.Errorf("spawns = %d, want 0 — daemon.ChildEnv resolves both path variables before "+
+					"handing them on, so a daemon started in here would manage this session's "+
+					"directory for the rest of its life, after `run` has deleted it", d.spawns)
+			}
+			payload := decodePayload(t, stdout)
+			if got := payload["updated"]; got != true {
+				t.Errorf("updated = %v, want true", got)
+			}
+			if got := payload["daemonRestarted"]; got != false {
+				t.Errorf("daemonRestarted = %v, want false", got)
+			}
+			_ = stderr
+			_ = target
+		})
+	}
+}
+
+// The sentence is gated on the daemon having been running, because on a machine
+// whose daemon was not up it is simply false.
+func TestTheScopedSessionNoticeAppearsOnlyWhenThereWasADaemon(t *testing.T) {
+	const notice = "will stay stopped for this `ccdad run` session"
+
+	t.Run("there was one", func(t *testing.T) {
+		_, _, _ = updateWorld(t, "0.6.1", "v0.7.0")
+		_ = stubUpdateDaemon(t, true)
+		enterRunSession(t, "acct-1")
+
+		code, _, stderr, top := runRoot(t, "update")
+		if code != ExitOK {
+			t.Fatalf("exit = %d, want 0 (%s)", code, top)
+		}
+		if !strings.Contains(stderr, notice) {
+			t.Errorf("stderr = %q, want it to say the daemon stays stopped", stderr)
+		}
+		if !strings.Contains(stderr, "normal shell") {
+			t.Errorf("stderr = %q, want it to say how to bring the daemon back", stderr)
+		}
+	})
+
+	t.Run("there was not", func(t *testing.T) {
+		_, _, _ = updateWorld(t, "0.6.1", "v0.7.0")
+		_ = stubUpdateDaemon(t, false)
+		enterRunSession(t, "acct-1")
+
+		code, _, stderr, top := runRoot(t, "update")
+		if code != ExitOK {
+			t.Fatalf("exit = %d, want 0 (%s)", code, top)
+		}
+		if strings.Contains(stderr, notice) {
+			t.Errorf("stderr = %q, want no sentence about a daemon that was never up", stderr)
+		}
+	})
+}
+
+// Outside a session the restart happens, which is the control the two tests
+// above need: without it they would pass on a build that never restarts at all.
+func TestOutsideASessionTheDaemonComesBack(t *testing.T) {
+	_, _, _ = updateWorld(t, "0.6.1", "v0.7.0")
+	d := stubUpdateDaemon(t, true)
+
+	if code, _, _, top := runRoot(t, "update"); code != ExitOK {
+		t.Fatalf("exit = %d, want 0 (%s)", code, top)
+	}
+	if d.spawns != 1 {
+		t.Fatalf("spawns = %d, want 1 outside a session", d.spawns)
+	}
+}
