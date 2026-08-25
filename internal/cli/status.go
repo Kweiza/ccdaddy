@@ -136,6 +136,21 @@ func loadSnapshot(cmd *cobra.Command, now time.Time) (snap view.Snapshot, probeE
 		notices = append(notices, n)
 	}
 
+	// The measurement is taken HERE, in the one place that already holds both
+	// documents it needs, so `ccdad status`, `ccdad list` and the terminal
+	// dashboard cannot measure one fleet three ways. It is the same call
+	// `ccdad runway` makes, on the same two sources: the cache supplies every
+	// level and the series supplies nothing but slopes.
+	//
+	// A series that cannot be read costs the rates and nothing else. Every row
+	// below still renders, because a dashboard is what a user reaches for when
+	// something is already wrong.
+	fleet, historyNotice := fleetForecast(accounts, cache, now)
+	if historyNotice != "" {
+		fmt.Fprint(cmd.ErrOrStderr(), historyNotice)
+		notices = append(notices, historyNotice)
+	}
+
 	engine := map[string]daemon.AccountStatus{}
 	for _, a := range report.Status.Accounts {
 		engine[a.UUID] = a
@@ -198,6 +213,14 @@ func loadSnapshot(cmd *cobra.Command, now time.Time) (snap view.Snapshot, probeE
 		HasMode:     hasMode,
 		Version:     buildinfo.Version,
 		Notices:     notices,
+		Forecast:    fleet,
+		// Basis.Known is the whole test, and it is the same one view.RunwayLine
+		// applies before it returns anything: a fleet nobody has enough
+		// readings for has levels but no rate, and reporting that as a forecast
+		// would publish an object whose every verdict is "unknown" beside a
+		// burn of zero. It is also what keeps the dashboard's byte-compared
+		// golden fixtures still on a machine that has recorded nothing.
+		HasForecast: fleet.Basis.Known,
 	}, probeErr, nil
 }
 
@@ -326,6 +349,27 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 	if snap.HasMode {
 		fmt.Fprintln(out, view.ModeLine(snap.Mode))
 	}
+	// The empty string is the gate: view.RunwayLine returns one when there is
+	// no measurement, and that is how this renderer, `ccdad list` and the
+	// dashboard all decline the line without each carrying its own idea of when
+	// there is nothing to say.
+	//
+	// It belongs with the labels above and not with the table: the
+	// nine-character label lines it up with Daemon:, Active: and Mode:, and the
+	// blank line below is the separator between that block and the rows.
+	//
+	// The order this position produces is not the one it looks like. The
+	// tabwriter below buffers every row until Flush, so a line handed straight
+	// to out at ANY point before that still comes out ahead of the table --
+	// measured, not assumed. What position in this function decides is which
+	// side of the blank separator it lands on, which is the whole of it.
+	//
+	// time.Local, because a person is reading it. internal/forecast touches no
+	// environment, so the caller nearest the reader chooses the zone, and
+	// view.Timestamp always prints which one it was.
+	if line := view.RunwayLine(snap.Forecast, now, time.Local); line != "" {
+		fmt.Fprintf(out, "Runway:  %s\n", line)
+	}
 	fmt.Fprintln(out)
 
 	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
@@ -383,6 +427,14 @@ func statusPayload(snap view.Snapshot, probeErr error) map[string]any {
 	// which is the one thing about these rows a script cannot infer from them.
 	if snap.Hover {
 		payload["hover"] = true
+	}
+	// Conditional for the same reason, and it is forecastJSON's object rather
+	// than a second spelling of it: `ccdad runway --json` publishes the
+	// identical document under the identical key, and two commands describing
+	// one measurement must not describe it two ways. Absent means nothing was
+	// measured; an object of zeros would read as a fleet burning nothing.
+	if snap.HasForecast {
+		payload["forecast"] = forecastJSON(snap.Forecast)
 	}
 	return payload
 }

@@ -9,9 +9,11 @@ import (
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/daemon"
+	"github.com/Kweiza/ccdaddy/internal/history"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/usage"
+	"github.com/Kweiza/ccdaddy/internal/view"
 )
 
 func mustTime(s string) time.Time {
@@ -315,25 +317,39 @@ func TestStatusReportsAnUnprobeableLockAsUnknown(t *testing.T) {
 	}
 }
 
-// A linear projection through bursty real usage is too rough to state as fact
-// in a table a human reads, so it is computed and kept to --json.
-func TestTheProjectionIsJSONOnly(t *testing.T) {
+// The projection rule, as it now stands.
+//
+// usage.Pace's single-reading extrapolation is still refused in front of a
+// person: it draws a straight line from a window's opening through the one
+// point that has been read, and real usage is bursty enough that the line is
+// too rough to state as fact in a table. The measured runway line is allowed,
+// because it is measured — several readings taken over hours, with the span
+// they cover printed beside the answer.
+//
+// This test used to forbid the bare substring "exhaust" anywhere in human
+// stdout. With two projections in the tree that proxy no longer separates the
+// one that was refused from the one that was approved, so what it stood for is
+// asserted directly: on a machine carrying BOTH, the single-reading
+// projection's identifiers and the moment it extrapolated to stay off stdout,
+// and --json still carries them.
+func TestTheSingleReadingProjectionIsStillJSONOnly(t *testing.T) {
 	isolate(t)
 	freezeClock(t, statusNow)
-	seedAccount(t, "uuid-a", "work@example.com")
-	// Four days into a seven-day window: past the 24-hour suppression, and
-	// spending fast enough to have a projection.
-	seedUsageEntry(t, "uuid-a", usage.Entry{
-		FetchedAt: statusNow.Add(-time.Minute),
-		Snapshot: &usage.Snapshot{
-			SevenDay: window(80, statusNow.Add(72*time.Hour)),
-		},
-	})
+	// Both projections at once. These accounts are four days into a seven-day
+	// window — past the suppression and spending, so each carries a pace
+	// projection — and they have a series behind them, so the measured line is
+	// printed too. A fixture with only the pace projection would go green on a
+	// dashboard that printed neither, which is the wrong implementation this
+	// test most needs to rule out.
+	seedBurningFleet(t)
 
 	_, human, _, _ := runRoot(t, "status")
-	for _, forbidden := range []string{"projectedExhaustion", "willLastToReset", "exhaust"} {
+	if !strings.Contains(human, "Runway:") {
+		t.Fatalf("no measured line on stdout, so nothing below separates the approved projection from the refused one:\n%s", human)
+	}
+	for _, forbidden := range []string{"projectedExhaustionAt", "willLastToReset"} {
 		if strings.Contains(human, forbidden) {
-			t.Errorf("the human table mentions %q, which is kept to --json:\n%s", forbidden, human)
+			t.Errorf("the human dashboard mentions %q, which is kept to --json:\n%s", forbidden, human)
 		}
 	}
 
@@ -351,7 +367,8 @@ func TestTheProjectionIsJSONOnly(t *testing.T) {
 	if !ok {
 		t.Fatalf("no seven_day pace: %v", pace)
 	}
-	if _, ok := week["projectedExhaustionAt"]; !ok {
+	at, _ := week["projectedExhaustionAt"].(string)
+	if at == "" {
 		t.Errorf("--json does not carry projectedExhaustionAt: %v", week)
 	}
 	if _, ok := week["willLastToReset"]; !ok {
@@ -359,6 +376,132 @@ func TestTheProjectionIsJSONOnly(t *testing.T) {
 	}
 	if _, ok := week["expectedPct"]; !ok {
 		t.Errorf("--json does not carry expectedPct: %v", week)
+	}
+	// The two identifiers above are JSON key names, and a table that grew an
+	// extrapolated column would print none of them. The MOMENT is what such a
+	// column would carry, so it is asserted absent in the shape every absolute
+	// time on a human surface here is rendered in.
+	if at != "" {
+		if rendered := view.Timestamp(mustTime(at), time.Local); strings.Contains(human, rendered) {
+			t.Errorf("the dashboard prints %q, the moment the single-reading projection extrapolated to:\n%s", rendered, human)
+		}
+	}
+}
+
+// The measured line appears when there is a measurement behind it, and not
+// otherwise — and it appears above the table.
+//
+// Both halves matter. A line printed with no series behind it would be a
+// promise resting on no reading, which is the one output this measurement
+// exists to refuse; and view.RunwayLine's empty string is what `ccdad list` and
+// the dashboard also read as "print nothing", so a status that decided for
+// itself would be the first of three surfaces to disagree.
+//
+// The placement is not cosmetic. renderStatus hands the table to a tabwriter,
+// which holds everything until Flush, so a line written straight to the same
+// stream after that writer exists arrives after the table rather than above it.
+func TestTheRunwayLineAppearsOnlyWithAHistoryBehindIt(t *testing.T) {
+	t.Run("with a series", func(t *testing.T) {
+		isolate(t)
+		freezeClock(t, statusNow)
+		seedBurningFleet(t)
+
+		_, human, _, _ := runRoot(t, "status")
+		lines := strings.Split(human, "\n")
+		mode := -1
+		for i, l := range lines {
+			if strings.HasPrefix(l, "Mode:") {
+				mode = i
+			}
+		}
+		// The line UNDER Mode:, not merely somewhere above the table. A
+		// tabwriter holds its rows until Flush, so a runway line written to the
+		// same stream at any point before that still comes out above the table
+		// — and lands on the far side of the blank separator, in the block of
+		// rows rather than in the block of labels its nine-character label is
+		// padded to line up with. Position in the file is what distinguishes
+		// the two, and nothing about the order the bytes arrive in does.
+		if mode < 0 || mode+1 >= len(lines) || !strings.HasPrefix(lines[mode+1], "Runway:  ") {
+			t.Fatalf("the runway line is not the line under Mode::\n%s", human)
+		}
+		runway := lines[mode+1]
+		// The span the rates were measured over rides on the line: a verdict
+		// from two hours of evidence and one from four support different
+		// claims, and only the reader can weigh that.
+		if !strings.Contains(runway, "basis 2h00m") {
+			t.Errorf("the line states no basis: %q", runway)
+		}
+		// No percentage. Four tests in this file forbid one belonging to a
+		// window the table is not reporting, and this line reports a fleet
+		// rather than any single window.
+		if strings.Contains(runway, "%") {
+			t.Errorf("the runway line carries a percentage: %q", runway)
+		}
+
+		_, out, _, _ := runRoot(t, "status", "--json")
+		f, ok := statusJSON(t, out)["forecast"].(map[string]any)
+		if !ok {
+			t.Fatalf("no forecast object:\n%s", out)
+		}
+		if _, ok := f["basis"]; !ok {
+			t.Errorf("forecast = %v, which names no basis", f)
+		}
+		if _, ok := f["axes"]; !ok {
+			t.Errorf("forecast = %v, which carries no measured axis", f)
+		}
+	})
+
+	t.Run("without one", func(t *testing.T) {
+		isolate(t)
+		freezeClock(t, statusNow)
+		// One reading and nothing older than it: the machine that has been
+		// recording for ten minutes.
+		seedAccountAddedAt(t, "uuid-a", "a@example.com", runwayAddedAt)
+		seedUsageEntry(t, "uuid-a", usage.Entry{
+			FetchedAt: statusNow,
+			Snapshot:  &usage.Snapshot{SevenDay: window(48, runwayWeeklyReset)},
+		})
+
+		_, human, _, _ := runRoot(t, "status")
+		if strings.Contains(human, "Runway:") {
+			t.Errorf("the dashboard states a runway with no reading behind it:\n%s", human)
+		}
+
+		_, out, _, _ := runRoot(t, "status", "--json")
+		if f, ok := statusJSON(t, out)["forecast"]; ok {
+			t.Errorf("forecast = %v was published on a machine with nothing measured; absent and zero are different answers", f)
+		}
+	})
+}
+
+// A series that cannot be read costs the rates and nothing else, and the reason
+// is said out loud. A line that simply vanishes reads as a fleet with nothing
+// to report rather than as a file nobody could open, and those want different
+// things from a reader: one is a quiet week, the other is a store to go and
+// look at.
+func TestTheDashboardSaysSoWhenTheSeriesCannotBeRead(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	seedBurningFleet(t)
+	// Truncated JSON rather than an unreadable mode: a parse failure is the one
+	// a real store reaches after a crash mid-write, and it is the case where
+	// every level is still perfectly readable from the other file.
+	if err := os.WriteFile(mustPath(history.Path()), []byte("{\"accounts\":"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	code, human, errOut, top := runRoot(t, "status")
+	if code != ExitOK {
+		t.Fatalf("exit %d (%s); a dashboard renders whatever else is wrong\n%s", code, top, human)
+	}
+	if !strings.Contains(errOut, history.FileName) {
+		t.Errorf("stderr names no file that could not be read:\n%s", errOut)
+	}
+	if strings.Contains(human, "Runway:") {
+		t.Errorf("a runway was stated from a series that could not be read:\n%s", human)
+	}
+	if !strings.Contains(human, "a@example.com") {
+		t.Errorf("the rows the usage cache still answers for were dropped with it:\n%s", human)
 	}
 }
 
