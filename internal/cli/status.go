@@ -367,8 +367,13 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 	// time.Local, because a person is reading it. internal/forecast touches no
 	// environment, so the caller nearest the reader chooses the zone, and
 	// view.Timestamp always prints which one it was.
+	//
+	// The width is measured on out, and it is zero for everything that is not a
+	// terminal. A line this long folds where the terminal decides otherwise,
+	// and its clauses are separated by a middot, so a fold that lands between
+	// two of them cannot be told from one that lands inside a date.
 	if line := view.RunwayLine(snap.Forecast, now, time.Local); line != "" {
-		fmt.Fprintf(out, "Runway:  %s\n", line)
+		fmt.Fprintln(out, view.RunwayWrap("Runway:  ", line, outWidth(out)))
 	}
 	fmt.Fprintln(out)
 

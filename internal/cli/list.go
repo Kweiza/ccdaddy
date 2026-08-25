@@ -228,8 +228,13 @@ func newListCmd() *cobra.Command {
 			// time.Local, because a person is reading it. internal/forecast
 			// touches no environment, so the caller nearest the reader chooses
 			// the zone, and view.Timestamp always prints which one it was.
+			//
+			// The width is the writer's, and zero for anything that is not a
+			// terminal; see outWidth. `ccdad status` folds the same line the
+			// same way, and both leave it alone when nobody is watching.
 			if line := view.RunwayLine(f, now, time.Local); line != "" {
-				fmt.Fprintf(cmd.OutOrStdout(), "\nRunway:  %s\n", line)
+				w := cmd.OutOrStdout()
+				fmt.Fprintf(w, "\n%s\n", view.RunwayWrap("Runway:  ", line, outWidth(w)))
 			}
 			return nil
 		},

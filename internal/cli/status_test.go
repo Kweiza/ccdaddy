@@ -3,10 +3,13 @@ package cli
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 	"github.com/Kweiza/ccdaddy/internal/history"
@@ -1216,5 +1219,103 @@ func TestStatusJSONCarriesHoverOnlyWhenItIsOn(t *testing.T) {
 	_, on, _, _ := runRoot(t, "status", "--json")
 	if got := statusJSON(t, on)["hover"]; got != true {
 		t.Errorf("hover = %v, want true", got)
+	}
+}
+
+// stubOutWidth describes a terminal of cols display columns for whatever the
+// command renders into. A real one is not something a test can arrange, and
+// the fold is the whole of what this seam decides.
+func stubOutWidth(t *testing.T, cols int) {
+	t.Helper()
+	saved := outWidth
+	t.Cleanup(func() { outWidth = saved })
+	outWidth = func(io.Writer) int { return cols }
+}
+
+// runwayBlockOf is the summary as it lands on the screen: the labelled line and
+// every line hung under it. The continuation indent is nine columns, which is
+// the label's width and not a number this test picked -- the table's own rows
+// are indented two, so nothing else on the page can be mistaken for one.
+func runwayBlockOf(t *testing.T, out string) []string {
+	t.Helper()
+	var block []string
+	for _, line := range strings.Split(out, "\n") {
+		switch {
+		case strings.HasPrefix(line, "Runway:"):
+			block = append(block, line)
+		case len(block) > 0 && strings.HasPrefix(line, "         ") && strings.TrimSpace(line) != "":
+			block = append(block, line)
+		case len(block) > 0:
+			return block
+		}
+	}
+	if block == nil {
+		t.Fatalf("no runway line in:\n%s", out)
+	}
+	return block
+}
+
+// runwayClausesOf recovers what a block says, with the layout taken back off:
+// the label, the hanging indent, and the separator in both the forms it takes.
+// Two renderings of one fleet must carry the same clauses in the same order or
+// the fold dropped something.
+func runwayClausesOf(t *testing.T, block []string) string {
+	t.Helper()
+	var clauses []string
+	for i, l := range block {
+		if i == 0 {
+			l = strings.TrimPrefix(l, "Runway:  ")
+		} else {
+			l = strings.TrimPrefix(l, "         ")
+		}
+		clauses = append(clauses, strings.Split(strings.TrimSuffix(l, "  \u00b7"), "  \u00b7  ")...)
+	}
+	return strings.Join(clauses, "|")
+}
+
+// A 139-column line on an 80-column terminal is the measurement this item was
+// filed on, and the terminal folds it wherever its own right edge falls. The
+// dashboard has cut this line from the right since it shipped; `ccdad status`
+// printed it raw, so the only reader that could not fold it was the one the
+// line was written for.
+//
+// What is asserted is that nothing is lost and every line fits -- not a golden
+// block. Where the packing puts each clause is allowed to change; that a clause
+// survives the fold is not.
+func TestTheRunwayLineIsFoldedToTheTerminalItIsPrintedOn(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	seedBurningFleet(t)
+
+	const width = 60
+
+	// The default seam reports no width for the buffer these tests render
+	// into, which is the unfolded rendering every other assertion in this
+	// package is written against.
+	_, unfolded, _, _ := runRoot(t, "status")
+	one := runwayBlockOf(t, unfolded)
+	if len(one) != 1 {
+		t.Fatalf("a writer with no width folded anyway:\n%s", strings.Join(one, "\n"))
+	}
+	if w := ansi.StringWidth(one[0]); w <= width {
+		t.Fatalf("the fixture's line is %d columns, inside the %d this test narrows to, so it rules nothing out: %q", w, width, one[0])
+	}
+
+	stubOutWidth(t, width)
+	_, folded, _, _ := runRoot(t, "status")
+	block := runwayBlockOf(t, folded)
+	if len(block) < 2 {
+		t.Fatalf("the line did not fold at %d columns:\n%s", width, strings.Join(block, "\n"))
+	}
+	for i, l := range block {
+		// A line carrying one clause and nothing else is allowed to overflow:
+		// the clauses end in an absolute moment and a span, and a cut through
+		// either reads as a shorter date rather than as a line that did not fit.
+		if w := ansi.StringWidth(l); w > width && strings.Contains(l, "\u00b7") {
+			t.Errorf("line %d is %d columns on a %d-column terminal:\n%s", i, w, width, strings.Join(block, "\n"))
+		}
+	}
+	if got, want := runwayClausesOf(t, block), runwayClausesOf(t, one); got != want {
+		t.Errorf("the fold changed what the line says:\ngot  %s\nwant %s", got, want)
 	}
 }
