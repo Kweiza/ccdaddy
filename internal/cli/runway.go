@@ -1,12 +1,15 @@
 package cli
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/forecast"
 	"github.com/Kweiza/ccdaddy/internal/history"
 	"github.com/Kweiza/ccdaddy/internal/identity"
@@ -25,7 +28,10 @@ import (
 // a request against a rate-limited endpoint to tell the user something the
 // request cannot change.
 func newRunwayCmd() *cobra.Command {
-	var asJSON bool
+	var (
+		asJSON bool
+		out    string
+	)
 
 	cmd := &cobra.Command{
 		Use:   "runway",
@@ -44,6 +50,19 @@ func newRunwayCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			// --out names a destination but not a representation, and this
+			// command has two: a table for a person and a document for a
+			// program. Refusing is the same call `ccdad export` makes for
+			// --include-mcp in internal/cli/export.go — a flag alone is a
+			// usage error rather than a silent choice the user did not make.
+			//
+			// It is checked before anything is read or written, so a run that
+			// cannot say what it was asked for leaves no file behind either.
+			if out != "" && !asJSON {
+				return UsageError("--out writes the machine-readable document, so it needs --json as well: " +
+					"`ccdad runway --json --out PATH`")
+			}
+
 			now := timeNow()
 			errw := cmd.ErrOrStderr()
 
@@ -85,13 +104,61 @@ func newRunwayCmd() *cobra.Command {
 			}
 
 			if asJSON {
-				return writeJSON(cmd, map[string]any{"schemaVersion": 1, "forecast": forecastJSON(f)})
+				doc := map[string]any{"schemaVersion": 1, "forecast": forecastJSON(f)}
+				if out != "" {
+					return writeRunwayFile(cmd, out, doc)
+				}
+				return writeJSON(cmd, doc)
 			}
 			return renderRunway(cmd, f, accounts, now)
 		},
 	}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit a machine-readable object on stdout")
+	cmd.Flags().StringVar(&out, "out", "", "write to PATH at mode 0600 instead of stdout")
 	return cmd
+}
+
+// writeRunwayFile puts the --json document in a file instead of on stdout, at
+// mode 0600 through the atomic writer. Both are copied from `ccdad export
+// --out` in internal/cli/export.go rather than decided again: a second --out
+// that meant something slightly different would be exactly the divergence
+// internal/view exists to prevent, one layer up.
+//
+// `ccdad runway --json > report.json` already works — the --json contract puts
+// one document on stdout and every human word on stderr — so this is not there
+// to make redirection possible. It is there for three things a redirect does
+// not do:
+//
+//  1. The mode. A shell redirect creates the file at the umask, typically 0644,
+//     in whatever directory the shell is in. This writes 0600.
+//  2. Atomicity. A redirect truncates the target before the command runs, so a
+//     command that then fails leaves an empty file where a good one was.
+//     WriteFileAtomic renames into place or leaves the old file alone.
+//  3. Windows. `>` in Windows PowerShell 5.1 — the version that ships with the
+//     operating system — writes UTF-16 with a byte-order mark, and the result
+//     is not the document. This repository builds Windows targets and ships an
+//     install.ps1, so that reader is not hypothetical.
+//
+// The bytes are encoded the way writeJSON encodes them, indentation and
+// trailing newline included, so the file is byte-identical to the stdout form;
+// TestOutWritesTheDocumentAtModeSixHundred compares the two runs to pin it. The
+// buffer is not an optimisation — an atomic write needs the whole document
+// before it opens anything.
+func writeRunwayFile(cmd *cobra.Command, path string, payload any) error {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(payload); err != nil {
+		return fmt.Errorf("writing JSON output: %w", err)
+	}
+	if err := cclink.WriteFileAtomic(path, buf.Bytes(), 0o600); err != nil {
+		return err
+	}
+	// The confirmation goes to stderr and stdout stays empty, which is what
+	// makes `ccdad runway --json --out f.json` safe inside a pipeline that is
+	// reading something else.
+	fmt.Fprintf(cmd.ErrOrStderr(), "Wrote the forecast to %s (mode 0600).\n", path)
+	return nil
 }
 
 // fleetForecast measures the fleet from the two documents that carry it, and

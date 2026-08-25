@@ -2,6 +2,9 @@ package cli
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -564,5 +567,114 @@ func TestRunwayLeavesAnAccountOutOfRotationOutOfTheFleet(t *testing.T) {
 	// And the axis figures are one account's, not two.
 	if !hasRow(squeezedLines(out), "7-day 2.0 pp/h 0.6 pp/h runs dry ") {
 		t.Errorf("the weekly axis still carries both accounts' burn:\n%s", out)
+	}
+}
+
+// --out writes the same bytes --json puts on stdout, at 0600, and stdout stays
+// empty. The mode is the reason the flag exists in this repository at all: a
+// shell redirect creates the file at the umask, typically 0644, in whatever
+// directory the shell happens to be in. `ccdad export --out` in
+// internal/cli/export.go made the same call first, and this is that flag rather
+// than a second one that means something slightly different.
+func TestOutWritesTheDocumentAtModeSixHundred(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	seedBurningFleet(t)
+
+	path := filepath.Join(t.TempDir(), "runway.json")
+	code, stdout, errOut, top := runRoot(t, "runway", "--json", "--out", path)
+	if code != ExitOK {
+		t.Fatalf("runway --json --out = %d (%s), want 0", code, top)
+	}
+	// Nothing on stdout: the point of naming a file is that the document went
+	// there, and a command that wrote it to both would hand a pipeline the
+	// payload it was told to keep out of one.
+	if stdout != "" {
+		t.Errorf("the document went to the file AND to stdout:\n%s", stdout)
+	}
+	if !strings.Contains(errOut, path) {
+		t.Errorf("stderr = %q, want it to name the file it wrote", errOut)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Windows has no POSIX mode bits to assert on, and the atomic writer cannot
+	// give it any; every other target is held to 0600.
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Errorf("%s is %04o, want 0600 — a redirect at the umask is what --out exists to avoid",
+			path, info.Mode().Perm())
+	}
+
+	written, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The file is the document, checked before it is compared: two empty
+	// strings are equal, and an assertion that only compared them would pass on
+	// a command that wrote nothing anywhere.
+	doc := decodeContractDocument(t, string(written))
+	if _, ok := doc["forecast"]; !ok {
+		t.Fatalf("the file carries no forecast:\n%s", written)
+	}
+	_, onStdout, _, _ := runRoot(t, "runway", "--json")
+	if string(written) != onStdout {
+		t.Errorf("--out and --json wrote different bytes\nfile:\n%s\nstdout:\n%s", written, onStdout)
+	}
+}
+
+// --out without --json is a usage error, not a silent choice of one of the two
+// representations. `ccdad export` makes the same call for --include-mcp: a flag
+// alone is a usage error rather than a silent upgrade, because a flag the user
+// did not pass is not something to infer an output from.
+func TestOutWithoutJSONIsAUsageError(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	seedBurningFleet(t)
+
+	path := filepath.Join(t.TempDir(), "f.json")
+	code, stdout, errOut, top := runRoot(t, "runway", "--out", path)
+	if code != ExitUsage {
+		t.Fatalf("exit = %d, want %d (%s)", code, ExitUsage, top)
+	}
+	// The refusal names both halves of the pair, so the fix is in the message
+	// rather than in the help text.
+	for _, want := range []string{"--out", "--json"} {
+		if !strings.Contains(errOut+top, want) {
+			t.Errorf("the refusal does not name %s:\n%s\n%s", want, errOut, top)
+		}
+	}
+	if stdout != "" {
+		t.Errorf("the refusal rendered an answer anyway:\n%s", stdout)
+	}
+	// And it wrote no file. A usage error that had already created the target
+	// would leave a caller holding a file it was told it could not have.
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("os.Stat(%s) = %v, want the file never to have been created", path, err)
+	}
+}
+
+// The --json contract is untouched: its table row in json_contract_test.go
+// passes no --out, so stdout still carries exactly one indented object and
+// stderr carries no word about a file.
+func TestOutDoesNotChangeThePlainJSONAnswer(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	seedBurningFleet(t)
+
+	code, stdout, errOut, top := runRoot(t, "runway", "--json")
+	if code != ExitOK {
+		t.Fatalf("runway --json = %d (%s), want 0", code, top)
+	}
+	doc := decodeContractDocument(t, stdout)
+	if _, ok := doc["forecast"]; !ok {
+		t.Fatalf("stdout carries no forecast:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "\n  \"") {
+		t.Errorf("the payload is not indented, so this command is not going through writeJSON:\n%s", stdout)
+	}
+	if strings.Contains(errOut, "0600") {
+		t.Errorf("a run that named no file reported writing one:\n%s", errOut)
 	}
 }
