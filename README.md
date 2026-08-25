@@ -613,6 +613,8 @@ Fleet:   137 of 200 points left on the weekly axis
   spends it. Credits do not reset: that row is a balance divided by a rate,
   with nothing coming back.
 
+Accounts:  2 usable, 6 needed to hold at this rate  (4 more)
+
   IDX  ACCOUNT               WINDOW     LEFT  BURN      EMPTY
   2    personal@example.com  seven_day  83    0.5 pp/h  2026-08-25 20:28 UTC
   1    work                  seven_day  54    3.0 pp/h  2026-08-25 20:53 UTC
@@ -634,6 +636,31 @@ live login at a time, spending at the measured rate, taking each rollover as it
 arrives — which is how an axis whose replenishment looks ample can still run
 dry.
 
+**`Accounts:` answers that block from the other end.** The rows above say when
+the pool runs out; this says how many accounts it would take for it not to. It
+is the same simulation run again with seats the fleet does not have yet
+appended — never a burn rate divided by a replenishment rate — so you cannot be
+told `runs dry` and `you have enough accounts` on two adjacent lines. It is
+measured at the *upper* end of the band, for the same reason `holds` is: the
+figure has to be one that is provably enough, and being told to buy six and
+running dry on six is the failure worth being conservative about.
+
+Four forms, and no fifth:
+
+| The fleet | The line |
+|---|---|
+| Is short | `5 usable, 9 needed to hold at this rate  (4 more)` |
+| Holds, with room to spare | `5 usable, 3 needed to hold at this rate  (2 to spare)` |
+| Holds exactly | `5 usable, 5 needed to hold at this rate` |
+| Has no basis to search from | `5 usable, ? needed  (not enough history)` |
+
+Which axis asks for the extra seat is measured rather than assumed — the two
+imply different counts, and which is larger depends on the ratio of the two
+measured rates. The search stops at 256 accounts and prints `more than 256`
+instead of going on: at that size the weekly axis gives back 152 points an hour,
+so a fleet that appears to need more than that has a measurement problem rather
+than a purchasing one.
+
 **Rates are per axis, and the axes are never added.** A percentage point of a
 five-hour window and a point of a weekly one are different quantities, so there
 is a rate per row and no total. Both are percentage points per hour, `pp/h`.
@@ -653,12 +680,49 @@ failing to be read.
 
 If the accounts are on different plan tiers, a note on stderr says so. A
 percentage point of a Pro window and a point of a Max window are not the same
-amount of work, and every sum above adds them anyway.
+amount of work, and every sum above adds them anyway — and the seat count is
+the figure that notice matters most for, because `needed` counts accounts on
+the plan the fleet already has, which is not a well-defined unit on a fleet
+whose plans disagree.
 
 `ccdad status`, `ccdad list` and the terminal dashboard carry the same
 measurement as a single `Runway:` line, and print no line at all when there is
-no basis for one. `ccdad runway --json`, `ccdad status --json` and `ccdad list
---json` publish the identical object under `forecast`.
+no basis for one. That line picks up `· need 9 (4 more)` when the fleet is
+short and nothing when it holds: a fleet that holds has its answer in the word
+`holds`, and the spare count is worth a block and not a glance.
+
+`ccdad runway --json`, `ccdad status --json` and `ccdad list --json` publish the
+identical object under `forecast`. Its `fleet` object always carries
+`accountsUsable` — a count of zero is a reading — and carries `accountsNeeded`
+with `accountsNeededBy` only when there was a basis to search from, absent
+rather than zero when there was not. A search that reached its ceiling adds
+`accountsNeededCapped`, which turns the count above it into a bound.
+
+**`--out PATH` writes that document to a file** instead of stdout, at mode
+`0600`, with only a confirmation on stderr — the spelling, the mode and the
+writer `ccdad export --out` already uses. It needs `--json` as well, and says
+so rather than choosing for you if you leave it off: this command has two
+representations, a table for a person and a document for a program, and a
+destination does not say which one you meant.
+
+```sh
+ccdad runway --json --out runway.json
+```
+
+`ccdad runway --json > runway.json` already works — the `--json` contract puts
+one document on stdout and every human word on stderr — so the flag is not there
+to make redirection possible. It is there for three things a redirect does not
+do:
+
+1. **The mode.** A shell redirect creates the file at your umask, typically
+   `0644`. This writes `0600`.
+2. **Atomicity.** A redirect truncates the target before the command runs, so a
+   command that then fails leaves an empty file where a good one was. This
+   renames into place or leaves the old file alone.
+3. **Windows.** `>` in Windows PowerShell 5.1 — the version that ships with the
+   operating system — writes UTF-16 with a byte-order mark, and the result is
+   not the document.
+
 ## The dashboard
 
 `ccdad tui` opens the interactive dashboard: the accounts, their quota, the
