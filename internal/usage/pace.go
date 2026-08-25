@@ -62,6 +62,23 @@ func windowLength(n WindowName) (time.Duration, bool) {
 	return 0, false
 }
 
+// WindowLength is how long a window runs before it rolls over, and whether this
+// release knows. It is the ONLY source of that figure outside this package: a
+// caller that re-declares 18000 and 604800 owns a second copy of a rule that
+// lives here, and the two copies drift the first time a window's length moves.
+//
+// A wrapper rather than a rename, so the export is purely additive: windowLength
+// keeps both of its in-package call sites -- PaceOf here and ExpectedPct in
+// expected.go -- and the long note on it, which is about why cinder_cove is
+// absent from the table and why this is not IsWeekly with a length bolted on,
+// stays where it explains something rather than becoming the public contract.
+//
+// cinder_cove still answers false, and that is the load-bearing half for an
+// outside caller. Its resets_at is an expiry rather than a rollover, so a caller
+// handed a plausible length for it would invent an endless series of grants that
+// never arrive.
+func WindowLength(n WindowName) (time.Duration, bool) { return windowLength(n) }
+
 // IsWeekly reports whether a window's quota is the seven-day kind. It is a
 // question about PERISHABILITY, not about length: the ranking asks it to find
 // the quota consume-first should spend before it expires, and a five-hour
