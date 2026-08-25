@@ -90,6 +90,11 @@ import (
 //   - `auto`, which IS the engine. Starting a daemon for it would hand the
 //     singleton to the daemon and make the continuous form refuse itself, and
 //     `auto --once` exists precisely so the engine can be run WITHOUT one.
+//   - `mcp`, which the client starts and restarts on its own schedule. An entry
+//     here would spawn a daemon every time that happened, before any tool was
+//     called — and the tools that DO auto-start reach the hook through the
+//     command tree anyway, one fresh root per call, so listing the server buys
+//     nothing and spends an engine on a session that may never ask for one.
 //
 // `ccdad tui` is here, and that is a decision MADE rather than one made by
 // omission: this map has no totality test, so an unlisted command silently

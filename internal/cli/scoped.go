@@ -200,6 +200,23 @@ var scopedSessionRefusals = map[string]string{
 	// different way: every path that spawns one is guarded above, so anything
 	// arriving here was started by hand.
 	"ccdad " + daemon.RunArg: "would run the daemon against this session's credentials rather than the live ones",
+
+	// Both halves write Claude Code's OWN registration, and the two run modes
+	// send it to different files. In the default mode
+	// CLAUDE_SECURESTORAGE_CONFIG_DIR does not move .claude.json, so the entry
+	// lands on the real machine, permanently, from inside a session that is
+	// about to be deleted. Under --full-profile, CLAUDE_CONFIG_DIR DOES move
+	// it, so the entry is buried in one account's profile and the machine never
+	// sees it. The command would print success in either case.
+	//
+	// Refused per subcommand rather than per scope deliberately: --scope
+	// project is genuinely safe in a session, and a per-scope rule is a rule
+	// nobody can remember.
+	"ccdad mcp install": "would write Claude Code's own MCP registration into a file this session either shares with the machine or hides from it",
+	// The mirror, and the worse half: under --full-profile it would look inside
+	// this session's profile, find nothing, and report a clean machine while
+	// the real entry survived.
+	"ccdad mcp uninstall": "would look for Claude Code's MCP registration in this session's copy of the config and report a clean machine while the real entry survives",
 }
 
 // scopedSessionAllowed is every other command in the tree, with the reason it
@@ -303,6 +320,16 @@ var scopedSessionAllowed = map[string]bool{
 	"ccdad daemon status": true,
 	"ccdad daemon stop":   true,
 	"ccdad daemon logs":   true,
+
+	// mcp only SERVES. Every tool it exposes re-enters this same tree through
+	// a fresh root, so switch, auto and daemon start are refused PER CALL, out
+	// of the map above, with the same clause a person would get.
+	//
+	// This verdict is allowed BECAUSE that re-entry exists. If a tool ever
+	// calls an internal directly instead, the gate stops firing for it and this
+	// entry flips to a refusal in the same commit. It is the same sentence
+	// `ccdad tui` carries, for the same reason and about the same seam.
+	"ccdad mcp": true,
 
 	// Cobra's own. They read no state.
 	"ccdad help":                  true,
