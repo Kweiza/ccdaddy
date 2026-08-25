@@ -16,6 +16,33 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+### Added
+
+- **`ccdad update` replaces this binary with the latest signed release.**
+  `ccdad update` resolves the latest release, downloads `sha256sums.txt` and
+  `sha256sums.txt.minisig`, verifies that signature against a public key
+  compiled into the binary, and only then reads the checksum row for this
+  platform — the order matters, because a checksum file whose shape has been
+  inspected is still a file somebody else wrote. The asset is then staged beside
+  the binary, checked for size and digest, run once, and renamed over it. This
+  is the first thing in ccdad that consumes the signature 0.7.0 started
+  publishing; nothing did before it.
+  `ccdad update --check` answers everything a full run answers except the three
+  things only the download can tell you, and replaces nothing.
+  `ccdad update --version <tag>` pins a release, including an older one — naming
+  the tag is the consent for a downgrade, and without it a release older than
+  the one running is refused. `upgrade` is an alias. There is no `--no-verify`
+  and no `--insecure`: a mirror that does not carry the signature and an
+  attacker who removed it are the same bytes on the wire. A build with no pinned
+  key, a development build, and a Homebrew- or Scoop-owned install are each
+  refused rather than replaced, as is an install directory ccdad cannot write
+  to. A release whose signature does not verify is refused with a message that
+  deliberately does **not** say to re-run the installer, because neither
+  installer checks a signature and that path would accept the altered release on
+  checksums the same attacker controls. The daemon is stopped first and started
+  again from the new binary; inside a `ccdad run` session it is stopped and left
+  stopped, and the next ccdad command in a normal shell brings it back.
+
 ### Fixed
 
 - **`ccdad status`'s labelled block ran off the side of a narrow terminal.**
