@@ -2,6 +2,7 @@ package cli
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -767,5 +768,155 @@ func TestUnsignedReleaseNamesTheInstaller(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "Re-run the installer") {
 		t.Errorf("stderr = %q, want it to send the user to the installer for an unsigned release", stderr)
+	}
+}
+
+// prehashedSig rewrites a legacy signature's algorithm bytes to the prehashed
+// form. The signature itself becomes meaningless, and that is the point: the
+// algorithm is compared BEFORE either verification, so a verifier that looked
+// at it last would report "does not match" and route the user to the tamper
+// remedy for a release that is merely signed a way this build predates.
+func prehashedSig(t *testing.T, sig []byte) []byte {
+	t.Helper()
+	lines := strings.Split(strings.TrimRight(string(sig), "\n"), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("a signature has %d lines: %q", len(lines), sig)
+	}
+	raw, err := base64.StdEncoding.DecodeString(lines[1])
+	if err != nil {
+		t.Fatalf("decoding line 2 of the signature: %v", err)
+	}
+	raw[1] = 'D' // "Ed" (legacy) becomes "ED" (prehashed)
+	lines[1] = base64.StdEncoding.EncodeToString(raw)
+	return []byte(strings.Join(lines, "\n") + "\n")
+}
+
+// Five sentinels, five reasons, and two remedies. The remedy split is a
+// security decision rather than a wording one: NEITHER installer performs a
+// signature check, so routing a tamper failure to "re-run the installer" would
+// send the user to the one path that will happily accept the altered release,
+// on checksums the same attacker controls.
+func TestUpdateVerificationFailuresEachHaveTheirOwnReasonAndRemedy(t *testing.T) {
+	for _, c := range []struct {
+		name           string
+		arrange        func(t *testing.T, f *fakeRelease, sign signFunc)
+		reason         string
+		namesInstaller bool
+	}{{
+		name: "the signature does not match the file",
+		arrange: func(t *testing.T, f *fakeRelease, sign signFunc) {
+			f.put("sha256sums.txt.minisig", sign([]byte("some other bytes entirely"), "v0.7.0"))
+		},
+		reason: "signature",
+	}, {
+		name: "signed by a key this build does not trust",
+		arrange: func(t *testing.T, f *fakeRelease, _ signFunc) {
+			// A SECOND keypair, correctly used. stubReleaseKeys points
+			// releaseKeys at the new one, so it is restored afterwards and the
+			// signature it makes is genuine and simply not ours.
+			trusted := releaseKeys
+			other := stubReleaseKeys(t)
+			releaseKeys = trusted
+			f.put("sha256sums.txt.minisig", other(f.get("sha256sums.txt"), "v0.7.0"))
+		},
+		reason:         "key-id",
+		namesInstaller: true,
+	}, {
+		name: "the trusted comment names another release",
+		arrange: func(t *testing.T, f *fakeRelease, sign signFunc) {
+			f.put("sha256sums.txt.minisig", sign(f.get("sha256sums.txt"), "v0.6.1"))
+		},
+		reason: "wrong-release",
+	}, {
+		name: "a prehashed signature",
+		arrange: func(t *testing.T, f *fakeRelease, _ signFunc) {
+			f.put("sha256sums.txt.minisig", prehashedSig(t, f.get("sha256sums.txt.minisig")))
+		},
+		reason:         "algorithm",
+		namesInstaller: true,
+	}, {
+		name: "a body that is not a signature",
+		arrange: func(t *testing.T, f *fakeRelease, _ signFunc) {
+			f.put("sha256sums.txt.minisig", []byte("this is not a minisign signature\n"))
+		},
+		reason: "malformed",
+	}} {
+		t.Run(c.name, func(t *testing.T) {
+			target, f, sign := updateWorld(t, "0.6.1", "v0.7.0")
+			c.arrange(t, f, sign)
+
+			code, stdout, _, _ := runRoot(t, "update", "--json")
+			if code != ExitBlocked {
+				t.Fatalf("exit = %d, want %d", code, ExitBlocked)
+			}
+			if got := decodePayload(t, stdout)["reason"]; got != c.reason {
+				t.Errorf("reason = %v, want %q", got, c.reason)
+			}
+			assertBinaryUntouched(t, target)
+
+			_, _, stderr, _ := runRoot(t, "update")
+			// The AFFIRMATIVE instruction, not the bare word. The distrust remedy
+			// has to explain why re-running the installer would not help, so it
+			// says "installers" in the course of saying not to use one — an
+			// assertion on the token alone can never pass for the three rows that
+			// take it. What is actually being pinned is whether the user is TOLD
+			// to run the installer, which is one sentence with one spelling.
+			if got := strings.Contains(stderr, "Re-run the installer"); got != c.namesInstaller {
+				t.Errorf("stderr tells the user to re-run the installer = %v, want %v.\nNeither installer "+
+					"checks a signature, so a tamper failure must never route the user to it.\n%s",
+					got, c.namesInstaller, stderr)
+			}
+			if !c.namesInstaller && !strings.Contains(stderr, "minisign -Vm") {
+				t.Errorf("stderr = %q, want a tamper remedy that names `minisign -Vm`", stderr)
+			}
+		})
+	}
+}
+
+// The one line the user is told about the check that actually happened.
+func TestUpdateSaysItVerifiedTheChecksumFile(t *testing.T) {
+	_, _, _ = updateWorld(t, "0.6.1", "v0.7.0")
+
+	code, _, stderr, top := runRoot(t, "update")
+	if code != ExitOK {
+		t.Fatalf("exit = %d, want 0 (%s)", code, top)
+	}
+	if !strings.Contains(stderr, "Verified sha256sums.txt against ccdad's release key.") {
+		t.Errorf("stderr = %q, want the verification line", stderr)
+	}
+}
+
+// Two rotations of one key list: a build carrying both keys accepts a signature
+// from either, so a rotation strands nobody. A verifier that took only the
+// first key of the list would make rotation a permanent stranding of every
+// binary already in the field.
+func TestUpdateAcceptsASignatureFromEitherPinnedKey(t *testing.T) {
+	for _, position := range []string{"first", "second"} {
+		t.Run(position, func(t *testing.T) {
+			target, f, oldSign := updateWorld(t, "0.6.1", "v0.7.0")
+			old := releaseKeys()
+			newSign := stubReleaseKeys(t)
+			fresh := releaseKeys()
+
+			// The list order is FIXED at [old, fresh]. What the two rows vary
+			// is which key signed, and therefore where in the list the
+			// verifier has to find it. Reversing the list instead would put
+			// the signing key at index 0 in both rows, and a verifier that
+			// only ever consults keys[0] would pass the whole test.
+			both := append(append([]relsign.PublicKey{}, old...), fresh...)
+			releaseKeys = func() []relsign.PublicKey { return both }
+
+			sign := oldSign // old is both[0]
+			if position == "second" {
+				sign = newSign // fresh is both[1]
+			}
+			f.put("sha256sums.txt.minisig", sign(f.get("sha256sums.txt"), "v0.7.0"))
+
+			code, _, _, top := runRoot(t, "update")
+			if code != ExitOK {
+				t.Fatalf("exit = %d, want 0 (%s)", code, top)
+			}
+			_ = target
+		})
 	}
 }

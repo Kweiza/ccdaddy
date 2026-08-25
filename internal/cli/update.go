@@ -388,20 +388,39 @@ func runUpdate(cmd *cobra.Command, opts updateOptions) error {
 			fmt.Sprintf("ccdad could not download the signature for %s: %v", want.Tag(), err))
 	}
 
+	// Step 11 is the ordering this whole design rests on. A sums file whose
+	// SHAPE has been inspected is still a sums file an attacker wrote, and
+	// reading a row out of one before verifying the signature is not a smaller
+	// version of verifying — it is trusting the file. Signature, then shape,
+	// then row, in that order, with nothing between them.
+	//
+	// The wanted tag is mandatory rather than optional, and Verify treats the
+	// empty string as an error rather than a skip. sha256sums.txt names no
+	// version, so an old release's (sums, signature) pair stays a genuine,
+	// correctly signed pair forever — and an origin that chooses what to serve
+	// could answer "the latest is v9.9.9" and hand back the authentic v0.4.0
+	// pair with every signature check passing. The trusted comment is the field
+	// that closes that, because it is signed and it is ours to define.
+	if err := relsign.Verify(keys, sums, sig, want.Tag()); err != nil {
+		reason, remedy := updateVerifyFailure(err)
+		return rep.emit(cmd, opts.asJSON, ExitBlocked, reason,
+			fmt.Sprintf("The signature on %s's checksum file did not verify: %v\n%s", want.Tag(), err, remedy))
+	}
+	say(cmd, opts.asJSON, "Verified sha256sums.txt against ccdad's release key.")
+
 	// ---------------------------- BEGIN PLACEHOLDER ----------------------------
 	// Everything from this comment down to END PLACEHOLDER is scaffolding, and
-	// it is meant to be deleted WHOLE — comment, blank assignments and return
-	// together. Whoever writes the rest of the algorithm (verifying the
-	// signature against keys, reading this platform's row out of the checksum
-	// file, downloading the asset into staging and moving it over target)
-	// replaces this block; leaving the comment behind would leave it sitting
-	// above live code, describing something that is no longer true.
+	// it is meant to be deleted WHOLE — comment, blank assignment and return
+	// together. Whoever writes the rest of the algorithm (checking the shape of
+	// the verified checksum file, reading this platform's row out of it,
+	// downloading the asset into staging and moving it over target) replaces
+	// this block; leaving the comment behind would leave it sitting above live
+	// code, describing something that is no longer true.
 	//
 	// It exists so this command RUNS while the rest is still being written: it
-	// reports what it has resolved and stops. The blank assignments are what
-	// keep the compiler quiet about values only the later steps read. Nothing
+	// reports what it has verified and stops. The blank assignment is what
+	// keeps the compiler quiet about a value only the later steps read. Nothing
 	// asserts on any of it.
-	_, _ = sums, sig
 	_ = staging
 	return rep.emit(cmd, opts.asJSON, ExitOK, "", "")
 	// ----------------------------- END PLACEHOLDER -----------------------------
@@ -415,4 +434,38 @@ func upgradeHint(owner string) string {
 		return "'scoop update ccdad'"
 	}
 	return "'brew upgrade ccdad'"
+}
+
+// updateVerifyFailure maps a verification failure to its reason and the remedy
+// the user is given.
+//
+// The SPLIT is a security decision rather than a wording one. Neither installer
+// performs a signature check, so routing a TAMPER failure to "re-run the
+// installer" would send the user to the one path that will happily accept the
+// altered release, on checksums the same attacker controls.
+//
+// An unsigned release, one signed by a key this build predates, and one using
+// an algorithm this build cannot read are all a deliberate choice somewhere
+// rather than an attack — for those the installer IS the way forward.
+func updateVerifyFailure(err error) (reason, remedy string) {
+	const reinstall = "Re-run the installer from the project's README to move to a release this build can verify."
+	const distrust = "This release cannot be trusted, and re-running the installer would not help: " +
+		"the installers check checksums and not signatures. Take it up at " +
+		"https://github.com/Kweiza/ccdaddy/releases, and check the file yourself with `minisign -Vm sha256sums.txt`."
+
+	switch {
+	case errors.Is(err, relsign.ErrKeyID):
+		return "key-id", reinstall
+	case errors.Is(err, relsign.ErrAlgorithm):
+		return "algorithm", reinstall
+	case errors.Is(err, relsign.ErrRelease):
+		return "wrong-release", distrust
+	case errors.Is(err, relsign.ErrMalformed):
+		return "malformed", distrust
+	}
+	// Anything this build does not recognise — including ErrSignature itself —
+	// takes the distrust remedy. That is the safe half of the split, and it
+	// means a sentinel added to relsign later cannot silently arrive with the
+	// "re-run the installer" advice attached to it.
+	return "signature", distrust
 }
