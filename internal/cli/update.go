@@ -659,10 +659,15 @@ func upgradeHint(owner string) string {
 // updateReasonCode is the exit code each reason carries, stated once.
 //
 // The rule: anything ccdad DECIDED not to do is 4, and anything ccdad COULD NOT
-// do is 1. That covers the whole table, including the four arms that fire
-// before any candidate release exists — no-pinned-key, dev-build,
-// package-manager and not-writable are all 4, because each is a decision this
-// build made about a machine it can see, not a step that failed.
+// do is 1. It sorts every reason but one — already-current is 3, because a
+// machine that is already on the newest release is neither a refusal nor a
+// failure, and a script polling for work needs to tell it from both.
+//
+// The rule cuts ACROSS the pipeline rather than along it. Five reasons fire
+// before a candidate release exists and they do not share a code: no-pinned-key,
+// dev-build, package-manager and not-writable are 4, because each is a decision
+// this build made about a machine it can see; no-executable-path is 1, because
+// a ccdad that cannot find its own binary did not decide anything.
 //
 // resolve-failed is the one that reads like a counter-example and is not: a
 // discovery that produced no tag is something ccdad could not do, so it is 1,
@@ -841,10 +846,12 @@ func (a stagedAsset) replaceInto(target string) error {
 // out — updateVerifyFailure below, and the checksum mismatch in runUpdate — and
 // a divergence between them would be a difference in what ccdad says about the
 // same class of failure, with nothing able to go red for it.
-// The URL is deliberately NOT the last thing in it. Every caller appends its
-// own sentence, and an appended "." lands against the link — which terminal
-// link detection and every chat client that reflows this will take as part of
-// the URL and hand the user a 404.
+// The URL is deliberately NOT the last thing in it: the closing sentence is
+// part of the constant rather than left to the callers. One of the two does
+// append to it and one does not, so leaving the link exposed would have made
+// the difference between them a "." landing against the URL — which terminal
+// link detection and every chat client that reflows this take as part of the
+// link, handing the user a 404.
 const updateDistrust = "This release cannot be trusted, and re-running the installer would not help: " +
 	"the installers check checksums and not signatures. Take it up at " +
 	"https://github.com/Kweiza/ccdaddy/releases before installing anything from it."
