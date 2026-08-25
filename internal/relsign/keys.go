@@ -1,6 +1,7 @@
 package relsign
 
 import (
+	"bytes"
 	"slices"
 	"strings"
 )
@@ -51,10 +52,19 @@ func mustParseKeys(s string) []PublicKey {
 // Keys returns this build's trust root, parsed from the compile-time constant.
 // An empty slice means enforcement is off.
 //
-// A clone: a caller that held the slice itself would hold the trust root, and
-// one append or index assignment anywhere would rewrite what every later
-// verification runs against.
-func Keys() []PublicKey { return slices.Clone(parsedKeys) }
+// A DEEP clone. slices.Clone alone only copies the outer slice: PublicKey.Key
+// is itself a slice (ed25519.PublicKey), so a caller that held one of the
+// returned elements would still hold the trust root's own key bytes, and
+// something as small as Keys()[0].Key[0] ^= 0xFF would corrupt what every
+// later verification runs against for the rest of the process. Cloning each
+// Key too is what makes the returned value actually independent.
+func Keys() []PublicKey {
+	out := slices.Clone(parsedKeys)
+	for i := range out {
+		out[i].Key = bytes.Clone(out[i].Key)
+	}
+	return out
+}
 
 // Enforced reports whether this build carries a trust root at all.
 func Enforced() bool { return len(parsedKeys) > 0 }

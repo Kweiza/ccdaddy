@@ -83,6 +83,17 @@ func TestKeysHandsOutACopyAndEnforcementFollowsTheList(t *testing.T) {
 	if Keys()[0].KeyNum == [8]byte{} {
 		t.Fatal("Keys() aliases the package's own trust root")
 	}
+
+	// Same claim one level down. PublicKey.Key is itself a slice, so cloning
+	// only the outer slice above would still pass -- got[0] = PublicKey{}
+	// replaces the whole struct rather than reaching into its Key field -- and
+	// would still hand out an alias to the trust root's key bytes. Flip one bit
+	// through a freshly returned value and check a second call is unaffected.
+	got = Keys()
+	got[0].Key[0] ^= 1
+	if Keys()[0].Key[0] == got[0].Key[0] {
+		t.Fatal("Keys() aliases the trust root's key bytes")
+	}
 }
 
 // Whatever the constant holds today, these two answers describe the same fact
