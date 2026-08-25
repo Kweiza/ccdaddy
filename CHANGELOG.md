@@ -16,6 +16,43 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+### Added
+
+- **`ccdad tui`, the interactive dashboard**, and bare `ccdad` now opens it at a
+  terminal instead of printing the status dashboard. That is a widening rather
+  than a break: off a terminal the bare slot still refuses with usage on stderr
+  and exit `2`, exactly as it always has, so no script can have depended on what
+  it did. Six keys, and every one that changes something runs the ordinary
+  command for it — same refusals, same wording, same exit codes. It never
+  fetches; the page is read from disk.
+- **`ccdad mcp`, an MCP server for Claude Code**, with fifteen tools in four
+  classes: five reads, five that write ccdad's own account file, four that drive
+  the daemon, and `switch`, which rewrites the live login and asks the person at
+  the keyboard first. Eight ccdad verbs are deliberately not tools, and a
+  handler registered under any of their names is refused before it runs.
+  `ccdad mcp install` registers the server with Claude Code — three scopes,
+  defaulting to `user`, which is **not** `claude mcp add`'s own default of
+  `local` — `--print-config` prints the entry without writing anything, and
+  `ccdad mcp uninstall` removes it. `ccdad uninstall` removes it too, now that
+  there is something to remove.
+- **A Claude Code plugin and marketplace**, installable through `/plugin`. It is
+  optional and it is MCP wiring only: the same server `ccdad mcp install`
+  registers, needing the `ccdad` binary on PATH. The one-liners remain the
+  first-class way to install ccdad.
+- **`ccdad doctor` gained an `mcp-tools` row**, naming which tool-name spelling
+  this machine has.
+
+### Changed
+
+- **Registering the server directly replaces the plugin's copy, and renames
+  every tool.** Claude Code de-duplicates MCP servers by endpoint, so the two
+  never run side by side once both name `ccdad mcp` — but the plugin's tools are
+  `mcp__plugin_ccdad_ccdad__*` and a direct registration's are `mcp__ccdad__*`.
+  A permission rule, hook matcher or allowed-tools entry written for one
+  silently never fires under the other. `ccdad mcp install` warns and names both
+  spellings when it finds the plugin installed; `ccdad mcp uninstall` hands the
+  server back.
+
 ## [0.5.0] — 2026-08-25
 
 The release that makes a pool safe to drive from more than one machine, and

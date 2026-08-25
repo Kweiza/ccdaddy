@@ -94,6 +94,8 @@ endorsed by, or supported by Anthropic.
 - [Install](#install)
 - [Quick start](#quick-start)
 - [Commands](#commands)
+- [The dashboard](#the-dashboard)
+- [Claude Code's own tools](#claude-codes-own-tools)
 - [How the switch stays safe](#how-the-switch-stays-safe)
 - [Running sessions side by side](#running-sessions-side-by-side)
 - [Configuration](#configuration)
@@ -227,6 +229,7 @@ is a usage error rather than a silent hang. Pass the token, or `-`.
 | Command | What it does |
 |---|---|
 | `ccdad` | The dashboard, at a terminal. In a pipe, a redirect or cron it is usage on stderr and exit `2` |
+| `ccdad tui` | The same dashboard, asked for by name — and in a pipe it renders once and exits `0` |
 | `ccdad add [ALIAS]` | Log in through the browser and manage the account |
 | `ccdad add-token [TOKEN\|-]` | Register an `sk-ant-oat…` setup token or an `sk-ant-api…` key |
 | `ccdad list` | List managed accounts and how much quota each has left |
@@ -238,6 +241,8 @@ is a usage error rather than a silent hang. Pass the token, or `-`.
 | `ccdad hover on\|off\|status` | Hand every threshold and every margin to the engine |
 | `ccdad status` | The engine dashboard: quota used, window, reset, pace — read from disk |
 | `ccdad daemon start\|stop\|restart\|status\|logs` | Drive the background daemon directly |
+| `ccdad mcp` | Serve ccdad's tools to Claude Code over the Model Context Protocol. Claude Code starts it; you do not |
+| `ccdad mcp install\|uninstall` | Register that server with Claude Code, or take it back out |
 | `ccdad config get\|set\|unset\|list\|path` | Read and write `~/.ccdad/config.toml` |
 | `ccdad alias`, `move` | Give an account a handle; reorder the display |
 | `ccdad disable`, `enable` | Hold an account out of automatic rotation, or return it |
@@ -521,6 +526,116 @@ either way — so `ccdad hover status >/dev/null || ccdad hover on` is correct,
 and the numbers hover *would* choose are visible to somebody still deciding. An
 omakase mode is only acceptable if you can see what it chose.
 
+## The dashboard
+
+`ccdad tui` opens the interactive dashboard: the accounts, their quota, the
+daemon's own state, and a key for each of the things a reader of it does next.
+Bare `ccdad` opens the same thing when stdin and stdout are both a terminal.
+
+| Key | What it does |
+|---|---|
+| `a` | Add an account — hands the terminal to `ccdad add` and comes back |
+| `s` | Switch the live login |
+| `d` | The daemon screen — `S` starts, `x` stops, `R` restarts, and the log tails |
+| `c` | Change the switching strategy |
+| `l` | Swap the table between what `ccdad status` shows and what `ccdad list` shows |
+| `q` | Quit (`ctrl+c` too) |
+
+`up`/`k` and `down`/`j` move, `r` reloads from disk, `esc` goes back, and `?`
+opens the full key list.
+
+Every key that changes something runs the ordinary command for it, through a
+fresh command tree. It gets the same refusals, the same wording and the same
+exit codes typing it would give — a switch from the dashboard inside a `ccdad
+run` session is refused in that command's own words.
+
+It never fetches. Everything on the page is read from disk, because the usage
+endpoint allows roughly 28–30 requests per identity per rolling hour on a
+sliding window and a dashboard that polled would let one burst saturate an
+account for a full hour.
+
+It is designed for 80×24 and gets narrower gracefully: columns drop out in a
+fixed order, and below 35 columns or 3 rows it says what it needs instead of
+drawing a page nobody can read. With stdout redirected it renders once and
+exits 0, so `ccdad tui > page.txt` is a snapshot rather than a hang.
+
+## Claude Code's own tools
+
+`ccdad mcp` serves ccdad's commands to Claude Code over the Model Context
+Protocol, so a session can look at your accounts and move the live login
+without you leaving it. It is not a command to run by hand — Claude Code starts
+it, talks to it over that process's standard input and output, and stops it
+when the session ends.
+
+```sh
+ccdad mcp install              # register it, machine-wide
+ccdad mcp install --scope local    # this directory only
+ccdad mcp install --scope project  # ./.mcp.json, committed to the repository
+ccdad mcp install --print-config   # print the entry, write nothing
+ccdad mcp uninstall            # remove it again
+```
+
+**The default scope is `user`, and that is not `claude mcp add`'s default.**
+Anthropic's command registers into the current project (`local`); ccdad manages
+a machine's logins rather than a repository's, so machine-wide is the honest
+default here. Running the installer twice is exit `3` and one entry; an entry
+pointing somewhere else is rewritten and both endpoints are printed.
+
+Fifteen tools, in four classes:
+
+| Class | Tools | What it can do |
+|---|---|---|
+| read | `list`, `status`, `which`, `doctor`, `config_get` | Answers a question and changes nothing ccdad owns. Three of them may start the background daemon, and say so |
+| store | `enable`, `disable`, `alias`, `move`, `primary` | Writes ccdad's own account file. Never Claude Code's login |
+| credential | `switch` | Rewrites the live login. **Asks the person at the keyboard first**, through the client's own confirmation prompt, and refuses on a client that cannot ask |
+| daemon | `daemon_start`, `daemon_stop`, `daemon_restart`, `daemon_status` | Drives the background process, which outlives the session that started it |
+
+Eight ccdad verbs are deliberately **not** tools, and their absence is enforced
+rather than noted — a handler registered under any of these names is refused
+before it runs:
+
+| Verb | Why not |
+|---|---|
+| `add`, `add-token` | Need a terminal, open a browser or read a secret from one, and block for minutes |
+| `run` | Replaces the process |
+| `export`, `import` | Move refresh tokens off and onto the machine through text a model can read |
+| `uninstall` | Deletes the thing holding your logins |
+| `setup-path` | Edits shell startup files |
+| `bootstrap` | Imports a secret document, as a container entrypoint concern |
+
+`ccdad mcp` declares no `--json` flag. Its standard output carries the protocol
+and nothing else; diagnostics go to standard error, which the client treats as
+server logs.
+
+### The plugin
+
+The same server is also packaged as a Claude Code plugin, installable through
+`/plugin` from this repository's own marketplace. It is optional — the
+one-liners at the top of this file remain the first-class way to install ccdad
+— and it is **MCP wiring only**: it ships no skills, no agents and no hooks,
+and it still needs the `ccdad` binary on your PATH. Without one the plugin
+installs, reports as enabled, and only `claude mcp list` says the server failed
+to connect.
+
+Installing by both paths is safe and does not run two servers. Claude Code
+de-duplicates MCP servers by **endpoint** — the command plus its arguments —
+and both entries name `ccdad mcp`, so a direct registration replaces the
+plugin's copy rather than running beside it.
+
+**It does rename every tool**, and that is the part worth reading twice:
+
+```
+mcp__ccdad__switch                 # registered by `ccdad mcp install`
+mcp__plugin_ccdad_ccdad__switch    # registered by the plugin
+```
+
+A permission rule, a hook matcher or an allowed-tools entry written for one
+spelling silently never fires under the other — no error, no warning, no log
+line. `ccdad mcp install` says so when it finds the plugin already installed,
+`ccdad doctor`'s `mcp-tools` row names the spelling this machine has, and
+`ccdad mcp uninstall` hands the server back to the plugin. The plugin's own
+[README](plugins/README.md) carries the same warning from the other direction.
+
 ## How the switch stays safe
 
 `~/.claude/.credentials.json` holds more than your login. `mcpOAuth` — every
@@ -679,6 +794,19 @@ elapsed share, so hover has nothing to derive a threshold from until a turn wake
 it. `credit.max_auto_spend` is the one number hover leaves alone, and
 [`ccdad hover`](#ccdad-hover) is the command that turns it on and shows every
 number it chose.
+
+`mcp_switch_without_elicitation` is not an engine knob — it is the one key in
+this file that governs a different surface. ccdad's MCP server refuses to
+rewrite the live login without asking the person at the keyboard; on a client
+that cannot carry that question, this key is how you allow it anyway. It
+defaults to `false`, which refuses.
+`CCDAD_MCP_SWITCH_WITHOUT_ELICITATION` in the environment of the process
+running `ccdad mcp` does the same thing for one client, and it **decides**
+whenever it is set — an explicit `false` there takes back what the file granted
+for the machine. On a client that *can* ask, you are still asked even with the
+key granted: it is a fallback, not an override. Hover honours it rather than
+deriving it, because hover is a policy for the switching engine and a mode that
+supplied this one would be deciding that unattended also means unconfirmed.
 
 Keys this version does not recognise are left alone rather than deleted, so a
 file written by a newer release survives an older one. Trying to *set* an
@@ -1280,7 +1408,6 @@ This is printed by `ccdad --help` too. It is the one promise made before 1.0.
 
 Deliberate, and listed so you can tell a gap from a bug.
 
-- **A TUI and an MCP plugin.** Both are planned; neither is written.
 - **No OS service integration.** The daemon manages itself — a detached
   process, a `flock` singleton, a pidfile, auto-started by any `ccdad` command.
   There is no launchd, systemd or Windows service unit in v1.
@@ -1326,8 +1453,8 @@ cd ccdaddy
 go build ./cmd/ccdad
 ```
 
-Go 1.26.4 or newer. Eight third-party modules, all Go; the released binaries
-are static and need no runtime.
+Go 1.26.4 or newer. The third-party modules are all Go and `go.mod` is the
+authority on which; the released binaries are static and need no runtime.
 
 ```sh
 scripts/ci.sh all
@@ -1395,6 +1522,7 @@ Common answers it gives:
 | `warn credential-files … belong to no account` | A file under the store's `credentials/` holds a live refresh token that `accounts.toml` does not name, so `list`, `remove` and the account rows above cannot see it. The path is in the message. Delete it once you have looked — `doctor` never will |
 | `fail accounts-file … is GONE` | `accounts.toml` itself is missing while credential files still sit beside it — ccdad's whole account list is gone, not just one account. **Do not delete those files**; each is a login you can still recover. Restore the document from a backup, `ccdad import` an export, or run `ccdad add` once per account |
 | `skipped profiles/primary-accounts/credential-files … cannot be trusted` | The `accounts-file` row above already failed, so these three have no account list to check against — read that row instead of this one |
+| `ok mcp-tools` | Which spelling this machine's ccdad MCP tools have — `mcp__ccdad__*` from `ccdad mcp install`, `mcp__plugin_ccdad_ccdad__*` from the plugin. A rule written for one never fires under the other. `CLAUDE_PLUGIN_ROOT` decides the answer when ccdad is itself running as the plugin's server; in a shell the row reads Claude Code's plugin registry instead |
 
 ## Contributing
 
