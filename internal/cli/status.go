@@ -74,7 +74,7 @@ func runStatus(cmd *cobra.Command, asJSON bool) error {
 	if asJSON {
 		return writeJSON(cmd, statusPayload(snap, probeErr))
 	}
-	return renderStatus(cmd, snap.Report, snap.Rows, snap.ActiveLabel, snap.Mode, snap.HasMode, snap.Now)
+	return renderStatus(cmd, snap)
 }
 
 // loadSnapshot is one complete read of the documents a dashboard renders,
@@ -193,6 +193,7 @@ func loadSnapshot(cmd *cobra.Command, now time.Time) (snap view.Snapshot, probeE
 		Report:      report,
 		ActiveLabel: activeLabel,
 		Strategy:    cfg.Strategy.String(),
+		Hover:       cfg.Hover,
 		Mode:        mode,
 		HasMode:     hasMode,
 		Version:     buildinfo.Version,
@@ -219,8 +220,14 @@ var enginePlan = func(s *store.Store, now time.Time) (strategy.Plan, bool, error
 	return ev.Plan, ev.Decided, nil
 }
 
-// rowThresholds is what `status` and `list` measure their rows against: one
-// bundle per account, because under hover there is no single one.
+// rowThresholds is what `list` measures its rows against: one bundle per
+// account, because under hover there is no single one.
+//
+// It is `list`'s alone. `status` reads the same answer out of view.ThresholdsFor
+// directly, because it has already asked the engine for the mode and must not
+// ask a second time. cfg is a parameter rather than a read for the same reason:
+// its caller has the config in hand to decide whether to say the numbers were
+// derived, and a second rowConfig call would print the config notice twice.
 //
 // It goes through RankOptions rather than reading the threshold keys itself, so
 // the number a row is reported against is the number the engine ranked on. Two
@@ -241,8 +248,7 @@ var enginePlan = func(s *store.Store, now time.Time) (strategy.Plan, bool, error
 // it against the documented defaults, which is the same call `ccdad auto` makes.
 // An engine that cannot be asked is the same kind of notice, and it falls back
 // to the configured bundle because that is the last table anyone can name.
-func rowThresholds(cmd *cobra.Command, s *store.Store, now time.Time) func(uuid string) strategy.Thresholds {
-	cfg := rowConfig(cmd)
+func rowThresholds(cmd *cobra.Command, cfg config.Config, s *store.Store, now time.Time) func(uuid string) strategy.Thresholds {
 	if !cfg.RankOptions(now).Hover {
 		// `list` asks the engine only when hover is on, because with hover off
 		// the configured bundle answers every row and an evaluation would be a
@@ -291,23 +297,34 @@ func thresholdsFrom(cmd *cobra.Command, cfg config.Config, now time.Time,
 	return resolve
 }
 
-func renderStatus(cmd *cobra.Command, report daemon.Report, rows []view.Row,
-	activeLabel string, mode strategy.Mode, hasMode bool, now time.Time) error {
+// renderStatus takes the whole Snapshot rather than a field per column. The
+// argument list was already seven long and every entry on it was one of
+// loadSnapshot's own: passing the document is what stops the next field it
+// gains from being an eighth positional bool.
+func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 	out := cmd.OutOrStdout()
+	rows, now := snap.Rows, snap.Now
 
-	fmt.Fprintln(out, view.DaemonLine(report, now))
+	fmt.Fprintln(out, view.DaemonLine(snap.Report, now))
 
 	if len(rows) == 0 {
 		fmt.Fprintln(cmd.ErrOrStderr(), "No accounts yet. Run 'ccdad add' to log one in.")
 		return nil
 	}
 
-	// activeLabel is loadSnapshot's, not recomputed here: two loops over rows
+	// ActiveLabel is loadSnapshot's, not recomputed here: two loops over rows
 	// producing the same "which account is active" sentence is the exact "one
 	// value, two spellings" failure this task exists to remove.
-	fmt.Fprintf(out, "Active:  %s\n", activeLabel)
-	if hasMode {
-		fmt.Fprintln(out, view.ModeLine(mode))
+	fmt.Fprintf(out, "Active:  %s\n", snap.ActiveLabel)
+	// Above the Mode line, because it is what EXPLAINS it: under hover the mode
+	// is headroom whatever the file says, hover having overridden the strategy
+	// key. A reader who set consume-first and finds headroom here needs the
+	// reason before the answer, not after it.
+	if snap.Hover {
+		fmt.Fprintln(out, view.HoverLine())
+	}
+	if snap.HasMode {
+		fmt.Fprintln(out, view.ModeLine(snap.Mode))
 	}
 	fmt.Fprintln(out)
 
@@ -359,6 +376,13 @@ func statusPayload(snap view.Snapshot, probeErr error) map[string]any {
 	// same guard.
 	if snap.HasMode {
 		payload["mode"] = snap.Mode.String()
+	}
+	// Conditional for the reason unnamableWeeklyCaps is: an ordinary payload does
+	// not carry a field that is always the boring default. Present means every
+	// windowThreshold on the wire was DERIVED rather than read out of the file,
+	// which is the one thing about these rows a script cannot infer from them.
+	if snap.Hover {
+		payload["hover"] = true
 	}
 	return payload
 }

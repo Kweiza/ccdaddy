@@ -85,7 +85,11 @@ func newListCmd() *cobra.Command {
 			if cerr := cache.LoadError(); cerr != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "The usage cache could not be read: %v\n", cerr)
 			}
-			quota := view.Rows(visible, cache, active, hasActive, now, rowThresholds(cmd, s, now))
+			// Read once, here, because two things hang on it: which thresholds
+			// the rows are measured against, and whether the table below has to
+			// say where they came from.
+			cfg := rowConfig(cmd)
+			quota := view.Rows(visible, cache, active, hasActive, now, rowThresholds(cmd, cfg, s, now))
 
 			if asJSON {
 				rows := make([]map[string]any, 0, len(visible))
@@ -122,6 +126,23 @@ func newListCmd() *cobra.Command {
 					fmt.Fprintln(cmd.ErrOrStderr(), "Every account is disabled. Run 'ccdad list --all' to see them.")
 				}
 				return nil
+			}
+
+			// LEFT is measured against the thresholds hover DERIVED, and saying
+			// nothing about that is how a mode doing exactly what it promised
+			// reads as a defect: a user who set threshold = 80 and finds a row
+			// held to 93 has nothing to tell the two apart, and the listing is
+			// where an account gets chosen.
+			//
+			// It sits here rather than beside the config read, past both empty
+			// returns, because it is a note about a COLUMN: printed above "No
+			// accounts yet" it describes a table that was never drawn. Human-only
+			// for the same reason -- --json already carries the real
+			// windowThreshold on every row, which is a better answer than a
+			// sentence about a column that document does not have.
+			if cfg.Hover {
+				fmt.Fprintln(cmd.ErrOrStderr(),
+					"note: hover is on; LEFT is measured against the thresholds hover derived per account, not against a value in config.toml. 'ccdad hover status' prints them.")
 			}
 
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)

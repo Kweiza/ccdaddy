@@ -88,3 +88,22 @@ func ModeLine(m strategy.Mode) string {
 		return "Mode:    headroom  (at least one account has room, or could not be read)"
 	}
 }
+
+// HoverLine is the dashboard's one line about the fully automatic mode, and it
+// is printed only when hover is ON.
+//
+// Absence is unambiguous here, which is what separates it from ModeLine: hover
+// off is the default and the configured numbers are then the ones in force,
+// whereas a missing Mode would have been defaulted to "headroom" -- a plausible
+// answer nobody computed. What it must not be is silent while hover IS on. The
+// Mode line reads "headroom" under hover because hover forced headroom, so a
+// reader who configured consume-first would otherwise see a mode they never
+// asked for with no reason for it anywhere on the page.
+//
+// It names 'ccdad hover status' rather than printing a number, because there is
+// no single number to print: hover derives one per account and per window. The
+// label column is nine characters wide, matching the Daemon:, Active: and Mode:
+// lines it stacks with.
+func HoverLine() string {
+	return "Hover:   on  (every threshold derived per account; 'ccdad hover status' prints the numbers in force)"
+}
