@@ -1966,3 +1966,203 @@ func TestOutsideASessionTheDaemonComesBack(t *testing.T) {
 		t.Fatalf("spawns = %d, want 1 outside a session", d.spawns)
 	}
 }
+
+// Every way this command can fail, and the two things all of them owe the user:
+// the binary they are running is exactly as it was, and there is no
+// .ccdad-update.* directory sitting beside it.
+//
+// A table rather than an assertion inside each test, because the property is
+// about the COMMAND and not about any one refusal — and because the arm
+// somebody adds later costs one row here rather than a decision.
+//
+// Three reasons are deliberately not rows. `no-executable-path` cannot be
+// arranged and then asserted against, since the assertion needs the very path
+// the arm says cannot be found. `key-id` needs a second keypair and is asserted
+// where it is produced, with the same untouched-binary check. `replace-failed`
+// needs the staging directory swept out from under the rename mid-run, which is
+// asserted where it is produced for the same reason.
+//
+// `already-current` is a row even though it is not a failure: it returns after
+// the staging directory has been created, so it owes the same two things, and
+// it is the arm most likely to be reached on an ordinary machine.
+func TestUpdateLeavesNothingBehindOnEveryFailure(t *testing.T) {
+	for _, c := range []struct {
+		reason  string
+		want    ExitCode
+		argv    []string
+		arrange func(t *testing.T, f *fakeRelease, sign signFunc, d *fakeDaemon, target string)
+	}{{
+		reason: "no-pinned-key", want: ExitBlocked,
+		arrange: func(t *testing.T, _ *fakeRelease, _ signFunc, _ *fakeDaemon, _ string) {
+			saved := releaseKeys
+			t.Cleanup(func() { releaseKeys = saved })
+			releaseKeys = func() []relsign.PublicKey { return nil }
+		},
+	}, {
+		reason: "dev-build", want: ExitBlocked,
+		arrange: func(t *testing.T, _ *fakeRelease, _ signFunc, _ *fakeDaemon, _ string) {
+			stubVersion(t, "dev")
+		},
+	}, {
+		reason: "package-manager", want: ExitBlocked,
+		arrange: func(t *testing.T, _ *fakeRelease, _ signFunc, _ *fakeDaemon, target string) {
+			t.Setenv("HOMEBREW_PREFIX", filepath.Dir(target))
+		},
+	}, {
+		reason: "resolve-failed", want: ExitFailure,
+		arrange: func(_ *testing.T, f *fakeRelease, _ signFunc, _ *fakeDaemon, _ string) {
+			f.setTag("")
+		},
+	}, {
+		reason: "already-current", want: ExitNothingToDo,
+		arrange: func(t *testing.T, _ *fakeRelease, _ signFunc, _ *fakeDaemon, _ string) {
+			stubVersion(t, "0.7.0")
+		},
+	}, {
+		reason: "rollback", want: ExitBlocked,
+		arrange: func(_ *testing.T, f *fakeRelease, _ signFunc, _ *fakeDaemon, _ string) {
+			f.setTag("v0.1.0")
+		},
+	}, {
+		reason: "download-sums", want: ExitFailure,
+		arrange: func(_ *testing.T, f *fakeRelease, _ signFunc, _ *fakeDaemon, _ string) {
+			f.setStatus("sha256sums.txt", http.StatusInternalServerError)
+		},
+	}, {
+		reason: "unsigned-release", want: ExitBlocked,
+		arrange: func(_ *testing.T, f *fakeRelease, _ signFunc, _ *fakeDaemon, _ string) {
+			f.setStatus("sha256sums.txt.minisig", http.StatusNotFound)
+		},
+	}, {
+		reason: "signature", want: ExitBlocked,
+		arrange: func(_ *testing.T, f *fakeRelease, sign signFunc, _ *fakeDaemon, _ string) {
+			f.put("sha256sums.txt.minisig", sign([]byte("other bytes"), "v0.7.0"))
+		},
+	}, {
+		reason: "wrong-release", want: ExitBlocked,
+		arrange: func(_ *testing.T, f *fakeRelease, sign signFunc, _ *fakeDaemon, _ string) {
+			f.put("sha256sums.txt.minisig", sign(f.get("sha256sums.txt"), "v0.6.1"))
+		},
+	}, {
+		reason: "algorithm", want: ExitBlocked,
+		arrange: func(t *testing.T, f *fakeRelease, _ signFunc, _ *fakeDaemon, _ string) {
+			f.put("sha256sums.txt.minisig", prehashedSig(t, f.get("sha256sums.txt.minisig")))
+		},
+	}, {
+		reason: "malformed", want: ExitBlocked,
+		arrange: func(_ *testing.T, f *fakeRelease, _ signFunc, _ *fakeDaemon, _ string) {
+			f.put("sha256sums.txt.minisig", []byte("not a signature\n"))
+		},
+	}, {
+		reason: "shape", want: ExitBlocked,
+		arrange: func(_ *testing.T, f *fakeRelease, sign signFunc, _ *fakeDaemon, _ string) {
+			page := []byte("<!doctype html>\n")
+			f.put("sha256sums.txt", page)
+			f.put("sha256sums.txt.minisig", sign(page, "v0.7.0"))
+		},
+	}, {
+		reason: "not-listed", want: ExitBlocked,
+		arrange: func(_ *testing.T, f *fakeRelease, sign signFunc, _ *fakeDaemon, _ string) {
+			sums := sumsFor(map[string][]byte{"LICENSE": []byte("license\n")})
+			f.put("sha256sums.txt", sums)
+			f.put("sha256sums.txt.minisig", sign(sums, "v0.7.0"))
+		},
+	}, {
+		reason: "download-asset", want: ExitFailure,
+		arrange: func(_ *testing.T, f *fakeRelease, _ signFunc, _ *fakeDaemon, _ string) {
+			f.setStatus(release.Asset(), http.StatusInternalServerError)
+		},
+	}, {
+		reason: "size", want: ExitBlocked,
+		arrange: func(t *testing.T, f *fakeRelease, sign signFunc, _ *fakeDaemon, _ string) {
+			reseal(t, f, sign, "v0.7.0", []byte("too small to be a ccdad\n"))
+		},
+	}, {
+		reason: "checksum", want: ExitBlocked,
+		arrange: func(t *testing.T, f *fakeRelease, _ signFunc, _ *fakeDaemon, _ string) {
+			f.put(release.Asset(), append(stagedAssetBody(t), []byte("\n// tampered\n")...))
+		},
+	}, {
+		reason: "smoke", want: ExitBlocked,
+		arrange: func(t *testing.T, _ *fakeRelease, _ signFunc, _ *fakeDaemon, _ string) {
+			t.Setenv(updateAssetRoleEnv, updateAssetRoleFail)
+		},
+	}, {
+		reason: "daemon", want: ExitFailure,
+		arrange: func(_ *testing.T, _ *fakeRelease, _ signFunc, d *fakeDaemon, _ string) {
+			d.shutdownErr = errors.New("the shutdown request went nowhere")
+		},
+	}, {
+		reason: "not-writable", want: ExitBlocked,
+		argv: []string{"update", "--check", "--json"},
+		arrange: func(t *testing.T, _ *fakeRelease, _ signFunc, _ *fakeDaemon, target string) {
+			if runtime.GOOS == "windows" {
+				t.Skip("a mode is not an ACL: chmod 0500 does not stop a write here")
+			}
+			if os.Geteuid() == 0 {
+				t.Skip("root ignores the mode bits, so no chmod can make a directory unwritable")
+			}
+			dir := filepath.Dir(target)
+			if err := os.Chmod(dir, 0o500); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+		},
+	}} {
+		t.Run(c.reason, func(t *testing.T) {
+			target, f, sign := updateWorld(t, "0.6.1", "v0.7.0")
+			d := stubUpdateDaemon(t, true)
+			c.arrange(t, f, sign, d, target)
+
+			argv := c.argv
+			if argv == nil {
+				argv = []string{"update", "--json"}
+			}
+			code, stdout, _, _ := runRoot(t, argv...)
+			if code != c.want {
+				t.Fatalf("exit = %d, want %d", code, c.want)
+			}
+			payload := decodePayload(t, stdout)
+			if got := payload["reason"]; got != c.reason {
+				t.Fatalf("reason = %v, want %q", got, c.reason)
+			}
+			if got := payload["updated"]; got != false {
+				t.Errorf("updated = %v, want false", got)
+			}
+			assertBinaryUntouched(t, target)
+		})
+	}
+}
+
+// Every one of those arms is a row in the exit-code contract, and the contract
+// is what a supervisor branches on. Nothing above pins that the codes are the
+// ones the documentation promises rather than merely self-consistent, so this
+// asserts the split directly: 4 is what the origin served and ccdad refused, 1
+// is what ccdad itself could not do.
+func TestUpdateExitCodesSplitRefusalsFromFailures(t *testing.T) {
+	refusals := []string{
+		"no-pinned-key", "dev-build", "package-manager", "not-writable", "rollback",
+		"unsigned-release", "signature", "key-id", "wrong-release", "algorithm",
+		"malformed", "shape", "not-listed", "size", "checksum", "smoke",
+	}
+	failures := []string{
+		"no-executable-path", "resolve-failed", "download-sums", "download-asset",
+		"daemon", "replace-failed",
+	}
+	for _, r := range refusals {
+		if got := updateReasonCode(r); got != ExitBlocked {
+			t.Errorf("%s maps to %d, want %d", r, got, ExitBlocked)
+		}
+	}
+	for _, r := range failures {
+		if got := updateReasonCode(r); got != ExitFailure {
+			t.Errorf("%s maps to %d, want %d", r, got, ExitFailure)
+		}
+	}
+	if got := updateReasonCode("already-current"); got != ExitNothingToDo {
+		t.Errorf("already-current maps to %d, want %d", got, ExitNothingToDo)
+	}
+	if got := updateReasonCode("nonsense"); got != ExitFailure {
+		t.Errorf("an unknown reason maps to %d, want %d — the fallback must be the safe half", got, ExitFailure)
+	}
+}
