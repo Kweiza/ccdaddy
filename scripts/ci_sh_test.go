@@ -251,6 +251,110 @@ func TestCICitesDoesNotReportOrdinaryHyphenatedEnglish(t *testing.T) {
 	}
 }
 
+// The POINTED shape written as a PATH, which is how a plan is actually cited
+// and which the slug pattern cannot see: it keys on `[a-z0-9]+(-[a-z0-9]+){2,}`
+// immediately after the pointing phrase, and `docs/` ends that token at the
+// slash before a single hyphen group has matched.
+//
+// `docs/` is the case that matters. It is in .git/info/exclude and no commit in
+// this repository has ever contained a file under it, so every reference to one
+// resolves for exactly the person whose machine it is on -- the thing this
+// check exists to stop.
+func TestCICitesReportsAPlanCitedByPath(t *testing.T) {
+	root := throwawayRepo(t, map[string]string{
+		"internal/x/x.go": "package x\n\n// The ordering is not re-argued here: " +
+			"see docs/plans/2026-08-25-self-upgrade.md for why it is that way.\nfunc X() {}\n",
+	})
+
+	out, code := runCI(t, root, "cites")
+	if code != 1 {
+		t.Fatalf("exit %d, want 1 — a plan cited by path is unreachable to every other reader\n%s", code, out)
+	}
+	if !strings.Contains(out, "docs/plans/2026-08-25-self-upgrade.md") {
+		t.Errorf("stderr does not quote the path it objected to:\n%s", out)
+	}
+}
+
+// The same rule as the slug arm, in the direction that keeps the check usable:
+// a path this repository HAS is a pointer that resolves for everyone.
+func TestCICitesAllowsAPathThisRepositoryHas(t *testing.T) {
+	root := throwawayRepo(t, map[string]string{
+		"docs/plans/2026-08-25-self-upgrade.md": "# a plan that is really here\n",
+		"internal/x/x.go":                       "package x\n\n// The ordering is argued in docs/plans/2026-08-25-self-upgrade.md.\nfunc X() {}\n",
+	})
+
+	out, code := runCI(t, root, "cites")
+	if code != 0 {
+		t.Fatalf("exit %d, want 0 — the document it points at is right there in the tree\n%s", code, out)
+	}
+}
+
+// A pointer at the end of a sentence, which is how the one such line in this
+// repository is written: `.github/ISSUE_TEMPLATE/config.yml` says "See
+// SECURITY.md." with a full stop. Naively taking the last whitespace-delimited
+// token yields `SECURITY.md.`, which resolves to nothing and fails a correct
+// line -- and a check that fails on correct code is a check somebody switches
+// off.
+func TestCICitesAllowsAMarkdownPointerThatEndsASentence(t *testing.T) {
+	root := throwawayRepo(t, map[string]string{
+		"SECURITY.md":     "# how to report a vulnerability\n",
+		"internal/x/x.go": "package x\n\n// Report it privately instead: see SECURITY.md.\nfunc X() {}\n",
+	})
+
+	out, code := runCI(t, root, "cites")
+	if code != 0 {
+		t.Fatalf("exit %d, want 0 — the trailing full stop is punctuation, not part of the name\n%s", code, out)
+	}
+}
+
+// The `docs/` half of the pattern, alone. A plan is as often named without its
+// extension as with it, and the `.md` half cannot see that spelling.
+func TestCICitesReportsAPlanUnderDocsCitedWithoutAnExtension(t *testing.T) {
+	root := throwawayRepo(t, map[string]string{
+		"internal/x/x.go": "package x\n\n// The twelve tasks are listed there: " +
+			"see docs/plans/2026-08-25-self-upgrade-part3 for the order.\nfunc X() {}\n",
+	})
+
+	out, code := runCI(t, root, "cites")
+	if code != 1 {
+		t.Fatalf("exit %d, want 1 — nothing under docs/ has ever been in this repository\n%s", code, out)
+	}
+}
+
+// The `.md` half, alone: a document outside docs/ that this repository does not
+// have. Without this the extension arm could be deleted and only the docs/
+// spelling would still be caught.
+func TestCICitesReportsAMarkdownDocumentThisRepositoryDoesNotHave(t *testing.T) {
+	root := throwawayRepo(t, map[string]string{
+		"internal/x/x.go": "package x\n\n// The numbers are not repeated here: " +
+			"see notes/2026-08-25-measurement.md for them.\nfunc X() {}\n",
+	})
+
+	out, code := runCI(t, root, "cites")
+	if code != 1 {
+		t.Fatalf("exit %d, want 1 — that document is on somebody's machine, not in the tree\n%s", code, out)
+	}
+}
+
+// The scope this arm deliberately does not take, and the measurement behind it:
+// a pattern that flagged any unresolved path matched six lines in this tree and
+// four were wrong -- `os/types_windows.go` is the Go standard library,
+// `tools/call` is a method name on the wire, `internal/cli` is a directory, and
+// one was a filename with the sentence's full stop stuck to it. This check is
+// about DOCUMENTS. Whether a comment names a code path correctly is a different
+// question with a different answer, and it is not this one.
+func TestCICitesDoesNotReportACodePathThatIsNotADocument(t *testing.T) {
+	root := throwawayRepo(t, map[string]string{
+		"internal/x/x.go": "package x\n\n// The execute bit is not reported, per os/types_windows.go -- and the\n" +
+			"// middleware runs exactly once per tools/call on the wire.\nfunc X() {}\n",
+	})
+
+	out, code := runCI(t, root, "cites")
+	if code != 0 {
+		t.Fatalf("exit %d, want 0 — neither target is a document this repository could contain\n%s", code, out)
+	}
+}
+
 // runCIWithEnv is runCI with the child's environment named explicitly. The
 // plugin check branches on whether `claude` is on PATH, and a test that cannot
 // control PATH describes the developer's machine rather than the check.

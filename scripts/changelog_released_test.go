@@ -141,7 +141,9 @@ func releasedSumProblems(versions []string, digests, want map[string]string) []s
 		case want[v] == "":
 			out = append(out, fmt.Sprintf(
 				"`## [%s]` has no digest in %s.\n"+
-					"If you are cutting a release, regenerate the file in the same commit.",
+					"If you are cutting a release, regenerate the table in the SAME commit:\n"+
+					"  go test ./scripts -run TestNoReleasedSection -update-sums -count=1\n"+
+					"and read the diff — it writes whatever the file says.",
 				v, releasedSums))
 		case want[v] != digests[v]:
 			out = append(out, fmt.Sprintf(
