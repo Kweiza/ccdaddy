@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -1030,8 +1031,18 @@ func TestUpdateVerificationFailuresEachHaveTheirOwnReasonAndRemedy(t *testing.T)
 					"checks a signature, so a tamper failure must never route the user to it.\n%s",
 					got, c.namesInstaller, stderr)
 			}
-			if !c.namesInstaller && !strings.Contains(stderr, "minisign -Vm") {
-				t.Errorf("stderr = %q, want a tamper remedy that names `minisign -Vm`", stderr)
+			// A tamper remedy has to leave the user a way to look for
+			// themselves; the installer is not it, so something else must be.
+			//
+			// This asserted the string `minisign -Vm`, and that spelling was
+			// the bug: bare, minisign looks for ~/.minisign/minisign.pub and
+			// exits non-zero, and this command never writes sha256sums.txt to
+			// disk, so both halves of the command it printed were wrong. It
+			// points at the README section that carries the whole recipe now,
+			// and the assertion moved with it rather than being dropped.
+			if !c.namesInstaller && !strings.Contains(stderr, "Verifying the download") {
+				t.Errorf("stderr = %q, want a tamper remedy that points at a way to check the "+
+					"release without the installer", stderr)
 			}
 			// The verification line is the one security assurance this command
 			// makes to a user, and a refusal must not carry it. Printing it
@@ -2202,6 +2213,24 @@ func TestTheScopedSessionNoticeAppearsOnlyWhenThereWasADaemon(t *testing.T) {
 		if !strings.Contains(stderr, "normal shell") {
 			t.Errorf("stderr = %q, want it to say how to bring the daemon back", stderr)
 		}
+		// The command the sentence names has to be one auto-start will
+		// actually act on. "Run any ccdad command" stood here and was false:
+		// auto-start is an allow-list, and `ccdad daemon status` — the most
+		// natural thing to type next — is not on it, so the user would get a 5
+		// and still no daemon. Checked against the map rather than against a
+		// second copy of the sentence, so removing the command from the
+		// allow-list reddens this.
+		named := "ccdad status"
+		if !strings.Contains(stderr, "`"+named+"`") {
+			t.Errorf("stderr = %q, want it to name a command that starts a daemon", stderr)
+		}
+		if !autoStartCommands[named] {
+			t.Errorf("the notice tells the user to run %q, which is not in autoStartCommands, so it "+
+				"will not start anything", named)
+		}
+		if strings.Contains(stderr, "any ccdad command from") {
+			t.Errorf("stderr = %q; most ccdad commands do not start a daemon", stderr)
+		}
 	})
 
 	t.Run("there was not", func(t *testing.T) {
@@ -2482,4 +2511,67 @@ func TestVerifiedSumsRefusesBytesAlteredAfterVerification(t *testing.T) {
 	if zero.intact() || zero.looksLikeSums() {
 		t.Error("the zero verifiedSums reads as verified")
 	}
+}
+
+// The re-hash inside smokeStaged, which is the one of the two that no
+// end-to-end test can reach: nothing runs between the digest comparison and the
+// smoke run, so there is no seam to arrange the rewrite from. Replacing
+// staged.pathIfIntact() with staged.path there left the whole package green,
+// while the same deletion in replaceInto reddens the rewritten-file test — so
+// one site was pinned and the other could be deleted in silence.
+//
+// A direct test on the handle closes it without inventing a seam. It is also
+// what the accepted TOCTOU window rests on: the window is narrowed to a single
+// statement inside each of two functions, and that argument is worth nothing
+// unless both statements are held up by something.
+func TestSmokeStagedRefusesAFileRewrittenAfterItWasAccepted(t *testing.T) {
+	isolate(t)
+	body := stagedAssetBody(t)
+	sum := sha256.Sum256(body)
+	digest := hex.EncodeToString(sum[:])
+
+	want, ok := release.ParseTag("v0.7.0")
+	if !ok {
+		t.Fatal("v0.7.0 does not parse as a tag")
+	}
+	// Handed to the child through the environment, so the copied test binary
+	// answers --version as a ccdad of that release would.
+	accept := func(t *testing.T) (stagedAsset, string) {
+		t.Helper()
+		t.Setenv(updateAssetRoleEnv, "ccdad version 0.7.0")
+		p := filepath.Join(t.TempDir(), release.Asset())
+		if err := os.WriteFile(p, body, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		a, matched := acceptStaged(p, digest, digest)
+		if !matched {
+			t.Fatal("acceptStaged refused a file against its own digest")
+		}
+		return a, p
+	}
+
+	// The control. Without it a red below could be the fixture failing to
+	// produce a runnable file rather than the guard firing.
+	t.Run("untouched", func(t *testing.T) {
+		a, _ := accept(t)
+		if err := smokeStaged(context.Background(), a, want); err != nil {
+			t.Fatalf("smokeStaged on an untouched file: %v", err)
+		}
+	})
+
+	t.Run("rewritten after it was accepted", func(t *testing.T) {
+		a, p := accept(t)
+		// Still a perfectly good executable that still answers --version with
+		// the right release: the ONLY thing wrong with it is that these are not
+		// the bytes the signed row named. Without the re-hash the smoke run
+		// executes them and reports success.
+		if err := os.WriteFile(p, append(body, []byte("\n// appended after the digest\n")...), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		err := smokeStaged(context.Background(), a, want)
+		if !errors.Is(err, errStagedAltered) {
+			t.Fatalf("smokeStaged err = %v, want one wrapping errStagedAltered — this step EXECUTES "+
+				"the file, so running bytes that were never digested is the worse half of the mistake", err)
+		}
+	})
 }
