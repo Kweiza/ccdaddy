@@ -65,13 +65,23 @@ func TestTheConsoleAnswerReachesTheOptionsUnchanged(t *testing.T) {
 // will cheerfully interrogate a console the invocation is not writing one byte
 // to, and whatever guard exists is the caller's alone.
 //
-// The two callers entitled to pay that price are both on the far side of
-// tui.Options: the event loop, which does not pay it at all because the reply
-// reaches it as a message, and the one-shot render, which pays it under a guard
-// of its own with both stdio ends checked. Making the call HERE would move it
-// onto the branch where both ends are terminals -- the live-program branch, the
-// one path that must never block -- and leave the redirected branch, the only
-// one it is scoped to, never asking.
+// It is paid ONCE PER PROCESS, and it is paid through the seam internal/tui
+// exports rather than by anyone writing the call themselves. tui.DarkBackground
+// is a sync.OnceValue wrapping the query with the guard it needs -- terminals
+// required on both ends of stdio, dark returned when it declined to ask -- and
+// package cli reaches that one answer through the darkBackground var in
+// color.go, which POINTS AT it. The event loop does not pay it at all, because
+// the reply reaches a live program as a message.
+//
+// That is why this ban survives package cli acquiring a caller. It never
+// forbade package cli from KNOWING the answer; it forbids package cli from
+// ASKING for it a second time. Two queries in two packages are two caches and
+// two two-second budgets: a process that rendered a listing and then a
+// dashboard would pay four seconds, and a second one written here would land on
+// whichever branch its author happened to guard -- most likely the branch where
+// both ends are terminals, which is the live-program path that must never
+// block, leaving the redirected path it was scoped to never asking. One query,
+// behind one guard, in the package that owns the terminal.
 //
 // This is a walk and not a grep because the naive form is not the only form: a
 // query parked in a package-level value and reached through the name reads as
@@ -107,10 +117,10 @@ func TestNothingInThisPackageAsksTheTerminalWhatColourItsBackgroundIs(t *testing
 			if !is || !forbidden[s.Sel.Name] {
 				return true
 			}
-			t.Errorf("%s reaches %s: the terminal's background colour is resolved on the "+
-				"far side of tui.Options, by the event loop for a live program and by the "+
-				"one-shot render for a redirected one, and package cli hands the configured "+
-				"value across unresolved", fset.Position(s.Pos()), s.Sel.Name)
+			t.Errorf("%s reaches %s: the terminal's background colour is queried once per "+
+				"process, by tui.DarkBackground, under the guard that lives with it -- a "+
+				"caller in this package reaches that answer through the darkBackground var "+
+				"in color.go and never asks again", fset.Position(s.Pos()), s.Sel.Name)
 			return true
 		})
 	}

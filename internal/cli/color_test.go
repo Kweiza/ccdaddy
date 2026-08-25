@@ -191,11 +191,25 @@ func TestTheJSONPathsCarryNoEscapeByteEvenWithColourForced(t *testing.T) {
 // rather than at a terminal, resolve NoTTY and silently kill colour on the
 // one-shot dashboard render -- a failure with no error, no test and no symptom
 // except a page that came out grey.
+//
+// THE ROOT IS READ EXACTLY AS NewRootCmd LEFT IT, AND THAT IS THE ENTIRE POINT.
+// The obvious version of this test calls root.SetOut(&buf) first, the way every
+// other test in this package does, and it is BLIND: SetOut replaces whatever
+// the constructor installed, so a NewRootCmd that really did wrap its own
+// writer has the wrap thrown away one line before the assertion reads it. The
+// first arm then passes on the buffer, tuiOptions wraps that same buffer rather
+// than a wrapped writer, and the "doubled" arm below is unreachable as well --
+// both arms green against the exact defect they name. Measured: with
+// root.SetOut(colorWriter(os.Stdout)) added to NewRootCmd, the SetOut shape
+// passed and this shape fails on the first arm.
+//
+// So nothing is set here. OutOrStdout() falls back to os.Stdout on an untouched
+// root, which is precisely the production value this is asking about, and the
+// only thing either arm does with a writer is ask its type -- no byte is
+// written to the developer's terminal by this test.
 func TestTheRootIsNotWrappedAndTheDashboardWriterIsNotDoubled(t *testing.T) {
 	isolate(t)
 	root := NewRootCmd()
-	var buf bytes.Buffer
-	root.SetOut(&buf)
 	if _, wrapped := root.OutOrStdout().(*colorprofile.Writer); wrapped {
 		t.Fatal("the root's own writer is a *colorprofile.Writer; every renderer under " +
 			"it now wraps a wrapped writer")
