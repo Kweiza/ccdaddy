@@ -164,7 +164,12 @@ func Verify(keys []PublicKey, content, minisig []byte, wantRelease string) error
 		}
 	}
 	if !found {
-		return fmt.Errorf("%w: key id %x", ErrKeyID, s.keyNum)
+		// keyIDHex, not %x: ccdaddy.pub's own comment line and every .minisig
+		// this repository writes already carry the id in the stock tool's
+		// form -- the bytes read little-endian, not the order they sit in the
+		// wire format -- and a maintainer comparing this refusal against
+		// either of those must not see two different strings for one key.
+		return fmt.Errorf("%w: key id %s", ErrKeyID, keyIDHex(s.keyNum))
 	}
 	if !ed25519.Verify(key.Key, content, s.sig) {
 		return ErrSignature
