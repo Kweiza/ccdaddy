@@ -80,8 +80,9 @@ func buildRelease(t *testing.T) string {
 	}
 	dist := t.TempDir()
 	for name, body := range map[string]string{
-		"ccdad-freebsd-amd64": "a target this repository does not ship",
-		"sha256sums.txt":      "stale contents\n",
+		"ccdad-freebsd-amd64":    "a target this repository does not ship",
+		"sha256sums.txt":         "stale contents\n",
+		"sha256sums.txt.minisig": "a signature over an earlier run's sums file\n",
 	} {
 		if err := os.WriteFile(filepath.Join(dist, name), []byte(body), 0o644); err != nil {
 			t.Fatalf("seeding %s: %v", name, err)
