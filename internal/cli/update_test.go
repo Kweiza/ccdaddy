@@ -1239,7 +1239,8 @@ func TestUpdateReadsTheRowOutOfTheBytesItVerified(t *testing.T) {
 
 	code, _, _, top := runRoot(t, "update", "--json")
 	if code != ExitOK {
-		t.Fatalf("exit = %d, want 0 (%s) — something read the checksum file a second time and got the page", code, top)
+		t.Fatalf("exit = %d, want 0 (%s) — this release is correct, so a run that refuses here "+
+			"read something other than the one file it verified", code, top)
 	}
 	asked := 0
 	for _, p := range f.asked() {
@@ -2252,5 +2253,56 @@ func TestUpdateExitCodesSplitRefusalsFromFailures(t *testing.T) {
 	}
 	if got := updateReasonCode("nonsense"); got != ExitFailure {
 		t.Errorf("an unknown reason maps to %d, want %d — the fallback must be the safe half", got, ExitFailure)
+	}
+}
+
+// The type stops the checks being handed a SECOND buffer; the digest stops the
+// ONE buffer being rewritten underneath them. This is the second half, and it
+// cannot be reached through the command at all — which is the whole reason it
+// needs its own test.
+//
+// The row corrupted below is LICENSE, which has nothing to do with this
+// platform's asset. That is deliberate: release.SumsLookLikeSums asks only that
+// SOME line be a checksum row, and release.ExpectedHash reads one anchored row
+// and ignores the rest, so neither of them can notice this edit. A run that
+// verified one buffer and read another would install the right binary from the
+// wrong file, and no assertion about a reason, an exit code or a request count
+// can see it.
+func TestVerifiedSumsRefusesBytesAlteredAfterVerification(t *testing.T) {
+	sign := stubReleaseKeys(t)
+	sums := sumsFor(map[string][]byte{
+		release.Asset(): []byte("a released binary\n"),
+		"LICENSE":       []byte("license\n"),
+	})
+
+	v, err := verifySums(releaseKeys(), sums, sign(sums, "v0.7.0"), "v0.7.0")
+	if err != nil {
+		t.Fatalf("verifying a correctly signed checksum file: %v", err)
+	}
+	if !v.looksLikeSums() {
+		t.Fatal("the fixture does not pass the shape check, so this test proves nothing")
+	}
+	if _, ok := v.expectedHash(release.Asset()); !ok {
+		t.Fatal("the fixture does not list this asset, so this test proves nothing")
+	}
+
+	i := strings.Index(string(v.b), "LICENSE")
+	if i <= 10 {
+		t.Fatalf("no LICENSE row to corrupt at a usable offset (%d): %q", i, v.b)
+	}
+	v.b[i-10] ^= 1 // one byte of that row's digest, in place
+
+	if v.looksLikeSums() {
+		t.Error("the shape check answered over bytes that are no longer the ones the signature covered")
+	}
+	if _, ok := v.expectedHash(release.Asset()); ok {
+		t.Error("a row was read out of bytes that are no longer the ones the signature covered")
+	}
+
+	// A caller that ignored verifySums's error holds a zero handle, and it must
+	// not be readable either: the digest of no bytes is not the zero array.
+	var zero verifiedSums
+	if zero.intact() || zero.looksLikeSums() {
+		t.Error("the zero verifiedSums reads as verified")
 	}
 }

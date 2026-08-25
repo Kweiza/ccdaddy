@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"net/http"
@@ -404,7 +405,8 @@ func runUpdate(cmd *cobra.Command, opts updateOptions) error {
 	// could answer "the latest is v9.9.9" and hand back the authentic v0.4.0
 	// pair with every signature check passing. The trusted comment is the field
 	// that closes that, because it is signed and it is ours to define.
-	if err := relsign.Verify(keys, sums, sig, want.Tag()); err != nil {
+	verified, err := verifySums(keys, sums, sig, want.Tag())
+	if err != nil {
 		reason, remedy := updateVerifyFailure(err)
 		return rep.emit(cmd, opts.asJSON, updateReasonCode(reason), reason,
 			fmt.Sprintf("The signature on %s's checksum file did not verify: %v\n%s", want.Tag(), err, remedy))
@@ -413,7 +415,7 @@ func runUpdate(cmd *cobra.Command, opts updateOptions) error {
 
 	// Step 12. Verified, and still possibly an HTML page: a signature says who
 	// wrote the bytes and never what they are.
-	if !release.SumsLookLikeSums(sums) {
+	if !verified.looksLikeSums() {
 		return rep.emit(cmd, opts.asJSON, updateReasonCode("shape"), "shape",
 			fmt.Sprintf("The checksum file for %s carries no checksums at all, so ccdad will not install it. "+
 				"It came correctly signed, which makes this worse rather than better. "+
@@ -425,7 +427,7 @@ func runUpdate(cmd *cobra.Command, opts updateOptions) error {
 	// release simply does not carry this platform, which is a fact about the
 	// release rather than a suspicion about it.
 	asset := release.Asset()
-	wantHash, listed := release.ExpectedHash(sums, asset)
+	wantHash, listed := verified.expectedHash(asset)
 	if !listed {
 		return rep.emit(cmd, opts.asJSON, updateReasonCode("not-listed"), "not-listed",
 			fmt.Sprintf("Release %s does not publish %s, so there is nothing here for this machine. "+
@@ -712,4 +714,67 @@ func updateVerifyFailure(err error) (reason, remedy string) {
 	// means a sentinel added to relsign later cannot silently arrive with the
 	// "re-run the installer" advice attached to it.
 	return "signature", distrust
+}
+
+// verifiedSums is sha256sums.txt after its signature has been checked, and it
+// is the only thing the checks that follow will answer over.
+//
+// TWO different things go wrong here and the type closes only one of them.
+//
+// The first is being handed OTHER BYTES: a change that re-downloaded the file,
+// or read from a second variable holding a copy of it, would leave every
+// existing test green while ExpectedHash ran on bytes nothing had
+// authenticated. verifySums is the only thing here that builds one of these out
+// of unverified bytes, and the two checks are methods on it, so at those call
+// sites a []byte does not typecheck and such a change cannot be made by
+// ACCIDENT -- it has to name this type and construct one, which is not what a
+// refactor looks like. That is the whole of what one Go package can enforce:
+// release.SumsLookLikeSums stays callable on any slice by anyone who writes
+// that call out, and the fields here are visible to every file in the package.
+//
+// The second is the SAME BYTES being rewritten underneath the checks. Nothing
+// in Go stops a slice being written through, and the plausible way it happens
+// is a later kindness -- trimming the file, or normalising CRLF before the
+// shape check, because release.ExpectedHash refuses a carriage return. So the
+// digest is taken when the signature verifies and re-checked at every read.
+// Bytes that no longer hash to what was signed are not verified bytes, whoever
+// rewrote them and for whatever reason.
+//
+// Both reads therefore FAIL CLOSED rather than reporting the alteration in
+// their own words: "shape" and "not listed" are the two refusals this command
+// already has for a checksum file it will not read, both of them stop the run
+// with the binary untouched, and inventing a third reason for a state that is
+// unreachable in shipped code would put it in a contract every failure arm is
+// asserted against.
+type verifiedSums struct {
+	b      []byte
+	digest [sha256.Size]byte
+}
+
+// verifySums checks the signature over sums and hands back the bytes it
+// covered. The window between the check and the snapshot is one statement, and
+// that is as small as it goes.
+func verifySums(keys []relsign.PublicKey, sums, sig []byte, wantRelease string) (verifiedSums, error) {
+	if err := relsign.Verify(keys, sums, sig, wantRelease); err != nil {
+		return verifiedSums{}, err
+	}
+	return verifiedSums{b: sums, digest: sha256.Sum256(sums)}, nil
+}
+
+// intact reports whether the bytes still hash to what the signature covered.
+//
+// The zero verifiedSums is not intact -- the digest of no bytes is not the zero
+// array -- so a caller that ignored verifySums's error still cannot read
+// anything out of the handle it got.
+func (v verifiedSums) intact() bool { return sha256.Sum256(v.b) == v.digest }
+
+// looksLikeSums is release.SumsLookLikeSums over the verified bytes.
+func (v verifiedSums) looksLikeSums() bool { return v.intact() && release.SumsLookLikeSums(v.b) }
+
+// expectedHash is release.ExpectedHash over the verified bytes.
+func (v verifiedSums) expectedHash(asset string) (string, bool) {
+	if !v.intact() {
+		return "", false
+	}
+	return release.ExpectedHash(v.b, asset)
 }
