@@ -179,10 +179,18 @@ type Fleet struct {
 	// AccountsUsable is how many accounts the run had to work with: the ones
 	// that are eligible for the rotation and have at least one readable
 	// window. An account that is out right now is one of them -- being spent
-	// is a fact about this minute, and its quota comes back -- and it is the
-	// same set PointsTotal counts a hundred points for and the same set the
-	// replenishment figures are measured over, so a reader can check one
-	// against the other.
+	// is a fact about this minute, and its quota comes back.
+	//
+	// The cross-check a reader has is Basis.Accounts less Basis.Unreadable and
+	// Basis.Ineligible, and that subtraction is exact. It is NOT PointsTotal
+	// divided by a hundred and NOT the denominator of either Replenish figure,
+	// and those three are three different counts: PointsTotal counts only the
+	// accounts that reported a WEEKLY window, the weekly Replenish is measured
+	// over that same narrower set, and the five-hour Replenish over the
+	// accounts carrying five_hour. An account that reported a five-hour window
+	// and no weekly one is in this count and in neither of those, so inviting
+	// the comparison would hand a reader a subtraction that fails on an
+	// ordinary fleet.
 	AccountsUsable int
 
 	// AccountsNeeded is the smallest fleet size at which BOTH axes survive the
