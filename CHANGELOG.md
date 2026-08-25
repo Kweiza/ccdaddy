@@ -18,6 +18,30 @@ by `uuid` or `alias`.
 
 ### Fixed
 
+- **Hover no longer clamps a derived threshold, and that is what makes it hold
+  the pace line it promises.** The threshold is `elapsed% + 100/usable`; it used
+  to be clamped to 99. The clamp fires when the elapsed share plus the pool share
+  passes the cap — which is to say on whichever account is furthest through its
+  own window, exactly the account whose quota expires soonest. Above it the
+  elapsed term was gone and slack collapsed to `99 − utilization`, so the pool
+  was ordered on raw utilization for precisely the accounts that mattered most.
+  Measured on three accounts resetting one, three and five days out, driven
+  through the engine on thirty-minute ticks for five days: the clamp was live on
+  240 of 240 ticks, and the fleet's final-day drift from its own pace lines
+  halved when it came out — mean spread `20.14 → 9.89` — on **fewer** switches
+  (12 → 9). `TestHoverHoldsEveryAccountNearItsOwnPaceLine` is that measurement.
+  A pace target above 100 is meaningful: it means no restraint, because there is
+  nobody to hand the work to. `ccdad hover status` still stops its THRESHOLD
+  column at `100%` and prints a footer naming the rows where that is the ceiling
+  rather than the derived figure; `--json` carries the true number, because
+  `slack` is measured against it.
+- **An account with nothing left counts as spent even when its pace target is
+  above 100.** `Spent` now reads `slack < 0 || MinPct <= 0`. This used to fall
+  out of the clamp — `100 > 99` guaranteed a used-up window reported negative
+  slack — and with the clamp gone it has to be said. Without it, one empty
+  account would report positive slack, land in the roomy tier ahead of every
+  account that actually has quota, and, because `allOver` is built from this
+  predicate, take recovery mode away from the whole pool.
 - **`usage.PaceOf` no longer reports an exhaustion in the past for a very
   distant projection.** The seconds were converted to a `time.Duration` before
   being multiplied by `time.Second`, so the product overflowed `int64` past
@@ -25,6 +49,20 @@ by `uuid` or `alias`.
   exhaustion in **1857** and `willLastToReset = false`, the exact opposite of the
   truth, and that answer reaches a switch decision through the pre-emptive rule.
   It saturates now.
+
+### Changed
+
+- **Hover's hysteresis margin is `3` points of slack, down from `5`.** Five sat
+  above the spread a real pool shows. Two accounts whose binding windows are the
+  same length have thresholds that rise at the same rate, so the gap between
+  their slacks is frozen against the clock — the only thing that closes it is
+  the live account spending another point, which is a point spent on whichever
+  of the two has less left. A fleet of six measured on 2026-08-25 sat four
+  points apart under the five-point margin, holding the engine on an account
+  with ten points of raw room while the candidate held thirty. Nothing else
+  moves: `HoverCooldown` is still what bounds the flap rate, which is the job a
+  margin does badly. Only `hover` is affected; `hysteresis_pct` outside it keeps
+  its `10` default and whatever you set.
 
 ## [0.6.0] — 2026-08-25
 

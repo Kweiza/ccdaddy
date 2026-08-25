@@ -206,8 +206,13 @@ func TestHoverStatusShowsTheThresholdTheUtilizationAndTheSlack(t *testing.T) {
 		"THRESHOLD", "SLACK",
 		// Two usable accounts, so a weekly window 43% elapsed is held to 93.
 		"seven_day", "93%",
-		// The five-hour window resets within the hour, so it caps out.
-		"five_hour", "99%",
+		// The five-hour window resets within the hour, so its pace target is
+		// 80 + 50 = 130: no restraint at all. The COLUMN stops at 100, and the
+		// footer is what says the printed figure is the ceiling rather than the
+		// number the ranking used -- which is why SLACK on that row does not
+		// subtract from it.
+		"five_hour", "100%",
+		"2 row(s) show 100%",
 		"2 usable accounts",
 	} {
 		if !strings.Contains(stdout, want) {
@@ -490,10 +495,12 @@ func TestHoverStatusAnswersInJSON(t *testing.T) {
 			continue
 		}
 		week = true
-		// One usable account, so the share is the whole 100 points and the cap
-		// is what decides.
-		if w.Threshold != 99 || w.Utilization != 55 || w.Slack != 44 {
-			t.Errorf("seven_day = %+v, want threshold 99 against 55%% used", w)
+		// One usable account, so the share is the whole 100 points: 43 + 100.
+		// --json carries the figure the ranking used and is deliberately NOT
+		// held to the human table's ceiling -- a machine consumer checks slack
+		// against this, and 100 would not subtract to 88.
+		if w.Threshold != 143 || w.Utilization != 55 || w.Slack != 88 {
+			t.Errorf("seven_day = %+v, want threshold 143 against 55%% used", w)
 		}
 		if w.ExpectedPct != 43 {
 			t.Errorf("expectedPct = %v, want 43", w.ExpectedPct)

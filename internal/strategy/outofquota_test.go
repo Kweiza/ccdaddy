@@ -126,6 +126,37 @@ func TestSpentAndOutOfQuotaAreDifferentQuestions(t *testing.T) {
 	}
 }
 
+// "Empty implies spent" used to be arithmetic on a clamp -- 100 > HoverCap
+// guaranteed a used-up window reported negative slack -- and the clamp is gone.
+// So the pace target of an account far enough through its own window now runs
+// PAST 100, and a window with nothing in it reports POSITIVE slack.
+//
+// Spent has to say so anyway. It gates allOver, which is the only thing that
+// reaches ModeRecovery, so one account like this reading as roomy would take
+// recovery mode away from the whole pool -- and headroomTier would file it in
+// tier 0, ahead of every account that actually has quota.
+func TestAnEmptyAccountIsSpentEvenWhenItsPaceTargetIsAbove100(t *testing.T) {
+	// One usable account, so the share is the whole 100 points: a weekly window
+	// 92% elapsed is measured against 192, and at 100% used that is +92 of slack.
+	pool := []Candidate{hoverAt("solo", 0.92, 100)}
+	o := hoverOpts().withHover(pool)
+
+	h := measure(pool[0], o).Headroom
+	if h.Slack <= 0 {
+		t.Fatalf("Slack = %v; this test is pointless unless the pace target is above 100", h.Slack)
+	}
+	if spent, known := Spent(h); !known || !spent {
+		t.Errorf("Spent = %v (known %v) on an account at 100%% used with slack %+.0f",
+			spent, known, h.Slack)
+	}
+	if empty, known := OutOfQuota(h); !known || !empty {
+		t.Errorf("OutOfQuota = %v (known %v); MinPct = %v", empty, known, h.MinPct)
+	}
+	if got := headroomTier(measure(pool[0], o)); got != 3 {
+		t.Errorf("headroomTier = %d, want 3: an account with nothing in it is not roomy", got)
+	}
+}
+
 // A single threshold cannot produce the inversion at all: slack is raw room
 // shifted by a constant, so the two axes order identically. This is what bounds
 // the whole defect to per-window thresholds, which is to say to hover.
