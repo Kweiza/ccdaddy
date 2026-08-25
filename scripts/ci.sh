@@ -333,10 +333,14 @@ EOF
 	docpaths=
 	if pointers=$(git grep -nE "$cites_docpath" -- "${cites_paths[@]}"); then
 		while IFS= read -r line; do
-			# The trailing punctuation strip is load-bearing and has a line in
-			# this tree behind it: `See SECURITY.md.` ends a sentence, and
-			# taking the last token whole yields `SECURITY.md.`, which resolves
-			# to nothing and would fail a correct file.
+			# The trailing punctuation strip, and the half it is for: the
+			# `docs/` branch has `.` inside its character class, so
+			# `see docs/plans/a-thing.md.` ending a sentence yields the target
+			# with the full stop attached, which resolves to nothing and fails a
+			# correct line. The `.md` branch cannot do that -- it has to END at
+			# `.md`, so the stop is never inside the match. A test written
+			# around the second shape was blind, and deleting this line left the
+			# suite green; the test that holds it now uses the first.
 			targets=$(printf '%s\n' "$line" | grep -oE "$cites_docpath" |
 				sed -E 's/.*[[:space:]]//; s/[].,;:)"'"'"']+$//')
 			for target in $targets; do

@@ -280,7 +280,8 @@ func TestCICitesReportsAPlanCitedByPath(t *testing.T) {
 func TestCICitesAllowsAPathThisRepositoryHas(t *testing.T) {
 	root := throwawayRepo(t, map[string]string{
 		"docs/plans/2026-08-25-self-upgrade.md": "# a plan that is really here\n",
-		"internal/x/x.go":                       "package x\n\n// The ordering is argued in docs/plans/2026-08-25-self-upgrade.md.\nfunc X() {}\n",
+		"internal/x/x.go": "package x\n\n// The ordering is not re-argued here: " +
+			"see docs/plans/2026-08-25-self-upgrade.md for it.\nfunc X() {}\n",
 	})
 
 	out, code := runCI(t, root, "cites")
@@ -289,12 +290,33 @@ func TestCICitesAllowsAPathThisRepositoryHas(t *testing.T) {
 	}
 }
 
-// A pointer at the end of a sentence, which is how the one such line in this
-// repository is written: `.github/ISSUE_TEMPLATE/config.yml` says "See
-// SECURITY.md." with a full stop. Naively taking the last whitespace-delimited
-// token yields `SECURITY.md.`, which resolves to nothing and fails a correct
-// line -- and a check that fails on correct code is a check somebody switches
-// off.
+// A `docs/` pointer that ends a sentence, and this is the ONE shape the
+// trailing-punctuation strip exists for. Measured: `docs/[A-Za-z0-9._/-]+` has
+// `.` inside the class, so `see docs/plans/a-thing.md.` yields the target
+// `docs/plans/a-thing.md.` with the full stop attached, which resolves to
+// nothing and fails a correct line.
+//
+// A first version of this test used `See SECURITY.md.` -- the one such line in
+// this repository -- and it was BLIND: the `.md` half of the pattern has to end
+// at `.md`, so the full stop is never inside the match and the strip is a no-op
+// for it. Deleting the strip left the whole suite green. The next test keeps
+// that line pinned for what it does prove.
+func TestCICitesAllowsADocumentPointerThatEndsASentence(t *testing.T) {
+	root := throwawayRepo(t, map[string]string{
+		"docs/plans/2026-08-25-a-thing.md": "# a plan that is really here\n",
+		"internal/x/x.go": "package x\n\n// The order is set out in " +
+			"see docs/plans/2026-08-25-a-thing.md.\nfunc X() {}\n",
+	})
+
+	out, code := runCI(t, root, "cites")
+	if code != 0 {
+		t.Fatalf("exit %d, want 0 — the trailing full stop is punctuation, not part of the path\n%s", code, out)
+	}
+}
+
+// The shape the repository actually carries, in `.github/ISSUE_TEMPLATE`. It
+// proves the narrower thing: the extension half of the pattern cannot swallow a
+// sentence's full stop, so a bare document name ending a sentence resolves.
 func TestCICitesAllowsAMarkdownPointerThatEndsASentence(t *testing.T) {
 	root := throwawayRepo(t, map[string]string{
 		"SECURITY.md":     "# how to report a vulnerability\n",
@@ -303,7 +325,7 @@ func TestCICitesAllowsAMarkdownPointerThatEndsASentence(t *testing.T) {
 
 	out, code := runCI(t, root, "cites")
 	if code != 0 {
-		t.Fatalf("exit %d, want 0 — the trailing full stop is punctuation, not part of the name\n%s", code, out)
+		t.Fatalf("exit %d, want 0 — the full stop is outside the match, not part of the name\n%s", code, out)
 	}
 }
 
