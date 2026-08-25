@@ -93,6 +93,11 @@ func storeMarkers() []string {
 		// "not a ccdad store", leaving a directory nothing else cleans up.
 		SessionsDirName,
 		ProfilesDirName,
+		// And this one, for the same reason and a narrower case: a machine
+		// where the only thing ccdad ever did was register the MCP server has
+		// a store holding nothing but the record. Without it here, that
+		// directory is refused as "not a ccdad store" and left behind.
+		mcpRecordFileName,
 	}
 }
 
@@ -101,14 +106,52 @@ var (
 	// the test binary.
 	executablePath = os.Executable
 
-	// unwireMCP removes ccdad's registration from Claude Code, and finds
-	// nothing today: `ccdad mcp install` is deferred out of this queue, so
-	// there is no registration to remove and no file whose shape could be
-	// guessed at without inventing the contract that task has to follow. It is
-	// a hook rather than a stub — when the registration lands, its removal goes
-	// HERE, and the caller below already treats a failure as a warning rather
-	// than as a reason to leave a half-uninstalled machine behind.
-	unwireMCP = func() (removed bool, err error) { return false, nil }
+	// unwireMCP removes ccdad's registration from Claude Code.
+	//
+	// With an install record it removes the entry from exactly the file the
+	// installer wrote, which is the whole reason the record exists: the three
+	// scopes point at different files — and the project scope's is keyed to
+	// the directory the install was run in, which is not the directory the
+	// uninstall is run in. A guess that looks in the wrong one reports a clean
+	// machine while the real entry survives and prints a connect failure in
+	// every future session.
+	//
+	// Without a record — an older install, or an entry somebody added by hand
+	// with `claude mcp add` — it scans all three locations and removes what it
+	// finds. That path is the machine this will actually meet, and it is also
+	// the one that cannot be exact: the project leg reads the current
+	// directory, because there is nothing left that remembers another one.
+	//
+	// It is a hook (a var) rather than a plain function because the caller's
+	// contract is warn-rather-than-fail and a test has to be able to make it
+	// fail on demand. The signature is that test's fixture: do not change it.
+	unwireMCP = func() (removed bool, err error) {
+		rec, ok, rerr := loadMCPRecord()
+		if rerr == nil && ok {
+			scope, perr := parseMCPScope(rec.Scope)
+			if perr == nil {
+				return removeMCPEntry(scope, rec.Path)
+			}
+			// A record naming a scope this build does not know is not a
+			// reason to stop — it is a reason to fall through to the scan and
+			// say so, which the caller prints as a warning.
+			rerr = perr
+		}
+		for _, scope := range []mcpScope{scopeUser, scopeLocal, scopeProject} {
+			path, terr := mcpTargetPath(scope)
+			if terr != nil {
+				rerr = errors.Join(rerr, terr)
+				continue
+			}
+			gone, xerr := removeMCPEntry(scope, path)
+			if xerr != nil {
+				rerr = errors.Join(rerr, xerr)
+				continue
+			}
+			removed = removed || gone
+		}
+		return removed, rerr
+	}
 )
 
 func newUninstallCmd() *cobra.Command {
@@ -214,6 +257,25 @@ func runUninstall(cmd *cobra.Command, assumeYes bool) error {
 		return fmt.Errorf("refusing to uninstall while a daemon may still be running: %w", err)
 	}
 
+	// BEFORE the store is deleted, and that order is load-bearing rather than
+	// tidy: the install record lives under root, and unwireMCP reads it to
+	// learn which file the entry went into. Run after os.RemoveAll the record
+	// is always already gone, so the function always takes its scanning
+	// fallback — which, for a project-scope install, looks in whatever
+	// directory the user happens to be standing in and reports a clean machine
+	// while the entry survives.
+	//
+	// Nothing else here depends on the order: unwireMCP touches Claude Code's
+	// own config files and never root or anything under it.
+	//
+	// A failure must not strand a user whose store is about to be gone, so it
+	// is a warning rather than a return.
+	if removed, err := unwireMCP(); err != nil {
+		fmt.Fprintf(out, "The Claude Code registration could not be removed: %v\n", err)
+	} else if removed {
+		fmt.Fprintln(out, "Removed ccdad's Claude Code registration.")
+	}
+
 	if storeState.present {
 		if err := os.RemoveAll(root); err != nil {
 			return fmt.Errorf("removing %s: %w", root, err)
@@ -225,14 +287,6 @@ func runUninstall(cmd *cobra.Command, assumeYes bool) error {
 	// claim and the acquire below is uncontended in the ordinary case.
 	if claimPresent {
 		tidyCredentialHome(out, claimDir)
-	}
-
-	// A failure here must not strand a user whose store is already gone, so it
-	// is a warning rather than a return.
-	if removed, err := unwireMCP(); err != nil {
-		fmt.Fprintf(out, "The Claude Code registration could not be removed: %v\n", err)
-	} else if removed {
-		fmt.Fprintln(out, "Removed ccdad's Claude Code registration.")
 	}
 
 	switch {

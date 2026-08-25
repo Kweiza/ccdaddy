@@ -471,3 +471,176 @@ func TestUninstallRecognisesAStoreThatOnlyHoldsSessions(t *testing.T) {
 		t.Errorf("the store survived (err = %v)", err)
 	}
 }
+
+// The installer that wrote the entry recorded where it put it, so the uninstall
+// does not have to guess -- and guessing is the failure that matters here,
+// because a guess that looks in the wrong file reports a clean machine while
+// the real entry survives and prints a connect failure in every session.
+//
+// This drives `ccdad uninstall` end to end rather than calling unwireMCP()
+// directly, and that distinction is the point: a unit test of the hook is
+// structurally blind to a bug in its CALLER, and the caller had one.
+func TestUninstallRemovesTheRegistrationFromTheScopeItWasInstalledIn(t *testing.T) {
+	isolate(t)
+	stubDaemonWorld(t, &fakeDaemon{})
+	fakeBinary(t)
+	stubCcdadOnPath(t, true)
+	seedAccount(t, "uuid-aaaa-0001", "work@example.com")
+	if code, _, stderr, top := runRoot(t, "mcp", "install"); code != ExitOK {
+		t.Fatalf("install = %d (%s%s)", code, stderr, top)
+	}
+
+	code, _, stderr, top := runRoot(t, "uninstall", "--yes")
+	if code != ExitOK {
+		t.Fatalf("uninstall = %d (%s%s)", code, stderr, top)
+	}
+	if !strings.Contains(stderr, "Removed ccdad's Claude Code registration") {
+		t.Errorf("uninstall did not report removing the registration:\n%s", stderr)
+	}
+	if countCcdadServers(t) != 0 {
+		t.Error("the entry survived a real `ccdad uninstall`")
+	}
+}
+
+// The scope that exposes the ordering bug, and it only exposes it from a
+// DIFFERENT directory than the install was run in.
+//
+// A project-scope entry lives in <cwd>/.mcp.json, and the record is what
+// remembers which directory that was. If the store were deleted before the
+// record is read, unwireMCP would fall back to scanning -- and the project leg
+// of that scan reads the directory the user happens to be standing in, which is
+// not the one the entry is in. It would find nothing, report a clean machine,
+// and leave the entry behind. Running the uninstall from the same directory
+// cannot tell the two implementations apart, because the fallback would find it
+// there by luck.
+func TestUninstallRemovesAProjectScopeRegistrationFromAnotherDirectory(t *testing.T) {
+	isolate(t)
+	stubDaemonWorld(t, &fakeDaemon{})
+	fakeBinary(t)
+	stubCcdadOnPath(t, true)
+	seedAccount(t, "uuid-aaaa-0001", "work@example.com")
+
+	project := t.TempDir()
+	t.Chdir(project)
+	if code, _, stderr, top := runRoot(t, "mcp", "install", "--scope", "project"); code != ExitOK {
+		t.Fatalf("install --scope project = %d (%s%s)", code, stderr, top)
+	}
+	// Somewhere else entirely, which is where a user uninstalling from their
+	// home directory actually is.
+	t.Chdir(t.TempDir())
+
+	code, _, stderr, top := runRoot(t, "uninstall", "--yes")
+	if code != ExitOK {
+		t.Fatalf("uninstall = %d (%s%s)", code, stderr, top)
+	}
+	if data, err := os.ReadFile(filepath.Join(project, ".mcp.json")); err == nil {
+		t.Errorf("the project-scope entry survived an uninstall run from another directory: %s", data)
+	}
+	if !strings.Contains(stderr, "Removed ccdad's Claude Code registration") {
+		t.Errorf("uninstall did not report removing the registration:\n%s", stderr)
+	}
+}
+
+// No record is the machine this will actually meet: somebody registered the
+// server with a ccdad old enough not to have recorded it, or their store was
+// cleared under them. Scan all three, remove what is there, and never fail --
+// the caller is midway through deleting the store and a hard error here strands
+// the user.
+//
+// All three scopes, one subtest each, and that is not thoroughness for its own
+// sake: the three legs read two different files and one of them is keyed to the
+// current directory, so a scan that quietly dropped a leg would pass a test
+// that only ever seeded the user scope. Measured -- with the project leg
+// removed, a single-scope version of this test stayed green.
+func TestWithNoRecordItScansEveryScopeAndStillNeverFails(t *testing.T) {
+	for _, scope := range []string{"user", "local", "project"} {
+		t.Run(scope, func(t *testing.T) {
+			isolate(t)
+			stubCcdadOnPath(t, true)
+			t.Chdir(t.TempDir())
+			if code, _, stderr, top := runRoot(t, "mcp", "install", "--scope", scope); code != ExitOK {
+				t.Fatalf("install --scope %s = %d (%s%s)", scope, code, stderr, top)
+			}
+			// The record, gone. Everything else is exactly as the installer
+			// left it, which is the state an upgrade from an older ccdad is in.
+			if err := deleteMCPRecord(); err != nil {
+				t.Fatal(err)
+			}
+
+			removed, err := unwireMCP()
+			if err != nil {
+				t.Fatalf("unwireMCP() with no record returned an error: %v", err)
+			}
+			if !removed {
+				t.Errorf("the scan did not reach a --scope %s entry", scope)
+			}
+		})
+	}
+}
+
+// An entry somebody typed themselves, and the half of the scan that has to be
+// careful: it is removing one key out of a file that belongs to the user.
+func TestTheScanRemovesAHandWrittenEntryAndNobodyElsesKeys(t *testing.T) {
+	isolate(t)
+	writeGlobalConfigFixture(t,
+		`{"numStartups":7,"mcpServers":{"other":{"type":"stdio","command":"x"},`+
+			`"ccdad":{"type":"stdio","command":"ccdad","args":["mcp"],"env":{}}}}`)
+
+	removed, err := unwireMCP()
+	if err != nil {
+		t.Fatalf("unwireMCP() over a hand-written entry returned an error: %v", err)
+	}
+	if !removed {
+		t.Error("a hand-written entry was not found by the scan")
+	}
+	if countCcdadServers(t) != 0 {
+		t.Error("the hand-written entry survived the scan")
+	}
+	raw := compactJSON(t, readGlobalConfigFixture(t))
+	for _, want := range []string{`"numStartups":7`, `"other"`} {
+		if !strings.Contains(raw, want) {
+			t.Errorf("the scan took %s with it:\n%s", want, raw)
+		}
+	}
+}
+
+// Nothing anywhere is not an error either, and it is not a change.
+func TestOnAMachineWithNoRegistrationTheUnwireIsSilentAndClean(t *testing.T) {
+	isolate(t)
+	removed, err := unwireMCP()
+	if err != nil || removed {
+		t.Fatalf("unwireMCP() = %v, %v; want false, nil on a machine with no entry", removed, err)
+	}
+}
+
+// A store holding only the install record is still a ccdad store. Without this,
+// a machine whose accounts were all removed -- or one where the only thing
+// ccdad ever did was register the server -- is refused as "not a ccdad store"
+// and the directory is left behind for nobody to clean up. It is the same
+// reason the session and profile directories are already on that list.
+func TestAStoreHoldingOnlyTheInstallRecordIsStillRecognised(t *testing.T) {
+	isolate(t)
+	stubDaemonWorld(t, &fakeDaemon{})
+	fakeBinary(t)
+	stubCcdadOnPath(t, true)
+	if code, _, stderr, top := runRoot(t, "mcp", "install"); code != ExitOK {
+		t.Fatalf("install = %d (%s%s)", code, stderr, top)
+	}
+	root := mustPath(ccpath.StoreHome())
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != mcpRecordFileName {
+		t.Fatalf("the store holds %v; this test is only meaningful when the record is the only thing in it", entries)
+	}
+
+	code, _, stderr, top := runRoot(t, "uninstall", "--yes")
+	if code != ExitOK {
+		t.Fatalf("uninstall = %d (%s%s), want 0: a store holding only the record is still a ccdad store",
+			code, stderr, top)
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Errorf("%s survived the uninstall", root)
+	}
+}
