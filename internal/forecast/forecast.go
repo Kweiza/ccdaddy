@@ -55,6 +55,12 @@ type Basis struct {
 	// reader can add them against Accounts.
 	Unreadable int
 
+	// Ineligible is accounts the rotation cannot hand work to -- see
+	// Input.Eligible. They are excluded before anything is measured, so they
+	// appear here and in no other figure on this page, and Accounts less this
+	// and the two headings above it is what was actually measured.
+	Ineligible int
+
 	// Known is false when nothing was measured at all. It is not a rate of
 	// zero: a fleet nobody has enough readings for is not a fleet burning
 	// nothing.
@@ -95,11 +101,22 @@ type AccountRow struct {
 
 	// Window is the window Left and Burn describe -- the account's least-room
 	// weekly one, which is the window the fleet's points are counted on.
-	Window usage.WindowName
+	//
+	// HasWindow is whether the account reported a weekly window at all. When
+	// it is false, Window, Left and Burn carry NO QUANTITY -- not an unknown
+	// one -- and the account is out of PointsLeft and PointsTotal. It still
+	// gets a row, because it is still in the fleet and the run still has
+	// something to say about when it goes out; what it has no weekly figure
+	// for is this column. Naming its five-hour window here instead would put a
+	// five-hour room and a five-hour rate in a column that is summed into the
+	// weekly axis above it, and those are the two quantities this package adds
+	// nowhere else.
+	Window    usage.WindowName
+	HasWindow bool
 
 	// Left is 100 minus that window's utilization, read from the CURRENT
-	// snapshot. The rows sum to Fleet.PointsLeft, which is what lets a reader
-	// check one figure against the other.
+	// snapshot. The rows with a window sum to Fleet.PointsLeft, which is what
+	// lets a reader check one figure against the other.
 	Left float64
 
 	// Burn is this account's own consumption over the SHARED span the axis
@@ -153,12 +170,16 @@ type Fleet struct {
 	// An account that is already out still counts toward PointsTotal, and
 	// contributes its zero to PointsLeft. It is a readable seat of the fleet's
 	// capacity that happens to be empty right now, and dropping it would move
-	// the denominator every time an account rolled over.
+	// the denominator every time an account rolled over. An account that
+	// reported no weekly window counts toward NEITHER, and that is a different
+	// case: there is no weekly quota of it to count.
 	PointsLeft  float64
 	PointsTotal float64
 
 	// Rows is one line per readable account, ordered by EmptyAt ascending and
 	// then by the account's index, so the account that goes first reads first.
+	// PointsTotal is 100 times the rows with a weekly window, which is not
+	// always every row -- see AccountRow.HasWindow.
 	Rows []AccountRow
 
 	// Credit is the paid-usage answer, which is one date or nothing.
@@ -197,6 +218,23 @@ type Input struct {
 	// Series is this account's samples, oldest first, already filtered by the
 	// read side.
 	Series []history.Sample
+
+	// Eligible is whether the ROTATION can hand this account work. It is the
+	// caller's copy of the engine's own eligibility rule, which is stated once
+	// in eligible() in internal/strategy/rank.go; this package must not import
+	// a ranking, so the answer arrives as a field.
+	//
+	// An ineligible account's quota is quota the fleet cannot reach: a run
+	// that made it live would spend capacity no switch can get to, and would
+	// report a runway several times longer than the fleet has. That is the
+	// same fail-open simAccount.readable refuses -- an account nobody can see
+	// and an account nothing can switch to are unreachable for different
+	// reasons and by the same amount.
+	//
+	// The zero value EXCLUDES, which is deliberate: a caller that forgets this
+	// field reports an empty fleet, loudly, rather than an over-long runway
+	// that reads like an answer.
+	Eligible bool
 }
 
 // account is one Input with everything derived from it that more than one part
@@ -229,8 +267,19 @@ func Of(in []Input, now time.Time) Fleet {
 	from := now.Add(-history.MeasuredSpan)
 
 	accounts := make([]account, 0, len(in))
-	var unreadable int
+	reachable := make([]Input, 0, len(in))
+	var unreadable, ineligible int
 	for _, a := range in {
+		// Eligibility is asked FIRST, and an ineligible account is counted as
+		// ineligible rather than as unreadable even when it is both. It is not
+		// part of the fleet being measured at all: its readings are not
+		// evidence about a rotation that cannot reach it, and its quota is not
+		// capacity that rotation has.
+		if !a.Eligible {
+			ineligible++
+			continue
+		}
+		reachable = append(reachable, a)
 		acc := accountOf(a)
 		if len(acc.order) == 0 {
 			unreadable++
@@ -245,10 +294,11 @@ func Of(in []Input, now time.Time) Fleet {
 		Basis: Basis{
 			Window:     history.MeasuredSpan,
 			Observed:   basisSpan,
-			Readings:   readingsIn(in, from, now),
+			Readings:   readingsIn(reachable, from, now),
 			Accounts:   len(in),
 			Unmeasured: len(accounts) - measured,
 			Unreadable: unreadable,
+			Ineligible: ineligible,
 			Known:      measured > 0,
 		},
 		TierNotice: tierNotice(accounts),
@@ -265,8 +315,8 @@ func Of(in []Input, now time.Time) Fleet {
 	for _, a := range accounts {
 		sim = append(sim, simAccount{uuid: a.in.UUID, idx: a.in.Idx, windows: a.sim})
 	}
-	f.FiveHour.Replenish = replenish(len(accounts), usage.WindowFiveHour)
-	f.Weekly.Replenish = replenish(len(accounts), usage.WindowSevenDay)
+	f.FiveHour.Replenish = replenish(carrying(accounts, isFiveHour), usage.WindowFiveHour)
+	f.Weekly.Replenish = replenish(carrying(accounts, usage.IsWeekly), usage.WindowSevenDay)
 
 	// Scope decides what burns and what ends a run; usability stays fleet-wide
 	// inside the run, because an account whose weekly window is spent cannot be
@@ -282,9 +332,16 @@ func Of(in []Input, now time.Time) Fleet {
 		both = append(both, n)
 	}
 
+	// Each axis is gated on evidence about ITS OWN windows, and deliberately
+	// not on the Burn figure printed beside it. Those two are the same fact on
+	// an ordinary fleet and they are not the same statement: Burn is measured
+	// over one chosen window per account, so tying the verdict to it would let
+	// a change in how that window is chosen decide whether an axis may speak.
+	// That is exactly how a weekly row once came to say "holds" for a fleet
+	// whose weekly windows had never been read.
 	lowRates, highRates := rates.low(), rates.high()
-	f.FiveHour = decide(f.FiveHour, sim, lowRates, highRates, five, now, f.FiveHour.Burn.Known)
-	f.Weekly = decide(f.Weekly, sim, lowRates, highRates, weekly, now, f.Weekly.Burn.Known)
+	f.FiveHour = decide(f.FiveHour, sim, lowRates, highRates, five, now, anyKnown(rates, five))
+	f.Weekly = decide(f.Weekly, sim, lowRates, highRates, weekly, now, anyKnown(rates, weekly))
 	f.Both = decide(f.Both, sim, lowRates, highRates, both, now, f.Basis.Known)
 
 	// The rows come out of the fleet run at the low end of the band. That run
@@ -293,9 +350,17 @@ func Of(in []Input, now time.Time) Fleet {
 	_, _, emptyAt := simulateScoped(sim, lowRates, both, now)
 	f.Rows = rowsOf(accounts, emptyAt, bindSpan, from, now)
 	for _, r := range f.Rows {
+		// Rows without a weekly window are counted in NEITHER figure, which is
+		// why the total is accumulated here rather than taken from len(Rows):
+		// an account with no weekly quota to report has none to be part of the
+		// denominator either, and counting it would put 100 points into the
+		// fleet's capacity that no weekly window backs.
+		if !r.HasWindow {
+			continue
+		}
 		f.PointsLeft += r.Left
+		f.PointsTotal += 100
 	}
-	f.PointsTotal = 100 * float64(len(f.Rows))
 
 	f.Credit = creditFleet(creditInputs(accounts, from, now), now)
 	return f
@@ -356,22 +421,25 @@ func accountOf(in Input) account {
 // would report a change in the fleet that never happened. MinPct's own doc in
 // internal/strategy/headroom.go works the ordinary pair through.
 //
-// The fallback to a non-weekly window is for the account whose weekly windows
-// dropped out of one response while its five-hour one came back. Reporting no
-// row for it would leave a readable account out of the points total while its
-// neighbours' rows still claimed to sum to it; naming the window it does have
-// keeps the three figures on one set of accounts and invents no level.
+// An account whose response carried no weekly window at all has NO binding
+// window, and the second return says so. It is the account whose weekly windows
+// dropped out of one response while its five-hour one came back, and falling
+// back to that five-hour window is what this function used to do: it put a
+// five-hour room into the fleet's weekly points and a five-hour rate into the
+// weekly burn column. The two are not interchangeable at any scale -- the
+// windows run over 168 hours and five, a factor of 33.6 -- so one window's
+// percentage point is not the other's. The account keeps its row: rowsOf marks
+// the three cells as quantities that do not exist here, so nothing disappears
+// from the table except a figure that was measured on the wrong window.
 func bindingWindow(a account) (usage.WindowName, bool) {
 	best, found := usage.WindowName(""), false
 	var bestRoom float64
 	for _, w := range a.order {
+		if !usage.IsWeekly(w.Name) {
+			continue
+		}
 		room := 100 - a.sim[w.Name].pct
-		weekly := usage.IsWeekly(w.Name)
-		switch {
-		case !found:
-		case weekly && !usage.IsWeekly(best):
-		case weekly == usage.IsWeekly(best) && room < bestRoom:
-		default:
+		if found && room >= bestRoom {
 			continue
 		}
 		best, bestRoom, found = w.Name, room, true
@@ -388,6 +456,22 @@ type fleetRates struct {
 }
 
 func (r fleetRates) band(n usage.WindowName) Band { return r.bands[n] }
+
+// anyKnown is whether a run over this scope has any measured rate to run at.
+//
+// It is what tells "the axis holds" apart from "nothing about this axis was
+// ever read". A window with no rate contributes no event, so a run whose whole
+// scope is unmeasured reaches the horizon without spending a thing and reports
+// that the axis holds -- a promise resting on no reading. An empty scope is the
+// same statement in the extreme: no window of that axis was reported by anyone.
+func anyKnown(r fleetRates, scope []usage.WindowName) bool {
+	for _, n := range scope {
+		if r.band(n).Known {
+			return true
+		}
+	}
+	return false
+}
 
 // low and high are the two rate maps the band's ends are run at. A name with no
 // measured rate is ABSENT from both rather than present as a zero: the run
@@ -479,12 +563,17 @@ func bindBasis(accounts []account, from, now time.Time) (filled float64, span ti
 	return filled, acc.span(), contributors
 }
 
-// replenish is what an axis gives back: one window's worth per readable account
-// per window length.
+// replenish is what an axis gives back: one window's worth per account that
+// carries a window of that axis, per window length.
 //
 // It counts accounts the run will find unusable, and that divergence is the
 // point of keeping this figure out of the verdict: an account out on the other
 // axis contributes here and supplies nothing to the rotation.
+//
+// It does NOT count an account that reported no window of this axis at all,
+// which is a different case from an account that is out: a window nobody
+// reported cannot roll over, and crediting the axis with a hundred points a
+// week for it would explain a verdict with capacity that does not exist.
 func replenish(accounts int, of usage.WindowName) float64 {
 	length, known := usage.WindowLength(of)
 	if !known || length <= 0 {
@@ -492,6 +581,26 @@ func replenish(accounts int, of usage.WindowName) float64 {
 	}
 	return float64(accounts) * 100 / length.Hours()
 }
+
+// carrying is how many accounts reported at least one window the axis is made
+// of, which is the count that axis's replenishment is measured over.
+func carrying(accounts []account, inAxis func(usage.WindowName) bool) int {
+	n := 0
+	for _, a := range accounts {
+		for _, w := range a.order {
+			if inAxis(w.Name) {
+				n++
+				break
+			}
+		}
+	}
+	return n
+}
+
+// isFiveHour is the five-hour axis's membership test, written as a function so
+// it reads beside usage.IsWeekly at the one place both are used. The axis is
+// one window name; there is no set of them.
+func isFiveHour(n usage.WindowName) bool { return n == usage.WindowFiveHour }
 
 // decide runs one axis at both ends of the measured band and reads the verdict
 // off the pair.
@@ -542,14 +651,21 @@ func rowsOf(accounts []account, emptyAt map[string]time.Time, span time.Duration
 	}
 	ordered := make([]ranked, 0, len(accounts))
 	for _, a := range accounts {
-		if !a.hasBind {
-			continue
-		}
-		row := AccountRow{UUID: a.in.UUID, Window: a.bind, Left: 100 - a.sim[a.bind].pct}
+		// Every readable account gets a row, including one with no weekly
+		// window: it is in the fleet, the run burns it and can find it out,
+		// and the EMPTY column has something true to say about it. Only the
+		// three weekly cells are missing, and they are marked missing rather
+		// than filled from another axis.
+		row := AccountRow{UUID: a.in.UUID, HasWindow: a.hasBind}
 		row.OutNow = minRoomOf(a) <= 0
 		if at, ok := emptyAt[a.in.UUID]; ok {
 			row.EmptyAt, row.HasEmpty = at, true
 		}
+		if !a.hasBind {
+			ordered = append(ordered, ranked{row: row, idx: a.in.Idx})
+			continue
+		}
+		row.Window, row.Left = a.bind, 100-a.sim[a.bind].pct
 		if f, _, _, ok := windowRate(a.in.Series, a.bind, from, now); ok {
 			// Divided by the SHARED span rather than by this account's own
 			// cover, so the column sums to the axis figure above it. An account
@@ -683,6 +799,10 @@ func tierNotice(accounts []account) string {
 // whole fleet, including accounts that cleared no gate. It is the size of the
 // evidence a reader is being asked to weigh, not the size of the part that was
 // usable, and an account whose samples were all refused still took them.
+//
+// The fleet here is the ELIGIBLE accounts, which is the set every other figure
+// on the page was measured over. Readings taken from an account the rotation
+// cannot reach were never going to be weighed against anything.
 func readingsIn(in []Input, from, to time.Time) int {
 	n := 0
 	for _, a := range in {
