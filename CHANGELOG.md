@@ -16,6 +16,14 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-08-25
+
+Three things the design spec named "extras, in order: TUI, MCP, GUI widget" —
+the first two ship, none of the priority order changed. A terminal dashboard,
+an MCP server most of whose tools can rewrite the live login or the daemon,
+and the plugin that wires the server into Claude Code without shipping a
+binary through it.
+
 ### Added
 
 - **`ccdad tui`, the interactive dashboard**, and bare `ccdad` now opens it at a
