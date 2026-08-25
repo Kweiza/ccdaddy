@@ -263,6 +263,12 @@ cites_pointer='([Ss]ee|[Pp]er|[Rr]efer to|[Dd]escribed in|[Dd]ocumented in) [a-z
 # .git/info/exclude, and `git log --all --diff-filter=A -- 'docs/*'` is empty,
 # so no commit in this repository has ever carried a file under it.
 #
+# What this arm has caught here so far is NOTHING, and that is worth stating
+# rather than dressing up: across every commit reachable from every ref and
+# every live worktree, the pattern has matched one line, `See SECURITY.md.`,
+# and that one resolves. This is a gate against a shape that got past the
+# other two, not a report of damage already done.
+#
 # MEASURED ON THIS TREE, because a pattern nobody counted is a pattern nobody
 # knows the cost of. A pattern that flagged ANY unresolved path matched six
 # lines and four of them were correct: `os/types_windows.go` is the Go standard
@@ -273,7 +279,11 @@ cites_pointer='([Ss]ee|[Pp]er|[Rr]efer to|[Dd]escribed in|[Dd]ocumented in) [a-z
 # owner -- so the target must look like one: under `docs/`, or ending `.md`.
 # Restricted that way it matches exactly one line here, `See SECURITY.md.` in
 # .github/ISSUE_TEMPLATE/config.yml, and that one resolves.
-cites_docpath='([Ss]ee|[Pp]er|[Rr]efer to|[Dd]escribed in|[Dd]ocumented in) (docs/[A-Za-z0-9._/-]+|[A-Za-z0-9._/-]+\.md)'
+# The `.md` half ends at a character that cannot continue a path, or at the end
+# of the line. Without that boundary `guide.mdx` matches as the prefix
+# `guide.md`, and a correct citation of a tracked file is reported for a name
+# nobody wrote.
+cites_docpath='([Ss]ee|[Pp]er|[Rr]efer to|[Dd]escribed in|[Dd]ocumented in) (docs/[A-Za-z0-9._/-]+|[A-Za-z0-9._/-]+\.md([^A-Za-z0-9]|$))'
 
 # tracked_has answers whether the repository contains this exact path.
 #
@@ -285,8 +295,24 @@ cites_docpath='([Ss]ee|[Pp]er|[Rr]efer to|[Dd]escribed in|[Dd]ocumented in) (doc
 # to write a second one.
 tracked=
 tracked_has() {
-	case $'\n'"$tracked"$'\n' in
-	*$'\n'"$1"$'\n'*) return 0 ;;
+	case $1 in
+	*/*)
+		# A PATH names one file and is matched whole. `(^|/)name` matching here
+		# would let `docs/x.md` resolve against an unrelated `vendor/docs/x.md`.
+		case $'\n'"$tracked"$'\n' in
+		*$'\n'"$1"$'\n'*) return 0 ;;
+		esac
+		;;
+	*)
+		# A BARE NAME is how a person names a document, and the slug arm above
+		# already resolves one that way. Matching it only at the repository root
+		# failed `see PULL_REQUEST_TEMPLATE.md` -- the file is tracked, in
+		# .github/ -- and CONTRIBUTING.md promises that pointing at a file in
+		# the tree is fine.
+		case $'\n'"$tracked"$'\n' in
+		*$'\n'"$1"$'\n'* | *"/$1"$'\n'*) return 0 ;;
+		esac
+		;;
 	esac
 	return 1
 }
@@ -333,16 +359,26 @@ EOF
 	docpaths=
 	if pointers=$(git grep -nE "$cites_docpath" -- "${cites_paths[@]}"); then
 		while IFS= read -r line; do
-			# The trailing punctuation strip, and the half it is for: the
-			# `docs/` branch has `.` inside its character class, so
+			# The pointing phrase is stripped by NAME rather than by taking
+			# the last whitespace-delimited token: the `.md` half now ends on a
+			# boundary character, and that character can be a space, which
+			# would leave the last token empty.
+			#
+			# Then the trailing strip, and the half it is for: the `docs/`
+			# branch has `.` inside its character class, so
 			# `see docs/plans/a-thing.md.` ending a sentence yields the target
 			# with the full stop attached, which resolves to nothing and fails a
-			# correct line. The `.md` branch cannot do that -- it has to END at
-			# `.md`, so the stop is never inside the match. A test written
-			# around the second shape was blind, and deleting this line left the
-			# suite green; the test that holds it now uses the first.
+			# correct line. A test written around `See SECURITY.md.` was blind
+			# to this -- the `.md` half cannot take a stop inside its match --
+			# and deleting the strip left the suite green.
+			#
+			# `|| true` because not every line git grep printed re-matches: a
+			# NUL byte anywhere in a searched file makes it print
+			# `Binary file X matches` with no `file:line:` prefix, `grep -oE`
+			# then exits 1, and under `set -e` the assignment kills the check
+			# with no diagnostic at all.
 			targets=$(printf '%s\n' "$line" | grep -oE "$cites_docpath" |
-				sed -E 's/.*[[:space:]]//; s/[].,;:)"'"'"']+$//')
+				sed -E 's/^([Ss]ee|[Pp]er|[Rr]efer to|[Dd]escribed in|[Dd]ocumented in)[[:space:]]+//; s/[^A-Za-z0-9_/-]+$//' || true)
 			for target in $targets; do
 				if tracked_has "$target"; then
 					continue
@@ -356,7 +392,11 @@ $pointers
 EOF
 	fi
 
-	hits=$(printf '%s\n%s\n%s' "$spelled" "$unresolved" "$docpaths" | grep -v '^$' || true)
+	# Deduplicated: a hyphenated document name ending in `.md` matches the slug
+	# pattern, which stops before the extension, AND this one -- and the same
+	# file:line printed twice reads as two problems.
+	hits=$(printf '%s\n%s\n%s' "$spelled" "$unresolved" "$docpaths" |
+		grep -v '^$' | awk '!seen[$0]++' || true)
 	endgroup
 	if [ -n "$hits" ]; then
 		echo "ci: these comments point at something no reader outside this machine has:" >&2

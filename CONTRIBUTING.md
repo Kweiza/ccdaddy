@@ -144,7 +144,9 @@ contents; keep it that way.
   pattern has matched anything. `docs/` is not in this repository and never
   has been, so a reference to one resolves for exactly the person whose
   machine it is on. Pointing at a file that *is* in the tree is fine and stays
-  fine, in either form.
+  fine, in either form — a bare name resolves wherever the file sits, and a
+  path is read from the repository root, so write `.github/SECURITY.md` or
+  `SECURITY.md` rather than `./SECURITY.md`.
 - **The 7-bit rule is `internal/tui` and `internal/view` only.** Those two
   packages draw a terminal page whose frame is measured in columns, and their
   golden fixtures compare raw bytes — so a character that is one column wide
