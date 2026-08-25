@@ -16,6 +16,31 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-08-25
+
+Two things ccdad could not do before. It can now measure how fast the fleet is
+actually spending and say when that runs out, rather than only reporting how
+much of a window is gone; and a release now carries a claim about who made it,
+not only that it arrived intact.
+
+The first is a rate where there was only ever a level. A level cannot tell you
+whether you are an hour from a stop or three days from one, and the daemon was
+already taking the readings that would answer it — it just was not keeping them.
+It keeps them now, and `ccdad runway` runs the rotation forward against the
+measured rate rather than dividing burn by replenishment, because the two
+disagree exactly where it matters. The same simulation answers how many accounts
+would be enough. Unknown stays unknown throughout: a machine recording for ten
+minutes is told it has no basis rather than handed a runway of forever.
+
+The second is minisign. Every release now publishes `sha256sums.txt.minisig`
+beside its checksums, and ccdad carries the public half in a constant a link
+line cannot patch. Checksums say a download is intact; the signature says it is
+ours — and the release it names, which matters because `sha256sums.txt` carries
+no version of its own and an old release's checksums and signature would
+otherwise stay a genuine, correctly signed pair forever. Nothing in ccdad
+consumes the signature yet; it ships first so that signed releases exist before
+anything requires one.
+
 ### Added
 
 - **`ccdad runway` measures how fast the accounts are actually spending, and
@@ -24,6 +49,14 @@ by `uuid` or `alias`.
   you are an hour away from a stop or three days. The daemon was already taking
   the readings; nothing was keeping them. It now appends each one to
   `~/.ccdad/history.json`, and `runway` measures the last four hours of them.
+  A history file that cannot be read or parsed costs the rates and nothing else
+  — every row still renders — but `ccdad status` and `ccdad list` now say so on
+  stderr where they never had anything to say about this file, and `status` also
+  carries it into `Notices`, so the dashboard spends a row on it. The series is
+  kept for eight hours, which is the longest gap the poll policy can leave a
+  six-account identity; that is 250-430 KB on disk for six accounts at the
+  normal cadence and up to about 1.3 MB at the retention cap, rewritten on every
+  poll and read whole by every command that forecasts.
   No extra request is made against the usage endpoint and no cadence changed:
   the file is written from the one place a fresh reading was already being
   stored.
@@ -89,14 +122,24 @@ by `uuid` or `alias`.
   three `--json` payloads, and as a `runway` tool in the MCP server — which
   still has no verb to launch it. That one-line summary gains `· need 9 (4
   more)` when the fleet is short and nothing when it holds, and the `fleet`
-  object gains `accountsUsable`, `accountsNeeded` and `accountsNeededBy`, the
-  last two absent rather than zero when there was no basis to search from.
+  object gains `accountsUsable`, `accountsNeeded`, `accountsNeededBy` and
+  `accountsNeededCapped`, the middle two absent rather than zero when there was
+  no basis to search from. Read the last one: when it is true the search hit its
+  ceiling and `accountsNeeded` is a bound rather than a count, so a program that
+  ignores it reads `256` as "buy 256" instead of "more than 256" — the human
+  form says so in words and the machine form says so in that flag.
   `ccdad runway --json --out PATH` writes the document to a file at mode `0600`
   with nothing on stdout, the way `ccdad export --out` does; `--out` without
   `--json` is a usage error, because this command has two representations and a
   destination does not choose between them. `ccdad doctor` gains
-  a `history` check — an absent file is fine, an unparseable one is a warning —
-  and `ccdad uninstall` counts the file among the markers that identify a ccdad
+  a `history` check with three levels rather than two: an absent file is fine,
+  an unparseable one is a warning, and one that cannot be READ at all — a
+  permission problem, a directory in its place, an I/O error — is a **failure**,
+  so `ccdad doctor` now exits 1 on it where the same machine passed before. That
+  is deliberately harsher than the usage cache, whose identical breakage is only
+  ever a warning: nothing rewrites a series it could not read first. Anyone with
+  `ccdad doctor` in a health check should know that a file which did not exist
+  before this release can now turn it red. And `ccdad uninstall` counts the file among the markers that identify a ccdad
   store, so a directory holding only this one is still recognised rather than
   refused as somebody else's.
 
