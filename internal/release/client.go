@@ -144,3 +144,69 @@ func (c *Client) Get(ctx context.Context, rawURL string, limit int64) ([]byte, e
 // trimmedBase is the configured origin with no trailing slash, for the callers
 // in this file that join onto it.
 func (c *Client) trimmedBase() string { return strings.TrimRight(c.base, "/") }
+
+// Latest resolves the published latest release to its tag.
+//
+// GET <base>/latest with redirects NOT followed: the Location header is the
+// answer. api.github.com/repos/.../releases/latest is deliberately not used,
+// and the reason is already written down in install.sh — sixty unauthenticated
+// requests an hour turns a corporate NAT or a CI runner into a mystery failure.
+// Reintroducing it here would need that argument re-made, not merely forgotten.
+//
+// The Location is remote-controlled input that ends up in a status document and
+// on a terminal. Only a …/tag/<version> shape is accepted, it is re-parsed, and
+// the canonical re-stringified tag is what comes back — never the bytes the
+// origin sent.
+//
+// The tag arriving over an unauthenticated channel is safe ONLY because the
+// signature's trusted comment names the release too: the origin chooses the
+// name, and the signature decides whether the bytes are the ones published
+// under it. Neither half stands alone.
+func (c *Client) Latest(ctx context.Context) (string, error) {
+	u := c.trimmedBase() + "/latest"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return "", fmt.Errorf("building a request for %s: %w", u, err)
+	}
+	req.Header.Set("User-Agent", userAgent())
+	resp, err := c.noFollow.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("asking %s which release is latest: %w", u, err)
+	}
+	// The body is never read. A redirect's body is decoration, and reading it
+	// would be an unbounded read of something nothing looks at.
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 300 || resp.StatusCode > 399 {
+		return "", fmt.Errorf("%s answered HTTP %d instead of redirecting to a release", u, resp.StatusCode)
+	}
+	loc := resp.Header.Get("Location")
+	if loc == "" {
+		return "", fmt.Errorf("%s redirected with no Location header", u)
+	}
+	ref, err := url.Parse(loc)
+	if err != nil {
+		return "", fmt.Errorf("%s redirected to an unparseable location: %w", u, err)
+	}
+	// A relative Location is legal and GitHub has sent both forms; resolving
+	// against the request URL is what the stdlib's own redirect handling does.
+	target := resp.Request.URL.ResolveReference(ref)
+
+	// Whole SEGMENTS, never strings.Contains. The origin chooses the whole
+	// path, so /releases/nottag/v1.2.3 must not answer this question.
+	seg := strings.Split(strings.Trim(target.EscapedPath(), "/"), "/")
+	if len(seg) < 2 || seg[len(seg)-2] != "tag" {
+		return "", fmt.Errorf("%s redirected to %s, which does not name a release tag", u, target.Path)
+	}
+	// Unescaped AFTER the split, so an encoded separator cannot manufacture a
+	// segment boundary that was not in the path.
+	last, err := url.PathUnescape(seg[len(seg)-1])
+	if err != nil {
+		return "", fmt.Errorf("%s redirected to %s, whose last segment does not decode", u, target.Path)
+	}
+	v, ok := ParseTag(last)
+	if !ok {
+		return "", fmt.Errorf("%s redirected to %s, whose last segment is not a version", u, target.Path)
+	}
+	return v.Tag(), nil
+}
