@@ -2,14 +2,18 @@ package tui
 
 import (
 	"fmt"
+	"image/color"
 	"io"
+	"os"
 	"strings"
+	"sync"
 
 	"charm.land/bubbles/v2/help"
 	"charm.land/bubbles/v2/progress"
 	"charm.land/lipgloss/v2"
 	"charm.land/lipgloss/v2/table"
 	"github.com/charmbracelet/x/ansi"
+	"golang.org/x/term"
 
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 	"github.com/Kweiza/ccdaddy/internal/theme"
@@ -44,11 +48,22 @@ type Model struct {
 	Gauge  progress.Model
 	Help   help.Model
 	Keys   KeyMap
-	// Pal is the colour of every role on this page. It is carried and handed to
-	// cellStyle and not yet read for a colour: the glyph vocabulary and the
-	// colours are two changes, and mixing them into one commit makes a glyph
-	// failure that only reproduces on one operating system impossible to
-	// bisect.
+	// Pal is the colour of every role on this page: the chrome, the header
+	// line's labels, the table's cells through cellStyle, the gauge's fill and
+	// track per row, and the frame's border.
+	//
+	// It is a FIELD and not a package-level lookup because lipgloss v2 removed
+	// the global renderer -- a Style consults nothing about the terminal on its
+	// own -- so the background-darkness answer has to be threaded in from
+	// whoever asked the terminal for it. Two things ask, on two paths that
+	// cannot share one call: the event loop asks through a Cmd and refines this
+	// field when the reply arrives, and the one-shot render asks synchronously
+	// through DarkBackground. Both end here.
+	//
+	// Its zero value is the None palette and that is load-bearing rather than
+	// incidental: every role answers NoColor, Palette.Style hands back a style
+	// with no foreground SET, and the page emits no SGR byte at all -- which is
+	// what lets the seven golden pages under testdata be compared as bytes.
 	Pal theme.Palette
 	// Glyphs is the vocabulary this page draws with, chosen once per process.
 	Glyphs Glyphs
@@ -234,10 +249,33 @@ func (m Model) Body() string {
 			lines = append(lines, truncate(r, inner))
 		}
 	}
+	// addRole is add with one role over every row it is given.
+	//
+	// It styles LINE BY LINE, and that is a correctness rule rather than a
+	// preference. lipgloss right-pads every short line of a multi-line Render
+	// out to the widest line in the block -- Render("a\nbb  \n") comes back as
+	// "a   \nbb  \n    " -- so handing it the five-row wordmark in one piece
+	// would add trailing spaces to four of its rows and push the frame's right
+	// edge out with them. A row at a time cannot do that: there is nothing else
+	// in the block for a short line to be padded out to.
+	//
+	// The cut happens BEFORE the style, so ansi.Truncate is measuring the
+	// characters a reader sees and never an escape sequence.
+	//
+	// Anything whose role is the terminal's own foreground goes through add
+	// instead, unstyled. A Style with no foreground set renders a string
+	// unchanged, so the two agree -- but a blank spacer row has no role to name
+	// and asking for one would be inventing a claim about it.
+	addRole := func(role theme.Role, rows ...string) {
+		st := m.Pal.Style(role)
+		for _, r := range rows {
+			lines = append(lines, st.Render(truncate(r, inner)))
+		}
+	}
 
 	switch {
 	case l.Wordmark:
-		add(wordmark[:len(wordmark)-1]...)
+		addRole(theme.RoleAccent, wordmark[:len(wordmark)-1]...)
 		// The version rides on the wordmark's own last row, which is where
 		// the full page puts it and why the title rung costs nothing until
 		// the wordmark is already gone.
@@ -245,19 +283,23 @@ func (m Model) Body() string {
 		if l.Title {
 			last += titleLine(m.Snap.Version)
 		}
-		add(last)
+		addRole(theme.RoleAccent, last)
 	case l.Title:
-		add(titleLine(m.Snap.Version))
+		addRole(theme.RoleAccent, titleLine(m.Snap.Version))
 	}
 	if l.Blanks {
 		add("")
 	}
 	if l.Tagline {
-		add(tagline...)
+		// The tagline is muted and the wordmark is not, and that split is what
+		// the accent role is for: the wordmark is what the page IS, and the
+		// tagline is a joke told underneath it. Two roles rather than one keeps
+		// the eye on the name.
+		addRole(theme.RoleMuted, tagline...)
 		add("")
 	}
 	if l.Figures {
-		add(figures...)
+		addRole(theme.RoleAccent, figures...)
 		add("")
 	}
 	if l.Header {
@@ -288,7 +330,7 @@ func (m Model) Body() string {
 		add(truncateCue("Runway: "+runway, inner, m.Glyphs.Cue))
 	}
 	if l.Notice {
-		add(noticeLine(m.Snap.Notices, inner, m.Glyphs.Cue))
+		addRole(theme.RoleNotice, noticeLine(m.Snap.Notices, inner, m.Glyphs.Cue))
 	}
 	lines = append(lines, m.tableBlock(l, inner)...)
 	if l.Blanks {
@@ -300,7 +342,24 @@ func (m Model) Body() string {
 	if !l.Border {
 		return page
 	}
-	return lipgloss.NewStyle().Border(m.Glyphs.Border).Width(m.Width).Render(page)
+	// The border is the one multi-line Render on this page and it is the one
+	// place the padding is wanted: a bordered box exists to make every line the
+	// same width. BorderForeground paints the frame characters alone and leaves
+	// the content's own styling untouched, so the page inside arrives here
+	// already correct and comes out still correct.
+	//
+	// The guard is not defensive tidiness. BorderForeground takes a color.Color
+	// rather than a Style, so it cannot make the distinction Palette.Style
+	// makes for every other surface here: a border with no foreground SET emits
+	// nothing, while a border whose foreground IS NoColor is a colour the
+	// writer may still spell out on the wire. The None theme's whole contract
+	// is that it emits zero escape bytes, and this is the one call on the page
+	// that could break it.
+	frame := lipgloss.NewStyle().Border(m.Glyphs.Border).Width(m.Width)
+	if c := m.Pal.Color(theme.RoleAccent); !isNoColor(c) {
+		frame = frame.BorderForeground(c)
+	}
+	return frame.Render(page)
 }
 
 // floors is the page below the minimum viable size: what it needs, and the
@@ -358,10 +417,22 @@ func (m Model) runwayLine() string {
 // keybar does: a line cut mid-value leaves "Strategy: he", which reads as a
 // strategy named "he" rather than as a line that did not fit.
 func (m Model) headerLine(width int) string {
-	line := "Active: " + m.Snap.ActiveLabel + "  |  Strategy: " + m.Snap.StrategyLabel()
+	lab := m.Pal.Style(theme.RoleHeader)
+	line := lab.Render("Active: ") + m.Snap.ActiveLabel +
+		"  |  " + lab.Render("Strategy: ") + m.Snap.StrategyLabel()
 	if m.Snap.HasMode {
-		line += "  |  Mode: " + m.Snap.Mode.String()
+		line += "  |  " + lab.Render("Mode: ") + m.Snap.Mode.String()
 	}
+	// The LABELS take the heading role and the answers take none, which is the
+	// rule the table one block down already pays: the column headings carry
+	// RoleHeader and the cells underneath carry their own role or the
+	// terminal's foreground. Painting the whole line as one span would make the
+	// fleet's three answers the loudest thing on the page and would make
+	// "Active:" and the address it names read as one word.
+	//
+	// Every piece is styled BEFORE the join and the join is cut afterwards, so
+	// the cut is ANSI-aware and the cue truncateCue leaves behind lands outside
+	// every style rather than inside whichever one it fell in.
 	return truncateCue(line, width, m.Glyphs.Cue)
 }
 
@@ -381,7 +452,16 @@ func noticeLine(notices []string, width int, cue string) string {
 	if len(notices) > 1 {
 		suffix = fmt.Sprintf("  (+%d more)", len(notices)-1)
 	}
-	room := width - len(prefix) - len(suffix)
+	// Display columns and not bytes. The notice's own text is whatever the
+	// caller wrote -- the runway wording alone already carries a multi-byte
+	// separator -- so a reservation measured in bytes takes more room away than
+	// the label occupies, and the "(+3 more)" it was protecting is cut off at
+	// exactly the width where it starts mattering.
+	//
+	// It is also why nothing paints INSIDE this function: the caller styles the
+	// line whole, after the reservation and both cuts, so no escape sequence is
+	// ever in front of a measurement here.
+	room := width - ansi.StringWidth(prefix) - ansi.StringWidth(suffix)
 	return truncateCue(prefix+truncateCue(notices[0], room, cue)+suffix, width, cue)
 }
 
@@ -531,8 +611,30 @@ func (m Model) tableBlock(l Layout, inner int) []string {
 	return out
 }
 
-// cellStyle is the table's per-cell style: the state column's own role, and the
-// column gaps.
+// cellStyle is the table's per-cell style: the state column's own role, the
+// muted marker rows, the column headings, and the column gaps.
+//
+// Three kinds of row reach here and each answers differently. The heading row
+// is not about any account. An account row takes the role of the state it
+// prints, from the SAME call that produced the glyph and the word, so a colour
+// can never describe a different state than the text beside it. And a marker
+// row -- "no accounts", "+3 more  (j/k)" -- is this package's own sentence
+// about the table rather than about anybody's account, so it takes RoleMuted
+// across every column. It was previously excluded from the state arm by the
+// `row < len(shown)` bound and then fell out of the switch with no style at
+// all, which left the empty-store line wearing the terminal's default
+// foreground in a table where everything around it is painted.
+//
+// The glyph set is passed through and only the third return is read. It is
+// taken rather than defaulted because stateCell is one function with one
+// signature and a second call site spelling its own vocabulary is exactly the
+// drift the set exists to remove -- even here, where the vocabulary cannot
+// reach the output.
+//
+// The style is built from the palette on every call and never cached. Palette
+// stores colours, so Style hands back a fresh lipgloss.Style each time and the
+// PaddingRight below cannot reach back into the theme and widen a role for
+// every other caller.
 //
 // The gap after the index column is one rather than two, and that is the
 // arithmetic the width ladder's own footprints were computed against — the
@@ -544,22 +646,12 @@ func cellStyle(g Glyphs, pal theme.Palette, shown []view.Row, cols []Column, row
 	st := lipgloss.NewStyle()
 	switch {
 	case row == table.HeaderRow:
-		st = styleHeader
-	case row < len(shown) && cols[col] == ColState:
-		// The role a state is painted in comes from the same call that produced
-		// the glyph and the word beside it, so a colour can never describe a
-		// different state than the text under it.
-		//
-		// All three returns are discarded for exactly one commit, and that is
-		// this commit's whole posture: the glyph vocabulary and the palette are
-		// separate changes, and a Windows-only glyph failure arriving in the
-		// same commit as a colour would not be bisectable. What lands here now
-		// is the SHAPE -- g, pal, and a call that already asks the right
-		// question -- so that the commit which paints this cell writes one line
-		// and moves no caller. pal is unread here for the same reason and is
-		// declared now rather than then, because a parameter added later is a
-		// parameter every call site in this package moves for twice.
-		_, _, _ = stateCell(g, shown[row].Engine.State)
+		st = pal.Style(theme.RoleHeader)
+	case row >= len(shown):
+		st = pal.Style(theme.RoleMuted)
+	case cols[col] == ColState:
+		_, _, role := stateCell(g, shown[row].Engine.State)
+		st = pal.Style(role)
 	}
 	switch col {
 	case last:
@@ -650,7 +742,23 @@ func (m Model) cell(c Column, r view.Row, l Layout, at int) string {
 		if l.Collapsed {
 			return usedCellCollapsed(r)
 		}
-		return usedCell(r, m.Gauge)
+		// The gauge is coloured PER ROW, on a copy. Model.Gauge is one
+		// progress.Model built once by newModel and passed by VALUE, so
+		// assigning these two fields here cannot reach the next row -- and
+		// building a second progress.Model per row would be a second
+		// construction site for the fill characters and the width, which is the
+		// drift newGauge exists to prevent.
+		//
+		// This is the one place style goes INSIDE a cell string, and it is safe
+		// because it has to be: progress paints fill and empty as two separate
+		// Render calls, so the escapes are inside the cell by construction, and
+		// cellStyle applies one style to a whole cell and could not give the two
+		// halves different roles even if it wanted to. Both the table and the
+		// truncation below it measure ANSI-aware.
+		g := m.Gauge
+		g.FullColor = m.Pal.Color(gaugeRole(r))
+		g.EmptyColor = m.Pal.Color(theme.RoleGaugeEmpty)
+		return usedCell(r, g)
 	case ColWindow:
 		return windowCell(r)
 	case ColResets:
@@ -732,6 +840,54 @@ func truncateCue(s string, width int, cue string) string {
 	return ansi.Truncate(s, width, cue)
 }
 
+// isNoColor is whether a palette answered a role with "the terminal's own
+// foreground". Palette.Style answers it for every caller that wants a Style;
+// this is for the one caller that wants a colour.
+func isNoColor(c color.Color) bool {
+	_, ok := c.(lipgloss.NoColor)
+	return ok
+}
+
+// DarkBackground answers whether this process's terminal has a dark
+// background: for the one-shot page below, and for the one-shot listings in
+// package cli, which reads this same var rather than writing a second query.
+// Every clause of it is a bound rather than a preference.
+//
+// It asks only when stdin AND stdout are terminals, and that guard has to be
+// the CALLER'S. On Windows lipgloss opens CONIN$ and CONOUT$ explicitly when
+// stdio is redirected, so the library will not decline a query into a pipe, and
+// `ccdad status > file` from a scheduled task would sit in raw mode waiting for
+// a reply from nobody.
+//
+// It asks at most once per process, because the query puts stdin into raw mode
+// with a deferred restore and blocks up to two seconds on a terminal that
+// answers neither OSC 11 nor DA1. Twice is four seconds before a table appears.
+//
+// It answers dark when it did not ask, which is the same default the
+// interactive half takes when a multiplexer eats the reply. A default that is
+// DEFINED rather than awaited is what keeps the two surfaces from disagreeing
+// on a terminal that never answers.
+//
+// It is a package var because no test has a terminal, and it is EXPORTED for
+// the same reason it is cached: package cli's one-shot tables need this answer
+// too, and a second sync.OnceValue over there would be a second two-second
+// budget and a second thing every test in that package had to remember to stub.
+// It is never reached from the daemon, which renders nothing.
+var DarkBackground = sync.OnceValue(func() bool {
+	if !isTerminal(os.Stdin) || !isTerminal(os.Stdout) {
+		return true
+	}
+	return lipgloss.HasDarkBackground(os.Stdin, os.Stdout)
+})
+
+// isTerminal is this package's own copy of the test package cli spells as isTTY
+// in tty.go, and a copy rather than an import: package cli imports package tui
+// to register the dashboard command, so the reverse import is a cycle and not a
+// choice.
+func isTerminal(f *os.File) bool {
+	return f != nil && term.IsTerminal(int(f.Fd()))
+}
+
 // Render is the one-shot, non-TTY page: load, draw at the design target with
 // no height ladder, and write it.
 //
@@ -743,7 +899,23 @@ func Render(o Options) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	m := newModel(snap, oneShotWidth, unboundedHeight, paletteFor(o.Theme), glyphsFor(o))
+	// theme=auto is resolved HERE and nowhere earlier. Package cli hands over
+	// the configured word, and this is the branch the query is scoped to: a
+	// redirected page has no Update to answer a BackgroundColorMsg, so this is
+	// its only chance to ask, and resolving in tuiOptions would have moved the
+	// two-second wait onto the interactive branch instead -- the one path that
+	// must not block.
+	//
+	// paletteFor stays the answer for every other name INCLUDING the empty one,
+	// and the guard is why. theme.Pick resolves an unrecognised name -- the
+	// empty one included -- to Dark, and the empty name is what an Options
+	// nobody filled in carries; asking Pick unconditionally would make the
+	// unthemed page paint and redden every golden under testdata.
+	pal := paletteFor(o.Theme)
+	if o.Theme == theme.Auto {
+		pal = theme.Pick(theme.Auto, DarkBackground())
+	}
+	m := newModel(snap, oneShotWidth, unboundedHeight, pal, glyphsFor(o))
 	// Nobody is pointing at anything in a pipe. Without this the first row of
 	// every redirected render would carry a selection marker put there by a
 	// reader who is not present.

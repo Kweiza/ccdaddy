@@ -69,39 +69,58 @@ func (k KeyMap) FullHelp() [][]key.Binding {
 	}
 }
 
-// newHelp is help.New with its two Unicode defaults overridden: ShortSeparator
-// is U+2022 and Ellipsis is U+2026 out of the box, and neither is a character
-// this line can afford. The separator is drawn between every pair of bindings
-// on the one line that tells a user how to leave a full-screen program, and the
-// ellipsis is the cut cue -- both land on measured column boundaries, and both
-// are ambiguous-width, so on a machine in east-asian width mode they would each
-// silently cost a column the footer had already spent.
+// newHelp is help.New with its two non-ASCII defaults overridden and its seven
+// styles taken from the palette.
 //
-// The cue is the page's own rather than a literal here, because the keybar and
-// the header line are cut by the same page and a reader who learns what a cut
-// looks like in one place should not have to learn it again in the other.
+// ShortSeparator is U+2022 by default and Ellipsis is U+2026, and both are
+// STRING fields on help.Model rather than part of help.Styles. They stay
+// overridden and nothing below touches them: they are what keeps the keybar
+// 7-bit, and a terminal on a code page that lacks either renders a replacement
+// glyph in the middle of the one line telling a user how to leave a full-screen
+// program. Both would also land on a measured column boundary while being
+// ambiguous-width, so on a machine in east-asian width mode they would each
+// silently cost a column the footer had already spent. The ellipsis is the
+// page's own cue rather than a literal spelled a second time here, because the
+// keybar and the header line are cut by the same page and a reader who learns
+// what a cut looks like in one place should not have to learn it again in the
+// other.
 //
-// help.New's default Styles carry truecolor foreground colours, which render as
-// SGR escape bytes even though the only difference between a key and its
-// description here is which characters they are. This repository's rendered
-// output is compared as plain strings -- in the tests that read keybar() and in
-// every golden page under testdata -- so the styles are zeroed rather than left
-// at their default. A zero lipgloss.Style is exactly what NewStyle() returns,
-// so this asks for no styling the same way the library would if asked for none.
+// help.Styles is SEVEN whole lipgloss.Style values and not a set of colour
+// fields, so there is no way to tint one without replacing it -- and help.New's
+// own defaults carry truecolor foregrounds this package never chose. Each of
+// the seven therefore gets a style carrying a Foreground and nothing else -- no
+// Width, no Padding, no Transform. help does its own layout: ShortHelpView
+// measures each item with lipgloss.Width and decides from that whether the next
+// binding fits, and FullHelpView joins its columns horizontally. A Width or a
+// Padding set here would be a theme overruling that arithmetic, and the
+// footer's own spacing is computed from the bar keybar returns.
 //
-// pal is taken and NOT read, and it is declared now rather than in the commit
-// that reads it. Zeroing those Styles is a colour decision made here and
-// nowhere else -- a key and its description are the two roles this line has --
-// so the commit that gives the page a palette fills those two fields in and
-// moves no caller. A parameter added later is a parameter every call site in
-// this package moves for twice, and the reason the glyphs and the colours are
-// two commits at all is that a glyph failure which reproduces on one operating
-// system has to stay bisectable on its own.
+// Under the None theme every one of the seven is a style with no foreground
+// SET, which emits no SGR byte at all -- which is what lets the seven golden
+// pages under testdata go on being compared as bytes.
+//
+// FullKey and FullDesc are rendered by the library over a MULTI-LINE join, and
+// that is the one place the right-padding a multi-line Render performs is
+// wanted rather than feared: it is what squares the long help's columns off
+// before JoinHorizontal puts them side by side.
+//
+// Keys take the heading role and everything else the muted one. The key is what
+// a reader is looking for and the description is what tells them they found the
+// right one, so the contrast between the two is the whole content of the line;
+// the separators and the ellipsis are punctuation and are quieter than both.
 func newHelp(cue string, pal theme.Palette) help.Model {
 	h := help.New()
 	h.ShortSeparator = "  "
 	h.Ellipsis = cue
-	h.Styles = help.Styles{}
+	h.Styles = help.Styles{
+		Ellipsis:       pal.Style(theme.RoleMuted),
+		ShortKey:       pal.Style(theme.RoleHeader),
+		ShortDesc:      pal.Style(theme.RoleMuted),
+		ShortSeparator: pal.Style(theme.RoleMuted),
+		FullKey:        pal.Style(theme.RoleHeader),
+		FullDesc:       pal.Style(theme.RoleMuted),
+		FullSeparator:  pal.Style(theme.RoleMuted),
+	}
 	return h
 }
 

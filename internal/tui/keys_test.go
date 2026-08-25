@@ -15,8 +15,13 @@ import (
 // gave 28, SetWidth(37) gave 53 and SetWidth(45) gave 53. Truncation is
 // non-monotone and it overflows, so the two widths that were measured to fail
 // are the two this test names.
+//
+// This one deliberately does NOT strip, and it is drawn from the palette that
+// paints. ansi.StringWidth is ANSI-aware, so the escapes cost it nothing, and
+// the painted bar is exactly the string this bound has to hold for -- stripping
+// first would take it out of the one test that bounds it.
 func TestTheKeybarNeverExceedsTheWidthItWasGiven(t *testing.T) {
-	h, k := newHelp(UnicodeGlyphs.Cue, theme.Of(theme.None)), DefaultKeys()
+	h, k := newHelp(UnicodeGlyphs.Cue, theme.Of(theme.Dark)), DefaultKeys()
 	for _, w := range []int{20, 30, 37, 45, 53, 80, 113} {
 		got := keybar(h, k, w, UnicodeGlyphs.Cue)
 		if n := ansi.StringWidth(got); n > w {
@@ -55,18 +60,28 @@ func TestQuitOutlivesListInTheKeybar(t *testing.T) {
 // absent below width 45 (at 37, for instance, the bar cuts off inside "c
 // strategy" and never reaches q at all) and present at 45 and every width
 // from there up to the full 53. Below 45, every truncated rendering must end
-// in the ".." tail -- the visual cue that something was cut, which an empty
-// tail silently omitted at exactly the widths this task exists to fix.
+// in the cue -- the visual cue that something was cut, which an empty tail
+// silently omitted at exactly the widths this task exists to fix.
+//
+// Both loops strip, and the bar is drawn from the palette that PAINTS rather
+// than from a colourless one, which is the pairing that makes them mean
+// anything. The assertions are about the characters a reader sees and the
+// escapes sit exactly where they would break them: "q" is followed by an SGR
+// reset before its space, so Contains(got, "q ") misses on a bar that is
+// showing q perfectly well, and a cut bar ends in the cue followed by a reset,
+// so HasSuffix misses on a bar that flagged its cut correctly. Asserting on the
+// colourless bar instead would keep them green and stop them covering the bar
+// this program actually draws.
 func TestTheKeybarShowsQAsSoonAsItFitsAndFlagsWhenItCuts(t *testing.T) {
-	h, k := newHelp(UnicodeGlyphs.Cue, theme.Of(theme.None)), DefaultKeys()
+	h, k := newHelp(UnicodeGlyphs.Cue, theme.Of(theme.Dark)), DefaultKeys()
 	for _, w := range []int{45, 53, 80, 113} {
-		got := keybar(h, k, w, UnicodeGlyphs.Cue)
+		got := ansi.Strip(keybar(h, k, w, UnicodeGlyphs.Cue))
 		if !strings.Contains(got, "q ") {
 			t.Errorf("keybar at width %d does not show q: %q", w, got)
 		}
 	}
 	for _, w := range []int{20, 30, 37} {
-		got := keybar(h, k, w, UnicodeGlyphs.Cue)
+		got := ansi.Strip(keybar(h, k, w, UnicodeGlyphs.Cue))
 		if !strings.HasSuffix(got, UnicodeGlyphs.Cue) {
 			t.Errorf("keybar at width %d was cut but does not end in the cue: %q", w, got)
 		}
@@ -80,9 +95,13 @@ func TestTheKeybarShowsQAsSoonAsItFitsAndFlagsWhenItCuts(t *testing.T) {
 // are ASCII in both glyph sets. A terminal on a code page that lacks either
 // would render a replacement glyph in the middle of the one line telling a user
 // how to leave.
+//
+// It strips first because the bar is painted now, and the escape bytes an SGR
+// sequence adds are ASCII themselves: a sweep that left them in would go on
+// passing while saying nothing about the characters a reader sees.
 func TestTheKeybarIsSevenBitAscii(t *testing.T) {
 	for _, w := range []int{37, 53, 113} {
-		for _, r := range keybar(newHelp(UnicodeGlyphs.Cue, theme.Of(theme.None)), DefaultKeys(), w, UnicodeGlyphs.Cue) {
+		for _, r := range ansi.Strip(keybar(newHelp(UnicodeGlyphs.Cue, theme.Of(theme.Dark)), DefaultKeys(), w, UnicodeGlyphs.Cue)) {
 			if r > 127 {
 				t.Fatalf("keybar at width %d carries %q (U+%04X)", w, r, r)
 			}

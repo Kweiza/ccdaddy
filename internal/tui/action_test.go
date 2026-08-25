@@ -127,7 +127,7 @@ func TestAPickerOverAnEmptyStoreChoosesNothingAndSaysSo(t *testing.T) {
 // nothing did.
 func TestExitThreeIsReportedAsNothingToDoAndNotAsAFailure(t *testing.T) {
 	ex := func(argv []string) (int, string, string) { return 3, "", "already on that account\n" }
-	body := run(ex, []string{"switch", "uuid-a"}).Body(60)
+	body := run(ex, []string{"switch", "uuid-a"}).Body(60, theme.Of(theme.None))
 	if !strings.Contains(body, "already on that account") {
 		t.Fatalf("the command's own words did not reach the panel:\n%s", body)
 	}
@@ -145,7 +145,7 @@ func TestExitThreeIsReportedAsNothingToDoAndNotAsAFailure(t *testing.T) {
 func TestTheCommandsOwnWordsAreRenderedVerbatim(t *testing.T) {
 	const note = "the environment's token wins; the login was not moved\n"
 	ex := func([]string) (int, string, string) { return 0, "", note }
-	if body := run(ex, []string{"switch", "uuid-a"}).Body(60); !strings.Contains(body, strings.TrimSpace(note)) {
+	if body := run(ex, []string{"switch", "uuid-a"}).Body(60, theme.Of(theme.None)); !strings.Contains(body, strings.TrimSpace(note)) {
 		t.Fatalf("the displacement note did not survive to the panel:\n%s", body)
 	}
 }
@@ -156,7 +156,7 @@ func TestTheCommandsOwnWordsAreRenderedVerbatim(t *testing.T) {
 func TestABlockedCommandIsReportedWithItsOwnRefusal(t *testing.T) {
 	const refusal = "ccdad switch is refused inside a 'ccdad run' session\n"
 	ex := func([]string) (int, string, string) { return 4, "", refusal }
-	body := run(ex, []string{"switch", "uuid-a"}).Body(80)
+	body := run(ex, []string{"switch", "uuid-a"}).Body(80, theme.Of(theme.None))
 	if !strings.Contains(body, "blocked") {
 		t.Fatalf("exit 4 was not reported as blocked:\n%s", body)
 	}
@@ -169,7 +169,7 @@ func TestABlockedCommandIsReportedWithItsOwnRefusal(t *testing.T) {
 // this package invented for it.
 func TestAnUnnamedExitCodeCarriesItsNumber(t *testing.T) {
 	ex := func([]string) (int, string, string) { return 7, "", "something else went wrong\n" }
-	body := run(ex, []string{"switch", "uuid-a"}).Body(60)
+	body := run(ex, []string{"switch", "uuid-a"}).Body(60, theme.Of(theme.None))
 	if !strings.Contains(body, "exit 7") {
 		t.Fatalf("exit 7 lost its code:\n%s", body)
 	}
@@ -182,7 +182,7 @@ func TestAnUnnamedExitCodeCarriesItsNumber(t *testing.T) {
 // that reads as output nobody can see.
 func TestACommandThatWroteNothingAddsNoBlankLine(t *testing.T) {
 	ex := func([]string) (int, string, string) { return 0, "", "" }
-	body := run(ex, []string{"daemon", "start"}).Body(60)
+	body := run(ex, []string{"daemon", "start"}).Body(60, theme.Of(theme.None))
 	if got := len(strings.Split(body, "\n")); got != 2 {
 		t.Fatalf("a silent command rendered %d lines, want the command and its verdict:\n%s", got, body)
 	}
@@ -191,11 +191,16 @@ func TestACommandThatWroteNothingAddsNoBlankLine(t *testing.T) {
 // The panel never runs wider than the frame it is drawn in. A command's stderr
 // is arbitrary length and a bordered box soft-wraps rather than truncating, so
 // one long refusal would cost as many rows as it needed.
+//
+// It draws under the palette that PAINTS, and that is what this bound is for.
+// block measures with ansi.StringWidth and cuts with ansi.Truncate, so a
+// painted block is the case where those two have work to do; a colourless one
+// would leave the ANSI-aware half of block untested at every width here.
 func TestThePanelNeverExceedsTheWidthItWasGiven(t *testing.T) {
 	long := strings.Repeat("a refusal that keeps going ", 20)
 	ex := func([]string) (int, string, string) { return 4, long + "\n", long + "\n" }
 	for _, width := range []int{20, 40, 60, 80} {
-		body := run(ex, []string{"switch", strings.Repeat("u", 60)}).Body(width)
+		body := run(ex, []string{"switch", strings.Repeat("u", 60)}).Body(width, theme.Of(theme.Dark))
 		for i, line := range strings.Split(body, "\n") {
 			if got := ansi.StringWidth(line); got > width {
 				t.Errorf("at width %d line %d is %d columns: %q", width, i, got, line)
@@ -204,12 +209,13 @@ func TestThePanelNeverExceedsTheWidthItWasGiven(t *testing.T) {
 	}
 }
 
-// The picker is drawn inside the same frame and obeys the same bound.
+// The picker is drawn inside the same frame and obeys the same bound, and it is
+// drawn painted for the same reason the panel above is.
 func TestThePickerNeverExceedsTheWidthItWasGiven(t *testing.T) {
 	rows := append(fixtureRows(), view.Row{})
 	rows[len(rows)-1].Account.Email = strings.Repeat("long", 30) + "@example.com"
 	for _, width := range []int{20, 40, 60} {
-		for i, line := range strings.Split(switchPicker(rows, 0, UnicodeGlyphs).Body(width, theme.Of(theme.None)), "\n") {
+		for i, line := range strings.Split(switchPicker(rows, 0, UnicodeGlyphs).Body(width, theme.Of(theme.Dark)), "\n") {
 			if got := ansi.StringWidth(line); got > width {
 				t.Errorf("at width %d line %d is %d columns: %q", width, i, got, line)
 			}

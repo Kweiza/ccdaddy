@@ -144,15 +144,19 @@ func (p picker) Chosen() []string {
 // force" is the same claim the table's live marker makes about an account, and
 // that one is spelled "*" wherever it appears in this binary.
 //
-// pal is taken and NOT read, for one commit. This screen has the two roles the
-// table has -- the value in force, and everything else -- and the commit that
-// paints them writes those two lines here and moves no caller. Declaring the
-// parameter with the glyph swap rather than with the colours is what keeps the
-// two changes separable: a glyph failure that only reproduces on one operating
-// system has to be bisectable without a palette in the same commit.
+// Each line is styled ON ITS OWN and never as a joined block, for the reason
+// the page's chrome is: lipgloss right-pads a multi-line Render out to the
+// widest line, which would put trailing space on every short label here and
+// leave block's own truncation measuring something that is not text.
+//
+// The CUT comes afterwards, in block, and it is safe there rather than in spite
+// of being there: block's truncate is ansi.Truncate, which measures display
+// columns past the escape sequences and carries the opener across the cut. A
+// width-blind cut would have to happen first; this one does not, and inverting
+// the two would put the padding inside the styled run.
 func (p picker) Body(width int, pal theme.Palette) string {
 	lines := make([]string, 0, len(p.items)+2)
-	lines = append(lines, p.title)
+	lines = append(lines, pal.Style(theme.RoleHeader).Render(p.title))
 	for i, it := range p.items {
 		cursor, mark := "  ", "  "
 		if i == p.cursor {
@@ -161,12 +165,19 @@ func (p picker) Body(width int, pal theme.Palette) string {
 		if i == p.current {
 			mark = "* "
 		}
-		lines = append(lines, cursor+mark+it.label)
+		line := cursor + mark + it.label
+		// "You are here" is the fact that makes the rest of the list mean
+		// something, and it is the one line in this block a reader is comparing
+		// everything else against.
+		if i == p.current {
+			line = pal.Style(theme.RoleAccent).Render(line)
+		}
+		lines = append(lines, line)
 	}
 	if len(p.items) == 0 {
-		lines = append(lines, "    nothing to choose from")
+		lines = append(lines, pal.Style(theme.RoleMuted).Render("    nothing to choose from"))
 	}
-	lines = append(lines, "enter  choose    esc  cancel")
+	lines = append(lines, pal.Style(theme.RoleMuted).Render("enter  choose    esc  cancel"))
 	return block(lines, width)
 }
 
@@ -203,8 +214,16 @@ func run(ex view.Exec, argv []string) result {
 // nothing prints the displacement note in the command's own words, and this
 // panel is where those words appear unedited. The panel does not know what a
 // displacement is, and that is what keeps it from getting one wrong.
-func (r result) Body(width int) string {
-	lines := []string{"$ ccdad " + strings.Join(r.Argv, " "), r.verdict()}
+//
+// The verdict is the only painted line. The command line above it is what the
+// user asked for and the output below it is somebody else's bytes -- painting
+// arbitrary captured stderr from a vocabulary this package chose would be this
+// panel doing exactly the rewriting the paragraph above forbids.
+func (r result) Body(width int, pal theme.Palette) string {
+	lines := []string{
+		"$ ccdad " + strings.Join(r.Argv, " "),
+		pal.Style(r.verdictRole()).Render(r.verdict()),
+	}
 	lines = append(lines, textLines(r.Stdout)...)
 	lines = append(lines, textLines(r.Stderr)...)
 	return block(lines, width)
@@ -212,11 +231,11 @@ func (r result) Body(width int) string {
 
 // verdict is the exit code in the contract's own words.
 //
-// Exit 3 is deliberately not a failure and is not coloured or worded as one: a
-// dashboard that painted every non-zero red would tell a user something went
-// wrong when the account they picked was simply the one already live. Every
-// code the contract does not name carries its own number rather than a word
-// this package invented for it.
+// Exit 3 is deliberately not a failure and is not worded as one: a dashboard
+// that reported every non-zero code as a failure would tell a user something
+// went wrong when the account they picked was simply the one already live.
+// Every code the contract does not name carries its own number rather than a
+// word this package invented for it.
 func (r result) verdict() string {
 	switch r.Code {
 	case exitOK:
@@ -227,6 +246,29 @@ func (r result) verdict() string {
 		return "blocked"
 	}
 	return fmt.Sprintf("exit %d", r.Code)
+}
+
+// verdictRole is the colour the word above carries, and it is a SEPARATE
+// function from verdict for one reason: exit 3.
+//
+// Exit 3 is deliberately not a failure, so it takes neither the exhausted role
+// nor the active one. A dashboard that painted every non-zero code red would
+// tell a user something went wrong when the account they picked was simply the
+// one already live, which is the commonest way this panel is opened at all;
+// painting it green would claim something happened. Muted says what actually
+// happened, which is nothing.
+//
+// Exit 4 and every code the contract does not name share the exhausted role.
+// They are different facts and the WORD keeps them apart -- "blocked" against a
+// bare number -- but they are the same answer to "did this work".
+func (r result) verdictRole() theme.Role {
+	switch r.Code {
+	case exitOK:
+		return theme.RoleActive
+	case exitNothingToDo:
+		return theme.RoleMuted
+	}
+	return theme.RoleExhausted
 }
 
 // textLines splits captured output into lines and drops the empty tail a

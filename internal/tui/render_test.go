@@ -151,12 +151,26 @@ func TestThePageNeverScrollsHorizontally(t *testing.T) {
 	}
 }
 
-// The plain path emits no escape byte at all, which is what makes an ANSI-free
-// fixture possible. The width functions still report the intended widths with
-// the colours unset, so the layout is the same one a coloured render produces.
-func TestThePlainPathEmitsNoEscapeBytes(t *testing.T) {
+// The None theme emits no escape byte, and that is what makes a fixture
+// comparison against testdata worth running at all -- and what lets the rest of
+// this file, and model_test.go, go on asserting on raw rendered bytes with no
+// ansi.Strip anywhere.
+//
+// So both halves are asserted, and the App's page is asserted beside the
+// Model's. The None theme must carry none; the Dark theme must carry some. The
+// second is what turns the first from a property of this package into a
+// property of the THEME, and it is the assertion that goes red the day somebody
+// deletes a Style call and every colour test above it goes on passing against a
+// page that has quietly stopped being coloured.
+func TestTheNoneThemeEmitsNoEscapeBytesAndTheDarkThemeDoes(t *testing.T) {
 	if strings.ContainsRune(fixtureModel(113, 26).Body(), 0x1b) {
-		t.Fatal("the plain render carries an escape byte, so no fixture here can be trusted")
+		t.Fatal("the None theme carries an escape byte, so no fixture here can be trusted")
+	}
+	if strings.ContainsRune(newApp(fixtureOptions()).m.Body(), 0x1b) {
+		t.Fatal("the App's own page carries an escape byte under the None theme")
+	}
+	if !strings.ContainsRune(darkModel(113, 26).Body(), 0x1b) {
+		t.Fatal("the Dark theme carries no escape byte, so the assertion above proves nothing")
 	}
 }
 
@@ -414,6 +428,19 @@ var fixtureNow = time.Date(2026, 3, 4, 12, 0, 0, 0, time.UTC)
 // fixtureRows is the placeholder pool: one subscription part-spent, one credit
 // account fully spent and held out of rotation, one idle alternate, and one
 // api-key seat that could not be read at all.
+//
+// MinPct and MinWindow are filled on every row that has a reading, and the
+// second row's floor carries its own slack pair. Neither is decoration.
+// strategy.OutOfQuota reads MinPct alone, so a pool that left it at zero would
+// report every account as EMPTY -- the one at 52% included -- and a test of the
+// gauge's colour would be unable to tell green from red because the whole
+// fixture is red. A floor with no FloorSlack beside it is the same hazard one
+// level down: the bar's length would come from the floor while its colour came
+// from a zero nobody set.
+//
+// None of it prints. LEFT reads Headroom.Pct, USED reads the window, and
+// nothing on the page reads MinPct or either floor figure, so no golden under
+// testdata moves.
 func fixtureRows() []view.Row {
 	pct := func(v float64) *float64 { return &v }
 	in := func(d time.Duration) *time.Time { t := fixtureNow.Add(d); return &t }
@@ -431,8 +458,11 @@ func fixtureRows() []view.Row {
 				Snapshot:  &usage.Snapshot{FiveHour: usage.NewWindow(pct(87), in(82*time.Minute))},
 				FetchedAt: fixtureNow.Add(-4 * time.Minute),
 			},
-			Headroom: strategy.Headroom{Known: true, Binding: usage.WindowFiveHour, Pct: 13, Slack: -7, Threshold: 80},
-			Engine:   daemon.AccountStatus{UUID: "d3b07384-d9a0-4f9b-9a2c-5f0c3a1e7b21", State: daemon.StateActive},
+			Headroom: strategy.Headroom{
+				Known: true, Binding: usage.WindowFiveHour, Pct: 13, Slack: -7, Threshold: 80,
+				MinPct: 13, MinWindow: usage.WindowFiveHour,
+			},
+			Engine: daemon.AccountStatus{UUID: "d3b07384-d9a0-4f9b-9a2c-5f0c3a1e7b21", State: daemon.StateActive},
 		},
 		{
 			Account: store.Account{
@@ -447,7 +477,9 @@ func fixtureRows() []view.Row {
 			},
 			Headroom: strategy.Headroom{
 				Known: true, Binding: usage.WindowSevenDayOpus, Pct: 0, Slack: -20, Threshold: 80,
+				MinPct: 0, MinWindow: usage.WindowSevenDayOpus,
 				HasFloor: true, Floor: usage.WindowSevenDayOpus,
+				FloorSlack: -20, FloorThreshold: 80,
 			},
 			Engine: daemon.AccountStatus{UUID: "1c8f9a52-4e6b-4d18-8f77-2a9d5c0b6e34", State: daemon.StateExhausted},
 		},
@@ -462,8 +494,11 @@ func fixtureRows() []view.Row {
 				Snapshot:  &usage.Snapshot{FiveHour: usage.NewWindow(pct(52), in(4*time.Hour+11*time.Minute))},
 				FetchedAt: fixtureNow.Add(-6 * time.Minute),
 			},
-			Headroom: strategy.Headroom{Known: true, Binding: usage.WindowFiveHour, Pct: 48, Slack: 28, Threshold: 80},
-			Engine:   daemon.AccountStatus{UUID: "7f2e1b90-3c45-4a6d-9e08-b1d7c4a5f6e2", State: daemon.StateCandidate},
+			Headroom: strategy.Headroom{
+				Known: true, Binding: usage.WindowFiveHour, Pct: 48, Slack: 28, Threshold: 80,
+				MinPct: 48, MinWindow: usage.WindowFiveHour,
+			},
+			Engine: daemon.AccountStatus{UUID: "7f2e1b90-3c45-4a6d-9e08-b1d7c4a5f6e2", State: daemon.StateCandidate},
 		},
 		{
 			Account: store.Account{
@@ -640,11 +675,17 @@ func TestTheCursorFollowsTheRowAndNotTheScreenPositionOnceItScrolls(t *testing.T
 // the file: strategy.Options' withHover pass overrides the key. Printing the
 // file's value there is the defect this test exists for -- a reader who had set
 // consume-first saw consume-first and concluded hover was off.
+//
+// It renders under the palette that PAINTS and strips afterwards, because this
+// is a test about the header line and the header line is the one block on the
+// page that styles its own clauses. "Strategy: " is a label and "hover" is the
+// answer, so an SGR reset closes the label's span between them and a colourless
+// render would be testing a line this program never draws.
 func TestTheHeaderNamesHoverRatherThanTheStrategyHoverOverrode(t *testing.T) {
 	snap := fixtureSnapshot(fixtureReport(113, 26))
 	snap.Strategy, snap.Hover = "consume-first", true
 
-	page := newModel(snap, 113, 26, theme.Of(theme.None), UnicodeGlyphs).Body()
+	page := ansi.Strip(newModel(snap, 113, 26, theme.Of(theme.Dark), UnicodeGlyphs).Body())
 	if !strings.Contains(page, "Strategy: hover") {
 		t.Errorf("the header does not name hover:\n%s", page)
 	}

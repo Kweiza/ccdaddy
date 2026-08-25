@@ -14,32 +14,6 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/view"
 )
 
-// The styles this file used to hand out, and the one it still does. stateCell
-// answers with a theme.Role now, so five of the six below are reached by
-// nothing; only styleHeader is still read, by cellStyle. They are kept rather
-// than deleted because deleting them is a decision about COLOUR, and this
-// commit swaps the glyph vocabulary and paints nothing -- putting the two in
-// one commit is what would make a glyph failure that reproduces on one
-// operating system impossible to bisect.
-//
-// Every one of them is the zero lipgloss.Style, and that is load-bearing rather
-// than provisional: the two escape-byte gates in this package assert that a
-// page drawn through these emits no SGR byte at all, which is what lets the
-// seven golden pages under testdata be compared as bytes. Colour is redundant
-// emphasis in this column anyway -- the glyph and the word carry the meaning,
-// so a monochrome terminal and NO_COLOR lose nothing -- and lipgloss v2 has no
-// auto-adaptive fallback (v1's renderer chose for a light or dark background
-// and v2 does not), so a concrete value picked here without a palette would be
-// illegible on half the terminals in the world.
-var (
-	styleActive      = lipgloss.NewStyle()
-	styleCandidate   = lipgloss.NewStyle()
-	styleExhausted   = lipgloss.NewStyle()
-	styleQuarantined = lipgloss.NewStyle()
-	styleMuted       = lipgloss.NewStyle()
-	styleHeader      = lipgloss.NewStyle()
-)
-
 // newGauge is the ten-cell bar. Ten cells, so a full bar is ten characters and
 // one character is ten percent -- a scale a reader can count without a legend.
 //
@@ -63,11 +37,16 @@ var (
 // progress.New defaults FullColor and EmptyColor to its own purple/gray pair
 // and paints them unconditionally -- there is no "no colour" Option, only
 // exported fields. lipgloss.NoColor{} is the library's own documented way to
-// say a role carries no colour, and NoColor is the whole of what this file says
-// about colour in this commit: nothing here paints yet. The bar's fill takes a
-// role from the palette in the commit that applies it, per row; until then it
-// is the terminal's own foreground, which is the one colour a library default
+// say a role carries no colour, and it is what this constructor leaves them at:
+// the terminal's own foreground, which is the one colour a library default
 // could never have got right on a terminal nobody has measured.
+//
+// The page then overwrites both fields on its own COPY of this model, per row,
+// from gaugeRole and RoleGaugeEmpty -- a progress.Model is a value, and the
+// dashboard holds exactly one of them. That is why the pair is set here at all
+// rather than left at the library's default: a row whose palette answers
+// NoColor must fall back to a bar this constructor already made colourless,
+// not to a purple somebody else chose.
 func newGauge(g Glyphs) progress.Model {
 	p := progress.New(
 		progress.WithFillCharacters(g.GaugeFull, g.GaugeEmpty),
@@ -106,37 +85,112 @@ func usedCell(r view.Row, g progress.Model) string {
 // same two absences: a narrow terminal is not a reason to invent a number.
 func usedCellCollapsed(r view.Row) string { return r.UsedLabel() }
 
-// stateCell is one self-describing cell: a glyph, a word, and the ROLE the pair
-// is painted in. The glyph is redundant emphasis and the word carries the
-// meaning, so the column survives NO_COLOR and a monochrome terminal.
+// warnBand is how close to its threshold a row has to be before the bar turns
+// amber. Ten points, and it is a DISPLAY constant: nothing in this repository
+// decides anything by it, no engine reads it, and moving it changes the colour
+// of a bar and nothing else.
 //
-// It hands back a role and not a style, and the difference is what makes this
-// function testable. A lipgloss.Style carries a []color.Color and a func field
-// and has no ==, so a caller can compare two styles only by rendering them; a
-// role is an int, and the mapping from a state to its emphasis is therefore a
-// value a test pins directly. Building the style is the caller's job, because
-// the caller is the one holding the palette.
+// It is deliberately NOT strategy's hysteresis_pct, which is the number a
+// reader reaches for first, and any one of these four objections is enough on
+// its own. hysteresis_pct is a PAIRWISE displacement margin -- how far a
+// candidate has to beat the ACTIVE account before the engine will move the
+// credential -- so it carries no information at all about one row's own
+// distance to breach. It is applied in exactly one place in the ranking and
+// nowhere near a row. Its defaulting substitutes ten for any value at or below
+// zero, so a user who deliberately set it to nothing would get a band they
+// never asked for. And under hover the engine does not read it at all -- which
+// is precisely the "the table says one thing and the engine does another"
+// failure a band on a dashboard exists to avoid.
+//
+// A named display constant claims only "close to the threshold", claims it in
+// its own name, and no engine number can drift away from it.
+const warnBand = 10.0
+
+// gaugeRole is the bar's colour.
+//
+// The emptiness clause is FIRST and it asks an ACCOUNT-level question rather
+// than a question about the window the bar happens to be drawing. A blown
+// five-hour window can never become a floor -- the floor rule requires a weekly
+// window -- so when a weekly binds on slack the reported window is the weekly
+// and the five-hour window with nothing left in it is invisible to any test
+// asked of the reported window. Reproduced against the tree: five-hour 100%
+// used at 95% elapsed, seven-day 40% used at 30% elapsed, the bar reads 40%,
+// and the daemon has already filed the account as empty. Painting that green is
+// the whole reason this clause runs ahead of the band.
+//
+// The band then reads the REPORTED window's slack and never the binding
+// window's, because the bar's LENGTH came from the reported window. An account
+// whose weekly floor is blown draws a full bar off the weekly while its binding
+// five-hour window still carries 3.667 points of slack, and a band fed the
+// binding number paints a dead account green under a bar that reads 100%.
+// Colour and length describe one window or they describe nothing.
+//
+// An account nobody could read takes RoleMuted rather than a gauge role.
+// Unknown is not empty, and the cell it lands in draws no bar at all -- the
+// bare question mark, with no bracket, because a bracket implies a reading --
+// so the absence is carried by there being nothing to paint, never by a bar.
+func gaugeRole(r view.Row) theme.Role {
+	if empty, known := r.Empty(); known && empty {
+		return theme.RoleGaugeOver
+	}
+	slack, _, ok := r.ReportedSlack()
+	if !ok {
+		return theme.RoleMuted
+	}
+	switch {
+	case slack <= 0:
+		return theme.RoleGaugeOver
+	case slack <= warnBand:
+		return theme.RoleGaugeWarn
+	}
+	return theme.RoleGaugeOK
+}
+
+// stateCell is one self-describing cell: a glyph, a word, and the role that
+// colours both. The glyph is redundant emphasis and the word carries the
+// meaning, so the column survives NO_COLOR, a monochrome terminal and the None
+// theme with nothing lost.
+//
+// The third return is a theme.Role and not a lipgloss.Style, and that is the
+// whole reason this signature changed. This function used to hand back one of
+// six empty styles held in a package var block, justified by the claim that
+// lipgloss v2 has no auto-adaptive fallback. That claim was wrong. What v2
+// removed is the GLOBAL RENDERER: a Style no longer consults anything about the
+// terminal on its own, so the background-darkness boolean has to be threaded in
+// from the program that asked the terminal for it. Threading it is what the
+// palette does, and once a palette exists there is nothing left for an empty
+// package var to hold.
+//
+// So the style is manufactured from a palette at the moment a caller renders.
+// This function needs no palette, stays a pure map from a document value to a
+// vocabulary, and cannot hand two callers styles built from two different
+// themes. It is also what lets a test assert the mapping by value, since
+// lipgloss.Style carries a slice field and a func field and therefore has no ==.
 //
 // The default arm is mandatory. AccountState is a string type, so a switch
 // without one falls out of every case and leaves the caller holding whatever it
-// initialised -- most naturally a zero glyph and the zero Role, which is the
-// terminal's own foreground and reads as "nothing unusual here". The document
-// format is additive by contract: a newer daemon may publish a state this
-// binary has never heard of, and that happens on the day somebody upgrades one
-// half of a machine. Carry the value through and render it.
+// initialised -- most naturally a zero glyph and the zero Role, which reads as
+// "the terminal's own foreground on an active account". The document format is
+// additive by contract: a newer daemon may publish a state this binary has
+// never heard of, and that happens on the day somebody upgrades one half of a
+// machine. Carry the value through and render it.
 //
 // The empty string is its own arm and it is not an error. AccountStatus.State
 // is omitempty and is filled from a map lookup that returns the zero value on a
 // miss, so an account no daemon has ever published carries "".
 //
-// The glyph here is deliberately NOT the character the two tables use for the
-// live account, and that is a reversal of what this comment used to say. The
-// live marker answers "which login would a session get right now", read from
-// the credential file; this answers "what did the ranking last decide about
-// this account", read from the daemon's own status document. Two documents, two
-// questions, and when they disagree that disagreement is the most useful thing
-// on the page -- which the old shared "*" hid, because agreement and a
-// rendering coincidence looked identical.
+// StateEmpty takes RoleExhausted rather than a role of its own. The two are
+// different facts -- one is past the number it was given, the other has nothing
+// left -- and the GLYPH is what keeps them apart; a second red would spend a
+// role on a distinction the reader is already being shown.
+//
+// The glyph is deliberately NOT the character the two tables use for the live
+// account. The live marker answers "which login would a session get right now",
+// read from the credential file; this answers "what did the ranking last decide
+// about this account", read from the daemon's own status document. Two
+// documents, two questions, and when they disagree that disagreement is the
+// most useful thing on the page -- which the old shared "*" hid, because
+// agreement and a rendering coincidence looked identical.
 func stateCell(g Glyphs, s daemon.AccountState) (glyph, text string, role theme.Role) {
 	switch s {
 	case daemon.StateActive:

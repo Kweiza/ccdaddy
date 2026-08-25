@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/Kweiza/ccdaddy/internal/daemon"
+	"github.com/Kweiza/ccdaddy/internal/theme"
 	"github.com/Kweiza/ccdaddy/internal/view"
 )
 
@@ -173,13 +174,29 @@ func newApp(o Options) App {
 	return App{m: newModel(view.Snapshot{}, 0, 0, paletteFor(o.Theme), glyphsFor(o)), opts: o}
 }
 
-// Init loads once and starts both clocks.
+// Init loads once, starts both clocks, and asks the terminal what colour it is.
 //
 // The startup read goes through a message rather than straight to the seam,
 // because Init hands back a command and not a model -- and the flag that says
 // a read is in flight lives on the model.
+//
+// tea.RequestBackgroundColor is passed BARE, with no parentheses. It is a
+// func() Msg and tea.Cmd is a func() Msg, so the identifier already IS a Cmd;
+// bubbletea's own godoc shows `return RequestBackgroundColor()` inside an Init,
+// which returns a Msg and does not compile here.
+//
+// It is a fourth Cmd in this Batch and nothing else changes. NO ProgramOption is
+// added and none is needed: the option list Run hands the library is empty, and
+// that emptiness is the shutdown property that keeps a SIGTERM in raw mode from
+// killing the process outright -- a test counts those options at zero and this
+// must not be the change that makes it one.
 func (a App) Init() tea.Cmd {
-	return tea.Batch(func() tea.Msg { return refreshMsg{} }, a.tickContent(), a.tickReload())
+	return tea.Batch(
+		func() tea.Msg { return refreshMsg{} },
+		a.tickContent(),
+		a.tickReload(),
+		tea.RequestBackgroundColor,
+	)
 }
 
 // Update is the whole event loop. Every arm that schedules ends by returning
@@ -190,6 +207,41 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		a.m.Width, a.m.Height = msg.Width, msg.Height
 		a.m = scrolled(a.m)
+		return a, nil
+
+	case tea.BackgroundColorMsg:
+		// This arm is LIVE in a shipping binary and not a defensive branch, and
+		// the guard below stays. Options.Theme carries the CONFIGURED value, so
+		// `tui.theme = auto` -- the default nobody changes -- arrives here as
+		// theme.Auto, and this is the only place the interactive page ever
+		// learns it is running on a light terminal. Package cli does not
+		// resolve it first, deliberately: resolving in tuiOptions would put the
+		// two-second raw-mode query on the branch where both stdio ends are
+		// terminals, which is the interactive one, and that is the single path
+		// this program must never block on.
+		//
+		// Auto is the only name this answer may move, and the guard is not an
+		// optimisation. theme.Pick hands back the named theme for every other
+		// name, which is right for dark, light, ansi and none and WRONG for the
+		// empty one: an unrecognised name resolves to Dark, and the empty name
+		// is what an Options nobody filled in carries. paletteFor is where that
+		// substitution is made at construction, and asking Pick here would be a
+		// second, disagreeing answer to "what does no name mean" -- one that
+		// would make probes() paint and redden every golden.
+		//
+		// This is a REFINEMENT and never a construction. The page was built and
+		// has been drawing since frame one; bubbletea sends this message only in
+		// answer to a request and tracks no timeout, so a terminal that never
+		// answers must be left with a working page rather than an unbuilt one.
+		//
+		// The keybar is rebuilt with it. help.Model holds its seven styles by
+		// value, so a Model whose palette moved without it would draw a light
+		// page under a dark keybar.
+		if a.opts.Theme != theme.Auto {
+			return a, nil
+		}
+		a.m.Pal = theme.Pick(theme.Auto, msg.IsDark())
+		a.m.Help = newHelp(a.m.Glyphs.Cue, a.m.Pal)
 		return a, nil
 
 	case contentMsg:
@@ -279,9 +331,11 @@ func (a App) body() string {
 	case screenPicker:
 		return fit(a.pick.Body(a.m.Width, a.m.Pal), a.m.Width, a.m.Height)
 	case screenPanel:
+		// a.note is untouched: it is a sentence this package wrote and has no
+		// exit code, so there is no verdict to colour it from.
 		text := a.note
 		if text == "" {
-			text = a.res.Body(a.m.Width)
+			text = a.res.Body(a.m.Width, a.m.Pal)
 		}
 		return fit(text+"\n\nesc  back", a.m.Width, a.m.Height)
 	case screenDaemon:
@@ -317,6 +371,7 @@ func (a App) daemonScreen() daemonScreen {
 		CredentialHome: a.opts.CredentialHome,
 		SamePath:       a.opts.SamePath,
 		Glyphs:         a.m.Glyphs,
+		Pal:            a.m.Pal,
 	}
 }
 
