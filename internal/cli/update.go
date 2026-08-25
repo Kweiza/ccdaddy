@@ -227,7 +227,7 @@ func runUpdate(cmd *cobra.Command, opts updateOptions) error {
 	// Step 1. Two paths, and they are not the same path.
 	exe, err := executablePath()
 	if err != nil {
-		return rep.emit(cmd, opts.asJSON, ExitFailure, "no-executable-path",
+		return rep.emit(cmd, opts.asJSON, updateReasonCode("no-executable-path"), "no-executable-path",
 			fmt.Sprintf("ccdad cannot tell where its own binary is (%v), so it cannot replace it.", err))
 	}
 	// invokedDir is UNRESOLVED, and it is the only correct input to the PATH
@@ -242,7 +242,7 @@ func runUpdate(cmd *cobra.Command, opts updateOptions) error {
 	// right for the question IT answers; it is wrong here.
 	target, err := filepath.EvalSymlinks(exe)
 	if err != nil {
-		return rep.emit(cmd, opts.asJSON, ExitFailure, "no-executable-path",
+		return rep.emit(cmd, opts.asJSON, updateReasonCode("no-executable-path"), "no-executable-path",
 			fmt.Sprintf("ccdad cannot resolve %s to a real file (%v), so it cannot replace it.", exe, err))
 	}
 	// The staging directory is the target's own directory, which is what makes
@@ -258,7 +258,7 @@ func runUpdate(cmd *cobra.Command, opts updateOptions) error {
 	// update test depending on whether a key has been generated yet.
 	keys := releaseKeys()
 	if len(keys) == 0 {
-		return rep.emit(cmd, opts.asJSON, ExitBlocked, "no-pinned-key",
+		return rep.emit(cmd, opts.asJSON, updateReasonCode("no-pinned-key"), "no-pinned-key",
 			"This ccdad was built with no release key, so it cannot verify an update. "+
 				"Re-run the installer from the project's README to get a build that can.")
 	}
@@ -266,7 +266,7 @@ func runUpdate(cmd *cobra.Command, opts updateOptions) error {
 	// Step 3. A dev build has no released version to compare against, and
 	// replacing it would throw away whatever it was built from.
 	if buildinfo.Version == "dev" {
-		return rep.emit(cmd, opts.asJSON, ExitBlocked, "dev-build",
+		return rep.emit(cmd, opts.asJSON, updateReasonCode("dev-build"), "dev-build",
 			"This is a development build, so there is no released version to update from. "+
 				"Re-run the installer from the project's README to get a released one.")
 	}
@@ -278,7 +278,7 @@ func runUpdate(cmd *cobra.Command, opts updateOptions) error {
 	// path, because a /usr/local/bin symlink resolves into the Cellar and the
 	// Cellar is what names the manager.
 	if owner := packageManagerOwning(target); owner != "" {
-		return rep.emit(cmd, opts.asJSON, ExitBlocked, "package-manager",
+		return rep.emit(cmd, opts.asJSON, updateReasonCode("package-manager"), "package-manager",
 			fmt.Sprintf("%s installed ccdad at %s and owns that file. Run %s instead: replacing it here "+
 				"would leave %s believing something else is installed.", owner, target, upgradeHint(owner), owner))
 	}
@@ -292,7 +292,7 @@ func runUpdate(cmd *cobra.Command, opts updateOptions) error {
 	// permission.
 	staging, err := os.MkdirTemp(stageDir, updateStagePattern)
 	if err != nil {
-		return rep.emit(cmd, opts.asJSON, ExitBlocked, "not-writable",
+		return rep.emit(cmd, opts.asJSON, updateReasonCode("not-writable"), "not-writable",
 			fmt.Sprintf("ccdad cannot write to %s (%v), so it cannot stage a replacement there.", stageDir, err))
 	}
 	defer os.RemoveAll(staging)
@@ -308,7 +308,7 @@ func runUpdate(cmd *cobra.Command, opts updateOptions) error {
 		tag, err := client.Latest(ctx)
 		cancel()
 		if err != nil {
-			return rep.emit(cmd, opts.asJSON, ExitFailure, "resolve-failed",
+			return rep.emit(cmd, opts.asJSON, updateReasonCode("resolve-failed"), "resolve-failed",
 				fmt.Sprintf("ccdad could not work out which release is latest: %v", err))
 		}
 		// Latest already re-parsed and re-stringified this, and it is parsed
@@ -316,7 +316,7 @@ func runUpdate(cmd *cobra.Command, opts updateOptions) error {
 		// whichever of the two sources it came from.
 		v, ok := release.ParseTag(tag)
 		if !ok {
-			return rep.emit(cmd, opts.asJSON, ExitFailure, "resolve-failed",
+			return rep.emit(cmd, opts.asJSON, updateReasonCode("resolve-failed"), "resolve-failed",
 				fmt.Sprintf("ccdad could not read %q as a release tag.", tag))
 		}
 		want = v
@@ -344,7 +344,7 @@ func runUpdate(cmd *cobra.Command, opts updateOptions) error {
 			// Skipped when --version is explicit, because
 			// `ccdad update --version <what I am on>` is how a user re-fetches
 			// and re-verifies a binary they suspect.
-			return rep.emit(cmd, opts.asJSON, ExitNothingToDo, "already-current",
+			return rep.emit(cmd, opts.asJSON, updateReasonCode("already-current"), "already-current",
 				fmt.Sprintf("ccdad %s is the latest release, and it is what is running here.", want))
 		case want.Compare(running) < 0:
 			// Step 8. The tag arrived over an unauthenticated channel, and the
@@ -353,7 +353,7 @@ func runUpdate(cmd *cobra.Command, opts updateOptions) error {
 			// are public and pass every check. Naming the tag is the consent
 			// that unlocks it; there is no prompt, because there is nothing
 			// here to destroy.
-			return rep.emit(cmd, opts.asJSON, ExitBlocked, "rollback",
+			return rep.emit(cmd, opts.asJSON, updateReasonCode("rollback"), "rollback",
 				fmt.Sprintf("The origin says the latest release is %s, which is older than the %s running here. "+
 					"Nothing was downloaded. Pass --version %s if that is really what you want.",
 					want.Tag(), running, want.Tag()))
@@ -367,7 +367,7 @@ func runUpdate(cmd *cobra.Command, opts updateOptions) error {
 	sums, err := client.Get(ctx, dl+"/sha256sums.txt", maxSumsBytes)
 	cancel()
 	if err != nil {
-		return rep.emit(cmd, opts.asJSON, ExitFailure, "download-sums",
+		return rep.emit(cmd, opts.asJSON, updateReasonCode("download-sums"), "download-sums",
 			fmt.Sprintf("ccdad could not download the checksum file for %s: %v", want.Tag(), err))
 	}
 
@@ -383,11 +383,11 @@ func runUpdate(cmd *cobra.Command, opts updateOptions) error {
 	if err != nil {
 		var status *release.StatusError
 		if errors.As(err, &status) && status.Status == http.StatusNotFound {
-			return rep.emit(cmd, opts.asJSON, ExitBlocked, "unsigned-release",
+			return rep.emit(cmd, opts.asJSON, updateReasonCode("unsigned-release"), "unsigned-release",
 				fmt.Sprintf("Release %s publishes no signature, so ccdad will not install it. "+
 					"Re-run the installer from the project's README if you mean to move to it anyway.", want.Tag()))
 		}
-		return rep.emit(cmd, opts.asJSON, ExitFailure, "download-sums",
+		return rep.emit(cmd, opts.asJSON, updateReasonCode("download-sums"), "download-sums",
 			fmt.Sprintf("ccdad could not download the signature for %s: %v", want.Tag(), err))
 	}
 
@@ -406,7 +406,7 @@ func runUpdate(cmd *cobra.Command, opts updateOptions) error {
 	// that closes that, because it is signed and it is ours to define.
 	if err := relsign.Verify(keys, sums, sig, want.Tag()); err != nil {
 		reason, remedy := updateVerifyFailure(err)
-		return rep.emit(cmd, opts.asJSON, ExitBlocked, reason,
+		return rep.emit(cmd, opts.asJSON, updateReasonCode(reason), reason,
 			fmt.Sprintf("The signature on %s's checksum file did not verify: %v\n%s", want.Tag(), err, remedy))
 	}
 	say(cmd, opts.asJSON, "Verified sha256sums.txt against ccdad's release key.")
@@ -414,7 +414,7 @@ func runUpdate(cmd *cobra.Command, opts updateOptions) error {
 	// Step 12. Verified, and still possibly an HTML page: a signature says who
 	// wrote the bytes and never what they are.
 	if !release.SumsLookLikeSums(sums) {
-		return rep.emit(cmd, opts.asJSON, ExitBlocked, "shape",
+		return rep.emit(cmd, opts.asJSON, updateReasonCode("shape"), "shape",
 			fmt.Sprintf("The checksum file for %s carries no checksums at all, so ccdad will not install it. "+
 				"It came correctly signed, which makes this worse rather than better. "+
 				"Check https://github.com/Kweiza/ccdaddy/releases, and read the file yourself with "+
@@ -427,7 +427,7 @@ func runUpdate(cmd *cobra.Command, opts updateOptions) error {
 	asset := release.Asset()
 	wantHash, listed := release.ExpectedHash(sums, asset)
 	if !listed {
-		return rep.emit(cmd, opts.asJSON, ExitBlocked, "not-listed",
+		return rep.emit(cmd, opts.asJSON, updateReasonCode("not-listed"), "not-listed",
 			fmt.Sprintf("Release %s does not publish %s, so there is nothing here for this machine. "+
 				"Check https://github.com/Kweiza/ccdaddy/releases for what it does carry.", want.Tag(), asset))
 	}
@@ -476,7 +476,7 @@ func runUpdate(cmd *cobra.Command, opts updateOptions) error {
 	gotHash, n, err := client.Download(ctx, dl+"/"+asset, staged, maxAssetBytes)
 	cancel()
 	if err != nil {
-		return rep.emit(cmd, opts.asJSON, ExitFailure, "download-asset",
+		return rep.emit(cmd, opts.asJSON, updateReasonCode("download-asset"), "download-asset",
 			fmt.Sprintf("ccdad could not download %s: %v", asset, err))
 	}
 
@@ -484,7 +484,7 @@ func runUpdate(cmd *cobra.Command, opts updateOptions) error {
 	// reported as what it is. install.sh applies the same floor for the same
 	// reason, and the two must not drift.
 	if n < release.MinAssetBytes {
-		return rep.emit(cmd, opts.asJSON, ExitBlocked, "size",
+		return rep.emit(cmd, opts.asJSON, updateReasonCode("size"), "size",
 			fmt.Sprintf("%s downloaded as %d bytes, which is not a ccdad binary — a proxy or an error page. "+
 				"Nothing was replaced.", asset, n))
 	}
@@ -505,7 +505,7 @@ func runUpdate(cmd *cobra.Command, opts updateOptions) error {
 	// ASSET, and re-running minisign on the checksum file would succeed and say
 	// nothing at all about that.
 	if gotHash != wantHash {
-		return rep.emit(cmd, opts.asJSON, ExitBlocked, "checksum",
+		return rep.emit(cmd, opts.asJSON, updateReasonCode("checksum"), "checksum",
 			fmt.Sprintf("%s does not match the checksum %s publishes for it.\n"+
 				"  published %s\n  downloaded %s\n"+
 				updateDistrust+".", asset, want.Tag(), wantHash, gotHash))
@@ -520,7 +520,7 @@ func runUpdate(cmd *cobra.Command, opts updateOptions) error {
 	// catches. It proves the asset runs on the machine about to use it; it
 	// proves nothing about whether it was ever tested.
 	if err := smokeStaged(cmd.Context(), staged, want); err != nil {
-		return rep.emit(cmd, opts.asJSON, ExitBlocked, "smoke",
+		return rep.emit(cmd, opts.asJSON, updateReasonCode("smoke"), "smoke",
 			fmt.Sprintf("The downloaded %s will not run on this machine: %v\nNothing was replaced.", asset, err))
 	}
 
@@ -541,13 +541,13 @@ func runUpdate(cmd *cobra.Command, opts updateOptions) error {
 		if !errors.Is(err, errSilent) {
 			human = fmt.Sprintf("The ccdad daemon could not be stopped (%v), so the binary was left alone.", err)
 		}
-		return rep.emit(cmd, opts.asJSON, ExitFailure, "daemon", human)
+		return rep.emit(cmd, opts.asJSON, updateReasonCode("daemon"), "daemon", human)
 	}
 	rep.daemonWasRunning = wasRunning
 
 	// Step 20.
 	if err := replaceBinary(staged, target); err != nil {
-		return rep.emit(cmd, opts.asJSON, ExitFailure, "replace-failed",
+		return rep.emit(cmd, opts.asJSON, updateReasonCode("replace-failed"), "replace-failed",
 			fmt.Sprintf("ccdad could not put the new binary in place: %v", err))
 	}
 	rep.updated = true
@@ -612,6 +612,28 @@ func upgradeHint(owner string) string {
 		return "'scoop update ccdad'"
 	}
 	return "'brew upgrade ccdad'"
+}
+
+// updateReasonCode is the exit code each reason carries, stated once.
+//
+// The rule: once ccdad holds a candidate release, anything the origin served
+// that ccdad refuses is 4, and anything ccdad itself could not do is 1. The
+// clause before the comma is the carve-out that makes the table consistent — a
+// discovery step that cannot produce a candidate at all is 1, because there is
+// no release yet to have an opinion about.
+//
+// An unknown reason is 1, which is the safe half: a new refusal that forgot to
+// be listed reports "ccdad could not do this" rather than accusing an origin.
+func updateReasonCode(reason string) ExitCode {
+	switch reason {
+	case "already-current":
+		return ExitNothingToDo
+	case "no-pinned-key", "dev-build", "package-manager", "not-writable", "rollback",
+		"unsigned-release", "signature", "key-id", "wrong-release", "algorithm",
+		"malformed", "shape", "not-listed", "size", "checksum", "smoke":
+		return ExitBlocked
+	}
+	return ExitFailure
 }
 
 // smokeStaged runs the staged binary once and requires it to name the release
