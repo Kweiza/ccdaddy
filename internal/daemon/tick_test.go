@@ -17,6 +17,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/cclock"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/config"
+	"github.com/Kweiza/ccdaddy/internal/history"
 	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/oauth"
 	"github.com/Kweiza/ccdaddy/internal/pollpolicy"
@@ -2118,3 +2119,288 @@ func TestTwoDaemonsHandedTheSameInputsDoNotPickTheSameDeadline(t *testing.T) {
 // so pinning it here changes what the tests assert not at all and only says out
 // loud which sample they were always relying on.
 func midJitter() float64 { return 0.5 }
+
+// readingAt is a snapshot whose five-hour window is readable and whose reset is
+// far enough out that nothing in the tick wants to warm it up. snapshotWith
+// anchors its reset an hour after tickEpoch, which a test that advances its
+// clock walks straight past.
+func readingAt(pct float64, at time.Time) *usage.Snapshot {
+	resets := at.Add(8 * time.Hour)
+	return &usage.Snapshot{FiveHour: usage.NewWindow(&pct, &resets)}
+}
+
+// seriesOf reads one account's stored series with no lower bound, so a test
+// sees every sample on disk rather than the subset a store's AddedAt admits.
+func seriesOf(t *testing.T, uuid string) []history.Sample {
+	t.Helper()
+	h, err := history.LoadHistory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h.Series(uuid, time.Time{})
+}
+
+// A sample is taken only where a reading exists. commit is reached from four
+// call sites and only one of them carries a snapshot; the other three are
+// failure paths that re-stamp scheduling state and deliberately leave the last
+// good reading alone. Writing a point on one of those would put the PREVIOUS
+// reading's percentage at the current instant, which is a flat segment that
+// never happened, and a burn rate measured across it is dragged toward zero for
+// as long as the outage lasts — the one moment the figure is worth having.
+func TestOnlyASuccessfulPollRecordsASample(t *testing.T) {
+	isolateEngine(t)
+	seedAccount(t, "u-1", "org-1")
+	liveAs(t, "u-1")
+
+	now := tickEpoch
+	var tokenErr, fetchErr error
+	e := engineFor(t, func(context.Context, string) (string, error) {
+		if tokenErr != nil {
+			return "", tokenErr
+		}
+		return "AT-u-1", nil
+	}, func(context.Context, string) (*usage.Snapshot, error) {
+		if fetchErr != nil {
+			return nil, fetchErr
+		}
+		return readingAt(42, now), nil
+	})
+	e.Now = func() time.Time { return now }
+
+	tick(t, e)
+	if got := seriesOf(t, "u-1"); len(got) != 1 {
+		t.Fatalf("samples after one successful poll = %d, want 1", len(got))
+	}
+
+	// Each of the three arms of handleFailure, in turn. Two hours between them
+	// clears every cadence the policy can choose: Post429MaxInterval, the
+	// longest, is thirty minutes.
+	for _, c := range []struct {
+		name  string
+		token error
+		fetch error
+	}{
+		// Claude Code has not rotated the live login in eight hours. This is
+		// unknown, not an endpoint failure, and commit runs with no snapshot.
+		{"the live login's token is stale", tokens.ErrLiveTokenStale, nil},
+		// The shared budget said stop. commit runs with no snapshot and the
+		// rate-limit adjustment.
+		{"the endpoint rate limited us", nil, usage.ErrRateLimited},
+		// A transport failure: no evidence about the account at all.
+		{"the endpoint could not be reached", nil, errors.New("dial tcp: connection refused")},
+	} {
+		now = now.Add(2 * time.Hour)
+		tokenErr, fetchErr = c.token, c.fetch
+		tick(t, e)
+		if got := seriesOf(t, "u-1"); len(got) != 1 {
+			t.Fatalf("%s: samples = %d, want the 1 the successful poll left; a failed poll fabricated a point", c.name, len(got))
+		}
+	}
+}
+
+// The recorder costs no request. This is the promise the whole series rests on:
+// it is made of readings the poller was already taking, so the endpoint's
+// allowance and the poll cadence are untouched by its existence.
+//
+// The comparison is against an arm in which the recorder writes nothing at all
+// — a directory stands where the document goes, so every Record fails on the
+// read before it even reaches the lock. If recording cost a request, or moved a
+// cadence, the two arms would not agree on how many requests were made.
+func TestTheRecorderTakesNoNewRequest(t *testing.T) {
+	poll := func(t *testing.T) int {
+		t.Helper()
+		seedAccount(t, "u-1", "org-1")
+		liveAs(t, "u-1")
+		now := tickEpoch
+		var calls atomicCounter
+		e := engineFor(t, tokensAreFine, func(context.Context, string) (*usage.Snapshot, error) {
+			calls.inc()
+			return readingAt(42, now), nil
+		})
+		e.Now = func() time.Time { return now }
+		// Three, so the count is a cadence rather than a single event: two
+		// hours apart clears every interval the policy can choose.
+		for i := 0; i < 3; i++ {
+			tick(t, e)
+			now = now.Add(2 * time.Hour)
+		}
+		return calls.get()
+	}
+
+	isolateEngine(t)
+	recording := poll(t)
+	if got := len(seriesOf(t, "u-1")); got != recording {
+		t.Fatalf("samples = %d over %d requests; one poll is one sample", got, recording)
+	}
+
+	isolateEngine(t)
+	if err := os.MkdirAll(mustPath(history.Path()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	silent := poll(t)
+	// The proof that this arm really did record nothing: a Record that had
+	// somehow succeeded would have had to replace the directory with a file.
+	if fi, err := os.Stat(mustPath(history.Path())); err != nil || !fi.IsDir() {
+		t.Fatalf("the arm that must store nothing wrote a document anyway: %v, %v", fi, err)
+	}
+	if recording != silent {
+		t.Fatalf("requests with the recorder = %d, without it = %d; the series must be made of readings already being taken", recording, silent)
+	}
+}
+
+// The two cross-process locks are never nested. usage.WithCache and
+// history.WithHistory are both cclock mkdir mutexes on the same store, and
+// nothing else in this tree holds one while taking another.
+//
+// The observable is timing, because the two lock DIRECTORIES differ and nesting
+// them therefore does not deadlock — it just holds the cache shut for as long
+// as the series lock is contended. So the series lock is held here by another
+// owner for the whole test, which parks the recorder at its full timeout, and
+// the reading is required to have reached the cache long before that timeout
+// could elapse. A recorder called from inside the cache callback would publish
+// nothing until it gave up.
+func TestTheCacheLockIsFreeWhileTheHistoryWriteWaits(t *testing.T) {
+	isolateEngine(t)
+	seedAccount(t, "u-1", "org-1")
+	liveAs(t, "u-1")
+
+	// Held through the package's own API rather than by rebuilding its lock
+	// path here: a test that spells the lock directory itself stops testing the
+	// same lock the moment the name moves.
+	held := make(chan struct{})
+	release := make(chan struct{})
+	locked := make(chan error, 1)
+	go func() {
+		locked <- history.WithHistory(5*time.Second, func(*history.History) error {
+			close(held)
+			<-release
+			return nil
+		})
+	}()
+	<-held
+	// Registered before the first assertion can fire: a t.Fatal below runs the
+	// cleanups, and without this one the fixture would sit on the lock — and on
+	// cclock's touch goroutine — for the rest of the binary's life.
+	var once sync.Once
+	unlock := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(unlock)
+
+	e := engineFor(t, tokensAreFine, func(context.Context, string) (*usage.Snapshot, error) {
+		return readingAt(42, tickEpoch), nil
+	})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = e.Tick(context.Background())
+		e.Wait()
+	}()
+
+	deadline := time.Now().Add(historyTimeout / 2)
+	for {
+		if _, ok := cacheEntry(t, "u-1"); ok {
+			break
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatal("half a history timeout after the poll started the reading had still not reached the usage cache; the cache lock is being held across the history write")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	select {
+	case <-done:
+		t.Fatal("the poll finished while the series lock was held by someone else, so it never waited for that lock at all")
+	default:
+	}
+
+	unlock()
+	<-done
+	if err := <-locked; err != nil {
+		t.Fatalf("the fixture's own history write failed: %v", err)
+	}
+}
+
+// A sample is a COPY of the reading, and the copy is where a tri-state is
+// easiest to flatten. Three of them cross here: a window that is present but
+// unreadable, a credit balance that cannot be read, and a monthly limit that
+// was not reported.
+func TestASampleKeepsTheReadingsTriStatesApart(t *testing.T) {
+	at := time.Date(2026, 8, 25, 8, 12, 46, 459438294, time.UTC)
+	pct := 24.0
+	// resets_at as the endpoint sends it: an anchor on the minute carrying a
+	// sub-second component generated from the server's clock at request time.
+	reset := time.Date(2026, 8, 25, 1, 40, 0, 308482000, time.UTC)
+	used := 1250.0 // minor units, so $12.50
+
+	got := historySample(&usage.Snapshot{
+		FiveHour: usage.NewWindow(&pct, &reset),
+		// Present and reporting neither figure, which is what a freshly reset
+		// account answers: {"utilization":null,"resets_at":null}.
+		SevenDay: usage.NewWindow(nil, nil),
+		ExtraUsage: usage.ExtraUsageFor(usage.ExtraUsageInput{
+			State: usage.ExtraUsageEnabled, Currency: "USD", UsedCredits: &used,
+		}),
+	}, at)
+
+	if !got.At.Equal(at) {
+		t.Errorf("At = %s, want the reading's own instant %s", got.At, at)
+	}
+	if _, present := got.Windows[usage.WindowSevenDay]; present {
+		t.Error("a present window whose utilization could not be read was stored anyway; nothing read is not nothing used")
+	}
+	w, ok := got.Windows[usage.WindowFiveHour]
+	if !ok {
+		t.Fatalf("five_hour is missing from %v", got.Windows)
+	}
+	if w.Pct != 24 {
+		t.Errorf("Pct = %v, want 24", w.Pct)
+	}
+	if want := reset.Truncate(time.Minute); !w.Reset.Equal(want) {
+		t.Errorf("Reset = %s, want %s — the sub-second part is the server's clock, not the window's anchor", w.Reset, want)
+	}
+	if got.Credit == nil {
+		t.Fatal("an enabled account with a readable balance stored no credit")
+	}
+	if got.Credit.Used != 12.50 {
+		t.Errorf("Used = %v, want 12.50 — the wire figure is in minor units", got.Credit.Used)
+	}
+	if got.Credit.Currency != "USD" {
+		t.Errorf("Currency = %q, want USD; two accounts' figures do not add up without it", got.Credit.Currency)
+	}
+	if got.Credit.Limit != nil {
+		t.Errorf("Limit = %v, want nil — no reported cap means unlimited, and a zero would mean a cap of nothing", *got.Credit.Limit)
+	}
+}
+
+// Credit is recorded only where the account both reports overage enabled and
+// answers with a balance. Every other state refuses: a money figure that cannot
+// be read is not a zero one.
+func TestCreditIsSampledOnlyWhenItIsBothEnabledAndReadable(t *testing.T) {
+	used, limit := 1250.0, 5000.0
+	for _, c := range []struct {
+		name string
+		in   usage.ExtraUsageInput
+		want bool
+	}{
+		{"enabled and readable", usage.ExtraUsageInput{
+			State: usage.ExtraUsageEnabled, Currency: "USD", UsedCredits: &used, MonthlyLimit: &limit}, true},
+		{"enabled but the balance did not come back", usage.ExtraUsageInput{
+			State: usage.ExtraUsageEnabled, Currency: "USD", MonthlyLimit: &limit}, false},
+		{"switched off on the account", usage.ExtraUsageInput{
+			State: usage.ExtraUsageDisabled, Currency: "USD", UsedCredits: &used}, false},
+		// An org or seat policy refusal, which is not the same verdict as
+		// overage being switched off, and neither is the same as not knowing.
+		{"blocked by policy", usage.ExtraUsageInput{
+			State: usage.ExtraUsageBlocked, Currency: "USD", UsedCredits: &used}, false},
+		{"the state itself could not be read", usage.ExtraUsageInput{
+			State: usage.ExtraUsageUnknown, Currency: "USD", UsedCredits: &used}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got := historySample(&usage.Snapshot{ExtraUsage: usage.ExtraUsageFor(c.in)}, tickEpoch)
+			if (got.Credit != nil) != c.want {
+				t.Fatalf("credit stored = %v, want %v", got.Credit != nil, c.want)
+			}
+			if c.want && (got.Credit.Limit == nil || *got.Credit.Limit != 50) {
+				t.Fatalf("Limit = %v, want 50 — the wire figure is in minor units", got.Credit.Limit)
+			}
+		})
+	}
+}
