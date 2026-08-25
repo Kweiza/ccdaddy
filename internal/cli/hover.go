@@ -5,7 +5,6 @@ import (
 	"io"
 	"strconv"
 	"strings"
-	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -510,8 +509,7 @@ func renderHoverStatus(cmd *cobra.Command, on bool, plan strategy.HoverPlan,
 		}
 	}
 
-	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "  IDX\tACCOUNT\tWINDOW\tELAPSED\tUTIL\tTHRESHOLD\tSLACK")
+	cells := make([][]string, 0, len(plan.Windows))
 	for _, row := range plan.Windows {
 		a := byUUID[row.UUID]
 		marker := " "
@@ -524,10 +522,18 @@ func renderHoverStatus(cmd *cobra.Command, on bool, plan strategy.HoverPlan,
 		if row.HasExpected {
 			elapsed = fmt.Sprintf("%.0f%%", row.ExpectedPct)
 		}
-		// The note rides on the SLACK cell rather than in a column of its own.
-		// tabwriter pads every cell that is followed by a tab, so a note column
-		// would pad SLACK out to the width of the longest note and leave every
-		// row without one ending in trailing spaces.
+		// The note rides on the SLACK cell rather than in a column of its own,
+		// and it stays there under columns() for a reason the tabwriter's did
+		// not survive. That one was mechanical: tabwriter padded every cell
+		// followed by a tab, so a note column would have padded SLACK out to
+		// the width of the longest note and left every row without one ending
+		// in trailing spaces. columns() pads no last column and trims every
+		// line, so that particular damage is gone. What is left is the reading:
+		// SLACK is three or four characters wide and a note is up to eighty, so
+		// as a column it would push every note to one fixed offset far to the
+		// right of the number it is explaining, and a row with no note would
+		// leave a gap the eye has to cross to find nothing. Seven cells,
+		// never eight.
 		note := ""
 		switch {
 		case row.Warmup.Target:
@@ -550,11 +556,15 @@ func renderHoverStatus(cmd *cobra.Command, on bool, plan strategy.HoverPlan,
 		case row.Credit:
 			note = "  (primary, metered in credits)"
 		}
-		fmt.Fprintf(w, "%s %d\t%s\t%s\t%s\t%.0f%%\t%.0f%%\t%+.0f%s\n",
-			marker, a.Idx, a.Label(), row.Window, elapsed,
-			row.Utilization, displayThreshold(row.Threshold), row.Slack, note)
+		cells = append(cells, []string{
+			fmt.Sprintf("%s %d", marker, a.Idx), a.Label(), string(row.Window), elapsed,
+			fmt.Sprintf("%.0f%%", row.Utilization),
+			fmt.Sprintf("%.0f%%", displayThreshold(row.Threshold)),
+			fmt.Sprintf("%+.0f", row.Slack) + note,
+		})
 	}
-	if err := w.Flush(); err != nil {
+	if err := columns(out, []string{"  IDX", "ACCOUNT", "WINDOW", "ELAPSED", "UTIL", "THRESHOLD", "SLACK"},
+		cells, nil); err != nil {
 		return err
 	}
 	thresholdCeilingFooter(out, plan)

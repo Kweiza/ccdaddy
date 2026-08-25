@@ -15,6 +15,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/config"
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 	"github.com/Kweiza/ccdaddy/internal/identity"
+	"github.com/Kweiza/ccdaddy/internal/theme"
 )
 
 // doctorReport is one run of the command, parsed out of --json.
@@ -2075,5 +2076,43 @@ func TestTheMCPToolsRowIsInTheReportDoctorActuallyPrints(t *testing.T) {
 	}
 	if !strings.Contains(stdout, `"mcp-tools"`) {
 		t.Errorf("the mcp-tools row is not in the report:\n%s", stdout)
+	}
+}
+
+// Four levels, four roles, and no two of them the same.
+//
+// The four-way distinctness is the assertion that matters, not the specific
+// roles: the point of colouring this column at all is that a reader picking the
+// fail rows out of twenty-two does not have to judge saturation, and two levels
+// sharing a role gives that back. skipped is checked against ok by name as well,
+// because that is the pair the eye would most naturally conflate -- "this check
+// does not apply here" reading as "this check passed" is the one wrong answer
+// this column can give, and it is the level the real checks emit on a fresh
+// machine, on Windows and off macOS.
+//
+// The unrecognised level is here because checkLevel is a string and this file's
+// check literals are POSITIONAL: a typo in the second field compiles. It must
+// come out RoleDefault, which is no colour at all, rather than inheriting an
+// arm and reporting a verdict nobody wrote.
+func TestEveryCheckLevelTakesItsOwnRole(t *testing.T) {
+	roles := map[checkLevel]theme.Role{}
+	for _, l := range []checkLevel{levelOK, levelWarn, levelFail, levelSkipped} {
+		roles[l] = levelRole(l)
+	}
+	seen := map[theme.Role]checkLevel{}
+	for l, r := range roles {
+		if other, dup := seen[r]; dup {
+			t.Errorf("%q and %q share a role, so the column asks a reader to tell two "+
+				"different verdicts apart by nothing", l, other)
+		}
+		seen[r] = l
+	}
+	if roles[levelSkipped] == roles[levelOK] {
+		t.Errorf("skipped is painted like ok, which tells a user a check passed when it " +
+			"never ran")
+	}
+	if got := levelRole(checkLevel("bogus")); got != theme.RoleDefault {
+		t.Errorf("an unrecognised level took role %v, want RoleDefault: a typo in a "+
+			"positional check literal must go out plain, not wearing fail's colour", got)
 	}
 }

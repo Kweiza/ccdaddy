@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/colorprofile"
 	"github.com/spf13/cobra"
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
@@ -37,12 +38,31 @@ import (
 // CLAUDE_SECURESTORAGE_CONFIG_DIR must be set too, and to a non-empty value:
 // ccpath.CredentialHome() prefers it over CLAUDE_CONFIG_DIR whenever it is
 // DEFINED, and defined-but-empty falls back to the real ~/.claude.
+//
+// The colour environment is sandboxed here too, and it is the same class of
+// input as the paths: CLICOLOR_FORCE and NO_COLOR are read by colorprofile out
+// of the environment colorWriter hands it, so a developer with either exported
+// runs a different suite from the one CI runs.
 func isolate(t *testing.T) string {
 	t.Helper()
 	claude := t.TempDir()
 	t.Setenv("CCDAD_HOME", filepath.Join(t.TempDir(), "ccdad"))
 	t.Setenv("CLAUDE_CONFIG_DIR", claude)
 	t.Setenv("CLAUDE_SECURESTORAGE_CONFIG_DIR", claude)
+
+	// The colour environment, cleared for the same reason the auth environment
+	// below is. colorWriter hands colorprofile os.Environ(), and either of
+	// these two variables moves the profile: CLICOLOR_FORCE=1 raises a
+	// bytes.Buffer to ANSI256 and puts SGR bytes into every table this suite
+	// asserts on, NO_COLOR=1 floors a forced one back down. Both directions are
+	// a test whose answer depends on whose shell ran it.
+	//
+	// Empty rather than unset, because there is no t.Unsetenv -- and empty is
+	// what colorprofile's strconv.ParseBool already reads as absent. The tests
+	// that mean to describe a forced terminal set TTY_FORCE and CLICOLOR_FORCE
+	// themselves, by name.
+	t.Setenv("CLICOLOR_FORCE", "")
+	t.Setenv("NO_COLOR", "")
 
 	// The home directory is sandboxed HERE rather than in the tests that need
 	// it, and that placement is the whole protection. `ccdad setup-path` writes
@@ -493,6 +513,46 @@ func TestRunCmdWithNoArgumentsDoesNotInheritTheTestBinarysCommandLine(t *testing
 	}
 	if got := rec.last(t).Surface; got != oauth.SurfaceClaudeAI {
 		t.Fatalf("Surface = %v, want the subscription surface: runCmd ran the test binary's own command line instead of the empty one it was given", got)
+	}
+}
+
+// The two variables the sandbox forgot, and they are the two that decide
+// whether this suite sees escape bytes at all.
+//
+// colorprofile reads CLICOLOR_FORCE and NO_COLOR out of the environment it is
+// handed, and colorWriter hands it os.Environ(). Measured on this tree: with
+// CLICOLOR_FORCE=1 exported, colorWriter(&bytes.Buffer{}) resolves to ANSI256
+// rather than NoTTY, a styled cell reaches the buffer as
+// "* 1  \x1b[32m95%\x1b[m  ok\n", and hover_test.go's row assertions -- which
+// split a row with strings.Fields and then index the result -- read a colour
+// escape where they expect a number. A developer who exports either variable
+// in their shell would get answers out of this suite that CI never sees, which
+// is the same unsandboxed-input shape as the auth block in isolate.
+//
+// color_test.go's TestNoColorStripsEvenWhereColourWouldOtherwiseBeAllowed
+// already clears CLICOLOR_FORCE by hand, for exactly this reason and with the
+// same t.Setenv-to-empty idiom; that it had to is what says the sandbox was
+// missing it. NO_COLOR goes with it rather than being left alone as the
+// "harmless" direction: a suite whose colour assertions pass only because a
+// developer's NO_COLOR floored them is asserting nothing.
+func TestIsolateNeutralisesTheColourForcingVariables(t *testing.T) {
+	t.Setenv("CLICOLOR_FORCE", "1")
+	t.Setenv("NO_COLOR", "1")
+	isolate(t)
+
+	for _, v := range []string{"CLICOLOR_FORCE", "NO_COLOR"} {
+		if got := os.Getenv(v); got != "" {
+			t.Errorf("%s = %q after isolate, want empty", v, got)
+		}
+	}
+	w, ok := colorWriter(&bytes.Buffer{}).(*colorprofile.Writer)
+	if !ok {
+		t.Fatalf("colorWriter did not return a *colorprofile.Writer: %T", colorWriter(&bytes.Buffer{}))
+	}
+	if w.Profile > colorprofile.NoTTY {
+		t.Fatalf("profile into a bytes.Buffer is %v, want NoTTY: the sandbox let a "+
+			"forcing variable through and every table assertion in this package "+
+			"is now reading escape bytes", w.Profile)
 	}
 }
 

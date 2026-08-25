@@ -12,6 +12,7 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/credhome"
 	"github.com/Kweiza/ccdaddy/internal/daemon"
+	"github.com/Kweiza/ccdaddy/internal/theme"
 	"github.com/Kweiza/ccdaddy/internal/view"
 	"github.com/Kweiza/ccdaddy/internal/winerr"
 )
@@ -179,12 +180,25 @@ func runDaemonStatus(cmd *cobra.Command, asJSON bool) error {
 			return err
 		}
 	} else {
+		out, pal := renderTarget(cmd)
+		// The colour is on the VERDICT and not on the label, because the
+		// verdict is what a reader is scanning for. Both branches keep their
+		// sentence: "not running" is still the words "not running" with the
+		// colour stripped off, so this is a second reading of the answer and
+		// never the only one.
 		switch report.State {
 		case daemon.DaemonRunning:
-			fmt.Fprintln(cmd.OutOrStdout(), "ccdad daemon: "+view.DescribeRunning(report, timeNow()))
+			fmt.Fprintln(out, "ccdad daemon: "+
+				pal.Style(theme.RoleActive).Render(view.DescribeRunning(report, timeNow())))
 		case daemon.DaemonStopped:
-			fmt.Fprintln(cmd.OutOrStdout(), "ccdad daemon: not running")
+			fmt.Fprintln(out, "ccdad daemon: "+
+				pal.Style(theme.RoleMuted).Render("not running"))
 		}
+		// Three-valued and it stays three-valued: an unprobeable lock prints
+		// nothing here and the error is the output, on stderr and unpainted.
+		// "Unknown" folded into the grey of "not running" would be a probe that
+		// answered when it could not, which is the one thing this command
+		// exists not to do.
 		if report.StatusErr != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "The daemon's status file could not be read: %v\n", report.StatusErr)
 		}

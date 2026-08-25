@@ -11,8 +11,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"text/tabwriter"
 
+	"charm.land/lipgloss/v2"
 	"github.com/spf13/cobra"
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
@@ -26,6 +26,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/switcher"
+	"github.com/Kweiza/ccdaddy/internal/theme"
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
 
@@ -82,6 +83,39 @@ const (
 	levelSkipped checkLevel = "skipped"
 )
 
+// levelRole is the verdict column's colour, and it is deliberately not four
+// shades of one hue: ok, warn, fail and skipped are four different answers to
+// "do I have to do something about this", and a reader picking the fail rows
+// out of twenty-two should not have to judge saturation to do it. The word
+// stays in the cell whatever the colour is, so a level that lost its colour to
+// a 16-colour terminal or to NO_COLOR is still the word "fail" -- which is what
+// keeps colour from being the only thing carrying the verdict.
+//
+// skipped is muted rather than left plain. "This check does not apply here" is
+// an absence, not a pass, and it is a level real checks emit -- the Windows
+// file-modes row, the non-macOS keychain row, every check whose subject is
+// missing. Painting it like ok would tell a user their store was checked and
+// fine when there is no store.
+//
+// checkLevel is a string, so a check literal can carry a value that is none of
+// the four constants -- the literals in this file are positional, and a typo in
+// the second field compiles. That value takes RoleDefault, which carries no
+// colour at all: an unrecognised verdict must go out plain rather than
+// silently inheriting fail's red and reporting a problem nobody found.
+func levelRole(l checkLevel) theme.Role {
+	switch l {
+	case levelOK:
+		return theme.RoleGaugeOK
+	case levelWarn:
+		return theme.RoleGaugeWarn
+	case levelFail:
+		return theme.RoleExhausted
+	case levelSkipped:
+		return theme.RoleMuted
+	}
+	return theme.RoleDefault
+}
+
 type check struct {
 	Name   string
 	Level  checkLevel
@@ -124,11 +158,24 @@ func newDoctorCmd() *cobra.Command {
 					return err
 				}
 			} else {
-				w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+				// Inside the else, not above the if: the --json document goes
+				// straight to cmd.OutOrStdout() and never through the colour
+				// writer, which is what keeps a machine-readable report free of
+				// anything a forced profile would add to it.
+				out, pal := renderTarget(cmd)
+				rows := make([][]string, 0, len(checks))
 				for _, c := range checks {
-					fmt.Fprintf(w, "%s\t%s\t%s\n", c.Level, c.Name, c.Detail)
+					rows = append(rows, []string{string(c.Level), c.Name, c.Detail})
 				}
-				if err := w.Flush(); err != nil {
+				// No header, exactly as before: this table's first column is the
+				// verdict and a reader does not need to be told that the word
+				// "fail" is a level.
+				if err := columns(out, nil, rows, func(row, col int) lipgloss.Style {
+					if col != 0 || row < 0 || row >= len(checks) {
+						return lipgloss.NewStyle()
+					}
+					return pal.Style(levelRole(checks[row].Level))
+				}); err != nil {
 					return err
 				}
 			}

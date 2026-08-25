@@ -406,9 +406,9 @@ func TestTheSingleReadingProjectionIsStillJSONOnly(t *testing.T) {
 // the dashboard also read as "print nothing", so a status that decided for
 // itself would be the first of three surfaces to disagree.
 //
-// The placement is not cosmetic. renderStatus hands the table to a tabwriter,
-// which holds everything until Flush, so a line written straight to the same
-// stream after that writer exists arrives after the table rather than above it.
+// The placement is not cosmetic. columns() writes the table when renderStatus
+// calls it, so a line written to the same stream after that call arrives after
+// the table and a line written before it arrives above.
 func TestTheRunwayLineAppearsOnlyWithAHistoryBehindIt(t *testing.T) {
 	t.Run("with a series", func(t *testing.T) {
 		isolate(t)
@@ -423,13 +423,13 @@ func TestTheRunwayLineAppearsOnlyWithAHistoryBehindIt(t *testing.T) {
 				mode = i
 			}
 		}
-		// The line UNDER Mode:, not merely somewhere above the table. A
-		// tabwriter holds its rows until Flush, so a runway line written to the
-		// same stream at any point before that still comes out above the table
-		// — and lands on the far side of the blank separator, in the block of
-		// rows rather than in the block of labels its nine-character label is
-		// padded to line up with. Position in the file is what distinguishes
-		// the two, and nothing about the order the bytes arrive in does.
+		// The line UNDER Mode:, not merely somewhere above the table. What
+		// decides which side of the blank separator it lands on is where in
+		// renderStatus it is written, and now that is also what decides the
+		// byte order: columns() writes when it is called, so this line is
+		// above the table because it is written above it. It belongs in the
+		// block of labels its nine-character label is padded to line up with,
+		// not in the block of rows.
 		if mode < 0 || mode+1 >= len(lines) || !strings.HasPrefix(lines[mode+1], "Runway:  ") {
 			t.Fatalf("the runway line is not the line under Mode::\n%s", human)
 		}

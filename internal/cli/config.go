@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 
@@ -310,13 +309,13 @@ func newConfigListCmd() *cobra.Command {
 				return writeJSON(cmd, payload)
 			}
 
-			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+			out := cmd.OutOrStdout()
 			if !cfg.Hover {
-				fmt.Fprintln(w, "KEY\tVALUE\tSOURCE")
+				cells := make([][]string, 0, len(rows))
 				for _, r := range rows {
-					fmt.Fprintf(w, "%s\t%s\t%s\n", r.Key, r.Value, r.Source)
+					cells = append(cells, []string{r.Key, r.Value, r.Source})
 				}
-				return w.Flush()
+				return columns(out, []string{"KEY", "VALUE", "SOURCE"}, cells, nil)
 			}
 			// The fourth column exists only under hover. With hover off it would
 			// carry the same word on every row, and a column that says nothing
@@ -324,15 +323,15 @@ func newConfigListCmd() *cobra.Command {
 			// have. SOURCE stays one word for the same reason it is a separate
 			// column: it answers where a number came from, not whether anything
 			// is reading it.
-			fmt.Fprintln(w, "KEY\tVALUE\tSOURCE\tHOVER")
+			cells := make([][]string, 0, len(rows))
 			for _, r := range rows {
 				verdict := "honoured"
 				if r.Overridden {
 					verdict = "overriding"
 				}
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", r.Key, r.Value, r.Source, verdict)
+				cells = append(cells, []string{r.Key, r.Value, r.Source, verdict})
 			}
-			return w.Flush()
+			return columns(out, []string{"KEY", "VALUE", "SOURCE", "HOVER"}, cells, nil)
 		},
 	}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit one JSON object on stdout")

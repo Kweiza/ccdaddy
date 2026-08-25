@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -325,16 +324,36 @@ func thresholdsFrom(cmd *cobra.Command, cfg config.Config, now time.Time,
 // loadSnapshot's own: passing the document is what stops the next field it
 // gains from being an eighth positional bool.
 func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
-	out := cmd.OutOrStdout()
+	out, pal := renderTarget(cmd)
 	rows, now := snap.Rows, snap.Now
 
 	// Every line of this block goes through view.WrapLabeled at the width of
-	// the writer, and the width is zero for everything that is not a terminal.
+	// the terminal, and the width is zero for everything that is not one.
 	// Measured on an 80-column terminal: Mode: 124 display columns, Hover: 100,
 	// and the terminal folded both wherever its own right edge landed. The
 	// runway line below has its own wrap, because its spaces are inside its
 	// values and these are between words.
-	fmt.Fprintln(out, view.WrapLabeled(view.DaemonLine(snap.Report, now), outWidth(out)))
+	//
+	// THE WIDTH IS MEASURED ON cmd.OutOrStdout() AND NEVER ON out, at all five
+	// sites below, and the distinction is the whole reason this paragraph
+	// exists. out is renderTarget's writer -- the same destination wearing a
+	// palette -- and outWidth answers by asserting *os.File. A wrapper fails
+	// that assertion, so outWidth(out) is 0 on every terminal there is and the
+	// fold just stops, on a change that never mentioned folding. That is the
+	// worst shape a regression comes in: git merges the palette and the fold
+	// without a word between them, every test in this package stubs the
+	// outWidth seam and stays green, and the only reader who can see it is a
+	// person at an 80-column window. TestWidthIsMeasuredOnTheFileAndNotThe
+	// DecoratedWriter is what makes the next such merge red instead.
+	//
+	// The rejected alternative was giving colorWriter's type an
+	// Unwrap() io.Writer and teaching outWidth to follow the chain. It is a
+	// general mechanism -- every future decorator has to remember to implement
+	// it, and one that genuinely does narrow the usable width would have the
+	// fold silently re-enabled at the wrong number -- introduced for two call
+	// sites in one package. A palette does not change how wide the terminal is;
+	// the width comes from the thing that has one.
+	fmt.Fprintln(out, view.WrapLabeled(view.DaemonLine(snap.Report, now), outWidth(cmd.OutOrStdout())))
 
 	if len(rows) == 0 {
 		fmt.Fprintln(cmd.ErrOrStderr(), "No accounts yet. Run 'ccdad add' to log one in.")
@@ -344,16 +363,16 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 	// ActiveLabel is loadSnapshot's, not recomputed here: two loops over rows
 	// producing the same "which account is active" sentence is the exact "one
 	// value, two spellings" failure this task exists to remove.
-	fmt.Fprintln(out, view.WrapLabeled("Active:  "+snap.ActiveLabel, outWidth(out)))
+	fmt.Fprintln(out, view.WrapLabeled("Active:  "+snap.ActiveLabel, outWidth(cmd.OutOrStdout())))
 	// Above the Mode line, because it is what EXPLAINS it: under hover the mode
 	// is headroom whatever the file says, hover having overridden the strategy
 	// key. A reader who set consume-first and finds headroom here needs the
 	// reason before the answer, not after it.
 	if snap.Hover {
-		fmt.Fprintln(out, view.WrapLabeled(view.HoverLine(), outWidth(out)))
+		fmt.Fprintln(out, view.WrapLabeled(view.HoverLine(), outWidth(cmd.OutOrStdout())))
 	}
 	if snap.HasMode {
-		fmt.Fprintln(out, view.WrapLabeled(view.ModeLine(snap.Mode), outWidth(out)))
+		fmt.Fprintln(out, view.WrapLabeled(view.ModeLine(snap.Mode), outWidth(cmd.OutOrStdout())))
 	}
 	// The empty string is the gate: view.RunwayLine returns one when there is
 	// no measurement, and that is how this renderer, `ccdad list` and the
@@ -364,34 +383,44 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 	// nine-character label lines it up with Daemon:, Active: and Mode:, and the
 	// blank line below is the separator between that block and the rows.
 	//
-	// The order this position produces is not the one it looks like. The
-	// tabwriter below buffers every row until Flush, so a line handed straight
-	// to out at ANY point before that still comes out ahead of the table --
-	// measured, not assumed. What position in this function decides is which
-	// side of the blank separator it lands on, which is the whole of it.
+	// The order this position produces is now the order it looks like.
+	// columns() writes when it is called, so a line handed to out before it
+	// comes out before it, and one handed to out after it comes out after. The
+	// tabwriter this replaced buffered every row until Flush, so the same
+	// ordering held for a different reason and the source order was free.
+	// What position in this function still decides is which side of the blank
+	// separator this lands on, which is the whole of it.
 	//
 	// time.Local, because a person is reading it. internal/forecast touches no
 	// environment, so the caller nearest the reader chooses the zone, and
 	// view.Timestamp always prints which one it was.
 	//
-	// The width is measured on out, and it is zero for everything that is not a
-	// terminal. A line this long folds where the terminal decides otherwise,
-	// and its clauses are separated by a middot, so a fold that lands between
-	// two of them cannot be told from one that lands inside a date.
+	// The width is the terminal's -- read off cmd.OutOrStdout() for the reason
+	// the block comment above gives -- and it is zero for everything that is
+	// not a terminal. A line this long folds where the terminal decides
+	// otherwise, and its clauses are separated by a middot, so a fold that
+	// lands between two of them cannot be told from one that lands inside a
+	// date.
 	if line := view.RunwayLine(snap.Forecast, now, time.Local); line != "" {
-		fmt.Fprintln(out, view.RunwayWrap("Runway:  ", line, outWidth(out)))
+		fmt.Fprintln(out, view.RunwayWrap("Runway:  ", line, outWidth(cmd.OutOrStdout())))
 	}
 	fmt.Fprintln(out)
 
-	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "  IDX\tACCOUNT\tTYPE\tUSED\tWINDOW\tRESETS IN\tPACE\tAGE")
+	cells := make([][]string, 0, len(rows))
 	for _, r := range rows {
-		fmt.Fprintf(w, "%s %d\t%s\t%s\t%s\t%s\t%s\t%s\t%s%s\n",
-			r.Marker(), r.Account.Idx, r.StatusLabel(), r.Account.Kind,
+		// StatusFlags rides on the AGE cell, which is what the trailing %s%s in
+		// the format string this replaced was doing, and for the same reason
+		// the flags ride on `list`'s last cell: a suffix that belongs to one
+		// account reads better beside that account's own figure than at a
+		// fixed offset far to its right.
+		cells = append(cells, []string{
+			fmt.Sprintf("%s %d", r.Marker(), r.Account.Idx), r.StatusLabel(), r.Account.Kind.String(),
 			r.UsedLabel(), r.WindowLabel(), r.ResetsLabel(now), r.PaceLabel(),
-			r.AgeLabel(now), r.StatusFlags())
+			r.AgeLabel(now) + r.StatusFlags(),
+		})
 	}
-	return w.Flush()
+	return columns(out, []string{"  IDX", "ACCOUNT", "TYPE", "USED", "WINDOW", "RESETS IN", "PACE", "AGE"},
+		cells, quotaCellStyle(pal, rows, 3, view.Row.UsedLabel))
 }
 
 func statusPayload(snap view.Snapshot, probeErr error) map[string]any {
