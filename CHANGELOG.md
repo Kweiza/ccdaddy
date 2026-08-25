@@ -50,15 +50,24 @@ by `uuid` or `alias`.
   `dark`, `light`, `ansi` or `none`; `tui.glyphs` takes `auto`, `unicode` or
   `ascii`. Both default to `auto`.
 
-  `theme=auto` asks the terminal for its background colour once per process
-  and resolves to `dark` or `light`. It never resolves to `ansi`: fitting a
-  24-bit colour to whatever a lower-colour terminal can show already happens
-  on every render, so a terminal that cannot carry the full palette gets a
-  downgrade of the same design rather than a different one. `ansi` is the
-  opt-in for a user who would rather their own terminal theme owned the
-  sixteen standard slots, and `none` emits no escape byte at all — the same
-  thing `NO_COLOR` gets on a terminal, and what `ccdad mcp` gets
-  unconditionally, regardless of what the environment says.
+  `theme=auto` does not mean the same thing on every surface. `ccdad tui` on
+  an owned terminal asks — once, through bubbletea's own background-colour
+  request — and resolves to `dark` or `light`. `ccdad list`, `status`,
+  `doctor`, `daemon status`, and a redirected `ccdad tui` never ask: they take
+  the dark default outright. A live dashboard can afford one query because it
+  asks on the way in and then runs for minutes; a listing cannot, because the
+  same query costs four seconds on a terminal that stays silent and each of
+  these commands is its own process, so nothing carries a cached answer from
+  one invocation to the next. `ccdad config set tui.theme light` is the
+  standing opt-out for a light terminal, and it costs one line, once.
+  `theme` never resolves to `ansi`: fitting a 24-bit colour to whatever a
+  lower-colour terminal can show already happens on every render, so a
+  terminal that cannot carry the full palette gets a downgrade of the same
+  design rather than a different one. `ansi` is the opt-in for a user who
+  would rather their own terminal theme owned the sixteen standard slots, and
+  `none` emits no escape byte at all — the same thing `NO_COLOR` gets on a
+  terminal, and what `ccdad mcp` gets unconditionally, regardless of what the
+  environment says.
 
   `glyphs=auto` resolves to `ascii` on a Windows console whose output code
   page is not 65001, and whenever `RUNEWIDTH_EASTASIAN` is set — that
