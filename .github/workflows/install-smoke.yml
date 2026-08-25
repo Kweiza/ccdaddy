@@ -187,6 +187,125 @@ jobs:
         run: |
           echo "::notice title=Install smoke covers four of six release assets::Installed here: ccdad-linux-amd64, ccdad-linux-arm64, ccdad-darwin-arm64, ccdad-windows-amd64. Never installed: ccdad-darwin-amd64 (GitHub's macOS runners are arm64), ccdad-windows-arm64 (its Windows runners are amd64)."
 
+  # The one thing in this repository that can show the SIGNING pipeline works
+  # end to end. internal/relsign's tests prove our signer and our verifier agree
+  # with each other, which is exactly what a pair wrong in the same way also
+  # does. Everything between them is untested until here: the secret in Actions,
+  # the signer running in CI, the upload, the key committed in this tree, and a
+  # stranger's minisign accepting the result. Without this job the first proof
+  # of that chain is somebody's failed upgrade.
+  signature:
+    name: Verify the published signature
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # The workflow's own commit, for ccdaddy.pub, for the reason the resolve
+      # job gives above. The key that matters is the one THIS tree claims a
+      # release is signed with; checking a release against a key taken from that
+      # same release is a round trip that cannot fail.
+      - uses: actions/checkout@v7
+
+      # Unpacked, not installed: dpkg-deb -x needs no root and touches no dpkg
+      # database, so this step cannot pass by changing the machine, and what it
+      # produces is the distribution's own build rather than anything from here.
+      - name: Fetch the stock minisign
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/minisign"
+          cd "$RUNNER_TEMP/minisign"
+          # The runner image's package index can be older than the pool it
+          # points at, which surfaces as a 404 on the .deb rather than as a
+          # missing package. One refresh, one retry; after that it is a real
+          # failure and this job says so instead of skipping.
+          apt-get download minisign || { sudo apt-get update && apt-get download minisign; }
+          dpkg-deb -x minisign_*.deb root
+          printf '%s\n' "$RUNNER_TEMP/minisign/root/usr/bin" >>"$GITHUB_PATH"
+
+      # Printed, not asserted. WHICH build accepted the signature is the
+      # evidence this job exists to produce, and a version in the log is what
+      # makes a later "it verified" claim checkable by somebody else.
+      - name: Say which minisign this is
+        run: minisign -v
+
+      - name: Download the published checksums and their signature
+        env:
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/rel"
+          # Tag-pinned rather than latest/download: a prerelease does not
+          # resolve there at all, and for anything else the two are the same
+          # bytes. install.sh builds the same URL shape for the same reason.
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/rel/sha256sums.txt" "$base/sha256sums.txt"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/rel/sha256sums.txt.minisig" "$base/sha256sums.txt.minisig"
+
+      - name: Verify with the key committed in this tree
+        env:
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          rel=$RUNNER_TEMP/rel
+          minisign -V -p ccdaddy.pub -m "$rel/sha256sums.txt" -x "$rel/sha256sums.txt.minisig" | tee "$rel/verified.txt"
+
+          # minisign answers "is this signature authentic". It does not answer
+          # "is this the release I asked for", and the two come apart: an origin
+          # that chooses what to serve can hand back an OLDER release's genuine,
+          # correctly signed pair with every signature check passing. The
+          # release name lives in the trusted comment, which the second
+          # signature covers -- so it is text an attacker chose until the line
+          # above returned, and worth reading only now.
+          tc=$(sed -n 's/^Trusted comment: //p' "$rel/verified.txt")
+          if [ -z "$tc" ]; then
+            echo "install-smoke: minisign verified and printed no trusted comment" >&2
+            exit 1
+          fi
+          # Exactly one tab-separated field equal to ccdaddy:<tag>, which is the
+          # rule internal/relsign enforces; the two must not disagree about what
+          # a valid release is. -F because the tag is data -- read as a pattern,
+          # ccdaddy:v1.2.3 also matches ccdaddy:v1x2x3, and every tag this
+          # project cuts has dots in it. install.ps1 escapes for the same reason.
+          n=$(printf '%s' "$tc" | tr '\t' '\n' | grep -Fxc -- "ccdaddy:$TAG" || true)
+          if [ "$n" != 1 ]; then
+            printf 'install-smoke: the trusted comment %s does not name %s exactly once\n' "$tc" "$TAG" >&2
+            exit 1
+          fi
+          echo "install-smoke: the stock minisign accepts $TAG's checksums against ccdaddy.pub" >&2
+
+      # A step that runs minisign and reports success has so far proved that
+      # minisign ran. These prove it LOOKED. Without them a wrong flag -- a
+      # message that is not the file downloaded, a key that is not the one
+      # committed -- passes this job forever, which is the failure this whole
+      # job was added to stop happening somewhere else.
+      - name: Prove the verification can fail
+        run: |
+          set -euo pipefail
+          rel=$RUNNER_TEMP/rel
+          ctl=$RUNNER_TEMP/ctl
+          mkdir -p "$ctl"
+
+          # One: the real signature over content it does not cover. If this
+          # passes, nothing is binding the checksums to the signature.
+          cp "$rel/sha256sums.txt" "$ctl/tampered.txt"
+          printf 'tampered\n' >>"$ctl/tampered.txt"
+          if minisign -V -p ccdaddy.pub -m "$ctl/tampered.txt" -x "$rel/sha256sums.txt.minisig" >/dev/null 2>&1; then
+            echo "install-smoke: minisign accepted a sums file with a line appended to it" >&2
+            exit 1
+          fi
+
+          # Two: the real content and signature under a key that is not ours.
+          # If this passes, -p is not being consulted and the check above would
+          # take anybody's signature. Generated here rather than committed, so
+          # this control cannot be broken by tidying a fixture directory
+          # somewhere else in the tree.
+          minisign -G -W -p "$ctl/other.pub" -s "$ctl/other.key" >/dev/null
+          if minisign -V -p "$ctl/other.pub" -m "$rel/sha256sums.txt" -x "$rel/sha256sums.txt.minisig" >/dev/null 2>&1; then
+            echo "install-smoke: minisign accepted our signature under a key that is not ours" >&2
+            exit 1
+          fi
+          echo "install-smoke: both controls were refused, so the verification above was doing work" >&2
+
   fresh:
     name: fresh install (${{ matrix.os }})
     needs: resolve
