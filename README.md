@@ -272,9 +272,15 @@ paste.
 compare it against the key compiled into a binary you already trust:
 
 ```sh
-grep -Faq "$(sed -n 2p ccdaddy.pub)" "$(command -v ccdad)" \
+ccdad_bin=$(command -v ccdad) || { echo "no ccdad on PATH"; exit 1; }
+grep -Faq "$(sed -n 2p ccdaddy.pub)" "$ccdad_bin" \
   && echo "same key" || echo "no key found; this build predates ccdad update"
 ```
+
+The `command -v` is a separate step because it can fail. Inlined, a machine
+with no `ccdad` on `PATH` leaves `grep` an empty filename to open, and the
+else-arm then reports "this build predates ccdad update" about a build that is
+not there at all.
 
 A plain `grep -q … && echo` would print nothing both when the key differs and
 when this build carries no key at all, and those are different things to be
@@ -861,7 +867,9 @@ real one.
 The daemon is stopped first and started again from the new binary. Inside a
 `ccdad run` session it is stopped and **not** restarted — a daemon spawned from
 inside a session would manage that session's credential directory for the rest
-of its life — and the next ccdad command in a normal shell brings it back.
+of its life. Run `ccdad status` from a normal shell to bring it back; only the
+commands that may auto-start a daemon do, and `ccdad daemon status` is not one
+of them.
 
 A Homebrew or Scoop install is refused rather than replaced: run
 `brew upgrade ccdad` or `scoop update ccdad`, which own that binary and its

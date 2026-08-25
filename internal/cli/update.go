@@ -44,8 +44,15 @@ const (
 	// proxy that answers with a whole web page, which is the failure it is for.
 	maxSumsBytes = 1 << 20
 	// maxSigBytes sits ABOVE the verifier's own 16 KiB refusal on purpose, so
-	// an over-long body reaches the verifier and is refused for its own stated
-	// reason rather than arriving pre-truncated and failing on a line count.
+	// that an over-long body reaches the verifier and is refused as the
+	// malformed signature it is, with the tamper remedy, rather than as a
+	// transport failure.
+	//
+	// A smaller cap would NOT truncate: (*release.Client).Get reads limit+1 and
+	// refuses the whole body, which its own doc comment says and
+	// TestGetRefusesAnOverLongBodyRatherThanTruncatingIt holds up. What a
+	// smaller cap actually costs is the reason — download-sums and exit 1,
+	// which says the origin was unreachable when it was not.
 	maxSigBytes = 64 << 10
 	// maxAssetBytes: every released ccdad is between eleven and fourteen
 	// megabytes on all six targets, built with the flags
@@ -59,10 +66,15 @@ const (
 	// metadataTimeout bounds the redirect and the two sub-kilobyte fetches. It
 	// bounds connection setup and a stalled read, not a transfer.
 	metadataTimeout = 30 * time.Second
-	// assetTimeout bounds the asset: four megabytes in ten minutes is about
-	// 7 KB/s, a bad tethered link rather than a stalled one. It is a CONTEXT
-	// deadline and not an http.Client.Timeout, because a whole-request clock
-	// kills a slow but healthy download.
+	// assetTimeout bounds the asset. The largest of the six targets is 13.09
+	// MiB, so ten minutes is a floor of about 23 KB/s — a bad tethered link
+	// rather than a stalled one. The figure moved rather than the deadline:
+	// tolerating the 7 KB/s an earlier version of this comment claimed would
+	// mean waiting a little over half an hour, which is not a thing a command
+	// run in a terminal should do without saying anything.
+	//
+	// It is a CONTEXT deadline and not an http.Client.Timeout, because a
+	// whole-request clock kills a slow but healthy download.
 	assetTimeout = 10 * time.Minute
 	// smokeTimeout bounds `<staged> --version`. Cobra prints a version and
 	// exits; anything that has not done so in fifteen seconds is not a ccdad.
@@ -199,7 +211,7 @@ func (r *updateReport) emit(cmd *cobra.Command, asJSON bool, code ExitCode, reas
 
 // say prints one progress line, and nothing at all under --json.
 //
-// stopDaemon and startDaemon print their own lines and are not routed
+// stopDaemon and startDaemonFrom print their own lines and are not routed
 // through here. Those go to stderr, which the --json contract leaves alone.
 func say(cmd *cobra.Command, asJSON bool, format string, a ...any) {
 	if asJSON {
@@ -422,8 +434,8 @@ func runUpdate(cmd *cobra.Command, opts updateOptions) error {
 		return rep.emit(cmd, opts.asJSON, updateReasonCode("shape"), "shape",
 			fmt.Sprintf("The checksum file for %s carries no checksums at all, so ccdad will not install it. "+
 				"It came correctly signed, which makes this worse rather than better. "+
-				"Check https://github.com/Kweiza/ccdaddy/releases, and read the file yourself with "+
-				"`minisign -Vm sha256sums.txt`.", want.Tag()))
+				"Check https://github.com/Kweiza/ccdaddy/releases, and read the file yourself — "+
+				"\"Verifying the download\" in the project's README has the commands.", want.Tag()))
 	}
 
 	// Step 13. Not being listed is its own refusal and its own remedy: the
@@ -505,10 +517,10 @@ func runUpdate(cmd *cobra.Command, opts updateOptions) error {
 	// "Re-run the installer": that spelling is what the verification tests
 	// assert on to tell the two remedies apart.
 	//
-	// The one sentence it does not share is the `minisign -Vm sha256sums.txt`
-	// invitation. Here sha256sums.txt verified — what failed to match is the
-	// ASSET, and re-running minisign on the checksum file would succeed and say
-	// nothing at all about that.
+	// The one sentence it does not share is the invitation to re-check the
+	// signature. Here sha256sums.txt verified — what failed to match is the
+	// ASSET, so pointing at a recipe for verifying the checksum file would
+	// succeed and say nothing at all about what actually went wrong.
 	//
 	// The comparison is also the CONSTRUCTOR of the handle everything below
 	// uses, so the steps that run and install the file cannot be pointed at a
@@ -518,7 +530,7 @@ func runUpdate(cmd *cobra.Command, opts updateOptions) error {
 		return rep.emit(cmd, opts.asJSON, updateReasonCode("checksum"), "checksum",
 			fmt.Sprintf("%s does not match the checksum %s publishes for it.\n"+
 				"  published %s\n  downloaded %s\n"+
-				updateDistrust+".", asset, want.Tag(), wantHash, gotHash))
+				updateDistrust, asset, want.Tag(), wantHash, gotHash))
 	}
 
 	// Step 18 executes the binary that is about to become ccdad. Two of the six
@@ -559,8 +571,18 @@ func runUpdate(cmd *cobra.Command, opts updateOptions) error {
 	// re-hashed against the digest the signed row named at the moment they are
 	// moved into place.
 	if err := staged.replaceInto(target); err != nil {
+		// The daemon was stopped at step 19 and stays stopped, and the user is
+		// told so here for the same reason step 21 says it on the arm below:
+		// "daemonRestarted": false reaches a script and nobody else. stopDaemon
+		// printed "Stopped the ccdad daemon" a moment ago, so without this the
+		// last word on the subject is that it went down.
+		down := ""
+		if wasRunning {
+			down = "\nThe ccdad daemon is still stopped; the next ccdad command that is allowed to " +
+				"start one will bring it back."
+		}
 		return rep.emit(cmd, opts.asJSON, updateReasonCode("replace-failed"), "replace-failed",
-			fmt.Sprintf("ccdad could not put the new binary in place: %v", err))
+			fmt.Sprintf("ccdad could not put the new binary in place: %v%s", err, down))
 	}
 	rep.updated = true
 
@@ -591,7 +613,15 @@ func runUpdate(cmd *cobra.Command, opts updateOptions) error {
 		// back, on the new binary.
 		if _, inSession := currentScopedSession(); inSession {
 			say(cmd, opts.asJSON, "The ccdad daemon is stopped and will stay stopped for this `ccdad run` session.")
-			say(cmd, opts.asJSON, "Run any ccdad command from a normal shell to bring it back on the new version.")
+			// "any ccdad command" was wrong and is the sentence a user acts on.
+			// Auto-start is an allow-list — autoStartCommands in autostart.go —
+			// and `ccdad daemon status`, the most natural thing to type after
+			// being told the daemon is stopped, is not on it: it answers 5 and
+			// starts nothing. A command that IS on it is named instead, and
+			// TestTheScopedSessionNoticeAppearsOnlyWhenThereWasADaemon checks
+			// that name against the map rather than against this sentence.
+			say(cmd, opts.asJSON, "Run `ccdad status` from a normal shell to bring it back on the new "+
+				"version. Only some commands may start a daemon, and `ccdad daemon status` is not one of them.")
 		} else if err := startDaemonFrom(cmd, target); err != nil {
 			say(cmd, opts.asJSON, "The ccdad daemon could not be restarted (%v); "+
 				"the next ccdad command that is allowed to start one will.", err)
@@ -628,11 +658,15 @@ func upgradeHint(owner string) string {
 
 // updateReasonCode is the exit code each reason carries, stated once.
 //
-// The rule: once ccdad holds a candidate release, anything the origin served
-// that ccdad refuses is 4, and anything ccdad itself could not do is 1. The
-// clause before the comma is the carve-out that makes the table consistent — a
-// discovery step that cannot produce a candidate at all is 1, because there is
-// no release yet to have an opinion about.
+// The rule: anything ccdad DECIDED not to do is 4, and anything ccdad COULD NOT
+// do is 1. That covers the whole table, including the four arms that fire
+// before any candidate release exists — no-pinned-key, dev-build,
+// package-manager and not-writable are all 4, because each is a decision this
+// build made about a machine it can see, not a step that failed.
+//
+// resolve-failed is the one that reads like a counter-example and is not: a
+// discovery that produced no tag is something ccdad could not do, so it is 1,
+// and there is no release there to have had an opinion about anyway.
 //
 // An unknown reason is 1, which is the safe half: a new refusal that forgot to
 // be listed reports "ccdad could not do this" rather than accusing an origin.
@@ -807,9 +841,13 @@ func (a stagedAsset) replaceInto(target string) error {
 // out — updateVerifyFailure below, and the checksum mismatch in runUpdate — and
 // a divergence between them would be a difference in what ccdad says about the
 // same class of failure, with nothing able to go red for it.
+// The URL is deliberately NOT the last thing in it. Every caller appends its
+// own sentence, and an appended "." lands against the link — which terminal
+// link detection and every chat client that reflows this will take as part of
+// the URL and hand the user a 404.
 const updateDistrust = "This release cannot be trusted, and re-running the installer would not help: " +
 	"the installers check checksums and not signatures. Take it up at " +
-	"https://github.com/Kweiza/ccdaddy/releases"
+	"https://github.com/Kweiza/ccdaddy/releases before installing anything from it."
 
 // updateVerifyFailure maps a verification failure to its reason and the remedy
 // the user is given.
@@ -827,7 +865,17 @@ func updateVerifyFailure(err error) (reason, remedy string) {
 	// The invitation to check the file is this arm's alone: here it is
 	// sha256sums.txt itself that failed to verify, so re-running minisign over
 	// it is exactly the thing that shows the user what ccdad saw.
-	const distrust = updateDistrust + ", and check the file yourself with `minisign -Vm sha256sums.txt`."
+	//
+	// It points at the README rather than spelling a command, and that is not
+	// laziness. `minisign -Vm sha256sums.txt` needs -p to say which key, or it
+	// looks for ~/.minisign/minisign.pub and exits non-zero for a reason that
+	// has nothing to do with the release — and this command streams
+	// sha256sums.txt into memory and never writes it, so the file the message
+	// named was not on the user's disk either. Printing a command that errors
+	// out, in the one arm that says a release may have been tampered with,
+	// reads as "even minisign cannot read this release".
+	const distrust = updateDistrust + " \"Verifying the download\" in the project's README has the " +
+		"commands, including the key and the file this command did not leave behind."
 
 	switch {
 	case errors.Is(err, relsign.ErrKeyID):
