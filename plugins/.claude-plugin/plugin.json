@@ -1,0 +1,11 @@
+{
+  "name": "ccdad",
+  "version": "0.1.0",
+  "description": "Manage Claude Code accounts from a session. Requires the ccdad binary on PATH: https://github.com/Kweiza/ccdaddy",
+  "author": { "name": "Kweiza", "url": "https://github.com/Kweiza" },
+  "homepage": "https://github.com/Kweiza/ccdaddy",
+  "repository": "https://github.com/Kweiza/ccdaddy",
+  "license": "MIT",
+  "keywords": ["claude-code", "accounts", "oauth", "mcp"],
+  "mcpServers": "./.mcp.json"
+}

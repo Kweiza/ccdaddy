@@ -1,0 +1,11 @@
+{
+  "name": "ccdaddy",
+  "owner": { "name": "Kweiza", "url": "https://github.com/Kweiza" },
+  "description": "The ccdad plugin: MCP wiring for the ccdad multi-account manager for Claude Code.",
+  "plugins": [
+    { "name": "ccdad",
+      "source": "./plugins",
+      "description": "Manage Claude Code accounts from a session. Requires the ccdad binary on PATH: https://github.com/Kweiza/ccdaddy",
+      "category": "productivity" }
+  ]
+}
