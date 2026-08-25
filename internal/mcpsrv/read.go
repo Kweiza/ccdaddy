@@ -24,13 +24,14 @@ type configGetIn struct {
 // autoStarts is the sentence a read carries when running it may detach ccdad's
 // background process.
 //
-// Three of the five reads are on ccdad's auto-start list -- list, status and
+// Three of the six reads are on ccdad's auto-start list -- list, status and
 // which -- because those are the commands a person runs while USING their
-// accounts. doctor and config_get are deliberately not, doctor because it must
-// not create the thing it is checking for, so this sentence is false on them
-// and they do not carry it. "A read-only tool has no side effects" is not true
-// of the three that do, and a description that implies it is a lie the model
-// repeats to the person running it.
+// accounts. doctor, config_get and runway are deliberately not: doctor must not
+// create the thing it is checking for, and runway answers a question about
+// readings already on disk, which a poll started to answer it cannot change. So
+// this sentence is false on those three and they do not carry it. "A read-only
+// tool has no side effects" is not true of the three that do, and a description
+// that implies it is a lie the model repeats to the person running it.
 const autoStarts = " Note: like the ccdad command it runs, this may start ccdad's background daemon if none is running."
 
 // readOnly is the annotation set every read tool carries.
@@ -112,6 +113,31 @@ func addReadTools(srv *mcp.Server, e view.Exec) error {
 		Annotations: readOnly(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in configGetIn) (*mcp.CallToolResult, ReadOut, error) {
 		out, isErr := readResult(e, "config", "get", in.Key, "--json")
+		return &mcp.CallToolResult{IsError: isErr}, out, nil
+	})
+
+	// The description spends most of its length on what an empty answer means,
+	// because that is the answer a fresh install gives and the one a model is
+	// most likely to misreport. "No rate could be measured" arrives as exit 0
+	// with a document whose basis says zero readings -- not an error, and not a
+	// fleet that burns nothing. A model told only "reports the burn rate" reads
+	// the missing figure as zero and tells the person their quota will last
+	// forever.
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:  "runway",
+		Title: "Measure how fast the accounts are spending quota, and say when it runs out",
+		Description: "Measure how fast ccdad's accounts are spending their quota, using readings " +
+			"already recorded on this machine, and report whether the five-hour and weekly " +
+			"windows hold at that rate, when each one runs dry, and when paid credits run " +
+			"out. It fetches nothing and costs no request against the usage endpoint. " +
+			"Rates are percentage points per hour and are reported per window: the two " +
+			"windows are different quantities and adding them gives a number with no unit. " +
+			"When too little has been recorded to measure a rate, the answer says so and is " +
+			"complete rather than failed -- a missing rate is unknown and never zero. " +
+			"Returns ccdad's own JSON document.",
+		Annotations: readOnly(),
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in noArgs) (*mcp.CallToolResult, ReadOut, error) {
+		out, isErr := readResult(e, "runway", "--json")
 		return &mcp.CallToolResult{IsError: isErr}, out, nil
 	})
 

@@ -9,14 +9,19 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// readToolNames is the class this file is about: the five verbs that answer a
+// readToolNames is the class this file is about: the verbs that answer a
 // question and change nothing ccdad owns.
-var readToolNames = []string{"list", "status", "which", "doctor", "config_get"}
+//
+// It is spelled out rather than derived from toolClass, because a list derived
+// from the thing under test agrees with it by construction: a read registered
+// without a class would drop out of both at once and every assertion below
+// would still pass over the remainder.
+var readToolNames = []string{"list", "status", "which", "doctor", "config_get", "runway"}
 
-// tools/list is the contract a client sees before it calls anything. The five
-// reads have to be there, described, and shaped so that an invented argument is
+// tools/list is the contract a client sees before it calls anything. Every read
+// has to be there, described, and shaped so that an invented argument is
 // refused rather than ignored.
-func TestToolsListOffersTheFiveReadsWithTheirSchemas(t *testing.T) {
+func TestToolsListOffersEveryReadWithItsSchema(t *testing.T) {
 	tools := offeredTools(t)
 
 	for _, name := range readToolNames {
@@ -39,10 +44,10 @@ func TestToolsListOffersTheFiveReadsWithTheirSchemas(t *testing.T) {
 		}
 	}
 
-	// The three that take nothing declare NO properties, not merely nothing
+	// The four that take nothing declare NO properties, not merely nothing
 	// required: an optional argument would be accepted, ignored by a handler
 	// that never reads it, and offered to the model as one it may pass.
-	for _, name := range []string{"status", "which", "doctor"} {
+	for _, name := range []string{"status", "which", "doctor", "runway"} {
 		if s := schemaOf(t, tools[name]); len(s.Properties) != 0 {
 			t.Errorf("%q declares %v; it takes no arguments", name, propertyNames(s))
 		}
@@ -68,8 +73,8 @@ func TestToolsListOffersTheFiveReadsWithTheirSchemas(t *testing.T) {
 // omitted from the wire entirely, and what the client then reads is the
 // protocol's default rather than the author's intent.
 //
-// The five reads by NAME rather than every tool this server offers. The three
-// other classes answer these same two keys differently and truthfully, and each
+// The reads by NAME rather than every tool this server offers. The three other
+// classes answer these same two keys differently and truthfully, and each
 // asserts its own; a loop over all of them here would have to be widened into
 // agreeing with whatever the newest class happens to declare.
 func TestEveryReadToolDeclaresBothPointerAnnotationsExplicitly(t *testing.T) {
@@ -143,6 +148,7 @@ func TestEachReadToolRunsItsOwnVerbWithJSONAndReturnsTheBytes(t *testing.T) {
 		{"which", `{}`, []string{"which", "--json"}},
 		{"doctor", `{}`, []string{"doctor", "--json"}},
 		{"config_get", `{"key":"threshold"}`, []string{"config", "get", "threshold", "--json"}},
+		{"runway", `{}`, []string{"runway", "--json"}},
 	} {
 		t.Run(tc.tool+" "+tc.args, func(t *testing.T) {
 			var got []string
@@ -192,22 +198,40 @@ func TestANegativeAnswerCrossesTheWireAsAnAnswerAndNotAsAnError(t *testing.T) {
 
 // The three reads that the command tree will auto-start a daemon for say so.
 // A description that let a model believe a read-only tool has no side effects
-// would be a lie the model repeats to the person running it. doctor and
-// config_get are deliberately not on that list -- doctor must not create what
-// it is checking for -- so the sentence would be false on them.
+// would be a lie the model repeats to the person running it. doctor, config_get
+// and runway are deliberately not on that list -- doctor must not create what
+// it is checking for, and runway answers a question about the past that a fresh
+// poll cannot change -- so the sentence would be false on them.
 func TestTheReadsThatStartADaemonSayThatTheyDo(t *testing.T) {
 	tools := offeredTools(t)
 	const says = "background daemon"
 	for _, name := range []string{"list", "status", "which"} {
-		if !strings.Contains(tools[name].Description, says) {
-			t.Errorf("%q does not warn that it may start the daemon: %q", name, tools[name].Description)
+		if desc := describes(t, tools, name); !strings.Contains(desc, says) {
+			t.Errorf("%q does not warn that it may start the daemon: %q", name, desc)
 		}
 	}
-	for _, name := range []string{"doctor", "config_get"} {
-		if strings.Contains(tools[name].Description, says) {
-			t.Errorf("%q claims it may start the daemon; it is not on the auto-start list: %q", name, tools[name].Description)
+	for _, name := range []string{"doctor", "config_get", "runway"} {
+		if desc := describes(t, tools, name); strings.Contains(desc, says) {
+			t.Errorf("%q claims it may start the daemon; it is not on the auto-start list: %q", name, desc)
 		}
 	}
+}
+
+// describes is one tool's description, and it exists so that an UNREGISTERED
+// name fails rather than panics. tools[name] on a miss yields a nil *mcp.Tool
+// and reading a field off it is a segfault, which aborts the whole test binary
+// -- so the first missing tool would hide the verdict of every test that runs
+// after this one, including the class-totality gate. Measured while checking
+// that removing a registration turns a test red: it did, and it took four other
+// tests' results down with it.
+func describes(t *testing.T, tools map[string]*mcp.Tool, name string) string {
+	t.Helper()
+	tool, ok := tools[name]
+	if !ok || tool == nil {
+		t.Errorf("tools/list does not offer %q at all", name)
+		return ""
+	}
+	return tool.Description
 }
 
 // offeredTools is what a client sees in tools/list, keyed by name.
