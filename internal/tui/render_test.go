@@ -104,11 +104,48 @@ func TestEveryFixtureFitsTheTerminalItWasPlannedFor(t *testing.T) {
 // so a single line one column too wide costs a row and pushes the page past
 // its height budget with no error anywhere. The check is cheap and it is the
 // only thing that would notice.
+//
+// The table walks every SHAPE a golden page under testdata was drawn at, and
+// the two prep functions are what it costs to say that rather than a taste for
+// table-driven tests. The five width-ladder rungs were already covered twice
+// over: this guard renders the same page checkGolden compares against a file,
+// so a file too wide would mean a render too wide and this would be red before
+// the comparison was. The notice page and the zero-accounts page were not
+// covered at all, because neither is drawn at a shape this table held -- one is
+// 80x20 with a notice set, the other 80x13 with the rows taken away -- so two
+// of the seven files had nothing independent bounding their width, and a
+// regeneration would have blessed whatever came out of the renderer.
+//
+// The nil-rows case builds its model the way the zero-accounts golden does --
+// fixtureModel first, rows removed after -- and not as an empty Model. Body
+// asks Plan about at least one row whatever Snap.Rows holds, and the report and
+// the header line come from the fixture either way, so a page assembled from
+// scratch would be a different page than the one on disk and would bound the
+// wrong thing.
 func TestThePageNeverScrollsHorizontally(t *testing.T) {
-	for _, tc := range []struct{ w, h int }{{113, 26}, {80, 24}, {80, 13}, {56, 10}, {43, 9}, {35, 3}} {
-		for i, line := range strings.Split(fixtureModel(tc.w, tc.h).Body(), "\n") {
+	for _, tc := range []struct {
+		name string
+		w, h int
+		prep func(*Model)
+	}{
+		{"the full page with every column", 113, 26, nil},
+		{"the design target, figures dropped", 80, 24, nil},
+		{"one notice", 80, 20, func(m *Model) {
+			m.Snap.Notices = []string{"hover thresholds could not be read"}
+		}},
+		{"wordmark and tagline dropped", 80, 13, nil},
+		{"zero accounts", 80, 13, func(m *Model) { m.Snap.Rows = nil }},
+		{"the frame dropped", 56, 10, nil},
+		{"the gauge collapsed", 43, 9, nil},
+		{"the smallest page that still renders", 35, 3, nil},
+	} {
+		m := fixtureModel(tc.w, tc.h)
+		if tc.prep != nil {
+			tc.prep(&m)
+		}
+		for i, line := range strings.Split(m.Body(), "\n") {
 			if got := ansi.StringWidth(line); got > tc.w {
-				t.Errorf("at %dx%d line %d is %d columns wide: %q", tc.w, tc.h, i, got, line)
+				t.Errorf("%s at %dx%d: line %d is %d columns wide: %q", tc.name, tc.w, tc.h, i, got, line)
 			}
 		}
 	}

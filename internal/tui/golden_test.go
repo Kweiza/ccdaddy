@@ -106,3 +106,184 @@ func goldenWant(t *testing.T, name, got string) string {
 	}
 	return got
 }
+
+// The seven pages, checked against the LADDER instead of against the renderer
+// that drew them.
+//
+// This is the assertion that closes the hole -update leaves open. Six of these
+// files are transcriptions of what the renderer produced, so checkGolden on its
+// own is a renderer agreeing with itself: regenerate under a bug and the bug is
+// written to disk and blessed, with nothing between that and a release but a
+// human reading a diff. Every number below is read off the two ladders in
+// layout.go -- which rung drops the border, which drops the STATE column, which
+// collapses the gauge -- and off the fixture pool's own shape, so a golden that
+// recorded the wrong page fails here even while matching the renderer perfectly.
+//
+// WHAT EACH NUMBER IS, and not one of them is an observation:
+//
+//   - FRAME is all-or-nothing and never a count in between. saveBorder is a
+//     single rung of the height ladder, and a page that kept its border draws a
+//     rule on every one of its rows: the two edge rows from the corners and the
+//     horizontal rule, every content row from the two vertical ones. 56x10 and
+//     43x9 are below that rung; the four 80- and 113-column pages are above it.
+//   - GAUGE is three rows on every page that draws the bar, because the fixture
+//     pool is four accounts of which exactly three have a reading. The fourth
+//     is unreadable and renders as a bare "?" with no bracket and no bar, which
+//     is usedCell's absence rule and not a rounding. 43x9 sits below collapseAt
+//     where USED is the bare percentage, and the zero-accounts page has no
+//     account row to draw one on.
+//   - STATE is four rows wherever ColState survived the WIDTH ladder, one per
+//     account. 56 and 43 columns have both dropped that column by then; the
+//     zero-accounts page keeps the heading and has nothing under it.
+//   - WIDEST is exactly the width and never merely within it. footer pads
+//     itself to the full width at every rung, framed or not, so a page whose
+//     widest line came out short is a page that lost a column somewhere -- a
+//     failure an upper bound alone would pass.
+//   - LINES is within the height the page was planned for, which is the whole
+//     of what the height ladder promises.
+//   - ASCII says the entire file is 7-bit, and only the 43x9 page is. That rung
+//     has dropped the frame, collapsed the gauge and dropped the STATE column;
+//     the chrome above it is ASCII art by rule; the cut cue and the two scroll
+//     marks are ASCII in both sets; and no page here claims a forecast, so the
+//     one line that would carry a computed value's own U+00B7 is never drawn.
+//     It is a stronger claim than the three counts above precisely because it
+//     catches a character from a class nobody thought to enumerate.
+//
+// The classes are spelled from UnicodeGlyphs rather than as literals, and that
+// does not weaken anything: WHICH characters the set holds is pinned by value
+// in glyphs_test.go, and what is asserted here is WHERE they are allowed to
+// appear. Two tests, two claims, neither restating the other. Reading them out
+// of ASCIIGlyphs instead would be meaningless rather than merely different --
+// its frame is "+-|" and its markers are "*+!0x-?", every one of which the
+// wordmark and the page's own prose already contain, so every row of every page
+// would count as framed. That is one more reason the fixtures name their glyph
+// set explicitly instead of detecting it.
+func TestEveryGoldenPageCarriesTheGlyphClassesItsRungAllows(t *testing.T) {
+	for _, tc := range []struct {
+		file          string
+		width, height int
+		frame         bool
+		gaugeRows     int
+		stateRows     int
+		sevenBitASCII bool
+	}{
+		{goldenFullPage, 113, 26, true, 3, 4, false},
+		{goldenDesignTarget, 80, 24, true, 3, 4, false},
+		{goldenShort, 80, 13, true, 3, 4, false},
+		{goldenNotice, 80, 20, true, 3, 4, false},
+		{goldenZeroAccounts, 80, 13, true, 0, 0, false},
+		{goldenNarrow, 56, 10, false, 3, 0, false},
+		{goldenCollapsed, 43, 9, false, 0, 0, true},
+	} {
+		t.Run(tc.file, func(t *testing.T) {
+			lines := strings.Split(readGolden(t, tc.file), "\n")
+			if len(lines) > tc.height {
+				t.Errorf("%s is %d lines, %d more than the %d-row terminal it was planned for",
+					tc.file, len(lines), len(lines)-tc.height, tc.height)
+			}
+			widest := 0
+			for i, line := range lines {
+				got := ansi.StringWidth(line)
+				if got > tc.width {
+					t.Errorf("%s line %d is %d columns, want at most %d: %q", tc.file, i, got, tc.width, line)
+				}
+				if got > widest {
+					widest = got
+				}
+			}
+			if widest != tc.width {
+				t.Errorf("%s is %d columns at its widest, want exactly %d: the footer pads to the full width at every rung",
+					tc.file, widest, tc.width)
+			}
+			wantFrame := 0
+			if tc.frame {
+				wantFrame = len(lines)
+			}
+			if got := linesCarrying(lines, frameClass(UnicodeGlyphs)); got != wantFrame {
+				t.Errorf("%s draws a frame character on %d of its %d lines, want %d", tc.file, got, len(lines), wantFrame)
+			}
+			if got := linesCarrying(lines, gaugeClass(UnicodeGlyphs)); got != tc.gaugeRows {
+				t.Errorf("%s draws a gauge cell on %d lines, want %d", tc.file, got, tc.gaugeRows)
+			}
+			if got := linesCarrying(lines, stateClass(UnicodeGlyphs)); got != tc.stateRows {
+				t.Errorf("%s draws a state marker on %d lines, want %d", tc.file, got, tc.stateRows)
+			}
+			if got := sevenBitASCII(lines); got != tc.sevenBitASCII {
+				t.Errorf("%s is entirely 7-bit ASCII: %v, want %v", tc.file, got, tc.sevenBitASCII)
+			}
+		})
+	}
+}
+
+// linesCarrying counts LINES holding at least one rune of a class, not runes.
+//
+// A line is the unit because every claim above is about which ROWS of the page
+// a class is allowed on: three rows have a gauge, four have a state marker,
+// every row or no row has a frame. Counting runes would answer a different
+// question -- how many cells a ten-wide bar filled -- which moves with the
+// percentages in the fixture pool and would make this table a transcription of
+// the renderer again, which is the one thing it exists not to be.
+func linesCarrying(lines []string, class map[rune]bool) int {
+	n := 0
+	for _, line := range lines {
+		for _, r := range line {
+			if class[r] {
+				n++
+				break
+			}
+		}
+	}
+	return n
+}
+
+// frameClass is the eight border runes a bordered Style actually draws. The
+// Middle fields are left out for the reason drawnRunes leaves them out: the
+// only bordered thing on this page is the outer frame, and the account table is
+// built with an empty Border and every side switched off.
+func frameClass(g Glyphs) map[rune]bool {
+	return runeSet(
+		g.Border.Top, g.Border.Bottom, g.Border.Left, g.Border.Right,
+		g.Border.TopLeft, g.Border.TopRight, g.Border.BottomLeft, g.Border.BottomRight,
+	)
+}
+
+// gaugeClass is the bar's two fill cells.
+func gaugeClass(g Glyphs) map[rune]bool {
+	return runeSet(string(g.GaugeFull), string(g.GaugeEmpty))
+}
+
+// stateClass is the seven markers the STATE column can draw, and the cursor is
+// deliberately not among them. Every page here is rendered with the cursor at
+// row zero, which is the fixture pool's live account, and the live marker wins
+// that column -- so the cursor glyph appears on none of these pages and adding
+// it would be adding a column of zeroes. Where it would matter is the 43x9
+// page, and the 7-bit assertion there catches it along with everything else.
+func stateClass(g Glyphs) map[rune]bool {
+	return runeSet(g.Active, g.Candidate, g.Exhausted, g.Empty, g.Quarantined, g.Disabled, g.Unknown)
+}
+
+func runeSet(ss ...string) map[rune]bool {
+	out := map[rune]bool{}
+	for _, s := range ss {
+		for _, r := range s {
+			out[r] = true
+		}
+	}
+	return out
+}
+
+// sevenBitASCII reports whether every BYTE of the page is below 0x80. It is
+// spelled over bytes and not over runes because that is the claim: a rune loop
+// would decode U+2588 into one value below no threshold anything measures, and
+// the question here is whether a byte a legacy console cannot render is present
+// at all.
+func sevenBitASCII(lines []string) bool {
+	for _, line := range lines {
+		for i := 0; i < len(line); i++ {
+			if line[i] > 0x7f {
+				return false
+			}
+		}
+	}
+	return true
+}
