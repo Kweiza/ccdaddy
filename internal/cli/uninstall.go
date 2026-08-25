@@ -15,6 +15,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/credhome"
 	"github.com/Kweiza/ccdaddy/internal/daemon"
+	"github.com/Kweiza/ccdaddy/internal/history"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/usage"
@@ -87,6 +88,7 @@ func storeMarkers() []string {
 		daemon.StatusFileName,
 		daemon.LogFileName,
 		usage.CacheFileName,
+		history.FileName,
 		strategy.StateFileName,
 		// `ccdad run` puts these here, and a store whose accounts have all been
 		// removed can still hold one. Without them such a store is refused as

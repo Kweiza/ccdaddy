@@ -21,6 +21,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/config"
 	"github.com/Kweiza/ccdaddy/internal/credhome"
 	"github.com/Kweiza/ccdaddy/internal/daemon"
+	"github.com/Kweiza/ccdaddy/internal/history"
 	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
@@ -188,6 +189,7 @@ func runChecks() []check {
 		checkPidfile(storeUsable),
 		checkStatusFile(report),
 		checkUsageCache(storeUsable),
+		checkHistory(storeUsable),
 		checkEngineState(storeUsable),
 		checkConfig(storeUsable),
 		checkSessions(root, storeUsable),
@@ -411,6 +413,40 @@ func checkUsageCache(usable bool) check {
 			"%v — every account will read as unknown until it is rewritten", cerr)}
 	}
 	return check{"usage-cache", levelOK, namePath(usage.CachePath())}
+}
+
+// checkHistory is the only place a damaged series is ever mentioned. Every
+// other surface renders an unparseable history exactly as it renders a machine
+// that has not polled yet — no measured rate — so without this row a file that
+// has silently stopped accumulating looks identical to a fresh install.
+//
+// A MISSING file is levelOK and not a warning. history.json appears only once a
+// daemon has recorded a poll, so warning on its absence would warn on every
+// install for as long as it takes the first poll to land, and on every machine
+// that runs ccdad without the daemon at all.
+//
+// history.LoadHistory is used rather than anything that opens the store,
+// because it is read-only on every path: an absent file is an empty series and
+// no error, so the probe cannot bring into existence the evidence it is being
+// asked to report on.
+//
+// A parse failure is a warning and a read failure is a failure, which is the
+// same split checkUsageCache makes and for the same reason: unreadable bytes
+// are a broken machine, while unparseable ones are a file the next write
+// replaces.
+func checkHistory(usable bool) check {
+	if !usable {
+		return check{"history", levelSkipped, "there is no store to check"}
+	}
+	h, err := history.LoadHistory()
+	if err != nil {
+		return check{"history", levelFail, err.Error()}
+	}
+	if herr := h.LoadError(); herr != nil {
+		return check{"history", levelWarn, fmt.Sprintf(
+			"%v — no burn rate can be measured until it is rewritten", herr)}
+	}
+	return check{"history", levelOK, namePath(history.Path())}
 }
 
 // checkSessions reports the per-session credential directories `ccdad run`

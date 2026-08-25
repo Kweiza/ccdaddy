@@ -120,7 +120,7 @@ func TestDoctorNamesAStoreThatPointsAtNothing(t *testing.T) {
 	// Everything downstream of the store is skipped rather than answered from
 	// nothing: a "permissions ok" for a directory that does not exist is a
 	// diagnostic that lies.
-	for _, name := range []string{"permissions", "pidfile", "usage-cache", "engine-state", "config", "sessions"} {
+	for _, name := range []string{"permissions", "pidfile", "usage-cache", "history", "engine-state", "config", "sessions"} {
 		if got := r.level(t, name); got != "skipped" {
 			t.Errorf("%s = %q with no store to check, want skipped: %s", name, got, r.detail(t, name))
 		}
@@ -409,6 +409,47 @@ func TestDoctorReportsACorruptUsageCache(t *testing.T) {
 	}
 }
 
+// A machine with no series yet is a healthy machine, and saying otherwise would
+// warn on every install for the first hours of its life: history.json appears
+// only once a daemon has polled, and nothing else in the tree ever creates it.
+// So absent and damaged are different verdicts here, which is the distinction
+// history.LoadHistory already draws for its own callers — an absent file is an
+// empty series and no error, a damaged one keeps its reason.
+//
+// The second assertion is this file's standing rule applied to the newest row:
+// a probe that brought history.json into existence while checking for it would
+// destroy the evidence that no daemon has ever recorded anything here.
+func TestDoctorTreatsAnAbsentHistoryAsHealthy(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+
+	_, r, _ := runDoctor(t)
+	if got := r.level(t, "history"); got != "ok" {
+		t.Errorf("history = %q on a machine that has never polled, want ok: %s", got, r.detail(t, "history"))
+	}
+	if _, err := os.Stat(filepath.Join(mustPath(ccpath.StoreHome()), "history.json")); !os.IsNotExist(err) {
+		t.Errorf("doctor created the series it was asked to report on: %v", err)
+	}
+}
+
+// A series that cannot be parsed is invisible on every other surface: the
+// forecast simply reports no measured rate, which is also exactly what a fresh
+// machine reports. doctor is the only place the two are ever told apart, and
+// the level is a warning rather than a failure because nothing is broken —
+// the next write replaces the file and measurement resumes.
+func TestDoctorReportsACorruptHistory(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	if err := os.WriteFile(filepath.Join(mustPath(ccpath.StoreHome()), "history.json"), []byte("{{{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, r, _ := runDoctor(t)
+	if got := r.level(t, "history"); got != "warn" {
+		t.Errorf("history = %q, want warn: %s", got, r.detail(t, "history"))
+	}
+}
+
 // Claude Code changing these internals between releases is the risk doctor
 // exists against. A credentials file ccdad cannot parse is the loudest form of
 // that, and switch deliberately refuses to repair one.
@@ -445,7 +486,7 @@ func TestDoctorHumanOutputNamesEveryCheck(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit %d, want 0\n%s", code, stdout)
 	}
-	for _, name := range []string{"store", "path", "permissions", "locks", "pidfile", "status-file", "usage-cache", "engine-state", "config", "sessions", "profiles", "primary-accounts", "credential-files", "credential-home", "claude-version", "claude-code", "credential-keys", "keychain", "environment", "api-key", "oauth-source"} {
+	for _, name := range []string{"store", "path", "permissions", "locks", "pidfile", "status-file", "usage-cache", "history", "engine-state", "config", "sessions", "profiles", "primary-accounts", "credential-files", "credential-home", "claude-version", "claude-code", "credential-keys", "keychain", "environment", "api-key", "oauth-source"} {
 		if !strings.Contains(stdout, name) {
 			t.Errorf("the human report does not mention the %s check:\n%s", name, stdout)
 		}
