@@ -328,7 +328,13 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 	out := cmd.OutOrStdout()
 	rows, now := snap.Rows, snap.Now
 
-	fmt.Fprintln(out, view.DaemonLine(snap.Report, now))
+	// Every line of this block goes through view.WrapLabeled at the width of
+	// the writer, and the width is zero for everything that is not a terminal.
+	// Measured on an 80-column terminal: Mode: 124 display columns, Hover: 100,
+	// and the terminal folded both wherever its own right edge landed. The
+	// runway line below has its own wrap, because its spaces are inside its
+	// values and these are between words.
+	fmt.Fprintln(out, view.WrapLabeled(view.DaemonLine(snap.Report, now), outWidth(out)))
 
 	if len(rows) == 0 {
 		fmt.Fprintln(cmd.ErrOrStderr(), "No accounts yet. Run 'ccdad add' to log one in.")
@@ -338,16 +344,16 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 	// ActiveLabel is loadSnapshot's, not recomputed here: two loops over rows
 	// producing the same "which account is active" sentence is the exact "one
 	// value, two spellings" failure this task exists to remove.
-	fmt.Fprintf(out, "Active:  %s\n", snap.ActiveLabel)
+	fmt.Fprintln(out, view.WrapLabeled("Active:  "+snap.ActiveLabel, outWidth(out)))
 	// Above the Mode line, because it is what EXPLAINS it: under hover the mode
 	// is headroom whatever the file says, hover having overridden the strategy
 	// key. A reader who set consume-first and finds headroom here needs the
 	// reason before the answer, not after it.
 	if snap.Hover {
-		fmt.Fprintln(out, view.HoverLine())
+		fmt.Fprintln(out, view.WrapLabeled(view.HoverLine(), outWidth(out)))
 	}
 	if snap.HasMode {
-		fmt.Fprintln(out, view.ModeLine(snap.Mode))
+		fmt.Fprintln(out, view.WrapLabeled(view.ModeLine(snap.Mode), outWidth(out)))
 	}
 	// The empty string is the gate: view.RunwayLine returns one when there is
 	// no measurement, and that is how this renderer, `ccdad list` and the
