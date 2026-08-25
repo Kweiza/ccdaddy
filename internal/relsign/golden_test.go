@@ -139,30 +139,42 @@ func TestGoldenSignaturesFromTheStockTool(t *testing.T) {
 		sig     []byte
 		tag     string
 		want    error
+		// wantMsg is set only on the one row where the sentinel is not enough
+		// to tell two error paths apart: ErrAlgorithm wraps both a recognized
+		// prehashed tag and a wholly unknown one, but only the former carries
+		// a remedy worth printing. A change that deletes the return statement
+		// producing that remedy, leaving the tag to fall into the generic
+		// default case, still satisfies errors.Is(err, ErrAlgorithm) -- so
+		// only a message check catches it.
+		wantMsg string
 	}{
-		{"the signature a release publishes", []PublicKey{release}, sums, valid, goldenTag, nil},
-		{"rotation: the key is second in the list", []PublicKey{other, release}, sums, valid, goldenTag, nil},
-		{"rotation: the key is first in the list", []PublicKey{release, other}, sums, valid, goldenTag, nil},
-		{"a trusted comment ending in a tab", []PublicKey{release}, sums, fixture(t, "sums.txt.tabtc.minisig"), goldenTag, nil},
-		{"another key's signature", []PublicKey{release}, sums, fixture(t, "sums.txt.other.minisig"), goldenTag, ErrKeyID},
-		{"that key, trusted", []PublicKey{other}, sums, fixture(t, "sums.txt.other.minisig"), goldenTag, nil},
-		{"v1.2.30 does not satisfy v1.2.3", []PublicKey{release}, sums, fixture(t, "sums.txt.v1230.minisig"), goldenTag, ErrRelease},
-		{"v1.2.30 satisfies itself", []PublicKey{release}, sums, fixture(t, "sums.txt.v1230.minisig"), goldenTag30, nil},
-		{"v1.2.3 does not satisfy v1.2.30", []PublicKey{release}, sums, valid, goldenTag30, ErrRelease},
-		{"one flipped content byte", []PublicKey{release}, flipByte(sums, 3), valid, goldenTag, ErrSignature},
-		{"one flipped signature byte", []PublicKey{release}, sums, flipSigByte(t, valid), goldenTag, ErrSignature},
-		{"a tampered trusted comment", []PublicKey{release}, sums, retag(t, valid, "v9.9.9"), "v9.9.9", ErrSignature},
-		{"the prehashed algorithm", []PublicKey{release}, sums, prehash(t, valid), goldenTag, ErrAlgorithm},
-		{"CRLF line endings", []PublicKey{release}, sums, []byte(strings.ReplaceAll(string(valid), "\n", "\r\n")), goldenTag, nil},
-		{"a fifth line", []PublicKey{release}, sums, append(append([]byte{}, valid...), "extra\n"...), goldenTag, ErrMalformed},
-		{"no untrusted comment prefix", []PublicKey{release}, sums, dropPrefix(t, valid, 0), goldenTag, ErrMalformed},
-		{"no trusted comment prefix", []PublicKey{release}, sums, dropPrefix(t, valid, 2), goldenTag, ErrMalformed},
-		{"one byte over the bound", []PublicKey{release}, sums, bloat(t, valid, maxSigBytes+1), goldenTag, ErrMalformed},
+		{"the signature a release publishes", []PublicKey{release}, sums, valid, goldenTag, nil, ""},
+		{"rotation: the key is second in the list", []PublicKey{other, release}, sums, valid, goldenTag, nil, ""},
+		{"rotation: the key is first in the list", []PublicKey{release, other}, sums, valid, goldenTag, nil, ""},
+		{"a trusted comment ending in a tab", []PublicKey{release}, sums, fixture(t, "sums.txt.tabtc.minisig"), goldenTag, nil, ""},
+		{"another key's signature", []PublicKey{release}, sums, fixture(t, "sums.txt.other.minisig"), goldenTag, ErrKeyID, ""},
+		{"that key, trusted", []PublicKey{other}, sums, fixture(t, "sums.txt.other.minisig"), goldenTag, nil, ""},
+		{"v1.2.30 does not satisfy v1.2.3", []PublicKey{release}, sums, fixture(t, "sums.txt.v1230.minisig"), goldenTag, ErrRelease, ""},
+		{"v1.2.30 satisfies itself", []PublicKey{release}, sums, fixture(t, "sums.txt.v1230.minisig"), goldenTag30, nil, ""},
+		{"v1.2.3 does not satisfy v1.2.30", []PublicKey{release}, sums, valid, goldenTag30, ErrRelease, ""},
+		{"one flipped content byte", []PublicKey{release}, flipByte(sums, 3), valid, goldenTag, ErrSignature, ""},
+		{"one flipped signature byte", []PublicKey{release}, sums, flipSigByte(t, valid), goldenTag, ErrSignature, ""},
+		{"a tampered trusted comment", []PublicKey{release}, sums, retag(t, valid, "v9.9.9"), "v9.9.9", ErrSignature, ""},
+		{"the prehashed algorithm", []PublicKey{release}, sums, prehash(t, valid), goldenTag, ErrAlgorithm, "install the current release with the installer"},
+		{"CRLF line endings", []PublicKey{release}, sums, []byte(strings.ReplaceAll(string(valid), "\n", "\r\n")), goldenTag, nil, ""},
+		{"a fifth line", []PublicKey{release}, sums, append(append([]byte{}, valid...), "extra\n"...), goldenTag, ErrMalformed, ""},
+		{"no untrusted comment prefix", []PublicKey{release}, sums, dropPrefix(t, valid, 0), goldenTag, ErrMalformed, ""},
+		{"no trusted comment prefix", []PublicKey{release}, sums, dropPrefix(t, valid, 2), goldenTag, ErrMalformed, ""},
+		{"one byte over the bound", []PublicKey{release}, sums, bloat(t, valid, maxSigBytes+1), goldenTag, ErrMalformed, ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := Verify(tc.keys, tc.content, tc.sig, tc.tag); !errors.Is(err, tc.want) {
+			err := Verify(tc.keys, tc.content, tc.sig, tc.tag)
+			if !errors.Is(err, tc.want) {
 				t.Fatalf("Verify() = %v, want %v", err, tc.want)
+			}
+			if tc.wantMsg != "" && !strings.Contains(err.Error(), tc.wantMsg) {
+				t.Fatalf("Verify() = %q, want a message containing %q", err, tc.wantMsg)
 			}
 		})
 	}
