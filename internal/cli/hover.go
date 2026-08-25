@@ -51,6 +51,10 @@ func newHoverCmd() *cobra.Command {
 			"probe_unknown, preempt_lead, hysteresis_pct, headroom_ratio, cooldown and\n" +
 			"recovery_hysteresis. 'ccdad config list' marks each of them while hover is on,\n" +
 			"so a number that stopped mattering says so rather than quietly not applying.\n\n" +
+			"It overrides the 'ccdad switch --strategy' flag too, and not just the config key\n" +
+			"of the same name. That flag is required by the targetless grammar, so it still\n" +
+			"has to be typed; the switch names the override on stderr rather than ranking as\n" +
+			"though it had not been.\n\n" +
 			"It does NOT stop reading credit.max_auto_spend, or an account's primary and\n" +
 			"disabled flags. Fully automatic must not become fully automatic spending: the\n" +
 			"ceiling is one of the two independent opt-ins unattended overage requires, and\n" +
