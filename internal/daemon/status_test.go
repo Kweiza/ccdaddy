@@ -391,13 +391,20 @@ func TestSweepStatusTempsRemovesOrphansAndNothingElse(t *testing.T) {
 		"ccdad.lock":       "",
 		"usage.json":       "{}",
 		"usage.json.tmp-1": "{}",
+		"history.json":     "{}",
 	}
 	for name, body := range keep {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	orphans := []string{"status.json.tmp-1", "status.json.tmp-987654321"}
+	orphans := []string{
+		"status.json.tmp-1", "status.json.tmp-987654321",
+		// The series is the other file with no sweeper of its own. Its temps
+		// are collected here and usage.json's deliberately are not, so a test
+		// that named only status.json's could not tell the two apart.
+		"history.json.tmp-4242",
+	}
 	for _, name := range orphans {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte("{}"), 0o600); err != nil {
 			t.Fatal(err)
@@ -415,9 +422,10 @@ func TestSweepStatusTempsRemovesOrphansAndNothingElse(t *testing.T) {
 	for name := range keep {
 		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
 			// usage.json.tmp-1 belongs to a writer that may be a live CLI
-			// process holding the cache lock; sweeping it would race a
-			// stranger's rename.
-			t.Errorf("%s was removed but is not this file's orphan: %v", name, err)
+			// process holding the cache lock, and a lost cache write costs
+			// every reader a poll's worth of freshness; sweeping it would race
+			// a stranger's rename for a much larger stake than a sample.
+			t.Errorf("%s was removed but is not a swept file's orphan: %v", name, err)
 		}
 	}
 }

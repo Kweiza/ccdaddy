@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
+	"github.com/Kweiza/ccdaddy/internal/history"
 )
 
 // StatusSchemaVersion is the version stamped into every document this binary
@@ -270,38 +271,48 @@ func ReadStatus() (Status, bool, error) {
 	return s, true, nil
 }
 
-// SweepStatusTemps removes temp files left beside status.json by a rename that
-// never completed.
+// SweepStatusTemps removes temp files left beside status.json, and beside the
+// usage history, by a rename that never completed.
 //
 // WriteFileAtomic's own comment calls an orphaned temp acceptable, and at the
 // rate it is called elsewhere it is. At one write per second on Windows, where
 // a scanner holding the temp file open is what strands it, "rare" becomes
 // "daily". The daemon sweeps at startup, AFTER taking the singleton — which is
-// what makes it safe, because the singleton is the proof that no other daemon is
-// mid-rename.
+// what makes it safe for status.json, because the singleton is the proof that no
+// other daemon is mid-rename.
 //
-// It sweeps this file's temps and nothing else. usage.json's temps belong to a
-// writer that may be a live CLI process holding the cache lock, and removing one
-// of those would race a stranger's rename rather than clean up after a dead one.
+// The history is swept on a NARROWER argument, and the singleton is not it:
+// `ccdad list --refresh` appends to the series from a process that holds no
+// singleton, so a temp file there can belong to a live stranger just as
+// usage.json's can. What differs is what each side costs. A history temp exists
+// for the microseconds between one write and one rename, at most once per poll,
+// and losing that race drops a single sample out of hundreds — while an orphan
+// there is otherwise collected by nothing, because that file has no other
+// sweeper. usage.json is written by every command that takes a reading, and a
+// lost cache write costs a poll's worth of freshness for every reader at once,
+// so its temps are still left alone.
 func SweepStatusTemps() error {
 	root, err := storeRoot()
 	if err != nil {
 		return err
 	}
-	// The pattern is WriteFileAtomic's own: filepath.Base(path) + ".tmp-*".
-	matches, err := filepath.Glob(filepath.Join(root, StatusFileName+".tmp-*"))
-	if err != nil {
-		// Glob only fails on a malformed pattern, and this one is a constant.
-		return fmt.Errorf("scanning for %s temp files: %w", StatusFileName, err)
-	}
 	var errs []error
-	for _, path := range matches {
-		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			errs = append(errs, err)
+	for _, name := range []string{StatusFileName, history.FileName} {
+		// The pattern is WriteFileAtomic's own: filepath.Base(path) + ".tmp-*".
+		matches, gerr := filepath.Glob(filepath.Join(root, name+".tmp-*"))
+		if gerr != nil {
+			// Glob only fails on a malformed pattern, and both of these are
+			// built from constants.
+			return fmt.Errorf("scanning for %s temp files: %w", name, gerr)
+		}
+		for _, path := range matches {
+			if rerr := os.Remove(path); rerr != nil && !errors.Is(rerr, os.ErrNotExist) {
+				errs = append(errs, rerr)
+			}
 		}
 	}
 	if len(errs) > 0 {
-		return fmt.Errorf("sweeping %s temp files: %w", StatusFileName, errors.Join(errs...))
+		return fmt.Errorf("sweeping temp files: %w", errors.Join(errs...))
 	}
 	return nil
 }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/config"
+	"github.com/Kweiza/ccdaddy/internal/history"
 	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/pollpolicy"
 	"github.com/Kweiza/ccdaddy/internal/store"
@@ -32,6 +33,19 @@ const cacheTimeout = 5 * time.Second
 
 // stateTimeout bounds the wait for the engine state lock.
 const stateTimeout = 5 * time.Second
+
+// historyTimeout bounds the wait for the usage history's own lock, and it is
+// deliberately far below cacheTimeout rather than equal to it.
+//
+// The recorder runs on the poll goroutine Engine.Wait blocks on, which is what
+// the daemon drains on the way out, and the CLI gives that drain ten seconds
+// before it force-kills the process — which on Windows is TerminateProcess,
+// with no chance to finish anything. The two costs are not comparable: a sample
+// that cannot get the lock inside two seconds loses one point of resolution
+// from a series of hundreds, while a drain that overruns loses the process. So
+// a miss here is dropped and never retried, and Record's (uuid, at) key means
+// the next poll's sample is a new point rather than a duplicate of a lost one.
+const historyTimeout = 2 * time.Second
 
 // Engine is the tick loop's body: the poller fleet, the scheduler, and the
 // unattended switch.
@@ -1016,6 +1030,80 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now time.Time,
 	if err != nil {
 		e.logf("recording %s's reading failed: %v", a.UUID, err)
 	}
+
+	// The series is appended to HERE — after usage.WithCache has returned and
+	// released its lock, never from inside its callback. Both are cclock mkdir
+	// mutexes on the same store, and nothing else in this tree holds one while
+	// taking another. Nesting them would not deadlock, because the two lock
+	// directories differ; it would do something quieter and worse — hold the
+	// usage cache shut against every reader and every other poller for as long
+	// as the series lock happened to be contended, which is a wait bounded only
+	// by historyTimeout.
+	//
+	// Only a poll that produced a reading writes one. The other three callers
+	// of commit are failure paths that re-stamp scheduling state and leave the
+	// last good reading alone, so a sample taken there would place the PREVIOUS
+	// reading's percentage at the current instant: a flat segment that never
+	// happened, dragging a measured burn rate toward zero for as long as the
+	// outage lasts.
+	//
+	// A failure is logged and dropped. The reading itself is already committed
+	// above, which is the part that had to succeed.
+	if snap != nil {
+		if herr := history.Record(historyTimeout, a.UUID, historySample(snap, now), now); herr != nil {
+			e.logf("appending %s's sample to the usage history failed: %v", a.UUID, herr)
+		}
+	}
+}
+
+// historySample copies one reading into the shape the series stores. It is only
+// ever handed a reading: a poll that produced none is not a sample, and its
+// caller is the gate that says so.
+//
+// It COPIES rather than keeping the snapshot. usage.Entry.Snapshot is shared and
+// read-only — the cache hands one pointer to every reader — so a series holding
+// it would publish whatever some later poll made of it.
+//
+// Three tri-states cross here and none of them may flatten. A window whose
+// utilization could not be read is ABSENT from the sample rather than present at
+// zero, because nothing read is not nothing used. Credit is recorded only where
+// the account both reports overage enabled and answers with a balance, because a
+// money figure that cannot be read refuses rather than defaulting. And a nil
+// Limit is the account reporting no monthly cap, which means unlimited — a zero
+// would mean a cap of nothing, the opposite verdict.
+func historySample(s *usage.Snapshot, at time.Time) history.Sample {
+	windows := s.AllWindows()
+	sample := history.Sample{At: at}
+	for _, w := range windows {
+		pct, ok := w.Percent()
+		if !ok {
+			continue
+		}
+		r := history.Reading{Pct: pct}
+		if reset, ok := w.Reset(); ok {
+			// Truncated to the minute because the endpoint regenerates
+			// resets_at's sub-second part from its own clock on every request:
+			// two readings of one unrolled window carry different microseconds,
+			// and a reader that segments a series wherever the reset changed
+			// would see every consecutive pair as a rollover. Nothing is lost,
+			// because no window rolls over on a sub-minute boundary.
+			r.Reset = reset.Truncate(time.Minute)
+		}
+		if sample.Windows == nil {
+			sample.Windows = make(map[usage.WindowName]history.Reading, len(windows))
+		}
+		sample.Windows[w.Name] = r
+	}
+	if s.ExtraUsage.State == usage.ExtraUsageEnabled {
+		if used, ok := s.ExtraUsage.UsedCredits(); ok {
+			c := history.Credit{Used: used, Currency: s.ExtraUsage.CurrencyCode()}
+			if limit, ok := s.ExtraUsage.MonthlyLimit(); ok {
+				c.Limit = &limit
+			}
+			sample.Credit = &c
+		}
+	}
+	return sample
 }
 
 // warmTarget is when the next of this account's clocks runs down, plus the
