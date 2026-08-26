@@ -862,3 +862,64 @@ func TestLogsPrintsTheLastLinesOnly(t *testing.T) {
 		t.Fatalf("stdout = %q, want the last two lines", got)
 	}
 }
+
+// The same four keys the published document carries, flat and in the daemon
+// block. A nested object would be wire-incompatible with the document for no
+// gain, and because the block is shared, both commands that describe a daemon
+// gain them at once.
+func TestBothDaemonPayloadsCarryTheReleaseCheck(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	checkedAt := statusNow.Add(-2 * time.Hour)
+	stubDaemon(t, daemon.Report{
+		State:     daemon.DaemonRunning,
+		HasStatus: true,
+		Status: daemon.Status{
+			SchemaVersion:     daemon.StatusSchemaVersion,
+			PID:               4242,
+			UpdateCheckedAt:   checkedAt,
+			NextUpdateCheckAt: checkedAt.Add(24 * time.Hour),
+			UpdateLatest:      "0.7.0",
+			UpdateCheckError:  "dial tcp: i/o timeout",
+		},
+	}, nil)
+
+	for _, argv := range [][]string{{"status", "--json"}, {"daemon", "status", "--json"}} {
+		t.Run(strings.Join(argv, " "), func(t *testing.T) {
+			_, stdout, _, _ := runRoot(t, argv...)
+			d, ok := statusJSON(t, stdout)["daemon"].(map[string]any)
+			if !ok {
+				t.Fatalf("no daemon object: %s", stdout)
+			}
+			for _, key := range []string{"updateCheckedAt", "nextUpdateCheckAt", "updateLatest", "updateCheckError"} {
+				if d[key] == nil {
+					t.Errorf("daemon.%s is missing: %v", key, d)
+				}
+			}
+			if d["updateLatest"] != "0.7.0" {
+				t.Errorf("daemon.updateLatest = %v, want %q", d["updateLatest"], "0.7.0")
+			}
+		})
+	}
+}
+
+// Each key is behind its own zero guard, so an ordinary payload does not carry
+// four fields that are always empty -- the rule every other conditional key in
+// these payloads already follows.
+func TestADaemonThatHasNeverCheckedCarriesNoneOfTheFourKeys(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	stubDaemon(t, daemon.Report{
+		State:     daemon.DaemonRunning,
+		HasStatus: true,
+		Status:    daemon.Status{SchemaVersion: daemon.StatusSchemaVersion, PID: 4242},
+	}, nil)
+
+	_, stdout, _, _ := runRoot(t, "daemon", "status", "--json")
+	d := statusJSON(t, stdout)["daemon"].(map[string]any)
+	for _, key := range []string{"updateCheckedAt", "nextUpdateCheckAt", "updateLatest", "updateCheckError"} {
+		if _, present := d[key]; present {
+			t.Errorf("daemon.%s is present on a daemon that has never checked: %v", key, d)
+		}
+	}
+}
