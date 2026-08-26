@@ -715,13 +715,20 @@ EOF
 			# boundary character, and that character can be a space, which
 			# would leave the last token empty.
 			#
-			# Then the trailing strip, and the half it is for: the `docs/`
-			# branch has `.` inside its character class, so
+			# Then the trailing strip, which BOTH halves of the pattern need.
+			# The `docs/` branch has `.` inside its character class, so
 			# `see docs/plans/a-thing.md.` ending a sentence yields the target
 			# with the full stop attached, which resolves to nothing and fails a
-			# correct line. A test written around `See SECURITY.md.` was blind
-			# to this -- the `.md` half cannot take a stop inside its match --
-			# and deleting the strip left the suite green.
+			# correct line.
+			#
+			# The comment here used to say the `.md` half was exempt, on the
+			# grounds that its match has to end at `.md`. That stopped being
+			# true when the half gained its `([^A-Za-z0-9]|$)` boundary: the
+			# boundary CONSUMES the character it matches, so `see SECURITY.md.`
+			# yields `see SECURITY.md.` -- measured with `grep -oE` against the
+			# pattern as it stands. Deleting the strip now fails that line, and
+			# `See SECURITY.md.` is a line this repository actually carries, in
+			# .github/ISSUE_TEMPLATE/config.yml.
 			#
 			# `|| true` because not every line git grep printed re-matches: a
 			# NUL byte anywhere in a searched file makes it print

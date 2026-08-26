@@ -761,10 +761,16 @@ func TestCICitesAllowsAPathThisRepositoryHas(t *testing.T) {
 // nothing and fails a correct line.
 //
 // A first version of this test used `See SECURITY.md.` -- the one such line in
-// this repository -- and it was BLIND: the `.md` half of the pattern has to end
-// at `.md`, so the full stop is never inside the match and the strip is a no-op
-// for it. Deleting the strip left the whole suite green. The next test keeps
-// that line pinned for what it does prove.
+// this repository -- and it WAS blind at the time, because the `.md` half of
+// the pattern then ended at `.md` and the full stop was never inside the match.
+// Deleting the strip left the whole suite green.
+//
+// That is history rather than a fact about the pattern, and it stopped being
+// true when the `.md` half gained its `([^A-Za-z0-9]|$)` boundary: a boundary
+// CONSUMES what it matches, so the stop is inside the match now and the strip
+// is load-bearing for both halves. Measured -- deleting the strip today fails
+// the next test rather than leaving it green. The `docs/` fixture stays because
+// it is the one that was never blind.
 func TestCICitesAllowsADocumentPointerThatEndsASentence(t *testing.T) {
 	root := throwawayRepo(t, map[string]string{
 		"docs/plans/2026-08-25-a-thing.md": "# a plan that is really here\n",
@@ -779,8 +785,10 @@ func TestCICitesAllowsADocumentPointerThatEndsASentence(t *testing.T) {
 }
 
 // The shape the repository actually carries, in `.github/ISSUE_TEMPLATE`. It
-// proves the narrower thing: the extension half of the pattern cannot swallow a
-// sentence's full stop, so a bare document name ending a sentence resolves.
+// proves that a bare document name ending a sentence resolves -- and it does so
+// through the trailing strip, not around it. The comment here used to claim the
+// extension half could not swallow a full stop; the `([^A-Za-z0-9]|$)` boundary
+// consumes one, so it can and does, and this test is red without the strip.
 func TestCICitesAllowsAMarkdownPointerThatEndsASentence(t *testing.T) {
 	root := throwawayRepo(t, map[string]string{
 		"SECURITY.md":     "# how to report a vulnerability\n",
