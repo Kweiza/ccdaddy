@@ -19,10 +19,15 @@ func TestClassify(t *testing.T) {
 		{
 			// Overage on top of a subscription is still a subscription: credits
 			// are a secondary axis and are not touched while a window has room.
-			name:    "subscription with overage enabled is still a subscription",
-			profile: &Profile{OrganizationType: "enterprise", HasExtraUsage: true},
-			usage:   UsageShape{HasSubscriptionWindows: true, ExtraUsageEnabled: true},
-			want:    KindSubscription,
+			name: "subscription with overage enabled is still a subscription",
+			profile: &Profile{
+				OrganizationType: "claude_enterprise",
+				SeatTier:         "enterprise_usage_based",
+				RateLimitTier:    "default_claude_zero",
+				HasExtraUsage:    true,
+			},
+			usage: UsageShape{HasSubscriptionWindows: true, ExtraUsageEnabled: true},
+			want:  KindSubscription,
 		},
 		{
 			// An account that is both is a subscription. The login and add-token
@@ -39,7 +44,7 @@ func TestClassify(t *testing.T) {
 			// HasExtraUsage is deliberately left false: this case exists to pin
 			// the usage-derived rule, and must fail if that branch is removed.
 			name:    "no windows but extra usage enabled is a credit account",
-			profile: &Profile{OrganizationType: "enterprise"},
+			profile: &Profile{OrganizationType: "claude_enterprise"},
 			usage:   UsageShape{HasSubscriptionWindows: false, ExtraUsageEnabled: true},
 			want:    KindCredit,
 		},

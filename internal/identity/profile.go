@@ -67,14 +67,33 @@ type Profile struct {
 	Email            string
 	OrganizationUUID string
 
-	// OrganizationType maps to the subscription tier: pro, claude_max, team,
-	// enterprise.
+	// OrganizationType is the subscription tier as the WIRE spells it, which is
+	// claude_ prefixed throughout: claude_pro, claude_max, claude_team,
+	// claude_enterprise. Claude Code compares against the mapped SHORT name
+	// ("enterprise", "max") everywhere, and internal/cli.subscriptionTypeOf is
+	// the map -- so a predicate that compares this field against "enterprise"
+	// is a predicate that never fires. Measured against a live claude_enterprise
+	// organization on 2026-08-26.
 	OrganizationType string
-	RateLimitTier    string
-	SeatTier         string
+	// RateLimitTier is the plan-window entitlement, e.g. default_claude_max_20x.
+	// A seat granted none reports default_claude_zero, which is one of the two
+	// things noPlanWindowProfile reads.
+	RateLimitTier string
+	// SeatTier is the seat's own billing arrangement inside the organization,
+	// e.g. standard, or enterprise_usage_based for a seat metered in money.
+	// This is a SEAT fact and BillingType below is an ORGANIZATION fact, and an
+	// enterprise org can hold a contracted subscription while its seats are
+	// metered per unit -- which is why the two disagree and why only this one
+	// answers "how is this account metered".
+	SeatTier string
 
-	// BillingType is the one profile field that is evidence of how the account
-	// is metered; see Classify.
+	// BillingType is the ORGANIZATION's billing arrangement, and it is weaker
+	// evidence than its name suggests. Claude Code reads a closed set of four
+	// as subscription -- stripe_subscription, stripe_subscription_contracted,
+	// apple_subscription, google_play_subscription -- and a money-metered
+	// enterprise seat reports the SECOND of those, because the organization
+	// really does hold a contracted subscription. No allowlist on this field
+	// can reach such an account; see Classify and noPlanWindowProfile.
 	BillingType string
 	// HasExtraUsage is the organization's has_extra_usage_enabled overage
 	// switch. It is recorded as a secondary axis and is deliberately NOT

@@ -18,6 +18,21 @@ by `uuid` or `alias`.
 
 ### Added
 
+- **The credit runway is measured for a fleet with no plan windows, and
+  `ccdad runway` shows it.** The credit axis was handed the account list the
+  window simulation had already filtered, and that filter drops every account
+  with nothing to simulate — so a fleet metered only in money could not reach
+  the figure at all, and adding one irrelevant plan window to the same account
+  made it appear. The page was gated on the window basis too, so such a fleet
+  got no table and was told there was not enough history to measure a burn rate
+  while its burn rate sat measured in the same document. The two window rows are
+  now printed only when a window basis exists: two rows of `-` above a real
+  credit row invite the reader to conclude the fleet burns no quota.
+
+- **`seat_tier` is stored.** It is the one profile field that says how a *seat*
+  is metered, as opposed to how its organization is billed, and it was fetched
+  and then dropped.
+
 - **The daemon says when a newer ccdad is out.** Once a day it asks the
   releases page what the newest release is — one request per day per store, to
   the host the machine already used to install ccdad, carrying the running
@@ -74,6 +89,47 @@ by `uuid` or `alias`.
   window` and six other correct lines of this repository.
 
 ### Fixed
+
+- **An enterprise seat metered in credits is recognised, ranked and rendered.**
+  Measured against two live `claude_enterprise` seats on 2026-08-26. Such a seat
+  reports `seat_tier` `enterprise_usage_based`, `rate_limit_tier`
+  `default_claude_zero`, every plan window `null` and an empty `limits[]`: money
+  is its only meter. It was filed as a *subscription* at add time and stayed
+  that way, and three separate things went wrong from there.
+
+  `ccdad add` never calls the usage endpoint, so classification had only the
+  profile — and the profile's `billing_type` on such a seat is
+  `stripe_subscription_contracted`, one of the four values Claude Code itself
+  reads as a subscription. The organization really does hold a contracted
+  subscription; it is the *seat* that is metered per unit, so no allowlist on
+  that field could ever have reached the account. Classification now asks
+  whether the profile grants any plan-window entitlement at all, which is the
+  same test Claude Code makes, and a seat that has none starts with the primary
+  flag already set — a ceiling that gates spending *past* paid quota has nothing
+  to gate on an account that has no quota, and at its default of `0` it would
+  otherwise have gated the account shut forever.
+
+  A misfiled account also stayed misfiled: `store.ApplyUsage` was written and
+  tested for exactly this repair and was never called by anything. The daemon
+  now applies it on every poll that produced a reading, which is also the only
+  thing that has ever written the stored credit balance.
+
+  Ranking then moved the wrong way rather than not at all. With no plan window
+  to read, two such seats both measured as *unknown*, and the engine switched
+  off the seat with 60% of its balance left onto the one that was fully drained.
+  Separately, a fleet with no subscription accounts at all was frozen: the
+  branch that keeps an engine from returning to a spent subscription pool also
+  fired when there was no such pool to return to, so the credit pool was ranked,
+  gated and then never consulted — permanently, while reporting a shortage of
+  accounts the user does not have. `credit.max_auto_spend` still gates every
+  move and still refuses at its default of `0`.
+
+  Everything that renders read the plan-window axis unconditionally, so
+  `status`, `list` and the dashboard printed `?` in the USED column for a seat
+  the engine was ranking on a perfectly good percentage, the daemon published
+  `unknown` for every account in the fleet, and the poll scheduler — whose two
+  urgency bands both require a known reading — left a seat at 99% of its balance
+  on the lazy cadence. One reading now produces one answer for all of them.
 
 - **`scripts/ci.sh` answers 0, 1 or 2 and nothing else.** 2 means a check name
   the script does not have; a check that ran and found a real problem reports 1,

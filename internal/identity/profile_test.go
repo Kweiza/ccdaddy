@@ -35,7 +35,7 @@ func TestFetchProfileParsesAccountAndOrganization(t *testing.T) {
 			"account":{"uuid":"acct-1","email":"user@example.com"},
 			"organization":{
 				"uuid":"org-1","organization_type":"claude_max","rate_limit_tier":"default_claude_max_20x",
-				"seat_tier":"standard","has_extra_usage_enabled":true,"billing_type":"subscription"
+				"seat_tier":"standard","has_extra_usage_enabled":true,"billing_type":"stripe_subscription"
 			}
 		}`)
 	})
@@ -79,8 +79,8 @@ func TestFetchProfileParsesAccountAndOrganization(t *testing.T) {
 	if !got.HasExtraUsage {
 		t.Fatal("HasExtraUsage = false, want true")
 	}
-	if got.BillingType != "subscription" {
-		t.Fatalf("BillingType = %q, want subscription", got.BillingType)
+	if got.BillingType != "stripe_subscription" {
+		t.Fatalf("BillingType = %q, want stripe_subscription", got.BillingType)
 	}
 }
 
