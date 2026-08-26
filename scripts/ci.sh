@@ -390,10 +390,23 @@ check_cgo() {
 # citation written inside one of those three is not caught by anything.
 # Measured, so that nobody tidies one away: dropping `:!CONTRIBUTING.md` fails
 # the gate on nine of its own lines, and dropping `:!scripts/ci_sh_test.go`
-# fails it on thirty. Neither is caught by any test, because every fixture
+# fails it on thirty-one. Neither is caught by any test, because every fixture
 # repository is built fresh and contains neither file, so the only thing
 # keeping these honest is re-running them whenever the patterns, the pathspec
 # or either excluded file changes.
+#
+# THIS IS THE ONLY PLACE THE PAIR IS RECORDED, and that is deliberate. It was
+# written down twice -- here and in a comment above the fixture in
+# ci_sh_test.go -- and the copies diverged the first time one of them was
+# re-measured: this one moved to nine and thirty and the other went on saying
+# four, which was the count of a tree two widenings ago. A measurement with two
+# owners has none.
+#
+# Thirty-one and not thirty as of 2026-08-26, and the re-run is why it is known:
+# the commit that pinned the child environment rewrote a comment in
+# ci_sh_test.go that quotes the section symbol, which is one more line carrying
+# a string this check fails on. The number moves whenever that file's prose
+# does, which is the point of the sentence above rather than an annoyance.
 #
 # The pair that stood here read four and seven, and both are worth naming
 # because they are the failure this comment exists to prevent. Four was a true
