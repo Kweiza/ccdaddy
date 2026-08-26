@@ -142,3 +142,27 @@ func TestParseKind(t *testing.T) {
 		}
 	}
 }
+
+// TestAnEnterpriseUsageBasedSeatClassifiesAsCreditFromTheProfileAlone pins the
+// only rule `ccdad add` can apply. That path never calls the usage endpoint —
+// it hands Classify an empty UsageShape by construction — so the profile is the
+// whole of the evidence, and getting it wrong is permanent rather than
+// temporary.
+//
+// Every value here is VERBATIM from a live claude_enterprise seat read on
+// 2026-08-26, and billing_type is the trap the old rule walked into:
+// "stripe_subscription_contracted" is one of the four values Claude Code's own
+// QG() treats as a SUBSCRIPTION, so no billing_type allowlist can ever reach
+// this account no matter what is added to it.
+func TestAnEnterpriseUsageBasedSeatClassifiesAsCreditFromTheProfileAlone(t *testing.T) {
+	p := &Profile{
+		OrganizationType: "claude_enterprise",
+		RateLimitTier:    "default_claude_zero",
+		SeatTier:         "enterprise_usage_based",
+		BillingType:      "stripe_subscription_contracted",
+		HasExtraUsage:    true,
+	}
+	if got := Classify(p, UsageShape{}, false); got != KindCredit {
+		t.Fatalf("Classify() = %v, want %v — an add with no usage call has only this profile to go on", got, KindCredit)
+	}
+}
