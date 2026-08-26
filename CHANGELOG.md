@@ -16,6 +16,24 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+### Added
+
+- **The daemon says when a newer ccdad is out.** Once a day it asks the
+  releases page what the newest release is — one request per day per store, to
+  the host the machine already used to install ccdad, carrying the running
+  version as its user agent and nothing else. What it heard shows up as an
+  `Update:` line in `ccdad status`, on the dashboard's daemon screen, as an
+  `update-check` row in `ccdad doctor`, and as four keys in the `daemon` block
+  of `ccdad status --json` and `ccdad daemon status --json`. The daemon
+  publishes the *reading* and never a verdict: upgrading replaces the binary
+  while the old daemon keeps publishing, so an "update available" boolean
+  computed there would spend one day per upgrade telling the new binary to
+  install what it is already running. The comparison happens in whatever is
+  reading, against its own version, and `dev` builds are silent because their
+  version compares with nothing. The new `update_check` key switches the
+  request off for a machine that may not call out; it defaults to `true`, and
+  it does **not** gate `ccdad update`.
+
 ## [0.8.0] — 2026-08-26
 
 The release that puts `ccdad update` in users' hands, and the one that stops the
