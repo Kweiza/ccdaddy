@@ -401,10 +401,20 @@ func Decide(cands []Candidate, o Options, cfg Config, st *State, activeUUID stri
 		}
 	}
 
-	if activeIsCredit {
+	if activeIsCredit && len(res.Order) > 0 {
 		// Staying is not a switch, so the gate is not re-run against the
 		// account already in use: the credit gate decides what may be
 		// SWITCHED TO.
+		//
+		// The length test is what keeps this to the case the block above names.
+		// A subscription pool that EXISTS and is spent is somewhere the engine
+		// would gain nothing by returning to. A pool that does not exist at all
+		// is a different sentence, and it is every enterprise installation:
+		// with no main pool the walk below is the only pool there is, and
+		// returning here refused to consult it -- permanently, and while
+		// reporting a shortage of accounts the user never had. Nothing about
+		// the money changes; max_auto_spend still gates every move below, and
+		// at its shipped default of 0 it still refuses.
 		plan.Action = ActionStay
 		plan.Reason = ReasonNoSubscriptionRoom
 		return plan
