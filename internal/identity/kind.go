@@ -119,6 +119,29 @@ func noPlanWindowProfile(p *Profile) bool {
 		norm(p.SeatTier) == seatTierEnterpriseUsageBased
 }
 
+// PrimaryByDefault reports whether a newly added account should start with the
+// primary flag already set.
+//
+// The flag means "this account's credits are its ORDINARY metering rather than
+// an overage", and it exempts the account from credit.max_auto_spend. That
+// exemption is the whole reason the flag was manual: a ceiling is an opt-in to
+// SPENDING PAST paid quota, and bypassing it should be deliberate.
+//
+// A seat with no plan-window entitlement is the case where that reasoning
+// inverts. There is no quota for its credits to be an overage of, so the
+// ceiling is not gating an overage — it is gating the only way the account can
+// be used at all, and at its shipped default of 0 it gates it shut forever.
+// Adding such an account IS the deliberate act, because nothing else about it
+// is usable.
+//
+// It is deliberately the NARROW predicate rather than "was classified credit":
+// an account that reaches KindCredit through a metered billing_type may well
+// have quota behind it, and starting that one exempt from the ceiling would
+// spend money the user never authorized.
+func PrimaryByDefault(p *Profile) bool {
+	return noPlanWindowProfile(p)
+}
+
 // Classify decides how an account is metered.
 //
 // Subscription windows win outright: an account with an active five-hour or

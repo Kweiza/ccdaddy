@@ -41,6 +41,8 @@ type Account struct {
 	Tier string `toml:"tier,omitempty"`
 	// RateLimitTier is rate_limit_tier, e.g. default_claude_max_20x.
 	RateLimitTier string `toml:"rate_limit_tier,omitempty"`
+	// SeatTier is seat_tier, e.g. standard or enterprise_usage_based.
+	SeatTier string `toml:"seat_tier,omitempty"`
 	// OrganizationUUID is the owning organization, when the profile reported
 	// one. The ambiguous-email error names it, so a user with the same address
 	// in two organizations can tell the candidates apart.
