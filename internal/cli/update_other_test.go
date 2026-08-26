@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -45,19 +46,62 @@ func startRunningImage(t *testing.T, path string) {
 	})
 }
 
-// The control comes first. Without it this file proves that a rename works on a
-// file, which is not the claim: the claim is that a rename works where a WRITE
-// does not, which is the entire reason the staged file is a sibling of the
-// target rather than something in /tmp that gets copied over.
-func TestReplaceBinaryWorksWhereAWriteOverALiveImageDoesNot(t *testing.T) {
+// Whether a write over a live image fails is a platform fact, and it is not the
+// same fact on every Unix. Measured on GitHub's runners on 2026-08-26, with the
+// child proved alive by signal 0 immediately before and immediately after the
+// write:
+//
+//	linux/amd64    open …/ccdad: text file busy
+//	darwin/arm64    <nil>
+//
+// On darwin both a copy of /bin/sh and an image the Go toolchain had just built
+// were overwritten while running, so what differs is the platform and not the
+// way the image was made: macOS does not hold the constraint Linux reports as
+// ETXTBSY.
+//
+// This is a DECLARED fact and not a skip on a failed probe, because a probe
+// alone cannot tell "this platform has no such constraint" from "the constraint
+// regressed on a platform that has one" — and the second is the only thing the
+// control below exists to catch. So the control asserts the fact in both
+// directions and is loud either way.
+const liveImageIsWriteProtected = runtime.GOOS != "darwin"
+
+// The control, and it is a test of its own rather than the first half of the
+// one below. It does not hold everywhere and the claim below does: on darwin a
+// live image can simply be written over, so pairing them would either give up
+// the rename coverage on the platform `ccdad update` most needs it, or leave
+// this file's central claim quietly conditional.
+func TestAWriteOverALiveImageFailsWhereThePlatformHasThatConstraint(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "ccdad")
 	startRunningImage(t, target)
 
-	if err := os.WriteFile(target, []byte("new"), 0o755); err == nil {
-		t.Fatal("writing over a live image succeeded; this platform does not " +
-			"have the constraint replaceBinary exists for, and the rest of this test proves nothing")
+	err := os.WriteFile(target, []byte("new"), 0o755)
+	switch {
+	case liveImageIsWriteProtected && err == nil:
+		t.Fatalf("writing over a live image succeeded on %s, which is recorded above as "+
+			"having the constraint replaceBinary exists for. Either the constraint went "+
+			"away or startRunningImage stopped producing a live image, and under both of "+
+			"those the test below proves less than its name claims.", runtime.GOOS)
+	case !liveImageIsWriteProtected && err != nil:
+		t.Fatalf("writing over a live image failed on %s (%v), which is recorded above as "+
+			"having no such constraint. That record is what makes this file lenient here, "+
+			"so it has to be corrected rather than left to pass quietly.", runtime.GOOS, err)
 	}
+}
+
+// The claim, and this one holds on every platform the file builds for:
+// replaceBinary puts the staged bytes at target even when target is a live
+// image, and consumes the staged file doing it. On linux that is only possible
+// because it renames rather than writes — which is what the control above
+// proves, and the entire reason the staged file is a sibling of the target
+// rather than something in /tmp that gets copied over. On darwin a write would
+// have worked too; the rename is still what runs, and this is what says it runs
+// correctly there.
+func TestReplaceBinaryReplacesALiveImage(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "ccdad")
+	startRunningImage(t, target)
 
 	staged := filepath.Join(dir, "ccdad-staged")
 	if err := os.WriteFile(staged, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
