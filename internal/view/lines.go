@@ -126,10 +126,12 @@ func DescribeRunning(report daemon.Report, now time.Time) string {
 // table keeps the projection to --json, and a mode line that used the word
 // would put it back on the page the projection was kept off.
 //
-// NOTHING ENFORCES THAT. This paragraph named a test that does not exist under
-// that name or any other -- searched, 2026-08-26 -- so the rule has been held
-// by the sentence you are reading and by whoever remembered it. Adding the
-// word to a branch below changes no test in this tree.
+// TestNoModeLineBranchSaysExhausted is what makes that red. It asks the
+// question twice -- by rendering every mode this binary declares plus one it
+// has never heard of, and by reading the branches below as source, so a case
+// written for a mode nothing yet passes in is covered too -- and it pins the
+// branch count, because a line added to a block without the test that covers
+// the block growing with it is how this rule came to be held by prose.
 func ModeLine(m strategy.Mode) string {
 	switch m {
 	case strategy.ModeRecovery:
