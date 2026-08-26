@@ -107,6 +107,67 @@ unfalsifiable. So:
   the environment probes. Use it. A test that needs a real one opts in by name,
   which makes the exception visible.
 
+## Test code you have written but not run
+
+Work here is often written out before it is made — a plan, a checklist, a pull
+request that quotes the test it is about to add. Reading that back before you
+run it is worth the hour, and it fails in one particular way: the reader
+compiles the implementation in their head and takes the *test* as prose.
+
+That has cost this tree twice. One change shipped seven defects, six of them in
+test code and four of those the same shape — a case that could not reach the
+check it was named for, because an earlier guard caught the fixture and
+returned the same error the case was asserting on. A later change was read the
+other way, every test block treated as code against the tree it would land in,
+and that turned up eleven things worth changing before a line of it ran. Four
+of the eleven would have produced a green run that proved nothing.
+
+So read a test block you have not run as if it were about to be compiled:
+
+- **Does the mutation actually reach the assertion?** Trace it through the
+  control flow of the tree it will land in, not through the sentence that names
+  it. One mutation was written against a constant that occurs zero times in the
+  function it named — the branch it meant lives in a different function
+  entirely. A `sed` for a string that is not there matches nothing and exits
+  `0`, so the green run that follows reads exactly like a caught mutation.
+- **Does the block compile?** Helper arity, redeclaration against the whole
+  package — every other `_test.go` file in it counts — and imports in **both**
+  directions, because an unused one is as fatal as a missing one. Three
+  separate blocks failed this: one declared a helper the package already had
+  under that name, one called `errors.New` in a file nothing had added `errors`
+  to, and one called a constructor with three arguments where it takes five.
+- **Would the assertion pass if the code under test never ran?** An assertion
+  the zero value satisfies constrains nothing. One test's three assertions were
+  all true of a freshly constructed value, and it threw away the one counter
+  that would have said whether the thing under test was dispatched at all.
+  Assert the counter first, then the shape.
+- **Does the mutation break the build instead of the test?** "Delete this line"
+  is a fine instruction until the line is an import's only use. The package
+  then fails to compile with *imported and not used*, which reads as a caught
+  mutation to nobody and as a broken tree to everybody. Assign `nil` rather
+  than deleting the assignment.
+- **Can each step's proof pass where the step stands?** One step's own
+  verification needed a value that the step after it was going to publish, so
+  it could not pass in place — and the two assertions it leaned on were vacuous
+  until it did. Order the work by what each proof needs, not by subject.
+
+Then check the reading itself. Of the forty-three findings that second pass
+produced, three did not survive an adversarial re-read, one of them a confident
+"this test is blind" whose experiment had been run at the wrong scope.
+Re-prove every correction by mutating the real tree before you write it down: a
+review nobody reviews adds work rather than removing it.
+
+The same goes for a number. The comment above the citation check's exclusion
+list in `scripts/ci.sh` says, as a measurement, how many lines each excluded
+file would fail on if the check could read it. Both counts were written into
+the commit that widened that check from five filename patterns to everything
+git tracks, and neither was re-run afterwards. One had been a true count of the
+tree before that commit and was stale by the time the commit carrying it
+landed; the other counted fixtures where the check counts lines, and was never
+right. They are corrected. A measurement in a comment is a claim like any
+other, and the commit that widens a check is exactly where every count
+describing it goes stale.
+
 ## Code that touches credentials
 
 `internal/cclink`, `internal/cclock`, `internal/switcher` and `internal/store`
