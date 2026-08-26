@@ -219,7 +219,7 @@ func loadSnapshot(cmd *cobra.Command, now time.Time) (snap view.Snapshot, probeE
 		// would publish an object whose every verdict is "unknown" beside a
 		// burn of zero. It is also what keeps the dashboard's byte-compared
 		// golden fixtures still on a machine that has recorded nothing.
-		HasForecast: fleet.Basis.Known,
+		HasForecast: fleet.Basis.Known || fleet.Credit.Known,
 	}, probeErr, nil
 }
 

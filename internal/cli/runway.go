@@ -93,7 +93,7 @@ func newRunwayCmd() *cobra.Command {
 			switch {
 			case len(accounts) == 0:
 				fmt.Fprintln(errw, "No accounts yet. Run 'ccdad add' to log one in.")
-			case !f.Basis.Known:
+			case !f.Basis.Known && !f.Credit.Known:
 				// Said in front of a person on both paths, because the payload's
 				// silence on this is easy to misread as a fleet that burns
 				// nothing.
@@ -269,7 +269,11 @@ func renderRunway(cmd *cobra.Command, f forecast.Fleet, accounts []store.Account
 		}
 	}
 
-	if !f.Basis.Known {
+	// Two axes, two gates. Basis is the WINDOW basis, and gating the whole page
+	// on it meant a fleet metered only in money -- every enterprise install --
+	// got no table at all while its burn rate sat measured in the same
+	// document.
+	if !f.Basis.Known && !f.Credit.Known {
 		writeAccounts()
 		return nil
 	}
@@ -279,22 +283,36 @@ func renderRunway(cmd *cobra.Command, f forecast.Fleet, accounts []store.Account
 	// reader chooses one, and view.Timestamp always prints which one it was.
 	loc := time.Local
 
+	// The window rows are printed only when a window basis was measured. Two
+	// rows of "-" above a real credit row do not report an absence; they invite
+	// the reader to conclude the fleet burns no quota, which is the one thing
+	// an unmeasured axis must never say.
+	rows := make([][]string, 0, 3)
+	if f.Basis.Known {
+		rows = append(rows,
+			[]string{"  5-hour", view.RunwayBurn(f.FiveHour.Burn), view.RunwayReplenish(f.FiveHour.Replenish),
+				view.RunwayVerdict(f.FiveHour, now, loc)},
+			[]string{"  7-day", view.RunwayBurn(f.Weekly.Burn), view.RunwayReplenish(f.Weekly.Replenish),
+				view.RunwayVerdict(f.Weekly, now, loc)},
+		)
+	}
+	rows = append(rows, []string{"  Credits", view.RunwayCreditBurn(f.Credit), view.RunwayCreditReplenish(),
+		view.RunwayCreditVerdict(f.Credit, now, loc)})
+
 	fmt.Fprintln(out)
-	if err := columns(out, []string{"  AXIS", "BURN", "REPLENISHES", "VERDICT"}, [][]string{
-		{"  5-hour", view.RunwayBurn(f.FiveHour.Burn), view.RunwayReplenish(f.FiveHour.Replenish),
-			view.RunwayVerdict(f.FiveHour, now, loc)},
-		{"  7-day", view.RunwayBurn(f.Weekly.Burn), view.RunwayReplenish(f.Weekly.Replenish),
-			view.RunwayVerdict(f.Weekly, now, loc)},
-		{"  Credits", view.RunwayCreditBurn(f.Credit), view.RunwayCreditReplenish(),
-			view.RunwayCreditVerdict(f.Credit, now, loc)},
-	}, nil); err != nil {
+	if err := columns(out, []string{"  AXIS", "BURN", "REPLENISHES", "VERDICT"}, rows, nil); err != nil {
 		return err
 	}
-	// The credit row means something different from the two above it, and a
+	// The credit row means something different from the window rows, and a
 	// table cannot say so on its own.
-	fmt.Fprintln(out, "\n  The two window rows ask whether resets give quota back faster than the fleet\n"+
-		"  spends it. Credits do not reset: that row is a balance divided by a rate,\n"+
-		"  with nothing coming back.")
+	if f.Basis.Known {
+		fmt.Fprintln(out, "\n  The two window rows ask whether resets give quota back faster than the fleet\n"+
+			"  spends it. Credits do not reset: that row is a balance divided by a rate,\n"+
+			"  with nothing coming back.")
+	} else {
+		fmt.Fprintln(out, "\n  Credits do not reset: that row is a balance divided by a rate, with nothing\n"+
+			"  coming back. No account in this fleet is metered on a plan window.")
+	}
 
 	writeAccounts()
 
