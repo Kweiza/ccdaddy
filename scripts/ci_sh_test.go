@@ -47,11 +47,14 @@ func runCI(t *testing.T, root string, args ...string) (string, int) {
 	return string(out), code
 }
 
-// throwawayRepo is a git repository containing nothing but a copy of ci.sh and
-// whatever files the caller asks for. `git init` is enough: `git ls-files
-// --cached --others --exclude-standard` answers without a commit, and a commit
-// would need an identity this test has no business configuring.
-func throwawayRepo(t *testing.T, files map[string]string) string {
+// scriptTree is a directory holding a copy of ci.sh plus whatever files the
+// caller asks for, and NOT a git repository. throwawayRepo builds on it.
+//
+// Used directly it is how a test asks what a check does when git REFUSES, and
+// that question has an answer worth pinning: two checks build their file list
+// from git, and the failure mode of a bad answer there is a check that looked
+// at nothing and said so with exit 0.
+func scriptTree(t *testing.T, files map[string]string) string {
 	t.Helper()
 	root := t.TempDir()
 
@@ -70,6 +73,12 @@ func throwawayRepo(t *testing.T, files map[string]string) string {
 		t.Fatal(err)
 	}
 
+	writeFiles(t, root, files)
+	return root
+}
+
+func writeFiles(t *testing.T, root string, files map[string]string) {
+	t.Helper()
 	for name, content := range files {
 		path := filepath.Join(root, filepath.FromSlash(name))
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -79,20 +88,41 @@ func throwawayRepo(t *testing.T, files map[string]string) string {
 			t.Fatal(err)
 		}
 	}
+}
+
+// throwawayRepo, and then more files written AFTERWARDS. The order is the whole
+// point: `git add -A` has already run, so everything in `later` is on disk and
+// in nobody's index — which is the state a developer is in between writing a
+// file and staging it, and the state `cites` used to be blind to.
+func throwawayRepoThenWrite(t *testing.T, files, later map[string]string) string {
+	t.Helper()
+	root := throwawayRepo(t, files)
+	writeFiles(t, root, later)
+	return root
+}
+
+// throwawayRepo is a git repository containing nothing but a copy of ci.sh and
+// whatever files the caller asks for. `git init` is enough: `git ls-files
+// --cached --others --exclude-standard` answers without a commit, and a commit
+// would need an identity this test has no business configuring.
+func throwawayRepo(t *testing.T, files map[string]string) string {
+	t.Helper()
+	root := scriptTree(t, files)
 
 	git := exec.Command("git", "init", "--quiet")
 	git.Dir = root
 	if out, err := git.CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v\n%s", err, out)
 	}
-	// STAGED, not merely written. `fmt` reads `git ls-files --cached --others`
-	// and sees an untracked file; `cites` reads `git grep` and `git ls-files`,
-	// and both of those see the INDEX only -- so without this every cites test
-	// would pass by searching nothing. Still no commit: `git add` needs no
-	// identity, and `git commit` would.
+	// STAGED, not merely written, and it is still worth doing even though both
+	// checks now read `--cached --others --exclude-standard` and would see these
+	// files either way: a staged fixture is the state a commit is in, which is
+	// what CI runs against. throwawayRepoThenWrite is how a test asks the other
+	// question deliberately. Still no commit: `git add` needs no identity, and
+	// `git commit` would.
 	//
 	// It respects .gitignore, which is what keeps TestCIFmtIgnoresWhatGitIgnores
-	// describing the same machine it did before.
+	// and TestCICitesIgnoresWhatGitIgnores describing the same machine.
 	add := exec.Command("git", "add", "-A")
 	add.Dir = root
 	if out, err := add.CombinedOutput(); err != nil {
@@ -149,6 +179,146 @@ func TestCIFmtIgnoresWhatGitIgnores(t *testing.T) {
 	}
 }
 
+// A Go file gofmt cannot PARSE, which is a different thing from one it would
+// reformat and is the case every fixture above misses. `gofmt -l` exits 2 for
+// it, and read bare under `set -e` that 2 became the script's own exit code --
+// the code this repository reserves for a check name that does not exist. A
+// check that ran and found a real problem was answering "you typed the check
+// name wrong".
+//
+// The exact code is asserted, not merely "non-zero": 1 and 2 are both non-zero
+// and the whole bug is which of them arrives.
+func TestCIFmtReportsOneWhenAGoFileDoesNotParse(t *testing.T) {
+	root := throwawayRepo(t, map[string]string{
+		"internal/broken/broken.go": "package broken\n\nfunc {{{\n",
+	})
+
+	out, code := runCI(t, root, "fmt")
+	if code != 1 {
+		t.Fatalf("exit %d, want 1 — a check that ran and found something reports 1, and 2 means an unknown check name\n%s", code, out)
+	}
+	if !strings.Contains(out, "gofmt exited 2") {
+		t.Errorf("stderr does not say what gofmt actually exited with, which is the line that sends a reader to look for a file that does not parse:\n%s", out)
+	}
+}
+
+// gofmt writes the parse error to stderr AND the merely-unformatted names to
+// stdout, and exits 2 for the pair. The bare assignment threw the second away,
+// so a developer with one unparseable file was never told about the other file
+// that only needed `gofmt -w`.
+//
+// This is the test that rules out the cheap version of the fix: catching
+// gofmt's status and returning 1 without keeping what it printed leaves this
+// red.
+func TestCIFmtStillNamesTheUnformattedFileWhenAnotherDoesNotParse(t *testing.T) {
+	root := throwawayRepo(t, map[string]string{
+		"internal/a/broken.go":      "package broken\n\nfunc {{{\n",
+		"internal/b/unformatted.go": unformattedGo,
+	})
+
+	out, code := runCI(t, root, "fmt")
+	if code != 1 {
+		t.Fatalf("exit %d, want 1\n%s", code, out)
+	}
+	if !strings.Contains(out, filepath.Join("internal", "b", "unformatted.go")) {
+		t.Errorf("gofmt named the unformatted file and the check dropped it; that file is the one the developer can actually fix:\n%s", out)
+	}
+}
+
+// The failure that is worse than a wrong exit code, because it is GREEN. The
+// file list came through a process substitution, whose status `set -e` cannot
+// see, so a git that refused left check_fmt reporting "no Go files to format"
+// and exiting 0.
+//
+// A tree that is not a repository is the cheapest reachable form of that. The
+// assertion is on the code AND on the absence of the everything-is-fine line,
+// because exit 0 is also what a genuinely empty tree returns.
+func TestCIFmtFailsWhenGitCannotListTheTree(t *testing.T) {
+	root := scriptTree(t, map[string]string{"internal/x/x.go": "package x\n"})
+
+	out, code := runCI(t, root, "fmt")
+	if code != 1 {
+		t.Fatalf("exit %d, want 1 — git refused, so this check looked at nothing and must not say it passed\n%s", code, out)
+	}
+	if strings.Contains(out, "no Go files to format") {
+		t.Errorf("the check reported an empty tree when what actually happened is that git would not answer:\n%s", out)
+	}
+}
+
+// The same question of the other check that builds a list from git. It read
+// `tracked=$(git ls-files)` bare, so git's own 128 left through `set -e` as the
+// script's exit code -- a worse collision than the 2 above, because 128 is the
+// range a shell also uses for "killed by a signal".
+func TestCICitesFailsWhenGitCannotListTheTree(t *testing.T) {
+	root := scriptTree(t, map[string]string{"internal/x/x.go": "package x\n"})
+
+	out, code := runCI(t, root, "cites")
+	if code != 1 {
+		t.Fatalf("exit %d, want 1 — git refused; 128 is git's number, not this script's\n%s", code, out)
+	}
+	if strings.Contains(out, "no line cites") {
+		t.Errorf("the check reported a clean tree when git would not answer:\n%s", out)
+	}
+}
+
+// envWithActions is the child environment with GITHUB_ACTIONS set, so a test
+// can read the fold markers. The parent's environment is kept because gofmt has
+// to be findable; a duplicate key is resolved last-wins by os/exec, so appending
+// is enough even on a runner that already sets it.
+func envWithActions(t *testing.T) []string {
+	t.Helper()
+	return append(os.Environ(), "GITHUB_ACTIONS=1")
+}
+
+// A ::group:: that is opened and never closed swallows everything after it, and
+// `set -e` used to abort before `endgroup` on every failing path -- which is to
+// say on exactly the runs somebody is reading the log for. Measured when this
+// was written: seven group/endgroup pairs and five of them abortable between
+// the halves, an ordinary `vet` or `test` failure included.
+//
+// Counting is what sees it. No assertion on the text can: the markers are
+// balanced on the passing path, which is the only path the rest of this file
+// exercises under Actions.
+func TestTheFoldIsClosedWhenACheckFails(t *testing.T) {
+	root := throwawayRepo(t, map[string]string{
+		"internal/broken/broken.go": "package broken\n\nfunc {{{\n",
+	})
+
+	out, code := runCIWithEnv(t, root, envWithActions(t), "fmt")
+	if code != 1 {
+		t.Fatalf("exit %d, want 1\n%s", code, out)
+	}
+	open := strings.Count(out, "::group::")
+	closed := strings.Count(out, "::endgroup::")
+	if open != closed {
+		t.Errorf("%d ::group:: and %d ::endgroup:: — the failure is inside a fold that never closes, "+
+			"so the one line the reader came for is hidden:\n%s", open, closed, out)
+	}
+	if open == 0 {
+		t.Fatalf("no fold was opened at all, so this test proved nothing:\n%s", out)
+	}
+	// The script's own diagnostic belongs OUTSIDE the fold, which is the half of
+	// the contract that counting cannot check.
+	if i, j := strings.LastIndex(out, "::endgroup::"), strings.Index(out, "ci: gofmt exited"); j >= 0 && j < i {
+		t.Errorf("the check's own explanation is inside the fold:\n%s", out)
+	}
+}
+
+// The same, for a check whose failure arrives from git rather than from a tool
+// with something to say. Without this, closing the fold could be wired into the
+// gofmt path alone and every other leg would keep the bug.
+func TestTheFoldIsClosedWhenGitRefuses(t *testing.T) {
+	root := scriptTree(t, map[string]string{"internal/x/x.go": "package x\n"})
+
+	out, code := runCIWithEnv(t, root, envWithActions(t), "cites")
+	if code != 1 {
+		t.Fatalf("exit %d, want 1\n%s", code, out)
+	}
+	if open, closed := strings.Count(out, "::group::"), strings.Count(out, "::endgroup::"); open != closed {
+		t.Errorf("%d ::group:: and %d ::endgroup:::\n%s", open, closed, out)
+	}
+}
+
 func TestCIRefusesAnUnknownCheck(t *testing.T) {
 	root, err := filepath.Abs("..")
 	if err != nil {
@@ -199,6 +369,219 @@ func TestCICitesAllowsAnRFCSectionReference(t *testing.T) {
 	out, code := runCI(t, root, "cites")
 	if code != 0 {
 		t.Fatalf("exit %d, want 0 — CONTRIBUTING.md permits a citation to a published standard\n%s", code, out)
+	}
+}
+
+// The RFC exemption was one exact spelling applied to a whole LINE, and it was
+// wrong in both directions. These are the two directions.
+//
+// FALSE POSITIVES FIRST. A comma after the number, and the section written
+// before the number, are how people actually write a citation, and both failed
+// a rule CONTRIBUTING.md permits. A gate that fails on correct prose is a gate
+// somebody switches off -- and the shape it pushes them toward, `RFC 6749
+// Section 6`, has no section symbol at all and is invisible to this check in
+// both directions, so the false positive costs more than the line it fails.
+func TestCICitesAllowsAnRFCSectionWrittenWithAComma(t *testing.T) {
+	root := throwawayRepo(t, map[string]string{
+		"internal/x/x.go": "package x\n\n// See RFC 6749, \u00a76 for the flow.\nfunc X() {}\n",
+	})
+
+	out, code := runCI(t, root, "cites")
+	if code != 0 {
+		t.Fatalf("exit %d, want 0 — a comma is punctuation, not a different kind of citation\n%s", code, out)
+	}
+}
+
+func TestCICitesAllowsASectionWrittenBeforeItsRFC(t *testing.T) {
+	root := throwawayRepo(t, map[string]string{
+		"internal/x/x.go": "package x\n\n// See \u00a76 of RFC 6749.\nfunc X() {}\n",
+	})
+
+	out, code := runCI(t, root, "cites")
+	if code != 0 {
+		t.Fatalf("exit %d, want 0 — the section still names an RFC, in the other order\n%s", code, out)
+	}
+}
+
+// A RANGE, and the reason it is here is portability rather than English. The
+// section symbol is two bytes, so `\u00a7+` reads as one \302 followed by
+// repeated \247 on a byte-oriented engine and matches only the first half of
+// `\u00a7\u00a7`. That is the same trap the two `\b` notes in ci.sh record: the
+// arm fails on one platform while every test expecting a MISS still misses. An
+// alternation of two literals is what this rules in.
+func TestCICitesAllowsAnRFCSectionRange(t *testing.T) {
+	root := throwawayRepo(t, map[string]string{
+		"internal/x/x.go": "package x\n\n// Both apply: RFC 6749 \u00a7\u00a76 and 7.\nfunc X() {}\n",
+	})
+
+	out, code := runCI(t, root, "cites")
+	if code != 0 {
+		t.Fatalf("exit %d, want 0 — a range is one citation written once\n%s", code, out)
+	}
+}
+
+// THE OTHER DIRECTION, and it is the one the old comment called a deliberate
+// trade. The drop was per-LINE and ran after the whole spelled arm, so `RFC <n>
+// \u00a7` anywhere on a line exempted that line from ALL THREE literals. Either
+// half of this fixture alone fails; together they used to pass.
+//
+// This is what rules out the shape the fix is easy to get wrong: an exemption
+// that still decides per line. Subtracting the citation and re-testing the
+// remainder is the only implementation that leaves this red-when-broken.
+func TestCICitesDoesNotLetAnRFCCitationLaunderASectionOnTheSameLine(t *testing.T) {
+	root := throwawayRepo(t, map[string]string{
+		"internal/x/x.go": "package x\n\n// See RFC 6749 \u00a76, and also \u00a77.2 of the design document.\nfunc X() {}\n",
+	})
+
+	out, code := runCI(t, root, "cites")
+	if code != 1 {
+		t.Fatalf("exit %d, want 1 — the second section names no standard, and the first does not vouch for it\n%s", code, out)
+	}
+}
+
+// The same laundering, for the two literals that are not the section symbol.
+// They were laundered too, which is the part the report of this bug understated:
+// the filter dropped the line, and the line carried all three patterns.
+func TestCICitesDoesNotLetAnRFCCitationLaunderANamedWorkItem(t *testing.T) {
+	root := throwawayRepo(t, map[string]string{
+		"internal/x/x.go": "package x\n\n// This is what task 47 asked for; the loopback rule is RFC 8252 \u00a77.3.\nfunc X() {}\n",
+	})
+
+	out, code := runCI(t, root, "cites")
+	if code != 1 {
+		t.Fatalf("exit %d, want 1 — an RFC citation on the line says nothing about \"task 47\" on the same line\n%s", code, out)
+	}
+}
+
+// The exemption validates a SHAPE, and this is the edge where a shape stops
+// being a citation. `RFC 9999 \u00a7 anything at all` has a section symbol
+// introducing prose rather than a section, and accepting it would make the
+// exemption a way of writing `\u00a7` wherever you like.
+//
+// The RFC number itself is deliberately not checked for existence -- 9999 is
+// unassigned and still exempt when it introduces a numbered section -- because
+// whether a number was ever issued is not a question a grep can ask.
+func TestCICitesRefusesASectionSymbolThatIntroducesNoSection(t *testing.T) {
+	root := throwawayRepo(t, map[string]string{
+		"internal/x/x.go": "package x\n\n// RFC 9999 \u00a7 anything at all, even \u00a77.2 of the internal design doc.\nfunc X() {}\n",
+	})
+
+	out, code := runCI(t, root, "cites")
+	if code != 1 {
+		t.Fatalf("exit %d, want 1 — a section symbol followed by prose is not a citation\n%s", code, out)
+	}
+}
+
+// THE FILE SET. It was five extensions, which is narrower than the rule
+// CONTRIBUTING.md states and than this check's own name claims; thirty-seven
+// tracked files sat outside it. Measured when it was widened, each of these
+// carried a violation and the check exited 0.
+//
+// A file with NO extension is the case a pathspec of extensions cannot reach at
+// all, so it is the one worth a test: `ccdad-entrypoint` is a real shell script
+// in this repository and the .cmd fixtures, the .js generator, the licence text
+// and the plugin manifests are the same question asked again.
+func TestCICitesSearchesAFileWithNoExtension(t *testing.T) {
+	root := throwawayRepo(t, map[string]string{
+		"ccdad-entrypoint": "#!/bin/sh\n# The layout is in \u00a77.2 of the design document.\nexec \"$@\"\n",
+	})
+
+	out, code := runCI(t, root, "cites")
+	if code != 1 {
+		t.Fatalf("exit %d, want 1 — a shell script is not exempt for having no dot in its name\n%s", code, out)
+	}
+	if !strings.Contains(out, "ccdad-entrypoint") {
+		t.Errorf("stderr does not name the file:\n%s", out)
+	}
+}
+
+// A BINARY file, and this is what makes the widened pathspec safe rather than
+// merely wider. `git grep` prints `Binary file X matches` for one -- a line with
+// no `file:line:` prefix and no offending text -- and the spelled arm piped that
+// straight into its findings, so the gate failed on assets/ccdaddy.png with a
+// message nobody could act on. `-I` is the fix; excluding the one path would
+// have worked until the next image.
+func TestCICitesDoesNotReportABinaryFile(t *testing.T) {
+	root := throwawayRepo(t, map[string]string{
+		"assets/logo.png": "PNG\x00\x00\u00a7 7.2 the brief task 47\x00",
+		"internal/x/x.go": "package x\n",
+	})
+
+	out, code := runCI(t, root, "cites")
+	if code != 0 {
+		t.Fatalf("exit %d, want 0 — bytes inside an image are not a citation, and \"Binary file X matches\" is not a report\n%s", code, out)
+	}
+	if strings.Contains(out, "Binary file") {
+		t.Errorf("git's binary notice reached the findings:\n%s", out)
+	}
+}
+
+// The three exclusions, which no test reached before and which are load-bearing
+// in production: each of those files has to contain the very strings this check
+// fails on. Measured, dropping `:!CONTRIBUTING.md` fails the real tree on four
+// of its own lines -- and left the whole suite green, because every fixture
+// repository is built fresh and has no CONTRIBUTING.md in it.
+//
+// So this fixture puts one there.
+func TestCICitesDoesNotFailTheDocumentThatStatesTheRule(t *testing.T) {
+	root := throwawayRepo(t, map[string]string{
+		"CONTRIBUTING.md": "# Contributing\n\nThe gate fails on `\u00a7`, on \"the brief\", and on \"task *n*\",\n" +
+			"and on `see docs/plans/2026-08-25-a-thing.md`.\n",
+	})
+
+	out, code := runCI(t, root, "cites")
+	if code != 0 {
+		t.Fatalf("exit %d, want 0 — a gate that cannot state what it forbids is worse than the exclusion\n%s", code, out)
+	}
+}
+
+// UNTRACKED. The file set came from the index alone, so a new file carrying a
+// citation gave exit 0 and the SAME file after `git add -N` gave 1 -- which made
+// running this before staging worthless. check_fmt has never had that hole; it
+// reads `--cached --others --exclude-standard`, and this check does now too.
+func TestCICitesSearchesAFileThatIsNotYetStaged(t *testing.T) {
+	root := throwawayRepoThenWrite(t,
+		map[string]string{"internal/x/x.go": "package x\n"},
+		map[string]string{"internal/y/y.go": "package y\n\n// The rule is in \u00a77.2 of the design document.\nfunc Y() {}\n"},
+	)
+
+	out, code := runCI(t, root, "cites")
+	if code != 1 {
+		t.Fatalf("exit %d, want 1 — the file is on disk and this check is what you run before staging it\n%s", code, out)
+	}
+}
+
+// The bound on the above, and the reason it is not simply "read the working
+// tree": a scratch directory somebody has told git to ignore is not this
+// repository's content, and failing on one is how a gate gets switched off.
+func TestCICitesIgnoresWhatGitIgnores(t *testing.T) {
+	root := throwawayRepoThenWrite(t,
+		map[string]string{".gitignore": "scratch/\n", "internal/x/x.go": "package x\n"},
+		map[string]string{"scratch/notes.go": "package scratch\n\n// The rule is in \u00a77.2 of the design document.\nfunc S() {}\n"},
+	)
+
+	out, code := runCI(t, root, "cites")
+	if code != 0 {
+		t.Fatalf("exit %d, want 0 — .gitignore is where a working-tree gate stops\n%s", code, out)
+	}
+}
+
+// The other half of widening the universe: a pointer RESOLVES against it too.
+// Reading the index for the tracked list while searching the working tree would
+// report `see notes-for-me.md` as unreachable for the minute between writing
+// that file and staging it, which is a gate failing on correct work.
+func TestCICitesResolvesAPointerToAFileThatIsNotYetStaged(t *testing.T) {
+	root := throwawayRepoThenWrite(t,
+		map[string]string{"internal/x/x.go": "package x\n"},
+		map[string]string{
+			"notes-for-me.md": "# a document that is really here\n",
+			"internal/y/y.go": "package y\n\n// The measurement is not repeated here: see notes-for-me.md for it.\nfunc Y() {}\n",
+		},
+	)
+
+	out, code := runCI(t, root, "cites")
+	if code != 0 {
+		t.Fatalf("exit %d, want 0 — the file it points at is right there on disk\n%s", code, out)
 	}
 }
 
@@ -580,6 +963,33 @@ func TestCIPluginFailsWhenTheValidatorDoes(t *testing.T) {
 	out, code := runCIWithEnv(t, root, fakeClaude(t, log, 1), "plugin")
 	if code == 0 {
 		t.Fatalf("exit 0 with a validator that refused; the check swallows its own answer\n%s", out)
+	}
+}
+
+// WHICH non-zero, and this is the test that holds the exit-code convention for
+// every check that shells out. `claude` is somebody else's binary and its status
+// is theirs to change: measured before this, fakes exiting 2, 3 and 7 came
+// straight out of ci.sh as 2, 3 and 7. A validator that started using 2 for its
+// own purposes would have made this script report "you typed the check name
+// wrong" on every push.
+//
+// The test above accepts any non-zero code, so all three of those pass it. This
+// one is the difference between "the check noticed" and "the check answered in
+// this script's own vocabulary", and it is the only test anywhere that reaches
+// `run`.
+func TestCIPluginReportsOneWhenTheValidatorExitsTwo(t *testing.T) {
+	root, err := filepath.Abs("..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := filepath.Join(t.TempDir(), "argv")
+	out, code := runCIWithEnv(t, root, fakeClaude(t, log, 2), "plugin")
+	if code != 1 {
+		t.Fatalf("exit %d, want 1 — the check ran; 2 is reserved for a check name this script does not have\n%s", code, out)
+	}
+	if !strings.Contains(out, "exited 2") {
+		t.Errorf("stderr does not name the code the validator actually used, which is the line that "+
+			"tells a reader this was the tool and not a typo:\n%s", out)
 	}
 }
 
