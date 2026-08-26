@@ -244,6 +244,28 @@ contents; keep it that way.
   not launder the second. The Go specification has no exemption yet, because
   nothing here cites it and its sections are named rather than numbered; write
   one when the first citation to it is written.
+
+  **A comment that names a test must name one that exists**, and that half is
+  checked by `scripts/cited_test_names_test.go` rather than by `cites`. It is a
+  separate check because it needs a parser: `cites` deliberately does not know
+  what a comment is, and knowing what a *test declaration* is on top of that
+  would mean teaching a shell script Go. It reads Go comments, Go string
+  literals — `-test.run=` in a re-executed helper is a citation too, and a
+  rename there leaves a subprocess that runs no test and exits 0 — and the
+  shell scripts, which cite tests in their own comments.
+
+  Two rules follow from how this goes wrong rather than from taste. **Write the
+  name on one line**, even when it is long: the two that were found wrong had
+  been broken across a comment line wrap, so the name had never existed as
+  contiguous text anywhere and no grep, `git log -S` over every ref included,
+  could have found either. And **a name after `-run` is checked as the pattern
+  it is** — `go test ./internal/tui -run TestThePage -update` selects two tests
+  on purpose — but it must still select something, because a `-run` matching
+  nothing exits 0 having run nothing.
+
+  Markdown is outside this one, deliberately: a name in a released section of
+  `CHANGELOG.md` is frozen by another check, and this file needs to be able to
+  write a placeholder in a sentence about how to describe a mutation.
 - **The 7-bit rule is `internal/tui` and `internal/view` only.** Those two
   packages draw a terminal page whose frame is measured in columns, and their
   golden fixtures compare raw bytes — so a character that is one column wide
