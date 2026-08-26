@@ -119,3 +119,46 @@ func TestTheLastResortPoolOpensOnTheConfiguredThreshold(t *testing.T) {
 		}
 	}
 }
+
+// TestAFleetOfOnlyCreditAccountsStillSwitches is the case an enterprise
+// installation is made entirely of, and it was the one case with no test.
+//
+// Every credit fleet elsewhere in this package carries at least one
+// subscription account, so the branch that fires when Result.Order is EMPTY was
+// never exercised. It stayed, permanently, with the reason "no subscription
+// account has room" — a pool the user does not have and cannot make. Not a
+// refusal to spend: the credit pool was ranked correctly, gated correctly, and
+// then never consulted, because the guard above it returned first.
+//
+// The guard's own comment says it is for "an engine already on a credit account
+// with no subscription room to return to". A subscription pool that does not
+// exist is not a pool with no room, and this is the difference.
+func TestAFleetOfOnlyCreditAccountsStillSwitches(t *testing.T) {
+	spent := creditWith("b", enabledExtra(f(10000), f(9000)))
+	roomy := creditWith("a", enabledExtra(f(10000), f(1000)))
+	cands := []Candidate{spent, roomy}
+
+	p := Decide(cands, opts(), Config{MaxAutoSpend: 200}, NewState(), "b")
+
+	want(t, p, ActionSwitch, ReasonBetterTarget, "a")
+	if !p.CreditConsulted {
+		t.Error("CreditConsulted = false — the credit pool was ranked and never looked at")
+	}
+}
+
+// TestAFleetOfOnlyCreditAccountsWithNoCeilingStillRefuses is the guard on the
+// test above. Opening the branch must not open the WALLET: credit.max_auto_spend
+// ships at 0, and that opt-out has to keep refusing exactly as it did before.
+func TestAFleetOfOnlyCreditAccountsWithNoCeilingStillRefuses(t *testing.T) {
+	cands := []Candidate{
+		creditWith("b", enabledExtra(f(10000), f(9000))),
+		creditWith("a", enabledExtra(f(10000), f(1000))),
+	}
+
+	p := Decide(cands, opts(), Config{}, NewState(), "b")
+
+	want(t, p, ActionBlocked, ReasonCreditGate, "")
+	if p.Credit.Reason != CreditNotOptedIn {
+		t.Errorf("Credit.Reason = %v, want %v — the ceiling is the opt-in and it was never given", p.Credit.Reason, CreditNotOptedIn)
+	}
+}
