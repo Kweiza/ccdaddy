@@ -1,8 +1,10 @@
 package daemon
 
 import (
+	"context"
 	"time"
 
+	"github.com/Kweiza/ccdaddy/internal/config"
 	"github.com/Kweiza/ccdaddy/internal/pollpolicy"
 )
 
@@ -77,4 +79,63 @@ func usableDeadline(published, now time.Time, rnd float64) time.Time {
 		return nextUpdateCheck(now, rnd)
 	}
 	return published
+}
+
+// checkForRelease asks the origin what the newest release is, at most once per
+// interval per store.
+//
+// It rides the tick rather than a ticker of its own: a second timer would be a
+// second thing to shut down cleanly, for a decision that is one comparison
+// against a clock the tick has already read.
+//
+// The stamp is written at DISPATCH and not when the answer arrives. The day's
+// slot is then durable in the same iteration's publish, so a daemon that dies
+// mid-check does not spend a second request when it comes back -- which is why
+// the published field is called "checked" and means "asked", not "answered".
+//
+// There is no retry ladder. Failure and success schedule identically, which is
+// what makes "one request per slot" true without qualification, and the jitter
+// is redrawn on every reschedule so a fleet that failed against one outage does
+// not come back in a single burst.
+func (e *Engine) checkForRelease(ctx context.Context, cfg config.Config, now time.Time) {
+	if !cfg.UpdateCheck || e.LatestRelease == nil {
+		return
+	}
+
+	e.mu.Lock()
+	if e.updateInFlight || now.Before(e.nextUpdateCheckAt) {
+		e.mu.Unlock()
+		return
+	}
+	e.updateCheckedAt = now
+	e.nextUpdateCheckAt = nextUpdateCheck(now, e.rand())
+	e.updateInFlight = true
+	e.mu.Unlock()
+
+	// Dispatched, never awaited. The tick never waits on the network -- Loop
+	// waits for the body to return, so a tick that awaited this would stop
+	// publishing status and stop executing switches for as long as the origin
+	// took to answer.
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		// The TICK's context, so a shutdown cancels a check in flight, bounded
+		// by the same clock one poll gets: there is one answer in this process
+		// to "how long will the daemon wait on a network call", and a second
+		// number here would be a second thing to keep in step.
+		ctx, cancel := context.WithTimeout(ctx, e.pollTimeout())
+		defer cancel()
+		tag, err := e.LatestRelease(ctx)
+		e.recordRelease(tag, err)
+	}()
+}
+
+// recordRelease releases the slot the dispatch took. It records nothing yet:
+// the slot must be released unconditionally or no later check ever runs, and
+// that alone is what this commit needs to be correct.
+func (e *Engine) recordRelease(tag string, err error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.updateInFlight = false
+	_, _ = tag, err
 }
