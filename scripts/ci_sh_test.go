@@ -88,7 +88,13 @@ func ciPath(t *testing.T) string {
 //     `--cached` lists a staged one whatever the excludes say — which is
 //     exactly the half of the fixture set throwawayRepoThenWrite exists for. A
 //     throwaway HOME is what keeps that answer the check's rather than the
-//     reader's.
+//     reader's. Carrying NO home is deterministic too, and measured so — git
+//     then reads no global config at all, and the excludes test passes with
+//     the entry deleted. It is not what is done, because no machine ci.sh runs
+//     on has no HOME: a throwaway one is a clean machine, and an absent one is
+//     a machine that does not exist. What holds the entry is the list test
+//     below rather than a behaviour, and that is stated because it is the
+//     weaker of the two kinds.
 //
 //   - LC_ALL, which is the one a pinned environment gets wrong by OMISSION. An
 //     environment carrying no locale is the C locale, so pinning without
