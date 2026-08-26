@@ -1424,3 +1424,57 @@ func proseOf(block []string) []string {
 	}
 	return block
 }
+
+func TestStatusSaysWhenTheDaemonHasSeenANewerRelease(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	stubVersion(t, "0.6.1")
+	seedAccount(t, "uuid-a", "work@example.com")
+	stubDaemon(t, daemon.Report{
+		State:     daemon.DaemonRunning,
+		HasStatus: true,
+		Status: daemon.Status{
+			SchemaVersion:   daemon.StatusSchemaVersion,
+			PID:             4242,
+			StartedAt:       statusNow.Add(-3 * time.Hour),
+			UpdateCheckedAt: statusNow.Add(-2 * time.Hour),
+			UpdateLatest:    "0.7.0",
+		},
+	}, nil)
+
+	code, stdout, _, _ := runRoot(t, "status")
+	if code != ExitOK {
+		t.Fatalf("exit %d, want 0", code)
+	}
+	if !strings.Contains(stdout, "0.7.0 is out") {
+		t.Errorf("the dashboard does not say a release is out:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "0.6.1") {
+		t.Errorf("the dashboard does not say what this binary is:\n%s", stdout)
+	}
+}
+
+// The line is an exception on a dashboard people read every day, so it appears
+// only when there is something to say. A daemon publishing the version already
+// running is the ordinary state of every up-to-date machine.
+func TestStatusSaysNothingAboutAReleaseItIsAlreadyOn(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	stubVersion(t, "0.7.0")
+	seedAccount(t, "uuid-a", "work@example.com")
+	stubDaemon(t, daemon.Report{
+		State:     daemon.DaemonRunning,
+		HasStatus: true,
+		Status: daemon.Status{
+			SchemaVersion:   daemon.StatusSchemaVersion,
+			PID:             4242,
+			UpdateCheckedAt: statusNow.Add(-2 * time.Hour),
+			UpdateLatest:    "0.7.0",
+		},
+	}, nil)
+
+	_, stdout, _, _ := runRoot(t, "status")
+	if strings.Contains(stdout, "is out") {
+		t.Errorf("the dashboard announced a release this binary is already on:\n%s", stdout)
+	}
+}
