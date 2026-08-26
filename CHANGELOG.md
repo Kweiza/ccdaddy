@@ -111,6 +111,30 @@ by `uuid` or `alias`.
 
 ### Fixed
 
+- **A stale profile is re-read, so the tier fields stop being frozen at add
+  time.** `Tier`, `RateLimitTier`, `SeatTier` and `OrganizationUUID` were
+  written once by `ccdad add` and by nothing else for the life of the
+  installation — the daemon fetches a profile on every attribution pass but
+  deliberately keeps only the uuid. That was invisible until a switch began
+  writing `oauthAccount.seatTier` from the stored value: an account added before
+  this tree read `seat_tier` at all carries the empty string, which Claude Code
+  cannot tell from a pro or max seat that genuinely has none, so a money-metered
+  enterprise seat silently loses the Opus tier its own predicate would grant it.
+  The warning `ccdad add` prints when a profile lookup fails — "the tier will
+  fill in on the first usage refresh" — was untrue until now. A poll that has
+  already recorded its usage reading now re-reads the profile when the stored
+  one is older than a day, on both paths that poll: the daemon's tick and
+  `ccdad list --refresh`. The day is Claude Code's own figure for the same
+  cached profile (`XH=86400000`), copied rather than invented so the two do not
+  re-read on different schedules. A new `profile_fetched_at` stamp is what makes
+  "never measured" distinguishable from "measured, and the answer was none" —
+  without it the empty seat tier is ambiguous in exactly the way that decides
+  behaviour. The re-read deliberately does NOT revise `Kind`: the usage axis
+  owns that through `ApplyUsage`, and re-running add-time classification would
+  overwrite a decision made on real window-and-overage evidence with the guess
+  that preceded it. A failed profile lookup costs the poll nothing and does not
+  move the stamp.
+
 - **A switch carries the seat tier into Claude Code's own cached profile.**
   Claude Code decides which model tier a session defaults to with
   `Zu(){return Xe()==="enterprise"&&dO()==="enterprise_usage_based"}`, and the

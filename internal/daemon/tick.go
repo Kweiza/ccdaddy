@@ -70,6 +70,15 @@ type Engine struct {
 	// describe an endpoint's behaviour without one.
 	AccessToken func(ctx context.Context, uuid string) (string, error)
 	FetchUsage  func(ctx context.Context, accessToken string) (*usage.Snapshot, error)
+	// FetchProfile reads /api/oauth/profile for the account a token belongs
+	// to. It is a SECOND endpoint on the poll path and it is called rarely on
+	// purpose: see poll, which spends a request on it only when the stored
+	// profile is older than store.ProfileTTL.
+	//
+	// NIL MEANS DO NOT CALL, matching Freshen and ResolveOwner. A test that
+	// has not asked for the profile endpoint cannot reach it by forgetting to
+	// stub it, and a poll whose seam is nil simply skips the step.
+	FetchProfile func(ctx context.Context, accessToken string) (*identity.Profile, error)
 	// Freshen refreshes one account's stored credential so a swap does not
 	// install a login Claude Code would rotate on sight. Nil means a stale
 	// credential is refused rather than repaired, which is the safe direction
@@ -189,11 +198,16 @@ type pollRecord struct {
 func NewEngine() *Engine {
 	src := tokens.New()
 	client := usage.NewClient()
+	// One profile client for both seams: ResolveOwner and FetchProfile hit the
+	// same endpoint, and two clients would mean two connection pools and two
+	// sets of timeouts for one URL.
+	profiles := identity.NewClient()
 	return &Engine{
 		AccessToken:  src.AccessToken,
 		Freshen:      src.Freshen,
-		ResolveOwner: ownerResolver(identity.NewClient()),
+		ResolveOwner: ownerResolver(profiles),
 		FetchUsage:   client.FetchUsage,
+		FetchProfile: profiles.FetchProfile,
 		Rand:         rand.Float64,
 		reloader:     config.NewReloader(),
 		inFlight:     map[string]struct{}{},
@@ -945,7 +959,56 @@ func (e *Engine) poll(ctx context.Context, a store.Account, cfg config.Config,
 		return err
 	}
 	e.commit(a, snap, now, identity, thresholds, active, nil)
+	e.refreshProfile(ctx, a, token, now)
 	return nil
+}
+
+// refreshProfile re-reads the account's profile when the stored one has aged
+// past store.ProfileTTL, and writes the four fields a profile decides back to
+// the store.
+//
+// WHY THIS EXISTS. Tier, RateLimitTier, SeatTier and OrganizationUUID were
+// written once, by `ccdad add`, and by nothing else for the life of the
+// installation. That was invisible until a switch began writing
+// oauthAccount.seatTier from the stored value: an account added before this
+// tree read seat_tier at all carries "", which Claude Code cannot tell from a
+// pro or max seat that genuinely has none, so a money-metered enterprise seat
+// silently loses the Opus tier its own `Zu()` would grant it. The warning
+// `ccdad add` already prints when a profile lookup fails -- "the tier will fill
+// in on the first usage refresh" -- was simply untrue until this ran.
+//
+// IT IS DELIBERATELY AFTER commit AND CANNOT AFFECT IT. The usage reading is
+// what a poll exists for and it is already recorded by the time this runs, so a
+// profile endpoint that is down, slow or rate-limiting costs the fleet nothing
+// that matters. Every failure here is logged and dropped for that reason: there
+// is no schedule to back off, because the only thing a failure delays is a
+// re-read of a fact that changes a handful of times in an account's life.
+//
+// IT SPENDS A SECOND REQUEST, which is why the gate is a day rather than a
+// tick. The endpoint's allowance belongs to the identity and every poll already
+// spends one on usage; doubling that permanently, for a value that is stable
+// for months, would buy nothing. store.ProfileTTL is Claude Code's own figure.
+func (e *Engine) refreshProfile(ctx context.Context, a store.Account, token string, now time.Time) {
+	if e.FetchProfile == nil || token == "" || !a.ProfileStale(now) {
+		return
+	}
+	p, err := e.FetchProfile(ctx, token)
+	if err != nil {
+		e.logf("re-reading %s's profile failed: %v", a.UUID, err)
+		return
+	}
+	// Out here rather than inside commit's usage-cache callback, for the reason
+	// history.Record and ApplyUsage are both out there: this takes the store's
+	// mkdir mutex, and taking one of those while holding the usage cache's
+	// would hold the cache shut against every reader for as long as the store
+	// happened to be contended.
+	if serr := store.WithStore(func(s *store.Store) error {
+		return s.ApplyProfile(a.UUID, p, now)
+	}); serr != nil && !errors.Is(serr, store.ErrNotFound) {
+		// An account that is no longer in the store is an ordinary race with
+		// `ccdad remove`, not a failure worth logging.
+		e.logf("recording %s's re-read profile failed: %v", a.UUID, serr)
+	}
 }
 
 // handleFailure decides what a failed poll means. Only ONE of the failures says

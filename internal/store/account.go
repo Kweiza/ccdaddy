@@ -47,6 +47,20 @@ type Account struct {
 	// one. The ambiguous-email error names it, so a user with the same address
 	// in two organizations can tell the candidates apart.
 	OrganizationUUID string `toml:"organization_uuid,omitempty"`
+	// ProfileFetchedAt is when the four fields above -- Tier, RateLimitTier,
+	// SeatTier and OrganizationUUID -- were last taken from a live
+	// /api/oauth/profile response. It exists because their EMPTY value is
+	// ambiguous in a way that decides behaviour: SeatTier "" is both "a pro or
+	// max seat that reported seat_tier null", which is the correct and final
+	// answer for most accounts, and "an account added before this tree read
+	// seat_tier at all", which is a hole. Without a stamp the two cannot be
+	// told apart, so a backfill would either re-read every account forever or
+	// skip the ones that need it.
+	//
+	// It is stamped ONLY by a profile that actually arrived. A failed lookup
+	// leaves it where it was, so an outage costs a retry rather than a day of
+	// believing the fields are fresh.
+	ProfileFetchedAt time.Time `toml:"profile_fetched_at,omitempty"`
 	// OAuthAccountSnapshot is the exact oauthAccount object Claude Code held
 	// in ~/.claude.json for this account, captured by ccdad the moment a
 	// switch displaced it as the live login. A later switch back restores it

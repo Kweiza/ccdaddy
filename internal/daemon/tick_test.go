@@ -186,6 +186,10 @@ func engineFor(t *testing.T, token func(context.Context, string) (string, error)
 	// not cannot reach the network by forgetting to.
 	e.Freshen = nil
 	e.ResolveOwner = nil
+	// The third of the same kind, and it is a SECOND endpoint on the poll path
+	// rather than a switch-time one: a test that did not ask for the profile
+	// endpoint must not reach it just by polling.
+	e.FetchProfile = nil
 	return e
 }
 
