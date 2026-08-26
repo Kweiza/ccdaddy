@@ -29,8 +29,8 @@ func TestTheFlagLiteralsMatchTheWindowsDefinitions(t *testing.T) {
 // `GOOS=windows go vet ./...` and no further. It pins the flag set against
 // being emptied or widened, which is worth having because the alternative is
 // nothing at all — but it asserts a struct, not an operating system. Whether
-// DETACHED_PROCESS actually severs the console is TestSpawnLeavesTheChildWith
-// NoConsole below.
+// DETACHED_PROCESS actually severs the console is
+// TestSpawnLeavesTheChildWithNoConsole below.
 //
 // This used to name the post-release install smoke suite instead, and that was
 // never true of it: nothing under .github/workflows mentions a console at all,

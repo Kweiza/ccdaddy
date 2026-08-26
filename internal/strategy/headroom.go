@@ -169,8 +169,9 @@ func FixedWindowFamily(n usage.WindowName) (string, bool) {
 }
 
 // fixedWindows is every window FixedWindowFamily answers for. Listed once so
-// WindowForFixedFamily's reverse lookup and TestFixedWindowFamilyAndItsReverseAgree
-// both walk it, rather than either repeating FixedWindowFamily's own cases.
+// that WindowForFixedFamily's reverse lookup and
+// TestFixedWindowFamilyAndItsReverseAgreeOverEveryFixedWindow both walk it,
+// rather than either repeating FixedWindowFamily's own cases.
 var fixedWindows = []usage.WindowName{usage.WindowSevenDayOpus, usage.WindowSevenDaySonnet}
 
 // WindowForFixedFamily is FixedWindowFamily's reverse: the fixed window one
