@@ -150,6 +150,34 @@ type Status struct {
 	LastSwitchAt time.Time       `json:"lastSwitchAt,omitzero"`
 	LastSwitchTo string          `json:"lastSwitchTo,omitempty"`
 	Accounts     []AccountStatus `json:"accounts,omitempty"`
+	// The daily release check, in four fields that pass this file's own
+	// authority rule: all four are facts about the daemon PROCESS, and nothing
+	// else on the machine records them.
+	//
+	// UpdateCheckedAt is the DISPATCH stamp, not the answer's. The day's slot is
+	// spent the moment the request goes out, so a daemon that dies mid-check
+	// does not spend a second one when it comes back.
+	UpdateCheckedAt   time.Time `json:"updateCheckedAt,omitzero"`
+	NextUpdateCheckAt time.Time `json:"nextUpdateCheckAt,omitzero"`
+	// UpdateLatest is the newest release the daemon has seen, spelled the way
+	// buildinfo.Version is -- "0.7.0", never a leading v -- so the two sides of
+	// the comparison a reader makes are written the same way.
+	//
+	// It is STICKY across failures: a failed check never erases the last good
+	// reading, so a temporary outage does not un-tell the user about a release
+	// that is still out. UpdateCheckError is the opposite and a successful
+	// check clears it, because without that one failure would leave every
+	// reader warning about it forever beside a row saying the check is current.
+	//
+	// There is deliberately no updateAvailable and no updateCheckEnabled. A
+	// boolean computed by a 0.6.1 daemon would tell a 0.7.0 CLI to upgrade to
+	// what it is already running -- the upgrade-day skew above, turned into a
+	// wrong answer -- so what is published is an OBSERVATION and the comparison
+	// happens in the reader, against the reader's own version. Whether the
+	// check is switched on has an authoritative file of its own, which is
+	// config.toml, and `ccdad doctor` reads it directly.
+	UpdateLatest     string `json:"updateLatest,omitempty"`
+	UpdateCheckError string `json:"updateCheckError,omitempty"`
 }
 
 // StatusWriter publishes Status documents and skips the ones that would change
