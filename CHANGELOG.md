@@ -130,6 +130,9 @@ by `uuid` or `alias`.
   `unknown` for every account in the fleet, and the poll scheduler — whose two
   urgency bands both require a known reading — left a seat at 99% of its balance
   on the lazy cadence. One reading now produces one answer for all of them.
+  `list`'s LEFT column keeps showing the balance and the account's own cap for
+  such a seat rather than the bare percentage: `40%` and `795.23 left of 2000.00
+  (USD)` are the same fact, and only one of them says whether to top up.
 
 - **`scripts/ci.sh` answers 0, 1 or 2 and nothing else.** 2 means a check name
   the script does not have; a check that ran and found a real problem reports 1,

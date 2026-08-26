@@ -301,16 +301,28 @@ func (r Row) TierLabel() string {
 //
 // Never "0%" for an account that could not be read.
 func (r Row) LeftLabel() string {
+	// The credit axis is asked FIRST, and only here. On it Headroom.Pct is a
+	// percentage of a BALANCE, and a balance can say more than a percentage
+	// can: "40%" and "795.23 left of 2000.00 (USD)" are the same fact, and only
+	// one of them tells a reader whether to top up. USED beside it keeps the
+	// percentage, which is what makes the two columns comparable across a fleet
+	// that mixes both kinds of meter.
+	//
+	// Reading extra_usage here is safe because it is read-only display: it is
+	// the SAME object the credit gate prices a switch against
+	// (internal/strategy/credit.go), never a second source for the number.
+	if r.Headroom.OnCreditAxis() {
+		if label, ok := r.creditLeftLabel(); ok {
+			return label
+		}
+	}
 	if r.Headroom.Known {
 		return fmt.Sprintf("%.0f%%", r.Headroom.Pct)
 	}
-	// Headroom is computed from the five subscription windows alone (see
-	// strategy.HeadroomFor) and is never Known for a seat with none, which is
-	// every enterprise/pay-as-you-go account KindCredit names — not just an
-	// account that failed to poll. Reading the credit axis instead of printing
-	// "?" for the whole class is safe because it is read-only display: it is
-	// the SAME extra_usage the credit gate prices a switch against
-	// (internal/strategy/credit.go), never a second source for the number.
+	// An account whose headroom is unknown may still have a readable balance —
+	// a poll that failed leaves the last reading in place, and a seat whose
+	// utilization was absent from an otherwise good body has money figures
+	// without a percentage.
 	if label, ok := r.creditLeftLabel(); ok {
 		return label
 	}
