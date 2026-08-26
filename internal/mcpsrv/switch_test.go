@@ -149,8 +149,10 @@ func TestAConfirmedSwitchRunsCcdadExactlyOnceHoweverOftenTheHandlerIsEntered(t *
 // assumed: one confirmed tool call enters the handler TWICE -- once to return
 // the input request, once with the answer -- so anything a handler does before
 // its confirm branch happens twice, and the first time before anybody has been
-// asked. `TestAConfirmedSwitchRunsCcdadExactlyOnce...` is the other half: this
-// one pins the premise, that one pins that ccdad still ran once.
+// asked.
+// `TestAConfirmedSwitchRunsCcdadExactlyOnceHoweverOftenTheHandlerIsEntered` is
+// the other half: this one pins the premise, that one pins that ccdad still ran
+// once.
 //
 // The probe is registered with mcp.AddTool directly, like gate_test.go's, so
 // that the count belongs to the SDK's round-trip machinery and not to anything

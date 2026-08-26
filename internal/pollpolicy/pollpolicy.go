@@ -244,8 +244,9 @@ func Next(s State, in Input, rnd float64) (time.Time, State) {
 // on the exempt path, so the clamp is currently unreachable from Next(). It is
 // kept, and tested directly instead, because its value is exactly that it holds
 // for a rule nobody has written yet — a floor that only exists as long as every
-// author remembers it is not a floor. TestTheSustainedFloorHoldsWhateverThePolicy
-// AsksFor is the test whose failure requires this function.
+// author remembers it is not a floor.
+// TestTheSustainedFloorHoldsWhateverThePolicyAsksFor is the test whose failure
+// requires this function.
 func sustained(d time.Duration, in Input, moving bool) time.Duration {
 	if d < MinInterval && !urgent(in, moving) {
 		return MinInterval

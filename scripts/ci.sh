@@ -659,6 +659,17 @@ cites_search() {
 	return 1
 }
 
+# A citation whose target is a TEST IN THIS TREE is not checked here, and this
+# is where a reader would look for it, so: the question is asked by
+# TestACommentThatNamesATestNamesOneThatExists, in scripts/cited_test_names_test.go,
+# and it rides `ci.sh test` like any other Go test.
+#
+# It is there rather than here because it needs to know what a comment is, what
+# a string literal is and what a test declaration is. This check deliberately
+# knows none of the three -- a Go string carrying `Â§7.2` fails it and so does
+# README prose, and the wider rule is the better one -- and teaching it would
+# mean a parser per language. go/ast already is that parser for the one
+# language every name of that shape lives in.
 check_cites() {
 	group "self-contained citations"
 	local spelled spelled_raw pointers unresolved line targets target hits docpaths

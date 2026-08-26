@@ -133,8 +133,9 @@ func inside(container, path string) bool {
 // path_windows.go (checked in the Go tree, not reasoned about). So Rel is
 // case-insensitive exactly where the platform is, and a manual fold was both
 // redundant and — on a Linux build with goos forced to "windows" — the only
-// thing its own test was exercising. TestWindowsASessionSpeltInADifferentCase
-// asserts the real behaviour, on the platform that has it.
+// thing its own test was exercising.
+// TestWindowsASessionSpeltInADifferentCaseIsStillThatSession asserts the real
+// behaviour, on the platform that has it.
 func relInside(container, path string) bool {
 	rel, err := filepath.Rel(container, path)
 	if err != nil {
