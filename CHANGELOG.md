@@ -95,6 +95,32 @@ by `uuid` or `alias`.
 
 ### Fixed
 
+- **The login-surface flags name the surface instead of the billing.** `--console`
+  said "for a credit-billed account", and an enterprise seat metered only in
+  extra_usage credits reads itself as exactly that — while being a claude.ai seat
+  whose meter happens to be money. Picking Console for it mints a credential from
+  a different issuer, and the login SUCCEEDS, so the mistake surfaces later as an
+  account that will not behave. `--console` now names `platform.claude.com` and
+  says it does not mint claude.ai credentials; `--claudeai` names the seats it
+  covers, enterprise included.
+
+- **`ccdad add-token` says what it costs before somebody reaches for it.** It
+  described itself as the thing to use on a headless machine, which is the
+  sentence a person in a container reads right before creating an account that
+  can never be ranked — it carries no refresh grant, so the daemon skips it on
+  every poll and `ccdad list` says nothing. Headless was never the distinction
+  either: `ccdad add --no-browser` completes a real login from a pasted code. The
+  refusal a container hits when it has neither a browser nor a terminal now names
+  the missing `-t` first, and the ranking cost second.
+
+- **The README documents logging in inside a container.** It described exactly one
+  way to provision a rankable account — `ccdad export --full` — so a reader with
+  two environments arrived at copying one grant to both, which is the one shape
+  that makes two holders race over a token only one of them can spend. A login
+  per environment is now the first option, with the `-t` requirement, the
+  five-minute default timeout, and the per-identity poll allowance two
+  environments share.
+
 - **An enterprise seat metered in credits is recognised, ranked and rendered.**
   Measured against two live `claude_enterprise` seats on 2026-08-26. Such a seat
   reports `seat_tier` `enterprise_usage_based`, `rate_limit_tier`

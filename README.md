@@ -1697,9 +1697,64 @@ on. Such an account is stored, and it is usable as a credential, and it can
 **never be ranked**. A container provisioned that way has no auto-switching at
 all, which is the entire product, and nothing in `ccdad list` says so.
 
-What carries a rankable account is `ccdad export --full`. `ccdad bootstrap`
-reads one from `CCDAD_IMPORT` — a path, or `-` for stdin — and the entrypoint
-runs it before it starts the engine.
+Two things carry a rankable account, and they are not equivalent. The first is a
+login performed **inside** the container, below. The second is
+`ccdad export --full`: `ccdad bootstrap` reads one from `CCDAD_IMPORT` — a path,
+or `-` for stdin — and the entrypoint runs it before it starts the engine.
+
+### Logging in inside the container
+
+This is the one to reach for first, and it is the only one that does not copy a
+credential between machines.
+
+```sh
+docker volume create ccdad-prod
+
+docker run -it --rm -v ccdad-prod:/data ccdaddy \
+  ccdad add --alias seat-a --no-browser --activate --timeout 15m
+```
+
+Once per account per environment, and never again: the login lands on the volume,
+and replacing the container does not touch the volume. Nothing about ccdad's
+stored state is bound to a machine, so the same volume works wherever it is
+mounted.
+
+**`-t` is not optional.** `--no-browser` leaves a pasted code as the only way in,
+and that path needs a terminal on stdin — `docker run -i` with a pipe, a heredoc,
+or a `compose run` without a TTY all refuse before the login starts. The refusal
+names `ccdad add-token`, which is the trap the section above describes.
+
+`--timeout` defaults to five minutes, which is short for a browser round trip on
+a machine that is not the one running the container. `--activate` is worth
+passing on the first account of a fresh environment: without a live login there
+is no reading to rank, and the environment sits idle until the first poll lands.
+
+Each `ccdad add` starts its own login, so a second one needs a second browser
+tab. A code pasted into the wrong one is refused outright rather than re-prompted:
+the state it carries belongs to the login that is no longer waiting.
+
+An enterprise seat metered only in credits takes the DEFAULT surface, not
+`--console`. Both are logins and only one of them mints a claude.ai credential;
+`--console` is for an API-billed Console account, which is a different thing from
+a claude.ai seat whose meter happens to be money.
+
+### Two environments, one set of accounts
+
+A staging container and a production container can hold the same accounts, and the
+right way to do it is a login in each rather than an export from one into the
+other. Each login is its own grant. An export copies ONE grant to a second
+holder, and a refresh rotates it — so whichever side refreshes first leaves the
+other holding a superseded token, which reaches ccdad as a failed refresh and
+takes that account out of rotation until it is added again.
+
+Two environments do share one thing they cannot partition: the usage endpoint's
+per-identity allowance, roughly 28-30 requests per rolling hour. Two idle engines
+over one organization fit inside it. Two engines both watching an account that is
+close to its limit do not — the cadence tightens on both at once, because both
+are reading the same numbers and reaching the same conclusion. If both
+environments do not need to be live at the same time, run the second one only
+when it is being used.
+
 
 ### That document holds refresh tokens
 
