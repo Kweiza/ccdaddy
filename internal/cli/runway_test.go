@@ -1047,3 +1047,57 @@ func runwaySummaryLine(t *testing.T, out string) string {
 	t.Fatalf("no runway line at all:\n%s", out)
 	return ""
 }
+
+// seedCreditOnlySeat is seedPaidAccount's fixture with the plan windows taken
+// away: a seat metered in money and nothing else, which is every account in an
+// enterprise installation. The money figures are identical, so the credit row
+// this fleet produces must be identical too.
+func seedCreditOnlySeat(t *testing.T, uuid, email string) {
+	t.Helper()
+	seedAccountWithTier(t, uuid, email, runwayTier, runwayAddedAt)
+	limit, used := 10000.0, 5000.0 // cents: a $100 cap, $50 spent
+	seedUsageEntry(t, uuid, usage.Entry{
+		FetchedAt: statusNow,
+		Snapshot: &usage.Snapshot{
+			ExtraUsage: usage.ExtraUsageFor(usage.ExtraUsageInput{
+				State: usage.ExtraUsageEnabled, Currency: "USD",
+				MonthlyLimit: &limit, UsedCredits: &used,
+			}),
+		},
+	})
+	major := 100.0
+	var samples []history.Sample
+	for i := 4; i >= 0; i-- {
+		samples = append(samples, history.Sample{
+			At:     statusNow.Add(-time.Duration(i) * 30 * time.Minute),
+			Credit: &history.Credit{Used: 14 - float64(i), Limit: &major, Currency: "USD"},
+		})
+	}
+	seedHistory(t, uuid, samples...)
+}
+
+// TestRunwayRendersTheCreditsOfAFleetWithNoPlanWindows is the whole page for an
+// enterprise installation.
+//
+// Both the table and the "not enough history" notice were gated on Basis.Known,
+// which is the WINDOW basis — so a fleet whose every account is metered in
+// money got no table at all, and was told there was not enough history to
+// measure a burn rate while its burn rate sat measured in the same document.
+func TestRunwayRendersTheCreditsOfAFleetWithNoPlanWindows(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	seedCreditOnlySeat(t, "uuid-a", "a@example.com")
+
+	code, out, errOut, top := runRoot(t, "runway")
+	if code != ExitOK {
+		t.Fatalf("code = %v, want ExitOK (%s)", code, top)
+	}
+	// The same two dollars an hour seedPaidAccount produces: the money halves
+	// are identical and only the windows were taken away.
+	if !hasRow(squeezedLines(out), "Credits 2.00 USD/h - runs dry ") {
+		t.Errorf("no measured credit row for a fleet metered only in money:\n%s", out)
+	}
+	if strings.Contains(errOut, "Not enough history") {
+		t.Errorf("the burn rate was measured and the page says it was not:\n%s", errOut)
+	}
+}
