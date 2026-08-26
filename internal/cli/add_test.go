@@ -1648,6 +1648,48 @@ func TestApplyProfileMarksAMoneyMeteredSeatPrimary(t *testing.T) {
 	}
 }
 
+// TestApplyProfileStampsWhenTheProfileWasRead is what keeps the daemon from
+// re-reading a profile `ccdad add` has just read.
+//
+// The stamp is the ONLY thing separating "measured, and the seat reported no
+// tier" from "added before this tree read the field", and an account added
+// today lands squarely in the first case. Leaving it zero here would classify
+// every freshly added account as never-measured, so the daemon would spend a
+// second request on the profile endpoint for every account on every day of its
+// life -- the exact cost store.ProfileTTL exists to bound.
+func TestApplyProfileStampsWhenTheProfileWasRead(t *testing.T) {
+	before := time.Now()
+	var acct store.Account
+	applyProfile(&acct, &identity.Profile{
+		AccountUUID:      "u-3",
+		OrganizationType: "claude_max",
+		RateLimitTier:    "default_claude_max_20x",
+	})
+	if acct.ProfileFetchedAt.IsZero() {
+		t.Fatal("ProfileFetchedAt is zero — a profile that was just read reads as never measured")
+	}
+	if acct.ProfileFetchedAt.Before(before) {
+		t.Errorf("ProfileFetchedAt = %v, want it at or after %v", acct.ProfileFetchedAt, before)
+	}
+	if acct.ProfileStale(time.Now()) {
+		t.Error("ProfileStale() = true immediately after add — the daemon would re-read this on its very next poll")
+	}
+}
+
+// A profile lookup that FAILED must not stamp. Kind still gets Classify's
+// documented no-evidence default, but recording a reading that never happened
+// would buy a full ProfileTTL of believing the empty tier fields are measured.
+func TestApplyProfileDoesNotStampANilProfile(t *testing.T) {
+	var acct store.Account
+	applyProfile(&acct, nil)
+	if !acct.ProfileFetchedAt.IsZero() {
+		t.Errorf("ProfileFetchedAt = %v, want zero — no profile was read", acct.ProfileFetchedAt)
+	}
+	if !acct.ProfileStale(time.Now()) {
+		t.Error("ProfileStale() = false after a failed lookup; the repair would never run")
+	}
+}
+
 // TestApplyProfileLeavesAnOrdinarySubscriptionAlone is the guard on the rule
 // above: the primary flag bypasses credit.max_auto_spend, so it must never
 // arrive on an account a plan window still meters.
