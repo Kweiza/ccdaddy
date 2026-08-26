@@ -949,3 +949,120 @@ func TestTheLiveCreditReadingParsesAsThisPackageAssumed(t *testing.T) {
 		t.Errorf("Percent() = %v, %v; want 100 -- a 0-1 fraction would read 1 here", got, ok)
 	}
 }
+
+// liveEnterpriseUsage is a VERBATIM /api/oauth/usage body from a
+// claude_enterprise seat whose seat_tier is enterprise_usage_based, read on
+// 2026-08-26. Nothing is edited and nothing is elided; the response carries no
+// account identifier, so there is nothing in it to scrub.
+//
+// It is the reading this package had never seen. The one live body pinned
+// before it is a SATURATED account -- used equals limit, so utilization is 100
+// and every ratio in it is 1 either way round -- and no fixture anywhere
+// exercised a partially consumed one. This seat is at 60.24%, which is the
+// state an enterprise fleet spends its whole life in.
+//
+// Read what it says about the shape, not only the numbers. Every plan window is
+// null, limits[] is empty, and extra_usage carries the entire meter: that is
+// what a seat with no plan-window entitlement looks like, and it is the shape
+// Classify's first branch and HeadroomOrCredit's fallback are both written for.
+const liveEnterpriseUsage = `{"five_hour": null, "seven_day": null, "seven_day_oauth_apps": null,` +
+	` "seven_day_opus": null, "seven_day_sonnet": null, "seven_day_cowork": null,` +
+	` "seven_day_omelette": null, "tangelo": null, "iguana_necktie": null,` +
+	` "omelette_promotional": null, "nimbus_quill": {"utilization": 0.0, "resets_at": null,` +
+	` "limit_dollars": null, "used_dollars": null, "remaining_dollars": null},` +
+	` "cinder_cove": null, "amber_ladder": null,` +
+	` "extra_usage": {"is_enabled": true, "monthly_limit": 200000, "used_credits": 120477.0,` +
+	` "utilization": 60.238499999999995, "currency": "USD", "decimal_places": 2,` +
+	` "disabled_reason": null, "user_disabled": false, "spend_limit_reached": false,` +
+	` "credits_ever_enabled": true, "daily": null, "weekly": null}, "limits": [],` +
+	` "spend": {"used": {"amount_minor": 120477, "currency": "USD", "exponent": 2},` +
+	` "limit": {"amount_minor": 200000, "currency": "USD", "exponent": 2}, "percent": 60,` +
+	` "severity": "normal", "enabled": true, "disabled_reason": null,` +
+	` "cap": {"money": null, "credits": {"amount_minor": 200000, "exponent": 2}}, "balance": null,` +
+	` "auto_reload": null, "disclaimer": "Usage credits cover you when you hit your plan limits.",` +
+	` "can_purchase_credits": false, "can_toggle": false}, "member_dashboard_available": true}`
+
+// TestTheLiveEnterpriseReadingParsesAsThisPackageAssumed is the wire, pinned.
+//
+// The shape assertions are the load-bearing half. A seat metered only in money
+// must come out of here with NO subscription windows, because that single
+// answer is what routes it to the credit axis in identity.Classify, in
+// strategy.HeadroomOrCredit and in the daemon's published state. If a future
+// response starts carrying a window here, all three change their minds at once
+// and this is the test that says so.
+func TestTheLiveEnterpriseReadingParsesAsThisPackageAssumed(t *testing.T) {
+	s, err := Parse([]byte(liveEnterpriseUsage))
+	if err != nil {
+		t.Fatalf("Parse() on a live enterprise body: %v", err)
+	}
+
+	if s.HasSubscriptionWindows() {
+		t.Error("HasSubscriptionWindows() = true — every plan window in this body is null")
+	}
+	for _, w := range s.AllWindows() {
+		if _, ok := w.Percent(); ok {
+			t.Errorf("window %q reported a utilization; every one of them is null on the wire", w.Name)
+		}
+	}
+	if got := len(s.ScopedWindows()); got != 0 {
+		t.Errorf("ScopedWindows() = %d, want 0 — limits[] is empty", got)
+	}
+
+	e := s.ExtraUsage
+	if e.State != ExtraUsageEnabled {
+		t.Fatalf("ExtraUsage.State = %v, want %v", e.State, ExtraUsageEnabled)
+	}
+	// The minor-unit conversion, on the reading that can finally show it. The
+	// saturated fixture cannot: used equals limit there, so a missing division
+	// by 100 changes neither figure's relationship to the other.
+	if limit, ok := e.MonthlyLimit(); !ok || limit != 2000 {
+		t.Errorf("MonthlyLimit() = %v, %v; want 2000 — 200000 minor units of a two-decimal currency", limit, ok)
+	}
+	if used, ok := e.UsedCredits(); !ok || used != 1204.77 {
+		t.Errorf("UsedCredits() = %v, %v; want 1204.77", used, ok)
+	}
+	// utilization is already a percent on the wire and is NOT converted. It is
+	// also the account's own arithmetic: 120477/200000 is 60.2385, so a build
+	// that divided this by 100 as well would answer 0.602385 and read as an
+	// almost untouched balance.
+	if pct, ok := e.Percent(); !ok || math.Abs(pct-60.2385) > 1e-9 {
+		t.Errorf("Percent() = %v, %v; want 60.2385", pct, ok)
+	}
+	if e.CurrencyCode() != "USD" {
+		t.Errorf("CurrencyCode() = %q, want USD", e.CurrencyCode())
+	}
+	if e.DisabledReason != "" {
+		t.Errorf("DisabledReason = %q, want empty — this seat is not refused", e.DisabledReason)
+	}
+}
+
+// TestALiveEnterpriseReadingSurvivesTheKeysThisBuildDoesNotRead is the other
+// half, and it is the one that ages.
+//
+// Twelve of the keys in the body above appear nowhere in the Claude Code
+// 2.1.246 bundle — decimal_places, credits_ever_enabled, user_disabled,
+// member_dashboard_available, can_purchase_credits, limit_dollars,
+// nimbus_quill, amber_ladder, tangelo, iguana_necktie, seven_day_cowork,
+// omelette_promotional — and the whole `spend` object is unread by it too. The
+// server ships ahead of its own client, so this package will keep meeting keys
+// it has no schema for, and meeting one must never cost it the reading.
+func TestALiveEnterpriseReadingSurvivesTheKeysThisBuildDoesNotRead(t *testing.T) {
+	full, err := Parse([]byte(liveEnterpriseUsage))
+	if err != nil {
+		t.Fatalf("Parse() on the live body: %v", err)
+	}
+	// The same reading with every unknown sibling removed. If the two disagree,
+	// something in this package is reading a key it does not declare.
+	trimmed, err := Parse([]byte(`{"five_hour": null, "seven_day": null, "limits": [],` +
+		` "extra_usage": {"is_enabled": true, "monthly_limit": 200000, "used_credits": 120477.0,` +
+		` "utilization": 60.238499999999995, "currency": "USD", "disabled_reason": null}}`))
+	if err != nil {
+		t.Fatalf("Parse() on the trimmed body: %v", err)
+	}
+	fullPct, _ := full.ExtraUsage.Percent()
+	trimmedPct, _ := trimmed.ExtraUsage.Percent()
+	if fullPct != trimmedPct || full.ExtraUsage.State != trimmed.ExtraUsage.State {
+		t.Errorf("the unknown keys changed the reading: full %v/%v, trimmed %v/%v",
+			fullPct, full.ExtraUsage.State, trimmedPct, trimmed.ExtraUsage.State)
+	}
+}
