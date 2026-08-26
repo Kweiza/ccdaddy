@@ -996,7 +996,11 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now time.Time,
 			entry.FetchedAt = now
 		}
 
-		h := strategy.HeadroomOf(entry.Snapshot, thr)
+		// HeadroomOrCredit, not HeadroomOf: a seat metered only in money has no
+		// plan window, so the window-only axis leaves Known false and both
+		// urgency bands below exclude it by their first line. A seat at 99% of
+		// its balance would poll on the lazy cadence forever.
+		h := strategy.HeadroomOrCredit(entry.Snapshot, thr)
 		reading := pollpolicy.Reading{Exhausted: exhausted(h)}
 		if snap != nil && h.Known {
 			reading.BindingPct, reading.Known = 100-h.Pct, true
@@ -1408,7 +1412,11 @@ func accountState(a store.Account, cache *usage.Cache, quarantined bool,
 		// Unknown is NOT an empty account, and it must never render as 0%.
 		return StateUnknown
 	}
-	h := strategy.HeadroomOf(entry.Snapshot, thresholds(a.UUID))
+	// HeadroomOrCredit, not HeadroomOf: Unknown means "nobody could read this",
+	// and a seat metered only in money was read perfectly well -- it just has no
+	// plan window to be read on. Publishing Unknown for the whole fleet makes
+	// every consumer keyed on the states below inert.
+	h := strategy.HeadroomOrCredit(entry.Snapshot, thresholds(a.UUID))
 	if !h.Known {
 		return StateUnknown
 	}

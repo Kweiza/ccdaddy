@@ -96,3 +96,48 @@ func TestTheDaemonPollCadenceMeasuresAgainstThePerWindowTable(t *testing.T) {
 		t.Errorf("with seven_day capped at 60 the next poll is %v, want %v — the table never reached the cadence, so an account the engine calls spent is still polled as a healthy one", tuned, want)
 	}
 }
+
+// creditOnlySnapshot is a seat metered in money and nothing else: no plan
+// window carried a figure, and extra_usage holds the whole meter. The figures
+// are a live claude_enterprise seat read on 2026-08-26, in wire minor units.
+func creditOnlySnapshot(utilization float64) *usage.Snapshot {
+	u, limit, used := utilization, 200000.0, 120451.0
+	return &usage.Snapshot{ExtraUsage: usage.ExtraUsageFor(usage.ExtraUsageInput{
+		State:        usage.ExtraUsageEnabled,
+		Currency:     "USD",
+		MonthlyLimit: &limit,
+		UsedCredits:  &used,
+		Utilization:  &u,
+	})}
+}
+
+// TestASeatMeteredOnlyInMoneyPublishesARealState is what a fleet of enterprise
+// seats needs before anything downstream of status.json can work.
+//
+// accountState measured the window-only axis, so every such seat published
+// StateUnknown no matter how much of its balance was gone — and Unknown is the
+// answer that means "nobody could read this", which is exactly wrong for an
+// account whose meter was read perfectly well. Everything keyed on the states
+// below is inert for the whole fleet until this reads the right axis.
+func TestASeatMeteredOnlyInMoneyPublishesARealState(t *testing.T) {
+	cfg := config.Config{Threshold: 80, CreditThreshold: 80}
+	cases := []struct {
+		name        string
+		utilization float64
+		want        AccountState
+	}{
+		{"most of the balance left", 60.2255, StateCandidate},
+		{"past the credit threshold", 90, StateExhausted},
+		{"the balance is gone", 100, StateEmpty},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cache := &usage.Cache{}
+			cache.Put("acct-1", usage.Entry{Snapshot: creditOnlySnapshot(tc.utilization), FetchedAt: tickEpoch})
+			a := store.Account{UUID: "acct-1", Primary: true}
+			if got := accountState(a, cache, false, "", configuredThresholds(cfg)); got != tc.want {
+				t.Errorf("accountState() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
