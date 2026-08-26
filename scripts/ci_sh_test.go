@@ -624,6 +624,48 @@ func TestCICitesResolvesAPointerToAFileThatIsNotYetStaged(t *testing.T) {
 	}
 }
 
+// A PATTERN THE PLATFORM'S REGEX LIBRARY REFUSES, which is the fail-open this
+// check is most exposed to and the one that would be hardest to notice.
+//
+// `git grep` exits 1 for "no matches" and 128 for "I could not read that
+// pattern", and `if hits=$(git grep …)` read both as falsy — so an arm whose
+// pattern one platform rejects checked nothing and the gate reported a clean
+// tree, exit 0. That is not hypothetical here: two comments in ci.sh record
+// macOS's git reading `\b` as a literal `b`, which turned a whole arm into a
+// no-op on that leg while every test expecting a MISS still missed.
+//
+// The mutation is applied to a COPY of the script rather than asserted against
+// the real patterns, because the real ones have to stay valid — the point is
+// what happens to the check when a pattern is not, whatever the reason.
+func TestCICitesFailsWhenGitRefusesAPattern(t *testing.T) {
+	root := throwawayRepo(t, map[string]string{
+		"internal/x/x.go": "package x\n\n// See some-other-notes-file for it.\nfunc X() {}\n",
+	})
+
+	script := filepath.Join(root, "scripts", "ci.sh")
+	raw, err := os.ReadFile(script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An unbalanced `{`, which every ERE implementation rejects.
+	broken := strings.Replace(string(raw), "(-[A-Za-z0-9]+){2,}'", "(-[A-Za-z0-9]+){2,'", 1)
+	if broken == string(raw) {
+		t.Fatal("the pointer pattern is not where this test expects it; re-locate it by content")
+	}
+	if err := os.WriteFile(script, []byte(broken), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	out, code := runCI(t, root, "cites")
+	if code != 1 {
+		t.Fatalf("exit %d, want 1 — that arm read nothing, and reporting a clean tree for a "+
+			"pattern git would not accept is how an arm goes quiet on one platform forever\n%s", code, out)
+	}
+	if strings.Contains(out, "no line cites") {
+		t.Errorf("the check called the tree clean after git refused its pattern:\n%s", out)
+	}
+}
+
 // The POINTED shape: a document named rather than spelled. This is the one that
 // got through — internal/cclink/keychain.go pointed at a file in one person's
 // notes directory, and no literal in the check matched a bare name.
