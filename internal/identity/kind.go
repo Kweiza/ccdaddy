@@ -53,6 +53,20 @@ type UsageShape struct {
 	ExtraUsageEnabled bool
 }
 
+// The three profile values that name a seat with no plan-window entitlement,
+// spelled once because noPlanWindowProfile and its test both need them and a
+// second spelling of a wire literal is a silent divergence waiting to happen.
+const (
+	// rateLimitTierZero is rate_limit_tier for a seat granted no plan windows.
+	rateLimitTierZero = "default_claude_zero"
+	// orgTypeEnterprise is organization_type as the WIRE spells it. Claude Code
+	// compares against the mapped short name "enterprise"; this is the value
+	// before that map.
+	orgTypeEnterprise = "claude_enterprise"
+	// seatTierEnterpriseUsageBased is seat_tier for a money-metered seat.
+	seatTierEnterpriseUsageBased = "enterprise_usage_based"
+)
+
 // isMeteredBilling reports whether a billing_type means "pays per unit". An
 // unrecognized value is not treated as evidence, so a new value Anthropic adds
 // falls through to the side that does not spend.
@@ -62,6 +76,47 @@ func isMeteredBilling(s string) bool {
 		return true
 	}
 	return false
+}
+
+// noPlanWindowProfile reports whether the PROFILE ALONE already says this
+// account has no plan window to be metered against.
+//
+// That is the thing the credit axis actually turns on. An account with a plan
+// window spends credits only as OVERAGE on top of quota it has already paid
+// for; an account with no window at all is metered in money and nothing else,
+// and the same extra_usage object carries both. The wire does not label which
+// it is — the usage response ships the same
+// "Usage credits cover you when you hit your plan limits" disclaimer to a
+// pay-as-you-go enterprise seat — so window presence is the only honest test.
+//
+// It exists for `ccdad add`, which never calls the usage endpoint and so hands
+// Classify an empty UsageShape by construction. Without it that path has only
+// billing_type to go on, and a money-metered enterprise seat reports
+// "stripe_subscription_contracted" there: one of the four values Claude Code's
+// own QG() treats as a SUBSCRIPTION. No allowlist on that field can ever reach
+// the account.
+//
+// Both arms are Claude Code's own, from its no-overage-concept predicate
+// `Y(){return N()!=="firstParty"||!A()||V()||dn()==="default_claude_zero"}`,
+// where dn is rate_limit_tier and V is
+// `subscriptionType==="enterprise" && seatTier==="enterprise_usage_based"`.
+// The organization_type compared here is the RAW wire value, claude_enterprise,
+// and not the post-map short name "enterprise" that Claude Code compares
+// against — see subscriptionTypeOf in internal/cli.
+//
+// Measured against two live claude_enterprise seats on 2026-08-26; both are
+// caught by the first arm alone, which is the arm whose field ccdad already
+// persists.
+func noPlanWindowProfile(p *Profile) bool {
+	if p == nil {
+		return false
+	}
+	norm := func(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
+	if norm(p.RateLimitTier) == rateLimitTierZero {
+		return true
+	}
+	return norm(p.OrganizationType) == orgTypeEnterprise &&
+		norm(p.SeatTier) == seatTierEnterpriseUsageBased
 }
 
 // Classify decides how an account is metered.
@@ -87,6 +142,9 @@ func Classify(p *Profile, u UsageShape, isAPIKey bool) Kind {
 	// otherwise file every Max account with overage on the credit side of the
 	// gate.
 	if u.ExtraUsageEnabled {
+		return KindCredit
+	}
+	if noPlanWindowProfile(p) {
 		return KindCredit
 	}
 	if p != nil && isMeteredBilling(p.BillingType) {
