@@ -1090,6 +1090,30 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now time.Time,
 		if herr := history.Record(historyTimeout, a.UUID, historySample(snap, now), now); herr != nil {
 			e.logf("appending %s's sample to the usage history failed: %v", a.UUID, herr)
 		}
+		// The classification, revised from the same reading and under the same
+		// gate. `ccdad add` and `add-token` both classify from the profile
+		// alone -- neither calls the usage endpoint -- so an account whose
+		// profile was unreadable, or whose billing_type says something this
+		// build has no rule for, is filed on a guess. This is the only thing
+		// that ever revises that guess, and it is also the only writer of the
+		// stored credit balance.
+		//
+		// Out here for the same reason history.Record is: it takes the store's
+		// mkdir mutex, and taking one of those while holding the usage cache's
+		// would hold the cache shut against every reader for as long as the
+		// store happened to be contended.
+		//
+		// snap != nil is the gate ApplyUsage's own signature demands. A poll
+		// that produced no reading is not evidence, and a credit account that
+		// has run out reports overage off and no windows -- re-classifying on
+		// that would file it as a subscription at the moment it went broke.
+		if serr := store.WithStore(func(s *store.Store) error {
+			return s.ApplyUsage(a.UUID, snap, now)
+		}); serr != nil && !errors.Is(serr, store.ErrNotFound) {
+			// A reading for an account that is no longer in the store is an
+			// ordinary race with `ccdad remove`, not a failure worth logging.
+			e.logf("revising %s's classification from its reading failed: %v", a.UUID, serr)
+		}
 	}
 }
 
