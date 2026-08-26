@@ -59,7 +59,14 @@ the same thing:
 | `vet` | `go vet ./...` for the host |
 | `test` | `go test ./... -race` |
 | `cgo` | all six release targets build and vet with `CGO_ENABLED=0` |
-| `cites` | no comment cites a document this repository does not contain |
+| `cites` | no line cites a document this repository does not contain |
+
+It exits **0** when everything asked for passed, **1** when a check ran and
+found a problem, and **2** only when you named a check it does not have. No
+other code escapes, whatever the tool underneath a check exited with — `gofmt`
+answers 2 for a file it cannot parse and `git` answers 128, and both used to
+come straight out of the script, so a real finding arrived wearing the code
+that means "you typed the check name wrong".
 
 The only thing CI adds is running `test` on Linux, macOS and Windows instead of
 one of them. That matters more than it sounds: every `_windows.go` file in this
@@ -126,27 +133,56 @@ contents; keep it that way.
   was rejected, the thing that looks like a bug and is not, the platform
   behaviour that surprised you. Several comments in this tree exist purely to
   stop the next reader from "fixing" something back.
-- **Comments are self-contained.** A comment may point at something in this
-  repository — a file, a function, a README section — and at a published
-  standard (an RFC, the Go specification). It may not point at anything else.
+- **What this repository ships is self-contained.** A line may point at
+  something in this repository — a file, a function, a README section — and at
+  a section of a published standard. It may not point at anything else.
   For a while these comments cited a design document by section, `§7.2` and
   `§9.3`, and named internal work items; that document is not in the tree and
   is not going to be, so every one of those references was worth nothing to the
   person actually reading the code. State the fact instead.
+
+  **Every line, not only comments**, and that is deliberate rather than an
+  accident of how the check is written. A user-visible error string that cites
+  `§7.2` of a document nobody has is worse than a comment that does, not
+  better, and prose in `README.md` is read by more people than either.
+
   `scripts/ci.sh cites` fails the build on `§`, on "the brief", and on
   "task *n*" — and on a pointing phrase ("see", "per", "refer to", "described
   in", "documented in") in front of either a hyphenated name or a document
-  path this repository does not contain. The name form is there because a
-  private note was once cited by name rather than by section, and a bare name
-  has no spelling for a literal to catch. The path form is there because that
-  is how a plan is actually cited — `see docs/plans/2026-08-25-a-thing.md` —
-  and the name pattern cannot see it: the slash ends the token before the
-  pattern has matched anything. `docs/` is not in this repository and never
-  has been, so a reference to one resolves for exactly the person whose
-  machine it is on. Pointing at a file that *is* in the tree is fine and stays
-  fine, in either form — a bare name resolves wherever the file sits, and a
-  path is read from the repository root, so write `.github/SECURITY.md` or
-  `SECURITY.md` rather than `./SECURITY.md`.
+  path this repository does not contain. It searches every file git tracks,
+  plus the ones you have written and not yet staged, minus anything
+  `.gitignore` covers and anything git treats as binary. Three files are
+  exempt because they have to quote what they forbid: `scripts/ci.sh`,
+  `scripts/ci_sh_test.go` and this one.
+
+  The name form is there because a private note was once cited by name rather
+  than by section, and a bare name has no spelling for a literal to catch. It
+  wants **at least three segments** — `see keychain-notes-here`, not
+  `see keychain-notes`. That floor is a measurement, not taste: at two
+  segments the same shape reports `per rate-limit window` and six other
+  correct lines of this tree, because ordinary English behind "per" is
+  indistinguishable from a document name by shape alone. A two-segment name is
+  therefore a miss this gate accepts knowingly.
+
+  The path form is there because that is how a plan is actually cited —
+  `see docs/plans/2026-08-25-a-thing.md` — and the name pattern cannot see it:
+  the slash ends the token before the pattern has matched anything. `docs/` is
+  not in this repository and never has been, so a reference to one resolves for
+  exactly the person whose machine it is on. Pointing at a file that *is* in
+  the tree is fine and stays fine, in either form — a bare name resolves
+  wherever the file sits, and a path is read from the repository root, so write
+  `.github/SECURITY.md` or `SECURITY.md` rather than `./SECURITY.md`.
+
+  **Citing a standard by section is fine, and the spelling is not fussy.**
+  `RFC 6749 §6`, `RFC 6749, §6`, `§6 of RFC 6749`, `RFC6749 §6` and
+  `RFC 6749 §§6 and 7` all pass. The section has to start with a digit:
+  `RFC 9999 § whatever you like` is not a citation, it is a way of smuggling a
+  `§` past the gate. The exemption is subtracted from a line rather than used
+  to excuse it, so a line carrying both a real citation and a real violation
+  still fails on the violation — writing `RFC 8252 §7.3` next to `task 47` does
+  not launder the second. The Go specification has no exemption yet, because
+  nothing here cites it and its sections are named rather than numbered; write
+  one when the first citation to it is written.
 - **The 7-bit rule is `internal/tui` and `internal/view` only.** Those two
   packages draw a terminal page whose frame is measured in columns, and their
   golden fixtures compare raw bytes — so a character that is one column wide
