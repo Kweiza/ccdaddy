@@ -190,3 +190,29 @@ func TestASeatMeteredOnlyInMoneyNamesNoWindow(t *testing.T) {
 		t.Errorf("WindowLabel() = %q, want %q — extra_usage is a balance, not a window", got, NoQuantity)
 	}
 }
+
+// TestASeatMeteredOnlyInMoneyKeepsTheMoneyInItsLeftColumn is the half of the
+// display that a percentage cannot carry.
+//
+// LEFT reads the headroom percentage for an account metered on a plan window,
+// because that is the quantity the ranking used and a window has no other. A
+// BALANCE does: "40%" and "795.23 left of 2000.00 (USD)" are the same fact, and
+// only one of them tells a user whether to top up. The credit fallback here was
+// written for exactly this class of account and became unreachable the moment
+// the headroom axis learned to read them, which is the kind of regression that
+// leaves both columns technically correct and the page less useful.
+func TestASeatMeteredOnlyInMoneyKeepsTheMoneyInItsLeftColumn(t *testing.T) {
+	r := creditOnlyRow(t, 60.2255)
+	got := r.LeftLabel()
+	if !strings.Contains(got, "USD") {
+		t.Errorf("LeftLabel() = %q, want the balance and its currency — a percentage of a balance hides the balance", got)
+	}
+	if !strings.Contains(got, "2000.00") {
+		t.Errorf("LeftLabel() = %q, want the account's own cap in it", got)
+	}
+	// USED keeps the percentage, which is what makes the two columns comparable
+	// across a mixed fleet.
+	if used := r.UsedLabel(); used != "60%" {
+		t.Errorf("UsedLabel() = %q, want %q", used, "60%")
+	}
+}
