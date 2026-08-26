@@ -503,3 +503,35 @@ func recoveryOf(s *usage.Snapshot, clears usage.WindowName) timeValue {
 	at, ok := s.ResetFor(clears)
 	return timeValue{at: at, ok: ok}
 }
+
+// HeadroomOrCredit is the headroom to SHOW for an account: its binding plan
+// window when it has one, and its credit allowance when it has none.
+//
+// It exists because HeadroomOf reads plan windows and nothing else, while
+// rank.go:measure reassigns a primary credit seat onto the credit axis before
+// ranking it. Every caller that rendered HeadroomOf therefore printed "?" for a
+// seat the engine was ranking on a perfectly good number — the dashboard and
+// the engine describing one account with two answers.
+//
+// The order is the same one Classify makes for the same reading, and it has to
+// be: an account with a live window and overage switched on is metered by the
+// window, and its credits are what it spends AFTER that window runs out. So a
+// window that binds always wins, and the credit axis is reached only when there
+// is no window at all.
+//
+// It is not a replacement for HeadroomOf. The RANKING must keep using the
+// window-only form plus the primary-seat reassignment, because whether a credit
+// balance may be spent at all is the credit gate's question and not this one;
+// answering it here would rank a non-primary credit account as though its money
+// were quota. This is the DISPLAY axis: what is left, on whichever meter this
+// account actually runs on.
+func HeadroomOrCredit(s *usage.Snapshot, t Thresholds) Headroom {
+	if h := HeadroomOf(s, t); h.Known {
+		return h
+	}
+	var e usage.ExtraUsage
+	if s != nil {
+		e = s.ExtraUsage
+	}
+	return creditHeadroomOf(e, t)
+}

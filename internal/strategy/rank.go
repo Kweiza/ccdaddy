@@ -440,11 +440,24 @@ func creditHeadroom(c Candidate, o Options) Headroom {
 	if c.Usage != nil {
 		e = c.Usage.ExtraUsage
 	}
+	return creditHeadroomOf(e, o.Thresholds())
+}
+
+// creditHeadroomOf is creditHeadroom's arithmetic, with the Candidate and the
+// Options taken off it.
+//
+// It is separated for one reason: HeadroomOrCredit needs the same axis from a
+// snapshot alone, and the ranking and the rendering answering the same reading
+// with two different numbers is the exact defect this pair exists to close.
+// Spelled twice, the two would drift the first time either changed, and the
+// symptom would be a dashboard disagreeing with the engine about the account it
+// is describing.
+func creditHeadroomOf(e usage.ExtraUsage, t Thresholds) Headroom {
 	pct, ok := e.Percent()
 	if !ok {
 		return Headroom{}
 	}
-	thr := o.Thresholds().CreditThreshold()
+	thr := t.CreditThreshold()
 	return Headroom{
 		Pct:       100 - pct,
 		MinPct:    100 - pct,
