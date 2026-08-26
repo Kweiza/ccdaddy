@@ -64,6 +64,11 @@ var hoverOverrides = map[string]bool{
 // entirely. A mode that derived it would be deciding, on the user's behalf,
 // that an unattended switch may also be an unconfirmed one.
 //
+// update_check is here for the same reason one step further out: hover is a
+// policy for the switching engine, and this key is whether the daemon may make
+// a request at all. A mode that derived it would be deciding, on the user's
+// behalf, that fully automatic also means fully connected.
+//
 // The two display keys are here because hover is a policy for WHICH ACCOUNT is
 // live, and nothing about how a screen is painted follows from that. A mode
 // that derived them would be answering a question about the user's terminal out
@@ -74,6 +79,7 @@ var hoverHonours = map[string]bool{
 	keyMaxAutoSpend:                true,
 	keyHover:                       true,
 	keyMCPSwitchWithoutElicitation: true,
+	keyUpdateCheck:                 true,
 	keyTUITheme:                    true,
 	keyTUIGlyphs:                   true,
 }

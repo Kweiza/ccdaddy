@@ -278,6 +278,7 @@ func TestEveryKeyCanBeSetAndReadBack(t *testing.T) {
 		keyMaxAutoSpend:       "25",
 
 		keyMCPSwitchWithoutElicitation: "true",
+		keyUpdateCheck:                 "false",
 
 		// Neither is the default, for the reason the booleans above are not: a
 		// key set to the value it already had would pass this test without the
@@ -334,6 +335,7 @@ func TestEveryKeyCanBeSetAndReadBack(t *testing.T) {
 		WindowThreshold:    map[usage.WindowName]float64{usage.WindowFiveHour: 85},
 
 		MCPSwitchWithoutElicitation: true,
+		UpdateCheck:                 false,
 		TUITheme:                    "dark",
 		TUIGlyphs:                   "ascii",
 	}
@@ -362,6 +364,7 @@ func TestTheEffectiveValueOfEveryKeyIsFormattable(t *testing.T) {
 		keyMaxAutoSpend:       "0",
 
 		keyMCPSwitchWithoutElicitation: "false",
+		keyUpdateCheck:                 "true",
 
 		keyTUITheme:  "auto",
 		keyTUIGlyphs: "auto",

@@ -37,6 +37,20 @@ const (
 	// is that a model talking to that server has no way to write it.
 	keyMCPSwitchWithoutElicitation = "mcp_switch_without_elicitation"
 
+	// keyUpdateCheck is the second key here that governs no part of the
+	// switching engine, and it is the ONLY key in ccdad that governs a network
+	// call to a host other than api.anthropic.com. That is the whole reason it
+	// exists: an egress-filtered or air-gapped machine has to be able to say
+	// "stop asking", and the request it stops is one nothing else in the file
+	// can reach.
+	//
+	// It governs the DAEMON's observation and nothing else. `ccdad update` does
+	// not consult it: a key that silently disabled an explicit command a human
+	// typed would be a worse surprise than the network call it exists to
+	// prevent. An admin who wants to stop a fleet upgrading itself is managing
+	// the binary, not this key.
+	keyUpdateCheck = "update_check"
+
 	keyCreditThreshold = "credit.threshold"
 	keyMaxAutoSpend    = "credit.max_auto_spend"
 
@@ -92,6 +106,12 @@ const (
 // `ccdad config set` then refuses.
 const KeyMCPSwitchWithoutElicitation = keyMCPSwitchWithoutElicitation
 
+// KeyUpdateCheck is the third key a package outside this one names directly.
+// `ccdad doctor` prints it in the row that reports the daily release check, so
+// a reader is told the exact name `ccdad config set` accepts -- and a name
+// spelled twice is exactly the drift keys.go exists to prevent.
+const KeyUpdateCheck = keyUpdateCheck
+
 // Keys lists every settable key this release knows by name, in file order,
 // which is also the order `ccdad config list` prints them in. A CLI builds its
 // help and its error messages from this, so a key added here cannot be
@@ -117,6 +137,7 @@ func Keys() []string {
 		keyProbeUnknown,
 		keyHover,
 		keyMCPSwitchWithoutElicitation,
+		keyUpdateCheck,
 		keyCreditThreshold,
 		keyMaxAutoSpend,
 		keyTUITheme,

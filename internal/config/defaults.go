@@ -55,6 +55,11 @@ const defaultPreemptLead = 6 * time.Minute
 // unconditional. Hover is OFF because it overrides every number the user
 // tuned, and a mode that ignores the config file has to be asked for.
 //
+// UpdateCheck is an answer too, and the only one behind which there is a host
+// other than api.anthropic.com. It is ON because a user who never edits this
+// file is exactly the user who will otherwise never hear that a release
+// shipped.
+//
 // TUITheme and TUIGlyphs are answers in a third shape. Their real default is a
 // MEASUREMENT of the terminal that will draw the screen -- how dark its
 // background is, what its console code page says it can carry -- and this
@@ -83,7 +88,15 @@ func Defaults() Config {
 		// permission that lets an MCP client rewrite the live login without
 		// asking the person at the keyboard.
 		MCPSwitchWithoutElicitation: false,
-		TUITheme:                    defaultTUITheme,
-		TUIGlyphs:                   defaultTUIGlyphs,
+		// True, and this is the one default in this table that makes a network
+		// request nobody asked for. It is deliberate: the request is one per
+		// day per store to the host the machine already used to install ccdad,
+		// it carries the version and nothing else, and the alternative is a
+		// user running a build with a known bug in it because nothing ever told
+		// them otherwise. `update_check = false` is how a machine that may not
+		// call out says so.
+		UpdateCheck: true,
+		TUITheme:    defaultTUITheme,
+		TUIGlyphs:   defaultTUIGlyphs,
 	}
 }
