@@ -334,7 +334,7 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 	// runway line below has its own wrap, because its spaces are inside its
 	// values and these are between words.
 	//
-	// THE WIDTH IS MEASURED ON cmd.OutOrStdout() AND NEVER ON out, at all five
+	// THE WIDTH IS MEASURED ON cmd.OutOrStdout() AND NEVER ON out, at all six
 	// sites below, and the distinction is the whole reason this paragraph
 	// exists. out is renderTarget's writer -- the same destination wearing a
 	// palette -- and outWidth answers by asserting *os.File. A wrapper fails
@@ -354,6 +354,17 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 	// sites in one package. A palette does not change how wide the terminal is;
 	// the width comes from the thing that has one.
 	fmt.Fprintln(out, view.WrapLabeled(view.DaemonLine(snap.Report, now), outWidth(cmd.OutOrStdout())))
+
+	// Under the daemon line and ABOVE the no-accounts return, because a machine
+	// with no accounts yet is still a machine that can be out of date -- and
+	// because this is a fact about the daemon, which is what the line above it
+	// describes. It is silent unless there is something to say, and it wraps the
+	// way its five siblings do: the sentence is 95 columns on a release whose
+	// versions are three digits each, which an 80-column terminal folds wherever
+	// its own right edge lands.
+	if line, ok := view.UpdateLine(snap.Report, snap.Version); ok {
+		fmt.Fprintln(out, view.WrapLabeled(line, outWidth(cmd.OutOrStdout())))
+	}
 
 	if len(rows) == 0 {
 		fmt.Fprintln(cmd.ErrOrStderr(), "No accounts yet. Run 'ccdad add' to log one in.")
