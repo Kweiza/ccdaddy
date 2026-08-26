@@ -3,6 +3,10 @@ package cli
 import (
 	"encoding/json"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"go/types"
 	"io"
 	"os"
 	"strings"
@@ -1340,6 +1344,26 @@ func TestEveryLabelledLineFitsTheTerminalItIsPrintedOn(t *testing.T) {
 	if code, _, errOut, _ := runRoot(t, "hover", "on"); code != ExitOK {
 		t.Fatalf("hover on = %d (%s)", code, errOut)
 	}
+	// And a release the daemon has seen, for the same reason and after the same
+	// mistake: Update: was added to this block and not to this fixture, so it
+	// was the one site of the six whose wrap could be deleted with the whole
+	// package still green.
+	//
+	// STOPPED with a status, which is not a contradiction and not a
+	// convenience: the lock says nobody is running and the status file the last
+	// daemon left is still readable. Keeping the state stopped is what keeps
+	// Daemon: at the 59 columns the width below was chosen against -- a running
+	// daemon's line is shorter than this test's own terminal.
+	stubVersion(t, "0.6.1")
+	stubDaemon(t, daemon.Report{
+		State:     daemon.DaemonStopped,
+		HasStatus: true,
+		Status: daemon.Status{
+			SchemaVersion:   daemon.StatusSchemaVersion,
+			UpdateCheckedAt: statusNow.Add(-2 * time.Hour),
+			UpdateLatest:    "0.7.0",
+		},
+	}, nil)
 
 	// Thirty-six rather than the eighty the defect was filed at, because at
 	// eighty this fixture's Daemon: (59 display columns), Active: (37) and
@@ -1352,7 +1376,7 @@ func TestEveryLabelledLineFitsTheTerminalItIsPrintedOn(t *testing.T) {
 	block := labelBlockOf(t, wide)
 	// Each label named explicitly. A block that stopped printing one of these
 	// would otherwise quietly shrink what this test covers.
-	for _, label := range []string{"Daemon:", "Active:", "Hover:", "Mode:", "Runway:"} {
+	for _, label := range []string{"Daemon:", "Update:", "Active:", "Hover:", "Mode:", "Runway:"} {
 		if !strings.HasPrefix(strings.Join(block, "\n"), label) && !strings.Contains(strings.Join(block, "\n"), "\n"+label) {
 			t.Fatalf("no %s line in the block, so this test no longer covers it:\n%s", label, wide)
 		}
@@ -1363,11 +1387,11 @@ func TestEveryLabelledLineFitsTheTerminalItIsPrintedOn(t *testing.T) {
 			over++
 		}
 	}
-	// All five, and the count is named rather than "at least one": a fixture
+	// All six, and the count is named rather than "at least one": a fixture
 	// that drifted narrow would otherwise leave this test passing over lines it
 	// no longer exercises, which is how it read before it was measured.
-	if over != 5 {
-		t.Fatalf("%d of this fixture's %d block lines are over %d columns, want all 5, so the assertion below is weaker than it reads:\n%s", over, len(block), width, wide)
+	if over != 6 {
+		t.Fatalf("%d of this fixture's %d block lines are over %d columns, want all 6, so the assertion below is weaker than it reads:\n%s", over, len(block), width, wide)
 	}
 
 	stubOutWidth(t, width)
@@ -1423,6 +1447,101 @@ func proseOf(block []string) []string {
 		}
 	}
 	return block
+}
+
+// status.go states, in the paragraph above its first Fprintln, that every line
+// of the labelled block folds through view.WrapLabeled -- or view.RunwayWrap,
+// for the one line whose clauses are atomic -- at the width of
+// cmd.OutOrStdout(), and it counts the sites so a reader can check the count.
+// Nothing checked the count, and nothing checked the rule.
+//
+// TestEveryLabelledLineFitsTheTerminalItIsPrintedOn asks the stronger question
+// where it reaches: it renders the block narrow and proves the fold HAPPENS,
+// rather than that it was called for. What it cannot reach is a site its
+// fixture never emits. Update: shipped through a hole of exactly that shape --
+// added to the block, not added to that fixture -- and dropping its wrap left
+// every test in this package green. Measured: of the six sites, that one and
+// only that one.
+//
+// So this asks the structural question, where no fixture gets a vote: every
+// Fprintln into out in this function folds, and there are six of them. A
+// seventh line turns this red on purpose. That is the whole mechanism -- the
+// paragraph in status.go cannot make anybody read it, and this can.
+//
+// The width EXPRESSION is pinned too, by source rather than by value.
+// TestTheFoldMeasuresTheFileAndNotTheWriterItPaintsThrough holds that half at
+// runtime but only at the sites its fixture executes, and neither Hover: nor
+// Update: is one of them. outWidth(out) compiles, is 0 on every terminal there
+// is, and changes no byte of any fixture.
+func TestEveryLineOfTheStatusBlockFoldsAtTheFilesWidth(t *testing.T) {
+	const (
+		file      = "status.go"
+		fn        = "renderStatus"
+		wantSites = 6
+		wantWidth = "outWidth(cmd.OutOrStdout())"
+	)
+
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, file, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body *ast.BlockStmt
+	for _, d := range f.Decls {
+		if fd, ok := d.(*ast.FuncDecl); ok && fd.Recv == nil && fd.Name.Name == fn {
+			body = fd.Body
+		}
+	}
+	if body == nil {
+		t.Fatalf("no func %s in %s, so this test now guards nothing", fn, file)
+	}
+
+	// RunwayWrap is here rather than in a rule of its own because the question
+	// is which lines FOLD, not which helper folds them. The two differ in what
+	// they treat as unbreakable, and both take the width as their last
+	// argument, which is the half this asserts about either.
+	folds := map[string]bool{"view.WrapLabeled": true, "view.RunwayWrap": true}
+
+	sites := 0
+	ast.Inspect(body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		// Two arguments: the bare Fprintln(out) below the block is the blank
+		// separator and has nothing to fold, and the no-accounts line goes to
+		// stderr rather than out.
+		if !ok || types.ExprString(call.Fun) != "fmt.Fprintln" || len(call.Args) != 2 {
+			return true
+		}
+		if types.ExprString(call.Args[0]) != "out" {
+			return true
+		}
+		sites++
+		where := fset.Position(call.Pos())
+		inner, ok := call.Args[1].(*ast.CallExpr)
+		if !ok || !folds[types.ExprString(inner.Fun)] {
+			t.Errorf("%s: %s goes to out unfolded. Every line of this block wraps at the "+
+				"terminal's width -- this one goes out raw, at whatever it measures, on the "+
+				"80-column window it was written for",
+				where, types.ExprString(call.Args[1]))
+			return true
+		}
+		if got := types.ExprString(inner.Args[len(inner.Args)-1]); got != wantWidth {
+			t.Errorf("%s: folds at %s, want %s. outWidth answers by asserting *os.File and "+
+				"out is renderTarget's wrapper around one, so the assertion fails, the width "+
+				"is 0 on every terminal there is, and the fold stops without a word",
+				where, got, wantWidth)
+		}
+		return true
+	})
+
+	// Named rather than "at least one". A restructure that moved these lines
+	// behind a helper would otherwise leave this test passing over a function
+	// with nothing in it left to check.
+	if sites != wantSites {
+		t.Fatalf("%d lines of %s print to out, want %d. If a line was added, it needs the "+
+			"fold and both counts -- this one and the paragraph in %s that states the rule -- "+
+			"moved with it; if one was removed, the same",
+			sites, fn, wantSites, file)
+	}
 }
 
 func TestStatusSaysWhenTheDaemonHasSeenANewerRelease(t *testing.T) {
