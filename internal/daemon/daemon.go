@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/credhome"
+	"github.com/Kweiza/ccdaddy/internal/release"
 )
 
 // Options configures the daemon process.
@@ -53,13 +54,44 @@ type Options struct {
 // hidden entrypoint without becoming a daemon; what that entrypoint runs is
 // this.
 func EngineOptions() Options {
-	e := NewEngine()
+	e := engineForDaemon()
 	return Options{
 		Tick:     e.Tick,
 		Snapshot: e.Snapshot,
 		Drain:    e.Wait,
 		Attach:   func(l *Logger) { e.Log = l.Printf },
 	}
+}
+
+// engineForDaemon is NewEngine plus the two things only a daemon process may
+// have: the release resolver, and whatever the last daemon left behind about
+// the release check.
+//
+// It is a function of its own so a test can assert on the ENGINE rather than on
+// the four funcs EngineOptions wraps it in -- a resolver that was never wired
+// is invisible from the other side of that wrapper.
+//
+// The seeding happens HERE and not in NewEngine. NewEngine is also called from
+// the CLI -- internal/cli builds a real engine in its own process for a
+// refresh -- so a status read inside the constructor would put filesystem I/O
+// on call sites that have nothing to do with a daemon, and would make the "no
+// requests from the CLI" promise depend on which methods a refresh happens to
+// call. It also has to happen before Run publishes its first document, or that
+// publish overwrites the seeded deadline with nothing and a restart loop spends
+// one request per restart.
+//
+// A status file that cannot be read leaves the engine unseeded, which is the
+// same state a fresh install is in: one check shortly after start.
+func engineForDaemon() *Engine {
+	e := NewEngine()
+	// The ONE place this is wired. Everywhere else the resolver is nil and the
+	// check never runs, which is what keeps `ccdad list --refresh` and every
+	// test in this package off the release origin.
+	e.LatestRelease = release.NewClient().Latest
+	if s, ok, err := ReadStatus(); err == nil && ok {
+		e.seedRelease(s, e.now())
+	}
+	return e
 }
 
 func (o Options) tick(ctx context.Context) error {
