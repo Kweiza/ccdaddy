@@ -1,6 +1,10 @@
 package view
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -149,5 +153,85 @@ func TestTheUpdateLineComparesAgainstTheRunningBinary(t *testing.T) {
 				t.Errorf("UpdateLine() = %q, want the nine-column label field", line)
 			}
 		})
+	}
+}
+
+// "exhausted" is a value on the JSON wire -- daemon.StateExhausted is that
+// spelling -- and the human table's rule is that the projection is where it
+// stays. A Mode line using the word would put it back on the page it was kept
+// off. That rule was held by a paragraph in lines.go and by whoever remembered
+// it: the paragraph named a test that existed under no name at all, so adding
+// the word changed nothing anywhere.
+//
+// It is asked TWICE, and neither question contains the other. The runtime half
+// can only reach branches some Mode value selects, so a case added for a fourth
+// constant is invisible to it until that constant is passed in. The source half
+// reads every branch whether anything selects it or not, and cannot see a word
+// that arrives through a helper rather than a literal.
+//
+// Case-insensitively, because "Exhausted" at the start of a clause is the same
+// word on the same page.
+func TestNoModeLineBranchSaysExhausted(t *testing.T) {
+	const (
+		forbidden    = "exhaust"
+		file         = "lines.go"
+		fn           = "ModeLine"
+		wantBranches = 3
+	)
+
+	// Every mode this binary declares, plus one it has never heard of, which is
+	// the default arm and the one a newer daemon's value would land on.
+	for _, m := range []strategy.Mode{
+		strategy.ModeHeadroom,
+		strategy.ModeRecovery,
+		strategy.ModeConsumeFirst,
+		strategy.Mode(99),
+	} {
+		if line := ModeLine(m); strings.Contains(strings.ToLower(line), forbidden) {
+			t.Errorf("ModeLine(%v) = %q; the human table keeps that word to the --json projection", m, line)
+		}
+	}
+
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, file, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body *ast.BlockStmt
+	for _, d := range f.Decls {
+		if fd, ok := d.(*ast.FuncDecl); ok && fd.Recv == nil && fd.Name.Name == fn {
+			body = fd.Body
+		}
+	}
+	if body == nil {
+		t.Fatalf("no func %s in %s, so this test now guards nothing", fn, file)
+	}
+
+	branches := 0
+	ast.Inspect(body, func(n ast.Node) bool {
+		lit, ok := n.(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return true
+		}
+		branches++
+		text, err := strconv.Unquote(lit.Value)
+		if err != nil {
+			text = lit.Value
+		}
+		if strings.Contains(strings.ToLower(text), forbidden) {
+			t.Errorf("%s:%d: a %s branch says %q", file, fset.Position(lit.Pos()).Line, fn, text)
+		}
+		return true
+	})
+
+	// The count is pinned rather than floored, and that is the half of this
+	// test that has to be argued for. It is not a fact about the code worth
+	// recording; it is a tripwire. The way this rule came to be held by prose
+	// in the first place was a branch added to a block without the test
+	// covering that block growing with it, and a fourth mode arriving to a
+	// silent green is that same commit again.
+	if branches != wantBranches {
+		t.Fatalf("%s has %d string branches, want %d: read the new one against the rule above, then move this count",
+			fn, branches, wantBranches)
 	}
 }
