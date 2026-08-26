@@ -122,9 +122,14 @@ func DescribeRunning(report daemon.Report, now time.Time) string {
 // reset because everything is spent" from "the engine has nothing to do".
 //
 // The label column is nine characters wide, matching the Daemon: and Active:
-// lines above it. No branch may contain the substring "exhaust": the human table
-// keeps the projection to --json, and TestTheProjectionIsJSONOnly fails on that
-// word appearing anywhere in stdout.
+// lines above it. No branch may contain the substring "exhaust": the human
+// table keeps the projection to --json, and a mode line that used the word
+// would put it back on the page the projection was kept off.
+//
+// NOTHING ENFORCES THAT. This paragraph named a test that does not exist under
+// that name or any other -- searched, 2026-08-26 -- so the rule has been held
+// by the sentence you are reading and by whoever remembered it. Adding the
+// word to a branch below changes no test in this tree.
 func ModeLine(m strategy.Mode) string {
 	switch m {
 	case strategy.ModeRecovery:

@@ -163,7 +163,7 @@ type APIKeyEnvironment struct {
 //
 // It is duplicated from cclink rather than imported because identity must not
 // depend on the package that writes Claude Code's files; both spell the same
-// rule and TestAPIKeyApprovalMatchesCclink pins that they agree.
+// rule and TestAPIKeyApprovalAgreesWithCclink pins that they agree.
 func APIKeyApproval(key string) string {
 	trimmed := strings.TrimSpace(key)
 	if len(trimmed) <= 20 {
