@@ -95,6 +95,19 @@ by `uuid` or `alias`.
 
 ### Fixed
 
+- **The switch log line says why, not only what.** A daemon alternated between
+  two accounts every 121 seconds for twenty-five minutes, and afterwards there
+  was no way to say which margin kept clearing or on what numbers: the log
+  recorded `switched to X` and nothing else, and the readings behind it aged out
+  of the series before anyone looked. 121 s is `HoverCooldown` plus one tick, so
+  the shape already said the ranking wanted to move on every evaluation — but
+  the half that would have identified the cause was never written down, while
+  sitting one line away in the same scope. The line now carries the account
+  being left, the reason the ranking gave, and the binding window with its slack
+  against the threshold it was measured on. An unreadable headroom renders as
+  unreadable rather than as zeroes, because `slack=0 thr=0` reads like a
+  measurement and is not one.
+
 - **The login-surface flags name the surface instead of the billing.** `--console`
   said "for a credit-billed account", and an enterprise seat metered only in
   extra_usage credits reads itself as exactly that — while being a claude.ai seat

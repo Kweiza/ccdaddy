@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/rand/v2"
 	"strings"
 	"sync"
@@ -379,9 +380,60 @@ func (e *Engine) Tick(ctx context.Context) error {
 		return swapErr
 	}
 	if res.Outcome == switcher.Switched {
-		e.logf("switched to %s", res.Target.Label())
+		e.logf("%s", switchLogLine(ev, res.Target))
 	}
 	return nil
+}
+
+// switchLogLine is what the daemon records when it moves the live login.
+//
+// It carries the REASON and the figures the margin was judged on, and that is
+// the whole point of it. A log that records only the target answers "did it
+// move" and nothing else -- so a daemon that alternated between two accounts
+// every 121 seconds for twenty-five minutes left no way to say which margin
+// kept clearing, or by how much. 121 s is HoverCooldown plus one tick, which
+// already says the ranking wanted to move on every evaluation; what it does not
+// say is why, and the readings behind it aged out of the series before anyone
+// looked.
+//
+// Everything here was one line away in the same scope. The cost of carrying it
+// is a longer line in a file that is capped at 32 MiB and rotates.
+//
+// The three absences are rendered as absences rather than as zeroes. An
+// unreadable headroom is the ordinary state for a seat metered in credits,
+// whose binding window AllWindows deliberately does not carry, and "slack=0
+// thr=0" is a sentence that reads like a measurement and is not one.
+func switchLogLine(ev switcher.Evaluation, target store.Account) string {
+	var b strings.Builder
+	b.WriteString("switched to ")
+	b.WriteString(target.Label())
+
+	if ev.LiveKnown && ev.Live.UUID != "" {
+		b.WriteString(" from ")
+		b.WriteString(ev.Live.Label())
+	} else if ev.Live.UUID != "" || ev.Live.Email != "" {
+		b.WriteString(" from ")
+		b.WriteString(ev.Live.Label())
+	} else {
+		b.WriteString(" from no attributable login")
+	}
+
+	if !ev.Decided {
+		b.WriteString(": no ranking ran")
+		return b.String()
+	}
+
+	b.WriteString(": ")
+	b.WriteString(ev.Plan.Reason.String())
+
+	h := ev.Plan.Target.Headroom
+	if !h.Known {
+		b.WriteString(" (headroom unreadable)")
+		return b.String()
+	}
+	fmt.Fprintf(&b, " (binding=%s slack=%.1f thr=%.1f used=%.1f)",
+		h.Binding, h.Slack, h.Threshold, 100-h.Pct)
+	return b.String()
 }
 
 // activeAfter is the account Claude Code is logged in as once this tick's swap
