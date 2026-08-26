@@ -367,3 +367,50 @@ func screenWithPoll(t *testing.T, p usage.PollState) daemonScreen {
 	d.Rows[0].Entry.Poll = p
 	return d
 }
+
+// The dashboard already reads the same snapshot `ccdad status` does, so the
+// four fields arrive for free -- but it renders through its own wording and
+// would have been the one surface that never mentions a release.
+func TestTheDaemonScreenSaysWhenANewerReleaseIsOut(t *testing.T) {
+	d := runningScreen(t)
+	d.Report.Status.UpdateCheckedAt = statusNow.Add(-2 * time.Hour)
+	d.Report.Status.UpdateLatest = "0.7.0"
+	d.Version = "0.6.1"
+
+	body := d.Body(120, 60)
+	if !strings.Contains(body, "0.7.0 is out") {
+		t.Errorf("the daemon screen does not mention the release the daemon saw:\n%s", body)
+	}
+}
+
+// And says nothing when there is nothing to say, which is every machine that is
+// up to date and every build whose version cannot be compared.
+func TestTheDaemonScreenIsSilentWithNothingToReport(t *testing.T) {
+	// A silent verdict returns the empty string, so an unguarded append puts a
+	// whitespace-only ROW on the page rather than the word this test is
+	// looking for. Checking only for "is out" would call that silence.
+	noBlankRow := func(t *testing.T, body string) {
+		t.Helper()
+		for i, line := range strings.Split(body, "\n") {
+			if line != "" && strings.TrimSpace(line) == "" {
+				t.Errorf("line %d is %q -- a silent verdict still appended a row:\n%s", i, line, body)
+			}
+		}
+	}
+
+	d := runningScreen(t)
+	body := d.Body(120, 60)
+	if strings.Contains(body, "is out") {
+		t.Errorf("the daemon screen announced a release with nothing recorded:\n%s", body)
+	}
+	noBlankRow(t, body)
+
+	d.Report.Status.UpdateCheckedAt = statusNow.Add(-2 * time.Hour)
+	d.Report.Status.UpdateLatest = "0.7.0"
+	d.Version = "dev"
+	body = d.Body(120, 60)
+	if strings.Contains(body, "is out") {
+		t.Errorf("the daemon screen compared a dev build against a release:\n%s", body)
+	}
+	noBlankRow(t, body)
+}

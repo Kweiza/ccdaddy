@@ -375,6 +375,7 @@ func (a App) daemonScreen() daemonScreen {
 		SamePath:       a.opts.SamePath,
 		Glyphs:         a.m.Glyphs,
 		Pal:            a.m.Pal,
+		Version:        a.m.Snap.Version,
 	}
 }
 

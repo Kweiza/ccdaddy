@@ -1447,3 +1447,12 @@ func TestUpAndDownMoveTheCursor(t *testing.T) {
 		t.Fatalf("the cursor wrapped past the bottom to %d, want %d", a.m.Cursor, want)
 	}
 }
+
+// The field has to be carried across, or the screen compares a release against
+// an empty string and is silent forever on the one surface that reads it.
+func TestTheDaemonScreenIsHandedThisBinarysVersion(t *testing.T) {
+	a := App{m: Model{Snap: view.Snapshot{Version: "0.6.1"}}}
+	if got := a.daemonScreen().Version; got != "0.6.1" {
+		t.Errorf("daemonScreen().Version = %q, want the snapshot's %q", got, "0.6.1")
+	}
+}
