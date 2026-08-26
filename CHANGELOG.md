@@ -34,6 +34,77 @@ by `uuid` or `alias`.
   request off for a machine that may not call out; it defaults to `true`, and
   it does **not** gate `ccdad update`.
 
+### Changed
+
+- **`scripts/ci.sh cites` reads every file git knows about, not five
+  extensions.** The pathspec was `*.go *.sh *.ps1 *.yml *.md`, which is a
+  narrower rule than the one `CONTRIBUTING.md` states and than the check's own
+  name claims: `Dockerfile`, `ccdad-entrypoint`, the `.cmd` shim fixtures, the
+  `.js` generator, `THIRD-PARTY-LICENSES.txt`, both plugin manifests, `LICENSE`
+  and `NOTICE` were among thirty-seven tracked files it never looked at. It now
+  reads everything git tracks plus everything written and not yet staged —
+  running it before `git add` used to be a green that meant nothing, because a
+  new file gave 0 and the same file after `git add -N` gave 1 — minus anything
+  `.gitignore` covers and anything git treats as binary. Measured before the
+  change: widening it costs zero new failures on this tree. The rule is also
+  stated as *every line* rather than *every comment* now, which is what it has
+  always enforced: a Go string literal pointing at a section of a document
+  nobody outside this machine has fails it, and so does prose in `README.md`.
+  That is the right scope — an unreachable citation in a user-visible error
+  string is worse than one in a comment, not better — so the wording moved
+  rather than the code.
+
+- **A citation to a published standard is subtracted from a line, rather than
+  used to excuse the whole line.** The exemption matched one exact spelling and
+  then dropped the whole line, and it was wrong in both directions. A citation
+  with a comma after the RFC number, and one with the section written before the
+  number rather than after it, are both forms `CONTRIBUTING.md` permits, and
+  both failed the build — a gate that fails on correct prose is a gate somebody
+  switches off, and the spelling it pushes people towards, with the word
+  *section* written out and no symbol at all, is invisible to this check in both
+  directions. In the other direction, one well-formed RFC citation anywhere on a
+  line exempted that line from *all three* of the patterns this check looks for:
+  a line that named an internal work item and also cited a real RFC section
+  passed, while either half of it alone failed. The accepted citation is now
+  removed from a copy of the line and what is left is re-judged, which is the
+  rule anybody would state in words. The pointing
+  arm also catches a name written in capitals, and the three-segment minimum
+  that keeps it from reporting ordinary English is written down with the
+  measurement behind it: at two segments the same shape reports `per rate-limit
+  window` and six other correct lines of this repository.
+
+### Fixed
+
+- **`scripts/ci.sh` answers 0, 1 or 2 and nothing else.** 2 means a check name
+  the script does not have; a check that ran and found a real problem reports 1,
+  whatever the tool underneath it exited with. It did not before, and not only
+  in one place: `gofmt -l` exits 2 for a Go file it cannot parse, `go test
+  -race` exits 2 with "-race is not supported on linux/386", `go build` exits 2
+  on an unsupported `GOOS/GOARCH` pair, `claude plugin validate` propagates
+  whatever it likes, a tool missing from `PATH` is 127 and a `git` that refuses
+  is 128 — and every one of those left the script as the script's own exit
+  code. One unparseable Go file made `ci.sh fmt` report the code that means
+  "you typed the check name wrong".
+
+- **A failing check no longer leaves its `::group::` fold open in the Actions
+  log.** Of seven `group`/`endgroup` pairs, five could be aborted between the
+  two halves *on the check's ordinary failure path* — an ordinary `vet` or
+  `test` failure included — so the one line the reader came for sat inside a
+  section that never closed and swallowed everything after it.
+
+- **Three checks that reported success having looked at nothing.** `ci.sh fmt`
+  built its file list through a process substitution, whose exit status `set
+  -e` cannot see, so a `git` that refused printed its own `fatal:` and then
+  `ci: no Go files to format` and exited 0. `cites` read its tracked list
+  through a bare assignment and left with git's 128. And an arm of `cites`
+  whose pattern the platform's regular-expression library rejects searched
+  nothing and reported a clean tree: `git grep` exits 1 for "no matches" and
+  128 for "I could not read that pattern", and both were being read as "no
+  matches". That last one is not hypothetical here — macOS's git reads `\b` as
+  a literal `b` rather than a word boundary, which once turned a whole arm of
+  this check into a no-op on that leg while every test expecting a *miss* still
+  missed.
+
 ## [0.8.0] — 2026-08-26
 
 The release that puts `ccdad update` in users' hands, and the one that stops the
