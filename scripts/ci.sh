@@ -621,6 +621,33 @@ cites_grep() {
 	git grep -I --untracked --exclude-standard -nE "$@"
 }
 
+# cites_search runs one arm's pattern and keeps the difference between "found
+# nothing" and "could not ask". The result lands in `cites_found`; a return of 1
+# means git refused.
+#
+# `git grep` exits 1 for no matches and something larger for an error, and
+# `if hits=$(git grep …)` reads both as falsy — so an arm whose pattern the
+# platform's regex library rejects reported a clean tree and exited 0.
+# Reproduced: an unbalanced `{` in cites_pointer makes git print
+# `fatal: command line, '…': Unmatched \{` and this check then says
+# "no line cites a document this repository does not contain", rc=0.
+#
+# That is the `\b` trap two patterns below already carry, with a louder cause
+# and the same shape: the gate is off on some leg and green about it. macOS's
+# git and GNU git do not accept exactly the same extended regular expressions,
+# which is the whole reason this can happen on one runner and not another.
+cites_found=
+cites_search() {
+	local rc=0
+	cites_found=$(cites_grep "$@" -- "${cites_paths[@]}") || rc=$?
+	if [ "$rc" -le 1 ]; then
+		return 0
+	fi
+	echo "ci: git grep exited $rc for this pattern, so that arm of the check read nothing:" >&2
+	echo "ci:   $1" >&2
+	return 1
+}
+
 check_cites() {
 	group "self-contained citations"
 	local spelled spelled_raw pointers unresolved line targets target hits docpaths
@@ -657,7 +684,12 @@ check_cites() {
 	# engine the rest of this check already uses rather than a second regex
 	# dialect to be wrong about on one platform.
 	spelled=
-	if spelled_raw=$(cites_grep "$cites_spelled" -- "${cites_paths[@]}"); then
+	if ! cites_search "$cites_spelled"; then
+		endgroup
+		return 1
+	fi
+	spelled_raw=$cites_found
+	if [ -n "$spelled_raw" ]; then
 		while IFS= read -r line; do
 			if printf '%s\n' "$line" | sed -E "s/$cites_standard//g" |
 				grep -qE "$cites_spelled"; then
@@ -675,7 +707,12 @@ EOF
 	# fail on "see gen-cmd-shim-fixtures" the first time somebody wrote it, and
 	# a gate that fails on correct code is a gate somebody switches off.
 	unresolved=
-	if pointers=$(cites_grep "$cites_pointer" -- "${cites_paths[@]}"); then
+	if ! cites_search "$cites_pointer"; then
+		endgroup
+		return 1
+	fi
+	pointers=$cites_found
+	if [ -n "$pointers" ]; then
 		while IFS= read -r line; do
 			# Every target on the line, not the first: one unresolvable
 			# pointer is enough, and taking only `head -1` would let a
@@ -708,7 +745,12 @@ EOF
 	# path names one file, and `(^|/)name` matching would let `docs/x.md`
 	# resolve against an unrelated `vendor/docs/x.md`.
 	docpaths=
-	if pointers=$(cites_grep "$cites_docpath" -- "${cites_paths[@]}"); then
+	if ! cites_search "$cites_docpath"; then
+		endgroup
+		return 1
+	fi
+	pointers=$cites_found
+	if [ -n "$pointers" ]; then
 		while IFS= read -r line; do
 			# The pointing phrase is stripped by NAME rather than by taking
 			# the last whitespace-delimited token: the `.md` half now ends on a
