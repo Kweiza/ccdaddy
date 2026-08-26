@@ -22,29 +22,184 @@ import (
 
 // runCI runs scripts/ci.sh from dir — the repository root of a throwaway tree
 // for the fmt tests, and the real one otherwise.
+//
+// The child's environment is ciEnv's rather than this process's, and that is
+// the difference between a test describing the script and a test describing
+// the machine it ran on. See ciEnv for what the inheritance was costing.
 func runCI(t *testing.T, root string, args ...string) (string, int) {
 	t.Helper()
-	if runtime.GOOS == "windows" {
-		// The Windows leg runs this script for real, through the bash that
-		// ships with Git. It cannot run it like THIS: exec hands bash an
-		// absolute C:\… path, and `dirname` on a backslash path answers ".".
-		t.Skip("ci.sh is invoked by path here, which Git Bash cannot resolve")
-	}
-	script := filepath.Join(root, "scripts", "ci.sh")
-	cmd := exec.Command("bash", append([]string{script}, args...)...)
-	// Not the repository: the script has to locate its own root, because CI
-	// calls it from the workspace root and a developer from anywhere.
-	cmd.Dir = t.TempDir()
-	out, err := cmd.CombinedOutput()
-	code := 0
-	if err != nil {
-		var exit *exec.ExitError
-		if !errors.As(err, &exit) {
-			t.Fatalf("running ci.sh %v: %v\n%s", args, err, out)
+	return runCIWithEnv(t, root, ciEnv(t), args...)
+}
+
+// ciTools is what ci.sh executes on the paths runCI reaches, and the list is
+// the answer to "what does a pinned PATH have to carry": `fmt` runs gofmt and
+// git, `cites` runs git, sed, grep and awk, and every arm runs dirname to
+// resolve the script's own root. `go`, `mktemp`, `file` and `env` belong to
+// check_cgo, and `claude` to check_plugin; runCI runs neither, and the plugin
+// tests build their own PATH precisely so that they can control that answer.
+var ciTools = []string{"git", "gofmt", "awk", "sed", "grep", "dirname"}
+
+// ciPath is the directories those tools are actually in, measured on the
+// machine rather than written down.
+//
+// A literal `/usr/bin:/bin` — which is what envWithoutClaude below can afford,
+// because the plugin check needs no Go toolchain — is wrong here, and measured
+// wrong: gofmt is in /usr/local/bin on the machine this was written on and in
+// the runner's hosted toolcache on Actions, and neither of those is /usr/bin.
+// What that costs is not a test that cannot run but one that passes for the
+// wrong reason: ci.sh reports `gofmt exited 127` and returns 1, and 1 is the
+// same status an unformatted tree returns.
+func ciPath(t *testing.T) string {
+	t.Helper()
+	var dirs []string
+	seen := map[string]bool{}
+	for _, tool := range ciTools {
+		full, err := exec.LookPath(tool)
+		if err != nil {
+			t.Fatalf("ci.sh runs %s and this machine has none on PATH: %v", tool, err)
 		}
-		code = exit.ExitCode()
+		dir := filepath.Dir(full)
+		if seen[dir] {
+			continue
+		}
+		seen[dir] = true
+		dirs = append(dirs, dir)
 	}
-	return string(out), code
+	return strings.Join(dirs, string(os.PathListSeparator))
+}
+
+// ciEnv is the environment ci.sh runs under here, named rather than inherited.
+//
+// runCI used to hand the child os.Environ(). Three variables were doing real
+// work inside that inheritance, and each is a measurement rather than a worry:
+//
+//   - GITHUB_ACTIONS is set on a runner, so `group` wrote `::group::` and
+//     `::endgroup::` into the output every assertion in this file greps. The
+//     suite was exercising one branch of `group` on Actions and the other on a
+//     developer's machine — which is the class of difference this file exists
+//     to stop. It is left out here and set by envWithActions alone, so the two
+//     environments differ in exactly the variable under test.
+//
+//   - HOME. git does not NEED one: `fmt` and `cites` both pass under `env -i`
+//     carrying nothing but PATH. It READS one, which is the problem, because
+//     `--exclude-standard` honours core.excludesFile. Measured: against a HOME
+//     whose global excludes name broken.go, the unformatted-file fixture is
+//     reported as clean and ci.sh exits 0. Only for an UNTRACKED file —
+//     `--cached` lists a staged one whatever the excludes say — which is
+//     exactly the half of the fixture set throwawayRepoThenWrite exists for. A
+//     throwaway HOME is what keeps that answer the check's rather than the
+//     reader's.
+//
+//   - LC_ALL, which is the one a pinned environment gets wrong by OMISSION. An
+//     environment carrying no locale is the C locale, so pinning without
+//     saying so would have moved every test in this file onto the
+//     byte-oriented engine and deleted the other one from the suite with
+//     nothing in the diff mentioning it. C is pinned deliberately — it is the
+//     one locale every machine has — and the character-oriented engine is
+//     named by the one test that needs both, rather than arriving by accident
+//     through whoever's LANG. Measured: the whole suite is green under
+//     LC_ALL=C.
+//
+// CCDAD_REQUIRE_CLAUDE is the fourth variable ci.sh reads and it is left out
+// with nothing to weigh: it is read only by check_plugin, which runCI never
+// runs.
+func ciEnv(t *testing.T) []string {
+	t.Helper()
+	return []string{
+		"PATH=" + ciPath(t),
+		"HOME=" + t.TempDir(),
+		"LC_ALL=C",
+	}
+}
+
+// The three tests below are what makes the pinning red when it is undone. They
+// are separate because they fail for three different reasons: one proves the
+// pinned environment REACHES the child, one proves that what it keeps out
+// CHANGES an answer, and one pins the list itself so a fourth variable cannot
+// be added to the child's world without a diff saying so.
+
+// GITHUB_ACTIONS is set here, in this process, which is the only way to ask the
+// question on a machine that is not a runner. Every assertion in this file
+// greps `out`; under the old runCI this fixture came back wrapped in
+// `::group::` on Actions and bare everywhere else.
+func TestTheChildDoesNotInheritThisProcessActionsMarkers(t *testing.T) {
+	t.Setenv("GITHUB_ACTIONS", "true")
+	root := throwawayRepo(t, map[string]string{"internal/x/x.go": "package x\n"})
+
+	out, code := runCI(t, root, "cites")
+	if code != 0 {
+		t.Fatalf("exit %d, want 0\n%s", code, out)
+	}
+	if strings.Contains(out, "::group::") || strings.Contains(out, "::endgroup::") {
+		t.Errorf("the fold markers reached a runCI fixture from this process's environment:\n%s", out)
+	}
+}
+
+// HOME, and this is the measurement that put it in ciEnv rather than a worry
+// about it. git does not need a HOME; it READS one, and `--exclude-standard`
+// honours core.excludesFile, so a developer whose global ignore file happens to
+// name a fixture turns a red test green rather than noisy.
+//
+// The file is written AFTER `git add`, which is what makes it reachable: an
+// ignore rule cannot hide a file `--cached` already lists.
+func TestTheChildDoesNotInheritThisProcessGlobalGitExcludes(t *testing.T) {
+	home := t.TempDir()
+	writeFiles(t, home, map[string]string{
+		".gitconfig":   "[core]\n\texcludesFile = " + filepath.Join(home, "globalignore") + "\n",
+		"globalignore": "broken.go\n",
+	})
+	t.Setenv("HOME", home)
+
+	root := throwawayRepoThenWrite(t,
+		map[string]string{"internal/keep/keep.go": "package keep\n"},
+		map[string]string{"internal/broken/broken.go": unformattedGo})
+
+	out, code := runCI(t, root, "fmt")
+	if code != 1 {
+		t.Fatalf("exit %d, want 1 — an unformatted file this process's git config hides is still "+
+			"an unformatted file to the check\n%s", code, out)
+	}
+	if !strings.Contains(out, filepath.ToSlash(filepath.Join("internal", "broken", "broken.go"))) {
+		t.Errorf("the check did not name the unformatted file:\n%s", out)
+	}
+}
+
+// The list itself. The two tests above would both still pass if ciEnv grew a
+// fourth entry — or handed the child os.Environ() with one key overridden —
+// and this one says what the child's whole world is.
+//
+// LC_ALL is named as a VALUE and not merely as a key, because the value is the
+// claim: C is the byte-oriented engine, it is the locale every machine has, and
+// TestCICitesAllowsAnRFCSectionRange's comment is written against it.
+func TestThePinnedEnvironmentNamesEveryVariableItCarries(t *testing.T) {
+	t.Setenv("CCDAD_SOMETHING_THE_SCRIPT_MUST_NOT_SEE", "1")
+
+	got := map[string]string{}
+	for _, entry := range ciEnv(t) {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok {
+			t.Fatalf("%q is not a NAME=VALUE entry", entry)
+		}
+		if _, dup := got[key]; dup {
+			t.Fatalf("%s is named twice; last-wins makes the first one unreadable", key)
+		}
+		got[key] = value
+	}
+
+	for _, key := range []string{"PATH", "HOME", "LC_ALL"} {
+		if _, ok := got[key]; !ok {
+			t.Errorf("the pinned environment carries no %s", key)
+		}
+	}
+	if len(got) != 3 {
+		t.Errorf("the pinned environment carries %d variables, want the 3 named above: %v", len(got), got)
+	}
+	if got["LC_ALL"] != "C" {
+		t.Errorf("LC_ALL = %q, want C — the byte-oriented engine is what the section-range test is written against", got["LC_ALL"])
+	}
+	if got["HOME"] == os.Getenv("HOME") {
+		t.Errorf("HOME = %q, which is this process's own", got["HOME"])
+	}
 }
 
 // scriptTree is a directory holding a copy of ci.sh plus whatever files the
@@ -261,13 +416,13 @@ func TestCICitesFailsWhenGitCannotListTheTree(t *testing.T) {
 	}
 }
 
-// envWithActions is the child environment with GITHUB_ACTIONS set, so a test
-// can read the fold markers. The parent's environment is kept because gofmt has
-// to be findable; a duplicate key is resolved last-wins by os/exec, so appending
-// is enough even on a runner that already sets it.
+// envWithActions is ciEnv with GITHUB_ACTIONS set, so a test can read the fold
+// markers. It differs from the environment every other test here runs under in
+// that one variable and nothing else, which is what makes an assertion about
+// the markers an assertion about `group`.
 func envWithActions(t *testing.T) []string {
 	t.Helper()
-	return append(os.Environ(), "GITHUB_ACTIONS=1")
+	return append(ciEnv(t), "GITHUB_ACTIONS=1")
 }
 
 // A ::group:: that is opened and never closed swallows everything after it, and
@@ -415,17 +570,21 @@ func TestCICitesAllowsASectionWrittenBeforeItsRFC(t *testing.T) {
 // `§§`. That is the same trap the two `\b` notes in ci.sh record: the
 // arm fails on one platform while every test expecting a MISS still misses. An
 // alternation of two literals is what this rules in.
-// It is run TWICE, and the second run is the one with teeth. Under a UTF-8
-// locale GNU sed reads § as one character, so `§+` matches `§§` perfectly well
-// and this fixture passes with the quantifier in place -- measured: swapping
-// the alternation back to `§+` leaves the whole suite green under en_US.UTF-8
-// and reddens this test under LC_ALL=C. A fixture that only ever ran in the
+// It is asked on BOTH ENGINES, and the byte-oriented one is the leg with teeth.
+// Under a UTF-8 locale GNU sed reads § as one character, so `§+` matches `§§`
+// perfectly well and this fixture passes with the quantifier in place --
+// measured: swapping the alternation back to `§+` leaves the whole suite green
+// under en_US.UTF-8 and reddens this test. A fixture that only ever ran in the
 // developer's locale would pin nothing, which is the same shape as the macOS
 // `\b` trap two comments in ci.sh already record: right on the leg you look at,
 // silently off on the other.
 //
-// LC_ALL=C is the byte-oriented engine made reachable from any machine, so the
-// portability claim is checked rather than asserted.
+// This is the C leg, and it needs no LC_ALL of its own now that ciEnv pins one:
+// C is the locale every test in this file runs under, which is the byte-
+// oriented engine made reachable from any machine. The other leg is the test
+// below, and it is a separate function rather than a second call here so that a
+// machine with no UTF-8 locale SKIPS visibly instead of quietly asking the same
+// question twice.
 func TestCICitesAllowsAnRFCSectionRange(t *testing.T) {
 	root := throwawayRepo(t, map[string]string{
 		"internal/x/x.go": "package x\n\n// Both apply: RFC 6749 \u00a7\u00a76 and 7.\nfunc X() {}\n",
@@ -433,14 +592,73 @@ func TestCICitesAllowsAnRFCSectionRange(t *testing.T) {
 
 	out, code := runCI(t, root, "cites")
 	if code != 0 {
-		t.Fatalf("exit %d, want 0 — a range is one citation written once\n%s", code, out)
+		t.Fatalf("exit %d, want 0 — a range is one citation written once, and under the pinned C "+
+			"locale the section symbol is two bytes, so a quantifier binds only the second of "+
+			"them\n%s", code, out)
 	}
+}
 
-	out, code = runCIWithEnv(t, root, append(os.Environ(), "LC_ALL=C"), "cites")
-	if code != 0 {
-		t.Fatalf("exit %d, want 0 under LC_ALL=C — the section symbol is two bytes there, and a "+
-			"quantifier binds only the second of them\n%s", code, out)
+// The same fixture on the CHARACTER-oriented engine, and it is here because
+// pinning the environment would otherwise have deleted that engine from the
+// suite: an environment carrying no locale is the C locale, so every leg would
+// have become the leg above.
+//
+// It has no teeth against `§+` — that quantifier is correct here, which is the
+// whole point of the paragraph above — and it has teeth against the other
+// direction, a pattern that works on bytes and not on characters. The risk runs
+// both ways and only one way was covered.
+func TestCICitesAllowsAnRFCSectionRangeUnderAUTF8Locale(t *testing.T) {
+	locale := utf8Locale()
+	if locale == "" {
+		t.Skip("this machine lists no UTF-8 locale, so the character-oriented engine cannot be reached from it")
 	}
+	root := throwawayRepo(t, map[string]string{
+		"internal/x/x.go": "package x\n\n// Both apply: RFC 6749 \u00a7\u00a76 and 7.\nfunc X() {}\n",
+	})
+
+	out, code := runCIWithEnv(t, root, append(ciEnv(t), "LC_ALL="+locale), "cites")
+	if code != 0 {
+		t.Fatalf("exit %d, want 0 under %s — the section symbol is one character there\n%s",
+			code, locale, out)
+	}
+}
+
+// utf8Locale is a UTF-8 locale this machine actually has, or "" when it lists
+// none.
+//
+// Asked of `locale -a` rather than written down, because no single name is
+// portable: C.UTF-8 exists on the Linux runner and not on macOS, glibc lists
+// en_US.UTF-8 as `en_US.utf8`, and a name the machine does not have does not
+// fail loudly — setlocale falls back to C and writes a warning into the very
+// output these tests grep, so the leg would have gone on passing while
+// measuring the engine it was written to avoid.
+//
+// The preference order only makes the choice deterministic across machines that
+// have several; any UTF-8 locale reaches the character-oriented engine.
+func utf8Locale() string {
+	out, err := exec.Command("locale", "-a").Output()
+	if err != nil {
+		return ""
+	}
+	var have []string
+	for _, line := range strings.Split(string(out), "\n") {
+		name := strings.TrimSpace(line)
+		lower := strings.ToLower(name)
+		if strings.HasSuffix(lower, ".utf-8") || strings.HasSuffix(lower, ".utf8") {
+			have = append(have, name)
+		}
+	}
+	for _, want := range []string{"c.utf-8", "c.utf8", "en_us.utf-8", "en_us.utf8"} {
+		for _, name := range have {
+			if strings.ToLower(name) == want {
+				return name
+			}
+		}
+	}
+	if len(have) > 0 {
+		return have[0]
+	}
+	return ""
 }
 
 // THE OTHER DIRECTION, and it is the one the old comment called a deliberate
