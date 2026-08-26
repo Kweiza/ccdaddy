@@ -251,11 +251,13 @@ func newListCmd() *cobra.Command {
 			// fails that assertion -- so a width read off it is 0 on every
 			// terminal there is and the fold silently stops happening, on a
 			// branch where nothing else about the line changed. Nothing catches
-			// that: git merges the two edits without a word, every test in this
-			// package stubs the outWidth seam, and the only reader who can see
-			// it is a person at an 80-column window. See TestWidthIsMeasuredOn
-			// TheFileAndNotTheDecoratedWriter, which is what turns the next such
-			// merge red.
+			// that on its own: git merges the two edits without a word, every
+			// test that stubs the outWidth seam stays green, and the only
+			// reader who can see it is a person at an 80-column window.
+			// TestTheFoldMeasuresTheFileAndNotTheWriterItPaintsThrough is what
+			// turns that merge red, and this site is one it reaches -- it runs
+			// `ccdad list` as well as `ccdad status`, because the collision
+			// arrived at each of them separately.
 			//
 			// The rejected alternative was an Unwrap() io.Writer on
 			// colorWriter's type with outWidth following the chain. That is a

@@ -341,10 +341,26 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 	// that assertion, so outWidth(out) is 0 on every terminal there is and the
 	// fold just stops, on a change that never mentioned folding. That is the
 	// worst shape a regression comes in: git merges the palette and the fold
-	// without a word between them, every test in this package stubs the
-	// outWidth seam and stays green, and the only reader who can see it is a
-	// person at an 80-column window. TestWidthIsMeasuredOnTheFileAndNotThe
-	// DecoratedWriter is what makes the next such merge red instead.
+	// without a word between them, every test that stubs the outWidth seam
+	// stays green, and the only reader who can see it is a person at an
+	// 80-column window.
+	//
+	// Two tests hold this now, and they hold different halves of it.
+	// TestTheFoldMeasuresTheFileAndNotTheWriterItPaintsThrough runs both
+	// commands and asserts the writer that arrives to be measured IS the file
+	// the root was given -- the stronger question, at the sites its fixture
+	// executes. It does not execute all of them: Hover: and Update: are printed
+	// only under a state it does not set up, and outWidth(out) at either was
+	// green across this whole package. The other half is held by
+	// TestEveryLineOfTheStatusBlockFoldsAtTheFilesWidth, which reads this
+	// function's source rather than its output, so every site is covered
+	// whatever a fixture happens to render and the count of six below is
+	// asserted there rather than only written here.
+	//
+	// Both names are written on one line each, deliberately. The name this
+	// paragraph carried before was split across a line break and named nothing
+	// that existed -- the test had been renamed, and no grep for the name in
+	// the comment could find that out.
 	//
 	// The rejected alternative was giving colorWriter's type an
 	// Unwrap() io.Writer and teaching outWidth to follow the chain. It is a
