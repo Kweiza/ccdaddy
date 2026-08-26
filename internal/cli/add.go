@@ -468,15 +468,27 @@ func loginError(stderr io.Writer, err error) error {
 //
 // A nil profile still decides the Kind, because "no evidence" is an answer
 // Classify has a documented default for.
+//
+// The four fields a profile OWNS go through store.Account.AdoptProfile, which
+// is their single writer -- the daemon reaches the same four through
+// store.ApplyProfile when it re-reads a stale profile, and two copies of that
+// list would drift the first time a fifth field appeared on the wire.
+// AdoptProfile also stamps ProfileFetchedAt, which is what makes the re-read
+// possible: without it an account added here is indistinguishable from one
+// added before the field existed, and the daemon would re-read every account's
+// profile every day forever.
+//
+// Kind and Primary stay HERE and deliberately do not travel with the four.
+// Both are add-time decisions taken with an empty UsageShape because no usage
+// call has been made yet, and the daemon's later re-read must not re-take them:
+// store.ApplyUsage owns Kind on the usage axis by then, and Primary is a user
+// setting the moment the user touches it.
 func applyProfile(acct *store.Account, p *identity.Profile) {
 	acct.Kind = identity.Classify(p, identity.UsageShape{}, false)
 	if p == nil {
 		return
 	}
-	acct.Tier = p.OrganizationType
-	acct.RateLimitTier = p.RateLimitTier
-	acct.SeatTier = p.SeatTier
-	acct.OrganizationUUID = p.OrganizationUUID
+	acct.AdoptProfile(p, time.Now())
 	acct.Primary = identity.PrimaryByDefault(p)
 }
 
