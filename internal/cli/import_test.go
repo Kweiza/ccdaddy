@@ -13,6 +13,7 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
+	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/store"
 )
 
@@ -734,5 +735,56 @@ func TestImportRefusesAnEmptyDocument(t *testing.T) {
 	}
 	if !strings.Contains(top, "empty") {
 		t.Errorf("the refusal %q does not say the file is empty", top)
+	}
+}
+
+// TestSeatTierSurvivesTheRoundTrip pins the field that decides how an account
+// is METERED across a move between machines.
+//
+// seat_tier is the one profile field that separates a seat billed per unit from
+// one metered on a plan window, and it is what identity.PrimaryByDefault reads
+// to decide whether an account may be ranked without a spend ceiling. Kind and
+// Primary are both carried already, so an import without seat_tier lands an
+// account that behaves correctly and can no longer SAY WHY -- and the next
+// thing to re-derive either of them from the profile fields, on a machine that
+// never saw the profile, gets a different answer.
+func TestSeatTierSurvivesTheRoundTrip(t *testing.T) {
+	isolate(t)
+	s, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add(store.Account{
+		UUID: "u-1", Email: "seat@example.com",
+		Kind: identity.KindCredit, Primary: true,
+		Tier: "claude_enterprise", RateLimitTier: "default_claude_zero",
+		SeatTier: "enterprise_usage_based",
+	}, credsFor("RT-u-1")); err != nil {
+		t.Fatal(err)
+	}
+	path := exportTo(t, "backup.json")
+
+	// A second machine: a fresh store.
+	t.Setenv("CCDAD_HOME", filepath.Join(t.TempDir(), "ccdad2"))
+	if code, _, _, top := runRoot(t, "import", path); code != ExitOK {
+		t.Fatalf("import = %d (%s), want 0", code, top)
+	}
+
+	after, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := after.Get("u-1")
+	if !ok {
+		t.Fatal("u-1 was not imported")
+	}
+	if got.SeatTier != "enterprise_usage_based" {
+		t.Errorf("SeatTier = %q, want %q", got.SeatTier, "enterprise_usage_based")
+	}
+	// The three that already crossed, asserted here so a change that carries
+	// seat_tier by dropping one of them cannot pass.
+	if got.Kind != identity.KindCredit || !got.Primary || got.RateLimitTier != "default_claude_zero" {
+		t.Errorf("Kind/Primary/RateLimitTier = %v/%v/%q; want credit/true/default_claude_zero",
+			got.Kind, got.Primary, got.RateLimitTier)
 	}
 }

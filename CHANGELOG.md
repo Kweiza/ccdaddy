@@ -29,9 +29,14 @@ by `uuid` or `alias`.
   now printed only when a window basis exists: two rows of `-` above a real
   credit row invite the reader to conclude the fleet burns no quota.
 
-- **`seat_tier` is stored.** It is the one profile field that says how a *seat*
-  is metered, as opposed to how its organization is billed, and it was fetched
-  and then dropped.
+- **`seat_tier` is stored, and it crosses `export`/`import`.** It is the one
+  profile field that says how a *seat* is metered, as opposed to how its
+  organization is billed, and it was fetched and then dropped. Carrying it
+  through a move between machines matters because `Kind` and the primary flag
+  are both *derived* from it: an import without it lands an account that behaves
+  correctly and can no longer say why, and the next thing to re-derive either
+  from the profile fields, on a machine that never saw the profile, gets a
+  different answer.
 
 - **The daemon says when a newer ccdad is out.** Once a day it asks the
   releases page what the newest release is — one request per day per store, to

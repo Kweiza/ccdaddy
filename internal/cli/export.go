@@ -52,6 +52,7 @@ type exportAccount struct {
 	Kind             string    `json:"kind"`
 	Tier             string    `json:"tier,omitempty"`
 	RateLimitTier    string    `json:"rateLimitTier,omitempty"`
+	SeatTier         string    `json:"seatTier,omitempty"`
 	OrganizationUUID string    `json:"organizationUuid,omitempty"`
 	Disabled         bool      `json:"disabled,omitempty"`
 	Primary          bool      `json:"primary,omitempty"`
@@ -144,6 +145,7 @@ func newExportCmd() *cobra.Command {
 					Kind:             a.Kind.String(),
 					Tier:             a.Tier,
 					RateLimitTier:    a.RateLimitTier,
+					SeatTier:         a.SeatTier,
 					OrganizationUUID: a.OrganizationUUID,
 					Disabled:         a.Disabled,
 					Primary:          a.Primary,
