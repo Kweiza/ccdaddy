@@ -781,9 +781,14 @@ func TestCICitesDoesNotReportABinaryFile(t *testing.T) {
 
 // The three exclusions, which no test reached before and which are load-bearing
 // in production: each of those files has to contain the very strings this check
-// fails on. Measured, dropping `:!CONTRIBUTING.md` fails the real tree on four
-// of its own lines -- and left the whole suite green, because every fixture
-// repository is built fresh and has no CONTRIBUTING.md in it.
+// fails on. Dropping `:!CONTRIBUTING.md` fails the real tree on its own lines
+// and leaves the whole suite green, because every fixture repository is built
+// fresh and has no CONTRIBUTING.md in it.
+//
+// HOW MANY lines is not repeated here. It used to be, and the copy went stale
+// the first time the number was re-measured -- this comment still said four
+// while the pathspec's own comment in ci.sh had moved to nine. The count lives
+// beside `cites_paths`, which is the thing it is a fact about.
 //
 // So this fixture puts one there.
 func TestCICitesDoesNotFailTheDocumentThatStatesTheRule(t *testing.T) {
