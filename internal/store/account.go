@@ -86,8 +86,17 @@ type Account struct {
 	// is ranked beside the subscription accounts instead of waiting in the
 	// last-resort credit pool, and credit.max_auto_spend does not gate it,
 	// because a ceiling that defaults to 0 would mean the seat could never be
-	// used at all. Typing the command that sets this IS the second opt-in that
-	// ceiling otherwise supplies.
+	// used at all.
+	//
+	// `ccdad primary` sets it, and identity.PrimaryByDefault also sets it at add
+	// time for a seat whose PROFILE already says it has no plan-window
+	// entitlement. Typing the command is no longer the only opt-in, and the
+	// reason is in that predicate: the ceiling is an opt-in to spending PAST
+	// paid quota, and a seat with no quota has none to spend past. Adding such
+	// an account is the deliberate act, because nothing else about it is usable.
+	// Re-adding an account already in the store keeps whatever this field says
+	// rather than recomputing it, so an explicit `ccdad primary <acct> off` is
+	// not undone by a re-login; see Store.add.
 	Primary bool `toml:"primary,omitempty"`
 	// AddedAt is when ccdad first stored this account.
 	AddedAt time.Time `toml:"added_at"`
