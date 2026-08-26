@@ -1066,6 +1066,27 @@ func fakeClaude(t *testing.T, log string, exitCode int) []string {
 	return []string{"PATH=" + dir + ":/usr/bin:/bin", "HOME=" + t.TempDir()}
 }
 
+// A fake claude that refuses ONE subcommand and answers the rest normally, so a
+// test can ask whether the check reads THAT call's status. `fakeClaude` takes a
+// single code and fails everything, which cannot tell a check that reads every
+// status from one that reads only the first.
+//
+// failWhen is a shell `case` pattern matched against the whole argv.
+func fakeClaudeRefusing(t *testing.T, log, failWhen string) []string {
+	t.Helper()
+	dir := t.TempDir()
+	body := "#!/bin/sh\n" +
+		"printf '%s\\n' \"$*\" >>'" + log + "'\n" +
+		"if [ -n \"${CLAUDE_CONFIG_DIR:-}\" ]; then printf 'CFG %s\\n' \"$CLAUDE_CONFIG_DIR\" >>'" + log + "'; fi\n" +
+		"case \"$*\" in " + failWhen + ") exit 1 ;; esac\n" +
+		"case \"$1 $2\" in 'plugin details') echo 'MCP servers (1)  ccdad' ;; esac\n" +
+		"exit 0\n"
+	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return []string{"PATH=" + dir + ":/usr/bin:/bin", "HOME=" + t.TempDir()}
+}
+
 func TestCIPluginSkipsLoudlyWhenClaudeIsNotInstalled(t *testing.T) {
 	root, err := filepath.Abs("..")
 	if err != nil {
@@ -1133,6 +1154,39 @@ func TestCIPluginFailsWhenTheValidatorDoes(t *testing.T) {
 	out, code := runCIWithEnv(t, root, fakeClaude(t, log, 1), "plugin")
 	if code == 0 {
 		t.Fatalf("exit 0 with a validator that refused; the check swallows its own answer\n%s", out)
+	}
+}
+
+// Each `claude plugin validate` call's STATUS is read, and there are two of
+// them. `TestCIPluginValidatesBothTheMarketplaceAndThePluginDirectory` proves
+// only that both were INVOKED -- it reads the argv log -- and
+// TestCIPluginFailsWhenTheValidatorDoes uses a fake that refuses everything, so
+// a check that read the first status and dropped the second would pass both.
+// Measured: `|| true` on either validate line left the whole suite green.
+//
+// The second call is the guard for a mistyped source. A source naming a
+// directory that is not there passes the marketplace validate silently, with
+// nothing validated at all -- so the call whose status is easiest to lose is the
+// one that matters most.
+func TestCIPluginFailsWhenEitherValidateRefuses(t *testing.T) {
+	root, err := filepath.Abs("..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name     string
+		failWhen string
+	}{
+		{"the marketplace", "'plugin validate --strict .'"},
+		{"the plugin directory", "'plugin validate --strict plugins'"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			log := filepath.Join(t.TempDir(), "argv")
+			out, code := runCIWithEnv(t, root, fakeClaudeRefusing(t, log, tc.failWhen), "plugin")
+			if code != 1 {
+				t.Fatalf("exit %d, want 1 — the validator refused %s and the check went on\n%s", code, tc.name, out)
+			}
+		})
 	}
 }
 
@@ -1215,16 +1269,33 @@ func TestThePluginCheckInstallsIntoAThrowawayConfigDirectoryAndRemovesIt(t *test
 		t.Fatal(err)
 	}
 
-	var cfg string
+	// EVERY logged CLAUDE_CONFIG_DIR, not the first. This loop stopped at the
+	// first match, and the smoke leg makes three calls: measured, `claude plugin
+	// marketplace add` could lose its CLAUDE_CONFIG_DIR and run against the
+	// developer's REAL Claude Code while install and details still carried the
+	// throwaway, and this test stayed green. Not installing into somebody's own
+	// Claude Code is the entire reason this test exists.
+	//
+	// The fake logs a CFG line only when the variable is set, so a call that
+	// lost it shows up as a MISSING line rather than a wrong one -- which is why
+	// the count is asserted as well as the value.
+	var cfgs []string
 	for _, line := range strings.Split(string(recorded), "\n") {
 		if after, ok := strings.CutPrefix(line, "CFG "); ok {
-			cfg = after
-			break
+			cfgs = append(cfgs, after)
 		}
 	}
-	if cfg == "" {
-		t.Fatalf("the smoke leg ran with no CLAUDE_CONFIG_DIR, so it installed into whatever "+
-			"Claude Code the machine already has:\n%s", recorded)
+	const smokeCalls = 3 // marketplace add, install, details
+	if len(cfgs) != smokeCalls {
+		t.Fatalf("%d of the %d smoke invocations carried CLAUDE_CONFIG_DIR; one that does not "+
+			"runs against whatever Claude Code the machine already has:\n%s", len(cfgs), smokeCalls, recorded)
+	}
+	cfg := cfgs[0]
+	for _, other := range cfgs[1:] {
+		if other != cfg {
+			t.Fatalf("the smoke leg used more than one config directory (%q and %q); only the one "+
+				"the cleanup trap knows about gets removed:\n%s", cfg, other, recorded)
+		}
 	}
 	if strings.HasPrefix(cfg, root) {
 		t.Errorf("the throwaway config directory is inside the repository: %s", cfg)
