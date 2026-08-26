@@ -16,6 +16,32 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-08-26
+
+The release that puts `ccdad update` in users' hands, and the one that stops the
+terminal being plain.
+
+`ccdad update` finishes what 0.7.0 started. That release published a signature
+over every release's checksums and nothing consumed it, so the point of shipping
+one was still ahead of it: every upgrade in the field still meant re-running an
+installer that checks a checksum and no signature. This one consumes it, at the
+place it matters most — the command that overwrites the binary you are running.
+The order is the design. The signature is verified before the checksum file is
+read for anything, the staged binary is run once before it is renamed over the
+live one, and every answer ccdad does not like is a refusal rather than a
+replacement. There is no `--no-verify` and no `--insecure`, because a mirror
+that does not carry the signature and an attacker who removed it are the same
+bytes on the wire.
+
+The second thing is colour. Every page ccdad draws — the dashboard, `list`,
+`status`, `doctor`, `daemon status` — is painted from one palette and one glyph
+set rather than from nine inline decisions, and `tui.theme` and `tui.glyphs` are
+the two keys that say what that means on a given terminal. This one changes what
+every existing user sees on every command, which is why both keys are opt-outs by
+name and separately. Three things did not move: the layout, down to the column;
+the rule that colour is never the only thing carrying a distinction; and
+`--json`, which bypasses the colour writer everywhere it exists.
+
 ### Added
 
 - **`ccdad update` replaces this binary with the latest signed release.**
@@ -42,6 +68,34 @@ by `uuid` or `alias`.
   checksums the same attacker controls. The daemon is stopped first and started
   again from the new binary; inside a `ccdad run` session it is stopped and left
   stopped, and the next ccdad command in a normal shell brings it back.
+
+  **The exit code is the contract, and `--check`'s is the opposite of the
+  obvious guess.** `ccdad update --check` exits **0 when an update is
+  available** and **3 when this machine is already on the newest release** — 3
+  being "the world is already how you asked", the same code `ccdad daemon stop`
+  answers with nothing to stop, and what makes `ccdad update --check && ccdad
+  update` compose. A poller that reads any nonzero as broken will raise an
+  alarm about a machine that is simply up to date. Beyond those two: **4** is
+  every refusal ccdad *decided* on — each one named above, plus a signature
+  that does not verify, a signature made with another key or for another
+  release, a sums file whose shape or hash algorithm is wrong, a checksum row
+  that is missing or does not match, an asset whose size does not match, a
+  staged binary that would not run, and a downgrade nobody consented to. **1**
+  is everything ccdad *could not do*: a discovery that produced no tag, a
+  download that failed, a daemon that would not stop, a rename that failed. A
+  reason nobody listed takes 1, so a refusal added later reports "ccdad could
+  not do this" rather than accusing an origin.
+
+  `--json` writes that same answer as an object on stdout instead of the
+  sentences: `schemaVersion` 1, `currentVersion` and `updated` always, `reason`
+  on anything but success, and `tag`, `targetVersion`, `resolvedLatest`,
+  `updateAvailable`, `path`, `installDir`, `onPath` and `daemonRestarted` where
+  the run got far enough for each to mean something — absent rather than false
+  where it did not, which is the rule `unnamableWeeklyCaps` and `hover` already
+  follow. It changes the representation and never the answer: the exit code is
+  identical with and without it, the human words are suppressed rather than
+  printed beside the payload, and every progress line goes to stderr, so stdout
+  carries the object and nothing else.
 - **Two more keys for what the terminal output looks like, `tui.theme` and
   `tui.glyphs`.** They join `mcp_switch_without_elicitation` as keys that
   govern a surface rather than the engine, and hover honours both rather than
@@ -1650,7 +1704,8 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/Kweiza/ccdaddy/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/Kweiza/ccdaddy/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/Kweiza/ccdaddy/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/Kweiza/ccdaddy/compare/v0.5.0...v0.6.0
