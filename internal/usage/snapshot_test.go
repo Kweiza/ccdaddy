@@ -1066,3 +1066,180 @@ func TestALiveEnterpriseReadingSurvivesTheKeysThisBuildDoesNotRead(t *testing.T)
 			fullPct, full.ExtraUsage.State, trimmedPct, trimmed.ExtraUsage.State)
 	}
 }
+
+// liveMaxUsageOverageOff is the CONTROL for liveEnterpriseUsage: a VERBATIM
+// /api/oauth/usage body from a claude_max seat (rate_limit_tier
+// default_claude_max_20x, seat_tier null), read on 2026-08-26. The usage
+// response carries no account identifier, so there is nothing in it to scrub.
+//
+// Until this landed, every wire recording in this repository was an enterprise
+// seat from a single organization, which meant no shape here could be told
+// apart from "what that one org happens to send". Read it against
+// liveEnterpriseUsage rather than on its own -- the pair is the evidence, not
+// either body.
+//
+// WHAT THE PAIR PROVES, and it is mostly negative. can_toggle and
+// can_purchase_credits are false on BOTH, so neither distinguishes a
+// money-metered seat from a plan seat. The only structural difference is the
+// one this package already keys on: this body HAS plan windows and the
+// enterprise one has none.
+//
+// Overage is off here, and off in a specific way worth keeping: user_disabled
+// is true with disabled_reason null -- the wire saying the holder turned it
+// off, not that the seat may not have it. decimal_places is null while
+// spend.used still carries {currency USD, exponent 2}, which is the wire
+// stating this account's exponent even with the meter dark. majorUnits does not
+// read either field yet; see zeroDecimalCurrencies.
+const liveMaxUsageOverageOff = `{"five_hour": {"utilization": 0.0, "resets_at": "2026-08-26T22:39:59.713388+00:00",` +
+	` "limit_dollars": null, "used_dollars": null, "remaining_dollars": null}, "seven_day":` +
+	` {"utilization": 100.0, "resets_at": "2026-08-29T18:59:59.713410+00:00", "limit_dollars":` +
+	` null, "used_dollars": null, "remaining_dollars": null}, "seven_day_oauth_apps": null,` +
+	` "seven_day_opus": null, "seven_day_sonnet": null, "seven_day_cowork": null,` +
+	` "seven_day_omelette": null, "tangelo": null, "iguana_necktie": null, "omelette_promotional":` +
+	` null, "nimbus_quill": {"utilization": 0.0, "resets_at": null, "limit_dollars": null,` +
+	` "used_dollars": null, "remaining_dollars": null}, "cinder_cove": null, "amber_ladder": null,` +
+	` "extra_usage": {"is_enabled": false, "monthly_limit": null, "used_credits": null,` +
+	` "utilization": null, "currency": null, "decimal_places": null, "disabled_reason": null,` +
+	` "user_disabled": true, "spend_limit_reached": false, "credits_ever_enabled": true, "daily":` +
+	` null, "weekly": null}, "limits": [{"kind": "session", "group": "session", "percent": 0,` +
+	` "severity": "normal", "resets_at": "2026-08-26T22:39:59.713388+00:00", "scope": null,` +
+	` "is_active": false}, {"kind": "weekly_all", "group": "weekly", "percent": 100, "severity":` +
+	` "critical", "resets_at": "2026-08-29T18:59:59.713410+00:00", "scope": null, "is_active":` +
+	` true}, {"kind": "weekly_scoped", "group": "weekly", "percent": 10, "severity": "normal",` +
+	` "resets_at": "2026-08-29T18:59:59.713688+00:00", "scope": {"model": {"id": null,` +
+	` "display_name": "Fable"}, "surface": null}, "is_active": false}], "spend": {"used":` +
+	` {"amount_minor": 0, "currency": "USD", "exponent": 2}, "limit": null, "percent": 0,` +
+	` "severity": "normal", "enabled": false, "disabled_reason": null, "cap": null, "balance":` +
+	` null, "auto_reload": null, "disclaimer": "Usage credits cover you when you hit your plan` +
+	` limits. [Learn more](https://support.claude.com/articles/12429409)", "can_purchase_credits":` +
+	` false, "can_toggle": false}, "member_dashboard_available": false}`
+
+// liveMaxUsageBlocked is the SAME seat minutes later, with overage switched on
+// by the account holder. Same organization, same plan, same rate_limit_tier:
+// the only thing that moved is the meter, which makes this a controlled
+// before/after rather than two accounts that differ in unknown ways.
+//
+// It is the first LIVE body this repository has for the Blocked branch.
+// is_enabled is false while disabled_reason is out_of_credits, and
+// out_of_credits is one of the three transientOverageRefusals, so this parses
+// as ExtraUsageBlocked -- a state that until now only synthetic fixtures ever
+// reached.
+//
+// READ THE TWO EXHAUSTION AXES APART. spend_limit_reached is false and
+// utilization is 77.85 at the same moment the meter is refused for want of
+// credits. The monthly cap and the credit balance are different things and only
+// one of them ran out; spend.balance is null, so the wire does not say what the
+// other one holds. Anything that collapses these into a single "exhausted"
+// boolean gets this account wrong in whichever direction it collapses them.
+//
+// The profile endpoint disagrees with this body, which is its own warning:
+// organization.has_extra_usage_enabled is TRUE here while extra_usage.is_enabled
+// is false. profile reports the setting, usage reports the effect.
+const liveMaxUsageBlocked = `{"five_hour": {"utilization": 0.0, "resets_at": "2026-08-26T22:40:00.130893+00:00",` +
+	` "limit_dollars": null, "used_dollars": null, "remaining_dollars": null}, "seven_day":` +
+	` {"utilization": 100.0, "resets_at": "2026-08-29T19:00:00.130929+00:00", "limit_dollars":` +
+	` null, "used_dollars": null, "remaining_dollars": null}, "seven_day_oauth_apps": null,` +
+	` "seven_day_opus": null, "seven_day_sonnet": null, "seven_day_cowork": null,` +
+	` "seven_day_omelette": null, "tangelo": null, "iguana_necktie": null, "omelette_promotional":` +
+	` null, "nimbus_quill": {"utilization": 0.0, "resets_at": null, "limit_dollars": null,` +
+	` "used_dollars": null, "remaining_dollars": null}, "cinder_cove": null, "amber_ladder": null,` +
+	` "extra_usage": {"is_enabled": false, "monthly_limit": 2000, "used_credits": 1557.0,` +
+	` "utilization": 77.85, "currency": "USD", "decimal_places": 2, "disabled_reason":` +
+	` "out_of_credits", "user_disabled": false, "spend_limit_reached": false,` +
+	` "credits_ever_enabled": true, "daily": null, "weekly": null}, "limits": [{"kind": "session",` +
+	` "group": "session", "percent": 0, "severity": "normal", "resets_at":` +
+	` "2026-08-26T22:40:00.130893+00:00", "scope": null, "is_active": false}, {"kind":` +
+	` "weekly_all", "group": "weekly", "percent": 100, "severity": "critical", "resets_at":` +
+	` "2026-08-29T19:00:00.130929+00:00", "scope": null, "is_active": true}, {"kind":` +
+	` "weekly_scoped", "group": "weekly", "percent": 10, "severity": "normal", "resets_at":` +
+	` "2026-08-29T19:00:00.131221+00:00", "scope": {"model": {"id": null, "display_name":` +
+	` "Fable"}, "surface": null}, "is_active": false}], "spend": {"used": {"amount_minor": 1557,` +
+	` "currency": "USD", "exponent": 2}, "limit": {"amount_minor": 2000, "currency": "USD",` +
+	` "exponent": 2}, "percent": 78, "severity": "warning", "enabled": false, "disabled_reason":` +
+	` "out_of_credits", "cap": {"money": null, "credits": {"amount_minor": 2000, "exponent": 2}},` +
+	` "balance": null, "auto_reload": null, "disclaimer": "Usage credits cover you when you hit` +
+	` your plan limits. [Learn more](https://support.claude.com/articles/12429409)",` +
+	` "can_purchase_credits": false, "can_toggle": false}, "member_dashboard_available": false}`
+
+// TestTheLiveMaxReadingIsTheControlTheEnterpriseReadingLacked is the pair, pinned.
+//
+// The load-bearing assertion is the FIRST one. A plan seat must come out of
+// here with subscription windows, because that single answer is what routes it
+// away from the credit axis in identity.Classify and in
+// strategy.HeadroomOrCredit -- the same answer liveEnterpriseUsage must give in
+// the opposite direction. One body cannot test a discriminator; two can.
+func TestTheLiveMaxReadingIsTheControlTheEnterpriseReadingLacked(t *testing.T) {
+	max, err := Parse([]byte(liveMaxUsageOverageOff))
+	if err != nil {
+		t.Fatalf("Parse() on a live max body: %v", err)
+	}
+	ent, err := Parse([]byte(liveEnterpriseUsage))
+	if err != nil {
+		t.Fatalf("Parse() on the live enterprise body: %v", err)
+	}
+
+	if !max.HasSubscriptionWindows() {
+		t.Error("HasSubscriptionWindows() = false on a max seat whose five_hour and seven_day are both populated")
+	}
+	if ent.HasSubscriptionWindows() {
+		t.Error("HasSubscriptionWindows() = true on the enterprise seat — the contrast this pair exists for is gone")
+	}
+	if got := len(max.ScopedWindows()); got == 0 {
+		t.Error("ScopedWindows() = 0 — this body's limits[] carries a weekly_scoped entry")
+	}
+
+	e := max.ExtraUsage
+	if e.State != ExtraUsageDisabled {
+		t.Fatalf("ExtraUsage.State = %v, want %v — is_enabled false with no refusal reason", e.State, ExtraUsageDisabled)
+	}
+	if _, ok := e.MonthlyLimit(); ok {
+		t.Error("MonthlyLimit() reported a cap; monthly_limit is null on a seat with the meter off")
+	}
+	if _, ok := e.UsedCredits(); ok {
+		t.Error("UsedCredits() reported a spend; used_credits is null here")
+	}
+	// currency is null on the wire and CurrencyCode defaults it, exactly as
+	// Claude Code's own `tse.currency ?? "USD"` does. Asserted so that a future
+	// build reading decimal_places instead cannot quietly change what an
+	// unreported currency means.
+	if got := e.CurrencyCode(); got != "USD" {
+		t.Errorf("CurrencyCode() = %q, want USD by default — currency is null in this body", got)
+	}
+}
+
+// TestTheLiveMaxReadingBlocksRatherThanDisablesWhenOutOfCredits is the branch
+// that had never seen a real response.
+func TestTheLiveMaxReadingBlocksRatherThanDisablesWhenOutOfCredits(t *testing.T) {
+	s, err := Parse([]byte(liveMaxUsageBlocked))
+	if err != nil {
+		t.Fatalf("Parse() on the live blocked body: %v", err)
+	}
+
+	e := s.ExtraUsage
+	if e.State != ExtraUsageBlocked {
+		t.Fatalf("ExtraUsage.State = %v, want %v — out_of_credits is a refusal, not a switch left off",
+			e.State, ExtraUsageBlocked)
+	}
+	if e.DisabledReason != "out_of_credits" {
+		t.Errorf("DisabledReason = %q, want out_of_credits kept verbatim", e.DisabledReason)
+	}
+	// The refusal is NOT the cap being reached. Both figures are readable and
+	// the account is at 78% of a limit it has not hit.
+	if limit, ok := e.MonthlyLimit(); !ok || limit != 20 {
+		t.Errorf("MonthlyLimit() = %v, %v; want 20 — 2000 minor units of a two-decimal currency", limit, ok)
+	}
+	if used, ok := e.UsedCredits(); !ok || used != 15.57 {
+		t.Errorf("UsedCredits() = %v, %v; want 15.57", used, ok)
+	}
+	if pct, ok := e.Percent(); !ok || math.Abs(pct-77.85) > 1e-9 {
+		t.Errorf("Percent() = %v, %v; want 77.85 — a refused meter is not a full one", pct, ok)
+	}
+	if e.CurrencyCode() != "USD" {
+		t.Errorf("CurrencyCode() = %q, want USD", e.CurrencyCode())
+	}
+	// The plan windows are untouched by the meter's state: this seat still has
+	// its subscription entitlement while its overage is refused.
+	if !s.HasSubscriptionWindows() {
+		t.Error("HasSubscriptionWindows() = false — turning overage on did not take the plan away")
+	}
+}
