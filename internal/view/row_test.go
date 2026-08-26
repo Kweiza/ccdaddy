@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/config"
+	"github.com/Kweiza/ccdaddy/internal/identity"
+	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
@@ -132,5 +134,59 @@ func TestACreditAccountsLeftLabelReadsTheCreditAxisRatherThanUnreadable(t *testi
 	}
 	if got := r.LeftLabel(); !strings.Contains(got, "74.50") {
 		t.Errorf("LeftLabel() = %q, want the remaining amount", got)
+	}
+}
+
+// creditOnlyRow is an account metered in money and nothing else, built through
+// the same constructor `status` and `list` use so the wiring is under test and
+// not only the formatting. The numbers are a live claude_enterprise seat read
+// on 2026-08-26, in the minor units the wire carries.
+func creditOnlyRow(t *testing.T, utilization float64) Row {
+	t.Helper()
+	u, limit, used := utilization, 200000.0, 120451.0
+	snap := &usage.Snapshot{ExtraUsage: usage.ExtraUsageFor(usage.ExtraUsageInput{
+		State:        usage.ExtraUsageEnabled,
+		Currency:     "USD",
+		MonthlyLimit: &limit,
+		UsedCredits:  &used,
+		Utilization:  &u,
+	})}
+	cache := &usage.Cache{}
+	cache.Put("u-1", usage.Entry{Snapshot: snap, FetchedAt: time.Now()})
+	acct := store.Account{UUID: "u-1", Kind: identity.KindCredit, Primary: true}
+	rows := Rows([]store.Account{acct}, cache, acct, true, time.Now(),
+		func(string) strategy.Thresholds { return strategy.Thresholds{} })
+	if len(rows) != 1 {
+		t.Fatalf("Rows() returned %d rows, want 1", len(rows))
+	}
+	return rows[0]
+}
+
+// TestASeatMeteredOnlyInMoneyStillReportsHowMuchItHasUsed is the display half
+// of the enterprise seat.
+//
+// Rows() derived every row's headroom from the window-only axis, so a seat with
+// no plan window rendered "?" in the USED column of `status`, of `list` and of
+// the TUI — while the engine, which reassigns exactly this seat onto the credit
+// axis, was ranking it on a real percentage. The dashboard has to describe the
+// meter the account actually runs on.
+func TestASeatMeteredOnlyInMoneyStillReportsHowMuchItHasUsed(t *testing.T) {
+	r := creditOnlyRow(t, 60.2255)
+	if !r.Headroom.Known {
+		t.Fatal("Headroom.Known = false — Rows() is still reading the window-only axis")
+	}
+	if got := r.UsedLabel(); got != "60%" {
+		t.Errorf("UsedLabel() = %q, want %q — the seat has spent 60%% of its balance", got, "60%")
+	}
+}
+
+// TestASeatMeteredOnlyInMoneyNamesNoWindow is the guard on the test above. The
+// credit axis is not a window: it has no reset and no rollover, and naming one
+// would send the WINDOW and RESETS IN columns looking for a recovery that never
+// comes.
+func TestASeatMeteredOnlyInMoneyNamesNoWindow(t *testing.T) {
+	r := creditOnlyRow(t, 60.2255)
+	if got := r.WindowLabel(); got != NoQuantity {
+		t.Errorf("WindowLabel() = %q, want %q — extra_usage is a balance, not a window", got, NoQuantity)
 	}
 }

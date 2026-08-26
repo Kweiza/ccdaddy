@@ -67,7 +67,10 @@ func Rows(accounts []store.Account, cache *usage.Cache, active store.Account,
 		row := Row{Account: a, Active: hasActive && a.UUID == active.UUID}
 		if entry, ok := cache.Get(a.UUID); ok && entry.Snapshot != nil {
 			row.Entry, row.HasEntry = entry, true
-			row.Headroom = strategy.HeadroomOf(entry.Snapshot, thresholds(a.UUID))
+			// HeadroomOrCredit, not HeadroomOf: a seat metered only in money
+			// carries no plan window, and the window-only axis reported it
+			// unknown while the engine ranked it on its balance.
+			row.Headroom = strategy.HeadroomOrCredit(entry.Snapshot, thresholds(a.UUID))
 			row.Pace = entry.Snapshot.Pace(now)
 		}
 		rows = append(rows, row)
@@ -196,6 +199,15 @@ func (r Row) Marker() string {
 func (r Row) UsedLabel() string {
 	bw, ok := r.Reported()
 	if !ok {
+		// The credit axis is the one absence here that is not an absence. It
+		// binds on extra_usage, which AllWindows deliberately does not carry,
+		// so Reported() answers false for a reading that is perfectly well
+		// known. Headroom.Pct is what is LEFT on it, so the spent share is its
+		// complement -- the same arithmetic the window branch below performs,
+		// on the meter this account actually runs on.
+		if r.HasEntry && r.Headroom.OnCreditAxis() {
+			return fmt.Sprintf("%.0f%%", 100-r.Headroom.Pct)
+		}
 		return Unreadable
 	}
 	pct, ok := bw.Percent()

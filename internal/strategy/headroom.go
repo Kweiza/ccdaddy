@@ -504,6 +504,19 @@ func recoveryOf(s *usage.Snapshot, clears usage.WindowName) timeValue {
 	return timeValue{at: at, ok: ok}
 }
 
+// OnCreditAxis reports whether this headroom was measured against a credit
+// balance rather than a plan window.
+//
+// A caller needs it because the two are not interchangeable downstream: the
+// credit axis has no reset, no rollover and no entry in Snapshot.AllWindows, so
+// anything that resolves the binding name to a window finds nothing and has to
+// know whether that absence is "unreadable" or "there is no window here by
+// construction". The comparison lives here so the literal extra_usage is
+// spelled in one place.
+func (h Headroom) OnCreditAxis() bool {
+	return h.Known && h.Binding == creditWindow
+}
+
 // HeadroomOrCredit is the headroom to SHOW for an account: its binding plan
 // window when it has one, and its credit allowance when it has none.
 //
