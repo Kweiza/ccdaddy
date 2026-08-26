@@ -484,7 +484,7 @@ func TestTheKeySetIsClosed(t *testing.T) {
 	want := []string{
 		"threshold", "hysteresis_pct", "headroom_ratio",
 		"cooldown", "recovery_hysteresis", "preempt_lead", "strategy",
-		"probe_unknown", "hover", "mcp_switch_without_elicitation",
+		"probe_unknown", "hover", "mcp_switch_without_elicitation", "update_check",
 		"credit.threshold", "credit.max_auto_spend",
 		"tui.theme", "tui.glyphs",
 	}
@@ -498,12 +498,12 @@ func TestTheKeySetIsClosed(t *testing.T) {
 		}
 	}
 
-	// The two keys this package exports by name for another package to print.
+	// The three keys this package exports by name for another package to print.
 	// An exported constant that drifted from the namespace would have the
 	// printing package naming a key `ccdad config set` then refuses, and the
 	// caller's own assertion could not see it: it compares the constant with
 	// itself.
-	for _, exported := range []string{KeyHover, KeyMCPSwitchWithoutElicitation} {
+	for _, exported := range []string{KeyHover, KeyMCPSwitchWithoutElicitation, KeyUpdateCheck} {
 		if !slices.Contains(Keys(), exported) {
 			t.Errorf("the exported key %q is not in the settable namespace: %v", exported, Keys())
 		}
@@ -814,5 +814,29 @@ func TestANilWindowThresholdEqualsAnEmptyOne(t *testing.T) {
 	empty.WindowThreshold = map[usage.WindowName]float64{}
 	if !Defaults().Equal(empty) {
 		t.Error("Equal() separated a nil window table from an empty one; both mean every window uses `threshold`")
+	}
+}
+
+// update_check is the only key in ccdad that governs a network call to a host
+// other than api.anthropic.com, so its default and its off switch are both
+// worth pinning: an air-gapped or egress-filtered machine has to be able to say
+// "stop asking", and every other machine has to get the check without asking
+// for it.
+func TestTheUpdateCheckKeyDefaultsToOnAndCanBeSwitchedOff(t *testing.T) {
+	if !Defaults().UpdateCheck {
+		t.Error("Defaults().UpdateCheck = false; a user who has never edited the file would never hear that a release shipped")
+	}
+	cfg, err := Parse([]byte("update_check = false\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.UpdateCheck {
+		t.Error("update_check = false did not reach the config; the one key that stops an egress-filtered machine calling out does nothing")
+	}
+	// Hover derives thresholds. This is not one: it is whether the daemon may
+	// make a request at all, and a mode that supplied it would be deciding on
+	// the user's behalf that fully automatic also means fully connected.
+	if HoverOverrides(keyUpdateCheck) {
+		t.Error("hover overrides update_check; a ranking policy must not switch a network call back on")
 	}
 }

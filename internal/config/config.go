@@ -103,6 +103,15 @@ type Config struct {
 	//
 	// It defaults to false, which refuses.
 	MCPSwitchWithoutElicitation bool
+	// UpdateCheck is whether the daemon may ask, once a day, what the newest
+	// released ccdad is.
+	//
+	// It is the only field here behind which there is a request to a host other
+	// than api.anthropic.com, and it defaults to TRUE: a user who never edits
+	// this file would otherwise never hear that a fix shipped. The daemon
+	// publishes what it saw and never a verdict, so this key switches off a
+	// request rather than a recommendation.
+	UpdateCheck bool
 	// TUITheme is which palette ccdad's own screens paint with, held as a
 	// STRING rather than as the palette package's own type.
 	//
@@ -146,6 +155,7 @@ func (c Config) Equal(o Config) bool {
 		c.ProbeUnknown == o.ProbeUnknown &&
 		c.Hover == o.Hover &&
 		c.MCPSwitchWithoutElicitation == o.MCPSwitchWithoutElicitation &&
+		c.UpdateCheck == o.UpdateCheck &&
 		c.TUITheme == o.TUITheme &&
 		c.TUIGlyphs == o.TUIGlyphs &&
 		maps.Equal(c.WindowThreshold, o.WindowThreshold)
@@ -260,6 +270,11 @@ type fileShape struct {
 	// permission back rather than never having granted it.
 	MCPSwitchWithoutElicitation *bool `toml:"mcp_switch_without_elicitation"`
 
+	// A pointer for the reason every key here is one: absence has to be
+	// distinguishable from an explicit false, which is a person switching the
+	// daily release check off rather than never having had it on.
+	UpdateCheck *bool `toml:"update_check"`
+
 	WindowThreshold map[string]float64 `toml:"window_threshold"`
 	Credit          *creditFile        `toml:"credit"`
 
@@ -325,6 +340,7 @@ func Parse(raw []byte) (Config, error) {
 	applyBool(&cfg.ProbeUnknown, f.ProbeUnknown)
 	applyBool(&cfg.Hover, f.Hover)
 	applyBool(&cfg.MCPSwitchWithoutElicitation, f.MCPSwitchWithoutElicitation)
+	applyBool(&cfg.UpdateCheck, f.UpdateCheck)
 	if err := applyWindowThresholds(&cfg, f.WindowThreshold); err != nil {
 		return Config{}, err
 	}
