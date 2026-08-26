@@ -307,6 +307,12 @@ func TestTheFoldIsClosedWhenACheckFails(t *testing.T) {
 // The same, for a check whose failure arrives from git rather than from a tool
 // with something to say. Without this, closing the fold could be wired into the
 // gofmt path alone and every other leg would keep the bug.
+//
+// What it does NOT hold, stated because measuring found it out: counting alone
+// is satisfied by any ONE of the three paths that close a fold, so this test
+// goes red only if all three go at once. The ordering assertion in the test
+// above is the one with teeth, and TestTheExitTrapClosesAnOpenFold is what
+// holds the backstop no fixture can reach.
 func TestTheFoldIsClosedWhenGitRefuses(t *testing.T) {
 	root := scriptTree(t, map[string]string{"internal/x/x.go": "package x\n"})
 
@@ -404,11 +410,22 @@ func TestCICitesAllowsASectionWrittenBeforeItsRFC(t *testing.T) {
 }
 
 // A RANGE, and the reason it is here is portability rather than English. The
-// section symbol is two bytes, so `\u00a7+` reads as one \302 followed by
+// section symbol is two bytes, so `§+` reads as one \302 followed by
 // repeated \247 on a byte-oriented engine and matches only the first half of
-// `\u00a7\u00a7`. That is the same trap the two `\b` notes in ci.sh record: the
+// `§§`. That is the same trap the two `\b` notes in ci.sh record: the
 // arm fails on one platform while every test expecting a MISS still misses. An
 // alternation of two literals is what this rules in.
+// It is run TWICE, and the second run is the one with teeth. Under a UTF-8
+// locale GNU sed reads § as one character, so `§+` matches `§§` perfectly well
+// and this fixture passes with the quantifier in place -- measured: swapping
+// the alternation back to `§+` leaves the whole suite green under en_US.UTF-8
+// and reddens this test under LC_ALL=C. A fixture that only ever ran in the
+// developer's locale would pin nothing, which is the same shape as the macOS
+// `\b` trap two comments in ci.sh already record: right on the leg you look at,
+// silently off on the other.
+//
+// LC_ALL=C is the byte-oriented engine made reachable from any machine, so the
+// portability claim is checked rather than asserted.
 func TestCICitesAllowsAnRFCSectionRange(t *testing.T) {
 	root := throwawayRepo(t, map[string]string{
 		"internal/x/x.go": "package x\n\n// Both apply: RFC 6749 \u00a7\u00a76 and 7.\nfunc X() {}\n",
@@ -418,11 +435,17 @@ func TestCICitesAllowsAnRFCSectionRange(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d, want 0 — a range is one citation written once\n%s", code, out)
 	}
+
+	out, code = runCIWithEnv(t, root, append(os.Environ(), "LC_ALL=C"), "cites")
+	if code != 0 {
+		t.Fatalf("exit %d, want 0 under LC_ALL=C — the section symbol is two bytes there, and a "+
+			"quantifier binds only the second of them\n%s", code, out)
+	}
 }
 
 // THE OTHER DIRECTION, and it is the one the old comment called a deliberate
 // trade. The drop was per-LINE and ran after the whole spelled arm, so `RFC <n>
-// \u00a7` anywhere on a line exempted that line from ALL THREE literals. Either
+// §` anywhere on a line exempted that line from ALL THREE literals. Either
 // half of this fixture alone fails; together they used to pass.
 //
 // This is what rules out the shape the fix is easy to get wrong: an exemption
@@ -454,16 +477,24 @@ func TestCICitesDoesNotLetAnRFCCitationLaunderANamedWorkItem(t *testing.T) {
 }
 
 // The exemption validates a SHAPE, and this is the edge where a shape stops
-// being a citation. `RFC 9999 \u00a7 anything at all` has a section symbol
+// being a citation. `RFC 9999 § anything at all` has a section symbol
 // introducing prose rather than a section, and accepting it would make the
-// exemption a way of writing `\u00a7` wherever you like.
+// exemption a way of writing `§` wherever you like.
+//
+// ONE section symbol on the line, and that is the whole design of this fixture.
+// It read `RFC 9999 § anything at all, even §7.2 of the internal design doc.`
+// first and it was BLIND: widening the accepted section body to anything still
+// left the trailing `§7.2` on the line, so the check exited 1 either way and
+// the assertion could not tell which symbol it was failing on. Measured --
+// that mutation left the whole suite green. With the clause alone the line
+// flips from 1 to 0 the moment the digit requirement goes.
 //
 // The RFC number itself is deliberately not checked for existence -- 9999 is
 // unassigned and still exempt when it introduces a numbered section -- because
 // whether a number was ever issued is not a question a grep can ask.
 func TestCICitesRefusesASectionSymbolThatIntroducesNoSection(t *testing.T) {
 	root := throwawayRepo(t, map[string]string{
-		"internal/x/x.go": "package x\n\n// RFC 9999 \u00a7 anything at all, even \u00a77.2 of the internal design doc.\nfunc X() {}\n",
+		"internal/x/x.go": "package x\n\n// RFC 9999 \u00a7 anything at all.\nfunc X() {}\n",
 	})
 
 	out, code := runCI(t, root, "cites")
@@ -497,14 +528,22 @@ func TestCICitesSearchesAFileWithNoExtension(t *testing.T) {
 
 // A BINARY file, and this is what makes the widened pathspec safe rather than
 // merely wider. `git grep` prints `Binary file X matches` for one -- a line with
-// no `file:line:` prefix and no offending text -- and the spelled arm piped that
-// straight into its findings, so the gate failed on assets/ccdaddy.png with a
-// message nobody could act on. `-I` is the fix; excluding the one path would
-// have worked until the next image.
+// no `file:line:` prefix and no offending text -- and the gate failed on
+// assets/ccdaddy.png with a message nobody could act on. `-I` is the fix;
+// excluding the one path would have worked until the next image.
+//
+// THE NAME MATTERS AND THE FIXTURE IS BUILT AROUND IT. An earlier version of
+// this test used `assets/logo.png` and was blind: the spelled arm re-tests each
+// line after subtracting the accepted citations, and `Binary file
+// assets/logo.png matches` carries no `§`, no "the brief" and no "task n", so
+// it is dropped there whether `-I` is passed or not. The notice quotes the
+// PATH, so a path that carries a literal is what puts it back in scope --
+// measured, this fixture exits 1 with the notice as its only finding when `-I`
+// is removed, and 0 with it.
 func TestCICitesDoesNotReportABinaryFile(t *testing.T) {
 	root := throwawayRepo(t, map[string]string{
-		"assets/logo.png": "PNG\x00\x00\u00a7 7.2 the brief task 47\x00",
-		"internal/x/x.go": "package x\n",
+		"assets/task 47 diagram.png": "PNG\x00\x00\u00a7 7.2\x00",
+		"internal/x/x.go":            "package x\n",
 	})
 
 	out, code := runCI(t, root, "cites")
@@ -1231,5 +1270,42 @@ func TestTheScriptInstallsExactlyOneExitTrap(t *testing.T) {
 		t.Errorf("ci.sh installs %d EXIT traps (%v); a second one replaces the first rather than "+
 			"chaining, so whatever the first cleaned up stops being cleaned up. Add an arm to "+
 			"cleanup instead.", len(traps), traps)
+	}
+}
+
+// The EXIT trap closes a fold that is still open, and this is a TEXT assertion
+// for the same reason the one above is: no behavioural test in this file can
+// reach it.
+//
+// That is measured rather than assumed. Deleting `endgroup` from cleanup leaves
+// the whole suite green, and so does deleting it from `run` — both of the
+// general backstops can be removed at once and nothing notices. What the two
+// fold tests actually hold is the INLINE close each check does for itself:
+// TestTheFoldIsClosedWhenACheckFails bites through its ordering assertion, which
+// only check_fmt's own `endgroup` satisfies, and its counting half is satisfied
+// by any one of the three paths.
+//
+// The backstop is for what no fixture produces: a signal, and a `return` added
+// inside a fold by a check nobody has written yet. A guard for the unwritten
+// case cannot have a fixture, so it gets this instead of a comment asking to be
+// left alone.
+func TestTheExitTrapClosesAnOpenFold(t *testing.T) {
+	root, err := filepath.Abs("..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(root, "scripts", "ci.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, ok := betweenOnce(string(raw), "cleanup() {\n", "\n}\n")
+	if !ok {
+		t.Fatal("cleanup() is not where this test expects it; re-locate it by content")
+	}
+	if !strings.Contains(body, "endgroup") {
+		t.Errorf("cleanup() does not close an open fold, so a check that dies inside one — from a "+
+			"signal, or from a `return` a future check adds — leaves ::group:: open and "+
+			"everything after it swallowed. Nothing else in this file catches that; the fold "+
+			"tests are satisfied by the inline closes.\ncleanup() is:\n%s", body)
 	}
 }
