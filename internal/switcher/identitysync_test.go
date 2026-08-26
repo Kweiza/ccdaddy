@@ -212,3 +212,63 @@ func TestExecuteLeavesOAuthAccountAloneWhenAlreadyCorrect(t *testing.T) {
 		t.Fatalf("an already-correct oauthAccount was rewritten:\nbefore: %s\nafter:  %s", before, after)
 	}
 }
+
+// Claude Code decides which model tier a session defaults to with
+// `Zu(){return Xe()==="enterprise"&&dO()==="enterprise_usage_based"}`, and the
+// seat half of that reads ~/.claude.json rather than the credentials file:
+// `dO(){return Dn()?.seatTier??null}` over `Dn(){return Zt()?k().oauthAccount:void 0}`
+// (2.1.246). claudeAiOauth has no seatTier key at all, so the ONLY place a
+// switch can put one is the oauthAccount object it already rewrites. Leaving it
+// out drops a money-metered enterprise seat out of the Opus tier `cE()` grants
+// alongside max and team-5x, until Claude Code's own next token refresh happens
+// to repair the field on its way past.
+func TestExecuteCarriesSeatTierIntoOAuthAccount(t *testing.T) {
+	isolate(t)
+	seed(t, "u-1", "one@example.com")
+	two := seedSeat(t, "u-2", "two@example.com", "enterprise_usage_based")
+	liveAs(t, "u-1")
+	writeGlobalConfig(t, `{"oauthAccount":{"accountUuid":"u-1","emailAddress":"one@example.com"}}`)
+
+	res, err := Execute(openStore(t), Request{Target: two, LiveUUID: "u-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Outcome != Switched {
+		t.Fatalf("outcome = %v, want %v", res.Outcome, Switched)
+	}
+
+	got := readOAuthAccount(t)
+	if got["seatTier"] != "enterprise_usage_based" {
+		t.Fatalf("oauthAccount.seatTier = %v, want enterprise_usage_based: %v", got["seatTier"], got)
+	}
+	// Writing the seat must not drag in the four fields whose combined
+	// presence makes Claude Code's refresh handler skip re-fetching the
+	// profile. seatTier is deliberately not one of them -- 2.1.246 gates that
+	// skip on billingType, accountCreatedAt, subscriptionCreatedAt and
+	// ccOnboardingFlags only.
+	if _, ok := got["billingType"]; ok {
+		t.Fatalf("writing seatTier also completed the profile Claude Code must re-fetch: %v", got)
+	}
+}
+
+// A pro or max seat answers seat_tier null on the wire -- measured on two live
+// max accounts, 2026-08-26 -- so ccdad holds the empty string for one. Writing
+// `"seatTier":""` would be ccdad asserting a seat tier nobody reported, and
+// Claude Code compares that value against a literal; the key must simply be
+// absent, which is what its own `??null` already reads as unknown.
+func TestExecuteOmitsSeatTierForASeatThatHasNone(t *testing.T) {
+	isolate(t)
+	seed(t, "u-1", "one@example.com")
+	two := seed(t, "u-2", "two@example.com")
+	liveAs(t, "u-1")
+	writeGlobalConfig(t, `{"oauthAccount":{"accountUuid":"u-1","emailAddress":"one@example.com"}}`)
+
+	if _, err := Execute(openStore(t), Request{Target: two, LiveUUID: "u-1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	got := readOAuthAccount(t)
+	if v, ok := got["seatTier"]; ok {
+		t.Fatalf("oauthAccount carries seatTier = %v for a seat that reported none: %v", v, got)
+	}
+}

@@ -514,8 +514,14 @@ func SyncGlobalConfigIdentity(s *store.Store, target, previousLive store.Account
 		if target.OAuthAccountSnapshot != "" {
 			return cclink.RestoreOAuthAccountSnapshot(g, json.RawMessage(target.OAuthAccountSnapshot))
 		}
-		return cclink.ResetOAuthAccountIdentity(g, target.UUID, target.Email,
-			target.OrganizationUUID, target.Tier, target.RateLimitTier)
+		return cclink.ResetOAuthAccountIdentity(g, cclink.AccountIdentity{
+			UUID:             target.UUID,
+			Email:            target.Email,
+			OrganizationUUID: target.OrganizationUUID,
+			OrganizationType: target.Tier,
+			RateLimitTier:    target.RateLimitTier,
+			SeatTier:         target.SeatTier,
+		})
 	})
 	if err != nil {
 		return err
