@@ -634,8 +634,89 @@ func TestCICitesDoesNotReportOrdinaryHyphenatedEnglish(t *testing.T) {
 	}
 }
 
+// THE ARITY, from below. `{2,}` — two hyphen groups, three segments — is the
+// number that keeps the pointer arm from reporting this repository's own prose,
+// and until this fixture existed nothing held it: `{2,}` moved to `{1,}` or to
+// `{3,}` left every test in this file green while changing what the gate
+// accepts in both directions.
+//
+// The test that looks like it should hold this cannot.
+// TestCICitesDoesNotReportOrdinaryHyphenatedEnglish has no pointing phrase in
+// front of its slugs, so no arity change can reach it at all — it constrains the
+// phrase requirement and nothing else.
+//
+// This one reddens if the floor is raised to three groups.
+func TestCICitesReportsANameWithTwoHyphenGroups(t *testing.T) {
+	root := throwawayRepo(t, map[string]string{
+		"internal/x/x.go": "package x\n\n// See keychain-notes-here for the measurement.\nfunc X() {}\n",
+	})
+
+	out, code := runCI(t, root, "cites")
+	if code != 1 {
+		t.Fatalf("exit %d, want 1 — three segments is the shortest thing this gate calls a document name\n%s", code, out)
+	}
+	if !strings.Contains(out, "keychain-notes-here") {
+		t.Errorf("stderr does not quote the pointer it objected to:\n%s", out)
+	}
+}
+
+// THE ARITY, from above, and this is the direction with a measured price. One
+// hyphen group is not a document name, it is ordinary English behind a pointing
+// phrase: relaxing the floor to `{1,}` fails seven correct lines of this tree,
+// six of them behind "per" — `per rate-limit window`, `per five-hour cycle`,
+// `per sub-key`, `per warm-up`.
+//
+// So this fixture is written the way those lines are written, and the cost of
+// the floor is stated rather than hidden: `see keychain-notes` is a miss, and it
+// is a miss this gate takes knowingly rather than fail seven lines that are
+// right.
+func TestCICitesDoesNotReportANameWithOneHyphenGroup(t *testing.T) {
+	root := throwawayRepo(t, map[string]string{
+		"internal/x/x.go": "package x\n\n// One threshold per rate-limit window, and no more.\nfunc X() {}\n",
+	})
+
+	out, code := runCI(t, root, "cites")
+	if code != 0 {
+		t.Fatalf("exit %d, want 0 — this tree writes English that way in seven places\n%s", code, out)
+	}
+}
+
+// Case. `see Keychain-Notes-Here` walked straight through, because both
+// character classes were `[a-z0-9]` — and a document named the way a person
+// capitalises a title is exactly as unreachable as one in lower case.
+//
+// Adding `A-Z` was free and that is why it was taken: measured over the widened
+// file set the pattern matches nothing with it that it did not match without it.
+func TestCICitesReportsAnUppercaseName(t *testing.T) {
+	root := throwawayRepo(t, map[string]string{
+		"internal/x/x.go": "package x\n\n// See Keychain-Notes-Here for the measurement.\nfunc X() {}\n",
+	})
+
+	out, code := runCI(t, root, "cites")
+	if code != 1 {
+		t.Fatalf("exit %d, want 1 — a capital letter does not make a private note reachable\n%s", code, out)
+	}
+}
+
+// The bound the case widening deliberately stops at, and the measurement behind
+// it: adding `_` to the classes reports `see keychain_security_test.go.`, which
+// is a CORRECT citation of a file this repository tracks — the slug arm resolves
+// its target without the trailing-punctuation strip the docpath arm has, so the
+// full stop comes along and resolves to nothing. One false positive is the whole
+// price of a shape nobody here writes, so it is not paid.
+func TestCICitesDoesNotReportAnUnderscoredName(t *testing.T) {
+	root := throwawayRepo(t, map[string]string{
+		"internal/x/x.go": "package x\n\n// See keychain_notes_here for the measurement.\nfunc X() {}\n",
+	})
+
+	out, code := runCI(t, root, "cites")
+	if code != 0 {
+		t.Fatalf("exit %d, want 0 — underscores are how this tree names Go files, not documents\n%s", code, out)
+	}
+}
+
 // The POINTED shape written as a PATH, which is how a plan is actually cited
-// and which the slug pattern cannot see: it keys on `[a-z0-9]+(-[a-z0-9]+){2,}`
+// and which the slug pattern cannot see: it keys on `[A-Za-z0-9]+(-[A-Za-z0-9]+){2,}`
 // immediately after the pointing phrase, and `docs/` ends that token at the
 // slash before a single hyphen group has matched.
 //
