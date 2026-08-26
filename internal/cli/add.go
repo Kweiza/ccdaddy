@@ -163,13 +163,31 @@ func newAddCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().BoolVar(&useClaudeAI, "claudeai", false, "use the subscription login (default)")
-	cmd.Flags().BoolVar(&useConsole, "console", false, "use the Console login, for a credit-billed account")
+	// Both helps name the SURFACE and not the billing. An enterprise seat
+	// metered only in credits is credit-billed and still belongs on claude.ai,
+	// and a help that sorted these by billing sent exactly that seat to the
+	// wrong issuer; see oauth.Surface.
+	cmd.Flags().BoolVar(&useClaudeAI, "claudeai", false,
+		"use the claude.ai login: Pro, Max, Team and Enterprise seats (default)")
+	cmd.Flags().BoolVar(&useConsole, "console", false,
+		"use the Console login at platform.claude.com; it does not mint claude.ai credentials")
 	cmd.Flags().BoolVar(&noBrowser, "no-browser", false, "do not open a browser; print the URL and wait for a pasted code")
 	cmd.Flags().StringVar(&alias, "alias", "", "short handle for the account")
 	cmd.Flags().BoolVar(&activate, "activate", false, "switch to the account once it is added")
 	cmd.Flags().DurationVar(&timeout, "timeout", oauth.DefaultLoginTimeout, "how long to wait for the login")
 	return cmd
+}
+
+// noLoginPathRefusal is what a machine with no browser AND no terminal is told.
+//
+// It is a function so the sentence has one owner and a test can read it: the
+// advice in it is the kind that is followed, and the wrong version of it costs
+// a fleet its rotation silently.
+func noLoginPathRefusal() error {
+	return fmt.Errorf("no browser is available and stdin is not a terminal, so there is no way to complete a login here.\n" +
+		"In a container this is usually a missing -t: docker run -it ... ccdad add --no-browser\n" +
+		"'ccdad add-token' is the other way in, but the account it stores carries no refresh grant, " +
+		"so it is never polled and can never be ranked or rotated into")
 }
 
 type addOptions struct {
@@ -188,10 +206,7 @@ func runAdd(cmd *cobra.Command, opts addOptions) error {
 	canPaste := stdinIsTTY()
 	canOpen := opts.tryBrowser && browserAvailable()
 	if !canPaste && !canOpen {
-		return WithCode(
-			fmt.Errorf("no browser is available and stdin is not a terminal, so there is no way to complete a login here.\n"+
-				"Run 'ccdad add-token' with a token from another machine instead"),
-			ExitBlocked)
+		return WithCode(noLoginPathRefusal(), ExitBlocked)
 	}
 
 	var paste oauth.PasteSource
@@ -621,8 +636,12 @@ func newAddTokenCmd() *cobra.Command {
 		Use:   "add-token [TOKEN|-]",
 		Short: "Register a token directly, with no browser",
 		Long: "Registers an sk-ant-oat... setup token or an sk-ant-api... API key.\n" +
-			"Use this on a headless machine, or when a token came from somewhere else.\n" +
 			"'-' reads the token from stdin; with no argument ccdad prompts without echoing.\n\n" +
+			"The account this stores carries NO refresh grant, so it is never polled and can\n" +
+			"never be ranked or rotated into: it is a credential you can run with, not a seat\n" +
+			"the engine can choose. A machine with no browser does not need this —\n" +
+			"'ccdad add --no-browser' completes a real login from a pasted code, and only that\n" +
+			"path mints a grant. It needs a terminal on stdin; under docker that means -t.\n\n" +
 			"An API key can be made the live credential: --activate writes it to Claude Code's\n" +
 			"config as primaryApiKey and removes the OAuth login sitting in front of it.\n" +
 			"A setup token cannot — Claude Code reads one from CLAUDE_CODE_OAUTH_TOKEN only,\n" +
