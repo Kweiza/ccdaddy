@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/Kweiza/ccdaddy/internal/daemon"
+	"github.com/Kweiza/ccdaddy/internal/release"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 )
 
@@ -55,6 +56,49 @@ func DaemonLine(report daemon.Report, now time.Time) string {
 	default:
 		return "Daemon:  unknown  (the lock could not be probed)"
 	}
+}
+
+// UpdateLine is the release line `ccdad status` prints under the daemon line
+// and the terminal dashboard prints under its liveness block.
+//
+// The daemon publishes what it SAW -- a version string -- and never a verdict,
+// so the comparison happens here, against the version of the binary doing the
+// reading. That is not a preference: upgrading replaces the binary while the
+// old daemon keeps publishing, so a boolean computed by a 0.6.1 daemon would
+// tell a 0.7.0 CLI to upgrade to what it is already running.
+//
+// It is SILENT -- ok false -- for every reading it cannot turn into that
+// sentence: no published document, nothing recorded, a recorded release that
+// does not parse, a running version that does not parse (every `dev` build, so
+// every build a developer makes), or a release that is not newer. A line that
+// says nothing useful under a dashboard people read every day is worse than no
+// line.
+func UpdateLine(report daemon.Report, running string) (string, bool) {
+	// No second guard for an empty UpdateLatest. ParseTag refuses it one line
+	// down, so a clause for it would be one no test could ever turn red -- and
+	// an untestable guard is how a reader is told a case is handled when it is
+	// really handled somewhere else.
+	if !report.HasStatus {
+		return "", false
+	}
+	latest, ok := release.ParseTag(report.Status.UpdateLatest)
+	if !ok {
+		return "", false
+	}
+	current, ok := release.ParseTag(running)
+	if !ok {
+		return "", false
+	}
+	// Equal is silent as well as older. "You are on the newest release" is a
+	// fact a dashboard does not need to repeat every time it is drawn.
+	if latest.Compare(current) <= 0 {
+		return "", false
+	}
+	// The releases page rather than a download URL, and through the same base
+	// the rest of ccdad resolves releases against, so a machine pointed at a
+	// mirror is not sent to the public one.
+	return fmt.Sprintf("Update:  ccdad %s is out; this is %s  (%s)",
+		latest, current, release.BaseURL()+"/latest"), true
 }
 
 // DescribeRunning is the one-line human form of a live daemon. now is a
