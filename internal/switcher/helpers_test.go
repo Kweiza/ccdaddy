@@ -109,6 +109,26 @@ func seed(t *testing.T, uuid, email string) store.Account {
 	return got
 }
 
+// seedSeat adds an account whose profile lookup recorded a seat_tier. Only a
+// seat metered in money has ever been observed carrying one: a pro or max
+// account answers seat_tier null, which decodes to the zero value seed leaves.
+func seedSeat(t *testing.T, uuid, email, seatTier string) store.Account {
+	t.Helper()
+	s, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := store.Account{UUID: uuid, Email: email, SeatTier: seatTier}
+	if err := s.Add(a, oauthBlob("RT-"+uuid)); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := s.Get(uuid)
+	if !ok {
+		t.Fatalf("seedSeat: %s did not land in the store", uuid)
+	}
+	return got
+}
+
 // seedToken adds an account whose credential Claude Code reads from somewhere
 // other than the credentials file.
 func seedToken(t *testing.T, uuid, email, kind, token string) store.Account {

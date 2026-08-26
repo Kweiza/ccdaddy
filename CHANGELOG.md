@@ -95,6 +95,22 @@ by `uuid` or `alias`.
 
 ### Fixed
 
+- **A switch carries the seat tier into Claude Code's own cached profile.**
+  Claude Code decides which model tier a session defaults to with
+  `Zu(){return Xe()==="enterprise"&&dO()==="enterprise_usage_based"}`, and the
+  seat half of that reads `~/.claude.json`, not the credentials file:
+  `dO(){return Dn()?.seatTier??null}` over
+  `Dn(){return Zt()?k().oauthAccount:void 0}` (2.1.246). The minimal
+  `oauthAccount` object a switch writes for an account with no captured
+  snapshot named the organization but never the seat, so a money-metered
+  enterprise seat fell out of the Opus tier Claude Code grants it alongside max
+  and team-5x, and stayed out until its own next token refresh happened to
+  repair the field — which can be most of an access token's lifetime away.
+  `seatTier` is deliberately NOT one of the four fields whose combined presence
+  makes that refresh skip re-fetching the profile, so writing it does not
+  suppress the correction that follows. A seat that reports no tier — every pro
+  and max account measured — still gets no key rather than an empty string.
+
 - **The switch log line says why, not only what.** A daemon alternated between
   two accounts every 121 seconds for twenty-five minutes, and afterwards there
   was no way to say which margin kept clearing or on what numbers: the log
