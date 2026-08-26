@@ -166,3 +166,47 @@ func TestAnEnterpriseUsageBasedSeatClassifiesAsCreditFromTheProfileAlone(t *test
 		t.Fatalf("Classify() = %v, want %v — an add with no usage call has only this profile to go on", got, KindCredit)
 	}
 }
+
+// TestAnEnterpriseUsageBasedSeatIsCreditEvenOnAnOrdinaryRateLimitTier covers
+// the SECOND arm of noPlanWindowProfile on its own.
+//
+// It is deliberately built so the first arm cannot answer it: rate_limit_tier
+// is a perfectly ordinary value here, and only the organization_type/seat_tier
+// pair says the seat is metered in money. Without this the second arm is
+// unreachable from any test, which is how it was written — a mutation removing
+// it left the whole tree green.
+//
+// NOT MEASURED. Every live capture in hand carries default_claude_zero as well,
+// so this pins the rule Claude Code states rather than a reading anyone has
+// taken. A seat that is enterprise_usage_based on a non-zero tier may not
+// exist; if one is ever captured, this is the test that already covers it.
+func TestAnEnterpriseUsageBasedSeatIsCreditEvenOnAnOrdinaryRateLimitTier(t *testing.T) {
+	p := &Profile{
+		OrganizationType: "claude_enterprise",
+		RateLimitTier:    "default_claude_max_20x",
+		SeatTier:         "enterprise_usage_based",
+		BillingType:      "stripe_subscription_contracted",
+	}
+	if got := Classify(p, UsageShape{}, false); got != KindCredit {
+		t.Fatalf("Classify() = %v, want %v — seat_tier alone names a money-metered seat", got, KindCredit)
+	}
+}
+
+// TestAnEnterpriseSeatOnAnOrdinaryTierIsNotCreditWithoutTheSeatTier is the
+// other half of the pair above, and it is what stops noPlanWindowProfile's
+// second arm from widening into "every enterprise organization".
+//
+// A contracted enterprise org whose seats DO carry plan windows is a
+// subscription, and filing it as credit would rank it behind every real
+// subscription for no reason. organization_type alone must not decide.
+func TestAnEnterpriseSeatOnAnOrdinaryTierIsNotCreditWithoutTheSeatTier(t *testing.T) {
+	p := &Profile{
+		OrganizationType: "claude_enterprise",
+		RateLimitTier:    "default_claude_max_20x",
+		SeatTier:         "standard",
+		BillingType:      "stripe_subscription_contracted",
+	}
+	if got := Classify(p, UsageShape{}, false); got != KindSubscription {
+		t.Fatalf("Classify() = %v, want %v — an enterprise org is not by itself a money-metered seat", got, KindSubscription)
+	}
+}
