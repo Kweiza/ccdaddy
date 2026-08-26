@@ -241,6 +241,24 @@ func daemonJSON(report daemon.Report, probeErr error) map[string]any {
 		if report.Status.Stopped {
 			d["stopped"] = true
 		}
+		// The daily release check, as the SAME four flat keys the published
+		// document carries rather than a nested object: a nested form would be
+		// wire-incompatible with the document for no gain, and a consumer that
+		// reads status.json directly and one that reads this payload would then
+		// need two spellings of one fact. Each is behind its own zero guard, so
+		// an ordinary payload does not carry four fields that are always empty.
+		if !report.Status.UpdateCheckedAt.IsZero() {
+			d["updateCheckedAt"] = report.Status.UpdateCheckedAt
+		}
+		if !report.Status.NextUpdateCheckAt.IsZero() {
+			d["nextUpdateCheckAt"] = report.Status.NextUpdateCheckAt
+		}
+		if report.Status.UpdateLatest != "" {
+			d["updateLatest"] = report.Status.UpdateLatest
+		}
+		if report.Status.UpdateCheckError != "" {
+			d["updateCheckError"] = report.Status.UpdateCheckError
+		}
 	}
 	return d
 }
