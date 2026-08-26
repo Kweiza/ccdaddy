@@ -176,3 +176,17 @@ func (e *Engine) recordRelease(tag string, err error) {
 	e.updateLatest = v.String()
 	e.updateErr = ""
 }
+
+// seedRelease carries a previous daemon's release-check state into this one.
+//
+// Without it a machine in a restart loop asks the origin once per restart: the
+// deadline lives only in the published document, and an engine that started
+// from zero would treat every start as a store that had never checked.
+func (e *Engine) seedRelease(s Status, now time.Time) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.updateCheckedAt = s.UpdateCheckedAt
+	e.nextUpdateCheckAt = usableDeadline(s.NextUpdateCheckAt, now, e.rand())
+	e.updateLatest = s.UpdateLatest
+	e.updateErr = s.UpdateCheckError
+}

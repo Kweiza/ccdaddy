@@ -324,3 +324,66 @@ func TestAnAnswerThatIsNotATagIsAFailedCheck(t *testing.T) {
 		t.Error("an unparseable answer was recorded as a success")
 	}
 }
+
+// The state is seeded where the DAEMON builds its engine, and it must happen
+// before Run publishes its first document: that publish would otherwise
+// overwrite the deadline with nothing, and a machine in a restart loop would
+// spend one request per restart.
+func TestTheDaemonsEngineCarriesTheLastDaemonsReleaseState(t *testing.T) {
+	isolateEngine(t)
+	now := time.Now()
+	published := Status{
+		UpdateCheckedAt:   now.Add(-2 * time.Hour),
+		NextUpdateCheckAt: now.Add(22 * time.Hour),
+		UpdateLatest:      "0.7.0",
+		UpdateCheckError:  "dial tcp: i/o timeout",
+	}
+	if _, err := NewStatusWriter().Write(published, now); err != nil {
+		t.Fatal(err)
+	}
+
+	e := engineForDaemon()
+	// The one constructor that wires the resolver. NewEngine must not, or every
+	// `ccdad list --refresh` acquires a release check.
+	if e.LatestRelease == nil {
+		t.Fatal("the daemon's engine has no release resolver, so the check can never run")
+	}
+	got := e.Snapshot()
+	if !got.NextUpdateCheckAt.Equal(published.NextUpdateCheckAt) {
+		t.Errorf("NextUpdateCheckAt = %v, want the published %v -- a restart that forgot it would ask again immediately",
+			got.NextUpdateCheckAt, published.NextUpdateCheckAt)
+	}
+	if got.UpdateLatest != "0.7.0" {
+		t.Errorf("UpdateLatest = %q, want the published %q", got.UpdateLatest, "0.7.0")
+	}
+	if got.UpdateCheckError != published.UpdateCheckError {
+		t.Errorf("UpdateCheckError = %q, want the published %q", got.UpdateCheckError, published.UpdateCheckError)
+	}
+	if !got.UpdateCheckedAt.Equal(published.UpdateCheckedAt) {
+		t.Errorf("UpdateCheckedAt = %v, want the published %v", got.UpdateCheckedAt, published.UpdateCheckedAt)
+	}
+	// NewEngine reads nothing. A status read inside the constructor would put
+	// filesystem I/O on every CLI call site of it.
+	if fresh := NewEngine().Snapshot(); !fresh.NextUpdateCheckAt.IsZero() || fresh.UpdateLatest != "" {
+		t.Errorf("NewEngine read the published document: %+v", fresh)
+	}
+}
+
+// A document from a backup or from a machine whose clock was wrong can carry a
+// deadline years out. Honouring it would switch the feature off permanently and
+// in silence, and zeroing it would have every such machine check immediately.
+func TestASeededDeadlineFromTheFutureIsResampledRatherThanHonoured(t *testing.T) {
+	isolateEngine(t)
+	now := time.Now()
+	if _, err := NewStatusWriter().Write(Status{NextUpdateCheckAt: now.Add(72 * time.Hour)}, now); err != nil {
+		t.Fatal(err)
+	}
+
+	got := engineForDaemon().Snapshot().NextUpdateCheckAt
+	if got.IsZero() {
+		t.Fatal("an impossible deadline was discarded; the machine would ask on its very next tick")
+	}
+	if !got.After(now) || got.After(now.Add(updateCheckInterval+updateCheckInterval/10)) {
+		t.Errorf("NextUpdateCheckAt = %v, want a fresh deadline inside one jittered interval of %v", got, now)
+	}
+}
