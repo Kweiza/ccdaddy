@@ -577,6 +577,7 @@ strategy                        headroom  default  overriding
 probe_unknown                   true      default  overriding
 hover                           true      file     honoured
 mcp_switch_without_elicitation  false     default  honoured
+update_check                    true      default  honoured
 credit.threshold                80        default  overriding
 credit.max_auto_spend           0         default  honoured
 tui.theme                       auto      default  honoured
@@ -1124,6 +1125,7 @@ strategy                        headroom  default
 probe_unknown                   true      default
 hover                           false     default
 mcp_switch_without_elicitation  false     default
+update_check                    true      default
 credit.threshold                80        default
 credit.max_auto_spend           0         default
 tui.theme                       auto      default
@@ -1231,6 +1233,24 @@ carry it ships mojibake, and that is your call to make.
 Neither key is read by the daemon, which draws nothing, and neither reaches
 `ccdad mcp`, whose tool results are plain text by construction rather than by
 exclusion. `--json` is unaffected on every command that has it.
+
+`update_check` is the last key here that is not an engine knob, and the only
+one in the file behind which there is a request to a host other than
+`api.anthropic.com`. With it on — the default — the daemon asks
+`https://github.com/Kweiza/ccdaddy/releases/latest` once a day what the newest
+release is, sends `ccdad/<version>` as its user agent and nothing else, and
+publishes what it heard: `ccdad status` grows an `Update:` line, `ccdad doctor`
+grows an `update-check` row, and `ccdad status --json` carries the same reading
+in its `daemon` block. No account, no credential, no identifier, no usage
+figure. `update_check = false` stops the request, which is what an
+egress-filtered or air-gapped machine wants.
+
+**It does not gate `ccdad update`.** A key that silently disabled a command you
+typed would be a worse surprise than the network call it exists to prevent, so
+the command asks whatever the file says. Stopping a fleet from upgrading itself
+is something you do to the binary, not to this key. The check is one request
+per day per *store*, not per machine: the daemon singleton is keyed on the
+store, so a machine running two ccdad stores runs two daemons on purpose.
 
 Keys this version does not recognise are left alone rather than deleted, so a
 file written by a newer release survives an older one. Trying to *set* an
