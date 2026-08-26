@@ -389,9 +389,20 @@ check_cgo() {
 # the exclusion. The cost is real and worth naming: a genuinely unreachable
 # citation written inside one of those three is not caught by anything.
 # Measured, so that nobody tidies one away: dropping `:!CONTRIBUTING.md` fails
-# the gate on four of its own lines, and dropping `:!scripts/ci_sh_test.go`
-# fails it on seven fixtures. Neither is caught by any test, because every
-# fixture repository is built fresh and contains neither file.
+# the gate on nine of its own lines, and dropping `:!scripts/ci_sh_test.go`
+# fails it on thirty. Neither is caught by any test, because every fixture
+# repository is built fresh and contains neither file, so the only thing
+# keeping these honest is re-running them whenever the patterns, the pathspec
+# or either excluded file changes.
+#
+# The pair that stood here read four and seven, and both are worth naming
+# because they are the failure this comment exists to prevent. Four was a true
+# count — of the tree as it stood BEFORE the commit that wrote it down widened
+# the pathspec to everything git tracks and rewrote CONTRIBUTING.md's "Style"
+# section. It was stale on arrival, by five lines. Seven counted fixtures
+# rather than lines and matched neither at any point: the tree it described
+# failed on nine lines, eight of them fixture strings and one a comment. The
+# unit is lines here now, because a line is what the command above prints.
 #
 # The leading `.` is not decoration. A pathspec made only of exclusions means
 # "everything but these" to a git new enough to say so, and the script has
