@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -177,5 +178,149 @@ func TestTheUpdateCheckKeyStopsTheRequestAndFlippingItTakesEffectNextTick(t *tes
 	tick(t, e)
 	if *n != 1 {
 		t.Fatalf("the release origin was asked %d times after the key was turned back on, want 1", *n)
+	}
+}
+
+// A movable clock, so a test can cross the deadline it just watched be set.
+// Named apart from this package's existing movableEngine, which takes a fetch
+// func and builds its engine straight from NewEngine -- leaving Freshen and
+// ResolveOwner pointed at the real endpoints, which is exactly what a release
+// test must not have.
+func movableReleaseEngine(t *testing.T, now *time.Time) *Engine {
+	t.Helper()
+	e := releaseEngine(t)
+	e.Now = func() time.Time { return *now }
+	return e
+}
+
+func TestASuccessfulCheckRecordsTheReleaseWithoutItsLeadingV(t *testing.T) {
+	isolateEngine(t)
+	seedAccount(t, "u-1", "org-1")
+	liveAs(t, "u-1")
+
+	e := releaseEngine(t)
+	stubRelease(e, "v0.7.0", nil)
+	tick(t, e)
+
+	s := e.Snapshot()
+	// Spelled the way buildinfo.Version is, because the reader compares the two
+	// and a "v" on one side only is a comparison that fails on punctuation.
+	if s.UpdateLatest != "0.7.0" {
+		t.Errorf("UpdateLatest = %q, want %q", s.UpdateLatest, "0.7.0")
+	}
+	if s.UpdateCheckError != "" {
+		t.Errorf("UpdateCheckError = %q, want it empty on a success", s.UpdateCheckError)
+	}
+}
+
+// A failed check never erases the last good reading. A temporary outage must
+// not un-tell the user about a release that is still out.
+func TestAFailedCheckKeepsTheLastGoodReadingAndASuccessClearsTheError(t *testing.T) {
+	isolateEngine(t)
+	seedAccount(t, "u-1", "org-1")
+	liveAs(t, "u-1")
+
+	now := tickEpoch
+	e := movableReleaseEngine(t, &now)
+	answer, failure := "v0.7.0", error(nil)
+	e.LatestRelease = func(context.Context) (string, error) { return answer, failure }
+
+	tick(t, e)
+	if got := e.Snapshot().UpdateLatest; got != "0.7.0" {
+		t.Fatalf("UpdateLatest = %q after the first check, want %q", got, "0.7.0")
+	}
+
+	answer, failure = "", errors.New("dial tcp: i/o timeout")
+	now = now.Add(25 * time.Hour)
+	tick(t, e)
+	s := e.Snapshot()
+	if s.UpdateLatest != "0.7.0" {
+		t.Errorf("UpdateLatest = %q after a failure, want the last good reading %q", s.UpdateLatest, "0.7.0")
+	}
+	if s.UpdateCheckError == "" {
+		t.Error("a failed check recorded no error; nothing else on the machine says the check is not working")
+	}
+
+	answer, failure = "v0.7.0", nil
+	now = now.Add(25 * time.Hour)
+	tick(t, e)
+	// Without this, one failure leaves every reader warning about it forever,
+	// beside a row that says the check is current.
+	if got := e.Snapshot().UpdateCheckError; got != "" {
+		t.Errorf("UpdateCheckError = %q after a successful check, want it cleared", got)
+	}
+}
+
+// Cancellation is this process shutting down, which is a fact about the daemon
+// rather than about the origin. Recording it would make "the release check
+// failed" the last thing a clean stop publishes.
+func TestACancelledCheckRecordsNothing(t *testing.T) {
+	isolateEngine(t)
+	seedAccount(t, "u-1", "org-1")
+	liveAs(t, "u-1")
+
+	e := releaseEngine(t)
+	n := stubRelease(e, "", context.Canceled)
+	tick(t, e)
+
+	// Asserted first, because every assertion below is also satisfied by a
+	// check that was never dispatched at all -- the fields start empty, so
+	// without this the test passes whether or not the gate ever fired.
+	if *n != 1 {
+		t.Fatalf("the release origin was asked %d times, want 1", *n)
+	}
+	s := e.Snapshot()
+	if s.UpdateCheckError != "" {
+		t.Errorf("UpdateCheckError = %q for a cancelled check, want nothing recorded", s.UpdateCheckError)
+	}
+	if s.UpdateLatest != "" {
+		t.Errorf("UpdateLatest = %q for a cancelled check", s.UpdateLatest)
+	}
+	// The slot is still released, or every later check is blocked forever by a
+	// flag nothing clears.
+	if e.updateInFlight {
+		t.Error("a cancelled check left the slot marked in flight; no check would ever run again")
+	}
+}
+
+// An expired deadline is the opposite of a cancellation and IS recorded: the
+// origin was asked and did not answer, which is a fact about the origin. The
+// two arrive as sibling errors from the same context, so nothing but a test
+// stops the cancellation arm being widened to swallow both.
+func TestAnExpiredDeadlineIsRecordedUnlikeACancellation(t *testing.T) {
+	isolateEngine(t)
+	seedAccount(t, "u-1", "org-1")
+	liveAs(t, "u-1")
+
+	e := releaseEngine(t)
+	n := stubRelease(e, "", context.DeadlineExceeded)
+	tick(t, e)
+
+	if *n != 1 {
+		t.Fatalf("the release origin was asked %d times, want 1", *n)
+	}
+	if got := e.Snapshot().UpdateCheckError; got == "" {
+		t.Error("a check that timed out recorded nothing; the origin was asked and did not answer, and that is not the daemon shutting down")
+	}
+}
+
+// The tag arrives over an unauthenticated channel and ends up in status.json
+// and on a terminal. An answer that is not a release tag is a failed check, not
+// a latest version nobody can parse.
+func TestAnAnswerThatIsNotATagIsAFailedCheck(t *testing.T) {
+	isolateEngine(t)
+	seedAccount(t, "u-1", "org-1")
+	liveAs(t, "u-1")
+
+	e := releaseEngine(t)
+	stubRelease(e, "<html>404</html>", nil)
+	tick(t, e)
+
+	s := e.Snapshot()
+	if s.UpdateLatest != "" {
+		t.Errorf("UpdateLatest = %q, want nothing recorded for an answer that is not a tag", s.UpdateLatest)
+	}
+	if s.UpdateCheckError == "" {
+		t.Error("an unparseable answer was recorded as a success")
 	}
 }

@@ -2,10 +2,13 @@ package daemon
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/config"
 	"github.com/Kweiza/ccdaddy/internal/pollpolicy"
+	"github.com/Kweiza/ccdaddy/internal/release"
 )
 
 // updateCheckInterval is how often the daemon asks the release origin what the
@@ -130,12 +133,46 @@ func (e *Engine) checkForRelease(ctx context.Context, cfg config.Config, now tim
 	}()
 }
 
-// recordRelease releases the slot the dispatch took. It records nothing yet:
-// the slot must be released unconditionally or no later check ever runs, and
-// that alone is what this commit needs to be correct.
+// recordRelease files what the check came back with.
+//
+// UpdateLatest is STICKY across failures and UpdateCheckError is not. A failed
+// check never erases the last good reading, so a temporary outage does not
+// un-tell the user about a release that is still out; and a successful check
+// CLEARS the error, because without that one failure would leave every reader
+// warning about it forever, beside a row saying the check is current.
+//
+// A cancelled context records nothing at all. That is this daemon shutting
+// down -- a fact about the process, not about the origin -- and writing it
+// would make "the release check failed" the last thing a clean stop publishes.
+// A deadline that expired is the opposite and IS recorded: the origin was asked
+// and did not answer.
 func (e *Engine) recordRelease(tag string, err error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	// Released first and unconditionally. An arm that returned early without
+	// this would leave the slot marked in flight for the daemon's whole life,
+	// and no later check would ever run.
 	e.updateInFlight = false
-	_, _ = tag, err
+
+	switch {
+	case errors.Is(err, context.Canceled):
+		return
+	case err != nil:
+		e.updateErr = err.Error()
+		return
+	}
+
+	v, ok := release.ParseTag(tag)
+	if !ok {
+		// The tag arrives over an unauthenticated channel and ends up in
+		// status.json and on a terminal, so an answer that is not a release tag
+		// is a failed check rather than a version string nobody can parse. The
+		// answer is quoted rather than interpolated bare for the same reason.
+		e.updateErr = fmt.Sprintf("the release origin answered %q, which is not a release tag", tag)
+		return
+	}
+	// Spelled the way buildinfo.Version is -- "0.7.0", no leading v -- so the
+	// two sides of the comparison a reader makes are written the same way.
+	e.updateLatest = v.String()
+	e.updateErr = ""
 }
