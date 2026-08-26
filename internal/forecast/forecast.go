@@ -424,7 +424,13 @@ func Of(in []Input, now time.Time) Fleet {
 		f.PointsTotal += 100
 	}
 
-	f.Credit = creditFleet(creditInputs(accounts, from, now), now)
+	// reachable, not accounts: the slice above it has already had every account
+	// with no SIMULATABLE PLAN WINDOW dropped from it, and that filter has
+	// nothing to do with whether a balance can be measured. Feeding it here made
+	// the credit runway structurally unreachable for a seat metered only in
+	// money -- adding one irrelevant plan window to the same account was enough
+	// to make the figure appear.
+	f.Credit = creditFleet(creditInputs(reachable, from, now), now)
 	return f
 }
 
@@ -779,7 +785,9 @@ func minRoomOf(a account) float64 {
 // An unreadable monthly limit becomes nil, which means UNLIMITED and not a cap
 // of zero. Whether that refuses the whole figure is creditFleet's decision and
 // depends on whether the uncapped account is spending.
-func creditInputs(accounts []account, from, now time.Time) []creditInput {
+// creditInputs takes the eligible Inputs rather than the simulatable accounts,
+// because the two sets differ by exactly the accounts this axis exists for.
+func creditInputs(in []Input, from, now time.Time) []creditInput {
 	type measuredCredit struct {
 		in    creditInput
 		spent float64
@@ -788,17 +796,22 @@ func creditInputs(accounts []account, from, now time.Time) []creditInput {
 		found []measuredCredit
 		acc   spanAcc
 	)
-	for _, a := range accounts {
-		e := a.in.Snapshot.ExtraUsage
+	for _, a := range in {
+		// A reading is what carries the balance, and an account that has never
+		// had one is not a zero balance.
+		if a.Snapshot == nil {
+			continue
+		}
+		e := a.Snapshot.ExtraUsage
 		used, ok := e.UsedCredits()
 		if !ok {
 			continue
 		}
-		spent, _, _, ok := creditSpend(a.in.Series, from, now)
+		spent, _, _, ok := creditSpend(a.Series, from, now)
 		if !ok {
 			continue
 		}
-		first, last, ok := spanOf(a.in.Series, from, now, carriesCredit)
+		first, last, ok := spanOf(a.Series, from, now, carriesCredit)
 		if !ok {
 			continue
 		}

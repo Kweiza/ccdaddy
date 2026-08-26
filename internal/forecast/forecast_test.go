@@ -557,3 +557,40 @@ func TestTheCreditRunwayIsAssembledFromTheSnapshotAndTheSeries(t *testing.T) {
 		t.Errorf("Credit.DryAt = %v, want %v", got.Credit.DryAt, want)
 	}
 }
+
+// TestTheCreditRunwayIsMeasuredForAFleetWithNoPlanWindows is the same join as
+// the test above, on the fleet that is made entirely of money.
+//
+// The credit axis was fed the slice the WINDOW simulation had already filtered:
+// an account with no simulatable plan window is counted unreadable and dropped
+// before it, so a seat metered only in money could never reach the credit
+// runway at all. Adding one irrelevant plan window to the same account made the
+// figure appear, which is the tell.
+//
+// The existing end-to-end test cannot see this because its snapshot carries a
+// weekly window.
+func TestTheCreditRunwayIsMeasuredForAFleetWithNoPlanWindows(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	// A $100 cap against $50 spent, in the minor units the wire reports.
+	snap := &usage.Snapshot{ExtraUsage: usage.ExtraUsageFor(usage.ExtraUsageInput{
+		State: usage.ExtraUsageEnabled, Currency: "USD",
+		MonthlyLimit: pf(10000), UsedCredits: pf(5000),
+	})}
+	// Major units, as the recorder writes them: six dollars over four hours.
+	var series []history.Sample
+	for i, u := range []float64{14, 17, 20} {
+		series = append(series, history.Sample{
+			At:     now.Add(-4*time.Hour + time.Duration(i)*2*time.Hour),
+			Credit: &history.Credit{Used: u, Limit: pf(100), Currency: "USD"},
+		})
+	}
+
+	got := Of([]Input{{UUID: "uuid-a", Idx: 1, Eligible: true, Snapshot: snap, Series: series}}, now)
+
+	if !got.Credit.Known {
+		t.Fatal("Credit.Known = false — the balance is readable and the spend rate is measured; only the window filter stood between them")
+	}
+	if got.Credit.SpendPerHour != 1.5 {
+		t.Errorf("Credit.SpendPerHour = %v, want 1.5 — six dollars over the four-hour span", got.Credit.SpendPerHour)
+	}
+}
