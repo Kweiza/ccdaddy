@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
@@ -530,7 +531,7 @@ func TestDoctorHumanOutputNamesEveryCheck(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit %d, want 0\n%s", code, stdout)
 	}
-	for _, name := range []string{"store", "path", "permissions", "locks", "pidfile", "status-file", "usage-cache", "history", "engine-state", "config", "sessions", "profiles", "primary-accounts", "credential-files", "credential-home", "claude-version", "claude-code", "credential-keys", "keychain", "environment", "api-key", "oauth-source"} {
+	for _, name := range []string{"store", "path", "permissions", "locks", "pidfile", "status-file", "usage-cache", "history", "engine-state", "config", "update-check", "sessions", "profiles", "primary-accounts", "credential-files", "credential-home", "claude-version", "claude-code", "credential-keys", "keychain", "environment", "api-key", "oauth-source"} {
 		if !strings.Contains(stdout, name) {
 			t.Errorf("the human report does not mention the %s check:\n%s", name, stdout)
 		}
@@ -2114,5 +2115,93 @@ func TestEveryCheckLevelTakesItsOwnRole(t *testing.T) {
 	if got := levelRole(checkLevel("bogus")); got != theme.RoleDefault {
 		t.Errorf("an unrecognised level took role %v, want RoleDefault: a typo in a "+
 			"positional check literal must go out plain, not wearing fail's colour", got)
+	}
+}
+
+// The arms are ordered and a machine can match several at once, so the order is
+// the decision. It is asserted on the pure verdict rather than through a store,
+// because arranging a store that matches three arms at once is arranging the
+// test rather than the machine.
+func TestTheUpdateCheckRowIsDecidedInPrecedenceOrder(t *testing.T) {
+	checkedAt := mustTime("2026-08-25T09:00:00Z")
+	published := func(s daemon.Status) daemon.Report {
+		s.SchemaVersion = daemon.StatusSchemaVersion
+		return daemon.Report{State: daemon.DaemonRunning, HasStatus: true, Status: s}
+	}
+	// A machine that matches arms 3, 4 and 5's inputs at once.
+	crowded := daemon.Status{
+		UpdateCheckedAt:   checkedAt,
+		NextUpdateCheckAt: checkedAt.Add(24 * time.Hour),
+		UpdateLatest:      "0.7.0",
+		UpdateCheckError:  "dial tcp: i/o timeout",
+	}
+
+	for _, tc := range []struct {
+		name    string
+		enabled bool
+		report  daemon.Report
+		running string
+		level   checkLevel
+		want    string
+	}{
+		{"switched off outranks both a release and a failure", false, published(crowded), "0.6.1", levelOK, "update_check is false"},
+		{"a check that never ran outranks a recorded release", true, published(daemon.Status{UpdateLatest: "0.7.0"}), "0.6.1", levelOK, "no daemon has checked"},
+		{"a newer release outranks the failure recorded beside it", true, published(crowded), "0.6.1", levelWarn, "0.7.0 is out"},
+		{"a failure is reported when nothing newer is recorded", true, published(daemon.Status{
+			UpdateCheckedAt: checkedAt, NextUpdateCheckAt: checkedAt.Add(24 * time.Hour),
+			UpdateLatest: "0.6.1", UpdateCheckError: "dial tcp: i/o timeout",
+		}), "0.6.1", levelWarn, "the last release check failed"},
+		{"the recorded release being the current one is an ok row", true, published(daemon.Status{
+			UpdateCheckedAt: checkedAt, UpdateLatest: "0.6.1",
+		}), "0.6.1", levelOK, "is the newest release"},
+		{"a dev build says the two cannot be compared", true, published(daemon.Status{
+			UpdateCheckedAt: checkedAt, UpdateLatest: "0.7.0",
+		}), "dev", levelOK, "cannot be compared"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			level, detail := updateCheckVerdict(tc.enabled, tc.report, tc.running)
+			if level != tc.level {
+				t.Errorf("level = %q, want %q (%s)", level, tc.level, detail)
+			}
+			if !strings.Contains(detail, tc.want) {
+				t.Errorf("detail = %q, want it to contain %q", detail, tc.want)
+			}
+		})
+	}
+}
+
+// The row itself: it must never be a failure, because fail is the only level
+// that changes doctor's exit code and a release landing must not turn every
+// health-check script in the world red.
+func TestTheUpdateCheckRowIsNeverAFailureAndAsksNobody(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	stubVersion(t, "0.6.1")
+	// A real origin, pointed at by CCDAD_BASE_URL and counting what reaches it.
+	// A probe must not create what it probes, and "makes no request" is the
+	// half of this row's name that no assertion about its text can reach.
+	origin, _ := newFakeRelease(t, "v0.7.0")
+	stubDaemon(t, daemon.Report{
+		State:     daemon.DaemonRunning,
+		HasStatus: true,
+		Status: daemon.Status{
+			SchemaVersion:   daemon.StatusSchemaVersion,
+			UpdateCheckedAt: mustTime("2026-08-25T09:00:00Z"),
+			UpdateLatest:    "0.7.0",
+		},
+	}, nil)
+
+	code, r, _ := runDoctor(t)
+	if code != ExitOK {
+		t.Fatalf("exit %d, want 0 — a release being out is not a failed health check", code)
+	}
+	if got := r.level(t, "update-check"); got != "warn" {
+		t.Errorf("update-check = %q, want warn: %s", got, r.detail(t, "update-check"))
+	}
+	if !strings.Contains(r.detail(t, "update-check"), "0.7.0") {
+		t.Errorf("the row does not name the release: %s", r.detail(t, "update-check"))
+	}
+	if asked := origin.asked(); len(asked) != 0 {
+		t.Errorf("the release origin was asked for %v; doctor probes what the daemon recorded and must not create the request it reports on", asked)
 	}
 }

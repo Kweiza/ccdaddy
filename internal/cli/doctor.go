@@ -11,10 +11,12 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"charm.land/lipgloss/v2"
 	"github.com/spf13/cobra"
 
+	"github.com/Kweiza/ccdaddy/internal/buildinfo"
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/ccver"
@@ -23,6 +25,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 	"github.com/Kweiza/ccdaddy/internal/history"
 	"github.com/Kweiza/ccdaddy/internal/identity"
+	"github.com/Kweiza/ccdaddy/internal/release"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/switcher"
@@ -227,6 +230,21 @@ func runChecks() []check {
 	// either answer alone. It creates nothing: stat, readlink and a read of a
 	// package.json.
 	install, installErr := probeClaudeInstall()
+	// Read ONCE and handed to the two rows that have an opinion about it. Two
+	// Loads could disagree -- a `ccdad config set` can land between them -- and
+	// a report whose release row contradicts its own config row is worse than
+	// either answer alone. It creates nothing: a missing file resolves to the
+	// defaults without writing one, which is this file's first rule.
+	settings, settingsErr := config.Load()
+	// A file that could not be read leaves settings at its ZERO value, and a
+	// zero bool is not the same answer as a key set to false. The config row is
+	// where an unusable file is reported; every other row that reads a setting
+	// falls back to the documented defaults, which is what the engine itself
+	// runs on in that state.
+	effective := settings
+	if settingsErr != nil {
+		effective = config.Defaults()
+	}
 
 	return []check{
 		storeCheck,
@@ -238,7 +256,8 @@ func runChecks() []check {
 		checkUsageCache(storeUsable),
 		checkHistory(storeUsable),
 		checkEngineState(storeUsable),
-		checkConfig(storeUsable),
+		checkConfig(storeUsable, settings, settingsErr),
+		checkUpdateCheck(report, effective),
 		checkSessions(root, storeUsable),
 		accountsCheck,
 		checkProfiles(root, storeUsable, accountsUsable),
@@ -632,7 +651,7 @@ func checkEngineState(usable bool) check {
 // configuration and most machines never need one. An unusable file is a warning
 // rather than a failure for the same reason — ccdad goes on working, on numbers
 // the user did not choose.
-func checkConfig(usable bool) check {
+func checkConfig(usable bool, settings config.Config, settingsErr error) check {
 	if !usable {
 		return check{"config", levelSkipped, "there is no store to check"}
 	}
@@ -644,10 +663,11 @@ func checkConfig(usable bool) check {
 		return check{"config", levelOK, fmt.Sprintf(
 			"no %s, so the engine runs on the built-in defaults", config.FileName)}
 	}
-	cfg, err := config.Load()
-	if err != nil {
+	// The load is the caller's, so this row and the release row cannot disagree
+	// about one file.
+	if settingsErr != nil {
 		return check{"config", levelWarn, fmt.Sprintf(
-			"%v — every value in it is being ignored and the engine is running on its defaults", err)}
+			"%v — every value in it is being ignored and the engine is running on its defaults", settingsErr)}
 	}
 	detail := path
 	if raw, rerr := os.ReadFile(path); rerr == nil {
@@ -656,12 +676,74 @@ func checkConfig(usable bool) check {
 				"%s carries keys this ccdad does not know, which are preserved but ignored: %v", path, unknown)}
 		}
 	}
-	if cfg.MaxAutoSpend > 0 {
+	if settings.MaxAutoSpend > 0 {
 		// Unattended spending is on. The risk register rates it High, and
 		// doctor is where a user checks what their machine will do without them.
-		detail = fmt.Sprintf("%s — unattended credit spending is armed up to %v", path, cfg.MaxAutoSpend)
+		detail = fmt.Sprintf("%s — unattended credit spending is armed up to %v", path, settings.MaxAutoSpend)
 	}
 	return check{"config", levelOK, detail}
+}
+
+// checkUpdateCheck reports what the daemon's daily release check has found.
+//
+// It makes NO request. A probe must not create what it probes, and asking the
+// origin here would answer a different question from the one this row is about:
+// whether the DAEMON is asking, and what it last heard.
+//
+// It is `warn` at its worst. fail is the only level that changes doctor's exit
+// code, and a release landing must not turn every health-check script in the
+// world red on the day it ships.
+func checkUpdateCheck(report daemon.Report, settings config.Config) check {
+	level, detail := updateCheckVerdict(settings.UpdateCheck, report, buildinfo.Version)
+	return check{"update-check", level, detail}
+}
+
+// updateCheckVerdict is the row's decision, as a pure function of the three
+// things it depends on, so the PRECEDENCE below can be asserted directly rather
+// than through a store arranged to match one arm at a time.
+//
+// The arms are ORDERED and a machine can match several at once:
+//
+//   - switched off outranks everything. A machine that asked not to be told is
+//     not one to warn about a release it was never going to look for.
+//   - a newer release outranks a failed check. A release seen yesterday is
+//     still out today, and today's failure is the less useful of the two facts.
+//   - a comparison outranks "cannot compare", so a build with no comparable
+//     version says so only when there is nothing better to say.
+func updateCheckVerdict(enabled bool, report daemon.Report, running string) (checkLevel, string) {
+	if !enabled {
+		// The command is deliberately NOT gated by this key, and the row says
+		// so: a key that silently disabled something a human typed would be a
+		// worse surprise than the request it prevents.
+		return levelOK, fmt.Sprintf(
+			"%s is false in %s, so the daemon never asks whether a release is out; the update command is not gated by it",
+			config.KeyUpdateCheck, config.FileName)
+	}
+	s := report.Status
+	if !report.HasStatus || s.UpdateCheckedAt.IsZero() {
+		return levelOK, "no daemon has checked for a release yet"
+	}
+
+	latest, latestOK := release.ParseTag(s.UpdateLatest)
+	current, currentOK := release.ParseTag(running)
+	when := s.UpdateCheckedAt.Format(time.RFC3339)
+
+	if latestOK && currentOK && latest.Compare(current) > 0 {
+		return levelWarn, fmt.Sprintf("ccdad %s is out and this is %s (checked %s) — %s",
+			latest, current, when, release.BaseURL()+"/latest")
+	}
+	if s.UpdateCheckError != "" {
+		due := "the next tick"
+		if !s.NextUpdateCheckAt.IsZero() {
+			due = s.NextUpdateCheckAt.Format(time.RFC3339)
+		}
+		return levelWarn, fmt.Sprintf("the last release check failed: %s (the next is due %s)", s.UpdateCheckError, due)
+	}
+	if latestOK && currentOK {
+		return levelOK, fmt.Sprintf("ccdad %s is the newest release (checked %s)", latest, when)
+	}
+	return levelOK, fmt.Sprintf(
+		"the newest release cannot be compared against this build's version %q (checked %s)", running, when)
 }
 
 // checkCredentialHome answers the question no other check can: is something
