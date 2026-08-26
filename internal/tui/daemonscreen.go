@@ -27,6 +27,11 @@ type daemonScreen struct {
 	Log    []string
 	Now    time.Time
 	LogErr error
+	// Version is what THIS binary claims to be, because the comparison against
+	// the release the daemon saw is the reader's to make: the daemon publishes
+	// an observation, and a verdict computed there would be a 0.6.1 daemon
+	// telling a 0.7.0 dashboard to upgrade to what it is already running.
+	Version string
 	// CredentialHome is THIS process's own resolution of the Claude Code
 	// credential home, for comparison against the one the daemon published.
 	// A daemon started from a shell that resolved a different one manages that
@@ -147,6 +152,13 @@ func (d daemonScreen) liveness() []string {
 		if d.driftsFrom(s.CredentialHome) {
 			out = append(out, "  this ccdad resolves "+d.CredentialHome+" instead, so the two manage different logins")
 		}
+	}
+	// Rendered through the same function `ccdad status` prints, rather than a
+	// wording of this screen's own. This screen already has four wordings for a
+	// daemon's state in this binary to keep in step; a fifth for the release
+	// would be a fifth.
+	if line, ok := view.UpdateLine(d.Report, d.Version); ok {
+		out = append(out, "  "+strings.TrimPrefix(line, "Update:  "))
 	}
 	return out
 }
