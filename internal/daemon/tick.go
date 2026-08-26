@@ -93,6 +93,15 @@ type Engine struct {
 	PollTimeout time.Duration
 	// Log records what a tick decided. Nil is silent.
 	Log func(format string, a ...any)
+	// LatestRelease resolves the newest published release, as a tag such as
+	// "v0.7.0". It is a func for the reason the poller's hooks above are, and
+	// NIL IS THE DEFAULT ON PURPOSE: NewEngine leaves it unset, so the only
+	// engine in this binary that can reach the release origin is the one
+	// EngineOptions builds for the daemon process. internal/cli constructs a
+	// real Engine of its own for a refresh, and this is what stops that
+	// construction acquiring a network call nobody asked it for -- and what
+	// stops a test in this package reaching the network by forgetting a stub.
+	LatestRelease func(ctx context.Context) (string, error)
 
 	reloader *config.Reloader
 
@@ -102,6 +111,16 @@ type Engine struct {
 	inFlight map[string]struct{}
 	polls    map[string]pollRecord
 	status   Status
+	// The daily release check's whole state, beside cfg and polls under the
+	// same lock. It is deliberately NOT inside status: publish() replaces that
+	// field wholesale on every tick, so anything kept there would be erased
+	// about once a second. Snapshot overlays these the way it overlays the poll
+	// records, and for the same reason.
+	updateCheckedAt   time.Time
+	nextUpdateCheckAt time.Time
+	updateInFlight    bool
+	updateLatest      string
+	updateErr         string
 	// saidOverridden, saidContended and saidClaimNotice are touched only from
 	// Tick, which Loop runs one at a time, so they are deliberately outside the
 	// mutex above: the fields under it are the ones a poller goroutine or
@@ -277,6 +296,13 @@ func (e *Engine) Snapshot() Status {
 			out.Accounts[i].NextPollAt = next
 		}
 	}
+	// The four release-check fields, overlaid here for the reason the poll
+	// times above are: publish() replaces e.status wholesale on every tick, so
+	// state that has to outlive one iteration cannot live in it.
+	out.UpdateCheckedAt = e.updateCheckedAt
+	out.NextUpdateCheckAt = e.nextUpdateCheckAt
+	out.UpdateLatest = e.updateLatest
+	out.UpdateCheckError = e.updateErr
 	return out
 }
 
@@ -301,6 +327,13 @@ func (e *Engine) Tick(ctx context.Context) error {
 	if cfgErr != nil {
 		e.logf("config: %v (running on the last one that parsed)", cfgErr)
 	}
+
+	// Above the evaluation AND above the cache load, which is the position
+	// rather than a place it fitted: a machine whose usage cache cannot be read
+	// returns from this function early, and a machine whose ranking pass fails
+	// every tick is exactly the machine whose user needs to hear that a fix
+	// shipped.
+	e.checkForRelease(ctx, cfg, now)
 
 	cache, err := usage.LoadCache()
 	if err != nil {
