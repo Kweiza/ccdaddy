@@ -18,6 +18,22 @@ by `uuid` or `alias`.
 
 ### Added
 
+- **A pro/max control group is pinned beside the enterprise wire.** Every live
+  recording this repository had was an enterprise seat from one organization, so
+  nothing in the enterprise body could be told apart from what that one org
+  happens to send. Two verbatim `/api/oauth/usage` bodies from a `claude_max`
+  seat are pinned now — the same seat with its overage meter off and on — and
+  read as a pair against the enterprise one. The pair settles four fields that
+  looked like tier discriminators and are not: `can_toggle` and
+  `can_purchase_credits` are false on both, `spend.cap` takes the same shape on
+  both once the meter is configured, and `member_dashboard_available` does not
+  move when the meter does. The one structural difference is the one already
+  keyed on — a plan seat has windows and a money-metered seat has none. The
+  overage-on body is also the first live response to reach the `Blocked` branch:
+  `out_of_credits` is refused while `spend_limit_reached` is false at 78% of a
+  cap, so the monthly cap and the credit balance are two exhaustion axes and
+  must not be collapsed into one.
+
 - **The credit runway is measured for a fleet with no plan windows, and
   `ccdad runway` shows it.** The credit axis was handed the account list the
   window simulation had already filtered, and that filter drops every account
