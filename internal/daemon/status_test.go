@@ -532,3 +532,75 @@ func TestObserveCarriesAnUnreadableDocumentWithoutFailing(t *testing.T) {
 		t.Error("the parse failure was swallowed; doctor has nothing to print")
 	}
 }
+
+// The four release-check fields are APPENDED to the document, not a new
+// version of it. Upgrading replaces the binary while the old daemon keeps
+// publishing, so on the day of an upgrade a new CLI reads an old document and,
+// the moment the daemon restarts, an old CLI reads a new one. Both directions
+// have to work, which is what an additive contract with a fixed schema version
+// buys -- and bumping the version to add a field spends it.
+func TestTheReleaseCheckFieldsRoundTripAndDoNotBumpTheSchema(t *testing.T) {
+	isolate(t)
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	want := Status{
+		UpdateCheckedAt:   now.Add(-2 * time.Hour),
+		NextUpdateCheckAt: now.Add(22 * time.Hour),
+		UpdateLatest:      "0.7.0",
+		UpdateCheckError:  "dial tcp: i/o timeout",
+	}
+	if _, err := NewStatusWriter().Write(want, now); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := ReadStatus()
+	if err != nil || !ok {
+		t.Fatalf("ReadStatus() = %v, %v", ok, err)
+	}
+	if !got.UpdateCheckedAt.Equal(want.UpdateCheckedAt) {
+		t.Errorf("UpdateCheckedAt = %v, want %v", got.UpdateCheckedAt, want.UpdateCheckedAt)
+	}
+	if !got.NextUpdateCheckAt.Equal(want.NextUpdateCheckAt) {
+		t.Errorf("NextUpdateCheckAt = %v, want %v", got.NextUpdateCheckAt, want.NextUpdateCheckAt)
+	}
+	if got.UpdateLatest != want.UpdateLatest {
+		t.Errorf("UpdateLatest = %q, want %q", got.UpdateLatest, want.UpdateLatest)
+	}
+	if got.UpdateCheckError != want.UpdateCheckError {
+		t.Errorf("UpdateCheckError = %q, want %q", got.UpdateCheckError, want.UpdateCheckError)
+	}
+	raw, rerr := os.ReadFile(mustPath(StatusPath()))
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	// The wire names are the contract every reader outside this package is
+	// written against, and a round trip through one struct cannot see a rename:
+	// it marshals and unmarshals with the same tag either way.
+	for _, name := range []string{"updateCheckedAt", "nextUpdateCheckAt", "updateLatest", "updateCheckError"} {
+		if !strings.Contains(string(raw), name) {
+			t.Errorf("the published document does not carry %q:\n%s", name, raw)
+		}
+	}
+	if StatusSchemaVersion != 1 {
+		t.Errorf("StatusSchemaVersion = %d; adding a field is not how a reader is told about one, and bumping it breaks the readers this contract exists for", StatusSchemaVersion)
+	}
+}
+
+// An old daemon publishes none of the four, and a reader must see the zero
+// values rather than an error or a guess. This is the other direction of the
+// same skew, and it is the one a machine actually spends a day in.
+func TestADocumentWithNoReleaseFieldsReadsAsZero(t *testing.T) {
+	isolate(t)
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	if _, err := NewStatusWriter().Write(Status{PID: 4242}, now); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := ReadStatus()
+	if err != nil || !ok {
+		t.Fatalf("ReadStatus() = %v, %v", ok, err)
+	}
+	if !got.UpdateCheckedAt.IsZero() || !got.NextUpdateCheckAt.IsZero() {
+		t.Errorf("an old document produced a stamp out of nothing: %+v", got)
+	}
+	if got.UpdateLatest != "" || got.UpdateCheckError != "" {
+		t.Errorf("an old document produced a release reading out of nothing: %+v", got)
+	}
+}
