@@ -89,3 +89,64 @@ func TestAConfiguredThresholdStillMakesATrippedWeeklyAFloor(t *testing.T) {
 			h.Floor, h.HasFloor)
 	}
 }
+
+// creditOnly is a reading from a seat metered in money and nothing else: no
+// plan window carried any figure, and extra_usage holds the whole meter. The
+// numbers are a live claude_enterprise seat read on 2026-08-26, in the minor
+// units the wire uses.
+func creditOnly(utilization float64) *usage.Snapshot {
+	u := utilization
+	limit, used := 200000.0, 120451.0
+	return &usage.Snapshot{ExtraUsage: usage.ExtraUsageFor(usage.ExtraUsageInput{
+		State:        usage.ExtraUsageEnabled,
+		Currency:     "USD",
+		MonthlyLimit: &limit,
+		UsedCredits:  &used,
+		Utilization:  &u,
+	})}
+}
+
+// TestHeadroomOrCreditReadsTheCreditAxisWhenNoWindowBinds is the display half
+// of what rank.go:measure already does for the engine.
+//
+// HeadroomOf reads plan windows and nothing else, so a seat with none answers
+// Known=false — and every caller that renders a percent then prints "?" while
+// the engine, which reassigns the same seat onto the credit axis, is ranking it
+// on a real number. One reading must not produce two answers.
+func TestHeadroomOrCreditReadsTheCreditAxisWhenNoWindowBinds(t *testing.T) {
+	h := HeadroomOrCredit(creditOnly(60.2255), Thresholds{})
+	if !h.Known {
+		t.Fatal("Known = false — the seat has a readable meter, it is just not a plan window")
+	}
+	if got, want := h.Pct, 100-60.2255; math.Abs(got-want) > 1e-9 {
+		t.Errorf("Pct = %v, want %v", got, want)
+	}
+	if h.Binding != "extra_usage" {
+		t.Errorf("Binding = %q, want %q", h.Binding, "extra_usage")
+	}
+	if got, want := h.Threshold, (Thresholds{}).CreditThreshold(); got != want {
+		t.Errorf("Threshold = %v, want the credit threshold %v", got, want)
+	}
+}
+
+// TestHeadroomOrCreditPrefersAPlanWindowOverTheCreditAxis is the guard on the
+// fallback above, and it is the one that keeps a subscription honest.
+//
+// An ordinary account with overage switched on carries BOTH a plan window and a
+// populated extra_usage. Its credits are not its meter — they are what it
+// spends after the window runs out — so the window has to win, exactly as
+// Classify's first branch already decides for the same reading.
+func TestHeadroomOrCreditPrefersAPlanWindowOverTheCreditAxis(t *testing.T) {
+	s := creditOnly(90)
+	s.FiveHour = win(10, time.Hour)
+	h := HeadroomOrCredit(s, Thresholds{})
+	if !h.Known {
+		t.Fatal("Known = false for a reading with a live five-hour window")
+	}
+	if h.Binding != usage.WindowFiveHour {
+		t.Fatalf("Binding = %q, want %q — overage credits are not the meter while a window has room", h.Binding, usage.WindowFiveHour)
+	}
+	if h.Pct != 90 {
+		t.Errorf("Pct = %v, want 90 — the five-hour window's own headroom", h.Pct)
+	}
+}
