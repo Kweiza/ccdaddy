@@ -1619,3 +1619,51 @@ func TestAddSurvivesAnUnwritableEngineState(t *testing.T) {
 		t.Error("the account was not stored")
 	}
 }
+
+// TestApplyProfileMarksAMoneyMeteredSeatPrimary pins the second half of what a
+// profile decides at add time.
+//
+// Kind alone is not enough to make an enterprise seat usable. A credit account
+// that is not primary waits in the last-resort pool behind credit.max_auto_spend,
+// which ships at 0 — so a fleet made only of these seats would classify
+// correctly and still never switch. The flag has to arrive with the
+// classification that implies it.
+func TestApplyProfileMarksAMoneyMeteredSeatPrimary(t *testing.T) {
+	var acct store.Account
+	applyProfile(&acct, &identity.Profile{
+		AccountUUID:      "u-1",
+		OrganizationType: "claude_enterprise",
+		RateLimitTier:    "default_claude_zero",
+		SeatTier:         "enterprise_usage_based",
+		BillingType:      "stripe_subscription_contracted",
+	})
+	if acct.Kind != identity.KindCredit {
+		t.Fatalf("Kind = %v, want %v", acct.Kind, identity.KindCredit)
+	}
+	if !acct.Primary {
+		t.Fatal("Primary = false, want true — a seat with no plan window has no quota for its credits to be an overage of")
+	}
+	if acct.SeatTier != "enterprise_usage_based" {
+		t.Errorf("SeatTier = %q, want it carried through", acct.SeatTier)
+	}
+}
+
+// TestApplyProfileLeavesAnOrdinarySubscriptionAlone is the guard on the rule
+// above: the primary flag bypasses credit.max_auto_spend, so it must never
+// arrive on an account a plan window still meters.
+func TestApplyProfileLeavesAnOrdinarySubscriptionAlone(t *testing.T) {
+	var acct store.Account
+	applyProfile(&acct, &identity.Profile{
+		AccountUUID:      "u-2",
+		OrganizationType: "claude_max",
+		RateLimitTier:    "default_claude_max_20x",
+		SeatTier:         "standard",
+		BillingType:      "stripe_subscription",
+	})
+	if acct.Kind != identity.KindSubscription {
+		t.Fatalf("Kind = %v, want %v", acct.Kind, identity.KindSubscription)
+	}
+	if acct.Primary {
+		t.Fatal("Primary = true, want false — the flag bypasses the spend ceiling and this account has quota")
+	}
+}

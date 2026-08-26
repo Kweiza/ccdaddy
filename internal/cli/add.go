@@ -245,12 +245,11 @@ func runAdd(cmd *cobra.Command, opts addOptions) error {
 	acct := store.Account{
 		UUID:  result.Token.Account.UUID,
 		Email: result.Token.Account.EmailAddress,
-		// No usage call has been made, so UsageShape is empty by fact rather
-		// than by omission: Classify reads that as "no window evidence" and
-		// only a metered billing_type can still make it credit. An overage
-		// switch on a subscription org is not evidence.
-		Kind: identity.Classify(profile, identity.UsageShape{}, false),
 	}
+	// No usage call has been made, so the UsageShape applyProfile passes is
+	// empty by fact rather than by omission: Classify reads that as "no window
+	// evidence", and an overage switch on a subscription org is not evidence.
+	applyProfile(&acct, profile)
 	if profile != nil {
 		if acct.UUID == "" {
 			acct.UUID = profile.AccountUUID
@@ -258,9 +257,6 @@ func runAdd(cmd *cobra.Command, opts addOptions) error {
 		if acct.Email == "" {
 			acct.Email = profile.Email
 		}
-		acct.Tier = profile.OrganizationType
-		acct.RateLimitTier = profile.RateLimitTier
-		acct.OrganizationUUID = profile.OrganizationUUID
 	}
 	if acct.UUID == "" {
 		return fmt.Errorf("the login did not identify an account; try again")
@@ -444,6 +440,29 @@ func loginError(stderr io.Writer, err error) error {
 		return WithCode(err, ExitFailure)
 	}
 	return err
+}
+
+// applyProfile writes everything one profile lookup decides about an account.
+//
+// It exists because two add paths — the browser login and `add-token` — each
+// asked the same four questions of the same object, and a fifth question added
+// to one and not the other is invisible until an account is already stored
+// wrong. UUID and email are deliberately NOT here: those two differ by path,
+// the login already having them from the token exchange while the token path
+// has only a synthetic label to replace.
+//
+// A nil profile still decides the Kind, because "no evidence" is an answer
+// Classify has a documented default for.
+func applyProfile(acct *store.Account, p *identity.Profile) {
+	acct.Kind = identity.Classify(p, identity.UsageShape{}, false)
+	if p == nil {
+		return
+	}
+	acct.Tier = p.OrganizationType
+	acct.RateLimitTier = p.RateLimitTier
+	acct.SeatTier = p.SeatTier
+	acct.OrganizationUUID = p.OrganizationUUID
+	acct.Primary = identity.PrimaryByDefault(p)
 }
 
 // subscriptionTypeOf maps the profile's organization_type to the short name
@@ -766,10 +785,7 @@ func runAddToken(cmd *cobra.Command, token string, isAPIKey bool, email, alias s
 			if acct.Email == "" {
 				acct.Email = profile.Email
 			}
-			acct.Tier = profile.OrganizationType
-			acct.RateLimitTier = profile.RateLimitTier
-			acct.OrganizationUUID = profile.OrganizationUUID
-			acct.Kind = identity.Classify(profile, identity.UsageShape{}, false)
+			applyProfile(&acct, profile)
 		}
 	}
 
