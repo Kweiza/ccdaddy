@@ -6,16 +6,15 @@ package tui
 // generator — no figlet dependency, no font file — because a generator would
 // put a build step in front of a decoration.
 //
-// Every one of them is 7-bit ASCII, and it stays that way even now that the
-// page around it draws box-drawing and block characters on purpose. This is
-// ART, measured in columns by a transcription somebody did by hand, and the
-// height ladder's row budget and the frame's width are both arithmetic over the
-// sizes below. A block character inside one of these rows would measure one
-// column on most machines and two on a machine whose width engine was started
-// in east-asian mode, so the drawing would change shape with an environment
-// variable — and the glyph set that fixes that for the frame and the gauge
-// cannot fix it here, because these rows are not a vocabulary with two
-// spellings. They are one drawing.
+// Every one of them is 7-bit ASCII, and that is now what they are FOR. Since
+// the pixel chrome landed these three blocks are the fallback the page draws
+// when Glyphs.Art is false -- a console that cannot carry UTF-8, or a process
+// whose width engine is in its east-asian mode, where a block character
+// measures two columns and a drawing changes shape with an environment
+// variable. They are ART, measured in columns by a transcription somebody did
+// by hand, and they are not a vocabulary with two spellings: they are one
+// drawing, which is why the fallback is these rows rather than a degraded
+// version of the other ones.
 var wordmark = []string{
 	`  ___ ___ ___          _    _        `,
 	` / __/ __|   \ __ _ __| |__| |_  _   `,
