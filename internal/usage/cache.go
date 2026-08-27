@@ -12,6 +12,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/cclock"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/pollpolicy"
+	"github.com/Kweiza/ccdaddy/internal/zone"
 )
 
 // The on-disk usage cache: one document the daemon writes and every CLI
@@ -300,9 +301,30 @@ func LoadCache() (*Cache, error) {
 }
 
 // save writes the cache atomically. The caller must hold the lock.
+//
+// ccdad's OWN moments are rendered in the machine's zone -- fetched_at,
+// next_poll_at, stand_down_until and the two stamps inside poll and probe --
+// which is the rule status.json, every --json document and the history series
+// obey, applied at this file's one serialiser for the same reason: a writer's
+// job is to choose an instant, and an instant has no zone.
+//
+// This document is the one that CANNOT carry a single zone, and that is
+// deliberate rather than a gap. The snapshot half is a verbatim mirror of the
+// endpoint's body -- Snapshot.MarshalJSON writes the endpoint's own shape and
+// Snapshot.UnmarshalJSON reads it back through the parser a live response goes
+// through, which is what lets a cache be compared against bodies recorded from
+// the endpoint. Rendering a resets_at in a local offset would still parse and
+// would end that, so the wire's moments stay exactly as they arrived.
+//
+// The boundary is the `snapshot` object, and it holds structurally rather than
+// by a list of names: every moment inside a Snapshot lives in an unexported
+// field behind that codec, so the walk below cannot reach one even if somebody
+// wanted it to. An exported time.Time added to Snapshot would break the mirror,
+// and TestTheCacheRendersItsOwnMomentsLocallyAndMirrorsTheWireVerbatim is where
+// that gets noticed.
 func (c *Cache) save(root string) error {
 	c.data.Version = 1
-	encoded, err := json.Marshal(c.data)
+	encoded, err := json.Marshal(zone.In(c.data, time.Local))
 	if err != nil {
 		return fmt.Errorf("encoding %s: %w", CacheFileName, err)
 	}
