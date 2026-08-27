@@ -154,3 +154,118 @@ func TestASolidCellIsPaintedOnBothChannels(t *testing.T) {
 		t.Errorf("an empty cell painted a foreground colour when it should not: %q", got)
 	}
 }
+
+// The grids are hand-maintained data, and every one of these is a way a hand
+// edit goes wrong silently.
+//
+// An odd row count folds the last row against a row that is not there and
+// panics at render time, on one page size, in front of a user. A short row
+// indexes out of range the same way. A stray character is worse than either
+// because it does not panic: it becomes ink, and a drawing acquires a pixel
+// nobody put there.
+func TestTheGridsAreWellFormed(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		g    artGrid
+		rows int
+	}{
+		{"the wordmark", wordArt, 5},
+		{"the figures", figureArt, 6},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.g.W != 48 {
+				t.Errorf("the grid is %d cells wide, want 48: both blocks share the figure block's anchor", tc.g.W)
+			}
+			if len(tc.g.Rows)%2 != 0 {
+				t.Fatalf("the grid has %d pixel rows, which is odd: the fold takes them in pairs", len(tc.g.Rows))
+			}
+			if got := tc.g.height(); got != tc.rows {
+				t.Errorf("the grid is %d terminal rows, want %d: the height ladder budgets that many", got, tc.rows)
+			}
+			for i, row := range tc.g.Rows {
+				if len(row) != tc.g.W {
+					t.Errorf("pixel row %d is %d characters, want %d: %q", i, len(row), tc.g.W, row)
+				}
+				for j := 0; j < len(row); j++ {
+					if row[j] != artGround && row[j] != '1' {
+						t.Errorf("pixel row %d column %d is %q, want %q or '1'", i, j, row[j], artGround)
+					}
+				}
+			}
+		})
+	}
+}
+
+// A drawing with no ink is a bug that every other test in this file would call
+// correct, because a grid of pure ground folds to a row of spaces and satisfies
+// the fold table, the cut, the tail and the strip-equality assertion at once.
+//
+// The half-inked cell is named separately and it is not decoration: it is the
+// premise of the wordmark's case in TestEachRoleLandsOnTheCellItNames, which
+// looks for the accent's opening sequence immediately followed by U+2580. A
+// solid cell opens with a foreground AND a background, so that assertion only
+// has something to find if some cell somewhere is inked on the top half alone.
+func TestEachGridDrawsInkAndAtLeastOneHalfInkedCell(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		g    artGrid
+	}{
+		{"the wordmark", wordArt},
+		{"the figures", figureArt},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ink, halfTop := 0, 0
+			for r := 0; r < tc.g.height(); r++ {
+				for c := 0; c < tc.g.W; c++ {
+					switch cell := foldArt(tc.g, r, c); {
+					case cell == artCell{Rune: artUpper, Ink: true}:
+						halfTop++
+						ink++
+					case cell.Ink:
+						ink++
+					}
+				}
+			}
+			if ink == 0 {
+				t.Fatalf("the grid draws nothing at all")
+			}
+			if halfTop == 0 {
+				t.Errorf("no cell is inked on the top half alone, so TestEachRoleLandsOnTheCellItNames has nothing to match")
+			}
+			t.Logf("%d inked cells of %d, %d of them inked on the top half alone", ink, tc.g.height()*tc.g.W, halfTop)
+		})
+	}
+}
+
+// The drawing is the same width in both width modes, measured in CELLS.
+//
+// A child process is the only way to ask this, and glyphs_test.go says why: the
+// width engine reads RUNEWIDTH_EASTASIAN once in its own package init, into two
+// unexported values nothing exports a setter for. t.Setenv would change an
+// environment nobody reads again, and the naive version of this test measures
+// the narrow mode twice.
+//
+// The assertion is on the CELL count and not on ansi.StringWidth, deliberately.
+// StringWidth is what says 96 in that mode; the claim here is the narrower one
+// that the renderer emits the same runes either way, which is what makes
+// Glyphs.Art the only thing standing between the art and a broken frame.
+func TestAnArtRowIsTheSameCellsInBothWidthModes(t *testing.T) {
+	m := fixtureModel(113, 26)
+	for _, tc := range []struct {
+		name string
+		g    artGrid
+	}{
+		{"the wordmark", wordArt},
+		{"the figures", figureArt},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for r := 0; r < tc.g.height(); r++ {
+				row := m.artRow(tc.g, r, 111, theme.RoleAccent, "")
+				if got := len([]rune(row)); got != tc.g.W {
+					t.Errorf("row %d is %d runes, want %d", r, got, tc.g.W)
+				}
+			}
+		})
+	}
+	alsoInEastAsianMode(t)
+}
