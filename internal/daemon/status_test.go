@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -36,6 +37,22 @@ func readRaw(t *testing.T) map[string]any {
 	return out
 }
 
+// stamp is the timestamp under key, read back as the INSTANT it names.
+//
+// The tests that assert which moment generatedAt carries are about the change
+// stamp and not about the zone it is written in, and comparing the string would
+// tie them to whatever zone the writer renders in — which is the machine's, so
+// they would pass in UTC and fail in Seoul. Which zone reaches the wire is
+// TestStatusWriterRendersEveryTimeInOneZone's question, and it is asked once.
+func stamp(t *testing.T, raw map[string]any, key string) time.Time {
+	t.Helper()
+	got, ok := raw[key].(string)
+	if !ok {
+		t.Fatalf("%s = %v, want a timestamp", key, raw[key])
+	}
+	return at(got)
+}
+
 func TestStatusWriterPublishesTheDocument(t *testing.T) {
 	isolate(t)
 	if err := os.MkdirAll(filepath.Dir(mustPath(StatusPath())), 0o700); err != nil {
@@ -65,7 +82,7 @@ func TestStatusWriterPublishesTheDocument(t *testing.T) {
 	if got := raw["schemaVersion"]; got != float64(StatusSchemaVersion) {
 		t.Errorf("schemaVersion = %v, want %d", got, StatusSchemaVersion)
 	}
-	if got := raw["generatedAt"]; got != "2026-08-22T05:00:00Z" {
+	if got := stamp(t, raw, "generatedAt"); !got.Equal(at("2026-08-22T05:00:00Z")) {
 		t.Errorf("generatedAt = %v, want the write time", got)
 	}
 	if got := raw["pid"]; got != float64(4242) {
@@ -128,7 +145,7 @@ func TestStatusWriterSkipsAnUnchangedDocument(t *testing.T) {
 	// generatedAt is a change stamp, not a heartbeat. An unchanged tick must
 	// leave it exactly where it was, or the skip is unobservable and the next
 	// reader of this file deletes it as pointless.
-	if got := readRaw(t)["generatedAt"]; got != "2026-08-22T05:00:00Z" {
+	if got := stamp(t, readRaw(t), "generatedAt"); !got.Equal(at("2026-08-22T05:00:00Z")) {
 		t.Errorf("generatedAt = %v after a skipped write, want the earlier stamp", got)
 	}
 	after, err := os.Stat(mustPath(StatusPath()))
@@ -160,8 +177,8 @@ func TestStatusWriterPublishesAChange(t *testing.T) {
 	if raw["activeUuid"] != "uuid-b" {
 		t.Errorf("activeUuid = %v, want the new value", raw["activeUuid"])
 	}
-	if raw["generatedAt"] != "2026-08-22T05:00:01Z" {
-		t.Errorf("generatedAt = %v, want the time the change was published", raw["generatedAt"])
+	if got := stamp(t, raw, "generatedAt"); !got.Equal(at("2026-08-22T05:00:01Z")) {
+		t.Errorf("generatedAt = %v, want the time the change was published", got)
 	}
 }
 
@@ -602,5 +619,82 @@ func TestADocumentWithNoReleaseFieldsReadsAsZero(t *testing.T) {
 	}
 	if got.UpdateLatest != "" || got.UpdateCheckError != "" {
 		t.Errorf("an old document produced a release reading out of nothing: %+v", got)
+	}
+}
+
+// kst is a zone that is not UTC and is not the machine's, so a document
+// rendered in it can be told apart from one that was never rendered at all.
+// A test that asked for time.Local would be blind on CI, where nothing sets TZ
+// and local IS UTC — the offset it asserted would be the offset the bug leaves
+// behind, and the test would pass over the defect it exists to catch.
+var kst = time.FixedZone("KST", 9*60*60)
+
+// One document, one zone.
+//
+// nextPollAt has two writers. The ordinary cadence is now.Add(interval) and
+// carries the machine's zone; an account whose next look is pulled to a window
+// rollover inherits the wire's, because resets_at is parsed from a string
+// ending in Z and warmClamp returns that instant verbatim. Both are the same
+// moment written two ways, and a reader comparing the rows against one wall
+// clock reads the second kind as hours overdue. It is not a hypothetical: a
+// live store carried five rows at +09:00 beside one at Z, and the Z row was
+// four minutes in the FUTURE.
+//
+// The rule this pins is that the zone is the document's and not the field's.
+func TestStatusWriterRendersEveryTimeInOneZone(t *testing.T) {
+	isolate(t)
+	if err := os.MkdirAll(filepath.Dir(mustPath(StatusPath())), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	w := NewStatusWriter()
+	w.zone = kst
+
+	if _, err := w.Write(Status{
+		PID:               3,
+		StartedAt:         at("2026-08-22T04:00:00Z"),
+		LastSwitchAt:      at("2026-08-22T04:30:00Z"),
+		LastSwitchTo:      "uuid-a",
+		ActiveUUID:        "uuid-a",
+		UpdateCheckedAt:   at("2026-08-22T03:00:00Z"),
+		NextUpdateCheckAt: at("2026-08-23T03:00:00Z"),
+		Accounts: []AccountStatus{
+			// The cadence writer's shape: an instant already in the zone the
+			// document is rendered in.
+			{UUID: "uuid-a", State: StateActive, NextPollAt: at("2026-08-22T05:10:00Z").In(kst),
+				LastPollAt: at("2026-08-22T05:00:00Z").In(kst)},
+			// The rollover writer's shape: the same kind of instant, carrying
+			// the wire's zone instead.
+			{UUID: "uuid-b", State: StateCandidate, NextPollAt: at("2026-08-22T05:12:00Z"),
+				LastPollAt: at("2026-08-22T05:01:00Z")},
+		},
+	}, at("2026-08-22T05:00:00Z")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	body, err := os.ReadFile(mustPath(StatusPath()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Every timestamp in the document, found the way a reader finds them —
+	// by their shape on the wire rather than by a list of field names this
+	// test would have to be told to grow.
+	stamps := regexp.MustCompile(`"(\d{4}-\d\d-\d\dT[\d:.]+(?:Z|[+-]\d\d:\d\d))"`).FindAllStringSubmatch(string(body), -1)
+	if len(stamps) < 8 {
+		t.Fatalf("found %d timestamps in the document, want every one of the eight it carries:\n%s",
+			len(stamps), body)
+	}
+	for _, m := range stamps {
+		if !strings.HasSuffix(m[1], "+09:00") {
+			t.Errorf("%s is not in the document's zone; one document carries one zone:\n%s", m[1], body)
+		}
+	}
+}
+
+// The zone a document is rendered in is the machine's, because the person
+// reading it is on the machine. It is not a constructor argument for the same
+// reason `ccdad status` does not take one: there is nobody else to ask.
+func TestNewStatusWriterRendersTheMachineZone(t *testing.T) {
+	if got := NewStatusWriter().zone; got != time.Local {
+		t.Errorf("a new writer renders in %v, want the machine's zone %v", got, time.Local)
 	}
 }

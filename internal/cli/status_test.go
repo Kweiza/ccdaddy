@@ -9,6 +9,7 @@ import (
 	"go/types"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -1595,5 +1596,102 @@ func TestStatusSaysNothingAboutAReleaseItIsAlreadyOn(t *testing.T) {
 	_, stdout, _, _ := runRoot(t, "status")
 	if strings.Contains(stdout, "is out") {
 		t.Errorf("the dashboard announced a release this binary is already on:\n%s", stdout)
+	}
+}
+
+// jsonStampPattern finds every timestamp in a document the way a reader finds
+// them — by their shape on the wire rather than by a list of key names this
+// test would have to be told to grow. It matches a pre-formatted string exactly
+// as it matches a marshalled time.Time, which is what makes it able to see the
+// payloads that spell their own layout.
+var jsonStampPattern = regexp.MustCompile(`"(\d{4}-\d\d-\d\dT[\d:.]+(?:Z|[+-]\d\d:\d\d))"`)
+
+// jsonStamps is every timestamp in a --json document, in order.
+func jsonStamps(doc string) []string {
+	var out []string
+	for _, m := range jsonStampPattern.FindAllStringSubmatch(doc, -1) {
+		out = append(out, m[1])
+	}
+	return out
+}
+
+// pinJSONZone fixes the zone --json documents are rendered in, for a test that
+// would otherwise be blind.
+//
+// Nothing sets TZ in CI, so time.Local is UTC there, and a test that asserted
+// against it would accept the very rows the bug leaves behind — every one of
+// them already ends in Z. Pinning a zone that is nobody's default makes the
+// assertion decide the same thing on every machine.
+func pinJSONZone(t *testing.T, loc *time.Location) {
+	t.Helper()
+	saved := jsonZone
+	t.Cleanup(func() { jsonZone = saved })
+	jsonZone = func() *time.Location { return loc }
+}
+
+// One document, one zone, and it is the machine's.
+//
+// `ccdad status --json` is the widest of these documents: it carries the
+// daemon's own stamps, the engine's poll schedule per account, the cache's
+// fetch times, the windows' rollovers as the endpoint reported them, and two
+// kinds of projection. Those arrive from four different places in four
+// different zones — resets_at is parsed off a wire string ending in Z, a poll
+// time pulled to a rollover inherits that Z, and everything computed from
+// time.Now() carries the machine's offset — and until they are rendered
+// together nothing makes them agree.
+//
+// The fixture carries the mixture on purpose. Seeding only machine-zone
+// moments would let this pass on CI, where local is UTC and the bug's own
+// output is indistinguishable from the fix's.
+func TestStatusJSONRendersEveryTimeInOneZone(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	pinJSONZone(t, time.FixedZone("KST", 9*60*60))
+	// Two accounts with history, pace projections and window rollovers, so the
+	// document carries every kind of moment it can carry rather than only the
+	// engine's two.
+	seedBurningFleet(t)
+	stubDaemon(t, daemon.Report{
+		State:     daemon.DaemonRunning,
+		HasStatus: true,
+		Status: daemon.Status{
+			SchemaVersion: daemon.StatusSchemaVersion,
+			PID:           4242,
+			// An OLD daemon's document, still on disk after an upgrade: it was
+			// written before the writer rendered one zone, so it carries both.
+			// The reader has to be right about it too, or the fix only reaches
+			// the machines that restarted the daemon.
+			StartedAt: statusNow.Add(-3 * time.Hour),
+			Accounts: []daemon.AccountStatus{
+				{UUID: "uuid-a", State: daemon.StateActive,
+					NextPollAt: statusNow.Add(10 * time.Minute).In(time.FixedZone("XYZ", -7*60*60)),
+					LastPollAt: statusNow.Add(-2 * time.Minute)},
+				{UUID: "uuid-b", State: daemon.StateCandidate,
+					NextPollAt: statusNow.Add(12 * time.Minute).UTC(),
+					LastPollAt: statusNow.Add(-1 * time.Minute).UTC()},
+			},
+		},
+	}, nil)
+
+	_, stdout, _, _ := runRoot(t, "status", "--json")
+	stamps := jsonStamps(stdout)
+	// The count is the guard against a fixture that stopped producing
+	// timestamps: a document with none would satisfy every assertion below.
+	if len(stamps) < 6 {
+		t.Fatalf("the document carries %d timestamps, too few for this to be deciding anything:\n%s",
+			len(stamps), stdout)
+	}
+	for _, got := range stamps {
+		if !strings.HasSuffix(got, "+09:00") {
+			t.Errorf("%s is not in the document's zone; one document carries one zone:\n%s", got, stdout)
+		}
+	}
+}
+
+// The zone is the machine's, because the person reading the document is on the
+// machine. It is a var only so a test can pin it — see pinJSONZone.
+func TestJSONZoneIsTheMachineZone(t *testing.T) {
+	if got := jsonZone(); got != time.Local {
+		t.Errorf("--json documents render in %v, want the machine's zone %v", got, time.Local)
 	}
 }

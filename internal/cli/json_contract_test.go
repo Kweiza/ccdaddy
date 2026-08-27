@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -41,8 +42,13 @@ import (
 //  4. A stdout whose reader has gone away is exit 0, and any OTHER write
 //     failure is exit 1. Both halves are needed to rule out both wrong
 //     implementations — see TestJSONContractWriteFailures.
+//  5. Every timestamp in a document is in ONE zone, and it is the machine's.
+//     A payload builder that formats a moment itself is how the zone drifts:
+//     the sites that call .In(jsonZone()) agree with each other and the ones
+//     that forget publish whatever zone their input arrived carrying. See
+//     TestJSONContractRendersEveryTimeInOneZone.
 //
-// The fifth test is the one that makes the other four keep working:
+// The sixth test is the one that makes the other five keep working:
 // TestJSONContractCoversEveryJSONCommand walks the tree and fails when a
 // command offers --json and has no row here.
 
@@ -557,6 +563,44 @@ func TestJSONContractWriteFailures(t *testing.T) {
 // Both directions are checked. A row for a command that no longer offers --json
 // is just as wrong as a command with no row: it passes silently while asserting
 // nothing about the tree as it now stands.
+// Rule 5. One zone per document, and it is the machine's.
+//
+// This is the rule that only exists BETWEEN commands. Each payload builder is
+// correct on its own: engineJSON puts a time.Time in the map and lets the
+// encoder render it, warmupJSON formats its own string, and both are readable
+// in isolation. What they cannot see is that the moments reaching them come
+// from different places — time.Now() carries the machine's offset, a window's
+// resets_at is parsed off a wire string ending in Z and carries UTC — so a
+// document assembled from several of them carries several zones. A live store
+// held five poll times at +09:00 beside one at Z, and the Z row read as nine
+// hours overdue while being four minutes in the future.
+//
+// The zone is pinned rather than read, for the reason pinJSONZone gives:
+// nothing sets TZ in CI, so time.Local is UTC there and every row the bug
+// leaves behind already ends in Z.
+func TestJSONContractRendersEveryTimeInOneZone(t *testing.T) {
+	seen := 0
+	for _, c := range jsonContractCases() {
+		t.Run(c.title(), func(t *testing.T) {
+			inContractWorld(t, c, func(t *testing.T) {
+				pinJSONZone(t, time.FixedZone("KST", 9*60*60))
+				_, stdout, _, _ := runRoot(t, c.argv()...)
+				for _, got := range jsonStamps(stdout) {
+					seen++
+					if !strings.HasSuffix(got, "+09:00") {
+						t.Errorf("%s is not in the document's zone:\n%s", got, stdout)
+					}
+				}
+			})
+		})
+	}
+	// Without this the rule passes on a table whose fixtures stopped producing
+	// moments at all, which is a green test asserting nothing.
+	if seen == 0 {
+		t.Error("no row in this table emitted a single timestamp, so this rule decided nothing")
+	}
+}
+
 func TestJSONContractCoversEveryJSONCommand(t *testing.T) {
 	inTree := map[string]bool{}
 	for _, path := range jsonCommandPaths(NewRootCmd()) {

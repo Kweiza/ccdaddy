@@ -11,6 +11,7 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/history"
+	"github.com/Kweiza/ccdaddy/internal/zone"
 )
 
 // StatusSchemaVersion is the version stamped into every document this binary
@@ -202,11 +203,44 @@ type StatusWriter struct {
 	size int64
 	// published records whether last/size mean anything yet.
 	published bool
+	// zone is the one zone every timestamp in the published document is
+	// rendered in.
+	//
+	// It has to be ONE, and it cannot be left to the writers. nextPollAt is
+	// computed two ways -- now.Add(interval) for an account on the ordinary
+	// cadence, and a window's resets_at for one whose next look is pulled to a
+	// rollover -- and the second of those is parsed from a wire string ending
+	// in Z, so it arrives carrying UTC while the first carries the machine's
+	// zone. encoding/json writes whichever offset it is handed. A live store
+	// held five poll times at +09:00 beside one at Z, and the Z row read as
+	// nine hours overdue when it was in fact four minutes in the future.
+	//
+	// The instants were never wrong and are not changed here. What changes is
+	// that the document decides how they are written, which is the only level
+	// at which "one document, one zone" is a property rather than a habit.
+	zone *time.Location
 }
 
 // NewStatusWriter returns a writer that has published nothing, so its first
 // Write always writes.
-func NewStatusWriter() *StatusWriter { return &StatusWriter{} }
+//
+// The zone is the machine's, and it is not an argument. Every reader of this
+// document is on the machine that wrote it -- `ccdad status`, `ccdad doctor`,
+// the dashboard, and the person who opens status.json in an editor -- so there
+// is nobody else to ask. UTC would be defensible for a document that travelled,
+// and this one does not.
+func NewStatusWriter() *StatusWriter { return &StatusWriter{zone: time.Local} }
+
+// loc is the zone to render in, with the zero value of StatusWriter treated as
+// the machine's. time.Time.In panics on a nil location, and a writer built as a
+// struct literal rather than through the constructor is otherwise a crash in
+// the tick loop.
+func (w *StatusWriter) loc() *time.Location {
+	if w.zone == nil {
+		return time.Local
+	}
+	return w.zone
+}
 
 // Write publishes s, stamping the schema version and — only when the content
 // changed — the time. It reports whether anything was written.
@@ -215,6 +249,12 @@ func (w *StatusWriter) Write(s Status, now time.Time) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+
+	// Before either marshal, so the bytes the skip compares are the bytes that
+	// would be written. It also detaches s.Accounts from the caller's slice --
+	// Status is passed by value and the slice header inside it is not -- which
+	// is what makes the two assignments below safe to do on a copy.
+	s = zone.In(s, w.loc())
 
 	s.SchemaVersion = StatusSchemaVersion
 	s.GeneratedAt = time.Time{}
@@ -226,7 +266,7 @@ func (w *StatusWriter) Write(s Status, now time.Time) (bool, error) {
 		return false, nil
 	}
 
-	s.GeneratedAt = now
+	s.GeneratedAt = now.In(w.loc())
 	encoded, err := json.Marshal(s)
 	if err != nil {
 		return false, fmt.Errorf("encoding %s: %w", StatusFileName, err)

@@ -15,6 +15,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/usage"
 	"github.com/Kweiza/ccdaddy/internal/view"
+	"github.com/Kweiza/ccdaddy/internal/zone"
 )
 
 // newRunwayCmd builds `ccdad runway`: how fast the fleet is spending its quota,
@@ -144,6 +145,10 @@ func newRunwayCmd() *cobra.Command {
 // buffer is not an optimisation — an atomic write needs the whole document
 // before it opens anything.
 func writeRunwayFile(cmd *cobra.Command, path string, payload any) error {
+	// The same document writeJSON would have put on stdout, so it is rendered
+	// in the same zone. A `--out` file that disagreed with the piped form about
+	// what hour a fleet runs dry would be the same document twice.
+	payload = zone.In(payload, jsonZone())
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetIndent("", "  ")

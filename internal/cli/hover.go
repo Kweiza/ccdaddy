@@ -317,7 +317,7 @@ func warmupJSON(w strategy.HoverWindow, facts warmupFacts) map[string]any {
 		out["coldStreak"] = w.Warmup.Streak
 	}
 	if !w.Warmup.LastAttemptAt.IsZero() {
-		out["lastAttemptAt"] = w.Warmup.LastAttemptAt.UTC().Format(time.RFC3339)
+		out["lastAttemptAt"] = w.Warmup.LastAttemptAt.In(jsonZone()).Format(time.RFC3339)
 	}
 	// The first reader ProbeState.LastError has ever had. It is reported and
 	// never gated on, for the reason usage.ProbeState gives: an exit code cannot
@@ -327,7 +327,7 @@ func warmupJSON(w strategy.HoverWindow, facts warmupFacts) map[string]any {
 		out["lastError"] = w.Warmup.LastError
 	}
 	if at, ok := warmupAt(w, facts); ok {
-		out["at"] = at.UTC().Format(time.RFC3339)
+		out["at"] = at.In(jsonZone()).Format(time.RFC3339)
 	}
 	return out
 }
