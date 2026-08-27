@@ -48,7 +48,28 @@ type Glyphs struct {
 	// message can say which vocabulary produced the page it is complaining
 	// about, and so a test can pin the set it asked for rather than inferring
 	// it from a character.
-	Name        string
+	Name string
+	// Art is whether this set may draw the pixel chrome, and it is the width
+	// rule's THIRD answer rather than a convenience field.
+	//
+	// The rule above divides this vocabulary in two. A MARKER must measure one
+	// column in both width modes, because a table's columns were computed
+	// around it. The FRAME and the GAUGE may be ambiguous, because a frame is
+	// drawn at a width it was told and a gauge is a fixed cell whose total does
+	// not move with the value in it.
+	//
+	// ART is ambiguous AND its total moves with the mode, which is neither of
+	// those, so it gets neither answer. Measured: a 48-cell row of U+2580 is 48
+	// columns ordinarily and 96 in east-asian mode. Cutting art in cell space
+	// keeps ansi.Truncate off its path, but the frame still measures every
+	// content row it is handed, and a 96-column row inside a box asked for 78
+	// breaks the box rather than the drawing.
+	//
+	// So this is false in the east-asian mode even when the caller spelled
+	// "unicode", which is the one place the escape hatch is narrowed. The
+	// narrowing is exact: the frame, the cursor and the eight markers are still
+	// Unicode there, because their widths are still ones the page can predict.
+	Art         bool
 	Border      lipgloss.Border
 	GaugeFull   rune
 	GaugeEmpty  rune
@@ -84,6 +105,7 @@ type Glyphs struct {
 // different files and their disagreeing is information.
 var UnicodeGlyphs = Glyphs{
 	Name:        "unicode",
+	Art:         true,
 	Border:      lipgloss.RoundedBorder(),
 	GaugeFull:   '█',
 	GaugeEmpty:  '▒',
@@ -114,6 +136,7 @@ var UnicodeGlyphs = Glyphs{
 // still read and a maintainer has one fewer table to keep in step.
 var ASCIIGlyphs = Glyphs{
 	Name:        "ascii",
+	Art:         false,
 	Border:      lipgloss.ASCIIBorder(),
 	GaugeFull:   '#',
 	GaugeEmpty:  '.',
@@ -154,7 +177,14 @@ var ASCIIGlyphs = Glyphs{
 func PickGlyphs(configured string, utf8Console bool) Glyphs {
 	switch configured {
 	case "unicode":
-		return UnicodeGlyphs
+		// Honoured, minus the one member of the set whose width the page cannot
+		// predict in this mode. See Glyphs.Art for why that is the drawing and
+		// not the frame. The copy matters: clearing the field on the package's
+		// own value would disable the art for every later caller in the
+		// process, including ones that never asked.
+		g := UnicodeGlyphs
+		g.Art = !eastAsianWidth()
+		return g
 	case "ascii":
 		return ASCIIGlyphs
 	}
