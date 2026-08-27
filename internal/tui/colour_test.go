@@ -343,6 +343,7 @@ func TestEachRoleLandsOnTheCellItNames(t *testing.T) {
 
 	for _, tc := range []struct{ name, want string }{
 		{"the wordmark's art", open(theme.RoleAccent) + string(artUpper)},
+		{"the version on the art's last row", open(theme.RoleAccent) + "ccdad "},
 		{"the tagline", open(theme.RoleMuted) + tagline[0]},
 		{"the header line's label", open(theme.RoleHeader) + "Active: "},
 		{"the column headings", open(theme.RoleHeader) + "IDX"},

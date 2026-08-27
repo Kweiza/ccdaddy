@@ -31,7 +31,7 @@ const (
 // not a procedure, it is a dare -- and the change that motivated this one
 // touches all seven at once.
 //
-//	go test ./internal/tui -run TestThePage -update -count=1
+//	go test ./internal/tui -update -count=1
 //
 // The flag WRITES WHATEVER THE RENDERER SAID, including a page that is wrong.
 // It is a transcription tool and never an oracle, and the discipline that makes
@@ -152,7 +152,8 @@ func goldenWant(t *testing.T, name, got string) string {
 //     of what the height ladder promises.
 //   - ASCII says the entire file is 7-bit, and only the 43x9 page is. That rung
 //     has dropped the frame, collapsed the gauge and dropped the STATE column;
-//     the chrome above it is ASCII art by rule; the cut cue and the two scroll
+//     the chrome above it is dropped by the ladder at this height, so there is
+//     no art vocabulary at stake either; the cut cue and the two scroll
 //     marks are ASCII in both sets; and no page here claims a forecast, so the
 //     one line that would carry a computed value's own U+00B7 is never drawn.
 //     It is a stronger claim than the three counts above precisely because it

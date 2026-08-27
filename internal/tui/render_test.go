@@ -433,6 +433,50 @@ func TestASCIIGlyphsDrawTheFallbackBlocksAndNoArtRune(t *testing.T) {
 	}
 }
 
+// The scenario Glyphs.Art exists to answer, rendered rather than merely
+// inspected: an explicit `glyphs = "unicode"` configuration in a process whose
+// width engine is in its east-asian mode. PickGlyphs answers that with a set
+// whose Name is "unicode" and whose Art is false -- a shape neither
+// TestASCIIGlyphsDrawTheFallbackBlocksAndNoArtRune above (which goes through
+// ASCIIGlyphs, Name=="ascii") nor a render.go gated on `m.Glyphs.Name ==
+// "unicode"` instead of `m.Glyphs.Art` could tell apart from ordinary Unicode.
+//
+// This is built through PickGlyphs itself and not the ASCIIGlyphs constant,
+// because the point is the real decision path that produces that shape, not a
+// stand-in for it. t.Setenv is legal here for the same reason
+// TestGlyphsAutoFallsBackToAsciiWhenTheWidthEngineIsInEastAsianMode's is:
+// PickGlyphs reads RUNEWIDTH_EASTASIAN itself, at call time, through
+// eastAsianWidth -- unlike the x/ansi width engine, which reads it once at
+// package init and needs alsoInEastAsianMode's subprocess to observe honestly.
+// This test is about the render pipeline's decision, not about a measured
+// column, so no re-exec is needed.
+func TestAnExplicitUnicodeGlyphSetStillFallsBackToTheTypedBlocksInEastAsianMode(t *testing.T) {
+	t.Setenv("RUNEWIDTH_EASTASIAN", "1")
+	g := PickGlyphs("unicode", true)
+	if g.Name != "unicode" || g.Art {
+		t.Fatalf("PickGlyphs(\"unicode\", true) under RUNEWIDTH_EASTASIAN=1 is Name=%q Art=%v, want Name=\"unicode\" Art=false -- fix the setup before trusting the rest of this test",
+			g.Name, g.Art)
+	}
+
+	got := fixtureModelGlyphs(113, 26, g).Body()
+	if !strings.Contains(got, figures[0]) {
+		t.Error("Name==\"unicode\", Art==false did not draw the figure block's own typed fallback row")
+	}
+	if !strings.Contains(got, wordmark[0]) {
+		t.Error("Name==\"unicode\", Art==false did not draw the wordmark's own typed fallback row")
+	}
+	if strings.ContainsRune(got, artUpper) || strings.ContainsRune(got, artLower) {
+		t.Error("Name==\"unicode\", Art==false drew an art rune, which only Glyphs.Art may")
+	}
+
+	// The escape hatch is narrow, not total: the frame, the cursor and the
+	// markers stay Unicode even though the art does not, because their widths
+	// are still predictable in this mode. See PickGlyphs and Glyphs.Art.
+	if g.Cursor != UnicodeGlyphs.Cursor {
+		t.Errorf("the fallback took the cursor along with the art: %q, want %q", g.Cursor, UnicodeGlyphs.Cursor)
+	}
+}
+
 // A load that fails with no previous page to keep is fatal rather than a
 // notice: there is nothing to label.
 func TestAOneShotRenderReportsALoadFailureRatherThanDrawingAnEmptyPage(t *testing.T) {
