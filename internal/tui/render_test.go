@@ -398,7 +398,11 @@ func TestTheOneShotRenderIsEightyColumnsWideWithNoHeightLadder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(got, figures[0]) {
+	// The figure block's own first row, rendered at the grid's width so the
+	// expectation does not depend on what `inner` works out to. The one-shot
+	// page is colourless, so this is the runes and nothing else.
+	want := fixtureModel(80, 24).artRow(figureArt, 0, figureArt.W, theme.RoleAccent, "")
+	if !strings.Contains(got, want) {
 		t.Error("the one-shot render dropped the figure block, which only the height ladder does")
 	}
 	for _, line := range strings.Split(got, "\n") {
@@ -408,6 +412,24 @@ func TestTheOneShotRenderIsEightyColumnsWideWithNoHeightLadder(t *testing.T) {
 	}
 	if out.String() != got+"\n" {
 		t.Fatal("Render returned a page it did not write, so a caller holding only the writer sees something else")
+	}
+}
+
+// The wordmark and figures arms both switch on Glyphs.Art, and ASCIIGlyphs is
+// the one set that answers false. A page drawn under it must fall back to the
+// plain-text blocks in chrome.go and never reach artRow -- the whole reason
+// Glyphs.Art exists is a console or a width mode where the art is wrong, and
+// a fallback that quietly kept drawing the art anyway would defeat it.
+func TestASCIIGlyphsDrawTheFallbackBlocksAndNoArtRune(t *testing.T) {
+	got := fixtureModelGlyphs(113, 26, ASCIIGlyphs).Body()
+	if !strings.Contains(got, figures[0]) {
+		t.Error("ASCIIGlyphs did not draw the figure block's own first row")
+	}
+	if !strings.Contains(got, wordmark[0]) {
+		t.Error("ASCIIGlyphs did not draw the wordmark's own first row")
+	}
+	if strings.ContainsRune(got, artUpper) || strings.ContainsRune(got, artLower) {
+		t.Error("ASCIIGlyphs drew an art rune, which only Glyphs.Art may")
 	}
 }
 

@@ -274,11 +274,24 @@ func (m Model) Body() string {
 	}
 
 	switch {
+	case l.Wordmark && m.Glyphs.Art:
+		for r := 0; r < wordArt.height()-1; r++ {
+			lines = append(lines, m.artRow(wordArt, r, inner, theme.RoleAccent, ""))
+		}
+		// The version rides on the wordmark's own last row, which is where the
+		// full page puts it and why the title rung costs nothing until the
+		// wordmark is already gone. On the drawing it rides in CELLS after the
+		// art rather than in bytes appended to it -- a pixel row cannot carry
+		// concatenated text, but a row being assembled in cell space can.
+		tail := ""
+		if l.Title {
+			tail = titleLine(m.Snap.Version)
+		}
+		lines = append(lines, m.artRow(wordArt, wordArt.height()-1, inner, theme.RoleAccent, tail))
 	case l.Wordmark:
 		addRole(theme.RoleAccent, wordmark[:len(wordmark)-1]...)
-		// The version rides on the wordmark's own last row, which is where
-		// the full page puts it and why the title rung costs nothing until
-		// the wordmark is already gone.
+		// The same rule, in the vocabulary that has no drawing: see the arm
+		// above for why the version is here rather than on a row of its own.
 		last := wordmark[len(wordmark)-1]
 		if l.Title {
 			last += titleLine(m.Snap.Version)
@@ -299,7 +312,13 @@ func (m Model) Body() string {
 		add("")
 	}
 	if l.Figures {
-		addRole(theme.RoleAccent, figures...)
+		if m.Glyphs.Art {
+			for r := 0; r < figureArt.height(); r++ {
+				lines = append(lines, m.artRow(figureArt, r, inner, theme.RoleAccent, ""))
+			}
+		} else {
+			addRole(theme.RoleAccent, figures...)
+		}
 		add("")
 	}
 	if l.Header {
