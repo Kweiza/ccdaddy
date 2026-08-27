@@ -93,7 +93,27 @@ func walk(v reflect.Value, loc *time.Location) reflect.Value {
 
 	case reflect.Struct:
 		if v.Type() == timeType {
-			return reflect.ValueOf(v.Interface().(time.Time).In(loc))
+			t := v.Interface().(time.Time)
+			// An UNSET time is left alone, in the UTC it already carries.
+			//
+			// A zero time is not a moment, so giving it a zone means nothing --
+			// and it is worse than meaningless, because it is lossy. A real
+			// location's offset in year 1 is its LMT, and an LMT offset has
+			// SECONDS in it: Asia/Seoul is +08:27:52, America/New_York is
+			// -04:56:02. RFC 3339 has no place to write those seconds, so
+			// encoding/json truncates the offset to the minute and the value
+			// that comes back is a real instant 52 or 2 seconds away from the
+			// zero time. Every IsZero() downstream then disagrees with it, and
+			// an `omitempty` time field -- usage.Entry's stand_down_until and
+			// poll.last_rate_limited are two -- publishes year 1 as a schedule.
+			//
+			// Measured, and it does NOT show up under a time.FixedZone: a whole
+			// hour has no seconds to lose. That is why TestInLeavesAnUnsetTimeAlone
+			// uses real locations.
+			if t.IsZero() {
+				return v
+			}
+			return reflect.ValueOf(t.In(loc))
 		}
 		out := reflect.New(v.Type()).Elem()
 		// The whole struct is copied first and the exported fields are then
