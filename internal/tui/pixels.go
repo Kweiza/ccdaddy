@@ -191,29 +191,33 @@ var wordArt = artGrid{W: 48, Rows: []string{
 // cells folded).
 //
 // Traced first (crop (203,328)-(916,621) of the mockup, thresholded against
-// its salmon ink at #eb9384), then hand-cleaned: the raw threshold survives as
-// noisy single-pixel salt scattered through what should be readable eyes and
-// legs, so the shapes below are redrawn on the trace's own silhouette rather
-// than kept as its literal output. The left 32 columns are four overlapping
-// blocky bodies -- one taller creature peeking up in back, one to each side,
-// one lower in front, each with a punched-out pair of eyes at whatever row is
-// still that creature's own face and not another's overlap -- standing on
-// separated one-and-two-pixel legs. A 5-column gap separates them from the
-// "Daddy" figure in the last 11 columns: a wide hat brim over a narrower
-// crown, a head with two eye-slit punches, a moustache carved as a gap under
-// the cheeks (so it folds as ink on the chin half and ground on the lip half),
-// shoulders, and its own set of legs.
+// its salmon ink at #eb9384), then hand-redrawn twice. The first hand pass
+// drew the four creatures as overlapping rectangles sharing one silhouette,
+// which read as one fused blob with eye-holes rather than four bodies: three
+// of its twelve pixel rows -- including the whole row at the "waist" -- had
+// no gap anywhere across the 32-column cluster, so there was nothing for a
+// reader's eye to trace between one creature and the next. This is the
+// second pass: each creature is its own lane (0-7, 9-16, 18-25, 27-31) and
+// columns 8, 17 and 26 are a deliberate seam of ground that no creature's
+// rectangle ever reaches, in ANY of the twelve rows -- not a notch cut into a
+// shared mass. The back-center creature is tallest and alone at the top; the
+// others start lower, and each carries its own punched pair of eyes. A
+// 5-column gap separates the cluster from the "Daddy" figure in the last 11
+// columns: a wide hat brim over a narrower crown, a head with two eye-slit
+// punches, a moustache carved as a gap under the cheeks (so it folds as ink
+// on the chin half and ground on the lip half), shoulders, and its own set of
+// legs -- unchanged from the first pass, which already read correctly.
 var figureArt = artGrid{W: 48, Rows: []string{
-	`.........11111111111111..............11111111111`,
-	`.........11111111111111................1111111..`,
-	`1111111111111.1111.1111111111111......11.111.11.`,
-	`1111111111111.1111.1111111111111......11.111.11.`,
-	`11.1111.1111111111111111.111.111......111111111.`,
-	`11.1111.1111111111111111.111.111......111111111.`,
-	`111111111111.111111.111111111111......11.....11.`,
-	`111111111111.111111.111111111111......111111111.`,
-	`11111111111111111111111111111111.....11111111111`,
-	`.11..11..11..11..11..11..11..11......11111111111`,
-	`.11..11..11..11..11..11..11..11......11.11.11.11`,
-	`.11..11..11..11..11..11..11..11......11.11.11.11`,
+	`.........11111111....................11111111111`,
+	`.........11111111......................1111111..`,
+	`11111111.11.11.11..........11111......11.111.11.`,
+	`11111111.11.11.11.11111111.11111......11.111.11.`,
+	`11.11.11.11111111.11111111.1.1.1......111111111.`,
+	`11.11.11.11111111.11.11.11.1.1.1......111111111.`,
+	`11111111.11111111.11.11.11.11111......11.....11.`,
+	`11111111.11111111.11111111.11111......111111111.`,
+	`11111111.11111111.11111111.11111.....11111111111`,
+	`.11..11..11..11....11..11...11.......11111111111`,
+	`.11..11..11..11....11..11...11.......11.11.11.11`,
+	`.11..11..11..11....11..11...11.......11.11.11.11`,
 }}
