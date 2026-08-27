@@ -30,16 +30,52 @@ func TestInKeepsTheInstantAndChangesOnlyTheZone(t *testing.T) {
 	}
 }
 
-// A zero time.Time must stay zero, because `omitzero` is what keeps an unset
-// poll time off the wire and it asks IsZero(). A conversion that produced
-// 0001-01-01T09:00:00+09:00 would be non-zero to a human reader and still zero
-// to IsZero — or, if it were not, would publish year 1 as a poll time, which
-// TestStatusOmitsUnsetTimes exists to prevent.
-func TestInLeavesTheZeroTimeOmittable(t *testing.T) {
+// An unset time.Time is left ALONE, zone and all, and the zone it is left in is
+// UTC.
+//
+// A zero time is not a moment, so putting it in a zone means nothing — and it is
+// worse than meaningless, it is lossy. A real location's offset in year 1 is its
+// LMT, which has SECONDS in it: Asia/Seoul is +08:27:52, America/New_York is
+// -04:56:02, Australia/Lord_Howe is +10:36:20. RFC 3339 cannot write seconds in
+// an offset, so encoding/json truncates it to the minute and the value that
+// comes back is 52, 2 and 20 seconds away from the zero time respectively. It is
+// then not zero at all, and `omitempty` fields — usage.Entry's stand_down_until
+// and poll.last_rate_limited are two — publish it as a real instant in year 1
+// that every IsZero() check downstream then disagrees with.
+//
+// The zones here are REAL ones and not time.FixedZone, and that is the whole
+// point of the case. A fixed whole-hour offset has no seconds to lose, so this
+// test passes under a FixedZone whether or not the guard exists — measured, and
+// it is how the bug reached a green suite in the first place.
+func TestInLeavesAnUnsetTimeAlone(t *testing.T) {
 	var unset time.Time
-	if got := zone.In(unset, kst); !got.IsZero() {
-		t.Errorf("In(zero) = %s, which omitzero would publish", got)
+	for _, name := range []string{"Asia/Seoul", "America/New_York", "Australia/Lord_Howe", "UTC"} {
+		loc, err := time.LoadLocation(name)
+		if err != nil {
+			t.Fatalf("loading %s: %v", name, err)
+		}
+		got := zone.In(unset, loc)
+		if !got.IsZero() {
+			t.Errorf("In(zero, %s) = %s, which is no longer unset", name, got)
+		}
+		// The round trip is the assertion that matters, because that is where
+		// the offset's seconds are lost.
+		body, err := json.Marshal(got)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var back time.Time
+		if err := json.Unmarshal(body, &back); err != nil {
+			t.Fatal(err)
+		}
+		if !back.IsZero() {
+			t.Errorf("In(zero, %s) marshalled to %s and came back as %s, %v from the zero time",
+				name, body, back, back.Sub(unset))
+		}
 	}
+
+	// And omitzero still omits it, which is what keeps an unset poll time off
+	// status.json entirely.
 	doc := struct {
 		At time.Time `json:"at,omitzero"`
 	}{At: zone.In(unset, kst)}

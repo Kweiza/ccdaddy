@@ -1657,6 +1657,12 @@ func TestStatusJSONRendersEveryTimeInOneZone(t *testing.T) {
 		Status: daemon.Status{
 			SchemaVersion: daemon.StatusSchemaVersion,
 			PID:           4242,
+			// Set, because a published document always carries it -- the writer
+			// stamps it on every write. Left unset the payload would carry
+			// generatedAt as year 1, which is not in any zone and would make
+			// this assertion about the zero-time guard rather than about the
+			// rule it exists to pin.
+			GeneratedAt: statusNow.Add(-30 * time.Second),
 			// An OLD daemon's document, still on disk after an upgrade: it was
 			// written before the writer rendered one zone, so it carries both.
 			// The reader has to be right about it too, or the fix only reaches
