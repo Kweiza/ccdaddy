@@ -148,7 +148,7 @@ func writeRunwayFile(cmd *cobra.Command, path string, payload any) error {
 	// The same document writeJSON would have put on stdout, so it is rendered
 	// in the same zone. A `--out` file that disagreed with the piped form about
 	// what hour a fleet runs dry would be the same document twice.
-	payload = zone.In(payload, jsonZone())
+	payload = zone.In(payload, readerZone())
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetIndent("", "  ")

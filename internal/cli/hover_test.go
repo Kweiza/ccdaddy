@@ -10,6 +10,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/config"
 	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/store"
+	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
 
@@ -646,5 +647,47 @@ func TestHoverStatusSaysWhenNothingCanBeWarmed(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "not on this PATH") {
 		t.Errorf("stdout does not say why nothing can be warmed:\n%s", stdout)
+	}
+}
+
+// The two keys on `hover status --json` that spell their own layout.
+//
+// Like the `auto` stream's, these are conditional branches the contract table
+// never reaches: no row there has a warm-up that has been attempted, so the
+// last-attempt stamp and the instant a backoff opens were flipped to the
+// document's zone with nothing executing them. Measured: reverting
+// lastAttemptAt to .UTC() left every other test in this package green.
+func TestHoverWarmupJSONRendersEveryTimeInOneZone(t *testing.T) {
+	pinReaderZone(t, time.FixedZone("KST", 9*60*60))
+	wire := time.FixedZone("UTCish", 0)
+	now := time.Date(2026, 8, 22, 5, 0, 0, 0, wire)
+
+	// A window whose warm-up has been tried and is now in backoff: that is the
+	// one state where BOTH keys are written — the attempt behind it and the
+	// instant the backoff opens ahead of it.
+	got := warmupJSON(strategy.HoverWindow{
+		UUID:   "uuid-b",
+		Window: usage.WindowFiveHour,
+		Warmup: strategy.Warmup{
+			Eligible:      true,
+			Streak:        2,
+			LastAttemptAt: now.Add(-24 * time.Hour),
+			NextAt:        now.Add(20 * time.Minute),
+		},
+	}, warmupFacts{activeUUID: "uuid-a", liveKnown: true, probeOn: true, now: now})
+
+	if got["state"] != "backoff" {
+		t.Fatalf("state = %v, want backoff — the fixture no longer reaches the branch that writes both keys: %v",
+			got["state"], got)
+	}
+	for _, key := range []string{"lastAttemptAt", "at"} {
+		s, _ := got[key].(string)
+		if s == "" {
+			t.Errorf("%s is missing, so this test decides nothing about it: %v", key, got)
+			continue
+		}
+		if !strings.HasSuffix(s, "+09:00") {
+			t.Errorf("%s = %s, which is not the document's zone", key, s)
+		}
 	}
 }

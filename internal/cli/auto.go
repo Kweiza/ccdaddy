@@ -410,7 +410,7 @@ func (e *autoEmitter) evaluated(ev switcher.Evaluation, action, reason string) {
 		payload["quarantined"] = ev.Plan.Quarantined
 	}
 	if ev.Plan.HasRetryAt {
-		payload["retryAt"] = ev.Plan.RetryAt.In(jsonZone()).Format(time.RFC3339)
+		payload["retryAt"] = ev.Plan.RetryAt.In(readerZone()).Format(time.RFC3339)
 	}
 	if ev.Plan.CreditConsulted {
 		credit := map[string]any{
@@ -465,7 +465,7 @@ func (e *autoEmitter) emit(payload map[string]any) {
 		return
 	}
 	payload["schemaVersion"] = autoSchemaVersion
-	payload["at"] = e.now().In(jsonZone()).Format(time.RFC3339Nano)
+	payload["at"] = e.now().In(readerZone()).Format(time.RFC3339Nano)
 	if err := e.enc.Encode(payload); err != nil {
 		// Held rather than returned: the caller is mid-decision and the event
 		// is a report of it, so a broken stream must not change what the engine
@@ -491,11 +491,11 @@ func rankingJSON(order []strategy.Ranked) []map[string]any {
 			row["windowThreshold"] = r.Headroom.Threshold
 		}
 		if r.HasRecovery {
-			row["recoversAt"] = r.RecoversAt.In(jsonZone()).Format(time.RFC3339)
+			row["recoversAt"] = r.RecoversAt.In(readerZone()).Format(time.RFC3339)
 			row["returnsInsideHorizon"] = r.ReturnsInsideHorizon
 		}
 		if r.HasWeeklyReset {
-			row["weeklyResetsAt"] = r.WeeklyResetsAt.In(jsonZone()).Format(time.RFC3339)
+			row["weeklyResetsAt"] = r.WeeklyResetsAt.In(readerZone()).Format(time.RFC3339)
 		}
 		out = append(out, row)
 	}

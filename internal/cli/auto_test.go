@@ -12,6 +12,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
+	"github.com/Kweiza/ccdaddy/internal/switcher"
 )
 
 // twoAccountsOneBetter is the ordinary engine setup: u-1 is live and nearly
@@ -475,6 +476,68 @@ func TestTheNoReadingsEventDoesNotDescribeAPlanThatNeverRan(t *testing.T) {
 	for _, key := range []string{"explanation", "mode", "order", "target"} {
 		if _, ok := ev[key]; ok {
 			t.Errorf("event carries %q = %v, but no ranking ever ran", key, ev[key])
+		}
+	}
+}
+
+// The three keys on the `auto` stream that spell their own layout.
+//
+// They are the sites the cross-command rule cannot reach: rule 5 in
+// json_contract_test.go runs each command against the contract table, and no
+// row there reaches a plan that has a retry instant or a ranking that carries a
+// recovery — so those two branches were flipped to the document's zone with
+// nothing executing them. Measured: reverting either one to .UTC() left every
+// other test in this package green.
+//
+// Every moment here is seeded in a zone that is NOT the one the document is
+// rendered in, so a builder that passed its input through unchanged fails.
+func TestAutoStreamRendersEveryTimeInOneZone(t *testing.T) {
+	pinReaderZone(t, time.FixedZone("KST", 9*60*60))
+	wire := time.FixedZone("UTCish", 0)
+	at := time.Date(2026, 8, 22, 5, 0, 0, 0, wire)
+
+	var buf bytes.Buffer
+	em := &autoEmitter{json: true, enc: json.NewEncoder(&buf), now: func() time.Time { return at }}
+	em.evaluated(switcher.Evaluation{
+		Decided: true,
+		Plan: strategy.Plan{
+			HasRetryAt: true,
+			RetryAt:    at.Add(30 * time.Minute),
+			Result: strategy.Result{Order: []strategy.Ranked{{
+				UUID:           "uuid-a",
+				HasRecovery:    true,
+				RecoversAt:     at.Add(time.Hour),
+				HasWeeklyReset: true,
+				WeeklyResetsAt: at.Add(48 * time.Hour),
+			}}},
+		},
+	}, "stay", "every candidate is over threshold")
+
+	var ev map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &ev); err != nil {
+		t.Fatalf("the event does not parse: %v\n%s", err, buf.String())
+	}
+	// Named rather than counted, because the branches that carry them are
+	// conditional: a fixture that stopped reaching one would otherwise leave
+	// this test green with nothing to look at.
+	order, ok := ev["order"].([]any)
+	if !ok || len(order) != 1 {
+		t.Fatalf("no ranking on the event: %v", ev)
+	}
+	row, _ := order[0].(map[string]any)
+	for key, got := range map[string]any{
+		"at":             ev["at"],
+		"retryAt":        ev["retryAt"],
+		"recoversAt":     row["recoversAt"],
+		"weeklyResetsAt": row["weeklyResetsAt"],
+	} {
+		s, _ := got.(string)
+		if s == "" {
+			t.Errorf("%s is missing from the event, so this test decides nothing about it: %v", key, ev)
+			continue
+		}
+		if !strings.HasSuffix(s, "+09:00") {
+			t.Errorf("%s = %s, which is not the document's zone", key, s)
 		}
 	}
 }
