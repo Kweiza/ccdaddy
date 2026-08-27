@@ -150,8 +150,19 @@ func TestTheChildDoesNotInheritThisProcessActionsMarkers(t *testing.T) {
 // ignore rule cannot hide a file `--cached` already lists.
 func TestTheChildDoesNotInheritThisProcessGlobalGitExcludes(t *testing.T) {
 	home := t.TempDir()
+	// ToSlash, and it is the config file's grammar rather than cosmetics: a
+	// backslash in a git config VALUE opens an escape sequence, so a Windows
+	// temp path arrives carrying \U, \A and \T and git refuses the whole file
+	// with `fatal: bad config line 2`. That took down this fixture's own `git
+	// init` -- the test process reads the HOME set below too -- before the
+	// check under test was ever invoked, which is a red leg reporting on a
+	// test that does not run there at all: runCIWithEnv skips on Windows, so
+	// nothing but this fixture ever reads the file on that platform.
+	// Reproduced by writing the same value by hand under Linux, so the cause
+	// is the grammar and not the platform, and forward slashes are what git
+	// writes into its own config on Windows. Everywhere else this is a no-op.
 	writeFiles(t, home, map[string]string{
-		".gitconfig":   "[core]\n\texcludesFile = " + filepath.Join(home, "globalignore") + "\n",
+		".gitconfig":   "[core]\n\texcludesFile = " + filepath.ToSlash(filepath.Join(home, "globalignore")) + "\n",
 		"globalignore": "broken.go\n",
 	})
 	t.Setenv("HOME", home)
