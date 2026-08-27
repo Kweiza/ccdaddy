@@ -16,6 +16,60 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-08-27
+
+The release that learns a seat can be metered in money rather than quota, and
+the one that makes every document ccdad writes agree about what time it is.
+
+The first began as a live account ccdad could see and could not use. A
+`claude_enterprise` seat metered only in `extra_usage` credits reports every
+plan window `null` and an empty `limits[]` — money is its only meter — and
+every layer above that read the plan-window axis as though it were the only
+one. It was filed as a subscription at add time, because the profile field that
+names the billing describes the ORGANIZATION and the organization really does
+hold a contracted subscription; the repair written for exactly this case was
+never called by anything; ranking then measured two such seats as equally
+unknown and switched off the one with 60% of its balance left onto the one that
+was drained; and `status`, `list` and the dashboard printed `?` in the USED
+column for an account the engine was ranking on a perfectly good percentage.
+One reading now produces one answer for all of them, `ccdad runway` measures
+the credit burn for a fleet with no windows to simulate, and `seat_tier` — the
+one field that says how a SEAT is metered rather than how its organization is
+billed — is stored, re-read when it goes stale, carried through
+`export`/`import`, and written into Claude Code's own cached profile on a
+switch, which is where it decides the model tier. Two `claude_max` bodies are
+pinned beside the enterprise one as a control, and they settle four fields that
+looked like tier discriminators and are not.
+
+The second is what time it is. `status.json` published `nextPollAt` two ways —
+an account on the ordinary cadence carried the machine's offset, one pulled to
+a window rollover carried the `Z` it was parsed off the wire with — and read
+against a local clock the `Z` row looked nine hours overdue when it was four
+minutes in the future. `history.json` had the same split: 292 timestamps at
+`+09:00` beside 870 at `Z`, describing one afternoon. The zone belongs to the
+DOCUMENT now rather than to the field, applied where each document is
+serialised rather than at every writer that computes a moment, and it is the
+machine's, because every reader of these documents is on the machine that wrote
+them. Every instant is unchanged and every value is still RFC 3339 with its
+offset written out. Two documents are deliberately outside the rule and now say
+why: `ccdad export` keeps UTC because it is written to be carried to a machine
+whose offset is not the writer's, and the `snapshot` object inside `usage.json`
+is a verbatim mirror of the endpoint's body, whose whole job is being
+comparable against a recorded response.
+
+The third is smaller and shows up on every screen. Once a day the daemon asks
+the host the machine installed from what the newest release is, carrying the
+running version and nothing else, and it publishes the READING rather than a
+verdict: an upgrade replaces the binary while the old daemon keeps publishing,
+so an "update available" boolean computed there would spend a day telling the
+new binary to install what it is already running. `update_check` switches the
+request off for a machine that may not call out. Underneath all of it, the
+checks this repository gates on were re-measured and found answering questions
+they had not been asked: `scripts/ci.sh` returns 0, 1 or 2 and nothing else, a
+failing check closes its fold in the Actions log, and three checks that
+reported success having looked at nothing were fixed — one of them a whole arm
+of `cites` that macOS's git had quietly turned into a no-op.
+
 ### Added
 
 - **A pro/max control group is pinned beside the enterprise wire.** Every live
@@ -130,6 +184,21 @@ by `uuid` or `alias`.
   measurement behind it: at two segments the same shape reports `per rate-limit
   window` and six other correct lines of this repository.
 
+- **A comment that names a test this tree does not define fails the build.**
+  Rename a test and every comment naming it goes false while the tree stays
+  green, because nothing anywhere read those names — and it had already
+  happened here. The check is a Go test rather than a seventh arm of `cites`,
+  because what a comment is, what a string literal is and what a test
+  declaration is are questions `go/ast` answers exactly and a regex over every
+  tracked file answers approximately; `cites` carries a pointer to it, since
+  that is where a reader looks for the citation rule. It reads Go comments and
+  Go string literals — a `-test.run=` argument in a test that re-executes
+  itself is a citation too, and a rename there leaves a subprocess that runs no
+  test and exits 0 — plus shell scripts, because `ci.sh`'s own comments cite
+  tests. A name in a `-run` argument is judged as the unanchored pattern it is,
+  because one deliberately selects two tests. Five sites were wrong when it
+  landed, and three of the five had the name truncated at a line boundary.
+
 ### Fixed
 
 - **A stale profile is re-read, so the tier fields stop being frozen at add
@@ -171,7 +240,12 @@ by `uuid` or `alias`.
   moment. `internal/zone` walks a value and renders every timestamp inside it
   in one location; the daemon's status writer and every `--json` payload go
   through it. The zone is the machine's, because every reader of these
-  documents is on the machine that wrote them.
+  documents is on the machine that wrote them. An unset moment is the one thing
+  left alone, and it has to be: a real location's offset in year 1 is its LMT
+  and carries seconds — `Asia/Seoul` is `+08:27:52` — which RFC 3339 has
+  nowhere to write, so a zero `time.Time` handed a zone came back from JSON
+  fifty-two seconds away from zero and `IsZero` said false everywhere
+  downstream. An instant with no moment in it has no zone to be in.
 
 - **The usage history series carries one zone too, and the retention bound is
   restated for the machine it actually runs on.** `history.json` had the same
@@ -2024,7 +2098,8 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/Kweiza/ccdaddy/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/Kweiza/ccdaddy/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/Kweiza/ccdaddy/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/Kweiza/ccdaddy/compare/v0.6.0...v0.6.1
