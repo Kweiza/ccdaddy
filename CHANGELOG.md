@@ -72,6 +72,27 @@ by `uuid` or `alias`.
 
 ### Changed
 
+- **Every `--json` document renders its timestamps in the machine's zone, and
+  so do the three absolute moments `ccdad doctor` prints.** This is visible to a
+  consumer, and it is the other half of the fix above: a document that agreed
+  with itself only inside the daemon's half would still print the engine's poll
+  times beside the endpoint's window rollovers in two zones. Six payload sites
+  that formatted their own moment with `.UTC()` — `auto`'s `retryAt`, `at`,
+  `recoversAt` and `weeklyResetsAt`, and `hover status`'s `lastAttemptAt` and
+  `at` — now ask for the same location, so one rule covers the documents that
+  let the encoder render a `time.Time` and the ones that spell their own layout.
+  `ccdad doctor` joins them because it reads its stamps out of the published
+  document and prints them to a PERSON: on the day of an upgrade the old daemon
+  is still running and still publishing, so a new binary reads a document whose
+  stamps carry whatever zone each writer handed them, and `generated
+  2026-08-22T05:00:00Z` under a local clock is the nine-hour stall this started
+  as. Every instant is unchanged and every value is still RFC 3339 with its
+  offset written out, so a conformant parser reads the same moment it read
+  before; a consumer that compared these strings BYTEWISE was already wrong,
+  because the zone it was matching on varied from row to row. `ccdad export` is
+  deliberately not included: that file is written to be carried to another
+  machine, where the writer's offset is not the reader's, and it keeps UTC.
+
 - **`scripts/ci.sh cites` reads every file git knows about, not five
   extensions.** The pathspec was `*.go *.sh *.ps1 *.yml *.md`, which is a
   narrower rule than the one `CONTRIBUTING.md` states and than the check's own
@@ -134,6 +155,23 @@ by `uuid` or `alias`.
   overwrite a decision made on real window-and-overage evidence with the guess
   that preceded it. A failed profile lookup costs the poll nothing and does not
   move the stamp.
+- **One document, one time zone, and it is the machine's.** `status.json`
+  published `nextPollAt` two ways. An account on the ordinary cadence gets
+  `now.Add(interval)` and carries the machine's offset; an account whose next
+  look is pulled to a window rollover takes the instant
+  `strategy.NextResetAmong` returns, which is parsed off the wire with an
+  explicit `.UTC()` and comes back ending in `Z` — and `warmClamp` returns that
+  target verbatim, because choosing an instant is its whole job. Observed on a
+  live store: five poll times at `+09:00` beside one at `Z`. Read against a
+  local wall clock the `Z` row looked nine hours overdue and stalled; it was
+  four minutes in the FUTURE, and that account had just been polled. Nothing
+  was ever wrong about the instants, and none of them moved. What changed is
+  that the zone now belongs to the DOCUMENT rather than to the field, applied
+  where each document is serialised rather than at every writer that computes a
+  moment. `internal/zone` walks a value and renders every timestamp inside it
+  in one location; the daemon's status writer and every `--json` payload go
+  through it. The zone is the machine's, because every reader of these
+  documents is on the machine that wrote them.
 
 - **A switch carries the seat tier into Claude Code's own cached profile.**
   Claude Code decides which model tier a session defaults to with

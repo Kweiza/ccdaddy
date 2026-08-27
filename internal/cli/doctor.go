@@ -458,8 +458,14 @@ func checkStatusFile(report daemon.Report) check {
 	if !report.HasStatus {
 		return check{"status-file", levelOK, "no daemon has published one"}
 	}
+	// In the READER's zone, not the document's. The two agree for a document
+	// this binary's daemon wrote, and they do not on the day of an upgrade: the
+	// old daemon keeps running and keeps publishing until something stops it,
+	// and what it publishes carries whatever zone each writer happened to hand
+	// it. A line that printed 17:41Z under a KST clock is how this bug was
+	// diagnosed as a nine-hour poll stall that was not happening.
 	return check{"status-file", levelOK, fmt.Sprintf("schema %d, generated %s",
-		report.Status.SchemaVersion, report.Status.GeneratedAt.Format("2006-01-02T15:04:05Z07:00"))}
+		report.Status.SchemaVersion, report.Status.GeneratedAt.In(readerZone()).Format("2006-01-02T15:04:05Z07:00"))}
 }
 
 // checkUsageCache is a warning rather than a failure by the cache's own design:
@@ -726,7 +732,8 @@ func updateCheckVerdict(enabled bool, report daemon.Report, running string) (che
 
 	latest, latestOK := release.ParseTag(s.UpdateLatest)
 	current, currentOK := release.ParseTag(running)
-	when := s.UpdateCheckedAt.Format(time.RFC3339)
+	// The reader's zone, for the reason checkStatusFile gives.
+	when := s.UpdateCheckedAt.In(readerZone()).Format(time.RFC3339)
 
 	if latestOK && currentOK && latest.Compare(current) > 0 {
 		return levelWarn, fmt.Sprintf("ccdad %s is out and this is %s (checked %s) — %s",
@@ -735,7 +742,7 @@ func updateCheckVerdict(enabled bool, report daemon.Report, running string) (che
 	if s.UpdateCheckError != "" {
 		due := "the next tick"
 		if !s.NextUpdateCheckAt.IsZero() {
-			due = s.NextUpdateCheckAt.Format(time.RFC3339)
+			due = s.NextUpdateCheckAt.In(readerZone()).Format(time.RFC3339)
 		}
 		return levelWarn, fmt.Sprintf("the last release check failed: %s (the next is due %s)", s.UpdateCheckError, due)
 	}

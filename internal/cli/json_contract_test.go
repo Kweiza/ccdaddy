@@ -44,7 +44,7 @@ import (
 //     implementations — see TestJSONContractWriteFailures.
 //  5. Every timestamp in a document is in ONE zone, and it is the machine's.
 //     A payload builder that formats a moment itself is how the zone drifts:
-//     the sites that call .In(jsonZone()) agree with each other and the ones
+//     the sites that call .In(readerZone()) agree with each other and the ones
 //     that forget publish whatever zone their input arrived carrying. See
 //     TestJSONContractRendersEveryTimeInOneZone.
 //
@@ -575,7 +575,7 @@ func TestJSONContractWriteFailures(t *testing.T) {
 // held five poll times at +09:00 beside one at Z, and the Z row read as nine
 // hours overdue while being four minutes in the future.
 //
-// The zone is pinned rather than read, for the reason pinJSONZone gives:
+// The zone is pinned rather than read, for the reason pinReaderZone gives:
 // nothing sets TZ in CI, so time.Local is UTC there and every row the bug
 // leaves behind already ends in Z.
 func TestJSONContractRendersEveryTimeInOneZone(t *testing.T) {
@@ -583,7 +583,7 @@ func TestJSONContractRendersEveryTimeInOneZone(t *testing.T) {
 	for _, c := range jsonContractCases() {
 		t.Run(c.title(), func(t *testing.T) {
 			inContractWorld(t, c, func(t *testing.T) {
-				pinJSONZone(t, time.FixedZone("KST", 9*60*60))
+				pinReaderZone(t, time.FixedZone("KST", 9*60*60))
 				_, stdout, _, _ := runRoot(t, c.argv()...)
 				for _, got := range jsonStamps(stdout) {
 					seen++

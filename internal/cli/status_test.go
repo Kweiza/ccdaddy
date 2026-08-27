@@ -1615,18 +1615,18 @@ func jsonStamps(doc string) []string {
 	return out
 }
 
-// pinJSONZone fixes the zone --json documents are rendered in, for a test that
+// pinReaderZone fixes the zone --json documents are rendered in, for a test that
 // would otherwise be blind.
 //
 // Nothing sets TZ in CI, so time.Local is UTC there, and a test that asserted
 // against it would accept the very rows the bug leaves behind — every one of
 // them already ends in Z. Pinning a zone that is nobody's default makes the
 // assertion decide the same thing on every machine.
-func pinJSONZone(t *testing.T, loc *time.Location) {
+func pinReaderZone(t *testing.T, loc *time.Location) {
 	t.Helper()
-	saved := jsonZone
-	t.Cleanup(func() { jsonZone = saved })
-	jsonZone = func() *time.Location { return loc }
+	saved := readerZone
+	t.Cleanup(func() { readerZone = saved })
+	readerZone = func() *time.Location { return loc }
 }
 
 // One document, one zone, and it is the machine's.
@@ -1646,7 +1646,7 @@ func pinJSONZone(t *testing.T, loc *time.Location) {
 func TestStatusJSONRendersEveryTimeInOneZone(t *testing.T) {
 	isolate(t)
 	freezeClock(t, statusNow)
-	pinJSONZone(t, time.FixedZone("KST", 9*60*60))
+	pinReaderZone(t, time.FixedZone("KST", 9*60*60))
 	// Two accounts with history, pace projections and window rollovers, so the
 	// document carries every kind of moment it can carry rather than only the
 	// engine's two.
@@ -1689,9 +1689,9 @@ func TestStatusJSONRendersEveryTimeInOneZone(t *testing.T) {
 }
 
 // The zone is the machine's, because the person reading the document is on the
-// machine. It is a var only so a test can pin it — see pinJSONZone.
+// machine. It is a var only so a test can pin it — see pinReaderZone.
 func TestJSONZoneIsTheMachineZone(t *testing.T) {
-	if got := jsonZone(); got != time.Local {
+	if got := readerZone(); got != time.Local {
 		t.Errorf("--json documents render in %v, want the machine's zone %v", got, time.Local)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -2205,3 +2206,66 @@ func TestTheUpdateCheckRowIsNeverAFailureAndAsksNobody(t *testing.T) {
 		t.Errorf("the release origin was asked for %v; doctor probes what the daemon recorded and must not create the request it reports on", asked)
 	}
 }
+
+// `ccdad doctor`'s three absolute moments are printed in the READER's zone.
+//
+// They are the only places in the tree that print an absolute timestamp to a
+// person in a machine layout rather than through view.Timestamp, and each one
+// reads a field out of the published status document. Printing them in the
+// document's own zone is what makes them wrong on the day of an upgrade: the
+// old daemon keeps running and keeps publishing until something stops it, so a
+// new binary reads a document whose stamps carry whatever zone each writer
+// happened to hand them. A `generated 2026-08-22T05:00:00Z` under a KST clock
+// is the nine-hour stall this whole item started as.
+//
+// Every stamp below is seeded in UTC and the zone is pinned away from it, so a
+// row that passed its input through unchanged fails — on CI too, where nothing
+// sets TZ and local is UTC.
+func TestDoctorPrintsAbsoluteStampsInTheReaderZone(t *testing.T) {
+	pinReaderZone(t, time.FixedZone("KST", 9*60*60))
+	at := mustTime("2026-08-22T05:00:00Z")
+	report := daemon.Report{
+		State:     daemon.DaemonRunning,
+		HasStatus: true,
+		Status: daemon.Status{
+			SchemaVersion:     daemon.StatusSchemaVersion,
+			GeneratedAt:       at,
+			UpdateCheckedAt:   at.Add(-time.Hour),
+			NextUpdateCheckAt: at.Add(23 * time.Hour),
+			UpdateLatest:      "9.9.9",
+			UpdateCheckError:  "the release endpoint refused the request",
+		},
+	}
+
+	for _, tc := range []struct {
+		name   string
+		detail string
+	}{
+		{"status-file", checkStatusFile(report).Detail},
+		// The newer-release arm, which is where `checked …` is printed.
+		{"update-check newer release", detailOf(updateCheckVerdict(true, report, "0.1.0"))},
+		// The failed-check arm, which is the only one that prints the DUE
+		// instant. It is reached by making the versions incomparable, because
+		// a newer release outranks a failed check.
+		{"update-check failure", detailOf(updateCheckVerdict(true, report, "not-a-version"))},
+	} {
+		stamps := rfc3339Pattern.FindAllString(tc.detail, -1)
+		if len(stamps) == 0 {
+			t.Errorf("%s printed no absolute moment, so this row decides nothing: %q", tc.name, tc.detail)
+			continue
+		}
+		for _, got := range stamps {
+			if !strings.HasSuffix(got, "+09:00") {
+				t.Errorf("%s printed %s, which is the document's zone and not the reader's: %q",
+					tc.name, got, tc.detail)
+			}
+		}
+	}
+}
+
+// rfc3339Pattern is jsonStampPattern without the quotes: `ccdad doctor` prints
+// its moments inside a sentence rather than as a JSON value, so they are found
+// by shape rather than by position.
+var rfc3339Pattern = regexp.MustCompile(`\d{4}-\d\d-\d\dT[\d:.]+(?:Z|[+-]\d\d:\d\d)`)
+
+func detailOf(_ checkLevel, detail string) string { return detail }
