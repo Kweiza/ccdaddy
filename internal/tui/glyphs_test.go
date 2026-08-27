@@ -258,3 +258,68 @@ func TestABorderedPageIsExactlyItsWidthInEastAsianMode(t *testing.T) {
 	}
 	alsoInEastAsianMode(t)
 }
+
+// The escape hatch is honoured in the direction it was built for, and in no
+// other. `glyphs = "unicode"` is a sentence somebody typed, so the frame, the
+// cursor and the eight markers stay Unicode even in a process whose width
+// engine is in its east-asian mode -- that is what PickGlyphs means by "a value
+// that a probe could veto is not a setting".
+//
+// The ART is the one thing that cannot ride along, and the reason is a width
+// fact rather than a taste. Measured on this tree: a 48-cell row of U+2580 is
+// 96 columns in that mode. Art rows are cut in cell space, so ansi.Truncate
+// never amputates them -- but the frame renders the whole page at a width it
+// was told, and it measures every content row it is handed. A 96-column row
+// inside a box asked for 78 breaks the box. The frame and the markers stay
+// because their widths are still predictable; the drawing goes.
+//
+// Decided here rather than at the draw site so that Model.Body stays a function
+// of its inputs: the environment is read once, where the vocabulary is chosen.
+func TestAnExplicitUnicodeKeepsItsGlyphsAndLosesOnlyTheArtInEastAsianMode(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		configured string
+		env        string
+		wantName   string
+		wantArt    bool
+	}{
+		{"unicode in the ordinary width mode draws art", "unicode", "", "unicode", true},
+		{"unicode with the east-asian mode on keeps its glyphs", "unicode", "1", "unicode", false},
+		{"unicode with the east-asian mode spelled true", "unicode", "true", "unicode", false},
+		{"a value the width engine itself ignores leaves the art on", "unicode", "yes", "unicode", true},
+		{"the variable explicitly off leaves the art on", "unicode", "0", "unicode", true},
+		{"auto never reaches the unicode set in that mode", "auto", "1", "ascii", false},
+		{"ascii never draws art", "ascii", "", "ascii", false},
+		{"ascii asked for in that mode is still ascii", "ascii", "1", "ascii", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("RUNEWIDTH_EASTASIAN", tc.env)
+			g := PickGlyphs(tc.configured, true)
+			if g.Name != tc.wantName {
+				t.Errorf("PickGlyphs(%q) is the %s set, want %s", tc.configured, g.Name, tc.wantName)
+			}
+			if g.Art != tc.wantArt {
+				t.Errorf("PickGlyphs(%q) draws art: %v, want %v", tc.configured, g.Art, tc.wantArt)
+			}
+			if tc.wantName == "unicode" && g.Cursor != UnicodeGlyphs.Cursor {
+				t.Errorf("the escape hatch dropped the cursor along with the art: %q", g.Cursor)
+			}
+		})
+	}
+}
+
+// The package's own set is a value nobody may quietly turn off.
+//
+// PickGlyphs clears Art on a COPY, and this is what holds it to that. Without
+// it, an arm written as `UnicodeGlyphs.Art = false; return UnicodeGlyphs` would
+// pass every case above and disable the art for the rest of the process, in a
+// way that reproduces only when a test happens to run after that one.
+func TestPickingGlyphsInEastAsianModeDoesNotDisarmThePackagesOwnSet(t *testing.T) {
+	t.Setenv("RUNEWIDTH_EASTASIAN", "1")
+	if g := PickGlyphs("unicode", true); g.Art {
+		t.Fatalf("the east-asian arm did not clear Art, so the rest of this test is meaningless")
+	}
+	if !UnicodeGlyphs.Art {
+		t.Error("PickGlyphs cleared Art on the package's UnicodeGlyphs instead of on its own copy")
+	}
+}
