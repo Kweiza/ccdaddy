@@ -157,8 +157,8 @@ func (m Model) artRow(g artGrid, row, inner int, role theme.Role, tail string) s
 	return b.String()
 }
 
-// wordArt is the "CCDaddy" wordmark, traced and then hand-redrawn from
-// docs/tui-mockup.png. 48x10 pixels (48x5 terminal cells folded).
+// wordArt is the "CCDaddy" wordmark, traced and then hand-redrawn from the
+// wordmark mockup. 48x10 pixels (48x5 terminal cells folded).
 //
 // The mockup's wordmark is a thin glowing outline font, and at this canvas a
 // straight trace of it disappears: resizing 840x130 source pixels down to
@@ -187,7 +187,7 @@ var wordArt = artGrid{W: 48, Rows: []string{
 }}
 
 // figureArt is the row of small creatures and the moustached "Daddy" figure
-// beneath the wordmark in docs/tui-mockup.png. 48x12 pixels (48x6 terminal
+// beneath the wordmark in the mockup image. 48x12 pixels (48x6 terminal
 // cells folded).
 //
 // Traced first (crop (203,328)-(916,621) of the mockup, thresholded against
