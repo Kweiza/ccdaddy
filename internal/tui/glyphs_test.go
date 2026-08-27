@@ -108,16 +108,28 @@ func TestEveryMarkerGlyphMeasuresOneColumnInBothWidthModes(t *testing.T) {
 	alsoInEastAsianMode(t)
 }
 
-// The ambiguous set is CLOSED, and this is what closes it. Six frame glyphs and
-// two gauge glyphs are allowed to measure two columns in east-asian mode; every
-// other character either set can emit must measure one in both. The frame and
-// the gauge get the exemption because a frame is drawn at a known width and a
-// gauge is a fixed-width cell whose total does not move with the value -- and
-// because the auto glyph set falls back to ASCII in that mode anyway, which is
-// what makes the exemption safe rather than merely declared.
+// The ambiguous set is CLOSED for the fixed VOCABULARY this test walks --
+// drawnRunes' markers, cue, gauge and border, nothing more -- and this is what
+// closes it. Six frame glyphs and two gauge glyphs in that vocabulary are
+// allowed to measure two columns in east-asian mode; every other character in
+// it must measure one in both. The frame and the gauge get the exemption
+// because a frame is drawn at a known width and a gauge is a fixed-width cell
+// whose total does not move with the value -- and because the auto glyph set
+// falls back to ASCII in that mode anyway, which is what makes the exemption
+// safe rather than merely declared.
 //
-// Nothing joins this list. A ninth entry means a page whose width arithmetic is
-// right on one machine and two columns out on another, with no error anywhere.
+// Nothing joins this list. A ninth entry in that vocabulary means a page whose
+// width arithmetic is right on one machine and two columns out on another,
+// with no error anywhere.
+//
+// The pixel ART is not part of this vocabulary and this test never sees it:
+// drawnRunes does not walk the art grids, only the markers, the cue, the gauge
+// and the border. The art is separately ambiguous-width BY DESIGN -- it draws
+// U+2580 and U+2584 on purpose -- and nothing here bounds that. What bounds it
+// instead is Glyphs.Art being false whenever the width engine is in east-asian
+// mode, which is what TestAnExplicitUnicodeKeepsItsGlyphsAndLosesOnlyTheArtInEastAsianMode
+// and TestAnExplicitUnicodeGlyphSetStillFallsBackToTheTypedBlocksInEastAsianMode
+// verify.
 func TestTheAmbiguousGlyphSetIsExactlyTheFrameAndTheGauge(t *testing.T) {
 	ambiguous := map[rune]bool{
 		'\u256d': true, '\u256e': true, '\u2570': true, '\u256f': true, // the four rounded corners

@@ -152,7 +152,11 @@ func (m Model) artRow(g artGrid, row, inner int, role theme.Role, tail string) s
 	}
 
 	if tail != "" && n < inner {
-		b.WriteString(truncate(tail, inner-n))
+		cut := truncate(tail, inner-n)
+		if painted {
+			cut = lipgloss.NewStyle().Foreground(c).Render(cut)
+		}
+		b.WriteString(cut)
 	}
 	return b.String()
 }
