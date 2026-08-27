@@ -16,6 +16,35 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.9.1] — 2026-08-27
+
+The release that stops pretending a wordmark is text.
+
+The dashboard's own name and its four mascots have been seven-bit ASCII
+wherever ccdad drew them — one flat colour over a hand-typed shape. This
+release draws them instead: two grids traced from the design mockup, one
+character per pixel, folded two rows to a cell with the upper and lower
+half-block glyphs so a foreground and a background paint one terminal cell
+as two independent pixels. The colour comes from the palette that already
+existed for everything else on the page — no new role, no new gate — because
+the glyph is chosen by which half of a cell is drawn, never by which theme is
+active. That is also what keeps `NO_COLOR` and a piped or redirected page
+legible: every colour can be stripped and a recognisable silhouette survives,
+dithered rather than solid.
+
+### Added
+
+- **The wordmark and the four creatures are drawn as coloured pixel art**,
+  with the same typed ASCII this page has always drawn kept as an exact,
+  byte-for-byte fallback for the one case the new art cannot safely draw in:
+  a console whose width engine measures ambiguous characters as two columns.
+  That fallback fires even when a user has explicitly asked for the Unicode
+  glyph set, because the frame around the art is what would break, not the
+  art's own good looks. Nothing about the page's layout, its column widths,
+  or its behaviour on any command changes — this is decoration, and it
+  degrades the same way every other coloured surface on this page already
+  does.
+
 ## [0.9.0] — 2026-08-27
 
 The release that learns a seat can be metered in money rather than quota, and
@@ -2098,7 +2127,8 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/Kweiza/ccdaddy/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/Kweiza/ccdaddy/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/Kweiza/ccdaddy/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/Kweiza/ccdaddy/compare/v0.6.1...v0.7.0
