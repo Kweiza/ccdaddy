@@ -189,6 +189,23 @@ by `uuid` or `alias`.
   non-UTC zone and stated as the worse of the two, because every machine that
   is not a CI runner is the worse of the two.
 
+- **The usage cache renders ccdad's own moments in the machine's zone, and
+  leaves the mirrored wire body exactly as it arrived.** `usage.json` is the one
+  document in the store that CANNOT carry a single zone, and saying so is the
+  point of the entry. Half of it is not ccdad's to render: the `snapshot` object
+  is a verbatim mirror of the endpoint's body, written as the endpoint's own
+  shape and read back through the parser a live response goes through, which is
+  what lets a stored cache be compared against bodies recorded from the
+  endpoint. A `resets_at` in a local offset would still parse and would end
+  that. So the split stays and becomes a rule instead of an accident:
+  `fetched_at`, `next_poll_at`, `stand_down_until` and the stamps inside `poll`
+  and `probe` are the reader's, everything under `snapshot` is the wire's, and
+  the boundary is an object a reader can see. It holds structurally rather than
+  by a list of field names — every moment inside a snapshot lives in an
+  unexported field behind that codec, so nothing can reach one by accident, and
+  an exported timestamp added there would break the mirror and fail the test
+  that says so.
+
 - **A switch carries the seat tier into Claude Code's own cached profile.**
   Claude Code decides which model tier a session defaults to with
   `Zu(){return Xe()==="enterprise"&&dO()==="enterprise_usage_based"}`, and the

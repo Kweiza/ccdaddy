@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -651,5 +652,120 @@ func TestAShortServeTTLLeftByAnOlderCcdadIsIgnored(t *testing.T) {
 	// reading, under any TTL.
 	if (Entry{FetchedAt: now.Add(time.Hour)}).FreshWithin(now, ServeTTL) {
 		t.Error("a reading from the future was served as fresh")
+	}
+}
+
+// ccdad's own moments are rendered in the machine's zone; the mirrored wire body
+// is left exactly as it arrived.
+//
+// This document cannot carry ONE zone, and that is the whole point of the test.
+// Everything else in the store now does — status.json, every --json document,
+// the history series — and this file is the exception because half of it is not
+// ccdad's to render. Snapshot.MarshalJSON "writes the endpoint's own shape" and
+// Snapshot.UnmarshalJSON reads it back "with the same parser a live response
+// goes through", which is what lets a cache be compared against bodies recorded
+// verbatim from the endpoint. Rendering resets_at in a local offset would still
+// parse and would end that.
+//
+// So the split stays, and what changes is that it becomes a RULE instead of an
+// accident: ccdad's own moments in the reader's zone, the wire's body verbatim,
+// and the boundary between them is the `snapshot` object a reader can see.
+//
+// It holds for a structural reason rather than by a list of field names this
+// test would have to be told to grow: every moment inside a Snapshot lives in an
+// UNEXPORTED field (Window.reset, Limit.reset) behind that codec, and the walk
+// that renders the document cannot reach one. Adding an exported time.Time to
+// Snapshot would break the mirror and fail here, which is the right place for
+// that to be noticed.
+func TestTheCacheRendersItsOwnMomentsLocallyAndMirrorsTheWireVerbatim(t *testing.T) {
+	isolate(t)
+	saved := time.Local
+	time.Local = time.FixedZone("KST", 9*60*60)
+	t.Cleanup(func() { time.Local = saved })
+
+	// A wire body, ending in Z the way every resets_at the endpoint sends does.
+	snap, err := Parse([]byte(`{"five_hour":{"utilization":24,"resets_at":"2026-08-22T07:00:00.5Z"},
+	                            "seven_day":{"utilization":61,"resets_at":"2026-08-25T09:00:00.5Z"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// ccdad's own moments, seeded in a zone that is neither the machine's nor
+	// the one they would end up in by accident.
+	at := time.Date(2026, 8, 22, 5, 0, 0, 0, time.UTC)
+	if err := WithCache(5*time.Second, func(c *Cache) error {
+		c.Put("uuid-a", Entry{
+			Snapshot:       snap,
+			FetchedAt:      at,
+			NextPollAt:     at.Add(10 * time.Minute),
+			StandDownUntil: at.Add(30 * time.Minute),
+			Poll:           PollState{Interval: time.Minute, LastRateLimited: at.Add(-time.Hour)},
+			Probe:          ProbeState{LastAttemptAt: at.Add(-2 * time.Hour), Window: WindowFiveHour},
+		})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	body, err := os.ReadFile(mustPath(CachePath()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(body, &doc); err != nil {
+		t.Fatalf("the cache does not parse: %v\n%s", err, body)
+	}
+
+	// Walked rather than spelled, so a moment added anywhere lands here whether
+	// or not this test was told about it. The path says which side of the
+	// boundary it is on.
+	stamp := regexp.MustCompile(`^\d{4}-\d\d-\d\dT[\d:.]+(?:Z|[+-]\d\d:\d\d)$`)
+	mine, mirrored := 0, 0
+	var walk func(v any, path string)
+	walk = func(v any, path string) {
+		switch t2 := v.(type) {
+		case map[string]any:
+			for k, x := range t2 {
+				walk(x, path+"/"+k)
+			}
+		case []any:
+			for _, x := range t2 {
+				walk(x, path+"[]")
+			}
+		case string:
+			if !stamp.MatchString(t2) {
+				return
+			}
+			inMirror := strings.Contains(path, "/snapshot/")
+			// The zero time is written by neither side's choice — it is what
+			// encoding/json does with an unset time.Time under omitempty, and
+			// it stays 0001-01-01T00:00:00Z on both sides of the boundary.
+			if strings.HasPrefix(t2, "0001-01-01") {
+				return
+			}
+			switch {
+			case inMirror:
+				mirrored++
+				if !strings.HasSuffix(t2, "Z") {
+					t.Errorf("%s = %s is inside the mirrored wire body and is no longer the endpoint's own shape",
+						path, t2)
+				}
+			default:
+				mine++
+				if !strings.HasSuffix(t2, "+09:00") {
+					t.Errorf("%s = %s is ccdad's own moment and is not in the reader's zone", path, t2)
+				}
+			}
+		}
+	}
+	walk(doc, "")
+
+	// Both sides have to be populated, or one half of the rule is being decided
+	// by an empty fixture.
+	if mine < 4 {
+		t.Errorf("found %d of ccdad's own moments, want fetched_at, next_poll_at, stand_down_until, "+
+			"poll.last_rate_limited and probe.last_attempt_at:\n%s", mine, body)
+	}
+	if mirrored < 2 {
+		t.Errorf("found %d mirrored moments, want both windows' resets_at:\n%s", mirrored, body)
 	}
 }
