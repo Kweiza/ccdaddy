@@ -202,9 +202,10 @@ by `uuid` or `alias`.
   and `probe` are the reader's, everything under `snapshot` is the wire's, and
   the boundary is an object a reader can see. It holds structurally rather than
   by a list of field names — every moment inside a snapshot lives in an
-  unexported field behind that codec, so nothing can reach one by accident, and
-  an exported timestamp added there would break the mirror and fail the test
-  that says so.
+  unexported field behind that codec, so nothing that renders the document can
+  reach one by accident. The one place those moments ARE rendered is the
+  snapshot codec's own `fromTime`, and rendering it in anything but UTC fails
+  the test that pins the mirror.
 
 - **A switch carries the seat tier into Claude Code's own cached profile.**
   Claude Code decides which model tier a session defaults to with

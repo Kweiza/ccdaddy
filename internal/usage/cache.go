@@ -319,9 +319,16 @@ func LoadCache() (*Cache, error) {
 // The boundary is the `snapshot` object, and it holds structurally rather than
 // by a list of names: every moment inside a Snapshot lives in an unexported
 // field behind that codec, so the walk below cannot reach one even if somebody
-// wanted it to. An exported time.Time added to Snapshot would break the mirror,
-// and TestTheCacheRendersItsOwnMomentsLocallyAndMirrorsTheWireVerbatim is where
-// that gets noticed.
+// wanted it to.
+//
+// What CAN break the mirror is fromTime, which is the one place a snapshot's
+// moments are rendered. Changing its .UTC() is what
+// TestTheCacheRendersItsOwnMomentsLocallyAndMirrorsTheWireVerbatim catches --
+// measured, by making that substitution and watching it fail. Adding an
+// exported time.Time to Snapshot does NOT reach the wire and does NOT fail
+// anything here, because Snapshot.MarshalJSON builds an explicit wire struct
+// rather than encoding its own fields; a field added there has to be added to
+// toWire before it means anything at all.
 func (c *Cache) save(root string) error {
 	c.data.Version = 1
 	encoded, err := json.Marshal(zone.In(c.data, time.Local))

@@ -674,9 +674,14 @@ func TestAShortServeTTLLeftByAnOlderCcdadIsIgnored(t *testing.T) {
 // It holds for a structural reason rather than by a list of field names this
 // test would have to be told to grow: every moment inside a Snapshot lives in an
 // UNEXPORTED field (Window.reset, Limit.reset) behind that codec, and the walk
-// that renders the document cannot reach one. Adding an exported time.Time to
-// Snapshot would break the mirror and fail here, which is the right place for
-// that to be noticed.
+// that renders the document cannot reach one.
+//
+// The half of the rule this test can actually decide is the mirror's RENDERING,
+// which is fromTime's single .UTC(). Substituting .Local() there fails the
+// mirrored arm below -- measured, not assumed. Adding an exported time.Time to
+// Snapshot does not fail anything here and is not meant to: MarshalJSON builds
+// an explicit wire struct, so a field added to Snapshot never reaches the
+// document until somebody also adds it to toWire.
 func TestTheCacheRendersItsOwnMomentsLocallyAndMirrorsTheWireVerbatim(t *testing.T) {
 	isolate(t)
 	saved := time.Local
