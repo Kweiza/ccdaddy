@@ -156,3 +156,64 @@ func (m Model) artRow(g artGrid, row, inner int, role theme.Role, tail string) s
 	}
 	return b.String()
 }
+
+// wordArt is the "CCDaddy" wordmark, traced and then hand-redrawn from
+// docs/tui-mockup.png. 48x10 pixels (48x5 terminal cells folded).
+//
+// The mockup's wordmark is a thin glowing outline font, and at this canvas a
+// straight trace of it disappears: resizing 840x130 source pixels down to
+// 48x10 averages every stroke into the ground around it, and even a fraction-
+// coverage threshold on a pre-binarized mask produced static, not letters --
+// there is no single row of pixels in the source thin enough to survive that
+// compression and thick enough to read as ink afterward. So this is drawn
+// instead of traced: seven capital letters in a bold seven-segment style
+// (open-C, open-C, rectangle-D, A with no foot, rectangle-D twice more, and a
+// Y with a descender tail echoing the mockup's own flourish under its "y"),
+// spelling CCDADDY, each 5 pixels wide with a 1-pixel gap. The mockup also
+// carries a smaller "(ccdad)" alias beside the wordmark; there is no width
+// left to draw both legibly at 48 columns, so that alias is dropped here and
+// only the primary name is drawn.
+var wordArt = artGrid{W: 48, Rows: []string{
+	`...11111.11111.11111.11111.11111.11111.1...1....`,
+	`...1.....1.....1...1.1...1.1...1.1...1.1...1....`,
+	`...1.....1.....1...1.1...1.1...1.1...1.1...1....`,
+	`...1.....1.....1...1.1...1.1...1.1...1.1...1....`,
+	`...1.....1.....1...1.11111.1...1.1...1.11111....`,
+	`...1.....1.....1...1.1...1.1...1.1...1...1......`,
+	`...1.....1.....1...1.1...1.1...1.1...1...1......`,
+	`...1.....1.....1...1.1...1.1...1.1...1...1......`,
+	`...1.....1.....1...1.1...1.1...1.1...1...1......`,
+	`...11111.11111.11111.......11111.11111...1......`,
+}}
+
+// figureArt is the row of small creatures and the moustached "Daddy" figure
+// beneath the wordmark in docs/tui-mockup.png. 48x12 pixels (48x6 terminal
+// cells folded).
+//
+// Traced first (crop (203,328)-(916,621) of the mockup, thresholded against
+// its salmon ink at #eb9384), then hand-cleaned: the raw threshold survives as
+// noisy single-pixel salt scattered through what should be readable eyes and
+// legs, so the shapes below are redrawn on the trace's own silhouette rather
+// than kept as its literal output. The left 32 columns are four overlapping
+// blocky bodies -- one taller creature peeking up in back, one to each side,
+// one lower in front, each with a punched-out pair of eyes at whatever row is
+// still that creature's own face and not another's overlap -- standing on
+// separated one-and-two-pixel legs. A 5-column gap separates them from the
+// "Daddy" figure in the last 11 columns: a wide hat brim over a narrower
+// crown, a head with two eye-slit punches, a moustache carved as a gap under
+// the cheeks (so it folds as ink on the chin half and ground on the lip half),
+// shoulders, and its own set of legs.
+var figureArt = artGrid{W: 48, Rows: []string{
+	`.........11111111111111..............11111111111`,
+	`.........11111111111111................1111111..`,
+	`1111111111111.1111.1111111111111......11.111.11.`,
+	`1111111111111.1111.1111111111111......11.111.11.`,
+	`11.1111.1111111111111111.111.111......111111111.`,
+	`11.1111.1111111111111111.111.111......111111111.`,
+	`111111111111.111111.111111111111......11.....11.`,
+	`111111111111.111111.111111111111......111111111.`,
+	`11111111111111111111111111111111.....11111111111`,
+	`.11..11..11..11..11..11..11..11......11111111111`,
+	`.11..11..11..11..11..11..11..11......11.11.11.11`,
+	`.11..11..11..11..11..11..11..11......11.11.11.11`,
+}}
