@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/Kweiza/ccdaddy/internal/store"
+	"github.com/Kweiza/ccdaddy/internal/zone"
 )
 
 // errSilent carries an exit code without a message. Commands use it when they
@@ -29,7 +31,33 @@ var errSilent = errors.New("")
 // json_contract_test.go — including that every document has the shape this
 // function gives it, which is how a command that stopped coming through here
 // gets noticed.
+// jsonZone is the one zone every `--json` document is rendered in, and it is
+// the machine's.
+//
+// A --json document is read on the machine that produced it -- piped into jq at
+// the same prompt, or opened in an editor beside `ccdad status` -- so the zone
+// that makes it readable is the reader's own. Rendering the moments the
+// endpoint reported in UTC beside the moments ccdad computed in local time
+// makes a document that cannot be read down the page: a live store carried five
+// poll times at +09:00 beside one at Z, and the Z row looked nine hours overdue
+// when it was four minutes in the future.
+//
+// It is a var so a test can pin a zone that is nobody's default. Nothing sets
+// TZ in CI, so time.Local is UTC there, and a test that asserted against it
+// would accept exactly the rows the bug leaves behind.
+//
+// It is deliberately NOT the zone of `ccdad export`, whose file is written to
+// be carried to another machine: the writer's local offset is not the reader's
+// there, and export.go keeps its own UTC for that reason.
+var jsonZone = func() *time.Location { return time.Local }
+
 func writeJSON(cmd *cobra.Command, payload any) error {
+	// One rule for every document rather than a habit each payload builder
+	// keeps. The alternative is a .UTC() or .In() at each of the two dozen
+	// places a moment enters a payload, which is the shape this bug arrived in:
+	// the sites that remembered agreed with each other and the ones that forgot
+	// published the zone their input happened to carry.
+	payload = zone.In(payload, jsonZone())
 	enc := json.NewEncoder(cmd.OutOrStdout())
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(payload); err != nil {
