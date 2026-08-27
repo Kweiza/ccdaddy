@@ -34,6 +34,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/cclock"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/usage"
+	"github.com/Kweiza/ccdaddy/internal/zone"
 )
 
 const (
@@ -122,14 +123,22 @@ const (
 	//
 	// The sizes are measured by encoding this document's own shape rather than
 	// estimated, and TestTheDocumentSizeAtTheCapIsWhatMaxSamplesClaims keeps
-	// measuring them: a sample costs 267 bytes carrying three windows and a
-	// credit, 455 carrying all six the usage schema names. Six accounts at 160
-	// samples each is therefore 250-430 KB, and six accounts pinned at this cap
-	// would be 0.8-1.3 MB -- more again on a plan that reports scoped weekly
+	// measuring them: a sample costs 287 bytes carrying three windows and a
+	// credit, 490 carrying all six the usage schema names. Six accounts at 160
+	// samples each is therefore 270-460 KB, and six accounts pinned at this cap
+	// would be 0.84-1.44 MB -- more again on a plan that reports scoped weekly
 	// caps too, whose names are longer than the fixed ones. That upper figure is
 	// why the cap is a cap and not a target: LoadHistory reads and unmarshals
 	// the whole document, with no lock and no partial read, on every command
 	// that forecasts.
+	//
+	// Those are the figures for a machine whose zone is not UTC, and they are
+	// the ones to size against. save renders the whole document in the
+	// machine's zone, and an offset is six characters where Z is one, so a
+	// sample carrying three timestamps costs 20 bytes more there than it does
+	// on a UTC machine -- 267 and 455 bytes, 0.78 and 1.33 MB, measured. The
+	// bound has to be the worse of the two, and every machine that is not a CI
+	// runner is the worse of the two.
 	maxSamples = 512
 )
 
@@ -391,9 +400,26 @@ func LoadHistory() (*History, error) {
 }
 
 // save writes the series atomically. The caller must hold the lock.
+//
+// The document is rendered in ONE zone, and it is the machine's. A sample
+// carries two kinds of moment from two places -- At is the reading's FetchedAt,
+// computed from time.Now() and carrying the machine's offset, while the Reset
+// beside it came off the wire, where every resets_at ends in Z and
+// internal/usage parses it with an explicit .UTC() -- and encoding/json writes
+// whichever offset it is handed. A live series carried 292 timestamps at +09:00
+// beside 870 at Z, describing one afternoon.
+//
+// It is applied HERE, at the one serialiser, and not at the callers that build
+// a Sample: a writer's job is to choose an instant, and an instant has no zone.
+// status.json and every --json document obey the same rule at the same kind of
+// place; see internal/zone.
+//
+// Only the rendering changes. Nothing reads a moment out of this file as a
+// string: the reset a reader segments on is compared with time.Time, which is
+// the whole point of Reading.Reset being truncated rather than formatted.
 func (h *History) save(root string) error {
 	h.data.Version = 1
-	encoded, err := json.Marshal(h.data)
+	encoded, err := json.Marshal(zone.In(h.data, time.Local))
 	if err != nil {
 		return fmt.Errorf("encoding %s: %w", FileName, err)
 	}

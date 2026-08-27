@@ -7,6 +7,8 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -677,7 +679,20 @@ func TestAFailedTransactionWritesNothing(t *testing.T) {
 //
 // The tolerance is wide enough for a Go release that reorders a map or shortens
 // a float, and narrow enough that adding a field to Sample lands here.
+//
+// The zone is pinned, and pinning it is what makes the figures a BOUND rather
+// than a fact about the machine that ran the test. save renders the document in
+// the machine's zone, and an offset is six characters where Z is one, so the
+// same document is 8% larger on a machine whose zone is not UTC -- which is
+// every machine except a CI runner, where nothing sets TZ. Read off an
+// unpinned time.Local these numbers would be the small ones in CI and the large
+// ones in Seoul, and maxSamples would be justified by whichever had been run
+// last.
 func TestTheDocumentSizeAtTheCapIsWhatMaxSamplesClaims(t *testing.T) {
+	saved := time.Local
+	time.Local = time.FixedZone("KST", 9*60*60)
+	t.Cleanup(func() { time.Local = saved })
+
 	all := []usage.WindowName{
 		usage.WindowFiveHour, usage.WindowSevenDay, usage.WindowSevenDayOpus,
 		usage.WindowSevenDaySonnet, usage.WindowSevenDayOAuthApps, usage.WindowCinderCove,
@@ -688,8 +703,8 @@ func TestTheDocumentSizeAtTheCapIsWhatMaxSamplesClaims(t *testing.T) {
 		perSample int
 		atCapMB   float64
 	}{
-		{"three windows and a credit", all[:3], 267, 0.78},
-		{"six windows and a credit", all, 455, 1.33},
+		{"three windows and a credit", all[:3], 287, 0.84},
+		{"six windows and a credit", all, 490, 1.44},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			one := encodedSize(t, 1, 1, c.windows)
@@ -741,4 +756,82 @@ func encodedSize(t *testing.T, accounts, samples int, windows []usage.WindowName
 		t.Fatal(err)
 	}
 	return int(fi.Size())
+}
+
+// One document, one zone, and it is the machine's.
+//
+// A sample carries two kinds of moment and they arrive from different places.
+// At is the reading's FetchedAt, computed from time.Now() and carrying the
+// machine's offset; the Reset beside it came off the wire, where every
+// resets_at ends in Z, and internal/usage parses it with an explicit .UTC().
+// encoding/json writes whichever offset it is handed, so one file describes one
+// afternoon in two zones. Measured on a live series before this: 292 timestamps
+// at +09:00 beside 870 at Z.
+//
+// Only the rendering changes. Nothing here compares a moment as a string --
+// Reading.Reset's own comment turns on the sub-second part being noise, and the
+// segmentation that reads it uses time.Time.
+//
+// The zone is pinned rather than read. Nothing sets TZ in CI, so time.Local is
+// UTC there, and a test that asserted against it would accept every row this
+// bug leaves behind.
+func TestTheSeriesRendersEveryTimeInOneZone(t *testing.T) {
+	isolate(t)
+	kst := time.FixedZone("KST", 9*60*60)
+	saved := time.Local
+	time.Local = kst
+	t.Cleanup(func() { time.Local = saved })
+
+	// Deliberately mixed, the way the two writers really deliver them: the
+	// sample's own moment already in the machine's zone, the wire's resets in
+	// UTC.
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	limit := 100.0
+	s := Sample{
+		At: now.In(kst),
+		Windows: map[usage.WindowName]Reading{
+			usage.WindowFiveHour: {Pct: 24, Reset: now.Add(90 * time.Minute)},
+			usage.WindowSevenDay: {Pct: 85, Reset: now.Add(80 * time.Hour)},
+		},
+		Credit: &Credit{Used: 12.5, Limit: &limit, Currency: "USD"},
+	}
+	if err := Record(time.Second, "uuid-a", s, now); err != nil {
+		t.Fatal(err)
+	}
+
+	body, err := os.ReadFile(mustPath(Path()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Found by shape rather than by a list of field names this test would have
+	// to be told to grow.
+	stamps := regexp.MustCompile(`"(\d{4}-\d\d-\d\dT[\d:.]+(?:Z|[+-]\d\d:\d\d))"`).
+		FindAllStringSubmatch(string(body), -1)
+	if len(stamps) < 3 {
+		t.Fatalf("found %d timestamps, want the sample's own and both resets:\n%s", len(stamps), body)
+	}
+	for _, m := range stamps {
+		if !strings.HasSuffix(m[1], "+09:00") {
+			t.Errorf("%s is not in the document's zone; one document carries one zone:\n%s", m[1], body)
+		}
+	}
+
+	// And the instants survived, which is the half that matters more than the
+	// rendering: a series whose moments moved would measure a different rate.
+	h, err := LoadHistory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := h.Series("uuid-a", time.Time{})
+	if len(got) != 1 {
+		t.Fatalf("samples = %d, want 1", len(got))
+	}
+	if !got[0].At.Equal(s.At) {
+		t.Errorf("at = %v, want the instant it went in as, %v", got[0].At, s.At)
+	}
+	for name, w := range s.Windows {
+		if g := got[0].Windows[name]; !g.Reset.Equal(w.Reset) {
+			t.Errorf("window %q reset = %v, want %v", name, g.Reset, w.Reset)
+		}
+	}
 }

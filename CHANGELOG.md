@@ -173,6 +173,22 @@ by `uuid` or `alias`.
   through it. The zone is the machine's, because every reader of these
   documents is on the machine that wrote them.
 
+- **The usage history series carries one zone too, and the retention bound is
+  restated for the machine it actually runs on.** `history.json` had the same
+  split for the same reason: a sample's `at` is the reading's fetch time and
+  carries the machine's offset, while the `reset` beside it came off the wire
+  and carries `Z`. Measured on a live series before the fix — 292 timestamps at
+  `+09:00` beside 870 at `Z`, describing one afternoon. It is rendered at its
+  one serialiser now, like the others. This costs SIZE, and the cost is the
+  reason the note is here rather than only in the code: an offset is six
+  characters where `Z` is one, so a sample carrying three timestamps is 20
+  bytes larger and the document at its retention cap goes from 1.33 MB to
+  1.44 MB. That figure is `maxSamples`' whole justification, and it was
+  previously measured on whichever zone happened to run the test — small in CI,
+  where nothing sets `TZ`, and large everywhere else. It is now pinned to a
+  non-UTC zone and stated as the worse of the two, because every machine that
+  is not a CI runner is the worse of the two.
+
 - **A switch carries the seat tier into Claude Code's own cached profile.**
   Claude Code decides which model tier a session defaults to with
   `Zu(){return Xe()==="enterprise"&&dO()==="enterprise_usage_based"}`, and the
