@@ -1,6 +1,7 @@
 package cclink
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -258,6 +259,60 @@ func writeMerged(decide func(live Blob) (Blob, error)) (err error) {
 
 	if err := WriteFileAtomic(livePath, data, 0o600); err != nil {
 		return err
+	}
+	return installIntoKeychain(data)
+}
+
+// installIntoKeychain mirrors what was just written into the macOS Keychain
+// item -- WHEN one is already there.
+//
+// It is not a courtesy. On macOS the combinator Claude Code builds its
+// credential store from reads the keychain FIRST and falls back to the file:
+//
+//	read(a){let o=e.read(a);if(o!==null&&o!==void 0)return o;return t.read(a)||{}}
+//
+// so where an item exists it IS the login, and the file above is a store
+// nothing consults. Writing only the file is what made a switch look like it
+// worked while every request kept authenticating as the account the item named.
+// keychain_security.go's Write carries the measurement that settles this.
+//
+// AN ABSENT ITEM IS LEFT ABSENT. With no item the fallback is what gets read,
+// so the file is already the login and there is nothing to mirror; creating one
+// would introduce a second store where the machine had one, and make it the
+// store consulted first from then on. That is a decision about how a machine
+// stores its credentials, and a switch is not where it gets made.
+//
+// THE COST IS PAID INSIDE THE CREDENTIAL LOCKS, which is the objection this
+// path was refused on before. Two spawns of `security` -- a lookup that does
+// not decrypt, then the install -- sit in a window Claude Code's own refresh
+// blocks on. That was worth avoiding while the item was believed inert. It is
+// not worth avoiding to preserve a swap that does not swap anything.
+//
+// A failure is returned rather than warned about, and the caller sees a switch
+// that failed. That is the honest report: the file moved and the login did not,
+// which is exactly the state this whole path exists to stop producing. The two
+// writes cannot be made atomic -- one is a file and the other is a daemon --
+// so the choice is only which failure the caller is told about, and silence is
+// what let this go unnoticed for as long as it did.
+func installIntoKeychain(data []byte) error {
+	ctx := context.Background()
+
+	found, err := ProbeCredentialKeychainItem(ctx)
+	if errors.Is(err, ErrKeychainUnsupported) {
+		return nil
+	}
+	if err != nil {
+		// A lookup that could not answer is not an absence. A locked keychain
+		// refusing to be read leaves it unknown whether an item is shadowing
+		// the file, and reporting that as "no item, nothing to do" would be
+		// the same switch-that-changes-nothing with a different cause.
+		return fmt.Errorf("the credentials file was written, but ccdad could not tell whether a keychain item shadows it: %w", err)
+	}
+	if !found.Present {
+		return nil
+	}
+	if err := found.Item.Write(ctx, string(data)); err != nil {
+		return fmt.Errorf("the credentials file was written, but the keychain item Claude Code reads first could not be updated, so the login did not change: %w", err)
 	}
 	return nil
 }
