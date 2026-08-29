@@ -3,6 +3,7 @@ package cclink
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -264,6 +265,56 @@ type KeychainLookup struct {
 	// "nothing there" has to be able to say what it looked for, and on a
 	// decomposed CLAUDE_CONFIG_DIR that is two names rather than one.
 	Checked []KeychainItem
+}
+
+// Write installs secret into the item, creating it or replacing whatever is
+// there.
+//
+// WHY ccdad WRITES THE KEYCHAIN AT ALL, given that the header of keychain.go
+// spent its length arguing ccdad should not touch it: because the premise that
+// argument rested on -- that 2.1.113 dropped the backend, so the item is inert
+// on anything a user can install today -- is FALSE. Measured against the
+// installed 2.1.234, 2.1.238 and 2.1.251, every one of them carries a whole
+// keychain backend that spawns `security find-generic-password`, and the
+// combinator still reads it BEFORE the credentials file:
+//
+//	read(a){let o=e.read(a);if(o!==null&&o!==void 0)return o;return t.read(a)||{}}
+//
+// So on macOS the item is the live login, and a switch that writes only
+// .credentials.json writes the store Claude Code consults SECOND. It appears to
+// work -- the file changes, `which` reads it back, the daemon logs a switch --
+// and Claude Code goes on authenticating as whoever the item names. That was
+// observed, not deduced: with the item holding one account and the file another,
+// an hour of work after a switch landed entirely on the item's account.
+//
+// -U is what makes this an install rather than a create: without it `security`
+// refuses an item that already exists with errSecDuplicateItem, which is the
+// ordinary case here -- the item is nearly always already there.
+//
+// THE SECRET GOES ON ARGV, and that is a real cost rather than an oversight. -X
+// takes the payload as hex, and hex is what makes `security` store the bytes
+// rather than interpret them; the alternative is -w, which takes the same
+// plaintext on the same argv. Both are visible in a process listing for the
+// life of the spawn. Claude Code's own writer passes -X the same way and only
+// falls back from stdin to argv past a length limit, so ccdad is not opening an
+// exposure Claude Code closes -- but it is opening one on every switch rather
+// than on an occasional oversized payload. Narrowing it needs `security -i`,
+// which is an interactive command stream rather than a flag, and runSecurity
+// deliberately pins Stdin to DevNull so that a subcommand which decides to
+// prompt cannot compete for the terminal. Changing that is a bigger change than
+// this one and it is not free either.
+func (it KeychainItem) Write(ctx context.Context, secret string) error {
+	res, err := runSecurity(ctx, "add-generic-password", "-U",
+		"-a", it.Account, "-s", it.Service,
+		"-X", hex.EncodeToString([]byte(secret)))
+	if err != nil {
+		return err
+	}
+	if res.code == 0 {
+		return nil
+	}
+	return &KeychainError{
+		Op: "add-generic-password", failure: classifyKeychainError(res.stderr), stderr: res.stderr}
 }
 
 // ProbeCredentialKeychainItem is the doctor probe: derive the names this

@@ -2,6 +2,7 @@ package cclink
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -570,5 +571,30 @@ func TestProbeCredentialKeychainItemStopsAtAnUnanswerableLookup(t *testing.T) {
 	want := []string{"find-generic-password", "-a", "tester", "-s", "Claude Code-credentials-0873cca0"}
 	if got := recordedArgv(t, argv); !reflect.DeepEqual(got, want) {
 		t.Fatalf("argv = %q, want %q — the probe continued past an error", got, want)
+	}
+}
+
+// Write installs the secret under the item, in Claude Code's own argument
+// shape: -U so an item that already exists is updated rather than refused, and
+// the payload as hex under -X because that is what its own writer passes.
+//
+// The hex is asserted rather than the plaintext: -X is what makes `security`
+// treat the argument as data rather than as a password to be interpreted, and
+// a Write that passed the JSON raw would store something else.
+func TestWriteInstallsTheSecretAsHex(t *testing.T) {
+	argv := fakeSecurity{}.install(t)
+
+	const secret = `{"claudeAiOauth":{"accessToken":"sk-ant-oat01-x"}}`
+	if err := testItem.Write(context.Background(), secret); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{
+		"add-generic-password", "-U",
+		"-a", "tester", "-s", "Claude Code-credentials",
+		"-X", hex.EncodeToString([]byte(secret)),
+	}
+	if got := recordedArgv(t, argv); !reflect.DeepEqual(got, want) {
+		t.Fatalf("argv = %q, want %q", got, want)
 	}
 }
