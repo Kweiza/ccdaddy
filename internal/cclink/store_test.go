@@ -37,6 +37,20 @@ func withClaudeHome(t *testing.T) string {
 	t.Setenv("HOME", home)        // still consulted by ccpath.ConfigHome, unrelated to this package
 	t.Setenv("USERPROFILE", home) // the same variable, on Windows
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
+
+	// Sandbox the KEYCHAIN too, and for the same reason the file is sandboxed.
+	// writeMerged now installs into the keychain item after writing the file,
+	// and this package's tests run on the developer's own macOS -- where that
+	// item is their live Claude Code login. A test that sandboxed the file and
+	// left the item alone would write its fixture credentials straight into it.
+	// "linux" is the off switch: runSecurity refuses to spawn anywhere but
+	// darwin, so no `security` runs at all. A test that WANTS the spawn calls
+	// fakeSecurity.install after this, which sets darwin back and points the
+	// exec layer at the fixture.
+	savedGOOS := keychainGOOS
+	t.Cleanup(func() { keychainGOOS = savedGOOS })
+	keychainGOOS = "linux"
+
 	if got := mustPath(ccpath.CredentialHome()); got != creds {
 		t.Fatalf("withClaudeHome: mustPath(ccpath.CredentialHome()) = %q, want %q -- refusing to run with unsandboxed credentials", got, creds)
 	}
@@ -596,5 +610,49 @@ func TestActivateWithPropagatesADecideFailureWithoutWriting(t *testing.T) {
 	}
 	if !bytes.Equal(before, after) {
 		t.Fatal("a failed decision still rewrote the credentials file")
+	}
+}
+
+// On macOS the keychain item is the store Claude Code consults FIRST, so a
+// switch that wrote only the credentials file would leave every request
+// authenticating as whoever the item names. An item that is already there is
+// installed into as well.
+//
+// The fixture records only its LAST invocation, so "the install ran" is spelled
+// as "the install is what ran last".
+func TestActivateInstallsIntoAnExistingKeychainItem(t *testing.T) {
+	withClaudeHome(t)
+	writeCreds(t, `{"claudeAiOauth":{"accessToken":"old"}}`)
+	// exit 0 for every spawn: the lookup finds the item and the install succeeds.
+	argv := fakeSecurity{}.install(t)
+
+	if err := Activate(Blob{"claudeAiOauth": json.RawMessage(`{"accessToken":"new"}`)}); err != nil {
+		t.Fatalf("Activate() = %v, want nil", err)
+	}
+
+	got := recordedArgv(t, argv)
+	if len(got) == 0 || got[0] != "add-generic-password" {
+		t.Fatalf("last spawn = %q, want the keychain install", got)
+	}
+}
+
+// A machine with no item has nothing shadowing the credentials file. Creating
+// one would introduce a second store where there was one, and it would become
+// the store Claude Code reads first -- a switch is not the place to decide a
+// machine should start using the keychain.
+func TestActivateDoesNotCreateAKeychainItemThatWasNotThere(t *testing.T) {
+	withClaudeHome(t)
+	writeCreds(t, `{"claudeAiOauth":{"accessToken":"old"}}`)
+	argv := fakeSecurity{exit: securityNotFoundCode}.install(t)
+
+	if err := Activate(Blob{"claudeAiOauth": json.RawMessage(`{"accessToken":"new"}`)}); err != nil {
+		t.Fatalf("Activate() = %v, want nil", err)
+	}
+
+	got := recordedArgv(t, argv)
+	for _, arg := range got {
+		if arg == "add-generic-password" {
+			t.Fatalf("Activate created an item that was not there: %q", got)
+		}
 	}
 }
