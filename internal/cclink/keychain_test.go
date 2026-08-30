@@ -453,3 +453,21 @@ func TestTrimKeychainSecret(t *testing.T) {
 		}
 	}
 }
+
+// The sentence for a refused non-interactive lookup now has TWO readers, and
+// the second one needs the half the first does not. doctor's own probe is run
+// by a person in a shell, who can move to another one. A daemon reporting it
+// cannot: it inherited the session at startup, and every successor it spawns
+// inherits the same one -- so the automatic replacement will not save it and
+// the remedy is a restart from a session that can read the keychain.
+//
+// That is not a hypothetical caveat. It is the whole reason one daemon stayed
+// wedged across a restart and another did not.
+func TestTheNonInteractiveSentenceTellsADaemonWhatToDo(t *testing.T) {
+	detail := keychainFailureDetail(failNoInteraction)
+	for _, want := range []string{"non-interactive", "daemon", "restart"} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("detail = %q, want %q in it", detail, want)
+		}
+	}
+}

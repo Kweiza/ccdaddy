@@ -648,3 +648,129 @@ func TestReadTreatsAZeroLengthBlobAsAValue(t *testing.T) {
 		t.Fatalf("secret = %q, want the empty value", secret)
 	}
 }
+
+// A silent `security` is not a `security` that said nothing USEFUL: its exit
+// code is the OSStatus, and for the keychain band that is a name.
+//
+// 36 is the one this arrived as. A daemon logged `said-nothing (exit 36)` on
+// the first tick after a restart and every tick for the next two minutes, and
+// 36 is errSecInteractionNotAllowed -- the keychain refusing a non-interactive
+// lookup, which is a thing ccdad already has the right sentence for and could
+// not reach, because it reached it only from stderr text that this path does
+// not produce.
+func TestASilentExitIsClassifiedByItsCode(t *testing.T) {
+	fakeSecurity{exit: 36}.install(t)
+
+	_, _, err := testItem.Read(context.Background())
+	var kcErr *KeychainError
+	if !errors.As(err, &kcErr) {
+		t.Fatalf("err = %v, want a *KeychainError", err)
+	}
+	if strings.Contains(err.Error(), "said-nothing") {
+		t.Fatalf("Error() = %q, want the code's own name rather than the fallback", err.Error())
+	}
+	if !strings.Contains(err.Error(), "36") {
+		t.Fatalf("Error() = %q, want the exit code still in it", err.Error())
+	}
+	// The sentence that tells the user what to do about it, which is the whole
+	// point of naming the code.
+	if !strings.Contains(kcErr.Detail(), "non-interactive") {
+		t.Fatalf("Detail() = %q, want the sentence for a refused non-interactive lookup", kcErr.Detail())
+	}
+}
+
+// Every code in the keychain band that ccdad can name, and the ones it must
+// NOT. The low byte is ambiguous across the whole OSStatus space -- only this
+// band is being read -- so a code outside what is listed here keeps the
+// honestly empty answer rather than being guessed at.
+func TestSilentExitCodesAreNamedOnlyWhereTheyAreKnown(t *testing.T) {
+	for _, tc := range []struct {
+		code int
+		want keychainFailure
+	}{
+		{36, failNoInteraction}, // errSecInteractionNotAllowed
+		{37, failNoKeychain},    // errSecNoDefaultKeychain
+		{45, failDuplicateItem}, // errSecDuplicateItem
+		{50, failNoKeychain},    // errSecNoSuchKeychain
+		{51, failAuthFailed},    // errSecAuthFailed
+		{128, failUserCanceled}, // errSecUserCanceled
+		{29, failSaidNothing},   // errSecInteractionRequired: a real code, but
+		{53, failSaidNothing},   // errSecNotAvailable: no sentence here says
+		{60, failSaidNothing},   // it, and a wrong one is worse than a number.
+		{1, failSaidNothing},
+		{0, failSaidNothing},
+	} {
+		if got := classifyKeychainFailure("", tc.code); got != tc.want {
+			t.Errorf("exit %d classified as %q, want %q", tc.code, got, tc.want)
+		}
+	}
+}
+
+// stderr OUTRANKS the code, and the order is load-bearing for the reason
+// classifyKeychainError's own header gives: it mirrors Claude Code's classifier
+// so the two agree about why one spawn failed. The code is a fallback for the
+// path that produces no stderr, never a second opinion about one that did.
+func TestStderrStillDecidesWhenThereIsAny(t *testing.T) {
+	got := classifyKeychainFailure("security: SecKeychainSearchCopyNext: User canceled the operation.", 36)
+	if got != failUserCanceled {
+		t.Fatalf("classified as %q, want the stderr's verdict rather than the code's", got)
+	}
+}
+
+// Present is the path doctor's probe takes, and it is where the sentence for a
+// refused lookup actually reaches a person -- the keychain row prints Detail().
+// Read having the classification is not evidence that this does: they build
+// their errors at separate call sites, and a mutation that reverted only this
+// one went unnoticed by every test above.
+func TestPresentAlsoClassifiesASilentExitByItsCode(t *testing.T) {
+	fakeSecurity{exit: 36}.install(t)
+
+	present, err := testItem.Present(context.Background())
+	if present {
+		t.Fatal("Present = true on a failed lookup")
+	}
+	var kcErr *KeychainError
+	if !errors.As(err, &kcErr) {
+		t.Fatalf("err = %v, want a *KeychainError", err)
+	}
+	if !strings.Contains(kcErr.Detail(), "non-interactive") {
+		t.Fatalf("Detail() = %q, want the sentence doctor prints for a refused lookup", kcErr.Detail())
+	}
+}
+
+// Write is the other live path: the install a switch performs. A switch that
+// fails because the keychain refused the session has to say THAT, or the report
+// is "the login did not change" with no reason attached.
+func TestWriteAlsoClassifiesASilentExitByItsCode(t *testing.T) {
+	fakeSecurity{exit: 36}.install(t)
+
+	err := testItem.Write(context.Background(), "{}")
+	var kcErr *KeychainError
+	if !errors.As(err, &kcErr) {
+		t.Fatalf("err = %v, want a *KeychainError", err)
+	}
+	if kcErr.Op != "add-generic-password" {
+		t.Fatalf("Op = %q, want the subcommand that failed", kcErr.Op)
+	}
+	if !strings.Contains(kcErr.Detail(), "non-interactive") {
+		t.Fatalf("Detail() = %q, want the refused-lookup sentence on the write path too", kcErr.Detail())
+	}
+}
+
+// Delete is the one nothing in ccdad calls, and its header carries the ruling
+// that says so. It builds its error at a call site of its own all the same, and
+// a classifier that is right at three of four sites is a trap for whoever
+// lifts the ruling: the surviving mutant is closed here rather than left as an
+// exercise.
+func TestDeleteAlsoClassifiesASilentExitByItsCode(t *testing.T) {
+	fakeSecurity{exit: 36}.install(t)
+
+	err := testItem.Delete(context.Background())
+	var kcErr *KeychainError
+	if !errors.As(err, &kcErr) {
+		t.Fatalf("err = %v, want a *KeychainError", err)
+	}
+	if !strings.Contains(kcErr.Detail(), "non-interactive") {
+		t.Fatalf("Detail() = %q, want the refused-lookup sentence on the delete path too", kcErr.Detail())
+	}
+}

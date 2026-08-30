@@ -212,7 +212,7 @@ func (it KeychainItem) Present(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 	return false, &KeychainError{
-		Op: "find-generic-password", failure: classifyKeychainError(res.stderr), stderr: res.stderr, code: res.code}
+		Op: "find-generic-password", failure: classifyKeychainFailure(res.stderr, res.code), stderr: res.stderr, code: res.code}
 }
 
 // Read returns the secret stored in the item, and whether there was one.
@@ -231,7 +231,7 @@ func (it KeychainItem) Read(ctx context.Context) (string, bool, error) {
 		return "", false, nil
 	}
 	return "", false, &KeychainError{
-		Op: "find-generic-password", failure: classifyKeychainError(res.stderr), stderr: res.stderr, code: res.code}
+		Op: "find-generic-password", failure: classifyKeychainFailure(res.stderr, res.code), stderr: res.stderr, code: res.code}
 }
 
 // Delete removes the item. An item that was already absent is success: the
@@ -269,7 +269,7 @@ func (it KeychainItem) Delete(ctx context.Context) error {
 		return nil
 	}
 	return &KeychainError{
-		Op: "delete-generic-password", failure: classifyKeychainError(res.stderr), stderr: res.stderr, code: res.code}
+		Op: "delete-generic-password", failure: classifyKeychainFailure(res.stderr, res.code), stderr: res.stderr, code: res.code}
 }
 
 // KeychainLookup is what a probe for the legacy credential item found.
@@ -333,7 +333,7 @@ func (it KeychainItem) Write(ctx context.Context, secret string) error {
 		return nil
 	}
 	return &KeychainError{
-		Op: "add-generic-password", failure: classifyKeychainError(res.stderr), stderr: res.stderr, code: res.code}
+		Op: "add-generic-password", failure: classifyKeychainFailure(res.stderr, res.code), stderr: res.stderr, code: res.code}
 }
 
 // ProbeCredentialKeychainItem is the doctor probe: derive the names this
