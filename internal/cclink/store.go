@@ -45,14 +45,53 @@ var (
 	ErrNoChange = errors.New("the credentials file is to be left as it is")
 )
 
-// Load reads the live credentials file. A missing file is an empty Blob and
-// no error: that is a machine where Claude Code has never logged in.
+// Load reads the login Claude Code is actually authenticating with. A missing
+// one is an empty Blob and no error: that is a machine where Claude Code has
+// never logged in.
+//
+// ON macOS THAT IS THE KEYCHAIN ITEM WHEN ONE IS THERE. Claude Code assembles
+// its credential store as a keychain-with-plaintext-fallback combinator whose
+// read is
+//
+//	read(a){let o=e.read(a);if(o!==null&&o!==void 0)return o;return t.read(a)||{}}
+//
+// so an item that exists is the login and the file is a store nothing consults.
+// Reading the file past such an item is a CONFIDENT WRONG ANSWER -- it is what
+// had `ccdad which` naming one account while an hour of work went to another --
+// and every command that asks who is live asks through here.
+//
+// LoadKeychainCredentials's own header used to rule the opposite way, that Load
+// must not consult the keychain because 2.1.113 dropped the backend. That
+// premise was measured again and is false; keychain_security.go's Write carries
+// the measurement.
+//
+// A keychain that cannot be READ is an error rather than a fallback. The
+// fallback is for "there is no item", which is a fact; a locked keychain is an
+// unknown, and answering an unknown with the file is the same confident wrong
+// answer in a quieter form.
 func Load() (Blob, error) {
+	if live, ok, err := loadFromKeychain(); err != nil || ok {
+		return live, err
+	}
 	path, err := ccpath.CredentialsPath()
 	if err != nil {
 		return nil, err
 	}
 	return loadFrom(path)
+}
+
+// loadFromKeychain is Load's first half: the item's login, and whether there
+// was an item at all. Off macOS there is no such store and the answer is
+// always "no item", which is not a failure.
+func loadFromKeychain() (Blob, bool, error) {
+	live, ok, err := LoadKeychainCredentials(context.Background())
+	if errors.Is(err, ErrKeychainUnsupported) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return live, ok, nil
 }
 
 // loadFrom reads and decodes the credentials file at an already-resolved
