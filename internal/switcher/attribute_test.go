@@ -123,7 +123,7 @@ func TestAttributePrefersTheLoginOverAStoredAPIKey(t *testing.T) {
 	live := liveLogin("RT-ONE")
 	env := identity.APIKeyEnvironment{Interactive: true, ManagedKey: "sk-ant-api03-STORED"}
 
-	res := AttributeLogin(live, accounts, lookupFrom(stored), env, oauthEnv())
+	res := AttributeLogin(live, accounts, lookupFrom(stored), env, oauthEnv(), cclink.SourceCredentialsFile)
 	if !res.OK || res.Account.UUID != "u-login" {
 		t.Fatalf("attributed to %+v via %q, want the login account", res.Account, res.Via)
 	}
@@ -136,7 +136,7 @@ func TestAttributeUsesTheStoredAPIKeyWhenThereIsNoLogin(t *testing.T) {
 	stored := map[string]cclink.Blob{"u-key": apiKeyCreds("sk-ant-api03-STORED")}
 	env := identity.APIKeyEnvironment{Interactive: true, ManagedKey: "sk-ant-api03-STORED"}
 
-	res := AttributeLogin(cclink.Blob{}, accounts, lookupFrom(stored), env, oauthEnv())
+	res := AttributeLogin(cclink.Blob{}, accounts, lookupFrom(stored), env, oauthEnv(), cclink.SourceCredentialsFile)
 	if !res.OK || res.Account.UUID != "u-key" {
 		t.Fatalf("attributed to %+v via %q, want the api-key account", res.Account, res.Via)
 	}
@@ -162,7 +162,7 @@ func TestAttributeEnvAPIKeyDisplacesTheLogin(t *testing.T) {
 		EnvKey:      key,
 		Approved:    []string{identity.APIKeyApproval(key)},
 	}
-	res := AttributeLogin(live, accounts, lookupFrom(stored), env, oauthEnv())
+	res := AttributeLogin(live, accounts, lookupFrom(stored), env, oauthEnv(), cclink.SourceCredentialsFile)
 	if !res.OK || res.Account.UUID != "u-key" {
 		t.Fatalf("attributed to %+v via %q, want the api-key account", res.Account, res.Via)
 	}
@@ -172,7 +172,7 @@ func TestAttributeEnvAPIKeyDisplacesTheLogin(t *testing.T) {
 	// approval list is actually consulted: without it, both halves would
 	// attribute to the key.
 	env.Approved = nil
-	res = AttributeLogin(live, accounts, lookupFrom(stored), env, oauthEnv())
+	res = AttributeLogin(live, accounts, lookupFrom(stored), env, oauthEnv(), cclink.SourceCredentialsFile)
 	if !res.OK || res.Account.UUID != "u-login" {
 		t.Fatalf("unapproved key attributed to %+v via %q, want the login account", res.Account, res.Via)
 	}
@@ -190,7 +190,7 @@ func TestAttributeReportsAnApiKeyHelperRatherThanGuessing(t *testing.T) {
 	stored := map[string]cclink.Blob{"u-login": oauthBlob("RT-ONE")}
 	live := liveLogin("RT-ONE")
 
-	res := AttributeLogin(live, accounts, lookupFrom(stored), identity.APIKeyEnvironment{Interactive: true, Helper: true}, oauthEnv())
+	res := AttributeLogin(live, accounts, lookupFrom(stored), identity.APIKeyEnvironment{Interactive: true, Helper: true}, oauthEnv(), cclink.SourceCredentialsFile)
 	if res.OK {
 		t.Fatalf("attributed to %+v; the helper's key is one ccdad cannot see", res.Account)
 	}
@@ -219,7 +219,7 @@ func TestAttributeNamesTheMechanismWhenItCannotNameTheAccount(t *testing.T) {
 	writeHostToken(t, "sk-ant-oat-INJECTED")
 
 	res := AttributeLogin(live, accounts, lookupFrom(stored),
-		identity.APIKeyEnvironment{Interactive: true}, oauthEnv())
+		identity.APIKeyEnvironment{Interactive: true}, oauthEnv(), cclink.SourceCredentialsFile)
 	if res.OK {
 		t.Fatalf("attributed to %+v — the credential is a file ccdad must not read", res.Account)
 	}
@@ -242,7 +242,7 @@ func TestAttributeDeclinesOnABgAuthSnapshot(t *testing.T) {
 	t.Setenv("CLAUDE_BG_AUTH_SNAPSHOT_PATH", snapshot)
 
 	res := AttributeLogin(liveLogin("RT-ONE"), accounts, lookupFrom(stored),
-		identity.APIKeyEnvironment{Interactive: true}, oauthEnv())
+		identity.APIKeyEnvironment{Interactive: true}, oauthEnv(), cclink.SourceCredentialsFile)
 	if res.OK {
 		t.Fatalf("attributed to %+v on a machine ccdad cannot resolve", res.Account)
 	}
@@ -298,5 +298,39 @@ func TestUnattendedSwitchStandsDownForAHostInjectedToken(t *testing.T) {
 	}
 	if res.DisplacedBy != identity.OAuthHostTokenFile {
 		t.Errorf("DisplacedBy = %v, want the host token file", res.DisplacedBy)
+	}
+}
+
+// The `via` line names the store the login was READ from. It used to be a
+// constant -- "the Claude Code credentials file" -- which on macOS is the store
+// Claude Code consults SECOND, so `which` reported the file while the keychain
+// item was what had answered. Which store it is was the entire subject of the
+// bug that sentence was printed under.
+func TestAttributeLoginNamesTheStoreTheLoginCameFrom(t *testing.T) {
+	accounts := []store.Account{{UUID: "u-login", Email: "login@example.com", Idx: 1}}
+	stored := map[string]cclink.Blob{"u-login": oauthBlob("RT-ONE")}
+	live := liveLogin("RT-ONE")
+
+	res := AttributeLogin(live, accounts, lookupFrom(stored),
+		identity.APIKeyEnvironment{Interactive: true}, oauthEnv(), cclink.SourceKeychainItem)
+	if !res.OK || res.Account.UUID != "u-login" {
+		t.Fatalf("attributed to %+v, want the login account", res.Account)
+	}
+	if !strings.Contains(res.Via, "Keychain") {
+		t.Fatalf("Via = %q, want it to name the keychain item that answered", res.Via)
+	}
+}
+
+// And the file, when the file is what answered -- the same value, arrived at by
+// reading rather than by assuming.
+func TestAttributeLoginNamesTheFileWhenTheFileAnswered(t *testing.T) {
+	accounts := []store.Account{{UUID: "u-login", Email: "login@example.com", Idx: 1}}
+	stored := map[string]cclink.Blob{"u-login": oauthBlob("RT-ONE")}
+	live := liveLogin("RT-ONE")
+
+	res := AttributeLogin(live, accounts, lookupFrom(stored),
+		identity.APIKeyEnvironment{Interactive: true}, oauthEnv(), cclink.SourceCredentialsFile)
+	if !strings.Contains(res.Via, "credentials file") {
+		t.Fatalf("Via = %q, want it to name the credentials file", res.Via)
 	}
 }

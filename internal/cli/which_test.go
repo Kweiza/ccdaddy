@@ -129,3 +129,46 @@ func TestWhichJSONCarriesTheUnknownKeyProbe(t *testing.T) {
 		t.Fatalf("unknownKeys = %v, want [somethingNew]", payload.UnknownKeys)
 	}
 }
+
+// An unattributable LOGIN is not evidence that the account belongs to somebody
+// else. Attribution matches on the refresh token, and Claude Code rotates that
+// on every refresh, so the commonest cause of "cannot attribute" is one of the
+// user's OWN accounts seconds after a refresh. The engine already treats it
+// that way -- it is invariant 1 of the rotation-stomp fix, and cooldownGate
+// exempts the no-baseline case on purpose. `which` asserted the opposite.
+func TestWhichDoesNotClaimAnUnattributableLoginIsUnmanaged(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "u-1", "a@example.com")
+	// A login the store cannot match: exactly what a rotated token looks like
+	// from here.
+	writeLiveFile(t, `{"claudeAiOauth":{"accessToken":"AT-x","refreshToken":"RT-ROTATED-AWAY","scopes":["user:inference"]}}`)
+
+	code, _, errOut, _ := runRoot(t, "which")
+	if code != ExitProbeNegative {
+		t.Fatalf("exit = %d, want %d -- the verdict does not change", code, ExitProbeNegative)
+	}
+	if strings.Contains(errOut, "not one ccdad manages") {
+		t.Errorf("which asserts ownership it did not establish:\n%s", errOut)
+	}
+	if !strings.Contains(errOut, "rotate") {
+		t.Errorf("the notice does not say why attribution can fail on an account that IS managed:\n%s", errOut)
+	}
+}
+
+// The environment axis keeps the blunt sentence, and the difference is the
+// point: a token handed to Claude Code through CLAUDE_CODE_OAUTH_TOKEN is not
+// rotated by anything ccdad can miss, so "not one ccdad manages" is a claim
+// that can actually be made there.
+func TestWhichStillSaysUnmanagedForAnEnvironmentToken(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "u-1", "a@example.com")
+	if code, _, _, top := runRoot(t, "switch", "1"); code != ExitOK {
+		t.Fatalf("switch = %d (%s)", code, top)
+	}
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-SOMEONE-ELSES")
+
+	_, _, errOut, _ := runRoot(t, "which")
+	if !strings.Contains(errOut, "not one ccdad manages") {
+		t.Errorf("the environment axis lost its own sentence:\n%s", errOut)
+	}
+}

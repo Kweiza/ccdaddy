@@ -1243,7 +1243,7 @@ func TestDoctorNamesTheInstalledClaudeCode(t *testing.T) {
 // switch is a silent no-op and `ccdad run`'s default scoping is ignored, so a
 // report that came back green would be telling the user their machine is fine
 // while nothing ccdad does reaches Claude Code.
-func TestDoctorFailsOnAKeychainEraClaudeCode(t *testing.T) {
+func TestDoctorFailsOnAClaudeCodeThatCannotScope(t *testing.T) {
 	isolate(t)
 	seedHealthyMachine(t)
 	stubClaudeInstall(t, claudeVersion(2, 1, 112), nil)
@@ -2184,5 +2184,37 @@ func TestDoctorReportsAKeychainItemAsTheLiveLoginOnACurrentRelease(t *testing.T)
 	}
 	if code != ExitOK {
 		t.Fatalf("exit %d, want 0 -- an item ccdad keeps up to date is not a fault", code)
+	}
+}
+
+// doctor's oauth-source row named the credentials file from a constant, so on a
+// machine whose login is the keychain item it contradicted doctor's OWN
+// keychain row two lines above. Both rows are in the same report; a reader
+// cannot be expected to decide which one is lying.
+func TestDoctorOAuthSourceNamesTheKeychainWhenThatIsWhatAnswered(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	stubLiveSource(t, cclink.SourceKeychainItem)
+
+	_, report, _ := runDoctor(t)
+	detail := report.detail(t, "oauth-source")
+	if !strings.Contains(detail, "Keychain") {
+		t.Errorf("oauth-source does not name the keychain that answered:\n%s", detail)
+	}
+	if strings.Contains(detail, "login in the credentials file") {
+		t.Errorf("oauth-source still names the file from a constant:\n%s", detail)
+	}
+}
+
+// And the file, when the file is what answered.
+func TestDoctorOAuthSourceNamesTheFileWhenTheFileAnswered(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	stubLiveSource(t, cclink.SourceCredentialsFile)
+
+	_, report, _ := runDoctor(t)
+	detail := report.detail(t, "oauth-source")
+	if !strings.Contains(detail, "credentials file") {
+		t.Errorf("oauth-source does not name the credentials file:\n%s", detail)
 	}
 }

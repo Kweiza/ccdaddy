@@ -1018,7 +1018,7 @@ func TestRunFullProfileWarnsWhenAnEarlierLoginWouldMakeTheKeyInert(t *testing.T)
 // caller can fix it with a flag, and nothing is started — the assertion on the
 // stub is not decoration: a check placed after the launch would satisfy the
 // exit code and still have run the session as the wrong account.
-func TestRunRefusesTheDefaultModeOnAKeychainEraClaudeCode(t *testing.T) {
+func TestRunRefusesTheDefaultModeOnAClaudeCodeThatCannotScope(t *testing.T) {
 	isolate(t)
 	seedAccount(t, "u-1", "a@example.com")
 	stub := stubClaude(t, ExitOK)
@@ -1052,7 +1052,7 @@ func TestRunRefusesTheDefaultModeOnAKeychainEraClaudeCode(t *testing.T) {
 // The escape hatch has to actually work, or the refusal is a dead end.
 // --full-profile scopes CLAUDE_CONFIG_DIR, which every era of Claude Code reads,
 // so it is the one mode that still isolates on such a machine.
-func TestRunFullProfileStillRunsOnAKeychainEraClaudeCode(t *testing.T) {
+func TestRunFullProfileStillRunsOnAClaudeCodeThatCannotScope(t *testing.T) {
 	isolate(t)
 	seedAccount(t, "u-1", "a@example.com")
 	stub := stubClaude(t, ExitOK)
@@ -1158,7 +1158,7 @@ func TestRunDescribesTheClaudeItIsAboutToRunAndNotTheInterpreter(t *testing.T) {
 // branch earlier and takes such a session from it on every build. That is
 // refuseDisplacedAuth's subject, and isolate() empties the variable, which is
 // why this test describes the era and only the era.
-func TestRunDoesNotRefuseASetupTokenAccountOnAKeychainEraClaudeCode(t *testing.T) {
+func TestRunDoesNotRefuseASetupTokenAccountOnAClaudeCodeThatCannotScope(t *testing.T) {
 	isolate(t)
 	seedTokenAccount(t, "u-1", "a@example.com", "setup-token", "sk-ant-oat-1")
 	stub := stubClaude(t, ExitOK)
@@ -1181,7 +1181,7 @@ func TestRunDoesNotRefuseASetupTokenAccountOnAKeychainEraClaudeCode(t *testing.T
 // An api-key account on a keychain-era build gets authorise's accurate refusal,
 // not the keychain one. Both are exit 2, so the level cannot tell them apart:
 // the assertion is on the sentence that only the right one carries.
-func TestRunGivesAnAPIKeyAccountItsOwnRefusalEvenOnAKeychainEraClaudeCode(t *testing.T) {
+func TestRunGivesAnAPIKeyAccountItsOwnRefusalEvenOnAClaudeCodeThatCannotScope(t *testing.T) {
 	isolate(t)
 	seedTokenAccount(t, "u-1", "a@example.com", cclink.APIKeyKind, "sk-ant-api-1")
 	stubClaude(t, ExitOK)
@@ -1344,7 +1344,7 @@ func TestRunRefusesUnderFullProfileAndLeavesNoProfileBehind(t *testing.T) {
 }
 
 // The refusal runs before the credential home is made, for the reason
-// refuseKeychainEra's own placement gives: a refusal that first created a
+// refuseUnscopedRun's own placement gives: a refusal that first created a
 // directory holding a live refresh token is tidied by the defer, but only after
 // the fact.
 func TestRunRefusesBeforeItCreatesASessionDirectory(t *testing.T) {

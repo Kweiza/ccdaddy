@@ -84,17 +84,22 @@ var lookProgram = exec.LookPath
 // running a current release can reach.
 var describeClaudeInstall = ccver.Describe
 
-// refuseKeychainEra is the default mode's refusal on a Claude Code that does not
+// refuseUnscopedRun is the default mode's refusal on a Claude Code that does not
 // know the variable the default mode scopes with.
 //
 // The measurement, from cclink's keychain header and the item that filed this:
 // CLAUDE_SECURESTORAGE_CONFIG_DIR does not occur even ONCE in 2.1.112. It
-// arrived in 2.1.113, AFTER the keychain backend it nominally outranks was
-// already gone. So on such a build newSession's whole mechanism is a variable
-// nothing reads: claude falls through to the machine's own ~/.claude, the
-// session runs as the LIVE login, and ccdad reports success. That is the same
-// silent no-op as the keychain shadow, on the same population, and this command
+// arrived in 2.1.113. So on such a build newSession's whole mechanism is a
+// variable nothing reads: claude falls through to the machine's own ~/.claude,
+// the session runs as the LIVE login, and ccdad reports success. This command
 // exists to promise the opposite.
+//
+// (An earlier version of this header added "AFTER the keychain backend it
+// nominally outranks was already gone", and called the failure "the same silent
+// no-op as the keychain shadow". The backend was never gone -- every release
+// reads the item -- so the aside was wrong and the comparison is now to a thing
+// ccdad handles rather than to a thing it suffers. The variable half of that
+// boundary is real and is what this refusal is about.)
 //
 // Refusing rather than warning, because a warning that is scrolled past leaves
 // the user running the wrong account under a label that says otherwise — the
@@ -129,8 +134,8 @@ var describeClaudeInstall = ccver.Describe
 //
 // So a stored token record of either kind returns early and the two other
 // answers stand.
-func refuseKeychainEra(install ccver.Install, blob cclink.Blob, label string) error {
-	if !install.KeychainEra() {
+func refuseUnscopedRun(install ccver.Install, blob cclink.Blob, label string) error {
+	if !install.PreSecureStorageDir() {
 		return nil
 	}
 	if _, hasToken := cclink.TokenRecordOf(blob); hasToken {
@@ -141,7 +146,7 @@ func refuseKeychainEra(install ccver.Install, blob cclink.Blob, label string) er
 		"MACHINE's own file instead and run as the live login, while ccdad reported success. Run it with "+
 		"--full-profile, which scopes CLAUDE_CONFIG_DIR and does work on this build; or upgrade Claude Code to "+
 		"%s or later",
-		install, ccver.LastKeychainEra.NextPatch(), label, ccver.LastKeychainEra.NextPatch())
+		install, ccver.LastPreSecureStorageDir.NextPatch(), label, ccver.LastPreSecureStorageDir.NextPatch())
 }
 
 // refuseDisplacedAuth is the refusal for a shell whose own environment already
@@ -166,7 +171,7 @@ func refuseKeychainEra(install ccver.Install, blob cclink.Blob, label string) er
 // command exists to prevent, pointed the other way: whoever typed
 // `ANTHROPIC_AUTH_TOKEN=… ccdad run` meant it.
 //
-// Refusing rather than warning, for the reason refuseKeychainEra states in full
+// Refusing rather than warning, for the reason refuseUnscopedRun states in full
 // a few lines above: a warning that is scrolled past leaves the user running the
 // wrong account under a label that says otherwise.
 //
@@ -196,7 +201,7 @@ func refuseKeychainEra(install ccver.Install, blob cclink.Blob, label string) er
 //     words, and --full-profile puts the key in the profile's global config.
 //   - any other stored kind is authorise's to refuse BY NAME. Answering here
 //     first would replace an accurate refusal with a misleading one, which is
-//     the mistake refuseKeychainEra's api-key arm already records.
+//     the mistake refuseUnscopedRun's api-key arm already records.
 //
 // ONE APPROXIMATION, stated rather than hidden. env.Helper is read from the
 // settings tree THIS process resolves. That is exactly the child's tree in the
@@ -1004,7 +1009,7 @@ func newRunCmd() *cobra.Command {
 			// launchPastShim replaces the path with an interpreter, which is
 			// node rather than claude.
 			if !fullProfile {
-				if err := refuseKeychainEra(describeClaudeInstall(path), blob, target.Label()); err != nil {
+				if err := refuseUnscopedRun(describeClaudeInstall(path), blob, target.Label()); err != nil {
 					return err
 				}
 			}

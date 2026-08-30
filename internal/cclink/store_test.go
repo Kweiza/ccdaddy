@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -793,5 +794,42 @@ func TestActivateWritesCompactJSONIntoTheKeychainItem(t *testing.T) {
 	var back Blob
 	if err := json.Unmarshal(raw, &back); err != nil {
 		t.Fatalf("the item payload is not valid JSON: %v", err)
+	}
+}
+
+// Load answers WHICH ACCOUNT; LoadWithSource also answers WHICH STORE, because
+// on macOS those are two different questions and every command that reports the
+// first was reporting the second from a constant.
+func TestLoadWithSourceNamesTheKeychainWhenItAnswered(t *testing.T) {
+	withClaudeHome(t)
+	writeCreds(t, `{"claudeAiOauth":{"accessToken":"from-the-file"}}`)
+	fakeSecurity{stdout: `{"claudeAiOauth":{"accessToken":"from-the-keychain"}}` + "\n"}.install(t)
+
+	_, src, err := LoadWithSource()
+	if err != nil {
+		t.Fatalf("LoadWithSource() = %v, want nil", err)
+	}
+	if src != SourceKeychainItem {
+		t.Fatalf("source = %v, want SourceKeychainItem", src)
+	}
+	if !strings.Contains(src.String(), "Keychain") {
+		t.Fatalf("String() = %q, want it to name the keychain", src.String())
+	}
+}
+
+func TestLoadWithSourceNamesTheFileWhenNoItemIsThere(t *testing.T) {
+	withClaudeHome(t)
+	writeCreds(t, `{"claudeAiOauth":{"accessToken":"from-the-file"}}`)
+	fakeSecurity{exit: securityNotFoundCode}.install(t)
+
+	_, src, err := LoadWithSource()
+	if err != nil {
+		t.Fatalf("LoadWithSource() = %v, want nil", err)
+	}
+	if src != SourceCredentialsFile {
+		t.Fatalf("source = %v, want SourceCredentialsFile", src)
+	}
+	if !strings.Contains(src.String(), "credentials file") {
+		t.Fatalf("String() = %q, want it to name the file", src.String())
 	}
 }
