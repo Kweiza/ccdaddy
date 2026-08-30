@@ -358,7 +358,7 @@ func TestClassifyKeychainError(t *testing.T) {
 		stderr string
 		want   keychainFailure
 	}{
-		{"nothing said", "", failEmpty},
+		{"nothing said", "", failSaidNothing},
 		{"unrecognised", "security: something new happened", failOther},
 		{
 			"item not found",
@@ -419,7 +419,7 @@ func TestKeychainFailureDetailsAreDistinct(t *testing.T) {
 	all := []keychainFailure{
 		failDuplicateItem, failUnavailable, failNoKeychain, failItemNotFound,
 		failNoInteraction, failUserCanceled, failAuthFailed, failLocked,
-		failEmpty, failOther, failTimedOut, failLingering, failSecurityMissing,
+		failSaidNothing, failOther, failTimedOut, failLingering, failSecurityMissing,
 	}
 	seen := make(map[string]keychainFailure, len(all))
 	for _, f := range all {

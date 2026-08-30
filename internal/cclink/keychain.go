@@ -398,7 +398,7 @@ const (
 	failUserCanceled    keychainFailure = "user-canceled"
 	failAuthFailed      keychainFailure = "auth-failed"
 	failLocked          keychainFailure = "keychain-locked"
-	failEmpty           keychainFailure = "empty"
+	failSaidNothing     keychainFailure = "said-nothing"
 	failOther           keychainFailure = "other"
 	failTimedOut        keychainFailure = "timed-out"
 	failLingering       keychainFailure = "not-reaped"
@@ -414,7 +414,7 @@ const (
 // spawn failed is worse than no diagnostic.
 func classifyKeychainError(stderr string) keychainFailure {
 	if stderr == "" {
-		return failEmpty
+		return failSaidNothing
 	}
 	s := strings.ToLower(stderr)
 	switch {
@@ -476,8 +476,11 @@ func keychainFailureDetail(f keychainFailure) string {
 		// code other than 44, which is not a machine ccdad can reason about --
 		// the exit code is the contract, and this one broke it.
 		return "the keychain said the item is absent but exited with an unexpected status, so ccdad is not treating that as an answer"
-	case failEmpty:
-		return "the lookup failed without saying why"
+	case failSaidNothing:
+		// Reached without an exit code only when nothing set one. The
+		// code-carrying sentence is on *KeychainError.Detail, because the
+		// number is the whole content of this failure.
+		return "the lookup exited non-zero and printed nothing, so there is no reason to report"
 	}
 	return "the lookup failed for a reason ccdad does not recognise"
 }

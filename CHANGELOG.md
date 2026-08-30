@@ -16,6 +16,20 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A silent `security` failure now names its exit code.** A spawn that exits
+  non-zero and prints nothing was reported as `security find-generic-password:
+  empty`, which names no code, no store and no remedy — and "empty" reads as a
+  verdict on the ITEM, which is the one thing it never means: an item holding a
+  zero-length blob exits 0 and is a value, not a failure. It classified an empty
+  STDERR. `KeychainError` now carries the exit status and the failure is spelled
+  `said-nothing`, so the message reads `security find-generic-password:
+  said-nothing (exit 60)` and `doctor` prints the number rather than "the lookup
+  failed without saying why". Found on a machine where the daemon logged 11,300
+  identical copies of the old sentence over three hours, none of which said
+  enough to tell that failure apart from any other.
+
 ## [0.9.4] — 2026-08-30
 
 The release that makes the reports agree with each other.
