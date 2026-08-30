@@ -2,6 +2,7 @@ package cclink
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -755,5 +756,42 @@ func TestActivateKeepsMachineKeysFromTheKeychainNotTheStaleFile(t *testing.T) {
 	}
 	if mcp["sentry|1"].AccessToken != "current" {
 		t.Fatalf("mcpOAuth carried the stale file's value %q, want the item's", mcp["sentry|1"].AccessToken)
+	}
+}
+
+// The item must hold COMPACT json, and this is not a style preference.
+// `security -w` returns HEX for any value containing a newline, and both
+// Claude Code's reader and ccdad's own LoadKeychainCredentials parse the
+// output as JSON -- so an indented payload round-trips as hex and is
+// unreadable to both. The credentials FILE is indented on purpose (it matches
+// what Claude Code writes there); the item is the other shape.
+//
+// Measured before this test existed: writing the file's indented bytes into a
+// real item made `security -w` return 5284 hex characters where the item
+// Claude Code itself wrote had come back as plain JSON.
+func TestActivateWritesCompactJSONIntoTheKeychainItem(t *testing.T) {
+	withClaudeHome(t)
+	writeCreds(t, `{"claudeAiOauth":{"accessToken":"old"}}`)
+	argv := fakeSecurity{}.install(t)
+
+	if err := Activate(Blob{"claudeAiOauth": json.RawMessage(`{"accessToken":"new"}`)}); err != nil {
+		t.Fatalf("Activate() = %v, want nil", err)
+	}
+
+	got := recordedArgv(t, argv)
+	if len(got) == 0 || got[0] != "add-generic-password" {
+		t.Fatalf("last spawn = %q, want the keychain install", got)
+	}
+	payload := got[len(got)-1]
+	raw, err := hex.DecodeString(payload)
+	if err != nil {
+		t.Fatalf("the -X payload is not hex: %v", err)
+	}
+	if bytes.ContainsRune(raw, '\n') {
+		t.Fatalf("the item payload carries a newline, so `security -w` will hand it back as hex:\n%s", raw)
+	}
+	var back Blob
+	if err := json.Unmarshal(raw, &back); err != nil {
+		t.Fatalf("the item payload is not valid JSON: %v", err)
 	}
 }

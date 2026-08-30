@@ -327,7 +327,7 @@ func writeMerged(decide func(live Blob) (Blob, error)) (err error) {
 	if err := WriteFileAtomic(livePath, data, 0o600); err != nil {
 		return err
 	}
-	return installIntoKeychain(data)
+	return installIntoKeychain(merged)
 }
 
 // installIntoKeychain mirrors what was just written into the macOS Keychain
@@ -361,7 +361,7 @@ func writeMerged(decide func(live Blob) (Blob, error)) (err error) {
 // writes cannot be made atomic -- one is a file and the other is a daemon --
 // so the choice is only which failure the caller is told about, and silence is
 // what let this go unnoticed for as long as it did.
-func installIntoKeychain(data []byte) error {
+func installIntoKeychain(merged Blob) error {
 	ctx := context.Background()
 
 	found, err := ProbeCredentialKeychainItem(ctx)
@@ -378,7 +378,24 @@ func installIntoKeychain(data []byte) error {
 	if !found.Present {
 		return nil
 	}
-	if err := found.Item.Write(ctx, string(data)); err != nil {
+	// COMPACT, where the file is indented, and the difference is not cosmetic.
+	// `security -w` -- the read Claude Code performs, and the one
+	// LoadKeychainCredentials performs -- hands back HEX for any value
+	// containing a newline, and both readers parse the output as JSON. An
+	// indented payload therefore round-trips as hex and is unreadable to both,
+	// silently: the reader's parse fails, its catch swallows it, and the
+	// combinator falls through to the file as though no item existed.
+	//
+	// Measured on a real item: the file's indented bytes came back as 5284 hex
+	// characters, where the item Claude Code had written itself came back as
+	// plain JSON. marshalNoEscape is the same encoder minus the indent, so the
+	// bytes still match what Claude Code writes rather than merely parsing the
+	// same.
+	compact, err := marshalNoEscape(merged)
+	if err != nil {
+		return fmt.Errorf("encoding the keychain payload: %w", err)
+	}
+	if err := found.Item.Write(ctx, string(compact)); err != nil {
 		return fmt.Errorf("the credentials file was written, but the keychain item Claude Code reads first could not be updated, so the login did not change: %w", err)
 	}
 	return nil
