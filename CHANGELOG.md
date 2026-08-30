@@ -16,6 +16,30 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A silent `security` failure is classified by its exit code.** 0.9.5 made the
+  code visible; this reads it. `security` exits with the OSStatus truncated to
+  its low byte — not a guess, it is why `securityNotFoundCode` is 44 for
+  errSecItemNotFound (-25300) — so 36 is errSecInteractionNotAllowed, the
+  keychain refusing a lookup it cannot ask a human about. ccdad already had the
+  right sentence for that and could not reach it, because `security` writes
+  nothing to stderr on that path. `said-nothing (exit 36)` now reads
+  `interaction-not-allowed (exit 36)`, and `doctor` prints the remedy.
+  Only the keychain band is read and only where an existing sentence means what
+  the code means: errSecInteractionRequired (29) and errSecNotAvailable (53) are
+  deliberately left unnamed, because a bare number a reader can look up beats a
+  name that is nearly right. stderr still outranks the code — the stderr
+  classifier mirrors Claude Code's own and the two must not disagree about why
+  one spawn failed.
+- **The refused-lookup sentence tells a daemon what to do.** It was written for
+  a person running `doctor`, who can move to another shell. A daemon cannot: it
+  inherited the refusing session at startup and every successor it spawns
+  inherits the same one, so 0.9.5's automatic replacement cannot fix this
+  particular failure and the restart has to come from a session that can read
+  the keychain. That is why one wedged daemon survived a restart and another
+  did not.
+
 ## [0.9.5] — 2026-08-30
 
 The release that lets a broken daemon say so, and then fix itself.

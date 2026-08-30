@@ -405,6 +405,59 @@ const (
 	failSecurityMissing keychainFailure = "security-missing"
 )
 
+// classifyKeychainFailure is the classifier callers use: what `security` SAID if
+// it said anything, and what it EXITED with if it did not.
+//
+// The order is not a preference. classifyKeychainError below mirrors Claude
+// Code's own classifier so that ccdad and Claude Code never disagree about why
+// one spawn failed, and an exit code consulted first would break that for every
+// failure that has stderr. The code is the fallback for the path that produces
+// none, never a second opinion about one that did.
+func classifyKeychainFailure(stderr string, code int) keychainFailure {
+	if stderr != "" {
+		return classifyKeychainError(stderr)
+	}
+	return classifyKeychainExit(code)
+}
+
+// classifyKeychainExit names a silent failure from its exit status.
+//
+// `security` exits with the OSStatus truncated to its low byte -- which is not
+// a guess: securityNotFoundCode is 44 because errSecItemNotFound is -25300, and
+// this file has relied on that arithmetic since the keychain backend landed.
+// The values below were read out of the SDK's own SecBase.h rather than
+// remembered.
+//
+// ONLY the keychain band is read, and only where ccdad already has a sentence
+// that says the right thing. A low byte is ambiguous across the whole OSStatus
+// space, so a code that is not listed keeps failSaidNothing and its number: a
+// bare number is a fact the reader can look up, and a wrong name is a
+// confident wrong answer of exactly the kind the silent failure taught this
+// file to stop giving. errSecInteractionRequired (29) and errSecNotAvailable
+// (53) are real codes left out on that rule -- neither has a sentence here that
+// means what it means.
+//
+// 36 is why this exists. A daemon logged `said-nothing (exit 36)` on every tick
+// for two minutes after a restart, and 36 is errSecInteractionNotAllowed: the
+// keychain refusing a lookup it cannot ask a human about, which is what a
+// process outside the user's login session gets. ccdad had the sentence for it
+// and could not reach it, because `security` writes nothing to stderr there.
+func classifyKeychainExit(code int) keychainFailure {
+	switch code {
+	case 36: // errSecInteractionNotAllowed
+		return failNoInteraction
+	case 37, 50: // errSecNoDefaultKeychain, errSecNoSuchKeychain
+		return failNoKeychain
+	case 45: // errSecDuplicateItem
+		return failDuplicateItem
+	case 51: // errSecAuthFailed
+		return failAuthFailed
+	case 128: // errSecUserCanceled
+		return failUserCanceled
+	}
+	return failSaidNothing
+}
+
 // classifyKeychainError mirrors Claude Code's own stderr classifier, IN ITS
 // ORDER, because the order is load-bearing: the tests are substring tests on
 // one lowercased string and several of them can match at once. A keychain that
@@ -454,7 +507,15 @@ func keychainFailureDetail(f keychainFailure) string {
 	case failLocked:
 		return "the login keychain is locked, so ccdad cannot tell whether a stale item is there; unlock it and run doctor again"
 	case failNoInteraction:
-		return "the keychain refused a non-interactive lookup, which is what a headless or SSH session gets; run doctor from a logged-in desktop session"
+		// Two readers, and the second needs the second half. A person running
+		// doctor can move to another shell. A DAEMON cannot: it inherited its
+		// session at startup and every successor it spawns inherits the same
+		// one, so the automatic replacement cannot fix this and the restart has
+		// to come from somewhere else. That is why one wedged daemon survived a
+		// restart and another did not.
+		return "the keychain refused a non-interactive lookup, which is what a headless or SSH session gets; " +
+			"run doctor from a logged-in desktop session, and restart the daemon from one too if it is the daemon " +
+			"reporting this — it inherited the refusing session and its replacements inherit it as well"
 	case failUserCanceled:
 		return "the keychain prompt was dismissed, so the lookup never completed"
 	case failAuthFailed:
