@@ -421,7 +421,13 @@ func attributeLive(live cclink.Blob, accounts []store.Account,
 	if err != nil {
 		cfg = nil
 	}
-	res := switcher.AttributeLogin(live, accounts, lookup, claudeAPIKeyEnvironment(cfg), claudeOAuthEnvironment())
+	// SourceNone, and it is not a claim about where live came from: this helper
+	// returns the ACCOUNT and drops the Via, so the store's name never reaches a
+	// user through here. Commands that DO report a source read it themselves --
+	// `which` takes it from cclink.LoadWithSource alongside the blob. If this
+	// ever starts returning res.Via, it has to take the source too.
+	res := switcher.AttributeLogin(live, accounts, lookup,
+		claudeAPIKeyEnvironment(cfg), claudeOAuthEnvironment(), cclink.SourceNone)
 	return res.Account, res.OK
 }
 

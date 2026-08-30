@@ -98,11 +98,10 @@ import (
 // reported as Claude Code 0.0.1.
 const PackageName = "@anthropic-ai/claude-code"
 
-// LastKeychainEra is the last Claude Code that does not know
+// LastPreSecureStorageDir is the last Claude Code that does not know
 // CLAUDE_SECURESTORAGE_CONFIG_DIR. 2.1.113 introduced the variable.
 //
-// IT NO LONGER MEANS "the last one that reads the macOS Keychain", and the name
-// is a leftover of when it meant both. The keychain half was measured again and
+// IT WAS CALLED LastPreSecureStorageDir, and the rename is the point of this comment. The keychain half was measured again and
 // is FALSE: 2.1.234, 2.1.238 and 2.1.251 each carry a whole keychain backend
 // that spawns `security find-generic-password`, and the combinator still reads
 // the item BEFORE .credentials.json. The backend was never removed.
@@ -115,10 +114,13 @@ const PackageName = "@anthropic-ai/claude-code"
 // the combinator is named `keychain-with-plaintext-fallback`, so finding the
 // fallback proves nothing about the primary. See internal/cclink/keychain.go.
 //
-// Renaming it is worth doing and is not done here, because every caller of
-// KeychainEra() reads it for the variable and would have to be re-read one by
-// one to be sure none is still reading it for the keychain.
-var LastKeychainEra = Version{2, 1, 112}
+// Every caller was re-read before the rename rather than swept: run.go and
+// probe.go gate `ccdad run`'s default scoping on it, and doctor.go prints it in
+// the claude-version row. All three want the variable, and doctor's keychain
+// row -- the one caller that did want the keychain -- had already stopped
+// asking, because an item is the login on every release and there is no era to
+// be on.
+var LastPreSecureStorageDir = Version{2, 1, 112}
 
 // ErrNoClaudeCode is returned when no launcher could be found at all. It is
 // distinct from "found one and could not name its version": a machine with no
@@ -663,16 +665,16 @@ func (in Install) native(target, version string) Install {
 	return in
 }
 
-// KeychainEra reports whether this install is one where
-// CLAUDE_SECURESTORAGE_CONFIG_DIR does nothing. Despite the name it says
-// NOTHING about the keychain any more -- every release reads that item, so
-// there is no era to be on. LastKeychainEra says why the name survives.
+// PreSecureStorageDir reports whether this install is one where
+// CLAUDE_SECURESTORAGE_CONFIG_DIR does nothing, which is what `ccdad run`'s
+// default mode scopes with. It says nothing about the keychain: every release
+// reads that item, so there is no era to be on.
 //
 // An unknown version is NOT the era. Every caller acts on this — doctor rules
 // `fail`, run refuses to start — and "ccdad could not classify this install"
 // must not fire either of those on a machine that works.
-func (in Install) KeychainEra() bool {
-	return in.Known && in.Version.AtMost(LastKeychainEra)
+func (in Install) PreSecureStorageDir() bool {
+	return in.Known && in.Version.AtMost(LastPreSecureStorageDir)
 }
 
 // String renders the install for a diagnostic line.
@@ -946,7 +948,7 @@ func displayPath(launcher, real string) string {
 }
 
 // NextPatch is the release immediately after v. It exists so the one place
-// LastKeychainEra is written stays the one place: every message that says
+// LastPreSecureStorageDir is written stays the one place: every message that says
 // "upgrade to 2.1.113 or later" derives that number from the boundary rather
 // than repeating it, which is what stops the two from drifting apart.
 func (v Version) NextPatch() Version { return Version{v.Major, v.Minor, v.Patch + 1} }

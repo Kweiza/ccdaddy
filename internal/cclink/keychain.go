@@ -18,7 +18,7 @@ import (
 // reads these items, that 2.1.113 removed the backend outright, and that every
 // release from 2.1.113 on -- 2.1.222, 2.1.238, 2.1.240, 2.1.241 -- "names its
 // secure-storage backend plaintext and reads .credentials.json". ccver carried
-// the same boundary as LastKeychainEra, doctor printed it as "nothing is broken
+// the same boundary as LastPreSecureStorageDir, doctor printed it as "nothing is broken
 // right now", and ccdad wrote only .credentials.json on the strength of it.
 //
 // IT IS FALSE, and the way it failed is worth more than the fact. Three builds

@@ -259,7 +259,7 @@ func TestProbeWithoutClaudeOnPATHIsAUsageError(t *testing.T) {
 // CLAUDE_SECURESTORAGE_CONFIG_DIR, and for a probe that is worse than for a
 // session: the child would run as the machine's LIVE login and spend the wrong
 // account's quota while ccdad recorded a probe of this one.
-func TestProbeRefusesOnAKeychainEraClaudeCodeRatherThanSpendingTheWrongQuota(t *testing.T) {
+func TestProbeRefusesOnAClaudeCodeThatCannotScopeRatherThanSpendingTheWrongQuota(t *testing.T) {
 	isolate(t)
 	freezeClock(t, probeNow)
 	seedUnprobed(t, "u-1", "a@example.com")

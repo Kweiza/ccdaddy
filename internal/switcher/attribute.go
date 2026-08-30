@@ -153,6 +153,19 @@ type Attribution struct {
 	OK      bool
 	// Via names the mechanism, in the caller's words.
 	Via string
+	// FromLoginStore says the credential came from the LOGIN STORE -- the
+	// keychain item or the credentials file -- rather than from an environment
+	// override or a stored API key.
+	//
+	// It exists because a failure to attribute means different things on the
+	// two axes, and only one of them supports the sentence ccdad used to print
+	// for both. A login store's refresh token is rotated by Claude Code on
+	// every refresh, and attribution matches on that token, so an
+	// unattributable login is very often one of the user's OWN accounts seconds
+	// after a refresh -- calling it unmanaged asserts ownership nothing
+	// established. A token handed over in CLAUDE_CODE_OAUTH_TOKEN is not
+	// rotated by anything ccdad can miss, so there the claim can be made.
+	FromLoginStore bool
 }
 
 // LoginOf reads the credentials file as the two fields the OAuth resolver's
@@ -202,8 +215,14 @@ func LoginOf(live cclink.Blob) identity.Login {
 //     the credential. It is Claude Code's lowest-priority source, and treating
 //     it as the answer while a login exists is the single mistake this whole
 //     model exists to avoid.
+//
+// liveSource is WHICH STORE live came from, and it is a parameter rather than
+// something this function works out: the read already happened, and re-deriving
+// it here would be a second answer that can disagree with the first. Callers
+// get it from cclink.LoadWithSource.
 func AttributeLogin(live cclink.Blob, accounts []store.Account,
-	lookup Lookup, env identity.APIKeyEnvironment, oauthEnv identity.OAuthEnvironment) Attribution {
+	lookup Lookup, env identity.APIKeyEnvironment, oauthEnv identity.OAuthEnvironment,
+	liveSource cclink.CredentialSource) Attribution {
 
 	key, source := env.Resolve()
 
@@ -244,7 +263,10 @@ func AttributeLogin(live cclink.Blob, accounts []store.Account,
 		return Attribution{Via: oauthSource.SourceName()}
 	case oauthSource == identity.OAuthLogin:
 		acct, ok := AttributeFile(live, accounts, lookup)
-		return Attribution{Account: acct, OK: ok, Via: "the Claude Code credentials file"}
+		// The store that ANSWERED, not a constant. On macOS the keychain item
+		// is read before the file, so naming the file here was wrong on exactly
+		// the machines where which store it is mattered.
+		return Attribution{Account: acct, OK: ok, Via: liveSource.String(), FromLoginStore: true}
 	case oauthSource != identity.OAuthNone:
 		// Everything else on this axis is a mechanism ccdad can name and an
 		// account it cannot: the credential is behind a descriptor, in a file

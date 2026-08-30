@@ -230,8 +230,8 @@ func TestAnUnclassifiableLauncherIsUnknownAndSaysWhy(t *testing.T) {
 	if !strings.Contains(got.Why, launcher) {
 		t.Errorf("Why does not name the launcher it could not classify:\n%s", got.Why)
 	}
-	if got.KeychainEra() {
-		t.Error("KeychainEra() = true for an unknown version — every caller acts on this, " +
+	if got.PreSecureStorageDir() {
+		t.Error("PreSecureStorageDir() = true for an unknown version — every caller acts on this, " +
 			"and an install ccdad could not classify must not fire a refusal")
 	}
 }
@@ -413,7 +413,7 @@ func TestCompareIsNumericRatherThanLexical(t *testing.T) {
 // The boundary itself, on both sides and exactly on it. 2.1.112 is IN the era
 // and 2.1.113 is not; getting that inclusive edge backwards inverts doctor's
 // remedy and run's refusal at once.
-func TestTheKeychainEraEndsAt2_1_112(t *testing.T) {
+func TestThePreSecureStorageDirBoundaryEndsAt2_1_112(t *testing.T) {
 	for _, tc := range []struct {
 		version Version
 		era     bool
@@ -426,13 +426,13 @@ func TestTheKeychainEraEndsAt2_1_112(t *testing.T) {
 		{Version{3, 0, 0}, false},
 	} {
 		in := Install{Version: tc.version, Known: true}
-		if got := in.KeychainEra(); got != tc.era {
-			t.Errorf("Install{%s}.KeychainEra() = %v, want %v", tc.version, got, tc.era)
+		if got := in.PreSecureStorageDir(); got != tc.era {
+			t.Errorf("Install{%s}.PreSecureStorageDir() = %v, want %v", tc.version, got, tc.era)
 		}
 	}
-	if LastKeychainEra.NextPatch() != (Version{2, 1, 113}) {
-		t.Errorf("LastKeychainEra.NextPatch() = %s, want 2.1.113 — every 'upgrade to' message derives from it",
-			LastKeychainEra.NextPatch())
+	if LastPreSecureStorageDir.NextPatch() != (Version{2, 1, 113}) {
+		t.Errorf("LastPreSecureStorageDir.NextPatch() = %s, want 2.1.113 — every 'upgrade to' message derives from it",
+			LastPreSecureStorageDir.NextPatch())
 	}
 }
 
@@ -695,7 +695,7 @@ func TestAChainedVersionsEntryNamesTheVersionThatActuallyRuns(t *testing.T) {
 	// And the consequence, stated where it bites: 2.1.100 is inside the
 	// keychain era and 2.1.241 is not, so getting this wrong is a refusal on a
 	// machine that is fine.
-	if got.KeychainEra() {
+	if got.PreSecureStorageDir() {
 		t.Error("a current machine was classified as keychain-era")
 	}
 }
@@ -780,7 +780,7 @@ func TestAnUnrelatedAncestorsPackageIsNotCreditedToTheLauncher(t *testing.T) {
 		t.Fatalf("Describe credited an unrelated tree's %s to %s", got.Version, launcher)
 	}
 	// The consequence is what makes it critical rather than cosmetic.
-	if got.KeychainEra() {
+	if got.PreSecureStorageDir() {
 		t.Error("a healthy machine was classified as keychain-era, which refuses `ccdad run` and fails doctor")
 	}
 }
@@ -1020,8 +1020,8 @@ func TestAnEmptyLauncherIsNotCreditedWithAReservedVersion(t *testing.T) {
 		t.Fatalf("Describe named %s for an EMPTY launcher — matched against a reservation the installer "+
 			"had not filled in yet", got.Version)
 	}
-	if got.KeychainEra() {
-		t.Fatal("KeychainEra() is true for an empty launcher, so `ccdad run` would refuse and blame the " +
+	if got.PreSecureStorageDir() {
+		t.Fatal("PreSecureStorageDir() is true for an empty launcher, so `ccdad run` would refuse and blame the " +
 			"version on a machine whose launcher simply has no bytes")
 	}
 	if got.Method != MethodNative {
@@ -1065,14 +1065,14 @@ func TestAReservationIsNotAMatchForALauncherThatHasBytes(t *testing.T) {
 // THE PROPERTY THE ITEM BEHIND THIS WORK IS ABOUT, on every CI leg rather than
 // only the Windows one. The shape is a Windows install and the platform is not:
 // what matters is that a launcher named from its BYTES is Known, and that
-// KeychainEra() therefore fires — which is what makes `ccdad run` refuse and
+// PreSecureStorageDir() therefore fires — which is what makes `ccdad run` refuse and
 // doctor rule fail. Before the bytes were read this was Known=false on such a
 // machine, so the refusal never fired and the session ran as the live login.
 //
 // ccver_windows_test.go has the same property against a real Windows runner with
 // HOME and %USERPROFILE% apart; this one is here so the property is not resting
 // on one leg out of three.
-func TestACopyOfAKeychainEraBinaryIsInTheEra(t *testing.T) {
+func TestACopyOfAPreVariableBinaryIsStillOnTheOldSide(t *testing.T) {
 	home := tempDir(t)
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
@@ -1083,8 +1083,8 @@ func TestACopyOfAKeychainEraBinaryIsInTheEra(t *testing.T) {
 	write(t, launcher, "ELF-112")
 
 	got := Describe(launcher)
-	if !got.KeychainEra() {
-		t.Fatalf("KeychainEra() = false for %s — the refusal `ccdad run` exists for does not fire: %s",
+	if !got.PreSecureStorageDir() {
+		t.Fatalf("PreSecureStorageDir() = false for %s — the refusal `ccdad run` exists for does not fire: %s",
 			got, got.Why)
 	}
 }
@@ -1299,7 +1299,7 @@ func TestAPrunedLocalInstallDoesNotFallBackToTheWrapperManifest(t *testing.T) {
 	if got.Known {
 		t.Fatalf("Describe = %+v, want unknown — nothing here declares a Claude Code version", got)
 	}
-	if got.KeychainEra() {
+	if got.PreSecureStorageDir() {
 		t.Error("a wrapper manifest classified the machine as keychain-era")
 	}
 }

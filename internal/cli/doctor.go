@@ -217,7 +217,7 @@ func runChecks() []check {
 	// chances for them to disagree inside a single report.
 	accountsCheck, accountsUsable := checkAccountsFile(root, storeUsable)
 
-	live, liveErr := cclink.Load()
+	live, liveSource, liveErr := loadLiveWithSource()
 	// Read, never created: LoadGlobalConfig opens the file read-only and a
 	// missing one resolves to an empty config. This file's rule is that the
 	// probe must not CREATE what it probes, which is why store.Open is refused
@@ -270,7 +270,7 @@ func runChecks() []check {
 		checkKeychain(),
 		checkEnvironment(),
 		checkAPIKey(cfg, cfgErr),
-		checkOAuthSource(live, liveErr),
+		checkOAuthSource(live, liveErr, liveSource),
 		checkMCPTools(),
 	}
 }
@@ -929,7 +929,7 @@ func checkClaudeVersion(install ccver.Install, err error) check {
 		return check{"claude-version", levelWarn, fmt.Sprintf(
 			"ccdad found a claude launcher and cannot name its version: %s", install.Why)}
 	}
-	if install.KeychainEra() {
+	if install.PreSecureStorageDir() {
 		// The keychain half of this warning is GONE, and its absence is the
 		// correction: every release reads the item, so "a stale item shadows
 		// every switch" was never a property of old builds in particular. It is
@@ -941,7 +941,7 @@ func checkClaudeVersion(install ccver.Install, err error) check {
 				"the session would run as the machine's live login. Upgrade Claude Code to %s or later, which added "+
 				"the variable. Until then `ccdad run --full-profile` is the one mode that still scopes, because it "+
 				"sets CLAUDE_CONFIG_DIR, which this build does read",
-			install, ccver.LastKeychainEra.NextPatch())}
+			install, ccver.LastPreSecureStorageDir.NextPatch())}
 	}
 	return check{"claude-version", levelOK, install.String()}
 }
@@ -1211,7 +1211,12 @@ func checkEnvironment() check {
 // of it.
 //
 // No value is printed on any branch. Every source here names a live credential.
-func checkOAuthSource(live cclink.Blob, liveErr error) check {
+// loadLiveWithSource is the seam the tests fix the store name through. doctor
+// runs on the machine it is diagnosing, so a test cannot arrange for a keychain
+// item to exist without touching the developer's own.
+var loadLiveWithSource = cclink.LoadWithSource
+
+func checkOAuthSource(live cclink.Blob, liveErr error, liveSource cclink.CredentialSource) check {
 	// AN UNREADABLE CREDENTIALS FILE STILL ANSWERS MOST OF THIS. The login is
 	// the resolver's LAST branch, so every source above it is decidable without
 	// the file -- and those are the sources with no variable behind them, which
@@ -1232,8 +1237,11 @@ func checkOAuthSource(live cclink.Blob, liveErr error) check {
 
 	switch source {
 	case identity.OAuthLogin:
+		// The store that ANSWERED, not a constant. Naming the file here on a
+		// machine whose login is the keychain item made this row contradict the
+		// keychain row two lines above, in the same report.
 		return check{"oauth-source", levelOK,
-			"Claude Code would authenticate with the login in the credentials file" + scopedSessionNote()}
+			"Claude Code would authenticate with the login in " + liveSource.String() + scopedSessionNote()}
 	case identity.OAuthNone:
 		// With the file unreadable this is "nothing ABOVE the login wins", not
 		// "nothing wins" -- the last branch is the one that could not be
@@ -1253,7 +1261,7 @@ func checkOAuthSource(live cclink.Blob, liveErr error) check {
 		// bug in ccdad rather than as the actionable fact it is.
 		if _, hasRecord := live["claudeAiOauth"]; hasRecord && !login.SignsInForInference() {
 			return check{"oauth-source", levelWarn,
-				"the credentials file holds a login, but its scopes do not carry user:inference — Claude " +
+				"the login store holds a login, but its scopes do not carry user:inference — Claude " +
 					"Code takes a login as a credential only when they do, so no OAuth credential resolves " +
 					"at all. Sign in again with `ccdad login`" + scopedSessionNote()}
 		}

@@ -93,9 +93,9 @@ func TestTheLocalInstallFallbackStaysUnderUSERPROFILE(t *testing.T) {
 // binaries were published for 2.1.110, 2.1.111 and 2.1.112, and 2.1.112's own
 // bundle carries the native installer's win32 branch with CLAUDE_SECURESTORAGE_
 // CONFIG_DIR occurring in it exactly zero times. Before the bytes were read,
-// such an install was Known=false, so KeychainEra() was false, so `ccdad run`
+// such an install was Known=false, so PreSecureStorageDir() was false, so `ccdad run`
 // started a default-mode session that silently ran as the live login.
-func TestAKeychainEraNativeCopyIsNowInTheEra(t *testing.T) {
+func TestAPreVariableNativeCopyIsNowRecognised(t *testing.T) {
 	layoutHome := tempDir(t)
 	t.Setenv("HOME", layoutHome)
 	t.Setenv("USERPROFILE", tempDir(t))
@@ -107,8 +107,8 @@ func TestAKeychainEraNativeCopyIsNowInTheEra(t *testing.T) {
 	write(t, launcher, "ELF-112")
 
 	got := Describe(launcher)
-	if !got.KeychainEra() {
-		t.Fatalf("KeychainEra() = false for %s — the refusal `ccdad run` exists for still does not fire "+
+	if !got.PreSecureStorageDir() {
+		t.Fatalf("PreSecureStorageDir() = false for %s — the refusal `ccdad run` exists for still does not fire "+
 			"on Windows: %s", got, got.Why)
 	}
 }
@@ -143,8 +143,8 @@ func TestAnInstallUnderUSERPROFILEIsFoundWhenHOMEPointsElsewhere(t *testing.T) {
 	if got.Launcher != launcher {
 		t.Fatalf("Launcher = %q, want %q", got.Launcher, launcher)
 	}
-	if !got.KeychainEra() {
-		t.Fatalf("KeychainEra() = false for %s — found the install and could not name it: %s", got, got.Why)
+	if !got.PreSecureStorageDir() {
+		t.Fatalf("PreSecureStorageDir() = false for %s — found the install and could not name it: %s", got, got.Why)
 	}
 }
 

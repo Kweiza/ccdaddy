@@ -70,14 +70,69 @@ var (
 // unknown, and answering an unknown with the file is the same confident wrong
 // answer in a quieter form.
 func Load() (Blob, error) {
+	live, _, err := LoadWithSource()
+	return live, err
+}
+
+// CredentialSource is WHICH STORE answered. It exists because on macOS "who is
+// logged in" and "where does that come from" are two different questions, and
+// every command that reported the first was naming the second from a constant:
+// `which` said "the Claude Code credentials file" while the keychain item was
+// what it had read, on exactly the machine where the difference was the whole
+// point.
+type CredentialSource int
+
+const (
+	// SourceNone is no login anywhere.
+	SourceNone CredentialSource = iota
+	// SourceCredentialsFile is ~/.claude/.credentials.json.
+	SourceCredentialsFile
+	// SourceKeychainItem is the macOS Keychain item, which Claude Code's
+	// credential store reads BEFORE the file.
+	SourceKeychainItem
+)
+
+// String names the store for a person.
+//
+// It is a NOUN PHRASE and deliberately short, because both readers put it
+// inside a sentence of their own: `which` prints "via <this>" and doctor prints
+// "the login in <this>". Spelling it "the Claude Code credentials file" made
+// the second read "the login in the Claude Code credentials file", which says
+// Claude Code twice and reads like a different file from the one meant.
+func (s CredentialSource) String() string {
+	switch s {
+	case SourceKeychainItem:
+		return "the macOS Keychain item, which Claude Code reads first"
+	case SourceCredentialsFile:
+		return "the credentials file"
+	}
+	return "no credential store"
+}
+
+// LoadWithSource is Load, and also says which store answered.
+//
+// A missing login is (Blob{}, SourceNone, nil): the file half returns an empty
+// Blob for a machine where Claude Code has never logged in, and naming a store
+// for a login that is not there would be a third wrong answer of the same kind.
+func LoadWithSource() (Blob, CredentialSource, error) {
 	if live, ok, err := loadFromKeychain(); err != nil || ok {
-		return live, err
+		if err != nil {
+			return nil, SourceNone, err
+		}
+		return live, SourceKeychainItem, nil
 	}
 	path, err := ccpath.CredentialsPath()
 	if err != nil {
-		return nil, err
+		return nil, SourceNone, err
 	}
-	return loadFrom(path)
+	live, err := loadFrom(path)
+	if err != nil {
+		return nil, SourceNone, err
+	}
+	if len(live) == 0 {
+		return live, SourceNone, nil
+	}
+	return live, SourceCredentialsFile, nil
 }
 
 // loadLiveUnderLock is the merge base: the store Claude Code reads, with its

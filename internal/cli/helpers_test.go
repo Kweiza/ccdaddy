@@ -568,3 +568,16 @@ func writeFile(t *testing.T, path, body string) {
 		t.Fatal(err)
 	}
 }
+
+// stubLiveSource fixes which store doctor believes answered, without needing a
+// keychain on the test machine. The blob itself is whatever seedHealthyMachine
+// wrote; this axis is only about the NAME the report gives it.
+func stubLiveSource(t *testing.T, src cclink.CredentialSource) {
+	t.Helper()
+	saved := loadLiveWithSource
+	t.Cleanup(func() { loadLiveWithSource = saved })
+	loadLiveWithSource = func() (cclink.Blob, cclink.CredentialSource, error) {
+		live, err := cclink.Load()
+		return live, src, err
+	}
+}

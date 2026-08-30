@@ -123,7 +123,7 @@ func credentialWord(kind string) string {
 // is about to be refused: on a Claude Code that predates
 // CLAUDE_SECURESTORAGE_CONFIG_DIR the child would run as the machine's LIVE
 // login and spend the wrong account's quota while ccdad recorded a probe of this
-// one. refuseKeychainEra returns early for a token record, which is why the
+// one. refuseUnscopedRun returns early for a token record, which is why the
 // credential test above it is the one that answers those accounts.
 //
 // The displaced-auth test comes third, for the same reason as the second: an
@@ -140,7 +140,7 @@ func probeSkip(a store.Account, blob cclink.Blob, entry usage.Entry, o probeOpti
 			"can read comes from a login's refresh grant — so a probe would spend quota for a reading "+
 			"nothing could ever take", a.Label(), credentialWord(rec.Kind)), true
 	}
-	if kerr := refuseKeychainEra(describeClaudeInstall(o.claude), blob, a.Label()); kerr != nil {
+	if kerr := refuseUnscopedRun(describeClaudeInstall(o.claude), blob, a.Label()); kerr != nil {
 		return kerr.Error(), true
 	}
 	if derr := refuseDisplacedAuth(claudeOAuthEnvironment(), blob, a.Label()); derr != nil {
