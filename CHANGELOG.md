@@ -16,6 +16,44 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.9.4] — 2026-08-30
+
+The release that makes the reports agree with each other.
+
+0.9.2 and 0.9.3 taught ccdad to read and write the store Claude Code actually
+reads. What they did not do is teach it to SAY so: three reports went on naming
+the credentials file from a constant, and on a machine whose login is the
+keychain item, `ccdad doctor` contradicted itself two lines apart.
+
+### Fixed
+
+- **`ccdad which` names the store that answered.** `cclink.LoadWithSource` is
+  `Load` plus which store it came from, and `switcher.AttributeLogin` now carries
+  it into `via`. It read `via the Claude Code credentials file` while the
+  keychain item was what had been read — on exactly the machines where which
+  store it is was the reason someone ran the command.
+- **`doctor`'s `oauth-source` row does the same.** It said "Claude Code would
+  authenticate with the login in the credentials file" directly beneath a
+  `keychain` row saying the item is read first. Same report, opposite claims.
+- **`which` no longer calls an unattributable login unmanaged.** Attribution
+  matches on the refresh token, and Claude Code rotates that on every refresh, so
+  the commonest cause of "cannot attribute" is one of your own accounts moments
+  after a refresh — the engine has always treated it that way. The notice now
+  says what ccdad could not do and why, and points at `ccdad add`. The
+  environment axis keeps the blunt sentence, because a token supplied through
+  `CLAUDE_CODE_OAUTH_TOKEN` is not rotated behind ccdad's back and there the
+  claim is one that can be made.
+
+### Changed
+
+- `ccver.LastKeychainEra` is now `LastPreSecureStorageDir`, `Install.KeychainEra()`
+  is `PreSecureStorageDir()`, and `refuseKeychainEra` is `refuseUnscopedRun`. The
+  constant carried two facts — "reads the keychain" and "does not know
+  `CLAUDE_SECURESTORAGE_CONFIG_DIR`" — which were bisected as one, and only the
+  variable half held. Every release reads the keychain, so there is no era to be
+  on. Each caller was re-read rather than swept: `run` and `probe` gate scoping on
+  it and `doctor` prints it, and all three want the variable.
+
 ## [0.9.3] — 2026-08-30
 
 The release that makes 0.9.2 actually work on the machine it was written for.
@@ -2214,7 +2252,8 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.9.3...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.9.4...HEAD
+[0.9.4]: https://github.com/Kweiza/ccdaddy/compare/v0.9.3...v0.9.4
 [0.9.3]: https://github.com/Kweiza/ccdaddy/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/Kweiza/ccdaddy/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/Kweiza/ccdaddy/compare/v0.9.0...v0.9.1
