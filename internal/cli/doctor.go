@@ -267,7 +267,7 @@ func runChecks() []check {
 		checkClaudeVersion(install, installErr),
 		checkClaudeCode(live, liveErr),
 		checkCredentialKeys(live, liveErr),
-		checkKeychain(install),
+		checkKeychain(),
 		checkEnvironment(),
 		checkAPIKey(cfg, cfgErr),
 		checkOAuthSource(live, liveErr),
@@ -930,14 +930,17 @@ func checkClaudeVersion(install ccver.Install, err error) check {
 			"ccdad found a claude launcher and cannot name its version: %s", install.Why)}
 	}
 	if install.KeychainEra() {
+		// The keychain half of this warning is GONE, and its absence is the
+		// correction: every release reads the item, so "a stale item shadows
+		// every switch" was never a property of old builds in particular. It is
+		// how the arrangement works everywhere, and ccdad installs into the item
+		// now. What is left is the variable, which really did arrive at 2.1.113.
 		return check{"claude-version", levelFail, fmt.Sprintf(
-			"%s is on the far side of the boundary ccdad is built on, and two of ccdad's promises are void on it. "+
-				"Its credential store reads the macOS Keychain BEFORE .credentials.json, so on macOS a stale item "+
-				"shadows every switch ccdad makes and the switch silently does nothing; and it does not know "+
-				"CLAUDE_SECURESTORAGE_CONFIG_DIR at all, on any platform, so `ccdad run`'s default scoping is ignored "+
-				"and the session would run as the machine's live login. Upgrade Claude Code to %s or later, which "+
-				"removed the keychain backend and added the variable. Until then `ccdad run --full-profile` is the "+
-				"one mode that still scopes, because it sets CLAUDE_CONFIG_DIR, which this build does read",
+			"%s is on the far side of the boundary ccdad is built on: it does not know "+
+				"CLAUDE_SECURESTORAGE_CONFIG_DIR, on any platform, so `ccdad run`'s default scoping is ignored and "+
+				"the session would run as the machine's live login. Upgrade Claude Code to %s or later, which added "+
+				"the variable. Until then `ccdad run --full-profile` is the one mode that still scopes, because it "+
+				"sets CLAUDE_CONFIG_DIR, which this build does read",
 			install, ccver.LastKeychainEra.NextPatch())}
 	}
 	return check{"claude-version", levelOK, install.String()}
@@ -1013,11 +1016,8 @@ func checkCredentialKeys(live cclink.Blob, err error) check {
 		strings.Join(unknown, ", "))}
 }
 
-// keychainProbe is doctor's window onto the legacy macOS Keychain, and it is a
-// var so the tests can describe a machine that has an item on it. Without the
-// seam every branch below except "skipped" would be unreachable from a Linux
-// development machine, and the branch that matters — a stale item found — would
-// ship having never been rendered.
+// keychainProbe is doctor's window onto the macOS Keychain, and it is a
+// variable so the tests can answer for it.
 var keychainProbe = cclink.ProbeCredentialKeychainItem
 
 // keychainDetailer is an error that already knows how to explain itself to a
@@ -1026,36 +1026,24 @@ var keychainProbe = cclink.ProbeCredentialKeychainItem
 // keychain without cclink having to export the classification it keeps private.
 type keychainDetailer interface{ Detail() string }
 
-// checkKeychain looks for the credential item a Keychain-era Claude Code would
-// have written, which a DOWNGRADED Claude Code would still read in preference
-// to the file ccdad writes. The risk register rates "Claude Code changes these
-// internals between releases" High and names doctor as the mitigation; this is
-// the half of that mitigation which points backwards rather than forwards.
+// checkKeychain reports the credential item on macOS.
 //
-// It is the one check here that runs another program, and two properties keep
-// that honest. The lookup asks for the item's ATTRIBUTES and never its secret,
-// so it cannot raise the "wants to use your keychain" dialog on anybody's
-// machine; and every spawn has a wall-clock deadline with a kill behind it,
-// because a locked keychain on a headless host does not fail, it waits.
+// IT IS NOT A STALENESS CHECK ANY MORE. It was written as one, on the premise
+// that 2.1.113 removed the keychain backend and left the item behind as a
+// leftover -- inert on anything installable today, worth deleting only against
+// a future downgrade. That premise was measured again and is false: 2.1.234,
+// 2.1.238 and 2.1.251 each spawn `security find-generic-password`, and the
+// combinator reads the item BEFORE .credentials.json on all of them.
 //
-// Report-only, like the rest of the file, and now for a measured reason rather
-// than a cautious one. cclink's keychain header records the read order: 2.1.112
-// and earlier read the keychain and fall back to the file, so deleting the item
-// is a REPAIR and not a logout. What deleting still costs is the login in the
-// item, which on such a machine is the live one — so the act needs a user who
-// knows that, which is what the detail below now says. Whether doctor should
-// ever repair rather than report is still undecided, and doing this inside a
-// switch would put a `security` spawn in the credential-lock window on every
-// macOS switch to serve a population that shrinks with every release.
+// So where an item exists it is the login, and this row's job is to say so.
+// The line it replaces -- "nothing is broken right now. Removing it is cleanup"
+// -- is how a live credential store got read as a leftover while every switch
+// silently did nothing, and it was the most dangerous sentence in the tool.
 //
-// It takes the install because the remedy INVERTS across 2.1.113 and the two
-// halves are not variations of one sentence: on a current build removing the
-// item is cleanup, and on a keychain-era build it destroys that machine's live
-// login and reverts within hours. This row used to print both and make the user
-// decide which machine they were on — a question ccdad can now answer, and the
-// item that asked it is the reason ccver exists. Only an install whose version
-// ccdad could not read still gets both.
-func checkKeychain(install ccver.Install) check {
+// It no longer takes the install. Which release is on the machine decided the
+// remedy while there were two; there is one now, and it is the same on every
+// version, so reading the install here would only invite the old split back.
+func checkKeychain() check {
 	found, err := keychainProbe(context.Background())
 	item := found.Item
 
@@ -1063,73 +1051,33 @@ func checkKeychain(install ccver.Install) check {
 		return check{"keychain", levelSkipped, "there is no macOS Keychain on this platform"}
 	}
 	if err != nil {
-		// A probe that could not answer is NOT an absence. Saying "no stale
-		// item" because a locked keychain refused to be read is the same
-		// mistake as reporting "no daemon" for a filesystem where locks do not
-		// work, one check up.
+		// A probe that could not answer is NOT an absence. Saying "no item"
+		// because a locked keychain refused to be read is the same mistake as
+		// reporting "no daemon" for a filesystem where locks do not work, one
+		// check up -- and it matters more now: the item is the login, so an
+		// unanswered probe leaves it unknown whether a switch can reach Claude
+		// Code at all.
 		var explained keychainDetailer
 		if errors.As(err, &explained) {
 			return check{"keychain", levelWarn, fmt.Sprintf(
-				"ccdad could not check for a stale %s item: %s", item.Service, explained.Detail())}
+				"ccdad could not read the %s item, so it cannot tell whether a switch reaches Claude Code: %s",
+				item.Service, explained.Detail())}
 		}
 		return check{"keychain", levelWarn, fmt.Sprintf(
-			"ccdad could not check for a stale %s item: %v", item.Service, err)}
+			"ccdad could not read the %s item, so it cannot tell whether a switch reaches Claude Code: %v",
+			item.Service, err)}
 	}
 	if !found.Present {
 		return check{"keychain", levelOK, fmt.Sprintf(
-			"no legacy item for %q under %s", item.Account, keychainNameList(found.Checked))}
+			"no item for %q under %s, so .credentials.json is the login Claude Code reads",
+			item.Account, keychainNameList(found.Checked))}
 	}
-	// A warning rather than a failure, and deliberately: 2.1.113 removed the
-	// backend, so on any Claude Code a user can install today nothing is broken
-	// right now. What it costs is a downgrade — or a pin to 2.1.112 or earlier,
-	// which is the same machine seen from the other side.
-	//
-	// The remedy carries its price now. The read order settles that deleting the
-	// item hands a keychain-era Claude Code back to the credentials file rather
-	// than logging it out — that much is safe — but the login INSIDE the item
-	// goes with it, and on a machine still running 2.1.112 or earlier that item
-	// is the live login rather than a leftover. Printing the command without
-	// that sentence was handing someone a way to lose an account ccdad may not
-	// hold.
-	//
-	// Which of the three sentences below applies is now READ rather than asked.
-	remove := fmt.Sprintf("/usr/bin/security delete-generic-password -a %q -s %q", item.Account, item.Service)
-	switch {
-	case install.KeychainEra():
-		// The remedy is not the command, and leading with the command would be
-		// read as one. On this machine the item is the live login and deleting
-		// it undoes itself: cclink's keychain header measures the update path
-		// that re-creates the item and unlinks .credentials.json on the next
-		// token refresh, so the "fix" reverts within hours and takes what ccdad
-		// wrote with it.
-		return check{"keychain", levelWarn, fmt.Sprintf(
-			"a legacy keychain item %q for %q is still there, and %s reads it BEFORE the credentials file — so it "+
-				"reads that item INSTEAD of what ccdad writes, and every switch silently does nothing. Do NOT delete it: "+
-				"on this build that item is your live login, and the next token refresh re-creates it and deletes the "+
-				"credentials file with it, so the deletion reverts within hours and costs what ccdad wrote. Upgrade "+
-				"Claude Code to %s or later, which does not read the item at all; after that, removing it is cleanup: %s",
-			item.Service, item.Account, install, ccver.LastKeychainEra.NextPatch(), remove)}
-	case install.Known:
-		return check{"keychain", levelWarn, fmt.Sprintf(
-			"a legacy keychain item %q for %q is still there. %s ignores it — 2.1.113 removed that backend — so "+
-				"nothing is broken right now. Removing it is cleanup: nothing recreates it, and it stops a future "+
-				"downgrade, or a pin to 2.1.112 or earlier, from shadowing everything ccdad writes. Remove it with: %s",
-			item.Service, item.Account, install, remove)}
-	default:
-		// Both remedies, because ccdad could not name the version. The
-		// claude-version row is named rather than left implicit, so a reader
-		// who wants one remedy instead of two knows which row to fix first.
-		return check{"keychain", levelWarn, fmt.Sprintf(
-			"a legacy keychain item %q for %q is still there. Claude Code 2.1.112 and earlier read this item BEFORE "+
-				"the credentials file, so such a build reads it INSTEAD of what ccdad writes and every switch silently "+
-				"does nothing; 2.1.113 removed that backend, so a current Claude Code ignores the item entirely. ccdad "+
-				"could not name the Claude Code on this machine — the claude-version check says why — so WHICH ONE "+
-				"YOU ARE ON DECIDES THE REMEDY. On 2.1.113 or later, removing the item is cleanup: nothing recreates it, "+
-				"and it stops a future downgrade from shadowing ccdad. On 2.1.112 or earlier, removing it is NOT a fix: "+
-				"that item is the live login, and the next credential write recreates it and deletes the credentials "+
-				"file with it, so upgrade Claude Code instead. Remove it with: %s",
-			item.Service, item.Account, remove)}
-	}
+	return check{"keychain", levelOK, fmt.Sprintf(
+		"the keychain item %q for %q is Claude Code's live login: its credential store reads that item BEFORE "+
+			".credentials.json, so it is what every request authenticates with. ccdad installs into it on every "+
+			"switch, so a swap reaches Claude Code rather than only the file. Do not delete it -- it is the login, "+
+			"and the next credential write would put it back anyway",
+		item.Service, item.Account)}
 }
 
 // keychainNameList renders the names a probe looked for. It is a list rather

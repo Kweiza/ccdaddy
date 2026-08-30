@@ -10,14 +10,49 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
-// Legacy macOS Keychain support. "Legacy" here has a date on it now rather than
-// an open end: 2.1.112 (2026-04-16) is the LAST Claude Code whose credential
-// store reads these items, and 2.1.113 (2026-04-17) removed the backend
-// outright. Every release from 2.1.113 on -- 2.1.222, 2.1.238, 2.1.240, 2.1.241
-// -- names its secure-storage backend "plaintext" and reads .credentials.json.
-// The boundary was measured, not inferred: every published release from 2.1.112
-// to 2.1.129 was fetched and searched for the backend, and it disappears at
-// exactly 2.1.113.
+// macOS Keychain support. NOT legacy: this file used to open by dating the
+// keychain era's end, and that date was wrong.
+//
+// WHAT THE OLD HEADER CLAIMED, so the correction has something to point at:
+// that 2.1.112 (2026-04-16) is the LAST Claude Code whose credential store
+// reads these items, that 2.1.113 removed the backend outright, and that every
+// release from 2.1.113 on -- 2.1.222, 2.1.238, 2.1.240, 2.1.241 -- "names its
+// secure-storage backend plaintext and reads .credentials.json". ccver carried
+// the same boundary as LastKeychainEra, doctor printed it as "nothing is broken
+// right now", and ccdad wrote only .credentials.json on the strength of it.
+//
+// IT IS FALSE, and the way it failed is worth more than the fact. Three builds
+// sitting on the machine that found this -- 2.1.234, 2.1.238 and 2.1.251, one
+// of them named in that list -- each contain a whole keychain backend, and it
+// SPAWNS:
+//
+//	name:"keychain",read(){let e=B$(),t=e.cache;
+//	  if(Date.now()-t.cachedAt<Aqt)return t.data;
+//	  let r=e.lastReadFailure;if(r!==null&&Date.now()-r<OEn)return t.data;
+//	  try{let a=a0(s5),o=xC(),
+//	    s=nJ(`security find-generic-password -a "${o}" -w -s "${a}"`,{timeout:m});
+//	    if(s){let i=V(s);return e.cache={data:i,cachedAt:Date.now()},i}}catch(a){}
+//
+// THE MEASUREMENT THAT MISSED IT searched a release for `name:"plaintext"`,
+// found it, and concluded the backend WAS plaintext. But the store is a
+// combinator named `${A.name}-with-${B.name}-fallback` over both members, so
+// the fallback's own name is present in every build that has a keychain
+// primary. Finding B proves nothing about A. Count them separately instead --
+// on an installed build, with no download:
+//
+//	LC_ALL=C tr -d '\000' < ~/.local/share/claude/versions/<v> > cc.js
+//	LC_ALL=C grep -ac 'name:"keychain"' cc.js
+//	LC_ALL=C grep -ac 'find-generic-password' cc.js
+//
+// LC_ALL=C is not decoration: without it `tr` can drop nothing at all and leave
+// a zero-byte file, which reads as "the backend is gone" exactly like the real
+// thing. And a lookbehind wider than ~500 chars over 166 MB does not finish in
+// two minutes -- take the byte offset from `grep -abo` and `dd` a window.
+//
+// WHAT IT COST, measured on the machine that found it: the item held one
+// account and .credentials.json another, ccdad had switched an hour earlier,
+// `ccdad which` named the file's account, and every request in that hour was
+// metered to the item's. The daemon logged the switch. Nothing errored.
 //
 // THE READ ORDER, which is the fact everything else here turns on. Every release
 // sampled from 0.2.125 through 2.1.112 wraps the keychain in the same
