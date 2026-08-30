@@ -84,11 +84,20 @@ type KeychainError struct {
 	failure keychainFailure
 	// stderr is what security actually said, kept for the error string.
 	stderr string
+	// code is the exit status, and it is carried for the ONE failure where
+	// nothing else is: a spawn that exits non-zero and prints nothing leaves
+	// the number as the entire report. Zero here means "no exit status was
+	// involved" -- a timeout, an unreaped child, a missing binary -- rather
+	// than success, which never reaches this type.
+	code int
 }
 
 func (e *KeychainError) Error() string {
-	if e.stderr != "" {
+	switch {
+	case e.stderr != "":
 		return fmt.Sprintf("security %s: %s: %s", e.Op, e.failure, e.stderr)
+	case e.code != 0:
+		return fmt.Sprintf("security %s: %s (exit %d)", e.Op, e.failure, e.code)
 	}
 	return fmt.Sprintf("security %s: %s", e.Op, e.failure)
 }
@@ -96,7 +105,17 @@ func (e *KeychainError) Error() string {
 // Detail is the sentence a diagnostic prints. Every failure has its own, so a
 // report says what the user should do next rather than only that something went
 // wrong.
-func (e *KeychainError) Detail() string { return keychainFailureDetail(e.failure) }
+//
+// The silent failure gets its sentence built here rather than in the table,
+// because the exit code IS the sentence: without it the report is "it failed",
+// which is what the caller already knew.
+func (e *KeychainError) Detail() string {
+	if e.failure == failSaidNothing && e.code != 0 {
+		return fmt.Sprintf("the lookup exited %d and printed nothing, so the exit code is the only evidence there is; "+
+			"run it by hand to see what it does", e.code)
+	}
+	return keychainFailureDetail(e.failure)
+}
 
 // securityResult is one completed spawn. A non-zero code is carried here rather
 // than as an error, because callers decide which codes mean what.
@@ -193,7 +212,7 @@ func (it KeychainItem) Present(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 	return false, &KeychainError{
-		Op: "find-generic-password", failure: classifyKeychainError(res.stderr), stderr: res.stderr}
+		Op: "find-generic-password", failure: classifyKeychainError(res.stderr), stderr: res.stderr, code: res.code}
 }
 
 // Read returns the secret stored in the item, and whether there was one.
@@ -212,7 +231,7 @@ func (it KeychainItem) Read(ctx context.Context) (string, bool, error) {
 		return "", false, nil
 	}
 	return "", false, &KeychainError{
-		Op: "find-generic-password", failure: classifyKeychainError(res.stderr), stderr: res.stderr}
+		Op: "find-generic-password", failure: classifyKeychainError(res.stderr), stderr: res.stderr, code: res.code}
 }
 
 // Delete removes the item. An item that was already absent is success: the
@@ -250,7 +269,7 @@ func (it KeychainItem) Delete(ctx context.Context) error {
 		return nil
 	}
 	return &KeychainError{
-		Op: "delete-generic-password", failure: classifyKeychainError(res.stderr), stderr: res.stderr}
+		Op: "delete-generic-password", failure: classifyKeychainError(res.stderr), stderr: res.stderr, code: res.code}
 }
 
 // KeychainLookup is what a probe for the legacy credential item found.
@@ -314,7 +333,7 @@ func (it KeychainItem) Write(ctx context.Context, secret string) error {
 		return nil
 	}
 	return &KeychainError{
-		Op: "add-generic-password", failure: classifyKeychainError(res.stderr), stderr: res.stderr}
+		Op: "add-generic-password", failure: classifyKeychainError(res.stderr), stderr: res.stderr, code: res.code}
 }
 
 // ProbeCredentialKeychainItem is the doctor probe: derive the names this

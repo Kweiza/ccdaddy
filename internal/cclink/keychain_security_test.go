@@ -598,3 +598,53 @@ func TestWriteInstallsTheSecretAsHex(t *testing.T) {
 		t.Fatalf("argv = %q, want %q", got, want)
 	}
 }
+
+// A `security` that exits non-zero and prints nothing leaves its EXIT CODE as
+// the only fact about the failure, so the error has to carry it.
+//
+// This is not a hypothetical. A daemon ticking once a second wrote 11,300
+// copies of `security find-generic-password: empty` over three hours, and that
+// sentence names no exit code, no store and no remedy -- so the failure could
+// not be told apart from any other silent one, and the loop that produced it
+// could not be diagnosed from its own log.
+//
+// The old spelling was worse than uninformative. "empty" reads as a verdict on
+// the ITEM, which is the one thing it never means: an item whose blob is
+// genuinely zero-length exits 0, and TestReadTreatsAZeroLengthBlobAsAValue
+// pins that. It classifies an empty STDERR.
+func TestReadNamesTheExitCodeWhenSecuritySaysNothing(t *testing.T) {
+	fakeSecurity{exit: 60}.install(t)
+
+	_, _, err := testItem.Read(context.Background())
+	var kcErr *KeychainError
+	if !errors.As(err, &kcErr) {
+		t.Fatalf("err = %v, want a *KeychainError", err)
+	}
+	if !strings.Contains(err.Error(), "60") {
+		t.Fatalf("Error() = %q, want the exit code in it", err.Error())
+	}
+	if strings.Contains(err.Error(), "empty") {
+		t.Fatalf("Error() = %q, still says \"empty\", which names the item rather than the spawn", err.Error())
+	}
+	if !strings.Contains(kcErr.Detail(), "60") {
+		t.Fatalf("Detail() = %q, want the exit code -- it is the only evidence there is", kcErr.Detail())
+	}
+}
+
+// The blob a silent failure gets confused with: zero length is a VALUE, it
+// exits 0, and it is not an error. Measured against the real /usr/bin/security
+// on macOS 15, which returns code 0 and an empty stdout for such an item.
+func TestReadTreatsAZeroLengthBlobAsAValue(t *testing.T) {
+	fakeSecurity{stdout: ""}.install(t)
+
+	secret, ok, err := testItem.Read(context.Background())
+	if err != nil {
+		t.Fatalf("Read on a zero-length blob = %v, want no error", err)
+	}
+	if !ok {
+		t.Fatal("Read reported no item for an item that is there and holds nothing")
+	}
+	if secret != "" {
+		t.Fatalf("secret = %q, want the empty value", secret)
+	}
+}
