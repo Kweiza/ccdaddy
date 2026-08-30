@@ -253,6 +253,7 @@ func runChecks() []check {
 		checkLocks(report, probeErr),
 		checkPidfile(storeUsable),
 		checkStatusFile(report),
+		checkTickHealth(report),
 		checkUsageCache(storeUsable),
 		checkHistory(storeUsable),
 		checkEngineState(storeUsable),
@@ -466,6 +467,54 @@ func checkStatusFile(report daemon.Report) check {
 	// diagnosed as a nine-hour poll stall that was not happening.
 	return check{"status-file", levelOK, fmt.Sprintf("schema %d, generated %s",
 		report.Status.SchemaVersion, report.Status.GeneratedAt.In(readerZone()).Format("2006-01-02T15:04:05Z07:00"))}
+}
+
+// checkTickHealth is the difference between a daemon that is RUNNING and a
+// daemon that is WORKING, and it exists because for three hours and twenty
+// minutes there was nothing here that could tell them apart.
+//
+// The machine that asked for it had a daemon failing every tick -- 11,300 in a
+// row, one a second, every one of them a switch that did not happen -- and
+// `ccdad doctor` printed ok on every row it had, truthfully: the singleton WAS
+// held, the pidfile DID name the process, the status document WAS fresh,
+// because a failing tick still publishes. Every existing row asked about
+// liveness. None asked whether anything was getting done.
+//
+// A daemon that has published nothing is SKIPPED and not ok, for the reason
+// checkPidfile gives about liveness evidence: absent fields are also what a
+// daemon too old to write them leaves, and reporting silence as health is the
+// exact mistake this row was added to stop making.
+func checkTickHealth(report daemon.Report) check {
+	if report.State != daemon.DaemonRunning {
+		return check{"tick-health", levelSkipped, "no daemon is running, so there is no tick loop to report on"}
+	}
+	if !report.HasStatus {
+		return check{"tick-health", levelSkipped, "the running daemon has not published a status document yet"}
+	}
+	s := report.Status
+	if !s.TickHealthReported {
+		// Absence is not health. See Status.TickHealthReported: a daemon that
+		// predates these fields publishes exactly what a healthy one does.
+		return check{"tick-health", levelSkipped,
+			"the running daemon does not report tick health, so this cannot say whether it is switching; " +
+				"restart it with 'ccdad daemon restart' to find out"}
+	}
+	if s.TickFailures == 0 {
+		return check{"tick-health", levelOK, "the daemon's last tick completed, so switching is not blocked"}
+	}
+	// The AGE of the run, not just its length. "A tick just failed" and
+	// "nothing has worked since lunch" are the same count at 1 Hz for very
+	// different lengths of time, and only the second one means the daemon has
+	// stopped doing its job. In the reader's zone, for the reason
+	// checkStatusFile gives.
+	since := s.TickFailingSince.In(readerZone()).Format("2006-01-02T15:04:05Z07:00")
+	detail := fmt.Sprintf("the tick loop has failed %d times in a row since %s, "+
+		"so no switch has happened in that time: %s", s.TickFailures, since, s.LastTickError)
+	if s.TickFailingSince.IsZero() {
+		detail = fmt.Sprintf("the tick loop has failed %d times in a row, "+
+			"so no switch has happened in that time: %s", s.TickFailures, s.LastTickError)
+	}
+	return check{"tick-health", levelFail, detail}
 }
 
 // checkUsageCache is a warning rather than a failure by the cache's own design:

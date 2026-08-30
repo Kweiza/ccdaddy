@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime/debug"
 	"time"
@@ -26,7 +27,59 @@ const (
 	// the singleton, so nothing can take over, and it publishes nothing while
 	// looking alive to every probe.
 	maxConsecutivePanics = 10
+
+	// wedgedAfter is the same judgement for a tick that ERRORS rather than
+	// panicking, and it is a duration rather than a count for the reason
+	// rotateCheckInterval is: a laptop that slept through the window would
+	// otherwise owe 300 wakeful seconds before anyone noticed.
+	//
+	// Five minutes is chosen from what the failure it exists for looked like.
+	// A daemon whose keychain read had started failing did so on its FIRST tick
+	// and on all 11,300 after it, so any threshold at all would have caught it;
+	// what the number has to avoid is catching an ordinary outage. Nothing in
+	// the tick body retries for anything like five minutes -- the poll timeout
+	// and every `security` spawn are seconds -- so an unbroken run this long is
+	// structural rather than transient.
+	wedgedAfter = 5 * time.Minute
+
+	// tickErrorRepeatEvery is how often an unchanged tick error is written
+	// again. The first line of a run is always logged; this is what keeps the
+	// 400th from being.
+	tickErrorRepeatEvery = 5 * time.Minute
 )
+
+// ErrWedged is Run reporting that the tick body has failed without interruption
+// for long enough to be structural, and that the caller should replace the
+// process rather than wait for it to come round.
+//
+// It is a REPLACEMENT and not a shutdown, and the evidence says which. Retrying
+// in process recovered nothing across 11,300 consecutive failures; a fresh
+// process was healthy on its first tick, spawning the same `security` with the
+// same argv from the same user. Nothing found a difference between the two
+// beyond the process itself -- environment, working directory, session and
+// keychain state were all measured equal -- so the loop does not claim to know
+// what a new process fixes, only that one does.
+var ErrWedged = errors.New("the tick body has been failing without interruption")
+
+// TickHealth is what the loop knows about the tick body's recent history. It is
+// published in the status document and read back by doctor, because none of it
+// was anywhere on disk while a daemon span for three hours with every doctor
+// row reading ok.
+type TickHealth struct {
+	// Consecutive is the length of the current run of failing ticks, and 0 the
+	// moment one passes.
+	Consecutive int
+	// Since is when the current run began -- the FIRST failure's time, not the
+	// most recent, because the age of the run is the fact worth reporting.
+	Since time.Time
+	// LastError is the most recent tick error, rendered.
+	LastError string
+	// EverPassed is whether any tick in THIS process has ever succeeded. It is
+	// what decides whether a replacement inherits the recovery budget or starts
+	// a fresh one: a process that worked for a day and then wedged is not the
+	// same evidence as one that never worked at all.
+	EverPassed bool
+}
 
 // Loop is the daemon's 1 Hz tick loop.
 //
@@ -54,6 +107,19 @@ type Loop struct {
 	RotateEvery time.Duration
 	// Now is the clock. Zero means time.Now.
 	Now func() time.Time
+	// WedgedAfter is how long an unbroken run of failing ticks may last before
+	// Run gives up on it. Zero means wedgedAfter.
+	WedgedAfter time.Duration
+	// RepeatEvery is how often an unchanged tick error is logged again. Zero
+	// means tickErrorRepeatEvery.
+	RepeatEvery time.Duration
+	// RecoveryBudget is how many more times the PROCESS may replace itself, and
+	// a loop with none must not give up: a machine broken for good would
+	// otherwise spawn a successor every five minutes forever. Zero -- the zero
+	// value, so nothing that builds a Loop without asking for this behaviour
+	// gets it -- means the loop keeps ticking through a wedge and lets the
+	// published health be what raises the alarm.
+	RecoveryBudget int
 
 	// ticks replaces the internal ticker so a test can deliver one tick at a
 	// time. Production leaves it nil.
@@ -78,10 +144,79 @@ type Loop struct {
 	looped chan<- struct{}
 
 	panics int
+	health TickHealth
+	// lastLoggedAt is when the current run of failures was last written to the
+	// log, which is not when it last failed.
+	lastLoggedAt time.Time
 }
 
 // Panics is how many ticks have panicked over this loop's life.
 func (l *Loop) Panics() int { return l.panics }
+
+// Health is the tick body's recent history, for the status document.
+//
+// It is read from the loop's own goroutine by the tick body's publisher, one
+// tick behind: publishing happens INSIDE the tick, so the document written this
+// tick carries the streak as of the previous one. That is a property worth
+// naming rather than fixing -- fixing it means publishing after the body, which
+// is the ordering that lets a half-applied iteration reach disk.
+func (l *Loop) Health() TickHealth { return l.health }
+
+func (l *Loop) wedgedAfter() time.Duration {
+	if l.WedgedAfter > 0 {
+		return l.WedgedAfter
+	}
+	return wedgedAfter
+}
+
+func (l *Loop) repeatEvery() time.Duration {
+	if l.RepeatEvery > 0 {
+		return l.RepeatEvery
+	}
+	return tickErrorRepeatEvery
+}
+
+// noteTickFailure folds one failing tick into the current run and decides
+// whether it is worth a line.
+//
+// Three things get logged and nothing else does: the first failure of a run,
+// a failure whose error has CHANGED -- the event most worth seeing, and the one
+// a naive "log every N" would bury -- and the run still going one repeat window
+// later.
+func (l *Loop) noteTickFailure(now time.Time, err error) {
+	text := err.Error()
+	first := l.health.Consecutive == 0
+	changed := !first && text != l.health.LastError
+
+	if first {
+		l.health.Since = now
+	}
+	l.health.Consecutive++
+	l.health.LastError = text
+
+	switch {
+	case first, changed:
+		l.logf("tick failed: %v", err)
+	case now.Sub(l.lastLoggedAt) >= l.repeatEvery():
+		l.logf("tick still failing: %d ticks over %s, most recently: %v",
+			l.health.Consecutive, now.Sub(l.health.Since).Round(time.Second), err)
+	default:
+		return
+	}
+	l.lastLoggedAt = now
+}
+
+// noteTickSuccess ends a run, and says what it cost. A log that records only
+// failures cannot answer "when did it come back", which is the question asked
+// of it after every incident.
+func (l *Loop) noteTickSuccess(now time.Time) {
+	if l.health.Consecutive > 0 {
+		l.logf("tick recovered after %d failed ticks over %s",
+			l.health.Consecutive, now.Sub(l.health.Since).Round(time.Second))
+	}
+	l.health = TickHealth{EverPassed: true}
+	l.lastLoggedAt = time.Time{}
+}
 
 func (l *Loop) interval() time.Duration {
 	if l.Interval > 0 {
@@ -159,9 +294,19 @@ func (l *Loop) Run(ctx context.Context) error {
 			}
 		case err != nil:
 			consecutivePanics = 0
-			l.logf("tick failed: %v", err)
+			now := l.now()
+			l.noteTickFailure(now, err)
+			// The budget is checked BEFORE the window, not after, so a loop
+			// that may not give up never even measures one -- it has nothing
+			// to do with the answer, and a wedge it cannot act on is not an
+			// event.
+			if l.RecoveryBudget > 0 && now.Sub(l.health.Since) >= l.wedgedAfter() {
+				return fmt.Errorf("%w for %s (%d ticks), most recently: %w",
+					ErrWedged, now.Sub(l.health.Since).Round(time.Second), l.health.Consecutive, err)
+			}
 		default:
 			consecutivePanics = 0
+			l.noteTickSuccess(l.now())
 		}
 
 		// Recomputed from the clock just read, never advanced by one period at a

@@ -95,7 +95,15 @@ const (
 // than in the parent. That same inheritance is why auto-start must be
 // suppressed under `go test`: an unsuppressed spawn detaches a daemon pinned to
 // a t.TempDir() that is about to be deleted underneath it.
-func SpawnFrom(exe string) error {
+func SpawnFrom(exe string) error { return spawnWithEnv(exe, nil) }
+
+// spawnWithEnv is SpawnFrom with one hook, for the one caller that needs to say
+// something to the child that ChildEnv does not: a daemon replacing itself has
+// to hand the successor the recovery count, and that count is not derivable
+// from the environment the parent was started with.
+//
+// A nil mutate is SpawnFrom exactly, so the ordinary path carries no branch.
+func spawnWithEnv(exe string, mutate func([]string) []string) error {
 	if exe == "" {
 		var err error
 		if exe, err = os.Executable(); err != nil {
@@ -105,6 +113,9 @@ func SpawnFrom(exe string) error {
 	env, err := ChildEnv()
 	if err != nil {
 		return err
+	}
+	if mutate != nil {
+		env = mutate(env)
 	}
 	devnull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
 	if err != nil {
