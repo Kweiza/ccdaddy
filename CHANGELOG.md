@@ -16,6 +16,16 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.9.6] — 2026-08-30
+
+The release that finishes the sentence 0.9.5 started.
+
+0.9.5 shipped at 16:22 and the failure it was built for recurred at 16:30,
+printing the exit code the old message had thrown away: 36. That is a name —
+errSecInteractionNotAllowed, the keychain refusing a lookup it cannot ask a
+human about — and ccdad had been carrying the right sentence for it all along
+without a way to reach it. One day's mystery, answered by the first recurrence.
+
 ### Fixed
 
 - **A silent `security` failure is classified by its exit code.** 0.9.5 made the
@@ -2332,7 +2342,8 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.9.5...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.9.6...HEAD
+[0.9.6]: https://github.com/Kweiza/ccdaddy/compare/v0.9.5...v0.9.6
 [0.9.5]: https://github.com/Kweiza/ccdaddy/compare/v0.9.4...v0.9.5
 [0.9.4]: https://github.com/Kweiza/ccdaddy/compare/v0.9.3...v0.9.4
 [0.9.3]: https://github.com/Kweiza/ccdaddy/compare/v0.9.2...v0.9.3
