@@ -16,6 +16,43 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.9.3] — 2026-08-30
+
+The release that makes 0.9.2 actually work on the machine it was written for.
+
+0.9.2 taught ccdad that the macOS Keychain item is the login and had it install
+into that item on every switch. Both halves were wrong in practice, and both
+were found within minutes of shipping — by running it, not by testing it.
+
+### Fixed
+
+- **A switch decided `AlreadyOn` from the credentials file**, which is the store
+  Claude Code consults *second*. `writeMerged`'s base is not merely what gets
+  merged onto; it is the blob every `ActivateWith` caller decides from, and
+  `switcher.Execute` computes `AlreadyOn` out of it. With the item holding one
+  account and the file another — the exact shape 0.9.2 exists to repair —
+  `ccdad switch <the file's account>` answered "Already on" and wrote nothing.
+  Since the keychain install lives on the write path, no write meant no repair:
+  a deadlock rather than a delay, on precisely the machine that needed it. The
+  base is now the store Claude Code reads, with the file half still taken from
+  the directory the locks cover.
+- **The item was written with the credentials file's indented bytes.**
+  `security -w` — the read Claude Code performs, and the one
+  `LoadKeychainCredentials` performs — returns HEX for any value containing a
+  newline, and both readers parse the output as JSON. So the item ccdad wrote
+  came back as hex, failed to parse, and the combinator fell through to the file
+  as though no item existed; the reader's own catch swallows the error. The file
+  stays indented, matching what Claude Code writes there, and the item is now
+  compact, matching what Claude Code writes *there*.
+
+### Changed
+
+- Machine-scoped keys (`mcpOAuth`, the device key) are now carried forward from
+  the keychain item rather than the file when an item exists. Claude Code writes
+  the primary and skips the fallback on success, so on such a machine the file
+  stops being updated and merging onto it would put back keys the item had
+  already moved past.
+
 ## [0.9.2] — 2026-08-30
 
 The release that found out a switch was never reaching Claude Code on macOS.
@@ -2177,7 +2214,8 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.9.2...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.9.3...HEAD
+[0.9.3]: https://github.com/Kweiza/ccdaddy/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/Kweiza/ccdaddy/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/Kweiza/ccdaddy/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/Kweiza/ccdaddy/compare/v0.8.0...v0.9.0
