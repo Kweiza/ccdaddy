@@ -16,6 +16,8 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.9.2] — 2026-08-30
+
 The release that found out a switch was never reaching Claude Code on macOS.
 
 ccdad wrote `.credentials.json` and stopped. On macOS that is the store Claude
@@ -2175,7 +2177,8 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.9.2...HEAD
+[0.9.2]: https://github.com/Kweiza/ccdaddy/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/Kweiza/ccdaddy/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/Kweiza/ccdaddy/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/Kweiza/ccdaddy/compare/v0.7.0...v0.8.0
