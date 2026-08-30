@@ -16,6 +16,17 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.9.5] — 2026-08-30
+
+The release that lets a broken daemon say so, and then fix itself.
+
+A daemon spent three hours and twenty minutes failing every tick — 11,300 in a
+row, each one a switch that did not happen — while `ccdad doctor` printed ok on
+every row it had, and its own log said the same eleven-thousand-line sentence
+about a `security` spawn that had named neither its exit code nor its subject.
+Nothing here is a fix for that spawn, whose cause is still unidentified. All
+three are fixes for not being able to tell.
+
 ### Added
 
 - **The daemon replaces itself when its tick loop wedges.** An unbroken run of
@@ -2297,7 +2308,8 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.9.4...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.9.5...HEAD
+[0.9.5]: https://github.com/Kweiza/ccdaddy/compare/v0.9.4...v0.9.5
 [0.9.4]: https://github.com/Kweiza/ccdaddy/compare/v0.9.3...v0.9.4
 [0.9.3]: https://github.com/Kweiza/ccdaddy/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/Kweiza/ccdaddy/compare/v0.9.1...v0.9.2
