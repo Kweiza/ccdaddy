@@ -656,3 +656,50 @@ func TestActivateDoesNotCreateAKeychainItemThatWasNotThere(t *testing.T) {
 		}
 	}
 }
+
+// Load answers "what is Claude Code authenticating as", and on macOS that is
+// the keychain item whenever there is one: its combinator reads the item first
+// and only falls back to the file. Reading the file past an item that exists
+// reports a login nothing authenticates with -- which is what `ccdad which`
+// did while an hour of work went to the account the item named.
+func TestLoadPrefersTheKeychainItemOverTheFile(t *testing.T) {
+	withClaudeHome(t)
+	writeCreds(t, `{"claudeAiOauth":{"accessToken":"from-the-file"}}`)
+	fakeSecurity{stdout: `{"claudeAiOauth":{"accessToken":"from-the-keychain"}}` + "\n"}.install(t)
+
+	live, err := Load()
+	if err != nil {
+		t.Fatalf("Load() = %v, want nil", err)
+	}
+	var acct struct {
+		AccessToken string `json:"accessToken"`
+	}
+	if err := json.Unmarshal(live["claudeAiOauth"], &acct); err != nil {
+		t.Fatal(err)
+	}
+	if acct.AccessToken != "from-the-keychain" {
+		t.Fatalf("accessToken = %q, want the keychain's -- Load read past the store Claude Code reads first", acct.AccessToken)
+	}
+}
+
+// With no item the fallback is what Claude Code reads, so the file is the
+// login and Load says so.
+func TestLoadFallsBackToTheFileWhenNoItemIsThere(t *testing.T) {
+	withClaudeHome(t)
+	writeCreds(t, `{"claudeAiOauth":{"accessToken":"from-the-file"}}`)
+	fakeSecurity{exit: securityNotFoundCode}.install(t)
+
+	live, err := Load()
+	if err != nil {
+		t.Fatalf("Load() = %v, want nil", err)
+	}
+	var acct struct {
+		AccessToken string `json:"accessToken"`
+	}
+	if err := json.Unmarshal(live["claudeAiOauth"], &acct); err != nil {
+		t.Fatal(err)
+	}
+	if acct.AccessToken != "from-the-file" {
+		t.Fatalf("accessToken = %q, want the file's", acct.AccessToken)
+	}
+}
