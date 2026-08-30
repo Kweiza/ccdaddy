@@ -2218,3 +2218,76 @@ func TestDoctorOAuthSourceNamesTheFileWhenTheFileAnswered(t *testing.T) {
 		t.Errorf("oauth-source does not name the credentials file:\n%s", detail)
 	}
 }
+
+// The row that was missing, and the incident that asked for it: a daemon whose
+// every tick failed for three hours and twenty minutes while doctor reported
+// EVERY row ok -- including `locks`, which said "a daemon holds the singleton"
+// and was telling the truth. Liveness is not health, and until this row there
+// was nothing between them.
+func TestTickHealthFailsWhileTheTickLoopIsFailing(t *testing.T) {
+	pinReaderZone(t, time.FixedZone("KST", 9*60*60))
+	since := mustTime("2026-08-30T03:04:12Z")
+	report := daemon.Report{
+		State:     daemon.DaemonRunning,
+		HasStatus: true,
+		Status: daemon.Status{
+			SchemaVersion:      daemon.StatusSchemaVersion,
+			GeneratedAt:        since.Add(3*time.Hour + 20*time.Minute),
+			TickFailures:       11300,
+			TickFailingSince:   since,
+			LastTickError:      "security find-generic-password: said-nothing (exit 60)",
+			TickHealthReported: true,
+		},
+	}
+
+	got := checkTickHealth(report)
+	if got.Level != levelFail {
+		t.Fatalf("level = %q for a daemon that has switched nothing in three hours, want fail", got.Level)
+	}
+	for _, want := range []string{"11300", "exit 60"} {
+		if !strings.Contains(got.Detail, want) {
+			t.Errorf("detail = %q, want %q in it", got.Detail, want)
+		}
+	}
+	// The age of the run is the fact that separates "a tick just failed" from
+	// "nothing has worked since lunch", and it is printed in the READER's zone
+	// for the reason checkStatusFile gives.
+	if stamps := rfc3339Pattern.FindAllString(got.Detail, -1); len(stamps) == 0 {
+		t.Errorf("detail = %q, printed no absolute moment, so the row cannot say how old the run is", got.Detail)
+	} else {
+		for _, stamp := range stamps {
+			if !strings.HasSuffix(stamp, "+09:00") {
+				t.Errorf("detail printed %s, which is the document's zone and not the reader's", stamp)
+			}
+		}
+	}
+}
+
+// A healthy daemon, a stopped one, and a daemon too old to publish the fields
+// all read the same on the wire -- absent -- so none of them may read as a
+// failure. Saying "ok" about a daemon that never told you is the mistake
+// `pidfile` names in its own comment, so this row says what it actually knows.
+func TestTickHealthDoesNotInventAVerdict(t *testing.T) {
+	if got := checkTickHealth(daemon.Report{State: daemon.DaemonRunning, HasStatus: true,
+		Status: daemon.Status{SchemaVersion: daemon.StatusSchemaVersion, TickHealthReported: true}}); got.Level != levelOK {
+		t.Errorf("a running daemon with no failures = %q, want ok: %s", got.Level, got.Detail)
+	}
+	// The upgrade-day case, and it is the one this row would otherwise get
+	// exactly backwards. A daemon from before these fields existed publishes
+	// them absent, which is byte-for-byte what a healthy daemon publishes -- so
+	// reading absence as health would print `ok tick-health` about the very
+	// daemon that could be wedged and could not say so. status.go's additive
+	// contract makes an old daemon publishing into a new CLI the NORMAL state
+	// on the day of an upgrade, not an edge case: the old one keeps running
+	// until something stops it.
+	if got := checkTickHealth(daemon.Report{State: daemon.DaemonRunning, HasStatus: true,
+		Status: daemon.Status{SchemaVersion: daemon.StatusSchemaVersion, TickFailures: 0}}); got.Level != levelSkipped {
+		t.Errorf("a daemon that does not report tick health = %q, want skipped: %s", got.Level, got.Detail)
+	}
+	if got := checkTickHealth(daemon.Report{State: daemon.DaemonStopped}); got.Level != levelSkipped {
+		t.Errorf("no daemon = %q, want skipped: %s", got.Level, got.Detail)
+	}
+	if got := checkTickHealth(daemon.Report{State: daemon.DaemonRunning}); got.Level != levelSkipped {
+		t.Errorf("a daemon that has published nothing = %q, want skipped: %s", got.Level, got.Detail)
+	}
+}

@@ -93,6 +93,11 @@ const (
 	roleHolder   = "singleton-holder"
 	roleHoldPipe = "spawner-writes-nothing"
 	roleDaemon   = "daemon"
+	// roleSuccessor is a daemon replacing itself. It is a role of its own
+	// rather than a flag on roleSpawner because the thing under test is the
+	// ONE difference between them: SpawnSuccessor says something to the child
+	// that ChildEnv does not.
+	roleSuccessor = "successor-spawner"
 
 	// stderrMarker is written to the daemon's own descriptor 2, to prove it
 	// lands in daemon.log rather than in the null device Spawn hands the child.
@@ -117,6 +122,12 @@ func TestMain(m *testing.M) {
 		}
 	}
 	switch os.Getenv(roleEnv) {
+	case roleSuccessor:
+		if err := SpawnSuccessor(2); err != nil {
+			fmt.Fprintln(os.Stderr, "successor-spawner:", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
 	case roleSpawner, roleHoldPipe:
 		if err := Spawn(); err != nil {
 			fmt.Fprintln(os.Stderr, "spawner:", err)
@@ -181,6 +192,7 @@ func runAsSpawnedDaemon() int {
 		"cwd=" + cwd,
 		"store=" + os.Getenv("CCDAD_HOME"),
 		"child=" + os.Getenv(ChildEnvVar),
+		"recovery=" + os.Getenv(RecoveryEnvVar),
 		// Always false off Windows, where a console is not a thing. On Windows
 		// it is the one field that reports what DETACHED_PROCESS actually did,
 		// rather than what it was spelled as.

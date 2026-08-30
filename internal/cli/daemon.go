@@ -56,6 +56,10 @@ var (
 	// runDaemon is the loop itself, behind a seam so a test can drive the hidden
 	// entrypoint without turning the test binary into a daemon.
 	runDaemon = daemon.Run
+	// spawnSuccessor replaces a daemon that gave up on its own tick loop. It is
+	// separate from spawnDaemon because the two are started for opposite
+	// reasons and only this one carries a recovery count.
+	spawnSuccessor = daemon.SpawnSuccessor
 )
 
 var (
@@ -130,6 +134,24 @@ func newDaemonRunCmd() *cobra.Command {
 			err := runDaemon(cmd.Context(), daemon.EngineOptions())
 			if errors.Is(err, daemon.ErrSingletonHeld) {
 				return WithCode(err, ExitNothingToDo)
+			}
+			// The wedge hand-off, and it happens HERE for one reason: the
+			// successor's first act is to take the singleton, and Run gives it
+			// back in a defer -- so this is the earliest place the lock is
+			// free. Doing it inside Run would have the replacement race the
+			// process it is replacing and lose.
+			var wedged *daemon.WedgedError
+			if errors.As(err, &wedged) {
+				fmt.Fprintf(cmd.ErrOrStderr(), "%v; starting a replacement\n", wedged)
+				if serr := spawnSuccessor(wedged.NextRecovery); serr != nil {
+					// Both facts, in that order. The wedge is why there is no
+					// daemon; the spawn failure is why there will not be one.
+					return errors.Join(err, fmt.Errorf("starting the replacement: %w", serr))
+				}
+				// The daemon did its job by standing down for a successor that
+				// started. Reporting that as a failure would have every
+				// supervisor treat a working recovery as an incident.
+				return nil
 			}
 			return err
 		},

@@ -32,6 +32,10 @@ type Options struct {
 	Snapshot func() Status
 	// Interval is the tick cadence. Zero means the tick loop's one second.
 	Interval time.Duration
+	// WedgedAfter is how long an unbroken run of failing ticks may last before
+	// Run gives up and asks to be replaced. Zero means the tick loop's five
+	// minutes; it is settable so a test does not have to spend them.
+	WedgedAfter time.Duration
 	// Now is the clock. Zero means time.Now.
 	Now func() time.Time
 	// Attach is handed the daemon's log once it is open, before the first tick.
@@ -224,12 +228,23 @@ func Run(ctx context.Context, o Options) (err error) {
 	// "this daemon did not say" rather than as ~/.claude.
 	credentialHome, _ := credhome.Home()
 	writer := NewStatusWriter()
+	// Declared before publish and assigned after it, because the two point at
+	// each other: the loop's body publishes, and what it publishes includes the
+	// loop's own health. The nil check is not defensive -- the FIRST publish
+	// below happens before the loop exists, and a daemon that has not ticked
+	// yet has no health to report.
+	var loop *Loop
 	publish := func(stopped bool) error {
 		s := o.snapshot()
 		s.PID = os.Getpid()
 		s.CredentialHome = credentialHome
 		s.StartedAt = startedAt
 		s.Stopped = stopped
+		if loop != nil {
+			h := loop.Health()
+			s.TickFailures, s.TickFailingSince, s.LastTickError = h.Consecutive, h.Since, h.LastError
+			s.TickHealthReported = true
+		}
 		_, werr := writer.Write(s, o.now())
 		return werr
 	}
@@ -247,7 +262,7 @@ func Run(ctx context.Context, o Options) (err error) {
 	// function is organised around.
 	watchShutdownRequest(runCtx, stop, log)
 
-	loop := &Loop{
+	loop = &Loop{
 		Tick: func(c context.Context) error {
 			// Publishing rides on the tick rather than on a clock of its own, so
 			// what is on disk is always the state after a completed iteration
@@ -257,8 +272,19 @@ func Run(ctx context.Context, o Options) (err error) {
 		Log:      log,
 		Interval: o.Interval,
 		Now:      o.Now,
+		// Read from the environment HERE rather than inside the loop, so the
+		// one process-scoped fact the loop acts on is visible in the process
+		// that owns it.
+		WedgedAfter:    o.WedgedAfter,
+		RecoveryBudget: recoveryBudget(),
 	}
 	loopErr := loop.Run(runCtx)
+	if errors.Is(loopErr, ErrWedged) {
+		// EverPassed is read before the shutdown below, because it is the fact
+		// that decides whether the successor inherits this chain's spent budget
+		// or starts a fresh one -- and it is gone once this process is.
+		loopErr = &WedgedError{Err: loopErr, NextRecovery: NextRecoveryCount(recoveriesSoFar(), loop.Health().EverPassed)}
+	}
 
 	log.Printf("ccdad daemon stopping")
 	// Before the final document, never after: it is the one that says the

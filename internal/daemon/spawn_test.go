@@ -450,3 +450,23 @@ func TestProbeAvailableSaysWhatIsMissing(t *testing.T) {
 		t.Errorf("ProbeAvailable = %v on a machine that has claude", err)
 	}
 }
+
+// The recovery count has to survive the fork, or the cap is a comment: a
+// successor that arrives with an empty CCDAD_DAEMON_RECOVERY believes no
+// replacement has ever happened, and a machine a fresh process cannot fix
+// spawns one every five minutes forever.
+//
+// It is asserted through a REAL detached child rather than by inspecting the
+// slice SpawnSuccessor builds, for the reason the rest of this file gives: a
+// struct literal is not evidence about the operating system.
+func TestSpawnSuccessorHandsTheChildItsRecoveryCount(t *testing.T) {
+	report, _ := spawnViaAChildThatExits(t, roleEnv+"="+roleSuccessor)
+	if got := report["recovery"]; got != "2" {
+		t.Errorf("the successor sees %s=%q, want \"2\" — the cap cannot count what does not arrive",
+			RecoveryEnvVar, got)
+	}
+	// And it is still a daemon child in every other respect.
+	if got := report["child"]; got == "" {
+		t.Errorf("the successor does not carry %s", ChildEnvVar)
+	}
+}

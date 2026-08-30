@@ -179,6 +179,45 @@ type Status struct {
 	// config.toml, and `ccdad doctor` reads it directly.
 	UpdateLatest     string `json:"updateLatest,omitempty"`
 	UpdateCheckError string `json:"updateCheckError,omitempty"`
+	// The tick loop's own health, in three fields, and they exist because none
+	// of it was anywhere on disk when it was needed. A daemon whose every tick
+	// failed for three hours published this document 11,300 times without one
+	// of those documents saying so, and `ccdad doctor` read them all and
+	// reported every row ok -- because what it asked was whether a daemon holds
+	// the singleton, which is liveness and not health.
+	//
+	// They pass this file's authority rule: the tick loop is in the daemon
+	// process and nothing else on the machine can observe it. daemon.log
+	// carries the same failure in prose, but prose is not a thing a check can
+	// ask a question of.
+	//
+	// All three are ABSENT on a healthy daemon rather than zero-valued, so a
+	// reader can tell "this daemon is fine" from "this daemon is too old to
+	// say" without knowing the vintage of what wrote it.
+	//
+	// TickFailures is the length of the current unbroken run, and it is
+	// published ONE TICK BEHIND: the publish happens inside the tick body, so
+	// the document written this tick carries the streak as of the previous one.
+	// Loop.Health says the same thing from the other side.
+	TickFailures     int       `json:"tickFailures,omitempty"`
+	TickFailingSince time.Time `json:"tickFailingSince,omitzero"`
+	LastTickError    string    `json:"lastTickError,omitempty"`
+	// TickHealthReported is what makes the three fields above readable, and
+	// without it they are worse than absent.
+	//
+	// A healthy daemon publishes no failures, and a daemon too old to have
+	// heard of these fields publishes no failures either -- the same bytes, for
+	// opposite reasons. A reader that could not tell them apart would print
+	// "ok, the tick loop is fine" about the one daemon most likely to be
+	// wedged, which is precisely the confident wrong answer this row was added
+	// to stop. And the ambiguity is not a corner: the additive contract at the
+	// top of this file means an old daemon publishing into a new CLI is the
+	// NORMAL state on the day of an upgrade, because the old one keeps running
+	// until something stops it.
+	//
+	// It is written by every daemon that has run a tick and can report on it,
+	// so the reader's question is "did the writer say", not "is the value zero".
+	TickHealthReported bool `json:"tickHealthReported,omitempty"`
 }
 
 // StatusWriter publishes Status documents and skips the ones that would change

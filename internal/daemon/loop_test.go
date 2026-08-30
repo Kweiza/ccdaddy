@@ -481,3 +481,162 @@ func TestLoopWithARealTickerStopsPromptly(t *testing.T) {
 		t.Fatal("Run did not return promptly on cancellation")
 	}
 }
+
+// A tick that fails the same way every second must not write a line every
+// second. The daemon that made this rule logged 11,300 identical copies of
+// `tick failed: security find-generic-password: empty` over three hours and
+// 900 KB, and the repetition carried no information the first line did not:
+// nobody reads the 400th, and rotation throws away the context around it.
+func TestARunOfIdenticalTickFailuresIsLoggedOnce(t *testing.T) {
+	boom := errors.New("security find-generic-password: said-nothing (exit 60)")
+	h := newHarness(t, func(context.Context, int) error { return boom })
+	h.loop.RepeatEvery = 5 * time.Minute
+
+	for i := 0; i < 300; i++ {
+		h.tick(t)
+	}
+
+	body := readFile(t, mustPath(LogPath()))
+	if got := strings.Count(body, "tick failed"); got != 1 {
+		t.Fatalf("logged %d \"tick failed\" lines for one unbroken run, want 1", got)
+	}
+}
+
+// Once, though, is not enough either: a failure that is still going an hour
+// later has to say so, or the log's silence reads as recovery.
+func TestAStillFailingTickIsLoggedAgainOnItsOwnCadence(t *testing.T) {
+	h := newHarness(t, func(context.Context, int) error { return errors.New("boom") })
+	h.loop.RepeatEvery = 5 * time.Minute
+
+	h.tick(t)
+	h.clock.advance(5 * time.Minute)
+	h.tick(t)
+
+	body := readFile(t, mustPath(LogPath()))
+	if !strings.Contains(body, "still failing") {
+		t.Fatalf("log = %q, want a line saying the run is still going", body)
+	}
+	if !strings.Contains(body, "2 ticks") {
+		t.Fatalf("log = %q, want the repeat line to count the ticks", body)
+	}
+}
+
+// A DIFFERENT error is not a repeat. Folding it into the run would hide the
+// one event most worth seeing: the failure changing shape.
+func TestAChangedTickErrorIsLoggedStraightAway(t *testing.T) {
+	var which error = errors.New("first")
+	h := newHarness(t, func(context.Context, int) error { return which })
+
+	h.tick(t)
+	which = errors.New("second")
+	h.tick(t)
+
+	body := readFile(t, mustPath(LogPath()))
+	if !strings.Contains(body, "first") || !strings.Contains(body, "second") {
+		t.Fatalf("log = %q, want both errors named", body)
+	}
+}
+
+// Recovery is an EVENT and it gets a line. A log that only ever records
+// failures cannot answer "when did it come back", which is the question asked
+// of it after every incident.
+func TestRecoveryIsLoggedWithWhatItCost(t *testing.T) {
+	fail := true
+	h := newHarness(t, func(context.Context, int) error {
+		if fail {
+			return errors.New("boom")
+		}
+		return nil
+	})
+
+	h.tick(t)
+	h.tick(t)
+	fail = false
+	h.tick(t)
+
+	body := readFile(t, mustPath(LogPath()))
+	if !strings.Contains(body, "recovered after 2 failed ticks") {
+		t.Fatalf("log = %q, want the recovery line naming what it cost", body)
+	}
+	if h.loop.Health().Consecutive != 0 {
+		t.Fatalf("Consecutive = %d after a passing tick, want 0", h.loop.Health().Consecutive)
+	}
+}
+
+// The wedge rule, and the reason the whole mechanism exists: retrying IN
+// PROCESS recovered nothing across 11,300 attempts, and a fresh process was
+// healthy on its first tick. So a run of failures long enough to be structural
+// ends the loop, and the caller replaces the process.
+//
+// It is a DURATION and not a count, for the reason rotateCheckInterval is:
+// time.Ticker drops ticks rather than queueing them, so a laptop that slept
+// through the window would otherwise need 300 wakeful seconds to notice.
+func TestAnUnbrokenRunOfFailuresWedgesTheLoop(t *testing.T) {
+	h := newHarness(t, func(context.Context, int) error { return errors.New("boom") })
+	h.loop.WedgedAfter = 5 * time.Minute
+	h.loop.RecoveryBudget = 1
+
+	h.tick(t)
+	h.clock.advance(5 * time.Minute)
+	h.tick(t)
+
+	err := h.stop(t)
+	if !errors.Is(err, ErrWedged) {
+		t.Fatalf("Run = %v, want ErrWedged", err)
+	}
+	if !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("Run = %v, want the last error named in it", err)
+	}
+}
+
+// A budget of zero is a daemon that has already replaced itself as often as it
+// is allowed to. It must NOT keep exiting: a machine whose keychain is broken
+// for good would spawn a successor every five minutes forever, and the state
+// that leaves — no daemon at all, or a replacement storm — is worse than a
+// daemon that keeps trying and says so. doctor is what shouts.
+func TestAWedgedLoopWithNoBudgetKeepsTicking(t *testing.T) {
+	h := newHarness(t, func(context.Context, int) error { return errors.New("boom") })
+	h.loop.WedgedAfter = 5 * time.Minute
+	h.loop.RecoveryBudget = 0
+
+	h.tick(t)
+	h.clock.advance(5 * time.Minute)
+	h.tick(t)
+	h.tick(t)
+
+	if got := h.loop.Health().Consecutive; got != 3 {
+		t.Fatalf("Consecutive = %d, want the loop still ticking after the wedge point", got)
+	}
+	if err := h.stop(t); err != nil {
+		t.Fatalf("Run = %v, want a clean stop when there is no budget to give up on", err)
+	}
+}
+
+// Health is what the status document publishes and doctor reads. The streak,
+// when it started, and the error -- the three facts that were nowhere on disk
+// while the daemon span for three hours with every doctor row reading ok.
+func TestHealthCarriesTheStreakAndItsCause(t *testing.T) {
+	h := newHarness(t, func(context.Context, int) error { return errors.New("boom") })
+
+	if got := h.loop.Health(); got.Consecutive != 0 || got.EverPassed {
+		t.Fatalf("Health before any tick = %+v, want the zero state", got)
+	}
+	started := h.clock.now()
+	h.tick(t)
+	h.clock.advance(time.Minute)
+	h.tick(t)
+
+	got := h.loop.Health()
+	if got.Consecutive != 2 {
+		t.Fatalf("Consecutive = %d, want 2", got.Consecutive)
+	}
+	if !got.Since.Equal(started) {
+		t.Fatalf("Since = %v, want the FIRST failure's time %v", got.Since, started)
+	}
+	if got.LastError != "boom" {
+		t.Fatalf("LastError = %q, want the tick's error", got.LastError)
+	}
+	if got.EverPassed {
+		t.Fatal("EverPassed = true, but no tick has ever passed")
+	}
+}

@@ -16,8 +16,39 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+### Added
+
+- **The daemon replaces itself when its tick loop wedges.** An unbroken run of
+  failing ticks lasting five minutes ends the loop, and the entrypoint starts a
+  successor — after `Run` has given the singleton back, which is why the
+  hand-off is there and not inside it. The evidence is what picked replacement
+  over retry: a wedged daemon failed 11,300 consecutive ticks over three hours
+  and twenty minutes without recovering, and a fresh process was healthy on its
+  first tick, spawning the same `security` with the same argv. Bounded at three
+  replacements, carried in the child's environment as `CCDAD_DAEMON_RECOVERY`,
+  because an earlier replacement of that same daemon came up and wedged again —
+  so a machine can be in a state a new process does not fix, and the rule has to
+  end somewhere that still has a daemon running. A process that ever completed a
+  tick starts the successor's count over, so a daemon that wedges after a week
+  still gets its replacements.
+- **`doctor` has a `tick-health` row.** It is the difference between a daemon
+  that is running and one that is working. Every existing daemon row asked about
+  liveness, and all of them printed `ok`, truthfully, for the whole three hours
+  and twenty minutes: the singleton was held, the pidfile named the process, and
+  the status document was fresh, because a failing tick still publishes. The row
+  reads the streak, its age and its cause out of three new status fields
+  (`tickFailures`, `tickFailingSince`, `lastTickError`), and reports a daemon
+  that has published nothing as skipped rather than ok.
+
 ### Fixed
 
+- **A failing tick is no longer logged once a second.** The first failure of a
+  run is logged, a failure whose error has CHANGED is logged straight away, and
+  a run still going is logged once per five minutes with its count and age;
+  recovery gets a line of its own naming what it cost. The run that prompted
+  this wrote 11,300 identical lines and 900 KB in three hours, none of which
+  carried anything the first one did not — and rotation threw away the context
+  around it.
 - **A silent `security` failure now names its exit code.** A spawn that exits
   non-zero and prints nothing was reported as `security find-generic-password:
   empty`, which names no code, no store and no remedy — and "empty" reads as a

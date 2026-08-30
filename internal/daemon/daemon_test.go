@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -246,4 +248,126 @@ func TestRunWritesItsOwnLog(t *testing.T) {
 	if body == "" {
 		t.Fatal("the daemon logged nothing at all")
 	}
+}
+
+// A process that WORKED and then wedged is not the same evidence as one that
+// never worked at all, and the recovery budget has to tell them apart. Without
+// this, a daemon that runs healthily for a week and then wedges inherits the
+// spent budget of whatever restarted it a week ago, and gets no replacement at
+// all.
+func TestNextRecoveryCountStartsOverAfterAWorkingRun(t *testing.T) {
+	if got := NextRecoveryCount(2, true); got != 1 {
+		t.Errorf("NextRecoveryCount(2, everPassed) = %d, want a fresh streak of 1", got)
+	}
+	if got := NextRecoveryCount(2, false); got != 3 {
+		t.Errorf("NextRecoveryCount(2, never passed) = %d, want the streak continued", got)
+	}
+	if got := NextRecoveryCount(0, false); got != 1 {
+		t.Errorf("NextRecoveryCount(0, never passed) = %d, want 1", got)
+	}
+}
+
+// The budget is what stops a machine broken for good from spawning a successor
+// every five minutes forever. It is carried in the child's environment, the
+// same way CCDAD_DAEMON_CHILD is, because there is nowhere else a fact about
+// THIS chain of processes can live -- the store is shared with every other
+// daemon that ever ran against it.
+func TestRecoveryBudgetShrinksAsItIsSpent(t *testing.T) {
+	for _, tc := range []struct {
+		env  string
+		want int
+	}{
+		{"", maxRecoveries},
+		{"0", maxRecoveries},
+		{"1", maxRecoveries - 1},
+		{"3", 0},
+		{"9", 0},
+		{"nonsense", maxRecoveries},
+		{"-4", maxRecoveries},
+	} {
+		t.Setenv(RecoveryEnvVar, tc.env)
+		if got := recoveryBudget(); got != tc.want {
+			t.Errorf("recoveryBudget() with %s=%q = %d, want %d", RecoveryEnvVar, tc.env, got, tc.want)
+		}
+	}
+}
+
+// Run hands the wedge back to its caller rather than replacing the process
+// itself, and the ordering is the reason: the successor needs the singleton,
+// and Run releases it in a defer. Only the caller runs after that.
+func TestRunReportsAWedgedLoopAndNamesTheSuccessorsCount(t *testing.T) {
+	isolate(t)
+	t.Setenv(RecoveryEnvVar, "1")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := Run(ctx, Options{
+		Interval:    time.Millisecond,
+		WedgedAfter: 20 * time.Millisecond,
+		Tick:        func(context.Context) error { return errors.New("boom") },
+	})
+
+	var wedged *WedgedError
+	if !errors.As(err, &wedged) {
+		t.Fatalf("Run = %v, want a *WedgedError", err)
+	}
+	if !errors.Is(err, ErrWedged) {
+		t.Fatalf("Run = %v, want it to unwrap to ErrWedged", err)
+	}
+	if wedged.NextRecovery != 2 {
+		t.Fatalf("NextRecovery = %d, want the second of three", wedged.NextRecovery)
+	}
+	// The singleton is what the successor is about to need.
+	held, herr := SingletonHeld()
+	if herr != nil || held {
+		t.Fatalf("SingletonHeld() = (%v, %v) after Run returned; the successor cannot start", held, herr)
+	}
+}
+
+// A spent budget must not end the process. No daemon at all is worse than one
+// that keeps trying, so the loop runs on and the alarm moves to the document.
+func TestRunKeepsRunningWhenTheRecoveryBudgetIsSpent(t *testing.T) {
+	isolate(t)
+	t.Setenv(RecoveryEnvVar, strconv.Itoa(maxRecoveries))
+	stop := runInBackground(t, Options{
+		Interval:    time.Millisecond,
+		WedgedAfter: 20 * time.Millisecond,
+		Tick:        func(context.Context) error { return errors.New("boom") },
+	})
+
+	waitForStatus(t, 10*time.Second, func(s Status) bool { return s.TickFailures > 5 })
+	if err := stop(); err != nil {
+		t.Fatalf("Run = %v, want a clean stop rather than a wedge it cannot act on", err)
+	}
+}
+
+// The three facts that were nowhere on disk while a daemon span for three
+// hours with every doctor row reading ok.
+func TestRunPublishesTickHealth(t *testing.T) {
+	isolate(t)
+	stop := runInBackground(t, Options{
+		Interval: time.Millisecond,
+		Tick: func(context.Context) error {
+			return errors.New("security find-generic-password: said-nothing (exit 60)")
+		},
+	})
+
+	s := waitForStatus(t, 10*time.Second, func(s Status) bool { return s.TickFailures > 0 })
+	if s.TickFailingSince.IsZero() {
+		t.Error("tickFailingSince was never stamped, so nothing can say how old the run is")
+	}
+	if !strings.Contains(s.LastTickError, "exit 60") {
+		t.Errorf("lastTickError = %q, want the tick's error", s.LastTickError)
+	}
+	stop()
+
+	// And a healthy daemon publishes none of it, so a reader can tell the two
+	// apart without knowing which fields a daemon of this vintage writes.
+	isolate(t)
+	stop2 := runInBackground(t, Options{Interval: time.Millisecond})
+	healthy := waitForStatus(t, 10*time.Second, func(s Status) bool { return s.PID != 0 })
+	if healthy.TickFailures != 0 || healthy.LastTickError != "" {
+		t.Errorf("a healthy daemon published %+v, want the fields absent", healthy)
+	}
+	stop2()
 }
