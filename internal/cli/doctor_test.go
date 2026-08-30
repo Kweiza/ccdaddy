@@ -785,65 +785,6 @@ func TestDoctorSkipsTheKeychainWhereThereIsNone(t *testing.T) {
 	}
 }
 
-// A machine that has been switched to the file store and never cleaned up. The
-// assertion is on the REMEDIATION, not on the level: a warning that named the
-// problem without the command to fix it would pass a level check and be useless
-// to the person reading it, and there is nothing else in the tree that can spell
-// this item's name.
-func TestDoctorReportsAStaleKeychainItem(t *testing.T) {
-	isolate(t)
-	seedHealthyMachine(t)
-	stubKeychain(t, true, cclink.KeychainItem{
-		Service: "Claude Code-credentials-aa3d8c96",
-		Account: "tester",
-	}, nil)
-
-	code, report, _ := runDoctor(t)
-	if got := report.level(t, "keychain"); got != "warn" {
-		t.Fatalf("keychain level = %q, want warn", got)
-	}
-	// Still exit 0. A stale item breaks nothing on any Claude Code that can be
-	// installed today; only a downgrade makes it bite, and doctor's exit code is
-	// reserved for what is broken now.
-	if code != ExitOK {
-		t.Fatalf("exit %d, want 0 — a warning is not a failure", code)
-	}
-	detail := report.detail(t, "keychain")
-	for _, want := range []string{
-		"delete-generic-password",
-		"Claude Code-credentials-aa3d8c96",
-		"tester",
-		// The boundary, both sides of it. "An older Claude Code" is not
-		// actionable on its own: a user cannot tell whether the build they have
-		// is one, and the answer is a version number that was measured rather
-		// than guessed.
-		"2.1.112",
-		"2.1.113",
-		// The half that was missing, and the one that matters most. On a
-		// machine still reading the keychain, deleting the item is not a fix at
-		// all: the next credential write puts it back and takes the credentials
-		// file with it, because that era's update() deletes the file whenever
-		// the pre-write keychain read came back empty.
-		"recreates it and deletes the credentials file",
-		"upgrade Claude Code instead",
-	} {
-		if !strings.Contains(detail, want) {
-			t.Errorf("the detail does not mention %q:\n%s", want, detail)
-		}
-	}
-	// The caveat comes BEFORE the command, not after it. Someone who reads far
-	// enough to copy the invocation has necessarily already read the case in
-	// which running it makes things worse — which is the whole difference
-	// between a remedy and a way to lose the login and the file at once.
-	if cost, cmd := strings.Index(detail, "recreates it"), strings.Index(detail, "delete-generic-password"); cost > cmd {
-		t.Errorf("the command is offered before its caveat is named:\n%s", detail)
-	}
-}
-
-// A decomposed CLAUDE_CONFIG_DIR splits the item into two names, and a clean
-// answer has to say it looked for both. Naming one of them would be the same
-// half-answer as the securestorage derivation this check was corrected from:
-// certain, specific, and about a name Claude Code never wrote.
 func TestDoctorNamesEveryKeychainNameItCheckedFor(t *testing.T) {
 	isolate(t)
 	seedHealthyMachine(t)
@@ -908,7 +849,7 @@ func TestDoctorTreatsAnUnreadableKeychainAsUnknown(t *testing.T) {
 		t.Fatalf("keychain level = %q, want warn", got)
 	}
 	detail := report.detail(t, "keychain")
-	if !strings.Contains(detail, "could not check") {
+	if !strings.Contains(detail, "could not read") {
 		t.Errorf("the detail does not say the check failed to run:\n%s", detail)
 	}
 	if !strings.Contains(detail, "locked") {
@@ -916,8 +857,8 @@ func TestDoctorTreatsAnUnreadableKeychainAsUnknown(t *testing.T) {
 	}
 	// The sentence a clean machine gets must not appear here. Both branches are
 	// warnings on a clean-looking report, so the level alone cannot tell them
-	// apart -- what only one of them says is "no legacy item".
-	if strings.Contains(detail, "no legacy") {
+	// apart -- what only one of them says is "no item".
+	if strings.Contains(detail, "no item for") {
 		t.Errorf("an unreadable keychain was reported as an empty one:\n%s", detail)
 	}
 }
@@ -1317,10 +1258,9 @@ func TestDoctorFailsOnAKeychainEraClaudeCode(t *testing.T) {
 	detail := report.detail(t, "claude-version")
 	for _, want := range []string{
 		"2.1.112",
-		// Both defeats, because they bite on different platforms: the keychain
-		// shadow only on macOS, the missing variable everywhere. A message that
-		// named one would read as inapplicable to half the affected machines.
-		"Keychain",
+		// The variable, and ONLY the variable. This row used to name a keychain
+		// shadow as the other defeat of this era; every release has that
+		// shadow, so it was never what put 2.1.112 on the far side of anything.
 		"CLAUDE_SECURESTORAGE_CONFIG_DIR",
 		// What to do, and what still works meanwhile. A failure with no
 		// remedy is the shape this file's keychain row was corrected from.
@@ -1385,53 +1325,21 @@ func TestDoctorWarnsWhenThereIsNoClaudeCode(t *testing.T) {
 	}
 }
 
-// The remedy INVERTS across 2.1.113, and this is the assertion that pins it.
-// Both directions are asserted positively and negatively: the two branches are
-// both `warn` and both name the item and the command, so a test that only
-// checked the level, or only checked that its own sentence was present, would
-// pass against the branches swapped.
-func TestDoctorPicksTheKeychainRemedyForTheEraTheMachineIsOn(t *testing.T) {
-	for _, tc := range []struct {
-		name          string
-		install       ccver.Install
-		want, notWant string
-		// pinsVersion says whether asserting the version string proves the
-		// remedy quotes the install ccdad READ. It is per-row because one
-		// branch's own static prose contains a version number, and there an
-		// assertion on it matches that prose and passes with the install
-		// dropped entirely -- a test that cannot fail.
-		pinsVersion bool
-	}{
-		{
-			name:        "keychain era: the item is the live login and deleting it undoes itself",
-			install:     claudeVersion(2, 1, 112),
-			want:        "Do NOT delete it",
-			notWant:     "nothing is broken right now",
-			pinsVersion: true,
-		},
-		{
-			name:        "a current release: nothing reads it, so removing it is cleanup",
-			install:     claudeVersion(2, 1, 241),
-			want:        "nothing is broken right now",
-			notWant:     "Do NOT delete it",
-			pinsVersion: true,
-		},
-		{
-			// The boundary release itself is on the modern side. The version
-			// is NOT pinned here: this branch says "2.1.113 removed that
-			// backend" in its own words, so the assertion would match static
-			// text. Which branch was chosen is what this row is for.
-			name:        "the boundary release itself is treated as modern",
-			install:     claudeVersion(2, 1, 113),
-			want:        "nothing is broken right now",
-			notWant:     "Do NOT delete it",
-			pinsVersion: false,
-		},
+// The answer does not depend on the release any more, and this is what that
+// costs to assert: three versions spanning the old boundary, one answer. The
+// row used to hand out opposite remedies on either side of 2.1.113 -- "do NOT
+// delete it" below, "removing it is cleanup" above -- and the split rested on a
+// backend removal that never happened.
+func TestDoctorReportsTheSameKeychainAnswerOnEveryRelease(t *testing.T) {
+	for _, v := range []ccver.Install{
+		claudeVersion(2, 1, 112),
+		claudeVersion(2, 1, 113),
+		claudeVersion(2, 1, 251),
 	} {
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(v.Version.String(), func(t *testing.T) {
 			isolate(t)
 			seedHealthyMachine(t)
-			stubClaudeInstall(t, tc.install, nil)
+			stubClaudeInstall(t, v, nil)
 			stubKeychain(t, true, cclink.KeychainItem{
 				Service: "Claude Code-credentials-aa3d8c96",
 				Account: "tester",
@@ -1439,49 +1347,18 @@ func TestDoctorPicksTheKeychainRemedyForTheEraTheMachineIsOn(t *testing.T) {
 
 			_, report, _ := runDoctor(t)
 			detail := report.detail(t, "keychain")
-			if !strings.Contains(detail, tc.want) {
-				t.Errorf("the detail does not carry %q:\n%s", tc.want, detail)
+			if !strings.Contains(detail, "live login") {
+				t.Errorf("the detail does not say the item is the login:\n%s", detail)
 			}
-			if strings.Contains(detail, tc.notWant) {
-				t.Errorf("the detail carries the OTHER era's remedy %q:\n%s", tc.notWant, detail)
-			}
-			// The version is named in the remedy itself. "An older Claude Code"
-			// is not actionable; the number ccdad read is.
-			if tc.pinsVersion && !strings.Contains(detail, tc.install.Version.String()) {
-				t.Errorf("the remedy does not say which Claude Code it applies to:\n%s", detail)
+			for _, gone := range []string{"nothing is broken right now", "Do NOT delete it", "delete-generic-password"} {
+				if strings.Contains(detail, gone) {
+					t.Errorf("the per-era remedy %q survives:\n%s", gone, detail)
+				}
 			}
 		})
 	}
 }
 
-// The keychain-era remedy leads with the cost and does NOT lead with the
-// command, which is the property the row was corrected for once already. On this
-// machine the deletion destroys the live login and reverts within hours, so
-// anyone who reads far enough to copy the invocation has necessarily read that
-// first.
-func TestTheKeychainEraRemedyNamesItsCostBeforeItsCommand(t *testing.T) {
-	isolate(t)
-	seedHealthyMachine(t)
-	stubClaudeInstall(t, claudeVersion(2, 1, 100), nil)
-	stubKeychain(t, true, cclink.KeychainItem{Service: "Claude Code-credentials-aa3d8c96", Account: "tester"}, nil)
-
-	_, report, _ := runDoctor(t)
-	detail := report.detail(t, "keychain")
-	cost, cmd := strings.Index(detail, "Do NOT delete it"), strings.Index(detail, "delete-generic-password")
-	if cost < 0 || cmd < 0 {
-		t.Fatalf("the detail is missing the caveat or the command:\n%s", detail)
-	}
-	if cost > cmd {
-		t.Errorf("the command is offered before its caveat is named:\n%s", detail)
-	}
-}
-
-// A probe that could not LOOK is not a probe that looked and found nothing, and
-// doctor words them differently. The state is reachable rather than defensive:
-// ccpath.StoreHome returns from CCDAD_HOME without ever consulting the home
-// directory, so runChecks gets past its opening guard on a machine that has
-// CCDAD_HOME set and no resolvable HOME — and there ccver cannot even spell the
-// two fallback launcher paths, let alone stat them.
 func TestDoctorSaysWhenItCouldNotLookForAClaudeLauncher(t *testing.T) {
 	isolate(t)
 	seedHealthyMachine(t)
@@ -2269,3 +2146,43 @@ func TestDoctorPrintsAbsoluteStampsInTheReaderZone(t *testing.T) {
 var rfc3339Pattern = regexp.MustCompile(`\d{4}-\d\d-\d\dT[\d:.]+(?:Z|[+-]\d\d:\d\d)`)
 
 func detailOf(_ checkLevel, detail string) string { return detail }
+
+// An item on a CURRENT release is not a leftover. Every build this project has
+// measured -- 2.1.234, 2.1.238, 2.1.251 -- carries a whole keychain backend
+// that spawns `security find-generic-password`, and the combinator still reads
+// it BEFORE .credentials.json. So the item IS the login, on today's Claude Code
+// as much as on 2.1.112, and ccdad installs into it on every switch.
+//
+// The line this replaces said "nothing is broken right now. Removing it is
+// cleanup", which is how a live credential store got read as a leftover while
+// every switch silently did nothing.
+func TestDoctorReportsAKeychainItemAsTheLiveLoginOnACurrentRelease(t *testing.T) {
+	isolate(t)
+	seedHealthyMachine(t)
+	stubClaudeInstall(t, claudeVersion(2, 1, 251), nil)
+	stubKeychain(t, true, cclink.KeychainItem{
+		Service: "Claude Code-credentials-aa3d8c96",
+		Account: "tester",
+	}, nil)
+
+	code, report, _ := runDoctor(t)
+	detail := report.detail(t, "keychain")
+
+	if strings.Contains(detail, "nothing is broken right now") {
+		t.Errorf("doctor still calls the live credential store a leftover:\n%s", detail)
+	}
+	if strings.Contains(detail, "delete-generic-password") {
+		t.Errorf("doctor still offers to delete the live login:\n%s", detail)
+	}
+	for _, want := range []string{
+		"BEFORE",
+		"every switch",
+	} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("the detail does not mention %q:\n%s", want, detail)
+		}
+	}
+	if code != ExitOK {
+		t.Fatalf("exit %d, want 0 -- an item ccdad keeps up to date is not a fault", code)
+	}
+}

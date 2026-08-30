@@ -348,16 +348,13 @@ func ProbeCredentialKeychainItem(ctx context.Context) (KeychainLookup, error) {
 // using on this machine. The second return is false when there is no such item,
 // which is every machine running any Claude Code this project has seen.
 //
-// NOTHING IN ccdad CALLS THIS EITHER, and the routing question the other
-// proposed use raised is answered: Load() must NOT fall back to the Keychain on
-// macOS. Since
+// Load() CALLS THIS FIRST on macOS, which is the reverse of what this header
+// used to rule. It said Load must not consult the keychain, because "since
 // 2.1.113 the installed Claude Code does not read the item, so a ccdad that did
-// would report a login that Claude Code will never use -- a confident wrong
-// answer on the overwhelming majority of machines, reached by changing the read
-// path of every command (switch, which, doctor, add) for a population that
-// shrinks with each release. doctor's two rows already tell the truth together
-// without touching Load(): `claude-code` says there is no login in the file,
-// and `keychain` says the item is there.
+// would report a login that Claude Code will never use". The premise is false --
+// keychain.go's header carries the measurement -- and with it false, the
+// confident wrong answer is the one Load gave by reading the file past an item
+// that exists.
 //
 // A value that is not JSON is an error rather than an empty blob: `security -w`
 // hex-encodes data it cannot print, so unparseable output means the item is not

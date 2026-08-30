@@ -98,17 +98,26 @@ import (
 // reported as Claude Code 0.0.1.
 const PackageName = "@anthropic-ai/claude-code"
 
-// LastKeychainEra is the last Claude Code whose credential store reads the
-// macOS Keychain in preference to .credentials.json, and the last that does not
-// know CLAUDE_SECURESTORAGE_CONFIG_DIR. 2.1.113 removed the keychain backend and
-// introduced the variable.
+// LastKeychainEra is the last Claude Code that does not know
+// CLAUDE_SECURESTORAGE_CONFIG_DIR. 2.1.113 introduced the variable.
 //
-// Bisected twice, independently. internal/cclink/keychain.go found the boundary
-// in the code, by fetching every release from 2.1.112 to 2.1.129 and searching
-// for the backend. The npm registry's own metadata agrees from the outside: the
-// package's bin entry is "cli.js" through 2.1.112 and "bin/claude.exe" from
-// 2.1.113, where the platform binaries become optionalDependencies and the
-// unpacked package drops from ~49 MB to ~132 KB.
+// IT NO LONGER MEANS "the last one that reads the macOS Keychain", and the name
+// is a leftover of when it meant both. The keychain half was measured again and
+// is FALSE: 2.1.234, 2.1.238 and 2.1.251 each carry a whole keychain backend
+// that spawns `security find-generic-password`, and the combinator still reads
+// the item BEFORE .credentials.json. The backend was never removed.
+//
+// The two facts were bisected as one and only one of them held. The npm
+// metadata that "agreed from the outside" -- bin entry "cli.js" through 2.1.112,
+// "bin/claude.exe" from 2.1.113, unpacked size ~49 MB to ~132 KB -- dated the
+// PACKAGING change, which is real and is not evidence about the backend. The
+// code half searched a release for `name:"plaintext"`, found it, and stopped;
+// the combinator is named `keychain-with-plaintext-fallback`, so finding the
+// fallback proves nothing about the primary. See internal/cclink/keychain.go.
+//
+// Renaming it is worth doing and is not done here, because every caller of
+// KeychainEra() reads it for the variable and would have to be re-read one by
+// one to be sure none is still reading it for the keychain.
 var LastKeychainEra = Version{2, 1, 112}
 
 // ErrNoClaudeCode is returned when no launcher could be found at all. It is
@@ -654,8 +663,10 @@ func (in Install) native(target, version string) Install {
 	return in
 }
 
-// KeychainEra reports whether this install is one where the macOS Keychain
-// shadows .credentials.json and CLAUDE_SECURESTORAGE_CONFIG_DIR does nothing.
+// KeychainEra reports whether this install is one where
+// CLAUDE_SECURESTORAGE_CONFIG_DIR does nothing. Despite the name it says
+// NOTHING about the keychain any more -- every release reads that item, so
+// there is no era to be on. LastKeychainEra says why the name survives.
 //
 // An unknown version is NOT the era. Every caller acts on this — doctor rules
 // `fail`, run refuses to start — and "ccdad could not classify this install"

@@ -16,6 +16,54 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+The release that found out a switch was never reaching Claude Code on macOS.
+
+ccdad wrote `.credentials.json` and stopped. On macOS that is the store Claude
+Code consults *second*: its credential store is a `keychain-with-plaintext-fallback`
+combinator whose read returns the keychain item and only falls back to the file
+when there is none. So on any machine with an item, every switch moved the file
+and left the login alone — the file changed, `ccdad which` read it back, the
+daemon logged a switch, and every request went on authenticating as whoever the
+item named.
+
+ccdad believed otherwise because of a measurement recorded in
+`internal/cclink/keychain.go`: that 2.1.113 removed the keychain backend, making
+the item inert on anything installable today. It was measured again against
+2.1.234, 2.1.238 and 2.1.251 — one of them named in the original list — and all
+three carry a whole keychain backend that spawns
+`security find-generic-password`. The original search looked for
+`name:"plaintext"`, found it, and stopped; the combinator is named after *both*
+members, so the fallback's name is present in every build that has a keychain
+primary.
+
+### Fixed
+
+- **A switch now installs into the keychain item**, when one is there, so the
+  swap reaches Claude Code rather than only the file. An absent item is left
+  absent: with no item the file already is the login, and creating one would
+  introduce a second store and make it the one consulted first.
+- **`Load` reads the keychain item first on macOS**, so every command that asks
+  who is live — `which`, `doctor`, attribution, the engine — asks the store
+  Claude Code actually reads. `ccdad which` could previously name one account
+  with no hedge while the work was being metered to another.
+- **`ccdad doctor`'s `keychain` row no longer reports a live credential store as
+  a leftover.** It said "nothing is broken right now. Removing it is cleanup",
+  which is how the item that was shadowing every switch got read as harmless.
+  It now says the item is the login and that ccdad keeps it up to date, on every
+  release rather than per era.
+- **The `claude-version` row drops its keychain half.** It named a keychain
+  shadow as one of two defeats of Claude Code 2.1.112 and earlier; every release
+  has that shadow, so it was never what put that era on the far side of
+  anything. The `CLAUDE_SECURESTORAGE_CONFIG_DIR` half is real and stays.
+
+### Changed
+
+- `ccver.LastKeychainEra` now means only "the last release that does not know
+  `CLAUDE_SECURESTORAGE_CONFIG_DIR`". The two facts were bisected as one and
+  only the variable half held. The name is left alone for now, deliberately:
+  renaming it means re-reading every caller to be sure none is still reading it
+  for the keychain.
+
 ## [0.9.1] — 2026-08-27
 
 The release that stops pretending a wordmark is text.
