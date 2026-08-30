@@ -326,11 +326,17 @@ type runSession struct {
 	// afterwards. A --full-profile profile is not: it is the accumulated state
 	// the mode exists to preserve.
 	ephemeral bool
-	// globalConfig is the Claude Code global config THIS MODE OWNS, or "" when
-	// the mode shares the machine's. Only --full-profile owns one, and owning
-	// it is what makes an API-key account runnable: the key lives in that file
-	// rather than in a credential home, so the default mode — which
-	// deliberately leaves the machine's copy shared — has nowhere to put one.
+	// globalConfig is the Claude Code global config an API key may be written
+	// into, and "" is a refusal rather than a description. Only --full-profile
+	// fills it in: the key lives in that file rather than in a credential home,
+	// so a mode with no config of its own has nowhere to put one and authorise
+	// says so.
+	//
+	// A probe session is the case that separates the two readings. It OWNS a
+	// global config — newProbeSession gives it one, so it cannot write the
+	// machine's — and still leaves this "", because a probe must never install
+	// an API key anywhere. Read it as "may an API key be installed here", not
+	// as "does this mode share the machine's file".
 	globalConfig string
 }
 
@@ -343,6 +349,11 @@ type runSession struct {
 // mcpOAuth lives inside .credentials.json under that root — so setting both
 // would scope mcpOAuth away from the profile and undo the only reason to pay
 // for a profile at all.
+//
+// THAT IS A FACT ABOUT A PROFILE, NOT A RULE AGAINST SETTING BOTH. A profile
+// exists to accumulate mcpOAuth across runs, so splitting the two roots defeats
+// it. newProbeSession sets both on purpose and loses nothing, because a probe
+// accumulates nothing and is deleted when it ends.
 func newProfile(uuid string) (runSession, error) {
 	root, err := ccpath.StoreHome()
 	if err != nil {
@@ -591,6 +602,55 @@ func newSession(uuid string) (runSession, error) {
 		env:       setEnv(childEnv(), "CLAUDE_SECURESTORAGE_CONFIG_DIR", home),
 		ephemeral: true,
 	}, nil
+}
+
+// newProbeSession is newSession plus a global config of the probe's own, and it
+// exists because scoping a probe's CREDENTIALS was never enough to stop it
+// writing the machine's.
+//
+// Claude Code resolves the two out of two INDEPENDENT variables. Measured on
+// 2.1.251: the global config is join(CLAUDE_CONFIG_DIR || homedir(),
+// ".claude.json") (binary offset 154261741), while the credential root is
+// CLAUDE_SECURESTORAGE_CONFIG_DIR ?? (CLAUDE_CONFIG_DIR ?? ~/.claude) (offset
+// 155266015). A probe set only the second, so its `claude -p` turn authenticated
+// as the probed account and then stamped THAT account's oauthAccount into
+// ~/.claude.json -- the file `claude auth status` reads, and through it every
+// status line that asks who is logged in. Observed on a real machine: a probe
+// logged at 16:13:25.184 left .oauthAccount.profileFetchedAt at 16:13:26.307
+// naming the probed account, while the live credential had been a different one
+// since 15:55:56.
+//
+// It does not heal by itself, which is what makes it worth a fix rather than a
+// note. Claude Code re-fetches the profile only when profileFetchedAt is older
+// than 24 h, and that gate never compares accountUuid -- so a fresh WRONG stamp
+// suppresses the correction for a day. And the daemon never probes the live
+// account, so a probe's stamp is always a wrong identity, written unattended.
+//
+// ONE directory for both variables, deliberately. 2.1.251 derives the keychain
+// item's service name from CLAUDE_SECURESTORAGE_CONFIG_DIR first and consults
+// CLAUDE_CONFIG_DIR only when that is undefined (offset 155266150); a probe
+// always defines the first, so pointing both at one directory leaves the item
+// name byte-identical to what probes asked for before this change. Two
+// directories would be equally correct and one more thing to reason about.
+//
+// globalConfig stays "" even though this session now owns one. Nothing in the
+// probe path reads it: authorise is the only reader, probeSkip refuses every
+// token record before probeOne is reached, and probe.go seeds the credential
+// home outright rather than going through authorise. What "" gates there is
+// installing an API key into a session's config -- which a probe must never do
+// at all, so the field's refusal is the answer this path wants.
+//
+// NOT a change to newSession, and that is load-bearing: `ccdad run`'s default
+// mode shares that constructor and leaves the machine's global config shared ON
+// PURPOSE. A user typing `ccdad run <account>` is choosing to work as that
+// account; a daemon errand is not choosing anything.
+func newProbeSession(uuid string) (runSession, error) {
+	s, err := newSession(uuid)
+	if err != nil {
+		return runSession{}, err
+	}
+	s.env = setEnv(s.env, "CLAUDE_CONFIG_DIR", s.home)
+	return s, nil
 }
 
 // seedSession writes the account's stored credentials into the session's

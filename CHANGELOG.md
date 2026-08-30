@@ -16,6 +16,38 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A probe no longer writes the machine's `~/.claude.json`.** Claude Code
+  resolves its global config and its credential root from two INDEPENDENT
+  variables — measured on 2.1.251, the config is
+  `join(CLAUDE_CONFIG_DIR || homedir(), ".claude.json")` and the credential root
+  is `CLAUDE_SECURESTORAGE_CONFIG_DIR ?? (CLAUDE_CONFIG_DIR ?? ~/.claude)` — and
+  a probe scoped only the second. So its `claude -p` turn authenticated as the
+  probed account and then stamped THAT account's `oauthAccount` over the live
+  one. `claude auth status` reads that field, so every status line and every
+  tool that asks who is logged in named the account ccdad had just spent a turn
+  measuring rather than the one it had switched to. Probe sessions now scope
+  both variables to the same ephemeral directory; `ccdad run` is untouched,
+  because a user typing `ccdad run <account>` is choosing to work as that
+  account and a daemon errand is not.
+
+  It did not heal by itself, which is what made it worth fixing rather than
+  noting: Claude Code re-fetches the profile only when `profileFetchedAt` is
+  older than 24 h, and that gate never compares `accountUuid`, so a fresh wrong
+  stamp suppressed the correction for a day. The daemon never probes the live
+  account either, so a probe's stamp was always a wrong identity, written
+  unattended.
+
+  One directory for both variables rather than two, deliberately: 2.1.251
+  derives the Keychain item's service name from `CLAUDE_SECURESTORAGE_CONFIG_DIR`
+  first and consults `CLAUDE_CONFIG_DIR` only when that is undefined, so
+  pointing both at one directory leaves the item name byte-identical to what
+  probes asked for before. Measured end to end on a real machine: the probe
+  finished in 2 s of a 120 s budget, wrote its own `.claude.json` inside the
+  session, and left `~/.claude.json` unchanged byte for byte. A probe's session
+  transcripts stop landing in the user's `~/.claude/projects/` as well.
+
 ## [0.9.6] — 2026-08-30
 
 The release that finishes the sentence 0.9.5 started.
