@@ -242,7 +242,11 @@ func probeQuotaNoticer(w io.Writer) func() {
 // `ccdad doctor`'s sessions check reports, and this command's note says so in
 // the same words `run`'s does.
 func probeOne(cmd *cobra.Command, a store.Account, blob cclink.Blob, o probeOptions) error {
-	session, err := newSession(a.UUID)
+	// newProbeSession, not newSession: a probe scopes its global config as well
+	// as its credentials, or its turn stamps the probed account's identity into
+	// the machine's ~/.claude.json. newProbeSession's header carries the
+	// measurement and the incident.
+	session, err := newProbeSession(a.UUID)
 	if err != nil {
 		return err
 	}

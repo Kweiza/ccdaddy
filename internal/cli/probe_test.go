@@ -575,3 +575,91 @@ func TestRunChildSilencesAChildAndReportsItsOwnDeadline(t *testing.T) {
 		}
 	})
 }
+
+// A probe must not be able to write the machine's ~/.claude.json, and scoping
+// its CREDENTIALS was never enough to stop it.
+//
+// Measured on Claude Code 2.1.251: the global config is
+// join(CLAUDE_CONFIG_DIR || homedir(), ".claude.json") (binary offset
+// 154261741) while the credential root is CLAUDE_SECURESTORAGE_CONFIG_DIR ??
+// (CLAUDE_CONFIG_DIR ?? ~/.claude) (offset 155266015). Two independent
+// variables — so scoping the second, which is all a probe used to do, left the
+// first pointing at the machine's file. A probe's `claude -p` turn then wrote
+// the PROBED account's oauthAccount over the live one, and `claude auth status`
+// reads that field, so the account every status line displayed was the account
+// ccdad had just spent a turn measuring rather than the one it had switched to.
+//
+// Observed: daemon.log 16:13:25.184 logged a probe of 28d77f38; ~/.claude.json
+// .oauthAccount.profileFetchedAt became 16:13:26.307 naming that account, 1.12 s
+// later, while the live credential had been 63a8a4c1 since 15:55:56. It does not
+// self-heal — Claude Code's re-fetch gate is a 24 h check on profileFetchedAt
+// that never compares accountUuid, so a fresh wrong stamp suppresses the
+// correction for a day.
+func TestProbeGivesItsClaudeAGlobalConfigOfItsOwn(t *testing.T) {
+	claude := isolate(t)
+	freezeClock(t, probeNow)
+	seedUnprobed(t, "u-1", "a@example.com")
+
+	stub := stubClaudeDuring(t, ExitOK, nil)
+	if code, _, errOut, top := runRoot(t, "probe", "a@example.com"); code != ExitOK {
+		t.Fatalf("exit = %d (%s / %s), want 0", code, errOut, top)
+	}
+
+	// The assertion is REDIRECTION, not presence. childEnv() inherits whatever
+	// the calling shell had, and isolate() sets CLAUDE_CONFIG_DIR — so a probe
+	// that did nothing would still show the variable, pointing at the machine's
+	// config home. What must be true is that it points at the probe's OWN home.
+	cfg, ok := envOf(stub.spec.Env, "CLAUDE_CONFIG_DIR")
+	if !ok {
+		t.Fatal("the probe's claude was given no CLAUDE_CONFIG_DIR, so it writes the machine's ~/.claude.json")
+	}
+	if cfg == claude {
+		t.Fatalf("CLAUDE_CONFIG_DIR = %q, still the machine's config home — the probe can stamp its oauthAccount", cfg)
+	}
+	sessions := filepath.Join(mustPath(ccpath.StoreHome()), SessionsDirName)
+	if !strings.HasPrefix(cfg, sessions+string(filepath.Separator)) {
+		t.Errorf("CLAUDE_CONFIG_DIR = %q, want the ephemeral session home under %q", cfg, sessions)
+	}
+
+	// The SAME directory as the credential home, and that is load-bearing rather
+	// than tidy. 2.1.251 derives the keychain item's service name from
+	// CLAUDE_SECURESTORAGE_CONFIG_DIR FIRST and only falls back to
+	// CLAUDE_CONFIG_DIR when that is undefined (offset 155266150) — so pointing
+	// both at one directory leaves the item name byte-identical to what probes
+	// asked for before this change. Two directories would still be correct for
+	// the config, and would be a second thing to reason about for no gain.
+	creds, _ := envOf(stub.spec.Env, "CLAUDE_SECURESTORAGE_CONFIG_DIR")
+	if cfg != creds {
+		t.Errorf("CLAUDE_CONFIG_DIR = %q but CLAUDE_SECURESTORAGE_CONFIG_DIR = %q; "+
+			"a probe wants one directory, not two", cfg, creds)
+	}
+}
+
+// The constructor `ccdad run`'s default mode shares must NOT gain the variable.
+// That mode leaves the machine's global config shared ON PURPOSE (run.go's
+// header says so) — a user typing `ccdad run <account>` is choosing to work as
+// that account, which a daemon errand is not. Scoping it here would change what
+// a documented mode does, and `globalConfig == ""` is the load-bearing signal
+// for "this mode shares the machine's" that authorise's API-key refusal reads.
+func TestTheRunSessionConstructorStillSharesTheMachinesGlobalConfig(t *testing.T) {
+	isolate(t)
+
+	s, err := newSession("u-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Again the property is redirection: childEnv() carries the shell's own
+	// CLAUDE_CONFIG_DIR through, and must. What `ccdad run` must never do is
+	// point it at the session home, which is what would scope the global config
+	// away from the machine's.
+	if got, ok := envOf(s.env, "CLAUDE_CONFIG_DIR"); ok && got == s.home {
+		t.Error("newSession redirected CLAUDE_CONFIG_DIR at its own home; " +
+			"`ccdad run` shares the machine's global config by design")
+	}
+	if got, ok := envOf(s.env, "CLAUDE_SECURESTORAGE_CONFIG_DIR"); !ok || got != s.home {
+		t.Errorf("newSession's credential scope = (%q, %v), want its own home %q", got, ok, s.home)
+	}
+	if s.globalConfig != "" {
+		t.Errorf("globalConfig = %q, want \"\" — the signal that this mode owns none", s.globalConfig)
+	}
+}
