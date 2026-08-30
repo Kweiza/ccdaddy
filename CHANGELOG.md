@@ -16,6 +16,17 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.9.7] — 2026-08-30
+
+The release that stops an errand from leaving an identity behind.
+
+0.9.5 and 0.9.6 taught a wedged daemon to say what was wrong with it. This one
+answers a different complaint that looked like the same thing: a status line
+naming one account while the usage beside it belonged to another. Nothing was
+wrong with the switch, and nothing was wrong with the metering — ccdad's own
+probe had been writing the probed account's identity into the file every tool
+reads to answer "who am I logged in as".
+
 ### Fixed
 
 - **A probe no longer writes the machine's `~/.claude.json`.** Claude Code
@@ -2374,7 +2385,8 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.9.6...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.9.7...HEAD
+[0.9.7]: https://github.com/Kweiza/ccdaddy/compare/v0.9.6...v0.9.7
 [0.9.6]: https://github.com/Kweiza/ccdaddy/compare/v0.9.5...v0.9.6
 [0.9.5]: https://github.com/Kweiza/ccdaddy/compare/v0.9.4...v0.9.5
 [0.9.4]: https://github.com/Kweiza/ccdaddy/compare/v0.9.3...v0.9.4
