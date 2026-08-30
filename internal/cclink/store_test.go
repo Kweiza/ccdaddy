@@ -703,3 +703,57 @@ func TestLoadFallsBackToTheFileWhenNoItemIsThere(t *testing.T) {
 		t.Fatalf("accessToken = %q, want the file's", acct.AccessToken)
 	}
 }
+
+// ActivateWith's decision is only sound against the store Claude Code reads,
+// and on macOS that is the keychain item. The blob handed to decide is what
+// switcher.Execute computes AlreadyOn from, so a base taken from the file makes
+// a switch decline on exactly the machine that needs one: file and item naming
+// different accounts is the shape this whole path exists to repair.
+func TestActivateWithDecidesFromTheKeychainWhenAnItemIsThere(t *testing.T) {
+	withClaudeHome(t)
+	writeCreds(t, `{"claudeAiOauth":{"accessToken":"from-the-file"}}`)
+	fakeSecurity{stdout: `{"claudeAiOauth":{"accessToken":"from-the-keychain"}}` + "\n"}.install(t)
+
+	var seen string
+	err := ActivateWith(func(live Blob) (Blob, error) {
+		var acct struct {
+			AccessToken string `json:"accessToken"`
+		}
+		if err := json.Unmarshal(live["claudeAiOauth"], &acct); err != nil {
+			return nil, err
+		}
+		seen = acct.AccessToken
+		return Blob{"claudeAiOauth": json.RawMessage(`{"accessToken":"new"}`)}, nil
+	})
+	if err != nil {
+		t.Fatalf("ActivateWith() = %v, want nil", err)
+	}
+	if seen != "from-the-keychain" {
+		t.Fatalf("decide saw %q, want the keychain's -- AlreadyOn is computed from this blob", seen)
+	}
+}
+
+// The machine-scoped keys come from that same base, so they must come from the
+// item too. Claude Code writes the primary and skips the fallback, which is how
+// the file falls behind; merging onto the stale one would put back an mcpOAuth
+// login the item had already replaced.
+func TestActivateKeepsMachineKeysFromTheKeychainNotTheStaleFile(t *testing.T) {
+	withClaudeHome(t)
+	writeCreds(t, `{"claudeAiOauth":{"accessToken":"old"},"mcpOAuth":{"sentry|1":{"accessToken":"stale"}}}`)
+	fakeSecurity{stdout: `{"claudeAiOauth":{"accessToken":"old"},"mcpOAuth":{"sentry|1":{"accessToken":"current"}}}` + "\n"}.install(t)
+
+	if err := Activate(Blob{"claudeAiOauth": json.RawMessage(`{"accessToken":"new"}`)}); err != nil {
+		t.Fatalf("Activate() = %v, want nil", err)
+	}
+
+	got := readCreds(t)
+	var mcp map[string]struct {
+		AccessToken string `json:"accessToken"`
+	}
+	if err := json.Unmarshal(got["mcpOAuth"], &mcp); err != nil {
+		t.Fatal(err)
+	}
+	if mcp["sentry|1"].AccessToken != "current" {
+		t.Fatalf("mcpOAuth carried the stale file's value %q, want the item's", mcp["sentry|1"].AccessToken)
+	}
+}

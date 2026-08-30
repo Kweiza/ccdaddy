@@ -80,6 +80,34 @@ func Load() (Blob, error) {
 	return loadFrom(path)
 }
 
+// loadLiveUnderLock is the merge base: the store Claude Code reads, with its
+// file half taken from the directory the locks cover.
+//
+// It exists because the base is not only what gets merged onto -- it is the
+// blob every caller of ActivateWith DECIDES from. switcher.Execute computes
+// AlreadyOn out of it, and taking it from the file made a switch decline on the
+// one machine that needed one: file and item naming different accounts is the
+// shape this path exists to repair, and it was the shape that made it refuse.
+//
+// Two reasons point the same way, which is what makes this safe as well as
+// necessary. The item is the LOGIN, so a decision about who is live has to read
+// it. And the item is the FRESHER blob, because Claude Code's combinator writes
+// the primary and skips the fallback on success -- so a machine with an item
+// has a credentials file that stops being updated, and merging onto it would
+// put back machine-scoped keys the item had already moved past.
+//
+// livePath rather than ccpath.CredentialsPath(): loadFrom's own comment says
+// why, and reaching for Load() here would quietly lose that scope on the file
+// half. The keychain half has no such scope to lose -- the item's name comes
+// from CLAUDE_CONFIG_DIR, which is how `ccdad run` gets its own item rather
+// than the machine's.
+func loadLiveUnderLock(livePath string) (Blob, error) {
+	if live, ok, err := loadFromKeychain(); err != nil || ok {
+		return live, err
+	}
+	return loadFrom(livePath)
+}
+
 // loadFromKeychain is Load's first half: the item's login, and whether there
 // was an item at all. Off macOS there is no such store and the answer is
 // always "no item", which is not a failure.
@@ -263,7 +291,7 @@ func writeMerged(decide func(live Blob) (Blob, error)) (err error) {
 
 	livePath := filepath.Join(held.Scope(), ccpath.CredentialsFile)
 
-	live, err := loadFrom(livePath)
+	live, err := loadLiveUnderLock(livePath)
 	if err != nil {
 		return err
 	}
