@@ -251,13 +251,13 @@ func probeOne(cmd *cobra.Command, a store.Account, blob cclink.Blob, o probeOpti
 		return err
 	}
 	defer func() {
-		if aerr := adoptBack(a.UUID, session.home); aerr != nil {
+		if aerr := adoptBack(a.UUID, session); aerr != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(),
 				"note: %s's probe session credentials could not be carried back into the store (%v).\n"+
 					"They are kept at %s; 'ccdad doctor' reports it.\n", a.Label(), aerr, session.home)
 			return
 		}
-		if rerr := removeSession(session.home); rerr != nil {
+		if rerr := removeSession(session); rerr != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "note: could not remove the probe session directory %s (%v); "+
 				"'ccdad doctor' reports it.\n", session.home, rerr)
 		}

@@ -18,6 +18,46 @@ by `uuid` or `alias`.
 
 ### Fixed
 
+- **A `ccdad run` session or a probe no longer throws away the credential its
+  Claude Code rotated, and no longer leaves a live refresh token behind in the
+  login keychain.** Both scope the session by exporting
+  `CLAUDE_SECURESTORAGE_CONFIG_DIR`, which moves the session onto a keychain item
+  of its own. Claude Code 2.1.251's secure storage is a primary-with-fallback
+  combinator — the keychain first, `.credentials.json` second — and its `update()`
+  deletes the fallback whenever the primary write succeeds
+  (`if(i.success){if(s===null)await t.delete(o)}`). So the ordinary shape of a
+  macOS session that DID refresh is an item holding the rotated pair and no file
+  at all. `adoptBack` read only the file, scored that as "never refreshed",
+  returned success, and let `removeSession` delete the directory — discarding the
+  only copy of a grant the server had already rotated to and leaving the account's
+  snapshot holding the superseded one. The next thing to install that snapshot
+  earns `invalid_grant`, which Claude Code reports as an expired refresh token.
+  A read that FAILS is now reported rather than scored as absence, so the session
+  directory is kept and the credential stays recoverable. Pinned by
+  `TestAdoptBackCarriesARotationOutOfTheSessionKeychainItem` and
+  `TestAdoptBackPrefersTheKeychainItemOverTheFile`.
+
+- **Tearing a session down now removes both of its stores.** `removeSession`
+  deleted the directory and the lock beside it and left the scoped keychain item
+  in place forever, under a name derived from a temporary directory that no
+  longer exists — so nothing, `ccdad doctor` included, could ever name it again,
+  and `security dump-keychain` was the only way to find one. Three had
+  accumulated on the machine this was found on, each holding a recoverable
+  refresh token. Pinned by `TestRemoveSessionDeletesTheSessionsKeychainItem`.
+
+- **ccdad can now name the keychain item the INSTALLED Claude Code is using, as
+  well as the one an old build may have left behind.** The existing derivation
+  deliberately ignores `CLAUDE_SECURESTORAGE_CONFIG_DIR`, which is correct for
+  hunting a `<=2.1.112` legacy item — no such build had heard of the variable —
+  and wrong for every question about the item in use right now. `LiveKeychainItem`
+  is the second derivation, measured verbatim from 2.1.251: the credential root
+  outranks `CLAUDE_CONFIG_DIR`, the test on the winner is DEFINEDNESS rather than
+  truthiness, the hashed string is the raw value NFC-normalized, and the account
+  name is validated against `^[a-zA-Z0-9._-]+$` — which the legacy derivation must
+  NOT do, because no build that wrote a legacy item ever did. Pinned by
+  `TestLiveKeychainItemFollowsTheInstalledBuildsRules` and
+  `TestLegacyHuntIgnoresTheCredentialRootAndTheLiveDerivationDoesNot`.
+
 - **A live credential store that cannot be READ no longer makes every account
   look inactive, which was ccdad spending grants other holders were still
   using.** `tokens.Source.AccessToken` discarded `cclink.Load`'s error, so on a

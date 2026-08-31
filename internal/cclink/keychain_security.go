@@ -237,11 +237,17 @@ func (it KeychainItem) Read(ctx context.Context) (string, bool, error) {
 // Delete removes the item. An item that was already absent is success: the
 // caller asked for a state, not for an event.
 //
-// NOTHING IN ccdad CALLS THIS, and that is now a ruling rather than a gap.
-// Deleting the item during a switch was the proposed use. The fact it waited
-// on is settled -- <=2.1.112 reads the keychain and FALLS BACK to the
-// credentials file, so the delete redirects rather than logs out -- and the
-// measurement then supplied three reasons not to ship it anyway:
+// ONE CALLER, AND THE RULING BELOW IS ABOUT A DIFFERENT SUBJECT. removeSession
+// deletes the item a `ccdad run` session or a probe created under its OWN
+// scoped credential root -- an ephemeral store ccdad made, whose directory is
+// being deleted in the same breath, and whose login has just been carried into
+// the account's snapshot. Nothing about that is the machine's login.
+//
+// DELETING THE MACHINE'S OWN ITEM DURING A SWITCH is what the ruling refuses,
+// and it still does. The fact it waited on is settled -- <=2.1.112 reads the
+// keychain and FALLS BACK to the credentials file, so the delete redirects
+// rather than logs out -- and the measurement then supplied three reasons not
+// to ship it anyway:
 //
 //   - 2.1.113 dropped the backend, so on every Claude Code a user can install
 //     today the item is inert. The spawn would buy nothing while sitting inside
