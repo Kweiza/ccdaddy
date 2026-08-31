@@ -164,6 +164,11 @@ type Engine struct {
 	// back.
 	saidUnattributed bool
 
+	// nextResolveAt is the earliest the identity oracle may be asked again. The
+	// stand-down it belongs to is reached at 1 Hz and the ask behind it is a
+	// network call carrying the live login's own bearer; see resolveMinInterval.
+	nextResolveAt time.Time
+
 	// saidUnreadable latches the stand-down on a login STORE that could not be
 	// read at all, which is a different sentence from saidUnattributed's and a
 	// different remedy: that one waits for an identity, this one waits for the

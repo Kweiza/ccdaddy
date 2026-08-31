@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"errors"
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/identity"
@@ -1707,5 +1708,26 @@ func TestApplyProfileLeavesAnOrdinarySubscriptionAlone(t *testing.T) {
 	}
 	if acct.Primary {
 		t.Fatal("Primary = true, want false — the flag bypasses the spend ceiling and this account has quota")
+	}
+}
+
+// The unreadable-store case is the one `ccdad add` used to pass over in
+// silence: cclink.Load answers a nil blob, so carriableKeys is empty and every
+// warning downstream is about keys ccdad can see -- none of which fire.
+func TestAddSaysTheLiveLoginCouldNotBeRead(t *testing.T) {
+	if got := unreadableLiveNote(nil); got != "" {
+		t.Fatalf("a readable store produced a warning: %q", got)
+	}
+	note := unreadableLiveNote(errors.New("security find-generic-password: interaction-not-allowed (exit 36)"))
+	if note == "" {
+		t.Fatal("an unreadable store produced no warning at all, which is the silence this fixes")
+	}
+	for _, want := range []string{"could not be read", "exit 36", "trustedDeviceToken", "carrying nothing"} {
+		if !strings.Contains(note, want) {
+			t.Fatalf("the warning does not carry %q:\n%s", want, note)
+		}
+	}
+	if !strings.HasSuffix(note, "\n") {
+		t.Fatalf("the warning is not newline-terminated, so it runs into the next line: %q", note)
 	}
 }

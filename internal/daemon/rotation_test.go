@@ -15,6 +15,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/usage"
+	"time"
 )
 
 // liveAsRotated writes the credentials file Claude Code leaves behind when it
@@ -249,4 +250,63 @@ func mustStore(t *testing.T) *store.Store {
 		t.Fatal(err)
 	}
 	return s
+}
+
+// THE ORACLE IS A NETWORK CALL ON A 1 Hz PATH. act() reaches resolveLive on
+// every tick that wants to switch while the live login cannot be named, and
+// only the LOG line was latched -- so the request behind it went out once a
+// second, carrying the live login's own bearer, for as long as the state
+// lasted. After a rotation that lasts until a human intervenes.
+func TestTheIdentityOracleIsNotAskedEverySecond(t *testing.T) {
+	isolateEngine(t)
+	seedAccount(t, "u-1", "org-1")
+	seedAccount(t, "u-2", "org-2")
+	liveAsRotated(t, "u-2")
+
+	srv, fetch := usageByToken("u-1")
+	defer srv.Close()
+	asked := 0
+	e := engineFor(t, tokensAreFine, fetch)
+	e.ResolveOwner = func(context.Context, string) (string, error) {
+		asked++
+		return "", errors.New("the profile endpoint is having a bad day")
+	}
+
+	for i := 0; i < 10; i++ {
+		tick(t, e)
+	}
+	if asked > 1 {
+		t.Fatalf("the oracle was asked %d times across ten ticks in the same second, want 1", asked)
+	}
+}
+
+// Bounded is not disabled: once the interval has passed the oracle is asked
+// again, or a rotation ccdad could have adopted stays unadopted forever.
+func TestTheIdentityOracleIsAskedAgainAfterTheInterval(t *testing.T) {
+	isolateEngine(t)
+	seedAccount(t, "u-1", "org-1")
+	seedAccount(t, "u-2", "org-2")
+	liveAsRotated(t, "u-2")
+
+	srv, fetch := usageByToken("u-1")
+	defer srv.Close()
+	asked := 0
+	now := tickEpoch
+	e := engineFor(t, tokensAreFine, fetch)
+	e.Now = func() time.Time { return now }
+	e.ResolveOwner = func(context.Context, string) (string, error) {
+		asked++
+		return "", errors.New("still a bad day")
+	}
+
+	tick(t, e)
+	tick(t, e)
+	if asked != 1 {
+		t.Fatalf("the oracle was asked %d times before the interval, want 1", asked)
+	}
+	now = now.Add(resolveMinInterval + time.Second)
+	tick(t, e)
+	if asked != 2 {
+		t.Fatalf("the oracle was asked %d times after the interval passed, want 2", asked)
+	}
 }

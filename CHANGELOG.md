@@ -18,6 +18,33 @@ by `uuid` or `alias`.
 
 ### Fixed
 
+- **`ccdad auto` no longer reports a deliberate stand-down as a bug in itself.**
+  Its outcome switch carried a comment claiming it had no default, so "an Outcome
+  added later would break the build here". It has one. `switcher.Unattributed`
+  therefore compiled fine and exited 1 at runtime saying the switch "reported an
+  outcome this ccdad does not know" — to cron, the one consumer that cannot see
+  the machine — and the new `Unreadable` outcome would have joined it. Both now
+  have arms that say what happened and what to do, and
+  `TestEverySwitchOutcomeHasAnArmInAuto` is the check the comment believed the
+  compiler was performing.
+
+- **The identity oracle is no longer asked once a second.** `act` reaches
+  `resolveLive` on every tick that wants to switch while the live login cannot be
+  named, and only the LOG line was latched — so the `/api/oauth/profile` request
+  behind it went out at 1 Hz, carrying the live login's own bearer, for as long as
+  the state lasted. After a rotation that lasts until a human intervenes: 3600
+  requests an hour against the identity whose session is running underneath.
+  Bounded to one a minute, armed BEFORE the ask so a refused or hanging call
+  still costs the interval. Pinned by `TestTheIdentityOracleIsNotAskedEverySecond`
+  and `TestTheIdentityOracleIsAskedAgainAfterTheInterval`.
+
+- **`ccdad add` says when it could not read the live login at all.** That case was
+  the one silent one: `cclink.Load` answers a nil blob, so `carriableKeys` is
+  empty, `liveIsThisAccount` is false, and every warning downstream is about keys
+  ccdad can see — none of which fire. The user re-authenticated and was told
+  nothing while `store.Add` replaced the credential file wholesale. Pinned by
+  `TestAddSaysTheLiveLoginCouldNotBeRead`.
+
 - **A daemon no longer spends a replacement on a fault a fresh process would hit
   identically, and a spent replacement budget is no longer permanent.** macOS
   scopes `errSecInteractionNotAllowed` to the AUDIT SESSION, and a child inherits
