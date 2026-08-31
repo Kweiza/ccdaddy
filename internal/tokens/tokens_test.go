@@ -423,3 +423,39 @@ func TestARotationUnderUsIsNotOverwritten(t *testing.T) {
 		t.Fatalf("stored refresh token = %q, want the one the other writer left", rec.RefreshToken)
 	}
 }
+
+// An unreadable live store is not a store with nobody in it. While the keychain
+// answers errSecInteractionNotAllowed, cclink.Load fails, isLiveLogin answers
+// false for EVERY account, and the inactive branch spends a rotating single-use
+// refresh token that somebody else is still holding — Claude Code here, a
+// `ccdad run` session, or another machine. Measured 2026-09-01: eight hours of
+// an unreadable keychain rotated all five accounts' grants with no log line,
+// and Claude Code reported the grant it held as "refresh token expired".
+//
+// The symlink is the portable stand-in for exit 36: openCredentialsFile refuses
+// it, so Load returns an error rather than an empty login, which is the same
+// shape the keychain produces.
+func TestUnreadableLiveStoreSpendsNoRefreshToken(t *testing.T) {
+	isolate(t)
+	// Expired on purpose: an unexpired snapshot is served without a request, so
+	// only an expired one reaches the branch this is about.
+	seed(t, "u-1", oauthRecord("a1", "r1", time.Now().Add(-time.Hour), ""))
+
+	path := filepath.Join(os.Getenv("CLAUDE_CONFIG_DIR"), ".credentials.json")
+	if err := os.Symlink(filepath.Join(t.TempDir(), "elsewhere.json"), path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cclink.Load(); !errors.Is(err, cclink.ErrSymlink) {
+		t.Fatalf("precondition: cclink.Load must fail to read the live store, got %v", err)
+	}
+
+	src := sourceFor(t, refusingEndpoint(t))
+	got, err := src.AccessToken(context.Background(), "u-1")
+	if !errors.Is(err, ErrLivenessUnknown) {
+		t.Fatalf("AccessToken = (%q, %v), want ErrLivenessUnknown and no request spent", got, err)
+	}
+	// The grant must still be the one that was seeded: nothing rotated it.
+	if rec := storedRecord(t, "u-1"); rec.RefreshToken != "r1" {
+		t.Fatalf("the stored refresh token moved to %q; the grant was spent", rec.RefreshToken)
+	}
+}

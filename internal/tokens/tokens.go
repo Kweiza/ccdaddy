@@ -56,6 +56,17 @@ var (
 	// grant behind them.
 	ErrNoOAuthCredential = errors.New("that account has no OAuth login to refresh")
 
+	// ErrLivenessUnknown means the live credential store could not be READ, so
+	// this account cannot be shown to be — or not to be — the login Claude Code
+	// is authenticating with. On macOS a locked login keychain answers
+	// errSecInteractionNotAllowed and cclink.Load reports it rather than
+	// falling back to the file, which is the ordinary way to reach this.
+	//
+	// It says NOTHING about the account, so it must never quarantine one: it is
+	// a fact about this machine's ability to look, not about the grant. See
+	// AccessToken for why the answer is a refusal rather than a refresh.
+	ErrLivenessUnknown = errors.New("the live credential store could not be read, so whether this account is the live login cannot be established")
+
 	// ErrLiveTokenStale means the account is the LIVE Claude Code login and its
 	// token has reached Claude Code's own refresh window. ccdad rotates the
 	// live login only ABOVE that window; inside it the grant is Claude Code's
@@ -140,16 +151,39 @@ func (s *Source) AccessToken(ctx context.Context, uuid string) (string, error) {
 		return "", fmt.Errorf("%w: %q", ErrNoOAuthCredential, uuid)
 	}
 
-	// An unreadable live file is not an error here: it only means this account
-	// cannot be shown to be the live login, and every account is then treated
-	// as inactive — which is the branch that touches nothing in ~/.claude.
-	live, _ := cclink.Load()
+	// An unreadable live store does not make this account INACTIVE. It makes
+	// its liveness UNKNOWN, and those are opposite answers, because the
+	// inactive branch below SPENDS the account's refresh token. The grant is
+	// rotating and single-use, so spending one that somebody else is still
+	// holding — Claude Code here, a `ccdad run` session in its own credential
+	// home, another machine — revokes their copy, and the next thing they do
+	// with it is told the refresh token expired.
+	//
+	// This is rotation-stomp invariant 1, "cannot attribute the live file" is
+	// not "nobody is live". The switcher honours it and this Source did not:
+	// on 2026-09-01 a login keychain that had locked answered
+	// errSecInteractionNotAllowed for eight hours, cclink.Load reported that
+	// rather than falling back to the file, isLiveLogin then answered false for
+	// every account, and every managed account's grant was rotated from here
+	// with no log line and no live-store write.
+	//
+	// Serving a stored token that is still good stays allowed: it spends
+	// nothing and takes no lock. Only the rotation is refused, which is also
+	// what makes refresh's own precondition true rather than merely assumed.
+	//
+	// The live branch needs no guard of its own: a failed Load answers a nil
+	// blob, isLiveLogin refuses that, and liveToken re-reads under the lock and
+	// reports the same failure if it is ever reached another way.
+	live, liveErr := cclink.Load()
 	if isLiveLogin(rec, live) {
 		return s.liveToken(ctx, uuid, rec)
 	}
 
 	if !s.expired(rec) {
 		return rec.AccessToken, nil
+	}
+	if liveErr != nil {
+		return "", fmt.Errorf("%w: %q: %v", ErrLivenessUnknown, uuid, liveErr)
 	}
 	return s.refresh(ctx, uuid, rec)
 }

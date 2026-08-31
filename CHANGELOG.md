@@ -16,6 +16,34 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A live credential store that cannot be READ no longer makes every account
+  look inactive, which was ccdad spending grants other holders were still
+  using.** `tokens.Source.AccessToken` discarded `cclink.Load`'s error, so on a
+  machine whose login keychain had locked — `security find-generic-password`
+  answers `errSecInteractionNotAllowed`, exit 36, and `cclink.Load` reports that
+  rather than falling back to `.credentials.json` — `isLiveLogin` answered false
+  for EVERY account and each one fell into the inactive branch. That branch
+  rotates the account's refresh token and writes the minted pair only into
+  ccdad's own snapshot, on the documented premise that "this account is not the
+  live login". The grant is rotating and single-use, so every such rotation
+  revoked the copy its real holder was carrying: Claude Code on this machine, a
+  `ccdad run` session in its own credential home, or another machine. The holder
+  then got `invalid_grant` on its next refresh, which Claude Code reports as an
+  expired refresh token and which ends as a logged-out session. Measured on
+  2026-09-01: eight hours of an unreadable keychain rotated all five managed
+  accounts' grants, with no log line and no live-store write.
+
+  Liveness that cannot be established is now its own answer, `ErrLivenessUnknown`,
+  and it refuses the rotation instead of assuming the account is idle. This is
+  rotation-stomp invariant 1 — "cannot attribute the live file" is not "nobody is
+  live" — which the switcher already honoured and the token source did not.
+  Serving a stored token that is still good is unchanged, because it spends
+  nothing. `ErrLivenessUnknown` never quarantines an account: it is a fact about
+  this machine's ability to look, not about the grant. Pinned by
+  `TestUnreadableLiveStoreSpendsNoRefreshToken`.
+
 ## [0.9.7] — 2026-08-30
 
 The release that stops an errand from leaving an identity behind.
