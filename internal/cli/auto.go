@@ -280,13 +280,39 @@ func autoPass(ctx context.Context, em *autoEmitter, s *store.Store) (ExitCode, e
 		em.say("Two stores on one login undo each other's switches. Point CLAUDE_CONFIG_DIR at a " +
 			"directory of this store's own, or stop that engine.")
 		return ExitBlocked, nil
+	case switcher.Unattributed:
+		// 4, with Overridden, Stale and Contended: the engine wanted to move and
+		// did not, so the world is not as the caller asked. It used to reach the
+		// default arm below and exit 1 calling itself an outcome ccdad does not
+		// know -- a correct, deliberate stand-down reported to cron as a bug in
+		// the tool.
+		em.unchanged(res, "unattributed")
+		em.say("Not switching: the credentials file holds a login this store cannot name.")
+		em.say("Overwriting it could re-present a superseded grant and take that account down. " +
+			"Claude Code rotates a login's refresh token on every refresh and ccdad matches on that " +
+			"token, so a managed account stops being recognisable the moment it refreshes; " +
+			"`ccdad add` re-registers one whose token has moved on.")
+		return ExitBlocked, nil
+	case switcher.Unreadable:
+		// Same family, different remedy: that one waits for an identity, this
+		// one waits for the machine.
+		em.unchanged(res, "unreadable")
+		em.say("Not switching: this machine's login store cannot be read, so whether any account is " +
+			"live cannot be established.")
+		em.say("On macOS this is a locked login keychain: run `security unlock-keychain " +
+			"~/Library/Keychains/login.keychain-db`, then run this again from that shell.")
+		return ExitBlocked, nil
 	case switcher.Switched:
-		// Named rather than left to fall through. This switch has no default,
-		// so an Outcome added later would reach the lines below and report
-		// itself as a completed swap — a `{"kind":"switched"}` event and exit 0
-		// for a switch that never happened, to the one consumer that cannot see
-		// the machine. Adding a value to switcher.Outcome now breaks the build
-		// here instead, which is where it should break.
+		// Named rather than left to fall through, so a completed swap says so in
+		// exactly one place.
+		//
+		// THE DEFAULT BELOW IS NOT A BUILD BREAK, and the comment here used to
+		// claim it was ("this switch has no default"). It has one, so an Outcome
+		// added later compiles fine and exits 1 at runtime describing itself as
+		// unknown -- which is what Unattributed did, to the one consumer that
+		// cannot see the machine. The default is kept for a value no build of
+		// this tree can produce; every value switcher declares gets an arm, and
+		// that is a review rule rather than a compiler one.
 	default:
 		return ExitFailure, fmt.Errorf("the switch reported an outcome this ccdad does not know (%d): %s",
 			res.Outcome, res.Outcome)

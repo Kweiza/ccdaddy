@@ -3,11 +3,28 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/store"
 )
+
+// resolveMinInterval is the shortest gap between two asks of the identity
+// oracle.
+//
+// The oracle is a network call, it carries the LIVE login's own bearer, and
+// act() reaches it from a loop that turns once a second. Nothing bounded it:
+// the LOG line is latched on e.saidUnattributed, the request behind it was not,
+// so a login this store could not name cost one /api/oauth/profile request per
+// second for as long as that lasted -- and after a rotation that lasts until a
+// human intervenes. A stand-down must cost one request, not 3600 an hour, and
+// the identity it spends is the one whose session is running underneath.
+//
+// A minute is chosen from what the oracle can LEARN. Its answer changes only
+// when something rewrites the credentials file, and the repair it delays is one
+// the machine has already been waiting on for as long as the rotation is old.
+const resolveMinInterval = time.Minute
 
 // liveVerdict is what resolving an unnameable live login established.
 //
@@ -65,6 +82,22 @@ func (e *Engine) resolveLive(ctx context.Context, s *store.Store) (store.Account
 		// with it either, so nothing is running underneath.
 		return store.Account{}, liveUnresolved
 	}
+
+	// Armed BEFORE the ask, and for EVERY verdict. Before, so an ask that hangs
+	// or is refused still costs the interval -- an endpoint having a bad day is
+	// exactly the case that repeats. Every verdict, because the two that resolve
+	// change the world within this tick and do not come back here: adoption
+	// gives the next tick a baseline again, and foreign lets the swap proceed.
+	// The verdict that does come back every second is the one this bounds.
+	now := e.now()
+	if now.Before(e.nextResolveAt) {
+		// Not "nobody is live", and not "somebody else's". Holding the question
+		// leaves exactly what an unreachable endpoint leaves -- a file this
+		// store still cannot name -- so it answers with the same verdict, and
+		// act() stands the swap down rather than writing over a running login.
+		return store.Account{}, liveUnresolved
+	}
+	e.nextResolveAt = now.Add(resolveMinInterval)
 
 	ctx, cancel := context.WithTimeout(ctx, e.pollTimeout())
 	defer cancel()

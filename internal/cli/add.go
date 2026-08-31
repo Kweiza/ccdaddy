@@ -308,6 +308,9 @@ func runAdd(cmd *cobra.Command, opts addOptions) error {
 	// snapshot — a cross-account leak, which is worse than the loss this carry
 	// exists to prevent.
 	live, liveErr := cclink.Load()
+	if note := unreadableLiveNote(liveErr); note != "" {
+		fmt.Fprint(stderr, note)
+	}
 	liveIsThisAccount := liveErr == nil &&
 		switcher.CredentialIdentity(live) != "" &&
 		switcher.CredentialIdentity(live) == switcher.CredentialIdentity(prior)
@@ -958,4 +961,24 @@ func liveLoginOwner(cmd *cobra.Command, uuid string, live cclink.Blob) liveOwner
 		return liveOwnershipSame
 	}
 	return liveOwnershipOther
+}
+
+// unreadableLiveNote is what `ccdad add` says when it could not read the live
+// login at all, and "" when it could.
+//
+// It exists because that case is the ONE silent one. With the store unreadable
+// cclink.Load answers a nil blob, so carriableKeys is empty, liveIsThisAccount
+// is false, and every warning downstream is about keys ccdad can see -- none of
+// which fire. The user re-authenticates and is told nothing, while store.Add
+// replaces the credential file wholesale, so whatever was in the live store is
+// gone whether or not ccdad could look at it.
+func unreadableLiveNote(liveErr error) string {
+	if liveErr == nil {
+		return ""
+	}
+	return fmt.Sprintf(
+		"warning: the current login could not be read (%v), so ccdad cannot tell whether it is this "+
+			"account's and is carrying nothing from it.\n"+
+			"If it was this account's, its trustedDeviceToken and designOauth are being dropped: a "+
+			"device-cap slot is spent and the gateway may need re-trusting.\n", liveErr)
 }
