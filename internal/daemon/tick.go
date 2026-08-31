@@ -164,6 +164,12 @@ type Engine struct {
 	// back.
 	saidUnattributed bool
 
+	// saidUnreadable latches the stand-down on a login STORE that could not be
+	// read at all, which is a different sentence from saidUnattributed's and a
+	// different remedy: that one waits for an identity, this one waits for the
+	// machine. Latched for the same reason -- the tick reaches it at 1 Hz.
+	saidUnreadable bool
+
 	wg sync.WaitGroup
 }
 
@@ -495,6 +501,26 @@ func (e *Engine) act(ctx context.Context, s *store.Store, ev switcher.Evaluation
 	// establishes that the login is somebody else's, which is a machine ccdad
 	// exists to move off. Anything else stands the swap down; Execute enforces
 	// that too, and this is where it is decided with a name attached.
+	// A store that could not be READ is not a store with nobody in it, and it is
+	// not an identity problem the oracle can solve either -- resolveLive would
+	// re-read the same store and fail the same way. The swap stands down here
+	// rather than at the write, which is what stops the tick from failing on
+	// every one of its 1 Hz passes: on the machine this was found on that was
+	// 28,557 consecutive failures over eight hours, and the daemon spent its
+	// whole replacement budget on a fault no fresh process could clear.
+	if ev.LiveState == switcher.LiveUnreadable {
+		if !e.saidUnreadable {
+			e.saidUnreadable = true
+			e.logf("not switching: this machine's login store cannot be read (%v), so whether an account "+
+				"is live cannot be established, and installing over it could revoke a running session. "+
+				"On macOS this is a locked login keychain -- run `security unlock-keychain "+
+				"~/Library/Keychains/login.keychain-db` and restart the daemon FROM THAT SHELL, because "+
+				"a successor inherits the audit session that is refusing", ev.LiveErr)
+		}
+		return switcher.Result{Outcome: switcher.Unreadable, Target: ev.Target}, nil
+	}
+	e.saidUnreadable = false
+
 	foreign := false
 	if ev.LiveState == switcher.LiveUnattributed {
 		owner, verdict := e.resolveLive(ctx, s)

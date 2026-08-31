@@ -74,7 +74,7 @@ func CredentialIdentity(b cclink.Blob) string {
 	return ""
 }
 
-// LiveState is what the credentials file holds, in the three answers a swap
+// LiveState is what the credentials file holds, in the four answers a swap
 // needs to tell apart.
 //
 // AttributeFile used to return two, and collapsing the last two into one bool
@@ -102,6 +102,21 @@ const (
 	// managed account that has rotated since ccdad last saw it, and the file
 	// alone cannot say which.
 	LiveUnattributed
+	// LiveUnreadable: the login store could not be READ, so what it holds is
+	// not known -- not even whether it holds anything.
+	//
+	// This is the fourth answer, and it was missing for the same reason the
+	// third one was. A caller that could not read the store passed a nil blob,
+	// which lands on LiveNone above -- "nobody is logged in, and a swap has
+	// nothing to overwrite" -- and that is the most dangerous of the four
+	// things it could mean. On macOS the ordinary way to get here is a locked
+	// login keychain answering errSecInteractionNotAllowed while Claude Code,
+	// whose combinator falls back to the credentials file, carries on serving a
+	// live session from a store ccdad cannot see.
+	//
+	// It is appended rather than inserted so the existing values keep their
+	// numbers, the same rule Outcome carries.
+	LiveUnreadable
 )
 
 func (s LiveState) String() string {
@@ -112,6 +127,8 @@ func (s LiveState) String() string {
 		return "a managed account"
 	case LiveUnattributed:
 		return "a login this store cannot name"
+	case LiveUnreadable:
+		return "a login store this machine cannot read"
 	}
 	return "unknown"
 }

@@ -93,6 +93,10 @@ const (
 	// Stale: the target's stored credential sits inside the window Claude Code
 	// refreshes in, and no refresh could move it out. Nothing was written.
 	Stale
+	// Unreadable: this machine's login store could not be READ, so whether any
+	// account is live is not known -- not even whether anything is logged in.
+	// Nothing was written. Appended, for the reason Contended and Stale are.
+	Unreadable
 	// Unattributed: the credentials file holds an OAuth login this store
 	// cannot name, and the caller did not establish that it is foreign. An
 	// unattended swap stands down rather than write over what may be a managed
@@ -114,6 +118,8 @@ func (o Outcome) String() string {
 		return "that account's stored login is one Claude Code would refresh on sight, and refreshing it here did not succeed"
 	case Unattributed:
 		return "the credentials file holds a login this store cannot name, and overwriting it could take down an account mid-rotation"
+	case Unreadable:
+		return "this machine's login store cannot be read, so whether an account is live cannot be established"
 	case Switched:
 		return "switched"
 	default:

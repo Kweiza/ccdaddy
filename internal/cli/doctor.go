@@ -268,7 +268,7 @@ func runChecks() []check {
 		checkClaudeVersion(install, installErr),
 		checkClaudeCode(live, liveErr),
 		checkCredentialKeys(live, liveErr),
-		checkKeychain(),
+		checkKeychain(liveErr),
 		checkEnvironment(),
 		checkAPIKey(cfg, cfgErr),
 		checkOAuthSource(live, liveErr, liveSource),
@@ -1092,7 +1092,7 @@ type keychainDetailer interface{ Detail() string }
 // It no longer takes the install. Which release is on the machine decided the
 // remedy while there were two; there is one now, and it is the same on every
 // version, so reading the install here would only invite the old split back.
-func checkKeychain() check {
+func checkKeychain(liveErr error) check {
 	found, err := keychainProbe(context.Background())
 	item := found.Item
 
@@ -1120,6 +1120,28 @@ func checkKeychain() check {
 		return check{"keychain", levelOK, fmt.Sprintf(
 			"no item for %q under %s, so .credentials.json is the login Claude Code reads",
 			item.Account, keychainNameList(found.Checked))}
+	}
+	// PRESENT IS NOT READABLE, and this row asserted the strongest sentence in
+	// the report on the weaker fact. Present spawns `find-generic-password`
+	// WITHOUT -w, on purpose -- an attributes lookup can never raise the "wants
+	// to use your keychain" dialog -- so it answers 0 for an item whose secret
+	// the keychain is refusing. Measured on a machine whose login keychain had
+	// locked: this row was green and said the item "is what every request
+	// authenticates with" while every ccdad command was failing with exit 36
+	// and Claude Code had been serving from .credentials.json for eight hours.
+	//
+	// liveErr is the read that already happened, one row up -- no second spawn,
+	// so no new chance of a prompt. An item is present, so LoadWithSource
+	// reached the keychain half and any error it carries is the item's.
+	if liveErr != nil {
+		return check{"keychain", levelWarn, fmt.Sprintf(
+			"the keychain item %q for %q exists, but its secret could not be READ (%v) -- so it is not what "+
+				"anything is authenticating with right now. Claude Code's credential store falls back to "+
+				".credentials.json when the item refuses; ccdad does not, so every command that asks who is "+
+				"live fails instead and a switch cannot reach the login. On macOS this is a locked login "+
+				"keychain: run `security unlock-keychain ~/Library/Keychains/login.keychain-db`, then restart "+
+				"the daemon FROM THAT SHELL -- a successor inherits the audit session that is refusing",
+			item.Service, item.Account, liveErr)}
 	}
 	return check{"keychain", levelOK, fmt.Sprintf(
 		"the keychain item %q for %q is Claude Code's live login: its credential store reads that item BEFORE "+
