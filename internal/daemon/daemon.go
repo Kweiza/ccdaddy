@@ -283,7 +283,9 @@ func Run(ctx context.Context, o Options) (err error) {
 		// EverPassed is read before the shutdown below, because it is the fact
 		// that decides whether the successor inherits this chain's spent budget
 		// or starts a fresh one -- and it is gone once this process is.
-		loopErr = &WedgedError{Err: loopErr, NextRecovery: NextRecoveryCount(recoveriesSoFar(), loop.Health().EverPassed)}
+		health := loop.Health()
+		loopErr = &WedgedError{Err: loopErr,
+			NextRecovery: NextRecoveryCount(recoveriesSoFar(), health.EverPassed || health.Rearmed)}
 	}
 
 	log.Printf("ccdad daemon stopping")

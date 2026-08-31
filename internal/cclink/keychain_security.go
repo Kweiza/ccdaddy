@@ -405,3 +405,29 @@ func LoadKeychainCredentials(ctx context.Context) (Blob, bool, error) {
 	}
 	return b, true, nil
 }
+
+// SurvivesRestart reports whether err names a keychain failure a FRESH PROCESS
+// on this machine would hit identically, so replacing the process cannot clear
+// it.
+//
+// errSecInteractionNotAllowed is that failure, and the reason is the scoping
+// unit. macOS refuses it per AUDIT SESSION, and a child inherits its parent's:
+// the daemon's detach sets SysProcAttr{Setsid: true}, which creates a new POSIX
+// session and changes neither the audit session (au_session) nor the Mach
+// bootstrap namespace -- and those are what Security.framework consults to
+// decide whether it may prompt. So a daemon that replaces itself over this
+// fault gets a successor that fails on its own first tick.
+//
+// Measured 2026-08-31: three consecutive replacements, each failing 1.1 seconds
+// after it started, and then a chain with no replacements left for a wedge a
+// restart COULD have cleared. The remedy is a restart from a shell that already
+// has the keychain, which is a thing only a person can do.
+//
+// Every other classification is deliberately absent. A locked keychain that a
+// user unlocks, a timeout, a `security` that exited silently -- a fresh process
+// really might get a different answer to any of those, and claiming otherwise
+// would spend the opposite mistake.
+func SurvivesRestart(err error) bool {
+	var ke *KeychainError
+	return errors.As(err, &ke) && ke.failure == failNoInteraction
+}

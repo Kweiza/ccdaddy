@@ -18,6 +18,23 @@ by `uuid` or `alias`.
 
 ### Fixed
 
+- **A daemon no longer spends a replacement on a fault a fresh process would hit
+  identically, and a spent replacement budget is no longer permanent.** macOS
+  scopes `errSecInteractionNotAllowed` to the AUDIT SESSION, and a child inherits
+  its parent's — `detach` sets `SysProcAttr{Setsid: true}`, and a POSIX session is
+  neither an audit session nor a Mach bootstrap namespace, which are what
+  Security.framework consults. So every replacement over that fault produced a
+  successor that failed on its own first tick: three of them, 1.1 seconds each, on
+  2026-08-31. The loop now classifies the cause and keeps ticking instead, saying
+  once that the restart has to come from a shell that can already read the
+  keychain. Separately, a wedge that outlasts an hour earns one more attempt even
+  with the budget spent, because the machine the cap gave up on may have changed
+  since — the incident's own daemon watched the keychain become readable again and
+  kept failing, because the decision had been taken an hour earlier. Pinned by
+  `TestALoopDoesNotSpendAReplacementOnAFaultARestartInherits`,
+  `TestAWedgeThatOutlastsTheRearmWindowGetsOneMoreAttempt` and
+  `TestSurvivesRestartIsOnlyInteractionNotAllowed`.
+
 - **"The login store could not be read" is now its own answer, instead of
   collapsing into "nobody is logged in".** `Evaluate` handed `LiveStateOf` a nil
   blob when `cclink.Load` failed, which lands on `LiveNone` — documented as
