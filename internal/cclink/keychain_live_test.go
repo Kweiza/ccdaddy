@@ -3,6 +3,8 @@ package cclink
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"testing"
 )
 
@@ -103,5 +105,28 @@ func TestLegacyHuntIgnoresTheCredentialRootAndTheLiveDerivationDoesNot(t *testin
 	}
 	if live := LiveKeychainItem([]string{"USER=kweiza", os}).Service; live == "Claude Code-credentials" {
 		t.Fatal("the live derivation ignored the credential root")
+	}
+}
+
+// The classification is the whole safety argument for not replacing a daemon,
+// so it must answer true for exactly one failure and false for every other.
+func TestSurvivesRestartIsOnlyInteractionNotAllowed(t *testing.T) {
+	for _, f := range []keychainFailure{
+		failDuplicateItem, failUnavailable, failNoKeychain, failItemNotFound,
+		failUserCanceled, failAuthFailed, failLocked,
+	} {
+		if SurvivesRestart(&KeychainError{Op: "find-generic-password", failure: f}) {
+			t.Fatalf("%s was reported as surviving a restart; only the audit-session refusal does", f)
+		}
+	}
+	if !SurvivesRestart(&KeychainError{Op: "find-generic-password", failure: failNoInteraction, code: 36}) {
+		t.Fatal("errSecInteractionNotAllowed must be reported as surviving a restart")
+	}
+	if SurvivesRestart(nil) || SurvivesRestart(errors.New("something else")) {
+		t.Fatal("a non-keychain error was reported as surviving a restart")
+	}
+	// Wrapped, because that is how it reaches the loop: through a tick.
+	if !SurvivesRestart(fmt.Errorf("tick: %w", &KeychainError{failure: failNoInteraction})) {
+		t.Fatal("a wrapped refusal was not recognised")
 	}
 }

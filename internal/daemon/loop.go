@@ -6,11 +6,27 @@ import (
 	"fmt"
 	"runtime/debug"
 	"time"
+
+	"github.com/Kweiza/ccdaddy/internal/cclink"
 )
 
 const (
 	// tickInterval is the tick loop's cadence: once a second.
 	tickInterval = time.Second
+
+	// recoveryRearmAfter is how long a wedge may last before a loop with no
+	// replacement budget left is allowed one more attempt.
+	//
+	// The cap exists because a machine can be in a state a fresh process does
+	// not fix. What it got wrong is that the state can END: the fault that
+	// exhausted a chain on 2026-08-31 was a locked login keychain, and a user
+	// logging back into the GUI session clears it. With no re-arm the daemon
+	// that watched that happen kept failing for the rest of the night, because
+	// the decision had been taken an hour before the machine changed.
+	//
+	// An hour, so the pathological case is one spawn per hour rather than one
+	// per five minutes, and every attempt is a log line.
+	recoveryRearmAfter = time.Hour
 
 	// rotateCheckInterval is how often the tick loop checks daemon.log for
 	// rotation. At a 1 s tick, 5 minutes is 300 ticks; this is deliberately the
@@ -79,6 +95,11 @@ type TickHealth struct {
 	// a fresh one: a process that worked for a day and then wedged is not the
 	// same evidence as one that never worked at all.
 	EverPassed bool
+	// Rearmed is whether this run gave up on a wedge with its replacement
+	// budget already spent, because the wedge had outlasted recoveryRearmAfter.
+	// It makes the successor a FRESH chain for the same reason EverPassed does:
+	// the evidence the cap was counting is stale.
+	Rearmed bool
 }
 
 // Loop is the daemon's 1 Hz tick loop.
@@ -121,6 +142,9 @@ type Loop struct {
 	// published health be what raises the alarm.
 	RecoveryBudget int
 
+	// RecoveryRearmAfter overrides recoveryRearmAfter. Zero means the constant.
+	RecoveryRearmAfter time.Duration
+
 	// ticks replaces the internal ticker so a test can deliver one tick at a
 	// time. Production leaves it nil.
 	ticks <-chan time.Time
@@ -144,7 +168,11 @@ type Loop struct {
 	looped chan<- struct{}
 
 	panics int
-	health TickHealth
+
+	// saidInherited latches noteInheritedFault for one run of failures, so the
+	// decision is stated once rather than at 1 Hz.
+	saidInherited bool
+	health        TickHealth
 	// lastLoggedAt is when the current run of failures was last written to the
 	// log, which is not when it last failed.
 	lastLoggedAt time.Time
@@ -161,6 +189,35 @@ func (l *Loop) Panics() int { return l.panics }
 // naming rather than fixing -- fixing it means publishing after the body, which
 // is the ordering that lets a half-applied iteration reach disk.
 func (l *Loop) Health() TickHealth { return l.health }
+
+// noteInheritedFault says once, per run of failures, that the loop is wedged on
+// something replacing the process cannot fix. It is latched on the run rather
+// than repeated, because noteTickFailure is already saying the error itself on
+// its own cadence and this line is about the DECISION, which does not change.
+func (l *Loop) noteInheritedFault(now time.Time, err error) {
+	if l.saidInherited {
+		return
+	}
+	l.saidInherited = true
+	l.logf("not replacing this daemon: it has been failing for %s and the cause is one a fresh "+
+		"process on this machine would hit identically (%v). macOS scopes that refusal to the audit "+
+		"session, which a child inherits, so a replacement would fail on its own first tick. Restart "+
+		"ccdad from a shell that can already read the keychain",
+		now.Sub(l.health.Since).Round(time.Second), err)
+}
+
+// survivesRestart is this file's window onto the classification, and it is a
+// var for the reason doctor's keychainProbe is one: the only error that answers
+// true is built by a `security` spawn this suite cannot make happen.
+var survivesRestart = cclink.SurvivesRestart
+
+// rearmAfter is how long this loop stays given up before it may try once more.
+func (l *Loop) rearmAfter() time.Duration {
+	if l.RecoveryRearmAfter > 0 {
+		return l.RecoveryRearmAfter
+	}
+	return recoveryRearmAfter
+}
 
 func (l *Loop) wedgedAfter() time.Duration {
 	if l.WedgedAfter > 0 {
@@ -216,6 +273,9 @@ func (l *Loop) noteTickSuccess(now time.Time) {
 	}
 	l.health = TickHealth{EverPassed: true}
 	l.lastLoggedAt = time.Time{}
+	// The decision is about a RUN of failures, so a tick that passes ends the
+	// run and the next one may be reported afresh.
+	l.saidInherited = false
 }
 
 func (l *Loop) interval() time.Duration {
@@ -296,11 +356,26 @@ func (l *Loop) Run(ctx context.Context) error {
 			consecutivePanics = 0
 			now := l.now()
 			l.noteTickFailure(now, err)
+			// A fault a FRESH PROCESS would hit identically is not worth a
+			// replacement, and spending three on one is how a chain arrives
+			// with nothing left for a wedge a restart could have cleared. See
+			// cclink.SurvivesRestart for the scoping rule that makes the
+			// successor's failure certain rather than likely.
+			if now.Sub(l.health.Since) >= l.wedgedAfter() && survivesRestart(err) {
+				l.noteInheritedFault(now, err)
+				break
+			}
 			// The budget is checked BEFORE the window, not after, so a loop
 			// that may not give up never even measures one -- it has nothing
 			// to do with the answer, and a wedge it cannot act on is not an
 			// event.
-			if l.RecoveryBudget > 0 && now.Sub(l.health.Since) >= l.wedgedAfter() {
+			//
+			// A spent budget is not permanent any more. A wedge that outlasts
+			// rearmAfter earns one more attempt, because the machine the cap
+			// gave up on may have changed since -- see recoveryRearmAfter.
+			if (l.RecoveryBudget > 0 || now.Sub(l.health.Since) >= l.rearmAfter()) &&
+				now.Sub(l.health.Since) >= l.wedgedAfter() {
+				l.health.Rearmed = l.RecoveryBudget <= 0
 				return fmt.Errorf("%w for %s (%d ticks), most recently: %w",
 					ErrWedged, now.Sub(l.health.Since).Round(time.Second), l.health.Consecutive, err)
 			}

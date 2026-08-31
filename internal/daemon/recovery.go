@@ -59,8 +59,15 @@ func recoveriesSoFar() int {
 // continues the count it was started with -- that is the chain the cap is
 // counting, and letting a week of healthy running reset it is the point: a
 // daemon that wedges after a week must still get its replacements.
-func NextRecoveryCount(soFar int, everPassed bool) int {
-	if everPassed {
+//
+// freshChain is that judgement, and a RE-ARM is the second thing that makes it
+// true. A loop with no budget left that has stayed wedged past
+// recoveryRearmAfter is allowed one more attempt precisely because the machine
+// it gave up on may have changed since; handing the successor an already-spent
+// count would make that attempt the last one forever, which is the state the
+// re-arm exists to leave.
+func NextRecoveryCount(soFar int, freshChain bool) int {
+	if freshChain {
 		return 1
 	}
 	return soFar + 1
