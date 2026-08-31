@@ -2291,3 +2291,58 @@ func TestTickHealthDoesNotInventAVerdict(t *testing.T) {
 		t.Errorf("a daemon that has published nothing = %q, want skipped: %s", got.Level, got.Detail)
 	}
 }
+
+// stubLiveError makes the live-store read fail the way a locked keychain does,
+// so the report has to answer for a store it could not read.
+func stubLiveError(t *testing.T, err error) {
+	t.Helper()
+	saved := loadLiveWithSource
+	t.Cleanup(func() { loadLiveWithSource = saved })
+	loadLiveWithSource = func() (cclink.Blob, cclink.CredentialSource, error) {
+		return nil, cclink.SourceNone, err
+	}
+}
+
+// THE REGRESSION. Present spawns find-generic-password WITHOUT -w so it can
+// never raise an auth dialog, which also means it answers 0 for an item whose
+// SECRET the keychain is refusing. This row read that as "the item is what
+// every request authenticates with" and went green, on a machine where every
+// ccdad command was failing with exit 36 and Claude Code had fallen back to
+// .credentials.json hours earlier.
+func TestDoctorWillNotCallAnUnreadableKeychainItemTheLiveLogin(t *testing.T) {
+	isolate(t)
+	suppressAutoStart(t)
+	stubKeychain(t, true, cclink.KeychainItem{Service: "Claude Code-credentials", Account: "tester"}, nil)
+	stubLiveError(t, errors.New("security find-generic-password: interaction-not-allowed (exit 36)"))
+
+	_, report, _ := runDoctor(t)
+	if got := report.level(t, "keychain"); got == "ok" {
+		t.Fatalf("keychain level = ok while the item's secret could not be read:\n%s", report.detail(t, "keychain"))
+	}
+	detail := report.detail(t, "keychain")
+	for _, want := range []string{"could not be READ", "unlock-keychain", "FROM THAT SHELL"} {
+		if !strings.Contains(detail, want) {
+			t.Fatalf("the keychain row does not carry %q:\n%s", want, detail)
+		}
+	}
+	if strings.Contains(detail, "is Claude Code's live login") {
+		t.Fatalf("the row still asserts the item is the live login:\n%s", detail)
+	}
+}
+
+// The green sentence must survive for the machine it is true of: an item that
+// is present AND readable.
+func TestDoctorStillNamesAReadableKeychainItemAsTheLogin(t *testing.T) {
+	isolate(t)
+	suppressAutoStart(t)
+	stubKeychain(t, true, cclink.KeychainItem{Service: "Claude Code-credentials", Account: "tester"}, nil)
+	stubLiveSource(t, cclink.SourceKeychainItem)
+
+	_, report, _ := runDoctor(t)
+	if got := report.level(t, "keychain"); got != "ok" {
+		t.Fatalf("keychain level = %q for a readable item, want ok:\n%s", got, report.detail(t, "keychain"))
+	}
+	if !strings.Contains(report.detail(t, "keychain"), "is Claude Code's live login") {
+		t.Fatalf("the green row lost its sentence:\n%s", report.detail(t, "keychain"))
+	}
+}

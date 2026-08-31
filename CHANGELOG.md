@@ -18,6 +18,33 @@ by `uuid` or `alias`.
 
 ### Fixed
 
+- **"The login store could not be read" is now its own answer, instead of
+  collapsing into "nobody is logged in".** `Evaluate` handed `LiveStateOf` a nil
+  blob when `cclink.Load` failed, which lands on `LiveNone` — documented as
+  "nobody is logged in, and a swap has nothing to overwrite". That is the most
+  dangerous of the four readings: Claude Code's credential store falls back to
+  `.credentials.json` when the keychain refuses, so a session can be running
+  perfectly well underneath a store ccdad cannot see. `LiveState` gains a fourth
+  value, `LiveUnreadable`, and the daemon stands the swap down on it with the
+  reason and the remedy named. The stand-down also moves EARLIER than the write:
+  previously the tick reached the swap and failed under the credential locks, so
+  every one of its 1 Hz passes failed — 28,557 consecutive failures over eight
+  hours on the machine this was found on — and the daemon spent its whole
+  replacement budget on a fault no fresh process could clear. Pinned by
+  `TestEvaluateSaysUnreadableRatherThanNobodyLive` and
+  `TestATickWithAnUnreadableLoginStoreStandsDownInsteadOfFailing`.
+
+- **`ccdad doctor` no longer calls an unreadable keychain item Claude Code's live
+  login.** The row decided from `Present`, which spawns `find-generic-password`
+  WITHOUT `-w` so it can never raise the "wants to use your keychain" dialog —
+  and therefore answers 0 for an item whose SECRET the keychain is refusing. It
+  went green with the strongest sentence in the report while every ccdad command
+  was failing with exit 36. It now reads the outcome of the live-store load the
+  report already performed — no second spawn, so no new chance of a prompt — and
+  where that failed it says the item exists, cannot be read, is not what anything
+  is authenticating with, and that Claude Code has fallen back to the file.
+  Pinned by `TestDoctorWillNotCallAnUnreadableKeychainItemTheLiveLogin`.
+
 - **A `ccdad run` session or a probe no longer throws away the credential its
   Claude Code rotated, and no longer leaves a live refresh token behind in the
   login keychain.** Both scope the session by exporting

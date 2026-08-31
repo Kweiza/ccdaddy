@@ -36,7 +36,7 @@ type Evaluation struct {
 	// Live is the account the credentials FILE names, which is the hysteresis
 	// baseline and the value an unattended swap is conditional on.
 	//
-	// LiveState is the same read kept at three values rather than two. An
+	// LiveState is the same read kept at four values rather than two. An
 	// unattended caller needs it: LiveKnown false spans a machine with nobody
 	// logged in and a machine whose live login this store cannot name, and only
 	// the first of those is safe to overwrite.
@@ -134,12 +134,17 @@ func Evaluate(s *store.Store, opts EvalOptions) (Evaluation, error) {
 
 	live, err := cclink.Load()
 	if err != nil {
-		// Not fatal. Attribution here is the hysteresis baseline, and Execute
-		// re-reads under the lock before it writes anything.
+		// Not fatal, and NOT "nobody is live" either. Handing the nil blob to
+		// LiveStateOf answers LiveNone, which is the one reading a caller must
+		// not act on: it says the machine has nothing to lose, and an
+		// unreadable store is exactly where it may have everything to lose.
+		// Attribution here is the hysteresis baseline, and Execute re-reads
+		// under the lock before it writes anything.
 		ev.LiveErr = err
-		live = nil
+		ev.Live, ev.LiveState = store.Account{}, LiveUnreadable
+	} else {
+		ev.Live, ev.LiveState = LiveStateOf(live, accounts, s.Credentials)
 	}
-	ev.Live, ev.LiveState = LiveStateOf(live, accounts, s.Credentials)
 	ev.LiveKnown = ev.LiveState == LiveManaged
 	liveUUID := ""
 	if ev.LiveKnown {
