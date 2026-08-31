@@ -15,6 +15,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/store"
+	"sort"
 )
 
 // writeImportFile puts a document on disk for `ccdad import` to read.
@@ -787,4 +788,62 @@ func TestSeatTierSurvivesTheRoundTrip(t *testing.T) {
 		t.Errorf("Kind/Primary/RateLimitTier = %v/%v/%q; want credit/true/default_claude_zero",
 			got.Kind, got.Primary, got.RateLimitTier)
 	}
+}
+
+// INVARIANT 5 IN THE ONE PATH THAT STILL BROKE IT. store.Add replaces an
+// account's credential file wholesale, so importing a document that carries
+// only claudeAiOauth used to delete that account's designOauth and
+// trustedDeviceToken as the price of restoring one login. The
+// newer-credentials check cannot stand in for it: that compares claudeAiOauth
+// and nothing else, so it never sees the keys being dropped.
+func TestImportKeepsCredentialKeysTheDocumentNeverMentions(t *testing.T) {
+	isolate(t)
+	s, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	acct := store.Account{UUID: "u-1", Email: "one@example.com"}
+	if err := s.Add(acct, cclink.Blob{
+		"claudeAiOauth":      json.RawMessage(`{"accessToken":"AT","refreshToken":"RT-old"}`),
+		"designOauth":        json.RawMessage(`{"kept":true}`),
+		"trustedDeviceToken": json.RawMessage(`"device-abc"`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	path := writeImportFile(t, `{
+	  "schemaVersion": 1,
+	  "full": true,
+	  "accounts": [{"uuid":"u-1","email":"one@example.com","kind":"subscription",
+	    "credentials":{"claudeAiOauth":{"accessToken":"AT2","refreshToken":"RT-new"}}}]
+	}`)
+	if code, _, _, top := runRoot(t, "import", path, "--force"); code != ExitOK {
+		t.Fatalf("import = %d (%s), want 0", code, top)
+	}
+
+	s2, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := s2.Credentials("u-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got["claudeAiOauth"]), "RT-new") {
+		t.Fatalf("the document's login did not win: %s", got["claudeAiOauth"])
+	}
+	for _, key := range []string{"designOauth", "trustedDeviceToken"} {
+		if _, kept := got[key]; !kept {
+			t.Fatalf("%s was deleted by an import that never mentioned it; keys present: %v", key, keysOf(got))
+		}
+	}
+}
+
+func keysOf(b cclink.Blob) []string {
+	out := make([]string, 0, len(b))
+	for k := range b {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

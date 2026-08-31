@@ -504,6 +504,12 @@ func (s *Store) setOAuthAccountSnapshot(uuid string, snapshot json.RawMessage) e
 	return nil
 }
 
+// ErrNoCredentials says this account has no credential file at all, as opposed
+// to one this store could not READ. A caller about to REPLACE that file has to
+// tell the two apart: nothing is at stake in the first case, and in the second
+// what it is about to overwrite may hold the only copy of a secret.
+var ErrNoCredentials = errors.New("no stored credentials")
+
 // Credentials returns an account's stored account-scoped keys.
 func (s *Store) Credentials(uuid string) (cclink.Blob, error) {
 	// Checked here too, so a hand-edited accounts.toml cannot make this read an
@@ -514,7 +520,7 @@ func (s *Store) Credentials(uuid string) (cclink.Blob, error) {
 	raw, err := os.ReadFile(s.credentialPath(uuid))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("no stored credentials for %q; re-run 'ccdad add' for it", uuid)
+			return nil, fmt.Errorf("%w for %q; re-run 'ccdad add' for it", ErrNoCredentials, uuid)
 		}
 		return nil, fmt.Errorf("reading stored credentials: %w", err)
 	}

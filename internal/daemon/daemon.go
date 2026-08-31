@@ -63,7 +63,7 @@ func EngineOptions() Options {
 		Tick:     e.Tick,
 		Snapshot: e.Snapshot,
 		Drain:    e.Wait,
-		Attach:   func(l *Logger) { e.Log = l.Printf },
+		Attach:   func(l *Logger) { e.AttachLog(l.Printf) },
 	}
 }
 

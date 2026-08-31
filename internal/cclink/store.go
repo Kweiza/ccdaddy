@@ -156,11 +156,43 @@ func LoadWithSource() (Blob, CredentialSource, error) {
 // half. The keychain half has no such scope to lose -- the item's name comes
 // from CLAUDE_CONFIG_DIR, which is how `ccdad run` gets its own item rather
 // than the machine's.
-func loadLiveUnderLock(livePath string) (Blob, error) {
-	if live, ok, err := loadFromKeychain(); err != nil || ok {
-		return live, err
+// THE SECOND RETURN IS WHETHER THE ITEM ANSWERED, and it is not a convenience.
+// installIntoKeychain replaces the item WHOLESALE, so the only item it may
+// write is the one this read took its base from; deriving that answer a second
+// time, from a separate lookup, is what let the two disagree -- the lookup was
+// attributes-only and could not fail, so a switch could commit to writing an
+// item it had never read.
+//
+// THE ITEM IS NOT THE WHOLE BASE EITHER. The freshness argument above holds for
+// what the item HAS; it says nothing about what the item never had. Claude
+// Code's combinator writes the primary and skips the fallback ON SUCCESS, so
+// the moment a keychain write FAILS -- a locked keychain answers
+// `{success:!1,transient:...}` -- it takes the plaintext fallback instead, and
+// from then on the file holds machine-scoped keys the item has never seen. An
+// MCP login made during that window lives only in the file. Merging onto the
+// item alone would delete it on the next switch, so the file's machine keys are
+// folded back in; see overlayMachineKeys, which lets the item win every
+// collision and only refuses to DROP what neither store has superseded.
+//
+// A file that cannot be READ, behind an item that answered, is an error rather
+// than an empty base. The write this base feeds replaces that file wholesale,
+// so continuing on the item alone would destroy machine keys at exactly the
+// moment ccdad cannot see what it is destroying.
+func loadLiveUnderLock(livePath string) (Blob, bool, error) {
+	item, ok, err := loadFromKeychain()
+	if err != nil {
+		return nil, false, err
 	}
-	return loadFrom(livePath)
+	if !ok {
+		live, ferr := loadFrom(livePath)
+		return live, false, ferr
+	}
+	file, ferr := loadFrom(livePath)
+	if ferr != nil {
+		return nil, true, fmt.Errorf("the keychain item Claude Code reads first answered, but the "+
+			"credentials file it shadows could not be read, and a switch rewrites that file: %w", ferr)
+	}
+	return overlayMachineKeys(item, file), true, nil
 }
 
 // loadFromKeychain is Load's first half: the item's login, and whether there
@@ -346,7 +378,7 @@ func writeMerged(decide func(live Blob) (Blob, error)) (err error) {
 
 	livePath := filepath.Join(held.Scope(), ccpath.CredentialsFile)
 
-	live, err := loadLiveUnderLock(livePath)
+	live, itemIsLive, err := loadLiveUnderLock(livePath)
 	if err != nil {
 		return err
 	}
@@ -379,10 +411,26 @@ func writeMerged(decide func(live Blob) (Blob, error)) (err error) {
 	default:
 	}
 
-	if err := WriteFileAtomic(livePath, data, 0o600); err != nil {
+	// THE ITEM FIRST, THE FILE SECOND, and the order is the whole of what a
+	// failure between them costs. The two writes cannot be made atomic -- one is
+	// a file and the other is a daemon -- but the order was never forced. This
+	// way the first failure has moved NOTHING, and the second leaves a login
+	// that really did change with a stale file behind it: the store nothing
+	// consults while an item exists, and the one Claude Code's own combinator
+	// deletes on its next successful write. The other order left the file moved
+	// and the login unchanged, which is the state this whole path exists to stop
+	// producing.
+	if err := installIntoKeychain(itemIsLive, merged); err != nil {
 		return err
 	}
-	return installIntoKeychain(merged)
+	if err := WriteFileAtomic(livePath, data, 0o600); err != nil {
+		if itemIsLive {
+			return fmt.Errorf("the keychain item Claude Code reads first now holds the new login, "+
+				"but the credentials file behind it could not be replaced: %w", err)
+		}
+		return err
+	}
+	return nil
 }
 
 // installIntoKeychain mirrors what was just written into the macOS Keychain
@@ -416,23 +464,19 @@ func writeMerged(decide func(live Blob) (Blob, error)) (err error) {
 // writes cannot be made atomic -- one is a file and the other is a daemon --
 // so the choice is only which failure the caller is told about, and silence is
 // what let this go unnoticed for as long as it did.
-func installIntoKeychain(merged Blob) error {
+func installIntoKeychain(itemIsLive bool, merged Blob) error {
+	// itemIsLive comes from the READ that produced the merge base, not from a
+	// second lookup. The old lookup was ProbeCredentialKeychainItem, which
+	// spawns `find-generic-password` WITHOUT -w so it can never raise an auth
+	// dialog -- and therefore answers "present" for an item whose secret the
+	// keychain is refusing. A switch could commit to replacing, wholesale, an
+	// item it had never read. Now the item written is the item the base came
+	// from by construction rather than by agreement, and a keychain that cannot
+	// be read has already failed the read, before anything was written.
+	if !itemIsLive {
+		return nil
+	}
 	ctx := context.Background()
-
-	found, err := ProbeCredentialKeychainItem(ctx)
-	if errors.Is(err, ErrKeychainUnsupported) {
-		return nil
-	}
-	if err != nil {
-		// A lookup that could not answer is not an absence. A locked keychain
-		// refusing to be read leaves it unknown whether an item is shadowing
-		// the file, and reporting that as "no item, nothing to do" would be
-		// the same switch-that-changes-nothing with a different cause.
-		return fmt.Errorf("the credentials file was written, but ccdad could not tell whether a keychain item shadows it: %w", err)
-	}
-	if !found.Present {
-		return nil
-	}
 	// COMPACT, where the file is indented, and the difference is not cosmetic.
 	// `security -w` -- the read Claude Code performs, and the one
 	// LoadKeychainCredentials performs -- hands back HEX for any value
@@ -450,8 +494,12 @@ func installIntoKeychain(merged Blob) error {
 	if err != nil {
 		return fmt.Errorf("encoding the keychain payload: %w", err)
 	}
-	if err := found.Item.Write(ctx, string(compact)); err != nil {
-		return fmt.Errorf("the credentials file was written, but the keychain item Claude Code reads first could not be updated, so the login did not change: %w", err)
+	// CredentialKeychainItem(), not a probed candidate: it is the same name
+	// LoadKeychainCredentials just read from, so the item written is the item
+	// the base came from.
+	if err := CredentialKeychainItem().Write(ctx, string(compact)); err != nil {
+		return fmt.Errorf("the keychain item Claude Code reads first could not be updated, so nothing "+
+			"was written and the login did not change: %w", err)
 	}
 	return nil
 }

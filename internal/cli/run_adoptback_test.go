@@ -206,3 +206,46 @@ func TestRemoveSessionDeletesTheSessionsKeychainItem(t *testing.T) {
 		t.Fatalf("the session home survived removeSession: %v", err)
 	}
 }
+
+// Claude Code does not degrade a rejected refresh, it ZEROES the credential in
+// place: on invalid_grant 2.1.251 rewrites it as
+// {...d,refreshToken:"",accessToken:"",expiresAt:0}. That is still a valid
+// claudeAiOauth and still different from the stored one, so the adopt-back
+// would have written it -- overwriting the grant the server still honours with
+// one that cannot be switched to, polled with, or refreshed back into life.
+func TestAdoptBackRefusesACredentialClaudeCodeZeroed(t *testing.T) {
+	isolate(t)
+	alive := `{"accessToken":"a1","refreshToken":"r1"}`
+	seedLogin(t, "u-1", alive)
+	session := sessionFor(t)
+	zeroed := `{"accessToken":"","refreshToken":"","expiresAt":0,"scopes":["user:inference"]}`
+	stubSessionKeychain(t, func(cclink.KeychainItem) (string, bool, error) {
+		return `{"claudeAiOauth":` + zeroed + `}`, true, nil
+	})
+
+	if err := adoptBack("u-1", session); err != nil {
+		t.Fatalf("adoptBack: %v", err)
+	}
+	if got := storedOAuth(t, "u-1"); got != alive {
+		t.Fatalf("the zeroed record was carried into the store: %s", got)
+	}
+}
+
+// The refusal is about an ABSENT grant, not about anything else the record may
+// have lost, so a rotation that still carries a refresh token still lands.
+func TestAdoptBackStillTakesARecordThatCarriesAGrant(t *testing.T) {
+	isolate(t)
+	seedLogin(t, "u-1", `{"accessToken":"a1","refreshToken":"r1"}`)
+	session := sessionFor(t)
+	rotated := `{"accessToken":"","refreshToken":"r2"}`
+	stubSessionKeychain(t, func(cclink.KeychainItem) (string, bool, error) {
+		return `{"claudeAiOauth":` + rotated + `}`, true, nil
+	})
+
+	if err := adoptBack("u-1", session); err != nil {
+		t.Fatalf("adoptBack: %v", err)
+	}
+	if got := storedOAuth(t, "u-1"); got != rotated {
+		t.Fatalf("stored login = %s, want the rotated pair %s", got, rotated)
+	}
+}

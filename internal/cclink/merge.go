@@ -99,6 +99,43 @@ func Merge(live, incoming Blob) Blob {
 // incoming is not guaranteed to have come from Extract — a hand-built call or
 // a future export format could still carry the key, and a wholesale replace
 // would destroy the live machine's other-organization entries.
+// overlayMachineKeys returns the keychain item's blob with the machine-scoped
+// keys the credentials FILE still holds and the item does not folded back in.
+//
+// The item wins every collision, so loadLiveUnderLock's freshness argument is
+// untouched: this only refuses to DELETE what neither store has superseded.
+// Account-scoped keys are never taken from the file at all -- deciding who is
+// live from the item is the whole reason that base exists, and a stale login
+// read back out of the file is the confident wrong answer Load's header names.
+//
+// The fold is PER SUB-KEY, not per key, because per key would still lose the
+// thing worth keeping. mcpOAuth is keyed by server and coworkRemoteDevice by
+// organization, so an MCP server the user logged into while the keychain was
+// locked sits BESIDE entries the item already has -- a top-level "the item has
+// mcpOAuth, keep the item's" drops it. unionObjects is the same union Merge
+// already applies to coworkRemoteDevice, and it leaves a key alone whenever the
+// item's value is not an object to union into.
+func overlayMachineKeys(item, file Blob) Blob {
+	out := Blob{}
+	for k, v := range item {
+		out[k] = append(json.RawMessage(nil), v...)
+	}
+	for k, v := range file {
+		if IsAccountScoped(k) {
+			continue
+		}
+		held, ok := out[k]
+		if !ok {
+			out[k] = append(json.RawMessage(nil), v...)
+			continue
+		}
+		if merged, ok := unionObjects(held, v); ok {
+			out[k] = merged
+		}
+	}
+	return out
+}
+
 func unionObjects(live, incoming json.RawMessage) (json.RawMessage, bool) {
 	liveMap, liveOK := decodeObject(live)
 	if !liveOK {
