@@ -18,6 +18,32 @@ by `uuid` or `alias`.
 
 ### Fixed
 
+- **A session no longer carries back a grant the store has already moved past.**
+  A `ccdad run` session holds the copy it was seeded with for as long as it runs,
+  and a second run of the same account, a probe of it, or the poller's own
+  rotation all mint a new pair in the meantime — which revokes the session's. The
+  adopt-back wrote the older one back, so the next `ccdad switch` handed Claude
+  Code a dead token. `tokens.Source.save` settles the identical collision the
+  identical way and this function's header already claimed to carry that rule:
+  the stored one wins, because whoever wrote it is already using it. The refusal
+  is an error rather than a silent skip, because both callers keep the session
+  directory on an error and print where it is. Pinned by
+  `TestAdoptBackRefusesAGrantTheStoreHasAlreadyMovedPast`.
+
+- **ccdad can now repair a login Claude Code blanked while a rotation was in
+  flight.** Claude Code does not delete a rejected credential, it rewrites it in
+  place as `{...d,refreshToken:"",accessToken:"",expiresAt:0}`. `refreshLive`
+  reads and decides under Claude Code's lock, RELEASES it to reach the network,
+  and re-takes it to write — and a Claude Code whose own refresh is rejected in
+  that gap leaves the record blanked. `recordOf` refuses a blanked record, so the
+  compare-and-swap read it as somebody else's file and stood down, leaving the
+  user logged out while ccdad held the very pair that repairs them. The write is
+  identity-guarded: the credential that named the account is what was erased, so
+  `~/.claude.json`'s `oauthAccount` is the only thing left that can name it, and a
+  config that cannot be read errors rather than answering "not ours". Pinned by
+  `TestADeadTokenClearIsWrittenBackOverWhenTheConfigStillNamesUs` and
+  `TestADeadTokenClearIsLeftAloneWhenTheConfigNamesSomebodyElse`.
+
 - **A switch writes the keychain item BEFORE the credentials file, and writes the
   item it actually read.** The order was never forced and the old one produced
   exactly the losing state this path exists to prevent: the file moved and the

@@ -867,6 +867,36 @@ func adoptBack(uuid string, session runSession) error {
 		if bytes.Equal(current["claudeAiOauth"], fresh) {
 			return nil
 		}
+		// The stored snapshot moved on while this session held its seeded copy,
+		// so the session's grant is a generation behind and the server revoked
+		// it when it minted the stored one. Three supported paths reach here: a
+		// second `ccdad run` on this account, a `ccdad probe` of it, and the
+		// poller's own rotation. Writing a revoked grant back is not a lost
+		// refresh -- it is the next `ccdad switch` handing Claude Code a dead
+		// token, which is a logout.
+		//
+		// tokens.Source.save settles the identical collision the identical way,
+		// and this function's header already claims to carry that rule: the
+		// STORED one wins, because whoever wrote it is already using it. The
+		// comparison is claudeAiOauth.expiresAt in milliseconds, the same field
+		// and direction localCredentialIsNewer imports on. A pair that cannot be
+		// compared answers "adopt": a missing expiry is what a hand-written
+		// credential looks like, and refusing every uncomparable pair would
+		// strand the ordinary rotation this function exists for.
+		//
+		// An ERROR rather than a silent skip, and that is load-bearing. Both
+		// callers' defers KEEP the session directory when the adopt-back fails
+		// and print where it is, so the generation this refuses to install is
+		// still on disk and `ccdad doctor` still names it. A refusal nobody can
+		// see would be indistinguishable from the stale write it replaces.
+		if stored, ok := oauthExpiresAt(current); ok {
+			if mine, mineOK := oauthExpiresAt(cclink.Blob{"claudeAiOauth": fresh}); mineOK && stored > mine {
+				return fmt.Errorf("ccdad's stored snapshot for %s was refreshed while this session ran "+
+					"(stored expires %s, this session's copy expires %s), so this session's grant is a "+
+					"generation behind one the server has already revoked and is not carried back",
+					uuid, time.UnixMilli(stored).Format(time.RFC3339), time.UnixMilli(mine).Format(time.RFC3339))
+			}
+		}
 		next := cclink.Blob{}
 		for k, v := range current {
 			next[k] = v

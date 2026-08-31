@@ -325,7 +325,31 @@ func (s *Source) refreshLive(ctx context.Context, uuid string, current record) (
 	// read-decide-write; ErrNoChange from the decision leaves the file alone.
 	werr := activateWith(func(live cclink.Blob) (cclink.Blob, error) {
 		at, ok := recordOf(live)
-		if !ok || at.RefreshToken != current.RefreshToken {
+		switch {
+		case ok && at.RefreshToken == current.RefreshToken:
+			// Untouched: still the grant this call spent.
+		case !ok && deadTokenClear(live):
+			// THE ONE SHAPE OF "NOT THE GRANT WE SPENT" THAT IS STILL OURS.
+			// Claude Code does not delete a rejected credential, it BLANKS it:
+			// on invalid_grant 2.1.251 rewrites the record in place as
+			// {...d,refreshToken:"",accessToken:"",expiresAt:0}. recordOf
+			// refuses that -- there is no token in it to parse -- so the plain
+			// CAS read it as somebody else's file and stood down, leaving the
+			// user logged out while ccdad held the pair that would have
+			// repaired them.
+			//
+			// It may only be written when the blanked login is provably THIS
+			// account's, and the file itself can no longer say so: the record
+			// that named it is what was blanked. ~/.claude.json's oauthAccount
+			// is the one thing left that still names it.
+			named, ierr := liveIdentityIs(uuid)
+			if ierr != nil {
+				return nil, fmt.Errorf("reading the global config to name the blanked live login: %w", ierr)
+			}
+			if !named {
+				return nil, cclink.ErrNoChange
+			}
+		default:
 			return nil, cclink.ErrNoChange
 		}
 		next := cclink.Extract(live)
@@ -518,6 +542,52 @@ type record struct {
 	ClientID         string
 
 	raw json.RawMessage
+}
+
+// deadTokenClear reports whether the live record is Claude Code's own spelling
+// of "this credential is dead": present, syntactically valid, and empty.
+//
+// It reads the RAW object rather than going through recordOf, because recordOf
+// is what cannot tell the two apart -- a blanked record and a file with no
+// claudeAiOauth in it both answer !ok, and only one of them is a login this
+// process may repair.
+func deadTokenClear(live cclink.Blob) bool {
+	raw, ok := live["claudeAiOauth"]
+	if !ok {
+		return false
+	}
+	var wire struct {
+		AccessToken  string `json:"accessToken"`
+		RefreshToken string `json:"refreshToken"`
+	}
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		return false
+	}
+	return wire.AccessToken == "" && wire.RefreshToken == ""
+}
+
+// liveIdentityIs reports whether ~/.claude.json's cached profile names uuid.
+//
+// It is the only oracle left for a BLANKED login: the credential that named the
+// account is the thing that was erased, and this file is written by Claude Code
+// itself on every profile fetch. It is a cache and it can be stale -- see
+// claude auth status -- so it is used only to REFUSE, never to widen: the write
+// happens for a name that matches and stands down for anything else.
+//
+// A config that cannot be read is an error rather than "not ours". Offline, or
+// a permissions fault, is not evidence about whose login was blanked, and the
+// direction to fail in is the one that writes nothing.
+func liveIdentityIs(uuid string) (bool, error) {
+	cfg, err := cclink.LoadGlobalConfig()
+	if err != nil {
+		return false, err
+	}
+	raw, ok := cclink.OAuthAccountSnapshot(cfg)
+	if !ok {
+		return false, nil
+	}
+	got, ok := cclink.OAuthAccountUUID(raw)
+	return ok && got == uuid, nil
 }
 
 func recordOf(b cclink.Blob) (record, bool) {

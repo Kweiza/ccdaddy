@@ -10,6 +10,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/store"
+	"strings"
 )
 
 // stubSessionKeychain replaces the two windows onto a session's scoped item.
@@ -247,5 +248,51 @@ func TestAdoptBackStillTakesARecordThatCarriesAGrant(t *testing.T) {
 	}
 	if got := storedOAuth(t, "u-1"); got != rotated {
 		t.Fatalf("stored login = %s, want the rotated pair %s", got, rotated)
+	}
+}
+
+// A session's grant can be a GENERATION BEHIND by the time it ends: a second
+// `ccdad run` on the account, a probe of it, or the poller's own rotation all
+// mint a new pair, and the server revokes the one this session was seeded with.
+// Writing that back is not a lost refresh -- it is the next `ccdad switch`
+// handing Claude Code a dead token.
+func TestAdoptBackRefusesAGrantTheStoreHasAlreadyMovedPast(t *testing.T) {
+	isolate(t)
+	newer := `{"accessToken":"a2","refreshToken":"r2","expiresAt":2000000000000}`
+	seedLogin(t, "u-1", newer)
+	session := sessionFor(t)
+	older := `{"accessToken":"a1","refreshToken":"r1","expiresAt":1000000000000}`
+	stubSessionKeychain(t, func(cclink.KeychainItem) (string, bool, error) {
+		return `{"claudeAiOauth":` + older + `}`, true, nil
+	})
+
+	err := adoptBack("u-1", session)
+	if err == nil {
+		t.Fatal("adoptBack succeeded with a grant older than the stored one")
+	}
+	if !strings.Contains(err.Error(), "generation behind") {
+		t.Fatalf("the error does not say why it refused: %v", err)
+	}
+	if got := storedOAuth(t, "u-1"); got != newer {
+		t.Fatalf("the older grant was written over the newer one: %s", got)
+	}
+}
+
+// The ordinary rotation this function exists for still lands: a session grant
+// NEWER than the stored one is exactly what adopt-back is for.
+func TestAdoptBackStillTakesAGrantNewerThanTheStoredOne(t *testing.T) {
+	isolate(t)
+	seedLogin(t, "u-1", `{"accessToken":"a1","refreshToken":"r1","expiresAt":1000000000000}`)
+	session := sessionFor(t)
+	newer := `{"accessToken":"a2","refreshToken":"r2","expiresAt":2000000000000}`
+	stubSessionKeychain(t, func(cclink.KeychainItem) (string, bool, error) {
+		return `{"claudeAiOauth":` + newer + `}`, true, nil
+	})
+
+	if err := adoptBack("u-1", session); err != nil {
+		t.Fatalf("adoptBack: %v", err)
+	}
+	if got := storedOAuth(t, "u-1"); got != newer {
+		t.Fatalf("stored login = %s, want the session's newer grant", got)
 	}
 }

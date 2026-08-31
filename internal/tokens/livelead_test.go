@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
+	"io"
+	"strings"
 )
 
 func readLiveRecord(t *testing.T) record {
@@ -162,5 +164,88 @@ func TestAFailedLeadRefreshStillAnswersWithAUsableToken(t *testing.T) {
 	}
 	if live := readLiveRecord(t); live.RefreshToken != "RT" {
 		t.Errorf("a failed rotation still rewrote the live file: %+v", live)
+	}
+}
+
+// writeGlobalConfig puts an oauthAccount naming uuid into ~/.claude.json, which
+// is the only thing left that can name a login Claude Code has BLANKED.
+func writeGlobalConfig(t *testing.T, uuid string) {
+	t.Helper()
+	path := filepath.Join(os.Getenv("CLAUDE_CONFIG_DIR"), ".claude.json")
+	body := `{"oauthAccount":{"accountUuid":"` + uuid + `","emailAddress":"x@example.com"}}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Claude Code does not delete a rejected credential, it BLANKS it in place:
+// {...d,refreshToken:"",accessToken:"",expiresAt:0}. The window is the POST
+// itself -- refreshLive reads and decides under the lock, RELEASES it to reach
+// the network, and re-takes it to write. A Claude Code whose own refresh is
+// rejected in that gap leaves the record blanked, recordOf refuses it, and the
+// CAS read it as somebody else's file and stood down -- leaving the user logged
+// out while ccdad held the very pair that repairs them.
+func TestADeadTokenClearIsWrittenBackOverWhenTheConfigStillNamesUs(t *testing.T) {
+	isolate(t)
+	now := time.Now()
+	// Inside the band ccdad rotates in: above Claude Code's five-minute floor,
+	// at or below LiveRefreshLead.
+	rec := oauthRecord("a1", "r1", now.Add(20*time.Minute), "")
+	seed(t, "u-1", rec)
+	writeLive(t, rec)
+	writeGlobalConfig(t, "u-1")
+
+	src := sourceFor(t, func(w http.ResponseWriter, _ *http.Request) {
+		// The blanking happens WHILE the POST is in flight, which is the only
+		// moment the CAS can meet it.
+		writeLive(t, json.RawMessage(`{"accessToken":"","refreshToken":"","expiresAt":0}`))
+		_, _ = io.WriteString(w, tokenResponse("a2", "r2", 28800))
+	})
+	src.Now = func() time.Time { return now }
+
+	if _, err := src.AccessToken(context.Background(), "u-1"); err != nil {
+		t.Fatalf("AccessToken: %v", err)
+	}
+	live, err := cclink.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(live["claudeAiOauth"]), `"a2"`) {
+		t.Fatalf("the blanked live record was left blanked, so the user stays logged out: %s",
+			live["claudeAiOauth"])
+	}
+}
+
+// The repair is identity-GUARDED. A blanked record the config does not name is
+// somebody else's logout, and writing this account's pair over it would attach
+// one account's grant to another's session.
+func TestADeadTokenClearIsLeftAloneWhenTheConfigNamesSomebodyElse(t *testing.T) {
+	isolate(t)
+	now := time.Now()
+	rec := oauthRecord("a1", "r1", now.Add(20*time.Minute), "")
+	seed(t, "u-1", rec)
+	writeLive(t, rec)
+	writeGlobalConfig(t, "somebody-else")
+
+	src := sourceFor(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeLive(t, json.RawMessage(`{"accessToken":"","refreshToken":"","expiresAt":0}`))
+		_, _ = io.WriteString(w, tokenResponse("a2", "r2", 28800))
+	})
+	src.Now = func() time.Time { return now }
+
+	if _, err := src.AccessToken(context.Background(), "u-1"); err != nil {
+		t.Fatalf("AccessToken: %v", err)
+	}
+	live, err := cclink.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(live["claudeAiOauth"]), `"a2"`) {
+		t.Fatalf("this account's pair was written over somebody else's blanked login: %s",
+			live["claudeAiOauth"])
+	}
+	// The store still records the mint, because the grant was spent either way.
+	if r := storedRecord(t, "u-1"); r.RefreshToken != "r2" {
+		t.Fatalf("the minted pair was not recorded anywhere: %q", r.RefreshToken)
 	}
 }
