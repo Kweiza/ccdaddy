@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"errors"
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/store"
@@ -148,6 +149,48 @@ func applyImport(payload exportPayload, force bool) (imported, skipped []string,
 					skipped = append(skipped, fmt.Sprintf(
 						"%s (the credentials here are newer; --force to overwrite them)", row.label()))
 					continue
+				}
+				if known {
+					stored, cerr := s.Credentials(row.UUID)
+					switch {
+					case errors.Is(cerr, store.ErrNoCredentials):
+						// Nothing here to lose, and this import is the repair
+						// for an account row whose credential file went missing.
+					case cerr != nil:
+						// "could not read" is not "there is nothing there". The
+						// ccdad store is named because it is the one that
+						// answered -- the document is fine -- and the row is
+						// left alone rather than overwritten blind.
+						skipped = append(skipped, fmt.Sprintf(
+							"%s (the ccdad store could not read its stored credentials: %v; "+
+								"'ccdad remove' it, then import again to replace them)", row.label(), cerr))
+						continue
+					default:
+						// INVARIANT 5. store.Add replaces the credential file
+						// WHOLESALE -- `ccdad add-token` carries the same
+						// warning for the same reason -- so handing it the
+						// document's blob alone deletes this account's api-key
+						// record, its designOauth and its trustedDeviceToken as
+						// the price of restoring one OAuth login. The
+						// newer-credentials check above cannot stand in for it:
+						// that compares claudeAiOauth and nothing else, so it
+						// never sees the keys being dropped.
+						//
+						// The document still wins on every key it CARRIES, so
+						// --force keeps meaning "the document's generation of
+						// claudeAiOauth beats the newer local one" rather than
+						// "erase what the document never mentioned".
+						//
+						// Filtered through importSnapshot for the same reason
+						// the document is: a machine key that once reached this
+						// account's snapshot must not be re-blessed here, by a
+						// path with no rule on it.
+						for k, v := range importSnapshot(stored) {
+							if _, carried := creds[k]; !carried {
+								creds[k] = v
+							}
+						}
+					}
 				}
 			case known:
 				// A metadata-only export can still carry an alias, the two

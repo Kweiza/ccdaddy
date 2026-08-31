@@ -18,6 +18,62 @@ by `uuid` or `alias`.
 
 ### Fixed
 
+- **A switch writes the keychain item BEFORE the credentials file, and writes the
+  item it actually read.** The order was never forced and the old one produced
+  exactly the losing state this path exists to prevent: the file moved and the
+  login — the item Claude Code reads before it — did not. Item-first means the
+  first failure has moved nothing at all. And `installIntoKeychain` decided from
+  `ProbeCredentialKeychainItem`, which spawns `find-generic-password` WITHOUT `-w`
+  so it can never raise an auth dialog — and therefore answers "present" for an
+  item whose secret the keychain is refusing, letting a switch commit to
+  replacing, wholesale, an item it had never read. It now takes that answer from
+  the READ that produced the merge base. Pinned by
+  `TestASwitchThatCannotWriteTheItemMovesNothing`.
+
+- **A switch no longer deletes machine-scoped keys that only the credentials file
+  holds.** Where an item exists it is the merge base, on the argument that it is
+  the fresher blob. That holds for what the item HAS and says nothing about what
+  it never had: Claude Code's combinator writes the primary and skips the fallback
+  ON SUCCESS, so the moment a keychain write fails it takes the plaintext fallback
+  instead, and from then on the file carries machine keys the item has never seen
+  — an MCP login made while the keychain was locked lives only there. The file's
+  machine keys are folded back in per sub-key, with the item winning every
+  collision. A file that cannot be READ behind an item that answered is now an
+  error rather than an empty base, because the write replaces that file wholesale.
+  Pinned by `TestASwitchKeepsMachineKeysOnlyTheFileHolds` and
+  `TestASwitchRefusesWhenTheFileBehindAnItemCannotBeRead`.
+
+- **`adoptBack` refuses to carry back a credential Claude Code zeroed.** On
+  `invalid_grant` 2.1.251 rewrites the record in place as
+  `{...d,refreshToken:"",accessToken:"",expiresAt:0}` — still a syntactically
+  valid `claudeAiOauth`, and still different from the stored one, so the
+  adopt-back wrote it. The account was then unswitchable, unpollable and
+  unrefreshable: the exact unrecoverable state `adoptBack` exists to prevent,
+  arriving from the other direction. `ccdad run`'s header also claimed the
+  per-session directory was a concurrency mitigation; sharing Claude Code's
+  refresh lock is what SERIALISES two sessions, so a home of one's own is what
+  creates the double-spend rather than what prevents it. Pinned by
+  `TestAdoptBackRefusesACredentialClaudeCodeZeroed`.
+
+- **`ccdad import` stopped deleting credential keys the document never
+  mentioned.** `store.Add` replaces an account's credential file wholesale, so
+  importing a document carrying only `claudeAiOauth` dropped that account's
+  `designOauth` and `trustedDeviceToken`. The newer-credentials check could not
+  stand in for it: it compares `claudeAiOauth` and nothing else, so it never sees
+  the keys being dropped. The document still wins on every key it carries.
+  `store.ErrNoCredentials` now separates "no file" from "could not read it", and
+  the second leaves the row alone rather than overwriting it blind. Pinned by
+  `TestImportKeepsCredentialKeysTheDocumentNeverMentions`.
+
+- **Spending a refresh grant is now a log line.** A refresh token is single-use,
+  so minting a new pair revokes the old one — a mint nobody recorded is a
+  credential destroyed leaving nothing behind but a file mtime. That is how the
+  2026-09-01 logout read as causeless: five grants were spent between 22:45 and
+  03:28 while `daemon.log`'s entire account of those eight hours was "tick still
+  failing". Every line names which stores took the replacement, and no token text
+  is ever formatted. The daemon's log now reaches the token source at all, which
+  it never did. Pinned by `TestSpendingAGrantIsLogged`.
+
 - **`ccdad auto` no longer reports a deliberate stand-down as a bug in itself.**
   Its outcome switch carried a comment claiming it had no default, so "an Outcome
   added later would break the build here". It has one. `switcher.Unattributed`

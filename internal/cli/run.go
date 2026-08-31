@@ -578,9 +578,28 @@ func copyInto(src, dst string) error {
 // newSession creates a credential home for one run and returns its path.
 //
 // os.MkdirTemp gives 0700 without a second chmod, and its random suffix is what
-// makes two concurrent `ccdad run` invocations for the SAME account safe: they
-// must not share a directory, because they would then share Claude Code's
-// credential locks and race each other's token refresh.
+// makes the home EPHEMERAL: ccdad deletes it when the child exits, which it
+// could not do to a home a second session of the same account might still be
+// reading.
+//
+// THE SUFFIX IS NOT A CONCURRENCY MITIGATION, AND THIS HEADER USED TO SAY IT
+// WAS -- that two runs of one account "must not share a directory, because they
+// would then share Claude Code's credential locks and race each other's token
+// refresh". Sharing those locks is what SERIALISES them. Measured in 2.1.251's
+// refresh path: Claude Code takes `<home>/.oauth_refresh.lock`, and under it
+// re-reads the credential and returns "refreshed" having spent NOTHING when the
+// access token on disk is no longer the one it started with. Two sessions in
+// one home take turns and the second adopts the first's rotation. Two homes are
+// two locks over two copies of the SAME refresh token, so both spend it, the
+// server rotates on the first spend, and the loser's POST comes back
+// invalid_grant. The hazard belongs to this mode alone: --full-profile gives an
+// account ONE home, so its sessions share the locks.
+//
+// It is not closed here, because closing it means a shared home with a refcount
+// and this constructor is the one thing standing between a session's leftovers
+// and the next session's. What IS closed is the damage outliving the session:
+// adoptBack refuses to carry back the zeroed record Claude Code leaves behind
+// when a refresh is rejected.
 //
 // The uuid is in the name so `ccdad doctor` can say which account a leftover
 // belongs to without reading the credentials inside it.
@@ -807,6 +826,28 @@ func adoptBack(uuid string, session runSession) error {
 	if !ok {
 		return nil
 	}
+	if !carriesGrant(fresh) {
+		// A session whose refresh was REJECTED leaves a record with no grant in
+		// it. Measured in 2.1.251: on invalid_grant Claude Code rewrites the
+		// credential in place as `{...d,refreshToken:"",accessToken:"",
+		// expiresAt:0}` -- still a syntactically valid claudeAiOauth, and still
+		// different from the stored one, so the adopt-back below would write it.
+		//
+		// It must not. The rejection means somebody ELSE spent this account's
+		// grant while the session held a copy: a sibling `ccdad run` in a home
+		// of its own, or the poller's own rotation. What they rotated to is what
+		// the store now holds. A session may hand this store a NEWER grant; it
+		// may never hand it an empty one, because an empty one cannot be
+		// switched to, polled with, or refreshed back into life -- the exact
+		// unrecoverable state adoptBack exists to prevent, arriving from the
+		// other direction.
+		//
+		// Silent, like the token-account branch below it and for the same
+		// reason: this is a classification, not a store that answered badly.
+		// An error here would keep the session directory forever and leave
+		// doctor reporting a leftover that holds nothing but zeros.
+		return nil
+	}
 	return store.WithStore(func(st *store.Store) error {
 		current, err := st.Credentials(uuid)
 		if err != nil {
@@ -837,6 +878,24 @@ func adoptBack(uuid string, session runSession) error {
 		}
 		return st.Add(acct, next)
 	})
+}
+
+// carriesGrant reports whether a session's claudeAiOauth still holds a refresh
+// token, which is the only thing in it worth carrying back.
+//
+// The empty string is Claude Code's OWN spelling of "this credential is dead":
+// its readers ask `refreshToken===""` and answer "logged out" from the file
+// alone, without going near the network. A record in that shape is not one ccdad
+// can store -- and a record this cannot parse is not one either, which is the
+// same answer for the same reason: there is nothing in it to adopt.
+func carriesGrant(raw json.RawMessage) bool {
+	var wire struct {
+		RefreshToken string `json:"refreshToken"`
+	}
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		return false
+	}
+	return wire.RefreshToken != ""
 }
 
 // removeSession deletes a session's credential home and the lock Claude Code

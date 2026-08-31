@@ -38,8 +38,14 @@ const (
 	securityStdoutEnv = "CCDAD_TEST_SECURITY_STDOUT"
 	securityStderrEnv = "CCDAD_TEST_SECURITY_STDERR"
 	securityExitEnv   = "CCDAD_TEST_SECURITY_EXIT"
-	securityHangEnv   = "CCDAD_TEST_SECURITY_HANG"
-	securityLingerEnv = "CCDAD_TEST_SECURITY_LINGER"
+	// securityFailOpEnv names ONE subcommand that fails while the rest succeed.
+	// Ordering is the property some paths have -- a switch must write the item
+	// before the file -- and a fixture with one exit code for every spawn can
+	// only assert that everything failed.
+	securityFailOpEnv   = "CCDAD_TEST_SECURITY_FAIL_OP"
+	securityFailExitEnv = "CCDAD_TEST_SECURITY_FAIL_EXIT"
+	securityHangEnv     = "CCDAD_TEST_SECURITY_HANG"
+	securityLingerEnv   = "CCDAD_TEST_SECURITY_LINGER"
 )
 
 // TestMain routes on the environment before testing ever sees the argument
@@ -93,6 +99,13 @@ func runAsFakeSecurity() int {
 	if errOut := os.Getenv(securityStderrEnv); errOut != "" {
 		fmt.Fprint(os.Stderr, errOut)
 	}
+	if op := os.Getenv(securityFailOpEnv); op != "" && len(os.Args) > 1 && os.Args[1] == op {
+		code, err := strconv.Atoi(os.Getenv(securityFailExitEnv))
+		if err != nil || code == 0 {
+			return 1
+		}
+		return code
+	}
 	code, err := strconv.Atoi(os.Getenv(securityExitEnv))
 	if err != nil {
 		return 0
@@ -119,6 +132,10 @@ type fakeSecurity struct {
 	hang time.Duration
 	// linger makes it leak a child holding the output pipe.
 	linger bool
+	// failOp is one subcommand that fails while the rest succeed, and failExit
+	// is what it exits with (1 when unset).
+	failOp   string
+	failExit int
 }
 
 // install points the exec layer at the fixture and pretends this machine is
@@ -158,6 +175,8 @@ func (f fakeSecurity) install(t *testing.T) string {
 	if f.linger {
 		t.Setenv(securityLingerEnv, "1")
 	}
+	t.Setenv(securityFailOpEnv, f.failOp)
+	t.Setenv(securityFailExitEnv, strconv.Itoa(f.failExit))
 	return argv
 }
 

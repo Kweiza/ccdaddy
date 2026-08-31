@@ -87,6 +87,16 @@ type Source struct {
 	Skew time.Duration
 	// LockTimeout bounds the wait for Claude Code's refresh lock.
 	LockTimeout time.Duration
+
+	// Log records every refresh grant this Source SPENDS. Nil is silent.
+	//
+	// A refresh token is single-use: minting a new pair revokes the old one. So
+	// a mint nobody recorded is a credential destroyed leaving nothing behind
+	// but a file mtime, and that is how the 2026-09-01 logout read as causeless
+	// -- five grants were spent between 22:45 and 03:28 while daemon.log's
+	// entire account of those eight hours was "tick still failing". See logMint
+	// for what one line has to say.
+	Log func(format string, a ...any)
 }
 
 // New returns a Source with the production client and clock.
@@ -324,7 +334,12 @@ func (s *Source) refreshLive(ctx context.Context, uuid string, current record) (
 	})
 	// The store second, and unconditionally on the live write: a pair that was
 	// minted and not recorded is a pair nothing can ever use again.
-	if serr := s.save(uuid, updated, current.RefreshToken); serr != nil {
+	serr := s.save(uuid, updated, current.RefreshToken)
+	// Before either refusal returns, because both of them return NIL: the two
+	// branches below hand the caller a token and no error, so this line is the
+	// only thing that can say a grant was spent and one copy did not take it.
+	s.logMint(uuid, true, serr, werr)
+	if serr != nil {
 		return current.AccessToken, nil
 	}
 	if werr != nil && !errors.Is(werr, cclink.ErrNoChange) {
@@ -358,10 +373,52 @@ func (s *Source) refresh(ctx context.Context, uuid string, rec record) (string, 
 	if err != nil {
 		return "", err
 	}
-	if err := s.save(uuid, updated, rec.RefreshToken); err != nil {
-		return "", err
+	serr := s.save(uuid, updated, rec.RefreshToken)
+	// After the save and before its error returns. The grant is already spent
+	// either way, and the error the caller gets names a store that would not
+	// write -- never the rotation that made writing necessary.
+	s.logMint(uuid, false, serr, nil)
+	if serr != nil {
+		return "", serr
 	}
 	return fresh.AccessToken, nil
+}
+
+// logMint records one spent grant, and names which copies took the replacement.
+//
+// It is written per OUTCOME rather than as one line with fields because the
+// outcomes want different words: a store that refused the new pair has lost it
+// outright, and a live store that refused it has left Claude Code holding a
+// grant this rotation just revoked. Those are the two that end in a logout, and
+// neither returns an error to anybody.
+//
+// No token text is ever formatted here. The uuid is the account's primary key
+// and says everything a reader needs; the secret says nothing a reader needs
+// and would be in a file that rotates.
+func (s *Source) logMint(uuid string, live bool, storeErr, liveErr error) {
+	if s.Log == nil {
+		return
+	}
+	who := "not the live login"
+	if live {
+		who = "the live Claude Code login"
+	}
+	switch {
+	case storeErr != nil:
+		s.Log("refreshed the grant for %s (%s), but the ccdad store refused the new pair: %v; "+
+			"the grant it replaced is revoked and the replacement is held nowhere", uuid, who, storeErr)
+	case errors.Is(liveErr, cclink.ErrNoChange):
+		s.Log("refreshed the grant for %s (%s): the live credentials no longer held the grant that "+
+			"was spent, so the new pair is in the ccdad store alone", uuid, who)
+	case liveErr != nil:
+		s.Log("refreshed the grant for %s (%s), but Claude Code's credential store refused the new "+
+			"pair: %v; Claude Code is still holding the grant this rotation revoked", uuid, who, liveErr)
+	case live:
+		s.Log("refreshed the grant for %s (%s): the new pair is in Claude Code's credential store "+
+			"and in the ccdad store", uuid, who)
+	default:
+		s.Log("refreshed the grant for %s (%s): the new pair is in the ccdad store", uuid, who)
+	}
 }
 
 // save writes a claudeAiOauth record back into the account's stored snapshot,

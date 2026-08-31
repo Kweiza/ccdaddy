@@ -16,6 +16,8 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/cclock"
 	"github.com/Kweiza/ccdaddy/internal/oauth"
 	"github.com/Kweiza/ccdaddy/internal/store"
+	"io"
+	"strings"
 )
 
 // isolate points ccdad's store and every Claude Code path at temp directories.
@@ -457,5 +459,59 @@ func TestUnreadableLiveStoreSpendsNoRefreshToken(t *testing.T) {
 	// The grant must still be the one that was seeded: nothing rotated it.
 	if rec := storedRecord(t, "u-1"); rec.RefreshToken != "r1" {
 		t.Fatalf("the stored refresh token moved to %q; the grant was spent", rec.RefreshToken)
+	}
+}
+
+// A refresh token is single-use: minting a new pair REVOKES the old one. A mint
+// nobody recorded is therefore a credential destroyed leaving nothing behind
+// but a file mtime -- which is exactly how the 2026-09-01 logout read as
+// causeless, five grants spent while daemon.log said only "tick still failing".
+func TestSpendingAGrantIsLogged(t *testing.T) {
+	isolate(t)
+	seed(t, "u-1", oauthRecord("a1", "r1", time.Now().Add(-time.Hour), ""))
+	writeLive(t, oauthRecord("aOTHER", "rOTHER", time.Now().Add(6*time.Hour), ""))
+
+	var said []string
+	src := sourceFor(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, tokenResponse("a2", "r2", 28800))
+	})
+	src.Log = func(format string, a ...any) { said = append(said, fmt.Sprintf(format, a...)) }
+
+	if _, err := src.AccessToken(context.Background(), "u-1"); err != nil {
+		t.Fatalf("AccessToken: %v", err)
+	}
+	if len(said) != 1 {
+		t.Fatalf("a grant was spent and logged %d times, want exactly one:\n%s", len(said), strings.Join(said, "\n"))
+	}
+	line := said[0]
+	for _, want := range []string{"refreshed the grant", "u-1", "not the live login", "ccdad store"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("the line does not carry %q: %s", want, line)
+		}
+	}
+	// The secret must never reach the log: it is in a file that rotates, and it
+	// says nothing a reader of this line needs.
+	for _, secret := range []string{"r1", "r2", "a2"} {
+		if strings.Contains(line, `"`+secret+`"`) || strings.Contains(line, " "+secret+" ") {
+			t.Fatalf("the log line carries token text %q: %s", secret, line)
+		}
+	}
+}
+
+// A Source with no Log spends grants exactly as before and says nothing, which
+// is what every CLI path wants.
+func TestSpendingAGrantWithoutALogIsSilentAndStillWorks(t *testing.T) {
+	isolate(t)
+	seed(t, "u-1", oauthRecord("a1", "r1", time.Now().Add(-time.Hour), ""))
+	writeLive(t, oauthRecord("aOTHER", "rOTHER", time.Now().Add(6*time.Hour), ""))
+
+	src := sourceFor(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, tokenResponse("a2", "r2", 28800))
+	})
+	if got, err := src.AccessToken(context.Background(), "u-1"); err != nil || got != "a2" {
+		t.Fatalf("AccessToken = (%q, %v), want the fresh token", got, err)
+	}
+	if rec := storedRecord(t, "u-1"); rec.RefreshToken != "r2" {
+		t.Fatalf("the rotation was not stored: %q", rec.RefreshToken)
 	}
 }

@@ -169,6 +169,13 @@ type Engine struct {
 	// network call carrying the live login's own bearer; see resolveMinInterval.
 	nextResolveAt time.Time
 
+	// src is the token source the seams above were taken from, kept only so
+	// AttachLog can reach its Log field -- it was discarded before, so the one
+	// place that spends grants could never be given the daemon's log. NewEngine
+	// sets it; an Engine a test composes by hand leaves it nil and logs nothing
+	// extra.
+	src *tokens.Source
+
 	// saidUnreadable latches the stand-down on a login STORE that could not be
 	// read at all, which is a different sentence from saidUnattributed's and a
 	// different remedy: that one waits for an identity, this one waits for the
@@ -214,6 +221,7 @@ func NewEngine() *Engine {
 	// sets of timeouts for one URL.
 	profiles := identity.NewClient()
 	return &Engine{
+		src:          src,
 		AccessToken:  src.AccessToken,
 		Freshen:      src.Freshen,
 		ResolveOwner: ownerResolver(profiles),
@@ -224,6 +232,16 @@ func NewEngine() *Engine {
 		inFlight:     map[string]struct{}{},
 		polls:        map[string]pollRecord{},
 		cfg:          config.Defaults(),
+	}
+}
+
+// AttachLog gives the daemon's log to the engine AND to the token source behind
+// it, which is the half that was missing: the source is where a grant is spent,
+// and it had no way to say so.
+func (e *Engine) AttachLog(f func(format string, a ...any)) {
+	e.Log = f
+	if e.src != nil {
+		e.src.Log = f
 	}
 }
 
