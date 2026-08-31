@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"os"
 	"os/user"
+	"regexp"
 	"strings"
 
 	"golang.org/x/text/unicode/norm"
@@ -552,4 +553,94 @@ func keychainFailureDetail(f keychainFailure) string {
 // whoever wrote it -- ccdad is not entitled to reshape it.
 func trimKeychainSecret(out string) string {
 	return strings.TrimSuffix(out, "\n")
+}
+
+// liveAccountPattern is xC()'s `s`, the character set 2.1.251 accepts in an
+// account name before it gives up and uses the constant.
+var liveAccountPattern = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
+
+// LiveKeychainItem is the credential item a CURRENT Claude Code, launched with
+// env, reads and writes.
+//
+// IT IS A SECOND DERIVATION AND THAT IS THE POINT. CredentialKeychainItems
+// names an item a <=2.1.112 build could have LEFT BEHIND, and no such build had
+// heard of CLAUDE_SECURESTORAGE_CONFIG_DIR, so reading that variable there names
+// an item which cannot exist -- keychainServiceName's header says so. This one
+// answers the opposite question: which item is the INSTALLED build using right
+// now, in THIS environment. The two agree on a machine that exports neither
+// variable, which is why the difference stayed invisible until a scoped session
+// needed it.
+//
+// Measured verbatim in 2.1.251, in the credential-store chunk:
+//
+//	var s5="-credentials";
+//	function a0(n=""){let e=process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR,
+//	  t=e!==void 0?!e:!process.env.CLAUDE_CONFIG_DIR,
+//	  r=e!==void 0?e.normalize("NFC"):be(),
+//	  c=t?"":`-${a("sha256").update(r).digest("hex").substring(0,8)}`;
+//	  return `Claude Code${zt().OAUTH_FILE_SUFFIX}${n}${c}`}
+//
+// So CLAUDE_SECURESTORAGE_CONFIG_DIR OUTRANKS CLAUDE_CONFIG_DIR here, and the
+// test on the winner is DEFINEDNESS, not truthiness: a defined-but-empty value
+// selects the unsuffixed item, exactly as an unset CLAUDE_CONFIG_DIR does. The
+// hashed string is the variable's own NFC-normalized value, not a resolved or
+// symlink-followed form of it.
+//
+// Every `ccdad run` session and every probe exports a real directory into that
+// variable, so their item always carries a suffix and can never collide with
+// the machine's own login. That is the property adoptBack depends on.
+func LiveKeychainItem(env []string) KeychainItem {
+	secure, secureSet := envLookup(env, "CLAUDE_SECURESTORAGE_CONFIG_DIR")
+	config, _ := envLookup(env, "CLAUDE_CONFIG_DIR")
+	custom, _ := envLookup(env, "CLAUDE_CODE_CUSTOM_OAUTH_URL")
+	user, _ := envLookup(env, "USER")
+
+	unsuffixed, hashed := config == "", config
+	if secureSet {
+		unsuffixed, hashed = secure == "", secure
+	}
+	service := keychainBaseService + oauthFileSuffix(custom) + keychainCredentialsItem
+	if !unsuffixed {
+		service += keychainHashSuffix(norm.NFC.String(hashed))
+	}
+	return KeychainItem{Service: service, Account: liveKeychainAccount(user)}
+}
+
+// liveKeychainAccount is xC(), the account attribute the INSTALLED build puts
+// on an item it writes:
+//
+//	function xC(){let n;try{n=process.env.USER||u().username}catch{n="claude-code-user"}
+//	  if(!s.test(n))return"claude-code-user";return n}
+//
+// It differs from keychainAccountName by exactly one rule, and both exist for
+// that difference. This build rewrites a name outside liveAccountPattern to the
+// constant; NO build that could have left a legacy item behind ever did.
+// Applying the pattern to the legacy hunt would report "no item" on the very
+// machines whose item sits under a real name with a space in it; omitting it
+// here would name an item this build never writes.
+func liveKeychainAccount(user string) string {
+	name := user
+	if name == "" {
+		if fromOS, err := osUsername(); err == nil {
+			name = fromOS
+		}
+	}
+	if !liveAccountPattern.MatchString(name) {
+		return keychainFallbackAccount
+	}
+	return name
+}
+
+// envLookup reads a variable out of an explicit environment slice, reporting
+// DEFINEDNESS separately from the value because a0 tests the two differently.
+// The last assignment wins, which is what exec does with a duplicated name.
+func envLookup(env []string, name string) (string, bool) {
+	prefix := name + "="
+	value, found := "", false
+	for _, kv := range env {
+		if strings.HasPrefix(kv, prefix) {
+			value, found = kv[len(prefix):], true
+		}
+	}
+	return value, found
 }

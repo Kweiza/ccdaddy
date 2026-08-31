@@ -799,19 +799,11 @@ var fileExists = func(path string) bool {
 // Only claudeAiOauth is carried back, the way tokens.save does it. The rest of
 // what a session accumulates — mcpOAuth above all — belongs to the session's
 // own scope and is not the account's.
-func adoptBack(uuid, home string) error {
-	raw, err := os.ReadFile(filepath.Join(home, ccpath.CredentialsFile))
+func adoptBack(uuid string, session runSession) error {
+	fresh, ok, err := sessionLogin(session)
 	if err != nil {
-		// No file is the ordinary case for a session that never refreshed, and
-		// for one that never started: Claude Code exits before creating
-		// anything when it finds no credentials.
-		return nil
+		return err
 	}
-	var session cclink.Blob
-	if err := json.Unmarshal(raw, &session); err != nil {
-		return fmt.Errorf("reading the session credentials back: %w", err)
-	}
-	fresh, ok := session["claudeAiOauth"]
 	if !ok {
 		return nil
 	}
@@ -857,7 +849,8 @@ func adoptBack(uuid, home string) error {
 // symlinks before appending, and on macOS a path under /tmp resolves through
 // /private/tmp — so the name Claude Code used is not always the one ccdad
 // passed.
-func removeSession(home string) error {
+func removeSession(session runSession) error {
+	home := session.home
 	locks := []string{home + ".lock"}
 	if resolved, err := filepath.EvalSymlinks(home); err == nil && resolved != home {
 		locks = append(locks, resolved+".lock")
@@ -868,7 +861,114 @@ func removeSession(home string) error {
 			first = err
 		}
 	}
+	// The item LAST, and only after the directory is gone. It is reached only
+	// once adoptBack has carried the login into the store, so by here the
+	// rotated pair is recorded in two places and this copy is the disposable
+	// one; deleting it first would put a window between "the only copy is in an
+	// item nothing will ever name again" and "the directory is gone".
+	if err := deleteSessionKeychainItem(session); err != nil && first == nil {
+		first = err
+	}
 	return first
+}
+
+// deleteSessionKeychainItem removes the scoped item this session's Claude Code
+// wrote, which is the other half of tearing a session down.
+//
+// Without it every session that ever refreshed leaves a permanent item in the
+// login keychain holding a live refresh token, under a name derived from a
+// temporary directory that no longer exists -- so nothing, including
+// `ccdad doctor`, can ever name it again, and the only way to find one is
+// `security dump-keychain`. Three had accumulated on the machine this was
+// written for.
+//
+// An absent item is success: KeychainItem.Delete asks for a state rather than
+// an event, and a session that never refreshed never had one.
+func deleteSessionKeychainItem(session runSession) error {
+	err := sessionKeychainDelete(cclink.LiveKeychainItem(session.env))
+	if errors.Is(err, cclink.ErrKeychainUnsupported) {
+		return nil
+	}
+	return err
+}
+
+// sessionKeychainRead and sessionKeychainDelete are this file's window onto a
+// session's own scoped item, and they are vars for the reason doctor's
+// keychainProbe is one: the branch that matters runs only on macOS, and the
+// suite does not. Off macOS both answer ErrKeychainUnsupported, which every
+// caller here reads as "there is no such store", not as a failure.
+var sessionKeychainRead = func(item cclink.KeychainItem) (string, bool, error) {
+	return item.Read(context.Background())
+}
+
+var sessionKeychainDelete = func(item cclink.KeychainItem) error {
+	return item.Delete(context.Background())
+}
+
+// sessionLogin reads the claudeAiOauth a session ended with, out of whichever
+// of its two credential stores holds it.
+//
+// THE KEYCHAIN COMES FIRST BECAUSE IT IS CLAUDE CODE'S PRIMARY, and reading
+// only the file is what made this whole function wrong. 2.1.251's secure
+// storage is a primary-with-fallback combinator over the keychain and the
+// plaintext file, and its update() DELETES the fallback whenever the primary
+// write succeeds:
+//
+//	if(i.success){ if(s===null) await t.delete(o) }
+//
+// So on macOS the ordinary shape of a session that DID refresh is an item
+// holding the rotated pair and no file at all. The file-only read scored that
+// as "never refreshed", returned nil, and let removeSession delete the
+// directory -- throwing away the only copy of a grant the server had already
+// rotated to, and leaving the account's snapshot holding the superseded one.
+// The next thing to install that snapshot gets invalid_grant, which Claude Code
+// reports as an expired refresh token.
+//
+// A read that FAILS is not "no login". A locked keychain answers
+// errSecInteractionNotAllowed, and scoring that as absence is the same mistake
+// in a second place; the error travels, the caller keeps the session directory,
+// and the credential stays recoverable by hand.
+func sessionLogin(session runSession) (json.RawMessage, bool, error) {
+	if fresh, ok, err := sessionKeychainLogin(session); err != nil || ok {
+		return fresh, ok, err
+	}
+	raw, err := os.ReadFile(filepath.Join(session.home, ccpath.CredentialsFile))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			// No file AND no item is the ordinary case for a session that never
+			// refreshed, and for one that never started: Claude Code exits
+			// before creating anything when it finds no credentials.
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("reading the session credentials back: %w", err)
+	}
+	var blob cclink.Blob
+	if err := json.Unmarshal(raw, &blob); err != nil {
+		return nil, false, fmt.Errorf("reading the session credentials back: %w", err)
+	}
+	fresh, ok := blob["claudeAiOauth"]
+	return fresh, ok, nil
+}
+
+// sessionKeychainLogin reads the session's own scoped item. Off macOS there is
+// no such store and the answer is "no item", which is not a failure.
+func sessionKeychainLogin(session runSession) (json.RawMessage, bool, error) {
+	secret, ok, err := sessionKeychainRead(cclink.LiveKeychainItem(session.env))
+	if errors.Is(err, cclink.ErrKeychainUnsupported) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("reading the session's keychain item back: %w", err)
+	}
+	if !ok {
+		return nil, false, nil
+	}
+	var blob cclink.Blob
+	if err := json.Unmarshal([]byte(secret), &blob); err != nil {
+		return nil, false, fmt.Errorf("the session's keychain item does not hold a credential blob: %w", err)
+	}
+	fresh, has := blob["claudeAiOauth"]
+	return fresh, has, nil
 }
 
 // childEnv is the environment every run starts from.
@@ -1129,7 +1229,7 @@ func newRunCmd() *cobra.Command {
 				// file in it may be the only copy of a token the server has
 				// already rotated to, so deleting it would turn a reportable
 				// problem into an unrecoverable one.
-				if err := adoptBack(target.UUID, session.home); err != nil {
+				if err := adoptBack(target.UUID, session); err != nil {
 					fmt.Fprintf(cmd.ErrOrStderr(),
 						"note: this session's credentials could not be carried back into the store (%v).\n"+
 							"They are kept at %s; 'ccdad doctor' reports it.\n", err, session.home)
@@ -1138,7 +1238,7 @@ func newRunCmd() *cobra.Command {
 				if !session.ephemeral {
 					return
 				}
-				if err := removeSession(session.home); err != nil {
+				if err := removeSession(session); err != nil {
 					fmt.Fprintf(cmd.ErrOrStderr(), "note: could not remove the session directory %s (%v); "+
 						"'ccdad doctor' reports it.\n", session.home, err)
 				}
