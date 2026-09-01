@@ -2032,6 +2032,9 @@ func TestTheUpdateCheckRowIsDecidedInPrecedenceOrder(t *testing.T) {
 		{"the recorded release being the current one is an ok row", true, published(daemon.Status{
 			UpdateCheckedAt: checkedAt, UpdateLatest: "0.6.1",
 		}), "0.6.1", levelOK, "is the newest release"},
+		{"a check taken before this build says so rather than naming an older release", true, published(daemon.Status{
+			UpdateCheckedAt: checkedAt, NextUpdateCheckAt: checkedAt.Add(24 * time.Hour), UpdateLatest: "0.6.1",
+		}), "0.7.0", levelOK, "predates this build"},
 		{"a dev build says the two cannot be compared", true, published(daemon.Status{
 			UpdateCheckedAt: checkedAt, UpdateLatest: "0.7.0",
 		}), "dev", levelOK, "cannot be compared"},
@@ -2344,5 +2347,35 @@ func TestDoctorStillNamesAReadableKeychainItemAsTheLogin(t *testing.T) {
 	}
 	if !strings.Contains(report.detail(t, "keychain"), "is Claude Code's live login") {
 		t.Fatalf("the green row lost its sentence:\n%s", report.detail(t, "keychain"))
+	}
+}
+
+// THE ROW MUST NEVER CALL A VERSION OLDER THAN ITSELF "the newest release".
+//
+// The recorded check is a CACHE, and every machine that has just updated holds
+// one taken before the build now running it. The old arm fired on
+// `latest <= current` and said "ccdad 0.9.7 is the newest release" out of a
+// 0.9.8 binary -- a false sentence, printed green, naming a version older than
+// the one printing it. Observed on a real machine minutes after 0.9.8 shipped.
+func TestTheUpdateCheckRowNeverCallsAnOlderVersionTheNewest(t *testing.T) {
+	checkedAt := mustTime("2026-08-25T09:00:00Z")
+	report := daemon.Report{State: daemon.DaemonRunning, HasStatus: true, Status: daemon.Status{
+		SchemaVersion:     daemon.StatusSchemaVersion,
+		UpdateCheckedAt:   checkedAt,
+		NextUpdateCheckAt: checkedAt.Add(24 * time.Hour),
+		UpdateLatest:      "0.9.7",
+	}}
+	level, detail := updateCheckVerdict(true, report, "0.9.8")
+
+	if strings.Contains(detail, "is the newest release") {
+		t.Fatalf("the row called 0.9.7 the newest release out of a 0.9.8 build: %q", detail)
+	}
+	if !strings.Contains(detail, "0.9.7") || !strings.Contains(detail, "0.9.8") {
+		t.Fatalf("the row hides which two versions it is talking about: %q", detail)
+	}
+	// Still ok: a build newer than the last check is not a fault, and fail is
+	// the only level that moves doctor's exit code.
+	if level != levelOK {
+		t.Fatalf("level = %q, want ok -- being ahead of the last check is not a fault", level)
 	}
 }

@@ -763,6 +763,13 @@ func checkUpdateCheck(report daemon.Report, settings config.Config) check {
 //     not one to warn about a release it was never going to look for.
 //   - a newer release outranks a failed check. A release seen yesterday is
 //     still out today, and today's failure is the less useful of the two facts.
+//   - a check taken BEFORE this build outranks the equal case, because the two
+//     are different worlds wearing one sentence. The recorded release is a
+//     CACHE, so a machine that has just updated holds one taken before the
+//     binary now reading it -- and the old arm fired on `latest <= current` and
+//     answered "ccdad 0.9.7 is the newest release" out of a 0.9.8 build.
+//     Observed minutes after 0.9.8 shipped. A row may not name a version older
+//     than the one printing it as the newest thing there is.
 //   - a comparison outranks "cannot compare", so a build with no comparable
 //     version says so only when there is nothing better to say.
 func updateCheckVerdict(enabled bool, report daemon.Report, running string) (checkLevel, string) {
@@ -788,12 +795,25 @@ func updateCheckVerdict(enabled bool, report daemon.Report, running string) (che
 		return levelWarn, fmt.Sprintf("ccdad %s is out and this is %s (checked %s) — %s",
 			latest, current, when, release.BaseURL()+"/latest")
 	}
+	due := "the next tick"
+	if !s.NextUpdateCheckAt.IsZero() {
+		due = s.NextUpdateCheckAt.In(readerZone()).Format(time.RFC3339)
+	}
 	if s.UpdateCheckError != "" {
-		due := "the next tick"
-		if !s.NextUpdateCheckAt.IsZero() {
-			due = s.NextUpdateCheckAt.In(readerZone()).Format(time.RFC3339)
-		}
 		return levelWarn, fmt.Sprintf("the last release check failed: %s (the next is due %s)", s.UpdateCheckError, due)
+	}
+	if latestOK && currentOK && latest.Compare(current) < 0 {
+		// The check is a CACHE and this build is ahead of it, which is the
+		// ordinary state of every machine for the first day after it updates.
+		// It is not a fault -- fail is the only level that moves doctor's exit
+		// code, and being newer than the last check is not something to go red
+		// about -- but it is also not evidence that nothing newer exists, and
+		// the arm below used to claim exactly that in the recorded release's
+		// name.
+		return levelOK, fmt.Sprintf(
+			"the last release check predates this build: it saw %s and this is %s (checked %s), so it says "+
+				"nothing about whether anything newer is out; the next is due %s",
+			latest, current, when, due)
 	}
 	if latestOK && currentOK {
 		return levelOK, fmt.Sprintf("ccdad %s is the newest release (checked %s)", latest, when)

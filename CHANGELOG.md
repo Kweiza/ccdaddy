@@ -16,6 +16,19 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`ccdad doctor`'s `update-check` row no longer calls a version older than
+  itself the newest release.** The recorded check is a CACHE, and the arm that
+  reported it fired on `latest <= current` — so every machine that had just
+  updated held a check taken before the binary now reading it, and the row
+  printed "ccdad 0.9.7 is the newest release" in green out of a 0.9.8 build.
+  Observed on a real machine minutes after 0.9.8 shipped. Being ahead of the last
+  check is not a fault, so the row stays `ok`; it now says the check predates this
+  build, names both versions, and says when the next one is due, instead of
+  claiming to know something it cannot. Pinned by
+  `TestTheUpdateCheckRowNeverCallsAnOlderVersionTheNewest`.
+
 ## [0.9.8] — 2026-09-01
 
 The release that stops ccdad revoking the login it is holding.
