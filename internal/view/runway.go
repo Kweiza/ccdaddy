@@ -2,6 +2,7 @@ package view
 
 import (
 	"fmt"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -407,6 +408,27 @@ func creditRate(perHour float64) string {
 	return strconv.FormatFloat(perHour, 'g', 2, 64)
 }
 
+// RunwayCreditBasis is what the credit row was measured from, as a sentence:
+// the money, the span it was spent over, and how many readings carried it.
+//
+// The window axes have had a basis line since they existed and the credit row
+// has never had one, which was survivable only while no credit rate had ever
+// been measured. The first one that was is the reason this exists: a dry date a
+// decade out, correctly computed, from two cents. A reader cannot weigh that
+// from the date, and the row has room for the one sentence that lets them.
+//
+// It is empty for a refused figure, and the caller prints nothing rather than a
+// sentence about a measurement that did not happen. There is no singular arm
+// for the reading count because minSamples is three and creditSpend refuses
+// below it, so "1 reading" is a state no figure reaching here can be in.
+func RunwayCreditBasis(c forecast.CreditFleet) string {
+	if !c.Known {
+		return ""
+	}
+	return fmt.Sprintf("Measured from %.2f %s spent over %s, across %d readings.",
+		c.Spent, c.Currency, HumanDuration(c.Observed), c.Readings)
+}
+
 // RunwayCreditVerdict is when the fleet's paid balance reaches zero, or
 // Unreadable when the figure was refused.
 //
@@ -421,11 +443,65 @@ func RunwayCreditVerdict(c forecast.CreditFleet, now time.Time, loc *time.Locati
 	return runsDryAt(c.DryAt, now, loc)
 }
 
+// aYearOut is where a dry date stops being a moment and becomes a year.
+//
+// 365 days and not a calendar year: the comparison is against a SPAN, so a
+// calendar year would put the threshold on a different side of itself depending
+// on which side of a leap day now fell, and nothing being decided here is
+// precise enough for that to be a distinction worth carrying.
+const aYearOut = 365 * 24 * time.Hour
+
 // runsDryAt is the one wording for "empties at this moment", so the axis rows
 // and the credit row under them cannot phrase one answer two ways. The span in
 // parentheses is what makes the date usable without arithmetic.
+//
+// Past aYearOut it names a YEAR instead of a moment. No rate this repository
+// measures supports naming a minute a year away: rates are measured over
+// history.MeasuredSpan, four hours, and the credit rate's numerator is whole
+// minor units, so a fleet a few cents into its billing month divides two cents
+// and one cent moves the answer by half. Measured 2026-09-01 on one live
+// account, three readings ninety minutes apart: 2046, then 2037-02-26 09:49,
+// then 2036-04-19 09:49. All three were printed to the minute, and the minute
+// was the only part a reader could be sure of, because it came from `now`.
+//
+// This does not fork the wording, and it does not add a second absolute layout
+// beside Timestamp -- see its comment, which says there is one. Naming a year
+// is DECLINING to name a moment, which is a different act from naming one in
+// another format, and the zone still decides which year it is, so loc is still
+// read and still not taken from the environment.
+//
+// It also does not, in practice, reach the window rows: forecast's horizon is
+// fourteen days and a simulated run stops there, so no axis verdict has ever
+// been a year out. The rule is written for both anyway, because a rule that
+// asks which row is calling it is how two rows start phrasing one answer two
+// ways.
 func runsDryAt(at, now time.Time, loc *time.Location) string {
-	return fmt.Sprintf("runs dry %s  (in %s)", Timestamp(at, loc), HumanDuration(at.Sub(now)))
+	d := at.Sub(now)
+	if d < aYearOut {
+		return fmt.Sprintf("runs dry %s  (in %s)", Timestamp(at, loc), HumanDuration(d))
+	}
+	if loc == nil {
+		loc = time.UTC
+	}
+	return fmt.Sprintf("runs dry %d  (in about %s)", at.In(loc).Year(), approxYears(d))
+}
+
+// approxYears is the parenthetical for a date past aYearOut. The hedge is the
+// caller's word; this returns the quantity it hedges.
+//
+// It rounds the SPAN and not the difference between the two years, which is
+// worth knowing because the two can look inconsistent side by side: from
+// September 2026 a date in February 2037 prints as "2037  (in about 10 years)",
+// and a reader adding ten to 2026 lands a year short. The span is right --
+// 10.49 years -- and the year is right, and the line hands the reader the year
+// so that nobody has to add anything. Rounding the year difference instead
+// would trade this for a worse fault: a date 12 months out that happens to
+// cross a new year would read "about 2 years".
+func approxYears(d time.Duration) string {
+	if y := int(math.Round(d.Hours() / (365 * 24))); y != 1 {
+		return fmt.Sprintf("%d years", y)
+	}
+	return "a year"
 }
 
 // RunwayAccounts is the seat-count line under the axis block: how many accounts

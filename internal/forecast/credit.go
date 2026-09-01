@@ -46,7 +46,46 @@ type CreditFleet struct {
 	// DryAt is when the summed balance reaches zero at SpendPerHour.
 	DryAt time.Time
 
+	// Spent is the money the rate was measured FROM, in Currency's major unit,
+	// and Observed is the span it was measured over. They are this row's basis,
+	// and they are carried because a rate is only ever as good as the quantity
+	// it divided.
+	//
+	// used_credits arrives in whole minor units, so a fleet a few cents into
+	// its billing month divides a numerator of one or two CENTS, and one cent
+	// entering or leaving the trailing window changes the rate by half.
+	// Measured 2026-09-01 on one live account: three readings ninety minutes
+	// apart put its dry date at 2046, 2037-02-26 and 2036-04-19. Every one of
+	// those was correctly computed. What no surface could say was how thin the
+	// evidence under them was, because this pair was measured and then dropped.
+	//
+	// The existing gates do not cover it and are not meant to: minSamples and
+	// minCover both ask about the READINGS, and there were twenty-seven of them
+	// spread over nearly four hours. Neither asks whether the quantity measured
+	// is large enough to divide by.
+	Spent    float64
+	Observed time.Duration
+
+	// Readings is how many credit-carrying samples the sum ran over, across the
+	// fleet. It is what Basis.Readings is for the window axes, and it is here
+	// rather than there because Basis counts samples carrying a WINDOW, which a
+	// seat metered only in money never has.
+	Readings int
+
 	Known bool
+}
+
+// creditBasis is what a credit figure was measured from.
+//
+// It travels beside the inputs rather than inside them because every field is
+// fleet-wide: one span shared by every contributing account, one total, one
+// count. Put on creditInput it would be the same three values repeated per
+// account, and two accounts disagreeing about a fleet-wide span is a state that
+// could then be constructed.
+type creditBasis struct {
+	spent    float64
+	observed time.Duration
+	readings int
 }
 
 // creditSpend measures one account's paid spend over the samples in [from, to].
@@ -158,7 +197,7 @@ type creditInput struct {
 // separate ways of getting it wrong are refused below, and each of them would
 // otherwise print a concrete date that a reader has no way to distinguish from
 // a measured one.
-func creditFleet(in []creditInput, now time.Time) CreditFleet {
+func creditFleet(in []creditInput, b creditBasis, now time.Time) CreditFleet {
 	var (
 		currency string
 		left     float64
@@ -226,6 +265,9 @@ func creditFleet(in []creditInput, now time.Time) CreditFleet {
 		Currency:     currency,
 		SpendPerHour: rate,
 		DryAt:        now.Add(time.Duration(hours * float64(time.Hour))),
+		Spent:        b.spent,
+		Observed:     b.observed,
+		Readings:     b.readings,
 		Known:        true,
 	}
 }

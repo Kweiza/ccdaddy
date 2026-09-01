@@ -556,6 +556,28 @@ func TestTheCreditRunwayIsAssembledFromTheSnapshotAndTheSeries(t *testing.T) {
 	if !got.Credit.DryAt.Equal(want) {
 		t.Errorf("Credit.DryAt = %v, want %v", got.Credit.DryAt, want)
 	}
+
+	// The basis is the same measurement the rate came out of, carried rather
+	// than recomputed: six dollars, over the four hours the three readings
+	// reach across, from those three readings. It exists so a reader can tell
+	// this figure from one divided out of two cents, which is what the same
+	// arithmetic produces for a fleet just past its billing rollover.
+	if got.Credit.Spent != 6 {
+		t.Errorf("Credit.Spent = %v, want 6 -- the money the rate was measured from", got.Credit.Spent)
+	}
+	if got.Credit.Observed != 4*time.Hour {
+		t.Errorf("Credit.Observed = %v, want 4h", got.Credit.Observed)
+	}
+	if got.Credit.Readings != len(used) {
+		t.Errorf("Credit.Readings = %d, want %d", got.Credit.Readings, len(used))
+	}
+	// And the identity that keeps the basis honest: the rate IS the basis. A
+	// basis assembled from a different span or a different total than the one
+	// the division used would describe a measurement that did not happen.
+	if rate := got.Credit.Spent / got.Credit.Observed.Hours(); rate != got.Credit.SpendPerHour {
+		t.Errorf("Spent/Observed = %v but SpendPerHour = %v -- the basis is not what was divided",
+			rate, got.Credit.SpendPerHour)
+	}
 }
 
 // TestTheCreditRunwayIsMeasuredForAFleetWithNoPlanWindows is the same join as

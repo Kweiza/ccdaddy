@@ -56,7 +56,7 @@ func TestCreditRefusesRatherThanGuessing(t *testing.T) {
 		{"nothing is enabled", nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			got := creditFleet(c.in, now)
+			got := creditFleet(c.in, creditBasis{}, now)
 			if got.Known {
 				t.Fatalf("Known = true, DryAt = %v -- this case must refuse", got.DryAt)
 			}
@@ -71,7 +71,7 @@ func TestCreditDividesOneFleetBalanceByOneFleetRate(t *testing.T) {
 	got := creditFleet([]creditInput{
 		{used: 40, limit: f(100), rate: 1.5, currency: "USD"},
 		{used: 10, limit: f(50), rate: 0.5, currency: "USD"},
-	}, now)
+	}, creditBasis{}, now)
 	if !got.Known {
 		t.Fatal("Known = false, want a figure")
 	}
@@ -96,7 +96,7 @@ func TestAnUncappedAccountThatSpendsNothingIsSkippedNotRefused(t *testing.T) {
 	got := creditFleet([]creditInput{
 		{used: 7, limit: nil, rate: 0, currency: "USD"},
 		{used: 0, limit: f(20), rate: 2, currency: "USD"},
-	}, now)
+	}, creditBasis{}, now)
 	if !got.Known {
 		t.Fatal("Known = false, want a figure from the capped account alone")
 	}
@@ -117,7 +117,7 @@ func TestAnAccountPastItsOwnCapContributesNoBalanceRatherThanADebt(t *testing.T)
 	got := creditFleet([]creditInput{
 		{used: 130, limit: f(100), rate: 1, currency: "USD"},
 		{used: 0, limit: f(10), rate: 1, currency: "USD"},
-	}, now)
+	}, creditBasis{}, now)
 	if !got.Known {
 		t.Fatal("Known = false, want a figure")
 	}
@@ -134,7 +134,7 @@ func TestACreditRunwayTooLongToStateRefuses(t *testing.T) {
 	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
 	got := creditFleet([]creditInput{
 		{used: 0, limit: f(1e9), rate: 1e-9, currency: "USD"},
-	}, now)
+	}, creditBasis{}, now)
 	if got.Known {
 		t.Fatalf("Known = true, DryAt = %v -- an interval this long has no date", got.DryAt)
 	}
@@ -150,7 +150,7 @@ func TestANonFiniteSpendRateRefuses(t *testing.T) {
 	for _, rate := range []float64{math.NaN(), math.Inf(-1)} {
 		got := creditFleet([]creditInput{
 			{used: 0, limit: f(100), rate: rate, currency: "USD"},
-		}, now)
+		}, creditBasis{}, now)
 		if got.Known {
 			t.Errorf("rate %v: Known = true, DryAt = %v -- this rate is not a measurement", rate, got.DryAt)
 		}
@@ -385,7 +385,7 @@ func TestTheLivePairSpanningTheBillingRolloverContributesNothing(t *testing.T) {
 	// spends nothing: a measured zero is a rate, and left/0 is a date.
 	got := creditFleet([]creditInput{{
 		used: 0, limit: f(466), rate: spent / cover.Hours(), currency: "USD",
-	}}, now)
+	}}, creditBasis{}, now)
 	if got.Known {
 		t.Errorf("creditFleet reported DryAt = %v from a window that measured no spend", got.DryAt)
 	}
@@ -402,7 +402,7 @@ func TestTheLivePairSpanningTheBillingRolloverContributesNothing(t *testing.T) {
 func TestTheLiveDryDateComesFromTheArithmeticAndNotFromItsGuards(t *testing.T) {
 	series := liveRolloverSeries(t)
 	now := liveEnd
-	spent, cover, _, ok := creditSpend(series, now.Add(-history.MeasuredSpan), now)
+	spent, cover, readings, ok := creditSpend(series, now.Add(-history.MeasuredSpan), now)
 	if !ok {
 		t.Fatal("creditSpend refused the live series")
 	}
@@ -411,7 +411,7 @@ func TestTheLiveDryDateComesFromTheArithmeticAndNotFromItsGuards(t *testing.T) {
 	// against 0.02 USD spent, both as ~/.ccdad/usage.json recorded them.
 	got := creditFleet([]creditInput{{
 		used: 0.02, limit: f(466), rate: spent / cover.Hours(), currency: "USD",
-	}}, now)
+	}}, creditBasis{spent: spent, observed: cover, readings: readings}, now)
 	if !got.Known {
 		t.Fatal("creditFleet refused a fleet with a measured rate and a readable cap")
 	}
@@ -442,4 +442,19 @@ func TestTheLiveDryDateComesFromTheArithmeticAndNotFromItsGuards(t *testing.T) {
 	}
 	t.Logf("headroom under maxRunwayHours: %.1fx", maxRunwayHours/hours)
 	t.Logf("live dry date: %v (in %.0f hours)", got.DryAt.In(kst), hours)
+
+	// The basis this date needs a reader to see. Two cents is the whole of the
+	// evidence and the date is a decade out; those two facts belong to each
+	// other, and until this pair was carried only one of them could be printed.
+	if got.Spent != spent || got.Observed != cover || got.Readings != readings {
+		t.Errorf("basis = %v USD over %v from %d readings; want %v over %v from %d",
+			got.Spent, got.Observed, got.Readings, spent, cover, readings)
+	}
+	// And it is beyond a year by a wide margin, which is what makes this the
+	// row internal/view's coarse rendering exists for. If a future recording
+	// put it inside a year this assertion is the one that says so rather than
+	// letting the far case quietly stop being tested.
+	if hours < 365*24 {
+		t.Errorf("the live dry date is %v hours out, inside a year -- this series no longer exercises the far case", hours)
+	}
 }

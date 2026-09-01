@@ -318,6 +318,13 @@ func renderRunway(cmd *cobra.Command, f forecast.Fleet, accounts []store.Account
 		fmt.Fprintln(out, "\n  Credits do not reset: that row is a balance divided by a rate, with nothing\n"+
 			"  coming back. No account in this fleet is metered on a plan window.")
 	}
+	// The basis for the credit row, on its own line under the prose that
+	// explains what the row means. It is printed only when there is a figure to
+	// have a basis: a sentence describing a measurement beneath a row of "?"
+	// would describe evidence that produced nothing.
+	if basis := view.RunwayCreditBasis(f.Credit); basis != "" {
+		fmt.Fprintf(out, "  %s\n", basis)
+	}
 
 	writeAccounts()
 
@@ -458,6 +465,13 @@ func forecastJSON(f forecast.Fleet) map[string]any {
 		"currency":     f.Credit.Currency,
 		"spendPerHour": f.Credit.SpendPerHour,
 		"dryAt":        f.Credit.DryAt,
+		// The basis, under the same key spelling the window basis uses for its
+		// span, because a consumer reading both should not have to learn two
+		// names for one quantity. A rate divided from two cents and a rate
+		// divided from two hundred dollars are the same JSON without them.
+		"spent":           f.Credit.Spent,
+		"observedSeconds": int(f.Credit.Observed.Seconds()),
+		"readings":        f.Credit.Readings,
 	}
 	return out
 }
