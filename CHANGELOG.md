@@ -16,6 +16,26 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.9.10] — 2026-09-01
+
+The release that stops handing you a daemon that cannot do anything.
+
+0.9.8 taught the daemon to fail SAFELY when it cannot read Claude Code's login:
+it stands down, spends no grant, and says so. What it could not do was stop that
+daemon from being started in the first place. macOS scopes a keychain refusal to
+the audit session and `Setsid` does not change one, so a daemon started from a
+session that cannot read the login inherits that for its whole life — and the
+terminal was told "Started the ccdad daemon (pid N)." and given exit 0 anyway,
+because the child detaches and its own refusal reaches `daemon.log` and nowhere
+else. Five restarts on this machine between 12:41 and 13:10 were every one of
+them that.
+
+The unlock is scoped to the same session, which is what makes the repair
+possible rather than merely the diagnosis: unlocking HERE is exactly what a
+daemon started here inherits. So attended, ccdad now offers it — with the
+password going from the terminal into `/usr/bin/security` and never through
+ccdad — and unattended it refuses instead of completing into something inert.
+
 ### Added
 
 - **`ccdad daemon start` and `restart` no longer hand you a daemon that can never
@@ -2684,7 +2704,8 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.9.9...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.9.10...HEAD
+[0.9.10]: https://github.com/Kweiza/ccdaddy/compare/v0.9.9...v0.9.10
 [0.9.9]: https://github.com/Kweiza/ccdaddy/compare/v0.9.8...v0.9.9
 [0.9.8]: https://github.com/Kweiza/ccdaddy/compare/v0.9.7...v0.9.8
 [0.9.7]: https://github.com/Kweiza/ccdaddy/compare/v0.9.6...v0.9.7
