@@ -16,6 +16,21 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The credit row no longer reports a fleet spending nothing beside the date it
+  runs dry.** The `Credits` burn cell is written at two decimals, which is
+  money's own width and the right one for every rate a person would call a rate.
+  It is the wrong width at the low end, and the low end turned out not to be
+  hypothetical: the first credit spend rate ever measured against a live balance
+  here was 0.0026 USD/h — an enterprise seat four hours past its billing
+  rollover, two cents spent — which `%.2f` prints as `0.00`, in the same row as a
+  verdict naming the date that fleet runs dry. That cell's contract is that it
+  never reports a fleet spending nothing. A rate under half a minor unit an hour
+  is now written at two significant digits, and every wider rate keeps the two
+  decimals it already had. Pinned by
+  `TestACreditRateUnderACentAnHourDoesNotReadAsZero`.
+
 ## [0.9.10] — 2026-09-01
 
 The release that stops handing you a daemon that cannot do anything.
