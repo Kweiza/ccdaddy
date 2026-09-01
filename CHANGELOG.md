@@ -16,6 +16,40 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+### Added
+
+- **`ccdad daemon start` and `restart` no longer hand you a daemon that can never
+  switch, and offer the one repair that works.** macOS scopes a keychain refusal
+  — and a keychain UNLOCK — to the audit session, and `Setsid` changes the POSIX
+  session but neither the audit session nor the Mach bootstrap namespace. So a
+  daemon started from a session that cannot read the login inherits that for its
+  whole life. Nothing said so: Spawn detaches the child, so the child's own
+  stand-down reaches `daemon.log` and nowhere else while the terminal prints
+  "Started the ccdad daemon (pid N)." and exits 0. Measured 2026-09-01: five
+  restarts between 12:41 and 13:10, every one of them that.
+
+  Attended, ccdad now unlocks instead of refusing, because the unlock is scoped
+  to the session too — so unlocking HERE is exactly what a daemon started here
+  inherits. **ccdad never sees the password**: `UnlockLoginKeychain` hands stdio
+  to `/usr/bin/security`, which does its own asking on the terminal (that is why
+  it works over SSH, where no dialog is possible), and ccdad reads an exit code.
+  It never passes `-p`, never stores anything, and the prompt on screen is
+  Apple's own — which matters, because that password opens every secret in the
+  login keychain and a tool that asks for it is shaped exactly like a credential
+  stealer.
+
+  Unattended, or when the unlock did not help, the start is REFUSED with a
+  non-zero exit rather than completed into something inert. The gate keys on
+  `cclink.SurvivesRestart` and not on "the read failed": every other fault may
+  clear on its own, and a keychain locked in a session that CAN interact is
+  cleared with the daemon still running, so refusing there would turn a
+  self-healing wedge into a machine with no daemon at all. Auto-start does not
+  come through this path, so an incidental `ccdad list` never asks for a
+  password. Pinned by `TestDaemonStartRefusesASessionThatCannotReadTheLogin`,
+  `TestDaemonStartUnlocksWhenAttendedAndThenStarts`,
+  `TestDaemonStartDoesNotRefuseAFaultThatMightClear` and
+  `TestUnlockLoginKeychainNeverPassesAPassword`.
+
 ## [0.9.9] — 2026-09-01
 
 The release that stops a cached answer being read as a current one.
