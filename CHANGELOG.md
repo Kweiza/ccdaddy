@@ -16,6 +16,17 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.9.9] — 2026-09-01
+
+The release that stops a cached answer being read as a current one.
+
+0.9.8's whole subject was ccdad acting on something it could not actually see.
+This is the last row that still did it, and it was found by the release itself:
+minutes after 0.9.8 shipped, `ccdad doctor` printed "ccdad 0.9.7 is the newest
+release" — in green, out of a 0.9.8 binary, naming a version older than the one
+printing it. The recorded release check is a CACHE, and every machine holds one
+taken before the build now reading it for as long as a day after it updates.
+
 ### Fixed
 
 - **`ccdad doctor`'s `update-check` row no longer calls a version older than
@@ -2639,7 +2650,8 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.9.8...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.9.9...HEAD
+[0.9.9]: https://github.com/Kweiza/ccdaddy/compare/v0.9.8...v0.9.9
 [0.9.8]: https://github.com/Kweiza/ccdaddy/compare/v0.9.7...v0.9.8
 [0.9.7]: https://github.com/Kweiza/ccdaddy/compare/v0.9.6...v0.9.7
 [0.9.6]: https://github.com/Kweiza/ccdaddy/compare/v0.9.5...v0.9.6
