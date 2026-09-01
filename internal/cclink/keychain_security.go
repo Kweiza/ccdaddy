@@ -431,3 +431,36 @@ func SurvivesRestart(err error) bool {
 	var ke *KeychainError
 	return errors.As(err, &ke) && ke.failure == failNoInteraction
 }
+
+// UnlockLoginKeychain runs `security unlock-keychain` against the default
+// keychain with this process's stdio INHERITED.
+//
+// INHERITING STDIO IS THE WHOLE DESIGN. `security` asks for the password on the
+// TERMINAL -- not through the window server, which is why it works over SSH in
+// a session that could never raise a dialog -- so inheriting stdio sends the
+// password from the user's keyboard into Apple's own binary. ccdad never reads
+// it, never holds it, never writes it anywhere, and never passes `-p`, which is
+// the non-interactive form. It sees an exit code.
+//
+// That is not a formality. This password opens EVERY secret in the login
+// keychain -- browser logins, wifi, certificates -- and not just the one item
+// ccdad wants. A tool that prompts for it is shaped exactly like a credential
+// stealer, so the prompt on screen has to be verifiably Apple's rather than
+// ccdad's; securityPath being pinned absolute is the other half of that.
+//
+// THE DEFAULT KEYCHAIN, not a hardcoded path. `security unlock-keychain` with
+// no argument unlocks whatever the user's default is -- login.keychain-db on an
+// ordinary machine, and something else on a machine that has said otherwise.
+//
+// No timeout is imposed on the context. A person is typing.
+func UnlockLoginKeychain(ctx context.Context) error {
+	if keychainGOOS != "darwin" {
+		return ErrKeychainUnsupported
+	}
+	cmd := exec.CommandContext(ctx, securityPath, "unlock-keychain")
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("unlocking the login keychain: %w", err)
+	}
+	return nil
+}

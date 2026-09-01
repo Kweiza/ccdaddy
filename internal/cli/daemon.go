@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/credhome"
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 	"github.com/Kweiza/ccdaddy/internal/theme"
@@ -374,6 +375,9 @@ func startDaemonFrom(cmd *cobra.Command, exe string) error {
 	if err := refuseAClaimedCredentialHome(cmd); err != nil {
 		return err
 	}
+	if err := repairOrRefuseAnUnreadableLogin(cmd); err != nil {
+		return err
+	}
 	if err := spawnDaemon(exe); err != nil {
 		return err
 	}
@@ -445,6 +449,70 @@ func refuseAClaimedCredentialHome(cmd *cobra.Command) error {
 		s.Owner.Store, s.Owner.PID, s.Home)
 	fmt.Fprintln(out, "Two stores on one Claude Code login undo each other's switches. Point "+
 		"CLAUDE_CONFIG_DIR at a directory of this store's own, or stop that engine.")
+	return WithCode(errSilent, ExitBlocked)
+}
+
+// loginStoreRead and unlockLoginKeychain are seams, for the reason
+// credentialHomeClaim above is one: a test cannot arrange a macOS audit session
+// that refuses, and it must never be able to raise a real password prompt.
+var loginStoreRead = func() error { _, err := cclink.Load(); return err }
+
+var unlockLoginKeychain = cclink.UnlockLoginKeychain
+
+// loginStoreSurvivesRestart is the classification, as a seam of its own, because
+// cclink.keychainFailure is unexported: a test in this package cannot build the
+// one error that answers true, and stubbing the READ alone would leave the
+// decision untested.
+var loginStoreSurvivesRestart = cclink.SurvivesRestart
+
+// repairOrRefuseAnUnreadableLogin stops a start that would produce a daemon
+// inert for its whole life, and offers the one repair that works.
+//
+// IT BELONGS HERE for the reason refuseAClaimedCredentialHome names: Spawn
+// detaches the child, so the child's own stand-down reaches daemon.log and
+// nowhere else. The human who typed the command gets "Started the ccdad daemon
+// (pid N)." and exit 0 over a process that will never switch. Measured
+// 2026-09-01: five restarts between 12:41 and 13:10, each answered by that
+// stand-down in the log and by "Started" at the terminal.
+//
+// THE TEST IS SurvivesRestart AND NOT "the read failed". macOS scopes
+// errSecInteractionNotAllowed to the AUDIT SESSION, and Setsid changes the
+// POSIX session but neither the audit session nor the Mach bootstrap namespace
+// -- so a child inherits THAT refusal with certainty. Every other read failure
+// may clear on its own, and refusing there would turn a self-healing wedge into
+// a machine with no daemon at all.
+//
+// ATTENDED, IT REPAIRS RATHER THAN REFUSES, because the repair is one command
+// and it is the command that worked: the keychain unlock is scoped to the
+// session too, so unlocking HERE is what a daemon started here inherits. ccdad
+// never sees the password -- UnlockLoginKeychain hands stdio to
+// /usr/bin/security and reads an exit code -- and this is deliberately not on
+// the auto-start path, which spawns without coming through here: an incidental
+// `ccdad list` must never ask for a keychain password.
+func repairOrRefuseAnUnreadableLogin(cmd *cobra.Command) error {
+	err := loginStoreRead()
+	if err == nil || !loginStoreSurvivesRestart(err) {
+		return nil
+	}
+	out := cmd.ErrOrStderr()
+	if stdinIsTTY() {
+		fmt.Fprintf(out, "This session cannot read Claude Code's login: %v\n", err)
+		fmt.Fprintln(out, "macOS unlocks a keychain per SESSION, so a daemon started here would inherit "+
+			"the refusal and stand down on every tick. Unlocking it in this session is what a daemon "+
+			"started from here inherits instead.")
+		fmt.Fprintln(out, "The prompt below is /usr/bin/security's own -- ccdad never sees the password.")
+		if uerr := unlockLoginKeychain(context.Background()); uerr != nil {
+			fmt.Fprintf(out, "That did not complete: %v\n", uerr)
+		}
+		if err = loginStoreRead(); err == nil || !loginStoreSurvivesRestart(err) {
+			return nil
+		}
+	}
+	fmt.Fprintf(out, "Not starting: this session cannot read Claude Code's login (%v), and a daemon "+
+		"started here would inherit that for its whole life -- macOS scopes the refusal to the audit "+
+		"session, which a child inherits.\n", err)
+	fmt.Fprintln(out, "Unlock the keychain in this session, then start again:")
+	fmt.Fprintln(out, "    security unlock-keychain && ccdad daemon start")
 	return WithCode(errSilent, ExitBlocked)
 }
 
