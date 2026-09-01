@@ -430,7 +430,7 @@ func Of(in []Input, now time.Time) Fleet {
 	// the credit runway structurally unreachable for a seat metered only in
 	// money -- adding one irrelevant plan window to the same account was enough
 	// to make the figure appear.
-	f.Credit = creditFleet(creditInputs(reachable, from, now), now)
+	f.Credit = creditFleet(creditFleetInputs(reachable, from, now))
 	return f
 }
 
@@ -787,10 +787,19 @@ func minRoomOf(a account) float64 {
 // depends on whether the uncapped account is spending.
 // creditInputs takes the eligible Inputs rather than the simulatable accounts,
 // because the two sets differ by exactly the accounts this axis exists for.
-func creditInputs(in []Input, from, now time.Time) []creditInput {
+// creditFleetInputs is creditInputs plus the arguments creditFleet takes with
+// them, so the two calls cannot drift: the basis a caller passes is always the
+// basis the inputs beside it were measured from.
+func creditFleetInputs(in []Input, from, now time.Time) ([]creditInput, creditBasis, time.Time) {
+	out, b := creditInputs(in, from, now)
+	return out, b, now
+}
+
+func creditInputs(in []Input, from, now time.Time) ([]creditInput, creditBasis) {
 	type measuredCredit struct {
-		in    creditInput
-		spent float64
+		in       creditInput
+		spent    float64
+		readings int
 	}
 	var (
 		found []measuredCredit
@@ -807,7 +816,7 @@ func creditInputs(in []Input, from, now time.Time) []creditInput {
 		if !ok {
 			continue
 		}
-		spent, _, _, ok := creditSpend(a.Series, from, now)
+		spent, _, readings, ok := creditSpend(a.Series, from, now)
 		if !ok {
 			continue
 		}
@@ -819,19 +828,26 @@ func creditInputs(in []Input, from, now time.Time) []creditInput {
 		if limit, ok := e.MonthlyLimit(); ok {
 			c.limit = &limit
 		}
-		found = append(found, measuredCredit{in: c, spent: spent})
+		found = append(found, measuredCredit{in: c, spent: spent, readings: readings})
 		acc.add(first, last)
 	}
 	span := acc.span()
 	if span <= 0 {
-		return nil
+		return nil, creditBasis{}
 	}
 	out := make([]creditInput, 0, len(found))
+	b := creditBasis{observed: span}
 	for _, m := range found {
 		m.in.rate = m.spent / span.Hours()
 		out = append(out, m.in)
+		// Summed over the accounts that reached the slice and no others, so the
+		// basis describes the figure that was actually assembled rather than
+		// the fleet it was drawn from. An account creditSpend refused
+		// contributes to neither the rate nor the evidence for it.
+		b.spent += m.spent
+		b.readings += m.readings
 	}
-	return out
+	return out, b
 }
 
 // tierNotice says when the fleet's percentage points may not be adding up.

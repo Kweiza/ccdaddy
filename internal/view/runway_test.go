@@ -790,3 +790,75 @@ func TestACreditRateUnderACentAnHourDoesNotReadAsZero(t *testing.T) {
 		}
 	}
 }
+
+// A dry date a decade out is printed as a year, and the reason is the one this
+// package can state: no rate here is measured over more than four hours, so a
+// moment named to the minute a decade away claims a precision nothing produced
+// it has. Measured 2026-09-01 on one live account: three readings ninety
+// minutes apart put the credit dry date at 2046, 2037-02-26 09:49 and
+// 2036-04-19 09:49, every one of them to the minute.
+func TestADryDateBeyondAYearIsPrintedAsAYear(t *testing.T) {
+	kst := time.FixedZone("KST", 9*60*60)
+	now := time.Date(2026, 9, 1, 14, 14, 0, 0, kst)
+
+	far := forecast.CreditFleet{
+		Currency: "USD", SpendPerHour: 0.0051,
+		DryAt: time.Date(2037, 2, 26, 4, 48, 0, 0, kst), Known: true,
+	}
+	if got, want := view.RunwayCreditVerdict(far, now, kst), "runs dry 2037  (in about 10 years)"; got != want {
+		t.Errorf("RunwayCreditVerdict(far) = %q, want %q", got, want)
+	}
+
+	// Inside a year nothing changes, and that is most of what this repository
+	// prints: forecast's horizon is fourteen days, so no window-axis verdict
+	// has ever been a year out and none of them moves.
+	near := forecast.CreditFleet{
+		Currency: "USD", SpendPerHour: 1.4,
+		DryAt: time.Date(2026, 9, 4, 9, 30, 0, 0, kst), Known: true,
+	}
+	if got, want := view.RunwayCreditVerdict(near, now, kst), "runs dry 2026-09-04 09:30 KST  (in 2d19h)"; got != want {
+		t.Errorf("RunwayCreditVerdict(near) = %q, want %q", got, want)
+	}
+
+	// The threshold is a span of 365 days, and it is the same wording either
+	// side of it: one function answers for both rows, so a date just inside it
+	// still names its minute and a date just past it names its year.
+	justInside := now.Add(364 * 24 * time.Hour)
+	if got := view.RunwayCreditVerdict(forecast.CreditFleet{
+		Currency: "USD", SpendPerHour: 1, DryAt: justInside, Known: true,
+	}, now, kst); !strings.Contains(got, view.Timestamp(justInside, kst)) {
+		t.Errorf("a date 364 days out = %q, want the full timestamp %q", got, view.Timestamp(justInside, kst))
+	}
+	justPast := now.Add(366 * 24 * time.Hour)
+	if got, want := view.RunwayCreditVerdict(forecast.CreditFleet{
+		Currency: "USD", SpendPerHour: 1, DryAt: justPast, Known: true,
+	}, now, kst), "runs dry 2027  (in about a year)"; got != want {
+		t.Errorf("a date 366 days out = %q, want %q", got, want)
+	}
+}
+
+// The credit row's basis: what the figures above it were measured from. It is
+// the sentence that lets a reader tell a rate divided out of six dollars from
+// the same rate divided out of two cents, which no other cell on the page can
+// say and which the window axes have always had.
+func TestTheCreditBasisSaysWhatTheFigureWasMeasuredFrom(t *testing.T) {
+	live := forecast.CreditFleet{
+		Currency: "USD", SpendPerHour: 0.0051,
+		Spent: 0.02, Observed: 3*time.Hour + 56*time.Minute + 45*time.Second, Readings: 27,
+		Known: true,
+	}
+	if got, want := view.RunwayCreditBasis(live), "Measured from 0.02 USD spent over 3h56m, across 27 readings."; got != want {
+		t.Errorf("RunwayCreditBasis = %q, want %q", got, want)
+	}
+	// A refused figure has no basis, and the caller prints nothing rather than
+	// a sentence about a measurement that produced no answer.
+	if got := view.RunwayCreditBasis(forecast.CreditFleet{}); got != "" {
+		t.Errorf("RunwayCreditBasis(unknown) = %q, want the empty string", got)
+	}
+	// Not the zero value either: a refused figure that still carried a basis is
+	// what a mutation dropping the Known check would produce.
+	refused := forecast.CreditFleet{Currency: "USD", Spent: 6, Observed: 4 * time.Hour, Readings: 3}
+	if got := view.RunwayCreditBasis(refused); got != "" {
+		t.Errorf("RunwayCreditBasis(refused) = %q, want the empty string", got)
+	}
+}
