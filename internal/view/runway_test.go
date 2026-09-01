@@ -740,3 +740,53 @@ func TestALabelledWrapCountsDisplayColumnsAndNotBytes(t *testing.T) {
 		t.Errorf("a line that fits by columns was wrapped:\n\t%q", got)
 	}
 }
+
+// A rate under half a cent an hour is still spending, and this cell has to say
+// so. It is the case no fixture reached: every credit figure written before it
+// was a comfortable one, and the first rate ever measured against a live
+// balance landed here -- an enterprise seat four hours past its billing
+// rollover, two cents spent, 0.0026 USD/h.
+//
+// "%.2f" renders that "0.00", which puts a fleet reported spending nothing in
+// the same row as a verdict naming the date it runs dry, and RunwayCreditBurn's
+// own contract is that this cell never says a fleet spends nothing. The cell
+// has to be readable as a rate at the width the rate needs.
+func TestACreditRateUnderACentAnHourDoesNotReadAsZero(t *testing.T) {
+	// The live measurement, written as what it was: one cent of spend over the
+	// span between the readings that carried it.
+	live := 0.01 / (3*time.Hour + 50*time.Minute + 52*time.Second).Hours()
+	if got, want := view.RunwayCreditBurn(forecast.CreditFleet{
+		Currency: "USD", SpendPerHour: live, Known: true,
+	}), "0.0026 USD/h"; got != want {
+		t.Errorf("RunwayCreditBurn(live sub-cent rate) = %q, want %q", got, want)
+	}
+
+	// The invariant behind that one figure, across the magnitudes a rate can
+	// reach: a rate that got this far was measured and is positive, so the cell
+	// must always carry a digit that says so.
+	for _, rate := range []float64{live, 0.005, 0.0001, 1e-7} {
+		got := view.RunwayCreditBurn(forecast.CreditFleet{
+			Currency: "USD", SpendPerHour: rate, Known: true,
+		})
+		if !strings.ContainsAny(strings.TrimSuffix(got, " USD/h"), "123456789") {
+			t.Errorf("RunwayCreditBurn(%v) = %q -- a measured rate rendered as zero", rate, got)
+		}
+	}
+
+	// And the width money is written in is unchanged for every rate that fits
+	// it, which is what keeps this from being a licence to widen the column.
+	for _, c := range []struct {
+		rate float64
+		want string
+	}{
+		{1.4, "1.40 USD/h"},
+		{0.01, "0.01 USD/h"},
+		{12.345, "12.35 USD/h"},
+	} {
+		if got := view.RunwayCreditBurn(forecast.CreditFleet{
+			Currency: "USD", SpendPerHour: c.rate, Known: true,
+		}); got != c.want {
+			t.Errorf("RunwayCreditBurn(%v) = %q, want %q", c.rate, got, c.want)
+		}
+	}
+}

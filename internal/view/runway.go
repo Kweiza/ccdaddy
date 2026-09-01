@@ -3,6 +3,7 @@ package view
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -358,9 +359,10 @@ func RunwayEmpty(r forecast.AccountRow, now time.Time, loc *time.Location) strin
 }
 
 // RunwayCreditBurn is the fleet's paid spend, in the currency's major unit per
-// hour with the code beside it. Two decimals, because the unit is money; the
-// code, because amounts in two currencies do not add and a bare figure invites
-// a reader to add them anyway.
+// hour with the code beside it. Money's own width, because the unit is money;
+// the code, because amounts in two currencies do not add and a bare figure
+// invites a reader to add them anyway. creditRate is where the width is
+// decided, and why it is not always two decimals.
 //
 // A figure that could not be assembled is Unreadable, never zero. Every way it
 // can fail -- mixed currencies, an uncapped account that is spending, no
@@ -370,7 +372,39 @@ func RunwayCreditBurn(c forecast.CreditFleet) string {
 	if !c.Known {
 		return Unreadable
 	}
-	return fmt.Sprintf("%.2f %s/h", c.SpendPerHour, c.Currency)
+	return fmt.Sprintf("%s %s/h", creditRate(c.SpendPerHour), c.Currency)
+}
+
+// creditRate writes a measured spend rate so that it cannot read as zero.
+//
+// Two decimals is the width money is written in and the right width for every
+// rate a person would call a rate. It is not the right width at the low end,
+// and the low end is not hypothetical: the first spend rate this repository
+// ever measured against a live balance was 0.0026 USD/h -- an enterprise seat
+// four hours past its billing rollover, two cents spent. "%.2f" prints that as
+// "0.00", which is the one figure RunwayCreditBurn's contract says this cell
+// must never carry: a fleet reported spending nothing, in the same row as a
+// verdict naming the date it runs dry. The format string was producing the
+// reading the comment above it forbids.
+//
+// A rate that reaches here was MEASURED and is positive -- creditFleet refuses
+// a summed rate of zero or below before a CreditFleet is ever marked Known --
+// so the fallback is reached only by a rate under half a minor unit an hour,
+// and it is written with two significant digits. Not a bound and not an
+// approximation sign: the figure is known exactly, and only its width was ever
+// in question.
+//
+// The seam this leaves is deliberate. 0.0026 takes four decimals and 0.0053
+// takes two, so two readings either side of half a cent an hour change the
+// cell's width, and the narrower figure is the larger one. Both are correctly
+// rounded at the width they use. Widening every rate to match would put four
+// decimals on a figure in dollars an hour, which is a worse cell for every
+// fleet that has one.
+func creditRate(perHour float64) string {
+	if s := strconv.FormatFloat(perHour, 'f', 2, 64); strings.ContainsAny(s, "123456789") {
+		return s
+	}
+	return strconv.FormatFloat(perHour, 'g', 2, 64)
 }
 
 // RunwayCreditVerdict is when the fleet's paid balance reaches zero, or
