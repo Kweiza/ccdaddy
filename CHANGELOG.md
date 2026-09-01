@@ -16,6 +16,26 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.9.8] — 2026-09-01
+
+The release that stops ccdad revoking the login it is holding.
+
+A refresh token is single-use: minting a new pair revokes the old one. Two paths
+spent one without being able to show that nobody else was holding it. An
+unreadable login store — a macOS keychain that had locked — made every account
+read as idle, INCLUDING the live one, so the poller rotated all five while Claude
+Code went on serving from the fallback file it could still reach. And a `ccdad
+run` session's own rotation landed in a keychain item of its own, which the
+adopt-back never read, so the store kept a grant the server had already
+superseded. Both end the same way: Claude Code presents a revoked token, reports
+it as an expired refresh token, and the user is logged out with nothing in
+`daemon.log` to say why.
+
+The rule underneath every fix here is one ccdad already had for its switch engine
+and had never applied anywhere else — **"cannot read it" is not "nobody is
+there"** — and the reason the eight hours left no trace is the second one:
+spending a grant was not an event anything recorded.
+
 ### Fixed
 
 - **A session no longer carries back a grant the store has already moved past.**
@@ -2606,7 +2626,8 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.9.7...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.9.8...HEAD
+[0.9.8]: https://github.com/Kweiza/ccdaddy/compare/v0.9.7...v0.9.8
 [0.9.7]: https://github.com/Kweiza/ccdaddy/compare/v0.9.6...v0.9.7
 [0.9.6]: https://github.com/Kweiza/ccdaddy/compare/v0.9.5...v0.9.6
 [0.9.5]: https://github.com/Kweiza/ccdaddy/compare/v0.9.4...v0.9.5
