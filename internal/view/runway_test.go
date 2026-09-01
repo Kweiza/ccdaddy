@@ -835,6 +835,18 @@ func TestADryDateBeyondAYearIsPrintedAsAYear(t *testing.T) {
 	}, now, kst), "runs dry 2027  (in about a year)"; got != want {
 		t.Errorf("a date 366 days out = %q, want %q", got, want)
 	}
+
+	// The span is ROUNDED to years and not truncated to them. 657 days is 1.8
+	// years, and truncation calls that "a year" -- a hedge that rounds toward
+	// the reader's advantage on the one axis this repository fails closed on.
+	// This case is here because the arithmetic above it does not distinguish
+	// them: at 10.49 years and at 1.0027, rounding and truncation agree.
+	almostTwo := now.Add(657 * 24 * time.Hour)
+	if got, want := view.RunwayCreditVerdict(forecast.CreditFleet{
+		Currency: "USD", SpendPerHour: 1, DryAt: almostTwo, Known: true,
+	}, now, kst), "runs dry 2028  (in about 2 years)"; got != want {
+		t.Errorf("a date 657 days out = %q, want %q", got, want)
+	}
 }
 
 // The credit row's basis: what the figures above it were measured from. It is
