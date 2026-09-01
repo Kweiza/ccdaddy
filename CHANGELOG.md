@@ -16,6 +16,26 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+### Changed
+
+- **`ccdad runway` no longer dates the credit row to the minute a decade out, and
+  now says what that date was measured from.** `used_credits` arrives in whole
+  minor units, so a fleet a few cents into its billing month divides a two-cent
+  numerator and one cent entering or leaving the four-hour window halves the
+  rate. Measured on 2026-09-01: three readings of one live account ninety
+  minutes apart dated it 2046, then 2037-02-26 09:49, then 2036-04-19 09:49 —
+  every one correctly computed, and nothing on the page let a reader see how
+  thin they were. A dry date more than a year out is now printed as a year, and
+  the credit block carries a basis sentence — the money, the span, the reading
+  count — the way the window axes always have. Neither change refuses a figure
+  that was measured, and `runway --json` is unchanged except for three added
+  keys, still carrying the moment at full precision. The rule is written for
+  both rows so the one wording stays one wording; in practice it reaches only
+  credit, because the forecast horizon is fourteen days and no window verdict
+  has ever been a year out. Pinned by
+  `TestADryDateBeyondAYearIsPrintedAsAYear` and
+  `TestTheCreditBasisSaysWhatTheFigureWasMeasuredFrom`.
+
 ### Fixed
 
 - **The credit row no longer reports a fleet spending nothing beside the date it
