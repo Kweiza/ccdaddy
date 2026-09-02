@@ -9,7 +9,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/Kweiza/ccdaddy/internal/cclink"
+	"github.com/Kweiza/ccdaddy/internal/atomicfile"
 	"github.com/Kweiza/ccdaddy/internal/cclock"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/oauth"
@@ -272,7 +272,7 @@ func (s *State) save(root string) error {
 	if err != nil {
 		return fmt.Errorf("encoding %s: %w", StateFileName, err)
 	}
-	return cclink.WriteFileAtomic(filepath.Join(root, StateFileName), encoded, 0o600)
+	return atomicfile.WriteFile(filepath.Join(root, StateFileName), encoded, 0o600)
 }
 
 // WithState runs fn against the state under a cross-process lock and writes back
