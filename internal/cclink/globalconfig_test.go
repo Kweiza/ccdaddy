@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Kweiza/ccdaddy/internal/atomicfile"
 	"github.com/Kweiza/ccdaddy/internal/cclock"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 )
@@ -235,8 +236,7 @@ func TestUpdateGlobalConfigWritesUnderTheConfigLock(t *testing.T) {
 
 	var heldAtWrite bool
 	var contendErr error
-	orig := renameFile
-	renameFile = func(from, to string) error {
+	restore := atomicfile.SwapRename(func(from, to string) error {
 		_, statErr := os.Stat(lockDir)
 		heldAtWrite = statErr == nil
 		lk, err := cclock.Acquire(lockDir, cclock.Options{Stale: time.Minute, Timeout: 0})
@@ -244,9 +244,9 @@ func TestUpdateGlobalConfigWritesUnderTheConfigLock(t *testing.T) {
 			_ = lk.Release()
 		}
 		contendErr = err
-		return orig(from, to)
-	}
-	t.Cleanup(func() { renameFile = orig })
+		return os.Rename(from, to)
+	})
+	t.Cleanup(restore)
 
 	if err := UpdateGlobalConfig(func(g *GlobalConfig) error {
 		return SetPrimaryAPIKey(g, "sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUV")

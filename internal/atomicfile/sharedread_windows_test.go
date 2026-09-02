@@ -1,6 +1,6 @@
 //go:build windows
 
-package cclink
+package atomicfile
 
 import (
 	"io"

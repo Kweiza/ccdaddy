@@ -1,4 +1,4 @@
-package cclink
+package atomicfile
 
 import (
 	"bytes"
@@ -11,11 +11,11 @@ import (
 	"time"
 )
 
-func TestWriteFileAtomicCreates(t *testing.T) {
+func TestWriteFileCreates(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".credentials.json")
 
-	if err := WriteFileAtomic(path, []byte(`{"a":1}`), 0o600); err != nil {
-		t.Fatalf("WriteFileAtomic() = %v, want nil", err)
+	if err := WriteFile(path, []byte(`{"a":1}`), 0o600); err != nil {
+		t.Fatalf("WriteFile() = %v, want nil", err)
 	}
 	got, err := os.ReadFile(path)
 	if err != nil {
@@ -26,13 +26,13 @@ func TestWriteFileAtomicCreates(t *testing.T) {
 	}
 }
 
-func TestWriteFileAtomicSetsMode(t *testing.T) {
+func TestWriteFileSetsMode(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("chmod is a no-op on Windows beyond the read-only bit")
 	}
 	path := filepath.Join(t.TempDir(), ".credentials.json")
 
-	if err := WriteFileAtomic(path, []byte("{}"), 0o600); err != nil {
+	if err := WriteFile(path, []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(path)
@@ -44,15 +44,15 @@ func TestWriteFileAtomicSetsMode(t *testing.T) {
 	}
 }
 
-// TestWriteFileAtomicHonoursPerm uses a mode os.CreateTemp cannot produce by
+// TestWriteFileHonoursPerm uses a mode os.CreateTemp cannot produce by
 // accident (CreateTemp defaults to 0600), so it actually exercises the
 // tmp.Chmod(perm) call rather than merely re-confirming CreateTemp's default.
-func TestWriteFileAtomicHonoursPerm(t *testing.T) {
+func TestWriteFileHonoursPerm(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("chmod is a no-op on Windows beyond the read-only bit")
 	}
 	path := filepath.Join(t.TempDir(), ".credentials.json")
-	if err := WriteFileAtomic(path, []byte("{}"), 0o640); err != nil {
+	if err := WriteFile(path, []byte("{}"), 0o640); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(path)
@@ -64,13 +64,13 @@ func TestWriteFileAtomicHonoursPerm(t *testing.T) {
 	}
 }
 
-func TestWriteFileAtomicOverwrites(t *testing.T) {
+func TestWriteFileOverwrites(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".credentials.json")
 	if err := os.WriteFile(path, []byte(`{"old":true}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := WriteFileAtomic(path, []byte(`{"new":true}`), 0o600); err != nil {
+	if err := WriteFile(path, []byte(`{"new":true}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	got, err := os.ReadFile(path)
@@ -82,17 +82,17 @@ func TestWriteFileAtomicOverwrites(t *testing.T) {
 	}
 }
 
-// TestWriteFileAtomicRemovesItsTempFile checks that the temp file created
+// TestWriteFileRemovesItsTempFile checks that the temp file created
 // during the write does not survive as a stray sibling once the rename
 // succeeds. It does NOT prove the temp file was ever a sibling in the first
 // place — a temp file created in os.TempDir() and cleaned up there would also
 // leave this directory holding only the target file. Siblingness itself is
-// checked by TestWriteFileAtomicCreatesTempBesideTarget below.
-func TestWriteFileAtomicRemovesItsTempFile(t *testing.T) {
+// checked by TestWriteFileCreatesTempBesideTarget below.
+func TestWriteFileRemovesItsTempFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".credentials.json")
 
-	if err := WriteFileAtomic(path, []byte("{}"), 0o600); err != nil {
+	if err := WriteFile(path, []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	entries, err := os.ReadDir(dir)
@@ -108,14 +108,14 @@ func TestWriteFileAtomicRemovesItsTempFile(t *testing.T) {
 	}
 }
 
-// TestWriteFileAtomicCreatesTempBesideTarget proves the temp file is a
+// TestWriteFileCreatesTempBesideTarget proves the temp file is a
 // sibling of the target — the property the whole package exists for. A
 // rename within one directory is atomic; a temp file created elsewhere (e.g.
 // os.TempDir()) and moved in would degrade to copy-then-unlink across
 // filesystems, where a reader can catch a half-written credential file. The
 // temp file is gone by the time a test could inspect it after the fact, so
 // this observes the directory createTemp is actually called with via a seam.
-func TestWriteFileAtomicCreatesTempBesideTarget(t *testing.T) {
+func TestWriteFileCreatesTempBesideTarget(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".credentials.json")
 
@@ -127,7 +127,7 @@ func TestWriteFileAtomicCreatesTempBesideTarget(t *testing.T) {
 		return orig(d, pattern)
 	}
 
-	if err := WriteFileAtomic(path, []byte("{}"), 0o600); err != nil {
+	if err := WriteFile(path, []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if gotDir != dir {
@@ -135,13 +135,13 @@ func TestWriteFileAtomicCreatesTempBesideTarget(t *testing.T) {
 	}
 }
 
-// TestWriteFileAtomicSyncsBeforeRename pins that the fsync actually happens,
+// TestWriteFileSyncsBeforeRename pins that the fsync actually happens,
 // and that it happens before the rename. Crash durability itself is not
 // observable from a Go test -- proving the sync's disk-flush guarantee would
 // need OS-level fault injection -- but a refactor that drops the syncFile
 // call, or moves it after the rename, is observable, and this test exists to
 // catch exactly that regression.
-func TestWriteFileAtomicSyncsBeforeRename(t *testing.T) {
+func TestWriteFileSyncsBeforeRename(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".credentials.json")
 
 	origSync := syncFile
@@ -161,7 +161,7 @@ func TestWriteFileAtomicSyncsBeforeRename(t *testing.T) {
 		return origRename(oldpath, newpath)
 	}
 
-	if err := WriteFileAtomic(path, []byte("{}"), 0o600); err != nil {
+	if err := WriteFile(path, []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -176,26 +176,26 @@ func TestWriteFileAtomicSyncsBeforeRename(t *testing.T) {
 	}
 }
 
-func TestWriteFileAtomicFailsOnMissingDirectory(t *testing.T) {
+func TestWriteFileFailsOnMissingDirectory(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nope", ".credentials.json")
 
-	if err := WriteFileAtomic(path, []byte("{}"), 0o600); err == nil {
-		t.Fatal("WriteFileAtomic() = nil, want an error for a missing directory")
+	if err := WriteFile(path, []byte("{}"), 0o600); err == nil {
+		t.Fatal("WriteFile() = nil, want an error for a missing directory")
 	}
 }
 
-// TestWriteFileAtomicReaderNeverSeesPartialFile is the property this whole
+// TestWriteFileReaderNeverSeesPartialFile is the property this whole
 // task exists to provide: a reader racing a writer must always see a complete
 // payload — the old one or the new one — never a torn mix of the two. It
 // alternates a small and a much larger payload so a non-atomic implementation
 // (e.g. os.WriteFile, which writes in place without a rename) has a realistic
 // chance of being caught mid-write.
-func TestWriteFileAtomicReaderNeverSeesPartialFile(t *testing.T) {
+func TestWriteFileReaderNeverSeesPartialFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".credentials.json")
 	small := []byte(`{"account":"a"}`)
 	large := append(append([]byte(`{"account":"b","pad":"`), bytes.Repeat([]byte("x"), 1<<16)...), []byte(`"}`)...)
-	if err := WriteFileAtomic(path, small, 0o600); err != nil {
+	if err := WriteFile(path, small, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	stop := make(chan struct{})
@@ -209,7 +209,7 @@ func TestWriteFileAtomicReaderNeverSeesPartialFile(t *testing.T) {
 			if i%2 == 1 {
 				payload = large
 			}
-			if err := WriteFileAtomic(path, payload, 0o600); err != nil {
+			if err := WriteFile(path, payload, 0o600); err != nil {
 				// On Windows this is not necessarily a defect. The reader
 				// below reopens the file forever, and every reopen leaves the
 				// replaced name delete-pending for a moment; the bounded
@@ -271,13 +271,13 @@ reading:
 	}
 }
 
-// TestWriteFileAtomicRetriesRetryableReplaceFailures drives the retry loop
+// TestWriteFileRetriesRetryableReplaceFailures drives the retry loop
 // with a fake rename that fails twice and then delegates to the real
 // os.Rename, and a fake retryable that recognizes the fake failure. This
 // exercises the loop's own bookkeeping (it keeps trying, and eventually
 // succeeds and writes the data) without depending on a real platform-specific
 // sharing violation, so it runs on every OS.
-func TestWriteFileAtomicRetriesRetryableReplaceFailures(t *testing.T) {
+func TestWriteFileRetriesRetryableReplaceFailures(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".credentials.json")
 
 	origRename := renameFile
@@ -298,8 +298,8 @@ func TestWriteFileAtomicRetriesRetryableReplaceFailures(t *testing.T) {
 	}
 	retryable = func(err error) bool { return errors.Is(err, wantErr) }
 
-	if err := WriteFileAtomic(path, []byte(`{"ok":true}`), 0o600); err != nil {
-		t.Fatalf("WriteFileAtomic() = %v, want nil after retries succeed", err)
+	if err := WriteFile(path, []byte(`{"ok":true}`), 0o600); err != nil {
+		t.Fatalf("WriteFile() = %v, want nil after retries succeed", err)
 	}
 	if calls != 3 {
 		t.Fatalf("rename called %d times, want 3", calls)
@@ -313,11 +313,11 @@ func TestWriteFileAtomicRetriesRetryableReplaceFailures(t *testing.T) {
 	}
 }
 
-// TestWriteFileAtomicGivesUpAfterReplaceAttempts proves the retry loop is
+// TestWriteFileGivesUpAfterReplaceAttempts proves the retry loop is
 // bounded: a rename that always fails with a retryable error must not be
 // retried forever, and must not give up after a single attempt either — both
 // are real failure modes a broken loop could take.
-func TestWriteFileAtomicGivesUpAfterReplaceAttempts(t *testing.T) {
+func TestWriteFileGivesUpAfterReplaceAttempts(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".credentials.json")
 
 	origRename := renameFile
@@ -335,9 +335,9 @@ func TestWriteFileAtomicGivesUpAfterReplaceAttempts(t *testing.T) {
 	}
 	retryable = func(err error) bool { return errors.Is(err, wantErr) }
 
-	err := WriteFileAtomic(path, []byte("{}"), 0o600)
+	err := WriteFile(path, []byte("{}"), 0o600)
 	if err == nil {
-		t.Fatal("WriteFileAtomic() = nil, want an error once every retry is exhausted")
+		t.Fatal("WriteFile() = nil, want an error once every retry is exhausted")
 	}
 	if calls != replaceAttempts {
 		t.Fatalf("rename called %d times, want exactly replaceAttempts (%d)", calls, replaceAttempts)
@@ -345,7 +345,7 @@ func TestWriteFileAtomicGivesUpAfterReplaceAttempts(t *testing.T) {
 }
 
 // TestTempPatternIsTheOnlySpellingOfTheTempName pins the property that makes an
-// orphan sweeper somewhere else in the tree correct: the string WriteFileAtomic
+// orphan sweeper somewhere else in the tree correct: the string WriteFile
 // hands to os.CreateTemp IS the string TempPattern returns.
 //
 // This is not a tautology. The pattern used to be a literal here and a second
@@ -368,11 +368,11 @@ func TestTempPatternIsTheOnlySpellingOfTheTempName(t *testing.T) {
 		return f, err
 	}
 
-	if err := WriteFileAtomic(path, []byte("{}"), 0o600); err != nil {
+	if err := WriteFile(path, []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if want := TempPattern(path); gotPattern != want {
-		t.Errorf("WriteFileAtomic created its temp with pattern %q, want TempPattern's %q — "+
+		t.Errorf("WriteFile created its temp with pattern %q, want TempPattern's %q — "+
 			"a sweeper globbing TempPattern would miss every orphan this writer strands", gotPattern, want)
 	}
 	// And the pattern really does read as a glob over what it produced:
