@@ -20,6 +20,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/credhome"
 	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/oauth"
+	"github.com/Kweiza/ccdaddy/internal/provider"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/switcher"
@@ -258,8 +259,9 @@ func runAdd(cmd *cobra.Command, opts addOptions) error {
 	}
 
 	acct := store.Account{
-		UUID:  result.Token.Account.UUID,
-		Email: result.Token.Account.EmailAddress,
+		UUID:     result.Token.Account.UUID,
+		Email:    result.Token.Account.EmailAddress,
+		Provider: provider.Claude,
 	}
 	// No usage call has been made, so the UsageShape applyProfile passes is
 	// empty by fact rather than by omission: Classify reads that as "no window
@@ -771,9 +773,10 @@ func runAddToken(cmd *cobra.Command, token string, isAPIKey bool, email, alias s
 	}
 
 	acct := store.Account{
-		Email: email,
-		Kind:  identity.Classify(nil, identity.UsageShape{}, isAPIKey),
-		UUID:  uuidPrefix + fingerprint,
+		Email:    email,
+		Kind:     identity.Classify(nil, identity.UsageShape{}, isAPIKey),
+		UUID:     uuidPrefix + fingerprint,
+		Provider: provider.Claude,
 	}
 
 	if !isAPIKey {

@@ -21,6 +21,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/oauth"
 	"github.com/Kweiza/ccdaddy/internal/pollpolicy"
+	"github.com/Kweiza/ccdaddy/internal/provider"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/switcher"
@@ -99,7 +100,8 @@ func seedAccount(t *testing.T, uuid, org string) store.Account {
 	// drops any reading dated before its account was added, and a real
 	// time.Now() stamp would be hours after tickEpoch.
 	a := store.Account{
-		UUID: uuid, Email: uuid + "@example.com", OrganizationUUID: org,
+		Provider: provider.Claude,
+		UUID:     uuid, Email: uuid + "@example.com", OrganizationUUID: org,
 		AddedAt: tickEpoch.Add(-24 * time.Hour),
 	}
 	if err := s.Add(a, oauthBlob("RT-"+uuid)); err != nil {
@@ -122,7 +124,7 @@ func seedTokenAccount(t *testing.T, uuid string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Add(store.Account{
+	if err := s.Add(store.Account{Provider: provider.Claude,
 		UUID: uuid, Email: uuid + "@example.com", AddedAt: tickEpoch.Add(-24 * time.Hour),
 	}, cclink.Blob{cclink.TokenKey: rec}); err != nil {
 		t.Fatal(err)

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pelletier/go-toml/v2"
+
 	"github.com/Kweiza/ccdaddy/internal/provider"
 )
 
@@ -202,4 +204,104 @@ func TestEveryRowIsWrittenWithItsProviderKey(t *testing.T) {
 	if !strings.Contains(string(raw), "provider = 'claude'") {
 		t.Fatalf("accounts.toml does not carry the provider key:\n%s", raw)
 	}
+}
+
+// add refuses a zero Provider rather than defaulting it, and the three
+// constructors that build a Claude account say so explicitly.
+//
+// A default here would be the same wrong guess load refuses, arriving through
+// the other door: every future constructor that forgot the field would store a
+// Codex account labelled Claude, and the switch that rewrites Claude Code's
+// credentials file would then be handed it.
+func TestAddRefusesAnAccountWithNoProvider(t *testing.T) {
+	withStore(t)
+	s, err := Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = s.Add(Account{UUID: "u-1", Email: "a@example.com"}, sampleCreds("AT"))
+	if !errors.Is(err, ErrNoProvider) {
+		t.Fatalf("Add() = %v, want ErrNoProvider", err)
+	}
+	if got := s.Accounts(); len(got) != 0 {
+		t.Fatalf("the refused account landed anyway: %+v", got)
+	}
+}
+
+// Re-adding an existing uuid is how `ccdad add` doubles as re-authentication,
+// and it keeps the alias, the index and the two per-account flags. It must not
+// keep -- or silently change -- the provider: a uuid that arrives under the
+// other provider is a different account, and rewriting the row in place would
+// leave a Claude account holding a Codex credential file.
+func TestAddRefusesAProviderChangeOnAnExistingUUID(t *testing.T) {
+	withStore(t)
+	s, err := Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add(Account{UUID: "u-1", Provider: provider.Claude}, sampleCreds("AT")); err != nil {
+		t.Fatal(err)
+	}
+	err = s.Add(Account{UUID: "u-1", Provider: provider.Codex}, sampleCreds("AT-2"))
+	if !errors.Is(err, ErrProviderMismatch) {
+		t.Fatalf("Add() = %v, want ErrProviderMismatch", err)
+	}
+	got, ok := s.Get("u-1")
+	if !ok {
+		t.Fatal("the stored account is gone")
+	}
+	if got.Provider != provider.Claude {
+		t.Fatalf("Provider = %q after a refused re-add, want claude", got.Provider)
+	}
+}
+
+// The document is version 2 if and only if a row is Codex.
+//
+// Both halves matter. Bumping unconditionally would make every store
+// unreadable by the build before this one, for a field that build would have
+// ignored anyway. Never bumping would let a pre-v2 build read a Codex row,
+// drop the key and write it back -- which is the state ErrProviderMissing
+// exists to catch, and it would then never be caught, because the header would
+// still say 1 and version 1 reads an absent provider as Claude.
+func TestTheDocumentVersionFollowsTheProvidersInIt(t *testing.T) {
+	root := withStore(t)
+	s, err := Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add(Account{UUID: "u-1", Provider: provider.Claude}, sampleCreds("AT")); err != nil {
+		t.Fatal(err)
+	}
+	if got := documentVersion(t, root); got != 1 {
+		t.Fatalf("version = %d with only Claude accounts, want 1", got)
+	}
+
+	if err := s.Add(Account{UUID: "u-2", Provider: provider.Codex}, sampleCreds("AT-2")); err != nil {
+		t.Fatal(err)
+	}
+	if got := documentVersion(t, root); got != 2 {
+		t.Fatalf("version = %d with a Codex account, want 2", got)
+	}
+
+	if err := s.Remove("u-2"); err != nil {
+		t.Fatal(err)
+	}
+	if got := documentVersion(t, root); got != 1 {
+		t.Fatalf("version = %d after the Codex account was removed, want 1", got)
+	}
+}
+
+func documentVersion(t *testing.T, root string) int {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(root, accountsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Version int `toml:"version"`
+	}
+	if err := toml.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parsing accounts.toml: %v\n%s", err, raw)
+	}
+	return doc.Version
 }

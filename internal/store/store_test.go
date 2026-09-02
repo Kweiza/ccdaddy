@@ -14,6 +14,7 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/identity"
+	"github.com/Kweiza/ccdaddy/internal/provider"
 )
 
 func withStore(t *testing.T) string {
@@ -58,7 +59,7 @@ func TestAddPersistsAcrossReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	acct := Account{UUID: "u-1", Email: "a@example.com", Kind: identity.KindSubscription, Tier: "claude_max"}
+	acct := Account{Provider: provider.Claude, UUID: "u-1", Email: "a@example.com", Kind: identity.KindSubscription, Tier: "claude_max"}
 	if err := s.Add(acct, sampleCreds("AT")); err != nil {
 		t.Fatalf("Add() = %v, want nil", err)
 	}
@@ -93,7 +94,7 @@ func TestKindSurvivesTheTOMLRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Add(Account{UUID: "u-1", Kind: identity.KindCredit}, sampleCreds("AT")); err != nil {
+	if err := s.Add(Account{Provider: provider.Claude, UUID: "u-1", Kind: identity.KindCredit}, sampleCreds("AT")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -132,7 +133,7 @@ func TestAddAssignsSequentialIndices(t *testing.T) {
 	s, _ := Open()
 
 	for _, u := range []string{"u-1", "u-2", "u-3"} {
-		if err := s.Add(Account{UUID: u}, sampleCreds(u)); err != nil {
+		if err := s.Add(Account{Provider: provider.Claude, UUID: u}, sampleCreds(u)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -149,13 +150,13 @@ func TestAddSameUUIDUpdatesInPlace(t *testing.T) {
 	withStore(t)
 	s, _ := Open()
 
-	if err := s.Add(Account{UUID: "u-1", Email: "old@example.com"}, sampleCreds("OLD")); err != nil {
+	if err := s.Add(Account{Provider: provider.Claude, UUID: "u-1", Email: "old@example.com"}, sampleCreds("OLD")); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.SetAlias("u-1", "work"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Add(Account{UUID: "u-1", Email: "new@example.com"}, sampleCreds("NEW")); err != nil {
+	if err := s.Add(Account{Provider: provider.Claude, UUID: "u-1", Email: "new@example.com"}, sampleCreds("NEW")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -190,10 +191,10 @@ func TestAddSameUUIDUpdatesInPlace(t *testing.T) {
 func TestReAuthenticationKeepsTheIndexAndTheAddedAtTime(t *testing.T) {
 	withStore(t)
 	s, _ := Open()
-	if err := s.Add(Account{UUID: "u-1"}, sampleCreds("a")); err != nil {
+	if err := s.Add(Account{Provider: provider.Claude, UUID: "u-1"}, sampleCreds("a")); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Add(Account{UUID: "u-2", Email: "old@example.com"}, sampleCreds("b")); err != nil {
+	if err := s.Add(Account{Provider: provider.Claude, UUID: "u-2", Email: "old@example.com"}, sampleCreds("b")); err != nil {
 		t.Fatal(err)
 	}
 	before, ok := s.Get("u-2")
@@ -201,7 +202,7 @@ func TestReAuthenticationKeepsTheIndexAndTheAddedAtTime(t *testing.T) {
 		t.Fatal("Get(u-2) = false, want the account just added")
 	}
 
-	if err := s.Add(Account{UUID: "u-2", Email: "new@example.com"}, sampleCreds("b2")); err != nil {
+	if err := s.Add(Account{Provider: provider.Claude, UUID: "u-2", Email: "new@example.com"}, sampleCreds("b2")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -222,7 +223,7 @@ func TestReAuthenticationKeepsTheIndexAndTheAddedAtTime(t *testing.T) {
 func TestAccountsReturnsACopy(t *testing.T) {
 	withStore(t)
 	s, _ := Open()
-	if err := s.Add(Account{UUID: "u-1", Email: "a@example.com"}, sampleCreds("a")); err != nil {
+	if err := s.Add(Account{Provider: provider.Claude, UUID: "u-1", Email: "a@example.com"}, sampleCreds("a")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -237,7 +238,7 @@ func TestAccountsReturnsACopy(t *testing.T) {
 func TestCredentialsRoundTrip(t *testing.T) {
 	withStore(t)
 	s, _ := Open()
-	if err := s.Add(Account{UUID: "u-1"}, sampleCreds("AT")); err != nil {
+	if err := s.Add(Account{Provider: provider.Claude, UUID: "u-1"}, sampleCreds("AT")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -256,7 +257,7 @@ func TestCredentialsFileIsSixHundred(t *testing.T) {
 	}
 	dir := withStore(t)
 	s, _ := Open()
-	if err := s.Add(Account{UUID: "u-1"}, sampleCreds("AT")); err != nil {
+	if err := s.Add(Account{Provider: provider.Claude, UUID: "u-1"}, sampleCreds("AT")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -315,7 +316,7 @@ func TestRemoveDeletesCredentialsAndCompactsIndices(t *testing.T) {
 	dir := withStore(t)
 	s, _ := Open()
 	for _, u := range []string{"u-1", "u-2", "u-3"} {
-		if err := s.Add(Account{UUID: u}, sampleCreds(u)); err != nil {
+		if err := s.Add(Account{Provider: provider.Claude, UUID: u}, sampleCreds(u)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -350,8 +351,8 @@ func TestRemoveUnknownIsNotFound(t *testing.T) {
 func TestSetAliasRejectsDuplicates(t *testing.T) {
 	withStore(t)
 	s, _ := Open()
-	_ = s.Add(Account{UUID: "u-1"}, sampleCreds("a"))
-	_ = s.Add(Account{UUID: "u-2"}, sampleCreds("b"))
+	_ = s.Add(Account{Provider: provider.Claude, UUID: "u-1"}, sampleCreds("a"))
+	_ = s.Add(Account{Provider: provider.Claude, UUID: "u-2"}, sampleCreds("b"))
 
 	if err := s.SetAlias("u-1", "work"); err != nil {
 		t.Fatal(err)
@@ -369,7 +370,7 @@ func TestSetAliasRejectsDuplicates(t *testing.T) {
 func TestSetAliasValidates(t *testing.T) {
 	withStore(t)
 	s, _ := Open()
-	_ = s.Add(Account{UUID: "u-1"}, sampleCreds("a"))
+	_ = s.Add(Account{Provider: provider.Claude, UUID: "u-1"}, sampleCreds("a"))
 
 	if err := s.SetAlias("u-1", "123"); !errors.Is(err, ErrBadAlias) {
 		t.Fatalf("SetAlias(numeric) = %v, want ErrBadAlias", err)
@@ -379,7 +380,7 @@ func TestSetAliasValidates(t *testing.T) {
 func TestSetAliasNormalizes(t *testing.T) {
 	withStore(t)
 	s, _ := Open()
-	_ = s.Add(Account{UUID: "u-1"}, sampleCreds("a"))
+	_ = s.Add(Account{Provider: provider.Claude, UUID: "u-1"}, sampleCreds("a"))
 
 	if err := s.SetAlias("u-1", "  WORK  "); err != nil {
 		t.Fatal(err)
@@ -401,8 +402,8 @@ func TestSetAliasOnAnUnknownAccountIsNotFound(t *testing.T) {
 func TestActiveUUIDPersistsAndIsClearedOnRemoval(t *testing.T) {
 	withStore(t)
 	s, _ := Open()
-	_ = s.Add(Account{UUID: "u-1"}, sampleCreds("a"))
-	_ = s.Add(Account{UUID: "u-2"}, sampleCreds("b"))
+	_ = s.Add(Account{Provider: provider.Claude, UUID: "u-1"}, sampleCreds("a"))
+	_ = s.Add(Account{Provider: provider.Claude, UUID: "u-2"}, sampleCreds("b"))
 
 	if err := s.SetActive("u-1"); err != nil {
 		t.Fatal(err)
@@ -432,7 +433,7 @@ func TestAddRejectsAUUIDThatWouldEscapeTheStore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := s.Add(Account{UUID: "../../pwned"}, sampleCreds("AT")); err == nil {
+	if err := s.Add(Account{Provider: provider.Claude, UUID: "../../pwned"}, sampleCreds("AT")); err == nil {
 		t.Fatal("Add(traversal uuid) = nil, want an error")
 	}
 	if _, err := os.Stat(filepath.Join(filepath.Dir(dir), "pwned.json")); err == nil {
@@ -469,7 +470,7 @@ func TestAddIsEmptyUUIDRejected(t *testing.T) {
 	withStore(t)
 	s, _ := Open()
 
-	if err := s.Add(Account{UUID: ""}, sampleCreds("AT")); err == nil {
+	if err := s.Add(Account{Provider: provider.Claude, UUID: ""}, sampleCreds("AT")); err == nil {
 		t.Fatal("Add(no uuid) = nil, want an error")
 	}
 }
@@ -490,7 +491,7 @@ func TestAddDoesNotRecordAnAccountWhoseCredentialsFailedToWrite(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(creds, 0o700) })
 
-	if err := s.Add(Account{UUID: "u-1"}, sampleCreds("AT")); err == nil {
+	if err := s.Add(Account{Provider: provider.Claude, UUID: "u-1"}, sampleCreds("AT")); err == nil {
 		t.Fatal("Add() = nil, want the unwritable credentials directory to fail it")
 	}
 	if got := s.Accounts(); len(got) != 0 {
@@ -508,7 +509,7 @@ func TestRemoveKeepsTheAccountWhenTheCredentialFileCannotBeDeleted(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Add(Account{UUID: "u-1"}, sampleCreds("AT")); err != nil {
+	if err := s.Add(Account{Provider: provider.Claude, UUID: "u-1"}, sampleCreds("AT")); err != nil {
 		t.Fatal(err)
 	}
 	creds := filepath.Join(dir, credentialsDir)
@@ -625,11 +626,11 @@ func TestOpenRefusesWhenTheHomeDirectoryCannotBeResolved(t *testing.T) {
 func TestReAuthenticationKeepsAnAccountHeldOutOfRotation(t *testing.T) {
 	withStore(t)
 	s, _ := Open()
-	if err := s.Add(Account{UUID: "u-1", Email: "old@example.com", Disabled: true}, sampleCreds("a")); err != nil {
+	if err := s.Add(Account{Provider: provider.Claude, UUID: "u-1", Email: "old@example.com", Disabled: true}, sampleCreds("a")); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := s.Add(Account{UUID: "u-1", Email: "new@example.com"}, sampleCreds("b")); err != nil {
+	if err := s.Add(Account{Provider: provider.Claude, UUID: "u-1", Email: "new@example.com"}, sampleCreds("b")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -652,7 +653,7 @@ func TestReAuthenticationKeepsAnAccountHeldOutOfRotation(t *testing.T) {
 func TestPrimaryIsWrittenAndReadBack(t *testing.T) {
 	dir := withStore(t)
 	s, _ := Open()
-	if err := s.Add(Account{UUID: "u-1", Kind: identity.KindCredit}, sampleCreds("a")); err != nil {
+	if err := s.Add(Account{Provider: provider.Claude, UUID: "u-1", Kind: identity.KindCredit}, sampleCreds("a")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -690,7 +691,7 @@ func TestPrimaryIsWrittenAndReadBack(t *testing.T) {
 func TestAnOrdinaryAccountWritesNoPrimaryKey(t *testing.T) {
 	dir := withStore(t)
 	s, _ := Open()
-	if err := s.Add(Account{UUID: "u-1"}, sampleCreds("a")); err != nil {
+	if err := s.Add(Account{Provider: provider.Claude, UUID: "u-1"}, sampleCreds("a")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -711,11 +712,11 @@ func TestAnOrdinaryAccountWritesNoPrimaryKey(t *testing.T) {
 func TestReAuthenticationKeepsAnAccountPrimary(t *testing.T) {
 	withStore(t)
 	s, _ := Open()
-	if err := s.Add(Account{UUID: "u-1", Email: "old@example.com", Primary: true}, sampleCreds("a")); err != nil {
+	if err := s.Add(Account{Provider: provider.Claude, UUID: "u-1", Email: "old@example.com", Primary: true}, sampleCreds("a")); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := s.Add(Account{UUID: "u-1", Email: "new@example.com"}, sampleCreds("b")); err != nil {
+	if err := s.Add(Account{Provider: provider.Claude, UUID: "u-1", Email: "new@example.com"}, sampleCreds("b")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -754,7 +755,7 @@ func TestCredentialsRefusesAnAccountWithNoStoredFile(t *testing.T) {
 func TestCredentialsRefusesACorruptFile(t *testing.T) {
 	withStore(t)
 	s, _ := Open()
-	if err := s.Add(Account{UUID: "u-1"}, sampleCreds("a")); err != nil {
+	if err := s.Add(Account{Provider: provider.Claude, UUID: "u-1"}, sampleCreds("a")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(s.credentialPath("u-1"), []byte("{not json"), 0o600); err != nil {
@@ -776,7 +777,7 @@ func TestCredentialsRefusesACorruptFile(t *testing.T) {
 func TestSetAliasClearsWithAnEmptyValue(t *testing.T) {
 	withStore(t)
 	s, _ := Open()
-	if err := s.Add(Account{UUID: "u-1"}, sampleCreds("a")); err != nil {
+	if err := s.Add(Account{Provider: provider.Claude, UUID: "u-1"}, sampleCreds("a")); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.SetAlias("u-1", "work"); err != nil {
@@ -797,7 +798,7 @@ func TestSetAliasClearsWithAnEmptyValue(t *testing.T) {
 func TestAccountsFileCarriesItsSchemaVersion(t *testing.T) {
 	dir := withStore(t)
 	s, _ := Open()
-	if err := s.Add(Account{UUID: "u-1"}, sampleCreds("a")); err != nil {
+	if err := s.Add(Account{Provider: provider.Claude, UUID: "u-1"}, sampleCreds("a")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -841,10 +842,10 @@ func TestAccountsAtReadsWhatOpenWrote(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Add(Account{UUID: "uuid-a", Email: "a@example.com"}, sampleCreds("AT-a")); err != nil {
+	if err := s.Add(Account{Provider: provider.Claude, UUID: "uuid-a", Email: "a@example.com"}, sampleCreds("AT-a")); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Add(Account{UUID: "uuid-b", Email: "b@example.com"}, sampleCreds("AT-b")); err != nil {
+	if err := s.Add(Account{Provider: provider.Claude, UUID: "uuid-b", Email: "b@example.com"}, sampleCreds("AT-b")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -896,13 +897,13 @@ func TestAFailedTransactionRemovesTheCredentialFileItCreated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := seed.Add(Account{UUID: "u-1"}, sampleCreds("AT-1")); err != nil {
+	if err := seed.Add(Account{Provider: provider.Claude, UUID: "u-1"}, sampleCreds("AT-1")); err != nil {
 		t.Fatal(err)
 	}
 
 	boom := errors.New("boom")
 	err = WithStore(func(s *Store) error {
-		if err := s.Add(Account{UUID: "u-2"}, sampleCreds("AT-2")); err != nil {
+		if err := s.Add(Account{Provider: provider.Claude, UUID: "u-2"}, sampleCreds("AT-2")); err != nil {
 			return err
 		}
 		return boom
@@ -932,7 +933,7 @@ func TestAFailedTransactionPutsBackTheCredentialFileItDeleted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := seed.Add(Account{UUID: "u-1"}, sampleCreds("AT-1")); err != nil {
+	if err := seed.Add(Account{Provider: provider.Claude, UUID: "u-1"}, sampleCreds("AT-1")); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, credentialsDir, "u-1.json")
@@ -975,7 +976,7 @@ func TestAFailedTransactionKeepsCredentialsItOnlyOverwrote(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := seed.Add(Account{UUID: "u-1"}, sampleCreds("AT-OLD")); err != nil {
+	if err := seed.Add(Account{Provider: provider.Claude, UUID: "u-1"}, sampleCreds("AT-OLD")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1016,7 +1017,7 @@ func TestAFailedSaveRemovesTheCredentialFileItCreated(t *testing.T) {
 	}
 
 	err := WithStore(func(s *Store) error {
-		if err := s.Add(Account{UUID: "u-1"}, sampleCreds("AT-1")); err != nil {
+		if err := s.Add(Account{Provider: provider.Claude, UUID: "u-1"}, sampleCreds("AT-1")); err != nil {
 			return err
 		}
 		// Only the root: the credentials directory stays writable, so the
@@ -1048,7 +1049,7 @@ func TestRollbackSaysWhichCredentialFileItCouldNotRemove(t *testing.T) {
 
 	boom := errors.New("boom")
 	err := WithStore(func(s *Store) error {
-		if err := s.Add(Account{UUID: "u-1"}, sampleCreds("AT-1")); err != nil {
+		if err := s.Add(Account{Provider: provider.Claude, UUID: "u-1"}, sampleCreds("AT-1")); err != nil {
 			return err
 		}
 		if err := os.Chmod(creds, 0o500); err != nil {
@@ -1078,7 +1079,7 @@ func TestAFailedTransactionLeavesNoPhantomAccountInThisProcess(t *testing.T) {
 	var captured *Store
 	err := WithStore(func(s *Store) error {
 		captured = s
-		if err := s.Add(Account{UUID: "u-1"}, sampleCreds("AT-1")); err != nil {
+		if err := s.Add(Account{Provider: provider.Claude, UUID: "u-1"}, sampleCreds("AT-1")); err != nil {
 			return err
 		}
 		return boom
@@ -1103,7 +1104,7 @@ func TestThePathAccessorsNameWhatOpenWrites(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Add(Account{UUID: "uuid-a", Email: "work@example.com"}, sampleCreds("AT-a")); err != nil {
+	if err := s.Add(Account{Provider: provider.Claude, UUID: "uuid-a", Email: "work@example.com"}, sampleCreds("AT-a")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1148,7 +1149,7 @@ func TestOrphanCredentialsAtWaitsOutAnInFlightAddRatherThanTearingItsRead(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Add(Account{UUID: "u-0", Email: "a@example.com"}, sampleCreds("AT-u-0")); err != nil {
+	if err := s.Add(Account{Provider: provider.Claude, UUID: "u-0", Email: "a@example.com"}, sampleCreds("AT-u-0")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1218,7 +1219,7 @@ func TestOrphanCredentialsAtNamesACredentialFileNoAccountHas(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Add(Account{UUID: "uuid-a", Email: "work@example.com"}, sampleCreds("AT-a")); err != nil {
+	if err := s.Add(Account{Provider: provider.Claude, UUID: "uuid-a", Email: "work@example.com"}, sampleCreds("AT-a")); err != nil {
 		t.Fatal(err)
 	}
 	leaked := filepath.Join(root, "credentials", "uuid-gone.json")

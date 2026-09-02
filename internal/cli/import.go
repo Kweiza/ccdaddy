@@ -14,6 +14,7 @@ import (
 	"errors"
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/identity"
+	"github.com/Kweiza/ccdaddy/internal/provider"
 	"github.com/Kweiza/ccdaddy/internal/store"
 )
 
@@ -239,6 +240,7 @@ func applyImport(payload exportPayload, force bool) (imported, skipped []string,
 				UUID:             item.row.UUID,
 				Email:            item.row.Email,
 				Kind:             identity.ParseKind(item.row.Kind),
+				Provider:         provider.Claude,
 				Tier:             item.row.Tier,
 				RateLimitTier:    item.row.RateLimitTier,
 				SeatTier:         item.row.SeatTier,

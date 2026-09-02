@@ -14,6 +14,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/identity"
+	"github.com/Kweiza/ccdaddy/internal/provider"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"sort"
 )
@@ -221,7 +222,7 @@ func TestImportSkipsCredentialsOlderThanTheLocalOnes(t *testing.T) {
 		t.Fatal(err)
 	}
 	fresh := credsWithExpiry("RT-local", local)
-	if err := s.Add(store.Account{UUID: "u-1", Email: "one@example.com"}, fresh); err != nil {
+	if err := s.Add(store.Account{Provider: provider.Claude, UUID: "u-1", Email: "one@example.com"}, fresh); err != nil {
 		t.Fatal(err)
 	}
 	path := writeImportFile(t, fmt.Sprintf(`{
@@ -755,7 +756,7 @@ func TestSeatTierSurvivesTheRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Add(store.Account{
+	if err := s.Add(store.Account{Provider: provider.Claude,
 		UUID: "u-1", Email: "seat@example.com",
 		Kind: identity.KindCredit, Primary: true,
 		Tier: "claude_enterprise", RateLimitTier: "default_claude_zero",
@@ -802,7 +803,7 @@ func TestImportKeepsCredentialKeysTheDocumentNeverMentions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	acct := store.Account{UUID: "u-1", Email: "one@example.com"}
+	acct := store.Account{Provider: provider.Claude, UUID: "u-1", Email: "one@example.com"}
 	if err := s.Add(acct, cclink.Blob{
 		"claudeAiOauth":      json.RawMessage(`{"accessToken":"AT","refreshToken":"RT-old"}`),
 		"designOauth":        json.RawMessage(`{"kept":true}`),

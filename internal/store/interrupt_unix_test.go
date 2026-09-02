@@ -6,6 +6,8 @@ import (
 	"errors"
 	"syscall"
 	"testing"
+
+	"github.com/Kweiza/ccdaddy/internal/provider"
 )
 
 // Unix only, and a build tag rather than a runtime skip because syscall.Kill
@@ -31,7 +33,7 @@ func TestARealSIGINTInsideATransactionDoesNotKillTheProcess(t *testing.T) {
 	withStore(t)
 
 	err := WithStore(func(s *Store) error {
-		if err := s.Add(Account{UUID: "u-1"}, sampleCreds("AT-1")); err != nil {
+		if err := s.Add(Account{Provider: provider.Claude, UUID: "u-1"}, sampleCreds("AT-1")); err != nil {
 			return err
 		}
 		return syscall.Kill(syscall.Getpid(), syscall.SIGINT)

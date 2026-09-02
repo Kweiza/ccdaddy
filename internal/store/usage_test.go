@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/identity"
+	"github.com/Kweiza/ccdaddy/internal/provider"
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
 
@@ -34,7 +35,7 @@ func seed(t *testing.T, kind identity.Kind) *Store {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	if err := s.Add(Account{UUID: "acct-1", Email: "a@example.com", Kind: kind}, sampleCreds("t")); err != nil {
+	if err := s.Add(Account{Provider: provider.Claude, UUID: "acct-1", Email: "a@example.com", Kind: kind}, sampleCreds("t")); err != nil {
 		t.Fatalf("Add() error = %v", err)
 	}
 	return s

@@ -9,6 +9,7 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
+	"github.com/Kweiza/ccdaddy/internal/provider"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"strings"
 )
@@ -47,7 +48,7 @@ func seedLogin(t *testing.T, uuid string, oauth string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.Add(store.Account{UUID: uuid, Email: uuid + "@example.com"},
+	if err := st.Add(store.Account{Provider: provider.Claude, UUID: uuid, Email: uuid + "@example.com"},
 		cclink.Blob{"claudeAiOauth": json.RawMessage(oauth)}); err != nil {
 		t.Fatal(err)
 	}

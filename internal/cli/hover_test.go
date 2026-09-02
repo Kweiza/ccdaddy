@@ -9,6 +9,7 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/config"
 	"github.com/Kweiza/ccdaddy/internal/identity"
+	"github.com/Kweiza/ccdaddy/internal/provider"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/usage"
@@ -70,7 +71,8 @@ func seedHoverCreditAccount(t *testing.T, uuid, email string, pct float64) {
 		t.Fatal(err)
 	}
 	a := store.Account{
-		UUID: uuid, Email: email, Kind: identity.KindCredit,
+		Provider: provider.Claude,
+		UUID:     uuid, Email: email, Kind: identity.KindCredit,
 		Primary: true, AddedAt: hoverEpoch.Add(-time.Hour),
 	}
 	if err := s.Add(a, credsFor("RT-"+uuid)); err != nil {

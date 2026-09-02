@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
+	"github.com/Kweiza/ccdaddy/internal/provider"
 	"github.com/Kweiza/ccdaddy/internal/store"
 )
 
@@ -248,7 +249,7 @@ func TestBootstrapExitsZeroWhenEveryAccountIsLeftAlone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Add(store.Account{UUID: "u-1", Email: "one@example.com"},
+	if err := s.Add(store.Account{Provider: provider.Claude, UUID: "u-1", Email: "one@example.com"},
 		credsWithExpiry("RT-local", local)); err != nil {
 		t.Fatal(err)
 	}
@@ -371,7 +372,7 @@ func TestBootstrapNamesNothingWhenAnAliasCollidesMidBatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Add(store.Account{UUID: "u-alpha", Email: local}, credsWithExpiry("RT-local", newer)); err != nil {
+	if err := s.Add(store.Account{Provider: provider.Claude, UUID: "u-alpha", Email: local}, credsWithExpiry("RT-local", newer)); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.SetAlias("u-alpha", alias); err != nil {
