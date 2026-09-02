@@ -9,6 +9,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/credhome"
 	"github.com/Kweiza/ccdaddy/internal/identity"
+	"github.com/Kweiza/ccdaddy/internal/provider"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 )
@@ -16,6 +17,11 @@ import (
 // stateTimeout bounds the wait for the engine state lock. The only writers are
 // this stamp and the daemon's own, both sub-second writes.
 const stateTimeout = 5 * time.Second
+
+// ErrNotClaude is a switch asked to install an account that is not a Claude
+// account. This function writes Claude Code's credentials file; a Codex
+// account is served by the proxy and has nothing to install here.
+var ErrNotClaude = errors.New("switcher: target is not a Claude account")
 
 // ErrNoLogin is a target that cannot become the credentials file's login.
 //
@@ -312,6 +318,17 @@ var claimVerdict = credhome.Decide
 // is not there and the cooldown would hold the engine off its own retry.
 func Execute(s *store.Store, req Request) (Result, error) {
 	res := Result{Target: req.Target}
+
+	// Ahead of the credential read, and that ordering is the whole point. A
+	// Codex account's credential file exists and is readable, so the read
+	// succeeds and the refusal below it would be ErrNoLogin -- "this account
+	// has no Claude Code login" -- which is true and sends the user to `ccdad
+	// add` for an account that is logged in perfectly well. Nothing further
+	// down this function has any business running for a target it cannot
+	// install.
+	if req.Target.Provider != provider.Claude {
+		return res, ErrNotClaude
+	}
 
 	creds, err := s.Credentials(req.Target.UUID)
 	if err != nil {
