@@ -15,7 +15,13 @@ import (
 // exportSchemaVersion is the payload's contract version. The contract is
 // additive: a reader must ignore fields and accounts it does not recognize
 // rather than refusing the document.
-const exportSchemaVersion = 1
+//
+// 2 adds the provider on every row. The bump is what makes an older ccdad
+// print the note it already has for a document written by a newer one, which
+// is the honest thing to say: that build cannot tell a Codex row from a Claude
+// one, and importing one as the other would give it an account it can never
+// log in as.
+const exportSchemaVersion = 2
 
 // exportPayload is what `ccdad export` writes and `ccdad import` reads.
 //
@@ -46,10 +52,17 @@ type exportPayload struct {
 }
 
 type exportAccount struct {
-	UUID             string    `json:"uuid"`
-	Email            string    `json:"email,omitempty"`
-	Alias            string    `json:"alias,omitempty"`
-	Kind             string    `json:"kind"`
+	UUID  string `json:"uuid"`
+	Email string `json:"email,omitempty"`
+	Alias string `json:"alias,omitempty"`
+	Kind  string `json:"kind"`
+	// Provider carries NO omitempty, for the reason the store's own field
+	// carries none: an absent key would have to mean "written before ccdad
+	// knew about providers", and a Claude row would then be
+	// indistinguishable from an unknown one. The importer's derivation exists
+	// for documents that really do predate the field; it must not have to
+	// guess about documents that do not.
+	Provider         string    `json:"provider"`
 	Tier             string    `json:"tier,omitempty"`
 	RateLimitTier    string    `json:"rateLimitTier,omitempty"`
 	SeatTier         string    `json:"seatTier,omitempty"`
@@ -143,6 +156,7 @@ func newExportCmd() *cobra.Command {
 					Email:            a.Email,
 					Alias:            a.Alias,
 					Kind:             a.Kind.String(),
+					Provider:         a.Provider.String(),
 					Tier:             a.Tier,
 					RateLimitTier:    a.RateLimitTier,
 					SeatTier:         a.SeatTier,
