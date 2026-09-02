@@ -17,9 +17,12 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Kweiza/ccdaddy/internal/buildinfo"
+	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/daemon"
+	"github.com/Kweiza/ccdaddy/internal/provider"
 	"github.com/Kweiza/ccdaddy/internal/release"
 	"github.com/Kweiza/ccdaddy/internal/relsign"
+	"github.com/Kweiza/ccdaddy/internal/store"
 )
 
 // releaseKeys is the trust root this build verifies against.
@@ -349,6 +352,45 @@ func runUpdate(cmd *cobra.Command, opts updateOptions) error {
 	// claiming currency: "I cannot compare these" is not "you are up to date".
 	running, runningOK := release.ParseTag(buildinfo.Version)
 	rep.updateAvailable = !runningOK || want.Compare(running) > 0
+
+	// A pinned version is the consent, so this WARNS and proceeds rather than
+	// refusing: naming a tag is already the deliberate act, and a second gate
+	// on a road the user has said twice they want to go down is a gate they
+	// would learn to pass without reading.
+	//
+	// It is worth saying because the consequence is not visible from the tag.
+	// A build that does not know an account's provider reads accounts.toml,
+	// drops the key it cannot name, and writes the whole document back --
+	// leaving a version-2 header over rows with no provider, which the build
+	// the user upgrades back to refuses to open.
+	//
+	// Only a tag OLDER than this build: a newer one knows the field, so warning
+	// on every pinned tag would fire on the ordinary `ccdad update --version
+	// <next release>` and teach a user to scroll past it. An unparseable
+	// running version says nothing either -- there is no "older" to compare to.
+	//
+	// The read is best-effort: a store that cannot be read is not a reason to
+	// stop an update, and the warning is not the command's answer.
+	if pinned && runningOK && want.Compare(running) < 0 {
+		if root, rerr := ccpath.StoreHome(); rerr == nil {
+			if accounts, aerr := store.AccountsAt(root); aerr == nil {
+				codex := 0
+				for _, a := range accounts {
+					if a.Provider == provider.Codex {
+						codex++
+					}
+				}
+				if codex > 0 {
+					say(cmd, opts.asJSON,
+						"warning: %d Codex account(s) are in this store, and a ccdad that predates Codex "+
+							"support rewrites accounts.toml without their provider — after which this "+
+							"build refuses to open it. `ccdad export --full` first if you may come back.",
+						codex)
+				}
+			}
+		}
+	}
+
 	if runningOK && !pinned {
 		switch {
 		case want.Compare(running) == 0:
