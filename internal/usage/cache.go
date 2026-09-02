@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/Kweiza/ccdaddy/internal/cclink"
+	"github.com/Kweiza/ccdaddy/internal/atomicfile"
 	"github.com/Kweiza/ccdaddy/internal/cclock"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/pollpolicy"
@@ -335,7 +335,7 @@ func (c *Cache) save(root string) error {
 	if err != nil {
 		return fmt.Errorf("encoding %s: %w", CacheFileName, err)
 	}
-	return cclink.WriteFileAtomic(filepath.Join(root, CacheFileName), encoded, 0o600)
+	return atomicfile.WriteFile(filepath.Join(root, CacheFileName), encoded, 0o600)
 }
 
 // WithCache runs fn against the cache under a cross-process lock and writes back
