@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/identity"
+	"github.com/Kweiza/ccdaddy/internal/provider"
 )
 
 // Account is one managed Claude Code account.
@@ -37,6 +38,28 @@ type Account struct {
 	// maintained by Save, which overwrites it from Kind on every write — a
 	// caller that sets only KindName silently loses it.
 	KindName string `toml:"kind"`
+	// Provider is which service this account belongs to, and it is ONE field
+	// rather than the Kind/KindName pair beside it. go-toml round-trips a
+	// named string type directly; Kind needs its mirror only because it is a
+	// uint8, which TOML cannot spell.
+	//
+	// It carries NO omitempty, and that is load-bearing. A document that
+	// omitted the key for Claude rows would be indistinguishable from one a
+	// build that does not know the field rewrote -- and those two need
+	// opposite answers: the first is a Claude account, the second may be a
+	// Codex one whose provider was dropped. So every row carries the key, and
+	// a version-2 row without it is refused; see ErrProviderMissing.
+	Provider provider.ID `toml:"provider"`
+	// CodexReloginFor is the hash of the refresh token whose grant the token
+	// endpoint rejected for good.
+	//
+	// It is a hash and not a token because this file is 0600-but-plaintext and
+	// is what people paste into an issue. It names a TOKEN rather than being a
+	// flag, and that is the whole mechanism: an account needs a relogin
+	// exactly while this equals the hash of the token it still holds, so a
+	// later `ccdad codex add` stores a new one and the mark stops matching.
+	// Nothing has to clear it, and no stale mark can survive a re-login.
+	CodexReloginFor string `toml:"codex_relogin_for,omitempty"`
 	// Tier is organization_type, e.g. claude_max.
 	Tier string `toml:"tier,omitempty"`
 	// RateLimitTier is rate_limit_tier, e.g. default_claude_max_20x.
@@ -170,4 +193,20 @@ func (a Account) Label() string {
 		return a.UUID[:8]
 	}
 	return a.UUID
+}
+
+// NeedsRelogin reports whether this account's grant is known dead.
+//
+// currentRefreshTokenHash is the hash of the token the account holds RIGHT
+// NOW, which the caller reads from the stored credential blob. The comparison
+// is what makes the mark self-clearing: a re-login stores a different token,
+// the hashes stop matching, and the account is eligible again with nothing
+// having been erased.
+//
+// An empty mark is no mark. An empty current hash is an account with no
+// refresh token to be dead, which is not the same as one whose token was
+// rejected, so it answers false too.
+func (a Account) NeedsRelogin(currentRefreshTokenHash string) bool {
+	return a.CodexReloginFor != "" && currentRefreshTokenHash != "" &&
+		a.CodexReloginFor == currentRefreshTokenHash
 }

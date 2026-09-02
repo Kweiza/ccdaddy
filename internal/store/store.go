@@ -15,6 +15,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/identity"
+	"github.com/Kweiza/ccdaddy/internal/provider"
 )
 
 const (
@@ -148,14 +149,56 @@ func (s *Store) load() error {
 		return fmt.Errorf("parsing %s: %w", accountsFile, err)
 	}
 	for i := range s.data.Accounts {
+		a := &s.data.Accounts[i]
 		// An unrecognized name — an older accounts.toml, or a kind a future
 		// release adds — resolves to subscription deliberately. Guessing credit
 		// would let the account through the credit gate, which spends money;
 		// guessing subscription only costs a wasted rotation attempt.
-		s.data.Accounts[i].Kind = identity.ParseKind(s.data.Accounts[i].KindName)
+		a.Kind = identity.ParseKind(a.KindName)
+		// The provider is the opposite rule, and the asymmetry is the point. A
+		// version-1 document predates the field entirely, so an absent
+		// provider there is a fact -- every account in it is Claude. A
+		// version-2 document is one this build's own writer produced, and it
+		// writes the key on every row, so an absent provider there means a
+		// build that does not know the field read the document and wrote it
+		// back without it. Those rows may be Codex accounts, and reading one
+		// as Claude hands a Codex login to the switch that rewrites Claude
+		// Code's credentials file.
+		if a.Provider == "" && s.data.Version < 2 {
+			a.Provider = provider.Claude
+			continue
+		}
+		p, perr := provider.Parse(string(a.Provider))
+		if perr != nil {
+			return fmt.Errorf("%w: %s carries %q (%v)", ErrProviderMissing, a.UUID, string(a.Provider), perr)
+		}
+		a.Provider = p
 	}
 	s.sortAndReindex()
 	return nil
+}
+
+// ErrProviderMissing is a version-2 document whose rows do not say which
+// provider they belong to.
+//
+// It is loud rather than repaired because the repair would have to guess, and
+// the wrong guess is the expensive one: a Codex row read as Claude reaches the
+// switch that rewrites Claude Code's credentials file.
+var ErrProviderMissing = errors.New("accounts.toml: version 2 row without provider")
+
+// CheckVersionAt reads a store's document and reports whether this build can
+// use it, WITHOUT creating any part of it.
+//
+// The daemon runs it at start and every CLI store open reaches the same rule
+// through load. It is never run inside a tick: a document that became
+// unreadable between two ticks is a fact about the machine, and re-deciding it
+// on a cadence would turn one refusal into a log entry per second.
+//
+// A store that is not there is not a store with a bad version, so it answers
+// nil -- the same reading AccountsAt gives an absent document.
+func CheckVersionAt(root string) error {
+	s := &Store{root: root}
+	return s.load()
 }
 
 // AccountsAt reads a store's accounts WITHOUT creating any part of it.
