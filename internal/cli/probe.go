@@ -9,6 +9,7 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/daemon"
+	"github.com/Kweiza/ccdaddy/internal/provider"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/usage"
@@ -135,6 +136,28 @@ func credentialWord(kind string) string {
 // `ccdad run`'s launch refuses the identical condition unconditionally (never
 // gated by --full-profile); a probe's own scoping is no less exposed to it.
 func probeSkip(a store.Account, blob cclink.Blob, entry usage.Entry, o probeOptions) (string, bool) {
+	// FIRST, ahead of every other test in this function and ahead of the
+	// --force early return below.
+	//
+	// Nothing below catches a Codex account: the credential test looks for a
+	// ccdadToken record and a Codex blob has none, the two gates after it say
+	// nothing about a provider, and an entry with no probe history is allowed
+	// to probe -- so without this the function falls through and the turn is
+	// spent. Even if the credential test did fire it would answer with the
+	// wrong sentence, naming the credential and sending a user to a repair
+	// that does not apply to an account logged in perfectly well. Ahead of
+	// --force because the daemon spawns `probe --uuid <u> --force` as a child,
+	// so the forced path is a real caller rather than a flag a person types,
+	// and a check below the early return would let exactly that child spend a
+	// turn.
+	//
+	// There is no Codex counterpart to wake. A probe spends a turn against
+	// Claude Code to make a window report its rollover; nothing ccdad runs is
+	// Codex's client, and the Codex usage endpoint answers without being
+	// spent against.
+	if a.Provider != provider.Claude {
+		return fmt.Sprintf("%s is a Codex account; ccdad never probes Codex", a.Label()), true
+	}
 	if rec, isToken := cclink.TokenRecordOf(blob); isToken {
 		return fmt.Sprintf("%s's credential is %s rather than an OAuth login, and every usage window ccdad "+
 			"can read comes from a login's refresh grant — so a probe would spend quota for a reading "+
