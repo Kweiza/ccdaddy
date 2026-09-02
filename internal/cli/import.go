@@ -8,11 +8,13 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"errors"
 	"github.com/Kweiza/ccdaddy/internal/cclink"
+	"github.com/Kweiza/ccdaddy/internal/codexauth"
 	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/provider"
 	"github.com/Kweiza/ccdaddy/internal/store"
@@ -133,6 +135,7 @@ func applyImport(payload exportPayload, force bool) (imported, skipped []string,
 		type staged struct {
 			row   exportAccount
 			creds cclink.Blob
+			prov  provider.ID
 		}
 		var batch []staged
 
@@ -142,6 +145,16 @@ func applyImport(payload exportPayload, force bool) (imported, skipped []string,
 			// exported order on a store that already has one would renumber
 			// accounts the import never mentioned.
 			_, known := existing[row.UUID]
+
+			// Derived before anything is staged, so a row this build cannot
+			// classify costs nothing. The document's own blob is read rather
+			// than the filtered snapshot, so the derivation cannot depend on
+			// what the filter happens to keep.
+			prov, perr := importProviderOf(row, row.Credentials)
+			if perr != nil {
+				skipped = append(skipped, fmt.Sprintf("%s (%v)", row.label(), perr))
+				continue
+			}
 
 			creds := importSnapshot(row.Credentials)
 			switch {
@@ -209,7 +222,7 @@ func applyImport(payload exportPayload, force bool) (imported, skipped []string,
 					row.label()))
 				continue
 			}
-			batch = append(batch, staged{row: row, creds: creds})
+			batch = append(batch, staged{row: row, creds: creds, prov: prov})
 		}
 
 		// Collisions are judged AFTER staging, against the rows that will
@@ -240,7 +253,7 @@ func applyImport(payload exportPayload, force bool) (imported, skipped []string,
 				UUID:             item.row.UUID,
 				Email:            item.row.Email,
 				Kind:             identity.ParseKind(item.row.Kind),
-				Provider:         provider.Claude,
+				Provider:         item.prov,
 				Tier:             item.row.Tier,
 				RateLimitTier:    item.row.RateLimitTier,
 				SeatTier:         item.row.SeatTier,
@@ -515,6 +528,33 @@ func checkAliasCollisions(rows []exportAccount, existing map[string]store.Accoun
 	return nil
 }
 
+// importProviderOf decides which provider a document's row describes.
+//
+// Three answers, in this order.
+//
+// An EXPLICIT provider wins, and one this build does not know is an error
+// rather than a guess: the document was written by something that knows more
+// than this binary, the note at the top of the command already says what that
+// means, and the caller turns this into a skipped row that names itself. The
+// wrong guess is the expensive one -- an unknown provider imported as Claude
+// is an account the switch would try to make Claude Code's login.
+//
+// An ABSENT provider with a Codex record in the blob is a Codex account. That
+// key reaches an export from exactly one place, so it is evidence rather than
+// a heuristic.
+//
+// An absent provider with anything else is Claude, which is what every
+// document written before the field existed holds.
+func importProviderOf(row exportAccount, creds cclink.Blob) (provider.ID, error) {
+	if row.Provider != "" {
+		return provider.Parse(row.Provider)
+	}
+	if _, hasCodex := creds[codexauth.Key]; hasCodex {
+		return provider.Codex, nil
+	}
+	return provider.Claude, nil
+}
+
 // importSnapshot filters an imported blob down to what may be stored for ONE
 // account.
 //
@@ -542,6 +582,14 @@ func importSnapshot(b cclink.Blob) cclink.Blob {
 	if raw, ok := b[cclink.TokenKey]; ok {
 		out[cclink.TokenKey] = append(json.RawMessage(nil), raw...)
 	}
+	// The Codex record is the second key added back by name, and for the same
+	// reason as ccdadToken: cclink's list mirrors the keys that travel with a
+	// CLAUDE login, and a name Claude Code has never heard of does not belong
+	// in it. Dropping it here would import every Codex account with no
+	// credential at all -- a row in the store and nothing to serve it with.
+	if raw, ok := b[codexauth.Key]; ok {
+		out[codexauth.Key] = append(json.RawMessage(nil), raw...)
+	}
 	if len(out) == 0 {
 		return nil
 	}
@@ -563,12 +611,57 @@ func localCredentialIsNewer(s *store.Store, uuid string, incoming cclink.Blob) b
 	if err != nil {
 		return false
 	}
+	// A Codex record has no claudeAiOauth.expiresAt, so the comparison below
+	// finds nothing to compare and every Codex pair answers "not newer" --
+	// which silently overwrites a live Codex login with a stale one on every
+	// import. The ACCESS TOKEN's own exp is the claim compared instead.
+	if localAt, localOK := codexAccessExpiry(stored); localOK {
+		remoteAt, remoteOK := codexAccessExpiry(incoming)
+		if !remoteOK {
+			return false
+		}
+		return localAt.After(remoteAt)
+	}
 	local, localOK := oauthExpiresAt(stored)
 	remote, remoteOK := oauthExpiresAt(incoming)
 	if !localOK || !remoteOK {
 		return false
 	}
 	return local > remote
+}
+
+// codexAccessExpiry reads the access token's own exp claim out of the Codex
+// record.
+//
+// The token endpoint mints a new access token on every refresh and its exp
+// moves forward with it, so a later exp is a later credential. The id_token's
+// exp is never read: it is an hour from login and says nothing about the grant.
+// No signature check, on purpose -- this compares two records ccdad wrote
+// itself, and a verification here would be a second answer to a question the
+// proxy already asks of the endpoint.
+//
+// An absent or unreadable record answers false, which lets the import proceed:
+// the same fail-open localCredentialIsNewer applies to every uncomparable pair.
+func codexAccessExpiry(b cclink.Blob) (time.Time, bool) {
+	cred, ok, err := codexauth.FromBlob(b)
+	if err != nil || !ok {
+		return time.Time{}, false
+	}
+	parts := strings.Split(cred.AccessToken, ".")
+	if len(parts) != 3 {
+		return time.Time{}, false
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(parts[1], "="))
+	if err != nil {
+		return time.Time{}, false
+	}
+	var claims struct {
+		Exp int64 `json:"exp"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil || claims.Exp == 0 {
+		return time.Time{}, false
+	}
+	return time.Unix(claims.Exp, 0).UTC(), true
 }
 
 // oauthExpiresAt reads claudeAiOauth.expiresAt. It is in MILLISECONDS — the
