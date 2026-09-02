@@ -16,7 +16,34 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+### Added
+
+- **Every account now says which provider it belongs to, and `accounts.toml`
+  learned a second version.** `ccdad list --json`, `ccdad status --json` and
+  every other payload that carries an account object now carry `"provider"` on
+  it, always, with the value `claude` or `codex`. `ccdad export` writes the same
+  field on every row and its `schemaVersion` is now 2, so an older ccdad reading
+  one prints the note it already has for a document written by a newer build.
+  `ccdad import` derives a row's provider when the document does not carry one:
+  a row with a Codex credential in its blob is a Codex account, anything else is
+  Claude, and a provider this build does not know is skipped by name rather than
+  guessed at. The store's document is written as version 2 only when a Codex
+  account is in it, so a machine with none stays readable by every build that
+  came before. `config.toml` gained a `[codex]` table with `threshold`,
+  `binary`, `proxy_port` and `cross_account_replay`.
+
 ### Changed
+
+- **`ccdad runway` forecasts Claude accounts only, and says which accounts it
+  left out.** A Codex account's percentage points are a different plan's points,
+  and no Claude switch can make one the live login — so counting them promised
+  quota the fleet cannot reach. One line on stderr names the accounts the page
+  is not about, and it is printed only on a machine that has some. `ccdad probe`
+  refuses a Codex account before it reads a credential, `ccdad switch` refuses
+  one before it reads one, and `active` / `activeUuid` keep naming the Claude
+  login and nothing else. Pinned by
+  `TestActiveAndActiveUUIDNameOnlyTheClaudeLogin` and the never-cross tables in
+  `internal/switcher` and `internal/cli`.
 
 - **`ccdad runway` no longer dates the credit row to the minute a decade out, and
   now says what that date was measured from.** `used_credits` arrives in whole
