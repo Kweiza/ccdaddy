@@ -104,6 +104,15 @@ func newRunwayCmd() *cobra.Command {
 			switch {
 			case len(accounts) == 0:
 				fmt.Fprintln(errw, "No accounts yet. Run 'ccdad add' to log one in.")
+			case noClaudeAccounts(accounts):
+				// A fleet of nothing but Codex accounts is not a fleet with
+				// too little history — codexNotForecast above already named
+				// every account this page left out, and none of them was ever
+				// going to have a rate: `ccdad runway` measures no Codex
+				// burn. Falling into the history case here would print both
+				// notes back to back and blame the wrong thing.
+				fmt.Fprintln(errw, "No Claude accounts to forecast. ccdad measures no burn rate for a "+
+					"Codex account.")
 			case !f.Basis.Known && !f.Credit.Known:
 				// Said in front of a person on both paths, because the payload's
 				// silence on this is easy to misread as a fleet that burns
@@ -191,6 +200,22 @@ func codexNotForecast(accounts []store.Account) string {
 	return fmt.Sprintf("note: %d Codex %s not forecast — ccdad measures no burn rate for a Codex account, "+
 		"and its quota is a different plan's percentage points: %s",
 		len(labels), plural(len(labels), "account is", "accounts are"), strings.Join(labels, ", "))
+}
+
+// noClaudeAccounts reports a non-empty fleet that holds no Claude account —
+// the shape that used to fall into the "not enough history" branch below,
+// which blames the wrong thing: none of those accounts was ever going to earn
+// a rate, no matter how long the daemon had been polling.
+func noClaudeAccounts(accounts []store.Account) bool {
+	if len(accounts) == 0 {
+		return false
+	}
+	for _, a := range accounts {
+		if a.Provider == provider.Claude {
+			return false
+		}
+	}
+	return true
 }
 
 // fleetForecast measures the fleet from the two documents that carry it, and

@@ -61,6 +61,18 @@ func TestAVersionTwoRowWithoutAProviderIsRefused(t *testing.T) {
 	if !strings.Contains(err.Error(), "u-1") {
 		t.Errorf("Open() error = %q, want it to name the row it could not read", err)
 	}
+	// The wire text is version-agnostic and names the remedy: this branch is
+	// also reached by a version-1 document carrying an unrecognized provider
+	// value, which is not this fixture's shape, so the message must not claim
+	// it is.
+	if strings.Contains(err.Error(), "version 2") {
+		t.Errorf("Open() error = %q, names a version this branch does not always see", err)
+	}
+	for _, want := range []string{"row without a recognized provider", "restore each row's provider key", "version back to 1"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("Open() error = %q, want it to contain %q", err, want)
+		}
+	}
 }
 
 // A provider this build does not know is the same refusal and for the same

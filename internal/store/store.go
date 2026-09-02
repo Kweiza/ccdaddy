@@ -178,13 +178,20 @@ func (s *Store) load() error {
 	return nil
 }
 
-// ErrProviderMissing is a version-2 document whose rows do not say which
-// provider they belong to.
+// ErrProviderMissing is a row whose provider ccdad cannot make out. The wire
+// text used to name only one cause -- a version-2 row missing the key -- but
+// load reaches the same branch for a version-1 row carrying a value neither
+// "claude" nor "codex", which is a different document and a different
+// mistake; the text is version-agnostic now so it stops naming the wrong one.
 //
 // It is loud rather than repaired because the repair would have to guess, and
 // the wrong guess is the expensive one: a Codex row read as Claude reaches the
-// switch that rewrites Claude Code's credentials file.
-var ErrProviderMissing = errors.New("accounts.toml: version 2 row without provider")
+// switch that rewrites Claude Code's credentials file. There is also no
+// in-product repair for the shape this leaves a downgraded store in -- every
+// command but `uninstall` refuses until the document is fixed by hand -- which
+// is why the wire text names both ways out.
+var ErrProviderMissing = errors.New("accounts.toml: row without a recognized provider; " +
+	"restore each row's provider key, or set the document's version back to 1")
 
 // CheckVersionAt reads a store's document and reports whether this build can
 // use it, WITHOUT creating any part of it.

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -281,6 +282,16 @@ func newSwitchCmd() *cobra.Command {
 					strings.Join(res.UnknownKeys, ", "))
 			}
 			if err != nil {
+				// switcher.ErrNotClaude reaches here for a Codex account: the
+				// package-prefixed sentinel names no account and offers no
+				// remedy, so it is named here in the register this command's
+				// other refusals use — the Stale branch below is the nearest
+				// one.
+				if errors.Is(err, switcher.ErrNotClaude) {
+					return UsageError("%s is a Codex account, and `ccdad switch` installs a Claude "+
+						"account's login. A Codex account is served through ccdad's proxy; there is "+
+						"nothing to install", target.Label())
+				}
 				return err
 			}
 			noteProfileSync(cmd, res.ProfileSyncErr)

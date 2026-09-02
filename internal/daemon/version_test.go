@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/store"
 )
 
@@ -123,5 +124,37 @@ func TestRunStartsOnAStoreItCannotRead(t *testing.T) {
 	defer cancel()
 	if err := Run(ctx, Options{}); err != nil {
 		t.Fatalf("Run() = %v, want nil — an unreadable document must not refuse startup", err)
+	}
+}
+
+// CheckVersionAt is documented to create nothing — a store that is not there
+// is not a store with a bad version — and store.TestCheckVersionAt proves that
+// for the function itself. Nothing proved it for the DAEMON's own call site,
+// which is the caller the doc comment is written for.
+//
+// This calls store.CheckVersionAt the way daemon.go's Run does: root resolved
+// through ccpath.StoreHome() under CCDAD_HOME. It does not call Run() itself —
+// AcquireSingleton runs before the version check and MkdirAlls the store
+// directory into existence for its own lock file, so by the time the version
+// check ran the directory would already exist no matter what CheckVersionAt
+// does, and a test built on Run() could never fail for the reason this one
+// exists to catch.
+func TestCheckVersionAtCreatesNothingForTheDaemonsOwnResolution(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "never-created")
+	t.Setenv("CCDAD_HOME", root)
+
+	got, err := ccpath.StoreHome()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != root {
+		t.Fatalf("ccpath.StoreHome() = %q, want %q", got, root)
+	}
+
+	if err := store.CheckVersionAt(got); err != nil {
+		t.Fatalf("CheckVersionAt(%s) = %v, want nil for a store that is not there", got, err)
+	}
+	if _, serr := os.Stat(root); !errors.Is(serr, os.ErrNotExist) {
+		t.Errorf("os.Stat(%s) = %v, want the daemon's version check to have created nothing", root, serr)
 	}
 }
