@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Kweiza/ccdaddy/internal/atomicfile"
 	"github.com/Kweiza/ccdaddy/internal/cclock"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 )
@@ -443,8 +444,7 @@ func TestActivateWritesWhileTheCredentialLocksAreHeld(t *testing.T) {
 	var contendErr error
 	renamed := false
 
-	orig := renameFile
-	renameFile = func(from, to string) error {
+	restore := atomicfile.SwapRename(func(from, to string) error {
 		renamed = true
 		for _, d := range lockDirs {
 			if _, err := os.Stat(d); err != nil {
@@ -463,9 +463,9 @@ func TestActivateWritesWhileTheCredentialLocksAreHeld(t *testing.T) {
 		} else {
 			contendErr = err
 		}
-		return orig(from, to)
-	}
-	t.Cleanup(func() { renameFile = orig })
+		return os.Rename(from, to)
+	})
+	t.Cleanup(restore)
 
 	if err := Activate(Blob{"claudeAiOauth": json.RawMessage(`{"accessToken":"new"}`)}); err != nil {
 		t.Fatalf("Activate() = %v", err)
