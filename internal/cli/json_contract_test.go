@@ -905,3 +905,59 @@ func TestJSONContractAClosedReaderExitsZero(t *testing.T) {
 		})
 	}
 }
+
+// Every account object carries its provider, always, on every surface.
+//
+// Always, rather than only for Codex: a consumer cannot branch on a key that
+// is sometimes absent without deciding what absent MEANS, and the only honest
+// answer for an absent one is "this ccdad predates Codex" -- which is a
+// statement about the binary rather than about the account. The contract is
+// additive, so the key can only ever be added.
+//
+// It is one test over two surfaces rather than a row in the table above,
+// because that table pins TOP-LEVEL keys and this key is inside an array.
+func TestJSONContractEveryAccountObjectCarriesItsProvider(t *testing.T) {
+	for _, tc := range []struct {
+		path string
+		key  string
+	}{
+		{"list", "accounts"},
+		{"status", "accounts"},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			isolate(t)
+			seedAccount(t, "uuid-a", "work@example.com")
+			writeLiveFile(t, liveLoginJSON("RT-uuid-a", ""))
+			seedCodexAccount(t, "uuid-x", "codex@example.com")
+			stubDaemon(t, daemon.Report{State: daemon.DaemonStopped}, nil)
+
+			_, out, _, top := runRoot(t, tc.path, "--json")
+			var payload map[string]any
+			if err := json.Unmarshal([]byte(out), &payload); err != nil {
+				t.Fatalf("--json output is not valid JSON: %v (%s)\n%s", err, top, out)
+			}
+			rows, ok := payload[tc.key].([]any)
+			if !ok {
+				t.Fatalf("payload has no %q array:\n%s", tc.key, out)
+			}
+			if len(rows) != 2 {
+				t.Fatalf("payload carries %d accounts, want 2:\n%s", len(rows), out)
+			}
+			want := map[string]string{"uuid-a": "claude", "uuid-x": "codex"}
+			for _, r := range rows {
+				row, ok := r.(map[string]any)
+				if !ok {
+					t.Fatalf("an account object is not an object: %#v", r)
+				}
+				uuid, _ := row["uuid"].(string)
+				got, present := row["provider"]
+				if !present {
+					t.Fatalf("the account object for %s carries no provider key: %#v", uuid, row)
+				}
+				if got != want[uuid] {
+					t.Errorf("%s: provider = %v, want %q", uuid, got, want[uuid])
+				}
+			}
+		})
+	}
+}
