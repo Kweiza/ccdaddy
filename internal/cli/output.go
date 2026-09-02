@@ -85,6 +85,17 @@ func accountJSON(a store.Account) map[string]any {
 		"idx":   a.Idx,
 		"email": a.Email,
 		"kind":  a.Kind.String(),
+		// Unconditional, unlike the four optional keys below it. A consumer
+		// cannot branch on a key that is sometimes absent without deciding
+		// what absent means, and the only honest reading of an absent one is
+		// "this ccdad predates Codex" -- a statement about the binary rather
+		// than about the account.
+		//
+		// kind and provider are different axes and both are needed: kind says
+		// how an account is METERED (subscription, credit, api-key) and
+		// provider says whose service it is. A Codex account is a subscription
+		// account, always.
+		"provider": a.Provider.String(),
 	}
 	if a.Alias != "" {
 		out["alias"] = a.Alias
