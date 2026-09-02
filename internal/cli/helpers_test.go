@@ -19,6 +19,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/ccver"
+	"github.com/Kweiza/ccdaddy/internal/codexauth"
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/oauth"
@@ -416,6 +417,39 @@ func seedCreditAccount(t *testing.T, uuid, email string) {
 	if err := s.Add(store.Account{Provider: provider.Claude, UUID: uuid, Email: email, Kind: identity.KindCredit}, credsFor("RT-"+uuid)); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// seedCodexAccount stores an account served through ccdad's Codex proxy. Its
+// credential is the one ccdad-owned record and nothing Claude Code has ever
+// read, which is the shape every never-cross check is written against.
+func seedCodexAccount(t *testing.T, uuid, email string) {
+	t.Helper()
+	s, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cred := codexauth.Credential{
+		IDToken:      "ID-" + uuid,
+		AccessToken:  "AT-" + uuid,
+		RefreshToken: "RT-" + uuid,
+		AccountID:    "acct-" + uuid,
+		UserID:       uuid,
+	}
+	if err := s.Add(store.Account{
+		UUID: uuid, Email: email, Provider: provider.Codex, Kind: identity.KindSubscription,
+	}, cred.ToBlob()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// storeAccounts reads the store's accounts inside an isolated world.
+func storeAccounts(t *testing.T) []store.Account {
+	t.Helper()
+	s, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s.Accounts()
 }
 
 // seedPrimaryCreditAccount stores a credit-metered seat already marked primary.
