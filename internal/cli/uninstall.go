@@ -100,6 +100,20 @@ func storeMarkers() []string {
 		// a store holding nothing but the record. Without it here, that
 		// directory is refused as "not a ccdad store" and left behind.
 		mcpRecordFileName,
+		// The three the Codex work adds, for the same reason again. A machine
+		// whose only remaining ccdad state is the PATH shim, its record and
+		// the proxy's directory would otherwise be refused as "not a ccdad
+		// store" and left behind with a shim on PATH pointing at a binary the
+		// uninstall just removed.
+		//
+		// Spelled as literals: a marker is the name on disk, and the command
+		// that writes each of these declares its own name for it. "bin" holds
+		// the PATH shim, "codex" holds the serving pointer, the recorded proxy
+		// port and the launch records, and "codex-shim.json" is the shim
+		// install record.
+		"bin",
+		"codex",
+		"codex-shim.json",
 	}
 }
 
@@ -361,10 +375,14 @@ func runUninstall(cmd *cobra.Command, assumeYes bool) error {
 // storeInspection is what could be learned about the store WITHOUT creating any
 // part of it.
 type storeInspection struct {
-	root     string
-	present  bool
-	accounts []store.Account
-	lookup   func(uuid string) (cclink.Blob, error)
+	root    string
+	present bool
+	// unreadable marks the tolerant branch below: the document exists but this
+	// build could not parse it, so accounts is empty for a reason that is not
+	// "no accounts" and enumerate must say which.
+	unreadable bool
+	accounts   []store.Account
+	lookup     func(uuid string) (cclink.Blob, error)
 }
 
 // inspectStore decides whether the store may be deleted, and refuses anything
@@ -409,7 +427,31 @@ func inspectStore(root string) (storeInspection, error) {
 
 	// Only now, with the marker seen, is it safe to open — Open does an
 	// MkdirAll, which on any other path would manufacture what it deleted.
+	//
+	// A document this build cannot PARSE is still a store, and this command is
+	// the one that repairs the machine: the version rules refuse a version-2
+	// row with no provider, which is exactly what a ccdad that predates Codex
+	// support leaves behind, and refusing to uninstall then would make the
+	// damage disable its own remedy. The marker above already established that
+	// this directory is ours, which is the safety question. What is lost is
+	// the enumeration -- the listing says the directory rather than the
+	// accounts, which unreadable marks so enumerate can say so rather than
+	// print the sentence a genuinely empty store gets -- and the credential
+	// lookup stays the one set at the top of this function, which reports
+	// every account as absent.
+	//
+	// The tolerance is narrow on purpose: ONLY ErrProviderMissing, the specific
+	// shape a pre-Codex build's rewrite leaves behind. Any other Open error --
+	// a permissions failure, a truncated file, a document broken some other way
+	// -- still returns, because "refuse and say why" is what this command does
+	// for every other unreadable store, and widening the tolerance would swap
+	// that non-zero exit for a silent deletion with a blank enumeration and
+	// nothing revoked.
 	opened, err := store.Open()
+	if errors.Is(err, store.ErrProviderMissing) {
+		s.present, s.unreadable = true, true
+		return s, nil
+	}
 	if err != nil {
 		return s, err
 	}
@@ -486,7 +528,11 @@ func enumerate(out io.Writer, s storeInspection, exe string, exeErr error, owner
 		// otherwise announce that the refresh tokens of nobody cannot be
 		// recovered.
 		if len(s.accounts) == 0 {
-			fmt.Fprintf(out, "This will delete %s, which holds no accounts.\n", s.root)
+			if s.unreadable {
+				fmt.Fprintf(out, "This will delete %s, which holds accounts this build cannot read.\n", s.root)
+			} else {
+				fmt.Fprintf(out, "This will delete %s, which holds no accounts.\n", s.root)
+			}
 		} else {
 			fmt.Fprintf(out, "This will delete %s and the stored credentials of %d account(s):\n", s.root, len(s.accounts))
 			for _, a := range s.accounts {
