@@ -8,8 +8,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/credhome"
 	"github.com/Kweiza/ccdaddy/internal/release"
+	"github.com/Kweiza/ccdaddy/internal/store"
 )
 
 // Options configures the daemon process.
@@ -182,6 +184,21 @@ func Run(ctx context.Context, o Options) (err error) {
 		log.Printf("stderr stays where it was: %v", cerr)
 	}
 	log.Printf("ccdad daemon up, pid %d", os.Getpid())
+
+	// The store's version rule is decided ONCE, here, and never inside a tick.
+	// A document this build cannot read -- a version-2 header over rows with no
+	// provider, which is what a ccdad that predates Codex support leaves behind
+	// -- is a fact about the machine, and re-deciding it on a cadence would
+	// turn one refusal into a log line per tick. Nothing is created: a store
+	// that is not there is not a store with a bad version.
+	root, rerr := ccpath.StoreHome()
+	if rerr != nil {
+		return rerr
+	}
+	if verr := store.CheckVersionAt(root); errors.Is(verr, store.ErrProviderMissing) {
+		log.Printf("not starting: %v", verr)
+		return verr
+	}
 
 	claim, claimErr := credhome.Acquire()
 	switch {
