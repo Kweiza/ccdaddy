@@ -38,6 +38,45 @@ import (
 // FileName is the config file's basename inside the ccdad store.
 const FileName = "config.toml"
 
+// CodexConfig is the [codex] table: the four knobs the Codex lane, the
+// launcher and the proxy read.
+//
+// It is a nested struct rather than four fields on Config with codex- prefixes,
+// because the file has a table and the two shapes must agree -- a reader
+// looking for what governs Codex should find one place in the struct and one
+// heading in the file.
+type CodexConfig struct {
+	// Threshold is the utilization percent above which a Codex account counts
+	// as spent. A second number rather than a use of Config.Threshold, for the
+	// reason CreditThreshold is one: the two providers meter different
+	// quantities over different windows.
+	Threshold float64
+	// Binary names the real codex, for a machine where the PATH walk should
+	// not decide. Empty is the ordinary state: the first codex on PATH that is
+	// not ccdad's own shim.
+	Binary string
+	// ProxyPort pins the loopback port. 0 means resolve one -- the recorded
+	// port, or a default derived from the store's own path -- which is the
+	// ordinary state. A configured port that cannot be bound fails daemon
+	// start loudly; a resolved one falls back.
+	ProxyPort int
+	// CrossAccountReplay allows a 429 in the MIDDLE of a thread to be replayed
+	// on another account.
+	//
+	// It defaults to false, and that is a fact about how codex sends a turn
+	// rather than caution: every request carries the whole history including
+	// the reasoning content the previous account produced, so a replay bills a
+	// second account for a thread the first started and hands it material it
+	// did not generate. The default answer to a mid-thread 429 is to return it
+	// and let the user start a new thread, which lands on the new account
+	// cleanly.
+	//
+	// The default is provisional rather than settled: the paragraph above is
+	// reasoned from the shape of a codex request and is unmeasured, so a
+	// measurement made before release may turn it on.
+	CrossAccountReplay bool
+}
+
 // Config is the effective configuration: what the file says, over the defaults.
 //
 // No field is a pointer, and that is the property being kept: absence is
@@ -130,6 +169,8 @@ type Config struct {
 	// resolves against the console's code page and against an environment
 	// variable read once at process start, and the daemon has neither.
 	TUIGlyphs string
+	// Codex is the [codex] table. See CodexConfig.
+	Codex CodexConfig
 }
 
 // Equal is == for a Config, which the map field ended.
@@ -158,6 +199,7 @@ func (c Config) Equal(o Config) bool {
 		c.UpdateCheck == o.UpdateCheck &&
 		c.TUITheme == o.TUITheme &&
 		c.TUIGlyphs == o.TUIGlyphs &&
+		c.Codex == o.Codex &&
 		maps.Equal(c.WindowThreshold, o.WindowThreshold)
 }
 
@@ -285,11 +327,25 @@ type fileShape struct {
 	// table here the loader would report `auto` for a file that says `ansi`,
 	// and `ccdad config list` would print the default beside the word `file`.
 	TUI *tuiFile `toml:"tui"`
+
+	// A pointer for the same reason TUI is one: an absent [codex] and a
+	// [codex] that names one key are different documents.
+	Codex *codexFile `toml:"codex"`
 }
 
 type creditFile struct {
 	MaxAutoSpend *float64 `toml:"max_auto_spend"`
 	Threshold    *float64 `toml:"threshold"`
+}
+
+// Every field is a pointer for the reason every key in this file is one:
+// absence has to be distinguishable from an explicit zero or false, or a
+// [codex] table naming one key would reset the other three.
+type codexFile struct {
+	Threshold          *float64 `toml:"threshold"`
+	Binary             *string  `toml:"binary"`
+	ProxyPort          *int     `toml:"proxy_port"`
+	CrossAccountReplay *bool    `toml:"cross_account_replay"`
 }
 
 type tuiFile struct {
@@ -360,7 +416,44 @@ func Parse(raw []byte) (Config, error) {
 			return Config{}, err
 		}
 	}
+	if f.Codex != nil {
+		if err := applyFloat(&cfg.Codex.Threshold, f.Codex.Threshold, keyCodexThreshold, validThreshold); err != nil {
+			return Config{}, err
+		}
+		if f.Codex.Binary != nil {
+			cfg.Codex.Binary = *f.Codex.Binary
+		}
+		if f.Codex.ProxyPort != nil {
+			if err := validProxyPort(*f.Codex.ProxyPort); err != nil {
+				return Config{}, fmt.Errorf("%s in %s: %w", keyCodexProxyPort, FileName, err)
+			}
+			cfg.Codex.ProxyPort = *f.Codex.ProxyPort
+		}
+		applyBool(&cfg.Codex.CrossAccountReplay, f.Codex.CrossAccountReplay)
+	}
 	return cfg, nil
+}
+
+// validProxyPort holds the pinned port to what the proxy can actually bind,
+// and it is checked at LOAD rather than at bind: the symptom of a bad port
+// discovered at bind is a daemon that will not start, reported from a layer
+// with nothing to say about which key caused it.
+//
+// 0 is not a port, it is the way to say "resolve one" -- the recorded port, or
+// a default derived from the store's own path -- so it is accepted. A
+// privileged port is refused because nothing here runs as root and the bind
+// would fail; the range is the whole unprivileged port space rather than the
+// narrower band the derived default is drawn from, because pinning a port
+// outside that band is a legitimate choice a machine may have made for its own
+// reasons.
+func validProxyPort(v int) error {
+	if v == 0 {
+		return nil
+	}
+	if v < 1024 || v > 65535 {
+		return fmt.Errorf("%d is not a port ccdad can bind; write 0 to let ccdad resolve one, or a number between 1024 and 65535", v)
+	}
+	return nil
 }
 
 // Load reads the config from disk. A machine with no config file gets the full

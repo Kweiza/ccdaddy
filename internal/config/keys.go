@@ -54,12 +54,36 @@ const (
 	keyCreditThreshold = "credit.threshold"
 	keyMaxAutoSpend    = "credit.max_auto_spend"
 
+	// The Codex table. threshold is the utilization percent above which a
+	// Codex account counts as spent, and it is a SECOND number rather than a
+	// use of the top-level one for the reason credit.threshold is: the two
+	// providers meter different quantities over different windows, and a user
+	// who tightens one has said nothing about the other.
+	//
+	// binary names the real codex when the PATH walk should not decide.
+	// proxy_port pins the loopback port when it must be stable across
+	// restarts. cross_account_replay allows a mid-thread 429 to be replayed on
+	// another account, which bills a second account for a thread the first
+	// started and is therefore off unless it is asked for.
+	//
+	// The rule at the top of this file is not relaxed for them. None is a
+	// credential and none may become one.
+	keyCodexThreshold          = "codex.threshold"
+	keyCodexBinary             = "codex.binary"
+	keyCodexProxyPort          = "codex.proxy_port"
+	keyCodexCrossAccountReplay = "codex.cross_account_replay"
+
 	keyTUITheme  = "tui.theme"
 	keyTUIGlyphs = "tui.glyphs"
 
 	// creditSection, windowThresholdSection and tuiSection are the three tables
 	// keys nest under; every other key is top-level.
 	creditSection = "credit"
+
+	// codexSection is the fourth table, closed by NAME the way [credit] and
+	// [tui] are: all four of its keys are in Keys(), so isKnownKey matches
+	// them whole and needs no prefix arm.
+	codexSection = "codex"
 
 	// windowThresholdSection carries one threshold per rate-limit window. It is
 	// a table of its own rather than `threshold.<window>` because `threshold`
@@ -140,6 +164,10 @@ func Keys() []string {
 		keyUpdateCheck,
 		keyCreditThreshold,
 		keyMaxAutoSpend,
+		keyCodexThreshold,
+		keyCodexBinary,
+		keyCodexProxyPort,
+		keyCodexCrossAccountReplay,
 		keyTUITheme,
 		keyTUIGlyphs,
 	}
@@ -184,5 +212,6 @@ func windowOf(key string) (usage.WindowName, bool) {
 // naming `[future].a` and `[future].b` separately says nothing more than
 // naming `future` once.
 func isKnownSection(name string) bool {
-	return name == creditSection || name == windowThresholdSection || name == tuiSection
+	return name == creditSection || name == windowThresholdSection ||
+		name == tuiSection || name == codexSection
 }

@@ -98,5 +98,24 @@ func Defaults() Config {
 		UpdateCheck: true,
 		TUITheme:    defaultTUITheme,
 		TUIGlyphs:   defaultTUIGlyphs,
+		Codex: CodexConfig{
+			// The same number as the engine's own default threshold, and
+			// written here rather than taken from strategy for the reason
+			// MaxAutoSpend is written here: strategy has no Codex axis to
+			// default, so there is no engine constant to defer to.
+			Threshold: 80,
+			// Empty means the first codex on PATH that is not ccdad's own
+			// shim. Naming a binary here would be one machine's answer written
+			// down for every machine.
+			Binary: "",
+			// 0 means resolve one. A number here is a machine saying it needs
+			// the port to be stable, which is a choice rather than a default.
+			ProxyPort: 0,
+			// False, and this is an answer rather than caution: every codex
+			// request carries the whole thread including the reasoning content
+			// the previous account produced, so a mid-thread replay bills a
+			// second account for a thread the first started.
+			CrossAccountReplay: false,
+		},
 	}
 }

@@ -280,6 +280,11 @@ func TestEveryKeyCanBeSetAndReadBack(t *testing.T) {
 		keyMCPSwitchWithoutElicitation: "true",
 		keyUpdateCheck:                 "false",
 
+		keyCodexThreshold:          "65",
+		keyCodexBinary:             "/opt/codex/bin/codex",
+		keyCodexProxyPort:          "24680",
+		keyCodexCrossAccountReplay: "true",
+
 		// Neither is the default, for the reason the booleans above are not: a
 		// key set to the value it already had would pass this test without the
 		// set having landed anywhere.
@@ -338,6 +343,12 @@ func TestEveryKeyCanBeSetAndReadBack(t *testing.T) {
 		UpdateCheck:                 false,
 		TUITheme:                    "dark",
 		TUIGlyphs:                   "ascii",
+		Codex: CodexConfig{
+			Threshold:          65,
+			Binary:             "/opt/codex/bin/codex",
+			ProxyPort:          24680,
+			CrossAccountReplay: true,
+		},
 	}
 	// Equal rather than ==: Config carries the per-window table now, and a
 	// struct holding a map is not comparable at all.
@@ -365,6 +376,11 @@ func TestTheEffectiveValueOfEveryKeyIsFormattable(t *testing.T) {
 
 		keyMCPSwitchWithoutElicitation: "false",
 		keyUpdateCheck:                 "true",
+
+		keyCodexThreshold:          "80",
+		keyCodexBinary:             "",
+		keyCodexProxyPort:          "0",
+		keyCodexCrossAccountReplay: "false",
 
 		keyTUITheme:  "auto",
 		keyTUIGlyphs: "auto",

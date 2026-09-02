@@ -486,6 +486,7 @@ func TestTheKeySetIsClosed(t *testing.T) {
 		"cooldown", "recovery_hysteresis", "preempt_lead", "strategy",
 		"probe_unknown", "hover", "mcp_switch_without_elicitation", "update_check",
 		"credit.threshold", "credit.max_auto_spend",
+		"codex.threshold", "codex.binary", "codex.proxy_port", "codex.cross_account_replay",
 		"tui.theme", "tui.glyphs",
 	}
 	got := Keys()
@@ -797,6 +798,33 @@ func TestEqualComparesEveryFieldOfConfig(t *testing.T) {
 			f.SetString(f.String() + "-changed")
 		case reflect.Map:
 			f.Set(reflect.ValueOf(map[usage.WindowName]float64{usage.WindowFiveHour: 85}))
+		case reflect.Struct:
+			// A nested table. Each of its fields is changed on its OWN copy
+			// and asserted separately, because changing them all at once would
+			// pass for an Equal that compares only the first: the symptom of a
+			// forgotten field is silent either way, and a gate that cannot see
+			// one field of a table is no gate on that table.
+			for j := range f.NumField() {
+				nested := Defaults()
+				sub := reflect.ValueOf(&nested).Elem().Field(i).Field(j)
+				subName := name + "." + f.Type().Field(j).Name
+				switch sub.Kind() {
+				case reflect.Float64:
+					sub.SetFloat(sub.Float() + 1)
+				case reflect.Int:
+					sub.SetInt(sub.Int() + 1)
+				case reflect.Bool:
+					sub.SetBool(!sub.Bool())
+				case reflect.String:
+					sub.SetString(sub.String() + "-changed")
+				default:
+					t.Fatalf("Config.%s is a %s, which this gate cannot change on its own; teach it that kind before adding the field", subName, sub.Kind())
+				}
+				if Defaults().Equal(nested) {
+					t.Errorf("Equal() reported two configs alike after changing %s; the field is missing from Equal", subName)
+				}
+			}
+			continue
 		default:
 			t.Fatalf("Config.%s is a %s, which this gate cannot change on its own; teach it that kind before adding the field", name, f.Kind())
 		}

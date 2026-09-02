@@ -580,6 +580,10 @@ mcp_switch_without_elicitation  false     default  honoured
 update_check                    true      default  honoured
 credit.threshold                80        default  overriding
 credit.max_auto_spend           0         default  honoured
+codex.threshold                 80        default  honoured
+codex.binary                              default  honoured
+codex.proxy_port                0         default  honoured
+codex.cross_account_replay      false     default  honoured
 tui.theme                       auto      default  honoured
 tui.glyphs                      auto      default  honoured
 ```
@@ -1128,6 +1132,10 @@ mcp_switch_without_elicitation  false     default
 update_check                    true      default
 credit.threshold                80        default
 credit.max_auto_spend           0         default
+codex.threshold                 80        default
+codex.binary                              default
+codex.proxy_port                0         default
+codex.cross_account_replay      false     default
 tui.theme                       auto      default
 tui.glyphs                      auto      default
 ```
@@ -1138,6 +1146,11 @@ unattended spending needs two independent opt-ins, and a switch that cannot
 read the current spend fails closed rather than guessing. `credit.threshold` is
 a different number for a different kind of account, and
 [Credit-metered accounts](#credit-metered-accounts) is what it does.
+
+`codex.threshold`, `codex.binary`, `codex.proxy_port` and
+`codex.cross_account_replay` are the `[codex]` table: the same shape, one lane
+over, read by the launcher and the local proxy rather than by the Claude
+switching engine — which is why hover leaves all four of them alone.
 
 `window_threshold` is a table rather than a key, and the listing above shows a
 row only for the windows your file actually names. There is no default row,
