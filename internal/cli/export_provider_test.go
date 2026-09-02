@@ -52,13 +52,20 @@ func TestExportCarriesEveryRowsProvider(t *testing.T) {
 // The two tests above decode the document into a Go struct with a `string`
 // field for Provider, and a `string` cannot tell "the key is absent" from
 // "the key is present and holds the empty string" — so neither test would
-// notice if `omitempty` crept back onto exportAccount.Provider. That
-// distinction matters here specifically: the importer recognizes a document
-// written before ccdad knew about providers by the ABSENCE of the key on a
-// row, and treats such a row as Claude. If a later change makes the key
-// optional, an old document and a freshly-exported Claude row become
-// byte-identical on the wire, and the importer's derivation starts guessing
-// instead of reading a fact. This test decodes into the untyped JSON shape
+// notice if the key stopped being written at all. That distinction matters
+// here specifically: the importer recognizes a document written before ccdad
+// knew about providers by the ABSENCE of the key on a row, and treats such a
+// row as Claude.
+//
+// The hazard is the key going missing for any reason, a dropped assignment in
+// exportAccount being the likely one — NOT `omitempty`: a stored account's
+// provider is always "claude" or "codex", so the field is never the empty
+// string omitempty elides, and adding the tag back would change nothing a
+// real export produces. If the key stops being written some other way, a
+// freshly-exported Claude row becomes indistinguishable from a document that
+// predates the field, and the importer's derivation starts guessing instead
+// of reading a fact — which is why presence, not merely correctness, is what
+// a later import needs. This test decodes into the untyped JSON shape
 // instead, so it can ask the one question that matters: is "provider" a key
 // of this object at all.
 func TestEveryExportedAccountCarriesTheProviderKey(t *testing.T) {

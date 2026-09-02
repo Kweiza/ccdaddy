@@ -79,3 +79,22 @@ func TestRunwaySaysNothingWhenThereAreNoCodexAccounts(t *testing.T) {
 		t.Fatalf("runway printed the Codex note with no Codex account:\n%s", errOut)
 	}
 }
+
+// A Codex-only fleet used to print a contradictory pair: the "not forecast"
+// note naming the excluded accounts, immediately followed by "Not enough
+// history yet to measure a burn rate" -- because the len(accounts) == 0
+// branch is missed (the slice holds the Codex accounts) and nothing else
+// distinguished "no history yet" from "no Claude account could ever have
+// one". The second line has to say what is actually true instead.
+func TestRunwaySaysThereAreNoClaudeAccountsRatherThanNotEnoughHistory(t *testing.T) {
+	isolate(t)
+	seedCodexAccount(t, "u-codex", "c@example.com")
+
+	_, _, errOut, _ := runRoot(t, "runway")
+	if strings.Contains(errOut, "Not enough history") {
+		t.Fatalf("runway blamed missing history for a fleet with no Claude account at all:\n%s", errOut)
+	}
+	if !strings.Contains(errOut, "No Claude accounts") {
+		t.Fatalf("runway does not say why nothing was forecast:\n%s", errOut)
+	}
+}

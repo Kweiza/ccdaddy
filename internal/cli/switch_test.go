@@ -150,6 +150,31 @@ func TestSwitchRefusesASetupTokenAccount(t *testing.T) {
 	assertNoLiveCredentials(t)
 }
 
+// A Codex account reaching `ccdad switch` used to surface switcher.ErrNotClaude
+// verbatim: "switcher: target is not a Claude account" -- a package-prefixed
+// developer string, no account name, no remedy, in a command whose other
+// refusals are named, actionable sentences. Compare probeSkip's own: "codex@
+// example.com is a Codex account; ccdad never probes Codex".
+func TestSwitchRefusesACodexAccountAndNamesIt(t *testing.T) {
+	isolate(t)
+	seedCodexAccount(t, "u-x", "codex@example.com")
+
+	code, _, _, top := runRoot(t, "switch", "1")
+	if code != ExitUsage {
+		t.Fatalf("exit = %d (%s), want %d", code, top, ExitUsage)
+	}
+	if strings.Contains(top, "switcher:") {
+		t.Fatalf("error %q leaks the package-prefixed developer string", top)
+	}
+	if !strings.Contains(top, "codex@example.com") {
+		t.Fatalf("error %q does not name the account", top)
+	}
+	if !strings.Contains(top, "Codex") {
+		t.Fatalf("error %q does not say what kind of account it is", top)
+	}
+	assertNoLiveCredentials(t)
+}
+
 // An api-key account IS switchable, and the switch is two writes to two files.
 //
 // The credentials half is the one a plausible implementation omits, and the
