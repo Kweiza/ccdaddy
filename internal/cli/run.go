@@ -20,6 +20,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/ccver"
 	"github.com/Kweiza/ccdaddy/internal/identity"
+	"github.com/Kweiza/ccdaddy/internal/provider"
 	"github.com/Kweiza/ccdaddy/internal/store"
 )
 
@@ -1236,6 +1237,17 @@ func newRunCmd() *cobra.Command {
 			target, err := store.Resolve(s.Accounts(), args[0])
 			if err != nil {
 				return UsageError("%s", err.Error())
+			}
+			// Ahead of the credential read below: a Codex blob carries no
+			// TokenRecord, so refuseUnscopedRun and refuseDisplacedAuth both
+			// read it as an ordinary OAuth login (ours = identity.OAuthLogin)
+			// and let it through -- and this command's only ending is exec'ing
+			// Claude Code against a credentials file it just wrote, which for
+			// a Codex account means a Codex refresh token in Claude Code's own
+			// format, in a directory Claude Code owns and rewrites.
+			if target.Provider != provider.Claude {
+				return UsageError("%s is a Codex account, and `ccdad run` starts Claude Code. "+
+					"A Codex account is served through ccdad's proxy, not by a credentials file", target.Label())
 			}
 
 			// Read before the session directory is created rather than after,

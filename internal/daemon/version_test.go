@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -50,6 +51,22 @@ func TestRunRefusesAStoreWhoseRowsHaveNoProvider(t *testing.T) {
 	}
 	if held {
 		t.Error("Run() kept the singleton after refusing to start")
+	}
+
+	// The version check runs BEFORE the "up" log line, not after it: a start
+	// this build refuses must never log "ccdad daemon up, pid N" and then
+	// "not starting" on the very next line, which is what a reader followed
+	// into daemon.log to find the real reason a supervisor's ten-second wait
+	// had already timed out over.
+	raw, lerr := os.ReadFile(filepath.Join(root, LogFileName))
+	if lerr != nil {
+		t.Fatal(lerr)
+	}
+	if strings.Contains(string(raw), "up, pid") {
+		t.Errorf("daemon.log logged \"up\" before refusing to start:\n%s", raw)
+	}
+	if !strings.Contains(string(raw), "not starting") {
+		t.Errorf("daemon.log does not say why the daemon did not start:\n%s", raw)
 	}
 }
 
