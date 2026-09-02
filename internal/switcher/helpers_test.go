@@ -11,6 +11,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/identity"
+	"github.com/Kweiza/ccdaddy/internal/provider"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 )
@@ -98,7 +99,7 @@ func seed(t *testing.T, uuid, email string) store.Account {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := store.Account{UUID: uuid, Email: email}
+	a := store.Account{Provider: provider.Claude, UUID: uuid, Email: email}
 	if err := s.Add(a, oauthBlob("RT-"+uuid)); err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +119,7 @@ func seedSeat(t *testing.T, uuid, email, seatTier string) store.Account {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := store.Account{UUID: uuid, Email: email, SeatTier: seatTier}
+	a := store.Account{Provider: provider.Claude, UUID: uuid, Email: email, SeatTier: seatTier}
 	if err := s.Add(a, oauthBlob("RT-"+uuid)); err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +142,7 @@ func seedToken(t *testing.T, uuid, email, kind, token string) store.Account {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := store.Account{UUID: uuid, Email: email}
+	a := store.Account{Provider: provider.Claude, UUID: uuid, Email: email}
 	if err := s.Add(a, cclink.Blob{cclink.TokenKey: encoded}); err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +259,7 @@ func seedExpiring(t *testing.T, uuid, email string, until time.Duration) store.A
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := store.Account{UUID: uuid, Email: email}
+	a := store.Account{Provider: provider.Claude, UUID: uuid, Email: email}
 	if err := s.Add(a, expiringBlob("RT-"+uuid, until)); err != nil {
 		t.Fatal(err)
 	}

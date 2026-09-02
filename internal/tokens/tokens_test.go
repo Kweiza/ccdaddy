@@ -15,6 +15,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/cclock"
 	"github.com/Kweiza/ccdaddy/internal/oauth"
+	"github.com/Kweiza/ccdaddy/internal/provider"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"io"
 	"strings"
@@ -53,7 +54,7 @@ func seed(t *testing.T, uuid string, rec json.RawMessage) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Add(store.Account{UUID: uuid, Email: uuid + "@example.com"},
+	if err := s.Add(store.Account{Provider: provider.Claude, UUID: uuid, Email: uuid + "@example.com"},
 		cclink.Blob{"claudeAiOauth": rec}); err != nil {
 		t.Fatal(err)
 	}
@@ -385,7 +386,7 @@ func TestTokenAccountHasNothingToRefresh(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Add(store.Account{UUID: "u-tok", Email: "t@example.com"},
+	if err := s.Add(store.Account{Provider: provider.Claude, UUID: "u-tok", Email: "t@example.com"},
 		cclink.Blob{"ccdadToken": json.RawMessage(`{"kind":"api-key","token":"sk-ant-api-X"}`)}); err != nil {
 		t.Fatal(err)
 	}

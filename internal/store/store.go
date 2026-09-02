@@ -378,6 +378,12 @@ func (s *Store) Get(uuid string) (Account, bool) {
 	return Account{}, false
 }
 
+// ErrNoProvider is an account handed to Add with no provider on it. See add.
+var ErrNoProvider = errors.New("account has no provider")
+
+// ErrProviderMismatch is a re-add of a stored uuid under the other provider.
+var ErrProviderMismatch = errors.New("that uuid is stored under a different provider")
+
 // Add stores an account and its account-scoped credentials.
 //
 // Re-adding an existing uuid updates it in place: the fresh login replaces the
@@ -396,10 +402,28 @@ func (s *Store) add(a Account, creds cclink.Blob) error {
 	if err := ValidateUUID(a.UUID); err != nil {
 		return err
 	}
+	// Refused rather than defaulted. A default here would be the same wrong
+	// guess load refuses, arriving through the other door: every constructor
+	// that forgot the field would store a Codex account labelled Claude, and
+	// the switch that rewrites Claude Code's credentials file would be handed
+	// it. The three constructors that build a Claude account say so.
+	if !a.Provider.Valid() {
+		return fmt.Errorf("%w: %s", ErrNoProvider, a.UUID)
+	}
 	a.KindName = a.Kind.String()
 
 	existing, isUpdate := s.Get(a.UUID)
 	if isUpdate {
+		// Re-adding an existing uuid is what makes Add double as
+		// re-authentication, and it keeps the fields that belong to the user.
+		// The provider is not one of them and is not the login either: a uuid
+		// arriving under the other provider is a different account, and
+		// rewriting the row in place would leave the account labelled one way
+		// holding the other's credential file.
+		if existing.Provider != a.Provider {
+			return fmt.Errorf("%w: %s is stored as %s and arrived as %s",
+				ErrProviderMismatch, a.UUID, existing.Provider, a.Provider)
+		}
 		a.Idx = existing.Idx
 		a.Alias = existing.Alias
 		a.AddedAt = existing.AddedAt
@@ -593,8 +617,22 @@ func (s *Store) ActiveUUID() string { return s.data.ActiveUUID }
 // be the one way left to write the store without the lock, which is the bug
 // this whole file exists to remove.
 func (s *Store) save() error {
+	// Version 2 if and only if a row is Codex, and both halves are load-
+	// bearing. Bumping unconditionally makes every store unreadable by the
+	// build before this one, over a field that build would have ignored.
+	// Never bumping lets a pre-v2 build read a Codex row, drop the key it
+	// cannot name and write the document back -- and that state would never be
+	// caught, because a version-1 header reads an absent provider as Claude.
+	//
+	// Every row is written with its provider key either way. A version-1
+	// document carrying `provider = 'claude'` downgrades harmlessly; a
+	// version-2 document that has LOST the key is the loud error it should be.
+	s.data.Version = 1
 	for i := range s.data.Accounts {
 		s.data.Accounts[i].KindName = s.data.Accounts[i].Kind.String()
+		if s.data.Accounts[i].Provider == provider.Codex {
+			s.data.Version = 2
+		}
 	}
 	encoded, err := toml.Marshal(s.data)
 	if err != nil {

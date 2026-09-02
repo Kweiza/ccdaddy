@@ -22,6 +22,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/oauth"
+	"github.com/Kweiza/ccdaddy/internal/provider"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
@@ -364,7 +365,7 @@ func seedAccount(t *testing.T, uuid, email string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Add(store.Account{UUID: uuid, Email: email}, credsFor("RT-"+uuid)); err != nil {
+	if err := s.Add(store.Account{Provider: provider.Claude, UUID: uuid, Email: email}, credsFor("RT-"+uuid)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -378,7 +379,7 @@ func seedDisabledAccount(t *testing.T, uuid, email string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Add(store.Account{UUID: uuid, Email: email, Disabled: true}, credsFor("RT-"+uuid)); err != nil {
+	if err := s.Add(store.Account{Provider: provider.Claude, UUID: uuid, Email: email, Disabled: true}, credsFor("RT-"+uuid)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -396,7 +397,7 @@ func seedAPIKeyAccount(t *testing.T, uuid, email string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Add(store.Account{UUID: uuid, Email: email, Kind: identity.KindAPIKey},
+	if err := s.Add(store.Account{Provider: provider.Claude, UUID: uuid, Email: email, Kind: identity.KindAPIKey},
 		cclink.Blob{cclink.TokenKey: rec}); err != nil {
 		t.Fatal(err)
 	}
@@ -412,7 +413,7 @@ func seedCreditAccount(t *testing.T, uuid, email string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Add(store.Account{UUID: uuid, Email: email, Kind: identity.KindCredit}, credsFor("RT-"+uuid)); err != nil {
+	if err := s.Add(store.Account{Provider: provider.Claude, UUID: uuid, Email: email, Kind: identity.KindCredit}, credsFor("RT-"+uuid)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -427,7 +428,7 @@ func seedPrimaryCreditAccount(t *testing.T, uuid, email string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Add(store.Account{
+	if err := s.Add(store.Account{Provider: provider.Claude,
 		UUID: uuid, Email: email, Kind: identity.KindCredit, Primary: true,
 	}, credsFor("RT-"+uuid)); err != nil {
 		t.Fatal(err)

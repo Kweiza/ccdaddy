@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/Kweiza/ccdaddy/internal/identity"
+	"github.com/Kweiza/ccdaddy/internal/provider"
 )
 
 // three accounts, so a partition has a middle to get wrong.
@@ -16,7 +17,7 @@ func seedThree(t *testing.T) *Store {
 		t.Fatal(err)
 	}
 	for _, u := range []string{"u-1", "u-2", "u-3"} {
-		a := Account{UUID: u, Email: u + "@example.com", Kind: identity.KindSubscription}
+		a := Account{Provider: provider.Claude, UUID: u, Email: u + "@example.com", Kind: identity.KindSubscription}
 		if err := s.Add(a, sampleCreds("AT-"+u)); err != nil {
 			t.Fatalf("Add(%s) = %v", u, err)
 		}
@@ -127,7 +128,7 @@ func TestAnAccountAddedAfterAPartitionBelongsElsewhere(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	added := Account{UUID: "u-4", Email: "d@example.com", Kind: identity.KindSubscription}
+	added := Account{Provider: provider.Claude, UUID: "u-4", Email: "d@example.com", Kind: identity.KindSubscription}
 	if err := s.Add(added, sampleCreds("AT-u-4")); err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +142,7 @@ func TestAnAccountAddedAfterAPartitionBelongsElsewhere(t *testing.T) {
 // that has never run `ccdad own` owns everything.
 func TestAnAccountAddedWithNoPartitionIsOwnedHere(t *testing.T) {
 	s := seedThree(t)
-	added := Account{UUID: "u-4", Email: "d@example.com", Kind: identity.KindSubscription}
+	added := Account{Provider: provider.Claude, UUID: "u-4", Email: "d@example.com", Kind: identity.KindSubscription}
 	if err := s.Add(added, sampleCreds("AT-u-4")); err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +159,7 @@ func TestReAddingAnAccountKeepsItsSideOfThePartition(t *testing.T) {
 	if _, err := s.SetOwned([]string{"u-1"}); err != nil {
 		t.Fatal(err)
 	}
-	again := Account{UUID: "u-2", Email: "b@example.com", Kind: identity.KindSubscription}
+	again := Account{Provider: provider.Claude, UUID: "u-2", Email: "b@example.com", Kind: identity.KindSubscription}
 	if err := s.Add(again, sampleCreds("AT-u-2-rotated")); err != nil {
 		t.Fatal(err)
 	}

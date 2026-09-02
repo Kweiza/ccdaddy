@@ -15,6 +15,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/ccver"
 	"github.com/Kweiza/ccdaddy/internal/identity"
+	"github.com/Kweiza/ccdaddy/internal/provider"
 	"github.com/Kweiza/ccdaddy/internal/store"
 )
 
@@ -742,7 +743,7 @@ func seedTokenAccount(t *testing.T, uuid, email, kind, token string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Add(store.Account{UUID: uuid, Email: email}, cclink.Blob{cclink.TokenKey: rec}); err != nil {
+	if err := s.Add(store.Account{Provider: provider.Claude, UUID: uuid, Email: email}, cclink.Blob{cclink.TokenKey: rec}); err != nil {
 		t.Fatal(err)
 	}
 }

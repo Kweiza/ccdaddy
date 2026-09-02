@@ -5,6 +5,7 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/config"
 	"github.com/Kweiza/ccdaddy/internal/identity"
+	"github.com/Kweiza/ccdaddy/internal/provider"
 	"github.com/Kweiza/ccdaddy/internal/store"
 )
 
@@ -28,7 +29,7 @@ func TestASuccessfulPollRevisesAnAccountsClassification(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	acct := store.Account{UUID: "acct-1", Email: "seat@example.com", Kind: identity.KindSubscription}
+	acct := store.Account{Provider: provider.Claude, UUID: "acct-1", Email: "seat@example.com", Kind: identity.KindSubscription}
 	if err := s.Add(acct, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +67,7 @@ func TestAFailedPollLeavesAnAccountClassifiedAsItWas(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	acct := store.Account{UUID: "acct-1", Email: "seat@example.com", Kind: identity.KindCredit}
+	acct := store.Account{Provider: provider.Claude, UUID: "acct-1", Email: "seat@example.com", Kind: identity.KindCredit}
 	if err := s.Add(acct, nil); err != nil {
 		t.Fatal(err)
 	}

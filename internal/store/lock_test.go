@@ -3,6 +3,7 @@ package store
 import (
 	"errors"
 	"github.com/Kweiza/ccdaddy/internal/identity"
+	"github.com/Kweiza/ccdaddy/internal/provider"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -37,7 +38,7 @@ func TestConcurrentAddsLoseNoAccount(t *testing.T) {
 				return
 			}
 			<-start
-			errs[i] = s.Add(Account{UUID: uuidFor(i), Email: "a@example.com"}, sampleCreds("AT"))
+			errs[i] = s.Add(Account{Provider: provider.Claude, UUID: uuidFor(i), Email: "a@example.com"}, sampleCreds("AT"))
 		}()
 	}
 	close(start)
@@ -81,11 +82,11 @@ func TestMutateRereadsInsideTheLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := fresh.Add(Account{UUID: "u-first", Email: "first@example.com"}, sampleCreds("AT")); err != nil {
+	if err := fresh.Add(Account{Provider: provider.Claude, UUID: "u-first", Email: "first@example.com"}, sampleCreds("AT")); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := stale.Add(Account{UUID: "u-second", Email: "second@example.com"}, sampleCreds("AT")); err != nil {
+	if err := stale.Add(Account{Provider: provider.Claude, UUID: "u-second", Email: "second@example.com"}, sampleCreds("AT")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -131,7 +132,7 @@ func TestLockBusyGivesUpAfterTimeout(t *testing.T) {
 	defer func() { LockTimeout = saved }()
 
 	started := time.Now()
-	err = s.Add(Account{UUID: "u-1", Email: "a@example.com"}, sampleCreds("AT"))
+	err = s.Add(Account{Provider: provider.Claude, UUID: "u-1", Email: "a@example.com"}, sampleCreds("AT"))
 	elapsed := time.Since(started)
 
 	if !errors.Is(err, ErrLockBusy) {
@@ -178,7 +179,7 @@ func TestLocksUnsupportedIsRefusedNotIgnored(t *testing.T) {
 	})
 	defer restore()
 
-	err = s.Add(Account{UUID: "u-1", Email: "a@example.com"}, sampleCreds("AT"))
+	err = s.Add(Account{Provider: provider.Claude, UUID: "u-1", Email: "a@example.com"}, sampleCreds("AT"))
 	if !errors.Is(err, ErrLocksUnsupported) {
 		t.Fatalf("Add() on a filesystem without locks = %v, want ErrLocksUnsupported", err)
 	}
@@ -225,10 +226,10 @@ func TestWithStoreIsOneWrite(t *testing.T) {
 	defer func() { LockTimeout = saved }()
 
 	err := WithStore(func(s *Store) error {
-		if err := s.Add(Account{UUID: "u-1", Email: "a@example.com"}, sampleCreds("AT")); err != nil {
+		if err := s.Add(Account{Provider: provider.Claude, UUID: "u-1", Email: "a@example.com"}, sampleCreds("AT")); err != nil {
 			return err
 		}
-		if err := s.Add(Account{UUID: "u-2", Email: "b@example.com"}, sampleCreds("AT")); err != nil {
+		if err := s.Add(Account{Provider: provider.Claude, UUID: "u-2", Email: "b@example.com"}, sampleCreds("AT")); err != nil {
 			return err
 		}
 		if err := s.SetAlias("u-2", "work"); err != nil {
@@ -266,13 +267,13 @@ func TestWithStoreLeavesTheFileAloneOnError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := seed.Add(Account{UUID: "u-1", Email: "a@example.com"}, sampleCreds("AT")); err != nil {
+	if err := seed.Add(Account{Provider: provider.Claude, UUID: "u-1", Email: "a@example.com"}, sampleCreds("AT")); err != nil {
 		t.Fatal(err)
 	}
 
 	boom := errors.New("boom")
 	err = WithStore(func(s *Store) error {
-		if err := s.Add(Account{UUID: "u-2", Email: "b@example.com"}, sampleCreds("AT")); err != nil {
+		if err := s.Add(Account{Provider: provider.Claude, UUID: "u-2", Email: "b@example.com"}, sampleCreds("AT")); err != nil {
 			return err
 		}
 		return boom
@@ -304,7 +305,7 @@ func TestLockFileIsNeverWrittenOrUnlinked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Add(Account{UUID: "u-1", Email: "a@example.com", Kind: identity.KindSubscription}, sampleCreds("AT")); err != nil {
+	if err := s.Add(Account{Provider: provider.Claude, UUID: "u-1", Email: "a@example.com", Kind: identity.KindSubscription}, sampleCreds("AT")); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Remove("u-1"); err != nil {

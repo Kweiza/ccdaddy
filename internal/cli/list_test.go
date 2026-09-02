@@ -17,6 +17,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/history"
 	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/pollpolicy"
+	"github.com/Kweiza/ccdaddy/internal/provider"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
@@ -180,7 +181,7 @@ func seedTieredAccount(t *testing.T, uuid, email string, kind identity.Kind, tie
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Add(store.Account{UUID: uuid, Email: email, Kind: kind, Tier: tier},
+	if err := s.Add(store.Account{Provider: provider.Claude, UUID: uuid, Email: email, Kind: kind, Tier: tier},
 		credsFor("RT-"+uuid)); err != nil {
 		t.Fatal(err)
 	}

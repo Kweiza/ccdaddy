@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Kweiza/ccdaddy/internal/provider"
 )
 
 // deliverAt builds a watch that reports a signal at a chosen point.
@@ -75,10 +77,10 @@ func TestASignalMidTransactionTakesTheCredentialFileBackOffTheDisk(t *testing.T)
 	t.Cleanup(setWatchInterruptForTest(deliverAt(true, false)))
 
 	err := WithStore(func(s *Store) error {
-		if err := s.Add(Account{UUID: "u-1"}, sampleCreds("AT-1")); err != nil {
+		if err := s.Add(Account{Provider: provider.Claude, UUID: "u-1"}, sampleCreds("AT-1")); err != nil {
 			return err
 		}
-		return s.Add(Account{UUID: "u-2"}, sampleCreds("AT-2"))
+		return s.Add(Account{Provider: provider.Claude, UUID: "u-2"}, sampleCreds("AT-2"))
 	})
 	if !errors.Is(err, ErrInterrupted) {
 		t.Fatalf("WithStore() = %v, want ErrInterrupted", err)
@@ -116,7 +118,7 @@ func TestASignalAfterTheSaveLeavesTheWriteStanding(t *testing.T) {
 	t.Cleanup(setWatchInterruptForTest(deliverAt(false, true)))
 
 	err := WithStore(func(s *Store) error {
-		return s.Add(Account{UUID: "u-1"}, sampleCreds("AT-1"))
+		return s.Add(Account{Provider: provider.Claude, UUID: "u-1"}, sampleCreds("AT-1"))
 	})
 	if !errors.Is(err, ErrInterrupted) {
 		t.Fatalf("WithStore() = %v, want ErrInterrupted: a signal this code held may not be dropped", err)
@@ -149,7 +151,7 @@ func TestASignalOnAnAlreadyFailingTransactionIsStillReported(t *testing.T) {
 
 	boom := errors.New("boom")
 	err := WithStore(func(s *Store) error {
-		if err := s.Add(Account{UUID: "u-1"}, sampleCreds("AT-1")); err != nil {
+		if err := s.Add(Account{Provider: provider.Claude, UUID: "u-1"}, sampleCreds("AT-1")); err != nil {
 			return err
 		}
 		return boom
@@ -193,7 +195,7 @@ func TestTheWatchOutlivesTheReversal(t *testing.T) {
 	}))
 
 	err := WithStore(func(s *Store) error {
-		return s.Add(Account{UUID: "u-1"}, sampleCreds("AT-1"))
+		return s.Add(Account{Provider: provider.Claude, UUID: "u-1"}, sampleCreds("AT-1"))
 	})
 	if !errors.Is(err, ErrInterrupted) {
 		t.Fatalf("WithStore() = %v, want ErrInterrupted", err)
@@ -224,7 +226,7 @@ func TestASuccessfulTransactionUnhooksItsWatch(t *testing.T) {
 	}))
 
 	if err := WithStore(func(s *Store) error {
-		return s.Add(Account{UUID: "u-1"}, sampleCreds("AT-1"))
+		return s.Add(Account{Provider: provider.Claude, UUID: "u-1"}, sampleCreds("AT-1"))
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -249,10 +251,10 @@ func TestANestedMutatorTakesNoWatchOfItsOwn(t *testing.T) {
 	}))
 
 	if err := WithStore(func(s *Store) error {
-		if err := s.Add(Account{UUID: "u-1"}, sampleCreds("AT-1")); err != nil {
+		if err := s.Add(Account{Provider: provider.Claude, UUID: "u-1"}, sampleCreds("AT-1")); err != nil {
 			return err
 		}
-		if err := s.Add(Account{UUID: "u-2"}, sampleCreds("AT-2")); err != nil {
+		if err := s.Add(Account{Provider: provider.Claude, UUID: "u-2"}, sampleCreds("AT-2")); err != nil {
 			return err
 		}
 		return s.SetAlias("u-1", "one")
@@ -280,7 +282,7 @@ func TestAPanicInATransactionStillTakesTheCredentialFileBack(t *testing.T) {
 			}
 		}()
 		_ = WithStore(func(s *Store) error {
-			if err := s.Add(Account{UUID: "u-1"}, sampleCreds("AT-1")); err != nil {
+			if err := s.Add(Account{Provider: provider.Claude, UUID: "u-1"}, sampleCreds("AT-1")); err != nil {
 				return err
 			}
 			panic("boom")
