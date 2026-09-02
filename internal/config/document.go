@@ -310,8 +310,15 @@ func coerce(key, value string) (any, error) {
 		return coerceFloat(key, value, validThreshold)
 	}
 	switch key {
-	case keyThreshold, keyCreditThreshold:
+	case keyThreshold, keyCreditThreshold, keyCodexThreshold:
 		return coerceFloat(key, value, validThreshold)
+	case keyCodexBinary:
+		// Stored as typed, with no name list to check against: it is a path,
+		// and this package cannot tell a path that does not exist yet from one
+		// that is wrong. The launcher reports a binary it cannot run.
+		return strings.TrimSpace(value), nil
+	case keyCodexProxyPort:
+		return coerceInt(key, value, validProxyPort)
 	case keyHysteresisPct:
 		return coerceFloat(key, value, validHysteresisPct)
 	case keyHeadroomRatio:
@@ -345,7 +352,8 @@ func coerce(key, value string) (any, error) {
 			return nil, err
 		}
 		return s.String(), nil
-	case keyProbeUnknown, keyHover, keyMCPSwitchWithoutElicitation, keyUpdateCheck:
+	case keyProbeUnknown, keyHover, keyMCPSwitchWithoutElicitation, keyUpdateCheck,
+		keyCodexCrossAccountReplay:
 		return coerceBool(key, value)
 	case keyTUITheme:
 		return coerceName(key, value, validTheme)
@@ -396,6 +404,20 @@ func coerceFloat(key, value string, valid func(float64) error) (any, error) {
 		return nil, fmt.Errorf("%s: %w", key, err)
 	}
 	return f, nil
+}
+
+// coerceInt stores a real integer rather than the string that was typed, so
+// the file always reads `proxy_port = 24680`. It is separate from coerceFloat
+// because a port written as 24680.0 is a mistake rather than a spelling.
+func coerceInt(key, value string, valid func(int) error) (any, error) {
+	n, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil {
+		return nil, fmt.Errorf("%s: %q is not a whole number", key, value)
+	}
+	if err := valid(n); err != nil {
+		return nil, fmt.Errorf("%s: %w", key, err)
+	}
+	return int64(n), nil
 }
 
 // format renders a stored value the way `ccdad config get` prints it.
@@ -462,6 +484,14 @@ func (c Config) Value(key string) (string, error) {
 		return format(c.CreditThreshold), nil
 	case keyMaxAutoSpend:
 		return format(c.MaxAutoSpend), nil
+	case keyCodexThreshold:
+		return format(c.Codex.Threshold), nil
+	case keyCodexBinary:
+		return c.Codex.Binary, nil
+	case keyCodexProxyPort:
+		return format(int64(c.Codex.ProxyPort)), nil
+	case keyCodexCrossAccountReplay:
+		return format(c.Codex.CrossAccountReplay), nil
 	}
 	return "", unknownKey(key)
 }

@@ -75,6 +75,12 @@ var hoverOverrides = map[string]bool{
 // of a fact about their quota, and `ccdad config list` would then mark a theme
 // the user chose as one hover had taken over -- which would be a lie in the
 // column whose whole job is to say what is being read.
+//
+// The four Codex keys are here for the same reason, one lane over: hover is a
+// policy for the CLAUDE switching engine, and it derives nothing about a Codex
+// account -- there is no window, no reset and no ranking on that lane for it to
+// compute a number from. A mode that derived them would be answering a
+// question about a different provider out of a fact about Claude's quota.
 var hoverHonours = map[string]bool{
 	keyMaxAutoSpend:                true,
 	keyHover:                       true,
@@ -82,6 +88,10 @@ var hoverHonours = map[string]bool{
 	keyUpdateCheck:                 true,
 	keyTUITheme:                    true,
 	keyTUIGlyphs:                   true,
+	keyCodexThreshold:              true,
+	keyCodexBinary:                 true,
+	keyCodexProxyPort:              true,
+	keyCodexCrossAccountReplay:     true,
 }
 
 // HoverOverrides reports whether hover derives this key's value for itself,
