@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -12,6 +13,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/forecast"
 	"github.com/Kweiza/ccdaddy/internal/history"
 	"github.com/Kweiza/ccdaddy/internal/identity"
+	"github.com/Kweiza/ccdaddy/internal/provider"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/usage"
 	"github.com/Kweiza/ccdaddy/internal/view"
@@ -91,6 +93,14 @@ func newRunwayCmd() *cobra.Command {
 			if f.TierNotice != "" {
 				fmt.Fprintf(errw, "note: %s\n", f.TierNotice)
 			}
+			// One line for the accounts this page is not about, said out loud
+			// because silence reads as a fleet that is smaller than it is. It
+			// goes to stderr on BOTH paths: the --json document describes the
+			// forecast, and an omission is a fact about the machine rather
+			// than a field of it.
+			if line := codexNotForecast(accounts); line != "" {
+				fmt.Fprintln(errw, line)
+			}
 			switch {
 			case len(accounts) == 0:
 				fmt.Fprintln(errw, "No accounts yet. Run 'ccdad add' to log one in.")
@@ -165,6 +175,24 @@ func writeRunwayFile(cmd *cobra.Command, path string, payload any) error {
 	return nil
 }
 
+// codexNotForecast names the accounts the fleet left out, or "" when there are
+// none. A line printed on every run about an absence is noise, so a store with
+// no Codex account says nothing.
+func codexNotForecast(accounts []store.Account) string {
+	labels := make([]string, 0, len(accounts))
+	for _, a := range accounts {
+		if a.Provider == provider.Codex {
+			labels = append(labels, a.Label())
+		}
+	}
+	if len(labels) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("note: %d Codex %s not forecast — ccdad measures no burn rate for a Codex account, "+
+		"and its quota is a different plan's percentage points: %s",
+		len(labels), plural(len(labels), "account is", "accounts are"), strings.Join(labels, ", "))
+}
+
 // fleetForecast measures the fleet from the two documents that carry it, and
 // returns the one notice a series that could not be read earns.
 //
@@ -195,6 +223,22 @@ func fleetForecast(accounts []store.Account, cache *usage.Cache, now time.Time) 
 
 	in := make([]forecast.Input, 0, len(accounts))
 	for _, a := range accounts {
+		// The fleet is ONE provider's, and it is Claude's.
+		//
+		// Two reasons, either sufficient. A Codex account's percentage points
+		// are a different plan's points, so summing them with Claude's reports
+		// a fleet that does not exist -- the same objection the tier notice
+		// below raises about two Claude plans, one level up. And the Eligible
+		// rule this loop copies is about what the rotation can hand work to: a
+		// Claude switch can never make a Codex account the live login, so its
+		// quota is quota this page must not promise.
+		//
+		// Filtered HERE rather than at the call sites, because `ccdad list`
+		// calls this function too and two filters would drift -- one page
+		// would report a fleet the other does not.
+		if a.Provider != provider.Claude {
+			continue
+		}
 		// RateLimitTier, not Tier. Tier is organization_type, which is the same
 		// string for two seats on plans of very different sizes, and the
 		// question here is whether these accounts' percentage points are the
