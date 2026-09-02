@@ -604,6 +604,17 @@ func writeFile(t *testing.T, path, body string) {
 	}
 }
 
+// readFileForTest reads a file a command wrote, failing the test rather than
+// returning an error nobody would check.
+func readFileForTest(t *testing.T, path string) []byte {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
 // stubLiveSource fixes which store doctor believes answered, without needing a
 // keychain on the test machine. The blob itself is whatever seedHealthyMachine
 // wrote; this axis is only about the NAME the report gives it.
