@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/config"
+	"github.com/Kweiza/ccdaddy/internal/provider"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
@@ -198,7 +199,7 @@ func TestTheProjectionCarriesThePrimaryFlag(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cands := engineCandidates(s, s.Accounts(), cache)
+	cands := engineCandidates(s, s.Accounts(), cache, provider.Claude)
 	if len(cands) != 2 {
 		t.Fatalf("engineCandidates() returned %d candidates, want both accounts", len(cands))
 	}

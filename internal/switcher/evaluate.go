@@ -6,6 +6,7 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/config"
+	"github.com/Kweiza/ccdaddy/internal/provider"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/usage"
@@ -98,6 +99,24 @@ type EvalOptions struct {
 	// silently reverting a tuned threshold to stock because somebody mistyped an
 	// edit is the failure that rule exists to prevent.
 	Config func() (config.Config, error)
+	// Provider narrows the pass to one provider's accounts. The ZERO value
+	// reads as Claude, which is what keeps every existing call site on the
+	// path it is on today without naming one.
+	//
+	// It is not a filter on the OUTPUT. It is handed to the candidate builder,
+	// so an account of the other provider is never ranked, never wins, and is
+	// never returned as a target -- which is the property that has to hold,
+	// because a target is handed to a switch that rewrites Claude Code's
+	// credentials file.
+	Provider provider.ID
+}
+
+// provider is the pass's provider, defaulting a zero value to Claude.
+func (o EvalOptions) provider() provider.ID {
+	if o.Provider == "" {
+		return provider.Claude
+	}
+	return o.Provider
 }
 
 // config resolves the engine's knobs. Both branches return a usable config;
@@ -164,7 +183,7 @@ func Evaluate(s *store.Store, opts EvalOptions) (Evaluation, error) {
 	}
 	cache.Prune(added)
 
-	cands := engineCandidates(s, accounts, cache)
+	cands := engineCandidates(s, accounts, cache, opts.provider())
 	if !anyReading(cands) {
 		// No evidence at all. Moving here would not be a choice, it would be a
 		// reshuffle.
@@ -213,10 +232,21 @@ func Evaluate(s *store.Store, opts EvalOptions) (Evaluation, error) {
 }
 
 // engineCandidates projects the store and the on-disk usage cache onto what the
-// ranking takes.
-func engineCandidates(s *store.Store, accounts []store.Account, c *usage.Cache) []strategy.Candidate {
+// ranking takes, for ONE provider.
+//
+// The provider skip is stated here even though Installable already drops every
+// Codex account -- a Codex blob holds no claudeAiOauth and no api-key record,
+// so it is not installable. That is the reason to say it anyway: the skip that
+// happens to work is a coincidence of what a Codex credential looks like
+// today, and the rule is about which pool an account belongs to. It is also
+// why the Codex lane has its own candidate builder rather than reusing this
+// one with a different provider -- Installable would empty its pool.
+func engineCandidates(s *store.Store, accounts []store.Account, c *usage.Cache, p provider.ID) []strategy.Candidate {
 	out := make([]strategy.Candidate, 0, len(accounts))
 	for _, a := range accounts {
+		if a.Provider != p {
+			continue
+		}
 		if !Installable(s.Credentials(a.UUID)) {
 			continue
 		}
