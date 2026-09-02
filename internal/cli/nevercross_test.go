@@ -2,8 +2,10 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
@@ -73,5 +75,41 @@ func TestActiveAndActiveUUIDNameOnlyTheClaudeLogin(t *testing.T) {
 	}
 	if payload.ActiveUUID != "u-c2" {
 		t.Errorf("activeUuid = %q, want the Claude login u-c2", payload.ActiveUUID)
+	}
+}
+
+// `ccdad run` execs Claude Code, and a Codex account's blob carries no
+// TokenRecord -- so refuseUnscopedRun and refuseDisplacedAuth both read it as
+// an OAuth login and let it through, and the launch would write a Codex
+// refresh token into a session directory in Claude Code's own credentials
+// format. That directory is scoped to the session rather than the machine's
+// own login, so it is not a cross into the live login, but it is still a
+// Codex secret sitting in a shape and a place Claude Code owns and rewrites.
+//
+// The refusal has to land before the blob is even read, so the assertion
+// below is the shape TestRunRefusesBeforeItCreatesASessionDirectory pins for
+// every other run refusal: no sessions/ container at all.
+func TestRunRefusesACodexAccountRatherThanWritingClaudeCodeCredentials(t *testing.T) {
+	isolate(t)
+	seedCodexAccount(t, "u-x1", "x-one@example.com")
+	stub := stubClaude(t, ExitOK)
+
+	code, _, errOut, top := runRoot(t, "run", "1")
+	if code != ExitUsage {
+		t.Fatalf("exit = %d (%s / %s), want %d", code, errOut, top, ExitUsage)
+	}
+	message := errOut + top
+	if !strings.Contains(message, "x-one@example.com") {
+		t.Errorf("the refusal does not name the account:\n%s", message)
+	}
+	if !strings.Contains(message, "proxy") {
+		t.Errorf("the refusal does not say a Codex account is served through the proxy:\n%s", message)
+	}
+	if stub.started {
+		t.Error("claude was started")
+	}
+	container := filepath.Join(mustPath(ccpath.StoreHome()), SessionsDirName)
+	if _, err := os.Stat(container); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("os.Stat(%s) = %v, want no session container at all", container, err)
 	}
 }

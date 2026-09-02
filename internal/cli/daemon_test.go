@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 )
 
@@ -423,6 +424,42 @@ func TestStatusThenStartStartsOneWhenThereIsNone(t *testing.T) {
 	}
 	if f.spawns != 1 {
 		t.Fatalf("spawns = %d, want exactly 1", f.spawns)
+	}
+}
+
+// A store this build cannot use -- a version-2 document whose rows lost their
+// provider key, which is what a ccdad that predates Codex support leaves
+// behind -- used to run `daemon start` all the way through spawnDaemon and
+// waitForSingleton, and only fail after the full ten-second wait with "a
+// daemon was started but had not taken the singleton": true, but not the
+// reason, which the detached child had already written to daemon.log the
+// moment it read the same document. This pins the pre-check that catches it
+// before the spawn, the way refuseAClaimedCredentialHome already does for a
+// claimed credential home.
+func TestDaemonStartRefusesAStoreThisBuildCannotUseWithoutTheTenSecondWait(t *testing.T) {
+	isolate(t)
+	f := stubDaemonWorld(t, &fakeDaemon{})
+	root := mustPath(ccpath.StoreHome())
+	seedCodexAccount(t, "u-x", "c@example.com")
+	// Exactly what a build that does not know the provider field writes back.
+	rewritten := "version = 2\n\n[[accounts]]\nuuid = \"u-x\"\nemail = \"c@example.com\"\n" +
+		"kind = \"subscription\"\nidx = 1\nadded_at = 2026-09-02T00:00:00Z\n"
+	if err := os.WriteFile(filepath.Join(root, "accounts.toml"), []byte(rewritten), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	code, _, stderr, _ := runRoot(t, "daemon", "start")
+	if code == ExitOK {
+		t.Fatalf("daemon start exited 0 over a store this build cannot use:\n%s", stderr)
+	}
+	// The decisive signal: spawnDaemon (and the ten-second wait that follows
+	// it) must never be reached. A version that timed out and THEN reported
+	// the right words would still pass a text-only assertion.
+	if f.spawns != 0 {
+		t.Fatalf("a daemon was spawned over a store this build cannot use (%d spawns):\n%s", f.spawns, stderr)
+	}
+	if !strings.Contains(stderr, "Not starting") || !strings.Contains(stderr, "provider") {
+		t.Fatalf("the refusal does not say what is wrong:\n%s", stderr)
 	}
 }
 

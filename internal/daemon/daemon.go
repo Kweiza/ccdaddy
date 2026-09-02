@@ -183,14 +183,16 @@ func Run(ctx context.Context, o Options) (err error) {
 	if cerr := log.CaptureStderr(); cerr != nil {
 		log.Printf("stderr stays where it was: %v", cerr)
 	}
-	log.Printf("ccdad daemon up, pid %d", os.Getpid())
-
 	// The store's version rule is decided ONCE, here, and never inside a tick.
 	// A document this build cannot read -- a version-2 header over rows with no
 	// provider, which is what a ccdad that predates Codex support leaves behind
 	// -- is a fact about the machine, and re-deciding it on a cadence would
 	// turn one refusal into a log line per tick. Nothing is created: a store
 	// that is not there is not a store with a bad version.
+	//
+	// Ahead of the "up" line below on purpose: a start this build refuses logs
+	// "not starting" and stops there, rather than logging "up" for a daemon
+	// that unwinds on the very next statement.
 	root, rerr := ccpath.StoreHome()
 	if rerr != nil {
 		return rerr
@@ -199,6 +201,8 @@ func Run(ctx context.Context, o Options) (err error) {
 		log.Printf("not starting: %v", verr)
 		return verr
 	}
+
+	log.Printf("ccdad daemon up, pid %d", os.Getpid())
 
 	claim, claimErr := credhome.Acquire()
 	switch {

@@ -11,8 +11,10 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
+	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/credhome"
 	"github.com/Kweiza/ccdaddy/internal/daemon"
+	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/theme"
 	"github.com/Kweiza/ccdaddy/internal/view"
 	"github.com/Kweiza/ccdaddy/internal/winerr"
@@ -372,6 +374,9 @@ func startDaemon(cmd *cobra.Command) error { return startDaemonFrom(cmd, "") }
 // binary and restarts from that exact path rather than from whatever
 // os.Executable resolves to a moment later.
 func startDaemonFrom(cmd *cobra.Command, exe string) error {
+	if err := refuseAStoreThisBuildCannotUse(cmd); err != nil {
+		return err
+	}
 	if err := refuseAClaimedCredentialHome(cmd); err != nil {
 		return err
 	}
@@ -391,6 +396,42 @@ func startDaemonFrom(cmd *cobra.Command, exe string) error {
 	}
 	fmt.Fprintf(cmd.ErrOrStderr(), "Started the ccdad daemon%s.\n", runningPIDSuffix())
 	return nil
+}
+
+// storeVersionCheck is CheckVersionAt, as a seam for the same reason
+// credentialHomeClaim below is one.
+var storeVersionCheck = store.CheckVersionAt
+
+// refuseAStoreThisBuildCannotUse stops a start that would immediately be
+// refused by the child, and it has to happen HERE for the reason
+// refuseAClaimedCredentialHome below does: Spawn detaches the child, so its
+// own refusal reaches daemon.log and nowhere else. Without this, `daemon
+// start` runs all the way through the spawn and the ten-second singleton wait,
+// then reports "a daemon was started but had not taken the singleton after
+// 10s" — true, but not the reason, which the child had already written to
+// daemon.log the moment it read the document.
+//
+// The document is the one daemon.Run itself refuses at start: a version-2
+// header over rows with no provider, which is what a ccdad that predates
+// Codex support leaves behind after reading a version-2 document and writing
+// it back without a key it does not know. Narrowed to ErrProviderMissing to
+// match daemon.Run's own narrowing — a document this process cannot open or
+// parse describes a damaged machine, not an unsupported one, and the daemon
+// runs through those rather than refusing at start, so this pre-check must
+// not refuse a start the child itself would have tolerated.
+func refuseAStoreThisBuildCannotUse(cmd *cobra.Command) error {
+	root, err := ccpath.StoreHome()
+	if err != nil {
+		// Left for the spawn to report: it resolves the identical path and
+		// fails the identical way, with the identical message.
+		return nil
+	}
+	verr := storeVersionCheck(root)
+	if !errors.Is(verr, store.ErrProviderMissing) {
+		return nil
+	}
+	fmt.Fprintf(cmd.ErrOrStderr(), "Not starting: %v.\n", verr)
+	return WithCode(errSilent, ExitBlocked)
 }
 
 // credentialHomeClaim is the probe, as a seam, so a test can describe another
