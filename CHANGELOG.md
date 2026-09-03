@@ -16,6 +16,40 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-09-04
+
+The release that stops throwing away quota you have already paid for, and gives
+ccdad a second provider.
+
+An account carries more than one weekly cap. Alongside the all-model week there
+is one scoped to a single model family, and when that one is gone the account is
+not gone — every other model still runs against the week that is left. ccdad read
+it the other way. `OutOfQuota` took the least room across every window, so a
+spent `weekly_scoped:model:Fable` reported an account with nothing in it at all;
+the ranking filed it behind everything else, and the anti-flap gate, which waves
+every margin through to get off an empty account, stopped holding. On a fleet
+whose scoped week was gone across the board that meant a fifth of every account's
+week never spent, and a login that ping-ponged between two accounts every two
+minutes for half an hour because each in turn read as empty. The empty test now
+asks the narrower question it was always named for — is anything left that ANY
+model could spend — while `Spent` keeps reading the old figure, so a blown
+sub-cap still moves the engine off in good time and is still the window the
+account is reported against.
+
+`ccdad manual` is the mode that was missing. Holding ccdad to watching used to
+mean `ccdad disable` once per account, which reached the same silence by emptying
+the ranking pool and took the probes, the forecast, the plain `ccdad list` table
+and `ccdad auto --once`'s exit contract with it — and re-armed itself the moment
+an account was added. One key now does it, and costs none of that.
+
+And ccdad is no longer a Claude-only program. An account says which provider it
+belongs to, everywhere, always; a Codex account can be added by device code, has
+its quota read from the free usage endpoint rather than bought with an inference
+call, and is refused by name anywhere a Claude switch would have tried to install
+it. `accounts.toml` and `ccdad export` both learned a second schema version, and
+both stay readable by builds that came before wherever no Codex account is in
+them.
+
 ### Added
 
 - **`ccdad manual on|off|status` watches quota without ever switching.** The
@@ -2809,7 +2843,8 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.9.10...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/Kweiza/ccdaddy/compare/v0.9.10...v0.10.0
 [0.9.10]: https://github.com/Kweiza/ccdaddy/compare/v0.9.9...v0.9.10
 [0.9.9]: https://github.com/Kweiza/ccdaddy/compare/v0.9.8...v0.9.9
 [0.9.8]: https://github.com/Kweiza/ccdaddy/compare/v0.9.7...v0.9.8
