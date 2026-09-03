@@ -234,21 +234,40 @@ func providerOfRef(ref string) provider.ID {
 // repeat of it: what this message names cannot be supplied in a tool call. The
 // only way to act on it is at a shell or in an editor, and whoever is there can
 // run `ccdad switch` directly instead.
-func refusedWithoutAConfirm() error {
+// unchangedBy names what a refused switch left alone, in the words that
+// provider's switch would have used. Saying "the live login is unchanged"
+// after refusing a codex repoint is true but answers a question nobody asked.
+func unchangedBy(p provider.ID) string {
+	if p == provider.Codex {
+		return "codex still serves the account it was serving"
+	}
+	return "the live login is unchanged"
+}
+
+func refusedWithoutAConfirm(p provider.ID) error {
+	// The first clause names what would actually change, and the two providers
+	// change different things: a Claude switch rewrites the live login, a codex
+	// switch moves the pointer its proxy serves from and rewrites nothing. A
+	// refusal that named the wrong one would describe a risk the caller does
+	// not have, and this message exists to be acted on rather than skimmed.
+	at := "rewrite the live Claude Code login"
+	if p == provider.Codex {
+		at = "repoint the account its local codex proxy serves"
+	}
 	return fmt.Errorf(
-		"ccdad will not rewrite the live Claude Code login without asking the person at the keyboard, "+
+		"ccdad will not %s without asking the person at the keyboard, "+
 			"and this client cannot carry the question: it declared no support for form elicitation when "+
 			"it connected. Nothing was switched.\n\n"+
 			"The person at the keyboard can allow it anyway, in either of two places this tool call cannot "+
 			"reach: `ccdad config set %s true`, or %s=true in the environment of the process running "+
 			"`ccdad mcp`. Otherwise `ccdad switch <account>` at a terminal does the same thing.",
-		config.KeyMCPSwitchWithoutElicitation, EnvSwitchWithoutElicitation)
+		at, config.KeyMCPSwitchWithoutElicitation, EnvSwitchWithoutElicitation)
 }
 
 func addSwitchTool(srv *mcp.Server, e view.Exec) error {
 	mcp.AddTool(srv, &mcp.Tool{
-		Name:  "switch",
-		Title: "Make an account the live Claude Code login",
+		Name:        "switch",
+		Title:       "Make an account the live Claude Code login",
 		Description: switchToolDescription + autoStarts,
 		Annotations: credentialMutator(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in switchIn) (*mcp.CallToolResult, ActionOut, error) {
@@ -263,8 +282,8 @@ func addSwitchTool(srv *mcp.Server, e view.Exec) error {
 			if !accepted {
 				return nil, ActionOut{}, fmt.Errorf(
 					"the person at the keyboard did not confirm the switch to %q, so nothing was "+
-						"switched and the live login is unchanged. This is their answer rather than "+
-						"a failure: do not retry it.", in.Account)
+						"switched and %s. This is their answer rather than "+
+						"a failure: do not retry it.", in.Account, unchangedBy(providerOfRef(in.Account)))
 			}
 		case canAskForAForm(req.Session):
 			// RequestState is deliberately empty, and the thing it could have
@@ -288,7 +307,7 @@ func addSwitchTool(srv *mcp.Server, e view.Exec) error {
 			// that has no way to put the question in front of them. Nothing to
 			// do here: the switch below is the answer.
 		default:
-			return nil, ActionOut{}, refusedWithoutAConfirm()
+			return nil, ActionOut{}, refusedWithoutAConfirm(providerOfRef(in.Account))
 		}
 
 		out, isErr := actionResult(e, "switch", in.Account)

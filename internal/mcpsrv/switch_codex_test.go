@@ -98,3 +98,38 @@ func writeAccounts(t *testing.T, root, body string) {
 		t.Fatal(err)
 	}
 }
+
+// The two REFUSALS need the same split the two consents got. A client that
+// cannot carry a form gets told what ccdad declined to do, and for a codex
+// account "rewrite the live Claude Code login" names a risk the caller never
+// had -- the repoint touches no credential on this machine. Both messages were
+// Claude-only until this pair pinned them.
+func TestTheRefusalNamesWhatEachProviderWouldActuallyChange(t *testing.T) {
+	claude := refusedWithoutAConfirm(provider.Claude).Error()
+	if !strings.Contains(claude, "rewrite the live Claude Code login") {
+		t.Errorf("the Claude refusal stopped naming the login it protects:\n%s", claude)
+	}
+	if strings.Contains(claude, "codex") {
+		t.Errorf("the Claude refusal mentions codex:\n%s", claude)
+	}
+
+	codex := refusedWithoutAConfirm(provider.Codex).Error()
+	if !strings.Contains(codex, "repoint the account its local codex proxy serves") {
+		t.Errorf("the codex refusal does not say what it declined to do:\n%s", codex)
+	}
+	if strings.Contains(codex, "rewrite the live Claude Code login") {
+		t.Errorf("the codex refusal claims a repoint rewrites the Claude login:\n%s", codex)
+	}
+}
+
+// And the declined-confirm sentence, which is the softer half of the same case:
+// the person said no, and what ccdad tells the model it left alone must be the
+// thing that provider's switch would have moved.
+func TestTheDeclinedSentenceNamesWhatEachProviderLeftAlone(t *testing.T) {
+	if got := unchangedBy(provider.Claude); got != "the live login is unchanged" {
+		t.Errorf("unchangedBy(claude) = %q", got)
+	}
+	if got := unchangedBy(provider.Codex); !strings.Contains(got, "codex still serves") {
+		t.Errorf("unchangedBy(codex) = %q; it should name the pointer, not the login", got)
+	}
+}
