@@ -206,6 +206,13 @@ func TestEvaluateCodexOnAMachineWithNoCodexAccounts(t *testing.T) {
 	if ev.Decided {
 		t.Fatalf("Decided = true with no codex accounts to decide about")
 	}
+	// The asymmetry with the no-readings return is load-bearing and it is the
+	// only signal there is: having no codex accounts and having some that
+	// nobody has polled yet are different situations, they earn different
+	// advice, and NoReadings staying false here is what tells them apart.
+	if ev.NoReadings {
+		t.Fatalf("NoReadings = true with no codex accounts; that is the flag that means 'accounts exist but nothing was polled'")
+	}
 }
 
 func findRanked(res strategy.Result, uuid string) (strategy.Ranked, bool) {
