@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/daemon"
+	"github.com/Kweiza/ccdaddy/internal/provider"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/usage"
@@ -273,13 +274,27 @@ func (r Row) ListLabel() string {
 	return fmt.Sprintf("%s (%s)", r.Account.Email, r.Account.Alias)
 }
 
-// TypeLabel has no caller inside package cli today, and never will: both
-// `status`'s renderStatus and `list` pass r.Account.Kind straight to a `%s`
-// verb and let Stringer run, since that produces the identical bytes with one
-// less method call in the diff. It exists for a renderer that cannot lean on
-// Stringer -- a terminal UI measuring a column's width needs an actual string
-// to measure, not a value it can only format and then measure the result of.
-func (r Row) TypeLabel() string { return r.Account.Kind.String() }
+// TypeLabel is what the TYPE column says about an account.
+//
+// It now has three callers rather than one, and the reason is the reason it
+// stopped being derivable from Kind alone. Every ChatGPT plan is a
+// subscription, so a codex row rendered from Kind would say "subscription" --
+// true, and useless: it would be the word on every codex row and on most of the
+// Claude rows beside them, distinguishing nothing. What a reader needs in that
+// column is which side of the machine the row belongs to, because that is what
+// decides which command moves it.
+//
+// So `list`, `status` and the dashboard all call this rather than formatting
+// Kind themselves. Three renderers formatting one value three ways is the exact
+// "one value, two spellings" failure package view exists to remove -- and here
+// it would have shown as two tables calling an account a subscription while the
+// third called it codex.
+func (r Row) TypeLabel() string {
+	if r.Account.Provider == provider.Codex {
+		return "codex"
+	}
+	return r.Account.Kind.String()
+}
 
 func (r Row) TierLabel() string {
 	if r.Account.Tier == "" {

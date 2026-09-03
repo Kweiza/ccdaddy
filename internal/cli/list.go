@@ -221,7 +221,7 @@ func newListCmd() *cobra.Command {
 				// suffix that belongs to one account reads better beside that
 				// account's own reset than at a fixed offset far to its right.
 				cells = append(cells, []string{
-					fmt.Sprintf("%s %d", r.Marker(), a.Idx), r.ListLabel(), a.Kind.String(),
+					fmt.Sprintf("%s %d", r.Marker(), a.Idx), r.ListLabel(), r.TypeLabel(),
 					r.TierLabel(), r.LeftLabel(), r.ResetsLabel(now) + suffix,
 				})
 			}

@@ -441,7 +441,7 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 		// account reads better beside that account's own figure than at a
 		// fixed offset far to its right.
 		cells = append(cells, []string{
-			fmt.Sprintf("%s %d", r.Marker(), r.Account.Idx), r.StatusLabel(), r.Account.Kind.String(),
+			fmt.Sprintf("%s %d", r.Marker(), r.Account.Idx), r.StatusLabel(), r.TypeLabel(),
 			r.UsedLabel(), r.WindowLabel(), r.ResetsLabel(now), r.PaceLabel(),
 			r.AgeLabel(now) + r.StatusFlags(),
 		})
