@@ -114,6 +114,24 @@ func TestAnUnreadRowSaysNothing(t *testing.T) {
 	}
 }
 
+// The Known clause on its own. The two cases above cannot see it: a bare Row
+// has no floor either, so dropping Known leaves them answering empty for the
+// other reason. This is the shape that tells them apart -- a floor and a
+// binding window recorded on a headroom nothing could read, which is what a
+// zero value carrying names would look like. Without the clause the row prints
+// a note built from an unknown reading.
+func TestAnUnknownHeadroomSaysNothingEvenCarryingTwoWindowNames(t *testing.T) {
+	r := Row{Headroom: strategy.Headroom{
+		Known:    false,
+		HasFloor: true,
+		Floor:    usage.WindowSevenDay,
+		Binding:  usage.WindowFiveHour,
+	}}
+	if got := r.SplitNote(); got != "" {
+		t.Errorf("SplitNote() on an unread headroom = %q, want empty", got)
+	}
+}
+
 // ---- the width cut ----------------------------------------------------------
 
 func TestWindowLabelShortCutsOnlyTheConstantPrefix(t *testing.T) {
