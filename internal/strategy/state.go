@@ -13,6 +13,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/cclock"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/oauth"
+	"github.com/Kweiza/ccdaddy/internal/provider"
 )
 
 // The engine's anti-flap state, on disk.
@@ -96,6 +97,16 @@ type stateFile struct {
 	// LastSwitchTo is the account it moved to, kept so `ccdad status` can say
 	// what the cooldown is protecting.
 	LastSwitchTo string `json:"last_switch_to,omitempty"`
+	// The Codex lane's own pair. It is a SECOND pair rather than a second
+	// document because the anti-flap state is one file with one lock, and it is
+	// not a shared pair because the two lanes move for different reasons: a
+	// Claude rotation says nothing about which account should serve codex, and
+	// one stamp would have each lane serving the other's cooldown -- a Codex
+	// repoint holding Claude Code's login still five minutes later, and the
+	// reverse. Absent in a document written before this build, which reads as
+	// "the Codex lane has never moved", which is true of such a machine.
+	CodexLastSwitchAt time.Time `json:"codex_last_switch_at,omitempty"`
+	CodexLastSwitchTo string    `json:"codex_last_switch_to,omitempty"`
 	// Quarantine is keyed by account UUID and never by idx.
 	// store.sortAndReindex recompacts idx on every removal, so a file keyed on
 	// it would quarantine a different account after any `ccdad remove`.
@@ -131,6 +142,43 @@ func (s *State) LastSwitch() (time.Time, string) {
 func (s *State) RecordSwitch(uuid string, at time.Time) {
 	s.data.LastSwitchAt = at
 	s.data.LastSwitchTo = uuid
+}
+
+// CodexLastSwitch is when the Codex lane last repointed the serving account and
+// where to.
+func (s *State) CodexLastSwitch() (time.Time, string) {
+	return s.data.CodexLastSwitchAt, s.data.CodexLastSwitchTo
+}
+
+// RecordCodexSwitch stamps a completed Codex repoint. The rule RecordSwitch
+// states applies here unchanged: the caller records it AFTER the pointer was
+// written, because a cooldown earned by a repoint that failed would hold the
+// lane off its own retry.
+func (s *State) RecordCodexSwitch(uuid string, at time.Time) {
+	s.data.CodexLastSwitchAt = at
+	s.data.CodexLastSwitchTo = uuid
+}
+
+// ForProvider is this state as one lane sees it.
+//
+// The anti-flap gates read LastSwitch, and there is exactly one implementation
+// of them. Rather than give the Codex lane a second cooldown gate that would be
+// free to drift from the first, the Codex view PRESENTS the codex pair under
+// the name the gates already read.
+//
+// It is a shallow copy on purpose, and the quarantine map is therefore SHARED.
+// This is a read view for a decision, not a handle to write through: the two
+// writers of this document both go through WithState, which loads its own
+// State. A caller that mutated a quarantine on the returned value would be
+// mutating the original's map, which is why nothing does.
+func (s *State) ForProvider(p provider.ID) *State {
+	if p != provider.Codex {
+		return s
+	}
+	out := &State{data: s.data, loadErr: s.loadErr}
+	out.data.LastSwitchAt = s.data.CodexLastSwitchAt
+	out.data.LastSwitchTo = s.data.CodexLastSwitchTo
+	return out
 }
 
 // CooldownRemaining is how long the anti-flap cooldown still has to run, and
@@ -261,6 +309,8 @@ func LoadState() (*State, error) {
 	}
 	s.data.LastSwitchAt = parsed.LastSwitchAt
 	s.data.LastSwitchTo = parsed.LastSwitchTo
+	s.data.CodexLastSwitchAt = parsed.CodexLastSwitchAt
+	s.data.CodexLastSwitchTo = parsed.CodexLastSwitchTo
 	s.data.Version = parsed.Version
 	return s, nil
 }
@@ -389,4 +439,31 @@ func ClassifyRefresh(err error) RefreshOutcome {
 		return RefreshUpstream
 	}
 	return RefreshUnknown
+}
+
+// codexStampTimeout bounds the wait for the state lock when a Codex repoint
+// stamps its cooldown. It is the same five seconds internal/switcher waits for
+// the Claude stamp: the write is sub-second, so anything longer is a lock a
+// crashed process left behind, and cclock's stale rule is what clears that.
+const codexStampTimeout = 5 * time.Second
+
+// RecordCodexSwitch stamps the Codex anti-flap cooldown after a repoint has
+// succeeded. It is the sibling of switcher.RecordSwitch and it lives HERE
+// rather than there because internal/codexswitch is the only caller and that
+// package must not be able to reach internal/switcher at all -- the import gate
+// on its dependency closure is what makes "a Codex repoint can never install a
+// Claude credential" a property rather than a promise.
+//
+// An EXPLICIT `ccdad switch <codex>` stamps it too, for the reason the Claude
+// side does: the user has just chosen an account, and a lane evaluating ten
+// seconds later must not immediately override the choice.
+func RecordCodexSwitch(uuid string) error {
+	err := WithState(codexStampTimeout, func(st *State) error {
+		st.RecordCodexSwitch(uuid, time.Now())
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("the codex auto-switch cooldown could not be recorded: %w", err)
+	}
+	return nil
 }
