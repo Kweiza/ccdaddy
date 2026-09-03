@@ -9,6 +9,7 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/identity"
+	"github.com/Kweiza/ccdaddy/internal/provider"
 	"github.com/Kweiza/ccdaddy/internal/store"
 )
 
@@ -17,8 +18,8 @@ import (
 // still attributed correctly.
 func TestAttributeMatchesOnRefreshToken(t *testing.T) {
 	accounts := []store.Account{
-		{UUID: "u-1", Email: "a@example.com", Idx: 1},
-		{UUID: "u-2", Email: "b@example.com", Idx: 2},
+		{Provider: provider.Claude, UUID: "u-1", Email: "a@example.com", Idx: 1},
+		{Provider: provider.Claude, UUID: "u-2", Email: "b@example.com", Idx: 2},
 	}
 	stored := map[string]cclink.Blob{
 		"u-1": oauthBlob("RT-ONE"),
@@ -39,7 +40,7 @@ func TestAttributeMatchesOnRefreshToken(t *testing.T) {
 }
 
 func TestAttributeReportsNoMatch(t *testing.T) {
-	accounts := []store.Account{{UUID: "u-1", Idx: 1}}
+	accounts := []store.Account{{Provider: provider.Claude, UUID: "u-1", Idx: 1}}
 	stored := map[string]cclink.Blob{"u-1": oauthBlob("RT-ONE")}
 	live := cclink.Blob{"claudeAiOauth": json.RawMessage(`{"refreshToken":"SOMETHING-ELSE"}`)}
 
@@ -55,7 +56,7 @@ func TestAttributeReportsNoMatch(t *testing.T) {
 // compare equal, and a machine where Claude Code has never logged in gets
 // confidently attributed to a token account it is not using.
 func TestAttributeEmptyLiveIsNoMatch(t *testing.T) {
-	accounts := []store.Account{{UUID: "apikey-abc", Idx: 1}}
+	accounts := []store.Account{{Provider: provider.Claude, UUID: "apikey-abc", Idx: 1}}
 	tokenAccount := cclink.Blob{cclink.TokenKey: json.RawMessage(
 		`{"kind":"api-key","token":"sk-ant-api03-x"}`)}
 
@@ -70,7 +71,7 @@ func TestAttributeEmptyLiveIsNoMatch(t *testing.T) {
 // attributed to a token account just because that account cannot identify
 // itself out of the credentials file.
 func TestAttributeDoesNotMatchATokenAccountFromTheLiveFile(t *testing.T) {
-	accounts := []store.Account{{UUID: "apikey-abc", Idx: 1}}
+	accounts := []store.Account{{Provider: provider.Claude, UUID: "apikey-abc", Idx: 1}}
 	tokenAccount := cclink.Blob{cclink.TokenKey: json.RawMessage(
 		`{"kind":"api-key","token":"sk-ant-api03-x"}`)}
 	live := cclink.Blob{"claudeAiOauth": json.RawMessage(`{"refreshToken":"RT-SOMEONE"}`)}
@@ -85,7 +86,7 @@ func TestAttributeDoesNotMatchATokenAccountFromTheLiveFile(t *testing.T) {
 // The prefixes are what stop an access token stored by one account from
 // colliding with a refresh token stored by another.
 func TestAttributeDoesNotCrossMatchTokenKinds(t *testing.T) {
-	accounts := []store.Account{{UUID: "u-access", Idx: 1}}
+	accounts := []store.Account{{Provider: provider.Claude, UUID: "u-access", Idx: 1}}
 	stored := map[string]cclink.Blob{
 		"u-access": {"claudeAiOauth": json.RawMessage(`{"accessToken":"SHARED-VALUE"}`)},
 	}
@@ -113,8 +114,8 @@ func apiKeyCreds(key string) cclink.Blob {
 // someone to look at the wrong account's quota.
 func TestAttributePrefersTheLoginOverAStoredAPIKey(t *testing.T) {
 	accounts := []store.Account{
-		{UUID: "u-login", Email: "login@example.com", Idx: 1},
-		{UUID: "u-key", Email: "key@example.com", Idx: 2},
+		{Provider: provider.Claude, UUID: "u-login", Email: "login@example.com", Idx: 1},
+		{Provider: provider.Claude, UUID: "u-key", Email: "key@example.com", Idx: 2},
 	}
 	stored := map[string]cclink.Blob{
 		"u-login": oauthBlob("RT-ONE"),
@@ -132,7 +133,7 @@ func TestAttributePrefersTheLoginOverAStoredAPIKey(t *testing.T) {
 // With no login left, the stored key IS the credential -- which is exactly the
 // state `ccdad switch <api-key account>` creates.
 func TestAttributeUsesTheStoredAPIKeyWhenThereIsNoLogin(t *testing.T) {
-	accounts := []store.Account{{UUID: "u-key", Email: "key@example.com", Idx: 1}}
+	accounts := []store.Account{{Provider: provider.Claude, UUID: "u-key", Email: "key@example.com", Idx: 1}}
 	stored := map[string]cclink.Blob{"u-key": apiKeyCreds("sk-ant-api03-STORED")}
 	env := identity.APIKeyEnvironment{Interactive: true, ManagedKey: "sk-ant-api03-STORED"}
 
@@ -148,8 +149,8 @@ func TestAttributeUsesTheStoredAPIKeyWhenThereIsNoLogin(t *testing.T) {
 func TestAttributeEnvAPIKeyDisplacesTheLogin(t *testing.T) {
 	const key = "sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUV"
 	accounts := []store.Account{
-		{UUID: "u-login", Email: "login@example.com", Idx: 1},
-		{UUID: "u-key", Email: "key@example.com", Idx: 2},
+		{Provider: provider.Claude, UUID: "u-login", Email: "login@example.com", Idx: 1},
+		{Provider: provider.Claude, UUID: "u-key", Email: "key@example.com", Idx: 2},
 	}
 	stored := map[string]cclink.Blob{
 		"u-login": oauthBlob("RT-ONE"),
@@ -186,7 +187,7 @@ func TestAttributeEnvAPIKeyDisplacesTheLogin(t *testing.T) {
 // "not managed" alone would send someone looking at their accounts when the
 // cause is a settings key.
 func TestAttributeReportsAnApiKeyHelperRatherThanGuessing(t *testing.T) {
-	accounts := []store.Account{{UUID: "u-login", Email: "login@example.com", Idx: 1}}
+	accounts := []store.Account{{Provider: provider.Claude, UUID: "u-login", Email: "login@example.com", Idx: 1}}
 	stored := map[string]cclink.Blob{"u-login": oauthBlob("RT-ONE")}
 	live := liveLogin("RT-ONE")
 
@@ -213,7 +214,7 @@ func lookupFrom(stored map[string]cclink.Blob) func(string) (cclink.Blob, error)
 // mistake this whole model exists to avoid.
 func TestAttributeNamesTheMechanismWhenItCannotNameTheAccount(t *testing.T) {
 	isolate(t)
-	accounts := []store.Account{{UUID: "u-login", Email: "login@example.com", Idx: 1}}
+	accounts := []store.Account{{Provider: provider.Claude, UUID: "u-login", Email: "login@example.com", Idx: 1}}
 	stored := map[string]cclink.Blob{"u-login": oauthBlob("RT-ONE")}
 	live := liveLogin("RT-ONE")
 	writeHostToken(t, "sk-ant-oat-INJECTED")
@@ -233,7 +234,7 @@ func TestAttributeNamesTheMechanismWhenItCannotNameTheAccount(t *testing.T) {
 // "which account is this" has no honest answer, and a guess is worst here.
 func TestAttributeDeclinesOnABgAuthSnapshot(t *testing.T) {
 	isolate(t)
-	accounts := []store.Account{{UUID: "u-login", Email: "login@example.com", Idx: 1}}
+	accounts := []store.Account{{Provider: provider.Claude, UUID: "u-login", Email: "login@example.com", Idx: 1}}
 	stored := map[string]cclink.Blob{"u-login": oauthBlob("RT-ONE")}
 	snapshot := filepath.Join(t.TempDir(), "snap.json")
 	if err := os.WriteFile(snapshot, []byte(`{"accessToken":"x"}`), 0o600); err != nil {
@@ -307,7 +308,7 @@ func TestUnattendedSwitchStandsDownForAHostInjectedToken(t *testing.T) {
 // item was what had answered. Which store it is was the entire subject of the
 // bug that sentence was printed under.
 func TestAttributeLoginNamesTheStoreTheLoginCameFrom(t *testing.T) {
-	accounts := []store.Account{{UUID: "u-login", Email: "login@example.com", Idx: 1}}
+	accounts := []store.Account{{Provider: provider.Claude, UUID: "u-login", Email: "login@example.com", Idx: 1}}
 	stored := map[string]cclink.Blob{"u-login": oauthBlob("RT-ONE")}
 	live := liveLogin("RT-ONE")
 
@@ -324,7 +325,7 @@ func TestAttributeLoginNamesTheStoreTheLoginCameFrom(t *testing.T) {
 // And the file, when the file is what answered -- the same value, arrived at by
 // reading rather than by assuming.
 func TestAttributeLoginNamesTheFileWhenTheFileAnswered(t *testing.T) {
-	accounts := []store.Account{{UUID: "u-login", Email: "login@example.com", Idx: 1}}
+	accounts := []store.Account{{Provider: provider.Claude, UUID: "u-login", Email: "login@example.com", Idx: 1}}
 	stored := map[string]cclink.Blob{"u-login": oauthBlob("RT-ONE")}
 	live := liveLogin("RT-ONE")
 

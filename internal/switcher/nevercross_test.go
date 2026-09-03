@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
+	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/provider"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/usage"
@@ -148,5 +149,88 @@ func TestLiveStateOfNeverAttributesACodexAccount(t *testing.T) {
 	got, state := LiveStateOf(liveLogin("RT-"+claude.UUID), accounts, s.Credentials)
 	if got.Provider == provider.Codex {
 		t.Fatalf("LiveStateOf attributed a live Claude login to the Codex account %+v (state=%v)", got, state)
+	}
+}
+
+// seedMismatchedRow stores a row whose Provider and credential blob DISAGREE --
+// Provider: codex alongside a blob shaped like a Claude credential. seedCodex
+// and seedCodexAccount can never construct this: both only ever write a
+// codexOAuth-only blob, so a test built on either helper checks a shape the
+// three guards below were never at risk from.
+//
+// The row is reachable today, not hypothetical: `ccdad import`
+// (internal/cli/import.go) trusts row.Provider unconditionally, cclink.Extract
+// copies a claudeAiOauth or ccdadToken blob through regardless of provider, and
+// store.add never cross-checks a blob's shape against the provider field --
+// s.Add here is the same call import.go makes, not a shortcut around it.
+func seedMismatchedRow(t *testing.T, uuid, email string, blob cclink.Blob) store.Account {
+	t.Helper()
+	s := openStore(t)
+	a := store.Account{UUID: uuid, Email: email, Provider: provider.Codex}
+	if err := s.Add(a, blob); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := s.Get(uuid)
+	if !ok {
+		t.Fatalf("seedMismatchedRow: %s did not land in the store", uuid)
+	}
+	return got
+}
+
+// THE THREE GUARDS. Each of LiveStateOf, AttributeLogin's OAuthTokenEnv branch
+// and APIKeyOwner used to match a stored row by credential SHAPE alone, and
+// none of them checked a.Provider. A row seedMismatchedRow builds defeats every
+// one of them if the provider check is missing, however TestLiveStateOfNever-
+// AttributesACodexAccount above stays green throughout -- its seedCodex fixture
+// cannot construct the shape that trips these.
+
+// LiveStateOf: a Codex row carrying a claudeAiOauth blob must not be attributed
+// to a live Claude login that matches it.
+func TestLiveStateOfNeverAttributesAMismatchedCodexRow(t *testing.T) {
+	isolate(t)
+	seedMismatchedRow(t, "cx-evil", "evil@example.com", oauthBlob("RT-cx-evil"))
+
+	s := openStore(t)
+	got, state := LiveStateOf(liveLogin("RT-cx-evil"), s.Accounts(), s.Credentials)
+	if state == LiveManaged {
+		t.Fatalf("LiveStateOf attributed a live Claude login to %+v, whose Provider is codex (state=%v)", got, state)
+	}
+}
+
+// AttributeLogin's OAuthTokenEnv branch: a Codex row carrying a TokenKey record
+// whose Token matches CLAUDE_CODE_OAUTH_TOKEN must not be named as the account
+// behind it.
+func TestAttributeLoginOAuthTokenEnvNeverAttributesAMismatchedCodexRow(t *testing.T) {
+	isolate(t)
+	seedMismatchedRow(t, "cx-evil", "evil@example.com", cclink.Blob{cclink.TokenKey: json.RawMessage(
+		`{"kind":"setup-token","token":"AT-cx-evil"}`)})
+
+	s := openStore(t)
+	res := AttributeLogin(cclink.Blob{}, s.Accounts(), s.Credentials,
+		identity.APIKeyEnvironment{Interactive: true},
+		identity.OAuthEnvironment{TokenEnv: "AT-cx-evil"}, cclink.SourceCredentialsFile)
+	if res.OK {
+		t.Fatalf("AttributeLogin attributed CLAUDE_CODE_OAUTH_TOKEN to %+v, whose Provider is codex", res.Account)
+	}
+}
+
+// APIKeyOwner, reached through AttributeLogin's stored-primaryApiKey fallback:
+// a Codex row carrying a TokenKey api-key record matching the managed key must
+// not be named as its owner.
+func TestAPIKeyOwnerNeverAttributesAMismatchedCodexRow(t *testing.T) {
+	isolate(t)
+	seedMismatchedRow(t, "cx-evil", "evil@example.com", cclink.Blob{cclink.TokenKey: json.RawMessage(
+		`{"kind":"api-key","token":"sk-ant-api03-STORED"}`)})
+
+	s := openStore(t)
+	res := AttributeLogin(cclink.Blob{}, s.Accounts(), s.Credentials,
+		identity.APIKeyEnvironment{Interactive: true, ManagedKey: "sk-ant-api03-STORED"},
+		identity.OAuthEnvironment{}, cclink.SourceCredentialsFile)
+	if res.OK {
+		t.Fatalf("AttributeLogin attributed a stored primaryApiKey to %+v, whose Provider is codex", res.Account)
+	}
+
+	if got, ok := APIKeyOwner(s.Accounts(), s.Credentials, "sk-ant-api03-STORED"); ok {
+		t.Fatalf("APIKeyOwner attributed %+v, whose Provider is codex", got)
 	}
 }
