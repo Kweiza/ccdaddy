@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -199,5 +200,70 @@ func TestSwitchRefusesAProviderNameItCannotRead(t *testing.T) {
 	code, _, stderr, _ := runRoot(t, "switch", "claude@example.com", "--provider", "openai")
 	if code != ExitUsage {
 		t.Fatalf("exit = %d, want %d (usage)\n%s", code, ExitUsage, stderr)
+	}
+}
+
+// The OTHER arm of that same split, and the one nothing here reached. When the
+// POINTER write itself fails, nothing moved and the user must not be told
+// otherwise. Without this, `if errors.Is(...)` could be `if true`, or the
+// plain `return err` could be `return nil`, and the whole suite stays green.
+//
+// The pointer write is made to fail by making codex/ itself unwritable, which
+// is the mirror of the fixture above: store.Open() tightens the store ROOT
+// back to 0700 on every call, but it never touches codex/, so this one
+// survives the trip through switch.go.
+func TestSwitchToACodexAccountSaysNothingMovedWhenThePointerWriteFails(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("a mode-based denial does not hold for root or on windows")
+	}
+	isolate(t)
+	seedCodexAccount(t, "cx-1", "codex@example.com")
+
+	root, err := codexRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(root, "codex")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	code, _, stderr, _ := runRoot(t, "switch", "codex@example.com")
+	if code != ExitFailure {
+		t.Fatalf("exit = %d, want 1 on a pointer write that failed", code)
+	}
+	if stderr != "" {
+		t.Fatalf("the command claimed something about serving when nothing moved:\n%s", stderr)
+	}
+	if _, ok := codexswitch.ReadServing(root); ok {
+		t.Fatal("a pointer exists after the write that was supposed to fail")
+	}
+}
+
+// The two flag refusals this task added are messages, and a message nobody
+// asserts on is prose. Deleting both blocks left every switch test green,
+// because a later refusal fires anyway -- with a sentence that does not say
+// which flag the user should drop.
+func TestSwitchRefusesTheFlagsThatMeanNothingForCodex(t *testing.T) {
+	isolate(t)
+	seedCodexAccount(t, "cx-1", "codex@example.com")
+
+	for _, tc := range []struct{ name, flag, value, want string }{
+		{"strategy", "--strategy", "conservative", "takes no strategy"},
+		{"model", "--model", "opus", "names a Claude model family"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			code, _, _, top := runRoot(t, "switch", "--provider", "codex", tc.flag, tc.value)
+			if code != ExitUsage {
+				t.Fatalf("exit = %d, want %d (%s)", code, ExitUsage, top)
+			}
+			if !strings.Contains(top, tc.want) {
+				t.Fatalf("the refusal does not say why %s means nothing here:\n%s", tc.flag, top)
+			}
+		})
 	}
 }
