@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/Kweiza/ccdaddy/internal/codexusage"
+	"net/http"
 	"os"
 	"reflect"
 	"strings"
@@ -1153,5 +1155,47 @@ func TestTheListRunwayLineFoldsExactlyAsStatusDoes(t *testing.T) {
 	}
 	if got, want := strings.Join(listed, "\n"), strings.Join(runwayBlockOf(t, status), "\n"); got != want {
 		t.Errorf("the two commands fold one line two ways:\nlist:\n%s\nstatus:\n%s", got, want)
+	}
+}
+
+// `list --refresh` is the command a user reaches for precisely when no daemon
+// is running, so it is the only thing that will read a Codex account on that
+// machine. Nothing in this package covered that pairing, and deleting the line
+// in list.go that wires the read seams left the whole suite green.
+//
+// The seams are stubbed rather than real: this test spends no token and reaches
+// no endpoint. It only asks whether the wiring exists at all.
+func TestListRefreshReadsACodexAccountThroughTheStubbedSeams(t *testing.T) {
+	isolate(t)
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	movableClock(t, &now)
+	seedCodexAccount(t, "cx-1", "codexuser@example.com")
+
+	var reads atomic.Int64
+	saved := codexReadSeams
+	t.Cleanup(func() { codexReadSeams = saved })
+	codexReadSeams = func(*http.Client) (
+		func(context.Context, string) (string, string, error),
+		func(context.Context, string, string) (*usage.Snapshot, codexusage.Identity, error)) {
+
+		return func(context.Context, string) (string, string, error) {
+				return "AT-cx-1", "ws-1", nil
+			}, func(context.Context, string, string) (*usage.Snapshot, codexusage.Identity, error) {
+				reads.Add(1)
+				pct := 40.0
+				resets := now.Add(3 * time.Hour)
+				snap := &usage.Snapshot{
+					CodexPrimary: usage.NewWindowWithLength(&pct, &resets, 5*time.Hour),
+				}
+				return snap, codexusage.Identity{PlanType: "plus"}, nil
+			}
+	}
+
+	code, _, _, top := runRoot(t, "list", "--refresh")
+	if code != ExitOK {
+		t.Fatalf("exit = %d (%s), want 0", code, top)
+	}
+	if reads.Load() != 1 {
+		t.Fatalf("codex reads = %d, want 1 — the codex account was never read", reads.Load())
 	}
 }
