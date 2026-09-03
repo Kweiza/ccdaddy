@@ -1,6 +1,7 @@
 package codexswitch
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,6 +37,28 @@ func TestExecuteWritesThePointerAndReadServingReadsItBack(t *testing.T) {
 	uuid, ok := ReadServing(root)
 	if !ok || uuid != "cx-1" {
 		t.Fatalf("ReadServing = (%q, %v), want (\"cx-1\", true)", uuid, ok)
+	}
+}
+
+// A successful Execute stamps the cooldown, not just avoiding a stamp on
+// failure. Nothing outside this package calls Execute, so without this test
+// the RecordCodexSwitch call could be replaced with a no-op and every other
+// test here would stay green.
+func TestExecuteStampsTheCooldownOnSuccess(t *testing.T) {
+	root := home(t)
+	if err := Execute(root, "cx-1"); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	st, err := strategy.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	at, to := st.CodexLastSwitch()
+	if to != "cx-1" {
+		t.Fatalf("CodexLastSwitch() to = %q, want %q", to, "cx-1")
+	}
+	if at.IsZero() {
+		t.Fatal("CodexLastSwitch() at is the zero time after a successful Execute, want a real stamp")
 	}
 }
 
@@ -96,6 +119,36 @@ func TestAnEmptyPointerIsNoPointer(t *testing.T) {
 	}
 }
 
+// A directory where the pointer file should be -- os.ReadFile refuses it, and
+// that refusal must read as "no pointer", the same as any other unreadable
+// path.
+func TestReadServingAnswersNoOnADirectory(t *testing.T) {
+	root := home(t)
+	if err := os.MkdirAll(ServingPath(root), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if uuid, ok := ReadServing(root); ok {
+		t.Fatalf("ReadServing = (%q, true) with a directory at the pointer path; want no pointer", uuid)
+	}
+}
+
+// A strictly zero-byte file, as opposed to one holding only whitespace. The
+// two reach the empty check by different paths -- os.ReadFile returning a
+// zero-length slice versus TrimSpace collapsing whitespace to "" -- and only
+// one of them is exercised by TestAnEmptyPointerIsNoPointer.
+func TestReadServingAnswersNoOnAZeroByteFile(t *testing.T) {
+	root := home(t)
+	if err := os.MkdirAll(filepath.Dir(ServingPath(root)), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ServingPath(root), []byte{}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if uuid, ok := ReadServing(root); ok {
+		t.Fatalf("ReadServing = (%q, true) on a zero-byte file; want no pointer", uuid)
+	}
+}
+
 // The pointer comes FIRST and the stamp only after it landed. A stamp written
 // for a pointer that never got written is a cooldown holding the lane off the
 // retry that would have fixed it.
@@ -130,6 +183,41 @@ func TestAFailedPointerWriteStampsNothing(t *testing.T) {
 	}
 	if at, to := st.CodexLastSwitch(); !at.IsZero() || to != "" {
 		t.Fatalf("CodexLastSwitch() = (%v, %q) after a failed pointer write, want the zero pair", at, to)
+	}
+}
+
+// The opposite split: the pointer write succeeds -- codex/ is writable -- but
+// the stamp fails because the STORE ROOT itself is not writable, so
+// strategy's lock directory (a sibling of codex/, directly under root) cannot
+// be created. Execute must still report an error, but the pointer has
+// already moved: ReadServing must show the new account, and the error must
+// say so via ErrPointerMovedUnstamped rather than leaving the caller to guess.
+func TestAFailedStampLeavesThePointerMovedAndSaysSo(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod is a no-op on Windows beyond the read-only bit")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	root := home(t)
+	if err := os.MkdirAll(filepath.Join(root, "codex"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(root, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(root, 0o700) })
+
+	err := Execute(root, "cx-1")
+	if err == nil {
+		t.Fatal("Execute succeeded with an unwritable store root; want a failure")
+	}
+	if !errors.Is(err, ErrPointerMovedUnstamped) {
+		t.Fatalf("Execute error = %v, want it to wrap ErrPointerMovedUnstamped", err)
+	}
+	uuid, ok := ReadServing(root)
+	if !ok || uuid != "cx-1" {
+		t.Fatalf("ReadServing = (%q, %v) after a stamp-only failure, want (\"cx-1\", true) because the pointer already moved", uuid, ok)
 	}
 }
 
