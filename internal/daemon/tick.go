@@ -14,6 +14,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/history"
 	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/pollpolicy"
+	"github.com/Kweiza/ccdaddy/internal/provider"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/switcher"
@@ -745,12 +746,25 @@ func identityMembers(accounts []store.Account) map[string][]string {
 	return out
 }
 
-// pollable reports whether there is anything to poll WITH. An account with no
-// claudeAiOauth has no refresh grant behind it — `ccdad add-token` accounts are
-// the ordinary case — so asking the token source for one produces
-// tokens.ErrNoOAuthCredential every cadence forever. Skipping it here keeps a
-// permanent non-answer out of the status document.
+// pollable reports whether there is anything to poll WITH, and this path only
+// ever polls Claude: it reads the store's claudeAiOauth blob and calls the
+// Claude usage endpoint with it, and a Codex account is read by an entirely
+// different reading. In the ordinary case a Codex row never carries a
+// claudeAiOauth blob — `ccdad codex add` never writes one — so the credential
+// check below happened to exclude it on its own. But `ccdad import` accepts a
+// row that names Provider: codex explicitly alongside a claudeAiOauth blob,
+// and without the provider check such a row would be polled against the wrong
+// endpoint. Never-cross has to hold by construction, not by an accident of
+// credential shape.
+//
+// An account with no claudeAiOauth has no refresh grant behind it —
+// `ccdad add-token` accounts are the ordinary case — so asking the token
+// source for one produces tokens.ErrNoOAuthCredential every cadence forever.
+// Skipping it here keeps a permanent non-answer out of the status document.
 func pollable(s *store.Store, a store.Account) bool {
+	if a.Provider != provider.Claude {
+		return false
+	}
 	creds, err := s.Credentials(a.UUID)
 	if err != nil {
 		return false

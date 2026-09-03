@@ -299,6 +299,47 @@ func TestATerminalFailureMarksTheAccountForRelogin(t *testing.T) {
 	}
 }
 
+// A Terminal failure earns the same cooldown a Transient one does. Without it,
+// DefaultRefreshCooldown's whole purpose inverts: codex's own client retries a
+// 401 six times in six seconds, and a dead grant — the exact case a cooldown
+// exists to cover — would have all six of those, and every later poll besides,
+// re-present a refresh token the issuer has already flagged as reused.
+func TestATerminalFailureAlsoCoolsDown(t *testing.T) {
+	withStore(t)
+	seedCodex(t, "user-1", Credential{AccessToken: "AT", RefreshToken: "RT"})
+
+	var posts atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		posts.Add(1)
+		w.WriteHeader(http.StatusBadRequest)
+		io.WriteString(w, `{"error":{"code":"refresh_token_reused"}}`)
+	}))
+	defer srv.Close()
+	withAuthBase(t, srv.URL)
+
+	now := time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
+	r := NewRefresher(RefresherConfig{Client: srv.Client(), Now: func() time.Time { return now }})
+
+	first, err := r.Refresh(context.Background(), "user-1", "AT")
+	if err != nil {
+		t.Fatalf("Refresh() error = %v", err)
+	}
+	if first.Kind != Terminal {
+		t.Fatalf("first outcome = %s, want Terminal", first.Kind)
+	}
+
+	second, err := r.Refresh(context.Background(), "user-1", "AT")
+	if err != nil {
+		t.Fatalf("second Refresh() error = %v", err)
+	}
+	if second.Kind != Transient || second.Code != "cooldown" {
+		t.Errorf("second outcome = %s/%q, want Transient/cooldown", second.Kind, second.Code)
+	}
+	if got := posts.Load(); got != 1 {
+		t.Errorf("the endpoint saw %d attempts, want 1 — a dead grant must not be re-POSTed inside the cooldown", got)
+	}
+}
+
 // A transient failure teaches nothing about the grant, so it must not mark the
 // account — and it must stop the next caller reaching the endpoint at all,
 // because codex answers a 401 with six retries in six seconds.
@@ -400,6 +441,48 @@ func TestARefreshTriggeredByAStaleTokenAdoptsInstead(t *testing.T) {
 	}
 	if out.Credential.AccessToken != "AT-current" {
 		t.Errorf("AccessToken = %q, want the stored one", out.Credential.AccessToken)
+	}
+}
+
+// The fallback client NewRefresher builds when no Client is configured must
+// refuse a redirect exactly like the client a caller supplies: the POSTed
+// body is the refresh grant, single-use, and a 307 or 308 would make Go's
+// default client replay it — the refresh token itself — to whatever target
+// the redirect names.
+func TestTheFallbackClientRefusesARedirect(t *testing.T) {
+	withStore(t)
+	seedCodex(t, "user-1", Credential{AccessToken: "AT", RefreshToken: "RT-secret"})
+
+	var targetHit bool
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetHit = true
+		body := bodyOf(t, r)
+		if strings.Contains(body, "RT-secret") {
+			t.Error("the refresh grant reached the redirect target")
+		}
+	}))
+	defer target.Close()
+
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+	}))
+	defer origin.Close()
+	withAuthBase(t, origin.URL)
+
+	// No Client in the config: this exercises NewRefresher's OWN fallback,
+	// not a test-provided client.
+	out, err := NewRefresher(RefresherConfig{}).Refresh(context.Background(), "user-1", "AT")
+	if err != nil {
+		t.Fatalf("Refresh() error = %v", err)
+	}
+	if targetHit {
+		t.Fatal("the fallback client followed the redirect to the target")
+	}
+	// The origin's own 307 has no error code, so Classify calls it Transient
+	// on the origin's status — never on whatever the redirect target would
+	// have answered had the client followed it.
+	if out.Kind != Transient || out.Code != "http_307" {
+		t.Errorf("outcome = %s/%q, want Transient/http_307", out.Kind, out.Code)
 	}
 }
 

@@ -190,7 +190,19 @@ func finite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
 // response body.
 func Fetch(ctx context.Context, client *http.Client, accessToken, accountID, version string) (*usage.Snapshot, Identity, error) {
 	if client == nil {
-		client = &http.Client{Timeout: usageTimeout}
+		// The request carries the bearer in a header, and Go's default client
+		// already strips Authorization crossing hosts, so a followed redirect
+		// here would not leak the token the way the POST-based clients'
+		// bodies would. But this endpoint never legitimately redirects, and
+		// following one anyway would let whatever the redirect names answer
+		// in this account's name. Returning http.ErrUseLastResponse refuses
+		// that and hands the redirect response back unchanged instead.
+		client = &http.Client{
+			Timeout: usageTimeout,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, usageURL, nil)
 	if err != nil {

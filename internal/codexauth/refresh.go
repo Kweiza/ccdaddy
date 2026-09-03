@@ -229,7 +229,19 @@ func NewRefresher(cfg RefresherConfig) *Refresher {
 		accounts: map[string]*refreshState{},
 	}
 	if r.client == nil {
-		r.client = &http.Client{Timeout: 30 * time.Second}
+		r.client = &http.Client{
+			Timeout: 30 * time.Second,
+			// The POSTed body IS the refresh grant, and it is single-use: a
+			// 307 or 308 from the token host would make Go's default client
+			// replay that body — the refresh token itself — to whatever
+			// target the redirect names. Returning http.ErrUseLastResponse
+			// stops the client from following it and hands the redirect
+			// response back unchanged, which Classify then judges on its own
+			// terms instead of on the followed target's.
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
 	}
 	if r.now == nil {
 		r.now = time.Now
@@ -395,8 +407,14 @@ func (r *Refresher) Refresh(ctx context.Context, uuid, triggeredBy string) (Outc
 // again so a caller cannot pass a state it does not hold the lock on.
 func (r *Refresher) failed(uuid string, st *refreshState, cred Credential, status int, body []byte, postErr error) Outcome {
 	kind, code := Classify(status, body, postErr)
+	// Every attempt against the endpoint earns the cooldown, Terminal
+	// included: DefaultRefreshCooldown exists because codex's client retries
+	// six times in six seconds, and a dead grant is exactly the case that
+	// backoff has to cover — without it, a token the issuer has already
+	// flagged as reused would be re-presented on all six of those retries,
+	// and again on every poll after, until a human logs in again.
+	st.extendCooldown(r.now().Add(r.cooldown))
 	if kind != Terminal {
-		st.extendCooldown(r.now().Add(r.cooldown))
 		return Outcome{Kind: Transient, Code: code, Credential: cred}
 	}
 

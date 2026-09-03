@@ -319,6 +319,40 @@ func TestFetchErrorsNeverCarryTheToken(t *testing.T) {
 	}
 }
 
+// The nil-client fallback Fetch builds must refuse a redirect too: this
+// endpoint never legitimately sends one, and following it would let whatever
+// the redirect names answer in this account's name.
+func TestTheNilClientFallbackRefusesARedirect(t *testing.T) {
+	var targetHit bool
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetHit = true
+	}))
+	defer target.Close()
+
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+	}))
+	defer origin.Close()
+	withUsageURL(t, origin.URL)
+
+	// client is nil on purpose: this exercises Fetch's own fallback, not a
+	// test-provided client.
+	_, _, err := Fetch(context.Background(), nil, "AT", "ws-1", "1.2.3")
+	if err == nil {
+		t.Fatal("Fetch() = nil for a 307")
+	}
+	if targetHit {
+		t.Fatal("the nil-client fallback followed the redirect to the target")
+	}
+	var se *usage.StatusError
+	if !errors.As(err, &se) {
+		t.Fatalf("Fetch() = %v, want a *usage.StatusError", err)
+	}
+	if se.Status != http.StatusTemporaryRedirect {
+		t.Errorf("Status = %d, want %d — the origin's own 307, not whatever the target would have answered", se.Status, http.StatusTemporaryRedirect)
+	}
+}
+
 // withUsageURL points Fetch at a local server for one test.
 func withUsageURL(t *testing.T, url string) {
 	t.Helper()
