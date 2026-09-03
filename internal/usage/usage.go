@@ -90,6 +90,22 @@ func (e *StatusError) Unwrap() error {
 	return nil
 }
 
+// StatusErrorFrom builds a StatusError for a non-200 taken by a caller OUTSIDE
+// this package.
+//
+// It exists because StatusError's Retry-After is unexported, which is
+// deliberate — the difference between an absent header and a zero wait is the
+// whole of what the AIMD backoff reads, and a settable field would let a caller
+// spell a zero that means "now". A constructor keeps the invariant and keeps
+// the header grammar in one place: the Codex quota endpoint is a different
+// host answering a different path, and a second parse of Retry-After there
+// would be a second copy of the clock-skew rule.
+func StatusErrorFrom(status int, h http.Header, now time.Time) *StatusError {
+	e := &StatusError{Status: status}
+	e.retryAfter, e.hasRetryAfter = parseRetryAfter(h, now)
+	return e
+}
+
 // Client calls the usage endpoint.
 type Client struct {
 	HTTP    *http.Client
@@ -168,9 +184,7 @@ func (c *Client) FetchUsage(ctx context.Context, accessToken string) (*Snapshot,
 		return nil, fmt.Errorf("reading the usage response: %w", err)
 	}
 	if res.StatusCode != http.StatusOK {
-		e := &StatusError{Status: res.StatusCode}
-		e.retryAfter, e.hasRetryAfter = parseRetryAfter(res.Header, time.Now())
-		return nil, e
+		return nil, StatusErrorFrom(res.StatusCode, res.Header, time.Now())
 	}
 
 	return Parse(data)
