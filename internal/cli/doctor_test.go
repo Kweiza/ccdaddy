@@ -532,7 +532,7 @@ func TestDoctorHumanOutputNamesEveryCheck(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit %d, want 0\n%s", code, stdout)
 	}
-	for _, name := range []string{"store", "path", "permissions", "locks", "pidfile", "status-file", "usage-cache", "history", "engine-state", "config", "update-check", "sessions", "profiles", "primary-accounts", "credential-files", "credential-home", "claude-version", "claude-code", "credential-keys", "keychain", "environment", "api-key", "oauth-source"} {
+	for _, name := range []string{"store", "path", "permissions", "locks", "pidfile", "status-file", "usage-cache", "history", "engine-state", "config", "update-check", "sessions", "profiles", "primary-accounts", "credential-files", "codex-relogin", "codex-proxy", "credential-home", "claude-version", "claude-code", "credential-keys", "keychain", "environment", "api-key", "oauth-source"} {
 		if !strings.Contains(stdout, name) {
 			t.Errorf("the human report does not mention the %s check:\n%s", name, stdout)
 		}
