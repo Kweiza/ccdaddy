@@ -144,15 +144,30 @@ func newRemoveCmd() *cobra.Command {
 			// failure.
 			if wasServing {
 				root, rerr := codexRoot()
+				// Re-read RATHER THAN TRUST the snapshot taken above: that
+				// snapshot precedes the confirmation prompt, which blocks
+				// indefinitely, and nothing serialises this command against
+				// the daemon's own tick -- which can legitimately repoint
+				// codex to a different account while a human is still
+				// looking at the [y/N] prompt. Clearing on the strength of
+				// the stale snapshot would delete THAT account's live
+				// pointer instead of leaving it alone, and it would orphan
+				// its switch cooldown baseline in the process.
+				stillServing := false
 				if rerr == nil {
-					rerr = codexswitch.Clear(root)
+					uuid, ok := codexswitch.ReadServing(root)
+					stillServing = ok && uuid == target.UUID
+					if stillServing {
+						rerr = codexswitch.Clear(root)
+					}
 				}
-				if rerr != nil {
+				switch {
+				case rerr != nil:
 					fmt.Fprintf(cmd.ErrOrStderr(),
 						"warning: that account was the one codex was served from, and the pointer at %s could "+
 							"not be cleared (%v). Run 'ccdad switch --provider codex' to repoint it.\n",
 						namePath(codexPointerPath()), rerr)
-				} else {
+				case stillServing:
 					fmt.Fprintln(cmd.ErrOrStderr(),
 						"Note: that was the account codex was served from, so nothing is serving codex now. "+
 							"Run 'ccdad switch --provider codex' to pick another one.")
