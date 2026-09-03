@@ -16,6 +16,62 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.10.1] — 2026-09-04
+
+The release that stops a full bar from being painted green.
+
+0.10.0 widened the empty test from "no room in any window" to "no room a model
+choice cannot dodge", which is right for the account: one whose Fable week is
+gone and whose all-model week still holds a fifth can serve every prompt that is
+not Fable. The dashboard's gauge asks that same question first, and its own
+comment says why — "painting that green is the whole reason this clause runs
+ahead of the band". Widened, the clause stopped firing for exactly those rows,
+and the band below reads the tripped weekly's slack; under hover a threshold is
+an unclamped pace target, so a window far through its cycle with nothing left in
+it reports POSITIVE slack. Measured on a live four-account fleet: +17, past the
+band, so the bar drew to 100% off a week that is gone and was painted the colour
+of an account with room. The gauge now asks the window-level question too.
+
+The same change made an older, argued-for divergence routine. `ccdad list`
+prints LEFT off the window the ranking orders on and RESETS IN off the window
+the account is reported against, and it has no window column at any width — so
+a row could show a percentage about one window beside a countdown about another
+with nothing naming either. Neither number moves; the row now names both, on the
+honest condition that its two figures came from two windows rather than on a
+copy of the model-scope rule. `ccdad status` is untouched: it resolves every
+figure through one window and names it in a column.
+
+And the dashboard's WINDOW cell is back inside its budget. The ladder reserves
+twenty columns and `weekly_scoped:model:Fable` is twenty-five, with nothing
+between the cell and the terminal cutting it, so the overflow came off the right
+— where STATE and AUTO are. The constant `weekly_scoped:` prefix is cut there;
+`ccdad status` keeps the full name, which is the key `ccdad config` takes a
+per-window threshold on.
+
+### Fixed
+
+- **The dashboard painted a full bar green when the window it drew was empty.**
+  `gaugeRole`'s emptiness clause is an ACCOUNT verdict and 0.10.0 made it answer
+  false for an account whose only blown window caps one model family. The bar,
+  though, is drawn from the reported window, which is that blown cap.
+  `view.Row.ReportedEmpty` is the window-level question the account-level one
+  stopped answering. Pinned by `TestAFullBarDrawnOffABlownCapIsNeverPaintedOK`
+  and `TestACapThatIsNotYetGoneStillTakesTheBand`.
+- **`ccdad list` printed two windows' figures with nothing naming either.**
+  `view.Row.SplitNote` names both, gated on the reported and binding windows
+  differing and nothing else, so it also covers the divergence that predates
+  model scoping. The comment in `internal/cli/list.go` claiming LEFT is "100
+  minus the reported window's utilization" was false before any of this and is
+  repaired — it is the BINDING window's. Pinned by
+  `TestTheRowNamesBothWindowsWhenItsTwoFiguresComeFromTwo`,
+  `TestTheNoteCoversTheDivergenceThatPredatesModelScoping` and
+  `TestListNamesBothWindowsWhenTheRowsFiguresComeFromTwo`.
+- **A scoped window name overflowed the dashboard's WINDOW column by five
+  columns**, cutting STATE and AUTO off the right. `view.Row.WindowLabelShort`
+  cuts the constant prefix every scoped name carries. Pinned by
+  `TestWindowLabelShortCutsOnlyTheConstantPrefix` and
+  `TestWindowLabelShortLeavesAFixedNameAlone`.
+
 ## [0.10.0] — 2026-09-04
 
 The release that stops throwing away quota you have already paid for, and gives
@@ -2843,7 +2899,8 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.10.1...HEAD
+[0.10.1]: https://github.com/Kweiza/ccdaddy/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/Kweiza/ccdaddy/compare/v0.9.10...v0.10.0
 [0.9.10]: https://github.com/Kweiza/ccdaddy/compare/v0.9.9...v0.9.10
 [0.9.9]: https://github.com/Kweiza/ccdaddy/compare/v0.9.8...v0.9.9
