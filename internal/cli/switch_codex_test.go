@@ -305,21 +305,24 @@ func TestATargetlessCodexSwitchWithNoReadingsIsBlocked(t *testing.T) {
 	}
 }
 
-// --strategy and --model are the Claude ranking's knobs and the codex pass
-// ignores both, so they are refused rather than dropped: a flag silently
-// dropped is a user believing they narrowed something.
-func TestATargetlessCodexSwitchRefusesTheClaudeRankingFlags(t *testing.T) {
+// The mirror of the no-readings branch, and the one the pair was missing. A
+// store with genuinely NO codex accounts reaches a different return than one
+// whose accounts nobody has polled, and it earns a different sentence: the
+// first says log one in, the second says wait for a reading. Without this the
+// branch is reachable, correct, and asserted by nothing -- four separate
+// mutations to it left the whole package green, and one of them turned this
+// case into "Staying put: a better target cleared every margin", which is
+// worse than silence because it sounds like an answer.
+func TestATargetlessCodexSwitchWithNoCodexAccountsSaysSo(t *testing.T) {
 	isolate(t)
-	seedCodexAccount(t, "cx-1", "one@example.com")
+	seedAccount(t, "cl-1", "claude@example.com")
 
-	for _, argv := range [][]string{
-		{"switch", "--provider", "codex", "--strategy", "headroom"},
-		{"switch", "--provider", "codex", "--model", "opus"},
-	} {
-		code, _, stderr, _ := runRoot(t, argv...)
-		if code != ExitUsage {
-			t.Fatalf("%v exited %d, want %d (usage)\n%s", argv, code, ExitUsage, stderr)
-		}
+	code, _, stderr, _ := runRoot(t, "switch", "--provider", "codex")
+	if code != ExitBlocked {
+		t.Fatalf("exit = %d, want %d (blocked)\n%s", code, ExitBlocked, stderr)
+	}
+	if !strings.Contains(stderr, "no codex accounts") {
+		t.Fatalf("stderr does not say the pool is empty:\n%s", stderr)
 	}
 }
 
