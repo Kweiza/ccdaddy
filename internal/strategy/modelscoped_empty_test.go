@@ -150,6 +150,41 @@ func TestAHandBuiltHeadroomKeepsReadingMinPct(t *testing.T) {
 	}
 }
 
+// The two cases above cannot see the fallback at all: with the pair unset
+// MinAnyModelPct is zero, so reading it and falling back to MinPct give the same
+// answer whenever MinPct is zero too. These are the cases that tell them apart —
+// room in MinPct and no all-model window to have measured it. Dropping the
+// fallback reads both as empty.
+func TestTheFallbackToMinPctIsReadWhenThereIsRoomInIt(t *testing.T) {
+	s := &usage.Snapshot{
+		FiveHour: unread(),
+		SevenDay: unread(),
+		Limits:   []usage.Limit{scoped("Fable", "", 40, 48*time.Hour)},
+	}
+
+	h := HeadroomOf(s, thr())
+	if h.MinAnyModelWindow != "" {
+		t.Fatalf("MinAnyModelWindow = %q, want empty", h.MinAnyModelWindow)
+	}
+	if h.MinPct != 60 {
+		t.Fatalf("MinPct = %v, want 60", h.MinPct)
+	}
+	empty, known := OutOfQuota(h)
+	if !known {
+		t.Fatal("OutOfQuota known = false, want true")
+	}
+	if empty {
+		t.Error("OutOfQuota = true, want false — the Fable cap has 60 points left in it")
+	}
+}
+
+func TestAHandBuiltHeadroomWithRoomIsNotEmpty(t *testing.T) {
+	h := Headroom{Known: true, MinPct: 40, MinWindow: usage.WindowSevenDay}
+	if empty, known := OutOfQuota(h); !known || empty {
+		t.Errorf("OutOfQuota = (%v, %v), want (false, true)", empty, known)
+	}
+}
+
 // ---- the ordering axis lets a blown sub-cap go ------------------------------
 
 // Slack answers "closest to breaching" and the ranking spends it on "who takes

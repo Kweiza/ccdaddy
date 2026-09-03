@@ -25,10 +25,16 @@ type Snapshot struct {
 	ActiveLabel string // "work@example.com (work)", or "none of the managed accounts"
 	Strategy    string // config.Config.Strategy.String(), as CONFIGURED -- see StrategyLabel
 	Hover       bool   // config.Config.Hover
-	Mode        strategy.Mode
-	HasMode     bool
-	Version     string   // buildinfo.String()'s first field, or a test constant
-	Notices     []string // everything cli would have written to stderr
+	// Manual is config.Config.Manual. It is carried beside Hover rather than
+	// folded into the mode line because the two are different questions: Hover
+	// says where the numbers came from, Manual says whether ccdad will act on
+	// them. A fleet in manual mode with a healthy ranking looks exactly like a
+	// broken engine unless the dashboard says which it is.
+	Manual  bool
+	Mode    strategy.Mode
+	HasMode bool
+	Version string   // buildinfo.String()'s first field, or a test constant
+	Notices []string // everything cli would have written to stderr
 
 	// Forecast is the measured burn and what it implies, and HasForecast is
 	// whether one could be produced at all.

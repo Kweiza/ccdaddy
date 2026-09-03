@@ -258,6 +258,7 @@ func runChecks() []check {
 		checkHistory(storeUsable),
 		checkEngineState(storeUsable),
 		checkConfig(storeUsable, settings, settingsErr),
+		checkManual(storeUsable, settings, settingsErr),
 		checkUpdateCheck(report, effective),
 		checkSessions(root, storeUsable),
 		accountsCheck,
@@ -737,6 +738,43 @@ func checkConfig(usable bool, settings config.Config, settingsErr error) check {
 		detail = fmt.Sprintf("%s — unattended credit spending is armed up to %v", path, settings.MaxAutoSpend)
 	}
 	return check{"config", levelOK, detail}
+}
+
+// checkManual is a row of its own rather than a clause on the config row, and
+// the reason is what a person opens `ccdad doctor` for: a fleet that has stopped
+// switching. Every other row here would read `ok` in manual mode — the daemon is
+// up, the locks work, the ticks complete, the polls land — and the one fact that
+// explains the silence would be a fragment of a detail string on a row about a
+// file path.
+//
+// It is `warn` and not `ok`, and never `fail`. It is not a fault: the user asked
+// for it, and fail is the only level that changes doctor's exit code, so an
+// intentional mode must not turn a health check red. But it is not `ok` either.
+// A mode that suppresses the program's whole purpose has to be visible in the
+// place people look when something is wrong, and a row printed at `ok` beside
+// twenty other `ok` rows is a row nobody reads.
+//
+// It reports the mode being OFF as skipped rather than ok, which is the same
+// call the sessions row makes for a machine with nothing to report: a row that
+// says "ok, this mode you have never heard of is not on" spends a line of a
+// twenty-line table on nothing.
+func checkManual(usable bool, settings config.Config, settingsErr error) check {
+	if !usable {
+		return check{"manual-mode", levelSkipped, "there is no store to check"}
+	}
+	if settingsErr != nil {
+		// The config row already carries the parse failure and says the engine
+		// is on its defaults. Repeating it here would be a second sentence
+		// about one file; what this row can still say is what the DEFAULT is.
+		return check{"manual-mode", levelSkipped, fmt.Sprintf(
+			"%s cannot be used, so the engine is on its defaults and switching automatically", config.FileName)}
+	}
+	if !settings.Manual {
+		return check{"manual-mode", levelSkipped, "off, so ccdad switches accounts on its own"}
+	}
+	return check{"manual-mode", levelWarn, "on: ccdad is polling and ranking and will NOT move the live login. " +
+		"Every other row here reads ok in this mode, which is why it has one of its own. " +
+		"'ccdad manual off' hands the wheel back; 'ccdad switch <account>' works either way"}
 }
 
 // checkUpdateCheck reports what the daemon's daily release check has found.

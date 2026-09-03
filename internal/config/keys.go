@@ -28,6 +28,7 @@ const (
 	keyStrategy           = "strategy"
 	keyProbeUnknown       = "probe_unknown"
 	keyHover              = "hover"
+	keyManual             = "manual"
 
 	// keyMCPSwitchWithoutElicitation is the only key in this file that governs
 	// no part of the switching engine. It is here, in the file a person edits
@@ -160,6 +161,7 @@ func Keys() []string {
 		keyStrategy,
 		keyProbeUnknown,
 		keyHover,
+		keyManual,
 		keyMCPSwitchWithoutElicitation,
 		keyUpdateCheck,
 		keyCreditThreshold,

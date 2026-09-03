@@ -208,6 +208,7 @@ func loadSnapshot(cmd *cobra.Command, now time.Time) (snap view.Snapshot, probeE
 		ActiveLabel: activeLabel,
 		Strategy:    cfg.Strategy.String(),
 		Hover:       cfg.Hover,
+		Manual:      cfg.Manual,
 		Mode:        mode,
 		HasMode:     hasMode,
 		Version:     buildinfo.Version,
@@ -334,7 +335,7 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 	// runway line below has its own wrap, because its spaces are inside its
 	// values and these are between words.
 	//
-	// THE WIDTH IS MEASURED ON cmd.OutOrStdout() AND NEVER ON out, at all six
+	// THE WIDTH IS MEASURED ON cmd.OutOrStdout() AND NEVER ON out, at all seven
 	// sites below, and the distinction is the whole reason this paragraph
 	// exists. out is renderTarget's writer -- the same destination wearing a
 	// palette -- and outWidth answers by asserting *os.File. A wrapper fails
@@ -351,10 +352,12 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 	// the root was given -- the stronger question, at the sites its fixture
 	// executes. It does not execute all of them: Hover: and Update: are printed
 	// only under a state it does not set up, and outWidth(out) at either was
-	// green across this whole package. The other half is held by
+	// green across this whole package. Manual: is a third line in that
+	// position -- printed only when the mode is on, which no fixture there
+	// sets up either. The other half is held by
 	// TestEveryLineOfTheStatusBlockFoldsAtTheFilesWidth, which reads this
 	// function's source rather than its output, so every site is covered
-	// whatever a fixture happens to render and the count of six below is
+	// whatever a fixture happens to render and the count of seven below is
 	// asserted there rather than only written here.
 	//
 	// Both names are written on one line each, deliberately. The name this
@@ -397,6 +400,14 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 	// reason before the answer, not after it.
 	if snap.Hover {
 		fmt.Fprintln(out, view.WrapLabeled(view.HoverLine(), outWidth(cmd.OutOrStdout())))
+	}
+	// Above the Mode line too, and for a sharper version of the same reason:
+	// the mode line describes a ranking the engine is not going to act on. A
+	// reader who finds "recovery" here and no switch in the log needs to know
+	// which of the two facts explains the silence before they go looking for a
+	// broken daemon.
+	if snap.Manual {
+		fmt.Fprintln(out, view.WrapLabeled(view.ManualLine(), outWidth(cmd.OutOrStdout())))
 	}
 	if snap.HasMode {
 		fmt.Fprintln(out, view.WrapLabeled(view.ModeLine(snap.Mode), outWidth(cmd.OutOrStdout())))

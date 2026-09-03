@@ -130,6 +130,16 @@ type Config struct {
 	// Hover is the fully automatic mode: thresholds derived from pace, and
 	// every tuning key ignored.
 	Hover bool
+	// Manual is hover's opposite number and the mode nothing else in this file
+	// can express: the engine keeps polling, ranking and recording, and never
+	// moves the login. `ccdad switch` is untouched — it is a policy for the auto
+	// engine, not a lock.
+	//
+	// It is a MODE rather than a knob, so it is a plain bool with no default to
+	// fall back to, exactly as Hover is. Disabling every account reaches the
+	// same silence by a different door and costs the probes, the forecast and
+	// the listing to get there; this key costs none of them.
+	Manual bool
 	// MCPSwitchWithoutElicitation allows ccdad's MCP server to rewrite the live
 	// login on a client that cannot ask the person at the keyboard first.
 	//
@@ -195,6 +205,7 @@ func (c Config) Equal(o Config) bool {
 		c.PreemptLead == o.PreemptLead &&
 		c.ProbeUnknown == o.ProbeUnknown &&
 		c.Hover == o.Hover &&
+		c.Manual == o.Manual &&
 		c.MCPSwitchWithoutElicitation == o.MCPSwitchWithoutElicitation &&
 		c.UpdateCheck == o.UpdateCheck &&
 		c.TUITheme == o.TUITheme &&
@@ -229,6 +240,7 @@ func (c Config) StrategyConfig() strategy.Config {
 		Cooldown:           c.Cooldown,
 		RecoveryHysteresis: c.RecoveryHysteresis,
 		MaxAutoSpend:       c.MaxAutoSpend,
+		Manual:             c.Manual,
 	}
 }
 
@@ -305,6 +317,7 @@ type fileShape struct {
 	Strategy           *string  `toml:"strategy"`
 	ProbeUnknown       *bool    `toml:"probe_unknown"`
 	Hover              *bool    `toml:"hover"`
+	Manual             *bool    `toml:"manual"`
 
 	// Apart from the rest because it is the one key here that is not an engine
 	// knob, and a pointer for the same reason as the others: absence has to be
@@ -395,6 +408,7 @@ func Parse(raw []byte) (Config, error) {
 	}
 	applyBool(&cfg.ProbeUnknown, f.ProbeUnknown)
 	applyBool(&cfg.Hover, f.Hover)
+	applyBool(&cfg.Manual, f.Manual)
 	applyBool(&cfg.MCPSwitchWithoutElicitation, f.MCPSwitchWithoutElicitation)
 	applyBool(&cfg.UpdateCheck, f.UpdateCheck)
 	if err := applyWindowThresholds(&cfg, f.WindowThreshold); err != nil {

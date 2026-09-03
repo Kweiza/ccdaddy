@@ -115,6 +115,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newTuiCmd())
 	root.AddCommand(newConfigCmd())
 	root.AddCommand(newHoverCmd())
+	root.AddCommand(newManualCmd())
 	root.AddCommand(newExportCmd())
 	root.AddCommand(newImportCmd())
 	root.AddCommand(newBootstrapCmd())

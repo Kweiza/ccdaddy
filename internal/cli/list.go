@@ -177,6 +177,15 @@ func newListCmd() *cobra.Command {
 				fmt.Fprintln(cmd.ErrOrStderr(),
 					"note: hover is on; LEFT is how much of the window is left, and which window a row reports is chosen by the thresholds hover derived per account rather than by a value in config.toml. 'ccdad hover status' prints them.")
 			}
+			// Beside the hover note and for a different reason: hover's note is
+			// about what a COLUMN means, and this one is about whether anything
+			// will act on it. Every figure in the table below is current either
+			// way, which is exactly why a reader cannot tell from the table that
+			// nothing is going to move -- so the note has to.
+			if cfg.Manual {
+				fmt.Fprintln(cmd.ErrOrStderr(),
+					"note: manual mode is on; ccdad keeps these readings current and will not switch accounts. 'ccdad switch <account>' still works, and 'ccdad manual off' hands the wheel back.")
+			}
 
 			out, pal := renderTarget(cmd)
 			cells := make([][]string, 0, len(quota))
