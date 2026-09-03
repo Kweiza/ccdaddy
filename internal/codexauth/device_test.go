@@ -165,10 +165,15 @@ func TestPollDeviceLoginPollsThenExchanges(t *testing.T) {
 		case "/api/accounts/deviceauth/token":
 			polls++
 			pollBody = bodyOf(t, r)
-			if polls < 3 {
-				// 403 and 404 both mean "not approved yet"; anything else is
-				// a failure.
+			switch polls {
+			case 1:
+				// 403 means "not approved yet".
 				w.WriteHeader(http.StatusForbidden)
+				return
+			case 2:
+				// 404 means the same thing as 403; the continue-vs-fail split
+				// must treat both as "not yet" rather than only one of them.
+				w.WriteHeader(http.StatusNotFound)
 				return
 			}
 			io.WriteString(w, `{"authorization_code":"code-1","code_challenge":"chal","code_verifier":"ver"}`)
@@ -233,8 +238,11 @@ func TestPollDeviceLoginPollsThenExchanges(t *testing.T) {
 		}
 	}
 
-	if cred.AccessToken != "AT" || cred.RefreshToken != "RT" {
-		t.Errorf("credential = %+v", cred)
+	if cred.AccessToken != "AT" {
+		t.Errorf("AccessToken = %q, want %q", cred.AccessToken, "AT")
+	}
+	if cred.RefreshToken != "RT" {
+		t.Errorf("RefreshToken = %q, want %q", cred.RefreshToken, "RT")
 	}
 	if cred.UserID != "user-abc" {
 		t.Errorf("UserID = %q, want the chatgpt_user_id out of the id_token", cred.UserID)
