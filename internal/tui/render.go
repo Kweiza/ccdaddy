@@ -437,7 +437,11 @@ func (m Model) runwayLine() string {
 // strategy named "he" rather than as a line that did not fit.
 func (m Model) headerLine(width int) string {
 	lab := m.Pal.Style(theme.RoleHeader)
-	line := lab.Render("Active: ") + m.Snap.ActiveLabel +
+	// ActiveLine and not ActiveLabel: on a machine with a codex account the
+	// header names both providers, and `ccdad status` renders the identical
+	// sentence from the identical method. On a machine with none, ActiveLine IS
+	// ActiveLabel, which is what keeps the seven byte-compared pages still.
+	line := lab.Render("Active: ") + m.Snap.ActiveLine() +
 		"  |  " + lab.Render("Strategy: ") + m.Snap.StrategyLabel()
 	if m.Snap.HasMode {
 		line += "  |  " + lab.Render("Mode: ") + m.Snap.Mode.String()

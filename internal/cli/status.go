@@ -200,19 +200,27 @@ func loadSnapshot(cmd *cobra.Command, now time.Time) (snap view.Snapshot, probeE
 			activeLabel = r.Account.Label()
 		}
 	}
+	// The pointer, resolved through the one reader every surface uses. It is
+	// read HERE, in the function that already holds the account list, so that
+	// `ccdad status`, `ccdad list` and the dashboard cannot each answer it.
+	codexLabel := ""
+	if serving, ok := codexServingAccount(accounts); ok {
+		codexLabel = serving.Label()
+	}
 
 	return view.Snapshot{
-		Now:         now,
-		Rows:        rows,
-		Report:      report,
-		ActiveLabel: activeLabel,
-		Strategy:    cfg.Strategy.String(),
-		Hover:       cfg.Hover,
-		Mode:        mode,
-		HasMode:     hasMode,
-		Version:     buildinfo.Version,
-		Notices:     notices,
-		Forecast:    fleet,
+		Now:               now,
+		Rows:              rows,
+		Report:            report,
+		ActiveLabel:       activeLabel,
+		CodexServingLabel: codexLabel,
+		Strategy:          cfg.Strategy.String(),
+		Hover:             cfg.Hover,
+		Mode:              mode,
+		HasMode:           hasMode,
+		Version:           buildinfo.Version,
+		Notices:           notices,
+		Forecast:          fleet,
 		// Basis.Known is the whole test, and it is the same one view.RunwayLine
 		// applies before it returns anything: a fleet nobody has enough
 		// readings for has levels but no rate, and reporting that as a forecast
@@ -390,7 +398,12 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 	// ActiveLabel is loadSnapshot's, not recomputed here: two loops over rows
 	// producing the same "which account is active" sentence is the exact "one
 	// value, two spellings" failure this task exists to remove.
-	fmt.Fprintln(out, view.WrapLabeled("Active:  "+snap.ActiveLabel, outWidth(cmd.OutOrStdout())))
+	//
+	// ActiveLine and not ActiveLabel: on a machine with a codex account the
+	// answer to "what is this machine spending" has two halves, and the
+	// dashboard's header renders the identical sentence from the identical
+	// method.
+	fmt.Fprintln(out, view.WrapLabeled("Active:  "+snap.ActiveLine(), outWidth(cmd.OutOrStdout())))
 	// Above the Mode line, because it is what EXPLAINS it: under hover the mode
 	// is headroom whatever the file says, hover having overridden the strategy
 	// key. A reader who set consume-first and finds headroom here needs the

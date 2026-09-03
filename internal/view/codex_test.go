@@ -39,3 +39,35 @@ func TestTypeLabelOnAZeroProviderIsNotCodex(t *testing.T) {
 		t.Fatal("TypeLabel = codex on a row with no provider set")
 	}
 }
+
+// A machine with no codex accounts renders exactly what it rendered before this
+// field existed. That is not politeness: seven byte-compared dashboard pages
+// and every `ccdad status` fixture in the tree assert those bytes, and a clause
+// that appeared unconditionally would move all of them for a machine that has
+// no second provider on it.
+func TestTheActiveLineIsUnchangedWithNoCodexAccount(t *testing.T) {
+	s := Snapshot{ActiveLabel: "work@example.com (work)"}
+	if got := s.ActiveLine(); got != "work@example.com (work)" {
+		t.Fatalf("ActiveLine = %q, want the bare label", got)
+	}
+}
+
+func TestTheActiveLineNamesBothProvidersWhenCodexIsServed(t *testing.T) {
+	s := Snapshot{ActiveLabel: "work@example.com (work)", CodexServingLabel: "cx@example.com"}
+	want := "Claude: work@example.com (work) · Codex: cx@example.com"
+	if got := s.ActiveLine(); got != want {
+		t.Fatalf("ActiveLine = %q, want %q", got, want)
+	}
+}
+
+// The free function is what lets `ccdad which` -- which has no Snapshot --
+// produce the identical sentence. Two spellings of one line is how the two
+// commands come to disagree about a machine neither of them measured twice.
+func TestActiveLineIsOneSpellingForEveryCaller(t *testing.T) {
+	if got := ActiveLine("a", "b"); got != "Claude: a · Codex: b" {
+		t.Fatalf("ActiveLine = %q", got)
+	}
+	if got := ActiveLine("a", ""); got != "a" {
+		t.Fatalf("ActiveLine with no codex = %q, want the bare Claude label", got)
+	}
+}
