@@ -79,6 +79,22 @@ func windowLength(n WindowName) (time.Duration, bool) {
 // never arrive.
 func WindowLength(n WindowName) (time.Duration, bool) { return windowLength(n) }
 
+// WindowLengthOf is WindowLength for a caller that has the READING as well as
+// the name, and it is the one every length consumer should call.
+//
+// The reading wins. A window that reported its own length knows something the
+// table cannot: the table is Claude's fixed 18000/604800 pair, and a Codex
+// window's length is a property of the plan that only the endpoint knows. Names
+// the table has no entry for — cinder_cove, and both codex names — answer false
+// exactly as before when the reading carried no length either, so nothing
+// invents a rollover that never arrives.
+func WindowLengthOf(n WindowName, w Window) (time.Duration, bool) {
+	if d, ok := w.Length(); ok {
+		return d, true
+	}
+	return windowLength(n)
+}
+
 // IsWeekly reports whether a window's quota is the seven-day kind. It is a
 // question about PERISHABILITY, not about length: the ranking asks it to find
 // the quota consume-first should spend before it expires, and a five-hour
@@ -95,6 +111,20 @@ func IsWeekly(n WindowName) bool {
 		return true
 	}
 	return n.Scoped()
+}
+
+// IsWeeklyOf is IsWeekly for a caller that has the reading too.
+//
+// A window that reported its own length is measured, not named: a week or
+// longer is the perishable quota consume-first spends first, and anything
+// shorter is a rollover nobody can lose. A reading with no length falls back to
+// the name, which is what leaves every Claude call site answering exactly as it
+// does today.
+func IsWeeklyOf(n WindowName, w Window) bool {
+	if d, ok := w.Length(); ok {
+		return d >= 7*24*time.Hour
+	}
+	return IsWeekly(n)
 }
 
 // PaceReason says why a pace reading is or is not available. Every non-OK value
@@ -186,7 +216,7 @@ func (p Pace) Projection() (Projection, bool) {
 
 // PaceOf measures one window against the clock.
 func PaceOf(name WindowName, w Window, now time.Time) Pace {
-	length, ok := windowLength(name)
+	length, ok := WindowLengthOf(name, w)
 	if !ok {
 		return Pace{Reason: PaceNoWindowLength}
 	}

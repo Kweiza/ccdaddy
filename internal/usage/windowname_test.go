@@ -11,7 +11,12 @@ import (
 // keeps them the same list.
 func TestEveryRankedWindowIsAValidThresholdTarget(t *testing.T) {
 	names := RateLimitWindowNames()
-	ranked := (&Snapshot{}).RateLimitWindows()
+	// The codex windows are appended only when the reading carried them, so a
+	// zero Snapshot ranks five while the name list holds seven. Presenting them
+	// is what makes this a comparison of the two LISTS rather than of one list
+	// against one provider's reading.
+	present := NewWindow(nil, nil)
+	ranked := (&Snapshot{CodexPrimary: present, CodexSecondary: present}).RateLimitWindows()
 	if len(names) != len(ranked) {
 		t.Fatalf("RateLimitWindowNames() has %d names and RateLimitWindows() has %d windows; a window that can bind but cannot carry a threshold is a window nobody can tune",
 			len(names), len(ranked))

@@ -75,16 +75,23 @@ var scopedWindowScopes = [...]struct {
 // rateLimitWindowNames is Snapshot.RateLimitWindows' membership, in the same
 // order. cinder_cove is out for the reason it is out there: its resets_at is an
 // expiry rather than a rollover, so nothing ever ranks it.
+//
+// The two codex names are at the END and that is the same order as there: the
+// five Claude keys are listed unconditionally and the codex pair is appended
+// when the reading carried it, so a caller walking the two lists in step reads
+// the same names in the same places.
 var rateLimitWindowNames = [...]WindowName{
 	WindowFiveHour,
 	WindowSevenDay,
 	WindowSevenDayOAuthApps,
 	WindowSevenDayOpus,
 	WindowSevenDaySonnet,
+	WindowCodexPrimary,
+	WindowCodexSecondary,
 }
 
-// RateLimitWindowNames is the five recurring windows by name, for a caller that
-// has no reading to take them from — help text, a refusal, a settable-key list.
+// RateLimitWindowNames is the recurring windows by name, for a caller that has
+// no reading to take them from — help text, a refusal, a settable-key list.
 // It returns a copy so a caller cannot edit the table every answer comes from.
 func RateLimitWindowNames() []WindowName {
 	out := make([]WindowName, len(rateLimitWindowNames))
