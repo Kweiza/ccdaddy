@@ -352,7 +352,7 @@ func coerce(key, value string) (any, error) {
 			return nil, err
 		}
 		return s.String(), nil
-	case keyProbeUnknown, keyHover, keyMCPSwitchWithoutElicitation, keyUpdateCheck,
+	case keyProbeUnknown, keyHover, keyManual, keyMCPSwitchWithoutElicitation, keyUpdateCheck,
 		keyCodexCrossAccountReplay:
 		return coerceBool(key, value)
 	case keyTUITheme:
@@ -472,6 +472,8 @@ func (c Config) Value(key string) (string, error) {
 		return format(c.ProbeUnknown), nil
 	case keyHover:
 		return format(c.Hover), nil
+	case keyManual:
+		return format(c.Manual), nil
 	case keyMCPSwitchWithoutElicitation:
 		return format(c.MCPSwitchWithoutElicitation), nil
 	case keyUpdateCheck:

@@ -484,7 +484,7 @@ func TestTheKeySetIsClosed(t *testing.T) {
 	want := []string{
 		"threshold", "hysteresis_pct", "headroom_ratio",
 		"cooldown", "recovery_hysteresis", "preempt_lead", "strategy",
-		"probe_unknown", "hover", "mcp_switch_without_elicitation", "update_check",
+		"probe_unknown", "hover", "manual", "mcp_switch_without_elicitation", "update_check",
 		"credit.threshold", "credit.max_auto_spend",
 		"codex.threshold", "codex.binary", "codex.proxy_port", "codex.cross_account_replay",
 		"tui.theme", "tui.glyphs",
