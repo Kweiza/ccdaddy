@@ -179,10 +179,10 @@ func seedMismatchedRow(t *testing.T, uuid, email string, blob cclink.Blob) store
 
 // THE THREE GUARDS. Each of LiveStateOf, AttributeLogin's OAuthTokenEnv branch
 // and APIKeyOwner used to match a stored row by credential SHAPE alone, and
-// none of them checked a.Provider. A row seedMismatchedRow builds defeats every
-// one of them if the provider check is missing, however TestLiveStateOfNever-
-// AttributesACodexAccount above stays green throughout -- its seedCodex fixture
-// cannot construct the shape that trips these.
+// none of them checked a.Provider. A row seedMismatchedRow builds defeats
+// every one of them if the provider check is missing, however
+// TestLiveStateOfNeverAttributesACodexAccount above stays green throughout --
+// its seedCodex fixture cannot construct the shape that trips these.
 
 // LiveStateOf: a Codex row carrying a claudeAiOauth blob must not be attributed
 // to a live Claude login that matches it.
