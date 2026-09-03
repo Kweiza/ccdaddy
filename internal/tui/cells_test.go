@@ -94,6 +94,8 @@ func TestEveryStateNamesTheRoleItWillBePaintedIn(t *testing.T) {
 		{daemon.StateExhausted, theme.RoleExhausted},
 		{daemon.StateEmpty, theme.RoleExhausted},
 		{daemon.StateQuarantined, theme.RoleQuarantined},
+		{daemon.StateServing, theme.RoleActive},
+		{daemon.StateNeedsRelogin, theme.RoleQuarantined},
 		{daemon.StateDisabled, theme.RoleMuted},
 		{daemon.StateUnknown, theme.RoleMuted},
 		{"", theme.RoleMuted},
@@ -115,13 +117,18 @@ func TestAnAccountNoDaemonHasEverPublishedRendersADashAndNoGlyph(t *testing.T) {
 	}
 }
 
-// Six named arms, the empty arm, and the default. Eight, and the test counts
-// them so that deleting one is not a silent narrowing.
+// The eight states enumerated here each render a cell nothing else renders, and
+// the count is asserted so that deleting an arm is not a silent narrowing. The
+// two codex states are in the list for the reason the other six are: serving
+// takes the ACTIVE glyph and needs-relogin the QUARANTINED one, so the word is
+// all that separates each from its neighbour and a shared cell would be
+// invisible.
 func TestEveryAccountStateHasItsOwnCell(t *testing.T) {
 	seen := map[string]bool{}
 	for _, s := range []daemon.AccountState{
 		daemon.StateActive, daemon.StateCandidate, daemon.StateExhausted,
 		daemon.StateQuarantined, daemon.StateDisabled, daemon.StateUnknown,
+		daemon.StateServing, daemon.StateNeedsRelogin,
 	} {
 		glyph, text, _ := stateCell(UnicodeGlyphs, s)
 		if text != string(s) {
@@ -133,8 +140,8 @@ func TestEveryAccountStateHasItsOwnCell(t *testing.T) {
 		}
 		seen[key] = true
 	}
-	if len(seen) != 6 {
-		t.Fatalf("six named states rendered %d distinct cells", len(seen))
+	if len(seen) != 8 {
+		t.Fatalf("eight named states rendered %d distinct cells", len(seen))
 	}
 }
 

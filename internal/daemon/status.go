@@ -67,6 +67,19 @@ const (
 	// StateUnknown is an account whose usage could not be read. It is NOT an
 	// empty account, and it must never render as 0%.
 	StateUnknown AccountState = "unknown"
+	// StateServing is the Codex account ccdad's proxy serves new threads from.
+	//
+	// It is a SEPARATE value from active rather than the same word for both
+	// providers, and the difference is what it promises: active names the login
+	// Claude Code's next request carries, and serving names the account the
+	// proxy will bill a codex thread STARTED FROM NOW to -- threads already in
+	// flight keep the account that produced their reasoning content.
+	StateServing AccountState = "serving"
+	// StateNeedsRelogin is a Codex account whose refresh grant the endpoint has
+	// rejected. It is distinct from quarantined because the remedy is: a
+	// quarantine lapses on a timer, and this one only ends when a person runs
+	// `ccdad codex add`.
+	StateNeedsRelogin AccountState = "needs-relogin"
 )
 
 // AccountStatus is one account's engine state.
@@ -147,10 +160,39 @@ type Status struct {
 	// behind and a free singleton, and only this flag says which happened.
 	Stopped bool `json:"stopped,omitempty"`
 	// ActiveUUID is the account the engine last observed Claude Code using.
+	//
+	// It is CLAUDE'S and stays Claude's. The codex pointer is a different fact
+	// about a different credential path, and folding the two would make every
+	// consumer keyed on this field answer about whichever provider happened to
+	// move last.
 	ActiveUUID   string          `json:"activeUuid,omitempty"`
 	LastSwitchAt time.Time       `json:"lastSwitchAt,omitzero"`
 	LastSwitchTo string          `json:"lastSwitchTo,omitempty"`
 	Accounts     []AccountStatus `json:"accounts,omitempty"`
+	// The Codex lane's six fields. Every one of them passes this file's
+	// authority rule -- each is a fact about the daemon PROCESS or about the
+	// decision it just made, and nothing else on the machine records it.
+	//
+	// CodexServingUUID is the account the proxy serves NEW threads from. It is
+	// published from the pointer file rather than from an in-memory value,
+	// because the pointer is what the proxy actually reads per request.
+	CodexServingUUID string `json:"codexServingUuid,omitempty"`
+	// CodexProxyPort is the loopback port the proxy is listening on, and
+	// CodexProxyFellBack says it is not the port that was resolved -- something
+	// else held that one, so codex sessions launched before this daemon started
+	// are talking to nothing and must be relaunched.
+	//
+	// The port lives HERE and not in a file of its own: it is a process fact
+	// like the pid, and this is where process facts live.
+	CodexProxyPort     int  `json:"codexProxyPort,omitempty"`
+	CodexProxyFellBack bool `json:"codexProxyFellBack,omitempty"`
+	// The Codex anti-flap stamp, the twin of LastSwitchAt/To.
+	CodexLastSwitchAt time.Time `json:"codexLastSwitchAt,omitzero"`
+	CodexLastSwitchTo string    `json:"codexLastSwitchTo,omitempty"`
+	// CodexUnroutedLaunches counts codex sessions the launcher had to start
+	// WITHOUT the proxy in front of them. Such a session spends whatever
+	// ~/.codex holds and ccdad cannot see it, so doctor and status say so.
+	CodexUnroutedLaunches int `json:"codexUnroutedLaunches,omitempty"`
 	// The daily release check, in four fields that pass this file's own
 	// authority rule: all four are facts about the daemon PROCESS, and nothing
 	// else on the machine records them.

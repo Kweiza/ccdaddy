@@ -879,7 +879,7 @@ func TestTheDaemonAndTheEngineCannotDisagreeAboutSpent(t *testing.T) {
 
 			// activeUUID is empty so the active case cannot answer ahead of the
 			// verdict under test.
-			state := accountState(store.Account{UUID: "u-1"}, cache, false, "", configuredThresholds(cfg))
+			state := accountState(store.Account{UUID: "u-1"}, cache, false, false, "", "", configuredThresholds(cfg))
 
 			// One candidate, so AllOverThreshold is exactly "this account is
 			// known and spent" — the engine's own answer, reached without
@@ -1895,7 +1895,7 @@ func TestProbeDueRefusesAnUnknownLiveAccountAndNotMerelyAnEmptyOne(t *testing.T)
 	isolateEngine(t)
 	e := NewEngine()
 	e.Now = func() time.Time { return tickEpoch }
-	a := store.Account{UUID: "u-1"}
+	a := store.Account{UUID: "u-1", Provider: provider.Claude}
 	entry := usage.Entry{Snapshot: unusedWindow(), FetchedAt: tickEpoch.Add(-10 * time.Minute)}
 	cfg := config.Defaults()
 
@@ -2066,7 +2066,7 @@ func TestThePublishedScheduleIsTheOneTheDispatcherWillHonour(t *testing.T) {
 
 	// A restart: the cache is all there is, and the account is an alternate.
 	restarted := NewEngine()
-	restarted.publish(accounts, cache, live("u-1"), thresholds, nil)
+	restarted.publish(accounts, cache, live("u-1"), switcher.Evaluation{}, thresholds, nil)
 	if got := nextPollOf(t, restarted.Snapshot(), "u-2"); !got.Equal(stood) {
 		t.Errorf("a restarted daemon published %s for a stood-down alternate, want %s — "+
 			"the dispatcher will not touch it until then", got, stood)
@@ -2078,7 +2078,7 @@ func TestThePublishedScheduleIsTheOneTheDispatcherWillHonour(t *testing.T) {
 	e.Now = func() time.Time { return tickEpoch }
 	e.Rand = func() float64 { return 0.5 }
 	e.commit(accounts[0], snapshotWith(20), tickEpoch, []string{"u-2"}, thresholds, false, nil)
-	e.publish(accounts, cache, live("u-1"), thresholds, nil)
+	e.publish(accounts, cache, live("u-1"), switcher.Evaluation{}, thresholds, nil)
 	if got := nextPollOf(t, e.Snapshot(), "u-2"); !got.Equal(stood) {
 		t.Errorf("published %s for a stood-down alternate this process polled, want %s", got, stood)
 	}
@@ -2090,7 +2090,7 @@ func TestThePublishedScheduleIsTheOneTheDispatcherWillHonour(t *testing.T) {
 		t.Fatal(err)
 	}
 	entry, _ := reloaded.Get("u-2")
-	e.publish(accounts, reloaded, live("u-2"), thresholds, nil)
+	e.publish(accounts, reloaded, live("u-2"), switcher.Evaluation{}, thresholds, nil)
 	if got := nextPollOf(t, e.Snapshot(), "u-2"); !got.Equal(entry.NextPollAt) {
 		t.Errorf("published %s for the account that is now live, want the %s its own poll "+
 			"earned — a stand-down written for its predecessor does not hold it", got, entry.NextPollAt)
