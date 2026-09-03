@@ -57,7 +57,7 @@ func storedCredential(t *testing.T, uuid string) Credential {
 	}
 	cred, ok, err := FromBlob(blob)
 	if err != nil || !ok {
-		t.Fatalf("FromBlob() = %v, %v, %v", cred, ok, err)
+		t.Fatalf("FromBlob() ok = %v, err = %v", ok, err)
 	}
 	return cred
 }
@@ -115,13 +115,49 @@ func TestClassify(t *testing.T) {
 // The single-use grant is the whole reason this type exists. N callers seeing
 // the same 401 must produce ONE exchange: a second one presents a token the
 // server has already rotated, which is reuse detection, which is terminal.
+//
+// A naive version of this test -- a handler that answers instantly, with no
+// synchronization of its own -- passes even with the Refresher's mutex
+// deleted outright: against a local httptest server the winning caller's
+// whole read-POST-save cycle finishes fast enough that by the time any other
+// caller's own store read is next in line, it already sees the rotated pair
+// and adopts without ever attempting a POST. So every request blocks in the
+// handler until this test releases it, and release is driven by what
+// actually happened rather than by a guess about how long it takes to
+// happen: it fires the instant a SECOND request arrives, which is proof that
+// more than one caller reached the token endpoint, not a timing inference.
+//
+// Only the CORRECTLY-serialized case -- where a second request is never
+// coming, no matter how long this waits, because the other `callers`-1 are
+// permanently parked on the in-process mutex -- needs a way out at all, and
+// that is the one place a duration appears: a ceiling generous enough that a
+// genuine second attempt, however long the store's own retry backoff runs,
+// would have arrived well before it fires. It is sized as a wide margin
+// instead of a bound tuned to any specific constant, so it stays correct
+// across an ordinary change to that backoff instead of silently going blind
+// the moment it shrinks.
+//
+// (An earlier version of this synchronization used a WaitGroup barrier that
+// released the response as soon as every caller's goroutine had merely
+// launched. That proved just as blind: "launched" says nothing about
+// whether a caller has reached its own store read yet, and in practice the
+// store's own retry backoff serializes losing readers to roughly one
+// success per backoff interval regardless of how many are contending, so
+// the second reader's attempt lands tens of milliseconds after the first
+// -- long after a barrier keyed on goroutine launch alone had already let
+// go.)
 func TestNConcurrentRefreshesSpendOneGrant(t *testing.T) {
 	withStore(t)
 	seedCodex(t, "user-1", Credential{AccessToken: "AT-old", RefreshToken: "RT-old", AccountID: "ws-1", UserID: "user-1"})
 
 	var posts atomic.Int64
+	arrived := make(chan struct{}, 64)
+	release := make(chan struct{})
+	var closeRelease sync.Once
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		posts.Add(1)
+		arrived <- struct{}{}
+		<-release
 		io.WriteString(w, `{"id_token":"ID-new","access_token":"AT-new","refresh_token":"RT-new"}`)
 	}))
 	defer srv.Close()
@@ -140,6 +176,21 @@ func TestNConcurrentRefreshesSpendOneGrant(t *testing.T) {
 			outcomes[i], errs[i] = r.Refresh(context.Background(), "user-1", "AT-old")
 		}(i)
 	}
+
+	deadline := time.After(300 * time.Millisecond)
+waitForArrivals:
+	for {
+		select {
+		case <-arrived:
+			if posts.Load() >= 2 {
+				break waitForArrivals
+			}
+		case <-deadline:
+			break waitForArrivals
+		}
+	}
+	closeRelease.Do(func() { close(release) })
+
 	wg.Wait()
 
 	if got := posts.Load(); got != 1 {
@@ -166,7 +217,12 @@ func TestNConcurrentRefreshesSpendOneGrant(t *testing.T) {
 		t.Errorf("rotated = %d, adopted = %d; want 1 and %d", rotated, adopted, callers-1)
 	}
 	if got := storedCredential(t, "user-1"); got.AccessToken != "AT-new" || got.RefreshToken != "RT-new" {
-		t.Errorf("stored credential = %+v, want the rotated pair", got)
+		if got.AccessToken != "AT-new" {
+			t.Errorf("stored AccessToken = %q, want AT-new", got.AccessToken)
+		}
+		if got.RefreshToken != "RT-new" {
+			t.Errorf("stored RefreshToken = %q, want RT-new", got.RefreshToken)
+		}
 	}
 }
 
@@ -499,7 +555,12 @@ func TestARotationTheStoreCouldNotTakeIsHeldAndLandedNext(t *testing.T) {
 		t.Errorf("second AccessToken = %q, want AT-new", second.Credential.AccessToken)
 	}
 	if got := storedCredential(t, "user-1"); got.AccessToken != "AT-new" || got.RefreshToken != "RT-new" {
-		t.Errorf("stored credential = %+v, want the held pair landed", got)
+		if got.AccessToken != "AT-new" {
+			t.Errorf("stored AccessToken = %q, want AT-new", got.AccessToken)
+		}
+		if got.RefreshToken != "RT-new" {
+			t.Errorf("stored RefreshToken = %q, want RT-new", got.RefreshToken)
+		}
 	}
 	if got := posts.Load(); got != 1 {
 		t.Errorf("the token endpoint saw %d exchanges, want 1 — the second call lands the held pair instead of spending another grant", got)

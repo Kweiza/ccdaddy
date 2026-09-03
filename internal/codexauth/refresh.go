@@ -339,7 +339,7 @@ func (r *Refresher) Refresh(ctx context.Context, uuid, triggeredBy string) (Outc
 	// The store lock is NOT held here. See the note on Refresher.
 	raw, status, postErr := post(ctx, r.client, authBase+tokenPath, "application/json", bytes.NewReader(body))
 	if postErr != nil || status != http.StatusOK {
-		return r.failed(uuid, cred, status, raw, postErr), nil
+		return r.failed(uuid, st, cred, status, raw, postErr), nil
 	}
 
 	var res refreshResponse
@@ -389,9 +389,12 @@ func (r *Refresher) Refresh(ctx context.Context, uuid, triggeredBy string) (Outc
 
 // failed turns a refused exchange into an Outcome, marking the account only
 // when the grant itself is dead.
-func (r *Refresher) failed(uuid string, cred Credential, status int, body []byte, postErr error) Outcome {
+//
+// st is the caller's own refreshState, already locked by Refresh for the
+// whole call -- failed takes it as a parameter rather than looking it up
+// again so a caller cannot pass a state it does not hold the lock on.
+func (r *Refresher) failed(uuid string, st *refreshState, cred Credential, status int, body []byte, postErr error) Outcome {
 	kind, code := Classify(status, body, postErr)
-	st := r.state(uuid)
 	if kind != Terminal {
 		st.extendCooldown(r.now().Add(r.cooldown))
 		return Outcome{Kind: Transient, Code: code, Credential: cred}
@@ -415,6 +418,9 @@ func (r *Refresher) failed(uuid string, cred Credential, status int, body []byte
 
 // extendCooldown is monotonic: a cooldown can be lengthened and never cut
 // short, so two failures a second apart leave the LATER deadline standing.
+//
+// Its caller must already hold st.mu: this mutates st.cooldownUntil with no
+// locking of its own.
 func (st *refreshState) extendCooldown(until time.Time) {
 	if until.After(st.cooldownUntil) {
 		st.cooldownUntil = until
