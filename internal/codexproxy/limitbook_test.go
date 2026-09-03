@@ -121,3 +121,40 @@ func TestTheBookIsSafeForConcurrentUse(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// ResetsAt is the only deadline an answer to codex may quote, and the whole
+// point of the known flag is that a deadline ccdad invented never leaves the
+// process wearing the endpoint's authority. Without this the flag ships
+// unprotected: deleting the !e.known test leaves every other case in this file
+// green, because nothing else ever reads a marked account back through
+// ResetsAt.
+func TestAnInventedDeadlineIsNeverQuotedToCodex(t *testing.T) {
+	b := &LimitBook{}
+	until := bookEpoch.Add(time.Hour)
+	b.MarkLimitedFor("cx-1", until, false)
+
+	if _, ok := b.LimitedUntil("cx-1", bookEpoch); !ok {
+		t.Fatal("LimitedUntil said no; an invented deadline still holds the account back")
+	}
+	if at, ok := b.ResetsAt("cx-1", bookEpoch); ok {
+		t.Errorf("ResetsAt quoted %v for a deadline the endpoint never stated", at)
+	}
+}
+
+// And the other half: a reset the endpoint did state is quoted, right up to
+// the instant it lapses and not past it.
+func TestAnEndpointStatedResetIsQuoted(t *testing.T) {
+	b := &LimitBook{}
+	until := bookEpoch.Add(time.Hour)
+	b.MarkLimitedFor("cx-1", until, true)
+
+	if at, ok := b.ResetsAt("cx-1", bookEpoch); !ok || !at.Equal(until) {
+		t.Errorf("ResetsAt = %v, %v; want %v, true", at, ok, until)
+	}
+	if _, ok := b.ResetsAt("cx-1", until); ok {
+		t.Error("ResetsAt still quoted a reset at the very instant it lapsed")
+	}
+	if _, ok := b.ResetsAt("cx-1", until.Add(time.Nanosecond)); ok {
+		t.Error("ResetsAt quoted a reset a nanosecond after it lapsed")
+	}
+}
