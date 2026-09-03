@@ -203,6 +203,19 @@ func stateCell(g Glyphs, s daemon.AccountState) (glyph, text string, role theme.
 		return g.Empty, "empty", theme.RoleExhausted
 	case daemon.StateQuarantined:
 		return g.Quarantined, "quarantined", theme.RoleQuarantined
+	case daemon.StateServing:
+		// The codex proxy's account. It takes the ACTIVE glyph and the active
+		// role because it answers the same question for the other provider --
+		// "which account would a session started now be billed to" -- and the
+		// WORD is what tells the two apart, exactly as it does for empty and
+		// exhausted, which share a role for the same kind of reason.
+		return g.Active, "serving", theme.RoleActive
+	case daemon.StateNeedsRelogin:
+		// A dead grant is held out of rotation until a person runs a command,
+		// which is what quarantined means on the Claude side, so it is painted
+		// the same and the word carries the difference: a quarantine lapses on
+		// a timer and this one does not.
+		return g.Quarantined, "needs-relogin", theme.RoleQuarantined
 	case daemon.StateDisabled:
 		return g.Disabled, "disabled", theme.RoleMuted
 	case daemon.StateUnknown:

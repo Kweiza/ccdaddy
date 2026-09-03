@@ -149,6 +149,17 @@ type Engine struct {
 	saidOverridden  bool
 	saidContended   bool
 	saidClaimNotice string
+	// codexRelogin is the set of Codex accounts whose stored relogin mark still
+	// names the token they hold. It is beside the three latches above and under
+	// the same rule: Tick writes it and publish reads it, both on the tick
+	// goroutine, so it is deliberately outside the mutex the fields a poller
+	// goroutine reaches are under.
+	//
+	// It is a tick-scoped SET rather than a field on AccountStatus computed
+	// somewhere else because deciding it needs the credential file, and publish
+	// runs under e.mu -- reading files there would hold the status document shut
+	// against Snapshot for the length of a directory of reads.
+	codexRelogin map[string]bool
 	// saidNoClaude and saidProbeSpends are the probe's two once-per-lifetime
 	// lines, held here for the reason the three above are: this loop runs about
 	// once a second, and a machine with no Claude Code on it stays that way.
@@ -393,7 +404,12 @@ func (e *Engine) Tick(ctx context.Context) error {
 		// The configured table, not hoverThresholds(cfg, ev): a failed
 		// evaluation is the one case where ev.Plan cannot be trusted for
 		// anything it did not itself set, including whether Hover ran.
-		e.publish(accounts, cache, ev, configuredThresholds(cfg), quarantinedSet(ev))
+		//
+		// The Codex half is a zero Evaluation, and deliberately: the Claude
+		// pass failing says nothing about the Codex one, but this tick has not
+		// run it, and publishing a serving account nobody computed this tick
+		// would be a number with no measurement behind it.
+		e.publish(accounts, cache, ev, switcher.Evaluation{}, configuredThresholds(cfg), quarantinedSet(ev))
 		return evErr
 	}
 
@@ -418,7 +434,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	// and probe the wrong binding window.
 	thresholds := hoverThresholds(cfg, ev)
 	e.dispatch(ctx, s, accounts, cache, cfg, thresholds, now, active, activeKnown, quarantined)
-	e.publish(accounts, cache, ev, thresholds, quarantined)
+	e.publish(accounts, cache, ev, switcher.Evaluation{}, thresholds, quarantined)
 
 	if swapErr != nil {
 		return swapErr
@@ -851,6 +867,14 @@ func (e *Engine) probeDue(a store.Account, entry usage.Entry, cfg config.Config,
 	thresholds func(uuid string) strategy.Thresholds,
 	now time.Time, active string, activeKnown bool, quarantined map[string]bool) (usage.WindowName, string, bool) {
 
+	// The provider term is FIRST, and it is not a tidy-up. A probe seeds a
+	// scratch credential home from the account's stored Claude login and runs a
+	// real Claude Code against it; a Codex account has no such login, so the
+	// errand cannot authenticate and there is no codex-flavoured probe to write
+	// instead. The window a warm-up would start does not exist on that side.
+	if a.Provider != provider.Claude {
+		return "", "", false
+	}
 	if !cfg.ProbeUnknown || a.Disabled || quarantined[a.UUID] {
 		return "", "", false
 	}
@@ -1564,7 +1588,8 @@ func quarantinedSet(ev switcher.Evaluation) map[string]bool {
 }
 
 func (e *Engine) publish(accounts []store.Account, cache *usage.Cache,
-	ev switcher.Evaluation, thresholds func(uuid string) strategy.Thresholds, quarantined map[string]bool) {
+	ev switcher.Evaluation, codex switcher.Evaluation,
+	thresholds func(uuid string) strategy.Thresholds, quarantined map[string]bool) {
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -1575,6 +1600,16 @@ func (e *Engine) publish(accounts []store.Account, cache *usage.Cache,
 	}
 	if at, to := ev.LastSwitchAt, ev.LastSwitchTo; !at.IsZero() {
 		status.LastSwitchAt, status.LastSwitchTo = at, to
+	}
+	// The Codex half, from the Codex pass and from nowhere else. A zero
+	// Evaluation -- which is what a machine with no Codex accounts produces,
+	// and what the failed-Claude-evaluation path hands in -- leaves every field
+	// here absent, which is the honest answer for such a machine.
+	if codex.LiveKnown {
+		status.CodexServingUUID = codex.Live.UUID
+	}
+	if at, to := codex.LastSwitchAt, codex.LastSwitchTo; !at.IsZero() {
+		status.CodexLastSwitchAt, status.CodexLastSwitchTo = at, to
 	}
 	for _, a := range accounts {
 		row := AccountStatus{UUID: a.UUID}
@@ -1588,26 +1623,38 @@ func (e *Engine) publish(accounts []store.Account, cache *usage.Cache,
 		if entry, ok := cache.Get(a.UUID); ok {
 			row.NextPollAt = entry.PollAt(a.UUID == status.ActiveUUID)
 		}
-		row.State = accountState(a, cache, quarantined[a.UUID], status.ActiveUUID, thresholds)
+		row.State = accountState(a, cache, quarantined[a.UUID], e.codexRelogin[a.UUID],
+			status.ActiveUUID, status.CodexServingUUID, thresholds)
 		status.Accounts = append(status.Accounts, row)
 	}
 	e.status = status
 }
 
-func accountState(a store.Account, cache *usage.Cache, quarantined bool,
-	activeUUID string, thresholds func(uuid string) strategy.Thresholds) AccountState {
+func accountState(a store.Account, cache *usage.Cache, quarantined, needsRelogin bool,
+	activeUUID, servingUUID string, thresholds func(uuid string) strategy.Thresholds) AccountState {
 
 	// There is no case for the primary flag, and its absence is the decision:
 	// primary says where the engine RANKS an account, never that it should be
 	// left alone. Giving it an arm here would publish a usable seat as though its
 	// owner had held it out of rotation.
+	//
+	// The order is the answer's specificity, and the two new arms sit where
+	// they do for a reason each. needs-relogin is ABOVE serving because a dead
+	// grant is the fact whose remedy is a command: an account that answers 401
+	// on every turn must not be reported as the one currently working. serving
+	// is BELOW active only because the two are mutually exclusive by provider,
+	// so the order between them never decides anything.
 	switch {
 	case a.Disabled:
 		return StateDisabled
 	case quarantined:
 		return StateQuarantined
+	case needsRelogin:
+		return StateNeedsRelogin
 	case a.UUID == activeUUID:
 		return StateActive
+	case a.UUID == servingUUID:
+		return StateServing
 	}
 	entry, ok := cache.Get(a.UUID)
 	if !ok || entry.Snapshot == nil {

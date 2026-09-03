@@ -36,7 +36,7 @@ func TestTheDaemonMeasuresAgainstThePerWindowTable(t *testing.T) {
 	a := store.Account{UUID: "acct-1"}
 
 	bare := config.Config{Threshold: 80}
-	if got := accountState(a, cache, false, "", configuredThresholds(bare)); got != StateCandidate {
+	if got := accountState(a, cache, false, false, "", "", configuredThresholds(bare)); got != StateCandidate {
 		t.Fatalf("accountState() with no table = %q, want %q — 70%% used is under the default threshold", got, StateCandidate)
 	}
 
@@ -44,7 +44,7 @@ func TestTheDaemonMeasuresAgainstThePerWindowTable(t *testing.T) {
 		Threshold:       80,
 		WindowThreshold: map[usage.WindowName]float64{usage.WindowSevenDay: 60},
 	}
-	if got := accountState(a, cache, false, "", configuredThresholds(tuned)); got != StateExhausted {
+	if got := accountState(a, cache, false, false, "", "", configuredThresholds(tuned)); got != StateExhausted {
 		t.Errorf("accountState() with seven_day capped at 60 = %q, want %q — the daemon must measure each window against the threshold the ranking measures it against", got, StateExhausted)
 	}
 }
@@ -135,7 +135,7 @@ func TestASeatMeteredOnlyInMoneyPublishesARealState(t *testing.T) {
 			cache := &usage.Cache{}
 			cache.Put("acct-1", usage.Entry{Snapshot: creditOnlySnapshot(tc.utilization), FetchedAt: tickEpoch})
 			a := store.Account{UUID: "acct-1", Primary: true}
-			if got := accountState(a, cache, false, "", configuredThresholds(cfg)); got != tc.want {
+			if got := accountState(a, cache, false, false, "", "", configuredThresholds(cfg)); got != tc.want {
 				t.Errorf("accountState() = %q, want %q", got, tc.want)
 			}
 		})
