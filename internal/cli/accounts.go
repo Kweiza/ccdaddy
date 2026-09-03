@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
+	"github.com/Kweiza/ccdaddy/internal/provider"
 	"github.com/Kweiza/ccdaddy/internal/store"
 )
 
@@ -105,17 +106,30 @@ func setDisabled(cmd *cobra.Command, ref string, disabled bool) error {
 	// Disabling the last enabled account is still a completed action, not the
 	// blocked exit 4: nothing was blocked, and the state is exactly what was
 	// asked for. The engine reports having no viable target when it next looks.
-	if disabled && countEnabled(s.Accounts()) == 0 {
-		fmt.Fprintln(cmd.ErrOrStderr(),
-			"Note: every account is now disabled, so automatic switching has nothing to rotate to.")
+	//
+	// Counted for the disabled account's OWN provider, not across both: the
+	// two rotations are already provider-filtered -- EvalOptions.provider()
+	// defaults to Claude and codexCandidates skips disabled accounts within
+	// the codex lane alone -- so a shared count would stay silent about the
+	// Claude lane running dry while a codex account is still enabled, and
+	// symmetrically silent about the codex lane running dry while a Claude
+	// account is.
+	if disabled && countEnabled(s.Accounts(), target.Provider) == 0 {
+		if target.Provider == provider.Codex {
+			fmt.Fprintln(cmd.ErrOrStderr(),
+				"Note: every codex account is now disabled, so the codex lane has nothing to rotate to.")
+		} else {
+			fmt.Fprintln(cmd.ErrOrStderr(),
+				"Note: every account is now disabled, so automatic switching has nothing to rotate to.")
+		}
 	}
 	return nil
 }
 
-func countEnabled(accounts []store.Account) int {
+func countEnabled(accounts []store.Account, p provider.ID) int {
 	n := 0
 	for _, a := range accounts {
-		if !a.Disabled {
+		if a.Provider == p && !a.Disabled {
 			n++
 		}
 	}
