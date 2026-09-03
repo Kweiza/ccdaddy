@@ -90,36 +90,54 @@ const (
 	// gap the poller can leave, so the oldest end of the window still has a
 	// sample bracketing it after the worst possible silence.
 	//
-	// That gap is NOT pollpolicy's largest interval. The ceiling AIMD parks a
-	// repeatedly rate-limited account at is Post429MaxInterval, 1800 s, and
-	// pollpolicy.Next jitters it up by JitterFrac before returning it -- 1980 s
-	// at the top of the band. But the daemon then passes that already-jittered
-	// figure to pollpolicy.Share, which multiplies it by the number of accounts
-	// on one identity, because the endpoint's allowance belongs to the identity
-	// and not to the account, and nothing clamps the product. Six accounts is
-	// therefore 11880 s, 3 h 18 m, between two consecutive readings of any one
-	// of them. Four hours plus that is 7 h 18 m; eight hours is the next whole
-	// hour above it. TestRetainCoversTheLongestGapThePolicyPermits recomputes
-	// the gap through those two functions rather than from their inputs, so a
-	// rule change inside either one fails rather than silently invalidating this
-	// paragraph.
+	// That gap is NOT any one number in pollpolicy. The ceiling AIMD parks a
+	// repeatedly rate-limited account at is that table's Post429MaxInterval,
+	// and pollpolicy jitters it up by JitterFrac before returning it. The
+	// daemon then passes that already-jittered figure to Share, which
+	// multiplies it by the number of accounts on one identity, because the
+	// endpoint's allowance belongs to the identity and not to the account, and
+	// nothing clamps the product.
+	//
+	// It is the widest gap over EVERY table, not the Claude one, because this
+	// is one bound over one file that holds both providers' samples:
+	//
+	//   Claude  1800 s ceiling -> 1980 s jittered -> x6 = 3 h 18 m -> 7 h 18 m
+	//   Codex  14400 s ceiling -> 15840 s jittered -> x6 = 26 h 24 m -> 30 h 24 m
+	//
+	// 31 hours is the next whole hour above the larger.
+	// TestRetainCoversTheLongestGapThePolicyPermits recomputes both through
+	// those functions rather than from their inputs, so a rule change inside
+	// either table fails rather than silently invalidating this paragraph.
+	//
+	// Widening it four-fold costs nothing on disk, and that is measured rather
+	// than assumed: maxSamples is a hard count bound that did not move, so the
+	// file's worst case is exactly what it was. What the widening buys is a
+	// Codex account whose oldest end is still bracketed after a bad hour, and
+	// what it costs is that the COUNT bound now bites first on a Claude account
+	// polled at the 180 s floor -- see maxSamples.
 	//
 	// An identity larger than six leaves a longer gap than this and loses the
 	// oldest end of the window. The measurement is then made over a shorter span
 	// than four hours, which is a narrower answer rather than a wrong one.
 	//
-	// It is deliberately not derived from the 600 s idle cadence: that is not
-	// the longest interval the poller reaches, and sizing against it drops the
+	// It is deliberately not derived from an idle cadence: that is not the
+	// longest interval the poller reaches, and sizing against it drops the
 	// oldest end of the window on any fleet that has just been rate limited --
 	// exactly when a burn rate is worth having.
-	retain = 8 * time.Hour
+	retain = 31 * time.Hour
 
 	// maxSamples is a hard bound no cadence can argue past, so a poller that
 	// somehow ran far faster than the policy permits could not grow this file
-	// without limit. It is not the bound that normally bites: pollpolicy's
-	// sustained floor is MinInterval, 180 s, so eight hours of the fastest
-	// permitted polling is 160 samples per account, and reaching 512 would take
-	// a reading every 56 s.
+	// without limit.
+	//
+	// Which of the two bounds bites first depends on the provider, and both
+	// answers are correct. The Claude table's sustained floor is 180 s, so 31
+	// hours of the fastest permitted polling would be 620 samples and the COUNT
+	// bound cuts in at 512 -- about 25 h 36 m of retention for an account polled
+	// flat out, which still brackets the 7 h 18 m that table's own worst gap
+	// needs. The Codex table's floor is 15 minutes, so 31 hours is 124 samples
+	// and the AGE bound is the only one that applies. Neither reaches the cap by
+	// an ordinary cadence.
 	//
 	// The sizes are measured by encoding this document's own shape rather than
 	// estimated, and TestTheDocumentSizeAtTheCapIsWhatMaxSamplesClaims keeps
