@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -197,12 +198,62 @@ func TestAnElsewhereCodexAccountIsNotPolled(t *testing.T) {
 	}
 }
 
+// codexDispatch must not trust its caller to have already filtered by
+// provider. It is only ever handed s.CodexAccounts() today, but a credential
+// SHAPE check alone (creds[codexauth.Key]) is not a provider check -- this
+// project has already shipped a gate that held on shape rather than on
+// provider, and caught it late. The mirror of
+// TestACodexAccountWithAClaudeBlobIsNotPollable, which proves the same thing
+// about the Claude lane's pollable(): a Claude-provider account carrying a
+// codexOAuth-keyed blob must never be polled here.
+func TestACodexDispatchNeverPollsAClaudeProviderAccount(t *testing.T) {
+	isolateEngine(t)
+	s, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := store.Account{
+		Provider: provider.Claude,
+		UUID:     "u-claude", Email: "u-claude@example.com",
+		AddedAt: tickEpoch.Add(-24 * time.Hour),
+	}
+	blob := codexauth.Credential{
+		AccessToken: "AT-u-claude", RefreshToken: "RT-u-claude",
+		AccountID: "acct-u-claude", UserID: "u-claude",
+	}.ToBlob()
+	if err := s.Add(a, blob); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := s.Get("u-claude")
+	if !ok {
+		t.Fatal("seeded account is not in the store")
+	}
+
+	polled := false
+	e := codexEngine(t,
+		func(context.Context, string) (string, string, error) {
+			polled = true
+			return "AT-u-claude", "acct-u-claude", nil
+		},
+		func(context.Context, string, string) (*usage.Snapshot, codexusage.Identity, error) {
+			polled = true
+			return codexSnapshot(42), codexusage.Identity{}, nil
+		})
+
+	e.codexDispatch(context.Background(), s, []store.Account{got}, config.Defaults(), tickEpoch, "")
+	e.Wait()
+
+	if polled {
+		t.Fatal("a Claude-provider account carrying a codexOAuth blob was polled by the codex lane")
+	}
+}
+
 // The commit path writes the reading and the series and NOTHING else: no
 // ApplyUsage, so a codex snapshot cannot re-file the account's kind, and no
 // profile re-read, because there is no Anthropic profile behind it.
 func TestTheCodexCommitDoesNotReclassifyTheAccount(t *testing.T) {
 	isolateEngine(t)
-	seedCodexAccount(t, "cx-1")
+	before := seedCodexAccount(t, "cx-1")
 
 	e := codexEngine(t, codexTokensAreFine,
 		func(context.Context, string, string) (*usage.Snapshot, codexusage.Identity, error) {
@@ -225,6 +276,20 @@ func TestTheCodexCommitDoesNotReclassifyTheAccount(t *testing.T) {
 	}
 	if a.Provider != provider.Codex {
 		t.Fatalf("provider = %q after a codex poll, want codex", a.Provider)
+	}
+	// The assertion that actually distinguishes this path from the Claude
+	// commit, which DOES call store.ApplyUsage: the two checks above hold even
+	// if codexCommit secretly called it too, because a present CodexPrimary
+	// window already makes identity.ReclassifyOnUsage return KindSubscription
+	// -- exactly what seedCodexAccount seeded regardless -- and ApplyUsage
+	// never writes Provider at all. Credit is the field ApplyUsage actually
+	// writes: a Codex reading carries no ExtraUsage evidence, so a call that
+	// reached it would silently stamp Credit.ObservedAt to the poll's time
+	// while leaving every other Credit field at its zero value -- exactly the
+	// kind of overwrite a future merge of the two lanes could do to a Claude
+	// account's credit balance without either lane's own tests noticing.
+	if a.Credit != before.Credit {
+		t.Fatalf("credit = %+v after a codex poll, want it unchanged from %+v", a.Credit, before.Credit)
 	}
 }
 
@@ -379,6 +444,78 @@ func TestARepointWithAFailedStampStillPublishesTheNewAccount(t *testing.T) {
 	}
 }
 
+// The default arm of codexTick's three-way switch: a PLAIN Execute failure,
+// where the pointer never moves at all. codex/ ITSELF is chmod'd unwritable
+// here, rather than the store root -- mirroring TestAFailedPointerWriteStampsNothing
+// in internal/codexswitch -- so the pointer write fails before the stamp step
+// is ever reached, and this cannot land on the ErrPointerMovedUnstamped arm the
+// way TestARepointWithAFailedStampStillPublishesTheNewAccount above does. ev
+// must be left exactly as EvaluateCodex returned it: Live still names the
+// account that was serving before this tick ran, because what is actually
+// being served has not changed.
+func TestAPlainRepointFailureLeavesTheEvaluationAtThePreSwitchAccount(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod is a no-op on Windows beyond the read-only bit")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	isolateEngine(t)
+	seedCodexAccount(t, "cx-1")
+	seedCodexAccount(t, "cx-2")
+	root := mustPath(ccpath.StoreHome())
+	if err := codexswitch.Execute(root, "cx-1"); err != nil {
+		t.Fatal(err)
+	}
+	clearCodexStamp(t)
+
+	if err := usage.WithCache(cacheTimeout, func(c *usage.Cache) error {
+		c.Put("cx-1", usage.Entry{Snapshot: codexSnapshot(90), FetchedAt: tickEpoch})
+		c.Put("cx-2", usage.Entry{Snapshot: codexSnapshot(10), FetchedAt: tickEpoch})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	e := codexEngine(t,
+		func(context.Context, string) (string, string, error) {
+			t.Fatal("nothing should be polled: both cache entries are fresh at tickEpoch")
+			return "", "", nil
+		},
+		func(context.Context, string, string) (*usage.Snapshot, codexusage.Identity, error) {
+			t.Fatal("nothing should be polled: both cache entries are fresh at tickEpoch")
+			return nil, codexusage.Identity{}, nil
+		})
+
+	s, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// codex/ already exists from the Execute call above, and store.Open never
+	// touches it -- only the store's own directories -- so chmod'ing it here
+	// survives past the store.Open call above, unlike chmod'ing root does.
+	codexDir := filepath.Dir(codexswitch.ServingPath(root))
+	if err := os.Chmod(codexDir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(codexDir, 0o700) })
+
+	ev, tickErr := e.codexTick(context.Background(), s, config.Defaults(), tickEpoch)
+	e.Wait()
+	if tickErr != nil {
+		t.Fatalf("codexTick: %v, want nil (a plain Execute failure is logged, not returned)", tickErr)
+	}
+
+	if got := servingUUID(t); got != "cx-1" {
+		t.Fatalf("serving = %q, want cx-1 (the pointer write itself failed, so it must not have moved)", got)
+	}
+	if !ev.LiveKnown || ev.Live.UUID != "cx-1" {
+		t.Fatalf("codexTick's own evaluation: Live = %+v, LiveKnown = %v, want cx-1 (the pre-switch account) known",
+			ev.Live, ev.LiveKnown)
+	}
+}
+
 // clearCodexStamp removes the cooldown codexswitch.Execute leaves behind, for
 // the tests that are about the lane's decision rather than about the hold.
 func clearCodexStamp(t *testing.T) {
@@ -470,9 +607,24 @@ func TestATokenWithHoursLeftIsNotRefreshed(t *testing.T) {
 	isolateEngine(t)
 	seedCodexAccount(t, "cx-1")
 
+	// Mirrors TestATokenInsideAnHourOfExpiryIsRefreshedBeforeThePoll's own
+	// seeding: the store's stored credential has to be the SAME token the mock
+	// hands back, or codexauth.Refresher.Refresh's own re-read never agrees
+	// with what it was told to refresh, short-circuits to Adopted before
+	// reaching the transport, and refusingTokenEndpoint never has a chance to
+	// fire either way -- which would make it decoration rather than a live
+	// assertion.
+	fresh := codexJWT(tickEpoch.Add(6 * time.Hour))
+	if err := store.WithStore(func(s *store.Store) error {
+		return s.SetCredentials("cx-1", codexauth.Credential{
+			AccessToken: fresh, RefreshToken: "RT-cx-1", AccountID: "acct-cx-1", UserID: "cx-1",
+		}.ToBlob())
+	}); err != nil {
+		t.Fatal(err)
+	}
+
 	var mu sync.Mutex
 	var sawToken string
-	fresh := codexJWT(tickEpoch.Add(6 * time.Hour))
 	e := codexEngine(t,
 		func(context.Context, string) (string, string, error) { return fresh, "acct-cx-1", nil },
 		func(_ context.Context, token, _ string) (*usage.Snapshot, codexusage.Identity, error) {
