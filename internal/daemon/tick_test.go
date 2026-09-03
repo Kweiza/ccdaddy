@@ -407,6 +407,36 @@ func TestAnAccountWithNoOAuthCredentialIsNeverPolled(t *testing.T) {
 	}
 }
 
+// pollable gates on the provider, not just on credential shape. In the
+// ordinary case a Codex row never carries a claudeAiOauth blob — `ccdad codex
+// add` never writes one — so the credential check alone happens to exclude
+// it. But `ccdad import` accepts a row that names Provider: codex explicitly
+// alongside a claudeAiOauth blob, and such a row must never be polled against
+// the Claude usage endpoint: never-cross has to hold by construction, not by
+// an accident of shape.
+func TestACodexAccountWithAClaudeBlobIsNotPollable(t *testing.T) {
+	isolateEngine(t)
+	s, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := store.Account{
+		Provider: provider.Codex,
+		UUID:     "u-codex", Email: "u-codex@example.com",
+		AddedAt: tickEpoch.Add(-24 * time.Hour),
+	}
+	if err := s.Add(a, oauthBlob("RT-u-codex")); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := s.Get("u-codex")
+	if !ok {
+		t.Fatal("seeded account is not in the store")
+	}
+	if pollable(s, got) {
+		t.Error("a Codex account carrying a claudeAiOauth blob was pollable")
+	}
+}
+
 // A 429 is the shared budget saying stop. The backoff has to survive the tick
 // that earned it, which means it is persisted with the reading rather than held
 // in a map this process owns.
