@@ -3,6 +3,7 @@ package cclink
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -22,6 +23,15 @@ func TestWriteFileAtomicStillWrites(t *testing.T) {
 	}
 	if string(got) != `{"a":1}` {
 		t.Fatalf("file = %q, want the bytes handed to the wrapper", got)
+	}
+	// The mode half only, and not the whole test. What this test exists to
+	// catch is a wrapper that stopped calling through -- which would compile,
+	// leave every caller writing nothing, and be caught by the bytes above on
+	// every platform there is. Skipping the function outright on Windows would
+	// give that silence one OS to hide on for no gain, since the thing Windows
+	// cannot answer is the permission and nothing else.
+	if runtime.GOOS == "windows" {
+		return
 	}
 	info, err := os.Stat(path)
 	if err != nil {

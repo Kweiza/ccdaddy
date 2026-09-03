@@ -31,6 +31,11 @@ func (c Config) Effective() Config {
 // to prevent.
 const KeyHover = keyHover
 
+// KeyManual is the config key `ccdad manual` writes, exported for the same
+// reason KeyHover is: the command that writes it lives outside this package and
+// a second copy of the name is exactly the drift keys.go exists to prevent.
+const KeyManual = keyManual
+
 // hoverOverrides is every key hover derives for itself, so a value in the file
 // stops being read the moment hover is on.
 //
@@ -81,9 +86,17 @@ var hoverOverrides = map[string]bool{
 // account -- there is no window, no reset and no ranking on that lane for it to
 // compute a number from. A mode that derived them would be answering a
 // question about a different provider out of a fact about Claude's quota.
+//
+// manual is here because the two modes answer different questions and compose
+// rather than conflict. Hover decides WHAT THE NUMBERS ARE; manual decides
+// WHETHER THE ENGINE ACTS ON THEM. A hover that derived manual would be
+// deciding, out of a fact about quota, that the user did not mean the mode they
+// switched on -- and the derived thresholds are the very thing a manual-mode
+// user is watching, so the two are useful together rather than exclusive.
 var hoverHonours = map[string]bool{
 	keyMaxAutoSpend:                true,
 	keyHover:                       true,
+	keyManual:                      true,
 	keyMCPSwitchWithoutElicitation: true,
 	keyUpdateCheck:                 true,
 	keyTUITheme:                    true,

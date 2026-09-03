@@ -273,6 +273,7 @@ func TestEveryKeyCanBeSetAndReadBack(t *testing.T) {
 		keyPreemptLead:        "3m0s",
 		keyStrategy:           "consume-first",
 		keyProbeUnknown:       "false",
+		keyManual:             "true",
 		keyHover:              "true",
 		keyCreditThreshold:    "70",
 		keyMaxAutoSpend:       "25",
@@ -335,6 +336,7 @@ func TestEveryKeyCanBeSetAndReadBack(t *testing.T) {
 		Strategy:           strategy.StrategyConsumeFirst,
 		ProbeUnknown:       false,
 		Hover:              true,
+		Manual:             true,
 		CreditThreshold:    70,
 		MaxAutoSpend:       25,
 		WindowThreshold:    map[usage.WindowName]float64{usage.WindowFiveHour: 85},
@@ -371,6 +373,7 @@ func TestTheEffectiveValueOfEveryKeyIsFormattable(t *testing.T) {
 		keyStrategy:           "headroom",
 		keyProbeUnknown:       "true",
 		keyHover:              "false",
+		keyManual:             "false",
 		keyCreditThreshold:    "80",
 		keyMaxAutoSpend:       "0",
 
