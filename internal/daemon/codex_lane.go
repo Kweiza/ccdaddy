@@ -118,6 +118,17 @@ func (e *Engine) codexDispatch(ctx context.Context, s *store.Store, accounts []s
 	}
 	thr := codexThresholds(cfg)
 	for _, a := range accounts {
+		// This function is only ever handed s.CodexAccounts() today, but the
+		// guard is not written on trust of the caller: codexReloginSet checks
+		// the same field for the same reason, and the Claude lane's own
+		// pollable() checks its own provider before anything else. A credential
+		// SHAPE check alone (creds[codexauth.Key] below) is not a provider
+		// check -- this project has already shipped a gate that held on shape
+		// rather than on provider, and a Claude row is never eligible here no
+		// matter what a caller passes in.
+		if a.Provider != provider.Codex {
+			continue
+		}
 		if a.Elsewhere && a.UUID != serving {
 			continue
 		}
