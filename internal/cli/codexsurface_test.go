@@ -11,13 +11,20 @@ import (
 // check this helper exists to replace.
 func activeLineOf(t *testing.T, stdout string) string {
 	t.Helper()
+	var lines []string
 	for _, line := range strings.Split(stdout, "\n") {
 		if strings.HasPrefix(line, "Active:") {
-			return line
+			lines = append(lines, line)
 		}
 	}
-	t.Fatalf("no Active: line in:\n%s", stdout)
-	return ""
+	// Exactly one. A renderer that printed the clause twice would otherwise
+	// pass silently: the first of the two identical lines still equals what
+	// the caller wants, and a helper that only ever looked at the first match
+	// would never notice the second.
+	if len(lines) != 1 {
+		t.Fatalf("%d Active: lines in stdout, want exactly 1:\n%s", len(lines), stdout)
+	}
+	return lines[0]
 }
 
 // All three tables go through one method, so they cannot disagree about what a
