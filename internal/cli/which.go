@@ -8,6 +8,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/switcher"
+	"github.com/Kweiza/ccdaddy/internal/view"
 )
 
 func newWhichCmd() *cobra.Command {
@@ -74,7 +75,16 @@ func newWhichCmd() *cobra.Command {
 				// tell it from a real error.
 				return WithCode(errSilent, ExitProbeNegative)
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), res.Account.Label())
+			// The bare label is kept when there is no codex account, and that
+			// is a contract rather than a nicety: `ccdad which` is what a shell
+			// prompt and a CI step read, and every one of them predates the
+			// second provider. The two-clause form appears only on a machine
+			// where the second clause is a fact.
+			codexLabel := ""
+			if serving, ok := codexServingAccount(s.Accounts()); ok {
+				codexLabel = serving.Label()
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), view.ActiveLine(res.Account.Label(), codexLabel))
 			fmt.Fprintf(cmd.ErrOrStderr(), "via %s\n", res.Via)
 			return nil
 		},

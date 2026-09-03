@@ -23,12 +23,19 @@ type Snapshot struct {
 	Rows        []Row
 	Report      daemon.Report
 	ActiveLabel string // "work@example.com (work)", or "none of the managed accounts"
-	Strategy    string // config.Config.Strategy.String(), as CONFIGURED -- see StrategyLabel
-	Hover       bool   // config.Config.Hover
-	Mode        strategy.Mode
-	HasMode     bool
-	Version     string   // buildinfo.String()'s first field, or a test constant
-	Notices     []string // everything cli would have written to stderr
+	// CodexServingLabel is the account ccdad's codex proxy serves new threads
+	// from, or "" when there is no pointer or it names no stored account.
+	//
+	// EMPTY IS LOAD-BEARING. It is what keeps every surface rendering the exact
+	// bytes it rendered before codex existed on a machine that has no codex
+	// account -- seven byte-compared dashboard pages among them.
+	CodexServingLabel string
+	Strategy          string // config.Config.Strategy.String(), as CONFIGURED -- see StrategyLabel
+	Hover             bool   // config.Config.Hover
+	Mode              strategy.Mode
+	HasMode           bool
+	Version           string   // buildinfo.String()'s first field, or a test constant
+	Notices           []string // everything cli would have written to stderr
 
 	// Forecast is the measured burn and what it implies, and HasForecast is
 	// whether one could be produced at all.
@@ -68,3 +75,24 @@ func (s Snapshot) StrategyLabel() string {
 	}
 	return s.Strategy
 }
+
+// ActiveLine is who this machine is spending, in one sentence.
+//
+// It is a free function as well as a method because `ccdad which` has no
+// Snapshot to build and must produce the identical line: two spellings of one
+// sentence is how two commands come to describe one machine two ways, which is
+// the failure this whole package exists to prevent.
+//
+// With no codex account it is the Claude label ALONE, unlabelled. That is not a
+// degradation -- it is the answer every reader and every script had before
+// there was a second provider, and prefixing it with "Claude:" on a machine
+// with one provider would be labelling a distinction that does not exist there.
+func ActiveLine(claude, codex string) string {
+	if codex == "" {
+		return claude
+	}
+	return "Claude: " + claude + " · Codex: " + codex
+}
+
+// ActiveLine is this snapshot's.
+func (s Snapshot) ActiveLine() string { return ActiveLine(s.ActiveLabel, s.CodexServingLabel) }
