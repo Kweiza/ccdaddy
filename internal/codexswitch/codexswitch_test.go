@@ -2,12 +2,15 @@ package codexswitch
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 )
@@ -289,6 +292,94 @@ func TestClearIfServingOnAFreshMachineClearsNothing(t *testing.T) {
 	}
 	if cleared {
 		t.Fatal("ClearIfServing = true on a machine with no pointer; want false")
+	}
+}
+
+// THE CONCURRENCY INVARIANT ITSELF. The three tests above only ever call
+// ClearIfServing alone against an idle pointer file -- none of them proves the
+// "same lock Execute takes" property fix 3 exists for, and -race cannot prove
+// it either: the race detector watches memory accesses, not the filesystem, so
+// a `ClearIfServing` with its locking deleted -- read, compare, blind
+// os.Remove, exactly the shape this package used to have -- passes every other
+// test here AND a clean -race run. Only actually racing the two functions
+// against the same root exposes it, and unweighted goroutines cannot: measured
+// at over three thousand unsynchronized attempts with zero landing the race,
+// because Execute's write (its own lock, a temp file, a rename, then a
+// SEPARATE strategy-lock stamp) takes far longer than the microseconds between
+// ClearIfServing's read and its remove. clearIfServingRaceHook widens that gap
+// on purpose -- the same move cclock's own tests make with
+// setStatLockForTest to force ITS takeover window open -- so this test does
+// not depend on scheduler luck to prove the property either way.
+//
+// Each round starts the pointer at cx-1 and releases two goroutines on one
+// signal: Execute(root, "cx-2") and ClearIfServing(root, "cx-1"). Execute
+// always lands a write; ClearIfServing only ever removes what it reads as
+// still naming cx-1. Under a correctly serialized implementation there is
+// exactly one legal outcome whichever goroutine's critical section runs
+// first -- ClearIfServing first removes cx-1 (the hook's delay spent holding
+// the lock Execute is waiting on) for Execute to then overwrite with cx-2, or
+// Execute first writes cx-2 for ClearIfServing to find already mismatched --
+// so the pointer always ends the round on cx-2. Any other ending means
+// ClearIfServing's read and its remove were not atomic with Execute's write:
+// the read saw cx-1, Execute's cx-2 landed in the (now wide open) gap, and the
+// remove that followed destroyed the write that had just landed.
+func TestExecuteAndClearIfServingCannotInterleave(t *testing.T) {
+	root := home(t)
+
+	prevHook := clearIfServingRaceHook
+	clearIfServingRaceHook = func() { time.Sleep(50 * time.Millisecond) }
+	t.Cleanup(func() { clearIfServingRaceHook = prevHook })
+
+	// Serialized, the hook's delay is paid while ClearIfServing HOLDS the
+	// lock Execute is waiting on -- so every round pays it once, on top of
+	// cclock's own jittered backoff for the loser of the initial mkdir race.
+	// Twenty rounds is already more than the deterministic invariant below
+	// needs; it stays this small so the correctly serialized version of this
+	// test does not turn into a multi-minute one.
+	const rounds = 20
+	violations := 0
+	var example string
+	for i := 0; i < rounds; i++ {
+		if err := Execute(root, "cx-1"); err != nil {
+			t.Fatalf("round %d: seeding Execute: %v", i, err)
+		}
+
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			if err := Execute(root, "cx-2"); err != nil {
+				t.Errorf("round %d: Execute(cx-2): %v", i, err)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			if _, err := ClearIfServing(root, "cx-1"); err != nil {
+				t.Errorf("round %d: ClearIfServing(cx-1): %v", i, err)
+			}
+		}()
+		close(start)
+		wg.Wait()
+
+		final, ok := ReadServing(root)
+		if ok && final == "cx-2" {
+			continue
+		}
+		violations++
+		if example == "" {
+			if ok {
+				example = fmt.Sprintf("round %d: pointer = %q", i, final)
+			} else {
+				example = fmt.Sprintf("round %d: pointer absent", i)
+			}
+		}
+	}
+	if violations > 0 {
+		t.Fatalf("%d of %d rounds did not end with the pointer at \"cx-2\" (first: %s) -- "+
+			"ClearIfServing's read-then-remove is not atomic with a concurrent Execute", violations, rounds, example)
 	}
 }
 

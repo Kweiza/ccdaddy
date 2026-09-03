@@ -206,8 +206,25 @@ func ClearIfServing(root, uuid string) (cleared bool, err error) {
 	if !ok || current != uuid {
 		return false, nil
 	}
+	clearIfServingRaceHook()
 	if err := os.Remove(ServingPath(root)); err != nil && !os.IsNotExist(err) {
 		return false, fmt.Errorf("clearing the codex serving pointer: %w", err)
 	}
 	return true, nil
 }
+
+// clearIfServingRaceHook runs between ClearIfServing's own read of the pointer
+// and its removal of it -- while still holding acquireServingLock's lock, if
+// there is one to hold. Production code never overrides it; the zero value is
+// a no-op, so it costs nothing here.
+//
+// It exists only so a test can widen that gap on purpose. Left alone it is a
+// handful of microseconds -- Execute's write (its own lock, a temp file, a
+// rename, then a SEPARATE strategy-lock stamp) takes far longer than that, so
+// concurrent goroutines essentially never land inside it by chance; measured
+// at over three thousand unweighted attempts with none landing. Widening it
+// deliberately is the same move cclock's own tests make with
+// setStatLockForTest to force ITS takeover window open -- and a ClearIfServing
+// that is genuinely still serialized against Execute must tolerate the gap
+// being wide open just as well as it tolerates it being a few microseconds.
+var clearIfServingRaceHook = func() {}
