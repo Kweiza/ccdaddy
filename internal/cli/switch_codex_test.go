@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -145,6 +147,48 @@ func TestSwitchAcceptsAProviderAssertionThatHolds(t *testing.T) {
 	}
 	if got := servingNow(t); got != "cx-1" {
 		t.Fatalf("serving = %q, want cx-1", got)
+	}
+}
+
+// codexswitch.Execute writes the pointer BEFORE it stamps the cooldown, so a
+// failure in the stamp step alone leaves the pointer already moved. Reporting
+// a plain failure in that case would be a lie -- codex now serves the account
+// the user named -- so runCodexSwitch has its own honest sentence for it, and
+// this is what proves that branch is reached rather than merely read.
+//
+// The stamp write is made to fail by putting a DIRECTORY where strategy.json
+// belongs, so the state save's rename lands on an existing path and fails.
+// A read-only store root (the fixture codexswitch's own tests use for this)
+// does not survive reaching this command: store.Open() tightens the root back
+// to 0700 on every call, and switch.go opens the store again on its way to
+// the codex branch, undoing the fixture before Execute ever runs.
+func TestSwitchToACodexAccountSaysSoWhenThePointerMovedButTheCooldownDidNot(t *testing.T) {
+	isolate(t)
+	seedCodexAccount(t, "cx-1", "codex@example.com")
+
+	root, err := codexRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "codex"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "strategy.json"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	code, _, stderr, top := runRoot(t, "switch", "codex@example.com")
+	if code != ExitFailure {
+		t.Fatalf("exit = %d, want %d (ExitFailure)\n%s%s", code, ExitFailure, stderr, top)
+	}
+	if !strings.Contains(stderr, "Serving codex from codex@example.com from the next new thread") {
+		t.Fatalf("stderr does not say the pointer moved:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "cooldown was not recorded") {
+		t.Fatalf("stderr does not say the cooldown was not recorded:\n%s", stderr)
+	}
+	if got := servingNow(t); got != "cx-1" {
+		t.Fatalf("serving = %q, want cx-1 -- the pointer must have moved even though Execute returned an error", got)
 	}
 }
 
