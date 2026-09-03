@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -737,6 +738,67 @@ func TestARefreshRejectedWithA401MarksNothing(t *testing.T) {
 	if after.CodexReloginFor != "" {
 		t.Fatalf("a CLI refresh marked %s as needing a login on the strength of one 401", after.UUID)
 	}
+}
+
+// The rule this whole arm exists to keep: a hand-triggered refresh reads with
+// the token it already holds and NEVER rotates. A grant is single-use, the
+// daemon is already the one spender, and a second process rotating alongside it
+// invalidates the refresh token server-side and logs the user out with no undo.
+//
+// Wiring discipline is not the guard. Every symbol needed to set a refresher on
+// a CLI-built engine is exported and already imported over there, so this test
+// puts a WORKING one on the engine -- backed by the same rotating endpoint the
+// lane's own tests use -- and asserts the stored credential is untouched
+// afterwards. Without the refusal at the top of refreshCodex the poll rotates,
+// the store comes back holding AT-rotated, and both of the assertions in the
+// test above stay green while it happens.
+func TestAHandTriggeredRefreshWithARefresherRefusesInsteadOfRotating(t *testing.T) {
+	isolateEngine(t)
+	a := seedCodexAccount(t, "cx-1")
+
+	before, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	was, err := before.Credentials("cx-1")
+	if err != nil {
+		t.Fatalf("cx-1 has no credential to protect: %v", err)
+	}
+
+	e := codexEngine(t, codexTokensAreFine,
+		func(context.Context, string, string) (*usage.Snapshot, codexusage.Identity, error) {
+			return nil, codexusage.Identity{}, &usage.StatusError{Status: 401}
+		})
+	e.CodexRefresher = codexauth.NewRefresher(codexauth.RefresherConfig{
+		Client: &http.Client{Transport: rotatingTokenEndpoint{}},
+	})
+
+	s, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := s2res(e.Refresh(context.Background(), s, []store.Account{a}, config.Defaults(), ""))
+	if res.State != RefreshFailed {
+		t.Fatalf("State = %v, want the refusal to report a failed row", res.State)
+	}
+	if res.Err == nil {
+		t.Fatal("the refusal reported no error; a caller that wired a refresher must be told")
+	}
+
+	now, err := s.Credentials("cx-1")
+	if err != nil {
+		t.Fatalf("cx-1 lost its credential: %v", err)
+	}
+	if !reflect.DeepEqual(was, now) {
+		t.Fatal("the hand-triggered refresh rotated the grant; the daemon is the only spender")
+	}
+}
+
+func s2res(rs []RefreshResult) RefreshResult {
+	if len(rs) != 1 {
+		panic("want exactly one row")
+	}
+	return rs[0]
 }
 
 // An engine built without the read seams answers unpollable rather than

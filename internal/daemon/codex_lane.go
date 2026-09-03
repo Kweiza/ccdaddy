@@ -402,6 +402,17 @@ func codexReloginSet(s *store.Store, accounts []store.Account) map[string]bool {
 func (e *Engine) refreshCodex(ctx context.Context, s *store.Store, a store.Account,
 	res *RefreshResult, cache *usage.Cache, cfg config.Config, now time.Time, wg *sync.WaitGroup) {
 
+	if e.CodexRefresher != nil {
+		// Loud, not silent. Every Engine this arm is meant to run on is built
+		// without a refresher -- `daemon.NewEngine` never sets one, and
+		// `wireCodex` is only ever called for the daemon's own Engine -- so a
+		// caller that reaches this line WITH one has wired a mistake, and the
+		// grant it holds is single-use: spending it here is what a second
+		// process rotating alongside the daemon looks like.
+		res.State = RefreshFailed
+		res.Err = errors.New("a hand-triggered codex refresh must not hold a refresher")
+		return
+	}
 	if e.CodexAccessToken == nil || e.CodexFetchUsage == nil {
 		// No seams: this Engine was built without them, which is every Engine
 		// in this binary that did not ask. Unpollable is the same answer an
