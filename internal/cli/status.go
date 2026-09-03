@@ -209,9 +209,9 @@ func loadSnapshot(cmd *cobra.Command, now time.Time) (snap view.Snapshot, probeE
 	// The pointer, resolved through the one reader every surface uses. It is
 	// read HERE, in the function that already holds the account list, so that
 	// `ccdad status`, `ccdad list` and the dashboard cannot each answer it.
-	codexLabel := ""
+	codexLabel, codexUUID := "", ""
 	if serving, ok := codexServingAccount(accounts); ok {
-		codexLabel = serving.Label()
+		codexLabel, codexUUID = serving.Label(), serving.UUID
 	}
 
 	return view.Snapshot{
@@ -220,6 +220,7 @@ func loadSnapshot(cmd *cobra.Command, now time.Time) (snap view.Snapshot, probeE
 		Report:            report,
 		ActiveLabel:       activeLabel,
 		CodexServingLabel: codexLabel,
+		CodexServingUUID:  codexUUID,
 		Strategy:          cfg.Strategy.String(),
 		Hover:             cfg.Hover,
 		Mode:              mode,
@@ -499,6 +500,11 @@ func statusPayload(snap view.Snapshot, probeErr error) map[string]any {
 	}
 	if hasActive {
 		payload["activeUuid"] = activeUUID
+	}
+	// The same key `ccdad list --json` publishes, from the same reader. Two
+	// commands describing one pointer must not describe it two ways.
+	if snap.CodexServingUUID != "" {
+		payload["codexServingUuid"] = snap.CodexServingUUID
 	}
 	// Conditional, like every other key here that stands for a reading: absent
 	// means no ranking ran, and a consumer that saw "headroom" could not tell that
