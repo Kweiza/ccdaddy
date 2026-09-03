@@ -12,6 +12,7 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/identity"
+	"github.com/Kweiza/ccdaddy/internal/provider"
 	"github.com/Kweiza/ccdaddy/internal/store"
 )
 
@@ -150,6 +151,15 @@ func LiveStateOf(live cclink.Blob, accounts []store.Account, lookup Lookup) (sto
 		return store.Account{}, LiveNone
 	}
 	for _, a := range accounts {
+		// This is not a redundant check against CredentialIdentity's own
+		// claudeAiOauth read. `ccdad import` trusts row.Provider unconditionally
+		// and cclink.Extract copies a claudeAiOauth blob through regardless of
+		// provider, so a stored row can carry Provider: codex alongside a
+		// Claude-shaped blob -- shape alone does not prove ownership. See
+		// daemon.pollable for the same guard against the same reachable row.
+		if a.Provider != provider.Claude {
+			continue
+		}
 		stored, err := lookup(a.UUID)
 		if err != nil {
 			continue
@@ -269,6 +279,12 @@ func AttributeLogin(live cclink.Blob, accounts []store.Account,
 		// The one OAuth source ccdad can attribute to an ACCOUNT, because it is
 		// the one it stores credentials under.
 		for _, a := range accounts {
+			// Same guard, same reason as LiveStateOf's: a stored row's TokenKey
+			// record can carry a Claude setup-token shape under Provider: codex,
+			// and shape alone does not prove which provider it belongs to.
+			if a.Provider != provider.Claude {
+				continue
+			}
 			stored, err := lookup(a.UUID)
 			if err != nil {
 				continue
@@ -307,6 +323,12 @@ func APIKeyOwner(accounts []store.Account, lookup Lookup, key string) (store.Acc
 		return store.Account{}, false
 	}
 	for _, a := range accounts {
+		// Same guard, same reason as LiveStateOf's: a stored row's TokenKey
+		// record can carry a Claude api-key shape under Provider: codex, and
+		// shape alone does not prove which provider it belongs to.
+		if a.Provider != provider.Claude {
+			continue
+		}
 		creds, err := lookup(a.UUID)
 		if err != nil {
 			continue
