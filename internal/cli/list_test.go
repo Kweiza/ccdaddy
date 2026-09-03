@@ -231,12 +231,14 @@ func rowFor(t *testing.T, out, label string) string {
 // what "`ccdad list` and `ccdad status --json` can never disagree" rests on,
 // and the binding window is the one with LEAST left rather than the first one
 // the response happened to carry.
-func TestListShowsTheHeadroomAndResetOfTheBindingWindow(t *testing.T) {
+// The row shows EVERY window the account carries, and derives none of them.
+// This replaces a test that asserted the opposite -- that only the binding
+// window reached the table -- which is the behaviour a reader could not tell
+// apart from `ccdad status` naming a different one.
+func TestListShowsEveryWindowTheAccountCarries(t *testing.T) {
 	isolate(t)
 	freezeClock(t, listNow)
 	seedAccount(t, "u-1", "a@example.com")
-	// five_hour has more left, so seven_day binds. A renderer that took the
-	// first window in schema order would pass a fixture where the two agreed.
 	seedUsageEntry(t, "u-1", usage.Entry{
 		FetchedAt: listNow.Add(-90 * time.Second),
 		Snapshot: &usage.Snapshot{
@@ -247,15 +249,19 @@ func TestListShowsTheHeadroomAndResetOfTheBindingWindow(t *testing.T) {
 
 	_, out, _, top := runRoot(t, "list")
 	row := rowFor(t, out, "a@example.com")
-	// 38% LEFT, not the 62% used and not five_hour's 80.
-	if !strings.Contains(row, "38%") {
-		t.Errorf("the row does not carry the binding window's headroom (%s):\n%s", top, row)
+	// Both windows, as USED, and both rollovers. Neither is chosen over the
+	// other and neither is 100 minus the other.
+	for _, want := range []string{"20%", "62%", "30m", "2h14m"} {
+		if !strings.Contains(row, want) {
+			t.Errorf("the row does not carry %q (%s):\n%s", want, top, row)
+		}
 	}
-	if strings.Contains(row, "80%") {
-		t.Errorf("the row reports five_hour, which is not the binding window:\n%s", row)
-	}
-	if !strings.Contains(row, "2h14m") {
-		t.Errorf("the row does not carry the binding window's reset:\n%s", row)
+	// The headers name the windows, and the legend maps them back to the wire
+	// keys `ccdad config` takes a threshold on.
+	for _, want := range []string{"5H", "7D", "5H = five_hour", "7D = seven_day"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the listing does not carry %q:\n%s", want, out)
+		}
 	}
 }
 
@@ -296,16 +302,15 @@ func TestListShowsRemainingCreditWhenBothFiguresAreKnown(t *testing.T) {
 		},
 	})
 
+	// The balance is a line under the table rather than a cell in it: money is
+	// not commensurable with a percentage, and a column of one cannot carry the
+	// other. What matters is that it is still printed and still exact.
 	_, out, _, top := runRoot(t, "list")
-	row := rowFor(t, out, "a@example.com")
-	if strings.Contains(row, "?") {
-		t.Errorf("a credit account with a readable balance still renders '?' (%s):\n%s", top, row)
+	if !strings.Contains(out, "74.50") {
+		t.Errorf("the listing does not carry the remaining amount ($100 cap - $25.50 spent) (%s):\n%s", top, out)
 	}
-	if !strings.Contains(row, "74.50") {
-		t.Errorf("the row does not carry the remaining amount ($100 cap - $25.50 spent):\n%s", row)
-	}
-	if !strings.Contains(row, "25.50/100.00") {
-		t.Errorf("the row does not carry the used/limit pair:\n%s", row)
+	if !strings.Contains(out, "25.50/100.00") {
+		t.Errorf("the listing does not carry the used/limit pair:\n%s", out)
 	}
 }
 
@@ -328,12 +333,11 @@ func TestListShowsCreditUsedWithNoAccountLimit(t *testing.T) {
 	})
 
 	_, out, _, _ := runRoot(t, "list")
-	row := rowFor(t, out, "a@example.com")
-	if !strings.Contains(row, "5.00 used") {
-		t.Errorf("the row does not carry the used amount:\n%s", row)
+	if !strings.Contains(out, "5.00 used") {
+		t.Errorf("the listing does not carry the used amount:\n%s", out)
 	}
-	if !strings.Contains(row, "no account limit") {
-		t.Errorf("the row does not say there is no account limit:\n%s", row)
+	if !strings.Contains(out, "no account limit") {
+		t.Errorf("the listing does not say there is no account limit:\n%s", out)
 	}
 }
 
@@ -507,7 +511,7 @@ func TestListRefreshFetchesAndShowsTheFreshReading(t *testing.T) {
 	if calls.Load() != 1 {
 		t.Fatalf("fetches = %d, want 1", calls.Load())
 	}
-	if row := rowFor(t, out, "a@example.com"); !strings.Contains(row, "75%") {
+	if row := rowFor(t, out, "a@example.com"); !strings.Contains(row, "25%") {
 		t.Fatalf("the row does not show the reading just taken:\n%s", row)
 	}
 	// And it landed in the SAME cache the daemon and `status` read.
@@ -838,8 +842,11 @@ func TestListSaysWhenItsNumbersCameFromHover(t *testing.T) {
 	if !strings.Contains(errOut, note) {
 		t.Errorf("the listing does not say its numbers came from hover:\n%s", errOut)
 	}
-	if !strings.Contains(errOut, "LEFT") {
-		t.Errorf("the listing credits hover without naming the column it moved:\n%s", errOut)
+	// It names what hover actually moved. There is no single derived column
+	// left for it to name -- every window has a cell -- so what hover changes
+	// here is the thresholds the cells are coloured against.
+	if !strings.Contains(errOut, "threshold") {
+		t.Errorf("the listing credits hover without saying what it moved:\n%s", errOut)
 	}
 	if strings.Contains(stdout, note) {
 		t.Errorf("the note reached stdout, where a piped listing would parse it:\n%s", stdout)
@@ -850,16 +857,16 @@ func TestListSaysWhenItsNumbersCameFromHover(t *testing.T) {
 	}
 }
 
-// What hover moves in this table is the CHOICE of window, not the figure, and
-// the note has to say the true one. LEFT is Headroom.Pct -- 100 minus the
-// reported window's utilization -- and no threshold enters it.
+// The note has to describe the cells truthfully. A cell is one window's raw
+// utilization and no threshold enters it; what hover derives is the number the
+// cell is COLOURED against.
 //
-// The test above pins that the note EXISTS and names LEFT. Neither of those
-// constrains what it claims, which is how a note saying the number was
-// "measured against the thresholds hover derived" stood while the same command
-// printed 38% for a window held to 99: a reader doing the subtraction the
-// sentence invited gets 61 points of margin that are not there.
-func TestTheHoverNoteDoesNotClaimLeftIsMeasuredAgainstAThreshold(t *testing.T) {
+// The test above pins that the note exists. Neither of them constrains what it
+// claims, which is how a note saying the number was "measured against the
+// thresholds hover derived" stood while the same command printed a raw figure:
+// a reader doing the subtraction the sentence invited gets margin that is not
+// there.
+func TestTheHoverNoteDoesNotClaimACellIsMeasuredAgainstAThreshold(t *testing.T) {
 	isolate(t)
 	freezeClock(t, listNow)
 	seedAccount(t, "u-1", "a@example.com")
@@ -873,12 +880,12 @@ func TestTheHoverNoteDoesNotClaimLeftIsMeasuredAgainstAThreshold(t *testing.T) {
 
 	_, stdout, errOut, _ := runRoot(t, "list")
 
-	// The arithmetic the note must not misdescribe: 100 - 62, with hover on and
-	// whatever threshold it derived. If LEFT were threshold-relative this cell
-	// would move when the threshold did; it does not, and that is the whole
-	// content of the correction.
-	if row := rowFor(t, stdout, "a@example.com"); !strings.Contains(row, "38%") {
-		t.Fatalf("LEFT is not 100 minus the window's utilization:\n%s", row)
+	// The arithmetic the note must not misdescribe: the cell is the window's own
+	// utilization, with hover on and whatever threshold it derived. If the cell
+	// were threshold-relative it would move when the threshold did; it does not,
+	// and that is the whole content of the correction.
+	if row := rowFor(t, stdout, "a@example.com"); !strings.Contains(row, "62%") {
+		t.Fatalf("the cell is not the window's own utilization:\n%s", row)
 	}
 
 	// "measured against" is the specific false claim. A note that says the
@@ -889,9 +896,11 @@ func TestTheHoverNoteDoesNotClaimLeftIsMeasuredAgainstAThreshold(t *testing.T) {
 			t.Errorf("the note still claims LEFT is threshold-relative (%q):\n%s", wrong, errOut)
 		}
 	}
-	// It must still say what hover DID move, or it explains nothing.
-	if !strings.Contains(errOut, "which window") {
-		t.Errorf("the note does not say that hover chooses which window a row reports:\n%s", errOut)
+	// It must still say what hover DID move, or it explains nothing. With a
+	// cell per window there is no chosen window left to name; what hover
+	// derives is the threshold each cell is judged against.
+	if !strings.Contains(errOut, "derived per account and per window") {
+		t.Errorf("the note does not say what hover derives:\n%s", errOut)
 	}
 }
 

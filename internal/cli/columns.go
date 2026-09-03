@@ -170,6 +170,64 @@ var tableCell = strings.NewReplacer("\n", " ", "\r", " ", "\t", " ")
 // re-derived predicate would eventually dim a cell that reads as a dollar
 // figure. Asking the label is what keeps the colour describing the text beside
 // it and nothing else.
+// windowCellStyle is the colour on the per-window tables, and it is one
+// function for `list`, `status` and `hover status` because the three describe
+// one store: three copies would be three chances for the same account to be
+// painted three ways on three screens.
+//
+// It has three arms and the bound they obey is the one quotaCellStyle stated:
+// COLOUR IS NEVER THE ONLY THING CARRYING A DISTINCTION. Strip every escape
+// byte out of the table and nothing is lost.
+//
+//   - The active marker is a "*" in the IDX gutter, so the row says it is
+//     active with a glyph whether or not anything painted it.
+//   - The muted arm fires only where the cell's own text is "?", which is
+//     itself the statement that the value could not be read.
+//   - The over arm fires only where the cell's own text is 100%, which is
+//     itself the statement that the window is gone.
+//
+// THE ARM THAT IS NOT HERE, and it is the one this file used to argue about
+// from the other side: there is no amber band. A cell reading "84%" painted
+// amber would be saying "close to its threshold" in colour and nowhere else,
+// and neither CLI table carries a STATE column at any width for a reader to
+// recover it from -- the sole-carrier failure a monochrome terminal, a NO_COLOR
+// user and a colour-blind reader each turn into no information at all. The
+// dashboard has that column and takes the band there.
+//
+// What DID change is the over arm, and the reason is the whole of this release.
+// It used to be refused because `list`'s LEFT and `status`'s USED read
+// different windows by construction, so a red cell over either number was
+// saying something the number beside it contradicted. There is no derived
+// window any more: a cell is one window, and 100% in it is the cell's own text
+// agreeing with its own colour.
+func windowCellStyle(pal theme.Palette, rows []view.Row, firstWindowCol int,
+	cols view.Columns) func(row, col int) lipgloss.Style {
+
+	return func(row, col int) lipgloss.Style {
+		if row == table.HeaderRow {
+			return pal.Style(theme.RoleHeader)
+		}
+		if row < 0 || row >= len(rows) {
+			return lipgloss.NewStyle()
+		}
+		r := rows[row]
+		if col == 0 && r.Active {
+			return pal.Style(theme.RoleActive)
+		}
+		i := col - firstWindowCol
+		if i < 0 || i >= len(cols.Windows) {
+			return lipgloss.NewStyle()
+		}
+		switch r.CellState(cols.Windows[i].Name) {
+		case view.CellUnknown:
+			return pal.Style(theme.RoleMuted)
+		case view.CellOver:
+			return pal.Style(theme.RoleGaugeOver)
+		}
+		return lipgloss.NewStyle()
+	}
+}
+
 func quotaCellStyle(pal theme.Palette, rows []view.Row, quotaCol int,
 	label func(view.Row) string) func(row, col int) lipgloss.Style {
 

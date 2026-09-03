@@ -127,15 +127,24 @@ func TestStatusRendersTheDashboard(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit %d, want 0\n%s", code, stdout)
 	}
-	for _, want := range []string{"work@example.com", "62%", "seven_day", "2h14m", "1m"} {
+	// Both windows, both rollovers, the age, and the legend mapping each header
+	// back to the wire key `ccdad config` takes a threshold on.
+	for _, want := range []string{
+		"work@example.com", "1m",
+		"20%", "30m", "5H = five_hour",
+		"62%", "2h14m", "7D = seven_day",
+	} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("the dashboard does not mention %q:\n%s", want, stdout)
 		}
 	}
-	// The window with room to spare is not the one the row describes.
-	for _, unwanted := range []string{"20%", "five_hour", "30m"} {
+	// The derived columns are gone. A dashboard that still printed one would be
+	// answering "which window binds" beside the windows themselves, which is
+	// the question a reader could not tell `ccdad list` was answering
+	// differently.
+	for _, unwanted := range []string{"USED", "WINDOW", "LEFT", "PACE"} {
 		if strings.Contains(stdout, unwanted) {
-			t.Errorf("the dashboard shows %q, which is not the binding window:\n%s", unwanted, stdout)
+			t.Errorf("the dashboard still carries the derived column %q:\n%s", unwanted, stdout)
 		}
 	}
 }
@@ -577,9 +586,16 @@ func TestTheFiveHourWindowCarriesAPaceReading(t *testing.T) {
 		t.Fatalf("--json carries no five_hour pace: %v", pace)
 	}
 
-	_, human, _, _ := runRoot(t, "status")
-	if !strings.Contains(human, "ahead") {
-		t.Errorf("the table does not call a five-hour window 90%% spent at 80%% elapsed ahead of pace:\n%s", human)
+	// PACE left the human table with the derived window it was read off. The
+	// reading itself did not go anywhere: --json carries one per window,
+	// including the projection that must never reach a human view, and
+	// `ccdad runway` is the human answer to "how fast".
+	fh, ok := pace["five_hour"].(map[string]any)
+	if !ok {
+		t.Fatalf("five_hour pace is not an object: %v", pace["five_hour"])
+	}
+	if ahead, _ := fh["aheadOfPace"].(bool); !ahead {
+		t.Errorf("--json does not call a five-hour window 90%% spent at 80%% elapsed ahead of pace: %v", fh)
 	}
 }
 
@@ -712,11 +728,11 @@ func TestHumanDurationReadsAtEveryScale(t *testing.T) {
 	}
 }
 
-// The binding window can be a per-model or per-surface weekly cap out of
-// limits[]. Both columns read the binding window, and a lookup that only knows
-// the fixed five leaves them blank for an account whose headroom is known — and
-// publishes a bindingWindow name that resolves to nothing.
-func TestStatusRendersAScopedBindingWindow(t *testing.T) {
+// A per-model or per-surface weekly cap out of limits[] is a window like any
+// other and gets a column of its own. A build that only knows the fixed five
+// would leave it out of the table entirely — and publish a bindingWindow name
+// that resolves to nothing.
+func TestStatusRendersAScopedWindowAsItsOwnColumn(t *testing.T) {
 	isolate(t)
 	freezeClock(t, statusNow)
 	seedAccount(t, "uuid-a", "work@example.com")
@@ -735,10 +751,15 @@ func TestStatusRendersAScopedBindingWindow(t *testing.T) {
 
 	_, human, _, _ := runRoot(t, "status")
 	if !strings.Contains(human, "93%") {
-		t.Errorf("the scoped cap that binds is not in the USED column:\n%s", human)
+		t.Errorf("the scoped cap has no cell:\n%s", human)
 	}
-	if strings.Contains(human, "20%") {
-		t.Errorf("five_hour is rendered although the scoped cap is the one that binds:\n%s", human)
+	// BESIDE five_hour and not instead of it. The old table chose one window
+	// per row and a reader could not tell which; both are here now.
+	if !strings.Contains(human, "20%") {
+		t.Errorf("five_hour lost its cell to the scoped cap:\n%s", human)
+	}
+	if !strings.Contains(human, "FABLE = weekly_scoped:model:Fable") {
+		t.Errorf("the legend does not map the scoped column back to its wire key:\n%s", human)
 	}
 
 	_, out, _, _ := runRoot(t, "status", "--json")
@@ -762,11 +783,12 @@ func TestStatusRendersAScopedBindingWindow(t *testing.T) {
 	}
 }
 
-// A tripped WEEKLY cap is what a user has to be told about: it is the one that
-// will not come back for days, and naming the five-hour window instead tells
-// them to wait ten minutes for an account that is unusable until Friday. The
-// engine still ORDERS on the tightest window, which here is the five-hour one.
-func TestStatusReportsATrippedWeeklyCapRatherThanTheTightestWindow(t *testing.T) {
+// The 0.2.0 guard, restated for a table that derives nothing. A tripped WEEKLY
+// cap is what a user has to be told about — it will not come back for days —
+// and the old table could only tell them by NOT naming the five-hour window
+// beside it, which is how the choice between the two became invisible. Both are
+// on the row now, so neither can hide the other and the guard costs nothing.
+func TestNeitherAWeeklyCapNorATighterWindowHidesTheOther(t *testing.T) {
 	isolate(t)
 	freezeClock(t, statusNow)
 	seedAccount(t, "uuid-a", "work@example.com")
@@ -783,13 +805,18 @@ func TestStatusReportsATrippedWeeklyCapRatherThanTheTightestWindow(t *testing.T)
 	})
 
 	_, human, _, _ := runRoot(t, "status")
-	for _, want := range []string{"85%", "seven_day", "1d16h"} {
+	// The weekly, its rollover, and the legend naming it.
+	for _, want := range []string{"85%", "1d16h", "7D = seven_day"} {
 		if !strings.Contains(human, want) {
 			t.Errorf("the dashboard does not report the tripped weekly cap (%q):\n%s", want, human)
 		}
 	}
-	if strings.Contains(human, "five_hour") {
-		t.Errorf("the dashboard names five_hour, which comes back in ten minutes:\n%s", human)
+	// And the five-hour window, which the old table suppressed to make room for
+	// the weekly. Ten minutes is a true thing about this account too.
+	for _, want := range []string{"95%", "10m", "5H = five_hour"} {
+		if !strings.Contains(human, want) {
+			t.Errorf("the dashboard does not report the tighter window (%q):\n%s", want, human)
+		}
 	}
 
 	_, out, _, _ := runRoot(t, "status", "--json")
@@ -1479,7 +1506,7 @@ func TestEveryLineOfTheStatusBlockFoldsAtTheFilesWidth(t *testing.T) {
 	const (
 		file      = "status.go"
 		fn        = "renderStatus"
-		wantSites = 7
+		wantSites = 10
 		wantWidth = "outWidth(cmd.OutOrStdout())"
 	)
 

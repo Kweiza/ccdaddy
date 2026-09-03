@@ -48,8 +48,18 @@ type Row struct {
 	Entry    usage.Entry
 	HasEntry bool
 	Headroom strategy.Headroom
-	Pace     map[usage.WindowName]usage.Pace
-	Engine   daemon.AccountStatus
+	// Thresholds is the bundle this row was MEASURED against, kept so a cell can
+	// be coloured against the same numbers.
+	//
+	// It is resolved once in Rows and handed to HeadroomOrCredit from this
+	// field, so the bundle a cell reads and the bundle the row was ranked on
+	// are one object by construction rather than two calls that agree until the
+	// day one of them moves. Under hover that matters twice over: the table is
+	// derived per account and per window, so a second resolution could hand a
+	// cell a number no part of this row was measured with.
+	Thresholds strategy.Thresholds
+	Pace       map[usage.WindowName]usage.Pace
+	Engine     daemon.AccountStatus
 }
 
 // Rows pairs every account with its cached reading.
@@ -69,10 +79,14 @@ func Rows(accounts []store.Account, cache *usage.Cache, active store.Account,
 		row := Row{Account: a, Active: hasActive && a.UUID == active.UUID}
 		if entry, ok := cache.Get(a.UUID); ok && entry.Snapshot != nil {
 			row.Entry, row.HasEntry = entry, true
+			// Resolved ONCE and stored, then handed on from the field. Two
+			// calls would agree today and diverge the first time the resolver
+			// grew a clock or a pool in it -- and under hover it has both.
+			row.Thresholds = thresholds(a.UUID)
 			// HeadroomOrCredit, not HeadroomOf: a seat metered only in money
 			// carries no plan window, and the window-only axis reported it
 			// unknown while the engine ranked it on its balance.
-			row.Headroom = strategy.HeadroomOrCredit(entry.Snapshot, thresholds(a.UUID))
+			row.Headroom = strategy.HeadroomOrCredit(entry.Snapshot, row.Thresholds)
 			row.Pace = entry.Snapshot.Pace(now)
 		}
 		rows = append(rows, row)
