@@ -263,6 +263,21 @@ func TestStatusJSONCarriesTheCodexServingUuid(t *testing.T) {
 	}
 }
 
+// The omission half of the pair above. `list` has had this test; `status`
+// had not, and dropping statusPayload's `!= ""` guard on CodexServingUUID
+// stays fully green without it -- a consumer would then see an empty string
+// on a machine with no pointer and have no way to tell that from a pointer at
+// an account actually named "".
+func TestStatusJSONOmitsTheCodexServingUuidWithNoPointer(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "cl-1", "claude@example.com")
+
+	payload := decodeJSON(t, "status", "--json")
+	if _, present := payload["codexServingUuid"]; present {
+		t.Fatalf("codexServingUuid is present on a machine with no pointer:\n%v", payload)
+	}
+}
+
 // NEVER-CROSS. `active` and `activeUuid` answer about Claude Code's login and
 // nothing else. A fleet of three Claude accounts and two Codex ones, with one
 // of each in use, must produce exactly one row marked active -- the Claude one.
