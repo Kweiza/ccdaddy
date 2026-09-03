@@ -204,3 +204,114 @@ func TestTheCodexJitterIsAFractionOfItsOwnInterval(t *testing.T) {
 		t.Errorf("spread = %s, want at most %s", spread, cap)
 	}
 }
+
+// probe is a Table whose duration fields are all distinct, chosen so that no
+// two of them ever collide the way they do on the shipped tables: Claude's
+// ServeTTL and MinInterval are both 180s, Claude's ExhaustedInterval and
+// CandidateMaxInterval are both 600s, and Codex's ExhaustedInterval and
+// CandidateMaxInterval are both 60m. Against those collisions, a rule that
+// reads the wrong field can still return the right NUMBER by accident, and a
+// test asserting only the number cannot tell the difference.
+//
+// Against probe, it cannot: every duration is a value nothing else in the
+// table could have produced, so a swapped field reference returns a
+// distinguishable wrong answer no matter which two fields it confuses.
+var probe = Table{
+	ServeTTL:             1 * time.Second,
+	MinInterval:          2 * time.Second,
+	UrgentInterval:       3 * time.Second,
+	ActiveMaxInterval:    5 * time.Second,
+	CandidateMaxInterval: 8 * time.Second,
+	ExhaustedInterval:    13 * time.Second,
+	Post429MinInterval:   21 * time.Second,
+	Post429MaxInterval:   34 * time.Second,
+	Recent429Window:      55 * time.Second,
+	Post429BackoffMult:   1.5,
+	MovementDeltaPct:     1.0,
+	JitterFrac:           0.1,
+	Urgent:               true,
+	Danger:               true,
+}
+
+// ServeTTLFor must read ServeTTL. This is the one that bites today: on
+// Claude, ServeTTL and MinInterval are both 180s, so a swap to MinInterval is
+// invisible there — but on Codex it would silently turn the 3-minute cache
+// TTL into 15 minutes, with nothing failing. See
+// TestCodexServeTTLIsStillTheThreeMinuteFloor for that pin on the real table.
+func TestProbeServeTTLForReadsServeTTL(t *testing.T) {
+	in := Input{Now: epoch, Reading: sample(10), Threshold: 80}
+	if got, want := probe.ServeTTLFor(in), probe.ServeTTL; got != want {
+		t.Errorf("ServeTTLFor() = %s, want ServeTTL %s", got, want)
+	}
+}
+
+// The regression named above, pinned on the table that actually ships: on
+// Claude ServeTTL and MinInterval are both 180s, so a swap between them is
+// invisible against Claude alone. Codex's are 180s and 15m, so this is the
+// assertion a swap cannot survive.
+func TestCodexServeTTLIsStillTheThreeMinuteFloor(t *testing.T) {
+	in := Input{Now: epoch, Reading: sample(10), Threshold: 80}
+	if got, want := Codex.ServeTTLFor(in), 180*time.Second; got != want {
+		t.Errorf("Codex.ServeTTLFor() = %s, want %s", got, want)
+	}
+}
+
+// base's exhausted branch must read ExhaustedInterval, not
+// CandidateMaxInterval — the two collide at 600s on Claude and at 60m on
+// Codex, so only a table where they differ can catch the swap.
+func TestProbeBaseExhaustedReadsExhaustedInterval(t *testing.T) {
+	in := Input{Now: epoch, Active: false, Reading: Reading{Known: true, BindingPct: 10, Exhausted: true}, Threshold: 80}
+	if got, want := probe.base(in, false), probe.ExhaustedInterval; got != want {
+		t.Errorf("base() = %s, want ExhaustedInterval %s", got, want)
+	}
+}
+
+// sustained's clamp must return MinInterval, not ServeTTL.
+func TestProbeSustainedReturnsMinInterval(t *testing.T) {
+	in := Input{Now: epoch, Active: false, Reading: sample(10), Threshold: 80}
+	if got, want := probe.sustained(1*time.Second, in, false), probe.MinInterval; got != want {
+		t.Errorf("sustained() = %s, want MinInterval %s", got, want)
+	}
+}
+
+// sustained's clamp must trigger by comparing against MinInterval, not
+// ActiveMaxInterval. d sits strictly between the probe's MinInterval (2s) and
+// ActiveMaxInterval (5s): the correct comparison does not clamp it, so d
+// comes back unchanged; a comparison against ActiveMaxInterval would clamp it
+// to MinInterval instead.
+func TestProbeSustainedConditionComparesAgainstMinInterval(t *testing.T) {
+	in := Input{Now: epoch, Active: false, Reading: sample(10), Threshold: 80}
+	d := 4 * time.Second
+	if got, want := probe.sustained(d, in, false), d; got != want {
+		t.Errorf("sustained(%s) = %s, want it unchanged at %s — the clamp must not trigger between MinInterval and ActiveMaxInterval", d, got, want)
+	}
+}
+
+// base's danger branch must read MinInterval, not ServeTTL.
+func TestProbeBaseDangerReadsMinInterval(t *testing.T) {
+	in := Input{Now: epoch, Active: true, Reading: Reading{Known: true, BindingPct: 97}, Threshold: 80}
+	if got, want := probe.base(in, false), probe.MinInterval; got != want {
+		t.Errorf("base() = %s, want MinInterval %s", got, want)
+	}
+}
+
+// base's active-and-moving branch (inside the in.Active block, short of the
+// urgent exemption) must read MinInterval, not ServeTTL. The reading sits far
+// from the threshold so nearThreshold is false and the urgent branch above it
+// is never taken, regardless of t.Urgent.
+func TestProbeBaseActiveMovingReadsMinInterval(t *testing.T) {
+	in := Input{Now: epoch, Active: true, Reading: sample(10), Threshold: 80}
+	if got, want := probe.base(in, true), probe.MinInterval; got != want {
+		t.Errorf("base() = %s, want MinInterval %s", got, want)
+	}
+}
+
+// base's candidate-and-moving branch (outside the in.Active block) must also
+// read MinInterval, not ServeTTL. Same rule as the branch above, reached by a
+// different path: the account is not the live one.
+func TestProbeBaseCandidateMovingReadsMinInterval(t *testing.T) {
+	in := Input{Now: epoch, Active: false, Reading: sample(10), Threshold: 80}
+	if got, want := probe.base(in, true), probe.MinInterval; got != want {
+		t.Errorf("base() = %s, want MinInterval %s", got, want)
+	}
+}
