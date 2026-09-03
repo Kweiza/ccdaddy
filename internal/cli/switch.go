@@ -8,6 +8,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
+	"github.com/Kweiza/ccdaddy/internal/codexswitch"
+	"github.com/Kweiza/ccdaddy/internal/provider"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/switcher"
@@ -121,11 +123,41 @@ func atMostOneAccount(verb string) cobra.PositionalArgs {
 	}
 }
 
+// switchProvider reads the --provider flag. Empty is Claude, which is what
+// every invocation written before this flag existed means.
+func switchProvider(providerName string) (provider.ID, error) {
+	if providerName == "" {
+		return provider.Claude, nil
+	}
+	p, err := provider.Parse(providerName)
+	if err != nil {
+		return "", UsageError("--provider takes %s or %s, not %q",
+			provider.Claude, provider.Codex, providerName)
+	}
+	return p, nil
+}
+
 // checkSwitchFlags opens with the two flag rejections that are asymmetric and
 // easy to invert, so they are written out one per branch rather than folded
 // together: --strategy is refused WITH an explicit target, --model WITHOUT
 // --strategy. The rest of the function is ordinary argument checking.
-func checkSwitchFlags(args []string, strategyName, model string) error {
+func checkSwitchFlags(args []string, strategyName, model, providerName string) error {
+	p, err := switchProvider(providerName)
+	if err != nil {
+		return err
+	}
+	// The two Claude ranking knobs, refused for codex rather than ignored. The
+	// codex lane forces pre-emption off and hover off and ranks on one
+	// threshold, so a --strategy honoured here would narrow nothing and a
+	// --model would name a family the codex windows have no scope for. Silently
+	// dropping either is how a user comes to believe they excluded something.
+	if p == provider.Codex && strategyName != "" {
+		return UsageError("switch --provider codex ranks on the codex table, which takes no strategy; " +
+			"drop --strategy, or name the account you want")
+	}
+	if p == provider.Codex && model != "" {
+		return UsageError("switch --model names a Claude model family, so it means nothing with --provider codex")
+	}
 	if strategyName != "" && len(args) == 1 {
 		return UsageError("switch --strategy picks the account itself, so it cannot be given one as well; " +
 			"drop the account, or drop --strategy")
@@ -145,6 +177,13 @@ func checkSwitchFlags(args []string, strategyName, model string) error {
 	}
 	if strategyName == "" {
 		if len(args) == 0 {
+			// `--provider codex` IS a targetless grammar of its own: it names
+			// the pool, and the codex ranking has no strategy to be given.
+			// Nothing about it can rewrite the live login, which is what the
+			// refusal below is protecting.
+			if p == provider.Codex {
+				return nil
+			}
 			// The targetless grammar exists, but it is the --strategy one.
 			// Letting a bare `switch` mean "engine, pick something" would make
 			// the most easily mistyped command in the tree the one that
@@ -162,7 +201,7 @@ func checkSwitchFlags(args []string, strategyName, model string) error {
 
 func newSwitchCmd() *cobra.Command {
 	var force bool
-	var strategyName, model string
+	var strategyName, model, providerName string
 
 	cmd := &cobra.Command{
 		Use:   "switch [ACCOUNT]",
@@ -183,7 +222,11 @@ func newSwitchCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := checkSwitchFlags(args, strategyName, model); err != nil {
+			if err := checkSwitchFlags(args, strategyName, model, providerName); err != nil {
+				return err
+			}
+			asserted, err := switchProvider(providerName)
+			if err != nil {
 				return err
 			}
 
@@ -236,6 +279,35 @@ func newSwitchCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
+			}
+
+			// --provider is an ASSERTION about the account that was named, and
+			// it is checked here -- after Resolve and before anything is
+			// written. It exists because one person's Claude and Codex accounts
+			// commonly share an email address, so a reference that resolved to
+			// the wrong provider yesterday can resolve to the other one today;
+			// a script that means to move codex must not silently rewrite the
+			// live Claude login instead.
+			if providerName != "" && target.Provider != asserted {
+				return UsageError("%s is a %s account and --provider %s was asserted; "+
+					"run 'ccdad list' to see which is which",
+					target.Label(), target.Provider, asserted)
+			}
+
+			// The codex branch, BEFORE the credential read below. A Codex
+			// account's blob holds no claudeAiOauth and no token record, so
+			// falling through would take the setup-token refusal path and
+			// report a shape mismatch about an account that is not broken.
+			//
+			// What a codex switch IS: a pointer file. Codex holds no token on
+			// this machine -- ccdad's proxy rewrites the bearer per request --
+			// so there is no credential to install and nothing to lock.
+			if target.Provider == provider.Codex {
+				root, rerr := codexRoot()
+				if rerr != nil {
+					return rerr
+				}
+				return runCodexSwitch(cmd, root, target)
 			}
 
 			// The two token paths stay here rather than in the executor. A
@@ -344,5 +416,49 @@ func newSwitchCmd() *cobra.Command {
 		"let the engine choose the account: one of "+strings.Join(strategy.StrategyNames(), ", ")+" (no ACCOUNT)")
 	cmd.Flags().StringVar(&model, "model", "",
 		"the model this session will run: ignore other models' weekly caps when ranking (needs --strategy)")
+	cmd.Flags().StringVar(&providerName, "provider", "",
+		"assert the named account's provider (claude or codex), or with no ACCOUNT pick the best codex account")
 	return cmd
+}
+
+// runCodexSwitch repoints ccdad's codex proxy at one account.
+//
+// It writes a pointer and stamps a cooldown, and that is all. Nothing here
+// touches Claude Code's credentials file, takes a Claude Code lock, or reads a
+// stored login -- which is why it takes a root and an account rather than the
+// store.
+//
+// The sentence names the NEW THREAD because that is the honest scope of the
+// change: the proxy keeps a thread with the account that produced its earlier
+// turns, so a session already running goes on being billed where it was.
+func runCodexSwitch(cmd *cobra.Command, root string, target store.Account) error {
+	if serving, ok := codexswitch.ReadServing(root); ok && serving == target.UUID {
+		// Exit 3 is "the world is already as you asked". Reporting 0 would tell
+		// a cron job it changed something it did not.
+		fmt.Fprintf(cmd.ErrOrStderr(), "Codex is already served from %s.\n", target.Label())
+		return WithCode(errSilent, ExitNothingToDo)
+	}
+	if err := codexswitch.Execute(root, target.UUID); err != nil {
+		if errors.Is(err, codexswitch.ErrPointerMovedUnstamped) {
+			// The pointer already moved -- Execute writes it before it stamps
+			// the switch cooldown, and only the stamp failed. Reporting a
+			// plain failure here would be a lie: codex now serves target, just
+			// without the cooldown that holds a poll off an immediate
+			// re-switch. Say what is actually being served, the same honest
+			// split the daemon's own codexTick makes on this same error.
+			fmt.Fprintf(cmd.ErrOrStderr(),
+				"Serving codex from %s from the next new thread, but its switch cooldown was not recorded: %v\n"+
+					"  A poll shortly after this could repoint again immediately.\n",
+				target.Label(), err)
+			return WithCode(errSilent, ExitFailure)
+		}
+		return err
+	}
+	if daemonIsRunning() {
+		fmt.Fprintf(cmd.ErrOrStderr(), "Serving codex from %s from the next new thread.\n", target.Label())
+		return nil
+	}
+	fmt.Fprintf(cmd.ErrOrStderr(),
+		"Serving codex from %s from the next new thread, once the daemon runs.\n", target.Label())
+	return nil
 }

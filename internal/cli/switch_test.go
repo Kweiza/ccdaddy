@@ -153,24 +153,21 @@ func TestSwitchRefusesASetupTokenAccount(t *testing.T) {
 // A Codex account reaching `ccdad switch` used to surface switcher.ErrNotClaude
 // verbatim: "switcher: target is not a Claude account" -- a package-prefixed
 // developer string, no account name, no remedy, in a command whose other
-// refusals are named, actionable sentences. Compare probeSkip's own: "codex@
-// example.com is a Codex account; ccdad never probes Codex".
-func TestSwitchRefusesACodexAccountAndNamesIt(t *testing.T) {
+// refusals are named, actionable sentences. `switch` now repoints the codex
+// proxy instead of refusing, and an index resolves to a Codex account exactly
+// the way it resolves to a Claude one -- store.Resolve does not tell providers
+// apart, so the codex branch has to be reached from every resolution path, not
+// only a switch named by email.
+func TestSwitchToACodexAccountByIndexRepoints(t *testing.T) {
 	isolate(t)
 	seedCodexAccount(t, "u-x", "codex@example.com")
 
-	code, _, _, top := runRoot(t, "switch", "1")
-	if code != ExitUsage {
-		t.Fatalf("exit = %d (%s), want %d", code, top, ExitUsage)
+	code, _, stderr, top := runRoot(t, "switch", "1")
+	if code != ExitOK {
+		t.Fatalf("exit = %d (%s), want %d\n%s", code, top, ExitOK, stderr)
 	}
-	if strings.Contains(top, "switcher:") {
-		t.Fatalf("error %q leaks the package-prefixed developer string", top)
-	}
-	if !strings.Contains(top, "codex@example.com") {
-		t.Fatalf("error %q does not name the account", top)
-	}
-	if !strings.Contains(top, "Codex") {
-		t.Fatalf("error %q does not say what kind of account it is", top)
+	if !strings.Contains(stderr, "codex@example.com") {
+		t.Fatalf("stderr %q does not name the account", stderr)
 	}
 	assertNoLiveCredentials(t)
 }
