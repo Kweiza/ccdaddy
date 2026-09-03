@@ -81,6 +81,27 @@ func TestANilBookAnswersEveryQuestionWithNothing(t *testing.T) {
 	}
 }
 
+// MarkLimited is a one-line delegation to MarkLimitedFor, so the case above only
+// proves MarkLimitedFor tolerates nil by way of that delegation. Call it
+// directly too: a future edit that stops MarkLimited from delegating must not
+// silently drop this method's own nil guard.
+func TestANilBookToleratesMarkLimitedForDirectly(t *testing.T) {
+	var b *LimitBook
+	b.MarkLimitedFor("cx-1", bookEpoch.Add(time.Hour), false)
+	if until, ok := b.LimitedUntil("cx-1", bookEpoch); ok {
+		t.Fatalf("LimitedUntil on a nil book = (%v, true), want no limit", until)
+	}
+}
+
+// ResetsAt is the fourth method and the one codex-facing answers must use, so
+// it needs its own nil case rather than riding on LimitedUntil's.
+func TestANilBookToleratesResetsAt(t *testing.T) {
+	var b *LimitBook
+	if until, ok := b.ResetsAt("cx-1", bookEpoch); ok {
+		t.Fatalf("ResetsAt on a nil book = (%v, true), want no limit", until)
+	}
+}
+
 // The proxy is a fully concurrent handler and the lane writes from its own
 // goroutine, so this is read and written from several at once. -race is the
 // assertion; the loop is only what gives it something to look at.
