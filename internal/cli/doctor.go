@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -20,11 +21,13 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/ccver"
+	"github.com/Kweiza/ccdaddy/internal/codexauth"
 	"github.com/Kweiza/ccdaddy/internal/config"
 	"github.com/Kweiza/ccdaddy/internal/credhome"
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 	"github.com/Kweiza/ccdaddy/internal/history"
 	"github.com/Kweiza/ccdaddy/internal/identity"
+	"github.com/Kweiza/ccdaddy/internal/provider"
 	"github.com/Kweiza/ccdaddy/internal/release"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
@@ -264,6 +267,8 @@ func runChecks() []check {
 		checkProfiles(root, storeUsable, accountsUsable),
 		checkPrimary(root, storeUsable, accountsUsable),
 		checkCredentialFiles(root, storeUsable, accountsUsable),
+		checkCodexRelogin(root, storeUsable, accountsUsable),
+		checkCodexProxy(root, storeUsable, accountsUsable, report),
 		checkCredentialHome(report),
 		checkClaudeVersion(install, installErr),
 		checkClaudeCode(live, liveErr),
@@ -1812,4 +1817,157 @@ func checkPath() check {
 	}
 	return check{"path", levelWarn, fmt.Sprintf(
 		"%s is not on PATH, so `ccdad` only works by its full path. `%s setup-path` adds it", dir, exe)}
+}
+
+// codexAccountsAt is the store's Codex accounts, read WITHOUT opening the
+// store.
+//
+// store.Open creates the directory it opens, and this file's first rule is that
+// the probe must not create what it probes. AccountsAt reads the document and
+// nothing else, which is what checkPrimary and checkProfiles already use it for.
+func codexAccountsAt(root string) ([]store.Account, error) {
+	accounts, err := store.AccountsAt(root)
+	if err != nil {
+		return nil, err
+	}
+	var out []store.Account
+	for _, a := range accounts {
+		if a.Provider == provider.Codex {
+			out = append(out, a)
+		}
+	}
+	return out, nil
+}
+
+// codexBlobAt reads one account's stored credential blob directly, for the same
+// reason codexAccountsAt exists: opening the store would create it.
+func codexBlobAt(root, uuid string) (cclink.Blob, bool) {
+	raw, err := os.ReadFile(filepath.Join(store.CredentialsDirAt(root), uuid+".json"))
+	if err != nil {
+		return nil, false
+	}
+	var b cclink.Blob
+	if err := json.Unmarshal(raw, &b); err != nil {
+		return nil, false
+	}
+	return b, true
+}
+
+// checkCodexRelogin names the Codex accounts whose refresh grant the endpoint
+// has rejected.
+//
+// It is a WARNING and not a failure, on this file's own taxonomy: the machine
+// works, every other account rotates, and one account is out of service until a
+// person runs a command. What makes the row worth having is that nothing else
+// says so -- the account looks ordinary in `ccdad list`, and the first symptom
+// is a codex session answering a branded 401.
+//
+// The mark is compared against the token the account CURRENTLY holds, which is
+// what makes a re-login self-clearing: `ccdad codex add` stores a new token and
+// the mark stops matching, with nothing having had to remember to clear it. A
+// row that reported the bare mark would send a user to re-run a command they
+// have already run.
+func checkCodexRelogin(root string, usable, accountsUsable bool) check {
+	if !usable {
+		return check{"codex-relogin", levelSkipped, "there is no store to check"}
+	}
+	if !accountsUsable {
+		return check{"codex-relogin", levelSkipped, noAccountList}
+	}
+	accounts, err := codexAccountsAt(root)
+	if err != nil {
+		// Answering "every grant is live" out of a failed read would be exactly
+		// the reassuring lie this row exists to remove.
+		return check{"codex-relogin", levelFail, fmt.Sprintf("the account list cannot be read: %v", err)}
+	}
+	if len(accounts) == 0 {
+		return check{"codex-relogin", levelSkipped, "there are no codex accounts"}
+	}
+	var dead []string
+	for _, a := range accounts {
+		if a.CodexReloginFor == "" {
+			continue
+		}
+		blob, ok := codexBlobAt(root, a.UUID)
+		if !ok {
+			continue
+		}
+		if codexauth.NeedsRelogin(a, blob) {
+			dead = append(dead, a.Label())
+		}
+	}
+	if len(dead) == 0 {
+		return check{"codex-relogin", levelOK, fmt.Sprintf(
+			"%d codex account%s, and every stored grant is one the endpoint has not rejected",
+			len(accounts), plural(len(accounts), "", "s"))}
+	}
+	sort.Strings(dead)
+	return check{"codex-relogin", levelWarn, fmt.Sprintf(
+		"the refresh grant behind %s has been rejected, so ccdad cannot serve codex from %s until "+
+			"somebody logs in again: run `ccdad codex add`. Nothing else reports this -- the account "+
+			"looks ordinary in `ccdad list`, and the first symptom is a codex session answering an error",
+		joinAnd(dead), plural(len(dead), "it", "them"))}
+}
+
+// checkCodexProxy answers whether a codex session launched right now would
+// reach ccdad at all.
+//
+// The port is read from the published status document because that is where a
+// process fact lives; there is no file of its own for it. A daemon that is
+// running and has published no port is the one arm that is SKIPPED rather than
+// warned about, and the arm below says why.
+//
+// The fallback is the one arm that asks the reader to DO something. A proxy
+// that came up on a different port than the one it resolved leaves every codex
+// session started before it talking to a port nothing is listening on, and
+// codex's own symptom for that is an endless "Reconnecting" with no error text
+// at all -- so a user who is not told will read it as a network problem.
+func checkCodexProxy(root string, usable, accountsUsable bool, report daemon.Report) check {
+	if !usable {
+		return check{"codex-proxy", levelSkipped, "there is no store to check"}
+	}
+	if !accountsUsable {
+		return check{"codex-proxy", levelSkipped, noAccountList}
+	}
+	accounts, err := codexAccountsAt(root)
+	if err != nil {
+		return check{"codex-proxy", levelFail, fmt.Sprintf("the account list cannot be read: %v", err)}
+	}
+	if len(accounts) == 0 {
+		return check{"codex-proxy", levelSkipped, "there are no codex accounts"}
+	}
+	if report.State != daemon.DaemonRunning {
+		return check{"codex-proxy", levelWarn,
+			"no daemon is running, so nothing is serving codex: a codex session launched through ccdad " +
+				"would wait for a proxy that is not there. `ccdad daemon start` starts one"}
+	}
+	port := report.Status.CodexProxyPort
+	if port == 0 {
+		// SKIPPED and not warn, and the difference is the whole judgment in this
+		// arm. A running daemon that publishes no port is either one whose
+		// listener did not come up or one from a build that has no listener to
+		// publish, and the status document alone cannot tell those apart. While
+		// the proxy is not in the build the second is EVERY machine that has a
+		// codex account, so warning here would paint a row yellow for a whole
+		// release on evidence of nothing -- and a row that is always yellow is a
+		// row nobody reads by the time it means something. The state worth a
+		// warning is a port that is published and unreachable, and answering that
+		// takes a request this check does not make.
+		return check{"codex-proxy", levelSkipped, "the running daemon has published no codex proxy port"}
+	}
+	if report.Status.CodexProxyFellBack {
+		return check{"codex-proxy", levelWarn, fmt.Sprintf(
+			"the codex proxy is on port %d, which is not the port it resolved -- something else held that "+
+				"one. Any codex session started before this daemon is talking to a port nothing is "+
+				"listening on and shows an endless reconnect with no error: quit and relaunch those "+
+				"sessions", port)}
+	}
+	detail := fmt.Sprintf("the codex proxy is listening on 127.0.0.1:%d", port)
+	if n := report.Status.CodexUnroutedLaunches; n > 0 {
+		return check{"codex-proxy", levelWarn, fmt.Sprintf(
+			"%s, but %d codex session%s had to be launched without it and %s spending whatever "+
+				"~/.codex holds, which ccdad neither chose nor can see",
+			detail, n, plural(n, "", "s"), plural(n, "is", "are"))}
+	}
+	return check{"codex-proxy", levelOK, detail}
 }
