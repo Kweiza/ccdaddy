@@ -168,7 +168,7 @@ func TestRetentionDropsByAgeWithTheCountUnderItsCap(t *testing.T) {
 	isolate(t)
 	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
 	write := []Sample{
-		{At: now.Add(-9 * time.Hour)}, // older than the 8h bound
+		{At: now.Add(-(retain + time.Hour))}, // an hour past the age bound, whatever it is
 		{At: now.Add(-7 * time.Hour)},
 		{At: now.Add(-1 * time.Hour)},
 	}
@@ -183,7 +183,7 @@ func TestRetentionDropsByAgeWithTheCountUnderItsCap(t *testing.T) {
 	}
 	got := h.Series("uuid-a", time.Time{})
 	if len(got) != 2 {
-		t.Fatalf("samples = %d, want 2 (the 9h-old one is past the age bound)", len(got))
+		t.Fatalf("samples = %d, want 2 (the one older than retain is past the age bound)", len(got))
 	}
 	if !got[0].At.Equal(now.Add(-7 * time.Hour)) {
 		t.Errorf("oldest surviving sample = %v", got[0].At)
@@ -202,6 +202,11 @@ func TestRetentionDropsByAgeWithTheCountUnderItsCap(t *testing.T) {
 // named Share and then did not apply it, which left the bound twelve minutes
 // short for an identity of four and an hour and eighteen minutes short for one
 // of six.
+//
+// It walks EVERY table and takes the widest, because retention is one bound over
+// one file. A second provider whose congestion ceiling is eight times the first
+// one's would otherwise leave the oldest end of its own window unbracketed while
+// this test went on passing about the other provider.
 func TestRetainCoversTheLongestGapThePolicyPermits(t *testing.T) {
 	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
 	in := pollpolicy.Input{
@@ -209,23 +214,37 @@ func TestRetainCoversTheLongestGapThePolicyPermits(t *testing.T) {
 		Reading:   pollpolicy.Reading{BindingPct: 50, Known: true},
 		Threshold: 85,
 	}
-	// Repeated 429s are what park the AIMD estimate at the ceiling; one is not
-	// enough, because the increase is multiplicative from wherever it stands.
-	var st pollpolicy.State
-	for i := 0; i < 32; i++ {
-		st = pollpolicy.RateLimited(st, now, 0, false)
-	}
-	// The top of the jitter band, from inside the [0,1) the argument is
-	// documented to be: the widest gap is the one retention has to survive.
-	at, _ := pollpolicy.Next(st, in, math.Nextafter(1, 0))
-	if pollpolicy.InDangerBand(in) {
-		t.Fatal("this fixture is inside the danger band, where Share does not divide; it cannot measure the worst gap")
-	}
-	gap := pollpolicy.Share(at.Sub(now), maxIdentityAccounts, in)
 
-	if want := MeasuredSpan + gap; retain < want {
-		t.Fatalf("retain = %v, want at least %v (%v of window plus a %v gap for %d accounts on one identity)",
-			retain, want, MeasuredSpan, gap, maxIdentityAccounts)
+	var worst time.Duration
+	var worstTable string
+	for _, tc := range []struct {
+		name  string
+		table pollpolicy.Table
+	}{
+		{"claude", pollpolicy.Claude},
+		{"codex", pollpolicy.Codex},
+	} {
+		// Repeated 429s are what park the AIMD estimate at the ceiling; one is
+		// not enough, because the increase is multiplicative from wherever it
+		// stands.
+		var st pollpolicy.State
+		for i := 0; i < 32; i++ {
+			st = tc.table.RateLimited(st, now, 0, false)
+		}
+		// The top of the jitter band, from inside the [0,1) the argument is
+		// documented to be: the widest gap is the one retention has to survive.
+		at, _ := tc.table.Next(st, in, math.Nextafter(1, 0))
+		if tc.table.InDangerBand(in) {
+			t.Fatalf("the %s fixture is inside the danger band, where Share does not divide; it cannot measure the worst gap", tc.name)
+		}
+		if gap := tc.table.Share(at.Sub(now), maxIdentityAccounts, in); gap > worst {
+			worst, worstTable = gap, tc.name
+		}
+	}
+
+	if want := MeasuredSpan + worst; retain < want {
+		t.Fatalf("retain = %v, want at least %v (%v of window plus a %v gap for %d accounts on one identity, worst on the %s table)",
+			retain, want, MeasuredSpan, worst, maxIdentityAccounts, worstTable)
 	}
 }
 
