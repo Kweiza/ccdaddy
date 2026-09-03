@@ -347,6 +347,20 @@ var scopedSessionAllowed = map[string]bool{
 	// `ccdad tui` carries, for the same reason and about the same seam.
 	"ccdad mcp": true,
 
+	// The Codex commands write only ccdad's OWN store, which CCDAD_HOME points
+	// at and a session does not scope. `ccdad add` is refused in here and this
+	// one is not, and the difference is what each of them touches: that one can
+	// activate a Claude Code login, which is exactly the state a session scopes
+	// a copy of. This one stores an account ccdad serves through its own proxy
+	// and never writes Claude Code's credentials, Claude Code's config or
+	// codex's home.
+	//
+	// The parent carries a verdict of its own because the totality test walks
+	// every node of the tree, and a group with no verdict is a group whose
+	// subcommands were classified and whose own path was not.
+	"ccdad codex":     true,
+	"ccdad codex add": true,
+
 	// Cobra's own. They read no state.
 	"ccdad help":                  true,
 	"ccdad completion":            true,
