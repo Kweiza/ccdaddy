@@ -16,6 +16,7 @@
 package codexswitch
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,6 +25,15 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/atomicfile"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 )
+
+// ErrPointerMovedUnstamped marks an Execute failure that happened AFTER the
+// pointer already moved: the proxy is serving the new account, but the
+// anti-flap cooldown for that switch was not recorded, so a poll tick shortly
+// after can re-switch immediately with nothing holding it back. A caller that
+// sees an error satisfying errors.Is(err, ErrPointerMovedUnstamped) cannot
+// conclude the repoint did not happen -- it must re-read ReadServing to learn
+// what is actually being served.
+var ErrPointerMovedUnstamped = errors.New("codexswitch: the pointer moved but the switch cooldown was not recorded")
 
 // dirName and fileName are the two path components, spelled once.
 const (
@@ -68,6 +78,15 @@ func ReadServing(root string) (string, bool) {
 // proxy, which reads this file on every request, sees one whole uuid or the
 // previous one, never a torn line.
 //
+// A non-nil error does NOT mean the repoint did not happen. The pointer is
+// written first and the stamp only after, on purpose (see above), so a
+// failure in the stamp step returns an error while the pointer has already
+// moved: the proxy is already serving uuid, and the cooldown that would hold
+// the lane off an immediate re-switch was never recorded. That case wraps
+// ErrPointerMovedUnstamped. A caller that needs to know what is actually
+// being served on any error must re-read ReadServing rather than infer it
+// from Execute's return value.
+//
 // What it deliberately does NOT do: store.SetActive, switcher.RecordSwitch,
 // releaseManagedAPIKey, SyncGlobalConfigIdentity. None of them is reachable
 // from this package, which is asserted rather than remembered.
@@ -83,7 +102,10 @@ func Execute(root, uuid string) error {
 	if err := atomicfile.WriteFile(ServingPath(root), []byte(uuid+"\n"), 0o600); err != nil {
 		return fmt.Errorf("repointing codex at %s: %w", uuid, err)
 	}
-	return strategy.RecordCodexSwitch(uuid)
+	if err := strategy.RecordCodexSwitch(uuid); err != nil {
+		return fmt.Errorf("%w: %w", ErrPointerMovedUnstamped, err)
+	}
+	return nil
 }
 
 // Clear removes the pointer. `ccdad remove` calls it for the account that was
