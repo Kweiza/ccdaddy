@@ -50,3 +50,14 @@ func daemonIsRunning() bool {
 	held, err := singletonHeld()
 	return err == nil && held
 }
+
+// codexPointerPath names the pointer file for a MESSAGE. It takes the two-value
+// resolution apart the way namePath's callers do, because Go makes a two-value
+// call unusable inside a format string.
+func codexPointerPath() (string, error) {
+	root, err := codexRoot()
+	if err != nil {
+		return "", err
+	}
+	return codexswitch.ServingPath(root), nil
+}
