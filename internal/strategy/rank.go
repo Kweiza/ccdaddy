@@ -378,7 +378,11 @@ func OutOfQuota(h Headroom) (out, known bool) {
 func weeklyResetOf(s *usage.Snapshot, model string, t Thresholds) timeValue {
 	var out timeValue
 	for _, w := range bindingWindows(s, model, t) {
-		if !usage.IsWeekly(w.Name) {
+		// Length first, name second -- the same rule the weekly floor applies,
+		// spelled at both sites because a pass that disagreed with the floor
+		// about which windows are perishable would spend against a reset the
+		// floor is not waiting on.
+		if !usage.IsWeeklyOf(w.Name, w.Window) {
 			continue
 		}
 		at, ok := w.Reset()

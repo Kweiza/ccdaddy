@@ -328,7 +328,12 @@ func HeadroomFor(s *usage.Snapshot, model string, t Thresholds) Headroom {
 		//     for, and it is the one that matters: a blown weekly holds the
 		//     account back until it rolls, whatever any threshold says.
 		empty := pct >= 100
-		if (slack < 0 || empty) && usage.IsWeekly(w.Name) {
+		// The READING is asked, not the name. A codex window's length is a
+		// property of the plan and only the endpoint knows it, so the same name
+		// runs thirty days on one account and a week on another; a reading that
+		// carried no length falls back to the name, which is every Claude
+		// window and so every existing answer here.
+		if (slack < 0 || empty) && usage.IsWeeklyOf(w.Name, w.Window) {
 			// An EMPTY floor outranks one that is merely past its number,
 			// whatever the slack says. Least-slack alone is the wrong key once
 			// the two arms can both fire: a blown weekly reporting +8 of slack
