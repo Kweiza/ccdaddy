@@ -235,8 +235,10 @@ func TestClearRemovesThePointer(t *testing.T) {
 	if uuid, ok := ReadServing(root); ok {
 		t.Fatalf("ReadServing = (%q, true) after Clear; want no pointer", uuid)
 	}
-	// Clearing twice is not a failure: `ccdad remove` calls it without first
-	// asking whether there was one.
+	// Clearing twice is not a failure. Clear is the unconditional-wipe entry
+	// point its own doc comment describes -- it removes whatever is there
+	// without reading it first, so calling it a second time, with nothing
+	// left to remove, is exactly as valid a call as the first.
 	if err := Clear(root); err != nil {
 		t.Fatalf("Clear on a machine with no pointer: %v, want nil", err)
 	}
