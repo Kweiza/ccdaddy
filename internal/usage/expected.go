@@ -23,7 +23,7 @@ import "time"
 // TestExpectedPctAgreesWithTheShareThatPaceReports pins the two together so the
 // day either the cap or the window table moves, both move.
 func ExpectedPct(name WindowName, w Window, now time.Time) (float64, bool) {
-	length, ok := windowLength(name)
+	length, ok := WindowLengthOf(name, w)
 	if !ok {
 		return 0, false
 	}

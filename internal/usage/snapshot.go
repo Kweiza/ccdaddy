@@ -54,6 +54,23 @@ const (
 	WindowCinderCove        WindowName = "cinder_cove"
 )
 
+// The two windows a Codex account is metered by.
+//
+// They are ccdad's names and not the wire's: the Codex endpoint sends them as
+// an unnamed primary/secondary pair inside one rate_limit object, with the
+// length of each in the reading. Naming them here is what lets one threshold
+// key, one ranking and one cache serve both providers.
+//
+// There is deliberately no attempt to relabel them by length — "5h", "weekly",
+// "monthly". The labels upstream derives are a ±5% match of the window length
+// against a table of five candidates, so a plan whose window is not one of the
+// five would be labelled wrong, and a threshold keyed on a label would then
+// govern a different window on a different plan.
+const (
+	WindowCodexPrimary   WindowName = "codex_primary"
+	WindowCodexSecondary WindowName = "codex_secondary"
+)
+
 // Scoped reports whether this name belongs to a limits[] entry rather than to
 // one of the six keys the schema names. It is how a caller that has only a name
 // tells a per-model or per-surface weekly window from a fixed one.
@@ -75,6 +92,11 @@ type Window struct {
 	hasPct  bool
 	reset   time.Time
 	hasTime bool
+	// length is how long the window runs, when the READING said so. It is
+	// unexported for the same reason pct and reset are: a caller reading a
+	// zero out of an unknown is the bug this whole type exists to prevent.
+	length    time.Duration
+	hasLength bool
 }
 
 // Percent is the window's utilization as a percent of 0-100, and whether it was
@@ -124,6 +146,32 @@ func NewWindow(pct *float64, resetsAt *time.Time) Window {
 		w.reset, w.hasTime = resetsAt.UTC(), true
 	}
 	return w
+}
+
+// NewWindowWithLength is NewWindow for a reading that carried its own window
+// length. A length of zero or less is no length at all, not a zero-length
+// window: zero is the divisor in every pace calculation there is.
+func NewWindowWithLength(pct *float64, resetsAt *time.Time, length time.Duration) Window {
+	w := NewWindow(pct, resetsAt)
+	if length > 0 {
+		w.length, w.hasLength = length, true
+	}
+	return w
+}
+
+// Length is how long this window runs before it rolls over, as the READING
+// reported it, and whether it reported one at all.
+//
+// It is the second source of that figure and the first one consulted; see
+// WindowLengthOf. A Claude window never carries one, because the Claude schema
+// does not send it and the length is a property of the NAME there. A Codex
+// window always does, because the length is a property of the plan and the
+// endpoint is the only thing that knows it.
+func (w Window) Length() (time.Duration, bool) {
+	if !w.hasLength {
+		return 0, false
+	}
+	return w.length, true
 }
 
 // ExtraUsageInput is what ExtraUsageFor takes, for the same reason NewWindow
@@ -439,20 +487,47 @@ type Snapshot struct {
 	// have the engine wait for a rollover that never comes.
 	CinderCove Window
 
+	// CodexPrimary and CodexSecondary are a Codex account's two quota windows.
+	// They are absent on every Claude reading and present on every Codex one,
+	// which is why RateLimitWindows appends them conditionally rather than
+	// listing them beside the five.
+	//
+	// Their LENGTH travels in the window, not in a table. The endpoint sends
+	// limit_window_seconds per window and the value differs by plan — a lapsed
+	// free tier reports one 30-day primary and no secondary — so binding them
+	// to a fixed 5h/7d pair would pace a month as a week.
+	CodexPrimary   Window
+	CodexSecondary Window
+
 	ExtraUsage ExtraUsage
 	Limits     []Limit
 }
 
-// RateLimitWindows is the five recurring windows, in the schema's order. It
-// excludes cinder_cove; see Snapshot.CinderCove for why.
+// RateLimitWindows is the recurring windows, in the schema's order: the five
+// Claude ones always, then whichever of the two Codex ones this reading
+// carried. It excludes cinder_cove; see Snapshot.CinderCove for why.
+//
+// The Codex pair is conditional and the Claude five are not, and the asymmetry
+// is deliberate. The five are a fixed key set that a Claude response either
+// fills or nulls, so listing an absent one costs nothing. The Codex pair is
+// absent from every Claude reading there has ever been, so appending them
+// unconditionally would put two permanently-absent windows into every Claude
+// ranking, every threshold walk and every table this list feeds.
 func (s *Snapshot) RateLimitWindows() []NamedWindow {
-	return []NamedWindow{
+	out := []NamedWindow{
 		{WindowFiveHour, s.FiveHour},
 		{WindowSevenDay, s.SevenDay},
 		{WindowSevenDayOAuthApps, s.SevenDayOAuthApps},
 		{WindowSevenDayOpus, s.SevenDayOpus},
 		{WindowSevenDaySonnet, s.SevenDaySonnet},
 	}
+	if s.CodexPrimary.Present {
+		out = append(out, NamedWindow{WindowCodexPrimary, s.CodexPrimary})
+	}
+	if s.CodexSecondary.Present {
+		out = append(out, NamedWindow{WindowCodexSecondary, s.CodexSecondary})
+	}
+	return out
 }
 
 // weeklyScopedKind is the one limits[] kind Claude Code identifies as a
@@ -716,6 +791,19 @@ type windowWire struct {
 	ResetsAt    *string  `json:"resets_at"`
 }
 
+// codexWindowWire is windowWire plus the length.
+//
+// It is a SEPARATE type and not a third field on windowWire, and that is the
+// whole of what keeps the Claude half byte-identical: widening windowWire would
+// put a "limit_window_seconds":null into all six Claude keys of every cached
+// document, which is a change to a file format for a field that half of it can
+// never carry.
+type codexWindowWire struct {
+	Utilization        *float64 `json:"utilization"`
+	ResetsAt           *string  `json:"resets_at"`
+	LimitWindowSeconds *float64 `json:"limit_window_seconds"`
+}
+
 type extraUsageWire struct {
 	IsEnabled      *bool    `json:"is_enabled"`
 	MonthlyLimit   *float64 `json:"monthly_limit"`
@@ -846,15 +934,30 @@ func (w scopeWire) MarshalJSON() ([]byte, error) {
 
 // wire mirrors the whole response. Every unknown key is ignored, which is what
 // the schema's zod passthrough means on the read side.
+//
+// The two codex keys are ccdad's own and not the Claude endpoint's. They are in
+// THIS struct rather than in a second document because the on-disk cache is
+// this shape, and one snapshot type with one codec is what keeps a Codex row
+// and a Claude row readable by the same parser. A Claude response never carries
+// them, and a Claude snapshot encodes them as null, which reads back as absent.
+//
+// They are deliberately NOT added to usageFields. That list is the eight-key
+// probe for "a 200 that is an in-band error rather than a reading", taken from
+// Claude Code's own bundle, and widening it would change what this package
+// accepts as a Claude response. Nothing is lost: MarshalJSON always writes every
+// key, so a cached codex document still carries five_hour as null and clears the
+// probe.
 type wire struct {
-	FiveHour          *windowWire     `json:"five_hour"`
-	SevenDay          *windowWire     `json:"seven_day"`
-	SevenDayOAuthApps *windowWire     `json:"seven_day_oauth_apps"`
-	SevenDayOpus      *windowWire     `json:"seven_day_opus"`
-	SevenDaySonnet    *windowWire     `json:"seven_day_sonnet"`
-	CinderCove        *windowWire     `json:"cinder_cove"`
-	ExtraUsage        *extraUsageWire `json:"extra_usage"`
-	Limits            []limitWire     `json:"limits"`
+	FiveHour          *windowWire      `json:"five_hour"`
+	SevenDay          *windowWire      `json:"seven_day"`
+	SevenDayOAuthApps *windowWire      `json:"seven_day_oauth_apps"`
+	SevenDayOpus      *windowWire      `json:"seven_day_opus"`
+	SevenDaySonnet    *windowWire      `json:"seven_day_sonnet"`
+	CinderCove        *windowWire      `json:"cinder_cove"`
+	CodexPrimary      *codexWindowWire `json:"codex_primary"`
+	CodexSecondary    *codexWindowWire `json:"codex_secondary"`
+	ExtraUsage        *extraUsageWire  `json:"extra_usage"`
+	Limits            []limitWire      `json:"limits"`
 }
 
 // rateLimitEnvelope reports whether the body is a rate limit delivered inside a
@@ -901,6 +1004,29 @@ func toWindow(w *windowWire) Window {
 		out.pct, out.hasPct = *w.Utilization, true
 	}
 	out.reset, out.hasTime = parseReset(w.ResetsAt)
+	return out
+}
+
+// toCodexWindow normalizes one codex window. It is toWindow plus the length,
+// and the length is read from the reading because there is no table to look it
+// up in: the codex endpoint's windows are data-driven, and matching their
+// lengths against a fixed 5h/7d table is how a 30-day window gets paced as a
+// week.
+//
+// A non-positive or non-finite length is UNKNOWN rather than recorded. Zero
+// divides the pace arithmetic and a NaN loses every comparison in it.
+func toCodexWindow(w *codexWindowWire) Window {
+	if w == nil {
+		return Window{}
+	}
+	out := Window{Present: true}
+	if w.Utilization != nil {
+		out.pct, out.hasPct = *w.Utilization, true
+	}
+	out.reset, out.hasTime = parseReset(w.ResetsAt)
+	if w.LimitWindowSeconds != nil && isFinite(*w.LimitWindowSeconds) && *w.LimitWindowSeconds > 0 {
+		out.length, out.hasLength = time.Duration(*w.LimitWindowSeconds)*time.Second, true
+	}
 	return out
 }
 
@@ -1014,6 +1140,8 @@ func Parse(body []byte) (*Snapshot, error) {
 		SevenDayOpus:      toWindow(w.SevenDayOpus),
 		SevenDaySonnet:    toWindow(w.SevenDaySonnet),
 		CinderCove:        toWindow(w.CinderCove),
+		CodexPrimary:      toCodexWindow(w.CodexPrimary),
+		CodexSecondary:    toCodexWindow(w.CodexSecondary),
 		ExtraUsage:        toExtraUsage(w.ExtraUsage),
 		Limits:            toLimits(w.Limits),
 	}, nil
@@ -1054,6 +1182,24 @@ func (w Window) toWire() *windowWire {
 		Utilization: fromFloat(w.pct, w.hasPct),
 		ResetsAt:    fromTime(w.reset, w.hasTime),
 	}
+}
+
+// toCodexWire is toWire plus the length, for the two keys whose length is a
+// reading rather than a table lookup. A window with no length recorded omits
+// the field, which reads back as unknown rather than as a zero-length window.
+func (w Window) toCodexWire() *codexWindowWire {
+	if !w.Present {
+		return nil
+	}
+	out := &codexWindowWire{
+		Utilization: fromFloat(w.pct, w.hasPct),
+		ResetsAt:    fromTime(w.reset, w.hasTime),
+	}
+	if w.hasLength {
+		secs := w.length.Seconds()
+		out.LimitWindowSeconds = &secs
+	}
+	return out
 }
 
 func (e ExtraUsage) toWire() *extraUsageWire {
@@ -1118,6 +1264,8 @@ func (s Snapshot) MarshalJSON() ([]byte, error) {
 		SevenDayOpus:      s.SevenDayOpus.toWire(),
 		SevenDaySonnet:    s.SevenDaySonnet.toWire(),
 		CinderCove:        s.CinderCove.toWire(),
+		CodexPrimary:      s.CodexPrimary.toCodexWire(),
+		CodexSecondary:    s.CodexSecondary.toCodexWire(),
 		ExtraUsage:        s.ExtraUsage.toWire(),
 	}
 	if len(s.Limits) > 0 {
