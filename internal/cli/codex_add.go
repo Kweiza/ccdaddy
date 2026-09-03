@@ -68,8 +68,8 @@ func newCodexAddCmd() *cobra.Command {
 		Short: "Log in to a Codex account and manage it",
 		Long: "Prints a code and a page to enter it on, then waits for you to approve it.\n" +
 			"There is no browser to open and nothing to paste back.\n\n" +
-			"Adding an account does not switch to it. The account ccdad serves codex from\n" +
-			"is set by 'ccdad switch', and a switch applies from the next new thread.\n\n" +
+			"Adding an account does not switch to it. It is stored but does not yet serve\n" +
+			"codex.\n\n" +
 			"This never touches codex's own home and never runs 'codex login' or\n" +
 			"'codex logout'.",
 		Args:          usageArgs(cobra.NoArgs),
@@ -194,7 +194,11 @@ func runCodexAdd(cmd *cobra.Command, allowWorkspaceMember bool) error {
 	if acct.Tier != "" {
 		fmt.Fprintf(stderr, ", %s", acct.Tier)
 	}
-	fmt.Fprintf(stderr, ").\nIt is not serving codex yet: run `ccdad switch %s` to point new threads at it.\n", label)
+	// What is true right now, and nothing this build cannot back up: the
+	// account is logged in and stored. Switching a Codex account arrives with
+	// the lane that serves them, in a later part, so naming a command here
+	// today would send every reader straight into that command's own refusal.
+	fmt.Fprintf(stderr, ").\nIt is logged in and stored.\n")
 	return nil
 }
 

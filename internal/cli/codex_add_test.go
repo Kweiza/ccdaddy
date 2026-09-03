@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -344,4 +345,205 @@ func TestCodexHTTPClientNeverFollowsARedirect(t *testing.T) {
 	if redirectTargetHit {
 		t.Error("the redirect target received a request; the exchange body would have been replayed to it")
 	}
+}
+
+// codexAdviceCommandRE finds every quoted `ccdad WORD` or 'ccdad WORD' phrase
+// -- the shape this file's own advice sentences use -- without also matching
+// plain prose that happens to say "ccdad" (e.g. "the account ccdad serves
+// codex from"), which carries no quote before it.
+var codexAdviceCommandRE = regexp.MustCompile("[`']ccdad ([a-z][a-z0-9-]*)")
+
+// TestCodexAddAdviceNamesOnlyCommandsThatWorkForACodexAccount guards the
+// success message and the Long help text against telling a Codex user to run
+// a ccdad command that either does not exist or refuses a Codex account
+// outright -- the mistake this command's advice actually shipped with: it told
+// every first-time user to run `ccdad switch <email>`, and switch refuses a
+// Codex account by name (switch.go's ErrNotClaude handling, and see also
+// run.go and probe.go, which refuse the same way with the same "is a Codex
+// account" phrase). This is this command's own version of
+// TestTheAdviceToRunListRefreshNamesAFlagThatExists in list_test.go.
+func TestCodexAddAdviceNamesOnlyCommandsThatWorkForACodexAccount(t *testing.T) {
+	isolate(t)
+	stubCodexDevice(t, ownerPayload, nil)
+
+	code, _, stderr, top := runRoot(t, "codex", "add")
+	if code != ExitOK {
+		t.Fatalf("the add itself failed: %s%s", stderr, top)
+	}
+
+	texts := map[string]string{
+		"the success message": stderr,
+		"the Long help text":  newCodexAddCmd().Long,
+	}
+
+	for label, text := range texts {
+		for _, m := range codexAdviceCommandRE.FindAllStringSubmatch(text, -1) {
+			name := m[1]
+			root := NewRootCmd()
+			sub, _, err := root.Find([]string{name})
+			if err != nil || sub == root {
+				t.Errorf("%s tells the user to run `ccdad %s`, which is not a real command", label, name)
+				continue
+			}
+			// "1" is the one account this test stored, addressed by its
+			// display index -- the same shape TestSwitchRefusesACodexAccountAndNamesIt
+			// in switch_test.go drives the same refusal with.
+			_, _, rerr, rtop := runRoot(t, name, "1")
+			if strings.Contains(rerr, "is a Codex account") || strings.Contains(rtop, "is a Codex account") {
+				t.Errorf("%s tells the user to run `ccdad %s`, which refuses a Codex account:\n%s%s",
+					label, name, rerr, rtop)
+			}
+		}
+	}
+}
+
+// codexWorkspaceSeat has three branches a mutation test found unpinned: the
+// no-organizations fallthrough, the case-sensitive role comparison, and the
+// workspace-id guard. Each case below exists to catch exactly one of them.
+func TestCodexWorkspaceSeat(t *testing.T) {
+	tests := []struct {
+		name       string
+		claims     codexauth.Claims
+		wantTitle  string
+		wantMember bool
+	}{
+		{
+			// Catches a mutated fallthrough that returns member=true when the
+			// issuer sends no organizations claim at all: the docstring calls
+			// this branch deliberate, and this pins it.
+			name: "no organizations claim at all is not a member",
+			claims: codexauth.Claims{
+				AccountID: "ws-1",
+			},
+			wantTitle:  "",
+			wantMember: false,
+		},
+		{
+			// Catches a role comparison that stops being case-insensitive: an
+			// issuer sending "Owner" must still read as an owner.
+			name: "a capitalized Owner role is still an owner",
+			claims: codexauth.Claims{
+				AccountID: "ws-1",
+				Organizations: []codexauth.Organization{
+					{ID: "ws-1", Title: "Personal", Role: "Owner", IsDefault: true},
+				},
+			},
+			wantTitle:  "Personal",
+			wantMember: false,
+		},
+		{
+			// Catches a deleted `o.ID != claims.AccountID` guard: with it gone,
+			// the loop would judge the seat from the FIRST organization listed
+			// rather than the one the login is actually scoped to.
+			name: "a non-matching organization listed first is skipped",
+			claims: codexauth.Claims{
+				AccountID: "ws-2",
+				Organizations: []codexauth.Organization{
+					{ID: "ws-1", Title: "Other Workspace", Role: "member", IsDefault: true},
+					{ID: "ws-2", Title: "Personal", Role: "owner", IsDefault: true},
+				},
+			},
+			wantTitle:  "Personal",
+			wantMember: false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			title, member := codexWorkspaceSeat(tc.claims)
+			if title != tc.wantTitle || member != tc.wantMember {
+				t.Errorf("codexWorkspaceSeat() = (%q, %v), want (%q, %v)", title, member, tc.wantTitle, tc.wantMember)
+			}
+		})
+	}
+}
+
+// A second `codex add` for the same user in the same workspace is
+// re-authentication rather than a fresh account, and store.Add's own contract
+// (store.go's Add doc comment) is that the alias, the display index and the
+// disabled/primary flags survive it because they belong to the user rather
+// than to the login. This is the codex path's own proof of that promise: the
+// different-workspace refusal was covered already, but re-adding the SAME
+// workspace was not, so a regression that lost these fields here would have
+// been silent.
+func TestCodexAddReauthenticatesTheSameAccountInPlace(t *testing.T) {
+	isolate(t)
+	stubCodexDevice(t, ownerPayload, nil)
+	if code, _, _, top := runRoot(t, "codex", "add"); code != ExitOK {
+		t.Fatalf("the first add failed: %s", top)
+	}
+	if code, _, _, top := runRoot(t, "alias", "1", "codex-main"); code != ExitOK {
+		t.Fatalf("setting the alias failed: %s", top)
+	}
+	if code, _, _, top := runRoot(t, "disable", "1"); code != ExitOK {
+		t.Fatalf("disabling failed: %s", top)
+	}
+
+	stubCodexDevice(t, ownerPayload, nil)
+	if code, _, _, top := runRoot(t, "codex", "add"); code != ExitOK {
+		t.Fatalf("the re-add failed: %s", top)
+	}
+
+	s, _ := store.Open()
+	acct, ok := s.Get("user-abc")
+	if !ok {
+		t.Fatal("the account disappeared across the re-add")
+	}
+	if acct.Alias != "codex-main" {
+		t.Errorf("Alias = %q, want it to survive the re-add", acct.Alias)
+	}
+	if !acct.Disabled {
+		t.Error("Disabled = false, want it to survive the re-add")
+	}
+}
+
+// The nil-client guard in runCodexAdd exists so a codexHTTPClient seam that
+// ever returns nil cannot panic deep inside StartDeviceLogin/PollDeviceLogin.
+// Nothing in production reassigns that seam, so without a test driving it
+// through nil the guard is dead code no run ever measures. This makes it live:
+// it points the seam at a function that returns nil and confirms the command
+// still completes, having handed the two device-flow seams a real, non-nil
+// client instead.
+func TestCodexAddFallsBackToARealClientWhenTheSeamReturnsNil(t *testing.T) {
+	isolate(t)
+	savedClient := codexHTTPClient
+	t.Cleanup(func() { codexHTTPClient = savedClient })
+	codexHTTPClient = func() *http.Client { return nil }
+
+	savedStart, savedPoll, savedSleep := codexDeviceStart, codexDevicePoll, codexDeviceSleep
+	t.Cleanup(func() { codexDeviceStart, codexDevicePoll, codexDeviceSleep = savedStart, savedPoll, savedSleep })
+
+	var sawStartClient, sawPollClient *http.Client
+	codexDeviceStart = func(_ context.Context, client *http.Client) (codexauth.DeviceStart, error) {
+		sawStartClient = client
+		return codexauth.DeviceStart{
+			DeviceAuthID: "dev-1",
+			UserCode:     "ABCD-EFGH",
+			Interval:     5 * time.Second,
+			ExpiresAt:    time.Now().Add(15 * time.Minute),
+		}, nil
+	}
+	codexDevicePoll = func(_ context.Context, client *http.Client, start codexauth.DeviceStart, sleep func(time.Duration)) (codexauth.Credential, error) {
+		sawPollClient = client
+		sleep(start.Interval)
+		return codexauth.Credential{
+			IDToken:      codexJWT(ownerPayload),
+			AccessToken:  "AT",
+			RefreshToken: "RT",
+			LastRefresh:  time.Now().UTC(),
+		}, nil
+	}
+	codexDeviceSleep = func(time.Duration) {}
+
+	code, _, _, top := runRoot(t, "codex", "add")
+	if code != ExitOK {
+		t.Fatalf("exit = %d, want 0: %s", code, top)
+	}
+	if sawStartClient == nil || sawPollClient == nil {
+		t.Fatal("the device-flow seams received a nil client; the fallback in runCodexAdd did not fire")
+	}
+	// Dereferencing a field is exactly what a real codexauth call does first.
+	// If the fallback had not fired, this client would be nil and the next two
+	// lines would already have panicked.
+	_ = sawStartClient.Timeout
+	_ = sawPollClient.Timeout
 }
