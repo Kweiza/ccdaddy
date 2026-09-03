@@ -119,9 +119,28 @@ func wireCodex(e *Engine) {
 	e.CodexRefresher = codexauth.NewRefresher(codexauth.RefresherConfig{
 		Log: func(format string, a ...any) { e.logf(format, a...) },
 	})
-	client := &http.Client{Timeout: codexUsageTimeout}
-	e.CodexAccessToken = func(ctx context.Context, uuid string) (string, string, error) {
-		var token, accountID string
+	e.CodexAccessToken, e.CodexFetchUsage = CodexReadSeams(nil)
+}
+
+// CodexReadSeams is the READ half of the Codex seams: hand out the stored
+// access token, and spend it on the usage endpoint.
+//
+// It is EXPORTED and the refresher is not, and that split is the whole of how
+// "only the daemon refreshes a Codex token" is kept. `ccdad list --refresh`
+// builds an Engine of its own and needs exactly these two; a function that also
+// handed back a refresher would make that process a second spender of a
+// single-use grant, and the endpoint kills a refresh token that is used twice.
+//
+// client may be nil, which builds one bounded by codexUsageTimeout.
+func CodexReadSeams(client *http.Client) (
+	func(ctx context.Context, uuid string) (string, string, error),
+	func(ctx context.Context, accessToken, accountID string) (*usage.Snapshot, codexusage.Identity, error)) {
+
+	if client == nil {
+		client = &http.Client{Timeout: codexUsageTimeout}
+	}
+	token := func(_ context.Context, uuid string) (string, string, error) {
+		var access, accountID string
 		err := store.WithStore(func(s *store.Store) error {
 			creds, cerr := s.Credentials(uuid)
 			if cerr != nil {
@@ -134,14 +153,15 @@ func wireCodex(e *Engine) {
 			if !ok {
 				return fmt.Errorf("%s holds no codex credential", uuid)
 			}
-			token, accountID = c.AccessToken, c.AccountID
+			access, accountID = c.AccessToken, c.AccountID
 			return nil
 		})
-		return token, accountID, err
+		return access, accountID, err
 	}
-	e.CodexFetchUsage = func(ctx context.Context, accessToken, accountID string) (*usage.Snapshot, codexusage.Identity, error) {
+	fetch := func(ctx context.Context, accessToken, accountID string) (*usage.Snapshot, codexusage.Identity, error) {
 		return codexusage.Fetch(ctx, client, accessToken, accountID, buildinfo.Version)
 	}
+	return token, fetch
 }
 
 // codexUsageTimeout bounds one call to the Codex usage endpoint. It is the

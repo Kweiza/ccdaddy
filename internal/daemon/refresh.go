@@ -7,6 +7,7 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/config"
 	"github.com/Kweiza/ccdaddy/internal/pollpolicy"
+	"github.com/Kweiza/ccdaddy/internal/provider"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
@@ -105,6 +106,15 @@ func (e *Engine) Refresh(ctx context.Context, s *store.Store, want []store.Accou
 	for i := range want {
 		a, res := want[i], &out[i]
 
+		// The Codex arm, AHEAD of the Claude gate rather than folded into it.
+		// pollable asks for a claudeAiOauth key and a Codex account never has
+		// one, so a Codex row reaching that line comes back unpollable forever
+		// -- and this command is the one a user reaches for precisely when no
+		// daemon is running to have read the account instead.
+		if a.Provider == provider.Codex {
+			e.refreshCodex(ctx, s, a, res, cache, cfg, now, &wg)
+			continue
+		}
 		if !pollable(s, a) {
 			res.State = RefreshUnpollable
 			continue
