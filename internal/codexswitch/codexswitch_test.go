@@ -239,6 +239,59 @@ func TestClearRemovesThePointer(t *testing.T) {
 	}
 }
 
+func TestClearIfServingClearsAMatchingPointer(t *testing.T) {
+	root := home(t)
+	if err := Execute(root, "cx-1"); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	cleared, err := ClearIfServing(root, "cx-1")
+	if err != nil {
+		t.Fatalf("ClearIfServing: %v", err)
+	}
+	if !cleared {
+		t.Fatal("ClearIfServing = false, want true: the pointer named cx-1")
+	}
+	if uuid, ok := ReadServing(root); ok {
+		t.Fatalf("ReadServing = (%q, true) after ClearIfServing; want no pointer", uuid)
+	}
+}
+
+// THE regression this function exists for. A pointer legitimately repointed to
+// cx-2 -- by a daemon tick, say, running between a caller's read of the old
+// pointer and its decision to clear it -- must survive a ClearIfServing call
+// that is still acting on the stale name. A bare ReadServing-then-Clear at the
+// call site cannot tell "the pointer changed out from under me" from "the
+// pointer still names what I read"; ClearIfServing can, because it reads and
+// removes under one lock instead of two separate calls a repoint can land
+// between.
+func TestClearIfServingLeavesADifferentPointerAlone(t *testing.T) {
+	root := home(t)
+	if err := Execute(root, "cx-2"); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	cleared, err := ClearIfServing(root, "cx-1")
+	if err != nil {
+		t.Fatalf("ClearIfServing: %v", err)
+	}
+	if cleared {
+		t.Fatal("ClearIfServing = true, want false: the pointer names cx-2, not cx-1")
+	}
+	if uuid, ok := ReadServing(root); !ok || uuid != "cx-2" {
+		t.Fatalf("ReadServing = (%q, %v) after ClearIfServing(cx-1), want (\"cx-2\", true) -- the pointer must survive", uuid, ok)
+	}
+}
+
+func TestClearIfServingOnAFreshMachineClearsNothing(t *testing.T) {
+	root := home(t)
+	cleared, err := ClearIfServing(root, "cx-1")
+	if err != nil {
+		t.Fatalf("ClearIfServing: %v", err)
+	}
+	if cleared {
+		t.Fatal("ClearIfServing = true on a machine with no pointer; want false")
+	}
+}
+
 // THE IMPORT GATE. This package writes a pointer file and stamps a cooldown,
 // and it must be structurally incapable of doing anything to Claude Code's
 // login: not through internal/switcher, which installs credentials, not through
