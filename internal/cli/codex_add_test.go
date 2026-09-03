@@ -357,10 +357,11 @@ var codexAdviceCommandRE = regexp.MustCompile("[`']ccdad ([a-z][a-z0-9-]*)")
 // success message and the Long help text against telling a Codex user to run
 // a ccdad command that either does not exist or refuses a Codex account
 // outright -- the mistake this command's advice actually shipped with: it told
-// every first-time user to run `ccdad switch <email>`, and switch refuses a
-// Codex account by name (switch.go's ErrNotClaude handling, and see also
-// run.go and probe.go, which refuse the same way with the same "is a Codex
-// account" phrase). This is this command's own version of
+// every first-time user to run `ccdad switch <email>`, and switch refused a
+// Codex account by name. `switch` itself has since stopped refusing -- it
+// repoints the codex proxy -- but run.go and probe.go still refuse the same
+// way, with the same "is a Codex account" phrase, so the guard stays useful
+// for those. This is this command's own version of
 // TestTheAdviceToRunListRefreshNamesAFlagThatExists in list_test.go.
 func TestCodexAddAdviceNamesOnlyCommandsThatWorkForACodexAccount(t *testing.T) {
 	isolate(t)
@@ -386,8 +387,8 @@ func TestCodexAddAdviceNamesOnlyCommandsThatWorkForACodexAccount(t *testing.T) {
 				continue
 			}
 			// "1" is the one account this test stored, addressed by its
-			// display index -- the same shape TestSwitchRefusesACodexAccountAndNamesIt
-			// in switch_test.go drives the same refusal with.
+			// display index -- the same shape TestSwitchToACodexAccountByIndexRepoints
+			// in switch_test.go names the same account with.
 			_, _, rerr, rtop := runRoot(t, name, "1")
 			if strings.Contains(rerr, "is a Codex account") || strings.Contains(rtop, "is a Codex account") {
 				t.Errorf("%s tells the user to run `ccdad %s`, which refuses a Codex account:\n%s%s",

@@ -340,6 +340,16 @@ func stubEnvironment(t *testing.T, tty, browser bool) {
 	browserAvailable = func() bool { return browser }
 }
 
+// stubSingleton describes a machine with or without a daemon on it. The probe
+// is a package var precisely so this is possible: a running daemon is not a
+// thing a test can arrange.
+func stubSingleton(t *testing.T, held bool, err error) {
+	t.Helper()
+	saved := singletonHeld
+	t.Cleanup(func() { singletonHeld = saved })
+	singletonHeld = func() (bool, error) { return held, err }
+}
+
 // assertNoLiveCredentials fails if anything wrote Claude Code's credentials
 // file. Paired with isolate(t), it is what proves a command that must not
 // switch really did not.
