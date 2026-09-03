@@ -161,13 +161,17 @@ func (r Row) ReportedSlack() (slack, threshold float64, ok bool) {
 //
 // It is an ACCOUNT-level question and deliberately not a question about the
 // window this row happens to report. A blown FIVE-HOUR window can never be a
-// floor -- strategy admits a floor only for a window usage.IsWeekly answers
-// for -- so when a weekly binds on slack the reported window is that weekly and
-// the empty five-hour window is invisible to anything that only looks at what
-// the bar draws. The live shape: five_hour at 100% used and 95% elapsed beside
-// seven_day at 40% used and 30% elapsed. The weekly binds, there is no floor,
-// the bar reads 40%, and every window-level test on the reported window calls
-// the account healthy while it cannot serve a single prompt.
+// floor -- strategy admits a floor only for a window that runs a week or
+// longer, which it decides with usage.IsWeeklyOf: the window's own reported
+// length when it carries one, and the name only when it does not. A codex
+// primary running thirty days therefore CAN be the floor even though its name
+// is not in the weekly list -- so when a weekly binds on slack the reported
+// window is that weekly and the empty five-hour window is invisible to
+// anything that only looks at what the bar draws. The live shape: five_hour
+// at 100% used and 95% elapsed beside seven_day at 40% used and 30% elapsed.
+// The weekly binds, there is no floor, the bar reads 40%, and every
+// window-level test on the reported window calls the account healthy while it
+// cannot serve a single prompt.
 //
 // It DELEGATES rather than restating the predicate, because "nothing left" is
 // not "past the number it was given": under hover a threshold is a pace target
