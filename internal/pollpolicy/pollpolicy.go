@@ -171,28 +171,132 @@ type Input struct {
 	Threshold float64
 }
 
+// Table is one provider's cadence.
+//
+// It exists because the two providers' endpoints are not the same kind of
+// thing. The Claude usage endpoint has a MEASURED budget — roughly 28-30
+// requests per identity per rolling hour, over a sliding window — and every
+// number in the Claude table is tuned against it. The Codex quota endpoint
+// advertises no budget at all: no Retry-After on a good response, no
+// x-ratelimit-* headers, and upstream's own client never polls it on a timer,
+// so there is no blessed cadence to copy and no way to learn one except by
+// earning a 429. A poller against it is a traffic shape no official client
+// emits, so the Codex table is a floor set deliberately high and tightened only
+// against measurement.
+//
+// It is a TABLE and not a second copy of the rules. The rules below are the
+// expensive part — the ordering of the danger band against exhaustion, the
+// AND in the urgent rule, the final floor nothing may argue past — and every
+// one of them was got wrong at least once. A second provider spelled as a
+// second implementation gets each of those wrong again, separately, and the
+// symptom is a rate rather than a value: the danger band shipped through a
+// full table-test suite because every test asserted a cadence and none
+// asserted the rate.
+//
+// Two fields are booleans rather than durations, and that is the shape of the
+// difference. Urgent and Danger are whether the table HAS those bands at all,
+// not how fast they are. A table that has neither cannot be pushed below its
+// own floor by any input.
+type Table struct {
+	// ServeTTL is the age under which a reading is served with no fetch.
+	ServeTTL time.Duration
+	// MinInterval is the floor. It is also what the danger band returns, for
+	// the table that has one.
+	MinInterval time.Duration
+	// UrgentInterval is read only when Urgent is true.
+	UrgentInterval time.Duration
+	// ActiveMaxInterval, CandidateMaxInterval and ExhaustedInterval are the
+	// three idle cadences.
+	ActiveMaxInterval    time.Duration
+	CandidateMaxInterval time.Duration
+	ExhaustedInterval    time.Duration
+	// The AIMD triple: the floor while any 429 is recent, the ceiling the
+	// increase clamps at, and how long "recent" lasts.
+	Post429MinInterval time.Duration
+	Post429MaxInterval time.Duration
+	Recent429Window    time.Duration
+	// Post429BackoffMult is the multiplicative increase, applied once per 429.
+	Post429BackoffMult float64
+	// MovementDeltaPct is how far the binding percentage must move to count as
+	// moving.
+	MovementDeltaPct float64
+	// JitterFrac keeps independent processes out of lockstep.
+	JitterFrac float64
+	// Urgent is whether this table has the sub-floor urgent cadence, and
+	// Danger whether it has the live-account band. Both are false for Codex:
+	// the first is a burst affordable only against a known allowance, and the
+	// second spends most of an identity's budget on one account, which is not
+	// a trade an endpoint with no advertised budget can be asked to bear.
+	Urgent bool
+	Danger bool
+}
+
+// Claude is today's measured table, and the package-level functions at the
+// bottom of this file are its methods. Every existing test in this package goes
+// through those, so this value is what keeps them measuring the rules they were
+// written for.
+var Claude = Table{
+	ServeTTL:             ServeTTL,
+	MinInterval:          MinInterval,
+	UrgentInterval:       UrgentInterval,
+	ActiveMaxInterval:    ActiveMaxInterval,
+	CandidateMaxInterval: CandidateMaxInterval,
+	ExhaustedInterval:    ExhaustedInterval,
+	Post429MinInterval:   Post429MinInterval,
+	Post429MaxInterval:   Post429MaxInterval,
+	Recent429Window:      Recent429Window,
+	Post429BackoffMult:   Post429BackoffMult,
+	MovementDeltaPct:     MovementDeltaPct,
+	JitterFrac:           JitterFrac,
+	Urgent:               true,
+	Danger:               true,
+}
+
+// Codex is the timid one. Its numbers are NOT measured against a budget,
+// because there is no budget to measure against; they are chosen to be safe on
+// an endpoint that gives no feedback until it refuses.
+//
+// The ceiling is four hours rather than thirty minutes, and that is the one
+// number with a downstream cost: it is the widest gap the poller can leave, and
+// the recorded history has to retain far enough back to bracket it.
+var Codex = Table{
+	ServeTTL:             180 * time.Second,
+	MinInterval:          15 * time.Minute,
+	ActiveMaxInterval:    30 * time.Minute,
+	CandidateMaxInterval: 60 * time.Minute,
+	ExhaustedInterval:    60 * time.Minute,
+	Post429MinInterval:   30 * time.Minute,
+	Post429MaxInterval:   4 * time.Hour,
+	Recent429Window:      time.Hour,
+	Post429BackoffMult:   1.5,
+	MovementDeltaPct:     1.0,
+	JitterFrac:           0.1,
+	Urgent:               false,
+	Danger:               false,
+}
+
 // Next reports when this account should be polled again, and the state to carry
 // forward.
 //
 // rnd is a uniform sample in [0,1). It is an argument rather than a call into
 // math/rand so the whole policy stays a pure function; the caller passes
 // rand.Float64().
-func Next(s State, in Input, rnd float64) (time.Time, State) {
+func (t Table) Next(s State, in Input, rnd float64) (time.Time, State) {
 	next := s
-	moving := movement(s, in.Reading)
+	moving := t.movement(s, in.Reading)
 	if in.Reading.Known {
 		next.LastBindingPct, next.HasLastBinding = in.Reading.BindingPct, true
 	}
 
-	d := base(in, moving)
+	d := t.base(in, moving)
 
 	// The two post-429 rules are separate and BOTH apply: a floor while any 429
 	// is inside the window, and the AIMD estimate on top of it. Either one
 	// alone leaves a gap — without the floor a single 429 on an urgent account
 	// still polls at 60 s, and without the estimate repeated 429s never slow
 	// anything down.
-	if recent429(s, in.Now) {
-		d = longest(d, Post429MinInterval, s.Interval)
+	if t.recent429(s, in.Now) {
+		d = longest(d, t.Post429MinInterval, s.Interval)
 	} else if !s.LastRateLimited.IsZero() {
 		// The window has passed with no further 429. The congestion estimate
 		// lapses with it, so a later 429 starts the increase over rather than
@@ -219,9 +323,9 @@ func Next(s State, in Input, rnd float64) (time.Time, State) {
 	// burst of about fifteen requests that ends when the account leaves the band,
 	// and that fits the headroom the sustained rate leaves. A floor that clamped
 	// it too would delete cswap's one documented exception for no budget gained.
-	d = sustained(d, in, moving)
+	d = t.sustained(d, in, moving)
 
-	return in.Now.Add(jitter(d, rnd)), next
+	return in.Now.Add(t.jitter(d, rnd)), next
 }
 
 // sustained clamps a cadence to the rate the endpoint will actually bear.
@@ -247,9 +351,9 @@ func Next(s State, in Input, rnd float64) (time.Time, State) {
 // author remembers it is not a floor.
 // TestTheSustainedFloorHoldsWhateverThePolicyAsksFor is the test whose failure
 // requires this function.
-func sustained(d time.Duration, in Input, moving bool) time.Duration {
-	if d < MinInterval && !urgent(in, moving) {
-		return MinInterval
+func (t Table) sustained(d time.Duration, in Input, moving bool) time.Duration {
+	if d < t.MinInterval && !t.urgent(in, moving) {
+		return t.MinInterval
 	}
 	return d
 }
@@ -266,13 +370,17 @@ func sustained(d time.Duration, in Input, moving bool) time.Duration {
 // It is spelled out rather than read off base()'s return value because the two
 // are different questions: base() answers "how fast", and a cadence that happens
 // to equal UrgentInterval for some other reason has not earned the exemption.
-func urgent(in Input, moving bool) bool {
-	return in.Active && !in.Reading.Exhausted && !InDangerBand(in) && moving && nearThreshold(in)
+func (t Table) urgent(in Input, moving bool) bool {
+	// t.Urgent first, and it is the whole exemption for a table that has no
+	// urgent cadence: without it a Codex account inside the band would be
+	// exempt from its own floor and scheduled at UrgentInterval, which is zero
+	// on that table — a deadline of now.
+	return t.Urgent && in.Active && !in.Reading.Exhausted && !t.InDangerBand(in) && moving && nearThreshold(in)
 }
 
 // base is the cadence before any rate-limit rule.
-func base(in Input, moving bool) time.Duration {
-	if InDangerBand(in) {
+func (t Table) base(in Input, moving bool) time.Duration {
+	if t.InDangerBand(in) {
 		// Ahead of BOTH rules below, and each override is deliberate.
 		//
 		// Ahead of Exhausted, because Exhausted is measured against the spent
@@ -290,30 +398,35 @@ func base(in Input, moving bool) time.Duration {
 		// What the branch returns is DangerInterval and NOT UrgentInterval: the
 		// ordering is the part worth keeping, the 60 s was the part that spent
 		// twice the endpoint's allowance with no movement gate to end it.
-		return DangerInterval
+		// t.MinInterval and not DangerInterval, because a Table carries no
+		// danger interval of its own: the constant IS MinInterval, and
+		// spelling the branch as the table's floor is what makes it mean the
+		// same thing on a table whose floor is fifteen minutes. DangerInterval
+		// stays declared because the constants test pins it.
+		return t.MinInterval
 	}
 	if in.Reading.Exhausted {
 		// Deliberately ahead of the urgent rule. An exhausted active account
 		// has nothing left to watch tick down, so polling it every minute buys
 		// nothing and spends the identity's budget.
-		return ExhaustedInterval
+		return t.ExhaustedInterval
 	}
 	if in.Active {
-		if moving && nearThreshold(in) {
+		if t.Urgent && moving && nearThreshold(in) {
 			// AND, never OR. As an OR this fires for every account that is
 			// merely close to its limit and idle, which halves the effective
 			// interval across the whole fleet.
-			return UrgentInterval
+			return t.UrgentInterval
 		}
 		if moving {
-			return MinInterval
+			return t.MinInterval
 		}
-		return ActiveMaxInterval
+		return t.ActiveMaxInterval
 	}
 	if moving {
-		return MinInterval
+		return t.MinInterval
 	}
-	return CandidateMaxInterval
+	return t.CandidateMaxInterval
 }
 
 // nearThreshold is the "within 15 pp of threshold" half of the urgent rule. An
@@ -335,8 +448,11 @@ func nearThreshold(in Input) bool {
 // emergency. An unreadable sample is never in the band, for the same reason it
 // is never near the threshold: unknown is not a percentage, and reading it as
 // one would silence a whole identity on no evidence at all.
-func InDangerBand(in Input) bool {
-	if !in.Active || !in.Reading.Known {
+func (t Table) InDangerBand(in Input) bool {
+	// A table with no band never enters it. The band spends most of an
+	// identity's budget on one account, which is a trade only an endpoint with
+	// a known allowance can be asked to bear.
+	if !t.Danger || !in.Active || !in.Reading.Known {
 		return false
 	}
 	return in.Reading.BindingPct >= DangerBandPct
@@ -344,7 +460,7 @@ func InDangerBand(in Input) bool {
 
 // movement compares the sample against its predecessor. No predecessor is not
 // movement, and neither is an unreadable sample.
-func movement(s State, r Reading) bool {
+func (t Table) movement(s State, r Reading) bool {
 	if !r.Known || !s.HasLastBinding {
 		return false
 	}
@@ -352,16 +468,16 @@ func movement(s State, r Reading) bool {
 	if delta < 0 {
 		delta = -delta
 	}
-	return delta >= MovementDeltaPct
+	return delta >= t.MovementDeltaPct
 }
 
 // recent429 reports whether a 429 was seen inside the saturation horizon. The
 // zero time is never, not an instant an hour before the epoch.
-func recent429(s State, now time.Time) bool {
+func (t Table) recent429(s State, now time.Time) bool {
 	if s.LastRateLimited.IsZero() {
 		return false
 	}
-	return now.Sub(s.LastRateLimited) < Recent429Window
+	return now.Sub(s.LastRateLimited) < t.Recent429Window
 }
 
 // PerIdentity divides a cadence among the accounts that share one identity's
@@ -413,8 +529,8 @@ func PerIdentity(d time.Duration, accounts int) time.Duration {
 // for six minutes at the moment it can least afford to be. What actually keeps
 // a session alive is switching before the projection lands; this only narrows
 // that projection's error bars.
-func Share(d time.Duration, accounts int, in Input) time.Duration {
-	if InDangerBand(in) {
+func (t Table) Share(d time.Duration, accounts int, in Input) time.Duration {
+	if t.InDangerBand(in) {
 		return d
 	}
 	return PerIdentity(d, accounts)
@@ -434,8 +550,8 @@ func Share(d time.Duration, accounts int, in Input) time.Duration {
 // one token regardless of how many surfaces are open"; a TTL any policy can
 // rewrite is not a floor. Keeping the signature leaves the caller's shape alone
 // and leaves one place to put a per-reading rule back if one is ever earned.
-func ServeTTLFor(in Input) time.Duration {
-	return ServeTTL
+func (t Table) ServeTTLFor(in Input) time.Duration {
+	return t.ServeTTL
 }
 
 // StandDownUntil is when an account that yielded its share of the identity's
@@ -451,8 +567,8 @@ func ServeTTLFor(in Input) time.Duration {
 // The caller takes the LATER of this and whatever schedule the account had
 // already earned, so a stand-down can hold an account back and can never let
 // one out early — in particular it can never shorten a 429's floor.
-func StandDownUntil(now time.Time, rnd float64) time.Time {
-	return now.Add(jitter(Post429MaxInterval, rnd))
+func (t Table) StandDownUntil(now time.Time, rnd float64) time.Time {
+	return now.Add(t.jitter(t.Post429MaxInterval, rnd))
 }
 
 // RateLimited records a 429 and applies AIMD's multiplicative increase.
@@ -467,20 +583,20 @@ func StandDownUntil(now time.Time, rnd float64) time.Time {
 // included: without that bound a mistaken header parks an account for as long
 // as it says, and exhausted and rate-limited accounts are still polled because
 // quota can come back early.
-func RateLimited(s State, now time.Time, retryAfter time.Duration, hasRetryAfter bool) State {
+func (t Table) RateLimited(s State, now time.Time, retryAfter time.Duration, hasRetryAfter bool) State {
 	next := s
 	next.LastRateLimited = now
 
 	grown := s.Interval
 	if grown <= 0 {
-		grown = Post429MinInterval
+		grown = t.Post429MinInterval
 	}
-	grown = time.Duration(float64(grown) * Post429BackoffMult)
+	grown = time.Duration(float64(grown) * t.Post429BackoffMult)
 	if hasRetryAfter {
 		grown = longest(grown, retryAfter)
 	}
-	if grown > Post429MaxInterval {
-		grown = Post429MaxInterval
+	if grown > t.Post429MaxInterval {
+		grown = t.Post429MaxInterval
 	}
 	next.Interval = grown
 	return next
@@ -508,11 +624,11 @@ func RateLimited(s State, now time.Time, retryAfter time.Duration, hasRetryAfter
 // either way. That equivalence is an accident of an unrelated type's range,
 // which is not what "never rate-limited is not rate-limited" should rest on:
 // the guard says the thing the arithmetic only happens to agree with.
-func RateLimitedUntil(s State, now time.Time) (time.Time, bool) {
+func (t Table) RateLimitedUntil(s State, now time.Time) (time.Time, bool) {
 	if s.LastRateLimited.IsZero() {
 		return time.Time{}, false
 	}
-	at := s.LastRateLimited.Add(longest(Post429MinInterval, s.Interval))
+	at := s.LastRateLimited.Add(longest(t.Post429MinInterval, s.Interval))
 	if !now.Before(at) {
 		return time.Time{}, false
 	}
@@ -556,14 +672,14 @@ func ParseRetryAfter(value string, now time.Time) (time.Duration, bool) {
 // a fleet that paused together — a laptop waking, a daemon restarting across
 // machines — comes back in lockstep and empties the shared per-identity budget
 // in one burst.
-func jitter(d time.Duration, rnd float64) time.Duration {
+func (t Table) jitter(d time.Duration, rnd float64) time.Duration {
 	if rnd < 0 {
 		rnd = 0
 	}
 	if rnd > 1 {
 		rnd = 1
 	}
-	return time.Duration(float64(d) * (1 + JitterFrac*(2*rnd-1)))
+	return time.Duration(float64(d) * (1 + t.JitterFrac*(2*rnd-1)))
 }
 
 // longest is max over durations, spelled out because the zero value is a
@@ -576,4 +692,52 @@ func longest(ds ...time.Duration) time.Duration {
 		}
 	}
 	return out
+}
+
+// ---- the Claude table, as package functions ---------------------------------
+//
+// Every one of these is Claude.<method> and nothing else. They exist because
+// this package's callers and its whole existing test suite were written before
+// there was a second provider, and a rename would have made the diff that adds
+// Codex indistinguishable from the diff that changes Claude's cadence. Keeping
+// them means the 23 tests below this package's own rules are UNCHANGED, which
+// is the evidence that the table refactor moved no number.
+//
+// A caller that knows which provider it is polling should call the table's
+// method directly. These are for the ones that do not yet.
+
+// Next is Claude.Next.
+func Next(s State, in Input, rnd float64) (time.Time, State) { return Claude.Next(s, in, rnd) }
+
+// InDangerBand is Claude.InDangerBand.
+func InDangerBand(in Input) bool { return Claude.InDangerBand(in) }
+
+// Share is Claude.Share.
+func Share(d time.Duration, accounts int, in Input) time.Duration {
+	return Claude.Share(d, accounts, in)
+}
+
+// ServeTTLFor is Claude.ServeTTLFor.
+func ServeTTLFor(in Input) time.Duration { return Claude.ServeTTLFor(in) }
+
+// StandDownUntil is Claude.StandDownUntil.
+func StandDownUntil(now time.Time, rnd float64) time.Time { return Claude.StandDownUntil(now, rnd) }
+
+// RateLimited is Claude.RateLimited.
+func RateLimited(s State, now time.Time, retryAfter time.Duration, hasRetryAfter bool) State {
+	return Claude.RateLimited(s, now, retryAfter, hasRetryAfter)
+}
+
+// RateLimitedUntil is Claude.RateLimitedUntil.
+func RateLimitedUntil(s State, now time.Time) (time.Time, bool) {
+	return Claude.RateLimitedUntil(s, now)
+}
+
+// sustained is Claude.sustained. It is unexported and it is still here because
+// TestTheSustainedFloorHoldsWhateverThePolicyAsksFor calls it DIRECTLY: base()
+// no longer produces a sub-floor cadence off the exempt path, so there is no
+// Input that reaches the clamp from outside, and a floor proved only by the
+// rules that happen to respect it today is proved by nothing.
+func sustained(d time.Duration, in Input, moving bool) time.Duration {
+	return Claude.sustained(d, in, moving)
 }
