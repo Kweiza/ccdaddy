@@ -17,6 +17,12 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/view"
 )
 
+// noActiveAccountLabel is spelled once and read by every surface that must say
+// Claude Code is not attributed to a managed account -- `status`, the
+// dashboard and `which`'s unattributed path -- so a machine with no Claude
+// login cannot describe itself two ways depending which command asked.
+const noActiveAccountLabel = "none of the managed accounts"
+
 // timeNow is the clock the dashboard reads. It is a package var so a test can
 // fix it: every relative figure here — uptime, reset-in, the age of a reading —
 // is a difference against it.
@@ -194,7 +200,7 @@ func loadSnapshot(cmd *cobra.Command, now time.Time) (snap view.Snapshot, probeE
 		rows[i].Engine = engine[rows[i].Account.UUID]
 	}
 
-	activeLabel := "none of the managed accounts"
+	activeLabel := noActiveAccountLabel
 	for _, r := range rows {
 		if r.Active {
 			activeLabel = r.Account.Label()

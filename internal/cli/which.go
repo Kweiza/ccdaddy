@@ -69,8 +69,26 @@ func newWhichCmd() *cobra.Command {
 			}
 
 			noteEnvKeyApproval(cmd, env)
+			// Resolved BEFORE the !res.OK branch below, and not after it: a
+			// machine can have no Claude login attributed at all while codex is
+			// still being served, and that is not a reason for `which` to go
+			// silent about the half of the question it CAN answer. status.go's
+			// dashboard shares loadSnapshot and answers this exact state with a
+			// Codex clause; two commands describing one machine two ways is the
+			// failure this task exists to remove.
+			codexLabel := ""
+			if serving, ok := codexServingAccount(s.Accounts()); ok {
+				codexLabel = serving.Label()
+			}
 			if !res.OK {
 				fmt.Fprintf(cmd.ErrOrStderr(), "%s\n", unattributedNotice(res))
+				if codexLabel != "" {
+					// The exit code stays ExitProbeNegative: it reports whether
+					// Claude Code's OWN credential was attributed, and codex
+					// being served does not change that answer -- it only means
+					// there is a second clause worth printing alongside it.
+					fmt.Fprintln(cmd.OutOrStdout(), view.ActiveLine(noActiveAccountLabel, codexLabel))
+				}
 				// A negative probe answer, not a failure: exit 5 so a script can
 				// tell it from a real error.
 				return WithCode(errSilent, ExitProbeNegative)
@@ -80,10 +98,6 @@ func newWhichCmd() *cobra.Command {
 			// prompt and a CI step read, and every one of them predates the
 			// second provider. The two-clause form appears only on a machine
 			// where the second clause is a fact.
-			codexLabel := ""
-			if serving, ok := codexServingAccount(s.Accounts()); ok {
-				codexLabel = serving.Label()
-			}
 			fmt.Fprintln(cmd.OutOrStdout(), view.ActiveLine(res.Account.Label(), codexLabel))
 			fmt.Fprintf(cmd.ErrOrStderr(), "via %s\n", res.Via)
 			return nil

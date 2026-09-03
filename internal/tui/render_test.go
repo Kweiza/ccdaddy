@@ -737,6 +737,29 @@ func TestTheCursorFollowsTheRowAndNotTheScreenPositionOnceItScrolls(t *testing.T
 	}
 }
 
+// The header's Active clause is Snap.ActiveLine(), and the with-codex branch
+// of that method is exercised by NOTHING else in this package: fixtureRows()
+// deliberately carries no codex account -- a previous task's review found that
+// adding one would churn all seven golden pages for a property that belongs
+// to one cell -- so every golden page below only ever renders the empty
+// branch. That leaves the with-codex branch provable only off the golden
+// path, which is what this test is for. It calls headerLine directly, at a
+// width wide enough that nothing truncates, and touches no golden file and no
+// shared fixture.
+func TestHeaderLineNamesCodexWhenTheSnapshotCarriesIt(t *testing.T) {
+	snap := fixtureSnapshot(fixtureReport(113, 26))
+	snap.CodexServingLabel = "cx@example.com"
+	m := newModel(snap, 113, 26, theme.Of(theme.None), UnicodeGlyphs)
+
+	line := m.headerLine(200)
+	if !strings.Contains(line, "Claude: work@example.com (work)") {
+		t.Errorf("header line = %q, want the Claude clause", line)
+	}
+	if !strings.Contains(line, "Codex: cx@example.com") {
+		t.Errorf("header line = %q, want the Codex clause", line)
+	}
+}
+
 // The header names the strategy in FORCE, and under hover that is not the one in
 // the file: strategy.Options' withHover pass overrides the key. Printing the
 // file's value there is the defect this test exists for -- a reader who had set
