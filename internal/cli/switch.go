@@ -277,6 +277,15 @@ func newSwitchCmd() *cobra.Command {
 					// contract.
 					return UsageError("%s", err.Error())
 				}
+			} else if asserted == provider.Codex {
+				root, rerr := codexRoot()
+				if rerr != nil {
+					return rerr
+				}
+				target, err = chooseCodexTarget(cmd, s, root)
+				if err != nil {
+					return err
+				}
 			} else {
 				target, err = chooseTarget(cmd, s, strategyName, model, force)
 				if err != nil {
@@ -464,4 +473,59 @@ func runCodexSwitch(cmd *cobra.Command, root string, target store.Account) error
 	fmt.Fprintf(cmd.ErrOrStderr(),
 		"Serving codex from %s from the next new thread, once the daemon runs.\n", target.Label())
 	return nil
+}
+
+// chooseCodexTarget is the targetless codex grammar: the lane picks, under the
+// same margins the daemon applies.
+//
+// It is switcher.EvaluateCodex and not a second ranking, for the reason
+// chooseTarget is switcher.Evaluate: the moment there are two copies, the
+// hand-verified path and the unattended path diverge. What stays here is the
+// wording.
+//
+// --force is deliberately not honoured. It bypasses the anti-flap margins for a
+// switch that installs a credential and can be undone by switching back; a
+// codex repoint is already reversible in one command, and the cooldown it would
+// bypass is the only thing standing between two shells and a pointer that moves
+// on every invocation.
+func chooseCodexTarget(cmd *cobra.Command, s *store.Store, root string) (store.Account, error) {
+	stderr := cmd.ErrOrStderr()
+	ev, err := switcher.EvaluateCodex(s, root, switcher.EvalOptions{Provider: provider.Codex}, nil)
+	if err != nil {
+		return store.Account{}, err
+	}
+	if ev.ConfigErr != nil {
+		fmt.Fprintf(stderr, "note: %v; using the built-in defaults.\n", ev.ConfigErr)
+	}
+	if ev.StateErr != nil {
+		fmt.Fprintf(stderr, "note: the auto-switch state could not be read (%v); "+
+			"proceeding with no cooldown and no quarantines.\n", ev.StateErr)
+	}
+	// NoReadings is checked BEFORE Decided, and that order is load-bearing.
+	// EvaluateCodex sets Decided only after both of its early returns, so
+	// NoReadings == true always arrives with Decided == false -- checking
+	// !ev.Decided first would swallow the no-readings case and tell a user
+	// with several unpolled codex accounts "There are no codex accounts."
+	// !ev.Decided then covers the one case that remains: a store with no
+	// codex accounts at all.
+	if ev.NoReadings {
+		fmt.Fprintln(stderr, "ccdad has no codex usage readings yet, so there is nothing to choose on.")
+		fmt.Fprintln(stderr, "Name an account explicitly, or let the daemon poll first.")
+		return store.Account{}, WithCode(errSilent, ExitBlocked)
+	}
+	if !ev.Decided {
+		fmt.Fprintln(stderr, "There are no codex accounts. Run 'ccdad codex add' to log one in.")
+		return store.Account{}, WithCode(errSilent, ExitBlocked)
+	}
+
+	switch ev.Plan.Action {
+	case strategy.ActionSwitch:
+		return ev.Target, nil
+	case strategy.ActionBlocked:
+		fmt.Fprintf(stderr, "No codex account can be switched to: %s.\n", switcher.Explain(ev.Plan))
+		return store.Account{}, WithCode(errSilent, ExitBlocked)
+	default:
+		fmt.Fprintf(stderr, "Staying put: %s.\n", switcher.Explain(ev.Plan))
+		return store.Account{}, WithCode(errSilent, ExitNothingToDo)
+	}
 }

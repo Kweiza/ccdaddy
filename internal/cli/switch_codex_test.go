@@ -6,10 +6,12 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/codexswitch"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
+	"github.com/Kweiza/ccdaddy/internal/usage"
 )
 
 func servingNow(t *testing.T) string {
@@ -265,5 +267,85 @@ func TestSwitchRefusesTheFlagsThatMeanNothingForCodex(t *testing.T) {
 				t.Fatalf("the refusal does not say why %s means nothing here:\n%s", tc.flag, top)
 			}
 		})
+	}
+}
+
+// The targetless codex grammar. `--provider codex` names the pool; the ranking
+// picks inside it, on the same evaluation the daemon's lane runs.
+func TestATargetlessSwitchWithProviderCodexPicksTheBestCodexAccount(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "cl-1", "claude@example.com")
+	seedCodexAccount(t, "cx-1", "one@example.com")
+	seedCodexAccount(t, "cx-2", "two@example.com")
+	seedCodexUsage(t, "cx-1", 10)
+	seedCodexUsage(t, "cx-2", 70)
+
+	code, _, stderr, top := runRoot(t, "switch", "--provider", "codex")
+	if code != ExitOK {
+		t.Fatalf("exit = %d, want 0 (%s)\n%s", code, top, stderr)
+	}
+	if got := servingNow(t); got != "cx-2" {
+		t.Fatalf("serving = %q, want cx-2 -- the account with the most left", got)
+	}
+	assertNoLiveCredentials(t)
+}
+
+// With nothing polled there is no evidence to choose on, and a reshuffle is not
+// a choice. Exit 4 is the code a supervisor alerts on.
+func TestATargetlessCodexSwitchWithNoReadingsIsBlocked(t *testing.T) {
+	isolate(t)
+	seedCodexAccount(t, "cx-1", "one@example.com")
+
+	code, _, stderr, _ := runRoot(t, "switch", "--provider", "codex")
+	if code != ExitBlocked {
+		t.Fatalf("exit = %d, want %d (blocked)\n%s", code, ExitBlocked, stderr)
+	}
+	if !strings.Contains(stderr, "no codex usage readings") {
+		t.Fatalf("stderr does not say why nothing could be chosen:\n%s", stderr)
+	}
+}
+
+// --strategy and --model are the Claude ranking's knobs and the codex pass
+// ignores both, so they are refused rather than dropped: a flag silently
+// dropped is a user believing they narrowed something.
+func TestATargetlessCodexSwitchRefusesTheClaudeRankingFlags(t *testing.T) {
+	isolate(t)
+	seedCodexAccount(t, "cx-1", "one@example.com")
+
+	for _, argv := range [][]string{
+		{"switch", "--provider", "codex", "--strategy", "headroom"},
+		{"switch", "--provider", "codex", "--model", "opus"},
+	} {
+		code, _, stderr, _ := runRoot(t, argv...)
+		if code != ExitUsage {
+			t.Fatalf("%v exited %d, want %d (usage)\n%s", argv, code, ExitUsage, stderr)
+		}
+	}
+}
+
+// A bare targetless switch is unchanged: still the Claude grammar, still
+// refused without --strategy.
+func TestABareTargetlessSwitchIsStillRefused(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "cl-1", "claude@example.com")
+
+	code, _, stderr, _ := runRoot(t, "switch")
+	if code != ExitUsage {
+		t.Fatalf("exit = %d, want %d (usage)\n%s", code, ExitUsage, stderr)
+	}
+}
+
+// seedCodexUsage caches a codex reading with `headroom` percent of its primary
+// window left.
+func seedCodexUsage(t *testing.T, uuid string, headroom float64) {
+	t.Helper()
+	pct := 100 - headroom
+	resets := time.Now().Add(time.Hour)
+	snap := &usage.Snapshot{CodexPrimary: usage.NewWindowWithLength(&pct, &resets, 5*time.Hour)}
+	if err := usage.WithCache(time.Second, func(c *usage.Cache) error {
+		c.Put(uuid, usage.Entry{Snapshot: snap, FetchedAt: time.Now()})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
