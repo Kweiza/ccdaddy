@@ -169,7 +169,7 @@ func TestRetentionDropsByAgeWithTheCountUnderItsCap(t *testing.T) {
 	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
 	write := []Sample{
 		{At: now.Add(-(retain + time.Hour))}, // an hour past the age bound, whatever it is
-		{At: now.Add(-7 * time.Hour)},
+		{At: now.Add(-(retain - time.Hour))}, // an hour inside it, likewise
 		{At: now.Add(-1 * time.Hour)},
 	}
 	for _, s := range write {
@@ -185,7 +185,7 @@ func TestRetentionDropsByAgeWithTheCountUnderItsCap(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("samples = %d, want 2 (the one older than retain is past the age bound)", len(got))
 	}
-	if !got[0].At.Equal(now.Add(-7 * time.Hour)) {
+	if !got[0].At.Equal(now.Add(-(retain - time.Hour))) {
 		t.Errorf("oldest surviving sample = %v", got[0].At)
 	}
 }
