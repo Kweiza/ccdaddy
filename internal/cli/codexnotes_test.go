@@ -123,6 +123,71 @@ func TestRemoveDuringThePromptDoesNotClearAPointerThatMovedMeanwhile(t *testing.
 	}
 }
 
+// The opposite direction of the race above: codex is repointed TO the account
+// being removed WHILE the prompt blocks. remove's own snapshot, taken before
+// the prompt, said cx-2 was not serving -- so a fix that only re-read the
+// pointer inside an `if wasServing` block never runs at all here, cx-2 is
+// deleted, and the pointer is left naming a uuid nothing can resolve.
+func TestRemoveClearsAPointerThatMovedOntoTheTargetDuringThePrompt(t *testing.T) {
+	isolate(t)
+	stubEnvironment(t, true, false)
+	seedCodexAccount(t, "cx-1", "cx-1@example.com")
+	seedCodexAccount(t, "cx-2", "cx-2@example.com")
+	if code, _, _, top := runRoot(t, "switch", "cx-1@example.com"); code != ExitOK {
+		t.Fatalf("setup switch = %d (%s)", code, top)
+	}
+
+	root, err := codexRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRemoveCmd()
+	cmd.SetArgs(explicitArgs([]string{"cx-2@example.com"}))
+	stdinR, stdinW := io.Pipe()
+	cmd.SetIn(stdinR)
+	stderr := &signalOnFirstWrite{ready: make(chan struct{})}
+	cmd.SetErr(stderr)
+	cmd.SetOut(io.Discard)
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Execute() }()
+
+	select {
+	case <-stderr.ready:
+	case <-time.After(5 * time.Second):
+		t.Fatal("remove never printed its confirmation prompt")
+	}
+
+	// The daemon's own tick, simulated directly: it repoints codex TO cx-2 --
+	// the account about to be removed -- while the human at the prompt has not
+	// yet answered. remove's pre-prompt snapshot said cx-2 was not serving.
+	if err := codexswitch.Execute(root, "cx-2"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := stdinW.Write([]byte("y\n")); err != nil {
+		t.Fatal(err)
+	}
+	_ = stdinW.Close()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("remove returned %v\n%s", err, stderr.String())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("remove did not finish after being answered")
+	}
+
+	if got := servingNow(t); got != "" {
+		t.Fatalf("serving = %q after removing cx-2, want no pointer -- cx-2 no longer exists to be named", got)
+	}
+	if !strings.Contains(stderr.String(), "nothing is serving codex now") {
+		t.Fatalf("remove did not say the codex pointer was cleared:\n%s", stderr.String())
+	}
+}
+
 // signalOnFirstWrite closes ready the first time anything is written to it.
 // remove's confirmation prompt is the only write to stderr before the command
 // blocks on stdin, so this is how the test above knows precisely when the

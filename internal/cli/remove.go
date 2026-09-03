@@ -66,11 +66,6 @@ func newRemoveCmd() *cobra.Command {
 			live, _ := cclink.Load()
 			current, hasLive := attributeLive(live, accounts, s.Credentials)
 			wasLive := hasLive && current.UUID == target.UUID
-			// The same question on the codex side, asked here for the same
-			// reason: the pointer is resolved against the account list, and in
-			// a moment this account will not be in it.
-			serving, hasServing := codexServingAccount(accounts)
-			wasServing := hasServing && serving.UUID == target.UUID
 
 			// The profile is named in the confirmation because it is not the
 			// same thing as the stored credentials: it is what the account
@@ -132,46 +127,46 @@ func newRemoveCmd() *cobra.Command {
 					"Note: that account is still the live Claude Code login, and ccdad no longer has its credentials. "+
 						"Run 'ccdad switch' to move to a managed account.")
 			}
-			// The codex pointer is CLEARED rather than left to read as nothing.
-			// Both end with the proxy choosing the top-ranked account, so the
-			// behaviour is the same either way -- but a pointer naming an
-			// account nobody can find is a document that lies about what this
-			// machine is spending, and `ccdad which` would go on reading it.
+			// The codex pointer is CLEARED, if it still names this account,
+			// rather than left to read as nothing. Both end with the proxy
+			// choosing the top-ranked account, so the behaviour is the same
+			// either way -- but a pointer naming an account nobody can find is
+			// a document that lies about what this machine is spending, and
+			// `ccdad which` would go on reading it.
+			//
+			// Checked HERE, after the confirmation prompt and the removal,
+			// and NOT from a snapshot taken before either. The prompt blocks
+			// indefinitely and nothing serialises this command against the
+			// daemon's own tick, which can repoint codex either way while a
+			// human is still looking at [y/N] -- a snapshot taken before the
+			// prompt and trusted afterwards misses the direction where codex
+			// gets repointed TO this account DURING the wait: the account is
+			// then deleted and the pointer is left naming a uuid nothing can
+			// resolve, silently. ClearIfServing is what closes the remaining
+			// gap: it reads and clears under one lock, so a repoint arriving
+			// after it has already read the pointer cannot be undone by it --
+			// which a separate ReadServing-then-Clear pair here could not
+			// promise, however late the read ran.
 			//
 			// Reported as a warning rather than returned, for the reason the
 			// profile removal above is: the account is already gone from the
 			// store, so failing here would report a completed removal as a
 			// failure.
-			if wasServing {
-				root, rerr := codexRoot()
-				// Re-read RATHER THAN TRUST the snapshot taken above: that
-				// snapshot precedes the confirmation prompt, which blocks
-				// indefinitely, and nothing serialises this command against
-				// the daemon's own tick -- which can legitimately repoint
-				// codex to a different account while a human is still
-				// looking at the [y/N] prompt. Clearing on the strength of
-				// the stale snapshot would delete THAT account's live
-				// pointer instead of leaving it alone, and it would orphan
-				// its switch cooldown baseline in the process.
-				stillServing := false
-				if rerr == nil {
-					uuid, ok := codexswitch.ReadServing(root)
-					stillServing = ok && uuid == target.UUID
-					if stillServing {
-						rerr = codexswitch.Clear(root)
-					}
-				}
-				switch {
-				case rerr != nil:
-					fmt.Fprintf(cmd.ErrOrStderr(),
-						"warning: that account was the one codex was served from, and the pointer at %s could "+
-							"not be cleared (%v). Run 'ccdad switch --provider codex' to repoint it.\n",
-						namePath(codexPointerPath()), rerr)
-				case stillServing:
-					fmt.Fprintln(cmd.ErrOrStderr(),
-						"Note: that was the account codex was served from, so nothing is serving codex now. "+
-							"Run 'ccdad switch --provider codex' to pick another one.")
-				}
+			root, rerr := codexRoot()
+			cleared := false
+			if rerr == nil {
+				cleared, rerr = codexswitch.ClearIfServing(root, target.UUID)
+			}
+			switch {
+			case rerr != nil:
+				fmt.Fprintf(cmd.ErrOrStderr(),
+					"warning: the codex serving pointer at %s could not be checked (%v). If it named %s, run "+
+						"'ccdad switch --provider codex' to repoint it.\n",
+					namePath(codexPointerPath()), rerr, target.Label())
+			case cleared:
+				fmt.Fprintln(cmd.ErrOrStderr(),
+					"Note: that was the account codex was served from, so nothing is serving codex now. "+
+						"Run 'ccdad switch --provider codex' to pick another one.")
 			}
 			return nil
 		},
