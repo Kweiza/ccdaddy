@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Kweiza/ccdaddy/internal/identity"
+	"github.com/Kweiza/ccdaddy/internal/provider"
 	"github.com/Kweiza/ccdaddy/internal/store"
 )
 
@@ -77,6 +78,26 @@ func setPrimary(cmd *cobra.Command, ref string, primary bool) error {
 	target, err := store.Resolve(accounts, ref)
 	if err != nil {
 		return UsageError("%s", err.Error())
+	}
+	// Refused rather than stored inert. This flag switches ONE thing off -- the
+	// max_auto_spend ceiling -- and that ceiling gates a credit axis this
+	// version does not have for codex: there is no credit balance in the codex
+	// usage response and nothing ranks on one. A flag stored here would be a
+	// setting that reads as though it did something, which is the failure this
+	// command's own notice is written to avoid.
+	//
+	// Printed explicitly rather than left to the returned error's own text:
+	// every command in this tree silences Cobra's own error/usage printing, so
+	// a bare UsageError only ever reaches the process's top-level "ccdad: ..."
+	// line -- it never reaches the command's own stderr. A refusal this
+	// specific has to be readable on the terminal the same way the rest of
+	// this command's notices are.
+	if target.Provider == provider.Codex {
+		fmt.Fprintf(cmd.ErrOrStderr(),
+			"%s is a codex account, and primary switches off the credit ceiling, which ccdad does not "+
+				"apply to codex: there is no credit axis to rank one on.\n",
+			target.Label())
+		return WithCode(errSilent, ExitUsage)
 	}
 
 	// Before the write, and only on the way ON.

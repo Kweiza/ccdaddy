@@ -89,6 +89,17 @@ func setDisabled(cmd *cobra.Command, ref string, disabled bool) error {
 				"Note: that is the live Claude Code login. It stays live — disabling only holds it out of "+
 					"automatic rotation, so nothing will switch back to it once something switches away.")
 		}
+		// The codex half of the same sentence, and the same rule: disabled is a
+		// ROTATION policy, not a per-request gate. The proxy goes on serving a
+		// disabled account that the pointer names -- exactly as Claude Code goes
+		// on using a disabled login -- and the lane rotates away on its next
+		// decision.
+		if serving, ok := codexServingAccount(accounts); ok && serving.UUID == target.UUID {
+			fmt.Fprintln(cmd.ErrOrStderr(),
+				"Note: that is the account codex is served from. It keeps serving — disabling only "+
+					"holds it out of automatic rotation, so nothing will switch back to it once "+
+					"something switches away.")
+		}
 	}
 
 	// Disabling the last enabled account is still a completed action, not the

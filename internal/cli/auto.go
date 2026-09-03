@@ -42,6 +42,8 @@ func newAutoCmd() *cobra.Command {
 			"interrupted, which is what the daemon does with nothing detached.\n\n" +
 			"It never polls: it reads the same on-disk usage cache 'ccdad list' reads.\n" +
 			"Run the daemon, or 'ccdad list --refresh', to freshen it.\n\n" +
+			"It is Claude-only: it never moves the account codex is served from. Run the daemon\n" +
+			"for that, or 'ccdad switch --provider codex' by hand.\n\n" +
 			"Exit codes are the point. 0 switched; 3 nothing to do; 4 wanted to move and\n" +
 			"could not, which is the one to alert on; 2 only ever a usage error.\n\n" +
 			"--json emits NDJSON — one object per line, not one document. It is the only\n" +

@@ -9,6 +9,7 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
+	"github.com/Kweiza/ccdaddy/internal/codexswitch"
 	"github.com/Kweiza/ccdaddy/internal/store"
 )
 
@@ -65,6 +66,11 @@ func newRemoveCmd() *cobra.Command {
 			live, _ := cclink.Load()
 			current, hasLive := attributeLive(live, accounts, s.Credentials)
 			wasLive := hasLive && current.UUID == target.UUID
+			// The same question on the codex side, asked here for the same
+			// reason: the pointer is resolved against the account list, and in
+			// a moment this account will not be in it.
+			serving, hasServing := codexServingAccount(accounts)
+			wasServing := hasServing && serving.UUID == target.UUID
 
 			// The profile is named in the confirmation because it is not the
 			// same thing as the stored credentials: it is what the account
@@ -125,6 +131,32 @@ func newRemoveCmd() *cobra.Command {
 				fmt.Fprintln(cmd.ErrOrStderr(),
 					"Note: that account is still the live Claude Code login, and ccdad no longer has its credentials. "+
 						"Run 'ccdad switch' to move to a managed account.")
+			}
+			// The codex pointer is CLEARED rather than left to read as nothing.
+			// Both end with the proxy choosing the top-ranked account, so the
+			// behaviour is the same either way -- but a pointer naming an
+			// account nobody can find is a document that lies about what this
+			// machine is spending, and `ccdad which` would go on reading it.
+			//
+			// Reported as a warning rather than returned, for the reason the
+			// profile removal above is: the account is already gone from the
+			// store, so failing here would report a completed removal as a
+			// failure.
+			if wasServing {
+				root, rerr := codexRoot()
+				if rerr == nil {
+					rerr = codexswitch.Clear(root)
+				}
+				if rerr != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(),
+						"warning: that account was the one codex was served from, and the pointer at %s could "+
+							"not be cleared (%v). Run 'ccdad switch --provider codex' to repoint it.\n",
+						namePath(codexPointerPath()), rerr)
+				} else {
+					fmt.Fprintln(cmd.ErrOrStderr(),
+						"Note: that was the account codex was served from, so nothing is serving codex now. "+
+							"Run 'ccdad switch --provider codex' to pick another one.")
+				}
 			}
 			return nil
 		},
