@@ -647,21 +647,7 @@ func codexAccessExpiry(b cclink.Blob) (time.Time, bool) {
 	if err != nil || !ok {
 		return time.Time{}, false
 	}
-	parts := strings.Split(cred.AccessToken, ".")
-	if len(parts) != 3 {
-		return time.Time{}, false
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(parts[1], "="))
-	if err != nil {
-		return time.Time{}, false
-	}
-	var claims struct {
-		Exp int64 `json:"exp"`
-	}
-	if err := json.Unmarshal(payload, &claims); err != nil || claims.Exp == 0 {
-		return time.Time{}, false
-	}
-	return time.Unix(claims.Exp, 0).UTC(), true
+	return codexauth.AccessExpiry(cred)
 }
 
 // oauthExpiresAt reads claudeAiOauth.expiresAt. It is in MILLISECONDS — the
