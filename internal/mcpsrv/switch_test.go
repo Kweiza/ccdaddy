@@ -12,6 +12,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/Kweiza/ccdaddy/internal/config"
+	"github.com/Kweiza/ccdaddy/internal/provider"
 )
 
 // switch takes an account and NOTHING else, and the "nothing else" is the
@@ -175,7 +176,7 @@ func TestOneConfirmedCallEntersItsHandlerTwice(t *testing.T) {
 		entries++
 		if len(req.Params.InputResponses) == 0 {
 			return &mcp.CallToolResult{
-				InputRequests: mcp.InputRequestMap{confirmID: confirmParams("work@example.com")},
+				InputRequests: mcp.InputRequestMap{confirmID: confirmParams("work@example.com", provider.Claude)},
 			}, nil, nil
 		}
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: probeRan}}}, nil, nil
@@ -278,7 +279,7 @@ func TestTheQuestionNamesTheAccountAndTheAccountCannotWriteTheQuestion(t *testin
 	// Two blank-line-separated paragraphs are ccdad's own; a third would be the
 	// argument's. Counting newlines is the blunt form of the same check and it
 	// is the one that fails if the quoting is ever dropped.
-	if strings.Count(seen, "\n") != strings.Count(confirmParams("x").Message, "\n") {
+	if strings.Count(seen, "\n") != strings.Count(confirmParams("x", provider.Claude).Message, "\n") {
 		t.Errorf("the account added lines of its own to the question:\n%s", seen)
 	}
 }

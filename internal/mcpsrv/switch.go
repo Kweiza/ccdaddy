@@ -8,7 +8,10 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/config"
+	"github.com/Kweiza/ccdaddy/internal/provider"
+	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/view"
 )
 
@@ -166,7 +169,23 @@ func confirmDecision(req *mcp.CallToolRequest) (asked, accepted bool) {
 // There is no requested schema. The question is yes or no, and the protocol's
 // action field already answers exactly that -- a form with a field in it would
 // add a second thing that could be reported as accepted.
-func confirmParams(account string) *mcp.ElicitParams {
+func confirmParams(account string, p provider.ID) *mcp.ElicitParams {
+	// Two acts, two questions. A codex repoint does not rewrite any credential
+	// on this machine -- codex holds no token here at all -- and it takes effect
+	// on the next NEW thread rather than on the next request, because the proxy
+	// keeps a thread with the account that produced its earlier turns. Asking
+	// the Claude question about it would have a person decline something
+	// harmless; asking the codex question about a Claude switch would have them
+	// approve a login swap they thought was a pointer.
+	if p == provider.Codex {
+		return &mcp.ElicitParams{
+			Message: fmt.Sprintf(
+				"ccdad is about to make %q the account its local codex proxy serves for new threads. "+
+					"Every codex session launched through ccdad on this machine is billed to it from "+
+					"its next new thread; Claude Code's login is untouched. Allow it?",
+				account),
+		}
+	}
 	return &mcp.ElicitParams{
 		Message: fmt.Sprintf(
 			"ccdad is about to make the account %q the live Claude Code login on this machine.\n\n"+
@@ -174,6 +193,38 @@ func confirmParams(account string) *mcp.ElicitParams {
 				"request, with no restart -- including the conversation asking for this. Allow it?",
 			account),
 	}
+}
+
+// providerOfRef answers which provider a model-supplied account reference names.
+//
+// It resolves IN PROCESS, against accounts.toml, and that is not an
+// optimisation. The obvious alternative -- shelling out to `ccdad list --json`
+// through the Exec seam -- hides disabled rows, and a disabled account is a
+// perfectly legal explicit switch target. A consent built from a listing that
+// could not see the account would fall back to the wrong sentence for exactly
+// the rows a person is most likely to be asked about.
+//
+// Every failure answers Claude: an unreadable store, an unresolvable reference,
+// an ambiguous one. That is the conservative direction, because the Claude
+// consent is the stronger of the two -- and the switch that follows refuses on
+// the same reference a moment later anyway, in its own words.
+func providerOfRef(ref string) provider.ID {
+	root, err := ccpath.StoreHome()
+	if err != nil {
+		return provider.Claude
+	}
+	accounts, err := store.AccountsAt(root)
+	if err != nil {
+		return provider.Claude
+	}
+	a, err := store.Resolve(accounts, ref)
+	if err != nil {
+		return provider.Claude
+	}
+	if a.Provider == provider.Codex {
+		return provider.Codex
+	}
+	return provider.Claude
 }
 
 // refusedWithoutAConfirm is what the model is told when nobody can be asked.
@@ -198,13 +249,7 @@ func addSwitchTool(srv *mcp.Server, e view.Exec) error {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:  "switch",
 		Title: "Make an account the live Claude Code login",
-		Description: "Make one managed account the live Claude Code login on this machine. This is the " +
-			"tool that rewrites the credentials file: from its next request, every Claude Code " +
-			"session on this login is billed to the account named here, including the " +
-			"conversation that called this, and nothing restarts. It asks the person at the " +
-			"keyboard first and does nothing until they answer; on a client that cannot carry " +
-			"that question it refuses, unless the person has allowed it out of band. Switching " +
-			"to the account that is already live changes nothing and says so." + autoStarts,
+		Description: switchToolDescription + autoStarts,
 		Annotations: credentialMutator(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in switchIn) (*mcp.CallToolResult, ActionOut, error) {
 		// NOTHING above this line touches the world, and that is a requirement
@@ -234,7 +279,9 @@ func addSwitchTool(srv *mcp.Server, e view.Exec) error {
 			// client is a local process that launched it and could rewrite the
 			// credentials file directly. Nothing verifiable is being given up.
 			return &mcp.CallToolResult{
-				InputRequests: mcp.InputRequestMap{confirmID: confirmParams(in.Account)},
+				InputRequests: mcp.InputRequestMap{
+					confirmID: confirmParams(in.Account, providerOfRef(in.Account)),
+				},
 			}, ActionOut{}, nil
 		case allowedWithoutAsking():
 			// Granted out of band by the person at the keyboard, on a client
@@ -250,3 +297,20 @@ func addSwitchTool(srv *mcp.Server, e view.Exec) error {
 
 	return nil
 }
+
+// switchToolDescription is the tool's own words, lifted out of the literal so a
+// test can assert on it without constructing a server.
+//
+// The codex sentence is LAST because it is the narrower case: a caller reading
+// the first two sentences has the answer for the account it is most likely to
+// name, and the third tells it what changes when the account is a codex one.
+const switchToolDescription = "Make one managed account the live Claude Code login on this machine. This is the " +
+	"tool that rewrites the credentials file: from its next request, every Claude Code " +
+	"session on this login is billed to the account named here, including the " +
+	"conversation that called this, and nothing restarts. It asks the person at the " +
+	"keyboard first and does nothing until they answer; on a client that cannot carry " +
+	"that question it refuses, unless the person has allowed it out of band. Switching " +
+	"to the account that is already live changes nothing and says so. Naming a codex " +
+	"account instead repoints ccdad's local codex proxy: it takes effect on the next new " +
+	"codex thread, threads already running keep the account that started them, and " +
+	"Claude Code's own login is not touched."
