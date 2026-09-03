@@ -56,6 +56,12 @@ func scopedPrefix(scope string) string {
 	return weeklyScopedKind + ":" + scope + ":"
 }
 
+// ScopedWindowPrefix is what every scoped window name begins with, exported so
+// a renderer working to a column budget can cut it without spelling the
+// constant a second time. Spelled twice, a change to the prefix would leave a
+// cut that silently stopped cutting.
+const ScopedWindowPrefix = weeklyScopedKind + ":"
+
 // ScopeKindOf is the scope KEY a scoped window name was filed under, and
 // whether the name carried one at all.
 //
