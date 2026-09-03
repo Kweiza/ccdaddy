@@ -161,8 +161,17 @@ func newListCmd() *cobra.Command {
 			// tell the two apart, and the listing is where an account gets chosen.
 			//
 			// What hover moves here is that CHOICE, not the figure. LEFT is
-			// Headroom.Pct, which is 100 minus the reported window's utilization
-			// and has no threshold in it. The note used to say the number was
+			// Headroom.Pct, which is 100 minus the BINDING window's utilization
+			// -- the window the ranking orders on -- and has no threshold in it.
+			//
+			// This paragraph said "the reported window" until 0.10.1, and that
+			// was a different window whenever there is a floor:
+			// view.Row.ReportedName answers the floor then, RESETS IN beside
+			// LEFT is the reported window's, and the two are not the same cell's
+			// story. On a row where they differ view.Row.SplitNote now names
+			// both, which is the half this table had no column for.
+			//
+			// The note also used to say the number was
 			// measured against the derived thresholds, which would have a reader
 			// take LEFT = 11% as eleven points of margin on a row the same binary
 			// prints a threshold of 99 for.
@@ -222,7 +231,12 @@ func newListCmd() *cobra.Command {
 				// account's own reset than at a fixed offset far to its right.
 				cells = append(cells, []string{
 					fmt.Sprintf("%s %d", r.Marker(), a.Idx), r.ListLabel(), a.Kind.String(),
-					r.TierLabel(), r.LeftLabel(), r.ResetsLabel(now) + suffix,
+					// SplitNote after the flags and not folded into them: the
+					// group above is account POLICY -- primary, disabled,
+					// driven elsewhere -- and this one is a quota reading. In
+					// the same parentheses a reader would go looking for the
+					// ccdad command that turns "spent" off.
+					r.TierLabel(), r.LeftLabel(), r.ResetsLabel(now) + suffix + r.SplitNote(),
 				})
 			}
 			if err := columns(out, []string{"  IDX", "ACCOUNT", "TYPE", "TIER", "LEFT", "RESETS IN"},

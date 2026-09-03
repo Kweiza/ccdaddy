@@ -133,6 +133,25 @@ func gaugeRole(r view.Row) theme.Role {
 	if empty, known := r.Empty(); known && empty {
 		return theme.RoleGaugeOver
 	}
+	// The SECOND emptiness question, and it has to be here since 0.10.0.
+	//
+	// Row.Empty is an account verdict, and it now answers false for an account
+	// whose only blown window caps one model family — correctly, because that
+	// account can still serve every other model. The bar, though, is drawn from
+	// Reported(), and Reported() is that blown cap: the length says 100% while
+	// Empty says not empty, and the band below then colours it from the floor's
+	// slack. Under hover a threshold is an unclamped PACE TARGET, so a window
+	// far enough through its cycle with nothing left in it reports POSITIVE
+	// slack — measured on a live four-account fleet: +17, past warnBand, so
+	// RoleGaugeOK. A full bar drawn off a week that is gone, painted green.
+	//
+	// That is the exact failure the clause above exists to prevent, reached
+	// through the one door widening the account verdict opened. Colour answers
+	// for the window the bar DREW, which is what the paragraph above promises
+	// and what this restores.
+	if r.ReportedEmpty() {
+		return theme.RoleGaugeOver
+	}
 	slack, _, ok := r.ReportedSlack()
 	if !ok {
 		return theme.RoleMuted
@@ -273,7 +292,7 @@ func spaces(n int) string {
 // func(view.Row, ...) string, not a mix of methods and functions.
 func idxCell(r view.Row) string                   { return fmt.Sprintf("%d", r.Account.Idx) }
 func typeCell(r view.Row) string                  { return r.TypeLabel() }
-func windowCell(r view.Row) string                { return r.WindowLabel() }
+func windowCell(r view.Row) string                { return r.WindowLabelShort() }
 func resetsCell(r view.Row, now time.Time) string { return r.ResetsLabel(now) }
 func leftCell(r view.Row) string                  { return r.LeftLabel() }
 func tierCell(r view.Row) string                  { return r.TierLabel() }
