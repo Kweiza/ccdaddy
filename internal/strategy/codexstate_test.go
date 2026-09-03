@@ -78,6 +78,21 @@ func TestAClaudeStampDoesNotHoldTheCodexLane(t *testing.T) {
 	want(t, p, ActionSwitch, ReasonBetterTarget, "b")
 }
 
+// And the mirror of THAT, at the layer that gates a real move rather than at
+// the raw stamp: the Claude lane is handed the state itself, not a per-provider
+// view of it, so a codex repoint must not hold Claude Code's login off a switch
+// it has earned. Without this the two stamps are only proven independent in one
+// direction, and a CooldownRemaining that took the later of the two would leave
+// every test in this package green.
+func TestACodexStampDoesNotHoldTheClaudeLane(t *testing.T) {
+	st := NewState()
+	st.RecordCodexSwitch("b", now)
+
+	p := Decide([]Candidate{hr("a", 20, time.Hour), hr("b", 50, time.Hour)},
+		at(time.Minute), Config{}, st, "a")
+	want(t, p, ActionSwitch, ReasonBetterTarget, "b")
+}
+
 // The pair has to survive the file, or a daemon restart clears a cooldown the
 // document was written to remember.
 //
