@@ -18,6 +18,25 @@ by `uuid` or `alias`.
 
 ### Added
 
+- **`ccdad manual on|off|status` watches quota without ever switching.** The
+  engine keeps polling on its own cadence, keeps the usage cache and the history
+  current, keeps deriving hover's thresholds, and answers `ccdad status`,
+  `ccdad list`, `ccdad runway` and the dashboard with exactly the numbers it
+  would without the mode. The one thing it never does is move the live login.
+  `ccdad switch <account>` still works and still sticks — this is a policy for
+  the auto engine, not a lock. It replaces running `ccdad disable` once per
+  account, which reached the same silence and took the probes, the forecast and
+  the plain `ccdad list` table with it, left `ccdad auto --once` on exit 4
+  forever, and re-armed rotation the moment an account was added. `ccdad auto
+  --once` exits 3 here rather than 4: the world is already how the caller asked
+  for it. Four surfaces name the mode so a fleet that stopped switching never
+  reads as a broken one — a `Manual:` line in the `ccdad status` block, a note
+  on `ccdad list`, a `manual-mode` row in `ccdad doctor` at `warn`, and one line
+  in `daemon.log` on the transition. It composes with hover: hover decides what
+  the numbers are, manual decides whether ccdad acts on them. Pinned by
+  `TestManualModeStaysPutOnAPoolThatWouldOtherwiseSwitch`,
+  `TestManualModeStillRanksTheWholePool` and `TestAutoOnceStaysPutInManualMode`.
+
 - **Every account now says which provider it belongs to, and `accounts.toml`
   learned a second version.** `ccdad list --json`, `ccdad status --json` and
   every other payload that carries an account object now carry `"provider"` on
@@ -31,6 +50,30 @@ by `uuid` or `alias`.
   account is in it, so a machine with none stays readable by every build that
   came before. `config.toml` gained a `[codex]` table with `threshold`,
   `binary`, `proxy_port` and `cross_account_replay`.
+
+### Fixed
+
+- **A spent model-scoped weekly cap no longer empties the whole account.** A cap
+  scoped to one model family — `weekly_scoped:model:Fable`, `seven_day_opus`,
+  `seven_day_sonnet` — caps that family and nothing else, but `OutOfQuota` read
+  it through `MinPct` and reported an account with no room at all. That filed it
+  in the empty tier behind everything else, had the anti-flap gate wave every
+  margin through to get off it, and threw away whatever the all-model weekly
+  still held. On a fleet whose Fable week was gone across the board it left a
+  fifth of every account's week unspent and ping-ponged the login between two
+  accounts every two minutes, because each in turn read as empty. `OutOfQuota`
+  now asks whether anything is left that ANY model could spend; `Spent` still
+  reads `MinPct`, so a blown sub-cap still moves the engine off in good time,
+  and the cap is still the window the account is reported against. An empty
+  model-scoped cap also stops being the ordering axis when some window binding
+  every model was readable — a sub-cap that is already gone cannot get tighter
+  and says nothing about how much work is left. What still empties an account is
+  a window no model choice can dodge: the five-hour window, the all-model
+  weekly, `seven_day_oauth_apps`, a surface-scoped cap, the codex pair, and any
+  opted-in window under a scope this build cannot read. Pinned by
+  `TestABlownModelScopedCapDoesNotEmptyAnAccountThatCanStillServeOtherModels`,
+  `TestABlownSurfaceScopedCapStillEmptiesTheAccount` and
+  `TestAnEmptyModelScopedCapStopsBeingTheOrderingAxis`.
 
 ### Changed
 
