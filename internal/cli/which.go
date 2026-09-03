@@ -51,6 +51,22 @@ func newWhichCmd() *cobra.Command {
 				if res.OK {
 					payload["account"] = accountJSON(res.Account)
 				}
+				// UNCONDITIONAL, unlike list's and status's key, because this
+				// command's whole job is to answer a question: a consumer asking
+				// "is codex routed on this machine" needs a false rather than an
+				// absence it has to interpret as one.
+				//
+				// `attributed`, `via`, `account` and the exit code below stay
+				// CLAUDE'S. This object is beside them and never inside them: a
+				// machine whose Claude login cannot be attributed exits 5 whether or
+				// not codex is served, because that is the question the exit code
+				// has always answered.
+				codexObject := map[string]any{"serving": false}
+				if serving, ok := codexServingAccount(s.Accounts()); ok {
+					codexObject["serving"] = true
+					codexObject["account"] = accountJSON(serving)
+				}
+				payload["codex"] = codexObject
 				if env.EnvKeyNeedsApproval() {
 					payload["envKeyNeedsApproval"] = true
 				}

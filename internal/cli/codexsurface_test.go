@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -220,4 +221,193 @@ func TestStatusNamesNoCodexWhenThePointerNamesARemovedAccount(t *testing.T) {
 	if strings.Contains(stdout, "Codex:") {
 		t.Fatalf("status names a codex account nobody switched to, after the pointer's own account was removed:\n%s", stdout)
 	}
+}
+
+// The keys a consumer writes against. codexServingUuid is CONDITIONAL, like
+// activeUuid beside it: absent means there is no pointer, and a consumer that
+// saw an empty string could not tell that from a pointer at an account named "".
+func TestListJSONCarriesTheCodexServingUuid(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "cl-1", "claude@example.com")
+	seedCodexAccount(t, "cx-1", "codex@example.com")
+	if code, _, _, top := runRoot(t, "switch", "codex@example.com"); code != ExitOK {
+		t.Fatalf("setup switch = %d (%s)", code, top)
+	}
+
+	payload := decodeJSON(t, "list", "--json")
+	if got := payload["codexServingUuid"]; got != "cx-1" {
+		t.Fatalf("codexServingUuid = %v, want cx-1", got)
+	}
+}
+
+func TestListJSONOmitsTheCodexServingUuidWithNoPointer(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "cl-1", "claude@example.com")
+
+	payload := decodeJSON(t, "list", "--json")
+	if _, present := payload["codexServingUuid"]; present {
+		t.Fatalf("codexServingUuid is present on a machine with no pointer:\n%v", payload)
+	}
+}
+
+func TestStatusJSONCarriesTheCodexServingUuid(t *testing.T) {
+	isolate(t)
+	seedCodexAccount(t, "cx-1", "codex@example.com")
+	if code, _, _, top := runRoot(t, "switch", "codex@example.com"); code != ExitOK {
+		t.Fatalf("setup switch = %d (%s)", code, top)
+	}
+
+	payload := decodeJSON(t, "status", "--json")
+	if got := payload["codexServingUuid"]; got != "cx-1" {
+		t.Fatalf("codexServingUuid = %v, want cx-1", got)
+	}
+}
+
+// NEVER-CROSS. `active` and `activeUuid` answer about Claude Code's login and
+// nothing else. A fleet of three Claude accounts and two Codex ones, with one
+// of each in use, must produce exactly one row marked active -- the Claude one.
+func TestActiveStaysClaudesWithCodexAccountsInTheStore(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "cl-1", "one@example.com")
+	seedAccount(t, "cl-2", "two@example.com")
+	seedAccount(t, "cl-3", "three@example.com")
+	seedCodexAccount(t, "cx-1", "cx-one@example.com")
+	seedCodexAccount(t, "cx-2", "cx-two@example.com")
+	writeLiveFile(t, liveLoginJSON("RT-cl-2", ""))
+	if code, _, _, top := runRoot(t, "switch", "cx-one@example.com"); code != ExitOK {
+		t.Fatalf("setup switch = %d (%s)", code, top)
+	}
+
+	for _, argv := range [][]string{{"list", "--json"}, {"status", "--json"}} {
+		payload := decodeJSON(t, argv...)
+		if got := payload["activeUuid"]; got != "cl-2" {
+			t.Fatalf("%v: activeUuid = %v, want cl-2", argv, got)
+		}
+		accounts, _ := payload["accounts"].([]any)
+		active := 0
+		for _, raw := range accounts {
+			row, _ := raw.(map[string]any)
+			if row["active"] == true {
+				active++
+				if row["uuid"] != "cl-2" {
+					t.Fatalf("%v: %v is marked active", argv, row["uuid"])
+				}
+			}
+		}
+		if active != 1 {
+			t.Fatalf("%v: %d rows are marked active, want exactly one", argv, active)
+		}
+	}
+}
+
+// which's codex object is UNCONDITIONAL, and `serving: false` is the answer on a
+// machine with no pointer: a consumer asking "is codex routed" must be able to
+// get a no rather than an absence it has to interpret.
+func TestWhichJSONCarriesACodexObjectEitherWay(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "cl-1", "claude@example.com")
+	writeLiveFile(t, liveLoginJSON("RT-cl-1", ""))
+
+	payload := decodeJSON(t, "which", "--json")
+	codex, ok := payload["codex"].(map[string]any)
+	if !ok {
+		t.Fatalf("which --json has no codex object:\n%v", payload)
+	}
+	if codex["serving"] != false {
+		t.Fatalf("codex.serving = %v, want false", codex["serving"])
+	}
+	if _, present := codex["account"]; present {
+		t.Fatalf("codex.account is present with nothing serving:\n%v", codex)
+	}
+}
+
+func TestWhichJSONNamesTheServingCodexAccount(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "cl-1", "claude@example.com")
+	writeLiveFile(t, liveLoginJSON("RT-cl-1", ""))
+	seedCodexAccount(t, "cx-1", "codex@example.com")
+	if code, _, _, top := runRoot(t, "switch", "codex@example.com"); code != ExitOK {
+		t.Fatalf("setup switch = %d (%s)", code, top)
+	}
+
+	payload := decodeJSON(t, "which", "--json")
+	codex := payload["codex"].(map[string]any)
+	if codex["serving"] != true {
+		t.Fatalf("codex.serving = %v, want true", codex["serving"])
+	}
+	account := codex["account"].(map[string]any)
+	if account["uuid"] != "cx-1" {
+		t.Fatalf("codex.account.uuid = %v, want cx-1", account["uuid"])
+	}
+	if account["provider"] != "codex" {
+		t.Fatalf("codex.account.provider = %v, want codex", account["provider"])
+	}
+}
+
+// Exit 5 stays Claude's question. A machine whose Claude login cannot be
+// attributed answers 5 whether or not codex is served.
+func TestWhichStillExitsFiveWhenTheClaudeLoginIsUnattributed(t *testing.T) {
+	isolate(t)
+	seedCodexAccount(t, "cx-1", "codex@example.com")
+	if code, _, _, top := runRoot(t, "switch", "codex@example.com"); code != ExitOK {
+		t.Fatalf("setup switch = %d (%s)", code, top)
+	}
+
+	code, _, _, _ := runRoot(t, "which", "--json")
+	if code != ExitProbeNegative {
+		t.Fatalf("exit = %d, want %d", code, ExitProbeNegative)
+	}
+}
+
+// The placement test. codexObject is built OUTSIDE `if res.OK` in which.go, on
+// purpose: a consumer asking "is codex routed" needs a false or an account
+// whether or not Claude Code's own login can be attributed. Every test above
+// that reaches a res.OK == false payload discards stdout, so a codexObject
+// nested one level inside `if res.OK` -- a natural slip, since it sits right
+// after `payload["account"] = ...` -- would leave this file green while
+// silently dropping the codex object on every unattributed machine. This is
+// the one test that reads the payload on that path.
+func TestWhichJSONCarriesTheCodexObjectWhenClaudeIsUnattributed(t *testing.T) {
+	isolate(t)
+	seedCodexAccount(t, "cx-1", "codex@example.com")
+	if code, _, _, top := runRoot(t, "switch", "codex@example.com"); code != ExitOK {
+		t.Fatalf("setup switch = %d (%s)", code, top)
+	}
+
+	code, stdout, _, _ := runRoot(t, "which", "--json")
+	if code != ExitProbeNegative {
+		t.Fatalf("exit = %d, want %d", code, ExitProbeNegative)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+		t.Fatalf("which --json produced no document: %v\n%s", err, stdout)
+	}
+	if attributed, present := payload["attributed"]; !present || attributed != false {
+		t.Fatalf("attributed = %v, want false (this test needs res.OK == false to be meaningful)", attributed)
+	}
+	codex, ok := payload["codex"].(map[string]any)
+	if !ok {
+		t.Fatalf("which --json has no codex object with an unattributed Claude login:\n%v", payload)
+	}
+	if codex["serving"] != true {
+		t.Fatalf("codex.serving = %v, want true", codex["serving"])
+	}
+	account, ok := codex["account"].(map[string]any)
+	if !ok {
+		t.Fatalf("codex.account is missing with an unattributed Claude login:\n%v", codex)
+	}
+	if account["uuid"] != "cx-1" {
+		t.Fatalf("codex.account.uuid = %v, want cx-1", account["uuid"])
+	}
+}
+
+// decodeJSON runs a --json command and returns its one document.
+func decodeJSON(t *testing.T, argv ...string) map[string]any {
+	t.Helper()
+	_, stdout, _, _ := runRoot(t, argv...)
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+		t.Fatalf("%v produced no document: %v\n%s", argv, err, stdout)
+	}
+	return payload
 }

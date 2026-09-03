@@ -119,12 +119,30 @@ func jsonContractCases() []jsonContractCase {
 		want:  ExitOK,
 		keys:  []string{"accounts"},
 	}, {
+		path: "list",
+		name: "list/codex",
+		args: []string{"--json"},
+		// The row that pins codexServingUuid. It is a SECOND row rather than a
+		// key added to the one above, because the key is conditional: the row
+		// above describes a machine with no codex account, where its absence is
+		// the contract.
+		setup: func(t *testing.T) {
+			t.Helper()
+			seedHealthyMachine(t)
+			seedServedCodexMachine(t)
+		},
+		want: ExitOK,
+		keys: []string{"accounts", "codexServingUuid"},
+	}, {
 		path:  "which",
 		name:  "which/attributed",
 		args:  []string{"--json"},
 		setup: seedHealthyMachine,
 		want:  ExitOK,
-		keys:  []string{"attributed", "via", "account"},
+		// codex is UNCONDITIONAL, so it is pinned on the ordinary row rather
+		// than on one of its own: a consumer asking "is codex routed" gets a
+		// false rather than an absence, on every machine.
+		keys: []string{"attributed", "via", "account", "codex"},
 	}, {
 		path: "which",
 		name: "which/unattributed",
@@ -959,5 +977,14 @@ func TestJSONContractEveryAccountObjectCarriesItsProvider(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// seedServedCodexMachine adds one Codex account and points the proxy at it.
+func seedServedCodexMachine(t *testing.T) {
+	t.Helper()
+	seedCodexAccount(t, "cx-1", "codex@example.com")
+	if code, _, _, top := runRoot(t, "switch", "codex@example.com"); code != ExitOK {
+		t.Fatalf("setup switch = %d (%s)", code, top)
 	}
 }

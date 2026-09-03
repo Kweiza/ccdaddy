@@ -135,6 +135,17 @@ func newListCmd() *cobra.Command {
 				if hasActive {
 					payload["activeUuid"] = active.UUID
 				}
+				// A SECOND key rather than a value in activeUuid. The two name
+				// two credentials on two paths, and a consumer keyed on
+				// activeUuid -- every one written before codex existed -- must
+				// go on getting the Claude answer whatever this machine serves.
+				//
+				// Conditional, like activeUuid above: absent means there is no
+				// pointer, or it names an account this store no longer has,
+				// which is exactly what the proxy makes of such a pointer.
+				if serving, ok := codexServingAccount(accounts); ok {
+					payload["codexServingUuid"] = serving.UUID
+				}
 				// Conditional, like activeUuid above and like `mode` on the
 				// status payload: absent means nothing was measured, and an
 				// object of zeros would read as a fleet burning nothing. It is

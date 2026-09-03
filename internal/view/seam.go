@@ -30,12 +30,17 @@ type Snapshot struct {
 	// bytes it rendered before codex existed on a machine that has no codex
 	// account -- seven byte-compared dashboard pages among them.
 	CodexServingLabel string
-	Strategy          string // config.Config.Strategy.String(), as CONFIGURED -- see StrategyLabel
-	Hover             bool   // config.Config.Hover
-	Mode              strategy.Mode
-	HasMode           bool
-	Version           string   // buildinfo.String()'s first field, or a test constant
-	Notices           []string // everything cli would have written to stderr
+	// CodexServingUUID is the same account's key, for the --json payloads. A
+	// label is for a person and a uuid is what a script keys on, and deriving
+	// one from the other at the payload builder would be a second lookup of a
+	// pointer this snapshot has already read.
+	CodexServingUUID string
+	Strategy         string // config.Config.Strategy.String(), as CONFIGURED -- see StrategyLabel
+	Hover            bool   // config.Config.Hover
+	Mode             strategy.Mode
+	HasMode          bool
+	Version          string   // buildinfo.String()'s first field, or a test constant
+	Notices          []string // everything cli would have written to stderr
 
 	// Forecast is the measured burn and what it implies, and HasForecast is
 	// whether one could be produced at all.
