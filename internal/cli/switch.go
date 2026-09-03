@@ -68,7 +68,10 @@ func chooseTarget(cmd *cobra.Command, s *store.Store, strategyName, model string
 	// it reports the pass THIS answer came from. Where no pass ran there was no
 	// ranking for the flag to have been dropped out of, and the two sentences
 	// the caller gets instead already say so.
-	if ev.Plan.Hover != nil {
+	if ev.Plan.Hover != nil && strategyName != "" {
+		// Guarded on the NAME, not only on hover: --provider reaches this path
+		// with no --strategy at all, and the unguarded form printed
+		// "so --strategy  was not applied" with a hole where the name goes.
 		fmt.Fprintf(stderr, "note: hover is on and derives the ranking for itself, so --strategy %s was not applied. "+
 			"Name an account to choose one yourself, or run 'ccdad hover off' to hand the ranking back.\n", strategyName)
 	}
