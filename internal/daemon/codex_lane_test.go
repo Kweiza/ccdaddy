@@ -672,3 +672,90 @@ func (rt refusingTokenEndpoint) RoundTrip(r *http.Request) (*http.Response, erro
 	rt.t.Errorf("a token with hours left was sent to the token endpoint (%s)", r.URL)
 	return nil, errors.New("no rotation was expected")
 }
+
+// `ccdad list --refresh` is a CLI process, and the whole of what it may do to a
+// Codex account is read it with the token already stored. It is the SAME poller
+// the tick dispatches, through the same commit into the same cache, which is
+// what keeps `list` and `status --json` from computing two schedules.
+func TestRefreshPollsACodexAccountWithTheStoredToken(t *testing.T) {
+	isolateEngine(t)
+	a := seedCodexAccount(t, "cx-1")
+
+	e := codexEngine(t, codexTokensAreFine,
+		func(context.Context, string, string) (*usage.Snapshot, codexusage.Identity, error) {
+			return codexSnapshot(42), codexusage.Identity{}, nil
+		})
+	if e.CodexRefresher != nil {
+		t.Fatal("the fixture gave a CLI-shaped engine a refresher; only the daemon may hold one")
+	}
+
+	s, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := e.Refresh(context.Background(), s, []store.Account{a}, config.Defaults(), "")
+	if len(res) != 1 || res[0].State != RefreshFetched {
+		t.Fatalf("Refresh = %v, want one fetched row", res)
+	}
+	got, ok := cacheEntry(t, "cx-1")
+	if !ok {
+		t.Fatal("the refresh cached no codex reading")
+	}
+	if pct, known := got.Snapshot.CodexPrimary.Percent(); !known || pct != 42 {
+		t.Fatalf("cached utilization = %v (%v), want 42", pct, known)
+	}
+}
+
+// A 401 leaves the row stale and marks NOTHING.
+//
+// The daemon's lane answers a 401 by asking the refresher, and a Terminal
+// outcome there is what sets CodexReloginFor. A CLI process has no refresher,
+// so it has not tested the grant at all -- it has only been told that one
+// access token is stale. Marking on that evidence would put an account out of
+// rotation on a verdict nobody reached.
+func TestARefreshRejectedWithA401MarksNothing(t *testing.T) {
+	isolateEngine(t)
+	a := seedCodexAccount(t, "cx-1")
+
+	e := codexEngine(t, codexTokensAreFine,
+		func(context.Context, string, string) (*usage.Snapshot, codexusage.Identity, error) {
+			return nil, codexusage.Identity{}, &usage.StatusError{Status: 401}
+		})
+
+	s, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := e.Refresh(context.Background(), s, []store.Account{a}, config.Defaults(), "")
+	if len(res) != 1 || res[0].State != RefreshFailed {
+		t.Fatalf("Refresh = %v, want one failed row", res)
+	}
+	after, ok := s.Get("cx-1")
+	if !ok {
+		t.Fatal("cx-1 left the store")
+	}
+	if after.CodexReloginFor != "" {
+		t.Fatalf("a CLI refresh marked %s as needing a login on the strength of one 401", after.UUID)
+	}
+}
+
+// An engine built without the read seams answers unpollable rather than
+// failing. That is what every process that is not the daemon and did not ask
+// for them looks like, and `list` prints nothing about an unpollable row.
+func TestARefreshWithNoCodexSeamsIsUnpollable(t *testing.T) {
+	isolateEngine(t)
+	a := seedCodexAccount(t, "cx-1")
+
+	e := engineFor(t, tokensAreFine, func(context.Context, string) (*usage.Snapshot, error) {
+		return nil, errors.New("no Claude account in this test should be polled")
+	})
+
+	s, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := e.Refresh(context.Background(), s, []store.Account{a}, config.Defaults(), "")
+	if len(res) != 1 || res[0].State != RefreshUnpollable {
+		t.Fatalf("Refresh = %v, want one unpollable row", res)
+	}
+}

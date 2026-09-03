@@ -21,6 +21,15 @@ import (
 // service. isolate() points it at one that fails the test if dialled.
 var newEngine = daemon.NewEngine
 
+// codexReadSeams is the READ half of the daemon's Codex seams, and a package
+// var for the reason newEngine is one: a test has to be able to describe a
+// machine without letting `--refresh` reach chatgpt.com.
+//
+// It is the read half and nothing else. This process may spend a stored access
+// token; it must never rotate a grant, because the token endpoint kills a
+// refresh token that is used twice and the daemon is the one spender.
+var codexReadSeams = daemon.CodexReadSeams
+
 func newListCmd() *cobra.Command {
 	var (
 		asJSON  bool
@@ -313,7 +322,13 @@ func refreshUsage(cmd *cobra.Command, s *store.Store, want []store.Account,
 	}
 
 	var fetched, cached int
-	for _, r := range newEngine().Refresh(cmd.Context(), s, want, cfg, activeUUID) {
+	engine := newEngine()
+	// Wired HERE rather than inside NewEngine, so that every other Engine in
+	// this binary stays unable to touch a codex grant at all. Without it every
+	// Codex row comes back unpollable and this flag does nothing for the
+	// provider whose accounts no daemon may have polled.
+	engine.CodexAccessToken, engine.CodexFetchUsage = codexReadSeams(nil)
+	for _, r := range engine.Refresh(cmd.Context(), s, want, cfg, activeUUID) {
 		switch r.State {
 		case daemon.RefreshFetched:
 			fetched++

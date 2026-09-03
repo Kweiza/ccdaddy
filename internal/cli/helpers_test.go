@@ -20,6 +20,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/ccver"
 	"github.com/Kweiza/ccdaddy/internal/codexauth"
+	"github.com/Kweiza/ccdaddy/internal/codexusage"
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/oauth"
@@ -178,6 +179,26 @@ func isolate(t *testing.T) string {
 			return nil, errors.New("the usage client is not stubbed")
 		}
 		return e
+	}
+
+	// The Codex half of the same axis, and the sharper one: these two closures
+	// read a stored credential and spend it on chatgpt.com. They answer with an
+	// error rather than being left nil, because a nil pair reads as
+	// "unpollable" -- a state `list` prints nothing about, so an unsandboxed
+	// test would look like a passing one.
+	savedCodexSeams := codexReadSeams
+	t.Cleanup(func() { codexReadSeams = savedCodexSeams })
+	codexReadSeams = func(*http.Client) (
+		func(context.Context, string) (string, string, error),
+		func(context.Context, string, string) (*usage.Snapshot, codexusage.Identity, error)) {
+
+		return func(context.Context, string) (string, string, error) {
+				t.Error("this test asked for a codex access token; nothing in package cli may spend one")
+				return "", "", errors.New("the codex token source is not stubbed")
+			}, func(context.Context, string, string) (*usage.Snapshot, codexusage.Identity, error) {
+				t.Error("this test reached the codex usage endpoint")
+				return nil, codexusage.Identity{}, errors.New("the codex usage client is not stubbed")
+			}
 	}
 
 	// The macOS Keychain is the third axis, and the only one that would be

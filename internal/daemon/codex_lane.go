@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
@@ -382,4 +383,66 @@ func codexReloginSet(s *store.Store, accounts []store.Account) map[string]bool {
 		out[a.UUID] = true
 	}
 	return out
+}
+
+// refreshCodex is Engine.Refresh's Codex arm: the stored access token, the
+// Codex table's 429 hold, and NO refresher.
+//
+// That last is the point rather than an omission. This runs in a CLI process,
+// and the token endpoint kills a refresh token that is used twice -- so a
+// second process willing to rotate would be spending a grant the daemon is also
+// spending. A 401 here therefore leaves the row exactly as it was: the reading
+// stays stale and nothing is marked, because a process that never asked the
+// token endpoint anything has no verdict about the grant to record.
+//
+// The gate is the poll policy's and not the tick's cadence: a hand pressing a
+// button is not on a cadence, so serveTTL and whatever floor a 429 earned are
+// the only two things allowed to hold it. That is the rule the Claude arm above
+// already follows, and the reason nextPollAt is not consulted here.
+func (e *Engine) refreshCodex(ctx context.Context, s *store.Store, a store.Account,
+	res *RefreshResult, cache *usage.Cache, cfg config.Config, now time.Time, wg *sync.WaitGroup) {
+
+	if e.CodexAccessToken == nil || e.CodexFetchUsage == nil {
+		// No seams: this Engine was built without them, which is every Engine
+		// in this binary that did not ask. Unpollable is the same answer an
+		// add-token account gets, and `list` says nothing about it.
+		res.State = RefreshUnpollable
+		return
+	}
+	creds, err := s.Credentials(a.UUID)
+	if err != nil {
+		res.State, res.Err = RefreshFailed, err
+		return
+	}
+	if _, ok := creds[codexauth.Key]; !ok || codexauth.NeedsRelogin(a, creds) {
+		res.State = RefreshUnpollable
+		return
+	}
+	entry, has := cache.Get(a.UUID)
+	if has && entry.Fresh(now) {
+		res.State, res.At = RefreshCached, entry.FetchedAt.Add(usage.ServeTTL)
+		return
+	}
+	if at, held := pollpolicy.Codex.RateLimitedUntil(pollStateOf(entry), now); held {
+		res.State, res.At = RefreshHeld, at
+		return
+	}
+	root, err := ccpath.StoreHome()
+	if err != nil {
+		res.State, res.Err = RefreshFailed, err
+		return
+	}
+	// Which account is serving decides the cadence the commit writes back, the
+	// same way the Claude arm passes `active`.
+	serving, _ := codexswitch.ReadServing(root)
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if perr := e.codexPoll(ctx, a, codexThresholds(cfg), a.UUID == serving); perr != nil {
+			res.State, res.Err = RefreshFailed, perr
+			return
+		}
+		res.State = RefreshFetched
+	}()
 }
