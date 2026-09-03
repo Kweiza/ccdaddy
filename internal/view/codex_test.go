@@ -33,7 +33,7 @@ func TestTypeLabelStillNamesTheKindForAClaudeAccount(t *testing.T) {
 
 // A row read out of a version-1 document has a zero Provider, which store.load
 // fills in as Claude. Nothing here may treat the zero value as codex.
-func TestAZeroProviderIsNotCodex(t *testing.T) {
+func TestTypeLabelOnAZeroProviderIsNotCodex(t *testing.T) {
 	r := Row{Account: store.Account{UUID: "cl-1", Kind: identity.KindSubscription}}
 	if got := r.TypeLabel(); got == "codex" {
 		t.Fatal("TypeLabel = codex on a row with no provider set")

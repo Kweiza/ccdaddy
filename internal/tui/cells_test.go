@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"github.com/Kweiza/ccdaddy/internal/identity"
+	"github.com/Kweiza/ccdaddy/internal/provider"
 	"strings"
 	"testing"
 
@@ -282,5 +284,32 @@ func setNamedWindow(s *usage.Snapshot, name usage.WindowName, w usage.Window) {
 		s.SevenDayOpus = w
 	case usage.WindowSevenDaySonnet:
 		s.SevenDaySonnet = w
+	}
+}
+
+// The dashboard is the THIRD table that has to call a codex account codex, and
+// it was the one nothing asserted. list and status are pinned end to end by
+// their own tests, but those call view.Row.TypeLabel directly and never reach
+// this wrapper -- so replacing typeCell's body with r.Account.Kind.String()
+// left this package green, all seven byte-compared golden pages included.
+//
+// A unit test rather than a fixture account: the golden pages compare bytes,
+// and a codex row in fixtureRows() would churn all seven of them for a
+// property that belongs to one cell.
+func TestTheTypeCellCallsACodexRowCodex(t *testing.T) {
+	codex := view.Row{Account: store.Account{
+		Provider: provider.Codex,
+		Kind:     identity.KindSubscription,
+	}}
+	if got := typeCell(codex); got != "codex" {
+		t.Errorf("typeCell on a codex row = %q, want codex", got)
+	}
+
+	claude := view.Row{Account: store.Account{
+		Provider: provider.Claude,
+		Kind:     identity.KindSubscription,
+	}}
+	if got := typeCell(claude); got == "codex" {
+		t.Errorf("typeCell called a claude row codex")
 	}
 }
