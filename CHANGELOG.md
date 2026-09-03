@@ -16,7 +16,116 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.10.1] — 2026-09-04
+
+The release that stops a full bar from being painted green.
+
+0.10.0 widened the empty test from "no room in any window" to "no room a model
+choice cannot dodge", which is right for the account: one whose Fable week is
+gone and whose all-model week still holds a fifth can serve every prompt that is
+not Fable. The dashboard's gauge asks that same question first, and its own
+comment says why — "painting that green is the whole reason this clause runs
+ahead of the band". Widened, the clause stopped firing for exactly those rows,
+and the band below reads the tripped weekly's slack; under hover a threshold is
+an unclamped pace target, so a window far through its cycle with nothing left in
+it reports POSITIVE slack. Measured on a live four-account fleet: +17, past the
+band, so the bar drew to 100% off a week that is gone and was painted the colour
+of an account with room. The gauge now asks the window-level question too.
+
+The same change made an older, argued-for divergence routine. `ccdad list`
+prints LEFT off the window the ranking orders on and RESETS IN off the window
+the account is reported against, and it has no window column at any width — so
+a row could show a percentage about one window beside a countdown about another
+with nothing naming either. Neither number moves; the row now names both, on the
+honest condition that its two figures came from two windows rather than on a
+copy of the model-scope rule. `ccdad status` is untouched: it resolves every
+figure through one window and names it in a column.
+
+And the dashboard's WINDOW cell is back inside its budget. The ladder reserves
+twenty columns and `weekly_scoped:model:Fable` is twenty-five, with nothing
+between the cell and the terminal cutting it, so the overflow came off the right
+— where STATE and AUTO are. The constant `weekly_scoped:` prefix is cut there;
+`ccdad status` keeps the full name, which is the key `ccdad config` takes a
+per-window threshold on.
+
+### Fixed
+
+- **The dashboard painted a full bar green when the window it drew was empty.**
+  `gaugeRole`'s emptiness clause is an ACCOUNT verdict and 0.10.0 made it answer
+  false for an account whose only blown window caps one model family. The bar,
+  though, is drawn from the reported window, which is that blown cap.
+  `view.Row.ReportedEmpty` is the window-level question the account-level one
+  stopped answering. Pinned by `TestAFullBarDrawnOffABlownCapIsNeverPaintedOK`
+  and `TestACapThatIsNotYetGoneStillTakesTheBand`.
+- **`ccdad list` printed two windows' figures with nothing naming either.**
+  `view.Row.SplitNote` names both, gated on the reported and binding windows
+  differing and nothing else, so it also covers the divergence that predates
+  model scoping. The comment in `internal/cli/list.go` claiming LEFT is "100
+  minus the reported window's utilization" was false before any of this and is
+  repaired — it is the BINDING window's. Pinned by
+  `TestTheRowNamesBothWindowsWhenItsTwoFiguresComeFromTwo`,
+  `TestTheNoteCoversTheDivergenceThatPredatesModelScoping` and
+  `TestListNamesBothWindowsWhenTheRowsFiguresComeFromTwo`.
+- **A scoped window name overflowed the dashboard's WINDOW column by five
+  columns**, cutting STATE and AUTO off the right. `view.Row.WindowLabelShort`
+  cuts the constant prefix every scoped name carries. Pinned by
+  `TestWindowLabelShortCutsOnlyTheConstantPrefix` and
+  `TestWindowLabelShortLeavesAFixedNameAlone`.
+
+## [0.10.0] — 2026-09-04
+
+The release that stops throwing away quota you have already paid for, and gives
+ccdad a second provider.
+
+An account carries more than one weekly cap. Alongside the all-model week there
+is one scoped to a single model family, and when that one is gone the account is
+not gone — every other model still runs against the week that is left. ccdad read
+it the other way. `OutOfQuota` took the least room across every window, so a
+spent `weekly_scoped:model:Fable` reported an account with nothing in it at all;
+the ranking filed it behind everything else, and the anti-flap gate, which waves
+every margin through to get off an empty account, stopped holding. On a fleet
+whose scoped week was gone across the board that meant a fifth of every account's
+week never spent, and a login that ping-ponged between two accounts every two
+minutes for half an hour because each in turn read as empty. The empty test now
+asks the narrower question it was always named for — is anything left that ANY
+model could spend — while `Spent` keeps reading the old figure, so a blown
+sub-cap still moves the engine off in good time and is still the window the
+account is reported against.
+
+`ccdad manual` is the mode that was missing. Holding ccdad to watching used to
+mean `ccdad disable` once per account, which reached the same silence by emptying
+the ranking pool and took the probes, the forecast, the plain `ccdad list` table
+and `ccdad auto --once`'s exit contract with it — and re-armed itself the moment
+an account was added. One key now does it, and costs none of that.
+
+And ccdad is no longer a Claude-only program. An account says which provider it
+belongs to, everywhere, always; a Codex account can be added by device code, has
+its quota read from the free usage endpoint rather than bought with an inference
+call, and is refused by name anywhere a Claude switch would have tried to install
+it. `accounts.toml` and `ccdad export` both learned a second schema version, and
+both stay readable by builds that came before wherever no Codex account is in
+them.
+
 ### Added
+
+- **`ccdad manual on|off|status` watches quota without ever switching.** The
+  engine keeps polling on its own cadence, keeps the usage cache and the history
+  current, keeps deriving hover's thresholds, and answers `ccdad status`,
+  `ccdad list`, `ccdad runway` and the dashboard with exactly the numbers it
+  would without the mode. The one thing it never does is move the live login.
+  `ccdad switch <account>` still works and still sticks — this is a policy for
+  the auto engine, not a lock. It replaces running `ccdad disable` once per
+  account, which reached the same silence and took the probes, the forecast and
+  the plain `ccdad list` table with it, left `ccdad auto --once` on exit 4
+  forever, and re-armed rotation the moment an account was added. `ccdad auto
+  --once` exits 3 here rather than 4: the world is already how the caller asked
+  for it. Four surfaces name the mode so a fleet that stopped switching never
+  reads as a broken one — a `Manual:` line in the `ccdad status` block, a note
+  on `ccdad list`, a `manual-mode` row in `ccdad doctor` at `warn`, and one line
+  in `daemon.log` on the transition. It composes with hover: hover decides what
+  the numbers are, manual decides whether ccdad acts on them. Pinned by
+  `TestManualModeStaysPutOnAPoolThatWouldOtherwiseSwitch`,
+  `TestManualModeStillRanksTheWholePool` and `TestAutoOnceStaysPutInManualMode`.
 
 - **Every account now says which provider it belongs to, and `accounts.toml`
   learned a second version.** `ccdad list --json`, `ccdad status --json` and
@@ -31,6 +140,30 @@ by `uuid` or `alias`.
   account is in it, so a machine with none stays readable by every build that
   came before. `config.toml` gained a `[codex]` table with `threshold`,
   `binary`, `proxy_port` and `cross_account_replay`.
+
+### Fixed
+
+- **A spent model-scoped weekly cap no longer empties the whole account.** A cap
+  scoped to one model family — `weekly_scoped:model:Fable`, `seven_day_opus`,
+  `seven_day_sonnet` — caps that family and nothing else, but `OutOfQuota` read
+  it through `MinPct` and reported an account with no room at all. That filed it
+  in the empty tier behind everything else, had the anti-flap gate wave every
+  margin through to get off it, and threw away whatever the all-model weekly
+  still held. On a fleet whose Fable week was gone across the board it left a
+  fifth of every account's week unspent and ping-ponged the login between two
+  accounts every two minutes, because each in turn read as empty. `OutOfQuota`
+  now asks whether anything is left that ANY model could spend; `Spent` still
+  reads `MinPct`, so a blown sub-cap still moves the engine off in good time,
+  and the cap is still the window the account is reported against. An empty
+  model-scoped cap also stops being the ordering axis when some window binding
+  every model was readable — a sub-cap that is already gone cannot get tighter
+  and says nothing about how much work is left. What still empties an account is
+  a window no model choice can dodge: the five-hour window, the all-model
+  weekly, `seven_day_oauth_apps`, a surface-scoped cap, the codex pair, and any
+  opted-in window under a scope this build cannot read. Pinned by
+  `TestABlownModelScopedCapDoesNotEmptyAnAccountThatCanStillServeOtherModels`,
+  `TestABlownSurfaceScopedCapStillEmptiesTheAccount` and
+  `TestAnEmptyModelScopedCapStopsBeingTheOrderingAxis`.
 
 ### Changed
 
@@ -2766,7 +2899,9 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.9.10...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.10.1...HEAD
+[0.10.1]: https://github.com/Kweiza/ccdaddy/compare/v0.10.0...v0.10.1
+[0.10.0]: https://github.com/Kweiza/ccdaddy/compare/v0.9.10...v0.10.0
 [0.9.10]: https://github.com/Kweiza/ccdaddy/compare/v0.9.9...v0.9.10
 [0.9.9]: https://github.com/Kweiza/ccdaddy/compare/v0.9.8...v0.9.9
 [0.9.8]: https://github.com/Kweiza/ccdaddy/compare/v0.9.7...v0.9.8

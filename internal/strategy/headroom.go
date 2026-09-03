@@ -54,6 +54,40 @@ type Headroom struct {
 	// terms.
 	MinPct    float64
 	MinWindow usage.WindowName
+	// MinAnyModelPct is the least raw room among the windows a session cannot
+	// avoid by choosing a different model, and MinAnyModelWindow names it. It is
+	// what OutOfQuota reads, and it is a SEPARATE figure from MinPct for one
+	// reason: a window that caps ONE model family cannot empty an account.
+	//
+	// A blown weekly_scoped:model:Fable cap beside a weekly_all at 80% says the
+	// account has a fifth of its week left and that none of it may be spent on
+	// Fable. Read through MinPct that account reports zero room, which files it
+	// in the empty tier, hands it to nobody, and throws the fifth away — every
+	// week, on every account, for as long as the sub-cap stays blown. That is
+	// quota already paid for and it is the whole reason this field exists.
+	//
+	// What still empties an account is a window no model choice can dodge: the
+	// five-hour window, the all-model weekly, seven_day_oauth_apps, a
+	// SURFACE-scoped cap (Claude Code is itself a surface, so a spent one is
+	// spent whatever runs), the codex pair, and any opted-in window under a
+	// scope key this build cannot read — an unreadable scope is not evidence
+	// that a different model would escape it.
+	//
+	// MinPct is deliberately left alone. It is the honest "least room anywhere"
+	// figure, Spent still reads it so a blown sub-cap still counts as spent, and
+	// the display still names the blown window through Floor. This field answers
+	// the narrower question the empty tier was always asking: can this account
+	// serve a prompt at all.
+	// MinAnyModelWindow being EMPTY is how a consumer tells "no window binding
+	// every model was readable" from "one was, and it is full". There is no
+	// third field carrying that: a bool would have to be exported for the
+	// literals other packages build to be able to state it, and one they forgot
+	// to set would silently mean the opposite of what the same literal means
+	// today. A name nothing wrote is unmistakable, and OutOfQuota falls back to
+	// MinPct when it finds one — the conservative reading, and the one every
+	// Headroom built by hand keeps.
+	MinAnyModelPct    float64
+	MinAnyModelWindow usage.WindowName
 	// Known is false when no window reported a utilization. An account that
 	// could not be read is NOT an empty one, and treating it as one is the
 	// exact bug that parked cswap's engine permanently.
@@ -189,6 +223,30 @@ func WindowForFixedFamily(family string) (usage.WindowName, bool) {
 	return "", false
 }
 
+// capsOneModelFamily reports whether a window caps ONE model family and so can
+// be escaped by running a different model.
+//
+// Two shapes qualify and no others. The fixed per-model windows, through
+// FixedWindowFamily, which is the one place that correspondence is spelled. And
+// a weekly_scoped entry filed under the MODEL scope — read off the name rather
+// than off the ScopedWindow value, because bindingWindows has already flattened
+// its input to NamedWindow and the name is the only handle left.
+//
+// A SURFACE-scoped cap is deliberately not one of them, for the reason the
+// --model narrowing gives for never narrowing one away: Claude Code is itself a
+// surface, the wire gives no way to tell which surface name is this client's
+// own, and a cap that may well be this session's own is not one a model choice
+// escapes. A scope key this build does not name is not one either, on the same
+// conservative side — "I cannot read this scope" is not evidence that some other
+// model would dodge it.
+func capsOneModelFamily(n usage.WindowName) bool {
+	if _, ok := FixedWindowFamily(n); ok {
+		return true
+	}
+	scope, ok := usage.ScopeKindOf(n)
+	return ok && scope == usage.ScopeModel
+}
+
 // bindingWindows is the set of windows that bind for one ranking pass: the
 // --model narrowing rule (README, "ccdad switch").
 //
@@ -286,7 +344,20 @@ func HeadroomOf(s *usage.Snapshot, t Thresholds) Headroom {
 func HeadroomFor(s *usage.Snapshot, model string, t Thresholds) Headroom {
 	out := Headroom{}
 	floorSlack, floorEmpty := 0.0, false
-	for _, w := range bindingWindows(s, model, t) {
+	windows := bindingWindows(s, model, t)
+	// Whether anything the session cannot dodge by changing model was readable,
+	// answered BEFORE the loop because the ordering rule below needs it on the
+	// first window as much as on the last. A single pass cannot have it: the
+	// all-model weekly comes after the five-hour window in wire order but a
+	// model-scoped cap can come before either.
+	anyModelReadable := false
+	for _, w := range windows {
+		if _, ok := w.Percent(); ok && !capsOneModelFamily(w.Name) {
+			anyModelReadable = true
+			break
+		}
+	}
+	for _, w := range windows {
 		pct, ok := w.Percent()
 		if !ok {
 			continue
@@ -299,10 +370,49 @@ func HeadroomFor(s *usage.Snapshot, model string, t Thresholds) Headroom {
 		if room := 100 - pct; !out.Known || room < out.MinPct {
 			out.MinPct, out.MinWindow = room, w.Name
 		}
+		// The same minimum over the windows a model choice cannot escape. The
+		// window NAME is what records that one was seen at all, which is why the
+		// guard is on it rather than on out.Known: an account whose only
+		// readable window is model-scoped leaves this pair untouched, and
+		// OutOfQuota reads that as "no figure" rather than as a zero.
+		if !capsOneModelFamily(w.Name) {
+			if room := 100 - pct; out.MinAnyModelWindow == "" || room < out.MinAnyModelPct {
+				out.MinAnyModelPct, out.MinAnyModelWindow = room, w.Name
+			}
+		}
+		// A model-scoped window with NOTHING LEFT stops being the ordering axis
+		// once some window that binds every model was readable.
+		//
+		// Slack answers "which window is this account closest to breaching", and
+		// the ranking spends that answer on "which account should take the next
+		// prompt". For a sub-cap that is already gone the two come apart
+		// completely: it cannot get tighter, it will not clear until the week
+		// rolls, and it says nothing whatever about how much work the account
+		// can still take on the models that are left. Ordered on it, an account
+		// holding a fifth of its week loses to one holding a twentieth, forever,
+		// and the fifth is never spent.
+		//
+		// EMPTY is the whole test, not "past its threshold". A sub-cap merely
+		// running ahead of pace still bounds the session that is about to use
+		// it, and dropping it there would let ccdad walk an account into a hard
+		// limit one prompt later — the exact asymmetry bindingWindows' own
+		// comment weighs. And the guard matters: with no all-model window
+		// readable, the blown sub-cap is the only thing anyone knows about this
+		// account, and dropping it would report an unbounded one.
+		//
+		// The window is still counted in MinPct, is still eligible to be the
+		// Floor below, and is still what the display names. Only the ordering
+		// axis lets it go.
+		//
+		// It is a guard on the update and NOT a `continue`: the floor arm below
+		// is the half that keeps the account honest, and skipping the rest of
+		// the iteration would drop the blown sub-cap out of the very column that
+		// exists to name it.
+		ordering := !(pct >= 100 && capsOneModelFamily(w.Name) && anyModelReadable)
 		// The !out.Known guard is what makes the first readable window win
 		// outright. out.Slack is zero before it, so a first window with any
 		// positive slack would otherwise never be taken.
-		if !out.Known || slack < out.Slack {
+		if ordering && (!out.Known || slack < out.Slack) {
 			out.Pct, out.Slack, out.Threshold = 100-pct, slack, thr
 			out.Binding, out.Known = w.Name, true
 		}

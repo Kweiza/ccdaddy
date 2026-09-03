@@ -284,6 +284,7 @@ hysteresis_pct = 12.5
 headroom_ratio = 3.0
 cooldown = "7m"
 recovery_hysteresis = "90s"
+manual = true
 [credit]
 max_auto_spend = 25.0
 `))
@@ -297,6 +298,12 @@ max_auto_spend = 25.0
 		Cooldown:           7 * time.Minute,
 		RecoveryHysteresis: 90 * time.Second,
 		MaxAutoSpend:       25,
+		// A MODE rather than a knob, and here for exactly that reason: it is
+		// the one field in this struct whose whole job is the wire from
+		// config.toml to Decide, and nothing else in the tree asserts that
+		// wire. Dropped from StrategyConfig, `ccdad manual on` writes the key,
+		// every table says the mode is on, and the engine keeps switching.
+		Manual: true,
 	}
 	if got != want {
 		t.Errorf("StrategyConfig() = %+v, want %+v", got, want)
@@ -484,7 +491,7 @@ func TestTheKeySetIsClosed(t *testing.T) {
 	want := []string{
 		"threshold", "hysteresis_pct", "headroom_ratio",
 		"cooldown", "recovery_hysteresis", "preempt_lead", "strategy",
-		"probe_unknown", "hover", "mcp_switch_without_elicitation", "update_check",
+		"probe_unknown", "hover", "manual", "mcp_switch_without_elicitation", "update_check",
 		"credit.threshold", "credit.max_auto_spend",
 		"codex.threshold", "codex.binary", "codex.proxy_port", "codex.cross_account_replay",
 		"tui.theme", "tui.glyphs",

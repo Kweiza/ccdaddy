@@ -162,8 +162,20 @@ func HoverLine() string {
 	return "Hover:   on  (every threshold derived per account; 'ccdad hover status' prints the numbers in force)"
 }
 
+// ManualLine is the dashboard's one line about manual mode, printed only when
+// the mode is ON.
+//
+// It names `ccdad switch` in the same breath, because the sentence a reader
+// needs is not "ccdad has stopped" but "ccdad has stopped and you have not":
+// every table below this line is still current, and moving the login is still
+// one command. Without that half, a mode a user turned on last week reads as an
+// outage the first time they come back to a spent account.
+func ManualLine() string {
+	return "Manual:  on  (ccdad watches and never switches; 'ccdad switch <account>' still works)"
+}
+
 // WrapLabeled folds one line of the labelled block -- Daemon:, Active:, Hover:,
-// Mode: -- onto width display columns, breaking at spaces and hanging every
+// Manual:, Mode: -- onto width display columns, breaking at spaces and hanging every
 // line after the first under the value.
 //
 // Measured on an 80-column terminal against a live fleet: Mode: is 124 display

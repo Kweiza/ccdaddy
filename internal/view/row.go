@@ -15,6 +15,7 @@ package view
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/daemon"
@@ -185,6 +186,102 @@ func (r Row) ReportedSlack() (slack, threshold float64, ok bool) {
 // Three-valued for the reason the whole package is: an account nobody could
 // read is not an empty one, and folding that into a bare bool is the bug that
 // parked cswap's engine on the account that reset last.
+// ReportedEmpty is whether the window this row is REPORTED against has nothing
+// left in it — a WINDOW-level question, where Empty above is an ACCOUNT-level
+// one, and since 0.10.0 the two have different answers.
+//
+// They used to be the same question. OutOfQuota read the least room across
+// every window, so an account with any empty window answered empty and the
+// window the row drew was one of them. 0.10.0 moved it to the least room across
+// the windows a model choice cannot dodge, which is right for the account —
+// one whose Fable week is gone and whose all-model week holds a fifth can serve
+// every prompt that is not Fable, and calling it empty threw that fifth away.
+//
+// But the BAR is drawn from Reported(), and Reported() is that blown cap. The
+// length says 100% while Empty says not empty, and a renderer that colours from
+// the account verdict alone then paints a full bar off a dead week green. This
+// is what a renderer has to ask before it colours a bar it drew at 100%.
+//
+// pct >= 100 is spelled here rather than delegated because strategy carries no
+// window-level predicate to delegate to: OutOfQuota is the account-level one,
+// and it is exactly the one that came apart.
+// WindowLabelShort is WindowLabel with the scoped prefix cut, for a renderer
+// working to a column budget.
+//
+// It is a CUT and not a second spelling, the way the account cell's is. Every
+// scoped name carries `weekly_scoped:` and nothing else does — usage.IsWeekly
+// answers true for every Scoped() name — so the prefix is a constant on the
+// names that have it and carries no information a reader can act on. What is
+// kept is the pair the name was actually built from: the scope and the display
+// half, `model:Fable`, which is what tells one cap from another.
+//
+// The TUI's ladder reserves 20 columns of content for this cell while
+// `weekly_scoped:model:Fable` is 25, and nothing between the cell and the
+// terminal cut it — the overflow came off the RIGHT, where STATE and AUTO are,
+// so a scoped window silently ate two columns that had nothing to do with it.
+//
+// `ccdad status` keeps the full name. It has a whole column and no ladder, and
+// the full string is the key `ccdad config` takes a per-window threshold on.
+func (r Row) WindowLabelShort() string {
+	full := r.WindowLabel()
+	if rest, ok := strings.CutPrefix(full, usage.ScopedWindowPrefix); ok {
+		return rest
+	}
+	return full
+}
+
+// SplitNote is the suffix a row prints when its two figures describe two
+// windows: the window the row is REPORTED against, and how much is left on the
+// window the ranking actually ordered the account by.
+//
+// It exists for one table. `ccdad status` resolves USED, WINDOW, RESETS IN and
+// PACE through a single Reported() and names that window in a column of its
+// own, so every figure on a status row is about one window and the row says
+// which. `ccdad list` carries LEFT, which is Headroom.Pct off Headroom.BINDING,
+// beside RESETS IN, which is Reported() — and it has no window column at any
+// width. On a row where the two names differ it prints a percentage about one
+// window next to a countdown about another, with nothing naming either.
+//
+// That divergence is older than this note and was argued for: a five-hour
+// window 85% through its cycle at 98% used binds on slack while the weekly
+// beside it has nothing left, and the two columns then describe two windows on
+// purpose. What 0.10.0 changed is the FREQUENCY. An empty cap a different model
+// escapes stopped being the ordering axis and stayed the reporting one, so on a
+// fleet with a blown sub-cap the split is now most rows rather than a corner.
+// Neither number moves here. What is added is the two window names.
+//
+// The gate is Floor != Binding and nothing else. That is the honest statement
+// of the condition — this row's two figures came from two windows — rather than
+// a copy of the model-scope rule, which lives in strategy and would be the copy
+// that drifts. It covers the older divergence for free.
+//
+// The windows are spelled VERBATIM. The name is the key `ccdad config` takes a
+// per-window threshold on and the exact string `ccdad status`'s WINDOW column
+// prints, so a reader moving between the two tables reads one vocabulary. A
+// friendlier "the Fable week" would be a second one.
+//
+// Shaped like the flag suffixes beside it — two leading spaces, one
+// parenthesis — so a caller appends it and nothing else on the row moves.
+func (r Row) SplitNote() string {
+	if !r.Headroom.Known || !r.Headroom.HasFloor || r.Headroom.Floor == r.Headroom.Binding {
+		return ""
+	}
+	spent := ""
+	if r.ReportedEmpty() {
+		spent = " spent"
+	}
+	return fmt.Sprintf("  (%s%s; %s left on %s)", r.Headroom.Floor, spent, r.LeftLabel(), r.Headroom.Binding)
+}
+
+func (r Row) ReportedEmpty() bool {
+	bw, ok := r.Reported()
+	if !ok {
+		return false
+	}
+	pct, known := bw.Percent()
+	return known && pct >= 100
+}
+
 func (r Row) Empty() (empty, known bool) { return strategy.OutOfQuota(r.Headroom) }
 
 // Marker is the active-row marker: the character `status` and `list` both

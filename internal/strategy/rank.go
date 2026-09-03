@@ -356,17 +356,45 @@ func Spent(h Headroom) (spent, known bool) {
 // Ranked on slack alone the near-empty account wins, and the engine hands the
 // session to the one account that cannot serve it.
 //
-// It reads MinPct rather than Pct for the reason MinPct exists: Pct describes
-// whichever window is tightest on the SLACK axis, and the window that is empty
-// is not always that one.
+// It reads a MINIMUM rather than Pct for the reason those minima exist: Pct
+// describes whichever window is tightest on the SLACK axis, and the window that
+// is empty is not always that one.
+//
+// Which minimum is the question this predicate turns on, and it is
+// MinAnyModelPct rather than MinPct. "Nothing left in it at all" has to mean
+// nothing left that any model could spend, because that is what every caller
+// does with the answer: the empty tier files the account behind everything
+// else, the anti-flap gate waves every margin through to get off it, and
+// MainPoolExhausted starts buying credits once they all say yes. A weekly cap
+// scoped to ONE model family satisfies none of that — an account whose Fable
+// week is gone and whose all-model weekly holds a fifth can serve every prompt
+// that is not Fable, and reading it as empty throws that fifth away and buys
+// credits to replace quota already paid for.
+//
+// MinPct keeps its own job: Spent still reads it, so a blown sub-cap still
+// makes the account spent and still moves the engine off it in good time. The
+// difference between the two predicates is now exactly the difference between
+// "past a line" and "cannot serve anything", which is what they were always
+// named for.
 //
 // Three-valued for the same reason Spent is. An account nobody could read is
 // not an empty one.
+//
+// An unnamed MinAnyModelWindow falls back to MinPct rather than answering
+// unknown, and that is the conservative direction on two counts. An account
+// whose only readable window is model-scoped has nothing else to go on, and a
+// blown sub-cap is then the only thing known about it. And every Headroom built
+// by hand — the ranking's own fixtures, the TUI's colour cases, a consumer
+// outside this package — leaves the pair unset and keeps exactly the answer it
+// has today.
 func OutOfQuota(h Headroom) (out, known bool) {
 	if !h.Known {
 		return false, false
 	}
-	return h.MinPct <= 0, true
+	if h.MinAnyModelWindow == "" {
+		return h.MinPct <= 0, true
+	}
+	return h.MinAnyModelPct <= 0, true
 }
 
 // weeklyResetOf is the soonest reset among the weekly windows, which is what
@@ -462,14 +490,21 @@ func creditHeadroomOf(e usage.ExtraUsage, t Thresholds) Headroom {
 		return Headroom{}
 	}
 	thr := t.CreditThreshold()
+	// The all-model minimum is the same figure here, and named rather than left
+	// unset: a credit balance is money, and no choice of model spends less of
+	// it. Left unset it would fall back to MinPct, which happens to be the same
+	// number today — naming the window states the fact rather than relying on
+	// the two staying equal.
 	return Headroom{
-		Pct:       100 - pct,
-		MinPct:    100 - pct,
-		MinWindow: creditWindow,
-		Slack:     thr - pct,
-		Threshold: thr,
-		Known:     true,
-		Binding:   creditWindow,
+		Pct:               100 - pct,
+		MinPct:            100 - pct,
+		MinWindow:         creditWindow,
+		MinAnyModelPct:    100 - pct,
+		MinAnyModelWindow: creditWindow,
+		Slack:             thr - pct,
+		Threshold:         thr,
+		Known:             true,
+		Binding:           creditWindow,
 	}
 }
 

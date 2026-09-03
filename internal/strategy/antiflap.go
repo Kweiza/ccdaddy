@@ -89,6 +89,20 @@ type Config struct {
 	// Its default is 0 — the explicit opt-in — so unlike every other field here
 	// a zero is honoured rather than replaced.
 	MaxAutoSpend float64
+	// Manual holds the engine to WATCHING. It still polls, still ranks, still
+	// derives hover's thresholds and still fills the history the forecast is
+	// built on; it just never moves the login.
+	//
+	// It is a field on Config rather than on Options because Config is the half
+	// that comes from config.toml and is copied into the pass, and because the
+	// question it answers is about the DECISION rather than about the ranking:
+	// everything a reporting caller renders is computed exactly as it would be
+	// with the mode off, so `ccdad status`, the TUI and `ccdad runway` do not
+	// have to know the mode exists to stay correct.
+	//
+	// Unlike every other field here a zero is the honoured value: the default
+	// is automatic switching, which is what ccdad is for.
+	Manual bool
 }
 
 func (c Config) withDefaults() Config {
@@ -176,6 +190,11 @@ const (
 	// renumbering an enum that a report and a notification both name is a diff
 	// nobody can review.
 	ReasonProjectedExhaustion
+	// ReasonManual: manual mode is on, so the engine watches and never moves the
+	// login. Appended after ReasonProjectedExhaustion for the reason that one
+	// was appended last: the numbers are named in a report and a notification,
+	// and renumbering them is a diff nobody can review.
+	ReasonManual
 )
 
 func (r Reason) String() string {
@@ -206,6 +225,8 @@ func (r Reason) String() string {
 		return "no subscription account has room"
 	case ReasonProjectedExhaustion:
 		return "the live account is projected to hit its limit before the next reading"
+	case ReasonManual:
+		return "manual mode is on, so ccdad watches and never switches"
 	}
 	return "unknown"
 }
@@ -329,6 +350,31 @@ func Decide(cands []Candidate, o Options, cfg Config, st *State, activeUUID stri
 		Quarantined:           held,
 		SubscriptionExhausted: subExhausted,
 		Hover:                 o.hover,
+	}
+
+	// Manual mode, and it is answered HERE — after the ranking and before every
+	// other arm — for two reasons.
+	//
+	// After the ranking, because the ranking is the half a reporting caller
+	// renders. `ccdad status` prints the pool, `ccdad auto --json` publishes it,
+	// hover's derived table hangs off it, and the history behind `ccdad runway`
+	// is filled by the poll that produced it. A gate placed before Rank would
+	// blank all of that and make the mode cost the user the very numbers they
+	// turned it on to keep watching.
+	//
+	// Before every other arm, because manual mode is the operative fact whatever
+	// else is true. An empty pool under manual mode is still not the reason the
+	// login did not move, and reporting ReasonNoCandidates there would send a
+	// user off to fix a pool that was never going to be used.
+	//
+	// The action is ActionStay and not ActionBlocked, and the difference is the
+	// exit contract: blocked means the caller should DO something about it and
+	// is worth alerting on, while this is the world already being how the caller
+	// asked for it. `ccdad auto --once` exits 3 here rather than 4.
+	if cfg.Manual {
+		plan.Action = ActionStay
+		plan.Reason = ReasonManual
+		return plan
 	}
 
 	if len(res.Order) == 0 && len(res.Credit) == 0 {

@@ -139,12 +139,23 @@ type Engine struct {
 
 	reloader *config.Reloader
 
-	mu       sync.Mutex
-	cfg      config.Config
-	cfgErr   error
-	inFlight map[string]struct{}
-	polls    map[string]pollRecord
-	status   Status
+	mu     sync.Mutex
+	cfg    config.Config
+	cfgErr error
+	// The manual-mode state the log has already reported, so the line is
+	// written on the TRANSITION rather than on every tick. A tick loop runs
+	// about once a second; a line per tick would bury the switches the log
+	// exists to record, and no line at all leaves the one question a person
+	// reading daemon.log for a fleet that stopped switching actually has.
+	//
+	// Two fields rather than a pointer because the FIRST tick has to report
+	// too: a daemon started with the mode already on has to say so, and a
+	// zero-valued bool cannot tell "off" from "not asked yet".
+	lastManual      bool
+	lastManualKnown bool
+	inFlight        map[string]struct{}
+	polls           map[string]pollRecord
+	status          Status
 	// The daily release check's whole state, beside cfg and polls under the
 	// same lock. It is deliberately NOT inside status: publish() replaces that
 	// field wholesale on every tick, so anything kept there would be erased
@@ -406,6 +417,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	if cfgErr != nil {
 		e.logf("config: %v (running on the last one that parsed)", cfgErr)
 	}
+	e.reportManualMode(cfg.Manual)
 
 	// Above the evaluation AND above the cache load, which is the position
 	// rather than a place it fitted: a machine whose usage cache cannot be read
@@ -476,6 +488,36 @@ func (e *Engine) Tick(ctx context.Context) error {
 		e.logf("%s", switchLogLine(ev, res.Target))
 	}
 	return nil
+}
+
+// reportManualMode writes one line whenever manual mode changes, and on the
+// first tick whatever it is.
+//
+// A daemon in manual mode is indistinguishable in this log from a broken one:
+// both poll and neither switches. The line is the only thing that tells them
+// apart for somebody reading daemon.log rather than running `ccdad status`, and
+// it is the reason the mode is not a silent config key.
+//
+// It names `ccdad manual off` on the way in rather than only the state, because
+// the reader who needs this line most is the one who does not remember turning
+// the mode on.
+func (e *Engine) reportManualMode(on bool) {
+	e.mu.Lock()
+	first := !e.lastManualKnown
+	changed := first || e.lastManual != on
+	e.lastManual, e.lastManualKnown = on, true
+	e.mu.Unlock()
+	if !changed {
+		return
+	}
+	if on {
+		e.logf("manual mode is on: polling and ranking continue, and nothing here will move the live login. " +
+			"'ccdad manual off' hands the wheel back; 'ccdad switch <account>' still works meanwhile")
+		return
+	}
+	if !first {
+		e.logf("manual mode is off: this engine will move the live login again")
+	}
 }
 
 // switchLogLine is what the daemon records when it moves the live login.

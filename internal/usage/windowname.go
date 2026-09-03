@@ -56,6 +56,37 @@ func scopedPrefix(scope string) string {
 	return weeklyScopedKind + ":" + scope + ":"
 }
 
+// ScopedWindowPrefix is what every scoped window name begins with, exported so
+// a renderer working to a column budget can cut it without spelling the
+// constant a second time. Spelled twice, a change to the prefix would leave a
+// cut that silently stopped cutting.
+const ScopedWindowPrefix = weeklyScopedKind + ":"
+
+// ScopeKindOf is the scope KEY a scoped window name was filed under, and
+// whether the name carried one at all.
+//
+// WindowName.Scoped() answers only that the prefix is there; this answers WHICH
+// scope, which is the half a caller needs to tell a cap that binds one model
+// family from one that binds a surface. It is deliberately looser than
+// ValidWindowName: a scope key this build does not name is returned rather than
+// refused, because a caller asking "is this model-scoped" is entitled to the
+// honest answer "no, it is scoped to something else" for a key nobody here
+// recognizes.
+//
+// The prefix is split by the same scopedPrefix the constructor builds it with,
+// so a name usage can produce is a name this can read back.
+func ScopeKindOf(n WindowName) (string, bool) {
+	rest, scoped := strings.CutPrefix(string(n), weeklyScopedKind+":")
+	if !scoped {
+		return "", false
+	}
+	scope, display, split := strings.Cut(rest, ":")
+	if !split || scope == "" || display == "" {
+		return "", false
+	}
+	return scope, true
+}
+
 // scopedWindowScopes is the scope set, in the order ScopedWindows resolves it: a
 // model display name wins when an entry carries both, which is the half Claude
 // Code's own filter requires.

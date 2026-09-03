@@ -378,6 +378,7 @@ is a usage error rather than a silent hang. Pass the token, or `-`.
 | `ccdad probe <ACCOUNT>` | Spend one tiny request to start a window's clock early |
 | `ccdad auto` | Run the auto-switch engine, once or continuously |
 | `ccdad hover on\|off\|status` | Hand every threshold and every margin to the engine |
+| `ccdad manual on\|off\|status` | Keep watching quota and stop switching accounts |
 | `ccdad status` | The engine dashboard: quota used, window, reset, pace — read from disk |
 | `ccdad runway` | How fast the accounts are spending quota, and when it runs out — measured from readings already taken |
 | `ccdad daemon start\|stop\|restart\|status\|logs` | Drive the background daemon directly |
@@ -699,6 +700,49 @@ It answers `0` when hover is on and `5` when it is off, printing the table
 either way — so `ccdad hover status >/dev/null || ccdad hover on` is correct,
 and the numbers hover *would* choose are visible to somebody still deciding. An
 omakase mode is only acceptable if you can see what it chose.
+
+### `ccdad manual`
+
+```
+ccdad manual on
+ccdad manual status
+ccdad manual off
+```
+
+Manual mode leaves the engine running and stops it moving the live login.
+
+Everything else keeps working, and that is the whole point of it. It polls on
+the same cadence, refreshes the OAuth grants, writes the usage cache and the
+history `ccdad runway` is measured from, derives hover's thresholds, and answers
+`ccdad status`, `ccdad list`, `ccdad runway` and the dashboard with exactly the
+numbers it would without the mode.
+
+`ccdad switch <account>` still works and still sticks. This is a policy for the
+auto engine, not a lock — the same line [`ccdad disable`](#ccdad-disable) takes
+about itself.
+
+**Use it instead of disabling every account.** Disabling reaches the same
+silence by emptying the ranking pool, and it takes a great deal with it: the
+probe that fills a window reporting no reset time stops, `ccdad runway` and the
+accounts-needed verdict measure nothing, plain `ccdad list` prints nothing
+without `--all`, and `ccdad auto --once` exits `4` forever. It also re-arms
+itself, because an account added later defaults to enabled. None of that happens
+here, and it is one command rather than one per account.
+
+`ccdad auto --once` exits `3` in this mode, not `4`. The world is already how
+you asked for it, and `4` is the code worth alerting on.
+
+Four places say the mode is on, because a fleet that has stopped switching must
+never look like one that is broken: a `Manual:` line in the `ccdad status`
+block, a note on `ccdad list`, a `manual-mode` row in `ccdad doctor` at `warn`,
+and one line in `daemon.log` when the mode changes. `ccdad manual status`
+answers `0` when it is on and `5` when it is off, so `ccdad manual status
+>/dev/null || ccdad manual on` is correct.
+
+It composes with [hover](#ccdad-hover) rather than conflicting. Hover decides
+what the numbers are; manual decides whether ccdad acts on them. Watching
+hover's derived table while nothing moves is a reasonable way to decide whether
+to hand the wheel over.
 
 ### `ccdad runway`
 
