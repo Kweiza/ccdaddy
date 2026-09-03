@@ -3,15 +3,22 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/Kweiza/ccdaddy/internal/buildinfo"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
+	"github.com/Kweiza/ccdaddy/internal/codexauth"
+	"github.com/Kweiza/ccdaddy/internal/codexproxy"
+	"github.com/Kweiza/ccdaddy/internal/codexusage"
 	"github.com/Kweiza/ccdaddy/internal/credhome"
 	"github.com/Kweiza/ccdaddy/internal/release"
 	"github.com/Kweiza/ccdaddy/internal/store"
+	"github.com/Kweiza/ccdaddy/internal/usage"
 )
 
 // Options configures the daemon process.
@@ -94,11 +101,53 @@ func engineForDaemon() *Engine {
 	// check never runs, which is what keeps `ccdad list --refresh` and every
 	// test in this package off the release origin.
 	e.LatestRelease = release.NewClient().Latest
+	// The Codex lane's seams, wired here for the same reason and a sharper one:
+	// only the daemon may refresh a Codex grant, because the endpoint kills a
+	// refresh token that is used twice. A CLI process that acquired a refresher
+	// would be a second spender of the same grant.
+	wireCodex(e)
 	if s, ok, err := ReadStatus(); err == nil && ok {
 		e.seedRelease(s, e.now())
 	}
 	return e
 }
+
+// wireCodex gives the engine the four Codex seams. It is a function of its own
+// so a test can assert on the ENGINE rather than on EngineOptions' wrappers.
+func wireCodex(e *Engine) {
+	e.CodexBook = &codexproxy.LimitBook{}
+	e.CodexRefresher = codexauth.NewRefresher(codexauth.RefresherConfig{
+		Log: func(format string, a ...any) { e.logf(format, a...) },
+	})
+	client := &http.Client{Timeout: codexUsageTimeout}
+	e.CodexAccessToken = func(ctx context.Context, uuid string) (string, string, error) {
+		var token, accountID string
+		err := store.WithStore(func(s *store.Store) error {
+			creds, cerr := s.Credentials(uuid)
+			if cerr != nil {
+				return cerr
+			}
+			c, ok, perr := codexauth.FromBlob(creds)
+			if perr != nil {
+				return perr
+			}
+			if !ok {
+				return fmt.Errorf("%s holds no codex credential", uuid)
+			}
+			token, accountID = c.AccessToken, c.AccountID
+			return nil
+		})
+		return token, accountID, err
+	}
+	e.CodexFetchUsage = func(ctx context.Context, accessToken, accountID string) (*usage.Snapshot, codexusage.Identity, error) {
+		return codexusage.Fetch(ctx, client, accessToken, accountID, buildinfo.Version)
+	}
+}
+
+// codexUsageTimeout bounds one call to the Codex usage endpoint. It is the
+// poll's own bound as well, through Engine.pollTimeout; this one stops a
+// connection that never answers from holding the goroutine past it.
+const codexUsageTimeout = 30 * time.Second
 
 func (o Options) tick(ctx context.Context) error {
 	if o.Tick == nil {

@@ -10,6 +10,9 @@ import (
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
+	"github.com/Kweiza/ccdaddy/internal/codexauth"
+	"github.com/Kweiza/ccdaddy/internal/codexproxy"
+	"github.com/Kweiza/ccdaddy/internal/codexusage"
 	"github.com/Kweiza/ccdaddy/internal/config"
 	"github.com/Kweiza/ccdaddy/internal/history"
 	"github.com/Kweiza/ccdaddy/internal/identity"
@@ -113,6 +116,26 @@ type Engine struct {
 	// construction acquiring a network call nobody asked it for -- and what
 	// stops a test in this package reaching the network by forgetting a stub.
 	LatestRelease func(ctx context.Context) (string, error)
+
+	// The Codex lane's four seams. All four are NIL BY DEFAULT and nil means
+	// the lane polls nothing, for the reason FetchProfile is nil by default:
+	// internal/cli builds a real Engine of its own for a refresh, and a
+	// constructor that wired these would give that process the ability to spend
+	// a Codex grant. engineForDaemon is the one place they are wired.
+	//
+	// CodexAccessToken hands out a stored access token and the workspace id it
+	// has to be sent with. It never refreshes: only the daemon's shared
+	// refresher does that, so that N concurrent 401s cost exactly one token
+	// POST.
+	CodexAccessToken func(ctx context.Context, uuid string) (accessToken, accountID string, err error)
+	// CodexFetchUsage spends it on the Codex usage endpoint.
+	CodexFetchUsage func(ctx context.Context, accessToken, accountID string) (*usage.Snapshot, codexusage.Identity, error)
+	// CodexRefresher is the ONE refresher in this process, shared by the lane
+	// and the proxy. It holds a per-account mutex across re-read, POST and
+	// save, which is what makes a burst of 401s cost one grant rather than N.
+	CodexRefresher *codexauth.Refresher
+	// CodexBook is the rate-limit record the lane and the proxy share.
+	CodexBook *codexproxy.LimitBook
 
 	reloader *config.Reloader
 
@@ -434,7 +457,17 @@ func (e *Engine) Tick(ctx context.Context) error {
 	// and probe the wrong binding window.
 	thresholds := hoverThresholds(cfg, ev)
 	e.dispatch(ctx, s, accounts, cache, cfg, thresholds, now, active, activeKnown, quarantined)
-	e.publish(accounts, cache, ev, switcher.Evaluation{}, thresholds, quarantined)
+	// The Codex lane runs AFTER the Claude one and its failure is logged rather
+	// than returned. The two lanes share nothing that can fail together -- a
+	// different store view, a different cache row, a different pointer -- and a
+	// codex endpoint that is down must not put the daemon's tick loop into the
+	// failing streak that gets it replaced as wedged.
+	codexEv, codexErr := e.codexTick(ctx, s, cfg, now)
+	if codexErr != nil {
+		e.logf("the codex lane failed: %v", codexErr)
+	}
+	e.codexRelogin = codexReloginSet(s, accounts)
+	e.publish(accounts, cache, ev, codexEv, thresholds, quarantined)
 
 	if swapErr != nil {
 		return swapErr
