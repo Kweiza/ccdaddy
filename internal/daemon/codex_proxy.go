@@ -83,6 +83,13 @@ func (e *Engine) startCodexProxy(context.Context) (Proxy, error) {
 // proxy is built before the first tick, and until a tick has run e.cfg is still
 // the seeded default set, so reading the cache made [codex].proxy_port and
 // [codex].cross_account_replay inert.
+//
+// The reload's warning is deliberately dropped rather than returned. It is
+// already logged by loadConfig and already published as the engine's
+// ConfigError, and it never means "the config is unusable" -- a broken
+// hand-edit hands back the last set that parsed. Returning it would make one
+// bad line in config.toml a daemon that will not start, which is the failure
+// the last-good-config rule exists to prevent.
 func (e *Engine) codexProxyConfig(root string) (codexproxy.Config, error) {
 	cfg, _ := e.loadConfig()
 	port, source, err := codexproxy.ResolvePort(root, cfg.Codex.ProxyPort)
