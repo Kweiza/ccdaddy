@@ -255,6 +255,11 @@ func (s *Server) send(ctx context.Context, uuid string, in *http.Request, body [
 		return nil, err
 	}
 	a := &attempt{uuid: uuid, token: cred.AccessToken, status: res.StatusCode, header: res.Header}
+	// Every status, not just the successful ones: the header family on a 429 is
+	// the reading that says the account is spent.
+	if snap, ok := harvestHeaders(res.Header); ok {
+		s.harvest(uuid, snap)
+	}
 	if res.StatusCode >= 200 && res.StatusCode < 300 {
 		a.stream = res.Body
 		return a, nil
@@ -283,6 +288,7 @@ func (s *Server) streamBack(w http.ResponseWriter, a *attempt) {
 	if flusher != nil {
 		flusher.Flush()
 	}
+	scanner := s.streamHarvester(a.uuid)
 	buf := make([]byte, streamChunk)
 	for {
 		n, rerr := a.stream.Read(buf)
@@ -291,6 +297,9 @@ func (s *Server) streamBack(w http.ResponseWriter, a *attempt) {
 				// The client hung up. Nothing to report to it.
 				return
 			}
+			// After the client's copy, never before: a reading is worth less
+			// than a byte of the answer arriving on time.
+			scanner.write(buf[:n])
 			if flusher != nil {
 				flusher.Flush()
 			}
