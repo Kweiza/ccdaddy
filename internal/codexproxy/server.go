@@ -191,10 +191,29 @@ func newServer(cfg Config) (*Server, error) {
 // defaultClient has no overall timeout on purpose: the answer is a stream that
 // runs as long as the model does. What is bounded is the wait for the status
 // line, which is the part a hung upstream would otherwise hold forever.
+//
+// The upstream is FIXED, and CheckRedirect is what makes that true. Go's
+// default client follows up to ten hops, and for a 307 or 308 it replays the
+// BODY -- which here is the whole codex turn, the thread history including its
+// encrypted reasoning, travelling beside the workspace id and codex's own
+// installation id in the turn metadata; a hop that stays on the upstream's own
+// hostname carries the Authorization ccdad built as well. Measured: with this
+// nil, a 307 from the fake upstream to a second listener delivered the body and
+// both identifying headers to the second listener. send() also harvests the
+// rate-limit headers off whatever finally answered, so a followed redirect
+// could have a quota reading committed for the account that paid for the turn.
+// http.ErrUseLastResponse hands the 3xx back unfollowed, and the attempt loop
+// then passes it to codex like any other non-2xx. The Codex refresher guards
+// its own client the same way, for the same reason.
 func defaultClient() *http.Client {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.ResponseHeaderTimeout = responseHeaderTimeout
-	return &http.Client{Transport: tr}
+	return &http.Client{
+		Transport: tr,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 }
 
 // Port is the port the listener actually took.
