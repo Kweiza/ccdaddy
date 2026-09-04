@@ -722,6 +722,9 @@ func TestEngineOptionsWireTheEngineIntoTheProcess(t *testing.T) {
 	if o.Attach == nil {
 		t.Fatal("EngineOptions left Attach unwired; the engine would decide silently")
 	}
+	if o.StartProxy == nil {
+		t.Fatal("EngineOptions left StartProxy unwired; the daemon would bind no proxy, the status document would carry no port, and every codex launch would go unrouted")
+	}
 }
 
 // Drain runs after the loop has stopped and before Run returns, so a poll still

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -370,4 +371,153 @@ func TestRunPublishesTickHealth(t *testing.T) {
 		t.Errorf("a healthy daemon published %+v, want the fields absent", healthy)
 	}
 	stop2()
+}
+
+// orderLog records what happened in which order across the daemon's goroutines.
+type orderLog struct {
+	mu     sync.Mutex
+	events []string
+}
+
+func (o *orderLog) add(event string) {
+	o.mu.Lock()
+	o.events = append(o.events, event)
+	o.mu.Unlock()
+}
+
+func (o *orderLog) all() []string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([]string(nil), o.events...)
+}
+
+func firstIndex(events []string, want string) int {
+	for i, e := range events {
+		if e == want {
+			return i
+		}
+	}
+	return -1
+}
+
+func lastIndex(events []string, want string) int {
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i] == want {
+			return i
+		}
+	}
+	return -1
+}
+
+// fakeProxy stands in for the real listener: this package's job is the ORDER
+// the process does things in, not what the proxy does once it is up.
+type fakeProxy struct {
+	port     int
+	fellBack bool
+	events   *orderLog
+	linger   time.Duration
+}
+
+func (p *fakeProxy) Port() int      { return p.port }
+func (p *fakeProxy) FellBack() bool { return p.fellBack }
+
+func (p *fakeProxy) Serve(ctx context.Context) error {
+	<-ctx.Done()
+	// A request still being forwarded when the daemon is asked to stop.
+	time.Sleep(p.linger)
+	p.events.add("proxy")
+	return nil
+}
+
+// The launcher reads the port out of status.json and then asks that port for
+// health, so a document published before the bind would name a port nothing
+// answers.
+func TestTheProxyBindsBeforeTheFirstStatusIsPublished(t *testing.T) {
+	isolate(t)
+	events := &orderLog{}
+	stop := runInBackground(t, Options{
+		Interval: 5 * time.Millisecond,
+		Snapshot: func() Status { events.add("snapshot"); return Status{} },
+		StartProxy: func(ctx context.Context) (Proxy, error) {
+			events.add("bind")
+			return &fakeProxy{port: 24242, fellBack: true, events: events}, nil
+		},
+	})
+
+	s := waitForStatus(t, 10*time.Second, func(s Status) bool { return s.PID != 0 })
+	if s.CodexProxyPort != 24242 {
+		t.Errorf("codexProxyPort = %d, want 24242", s.CodexProxyPort)
+	}
+	if !s.CodexProxyFellBack {
+		t.Error("codexProxyFellBack = false, want true — a session started before this daemon is pointed at the old port")
+	}
+	if err := stop(); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	got := events.all()
+	if len(got) == 0 || got[0] != "bind" {
+		t.Fatalf("events = %v, want the bind first", got)
+	}
+}
+
+func TestAProxyThatCannotBindStopsTheDaemon(t *testing.T) {
+	isolate(t)
+	refusal := errors.New("the codex proxy cannot bind the configured port 24242: address already in use")
+	err := Run(context.Background(), Options{
+		Interval:   5 * time.Millisecond,
+		StartProxy: func(context.Context) (Proxy, error) { return nil, refusal },
+	})
+	if !errors.Is(err, refusal) {
+		t.Fatalf("Run() = %v, want the bind refusal", err)
+	}
+	// And it says so where somebody will find it.
+	path, perr := LogPath()
+	if perr != nil {
+		t.Fatal(perr)
+	}
+	data, rerr := os.ReadFile(path)
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	if !strings.Contains(string(data), "not starting") {
+		t.Fatalf("the daemon log does not say why it refused:\n%s", data)
+	}
+	// The singleton must be free again, or nothing can replace this daemon.
+	held, herr := SingletonHeld()
+	if herr != nil || held {
+		t.Fatalf("SingletonHeld() = (%v, %v) after a refused start", held, herr)
+	}
+}
+
+// A request the proxy is still forwarding harvests a usage reading when it
+// finishes. That reading must not land after the document saying the daemon
+// stopped, which is the same rule the engine drain has always had.
+func TestTheProxyIsDrainedBeforeTheFinalDocument(t *testing.T) {
+	isolate(t)
+	events := &orderLog{}
+	stop := runInBackground(t, Options{
+		Interval: 5 * time.Millisecond,
+		Snapshot: func() Status { events.add("snapshot"); return Status{} },
+		Drain:    func() { events.add("drain") },
+		StartProxy: func(ctx context.Context) (Proxy, error) {
+			return &fakeProxy{port: 24242, events: events, linger: 50 * time.Millisecond}, nil
+		},
+	})
+	waitForStatus(t, 10*time.Second, func(s Status) bool { return s.PID != 0 })
+	if err := stop(); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	got := events.all()
+	proxyAt, drainAt := firstIndex(got, "proxy"), firstIndex(got, "drain")
+	if proxyAt < 0 || drainAt < 0 {
+		t.Fatalf("events = %v, want both a proxy stop and a drain", got)
+	}
+	if proxyAt > drainAt {
+		t.Fatalf("events = %v, want the proxy drained before the engine", got)
+	}
+	if lastIndex(got, "snapshot") < drainAt {
+		t.Fatalf("events = %v, want the final document published after both drains", got)
+	}
 }

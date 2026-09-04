@@ -57,6 +57,20 @@ type Options struct {
 	// this is what stops a poll landing in the cache after the document that
 	// said the daemon had stopped.
 	Drain func()
+	// StartProxy binds the Codex proxy's listener. It runs BEFORE the first
+	// status publish, so the port that document carries is a port something is
+	// actually listening on -- a launcher proves the LISTENER by reading the
+	// port out of the document and asking it for health, because holding the
+	// singleton is not evidence that a proxy is up.
+	//
+	// An error stops the daemon. That is the whole point of the seam: a bind
+	// failure on a port the user configured must not be papered over, because
+	// serving on a different one leaves every codex session pointed at a port
+	// nothing answers, and codex's symptom for that is an endless reconnect.
+	//
+	// Nil means this daemon runs no proxy, which is what every test in this
+	// package that is not about the proxy gets.
+	StartProxy func(ctx context.Context) (Proxy, error)
 }
 
 // EngineOptions is the Options the real daemon runs with: the tick loop's
@@ -69,10 +83,11 @@ type Options struct {
 func EngineOptions() Options {
 	e := engineForDaemon()
 	return Options{
-		Tick:     e.Tick,
-		Snapshot: e.Snapshot,
-		Drain:    e.Wait,
-		Attach:   func(l *Logger) { e.AttachLog(l.Printf) },
+		Tick:       e.Tick,
+		Snapshot:   e.Snapshot,
+		Drain:      e.Wait,
+		Attach:     func(l *Logger) { e.AttachLog(l.Printf) },
+		StartProxy: e.startCodexProxy,
 	}
 }
 
@@ -216,7 +231,9 @@ func (o Options) now() time.Time {
 //     step 2 there is nowhere to write it;
 //  4. sweep the status temp files a previous daemon's interrupted renames left;
 //  5. write the pidfile;
-//  6. publish a first status, so a `ccdad status` racing the start sees a daemon
+//  6. bind the Codex proxy, so the port the first document carries is one
+//     something is listening on;
+//  7. publish a first status, so a `ccdad status` racing the start sees a daemon
 //     rather than nothing.
 //
 // Only ErrClaimed stops the daemon. Every other reason the claim could not be
@@ -230,7 +247,8 @@ func (o Options) now() time.Time {
 // that calls os.Exit is not theoretical damage: a tick killed mid-swap abandons
 // Claude Code's three lock directories on disk, and cclock's stale windows are
 // 60 s, 60 s and 15 s — so Claude Code's own token refresh wedges for up to a
-// minute over a Ctrl-C. The loop finishes the tick in flight, the final document
+// minute over a Ctrl-C. The loop finishes the tick in flight, the proxy drains
+// its in-flight turns, the engine drains its polls, the final document
 // is published marked stopped, the pidfile is truncated, the log is closed and
 // the singleton is released. The lock FILE is never removed: flock is per-inode,
 // and delete-and-recreate lets two daemons each hold "the" lock on a different
@@ -318,6 +336,40 @@ func Run(ctx context.Context, o Options) (err error) {
 	// "this daemon did not say" rather than as ~/.claude.
 	credentialHome, _ := credhome.Home()
 	writer := NewStatusWriter()
+
+	// The run context is created HERE rather than after the first publish,
+	// because the proxy has to be bound before that publish and it is
+	// cancelled by the same stop as everything else. Nothing between here and
+	// watchSignals below blocks on it, so moving it earlier changes when the
+	// context exists and nothing else.
+	runCtx, stop := context.WithCancel(ctx)
+	defer stop()
+
+	var (
+		proxyPort     int
+		proxyFellBack bool
+		proxyDone     chan struct{}
+	)
+	if o.StartProxy != nil {
+		proxy, perr := o.StartProxy(runCtx)
+		if perr != nil {
+			log.Printf("not starting: %v", perr)
+			return perr
+		}
+		proxyPort, proxyFellBack = proxy.Port(), proxy.FellBack()
+		log.Printf("the codex proxy is listening on 127.0.0.1:%d", proxyPort)
+		if proxyFellBack {
+			log.Printf("that is not the port that was asked for; codex sessions started before this daemon must be relaunched")
+		}
+		proxyDone = make(chan struct{})
+		go func() {
+			defer close(proxyDone)
+			if serr := proxy.Serve(runCtx); serr != nil {
+				log.Printf("the codex proxy stopped: %v", serr)
+			}
+		}()
+	}
+
 	// Declared before publish and assigned after it, because the two point at
 	// each other: the loop's body publishes, and what it publishes includes the
 	// loop's own health. The nil check is not defensive -- the FIRST publish
@@ -330,6 +382,8 @@ func Run(ctx context.Context, o Options) (err error) {
 		s.CredentialHome = credentialHome
 		s.StartedAt = startedAt
 		s.Stopped = stopped
+		s.CodexProxyPort = proxyPort
+		s.CodexProxyFellBack = proxyFellBack
 		if loop != nil {
 			h := loop.Health()
 			s.TickFailures, s.TickFailingSince, s.LastTickError = h.Consecutive, h.Since, h.LastError
@@ -342,8 +396,6 @@ func Run(ctx context.Context, o Options) (err error) {
 		log.Printf("publishing the first status: %v", perr)
 	}
 
-	runCtx, stop := context.WithCancel(ctx)
-	defer stop()
 	watchSignals(runCtx, stop, log)
 	// The same stop, reached the only other way it can be: Windows delivers no
 	// signal to a DETACHED_PROCESS child, so a named shutdown event is the
@@ -379,9 +431,20 @@ func Run(ctx context.Context, o Options) (err error) {
 	}
 
 	log.Printf("ccdad daemon stopping")
-	// Before the final document, never after: it is the one that says the
-	// daemon has stopped, and a poll still in flight would write into the cache
-	// behind it.
+	// The proxy first, then the engine, and only then the final document. Both
+	// drains exist for one reason: a request the proxy is still forwarding
+	// harvests a usage reading when it finishes, and a reading that landed
+	// after the document saying the daemon had stopped would be a fact nothing
+	// on the machine could account for.
+	//
+	// stop() is called explicitly rather than left to the deferred one, because
+	// the loop can return without the context having been cancelled at all --
+	// a wedged loop gives up on its own -- and the proxy would then never be
+	// told to stop.
+	stop()
+	if proxyDone != nil {
+		<-proxyDone
+	}
 	o.drain()
 	if perr := publish(true); perr != nil {
 		log.Printf("publishing the final status: %v", perr)
