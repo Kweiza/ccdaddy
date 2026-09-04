@@ -366,3 +366,16 @@ func TestTheBoundPortIsRecordedSoTheNextStartComesBackOnIt(t *testing.T) {
 		t.Fatalf("the next start would resolve (%d, %q); this one bound %d, which is what it must come back on", port, source, proxy.Port())
 	}
 }
+
+func TestAnUnparseableAccountsFileDoesNotStopTheProxy(t *testing.T) {
+	root := isolate(t)
+	if err := os.WriteFile(filepath.Join(root, "accounts.toml"), []byte("[[accounts]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	e := NewEngine()
+	proxy, err := e.startCodexProxy(context.Background())
+	if err != nil {
+		t.Fatalf("startCodexProxy() error = %v; a store this build cannot parse must not stop the daemon", err)
+	}
+	closeProxy(t, proxy)
+}

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/buildinfo"
+	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/codexlaunch"
 	"github.com/Kweiza/ccdaddy/internal/codexproxy"
 	"github.com/Kweiza/ccdaddy/internal/store"
@@ -88,23 +89,27 @@ func (e *Engine) codexProxyConfig(root string) (codexproxy.Config, error) {
 	if err != nil {
 		return codexproxy.Config{}, err
 	}
-	// Opened once, here, rather than per request: Credentials reads the file on
-	// every call, so a token another process rotated is still picked up, and
-	// re-opening the store per forwarded request would put a MkdirAll and two
-	// chmods on the path of every codex turn.
-	s, err := store.Open()
-	if err != nil {
-		return codexproxy.Config{}, err
-	}
 	return codexproxy.Config{
-		Root:               root,
-		Port:               port,
-		PortSource:         source,
-		Version:            buildinfo.Version,
-		Refresher:          e.CodexRefresher,
-		Book:               e.CodexBook,
-		Accounts:           func() ([]store.Account, error) { return store.AccountsAt(root) },
-		Credentials:        s.Credentials,
+		Root:       root,
+		Port:       port,
+		PortSource: source,
+		Version:    buildinfo.Version,
+		Refresher:  e.CodexRefresher,
+		Book:       e.CodexBook,
+		Accounts:   func() ([]store.Account, error) { return store.AccountsAt(root) },
+		// Derived from the root rather than from an opened store, and read on
+		// every call rather than once: reading per call is what picks up a
+		// token another process rotated, and deriving from the root is what
+		// keeps a store this build cannot open out of the daemon's start path.
+		// store.Open creates the tree, tightens two modes and PARSES
+		// accounts.toml, so an eager open here turned a hand-edited or
+		// truncated accounts.toml -- a repairable fault the daemon is supposed
+		// to run through and report on every tick -- into a refusal to start at
+		// all, with no proxy listening and every codex session left on codex's
+		// endless "Reconnecting... waiting for network". store.CredentialsAt
+		// does the one read the proxy needs and nothing else, so it costs no
+		// MkdirAll and no chmod per forwarded turn either.
+		Credentials:        func(uuid string) (cclink.Blob, error) { return store.CredentialsAt(root, uuid) },
 		RankedEligible:     e.codexRanked,
 		CrossAccountReplay: cfg.Codex.CrossAccountReplay,
 		Harvest:            e.harvestCodexSample,
