@@ -164,10 +164,51 @@ by `uuid` or `alias`.
   Pinned by `TestAClientHangupNeverCancelsTheGrantExchange` and
   `TestTheForwardedTurnItselfStaysCancellable`.
 
-Nothing points codex at this proxy yet. The PATH shim and the launcher that hand
-a codex process its launch secret are the next piece of work, so on this build the
-listener binds, answers its health route and forwards for a caller that already
-holds a secret, and no ccdad command hands one out.
+- **`codex` typed at a prompt now goes through ccdad.** `ccdad codex shim
+  install` writes a two-line script at `~/.ccdad/bin/codex` and registers that
+  directory through the same fenced block `ccdad setup-path` manages, so there
+  is one block on the machine and `ccdad uninstall` takes it back. Typing
+  `codex` then runs `ccdad codex exec`, which starts the real codex with its API
+  base pointed at the loopback proxy the daemon runs: codex holds no OAuth token
+  at all, and the account a session is billed to is the one ccdad chose.
+  `ccdad run <a Codex account>` starts the same session pinned to that account
+  and refuses rather than falling back, because falling back would bill an
+  account nobody named. A switch takes effect on the next NEW thread — every
+  request carries reasoning encrypted for the account that produced it, so a
+  thread stays with the account it started on. `codex login` and `codex logout`
+  are handed to the real codex untouched, since both revoke a grant
+  server-side with no undo — a pinned `ccdad run` refuses those two tails
+  instead, because neither verb so much as reads the account it was given. And
+  `codex login status` still answers about `~/.codex`, which ccdad does not
+  use. Pinned by `TestTheCodexShimIsExactlyTheTwoLinesItHasToBe`,
+  `TestCodexShimInstallWritesTheShimAndRegistersItsDirectory`,
+  `TestCodexExecSpawnsCodexWithTheSevenOverridesAndTheKey`,
+  `TestRunOnACodexAccountPinsTheLaunch`,
+  `TestRunOnACodexAccountRefusesWhenThereIsNoProxy`,
+  `TestCodexLoginAndLogoutAreNotRouted`,
+  `TestRunOnACodexAccountRefusesTheLoginAndLogoutTails` and
+  `TestARealCodexReachesTheUpstreamThroughTheProxy`.
+
+- **`ccdad setup-path` now registers a set of directories it derives on every
+  run**, rather than the one it was told about once — ccdad's own, unless a
+  package manager owns it, plus the codex shim's whenever one is installed. A
+  plain `ccdad setup-path` after a shim install therefore keeps the shim
+  instead of quietly dropping it, and a Homebrew ccdad still registers the shim
+  directory even though Homebrew manages its own. `ccdad doctor` gained a
+  `codex-shim` row saying which codex a bare `codex` resolves to, and `ccdad
+  run` and `ccdad codex exec` are now allowed to start a daemon, because the
+  account they serve is reached through one. There is no shim on Windows: run
+  `ccdad codex exec -- <args>` there. Pinned by
+  `TestSetupPathKeepsTheShimDirectoryOnALaterPlainRun`,
+  `TestSetupPathRegistersTheShimDirectoryForAPackageManagerInstall`,
+  `TestDoctorWarnsWhenCodexIsNotRoutedThroughCcdad`,
+  `TestCodexExecIsOnTheAutoStartAllowList` and
+  `TestCodexShimInstallRefusesOnWindows`.
+
+What is still not routed is deliberate rather than pending. An IDE or a desktop
+app that spawns codex itself never consults your shell's PATH, so the shim is
+not in front of it and it spends whatever `~/.codex` holds; `ccdad doctor`
+counts those launches on its `codex-proxy` row rather than leaving them silent.
 
 ## [0.12.0] — 2026-09-04
 
