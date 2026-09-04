@@ -52,6 +52,24 @@ func TestTheChromeBlocksAreTheSizesTheLadderBudgetsFor(t *testing.T) {
 	}
 }
 
+// The ASCII fallback is a second hand-authored drawing, so the raw pixel mask
+// cannot protect it. Pin the whole approved transcription: a partial pattern
+// check used to pass even when every body and leg was erased beneath four
+// surviving crowns.
+func TestTheASCIIFamilyMatchesItsApprovedTranscription(t *testing.T) {
+	want := []string{
+		`                                     ________   `,
+		`        .____.        .______.     __/______\__ `,
+		`._____. | >_ | .____. |  >_  |    /| _      _ |\`,
+		`| | | | [|__|] | || | [|____|]    | |  _~~_  | |`,
+		`[|___|]  | ||  [|__|]  | | | |    |_|________|_|`,
+		` | | |          | ||               || || || ||  `,
+	}
+	if got := strings.Join(figures, "\n"); got != strings.Join(want, "\n") {
+		t.Errorf("ASCII family changed:\n got:\n%s\nwant:\n%s", got, strings.Join(want, "\n"))
+	}
+}
+
 // A bordered lipgloss box SOFT-WRAPS overlong content rather than truncating
 // it: 40 characters inside Width(20) render as five rows. One footer a column
 // too wide therefore costs a row and blows the height budget with no error.

@@ -31,21 +31,19 @@ var tagline = []string{
 	`                      -- 'Daddy' Daemon`,
 }
 
-// figures measures 48 columns wide, not the 46 the plan's own prose states.
-// The block's left anchor is its leftmost real content across all six rows,
-// not column 1 of the fixture render -- three of the six rows (the brows,
-// mouth and chin-box rows) start their content at that anchor with no
-// leading space at all, so nothing here is shifted, only right-padded where
-// a row's content falls short of the widest one. The mouth row is the widest:
-// it is the one row that fills the full 48 columns on its own, with no
-// padding at either end.
+// figures is the hand-approved 7-bit transcription of the composed pixel
+// family. The one-column seams preserve the result of the babies' overlap;
+// Claude and Codex share the README creature's block body, and Codex gets only
+// a small >_ face cue rather than a separate robot shell. The babies occupy
+// four rows while Daddy occupies six, preserving the adult/child scale even
+// when block art is unavailable.
 var figures = []string{
-	`  ___      ^      ___     .^.         ______    `,
-	` /o o\   .---.   /o o\   .---.      _/______\_  `,
-	`|  ^  | [|o o|] |  ^  | [|o o|]    /| _    _ |\ `,
-	`| \_/ |  |_-_|  | \_/ |  |_-_|   | |  ~~~~  | | `,
-	` \___/   '---'   \___/   '---'    |_|________|_|`,
-	`  ||      / \      ||     / \       ||      ||  `,
+	`                                     ________   `,
+	`        .____.        .______.     __/______\__ `,
+	`._____. | >_ | .____. |  >_  |    /| _      _ |\`,
+	`| | | | [|__|] | || | [|____|]    | |  _~~_  | |`,
+	`[|___|]  | ||  [|__|]  | | | |    |_|________|_|`,
+	` | | |          | ||               || || || ||  `,
 }
 
 // titleLine is the one-row replacement the height ladder swaps the wordmark
