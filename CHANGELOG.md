@@ -177,6 +177,11 @@ holds a secret, and no ccdad command hands one out.
   Pinned by `TestEachSummaryFactAndActiveProviderOwnsItsOwnLine` and
   `TestTheCodexActiveLineIsIncludedInTheHeightBudget`.
 
+- **The dashboard family keeps the README proportions.** Both Claude and Codex
+  babies now use the original block-creature silhouette without antennas, are
+  smaller than Daddy on both axes, and overlap their neighbours by 30% while a
+  one-pixel ground contour keeps the four figures readable.
+
 ## [0.12.0] — 2026-09-04
 
 The release that gives switching strategy and operational status one command
