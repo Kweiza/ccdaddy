@@ -309,13 +309,37 @@ func explicitArgs(args []string) []string { return append([]string{}, args...) }
 // that got re-reported on top of the command's own notice.
 func runRoot(t *testing.T, args ...string) (code ExitCode, stdout, stderr, top string) {
 	t.Helper()
-	root := NewRootCmd()
+	return runRootWith(t, NewRootCmd(), args...)
+}
+
+// runRootWith drives a root the caller has already shaped, and exists for the
+// tests that have to add a flag to the tree before executing it: a population
+// that is empty on this tree today — the root declares no persistent flags —
+// cannot be described any other way, and a guard that has never seen the
+// population it guards is worth nothing.
+func runRootWith(t *testing.T, root *cobra.Command, args ...string) (code ExitCode, stdout, stderr, top string) {
+	t.Helper()
 	var out, errOut, topBuf bytes.Buffer
 	root.SetOut(&out)
 	root.SetErr(&errOut)
 	root.SetArgs(explicitArgs(args))
 	code = ExecuteWith(root, &topBuf)
 	return code, out.String(), errOut.String(), topBuf.String()
+}
+
+// subcommandOf is a command as ATTACHED to a root, which for anything that
+// reads Flags() is a different object from the one its constructor returned:
+// cobra merges the parents' persistent flags into a command's set, and a
+// detached one has no parents to merge.
+func subcommandOf(t *testing.T, root *cobra.Command, name string) *cobra.Command {
+	t.Helper()
+	for _, sub := range root.Commands() {
+		if sub.Name() == name {
+			return sub
+		}
+	}
+	t.Fatalf("the tree has no `%s` command", name)
+	return nil
 }
 
 // runCmd drives a single command in isolation, for the cases that must not go

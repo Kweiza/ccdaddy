@@ -1194,18 +1194,54 @@ func atLeastOneAccount(verb string) cobra.PositionalArgs {
 // execute(), before RunE, so a typed --help returns the help text and never
 // arrives here. Leaving it out would make the one flag this command does not
 // itself define the one the walk refuses if cobra's handling ever moves.
+//
+// It is also where a GLOBAL flag belongs once somebody decides it applies. The
+// walk sees the root's persistent flags too — cobra merges them into this
+// command's set before RunE — so a flag added to the root is refused here until
+// it is written down as one a Codex launch can honour.
 var codexRunNeutralFlags = map[string]bool{"help": true}
 
 // codexRunFlagRefusals says, per flag, WHY a Codex launch cannot honour it.
 //
 // A generic sentence covers a flag added later, but any flag a user might
-// plausibly type belongs here with its own reason: "it does not apply" on its
-// own reads as a bug in ccdad rather than as a decision, and the reader cannot
-// tell which without it.
+// plausibly type belongs here with its own reason: a refusal that names the
+// flag and no reason reads as a bug in ccdad rather than as a decision, and the
+// reader cannot tell which without one.
 var codexRunFlagRefusals = map[string]string{
 	"full-profile": "the flag gives a Claude Code session a config home of its own, seeded from the " +
 		"live config home, and a Codex launch has none to give — it starts codex through the " +
 		"ccdad daemon's proxy, which holds the credential, and reads nothing of Claude Code's",
+}
+
+// whyACodexLaunchRefuses is the reason the refusal names: the flag's own entry,
+// or a generic one for a flag nobody has written an entry for yet.
+//
+// There are TWO generic sentences because the walk sees two populations and no
+// one sentence is true of both. cmd.Flags() at RunE is the merged set — what
+// newRunCmd declares, plus every persistent flag inherited from the root — and:
+//
+//   - A flag newRunCmd declares is read, if at all, further down this same RunE,
+//     below the branch that sends a Codex account here. "Only on the Claude
+//     route" is therefore true of it by construction.
+//   - An inherited flag is not this command's at all. Whoever declared it reads
+//     it on every route, before this RunE runs, so calling it Claude-only would
+//     be a plain false statement about a genuinely global flag. What is true of
+//     it is only that nothing has decided what it means for a codex launch —
+//     which is the default-deny above, said out loud.
+//
+// InheritedFlags is what tells them apart: it is the parents' persistent flags,
+// the same discriminator the `--json` contract's command walk uses. On a
+// detached command it is empty, which is the right answer there too — a command
+// with no parent has inherited nothing.
+func whyACodexLaunchRefuses(cmd *cobra.Command, f *pflag.Flag) string {
+	if why := codexRunFlagRefusals[f.Name]; why != "" {
+		return why
+	}
+	if cmd.InheritedFlags().Lookup(f.Name) != nil {
+		return "it is a global flag of ccdad's, and nothing has decided what a launch that starts " +
+			"codex should do with it — so it is refused rather than accepted and dropped"
+	}
+	return "`ccdad run` reads it only on the Claude route, and this launch starts codex instead"
 }
 
 // refuseFlagsACodexLaunchCannotHonour turns a flag that means nothing on the
@@ -1220,6 +1256,10 @@ var codexRunFlagRefusals = map[string]string{
 // The first refusable flag in pflag's order is the one named, not all of them.
 // The set is sorted, so which one that is does not depend on the order they
 // were typed in; and a caller who typed two has to drop both anyway.
+//
+// "refuses" rather than "does not apply to": the frame has to stay true of an
+// inherited global flag, which does apply to the rest of the binary and is
+// refused here all the same.
 func refuseFlagsACodexLaunchCannotHonour(cmd *cobra.Command, label string) error {
 	var refused *pflag.Flag
 	cmd.Flags().Visit(func(f *pflag.Flag) {
@@ -1230,12 +1270,9 @@ func refuseFlagsACodexLaunchCannotHonour(cmd *cobra.Command, label string) error
 	if refused == nil {
 		return nil
 	}
-	why := codexRunFlagRefusals[refused.Name]
-	if why == "" {
-		why = "`ccdad run` reads it only on the Claude route, and this launch starts codex instead"
-	}
-	return UsageError("%s is a Codex account, and `--%s` does not apply to one: %s. "+
-		"Drop the flag, or name a Claude account.", label, refused.Name, why)
+	return UsageError("%s is a Codex account, and `ccdad run` refuses `--%s` on a launch that "+
+		"starts codex: %s. Drop the flag, or name a Claude account.",
+		label, refused.Name, whyACodexLaunchRefuses(cmd, refused))
 }
 
 func newRunCmd() *cobra.Command {
