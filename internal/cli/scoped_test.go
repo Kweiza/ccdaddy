@@ -12,6 +12,7 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
+	"github.com/Kweiza/ccdaddy/internal/codexlaunch"
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 )
 
@@ -585,4 +586,87 @@ func TestDoctorNamesTheSessionEvenWhenThereIsNoLoginInIt(t *testing.T) {
 		return
 	}
 	t.Fatal("doctor emitted no claude-code check")
+}
+
+// `ccdad codex exec` is ALLOWED inside a session, and this is the measurement
+// its verdict rests on -- written because the verdict was once argued from the
+// opposite of what the launcher does.
+//
+// The launcher does NOT replace the scope. It builds the child environment as
+// withNoProxyLoopback(setEnv(childEnv(), ...)), and childEnv is os.Environ
+// with only a defined-but-empty CLAUDE_CONFIG_DIR removed -- so the session's
+// credential home reaches the codex child verbatim. That is safe for a
+// different reason than `run`'s: the launch writes no Claude state at all, and
+// the only ccdad state it does write is a launch record under CCDAD_HOME,
+// which a session does not scope.
+func TestCodexExecInsideARunSessionInheritsTheScopeAndWritesNoClaudeState(t *testing.T) {
+	isolate(t)
+	root := mustPath(ccpath.StoreHome())
+	// Counted while the child is "running", because the record is deleted the
+	// moment it ends. Where it lands is the load-bearing half: under the store
+	// root, which a session leaves alone, and not in the session's own home.
+	// A record is a .json and the .lock beside it; the .json is the record.
+	records, inSession := -1, -1
+	stub, _ := routedWorld(t, ExitOK, func(launchSpec) {
+		records = 0
+		for _, name := range dirNames(t, codexlaunch.Dir(root)) {
+			if strings.HasSuffix(name, ".json") {
+				records++
+			}
+		}
+		inSession = len(dirNames(t, filepath.Join(root, SessionsDirName, "acct-1-1234567890", "codex")))
+	})
+	// AFTER routedWorld, which clears the variable so that its own assertions
+	// are about a plain shell.
+	home := enterRunSession(t, "acct-1")
+	login := readFile(t, filepath.Join(home, ccpath.CredentialsFile))
+
+	code, _, errOut, top := runRoot(t, "codex", "exec", "--", "exec", "say hi")
+
+	if code != ExitOK {
+		t.Fatalf("codex exec = %d, want 0\n%s\n%s", code, errOut, top)
+	}
+	if strings.Contains(top, refusalMarker) || strings.Contains(errOut, refusalMarker) {
+		t.Fatalf("`ccdad codex exec` was refused inside a session:\n%s%s", top, errOut)
+	}
+	// The claim itself. A launcher that replaced the scope would hand the child
+	// something else, or nothing.
+	if got := envValueOf(stub.spec.Env, "CLAUDE_SECURESTORAGE_CONFIG_DIR"); got != home {
+		t.Errorf("the child's CLAUDE_SECURESTORAGE_CONFIG_DIR is %q, want the launcher's own %q: "+
+			"the child inherits this environment rather than being given a fresh one", got, home)
+	}
+	if records != 1 {
+		t.Errorf("the store root held %d launch records while the child ran, want 1", records)
+	}
+	if inSession != 0 {
+		t.Errorf("the launch left %d entries under the session's own home, want 0", inSession)
+	}
+	// No Claude state, which is the whole reason propagating the scope is
+	// harmless: the login the session is running as is the one it started with.
+	if now := readFile(t, filepath.Join(home, ccpath.CredentialsFile)); now != login {
+		t.Errorf("the session's credentials file changed across the launch:\nbefore %s\nafter  %s", login, now)
+	}
+	if names := dirNames(t, home); len(names) != 1 || names[0] != ccpath.CredentialsFile {
+		t.Errorf("the launch left %v in the session's credential home, want only %s",
+			names, ccpath.CredentialsFile)
+	}
+}
+
+// dirNames lists a directory, reporting a missing one as empty rather than as
+// a failure -- "nothing was written there" is an answer these tests want.
+func dirNames(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		t.Fatal(err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	sort.Strings(names)
+	return names
 }
