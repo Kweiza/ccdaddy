@@ -251,7 +251,7 @@ type Plan struct {
 	// say why the credit pool was or was not consulted.
 	SubscriptionExhausted bool
 	// Hover is the pass the thresholds came from, set only when hover was on.
-	// nil is what says the mode was not in force; `ccdad hover status` reads
+	// nil is what says the mode was not in force; `ccdad status` reads
 	// this rather than deriving a second table of its own.
 	Hover *HoverPlan
 	// Credit is the gate's answer, set only when the credit pool was reached.

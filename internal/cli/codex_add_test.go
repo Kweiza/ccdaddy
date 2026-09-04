@@ -362,7 +362,7 @@ var codexAdviceCommandRE = regexp.MustCompile("[`']ccdad ([a-z][a-z0-9-]*)")
 // repoints the codex proxy -- but run.go and probe.go still refuse the same
 // way, with the same "is a Codex account" phrase, so the guard stays useful
 // for those. This is this command's own version of
-// TestTheAdviceToRunListRefreshNamesAFlagThatExists in list_test.go.
+// TestTheAdviceToRunStatusRefreshNamesAFlagThatExists in list_test.go.
 func TestCodexAddAdviceNamesOnlyCommandsThatWorkForACodexAccount(t *testing.T) {
 	isolate(t)
 	stubCodexDevice(t, ownerPayload, nil)

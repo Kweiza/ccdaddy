@@ -162,7 +162,7 @@ func (p ProbeState) Strikes(w WindowName) int { return p.ColdStreaks[w] }
 
 // NextAttemptAt is the earliest instant a warm-up of w may be attempted, on the
 // backoff arm alone. It is the reporting half of MayProbe's second arm, and it
-// is what `ccdad probe` and `ccdad hover status` print rather than deriving a
+// is what `ccdad probe` and daemon status print rather than deriving a
 // second copy of the ladder.
 func (p ProbeState) NextAttemptAt(w WindowName) time.Time {
 	return p.LastAttemptAt.Add(probeBackoff(p.Strikes(w)))

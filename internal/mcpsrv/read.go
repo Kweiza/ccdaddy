@@ -14,7 +14,7 @@ import (
 type noArgs struct{}
 
 type listIn struct {
-	All bool `json:"all,omitempty" jsonschema:"include the disabled accounts, which are held out of rotation and hidden by default"`
+	All bool `json:"all,omitempty" jsonschema:"accepted for compatibility; unified status always includes disabled accounts"`
 }
 
 type configGetIn struct {
@@ -54,15 +54,11 @@ func addReadTools(srv *mcp.Server, e view.Exec) error {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:  "list",
 		Title: "List the managed accounts",
-		Description: "List every account ccdad manages, with how much of each account's quota is " +
-			"left and when it resets. Returns ccdad's own JSON document." + autoStarts,
+		Description: "Compatibility name for ccdad status. Reports every managed account, its " +
+			"quota, the selected strategy and the daemon state. Returns ccdad's own JSON document." + autoStarts,
 		Annotations: readOnly(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in listIn) (*mcp.CallToolResult, ReadOut, error) {
-		argv := []string{"list"}
-		if in.All {
-			argv = append(argv, "--all")
-		}
-		argv = append(argv, "--json")
+		argv := []string{"status", "--json"}
 		out, isErr := readResult(e, argv...)
 		return &mcp.CallToolResult{IsError: isErr}, out, nil
 	})

@@ -142,8 +142,8 @@ func TestEachReadToolRunsItsOwnVerbWithJSONAndReturnsTheBytes(t *testing.T) {
 		args string
 		want []string
 	}{
-		{"list", `{}`, []string{"list", "--json"}},
-		{"list", `{"all":true}`, []string{"list", "--all", "--json"}},
+		{"list", `{}`, []string{"status", "--json"}},
+		{"list", `{"all":true}`, []string{"status", "--json"}},
 		{"status", `{}`, []string{"status", "--json"}},
 		{"which", `{}`, []string{"which", "--json"}},
 		{"doctor", `{}`, []string{"doctor", "--json"}},

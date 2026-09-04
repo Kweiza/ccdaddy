@@ -1613,7 +1613,7 @@ func TestDoctorDoesNotRepairTheStoreItIsReportingOn(t *testing.T) {
 // The orphan credential file: one written by a build older than the rollback
 // journal, or left by a rollback whose os.Remove was refused and whose error
 // the user did not act on. It holds a live refresh token at 0600 under
-// credentials/, and nothing on the machine can find it — `ccdad list`, `ccdad
+// credentials/, and nothing on the machine can find it — `ccdad status`, `ccdad
 // remove` and doctor's own account rows all read accounts.toml, and an orphan
 // is by definition a uuid the document does not carry.
 //

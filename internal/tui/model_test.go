@@ -764,7 +764,13 @@ func assertCursorIsDrawn(t *testing.T, m Model, width, height int) {
 	if m.Cursor < 0 || m.Cursor >= n {
 		t.Fatalf("%dx%d: the cursor is at %d with %d rows", width, height, m.Cursor, n)
 	}
-	l := Plan(m.Set, testCols(), m.Width, m.Height, n, len(m.Snap.Notices) > 0, m.runwayLine() != "")
+	runway := m.runwayLines()
+	footerWidth := m.Width - 2
+	if footerWidth < 1 {
+		footerWidth = m.Width
+	}
+	l := planWithRows(m.Set, testCols(), m.Width, m.Height, n, len(m.Snap.Notices) > 0,
+		len(runway) > 0, len(m.footerLines(footerWidth)), len(runway))
 	if l.TooNarrow || l.TooShort {
 		return
 	}
@@ -864,42 +870,9 @@ func TestTheQuitKeyQuitsFromEveryScreenThatIsNotAConfirm(t *testing.T) {
 // Update keeps the model the switch handed back.
 func TestUpdateAppliesWhatTheKeySwitchReturned(t *testing.T) {
 	a := appAt(t, fixtureOptions(), 113, 26)
-	before := a.m.Set
-
-	next, _ := a.Update(keyPress("l"))
-	if next.(App).m.Set == before {
+	next, _ := a.Update(keyPress("?"))
+	if next.(App).scr != screenHelp {
 		t.Fatal("a key that went through Update changed nothing")
-	}
-	if next.(App).m.Set != SetCompact {
-		t.Fatal("the list key did not swap the table")
-	}
-	// And back, so the key is a toggle rather than a one-way trip.
-	again, _ := next.Update(keyPress("l"))
-	if again.(App).m.Set != before {
-		t.Fatal("the list key does not swap back")
-	}
-}
-
-// The heading swaps with the polarity: `status` prints how much is spent and
-// `list` prints how much is left, and one heading carrying two polarities is
-// the drift the two tables have avoided since they were written.
-// [L] used to swap the POLARITY -- USED against LEFT -- because the two could
-// not share a heading. Both columns are gone: a row carries a cell per window
-// and derives nothing, so there is no polarity left to swap. What the key
-// swaps now is what each surface KNOWS: the dashboard has engine state and an
-// age beside every reading, and `ccdad list` has neither.
-func TestTheListKeySwapsTheColumnSet(t *testing.T) {
-	a := appAt(t, fixtureOptions(), 113, 26)
-	if !strings.Contains(a.body(), "STATE") {
-		t.Fatal("the page did not start on the dashboard's own table")
-	}
-	a, _, _ = a.key(keyPress("l"))
-	body := a.body()
-	if strings.Contains(body, "STATE") {
-		t.Fatalf("the list key did not swap the column set:\n%s", body)
-	}
-	if !strings.Contains(body, "TIER") {
-		t.Fatalf("the compact table does not carry TIER:\n%s", body)
 	}
 }
 
@@ -925,8 +898,8 @@ func TestTheStrategyKeyWritesASettingAndNeverMovesACredential(t *testing.T) {
 		t.Fatalf("enter on the strategy picker ran %d commands, want 1", len(ran))
 	}
 	got := strings.Join(ran[0], " ")
-	if !strings.HasPrefix(got, "config set strategy ") {
-		t.Fatalf("the strategy picker ran %q, want a config write", got)
+	if !strings.HasPrefix(got, "strategy ") {
+		t.Fatalf("the strategy picker ran %q, want a strategy change", got)
 	}
 	if strings.Contains(got, "switch") {
 		t.Fatalf("the strategy key ran %q, which moves a credential", got)

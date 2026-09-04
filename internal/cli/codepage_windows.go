@@ -17,7 +17,7 @@ const cpUTF8 = 65001
 // it. GetConsoleOutputCP takes no handle. setConsoleVT is genuinely
 // handle-scoped -- it widens the mode of the one handle it is given -- which
 // is why "a redirected stdout has no console mode to widen" is true there and
-// false here: `ccdad list > out.txt` launched from a console window is still
+// false here: `ccdad status > out.txt` launched from a console window is still
 // ATTACHED to that console, and the output code page is a property of the
 // console, shared with every process attached to it and outliving all of them.
 // Writing it would reinterpret the bytes of programs this one never heard of,

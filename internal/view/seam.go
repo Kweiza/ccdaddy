@@ -35,18 +35,17 @@ type Snapshot struct {
 	// one from the other at the payload builder would be a second lookup of a
 	// pointer this snapshot has already read.
 	CodexServingUUID string
-	Strategy         string // config.Config.Strategy.String(), as CONFIGURED -- see StrategyLabel
-	Hover            bool   // config.Config.Hover
-	// Manual is config.Config.Manual. It is carried beside Hover rather than
-	// folded into the mode line because the two are different questions: Hover
-	// says where the numbers came from, Manual says whether ccdad will act on
-	// them. A fleet in manual mode with a healthy ranking looks exactly like a
-	// broken engine unless the dashboard says which it is.
-	Manual  bool
-	Mode    strategy.Mode
-	HasMode bool
-	Version string   // buildinfo.String()'s first field, or a test constant
-	Notices []string // everything cli would have written to stderr
+	Strategy         string // the selected policy: hover, manual, headroom or consume-first
+	Hover            bool   // compatibility storage for the hover policy
+	// Manual is compatibility storage for the manual policy. The selected
+	// strategy remains explicit so a healthy ranking under manual cannot look
+	// like a broken engine.
+	Manual      bool
+	Mode        strategy.Mode
+	HasMode     bool
+	Version     string   // buildinfo.String()'s first field, or a test constant
+	Notices     []string // everything cli would have written to stderr
+	UnknownKeys []string // unrecognised top-level credential keys retained by the store
 
 	// Forecast is the measured burn and what it implies, and HasForecast is
 	// whether one could be produced at all.
@@ -65,22 +64,13 @@ type Snapshot struct {
 	HasForecast bool
 }
 
-// StrategyLabel is the strategy in FORCE, which under hover is not the one in
-// the file.
-//
-// Hover derives its own: strategy.Options' withHover pass overrides the key with
-// headroom, because a window close to its reset already carries a high threshold
-// and ordering by reset instant on top of that would rank on a quantity none of
-// hover's numbers came from. config.HoverOverrides answers true for the key and
-// `ccdad config list` marks it, so a header naming the file's value was the one
-// surface left spelling a setting nothing applies -- which reads to a user as
-// hover not being on at all.
-//
-// Strategy itself keeps the configured value rather than being overwritten,
-// because the terminal dashboard's strategy picker marks its current entry from
-// it. Setting the key while hover is on is a legitimate "for later"; it is only
-// naming it as the one in force that is false.
+// StrategyLabel is the single user-facing switching policy. New snapshots
+// already carry that value in Strategy; the boolean fallback keeps snapshots
+// built by older callers and tests truthful during an in-process upgrade.
 func (s Snapshot) StrategyLabel() string {
+	if s.Manual {
+		return "manual"
+	}
 	if s.Hover {
 		return "hover"
 	}

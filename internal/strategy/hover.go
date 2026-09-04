@@ -138,8 +138,8 @@ const (
 // HoverWindow is one derived threshold together with the figures it came from.
 //
 // It carries the inputs and not only the answer, because an automatic mode a
-// user cannot audit is one they have to take on trust. `ccdad hover status`
-// prints these verbatim.
+// user cannot audit is one they have to take on trust. `ccdad status` exposes
+// the resulting threshold beside each window.
 type HoverWindow struct {
 	UUID   string
 	Window usage.WindowName
@@ -180,7 +180,7 @@ type HoverWindow struct {
 //
 // What is deliberately NOT here is the half the daemon knows and this package
 // does not: which account is live, whether probe_unknown is on, whether there is
-// a Claude Code on this PATH. `ccdad hover status` layers those on top. The
+// a Claude Code on this PATH. The daemon's own status layers those on top. The
 // split is what keeps the gate itself in one place — the parts that could drift
 // are the parts nobody duplicated.
 type Warmup struct {

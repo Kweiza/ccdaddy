@@ -76,7 +76,7 @@ func TestThePageRendersByteForByteAtEveryLadderRung(t *testing.T) {
 		file          string
 	}{
 		{"the full page with every column", 113, 26, goldenFullPage},
-		{"the design target, figures dropped", 80, 24, goldenDesignTarget},
+		{"the design target, family retained", 80, 24, goldenDesignTarget},
 		{"wordmark and tagline dropped", 80, 13, goldenShort},
 		{"the frame dropped", 56, 10, goldenNarrow},
 		{"the gauge collapsed", 43, 9, goldenCollapsed},
@@ -129,8 +129,8 @@ func TestThePageNeverScrollsHorizontally(t *testing.T) {
 		prep func(*Model)
 	}{
 		{"the full page with every column", 113, 26, nil},
-		{"the design target, figures dropped", 80, 24, nil},
-		{"one notice", 80, 20, func(m *Model) {
+		{"the design target, family retained", 80, 24, nil},
+		{"one notice", 80, 21, func(m *Model) {
 			m.Snap.Notices = []string{"hover thresholds could not be read"}
 		}},
 		{"wordmark and tagline dropped", 80, 13, nil},
@@ -209,7 +209,7 @@ func TestBelowTheFloorsThePageRendersWhatItNeeds(t *testing.T) {
 	if got := fixtureModel(30, 24).Body(); !strings.Contains(got, "ccdad needs 35 columns") {
 		t.Errorf("at 30 columns: %q", got)
 	}
-	if got := fixtureModel(80, 2).Body(); !strings.Contains(got, "ccdad needs 3 rows") {
+	if got := fixtureModel(80, 2).Body(); !strings.Contains(got, "ccdad needs 4 rows") {
 		t.Errorf("at 2 rows: %q", got)
 	}
 	for _, tc := range []struct{ w, h int }{{0, 0}, {1, 1}, {-1, -1}} {
@@ -227,8 +227,8 @@ func TestTheScrollingRungNamesWhatIsOffThePage(t *testing.T) {
 	if len(lines) != 5 {
 		t.Fatalf("at 80x5 the page is %d rows:\n%s", len(lines), body)
 	}
-	if !strings.Contains(body, "+2 more") {
-		t.Fatalf("two accounts fell off the page and nothing said so:\n%s", body)
+	if !strings.Contains(body, "+3 more") {
+		t.Fatalf("three accounts fell off the page and nothing said so:\n%s", body)
 	}
 	if !strings.Contains(body, "(j/k)") {
 		t.Fatalf("the count does not say how to reach the rest:\n%s", body)
@@ -243,10 +243,10 @@ func TestTheScrollingRungNamesWhatIsOffThePage(t *testing.T) {
 // stopped being a dashboard -- and j/k, which the count advertises, would have
 // had nothing to move through.
 func TestWithRoomForOneRowTheAccountWinsAndTheCountGoes(t *testing.T) {
-	body := fixtureModel(35, 3).Body()
+	body := fixtureModel(35, 5).Body()
 	lines := strings.Split(body, "\n")
-	if len(lines) != 3 {
-		t.Fatalf("at 35x3 the page is %d rows:\n%s", len(lines), body)
+	if len(lines) != 5 {
+		t.Fatalf("at 35x5 the page is %d rows:\n%s", len(lines), body)
 	}
 	if strings.Contains(body, "more") {
 		t.Fatalf("the one row left was spent on a count instead of an account:\n%s", body)
@@ -301,7 +301,7 @@ func TestTheFixtureDataStillCoversTheUnreadableRowAndTheEmptyState(t *testing.T)
 // shortest terminal that keeps one. A fixture at 13 would have pinned the
 // absence and called it the presence.
 func TestANonEmptyNoticeRendersDirectlyAboveTheColumnHeader(t *testing.T) {
-	m := fixtureModel(80, 20)
+	m := fixtureModel(80, 21)
 	m.Snap.Notices = []string{"hover thresholds could not be read"}
 	got := m.Body()
 	if !strings.Contains(got, "note: hover thresholds could not be read") {
@@ -322,7 +322,7 @@ func TestANonEmptyNoticeRendersDirectlyAboveTheColumnHeader(t *testing.T) {
 // page that shows the first of four and says nothing about the other three
 // tells a user the first is all there was.
 func TestMoreNoticesThanFitAreCountedRatherThanDropped(t *testing.T) {
-	m := fixtureModel(80, 20)
+	m := fixtureModel(80, 21)
 	m.Snap.Notices = []string{"hover thresholds could not be read", "b", "c"}
 	if got := m.Body(); !strings.Contains(got, "(+2 more)") {
 		t.Fatalf("three notices rendered no count of what did not fit:\n%s", got)
@@ -338,7 +338,7 @@ func TestMoreNoticesThanFitAreCountedRatherThanDropped(t *testing.T) {
 // "no line and no gap", and a second golden would have pinned whichever of the
 // two the renderer happened to produce.
 func TestAnEmptyNoticesRendersNoLineAndNoGap(t *testing.T) {
-	quiet := fixtureModel(80, 20)
+	quiet := fixtureModel(80, 21)
 	quiet.Snap.Notices = nil
 	got := quiet.Body()
 	if strings.Contains(got, "note:") {
@@ -703,7 +703,7 @@ func TestTheLiveAccountKeepsTheMarkerWhenTheCursorIsOnIt(t *testing.T) {
 }
 
 // Nobody is pointing at anything in a pipe. The one-shot render answers
-// `ccdad tui > file` and bare `ccdad` off a terminal, and a selection marker
+// bare `ccdad` off a terminal, and a selection marker
 // there was put on the row by a reader who is not present.
 func TestTheOneShotRenderDrawsNoCursor(t *testing.T) {
 	// The live account is deliberately NOT the first row here: with the marker
@@ -739,7 +739,7 @@ func TestTheOneShotRenderDrawsNoCursor(t *testing.T) {
 // another.
 func TestTheCursorFollowsTheRowAndNotTheScreenPositionOnceItScrolls(t *testing.T) {
 	m := fixtureModel(80, 5)
-	m.Top, m.Cursor = 2, 3
+	m.Top, m.Cursor = 3, 3
 	body := m.Body()
 	if !strings.Contains(body, m.Glyphs.Cursor+" 4 ") {
 		t.Fatalf("the cursor is not on the row it indexes:\n%s", body)
@@ -795,12 +795,9 @@ func TestTheHeaderNamesHoverRatherThanTheStrategyHoverOverrode(t *testing.T) {
 	}
 }
 
-// The picker still marks the configured strategy while hover is on, and that is
-// the reason Snapshot keeps that value beside the label rather than being
-// overwritten with "hover". Setting the key under hover is a legitimate "set it
-// for later" -- `ccdad config list` marks it overriding -- and a picker with
-// nothing marked would have been this fix's own regression.
-func TestTheStrategyPickerStillMarksTheConfiguredEntryUnderHover(t *testing.T) {
+// Hover is now one of the four exclusive strategies, so the picker marks it
+// rather than a dormant automatic strategy from the compatibility fields.
+func TestTheStrategyPickerMarksHoverWhenHoverIsSelected(t *testing.T) {
 	snap := fixtureSnapshot(fixtureReport(113, 26))
 	snap.Strategy, snap.Hover = "consume-first", true
 	o := fixtureOptions()
@@ -811,8 +808,8 @@ func TestTheStrategyPickerStillMarksTheConfiguredEntryUnderHover(t *testing.T) {
 	if a.pick.current < 0 {
 		t.Fatal("the strategy picker marks nothing as current under hover")
 	}
-	if got := a.pick.items[a.pick.current].label; got != "consume-first" {
-		t.Errorf("the picker marks %q as current, want the configured consume-first", got)
+	if got := a.pick.items[a.pick.current].label; got != "hover" {
+		t.Errorf("the picker marks %q as current, want hover", got)
 	}
 }
 
@@ -878,13 +875,13 @@ func fixtureHoldingFleet() forecast.Fleet {
 
 // The dashboard names how many accounts a short fleet needs, and it spells none
 // of that here: the clause arrives inside view.RunwayLine, which `ccdad status`
-// and `ccdad list` render as well. Three surfaces and one wording -- a page that
-// assembled its own would be a fourth, free to say something different about the
+// renders as well. Two surfaces and one wording -- a page that assembled its
+// own would be a third, free to say something different about the
 // same fleet.
 //
 // A fleet that HOLDS carries no seat count at all, and the second half asserts
 // the page rather than the rule. Its answer is already the word "holds", and
-// this line is read at a glance beside Active: and Mode:, where a clause spent
+// this line is read at a glance beside Active: and Current:, where a clause spent
 // on good news is a clause the short case needed.
 //
 // What refuses it there is view.RunwayLine's own holding wording, which answers
@@ -903,7 +900,7 @@ func fixtureHoldingFleet() forecast.Fleet {
 // back cut at 80, with the cue that says so. That cut is a separate question and
 // TestTheRunwayLineIsCutToTheFrameRatherThanWrappingIt asks it, at 80 and at
 // four other widths.
-func TestTheDashboardLineNamesTheSeatsOnlyAShortFleetNeeds(t *testing.T) {
+func TestTheDashboardRunwayRowsNameTheSeatsOnlyAShortFleetNeeds(t *testing.T) {
 	short := fixtureModel(113, 24)
 	short.Snap.Forecast, short.Snap.HasForecast = fixtureFleet(), true
 	if body := short.Body(); !strings.Contains(body, "need 9 (4 more)") {
@@ -913,8 +910,10 @@ func TestTheDashboardLineNamesTheSeatsOnlyAShortFleetNeeds(t *testing.T) {
 	holding := fixtureModel(113, 24)
 	holding.Snap.Forecast, holding.Snap.HasForecast = fixtureHoldingFleet(), true
 	body := holding.Body()
-	if !strings.Contains(body, "Runway: holds on both axes at this rate  ·  basis 3h51m") {
-		t.Fatalf("the holding fixture drew no runway line, or drew a different one:\n%s", body)
+	for _, want := range []string{"Runway:  5h holds", "7d holds", "basis 3h51m"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("the holding fixture omitted %q:\n%s", want, body)
+		}
 	}
 	if strings.Contains(body, "need") {
 		t.Errorf("a fleet that holds spent part of the page on seats it does not need:\n%s", body)
@@ -929,12 +928,12 @@ func TestTheDashboardLineNamesTheSeatsOnlyAShortFleetNeeds(t *testing.T) {
 // fleet's line names the seats it needs, and at 80 the page hands back the first
 // 78 columns of this with a cue on the end. The whole string is the pin, so the
 // test that looks for it renders wide enough to hold it, and the cut form is
-// asserted separately by TestTheRunwayLineKeepsItsBasisWhenTheFrameCutsIt.
+// asserted separately by TestTheRunwayRowsKeepTheirBasisVisible.
 //
 // The seat count is last for that reason. The frame eats the tail, and the
 // clause the page can spare is the one `ccdad runway` prints in full -- not the
 // basis, which is on this line and nowhere else on this page.
-const fixtureRunwayLine = "Runway: 7d dry 2026-03-06 14:00 UTC (2d2h)  ·  5h holds  ·  basis 3h51m  ·  need 9 (4 more)"
+const fixtureRunwayLine = "Runway:  5h holds"
 
 // A populated forecast that the Snapshot does not claim moves no golden. All
 // seven whole-page fixtures are compared byte for byte, and every one of them
@@ -961,11 +960,11 @@ func TestAForecastTheSnapshotDoesNotClaimMovesNoGolden(t *testing.T) {
 		file          string
 	}{
 		{"the full page with every column", 113, 26, nil, goldenFullPage},
-		{"the design target, figures dropped", 80, 24, nil, goldenDesignTarget},
+		{"the design target with family art", 80, 24, nil, goldenDesignTarget},
 		{"wordmark and tagline dropped", 80, 13, nil, goldenShort},
 		{"the frame dropped", 56, 10, nil, goldenNarrow},
 		{"the gauge collapsed", 43, 9, nil, goldenCollapsed},
-		{"one notice", 80, 20, func(m *Model) {
+		{"one notice", 80, 21, func(m *Model) {
 			m.Snap.Notices = []string{"hover thresholds could not be read"}
 		}, goldenNotice},
 		{"zero accounts", 80, 13, func(m *Model) { m.Snap.Rows = nil }, goldenZeroAccounts},
@@ -987,7 +986,7 @@ func TestAForecastTheSnapshotDoesNotClaimMovesNoGolden(t *testing.T) {
 }
 
 // With a forecast behind it the line appears, directly under the
-// Active/Strategy/Mode line and above everything about the rows — the position
+// Active/Strategy/Current line and above everything about the rows — the position
 // `ccdad status` gives it, among the labels rather than among the accounts.
 //
 // The note line's own position is asserted elsewhere to be directly above the
@@ -1024,8 +1023,8 @@ func TestTheRunwayLineSitsUnderTheHeaderLineAndAboveTheNote(t *testing.T) {
 	if runway != header+1 {
 		t.Errorf("the runway line is at %d and the header line at %d; it belongs directly under the labels", runway, header)
 	}
-	if note != runway+1 || table != note+1 {
-		t.Errorf("runway=%d note=%d table=%d; want the note between the runway line and the column header",
+	if note != runway+4 || table != note+1 {
+		t.Errorf("runway=%d note=%d table=%d; want the note after four runway rows and before the column header",
 			runway, note, table)
 	}
 }
@@ -1085,7 +1084,12 @@ func TestTheRunwayLineIsCutToTheFrameRatherThanWrappingIt(t *testing.T) {
 			// len(m.Snap.Rows) rather than a literal, and false for the notice,
 			// because Body plans with exactly those: a mismatch here would
 			// compare the page against a layout nobody rendered.
-			want := Plan(m.Set, testCols(), w, height, len(m.Snap.Rows), false, true).Runway
+			footerWidth := w - 2
+			if footerWidth < 1 {
+				footerWidth = w
+			}
+			want := planWithRows(m.Set, testCols(), w, height, len(m.Snap.Rows), false, true,
+				len(m.footerLines(footerWidth)), len(m.runwayLines())).Runway
 			if got := strings.Contains(body, "Runway: "); got != want {
 				t.Errorf("at %dx%d the page draws a runway line: %v; the height ladder budgeted a row for one: %v:\n%s",
 					w, height, got, want, body)
@@ -1094,39 +1098,15 @@ func TestTheRunwayLineIsCutToTheFrameRatherThanWrappingIt(t *testing.T) {
 	}
 }
 
-// The frame cuts a line from the right, so the last clause is the first
-// casualty -- and on this line the evidence must not be it. A verdict with no
-// basis beside it is the output the measurement refuses to produce: a rate read
-// for twenty minutes and one read for four hours support very different claims,
-// and this page carries the span on this line and nowhere else. The seat count
-// is the clause that can be spared, because `ccdad runway` prints it in full and
-// prints the spare case this line never carries at all.
-//
-// Eighty columns is the design target and the width where it bites: a short
-// fleet's line is 91 columns, so at 80 something has to go. Measured: with the
-// seat clause last, "basis 3h51m" is inside the frame; with it between the
-// verdicts and the basis, as an earlier build had it, the basis is off the page
-// entirely and every width and row assertion beside this one still passes.
-func TestTheRunwayLineKeepsItsBasisWhenTheFrameCutsIt(t *testing.T) {
+// Each runway fact owns a row, so the basis remains visible without competing
+// with either quota axis for horizontal space.
+func TestTheRunwayRowsKeepTheirBasisVisible(t *testing.T) {
 	m := fixtureModel(80, 24)
 	m.Snap.Forecast, m.Snap.HasForecast = fixtureFleet(), true
 
-	var line string
-	for _, l := range strings.Split(m.Body(), "\n") {
-		if strings.Contains(l, "Runway: ") {
-			line = l
-		}
-	}
-	if line == "" {
-		t.Fatalf("no runway line at 80x24:\n%s", m.Body())
-	}
-	// Without this the test would pass on a page that was never cut, which is a
-	// different page from the one under assertion.
-	if strings.Contains(line, fixtureRunwayLine) {
-		t.Fatalf("the whole line fitted an 80-column frame, so nothing here is about the cut: %q", line)
-	}
-	if !strings.Contains(line, "basis 3h51m") {
-		t.Errorf("the frame cut the evidence off the line and kept the rest:\n\t%q", line)
+	body := m.Body()
+	if !strings.Contains(body, "         basis 3h51m") {
+		t.Errorf("the runway rows omitted their evidence:\n%s", body)
 	}
 }
 
@@ -1146,11 +1126,11 @@ func TestTheRunwayLineRendersInTheSnapshotsOwnZone(t *testing.T) {
 	body := m.Body()
 	// fixtureFleet's dry moment is 2026-03-06 14:00 UTC, which is 23:00 the
 	// same day nine hours east.
-	if !strings.Contains(body, "2026-03-06 23:00 KST") {
+	if !strings.Contains(body, "260306 23:00") {
 		t.Fatalf("the page did not render the dry moment in the Snapshot's zone:\n%s", body)
 	}
-	if strings.Contains(body, "UTC") {
-		t.Fatalf("the page rendered a zone the Snapshot's clock was not read in:\n%s", body)
+	if strings.Contains(body, "KST") || strings.Contains(body, "UTC") {
+		t.Fatalf("the compact dashboard timestamp retained a zone suffix:\n%s", body)
 	}
 }
 
@@ -1165,8 +1145,8 @@ func TestTheCountOfHiddenRowsSaysWhichWayTheyLie(t *testing.T) {
 		top  int
 		want string
 	}{
-		{"at the top, everything hidden is below", 0, UnicodeGlyphs.MoreBelow + " +2 more  (j/k)"},
-		{"scrolled to the bottom, everything hidden is above", 2, UnicodeGlyphs.MoreAbove + " +2 more  (j/k)"},
+		{"at the top, everything hidden is below", 0, UnicodeGlyphs.MoreBelow + " +3 more  (j/k)"},
+		{"scrolled to the bottom, everything hidden is above", 3, UnicodeGlyphs.MoreAbove + " +3 more  (j/k)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := fixtureModel(80, 5)

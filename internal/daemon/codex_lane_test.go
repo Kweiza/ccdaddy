@@ -674,7 +674,7 @@ func (rt refusingTokenEndpoint) RoundTrip(r *http.Request) (*http.Response, erro
 	return nil, errors.New("no rotation was expected")
 }
 
-// `ccdad list --refresh` is a CLI process, and the whole of what it may do to a
+// `ccdad status --refresh` is a CLI process, and the whole of what it may do to a
 // Codex account is read it with the token already stored. It is the SAME poller
 // the tick dispatches, through the same commit into the same cache, which is
 // what keeps `list` and `status --json` from computing two schedules.

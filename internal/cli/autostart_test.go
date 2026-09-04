@@ -49,7 +49,7 @@ func TestIsolateSuppressesAutoStart(t *testing.T) {
 	// that the policy happened to decline.
 	os.Unsetenv("CLAUDE_SECURESTORAGE_CONFIG_DIR")
 
-	runRoot(t, "list")
+	runRoot(t, "which")
 	if spawns != 0 {
 		t.Fatalf("the suite auto-started %d daemons; isolate(t) is not suppressing the hook", spawns)
 	}
@@ -59,7 +59,7 @@ func TestIsolateSuppressesAutoStart(t *testing.T) {
 // the feature: automatic switching with nothing for the user to run is the
 // whole point.
 func TestAutoStartStartsADaemonForAnAllowListedCommand(t *testing.T) {
-	for _, verb := range []string{"list", "status", "which"} {
+	for _, verb := range []string{"status", "status", "which"} {
 		t.Run(verb, func(t *testing.T) {
 			isolate(t)
 			f := stubDaemonWorld(t, &fakeDaemon{})
@@ -91,8 +91,7 @@ func TestAutoStartDoesNotFireForCommandsThatMustNotHaveOne(t *testing.T) {
 			"rather than using it, and the engine reads the flag on its next tick either way"},
 		{[]string{"setup-path"}, "the command that runs before `ccdad` even resolves must not spawn an " +
 			"engine for a machine that has no accounts yet"},
-		{[]string{"hover", "off"}, "the allow-list is keyed by command path, so listing hover would " +
-			"auto-start a daemon for the verb that turns the mode off"},
+		{[]string{"strategy", "headroom"}, "selecting a policy is configuration, not using an account"},
 		{[]string{daemon.RunArg}, "the child is itself ccdad, so this one is a fork bomb rather than a bug"},
 		{[]string{"run", "nobody"}, "run exports a scoped credential home into its child, and a daemon " +
 			"auto-started before that would manage the live one while the user is deliberately elsewhere"},
@@ -163,7 +162,7 @@ func TestAutoStartIsSuppressedInAProcessCcdadStarted(t *testing.T) {
 	enableAutoStart(t)
 	t.Setenv(daemon.ChildEnvVar, "1")
 
-	runRoot(t, "list")
+	runRoot(t, "status")
 	if f.spawns != 0 {
 		t.Fatalf("a process ccdad started auto-started %d more", f.spawns)
 	}
@@ -179,7 +178,7 @@ func TestAutoStartRefusesInAScopedCredentialEnvironment(t *testing.T) {
 	enableAutoStart(t)
 	t.Setenv("CLAUDE_SECURESTORAGE_CONFIG_DIR", t.TempDir())
 
-	runRoot(t, "list")
+	runRoot(t, "status")
 	if f.spawns != 0 {
 		t.Fatalf("auto-started %d daemons into a credential environment scoped to one terminal", f.spawns)
 	}
@@ -194,7 +193,7 @@ func TestAutoStartRefusesWhenTheCredentialHomeIsDefinedButEmpty(t *testing.T) {
 	enableAutoStart(t)
 	t.Setenv("CLAUDE_SECURESTORAGE_CONFIG_DIR", "")
 
-	runRoot(t, "list")
+	runRoot(t, "status")
 	if f.spawns != 0 {
 		t.Fatalf("auto-started %d daemons with the credential home defined-but-empty", f.spawns)
 	}
@@ -205,7 +204,7 @@ func TestAutoStartDoesNothingWhenADaemonIsAlreadyRunning(t *testing.T) {
 	f := stubDaemonWorld(t, &fakeDaemon{held: true, pid: 4321, pidOK: true})
 	enableAutoStart(t)
 
-	runRoot(t, "list")
+	runRoot(t, "status")
 	if f.spawns != 0 {
 		t.Fatalf("auto-started %d daemons alongside a running one", f.spawns)
 	}
@@ -219,23 +218,23 @@ func TestAutoStartDoesNothingWhenTheLockCannotBeProbed(t *testing.T) {
 	f := stubDaemonWorld(t, &fakeDaemon{probeErr: daemon.ErrLocksUnsupported})
 	enableAutoStart(t)
 
-	runRoot(t, "list")
+	runRoot(t, "status")
 	if f.spawns != 0 {
 		t.Fatalf("auto-started %d daemons on a filesystem that cannot answer whether one is running", f.spawns)
 	}
 }
 
-// Auto-start is invisible. One stray line on stdout breaks `ccdad list --json |
+// Auto-start is invisible. One stray line on stdout breaks `ccdad status --json |
 // jq`, and a daemon that will not start is a degraded mode rather than an error
 // for a command that was not asking for one.
 func TestAutoStartIsSilentAndDoesNotFailTheCommand(t *testing.T) {
 	isolate(t)
 	stubDaemonWorld(t, &fakeDaemon{})
-	wantCode, wantOut, wantErr, wantTop := runRoot(t, "list", "--json")
+	wantCode, wantOut, wantErr, wantTop := runRoot(t, "status", "--json")
 
 	f := stubDaemonWorld(t, &fakeDaemon{spawnErr: os.ErrPermission})
 	enableAutoStart(t)
-	code, stdout, stderr, top := runRoot(t, "list", "--json")
+	code, stdout, stderr, top := runRoot(t, "status", "--json")
 
 	if f.spawns != 1 {
 		t.Fatalf("spawns = %d, want the attempt to have been made", f.spawns)
@@ -260,11 +259,13 @@ func TestAutoStartDoesNotWaitForTheDaemonToComeUp(t *testing.T) {
 	f := stubDaemonWorld(t, &fakeDaemon{takeAfter: 1 << 30})
 	enableAutoStart(t)
 
-	runRoot(t, "list")
+	runRoot(t, "status")
 	if f.spawns != 1 {
 		t.Fatalf("spawns = %d, want exactly 1", f.spawns)
 	}
-	if f.probes != 1 {
-		t.Fatalf("auto-start probed the lock %d times; it waited for the daemon instead of leaving it to come up", f.probes)
+	// One probe belongs to auto-start and one to status's own Daemon line.
+	// A wait in auto-start would add at least one more.
+	if f.probes != 2 {
+		t.Fatalf("status probed the lock %d times, want one auto-start probe and one dashboard probe", f.probes)
 	}
 }

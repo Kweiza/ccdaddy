@@ -193,7 +193,7 @@ func classifyLockError(err error) error {
 // acquireLock takes the store lock, waiting up to LockTimeout.
 //
 // The wait is bounded and then it gives up, rather than blocking forever: the
-// daemon holds this lock across a switch, and a `ccdad list --refresh` that
+// daemon holds this lock across a switch, and a `ccdad status --refresh` that
 // blocked indefinitely behind it would look like a hang.
 func acquireLock(path string) (release func() error, err error) {
 	deadline := time.Now().Add(LockTimeout)
@@ -355,7 +355,7 @@ func (s *Store) mutate(fn func() error) (err error) {
 // of five accounts — an I/O failure on that credential write, which is what
 // remains once a caller has judged its document up front — leaves neither
 // three accounts in the file nor three credential files beside it. The second
-// was the worse half: a live refresh token that `ccdad list`, `ccdad remove`
+// was the worse half: a live refresh token that `ccdad status`, `ccdad remove`
 // and `ccdad doctor` could not see, because all three read the file.
 //
 // One change is deliberately NOT reversed: the content of a credential file

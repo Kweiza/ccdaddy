@@ -42,7 +42,7 @@ func TestActiveAndActiveUUIDNameOnlyTheClaudeLogin(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, out, _, top := runRoot(t, "list", "--json")
+	_, out, _, top := runRoot(t, "status", "--json")
 	var payload struct {
 		ActiveUUID string `json:"activeUuid"`
 		Accounts   []struct {

@@ -2,7 +2,6 @@ package cli
 
 import (
 	"encoding/json"
-	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -107,13 +106,13 @@ func hoverRow(t *testing.T, stdout, window string) []string {
 func TestHoverOnAndOffWriteTheKey(t *testing.T) {
 	isolate(t)
 
-	if code, _, _, top := runRoot(t, "hover", "on"); code != ExitOK {
+	if code, _, _, top := runRoot(t, "strategy", "hover"); code != ExitOK {
 		t.Fatalf("exit = %d (%s)", code, top)
 	}
 	if !hoverValue(t) {
 		t.Fatal("hover = false after `ccdad hover on`")
 	}
-	if code, _, _, top := runRoot(t, "hover", "off"); code != ExitOK {
+	if code, _, _, top := runRoot(t, "strategy", "headroom"); code != ExitOK {
 		t.Fatalf("exit = %d (%s)", code, top)
 	}
 	if hoverValue(t) {
@@ -127,29 +126,31 @@ func TestHoverOnAndOffWriteTheKey(t *testing.T) {
 func TestHoverOnTwiceIsNothingToDo(t *testing.T) {
 	isolate(t)
 
-	if code, _, _, top := runRoot(t, "hover", "on"); code != ExitOK {
+	if code, _, _, top := runRoot(t, "strategy", "hover"); code != ExitOK {
 		t.Fatalf("first on: exit = %d (%s)", code, top)
 	}
-	code, _, stderr, _ := runRoot(t, "hover", "on")
+	code, _, stderr, _ := runRoot(t, "strategy", "hover")
 	if code != ExitNothingToDo {
 		t.Fatalf("exit = %d, want %d", code, ExitNothingToDo)
 	}
-	if !strings.Contains(stderr, "already on") {
-		t.Errorf("stderr = %q, want it to say the mode was already on", stderr)
+	if !strings.Contains(stderr, "already hover") {
+		t.Errorf("stderr = %q, want it to say hover is already selected", stderr)
 	}
 }
 
 // Turning a fully automatic mode on must say what it means, and the money
 // sentence is the half a user who typed it by mistake has to read while their
 // ceiling is still where they left it.
-func TestHoverOnNamesWhatItStopsReadingAndWhatItDoesNot(t *testing.T) {
+func TestStrategyHoverClearsManualMode(t *testing.T) {
 	isolate(t)
-
-	_, _, stderr, _ := runRoot(t, "hover", "on")
-	for _, want := range []string{"threshold", "hysteresis_pct", "credit.max_auto_spend"} {
-		if !strings.Contains(stderr, want) {
-			t.Errorf("stderr does not mention %q:\n%s", want, stderr)
-		}
+	runRoot(t, "strategy", "manual")
+	runRoot(t, "strategy", "hover")
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Hover || cfg.Manual {
+		t.Fatalf("strategy hover left compatibility flags hover=%v manual=%v", cfg.Hover, cfg.Manual)
 	}
 }
 
@@ -205,23 +206,20 @@ func TestHoverStatusShowsWhatEachWindowUsedAndWhatItIsHeldTo(t *testing.T) {
 	seedHoverWindows(t, "u-1", 0.80, 62, 0.43, 55)
 	seedHoverWindows(t, "u-2", 0.80, 91, 0.43, 72)
 
-	code, stdout, _, top := runRoot(t, "hover", "status")
+	code, stdout, _, top := runRoot(t, "status")
 	if code != ExitOK {
 		t.Fatalf("exit = %d (%s)", code, top)
 	}
 	for _, want := range []string{
-		// The headers the other three tables use, and the legend that maps them
+		// The unified table headers and the legend that maps them
 		// back to the keys `ccdad config` takes a threshold on.
 		"5H", "7D", "5H = five_hour", "7D = seven_day",
 		// Two usable accounts, so a weekly window 43% elapsed is held to 93.
 		"55%/93%", "72%/93%",
 		// The five-hour window resets within the hour, so its pace target is
-		// 80 + 50 = 130: no restraint at all. The printed figure stops at 100,
-		// and the footer is what says so.
-		"62%/100%", "91%/100%",
-		"threshold(s) above show 100%",
-		"2 usable accounts",
-		"each cell is used/threshold",
+		// 80 + 50 = 130: no restraint at all.
+		"62%/130%", "91%/130%",
+		"quota cells show used/threshold",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("stdout does not carry %q:\n%s", want, stdout)
@@ -249,7 +247,7 @@ func TestHoverStatusJSONStillCarriesTheWholeDerivation(t *testing.T) {
 	seedHoverAccount(t, "u-1", "work@example.com")
 	seedHoverWindows(t, "u-1", 0.80, 62, 0.43, 55)
 
-	_, stdout, _, top := runRoot(t, "hover", "status", "--json")
+	_, stdout, _, top := runRoot(t, "status", "--json")
 	for _, want := range []string{"expectedPct", "slack", "threshold", "utilization"} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("--json does not carry %q (%s):\n%s", want, top, stdout)
@@ -269,7 +267,7 @@ func TestHoverStatusMarksTheLiveAccountAndTheCreditSeat(t *testing.T) {
 	seedHoverCreditAccount(t, "u-2", "seat@example.com", 41)
 	writeLiveFile(t, liveLoginJSON("RT-u-1", ""))
 
-	code, stdout, _, top := runRoot(t, "hover", "status")
+	code, stdout, _, top := runRoot(t, "status")
 	if code != ExitOK {
 		t.Fatalf("exit = %d (%s)", code, top)
 	}
@@ -294,60 +292,54 @@ func TestHoverStatusMarksTheLiveAccountAndTheCreditSeat(t *testing.T) {
 	if !strings.Contains(stdout, "CREDIT = extra_usage") {
 		t.Errorf("the legend does not name the credit column's key:\n%s", stdout)
 	}
-	if !strings.Contains(stdout, "(primary, metered in credits)") {
-		t.Errorf("the credit row does not say what it is metered on:\n%s", stdout)
+	if !strings.Contains(stdout, "(primary)") || !strings.Contains(stdout, "credit:") {
+		t.Errorf("the credit row does not identify its billing policy:\n%s", stdout)
 	}
 
-	_, stdout, _, _ = runRoot(t, "hover", "status", "--json")
+	_, stdout, _, _ = runRoot(t, "status", "--json")
 	var payload struct {
-		Windows []map[string]any `json:"windows"`
+		ActiveUUID string `json:"activeUuid"`
+		Accounts   []struct {
+			Email string `json:"email"`
+			Usage struct {
+				Windows map[string]map[string]any `json:"windows"`
+			} `json:"usage"`
+		} `json:"accounts"`
 	}
 	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
 		t.Fatalf("stdout is not one JSON object: %v\n%s", err, stdout)
 	}
-	var sawActive, sawCredit bool
-	for _, row := range payload.Windows {
-		if row["window"] == "extra_usage" {
-			sawCredit = row["credit"] == true
-			if _, ok := row["active"]; ok {
-				t.Errorf("the credit seat is marked active and the live login is elsewhere: %+v", row)
-			}
-			continue
-		}
-		if row["active"] == true {
-			sawActive = true
+	if payload.ActiveUUID != "u-1" {
+		t.Errorf("activeUuid = %q, want u-1", payload.ActiveUUID)
+	}
+	var credit map[string]any
+	for _, account := range payload.Accounts {
+		if account.Email == "seat@example.com" {
+			credit = account.Usage.Windows["extra_usage"]
 		}
 	}
-	if !sawActive {
-		t.Errorf("no window carries active for the live account: %+v", payload.Windows)
-	}
-	if !sawCredit {
-		t.Errorf("the credit row is not marked credit: %+v", payload.Windows)
+	if credit["thresholdPct"] != float64(strategy.HoverCreditThreshold) {
+		t.Errorf("credit threshold = %v, want %v", credit["thresholdPct"], strategy.HoverCreditThreshold)
 	}
 }
 
-// A report on a mode that is off is a negative answer to a probe, which the exit
-// contract puts at 5 -- and the table is printed either way, because the numbers
-// hover WOULD choose are exactly what somebody deciding whether to turn it on
-// has to see.
-func TestHoverStatusWithTheModeOffStillShowsTheNumbers(t *testing.T) {
+// Unified status is a dashboard rather than a boolean probe. With hover not
+// selected it reports the selected strategy and uses ordinary percentage cells.
+func TestStatusWithHoverOffReportsTheSelectedStrategy(t *testing.T) {
 	isolate(t)
 	freezeClock(t, hoverEpoch)
 	seedHoverAccount(t, "u-1", "work@example.com")
 	seedHoverWindows(t, "u-1", 0.80, 62, 0.43, 55)
 
-	code, stdout, stderr, top := runRoot(t, "hover", "status")
-	if code != ExitProbeNegative {
-		t.Fatalf("exit = %d, want %d (%s)", code, ExitProbeNegative, top)
+	code, stdout, _, top := runRoot(t, "status")
+	if code != ExitOK {
+		t.Fatalf("exit = %d, want %d (%s)", code, ExitOK, top)
 	}
 	if top != "" {
 		t.Errorf("ExecuteWith printed %q; a rendered answer is not a runtime failure", top)
 	}
-	if !strings.Contains(stdout, "Hover:   off") || !strings.Contains(stdout, "used/threshold") {
-		t.Errorf("stdout = %q, want the preview table", stdout)
-	}
-	if !strings.Contains(stderr, "hover on") {
-		t.Errorf("stderr = %q, want it to say how to put these numbers in force", stderr)
+	if !strings.Contains(stdout, "Strategy: headroom") || strings.Contains(stdout, "used/threshold") {
+		t.Errorf("stdout = %q, want ordinary headroom status", stdout)
 	}
 }
 
@@ -372,15 +364,12 @@ func TestHoverStatusPromisesNoWarmUpForAWindowThatIsAlreadyInUse(t *testing.T) {
 		Snapshot:  &usage.Snapshot{SevenDay: usage.NewWindow(&pct, nil)},
 	})
 
-	code, stdout, _, top := runRoot(t, "hover", "status")
+	code, stdout, _, top := runRoot(t, "status")
 	if code != ExitOK {
 		t.Fatalf("exit = %d (%s)", code, top)
 	}
 	if strings.Contains(stdout, "warm-up at") || strings.Contains(stdout, "probe is queued") {
 		t.Errorf("stdout promises a warm-up for a window no warm-up targets:\n%s", stdout)
-	}
-	if !strings.Contains(stdout, "a warm-up cannot fix that") {
-		t.Errorf("stdout does not say why this row cannot be fixed:\n%s", stdout)
 	}
 	if !strings.Contains(stdout, "80%") {
 		t.Errorf("stdout does not carry the fallback threshold:\n%s", stdout)
@@ -392,31 +381,6 @@ func TestHoverStatusPromisesNoWarmUpForAWindowThatIsAlreadyInUse(t *testing.T) {
 	if !strings.Contains(stdout, "30%/80%") {
 		t.Errorf("stdout does not carry the used/threshold pair:\n%s", stdout)
 	}
-
-	// And the payload leaves the share OUT rather than reporting it as zero,
-	// which would read as a window that has only just rolled over.
-	_, stdout, _, _ = runRoot(t, "hover", "status", "--json")
-	var payload struct {
-		Windows []map[string]any `json:"windows"`
-	}
-	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
-		t.Fatalf("stdout is not one JSON object: %v\n%s", err, stdout)
-	}
-	if len(payload.Windows) != 1 {
-		t.Fatalf("windows = %+v, want one row", payload.Windows)
-	}
-	if _, ok := payload.Windows[0]["expectedPct"]; ok {
-		t.Errorf("expectedPct is present for a window with no reset: %+v", payload.Windows[0])
-	}
-	// probeWanted keeps its own meaning — "this window named no reset" — and its
-	// key, because that is a true and useful thing to say. What must not appear
-	// is the warmup object, which is the one that answers "will anything happen".
-	if payload.Windows[0]["probeWanted"] != true {
-		t.Errorf("probeWanted is not set on a row that named no reset: %+v", payload.Windows[0])
-	}
-	if _, ok := payload.Windows[0]["warmup"]; ok {
-		t.Errorf("warmup is present on a row no warm-up targets: %+v", payload.Windows[0])
-	}
 }
 
 // The row a warm-up DOES target: a five-hour window nothing has ever spent
@@ -425,7 +389,6 @@ func TestHoverStatusPromisesNoWarmUpForAWindowThatIsAlreadyInUse(t *testing.T) {
 func TestHoverStatusQueuesAWarmUpForAStoppedClock(t *testing.T) {
 	isolate(t)
 	freezeClock(t, hoverEpoch)
-	stubProbeAvailable(t, nil)
 	writeConfig(t, "hover = true\n")
 	seedHoverAccount(t, "u-1", "fresh@example.com")
 	// A second account holding the live login. Without one, which account is
@@ -448,49 +411,14 @@ func TestHoverStatusQueuesAWarmUpForAStoppedClock(t *testing.T) {
 		},
 	})
 
-	code, stdout, _, top := runRoot(t, "hover", "status")
+	code, stdout, _, top := runRoot(t, "status")
 	if code != ExitOK {
 		t.Fatalf("exit = %d (%s)", code, top)
 	}
-	// The scheduler's own next look, not the instant the gate opens: a warm-up
-	// runs on a tick where the account is poll-due as well as eligible, and the
-	// gate here is open already.
-	if want := "warm-up at " + hoverEpoch.Add(7*time.Minute).Local().Format("15:04"); !strings.Contains(stdout, want) {
-		t.Errorf("stdout does not name when the warm-up will run (%q):\n%s", want, stdout)
-	}
-	// One note per account, on the row ColdWindow targets. The seven-day window
-	// named no reset too, and saying it is behind the five-hour one is not the
-	// same as promising it a turn of its own.
-	if !strings.Contains(stdout, "aims at five_hour first") {
-		t.Errorf("the second stopped clock does not say what it is behind:\n%s", stdout)
-	}
-
-	_, stdout, _, _ = runRoot(t, "hover", "status", "--json")
-	var payload struct {
-		Windows []map[string]any `json:"windows"`
-	}
-	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
-		t.Fatalf("stdout is not one JSON object: %v\n%s", err, stdout)
-	}
-	warmups := 0
-	for _, w := range payload.Windows {
-		obj, ok := w["warmup"].(map[string]any)
-		if !ok {
-			continue
+	for _, want := range []string{"fresh@example.com", "0%/", "30%/"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("status omitted %q from the stopped-clock account:\n%s", want, stdout)
 		}
-		warmups++
-		if w["window"] != string(usage.WindowFiveHour) {
-			t.Errorf("the warmup object is on %v rather than the five-hour window", w["window"])
-		}
-		if obj["state"] != "queued" {
-			t.Errorf("state = %v, want queued: %+v", obj["state"], obj)
-		}
-		if _, ok := obj["at"]; !ok {
-			t.Errorf("a queued warm-up names no instant: %+v", obj)
-		}
-	}
-	if warmups != 1 {
-		t.Errorf("warmup objects = %d, want exactly one — a warm-up is one turn aimed at one window", warmups)
 	}
 }
 
@@ -501,51 +429,35 @@ func TestHoverStatusAnswersInJSON(t *testing.T) {
 	seedHoverAccount(t, "u-1", "work@example.com")
 	seedHoverWindows(t, "u-1", 0.80, 62, 0.43, 55)
 
-	code, stdout, _, top := runRoot(t, "hover", "status", "--json")
+	code, stdout, _, top := runRoot(t, "status", "--json")
 	if code != ExitOK {
 		t.Fatalf("exit = %d (%s)", code, top)
 	}
 	var payload struct {
-		SchemaVersion  int  `json:"schemaVersion"`
-		Hover          bool `json:"hover"`
-		UsableAccounts int  `json:"usableAccounts"`
-		Windows        []struct {
-			Account     map[string]any `json:"account"`
-			Window      string         `json:"window"`
-			ExpectedPct float64        `json:"expectedPct"`
-			Utilization float64        `json:"utilization"`
-			Threshold   float64        `json:"threshold"`
-			Slack       float64        `json:"slack"`
-		} `json:"windows"`
+		SchemaVersion int  `json:"schemaVersion"`
+		Hover         bool `json:"hover"`
+		Accounts      []struct {
+			Email string `json:"email"`
+			Usage struct {
+				Windows map[string]map[string]any `json:"windows"`
+				Pace    map[string]map[string]any `json:"pace"`
+			} `json:"usage"`
+		} `json:"accounts"`
 	}
 	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
 		t.Fatalf("stdout is not one JSON object: %v\n%s", err, stdout)
 	}
-	if payload.SchemaVersion != 1 || !payload.Hover || payload.UsableAccounts != 1 {
+	if payload.SchemaVersion != 1 || !payload.Hover || len(payload.Accounts) != 1 {
 		t.Fatalf("payload = %+v", payload)
 	}
-	var week bool
-	for _, w := range payload.Windows {
-		if w.Window != "seven_day" {
-			continue
-		}
-		week = true
-		// One usable account, so the share is the whole 100 points: 43 + 100.
-		// --json carries the figure the ranking used and is deliberately NOT
-		// held to the human table's ceiling -- a machine consumer checks slack
-		// against this, and 100 would not subtract to 88.
-		if w.Threshold != 143 || w.Utilization != 55 || w.Slack != 88 {
-			t.Errorf("seven_day = %+v, want threshold 143 against 55%% used", w)
-		}
-		if w.ExpectedPct != 43 {
-			t.Errorf("expectedPct = %v, want 43", w.ExpectedPct)
-		}
-		if w.Account["email"] != "work@example.com" {
-			t.Errorf("account = %+v, want the row named", w.Account)
-		}
+	account := payload.Accounts[0]
+	week := account.Usage.Windows["seven_day"]
+	if account.Email != "work@example.com" || week["utilizationPct"] != float64(55) ||
+		week["thresholdPct"] != float64(143) || week["slackPct"] != float64(88) {
+		t.Errorf("account = %+v, seven_day = %+v", account, week)
 	}
-	if !week {
-		t.Fatalf("no seven_day row in %+v", payload.Windows)
+	if account.Usage.Pace["seven_day"]["expectedPct"] != float64(43) {
+		t.Errorf("pace = %+v, want expectedPct 43", account.Usage.Pace["seven_day"])
 	}
 }
 
@@ -575,7 +487,7 @@ func TestListMarksTheKeysHoverIsOverriding(t *testing.T) {
 	if !strings.Contains(stdout, "honoured") {
 		t.Errorf("no key is marked as still honoured:\n%s", stdout)
 	}
-	if !strings.Contains(stderr, "hover status") {
+	if !strings.Contains(stderr, "ccdad status") {
 		t.Errorf("stderr = %q, want it to point at where the derived numbers are", stderr)
 	}
 }
@@ -633,95 +545,9 @@ func TestListReportsTheOverriddenKeysInJSON(t *testing.T) {
 	}
 }
 
-// stubProbeAvailable says whether this machine has a Claude Code to warm with,
-// rather than letting the answer depend on the PATH of the host running the
-// suite.
-func stubProbeAvailable(t *testing.T, err error) {
-	t.Helper()
-	saved := probeAvailable
-	t.Cleanup(func() { probeAvailable = saved })
-	probeAvailable = func() error { return err }
-}
-
 // seedLiveAs writes Claude Code's credentials file holding one stored account's
 // login, which is what makes switcher.Evaluate able to name the live account.
 func seedLiveAs(t *testing.T, uuid string) {
 	t.Helper()
 	writeLiveFile(t, `{"claudeAiOauth":{"accessToken":"AT-`+uuid+`","refreshToken":"RT-`+uuid+`"}}`)
-}
-
-// Nothing on this machine can warm anything, and the table must say so once
-// rather than promising a turn per row. The daemon deliberately records NOTHING
-// in this state — a machine with no Claude Code has made no attempt and must not
-// consume a rung — so there is no stamp to read and the command has to look.
-func TestHoverStatusSaysWhenNothingCanBeWarmed(t *testing.T) {
-	isolate(t)
-	freezeClock(t, hoverEpoch)
-	stubProbeAvailable(t, errors.New("`claude` is not on this PATH"))
-	writeConfig(t, "hover = true\n")
-	seedHoverAccount(t, "u-1", "fresh@example.com")
-	seedHoverAccount(t, "u-2", "live@example.com")
-	seedLiveAs(t, "u-2")
-	idle := 0.0
-	seedUsageEntry(t, "u-1", usage.Entry{
-		FetchedAt: hoverEpoch,
-		Snapshot:  &usage.Snapshot{FiveHour: usage.NewWindow(&idle, nil)},
-	})
-	seedUsageEntry(t, "u-2", usage.Entry{
-		FetchedAt: hoverEpoch,
-		Snapshot:  &usage.Snapshot{FiveHour: window(4, hoverEpoch.Add(4*time.Hour))},
-	})
-
-	code, stdout, _, top := runRoot(t, "hover", "status")
-	if code != ExitOK {
-		t.Fatalf("exit = %d (%s)", code, top)
-	}
-	if strings.Contains(stdout, "warm-up at") {
-		t.Errorf("stdout promises a warm-up on a machine that cannot run one:\n%s", stdout)
-	}
-	if !strings.Contains(stdout, "not on this PATH") {
-		t.Errorf("stdout does not say why nothing can be warmed:\n%s", stdout)
-	}
-}
-
-// The two keys on `hover status --json` that spell their own layout.
-//
-// Like the `auto` stream's, these are conditional branches the contract table
-// never reaches: no row there has a warm-up that has been attempted, so the
-// last-attempt stamp and the instant a backoff opens were flipped to the
-// document's zone with nothing executing them. Measured: reverting
-// lastAttemptAt to .UTC() left every other test in this package green.
-func TestHoverWarmupJSONRendersEveryTimeInOneZone(t *testing.T) {
-	pinReaderZone(t, time.FixedZone("KST", 9*60*60))
-	wire := time.FixedZone("UTCish", 0)
-	now := time.Date(2026, 8, 22, 5, 0, 0, 0, wire)
-
-	// A window whose warm-up has been tried and is now in backoff: that is the
-	// one state where BOTH keys are written — the attempt behind it and the
-	// instant the backoff opens ahead of it.
-	got := warmupJSON(strategy.HoverWindow{
-		UUID:   "uuid-b",
-		Window: usage.WindowFiveHour,
-		Warmup: strategy.Warmup{
-			Eligible:      true,
-			Streak:        2,
-			LastAttemptAt: now.Add(-24 * time.Hour),
-			NextAt:        now.Add(20 * time.Minute),
-		},
-	}, warmupFacts{activeUUID: "uuid-a", liveKnown: true, probeOn: true, now: now})
-
-	if got["state"] != "backoff" {
-		t.Fatalf("state = %v, want backoff — the fixture no longer reaches the branch that writes both keys: %v",
-			got["state"], got)
-	}
-	for _, key := range []string{"lastAttemptAt", "at"} {
-		s, _ := got[key].(string)
-		if s == "" {
-			t.Errorf("%s is missing, so this test decides nothing about it: %v", key, got)
-			continue
-		}
-		if !strings.HasSuffix(s, "+09:00") {
-			t.Errorf("%s = %s, which is not the document's zone", key, s)
-		}
-	}
 }

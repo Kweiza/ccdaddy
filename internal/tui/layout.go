@@ -6,16 +6,8 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/view"
 )
 
-// ColumnSet is which of the two shipping tables the page is showing. [L] swaps
-// between them.
-//
-// It used to be the polarity switch: USED and LEFT never shared a heading, so a
-// page showing one could not show the other. Both columns are gone -- a row now
-// carries a cell per WINDOW and derives nothing -- and what is left is a
-// difference in what each surface KNOWS. The dashboard has engine state and an
-// age beside every reading; `ccdad list` has neither, because view.Rows
-// deliberately leaves Engine unfilled for it. SetFull is the dashboard's table
-// and SetCompact is the listing's.
+// ColumnSet describes the full dashboard table and its compact test/layout
+// variant. The interactive page always uses SetFull; there is no table toggle.
 type ColumnSet int
 
 const (
@@ -75,7 +67,7 @@ type Layout struct {
 	Notice                     bool // the "note: ..." line; see Plan's notice parameter
 	Runway                     bool // the "Runway: ..." line; see Plan's runway parameter
 	Border, Blanks             bool
-	Title, Header              bool // Header is the Active/Strategy/Mode line
+	Title, Header              bool // Header is the Active/Strategy/Current line
 
 	// VisibleRows is an UPPER BOUND on how many account rows to render, not a
 	// count of rows that are actually shown: at the scrolling rung the last
@@ -83,6 +75,8 @@ type Layout struct {
 	// below that rung it is clamped to the real row count so a renderer
 	// slicing Rows[Top:Top+VisibleRows] never reads past the end.
 	VisibleRows int
+	FooterRows  int
+	RunwayRows  int
 
 	TooNarrow, TooShort bool
 }
@@ -173,14 +167,35 @@ func maxInt(a, b int) int {
 // every optional column for the current table is already on the page — so
 // crossing a column threshold can never claim width ACCOUNT already had.
 func Plan(set ColumnSet, cols view.Columns, width, height, rows int, notice, runway bool) Layout {
-	var l Layout
+	runwayRows := 0
+	if runway {
+		runwayRows = 1
+	}
+	return planWithRows(set, cols, width, height, rows, notice, runway, 1, runwayRows)
+}
 
-	// 35x3 is the stated minimum viable size: below either dimension the page
-	// says what it needs instead of rendering something unreadable.
+// planWithRows extends Plan with the two dynamic vertical blocks: the wrapped
+// key bar and the one-line-per-fact runway summary.
+func planWithRows(set ColumnSet, cols view.Columns, width, height, rows int,
+	notice, runway bool, footerRows, runwayRows int) Layout {
+	var l Layout
+	l.FooterRows = 1
+	if footerRows > 0 {
+		l.FooterRows = footerRows
+	}
+	if runway {
+		l.RunwayRows = 1
+	}
+	if runwayRows > 0 {
+		l.RunwayRows = runwayRows
+	}
+
+	// 35 columns is the stated minimum viable width. Height also has to carry
+	// the wrapped footer, the table heading and one account row.
 	if width < 35 {
 		l.TooNarrow = true
 	}
-	if height < 3 {
+	if height < l.FooterRows+2 {
 		l.TooShort = true
 	}
 	if l.TooNarrow || l.TooShort {
@@ -365,7 +380,7 @@ func withoutColumns(cols []Column, drop ...Column) []Column {
 
 // The height ladder's row budget: wordmark 5 rows, tagline 2 rows plus its
 // blank, figures 6 rows plus its blank, the border 2 rows, the two remaining
-// blank separators, the one-row title and the Active/Strategy/Mode line.
+// blank separators, the one-row title and the Active/Strategy/Current line.
 // Fixed rows total 22, independent of the account row count -- N of those is
 // added on top, in planHeight, never folded into this constant. Neither the
 // notice line nor the runway line is part of the fixed 22 either: each exists
@@ -375,13 +390,12 @@ const (
 	fixedRows      = 22
 	saveFigures    = 7 // 6 rows plus its blank
 	saveNotice     = 1 // the "note: ..." line, when notice is true
-	saveRunway     = 1 // the "Runway: ..." line, when runway is true
 	saveTagline    = 3 // 2 rows plus its blank
 	saveWordmark   = 4 // 5 rows down to titleLine's 1
 	saveBorder     = 2
 	saveBlanks     = 2
 	saveTitle      = 1
-	saveHeaderLine = 1 // the Active/Strategy/Mode line
+	saveHeaderLine = 1 // the Active/Strategy/Current line
 )
 
 // planHeight is the height ladder: which blocks survive, in the order they
@@ -389,9 +403,9 @@ const (
 // dropped. The column header row, at least one account row and the footer are
 // never dropped — dropping past them is what VisibleRows scrolling is for.
 //
-// The notice line sits between figures and tagline: it is dropped right
-// after the figure block and before the tagline is even considered, so a
-// tight terminal never has to carry both a figure and a notice.
+// The tagline is the first decorative block to go. This keeps the family art
+// visible at the 80x24 design target even when the complete key bar wraps to a
+// second row.
 //
 // The runway line sits one rung below the notice, which decides what happens at
 // the single height where exactly one of the two fits: the note gives and the
@@ -417,13 +431,18 @@ func planHeight(l *Layout, height, rows int, notice, runway bool) {
 	l.Title, l.Header = true, true
 
 	need := fixedRows + rows
+	need += l.FooterRows - 1
 	if notice {
 		need += saveNotice
 	}
 	if runway {
-		need += saveRunway
+		need += l.RunwayRows
 	}
 
+	if need > height {
+		need -= saveTagline
+		l.Tagline = false
+	}
 	if need > height {
 		need -= saveFigures
 		l.Figures = false
@@ -433,12 +452,8 @@ func planHeight(l *Layout, height, rows int, notice, runway bool) {
 		l.Notice = false
 	}
 	if l.Runway && need > height {
-		need -= saveRunway
+		need -= l.RunwayRows
 		l.Runway = false
-	}
-	if need > height {
-		need -= saveTagline
-		l.Tagline = false
 	}
 	if need > height {
 		need -= saveWordmark
@@ -461,15 +476,15 @@ func planHeight(l *Layout, height, rows int, notice, runway bool) {
 		l.Header = false
 	}
 
-	// height-2 reserves one row for the column header and one for the
-	// footer, whatever chrome above them survived. It is an upper bound, not
+	// The subtraction reserves one row for the column header and every row in
+	// the wrapped footer, whatever chrome above them survived. It is an upper bound, not
 	// a target: at heights where the whole page fits comfortably, height-2
 	// can be far larger than the real row count, and a renderer slicing
 	// Rows[Top:Top+VisibleRows] on that unclamped number would read past the
 	// end of the slice. Clamping to rows makes VisibleRows == rows whenever
 	// everything already fits, and only less than that -- with the last line
 	// spent on "+K more (j/k)" -- once scrolling genuinely starts.
-	l.VisibleRows = height - 2
+	l.VisibleRows = height - 1 - l.FooterRows
 	if l.VisibleRows > rows {
 		l.VisibleRows = rows
 	}

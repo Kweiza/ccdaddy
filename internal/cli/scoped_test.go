@@ -164,17 +164,15 @@ func TestReadsAndStoreOnlyCommandsStillRunInsideARunSession(t *testing.T) {
 		name string
 		args []string
 	}{
-		{"list", []string{"list"}},
-		{"which", []string{"which"}},
 		{"status", []string{"status"}},
-		{"tui", []string{"tui"}},
+		{"which", []string{"which"}},
 		{"doctor", []string{"doctor"}},
 		{"alias", []string{"alias", "acct-1", "one"}},
 		{"disable", []string{"disable", "acct-1"}},
 		{"primary", []string{"primary", "a@example.com", "on"}},
 		{"bootstrap", []string{"bootstrap"}},
 		{"config list", []string{"config", "list"}},
-		{"hover status", []string{"hover", "status"}},
+		{"strategy", []string{"strategy", "headroom"}},
 		{"daemon status", []string{"daemon", "status"}},
 		{"daemon logs", []string{"daemon", "logs"}},
 		// update replaces the ccdad BINARY, which a session does not scope --
@@ -341,7 +339,7 @@ func TestAutoStartRefusesInsideAFullProfileSession(t *testing.T) {
 	enableAutoStart(t)
 	enterFullProfileSession(t, "acct-1")
 
-	runRoot(t, "list")
+	runRoot(t, "status")
 	if f.spawns != 0 {
 		t.Fatalf("auto-started %d daemons inside a --full-profile session", f.spawns)
 	}
@@ -356,7 +354,7 @@ func TestAutoStartStillFiresWithAnOrdinaryConfigDirOverride(t *testing.T) {
 	enableAutoStart(t)
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 
-	runRoot(t, "list")
+	runRoot(t, "status")
 	if f.spawns != 1 {
 		t.Fatalf("spawned %d daemons with an ordinary CLAUDE_CONFIG_DIR override, want 1", f.spawns)
 	}

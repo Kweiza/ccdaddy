@@ -779,7 +779,7 @@ func checkManual(usable bool, settings config.Config, settingsErr error) check {
 	}
 	return check{"manual-mode", levelWarn, "on: ccdad is polling and ranking and will NOT move the live login. " +
 		"Every other row here reads ok in this mode, which is why it has one of its own. " +
-		"'ccdad manual off' hands the wheel back; 'ccdad switch <account>' works either way"}
+		"'ccdad strategy headroom' hands the wheel back; 'ccdad switch <account>' works either way"}
 }
 
 // checkUpdateCheck reports what the daemon's daily release check has found.
@@ -943,7 +943,7 @@ func checkCredentialHome(report daemon.Report) check {
 //   - CLAUDE_CONFIG_DIR on its own is NOT a reason to refuse an auto-start, and
 //     rule 3 says why in as many words: it is where a great many people keep
 //     their Claude Code configuration, and refusing there would turn the
-//     feature off for all of them. So `ccdad list` in such a shell can spawn a
+//     feature off for all of them. So `ccdad status` in such a shell can spawn a
 //     daemon that pins that home for life, with nobody having typed anything
 //     about daemons.
 //   - CLAUDE_SECURESTORAGE_CONFIG_DIR does not auto-start at all: rule 3
@@ -1520,8 +1520,8 @@ func checkAPIKey(cfg *cclink.GlobalConfig, cfgErr error) check {
 // empty store and returns no error — which is right for the store, because a
 // machine where nothing has been added yet is exactly that, and wrong for a
 // diagnostic, because a machine whose document was deleted is exactly that too
-// and the two are the same bytes. `ccdad list` prints nothing, `ccdad switch`
-// has nothing to switch to, `ccdad status` shows an empty engine, and not one
+// and the two are the same bytes. `ccdad status` shows no accounts, `ccdad
+// switch` has nothing to switch to, and not one
 // line anywhere says the document is gone.
 //
 // AND UNTIL THIS ROW EXISTED THE REPORT WAS WORSE THAN SILENT. Every check that
@@ -1595,7 +1595,7 @@ func checkAccountsFile(root string, usable bool) (check, bool) {
 
 	return check{"accounts-file", levelFail, fmt.Sprintf(
 		"%s is GONE, and %d credential file%s still %s beside it (%s). ccdad keeps its whole account list in "+
-			"that one document, so every account on this machine is now invisible: `ccdad list` is empty and "+
+			"that one document, so every account on this machine is now invisible: `ccdad status` has no accounts and "+
 			"`ccdad switch` has nothing to switch to. Do NOT delete those files — each is a login you can "+
 			"still recover. Put the document back from a backup, `ccdad import` an export, or run `ccdad add` "+
 			"once per account",
@@ -1694,7 +1694,7 @@ func checkProfiles(root string, usable, accountsUsable bool) check {
 // It is the mirror of checkProfiles, one directory over and with more at stake:
 // a leaked profile MAY hold an API key, and a leaked credential file always
 // holds a live refresh token at 0600. No command a user would reach for can
-// find one. `ccdad list`, `ccdad remove` and the account rows in this very
+// find one. `ccdad status`, `ccdad remove` and the account rows in this very
 // report all read accounts.toml, and an orphan is by definition a uuid that
 // document does not carry — so it stays invisible to every one of them,
 // indefinitely. The permissions row above is the sole exception and not a
@@ -1755,7 +1755,7 @@ func checkCredentialFiles(root string, usable, accountsUsable bool) check {
 	}
 	return check{"credential-files", levelWarn, fmt.Sprintf(
 		"%d credential file%s belong%s to no account this store has (%s). Each holds a live refresh token "+
-			"at 0600, and nothing on this machine can find it: `ccdad list` and `ccdad remove` read "+
+			"at 0600, and nothing on this machine can find it: `ccdad status` and `ccdad remove` read "+
 			"accounts.toml, which is exactly what does not name %s. Delete %s once you have looked; doctor "+
 			"reports and never removes",
 		len(orphans), plural(len(orphans), "", "s"), plural(len(orphans), "s", ""),
@@ -1897,7 +1897,7 @@ func codexBlobAt(root, uuid string) (cclink.Blob, bool) {
 // It is a WARNING and not a failure, on this file's own taxonomy: the machine
 // works, every other account rotates, and one account is out of service until a
 // person runs a command. What makes the row worth having is that nothing else
-// says so -- the account looks ordinary in `ccdad list`, and the first symptom
+// says so -- the account looks ordinary in `ccdad status`, and the first symptom
 // is a codex session answering a branded 401.
 //
 // The mark is compared against the token the account CURRENTLY holds, which is
@@ -1943,7 +1943,7 @@ func checkCodexRelogin(root string, usable, accountsUsable bool) check {
 	return check{"codex-relogin", levelWarn, fmt.Sprintf(
 		"the refresh grant behind %s has been rejected, so ccdad cannot serve codex from %s until "+
 			"somebody logs in again: run `ccdad codex add`. Nothing else reports this -- the account "+
-			"looks ordinary in `ccdad list`, and the first symptom is a codex session answering an error",
+			"looks ordinary in `ccdad status`, and the first symptom is a codex session answering an error",
 		joinAnd(dead), plural(len(dead), "it", "them"))}
 }
 

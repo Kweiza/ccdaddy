@@ -44,7 +44,7 @@ func TestOutWidthReportsNoWidthForEverythingThatIsNotATerminal(t *testing.T) {
 // through. This test exists to make the next person who decorates that writer
 // fail here instead of shipping a fold that has quietly stopped happening.
 //
-// `ccdad status` and `ccdad list` both open with renderTarget, which hands back
+// `ccdad status` opens with renderTarget, which hands back
 // colorWriter's *colorprofile.Writer wrapped around cmd.OutOrStdout(). outWidth
 // answers by asserting *os.File -- deliberately, see its own header -- and a
 // wrapper is not one. Feed it the wrapper and the assertion fails, outWidth
@@ -53,8 +53,8 @@ func TestOutWidthReportsNoWidthForEverythingThatIsNotATerminal(t *testing.T) {
 // fixture, and no failing test anywhere, because every other test of the fold
 // stubs this seam and none of them ever looked at what it was handed. Measured
 // against the shape a clean three-way merge of the two changes produces:
-// `ccdad status` measured its width on *colorprofile.Writer at all five of its
-// sites and `ccdad list` at its one, and `go test ./...` was green.
+// `ccdad status` measured its width on *colorprofile.Writer at all of its sites,
+// and `go test ./...` was green.
 //
 // IDENTITY with the file the root was given is what is asserted, not the
 // weaker "it is some *os.File". The weaker question passes for a width read off
@@ -96,9 +96,7 @@ func TestTheFoldMeasuresTheFileAndNotTheWriterItPaintsThrough(t *testing.T) {
 		return 60
 	}
 
-	// Both commands, because they fold through two different helpers and the
-	// collision this guards against reached each of them separately.
-	for _, name := range []string{"status", "list"} {
+	for _, name := range []string{"status"} {
 		seen = nil
 		root := NewRootCmd()
 		root.SetOut(f)

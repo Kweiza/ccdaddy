@@ -55,7 +55,7 @@ type RefreshResult struct {
 	Err error
 }
 
-// Refresh is `ccdad list --refresh`: one pass over `want`, taking a reading for
+// Refresh is `ccdad status --refresh`: one pass over `want`, taking a reading for
 // every account allowed to have one taken, and returning when they are all in.
 //
 // It is the SAME poller the daemon's tick dispatches — the same token source,

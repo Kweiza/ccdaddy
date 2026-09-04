@@ -222,7 +222,7 @@ func TestTheJSONPathsCarryNoEscapeByteEvenWithColourForced(t *testing.T) {
 	t.Setenv("CLICOLOR_FORCE", "1")
 
 	for _, argv := range [][]string{
-		{"status", "--json"}, {"list", "--json"},
+		{"status", "--json"},
 		{"doctor", "--json"}, {"daemon", "status", "--json"},
 	} {
 		_, out, _, _ := runRoot(t, argv...)
@@ -300,33 +300,13 @@ var markerCell = regexp.MustCompile(`^\* [0-9]+$`)
 // cue can introduce.
 var windowHeaderCell = regexp.MustCompile(`^[A-Z0-9][A-Z0-9 :+#]*$`)
 
-// Colour is never the only thing carrying a distinction, and neither one-shot
-// table has a STATE column at any width to fall back on -- `ccdad list` has
-// never had one and `ccdad status` has never had one either. So the rule this
-// package can actually hold is stronger and simpler than "keep a word
-// somewhere": EVERY painted run must itself be a glyph or a word that states
-// what the paint states. Strip every escape byte and nothing is lost.
-//
-// The allowed set is therefore an allow-list and not a deny-list, and that is
-// the point: a future arm that paints a bare percentage, a reset duration or an
-// email address fails here by construction, named in the failure message,
-// without anybody having to think of that arm in advance. This is the test that
-// would have caught painting the LEFT cell on Row.Empty() -- a red "75%" with
-// no glyph and no word anywhere on the row, on a verdict read off a different
-// window from the one that number came from.
+// Every painted status cell still carries its meaning in text. Percentages are
+// allowed because their values preserve the ordering represented by the five
+// colour bands; stripping ANSI escapes therefore loses emphasis, not data.
 func TestColourIsNeverTheSoleCarrierInAOneShotTable(t *testing.T) {
 	isolate(t)
 	freezeClock(t, statusNow)
-	// Three accounts and three shapes of number, because the allow-list only
-	// bites on rows that exist: one polled with room, one never polled at all
-	// so LEFT and USED both read "?", and one polled with NOTHING left.
-	//
-	// The spent account is the load-bearing one. It is the row an exhausted arm
-	// in quotaCellStyle would paint -- a bare "0%" with no glyph and no word
-	// beside it -- and without it in the fixture this whole test passes just as
-	// happily against a build that HAS that arm, which was measured: adding the
-	// arm and running a two-account fixture came back green. A gate that cannot
-	// see the thing it forbids is not a gate.
+	// Exercise a low value, an unreadable value, and a fully used value.
 	//
 	// `switch` is what makes the first one live. seedLiveAs writes an access
 	// token the stored blob does not carry, so attribution does not match it
@@ -345,26 +325,14 @@ func TestColourIsNeverTheSoleCarrierInAOneShotTable(t *testing.T) {
 	t.Setenv("TTY_FORCE", "1")
 	t.Setenv("CLICOLOR_FORCE", "1")
 
-	// The fixed header labels of both tables, the unreadable sign, and a spent
-	// cell. The active marker is not here because it is not painted alone -- it
-	// arrives as the whole IDX cell, and markerCell above is its shape. The
-	// WINDOW headers are not here either: they are derived from whatever
-	// windows the fleet carries, so they are matched by shape below rather than
-	// enumerated, which is what keeps this list honest as the set grows.
-	// Nothing else in either table may carry a colour.
-	//
-	// "100%" is allowed and "84%" is not, and the difference is the whole
-	// property. Strip every escape byte: a reader still sees 100% and still
-	// knows that window is gone, so the colour carried nothing the text did not.
-	// An amber band over 84% would state "close to its threshold" in colour and
-	// nowhere else -- neither table carries a STATE column at any width -- so
-	// there is no such arm, and if one is ever added this test is where it fails.
+	// Fixed labels are exact; derived window labels and percentages are matched
+	// by shape below so new providers do not require a second vocabulary here.
 	allowed := map[string]bool{
 		"IDX": true, "ACCOUNT": true, "TYPE": true, "TIER": true, "AGE": true,
-		view.Unreadable: true, "100%": true,
+		view.Unreadable: true,
 	}
 
-	for _, argv := range []string{"list", "status"} {
+	for _, argv := range []string{"status"} {
 		_, out, _, top := runRoot(t, argv)
 		runs := styledRun.FindAllStringSubmatch(out, -1)
 		if len(runs) == 0 {
@@ -385,6 +353,11 @@ func TestColourIsNeverTheSoleCarrierInAOneShotTable(t *testing.T) {
 			// function of the fleet's own windows, so enumerating it here
 			// would be a second copy of view.WindowHeader that goes stale.
 			if windowHeaderCell.MatchString(text) {
+				continue
+			}
+			if matched, _ := regexp.MatchString(`^[0-9]+%(?:/[0-9]+%)?$`, text); matched {
+				// The percentage already carries the ordered quantity in text;
+				// colour makes its five utilization bands faster to scan.
 				continue
 			}
 			if text == view.Unreadable {

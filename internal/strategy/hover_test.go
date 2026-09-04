@@ -172,7 +172,7 @@ func TestHoverGivesAPrimaryCreditSeatAFixedThreshold(t *testing.T) {
 			p.For("c-1").CreditThreshold(), HoverCreditThreshold)
 	}
 	if len(p.Windows) != 1 {
-		t.Fatalf("Windows = %+v; `ccdad hover status` has one row to print for this seat", p.Windows)
+		t.Fatalf("Windows = %+v; `ccdad status` has one row to print for this seat", p.Windows)
 	}
 	row := p.Windows[0]
 	if !row.Credit || row.Window != creditWindow {
@@ -394,7 +394,7 @@ func TestDecideReportsThePlanHoverRanOn(t *testing.T) {
 
 	p := Decide(pool, o, Config{}, NewState(), "u-0")
 	if p.Hover == nil {
-		t.Fatal("Plan.Hover is nil with hover on; `ccdad hover status` has nothing to print")
+		t.Fatal("Plan.Hover is nil with hover on; `ccdad status` has no thresholds to print")
 	}
 	if p.Hover.Usable != 2 {
 		t.Errorf("Plan.Hover.Usable = %d, want 2", p.Hover.Usable)
@@ -428,7 +428,7 @@ func TestHoverConfigReplacesTheMarginsAndNotTheCeiling(t *testing.T) {
 	}
 }
 
-// fleetOf20260825 is the pool `ccdad hover status` printed on 2026-08-25: six
+// fleetOf20260825 is the pool `ccdad status` measured on 2026-08-25: six
 // accounts, every one of them past the pace target hover derived for it, so the
 // pass runs in recovery mode and nobody returns inside the horizon.
 //
@@ -607,9 +607,8 @@ func TestTheWeeklyResetIsReadFromTheSameTableTheHeadroomWas(t *testing.T) {
 	}
 }
 
-// `ccdad hover status` must not print a slack the engine did not rank on. Its
-// rows are built by a second pass, so the clamp has to be in both or the table
-// says an empty window has room while the ranking says it has none.
+// `ccdad status` must not print a slack the engine did not rank on. Otherwise
+// the table says an empty window has room while the ranking says it has none.
 func TestHoverStatusNeverShowsPositiveSlackOnAnEmptyWindow(t *testing.T) {
 	pool := []Candidate{hoverAt("solo", 0.92, 100)}
 	plan := HoverThresholds(pool, hoverOpts())

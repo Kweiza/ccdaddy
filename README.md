@@ -14,18 +14,24 @@ one *before* a rate limit stops you.
 [![license](https://img.shields.io/github/license/Kweiza/ccdaddy)](LICENSE)
 
 ```console
-$ ccdad list
-  IDX  ACCOUNT                  TYPE          TIER  5H   7D   FABLE  5H IN  7D IN
-* 1    work@example.com (work)  subscription  max   82%  61%  100%   1h14m  4d3h
-  2    personal@example.com     subscription  pro   17%  44%  38%    3h02m  6d1h
-  3    ci@example.org (ci)      api-key       -     ?    ?    ?      ?      ?
-windows:  5H = five_hour   7D = seven_day   FABLE = weekly_scoped:model:Fable
-
+$ ccdad status
+Daemon:  running  pid 48213  up 2h06m
+Active:  work@example.com (work)
+Strategy: headroom
+Current:  headroom
 Runway:  7d dry 2026-08-25 20:53 UTC (1d15h)  ·  5h holds  ·  basis 4h00m
 
-$ ccdad list --json
+  IDX  ACCOUNT                  TYPE          TIER  5H   7D   FABLE  5H IN  7D IN  AGE
+* 1    work@example.com (work)  subscription  max   82%  61%  100%   1h14m  4d3h   41s
+  2    personal@example.com     subscription  pro   17%  44%  38%    3h02m  6d1h   2m
+  3    ci@example.org (ci)      api-key       -     ?    ?    ?      ?      ?      ?
+windows:  5H = five_hour   7D = seven_day   FABLE = weekly_scoped:model:Fable
+
+$ ccdad status --json
 {
   "schemaVersion": 1,
+  "daemon": { "state": "running", "pid": 48213 },
+  "strategy": "headroom",
   "accounts": [
     {
       "uuid": "0d9e4e6a-1f1a-4b5e-9c3a-2f7b6a1d8e40",
@@ -112,16 +118,6 @@ $ ccdad list --json
   }
 }
 
-$ ccdad status
-Daemon:  running  pid 48213  up 2h06m
-Active:  work@example.com (work)
-Runway:  7d dry 2026-08-25 20:53 UTC (1d15h)  ·  5h holds  ·  basis 4h00m
-
-  IDX  ACCOUNT                  TYPE          5H   7D   FABLE  5H IN  7D IN  AGE
-* 1    work@example.com (work)  subscription  82%  61%  100%   1h14m  4d3h   41s
-  2    personal@example.com     subscription  17%  44%  38%    3h02m  6d1h   2m
-  3    ci@example.org (ci)      api-key       ?    ?    ?      ?      ?      ?
-windows:  5H = five_hour   7D = seven_day   FABLE = weekly_scoped:model:Fable
 ```
 
 `ccdad` is an unofficial, third-party tool. It is not affiliated with,
@@ -328,7 +324,7 @@ stays on amd64.
 
 Both installers stop the running daemon before replacing the binary and neither
 restarts it: it comes back on the next command that is allowed to auto-start
-one — bare `ccdad`, `add`, `add-token`, `list`, `status`, `tui`, `switch` or
+one — bare `ccdad`, `add`, `add-token`, `status`, `switch` or
 `which`. `ccdad daemon status` is not one of them, on purpose, so a supervisor
 loop cannot start what it was only asked to look at. `ccdad update` does
 restart it, from the binary it has just written.
@@ -346,7 +342,7 @@ Not `rm` — there is a daemon to stop and a credential directory to clear.
 ```sh
 ccdad add work          # opens a browser; 'work' becomes the alias
 ccdad add personal
-ccdad list              # who is managed, and how much quota each has left
+ccdad status            # accounts, quota, strategy, runway, and daemon state
 ccdad which             # who Claude Code is logged in as right now
 ccdad switch personal   # move the live login
 ccdad daemon start      # watch quota and switch automatically from now on
@@ -370,18 +366,15 @@ is a usage error rather than a silent hang. Pass the token, or `-`.
 | Command | What it does |
 |---|---|
 | `ccdad` | The dashboard, at a terminal. In a pipe, a redirect or cron it is usage on stderr and exit `2` |
-| `ccdad tui` | The same dashboard, asked for by name — and in a pipe it renders once and exits `0` |
 | `ccdad add [ALIAS]` | Log in through the browser and manage the account |
 | `ccdad add-token [TOKEN\|-]` | Register an `sk-ant-oat…` setup token or an `sk-ant-api…` key |
-| `ccdad list` | List managed accounts and how much quota each has left |
 | `ccdad which` | Show which managed account Claude Code is logged in as |
 | `ccdad switch [ACCOUNT]` | Make an account the live login |
 | `ccdad run <ACCOUNT> [args…]` | Start a Claude Code session as an account, without changing the live login |
 | `ccdad probe <ACCOUNT>` | Spend one tiny request to start a window's clock early |
 | `ccdad auto` | Run the auto-switch engine, once or continuously |
-| `ccdad hover on\|off\|status` | Hand every threshold and every margin to the engine |
-| `ccdad manual on\|off\|status` | Keep watching quota and stop switching accounts |
-| `ccdad status` | The engine dashboard: quota used, window, reset, pace — read from disk |
+| `ccdad strategy hover\|manual\|headroom\|consume-first` | Select the one account-switching policy |
+| `ccdad status` | The unified account, quota, strategy, runway, and daemon dashboard |
 | `ccdad runway` | How fast the accounts are spending quota, and when it runs out — measured from readings already taken |
 | `ccdad daemon start\|stop\|restart\|status\|logs` | Drive the background daemon directly |
 | `ccdad mcp` | Serve ccdad's tools to Claude Code over the Model Context Protocol. Claude Code starts it; you do not |
@@ -418,7 +411,7 @@ ccdad switch --strategy headroom \
 
 With no account, `--strategy` runs the same ranking and the same anti-flap
 margins the daemon uses, against the same on-disk usage cache. It never polls
-on its own — run the daemon, or `ccdad list --refresh`, so there is something
+on its own — run the daemon, or `ccdad status --refresh`, so there is something
 fresh to choose on.
 
 `--model` names the model the session will run, and **narrows** the ranking: the
@@ -553,12 +546,21 @@ cadence next happens to look. And it declines outright on an account with a
 window at 100% whose overage switch is not demonstrably off, because a turn there
 can be billed to credits and unattended spending takes its own two opt-ins.
 
-### `ccdad hover`
+### `ccdad strategy`
 
 ```sh
-ccdad hover on
-ccdad hover status
+ccdad strategy hover
+ccdad strategy manual
+ccdad strategy headroom
+ccdad strategy consume-first
+ccdad status
 ```
+
+`ccdad strategy` selects exactly one switching policy. `headroom` prefers the
+account with the most room, `consume-first` spends perishable weekly quota
+before it expires, `hover` derives pacing targets, and `manual` keeps polling
+while suppressing automatic switches. `ccdad status` shows the selected policy
+alongside the account table and hover's derived threshold for each window.
 
 Hover hands the tuning to the engine. It stops reading `threshold`,
 `hysteresis_pct`, `headroom_ratio`, `cooldown`, `recovery_hysteresis`,
@@ -630,9 +632,8 @@ its own window, which is exactly the account whose quota expires soonest, and
 above the clamp the elapsed term is gone and the pool is ordered on raw
 utilization instead of on pace. Measured on three accounts resetting one, three
 and five days out, the clamp doubled how far the fleet drifted from its own pace
-lines *and* cost more switches doing it. The human table still stops at `100%`
-and says so in a footer; `--json` carries the real figure, because `slack` is
-measured against it.
+lines *and* cost more switches doing it. Both the human table and `--json` carry
+the real figure, because `slack` is measured against it.
 
 A weekly window 43% elapsed — three days into a week — with four accounts gives
 68, which is 43 plus 25: an account running ahead of that pace hands the work on
@@ -644,13 +645,11 @@ right — it resets within the hour anyway; with eight it is 92.
 A window with no elapsed share to derive from takes a fixed 80 instead, and that
 covers two cases. One is a window with no clock running, which reports no reset
 at all — hover forces `probe_unknown` back on so the engine's own probe path
-starts it, and `ccdad hover status` says on that row what the engine will
-actually do about it and when: queued for a named time, sent, waiting for the
-reading that judges it, backing off after warm-ups that woke nothing, or held
-because nothing on this machine can run one. Hover queues nothing itself; the
-table and the daemon read the same predicate, so it cannot promise a turn the
-engine would decline. The other is a reset further out than the window is long,
-which is a clock no probe can fix, so that row carries no mark. A primary credit seat has no window and no reset either, so it
+starts it. `ccdad status` shows the fallback usage/threshold pair on that row;
+`ccdad daemon status` and `ccdad doctor` remain the places to diagnose daemon
+or probe failures. The other case is a reset further out than the window is
+long, which is a clock no probe can fix, so that row carries no mark. A primary
+credit seat has no window and no reset either, so it
 is held to a fixed 95 — credits do not come back at all, and the last few points
 are the ones worth keeping for a session already running.
 
@@ -666,48 +665,37 @@ close with time at all — only burn closes it, on the very account the margin i
 holding you to. A margin above the spread a real pool shows will sit on an
 account with ten points left while one with thirty waits.
 
-`ccdad hover status` prints, per account and per window, the share elapsed, the
-utilization, the threshold hover computed and the slack between the last two —
-every input to the formula beside its output, so the arithmetic can be checked
-rather than accepted:
+With hover selected, `ccdad status` prints each window as
+`utilization/threshold`; `--json` additionally carries elapsed pace and slack,
+so the arithmetic can be checked rather than accepted:
 
 ```console
-$ ccdad hover status
-Hover:   on
-Pool:    3 usable accounts, so each threshold is the share of its own window that
-         has elapsed, plus 100/3 points. A window far enough through its own
-         cycle earns more than 100, which means no restraint -- there is nobody
-         to hand the work to. This column stops at 100; --json carries the rest.
+$ ccdad status
+Strategy: hover
+Current:  headroom
 
   IDX  ACCOUNT            5H        7D       CREDIT
 * 1    work@example.com   12%/100%  52%/76%  -
   2    spare@example.com  74%/100%  31%/76%  -
   3    seat@example.com   -         -        61%/95%  (primary, metered in credits)
 windows:  5H = five_hour   7D = seven_day   CREDIT = extra_usage
-each cell is used/threshold; the threshold is the share of that window's own cycle that has elapsed plus the pool share.
-
-2 threshold(s) above show 100% because their pace target ran past it: far
-enough through their own cycle that nothing is being held back. The engine
-ranks on the real figure; `ccdad hover status --json` carries it.
+hover:    quota cells show used/threshold; thresholds are derived per account and window
 ```
 
 `*` marks the account Claude Code is logged in as, `-` is a window the account
-does not carry, and each cell is `used/threshold`. On the cells the footer
-names, THRESHOLD is
-the ceiling rather than the derived figure, so those two columns do not subtract;
-SLACK is always the real one, because it is what the engine ordered on.
+does not carry, and each cell is `used/threshold`. The engine ranks on the real
+uncapped threshold; `ccdad status --json` carries the corresponding slack.
 
-It answers `0` when hover is on and `5` when it is off, printing the table
-either way — so `ccdad hover status >/dev/null || ccdad hover on` is correct,
-and the numbers hover *would* choose are visible to somebody still deciding. An
-omakase mode is only acceptable if you can see what it chose.
+The unified status command always answers as a dashboard rather than as a
+boolean probe. Its `strategy` field is the scriptable answer to which policy is
+selected, while each hover window carries `thresholdPct` and `slackPct`.
 
-### `ccdad manual`
+#### Manual strategy
 
 ```
-ccdad manual on
-ccdad manual status
-ccdad manual off
+ccdad strategy manual
+ccdad status
+ccdad strategy headroom
 ```
 
 Manual mode leaves the engine running and stops it moving the live login.
@@ -715,7 +703,7 @@ Manual mode leaves the engine running and stops it moving the live login.
 Everything else keeps working, and that is the whole point of it. It polls on
 the same cadence, refreshes the OAuth grants, writes the usage cache and the
 history `ccdad runway` is measured from, derives hover's thresholds, and answers
-`ccdad status`, `ccdad list`, `ccdad runway` and the dashboard with exactly the
+`ccdad status`, `ccdad runway` and the dashboard with exactly the
 numbers it would without the mode.
 
 `ccdad switch <account>` still works and still sticks. This is a policy for the
@@ -725,25 +713,18 @@ about itself.
 **Use it instead of disabling every account.** Disabling reaches the same
 silence by emptying the ranking pool, and it takes a great deal with it: the
 probe that fills a window reporting no reset time stops, `ccdad runway` and the
-accounts-needed verdict measure nothing, plain `ccdad list` prints nothing
-without `--all`, and `ccdad auto --once` exits `4` forever. It also re-arms
+accounts-needed verdict measure nothing, and `ccdad auto --once` exits `4`
+forever. It also re-arms
 itself, because an account added later defaults to enabled. None of that happens
 here, and it is one command rather than one per account.
 
 `ccdad auto --once` exits `3` in this mode, not `4`. The world is already how
 you asked for it, and `4` is the code worth alerting on.
 
-Four places say the mode is on, because a fleet that has stopped switching must
-never look like one that is broken: a `Manual:` line in the `ccdad status`
-block, a note on `ccdad list`, a `manual-mode` row in `ccdad doctor` at `warn`,
-and one line in `daemon.log` when the mode changes. `ccdad manual status`
-answers `0` when it is on and `5` when it is off, so `ccdad manual status
->/dev/null || ccdad manual on` is correct.
-
-It composes with [hover](#ccdad-hover) rather than conflicting. Hover decides
-what the numbers are; manual decides whether ccdad acts on them. Watching
-hover's derived table while nothing moves is a reasonable way to decide whether
-to hand the wheel over.
+Status, doctor and the daemon log all say when manual is selected, because a
+fleet that has stopped switching must never look like one that is broken.
+Selecting any other strategy hands the wheel back; strategies are mutually
+exclusive.
 
 ### `ccdad runway`
 
@@ -850,13 +831,13 @@ the figure that notice matters most for, because `needed` counts accounts on
 the plan the fleet already has, which is not a well-defined unit on a fleet
 whose plans disagree.
 
-`ccdad status`, `ccdad list` and the terminal dashboard carry the same
+`ccdad status` and the terminal dashboard carry the same
 measurement as a single `Runway:` line, and print no line at all when there is
 no basis for one. That line picks up `· need 9 (4 more)` when the fleet is
 short and nothing when it holds: a fleet that holds has its answer in the word
 `holds`, and the spare count is worth a block and not a glance.
 
-`ccdad runway --json`, `ccdad status --json` and `ccdad list --json` publish the
+`ccdad runway --json` and `ccdad status --json` publish the
 identical object under `forecast`. Its `fleet` object always carries
 `accountsUsable` — a count of zero is a reading — and carries `accountsNeeded`
 with `accountsNeededBy` only when there was a basis to search from, absent
@@ -936,9 +917,9 @@ do it. With `--json` every non-zero answer carries a `reason`.
 
 ## The dashboard
 
-`ccdad tui` opens the interactive dashboard: the accounts, their quota, the
-daemon's own state, and a key for each of the things a reader of it does next.
-Bare `ccdad` opens the same thing when stdin and stdout are both a terminal.
+Bare `ccdad` opens the interactive dashboard when stdin and stdout are both a
+terminal. It shows the accounts, quota, selected strategy, current engine mode,
+runway, daemon state, and every available key command.
 
 | Key | What it does |
 |---|---|
@@ -946,7 +927,6 @@ Bare `ccdad` opens the same thing when stdin and stdout are both a terminal.
 | `s` | Switch the live login |
 | `d` | The daemon screen — `S` starts, `x` stops, `R` restarts, and the log tails |
 | `c` | Change the switching strategy |
-| `l` | Swap the table between what `ccdad status` shows and what `ccdad list` shows |
 | `q` | Quit (`ctrl+c` too) |
 
 `up`/`k` and `down`/`j` move, `r` reloads from disk, `esc` goes back, and `?`
@@ -963,9 +943,9 @@ sliding window and a dashboard that polled would let one burst saturate an
 account for a full hour.
 
 It is designed for 80×24 and gets narrower gracefully: columns drop out in a
-fixed order, and below 35 columns or 3 rows it says what it needs instead of
-drawing a page nobody can read. With stdout redirected it renders once and
-exits 0, so `ccdad tui > page.txt` is a snapshot rather than a hang.
+fixed order, while the complete key bar wraps onto as many rows as it needs.
+Below 35 columns or 3 rows it says what it needs instead of drawing a page
+nobody can read. Run `ccdad status` for a redirectable snapshot.
 
 It is in colour, and the frame, the gauges and the state markers are drawn
 with box-drawing characters. If yours shows boxes where those should be — a
@@ -1221,7 +1201,7 @@ file. It takes `strategy` and `probe_unknown` with them, and it forces
 `probe_unknown` back **on**: a window nothing has ever spent against reports no
 elapsed share, so hover has nothing to derive a threshold from until a turn wakes
 it. `credit.max_auto_spend` is the one number hover leaves alone, and
-[`ccdad hover`](#ccdad-hover) is the command that turns it on and shows every
+[`ccdad strategy`](#ccdad-strategy) is the command that turns it on, and status shows every
 number it chose.
 
 `mcp_switch_without_elicitation` is not an engine knob — it is the one key in
@@ -1238,22 +1218,22 @@ deriving it, because hover is a policy for the switching engine and a mode that
 supplied this one would be deciding that unattended also means unconfirmed.
 
 `tui.theme` and `tui.glyphs` are the other two keys here that govern a surface
-instead of the engine. They change what `ccdad tui`, bare `ccdad`, and the
-`status`, `list`, `doctor` and `daemon status` tables look like, and nothing
+instead of the engine. They change what bare `ccdad` and the `status`, `doctor`
+and `daemon status` tables look like, and nothing
 about which account gets switched to or when.
 
 `tui.theme` takes `auto`, `dark`, `light`, `ansi` or `none`, and defaults to
 `auto`. What `auto` resolves to depends on which surface is asking, and the
 split is deliberate rather than an inconsistency to route around.
 
-An owned `ccdad tui` — stdin and stdout both terminals — really does ask: it
+The dashboard — stdin and stdout both terminals — really does ask: it
 requests the background colour once, through bubbletea's own
 `tea.BackgroundColorMsg`, asynchronously, and keeps drawing with the dark
 default while the reply is in flight. A terminal that never answers just
 keeps that default; nothing in the dashboard blocks waiting for the question.
 
-`ccdad list`, `status`, `doctor`, `daemon status`, and `ccdad tui` with either
-stream redirected never ask at all — `auto` resolves straight to `dark`, full
+`ccdad status`, `doctor`, and `daemon status` never ask at all — `auto`
+resolves straight to `dark`, full
 stop. The reason is the query's cost, not a shortcut taken for its own sake:
 lipgloss's background probe runs against stdin and then against stdout, two
 seconds each with no guard for the two being the same file, so a terminal
@@ -1264,7 +1244,7 @@ sit in front of. A listing that would otherwise print in thirty milliseconds
 cannot, and caching the answer does not rescue it: each one-shot command is
 its own process, so a per-process cache is filled and thrown away inside the
 single invocation it was meant to amortise across. Measured against a silent
-pty: `ccdad list` cost 4.05s with the query still in place, 0.03s without it.
+pty: `ccdad status` cost 4.05s with the query still in place, 0.03s without it.
 Dark without asking is the only version of `auto` that keeps these commands
 at their ordinary speed.
 
@@ -1366,7 +1346,7 @@ from — are always taken from the window with the *least slack*, whichever fami
 it belongs to. So an account can be reported against its weekly cap and ranked
 on its five-hour one in the same pass, and `bindingWindow` need not name the
 one that decided where the account sits in the list. `ccdad status --json` and
-`ccdad list --json` publish `slack` and `windowThreshold` on each account's
+`ccdad status --json` publishes `slack` and `windowThreshold` on each account's
 `usage` object — the numbers the ordering was actually made on — and `ccdad auto
 --json` carries the same two on every row of its `order[]`. An account whose
 reading could not be taken carries neither, exactly as it carries no
@@ -1473,7 +1453,7 @@ absent only when nothing has ever been polled. In this mode it reads:
 ```console
 Daemon:  running  pid 48213  up 2h06m
 Active:  work@example.com (work)
-Mode:    recovery  (every account is over its threshold; empty accounts last, then soonest reset inside an hour, then slack)
+Current: recovery  (every account is over its threshold; empty accounts last, then soonest reset inside an hour, then slack)
 ```
 
 `ccdad status --json` carries the same answer as `mode`, and `ccdad auto --json`
@@ -1601,7 +1581,7 @@ self-limiting: sustaining it for an hour would take 60 points of movement inside
 15-point band, so it is a burst of about fifteen requests and then the account
 leaves the band on its own.
 
-`ccdad list --refresh` is deliberately not shortened either — the hand-held path
+`ccdad status --refresh` is deliberately not shortened either — the hand-held path
 serves any reading under 180 s old — so a scripted refresh cannot outrun the same
 allowance on the one account where a `429` costs most.
 
@@ -1633,7 +1613,7 @@ An account this machine does not own is neither rotated into nor polled on a
 cadence, and **an account added later belongs to another machine by default** —
 declaring a split once is meant to stay declared. Two things still work by name,
 because naming an account by hand says what you want more clearly than the split
-does: `ccdad switch` activates one, and `ccdad list --refresh` reads one.
+does: `ccdad switch` activates one, and `ccdad status --refresh` reads one.
 
 The live account is always polled even when another machine owns it. ccdad's
 thresholds, its anti-flap hysteresis and its pre-emptive switch are all statements
@@ -1679,13 +1659,13 @@ that could not be read is unknown — not spent, not empty — and because a pri
 seat is in the main pool, one it cannot read keeps the last-resort credit pool
 closed for everyone.
 
-`ccdad list` shows the flag as a suffix, `ccdad list --json`, `ccdad status
---json` and `ccdad which --json` carry `primary` on the account object, `ccdad
-export` carries it too so it survives a move between machines, and `ccdad doctor`
+`ccdad status` shows the flag as a suffix, while `ccdad status --json` and
+`ccdad which --json` carry `primary` on the account object. `ccdad export`
+carries it too so it survives a move between machines, and `ccdad doctor`
 names every account holding it — because "this account can spend money
 unattended" is not a fact that should live only in a file.
 
-`ccdad list --json` and `ccdad status --json` also carry a `usage.credit`
+`ccdad status --json` also carries a `usage.credit`
 object on any account whose latest reading had overage switched on — primary
 or not, since the axis is what the wire reported rather than something only a
 primary account can have:
@@ -1756,7 +1736,7 @@ setup token and an `sk-ant-api…` key are both stored **without** a
 skips the account on every poll and nothing ever produces a reading to rank it
 on. Such an account is stored, and it is usable as a credential, and it can
 **never be ranked**. A container provisioned that way has no auto-switching at
-all, which is the entire product, and nothing in `ccdad list` says so.
+all, which is the entire product, and nothing in `ccdad status` says so.
 
 Two things carry a rankable account, and they are not equivalent. The first is a
 login performed **inside** the container, below. The second is
@@ -1839,7 +1819,7 @@ or pipe it through `-`, and the container never has it on disk at all:
 
 ```sh
 ccdad export --full | docker run -i --rm \
-  -v ccdad-data:/data -e CCDAD_IMPORT=- ccdaddy ccdad list
+  -v ccdad-data:/data -e CCDAD_IMPORT=- ccdaddy ccdad status
 ```
 
 `ccdad bootstrap` is idempotent, so running it on every start is the intended
@@ -1938,18 +1918,17 @@ nothing failed and `1` when something did — a warning is not a failure — and
 | `2` | **Usage errors, and `ccdad run`'s refusals** — a bad flag, a bad combination, an unknown account, or a session `ccdad run` will not start because it would authenticate as something other than the account you named. `ccdad auto` and `ccdad switch` report that same displaced credential as `4`, because for them it is a blocked action rather than a command that cannot be run |
 | `3` | Understood, nothing to do (already on that account; daemon already stopped) |
 | `4` | Blocked: wanted to act, no viable target (everything exhausted, credit gate refused, or another OAuth source outranks the credentials file) |
-| `5` | A negative answer to a question, not a failure to answer it — no daemon running, nothing attributable, hover off when `ccdad hover status` asked. It has nothing to do with the `ccdad probe` command, which reports under the codes above like any other action |
+| `5` | A negative answer to a question, not a failure to answer it — no daemon running or nothing attributable. It has nothing to do with the `ccdad probe` command, which reports under the codes above like any other action |
 | `130` | SIGINT |
 
 `3` versus `4` is the actionability line — **alert on `4`, ignore `3`** — and
 `2` is kept exclusively for usage errors so a cron job can tell a typo from a
 no-op. `5` exists so `ccdad daemon status; [ $? -eq 5 ] && ccdad daemon start`
-and `ccdad hover status >/dev/null || ccdad hover on` are both safe: "no
-daemon" and "cannot determine whether there is a daemon" are different
+is safe: "no daemon" and "cannot determine whether there is a daemon" are different
 answers, and a supervisor that conflates them respawns forever on a filesystem
 where locks do not work.
 
-A closed pipe is not an error: `ccdad list --json | head -1` exits `0`.
+A closed pipe is not an error: `ccdad status --json | head -1` exits `0`.
 
 ### `--json`
 

@@ -26,19 +26,19 @@ func manualFleet(t *testing.T) {
 
 // ---- the command ------------------------------------------------------------
 
-func TestManualOnWritesTheKeyAndOffTakesItBack(t *testing.T) {
+func TestStrategyManualWritesTheKeyAndHeadroomTakesItBack(t *testing.T) {
 	manualFleet(t)
 
-	if code, _, _, _ := runRoot(t, "manual", "on"); code != ExitOK {
-		t.Fatalf("manual on exit %d, want 0", code)
+	if code, _, _, _ := runRoot(t, "strategy", "manual"); code != ExitOK {
+		t.Fatalf("strategy manual exit %d, want 0", code)
 	}
 	code, stdout, _, _ := runRoot(t, "config", "get", "manual")
 	if code != ExitOK || strings.TrimSpace(stdout) != "true" {
 		t.Fatalf("config get manual = %q (exit %d), want true", stdout, code)
 	}
 
-	if code, _, _, _ := runRoot(t, "manual", "off"); code != ExitOK {
-		t.Fatalf("manual off exit %d, want 0", code)
+	if code, _, _, _ := runRoot(t, "strategy", "headroom"); code != ExitOK {
+		t.Fatalf("strategy headroom exit %d, want 0", code)
 	}
 	code, stdout, _, _ = runRoot(t, "config", "get", "manual")
 	if code != ExitOK || strings.TrimSpace(stdout) != "false" {
@@ -48,45 +48,36 @@ func TestManualOnWritesTheKeyAndOffTakesItBack(t *testing.T) {
 
 // The exit contract: 3 is "the world is already how you asked for it", and it is
 // what makes `ccdad manual on` idempotent in a provisioning script.
-func TestManualOnTwiceIsNothingToDo(t *testing.T) {
+func TestStrategyManualTwiceIsNothingToDo(t *testing.T) {
 	manualFleet(t)
 
-	if code, _, _, _ := runRoot(t, "manual", "on"); code != ExitOK {
-		t.Fatalf("first manual on exit %d, want 0", code)
+	if code, _, _, _ := runRoot(t, "strategy", "manual"); code != ExitOK {
+		t.Fatalf("first strategy manual exit %d, want 0", code)
 	}
-	if code, _, _, _ := runRoot(t, "manual", "on"); code != ExitNothingToDo {
-		t.Errorf("second manual on exit %d, want %d", code, ExitNothingToDo)
+	if code, _, _, _ := runRoot(t, "strategy", "manual"); code != ExitNothingToDo {
+		t.Errorf("second strategy manual exit %d, want %d", code, ExitNothingToDo)
 	}
 }
 
-// status is a probe, so the mode being off is a negative answer rather than a
-// failure — which is what makes `ccdad manual status >/dev/null || ccdad manual
-// on` correct.
-func TestManualStatusProbesRatherThanFails(t *testing.T) {
+func TestStatusReportsTheSelectedManualStrategy(t *testing.T) {
 	manualFleet(t)
 
-	code, stdout, _, _ := runRoot(t, "manual", "status")
-	if code != ExitProbeNegative {
-		t.Errorf("manual status with the mode off exit %d, want %d", code, ExitProbeNegative)
-	}
-	if !strings.Contains(stdout, "off") {
-		t.Errorf("manual status does not say the mode is off:\n%s", stdout)
+	code, stdout, _, _ := runRoot(t, "status")
+	if code != ExitOK || !strings.Contains(stdout, "Strategy: headroom") {
+		t.Errorf("default status = exit %d:\n%s", code, stdout)
 	}
 
-	runRoot(t, "manual", "on")
-	code, stdout, _, _ = runRoot(t, "manual", "status")
-	if code != ExitOK {
-		t.Errorf("manual status with the mode on exit %d, want 0", code)
-	}
-	if !strings.Contains(stdout, "on") {
-		t.Errorf("manual status does not say the mode is on:\n%s", stdout)
+	runRoot(t, "strategy", "manual")
+	code, stdout, _, _ = runRoot(t, "status")
+	if code != ExitOK || !strings.Contains(stdout, "Strategy: manual") {
+		t.Errorf("manual status = exit %d:\n%s", code, stdout)
 	}
 }
 
 func TestManualRefusesAVerbItDoesNotHave(t *testing.T) {
 	manualFleet(t)
-	if code, _, _, _ := runRoot(t, "manual", "sometimes"); code != ExitUsage {
-		t.Errorf("manual sometimes exit %d, want %d", code, ExitUsage)
+	if code, _, _, _ := runRoot(t, "strategy", "sometimes"); code != ExitUsage {
+		t.Errorf("strategy sometimes exit %d, want %d", code, ExitUsage)
 	}
 }
 
@@ -99,34 +90,29 @@ func TestStatusNamesManualModeOnlyWhenItIsOn(t *testing.T) {
 	manualFleet(t)
 
 	_, stdout, _, _ := runRoot(t, "status")
-	if strings.Contains(stdout, "Manual:") {
+	if strings.Contains(stdout, "Strategy: manual") {
 		t.Errorf("the status block names manual mode while it is off:\n%s", stdout)
 	}
 
-	runRoot(t, "manual", "on")
+	runRoot(t, "strategy", "manual")
 	_, stdout, _, _ = runRoot(t, "status")
-	if !strings.Contains(stdout, "Manual:") {
+	if !strings.Contains(stdout, "Strategy: manual") {
 		t.Fatalf("the status block does not name manual mode:\n%s", stdout)
 	}
 	// The sentence a reader needs is not "ccdad has stopped" but "ccdad has
 	// stopped and you have not".
 	if !strings.Contains(stdout, "ccdad switch") {
-		t.Errorf("the Manual: line does not say that ccdad switch still works:\n%s", stdout)
+		t.Errorf("the Strategy line does not say that ccdad switch still works:\n%s", stdout)
 	}
 }
 
-func TestListNotesManualModeOnlyWhenItIsOn(t *testing.T) {
+func TestStatusCarriesNoSecondManualModeLine(t *testing.T) {
 	manualFleet(t)
 
-	_, _, stderr, _ := runRoot(t, "list")
-	if strings.Contains(stderr, "manual mode") {
-		t.Errorf("list notes manual mode while it is off:\n%s", stderr)
-	}
-
-	runRoot(t, "manual", "on")
-	_, _, stderr, _ = runRoot(t, "list")
-	if !strings.Contains(stderr, "manual mode is on") {
-		t.Errorf("list does not note manual mode:\n%s", stderr)
+	runRoot(t, "strategy", "manual")
+	_, stdout, stderr, _ := runRoot(t, "status")
+	if strings.Contains(stdout, "Manual:") || strings.Contains(stderr, "manual mode") {
+		t.Errorf("manual is duplicated outside Strategy:\nstdout=%s\nstderr=%s", stdout, stderr)
 	}
 }
 
@@ -135,7 +121,7 @@ func TestListNotesManualModeOnlyWhenItIsOn(t *testing.T) {
 func TestDoctorCarriesAManualModeRow(t *testing.T) {
 	manualFleet(t)
 
-	runRoot(t, "manual", "on")
+	runRoot(t, "strategy", "manual")
 	code, stdout, _, _ := runRoot(t, "doctor")
 	if !strings.Contains(stdout, "manual-mode") {
 		t.Fatalf("doctor has no manual-mode row:\n%s", stdout)
@@ -161,7 +147,7 @@ func TestAutoOnceStaysPutInManualMode(t *testing.T) {
 	twoAccountsOneBetter(t)
 	before := liveUUIDOf(t)
 
-	runRoot(t, "manual", "on")
+	runRoot(t, "strategy", "manual")
 	code, stdout, stderr, top := runRoot(t, "auto", "--once")
 	if code != ExitNothingToDo {
 		t.Fatalf("auto --once exit %d, want %d (staying put, not blocked)\n%s\n%s\n%s",

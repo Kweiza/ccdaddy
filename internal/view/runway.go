@@ -36,16 +36,83 @@ func Timestamp(t time.Time, loc *time.Location) string {
 	return t.In(loc).Format("2006-01-02 15:04 MST")
 }
 
+// CompactTimestamp is the dashboard's narrow absolute date: YYMMDD hh:mm.
+// The dashboard is local and interactive, so its space budget wins over the
+// zone suffix retained by the command-line and JSON forms.
+func CompactTimestamp(t time.Time, loc *time.Location) string {
+	if loc == nil {
+		loc = time.UTC
+	}
+	return t.In(loc).Format("060102 15:04")
+}
+
+// CompactRunwayLines is the terminal dashboard's vertical runway summary. The
+// command-line status keeps RunwayLine's compact horizontal form; a full-screen
+// page gives each axis and each supporting fact a row of its own.
+func CompactRunwayLines(f forecast.Fleet, now time.Time, loc *time.Location) []string {
+	if !f.Basis.Known {
+		return nil
+	}
+	parts := make([]string, 0, 5)
+	if seg, ok := compactFleetSegment(f, now, loc); ok {
+		parts = append(parts, seg)
+	}
+	parts = append(parts,
+		compactAxisSegment("5h", f.FiveHour, now, loc),
+		compactAxisSegment("7d", f.Weekly, now, loc),
+		runwayBasis(f),
+	)
+	if seg := RunwayNeedSegment(f); seg != "" {
+		parts = append(parts, seg)
+	}
+	return parts
+}
+
+func compactAxisSegment(label string, a forecast.Axis, now time.Time, loc *time.Location) string {
+	switch a.Verdict {
+	case forecast.VerdictRunsDry:
+		if !a.HasDryAt {
+			return label + " dry"
+		}
+		return fmt.Sprintf("%s dry %s (%s)", label, CompactTimestamp(a.DryAt, loc), HumanDuration(a.DryAt.Sub(now)))
+	case forecast.VerdictHolds:
+		return label + " holds"
+	default:
+		return label + " cannot tell yet"
+	}
+}
+
+func compactFleetSegment(f forecast.Fleet, now time.Time, loc *time.Location) (string, bool) {
+	holds := f.FiveHour.Verdict == forecast.VerdictHolds && f.Weekly.Verdict == forecast.VerdictHolds
+	switch f.Both.Verdict {
+	case forecast.VerdictRunsDry:
+		if !f.Both.HasDryAt {
+			return "", false
+		}
+		for _, a := range []forecast.Axis{f.FiveHour, f.Weekly} {
+			if a.Verdict == forecast.VerdictRunsDry && a.HasDryAt && !f.Both.DryAt.Before(a.DryAt) {
+				return "", false
+			}
+		}
+		return compactAxisSegment("5h+7d", f.Both, now, loc), true
+	case forecast.VerdictUnknown:
+		if holds {
+			return compactAxisSegment("5h+7d", f.Both, now, loc), true
+		}
+	}
+	return "", false
+}
+
 // runwaySep is what separates the clauses of the runway line. The spaces are
 // part of it: a middot with none reads as a decimal point at a glance, and this
-// line sits under Daemon:, Active: and Mode:, which are read at a glance.
+// line sits under Daemon:, Active: and Current:, which are read at a glance.
 const runwaySep = "  ·  "
 
-// RunwayLine is the one-line summary `ccdad status`, `ccdad list` and the
-// dashboard share, so one wording is spelled once rather than three times.
+// RunwayLine is the one-line summary `ccdad status` renders. The dashboard
+// uses the same verdict helpers in CompactRunwayLines.
 //
 // It returns "" when there is nothing to say, and that empty string is load
-// bearing: it is how all three callers know not to print a line at all, which
+// bearing: it is how both renderers know not to print a line at all, which
 // is what keeps the dashboard's byte-compared golden fixtures from moving on a
 // machine with no history behind it. A fleet with no basis gets no line, not a
 // line saying it holds -- a promise resting on no reading is the one output
@@ -558,7 +625,7 @@ func RunwayAccounts(f forecast.Fleet) string {
 //
 // A fleet that holds already has its answer in the word "holds", and the slack
 // it has on top of that is a block-level figure rather than a dashboard one: the
-// summary line is read at a glance beside Daemon:, Active: and Mode:, and a
+// summary line is read at a glance beside Daemon:, Active: and Current:, and a
 // clause spent on good news is a clause the short case needed. The full form,
 // spare count and all, is in RunwayAccounts.
 //
