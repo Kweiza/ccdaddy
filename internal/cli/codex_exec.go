@@ -11,9 +11,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spf13/cobra"
+
+	"github.com/Kweiza/ccdaddy/internal/ccpath"
+	"github.com/Kweiza/ccdaddy/internal/codexlaunch"
 	"github.com/Kweiza/ccdaddy/internal/codexproxy"
 	"github.com/Kweiza/ccdaddy/internal/config"
 	"github.com/Kweiza/ccdaddy/internal/daemon"
+	"github.com/Kweiza/ccdaddy/internal/store"
 )
 
 // codexProgramName is what PATH is searched for. It carries no extension:
@@ -326,4 +331,265 @@ func codexProxyForLaunch() (int, string) {
 		return 0, err.Error()
 	}
 	return port, ""
+}
+
+// codexProviderID is the model provider ccdad declares on the command line.
+//
+// Declared per launch and written into no file. codex's own config.toml is the
+// user's, a provider merged into it would outlive ccdad, and a codex started
+// from an editor would then pick the settings up with no ccdad there to serve
+// them -- a session that hangs on a dead port rather than one that falls back.
+const codexProviderID = "ccdad"
+
+// codexOverrides is the seven -c settings a routed launch carries.
+//
+// The first six declare one custom model provider and point codex at ccdad's
+// listener, and their EFFECT was measured rather than assumed: with exactly
+// these, codex sends only POST /responses; its bearer is the env_key's value;
+// it sends no chatgpt-account-id of its own, so the one the proxy adds is
+// authoritative; and it attempts no WebSocket, because supports_websockets is
+// absent and defaults off. `requires_openai_auth = false` is what stops codex
+// looking for an auth.json at all, which is why a routed session starts with no
+// login and needs none.
+//
+// The seventh is not about the provider. codex's default
+// shell_environment_policy inherits the WHOLE environment into every command
+// the agent runs, so without this line a prompt-injected `env` prints the
+// launch secret straight into the model's context. Excluding it does not make
+// the secret private -- a same-uid process can read the launcher's environment
+// either way -- it removes the one path that hands it to a model.
+//
+// There is no model pin here, deliberately: which model a session runs is the
+// user's business and codex's default, and ccdad pinning one would silently
+// override a `-c model=` the user typed.
+func codexOverrides(port int) []string {
+	return []string{
+		"-c", "model_provider=" + codexProviderID,
+		"-c", fmt.Sprintf("model_providers.%s.name=%q", codexProviderID, codexProviderID),
+		"-c", fmt.Sprintf("model_providers.%s.base_url=%q", codexProviderID,
+			fmt.Sprintf("http://127.0.0.1:%d", port)),
+		"-c", fmt.Sprintf("model_providers.%s.env_key=%q", codexProviderID, codexKeyEnv),
+		"-c", fmt.Sprintf("model_providers.%s.requires_openai_auth=false", codexProviderID),
+		"-c", fmt.Sprintf("model_providers.%s.wire_api=%q", codexProviderID, "responses"),
+		"-c", fmt.Sprintf("shell_environment_policy.exclude=[%q]", codexKeyEnv),
+	}
+}
+
+// codexLaunchOptions is what one launch is.
+type codexLaunchOptions struct {
+	// Pin is the account uuid this launch is bound to, or "" for a launch that
+	// follows the serving pointer. A pinned launch never falls back.
+	Pin string
+	// Args are everything codex is handed, verbatim.
+	Args []string
+}
+
+// runCodexLaunch is the whole launcher, shared by `ccdad codex exec` and
+// `ccdad run <codex-account>`.
+//
+// The eight steps are in order and each is load-bearing:
+//
+//  1. resolve the real codex, past ccdad's own shim.
+//  2. hand `login` and `logout` to it untouched.
+//  3. make sure a daemon exists, or say why one cannot be started here.
+//  4. prove the LISTENER, not the process.
+//  5. a pinned launch refuses if 3-4 failed; an unpinned one warns and runs.
+//  6. create the launch record and hold its lock.
+//  7. spawn codex with the overrides, the secret and the proxy exemption.
+//  8. release the lock and delete the record when the child ends.
+func runCodexLaunch(cmd *cobra.Command, opts codexLaunchOptions) error {
+	// 1.
+	path, err := codexBinary()
+	if err != nil {
+		return err
+	}
+
+	// 2. Both verbs REVOKE the stored grant server-side, with no undo. Routed
+	// through the proxy a logout would revoke a grant ccdad manages and take
+	// the account out of service for every session on the machine. They go to
+	// the real codex with no overrides and no key: an untouched codex talking
+	// to its own home, which ccdad neither reads nor writes.
+	if len(opts.Args) > 0 && (opts.Args[0] == "login" || opts.Args[0] == "logout") {
+		// A launcher can itself be running inside a routed session; the
+		// inherited key must not reach a codex ccdad is not routing.
+		return startCodex(cmd, path, opts.Args, unsetEnv(childEnv(), codexKeyEnv))
+	}
+
+	// 3 and 4.
+	port, reason := codexProxyForLaunch()
+	if reason != "" {
+		// 5. A launch that carries a pin NEVER falls back. The user named an
+		// account; running the session as whatever codex's own home holds would
+		// bill a different one and report success.
+		if opts.Pin != "" {
+			return UsageError("ccdad run %s needs the ccdad daemon and one cannot be started here: %s. "+
+				"Run it from a plain shell.", codexPinLabel(opts.Pin), reason)
+		}
+		// An unpinned launch runs codex anyway. Refusing would make a daemon
+		// that will not start mean no codex at all, which is worse than a
+		// session ccdad cannot see -- but it is said out loud, in several
+		// lines, because the failure is otherwise invisible: the session works,
+		// and it spends an account ccdad neither chose nor can measure.
+		fmt.Fprintf(cmd.ErrOrStderr(),
+			"ccdad: this codex session is NOT routed through ccdad.\n"+
+				"  why: %s\n"+
+				"  it spends whatever %s holds, which ccdad neither chose nor can see.\n"+
+				"  fix: run it from a plain shell, or start a daemon with `ccdad daemon start`.\n",
+			reason, codexOwnHome())
+		if root, rerr := ccpath.StoreHome(); rerr == nil {
+			// Discarded deliberately: a tally that could not be written is not
+			// a reason to refuse a launch the user is entitled to. The launcher
+			// has no other way to tell a daemon this happened -- there is no
+			// daemon to tell, which is why this branch was taken.
+			_ = codexlaunch.NoteUnrouted(root)
+		}
+		// A launcher can itself be running inside a routed session; the
+		// inherited key must not reach a codex ccdad is not routing.
+		return startCodex(cmd, path, opts.Args, unsetEnv(childEnv(), codexKeyEnv))
+	}
+
+	root, err := ccpath.StoreHome()
+	if err != nil {
+		return err
+	}
+	// 6.
+	launch, err := codexlaunch.Create(root, opts.Pin)
+	if err != nil {
+		return err
+	}
+	// 8, as a defer: the lock has to be released and both files deleted
+	// whatever the child did, including a panic. A record left behind with its
+	// lock released is not a security hole -- the proxy try-locks it and reaps
+	// it -- but it is a file per session on a machine nobody is watching.
+	defer func() {
+		if cerr := launch.Close(); cerr != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "note: this codex launch's record could not be removed (%v); "+
+				"the daemon sweeps it on its next tick.\n", cerr)
+		}
+	}()
+
+	// 7.
+	env := withNoProxyLoopback(setEnv(childEnv(), codexKeyEnv, launch.Secret()))
+	return startCodex(cmd, path, append(codexOverrides(port), opts.Args...), env)
+}
+
+// startCodex spawns codex, waits for it, and reports its status as ccdad's own.
+//
+// Spawn and wait rather than exec, and the launch record is the reason: it has
+// to be released and deleted when the child ends, and an exec'd process has no
+// "when the child ends". The stdio handles are the real files, so codex keeps
+// its terminal.
+//
+// The cmd.exe dance is `ccdad run`'s, for the same machine: an npm-installed
+// codex on Windows is a .cmd, and CreateProcessW runs a .cmd through cmd.exe,
+// which re-interprets `& | < > ^ % "` in any argument it is handed. Reading the
+// shim and launching its interpreter directly takes cmd.exe out of the picture;
+// a shim ccdad cannot read still goes through it, exactly as it did before, and
+// there an argument cmd.exe would eat is refused rather than mangled.
+func startCodex(cmd *cobra.Command, path string, args, env []string) error {
+	if cmdShimTarget(path) {
+		past, perr := launchPastShim(path)
+		bad := unsafeForCmdShim(args)
+		switch {
+		case perr == nil:
+			if bad != "" {
+				fmt.Fprintf(cmd.ErrOrStderr(), "note: %q would not survive %s, so ccdad is running %s directly.\n",
+					bad, shimBaseOf(path), shimBaseOf(past.path))
+			}
+			path, args = past.path, append(past.args, args...)
+			for _, kv := range past.env {
+				// A `#!/usr/bin/env FOO=bar node` shebang: the shim exports
+				// these before running anything, so a launch that goes past the
+				// shim has to carry them.
+				name, value, _ := strings.Cut(kv, "=")
+				env = setEnv(env, name, value)
+			}
+		case bad != "":
+			return UsageError("%s is a cmd.exe shim, and cmd.exe would re-interpret %q rather than pass "+
+				"it on. ccdad could not run its interpreter directly instead (%v); quote the argument "+
+				"differently, or install a native codex.exe", path, bad, perr)
+		default:
+			// A shim ccdad cannot read, carrying arguments cmd.exe handles
+			// correctly: the launch stays on the shim, which is what every
+			// working invocation on an unrecognised .cmd already does.
+		}
+	}
+	code, err := startChild(launchSpec{Path: path, Args: args, Env: env})
+	if err != nil {
+		return err
+	}
+	if code != ExitOK {
+		// The exit status is codex's, not ccdad's: this command is a runner,
+		// exactly as `ccdad run` is.
+		return WithCode(errSilent, code)
+	}
+	return nil
+}
+
+// codexPinLabel is how a refusal names the pinned account.
+//
+// The uuid is the fallback and not the answer: the user typed an alias or an
+// email, and a message naming a uuid asks them to go and look one up. A store
+// that cannot be opened is not worth failing the refusal over -- the refusal is
+// already the bad news.
+func codexPinLabel(uuid string) string {
+	s, err := store.Open()
+	if err != nil {
+		return uuid
+	}
+	if a, ok := s.Get(uuid); ok {
+		return a.Label()
+	}
+	return uuid
+}
+
+// codexOwnHome names the credential home an UNROUTED codex uses, for the banner
+// and for nothing else.
+//
+// ccdad never reads or writes it. This is the one place in the tree its name is
+// spoken, and it is spoken so the banner can say whose account is about to be
+// billed instead of ccdad's choice.
+func codexOwnHome() string {
+	if v := os.Getenv("CODEX_HOME"); v != "" {
+		return v
+	}
+	home, err := ccpath.Home()
+	if err != nil {
+		return "codex's own home"
+	}
+	return filepath.Join(home, ".codex")
+}
+
+func newCodexExecCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "exec [-- codex args…]",
+		Short: "Run codex through ccdad's local proxy",
+		Long: "exec starts the real codex with its API base pointed at the loopback proxy the\n" +
+			"ccdad daemon runs, so the session is billed to the account ccdad is serving and\n" +
+			"the next new thread follows a switch. codex holds no OAuth token of its own:\n" +
+			"ccdad owns the login, the refresh and the quota reading.\n\n" +
+			"This is what `~/.ccdad/bin/codex` runs, so `ccdad codex shim install` and then\n" +
+			"typing `codex` is the same thing. Run it by name on Windows, where there is no\n" +
+			"shim.\n\n" +
+			"Everything after `--` reaches codex verbatim. `login` and `logout` are handed\n" +
+			"to the real codex untouched, because both revoke a grant server-side and a\n" +
+			"routed one would revoke a grant ccdad manages.\n\n" +
+			"The exit status is codex's, not ccdad's: this command is a runner. A launch\n" +
+			"ccdad cannot route runs anyway and says so on stderr, because a daemon that\n" +
+			"will not start should not mean no codex at all.",
+		Args:          cobra.ArbitraryArgs,
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// args is handed on VERBATIM. pflag has already consumed the
+			// leading `--` as its own terminator -- measured, not assumed -- so
+			// stripping another here would eat a separator the user typed for
+			// codex.
+			return runCodexLaunch(cmd, codexLaunchOptions{Args: args})
+		},
+	}
+	// Everything after the separator must reach codex verbatim. Without this,
+	// cobra parses `-c` as its own and exits 2 before RunE.
+	cmd.Flags().SetInterspersed(false)
+	return cmd
 }
