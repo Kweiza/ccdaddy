@@ -1440,6 +1440,58 @@ func TestRunOnACodexAccountRefusesAnotherProgram(t *testing.T) {
 	}
 }
 
+// `codex login` and `codex logout` are the one tail that begins with `codex`
+// and still cannot be run as the named account: neither reads it, and both act
+// on codex's own home. `ccdad codex exec` hands them to the real codex because
+// the shim makes that command the machine's `codex`; a pinned launch has no
+// such invocation to keep working, so it refuses at exit 2 rather than spending
+// a login on a home the account has nothing to do with.
+//
+// The machine here is fully routed, so the refusal is about the verb and not
+// about a missing daemon -- which is what TestRunOnACodexAccountRefusesWhenThereIsNoProxy
+// covers.
+func TestRunOnACodexAccountRefusesTheLoginAndLogoutTails(t *testing.T) {
+	for _, verb := range []string{"login", "logout"} {
+		t.Run(verb, func(t *testing.T) {
+			isolate(t)
+			seedCodexAccount(t, "cx-run-5", "c@example.com")
+			stub, _ := routedWorld(t, ExitOK, nil)
+
+			code, _, errOut, top := runRoot(t, "run", "c@example.com", "--", "codex", verb)
+			if code != ExitUsage {
+				t.Fatalf("run on a codex account with a %s tail = %d, want %d\n%s\n%s",
+					verb, code, ExitUsage, errOut, top)
+			}
+			// The load-bearing half: a refusal that still started codex would
+			// have revoked the grant and then reported the refusal.
+			if stub.started {
+				t.Errorf("the refusal started codex anyway, as %q", stub.spec.Args)
+			}
+			said := errOut + top
+			if !strings.Contains(said, "c@example.com") {
+				t.Errorf("the refusal does not name the account:\n%s", said)
+			}
+			if !strings.Contains(said, "plain shell") || !strings.Contains(said, "ccdad codex add") {
+				t.Errorf("the refusal does not name both ways to do what was meant:\n%s", said)
+			}
+		})
+	}
+}
+
+// The help text and the behaviour, checked against each other. `run`'s Long
+// promises a launch that never falls back, and that promise is only true
+// because of the refusal above -- so a session that deletes one half has to
+// fail here rather than leave the other half lying.
+func TestRunsHelpSaysTheLoginTailsAreRefused(t *testing.T) {
+	long := newRunCmd().Long
+	for _, want := range []string{"codex login", "codex logout", "refused", "plain shell", "ccdad codex add"} {
+		if !strings.Contains(long, want) {
+			t.Errorf("`ccdad run` help does not mention %q, so it promises a carve-out it does not have:\n%s",
+				want, long)
+		}
+	}
+}
+
 // A PINNED launch never falls back. The user named an account; running the
 // session as whatever codex's own home holds would bill a different one and
 // report success. Exit 2, which is `ccdad run`'s contract for a refusal.

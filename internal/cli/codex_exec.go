@@ -390,7 +390,7 @@ type codexLaunchOptions struct {
 // The eight steps are in order and each is load-bearing:
 //
 //  1. resolve the real codex, past ccdad's own shim.
-//  2. hand `login` and `logout` to it untouched.
+//  2. hand `login` and `logout` to it untouched, unless the launch is pinned.
 //  3. make sure a daemon exists, or say why one cannot be started here.
 //  4. prove the LISTENER, not the process.
 //  5. a pinned launch refuses if 3-4 failed; an unpinned one warns and runs.
@@ -409,7 +409,24 @@ func runCodexLaunch(cmd *cobra.Command, opts codexLaunchOptions) error {
 	// the account out of service for every session on the machine. They go to
 	// the real codex with no overrides and no key: an untouched codex talking
 	// to its own home, which ccdad neither reads nor writes.
+	//
+	// A PINNED launch refuses them instead, and which invocation each surface
+	// stands for is the whole difference. `ccdad codex exec` is what the shim
+	// runs, so after `ccdad codex shim install` the word `codex` IS this
+	// command -- a carve-out is the only thing keeping `codex login` working on
+	// that machine, and there is no account in the invocation to contradict.
+	// Nothing rewrites anything into `ccdad run <acct>`: it is typed with an
+	// account named, and neither verb so much as reads that account. Both act
+	// on codex's own home, which is the fallback the pin exists to forbid, and
+	// the silent kind -- a login against the wrong home reports success.
 	if len(opts.Args) > 0 && (opts.Args[0] == "login" || opts.Args[0] == "logout") {
+		if opts.Pin != "" {
+			return UsageError("ccdad run %s cannot run `codex %s`: both act on codex's own home "+
+				"rather than on the named account, and logout revokes that grant server-side with "+
+				"no undo. Run `codex %s` from a plain shell if you mean codex's own home, or "+
+				"`ccdad codex add` for an account ccdad serves.",
+				codexPinLabel(opts.Pin), opts.Args[0], opts.Args[0])
+		}
 		// A launcher can itself be running inside a routed session; the
 		// inherited key must not reach a codex ccdad is not routing.
 		return startCodex(cmd, path, opts.Args, unsetEnv(childEnv(), codexKeyEnv))
