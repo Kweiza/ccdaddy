@@ -4,10 +4,6 @@ package tui
 
 import (
 	"fmt"
-	"time"
-
-	"charm.land/bubbles/v2/progress"
-	"charm.land/lipgloss/v2"
 
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 	"github.com/Kweiza/ccdaddy/internal/theme"
@@ -15,156 +11,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/view"
 )
 
-// newGauge is the ten-cell bar. Ten cells, so a full bar is ten characters and
-// one character is ten percent -- a scale a reader can count without a legend.
-//
-// The fill characters come from the glyph set rather than from here, and the
-// pair chosen for the Unicode set is a full block against a medium shade
-// because both are ambiguous-width: in east-asian mode they measure two columns
-// EACH, so a ten-cell bar is twenty columns at every fill level and the cell's
-// total does not move with the value. The obvious-looking alternative, a full
-// block against a light shade, is worse for exactly that reason and not for the
-// reason it looks worse: the shade is width-stable while the block is not, so
-// the same bar measures seventeen columns empty and twenty-seven columns full,
-// and a column that changes width with the number in it destroys the table
-// around it. The page never draws that pair anyway, because a process in
-// east-asian mode is handed the ASCII set, but the rule holds for whoever adds
-// the third one.
-//
-// The percentage is printed beside the bar rather than inside it, because
-// progress's own percentage would be styled by the library and this one has to
-// line up in a fixed-width column.
-//
-// progress.New defaults FullColor and EmptyColor to its own purple/gray pair
-// and paints them unconditionally -- there is no "no colour" Option, only
-// exported fields. lipgloss.NoColor{} is the library's own documented way to
-// say a role carries no colour, and it is what this constructor leaves them at:
-// the terminal's own foreground, which is the one colour a library default
-// could never have got right on a terminal nobody has measured.
-//
-// The page then overwrites both fields on its own COPY of this model, per row,
-// from gaugeRole and RoleGaugeEmpty -- a progress.Model is a value, and the
-// dashboard holds exactly one of them. That is why the pair is set here at all
-// rather than left at the library's default: a row whose palette answers
-// NoColor must fall back to a bar this constructor already made colourless,
-// not to a purple somebody else chose.
-func newGauge(g Glyphs) progress.Model {
-	p := progress.New(
-		progress.WithFillCharacters(g.GaugeFull, g.GaugeEmpty),
-		progress.WithoutPercentage(),
-		progress.WithWidth(10),
-	)
-	p.FullColor = lipgloss.NoColor{}
-	p.EmptyColor = lipgloss.NoColor{}
-	return p
-}
-
 const unreadable = view.Unreadable
-
-// usedCell mirrors the dashboard's USED column exactly. The gauge is built
-// INSIDE the Percent() arm and nowhere else: ViewAs takes a float64 with no
-// absence channel, so 0, a negative and a NaN all render as an empty bar, and
-// an unread account would be byte-identical to one at zero. That is the bug
-// that parked cswap's engine.
-//
-// Both absences return the bare "?" with no bracket and no bar. An empty
-// bracket pair is forbidden -- a bracket implies a reading.
-func usedCell(r view.Row, g progress.Model) string {
-	bw, ok := r.Reported()
-	if !ok {
-		return unreadable
-	}
-	pct, ok := bw.Percent()
-	if !ok {
-		return unreadable
-	}
-	return "[" + g.ViewAs(pct/100) + "] " + fmt.Sprintf("%3.0f%%", pct)
-}
-
-// usedCellCollapsed is USED at 4 columns instead of 17, for the rung of the
-// width ladder below 56 columns. It is the bare percentage and it keeps the
-// same two absences: a narrow terminal is not a reason to invent a number.
-func usedCellCollapsed(r view.Row) string { return r.UsedLabel() }
-
-// warnBand is how close to its threshold a row has to be before the bar turns
-// amber. Ten points, and it is a DISPLAY constant: nothing in this repository
-// decides anything by it, no engine reads it, and moving it changes the colour
-// of a bar and nothing else.
-//
-// It is deliberately NOT strategy's hysteresis_pct, which is the number a
-// reader reaches for first, and any one of these four objections is enough on
-// its own. hysteresis_pct is a PAIRWISE displacement margin -- how far a
-// candidate has to beat the ACTIVE account before the engine will move the
-// credential -- so it carries no information at all about one row's own
-// distance to breach. It is applied in exactly one place in the ranking and
-// nowhere near a row. Its defaulting substitutes ten for any value at or below
-// zero, so a user who deliberately set it to nothing would get a band they
-// never asked for. And under hover the engine does not read it at all -- which
-// is precisely the "the table says one thing and the engine does another"
-// failure a band on a dashboard exists to avoid.
-//
-// A named display constant claims only "close to the threshold", claims it in
-// its own name, and no engine number can drift away from it.
-const warnBand = 10.0
-
-// gaugeRole is the bar's colour.
-//
-// The emptiness clause is FIRST and it asks an ACCOUNT-level question rather
-// than a question about the window the bar happens to be drawing. A blown
-// five-hour window can never become a floor -- the floor rule requires a weekly
-// window -- so when a weekly binds on slack the reported window is the weekly
-// and the five-hour window with nothing left in it is invisible to any test
-// asked of the reported window. Reproduced against the tree: five-hour 100%
-// used at 95% elapsed, seven-day 40% used at 30% elapsed, the bar reads 40%,
-// and the daemon has already filed the account as empty. Painting that green is
-// the whole reason this clause runs ahead of the band.
-//
-// The band then reads the REPORTED window's slack and never the binding
-// window's, because the bar's LENGTH came from the reported window. An account
-// whose weekly floor is blown draws a full bar off the weekly while its binding
-// five-hour window still carries 3.667 points of slack, and a band fed the
-// binding number paints a dead account green under a bar that reads 100%.
-// Colour and length describe one window or they describe nothing.
-//
-// An account nobody could read takes RoleMuted rather than a gauge role.
-// Unknown is not empty, and the cell it lands in draws no bar at all -- the
-// bare question mark, with no bracket, because a bracket implies a reading --
-// so the absence is carried by there being nothing to paint, never by a bar.
-func gaugeRole(r view.Row) theme.Role {
-	if empty, known := r.Empty(); known && empty {
-		return theme.RoleGaugeOver
-	}
-	// The SECOND emptiness question, and it has to be here since 0.10.0.
-	//
-	// Row.Empty is an account verdict, and it now answers false for an account
-	// whose only blown window caps one model family — correctly, because that
-	// account can still serve every other model. The bar, though, is drawn from
-	// Reported(), and Reported() is that blown cap: the length says 100% while
-	// Empty says not empty, and the band below then colours it from the floor's
-	// slack. Under hover a threshold is an unclamped PACE TARGET, so a window
-	// far enough through its cycle with nothing left in it reports POSITIVE
-	// slack — measured on a live four-account fleet: +17, past warnBand, so
-	// RoleGaugeOK. A full bar drawn off a week that is gone, painted green.
-	//
-	// That is the exact failure the clause above exists to prevent, reached
-	// through the one door widening the account verdict opened. Colour answers
-	// for the window the bar DREW, which is what the paragraph above promises
-	// and what this restores.
-	if r.ReportedEmpty() {
-		return theme.RoleGaugeOver
-	}
-	slack, _, ok := r.ReportedSlack()
-	if !ok {
-		return theme.RoleMuted
-	}
-	switch {
-	case slack <= 0:
-		return theme.RoleGaugeOver
-	case slack <= warnBand:
-		return theme.RoleGaugeWarn
-	}
-	return theme.RoleGaugeOK
-}
 
 // cellRole is one window cell's colour, and it is the whole of what replaced
 // the gauge.
@@ -365,9 +212,6 @@ func spaces(n int) string {
 // (or, for idxCell, the one field the fixtures' IDX column shows), existing
 // so the column table has one shape: every cell this package draws is a
 // func(view.Row, ...) string, not a mix of methods and functions.
-func idxCell(r view.Row) string                   { return fmt.Sprintf("%d", r.Account.Idx) }
-func typeCell(r view.Row) string                  { return r.TypeLabel() }
-func windowCell(r view.Row) string                { return r.WindowLabelShort() }
-func resetsCell(r view.Row, now time.Time) string { return r.ResetsLabel(now) }
-func leftCell(r view.Row) string                  { return r.LeftLabel() }
-func tierCell(r view.Row) string                  { return r.TierLabel() }
+func idxCell(r view.Row) string  { return fmt.Sprintf("%d", r.Account.Idx) }
+func typeCell(r view.Row) string { return r.TypeLabel() }
+func tierCell(r view.Row) string { return r.TierLabel() }

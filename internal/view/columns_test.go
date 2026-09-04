@@ -239,3 +239,22 @@ func eq(a, b []string) bool {
 	}
 	return true
 }
+
+// The other half of the absence rule, and the half a fix for the first one can
+// break: ZERO IS A READING. An account at 0% used must render as a figure, or
+// "never say 0%" satisfies both halves and the table stops distinguishing them.
+//
+// This pair is cswap's parked engine in its newest home. There, one expired
+// token made every account look empty and the engine settled on whichever reset
+// last; here, a cell that read "-" or "0%" for an account nobody could reach
+// would say the same thing to a reader.
+func TestZeroPercentIsAReadingAndRendersAsOne(t *testing.T) {
+	r := fleetRow("a", 0, 40, nil, 0)
+	if got := r.WindowCell(usage.WindowFiveHour); got != "0%" {
+		t.Errorf("a window at 0%% used = %q, want 0%%", got)
+	}
+	unread := Row{}
+	if got := unread.WindowCell(usage.WindowFiveHour); got == "0%" {
+		t.Errorf("an unread row = %q; zero is a reading and this is not one", got)
+	}
+}

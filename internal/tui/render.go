@@ -9,7 +9,6 @@ import (
 	"sync"
 
 	"charm.land/bubbles/v2/help"
-	"charm.land/bubbles/v2/progress"
 	"charm.land/lipgloss/v2"
 	"charm.land/lipgloss/v2/table"
 	"github.com/charmbracelet/x/ansi"
@@ -50,7 +49,6 @@ type Model struct {
 	Height int
 	Cursor int // index into Snap.Rows
 	Top    int // first visible row, for the scrolling rung of the height ladder
-	Gauge  progress.Model
 	Help   help.Model
 	Keys   KeyMap
 	// Pal is the colour of every role on this page: the chrome, the header
@@ -93,7 +91,6 @@ func newModel(snap view.Snapshot, width, height int, pal theme.Palette, g Glyphs
 		Height: height,
 		Pal:    pal,
 		Glyphs: g,
-		Gauge:  newGauge(g),
 		Help:   newHelp(g.Cue, pal),
 		Keys:   DefaultKeys(),
 	}
