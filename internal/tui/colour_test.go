@@ -147,7 +147,7 @@ func TestAnUnreadAccountTakesNoGaugeRole(t *testing.T) {
 func TestTheStateColumnTakesTheRoleOfTheStateItPrints(t *testing.T) {
 	pal := theme.Of(theme.Dark)
 	shown := fixtureRows()
-	cols := []Column{ColIdx, ColAccount, ColState}
+	cols := []Column{col(ColIdx), col(ColAccount), col(ColState)}
 	const state = 2
 
 	for at, want := range map[int]theme.Role{
@@ -156,7 +156,7 @@ func TestTheStateColumnTakesTheRoleOfTheStateItPrints(t *testing.T) {
 		2: theme.RoleCandidate,
 		3: theme.RoleMuted,
 	} {
-		got := cellStyle(UnicodeGlyphs, pal, shown, cols, at, state, len(cols)-1).GetForeground()
+		got := cellStyle(UnicodeGlyphs, pal, shown, cols, testCols(), at, state, len(cols)-1).GetForeground()
 		if got != pal.Color(want) {
 			t.Errorf("row %d's STATE cell takes %v, want %v (%v)", at, got, pal.Color(want), want)
 		}
@@ -172,18 +172,18 @@ func TestTheStateColumnTakesTheRoleOfTheStateItPrints(t *testing.T) {
 // them is painted.
 func TestAMarkerRowIsMutedAndNotWhateverTheRowsAroundItAre(t *testing.T) {
 	pal := theme.Of(theme.Dark)
-	cols := []Column{ColIdx, ColAccount, ColState}
+	cols := []Column{col(ColIdx), col(ColAccount), col(ColState)}
 
 	// The scrolling marker: three rows shown, the marker at index 3.
 	for col := range cols {
-		got := cellStyle(UnicodeGlyphs, pal, fixtureRows()[:3], cols, 3, col, len(cols)-1).GetForeground()
+		got := cellStyle(UnicodeGlyphs, pal, fixtureRows()[:3], cols, testCols(), 3, col, len(cols)-1).GetForeground()
 		if got != pal.Color(theme.RoleMuted) {
 			t.Errorf("the +N-more marker's column %d takes %v, want RoleMuted", col, got)
 		}
 	}
 	// The empty-store marker: no rows shown at all, the marker at index 0.
 	for col := range cols {
-		got := cellStyle(UnicodeGlyphs, pal, nil, cols, 0, col, len(cols)-1).GetForeground()
+		got := cellStyle(UnicodeGlyphs, pal, nil, cols, testCols(), 0, col, len(cols)-1).GetForeground()
 		if got != pal.Color(theme.RoleMuted) {
 			t.Errorf("the no-accounts marker's column %d takes %v, want RoleMuted", col, got)
 		}
@@ -194,8 +194,8 @@ func TestAMarkerRowIsMutedAndNotWhateverTheRowsAroundItAre(t *testing.T) {
 // account, and they were already the one row cellStyle treated separately.
 func TestTheColumnHeadingsTakeTheHeaderRole(t *testing.T) {
 	pal := theme.Of(theme.Dark)
-	cols := []Column{ColIdx, ColAccount, ColState}
-	got := cellStyle(UnicodeGlyphs, pal, fixtureRows(), cols, table.HeaderRow, 0, len(cols)-1).GetForeground()
+	cols := []Column{col(ColIdx), col(ColAccount), col(ColState)}
+	got := cellStyle(UnicodeGlyphs, pal, fixtureRows(), cols, testCols(), table.HeaderRow, 0, len(cols)-1).GetForeground()
 	if got != pal.Color(theme.RoleHeader) {
 		t.Fatalf("the heading row takes %v, want RoleHeader", got)
 	}
@@ -204,10 +204,10 @@ func TestTheColumnHeadingsTakeTheHeaderRole(t *testing.T) {
 // The gaps are the width ladder's own arithmetic and a palette may not move
 // them: one column after IDX, two after every other, none after the last.
 func TestPaintingACellDoesNotMoveItsGap(t *testing.T) {
-	cols := []Column{ColIdx, ColAccount, ColState}
+	cols := []Column{col(ColIdx), col(ColAccount), col(ColState)}
 	for _, pal := range []theme.Palette{theme.Of(theme.None), theme.Of(theme.Dark)} {
 		for col, want := range map[int]int{0: 1, 1: 2, 2: 0} {
-			got := cellStyle(UnicodeGlyphs, pal, fixtureRows(), cols, 0, col, len(cols)-1).GetPaddingRight()
+			got := cellStyle(UnicodeGlyphs, pal, fixtureRows(), cols, testCols(), 0, col, len(cols)-1).GetPaddingRight()
 			if got != want {
 				t.Errorf("under %v, column %d pads %d, want %d", pal.Name(), col, got, want)
 			}
@@ -351,9 +351,12 @@ func TestEachRoleLandsOnTheCellItNames(t *testing.T) {
 		{"an exhausted row's state", open(theme.RoleExhausted) + m.Glyphs.Exhausted + " exhausted"},
 		{"a candidate row's state", open(theme.RoleCandidate) + m.Glyphs.Candidate + " candidate"},
 		{"an unread row's state", open(theme.RoleMuted) + m.Glyphs.Unknown + " unknown"},
-		{"a breached row's bar", "[" + open(theme.RoleGaugeOver)},
-		{"a roomy row's bar", "[" + open(theme.RoleGaugeOK)},
-		{"the unfilled track", open(theme.RoleGaugeEmpty)},
+		// The gauge is gone: it was seventeen columns of ONE window, and which
+		// window was the derivation this table stopped making. The row of
+		// percentages is the gauge now, read across, and the same three roles
+		// land on the cells instead of on a bar.
+		{"a spent window's cell", open(theme.RoleGaugeOver)},
+		{"a roomy window's cell", open(theme.RoleGaugeOK)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if !strings.Contains(page, tc.want) {

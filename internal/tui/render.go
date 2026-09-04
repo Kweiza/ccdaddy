@@ -39,7 +39,12 @@ import (
 // off a machine is read by whoever builds an Options and arrives already
 // answered.
 type Model struct {
-	Snap   view.Snapshot
+	Snap view.Snapshot
+	// Cols is the quota block this fleet needs: one column per window it
+	// carries, and one countdown per rollover. It comes from view.ColumnsOf,
+	// the same constructor the two CLI tables call, so no surface can grow a
+	// column the others do not have.
+	Cols   view.Columns
 	Set    ColumnSet
 	Width  int
 	Height int
@@ -76,8 +81,14 @@ type Model struct {
 // around them.
 func newModel(snap view.Snapshot, width, height int, pal theme.Palette, g Glyphs) Model {
 	return Model{
-		Snap:   snap,
-		Set:    SetStatus,
+		Snap: snap,
+		// The same constructor `ccdad list` and `ccdad status` call, on the
+		// same rows, so all three name the same windows in the same order under
+		// the same headers. Computed once per model rather than per frame: it
+		// is a function of the snapshot, and the snapshot does not change
+		// under a frame.
+		Cols:   view.ColumnsOf(snap.Rows),
+		Set:    SetFull,
 		Width:  width,
 		Height: height,
 		Pal:    pal,
@@ -228,7 +239,7 @@ func (m Model) Body() string {
 	// moves. Asking once also means the height budget and the page below it
 	// cannot disagree about whether there is a line.
 	runway := m.runwayLine()
-	l := Plan(m.Set, m.Width, m.Height, rows, len(m.Snap.Notices) > 0, runway != "")
+	l := Plan(m.Set, m.Cols, m.Width, m.Height, rows, len(m.Snap.Notices) > 0, runway != "")
 	if l.TooNarrow || l.TooShort {
 		return m.floors(l)
 	}
@@ -586,7 +597,7 @@ func (m Model) tableBlock(l Layout, inner int) []string {
 
 	headers := make([]string, len(cols))
 	for i, c := range cols {
-		headers[i] = headerName(c)
+		headers[i] = headerName(c, m.Cols)
 	}
 
 	data := make([][]string, 0, len(shown)+1)
@@ -596,7 +607,7 @@ func (m Model) tableBlock(l Layout, inner int) []string {
 			// The row's own index in Snap.Rows, not its index in the window:
 			// the cursor is a position in the table and the window is a view
 			// onto it, and the two differ by Top the moment scrolling starts.
-			cells[i] = m.cell(c, r, l, m.Top+at)
+			cells[i] = m.cell(c, r, l, m.Cols, m.Top+at)
 		}
 		data = append(data, cells)
 	}
@@ -622,7 +633,7 @@ func (m Model) tableBlock(l Layout, inner int) []string {
 		// so to the library as well.
 		Wrap(false).
 		StyleFunc(func(row, col int) lipgloss.Style {
-			return cellStyle(m.Glyphs, m.Pal, shown, cols, row, col, last)
+			return cellStyle(m.Glyphs, m.Pal, shown, cols, m.Cols, row, col, last)
 		}).
 		Headers(headers...).
 		Rows(data...)
@@ -665,16 +676,33 @@ func (m Model) tableBlock(l Layout, inner int) []string {
 // column carries the standard two, and the last carries none, so the table's
 // natural width is where the frame's padding starts rather than a column of
 // trailing space the frame then pads again.
-func cellStyle(g Glyphs, pal theme.Palette, shown []view.Row, cols []Column, row, col, last int) lipgloss.Style {
+func cellStyle(g Glyphs, pal theme.Palette, shown []view.Row, cols []Column,
+	block view.Columns, row, col, last int) lipgloss.Style {
+
 	st := lipgloss.NewStyle()
 	switch {
 	case row == table.HeaderRow:
 		st = pal.Style(theme.RoleHeader)
 	case row >= len(shown):
 		st = pal.Style(theme.RoleMuted)
-	case cols[col] == ColState:
+	case cols[col].Kind == ColState:
 		_, _, role := stateCell(g, shown[row].Engine.State)
 		st = pal.Style(role)
+	case cols[col].Kind == ColWindow:
+		// The row of percentages IS the gauge, read across, and this is what
+		// makes it one: each cell is coloured for its own window, against the
+		// threshold that window was measured with.
+		//
+		// A single bar could not survive the change. It was seventeen columns
+		// of one window, and which window was the derivation this table exists
+		// to stop making -- three windows would be fifty-one columns of bar, and
+		// one bar would be the derived window back again under a new name.
+		//
+		// The band is allowed HERE and refused on the two CLI tables, and the
+		// difference is the STATE column beside it: colour is never the only
+		// thing carrying a distinction, and on this page the account's verdict
+		// has a word of its own. Neither CLI table has one at any width.
+		st = pal.Style(cellRole(shown[row], block.Windows[cols[col].Win].Name))
 	}
 	switch col {
 	case last:
@@ -737,7 +765,7 @@ func (m Model) window(l Layout) (rows []view.Row, more int) {
 func (m Model) markerRow(cols []Column, l Layout, text string) []string {
 	cells := make([]string, len(cols))
 	for i, c := range cols {
-		if c == ColAccount {
+		if c.Kind == ColAccount {
 			cells[i] = accountCell(text, l.AccountWide, m.Glyphs.Cue)
 		}
 	}
@@ -753,39 +781,23 @@ func (m Model) markerRow(cols []Column, l Layout, text string) []string {
 // column a user reads immediately before pressing a hotkey that can move a
 // credential, and an alias-only label leaves someone who has aliased two
 // accounts unable to tell which address is which.
-func (m Model) cell(c Column, r view.Row, l Layout, at int) string {
-	switch c {
+func (m Model) cell(c Column, r view.Row, l Layout, cols view.Columns, at int) string {
+	switch c.Kind {
 	case ColIdx:
 		return m.markerCell(r, at) + " " + idxCell(r)
 	case ColAccount:
 		return accountCell(r.ListLabel(), l.AccountWide, m.Glyphs.Cue)
 	case ColType:
 		return typeCell(r)
-	case ColUsed:
-		if l.Collapsed {
-			return usedCellCollapsed(r)
-		}
-		// The gauge is coloured PER ROW, on a copy. Model.Gauge is one
-		// progress.Model built once by newModel and passed by VALUE, so
-		// assigning these two fields here cannot reach the next row -- and
-		// building a second progress.Model per row would be a second
-		// construction site for the fill characters and the width, which is the
-		// drift newGauge exists to prevent.
-		//
-		// This is the one place style goes INSIDE a cell string, and it is safe
-		// because it has to be: progress paints fill and empty as two separate
-		// Render calls, so the escapes are inside the cell by construction, and
-		// cellStyle applies one style to a whole cell and could not give the two
-		// halves different roles even if it wanted to. Both the table and the
-		// truncation below it measure ANSI-aware.
-		g := m.Gauge
-		g.FullColor = m.Pal.Color(gaugeRole(r))
-		g.EmptyColor = m.Pal.Color(theme.RoleGaugeEmpty)
-		return usedCell(r, g)
 	case ColWindow:
-		return windowCell(r)
-	case ColResets:
-		return resetsCell(r, m.Snap.Now)
+		return r.WindowCell(cols.Windows[c.Win].Name)
+	case ColReset:
+		return r.ResetCell(cols.Resets[c.Win], m.Snap.Now)
+	case ColWorst:
+		// The whole block in one cell, for a terminal too narrow to carry it.
+		// It names the window as well as the number, because a percentage with
+		// no window beside it is the thing this table stopped doing.
+		return worstCell(r, cols)
 	case ColState:
 		glyph, text, _ := stateCell(m.Glyphs, r.Engine.State)
 		if glyph == "" {
@@ -796,8 +808,8 @@ func (m Model) cell(c Column, r view.Row, l Layout, at int) string {
 		return autoCell(r)
 	case ColTier:
 		return tierCell(r)
-	case ColLeft:
-		return leftCell(r)
+	case ColAge:
+		return r.AgeLabel(m.Snap.Now)
 	}
 	return ""
 }
@@ -818,44 +830,32 @@ func (m Model) markerCell(r view.Row, at int) string {
 // columns with separate headings on purpose: `status` prints how much is
 // spent and `list` prints how much is left, and one heading carrying two
 // polarities is the drift the two tables have avoided since they were written.
-func headerName(c Column) string {
-	switch c {
+func headerName(c Column, cols view.Columns) string {
+	switch c.Kind {
 	case ColIdx:
 		return "IDX"
 	case ColAccount:
 		return "ACCOUNT"
 	case ColType:
 		return "TYPE"
-	case ColUsed:
-		return "USED"
+	case ColTier:
+		return "TIER"
 	case ColWindow:
-		return "WINDOW"
-	case ColResets:
-		return "RESETS IN"
+		return cols.Windows[c.Win].Header
+	case ColReset:
+		return cols.Resets[c.Win].Header
+	case ColWorst:
+		return "WORST"
 	case ColState:
 		return "STATE"
 	case ColAuto:
 		return "AUTO"
-	case ColTier:
-		return "TIER"
-	case ColLeft:
-		return "LEFT"
+	case ColAge:
+		return "AGE"
 	}
 	return ""
 }
 
-// truncateCue is truncate with a visible cue that something was cut. The keybar
-// already makes this argument for itself: an empty tail cuts a value with no
-// sign that anything is missing, and a reader then takes the remainder for the
-// whole.
-//
-// The cue arrives as an argument rather than being spelled here because there
-// is one cue on this page and it used to be written out at four sites that
-// could each be changed alone. Every set's cue is ASCII, and that is a rule
-// about WHERE this cut lands rather than about the binary: a cut is by
-// definition at a measured column boundary, and the character that would read
-// best there costs two columns on a machine whose width engine is in east-asian
-// mode.
 func truncateCue(s string, width int, cue string) string {
 	if width <= 0 {
 		return ""

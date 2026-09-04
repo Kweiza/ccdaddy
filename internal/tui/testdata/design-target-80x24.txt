@@ -9,11 +9,11 @@
 │                      -- 'Daddy' Daemon                                       │
 │                                                                              │
 │Active: work@example.com (work)  |  Strategy: headroom  |  Mode: headroom     │
-│IDX ACCOUNT               USED               RESETS IN  STATE        AUTO     │
-│* 1 work@example.com (..  [█████████▒]  87%  1h22m      ▪ active     yes      │
-│  2 enterprise@co.exam..  [██████████] 100%  5m         ✗ exhausted  no       │
-│  3 spare@example.com     [█████▒▒▒▒▒]  52%  4h11m      ◉ candidate  yes      │
-│  4 keyonly@example.co..  ?                  -          ◌ unknown    yes      │
+│IDX ACCOUNT               5H   7D OPUS  5H IN  7D OPUS IN  STATE              │
+│* 1 work@example.com (..  87%  -        1h22m  ?           ▪ active           │
+│  2 enterprise@co.exam..  -    100%     ?      5m          ✗ exhausted        │
+│  3 spare@example.com     52%  -        4h11m  ?           ◉ candidate        │
+│  4 keyonly@example.co..  ?    ?        ?      ?           ◌ unknown          │
 │                                                                              │
 │a add  s switch  d daemon  c strategy  q quit  l list      Daemon: not running│
 ╰──────────────────────────────────────────────────────────────────────────────╯

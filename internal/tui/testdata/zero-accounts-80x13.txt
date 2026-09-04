@@ -6,7 +6,7 @@
 │   ▀▄▄▄▄ ▀▄▄▄▄ ▀▄▄▄▀ ▀   ▀ ▀▄▄▄▀ ▀▄▄▄▀   ▀      ccdad v0.2.0                  │
 │                                                                              │
 │Active: work@example.com (work)  |  Strategy: headroom  |  Mode: headroom     │
-│IDX ACCOUNT               USED  RESETS IN  STATE  AUTO                        │
+│IDX ACCOUNT               5H  7D OPUS  5H IN  7D OPUS IN  STATE               │
 │    no accounts                                                               │
 │                                                                              │
 │a add  s switch  d daemon  c strategy  q quit  l list          Daemon: unknown│
