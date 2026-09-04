@@ -16,6 +16,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/cclock"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
+	"github.com/Kweiza/ccdaddy/internal/codexlaunch"
 	"github.com/Kweiza/ccdaddy/internal/config"
 	"github.com/Kweiza/ccdaddy/internal/history"
 	"github.com/Kweiza/ccdaddy/internal/identity"
@@ -2444,5 +2445,28 @@ func TestCreditIsSampledOnlyWhenItIsBothEnabledAndReadable(t *testing.T) {
 				t.Fatalf("Limit = %v, want 50 — the wire figure is in minor units", got.Credit.Limit)
 			}
 		})
+	}
+}
+
+// The launcher has no way to tell a daemon anything: it is a short-lived CLI
+// process, and the case it is reporting is the one where no daemon was running
+// to be told. It leaves a file behind instead, and Snapshot is where that file
+// is read -- the same place the release-check fields are overlaid, and for the
+// same reason: publish() replaces the status wholesale every tick, so a fact
+// that outlives one iteration cannot live in it.
+func TestSnapshotCarriesTheUnroutedLaunchesTheLauncherRecorded(t *testing.T) {
+	root := isolate(t)
+	e := NewEngine()
+
+	if got := e.Snapshot().CodexUnroutedLaunches; got != 0 {
+		t.Fatalf("CodexUnroutedLaunches = %d on a machine that has never had one, want 0", got)
+	}
+	for i := 0; i < 2; i++ {
+		if err := codexlaunch.NoteUnrouted(root); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := e.Snapshot().CodexUnroutedLaunches; got != 2 {
+		t.Errorf("CodexUnroutedLaunches = %d, want 2", got)
 	}
 }

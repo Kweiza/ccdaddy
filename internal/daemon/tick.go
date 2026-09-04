@@ -11,6 +11,7 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/codexauth"
+	"github.com/Kweiza/ccdaddy/internal/codexlaunch"
 	"github.com/Kweiza/ccdaddy/internal/codexproxy"
 	"github.com/Kweiza/ccdaddy/internal/codexusage"
 	"github.com/Kweiza/ccdaddy/internal/config"
@@ -421,6 +422,15 @@ func (e *Engine) Wait() { e.wg.Wait() }
 // last poll one tick late, forever. What the tick decided is a tick-scoped
 // fact; when an account was last reached is not.
 func (e *Engine) Snapshot() Status {
+	// Read BEFORE the lock. It is another process's file -- a codex launcher
+	// that could not reach a daemon -- so it is not engine state and holding
+	// the tick mutex across a filesystem read to fetch it would put an
+	// unrelated I/O wait in front of every other reader of this struct.
+	unrouted := 0
+	if root, err := storeRoot(); err == nil {
+		unrouted = codexlaunch.UnroutedCount(root)
+	}
+
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	out := e.status
@@ -450,6 +460,11 @@ func (e *Engine) Snapshot() Status {
 	out.NextUpdateCheckAt = e.nextUpdateCheckAt
 	out.UpdateLatest = e.updateLatest
 	out.UpdateCheckError = e.updateErr
+	// And the unrouted-launch tally, for the same reason and one more: the
+	// process that writes it is not this one. A codex launcher that could not
+	// reach a daemon leaves the count on disk, because there was no daemon to
+	// tell -- so this is the only place the number can enter the document.
+	out.CodexUnroutedLaunches = unrouted
 	return out
 }
 
