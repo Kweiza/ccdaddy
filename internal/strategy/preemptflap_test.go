@@ -25,8 +25,16 @@ import (
 // threshold than the live one is.
 func bestIsLive(interval time.Duration) []Candidate {
 	return []Candidate{
+		// Live: burning toward its five-hour limit, and still the roomiest
+		// thing here on the axis the ranking orders by.
 		polled(burning("a-live", 88), interval),
-		polled(burning("b-worse", 95), interval),
+		// Behind it on slack, and NOT itself about to run out -- which is what
+		// makes this pool able to tell the fix from the flap. A second account
+		// that were also projected out would be filtered by the rule's own
+		// "not itself running out" clause, and the walk would decline for a
+		// reason that has nothing to do with where it stops. No provenance, so
+		// the projection answers "cannot say" and the clause waves it through.
+		sub("b-worse", snap(win(5, 4*time.Hour), win(95, 48*time.Hour))),
 	}
 }
 
@@ -48,6 +56,22 @@ func TestTheControlPoolReachesThePreemptiveRule(t *testing.T) {
 	if len(res.Order) == 0 || res.Order[0].UUID != "a-live" {
 		t.Fatalf("Order = %v, want the live account first", order(res))
 	}
+	// The second account must NOT be filtered by the rule's own clauses, or
+	// this pool cannot tell "stopped at the live account" from "declined for
+	// another reason".
+	var worseRanked Ranked
+	for _, r := range res.Order {
+		if r.UUID == "b-worse" {
+			worseRanked = r
+		}
+	}
+	if empty, known := OutOfQuota(worseRanked.Headroom); known && empty {
+		t.Fatal("b-worse reads empty; the emptiness clause would decline it whatever this fix does")
+	}
+	if _, ok := preemptHorizon(byUUIDOf(cands)["b-worse"], o.PreemptLead); ok {
+		t.Fatal("b-worse has a horizon; without provenance the projection must answer \"cannot say\"")
+	}
+
 	// And the live account really is projected out inside its own blind
 	// interval, so the rule is reached rather than declining earlier for a
 	// reason that has nothing to do with the fix.
