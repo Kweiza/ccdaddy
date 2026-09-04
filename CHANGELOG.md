@@ -169,6 +169,31 @@ a codex process its launch secret are the next piece of work, so on this build t
 listener binds, answers its health route and forwards for a caller that already
 holds a secret, and no ccdad command hands one out.
 
+## [0.12.0] — 2026-09-04
+
+The release that gives switching strategy and operational status one command
+each, and makes the dashboard denser without hiding controls.
+
+### Added
+
+- **One strategy selector.** `ccdad strategy` now chooses exactly one of
+  `hover`, `manual`, `headroom`, or `consume-first`. The dashboard exposes the
+  same four choices.
+- **Five utilization colours.** Status and dashboard percentages progress
+  through blue, green, yellow, orange, and red bands from empty to full.
+
+### Changed
+
+- **One status surface.** `ccdad status` now includes the account table,
+  daemon state, selected strategy, current engine mode, runway, and hover's
+  per-window thresholds. The redundant `list`, `hover status`, and
+  `manual status` commands were removed along with the `hover`, `manual`, and
+  `tui` command groups. Bare `ccdad` remains the interactive dashboard.
+- **A denser dashboard.** Dates use `YYMMDD hh:mm`, runway axes render one per
+  line, and the full command key bar wraps instead of dropping actions. The
+  family art now shows two Claude children, two Codex children, and a more
+  distinct Daddy character.
+
 ## [0.11.0] — 2026-09-04
 
 The release that stops guessing which limit you meant, and stops the engine
@@ -3144,7 +3169,8 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/Kweiza/ccdaddy/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/Kweiza/ccdaddy/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/Kweiza/ccdaddy/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/Kweiza/ccdaddy/compare/v0.9.10...v0.10.0

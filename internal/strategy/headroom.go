@@ -19,7 +19,7 @@ type Headroom struct {
 	// Pct is 100 minus the binding window's utilization. It can go negative,
 	// and is kept that way: how far past its limit an account already is still
 	// orders it against other spent accounts. This is the DISPLAY axis, the one
-	// `ccdad list`'s LEFT column prints, and it asks the same question of every
+	// the engine's headroom projection prints, and it asks the same question of every
 	// window.
 	Pct float64
 	// Slack is the binding window's threshold minus its utilization, and it is
@@ -386,8 +386,8 @@ func HeadroomFor(s *usage.Snapshot, model string, t Thresholds) Headroom {
 		// It fires only when the window is empty, so no window with room left is
 		// touched and hover's pacing is unchanged everywhere it means anything.
 		// Threshold is still carried as the number the pace target actually was,
-		// so the two stop subtracting here -- which `ccdad hover status` already
-		// prints a footer about, for this very reason.
+		// so the two stop subtracting here -- which `ccdad status` explains in
+		// its hover footer.
 		if pct >= 100 && slack > 0 {
 			slack = 100 - pct
 		}
@@ -555,8 +555,8 @@ func ColdWindow(s *usage.Snapshot, model string, t Thresholds, now time.Time) (u
 // could land on METERED CREDITS rather than on quota already paid for.
 //
 // It is the one gate the warm-up loop shares with the credit gate's reasoning,
-// and it is here rather than in the daemon so that `ccdad hover status` refuses
-// on the same predicate it refuses on. Fully automatic must not become fully
+// and it is here rather than in the daemon so that reporting and scheduling
+// refuse on the same predicate. Fully automatic must not become fully
 // automatic SPENDING: the ceiling and the account's own overage switch are the
 // two independent opt-ins unattended overage requires, and a mode cannot supply
 // either on the user's behalf — least of all a mode whose whole job is to spend

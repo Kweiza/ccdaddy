@@ -13,7 +13,7 @@ import (
 // starts it by.
 //
 // It declares NO --json flag, and that silence is a decision rather than an
-// omission -- the same one `ccdad tui` makes, from the opposite direction. Its
+// omission -- the bare dashboard makes the mirror-image choice. Its
 // stdout carries the protocol, not a document, so the flag would promise four
 // contract rules it cannot satisfy. TestJSONContractCoversEveryJSONCommand
 // fires only for a command that declares the flag, which is why it stays

@@ -24,14 +24,14 @@ import (
 // command can simply read, and guessing it identically for every machine.
 //
 // That guess is now exactly what happens anyway, for every command except the
-// interactive dashboard. `ccdad list`, `status`, `doctor`, `daemon status`, and
-// a redirected `ccdad tui` all resolve `auto` to a defined dark palette without
+// interactive dashboard. `ccdad status`, `doctor`, `daemon status`, and a
+// redirected bare `ccdad` all resolve `auto` to a defined dark palette without
 // asking the terminal anything, because the ask costs four seconds on a
 // terminal that answers neither OSC 11 nor DA1, and a one-shot process cannot
 // amortise that cost the way a long-lived one can -- there is no second
 // invocation for a cache to save. internal/cli.resolvePalette and
 // internal/tui.DarkBackground are where that collapse happens, and it happens
-// there and not here on purpose. An owned `ccdad tui` still asks, once, through
+// there and not here on purpose. An owned bare `ccdad` still asks, once, through
 // bubbletea, and still gets the light terminal right that a load-time default
 // in this file never could; naming `dark` here would take that away from the
 // one surface that can still afford to be right, for nothing gained anywhere

@@ -13,7 +13,7 @@ import (
 // WHAT IT IS FOR. add writes a credential file before the document that names
 // it is saved, and rollback pays that back — but only from a return. A process
 // that never returns leaves the file with no account naming it, holding a live
-// refresh token at 0600, invisible to `ccdad list`, `ccdad remove` and every
+// refresh token at 0600, invisible to `ccdad status`, `ccdad remove` and every
 // account row `ccdad doctor` prints, because all of them read accounts.toml.
 // The ordinary way to reach that state is Ctrl-C partway through a
 // multi-account `ccdad import` or `ccdad bootstrap`.

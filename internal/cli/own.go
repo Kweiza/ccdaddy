@@ -25,7 +25,7 @@ import (
 // `ccdad switch` wants a fresh reading; an account another machine owns is never
 // polled on a cadence, because the reading spends a budget shared with whoever is
 // driving it and this machine can never rank it anyway. Disabled says something
-// about the account, so `ccdad list` explains it as a policy; Elsewhere says
+// about the account, so `ccdad status` explains it as a policy; Elsewhere says
 // something about this machine. And a partition is DECLARATIVE: an account added
 // later is somebody else's by default, where a machine partitioned by disabling
 // would silently start sharing every account added after the last disable.

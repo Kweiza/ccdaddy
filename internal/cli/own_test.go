@@ -125,7 +125,7 @@ func TestListMarksAnAccountAnotherMachineDrives(t *testing.T) {
 	if code, _, stderr, _ := runRoot(t, "own", "1"); code != ExitOK {
 		t.Fatalf("own = %d (%s), want 0", code, stderr)
 	}
-	_, stdout, _, _ := runRoot(t, "list")
+	_, stdout, _, _ := runRoot(t, "status")
 	if !strings.Contains(stdout, "another machine") {
 		t.Errorf("list does not say why two@example.com is never chosen:\n%s", stdout)
 	}

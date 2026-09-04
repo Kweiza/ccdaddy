@@ -98,7 +98,6 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newAddCmd())
 	root.AddCommand(newAddTokenCmd())
 	root.AddCommand(newWhichCmd())
-	root.AddCommand(newListCmd())
 	root.AddCommand(newSwitchCmd())
 	root.AddCommand(newRunCmd())
 	root.AddCommand(newProbeCmd())
@@ -112,10 +111,8 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newPrimaryCmd())
 	root.AddCommand(newStatusCmd())
 	root.AddCommand(newRunwayCmd())
-	root.AddCommand(newTuiCmd())
 	root.AddCommand(newConfigCmd())
-	root.AddCommand(newHoverCmd())
-	root.AddCommand(newManualCmd())
+	root.AddCommand(newStrategyCmd())
 	root.AddCommand(newExportCmd())
 	root.AddCommand(newImportCmd())
 	root.AddCommand(newBootstrapCmd())
@@ -218,7 +215,7 @@ func ExecuteWith(root *cobra.Command, errOut io.Writer) ExitCode {
 	if err == nil {
 		return ExitOK
 	}
-	// A closed stdout reader is not a failure: `ccdad list --json | head -1`
+	// A closed stdout reader is not a failure: `ccdad status --json | head -1`
 	// must exit 0. What that looks like is per-platform -- EPIPE here, two
 	// Windows error codes there -- so the predicate is build-tagged rather
 	// than an errno spelled inline.
@@ -256,8 +253,7 @@ func isUnknownCommand(err error) bool {
 // pipe is data nobody asked for, and one printed to a terminal whose stdin is a
 // file is the first half of a TUI that can never read a key.
 //
-// The interactive answer is `ccdad tui` itself, through runTui, and not a
-// second renderer that agrees with it today.
+// The interactive answer is the one dashboard entry point, through runTui.
 //
 // The non-interactive answer stays a usage ERROR, and that is what made handing
 // this slot to the dashboard a widening rather than a break: every release
@@ -283,7 +279,7 @@ func runBare(cmd *cobra.Command, args []string) error {
 			"bare `ccdad` opens the dashboard, which needs a terminal on stdin and stdout; name a command instead")
 	}
 	// See root.PersistentPreRun: this is the dashboard half of bare `ccdad`,
-	// and it auto-starts for exactly the reason `ccdad tui` does — the user is
+	// and it auto-starts because the user is
 	// looking at an engine that is not running.
 	autoStart(cmd)
 	return runTui(cmd, nil)

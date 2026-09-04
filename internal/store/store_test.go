@@ -888,7 +888,7 @@ func TestAccountsAtRefusesADamagedAccountsFile(t *testing.T) {
 //
 // A batch refused on the fourth of five accounts left the first three
 // credential files on disk with no accounts.toml naming them — each holding a
-// live refresh token, each invisible to `ccdad list`, `ccdad remove` and
+// live refresh token, each invisible to `ccdad status`, `ccdad remove` and
 // `ccdad doctor`, which all read the document.
 func TestAFailedTransactionRemovesTheCredentialFileItCreated(t *testing.T) {
 	dir := withStore(t)
@@ -1210,7 +1210,7 @@ func TestOrphanCredentialsAtWaitsOutAnInFlightAddRatherThanTearingItsRead(t *tes
 
 // The leak: a credential file a refused transaction left behind on a build
 // older than the rollback journal, holding a live refresh token at 0600 that
-// accounts.toml does not name. `ccdad list`, `ccdad remove` and doctor's
+// accounts.toml does not name. `ccdad status`, `ccdad remove` and doctor's
 // account rows all read the document, so an orphan is invisible to every one
 // of them, indefinitely.
 func TestOrphanCredentialsAtNamesACredentialFileNoAccountHas(t *testing.T) {

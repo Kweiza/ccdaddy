@@ -34,7 +34,7 @@ func HumanDuration(d time.Duration) string {
 // DaemonLine is the liveness line `ccdad status` prints at the top of the
 // dashboard. It is one of TWO wordings this repository ships, and the other is
 // DescribeRunning below. They are not merged: this one leads a nine-column
-// label field that the Active: and Mode: lines below it line up with, and the
+// label field that the Active: and Current: lines below it line up with, and the
 // other is a fragment that reads as the tail of a sentence.
 //
 // The default arm is DaemonUnknown and every future value. "Cannot tell" is
@@ -116,72 +116,52 @@ func DescribeRunning(report daemon.Report, now time.Time) string {
 	return line
 }
 
-// ModeLine is the ranking mode with the question it is asking. Recovery is the
+// CurrentLine is the ranking mode currently in force. Recovery is the
 // one a user needs told: the columns are identical to the ordinary case, so
 // nothing else on the dashboard distinguishes "the engine is ranking by soonest
 // reset because everything is spent" from "the engine has nothing to do".
 //
-// The label column is nine characters wide, matching the Daemon: and Active:
-// lines above it. No branch may contain the substring "exhaust": the human
+// The value begins after the `Current:` label and two spaces. No branch may
+// contain the substring "exhaust": the human
 // table keeps the projection to --json, and a mode line that used the word
 // would put it back on the page the projection was kept off.
 //
-// TestNoModeLineBranchSaysExhausted is what makes that red. It asks the
+// TestNoCurrentLineBranchSaysExhausted is what makes that red. It asks the
 // question twice -- by rendering every mode this binary declares plus one it
 // has never heard of, and by reading the branches below as source, so a case
 // written for a mode nothing yet passes in is covered too -- and it pins the
 // branch count, because a line added to a block without the test that covers
 // the block growing with it is how this rule came to be held by prose.
-func ModeLine(m strategy.Mode) string {
+func CurrentLine(m strategy.Mode) string {
 	switch m {
 	case strategy.ModeRecovery:
-		return "Mode:    recovery  (every account is over its threshold; empty accounts last, then soonest reset inside an hour, then slack)"
+		return "Current:  recovery  (every account is over its threshold; empty accounts last, then soonest reset inside an hour, then slack)"
 	case strategy.ModeConsumeFirst:
-		return "Mode:    consume-first  (spending perishable weekly quota before it expires)"
+		return "Current:  consume-first  (spending perishable weekly quota before it expires)"
 	default:
-		return "Mode:    headroom  (at least one account has room, or could not be read)"
+		return "Current:  headroom  (at least one account has room, or could not be read)"
 	}
 }
 
-// HoverLine is the dashboard's one line about the fully automatic mode, and it
-// is printed only when hover is ON.
-//
-// Absence is unambiguous here, which is what separates it from ModeLine: hover
-// off is the default and the configured numbers are then the ones in force,
-// whereas a missing Mode would have been defaulted to "headroom" -- a plausible
-// answer nobody computed. What it must not be is silent while hover IS on. The
-// Mode line reads "headroom" under hover because hover forced headroom, so a
-// reader who configured consume-first would otherwise see a mode they never
-// asked for with no reason for it anywhere on the page.
-//
-// It names 'ccdad hover status' rather than printing a number, because there is
-// no single number to print: hover derives one per account and per window. The
-// label column is nine characters wide, matching the Daemon:, Active: and Mode:
-// lines it stacks with.
-func HoverLine() string {
-	return "Hover:   on  (every threshold derived per account; 'ccdad hover status' prints the numbers in force)"
+// StrategyLine describes the one policy selected through `ccdad strategy`.
+func StrategyLine(name string) string {
+	switch name {
+	case "hover":
+		return "Strategy: hover  (thresholds are derived per account and window)"
+	case "manual":
+		return "Strategy: manual  (ccdad watches and never switches; 'ccdad switch <account>' still works)"
+	default:
+		return "Strategy: " + name
+	}
 }
 
-// ManualLine is the dashboard's one line about manual mode, printed only when
-// the mode is ON.
-//
-// It names `ccdad switch` in the same breath, because the sentence a reader
-// needs is not "ccdad has stopped" but "ccdad has stopped and you have not":
-// every table below this line is still current, and moving the login is still
-// one command. Without that half, a mode a user turned on last week reads as an
-// outage the first time they come back to a spent account.
-func ManualLine() string {
-	return "Manual:  on  (ccdad watches and never switches; 'ccdad switch <account>' still works)"
-}
-
-// WrapLabeled folds one line of the labelled block -- Daemon:, Active:, Hover:,
-// Manual:, Mode: -- onto width display columns, breaking at spaces and hanging every
+// WrapLabeled folds one line of the labelled block -- Daemon:, Active:,
+// Strategy:, Current: -- onto width display columns, breaking at spaces and hanging every
 // line after the first under the value.
 //
-// Measured on an 80-column terminal against a live fleet: Mode: is 124 display
-// columns in recovery and Hover: is 100 whenever hover is on, so the terminal
-// folded both wherever its own right edge fell -- mid-word, mid-clause,
-// sometimes inside a quoted command a reader was meant to type.
+// Current's recovery explanation is wider than an 80-column terminal, so an
+// unwrapped line folds wherever its own right edge falls -- mid-word or
+// mid-clause.
 //
 // It is a SEPARATE function from RunwayWrap, and the difference is not
 // duplication. These lines are prose and break at spaces; the runway line is a

@@ -48,6 +48,14 @@ func TestTimestampAlwaysCarriesItsZone(t *testing.T) {
 	}
 }
 
+func TestCompactTimestampUsesTwoDigitDateAndMinute(t *testing.T) {
+	at := time.Date(2026, 8, 27, 5, 10, 0, 0, time.UTC)
+	kst := time.FixedZone("KST", 9*3600)
+	if got, want := view.CompactTimestamp(at, kst), "260827 14:10"; got != want {
+		t.Errorf("CompactTimestamp() = %q, want %q", got, want)
+	}
+}
+
 // The line is how status, list and the dashboard all agree on one wording, and
 // the empty string is how all three know not to print anything at all. A
 // machine with no history behind it must produce nothing here: a line saying
@@ -441,15 +449,15 @@ func TestTheSummaryClauseIsCarriedOnlyByAShortFleet(t *testing.T) {
 	}
 }
 
-// The clause reaches status, list and the dashboard because it is part of the
-// one line all three render, and it sits LAST, after the basis.
+// The clause reaches status and the dashboard because it is part of the one
+// line both render, and it sits LAST, after the basis.
 //
 // That order is about the frame rather than about reading: the dashboard cuts
 // this line from the right, and at its 80-column design target a short fleet's
 // line is too long to fit, so the last clause is the one that goes. It must not
 // be the evidence -- a verdict with no basis beside it is the output this whole
 // measurement refuses to produce, and the dashboard prints the span nowhere
-// else. It is pinned there by TestTheRunwayLineKeepsItsBasisWhenTheFrameCutsIt
+// else. It is pinned there by TestTheRunwayRowsKeepTheirBasisVisible
 // in internal/tui, which renders the cut page; this asserts the bytes.
 func TestTheRunwayLineCarriesTheNeedOfAShortFleet(t *testing.T) {
 	now := time.Date(2026, 8, 24, 23, 10, 0, 0, time.UTC)
@@ -633,8 +641,8 @@ func TestTheSeparatorAFoldedLineEndsOnIsInsideTheMeasurement(t *testing.T) {
 
 // The runway line is not the only one in that block too wide for the terminal
 // it is read on. Measured on the same 80-column run that filed the runway
-// defect: Mode: 124 display columns, Hover: 100. They fold in the terminal for
-// the same reason and read badly for a different one -- these are prose, so a
+// defect: Current's recovery explanation is wider than 80 columns. It folds in
+// the terminal for the same reason and reads badly differently -- this is prose, so a
 // fold lands mid-sentence rather than mid-value.
 //
 // The two wraps are separate functions on purpose and this test is where that
@@ -643,7 +651,7 @@ func TestTheSeparatorAFoldedLineEndsOnIsInsideTheMeasurement(t *testing.T) {
 // not a place a break may land.
 func TestALabelledLineWrapsUnderItsOwnLabel(t *testing.T) {
 	const width = 80
-	line := "Mode:    recovery  (every account is over its threshold; empty accounts last, " +
+	line := "Current:  recovery  (every account is over its threshold; empty accounts last, " +
 		"then soonest reset inside an hour, then slack)"
 
 	got := view.WrapLabeled(line, width)
@@ -659,13 +667,13 @@ func TestALabelledLineWrapsUnderItsOwnLabel(t *testing.T) {
 			t.Errorf("line %d ends in whitespace, which is a fold the reader pays for twice: %q", i, l)
 		}
 	}
-	if !strings.HasPrefix(lines[0], "Mode:    ") {
+	if !strings.HasPrefix(lines[0], "Current:  ") {
 		t.Errorf("the label did not stay on the first line:\n%s", got)
 	}
-	// Nine columns: the label field Daemon:, Active:, Hover: and Mode: are all
-	// padded to. A continuation flush left reads as another label.
+	// Ten columns: `Current:` plus its two spaces. A continuation flush left
+	// reads as another label.
 	for i, l := range lines[1:] {
-		if !strings.HasPrefix(l, "         ") || strings.HasPrefix(l, "          ") {
+		if !strings.HasPrefix(l, "          ") || strings.HasPrefix(l, "           ") {
 			t.Errorf("continuation %d is not hung under the value: %q", i+1, l)
 		}
 	}
@@ -681,7 +689,7 @@ func TestALabelledLineWrapsUnderItsOwnLabel(t *testing.T) {
 // runway line's separator does. A wrapper that normalises whitespace loses that
 // distinction everywhere the line still fits.
 func TestALabelledWrapKeepsTheSpacingInsideALine(t *testing.T) {
-	line := "Mode:    consume-first  (spending perishable weekly quota before it expires)"
+	line := "Current:  consume-first  (spending perishable weekly quota before it expires)"
 	if got := view.WrapLabeled(line, 200); got != line {
 		t.Errorf("a line that fits was rewritten:\n\t%q", got)
 	}
@@ -711,7 +719,7 @@ func TestAWordWiderThanTheTerminalOverflowsRatherThanBeingCut(t *testing.T) {
 // to come out exactly as its builder spelled it. So does a terminal too narrow
 // to hold the label, where wrapping into no room produces a column of words.
 func TestAnUnknownWidthLeavesALabelledLineExactlyAsItWas(t *testing.T) {
-	line := "Hover:   on  (every threshold derived per account; 'ccdad hover status' prints the numbers in force)"
+	line := "Strategy: hover  (thresholds are derived per account and window)"
 	for _, width := range []int{0, -1, 9, 4} {
 		if got := view.WrapLabeled(line, width); got != line {
 			t.Errorf("WrapLabeled(width=%d) =\n\t%q\nwant\n\t%q", width, got, line)

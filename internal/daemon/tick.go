@@ -33,7 +33,7 @@ const defaultPollTimeout = 45 * time.Second
 
 // cacheTimeout bounds the wait for the usage cache's own lock. Every writer is
 // a sub-second read-modify-write; the contention is between poller goroutines
-// of this process and a `ccdad list --refresh` beside it.
+// of this process and a `ccdad status --refresh` beside it.
 const cacheTimeout = 5 * time.Second
 
 // stateTimeout bounds the wait for the engine state lock.
@@ -563,7 +563,7 @@ func (e *Engine) reportManualMode(on bool) {
 	}
 	if on {
 		e.logf("manual mode is on: polling and ranking continue, and nothing here will move the live login. " +
-			"'ccdad manual off' hands the wheel back; 'ccdad switch <account>' still works meanwhile")
+			"'ccdad strategy headroom' hands the wheel back; 'ccdad switch <account>' still works meanwhile")
 		return
 	}
 	if !first {
@@ -976,8 +976,8 @@ func due(e usage.Entry, has bool, now time.Time, live bool) bool {
 // the single window with the least slack, because that is the one the ranking
 // cares about — but a five-hour window can have a stopped clock beside a weekly
 // cap that binds tighter and has a running one of its own, and the five-hour
-// clock is the one whose lockout a warm-up shortens. `ccdad hover status` reads
-// the same ColdWindow and the same gate (strategy.HoverWindow.Warmup), so what
+// clock is the one whose lockout a warm-up shortens. The scheduler reads the
+// same ColdWindow and the same gate (strategy.HoverWindow.Warmup), so what
 // the table says is queued and what this fires on cannot drift.
 //
 // The live account is skipped, and that is the one exclusion worth spelling out.
@@ -1710,8 +1710,8 @@ func configuredThresholds(cfg config.Config) func(uuid string) strategy.Threshol
 // hoverThresholds is the one table this tick's dispatch, commit, probeDue and
 // publish all measure against.
 //
-// internal/cli/status.go's rowThresholds solves the identical problem for
-// rendering — route through the engine's own HoverPlan when hover is on,
+// The status renderer solves the identical problem through view.ThresholdsFor:
+// route through the engine's own HoverPlan when hover is on,
 // because hover divides the quota by a pool (usable, non-quarantined
 // accounts) that only a ranking pass knows — and this is the same fix for the
 // daemon's own scheduling and state-publishing paths, which had never made

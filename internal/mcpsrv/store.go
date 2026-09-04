@@ -48,7 +48,7 @@ func storeMutator() *mcp.ToolAnnotations {
 }
 
 type accountIn struct {
-	Account string `json:"account" jsonschema:"the account to enable or disable: a display index, an alias, an email address, or a uuid prefix of at least eight characters, as ccdad list shows them"`
+	Account string `json:"account" jsonschema:"the account to enable or disable: a display index, an alias, an email address, or a uuid prefix of at least eight characters, as ccdad status shows them"`
 }
 
 type aliasIn struct {

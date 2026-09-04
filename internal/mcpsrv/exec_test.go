@@ -43,15 +43,15 @@ func TestTheReadEnvelopeCarriesTheDocumentVerbatim(t *testing.T) {
 	doc := "{\n  \"schemaVersion\": 1,\n  \"accounts\": []\n}\n"
 	e := func(argv []string) (int, string, string) { return 0, doc, "" }
 
-	out, isErr := readResult(e, "list", "--json")
+	out, isErr := readResult(e, "status", "--json")
 	if isErr {
-		t.Fatalf("a clean list reported an error: %+v", out)
+		t.Fatalf("a clean status reported an error: %+v", out)
 	}
 	if out.Document != doc {
 		t.Errorf("Document = %q, want the exact bytes the command wrote", out.Document)
 	}
-	if out.Command != "ccdad list --json" {
-		t.Errorf("Command = %q, want the command line as the CLI would take it", out.Command)
+	if out.Command != "ccdad status --json" {
+		t.Errorf("Command = %q, want ccdad status --json", out.Command)
 	}
 }
 

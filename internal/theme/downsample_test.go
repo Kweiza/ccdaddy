@@ -28,12 +28,12 @@ var want256 = map[Name][numRoles]int{
 	Dark: {
 		RoleAccent: 210, RoleActive: 156, RoleCandidate: 81, RoleExhausted: 217,
 		RoleQuarantined: 184, RoleMuted: 188, RoleHeader: 231, RoleNotice: 229,
-		RoleGaugeOK: 79, RoleGaugeWarn: 214, RoleGaugeOver: 209, RoleGaugeEmpty: 254,
+		RoleGaugeCool: 111, RoleGaugeOK: 79, RoleGaugeWarn: 214, RoleGaugeHigh: 215, RoleGaugeOver: 209, RoleGaugeEmpty: 254,
 	},
 	Light: {
 		RoleAccent: 95, RoleActive: 22, RoleCandidate: 18, RoleExhausted: 52,
 		RoleQuarantined: 58, RoleMuted: 239, RoleHeader: 234, RoleNotice: 58,
-		RoleGaugeOK: 23, RoleGaugeWarn: 94, RoleGaugeOver: 88, RoleGaugeEmpty: 16,
+		RoleGaugeCool: 24, RoleGaugeOK: 23, RoleGaugeWarn: 94, RoleGaugeHigh: 130, RoleGaugeOver: 88, RoleGaugeEmpty: 16,
 	},
 }
 

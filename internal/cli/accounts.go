@@ -30,8 +30,7 @@ func newDisableCmd() *cobra.Command {
 		Long: "Hold an account out of automatic rotation.\n\n" +
 			"This is a policy for the auto engine, not a lock: 'ccdad switch <account>'\n" +
 			"still activates a disabled account, because naming one by hand says what you\n" +
-			"want more clearly than the flag does. 'ccdad list' hides it; 'ccdad list --all'\n" +
-			"shows it.",
+			"want more clearly than the flag does. 'ccdad status' keeps it visible and labels it.",
 		Args:          exactlyOneAccount("disable"),
 		SilenceUsage:  true,
 		SilenceErrors: true,

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/theme"
 	"github.com/Kweiza/ccdaddy/internal/view"
 )
@@ -80,23 +79,17 @@ func switchPicker(rows []view.Row, cursor int, g Glyphs) picker {
 	return p
 }
 
-// strategyPicker offers the strategies, built from the ranking package's own
-// list so a strategy added there cannot be forgotten here.
-//
-// Hover is not on this key. It is a separate boolean with its own command, and
-// folding it in would make one key write two settings. Nor is the engine Mode:
-// headroom, recovery and consume-first read like a set of three, but recovery
-// is an OUTCOME the ranking reports rather than a setting anyone chooses, and
-// offering it would let a user ask for a state instead of a policy.
+// strategyPicker mirrors the four choices of `ccdad strategy`. Recovery is not
+// one of them: it is a current engine outcome, not a policy a user selects.
 func strategyPicker(current string, g Glyphs) picker {
-	p := picker{title: "Rank accounts by which strategy?", current: -1, glyphs: g}
-	for i, name := range strategy.StrategyNames() {
+	p := picker{title: "Choose a switching strategy", current: -1, glyphs: g}
+	for i, name := range []string{"hover", "manual", "headroom", "consume-first"} {
 		if name == current {
 			p.current = i
 		}
 		p.items = append(p.items, pickerItem{
 			label: name,
-			argv:  []string{"config", "set", "strategy", name},
+			argv:  []string{"strategy", name},
 		})
 	}
 	p.cursor = clampCursor(p.current, len(p.items))

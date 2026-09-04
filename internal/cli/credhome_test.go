@@ -138,7 +138,7 @@ func TestAutoStartDoesNotSpawnIntoAClaimedCredentialHome(t *testing.T) {
 	f := stubDaemonWorld(t, &fakeDaemon{})
 	foreignClaim(t, "/other/ccdad")
 
-	if _, _, _, _ = runRoot(t, "list"); f.spawns != 0 {
+	if _, _, _, _ = runRoot(t, "status"); f.spawns != 0 {
 		t.Fatalf("auto-start spawned %d daemons into a credential home another store drives", f.spawns)
 	}
 }
@@ -151,7 +151,7 @@ func TestAutoStartStillSpawnsWhenTheClaimIsFree(t *testing.T) {
 	enableAutoStart(t)
 	f := stubDaemonWorld(t, &fakeDaemon{})
 
-	if _, _, _, _ = runRoot(t, "list"); f.spawns != 1 {
+	if _, _, _, _ = runRoot(t, "status"); f.spawns != 1 {
 		t.Fatalf("spawns = %d, want 1 — auto-start stopped working entirely", f.spawns)
 	}
 }
@@ -400,7 +400,7 @@ func TestAutoStartStillSpawnsWhenTheClaimCannotBeProbed(t *testing.T) {
 	})
 	t.Cleanup(restore)
 
-	if _, _, _, _ = runRoot(t, "list"); f.spawns != 1 {
+	if _, _, _, _ = runRoot(t, "status"); f.spawns != 1 {
 		t.Fatalf("spawns = %d, want 1 — an unanswerable probe is not a refusal", f.spawns)
 	}
 }

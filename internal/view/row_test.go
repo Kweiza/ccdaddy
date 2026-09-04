@@ -99,7 +99,7 @@ func TestACreditAccountsLeftLabelReadsTheCreditAxisRatherThanUnreadable(t *testi
 }
 
 // creditOnlyRow is an account metered in money and nothing else, built through
-// the same constructor `status` and `list` use so the wiring is under test and
+// the same constructor status and the TUI use so the wiring is under test and
 // not only the formatting. The numbers are a live claude_enterprise seat read
 // on 2026-08-26, in the minor units the wire carries.
 func creditOnlyRow(t *testing.T, utilization float64) Row {
@@ -127,8 +127,8 @@ func creditOnlyRow(t *testing.T, utilization float64) Row {
 // of the enterprise seat.
 //
 // Rows() derived every row's headroom from the window-only axis, so a seat with
-// no plan window rendered "?" in the USED column of `status`, of `list` and of
-// the TUI — while the engine, which reassigns exactly this seat onto the credit
+// no plan window rendered "?" in status and the TUI — while the engine, which
+// reassigns exactly this seat onto the credit
 // axis, was ranking it on a real percentage. The dashboard has to describe the
 // meter the account actually runs on.
 func TestASeatMeteredOnlyInMoneyStillReportsHowMuchItHasUsed(t *testing.T) {

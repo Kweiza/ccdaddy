@@ -54,19 +54,17 @@ func TestTheSwitchPickerStillOffersAnAccountHeldOutOfRotation(t *testing.T) {
 	}
 }
 
-// Two strategies, and only two. Hover is a separate boolean with its own
-// command and does not belong on this key; the engine Mode
-// (headroom/recovery/consume-first) is an OUTCOME rather than a setting and
-// appears only in the header line.
-func TestTheStrategyPickerOffersTwoValuesAndMarksTheCurrentOne(t *testing.T) {
+// The picker is the same four-choice surface as `ccdad strategy`. Recovery is
+// a current engine outcome, not a selectable policy.
+func TestTheStrategyPickerOffersFourValuesAndMarksTheCurrentOne(t *testing.T) {
 	p := strategyPicker("headroom", UnicodeGlyphs)
 	body := p.Body(60, theme.Of(theme.None))
-	for _, want := range []string{"headroom", "consume-first"} {
+	for _, want := range []string{"hover", "manual", "headroom", "consume-first"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the picker does not offer %q:\n%s", want, body)
 		}
 	}
-	for _, unwanted := range []string{"hover", "recovery"} {
+	for _, unwanted := range []string{"recovery"} {
 		if strings.Contains(body, unwanted) {
 			t.Errorf("the picker offers %q, which is not a strategy:\n%s", unwanted, body)
 		}
@@ -76,14 +74,12 @@ func TestTheStrategyPickerOffersTwoValuesAndMarksTheCurrentOne(t *testing.T) {
 	}
 }
 
-// The setting the picker writes is the one the config command reads, spelled
-// its way. A picker that ran an argv the tree does not answer to would report a
-// usage error for a key the dashboard offered.
-func TestTheStrategyPickerWritesThroughTheConfigCommand(t *testing.T) {
+// The picker writes through the one public strategy command.
+func TestTheStrategyPickerWritesThroughTheStrategyCommand(t *testing.T) {
 	p := strategyPicker("headroom", UnicodeGlyphs)
 	got := strings.Join(p.Move(1).Chosen(), " ")
-	if got != "config set strategy consume-first" {
-		t.Fatalf("Chosen() = %q, want the config command that owns this key", got)
+	if got != "strategy consume-first" {
+		t.Fatalf("Chosen() = %q, want the strategy command that owns this choice", got)
 	}
 }
 

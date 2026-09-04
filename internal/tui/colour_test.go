@@ -14,24 +14,8 @@ import (
 	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/theme"
-	"github.com/Kweiza/ccdaddy/internal/usage"
-	"github.com/Kweiza/ccdaddy/internal/view"
 )
-
-// headroomRow is a row with a reading and nothing else. gaugeRole is a pure
-// function of Empty() and ReportedSlack(); the first reads Headroom alone and
-// the second needs Reported() to resolve, which it does off the fixed five
-// windows whether or not any of them carries data. A row built any fuller
-// would be asserting on fields the band never touches.
-func headroomRow(h strategy.Headroom) view.Row {
-	return view.Row{
-		HasEntry: true,
-		Entry:    usage.Entry{Snapshot: &usage.Snapshot{}},
-		Headroom: h,
-	}
-}
 
 // The role style comes from the same call that produced the glyph and the word,
 // so a colour can never describe a different state than the text beside it.
@@ -250,7 +234,7 @@ func TestEachRoleLandsOnTheCellItNames(t *testing.T) {
 		// percentages is the gauge now, read across, and the same three roles
 		// land on the cells instead of on a bar.
 		{"a spent window's cell", open(theme.RoleGaugeOver)},
-		{"a roomy window's cell", open(theme.RoleGaugeOK)},
+		{"a middle window's cell", open(theme.RoleGaugeWarn)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if !strings.Contains(page, tc.want) {
@@ -279,7 +263,7 @@ func TestEachRoleLandsOnTheCellItNames(t *testing.T) {
 // shortest fixture that renders it and 80x13 would pin its absence.
 func TestTheNoticeLineIsPaintedAsANotice(t *testing.T) {
 	pal := theme.Of(theme.Dark)
-	m := darkModel(80, 20)
+	m := darkModel(80, 21)
 	m.Snap.Notices = []string{"hover thresholds could not be read"}
 	page := sgr(t, m.Body(), colorprofile.TrueColor)
 	if want := opener(pal, theme.RoleNotice) + "note: "; !strings.Contains(page, want) {

@@ -4,17 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/Kweiza/ccdaddy/internal/codexusage"
 	"net/http"
 	"os"
-	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/spf13/cobra"
 
+	"github.com/Kweiza/ccdaddy/internal/codexusage"
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 	"github.com/Kweiza/ccdaddy/internal/history"
 	"github.com/Kweiza/ccdaddy/internal/identity"
@@ -29,12 +29,12 @@ import (
 func TestListEmptyStoreExitsZeroWithTheNoticeOnStderr(t *testing.T) {
 	isolate(t)
 
-	code, out, errOut, top := runRoot(t, "list")
+	code, out, errOut, top := runRoot(t, "status")
 	if code != ExitOK {
 		t.Fatalf("exit = %d, want 0 for an empty store (%s)", code, top)
 	}
-	if out != "" {
-		t.Fatalf("stdout = %q, want empty: 'no accounts yet' is a notice, not data", out)
+	if !strings.Contains(out, "Daemon:") {
+		t.Fatalf("stdout = %q, want the daemon summary even when there are no accounts", out)
 	}
 	if !strings.Contains(errOut, "No accounts yet") {
 		t.Fatalf("stderr = %q, want the notice", errOut)
@@ -44,7 +44,7 @@ func TestListEmptyStoreExitsZeroWithTheNoticeOnStderr(t *testing.T) {
 func TestListEmptyStoreJSONIsOneDocument(t *testing.T) {
 	isolate(t)
 
-	code, out, errOut, _ := runRoot(t, "list", "--json")
+	code, out, errOut, _ := runRoot(t, "status", "--json")
 	if code != ExitOK {
 		t.Fatalf("exit = %d, want 0", code)
 	}
@@ -71,7 +71,7 @@ func TestListJSONCarriesSchemaVersionAndUUIDs(t *testing.T) {
 	isolate(t)
 	seedAccount(t, "u-1", "a@example.com")
 
-	code, out, _, top := runRoot(t, "list", "--json")
+	code, out, _, top := runRoot(t, "status", "--json")
 	if code != ExitOK {
 		t.Fatalf("exit = %d (%s), want 0", code, top)
 	}
@@ -94,13 +94,13 @@ func TestListJSONCarriesSchemaVersionAndUUIDs(t *testing.T) {
 	}
 }
 
-// The human table goes to stdout; nothing else may, or `ccdad list --json`
+// The human table goes to stdout; nothing else may, or `ccdad status --json`
 // would emit two documents.
 func TestListHumanOutputMentionsTheAccount(t *testing.T) {
 	isolate(t)
 	seedAccount(t, "u-1", "a@example.com")
 
-	code, out, _, top := runRoot(t, "list")
+	code, out, _, top := runRoot(t, "status")
 	if code != ExitOK {
 		t.Fatalf("exit = %d (%s), want 0", code, top)
 	}
@@ -109,24 +109,21 @@ func TestListHumanOutputMentionsTheAccount(t *testing.T) {
 	}
 }
 
-// A store whose accounts are all disabled must say so, not print a bare header
-// row with nothing under it.
+// Unified status keeps disabled accounts visible and labels why they are not
+// part of rotation.
 func TestListWithEveryAccountDisabledSaysSo(t *testing.T) {
 	isolate(t)
 	seedDisabledAccount(t, "u-1", "a@example.com")
 
-	code, out, errOut, top := runRoot(t, "list")
+	code, out, errOut, top := runRoot(t, "status")
 	if code != ExitOK {
 		t.Fatalf("exit = %d (%s), want 0", code, top)
 	}
-	if out != "" {
-		t.Fatalf("stdout = %q, want no table at all", out)
+	if !strings.Contains(out, "a@example.com") || !strings.Contains(out, "(disabled)") {
+		t.Fatalf("status does not show and label the disabled account:\n%s", out)
 	}
-	if !strings.Contains(errOut, "--all") {
-		t.Fatalf("stderr = %q, want it to point at --all", errOut)
-	}
-	if _, out, _, _ := runRoot(t, "list", "--all"); !strings.Contains(out, "a@example.com") {
-		t.Fatalf("list --all does not show the disabled account:\n%s", out)
+	if errOut != "" {
+		t.Fatalf("stderr = %q, want no hidden-account advice from unified status", errOut)
 	}
 }
 
@@ -141,17 +138,18 @@ func TestListMarksTheActiveAccount(t *testing.T) {
 		t.Fatalf("switch = %d (%s)", code, top)
 	}
 
-	_, out, _, _ := runRoot(t, "list")
+	_, out, _, _ := runRoot(t, "status")
 	for _, line := range strings.Split(out, "\n") {
-		if strings.Contains(line, "b@example.com") && !strings.HasPrefix(line, "*") {
+		fields := strings.Fields(ansi.Strip(line))
+		if strings.Contains(line, "b@example.com") && len(fields) >= 3 && fields[0] != "*" {
 			t.Fatalf("the live account is not marked:\n%s", out)
 		}
-		if strings.Contains(line, "a@example.com") && strings.HasPrefix(line, "*") {
+		if strings.Contains(line, "a@example.com") && len(fields) >= 3 && fields[0] == "*" {
 			t.Fatalf("a non-live account is marked:\n%s", out)
 		}
 	}
 
-	_, jsonOut, _, _ := runRoot(t, "list", "--json")
+	_, jsonOut, _, _ := runRoot(t, "status", "--json")
 	var payload struct {
 		ActiveUUID string `json:"activeUuid"`
 		Accounts   []struct {
@@ -197,7 +195,7 @@ func TestListShowsTheTypeAndTierOfEachAccount(t *testing.T) {
 	seedTieredAccount(t, "u-1", "a@example.com", identity.KindCredit, "claude_max")
 	seedTieredAccount(t, "u-2", "b@example.com", identity.KindSubscription, "")
 
-	_, out, _, top := runRoot(t, "list")
+	_, out, _, top := runRoot(t, "status")
 	if !strings.Contains(out, "TYPE") || !strings.Contains(out, "TIER") {
 		t.Fatalf("the header has no TYPE/TIER columns (%s):\n%s", top, out)
 	}
@@ -227,10 +225,9 @@ func rowFor(t *testing.T, out, label string) string {
 	return ""
 }
 
-// `list`'s usage columns. They read the same cache `status` reads, which is
-// what "`ccdad list` and `ccdad status --json` can never disagree" rests on,
-// and the binding window is the one with LEAST left rather than the first one
-// the response happened to carry.
+// Status usage columns read the same cache as its JSON form, and the binding
+// window is the one with LEAST left rather than the first one the response
+// happened to carry.
 // The row shows EVERY window the account carries, and derives none of them.
 // This replaces a test that asserted the opposite -- that only the binding
 // window reached the table -- which is the behaviour a reader could not tell
@@ -247,7 +244,7 @@ func TestListShowsEveryWindowTheAccountCarries(t *testing.T) {
 		},
 	})
 
-	_, out, _, top := runRoot(t, "list")
+	_, out, _, top := runRoot(t, "status")
 	row := rowFor(t, out, "a@example.com")
 	// Both windows, as USED, and both rollovers. Neither is chosen over the
 	// other and neither is 100 minus the other.
@@ -272,7 +269,7 @@ func TestListRendersAnUnreadableAccountAsAQuestionMark(t *testing.T) {
 	freezeClock(t, listNow)
 	seedAccount(t, "u-1", "a@example.com")
 
-	_, out, _, _ := runRoot(t, "list")
+	_, out, _, _ := runRoot(t, "status")
 	row := rowFor(t, out, "a@example.com")
 	if !strings.Contains(row, "?") {
 		t.Errorf("an account with no reading does not render '?':\n%s", row)
@@ -305,7 +302,7 @@ func TestListShowsRemainingCreditWhenBothFiguresAreKnown(t *testing.T) {
 	// The balance is a line under the table rather than a cell in it: money is
 	// not commensurable with a percentage, and a column of one cannot carry the
 	// other. What matters is that it is still printed and still exact.
-	_, out, _, top := runRoot(t, "list")
+	_, out, _, top := runRoot(t, "status")
 	if !strings.Contains(out, "74.50") {
 		t.Errorf("the listing does not carry the remaining amount ($100 cap - $25.50 spent) (%s):\n%s", top, out)
 	}
@@ -332,42 +329,12 @@ func TestListShowsCreditUsedWithNoAccountLimit(t *testing.T) {
 		},
 	})
 
-	_, out, _, _ := runRoot(t, "list")
+	_, out, _, _ := runRoot(t, "status")
 	if !strings.Contains(out, "5.00 used") {
 		t.Errorf("the listing does not carry the used amount:\n%s", out)
 	}
 	if !strings.Contains(out, "no account limit") {
 		t.Errorf("the listing does not say there is no account limit:\n%s", out)
-	}
-}
-
-// `ccdad list` and `ccdad status --json` can never disagree. The strongest form
-// of that is the one asserted here — the two commands emit the SAME usage
-// object, because they build it from the same cache through the same code.
-func TestListJSONCarriesTheSameUsageObjectStatusDoes(t *testing.T) {
-	isolate(t)
-	freezeClock(t, listNow)
-	stubDaemon(t, daemon.Report{}, nil)
-	seedAccount(t, "u-1", "a@example.com")
-	seedUsageEntry(t, "u-1", usage.Entry{
-		FetchedAt: listNow.Add(-90 * time.Second),
-		Snapshot: &usage.Snapshot{
-			FiveHour: window(20, listNow.Add(30*time.Minute)),
-			SevenDay: window(62, listNow.Add(2*time.Hour+14*time.Minute)),
-		},
-	})
-
-	_, listOut, _, _ := runRoot(t, "list", "--json")
-	_, statusOut, _, _ := runRoot(t, "status", "--json")
-
-	fromList := accountRow(t, statusJSON(t, listOut), "u-1")["usage"]
-	fromStatus := accountRow(t, statusJSON(t, statusOut), "u-1")["usage"]
-	if fromList == nil {
-		t.Fatalf("list --json carries no usage object:\n%s", listOut)
-	}
-	if !reflect.DeepEqual(fromList, fromStatus) {
-		t.Fatalf("list and status describe one reading two ways:\nlist:   %v\nstatus: %v",
-			fromList, fromStatus)
 	}
 }
 
@@ -379,7 +346,7 @@ func TestListJSONOmitsUsageForAnAccountWithNoReading(t *testing.T) {
 	freezeClock(t, listNow)
 	seedAccount(t, "u-1", "a@example.com")
 
-	_, out, _, _ := runRoot(t, "list", "--json")
+	_, out, _, _ := runRoot(t, "status", "--json")
 	if row := accountRow(t, statusJSON(t, out), "u-1"); row["usage"] != nil {
 		t.Fatalf("usage = %v, want the key absent when there is no reading", row["usage"])
 	}
@@ -404,7 +371,7 @@ func TestListJSONCarriesTheCreditAxisWhenAReadingHasOne(t *testing.T) {
 		},
 	})
 
-	_, out, _, _ := runRoot(t, "list", "--json")
+	_, out, _, _ := runRoot(t, "status", "--json")
 	usageObj, _ := accountRow(t, statusJSON(t, out), "u-1")["usage"].(map[string]any)
 	credit, _ := usageObj["credit"].(map[string]any)
 	if credit == nil {
@@ -432,7 +399,7 @@ func TestListJSONOmitsCreditWhenTheReadingHasNone(t *testing.T) {
 		Snapshot:  &usage.Snapshot{FiveHour: window(20, listNow.Add(30*time.Minute))},
 	})
 
-	_, out, _, _ := runRoot(t, "list", "--json")
+	_, out, _, _ := runRoot(t, "status", "--json")
 	usageObj, _ := accountRow(t, statusJSON(t, out), "u-1")["usage"].(map[string]any)
 	if credit, ok := usageObj["credit"]; ok {
 		t.Fatalf("usage.credit = %v, want the key absent when the reading carried no extra_usage", credit)
@@ -450,7 +417,7 @@ func TestListShowsBothTheEmailAndTheAlias(t *testing.T) {
 		t.Fatalf("alias = %d (%s)", code, top)
 	}
 
-	_, out, _, _ := runRoot(t, "list")
+	_, out, _, _ := runRoot(t, "status")
 	row := rowFor(t, out, "a@example.com")
 	if !strings.Contains(row, "work") {
 		t.Fatalf("the ACCOUNT column carries only one of the address and the alias:\n%s", row)
@@ -504,7 +471,7 @@ func TestListRefreshFetchesAndShowsTheFreshReading(t *testing.T) {
 		return snapshotUsing(now, 25), nil
 	})
 
-	code, out, _, top := runRoot(t, "list", "--refresh")
+	code, out, _, top := runRoot(t, "status", "--refresh")
 	if code != ExitOK {
 		t.Fatalf("exit = %d (%s), want 0", code, top)
 	}
@@ -531,7 +498,7 @@ func TestListWithoutRefreshNeverFetches(t *testing.T) {
 		return snapshotUsing(now, 25), nil
 	})
 
-	runRoot(t, "list")
+	runRoot(t, "status")
 	if calls.Load() != 0 {
 		t.Fatalf("fetches = %d, want 0 — `list` fetched without being asked", calls.Load())
 	}
@@ -549,9 +516,9 @@ func TestListRefreshInsideTheServeTTLMakesNoSecondRequest(t *testing.T) {
 		return snapshotUsing(now, 25), nil
 	})
 
-	runRoot(t, "list", "--refresh")
+	runRoot(t, "status", "--refresh")
 	now = listNow.Add(pollpolicy.ServeTTL - time.Second)
-	_, _, errOut, _ := runRoot(t, "list", "--refresh")
+	_, _, errOut, _ := runRoot(t, "status", "--refresh")
 	if calls.Load() != 1 {
 		t.Fatalf("fetches = %d, want 1 — the second --refresh re-fetched inside the TTL", calls.Load())
 	}
@@ -560,7 +527,7 @@ func TestListRefreshInsideTheServeTTLMakesNoSecondRequest(t *testing.T) {
 	}
 
 	now = listNow.Add(pollpolicy.ServeTTL)
-	runRoot(t, "list", "--refresh")
+	runRoot(t, "status", "--refresh")
 	if calls.Load() != 2 {
 		t.Fatalf("fetches = %d, want 2 once the TTL has elapsed", calls.Load())
 	}
@@ -576,10 +543,10 @@ func TestListRefreshHonoursThePost429FloorAndSaysSo(t *testing.T) {
 		return nil, &usage.StatusError{Status: 429}
 	})
 
-	runRoot(t, "list", "--refresh")
+	runRoot(t, "status", "--refresh")
 	now = listNow.Add(pollpolicy.ServeTTL + time.Minute)
 
-	code, _, errOut, top := runRoot(t, "list", "--refresh")
+	code, _, errOut, top := runRoot(t, "status", "--refresh")
 	if code != ExitOK {
 		t.Fatalf("exit = %d (%s), want 0 — the listing still rendered", code, top)
 	}
@@ -606,7 +573,7 @@ func TestListRefreshJSONIsStillOneDocument(t *testing.T) {
 		return nil, errors.New("the endpoint is having a bad day")
 	})
 
-	code, out, errOut, top := runRoot(t, "list", "--refresh", "--json")
+	code, out, errOut, top := runRoot(t, "status", "--refresh", "--json")
 	if code != ExitOK {
 		t.Fatalf("exit = %d (%s), want 0", code, top)
 	}
@@ -625,7 +592,7 @@ func TestListRefreshJSONIsStillOneDocument(t *testing.T) {
 
 // --refresh spends a rate-limited, per-identity allowance, so it spends it on
 // the rows it is about to print and on no others.
-func TestListRefreshLeavesDisabledAccountsAloneUnlessAllIsAsked(t *testing.T) {
+func TestStatusRefreshLeavesDisabledAccountsAlone(t *testing.T) {
 	isolate(t)
 	now := listNow
 	movableClock(t, &now)
@@ -635,15 +602,15 @@ func TestListRefreshLeavesDisabledAccountsAloneUnlessAllIsAsked(t *testing.T) {
 		return snapshotUsing(now, 25), nil
 	})
 
-	runRoot(t, "list", "--refresh")
+	runRoot(t, "status", "--refresh")
 	if calls.Load() != 1 {
 		t.Fatalf("fetches = %d, want 1 — the disabled account is not on the listing", calls.Load())
 	}
 
 	now = listNow.Add(pollpolicy.ServeTTL)
-	runRoot(t, "list", "--all", "--refresh")
-	if calls.Load() != 3 {
-		t.Fatalf("fetches = %d, want 3 — --all puts the disabled account back on the listing", calls.Load())
+	runRoot(t, "status", "--refresh")
+	if calls.Load() != 2 {
+		t.Fatalf("fetches = %d, want the enabled account refreshed twice and the disabled account never polled", calls.Load())
 	}
 }
 
@@ -660,7 +627,7 @@ func TestListRefreshIsQuietAboutAnAccountItCannotPoll(t *testing.T) {
 		return nil, errors.New("unreachable")
 	})
 
-	_, _, errOut, _ := runRoot(t, "list", "--refresh")
+	_, _, errOut, _ := runRoot(t, "status", "--refresh")
 	if calls.Load() != 0 {
 		t.Fatalf("fetches = %d, want 0", calls.Load())
 	}
@@ -687,7 +654,7 @@ func TestListRefreshDoesNotSayNothingWasNeededWhenSomethingWasFetched(t *testing
 		return snapshotUsing(now, 25), nil
 	})
 
-	_, _, errOut, _ := runRoot(t, "list", "--refresh")
+	_, _, errOut, _ := runRoot(t, "status", "--refresh")
 	if calls.Load() != 1 {
 		t.Fatalf("fetches = %d, want 1 — one account was inside its TTL and one was not", calls.Load())
 	}
@@ -696,33 +663,29 @@ func TestListRefreshDoesNotSayNothingWasNeededWhenSomethingWasFetched(t *testing
 	}
 }
 
-// `auto` and `switch` both tell a user to run `ccdad list --refresh` when the
-// cache is empty or stale. That advice named a flag the binary rejected before
-// this landed, and the sentences had to be pulled out of both files to stop
-// sending people to a usage error. This is what makes putting them back safe:
-// it fails if the flag ever leaves again, instead of the advice going stale in
-// silence.
-func TestTheAdviceToRunListRefreshNamesAFlagThatExists(t *testing.T) {
+// `auto` and `switch` tell a user to run `ccdad status --refresh` when the
+// cache is empty or stale. This keeps that advice tied to a real flag.
+func TestTheAdviceToRunStatusRefreshNamesAFlagThatExists(t *testing.T) {
 	root := NewRootCmd()
 
-	var list *cobra.Command
+	var status *cobra.Command
 	advice := map[string]string{}
 	for _, c := range root.Commands() {
 		switch c.Name() {
-		case "list":
-			list = c
+		case "status":
+			status = c
 		case "auto", "switch":
 			advice[c.Name()] = c.Long
 		}
 	}
-	if list == nil {
-		t.Fatal("there is no list command")
+	if status == nil {
+		t.Fatal("there is no status command")
 	}
-	if list.Flags().Lookup("refresh") == nil {
-		t.Fatal("`list` has no --refresh flag, and two commands tell users to run it")
+	if status.Flags().Lookup("refresh") == nil {
+		t.Fatal("`status` has no --refresh flag, and two commands tell users to run it")
 	}
 	for name, long := range advice {
-		if !strings.Contains(long, "ccdad list --refresh") {
+		if !strings.Contains(long, "ccdad status --refresh") {
 			t.Errorf("`%s --help` no longer points at the one flag that can freshen the cache:\n%s",
 				name, long)
 		}
@@ -737,7 +700,7 @@ func TestListJSONCarriesTheUnknownKeyProbe(t *testing.T) {
 	seedAccount(t, "u-1", "a@example.com")
 	writeLiveFile(t, liveLoginJSON("RT-u-1", `"somethingNew":{"a":1}`))
 
-	code, out, _, top := runRoot(t, "list", "--json")
+	code, out, _, top := runRoot(t, "status", "--json")
 	if code != ExitOK {
 		t.Fatalf("exit = %d (%s), want 0", code, top)
 	}
@@ -765,12 +728,12 @@ func TestListReportsAPrimaryAccount(t *testing.T) {
 	seedPrimaryCreditAccount(t, "u-1", "seat@example.com")
 	seedAccount(t, "u-2", "plain@example.com")
 
-	_, out, _, _ := runRoot(t, "list")
+	_, out, _, _ := runRoot(t, "status")
 	if !strings.Contains(out, "(primary)") {
 		t.Errorf("the listing does not mark the primary account:\n%s", out)
 	}
 
-	_, jsonOut, _, _ := runRoot(t, "list", "--json")
+	_, jsonOut, _, _ := runRoot(t, "status", "--json")
 	payload := statusJSON(t, jsonOut)
 	if got := accountRow(t, payload, "u-1")["primary"]; got != true {
 		t.Errorf("u-1 primary = %v, want true", got)
@@ -795,7 +758,7 @@ func TestListReportsBothPerAccountFlagsAtOnce(t *testing.T) {
 		t.Fatalf("disable = %d (%s)", code, top)
 	}
 
-	_, out, _, _ := runRoot(t, "list", "--all")
+	_, out, _, _ := runRoot(t, "status")
 	if !strings.Contains(out, "(primary, disabled)") {
 		t.Fatalf("the listing does not carry both flags:\n%s", out)
 	}
@@ -804,15 +767,14 @@ func TestListReportsBothPerAccountFlagsAtOnce(t *testing.T) {
 	// parentheses, with no stray separator.
 	isolate(t)
 	seedDisabledAccount(t, "u-2", "held@example.com")
-	if _, out, _, _ := runRoot(t, "list", "--all"); !strings.Contains(out, "(disabled)") {
+	if _, out, _, _ := runRoot(t, "status"); !strings.Contains(out, "(disabled)") {
 		t.Fatalf("the listing does not mark a disabled account:\n%s", out)
 	}
 }
 
-// `ccdad list` measures LEFT against the thresholds hover DERIVED, and it used
-// to do that silently. A reader who set threshold = 80 and sees a row held to 93
-// has no way to tell a defect from a mode doing exactly what it promised, and
-// the listing is where an account is chosen.
+// Status measures usage against thresholds hover derived. A reader who set
+// threshold = 80 and sees a row held to 93 needs the applied threshold beside
+// the reading to distinguish that policy from a defect.
 //
 // The note is on stderr, so a piped listing is unchanged, and it is human-only:
 // --json already carries the real per-row windowThreshold, which is a better
@@ -826,34 +788,31 @@ func TestListSaysWhenItsNumbersCameFromHover(t *testing.T) {
 		Snapshot:  &usage.Snapshot{SevenDay: window(62, listNow.Add(2*time.Hour))},
 	})
 
-	const note = "hover is on"
-	if _, _, errOut, _ := runRoot(t, "list"); strings.Contains(errOut, note) {
-		t.Errorf("the listing credits hover with hover off:\n%s", errOut)
+	const note = "hover:"
+	if _, stdout, _, _ := runRoot(t, "status"); strings.Contains(stdout, note) {
+		t.Errorf("status credits hover with hover off:\n%s", stdout)
 	}
 
-	if code, _, errOut, _ := runRoot(t, "config", "set", "hover", "true"); code != 0 {
-		t.Fatalf("config set hover true exited %v: %s", code, errOut)
+	if code, _, errOut, _ := runRoot(t, "strategy", "hover"); code != 0 {
+		t.Fatalf("strategy hover exited %v: %s", code, errOut)
 	}
 
-	code, stdout, errOut, _ := runRoot(t, "list")
+	code, stdout, _, _ := runRoot(t, "status")
 	if code != ExitOK {
 		t.Fatalf("exit %d, want 0\n%s", code, stdout)
 	}
-	if !strings.Contains(errOut, note) {
-		t.Errorf("the listing does not say its numbers came from hover:\n%s", errOut)
+	if !strings.Contains(stdout, note) {
+		t.Errorf("status does not say its cells use hover thresholds:\n%s", stdout)
 	}
 	// It names what hover actually moved. There is no single derived column
 	// left for it to name -- every window has a cell -- so what hover changes
 	// here is the thresholds the cells are coloured against.
-	if !strings.Contains(errOut, "threshold") {
-		t.Errorf("the listing credits hover without saying what it moved:\n%s", errOut)
-	}
-	if strings.Contains(stdout, note) {
-		t.Errorf("the note reached stdout, where a piped listing would parse it:\n%s", stdout)
+	if !strings.Contains(stdout, "threshold") {
+		t.Errorf("status credits hover without saying what it moved:\n%s", stdout)
 	}
 
-	if _, _, jsonErr, _ := runRoot(t, "list", "--json"); strings.Contains(jsonErr, note) {
-		t.Errorf("--json carries a note about a LEFT column it does not have:\n%s", jsonErr)
+	if _, jsonOut, jsonErr, _ := runRoot(t, "status", "--json"); jsonErr != "" || !strings.Contains(jsonOut, `"hover": true`) {
+		t.Errorf("--json does not carry hover as structured data; stdout=%s stderr=%s", jsonOut, jsonErr)
 	}
 }
 
@@ -874,11 +833,11 @@ func TestTheHoverNoteDoesNotClaimACellIsMeasuredAgainstAThreshold(t *testing.T) 
 		FetchedAt: listNow.Add(-90 * time.Second),
 		Snapshot:  &usage.Snapshot{SevenDay: window(62, listNow.Add(2*time.Hour))},
 	})
-	if code, _, errOut, _ := runRoot(t, "config", "set", "hover", "true"); code != 0 {
-		t.Fatalf("config set hover true exited %v: %s", code, errOut)
+	if code, _, errOut, _ := runRoot(t, "strategy", "hover"); code != 0 {
+		t.Fatalf("strategy hover exited %v: %s", code, errOut)
 	}
 
-	_, stdout, errOut, _ := runRoot(t, "list")
+	_, stdout, _, _ := runRoot(t, "status")
 
 	// The arithmetic the note must not misdescribe: the cell is the window's own
 	// utilization, with hover on and whatever threshold it derived. If the cell
@@ -892,15 +851,15 @@ func TestTheHoverNoteDoesNotClaimACellIsMeasuredAgainstAThreshold(t *testing.T) 
 	// number is relative to a threshold is wrong however it spells it, so the
 	// assertion is on the shape of the claim rather than on one sentence.
 	for _, wrong := range []string{"LEFT is measured against", "measured against the thresholds"} {
-		if strings.Contains(errOut, wrong) {
-			t.Errorf("the note still claims LEFT is threshold-relative (%q):\n%s", wrong, errOut)
+		if strings.Contains(stdout, wrong) {
+			t.Errorf("the note still claims a cell is threshold-relative (%q):\n%s", wrong, stdout)
 		}
 	}
 	// It must still say what hover DID move, or it explains nothing. With a
 	// cell per window there is no chosen window left to name; what hover
 	// derives is the threshold each cell is judged against.
-	if !strings.Contains(errOut, "derived per account and per window") {
-		t.Errorf("the note does not say what hover derives:\n%s", errOut)
+	if !strings.Contains(stdout, "derived per account and window") {
+		t.Errorf("the note does not say what hover derives:\n%s", stdout)
 	}
 }
 
@@ -910,13 +869,13 @@ func TestTheHoverNoteDoesNotClaimACellIsMeasuredAgainstAThreshold(t *testing.T) 
 func TestTheHoverNoteIsNotPrintedAboveAnEmptyListing(t *testing.T) {
 	isolate(t)
 	freezeClock(t, listNow)
-	if code, _, errOut, _ := runRoot(t, "config", "set", "hover", "true"); code != 0 {
-		t.Fatalf("config set hover true exited %v: %s", code, errOut)
+	if code, _, errOut, _ := runRoot(t, "strategy", "hover"); code != 0 {
+		t.Fatalf("strategy hover exited %v: %s", code, errOut)
 	}
 
-	const note = "hover is on"
-	if _, _, errOut, _ := runRoot(t, "list"); strings.Contains(errOut, note) {
-		t.Errorf("an empty listing credits hover for a column it never drew:\n%s", errOut)
+	const note = "hover:"
+	if _, stdout, _, _ := runRoot(t, "status"); strings.Contains(stdout, note) {
+		t.Errorf("an empty status credits hover for a table it never drew:\n%s", stdout)
 	}
 
 	// The OTHER empty listing, which leaves by a different return: accounts
@@ -925,12 +884,12 @@ func TestTheHoverNoteIsNotPrintedAboveAnEmptyListing(t *testing.T) {
 	if code, _, errOut, _ := runRoot(t, "disable", "a@example.com"); code != 0 {
 		t.Fatalf("disable exited %v: %s", code, errOut)
 	}
-	_, _, errOut, _ := runRoot(t, "list")
-	if !strings.Contains(errOut, "Every account is disabled") {
-		t.Fatalf("the all-disabled listing was not arranged:\n%s", errOut)
+	_, stdout, _, _ := runRoot(t, "status")
+	if !strings.Contains(stdout, "(disabled)") {
+		t.Fatalf("the disabled account is not visible:\n%s", stdout)
 	}
-	if strings.Contains(errOut, note) {
-		t.Errorf("the all-disabled listing credits hover for a column it never drew:\n%s", errOut)
+	if !strings.Contains(stdout, note) {
+		t.Errorf("a rendered quota table does not explain its hover thresholds:\n%s", stdout)
 	}
 }
 
@@ -956,7 +915,7 @@ func runwayLineOf(t *testing.T, out string) string {
 // reach: the listing hides only disabled accounts, the measurement covers only
 // the accounts the rotation can reach, and a disabled account is in neither. So
 // the placement of the print — after the early return, after the table — is
-// pinned by TestTheRunwayLineFollowsTheTable below, and what is pinned here is
+// pinned by TestTheRunwayLinePrecedesTheTable below, and what is pinned here is
 // the fail-closed half: a fleet the engine cannot switch to has no runway, and
 // --all showing its rows must not put one on the screen.
 func TestAnEmptyStoreStillPrintsNoRunwayLine(t *testing.T) {
@@ -964,9 +923,9 @@ func TestAnEmptyStoreStillPrintsNoRunwayLine(t *testing.T) {
 		isolate(t)
 		freezeClock(t, statusNow)
 
-		_, out, _, top := runRoot(t, "list")
-		if out != "" {
-			t.Fatalf("stdout = %q (%s), want nothing at all", out, top)
+		_, out, _, _ := runRoot(t, "status")
+		if strings.Contains(out, "Runway:") {
+			t.Fatalf("an empty store was given a runway:\n%s", out)
 		}
 	})
 
@@ -983,18 +942,14 @@ func TestAnEmptyStoreStillPrintsNoRunwayLine(t *testing.T) {
 		// statement about what the engine can do with them. Every one of these
 		// seats is held out of rotation by the user, so there is no quota here
 		// the fleet can spend and no claim to make about how long it lasts.
-		_, all, _, _ := runRoot(t, "list", "--all")
+		_, all, _, _ := runRoot(t, "status")
 		if !strings.Contains(all, "(disabled)") {
-			t.Fatalf("the fixture no longer lists disabled accounts, so the assertion below asserts nothing:\n%s", all)
+			t.Fatalf("the fixture no longer shows disabled accounts, so the assertion below asserts nothing:\n%s", all)
 		}
 		if strings.Contains(all, "Runway:") {
 			t.Errorf("a fleet the rotation cannot reach was given a runway:\n%s", all)
 		}
 
-		_, out, _, _ := runRoot(t, "list")
-		if out != "" {
-			t.Fatalf("stdout = %q, want nothing: a summary with no rows under it is not a listing", out)
-		}
 	})
 }
 
@@ -1004,13 +959,13 @@ func TestAnEmptyStoreStillPrintsNoRunwayLine(t *testing.T) {
 // Placement is not cosmetic here. columns() writes where it is called, so a
 // summary written before it would land where list_test.go's rowFor scans for
 // account rows and change which line it matches.
-func TestTheRunwayLineFollowsTheTable(t *testing.T) {
+func TestTheRunwayLinePrecedesTheTable(t *testing.T) {
 	t.Run("with a series", func(t *testing.T) {
 		isolate(t)
 		freezeClock(t, statusNow)
 		seedBurningFleet(t)
 
-		_, out, _, top := runRoot(t, "list")
+		_, out, _, top := runRoot(t, "status")
 		lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 		runway, lastRow := -1, -1
 		for i, l := range lines {
@@ -1027,8 +982,8 @@ func TestTheRunwayLineFollowsTheTable(t *testing.T) {
 		if lastRow < 0 {
 			t.Fatalf("no account rows to place it against:\n%s", out)
 		}
-		if runway < lastRow {
-			t.Fatalf("the runway line is above the table, where an account row is looked for:\n%s", out)
+		if runway > lastRow {
+			t.Fatalf("the runway summary is not in the status block above the account table:\n%s", out)
 		}
 		// The span the rates were measured over rides on the line: a verdict
 		// from two hours of evidence and one from four support different
@@ -1051,7 +1006,7 @@ func TestTheRunwayLineFollowsTheTable(t *testing.T) {
 			Snapshot:  &usage.Snapshot{SevenDay: window(48, runwayWeeklyReset)},
 		})
 
-		_, out, _, _ := runRoot(t, "list")
+		_, out, _, _ := runRoot(t, "status")
 		if !strings.Contains(out, "a@example.com") {
 			t.Fatalf("the listing itself is missing, so the absence below is not the one under test:\n%s", out)
 		}
@@ -1059,58 +1014,11 @@ func TestTheRunwayLineFollowsTheTable(t *testing.T) {
 			t.Errorf("a runway was stated with no reading behind it:\n%s", out)
 		}
 
-		_, jsonOut, _, _ := runRoot(t, "list", "--json")
+		_, jsonOut, _, _ := runRoot(t, "status", "--json")
 		if f, ok := statusJSON(t, jsonOut)["forecast"]; ok {
 			t.Errorf("forecast = %v was published on a machine with nothing measured; absent and zero are different answers", f)
 		}
 	})
-}
-
-// One fleet, one measurement, however it is asked for.
-//
-// The disabled account is the whole fixture. `--all` is a filter on the
-// LISTING, and a filter on a listing must not move a burn rate: the accounts
-// this measurement is taken over are the store's, not the rows about to be
-// printed. Without a disabled account in the store the two sets are the same
-// slice and an implementation that measured the wrong one would look right.
-//
-// The same figure has to come back from `ccdad status`, which is what makes
-// this one number rather than two that currently agree.
-//
-// The payload half is the load-bearing one, measured rather than assumed: with
-// the forecast built from the visible rows instead of the store's accounts, the
-// two rendered lines stayed IDENTICAL — half a fleet burning half as fast runs
-// dry at the same moment, and the line carries verdicts rather than rates. Only
-// the basis and the points under it moved, and only --json carries those.
-func TestListAndStatusStateOneRunway(t *testing.T) {
-	isolate(t)
-	freezeClock(t, statusNow)
-	seedBurningFleet(t)
-	if code, _, errOut, _ := runRoot(t, "disable", "2"); code != ExitOK {
-		t.Fatalf("disable = %d (%s)", code, errOut)
-	}
-
-	_, listed, _, _ := runRoot(t, "list")
-	_, all, _, _ := runRoot(t, "list", "--all")
-	_, dashboard, _, _ := runRoot(t, "status")
-	line := runwayLineOf(t, listed)
-	if got := runwayLineOf(t, all); got != line {
-		t.Errorf("--all changed the measurement:\n%q\n%q", line, got)
-	}
-	if got := runwayLineOf(t, dashboard); got != line {
-		t.Errorf("`ccdad list` and `ccdad status` state different runways:\n%q\n%q", line, got)
-	}
-
-	_, listOut, _, _ := runRoot(t, "list", "--json")
-	_, statusOut, _, _ := runRoot(t, "status", "--json")
-	listForecast, ok := statusJSON(t, listOut)["forecast"]
-	if !ok {
-		t.Fatalf("list --json publishes no forecast:\n%s", listOut)
-	}
-	if !reflect.DeepEqual(listForecast, statusJSON(t, statusOut)["forecast"]) {
-		t.Errorf("the two payloads describe one fleet two ways:\n%v\n%v",
-			listForecast, statusJSON(t, statusOut)["forecast"])
-	}
 }
 
 // A series that cannot be read costs the rates and nothing else, and the
@@ -1129,7 +1037,7 @@ func TestListSaysSoWhenTheSeriesCannotBeRead(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	code, out, errOut, top := runRoot(t, "list")
+	code, out, errOut, top := runRoot(t, "status")
 	if code != ExitOK {
 		t.Fatalf("exit %d (%s); a listing renders whatever else is wrong\n%s", code, top, out)
 	}
@@ -1144,30 +1052,7 @@ func TestListSaysSoWhenTheSeriesCannotBeRead(t *testing.T) {
 	}
 }
 
-// `ccdad list` prints the same summary under its own table, from its own
-// Fprintf. Two print sites carrying one wording is what view.RunwayLine exists
-// to make safe, and a fold taught to one of them and not the other is exactly
-// the drift it exists to prevent -- so the assertion is not that this folds,
-// but that it folds IDENTICALLY.
-func TestTheListRunwayLineFoldsExactlyAsStatusDoes(t *testing.T) {
-	isolate(t)
-	freezeClock(t, statusNow)
-	seedBurningFleet(t)
-
-	stubOutWidth(t, 60)
-	_, list, _, _ := runRoot(t, "list")
-	_, status, _, _ := runRoot(t, "status")
-
-	listed := runwayBlockOf(t, list)
-	if len(listed) < 2 {
-		t.Fatalf("the listing's line did not fold at 60 columns:\n%s", strings.Join(listed, "\n"))
-	}
-	if got, want := strings.Join(listed, "\n"), strings.Join(runwayBlockOf(t, status), "\n"); got != want {
-		t.Errorf("the two commands fold one line two ways:\nlist:\n%s\nstatus:\n%s", got, want)
-	}
-}
-
-// `list --refresh` is the command a user reaches for precisely when no daemon
+// `status --refresh` is the command a user reaches for precisely when no daemon
 // is running, so it is the only thing that will read a Codex account on that
 // machine. Nothing in this package covered that pairing, and deleting the line
 // in list.go that wires the read seams left the whole suite green.
@@ -1200,7 +1085,7 @@ func TestListRefreshReadsACodexAccountThroughTheStubbedSeams(t *testing.T) {
 			}
 	}
 
-	code, _, _, top := runRoot(t, "list", "--refresh")
+	code, _, _, top := runRoot(t, "status", "--refresh")
 	if code != ExitOK {
 		t.Fatalf("exit = %d (%s), want 0", code, top)
 	}
