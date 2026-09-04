@@ -350,7 +350,7 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 	// runway line below has its own wrap, because its spaces are inside its
 	// values and these are between words.
 	//
-	// THE WIDTH IS MEASURED ON cmd.OutOrStdout() AND NEVER ON out, at all seven
+	// THE WIDTH IS MEASURED ON cmd.OutOrStdout() AND NEVER ON out, at all eight
 	// sites below, and the distinction is the whole reason this paragraph
 	// exists. out is renderTarget's writer -- the same destination wearing a
 	// palette -- and outWidth answers by asserting *os.File. A wrapper fails
@@ -372,7 +372,7 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 	// sets up either. The other half is held by
 	// TestEveryLineOfTheStatusBlockFoldsAtTheFilesWidth, which reads this
 	// function's source rather than its output, so every site is covered
-	// whatever a fixture happens to render and the count of seven below is
+	// whatever a fixture happens to render and the count of eight below is
 	// asserted there rather than only written here.
 	//
 	// Both names are written on one line each, deliberately. The name this
@@ -398,6 +398,33 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 	// its own right edge lands.
 	if line, ok := view.UpdateLine(snap.Report, snap.Version); ok {
 		fmt.Fprintln(out, view.WrapLabeled(line, outWidth(cmd.OutOrStdout())))
+	}
+
+	// The proxy came up on a port other than the one it resolved, so every
+	// codex session launched before this daemon is talking to nothing. Its own
+	// symptom is codex's endless reconnect, which nothing else on the machine
+	// would explain -- which is the whole reason this line exists.
+	//
+	// The state clause excludes DaemonStopped and NOTHING else, and its two
+	// halves are separate decisions.
+	//
+	// It is there at all because a stopped daemon's status document stays
+	// readable -- a pairing this package exercises deliberately elsewhere --
+	// and the fallback flag inside it is a fact about a process that is gone.
+	// Without the clause the dashboard would print `Daemon:  not running` and,
+	// on the very next line, name a loopback port nothing is bound to and ask
+	// for a relaunch, when the fix is to start a daemon. `ccdad doctor` refuses
+	// that same reading: its codex check answers "no daemon is running" before
+	// it looks at the flag at all, and two surfaces disagreeing about one
+	// machine is worse than either answer alone.
+	//
+	// It is `!= DaemonStopped` and not `== DaemonRunning` because DaemonUnknown
+	// means the lock could not be probed, and "cannot tell" is never folded
+	// into "no" here: on a filesystem where locks do not work the daemon may
+	// well be running with a proxy that fell back, and that is precisely the
+	// reader this sentence is written for.
+	if r := snap.Report; r.State != daemon.DaemonStopped && r.HasStatus && r.Status.CodexProxyFellBack {
+		fmt.Fprintln(out, view.WrapLabeled(fmt.Sprintf("Codex:   the proxy is on 127.0.0.1:%d, not the port it resolved; codex sessions launched before this daemon must be relaunched", r.Status.CodexProxyPort), outWidth(cmd.OutOrStdout())))
 	}
 
 	if len(rows) == 0 {
