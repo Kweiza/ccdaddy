@@ -319,3 +319,50 @@ func TestTheProxyConfigTheDaemonBuildsIsFullyWired(t *testing.T) {
 		t.Errorf("the daemon log recorded %v, want the proxy's line", logged)
 	}
 }
+
+func TestAFallbackPortIsNeverRecorded(t *testing.T) {
+	root := isolate(t)
+	derived, source, err := codexproxy.ResolvePort(root, 0)
+	if err != nil || source != "derived" {
+		t.Fatalf("ResolvePort() = (%d, %q, %v), want a derived port for a fresh store", derived, source, err)
+	}
+	held, lerr := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(derived)))
+	if lerr != nil {
+		t.Skipf("something on this machine already holds the derived port %d: %v", derived, lerr)
+	}
+	defer held.Close()
+
+	e := NewEngine()
+	proxy, err := e.startCodexProxy(context.Background())
+	if err != nil {
+		t.Fatalf("startCodexProxy() error = %v, want a fallback rather than a refusal", err)
+	}
+	defer closeProxy(t, proxy)
+	if !proxy.FellBack() {
+		t.Fatalf("the proxy bound %d without falling back, though %d was held", proxy.Port(), derived)
+	}
+	if _, serr := os.Stat(codexproxy.PortPath(root)); !os.IsNotExist(serr) {
+		recorded, _ := os.ReadFile(codexproxy.PortPath(root))
+		t.Fatalf("the kernel-chosen fallback port %q was recorded; the next start would resolve it instead of the derived %d", strings.TrimSpace(string(recorded)), derived)
+	}
+}
+
+func TestTheBoundPortIsRecordedSoTheNextStartComesBackOnIt(t *testing.T) {
+	root := isolate(t)
+	e := NewEngine()
+	proxy, err := e.startCodexProxy(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeProxy(t, proxy)
+	if proxy.FellBack() {
+		t.Skipf("the derived port was held by something else on this machine; the fallback case is TestAFallbackPortIsNeverRecorded")
+	}
+	port, source, err := codexproxy.ResolvePort(root, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if port != proxy.Port() || source != "recorded" {
+		t.Fatalf("the next start would resolve (%d, %q); this one bound %d, which is what it must come back on", port, source, proxy.Port())
+	}
+}
