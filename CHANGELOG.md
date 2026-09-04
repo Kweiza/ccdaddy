@@ -16,6 +16,11 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-09-04
+
+The release that puts the daemon half of live Codex switching in place, and
+gives every dashboard fact and family member room of its own.
+
 ### Added
 
 - **The ccdad daemon now listens on loopback, and a Codex turn can be forwarded
@@ -3182,7 +3187,8 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/Kweiza/ccdaddy/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/Kweiza/ccdaddy/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/Kweiza/ccdaddy/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/Kweiza/ccdaddy/compare/v0.10.0...v0.10.1
