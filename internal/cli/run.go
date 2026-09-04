@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
@@ -1183,6 +1184,60 @@ func atLeastOneAccount(verb string) cobra.PositionalArgs {
 	}
 }
 
+// codexRunNeutralFlags names the flags on `ccdad run` that a Codex launch can
+// honour. It is the ALLOW half of a default-deny walk, and the direction is the
+// point: a flag added to this command later is refused on the Codex route until
+// somebody writes down why it applies, rather than being parsed, accepted and
+// dropped — which is exactly what --full-profile was.
+//
+// `help` is listed even though it cannot reach the walk: cobra intercepts it in
+// execute(), before RunE, so a typed --help returns the help text and never
+// arrives here. Leaving it out would make the one flag this command does not
+// itself define the one the walk refuses if cobra's handling ever moves.
+var codexRunNeutralFlags = map[string]bool{"help": true}
+
+// codexRunFlagRefusals says, per flag, WHY a Codex launch cannot honour it.
+//
+// A generic sentence covers a flag added later, but any flag a user might
+// plausibly type belongs here with its own reason: "it does not apply" on its
+// own reads as a bug in ccdad rather than as a decision, and the reader cannot
+// tell which without it.
+var codexRunFlagRefusals = map[string]string{
+	"full-profile": "the flag gives a Claude Code session a config home of its own, seeded from the " +
+		"live config home, and a Codex launch has none to give — it starts codex through the " +
+		"ccdad daemon's proxy, which holds the credential, and reads nothing of Claude Code's",
+}
+
+// refuseFlagsACodexLaunchCannotHonour turns a flag that means nothing on the
+// Codex route into a usage error naming it, rather than letting the launch
+// swallow it and report success.
+//
+// Visit rather than VisitAll: pflag walks only the flags that were actually
+// typed, which is Changed() asked once per flag instead of once per name this
+// function knows. A flag left at its default is never refused, so `ccdad run
+// <codex-acct>` — the whole ordinary shape of a Codex launch — keeps working.
+//
+// The first refusable flag in pflag's order is the one named, not all of them.
+// The set is sorted, so which one that is does not depend on the order they
+// were typed in; and a caller who typed two has to drop both anyway.
+func refuseFlagsACodexLaunchCannotHonour(cmd *cobra.Command, label string) error {
+	var refused *pflag.Flag
+	cmd.Flags().Visit(func(f *pflag.Flag) {
+		if refused == nil && !codexRunNeutralFlags[f.Name] {
+			refused = f
+		}
+	})
+	if refused == nil {
+		return nil
+	}
+	why := codexRunFlagRefusals[refused.Name]
+	if why == "" {
+		why = "`ccdad run` reads it only on the Claude route, and this launch starts codex instead"
+	}
+	return UsageError("%s is a Codex account, and `--%s` does not apply to one: %s. "+
+		"Drop the flag, or name a Claude account.", label, refused.Name, why)
+}
+
 func newRunCmd() *cobra.Command {
 	var fullProfile bool
 
@@ -1192,13 +1247,16 @@ func newRunCmd() *cobra.Command {
 		Long: "ACCOUNT may be a display index, an alias, an email address, or a uuid prefix.\n" +
 			"A Codex account starts codex instead of claude, through the loopback proxy the\n" +
 			"ccdad daemon runs, pinned to that account for the whole session: the tail is\n" +
-			"optional and defaults to `codex`, and anything else in it is refused. Such a\n" +
-			"launch needs a daemon and never falls back — running it as whatever codex's\n" +
-			"own home holds would bill a different account and report success. `codex login`\n" +
-			"and `codex logout` are refused here for the same reason rather than run: both\n" +
-			"act on codex's own home rather than on the named account, and logout revokes\n" +
-			"that grant server-side with no undo. Run either from a plain shell, or add an\n" +
-			"account ccdad serves with `ccdad codex add`.\n\n" +
+			"optional and defaults to `codex`, and anything else in it is refused. So is any\n" +
+			"flag of ccdad's own that only a Claude session has a use for: --full-profile\n" +
+			"scopes a Claude Code config home, which a codex session never reads, so it is\n" +
+			"refused rather than accepted and dropped. Such a launch needs a daemon and\n" +
+			"never falls back — running it as whatever codex's own home holds would bill a\n" +
+			"different account and report success. `codex login` and `codex logout` are\n" +
+			"refused here for the same reason rather than run: both act on codex's own home\n" +
+			"rather than on the named account, and logout revokes that grant server-side with\n" +
+			"no undo. Run either from a plain shell, or add an account ccdad serves with\n" +
+			"`ccdad codex add`.\n\n" +
 			"There is no interactive disambiguation: an ambiguous reference is exit 2, because\n" +
 			"this command hands control to claude and callers need it to be deterministic.\n\n" +
 			"Everything at or after ACCOUNT is passed to claude verbatim, hyphens included. A\n" +
@@ -1271,6 +1329,18 @@ func newRunCmd() *cobra.Command {
 			// a usage error rather than a silent launch of a program the proxy
 			// cannot serve.
 			if target.Provider == provider.Codex {
+				// The flags come first, and the asymmetry they fix is the
+				// reason they are here at all. `ccdad run <acct> --
+				// --full-profile` was already refused loudly by the tail check
+				// below, because the word is not `codex`; `ccdad run
+				// --full-profile <acct>` parsed, reached this branch, and
+				// returned before fullProfile was ever read — a launch reported
+				// as a success that did not do what was asked. A user who asks
+				// for a scoped config home and is silently given something else
+				// has no way to find out.
+				if err := refuseFlagsACodexLaunchCannotHonour(cmd, target.Label()); err != nil {
+					return err
+				}
 				tail := claudeArgs(args)
 				if len(tail) > 0 {
 					if tail[0] != codexProgramName {

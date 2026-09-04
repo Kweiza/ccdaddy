@@ -1067,9 +1067,11 @@ ccdad run work -- --model opus # a Claude account takes claude's args verbatim
 
 A Codex account takes a different tail. `ccdad run` starts codex rather than
 claude for one, through the loopback proxy the daemon runs, so the tail must be
-empty or begin with `codex`; anything else is exit `2`. The rest of this section
-is about a Claude account — see [Codex accounts](#codex-accounts) for the other
-kind.
+empty or begin with `codex`; anything else is exit `2`. So is `--full-profile`
+on one: the flag scopes a Claude Code config home, a codex session reads none,
+and a launch that took the word and dropped it would report a success that did
+not do what you asked. The rest of this section is about a Claude account — see
+[Codex accounts](#codex-accounts) for the other kind.
 
 `ccdad run` gives the session a credential home of its own containing only that
 account's login — the smallest blast radius available. The cost is that MCP
