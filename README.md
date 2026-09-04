@@ -133,6 +133,7 @@ endorsed by, or supported by Anthropic.
 - [Claude Code's own tools](#claude-codes-own-tools)
 - [How the switch stays safe](#how-the-switch-stays-safe)
 - [Running sessions side by side](#running-sessions-side-by-side)
+- [Codex accounts](#codex-accounts)
 - [Configuration](#configuration)
 - [Containers](#containers)
 - [Scripting](#scripting)
@@ -370,7 +371,8 @@ is a usage error rather than a silent hang. Pass the token, or `-`.
 | `ccdad add-token [TOKEN\|-]` | Register an `sk-ant-oat…` setup token or an `sk-ant-api…` key |
 | `ccdad which` | Show which managed account Claude Code is logged in as |
 | `ccdad switch [ACCOUNT]` | Make an account the live login |
-| `ccdad run <ACCOUNT> [args…]` | Start a Claude Code session as an account, without changing the live login |
+| `ccdad run <ACCOUNT> [args…]` | Start a session as an account, without changing the live login. A Codex account starts codex instead of claude |
+| `ccdad codex add\|shim install\|exec` | Log a Codex account in, put ccdad's `codex` on your PATH, or run codex through ccdad — see [Codex accounts](#codex-accounts) |
 | `ccdad probe <ACCOUNT>` | Spend one tiny request to start a window's clock early |
 | `ccdad auto` | Run the auto-switch engine, once or continuously |
 | `ccdad strategy hover\|manual\|headroom\|consume-first` | Select the one account-switching policy |
@@ -1060,8 +1062,14 @@ The rest of the protocol matters just as much:
 
 ```sh
 ccdad run work                 # a session as 'work'; the live login is untouched
-ccdad run work -- --model opus # everything after ACCOUNT goes to claude verbatim
+ccdad run work -- --model opus # a Claude account takes claude's args verbatim
 ```
+
+A Codex account takes a different tail. `ccdad run` starts codex rather than
+claude for one, through the loopback proxy the daemon runs, so the tail must be
+empty or begin with `codex`; anything else is exit `2`. The rest of this section
+is about a Claude account — see [Codex accounts](#codex-accounts) for the other
+kind.
 
 `ccdad run` gives the session a credential home of its own containing only that
 account's login — the smallest blast radius available. The cost is that MCP
@@ -1135,6 +1143,79 @@ live login, so they exit `2` and name the session instead. Reads are untouched:
 `list`, `which`, `status`, `doctor` and `export` answer for the shell you are
 in, and `ccdad doctor` says which session that is. Run the refused ones from a
 shell outside the session.
+
+## Codex accounts
+
+`ccdad` manages OpenAI Codex accounts alongside Claude ones, and it does it a
+different way, because Codex needs one.
+
+Claude Code reads its credential from a file on every request, which is why
+swapping that file moves a session already in flight. Codex caches its
+credential in memory for the life of the process and re-reads it on exactly one
+condition — an HTTP 401 — while running out of quota is a 429. The two never
+meet, so no amount of file swapping moves a running codex. `ccdad` takes codex
+out of the OAuth path instead: the daemon runs a loopback proxy, codex holds no
+token at all, and `ccdad` owns the login, the refresh and the quota reading.
+
+```sh
+ccdad codex add                 # log in, into ccdad's own store
+ccdad codex shim install        # put ~/.ccdad/bin/codex on your PATH
+codex                           # ...and this now goes through ccdad
+```
+
+`ccdad codex add` is a device-code login: it prints a code and a URL, and stores
+the result in ccdad's own store. It never writes `~/.codex`, and it never runs
+`codex login` or `codex logout` — both of those revoke the stored grant
+server-side, with no undo.
+
+The shim is a two-line script at `~/.ccdad/bin/codex`. `ccdad codex shim
+install` writes it and registers that directory through the same marker-fenced
+block `ccdad setup-path` manages, so there is one block on the machine and
+`ccdad uninstall` takes it back with everything else. `ccdad doctor` reports
+which codex a bare `codex` actually resolves to, which is the question that
+matters after a fresh install and before a new terminal.
+
+`ccdad codex exec -- <args>` is what the shim runs, and you can run it by name.
+`ccdad run <ACCOUNT> [-- codex <args>]` starts a session pinned to one account
+whatever the rest of the machine is serving; that form needs the daemon and
+refuses rather than falling back, because falling back would bill an account you
+did not name and report success.
+
+**A switch applies to NEW threads.** Every request codex makes carries the whole
+conversation, including reasoning encrypted for the account that produced it, so
+`ccdad` keeps a thread with the account it started on. `ccdad switch <a Codex
+account>` and the daemon's own rotation both take effect on your next new
+thread; the thread you are in keeps its account until you start another one.
+
+**`codex login status` answers about `~/.codex`, which ccdad does not use.** It
+will tell you that you are logged out, or logged in as somebody else, and both
+answers are true about that file and about nothing else. `ccdad which` names the
+account ccdad serves codex from.
+
+Two kinds of codex session are not routed, and both are deliberate:
+
+- **An IDE or a desktop app that spawns codex itself.** It never consults your
+  shell's PATH, so the shim is not in front of it. Those sessions read
+  `~/.codex` and spend whatever is in it. ccdad says so: `ccdad doctor`'s
+  `codex-proxy` row counts the codex launches that had no proxy in front of
+  them, and its `codex-shim` row says whether one is in front of the next.
+- **Windows.** There is no shim there. It would have to be a `.cmd`, which puts
+  `cmd.exe` in front of every prompt codex is given, and `ccdad` refuses that
+  launch rather than letting `cmd.exe` re-interpret an argument. Run `ccdad
+  codex exec -- <args>`, or `ccdad run <ACCOUNT> -- codex <args>`; both work on
+  every platform.
+
+Also not in v1: the `hover` strategy, `ccdad runway`'s forecast, `ccdad primary`
+and `ccdad auto` are Claude-only, and the credit axis with them — ccdad reads no
+Codex credit balance and counts no reset credits. There is no import of an
+existing `~/.codex/auth.json` and no browser login: `ccdad codex add` is a
+device-code login. One person's account in two workspaces is one account to
+ccdad. The model list is codex's bundled presets rather than the remote
+catalog. codex's keyring, auto and ephemeral credential stores are not used —
+a routed codex holds no credential at all. And a codex inside a container
+cannot reach a daemon on the host, because loopback is per network namespace;
+WSL2 works, since its loopback is shared with the Windows side and the launch
+secret is the gate.
 
 ## Configuration
 
