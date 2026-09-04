@@ -39,7 +39,7 @@ func (a Account) ProfileStale(now time.Time) bool {
 }
 
 // AdoptProfile writes the fields ONE profile lookup decides, and stamps when it
-// happened. It is the single writer of those fields: `ccdad add` and the
+// happened. It is the single writer of those fields: `ccdad add claude` and the
 // daemon's poll both reach them through here, so the two cannot drift into
 // disagreeing about which parts of a profile are allowed to land.
 //
@@ -50,8 +50,8 @@ func (a Account) ProfileStale(now time.Time) bool {
 // has been made yet. Re-running that here would overwrite a classification made
 // on window-and-overage evidence with the guess that preceded it, and it would
 // do so on every poll. The caller that legitimately decides Kind from a profile
-// is `ccdad add`, once, and it does that beside this call rather than through
-// it.
+// is `ccdad add claude`, once, and it does that beside this call rather than
+// through it.
 //
 // An EMPTY field on the wire is written as empty. That is not the same as the
 // nil-profile case its callers reject: a profile that answers seat_tier null is

@@ -95,9 +95,9 @@ var selfPath = os.Executable
 // A child rather than an in-process login, for four reasons, three of them
 // measured failures of the alternative rather than arguments.
 //
-// It reuses every line of `ccdad add`'s prose unchanged — the paste re-prompt,
-// the quarantine lift, the carriable-keys warning — instead of forking a few
-// hundred lines against the rule that keeps prose in one place.
+// It reuses every line of `ccdad add claude`'s prose unchanged — the paste
+// re-prompt, the quarantine lift, the carriable-keys warning — instead of
+// forking a few hundred lines against the rule that keeps prose in one place.
 //
 // The paste reader in this binary loops on a scanner over os.Stdin in a
 // goroutine whose own documentation admits it cannot be stopped. Run in
@@ -111,9 +111,9 @@ var selfPath = os.Executable
 // been taken process-wide and is dropped for the whole released span, so an
 // in-process login could not be interrupted at all — measured, Ctrl-C did
 // literally nothing and the keystrokes were then swallowed by the prompt.
-// `ccdad add` installs its own trap scoped to the login, so in the child that
-// is the whole story: measured, the child exited 130, the parent dropped the
-// signal, the program restored, and every subsequent key arrived.
+// `ccdad add claude` installs its own trap scoped to the login, so in the child
+// that is the whole story: measured, the child exited 130, the parent dropped
+// the signal, the program restored, and every subsequent key arrived.
 //
 // And a panic in the login is a dead child and an exit status, not a dead
 // dashboard.

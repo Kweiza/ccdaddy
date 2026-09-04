@@ -142,10 +142,10 @@ func TestTheExportedArgvsCannotBeEditedFromOutside(t *testing.T) {
 	}
 }
 
-// Exit 130 is an interrupted login and not a failure: `ccdad add` installs its
-// own scoped SIGINT trap for the span of the login and exits 130 when it fires.
-// Measured over a pty: the child exited 130, the parent dropped the signal, the
-// program restored, and every subsequent key arrived.
+// Exit 130 is an interrupted login and not a failure: `ccdad add claude`
+// installs its own scoped SIGINT trap for the span of the login and exits 130
+// when it fires. Measured over a pty: the child exited 130, the parent dropped
+// the signal, the program restored, and every subsequent key arrived.
 func TestTheChildsExitCodeIsMappedOntoTheExitContractAndNotGuessedAt(t *testing.T) {
 	for _, tc := range []struct {
 		code int
@@ -195,10 +195,10 @@ func TestTheFinishedMessageCarriesTheChildsErrorAndNothingElse(t *testing.T) {
 	}
 }
 
-// The one gate this key needs. `ccdad add` writes every line of its prose to
-// stderr and the library gives the child os.Stderr rather than the program's own
-// output, so under `ccdad 2>/dev/null` the login would wait for a code the user
-// was never shown, behind a dashboard that had vanished.
+// The one gate this key needs. `ccdad add claude` writes every line of its
+// prose to stderr and the library gives the child os.Stderr rather than the
+// program's own output, so under `ccdad 2>/dev/null` the login would wait for a
+// code the user was never shown, behind a dashboard that had vanished.
 func TestTheAddKeyRefusesWhenStderrIsRedirectedAndNamesTheRedirect(t *testing.T) {
 	if !strings.Contains(addNeedsStderr, "stderr") {
 		t.Fatal("the refusal does not name what is redirected, so a user cannot act on it")

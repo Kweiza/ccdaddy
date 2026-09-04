@@ -137,7 +137,7 @@ func noteCooldown(cmd *cobra.Command, err error) {
 // notice printed to a log nobody reads is not a notice.
 //
 // Every attended path that writes the live credentials file calls this, and
-// there are three: `ccdad switch`, its API-key form, and `ccdad add
+// there are three: `ccdad switch`, its API-key form, and `ccdad add claude
 // --activate`. The first has the verdict already — Execute decided it under
 // Claude Code's credential locks — and the other two write the file without
 // ever constructing a switcher.Result, which is why this takes the verdict

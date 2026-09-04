@@ -47,7 +47,7 @@ func TestTheLoginSurfaceFlagsDoNotContradictTheSurfaceTheySelect(t *testing.T) {
 // TestTheNoLoginRefusalDoesNotRecommendAnAccountThatCannotBeRanked covers the
 // other sentence in this file that reads as advice and is a trap.
 //
-// With no browser and no terminal, `ccdad add` refused and pointed at
+// With no browser and no terminal, `ccdad add claude` refused and pointed at
 // `ccdad add-token`. That command works, and the account it stores has no
 // claudeAiOauth record — so daemon.pollable skips it on every cadence, no
 // reading is ever produced, and the account can never be ranked or rotated
@@ -78,9 +78,9 @@ func TestTheNoLoginRefusalDoesNotRecommendAnAccountThatCannotBeRanked(t *testing
 // `add-token` described itself as the thing to "use on a headless machine",
 // which is the sentence a person in a container reads right before they create
 // an account that can never be ranked. It is also no longer true: `ccdad add
-// --no-browser` completes a login with no browser at all, so headless is not
-// the distinction. The distinction is whether a REFRESH GRANT comes with the
-// credential, and only the OAuth login mints one.
+// claude --no-browser` completes a login with no browser at all, so headless
+// is not the distinction. The distinction is whether a REFRESH GRANT comes with
+// the credential, and only the OAuth login mints one.
 func TestAddTokenSaysWhatItCostsBeforeSomebodyReachesForIt(t *testing.T) {
 	long := newAddTokenCmd().Long
 

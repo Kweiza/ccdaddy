@@ -313,7 +313,7 @@ func TestACodexRateLimitReachesTheSharedBook(t *testing.T) {
 
 // An account whose grant is dead is not polled: every request would spend a
 // round trip to be told the same thing, and the remedy is a person running
-// `ccdad codex add`.
+// `ccdad add codex`.
 func TestAnAccountNeedingALoginIsNotPolled(t *testing.T) {
 	isolateEngine(t)
 	seedCodexAccount(t, "cx-1")

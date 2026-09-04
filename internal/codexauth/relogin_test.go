@@ -26,7 +26,7 @@ func TestAMarkNamingTheStoredTokenNeedsALogin(t *testing.T) {
 }
 
 // The whole point of hashing the token rather than setting a flag: a later
-// `ccdad codex add` stores a new refresh token, and the mark stops matching
+// `ccdad add codex` stores a new refresh token, and the mark stops matching
 // with nothing having to clear it. A stale mark that survived a re-login would
 // hold an account out of rotation for good.
 func TestAMarkStopsMatchingOnceTheTokenHasMovedOn(t *testing.T) {

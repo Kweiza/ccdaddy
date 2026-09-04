@@ -222,9 +222,9 @@ func (s *State) Quarantine(uuid string, now time.Time, d time.Duration, reason s
 }
 
 // ClearQuarantine lifts an account's quarantine and reports whether there was
-// one. `ccdad add` re-authenticating an existing uuid must call this: store.Add
-// updates in place, so without it the user re-logs-in successfully and the
-// engine goes on refusing to use the account.
+// one. `ccdad add claude` re-authenticating an existing uuid must call this:
+// store.Add updates in place, so without it the user re-logs-in successfully
+// and the engine goes on refusing to use the account.
 func (s *State) ClearQuarantine(uuid string) bool {
 	if _, ok := s.data.Quarantine[uuid]; !ok {
 		return false

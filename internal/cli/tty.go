@@ -23,12 +23,12 @@ var stdoutIsTTY = func() bool { return isTTY(os.Stdout) }
 // stderrIsTTY reports whether this process's stderr is a terminal.
 //
 // One decision hangs on it, and it is a refusal. The terminal dashboard's
-// add-account key hands the terminal to a child `ccdad add`, and bubbletea
-// gives that child os.Stderr -- not the program's own output -- as its stderr.
-// `ccdad add` writes every line of its prose there: the login URL, the paste
-// instructions, the re-prompt. Under `ccdad 2>/dev/null` the child would sit
-// waiting for a code the user was never shown, behind a dashboard that had
-// vanished. The key refuses instead, and names the redirect.
+// add-account key hands the terminal to a child `ccdad add claude`, and
+// bubbletea gives that child os.Stderr -- not the program's own output -- as
+// its stderr. `ccdad add claude` writes every line of its prose there: the
+// login URL, the paste instructions, the re-prompt. Under `ccdad 2>/dev/null`
+// the child would sit waiting for a code the user was never shown, behind a
+// dashboard that had vanished. The key refuses instead, and names the redirect.
 var stderrIsTTY = func() bool { return isTTY(os.Stderr) }
 
 // outWidth is how many display columns w has, and 0 when it has none.

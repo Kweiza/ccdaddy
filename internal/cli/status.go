@@ -369,8 +369,11 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 		fmt.Fprintln(out, view.WrapLabeled(fmt.Sprintf("Codex:   the proxy is on 127.0.0.1:%d, not the port it resolved; codex sessions launched before this daemon must be relaunched", r.Status.CodexProxyPort), outWidth(cmd.OutOrStdout())))
 	}
 
+	// BOTH providers, and this is one of the few sentences where that is not a
+	// preference. There is nothing in the store to infer a provider from, so
+	// naming one would be a guess printed as advice.
 	if len(rows) == 0 {
-		fmt.Fprintln(cmd.ErrOrStderr(), "No accounts yet. Run 'ccdad add' to log one in.")
+		fmt.Fprintln(cmd.ErrOrStderr(), "No accounts yet. Run 'ccdad add claude' or 'ccdad add codex' to log one in.")
 		return nil
 	}
 

@@ -103,7 +103,10 @@ func newRunwayCmd() *cobra.Command {
 			}
 			switch {
 			case len(accounts) == 0:
-				fmt.Fprintln(errw, "No accounts yet. Run 'ccdad add' to log one in.")
+				// Both providers: an empty store says nothing about which one
+				// the reader came here for, and the case below is the only one
+				// that has a fleet to read a provider off.
+				fmt.Fprintln(errw, "No accounts yet. Run 'ccdad add claude' or 'ccdad add codex' to log one in.")
 			case noClaudeAccounts(accounts):
 				// A fleet of nothing but Codex accounts is not a fleet with
 				// too little history — codexNotForecast above already named

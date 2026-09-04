@@ -716,9 +716,16 @@ func TestATargetlessSwitchWithNoViableTargetIsBlocked(t *testing.T) {
 		t.Fatalf("exit = %d (%s), want %d", code, errOut, ExitBlocked)
 	}
 	// The count and the remedy, not just the word: a user whose engine is
-	// parked has to be told that re-authenticating is what unparks it.
-	if !strings.Contains(errOut, "2 account(s) quarantined") || !strings.Contains(errOut, "ccdad add") {
-		t.Errorf("stderr = %q, want the count and the remedy", errOut)
+	// parked has to be told that re-authenticating is what unparks it. Both
+	// logins, because Explain answers for the codex lane too and bare
+	// `ccdad add` would be a usage error at the end of the advice.
+	if !strings.Contains(errOut, "2 account(s) quarantined") {
+		t.Errorf("stderr = %q, want the count", errOut)
+	}
+	for _, want := range []string{"ccdad add claude", "ccdad add codex"} {
+		if !strings.Contains(errOut, want) {
+			t.Errorf("stderr = %q, want the remedy to name %q", errOut, want)
+		}
 	}
 }
 

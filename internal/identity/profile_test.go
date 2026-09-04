@@ -235,8 +235,8 @@ func TestNewClientMatchesClaudeCodesProfileTimeout(t *testing.T) {
 }
 
 // Every other test in this file overwrites BaseURL to reach a local server, so
-// the default — the one a real `ccdad add` uses — was written by nothing and
-// read by nothing. An empty default would send the profile request to a
+// the default — the one a real `ccdad add claude` uses — was written by nothing
+// and read by nothing. An empty default would send the profile request to a
 // relative path and resolve every account to nobody.
 func TestNewClientDefaultsToTheAnthropicAPI(t *testing.T) {
 	if got := NewClient().BaseURL; got != oauth.APIBaseURL {

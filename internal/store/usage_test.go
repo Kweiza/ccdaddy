@@ -52,9 +52,9 @@ func reopen(t *testing.T) *Store {
 
 // Every production Classify call passes an empty UsageShape, so the window
 // evidence Classify makes primary has never once been consulted. A pure credit
-// account added by `ccdad add` is filed as a subscription and walks straight
-// past the credit gate — which is precisely the failure that gate exists to
-// prevent.
+// account added by `ccdad add claude` is filed as a subscription and walks
+// straight past the credit gate — which is precisely the failure that gate
+// exists to prevent.
 func TestApplyUsageReclassifiesACreditAccountOnRealEvidence(t *testing.T) {
 	s := seed(t, identity.KindSubscription)
 

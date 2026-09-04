@@ -108,7 +108,7 @@ func TestEvaluateDefaultsToClaude(t *testing.T) {
 // Ahead of the read for a reason: the Codex account's credential file exists
 // and is readable, so the read succeeds and the refusal that follows would be
 // "this account has no Claude Code login" -- a true sentence that sends a user
-// to `ccdad add` for an account that is logged in perfectly well.
+// to `ccdad add claude` for an account that is logged in perfectly well.
 func TestExecuteRefusesANonClaudeTarget(t *testing.T) {
 	isolate(t)
 	target := seedCodex(t, "u-codex-1", "c@example.com")

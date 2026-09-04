@@ -143,6 +143,6 @@ func unattributedNotice(res switcher.Attribution) string {
 		"ccdad could not attribute the current credential (%s) to a managed account. "+
 			"That is not proof it is unmanaged: Claude Code rotates a login's refresh token on "+
 			"every refresh, and ccdad matches on that token, so one of your own accounts stops "+
-			"being recognisable the moment it refreshes. `ccdad add` re-registers an account whose "+
-			"token has moved on.", res.Via)
+			"being recognisable the moment it refreshes. `ccdad add claude` re-registers an account "+
+			"whose token has moved on.", res.Via)
 }

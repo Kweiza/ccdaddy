@@ -15,7 +15,8 @@ import (
 )
 
 // DefaultLoginTimeout bounds a login attempt. Claude Code has no timeout at all;
-// ccdad adds one so an abandoned `ccdad add` cannot hold a terminal forever.
+// ccdad adds one so an abandoned `ccdad add claude` cannot hold a terminal
+// forever.
 const DefaultLoginTimeout = 300 * time.Second
 
 // maxBadPastes bounds the re-prompt. A malformed paste is not fatal — the

@@ -194,11 +194,16 @@ func runCodexAdd(cmd *cobra.Command, allowWorkspaceMember bool) error {
 	if acct.Tier != "" {
 		fmt.Fprintf(stderr, ", %s", acct.Tier)
 	}
-	// What is true right now, and nothing this build cannot back up: the
-	// account is logged in and stored. Switching a Codex account arrives with
-	// the lane that serves them, in a later part, so naming a command here
-	// today would send every reader straight into that command's own refusal.
-	fmt.Fprintf(stderr, ").\nIt is logged in and stored.\n")
+	// Only what this build can back up. Switching shipped with the lane that
+	// serves these accounts, so the command IS namable now -- and it is worth
+	// naming, because a first Codex account is stored without becoming the one
+	// ccdad serves codex from, and nothing else on this path says so.
+	//
+	// It is the --provider form and not `ccdad switch <account>`: this login
+	// may have stored an account that is not the best seat to serve, and the
+	// asserted form is the one that ranks.
+	fmt.Fprintf(stderr, ").\nIt is logged in and stored.\n"+
+		"`ccdad switch --provider codex` picks the account ccdad serves codex from.\n")
 	return nil
 }
 

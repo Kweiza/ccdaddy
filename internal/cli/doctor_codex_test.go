@@ -50,7 +50,7 @@ func TestTheCodexReloginRowNamesTheAccountAndTheRemedy(t *testing.T) {
 		t.Fatalf("codex-relogin = %s with a dead grant, want warn", got)
 	}
 	detail := r.detail(t, "codex-relogin")
-	if !strings.Contains(detail, "codex@example.com") || !strings.Contains(detail, "ccdad codex add") {
+	if !strings.Contains(detail, "codex@example.com") || !strings.Contains(detail, "ccdad add codex") {
 		t.Fatalf("codex-relogin does not name the account and the remedy: %s", detail)
 	}
 }

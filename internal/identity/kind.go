@@ -89,9 +89,9 @@ func isMeteredBilling(s string) bool {
 // "Usage credits cover you when you hit your plan limits" disclaimer to a
 // pay-as-you-go enterprise seat — so window presence is the only honest test.
 //
-// It exists for `ccdad add`, which never calls the usage endpoint and so hands
-// Classify an empty UsageShape by construction. Without it that path has only
-// billing_type to go on, and a money-metered enterprise seat reports
+// It exists for `ccdad add claude`, which never calls the usage endpoint and so
+// hands Classify an empty UsageShape by construction. Without it that path has
+// only billing_type to go on, and a money-metered enterprise seat reports
 // "stripe_subscription_contracted" there: one of the four values Claude Code's
 // own QG() treats as a SUBSCRIPTION. No allowlist on that field can ever reach
 // the account.

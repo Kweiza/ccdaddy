@@ -313,8 +313,12 @@ func Explain(plan strategy.Plan) string {
 	if plan.HasRetryAt {
 		msg += fmt.Sprintf("; try again after %s", plan.RetryAt.Format(time.Kitchen))
 	}
+	// Explain answers for both lanes -- the codex switch prints it too -- so
+	// the remedy names both logins rather than assuming the quarantined
+	// account is a Claude one.
 	if len(plan.Quarantined) > 0 {
-		msg += fmt.Sprintf("; %d account(s) quarantined, re-run 'ccdad add' for them", len(plan.Quarantined))
+		msg += fmt.Sprintf("; %d account(s) quarantined, re-run 'ccdad add claude' or 'ccdad add codex' for them",
+			len(plan.Quarantined))
 	}
 	return msg
 }

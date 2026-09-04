@@ -57,7 +57,7 @@ type Account struct {
 	// is what people paste into an issue. It names a TOKEN rather than being a
 	// flag, and that is the whole mechanism: an account needs a relogin
 	// exactly while this equals the hash of the token it still holds, so a
-	// later `ccdad codex add` stores a new one and the mark stops matching.
+	// later `ccdad add codex` stores a new one and the mark stops matching.
 	// Nothing has to clear it, and no stale mark can survive a re-login.
 	CodexReloginFor string `toml:"codex_relogin_for,omitempty"`
 	// Tier is organization_type, e.g. claude_max.

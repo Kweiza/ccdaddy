@@ -603,7 +603,7 @@ func importSnapshot(b cclink.Blob) cclink.Blob {
 // both sides were written with. A pair that cannot be compared — a token
 // account, a snapshot with no expiry, an unparseable record — answers false and
 // lets the import proceed: the user asked for this document, and the worst case
-// is an account that needs `ccdad add` again, whereas refusing every
+// is an account that needs `ccdad add claude` again, whereas refusing every
 // uncomparable pair would make restoring a backup need --force as a matter of
 // routine.
 func localCredentialIsNewer(s *store.Store, uuid string, incoming cclink.Blob) bool {

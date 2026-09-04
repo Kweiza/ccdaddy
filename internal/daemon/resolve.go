@@ -111,8 +111,8 @@ func (e *Engine) resolveLive(ctx context.Context, s *store.Store) (store.Account
 		return store.Account{}, liveForeign
 	}
 	// Overlaid onto what the account already holds, not written in its place.
-	// store.Add replaces the credential file WHOLESALE -- `ccdad add` carries
-	// the same warning for the same reason -- so handing it Extract(live)
+	// store.Add replaces the credential file WHOLESALE -- `ccdad add claude`
+	// carries the same warning for the same reason -- so handing it Extract(live)
 	// alone would delete this account's stored api-key record along with any
 	// account-scoped key the live file happens not to carry, as the price of
 	// adopting a refreshed token.
