@@ -1667,6 +1667,30 @@ func (e *Engine) record(uuid string, at time.Time, err error) {
 	e.polls[uuid] = rec
 }
 
+// reached drops the reason the last poll gave for not reaching an account,
+// because something else has just reached it.
+//
+// It is deliberately HALF of record, and the half it leaves out is the point.
+// The Codex lane commits readings the proxy took off turns it was forwarding
+// anyway, and such a reading is direct evidence the account answered -- so the
+// recorded failure, which is what `ccdad status --json` and the daemon screen
+// print to say ccdad cannot reach this account, is contradicted and goes. But
+// LastPollAt says when the daemon last POLLED, and no poll was made: stamping it
+// would report a request to /wham/usage that never happened. Without this an
+// account whose session is busy enough that the lane never needs to poll it
+// carried one flaky network's error for hours, printed under a quota figure a
+// minute old.
+func (e *Engine) reached(uuid string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	rec, ok := e.polls[uuid]
+	if !ok || rec.err == "" {
+		return
+	}
+	rec.err = ""
+	e.polls[uuid] = rec
+}
+
 // publish builds the status document. It carries engine state and NOTHING a
 // reader could take a quota number from: the promise that `list` and `status
 // --json` can never disagree only holds while every figure has exactly one

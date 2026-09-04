@@ -349,6 +349,21 @@ func codexWindows(primary, secondary float64, secondaryReset time.Time) *usage.S
 	return snap
 }
 
+// publishedRow is one account's published engine state, by uuid rather than by
+// position: the document lists Claude accounts too, and a test that read
+// Accounts[0] would be asserting about whichever row the store happened to
+// return first.
+func publishedRow(t *testing.T, e *Engine, uuid string) AccountStatus {
+	t.Helper()
+	for _, row := range e.Snapshot().Accounts {
+		if row.UUID == uuid {
+			return row
+		}
+	}
+	t.Fatalf("%s has no published row", uuid)
+	return AccountStatus{}
+}
+
 // A poll that was already in flight when the proxy harvested a fresher reading
 // must not land on top of it.
 //
@@ -473,6 +488,52 @@ func TestAWindowThatHasRolledOverIsNotCarriedIntoAHarvest(t *testing.T) {
 	}
 	if got.Snapshot.CodexSecondary.Present {
 		t.Fatal("a window whose reset has passed was carried forward as present")
+	}
+}
+
+// A harvested reading is evidence the account was REACHED, and the record of
+// the last poll is what the status document and the TUI print when they say
+// ccdad cannot reach it.
+//
+// Measured before this: one poll that failed on a flaky network, then a busy
+// session in which every reading arrived through the proxy before the next
+// NextPollAt came round, and `ccdad status --json` went on reporting "network is
+// unreachable" for an account it was reading successfully every few minutes.
+//
+// LastPollAt is deliberately NOT moved. It says when the daemon last polled, and
+// a harvest is not a poll: stamping it would report a request to /wham/usage
+// that was never made.
+func TestAHarvestedReadingClearsTheErrorOfAPollThatFailed(t *testing.T) {
+	isolateEngine(t)
+	seedCodexAccount(t, "cx-1")
+
+	now := tickEpoch
+	e := codexEngine(t, codexTokensAreFine,
+		func(context.Context, string, string) (*usage.Snapshot, codexusage.Identity, error) {
+			return nil, codexusage.Identity{}, errors.New("dial tcp 172.64.155.209:443: connect: network is unreachable")
+		})
+	e.Now = func() time.Time { return now }
+	tick(t, e)
+
+	before := publishedRow(t, e, "cx-1")
+	if before.LastPollError == "" {
+		t.Fatal("the failed poll recorded no error, so this test would pass on a daemon that never clears one")
+	}
+
+	// The clock MOVES between the failed poll and the harvest, or the second
+	// assertion below is blind: a commit that stamped LastPollAt from a frozen
+	// clock would write back the instant the poll already recorded, and moving
+	// the field would be indistinguishable from leaving it alone.
+	now = tickEpoch.Add(30 * time.Minute)
+	e.harvestCodexSample("cx-1", codexSnapshot(34))
+	tick(t, e)
+
+	got := publishedRow(t, e, "cx-1")
+	if got.LastPollError != "" {
+		t.Fatalf("the status document still says %q for an account the proxy read a moment ago", got.LastPollError)
+	}
+	if !got.LastPollAt.Equal(before.LastPollAt) {
+		t.Fatalf("LastPollAt moved from %s to %s on a harvest; no request to /wham/usage was made, and the field says when the daemon last polled", before.LastPollAt, got.LastPollAt)
 	}
 }
 
