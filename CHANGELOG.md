@@ -115,6 +115,7 @@ by `uuid` or `alias`.
   `TestTheRateLimitHeadersBecomeAUsageSample`,
   `TestTheInStreamRateLimitEventBecomesAUsageSample`,
   `TestAnEventSplitAcrossTwoWritesIsStillRead`,
+  `TestAHarvestedReadingIsCommittedWithoutAPoll`,
   `TestAPollAlreadyInFlightCannotOverwriteAHarvestedReading`,
   `TestAPartialHarvestKeepsTheWindowItDidNotCarry`,
   `TestAWindowThatHasRolledOverIsNotCarriedIntoAHarvest` and

@@ -15,6 +15,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/buildinfo"
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/codexproxy"
+	"github.com/Kweiza/ccdaddy/internal/codexusage"
 	"github.com/Kweiza/ccdaddy/internal/provider"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
@@ -61,7 +62,7 @@ func TestAHarvestedReadingIsHandedToTheLaneExactlyOnce(t *testing.T) {
 
 // The lane's ranking is what the proxy serves a new thread from, and the two
 // live in different packages joined by exactly this function.
-func TestTheLanesRankingReachesTheProxy(t *testing.T) {
+func TestRankedUUIDsFlattensThePoolBestFirst(t *testing.T) {
 	ev := switcher.Evaluation{Plan: strategy.Plan{Result: strategy.Result{
 		Order: []strategy.Ranked{{UUID: "uuid-a"}, {UUID: "uuid-b"}},
 	}}}
@@ -71,6 +72,40 @@ func TestTheLanesRankingReachesTheProxy(t *testing.T) {
 	}
 	if got := rankedUUIDs(switcher.Evaluation{}); len(got) != 0 {
 		t.Fatalf("rankedUUIDs() = %v for an evaluation that never ranked, want nothing", got)
+	}
+}
+
+// The flattener above is joined to the proxy by one line in Tick, and that line
+// was what nothing tested: deleting `e.SetCodexRanked(rankedUUIDs(codexEv))`
+// left the whole daemon package green, while codexRanked() came back empty
+// forever and the proxy fell through to the store's row order -- so a user with
+// three codex accounts got new threads, and 429 replays, on whichever account
+// accounts.toml happened to list first rather than on the one the lane ranks
+// best. That is the disagreement between the two halves of ccdad that the line
+// exists to prevent.
+//
+// It takes TWO ticks, and that is not padding. The lane ranks on the cache as
+// it stands and dispatches the polls whose answers the next tick will rank, so
+// the first tick's evaluation has no readings in it and ranks nothing at all --
+// an assertion made after one tick reads [] whether the wiring is there or not.
+func TestTheTickHandsTheLanesRankingToTheProxy(t *testing.T) {
+	isolateEngine(t)
+	seedCodexAccount(t, "cx-1")
+	seedCodexAccount(t, "cx-2")
+
+	e := codexEngine(t, codexTokensAreFine,
+		func(_ context.Context, token, _ string) (*usage.Snapshot, codexusage.Identity, error) {
+			if token == "AT-cx-1" {
+				return codexSnapshot(90), codexusage.Identity{}, nil
+			}
+			return codexSnapshot(10), codexusage.Identity{}, nil
+		})
+	tick(t, e) // fills the cache
+	tick(t, e) // ranks on it
+
+	got := e.codexRanked()
+	if len(got) != 2 || got[0] != "cx-2" || got[1] != "cx-1" {
+		t.Fatalf("codexRanked() = %v after a tick that ranked two codex accounts, want [cx-2 cx-1]: cx-1 is 90%% spent and cx-2 is 10%%, so the proxy must start a new thread on cx-2", got)
 	}
 }
 
