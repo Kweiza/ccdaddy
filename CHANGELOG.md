@@ -204,10 +204,20 @@ by `uuid` or `alias`.
   `codex-shim` row saying which codex a bare `codex` resolves to, and `ccdad
   run` and `ccdad codex exec` are now allowed to start a daemon, because the
   account they serve is reached through one. There is no shim on Windows: run
-  `ccdad codex exec -- <args>` there. Pinned by
+  `ccdad codex exec -- <args>` there. The row also tells a missing execute bit
+  from a shim ccdad cannot repair at all: a mode that already reads `0755` on a
+  file this user still cannot run is an ACL entry or the file's ownership,
+  ccdad's only repair is a chmod and no chmod reaches either, so the row names
+  `chmod -N` (or `setfacl -b`) instead of an install that would find an
+  executable mode and report the shim as already there — and
+  `ccdad codex shim install` now refuses that machine rather than agreeing with
+  the old advice. Pinned by
   `TestSetupPathKeepsTheShimDirectoryOnALaterPlainRun`,
   `TestSetupPathRegistersTheShimDirectoryForAPackageManagerInstall`,
   `TestDoctorWarnsWhenCodexIsNotRoutedThroughCcdad`,
+  `TestDoctorDoesNotOfferAnInstallForAnACLItCannotClear`,
+  `TestCodexShimInstallRefusesAShimItCannotMakeRunnable`,
+  `TestCodexShimInstallDoesNotClaimAChmodItCannotMake`,
   `TestCodexExecIsOnTheAutoStartAllowList` and
   `TestCodexShimInstallRefusesOnWindows`.
 

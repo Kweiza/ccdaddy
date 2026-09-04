@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"time"
@@ -91,6 +92,53 @@ func shimPath() string {
 		return ""
 	}
 	return filepath.Join(dir, shimProgramName)
+}
+
+// shimRunnable answers whether THIS user can actually run the shim, which is
+// the question a PATH search asks and is not the question a mode answers.
+//
+// exec.LookPath rather than a permission-bit test, because an owner or an ACL
+// can withhold execute from this user on a file whose mode reads 0o755.
+// Measured on darwin: a shim at 0o755 plus
+// `chmod +a "user:<me> deny execute" <shim>` keeps mode 0o755, keeps
+// Perm()&0o111 set, and makes exec.LookPath and every exec of the file
+// "permission denied".
+//
+// A var so the arms that turn on the two answers disagreeing can be exercised
+// on an OS or a filesystem that cannot be given an ACL. Production never
+// reassigns it.
+var shimRunnable = func(path string) error {
+	_, err := exec.LookPath(path)
+	return err
+}
+
+// errShimUnrunnable is the refusal for a shim ccdad cannot make runnable.
+//
+// The only repair ccdad has is os.Chmod, and it reaches the permission bits and
+// nothing else: it cannot clear an ACL entry and it cannot change who owns the
+// file. So on a shim whose mode already says executable and which still will
+// not run, BOTH of the things install would otherwise say are false -- "already
+// installed", of a shim that cannot start, and "a new terminal runs `codex`
+// through ccdad", of a shim no terminal will run.
+//
+// Exit 4 and not 1: the user asked for something, it is blocked, and there is a
+// different command to run. It is theirs and not ccdad's, which is the whole
+// content of the message.
+//
+// Unlinking the file and writing a fresh one is deliberately NOT ccdad's repair
+// here. It is somebody's decision -- an administrator's, a management profile's,
+// the user's own -- and stepping out from under it with nothing said is worse
+// than refusing. It is also not reliable: measured on darwin, a directory
+// carrying `deny execute,file_inherit` hands the entry straight to a file
+// created inside it, so the fresh shim is born unrunnable and install would
+// report success on a machine it had not fixed.
+func errShimUnrunnable(path string, mode fs.FileMode, cause error) error {
+	return WithCode(fmt.Errorf(
+		"%s is mode %v and this user still cannot execute it (%v). That is an ACL entry or the file's "+
+			"ownership, not a permission bit, and ccdad repairs the mode and nothing else, so no "+
+			"reinstall will put it back. Clear the deny entry yourself -- `chmod -N %s` on macOS, "+
+			"`setfacl -b %s` on Linux -- and when %s hands the entry down by inheritance, clear it there "+
+			"too", path, mode, cause, path, path, filepath.Dir(path)), ExitBlocked)
 }
 
 // shimRecordPath is <CCDAD_HOME>/codex-shim.json.
@@ -252,6 +300,12 @@ func runCodexShimInstall(cmd *cobra.Command) error {
 // deleted has an unregistered directory, and one whose shim lost its executable
 // bit has a codex that refuses to start -- treating either as installed would
 // report nothing to do while the thing the user asked for stayed broken.
+//
+// A fourth thing is asked but never repaired: whether the shim can actually be
+// run. The three above are all writes, and the answer to all three is a write
+// this function makes; a shim held down by an ACL entry or by its ownership is
+// past what any write from here can reach, and it is refused rather than
+// reported either way.
 func writeCodexShim() (bool, error) {
 	dir, path := shimDir(), shimPath()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -269,11 +323,21 @@ func writeCodexShim() (bool, error) {
 	// would answer "nothing to do" to exactly the machine that needs the chmod
 	// below, and put the only repair there is out of reach.
 	executable := false
+	var mode fs.FileMode
 	if info, statErr := os.Stat(path); statErr == nil {
-		executable = info.Mode().Perm()&0o111 != 0
+		mode = info.Mode().Perm()
+		executable = mode&0o111 != 0
 	}
 	_, hadRecord := shimRecord()
 	if string(existing) == codexShimBody && hadRecord && executable {
+		// Nothing left to WRITE -- and a mode is not permission, so the last
+		// question is the one the shell asks rather than the one the bits
+		// answer. Without it this returns "already installed" to the machine
+		// whose `codex` cannot start, and that user follows the advice, nothing
+		// happens, and nothing on the machine says why.
+		if rerr := shimRunnable(path); rerr != nil {
+			return false, errShimUnrunnable(path, mode, rerr)
+		}
 		return false, nil
 	}
 	if err := os.WriteFile(path, []byte(codexShimBody), 0o755); err != nil {
@@ -282,6 +346,15 @@ func writeCodexShim() (bool, error) {
 	// The repair the mode check above exists to reach.
 	if err := os.Chmod(path, 0o755); err != nil {
 		return false, fmt.Errorf("making %s executable: %w", path, err)
+	}
+	// Whether that repair worked, asked rather than assumed. The chmod lands on
+	// the mode bits, a deny entry is not one of them, and the caller's next line
+	// is "a new terminal runs `codex` through ccdad" -- measured on darwin, a
+	// rewrite and a chmod over a shim carrying `deny execute` leave it exactly
+	// as unrunnable as it was. The record is written only past this point, so
+	// the record continues to mean ccdad believes this shim works.
+	if rerr := shimRunnable(path); rerr != nil {
+		return false, errShimUnrunnable(path, 0o755, rerr)
 	}
 	rec, err := json.Marshal(codexShimRecord{
 		SchemaVersion: 1,
