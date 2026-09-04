@@ -137,7 +137,32 @@ func preemptTarget(byUUID map[string]Candidate, res Result, activeUUID string, o
 	var throttled Ranked
 	hasThrottled := false
 	for _, r := range res.Order {
-		if isActive(r.UUID, activeUUID) || !r.Headroom.Known {
+		// The live account, reached in ranking order, ENDS the walk rather than
+		// being skipped over.
+		//
+		// This rule exists to move somewhere BETTER before the session is cut
+		// off. Everything after the live account in Result.Order is, by the
+		// order's own definition, worse than it -- and moving to a worse account
+		// does not buy the session anything: it is cut off there sooner, and the
+		// engine has spent a switch to arrange that.
+		//
+		// Skipping instead of stopping is what made this rule flap. Nothing else
+		// in the pass damps it: pre-emption is answered BEFORE the cooldown and
+		// before every margin, on purpose, because an account about to run out
+		// must not be held on by a hold. So with the live account already first,
+		// this walk took second place, the ordinary better-target rule moved
+		// back on the next tick, and the two alternated for as long as the
+		// projection held. Measured on a live fleet: a switch every two minutes
+		// -- the poll cadence -- for fifty-four minutes, sixty-five switches,
+		// between the same two accounts.
+		//
+		// Staying is the right answer when nothing is better. The projection is
+		// still true and the account will still run out; what is false is the
+		// premise that somewhere else is preferable.
+		if isActive(r.UUID, activeUUID) {
+			break
+		}
+		if !r.Headroom.Known {
 			continue
 		}
 		if empty, known := OutOfQuota(r.Headroom); known && empty {

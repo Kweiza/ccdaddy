@@ -142,8 +142,12 @@ func TestAnEmptyAccountIsSpentEvenWhenItsPaceTargetIsAbove100(t *testing.T) {
 	o := hoverOpts().withHover(pool)
 
 	h := measure(pool[0], o).Headroom
-	if h.Slack <= 0 {
-		t.Fatalf("Slack = %v; this test is pointless unless the pace target is above 100", h.Slack)
+	// Not negative is the premise. The pace target is 192, so the subtraction
+	// gives +92; the clamp on an empty window brings that to exactly 0. Either
+	// way Spent's `Slack < 0` clause is false and the MinPct clause is the only
+	// one that can fire, which is what this test holds.
+	if h.Slack < 0 {
+		t.Fatalf("Slack = %v; this test is pointless unless the slack is non-negative", h.Slack)
 	}
 	if spent, known := Spent(h); !known || !spent {
 		t.Errorf("Spent = %v (known %v) on an account at 100%% used with slack %+.0f",
