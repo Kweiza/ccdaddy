@@ -78,7 +78,7 @@ const (
 	// StateNeedsRelogin is a Codex account whose refresh grant the endpoint has
 	// rejected. It is distinct from quarantined because the remedy is: a
 	// quarantine lapses on a timer, and this one only ends when a person runs
-	// `ccdad codex add`.
+	// `ccdad add codex`.
 	StateNeedsRelogin AccountState = "needs-relogin"
 )
 

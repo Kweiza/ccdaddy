@@ -393,7 +393,7 @@ func TestRunRemovesTheSessionWhenTheChildExits(t *testing.T) {
 // server rotates the refresh token when it does — revoking the old one. The
 // store still holds the old one. Delete the session without looking and the
 // account is dead: `ccdad switch` installs a revoked credential, the daemon
-// cannot poll it, and the only repair is `ccdad add` again.
+// cannot poll it, and the only repair is `ccdad add claude` again.
 //
 // internal/tokens already carries the same adopt-back for the live file; this
 // is that rule applied to a file only `run` knows about.
@@ -1658,7 +1658,7 @@ func TestRunOnACodexAccountRefusesTheLoginAndLogoutTails(t *testing.T) {
 			if !strings.Contains(said, "c@example.com") {
 				t.Errorf("the refusal does not name the account:\n%s", said)
 			}
-			if !strings.Contains(said, "plain shell") || !strings.Contains(said, "ccdad codex add") {
+			if !strings.Contains(said, "plain shell") || !strings.Contains(said, "ccdad add codex") {
 				t.Errorf("the refusal does not name both ways to do what was meant:\n%s", said)
 			}
 		})
@@ -1671,7 +1671,7 @@ func TestRunOnACodexAccountRefusesTheLoginAndLogoutTails(t *testing.T) {
 // fail here rather than leave the other half lying.
 func TestRunsHelpSaysTheLoginTailsAreRefused(t *testing.T) {
 	long := newRunCmd().Long
-	for _, want := range []string{"codex login", "codex logout", "refused", "plain shell", "ccdad codex add"} {
+	for _, want := range []string{"codex login", "codex logout", "refused", "plain shell", "ccdad add codex"} {
 		if !strings.Contains(long, want) {
 			t.Errorf("`ccdad run` help does not mention %q, so it promises a carve-out it does not have:\n%s",
 				want, long)

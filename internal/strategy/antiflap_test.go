@@ -278,9 +278,10 @@ func TestAQuarantineWithNoExpiryNeverLapses(t *testing.T) {
 	}
 }
 
-// store.Add updates an existing uuid in place, so `ccdad add` re-authenticating
-// an account has to lift the quarantine explicitly. Without this the user logs
-// in again successfully and the engine goes on refusing to use the account.
+// store.Add updates an existing uuid in place, so `ccdad add claude`
+// re-authenticating an account has to lift the quarantine explicitly. Without
+// this the user logs in again successfully and the engine goes on refusing to
+// use the account.
 func TestClearingAQuarantineLetsAReauthenticatedAccountBack(t *testing.T) {
 	st := NewState()
 	st.Quarantine("b", now, time.Hour, "dead refresh token")

@@ -239,7 +239,7 @@ func newAddClaudeCmd() *cobra.Command {
 // a fleet its rotation silently.
 func noLoginPathRefusal() error {
 	return fmt.Errorf("no browser is available and stdin is not a terminal, so there is no way to complete a login here.\n" +
-		"In a container this is usually a missing -t: docker run -it ... ccdad add --no-browser\n" +
+		"In a container this is usually a missing -t: docker run -it ... ccdad add claude --no-browser\n" +
 		"'ccdad add-token' is the other way in, but the account it stores carries no refresh grant, " +
 		"so it is never polled and can never be ranked or rotated into")
 }
@@ -642,8 +642,8 @@ func aliasIsFree(alias string) error {
 // carries that this exchange did not return are preserved rather than dropped:
 // clauth's typed struct destroyed refreshTokenExpiresAt, rateLimitTier and
 // clientId on every re-serialize, and clientId is what a revocation request
-// needs. Replacing the record wholesale on every `ccdad add` would reintroduce
-// that exact failure one layer above cclink.
+// needs. Replacing the record wholesale on every `ccdad add claude` would
+// reintroduce that exact failure one layer above cclink.
 func credentialBlob(tok *oauth.TokenResponse, profile *identity.Profile, prior cclink.Blob) (cclink.Blob, error) {
 	payload := map[string]any{}
 	if raw, ok := prior["claudeAiOauth"]; ok {
@@ -710,8 +710,9 @@ func newAddTokenCmd() *cobra.Command {
 			"The account this stores carries NO refresh grant, so it is never polled and can\n" +
 			"never be ranked or rotated into: it is a credential you can run with, not a seat\n" +
 			"the engine can choose. A machine with no browser does not need this —\n" +
-			"'ccdad add --no-browser' completes a real login from a pasted code, and only that\n" +
-			"path mints a grant. It needs a terminal on stdin; under docker that means -t.\n\n" +
+			"'ccdad add claude --no-browser' completes a real login from a pasted code, and\n" +
+			"only that path mints a grant. It needs a terminal on stdin; under docker that\n" +
+			"means -t.\n\n" +
 			"An API key can be made the live credential: --activate writes it to Claude Code's\n" +
 			"config as primaryApiKey and removes the OAuth login sitting in front of it.\n" +
 			"A setup token cannot — Claude Code reads one from CLAUDE_CODE_OAUTH_TOKEN only,\n" +
@@ -1019,8 +1020,8 @@ func liveLoginOwner(cmd *cobra.Command, uuid string, live cclink.Blob) liveOwner
 	return liveOwnershipOther
 }
 
-// unreadableLiveNote is what `ccdad add` says when it could not read the live
-// login at all, and "" when it could.
+// unreadableLiveNote is what `ccdad add claude` says when it could not read the
+// live login at all, and "" when it could.
 //
 // It exists because that case is the ONE silent one. With the store unreadable
 // cclink.Load answers a nil blob, so carriableKeys is empty, liveIsThisAccount

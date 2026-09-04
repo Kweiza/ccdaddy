@@ -71,7 +71,7 @@ func (s *Store) SetCredentials(uuid string, creds cclink.Blob) error {
 // expectedHash is the hash of the token whose refresh was rejected, as the
 // caller saw it. The comparison is against what the store holds NOW, inside
 // the lock, and that is the whole point of the method: without it, a terminal
-// refusal for token A racing a `ccdad codex add` that stored token B would
+// refusal for token A racing a `ccdad add codex` that stored token B would
 // mark an account holding a perfectly good grant as needing a relogin.
 //
 // A miss is not an error. It means the store moved past the rejected token

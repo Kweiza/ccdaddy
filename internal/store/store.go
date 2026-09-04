@@ -415,7 +415,8 @@ var ErrProviderMismatch = errors.New("that uuid is stored under a different prov
 // Re-adding an existing uuid updates it in place: the fresh login replaces the
 // stored credentials while the alias, the display index and the two per-account
 // flags — disabled and primary, which belong to the user rather than to the
-// login — survive. This is what makes `ccdad add` double as re-authentication.
+// login — survive. This is what makes `ccdad add claude` double as
+// re-authentication.
 func (s *Store) Add(a Account, creds cclink.Blob) error {
 	return s.mutate(func() error { return s.add(a, creds) })
 }
@@ -613,7 +614,9 @@ func (s *Store) Credentials(uuid string) (cclink.Blob, error) {
 	raw, err := os.ReadFile(s.credentialPath(uuid))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("%w for %q; re-run 'ccdad add' for it", ErrNoCredentials, uuid)
+			// A uuid says nothing about its provider, so both logins are named.
+			return nil, fmt.Errorf("%w for %q; re-run 'ccdad add claude' or 'ccdad add codex' for it",
+				ErrNoCredentials, uuid)
 		}
 		return nil, fmt.Errorf("reading stored credentials: %w", err)
 	}
@@ -752,7 +755,7 @@ func (s *Store) rollback() error {
 		if err := cclink.WriteFileAtomic(path, u.prior, 0o600); err != nil {
 			errs = append(errs, fmt.Errorf(
 				"%q is still in the store but its stored credentials could not be put back at %s; "+
-					"re-run 'ccdad add' for it: %w", u.uuid, path, err))
+					"re-run 'ccdad add claude' or 'ccdad add codex' for it: %w", u.uuid, path, err))
 		}
 	}
 	s.undo = nil

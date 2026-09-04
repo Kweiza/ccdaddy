@@ -426,7 +426,7 @@ func writeUnknownLaunch(w http.ResponseWriter) {
 func writeNeedsRelogin(w http.ResponseWriter, label string) {
 	writeJSON(w, http.StatusUnauthorized, brandedBody{brandedError{
 		Type:    "ccdad_needs_relogin",
-		Message: "ccdad: " + label + " needs a new login; run `ccdad codex add`",
+		Message: "ccdad: " + label + " needs a new login; run `ccdad add codex`",
 	}})
 }
 

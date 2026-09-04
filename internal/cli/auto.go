@@ -293,7 +293,7 @@ func autoPass(ctx context.Context, em *autoEmitter, s *store.Store) (ExitCode, e
 		em.say("Overwriting it could re-present a superseded grant and take that account down. " +
 			"Claude Code rotates a login's refresh token on every refresh and ccdad matches on that " +
 			"token, so a managed account stops being recognisable the moment it refreshes; " +
-			"`ccdad add` re-registers one whose token has moved on.")
+			"`ccdad add claude` re-registers one whose token has moved on.")
 		return ExitBlocked, nil
 	case switcher.Unreadable:
 		// Same family, different remedy: that one waits for an identity, this

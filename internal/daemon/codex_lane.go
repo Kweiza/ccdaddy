@@ -301,7 +301,7 @@ func (e *Engine) codexFailure(ctx context.Context, a store.Account, token string
 			if out, rerr := e.CodexRefresher.Refresh(ctx, a.UUID, token); rerr != nil {
 				e.logf("refreshing %s's codex grant failed: %v", a.UUID, rerr)
 			} else if out.Kind == codexauth.Terminal {
-				e.logf("%s's codex grant is dead (%s); it needs `ccdad codex add`", a.UUID, out.Code)
+				e.logf("%s's codex grant is dead (%s); it needs `ccdad add codex`", a.UUID, out.Code)
 			}
 		}
 		// No reading either way. The next tick polls with whatever the refresher

@@ -907,7 +907,7 @@ func identityMembers(accounts []store.Account) map[string][]string {
 // ever polls Claude: it reads the store's claudeAiOauth blob and calls the
 // Claude usage endpoint with it, and a Codex account is read by an entirely
 // different reading. In the ordinary case a Codex row never carries a
-// claudeAiOauth blob — `ccdad codex add` never writes one — so the credential
+// claudeAiOauth blob — `ccdad add codex` never writes one — so the credential
 // check below happened to exclude it on its own. But `ccdad import` accepts a
 // row that names Provider: codex explicitly alongside a claudeAiOauth blob,
 // and without the provider check such a row would be polled against the wrong
@@ -1196,14 +1196,14 @@ func (e *Engine) poll(ctx context.Context, a store.Account, cfg config.Config,
 // the store.
 //
 // WHY THIS EXISTS. Tier, RateLimitTier, SeatTier and OrganizationUUID were
-// written once, by `ccdad add`, and by nothing else for the life of the
+// written once, by `ccdad add claude`, and by nothing else for the life of the
 // installation. That was invisible until a switch began writing
 // oauthAccount.seatTier from the stored value: an account added before this
 // tree read seat_tier at all carries "", which Claude Code cannot tell from a
 // pro or max seat that genuinely has none, so a money-metered enterprise seat
 // silently loses the Opus tier its own `Zu()` would grant it. The warning
-// `ccdad add` already prints when a profile lookup fails -- "the tier will fill
-// in on the first usage refresh" -- was simply untrue until this ran.
+// `ccdad add claude` already prints when a profile lookup fails -- "the tier
+// will fill in on the first usage refresh" -- was simply untrue until this ran.
 //
 // IT IS DELIBERATELY AFTER commit AND CANNOT AFFECT IT. The usage reading is
 // what a poll exists for and it is already recorded by the time this runs, so a
@@ -1434,7 +1434,7 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now time.Time,
 			e.logf("appending %s's sample to the usage history failed: %v", a.UUID, herr)
 		}
 		// The classification, revised from the same reading and under the same
-		// gate. `ccdad add` and `add-token` both classify from the profile
+		// gate. `ccdad add claude` and `add-token` both classify from the profile
 		// alone -- neither calls the usage endpoint -- so an account whose
 		// profile was unreadable, or whose billing_type says something this
 		// build has no rule for, is filed on a guess. This is the only thing

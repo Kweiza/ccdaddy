@@ -133,7 +133,7 @@ func TestATerminalRefreshWithNothingLeftAsksForANewLogin(t *testing.T) {
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", w.Code)
 	}
-	want := "{\"error\":{\"type\":\"ccdad_needs_relogin\",\"message\":\"ccdad: a@example.com needs a new login; run `ccdad codex add`\"}}"
+	want := "{\"error\":{\"type\":\"ccdad_needs_relogin\",\"message\":\"ccdad: a@example.com needs a new login; run `ccdad add codex`\"}}"
 	if got := strings.TrimSpace(w.Body.String()); got != want {
 		t.Fatalf("body =\n%s\nwant\n%s", got, want)
 	}
@@ -199,7 +199,7 @@ func TestTheRefresherIsAskedAtMostOncePerRequest(t *testing.T) {
 // is written and nothing is marked. The next exchange -- the lane's poll, or
 // the next turn once the 30 s cooldown lifts -- presents the burned grant, is
 // reuse-detected, and goes Terminal. The account is then out of rotation until
-// somebody runs `ccdad codex add`, because somebody pressed Ctrl-C.
+// somebody runs `ccdad add codex`, because somebody pressed Ctrl-C.
 func TestAClientHangupNeverCancelsTheGrantExchange(t *testing.T) {
 	f := newFixture(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)

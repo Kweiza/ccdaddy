@@ -514,7 +514,7 @@ func chooseCodexTarget(cmd *cobra.Command, s *store.Store, root string) (store.A
 		return store.Account{}, WithCode(errSilent, ExitBlocked)
 	}
 	if !ev.Decided {
-		fmt.Fprintln(stderr, "There are no codex accounts. Run 'ccdad codex add' to log one in.")
+		fmt.Fprintln(stderr, "There are no codex accounts. Run 'ccdad add codex' to log one in.")
 		return store.Account{}, WithCode(errSilent, ExitBlocked)
 	}
 

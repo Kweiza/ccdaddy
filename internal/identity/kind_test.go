@@ -32,7 +32,7 @@ func TestClassify(t *testing.T) {
 		{
 			// An account that is both is a subscription. The login and add-token
 			// paths classify with an empty UsageShape because they never fetch
-			// usage, so this is the shape every `ccdad add` sees: the
+			// usage, so this is the shape every `ccdad add claude` sees: the
 			// organization's overage switch is the ONLY credit-looking signal
 			// present, and it must not decide the verdict.
 			name:    "a max org with overage enabled and no usage read is still a subscription",
@@ -149,10 +149,10 @@ func TestParseKind(t *testing.T) {
 }
 
 // TestAnEnterpriseUsageBasedSeatClassifiesAsCreditFromTheProfileAlone pins the
-// only rule `ccdad add` can apply. That path never calls the usage endpoint —
-// it hands Classify an empty UsageShape by construction — so the profile is the
-// whole of the evidence, and getting it wrong is permanent rather than
-// temporary.
+// only rule `ccdad add claude` can apply. That path never calls the usage
+// endpoint — it hands Classify an empty UsageShape by construction — so the
+// profile is the whole of the evidence, and getting it wrong is permanent
+// rather than temporary.
 //
 // Every value here is VERBATIM from a live claude_enterprise seat read on
 // 2026-08-26, and billing_type is the trap the old rule walked into:

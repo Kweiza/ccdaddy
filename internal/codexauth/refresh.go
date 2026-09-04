@@ -420,7 +420,7 @@ func (r *Refresher) failed(uuid string, st *refreshState, cred Credential, statu
 
 	// Compare-and-swap on the rejected token. Written unconditionally, a slow
 	// terminal answer would quarantine an account whose grant a concurrent
-	// `ccdad codex add` had already replaced — and the mark would then match
+	// `ccdad add codex` had already replaced — and the mark would then match
 	// nothing and never clear.
 	hash := RefreshTokenHash(cred.RefreshToken)
 	if err := store.WithStore(func(s *store.Store) error {

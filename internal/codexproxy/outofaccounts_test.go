@@ -114,7 +114,7 @@ func TestOnlyDeadAccountsGetTheBrandedRelogin(t *testing.T) {
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", w.Code)
 	}
-	want := "{\"error\":{\"type\":\"ccdad_needs_relogin\",\"message\":\"ccdad: a@example.com needs a new login; run `ccdad codex add`\"}}"
+	want := "{\"error\":{\"type\":\"ccdad_needs_relogin\",\"message\":\"ccdad: a@example.com needs a new login; run `ccdad add codex`\"}}"
 	if got := strings.TrimSpace(w.Body.String()); got != want {
 		t.Fatalf("body =\n%s\nwant\n%s", got, want)
 	}
@@ -290,7 +290,7 @@ func TestADeadAccountIsNeverAnsweredAsMerelyWaiting(t *testing.T) {
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401; body = %s", w.Code, strings.TrimSpace(w.Body.String()))
 	}
-	want := "{\"error\":{\"type\":\"ccdad_needs_relogin\",\"message\":\"ccdad: a@example.com needs a new login; run `ccdad codex add`\"}}"
+	want := "{\"error\":{\"type\":\"ccdad_needs_relogin\",\"message\":\"ccdad: a@example.com needs a new login; run `ccdad add codex`\"}}"
 	if got := strings.TrimSpace(w.Body.String()); got != want {
 		t.Fatalf("body =\n%s\nwant\n%s", got, want)
 	}

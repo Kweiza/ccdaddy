@@ -17,10 +17,10 @@ import (
 // TestConcurrentAddsLoseNoAccount is the defect this lock exists to close.
 //
 // Each goroutine runs the whole Open -> mutate -> Save cycle, which is the
-// shape a second `ccdad add` process has. Without the lock the two reads both
-// see an empty store and the second rename replaces the first one's document,
-// so one account is simply gone. Separate Store values are essential: sharing
-// one would test a mutex this type does not claim to have.
+// shape a second `ccdad add claude` process has. Without the lock the two reads
+// both see an empty store and the second rename replaces the first one's
+// document, so one account is simply gone. Separate Store values are essential:
+// sharing one would test a mutex this type does not claim to have.
 func TestConcurrentAddsLoseNoAccount(t *testing.T) {
 	withStore(t)
 

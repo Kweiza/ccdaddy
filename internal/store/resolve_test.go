@@ -110,8 +110,14 @@ func TestResolveOnAnEmptyStoreSaysSo(t *testing.T) {
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Resolve(empty) = %v, want ErrNotFound", err)
 	}
-	if !strings.Contains(err.Error(), "ccdad add") {
-		t.Fatalf("error %q should point at 'ccdad add' when nothing is managed yet", err)
+	// Both logins, because resolution is provider-blind and an empty store
+	// carries no hint of which one the reader wants. Bare 'ccdad add' is a
+	// usage error, so naming it would answer a failed lookup with a second
+	// failure.
+	for _, want := range []string{"ccdad add claude", "ccdad add codex"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q should point at %q when nothing is managed yet", err, want)
+		}
 	}
 }
 

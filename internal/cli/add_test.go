@@ -920,9 +920,9 @@ func TestAddWithActivateWritesTheLiveFile(t *testing.T) {
 
 // --activate writes the live credentials file without going through
 // switcher.Execute, so it has to keep ~/.claude.json's oauthAccount in sync
-// itself. Without it, a machine's very first `ccdad add --activate` leaves
-// Claude Code displaying no account at all, or whichever account it happened
-// to be logged in as before, forever.
+// itself. Without it, a machine's very first `ccdad add claude --activate`
+// leaves Claude Code displaying no account at all, or whichever account it
+// happened to be logged in as before, forever.
 func TestAddWithActivateUpdatesOAuthAccount(t *testing.T) {
 	isolate(t)
 	stubEnvironment(t, true, false)
@@ -1716,7 +1716,7 @@ func TestApplyProfileMarksAMoneyMeteredSeatPrimary(t *testing.T) {
 }
 
 // TestApplyProfileStampsWhenTheProfileWasRead is what keeps the daemon from
-// re-reading a profile `ccdad add` has just read.
+// re-reading a profile `ccdad add claude` has just read.
 //
 // The stamp is the ONLY thing separating "measured, and the seat reported no
 // tier" from "added before this tree read the field", and an account added
@@ -1777,7 +1777,7 @@ func TestApplyProfileLeavesAnOrdinarySubscriptionAlone(t *testing.T) {
 	}
 }
 
-// The unreadable-store case is the one `ccdad add` used to pass over in
+// The unreadable-store case is the one `ccdad add claude` used to pass over in
 // silence: cclink.Load answers a nil blob, so carriableKeys is empty and every
 // warning downstream is about keys ccdad can see -- none of which fire.
 func TestAddSaysTheLiveLoginCouldNotBeRead(t *testing.T) {

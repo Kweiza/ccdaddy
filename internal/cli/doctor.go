@@ -1399,7 +1399,7 @@ func checkOAuthSource(live cclink.Blob, liveErr error, liveSource cclink.Credent
 			return check{"oauth-source", levelWarn,
 				"the login store holds a login, but its scopes do not carry user:inference — Claude " +
 					"Code takes a login as a credential only when they do, so no OAuth credential resolves " +
-					"at all. Sign in again with `ccdad login`" + scopedSessionNote()}
+					"at all. Sign in again with `ccdad add claude`" + scopedSessionNote()}
 		}
 		return check{"oauth-source", levelOK,
 			"no OAuth credential resolves, so nothing here would displace a login a switch installs" +
@@ -1599,8 +1599,8 @@ func checkAccountsFile(root string, usable bool) (check, bool) {
 		"%s is GONE, and %d credential file%s still %s beside it (%s). ccdad keeps its whole account list in "+
 			"that one document, so every account on this machine is now invisible: `ccdad status` has no accounts and "+
 			"`ccdad switch` has nothing to switch to. Do NOT delete those files — each is a login you can "+
-			"still recover. Put the document back from a backup, `ccdad import` an export, or run `ccdad add` "+
-			"once per account",
+			"still recover. Put the document back from a backup, `ccdad import` an export, or run "+
+			"`ccdad add claude` or `ccdad add codex` once per account",
 		path, len(stranded), plural(len(stranded), "", "s"), plural(len(stranded), "sits", "sit"),
 		strings.Join(stranded, ", "))}, false
 }
@@ -1903,7 +1903,7 @@ func codexBlobAt(root, uuid string) (cclink.Blob, bool) {
 // is a codex session answering a branded 401.
 //
 // The mark is compared against the token the account CURRENTLY holds, which is
-// what makes a re-login self-clearing: `ccdad codex add` stores a new token and
+// what makes a re-login self-clearing: `ccdad add codex` stores a new token and
 // the mark stops matching, with nothing having had to remember to clear it. A
 // row that reported the bare mark would send a user to re-run a command they
 // have already run.
@@ -1944,7 +1944,7 @@ func checkCodexRelogin(root string, usable, accountsUsable bool) check {
 	sort.Strings(dead)
 	return check{"codex-relogin", levelWarn, fmt.Sprintf(
 		"the refresh grant behind %s has been rejected, so ccdad cannot serve codex from %s until "+
-			"somebody logs in again: run `ccdad codex add`. Nothing else reports this -- the account "+
+			"somebody logs in again: run `ccdad add codex`. Nothing else reports this -- the account "+
 			"looks ordinary in `ccdad status`, and the first symptom is a codex session answering an error",
 		joinAnd(dead), plural(len(dead), "it", "them"))}
 }

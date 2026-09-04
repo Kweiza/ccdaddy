@@ -145,7 +145,7 @@ func TestAddAssignsSequentialIndices(t *testing.T) {
 }
 
 // Re-adding the same uuid updates it in place rather than creating a duplicate.
-// This is what makes `ccdad add` double as re-authentication.
+// This is what makes `ccdad add claude` double as re-authentication.
 func TestAddSameUUIDUpdatesInPlace(t *testing.T) {
 	withStore(t)
 	s, _ := Open()
@@ -618,9 +618,9 @@ func TestOpenRefusesWhenTheHomeDirectoryCannotBeResolved(t *testing.T) {
 	}
 }
 
-// `ccdad add` doubles as re-authentication in place, and the record a fresh
-// login builds knows nothing about the user having held this account out of
-// auto-rotation. Idx, Alias and AddedAt were pinned; Disabled was not, so
+// `ccdad add claude` doubles as re-authentication in place, and the record a
+// fresh login builds knows nothing about the user having held this account out
+// of auto-rotation. Idx, Alias and AddedAt were pinned; Disabled was not, so
 // dropping its carry silently returned a held-out account to the pool the next
 // time its owner logged in again.
 func TestReAuthenticationKeepsAnAccountHeldOutOfRotation(t *testing.T) {
@@ -704,11 +704,11 @@ func TestAnOrdinaryAccountWritesNoPrimaryKey(t *testing.T) {
 	}
 }
 
-// `ccdad add` doubles as re-authentication in place, and the record a fresh
-// login builds knows nothing about the user having armed this seat. Without the
-// carry, logging in again puts the account back behind credit.max_auto_spend —
-// which defaults to 0, so the account becomes permanently unusable and nothing
-// says why.
+// `ccdad add claude` doubles as re-authentication in place, and the record a
+// fresh login builds knows nothing about the user having armed this seat.
+// Without the carry, logging in again puts the account back behind
+// credit.max_auto_spend — which defaults to 0, so the account becomes
+// permanently unusable and nothing says why.
 func TestReAuthenticationKeepsAnAccountPrimary(t *testing.T) {
 	withStore(t)
 	s, _ := Open()

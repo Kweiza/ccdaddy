@@ -69,7 +69,9 @@ func runOwn(cmd *cobra.Command, args []string, clear bool) error {
 	}
 	accounts := s.Accounts()
 	if len(accounts) == 0 {
-		return UsageError("there are no accounts yet; run 'ccdad add' first")
+		// Ownership is a fact about the whole store, so this refusal knows
+		// nothing about providers and offers both rather than picking one.
+		return UsageError("there are no accounts yet; run 'ccdad add claude' or 'ccdad add codex' first")
 	}
 
 	// No arguments is a QUESTION, not "own nothing". Owning nothing would park

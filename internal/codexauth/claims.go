@@ -40,7 +40,7 @@ type Claims struct {
 	// build has not seen rather than an error.
 	PlanType string
 	// Organizations is the workspaces this identity belongs to, with the role
-	// it holds in each. `ccdad codex add` reads it to tell an owner from a
+	// it holds in each. `ccdad add codex` reads it to tell an owner from a
 	// member.
 	Organizations []Organization
 }

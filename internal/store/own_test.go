@@ -151,9 +151,10 @@ func TestAnAccountAddedWithNoPartitionIsOwnedHere(t *testing.T) {
 	}
 }
 
-// Re-adding an account -- `ccdad add` over an existing login, which is how a
-// re-authentication lands -- keeps the side of the partition it was on. The
-// alternative silently returns an account to this machine on every re-login.
+// Re-adding an account -- `ccdad add claude` over an existing login, which is
+// how a re-authentication lands -- keeps the side of the partition it was on.
+// The alternative silently returns an account to this machine on every
+// re-login.
 func TestReAddingAnAccountKeepsItsSideOfThePartition(t *testing.T) {
 	s := seedThree(t)
 	if _, err := s.SetOwned([]string{"u-1"}); err != nil {

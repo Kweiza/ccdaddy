@@ -424,7 +424,7 @@ func runCodexLaunch(cmd *cobra.Command, opts codexLaunchOptions) error {
 			return UsageError("ccdad run %s cannot run `codex %s`: both act on codex's own home "+
 				"rather than on the named account, and logout revokes that grant server-side with "+
 				"no undo. Run `codex %s` from a plain shell if you mean codex's own home, or "+
-				"`ccdad codex add` for an account ccdad serves.",
+				"`ccdad add codex` for an account ccdad serves.",
 				codexPinLabel(opts.Pin), opts.Args[0], opts.Args[0])
 		}
 		// A launcher can itself be running inside a routed session; the

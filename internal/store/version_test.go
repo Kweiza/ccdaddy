@@ -171,7 +171,7 @@ func TestCheckVersionAt(t *testing.T) {
 }
 
 // An account needs a relogin exactly while the mark names the token it still
-// holds. A later `ccdad codex add` stores a new token and the mark stops
+// holds. A later `ccdad add codex` stores a new token and the mark stops
 // matching, so nothing has to clear it and no stale mark can survive a
 // re-login.
 func TestNeedsRelogin(t *testing.T) {
@@ -240,11 +240,11 @@ func TestAddRefusesAnAccountWithNoProvider(t *testing.T) {
 	}
 }
 
-// Re-adding an existing uuid is how `ccdad add` doubles as re-authentication,
-// and it keeps the alias, the index and the two per-account flags. It must not
-// keep -- or silently change -- the provider: a uuid that arrives under the
-// other provider is a different account, and rewriting the row in place would
-// leave a Claude account holding a Codex credential file.
+// Re-adding an existing uuid is how `ccdad add claude` doubles as
+// re-authentication, and it keeps the alias, the index and the two per-account
+// flags. It must not keep -- or silently change -- the provider: a uuid that
+// arrives under the other provider is a different account, and rewriting the
+// row in place would leave a Claude account holding a Codex credential file.
 func TestAddRefusesAProviderChangeOnAnExistingUUID(t *testing.T) {
 	withStore(t)
 	s, err := Open()

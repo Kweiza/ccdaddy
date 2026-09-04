@@ -156,8 +156,10 @@ func Resolve(accounts []Account, ref string) (Account, error) {
 }
 
 func available(accounts []Account) string {
+	// Resolution is provider-blind, and on an empty store there is nothing to
+	// guess a provider from, so both logins are named rather than one.
 	if len(accounts) == 0 {
-		return "No accounts are managed yet — run 'ccdad add'."
+		return "No accounts are managed yet — run 'ccdad add claude' or 'ccdad add codex'."
 	}
 	parts := make([]string, 0, len(accounts))
 	for _, a := range accounts {

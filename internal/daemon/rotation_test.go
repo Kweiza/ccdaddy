@@ -201,8 +201,9 @@ func TestAdoptionWritesOnlyTheAccountTheOracleNamed(t *testing.T) {
 }
 
 // store.Add replaces the credential file wholesale, so adoption has to overlay
-// rather than write in place. `ccdad add` carries the same warning: without it,
-// taking a refreshed token costs the account every other key it had stored.
+// rather than write in place. `ccdad add claude` carries the same warning:
+// without it, taking a refreshed token costs the account every other key it had
+// stored.
 func TestAdoptionKeepsWhatTheAccountAlreadyHeld(t *testing.T) {
 	isolateEngine(t)
 	seedAccount(t, "u-1", "org-1")

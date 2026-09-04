@@ -79,7 +79,7 @@ func (s *Server) sendWithRefresh(ctx context.Context, uuid string, in *http.Requ
 	// calls a cancelled context Transient, which is correct (nothing was
 	// learned) and is exactly why nothing is written: the store keeps the grant
 	// the issuer has just spent. The next exchange presents it, is
-	// reuse-detected, goes Terminal, and the account needs `ccdad codex add` --
+	// reuse-detected, goes Terminal, and the account needs `ccdad add codex` --
 	// a login destroyed by a keystroke. The daemon lane never had this exposure
 	// because it refreshes on the tick's context, which only a daemon stop
 	// cancels.

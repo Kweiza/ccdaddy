@@ -519,7 +519,7 @@ func Execute(s *store.Store, req Request) (Result, error) {
 // back the displaced object up as, so target's own correctness never depends
 // on a caller supplying them -- a caller that cannot loses only that
 // courtesy. It is exported for the one other attended path that installs a
-// login without going through Execute: `ccdad add --activate`.
+// login without going through Execute: `ccdad add claude --activate`.
 func SyncGlobalConfigIdentity(s *store.Store, target, previousLive store.Account, previousLiveKnown bool) error {
 	var captured json.RawMessage
 	var capturedUUID string

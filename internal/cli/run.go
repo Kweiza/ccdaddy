@@ -1293,7 +1293,7 @@ func newRunCmd() *cobra.Command {
 			"refused here for the same reason rather than run: both act on codex's own home\n" +
 			"rather than on the named account, and logout revokes that grant server-side with\n" +
 			"no undo. Run either from a plain shell, or add an account ccdad serves with\n" +
-			"`ccdad codex add`.\n\n" +
+			"`ccdad add codex`.\n\n" +
 			"There is no interactive disambiguation: an ambiguous reference is exit 2, because\n" +
 			"this command hands control to claude and callers need it to be deterministic.\n\n" +
 			"Everything at or after ACCOUNT is passed to claude verbatim, hyphens included. A\n" +
