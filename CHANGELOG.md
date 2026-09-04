@@ -207,8 +207,10 @@ by `uuid` or `alias`.
 
 What is still not routed is deliberate rather than pending. An IDE or a desktop
 app that spawns codex itself never consults your shell's PATH, so the shim is
-not in front of it and it spends whatever `~/.codex` holds; `ccdad doctor`
-counts those launches on its `codex-proxy` row rather than leaving them silent.
+not in front of it and it spends whatever `~/.codex` holds; `ccdad doctor`'s
+`codex-shim` row says which codex a bare `codex` resolves to, and its
+`codex-proxy` row counts the launches ccdad itself had to start with no proxy
+in front of them.
 
 ## [0.12.0] — 2026-09-04
 
