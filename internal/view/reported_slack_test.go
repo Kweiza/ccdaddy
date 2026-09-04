@@ -52,8 +52,34 @@ func TestReportedSlackDescribesTheWindowTheRowActuallyReports(t *testing.T) {
 	if !ok {
 		t.Fatal("ReportedSlack() ok = false, want true: the window is right there in the snapshot")
 	}
-	if !close3(slack, 8.667) || !close3(thr, 108.667) {
-		t.Errorf("ReportedSlack() = (%v, %v), want (8.667, 108.667)", slack, thr)
+	// 0 and not 8.667: the weekly has nothing left, and an empty window never
+	// reports positive slack however far past 100 its pace target ran. The
+	// THRESHOLD is still the pace target it actually was, so the pair does not
+	// subtract -- which is the same thing `ccdad hover status` prints a footer
+	// about.
+	if !close3(slack, 0) || !close3(thr, 108.667) {
+		t.Errorf("ReportedSlack() = (%v, %v), want (0, 108.667)", slack, thr)
+	}
+}
+
+// The two pairs genuinely apart, on a shape that does not need an empty window
+// to look roomy. five_hour is 95% used against a 75 target -- twenty points
+// past, and the tightest thing here -- while the weekly is 85% used against 80,
+// five points past, over its line and therefore the floor. Binding is five_hour
+// and Reported is seven_day, so a reader resolving the window through one and
+// the number through the other reads a five-hour figure on a weekly row.
+func TestReportedSlackAndTheBindingSlackAreDifferentNumbers(t *testing.T) {
+	r := twoWindowRow(95, 85, hoverTable(75, 80))
+
+	if r.Headroom.Binding != usage.WindowFiveHour {
+		t.Fatalf("Binding = %q, want five_hour", r.Headroom.Binding)
+	}
+	if r.ReportedName() != usage.WindowSevenDay {
+		t.Fatalf("ReportedName() = %q, want seven_day", r.ReportedName())
+	}
+	slack, thr, ok := r.ReportedSlack()
+	if !ok || !close3(slack, -5) || !close3(thr, 80) {
+		t.Errorf("ReportedSlack() = (%v, %v, ok %v), want (-5, 80, true)", slack, thr, ok)
 	}
 	if close3(slack, r.Headroom.Slack) {
 		t.Errorf("ReportedSlack() returned the BINDING slack %v; that is five_hour's number on a seven_day row",
@@ -61,23 +87,32 @@ func TestReportedSlackDescribesTheWindowTheRowActuallyReports(t *testing.T) {
 	}
 }
 
-// The blown five-hour window, which is the case no test on the reported window
-// can see. five_hour is 100% used at 95% elapsed, so its pace target is 111.667
-// and it reports POSITIVE slack; seven_day is 40% used at 30% elapsed against
-// 46.667 and binds on the smaller 6.667. A blown five-hour window can never be
-// a floor, so the row reports the weekly, the bar reads 40%, and the account
-// cannot serve one prompt.
-func TestEmptyAsksTheAccountAndNotTheReportedWindow(t *testing.T) {
+// The blown five-hour window. It used to be the case no column could see: at
+// 100% used and 95% elapsed its pace target was 111.667, so it reported
+// POSITIVE slack, seven_day at 40% bound on the smaller 6.667, and the row
+// reported a weekly with room while the account could not serve one prompt.
+// That is the shape a live fleet hit -- a session cut off at the five-hour
+// limit with three accounts holding five-hour room behind it.
+//
+// The clamp closes it at the source: an empty window never reports positive
+// slack, so five_hour reports 0 and is the tightest window on the account. It
+// BINDS, which means the ranking sees it, and Empty() answers on the account
+// as it always did.
+func TestABlownFiveHourWindowBindsInsteadOfHidingBehindAWeekly(t *testing.T) {
 	r := twoWindowRow(100, 40, hoverTable(111.667, 46.667))
 
-	if r.Headroom.Binding != usage.WindowSevenDay || r.Headroom.HasFloor {
-		t.Fatalf("Binding = %q, HasFloor = %v; want seven_day and no floor -- five_hour is not weekly and cannot be one",
-			r.Headroom.Binding, r.Headroom.HasFloor)
+	if r.Headroom.Binding != usage.WindowFiveHour {
+		t.Fatalf("Binding = %q, want five_hour: it has nothing left and nothing is tighter than that",
+			r.Headroom.Binding)
 	}
-	slack, _, ok := r.ReportedSlack()
-	if !ok || slack <= 0 {
-		t.Fatalf("ReportedSlack() = (%v, ok %v); this case is pointless unless the reported window looks healthy",
-			slack, ok)
+	if !close3(r.Headroom.Slack, 0) {
+		t.Errorf("Slack = %v, want 0: a window with nothing left never reports positive slack", r.Headroom.Slack)
+	}
+	// A five-hour window can never be a floor -- the floor rule wants a weekly --
+	// so the account is reported against nothing here, and the ranking is the
+	// only thing that can act on it.
+	if r.Headroom.HasFloor {
+		t.Errorf("HasFloor = true; five_hour is not weekly and cannot be one")
 	}
 	empty, known := r.Empty()
 	if !known || !empty {

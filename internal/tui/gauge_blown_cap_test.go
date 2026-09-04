@@ -45,13 +45,11 @@ func blownCapRow(t *testing.T, fablePct float64) view.Row {
 func TestAFullBarDrawnOffABlownCapIsNeverPaintedOK(t *testing.T) {
 	r := blownCapRow(t, 100)
 
-	// The control: this row is the one the fix is about only because the
-	// account verdict lets it through and the band would say OK.
+	// The control: the ACCOUNT verdict lets this row through, because it can
+	// still serve every model but Fable. Whatever the band then says, a bar
+	// drawn at 100% must not read as healthy.
 	if empty, known := r.Empty(); !known || empty {
 		t.Fatalf("Empty() = (%v, %v), want (false, true) — the account can still serve other models", empty, known)
-	}
-	if slack, _, ok := r.ReportedSlack(); !ok || slack <= warnBand {
-		t.Fatalf("ReportedSlack() = %v — the fixture must reach the band with room to spare", slack)
 	}
 	if got := r.UsedLabel(); got != "100%" {
 		t.Fatalf("UsedLabel() = %q, want 100%% — the bar is full", got)
@@ -59,6 +57,40 @@ func TestAFullBarDrawnOffABlownCapIsNeverPaintedOK(t *testing.T) {
 
 	if got := gaugeRole(r); got != theme.RoleGaugeOver {
 		t.Errorf("gaugeRole = %v, want RoleGaugeOver — a full bar off a week that is gone must never read as healthy", got)
+	}
+}
+
+// The clause on its own, aimed where the clamp cannot reach it.
+//
+// HeadroomFor now clamps an empty window's slack to nothing positive, so a
+// Headroom it built can no longer arrive here with a full bar and a healthy
+// band -- the band alone would paint this row over. That closed the door
+// upstream and left this clause as the second lock, which is worth keeping:
+// a Headroom built by hand, by a fixture or by any future path that does not
+// go through that loop, is not clamped by anything.
+//
+// So the fixture is a hand-built Headroom: reported window at 100%, slack well
+// past the band. Only the emptiness clause can catch it.
+func TestTheGaugeAsksTheWindowItDrewEvenWhenTheSlackLooksHealthy(t *testing.T) {
+	now := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+	at := now.Add(40 * time.Hour)
+	full := 100.0
+	s := &usage.Snapshot{
+		SevenDay: usage.NewWindow(&full, &at),
+		FiveHour: usage.NewWindow(func() *float64 { v := 10.0; return &v }(), &at),
+	}
+	r := view.Row{HasEntry: true, Entry: usage.Entry{Snapshot: s}, Headroom: strategy.Headroom{
+		Known: true, Binding: usage.WindowFiveHour, Pct: 90, Slack: 40, Threshold: 50,
+		MinPct: 0, MinWindow: usage.WindowSevenDay,
+		MinAnyModelPct: 0, MinAnyModelWindow: usage.WindowSevenDay,
+		HasFloor: true, Floor: usage.WindowSevenDay, FloorSlack: 40, FloorThreshold: 140,
+	}}
+
+	if slack, _, ok := r.ReportedSlack(); !ok || slack <= warnBand {
+		t.Fatalf("ReportedSlack() = %v — this fixture must reach the band with room to spare", slack)
+	}
+	if got := gaugeRole(r); got != theme.RoleGaugeOver {
+		t.Errorf("gaugeRole = %v, want RoleGaugeOver — the bar was drawn at 100%%", got)
 	}
 }
 

@@ -40,28 +40,35 @@ func TestABlownWeeklyIsAFloorEvenWithAPaceTargetAbove100(t *testing.T) {
 	o := hoverOpts().withHover(pool)
 	r := measure(c, o)
 
-	if r.Headroom.Slack <= 0 {
-		t.Fatalf("Slack = %v; this case is pointless unless the blown weekly reports positive slack",
+	// Not negative is the whole premise. The pace target is 108.667, so the
+	// subtraction gives +8.667; the clamp on an empty window brings that to
+	// exactly 0. Either way `slack < 0` is false, so the floor's EMPTY arm is
+	// the only thing that can catch this window -- which is what this case
+	// exists to hold.
+	if r.Headroom.Slack < 0 {
+		t.Fatalf("Slack = %v; this case is pointless unless the blown weekly reports non-negative slack",
 			r.Headroom.Slack)
 	}
 	if !r.Headroom.HasFloor || r.Headroom.Floor != usage.WindowSevenDay {
 		t.Fatalf("Floor = %q (has %v), want seven_day: it is the window with nothing left in it",
 			r.Headroom.Floor, r.Headroom.HasFloor)
 	}
-	// The two pairs, side by side, because that is the whole point of carrying
-	// the second one: Binding and Floor are different windows here, and a
-	// reader that resolves the window through Floor and the number through
-	// Slack reads a weekly with nothing left in it as three points of room.
-	if r.Headroom.Binding != usage.WindowFiveHour {
-		t.Fatalf("Binding = %q, want five_hour: 3.667 of slack is tighter than the weekly's 8.667",
+	// The weekly BINDS as well as being the floor, and that is the clamp doing
+	// its job. Its pace target ran to 108.667, so the subtraction gave +8.667
+	// and five_hour's 3.667 looked tighter -- a window with nothing left in it
+	// ranked as roomier than one with two points of room. Clamped, the empty
+	// window reports 0 and is the tightest thing on the account, which is what
+	// "tightest" has to mean.
+	if r.Headroom.Binding != usage.WindowSevenDay {
+		t.Fatalf("Binding = %q, want seven_day: a window with nothing left is the tightest one",
 			r.Headroom.Binding)
 	}
-	if !nearly(r.Headroom.Slack, 3.667) || !nearly(r.Headroom.Threshold, 101.667) {
-		t.Errorf("binding pair = (%v, %v), want (3.667, 101.667): five_hour 98%% used against 85 elapsed plus a 16.667 share",
+	if !nearly(r.Headroom.Slack, 0) || !nearly(r.Headroom.Threshold, 108.667) {
+		t.Errorf("binding pair = (%v, %v), want (0, 108.667): the threshold is still the pace target it was, and the pair does not subtract",
 			r.Headroom.Slack, r.Headroom.Threshold)
 	}
-	if !nearly(r.Headroom.FloorSlack, 8.667) || !nearly(r.Headroom.FloorThreshold, 108.667) {
-		t.Errorf("floor pair = (%v, %v), want (8.667, 108.667): seven_day 100%% used against 92 elapsed plus the same share",
+	if !nearly(r.Headroom.FloorSlack, 0) || !nearly(r.Headroom.FloorThreshold, 108.667) {
+		t.Errorf("floor pair = (%v, %v), want (0, 108.667)",
 			r.Headroom.FloorSlack, r.Headroom.FloorThreshold)
 	}
 	// The five-hour window resets in 45 minutes and the weekly in over thirteen
