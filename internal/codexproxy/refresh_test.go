@@ -187,6 +187,79 @@ func TestTheRefresherIsAskedAtMostOncePerRequest(t *testing.T) {
 	}
 }
 
+// A codex client can go away in the middle of the 401 repair: the user presses
+// Ctrl-C or Esc, or codex abandons one of the six requests it answers a 401
+// with over six seconds. net/http cancels the handler's request context the
+// moment it does, and that cancellation must NOT reach the grant exchange.
+//
+// A Codex refresh token is single-use with server-side reuse detection, so the
+// token endpoint burns the presented grant before it answers. An exchange
+// aborted while that answer is in flight leaves the new pair unread and the
+// spent one on disk; Classify calls a cancelled context Transient, so nothing
+// is written and nothing is marked. The next exchange -- the lane's poll, or
+// the next turn once the 30 s cooldown lifts -- presents the burned grant, is
+// reuse-detected, and goes Terminal. The account is then out of rotation until
+// somebody runs `ccdad codex add`, because somebody pressed Ctrl-C.
+func TestAClientHangupNeverCancelsTheGrantExchange(t *testing.T) {
+	f := newFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		io.WriteString(w, `{"error":{"message":"expired"}}`)
+	})
+	f.add("uuid-a", "a@example.com", "access-a")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var seen error
+	cfg := f.config()
+	cfg.RankedEligible = func() []string { return []string{"uuid-a"} }
+	cfg.RefreshFunc = func(rctx context.Context, uuid, _ string) (codexauth.Outcome, error) {
+		// The client hangs up with the exchange in flight, which is the whole
+		// of the case: cancel() is synchronous, so a context derived from the
+		// request's is already cancelled by the time this reads it.
+		cancel()
+		seen = rctx.Err()
+		return codexauth.Outcome{Kind: codexauth.Transient, Code: "network"}, nil
+	}
+	s := f.server(t, cfg)
+
+	postCtx(ctx, s, unpinnedSecret, `{"input":[]}`)
+
+	if seen != nil {
+		t.Fatalf("the grant exchange saw %v when the codex client hung up; it must run on a context no client can cancel", seen)
+	}
+}
+
+// The other half of the same rule. Only the exchange is detached: a forwarded
+// turn spends nothing single-use, so a client that has gone away must stop
+// paying for one, and the attempt after a refresh is still the client's to
+// cancel. A fix that detached the whole attempt loop would forward a turn
+// nobody is listening to.
+func TestTheForwardedTurnItselfStaysCancellable(t *testing.T) {
+	f := newFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		io.WriteString(w, `{"error":{"message":"expired"}}`)
+	})
+	f.add("uuid-a", "a@example.com", "access-a")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cfg := f.config()
+	cfg.RankedEligible = func() []string { return []string{"uuid-a"} }
+	cfg.RefreshFunc = func(context.Context, string, string) (codexauth.Outcome, error) {
+		cancel()
+		f.rotate("uuid-a", "access-a-rotated")
+		return codexauth.Outcome{Kind: codexauth.Rotated}, nil
+	}
+	s := f.server(t, cfg)
+
+	w := postCtx(ctx, s, unpinnedSecret, `{"input":[]}`)
+
+	if n := len(f.took()); n != 1 {
+		t.Fatalf("the upstream saw %d requests, want 1: the replay must not outlive the client that asked for it", n)
+	}
+	if w.Code == http.StatusOK {
+		t.Fatal("a turn was forwarded and answered for a client that had already hung up")
+	}
+}
+
 // The upstream's own 401 about a REPLACEMENT account, after the search moved
 // on from a rate-limited one. Every other 4xx from a replacement is answered
 // with the original 429; a 401 is not, because it is the endpoint telling this

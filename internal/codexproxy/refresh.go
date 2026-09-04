@@ -3,9 +3,20 @@ package codexproxy
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/codexauth"
 )
+
+// refreshTimeout bounds a grant exchange that has been detached from the
+// client's request context, so a token endpoint that never answers cannot pin
+// this goroutine -- and with it the refresher's per-account mutex -- forever.
+//
+// It is deliberately longer than the 30 s Timeout the refresher's own default
+// http.Client carries: that client's timeout is what ends a stuck exchange in
+// production, and this is only the backstop for a Refresher built around a
+// client that has none.
+const refreshTimeout = 60 * time.Second
 
 // refreshVerdict is what one account's attempt settled.
 type refreshVerdict int
@@ -56,7 +67,29 @@ func (s *Server) sendWithRefresh(ctx context.Context, uuid string, in *http.Requ
 	}
 	*refreshed = true
 
-	out, rerr := s.refresh(ctx, uuid, a.token)
+	// The exchange runs on a context of this process's own, NEVER on the codex
+	// client's.
+	//
+	// A Codex refresh token is single-use with server-side reuse detection: the
+	// token endpoint burns the grant it was presented before it answers. If the
+	// client hangs up while that answer is in flight -- the user presses Ctrl-C
+	// or Esc, or codex abandons one of the six requests it answers a 401 with
+	// over six seconds -- net/http cancels this handler's request context, the
+	// POST is aborted, and the rotated pair is never read. codexauth.Classify
+	// calls a cancelled context Transient, which is correct (nothing was
+	// learned) and is exactly why nothing is written: the store keeps the grant
+	// the issuer has just spent. The next exchange presents it, is
+	// reuse-detected, goes Terminal, and the account needs `ccdad codex add` --
+	// a login destroyed by a keystroke. The daemon lane never had this exposure
+	// because it refreshes on the tick's context, which only a daemon stop
+	// cancels.
+	//
+	// Only the exchange is detached. The attempts around it stay on ctx,
+	// because a forwarded turn spends nothing single-use and a client that has
+	// gone away should stop paying for one.
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), refreshTimeout)
+	defer cancel()
+	out, rerr := s.refresh(rctx, uuid, a.token)
 	if rerr != nil {
 		s.logf("refreshing the codex token for %s did not complete: %v", short(uuid), rerr)
 		return nil, verdictTransient, nil

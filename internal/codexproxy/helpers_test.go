@@ -1,6 +1,7 @@
 package codexproxy
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -203,6 +204,19 @@ func post(s *Server, bearer string, headers map[string]string, body string) *htt
 	}
 	for k, v := range headers {
 		r.Header.Set(k, v)
+	}
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+	return w
+}
+
+// postCtx drives one POST /responses on a context the caller can cancel, which
+// is what a codex process that hangs up mid-turn looks like from the handler's
+// side. The plain post above is on context.Background and can never model it.
+func postCtx(ctx context.Context, s *Server, bearer, body string) *httptest.ResponseRecorder {
+	r := httptest.NewRequest(http.MethodPost, ResponsesPath, strings.NewReader(body)).WithContext(ctx)
+	if bearer != "" {
+		r.Header.Set("Authorization", "Bearer "+bearer)
 	}
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
