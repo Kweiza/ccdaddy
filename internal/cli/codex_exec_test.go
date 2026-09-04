@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -259,13 +260,22 @@ func writeCodexProxyStatus(t *testing.T, port int) {
 // fakeProxy is a listener answering ccdad's health route, and its port.
 func fakeProxy(t *testing.T) int {
 	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return listeningPort(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != codexproxy.HealthPath {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
 		io.WriteString(w, `{"ccdad":"test","port":0}`)
-	}))
+	})
+}
+
+// listeningPort starts a loopback server and answers the port it took, which is
+// the only part of it a launcher ever sees: the daemon publishes a number, and
+// what is behind that number is exactly what the launcher's probe has to decide
+// about.
+func listeningPort(t *testing.T, h http.HandlerFunc) int {
+	t.Helper()
+	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 	_, portText, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
 	if err != nil {
@@ -329,6 +339,62 @@ func TestTheCodexLaunchRefusesAPortNothingAnswers(t *testing.T) {
 
 	if port, reason := codexProxyForLaunch(); reason == "" {
 		t.Fatalf("codexProxyForLaunch accepted port %d with nothing listening on it", port)
+	}
+}
+
+// A port that ANSWERS but is not ccdad is refused, and the status code is the
+// only thing that tells the two apart. Ports are reused: a status document
+// written by a daemon that has since died names a number some other program can
+// take, and a launcher that accepted a completed connection as proof would point
+// codex at a stranger's server. codex's symptom then is its own endless
+// "Reconnecting", with no error text anywhere.
+//
+// A refused connection cannot show this. There the probe fails at the transport,
+// before any status code exists, so the check under test is never reached -- the
+// listener here completes the connection and answers every route, ccdad's health
+// route included, with a 404.
+func TestTheCodexLaunchRefusesAPortAStrangerAnswers(t *testing.T) {
+	isolate(t)
+	stubDaemonWorld(t, &fakeDaemon{held: true})
+	unsetForTest(t, "CLAUDE_SECURESTORAGE_CONFIG_DIR")
+	stranger := listeningPort(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	writeCodexProxyStatus(t, stranger)
+
+	port, reason := codexProxyForLaunch()
+	if reason == "" {
+		t.Fatalf("codexProxyForLaunch accepted port %d, where something that is not ccdad answered", port)
+	}
+	if !strings.Contains(reason, "404") {
+		t.Errorf("the reason does not say what answered instead: %q", reason)
+	}
+}
+
+// "Cannot determine" never becomes "not running". A filesystem where locks do
+// not work answers every probe with an error, and a launcher that read that as
+// "no daemon here" would spawn one per invocation forever -- none of which can
+// take the lock either.
+//
+// The spawn COUNT is the load-bearing assertion. The reason reads the same
+// whichever way the launcher reached it, because the wait after a spawn reports
+// an unprobeable lock in those very words too; only the count separates a
+// launcher that refused from one that spawned first and gave up afterwards.
+func TestTheCodexLaunchWillNotSpawnADaemonOnAnUnprobeableLock(t *testing.T) {
+	isolate(t)
+	f := stubDaemonWorld(t, &fakeDaemon{probeErr: errors.New("ENOLCK")})
+	unsetForTest(t, "CLAUDE_SECURESTORAGE_CONFIG_DIR")
+
+	_, reason := codexProxyForLaunch()
+	if reason == "" {
+		t.Fatal("the launcher took a lock it cannot probe as a daemon that is already running")
+	}
+	if !strings.Contains(reason, "cannot be probed") {
+		t.Errorf("the reason does not say the lock could not be probed: %q", reason)
+	}
+	if f.spawns != 0 {
+		t.Errorf("the launcher spawned %d daemons on a lock it cannot probe; on a filesystem where "+
+			"locks do not work that is one more daemon on every invocation, forever", f.spawns)
 	}
 }
 
