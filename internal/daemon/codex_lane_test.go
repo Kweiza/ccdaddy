@@ -349,6 +349,54 @@ func codexWindows(primary, secondary float64, secondaryReset time.Time) *usage.S
 	return snap
 }
 
+// A poll that was already in flight when the proxy harvested a fresher reading
+// must not land on top of it.
+//
+// Measured before the claim moved above the harvest branch: a poll parked in
+// CodexFetchUsage held no lock over the cache row it was going to write, so the
+// next tick committed the harvested 95% under it and the poll then wrote its own
+// 10% over that. The lane went on ranking a nearly spent account first, and the
+// 95% reading was gone rather than deferred -- CodexSample deletes as it hands
+// out. FetchedAt cannot untangle the two afterwards either: it is stamped when
+// the commit runs, so the late poll's is the larger of the two.
+func TestAPollAlreadyInFlightCannotOverwriteAHarvestedReading(t *testing.T) {
+	isolateEngine(t)
+	seedCodexAccount(t, "cx-1")
+
+	release := make(chan struct{})
+	polls := 0
+	e := codexEngine(t, codexTokensAreFine,
+		func(context.Context, string, string) (*usage.Snapshot, codexusage.Identity, error) {
+			polls++
+			<-release
+			return codexSnapshot(10), codexusage.Identity{}, nil
+		})
+	// Not tick(): that waits for the fleet, and this poll is parked on purpose.
+	// The claim is taken on the tick's own goroutine, so it is already held by
+	// the time Tick returns.
+	if err := e.Tick(context.Background()); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	e.harvestCodexSample("cx-1", codexSnapshot(95))
+	if err := e.Tick(context.Background()); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	close(release)
+	e.Wait()
+
+	tick(t, e)
+	got, ok := cacheEntry(t, "cx-1")
+	if !ok {
+		t.Fatal("the lane cached nothing at all")
+	}
+	if pct, known := got.Snapshot.CodexPrimary.Percent(); !known || pct != 95 {
+		t.Fatalf("cached utilization = %v (%v), want the harvested 95: the poll that answered 10 read the account BEFORE the turn the proxy took 95 off, and the lane now believes a spent account is roomy for a whole codex floor", pct, known)
+	}
+	if polls != 1 {
+		t.Fatalf("the lane made %d polls, want the one this test parked", polls)
+	}
+}
+
 // A harvested reading carries whatever the answer to one turn happened to
 // carry, and a response can name the primary window without the secondary --
 // codexproxy publishes a sample when EITHER family is present, because the

@@ -102,7 +102,10 @@ by `uuid` or `alias`.
   streamed answer carries a rate-limit event as well — the same figures the usage
   endpoint returns, arriving free on a request the proxy was forwarding anyway.
   The daemon's Codex lane commits those readings ahead of its own poll, so a busy
-  account is measured without spending anything to measure it. A response that names only one of the two quota windows is merged into the
+  account is measured without spending anything to measure it. That commit takes
+  the same one-writer-per-account claim a poll takes, so a poll that was already
+  in flight cannot land the figure it read BEFORE the turn on top of the fresher
+  one. A response that names only one of the two quota windows is merged into the
   cached reading rather than written over it — a primary-only answer, which is
   what a 429 usually carries, can no longer erase a nearly spent weekly — while a
   window whose own reset has already passed is dropped rather than carried
@@ -110,6 +113,7 @@ by `uuid` or `alias`.
   `TestTheRateLimitHeadersBecomeAUsageSample`,
   `TestTheInStreamRateLimitEventBecomesAUsageSample`,
   `TestAnEventSplitAcrossTwoWritesIsStillRead`,
+  `TestAPollAlreadyInFlightCannotOverwriteAHarvestedReading`,
   `TestAPartialHarvestKeepsTheWindowItDidNotCarry`,
   `TestAWindowThatHasRolledOverIsNotCarriedIntoAHarvest`.
 
