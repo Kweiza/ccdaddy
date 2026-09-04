@@ -203,7 +203,7 @@ func TestUninstallRemovesAStoreWithNoAccountsYet(t *testing.T) {
 	stubDaemonWorld(t, &fakeDaemon{})
 	stubEnvironment(t, false, false)
 	fakeBinary(t)
-	// What the first `ccdad list` on a fresh machine leaves behind, and nothing
+	// What the first `ccdad status` on a fresh machine leaves behind, and nothing
 	// else: no accounts.toml, because nothing has been saved.
 	if err := os.MkdirAll(filepath.Join(mustPath(ccpath.StoreHome()), "credentials"), 0o700); err != nil {
 		t.Fatal(err)

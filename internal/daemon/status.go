@@ -103,8 +103,8 @@ type AccountStatus struct {
 //
 // # Which file is authoritative
 //
-// `ccdad list` and `ccdad status --json` can never disagree, because the daemon
-// and the CLI read the same cache. That is a claim about usage.json, not about
+// The daemon and `ccdad status --json` cannot disagree because both read the
+// same cache. That is a claim about usage.json, not about
 // this file, and it only stays true if it is enforced here: if this document
 // also carried utilization percentages, a reader taking quota from status.json
 // while `list` takes it from usage.json would disagree with itself mid-tick,
@@ -431,7 +431,7 @@ func ReadStatus() (Status, bool, error) {
 // other daemon is mid-rename.
 //
 // The history is swept on a NARROWER argument, and the singleton is not it:
-// `ccdad list --refresh` appends to the series from a process that holds no
+// `ccdad status --refresh` appends to the series from a process that holds no
 // singleton, so a temp file there can belong to a live stranger just as
 // usage.json's can. What differs is what each side costs. A history temp exists
 // for the microseconds between one write and one rename, at most once per poll,

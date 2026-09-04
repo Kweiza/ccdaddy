@@ -15,10 +15,8 @@ import (
 // Columns turns a set of rows into the set of quota columns that describes them.
 //
 // There is ONE constructor and every surface calls it, which is what makes
-// `ccdad list`, `ccdad status`, `ccdad hover status` and the dashboard show the
-// same windows in the same order under the same headers. Four tables each
-// deciding for themselves is how the two that existed before came to name
-// different windows without either saying which.
+// `ccdad status` and the dashboard show the same windows in the same order
+// under the same headers.
 
 // HeaderBudget is the widest a window header may be, in display columns.
 //
@@ -89,7 +87,7 @@ type Columns struct {
 // be counting down to a deletion.
 func ColumnsOf(rows []Row) Columns {
 	seen := map[usage.WindowName]bool{}
-	var fixed, model, surface, unknown []usage.WindowName
+	var model, surface, unknown []usage.WindowName
 	credit := false
 	for _, r := range rows {
 		for _, w := range r.CarriedWindows() {
@@ -101,7 +99,6 @@ func ColumnsOf(rows []Row) Columns {
 			case w.Name == strategy.CreditWindow:
 				credit = true
 			case !w.Name.Scoped():
-				fixed = append(fixed, w.Name)
 			default:
 				scope, _, ok := usage.ScopeOf(w.Name)
 				switch {
@@ -142,8 +139,6 @@ func ColumnsOf(rows []Row) Columns {
 	if credit {
 		names = append(names, strategy.CreditWindow)
 	}
-	_ = fixed
-
 	cols := make([]WindowColumn, 0, len(names))
 	for _, n := range names {
 		cols = append(cols, WindowColumn{Name: n, Header: WindowHeader(n), Reset: -1, Ranked: rankedWindow(n)})
@@ -153,71 +148,6 @@ func ColumnsOf(rows []Row) Columns {
 	c := Columns{Windows: cols}
 	c.groupResets(rows)
 	return c
-}
-
-// ColumnsOfNames is ColumnsOf for a caller that already knows which windows it
-// is describing and has no rows to derive them from.
-//
-// `ccdad hover status` is that caller: its table comes from a ranking pass
-// rather than from a cache read, and loading the cache a second time to
-// rediscover a set it is already holding would be two reads that agree until
-// the day one of them moves. It goes through the same order, the same headers
-// and the same uniqueness passes, so the column a reader sees here is the
-// column they saw on the other three surfaces.
-//
-// It builds no reset columns: this caller has no rollovers to group, and a
-// countdown it invented would be a second answer to a question `ccdad status`
-// already answers.
-func ColumnsOfNames(names []usage.WindowName) Columns {
-	seen := map[usage.WindowName]bool{}
-	rows := []Row{}
-	_ = rows
-	var model, surface, unknown []usage.WindowName
-	credit := false
-	for _, n := range names {
-		if seen[n] {
-			continue
-		}
-		seen[n] = true
-		switch {
-		case n == strategy.CreditWindow:
-			credit = true
-		case !n.Scoped():
-		default:
-			scope, _, ok := usage.ScopeOf(n)
-			switch {
-			case !ok:
-				unknown = append(unknown, n)
-			case scope == usage.ScopeModel:
-				model = append(model, n)
-			case scope == usage.ScopeSurface:
-				surface = append(surface, n)
-			default:
-				unknown = append(unknown, n)
-			}
-		}
-	}
-	ordered := make([]usage.WindowName, 0, len(seen))
-	for _, n := range usage.RateLimitWindowNames() {
-		if seen[n] {
-			ordered = append(ordered, n)
-		}
-	}
-	sortNames(model)
-	sortNames(surface)
-	sortNames(unknown)
-	ordered = append(ordered, model...)
-	ordered = append(ordered, surface...)
-	ordered = append(ordered, unknown...)
-	if credit {
-		ordered = append(ordered, strategy.CreditWindow)
-	}
-	cols := make([]WindowColumn, 0, len(ordered))
-	for _, n := range ordered {
-		cols = append(cols, WindowColumn{Name: n, Header: WindowHeader(n), Reset: -1, Ranked: rankedWindow(n)})
-	}
-	uniqueHeaders(cols)
-	return Columns{Windows: cols}
 }
 
 func sortNames(n []usage.WindowName) {
@@ -506,6 +436,28 @@ func (r Row) Cells(c Columns, now time.Time) []string {
 	}
 	for _, rc := range c.Resets {
 		out = append(out, r.ResetCell(rc, now))
+	}
+	return out
+}
+
+// HoverCells is Cells with each quota cell expanded to used/threshold. The
+// reset cells are unchanged. It lets unified status carry the extra figure the
+// former hover-specific report existed to show.
+func (r Row) HoverCells(c Columns, now time.Time) []string {
+	out := make([]string, 0, len(c.Windows)+len(c.Resets))
+	for _, w := range c.Windows {
+		pct, state := r.WindowPct(w.Name)
+		switch state {
+		case WindowAbsent:
+			out = append(out, NoQuantity)
+		case WindowUnreadable:
+			out = append(out, Unreadable)
+		default:
+			out = append(out, fmt.Sprintf("%.0f%%/%.0f%%", pct, r.WindowThreshold(w.Name)))
+		}
+	}
+	for _, reset := range c.Resets {
+		out = append(out, r.ResetCell(reset, now))
 	}
 	return out
 }

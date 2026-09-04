@@ -52,7 +52,7 @@ const (
 
 func contrastBar(r Role) float64 {
 	switch r {
-	case RoleAccent, RoleGaugeOK, RoleGaugeWarn, RoleGaugeOver:
+	case RoleAccent, RoleGaugeCool, RoleGaugeOK, RoleGaugeWarn, RoleGaugeHigh, RoleGaugeOver:
 		return markBar
 	}
 	return textBar

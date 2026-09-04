@@ -214,7 +214,7 @@ func TestRefreshReportsAFailureAndKeepsTheLastGoodReading(t *testing.T) {
 
 // The endpoint's allowance belongs to an IDENTITY, so the cadence is divided
 // among every account that draws on it — including the ones this listing left
-// out. Sizing over `want` instead would let a filtered `ccdad list --refresh`
+// out. Sizing over `want` instead would let a filtered `ccdad status --refresh`
 // schedule the whole organization at the single-account rate.
 func TestRefreshDividesTheIdentityBudgetOverTheFleetAndNotTheListing(t *testing.T) {
 	isolateEngine(t)

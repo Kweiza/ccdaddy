@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"strings"
+
 	"charm.land/bubbles/v2/help"
 	"charm.land/bubbles/v2/key"
 	"github.com/charmbracelet/x/ansi"
@@ -8,14 +10,14 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/theme"
 )
 
-// KeyMap is every binding the dashboard answers to. Add through List are the
-// six the keybar advertises; Up through Enter are movement and dismissal,
+// KeyMap is every binding the dashboard answers to. The main-page bindings are
+// all advertised; Up through Enter are movement and dismissal,
 // shown only in the long help; Start through Restart belong to the daemon
 // screen and are not offered anywhere else.
 type KeyMap struct {
-	Add, Switch, Daemon, Strategy, Quit, List key.Binding
-	Up, Down, Refresh, Help, Esc, Enter       key.Binding
-	Start, Stop, Restart                      key.Binding
+	Add, Switch, Daemon, Strategy, Quit key.Binding
+	Up, Down, Refresh, Help, Esc, Enter key.Binding
+	Start, Stop, Restart                key.Binding
 }
 
 // DefaultKeys is the one KeyMap this program has.
@@ -26,7 +28,6 @@ func DefaultKeys() KeyMap {
 		Daemon:   key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "daemon")),
 		Strategy: key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "strategy")),
 		Quit:     key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
-		List:     key.NewBinding(key.WithKeys("l"), key.WithHelp("l", "list")),
 
 		Up:      key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("up/k", "up")),
 		Down:    key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("down/j", "down")),
@@ -47,24 +48,19 @@ func DefaultKeys() KeyMap {
 	}
 }
 
-// ShortHelp returns the keybar's six, in the order a, s, d, c, q, l. help
-// truncates from the right, so this order is a safety property and not a
-// preference: losing l costs nothing, because the table already is the list,
-// and losing q strands a user in a full-screen program with no advertised way
-// out. Being fifth of six rather than sixth is what buys q the room it has --
-// it is not a guarantee q survives every width. Measured against the rendered
-// bar (see keybar's own tests): q is entirely absent below width 45, and
-// present at 45 and every width above it.
+// ShortHelp is every action available on the main page. The renderer wraps the
+// complete set; order no longer decides which commands disappear at a narrow
+// width.
 func (k KeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Add, k.Switch, k.Daemon, k.Strategy, k.Quit, k.List}
+	return []key.Binding{k.Add, k.Switch, k.Daemon, k.Strategy, k.Up, k.Down, k.Refresh, k.Help, k.Quit}
 }
 
-// FullHelp groups every binding for the long help view: the keybar's six,
-// then movement and dismissal, then the daemon screen's three.
+// FullHelp groups every binding for the long help view: the main-page set,
+// then dismissal, then the daemon screen's three.
 func (k KeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
-		{k.Add, k.Switch, k.Daemon, k.Strategy, k.Quit, k.List},
-		{k.Up, k.Down, k.Refresh, k.Help, k.Esc, k.Enter},
+		k.ShortHelp(),
+		{k.Esc, k.Enter},
 		{k.Start, k.Stop, k.Restart},
 	}
 }
@@ -124,26 +120,39 @@ func newHelp(cue string, pal theme.Palette) help.Model {
 	return h
 }
 
-// keybar renders the help line and then truncates it, because help.SetWidth is
-// not a bound. Measured on this 53-column keybar: SetWidth(30) produced 28
-// columns, SetWidth(37) produced 53 and SetWidth(45) produced 53. Its
-// shouldAddItem returns "add it anyway" when an item overflows and the ellipsis
-// also does not fit, and the loop then keeps adding every remaining binding, so
-// truncation is non-monotone and overflows. The wrap is the bound.
-//
-// The tail passed to Truncate is the same argument h.Ellipsis was built from,
-// which is what makes the two agree by construction rather than by two literals
-// that matched when they were written: help's own ellipsis logic already adds
-// the cue at some widths (20, 30) but not at 37 or 45, where shouldAddItem's
-// overflow is what this function exists to catch -- an empty tail there cut a
-// binding with no visual cue that anything had been cut. Truncating from the
-// right means the ORDER of ShortHelp buys q one more rung before that
-// truncation reaches it; it is not a guarantee q survives every width, only
-// that it is never the first binding lost.
-//
-// help.Model has no exported Width field, only a private one reached through
-// SetWidth, which is why this calls the setter rather than assigning to one.
-func keybar(h help.Model, k KeyMap, width int, cue string) string {
-	h.SetWidth(width)
-	return ansi.Truncate(h.ShortHelpView(k.ShortHelp()), width, cue)
+// keybarLines wraps complete key/description pairs. A binding is never split
+// and no binding is dropped, so every available command remains visible at
+// every viable dashboard width.
+func keybarLines(h help.Model, bindings []key.Binding, width int) []string {
+	if width <= 0 {
+		return nil
+	}
+	sep := h.Styles.ShortSeparator.Render(h.ShortSeparator)
+	var lines []string
+	line := ""
+	for _, binding := range bindings {
+		if !binding.Enabled() {
+			continue
+		}
+		help := binding.Help()
+		item := h.Styles.ShortKey.Render(help.Key) + " " + h.Styles.ShortDesc.Render(help.Desc)
+		if line == "" {
+			line = item
+			continue
+		}
+		if ansi.StringWidth(line)+ansi.StringWidth(sep)+ansi.StringWidth(item) <= width {
+			line += sep + item
+			continue
+		}
+		lines = append(lines, line)
+		line = item
+	}
+	if line != "" {
+		lines = append(lines, line)
+	}
+	return lines
+}
+
+func keybar(h help.Model, k KeyMap, width int, _ string) string {
+	return strings.Join(keybarLines(h, k.ShortHelp(), width), "\n")
 }

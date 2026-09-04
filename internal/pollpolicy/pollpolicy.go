@@ -603,7 +603,7 @@ func (t Table) RateLimited(s State, now time.Time, retryAfter time.Duration, has
 }
 
 // RateLimitedUntil is the post-429 floor as an instant, for the caller that has
-// no cadence to ask Next() about: `ccdad list --refresh` is a button a hand
+// no cadence to ask Next() about: `ccdad status --refresh` is a button a hand
 // presses, not a scheduler, and it is still held to the post-429 backoff.
 //
 // It is the LONGER of the flat floor and whatever AIMD has earned, measured

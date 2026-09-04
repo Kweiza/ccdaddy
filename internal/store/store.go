@@ -708,7 +708,7 @@ type credentialUndo struct {
 // guarantee stopped at the document: the credentials directory is not inside
 // that atomic write. A batch refused on the fourth of five accounts left the
 // first three credential files on disk with no accounts.toml naming them —
-// each holding a live refresh token, each invisible to `ccdad list`, `ccdad
+// each holding a live refresh token, each invisible to `ccdad status`, `ccdad
 // remove` and `ccdad doctor`, because all three read the document.
 //
 // It reverses two of the three changes a transaction can make to that
@@ -942,7 +942,7 @@ func (s *Store) SetPrimary(uuid string, primary bool) (changed bool, err error) 
 // on a move that asked for the position the account already holds.
 //
 // Every account between the source and the destination changes number, so a
-// script holding an idx from an earlier `ccdad list` now acts on a different
+// script holding an idx from an earlier `ccdad status` now acts on a different
 // account. That is the stability contract in `ccdad --help` — idx is an ordinal,
 // not a key — and move is the command that makes it routine rather than a side
 // effect of removal.

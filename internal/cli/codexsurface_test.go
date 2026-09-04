@@ -41,7 +41,7 @@ func TestTheListTableNamesACodexRowCodex(t *testing.T) {
 	seedAccount(t, "cl-1", "claude@example.com")
 	seedCodexAccount(t, "cx-1", "one@example.com")
 
-	code, stdout, _, top := runRoot(t, "list")
+	code, stdout, _, top := runRoot(t, "status")
 	if code != ExitOK {
 		t.Fatalf("exit = %d (%s)", code, top)
 	}
@@ -234,7 +234,7 @@ func TestListJSONCarriesTheCodexServingUuid(t *testing.T) {
 		t.Fatalf("setup switch = %d (%s)", code, top)
 	}
 
-	payload := decodeJSON(t, "list", "--json")
+	payload := decodeJSON(t, "status", "--json")
 	if got := payload["codexServingUuid"]; got != "cx-1" {
 		t.Fatalf("codexServingUuid = %v, want cx-1", got)
 	}
@@ -244,7 +244,7 @@ func TestListJSONOmitsTheCodexServingUuidWithNoPointer(t *testing.T) {
 	isolate(t)
 	seedAccount(t, "cl-1", "claude@example.com")
 
-	payload := decodeJSON(t, "list", "--json")
+	payload := decodeJSON(t, "status", "--json")
 	if _, present := payload["codexServingUuid"]; present {
 		t.Fatalf("codexServingUuid is present on a machine with no pointer:\n%v", payload)
 	}
@@ -293,7 +293,7 @@ func TestActiveStaysClaudesWithCodexAccountsInTheStore(t *testing.T) {
 		t.Fatalf("setup switch = %d (%s)", code, top)
 	}
 
-	for _, argv := range [][]string{{"list", "--json"}, {"status", "--json"}} {
+	for _, argv := range [][]string{{"status", "--json"}} {
 		payload := decodeJSON(t, argv...)
 		if got := payload["activeUuid"]; got != "cl-2" {
 			t.Fatalf("%v: activeUuid = %v, want cl-2", argv, got)

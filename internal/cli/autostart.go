@@ -28,7 +28,7 @@ import (
 //     DEFINED, and — because `ccdad run --full-profile` REMOVES that variable
 //     and scopes with CLAUDE_CONFIG_DIR instead — a config home inside this
 //     store's own sessions or profiles container, which scoped.go answers.
-//  4. Silent, and never a failure. One stray line on stdout breaks `ccdad list
+//  4. Silent, and never a failure. One stray line on stdout breaks `ccdad status
 //     --json | jq`, and a daemon that will not start is a degraded mode rather
 //     than an error for a command that was not asking for one.
 //  5. Never into a credential home another store's engine already holds. A
@@ -69,9 +69,8 @@ import (
 //   - `primary`, for the same reason: setting an account's money policy is
 //     administering ccdad rather than using it, and the engine reads the flag
 //     on its next tick either way, whether or not one is already running.
-//   - `hover`, because this map is keyed by command path — listing it would
-//     auto-start a daemon for the verb that turns the mode off, and `ccdad
-//     hover off` is the one moment a stray daemon is least welcome.
+//   - `strategy`, because selecting a policy is configuration, not using an
+//     account. The running daemon picks the change up from config.toml.
 //   - `probe`, which is the engine's own errand rather than a user using their
 //     accounts, and which a daemon RE-EXECS. An entry here would leave the
 //     recursion guard as the only thing between a probe and an unbounded spawn,
@@ -96,18 +95,6 @@ import (
 //     command tree anyway, one fresh root per call, so listing the server buys
 //     nothing and spends an engine on a session that may never ask for one.
 //
-// `ccdad tui` is here, and that is a decision MADE rather than one made by
-// omission: this map has no totality test, so an unlisted command silently
-// never spawns and nothing in the tree ever says the question was asked. The
-// dashboard is `ccdad status` under another name, `status` is above, and the
-// person opening it is doing exactly what the paragraph at the top of this
-// list describes -- looking at an engine that is not running. The
-// counter-argument is real and is written here rather than left in nobody's
-// head: off a terminal `ccdad tui > file` renders once and exits 0, and the
-// hook fires before that render, so a redirected invocation spawns a daemon
-// too. That is the shape `ccdad status > file` already has, and it is accepted
-// for the same reason.
-//
 // Bare `ccdad` is the one entry that is here and is NOT started by the hook.
 // That slot is a dashboard behind a TTY gate and a usage error otherwise, and
 // only the dashboard half wants a daemon: a hook firing before the gate would
@@ -119,9 +106,7 @@ var autoStartCommands = map[string]bool{
 	"ccdad":           true,
 	"ccdad add":       true,
 	"ccdad add-token": true,
-	"ccdad list":      true,
 	"ccdad status":    true,
-	"ccdad tui":       true,
 	"ccdad switch":    true,
 	"ccdad which":     true,
 }

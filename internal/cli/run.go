@@ -1177,7 +1177,7 @@ func exitStatus(state *os.ProcessState) ExitCode {
 func atLeastOneAccount(verb string) cobra.PositionalArgs {
 	return func(_ *cobra.Command, args []string) error {
 		if len(args) == 0 {
-			return UsageError("%s needs an account; run 'ccdad list' to see them", verb)
+			return UsageError("%s needs an account; run 'ccdad status' to see them", verb)
 		}
 		return nil
 	}

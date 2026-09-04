@@ -140,8 +140,7 @@ func TestStatusRendersTheDashboard(t *testing.T) {
 	}
 	// The derived columns are gone. A dashboard that still printed one would be
 	// answering "which window binds" beside the windows themselves, which is
-	// the question a reader could not tell `ccdad list` was answering
-	// differently.
+	// the question the old split listing answered differently.
 	for _, unwanted := range []string{"USED", "WINDOW", "LEFT", "PACE"} {
 		if strings.Contains(stdout, unwanted) {
 			t.Errorf("the dashboard still carries the derived column %q:\n%s", unwanted, stdout)
@@ -417,9 +416,9 @@ func TestTheSingleReadingProjectionIsStillJSONOnly(t *testing.T) {
 //
 // Both halves matter. A line printed with no series behind it would be a
 // promise resting on no reading, which is the one output this measurement
-// exists to refuse; and view.RunwayLine's empty string is what `ccdad list` and
-// the dashboard also read as "print nothing", so a status that decided for
-// itself would be the first of three surfaces to disagree.
+// exists to refuse; and view.RunwayLine's empty string is what the dashboard
+// also reads as "print nothing", so a status that decided for itself would be
+// the first of two surfaces to disagree.
 //
 // The placement is not cosmetic. columns() writes the table when renderStatus
 // calls it, so a line written to the same stream after that call arrives after
@@ -434,11 +433,11 @@ func TestTheRunwayLineAppearsOnlyWithAHistoryBehindIt(t *testing.T) {
 		lines := strings.Split(human, "\n")
 		mode := -1
 		for i, l := range lines {
-			if strings.HasPrefix(l, "Mode:") {
+			if strings.HasPrefix(l, "Current:") {
 				mode = i
 			}
 		}
-		// The line UNDER Mode:, not merely somewhere above the table. What
+		// The line UNDER Current:, not merely somewhere above the table. What
 		// decides which side of the blank separator it lands on is where in
 		// renderStatus it is written, and now that is also what decides the
 		// byte order: columns() writes when it is called, so this line is
@@ -446,7 +445,7 @@ func TestTheRunwayLineAppearsOnlyWithAHistoryBehindIt(t *testing.T) {
 		// block of labels its nine-character label is padded to line up with,
 		// not in the block of rows.
 		if mode < 0 || mode+1 >= len(lines) || !strings.HasPrefix(lines[mode+1], "Runway:  ") {
-			t.Fatalf("the runway line is not the line under Mode::\n%s", human)
+			t.Fatalf("the runway line is not the line under Current::\n%s", human)
 		}
 		runway := lines[mode+1]
 		// The span the rates were measured over rides on the line: a verdict
@@ -846,7 +845,7 @@ func TestNeitherAWeeklyCapNorATighterWindowHidesTheOther(t *testing.T) {
 // window as well, because the binding window is the one with the least slack and
 // slack moves with the threshold. Hover's whole claim is that an automatic mode
 // a user cannot audit is one they have to take on trust.
-func TestStatusAndListReportTheThresholdsHoverRankedOn(t *testing.T) {
+func TestStatusReportsTheThresholdsHoverRankedOn(t *testing.T) {
 	isolate(t)
 	freezeClock(t, statusNow)
 	// 43% of a seven-day window gone, with two accounts to divide what is left
@@ -868,22 +867,16 @@ func TestStatusAndListReportTheThresholdsHoverRankedOn(t *testing.T) {
 		t.Fatalf("config set hover true exited %v: %s", code, errOut)
 	}
 
-	// Both commands, because they share one builder and the property worth
-	// pinning is that they cannot disagree.
-	for _, name := range []string{"status", "list"} {
-		t.Run(name, func(t *testing.T) {
-			_, out, _, _ := runRoot(t, name, "--json")
-			u, ok := accountRow(t, statusJSON(t, out), "uuid-a")["usage"].(map[string]any)
-			if !ok {
-				t.Fatalf("no usage object in %s --json:\n%s", name, out)
-			}
-			if got := u["windowThreshold"]; got != 93.0 {
-				t.Errorf("windowThreshold = %v, want the 93 hover derived rather than the configured 80", got)
-			}
-			if got := u["slack"]; got != -2.0 {
-				t.Errorf("slack = %v, want -2, which is 93 against 95%% used", got)
-			}
-		})
+	_, out, _, _ := runRoot(t, "status", "--json")
+	u, ok := accountRow(t, statusJSON(t, out), "uuid-a")["usage"].(map[string]any)
+	if !ok {
+		t.Fatalf("no usage object in status --json:\n%s", out)
+	}
+	if got := u["windowThreshold"]; got != 93.0 {
+		t.Errorf("windowThreshold = %v, want the 93 hover derived rather than the configured 80", got)
+	}
+	if got := u["slack"]; got != -2.0 {
+		t.Errorf("slack = %v, want -2, which is 93 against 95%% used", got)
 	}
 }
 
@@ -935,10 +928,7 @@ func TestTheDashboardAsksTheEngineExactlyOnce(t *testing.T) {
 	}
 }
 
-// `ccdad list` keeps the older contract, and that is the whole reason the two
-// commands do not share a call site: nothing in the listing needs a ranking
-// pass, and it has no mode line to put a second question behind.
-func TestTheListingDoesNotRunTheEngineWithHoverOff(t *testing.T) {
+func TestTheUnifiedStatusRunsOneEngineEvaluationWithHoverOff(t *testing.T) {
 	isolate(t)
 	freezeClock(t, statusNow)
 	seedAccountAddedAt(t, "uuid-a", "work@example.com", statusNow.Add(-24*time.Hour))
@@ -953,11 +943,11 @@ func TestTheListingDoesNotRunTheEngineWithHoverOff(t *testing.T) {
 		return strategy.Plan{}, true, nil
 	})
 
-	if _, out, _, _ := runRoot(t, "list", "--json"); out == "" {
+	if _, out, _, _ := runRoot(t, "status", "--json"); out == "" {
 		t.Fatal("list --json emitted nothing")
 	}
-	if asked {
-		t.Error("the listing ran an engine evaluation with hover off; the configured bundle needs none")
+	if !asked {
+		t.Error("status did not evaluate the engine for its Current line")
 	}
 }
 
@@ -981,8 +971,8 @@ func TestTheDashboardSaysSoWhenTheModeCannotBeRead(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit %d; a dashboard renders whatever else is wrong\n%s", code, stdout)
 	}
-	if strings.Contains(stdout, "Mode:") {
-		t.Errorf("the dashboard named a mode it could not compute:\n%s", stdout)
+	if strings.Contains(stdout, "Current:") {
+		t.Errorf("the dashboard named a current mode it could not compute:\n%s", stdout)
 	}
 	if !strings.Contains(errOut, "the engine state could not be read") {
 		t.Errorf("nothing on stderr says why the mode is missing:\n%s", errOut)
@@ -1093,7 +1083,7 @@ func TestStatusNamesTheModeWhenEveryAccountIsOverThreshold(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit %d, want 0\n%s", code, stdout)
 	}
-	if !strings.Contains(stdout, "Mode:    recovery") {
+	if !strings.Contains(stdout, "Current:  recovery") {
 		t.Errorf("the dashboard does not name the recovery mode:\n%s", stdout)
 	}
 	if !strings.Contains(stdout, "every account is over its threshold") {
@@ -1114,7 +1104,7 @@ func TestStatusNamesTheHeadroomModeToo(t *testing.T) {
 	})
 
 	_, stdout, _, _ := runRoot(t, "status")
-	if !strings.Contains(stdout, "Mode:    headroom") {
+	if !strings.Contains(stdout, "Current:  headroom") {
 		t.Errorf("the dashboard does not name the headroom mode:\n%s", stdout)
 	}
 }
@@ -1130,7 +1120,7 @@ func TestStatusOmitsTheModeWhenNothingHasEverBeenPolled(t *testing.T) {
 	seedAccountAddedAt(t, "uuid-a", "a@example.com", statusNow.Add(-time.Hour))
 
 	_, stdout, _, _ := runRoot(t, "status")
-	if strings.Contains(stdout, "Mode:") {
+	if strings.Contains(stdout, "Current:") {
 		t.Errorf("the dashboard claims a mode with no reading behind it:\n%s", stdout)
 	}
 }
@@ -1180,7 +1170,7 @@ func TestStatusNamesTheConsumeFirstMode(t *testing.T) {
 	})
 
 	_, stdout, _, _ := runRoot(t, "status")
-	if !strings.Contains(stdout, "Mode:    consume-first") {
+	if !strings.Contains(stdout, "Current:  consume-first") {
 		t.Errorf("the dashboard does not name the consume-first mode:\n%s", stdout)
 	}
 	if !strings.Contains(stdout, "perishable") {
@@ -1209,7 +1199,7 @@ func TestStatusSaysWhenHoverIsOn(t *testing.T) {
 	})
 
 	_, off, _, _ := runRoot(t, "status")
-	if strings.Contains(off, "Hover:") {
+	if strings.Contains(off, "Strategy: hover") {
 		t.Errorf("the dashboard reports hover with hover off:\n%s", off)
 	}
 
@@ -1220,11 +1210,11 @@ func TestStatusSaysWhenHoverIsOn(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit %d, want 0\n%s", code, on)
 	}
-	if !strings.Contains(on, "Hover:   on") {
+	if !strings.Contains(on, "Strategy: hover") {
 		t.Errorf("the dashboard does not say hover is on:\n%s", on)
 	}
-	if !strings.Contains(on, "ccdad hover status") {
-		t.Errorf("the dashboard says hover is on without saying where its numbers can be read:\n%s", on)
+	if !strings.Contains(on, "used/threshold") {
+		t.Errorf("the dashboard names hover without explaining its quota cells:\n%s", on)
 	}
 }
 
@@ -1353,11 +1343,9 @@ func TestTheRunwayLineIsFoldedToTheTerminalItIsPrintedOn(t *testing.T) {
 	}
 }
 
-// The runway line was the one that got filed, and it was not the only one over
-// the edge: on the same 80-column run, Mode: measured 124 display columns and
-// Hover: 100. A block where two of four lines fold and two do not is worse than
-// one where all four do, because the reader cannot tell which line they are
-// looking at the end of.
+// The runway line was the one that got filed, and Current's recovery
+// explanation also exceeds 80 columns. Every labelled line uses the same
+// hanging-wrap rule so the reader can identify continuation lines.
 //
 // The table below the block is deliberately NOT covered here. It is a
 // tabwriter, its rows measured 84 columns on that same run, and a table cannot
@@ -1367,11 +1355,10 @@ func TestEveryLabelledLineFitsTheTerminalItIsPrintedOn(t *testing.T) {
 	isolate(t)
 	freezeClock(t, statusNow)
 	seedBurningFleet(t)
-	// Hover on, because the Hover: line is printed only then and it is the
-	// second-widest line this block has. Without it this test would cover
-	// three of the four labels and read as though it covered all of them.
-	if code, _, errOut, _ := runRoot(t, "hover", "on"); code != ExitOK {
-		t.Fatalf("hover on = %d (%s)", code, errOut)
+	// Hover makes Strategy's explanatory form visible instead of testing only
+	// the short automatic strategy names.
+	if code, _, errOut, _ := runRoot(t, "strategy", "hover"); code != ExitOK {
+		t.Fatalf("strategy hover = %d (%s)", code, errOut)
 	}
 	// And a release the daemon has seen, for the same reason and after the same
 	// mistake: Update: was added to this block and not to this fixture, so it
@@ -1396,8 +1383,7 @@ func TestEveryLabelledLineFitsTheTerminalItIsPrintedOn(t *testing.T) {
 
 	// Thirty-six rather than the eighty the defect was filed at, because at
 	// eighty this fixture's Daemon: (59 display columns), Active: (37) and
-	// Mode: (72) all fit and only Hover: would be exercised -- measured. At
-	// thirty-six all four are over and every one of the four call sites is
+	// Current: (72) all fit. At thirty-six every call site is
 	// load bearing.
 	const width = 36
 
@@ -1405,7 +1391,7 @@ func TestEveryLabelledLineFitsTheTerminalItIsPrintedOn(t *testing.T) {
 	block := labelBlockOf(t, wide)
 	// Each label named explicitly. A block that stopped printing one of these
 	// would otherwise quietly shrink what this test covers.
-	for _, label := range []string{"Daemon:", "Update:", "Active:", "Hover:", "Mode:", "Runway:"} {
+	for _, label := range []string{"Daemon:", "Update:", "Active:", "Strategy:", "Current:", "Runway:"} {
 		if !strings.HasPrefix(strings.Join(block, "\n"), label) && !strings.Contains(strings.Join(block, "\n"), "\n"+label) {
 			t.Fatalf("no %s line in the block, so this test no longer covers it:\n%s", label, wide)
 		}

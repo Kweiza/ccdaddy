@@ -524,7 +524,7 @@ func enumerate(out io.Writer, s storeInspection, exe string, exeErr error, owner
 	if s.present {
 		// The account list and the warning that goes with it are printed only
 		// when there ARE accounts. A store that has never held one — which is
-		// what the first `ccdad list` on a fresh machine leaves — would
+		// what the first `ccdad status` on a fresh machine leaves — would
 		// otherwise announce that the refresh tokens of nobody cannot be
 		// recovered.
 		if len(s.accounts) == 0 {

@@ -529,7 +529,7 @@ var loginStoreSurvivesRestart = cclink.SurvivesRestart
 // never sees the password -- UnlockLoginKeychain hands stdio to
 // /usr/bin/security and reads an exit code -- and this is deliberately not on
 // the auto-start path, which spawns without coming through here: an incidental
-// `ccdad list` must never ask for a keychain password.
+// `ccdad status` must never ask for a keychain password.
 func repairOrRefuseAnUnreadableLogin(cmd *cobra.Command) error {
 	err := loginStoreRead()
 	if err == nil || !loginStoreSurvivesRestart(err) {

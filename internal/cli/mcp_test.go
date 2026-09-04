@@ -130,10 +130,10 @@ func TestTheExecutorCapturesBothWritersAndLeavesStdoutAlone(t *testing.T) {
 	seedAccount(t, "uuid-aaaa-0001", "work@example.com")
 
 	ex := freshRootExec(NewRootCmd())
-	code, stdout, stderr := ex([]string{"list", "--json"})
+	code, stdout, stderr := ex([]string{"status", "--json"})
 
 	if code != int(ExitOK) {
-		t.Fatalf("list --json = %d (%s)", code, stderr)
+		t.Fatalf("status --json = %d (%s)", code, stderr)
 	}
 	if !strings.Contains(stdout, `"accounts"`) {
 		t.Errorf("stdout = %q, want the document the command wrote", stdout)
@@ -187,8 +187,7 @@ func TestTheScopedSessionVerdictIsRecomputedOnEveryCallAndNotOncePerProcess(t *t
 // TestJSONContractCoversEveryJSONCommand fires only for a command that declares
 // the flag and is runnable, so it stays silent here -- and declaring the flag
 // would pull this command into four contract rules it cannot honestly satisfy
-// and make it the tree's second exception. `ccdad tui` is the first, for the
-// mirror-image reason.
+// and make it an exception. The bare dashboard is the mirror-image case.
 func TestTheMCPCommandDeclaresNoJSONFlagBecauseItsStdoutIsNotADocument(t *testing.T) {
 	cmd := newMCPCmd()
 	if f := cmd.Flags().Lookup("json"); f != nil {

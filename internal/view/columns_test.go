@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/store"
-	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
 
@@ -200,23 +199,6 @@ func TestAWindowCarriedWithNoUtilizationReadsUnknownAndNotZero(t *testing.T) {
 	r := Row{Account: store.Account{UUID: "a"}, HasEntry: true, Entry: usage.Entry{Snapshot: s}}
 	if got := r.WindowCell(usage.WindowFiveHour); got != Unreadable {
 		t.Errorf("present-with-null = %q, want %q", got, Unreadable)
-	}
-}
-
-// Empty is checked before the band. Under hover a threshold is an unclamped
-// pace target, so a spent window reports POSITIVE slack and a band consulted
-// first paints a gone week the colour of a healthy one.
-func TestASpentWindowIsOverEvenWhenItsSlackIsPositive(t *testing.T) {
-	r := fleetRow("a", 0, 80, map[string]float64{"Fable": 100}, 0)
-	r.Thresholds = strategy.Thresholds{Default: 80, PerWindow: map[usage.WindowName]float64{
-		usage.ScopedWindowName(usage.ScopeModel, "Fable"): 117,
-	}}
-	n := usage.ScopedWindowName(usage.ScopeModel, "Fable")
-	if slack := r.Thresholds.For(n) - 100; slack <= WarnBand {
-		t.Fatalf("fixture slack = %v; it must be past the band for this test to mean anything", slack)
-	}
-	if got := r.CellState(n); got != CellOver {
-		t.Errorf("CellState = %v, want CellOver", got)
 	}
 }
 

@@ -140,7 +140,7 @@ func (o EvalOptions) now() time.Time {
 }
 
 // Evaluate runs the engine once. It READS the usage cache and never fetches:
-// that is the same rule `ccdad list` follows, and for the same reason —
+// that is the same rule `ccdad status` follows, and for the same reason —
 // /api/oauth/usage allows roughly 28-30 requests per identity per rolling hour
 // over a SLIDING window, so a command a user can run in a loop must not be a
 // way to spend it.

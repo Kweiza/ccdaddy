@@ -19,7 +19,7 @@ import (
 // ErrPermission, ErrExist, ErrNotExist and ErrUnsupported.
 //
 // So the single `errors.Is(err, syscall.EPIPE)` this replaced was simply false
-// on Windows, and `ccdad list --json | head -1` printed "ccdad: writing
+// on Windows, and `ccdad status --json | head -1` printed "ccdad: writing
 // output: The pipe is being closed." and exited non-zero -- against the exit
 // contract, under which a reader that has gone away is not an error and the
 // run ends at exit 0. Nothing noticed, because until the three-OS matrix

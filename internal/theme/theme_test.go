@@ -21,8 +21,10 @@ var roleNames = [numRoles]string{
 	RoleMuted:       "RoleMuted",
 	RoleHeader:      "RoleHeader",
 	RoleNotice:      "RoleNotice",
+	RoleGaugeCool:   "RoleGaugeCool",
 	RoleGaugeOK:     "RoleGaugeOK",
 	RoleGaugeWarn:   "RoleGaugeWarn",
+	RoleGaugeHigh:   "RoleGaugeHigh",
 	RoleGaugeOver:   "RoleGaugeOver",
 	RoleGaugeEmpty:  "RoleGaugeEmpty",
 }
@@ -37,10 +39,10 @@ var colouredThemes = []Name{Dark, Light, ANSI}
 // all land on it.
 var stateRoles = []Role{RoleActive, RoleCandidate, RoleExhausted, RoleQuarantined, RoleMuted}
 
-// gaugeFills is the three colours the filled part of the bar takes. They never
+// gaugeFills is the five colours the filled part of the bar takes. They never
 // appear at once -- a bar has one colour -- but a reader who watches one
 // account cross a band must see the crossing.
-var gaugeFills = []Role{RoleGaugeOK, RoleGaugeWarn, RoleGaugeOver}
+var gaugeFills = []Role{RoleGaugeCool, RoleGaugeOK, RoleGaugeWarn, RoleGaugeHigh, RoleGaugeOver}
 
 func TestEveryRoleIsNamed(t *testing.T) {
 	for r := Role(0); r < numRoles; r++ {

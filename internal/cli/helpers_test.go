@@ -546,7 +546,7 @@ func TestNoArgumentsDoesNotInheritTheTestBinarysCommandLine(t *testing.T) {
 	stubTTYs(t, false, false)
 	saved := os.Args
 	t.Cleanup(func() { os.Args = saved })
-	os.Args = []string{saved[0], "list", "--json"}
+	os.Args = []string{saved[0], "status", "--json"}
 
 	code, out, _, top := runRoot(t)
 	if code != ExitUsage {

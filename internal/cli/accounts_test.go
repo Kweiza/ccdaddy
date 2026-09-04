@@ -10,7 +10,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/store"
 )
 
-func TestDisableHidesFromListButNotFromAll(t *testing.T) {
+func TestStatusKeepsDisabledAccountsVisibleAndLabelsThem(t *testing.T) {
 	isolate(t)
 	seedAccount(t, "u-1", "one@example.com")
 	seedAccount(t, "u-2", "two@example.com")
@@ -23,13 +23,9 @@ func TestDisableHidesFromListButNotFromAll(t *testing.T) {
 		t.Errorf("disable said %q, want it to say the account is disabled", stderr)
 	}
 
-	_, stdout, _, _ := runRoot(t, "list")
-	if strings.Contains(stdout, "two@example.com") {
-		t.Errorf("list still shows the disabled account:\n%s", stdout)
-	}
-	_, all, _, _ := runRoot(t, "list", "--all")
-	if !strings.Contains(all, "two@example.com") {
-		t.Errorf("list --all does not show the disabled account:\n%s", all)
+	_, stdout, _, _ := runRoot(t, "status")
+	if !strings.Contains(stdout, "two@example.com") || !strings.Contains(stdout, "disabled") {
+		t.Errorf("status does not show and label the disabled account:\n%s", stdout)
 	}
 }
 

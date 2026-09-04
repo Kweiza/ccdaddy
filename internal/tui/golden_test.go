@@ -19,7 +19,7 @@ const (
 	goldenShort        = "short-80x13.txt"
 	goldenNarrow       = "narrow-56x10.txt"
 	goldenCollapsed    = "collapsed-43x9.txt"
-	goldenNotice       = "notice-80x20.txt"
+	goldenNotice       = "notice-80x21.txt"
 	goldenZeroAccounts = "zero-accounts-80x13.txt"
 )
 
@@ -190,7 +190,7 @@ func TestEveryGoldenPageCarriesTheGlyphClassesItsRungAllows(t *testing.T) {
 		{goldenFullPage, 113, 26, true, 0, 4, false},
 		{goldenDesignTarget, 80, 24, true, 0, 4, false},
 		{goldenShort, 80, 13, true, 0, 4, false},
-		{goldenNotice, 80, 20, true, 0, 4, false},
+		{goldenNotice, 80, 21, true, 0, 4, false},
 		{goldenZeroAccounts, 80, 13, true, 0, 0, false},
 		{goldenNarrow, 56, 10, false, 0, 0, true},
 		{goldenCollapsed, 43, 9, false, 0, 0, true},

@@ -15,7 +15,7 @@ import (
 // this, the signal is delivered with its default disposition and the process
 // dies with status 141, so the write never returns an error and ExecuteWith's
 // EPIPE branch is unreachable dead code. The exit contract requires the
-// opposite: EPIPE is not an error, and `ccdad list --json | head -1` exits 0.
+// opposite: EPIPE is not an error, and `ccdad status --json | head -1` exits 0.
 // That held only by accident, for outputs small enough to fit the pipe buffer.
 //
 // signal.Notify (rather than signal.Ignore) is what flips the runtime into

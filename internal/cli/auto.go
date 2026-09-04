@@ -40,8 +40,8 @@ func newAutoCmd() *cobra.Command {
 		Long: "With --once, run one evaluation and exit — the cron and testing surface for\n" +
 			"the whole engine. Without it, evaluate continuously in the foreground until\n" +
 			"interrupted, which is what the daemon does with nothing detached.\n\n" +
-			"It never polls: it reads the same on-disk usage cache 'ccdad list' reads.\n" +
-			"Run the daemon, or 'ccdad list --refresh', to freshen it.\n\n" +
+			"It never polls: it reads the same on-disk usage cache 'ccdad status' reads.\n" +
+			"Run the daemon, or 'ccdad status --refresh', to freshen it.\n\n" +
 			"It is Claude-only: it never moves the account codex is served from. Run the daemon\n" +
 			"for that, or 'ccdad switch --provider codex' by hand.\n\n" +
 			"Exit codes are the point. 0 switched; 3 nothing to do; 4 wanted to move and\n" +
@@ -203,7 +203,7 @@ func autoPass(ctx context.Context, em *autoEmitter, s *store.Store) (ExitCode, e
 		// back empty. Both are 4, but only this one is fixed by polling.
 		em.evaluated(ev, "blocked", "no usage readings yet")
 		em.say("ccdad has no usage readings yet, so there is nothing to choose on.")
-		em.say("Run the daemon, or 'ccdad list --refresh', to fill the cache.")
+		em.say("Run the daemon, or 'ccdad status --refresh', to fill the cache.")
 		return ExitBlocked, nil
 	}
 
@@ -268,7 +268,7 @@ func autoPass(ctx context.Context, em *autoEmitter, s *store.Store) (ExitCode, e
 			em.notice("refreshing it failed: %v", res.FreshenErr)
 		}
 		em.say("Installing it would hand Claude Code a rotation that moves the refresh token out " +
-			"from under ccdad's copy. Its next poll refreshes the grant; `ccdad list --refresh` " +
+			"from under ccdad's copy. Its next poll refreshes the grant; `ccdad status --refresh` " +
 			"does it now.")
 		return ExitBlocked, nil
 	case switcher.Contended:

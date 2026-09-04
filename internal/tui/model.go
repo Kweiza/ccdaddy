@@ -506,22 +506,13 @@ func (a App) pageKey(msg tea.KeyPressMsg, k KeyMap) (App, tea.Cmd, bool) {
 		return a, nil, true
 
 	case key.Matches(msg, k.Strategy):
-		a.pick = strategyPicker(a.m.Snap.Strategy, a.m.Glyphs)
+		a.pick = strategyPicker(a.m.Snap.StrategyLabel(), a.m.Glyphs)
 		a.scr = screenPicker
 		return a, nil, true
 
 	case key.Matches(msg, k.Daemon):
 		a.scr = screenDaemon
 		return a, a.tailLog(), true
-
-	case key.Matches(msg, k.List):
-		if a.m.Set == SetFull {
-			a.m.Set = SetCompact
-		} else {
-			a.m.Set = SetFull
-		}
-		a.m = scrolled(a.m)
-		return a, nil, true
 
 	case key.Matches(msg, k.Up):
 		a.m.Cursor--
@@ -752,8 +743,13 @@ func scrolled(m Model) Model {
 	// happens to hold at the current offset.
 	probe := m
 	probe.Top = 0
-	shown, _ := probe.window(Plan(m.Set, m.Cols, m.Width, m.Height, n,
-		len(m.Snap.Notices) > 0, m.runwayLine() != ""))
+	footerWidth := m.Width - 2
+	if footerWidth < 1 {
+		footerWidth = m.Width
+	}
+	runway := m.runwayLines()
+	shown, _ := probe.window(planWithRows(m.Set, m.Cols, m.Width, m.Height, n,
+		len(m.Snap.Notices) > 0, len(runway) > 0, len(m.footerLines(footerWidth)), len(runway)))
 	room := len(shown)
 	if room < 1 {
 		room = 1

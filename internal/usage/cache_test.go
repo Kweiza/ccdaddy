@@ -297,7 +297,7 @@ func TestCacheOnAMissingFileIsEmptyAndNotAnError(t *testing.T) {
 	}
 }
 
-// serveTTL is enforced on the READ path. Without that, `ccdad list --refresh` in
+// serveTTL is enforced on the READ path. Without that, `ccdad status --refresh` in
 // a shell loop bursts the sliding window and saturates the identity's 28-30
 // requests per hour in seconds.
 func TestCacheRefusesToFetchInsideServeTTL(t *testing.T) {

@@ -350,7 +350,7 @@ func newProbeCmd() *cobra.Command {
 				}
 			}
 			if named == 0 {
-				return UsageError("probe needs an account, --%s, or --all; run 'ccdad list' to see them",
+				return UsageError("probe needs an account, --%s, or --all; run 'ccdad status' to see them",
 					daemon.ProbeUUIDFlag)
 			}
 			if named > 1 {

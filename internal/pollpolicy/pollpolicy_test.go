@@ -401,7 +401,7 @@ func TestTheBudgetIsSharedAcrossAnIdentity(t *testing.T) {
 	}
 }
 
-// The post-429 floor as a hand-held command has to read it. `ccdad list
+// The post-429 floor as a hand-held command has to read it. `ccdad status
 // --refresh` does not run on a cadence, so it cannot ask Next() when it may
 // call the endpoint again — it has to ask directly.
 func TestTheHandHeldFloorIsTheLongerOfTheFloorAndTheEarnedBackoff(t *testing.T) {

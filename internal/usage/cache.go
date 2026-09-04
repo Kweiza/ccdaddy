@@ -18,9 +18,9 @@ import (
 // The on-disk usage cache: one document the daemon writes and every CLI
 // invocation reads.
 //
-// It is what keeps `ccdad list` and `ccdad status --json` from ever
+// It is what keeps the human and JSON forms of `ccdad status` from ever
 // disagreeing, and it is the only thing standing between a scripted
-// `ccdad list` and the endpoint's 28-30 requests per identity per rolling hour.
+// `ccdad status --refresh` and the endpoint's 28-30 requests per identity per rolling hour.
 // That budget is a SLIDING WINDOW, so a burst saturates the identity for up to a
 // full hour and pausing does not give the capacity back early — which is why
 // serveTTL is enforced here, on the read path, and not only where a fetch is
@@ -136,7 +136,7 @@ func (e Entry) FreshWithin(now time.Time, ttl time.Duration) bool {
 // Fresh reports whether this reading may be served without a fetch.
 //
 // It is the flat ServeTTL and deliberately NOT ScheduledTTL. This is the gate on
-// the HAND-HELD path — `ccdad list --refresh`, through MayFetch — where it is
+// the HAND-HELD path — `ccdad status --refresh`, through MayFetch — where it is
 // the only rate bound there is, since that path ignores nextPollAt on purpose.
 // Serving the scheduler's shortened TTL here would let a scripted refresh reach
 // the endpoint six times as often as before, against an allowance of 28-30 an
@@ -342,7 +342,7 @@ func (c *Cache) save(root string) error {
 // what it changed. This is the only safe way to modify the cache.
 //
 // An atomic rename alone is not enough here. The daemon writes one account's
-// entry while `ccdad list --refresh` writes another, and both do a
+// entry while `ccdad status --refresh` writes another, and both do a
 // read-modify-write of the same document: without the lock the second rename
 // silently drops the first one's entry. The lock is cclock's — the same
 // mkdir-based advisory mutex ccdad already uses against Claude Code, with the

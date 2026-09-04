@@ -39,24 +39,28 @@ var observeDaemon = daemon.Observe
 var humanDuration = view.HumanDuration
 
 func newStatusCmd() *cobra.Command {
-	var asJSON bool
+	var (
+		asJSON  bool
+		refresh bool
+	)
 
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Show the engine dashboard",
-		Long: "status renders what is already on disk: the accounts, the cached usage\n" +
+		Long: "status is the one overview for the accounts, the selected strategy, cached\n" +
 			"readings and the daemon's own published state. It never fetches — the\n" +
 			"usage endpoint allows roughly 28-30 requests per identity per rolling\n" +
-			"hour on a sliding window, so a dashboard that polled would let one burst\n" +
-			"saturate an account for a full hour.",
+			"hour on a sliding window. --refresh asks once, while still respecting the\n" +
+			"cache and rate-limit backoff.",
 		Args:          usageArgs(cobra.NoArgs),
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runStatus(cmd, asJSON)
+			return runStatus(cmd, asJSON, refresh)
 		},
 	}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit a machine-readable object on stdout")
+	cmd.Flags().BoolVar(&refresh, "refresh", false, "refresh usage before rendering when the cache permits it")
 	return cmd
 }
 
@@ -68,10 +72,10 @@ func newStatusCmd() *cobra.Command {
 // exited non-zero when the daemon happened to be down would make the obvious
 // health-check script wrong. The only failure is one that leaves nothing to
 // render at all — an unreadable account store.
-func runStatus(cmd *cobra.Command, asJSON bool) error {
+func runStatus(cmd *cobra.Command, asJSON, refresh bool) error {
 	now := timeNow()
 
-	snap, probeErr, err := loadSnapshot(cmd, now)
+	snap, probeErr, err := loadSnapshot(cmd, now, refresh)
 	if err != nil {
 		return err
 	}
@@ -99,18 +103,26 @@ func runStatus(cmd *cobra.Command, asJSON bool) error {
 // human sentence. err is the one failure loadSnapshot cannot render past — an
 // unreadable account store or usage cache — and it is what runStatus returns
 // directly.
-func loadSnapshot(cmd *cobra.Command, now time.Time) (snap view.Snapshot, probeErr, err error) {
+func loadSnapshot(cmd *cobra.Command, now time.Time, refresh bool) (snap view.Snapshot, probeErr, err error) {
 	s, err := store.Open()
 	if err != nil {
 		return view.Snapshot{}, nil, err
 	}
 	accounts := s.Accounts()
 
-	// Tolerated, like `list` does: an unreadable live file costs the active
-	// marker and nothing else, and status is what a user reaches for when
-	// something is already wrong.
+	// An unreadable live file costs the active marker and nothing else. Status
+	// is what a user reaches for when something is already wrong.
 	live, _ := cclink.Load()
 	active, hasActive := attributeLive(live, accounts, s.Credentials)
+	if refresh {
+		pollable := make([]store.Account, 0, len(accounts))
+		for _, account := range accounts {
+			if !account.Disabled {
+				pollable = append(pollable, account)
+			}
+		}
+		refreshUsage(cmd, s, pollable, active, hasActive, now)
+	}
 
 	report, probeErr := observeDaemon()
 	var notices []string
@@ -127,10 +139,8 @@ func loadSnapshot(cmd *cobra.Command, now time.Time) (snap view.Snapshot, probeE
 		notices = append(notices, n)
 	}
 
-	// The cache is the authority for quota, for both this command and `list`.
-	// That `ccdad list` and `ccdad status --json` can never disagree is only
-	// true because neither of them has a second source for a number — see
-	// daemon.Status's authority note.
+	// The cache is the authority for quota. Status has no second source for a
+	// number — see daemon.Status's authority note.
 	cache, err := usage.LoadCache()
 	if err != nil {
 		return view.Snapshot{}, probeErr, err
@@ -142,8 +152,8 @@ func loadSnapshot(cmd *cobra.Command, now time.Time) (snap view.Snapshot, probeE
 	}
 
 	// The measurement is taken HERE, in the one place that already holds both
-	// documents it needs, so `ccdad status`, `ccdad list` and the terminal
-	// dashboard cannot measure one fleet three ways. It is the same call
+	// documents it needs, so status and the terminal dashboard cannot measure
+	// one fleet two ways. It is the same call
 	// `ccdad runway` makes, on the same two sources: the cache supplies every
 	// level and the series supplies nothing but slopes.
 	//
@@ -185,10 +195,8 @@ func loadSnapshot(cmd *cobra.Command, now time.Time) (snap view.Snapshot, probeE
 		mode, hasMode = plan.Result.Mode, true
 	}
 
-	// Bypasses thresholdsFrom -- which only prints -- so the hover notice it
-	// would otherwise swallow reaches Notices too, in the same position it
-	// already printed in: after the plan notice, exactly where thresholdsFrom
-	// evaluated as `view.Rows`'s argument would have run it.
+	// Threshold resolution returns its notices so the full-screen dashboard can
+	// carry them without owning a cobra command or a second policy path.
 	resolve, hoverNotices := view.ThresholdsFor(cfg, now, plan, planErr)
 	for _, n := range hoverNotices {
 		fmt.Fprint(cmd.ErrOrStderr(), n)
@@ -208,7 +216,7 @@ func loadSnapshot(cmd *cobra.Command, now time.Time) (snap view.Snapshot, probeE
 	}
 	// The pointer, resolved through the one reader every surface uses. It is
 	// read HERE, in the function that already holds the account list, so that
-	// `ccdad status`, `ccdad list` and the dashboard cannot each answer it.
+	// status and the dashboard cannot each answer it.
 	codexLabel, codexUUID := "", ""
 	if serving, ok := codexServingAccount(accounts); ok {
 		codexLabel, codexUUID = serving.Label(), serving.UUID
@@ -221,13 +229,14 @@ func loadSnapshot(cmd *cobra.Command, now time.Time) (snap view.Snapshot, probeE
 		ActiveLabel:       activeLabel,
 		CodexServingLabel: codexLabel,
 		CodexServingUUID:  codexUUID,
-		Strategy:          cfg.Strategy.String(),
+		Strategy:          selectedStrategy(cfg),
 		Hover:             cfg.Hover,
 		Manual:            cfg.Manual,
 		Mode:              mode,
 		HasMode:           hasMode,
 		Version:           buildinfo.Version,
 		Notices:           notices,
+		UnknownKeys:       cclink.UnknownKeys(live),
 		Forecast:          fleet,
 		// Basis.Known is the whole test, and it is the same one view.RunwayLine
 		// applies before it returns anything: a fleet nobody has enough
@@ -258,81 +267,14 @@ var enginePlan = func(s *store.Store, now time.Time) (strategy.Plan, bool, error
 	return ev.Plan, ev.Decided, nil
 }
 
-// rowThresholds is what `list` measures its rows against: one bundle per
-// account, because under hover there is no single one.
-//
-// It is `list`'s alone. `status` reads the same answer out of view.ThresholdsFor
-// directly, because it has already asked the engine for the mode and must not
-// ask a second time. cfg is a parameter rather than a read for the same reason:
-// its caller has the config in hand to decide whether to say the numbers were
-// derived, and a second rowConfig call would print the config notice twice.
-//
-// It goes through RankOptions rather than reading the threshold keys itself, so
-// the number a row is reported against is the number the engine ranked on. Two
-// constructions of the same bundle would agree until the day one of them was
-// changed.
-//
-// Under hover that rule is what forces the whole engine to be asked. Hover
-// derives a threshold per account from how far through its own window each one
-// is AND from how many accounts are left to share the remainder with, and that
-// pool is not the account list this command renders: it excludes an account
-// whose credentials cannot be installed and one that is quarantined, neither of
-// which is visible from here. A table built locally would divide the quota by a
-// different count and print numbers wrong in a new way rather than in the old
-// one, so the plan the engine actually made is what supplies them.
-//
-// A config that cannot be used is a notice and not a failure: refusing to render
-// a dashboard because a threshold was mistyped is a worse answer than rendering
-// it against the documented defaults, which is the same call `ccdad auto` makes.
-// An engine that cannot be asked is the same kind of notice, and it falls back
-// to the configured bundle because that is the last table anyone can name.
-func rowThresholds(cmd *cobra.Command, cfg config.Config, s *store.Store, now time.Time) func(uuid string) strategy.Thresholds {
-	if !cfg.RankOptions(now).Hover {
-		// `list` asks the engine only when hover is on, because with hover off
-		// the configured bundle answers every row and an evaluation would be a
-		// ranking pass nothing reads. `status` is the one that always asks, and
-		// it has a second question to put.
-		return thresholdsFrom(cmd, cfg, now, strategy.Plan{}, nil)
-	}
-	plan, _, err := enginePlan(s, now)
-	return thresholdsFrom(cmd, cfg, now, plan, err)
-}
-
-// rowConfig is the config the rows are measured against, with the one notice a
-// config that cannot be used earns. A dashboard that refused to render because a
-// threshold was mistyped is a worse answer than one rendered against the
-// documented defaults, which is the same call `ccdad auto` makes.
-func rowConfig(cmd *cobra.Command) config.Config {
-	cfg, notice := configOrDefaults()
-	if notice != "" {
-		fmt.Fprint(cmd.ErrOrStderr(), notice)
-	}
-	return cfg
-}
-
-// configOrDefaults is rowConfig without the print, so that a caller building a
-// Snapshot -- which has no stderr of its own to assume -- can carry the same
-// sentence rather than lose it. rowConfig and loadSnapshot both go through
-// this, so the config notice is spelled once regardless of which one asks.
+// configOrDefaults returns the fallback notice instead of printing it, so a
+// full-screen dashboard can carry the same message without owning stderr.
 func configOrDefaults() (cfg config.Config, notice string) {
 	cfg, err := config.Load()
 	if err != nil {
 		return config.Defaults(), fmt.Sprintf("note: %v; the rows are measured against the built-in thresholds\n", err)
 	}
 	return cfg, ""
-}
-
-// thresholdsFrom is rowThresholds without the fetch, so a caller that has
-// already asked the engine does not ask it twice. The plan is read only when
-// hover is on; with hover off it is ignored entirely, including its error.
-func thresholdsFrom(cmd *cobra.Command, cfg config.Config, now time.Time,
-	plan strategy.Plan, planErr error) func(uuid string) strategy.Thresholds {
-
-	resolve, notices := view.ThresholdsFor(cfg, now, plan, planErr)
-	for _, n := range notices {
-		fmt.Fprint(cmd.ErrOrStderr(), n)
-	}
-	return resolve
 }
 
 // renderStatus takes the whole Snapshot rather than a field per column. The
@@ -345,8 +287,8 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 
 	// Every line of this block goes through view.WrapLabeled at the width of
 	// the terminal, and the width is zero for everything that is not one.
-	// Measured on an 80-column terminal: Mode: 124 display columns, Hover: 100,
-	// and the terminal folded both wherever its own right edge landed. The
+	// Measured on an 80-column terminal, Current's recovery explanation exceeds
+	// the width and the terminal otherwise folds it wherever its edge lands. The
 	// runway line below has its own wrap, because its spaces are inside its
 	// values and these are between words.
 	//
@@ -441,31 +383,17 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 	// dashboard's header renders the identical sentence from the identical
 	// method.
 	fmt.Fprintln(out, view.WrapLabeled("Active:  "+snap.ActiveLine(), outWidth(cmd.OutOrStdout())))
-	// Above the Mode line, because it is what EXPLAINS it: under hover the mode
-	// is headroom whatever the file says, hover having overridden the strategy
-	// key. A reader who set consume-first and finds headroom here needs the
-	// reason before the answer, not after it.
-	if snap.Hover {
-		fmt.Fprintln(out, view.WrapLabeled(view.HoverLine(), outWidth(cmd.OutOrStdout())))
-	}
-	// Above the Mode line too, and for a sharper version of the same reason:
-	// the mode line describes a ranking the engine is not going to act on. A
-	// reader who finds "recovery" here and no switch in the log needs to know
-	// which of the two facts explains the silence before they go looking for a
-	// broken daemon.
-	if snap.Manual {
-		fmt.Fprintln(out, view.WrapLabeled(view.ManualLine(), outWidth(cmd.OutOrStdout())))
-	}
+	fmt.Fprintln(out, view.WrapLabeled(view.StrategyLine(snap.StrategyLabel()), outWidth(cmd.OutOrStdout())))
 	if snap.HasMode {
-		fmt.Fprintln(out, view.WrapLabeled(view.ModeLine(snap.Mode), outWidth(cmd.OutOrStdout())))
+		fmt.Fprintln(out, view.WrapLabeled(view.CurrentLine(snap.Mode), outWidth(cmd.OutOrStdout())))
 	}
 	// The empty string is the gate: view.RunwayLine returns one when there is
-	// no measurement, and that is how this renderer, `ccdad list` and the
-	// dashboard all decline the line without each carrying its own idea of when
+	// no measurement, and that is how this renderer and the dashboard both
+	// decline the line without each carrying its own idea of when
 	// there is nothing to say.
 	//
 	// It belongs with the labels above and not with the table: the
-	// nine-character label lines it up with Daemon:, Active: and Mode:, and the
+	// label keeps it in the same summary block as Daemon:, Active: and Current:, and the
 	// blank line below is the separator between that block and the rows.
 	//
 	// The order this position produces is now the order it looks like.
@@ -491,26 +419,30 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 	}
 	fmt.Fprintln(out)
 
-	// The same constructor `ccdad list` calls, which is what makes the two
-	// tables name the same windows in the same order under the same headers.
+	// The same constructor the dashboard calls, which is what makes both
+	// surfaces name the same windows in the same order under the same headers.
 	cols := view.ColumnsOf(rows)
 	cells := make([][]string, 0, len(rows))
 	for _, r := range rows {
 		// StatusFlags rides on the AGE cell, which is what the trailing %s%s in
 		// the format string this replaced was doing, and for the same reason
-		// the flags ride on `list`'s last cell: a suffix that belongs to one
+		// the flags ride on the last cell: a suffix that belongs to one
 		// account reads better beside that account's own figure than at a
 		// fixed offset far to its right.
 		row := []string{
-			fmt.Sprintf("%s %d", r.Marker(), r.Account.Idx), r.StatusLabel(), r.TypeLabel(),
+			fmt.Sprintf("%s %d", r.Marker(), r.Account.Idx), r.ListLabel(), r.TypeLabel(), r.TierLabel(),
 		}
-		row = append(row, r.Cells(cols, now)...)
+		if snap.Hover {
+			row = append(row, r.HoverCells(cols, now)...)
+		} else {
+			row = append(row, r.Cells(cols, now)...)
+		}
 		row = append(row, r.AgeLabel(now)+r.StatusFlags())
 		cells = append(cells, row)
 	}
-	head := append([]string{"  IDX", "ACCOUNT", "TYPE"}, cols.Headers()...)
+	head := append([]string{"  IDX", "ACCOUNT", "TYPE", "TIER"}, cols.Headers()...)
 	head = append(head, "AGE")
-	if err := columns(out, head, cells, windowCellStyle(pal, rows, 3, cols)); err != nil {
+	if err := columns(out, head, cells, windowCellStyle(pal, rows, 4, cols)); err != nil {
 		return err
 	}
 	// Under the table, because each of these explains a column the reader is
@@ -519,6 +451,11 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 	// `--json` still carries every window's pace including the projection.
 	if legend := cols.Legend(); legend != "" {
 		fmt.Fprintln(out, view.WrapLabeled(legend, outWidth(cmd.OutOrStdout())))
+	}
+	if snap.Hover {
+		fmt.Fprintln(out, view.WrapLabeled(
+			"hover:    quota cells show used/threshold; thresholds are derived per account and window",
+			outWidth(cmd.OutOrStdout())))
 	}
 	if note := cols.UnrankedNote(); note != "" {
 		fmt.Fprintln(out, view.WrapLabeled(note, outWidth(cmd.OutOrStdout())))
@@ -547,7 +484,7 @@ func statusPayload(snap view.Snapshot, probeErr error) map[string]any {
 		if r.Active {
 			activeUUID, hasActive = r.Account.UUID, true
 		}
-		if u := usageJSON(r, snap.Now); u != nil {
+		if u := usageJSON(r, snap.Now, snap.Hover); u != nil {
 			row["usage"] = u
 		}
 		if e := engineJSON(r.Engine); e != nil {
@@ -560,12 +497,13 @@ func statusPayload(snap view.Snapshot, probeErr error) map[string]any {
 		"schemaVersion": 1,
 		"daemon":        d,
 		"accounts":      out,
+		"strategy":      snap.StrategyLabel(),
 	}
 	if hasActive {
 		payload["activeUuid"] = activeUUID
 	}
-	// The same key `ccdad list --json` publishes, from the same reader. Two
-	// commands describing one pointer must not describe it two ways.
+	// A separate key from activeUuid because it describes the Codex lane's
+	// pointer, not Claude Code's live credential.
 	if snap.CodexServingUUID != "" {
 		payload["codexServingUuid"] = snap.CodexServingUUID
 	}
@@ -575,6 +513,9 @@ func statusPayload(snap view.Snapshot, probeErr error) map[string]any {
 	// same guard.
 	if snap.HasMode {
 		payload["mode"] = snap.Mode.String()
+	}
+	if len(snap.UnknownKeys) > 0 {
+		payload["unknownKeys"] = snap.UnknownKeys
 	}
 	// Conditional for the reason unnamableWeeklyCaps is: an ordinary payload does
 	// not carry a field that is always the boring default. Present means every
@@ -599,7 +540,7 @@ func statusPayload(snap view.Snapshot, probeErr error) map[string]any {
 // nil rather than an object of zeros, for the same reason the table prints "?":
 // an account that could not be read is not an empty one, and a consumer that
 // sees no `usage` key cannot mistake it for one at 0%.
-func usageJSON(r view.Row, now time.Time) map[string]any {
+func usageJSON(r view.Row, now time.Time, includeThresholds bool) map[string]any {
 	if !r.HasEntry {
 		return nil
 	}
@@ -628,16 +569,20 @@ func usageJSON(r view.Row, now time.Time) map[string]any {
 	// out of limits[], and a consumer resolving the name against the fixed five
 	// would find nothing for an account whose headroom is perfectly well known.
 	windows := map[string]any{}
-	for _, w := range r.Entry.Snapshot.AllWindows() {
-		if !w.Present {
-			continue
-		}
+	for _, w := range r.CarriedWindows() {
 		entry := map[string]any{}
 		if pct, ok := w.Percent(); ok {
 			entry["utilizationPct"] = pct
 		}
 		if reset, ok := w.Reset(); ok {
 			entry["resetsAt"] = reset
+		}
+		if includeThresholds {
+			threshold := r.WindowThreshold(w.Name)
+			entry["thresholdPct"] = threshold
+			if pct, ok := w.Percent(); ok {
+				entry["slackPct"] = threshold - pct
+			}
 		}
 		windows[string(w.Name)] = entry
 	}

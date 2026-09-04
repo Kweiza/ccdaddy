@@ -135,71 +135,10 @@ func columns(w io.Writer, headers []string, rows [][]string, style func(row, col
 // this has to survive, not a case that cannot arise.
 var tableCell = strings.NewReplacer("\n", " ", "\r", " ", "\t", " ")
 
-// quotaCellStyle is the colour on `status`'s and `list`'s tables, and it is one
-// function for both because the two describe one store: two copies would be two
-// chances for the same account to be painted two ways on two screens.
-//
-// It has three arms and it deliberately has no fourth, because every arm here
-// has to obey one bound: colour is never the only thing carrying a
-// distinction. The header's cells are words. The active marker is a "*"
-// printed in the IDX gutter, so the row says it is active with a glyph whether
-// or not anything painted it. The muted arm fires only where the cell's own
-// text is "?", which is itself the statement that the value could not be read.
-// Strip every escape byte out of either table and nothing is lost.
-//
-// THE ARM THAT IS NOT HERE: an exhausted account is not painted. Row.Empty()
-// is strategy.OutOfQuota, which is Headroom.MinPct <= 0 -- the LEAST raw room
-// any binding window has. `list`'s LEFT column prints Headroom.Pct, read off
-// the window with the least SLACK, and `status`'s USED column prints the
-// REPORTED window. Those are different windows by construction, so an account
-// the engine has filed as spent can print "75%" in LEFT and 40% in USED, and a
-// red cell over either number would be saying something the number beside it
-// contradicts. Worse, it would be saying it in colour alone: `ccdad list`
-// carries no STATE column at any width and `ccdad status` carries none either,
-// so there is no glyph and no word anywhere on the row for a reader to recover
-// the verdict from -- exactly the sole-carrier failure a monochrome terminal,
-// a NO_COLOR user and a colour-blind reader each turn into no information at
-// all. The exhausted distinction stays where it keeps its word, which is the
-// dashboard's STATE column. `ccdad status --json` carries the verdict for
-// anything that needs it programmatically.
-//
-// label is the column's OWN label function -- UsedLabel for status, LeftLabel
-// for list -- and the muted branch asks it rather than re-deriving the cascade
-// behind it. LeftLabel's absence is not UsedLabel's: one falls back to the
-// credit axis before giving up and the other does not, so a colour keyed on a
-// re-derived predicate would eventually dim a cell that reads as a dollar
-// figure. Asking the label is what keeps the colour describing the text beside
-// it and nothing else.
-// windowCellStyle is the colour on the per-window tables, and it is one
-// function for `list`, `status` and `hover status` because the three describe
-// one store: three copies would be three chances for the same account to be
-// painted three ways on three screens.
-//
-// It has three arms and the bound they obey is the one quotaCellStyle stated:
-// COLOUR IS NEVER THE ONLY THING CARRYING A DISTINCTION. Strip every escape
-// byte out of the table and nothing is lost.
-//
-//   - The active marker is a "*" in the IDX gutter, so the row says it is
-//     active with a glyph whether or not anything painted it.
-//   - The muted arm fires only where the cell's own text is "?", which is
-//     itself the statement that the value could not be read.
-//   - The over arm fires only where the cell's own text is 100%, which is
-//     itself the statement that the window is gone.
-//
-// THE ARM THAT IS NOT HERE, and it is the one this file used to argue about
-// from the other side: there is no amber band. A cell reading "84%" painted
-// amber would be saying "close to its threshold" in colour and nowhere else,
-// and neither CLI table carries a STATE column at any width for a reader to
-// recover it from -- the sole-carrier failure a monochrome terminal, a NO_COLOR
-// user and a colour-blind reader each turn into no information at all. The
-// dashboard has that column and takes the band there.
-//
-// What DID change is the over arm, and the reason is the whole of this release.
-// It used to be refused because `list`'s LEFT and `status`'s USED read
-// different windows by construction, so a red cell over either number was
-// saying something the number beside it contradicted. There is no derived
-// window any more: a cell is one window, and 100% in it is the cell's own text
-// agreeing with its own colour.
+// windowCellStyle colours each window by its own utilization: blue, green,
+// yellow, orange, then red. Unknown readings remain muted, the active marker
+// remains accented, and the percentage text preserves the ordered value when
+// colour is unavailable.
 func windowCellStyle(pal theme.Palette, rows []view.Row, firstWindowCol int,
 	cols view.Columns) func(row, col int) lipgloss.Style {
 
@@ -218,13 +157,13 @@ func windowCellStyle(pal theme.Palette, rows []view.Row, firstWindowCol int,
 		if i < 0 || i >= len(cols.Windows) {
 			return lipgloss.NewStyle()
 		}
-		switch r.CellState(cols.Windows[i].Name) {
-		case view.CellUnknown:
+		pct, state := r.WindowPct(cols.Windows[i].Name)
+		switch state {
+		case view.WindowUnreadable, view.WindowAbsent:
 			return pal.Style(theme.RoleMuted)
-		case view.CellOver:
-			return pal.Style(theme.RoleGaugeOver)
+		default:
+			return pal.Style(theme.UtilizationRole(pct))
 		}
-		return lipgloss.NewStyle()
 	}
 }
 
