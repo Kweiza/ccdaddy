@@ -195,15 +195,20 @@ func runCodexAdd(cmd *cobra.Command, allowWorkspaceMember bool) error {
 		fmt.Fprintf(stderr, ", %s", acct.Tier)
 	}
 	// Only what this build can back up. Switching shipped with the lane that
-	// serves these accounts, so the command IS namable now -- and it is worth
+	// serves these accounts, so a command IS namable now -- and it is worth
 	// naming, because a first Codex account is stored without becoming the one
 	// ccdad serves codex from, and nothing else on this path says so.
 	//
-	// It is the --provider form and not `ccdad switch <account>`: this login
-	// may have stored an account that is not the best seat to serve, and the
-	// asserted form is the one that ranks.
+	// The account is named OUTRIGHT, and not left to `ccdad switch --provider
+	// codex`, even though that is the form which ranks. Ranking needs usage
+	// readings and there are none at this instant: nothing has polled an
+	// account this old, and no daemon was started to poll it either, because
+	// autoStartCommands has no entry for this command. The ranking form
+	// therefore answers ExitBlocked when it is run here -- the exit
+	// TestATargetlessCodexSwitchWithNoReadingsIsBlocked pins -- and advice
+	// that refuses the moment it is followed is worse than no advice.
 	fmt.Fprintf(stderr, ").\nIt is logged in and stored.\n"+
-		"`ccdad switch --provider codex` picks the account ccdad serves codex from.\n")
+		"`ccdad switch %s` makes it the account ccdad serves codex from.\n", label)
 	return nil
 }
 

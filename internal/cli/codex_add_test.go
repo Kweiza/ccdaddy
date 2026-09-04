@@ -419,6 +419,64 @@ func TestCodexAddAdviceNamesOnlyCommandsThatWorkForACodexAccount(t *testing.T) {
 	}
 }
 
+// codexAdviceWholeLineRE takes a backticked command line WHOLE -- flags,
+// arguments and all -- where codexAdviceCommandRE above takes only the verb.
+// The difference is the whole point of the test below: a prefix of the advised
+// line can run when the line itself refuses.
+var codexAdviceWholeLineRE = regexp.MustCompile("`ccdad ([^`]+)`")
+
+// TestTheCodexAddAdviceRunsAtTheMomentItIsPrinted runs what the success
+// message just told the user to run, verbatim, on the store the add left
+// behind.
+//
+// TestCodexAddAdviceNamesOnlyCommandsThatWorkForACodexAccount asks a narrower
+// question and cannot see this one: it re-spells each verb with an account
+// reference of its own, so `ccdad switch --provider codex` is checked as
+// `ccdad switch 1`. Those two exit differently at this instant. A first Codex
+// account has no usage reading yet and `ccdad add codex` starts no daemon to
+// take one, so the ranking form answers ExitBlocked while naming the account
+// answers ExitOK -- which is how a line advising the ranking form shipped
+// green in the commit whose whole subject was pointing advice at spellings
+// that run.
+//
+// Exit 0 and nothing weaker: this line is read by somebody who has just
+// finished a login and is being told what to do next, and a usage error or a
+// refusal is not a next step. The serving pointer is then checked as well,
+// because exit 0 alone is a hole -- `ccdad status` clears it too, and would
+// leave a message that runs and does nothing green.
+func TestTheCodexAddAdviceRunsAtTheMomentItIsPrinted(t *testing.T) {
+	isolate(t)
+	suppressAutoStart(t)
+	stubCodexDevice(t, ownerPayload, nil)
+
+	code, _, stderr, top := runRoot(t, "add", "codex")
+	if code != ExitOK {
+		t.Fatalf("the add itself failed: %s%s", stderr, top)
+	}
+
+	advised := codexAdviceWholeLineRE.FindAllStringSubmatch(stderr, -1)
+	if len(advised) == 0 {
+		t.Fatalf("the success message hands the user no command line at all, so this test "+
+			"is asserting nothing:\n%s", stderr)
+	}
+	for _, m := range advised {
+		argv := strings.Fields(m[1])
+		code, _, rerr, rtop := runRoot(t, argv...)
+		if code != ExitOK {
+			t.Errorf("the add printed `ccdad %s` and running exactly that exits %d:\n%s%s",
+				m[1], code, rerr, rtop)
+		}
+	}
+
+	// "user-abc" is ownerPayload's chatgpt_user_id, which is the uuid the add
+	// above filed the account under.
+	if got := servingNow(t); got != "user-abc" {
+		t.Errorf("serving = %q, want user-abc -- following the advice left ccdad serving "+
+			"codex from somewhere else, so the sentence describes a command it does not name",
+			got)
+	}
+}
+
 // codexWorkspaceSeat has three branches a mutation test found unpinned: the
 // no-organizations fallthrough, the case-sensitive role comparison, and the
 // workspace-id guard. Each case below exists to catch exactly one of them.
