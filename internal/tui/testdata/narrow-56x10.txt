@@ -1,5 +1,6 @@
-ccdad v0.2.0
-Active: work@example.com (work)  |  Strategy: headroom..
+Active (Claude): work@example.com (work)
+Strategy: headroom
+Current: headroom
 IDX ACCOUNT               5H   7D OPUS  5H IN
 * 1 work@example.com (..  87%  -        1h22m
   2 enterprise@co.exam..  -    100%     ?    

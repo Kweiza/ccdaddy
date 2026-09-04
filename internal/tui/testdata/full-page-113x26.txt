@@ -5,17 +5,16 @@
 │   ▀     ▀     ▀   ▀ ▀   ▀ ▀   ▀ ▀   ▀   ▀                                                                     │
 │   ▀▄▄▄▄ ▀▄▄▄▄ ▀▄▄▄▀ ▀   ▀ ▀▄▄▄▀ ▀▄▄▄▀   ▀      ccdad v0.2.0                                                   │
 │                                                                                                               │
-│Quota down again? You were 'Yap'-ping.                                                                         │
-│                      -- 'Daddy' Daemon                                                                        │
+│                                     ▀▀▀▀▀▀▀▀                                                                  │
+│ ▄▄▄▄▄▄ ▀▀▀▀▀▀ ▄▄▄▄▄▄ ▀▀▀▀▀▀▀▀    ▀▀▀▀▀▀▀▀▀▀▀▀▀▀                                                               │
+│ ▀▀▀▀▀▀ ▀▀▄▀▀▀ ▀▀▀▀▀▀ ▀▀▄▀▀▀▀▀     ▀▀  ▀▀▀▀  ▀▀                                                                │
+│▄▀▀▄▀▀▄ ▀▀▄▀▄▄ ▀▀▄▀▀▄ ▀▀▄▀▄▄▀▀▀    ▀▀▀▄ ▀▀ ▄▀▀▀                                                                │
+│▀▀▀▀▀▀▀  ▀ ▀ ▀ ▀▀▀▀▀▀  ▀ ▀ ▀ ▀    ▀▀▀▀▀▀▀▀▀▀▀▀▀▀                                                               │
+│  ▀ ▀ ▀         ▀ ▀ ▀               ▀▀ ▀▀ ▀▀ ▀▀                                                                │
 │                                                                                                               │
-│▄▀▀▀▀▀▄  ▄▄▀▄▄    ▄▄▄     ▄▄▀        ▄▀▀▀▀▀▀▄                                                                  │
-│▀▀▄▀▄▀▀ ▀▀▀▀▀▀▀ ▄▀▀▀▀▀▄ ▄▀▀▀▀▀▄    ▀▀▀▀▀▀▀▀▀▀▀▀                                                                │
-│▀▄▀▀▀▄▀ ▀ ▄▄▄ ▀ ▀▀▀▀▀▀▀ ▀▀ ▄ ▀▀     ▀▀▄▀▀▀▀▄▀▀                                                                 │
-│▀▀▀▀▀▀▀ ▀▄▄▄▄▄▀ ▀▀▀▀▀▀▀ ▀▀▄▄▄▀▀▀▀▀  ▀▀▀▄  ▄▀▀▀                                                                 │
-│ ▀▀ ▀▀   ▀ ▀ ▀   ▀▀▀▀▀   ▀ ▀ ▀     ▀▀▀▀▀▀▀▀▀▀▀▀                                                                │
-│ ▀   ▀   ▀   ▀   ▀   ▀   ▀   ▀      ▀▀      ▀▀                                                                 │
-│                                                                                                               │
-│Active: work@example.com (work)  |  Strategy: headroom  |  Current: headroom                                   │
+│Active (Claude): work@example.com (work)                                                                       │
+│Strategy: headroom                                                                                             │
+│Current: headroom                                                                                              │
 │IDX ACCOUNT                     TYPE          5H   7D OPUS  5H IN  7D OPUS IN  STATE        AUTO  AGE          │
 │* 1 work@example.com (work)     subscription  87%  -        1h22m  ?           ▪ active     yes   4m           │
 │  2 enterprise@co.example       credit        -    100%     ?      5m          ✗ exhausted  no    2m           │

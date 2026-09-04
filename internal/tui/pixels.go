@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -190,23 +191,191 @@ var wordArt = artGrid{W: 48, Rows: []string{
 	`...11111.11111.11111.......11111.11111...1......`,
 }}
 
-// figureArt is a four-child family and the moustached Daddy beneath the
-// wordmark: Claude, Codex, Claude, Codex, then their father. Claude has the
-// rounded creature silhouette from the README art; Codex has an antenna and a
-// recessed screen face. Daddy gets the broad hat, eyebrows, moustache,
-// shoulders and separated legs that make him read as the adult at this scale.
-// The grid remains 48x12 pixels (48x6 terminal cells folded).
-var figureArt = artGrid{W: 48, Rows: []string{
-	`.11111.....1................1.........111111....`,
-	`1111111..11111....111.....111........11111111...`,
-	`11.1.11.1111111..11111...11111.....111111111111.`,
-	`1111111.1.1.1.1.11.1.11.11.1.11.....1111111111..`,
-	`1.111.1.1.....1.1111111.11...11.....11.1111.11..`,
-	`1111111.1.111.1.1.111.1.11.1.11.....1111111111..`,
-	`1111111.1.....1.1111111.11...11111..111....111..`,
-	`.11111..1111111.1111111..11111......1111..1111..`,
-	`.11.11...1.1.1...11111...1.1.1.....111111111111.`,
-	`.11.11...1.1.1...11.11...1.1.1.....11111..11111.`,
-	`.1...1...1...1...1...1...1...1......11......11..`,
-	`.1...1...1...1...1...1...1...1......11......11..`,
+// A pixelSprite is one unfurled figure before it is placed in the family. Its
+// rows use the same raw-pixel alphabet as artGrid, but a sprite is allowed to
+// be shorter than the final grid: the babies are deliberately eight pixels
+// tall while Daddy is twelve.
+type pixelSprite struct {
+	W    int
+	Rows []string
+}
+
+type familyKind uint8
+
+const (
+	babyClaude familyKind = iota
+	babyCodex
+	daddyClaude
+)
+
+type placedFigure struct {
+	Kind   familyKind
+	Sprite *pixelSprite
+	X, Y   int
+}
+
+const (
+	figureWidth  = 48
+	figureHeight = 12
+	babyWidth    = 10
+	babyOverlap  = 3
+)
+
+// Both babies keep the rectangular body, paired eyes, side arms and four short
+// legs of the README's original family. Codex changes only the tiny negative-
+// space face: three pixels form a chevron and two form its cursor, so it still
+// belongs to the same family instead of becoming an antenna-and-screen robot.
+var babyClaudeArt = pixelSprite{W: babyWidth, Rows: []string{
+	`.11111111.`,
+	`.11111111.`,
+	`.11.11.11.`,
+	`.11.11.11.`,
+	`1111111111`,
+	`1111111111`,
+	`..1.1.1.1.`,
+	`..1.1.1.1.`,
 }}
+
+var babyCodexArt = pixelSprite{W: babyWidth, Rows: []string{
+	`.11111111.`,
+	`.11111111.`,
+	`.11.11111.`,
+	`.111.1111.`,
+	`111.1..111`,
+	`1111111111`,
+	`..1.1.1.1.`,
+	`..1.1.1.1.`,
+}}
+
+// Daddy is the original figure's proportions rather than a baby with a hat:
+// a wider crown and brim, a twelve-pixel body, inset eyes and moustache, broad
+// shoulders and four separated legs.
+var daddyClaudeArt = pixelSprite{W: 14, Rows: []string{
+	`...11111111...`,
+	`...11111111...`,
+	`11111111111111`,
+	`.111111111111.`,
+	`.11..1111..11.`,
+	`.11..1111..11.`,
+	`.111..11..111.`,
+	`.1111....1111.`,
+	`11111111111111`,
+	`.111111111111.`,
+	`..11.11.11.11.`,
+	`..11.11.11.11.`,
+}}
+
+// familyFigures is in paint order, left to right. Every baby is ten pixels
+// wide and advances seven, so each adjacent pair overlaps by exactly three
+// pixels -- 30 percent -- while the whole huddle stays clear of Daddy at x=34.
+// The shallow vertical stagger echoes the README huddle's uneven top line.
+// Keeping the occlusion direction consistent also leaves every baby readable;
+// putting both neighbours in front of a ten-pixel middle baby would expose only
+// four columns of it at this resolution.
+var familyFigures = []placedFigure{
+	{Kind: babyClaude, Sprite: &babyClaudeArt, X: 0, Y: 3},
+	{Kind: babyCodex, Sprite: &babyCodexArt, X: 7, Y: 2},
+	{Kind: babyClaude, Sprite: &babyClaudeArt, X: 14, Y: 3},
+	{Kind: babyCodex, Sprite: &babyCodexArt, X: 21, Y: 2},
+	{Kind: daddyClaude, Sprite: &daddyClaudeArt, X: 34, Y: 0},
+}
+
+// composeFigureArt treats every sprite as an opaque raw-pixel rectangle. A
+// foreground figure never clears outside its own horizontal span, so a ten-
+// pixel baby placed seven pixels after its neighbour covers exactly three
+// pixels. Where footprints overlap, the foreground edge becomes a one-pixel
+// ground contour; the rows immediately above and below its footprint are
+// cleared only within that span so a covered foot cannot survive as a detached
+// fragment.
+func composeFigureArt(w, h int, figures []placedFigure) (artGrid, error) {
+	if w <= 0 || h <= 0 || h%2 != 0 {
+		return artGrid{}, fmt.Errorf("figure canvas must have positive width and positive even height, got %dx%d", w, h)
+	}
+
+	canvas := make([][]byte, h)
+	for y := range canvas {
+		canvas[y] = []byte(strings.Repeat(string(artGround), w))
+	}
+	for i, figure := range figures {
+		if figure.Sprite == nil {
+			return artGrid{}, fmt.Errorf("figure %d has no sprite", i)
+		}
+		sprite := figure.Sprite
+		if sprite.W <= 0 || len(sprite.Rows) == 0 {
+			return artGrid{}, fmt.Errorf("figure %d has an empty %dx%d sprite", i, sprite.W, len(sprite.Rows))
+		}
+		if figure.X < 0 || figure.Y < 0 || figure.X+sprite.W > w || figure.Y+len(sprite.Rows) > h {
+			return artGrid{}, fmt.Errorf("figure %d at (%d,%d) with size %dx%d exceeds %dx%d canvas",
+				i, figure.X, figure.Y, sprite.W, len(sprite.Rows), w, h)
+		}
+		for sy, row := range sprite.Rows {
+			if len(row) != sprite.W {
+				return artGrid{}, fmt.Errorf("figure %d row %d is %d pixels wide, want %d", i, sy, len(row), sprite.W)
+			}
+			for sx := 0; sx < len(row); sx++ {
+				if row[sx] != artGround && row[sx] != '1' {
+					return artGrid{}, fmt.Errorf("figure %d row %d column %d is %q, want %q or '1'", i, sy, sx, row[sx], artGround)
+				}
+			}
+		}
+
+		contourLeft, contourRight := false, false
+		for j := 0; j < i; j++ {
+			prior := figures[j]
+			if prior.Sprite == nil {
+				continue // The earlier validation would already have returned.
+			}
+			horizontal := figure.X < prior.X+prior.Sprite.W && prior.X < figure.X+sprite.W
+			vertical := figure.Y < prior.Y+len(prior.Sprite.Rows) && prior.Y < figure.Y+len(sprite.Rows)
+			if !horizontal || !vertical {
+				continue
+			}
+			switch {
+			case prior.X < figure.X:
+				contourLeft = true
+			case prior.X > figure.X:
+				contourRight = true
+			}
+		}
+
+		// The opaque rectangle removes covered pixels. Its one-row vertical
+		// caps remove fragments caused by the family's shallow Y stagger, but
+		// remain inside the X footprint so the overlap does not grow past 30%.
+		top := max(0, figure.Y-1)
+		bottom := min(h, figure.Y+len(sprite.Rows)+1)
+		for y := top; y < bottom; y++ {
+			for x := figure.X; x < figure.X+sprite.W; x++ {
+				canvas[y][x] = artGround
+			}
+		}
+		for sy, row := range figure.Sprite.Rows {
+			copy(canvas[figure.Y+sy][figure.X:figure.X+figure.Sprite.W], row)
+		}
+		for y := figure.Y; y < figure.Y+len(sprite.Rows); y++ {
+			if contourLeft {
+				canvas[y][figure.X] = artGround
+			}
+			if contourRight {
+				canvas[y][figure.X+sprite.W-1] = artGround
+			}
+		}
+	}
+
+	rows := make([]string, h)
+	for y := range canvas {
+		rows[y] = string(canvas[y])
+	}
+	return artGrid{W: w, Rows: rows}, nil
+}
+
+func mustComposeFigureArt(w, h int, figures []placedFigure) artGrid {
+	g, err := composeFigureArt(w, h, figures)
+	if err != nil {
+		panic(err)
+	}
+	return g
+}
+
+// figureArt remains 48x12 pixels (48x6 terminal cells folded), so improving
+// the family changes no rung of the dashboard's height ladder.
+var figureArt = mustComposeFigureArt(figureWidth, figureHeight, familyFigures)

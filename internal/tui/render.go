@@ -219,11 +219,12 @@ func (m Model) Body() string {
 	if rows < 1 {
 		rows = 1
 	}
-	// Asked for before the layout is planned, because whether the line exists
-	// decides how many rows the page needs, and the width it is cut to does
-	// not: the wording is the same at every terminal size and only the cut
-	// moves. Asking once also means the height budget and the page below it
-	// cannot disagree about whether there is a line.
+	// Asked for before the layout is planned, because the summary has one row
+	// per fact and its exact size decides how many rows the page needs. The
+	// width only moves each row's cut; it never changes the row count. Taking
+	// the budget from the returned slice means the height plan and the page
+	// below cannot carry separate ideas of how many summary rows exist.
+	summary := m.summaryLines(m.Width)
 	runway := m.runwayLines()
 	footerWidth := m.Width - 2
 	if footerWidth < 1 {
@@ -231,7 +232,7 @@ func (m Model) Body() string {
 	}
 	footerRows := len(m.footerLines(footerWidth))
 	l := planWithRows(m.Set, m.Cols, m.Width, m.Height, rows,
-		len(m.Snap.Notices) > 0, len(runway) > 0, footerRows, len(runway))
+		len(m.Snap.Notices) > 0, len(runway) > 0, footerRows, len(runway), len(summary))
 	if l.TooNarrow || l.TooShort {
 		return m.floors(l)
 	}
@@ -245,6 +246,10 @@ func (m Model) Body() string {
 	if l.Border {
 		inner -= 2
 	}
+	// The border spends one column at each edge. Re-cut the already-counted
+	// rows to the content width so no line can be clipped a second time without
+	// the visible cue summaryLines owns.
+	summary = m.summaryLines(inner)
 
 	var lines []string
 	add := func(rows ...string) {
@@ -325,7 +330,7 @@ func (m Model) Body() string {
 		add("")
 	}
 	if l.Header {
-		add(m.headerLine(inner))
+		add(summary...)
 	}
 	if l.Runway {
 		for i, line := range runway {
@@ -410,30 +415,35 @@ func (m Model) runwayLines() []string {
 	return view.CompactRunwayLines(m.Snap.Forecast, m.Snap.Now, m.Snap.Now.Location())
 }
 
-// headerLine is who is live, what the engine is set to, and what it decided.
+// summaryLines is who is live, what the engine is set to, and what it decided.
 //
-// The Strategy clause is Snap.StrategyLabel() and never Snap.Strategy: under
+// Every fact owns one line. In particular, Claude and Codex are separate
+// active facts: a long account label may be cut, but it cannot consume either
+// provider beside it or push Strategy and Current off the right edge.
+//
+// The Strategy line is Snap.StrategyLabel() and never Snap.Strategy: under
 // hover the configured strategy has stopped being read, and naming it here made
 // a page under a fully automatic mode look exactly like one that was not.
 //
-// The Current clause is present only when the pass Decided. A zero Plan does not
+// The Current line is present only when the pass Decided. A zero Plan does not
 // stringify to nothing — it stringifies to plausible values, and the zero Mode
 // is "headroom" — so a line built from a pass that never ran would print a
 // real answer nobody computed.
 //
-// It truncates with a visible cue rather than silently, for the reason the
-// keybar does: a line cut mid-value leaves "Strategy: he", which reads as a
-// strategy named "he" rather than as a line that did not fit.
-func (m Model) headerLine(width int) string {
+// Each line truncates with a visible cue rather than silently, for the reason
+// the keybar does: a line cut mid-value leaves "Strategy: he", which reads as
+// a strategy named "he" rather than as a line that did not fit.
+func (m Model) summaryLines(width int) []string {
 	lab := m.Pal.Style(theme.RoleHeader)
-	// ActiveLine and not ActiveLabel: on a machine with a codex account the
-	// header names both providers, and `ccdad status` renders the identical
-	// sentence from the identical method. On a machine with none, ActiveLine IS
-	// ActiveLabel, which is what keeps the seven byte-compared pages still.
-	line := lab.Render("Active: ") + m.Snap.ActiveLine() +
-		"  |  " + lab.Render("Strategy: ") + m.Snap.StrategyLabel()
+	lines := []string{
+		lab.Render("Active (Claude): ") + m.Snap.ActiveLabel,
+	}
+	if m.Snap.CodexServingLabel != "" {
+		lines = append(lines, lab.Render("Active (Codex): ")+m.Snap.CodexServingLabel)
+	}
+	lines = append(lines, lab.Render("Strategy: ")+m.Snap.StrategyLabel())
 	if m.Snap.HasMode {
-		line += "  |  " + lab.Render("Current: ") + m.Snap.Mode.String()
+		lines = append(lines, lab.Render("Current: ")+m.Snap.Mode.String())
 	}
 	// The LABELS take the heading role and the answers take none, which is the
 	// rule the table one block down already pays: the column headings carry
@@ -442,10 +452,13 @@ func (m Model) headerLine(width int) string {
 	// fleet's three answers the loudest thing on the page and would make
 	// "Active:" and the address it names read as one word.
 	//
-	// Every piece is styled BEFORE the join and the join is cut afterwards, so
-	// the cut is ANSI-aware and the cue truncateCue leaves behind lands outside
-	// every style rather than inside whichever one it fell in.
-	return truncateCue(line, width, m.Glyphs.Cue)
+	// Every label is styled before its answer is appended and each completed
+	// line is cut afterwards, so the cut is ANSI-aware and the cue truncateCue
+	// leaves behind lands outside the style rather than inside it.
+	for i := range lines {
+		lines[i] = truncateCue(lines[i], width, m.Glyphs.Cue)
+	}
+	return lines
 }
 
 // noticeLine is the one line the height ladder gives everything package cli
