@@ -247,10 +247,11 @@ func runCodexShimInstall(cmd *cobra.Command) error {
 // writeCodexShim puts the script and the record on disk, and reports whether
 // anything changed.
 //
-// The RECORD is half of "already installed", not an afterthought. A machine
-// whose script survived and whose record was deleted has an unregistered
-// directory, and treating it as installed would report nothing to do while
-// codex went on bypassing ccdad forever.
+// "Already installed" is three things and not one: the body, the record, and
+// the executable bit. A machine whose script survived and whose record was
+// deleted has an unregistered directory, and one whose shim lost its executable
+// bit has a codex that refuses to start -- treating either as installed would
+// report nothing to do while the thing the user asked for stayed broken.
 func writeCodexShim() (bool, error) {
 	dir, path := shimDir(), shimPath()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -260,16 +261,25 @@ func writeCodexShim() (bool, error) {
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return false, fmt.Errorf("reading %s: %w", path, err)
 	}
+	// The MODE is the third of those three. os.WriteFile applies its mode only
+	// when it CREATES the file, so a shim somebody chmod'ed keeps whatever
+	// mode it had -- and a shim that is not executable is a
+	// `codex: Permission denied` with nothing to point at, from a codex that is
+	// still first on PATH with the right body in it. Comparing the body alone
+	// would answer "nothing to do" to exactly the machine that needs the chmod
+	// below, and put the only repair there is out of reach.
+	executable := false
+	if info, statErr := os.Stat(path); statErr == nil {
+		executable = info.Mode().Perm()&0o111 != 0
+	}
 	_, hadRecord := shimRecord()
-	if string(existing) == codexShimBody && hadRecord {
+	if string(existing) == codexShimBody && hadRecord && executable {
 		return false, nil
 	}
 	if err := os.WriteFile(path, []byte(codexShimBody), 0o755); err != nil {
 		return false, fmt.Errorf("writing %s: %w", path, err)
 	}
-	// os.WriteFile applies its mode only when it CREATES the file, so a shim
-	// somebody chmod'ed keeps whatever mode it had -- and a shim that is not
-	// executable is a `codex: Permission denied` with nothing to point at.
+	// The repair the mode check above exists to reach.
 	if err := os.Chmod(path, 0o755); err != nil {
 		return false, fmt.Errorf("making %s executable: %w", path, err)
 	}

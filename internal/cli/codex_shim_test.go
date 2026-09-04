@@ -146,6 +146,52 @@ func TestCodexShimInstallRewritesAMissingRecord(t *testing.T) {
 	}
 }
 
+// A shim whose executable bit was taken away is not "already installed". It is
+// the one broken shim a user cannot diagnose: `codex` is still first on PATH,
+// the body is still right, and every attempt is `codex: Permission denied` with
+// nothing to point at. os.WriteFile applies its mode only when it CREATES the
+// file, so the repair is the chmod -- and the mode has to be part of what
+// install compares, or the early return answers "nothing to do" to the machine
+// that most needs the repair.
+func TestCodexShimInstallRestoresAnExecutableBitSomebodyTookAway(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("there is no shim on Windows; the refusal has its own test")
+	}
+	isolate(t)
+	t.Setenv("SHELL", "/bin/bash")
+	t.Setenv("PATH", "/usr/bin:/bin")
+	t.Setenv("HOMEBREW_PREFIX", "")
+	t.Setenv("SCOOP", "")
+	stubExecutable(t, filepath.Join(t.TempDir(), "ccdad"))
+
+	if code, _, errOut, _ := runRoot(t, "codex", "shim", "install"); code != ExitOK {
+		t.Fatalf("the first install = %d, want %d\n%s", code, ExitOK, errOut)
+	}
+	if err := os.Chmod(shimPath(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	code, _, errOut, top := runRoot(t, "codex", "shim", "install")
+	if code != ExitOK {
+		t.Fatalf("install over a non-executable shim = %d, want %d (there is a repair to make)\n%s\n%s",
+			code, ExitOK, errOut, top)
+	}
+	info, err := os.Stat(shimPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm()&0o111 == 0 {
+		t.Errorf("the shim is still mode %v, which no shell will execute", info.Mode().Perm())
+	}
+	body, err := os.ReadFile(shimPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != codexShimBody {
+		t.Errorf("the repair left the shim as %q, want %q", body, codexShimBody)
+	}
+}
+
 // Windows gets no shim in v1, and the refusal says why and what to run instead
 // rather than failing silently.
 func TestCodexShimInstallRefusesOnWindows(t *testing.T) {
