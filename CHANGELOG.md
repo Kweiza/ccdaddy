@@ -16,6 +16,11 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-09-04
+
+The release that gives switching strategy and operational status one command
+each, and makes the dashboard denser without hiding controls.
+
 ### Added
 
 - **One strategy selector.** `ccdad strategy` now chooses exactly one of
@@ -3011,7 +3016,8 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/Kweiza/ccdaddy/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/Kweiza/ccdaddy/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/Kweiza/ccdaddy/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/Kweiza/ccdaddy/compare/v0.9.10...v0.10.0
