@@ -342,11 +342,11 @@ func (e *Engine) codexCommit(a store.Account, snap *usage.Snapshot, thr strategy
 }
 
 // codexCommitHarvested writes what the PROXY read off a turn it was forwarding
-// anyway. It differs from the poll's commit in one way, and that way is about
+// anyway. It differs from the poll's commit in two ways, and both are about
 // where the reading came from rather than about what it says.
 //
-// The reading can be partial, so it is merged into the cached one rather than
-// written over it. A poll asks /wham/usage and is answered about every
+// FIRST, the reading can be partial, so it is merged into the cached one rather
+// than written over it. A poll asks /wham/usage and is answered about every
 // window the account has; a harvest reads whatever the answer to one turn
 // happened to carry, and internal/codexproxy publishes a sample when EITHER
 // window family is present -- deliberately, because the family on a 429 is the
@@ -355,10 +355,22 @@ func (e *Engine) codexCommit(a store.Account, snap *usage.Snapshot, thr strategy
 // from the row, strategy.HeadroomOf re-read the same account as 90% of room on
 // its five-hour window, and the lane went on ranking it first and serving it
 // into a wall of 429s.
+//
+// SECOND, it clears the error the last poll recorded. That error is what
+// `ccdad status --json` and the daemon screen print to say ccdad cannot reach an
+// account, and a harvested reading is direct evidence that it can: it came off a
+// real answer, from the same host, on the same credential. Left alone, one poll
+// that failed on a flaky network went on being reported for as long as the
+// session stayed busy enough that the lane never needed to poll again -- hours
+// of "network is unreachable" printed under a quota figure a minute old.
+//
+// What it deliberately does NOT do is stamp LastPollAt. That field says when the
+// daemon last polled, and no request to /wham/usage was made here.
 func (e *Engine) codexCommitHarvested(a store.Account, snap *usage.Snapshot,
 	thr strategy.Thresholds, now time.Time, serving bool) {
 
 	e.codexWrite(a, snap, thr, now, serving, nil, true)
+	e.reached(a.UUID)
 }
 
 // codexWrite is the body both commits share. `carry` is the whole difference

@@ -109,13 +109,16 @@ by `uuid` or `alias`.
   cached reading rather than written over it — a primary-only answer, which is
   what a 429 usually carries, can no longer erase a nearly spent weekly — while a
   window whose own reset has already passed is dropped rather than carried
-  forward. Pinned by
+  forward. And because a harvested reading is evidence the account was reached,
+  it clears the error a failed poll left in `ccdad status` and on the daemon
+  screen, without stamping a poll that was never made. Pinned by
   `TestTheRateLimitHeadersBecomeAUsageSample`,
   `TestTheInStreamRateLimitEventBecomesAUsageSample`,
   `TestAnEventSplitAcrossTwoWritesIsStillRead`,
   `TestAPollAlreadyInFlightCannotOverwriteAHarvestedReading`,
   `TestAPartialHarvestKeepsTheWindowItDidNotCarry`,
-  `TestAWindowThatHasRolledOverIsNotCarriedIntoAHarvest`.
+  `TestAWindowThatHasRolledOverIsNotCarriedIntoAHarvest` and
+  `TestAHarvestedReadingClearsTheErrorOfAPollThatFailed`.
 
 - **Credentials cannot travel in either direction.** Fourteen request headers are
   stripped by name before a turn is forwarded, and two whole families by prefix,
