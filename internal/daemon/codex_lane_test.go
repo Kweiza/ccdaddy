@@ -340,6 +340,94 @@ func TestAnAccountNeedingALoginIsNotPolled(t *testing.T) {
 	}
 }
 
+// codexWindows is codexSnapshot with the weekly window filled in too. A poll of
+// /wham/usage answers with both, and that is the reading a harvest off one
+// forwarded turn has to be merged into rather than written over.
+func codexWindows(primary, secondary float64, secondaryReset time.Time) *usage.Snapshot {
+	snap := codexSnapshot(primary)
+	snap.CodexSecondary = usage.NewWindowWithLength(&secondary, &secondaryReset, 7*24*time.Hour)
+	return snap
+}
+
+// A harvested reading carries whatever the answer to one turn happened to
+// carry, and a response can name the primary window without the secondary --
+// codexproxy publishes a sample when EITHER family is present, because the
+// family on a 429 is the most informative reading there is and it is often
+// primary-only. Written over the cached reading wholesale, such a sample ERASED
+// the weekly: a 96%-spent account with 4% of room re-read as 90% of room on the
+// five-hour window, kept its place at the top of the lane's ranking, and went on
+// being served into a wall of 429s.
+func TestAPartialHarvestKeepsTheWindowItDidNotCarry(t *testing.T) {
+	isolateEngine(t)
+	seedCodexAccount(t, "cx-1")
+
+	now := tickEpoch
+	e := codexEngine(t, codexTokensAreFine,
+		func(context.Context, string, string) (*usage.Snapshot, codexusage.Identity, error) {
+			return codexWindows(10, 96, tickEpoch.Add(72*time.Hour)), codexusage.Identity{}, nil
+		})
+	e.Now = func() time.Time { return now }
+	tick(t, e)
+
+	now = tickEpoch.Add(time.Minute)
+	e.harvestCodexSample("cx-1", codexSnapshot(90))
+	tick(t, e)
+
+	got, _ := cacheEntry(t, "cx-1")
+	if pct, ok := got.Snapshot.CodexPrimary.Percent(); !ok || pct != 90 {
+		t.Fatalf("the five-hour window reads %v (%v) after the harvest, want the harvested 90", pct, ok)
+	}
+	pct, ok := got.Snapshot.CodexSecondary.Percent()
+	if !ok || pct != 96 {
+		t.Fatalf("the weekly window reads %v (%v) after a primary-only harvest, want the cached 96 carried forward: erasing it turns 4%% of room into 90%% and leaves the lane ranking a spent account first", pct, ok)
+	}
+	// The carried window is a fact about the cache row, not about this turn. The
+	// usage series is a record of what was OBSERVED, and a point claiming the
+	// weekly was read at this instant would flatten the burn rate across a gap
+	// nothing measured.
+	series := seriesOf(t, "cx-1")
+	if len(series) == 0 {
+		t.Fatal("the harvest appended no sample to the usage series")
+	}
+	last := series[len(series)-1]
+	if !last.At.Equal(now) {
+		t.Fatalf("the last sample is stamped %s, want the harvest's %s", last.At, now)
+	}
+	if _, ok := last.Windows[usage.WindowCodexSecondary]; ok {
+		t.Fatal("the weekly window carried forward from the cache was appended to the usage series as though this turn had read it")
+	}
+}
+
+// The carry is bounded by the window's own reset. A weekly that has rolled over
+// since it was read is not evidence about the window running now, and carrying
+// its 96% forward would hold an account out of rotation through quota it has
+// already got back.
+func TestAWindowThatHasRolledOverIsNotCarriedIntoAHarvest(t *testing.T) {
+	isolateEngine(t)
+	seedCodexAccount(t, "cx-1")
+
+	now := tickEpoch
+	rollover := tickEpoch.Add(2 * time.Hour)
+	e := codexEngine(t, codexTokensAreFine,
+		func(context.Context, string, string) (*usage.Snapshot, codexusage.Identity, error) {
+			return codexWindows(10, 96, rollover), codexusage.Identity{}, nil
+		})
+	e.Now = func() time.Time { return now }
+	tick(t, e)
+
+	now = rollover.Add(time.Minute)
+	e.harvestCodexSample("cx-1", codexSnapshot(90))
+	tick(t, e)
+
+	got, _ := cacheEntry(t, "cx-1")
+	if pct, ok := got.Snapshot.CodexSecondary.Percent(); ok {
+		t.Fatalf("the weekly reads %v after its own reset at %s passed, want it absent rather than carried: the window it described has ended", pct, rollover)
+	}
+	if got.Snapshot.CodexSecondary.Present {
+		t.Fatal("a window whose reset has passed was carried forward as present")
+	}
+}
+
 // A machine with no Codex accounts must reach none of this, and in particular
 // must not read a pointer file, take the state lock, or publish a serving uuid.
 func TestAMachineWithNoCodexAccountsPublishesNoServingAccount(t *testing.T) {

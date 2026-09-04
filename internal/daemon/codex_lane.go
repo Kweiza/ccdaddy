@@ -150,7 +150,7 @@ func (e *Engine) codexDispatch(ctx context.Context, s *store.Store, accounts []s
 		// user actually made, so it is both free and more current than anything
 		// this lane's fifteen-minute floor can produce.
 		if snap, ok := e.CodexSample(a.UUID); ok {
-			e.codexCommit(a, snap, thr, now, a.UUID == serving, nil)
+			e.codexCommitHarvested(a, snap, thr, now, a.UUID == serving)
 			continue
 		}
 		entry, has := cache.Get(a.UUID)
@@ -307,13 +307,42 @@ func (e *Engine) codexEntry(uuid string) (usage.Entry, bool) {
 	return c.Get(uuid)
 }
 
-// codexCommit writes the reading and the next schedule, and appends the sample.
+// codexCommit writes what a POLL read: the reading, the next schedule, and the
+// sample.
 //
 // It is the Claude commit with four things removed: ApplyUsage, the profile
 // re-read, the probe verdict and warmClamp. Each is named in codexTick's own
 // comment with the reason it cannot apply here.
 func (e *Engine) codexCommit(a store.Account, snap *usage.Snapshot, thr strategy.Thresholds,
 	now time.Time, serving bool, adjust func(pollpolicy.State) pollpolicy.State) {
+
+	e.codexWrite(a, snap, thr, now, serving, adjust, false)
+}
+
+// codexCommitHarvested writes what the PROXY read off a turn it was forwarding
+// anyway. It differs from the poll's commit in one way, and that way is about
+// where the reading came from rather than about what it says.
+//
+// The reading can be partial, so it is merged into the cached one rather than
+// written over it. A poll asks /wham/usage and is answered about every
+// window the account has; a harvest reads whatever the answer to one turn
+// happened to carry, and internal/codexproxy publishes a sample when EITHER
+// window family is present -- deliberately, because the family on a 429 is the
+// most informative reading there is and it is often primary-only. Committed
+// wholesale, such a sample ERASED the other window: a 96%-spent weekly vanished
+// from the row, strategy.HeadroomOf re-read the same account as 90% of room on
+// its five-hour window, and the lane went on ranking it first and serving it
+// into a wall of 429s.
+func (e *Engine) codexCommitHarvested(a store.Account, snap *usage.Snapshot,
+	thr strategy.Thresholds, now time.Time, serving bool) {
+
+	e.codexWrite(a, snap, thr, now, serving, nil, true)
+}
+
+// codexWrite is the body both commits share. `carry` is the whole difference
+// between them, and codexCommitHarvested above says what it buys.
+func (e *Engine) codexWrite(a store.Account, snap *usage.Snapshot, thr strategy.Thresholds,
+	now time.Time, serving bool, adjust func(pollpolicy.State) pollpolicy.State, carry bool) {
 
 	err := usage.WithCache(cacheTimeout, func(c *usage.Cache) error {
 		entry, had := c.Get(a.UUID)
@@ -322,7 +351,16 @@ func (e *Engine) codexCommit(a store.Account, snap *usage.Snapshot, thr strategy
 			state = adjust(state)
 		}
 		if snap != nil {
-			entry.Snapshot, entry.FetchedAt = snap, now
+			stored := snap
+			if carry {
+				// Merged INSIDE the transaction, against the row this write is
+				// about to replace rather than against a copy read before the
+				// lock was taken: usage.json is a file several processes write,
+				// and a merge computed outside the lock would carry a window
+				// forward over one somebody else had just made newer.
+				stored = codexCarry(snap, entry.Snapshot, now)
+			}
+			entry.Snapshot, entry.FetchedAt = stored, now
 		} else if !had {
 			// A failed first attempt still stamps, or the entry is pruned and
 			// the backoff it just earned does not survive to the next tick.
@@ -360,10 +398,61 @@ func (e *Engine) codexCommit(a store.Account, snap *usage.Snapshot, thr strategy
 	// them would hold the cache shut against every reader for as long as the
 	// series lock happened to be contended.
 	if snap != nil {
+		// The reading as it ARRIVED, never the merged one written above: the
+		// series records what was observed, and a window carried forward from
+		// the cache was not read at this instant. A point that claimed it was
+		// would put an unchanged percentage at a time nothing measured, and a
+		// burn rate taken across that segment reads flat.
 		if herr := history.Record(historyTimeout, a.UUID, historySample(snap, now), now); herr != nil {
 			e.logf("appending %s's codex sample to the usage history failed: %v", a.UUID, herr)
 		}
 	}
+}
+
+// codexCarry is a harvested reading with the windows it did not carry taken
+// from the row it is about to replace.
+//
+// The two Codex windows are separately optional in a harvest and not in a poll,
+// which is why this is not codexCommit's business: absent from a poll's answer
+// means the account does not have that window, and absent from a harvest means
+// only that this one response did not mention it.
+func codexCarry(snap, prev *usage.Snapshot, now time.Time) *usage.Snapshot {
+	if snap == nil || prev == nil {
+		return snap
+	}
+	if snap.CodexPrimary.Present && snap.CodexSecondary.Present {
+		return snap
+	}
+	// A COPY of the caller's reading rather than the reading itself. The same
+	// pointer is handed to history.Record after the cache closes, and merging in
+	// place would append a window carried forward out of the cache to the usage
+	// series as though this turn had read it.
+	out := *snap
+	if !out.CodexPrimary.Present {
+		out.CodexPrimary = codexCarriedWindow(prev.CodexPrimary, now)
+	}
+	if !out.CodexSecondary.Present {
+		out.CodexSecondary = codexCarriedWindow(prev.CodexSecondary, now)
+	}
+	return &out
+}
+
+// codexCarriedWindow is one cached window kept, or nothing when it has already
+// rolled over.
+//
+// The bound is the window's own reset. A percentage that described a window
+// which has since ended says nothing about the one running now, and carrying a
+// spent one forward would hold an account out of rotation through quota it has
+// already got back -- the mirror of the erasure this merge exists to prevent,
+// and just as invisible.
+func codexCarriedWindow(w usage.Window, now time.Time) usage.Window {
+	if !w.Present {
+		return usage.Window{}
+	}
+	if at, ok := w.Reset(); ok && !now.Before(at) {
+		return usage.Window{}
+	}
+	return w
 }
 
 // codexReloginSet is the accounts whose stored relogin mark still names the
