@@ -34,9 +34,10 @@ func newCodexCmd() *cobra.Command {
 		RunE: func(*cobra.Command, []string) error {
 			// Cobra's own answer is to print help and exit 0. A caller that
 			// meant to type a verb gets a usage error, as everywhere else.
-			return UsageError("codex needs a subcommand: add")
+			return UsageError("codex needs a subcommand: add, shim")
 		},
 	}
 	cmd.AddCommand(newCodexAddCmd())
+	cmd.AddCommand(newCodexShimCmd())
 	return cmd
 }
