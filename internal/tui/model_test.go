@@ -770,7 +770,7 @@ func assertCursorIsDrawn(t *testing.T, m Model, width, height int) {
 		footerWidth = m.Width
 	}
 	l := planWithRows(m.Set, testCols(), m.Width, m.Height, n, len(m.Snap.Notices) > 0,
-		len(runway) > 0, len(m.footerLines(footerWidth)), len(runway))
+		len(runway) > 0, len(m.footerLines(footerWidth)), len(runway), len(m.summaryLines(m.Width)))
 	if l.TooNarrow || l.TooShort {
 		return
 	}

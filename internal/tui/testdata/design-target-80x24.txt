@@ -4,7 +4,6 @@
 │   ▀     ▀     ▀   ▀ ▀▀▀▀▀ ▀   ▀ ▀   ▀ ▀▀▀▀▀                                  │
 │   ▀     ▀     ▀   ▀ ▀   ▀ ▀   ▀ ▀   ▀   ▀                                    │
 │   ▀▄▄▄▄ ▀▄▄▄▄ ▀▄▄▄▀ ▀   ▀ ▀▄▄▄▀ ▀▄▄▄▀   ▀      ccdad v0.2.0                  │
-│                                                                              │
 │▄▀▀▀▀▀▄  ▄▄▀▄▄    ▄▄▄     ▄▄▀        ▄▀▀▀▀▀▀▄                                 │
 │▀▀▄▀▄▀▀ ▀▀▀▀▀▀▀ ▄▀▀▀▀▀▄ ▄▀▀▀▀▀▄    ▀▀▀▀▀▀▀▀▀▀▀▀                               │
 │▀▄▀▀▀▄▀ ▀ ▄▄▄ ▀ ▀▀▀▀▀▀▀ ▀▀ ▄ ▀▀     ▀▀▄▀▀▀▀▄▀▀                                │
@@ -12,13 +11,14 @@
 │ ▀▀ ▀▀   ▀ ▀ ▀   ▀▀▀▀▀   ▀ ▀ ▀     ▀▀▀▀▀▀▀▀▀▀▀▀                               │
 │ ▀   ▀   ▀   ▀   ▀   ▀   ▀   ▀      ▀▀      ▀▀                                │
 │                                                                              │
-│Active: work@example.com (work)  |  Strategy: headroom  |  Current: headroom  │
+│Active (Claude): work@example.com (work)                                      │
+│Strategy: headroom                                                            │
+│Current: headroom                                                             │
 │IDX ACCOUNT               5H   7D OPUS  5H IN  7D OPUS IN  STATE              │
 │* 1 work@example.com (..  87%  -        1h22m  ?           ▪ active           │
 │  2 enterprise@co.exam..  -    100%     ?      5m          ✗ exhausted        │
 │  3 spare@example.com     52%  -        4h11m  ?           ◉ candidate        │
 │  4 keyonly@example.co..  ?    ?        ?      ?           ◌ unknown          │
-│                                                                              │
 │a add  s switch  d daemon  c strategy  up/k up  down/j down  r refresh  ? help│
 │q quit                                                                        │
 ╰──────────────────────────────────────────────────────────────────────────────╯

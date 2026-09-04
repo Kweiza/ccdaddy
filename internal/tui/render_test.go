@@ -38,22 +38,20 @@ const fixtureVersion = "v0.2.0"
 // hand-transcribed chrome. Every differing byte was measured against those
 // three and falls into one of five classes, none of which is a renderer bug:
 //
-//  1. AMENDED ON PURPOSE, and stated as such. One row is inserted directly
-//     above the column header -- Active, Strategy, and Mode when the pass
-//     Decided -- so every page is one row taller than its reference. The
-//     daemon footer takes the wording `ccdad daemon status` already prints,
-//     so "running  pid 8123  up 2h05m" is "running (pid 8123, up 2h05m)".
+//  1. AMENDED ON PURPOSE, and stated as such. Active, Strategy, and Current
+//     each own a row directly above the column header, so a long value cannot
+//     push a later fact off the right edge. The daemon footer takes the wording
+//     `ccdad daemon status` already prints, so "running  pid 8123  up 2h05m"
+//     is "running (pid 8123, up 2h05m)".
 //  2. THE REFERENCE IS STALE ON ACCOUNT WIDTH. Its 80-column blocks render
 //     ACCOUNT at 23 columns. The width ladder gives 20 and the ladder is
 //     right: the reference was drawn by the probe that still had the defect
 //     where WIDENING a terminal narrowed the address column, and holding
 //     ACCOUNT at its comfort width is the fix for it.
-//  3. THE REFERENCE IS STALE ON THE HEIGHT-DROP ORDER. Its 56- and
-//     43-column blocks keep the frame and drop the title and the blanks
-//     instead. The height ladder drops the border at rung 5, ahead of the
-//     blanks at 6 and the title at 7, so both pages are frameless here --
-//     and, having no frame, two columns wider inside, which is what moves
-//     the footer's right edge with them.
+//  3. THE REFERENCE IS STALE ON THE HEIGHT-DROP ORDER. The ladder spends the
+//     tagline and blank separators before the family art. Farther down it
+//     drops the frame and title to retain the three summary facts at 56x10;
+//     at 43x9 the complete summary block gives to the table and footer.
 //  4. THE FIGURE BLOCK IS ANCHORED, NOT INDENTED. The chrome transcribes the
 //     block against its own leftmost content across all six rows rather than
 //     against the reference's first column, so it sits one column further
@@ -119,7 +117,7 @@ func TestEveryFixtureFitsTheTerminalItWasPlannedFor(t *testing.T) {
 // The nil-rows case builds its model the way the zero-accounts golden does --
 // fixtureModel first, rows removed after -- and not as an empty Model. Body
 // asks Plan about at least one row whatever Snap.Rows holds, and the report and
-// the header line come from the fixture either way, so a page assembled from
+// the summary block come from the fixture either way, so a page assembled from
 // scratch would be a different page than the one on disk and would bound the
 // wrong thing.
 func TestThePageNeverScrollsHorizontally(t *testing.T) {
@@ -749,37 +747,69 @@ func TestTheCursorFollowsTheRowAndNotTheScreenPositionOnceItScrolls(t *testing.T
 	}
 }
 
-// The header's Active clause is Snap.ActiveLine(), and the with-codex branch
-// of that method is exercised by NOTHING else in this package: fixtureRows()
-// deliberately carries no codex account -- a previous task's review found that
-// adding one would churn all seven golden pages for a property that belongs
-// to one cell -- so every golden page below only ever renders the empty
-// branch. That leaves the with-codex branch provable only off the golden
-// path, which is what this test is for. It calls headerLine directly, at a
-// width wide enough that nothing truncates, and touches no golden file and no
-// shared fixture.
-func TestHeaderLineNamesCodexWhenTheSnapshotCarriesIt(t *testing.T) {
+// Each summary fact owns a row. Active has one fact per provider, so neither a
+// long account label nor the second provider can push Strategy or Current off
+// the right edge of the terminal.
+//
+// fixtureRows deliberately carries no codex account, which keeps the golden
+// fixtures focused on the ordinary page. This direct case fixes the four-row
+// form without making every fixture depend on a second provider.
+func TestEachSummaryFactAndActiveProviderOwnsItsOwnLine(t *testing.T) {
 	snap := fixtureSnapshot(fixtureReport(113, 26))
 	snap.CodexServingLabel = "cx@example.com"
 	m := newModel(snap, 113, 26, theme.Of(theme.None), UnicodeGlyphs)
 
-	line := m.headerLine(200)
-	if !strings.Contains(line, "Claude: work@example.com (work)") {
-		t.Errorf("header line = %q, want the Claude clause", line)
+	got := m.summaryLines(200)
+	want := []string{
+		"Active (Claude): work@example.com (work)",
+		"Active (Codex): cx@example.com",
+		"Strategy: headroom",
+		"Current: headroom",
 	}
-	if !strings.Contains(line, "Codex: cx@example.com") {
-		t.Errorf("header line = %q, want the Codex clause", line)
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("summary lines =\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }
 
-// The header names the strategy in FORCE, and under hover that is not the one in
+// No codex pointer means there is no codex fact to print. The remaining facts
+// still keep their own rows rather than collapsing back into the old pipe-
+// separated sentence.
+func TestSummaryOmitsOnlyTheAbsentCodexProvider(t *testing.T) {
+	m := fixtureModel(80, 24)
+	got := m.summaryLines(200)
+	want := []string{
+		"Active (Claude): work@example.com (work)",
+		"Strategy: headroom",
+		"Current: headroom",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("summary lines =\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// The fourth line is part of the layout budget, not text appended after the
+// page was planned. Thirteen rows is deliberately tight enough to drive the
+// height ladder while still retaining the complete summary block.
+func TestTheCodexActiveLineIsIncludedInTheHeightBudget(t *testing.T) {
+	m := fixtureModel(80, 13)
+	m.Snap.CodexServingLabel = "cx@example.com"
+	body := m.Body()
+	if got := len(strings.Split(body, "\n")); got > m.Height {
+		t.Fatalf("page with a codex active line is %d rows in a %d-row terminal:\n%s", got, m.Height, body)
+	}
+	if !strings.Contains(body, "Active (Codex): cx@example.com") {
+		t.Fatalf("the height ladder dropped only the codex active fact:\n%s", body)
+	}
+}
+
+// The summary names the strategy in FORCE, and under hover that is not the one in
 // the file: strategy.Options' withHover pass overrides the key. Printing the
 // file's value there is the defect this test exists for -- a reader who had set
 // consume-first saw consume-first and concluded hover was off.
 //
 // It renders under the palette that PAINTS and strips afterwards, because this
-// is a test about the header line and the header line is the one block on the
-// page that styles its own clauses. "Strategy: " is a label and "hover" is the
+// is a test about the summary and the summary is the one block on the page that
+// styles its own labels. "Strategy: " is a label and "hover" is the
 // answer, so an SGR reset closes the label's span between them and a colourless
 // render would be testing a line this program never draws.
 func TestTheHeaderNamesHoverRatherThanTheStrategyHoverOverrode(t *testing.T) {
@@ -788,10 +818,10 @@ func TestTheHeaderNamesHoverRatherThanTheStrategyHoverOverrode(t *testing.T) {
 
 	page := ansi.Strip(newModel(snap, 113, 26, theme.Of(theme.Dark), UnicodeGlyphs).Body())
 	if !strings.Contains(page, "Strategy: hover") {
-		t.Errorf("the header does not name hover:\n%s", page)
+		t.Errorf("the summary does not name hover:\n%s", page)
 	}
 	if strings.Contains(page, "consume-first") {
-		t.Errorf("the header prints a strategy hover overrode:\n%s", page)
+		t.Errorf("the summary prints a strategy hover overrode:\n%s", page)
 	}
 }
 
@@ -986,7 +1016,7 @@ func TestAForecastTheSnapshotDoesNotClaimMovesNoGolden(t *testing.T) {
 }
 
 // With a forecast behind it the line appears, directly under the
-// Active/Strategy/Current line and above everything about the rows — the position
+// Active/Strategy/Current block and above everything about the rows — the position
 // `ccdad status` gives it, among the labels rather than among the accounts.
 //
 // The note line's own position is asserted elsewhere to be directly above the
@@ -1012,16 +1042,16 @@ func TestTheRunwayLineSitsUnderTheHeaderLineAndAboveTheNote(t *testing.T) {
 		}
 		return -1
 	}
-	header, runway, note, table := at("Active: "), at(fixtureRunwayLine), at("note: "), at("IDX ACCOUNT")
+	current, runway, note, table := at("Current: "), at(fixtureRunwayLine), at("note: "), at("IDX ACCOUNT")
 	if runway < 0 {
 		t.Fatalf("a claimed forecast drew no runway line, or drew a different one:\n%s", m.Body())
 	}
-	if header < 0 || note < 0 || table < 0 {
-		t.Fatalf("header=%d note=%d table=%d; the page is not the one this asserts about:\n%s",
-			header, note, table, m.Body())
+	if current < 0 || note < 0 || table < 0 {
+		t.Fatalf("current=%d note=%d table=%d; the page is not the one this asserts about:\n%s",
+			current, note, table, m.Body())
 	}
-	if runway != header+1 {
-		t.Errorf("the runway line is at %d and the header line at %d; it belongs directly under the labels", runway, header)
+	if runway != current+1 {
+		t.Errorf("the runway line is at %d and the summary ends at %d; it belongs directly under the labels", runway, current)
 	}
 	if note != runway+4 || table != note+1 {
 		t.Errorf("runway=%d note=%d table=%d; want the note after four runway rows and before the column header",
@@ -1089,7 +1119,7 @@ func TestTheRunwayLineIsCutToTheFrameRatherThanWrappingIt(t *testing.T) {
 				footerWidth = w
 			}
 			want := planWithRows(m.Set, testCols(), w, height, len(m.Snap.Rows), false, true,
-				len(m.footerLines(footerWidth)), len(m.runwayLines())).Runway
+				len(m.footerLines(footerWidth)), len(m.runwayLines()), len(m.summaryLines(w))).Runway
 			if got := strings.Contains(body, "Runway: "); got != want {
 				t.Errorf("at %dx%d the page draws a runway line: %v; the height ladder budgeted a row for one: %v:\n%s",
 					w, height, got, want, body)
