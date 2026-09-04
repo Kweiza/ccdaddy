@@ -54,6 +54,49 @@ func TestAConfiguredCodexBinaryThatIsNotThereIsAUsageError(t *testing.T) {
 	}
 }
 
+// The walk is handed the SHIM DIRECTORY, and codexBinary is the only place in
+// production that argument comes from. Handed an empty one instead, the walk's
+// skip short-circuits and its first answer is <CCDAD_HOME>/bin/codex -- the
+// shim, which execs `ccdad codex exec`, which resolves codex again: an
+// unbounded loop with a process per turn of it.
+//
+// The stub CAPTURES its argument rather than discarding it, which is the whole
+// point of this test. A stub of shape func(string) (string, error) that ignores
+// what it is given is green whatever codexBinary passes, including "".
+func TestTheUnconfiguredCodexBinaryHandsTheWalkTheShimDirectory(t *testing.T) {
+	isolate(t)
+	// No [codex] binary: this is the branch where the walk decides.
+	want := shimDir()
+	if want == "" {
+		t.Fatal("shimDir is empty in this test's environment, so it cannot be told apart from an unskipped walk")
+	}
+	elsewhere := filepath.Join(t.TempDir(), "codex")
+	saved := resolveCodex
+	t.Cleanup(func() { resolveCodex = saved })
+	var got string
+	called := false
+	resolveCodex = func(shim string) (string, error) {
+		called, got = true, shim
+		return elsewhere, nil
+	}
+
+	binary, err := codexBinary()
+	if err != nil {
+		t.Fatalf("codexBinary = %v", err)
+	}
+	if !called {
+		t.Fatal("codexBinary did not walk PATH although no [codex] binary is set")
+	}
+	if binary != elsewhere {
+		t.Errorf("codexBinary = %q, want the walk's answer %q", binary, elsewhere)
+	}
+	if got != want {
+		t.Errorf("the PATH walk was handed %q, want the shim directory %q: a walk that is not told "+
+			"which directory to skip answers with the shim itself, and the shim execs "+
+			"`ccdad codex exec`, which walks again -- an unbounded process loop", got, want)
+	}
+}
+
 // quoteTOML is a basic TOML string. The paths here are t.TempDir()s, which hold
 // no quote or backslash on any platform this runs on, so nothing more is needed
 // and anything more would be a second TOML encoder in the test suite.
