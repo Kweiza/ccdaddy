@@ -349,6 +349,51 @@ func (e *Engine) logf(format string, a ...any) {
 	}
 }
 
+// loadConfig re-reads config.toml and publishes it as the configuration in
+// force, returning both the config to run on and whatever went wrong reading
+// it.
+//
+// Reload never fails usefully: it returns the config to run on PLUS a warning,
+// and the last-good-config rule makes the warning the whole point -- a broken
+// hand-edit leaves the engine on the last config that PARSED rather than
+// reverting a tuned threshold to stock. So every caller uses the config it
+// returns and reports the error rather than acting on it.
+//
+// It is a method of its own rather than four lines inside Tick because Tick is
+// no longer the first caller. The codex proxy is bound BEFORE the first tick --
+// the listener has to be up before the daemon publishes its first status
+// document -- and it read e.cfg, which until the first tick is still the
+// config.Defaults() NewEngine seeded. That made [codex].proxy_port and
+// [codex].cross_account_replay permanently inert: a pinned port was ignored in
+// favour of the derived one, and because the port then never carried the
+// "config" source, the refusal to start on a pinned port that will not bind
+// could not fire either. Both keys are validated and documented, and both did
+// nothing.
+//
+// Reloading twice before the first tick costs one extra read of one small file
+// at daemon start, and buys the proxy and the first tick the same answer: the
+// reloader compares BYTES, so the tick that follows finds the file unchanged
+// and re-uses what this call parsed.
+//
+// The reloader is not safe for concurrent use, and nothing here makes it
+// concurrent: daemon.Run binds the proxy and then runs the tick loop in the
+// same goroutine, so the proxy's call and every tick's call are strictly
+// ordered. A nil reloader -- an Engine built as a literal rather than by
+// NewEngine -- keeps whatever config it already had rather than panicking.
+func (e *Engine) loadConfig() (config.Config, error) {
+	if e.reloader == nil {
+		return e.Config(), e.ConfigError()
+	}
+	cfg, cfgErr := e.reloader.Reload()
+	e.mu.Lock()
+	e.cfg, e.cfgErr = cfg, cfgErr
+	e.mu.Unlock()
+	if cfgErr != nil {
+		e.logf("config: %v (running on the last one that parsed)", cfgErr)
+	}
+	return cfg, cfgErr
+}
+
 // Config is the auto-switch engine's knobs currently in force, and ConfigError
 // whatever went wrong last reading them. Both are for the operator's benefit;
 // the engine has already used the config either way.
@@ -418,17 +463,8 @@ func (e *Engine) Tick(ctx context.Context) error {
 	accounts := s.Accounts()
 
 	// External config changes, picked up once per tick and shared by the
-	// scheduler and the decision. Reload never fails usefully: it returns the
-	// config to run on plus a warning, and the last-good-config rule makes the
-	// warning the whole point — a broken hand-edit leaves the engine on the
-	// last config that PARSED rather than reverting a tuned threshold to stock.
-	cfg, cfgErr := e.reloader.Reload()
-	e.mu.Lock()
-	e.cfg, e.cfgErr = cfg, cfgErr
-	e.mu.Unlock()
-	if cfgErr != nil {
-		e.logf("config: %v (running on the last one that parsed)", cfgErr)
-	}
+	// scheduler and the decision.
+	cfg, cfgErr := e.loadConfig()
 	e.reportManualMode(cfg.Manual)
 
 	// Above the evaluation AND above the cache load, which is the position
