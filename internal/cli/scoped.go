@@ -364,6 +364,13 @@ var scopedSessionAllowed = map[string]bool{
 	"ccdad codex shim":         true,
 	"ccdad codex shim install": true,
 
+	// exec REPLACES the scope in the child it launches, exactly as `ccdad run`
+	// does: the child's environment is built here rather than inherited, and
+	// the only ccdad state it writes is a launch record under CCDAD_HOME, which
+	// a session does not scope. It never touches Claude Code's credential file,
+	// its config, or codex's own home.
+	"ccdad codex exec": true,
+
 	// Cobra's own. They read no state.
 	"ccdad help":                  true,
 	"ccdad completion":            true,

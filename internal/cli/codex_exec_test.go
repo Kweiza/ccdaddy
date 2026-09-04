@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Kweiza/ccdaddy/internal/ccpath"
+	"github.com/Kweiza/ccdaddy/internal/codexlaunch"
 	"github.com/Kweiza/ccdaddy/internal/codexproxy"
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 )
@@ -417,5 +419,220 @@ func TestTheCodexLaunchStartsADaemonAndWaitsForIt(t *testing.T) {
 	// leaves it still starting.
 	if !f.held {
 		t.Error("codexProxyForLaunch answered before the daemon it started had taken the singleton")
+	}
+}
+
+// routedWorld is a machine with a live daemon, a live proxy and a stubbed
+// codex, and it returns the spec the launcher handed the child.
+func routedWorld(t *testing.T, code ExitCode, during func(launchSpec)) (*claudeStub, int) {
+	t.Helper()
+	// The Claude resolver is stubbed too, so a Codex launch that wrongly took
+	// the Claude route fails the same way on every machine rather than on
+	// whether claude happens to be installed.
+	stubLookClaude(t, filepath.Join(t.TempDir(), "claude"))
+	// A launcher can itself be running inside a routed codex session -- an
+	// agent shell that inherited the parent's key, or a user who exported one
+	// by hand. Exporting one here makes every key assertion below about what
+	// the launcher BUILT rather than about what the developer's shell held.
+	t.Setenv(codexKeyEnv, "inherited-from-a-parent-session")
+	stubDaemonWorld(t, &fakeDaemon{held: true})
+	unsetForTest(t, "CLAUDE_SECURESTORAGE_CONFIG_DIR")
+	port := fakeProxy(t)
+	writeCodexProxyStatus(t, port)
+
+	codex := filepath.Join(t.TempDir(), "codex")
+	saved := resolveCodex
+	t.Cleanup(func() { resolveCodex = saved })
+	resolveCodex = func(string) (string, error) { return codex, nil }
+
+	var stub claudeStub
+	savedChild := startChild
+	t.Cleanup(func() { startChild = savedChild })
+	startChild = func(spec launchSpec) (ExitCode, error) {
+		stub.started, stub.spec = true, spec
+		if during != nil {
+			during(spec)
+		}
+		return code, nil
+	}
+	return &stub, port
+}
+
+// The seven overrides are the whole wiring, and their shape was measured
+// rather than assumed. Six declare one custom model provider and point codex
+// at ccdad's listener; the seventh keeps the launch secret out of the
+// environment codex hands to the commands the agent runs.
+func TestCodexExecSpawnsCodexWithTheSevenOverridesAndTheKey(t *testing.T) {
+	isolate(t)
+	stub, port := routedWorld(t, ExitOK, nil)
+
+	code, _, errOut, top := runRoot(t, "codex", "exec", "--", "exec", "say hi")
+	if code != ExitOK {
+		t.Fatalf("codex exec = %d, want 0\n%s\n%s", code, errOut, top)
+	}
+	if !stub.started {
+		t.Fatal("codex exec started no child")
+	}
+	want := []string{
+		"-c", "model_provider=ccdad",
+		"-c", `model_providers.ccdad.name="ccdad"`,
+		"-c", fmt.Sprintf(`model_providers.ccdad.base_url="http://127.0.0.1:%d"`, port),
+		"-c", `model_providers.ccdad.env_key="CCDAD_CODEX_KEY"`,
+		"-c", "model_providers.ccdad.requires_openai_auth=false",
+		"-c", `model_providers.ccdad.wire_api="responses"`,
+		"-c", `shell_environment_policy.exclude=["CCDAD_CODEX_KEY"]`,
+		"exec", "say hi",
+	}
+	if len(stub.spec.Args) != len(want) {
+		t.Fatalf("codex was given %q, want %q", stub.spec.Args, want)
+	}
+	for i := range want {
+		if stub.spec.Args[i] != want[i] {
+			t.Fatalf("argument %d is %q, want %q\nfull: %q", i, stub.spec.Args[i], want[i], stub.spec.Args)
+		}
+	}
+	switch v := envValueOf(stub.spec.Env, codexKeyEnv); {
+	case v == "":
+		t.Error("the child got no launch secret, so every request it makes is an unknown bearer")
+	case v == "inherited-from-a-parent-session":
+		t.Error("the child got the key this process inherited rather than this launch's own secret; " +
+			"the proxy would attribute the session to somebody else's launch record")
+	}
+	if v := envValueOf(stub.spec.Env, "NO_PROXY"); !strings.Contains(v, "127.0.0.1") {
+		t.Errorf("NO_PROXY = %q, so an HTTP_PROXY in the environment would capture every request to ccdad", v)
+	}
+}
+
+// A SECOND `--` is codex's and survives. pflag consumes the first one as its
+// own terminator, so the launcher must not strip another -- doing so would eat
+// the separator a user typed for codex.
+func TestCodexExecKeepsASecondSeparator(t *testing.T) {
+	isolate(t)
+	stub, _ := routedWorld(t, ExitOK, nil)
+
+	if code, _, errOut, _ := runRoot(t, "codex", "exec", "--", "exec", "--", "-x"); code != ExitOK {
+		t.Fatalf("codex exec = %d, want 0\n%s", code, errOut)
+	}
+	tail := stub.spec.Args[len(stub.spec.Args)-3:]
+	if tail[0] != "exec" || tail[1] != "--" || tail[2] != "-x" {
+		t.Errorf("codex was handed %q; the tail must be exec -- -x verbatim", stub.spec.Args)
+	}
+}
+
+// `codex login` and `codex logout` both REVOKE the stored grant server-side,
+// with no undo. Routed through the proxy, a logout would revoke a grant ccdad
+// manages -- so they go to the real codex untouched, with no overrides and no
+// key, talking to codex's own home.
+func TestCodexLoginAndLogoutAreNotRouted(t *testing.T) {
+	for _, verb := range []string{"login", "logout"} {
+		t.Run(verb, func(t *testing.T) {
+			isolate(t)
+			stub, _ := routedWorld(t, ExitOK, nil)
+
+			if code, _, errOut, _ := runRoot(t, "codex", "exec", "--", verb); code != ExitOK {
+				t.Fatalf("codex exec -- %s = %d, want 0\n%s", verb, code, errOut)
+			}
+			if len(stub.spec.Args) != 1 || stub.spec.Args[0] != verb {
+				t.Errorf("codex %s was given %q, want exactly [%q]: a routed login talks to ccdad's proxy "+
+					"about a grant ccdad owns", verb, stub.spec.Args, verb)
+			}
+			// routedWorld exports a key into this process, so this asserts the
+			// STRIP and not merely the absence: a launcher that passed
+			// childEnv() straight through would hand `codex logout` the key it
+			// inherited from whatever routed session started it.
+			if v := envValueOf(stub.spec.Env, codexKeyEnv); v != "" {
+				t.Errorf("codex %s got a launch secret (%d bytes); an unrouted codex must carry none",
+					verb, len(v))
+			}
+		})
+	}
+}
+
+// The launch record has to EXIST while the child runs -- the proxy validates a
+// bearer against it on every request -- and be gone afterwards, so a machine
+// does not accumulate one per session.
+func TestTheLaunchRecordLivesExactlyAsLongAsTheChild(t *testing.T) {
+	isolate(t)
+	root := mustPath(ccpath.StoreHome())
+	var duringCount int
+	_, _ = routedWorld(t, ExitOK, func(launchSpec) {
+		entries, err := os.ReadDir(codexlaunch.Dir(root))
+		if err != nil {
+			t.Errorf("no launch directory while the child was running: %v", err)
+			return
+		}
+		duringCount = len(entries)
+	})
+
+	if code, _, errOut, _ := runRoot(t, "codex", "exec"); code != ExitOK {
+		t.Fatalf("codex exec = %d, want 0\n%s", code, errOut)
+	}
+	// One .lock and one .json.
+	if duringCount != 2 {
+		t.Errorf("the launch directory held %d files while the child ran, want 2 (a lock and a record)", duringCount)
+	}
+	entries, err := os.ReadDir(codexlaunch.Dir(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("the launch directory still holds %d files after the child exited", len(entries))
+	}
+}
+
+// An UNPINNED launch that cannot reach a proxy runs codex anyway, untouched,
+// and says so in words a user can act on. Refusing would make a broken daemon
+// mean no codex at all, which is worse than a session ccdad cannot see.
+func TestAnUnpinnedLaunchWithNoProxyRunsCodexUntouchedAndSaysSo(t *testing.T) {
+	isolate(t)
+	// As in routedWorld, and for the same reason: this launcher may itself be
+	// inside a routed session, so the assertion below is about the strip.
+	t.Setenv(codexKeyEnv, "inherited-from-a-parent-session")
+	root := mustPath(ccpath.StoreHome())
+	stubDaemonWorld(t, &fakeDaemon{held: true})
+	unsetForTest(t, "CLAUDE_SECURESTORAGE_CONFIG_DIR")
+	// A daemon holding the singleton and publishing no port.
+	codex := filepath.Join(t.TempDir(), "codex")
+	saved := resolveCodex
+	t.Cleanup(func() { resolveCodex = saved })
+	resolveCodex = func(string) (string, error) { return codex, nil }
+	var stub claudeStub
+	savedChild := startChild
+	t.Cleanup(func() { startChild = savedChild })
+	startChild = func(spec launchSpec) (ExitCode, error) {
+		stub.started, stub.spec = true, spec
+		return ExitOK, nil
+	}
+
+	code, _, errOut, _ := runRoot(t, "codex", "exec", "--", "exec", "hi")
+	if code != ExitOK {
+		t.Fatalf("an unpinned codex exec with no proxy = %d, want 0 (it runs codex anyway)\n%s", code, errOut)
+	}
+	if !stub.started {
+		t.Fatal("no codex was started at all")
+	}
+	if len(stub.spec.Args) != 2 || stub.spec.Args[0] != "exec" {
+		t.Errorf("codex was given %q, want the arguments untouched", stub.spec.Args)
+	}
+	if v := envValueOf(stub.spec.Env, codexKeyEnv); v != "" {
+		t.Error("an unrouted launch carried a launch secret")
+	}
+	if !strings.Contains(errOut, "NOT routed through ccdad") {
+		t.Errorf("no banner said the session is not routed:\n%s", errOut)
+	}
+	if strings.Count(errOut, "\n") < 3 {
+		t.Errorf("the banner is one line; it has to say why and how to fix it:\n%s", errOut)
+	}
+	if n := codexlaunch.UnroutedCount(root); n != 1 {
+		t.Errorf("the unrouted tally is %d, want 1: doctor and status read it from there", n)
+	}
+}
+
+func TestTheCodexExecPathIsAllowedInAScopedSession(t *testing.T) {
+	if _, refused := scopedSessionRefusals["ccdad codex exec"]; refused {
+		t.Error("`ccdad codex exec` is refused inside a scoped session; it replaces the scope in the child it launches, exactly as `ccdad run` does")
+	}
+	if !scopedSessionAllowed["ccdad codex exec"] {
+		t.Error("`ccdad codex exec` has no scoped-session verdict")
 	}
 }
