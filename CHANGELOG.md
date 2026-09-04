@@ -38,7 +38,8 @@ by `uuid` or `alias`.
   own endless "Reconnecting" rather than an error. Pinned by
   `TestTheProxyBindsBeforeTheFirstStatusIsPublished`,
   `TestAProxyThatCannotBindStopsTheDaemon`,
-  `TestTheProxyIsDrainedBeforeTheFinalDocument`, `TestAnOccupiedConfiguredPortIsARefusal`,
+  `TestTheProxyIsDrainedBeforeTheFinalDocument`,
+  `TestAWedgedLoopStillTellsTheProxyToStop`, `TestAnOccupiedConfiguredPortIsARefusal`,
   `TestAnOccupiedAutomaticPortFallsBack`, `TestADerivedPortIsInTheBandAndIsStable`,
   `TestTheConfiguredProxyPortIsTheOneBound`, `TestAFallbackPortIsNeverRecorded`,
   `TestTheBoundPortIsRecordedSoTheNextStartComesBackOnIt`

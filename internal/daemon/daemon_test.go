@@ -523,6 +523,78 @@ func TestTheProxyIsDrainedBeforeTheFinalDocument(t *testing.T) {
 	}
 }
 
+// A wedged loop is the shutdown that nobody asked for: loop.Run gives up on its
+// own and returns with the context still live, so the proxy goroutine is still
+// parked on <-ctx.Done() when Run reaches the drain that waits for it. The
+// explicit stop() before that drain is the only thing that ever tells it.
+// Leaving the job to the deferred cancel cannot work, because the deferred one
+// does not run until Run returns and Run cannot return until the drain does.
+//
+// Nothing paired the two cases until this test. The other wedged-loop test
+// passes no StartProxy, so proxyDone is nil there and the drain is skipped
+// entirely; the three proxy tests all stop through a cancelled parent context,
+// which is exactly the case the explicit stop() is NOT for. Deleting the
+// stop() line left the whole package green.
+//
+// The failure is a hang rather than a wrong value, so this is written around a
+// deadline: Run is started on a context nobody cancels, and a daemon that
+// never returns never runs the defer that releases the singleton -- leaving the
+// machine with one hung daemon and a recovery successor that can never claim
+// the lock to replace it.
+func TestAWedgedLoopStillTellsTheProxyToStop(t *testing.T) {
+	isolate(t)
+	t.Setenv(RecoveryEnvVar, "1")
+	// Nothing cancels this context. Wedging is the only way out.
+	ctx, cancel := context.WithCancel(context.Background())
+	events := &orderLog{}
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(ctx, Options{
+			Interval:    time.Millisecond,
+			WedgedAfter: 20 * time.Millisecond,
+			Tick:        func(context.Context) error { return errors.New("boom") },
+			StartProxy: func(context.Context) (Proxy, error) {
+				return &fakeProxy{port: 24242, events: events}, nil
+			},
+		})
+	}()
+	// The cleanup matters only when this test FAILS: a Run left hanging still
+	// holds the singleton and its temporary home, and every later test in this
+	// binary would then fail for a reason that is not its own.
+	returned := false
+	t.Cleanup(func() {
+		cancel()
+		if returned {
+			return
+		}
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+		}
+	})
+
+	select {
+	case err := <-done:
+		returned = true
+		if !errors.Is(err, ErrWedged) {
+			t.Fatalf("Run = %v, want it to unwrap to ErrWedged", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run never returned: a wedged loop left the proxy waiting on a context nobody cancelled")
+	}
+	// And the proxy was told, rather than merely outlived: fakeProxy records
+	// itself only after its own context is done. Without this the deadline
+	// above would still pass on a Run that skipped the drain altogether.
+	if got := events.all(); firstIndex(got, "proxy") < 0 {
+		t.Fatalf("events = %v, want the proxy to have seen its context cancelled", got)
+	}
+	// The singleton is what the recovery successor is about to need.
+	held, herr := SingletonHeld()
+	if herr != nil || held {
+		t.Fatalf("SingletonHeld() = (%v, %v) after Run returned; the successor cannot start", held, herr)
+	}
+}
+
 func TestTheSweepRunsOnEveryTick(t *testing.T) {
 	isolate(t)
 	var sweeps atomic.Int64
