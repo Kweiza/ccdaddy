@@ -182,8 +182,11 @@ by `uuid` or `alias`.
   refuses `--full-profile` on the same account for the same kind of reason: the
   flag scopes a Claude Code config home, a codex session reads none, and a
   launch that accepted the word and dropped it would report a success that did
-  not do what was asked. And `codex login status` still answers about
-  `~/.codex`, which ccdad does not use. Pinned by
+  not do what was asked. That refusal covers every flag such a launch can be
+  handed — `ccdad run`'s own, and any the binary declares globally — and the
+  reason it gives says which of the two it refused, because a global flag is
+  not one `ccdad run` reads only on the Claude route. And `codex login status`
+  still answers about `~/.codex`, which ccdad does not use. Pinned by
   `TestTheCodexShimIsExactlyTheTwoLinesItHasToBe`,
   `TestCodexShimInstallWritesTheShimAndRegistersItsDirectory`,
   `TestCodexExecSpawnsCodexWithTheSevenOverridesAndTheKey`,
@@ -192,7 +195,10 @@ by `uuid` or `alias`.
   `TestCodexLoginAndLogoutAreNotRouted`,
   `TestRunOnACodexAccountRefusesTheLoginAndLogoutTails`,
   `TestRunOnACodexAccountRefusesTheFlagsItCannotHonour`,
-  `TestRunOnACodexAccountWithNoRefusedFlagStillLaunches` and
+  `TestRunOnACodexAccountWithNoRefusedFlagStillLaunches`,
+  `TestEveryRunFlagHasAnAnswerOnTheCodexRoute`,
+  `TestTheCodexRouteAnswerWalkSeesAGlobalFlag`,
+  `TestTheGenericCodexRefusalIsTrueOfTheFlagItNames` and
   `TestARealCodexReachesTheUpstreamThroughTheProxy`.
 
 - **`ccdad setup-path` now registers a set of directories it derives on every

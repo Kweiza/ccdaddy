@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
@@ -1508,30 +1509,121 @@ func TestRunOnACodexAccountWithNoRefusedFlagStillLaunches(t *testing.T) {
 	}
 }
 
-// Every flag `ccdad run` defines has an answer on the Codex route: a reason it
-// is refused, or a place on the list of flags a Codex launch honours. The walk
-// itself is default-deny, so an unlisted flag is already refused rather than
-// swallowed -- what this test adds is that it is refused with a REASON, which
-// is the difference between a decision and an oversight the user reads.
-func TestEveryRunFlagHasAnAnswerOnTheCodexRoute(t *testing.T) {
-	cmd := newRunCmd()
+// codexRouteFlagGaps names the flags `ccdad run` can be handed that the Codex
+// route has no answer for: neither a reason they are refused nor a place on the
+// list a Codex launch honours.
+//
+// It walks the run command as ATTACHED TO A ROOT, and Flags() rather than
+// LocalFlags(), because that is exactly the set refuseFlagsACodexLaunchCannotHonour
+// walks at RunE. Cobra merges the parents' persistent flags into that set, so a
+// global flag added to the root later is a flag this route can be handed and
+// must therefore have an answer for -- and a walk over the detached command
+// newRunCmd returns cannot see that half of the population at all.
+func codexRouteFlagGaps(t *testing.T, root *cobra.Command) []string {
+	t.Helper()
+	run := subcommandOf(t, root, "run")
 	// Cobra adds --help during execute(), not at construction, so a walk over
-	// a freshly built command would not see the one flag the command does not
+	// a freshly built tree would not see the one flag the command does not
 	// define itself.
-	cmd.InitDefaultHelpFlag()
+	run.InitDefaultHelpFlag()
+	var gaps []string
 	seen := 0
-	cmd.Flags().VisitAll(func(f *pflag.Flag) {
+	run.Flags().VisitAll(func(f *pflag.Flag) {
 		seen++
-		if codexRunNeutralFlags[f.Name] {
+		if codexRunNeutralFlags[f.Name] || codexRunFlagRefusals[f.Name] != "" {
 			return
 		}
-		if codexRunFlagRefusals[f.Name] == "" {
-			t.Errorf("`ccdad run` defines --%s and the Codex route has no answer for it: "+
-				"give it a reason it is refused, or name it as one a Codex launch honours", f.Name)
-		}
+		gaps = append(gaps, f.Name)
 	})
 	if seen == 0 {
-		t.Fatal("no flags were walked, so this test asserts nothing")
+		t.Fatal("no flags were walked, so this asserts nothing")
+	}
+	return gaps
+}
+
+// Every flag `ccdad run` can be handed has an answer on the Codex route: a
+// reason it is refused, or a place on the list of flags a Codex launch honours.
+// The walk itself is default-deny, so an unlisted flag is already refused rather
+// than swallowed -- what this test adds is that it is refused with a REASON,
+// which is the difference between a decision and an oversight the user reads.
+func TestEveryRunFlagHasAnAnswerOnTheCodexRoute(t *testing.T) {
+	for _, name := range codexRouteFlagGaps(t, NewRootCmd()) {
+		t.Errorf("`ccdad run` can be handed --%s and the Codex route has no answer for it: "+
+			"give it a reason it is refused, or name it as one a Codex launch honours", name)
+	}
+}
+
+// The guard above is worth only what it can SEE, and the half it could not see
+// is the half that does not exist yet. The root declares no persistent flags
+// today, so a walk over the detached newRunCmd() passes on this tree and goes on
+// passing -- and the first global flag anybody adds reaches a user refused with
+// a reason that is false about it, which is the one outcome the guard exists to
+// prevent. This puts a global flag there and asks the walk to name it.
+func TestTheCodexRouteAnswerWalkSeesAGlobalFlag(t *testing.T) {
+	root := NewRootCmd()
+	root.PersistentFlags().Bool("probe-global", false, "a flag the whole binary would take")
+	if gaps := codexRouteFlagGaps(t, root); !slices.Contains(gaps, "probe-global") {
+		t.Errorf("the walk reported %v; a global flag `ccdad run` inherits is a flag the Codex "+
+			"route can be handed, so the walk has to see it", gaps)
+	}
+}
+
+// The generic reason -- what a flag with no entry of its own is refused with --
+// has to be TRUE of the flag it is attached to, and the two populations the
+// refusal walks do not share a true sentence. A flag `ccdad run` declares is
+// read only below the branch that sends a Codex account away, so "only on the
+// Claude route" describes it; a flag inherited from the root is read on every
+// route by whoever declared it, and saying the same of it would be a false
+// statement about a genuinely global flag.
+//
+// The argv is identical across the two rows. The only difference is WHERE the
+// flag is declared, which is the whole of what the sentence has to turn on.
+func TestTheGenericCodexRefusalIsTrueOfTheFlagItNames(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		declare func(root, run *cobra.Command)
+		want    string
+		notWant string
+	}{
+		{
+			name:    "a flag `ccdad run` declares itself",
+			declare: func(_, run *cobra.Command) { run.Flags().Bool("probe-flag", false, "") },
+			want:    "only on the Claude route",
+			notWant: "global flag",
+		},
+		{
+			name:    "a global flag inherited from the root",
+			declare: func(root, _ *cobra.Command) { root.PersistentFlags().Bool("probe-flag", false, "") },
+			want:    "global flag",
+			notWant: "only on the Claude route",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolate(t)
+			seedCodexAccount(t, "cx-run-8", "c@example.com")
+			stub, _ := routedWorld(t, ExitOK, nil)
+
+			root := NewRootCmd()
+			tc.declare(root, subcommandOf(t, root, "run"))
+			code, _, errOut, top := runRootWith(t, root, "run", "--probe-flag", "c@example.com")
+			if code != ExitUsage {
+				t.Fatalf("run on a codex account with --probe-flag = %d, want %d\n%s\n%s",
+					code, ExitUsage, errOut, top)
+			}
+			if stub.started {
+				t.Errorf("the refusal started codex anyway, as %q", stub.spec.Args)
+			}
+			said := errOut + top
+			if !strings.Contains(said, tc.want) {
+				t.Errorf("the refusal does not say %q, which is what is true of this flag:\n%s", tc.want, said)
+			}
+			// The load-bearing half: one sentence carrying both reasons would
+			// pass the assertion above while still telling the user something
+			// false about the flag they typed.
+			if strings.Contains(said, tc.notWant) {
+				t.Errorf("the refusal says %q, which is false of this flag:\n%s", tc.notWant, said)
+			}
+		})
 	}
 }
 
