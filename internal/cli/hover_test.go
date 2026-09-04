@@ -192,7 +192,11 @@ func TestHoverRefusesJSONOnTheWritingVerbs(t *testing.T) {
 // The whole point of an omakase mode being acceptable: every number chosen on
 // the user's behalf is printed, together with the two figures it was derived
 // from.
-func TestHoverStatusShowsTheThresholdTheUtilizationAndTheSlack(t *testing.T) {
+// One row per account, one cell per window, each cell "used/threshold". The
+// pair is what this command exists to show: an omakase mode is only acceptable
+// if you can see what it chose, and both halves of that are here. ELAPSED and
+// SLACK moved to --json, which carries the whole derivation.
+func TestHoverStatusShowsWhatEachWindowUsedAndWhatItIsHeldTo(t *testing.T) {
 	isolate(t)
 	freezeClock(t, hoverEpoch)
 	writeConfig(t, "hover = true\n")
@@ -206,26 +210,50 @@ func TestHoverStatusShowsTheThresholdTheUtilizationAndTheSlack(t *testing.T) {
 		t.Fatalf("exit = %d (%s)", code, top)
 	}
 	for _, want := range []string{
-		"THRESHOLD", "SLACK",
+		// The headers the other three tables use, and the legend that maps them
+		// back to the keys `ccdad config` takes a threshold on.
+		"5H", "7D", "5H = five_hour", "7D = seven_day",
 		// Two usable accounts, so a weekly window 43% elapsed is held to 93.
-		"seven_day", "93%",
+		"55%/93%", "72%/93%",
 		// The five-hour window resets within the hour, so its pace target is
-		// 80 + 50 = 130: no restraint at all. The COLUMN stops at 100, and the
-		// footer is what says the printed figure is the ceiling rather than the
-		// number the ranking used -- which is why SLACK on that row does not
-		// subtract from it.
-		"five_hour", "100%",
-		"2 row(s) show 100%",
+		// 80 + 50 = 130: no restraint at all. The printed figure stops at 100,
+		// and the footer is what says so.
+		"62%/100%", "91%/100%",
+		"threshold(s) above show 100%",
 		"2 usable accounts",
+		"each cell is used/threshold",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("stdout does not carry %q:\n%s", want, stdout)
 		}
 	}
-	// ELAPSED is the input the threshold was derived FROM, and it is what lets a
-	// reader check 43 + 50 = 93 rather than take it on trust.
-	if row := hoverRow(t, stdout, "seven_day"); row[1] != "43%" {
-		t.Errorf("ELAPSED = %q, want the share of the week that has passed", row[1])
+	// One row per ACCOUNT. Two accounts carrying two windows each used to be
+	// four rows; a reader of a real fleet had twelve.
+	rows := 0
+	for _, line := range strings.Split(stdout, "\n") {
+		if strings.Contains(line, "@example.com") {
+			rows++
+		}
+	}
+	if rows != 2 {
+		t.Errorf("the table has %d account rows, want 2 — one per account", rows)
+	}
+}
+
+// ELAPSED and SLACK left the human table and must still be reachable, or the
+// mode stopped being auditable.
+func TestHoverStatusJSONStillCarriesTheWholeDerivation(t *testing.T) {
+	isolate(t)
+	freezeClock(t, hoverEpoch)
+	writeConfig(t, "hover = true\n")
+	seedHoverAccount(t, "u-1", "work@example.com")
+	seedHoverWindows(t, "u-1", 0.80, 62, 0.43, 55)
+
+	_, stdout, _, top := runRoot(t, "hover", "status", "--json")
+	for _, want := range []string{"expectedPct", "slack", "threshold", "utilization"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("--json does not carry %q (%s):\n%s", want, top, stdout)
+		}
 	}
 }
 
@@ -258,10 +286,13 @@ func TestHoverStatusMarksTheLiveAccountAndTheCreditSeat(t *testing.T) {
 		t.Errorf("no row is marked as the live account's:\n%s", stdout)
 	}
 	// A credit seat has no window and no reset, so pace says nothing about it
-	// and 95 is the figure it is held to instead.
-	credit := hoverRow(t, stdout, "extra_usage")
-	if credit[1] != "-" || credit[3] != "95%" {
-		t.Errorf("the credit row = %v, want no elapsed share and a threshold of 95%%", credit)
+	// and 95 is the figure it is held to instead. It gets a CREDIT column of
+	// its own, and the legend names the key it is filed under.
+	if !strings.Contains(stdout, "/95%") {
+		t.Errorf("the credit seat is not shown against the 95%% it is held to:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "CREDIT = extra_usage") {
+		t.Errorf("the legend does not name the credit column's key:\n%s", stdout)
 	}
 	if !strings.Contains(stdout, "(primary, metered in credits)") {
 		t.Errorf("the credit row does not say what it is metered on:\n%s", stdout)
@@ -312,7 +343,7 @@ func TestHoverStatusWithTheModeOffStillShowsTheNumbers(t *testing.T) {
 	if top != "" {
 		t.Errorf("ExecuteWith printed %q; a rendered answer is not a runtime failure", top)
 	}
-	if !strings.Contains(stdout, "Hover:   off") || !strings.Contains(stdout, "THRESHOLD") {
+	if !strings.Contains(stdout, "Hover:   off") || !strings.Contains(stdout, "used/threshold") {
 		t.Errorf("stdout = %q, want the preview table", stdout)
 	}
 	if !strings.Contains(stderr, "hover on") {
@@ -354,11 +385,12 @@ func TestHoverStatusPromisesNoWarmUpForAWindowThatIsAlreadyInUse(t *testing.T) {
 	if !strings.Contains(stdout, "80%") {
 		t.Errorf("stdout does not carry the fallback threshold:\n%s", stdout)
 	}
-	// The ELAPSED cell is the unknown rather than a zero. A 0% there reads as a
-	// window that has only just rolled over, which is the most generous answer
-	// there is, and "30%" already contains "0%" -- so this is read as a cell.
-	if row := hoverRow(t, stdout, "seven_day"); row[1] != "-" {
-		t.Errorf("ELAPSED = %q for a window with no reset, want %q", row[1], "-")
+	// The cell carries the pair it always carries: 30% used against the
+	// fallback threshold. ELAPSED left the human table for --json, which is
+	// checked below -- and it is left OUT there rather than reported as zero,
+	// because a 0 reads as a window that has only just rolled over.
+	if !strings.Contains(stdout, "30%/80%") {
+		t.Errorf("stdout does not carry the used/threshold pair:\n%s", stdout)
 	}
 
 	// And the payload leaves the share OUT rather than reporting it as zero,

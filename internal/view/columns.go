@@ -155,6 +155,71 @@ func ColumnsOf(rows []Row) Columns {
 	return c
 }
 
+// ColumnsOfNames is ColumnsOf for a caller that already knows which windows it
+// is describing and has no rows to derive them from.
+//
+// `ccdad hover status` is that caller: its table comes from a ranking pass
+// rather than from a cache read, and loading the cache a second time to
+// rediscover a set it is already holding would be two reads that agree until
+// the day one of them moves. It goes through the same order, the same headers
+// and the same uniqueness passes, so the column a reader sees here is the
+// column they saw on the other three surfaces.
+//
+// It builds no reset columns: this caller has no rollovers to group, and a
+// countdown it invented would be a second answer to a question `ccdad status`
+// already answers.
+func ColumnsOfNames(names []usage.WindowName) Columns {
+	seen := map[usage.WindowName]bool{}
+	rows := []Row{}
+	_ = rows
+	var model, surface, unknown []usage.WindowName
+	credit := false
+	for _, n := range names {
+		if seen[n] {
+			continue
+		}
+		seen[n] = true
+		switch {
+		case n == strategy.CreditWindow:
+			credit = true
+		case !n.Scoped():
+		default:
+			scope, _, ok := usage.ScopeOf(n)
+			switch {
+			case !ok:
+				unknown = append(unknown, n)
+			case scope == usage.ScopeModel:
+				model = append(model, n)
+			case scope == usage.ScopeSurface:
+				surface = append(surface, n)
+			default:
+				unknown = append(unknown, n)
+			}
+		}
+	}
+	ordered := make([]usage.WindowName, 0, len(seen))
+	for _, n := range usage.RateLimitWindowNames() {
+		if seen[n] {
+			ordered = append(ordered, n)
+		}
+	}
+	sortNames(model)
+	sortNames(surface)
+	sortNames(unknown)
+	ordered = append(ordered, model...)
+	ordered = append(ordered, surface...)
+	ordered = append(ordered, unknown...)
+	if credit {
+		ordered = append(ordered, strategy.CreditWindow)
+	}
+	cols := make([]WindowColumn, 0, len(ordered))
+	for _, n := range ordered {
+		cols = append(cols, WindowColumn{Name: n, Header: WindowHeader(n), Reset: -1, Ranked: rankedWindow(n)})
+	}
+	uniqueHeaders(cols)
+	return Columns{Windows: cols}
+}
+
 func sortNames(n []usage.WindowName) {
 	sort.Slice(n, func(i, j int) bool { return n[i] < n[j] })
 }
