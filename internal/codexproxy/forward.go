@@ -119,24 +119,83 @@ func (s *Server) responses(w http.ResponseWriter, r *http.Request) {
 	}
 
 	threadID := threadIDOf(r)
-	order, _ := s.chooseOrder(rec, threadID)
+	order, pinned := s.chooseOrder(rec, threadID)
 	if len(order) == 0 {
 		s.logf("the codex proxy has no account it can serve a request from")
 		writeUnavailable(w)
 		return
 	}
-	a, err := s.send(r.Context(), order[0], r, body, false)
-	if err != nil {
-		s.logf("the codex proxy could not reach the upstream for %s: %v", short(order[0]), err)
-		writeUnavailable(w)
+	// Read BEFORE the first attempt: a thread that already has responses is
+	// carrying one account's encrypted reasoning, and whether it may be moved is
+	// a different question from whether a brand-new thread may be.
+	_, midThread := s.threadAccount(threadID)
+
+	// first is the rate limit that started the search. A replacement that fails
+	// for some unrelated reason must not turn a "you are out of quota" into a
+	// "your request was malformed". dead collects the accounts nothing on this
+	// machine can serve from until somebody logs in again, which is a different
+	// answer from an account that is merely out of quota for an hour.
+	var (
+		first *attempt
+		dead  []string
+	)
+
+	for i, uuid := range order {
+		// Every attempt after the first strips the turn state: it is a
+		// continuation token only the account that issued it can read.
+		a, err := s.send(r.Context(), uuid, r, body, i > 0)
+		if err != nil {
+			if errors.Is(err, errNoCredential) {
+				// The request never left this process. That is a fact about the
+				// ACCOUNT, and the answer it earns says so.
+				s.logf("codex account %s cannot serve: %v", short(uuid), err)
+				dead = append(dead, uuid)
+				continue
+			}
+			s.logf("the codex proxy could not reach the upstream for %s: %v", short(uuid), err)
+			continue
+		}
+		if a.stream != nil {
+			s.rememberThread(threadID, uuid)
+			// Past this call a byte may have reached the client, so nothing
+			// after it may be replayed.
+			s.streamBack(w, a)
+			return
+		}
+		if a.status == http.StatusTooManyRequests {
+			s.recordLimit(uuid, a)
+			if first == nil {
+				first = a
+			}
+			switch {
+			case pinned:
+				// A pin never bills another account.
+				writeBack(w, a)
+				return
+			case midThread && !s.cfg.CrossAccountReplay:
+				// The user starts a new thread and lands on the new account.
+				writeBack(w, a)
+				return
+			}
+			continue
+		}
+		// A 401 is the exception, and it is passed through rather than covered
+		// by the original rate limit: the endpoint is saying something about
+		// THIS account that the user has to see. Every other 4xx from a
+		// replacement is answered with the rate limit that started the search.
+		if first != nil && a.status != http.StatusUnauthorized {
+			s.logf("a replacement codex account answered %d; answering the original rate limit instead", a.status)
+			writeBack(w, first)
+			return
+		}
+		writeBack(w, a)
 		return
 	}
-	if a.stream != nil {
-		s.rememberThread(threadID, a.uuid)
-		s.streamBack(w, a)
+	if first != nil {
+		writeBack(w, first)
 		return
 	}
-	writeBack(w, a)
+	writeUnavailable(w)
 }
 
 // send makes one upstream attempt as one account.
