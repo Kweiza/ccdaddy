@@ -2,6 +2,7 @@ package codexlaunch
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -134,6 +135,29 @@ func TestAnUnknownBearerIsUnknown(t *testing.T) {
 		if res != Unknown {
 			t.Errorf("Lookup(%q) = %v, want Unknown", bearer, res)
 		}
+	}
+}
+
+func TestADeletePendingOpenIsAnUnknownLaunchNotAnError(t *testing.T) {
+	transient := errors.New("a dead launch file is being deleted")
+	original := retryableLookupOpen
+	retryableLookupOpen = func(err error) bool { return errors.Is(err, transient) }
+	t.Cleanup(func() { retryableLookupOpen = original })
+
+	for _, action := range []string{
+		"reading a codex launch record",
+		"locking a codex launch record",
+	} {
+		rec, res, err := lookupOpenFailure(action, fmt.Errorf("open: %w", transient))
+		if err != nil || res != Unknown || rec != (Record{}) {
+			t.Errorf("%s during a reap = (%+v, %v, %v), want (zero record, unknown, nil)", action, rec, res, err)
+		}
+	}
+
+	ordinary := errors.New("the launch directory is unreadable")
+	_, res, err := lookupOpenFailure("reading a codex launch record", ordinary)
+	if res != Unknown || !errors.Is(err, ordinary) {
+		t.Fatalf("ordinary open failure = (%v, %v), want (unknown, wrapped original error)", res, err)
 	}
 }
 
