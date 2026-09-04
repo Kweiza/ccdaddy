@@ -1198,9 +1198,12 @@ Two kinds of codex session are not routed, and both are deliberate:
 
 - **An IDE or a desktop app that spawns codex itself.** It never consults your
   shell's PATH, so the shim is not in front of it. Those sessions read
-  `~/.codex` and spend whatever is in it. ccdad says so: `ccdad doctor`'s
-  `codex-proxy` row counts the codex launches that had no proxy in front of
-  them, and its `codex-shim` row says whether one is in front of the next.
+  `~/.codex` and spend whatever is in it, and ccdad cannot see them at all —
+  they never enter ccdad, so nothing here counts them or names the account they
+  spent. `ccdad doctor` answers the neighbouring questions instead: its
+  `codex-shim` row says which codex a bare `codex` in your shell resolves to,
+  and its `codex-proxy` row counts only the launches ccdad itself had to start
+  with no proxy in front of them.
 - **Windows.** There is no shim there. It would have to be a `.cmd`, which puts
   `cmd.exe` in front of every prompt codex is given, and `ccdad` refuses that
   launch rather than letting `cmd.exe` re-interpret an argument. Run `ccdad
