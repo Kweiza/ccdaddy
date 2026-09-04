@@ -49,7 +49,9 @@ import (
 // they share a name and sit at opposite ends of this decision.
 //
 // What is here: the commands a user runs while USING their accounts, where an
-// engine that is not running is the thing they are about to be surprised by.
+// engine that is not running is the thing they are about to be surprised by —
+// including the two launchers, which additionally cannot serve a Codex account
+// at all without a daemon holding the proxy.
 //
 // What is deliberately not here, with the reason, because these are the entries
 // a later reader will want to add:
@@ -109,6 +111,28 @@ var autoStartCommands = map[string]bool{
 	"ccdad status":    true,
 	"ccdad switch":    true,
 	"ccdad which":     true,
+
+	// The two launchers, and `run` is a REVERSAL of what this map said before
+	// rather than a row nobody argued about.
+	//
+	// The old argument was that `run` exports a scoped credential home into its
+	// child, so a daemon started first would manage the live login while the
+	// user was deliberately elsewhere. That is about the CHILD's scope. `run`
+	// sets the child's variables outright and its own process is an ordinary
+	// shell — so the daemon it starts manages the live login, which is what a
+	// daemon does and what the user running ccdad asked for. The case that must
+	// not spawn is a `run` invoked from INSIDE a session, and that is
+	// autoStartRefusal's scoped-session arm, which still fires.
+	//
+	// The reason to be here at all is Codex. `ccdad run <codex-account>` and
+	// `ccdad codex exec` are served by the daemon's own loopback proxy, so
+	// without a daemon there is nothing to route the session through: the
+	// pinned form refuses outright and the unpinned one runs a codex ccdad
+	// neither chose an account for nor can see. Both launchers start a daemon
+	// themselves as well, and wait for it, which this hook deliberately does
+	// not — the entry is what makes the common case already warm.
+	"ccdad run":        true,
+	"ccdad codex exec": true,
 }
 
 // autoStart is the hook the root runs before every command. It is a package var
@@ -130,32 +154,16 @@ var autoStart = maybeAutoStart
 // generally does not benefit from it, the next one does.
 func maybeAutoStart(cmd *cobra.Command) {
 	// The recursion guard first, because it is the one whose failure is
-	// unbounded. Everything below it is a decision; this is a fuse.
+	// unbounded. Everything below it is a decision; this is a fuse. It is
+	// repeated inside autoStartRefusal rather than only there, because a fuse
+	// that fires after a map lookup is a fuse that depends on the map.
 	if os.Getenv(daemon.ChildEnvVar) != "" {
 		return
 	}
 	if !autoStartCommands[cmd.CommandPath()] {
 		return
 	}
-	// CLAUDE_SECURESTORAGE_CONFIG_DIR is how a credential home is scoped to one
-	// terminal, and ccdad itself sets it that way. A daemon auto-started from
-	// inside such a shell would manage THAT shell's credentials for the rest of
-	// its life, silently — and pinning the resolved path into the child only
-	// makes it permanent rather than preventing it. DEFINED is the test, not
-	// non-empty: Claude Code reads a defined-but-empty value as ~/.claude
-	// rather than as the config home, which is a different file again.
-	if _, scoped := os.LookupEnv("CLAUDE_SECURESTORAGE_CONFIG_DIR"); scoped {
-		return
-	}
-	// The half the test above cannot see. `ccdad run --full-profile` REMOVES
-	// that variable rather than emptying it and scopes with CLAUDE_CONFIG_DIR
-	// instead, so a session in that mode reads as an unscoped shell here —
-	// while ChildEnv would pin the profile into the daemon exactly the same
-	// way. CLAUDE_CONFIG_DIR on its own is NOT a reason to refuse: it is where
-	// a great many people keep their Claude Code configuration, and refusing
-	// there would turn auto-start off for all of them. Only a config home
-	// ccdad created for a run counts, which is what scoped.go answers.
-	if _, session := currentScopedSession(); session {
+	if autoStartRefusal() != "" {
 		return
 	}
 	held, err := singletonHeld()
@@ -166,24 +174,72 @@ func maybeAutoStart(cmd *cobra.Command) {
 		// invocation forever on a filesystem where locks do not work.
 		return
 	}
-	// Rule 5, and it is the same shape as rule 2: a fuse against an unbounded
-	// spawn rather than a policy decision.
-	//
-	// A daemon refused by the credential-home claim gives the SINGLETON back on
-	// its way out — the defer that releases it runs — so the probe above stays
-	// negative forever. Without this, every one of the allow-listed commands
-	// above forks a child that dies immediately, on every invocation, silently.
-	//
-	// Held-but-not-ours is the whole test, named or not: credhome.Acquire
-	// refuses on a claim it cannot attribute exactly as it refuses on one it
-	// can, because the lock is held either way. A probe that could not ANSWER is
-	// different and does not stop the spawn: the daemon degrades and keeps
-	// running in that case, so it takes the singleton and ends the loop itself.
-	if claim, cerr := credentialHomeClaim(); cerr == nil && claim.Held && !claim.Ours {
-		return
-	}
 	// The error is discarded, not ignored: rule 4. `ccdad doctor` and `ccdad
 	// status` are where a daemon that will not start is reported, and both say
 	// so from evidence rather than from a message this path could have printed.
 	_ = spawnDaemon("")
+}
+
+// autoStartRefusal names why a daemon must not be spawned from this process, or
+// "" when spawning is allowed.
+//
+// A named predicate rather than four inline conditions, because it now has TWO
+// callers: the hook above, and the codex launcher, which starts a daemon itself
+// and has to refuse in exactly the same places. Two copies of this list would
+// drift, and the direction they drift in is a daemon pinned for the rest of its
+// life to a directory that is about to be deleted.
+//
+// It returns a REASON rather than a bool, because the second caller prints one:
+// a codex session that could not be routed tells the user why, and a bool would
+// have made that message a second, independently-drifting copy of these four
+// cases.
+//
+// What is NOT in here is the singleton probe. "One is already running" is not a
+// refusal — it is the answer both callers want, and each does something
+// different with it: the hook stops, the launcher goes on to prove the proxy.
+func autoStartRefusal() string {
+	// Rule 2's fuse. The child is itself `ccdad <something>`, so a missing
+	// guard here spawns as fast as the operating system allows.
+	if os.Getenv(daemon.ChildEnvVar) != "" {
+		return "this process was started by ccdad itself"
+	}
+	// Rule 3. CLAUDE_SECURESTORAGE_CONFIG_DIR is how a credential home is
+	// scoped to one terminal, and ccdad itself sets it that way. A daemon
+	// auto-started from inside such a shell would manage THAT shell's
+	// credentials for the rest of its life, silently — and pinning the
+	// resolved path into the child only makes it permanent rather than
+	// preventing it. DEFINED is the test, not non-empty: Claude Code reads a
+	// defined-but-empty value as ~/.claude rather than as the config home,
+	// which is a different file again.
+	if _, scoped := os.LookupEnv("CLAUDE_SECURESTORAGE_CONFIG_DIR"); scoped {
+		return "CLAUDE_SECURESTORAGE_CONFIG_DIR scopes this shell's credential home to one terminal"
+	}
+	// The half the test above cannot see. `ccdad run --full-profile` REMOVES
+	// that variable rather than emptying it and scopes with CLAUDE_CONFIG_DIR
+	// instead, so a session in that mode reads as an unscoped shell here —
+	// while ChildEnv would pin the profile into the daemon exactly the same
+	// way. CLAUDE_CONFIG_DIR on its own is NOT a reason to refuse: it is where
+	// a great many people keep their Claude Code configuration, and refusing
+	// there would turn auto-start off for all of them. Only a config home ccdad
+	// created for a run counts, which is what scoped.go answers.
+	if session, inside := currentScopedSession(); inside {
+		return "this shell has " + session.describe()
+	}
+	// Rule 5, and it is the same shape as rule 2: a fuse against an unbounded
+	// spawn rather than a policy decision.
+	//
+	// A daemon refused by the credential-home claim gives the SINGLETON back on
+	// its way out — the defer that releases it runs — so a singleton probe
+	// stays negative forever. Without this, every allow-listed command forks a
+	// child that dies immediately, on every invocation, silently.
+	//
+	// Held-but-not-ours is the whole test, named or not: credhome.Acquire
+	// refuses on a claim it cannot attribute exactly as it refuses on one it
+	// can, because the lock is held either way. A probe that could not ANSWER
+	// is different and does not stop the spawn: the daemon degrades and keeps
+	// running in that case, so it takes the singleton and ends the loop itself.
+	if claim, cerr := credentialHomeClaim(); cerr == nil && claim.Held && !claim.Ours {
+		return "another ccdad store's engine holds this credential home"
+	}
+	return ""
 }
