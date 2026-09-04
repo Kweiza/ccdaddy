@@ -441,16 +441,3 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.WriteHeader(status)
 	_, _ = w.Write(data)
 }
-
-// authHit is defined for real in auth.go; this placeholder keeps the package
-// building until the bearer check lands.
-type authHit struct{}
-
-// responses is implemented for real in auth.go and forward.go.
-func (s *Server) responses(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		s.notFound(w, r)
-		return
-	}
-	writeUnavailable(w)
-}
