@@ -129,6 +129,24 @@ by `uuid` or `alias`.
   `TestTheLogNeverCarriesABearerOrABody` and
   `TestTheProxyNeverReachesTheClaudeCredentialPath`.
 
+- **A codex process that hangs up mid-repair can no longer cost an account its
+  login.** The proxy answers a 401 by asking the daemon's one refresher for a
+  rotation, and a Codex refresh token is single-use with server-side reuse
+  detection: the token endpoint burns the grant it was handed before it answers.
+  That exchange now runs on a context of the daemon's own, bounded at 60
+  seconds, rather than on the request context net/http cancels the instant codex
+  goes away — a user pressing Ctrl-C, or codex abandoning one of the six
+  requests it answers a 401 with. An exchange aborted while the endpoint's
+  answer was in flight leaves the new pair unread and the spent one on disk, and
+  a cancelled context is classified transient, so nothing is written and nothing
+  is marked; the loss only surfaces on the NEXT exchange, which presents the
+  burned grant, is reuse-detected and marks the account as needing
+  `ccdad codex add`. The forwarded turn itself stays cancellable, because a turn
+  spends nothing single-use and a client that has gone away should stop paying
+  for one.
+  Pinned by `TestAClientHangupNeverCancelsTheGrantExchange` and
+  `TestTheForwardedTurnItselfStaysCancellable`.
+
 Nothing points codex at this proxy yet. The PATH shim and the launcher that hand
 a codex process its launch secret are the next piece of work, so on this build the
 listener binds, answers its health route and forwards for a caller that already
