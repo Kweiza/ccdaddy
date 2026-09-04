@@ -364,11 +364,24 @@ var scopedSessionAllowed = map[string]bool{
 	"ccdad codex shim":         true,
 	"ccdad codex shim install": true,
 
-	// exec REPLACES the scope in the child it launches, exactly as `ccdad run`
-	// does: the child's environment is built here rather than inherited, and
-	// the only ccdad state it writes is a launch record under CCDAD_HOME, which
-	// a session does not scope. It never touches Claude Code's credential file,
-	// its config, or codex's own home.
+	// exec INHERITS the launcher's environment. The child is os.Environ with
+	// the launch key and the loopback proxy exemption added, and nothing taken
+	// out but a defined-but-empty CLAUDE_CONFIG_DIR -- so inside a session the
+	// session's own CLAUDE_SECURESTORAGE_CONFIG_DIR reaches codex verbatim.
+	//
+	// That is safe, and NOT because the scope is contained: it is not. It is
+	// safe because a codex launch writes no Claude Code state at all -- not the
+	// credential file, not the config, not codex's own home -- so there is
+	// nothing for the propagated scope to send to the wrong copy. The only
+	// ccdad state the launch writes is a launch record under CCDAD_HOME, which
+	// a session does not scope.
+	//
+	// What the propagated scope does reach is a ccdad command typed inside the
+	// codex child, by the user or by the agent. That command is judged by these
+	// same maps when it runs, so `ccdad switch` in there is refused with the
+	// clause a human would get -- and the propagation is what keeps that true.
+	// TestCodexExecInsideARunSessionInheritsTheScopeAndWritesNoClaudeState
+	// measures the whole paragraph.
 	"ccdad codex exec": true,
 
 	// Cobra's own. They read no state.
