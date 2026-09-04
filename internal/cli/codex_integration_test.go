@@ -139,6 +139,18 @@ func TestARealCodexReachesTheUpstreamThroughTheProxy(t *testing.T) {
 	child := exec.CommandContext(runCtx, codexPath,
 		append(codexOverrides(srv.Port()), "exec", "--skip-git-repo-check", "say hi")...)
 	child.Env = env
+	// WaitDelay bounds Wait after the deadline above has fired, and without it
+	// the diverted case cannot report itself.
+	//
+	// MEASURED, by deleting the withNoProxyLoopback line above and running this
+	// test: codex never exits on its own when its request is captured by the
+	// proxy -- it reconnects forever -- and killing it at the deadline is not
+	// enough, because it leaves a descendant holding the output pipe, so
+	// CombinedOutput stays blocked in io.Copy long after codex is gone. What
+	// that produced was a ten-minute package-wide test timeout and a goroutine
+	// dump, taking every other test in this package down with it, instead of
+	// the "saw no request at all" line below that names the actual defect.
+	child.WaitDelay = 5 * time.Second
 	// Stdin is left nil, which os/exec points at the null device: `codex exec`
 	// reads additional input from stdin and would otherwise wait for a terminal
 	// that is not there.
