@@ -364,6 +364,43 @@ func publishedRow(t *testing.T, e *Engine, uuid string) AccountStatus {
 	return AccountStatus{}
 }
 
+// The whole point of the harvest: a reading the proxy took off a turn the user
+// was making anyway is committed by the lane, and the poll that would have
+// bought the same figure is not made.
+//
+// It is asserted through a tick rather than through the two accessors it is
+// built from, because the accessors were the only thing tested: deleting the
+// branch in codexDispatch that consumes a harvested reading left this package
+// green, and a lane that never consumed one would put Codex quota back to being
+// up to fifteen minutes stale with nothing to show for it.
+func TestAHarvestedReadingIsCommittedWithoutAPoll(t *testing.T) {
+	isolateEngine(t)
+	seedCodexAccount(t, "cx-1")
+
+	polls := 0
+	e := codexEngine(t, codexTokensAreFine,
+		func(context.Context, string, string) (*usage.Snapshot, codexusage.Identity, error) {
+			polls++
+			return codexSnapshot(1), codexusage.Identity{}, nil
+		})
+	e.harvestCodexSample("cx-1", codexSnapshot(90))
+	tick(t, e)
+
+	got, ok := cacheEntry(t, "cx-1")
+	if !ok {
+		t.Fatal("the tick cached nothing, though a harvested reading was waiting")
+	}
+	if pct, known := got.Snapshot.CodexPrimary.Percent(); !known || pct != 90 {
+		t.Fatalf("cached utilization = %v (%v), want the harvested 90", pct, known)
+	}
+	if polls != 0 {
+		t.Fatalf("the lane made %d poll(s) for an account whose reading it already had", polls)
+	}
+	if _, ok := e.CodexSample("cx-1"); ok {
+		t.Fatal("the harvested reading is still held after the tick that committed it; it would be re-committed on every tick until another replaced it")
+	}
+}
+
 // A poll that was already in flight when the proxy harvested a fresher reading
 // must not land on top of it.
 //
