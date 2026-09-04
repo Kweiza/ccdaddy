@@ -139,12 +139,14 @@ func (s *Server) responses(w http.ResponseWriter, r *http.Request) {
 		first       *attempt
 		dead        []string
 		unreachable bool
+		transient   bool
+		refreshed   bool
 	)
 
 	for i, uuid := range order {
 		// Every attempt after the first strips the turn state: it is a
 		// continuation token only the account that issued it can read.
-		a, err := s.send(r.Context(), uuid, r, body, i > 0)
+		a, verdict, err := s.sendWithRefresh(r.Context(), uuid, r, body, i > 0, &refreshed)
 		if err != nil {
 			if errors.Is(err, errNoCredential) {
 				// The request never left this process. That is a fact about the
@@ -155,6 +157,14 @@ func (s *Server) responses(w http.ResponseWriter, r *http.Request) {
 			}
 			s.logf("the codex proxy could not reach the upstream for %s: %v", short(uuid), err)
 			unreachable = true
+			continue
+		}
+		switch verdict {
+		case verdictDead:
+			dead = append(dead, uuid)
+			continue
+		case verdictTransient:
+			transient = true
 			continue
 		}
 		if a.stream != nil {
@@ -195,13 +205,22 @@ func (s *Server) responses(w http.ResponseWriter, r *http.Request) {
 	}
 	// Everything that could be tried has been. The partition below answers from
 	// what the whole search learned rather than from whichever account happened
-	// to refuse first.
-	if first == nil && len(dead) == 0 && unreachable {
-		// Nothing was learned about any account: ccdad could not reach the
-		// upstream at all. Naming an account here would send somebody to fix a
-		// login that is not broken.
-		writeUnavailable(w)
-		return
+	// to refuse first -- but only after the two cases that are not about an
+	// account at all have been taken out of its way.
+	if first == nil && len(dead) == 0 {
+		if transient {
+			// Nothing is wrong with any account; ccdad simply could not repair
+			// a token this minute. Saying "log in again" here would send a user
+			// to re-authenticate an account that is fine.
+			writeRefreshTransient(w)
+			return
+		}
+		if unreachable {
+			// ccdad could not reach the upstream at all. Same rule, different
+			// cause: this is the network, not the login.
+			writeUnavailable(w)
+			return
+		}
 	}
 	s.outOfAccounts(w, order, dead)
 }
