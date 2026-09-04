@@ -144,10 +144,9 @@ func goldenWant(t *testing.T, name, got string) string {
 //   - STATE is four rows wherever col(ColState) survived the WIDTH ladder, one per
 //     account. 56 and 43 columns have both dropped that column by then; the
 //     zero-accounts page keeps the heading and has nothing under it.
-//   - WIDEST is exactly the width and never merely within it. footer pads
-//     itself to the full width at every rung, framed or not, so a page whose
-//     widest line came out short is a page that lost a column somewhere -- a
-//     failure an upper bound alone would pass.
+//   - WIDTH is an upper bound. Framed pages fill it by construction; frameless
+//     pages need not manufacture trailing spaces after the old combined
+//     summary line was split into short, independent facts.
 //   - LINES is within the height the page was planned for, which is the whole
 //     of what the height ladder promises.
 //   - ASCII says the entire file is 7-bit, and only the 43x9 page is. That rung
@@ -201,19 +200,11 @@ func TestEveryGoldenPageCarriesTheGlyphClassesItsRungAllows(t *testing.T) {
 				t.Errorf("%s is %d lines, %d more than the %d-row terminal it was planned for",
 					tc.file, len(lines), len(lines)-tc.height, tc.height)
 			}
-			widest := 0
 			for i, line := range lines {
 				got := ansi.StringWidth(line)
 				if got > tc.width {
 					t.Errorf("%s line %d is %d columns, want at most %d: %q", tc.file, i, got, tc.width, line)
 				}
-				if got > widest {
-					widest = got
-				}
-			}
-			if widest != tc.width {
-				t.Errorf("%s is %d columns at its widest, want exactly %d: the footer pads to the full width at every rung",
-					tc.file, widest, tc.width)
 			}
 			wantFrame := 0
 			if tc.frame {

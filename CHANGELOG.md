@@ -169,6 +169,14 @@ a codex process its launch secret are the next piece of work, so on this build t
 listener binds, answers its health route and forwards for a caller that already
 holds a secret, and no ccdad command hands one out.
 
+### Changed
+
+- **The interactive dashboard gives every summary fact its own row.** Claude
+  and Codex active accounts no longer share a sentence, and strategy and current
+  engine mode no longer compete with either account label for horizontal space.
+  Pinned by `TestEachSummaryFactAndActiveProviderOwnsItsOwnLine` and
+  `TestTheCodexActiveLineIsIncludedInTheHeightBudget`.
+
 ## [0.12.0] — 2026-09-04
 
 The release that gives switching strategy and operational status one command

@@ -157,7 +157,7 @@ func stateCell(g Glyphs, s daemon.AccountState) (glyph, text string, role theme.
 // The mockup showed per-row strategy names here. There is no per-account
 // strategy anywhere in this tree -- strategy is one global config key with two
 // values -- so the column carries the fact that does exist. The global name is
-// in the header line.
+// in the summary block.
 func autoCell(r view.Row) string {
 	if r.Account.Disabled {
 		return "no"

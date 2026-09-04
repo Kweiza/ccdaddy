@@ -77,7 +77,7 @@ func (k KeyMap) FullHelp() [][]key.Binding {
 // ambiguous-width, so on a machine in east-asian width mode they would each
 // silently cost a column the footer had already spent. The ellipsis is the
 // page's own cue rather than a literal spelled a second time here, because the
-// keybar and the header line are cut by the same page and a reader who learns
+// keybar and the summary lines are cut by the same page and a reader who learns
 // what a cut looks like in one place should not have to learn it again in the
 // other.
 //
