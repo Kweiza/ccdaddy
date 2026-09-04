@@ -215,7 +215,7 @@ func opener(pal theme.Palette, r theme.Role) string {
 // that looks fine.
 func TestEachRoleLandsOnTheCellItNames(t *testing.T) {
 	pal := theme.Of(theme.Dark)
-	m := darkModel(113, 26)
+	m := darkModel(113, 29)
 	page := sgr(t, m.Body(), colorprofile.TrueColor)
 	open := func(r theme.Role) string { return opener(pal, r) }
 
@@ -223,7 +223,7 @@ func TestEachRoleLandsOnTheCellItNames(t *testing.T) {
 		{"the wordmark's art", open(theme.RoleAccent) + string(artUpper)},
 		{"the version on the art's last row", open(theme.RoleAccent) + "ccdad "},
 		{"the tagline", open(theme.RoleMuted) + tagline[0]},
-		{"the header line's label", open(theme.RoleHeader) + "Active: "},
+		{"the summary's active label", open(theme.RoleHeader) + "Active (Claude): "},
 		{"the column headings", open(theme.RoleHeader) + "IDX"},
 		{"an active row's state", open(theme.RoleActive) + m.Glyphs.Active + " active"},
 		{"an exhausted row's state", open(theme.RoleExhausted) + m.Glyphs.Exhausted + " exhausted"},
@@ -243,12 +243,12 @@ func TestEachRoleLandsOnTheCellItNames(t *testing.T) {
 		})
 	}
 
-	// The header line's VALUES are not inside its labels' spans. The table pays
+	// The summary's VALUES are not inside its labels' spans. The table pays
 	// the same rule one block down -- the headings carry RoleHeader and the
-	// cells underneath carry their own role or none -- and a header line
+	// cells underneath carry their own role or none -- and a summary line
 	// painted as one span would make the fleet's answers louder than any row.
-	if joined := open(theme.RoleHeader) + "Active: " + m.Snap.ActiveLabel; strings.Contains(page, joined) {
-		t.Errorf("the header line is painted as one span, so the label and the answer read alike")
+	if joined := open(theme.RoleHeader) + "Active (Claude): " + m.Snap.ActiveLabel; strings.Contains(page, joined) {
+		t.Errorf("a summary line is painted as one span, so the label and the answer read alike")
 	}
 
 	// The frame is the page's outermost accent and the top border is the first

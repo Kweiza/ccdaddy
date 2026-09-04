@@ -53,6 +53,12 @@ const (
 	dirPerm  = 0o700
 )
 
+// retryableLookupOpen identifies the Windows errors an open can report while
+// another probe has the same dead launch file marked for deletion. It is a
+// seam so the lookup rule can be tested on every operating system; nothing
+// outside a test assigns to it.
+var retryableLookupOpen = winerr.Retryable
+
 // Dir is where a store's launch records live.
 func Dir(root string) string { return filepath.Join(root, "codex", "launches") }
 
@@ -230,7 +236,7 @@ func lookupHash(dir, h string) (Record, LookupResult, error) {
 		return Record{}, Unknown, nil
 	}
 	if err != nil {
-		return Record{}, Unknown, fmt.Errorf("reading a codex launch record: %w", err)
+		return lookupOpenFailure("reading a codex launch record", err)
 	}
 	var rec Record
 	if err := json.Unmarshal(data, &rec); err != nil {
@@ -267,7 +273,7 @@ func lookupHash(dir, h string) (Record, LookupResult, error) {
 		// A record with no lock beside it: nothing is holding this launch open.
 		return Record{}, Dead, errors.Join(removeIfPresent(jsonPath), removeIfPresent(lockPath))
 	case err != nil:
-		return Record{}, Unknown, fmt.Errorf("locking a codex launch record: %w", err)
+		return lookupOpenFailure("locking a codex launch record", err)
 	case !locked:
 		// The try-lock FAILED, and that failure is the evidence. A SHARED
 		// request can only be refused by an EXCLUSIVE holder, other probes take
@@ -286,6 +292,20 @@ func lookupHash(dir, h string) (Record, LookupResult, error) {
 	// does. A guard would have to be a second lock over the pair of files,
 	// bought to make two harmless answers identical.
 	return Record{}, Dead, errors.Join(fl.Unlock(), removeIfPresent(jsonPath), removeIfPresent(lockPath))
+}
+
+// lookupOpenFailure distinguishes a real filesystem failure from the Windows
+// shape of losing a race with another probe that is already reaping this dead
+// launch. Windows can answer an open of a delete-pending file with access,
+// sharing or lock violation rather than file-not-found. That is still a miss:
+// no live launcher was proved, so Unknown refuses the bearer just as Dead does.
+// It must not be reported or retried on the request path, and whatever survived
+// the first removal is collected by the next sweep.
+func lookupOpenFailure(action string, err error) (Record, LookupResult, error) {
+	if retryableLookupOpen(err) {
+		return Record{}, Unknown, nil
+	}
+	return Record{}, Unknown, fmt.Errorf("%s: %w", action, err)
 }
 
 // hashOf is the record name for a secret.

@@ -67,7 +67,7 @@ type Layout struct {
 	Notice                     bool // the "note: ..." line; see Plan's notice parameter
 	Runway                     bool // the "Runway: ..." line; see Plan's runway parameter
 	Border, Blanks             bool
-	Title, Header              bool // Header is the Active/Strategy/Current line
+	Title, Header              bool // Header is the Active/Strategy/Current summary block
 
 	// VisibleRows is an UPPER BOUND on how many account rows to render, not a
 	// count of rows that are actually shown: at the scrolling rung the last
@@ -171,13 +171,16 @@ func Plan(set ColumnSet, cols view.Columns, width, height, rows int, notice, run
 	if runway {
 		runwayRows = 1
 	}
-	return planWithRows(set, cols, width, height, rows, notice, runway, 1, runwayRows)
+	// Active and Strategy always exist. Model.Body supplies the exact count,
+	// including an optional Codex active row and Current, through planWithRows.
+	return planWithRows(set, cols, width, height, rows, notice, runway, 1, runwayRows, 2)
 }
 
-// planWithRows extends Plan with the two dynamic vertical blocks: the wrapped
-// key bar and the one-line-per-fact runway summary.
+// planWithRows extends Plan with the dynamic vertical blocks: the wrapped key
+// bar, the one-line-per-fact runway summary, and the one-line-per-fact status
+// summary.
 func planWithRows(set ColumnSet, cols view.Columns, width, height, rows int,
-	notice, runway bool, footerRows, runwayRows int) Layout {
+	notice, runway bool, footerRows, runwayRows, summaryRows int) Layout {
 	var l Layout
 	l.FooterRows = 1
 	if footerRows > 0 {
@@ -203,7 +206,7 @@ func planWithRows(set ColumnSet, cols view.Columns, width, height, rows int,
 	}
 
 	planWidth(&l, set, cols, width)
-	planHeight(&l, height, rows, notice, runway)
+	planHeight(&l, height, rows, summaryRows, notice, runway)
 
 	return l
 }
@@ -380,22 +383,20 @@ func withoutColumns(cols []Column, drop ...Column) []Column {
 
 // The height ladder's row budget: wordmark 5 rows, tagline 2 rows plus its
 // blank, figures 6 rows plus its blank, the border 2 rows, the two remaining
-// blank separators, the one-row title and the Active/Strategy/Current line.
-// Fixed rows total 22, independent of the account row count -- N of those is
-// added on top, in planHeight, never folded into this constant. Neither the
-// notice line nor the runway line is part of the fixed 22 either: each exists
-// only when Plan is told it does, which is exactly what Plan's notice and
-// runway parameters say.
+// blank separators and the one-row title. Fixed rows total 21, independent of
+// the account row count and the summary block -- both are added on top in
+// planHeight, never folded into this constant. Neither the notice line nor the
+// runway line is part of the fixed 21 either: each exists only when Plan is
+// told it does, which is exactly what Plan's notice and runway parameters say.
 const (
-	fixedRows      = 22
-	saveFigures    = 7 // 6 rows plus its blank
-	saveNotice     = 1 // the "note: ..." line, when notice is true
-	saveTagline    = 3 // 2 rows plus its blank
-	saveWordmark   = 4 // 5 rows down to titleLine's 1
-	saveBorder     = 2
-	saveBlanks     = 2
-	saveTitle      = 1
-	saveHeaderLine = 1 // the Active/Strategy/Current line
+	fixedRows    = 21
+	saveFigures  = 7 // 6 rows plus its blank
+	saveNotice   = 1 // the "note: ..." line, when notice is true
+	saveTagline  = 3 // 2 rows plus its blank
+	saveWordmark = 4 // 5 rows down to titleLine's 1
+	saveBorder   = 2
+	saveBlanks   = 2
+	saveTitle    = 1
 )
 
 // planHeight is the height ladder: which blocks survive, in the order they
@@ -403,9 +404,10 @@ const (
 // dropped. The column header row, at least one account row and the footer are
 // never dropped — dropping past them is what VisibleRows scrolling is for.
 //
-// The tagline is the first decorative block to go. This keeps the family art
-// visible at the 80x24 design target even when the complete key bar wraps to a
-// second row.
+// The tagline is the first decorative block to go. The two blank separators
+// go next, before the family art. With the multi-row summary and a complete key
+// bar, that order keeps the family visible at the 80x24 design target while
+// spending only vertical whitespace.
 //
 // The runway line sits one rung below the notice, which decides what happens at
 // the single height where exactly one of the two fits: the note gives and the
@@ -423,14 +425,14 @@ const (
 // -- once Wordmark is false. Title=false on its own therefore only ever
 // happens after Wordmark is already false: it means the version string is
 // gone from the page entirely, not that it moved.
-func planHeight(l *Layout, height, rows int, notice, runway bool) {
+func planHeight(l *Layout, height, rows, summaryRows int, notice, runway bool) {
 	l.Wordmark, l.Tagline, l.Figures = true, true, true
 	l.Notice = notice
 	l.Runway = runway
 	l.Border, l.Blanks = true, true
 	l.Title, l.Header = true, true
 
-	need := fixedRows + rows
+	need := fixedRows + rows + summaryRows
 	need += l.FooterRows - 1
 	if notice {
 		need += saveNotice
@@ -442,6 +444,10 @@ func planHeight(l *Layout, height, rows int, notice, runway bool) {
 	if need > height {
 		need -= saveTagline
 		l.Tagline = false
+	}
+	if need > height {
+		need -= saveBlanks
+		l.Blanks = false
 	}
 	if need > height {
 		need -= saveFigures
@@ -464,15 +470,11 @@ func planHeight(l *Layout, height, rows int, notice, runway bool) {
 		l.Border = false
 	}
 	if need > height {
-		need -= saveBlanks
-		l.Blanks = false
-	}
-	if need > height {
 		need -= saveTitle
 		l.Title = false
 	}
 	if need > height {
-		need -= saveHeaderLine
+		need -= summaryRows
 		l.Header = false
 	}
 

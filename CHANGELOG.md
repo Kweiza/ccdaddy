@@ -18,6 +18,91 @@ by `uuid` or `alias`.
 
 ### Added
 
+- **`codex` typed at a prompt now goes through ccdad.** `ccdad codex shim
+  install` writes a two-line script at `~/.ccdad/bin/codex` and registers that
+  directory through the same fenced block `ccdad setup-path` manages, so there
+  is one block on the machine and `ccdad uninstall` takes it back. Typing
+  `codex` then runs `ccdad codex exec`, which starts the real codex with its API
+  base pointed at the loopback proxy the daemon runs: codex holds no OAuth token
+  at all, and the account a session is billed to is the one ccdad chose.
+  `ccdad run <a Codex account>` starts the same session pinned to that account
+  and refuses rather than falling back, because falling back would bill an
+  account nobody named. A switch takes effect on the next NEW thread — every
+  request carries reasoning encrypted for the account that produced it, so a
+  thread stays with the account it started on. `codex login` and `codex logout`
+  are handed to the real codex untouched, since both revoke a grant
+  server-side with no undo — a pinned `ccdad run` refuses those two tails
+  instead, because neither verb so much as reads the account it was given. It
+  refuses `--full-profile` on the same account for the same kind of reason: the
+  flag scopes a Claude Code config home, a codex session reads none, and a
+  launch that accepted the word and dropped it would report a success that did
+  not do what was asked. That refusal covers every flag such a launch can be
+  handed — `ccdad run`'s own, and any the binary declares globally — and the
+  reason it gives says which of the two it refused, because a global flag is
+  not one `ccdad run` reads only on the Claude route. And `codex login status`
+  still answers about `~/.codex`, which ccdad does not use. Pinned by
+  `TestTheCodexShimIsExactlyTheTwoLinesItHasToBe`,
+  `TestCodexShimInstallWritesTheShimAndRegistersItsDirectory`,
+  `TestCodexExecSpawnsCodexWithTheSevenOverridesAndTheKey`,
+  `TestRunOnACodexAccountPinsTheLaunch`,
+  `TestRunOnACodexAccountRefusesWhenThereIsNoProxy`,
+  `TestCodexLoginAndLogoutAreNotRouted`,
+  `TestRunOnACodexAccountRefusesTheLoginAndLogoutTails`,
+  `TestRunOnACodexAccountRefusesTheFlagsItCannotHonour`,
+  `TestRunOnACodexAccountWithNoRefusedFlagStillLaunches`,
+  `TestEveryRunFlagHasAnAnswerOnTheCodexRoute`,
+  `TestTheCodexRouteAnswerWalkSeesAGlobalFlag`,
+  `TestTheGenericCodexRefusalIsTrueOfTheFlagItNames` and
+  `TestARealCodexReachesTheUpstreamThroughTheProxy`.
+
+- **`ccdad setup-path` now registers a set of directories it derives on every
+  run**, rather than the one it was told about once — ccdad's own, unless a
+  package manager owns it, plus the codex shim's whenever one is installed. A
+  plain `ccdad setup-path` after a shim install therefore keeps the shim
+  instead of quietly dropping it, and a Homebrew ccdad still registers the shim
+  directory even though Homebrew manages its own. `ccdad doctor` gained a
+  `codex-shim` row saying which codex a bare `codex` resolves to, and `ccdad
+  run` and `ccdad codex exec` are now allowed to start a daemon, because the
+  account they serve is reached through one. There is no shim on Windows: run
+  `ccdad codex exec -- <args>` there. The row also says why a shim that is
+  there will not run, and it names the one cause it found rather than a list:
+  an execute bit this user does not have on a file this user owns is ccdad's
+  own repair, and `ccdad codex shim install` puts it back — including on a mode
+  like `0655`, whose two execute bits belong to group and other and none of
+  them to the owner the kernel reads them for; a file owned by somebody else is
+  a `sudo chown`, because ccdad's chmod on it is refused before it starts; and
+  a file this user owns whose own execute bit is set and which still will not
+  run is an ACL entry, which is `chmod -N` (or `setfacl -b`) and no reinstall.
+  `ccdad codex shim install` agrees with the row on all three — it repairs the
+  first and refuses the other two — and every mode in both is spelled the way
+  the rest of `ccdad doctor` spells one, `0755` rather than `-rwxr-xr-x`.
+  Pinned by `TestSetupPathKeepsTheShimDirectoryOnALaterPlainRun`,
+  `TestSetupPathRegistersTheShimDirectoryForAPackageManagerInstall`,
+  `TestDoctorWarnsWhenCodexIsNotRoutedThroughCcdad`,
+  `TestDoctorDoesNotOfferAnInstallForAnACLItCannotClear`,
+  `TestDoctorDoesNotOfferAnACLRepairForAShimThisUserDoesNotOwn`,
+  `TestDoctorNamesTheInstallForAnExecuteBitThatIsNotThisUsers`,
+  `TestCodexShimInstallRefusesAShimItCannotMakeRunnable`,
+  `TestCodexShimInstallRefusesAShimThisUserDoesNotOwn`,
+  `TestCodexShimInstallPutsBackAnExecuteBitThatIsNotThisUsers`,
+  `TestCodexShimInstallDoesNotClaimAChmodItCannotMake`,
+  `TestCodexExecIsOnTheAutoStartAllowList` and
+  `TestCodexShimInstallRefusesOnWindows`.
+
+What is still not routed is deliberate rather than pending. An IDE or a desktop
+app that spawns codex itself never consults your shell's PATH, so the shim is
+not in front of it and it spends whatever `~/.codex` holds; `ccdad doctor`'s
+`codex-shim` row says which codex a bare `codex` resolves to, and its
+`codex-proxy` row counts the launches ccdad itself had to start with no proxy
+in front of them.
+
+## [0.13.0] — 2026-09-04
+
+The release that puts the daemon half of live Codex switching in place, and
+gives every dashboard fact and family member room of its own.
+
+### Added
+
 - **The ccdad daemon now listens on loopback, and a Codex turn can be forwarded
   through it with the serving account's bearer.** This is the piece that makes a
   Codex switch take effect without restarting codex, and the reason it exists is
@@ -164,83 +249,23 @@ by `uuid` or `alias`.
   Pinned by `TestAClientHangupNeverCancelsTheGrantExchange` and
   `TestTheForwardedTurnItselfStaysCancellable`.
 
-- **`codex` typed at a prompt now goes through ccdad.** `ccdad codex shim
-  install` writes a two-line script at `~/.ccdad/bin/codex` and registers that
-  directory through the same fenced block `ccdad setup-path` manages, so there
-  is one block on the machine and `ccdad uninstall` takes it back. Typing
-  `codex` then runs `ccdad codex exec`, which starts the real codex with its API
-  base pointed at the loopback proxy the daemon runs: codex holds no OAuth token
-  at all, and the account a session is billed to is the one ccdad chose.
-  `ccdad run <a Codex account>` starts the same session pinned to that account
-  and refuses rather than falling back, because falling back would bill an
-  account nobody named. A switch takes effect on the next NEW thread — every
-  request carries reasoning encrypted for the account that produced it, so a
-  thread stays with the account it started on. `codex login` and `codex logout`
-  are handed to the real codex untouched, since both revoke a grant
-  server-side with no undo — a pinned `ccdad run` refuses those two tails
-  instead, because neither verb so much as reads the account it was given. It
-  refuses `--full-profile` on the same account for the same kind of reason: the
-  flag scopes a Claude Code config home, a codex session reads none, and a
-  launch that accepted the word and dropped it would report a success that did
-  not do what was asked. That refusal covers every flag such a launch can be
-  handed — `ccdad run`'s own, and any the binary declares globally — and the
-  reason it gives says which of the two it refused, because a global flag is
-  not one `ccdad run` reads only on the Claude route. And `codex login status`
-  still answers about `~/.codex`, which ccdad does not use. Pinned by
-  `TestTheCodexShimIsExactlyTheTwoLinesItHasToBe`,
-  `TestCodexShimInstallWritesTheShimAndRegistersItsDirectory`,
-  `TestCodexExecSpawnsCodexWithTheSevenOverridesAndTheKey`,
-  `TestRunOnACodexAccountPinsTheLaunch`,
-  `TestRunOnACodexAccountRefusesWhenThereIsNoProxy`,
-  `TestCodexLoginAndLogoutAreNotRouted`,
-  `TestRunOnACodexAccountRefusesTheLoginAndLogoutTails`,
-  `TestRunOnACodexAccountRefusesTheFlagsItCannotHonour`,
-  `TestRunOnACodexAccountWithNoRefusedFlagStillLaunches`,
-  `TestEveryRunFlagHasAnAnswerOnTheCodexRoute`,
-  `TestTheCodexRouteAnswerWalkSeesAGlobalFlag`,
-  `TestTheGenericCodexRefusalIsTrueOfTheFlagItNames` and
-  `TestARealCodexReachesTheUpstreamThroughTheProxy`.
+Nothing points codex at this proxy yet. The PATH shim and the launcher that hand
+a codex process its launch secret are the next piece of work, so on this build the
+listener binds, answers its health route and forwards for a caller that already
+holds a secret, and no ccdad command hands one out.
 
-- **`ccdad setup-path` now registers a set of directories it derives on every
-  run**, rather than the one it was told about once — ccdad's own, unless a
-  package manager owns it, plus the codex shim's whenever one is installed. A
-  plain `ccdad setup-path` after a shim install therefore keeps the shim
-  instead of quietly dropping it, and a Homebrew ccdad still registers the shim
-  directory even though Homebrew manages its own. `ccdad doctor` gained a
-  `codex-shim` row saying which codex a bare `codex` resolves to, and `ccdad
-  run` and `ccdad codex exec` are now allowed to start a daemon, because the
-  account they serve is reached through one. There is no shim on Windows: run
-  `ccdad codex exec -- <args>` there. The row also says why a shim that is
-  there will not run, and it names the one cause it found rather than a list:
-  an execute bit this user does not have on a file this user owns is ccdad's
-  own repair, and `ccdad codex shim install` puts it back — including on a mode
-  like `0655`, whose two execute bits belong to group and other and none of
-  them to the owner the kernel reads them for; a file owned by somebody else is
-  a `sudo chown`, because ccdad's chmod on it is refused before it starts; and
-  a file this user owns whose own execute bit is set and which still will not
-  run is an ACL entry, which is `chmod -N` (or `setfacl -b`) and no reinstall.
-  `ccdad codex shim install` agrees with the row on all three — it repairs the
-  first and refuses the other two — and every mode in both is spelled the way
-  the rest of `ccdad doctor` spells one, `0755` rather than `-rwxr-xr-x`.
-  Pinned by `TestSetupPathKeepsTheShimDirectoryOnALaterPlainRun`,
-  `TestSetupPathRegistersTheShimDirectoryForAPackageManagerInstall`,
-  `TestDoctorWarnsWhenCodexIsNotRoutedThroughCcdad`,
-  `TestDoctorDoesNotOfferAnInstallForAnACLItCannotClear`,
-  `TestDoctorDoesNotOfferAnACLRepairForAShimThisUserDoesNotOwn`,
-  `TestDoctorNamesTheInstallForAnExecuteBitThatIsNotThisUsers`,
-  `TestCodexShimInstallRefusesAShimItCannotMakeRunnable`,
-  `TestCodexShimInstallRefusesAShimThisUserDoesNotOwn`,
-  `TestCodexShimInstallPutsBackAnExecuteBitThatIsNotThisUsers`,
-  `TestCodexShimInstallDoesNotClaimAChmodItCannotMake`,
-  `TestCodexExecIsOnTheAutoStartAllowList` and
-  `TestCodexShimInstallRefusesOnWindows`.
+### Changed
 
-What is still not routed is deliberate rather than pending. An IDE or a desktop
-app that spawns codex itself never consults your shell's PATH, so the shim is
-not in front of it and it spends whatever `~/.codex` holds; `ccdad doctor`'s
-`codex-shim` row says which codex a bare `codex` resolves to, and its
-`codex-proxy` row counts the launches ccdad itself had to start with no proxy
-in front of them.
+- **The interactive dashboard gives every summary fact its own row.** Claude
+  and Codex active accounts no longer share a sentence, and strategy and current
+  engine mode no longer compete with either account label for horizontal space.
+  Pinned by `TestEachSummaryFactAndActiveProviderOwnsItsOwnLine` and
+  `TestTheCodexActiveLineIsIncludedInTheHeightBudget`.
+
+- **The dashboard family keeps the README proportions.** Both Claude and Codex
+  babies now use the original block-creature silhouette without antennas, are
+  smaller than Daddy on both axes, and overlap their neighbours by 30% while a
+  one-pixel ground contour keeps the four figures readable.
 
 ## [0.12.0] — 2026-09-04
 
@@ -3242,7 +3267,8 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/Kweiza/ccdaddy/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/Kweiza/ccdaddy/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/Kweiza/ccdaddy/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/Kweiza/ccdaddy/compare/v0.10.0...v0.10.1

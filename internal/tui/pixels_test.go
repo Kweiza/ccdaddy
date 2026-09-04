@@ -155,6 +155,257 @@ func TestASolidCellIsPaintedOnBothChannels(t *testing.T) {
 	}
 }
 
+// The two baby masks are the visual approval boundary. A page golden cannot
+// hold this by itself: under the unpainted theme a fully inked cell and a cell
+// with only its top half inked both print U+2580, so changing one raw pixel can
+// leave every golden byte-identical. These literals preserve the README
+// family's block bodies while keeping Codex's distinction to a five-pixel
+// face cue instead of the old antenna-and-screen silhouette.
+func TestTheBabySpritesMatchTheirApprovedClaudeAndCodexSilhouettes(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		got  pixelSprite
+		want []string
+	}{
+		{"baby Claude", babyClaudeArt, []string{
+			`.11111111.`,
+			`.11111111.`,
+			`.11.11.11.`,
+			`.11.11.11.`,
+			`1111111111`,
+			`1111111111`,
+			`..1.1.1.1.`,
+			`..1.1.1.1.`,
+		}},
+		{"baby Codex", babyCodexArt, []string{
+			`.11111111.`,
+			`.11111111.`,
+			`.11.11111.`,
+			`.111.1111.`,
+			`111.1..111`,
+			`1111111111`,
+			`..1.1.1.1.`,
+			`..1.1.1.1.`,
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.got.W != babyWidth {
+				t.Errorf("sprite width = %d, want %d", tc.got.W, babyWidth)
+			}
+			if got, want := strings.Join(tc.got.Rows, "\n"), strings.Join(tc.want, "\n"); got != want {
+				t.Errorf("sprite changed:\n got:\n%s\nwant:\n%s", got, want)
+			}
+		})
+	}
+}
+
+type inkBounds struct {
+	left, top, right, bottom int
+}
+
+func boundsOf(s pixelSprite) inkBounds {
+	b := inkBounds{left: s.W, top: len(s.Rows), right: -1, bottom: -1}
+	for y, row := range s.Rows {
+		for x := 0; x < len(row); x++ {
+			if row[x] == artGround {
+				continue
+			}
+			if x < b.left {
+				b.left = x
+			}
+			if x > b.right {
+				b.right = x
+			}
+			if y < b.top {
+				b.top = y
+			}
+			if y > b.bottom {
+				b.bottom = y
+			}
+		}
+	}
+	return b
+}
+
+func (b inkBounds) width() int  { return b.right - b.left + 1 }
+func (b inkBounds) height() int { return b.bottom - b.top + 1 }
+
+// Size and overlap are properties of the component figures, not of the final
+// union mask. Keeping the placements is what makes both claims measurable:
+// four anonymous silhouettes baked into figureArt could be separated, fused,
+// or adult-sized with no reliable way to recover their intended boundaries.
+func TestTheBabiesAreSmallerThanDaddyAndOverlapByThirtyPercent(t *testing.T) {
+	var babies []placedFigure
+	var daddy *placedFigure
+	claudes, codices := 0, 0
+	for i := range familyFigures {
+		figure := &familyFigures[i]
+		switch figure.Kind {
+		case babyClaude:
+			claudes++
+			babies = append(babies, *figure)
+		case babyCodex:
+			codices++
+			babies = append(babies, *figure)
+		case daddyClaude:
+			daddy = figure
+		}
+	}
+	if len(babies) != 4 || claudes != 2 || codices != 2 {
+		t.Fatalf("family has %d babies (%d Claude, %d Codex), want four (two and two)", len(babies), claudes, codices)
+	}
+	if daddy == nil {
+		t.Fatal("family has no Daddy Claude")
+	}
+
+	daddyBounds := boundsOf(*daddy.Sprite)
+	for i, baby := range babies {
+		b := boundsOf(*baby.Sprite)
+		if b.left != 0 || b.right != baby.Sprite.W-1 || b.top != 0 || b.bottom != len(baby.Sprite.Rows)-1 {
+			t.Errorf("baby %d has padded bounds %+v inside %dx%d", i, b, baby.Sprite.W, len(baby.Sprite.Rows))
+		}
+		if b.width() >= daddyBounds.width() || b.height() >= daddyBounds.height() {
+			t.Errorf("baby %d is %dx%d, want both dimensions below Daddy's %dx%d",
+				i, b.width(), b.height(), daddyBounds.width(), daddyBounds.height())
+		}
+	}
+
+	for i := 0; i+1 < len(babies); i++ {
+		left, right := babies[i], babies[i+1]
+		lb, rb := boundsOf(*left.Sprite), boundsOf(*right.Sprite)
+		leftEdge := left.X + lb.left
+		leftEnd := left.X + lb.right
+		rightEdge := right.X + rb.left
+		overlap := leftEnd - rightEdge + 1
+		if rightEdge <= leftEdge {
+			t.Fatalf("babies are not ordered left to right at pair %d: %d then %d", i, leftEdge, rightEdge)
+		}
+		if overlap != babyOverlap || 10*overlap != 3*lb.width() || 10*overlap != 3*rb.width() {
+			t.Errorf("babies %d and %d overlap by %d pixels across widths %d and %d; want %d pixels, exactly 30%%",
+				i, i+1, overlap, lb.width(), rb.width(), babyOverlap)
+		}
+	}
+}
+
+// The raw composition is an approval boundary in addition to the page golden.
+// Folding two raw rows into one terminal row can hide a one-pixel regression,
+// and a union-only assertion cannot distinguish four children from one fused
+// shape. This pins the source-like faces, the overlap contours and Daddy's
+// two-lobed moustache before folding loses that information.
+func TestTheComposedFamilyMatchesItsApprovedRawSilhouette(t *testing.T) {
+	want := []string{
+		`.....................................11111111...`,
+		`.....................................11111111...`,
+		`........111111........11111111....11111111111111`,
+		`.111111.111111.111111.11111111.....111111111111.`,
+		`.111111.11.111.111111.11.11111.....11..1111..11.`,
+		`.11.11..111.11.11.11..111.1111.....11..1111..11.`,
+		`.11.11..11.1...11.11..11.1..111....111..11..111.`,
+		`1111111.111111.111111.111111111....1111....1111.`,
+		`1111111..1.1.1.111111..1.1.1.1....11111111111111`,
+		`..1.1.1..1.1.1..1.1.1..1.1.1.1.....111111111111.`,
+		`..1.1.1.........1.1.1...............11.11.11.11.`,
+		`....................................11.11.11.11.`,
+	}
+	if got := strings.Join(figureArt.Rows, "\n"); got != strings.Join(want, "\n") {
+		t.Errorf("composed family changed:\n got:\n%s\nwant:\n%s", got, strings.Join(want, "\n"))
+	}
+}
+
+// Each visible baby must remain one useful silhouette after occlusion. Four
+// components rule out fused bodies; the size floor rules out the detached
+// one- and two-pixel feet which a rectangular overwrite used to leave behind.
+func TestEveryComposedBabyIsSeparateAndHasNoDetachedFragments(t *testing.T) {
+	const babyClusterWidth = 31
+	seen := make([][]bool, len(figureArt.Rows))
+	for y := range seen {
+		seen[y] = make([]bool, babyClusterWidth)
+	}
+
+	type point struct{ x, y int }
+	var sizes []int
+	for y, row := range figureArt.Rows {
+		for x := 0; x < babyClusterWidth; x++ {
+			if row[x] != '1' || seen[y][x] {
+				continue
+			}
+			queue := []point{{x: x, y: y}}
+			seen[y][x] = true
+			size := 0
+			for len(queue) > 0 {
+				p := queue[0]
+				queue = queue[1:]
+				size++
+				for _, d := range []point{{x: -1}, {x: 1}, {y: -1}, {y: 1}} {
+					nx, ny := p.x+d.x, p.y+d.y
+					if nx < 0 || nx >= babyClusterWidth || ny < 0 || ny >= len(figureArt.Rows) || seen[ny][nx] {
+						continue
+					}
+					if figureArt.Rows[ny][nx] == '1' {
+						seen[ny][nx] = true
+						queue = append(queue, point{x: nx, y: ny})
+					}
+				}
+			}
+			sizes = append(sizes, size)
+		}
+	}
+
+	if len(sizes) != 4 {
+		t.Fatalf("baby cluster has %d connected ink silhouettes with sizes %v, want four", len(sizes), sizes)
+	}
+	for i, size := range sizes {
+		if size < 30 {
+			t.Errorf("baby silhouette %d is only %d pixels, likely a detached fragment", i, size)
+		}
+	}
+}
+
+func TestTheFigureComposerCutsAContinuousGroundContourAtAnOverlap(t *testing.T) {
+	block := pixelSprite{W: 3, Rows: []string{`111`, `111`}}
+	g, err := composeFigureArt(5, 2, []placedFigure{
+		{Sprite: &block, X: 0, Y: 0},
+		{Sprite: &block, X: 2, Y: 0},
+	})
+	if err != nil {
+		t.Fatalf("compose a valid overlap: %v", err)
+	}
+	for y, row := range g.Rows {
+		if row != `11.11` {
+			t.Errorf("row %d = %q, want a ground pixel between the two bodies", y, row)
+		}
+	}
+}
+
+func TestTheFigureComposerRejectsMalformedSpritesAndPlacements(t *testing.T) {
+	good := pixelSprite{W: 2, Rows: []string{`11`, `11`}}
+	empty := pixelSprite{}
+	short := pixelSprite{W: 2, Rows: []string{`1`, `11`}}
+	badPixel := pixelSprite{W: 2, Rows: []string{`1x`, `11`}}
+
+	for _, tc := range []struct {
+		name        string
+		w, h        int
+		figures     []placedFigure
+		wantInError string
+	}{
+		{"odd canvas height", 4, 3, nil, "positive even height"},
+		{"nil sprite", 4, 2, []placedFigure{{}}, "no sprite"},
+		{"empty sprite", 4, 2, []placedFigure{{Sprite: &empty}}, "empty"},
+		{"negative placement", 4, 2, []placedFigure{{Sprite: &good, X: -1}}, "exceeds"},
+		{"overflowing placement", 4, 2, []placedFigure{{Sprite: &good, X: 3}}, "exceeds"},
+		{"short row", 4, 2, []placedFigure{{Sprite: &short}}, "row 0"},
+		{"unknown pixel", 4, 2, []placedFigure{{Sprite: &badPixel}}, "column 1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := composeFigureArt(tc.w, tc.h, tc.figures)
+			if err == nil || !strings.Contains(err.Error(), tc.wantInError) {
+				t.Fatalf("error = %v, want one containing %q", err, tc.wantInError)
+			}
+		})
+	}
+}
+
 // The grids are hand-maintained data, and every one of these is a way a hand
 // edit goes wrong silently.
 //
@@ -165,26 +416,27 @@ func TestASolidCellIsPaintedOnBothChannels(t *testing.T) {
 // nobody put there.
 func TestTheGridsAreWellFormed(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		g    artGrid
-		rows int
+		name       string
+		w          int
+		rows       []string
+		foldedRows int
 	}{
-		{"the wordmark", wordArt, 5},
-		{"the figures", figureArt, 6},
+		{"the wordmark", wordArt.W, wordArt.Rows, 5},
+		{"the composed figures", figureArt.W, figureArt.Rows, 6},
+		{"baby Claude", babyClaudeArt.W, babyClaudeArt.Rows, 4},
+		{"baby Codex", babyCodexArt.W, babyCodexArt.Rows, 4},
+		{"Daddy Claude", daddyClaudeArt.W, daddyClaudeArt.Rows, 6},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if tc.g.W != 48 {
-				t.Errorf("the grid is %d cells wide, want 48: both blocks share the figure block's anchor", tc.g.W)
+			if len(tc.rows)%2 != 0 {
+				t.Fatalf("the grid has %d pixel rows, which is odd: the fold takes them in pairs", len(tc.rows))
 			}
-			if len(tc.g.Rows)%2 != 0 {
-				t.Fatalf("the grid has %d pixel rows, which is odd: the fold takes them in pairs", len(tc.g.Rows))
+			if got := len(tc.rows) / 2; got != tc.foldedRows {
+				t.Errorf("the grid is %d terminal rows, want %d", got, tc.foldedRows)
 			}
-			if got := tc.g.height(); got != tc.rows {
-				t.Errorf("the grid is %d terminal rows, want %d: the height ladder budgets that many", got, tc.rows)
-			}
-			for i, row := range tc.g.Rows {
-				if len(row) != tc.g.W {
-					t.Errorf("pixel row %d is %d characters, want %d: %q", i, len(row), tc.g.W, row)
+			for i, row := range tc.rows {
+				if len(row) != tc.w {
+					t.Errorf("pixel row %d is %d characters, want %d: %q", i, len(row), tc.w, row)
 				}
 				for j := 0; j < len(row); j++ {
 					if row[j] != artGround && row[j] != '1' {
