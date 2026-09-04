@@ -105,7 +105,12 @@ by `uuid` or `alias`.
   stripped by name before a turn is forwarded, and two whole families by prefix,
   so a same-uid process cannot smuggle a cookie or an API key onto a request
   carrying ccdad's own bearer; and the upstream's `set-cookie` and edge headers
-  are dropped before the answer reaches codex. The launch bearer, the upstream `Authorization`, request and response
+  are dropped before the answer reaches codex. The upstream is fixed and no
+  answer can move it: Go's client follows a `307` or `308` by replaying the
+  body, which here is the whole thread history travelling beside the workspace
+  id and codex's installation id, so the forwarding client hands a redirect back
+  to codex unfollowed rather than fetching a host the configuration never named.
+  The launch bearer, the upstream `Authorization`, request and response
   bodies and the turn metadata never reach the daemon log. And the whole of this
   is held away from Claude's credential path by a gate on the build graph rather
   than by habit: `internal/switcher`, `internal/tokens` and `internal/credhome`
@@ -114,6 +119,7 @@ by `uuid` or `alias`.
   have caught it — is asserted to be imported by name nowhere here. Pinned by
   `TestSmuggledCredentialAndHopHeadersNeverReachTheUpstream`,
   `TestUpstreamCookiesAndEdgeHeadersNeverReachTheClient`,
+  `TestTheDefaultClientNeverFollowsAnUpstreamRedirect`,
   `TestTheLogNeverCarriesABearerOrABody` and
   `TestTheProxyNeverReachesTheClaudeCredentialPath`.
 

@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -305,5 +306,51 @@ func TestAFaultAfterTheFirstByteBreaksTheConnectionRatherThanBrandingIt(t *testi
 
 	if got := w.Body.String(); got != "data: one\n\n" {
 		t.Fatalf("body = %q, want only what the handler had already streamed", got)
+	}
+}
+
+// The upstream is FIXED -- DefaultUpstream, or whatever the daemon was built
+// with -- and nothing the endpoint answers may move it. A 307 or 308 is
+// exactly such a move: Go's default client follows up to ten hops, and for
+// those two codes it replays the BODY. The body of a codex turn is the whole
+// thread history including its encrypted reasoning, and it travels beside the
+// workspace id and codex's own installation id in the turn metadata; a hop
+// that stays on the upstream's own hostname carries the OAuth access token
+// too. Following one would hand all of that to a host the configuration never
+// named, and send() then reads harvestHeaders off whatever answered, so the
+// redirect target could also have a quota reading committed for the account
+// that paid. The Codex refresher guards the same way for the same reason.
+//
+// What is pinned here is the DEFAULT client, with Config.Client left nil,
+// because nil is what the daemon hands in and defaultClient is therefore the
+// only client production ever forwards through.
+func TestTheDefaultClientNeverFollowsAnUpstreamRedirect(t *testing.T) {
+	var elsewhereHits atomic.Int64
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		elsewhereHits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer elsewhere.Close()
+
+	f := newFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", elsewhere.URL+"/steal")
+		w.WriteHeader(http.StatusTemporaryRedirect)
+	})
+	cfg := f.config()
+	cfg.Client = nil
+	a := f.add("uuid-a", "a@example.com", "access-a")
+	f.serving(t, a.UUID)
+	s := f.server(t, cfg)
+
+	w := post(s, unpinnedSecret, nil, `{"input":["secret prompt text"]}`)
+
+	if n := elsewhereHits.Load(); n != 0 {
+		t.Fatalf("the redirect target was fetched %d time(s); the upstream is fixed and a 3xx may not move it", n)
+	}
+	if got := len(f.took()); got != 1 {
+		t.Fatalf("the fixed upstream saw %d requests, want exactly 1", got)
+	}
+	if w.Code != http.StatusTemporaryRedirect {
+		t.Fatalf("status = %d, want the 307 handed back to codex unfollowed", w.Code)
 	}
 }
