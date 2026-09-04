@@ -2,7 +2,11 @@ package cli
 
 import (
 	"encoding/json"
+	"fmt"
+	"io/fs"
 	"os"
+	"os/exec"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -10,6 +14,60 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 )
+
+// denyExecute puts the machine into the one state this tree has to tell apart
+// from a missing execute bit: a file whose mode says 0o755 and which THIS user
+// still cannot run. It is what an ACL entry and a hostile ownership both look
+// like from Go, and it is the state no chmod ccdad makes can leave.
+//
+// A REAL ACL wherever the platform will make one. Measured on darwin:
+// `chmod +a "user:<me> deny execute" <file>` leaves the file mode 0o755, leaves
+// Perm()&0o111 set, and makes exec.LookPath on it "permission denied" -- so the
+// state under test is the state on a user's machine and not a description of
+// it. The ACL is removed again on cleanup, before the temp directory is.
+//
+// Where no ACL can be made -- another OS, a filesystem mounted without them,
+// a chmod that reports success and changes nothing -- the runnable probe is
+// stubbed for this one path instead, so the arm is covered on every OS this
+// suite runs on rather than only on the one that can build the state for real.
+// It says in the log which of the two it used, because a test that cannot say
+// that proves less than it looks like it does.
+func denyExecute(t *testing.T, path string) {
+	t.Helper()
+	// An ABSOLUTE chmod, because the tests that need this state are the ones
+	// that replace PATH with a shim directory and a fake codex, and a bare
+	// `chmod` there is not found -- which would silently downgrade every one of
+	// them to the stub on the one platform that can do this for real.
+	chmod := ""
+	for _, candidate := range []string{"/bin/chmod", "/usr/bin/chmod"} {
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			chmod = candidate
+			break
+		}
+	}
+	if me, uerr := user.Current(); uerr == nil && runtime.GOOS == "darwin" && chmod != "" {
+		entry := "user:" + me.Username + " deny execute"
+		if out, cerr := exec.Command(chmod, "+a", entry, path).CombinedOutput(); cerr != nil {
+			t.Logf("%s +a could not make an ACL on %s (%v: %s)", chmod, path, cerr, out)
+		} else {
+			t.Cleanup(func() { _ = exec.Command(chmod, "-a", entry, path).Run() })
+			if _, lerr := exec.LookPath(path); lerr != nil {
+				t.Logf("the state under test is a real ACL: %v", lerr)
+				return
+			}
+			t.Logf("%s +a reported success on %s and it is still runnable, so the ACL did not stick", chmod, path)
+		}
+	}
+	saved := shimRunnable
+	t.Cleanup(func() { shimRunnable = saved })
+	shimRunnable = func(p string) error {
+		if p == path {
+			return fmt.Errorf("exec: %q: %w", p, fs.ErrPermission)
+		}
+		return saved(p)
+	}
+	t.Logf("no ACL could be made here, so the runnable probe is stubbed for %s", path)
+}
 
 // The shim body is pinned BYTE FOR BYTE, and every word of it is load-bearing.
 // `exec` replaces the shell rather than leaving one waiting, so the process
@@ -189,6 +247,85 @@ func TestCodexShimInstallRestoresAnExecutableBitSomebodyTookAway(t *testing.T) {
 	}
 	if string(body) != codexShimBody {
 		t.Errorf("the repair left the shim as %q, want %q", body, codexShimBody)
+	}
+}
+
+// A shim ccdad cannot make runnable is NOT "already installed". Everything
+// install compares is a write it can make -- the body, the record, the mode --
+// and a shim held down by an ACL entry passes all three while being unable to
+// start. Reporting exit 3 there is the failure this refusal exists for: doctor
+// sends the user to this command, the command says the shim is already there,
+// and the row keeps saying the same thing forever.
+func TestCodexShimInstallRefusesAShimItCannotMakeRunnable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("there is no shim on Windows; the refusal has its own test")
+	}
+	isolate(t)
+	t.Setenv("SHELL", "/bin/bash")
+	t.Setenv("PATH", "/usr/bin:/bin")
+	t.Setenv("HOMEBREW_PREFIX", "")
+	t.Setenv("SCOOP", "")
+	stubExecutable(t, filepath.Join(t.TempDir(), "ccdad"))
+
+	if code, _, errOut, _ := runRoot(t, "codex", "shim", "install"); code != ExitOK {
+		t.Fatalf("the first install = %d, want %d\n%s", code, ExitOK, errOut)
+	}
+	denyExecute(t, shimPath())
+
+	code, _, errOut, top := runRoot(t, "codex", "shim", "install")
+	if code != ExitBlocked {
+		t.Fatalf("install over a shim ccdad cannot make runnable = %d, want %d (there is nothing it can "+
+			"write that fixes this)\n%s\n%s", code, ExitBlocked, errOut, top)
+	}
+	said := errOut + top
+	if !strings.Contains(said, "ACL") {
+		t.Errorf("the refusal does not say what is holding the shim down:\n%s", said)
+	}
+	if !strings.Contains(said, "chmod -N") {
+		t.Errorf("the refusal does not name what the user can do about it:\n%s", said)
+	}
+	if strings.Contains(said, "already") {
+		t.Errorf("the refusal still reports the shim as already installed:\n%s", said)
+	}
+}
+
+// The same refusal from the other side of the early return: with the record
+// deleted, install takes the WRITE path, rewrites the body and chmods 0o755 --
+// and a deny entry is not a mode bit, so the shim comes out of that chmod
+// exactly as unrunnable as it went in. Without the probe after the chmod the
+// command prints "Wrote <shim>. A new terminal runs `codex` through ccdad" on a
+// machine where no terminal will.
+func TestCodexShimInstallDoesNotClaimAChmodItCannotMake(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("there is no shim on Windows; the refusal has its own test")
+	}
+	isolate(t)
+	t.Setenv("SHELL", "/bin/bash")
+	t.Setenv("PATH", "/usr/bin:/bin")
+	t.Setenv("HOMEBREW_PREFIX", "")
+	t.Setenv("SCOOP", "")
+	stubExecutable(t, filepath.Join(t.TempDir(), "ccdad"))
+
+	if code, _, errOut, _ := runRoot(t, "codex", "shim", "install"); code != ExitOK {
+		t.Fatalf("the first install = %d, want %d\n%s", code, ExitOK, errOut)
+	}
+	if err := os.Remove(shimRecordPath()); err != nil {
+		t.Fatal(err)
+	}
+	denyExecute(t, shimPath())
+
+	code, _, errOut, top := runRoot(t, "codex", "shim", "install")
+	if code != ExitBlocked {
+		t.Fatalf("install that rewrote a shim it cannot run = %d, want %d\n%s\n%s",
+			code, ExitBlocked, errOut, top)
+	}
+	if strings.Contains(errOut+top, "A new terminal runs") {
+		t.Errorf("install claimed the shim now works:\n%s\n%s", errOut, top)
+	}
+	// The record is what setup-path's derived set keys on, so it must not come
+	// back for a shim ccdad just found it cannot run.
+	if _, err := os.Stat(shimRecordPath()); err == nil {
+		t.Error("install wrote the install record for a shim it refused")
 	}
 }
 

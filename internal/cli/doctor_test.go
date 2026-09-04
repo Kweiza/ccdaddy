@@ -2549,7 +2549,9 @@ func TestDoctorWarnsRatherThanFailsWithNeitherShimNorCodex(t *testing.T) {
 // A shim that lost its executable bit is skipped by PATH lookup, so the row
 // must name the command that puts the bit back rather than the one that
 // reorders PATH. TestCodexShimInstallRestoresAnExecutableBitSomebodyTookAway
-// pins that `ccdad codex shim install` is that command.
+// pins that `ccdad codex shim install` is that command -- which is what makes
+// this the arm where naming it is TRUE, and the arm below the one where it is
+// not.
 func TestDoctorNamesTheShimInstallWhenTheShimIsNotExecutable(t *testing.T) {
 	real := codexShimWorld(t)
 	writeExecutable(t, shimDir(), codexProgramName)
@@ -2572,6 +2574,57 @@ func TestDoctorNamesTheShimInstallWhenTheShimIsNotExecutable(t *testing.T) {
 	}
 	if strings.Contains(detail, "setup-path") {
 		t.Errorf("the row offers a PATH repair for a permission problem: %s", detail)
+	}
+	// A missing mode bit IS ccdad's to put back, so this arm must not send the
+	// user off to clear an ACL that is not there.
+	if strings.Contains(detail, "chmod -N") {
+		t.Errorf("the row blames an ACL for a missing execute bit: %s", detail)
+	}
+}
+
+// A shim whose MODE says 0o755 and which this user still cannot run is a
+// different arm, and the difference is whether the advice works on the machine
+// it is printed on. `ccdad codex shim install` repairs a shim by writing it and
+// chmod'ing it; an ACL entry and a hostile ownership are neither, so that
+// command finds an executable mode and a matching body and reports the shim as
+// already there. Naming it here would be advice that does nothing, followed by
+// a row that keeps saying the same thing. The row has to say ccdad cannot fix
+// this one and name what the user can do, and
+// TestCodexShimInstallRefusesAShimItCannotMakeRunnable pins that the command
+// refuses rather than agreeing with the old advice.
+func TestDoctorDoesNotOfferAnInstallForAnACLItCannotClear(t *testing.T) {
+	real := codexShimWorld(t)
+	writeExecutable(t, shimDir(), codexProgramName)
+	writeExecutable(t, real, codexProgramName)
+	shim := filepath.Join(shimDir(), codexProgramName)
+	denyExecute(t, shim)
+
+	// The premise: the mode still reads executable, so nothing about the
+	// permission bits distinguishes this machine from a healthy one.
+	if info, err := os.Stat(shim); err != nil {
+		t.Fatal(err)
+	} else if info.Mode().Perm()&0o111 == 0 {
+		t.Fatalf("the shim is mode %v, which is the OTHER arm: this test needs an executable mode that "+
+			"still cannot be run", info.Mode().Perm())
+	}
+
+	_, r, _ := runDoctor(t)
+	if got := r.level(t, "codex-shim"); got != string(levelWarn) {
+		t.Fatalf("codex-shim = %q, want warn when the shim cannot be executed: %s",
+			got, r.detail(t, "codex-shim"))
+	}
+	detail := r.detail(t, "codex-shim")
+	if !strings.Contains(detail, "not routed through ccdad") {
+		t.Errorf("the row does not say what is wrong: %s", detail)
+	}
+	if strings.Contains(detail, "ccdad codex shim install") {
+		t.Errorf("the row sends the user to a command that cannot clear an ACL: %s", detail)
+	}
+	if !strings.Contains(detail, "ACL") {
+		t.Errorf("the row does not say what is withholding execute: %s", detail)
+	}
+	if !strings.Contains(detail, "chmod -N") {
+		t.Errorf("the row does not name anything the user can actually do: %s", detail)
 	}
 }
 

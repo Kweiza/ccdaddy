@@ -2038,13 +2038,25 @@ func checkCodexProxy(root string, usable, accountsUsable bool, report daemon.Rep
 //
 // The executable bit is asked about on its own rather than folded into
 // "installed", and the reason is what the row says rather than what it advises:
-// both states are repaired by `ccdad codex shim install`, but a shim that is
-// present and unusable is not a shim that is absent, and a row calling it
-// absent would offer to put one where one already is. Leaving it out of the row
-// altogether is worse than either, because exec.LookPath steps over a
+// a shim that is present and unusable is not a shim that is absent, and a row
+// calling it absent would offer to put one where one already is. Leaving it out
+// of the row altogether is worse than either, because exec.LookPath steps over a
 // non-executable file: the row then reports whatever it found instead and
 // answers a permission problem with `ccdad setup-path`, on a machine whose PATH
 // is already right.
+//
+// Unusable is TWO arms and not one, and what separates them is whether the
+// advice is true of the machine it is printed on. `ccdad codex shim install`
+// repairs a shim by writing it and chmod'ing it, so it genuinely puts back a
+// missing execute bit -- and it cannot touch an ACL entry or the file's
+// ownership. A shim whose mode already says 0o755 and which this user still
+// cannot run is in that second state, and a row naming the install there would
+// send the user to a command that finds an executable mode and a matching body,
+// says the shim is already there, and changes nothing. So the mode is measured
+// alongside the lookup, and the second arm names what the USER can do instead.
+// Measured on darwin with a real ACL: shim at 0o755 plus
+// `chmod +a "user:<me> deny execute" <shim>` reads back as mode 0o755 with
+// Perm()&0o111 set, and exec.LookPath on it is "permission denied".
 //
 // Windows is skipped rather than warned about. There is no shim there in this
 // version, so a warning would be a permanent one about something the user
@@ -2070,18 +2082,27 @@ func checkCodexShim(root string, usable, accountsUsable bool) check {
 	}
 
 	dir, shim := shimDir(), shimPath()
-	installed, runnable := false, false
+	installed, modeSaysRunnable := false, false
+	var mode fs.FileMode
+	var unrunnable error
 	if shim != "" {
 		if info, serr := os.Stat(shim); serr == nil && info.Mode().IsRegular() {
 			installed = true
+			// What the MODE says, which is the only one of these two answers
+			// `ccdad codex shim install` can do anything about: its repair is a
+			// chmod.
+			mode = info.Mode().Perm()
+			modeSaysRunnable = mode&0o111 != 0
 			// Whether a PATH search would take the shim if it reached it. The
 			// same call the search itself makes rather than a permission-bit
 			// test, because an owner or an ACL can withhold execute from THIS
-			// user on a file whose mode reads 0o755.
-			_, xerr := exec.LookPath(shim)
-			runnable = xerr == nil
+			// user on a file whose mode reads 0o755 -- and the two answers
+			// disagreeing is its own arm below, because it is the one the chmod
+			// cannot reach.
+			unrunnable = shimRunnable(shim)
 		}
 	}
+	runnable := installed && unrunnable == nil
 	real, rerr := realCodexPath(dir)
 	// What a bare `codex` resolves to RIGHT NOW, which is the question the user
 	// is actually asking. exec.LookPath and not the walk above: this one must
@@ -2093,10 +2114,18 @@ func checkCodexShim(root string, usable, accountsUsable bool) check {
 			"there is no codex shim, so codex sessions are not routed through ccdad and spend whatever "+
 				"codex's own home holds — an account ccdad neither chose nor can see. "+
 				"`ccdad codex shim install` puts one at %s", shim)}
-	case !runnable:
+	case !runnable && !modeSaysRunnable:
 		return check{"codex-shim", levelWarn, fmt.Sprintf(
 			"%s is there but is not executable, so a PATH search steps over it and codex sessions are "+
 				"not routed through ccdad. `ccdad codex shim install` puts the bit back", shim)}
+	case !runnable:
+		return check{"codex-shim", levelWarn, fmt.Sprintf(
+			"%s is mode %v and this user still cannot execute it (%v), so a PATH search steps over it "+
+				"and codex sessions are not routed through ccdad. An ACL entry or the file's ownership "+
+				"is withholding execute, ccdad repairs the mode and nothing else, and no reinstall will "+
+				"put it back. Clear the deny entry yourself -- `chmod -N %s` on macOS, `setfacl -b %s` "+
+				"on Linux -- and when %s hands the entry down by inheritance, clear it there too",
+			shim, mode, unrunnable, shim, shim, dir)}
 	case ferr != nil:
 		return check{"codex-shim", levelWarn, fmt.Sprintf(
 			"%s exists, but this shell resolves no `codex` at all (%v), so codex sessions are not "+
