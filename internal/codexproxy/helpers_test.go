@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -140,6 +141,30 @@ func (f *fixture) took() []recordedRequest {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]recordedRequest(nil), f.requests...)
+}
+
+// mutate applies fn to the stored row for uuid.
+func (f *fixture) mutate(uuid string, fn func(*store.Account)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := range f.accounts {
+		if f.accounts[i].UUID == uuid {
+			fn(&f.accounts[i])
+			return
+		}
+	}
+}
+
+// serving writes the pointer the proxy reads on every request.
+func (f *fixture) serving(t *testing.T, uuid string) {
+	t.Helper()
+	dir := filepath.Join(f.root, "codex")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "serving"), []byte(uuid+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // logged returns everything the Log hook was handed, already formatted.
