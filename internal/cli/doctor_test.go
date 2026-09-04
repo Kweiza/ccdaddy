@@ -532,7 +532,7 @@ func TestDoctorHumanOutputNamesEveryCheck(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit %d, want 0\n%s", code, stdout)
 	}
-	for _, name := range []string{"store", "path", "permissions", "locks", "pidfile", "status-file", "usage-cache", "history", "engine-state", "config", "update-check", "sessions", "profiles", "primary-accounts", "credential-files", "codex-relogin", "codex-proxy", "credential-home", "claude-version", "claude-code", "credential-keys", "keychain", "environment", "api-key", "oauth-source"} {
+	for _, name := range []string{"store", "path", "permissions", "locks", "pidfile", "status-file", "usage-cache", "history", "engine-state", "config", "update-check", "sessions", "profiles", "primary-accounts", "credential-files", "codex-relogin", "codex-proxy", "codex-shim", "credential-home", "claude-version", "claude-code", "credential-keys", "keychain", "environment", "api-key", "oauth-source"} {
 		if !strings.Contains(stdout, name) {
 			t.Errorf("the human report does not mention the %s check:\n%s", name, stdout)
 		}
@@ -2377,5 +2377,143 @@ func TestTheUpdateCheckRowNeverCallsAnOlderVersionTheNewest(t *testing.T) {
 	// the only level that moves doctor's exit code.
 	if level != levelOK {
 		t.Fatalf("level = %q, want ok -- being ahead of the last check is not a fault", level)
+	}
+}
+
+// codexShimWorld is a machine with one Codex account and a PATH the test
+// controls. It returns the directory a real codex can be put in.
+//
+// It SKIPS on Windows, and that is not squeamishness about the platform: the
+// row is `skipped` there by design, so every arm below -- warn, fail, ok --
+// would read `skipped` on the windows-latest leg of the matrix and four of
+// these tests would be red for a reason that is the feature working.
+// TestDoctorSkipsTheShimRowOnWindows is what pins the Windows answer, and it
+// builds its own world so it still runs everywhere.
+func codexShimWorld(t *testing.T) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("there is no codex shim on Windows, so the row is skipped there; TestDoctorSkipsTheShimRowOnWindows pins that")
+	}
+	isolate(t)
+	seedCodexAccount(t, "cx-doc-1", "c@example.com")
+	real := t.TempDir()
+	t.Setenv("PATH", strings.Join([]string{shimDir(), real}, string(os.PathListSeparator)))
+	return real
+}
+
+func writeExecutable(t *testing.T, dir, name string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// No Codex accounts is SKIPPED and not ok: a machine that never uses codex has
+// nothing to be told, and an ok row would be one more green line claiming a
+// check that was not made.
+func TestDoctorSkipsTheShimRowWithNoCodexAccounts(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "u-doc-1", "a@example.com")
+
+	_, r, _ := runDoctor(t)
+	if got := r.level(t, "codex-shim"); got != string(levelSkipped) {
+		t.Errorf("codex-shim = %q, want skipped on a machine with no codex accounts: %s",
+			got, r.detail(t, "codex-shim"))
+	}
+}
+
+// Codex accounts and no shim ahead of codex is a WARNING: nothing is broken,
+// and codex sessions are spending an account ccdad neither chose nor can see.
+func TestDoctorWarnsWhenCodexIsNotRoutedThroughCcdad(t *testing.T) {
+	real := codexShimWorld(t)
+	writeExecutable(t, real, codexProgramName)
+
+	_, r, _ := runDoctor(t)
+	if got := r.level(t, "codex-shim"); got != string(levelWarn) {
+		t.Fatalf("codex-shim = %q, want warn with codex accounts and no shim: %s",
+			got, r.detail(t, "codex-shim"))
+	}
+	detail := r.detail(t, "codex-shim")
+	if !strings.Contains(detail, "not routed through ccdad") {
+		t.Errorf("the row does not say what is wrong: %s", detail)
+	}
+	if !strings.Contains(detail, "ccdad codex shim install") {
+		t.Errorf("the row does not name the fix: %s", detail)
+	}
+}
+
+// A shim with NOTHING behind it is a FAILURE, and it is the one arm of this row
+// that is: `codex` then resolves to a script that runs `ccdad codex exec`, which
+// finds no codex and refuses -- so the machine has a codex command that cannot
+// work, and only this row can say why.
+func TestDoctorFailsWhenTheShimHasNoRealCodexBehindIt(t *testing.T) {
+	codexShimWorld(t)
+	writeExecutable(t, shimDir(), codexProgramName)
+
+	_, r, _ := runDoctor(t)
+	if got := r.level(t, "codex-shim"); got != string(levelFail) {
+		t.Fatalf("codex-shim = %q, want fail with a shim and no codex behind it: %s",
+			got, r.detail(t, "codex-shim"))
+	}
+	if !strings.Contains(r.detail(t, "codex-shim"), "no other codex") {
+		t.Errorf("the row does not say what is missing: %s", r.detail(t, "codex-shim"))
+	}
+}
+
+func TestDoctorIsHappyWhenTheShimIsFirstAndACodexIsBehindIt(t *testing.T) {
+	real := codexShimWorld(t)
+	writeExecutable(t, shimDir(), codexProgramName)
+	writeExecutable(t, real, codexProgramName)
+
+	_, r, _ := runDoctor(t)
+	if got := r.level(t, "codex-shim"); got != string(levelOK) {
+		t.Fatalf("codex-shim = %q, want ok: %s", got, r.detail(t, "codex-shim"))
+	}
+	if !strings.Contains(r.detail(t, "codex-shim"), filepath.Join(real, codexProgramName)) {
+		t.Errorf("the row does not name the codex behind the shim: %s", r.detail(t, "codex-shim"))
+	}
+}
+
+// A shim that exists but is NOT first is a warning, not an ok: a bare `codex`
+// resolves to something else, so the machine has a shim it never runs.
+func TestDoctorWarnsWhenSomethingElseIsAheadOfTheShim(t *testing.T) {
+	real := codexShimWorld(t)
+	writeExecutable(t, shimDir(), codexProgramName)
+	writeExecutable(t, real, codexProgramName)
+	// Put the real one FIRST.
+	t.Setenv("PATH", strings.Join([]string{real, shimDir()}, string(os.PathListSeparator)))
+
+	_, r, _ := runDoctor(t)
+	if got := r.level(t, "codex-shim"); got != string(levelWarn) {
+		t.Fatalf("codex-shim = %q, want warn when a bare `codex` is not the shim: %s",
+			got, r.detail(t, "codex-shim"))
+	}
+	if !strings.Contains(r.detail(t, "codex-shim"), "not routed through ccdad") {
+		t.Errorf("the row does not say what is wrong: %s", r.detail(t, "codex-shim"))
+	}
+}
+
+// Windows has no shim in v1, so the row is skipped there rather than warning
+// forever about a thing that cannot be installed.
+func TestDoctorSkipsTheShimRowOnWindows(t *testing.T) {
+	// Its own world rather than codexShimWorld's, because that helper skips on
+	// Windows and this is the one test that has to run on every OS: it drives
+	// the Windows answer through shimOS, and the answer is the same wherever
+	// the test is running.
+	isolate(t)
+	seedCodexAccount(t, "cx-doc-2", "c@example.com")
+	saved := shimOS
+	t.Cleanup(func() { shimOS = saved })
+	shimOS = "windows"
+
+	_, r, _ := runDoctor(t)
+	if got := r.level(t, "codex-shim"); got != string(levelSkipped) {
+		t.Errorf("codex-shim = %q, want skipped on Windows: %s", got, r.detail(t, "codex-shim"))
+	}
+	if !strings.Contains(r.detail(t, "codex-shim"), "ccdad codex exec") {
+		t.Errorf("the row does not name what Windows runs instead: %s", r.detail(t, "codex-shim"))
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -270,6 +271,7 @@ func runChecks() []check {
 		checkCredentialFiles(root, storeUsable, accountsUsable),
 		checkCodexRelogin(root, storeUsable, accountsUsable),
 		checkCodexProxy(root, storeUsable, accountsUsable, report),
+		checkCodexShim(root, storeUsable, accountsUsable),
 		checkCredentialHome(report),
 		checkClaudeVersion(install, installErr),
 		checkClaudeCode(live, liveErr),
@@ -2008,4 +2010,79 @@ func checkCodexProxy(root string, usable, accountsUsable bool, report daemon.Rep
 			detail, n, plural(n, "", "s"), plural(n, "is", "are"))}
 	}
 	return check{"codex-proxy", levelOK, detail}
+}
+
+// checkCodexShim answers what a bare `codex` typed at a prompt would run.
+//
+// The question is not "is the shim installed" but "which codex does this shell
+// resolve", and those two have different answers on a machine where the shim
+// was installed and the terminal has not re-read its startup file, or where a
+// version manager puts its own directory ahead of ccdad's. Both are ordinary
+// and both mean codex sessions are spending an account ccdad neither chose nor
+// can measure, which nothing else on this machine says.
+//
+// The FAIL arm is the one that is not a warning, and it is narrow: a shim on
+// PATH with no other codex behind it. `codex` then resolves to a script that
+// runs `ccdad codex exec`, which finds nothing to run and refuses -- so the
+// machine has a codex command that cannot work at all, and only this row can
+// say why.
+//
+// Windows is skipped rather than warned about. There is no shim there in this
+// version, so a warning would be a permanent one about something the user
+// cannot fix, and the row names what to run instead.
+func checkCodexShim(root string, usable, accountsUsable bool) check {
+	if !usable {
+		return check{"codex-shim", levelSkipped, "there is no store to check"}
+	}
+	if !accountsUsable {
+		return check{"codex-shim", levelSkipped, noAccountList}
+	}
+	accounts, err := codexAccountsAt(root)
+	if err != nil {
+		return check{"codex-shim", levelFail, fmt.Sprintf("the account list cannot be read: %v", err)}
+	}
+	if len(accounts) == 0 {
+		return check{"codex-shim", levelSkipped, "there are no codex accounts"}
+	}
+	if shimOS == "windows" {
+		return check{"codex-shim", levelSkipped,
+			"there is no codex shim on Windows: a .cmd would put cmd.exe in front of every prompt. " +
+				"Run `ccdad codex exec -- <args>`, or `ccdad run <account> -- codex <args>`"}
+	}
+
+	dir, shim := shimDir(), shimPath()
+	installed := false
+	if shim != "" {
+		if info, serr := os.Stat(shim); serr == nil && info.Mode().IsRegular() {
+			installed = true
+		}
+	}
+	real, rerr := realCodexPath(dir)
+	if installed && rerr != nil {
+		return check{"codex-shim", levelFail, fmt.Sprintf(
+			"%s is the ccdad shim and there is no other codex on PATH behind it, so `codex` runs a "+
+				"script that has nothing to start. Install codex, or name the one to use with "+
+				"`ccdad config set codex.binary <path>`", shim)}
+	}
+	// What a bare `codex` resolves to RIGHT NOW, which is the question the user
+	// is actually asking. exec.LookPath and not the walk above: this one must
+	// see the shim.
+	first, ferr := exec.LookPath(codexProgramName)
+	switch {
+	case !installed:
+		return check{"codex-shim", levelWarn, fmt.Sprintf(
+			"there is no codex shim, so codex sessions are not routed through ccdad and spend whatever "+
+				"codex's own home holds — an account ccdad neither chose nor can see. "+
+				"`ccdad codex shim install` puts one at %s", shim)}
+	case ferr != nil:
+		return check{"codex-shim", levelWarn, fmt.Sprintf(
+			"%s exists, but this shell resolves no `codex` at all (%v), so codex sessions are not "+
+				"routed through ccdad. Open a new terminal, or run `ccdad setup-path`", shim, ferr)}
+	case !livePathRules.same(first, shim):
+		return check{"codex-shim", levelWarn, fmt.Sprintf(
+			"%s exists, but a bare `codex` resolves to %s, so codex sessions are not routed through "+
+				"ccdad. Open a new terminal, or run `ccdad setup-path` to put %s first", shim, first, dir)}
+	}
+	return check{"codex-shim", levelOK, fmt.Sprintf(
+		"`codex` resolves to the ccdad shim at %s, and the codex behind it is %s", shim, real)}
 }
