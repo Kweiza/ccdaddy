@@ -52,8 +52,20 @@ func (e *Engine) startCodexProxy(context.Context) (Proxy, error) {
 	// next daemon comes back on the same one and the codex sessions this one
 	// started keep working across a restart. A failure to record costs a
 	// different port next time and nothing else, so it is not fatal.
-	if rerr := codexproxy.RecordPort(root, srv.Port()); rerr != nil {
-		e.logf("could not record the codex proxy port: %v", rerr)
+	//
+	// A port the listener FELL BACK to is never recorded, and that is the whole
+	// reason for the guard. A fallback port comes from the kernel, which draws
+	// it from the ephemeral range -- 32768 and up on Linux, 49152 and up on the
+	// BSDs and Windows -- and recording one would move this store's port out of
+	// the 20000-31999 band the derivation exists to stay inside, permanently:
+	// the next start would resolve the ephemeral port from the record rather
+	// than deriving the stable one again, even after whatever held the derived
+	// port had gone. Skipping the write leaves the record as it was, so the
+	// next start goes back to the configured or derived port.
+	if !srv.FellBack() {
+		if rerr := codexproxy.RecordPort(root, srv.Port()); rerr != nil {
+			e.logf("could not record the codex proxy port: %v", rerr)
+		}
 	}
 	return srv, nil
 }
