@@ -145,19 +145,41 @@ func (e *Engine) codexDispatch(ctx context.Context, s *store.Store, accounts []s
 			// The account's row says needs-relogin, which is the answer.
 			continue
 		}
+		// ONE WRITER PER ACCOUNT, and the claim is taken HERE -- above the
+		// harvested reading rather than beside the poll it used to sit on.
+		//
+		// A poll dispatched by an earlier tick is still running with nothing
+		// holding its cache row, and the harvest branch below used to commit
+		// underneath it. Measured: the poll parks in its round trip, the proxy
+		// harvests 95% off the user's own turn while it is parked, the next tick
+		// commits that 95%, and then the poll lands with the 10% it read BEFORE
+		// the turn and overwrites it -- so the lane ranks a nearly spent account
+		// as roomy, keeps codex pointed at it, and does not look again for the
+		// fifteen-minute floor, which is the exact window the harvest exists to
+		// close. Sorting the two out afterwards is not available: FetchedAt is
+		// stamped when the commit runs, so the late poll's is the larger of the
+		// two and a monotonic guard would wave it through.
+		//
+		// ABOVE CodexSample and not below it, because CodexSample DELETES as it
+		// hands out: a tick that took the reading and only then found the claim
+		// held would have destroyed it rather than deferring it. Refused, this
+		// account gets nothing done this tick, and the reading is committed by
+		// the next one -- a second later, on top of the poll's own commit.
+		if !e.claim(a.UUID) {
+			continue
+		}
 		// A reading the proxy already took off a real turn is committed instead
 		// of being paid for again with a poll. It was taken by a request the
 		// user actually made, so it is both free and more current than anything
 		// this lane's fifteen-minute floor can produce.
 		if snap, ok := e.CodexSample(a.UUID); ok {
 			e.codexCommitHarvested(a, snap, thr, now, a.UUID == serving)
+			e.release(a.UUID)
 			continue
 		}
 		entry, has := cache.Get(a.UUID)
 		if !codexDue(entry, has, now) {
-			continue
-		}
-		if !e.claim(a.UUID) {
+			e.release(a.UUID)
 			continue
 		}
 		e.wg.Add(1)
