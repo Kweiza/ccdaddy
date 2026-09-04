@@ -78,6 +78,11 @@ type Config struct {
 	// Refresher is the daemon's ONE Codex refresher. Nil means a 401 is passed
 	// through rather than repaired.
 	Refresher *codexauth.Refresher
+	// RefreshFunc overrides Refresher. It exists so a test can describe an
+	// outcome without a store and a token endpoint, and production leaves it
+	// nil -- there must be exactly one refresher per daemon, and this is not a
+	// second place to build one.
+	RefreshFunc func(ctx context.Context, uuid, triggeredBy string) (codexauth.Outcome, error)
 	// Accounts reads the account rows.
 	Accounts func() ([]store.Account, error)
 	// Credentials reads one account's credential blob.

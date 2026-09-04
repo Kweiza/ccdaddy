@@ -175,6 +175,19 @@ func (f *fixture) forget(uuid string) {
 	delete(f.creds, uuid)
 }
 
+// rotate replaces an account's stored access token, which is what a successful
+// refresh leaves behind for the next attempt to read.
+func (f *fixture) rotate(uuid, accessToken string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.creds[uuid] = codexauth.Credential{
+		AccessToken:  accessToken,
+		RefreshToken: "refresh-" + uuid,
+		AccountID:    "workspace-" + uuid,
+		UserID:       uuid,
+	}.ToBlob()
+}
+
 // logged returns everything the Log hook was handed, already formatted.
 func (f *fixture) logged() []string {
 	f.mu.Lock()
