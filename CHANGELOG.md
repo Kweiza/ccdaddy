@@ -16,6 +16,110 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+### Added
+
+- **The ccdad daemon now listens on loopback, and a Codex turn can be forwarded
+  through it with the serving account's bearer.** This is the piece that makes a
+  Codex switch take effect without restarting codex, and the reason it exists is
+  that no file swap can: codex-cli caches its credentials in memory for the life
+  of the process and re-reads them on exactly one condition, an HTTP 401. Quota
+  exhaustion is a 429 and never enters that path. So ccdad keeps the tokens and
+  rewrites the bearer per request instead, and codex never sees an OAuth token at
+  all. **A running daemon therefore now holds a listening socket it did not hold
+  before** — `127.0.0.1` only, never a public interface. The port is resolved once
+  per start, in order: `[codex].proxy_port`, then the port recorded under the
+  store, then a deterministic derivation from the store's own path into
+  20000-32000, which sits below every OS ephemeral range so the daemon does not
+  fight the kernel for it. The live port is published in `status.json` and
+  `ccdad doctor` names it. If a configured port is held by something else the
+  daemon refuses to start and says so; if a derived or recorded one is held it
+  binds another and `ccdad status` says that codex sessions started before the
+  restart have to be relaunched, because their symptom on their side is codex's
+  own endless "Reconnecting" rather than an error. Pinned by
+  `TestTheProxyBindsBeforeTheFirstStatusIsPublished`,
+  `TestAProxyThatCannotBindStopsTheDaemon`,
+  `TestTheProxyIsDrainedBeforeTheFinalDocument`, `TestAnOccupiedConfiguredPortIsARefusal`,
+  `TestAnOccupiedAutomaticPortFallsBack`, `TestADerivedPortIsInTheBandAndIsStable`
+  and `TestStatusWarnsWhenTheCodexProxyIsNotOnThePortCodexWasTold`.
+
+- **A codex process proves itself with a lock its launcher holds, never with the
+  age of a file.** Each launch gets a 32-byte secret; the launcher takes an
+  exclusive lock on a file named after the secret's hash and holds it for its
+  whole life. The proxy calls a bearer valid when the record exists AND a probe
+  of that lock is refused. A probe that succeeds means the launcher is gone, so
+  the proxy deletes both files and forgets the hash. The probe takes a SHARED
+  lock, which is not an optimisation: an exclusive probe contends with every
+  other probe as well as with the launcher, and a contended try-lock cannot be
+  told apart from a held one — measured here, two concurrent probes of one dead
+  record called it live on every run. Nothing else about a launch record is
+  admissible; age in particular is not. Pinned by
+  `TestALaunchWhoseLauncherIsGoneIsDeadAndItsFilesAreRemoved`,
+  `TestARecordOlderThanADayWithAHeldLockIsStillValid`,
+  `TestConcurrentLookupsNeverCallADeadLaunchValid` and
+  `TestADeadLaunchIsEvictedFromTheCache`.
+
+- **The proxy never answers 5xx, and never hangs up before a status line.** codex
+  answers a 500 with thirty requests over twenty-five seconds and a refused
+  connection with unbounded reconnects, so every internal fault — a nil seam, a
+  store that will not open, a credential that will not parse, a panic anywhere in
+  the handler — comes back as 401, 404 or 429 instead. The one exception is
+  deliberate and is not a 5xx: once a byte of the answer has reached the client
+  the connection is broken rather than having a branded JSON body glued onto the
+  end of an event stream. Pinned by `TestTheProxyNeverAnswersFiveHundred`,
+  `TestAFaultBeforeAnyBytesIsAFourTwentyNineAndNeverAFiveHundred` and
+  `TestAFaultAfterTheFirstByteBreaksTheConnectionRatherThanBrandingIt`.
+
+- **A thread stays with the account that answered it first.** Every codex request
+  carries the whole history including the encrypted reasoning that earlier turns
+  produced, so the proxy pins a thread to its account and repointing the serving
+  account applies to NEW threads. A 429 records the limit — stated `Retry-After`,
+  then the body's reset, then a minute — and marks the account, then: a
+  launch-pinned turn gets the 429 unchanged, because a pin must never bill another
+  account; a thread with no answer yet is replayed on the next eligible account
+  with its turn state stripped; a thread already under way is only moved when
+  `[codex].cross_account_replay` is on. Nothing is ever replayed after a byte has
+  gone to the client. When every account is spent, codex is told to wait, with the
+  earliest reset any of them stated and with the field OMITTED when none stated
+  one, because a zero renders as 1970 on codex's side. Only accounts the search
+  actually marked dead produce the "log in again" answer — an upstream nobody
+  could reach is reported as unavailable, not as a missing login. Pinned by
+  `TestALaunchPinBeatsTheThreadPinAndThePointer`,
+  `TestAThreadKeepsTheAccountThatAnsweredItFirst`,
+  `TestEveryAccountWaitingAnswersWithTheEarliestReset`,
+  `TestAWaitingAccountWithNoStatedResetOmitsTheField` and
+  `TestAnUnreachableAccountIsNeverNamedAlongsideADeadOne`.
+
+- **A Codex account's quota is now read off the requests it is already making.**
+  Every codex answer carries the account's whole quota in its own headers, and a
+  streamed answer carries a rate-limit event as well — the same figures the usage
+  endpoint returns, arriving free on a request the proxy was forwarding anyway.
+  The daemon's Codex lane commits those readings ahead of its own poll, so a busy
+  account is measured without spending anything to measure it. Pinned by
+  `TestTheRateLimitHeadersBecomeAUsageSample`,
+  `TestTheInStreamRateLimitEventBecomesAUsageSample` and
+  `TestAnEventSplitAcrossTwoWritesIsStillRead`.
+
+- **Credentials cannot travel in either direction.** Fourteen request headers are
+  stripped by name before a turn is forwarded, and two whole families by prefix,
+  so a same-uid process cannot smuggle a cookie or an API key onto a request
+  carrying ccdad's own bearer; and the upstream's `set-cookie` and edge headers
+  are dropped before the answer reaches codex. The launch bearer, the upstream `Authorization`, request and response
+  bodies and the turn metadata never reach the daemon log. And the whole of this
+  is held away from Claude's credential path by a gate on the build graph rather
+  than by habit: `internal/switcher`, `internal/tokens` and `internal/credhome`
+  are absent from these packages' dependency closures, and `internal/oauth` — which
+  is already inside the closure of `internal/store`, so a closure rule could never
+  have caught it — is asserted to be imported by name nowhere here. Pinned by
+  `TestSmuggledCredentialAndHopHeadersNeverReachTheUpstream`,
+  `TestUpstreamCookiesAndEdgeHeadersNeverReachTheClient`,
+  `TestTheLogNeverCarriesABearerOrABody` and
+  `TestTheProxyNeverReachesTheClaudeCredentialPath`.
+
+Nothing points codex at this proxy yet. The PATH shim and the launcher that hand
+a codex process its launch secret are the next piece of work, so on this build the
+listener binds, answers its health route and forwards for a caller that already
+holds a secret, and no ccdad command hands one out.
+
 ## [0.10.1] — 2026-09-04
 
 The release that stops a full bar from being painted green.
