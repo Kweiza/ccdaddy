@@ -60,11 +60,11 @@ var (
 // of the two happened.
 const codexLoginTimeout = 20 * time.Minute
 
-func newCodexAddCmd() *cobra.Command {
+func newAddCodexCmd() *cobra.Command {
 	var allowWorkspaceMember bool
 
 	cmd := &cobra.Command{
-		Use:   "add",
+		Use:   "codex",
 		Short: "Log in to a Codex account and manage it",
 		Long: "Prints a code and a page to enter it on, then waits for you to approve it.\n" +
 			"There is no browser to open and nothing to paste back.\n\n" +

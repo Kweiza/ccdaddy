@@ -93,7 +93,60 @@ func newProfileClient() *identity.Client {
 	return c
 }
 
+// newAddCmd is the parent of every provider's login, and it runs nothing.
+//
+// Bare `ccdad add` is a usage error naming both providers rather than a default
+// to Claude. A default would be silent in the one direction that costs
+// something: those two words meant Claude for the whole of this program's life,
+// so a user typing them for a Codex account would be logged into Claude, at
+// exit 0, with nothing anywhere saying which provider answered.
+//
+// The flags stay on the leaves. Nothing here is persistent: --console and
+// --no-browser describe a browser login that Codex's device flow does not have,
+// and --allow-workspace-member describes a workspace Claude does not have, so a
+// persistent flag on this group would offer each provider the other's options
+// and fail somewhere further in.
 func newAddCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "add",
+		Short: "Log in to an account and manage it",
+		Long: "Every account starts here, and the provider is part of the command:\n" +
+			"'ccdad add claude' opens a browser login, 'ccdad add codex' prints a device code.\n\n" +
+			"Adding an account does not switch to it.",
+		Args:          addProviderArgs,
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(*cobra.Command, []string) error {
+			// Cobra's own answer is to print help and exit 0. A caller that
+			// meant to add an account gets a usage error, as everywhere else.
+			return UsageError("add needs a provider: claude or codex")
+		},
+	}
+	cmd.AddCommand(newAddClaudeCmd())
+	cmd.AddCommand(newAddCodexCmd())
+	return cmd
+}
+
+// addProviderArgs answers the grammar this rename broke.
+//
+// `ccdad add work` was how an alias was given until this release, and it is the
+// mistake the rename guarantees. Cobra's own answer is `unknown command "work"
+// for "ccdad add"`, which names neither the provider that is missing nor where
+// the alias went — so the alias moves in the message that reports it.
+//
+// It fires ahead of the scoped-session gate and the auto-start hook, because
+// cobra validates positional arguments before every persistent pre-run hook.
+// That is the right order for both: a mistyped command line is not a request to
+// write anything, and it must not warm an engine on its way to exit 2.
+func addProviderArgs(_ *cobra.Command, args []string) error {
+	if len(args) == 0 {
+		return nil
+	}
+	return UsageError("add needs a provider: claude or codex, not %q.\n"+
+		"An alias goes after the provider: 'ccdad add claude %s'", args[0], args[0])
+}
+
+func newAddClaudeCmd() *cobra.Command {
 	var (
 		useClaudeAI bool
 		useConsole  bool
@@ -104,7 +157,7 @@ func newAddCmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "add [ALIAS]",
+		Use:   "claude [ALIAS]",
 		Short: "Log in to a Claude account and manage it",
 		Long: "Opens a browser and completes the login over a loopback callback.\n" +
 			"If the browser cannot open, paste the code#state value the login page shows.\n" +

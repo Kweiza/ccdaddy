@@ -132,6 +132,39 @@ func TestTheMCPServerIsNotOnTheAutoStartAllowList(t *testing.T) {
 	}
 }
 
+// The three verdicts the `add` group split this allow-list into, pinned as MAP
+// entries because an omission here is SILENT: nothing walks the tree against
+// this map, so a missing key is simply a command that quietly stops warming an
+// engine, and a spurious one is a daemon spawned for a command about to exit 2.
+//
+// `ccdad add claude` keeps the entry bare `ccdad add` had: it is a user using
+// their accounts, and a fleet with no engine running is what they are about to
+// be surprised by.
+//
+// The GROUP has none. It resolves to a usage error naming the two providers and
+// touches nothing, so a hook firing there would start a daemon for a command
+// whose next act is to exit 2.
+//
+// `ccdad add codex` has none either, and that is not the same reason. A device
+// code login needs no engine at all — nothing is routed, nothing is ranked, and
+// the account it stores does not serve codex until something asks it to. The
+// entry that warms the first routed session is `ccdad codex exec`, which is on
+// the list above.
+func TestOnlyTheClaudeLoginWarmsAnEngineUnderTheAddGroup(t *testing.T) {
+	if !autoStartCommands["ccdad add claude"] {
+		t.Error("`ccdad add claude` is not on the auto-start allow-list; it is a user using their " +
+			"accounts, which is the case the hook exists for")
+	}
+	if autoStartCommands["ccdad add"] {
+		t.Error("the bare `ccdad add` group is on the auto-start allow-list, so the hook would " +
+			"spawn a daemon for a command whose next act is a usage error")
+	}
+	if autoStartCommands["ccdad add codex"] {
+		t.Error("`ccdad add codex` is on the auto-start allow-list; a device-code login needs no " +
+			"engine, and `ccdad codex exec` is already the entry that warms the first routed session")
+	}
+}
+
 // The recursion test the task asks for, run through the child's OWN entrypoint:
 // whatever else is true, `ccdad __daemon` must start nothing.
 func TestTheDaemonChildStartsNoDaemonOfItsOwn(t *testing.T) {

@@ -598,7 +598,7 @@ func TestRunCmdWithNoArgumentsDoesNotInheritTheTestBinarysCommandLine(t *testing
 	// than being swallowed the way pflag swallows -test.* today.
 	os.Args = []string{saved[0], "--console"}
 
-	if err, _, _ := runCmd(t, newAddCmd()); err != nil {
+	if err, _, _ := runCmd(t, newAddClaudeCmd()); err != nil {
 		t.Fatal(err)
 	}
 	if got := rec.last(t).Surface; got != oauth.SurfaceClaudeAI {

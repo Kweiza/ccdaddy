@@ -16,7 +16,7 @@ import (
 // to os.Stderr. Setting any of them here takes the login off the terminal the
 // user is looking at.
 func TestTheChildLeavesItsThreeStreamsForBubbleteaToFill(t *testing.T) {
-	c, err := addChild([]string{"add"})
+	c, err := addChild([]string{"add", "claude"})
 	if err != nil {
 		t.Skipf("os.Executable() is unavailable here: %v", err)
 	}
@@ -26,8 +26,8 @@ func TestTheChildLeavesItsThreeStreamsForBubbleteaToFill(t *testing.T) {
 	if c.SysProcAttr != nil {
 		t.Fatal("SysProcAttr takes the child out of this process group, and Ctrl-C then never reaches it")
 	}
-	if len(c.Args) != 2 || c.Args[1] != "add" {
-		t.Fatalf("the child runs %v, want [<self> add]", c.Args)
+	if !slices.Equal(c.Args[1:], []string{"add", "claude"}) {
+		t.Fatalf("the child runs %v, want [<self> add claude]", c.Args)
 	}
 }
 
@@ -76,8 +76,8 @@ func TestTheChildRunsTheArgvItWasHandedWordForWord(t *testing.T) {
 // is handed to the Codex login for as long as it takes them to notice.
 func TestEachProviderLabelNamesItsOwnLogin(t *testing.T) {
 	want := map[string][]string{
-		"Claude": {"add"},
-		"Codex":  {"codex", "add"},
+		"Claude": {"add", "claude"},
+		"Codex":  {"add", "codex"},
 	}
 	choices := addChoices()
 	if len(choices) != len(want) {
@@ -215,7 +215,7 @@ func TestAnUnresolvableSelfIsReportedRatherThanSwallowed(t *testing.T) {
 	selfPath = func() (string, error) {
 		return "", errors.New("/proc/self/exe: no such file or directory")
 	}
-	c, err := addChild([]string{"add"})
+	c, err := addChild([]string{"add", "claude"})
 	if err == nil {
 		t.Fatal("an unresolvable self produced a child anyway")
 	}

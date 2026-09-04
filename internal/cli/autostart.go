@@ -88,6 +88,13 @@ import (
 //     the binary starts an engine for a machine that has not finished being set
 //     up, and it is the one command a user may run before they have added a
 //     single account.
+//   - the bare `add` GROUP, whose next act is a usage error naming the two
+//     providers. An entry there would spawn an engine for a command about to
+//     exit 2, and the login the user then types warms one itself.
+//   - `add codex`, which is a device-code login and needs no engine: nothing is
+//     routed and nothing is ranked while a person is typing a code into a web
+//     page. `ccdad codex exec` is on the list, and it is the entry that warms
+//     the daemon the first routed session actually needs.
 //   - `auto`, which IS the engine. Starting a daemon for it would hand the
 //     singleton to the daemon and make the continuous form refuse itself, and
 //     `auto --once` exists precisely so the engine can be run WITHOUT one.
@@ -105,12 +112,12 @@ import (
 // the entry below does not merely narrow the policy — it makes the dashboard
 // the one place in the tree that asks for a daemon and is refused.
 var autoStartCommands = map[string]bool{
-	"ccdad":           true,
-	"ccdad add":       true,
-	"ccdad add-token": true,
-	"ccdad status":    true,
-	"ccdad switch":    true,
-	"ccdad which":     true,
+	"ccdad":            true,
+	"ccdad add claude": true,
+	"ccdad add-token":  true,
+	"ccdad status":     true,
+	"ccdad switch":     true,
+	"ccdad which":      true,
 
 	// The two launchers, and `run` is a REVERSAL of what this map said before
 	// rather than a row nobody argued about.
