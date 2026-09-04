@@ -1,7 +1,11 @@
 package daemon
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/switcher"
@@ -69,5 +73,66 @@ func TestAHarvestWithNothingInItIsIgnored(t *testing.T) {
 	}
 	if _, ok := e.CodexSample(""); ok {
 		t.Fatal("a reading with no account was recorded")
+	}
+}
+
+// plantDeadLaunch writes the two files a codex launcher that was killed leaves
+// behind: a record and a lock nothing holds.
+func plantDeadLaunch(t *testing.T, root, name string) (lockPath, jsonPath string) {
+	t.Helper()
+	dir := filepath.Join(root, "codex", "launches")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lockPath = filepath.Join(dir, name+".lock")
+	jsonPath = filepath.Join(dir, name+".json")
+	if err := os.WriteFile(lockPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(jsonPath, []byte(`{"pin":"","startedAt":"2026-09-02T00:00:00Z"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return lockPath, jsonPath
+}
+
+func TestDeadLaunchRecordsAreReapedButNotOnEveryTick(t *testing.T) {
+	root := isolate(t)
+	now := time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
+	e := NewEngine()
+	e.Now = func() time.Time { return now }
+
+	lock, doc := plantDeadLaunch(t, root, "aaaa1111")
+	e.reapCodexLaunches()
+	for _, p := range []string{lock, doc} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Fatalf("%s survived the sweep", filepath.Base(p))
+		}
+	}
+
+	// The tick runs about once a second. A sweep that ran every time would stat
+	// and try-lock every live codex session's record 86,400 times a day.
+	lock, doc = plantDeadLaunch(t, root, "bbbb2222")
+	e.reapCodexLaunches()
+	if _, err := os.Stat(doc); err != nil {
+		t.Fatalf("a second sweep ran inside the interval: %v", err)
+	}
+
+	now = now.Add(codexReapInterval + time.Second)
+	e.reapCodexLaunches()
+	for _, p := range []string{lock, doc} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Fatalf("%s survived the sweep after the interval passed", filepath.Base(p))
+		}
+	}
+}
+
+func TestReapingAStoreWithNoLaunchesIsSilent(t *testing.T) {
+	isolate(t)
+	e := NewEngine()
+	var lines []string
+	e.Log = func(format string, a ...any) { lines = append(lines, fmt.Sprintf(format, a...)) }
+	e.reapCodexLaunches()
+	if len(lines) != 0 {
+		t.Fatalf("a store with no launches logged %v", lines)
 	}
 }

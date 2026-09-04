@@ -2,13 +2,21 @@ package daemon
 
 import (
 	"context"
+	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/buildinfo"
+	"github.com/Kweiza/ccdaddy/internal/codexlaunch"
 	"github.com/Kweiza/ccdaddy/internal/codexproxy"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/switcher"
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
+
+// codexReapInterval is how often the launch records are swept. The tick reaches
+// the sweep about once a second, and one sweep is a stat and a try-lock per
+// live codex session, so the interval is what keeps a feature nobody is using
+// from costing 86,400 filesystem round trips a day.
+const codexReapInterval = 30 * time.Second
 
 // Proxy is the part of the Codex proxy this process drives.
 //
@@ -134,4 +142,34 @@ func rankedUUIDs(ev switcher.Evaluation) []string {
 		out = append(out, r.UUID)
 	}
 	return out
+}
+
+// reapCodexLaunches removes the launch records of codex processes that are
+// gone, on its own cadence.
+//
+// Nothing else does this. A Lookup only ever reaches the record a LIVE codex
+// quotes, so a machine that ran ten sessions and lost all ten to a reboot would
+// keep ten pairs of files until somebody deleted them by hand.
+func (e *Engine) reapCodexLaunches() {
+	root, err := storeRoot()
+	if err != nil {
+		return
+	}
+	now := e.now()
+	e.mu.Lock()
+	if now.Before(e.nextCodexReapAt) {
+		e.mu.Unlock()
+		return
+	}
+	e.nextCodexReapAt = now.Add(codexReapInterval)
+	e.mu.Unlock()
+
+	reaped, err := codexlaunch.Reap(root)
+	if err != nil {
+		e.logf("sweeping the codex launch records: %v", err)
+		return
+	}
+	if reaped > 0 {
+		e.logf("removed %d codex launch record(s) whose launcher is gone", reaped)
+	}
 }
