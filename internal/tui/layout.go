@@ -1,36 +1,67 @@
 package tui
 
-import "github.com/charmbracelet/x/ansi"
+import (
+	"github.com/charmbracelet/x/ansi"
 
-// ColumnSet is which of the two shipping tables the page is showing. [L]
-// swaps between them; the heading changes with the polarity, so USED and LEFT
-// never share a heading. Plan is the first thing in this package that needs
-// the distinction, so it is declared here rather than left undeclared until
-// something else does.
+	"github.com/Kweiza/ccdaddy/internal/view"
+)
+
+// ColumnSet is which of the two shipping tables the page is showing. [L] swaps
+// between them.
+//
+// It used to be the polarity switch: USED and LEFT never shared a heading, so a
+// page showing one could not show the other. Both columns are gone -- a row now
+// carries a cell per WINDOW and derives nothing -- and what is left is a
+// difference in what each surface KNOWS. The dashboard has engine state and an
+// age beside every reading; `ccdad list` has neither, because view.Rows
+// deliberately leaves Engine unfilled for it. SetFull is the dashboard's table
+// and SetCompact is the listing's.
 type ColumnSet int
 
 const (
-	SetStatus ColumnSet = iota // IDX ACCOUNT TYPE USED WINDOW RESETS IN STATE AUTO
-	SetList                    // IDX ACCOUNT TYPE TIER LEFT RESETS IN
+	SetFull    ColumnSet = iota // IDX ACCOUNT TYPE <windows> <resets> STATE AUTO
+	SetCompact                  // IDX ACCOUNT TYPE TIER <windows> <resets>
 )
 
-// Column identifies one field of the two shipping tables. ColIdx through
-// ColAuto are SetStatus's eight columns; ColTier and ColLeft are the two
-// SetList carries instead of ColUsed, ColWindow, ColState and ColAuto.
-type Column int
+// ColKind is what a column IS. It is separate from Column below because a
+// window column cannot be named by a constant: how many there are, and which
+// windows they stand for, is a fact about the fleet rather than about this
+// package.
+type ColKind int
 
 const (
-	ColIdx Column = iota
+	ColIdx ColKind = iota
 	ColAccount
 	ColType
-	ColUsed
+	ColTier
+	// ColWindow is one window's cell, and Column.Win indexes
+	// view.Columns.Windows.
 	ColWindow
-	ColResets
+	// ColReset is one rollover's countdown, and Column.Win indexes
+	// view.Columns.Resets.
+	ColReset
+	// ColWorst is the whole window block collapsed into one cell, for a
+	// terminal too narrow to carry the block itself. It is what this ladder
+	// does INSTEAD of dropping a window column.
+	ColWorst
 	ColState
 	ColAuto
-	ColTier
-	ColLeft
+	ColAge
 )
+
+// Column is one rendered column: its kind, and for a window or a reset, which
+// one.
+//
+// It is a comparable struct, so dropping a column is still `==` and the ladder
+// below reads the way it did when every column had a constant of its own.
+type Column struct {
+	Kind ColKind
+	Win  int
+}
+
+func col(k ColKind) Column   { return Column{Kind: k} }
+func windowCol(i int) Column { return Column{Kind: ColWindow, Win: i} }
+func resetCol(i int) Column  { return Column{Kind: ColReset, Win: i} }
 
 // Layout is the answer to "what fits", computed once per frame from the
 // terminal size and the row count, and read by nothing but the renderer: it
@@ -68,32 +99,50 @@ const (
 	accountMax     = 32
 )
 
-// windowFootprint, typeFootprint, autoFootprint and stateFootprint are each
-// column's own reserved width -- its content plus the standard 2-column gap
-// before the next column -- and planWidth subtracts them from fullAt to
-// compute each rung's boundary directly, rather than restating the result as
-// a literal that could drift from the arithmetic that produced it.
-// WINDOW's 20 columns of content are the one explicit
-// number in the material this was built from, sized to hold a
-// 20-character scoped key; USED's 17 and 4 are the other two explicit
-// numbers. TYPE, AUTO and STATE have no such source anywhere in that
-// material -- their content widths (12, 4 and 13) are back-computed from the
-// stated threshold boundaries themselves (91-77=14, 77-71=6, 71-56=15) rather
-// than invented independently, and are only as trustworthy as that
-// subtraction.
+// Each column's own reserved width: its content plus the standard 2-column gap
+// before the next column. planWidth subtracts them from a full-page width to
+// compute each rung's boundary directly, rather than restating the result as a
+// literal that could drift from the arithmetic that produced it.
+//
+// TYPE, AUTO and STATE keep the content widths (12, 4 and 13) back-computed
+// from the width ladder this was built on, and are only as trustworthy as that
+// subtraction. The three that are new are measured against what they actually
+// hold: a window cell is a percentage, "100%" at its widest, and its header is
+// view.HeaderBudget; a reset cell is a HumanDuration, "1d16h" at its widest,
+// under a header that is a window header plus " IN"; AGE is the same duration
+// without the header.
 const (
-	windowFootprint = 22 // 20 content + 2 gap
-	typeFootprint   = 14 // 12 content + 2 gap
-	autoFootprint   = 6  // 4 content + 2 gap
-	stateFootprint  = 15 // 13 content + 2 gap
-
-	// tierFootprint has no source at all, not even a back-computed one --
-	// TIER appears in no width-ladder table this was built from. 8 (6
-	// content, enough for "free"/"pro"/"team"-length values, plus the
-	// standard 2-column gap) is a provisional estimate for SetList's own
-	// ladder below, not a measured fact.
-	tierFootprint = 8
+	typeFootprint  = 14 // 12 content + 2 gap
+	autoFootprint  = 6  // 4 content + 2 gap
+	stateFootprint = 15 // 13 content + 2 gap
+	tierFootprint  = 8  // 6 content + 2 gap
+	ageFootprint   = 8  // 6 content + 2 gap
+	// worstFootprint holds "100% " plus a header of HeaderBudget, which is
+	// what the collapsed block renders.
+	worstFootprint = view.HeaderBudget + 7
 )
+
+// windowFootprint and resetFootprint are per COLUMN and depend on the header,
+// which is the fleet's own and not this package's, so they are functions rather
+// than constants.
+//
+// The content half is fixed and small -- a percentage is at most "100%" and a
+// countdown at most "1d16h" -- so the header is what decides, which is why
+// view.HeaderBudget exists at all.
+func windowFootprint(header string) int {
+	return maxInt(ansi.StringWidth(header), 4) + 2
+}
+
+func resetFootprint(header string) int {
+	return maxInt(ansi.StringWidth(header), 5) + 2
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
 
 // Plan reads nothing and calls nothing: it is a pure function of the six
 // arguments, so the same (set, width, height, rows, notice, runway) always
@@ -123,7 +172,7 @@ const (
 // while columns are added back one at a time, and to only let it grow once
 // every optional column for the current table is already on the page — so
 // crossing a column threshold can never claim width ACCOUNT already had.
-func Plan(set ColumnSet, width, height, rows int, notice, runway bool) Layout {
+func Plan(set ColumnSet, cols view.Columns, width, height, rows int, notice, runway bool) Layout {
 	var l Layout
 
 	// 35x3 is the stated minimum viable size: below either dimension the page
@@ -138,7 +187,7 @@ func Plan(set ColumnSet, width, height, rows int, notice, runway bool) Layout {
 		return l
 	}
 
-	planWidth(&l, set, width)
+	planWidth(&l, set, cols, width)
 	planHeight(&l, height, rows, notice, runway)
 
 	return l
@@ -154,86 +203,121 @@ func Plan(set ColumnSet, width, height, rows int, notice, runway bool) Layout {
 // in advance which width will need the reservation. Only once every optional
 // column for the current set is already on the page (width >= fullAt) does
 // unused width finally reach ACCOUNT, growing it up to accountMax.
-func planWidth(l *Layout, set ColumnSet, width int) {
-	// fullAt is the width at which every optional column this set carries is
-	// already on the page. Below it ACCOUNT is held at accountComfort; at and
-	// above it, whatever width remains finally reaches ACCOUNT.
-	fullAt := 113
-
-	switch set {
-	case SetList:
-		// SetList's own width ladder. There is no normative source for it
-		// anywhere in the material this was built from -- only SetStatus's
-		// ladder is stated -- so this is built structurally parallel to that
-		// one rather than out of invented numbers: the same three ACCOUNT
-		// stops (accountFloor/accountComfort/accountMax), because it is the
-		// same flex column under the same constraints, and a never-dropped
-		// four that mirrors SetStatus's (IDX, ACCOUNT, USED, RESETS IN) with
-		// LEFT standing in for USED -- LEFT is the answer this table exists
-		// to give, the same way USED is SetStatus's.
-		//
-		// SetList carries six columns to SetStatus's eight, and only one of
-		// them (TYPE) is optional: TIER is always shown. TYPE is the same
-		// column with the same content as SetStatus's, so its cost is reused
-		// rather than re-measured (typeFootprint, 14), and 77 is reused as
-		// its own drop threshold for the same reason.
-		l.Columns = []Column{ColIdx, ColAccount, ColType, ColTier, ColLeft, ColResets}
-		fullAt = 77
-		if width < 77 {
-			l.Columns = withoutColumns(l.Columns, ColType)
-		}
-		// Using the provisional widths above (idx 4, tier 8, left 6, resets 9
-		// as the last column with no trailing gap, plus accountFloor 12 and
-		// the 2-column border): IDX + ACCOUNT + TIER + LEFT + RESETS IN comes
-		// to 4+12+8+6+9+2 = 41 columns at the 35-column floor. That is short
-		// by 6, not comfortably fitting the way SetStatus's narrower
-		// four-survivor row does. This is stated here as a real finding, not
-		// silently papered over: the 35-column floor was sized for
-		// SetStatus's four, and nothing in this task establishes a
-		// SetList-specific floor to replace it.
-
-	default: // SetStatus
-		l.Columns = []Column{ColIdx, ColAccount, ColType, ColUsed, ColWindow, ColResets, ColState, ColAuto}
-		// Each rung's boundary is fullAt minus the running sum of the
-		// footprints of everything already dropped, rather than a restated
-		// literal, so the boundary and the footprint it is computed from
-		// cannot drift apart the way a comment and a hand-copied number can.
-		dropWindowAt := fullAt - windowFootprint   // 91
-		dropTypeAt := dropWindowAt - typeFootprint // 77
-		dropAutoAt := dropTypeAt - autoFootprint   // 71
-		collapseAt := dropAutoAt - stateFootprint  // 56
-		switch {
-		case width >= fullAt:
-			// fullAt is the full page's total width with every column shown
-			// and the border included: the top rung, nothing dropped.
-		case width >= dropWindowAt:
-			// WINDOW (20 columns of content, sized to hold a 20-character
-			// scoped key, plus its 2-column gap) no longer fits alongside
-			// everything else below this rung.
-			l.Columns = withoutColumns(l.Columns, ColWindow)
-		case width >= dropTypeAt:
-			// TYPE (12 content + 2 gap) additionally stops fitting.
-			l.Columns = withoutColumns(l.Columns, ColWindow, ColType)
-		case width >= dropAutoAt:
-			// AUTO (4 content + 2 gap) additionally stops fitting.
-			l.Columns = withoutColumns(l.Columns, ColWindow, ColType, ColAuto)
-		default: // 35 up to dropAutoAt-1
-			// Below dropAutoAt, STATE is dropped too, leaving the four
-			// columns the width ladder never drops at any width: IDX,
-			// ACCOUNT, USED and RESETS IN. collapseAt (STATE's footprint
-			// below dropAutoAt) lands on the same number the table gives the
-			// NEXT rung, even though that rung's actual effect is collapsing
-			// the gauge rather than dropping STATE, which is already gone by
-			// then.
-			l.Columns = withoutColumns(l.Columns, ColWindow, ColType, ColAuto, ColState)
-		}
-		// Below collapseAt, the USED gauge's 17 columns ([#########.] plus
-		// its percentage) no longer fit and it collapses to the bare
-		// 4-column percentage instead. SetList has no gauge -- LEFT is
-		// always the bare percentage -- so Collapsed is never set for it
-		// and stays false.
-		l.Collapsed = width < collapseAt
+func planWidth(l *Layout, set ColumnSet, cols view.Columns, width int) {
+	// The never-dropped four, and their absence from the drop order below IS
+	// the argument: IDX and ACCOUNT say WHICH account, and every window column
+	// says how much of one limit is gone. Dropping a window column would take a
+	// limit off the page silently -- and the one most likely to matter is
+	// exactly the one that is spent, because that is the row a reader came to
+	// look at. The block collapses to ColWorst instead, which is safe where
+	// dropping is not: with every cell reading percentage USED, the worst
+	// window is the MAX, so nothing the collapsed cell hides is worse than what
+	// it shows. A partial column set can make no such statement.
+	full := []Column{col(ColIdx), col(ColAccount), col(ColType)}
+	if set == SetCompact {
+		full = append(full, col(ColTier))
 	}
+	for i := range cols.Windows {
+		full = append(full, windowCol(i))
+	}
+	for i := range cols.Resets {
+		full = append(full, resetCol(i))
+	}
+	if set == SetFull {
+		full = append(full, col(ColState), col(ColAuto), col(ColAge))
+	}
+
+	// Drop order, lowest priority first. It is a fixed priority list walked
+	// from the tail and NEVER a greedy packer: greedy is non-monotone, so a
+	// column can vanish when the terminal WIDENS -- the same defect class the
+	// ACCOUNT reservation below exists to prevent. The price is that at some
+	// widths the page holds slack it cannot spend, and that is stated rather
+	// than hidden.
+	drops := []Column{}
+	if set == SetCompact {
+		drops = append(drops, col(ColTier))
+	}
+	if set == SetFull {
+		drops = append(drops, col(ColAuto))
+	}
+	drops = append(drops, col(ColType))
+	if set == SetFull {
+		drops = append(drops, col(ColAge), col(ColState))
+	}
+	// Reset columns from the LAST plan-order one back, so the rollover a reader
+	// is most likely to be waiting on -- the soonest, which sorts first -- is
+	// the last to go.
+	for i := len(cols.Resets) - 1; i >= 0; i-- {
+		drops = append(drops, resetCol(i))
+	}
+
+	cost := func(c Column) int {
+		switch c.Kind {
+		case ColIdx:
+			return 6
+		case ColAccount:
+			return accountComfort + 2
+		case ColType:
+			return typeFootprint
+		case ColTier:
+			return tierFootprint
+		case ColWindow:
+			return windowFootprint(cols.Windows[c.Win].Header)
+		case ColReset:
+			return resetFootprint(cols.Resets[c.Win].Header)
+		case ColWorst:
+			return worstFootprint
+		case ColState:
+			return stateFootprint
+		case ColAuto:
+			return autoFootprint
+		case ColAge:
+			return ageFootprint
+		}
+		return 0
+	}
+	total := func(cs []Column) int {
+		n := 2 // the border
+		for _, c := range cs {
+			n += cost(c)
+		}
+		return n
+	}
+
+	// fullAt is the width at which every optional column is already on the
+	// page. Below it ACCOUNT is held at accountComfort rather than growing with
+	// the terminal, and that slack is RESERVED for the next rung rather than
+	// spent: it is what makes "widening never removes a column, and never
+	// narrows ACCOUNT" possible without knowing in advance which width needs
+	// the reservation.
+	fullAt := total(full)
+
+	shown := full
+	for _, d := range drops {
+		if total(shown) <= width {
+			break
+		}
+		shown = withoutColumns(shown, d)
+	}
+	// Still too wide with every optional column gone: collapse the whole window
+	// block to one cell rather than take limits off the page one at a time.
+	if total(shown) > width && len(cols.Windows) > 0 {
+		var kept []Column
+		placed := false
+		for _, c := range shown {
+			if c.Kind == ColWindow {
+				if !placed {
+					kept = append(kept, col(ColWorst))
+					placed = true
+				}
+				continue
+			}
+			kept = append(kept, c)
+		}
+		shown = kept
+	}
+	l.Columns = shown
+	l.Collapsed = len(cols.Windows) > 0 && !hasKind(shown, ColWindow)
 
 	switch {
 	case width < 43:
@@ -248,10 +332,20 @@ func planWidth(l *Layout, set ColumnSet, width int) {
 			l.AccountWide = accountMax
 		}
 	}
+	if l.AccountWide < accountFloor {
+		l.AccountWide = accountFloor
+	}
 }
 
-// withoutColumns returns cols with every column in drop removed, preserving
-// order. It never mutates cols.
+func hasKind(cs []Column, k ColKind) bool {
+	for _, c := range cs {
+		if c.Kind == k {
+			return true
+		}
+	}
+	return false
+}
+
 func withoutColumns(cols []Column, drop ...Column) []Column {
 	out := make([]Column, 0, len(cols))
 	for _, c := range cols {

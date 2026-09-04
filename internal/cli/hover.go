@@ -15,6 +15,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/switcher"
 	"github.com/Kweiza/ccdaddy/internal/usage"
+	"github.com/Kweiza/ccdaddy/internal/view"
 )
 
 // `ccdad hover` is the fully automatic mode and the window onto it.
@@ -473,16 +474,24 @@ func thresholdCeilingFooter(out io.Writer, plan strategy.HoverPlan) {
 	if n == 0 {
 		return
 	}
-	fmt.Fprintf(out, "\n%d row(s) show %.0f%% because their pace target ran past it: far enough\n",
+	fmt.Fprintf(out, "\n%d threshold(s) above show %.0f%% because their pace target ran past it: far\n",
 		n, strategy.HoverDisplayCap)
-	fmt.Fprintf(out, "through their own cycle that nothing is being held back. SLACK is measured on\n")
-	fmt.Fprintf(out, "the real figure, so those rows do not subtract; `ccdad hover status --json`\n")
-	fmt.Fprintf(out, "carries it.\n")
+	fmt.Fprintf(out, "enough through their own cycle that nothing is being held back. The engine\n")
+	fmt.Fprintf(out, "ranks on the real figure; `ccdad hover status --json` carries it.\n")
 }
 
-// renderHoverStatus is the human table. Every column is an INPUT to the formula
-// except the last two, which are its output and the comparison it feeds -- so a
-// reader can check the arithmetic rather than being asked to accept it.
+// renderHoverStatus is the human table: one row per account, one cell per
+// window, each cell the pair "what this window has used / what hover holds it
+// to".
+//
+// It used to be one row per account per WINDOW, carrying ELAPSED, UTIL,
+// THRESHOLD and SLACK. Four accounts holding three windows was twelve rows to
+// read one fleet off, and none of the other three tables was shaped that way.
+// What survives is the pair that answers the question this command exists for:
+// what did hover choose, and against what. ELAPSED and SLACK move to --json,
+// which carries the whole derivation -- and hover's justification, that an
+// omakase mode is only acceptable if you can see what it chose, is met by the
+// pair plus the footer stating the rule that produced it.
 func renderHoverStatus(cmd *cobra.Command, on bool, plan strategy.HoverPlan,
 	byUUID map[string]store.Account, facts warmupFacts) error {
 
@@ -509,67 +518,101 @@ func renderHoverStatus(cmd *cobra.Command, on bool, plan strategy.HoverPlan,
 		}
 	}
 
-	cells := make([][]string, 0, len(plan.Windows))
+	// ONE ROW PER ACCOUNT, one cell per window, in the order and under the
+	// headers view.ColumnsOf gives the other three tables. It used to be one
+	// row per account per WINDOW -- four accounts carrying three windows was
+	// twelve rows to read a fleet off -- and the four figures per row went with
+	// it. UTIL and THRESHOLD stay, as one cell each: they are the pair that
+	// answers "what did hover choose, and against what". ELAPSED moves to
+	// --json, where the whole derivation still is; the footer below already
+	// states the rule it feeds.
+	names := make([]usage.WindowName, 0, len(plan.Windows))
+	byAccount := map[string][]strategy.HoverWindow{}
+	order := []string{}
 	for _, row := range plan.Windows {
-		a := byUUID[row.UUID]
+		names = append(names, row.Window)
+		if _, seen := byAccount[row.UUID]; !seen {
+			order = append(order, row.UUID)
+		}
+		byAccount[row.UUID] = append(byAccount[row.UUID], row)
+	}
+	cols := view.ColumnsOfNames(names)
+
+	cells := make([][]string, 0, len(order))
+	for _, uuid := range order {
+		a := byUUID[uuid]
 		marker := " "
-		if facts.activeUUID != "" && row.UUID == facts.activeUUID {
+		if facts.activeUUID != "" && uuid == facts.activeUUID {
 			marker = "*"
 		}
-		// Never "0%" for a window with no reset: unknown is not zero, and a zero
-		// here would look like a window that has only just rolled over.
-		elapsed := "-"
-		if row.HasExpected {
-			elapsed = fmt.Sprintf("%.0f%%", row.ExpectedPct)
+		byWindow := map[usage.WindowName]strategy.HoverWindow{}
+		for _, row := range byAccount[uuid] {
+			byWindow[row.Window] = row
 		}
-		// The note rides on the SLACK cell rather than in a column of its own,
-		// and it stays there under columns() for a reason the tabwriter's did
-		// not survive. That one was mechanical: tabwriter padded every cell
-		// followed by a tab, so a note column would have padded SLACK out to
-		// the width of the longest note and left every row without one ending
-		// in trailing spaces. columns() pads no last column and trims every
-		// line, so that particular damage is gone. What is left is the reading:
-		// SLACK is three or four characters wide and a note is up to eighty, so
-		// as a column it would push every note to one fixed offset far to the
-		// right of the number it is explaining, and a row with no note would
-		// leave a gap the eye has to cross to find nothing. Seven cells,
-		// never eight.
-		note := ""
-		switch {
-		case row.Warmup.Target:
-			note = warmupNote(row, facts)
-		case row.ProbeWanted:
-			if aim, behind := aims[row.UUID]; behind {
-				// A stopped clock the warm-up is not aiming at. It says what it
-				// is behind rather than nothing, because "no reset" with no
-				// explanation beside another row that HAS one reads as a bug.
-				note = fmt.Sprintf("  (no clock running; the warm-up aims at %s first)", aim)
-				break
+		cs := []string{fmt.Sprintf("%s %d", marker, a.Idx), a.Label()}
+		for _, w := range cols.Windows {
+			row, ok := byWindow[w.Name]
+			if !ok {
+				// This account carries no such window. "-" and never a pair of
+				// zeroes, which would read as a window it holds and has not
+				// touched.
+				cs = append(cs, "-")
+				continue
 			}
-			// ProbeWanted means "this window named no reset", which includes the
-			// one shape a warm-up cannot answer: quota already spent against the
-			// window and still no reset time is a resets_at this build could not
-			// read, and another turn buys the same unreadable field back. This is
-			// the row the old build printed "a probe is queued" on — the promise
-			// was false, and strategy.ColdWindow has never targeted it.
-			note = "  (this window is in use and still reported no reset time; a warm-up cannot fix that)"
-		case row.Credit:
-			note = "  (primary, metered in credits)"
+			// util/threshold, both with their sign, because the used half has
+			// to be the identical byte the other tables print for the same
+			// window and the threshold half is the number it was judged by.
+			cs = append(cs, fmt.Sprintf("%.0f%%/%.0f%%", row.Utilization, displayThreshold(row.Threshold)))
 		}
-		cells = append(cells, []string{
-			fmt.Sprintf("%s %d", marker, a.Idx), a.Label(), string(row.Window), elapsed,
-			fmt.Sprintf("%.0f%%", row.Utilization),
-			fmt.Sprintf("%.0f%%", displayThreshold(row.Threshold)),
-			fmt.Sprintf("%+.0f", row.Slack) + note,
-		})
+		// The notes ride on the LAST cell rather than in a column of their own:
+		// a note is up to eighty characters and a cell is six, so as a column
+		// it would push every note to one fixed offset far to the right of what
+		// it explains, and a row without one would leave a gap the eye has to
+		// cross to find nothing.
+		cs[len(cs)-1] += hoverNotes(byAccount[uuid], aims, facts)
+		cells = append(cells, cs)
 	}
-	if err := columns(out, []string{"  IDX", "ACCOUNT", "WINDOW", "ELAPSED", "UTIL", "THRESHOLD", "SLACK"},
-		cells, nil); err != nil {
+	head := append([]string{"  IDX", "ACCOUNT"}, cols.Headers()...)
+	if err := columns(out, head, cells, nil); err != nil {
 		return err
 	}
+	if legend := cols.Legend(); legend != "" {
+		fmt.Fprintln(out, legend)
+	}
+	fmt.Fprintln(out, "each cell is used/threshold; the threshold is the share of that window's own cycle that has elapsed plus the pool share.")
 	thresholdCeilingFooter(out, plan)
 	warmupFooters(out, plan, byUUID, facts)
 	return nil
+}
+
+// hoverNotes is one account's notes, which used to ride on one row each and now
+// have to share a cell.
+//
+// They are joined rather than reduced to the first, because they are about
+// different WINDOWS: an account can have a warm-up aimed at one window and a
+// stopped clock on another, and printing only the first would hide whichever
+// one the reader came looking for, half the time. Each note already names its
+// own window where the window matters.
+func hoverNotes(rows []strategy.HoverWindow, aims map[string]usage.WindowName, facts warmupFacts) string {
+	var out []string
+	for _, row := range rows {
+		switch {
+		case row.Warmup.Target:
+			out = append(out, strings.TrimSpace(warmupNote(row, facts)))
+		case row.ProbeWanted:
+			if aim, behind := aims[row.UUID]; behind {
+				out = append(out, fmt.Sprintf("(%s has no clock running; the warm-up aims at %s first)", row.Window, aim))
+				break
+			}
+			out = append(out, fmt.Sprintf("(%s is in use and still reported no reset time; a warm-up cannot fix that)", row.Window))
+		case row.Credit:
+			out = append(out, "(primary, metered in credits)")
+		}
+	}
+	if len(out) == 0 {
+		return ""
+	}
+	return "  " + strings.Join(out, " ")
 }
 
 // warmupFooters say the things that do not fit on a row: why nothing can be

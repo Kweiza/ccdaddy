@@ -33,112 +33,6 @@ func headroomRow(h strategy.Headroom) view.Row {
 	}
 }
 
-// The bar's colour is a question about the ACCOUNT and not about the window the
-// bar happens to be drawing. The first two cases below are the two bugs that
-// distinction exists for, and both were reproduced against the tree.
-func TestTheGaugeColourAsksTheAccountAndNotTheWindowItDraws(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		h    strategy.Headroom
-		want theme.Role
-	}{
-		{
-			// A blown FIVE-HOUR window can never become a floor -- the floor
-			// rule requires a weekly window -- so with the weekly binding on
-			// slack the bar draws the weekly at 40% while the five-hour window
-			// has nothing left in it. No test asked of the REPORTED window can
-			// see this account.
-			"nothing left in a window the bar does not draw",
-			strategy.Headroom{
-				Known: true, Binding: usage.WindowSevenDay,
-				Pct: 60, Slack: 62, Threshold: 99,
-				MinPct: 0, MinWindow: usage.WindowFiveHour,
-			},
-			theme.RoleGaugeOver,
-		},
-		{
-			// The weekly is blown and is the floor, so the bar reads 100%,
-			// while the binding five-hour window still carries 3.667 points of
-			// slack. A band fed the BINDING number paints that green.
-			"a blown weekly floor under a five-hour window with slack left",
-			strategy.Headroom{
-				Known: true, Binding: usage.WindowFiveHour,
-				Pct: 2, Slack: 3.667, Threshold: 101.667,
-				MinPct: 0, MinWindow: usage.WindowSevenDay,
-				HasFloor: true, Floor: usage.WindowSevenDay,
-				FloorSlack: 8.667, FloorThreshold: 108.667,
-			},
-			theme.RoleGaugeOver,
-		},
-		{
-			// The floor's slack is what the band reads, because the bar's
-			// LENGTH came from the floor too.
-			"the floor pair is roomy while the binding pair is not",
-			strategy.Headroom{
-				Known: true, Binding: usage.WindowFiveHour,
-				Pct: 12, Slack: 3.667, Threshold: 80,
-				MinPct: 12, MinWindow: usage.WindowFiveHour,
-				HasFloor: true, Floor: usage.WindowSevenDay,
-				FloorSlack: 28, FloorThreshold: 99,
-			},
-			theme.RoleGaugeOK,
-		},
-		{
-			"and the same swap the other way round",
-			strategy.Headroom{
-				Known: true, Binding: usage.WindowFiveHour,
-				Pct: 12, Slack: 28, Threshold: 80,
-				MinPct: 12, MinWindow: usage.WindowFiveHour,
-				HasFloor: true, Floor: usage.WindowSevenDay,
-				FloorSlack: 3.667, FloorThreshold: 99,
-			},
-			theme.RoleGaugeWarn,
-		},
-		{
-			"exactly on the band is inside it",
-			strategy.Headroom{
-				Known: true, Binding: usage.WindowFiveHour,
-				Pct: 12, Slack: warnBand, Threshold: 80,
-				MinPct: 12, MinWindow: usage.WindowFiveHour,
-			},
-			theme.RoleGaugeWarn,
-		},
-		{
-			"exactly at zero slack is over",
-			strategy.Headroom{
-				Known: true, Binding: usage.WindowFiveHour,
-				Pct: 12, Slack: 0, Threshold: 80,
-				MinPct: 12, MinWindow: usage.WindowFiveHour,
-			},
-			theme.RoleGaugeOver,
-		},
-		{
-			"room to spare",
-			strategy.Headroom{
-				Known: true, Binding: usage.WindowFiveHour,
-				Pct: 40, Slack: 40, Threshold: 80,
-				MinPct: 40, MinWindow: usage.WindowFiveHour,
-			},
-			theme.RoleGaugeOK,
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := gaugeRole(headroomRow(tc.h)); got != tc.want {
-				t.Fatalf("gaugeRole = %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
-
-// Unknown is not empty. An account nobody could read draws no bar at all -- the
-// bare question mark with no bracket -- so a gauge role here would be a colour
-// with nothing to paint, and green would be the lie that parked cswap's engine.
-func TestAnUnreadAccountTakesNoGaugeRole(t *testing.T) {
-	if got := gaugeRole(view.Row{}); got != theme.RoleMuted {
-		t.Fatalf("gaugeRole(unread) = %v, want RoleMuted", got)
-	}
-}
-
 // The role style comes from the same call that produced the glyph and the word,
 // so a colour can never describe a different state than the text beside it.
 // This asserts the pairing through cellStyle rather than through stateCell,
@@ -147,7 +41,7 @@ func TestAnUnreadAccountTakesNoGaugeRole(t *testing.T) {
 func TestTheStateColumnTakesTheRoleOfTheStateItPrints(t *testing.T) {
 	pal := theme.Of(theme.Dark)
 	shown := fixtureRows()
-	cols := []Column{ColIdx, ColAccount, ColState}
+	cols := []Column{col(ColIdx), col(ColAccount), col(ColState)}
 	const state = 2
 
 	for at, want := range map[int]theme.Role{
@@ -156,7 +50,7 @@ func TestTheStateColumnTakesTheRoleOfTheStateItPrints(t *testing.T) {
 		2: theme.RoleCandidate,
 		3: theme.RoleMuted,
 	} {
-		got := cellStyle(UnicodeGlyphs, pal, shown, cols, at, state, len(cols)-1).GetForeground()
+		got := cellStyle(UnicodeGlyphs, pal, shown, cols, testCols(), at, state, len(cols)-1).GetForeground()
 		if got != pal.Color(want) {
 			t.Errorf("row %d's STATE cell takes %v, want %v (%v)", at, got, pal.Color(want), want)
 		}
@@ -172,18 +66,18 @@ func TestTheStateColumnTakesTheRoleOfTheStateItPrints(t *testing.T) {
 // them is painted.
 func TestAMarkerRowIsMutedAndNotWhateverTheRowsAroundItAre(t *testing.T) {
 	pal := theme.Of(theme.Dark)
-	cols := []Column{ColIdx, ColAccount, ColState}
+	cols := []Column{col(ColIdx), col(ColAccount), col(ColState)}
 
 	// The scrolling marker: three rows shown, the marker at index 3.
 	for col := range cols {
-		got := cellStyle(UnicodeGlyphs, pal, fixtureRows()[:3], cols, 3, col, len(cols)-1).GetForeground()
+		got := cellStyle(UnicodeGlyphs, pal, fixtureRows()[:3], cols, testCols(), 3, col, len(cols)-1).GetForeground()
 		if got != pal.Color(theme.RoleMuted) {
 			t.Errorf("the +N-more marker's column %d takes %v, want RoleMuted", col, got)
 		}
 	}
 	// The empty-store marker: no rows shown at all, the marker at index 0.
 	for col := range cols {
-		got := cellStyle(UnicodeGlyphs, pal, nil, cols, 0, col, len(cols)-1).GetForeground()
+		got := cellStyle(UnicodeGlyphs, pal, nil, cols, testCols(), 0, col, len(cols)-1).GetForeground()
 		if got != pal.Color(theme.RoleMuted) {
 			t.Errorf("the no-accounts marker's column %d takes %v, want RoleMuted", col, got)
 		}
@@ -194,8 +88,8 @@ func TestAMarkerRowIsMutedAndNotWhateverTheRowsAroundItAre(t *testing.T) {
 // account, and they were already the one row cellStyle treated separately.
 func TestTheColumnHeadingsTakeTheHeaderRole(t *testing.T) {
 	pal := theme.Of(theme.Dark)
-	cols := []Column{ColIdx, ColAccount, ColState}
-	got := cellStyle(UnicodeGlyphs, pal, fixtureRows(), cols, table.HeaderRow, 0, len(cols)-1).GetForeground()
+	cols := []Column{col(ColIdx), col(ColAccount), col(ColState)}
+	got := cellStyle(UnicodeGlyphs, pal, fixtureRows(), cols, testCols(), table.HeaderRow, 0, len(cols)-1).GetForeground()
 	if got != pal.Color(theme.RoleHeader) {
 		t.Fatalf("the heading row takes %v, want RoleHeader", got)
 	}
@@ -204,10 +98,10 @@ func TestTheColumnHeadingsTakeTheHeaderRole(t *testing.T) {
 // The gaps are the width ladder's own arithmetic and a palette may not move
 // them: one column after IDX, two after every other, none after the last.
 func TestPaintingACellDoesNotMoveItsGap(t *testing.T) {
-	cols := []Column{ColIdx, ColAccount, ColState}
+	cols := []Column{col(ColIdx), col(ColAccount), col(ColState)}
 	for _, pal := range []theme.Palette{theme.Of(theme.None), theme.Of(theme.Dark)} {
 		for col, want := range map[int]int{0: 1, 1: 2, 2: 0} {
-			got := cellStyle(UnicodeGlyphs, pal, fixtureRows(), cols, 0, col, len(cols)-1).GetPaddingRight()
+			got := cellStyle(UnicodeGlyphs, pal, fixtureRows(), cols, testCols(), 0, col, len(cols)-1).GetPaddingRight()
 			if got != want {
 				t.Errorf("under %v, column %d pads %d, want %d", pal.Name(), col, got, want)
 			}
@@ -351,9 +245,12 @@ func TestEachRoleLandsOnTheCellItNames(t *testing.T) {
 		{"an exhausted row's state", open(theme.RoleExhausted) + m.Glyphs.Exhausted + " exhausted"},
 		{"a candidate row's state", open(theme.RoleCandidate) + m.Glyphs.Candidate + " candidate"},
 		{"an unread row's state", open(theme.RoleMuted) + m.Glyphs.Unknown + " unknown"},
-		{"a breached row's bar", "[" + open(theme.RoleGaugeOver)},
-		{"a roomy row's bar", "[" + open(theme.RoleGaugeOK)},
-		{"the unfilled track", open(theme.RoleGaugeEmpty)},
+		// The gauge is gone: it was seventeen columns of ONE window, and which
+		// window was the derivation this table stopped making. The row of
+		// percentages is the gauge now, read across, and the same three roles
+		// land on the cells instead of on a bar.
+		{"a spent window's cell", open(theme.RoleGaugeOver)},
+		{"a roomy window's cell", open(theme.RoleGaugeOK)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if !strings.Contains(page, tc.want) {

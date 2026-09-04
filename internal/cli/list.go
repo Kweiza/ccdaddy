@@ -204,7 +204,7 @@ func newListCmd() *cobra.Command {
 			// sentence about a column that document does not have.
 			if cfg.Hover {
 				fmt.Fprintln(cmd.ErrOrStderr(),
-					"note: hover is on; LEFT is how much of the window is left, and which window a row reports is chosen by the thresholds hover derived per account rather than by a value in config.toml. 'ccdad hover status' prints them.")
+					"note: hover is on; the thresholds these cells are coloured against are derived per account and per window rather than read from config.toml. 'ccdad hover status' prints them.")
 			}
 			// Beside the hover note and for a different reason: hover's note is
 			// about what a COLUMN means, and this one is about whether anything
@@ -217,6 +217,10 @@ func newListCmd() *cobra.Command {
 			}
 
 			out, pal := renderTarget(cmd)
+			// ONE constructor, called by every surface, which is what makes
+			// this table and `ccdad status` name the same windows in the same
+			// order under the same headers.
+			cols := view.ColumnsOf(quota)
 			cells := make([][]string, 0, len(quota))
 			for _, r := range quota {
 				a := r.Account
@@ -249,19 +253,38 @@ func newListCmd() *cobra.Command {
 				// this replaced was doing. A column would align them, and a
 				// suffix that belongs to one account reads better beside that
 				// account's own reset than at a fixed offset far to its right.
-				cells = append(cells, []string{
-					fmt.Sprintf("%s %d", r.Marker(), a.Idx), r.ListLabel(), r.TypeLabel(),
-					// SplitNote after the flags and not folded into them: the
-					// group above is account POLICY -- primary, disabled,
-					// driven elsewhere -- and this one is a quota reading. In
-					// the same parentheses a reader would go looking for the
-					// ccdad command that turns "spent" off.
-					r.TierLabel(), r.LeftLabel(), r.ResetsLabel(now) + suffix + r.SplitNote(),
-				})
+				// One cell per window, then one countdown per rollover. The
+				// flags ride on the LAST cell rather than in a column of their
+				// own: a column would align them, and a suffix that belongs to
+				// one account reads better beside that account's own numbers
+				// than at a fixed offset far to its right.
+				row := []string{
+					fmt.Sprintf("%s %d", r.Marker(), a.Idx), r.ListLabel(), r.TypeLabel(), r.TierLabel(),
+				}
+				block := r.Cells(cols, now)
+				block[len(block)-1] += suffix
+				cells = append(cells, append(row, block...))
 			}
-			if err := columns(out, []string{"  IDX", "ACCOUNT", "TYPE", "TIER", "LEFT", "RESETS IN"},
-				cells, quotaCellStyle(pal, quota, 4, view.Row.LeftLabel)); err != nil {
+			head := append([]string{"  IDX", "ACCOUNT", "TYPE", "TIER"}, cols.Headers()...)
+			if err := columns(out, head, cells, windowCellStyle(pal, quota, 4, cols)); err != nil {
 				return err
+			}
+			// The legend, the unranked note and any credit balance sit UNDER
+			// the table, because each of them explains a column the reader is
+			// already looking at.
+			width := outWidth(cmd.OutOrStdout())
+			if legend := cols.Legend(); legend != "" {
+				fmt.Fprintln(out, view.WrapLabeled(legend, width))
+			}
+			if note := cols.UnrankedNote(); note != "" {
+				fmt.Fprintln(out, view.WrapLabeled(note, width))
+			}
+			for _, r := range quota {
+				line, ok := r.CreditLine()
+				if !ok {
+					continue
+				}
+				fmt.Fprintln(out, view.WrapLabeled("credit:   "+r.ListLabel()+"  "+line, width))
 			}
 			// After the table, and after the early return above it, which is
 			// what keeps a listing with no rows from carrying a summary of

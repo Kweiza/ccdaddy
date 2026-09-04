@@ -15,7 +15,6 @@ package view
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/daemon"
@@ -48,8 +47,18 @@ type Row struct {
 	Entry    usage.Entry
 	HasEntry bool
 	Headroom strategy.Headroom
-	Pace     map[usage.WindowName]usage.Pace
-	Engine   daemon.AccountStatus
+	// Thresholds is the bundle this row was MEASURED against, kept so a cell can
+	// be coloured against the same numbers.
+	//
+	// It is resolved once in Rows and handed to HeadroomOrCredit from this
+	// field, so the bundle a cell reads and the bundle the row was ranked on
+	// are one object by construction rather than two calls that agree until the
+	// day one of them moves. Under hover that matters twice over: the table is
+	// derived per account and per window, so a second resolution could hand a
+	// cell a number no part of this row was measured with.
+	Thresholds strategy.Thresholds
+	Pace       map[usage.WindowName]usage.Pace
+	Engine     daemon.AccountStatus
 }
 
 // Rows pairs every account with its cached reading.
@@ -69,10 +78,14 @@ func Rows(accounts []store.Account, cache *usage.Cache, active store.Account,
 		row := Row{Account: a, Active: hasActive && a.UUID == active.UUID}
 		if entry, ok := cache.Get(a.UUID); ok && entry.Snapshot != nil {
 			row.Entry, row.HasEntry = entry, true
+			// Resolved ONCE and stored, then handed on from the field. Two
+			// calls would agree today and diverge the first time the resolver
+			// grew a clock or a pool in it -- and under hover it has both.
+			row.Thresholds = thresholds(a.UUID)
 			// HeadroomOrCredit, not HeadroomOf: a seat metered only in money
 			// carries no plan window, and the window-only axis reported it
 			// unknown while the engine ranked it on its balance.
-			row.Headroom = strategy.HeadroomOrCredit(entry.Snapshot, thresholds(a.UUID))
+			row.Headroom = strategy.HeadroomOrCredit(entry.Snapshot, row.Thresholds)
 			row.Pace = entry.Snapshot.Pace(now)
 		}
 		rows = append(rows, row)
@@ -124,164 +137,6 @@ func (r Row) Reported() (usage.NamedWindow, bool) {
 	return usage.NamedWindow{}, false
 }
 
-// ReportedSlack is the slack and the threshold of the window Reported()
-// resolves: the FLOOR pair when there is a floor, the BINDING pair otherwise.
-// It mirrors ReportedName exactly, and that is the whole of its job.
-//
-// It exists because Headroom.Slack and Headroom.Threshold are assigned off the
-// binding window in one statement, while ReportedName answers the floor when
-// there is one -- so a caller pairing the two is describing two windows and
-// saying it is describing one. The bar a dashboard draws is filled from
-// Reported(); colouring it from Headroom.Slack paints a weekly with nothing
-// left in it as roomy, on the strength of a five-hour window that happened to
-// bind three points under its own pace target.
-//
-// Nothing is derived a second time here. Both pairs were computed by
-// strategy.HeadroomFor in one pass over one window set, and this only chooses
-// between them: recomputing slack from a utilization and a threshold read back
-// out of the snapshot would be a second implementation of the ranking's own
-// arithmetic, living in the package whose entire reason for existing is that
-// there is ONE of each of these.
-//
-// ok mirrors Reported()'s ok rather than Headroom.Known, and the two can
-// differ: headroom is perfectly well known for an account whose reported name
-// is missing from AllWindows. A row rendering "?" for its window while showing
-// a slack figure beside it invites a reader to trust a number about a window
-// that is not on the screen.
-func (r Row) ReportedSlack() (slack, threshold float64, ok bool) {
-	if _, ok := r.Reported(); !ok {
-		return 0, 0, false
-	}
-	if r.Headroom.HasFloor {
-		return r.Headroom.FloorSlack, r.Headroom.FloorThreshold, true
-	}
-	return r.Headroom.Slack, r.Headroom.Threshold, true
-}
-
-// Empty is whether some window this account carries has nothing left in it at
-// all, and whether that could be established.
-//
-// It is an ACCOUNT-level question and deliberately not a question about the
-// window this row happens to report. A blown FIVE-HOUR window can never be a
-// floor -- strategy admits a floor only for a window that runs a week or
-// longer, which it decides with usage.IsWeeklyOf: the window's own reported
-// length when it carries one, and the name only when it does not. A codex
-// primary running thirty days therefore CAN be the floor even though its name
-// is not in the weekly list -- so when a weekly binds on slack the reported
-// window is that weekly and the empty five-hour window is invisible to
-// anything that only looks at what the bar draws. The live shape: five_hour
-// at 100% used and 95% elapsed beside seven_day at 40% used and 30% elapsed.
-// The weekly binds, there is no floor, the bar reads 40%, and every
-// window-level test on the reported window calls the account healthy while it
-// cannot serve a single prompt.
-//
-// It DELEGATES rather than restating the predicate, because "nothing left" is
-// not "past the number it was given": under hover a threshold is a pace target
-// and runs above 100 late in a window, so an empty window reports positive
-// slack. That distinction has exactly one implementation, in
-// strategy.OutOfQuota, and the daemon's own empty() delegates to it for the
-// same reason -- a second spelling is the copy that drifts, and this one would
-// drift where a user is looking.
-//
-// Three-valued for the reason the whole package is: an account nobody could
-// read is not an empty one, and folding that into a bare bool is the bug that
-// parked cswap's engine on the account that reset last.
-// ReportedEmpty is whether the window this row is REPORTED against has nothing
-// left in it — a WINDOW-level question, where Empty above is an ACCOUNT-level
-// one, and since 0.10.0 the two have different answers.
-//
-// They used to be the same question. OutOfQuota read the least room across
-// every window, so an account with any empty window answered empty and the
-// window the row drew was one of them. 0.10.0 moved it to the least room across
-// the windows a model choice cannot dodge, which is right for the account —
-// one whose Fable week is gone and whose all-model week holds a fifth can serve
-// every prompt that is not Fable, and calling it empty threw that fifth away.
-//
-// But the BAR is drawn from Reported(), and Reported() is that blown cap. The
-// length says 100% while Empty says not empty, and a renderer that colours from
-// the account verdict alone then paints a full bar off a dead week green. This
-// is what a renderer has to ask before it colours a bar it drew at 100%.
-//
-// pct >= 100 is spelled here rather than delegated because strategy carries no
-// window-level predicate to delegate to: OutOfQuota is the account-level one,
-// and it is exactly the one that came apart.
-// WindowLabelShort is WindowLabel with the scoped prefix cut, for a renderer
-// working to a column budget.
-//
-// It is a CUT and not a second spelling, the way the account cell's is. Every
-// scoped name carries `weekly_scoped:` and nothing else does — usage.IsWeekly
-// answers true for every Scoped() name — so the prefix is a constant on the
-// names that have it and carries no information a reader can act on. What is
-// kept is the pair the name was actually built from: the scope and the display
-// half, `model:Fable`, which is what tells one cap from another.
-//
-// The TUI's ladder reserves 20 columns of content for this cell while
-// `weekly_scoped:model:Fable` is 25, and nothing between the cell and the
-// terminal cut it — the overflow came off the RIGHT, where STATE and AUTO are,
-// so a scoped window silently ate two columns that had nothing to do with it.
-//
-// `ccdad status` keeps the full name. It has a whole column and no ladder, and
-// the full string is the key `ccdad config` takes a per-window threshold on.
-func (r Row) WindowLabelShort() string {
-	full := r.WindowLabel()
-	if rest, ok := strings.CutPrefix(full, usage.ScopedWindowPrefix); ok {
-		return rest
-	}
-	return full
-}
-
-// SplitNote is the suffix a row prints when its two figures describe two
-// windows: the window the row is REPORTED against, and how much is left on the
-// window the ranking actually ordered the account by.
-//
-// It exists for one table. `ccdad status` resolves USED, WINDOW, RESETS IN and
-// PACE through a single Reported() and names that window in a column of its
-// own, so every figure on a status row is about one window and the row says
-// which. `ccdad list` carries LEFT, which is Headroom.Pct off Headroom.BINDING,
-// beside RESETS IN, which is Reported() — and it has no window column at any
-// width. On a row where the two names differ it prints a percentage about one
-// window next to a countdown about another, with nothing naming either.
-//
-// That divergence is older than this note and was argued for: a five-hour
-// window 85% through its cycle at 98% used binds on slack while the weekly
-// beside it has nothing left, and the two columns then describe two windows on
-// purpose. What 0.10.0 changed is the FREQUENCY. An empty cap a different model
-// escapes stopped being the ordering axis and stayed the reporting one, so on a
-// fleet with a blown sub-cap the split is now most rows rather than a corner.
-// Neither number moves here. What is added is the two window names.
-//
-// The gate is Floor != Binding and nothing else. That is the honest statement
-// of the condition — this row's two figures came from two windows — rather than
-// a copy of the model-scope rule, which lives in strategy and would be the copy
-// that drifts. It covers the older divergence for free.
-//
-// The windows are spelled VERBATIM. The name is the key `ccdad config` takes a
-// per-window threshold on and the exact string `ccdad status`'s WINDOW column
-// prints, so a reader moving between the two tables reads one vocabulary. A
-// friendlier "the Fable week" would be a second one.
-//
-// Shaped like the flag suffixes beside it — two leading spaces, one
-// parenthesis — so a caller appends it and nothing else on the row moves.
-func (r Row) SplitNote() string {
-	if !r.Headroom.Known || !r.Headroom.HasFloor || r.Headroom.Floor == r.Headroom.Binding {
-		return ""
-	}
-	spent := ""
-	if r.ReportedEmpty() {
-		spent = " spent"
-	}
-	return fmt.Sprintf("  (%s%s; %s left on %s)", r.Headroom.Floor, spent, r.LeftLabel(), r.Headroom.Binding)
-}
-
-func (r Row) ReportedEmpty() bool {
-	bw, ok := r.Reported()
-	if !ok {
-		return false
-	}
-	pct, known := bw.Percent()
-	return known && pct >= 100
-}
-
 func (r Row) Empty() (empty, known bool) { return strategy.OutOfQuota(r.Headroom) }
 
 // Marker is the active-row marker: the character `status` and `list` both
@@ -291,45 +146,6 @@ func (r Row) Marker() string {
 		return "*"
 	}
 	return " "
-}
-
-// UsedLabel is how much of the reported window is SPENT, which is the column
-// `ccdad status` carries. Never "0%" for an account that could not be read:
-// there are two absences here and both render Unreadable. Reported() is false
-// with no cache entry, unknown headroom, or a name AllWindows does not carry;
-// Percent() is false when the window is present and reported no utilization.
-func (r Row) UsedLabel() string {
-	bw, ok := r.Reported()
-	if !ok {
-		// The credit axis is the one absence here that is not an absence. It
-		// binds on extra_usage, which AllWindows deliberately does not carry,
-		// so Reported() answers false for a reading that is perfectly well
-		// known. Headroom.Pct is what is LEFT on it, so the spent share is its
-		// complement -- the same arithmetic the window branch below performs,
-		// on the meter this account actually runs on.
-		if r.HasEntry && r.Headroom.OnCreditAxis() {
-			return fmt.Sprintf("%.0f%%", 100-r.Headroom.Pct)
-		}
-		return Unreadable
-	}
-	pct, ok := bw.Percent()
-	if !ok {
-		return Unreadable
-	}
-	return fmt.Sprintf("%.0f%%", pct)
-}
-
-// WindowLabel names the reported window, or "-" when there is no reading. It
-// is deliberately separate from UsedLabel even though both come out of one
-// Reported() call: the old inline form left windowName set and used unset when
-// Percent() was false, and that combination is real -- a window that is present
-// and reported no number.
-func (r Row) WindowLabel() string {
-	bw, ok := r.Reported()
-	if !ok {
-		return NoQuantity
-	}
-	return string(bw.Name)
 }
 
 // AgeLabel is how old this account's reading is.
@@ -400,51 +216,6 @@ func (r Row) TierLabel() string {
 	return r.Account.Tier
 }
 
-// LeftLabel is how much of the binding window is LEFT, which is the column
-// `ccdad list` carries.
-//
-// It is the complement of status's USED column and deliberately so: `list` is
-// where an account is chosen, and headroom is the quantity that choice is made
-// on — it is what the engine itself ranks by. The two columns are labelled, so
-// a reader is never asked to guess which way round a bare percentage runs.
-//
-// It stays on the ORDERING window while RESETS IN beside it names the reported
-// one, so on an account with a tripped weekly cap the two describe different
-// windows. That is the intended trade: LEFT has to keep meaning "how much of the
-// tightest window is left" or it stops being the figure the ranking used, and
-// RESETS IN has to name the cap that actually holds the account back or it tells
-// a user to wait ten minutes for an account that is gone until Friday.
-//
-// Never "0%" for an account that could not be read.
-func (r Row) LeftLabel() string {
-	// The credit axis is asked FIRST, and only here. On it Headroom.Pct is a
-	// percentage of a BALANCE, and a balance can say more than a percentage
-	// can: "40%" and "795.23 left of 2000.00 (USD)" are the same fact, and only
-	// one of them tells a reader whether to top up. USED beside it keeps the
-	// percentage, which is what makes the two columns comparable across a fleet
-	// that mixes both kinds of meter.
-	//
-	// Reading extra_usage here is safe because it is read-only display: it is
-	// the SAME object the credit gate prices a switch against
-	// (internal/strategy/credit.go), never a second source for the number.
-	if r.Headroom.OnCreditAxis() {
-		if label, ok := r.creditLeftLabel(); ok {
-			return label
-		}
-	}
-	if r.Headroom.Known {
-		return fmt.Sprintf("%.0f%%", r.Headroom.Pct)
-	}
-	// An account whose headroom is unknown may still have a readable balance —
-	// a poll that failed leaves the last reading in place, and a seat whose
-	// utilization was absent from an otherwise good body has money figures
-	// without a percentage.
-	if label, ok := r.creditLeftLabel(); ok {
-		return label
-	}
-	return Unreadable
-}
-
 // creditLeftLabel is LeftLabel's credit-axis fallback: the remaining amount
 // and, when the account reports both figures, the used/limit pair beside it —
 // the two things a LEFT column showing nothing but "?" was hiding entirely.
@@ -475,48 +246,4 @@ func (r Row) creditLeftLabel() (string, bool) {
 		return fmt.Sprintf("%.0f%% left", 100-pct), true
 	}
 	return "", false
-}
-
-// ResetsLabel is when the reported window rolls over, as a span. Both tables
-// render it from here so the two can never describe one reset two ways.
-func (r Row) ResetsLabel(now time.Time) string {
-	bw, ok := r.Reported()
-	if !ok {
-		return NoQuantity
-	}
-	reset, ok := bw.Reset()
-	if !ok {
-		return NoQuantity
-	}
-	return HumanDuration(reset.Sub(now))
-}
-
-// PaceLabel is the pace reading's human half: how the reported window's
-// consumption compares with the time elapsed in it.
-//
-// It reports the REPORTED window's pace and no other, so the column describes
-// the same window the two columns beside it do. Every window's pace is in
-// --json.
-//
-// The projection is deliberately absent: projectedExhaustionAt and
-// willLastToReset stay out of every human view, because a straight line through
-// bursty real usage is too rough to present as fact — and the way that sticks is
-// that nothing here can reach them: they are behind usage.Pace.Projection.
-func (r Row) PaceLabel() string {
-	bw, ok := r.Reported()
-	if !ok {
-		return NoQuantity
-	}
-	p, ok := r.Pace[bw.Name]
-	if !ok {
-		// Either a window with no length to measure against, or less than a
-		// seventh of the window since its reset — in which case elapsed time is
-		// tiny and almost any usage divides out as "far ahead". Saying nothing
-		// is the deliberate answer.
-		return NoQuantity
-	}
-	if p.AheadOfPace {
-		return "ahead"
-	}
-	return "on pace"
 }

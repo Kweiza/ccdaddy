@@ -41,10 +41,10 @@ func rowWithWindow(t *testing.T, name usage.WindowName, pct *float64, reset *tim
 // cells into two methods is only correct if each one re-derives that answer.
 func TestAPresentWindowWithNoNumberKeepsItsNameAndLosesOnlyItsPercentage(t *testing.T) {
 	r := rowWithWindow(t, usage.WindowFiveHour, nil, nil)
-	if got := r.UsedLabel(); got != Unreadable {
+	if got := r.WindowCell(usage.WindowFiveHour); got != Unreadable {
 		t.Errorf("UsedLabel() = %q, want %q: a window that reported no utilization is not one at 0%%", got, Unreadable)
 	}
-	if got := r.WindowLabel(); got != string(usage.WindowFiveHour) {
+	if got := string(r.ReportedName()); got != string(usage.WindowFiveHour) {
 		t.Errorf("WindowLabel() = %q, want %q: the window is present and has a name", got, usage.WindowFiveHour)
 	}
 }
@@ -53,47 +53,8 @@ func TestAPresentWindowWithNoNumberKeepsItsNameAndLosesOnlyItsPercentage(t *test
 // never draws a number.
 func TestAWindowAtZeroPercentIsARealReadingAndNotAnAbsence(t *testing.T) {
 	r := rowWithWindow(t, usage.WindowFiveHour, ptr(0.0), nil)
-	if got := r.UsedLabel(); got != "0%" {
+	if got := r.WindowCell(usage.WindowFiveHour); got != "0%" {
 		t.Errorf("UsedLabel() = %q, want \"0%%\": 0 is a reading", got)
-	}
-}
-
-// The three absences, each of which reaches Unreadable by a different route.
-func TestEveryWayAReadingCanBeMissingRendersTheSameQuestionMark(t *testing.T) {
-	cases := []struct {
-		name string
-		row  Row
-	}{
-		{
-			name: "no cache entry at all",
-			row:  Row{HasEntry: false},
-		},
-		{
-			name: "headroom never resolved to Known",
-			row: Row{
-				HasEntry: true,
-				Entry:    usage.Entry{Snapshot: &usage.Snapshot{FiveHour: window(20, time.Time{})}},
-				Headroom: strategy.Headroom{Known: false},
-			},
-		},
-		{
-			name: "a binding name AllWindows does not carry",
-			row: Row{
-				HasEntry: true,
-				Entry:    usage.Entry{Snapshot: &usage.Snapshot{}},
-				Headroom: strategy.Headroom{Known: true, Binding: usage.WindowName("weekly_scoped:model:retired")},
-			},
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := tc.row.UsedLabel(); got != Unreadable {
-				t.Errorf("UsedLabel() = %q, want %q", got, Unreadable)
-			}
-			if got := tc.row.WindowLabel(); got != "-" {
-				t.Errorf("WindowLabel() = %q, want \"-\"", got)
-			}
-		})
 	}
 }
 
@@ -129,10 +90,10 @@ func TestACreditAccountsLeftLabelReadsTheCreditAxisRatherThanUnreadable(t *testi
 		// none of them.
 		Headroom: strategy.Headroom{Known: false},
 	}
-	if got := r.LeftLabel(); got == Unreadable {
+	if got := func() string { l, _ := r.CreditLine(); return l }(); got == Unreadable {
 		t.Errorf("LeftLabel() = %q, want the credit axis rather than Unreadable", got)
 	}
-	if got := r.LeftLabel(); !strings.Contains(got, "74.50") {
+	if got := func() string { l, _ := r.CreditLine(); return l }(); !strings.Contains(got, "74.50") {
 		t.Errorf("LeftLabel() = %q, want the remaining amount", got)
 	}
 }
@@ -175,8 +136,13 @@ func TestASeatMeteredOnlyInMoneyStillReportsHowMuchItHasUsed(t *testing.T) {
 	if !r.Headroom.Known {
 		t.Fatal("Headroom.Known = false — Rows() is still reading the window-only axis")
 	}
-	if got := r.UsedLabel(); got != "60%" {
-		t.Errorf("UsedLabel() = %q, want %q — the seat has spent 60%% of its balance", got, "60%")
+	if got := r.WindowCell(strategy.CreditWindow); got != "60%" {
+		t.Errorf("the credit cell = %q, want %q — the seat has spent 60%% of its balance", got, "60%")
+	}
+	// And it has no five-hour window at all, which is a different absence from
+	// one it holds and could not read.
+	if got := r.WindowCell(usage.WindowFiveHour); got != "-" {
+		t.Errorf("five_hour = %q, want - — this seat carries no plan window", got)
 	}
 }
 
@@ -186,8 +152,13 @@ func TestASeatMeteredOnlyInMoneyStillReportsHowMuchItHasUsed(t *testing.T) {
 // comes.
 func TestASeatMeteredOnlyInMoneyNamesNoWindow(t *testing.T) {
 	r := creditOnlyRow(t, 60.2255)
-	if got := r.WindowLabel(); got != NoQuantity {
-		t.Errorf("WindowLabel() = %q, want %q — extra_usage is a balance, not a window", got, NoQuantity)
+	// The credit axis is not a window: it has no reset and no rollover, so it
+	// resolves to nothing in the window set and gets no countdown column.
+	if _, ok := r.Reported(); ok {
+		t.Errorf("Reported() resolved %q — extra_usage is a balance, not a window", r.ReportedName())
+	}
+	if _, ok := r.WindowReset(strategy.CreditWindow); ok {
+		t.Error("the credit meter reported a rollover; a balance does not roll over")
 	}
 }
 
@@ -203,16 +174,16 @@ func TestASeatMeteredOnlyInMoneyNamesNoWindow(t *testing.T) {
 // leaves both columns technically correct and the page less useful.
 func TestASeatMeteredOnlyInMoneyKeepsTheMoneyInItsLeftColumn(t *testing.T) {
 	r := creditOnlyRow(t, 60.2255)
-	got := r.LeftLabel()
+	got := func() string { l, _ := r.CreditLine(); return l }()
 	if !strings.Contains(got, "USD") {
 		t.Errorf("LeftLabel() = %q, want the balance and its currency — a percentage of a balance hides the balance", got)
 	}
 	if !strings.Contains(got, "2000.00") {
 		t.Errorf("LeftLabel() = %q, want the account's own cap in it", got)
 	}
-	// USED keeps the percentage, which is what makes the two columns comparable
-	// across a mixed fleet.
-	if used := r.UsedLabel(); used != "60%" {
+	// The cell keeps the percentage, which is what makes it comparable with
+	// every other account's cells across a mixed fleet.
+	if used := r.WindowCell(strategy.CreditWindow); used != "60%" {
 		t.Errorf("UsedLabel() = %q, want %q", used, "60%")
 	}
 }

@@ -294,6 +294,12 @@ var styledRun = regexp.MustCompile("\x1b\\[[0-9;]*m([^\x1b]*)\x1b\\[[0-9;]*m")
 // says live exactly as loudly as it did painted.
 var markerCell = regexp.MustCompile(`^\* [0-9]+$`)
 
+// windowHeaderCell is the shape of a derived quota header: the short name
+// view.WindowHeader builds, alone or followed by " IN" for a rollover column.
+// Upper case, digits, and the few punctuation marks a scope qualifier or a cut
+// cue can introduce.
+var windowHeaderCell = regexp.MustCompile(`^[A-Z0-9][A-Z0-9 :+#]*$`)
+
 // Colour is never the only thing carrying a distinction, and neither one-shot
 // table has a STATE column at any width to fall back on -- `ccdad list` has
 // never had one and `ccdad status` has never had one either. So the rule this
@@ -339,14 +345,23 @@ func TestColourIsNeverTheSoleCarrierInAOneShotTable(t *testing.T) {
 	t.Setenv("TTY_FORCE", "1")
 	t.Setenv("CLICOLOR_FORCE", "1")
 
-	// Every header label of both tables, and the unreadable sign. The active
-	// marker is not here because it is not painted alone -- it arrives as the
-	// whole IDX cell, and markerCell above is its shape. Nothing else in either
-	// table may carry a colour.
+	// The fixed header labels of both tables, the unreadable sign, and a spent
+	// cell. The active marker is not here because it is not painted alone -- it
+	// arrives as the whole IDX cell, and markerCell above is its shape. The
+	// WINDOW headers are not here either: they are derived from whatever
+	// windows the fleet carries, so they are matched by shape below rather than
+	// enumerated, which is what keeps this list honest as the set grows.
+	// Nothing else in either table may carry a colour.
+	//
+	// "100%" is allowed and "84%" is not, and the difference is the whole
+	// property. Strip every escape byte: a reader still sees 100% and still
+	// knows that window is gone, so the colour carried nothing the text did not.
+	// An amber band over 84% would state "close to its threshold" in colour and
+	// nowhere else -- neither table carries a STATE column at any width -- so
+	// there is no such arm, and if one is ever added this test is where it fails.
 	allowed := map[string]bool{
-		"IDX": true, "ACCOUNT": true, "TYPE": true, "TIER": true, "LEFT": true,
-		"RESETS IN": true, "USED": true, "WINDOW": true, "PACE": true, "AGE": true,
-		view.Unreadable: true,
+		"IDX": true, "ACCOUNT": true, "TYPE": true, "TIER": true, "AGE": true,
+		view.Unreadable: true, "100%": true,
 	}
 
 	for _, argv := range []string{"list", "status"} {
@@ -364,6 +379,12 @@ func TestColourIsNeverTheSoleCarrierInAOneShotTable(t *testing.T) {
 			// carries an index that changes with the fixture.
 			if markerCell.MatchString(text) {
 				sawMarker = true
+				continue
+			}
+			// A window or reset header, matched by shape. The set is a
+			// function of the fleet's own windows, so enumerating it here
+			// would be a second copy of view.WindowHeader that goes stale.
+			if windowHeaderCell.MatchString(text) {
 				continue
 			}
 			if text == view.Unreadable {

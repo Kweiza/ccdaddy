@@ -15,10 +15,11 @@ one *before* a rate limit stops you.
 
 ```console
 $ ccdad list
-  IDX  ACCOUNT                  TYPE          TIER  LEFT  RESETS IN
-* 1    work@example.com (work)  subscription  max   18%   1h14m
-  2    personal@example.com     subscription  pro   83%   4d3h
-  3    ci@example.org (ci)      api-key       -     ?     -
+  IDX  ACCOUNT                  TYPE          TIER  5H   7D   FABLE  5H IN  7D IN
+* 1    work@example.com (work)  subscription  max   82%  61%  100%   1h14m  4d3h
+  2    personal@example.com     subscription  pro   17%  44%  38%    3h02m  6d1h
+  3    ci@example.org (ci)      api-key       -     ?    ?    ?      ?      ?
+windows:  5H = five_hour   7D = seven_day   FABLE = weekly_scoped:model:Fable
 
 Runway:  7d dry 2026-08-25 20:53 UTC (1d15h)  ·  5h holds  ·  basis 4h00m
 
@@ -116,10 +117,11 @@ Daemon:  running  pid 48213  up 2h06m
 Active:  work@example.com (work)
 Runway:  7d dry 2026-08-25 20:53 UTC (1d15h)  ·  5h holds  ·  basis 4h00m
 
-  IDX  ACCOUNT                  TYPE          USED  WINDOW     RESETS IN  PACE     AGE
-* 1    work@example.com (work)  subscription  82%   five_hour  1h14m      ahead    41s
-  2    personal@example.com     subscription  17%   seven_day  4d3h       on pace  2m
-  3    ci@example.org (ci)      api-key       ?     -          -          -        ?
+  IDX  ACCOUNT                  TYPE          5H   7D   FABLE  5H IN  7D IN  AGE
+* 1    work@example.com (work)  subscription  82%  61%  100%   1h14m  4d3h   41s
+  2    personal@example.com     subscription  17%  44%  38%    3h02m  6d1h   2m
+  3    ci@example.org (ci)      api-key       ?    ?    ?      ?      ?      ?
+windows:  5H = five_hour   7D = seven_day   FABLE = weekly_scoped:model:Fable
 ```
 
 `ccdad` is an unofficial, third-party tool. It is not affiliated with,
@@ -677,22 +679,21 @@ Pool:    3 usable accounts, so each threshold is the share of its own window tha
          cycle earns more than 100, which means no restraint -- there is nobody
          to hand the work to. This column stops at 100; --json carries the rest.
 
-  IDX  ACCOUNT            WINDOW       ELAPSED  UTIL  THRESHOLD  SLACK
-* 1    work@example.com   five_hour    80%      12%   100%       +101
-* 1    work@example.com   seven_day    43%      52%   76%        +24
-  2    spare@example.com  five_hour    80%      74%   100%       +39
-  2    spare@example.com  seven_day    43%      31%   76%        +45
-  3    seat@example.com   extra_usage  -        61%   95%        +34  (primary, metered in credits)
+  IDX  ACCOUNT            5H        7D       CREDIT
+* 1    work@example.com   12%/100%  52%/76%  -
+  2    spare@example.com  74%/100%  31%/76%  -
+  3    seat@example.com   -         -        61%/95%  (primary, metered in credits)
+windows:  5H = five_hour   7D = seven_day   CREDIT = extra_usage
+each cell is used/threshold; the threshold is the share of that window's own cycle that has elapsed plus the pool share.
 
-2 row(s) show 100% because their pace target ran past it: far enough
-through their own cycle that nothing is being held back. SLACK is measured on
-the real figure, so those rows do not subtract; `ccdad hover status --json`
-carries it.
+2 threshold(s) above show 100% because their pace target ran past it: far
+enough through their own cycle that nothing is being held back. The engine
+ranks on the real figure; `ccdad hover status --json` carries it.
 ```
 
-`*` marks the account Claude Code is logged in as, `-` in ELAPSED is a window
-with no reset to measure a share against, and SLACK is `THRESHOLD − UTIL` — the
-number the ranking actually orders on. On the rows the footer names, THRESHOLD is
+`*` marks the account Claude Code is logged in as, `-` is a window the account
+does not carry, and each cell is `used/threshold`. On the cells the footer
+names, THRESHOLD is
 the ceiling rather than the derived figure, so those two columns do not subtract;
 SLACK is always the real one, because it is what the engine ordered on.
 
@@ -1348,18 +1349,22 @@ Two rules follow from the table:
   The weekly cap over 60 marks the account spent whatever the five-hour window
   says, and the five-hour cap over 85 marks it spent whatever the week says.
   Past means strictly past: sitting exactly on a threshold is not over it.
-- **When a weekly cap is over, that is the one the account is reported
-  against.** The `WINDOW` column, the `RESETS IN` beside it and `bindingWindow`
-  in `ccdad status --json` all name it, because it is the one that will not come
-  back for days: telling you to wait eight minutes for a five-hour rollover,
-  when the week is gone until Friday, is the wrong answer. If more than one
-  weekly cap is over, the one with the least slack is named.
+- **When a weekly cap is over, `bindingWindow` in `ccdad status --json` names
+  it**, because it is the one that will not come back for days: telling a
+  machine to wait eight minutes for a five-hour rollover, when the week is gone
+  until Friday, is the wrong answer. If more than one weekly cap is over, the
+  one with the least slack is named.
+
+**The human tables no longer choose.** Every window an account carries has a
+column of its own, so nothing is reported *against* one window in preference to
+another and no reader has to work out which one a figure came from. That
+question survives only in `--json`, where a machine asks it deliberately.
 
 **Reporting and ordering are two different questions.** The figures an account
 is ranked with — its slack, the percentage left, and the threshold those came
 from — are always taken from the window with the *least slack*, whichever family
 it belongs to. So an account can be reported against its weekly cap and ranked
-on its five-hour one in the same pass, and the window in `WINDOW` need not be the
+on its five-hour one in the same pass, and `bindingWindow` need not name the
 one that decided where the account sits in the list. `ccdad status --json` and
 `ccdad list --json` publish `slack` and `windowThreshold` on each account's
 `usage` object — the numbers the ordering was actually made on — and `ccdad auto
@@ -1704,14 +1709,13 @@ and an unreadable spend is not a spend of zero. `state` is `enabled`,
 `disabled`, `blocked`, or `unknown`; `disabledReason` is added when an
 organization refused overage and named why.
 
-The human `ccdad list` table has nowhere to put those figures on a credit-only
-account — it carries no five-hour or seven-day window, so there is no headroom
-for LEFT to report — and the column used to read `?` for the whole class.
-It now falls back to the same `usage.credit` reading: with both money figures
-on the wire it prints `used/limit`, e.g. `25.50/100.00 used, 74.50 left
-(USD)`; with only `usedCredits` it prints what was spent and says the account
-sets no limit of its own; `?` is still what an account that failed to poll at
-all shows.
+A credit-only account carries no five-hour or seven-day window, so its plan
+columns read `-` and its balance goes on a line under the table, where money can
+be spelled as money: with both figures on the wire it prints `used/limit`, e.g.
+`25.50/100.00 used, 74.50 left (USD)`; with only `usedCredits` it prints what was
+spent and says the account sets no limit of its own. A percentage of a balance
+hides the balance, and only one of the two tells a reader whether to top up. `?`
+is still what an account that failed to poll at all shows.
 
 ### Environment
 

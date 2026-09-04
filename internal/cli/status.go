@@ -350,7 +350,7 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 	// runway line below has its own wrap, because its spaces are inside its
 	// values and these are between words.
 	//
-	// THE WIDTH IS MEASURED ON cmd.OutOrStdout() AND NEVER ON out, at all eight
+	// THE WIDTH IS MEASURED ON cmd.OutOrStdout() AND NEVER ON out, at all eleven
 	// sites below, and the distinction is the whole reason this paragraph
 	// exists. out is renderTarget's writer -- the same destination wearing a
 	// palette -- and outWidth answers by asserting *os.File. A wrapper fails
@@ -372,7 +372,7 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 	// sets up either. The other half is held by
 	// TestEveryLineOfTheStatusBlockFoldsAtTheFilesWidth, which reads this
 	// function's source rather than its output, so every site is covered
-	// whatever a fixture happens to render and the count of eight below is
+	// whatever a fixture happens to render and the count of eleven below is
 	// asserted there rather than only written here.
 	//
 	// Both names are written on one line each, deliberately. The name this
@@ -491,6 +491,9 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 	}
 	fmt.Fprintln(out)
 
+	// The same constructor `ccdad list` calls, which is what makes the two
+	// tables name the same windows in the same order under the same headers.
+	cols := view.ColumnsOf(rows)
 	cells := make([][]string, 0, len(rows))
 	for _, r := range rows {
 		// StatusFlags rides on the AGE cell, which is what the trailing %s%s in
@@ -498,14 +501,36 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 		// the flags ride on `list`'s last cell: a suffix that belongs to one
 		// account reads better beside that account's own figure than at a
 		// fixed offset far to its right.
-		cells = append(cells, []string{
+		row := []string{
 			fmt.Sprintf("%s %d", r.Marker(), r.Account.Idx), r.StatusLabel(), r.TypeLabel(),
-			r.UsedLabel(), r.WindowLabel(), r.ResetsLabel(now), r.PaceLabel(),
-			r.AgeLabel(now) + r.StatusFlags(),
-		})
+		}
+		row = append(row, r.Cells(cols, now)...)
+		row = append(row, r.AgeLabel(now)+r.StatusFlags())
+		cells = append(cells, row)
 	}
-	return columns(out, []string{"  IDX", "ACCOUNT", "TYPE", "USED", "WINDOW", "RESETS IN", "PACE", "AGE"},
-		cells, quotaCellStyle(pal, rows, 3, view.Row.UsedLabel))
+	head := append([]string{"  IDX", "ACCOUNT", "TYPE"}, cols.Headers()...)
+	head = append(head, "AGE")
+	if err := columns(out, head, cells, windowCellStyle(pal, rows, 3, cols)); err != nil {
+		return err
+	}
+	// Under the table, because each of these explains a column the reader is
+	// already looking at. PACE left this table with the derived window it was
+	// read off -- `ccdad runway` is the human answer to "how fast", and
+	// `--json` still carries every window's pace including the projection.
+	if legend := cols.Legend(); legend != "" {
+		fmt.Fprintln(out, view.WrapLabeled(legend, outWidth(cmd.OutOrStdout())))
+	}
+	if note := cols.UnrankedNote(); note != "" {
+		fmt.Fprintln(out, view.WrapLabeled(note, outWidth(cmd.OutOrStdout())))
+	}
+	for _, r := range rows {
+		line, ok := r.CreditLine()
+		if !ok {
+			continue
+		}
+		fmt.Fprintln(out, view.WrapLabeled("credit:   "+r.StatusLabel()+"  "+line, outWidth(cmd.OutOrStdout())))
+	}
+	return nil
 }
 
 func statusPayload(snap view.Snapshot, probeErr error) map[string]any {

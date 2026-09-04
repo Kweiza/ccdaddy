@@ -342,6 +342,13 @@ func HoverThresholds(cands []Candidate, o Options) HoverPlan {
 				row.Warmup = warmupFor(c.Probe, cold, rollover, c.NextPollAt, o.Now, credits)
 			}
 			row.Slack = row.Threshold - pct
+			// The same clamp HeadroomFor applies, for the same reason and so
+			// that this table cannot report a slack the engine did not rank on.
+			// A window with nothing left never shows positive slack however far
+			// past 100 its pace target ran.
+			if pct >= 100 && row.Slack > 0 {
+				row.Slack = 100 - pct
+			}
 			per[w.Name] = row.Threshold
 			p.Windows = append(p.Windows, row)
 		}

@@ -142,8 +142,12 @@ func TestAnEmptyAccountIsSpentEvenWhenItsPaceTargetIsAbove100(t *testing.T) {
 	o := hoverOpts().withHover(pool)
 
 	h := measure(pool[0], o).Headroom
-	if h.Slack <= 0 {
-		t.Fatalf("Slack = %v; this test is pointless unless the pace target is above 100", h.Slack)
+	// Not negative is the premise. The pace target is 192, so the subtraction
+	// gives +92; the clamp on an empty window brings that to exactly 0. Either
+	// way Spent's `Slack < 0` clause is false and the MinPct clause is the only
+	// one that can fire, which is what this test holds.
+	if h.Slack < 0 {
+		t.Fatalf("Slack = %v; this test is pointless unless the slack is non-negative", h.Slack)
 	}
 	if spent, known := Spent(h); !known || !spent {
 		t.Errorf("Spent = %v (known %v) on an account at 100%% used with slack %+.0f",
@@ -168,5 +172,21 @@ func TestASingleThresholdCannotInvert(t *testing.T) {
 		if r.Order[i-1].Headroom.Pct < r.Order[i].Headroom.Pct {
 			t.Fatalf("a single threshold inverted the order at #%d: %v", i, order(r))
 		}
+	}
+}
+
+// The clamp is 100-pct and not a flat zero, so the arithmetic stays MONOTONE
+// past the line: a window five points over is worse than one exactly empty. An
+// ordering that flattened them would shuffle two spent accounts by uuid.
+func TestPastTheLineIsStillWorseThanExactlyEmpty(t *testing.T) {
+	exact := measure(hoverAt("exact", 0.92, 100), hoverOpts().withHover([]Candidate{hoverAt("exact", 0.92, 100)})).Headroom
+	over := measure(hoverAt("over", 0.92, 105), hoverOpts().withHover([]Candidate{hoverAt("over", 0.92, 105)})).Headroom
+
+	if exact.Slack != 0 {
+		t.Errorf("an exactly empty window reports %v of slack, want 0", exact.Slack)
+	}
+	if over.Slack >= exact.Slack {
+		t.Errorf("105%% used reports %v and 100%% reports %v; past the line has to be worse",
+			over.Slack, exact.Slack)
 	}
 }

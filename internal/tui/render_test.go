@@ -178,19 +178,28 @@ func TestTheNoneThemeEmitsNoEscapeBytesAndTheDarkThemeDoes(t *testing.T) {
 // percentages run opposite ways: status prints how much is spent, list prints
 // how much is left. One heading carrying two polarities is the drift the two
 // tables have avoided since they were written.
-func TestTheListToggleSwapsTheHeadingWithThePolarity(t *testing.T) {
-	status := fixtureModel(113, 26).Body()
+// The two sets differ in what each surface KNOWS, not in the polarity of one
+// derived column: both are gone, and every window has a cell in both tables.
+func TestTheTwoColumnSetsDifferByWhatTheSurfaceKnows(t *testing.T) {
+	full := fixtureModel(113, 26).Body()
 	m := fixtureModel(113, 26)
-	m.Set = SetList
-	list := m.Body()
-	if !strings.Contains(status, "USED") || strings.Contains(status, "LEFT") {
-		t.Error("the status set does not head its column USED")
+	m.Set = SetCompact
+	compact := m.Body()
+
+	if !strings.Contains(full, "STATE") || !strings.Contains(full, "AGE") {
+		t.Error("the dashboard's table does not carry the engine state and the reading's age")
 	}
-	if !strings.Contains(list, "LEFT") || strings.Contains(list, "USED") {
-		t.Error("the list set does not head its column LEFT")
+	if strings.Contains(compact, "STATE") {
+		t.Error("the compact table carries STATE, which the listing has no source for")
 	}
-	if !strings.Contains(list, "TIER") {
-		t.Error("the list set does not carry TIER, which is the column it exists for")
+	if !strings.Contains(compact, "TIER") {
+		t.Error("the compact table does not carry TIER, which is the column it exists for")
+	}
+	// The windows are in BOTH, which is the whole change: no set derives one.
+	for _, want := range []string{"5H", "7D"} {
+		if !strings.Contains(full, want) || !strings.Contains(compact, want) {
+			t.Errorf("%q is missing from one of the two tables", want)
+		}
 	}
 }
 
@@ -255,12 +264,15 @@ func TestWithRoomForOneRowTheAccountWinsAndTheCountGoes(t *testing.T) {
 // would silently stop covering if the placeholder data were edited.
 func TestTheFixtureDataStillCoversTheUnreadableRowAndTheEmptyState(t *testing.T) {
 	var unreadable, full, unknownToTheEngine bool
+	cols := view.ColumnsOf(fixtureRows())
 	for _, r := range fixtureRows() {
-		switch r.UsedLabel() {
-		case view.Unreadable:
-			unreadable = true
-		case "100%":
-			full = true
+		for _, w := range cols.Windows {
+			switch r.WindowCell(w.Name) {
+			case view.Unreadable:
+				unreadable = true
+			case "100%":
+				full = true
+			}
 		}
 		if r.Engine.State == daemon.StateUnknown {
 			unknownToTheEngine = true
@@ -1073,7 +1085,7 @@ func TestTheRunwayLineIsCutToTheFrameRatherThanWrappingIt(t *testing.T) {
 			// len(m.Snap.Rows) rather than a literal, and false for the notice,
 			// because Body plans with exactly those: a mismatch here would
 			// compare the page against a layout nobody rendered.
-			want := Plan(m.Set, w, height, len(m.Snap.Rows), false, true).Runway
+			want := Plan(m.Set, testCols(), w, height, len(m.Snap.Rows), false, true).Runway
 			if got := strings.Contains(body, "Runway: "); got != want {
 				t.Errorf("at %dx%d the page draws a runway line: %v; the height ladder budgeted a row for one: %v:\n%s",
 					w, height, got, want, body)
