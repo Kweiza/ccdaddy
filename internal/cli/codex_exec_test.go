@@ -760,7 +760,9 @@ func TestAnUnpinnedLaunchWithNoProxyRunsCodexUntouchedAndSaysSo(t *testing.T) {
 
 func TestTheCodexExecPathIsAllowedInAScopedSession(t *testing.T) {
 	if _, refused := scopedSessionRefusals["ccdad codex exec"]; refused {
-		t.Error("`ccdad codex exec` is refused inside a scoped session; it replaces the scope in the child it launches, exactly as `ccdad run` does")
+		t.Error("`ccdad codex exec` is refused inside a scoped session; it inherits the launcher's scope " +
+			"rather than replacing it, and that is safe because a codex launch writes no Claude Code " +
+			"state at all -- not the credential file, not the config, not codex's own home")
 	}
 	if !scopedSessionAllowed["ccdad codex exec"] {
 		t.Error("`ccdad codex exec` has no scoped-session verdict")
