@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -519,5 +520,24 @@ func TestTheProxyIsDrainedBeforeTheFinalDocument(t *testing.T) {
 	}
 	if lastIndex(got, "snapshot") < drainAt {
 		t.Fatalf("events = %v, want the final document published after both drains", got)
+	}
+}
+
+func TestTheSweepRunsOnEveryTick(t *testing.T) {
+	isolate(t)
+	var sweeps atomic.Int64
+	stop := runInBackground(t, Options{
+		Interval: 5 * time.Millisecond,
+		Sweep:    func() { sweeps.Add(1) },
+	})
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) && sweeps.Load() < 2 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if err := stop(); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := sweeps.Load(); got < 2 {
+		t.Fatalf("the sweep ran %d times over many ticks, want it on every tick", got)
 	}
 }

@@ -71,6 +71,11 @@ type Options struct {
 	// Nil means this daemon runs no proxy, which is what every test in this
 	// package that is not about the proxy gets.
 	StartProxy func(ctx context.Context) (Proxy, error)
+	// Sweep is housekeeping the tick body has no reason to know about, run once
+	// per tick before it. Today that is removing the launch records of codex
+	// processes that are gone; whatever it does, it must be cheap and it must
+	// not fail, because nothing here reads a result from it.
+	Sweep func()
 }
 
 // EngineOptions is the Options the real daemon runs with: the tick loop's
@@ -88,6 +93,7 @@ func EngineOptions() Options {
 		Drain:      e.Wait,
 		Attach:     func(l *Logger) { e.AttachLog(l.Printf) },
 		StartProxy: e.startCodexProxy,
+		Sweep:      e.reapCodexLaunches,
 	}
 }
 
@@ -207,6 +213,12 @@ func (o Options) attach(l *Logger) {
 func (o Options) drain() {
 	if o.Drain != nil {
 		o.Drain()
+	}
+}
+
+func (o Options) sweep() {
+	if o.Sweep != nil {
+		o.Sweep()
 	}
 }
 
@@ -406,6 +418,10 @@ func Run(ctx context.Context, o Options) (err error) {
 
 	loop = &Loop{
 		Tick: func(c context.Context) error {
+			// Before the tick body rather than after it, so a tick that fails
+			// does not also stop the housekeeping. It has its own cadence and
+			// returns nothing.
+			o.sweep()
 			// Publishing rides on the tick rather than on a clock of its own, so
 			// what is on disk is always the state after a completed iteration
 			// and never a half-applied one.

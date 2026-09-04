@@ -235,6 +235,10 @@ type Engine struct {
 	// the tick writes and reads them from this one.
 	codexRankedUUIDs []string
 	codexSamples     map[string]*usage.Snapshot
+	// nextCodexReapAt throttles the launch-record sweep. The tick reaches it at
+	// 1 Hz and the sweep is filesystem work per live codex session, so the
+	// cadence has to live somewhere other than the call site.
+	nextCodexReapAt time.Time
 
 	wg sync.WaitGroup
 }
