@@ -153,6 +153,15 @@ func isolate(t *testing.T) string {
 	// policy put the real hook back by name.
 	suppressAutoStart(t)
 
+	// The codex shim's auto-install is suppressed for the same reason and needs
+	// the same care: it is reached from `ccdad add codex`, it writes the startup
+	// files under the home directory above, and it reads $SHELL — which nothing
+	// in this suite sets, so an unsuppressed hook would write whatever dialect
+	// the developer happens to run and every codex-add test would assert on
+	// output that depends on it. The tests that describe the automatic install
+	// call realShimAutoInstall by name.
+	suppressShimAutoInstall(t)
+
 	// The network is isolated for the same reason the filesystem is. A test that
 	// reaches api.anthropic.com is not testing ccdad: it depends on the machine
 	// being online, on a real token being rejected, and it sends a value the
@@ -276,6 +285,25 @@ func suppressAutoStart(t *testing.T) {
 	saved := autoStart
 	t.Cleanup(func() { autoStart = saved })
 	autoStart = func(*cobra.Command) {}
+}
+
+// suppressShimAutoInstall replaces the codex shim's auto-install hook with a
+// no-op. See isolate.
+func suppressShimAutoInstall(t *testing.T) {
+	t.Helper()
+	saved := autoInstallShim
+	t.Cleanup(func() { autoInstallShim = saved })
+	autoInstallShim = func(*cobra.Command) {}
+}
+
+// realShimAutoInstall puts the production hook back for one test, which is what
+// a test that means to describe the automatic install has to do: isolate
+// silences it for the whole suite.
+func realShimAutoInstall(t *testing.T) {
+	t.Helper()
+	saved := autoInstallShim
+	t.Cleanup(func() { autoInstallShim = saved })
+	autoInstallShim = autoInstallCodexShim
 }
 
 // stubProfile points the profile client at a local server for the duration of
