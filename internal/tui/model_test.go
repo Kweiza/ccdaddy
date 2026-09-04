@@ -6,7 +6,9 @@ import (
 	"go/parser"
 	"go/token"
 	"io"
+	"os/exec"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -491,6 +493,65 @@ func TestEnterOnTheProviderChoiceReleasesTheTerminalRatherThanCapturingBytes(t *
 	}
 	if next.scr != screenPage {
 		t.Fatalf("the choice stayed on screen %d behind the released login", next.scr)
+	}
+}
+
+// The row the cursor is standing on is the provider that would be added. Every
+// choice is reachable from where the screen opens, and each one hands back its
+// own command line rather than the list's first.
+func TestTheProviderTheCursorIsOnIsTheOneThatWouldBeAdded(t *testing.T) {
+	choices := addChoices()
+	if len(choices) < 2 {
+		t.Fatal("there is only one provider, so moving the cursor cannot change the answer")
+	}
+	for i, want := range choices {
+		a := appAt(t, fixtureOptions(), 113, 26)
+		a, _, _ = a.key(keyPress("a"))
+		for range i {
+			a, _, _ = a.key(keyPress("down"))
+		}
+		if got := a.pick.Chosen(); !slices.Equal(got, want.argv) {
+			t.Errorf("%d down from the top the choice is %v, want %s's %v", i, got, want.label, want.argv)
+		}
+	}
+}
+
+// The login that opens is the one the cursor was standing on when enter was
+// pressed, and this reads the command line that is ACTUALLY released rather
+// than the one the picker would have handed over.
+//
+// Those are two different claims, and only this one is the user's: a handler
+// that consulted the list instead of the cursor would leave every assertion
+// about the picker green while enter on Codex opened the Claude login. The
+// library wraps the child in a message it does not export, so the release goes
+// through a package var to be readable at all.
+func TestTheLoginThatIsReleasedIsTheProviderTheCursorWasOn(t *testing.T) {
+	var released []string
+	old := execProcess
+	execProcess = func(c *exec.Cmd, fn tea.ExecCallback) tea.Cmd {
+		released = slices.Clone(c.Args[1:])
+		return func() tea.Msg { return addFinishedMsg{} }
+	}
+	t.Cleanup(func() { execProcess = old })
+
+	choices := addChoices()
+	if len(choices) < 2 {
+		t.Fatal("there is only one provider, so moving the cursor cannot change the login")
+	}
+	for i, want := range choices {
+		released = nil
+		a := appAt(t, fixtureOptions(), 113, 26)
+		a, _, _ = a.key(keyPress("a"))
+		for range i {
+			a, _, _ = a.key(keyPress("down"))
+		}
+		_, cmd, ok := a.key(keyPress("enter"))
+		if !ok || cmd == nil {
+			t.Fatalf("enter on %s was not handled or released nothing", want.label)
+		}
+		if !slices.Equal(released, want.argv) {
+			t.Errorf("enter on %s released %v, want %v", want.label, released, want.argv)
+		}
 	}
 }
 

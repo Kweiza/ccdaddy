@@ -457,6 +457,17 @@ func (a App) pickerKey(msg tea.KeyPressMsg, k KeyMap) (App, tea.Cmd, bool) {
 	return a.pickMotion(msg, k)
 }
 
+// execProcess is tea.ExecProcess behind a name, for the reason tick is: the
+// release is otherwise unobservable.
+//
+// The library takes the *exec.Cmd and wraps it in an unexported message, so the
+// command line this key actually hands the terminal to cannot be read back out
+// of the returned Cmd by anything outside the library. Behind a var, a test can
+// press its way to a provider and read the argv that was released -- which is
+// the one fact this key exists to get right, and the one that a login opening
+// for the wrong provider would be the only report of.
+var execProcess = tea.ExecProcess
+
 // addProviderKey is the provider choice, and it is a SEPARATE handler from
 // pickerKey for one word: enter.
 //
@@ -478,7 +489,7 @@ func (a App) addProviderKey(msg tea.KeyPressMsg, k KeyMap) (App, tea.Cmd, bool) 
 		if err != nil {
 			return a, func() tea.Msg { return addFinishedMsg{err: err} }, true
 		}
-		return a, tea.ExecProcess(c, func(err error) tea.Msg { return addFinishedMsg{err: err} }), true
+		return a, execProcess(c, func(err error) tea.Msg { return addFinishedMsg{err: err} }), true
 	}
 	return a.pickMotion(msg, k)
 }
