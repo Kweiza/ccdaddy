@@ -1466,8 +1466,8 @@ func proseOf(block []string) []string {
 // only that one.
 //
 // So this asks the structural question, where no fixture gets a vote: every
-// Fprintln into out in this function folds, and there are six of them. A
-// seventh line turns this red on purpose. That is the whole mechanism -- the
+// Fprintln into out in this function folds, and there are eight of them. A
+// ninth line turns this red on purpose. That is the whole mechanism -- the
 // paragraph in status.go cannot make anybody read it, and this can.
 //
 // The width EXPRESSION is pinned too, by source rather than by value.
@@ -1479,7 +1479,7 @@ func TestEveryLineOfTheStatusBlockFoldsAtTheFilesWidth(t *testing.T) {
 	const (
 		file      = "status.go"
 		fn        = "renderStatus"
-		wantSites = 7
+		wantSites = 8
 		wantWidth = "outWidth(cmd.OutOrStdout())"
 	)
 
@@ -1700,5 +1700,141 @@ func TestStatusJSONRendersEveryTimeInOneZone(t *testing.T) {
 func TestJSONZoneIsTheMachineZone(t *testing.T) {
 	if got := readerZone(); got != time.Local {
 		t.Errorf("--json documents render in %v, want the machine's zone %v", got, time.Local)
+	}
+}
+
+func TestStatusWarnsWhenTheCodexProxyIsNotOnThePortCodexWasTold(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	stubDaemon(t, daemon.Report{
+		State:     daemon.DaemonRunning,
+		HasStatus: true,
+		Status: daemon.Status{
+			SchemaVersion:      daemon.StatusSchemaVersion,
+			PID:                1,
+			StartedAt:          statusNow.Add(-time.Hour),
+			CodexProxyPort:     24242,
+			CodexProxyFellBack: true,
+		},
+	}, nil)
+
+	code, stdout, _, _ := runRoot(t, "status")
+	if code != ExitOK {
+		t.Fatalf("exit %d, want 0\n%s", code, stdout)
+	}
+	if !strings.Contains(stdout, "must be relaunched") {
+		t.Errorf("the dashboard never says the old sessions have to be relaunched:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "24242") {
+		t.Errorf("the dashboard does not name the port the proxy is actually on:\n%s", stdout)
+	}
+}
+
+func TestStatusSaysNothingAboutAProxyOnThePortItResolved(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	stubDaemon(t, daemon.Report{
+		State:     daemon.DaemonRunning,
+		HasStatus: true,
+		Status: daemon.Status{
+			SchemaVersion:  daemon.StatusSchemaVersion,
+			PID:            1,
+			StartedAt:      statusNow.Add(-time.Hour),
+			CodexProxyPort: 24242,
+		},
+	}, nil)
+
+	code, stdout, _, _ := runRoot(t, "status")
+	if code != ExitOK {
+		t.Fatalf("exit %d, want 0\n%s", code, stdout)
+	}
+	if strings.Contains(stdout, "must be relaunched") {
+		t.Errorf("the dashboard warns about a proxy that is on the port it resolved:\n%s", stdout)
+	}
+}
+
+// The two fixtures below differ from the first one in exactly ONE field, the
+// daemon state, which is what makes each of them an assertion about that field
+// rather than about the block as a whole.
+//
+// A stopped daemon leaves its last status document behind, readable, with
+// codexProxyFellBack still true inside it. The lock says nobody is running and
+// the file is still there; that pairing is not a contradiction and this package
+// already exercises it. Reading the fallback flag out of such a document and
+// printing it would name a loopback port nothing is bound to and tell the user
+// to relaunch sessions when what they actually need is a daemon -- and `ccdad
+// doctor` answers the same machine the opposite way, returning "no daemon is
+// running, so nothing is serving codex" before it ever looks at the flag.
+func TestStatusSaysNothingAboutTheProxyWhenTheDaemonIsStopped(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	stubDaemon(t, daemon.Report{
+		State:     daemon.DaemonStopped,
+		HasStatus: true,
+		Status: daemon.Status{
+			SchemaVersion:      daemon.StatusSchemaVersion,
+			PID:                1,
+			StartedAt:          statusNow.Add(-time.Hour),
+			CodexProxyPort:     24242,
+			CodexProxyFellBack: true,
+		},
+	}, nil)
+
+	code, stdout, _, _ := runRoot(t, "status")
+	if code != ExitOK {
+		t.Fatalf("exit %d, want 0\n%s", code, stdout)
+	}
+	// The positive half, and it is load bearing rather than decoration. This
+	// fixture seeds no accounts, so renderStatus prints the daemon line and
+	// returns two lines later: an assertion that only looked for the ABSENCE of
+	// the sentence would stay green with the whole block deleted, which is the
+	// blind shape this pair exists to avoid. Proving the daemon line rendered
+	// is what turns the silence below into a decision the code made.
+	if !strings.Contains(stdout, "Daemon:  not running") {
+		t.Fatalf("the daemon line never rendered, so the silence below proves nothing:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "must be relaunched") {
+		t.Errorf("the dashboard tells the user to relaunch codex sessions against a port whose daemon is gone:\n%s", stdout)
+	}
+}
+
+// "Cannot tell" is never folded into "no", which is the rule this repository
+// states wherever a daemon state is read: DaemonUnknown means the lock could
+// not be probed, and on a filesystem where locks do not work the daemon may
+// well be running with a proxy that fell back. That reader is exactly the one
+// the sentence is written for, so the guard excludes the definite no and
+// nothing else.
+//
+// Without this test the guard could be narrowed from `!= daemon.DaemonStopped`
+// to `== daemon.DaemonRunning` with every other test in the package still
+// green, and the narrowing would read like a tightening rather than the
+// silencing it is.
+//
+// The probe error alongside a readable document is the real shape and not a
+// contrived one: daemon.Observe reads the status file BEFORE it touches the
+// singleton, so a lock it cannot probe costs the liveness verdict and not the
+// contents. The error itself lands on stderr as a notice, which is why this
+// asserts on stdout and why the exit code is still 0.
+func TestStatusWarnsWhenTheCodexProxyFellBackAndTheDaemonStateIsUnknown(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	stubDaemon(t, daemon.Report{
+		State:     daemon.DaemonUnknown,
+		HasStatus: true,
+		Status: daemon.Status{
+			SchemaVersion:      daemon.StatusSchemaVersion,
+			PID:                1,
+			StartedAt:          statusNow.Add(-time.Hour),
+			CodexProxyPort:     24242,
+			CodexProxyFellBack: true,
+		},
+	}, daemon.ErrLocksUnsupported)
+
+	code, stdout, _, _ := runRoot(t, "status")
+	if code != ExitOK {
+		t.Fatalf("exit %d, want 0\n%s", code, stdout)
+	}
+	if !strings.Contains(stdout, "must be relaunched") {
+		t.Errorf("a daemon whose lock could not be probed silenced the fallback warning, and a probe that cannot answer is not a daemon that is stopped:\n%s", stdout)
 	}
 }
