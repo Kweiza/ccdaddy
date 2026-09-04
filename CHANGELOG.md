@@ -39,7 +39,9 @@ by `uuid` or `alias`.
   `TestTheProxyBindsBeforeTheFirstStatusIsPublished`,
   `TestAProxyThatCannotBindStopsTheDaemon`,
   `TestTheProxyIsDrainedBeforeTheFinalDocument`, `TestAnOccupiedConfiguredPortIsARefusal`,
-  `TestAnOccupiedAutomaticPortFallsBack`, `TestADerivedPortIsInTheBandAndIsStable`
+  `TestAnOccupiedAutomaticPortFallsBack`, `TestADerivedPortIsInTheBandAndIsStable`,
+  `TestTheConfiguredProxyPortIsTheOneBound`, `TestAFallbackPortIsNeverRecorded`,
+  `TestTheBoundPortIsRecordedSoTheNextStartComesBackOnIt`
   and `TestStatusWarnsWhenTheCodexProxyIsNotOnThePortCodexWasTold`.
 
 - **A codex process proves itself with a lock its launcher holds, never with the
