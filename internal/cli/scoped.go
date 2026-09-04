@@ -165,11 +165,12 @@ var scopedSessionRefusals = map[string]string{
 	"ccdad switch": "would write this session's credentials file rather than the live login",
 	"ccdad auto":   "would write this session's credentials file rather than the live login",
 
-	// add reads the live file to decide which machine-scoped keys belong to
-	// the account it is storing, and with --activate writes it. Inside a
-	// session both are the session's file, so the keys of whoever the session
-	// is running as would be carried onto the account being added.
-	"ccdad add": "reads the live login to decide which machine-scoped keys to store, and with --activate writes it",
+	// The Claude login reads the live file to decide which machine-scoped keys
+	// belong to the account it is storing, and with --activate writes it.
+	// Inside a session both are the session's file, so the keys of whoever the
+	// session is running as would be carried onto the account being added. Its
+	// Codex sibling touches none of that and is allowed below.
+	"ccdad add claude": "reads the live login to decide which machine-scoped keys to store, and with --activate writes it",
 
 	// The worst split of the set. activateAPIKeyAccount writes primaryApiKey
 	// into (CLAUDE_CONFIG_DIR ?? $HOME)/.claude.json -- which the DEFAULT
@@ -242,6 +243,23 @@ var scopedSessionAllowed = map[string]bool{
 	"ccdad which":  true,
 	"ccdad doctor": true,
 	"ccdad export": true,
+
+	// The `add` group itself acts on nothing: it resolves to a usage error
+	// naming the two providers, and every login under it carries its own
+	// verdict. Allowed rather than refused for that second reason — a refusal
+	// does NOT cascade to children, so it would buy no protection the leaves do
+	// not already give, and it would answer a command that touches no state at
+	// all with a sentence about writing Claude Code's.
+	"ccdad add": true,
+
+	// The Codex login writes only ccdad's OWN store, which CCDAD_HOME points at
+	// and a session does not scope. `ccdad add claude` is refused and its
+	// sibling here is not, and the difference is what each of them touches:
+	// that one can activate a Claude Code login, which is exactly the state a
+	// session scopes a copy of. This one stores an account ccdad serves through
+	// its own proxy and never writes Claude Code's credentials, Claude Code's
+	// config or codex's home.
+	"ccdad add codex": true,
 
 	// runway reads the usage cache and the recorded series, both of which live
 	// under CCDAD_HOME. A session scopes Claude Code's credential and config
@@ -341,19 +359,12 @@ var scopedSessionAllowed = map[string]bool{
 	// the dashboard carries, for the same reason and about the same seam.
 	"ccdad mcp": true,
 
-	// The Codex commands write only ccdad's OWN store, which CCDAD_HOME points
-	// at and a session does not scope. `ccdad add` is refused in here and this
-	// one is not, and the difference is what each of them touches: that one can
-	// activate a Claude Code login, which is exactly the state a session scopes
-	// a copy of. This one stores an account ccdad serves through its own proxy
-	// and never writes Claude Code's credentials, Claude Code's config or
-	// codex's home.
-	//
-	// The parent carries a verdict of its own because the totality test walks
-	// every node of the tree, and a group with no verdict is a group whose
-	// subcommands were classified and whose own path was not.
-	"ccdad codex":     true,
-	"ccdad codex add": true,
+	// The Codex group carries a verdict of its own because the totality test
+	// walks every node of the tree, and a group with no verdict is a group
+	// whose subcommands were classified and whose own path was not. Its login
+	// lives under `add` now; what is left here writes only ccdad's own store,
+	// <CCDAD_HOME>/bin and the user's shell startup file.
+	"ccdad codex": true,
 
 	// The shim writes <CCDAD_HOME>/bin and the user's shell startup file. A
 	// session scopes Claude Code's credential and config homes and nothing

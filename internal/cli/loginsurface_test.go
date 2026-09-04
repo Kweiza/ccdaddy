@@ -21,7 +21,7 @@ import (
 // wrong flag can have. So the two helps are held to naming the SURFACE rather
 // than the billing, and the type's own doc is the thing they may not contradict.
 func TestTheLoginSurfaceFlagsDoNotContradictTheSurfaceTheySelect(t *testing.T) {
-	cmd := newAddCmd()
+	cmd := newAddClaudeCmd()
 
 	consoleHelp := cmd.Flags().Lookup("console").Usage
 	claudeaiHelp := cmd.Flags().Lookup("claudeai").Usage

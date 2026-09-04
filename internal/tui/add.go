@@ -18,7 +18,7 @@ import (
 // the user was never shown.
 const addNeedsStderr = "add needs a terminal on stderr: the login writes its prompt and its paste " +
 	"instructions there, and stderr is redirected. Run ccdad without redirecting stderr, " +
-	"or run 'ccdad add' on its own."
+	"or run 'ccdad add claude' or 'ccdad add codex' on its own."
 
 // addFinishedMsg is what the released child's completion carries back to the
 // event loop: the error, and nothing else. Everything the login had to say it
@@ -33,12 +33,13 @@ type addFinishedMsg struct{ err error }
 // several minutes cannot be allowed to drift away from what actually runs.
 //
 // The labels are the providers' own names rather than the command lines. A user
-// on this screen is answering "which account am I adding", and `codex add`
-// against `add` would make the answer look like a difference in spelling.
+// on this screen is answering "which account am I adding", and the answer is
+// the provider whether or not the two command lines happen to differ by one
+// word.
 func addChoices() []pickerItem {
 	return []pickerItem{
-		{label: "Claude", argv: []string{"add"}},
-		{label: "Codex", argv: []string{"codex", "add"}},
+		{label: "Claude", argv: []string{"add", "claude"}},
+		{label: "Codex", argv: []string{"add", "codex"}},
 	}
 }
 

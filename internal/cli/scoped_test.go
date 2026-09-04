@@ -128,7 +128,7 @@ func TestEveryMutatorIsRefusedInsideARunSession(t *testing.T) {
 	}{
 		{"switch", []string{"switch", "acct-2"}},
 		{"auto", []string{"auto", "--once"}},
-		{"add", []string{"add"}},
+		{"add claude", []string{"add", "claude"}},
 		{"add-token", []string{"add-token", "sk-ant-oat-test"}},
 		{"remove", []string{"remove", "acct-1", "--yes"}},
 		{"uninstall", []string{"uninstall", "--yes"}},

@@ -79,7 +79,7 @@ func TestCodexAddStoresTheAccountFromTheIDTokenClaims(t *testing.T) {
 	isolate(t)
 	stubCodexDevice(t, ownerPayload, nil)
 
-	code, _, stderr, top := runRoot(t, "codex", "add")
+	code, _, stderr, top := runRoot(t, "add", "codex")
 	if code != ExitOK {
 		t.Fatalf("exit = %d, want 0\nstderr: %s\ntop: %s", code, stderr, top)
 	}
@@ -136,7 +136,7 @@ func TestCodexAddPrintsTheCodeAndTheVerificationPage(t *testing.T) {
 	isolate(t)
 	stubCodexDevice(t, ownerPayload, nil)
 
-	_, _, stderr, _ := runRoot(t, "codex", "add")
+	_, _, stderr, _ := runRoot(t, "add", "codex")
 	for _, want := range []string{"ABCD-EFGH", codexauth.DeviceVerifyURL} {
 		if !strings.Contains(stderr, want) {
 			t.Errorf("stderr = %q, want it to carry %q", stderr, want)
@@ -152,7 +152,7 @@ func TestCodexAddRefusesAWorkspaceMemberSeatWithNoTerminal(t *testing.T) {
 	stubEnvironment(t, false, false)
 	stubCodexDevice(t, memberPayload, nil)
 
-	code, _, stderr, top := runRoot(t, "codex", "add")
+	code, _, stderr, top := runRoot(t, "add", "codex")
 	if code != ExitUsage {
 		t.Fatalf("exit = %d, want %d\nstderr: %s\ntop: %s", code, ExitUsage, stderr, top)
 	}
@@ -173,7 +173,7 @@ func TestCodexAddAcceptsAWorkspaceMemberSeatWithTheFlag(t *testing.T) {
 	stubEnvironment(t, false, false)
 	stubCodexDevice(t, memberPayload, nil)
 
-	code, _, stderr, top := runRoot(t, "codex", "add", "--allow-workspace-member")
+	code, _, stderr, top := runRoot(t, "add", "codex", "--allow-workspace-member")
 	if code != ExitOK {
 		t.Fatalf("exit = %d, want 0\nstderr: %s\ntop: %s", code, stderr, top)
 	}
@@ -188,7 +188,7 @@ func TestCodexAddAsksBeforeAddingAWorkspaceMemberSeatOnATerminal(t *testing.T) {
 	stubEnvironment(t, true, false)
 	stubCodexDevice(t, memberPayload, nil)
 
-	cmd := newCodexAddCmd()
+	cmd := newAddCodexCmd()
 	cmd.SetIn(strings.NewReader("n\n"))
 	err, _, errOut := runCmd(t, cmd)
 	if CodeFor(err) != ExitNothingToDo {
@@ -210,12 +210,12 @@ func TestCodexAddAsksBeforeAddingAWorkspaceMemberSeatOnATerminal(t *testing.T) {
 func TestCodexAddRefusesTheSameUserInADifferentWorkspace(t *testing.T) {
 	isolate(t)
 	stubCodexDevice(t, ownerPayload, nil)
-	if code, _, _, top := runRoot(t, "codex", "add"); code != ExitOK {
+	if code, _, _, top := runRoot(t, "add", "codex"); code != ExitOK {
 		t.Fatalf("the first add failed: %s", top)
 	}
 
 	stubCodexDevice(t, memberPayload, nil)
-	code, _, _, top := runRoot(t, "codex", "add", "--allow-workspace-member")
+	code, _, _, top := runRoot(t, "add", "codex", "--allow-workspace-member")
 	if code != ExitUsage {
 		t.Fatalf("exit = %d, want %d\ntop: %s", code, ExitUsage, top)
 	}
@@ -241,7 +241,7 @@ func TestCodexAddNeverTouchesTheCodexHome(t *testing.T) {
 	t.Setenv("CODEX_HOME", codexHome)
 	stubCodexDevice(t, ownerPayload, nil)
 
-	if code, _, _, top := runRoot(t, "codex", "add"); code != ExitOK {
+	if code, _, _, top := runRoot(t, "add", "codex"); code != ExitOK {
 		t.Fatalf("exit = %d: %s", code, top)
 	}
 	entries, err := os.ReadDir(codexHome)
@@ -257,7 +257,7 @@ func TestCodexAddReportsAFailedLoginAndStoresNothing(t *testing.T) {
 	isolate(t)
 	stubCodexDevice(t, ownerPayload, errors.New("the device code expired before it was approved"))
 
-	code, _, _, top := runRoot(t, "codex", "add")
+	code, _, _, top := runRoot(t, "add", "codex")
 	if code != ExitFailure {
 		t.Fatalf("exit = %d, want %d\ntop: %s", code, ExitFailure, top)
 	}
@@ -275,17 +275,38 @@ func TestCodexWithNoSubcommandIsAUsageError(t *testing.T) {
 	if code != ExitUsage {
 		t.Fatalf("exit = %d, want %d\ntop: %s", code, ExitUsage, top)
 	}
-	if !strings.Contains(top, "add") {
-		t.Errorf("the refusal does not name a subcommand:\n%s", top)
+	if !strings.Contains(top, "exec") || !strings.Contains(top, "shim") {
+		t.Errorf("the refusal does not name the subcommands this group still has:\n%s", top)
+	}
+}
+
+// `ccdad codex add` is one release old and is REMOVED rather than kept as a
+// hidden alias. An alias exits 0, so a script still spelling it that way would
+// go on working and its author would never learn the name had moved; a usage
+// error naming the spelling that works is the only shape they read.
+//
+// This fires from the parent's own Args, which cobra reaches before any
+// persistent pre-run hook, so the tombstone is what a user sees from inside a
+// `ccdad run` session too.
+func TestTheOldCodexAddSpellingIsATombstoneAndNotAnAlias(t *testing.T) {
+	isolate(t)
+
+	code, _, _, top := runRoot(t, "codex", "add")
+
+	if code != ExitUsage {
+		t.Fatalf("exit = %d, want %d\ntop: %s", code, ExitUsage, top)
+	}
+	if !strings.Contains(top, "ccdad add codex") {
+		t.Errorf("the tombstone does not name the spelling that works:\n%s", top)
 	}
 }
 
 // Both new paths are ALLOWED in a scoped session. A session scopes Claude
 // Code's credential and config homes and nothing else, and this command writes
-// only ccdad's own store — which is also why `ccdad add` stays refused and this
-// one does not: that one activates a Claude login.
+// only ccdad's own store — which is also why `ccdad add claude` stays refused
+// and this one does not: that one activates a Claude login.
 func TestTheCodexPathsAreAllowedInsideARunSession(t *testing.T) {
-	for _, path := range []string{"ccdad codex", "ccdad codex add"} {
+	for _, path := range []string{"ccdad codex", "ccdad add codex"} {
 		if !scopedSessionAllowed[path] {
 			t.Errorf("%q has no allowed verdict", path)
 		}
@@ -298,7 +319,7 @@ func TestTheCodexPathsAreAllowedInsideARunSession(t *testing.T) {
 func TestCodexAddHonoursThePollingIntervalItWasGiven(t *testing.T) {
 	isolate(t)
 	slept := stubCodexDevice(t, ownerPayload, nil)
-	if code, _, _, top := runRoot(t, "codex", "add"); code != ExitOK {
+	if code, _, _, top := runRoot(t, "add", "codex"); code != ExitOK {
 		t.Fatalf("exit = %d: %s", code, top)
 	}
 	if *slept != 1 {
@@ -367,14 +388,14 @@ func TestCodexAddAdviceNamesOnlyCommandsThatWorkForACodexAccount(t *testing.T) {
 	isolate(t)
 	stubCodexDevice(t, ownerPayload, nil)
 
-	code, _, stderr, top := runRoot(t, "codex", "add")
+	code, _, stderr, top := runRoot(t, "add", "codex")
 	if code != ExitOK {
 		t.Fatalf("the add itself failed: %s%s", stderr, top)
 	}
 
 	texts := map[string]string{
 		"the success message": stderr,
-		"the Long help text":  newCodexAddCmd().Long,
+		"the Long help text":  newAddCodexCmd().Long,
 	}
 
 	for label, text := range texts {
@@ -469,7 +490,7 @@ func TestCodexWorkspaceSeat(t *testing.T) {
 func TestCodexAddReauthenticatesTheSameAccountInPlace(t *testing.T) {
 	isolate(t)
 	stubCodexDevice(t, ownerPayload, nil)
-	if code, _, _, top := runRoot(t, "codex", "add"); code != ExitOK {
+	if code, _, _, top := runRoot(t, "add", "codex"); code != ExitOK {
 		t.Fatalf("the first add failed: %s", top)
 	}
 	if code, _, _, top := runRoot(t, "alias", "1", "codex-main"); code != ExitOK {
@@ -480,7 +501,7 @@ func TestCodexAddReauthenticatesTheSameAccountInPlace(t *testing.T) {
 	}
 
 	stubCodexDevice(t, ownerPayload, nil)
-	if code, _, _, top := runRoot(t, "codex", "add"); code != ExitOK {
+	if code, _, _, top := runRoot(t, "add", "codex"); code != ExitOK {
 		t.Fatalf("the re-add failed: %s", top)
 	}
 
@@ -535,7 +556,7 @@ func TestCodexAddFallsBackToARealClientWhenTheSeamReturnsNil(t *testing.T) {
 	}
 	codexDeviceSleep = func(time.Duration) {}
 
-	code, _, _, top := runRoot(t, "codex", "add")
+	code, _, _, top := runRoot(t, "add", "codex")
 	if code != ExitOK {
 		t.Fatalf("exit = %d, want 0: %s", code, top)
 	}

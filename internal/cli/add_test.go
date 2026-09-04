@@ -55,7 +55,7 @@ func TestDetectTokenType(t *testing.T) {
 func TestAddCmdRejectsBothSurfaceFlags(t *testing.T) {
 	isolate(t)
 
-	err, _, _ := runCmd(t, newAddCmd(), "--claudeai", "--console")
+	err, _, _ := runCmd(t, newAddClaudeCmd(), "--claudeai", "--console")
 	if err == nil {
 		t.Fatal("Execute() = nil, want a usage error")
 	}
@@ -83,7 +83,7 @@ func TestArgCountViolationsAreUsageErrors(t *testing.T) {
 	isolate(t)
 
 	for _, args := range [][]string{
-		{"add", "one", "two"},
+		{"add", "claude", "one", "two"},
 		{"add-token", "one", "two"},
 	} {
 		code, _, _, _ := runRoot(t, args...)
@@ -93,12 +93,78 @@ func TestArgCountViolationsAreUsageErrors(t *testing.T) {
 	}
 }
 
+// Bare `ccdad add` names both providers rather than picking one.
+//
+// A default would be the worse of the two answers available. `ccdad add` meant
+// Claude for the whole of this program's life, so a silent default is exactly
+// the shape that logs somebody into Claude when they typed those words meaning
+// to add a Codex account — and both spellings exit 0, so nothing would say so.
+func TestBareAddNamesBothProvidersRatherThanDefaultingToOne(t *testing.T) {
+	isolate(t)
+
+	code, _, _, top := runRoot(t, "add")
+
+	if code != ExitUsage {
+		t.Fatalf("exit = %d, want %d\ntop: %s", code, ExitUsage, top)
+	}
+	for _, want := range []string{"claude", "codex"} {
+		if !strings.Contains(top, want) {
+			t.Errorf("the refusal does not name %q:\n%s", want, top)
+		}
+	}
+}
+
+// `ccdad add work` is how an alias was given until this release, and it is the
+// one mistake this rename guarantees somebody will make. Cobra's own answer to
+// it is `unknown command "work" for "ccdad add"`, which names neither the
+// provider that is missing nor where the alias goes now.
+//
+// The group's own Args answers instead, and it fires BEFORE the scoped-session
+// gate: cobra validates positional arguments ahead of every persistent pre-run
+// hook, so inside a `ccdad run` session this is still the message a user gets.
+func TestYesterdaysAliasGrammarIsToldWhereTheAliasGoesNow(t *testing.T) {
+	isolate(t)
+
+	code, _, _, top := runRoot(t, "add", "work")
+
+	if code != ExitUsage {
+		t.Fatalf("exit = %d, want %d\ntop: %s", code, ExitUsage, top)
+	}
+	if !strings.Contains(top, "ccdad add claude work") {
+		t.Errorf("the refusal does not say where the alias goes now:\n%s", top)
+	}
+	if strings.Contains(top, "unknown command") {
+		t.Errorf("cobra's own answer got through:\n%s", top)
+	}
+}
+
+// The group is ALLOWED inside a `ccdad run` session and the Claude login is
+// refused, which is not an oversight in either direction.
+//
+// A refusal does not cascade: every leaf carries its own verdict, so a refusal
+// on the group would protect nothing that the leaf below does not already
+// protect, and it would answer a command that touches no state at all with a
+// sentence about writing Claude Code's.
+func TestTheAddGroupIsAllowedInASessionAndTheClaudeLoginIsRefused(t *testing.T) {
+	if !scopedSessionAllowed["ccdad add"] {
+		t.Error("`ccdad add` has no allowed verdict; the group acts on nothing and a refusal " +
+			"there would neither reach its children nor describe what it refused")
+	}
+	if _, refused := scopedSessionRefusals["ccdad add"]; refused {
+		t.Error("`ccdad add` is refused; it is a usage error that touches nothing")
+	}
+	if _, refused := scopedSessionRefusals["ccdad add claude"]; !refused {
+		t.Error("`ccdad add claude` has no refusal; it reads the live login to decide which " +
+			"machine-scoped keys to store, and with --activate writes it")
+	}
+}
+
 // Giving the alias twice is a user mistake that must be named, not silently
 // resolved in favour of one of them.
 func TestAddRejectsTheAliasGivenTwice(t *testing.T) {
 	isolate(t)
 
-	err, _, _ := runCmd(t, newAddCmd(), "mine", "--alias", "yours")
+	err, _, _ := runCmd(t, newAddClaudeCmd(), "mine", "--alias", "yours")
 	if err == nil {
 		t.Fatal("Execute() = nil, want a usage error when the alias is given twice")
 	}
@@ -108,7 +174,7 @@ func TestAddRejectsTheAliasGivenTwice(t *testing.T) {
 	// A single --alias is not a mistake, and must get past validation. It then
 	// stops at the environment refusal, which is how this asserts "accepted"
 	// without running a real login.
-	err, _, _ = runCmd(t, newAddCmd(), "--alias", "same")
+	err, _, _ = runCmd(t, newAddClaudeCmd(), "--alias", "same")
 	if got := CodeFor(err); got != ExitBlocked {
 		t.Fatalf("CodeFor(single --alias) = %d, want %d: it should reach the environment check", got, ExitBlocked)
 	}
@@ -122,7 +188,7 @@ func TestAddRefusesUpFrontWithNeitherBrowserNorTTY(t *testing.T) {
 	stubEnvironment(t, false, false)
 
 	start := time.Now()
-	err, _, _ := runCmd(t, newAddCmd())
+	err, _, _ := runCmd(t, newAddClaudeCmd())
 	if err == nil {
 		t.Fatal("Execute() = nil, want a refusal")
 	}
@@ -492,7 +558,7 @@ func TestAddStoresTheClassifiedKind(t *testing.T) {
 			})
 			stubLogin(t, loginToken("acct-1", "a@example.com", "RT-1"))
 
-			if err, _, _ := runCmd(t, newAddCmd()); err != nil {
+			if err, _, _ := runCmd(t, newAddClaudeCmd()); err != nil {
 				t.Fatal(err)
 			}
 			s, _ := store.Open()
@@ -589,7 +655,7 @@ func TestAddOnACancelledContextExitsInterrupted(t *testing.T) {
 
 	root := NewRootCmd()
 	root.SetContext(ctx)
-	root.SetArgs([]string{"add"})
+	root.SetArgs([]string{"add", "claude"})
 	root.SetOut(io.Discard)
 	root.SetErr(io.Discard)
 
@@ -711,7 +777,7 @@ func TestAddAsksTheLoginForWhatTheFlagsSay(t *testing.T) {
 			})
 			rec := stubLogin(t, loginToken("acct-1", "a@example.com", "RT-1"))
 
-			if err, _, _ := runCmd(t, newAddCmd(), tc.args...); err != nil {
+			if err, _, _ := runCmd(t, newAddClaudeCmd(), tc.args...); err != nil {
 				t.Fatal(err)
 			}
 
@@ -766,7 +832,7 @@ func TestAddAnnouncesTheURLAndWhichPathCanFinish(t *testing.T) {
 			})
 			stubLogin(t, loginToken("acct-1", "a@example.com", "RT-1"))
 
-			err, _, stderr := runCmd(t, newAddCmd())
+			err, _, stderr := runCmd(t, newAddClaudeCmd())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -795,7 +861,7 @@ func TestAddDoesNotSwitchWithoutActivate(t *testing.T) {
 		io.WriteString(w, profileJSON("acct-1", "a@example.com"))
 	})
 
-	if err, _, _ := runCmd(t, newAddCmd()); err != nil {
+	if err, _, _ := runCmd(t, newAddClaudeCmd()); err != nil {
 		t.Fatalf("Execute() = %v, want nil", err)
 	}
 	assertNoLiveCredentials(t)
@@ -817,7 +883,7 @@ func TestAddWithActivateWritesTheLiveFile(t *testing.T) {
 		io.WriteString(w, profileJSON("acct-1", "a@example.com"))
 	})
 
-	if err, _, _ := runCmd(t, newAddCmd(), "--activate"); err != nil {
+	if err, _, _ := runCmd(t, newAddClaudeCmd(), "--activate"); err != nil {
 		t.Fatalf("Execute() = %v, want nil", err)
 	}
 
@@ -865,7 +931,7 @@ func TestAddWithActivateUpdatesOAuthAccount(t *testing.T) {
 		io.WriteString(w, profileJSON("acct-1", "a@example.com"))
 	})
 
-	if err, _, _ := runCmd(t, newAddCmd(), "--activate"); err != nil {
+	if err, _, _ := runCmd(t, newAddClaudeCmd(), "--activate"); err != nil {
 		t.Fatalf("Execute() = %v, want nil", err)
 	}
 
@@ -894,14 +960,14 @@ func TestReAuthenticatingTheLiveAccountKeepsItsOtherKeys(t *testing.T) {
 	})
 
 	stubLogin(t, loginToken("acct-1", "a@example.com", "RT-1"))
-	if err, _, _ := runCmd(t, newAddCmd(), "--activate"); err != nil {
+	if err, _, _ := runCmd(t, newAddClaudeCmd(), "--activate"); err != nil {
 		t.Fatal(err)
 	}
 	// Claude Code earns these during use; they are not part of a fresh login.
 	addLiveKey(t, "trustedDeviceToken", `"device-token-value"`)
 
 	stubLogin(t, loginToken("acct-1", "a@example.com", "RT-2"))
-	if err, _, _ := runCmd(t, newAddCmd()); err != nil {
+	if err, _, _ := runCmd(t, newAddClaudeCmd()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -930,13 +996,13 @@ func TestAddingASecondAccountDoesNotInheritTheFirstsKeys(t *testing.T) {
 	})
 
 	stubLogin(t, loginToken("acct-1", "a@example.com", "RT-1"))
-	if err, _, _ := runCmd(t, newAddCmd(), "--activate"); err != nil {
+	if err, _, _ := runCmd(t, newAddClaudeCmd(), "--activate"); err != nil {
 		t.Fatal(err)
 	}
 	addLiveKey(t, "trustedDeviceToken", `"first-accounts-device"`)
 
 	stubLogin(t, loginToken("acct-2", "b@example.com", "RT-2"))
-	if err, _, _ := runCmd(t, newAddCmd()); err != nil {
+	if err, _, _ := runCmd(t, newAddClaudeCmd()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -965,12 +1031,12 @@ func TestAddRejectsAnAliasAnotherAccountHolds(t *testing.T) {
 	})
 
 	stubLogin(t, loginToken("acct-1", "a@example.com", "RT-1"))
-	if err, _, _ := runCmd(t, newAddCmd(), "--alias", "work"); err != nil {
+	if err, _, _ := runCmd(t, newAddClaudeCmd(), "--alias", "work"); err != nil {
 		t.Fatal(err)
 	}
 
 	stubLogin(t, loginToken("acct-2", "b@example.com", "RT-2"))
-	err, _, _ := runCmd(t, newAddCmd(), "--alias", "work")
+	err, _, _ := runCmd(t, newAddClaudeCmd(), "--alias", "work")
 	if err == nil {
 		t.Fatal("Execute() = nil, want the duplicate alias refused")
 	}
@@ -990,11 +1056,11 @@ func TestReAuthenticationHonoursANewAlias(t *testing.T) {
 	})
 
 	stubLogin(t, loginToken("acct-1", "a@example.com", "RT-1"))
-	if err, _, _ := runCmd(t, newAddCmd(), "--alias", "old"); err != nil {
+	if err, _, _ := runCmd(t, newAddClaudeCmd(), "--alias", "old"); err != nil {
 		t.Fatal(err)
 	}
 	stubLogin(t, loginToken("acct-1", "a@example.com", "RT-2"))
-	if err, _, _ := runCmd(t, newAddCmd(), "--alias", "new"); err != nil {
+	if err, _, _ := runCmd(t, newAddClaudeCmd(), "--alias", "new"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1083,7 +1149,7 @@ func TestReAuthenticationDoesNotAbsorbAnotherAccountsKeys(t *testing.T) {
 	})
 
 	stubLogin(t, loginToken("acct-1", "a@example.com", "RT-1"))
-	if err, _, _ := runCmd(t, newAddCmd(), "--activate"); err != nil {
+	if err, _, _ := runCmd(t, newAddClaudeCmd(), "--activate"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1093,7 +1159,7 @@ func TestReAuthenticationDoesNotAbsorbAnotherAccountsKeys(t *testing.T) {
 		`"trustedDeviceToken":"SOMEONE-ELSES-DEVICE","designOauth":{"refreshToken":"SOMEONE-ELSES-DESIGN"}}`)
 
 	stubLogin(t, loginToken("acct-1", "a@example.com", "RT-2"))
-	if err, _, _ := runCmd(t, newAddCmd()); err != nil {
+	if err, _, _ := runCmd(t, newAddClaudeCmd()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1132,7 +1198,7 @@ func TestAdoptingTheLiveLoginCarriesItsKeysWhenTheProfileProvesTheAccount(t *tes
 		`"trustedDeviceToken":"DEVICE","enterpriseGateway":{"url":"https://gw"}}`)
 
 	stubLogin(t, loginToken("acct-1", "a@example.com", "RT-1"))
-	if err, _, _ := runCmd(t, newAddCmd()); err != nil {
+	if err, _, _ := runCmd(t, newAddClaudeCmd()); err != nil {
 		t.Fatal(err)
 	}
 	if !probedLive {
@@ -1168,7 +1234,7 @@ func TestAdoptingTheLiveLoginSaysWhatItCannotCarryWhenTheProbeFails(t *testing.T
 		`"trustedDeviceToken":"DEVICE","enterpriseGateway":{"url":"https://gw"}}`)
 
 	stubLogin(t, loginToken("acct-1", "a@example.com", "RT-1"))
-	err, _, errOut := runCmd(t, newAddCmd())
+	err, _, errOut := runCmd(t, newAddClaudeCmd())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1245,7 +1311,7 @@ func TestAddTokenKeepsAnExistingOAuthRecord(t *testing.T) {
 	})
 
 	stubLogin(t, loginToken("acct-1", "a@example.com", "RT-1"))
-	if err, _, _ := runCmd(t, newAddCmd()); err != nil {
+	if err, _, _ := runCmd(t, newAddClaudeCmd()); err != nil {
 		t.Fatal(err)
 	}
 	if err, _, _ := runCmd(t, newAddTokenCmd(), "sk-ant-oat01-SAMEACCOUNT"); err != nil {
@@ -1275,7 +1341,7 @@ func TestSwitchPrefersTheOAuthRecordOverAToken(t *testing.T) {
 		io.WriteString(w, profileJSON("acct-1", "a@example.com"))
 	})
 	stubLogin(t, loginToken("acct-1", "a@example.com", "RT-1"))
-	if err, _, _ := runCmd(t, newAddCmd()); err != nil {
+	if err, _, _ := runCmd(t, newAddClaudeCmd()); err != nil {
 		t.Fatal(err)
 	}
 	if err, _, _ := runCmd(t, newAddTokenCmd(), "sk-ant-oat01-SAMEACCOUNT"); err != nil {
@@ -1326,7 +1392,7 @@ func TestAddActivateRunsTheUnknownKeyProbe(t *testing.T) {
 	writeLiveFile(t, `{"claudeAiOauth":{"accessToken":"OLD","refreshToken":"RT-OLD"},"somethingNew":{"a":1}}`)
 	stubLogin(t, loginToken("acct-1", "a@example.com", "RT-1"))
 
-	err, _, errOut := runCmd(t, newAddCmd(), "--activate")
+	err, _, errOut := runCmd(t, newAddClaudeCmd(), "--activate")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1350,7 +1416,7 @@ func TestCaptureDoesNotTreatTwoUnidentifiableCredentialsAsEqual(t *testing.T) {
 	writeLiveFile(t, `{"trustedDeviceToken":"UNKNOWN-OWNER","designOauth":{"refreshToken":"UNKNOWN"}}`)
 
 	stubLogin(t, loginToken("acct-1", "a@example.com", "RT-1"))
-	if err, _, _ := runCmd(t, newAddCmd()); err != nil {
+	if err, _, _ := runCmd(t, newAddClaudeCmd()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1379,12 +1445,12 @@ func TestReAuthenticatingANonLiveAccountKeepsItsOwnKeys(t *testing.T) {
 	})
 
 	stubLogin(t, loginToken("acct-1", "a@example.com", "RT-1"))
-	if err, _, _ := runCmd(t, newAddCmd(), "--activate"); err != nil {
+	if err, _, _ := runCmd(t, newAddClaudeCmd(), "--activate"); err != nil {
 		t.Fatal(err)
 	}
 	addLiveKey(t, "trustedDeviceToken", `"acct-1-device"`)
 	stubLogin(t, loginToken("acct-1", "a@example.com", "RT-2"))
-	if err, _, _ := runCmd(t, newAddCmd()); err != nil {
+	if err, _, _ := runCmd(t, newAddClaudeCmd()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1392,7 +1458,7 @@ func TestReAuthenticatingANonLiveAccountKeepsItsOwnKeys(t *testing.T) {
 	writeLiveFile(t, `{"claudeAiOauth":{"accessToken":"OTHER","refreshToken":"RT-OTHER"}}`)
 
 	stubLogin(t, loginToken("acct-1", "a@example.com", "RT-3"))
-	if err, _, _ := runCmd(t, newAddCmd()); err != nil {
+	if err, _, _ := runCmd(t, newAddClaudeCmd()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1417,7 +1483,7 @@ func TestAddOnALoginTimeoutExitsOne(t *testing.T) {
 		return nil, oauth.ErrLoginTimeout
 	}
 
-	err, _, _ := runCmd(t, newAddCmd())
+	err, _, _ := runCmd(t, newAddClaudeCmd())
 	if got := CodeFor(err); got != ExitFailure {
 		t.Fatalf("CodeFor = %d, want %d (a login timeout is exit 1)", got, ExitFailure)
 	}
@@ -1449,7 +1515,7 @@ func TestAddRepromptsOnAPasteItCouldNotRead(t *testing.T) {
 		return &oauth.LoginResult{Token: loginToken("acct-1", "a@example.com", "RT-1")}, nil
 	}
 
-	err, _, stderr := runCmd(t, newAddCmd())
+	err, _, stderr := runCmd(t, newAddClaudeCmd())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1495,7 +1561,7 @@ func TestAddReportsTheRejectionDetailBehindTheCannedMessage(t *testing.T) {
 				return nil, &oauth.RejectionError{Rejection: tc.rejection}
 			}
 
-			err, _, stderr := runCmd(t, newAddCmd())
+			err, _, stderr := runCmd(t, newAddClaudeCmd())
 			if err == nil {
 				t.Fatal("Execute() = nil, want the rejected login reported")
 			}
@@ -1532,7 +1598,7 @@ func TestAddLiftsTheEngineQuarantine(t *testing.T) {
 			stubProfile(t, func(w http.ResponseWriter, _ *http.Request) {
 				io.WriteString(w, profileJSON("acct-1", "a@example.com"))
 			})
-			return runCmd(t, newAddCmd())
+			return runCmd(t, newAddClaudeCmd())
 		}},
 		{"setup token", func(t *testing.T) (error, string, string) {
 			stubProfile(t, func(w http.ResponseWriter, _ *http.Request) {
@@ -1580,7 +1646,7 @@ func TestAddSaysNothingWhenThereWasNoQuarantine(t *testing.T) {
 		io.WriteString(w, profileJSON("acct-1", "a@example.com"))
 	})
 
-	err, _, stderr := runCmd(t, newAddCmd())
+	err, _, stderr := runCmd(t, newAddClaudeCmd())
 	if err != nil {
 		t.Fatalf("Execute() = %v, want nil", err)
 	}
@@ -1605,7 +1671,7 @@ func TestAddSurvivesAnUnwritableEngineState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err, _, stderr := runCmd(t, newAddCmd())
+	err, _, stderr := runCmd(t, newAddClaudeCmd())
 	if err != nil {
 		t.Fatalf("Execute() = %v, want the add to succeed anyway", err)
 	}
