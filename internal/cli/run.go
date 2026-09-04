@@ -1194,7 +1194,11 @@ func newRunCmd() *cobra.Command {
 			"ccdad daemon runs, pinned to that account for the whole session: the tail is\n" +
 			"optional and defaults to `codex`, and anything else in it is refused. Such a\n" +
 			"launch needs a daemon and never falls back — running it as whatever codex's\n" +
-			"own home holds would bill a different account and report success.\n\n" +
+			"own home holds would bill a different account and report success. `codex login`\n" +
+			"and `codex logout` are refused here for the same reason rather than run: both\n" +
+			"act on codex's own home rather than on the named account, and logout revokes\n" +
+			"that grant server-side with no undo. Run either from a plain shell, or add an\n" +
+			"account ccdad serves with `ccdad codex add`.\n\n" +
 			"There is no interactive disambiguation: an ambiguous reference is exit 2, because\n" +
 			"this command hands control to claude and callers need it to be deterministic.\n\n" +
 			"Everything at or after ACCOUNT is passed to claude verbatim, hyphens included. A\n" +
