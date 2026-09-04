@@ -48,17 +48,49 @@ func TestTheChildCarriesNoFlagsTheUserDidNotAskFor(t *testing.T) {
 	}
 }
 
-// The child runs the command line the chosen provider names, word for word.
-// The choice is the only thing that decides which login opens, and a child
-// assembled from anything else would hand the terminal to the other provider.
-func TestTheChildRunsTheCommandLineTheChosenProviderNames(t *testing.T) {
+// The child runs the argv it was handed, word for word: nothing is appended,
+// reordered or dropped on the way to the terminal. This says nothing about
+// WHICH argv arrives here -- that is the choice's job, pinned by the table
+// below and, end to end, by the keypress that releases the terminal.
+func TestTheChildRunsTheArgvItWasHandedWordForWord(t *testing.T) {
 	for _, argv := range AddArgvs() {
 		c, err := addChild(argv)
 		if err != nil {
 			t.Skipf("os.Executable() is unavailable here: %v", err)
 		}
 		if !slices.Equal(c.Args[1:], argv) {
-			t.Errorf("the child runs %v for the choice %v", c.Args[1:], argv)
+			t.Errorf("the child runs %v for the argv %v", c.Args[1:], argv)
+		}
+	}
+}
+
+// The provider a user reads is the provider whose login opens, and the pairing
+// is written out HERE, by value, rather than read out of the thing it is meant
+// to pin.
+//
+// Every assertion that takes both the label and the argv from the same row
+// holds just as well when the two argvs are transposed -- the label moves with
+// the command line and the two go on agreeing with each other about the wrong
+// answer. Only a table a reader can see a swap in catches that, and a swap here
+// is the whole failure: a user picks Claude, reads "Claude", and their terminal
+// is handed to the Codex login for as long as it takes them to notice.
+func TestEachProviderLabelNamesItsOwnLogin(t *testing.T) {
+	want := map[string][]string{
+		"Claude": {"add"},
+		"Codex":  {"codex", "add"},
+	}
+	choices := addChoices()
+	if len(choices) != len(want) {
+		t.Fatalf("the add key offers %d providers and this table pins %d", len(choices), len(want))
+	}
+	for _, it := range choices {
+		argv, pinned := want[it.label]
+		if !pinned {
+			t.Errorf("the add key offers %q, which this table does not pin", it.label)
+			continue
+		}
+		if !slices.Equal(it.argv, argv) {
+			t.Errorf("choosing %q runs %v, want %v", it.label, it.argv, argv)
 		}
 	}
 }
