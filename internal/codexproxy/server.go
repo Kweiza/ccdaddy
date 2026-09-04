@@ -336,12 +336,26 @@ type trackedWriter struct {
 	status int
 }
 
+// WriteHeader records the status only AFTER the delegate has taken it, because
+// wrote is what the guard reads to decide whether a late fault can still be
+// answered, and it has to mean "a status line actually went out".
+//
+// The delegate can refuse: net/http's response READER accepts any three-digit
+// status, 000-099 included, while its WRITER panics in checkWriteHeaderCode on
+// anything below 100, and writeBack hands the upstream's status straight
+// through. Measured with the two statements the other way round: an upstream
+// answering `HTTP/1.1 000 Nothing` left wrote true with nothing on the wire,
+// the guard read that as "the status is already spent" and panicked
+// ErrAbortHandler, and the client got EOF -- a bare hang-up, with no status
+// line at all, which is the outcome the never-500 rule exists to avoid. In this
+// order the panic leaves wrote false and the guard still answers the branded
+// 429.
 func (w *trackedWriter) WriteHeader(status int) {
 	if w.wrote {
 		return
 	}
-	w.wrote, w.status = true, status
 	w.ResponseWriter.WriteHeader(status)
+	w.wrote, w.status = true, status
 }
 
 func (w *trackedWriter) Write(p []byte) (int, error) {
