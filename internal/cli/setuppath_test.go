@@ -228,7 +228,7 @@ func TestUserPathWithoutDirRemovesEveryCopyAndNothingElse(t *testing.T) {
 
 // blockFor is the block these splice tests write, kept short so the fixtures
 // below read as file shapes rather than as shell.
-func blockFor(dir string) string { return renderBlock(dir, shellPOSIX) }
+func blockFor(dir string) string { return renderBlock([]string{dir}, shellPOSIX) }
 
 func TestSpliceBlockAppendsWithoutDamagingWhatWasThere(t *testing.T) {
 	block := blockFor("/opt/ccdad/bin")
@@ -575,7 +575,7 @@ func TestFishBlockRunsUnderFish(t *testing.T) {
 		t.Skip("fish is not installed; the fish block is asserted as text and never executed here")
 	}
 	file := filepath.Join(t.TempDir(), "block.fish")
-	if err := os.WriteFile(file, []byte(renderBlock("/opt/ccdad/bin", shellFish)), 0o644); err != nil {
+	if err := os.WriteFile(file, []byte(renderBlock([]string{"/opt/ccdad/bin"}, shellFish)), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	script := "set -gx PATH /usr/bin /bin\nsource " + file + "\nsource " + file + "\nsource " + file +

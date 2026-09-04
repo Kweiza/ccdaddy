@@ -295,31 +295,49 @@ func sendSettingChange() error {
 // concatenation, writes REG_SZ (destroying %VAR% expansion), and truncates at
 // 1024 characters. Handing a user that line is handing them the defect this
 // command exists to avoid.
-func setupPathPrint(cmd *cobra.Command, dir string, _ setupPathOptions) error {
-	fmt.Fprintf(cmd.OutOrStdout(), "$env:Path = '%s;' + $env:Path\n", strings.ReplaceAll(dir, "'", "''"))
+func setupPathPrint(cmd *cobra.Command, dirs []string, _ setupPathOptions) error {
+	for _, dir := range dirs {
+		fmt.Fprintf(cmd.OutOrStdout(), "$env:Path = '%s;' + $env:Path\n", strings.ReplaceAll(dir, "'", "''"))
+	}
 	fmt.Fprintln(cmd.ErrOrStderr(),
 		"That line lasts only for the current PowerShell session. Run `ccdad setup-path` "+
 			"with no flags to register it in your user PATH, which every new terminal reads.")
 	return nil
 }
 
-func setupPathApply(cmd *cobra.Command, dir string, _ setupPathOptions) error {
+// dirs holds at most one entry here, and the loop below is written for that
+// rather than around it. The second entry the derived set can carry is the
+// codex shim's directory, and there is no shim on Windows: `ccdad codex shim
+// install` refuses there, so the record registeredDirs keys on is never
+// written. A loop is still what is written, because a `dirs[0]` would be a
+// silent truncation the day that changes.
+func setupPathApply(cmd *cobra.Command, dirs []string, _ setupPathOptions) error {
 	out := cmd.ErrOrStderr()
-	changed, err := registerUserPath(dir)
-	if err != nil {
-		return err
+	anyChanged, allOnPath := false, true
+	for _, dir := range dirs {
+		changed, err := registerUserPath(dir)
+		if err != nil {
+			return err
+		}
+		if !onPathList(os.Getenv("PATH"), dir, livePathRules) {
+			allOnPath = false
+		}
+		if !changed {
+			fmt.Fprintf(out, "Your user PATH already holds %s.\n", dir)
+			continue
+		}
+		anyChanged = true
+		fmt.Fprintf(out, "Added %s to your user PATH.\n", dir)
 	}
-	onPath := onPathList(os.Getenv("PATH"), dir, livePathRules)
-	if !changed {
+	onPath := allOnPath
+	if !anyChanged {
 		// Exit 3 keys off what is REGISTERED, never off the live %PATH% — see
 		// the same decision in setuppath_unix.go.
-		fmt.Fprintf(out, "Your user PATH already holds %s.\n", dir)
 		if !onPath {
 			fmt.Fprintln(out, "This terminal has not picked it up yet; open a new one.")
 		}
 		return WithCode(errSilent, ExitNothingToDo)
 	}
-	fmt.Fprintf(out, "Added %s to your user PATH.\n", dir)
 	if err := broadcastEnvChange(); err != nil {
 		// The write is already durable. A failed broadcast costs the user one
 		// new terminal, which is not worth failing a command over.
