@@ -78,35 +78,49 @@ func TestActiveAndActiveUUIDNameOnlyTheClaudeLogin(t *testing.T) {
 	}
 }
 
-// `ccdad run` execs Claude Code, and a Codex account's blob carries no
-// TokenRecord -- so refuseUnscopedRun and refuseDisplacedAuth both read it as
-// an OAuth login and let it through, and the launch would write a Codex
-// refresh token into a session directory in Claude Code's own credentials
-// format. That directory is scoped to the session rather than the machine's
-// own login, so it is not a cross into the live login, but it is still a
-// Codex secret sitting in a shape and a place Claude Code owns and rewrites.
+// The Claude route through `ccdad run` ends in exec'ing Claude Code against a
+// credentials file the command just wrote, and a Codex account's blob carries
+// no TokenRecord -- so refuseUnscopedRun and refuseDisplacedAuth both read it
+// as an OAuth login and let it through. Left to those two, the launch would
+// write a Codex refresh token into a session directory in Claude Code's own
+// credentials format. That directory is scoped to the session rather than the
+// machine's own login, so it is not a cross into the live login, but it is
+// still a Codex secret sitting in a shape and a place Claude Code owns and
+// rewrites.
 //
-// The refusal has to land before the blob is even read, so the assertion
-// below is the shape TestRunRefusesBeforeItCreatesASessionDirectory pins for
-// every other run refusal: no sessions/ container at all.
-func TestRunRefusesACodexAccountRatherThanWritingClaudeCodeCredentials(t *testing.T) {
+// What keeps it out of there is now the provider branch rather than a refusal:
+// a Codex account starts codex through ccdad's proxy instead, and the branch
+// has to sit before the blob is even read. So the disk assertion below is the
+// shape TestRunRefusesBeforeItCreatesASessionDirectory pins for every run
+// refusal -- no sessions/ container at all, and therefore no credentials file
+// inside one -- and the launch assertions are what tell that apart from a
+// command that simply did nothing.
+func TestRunOnACodexAccountNeverWritesClaudeCodeCredentials(t *testing.T) {
 	isolate(t)
 	seedCodexAccount(t, "u-x1", "x-one@example.com")
-	stub := stubClaude(t, ExitOK)
+	stub, _ := routedWorld(t, ExitOK, nil)
 
 	code, _, errOut, top := runRoot(t, "run", "1")
-	if code != ExitUsage {
-		t.Fatalf("exit = %d (%s / %s), want %d", code, errOut, top, ExitUsage)
+	if code != ExitOK {
+		t.Fatalf("exit = %d (%s / %s), want 0", code, errOut, top)
 	}
-	message := errOut + top
-	if !strings.Contains(message, "x-one@example.com") {
-		t.Errorf("the refusal does not name the account:\n%s", message)
+	if !stub.started {
+		t.Fatal("nothing was started at all")
 	}
-	if !strings.Contains(message, "proxy") {
-		t.Errorf("the refusal does not say a Codex account is served through the proxy:\n%s", message)
+	// routedWorld stubs BOTH resolvers, so the name of the child is what says
+	// which route the command took: codex from resolveCodex, claude from
+	// stubLookClaude.
+	if got := filepath.Base(stub.spec.Path); got != "codex" {
+		t.Errorf("`ccdad run` on a Codex account started %q, want codex", stub.spec.Path)
 	}
-	if stub.started {
-		t.Error("claude was started")
+	// A scoped Claude session is exactly what must not have happened. The
+	// Claude route sets this variable to the session credential home it made,
+	// and routedWorld leaves it unset -- so a value here is one this command
+	// put there.
+	for _, kv := range stub.spec.Env {
+		if strings.HasPrefix(kv, "CLAUDE_SECURESTORAGE_CONFIG_DIR=") {
+			t.Errorf("the codex child was handed a Claude credential home: %q", kv)
+		}
 	}
 	container := filepath.Join(mustPath(ccpath.StoreHome()), SessionsDirName)
 	if _, err := os.Stat(container); !errors.Is(err, os.ErrNotExist) {

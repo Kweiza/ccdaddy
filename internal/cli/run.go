@@ -1188,8 +1188,13 @@ func newRunCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "run <ACCOUNT> [claude args…]",
-		Short: "Start a Claude Code session as an account, without changing the live login",
+		Short: "Start a session as an account, without changing the live login",
 		Long: "ACCOUNT may be a display index, an alias, an email address, or a uuid prefix.\n" +
+			"A Codex account starts codex instead of claude, through the loopback proxy the\n" +
+			"ccdad daemon runs, pinned to that account for the whole session: the tail is\n" +
+			"optional and defaults to `codex`, and anything else in it is refused. Such a\n" +
+			"launch needs a daemon and never falls back — running it as whatever codex's\n" +
+			"own home holds would bill a different account and report success.\n\n" +
 			"There is no interactive disambiguation: an ambiguous reference is exit 2, because\n" +
 			"this command hands control to claude and callers need it to be deterministic.\n\n" +
 			"Everything at or after ACCOUNT is passed to claude verbatim, hyphens included. A\n" +
@@ -1238,16 +1243,55 @@ func newRunCmd() *cobra.Command {
 			if err != nil {
 				return UsageError("%s", err.Error())
 			}
-			// Ahead of the credential read below: a Codex blob carries no
-			// TokenRecord, so refuseUnscopedRun and refuseDisplacedAuth both
-			// read it as an ordinary OAuth login (ours = identity.OAuthLogin)
-			// and let it through -- and this command's only ending is exec'ing
-			// Claude Code against a credentials file it just wrote, which for
-			// a Codex account means a Codex refresh token in Claude Code's own
-			// format, in a directory Claude Code owns and rewrites.
+			// The provider branch, and it is BEFORE the credential read for a
+			// reason: everything below this line is about a Claude login. The
+			// blob read is Claude's credential shape, refuseUnscopedRun asks
+			// which Claude Code is installed, refuseDisplacedAuth asks which
+			// Anthropic credential outranks the file, and the session home is a
+			// Claude credential home. A Codex account has none of those -- it is
+			// served by the daemon's own proxy and codex holds no token at all
+			// -- so answering any of those questions for one would be answering
+			// a question this launch never asks.
+			//
+			// The two refusals below would not catch it either, which is why
+			// this cannot be left to them: a Codex blob carries no TokenRecord,
+			// so both read it as an ordinary OAuth login (ours =
+			// identity.OAuthLogin) and let it through -- and the ending is
+			// exec'ing Claude Code against a credentials file this command just
+			// wrote, which for a Codex account means a Codex refresh token in
+			// Claude Code's own format, in a directory Claude Code owns and
+			// rewrites.
+			//
+			// The tail is optional and defaults to codex, so that `ccdad run
+			// <acct>` means the same thing on both sides. Anything else in it is
+			// a usage error rather than a silent launch of a program the proxy
+			// cannot serve.
+			if target.Provider == provider.Codex {
+				tail := claudeArgs(args)
+				if len(tail) > 0 {
+					if tail[0] != codexProgramName {
+						return UsageError("%s is a Codex account, and the only program `ccdad run` starts "+
+							"for one is codex — the session reaches ccdad through a proxy that speaks "+
+							"codex's own API. The tail must begin with `codex`, or be empty; it began "+
+							"with %q", target.Label(), tail[0])
+					}
+					tail = tail[1:]
+				}
+				return runCodexLaunch(cmd, codexLaunchOptions{Pin: target.UUID, Args: tail})
+			}
+			// A provider that is neither must never fall through into the
+			// Claude route below. Today the store gets there first -- store.Open
+			// refuses to load a row whose provider it cannot parse, so this
+			// command fails above before it resolves anything, and Add refuses
+			// to write one -- which makes this guard unreachable, and there is
+			// no test for it because there is no way to reach it. It is here
+			// anyway: it is three lines, and its absence is the never-cross
+			// defect. A third provider added to internal/provider would parse,
+			// store, and then route silently into the credential write the
+			// branch above exists to keep a non-Claude account out of.
 			if target.Provider != provider.Claude {
-				return UsageError("%s is a Codex account, and `ccdad run` starts Claude Code. "+
-					"A Codex account is served through ccdad's proxy, not by a credentials file", target.Label())
+				return UsageError("%s is stored under the provider %q, and `ccdad run` has no route for one",
+					target.Label(), target.Provider)
 			}
 
 			// Read before the session directory is created rather than after,

@@ -1378,3 +1378,123 @@ func TestRunStartsWhenNothingInTheShellOutranksTheAccount(t *testing.T) {
 		t.Fatal("no session was started")
 	}
 }
+
+// `ccdad run <codex-account>` pins the launch to that account: the proxy serves
+// its credential whatever the serving pointer says, and a switch does not move
+// the session.
+func TestRunOnACodexAccountPinsTheLaunch(t *testing.T) {
+	isolate(t)
+	seedCodexAccount(t, "cx-run-1", "c@example.com")
+	stub, port := routedWorld(t, ExitOK, nil)
+
+	code, _, errOut, top := runRoot(t, "run", "c@example.com")
+	if code != ExitOK {
+		t.Fatalf("run on a codex account = %d, want 0\n%s\n%s", code, errOut, top)
+	}
+	if !stub.started {
+		t.Fatal("no codex was started")
+	}
+	if want := fmt.Sprintf(`model_providers.ccdad.base_url="http://127.0.0.1:%d"`, port); !slices.Contains(stub.spec.Args, want) {
+		t.Errorf("codex was given %q, want it pointed at %s", stub.spec.Args, want)
+	}
+	if v := envValueOf(stub.spec.Env, codexKeyEnv); v == "" {
+		t.Error("the child got no launch secret")
+	}
+}
+
+// The tail is OPTIONAL and defaults to codex, because `ccdad run <acct>` on a
+// Claude account starts claude with no arguments and the shapes have to match.
+func TestRunOnACodexAccountAcceptsAnExplicitCodexTail(t *testing.T) {
+	isolate(t)
+	seedCodexAccount(t, "cx-run-2", "c@example.com")
+	stub, _ := routedWorld(t, ExitOK, nil)
+
+	if code, _, errOut, _ := runRoot(t, "run", "c@example.com", "--", "codex", "exec", "hi"); code != ExitOK {
+		t.Fatalf("run = %d, want 0\n%s", code, errOut)
+	}
+	tail := stub.spec.Args[len(stub.spec.Args)-2:]
+	if tail[0] != "exec" || tail[1] != "hi" {
+		t.Errorf("codex was given %q, want it to end in the tail that was typed", stub.spec.Args)
+	}
+	// Asserted separately from the tail above, because the tail cannot see it:
+	// a launch that forwarded the word would put it BEFORE `exec hi`, leaving
+	// the last two arguments exactly where they are.
+	if slices.Contains(stub.spec.Args, codexProgramName) {
+		t.Errorf("codex was given %q; the word `codex` is the program and must not reach it as an argument", stub.spec.Args)
+	}
+}
+
+// Anything else in the tail is a usage error rather than a silent launch of
+// something the proxy cannot serve.
+func TestRunOnACodexAccountRefusesAnotherProgram(t *testing.T) {
+	isolate(t)
+	seedCodexAccount(t, "cx-run-3", "c@example.com")
+	routedWorld(t, ExitOK, nil)
+
+	code, _, errOut, top := runRoot(t, "run", "c@example.com", "--", "python", "-c", "print(1)")
+	if code != ExitUsage {
+		t.Fatalf("run on a codex account with a non-codex tail = %d, want %d\n%s\n%s", code, ExitUsage, errOut, top)
+	}
+	if !strings.Contains(errOut+top, "codex") {
+		t.Errorf("the refusal does not say what the tail has to begin with:\n%s\n%s", errOut, top)
+	}
+}
+
+// A PINNED launch never falls back. The user named an account; running the
+// session as whatever codex's own home holds would bill a different one and
+// report success. Exit 2, which is `ccdad run`'s contract for a refusal.
+func TestRunOnACodexAccountRefusesWhenThereIsNoProxy(t *testing.T) {
+	isolate(t)
+	seedCodexAccount(t, "cx-run-4", "c@example.com")
+	stubDaemonWorld(t, &fakeDaemon{held: true})
+	unsetForTest(t, "CLAUDE_SECURESTORAGE_CONFIG_DIR")
+	codex := filepath.Join(t.TempDir(), "codex")
+	saved := resolveCodex
+	t.Cleanup(func() { resolveCodex = saved })
+	resolveCodex = func(string) (string, error) { return codex, nil }
+	savedChild := startChild
+	t.Cleanup(func() { startChild = savedChild })
+	startChild = func(launchSpec) (ExitCode, error) {
+		t.Error("a pinned codex launch fell back and started codex anyway")
+		return ExitOK, nil
+	}
+
+	code, _, errOut, top := runRoot(t, "run", "c@example.com")
+	if code != ExitUsage {
+		t.Fatalf("a pinned launch with no proxy = %d, want %d\n%s\n%s", code, ExitUsage, errOut, top)
+	}
+	said := errOut + top
+	if !strings.Contains(said, "plain shell") {
+		t.Errorf("the refusal does not say what to do instead:\n%s", said)
+	}
+	if !strings.Contains(said, "c@example.com") {
+		t.Errorf("the refusal does not name the account:\n%s", said)
+	}
+}
+
+// The never-cross control. A Claude account takes exactly the route it always
+// did: no codex is resolved, no launch record is created, and claude is what
+// runs.
+func TestRunOnAClaudeAccountNeverEntersTheCodexLauncher(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "u-claude-1", "a@example.com")
+	stub := stubClaude(t, ExitOK)
+	saved := resolveCodex
+	t.Cleanup(func() { resolveCodex = saved })
+	resolveCodex = func(string) (string, error) {
+		t.Error("`ccdad run` on a Claude account resolved codex")
+		return "", errNoCodex
+	}
+
+	if code, _, errOut, top := runRoot(t, "run", "a@example.com"); code != ExitOK {
+		t.Fatalf("run on a claude account = %d, want 0\n%s\n%s", code, errOut, top)
+	}
+	if !stub.started {
+		t.Fatal("no claude was started")
+	}
+	for _, arg := range stub.spec.Args {
+		if strings.HasPrefix(arg, "model_provider") {
+			t.Errorf("claude was given a codex override: %q", stub.spec.Args)
+		}
+	}
+}
