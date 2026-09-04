@@ -29,10 +29,18 @@ type seenRequest struct {
 // codex binary.
 //
 // Every other test here asserts what ccdad BUILDS. This asserts what codex DOES
-// with it: that the overrides make it talk to the given port at all, that it
-// sends POST /responses and nothing else, that it attempts no WebSocket, that
-// the bearer arriving upstream is the account's and never the launch secret,
-// and that an HTTP_PROXY in the environment does not divert the request.
+// with it: that the overrides make it talk to the given port at all, that an
+// HTTP_PROXY in the environment does not divert the request, and that the
+// bearer arriving upstream is the account's and never the launch secret.
+//
+// The method, the path and the absent Upgrade that the upstream records are the
+// PROXY's OWN outbound construction rather than anything codex sent: forward.go
+// builds a POST to the configured upstream verbatim and strips Upgrade from
+// every forwarded request. So a codex-side route or WebSocket regression cannot
+// surface as a method, path or Upgrade complaint -- it surfaces as "the
+// upstream saw no request at all", which is the load-bearing guard here and the
+// one that caught every regression tried against this test. The assertions on
+// those three stay because they pin ccdad's forwarding and cost nothing.
 //
 // It spends no quota. The upstream is an httptest server on loopback, and the
 // only thing that reaches the network is nothing.
