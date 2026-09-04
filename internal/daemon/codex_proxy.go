@@ -40,32 +40,11 @@ func (e *Engine) startCodexProxy(context.Context) (Proxy, error) {
 	if err != nil {
 		return nil, err
 	}
-	port, source, err := codexproxy.ResolvePort(root, e.Config().Codex.ProxyPort)
+	cfg, err := e.codexProxyConfig(root)
 	if err != nil {
 		return nil, err
 	}
-	// Opened once, here, rather than per request: Credentials reads the file on
-	// every call, so a token another process rotated is still picked up, and
-	// re-opening the store per forwarded request would put a MkdirAll and two
-	// chmods on the path of every codex turn.
-	s, err := store.Open()
-	if err != nil {
-		return nil, err
-	}
-	srv, err := codexproxy.New(codexproxy.Config{
-		Root:               root,
-		Port:               port,
-		PortSource:         source,
-		Version:            buildinfo.Version,
-		Refresher:          e.CodexRefresher,
-		Book:               e.CodexBook,
-		Accounts:           func() ([]store.Account, error) { return store.AccountsAt(root) },
-		Credentials:        s.Credentials,
-		RankedEligible:     e.codexRanked,
-		CrossAccountReplay: e.Config().Codex.CrossAccountReplay,
-		Harvest:            e.harvestCodexSample,
-		Log:                e.logf,
-	})
+	srv, err := codexproxy.New(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -77,6 +56,48 @@ func (e *Engine) startCodexProxy(context.Context) (Proxy, error) {
 		e.logf("could not record the codex proxy port: %v", rerr)
 	}
 	return srv, nil
+}
+
+// codexProxyConfig is everything the daemon is responsible for handing the
+// proxy, for the store at root.
+//
+// It is separate from startCodexProxy so that what this process supplies can be
+// asserted without taking a port -- the fields below are the whole seam between
+// the daemon and the proxy, and a field wired to the wrong thing or left nil
+// is invisible from the other side of a bind.
+//
+// The config is read HERE, from disk, rather than taken from e.Config(). The
+// proxy is built before the first tick, and until a tick has run e.cfg is still
+// the seeded default set, so reading the cache made [codex].proxy_port and
+// [codex].cross_account_replay inert.
+func (e *Engine) codexProxyConfig(root string) (codexproxy.Config, error) {
+	cfg, _ := e.loadConfig()
+	port, source, err := codexproxy.ResolvePort(root, cfg.Codex.ProxyPort)
+	if err != nil {
+		return codexproxy.Config{}, err
+	}
+	// Opened once, here, rather than per request: Credentials reads the file on
+	// every call, so a token another process rotated is still picked up, and
+	// re-opening the store per forwarded request would put a MkdirAll and two
+	// chmods on the path of every codex turn.
+	s, err := store.Open()
+	if err != nil {
+		return codexproxy.Config{}, err
+	}
+	return codexproxy.Config{
+		Root:               root,
+		Port:               port,
+		PortSource:         source,
+		Version:            buildinfo.Version,
+		Refresher:          e.CodexRefresher,
+		Book:               e.CodexBook,
+		Accounts:           func() ([]store.Account, error) { return store.AccountsAt(root) },
+		Credentials:        s.Credentials,
+		RankedEligible:     e.codexRanked,
+		CrossAccountReplay: cfg.Codex.CrossAccountReplay,
+		Harvest:            e.harvestCodexSample,
+		Log:                e.logf,
+	}, nil
 }
 
 // codexRanked is the Codex lane's last ranking, best first.

@@ -1,12 +1,22 @@
 package daemon
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/Kweiza/ccdaddy/internal/buildinfo"
+	"github.com/Kweiza/ccdaddy/internal/cclink"
+	"github.com/Kweiza/ccdaddy/internal/codexproxy"
+	"github.com/Kweiza/ccdaddy/internal/provider"
+	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/switcher"
 	"github.com/Kweiza/ccdaddy/internal/usage"
@@ -134,5 +144,178 @@ func TestReapingAStoreWithNoLaunchesIsSilent(t *testing.T) {
 	e.reapCodexLaunches()
 	if len(lines) != 0 {
 		t.Fatalf("a store with no launches logged %v", lines)
+	}
+}
+
+// freePort names a port nothing is listening on.
+//
+// It binds and immediately closes, which is the only way to learn a free port
+// number from the kernel. There is no TIME_WAIT to worry about: the socket
+// never accepted a connection, so the port is bindable again at once.
+func freePort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	if err := ln.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return port
+}
+
+// closeProxy releases the listener startCodexProxy took, so a package whose
+// tests each start a proxy does not run out of descriptors.
+func closeProxy(t *testing.T, p Proxy) {
+	t.Helper()
+	srv, ok := p.(*codexproxy.Server)
+	if !ok {
+		t.Fatalf("startCodexProxy() returned %T, want *codexproxy.Server", p)
+	}
+	if err := srv.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTheConfiguredProxyPortIsTheOneBound(t *testing.T) {
+	isolate(t)
+	want := freePort(t)
+	writeConfig(t, fmt.Sprintf("[codex]\nproxy_port = %d\n", want))
+
+	e := NewEngine()
+	proxy, err := e.startCodexProxy(context.Background())
+	if err != nil {
+		t.Fatalf("startCodexProxy() error = %v, want nil", err)
+	}
+	defer closeProxy(t, proxy)
+	if proxy.Port() != want {
+		t.Fatalf("the proxy bound %d; [codex].proxy_port asked for %d", proxy.Port(), want)
+	}
+}
+
+func TestTheConfiguredCrossAccountReplayReachesTheProxy(t *testing.T) {
+	root := isolate(t)
+	e := NewEngine()
+	if cfg, err := e.codexProxyConfig(root); err != nil || cfg.CrossAccountReplay {
+		t.Fatalf("codexProxyConfig() = (CrossAccountReplay %v, %v) for a store with no config file, want it off", cfg.CrossAccountReplay, err)
+	}
+	writeConfig(t, "[codex]\ncross_account_replay = true\n")
+	cfg, err := e.codexProxyConfig(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.CrossAccountReplay {
+		t.Fatal("the proxy was built with cross-account replay off after config.toml turned it on; a mid-thread 429 would be returned rather than replayed, forever")
+	}
+}
+
+// A port the user pinned that will not bind is the ONE thing that stops the
+// daemon: serving on a different port would leave every codex session pointed
+// at a port nothing answers, and codex's symptom for that is an endless
+// reconnect rather than an error. It is checked here rather than only in
+// codexproxy because the branch is reached only if the daemon carries the
+// "config" source all the way from config.toml to the bind.
+func TestAConfiguredPortThatIsHeldStopsTheDaemon(t *testing.T) {
+	isolate(t)
+	held, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	port := held.Addr().(*net.TCPAddr).Port
+	writeConfig(t, fmt.Sprintf("[codex]\nproxy_port = %d\n", port))
+
+	e := NewEngine()
+	proxy, err := e.startCodexProxy(context.Background())
+	if err == nil {
+		closeProxy(t, proxy)
+		t.Fatalf("startCodexProxy() bound %d and reported no error, though the configured port %d was held", proxy.Port(), port)
+	}
+	if !strings.Contains(err.Error(), strconv.Itoa(port)) {
+		t.Fatalf("startCodexProxy() error = %v, want it to name the configured port %d", err, port)
+	}
+}
+
+// Every field of the Config the daemon hands the proxy, asserted here because
+// this is the whole seam between the two packages and a bind cannot show it: a
+// field left nil or wired to the wrong thing produces a listener that looks
+// exactly like a working one.
+func TestTheProxyConfigTheDaemonBuildsIsFullyWired(t *testing.T) {
+	root := isolate(t)
+	s, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add(store.Account{
+		Provider: provider.Codex,
+		UUID:     "uuid-a", Email: "uuid-a@example.com",
+		AddedAt: time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC),
+	}, cclink.Blob{"claudeAiOauth": json.RawMessage(`{"refreshToken":"RT-uuid-a"}`)}); err != nil {
+		t.Fatal(err)
+	}
+
+	e := NewEngine()
+	wireCodex(e)
+	var logged []string
+	e.Log = func(format string, a ...any) { logged = append(logged, fmt.Sprintf(format, a...)) }
+	e.SetCodexRanked([]string{"uuid-a"})
+
+	cfg, err := e.codexProxyConfig(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Root != root {
+		t.Errorf("Root = %q, want %q", cfg.Root, root)
+	}
+	if cfg.Version != buildinfo.Version {
+		t.Errorf("Version = %q, want %q, which is what the health route reports", cfg.Version, buildinfo.Version)
+	}
+	if cfg.PortSource != "derived" {
+		t.Errorf("PortSource = %q, want derived for a store that has recorded nothing and configured nothing", cfg.PortSource)
+	}
+	if cfg.Port < 20000 || cfg.Port > 31999 {
+		t.Errorf("Port = %d, want it derived into 20000-31999", cfg.Port)
+	}
+	if cfg.Refresher != e.CodexRefresher {
+		t.Error("Refresher is not the daemon's one refresher; a burst of 401s would spend the grant more than once")
+	}
+	if cfg.Book != e.CodexBook {
+		t.Error("Book is not the lane's limit book; the proxy and the lane would disagree about which accounts are spent")
+	}
+	if cfg.Accounts == nil {
+		t.Fatal("Accounts is nil; the proxy could not choose an account")
+	}
+	accounts, err := cfg.Accounts()
+	if err != nil || len(accounts) != 1 || accounts[0].UUID != "uuid-a" {
+		t.Errorf("Accounts() = (%v, %v), want the one account in this store", accounts, err)
+	}
+	if cfg.Credentials == nil {
+		t.Fatal("Credentials is nil; the proxy could not build a bearer")
+	}
+	blob, err := cfg.Credentials("uuid-a")
+	if err != nil || blob["claudeAiOauth"] == nil {
+		t.Errorf("Credentials(\"uuid-a\") = (%v, %v), want the stored blob", blob, err)
+	}
+	if cfg.RankedEligible == nil {
+		t.Fatal("RankedEligible is nil; a new thread would not start on the lane's best account")
+	}
+	if order := cfg.RankedEligible(); len(order) != 1 || order[0] != "uuid-a" {
+		t.Errorf("RankedEligible() = %v, want the order the lane recorded", order)
+	}
+	if cfg.Harvest == nil {
+		t.Fatal("Harvest is nil; a reading taken off a real response would be dropped")
+	}
+	snap := &usage.Snapshot{}
+	cfg.Harvest("uuid-a", snap)
+	if got, ok := e.CodexSample("uuid-a"); !ok || got != snap {
+		t.Error("Harvest did not reach the engine's sample the lane commits")
+	}
+	if cfg.Log == nil {
+		t.Fatal("Log is nil; the proxy would decide silently")
+	}
+	cfg.Log("a line from the proxy")
+	if len(logged) != 1 || logged[0] != "a line from the proxy" {
+		t.Errorf("the daemon log recorded %v, want the proxy's line", logged)
 	}
 }
