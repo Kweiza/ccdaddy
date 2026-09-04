@@ -120,6 +120,98 @@ a codex process its launch secret are the next piece of work, so on this build t
 listener binds, answers its health route and forwards for a caller that already
 holds a secret, and no ccdad command hands one out.
 
+## [0.11.0] — 2026-09-04
+
+The release that stops guessing which limit you meant, and stops the engine
+switching in circles.
+
+Every table showed ONE window per account and derived which one. `ccdad list`
+picked the window the ranking orders on, `ccdad status` picked the window the
+account is reported against, and on a fleet with a blown model-scoped cap those
+are different windows — so the same account read 20% in one table and 100% in
+the other, neither said which window it meant, and a reader could not tell a
+fleet with a fifth of its week left from one with nothing. Every window an
+account carries now has a column of its own, in the same order under the same
+headers on `ccdad list`, `ccdad status`, `ccdad hover status` and the dashboard,
+and each cell is the percentage USED so that 100% means the same thing
+everywhere. Nothing is derived, so there is nothing to explain. A legend under
+the table maps each short header back to the wire key `ccdad config` takes a
+per-window threshold on, and `--json` is unchanged — every payload carried the
+whole window set already, which is exactly why the human tables could stop
+choosing.
+
+And the engine was switching in circles. Pre-emption — the rule that moves off
+an account projected to run out before the next reading — walked the ranking and
+SKIPPED the live account, so with the live account already first it took second
+place, which the order itself calls worse. The ordinary better-target rule moved
+back on the next tick. Nothing damps that: pre-emption is answered before the
+cooldown and before every margin, on purpose, so an account about to run out is
+not held on by a hold. Measured on a live fleet: 65 switches between the same two
+accounts in two hours, one every two minutes, until the user turned the engine
+off by hand. Reaching the live account now ends the walk.
+
+Underneath both, one number was wrong. Under hover a threshold is a pace target
+and nothing clamped it, so a window far enough through its cycle was measured
+against a figure above 100 — the mode saying "no restraint, there is nobody to
+hand the work to". True about pacing, false about room: a five-hour window at
+100% used, held to 116, reported +16 of slack, so on the axis the ranking orders
+by a window that could not serve one more prompt outranked a healthy window
+early in its own cycle. An empty window never reports positive slack now, and a
+blown five-hour window binds instead of hiding behind a weekly with room.
+
+### Added
+
+- **Every usage table shows one column per window.** `view.ColumnsOf` is the one
+  constructor and all four surfaces call it, so no table can name a window the
+  others do not. Membership is the union over the visible rows of what each row
+  carries — the set `--json` has published since it was written. Order is the
+  wire's for the fixed keys and lexicographic after it, because rows arrive in
+  store order and a first-seen rule would slide a column sideways between two
+  runs of the same command. Reset columns are grouped by a TOLERANCE and not by
+  equality: measured on a live fleet, a scoped cap and its `seven_day` window are
+  one server-side instant arriving 158 to 320 MICROSECONDS apart, so exact
+  equality draws three countdowns where the fleet has two. Pinned by
+  `TestColumnsAreTheWindowsTheRowsActuallyCarry`,
+  `TestTheHeaderRowDoesNotDependOnRowOrder` and
+  `TestTwoWindowsMicrosecondsApartAreOneCountdown`.
+- **`ccdad hover status` is one row per account.** It was one row per account per
+  window — four accounts holding three windows was twelve rows — and each cell is
+  now `used/threshold`, the pair that answers what hover chose and against what.
+  ELAPSED and SLACK move to `--json`, which carries the whole derivation. Pinned
+  by `TestHoverStatusShowsWhatEachWindowUsedAndWhatItIsHeldTo`.
+
+### Fixed
+
+- **The engine switched between the same two accounts every two minutes.**
+  Pre-emption skipped the live account in the ranking instead of stopping at it,
+  so it moved to an account the order calls worse and the ordinary rule moved
+  back. Pinned by `TestPreemptionDoesNotMoveToAnAccountTheOrderCallsWorse` and
+  `TestTheEngineStaysPutWhenNothingOutranksTheLiveAccount`.
+- **A window with nothing left in it reported positive slack under hover**, so a
+  spent five-hour window outranked a healthy one and the engine parked a session
+  on an account that could not serve it. Slack is clamped to `100-pct` once a
+  window is empty — monotone past the line, and a no-op for any window with room,
+  so hover's pacing is untouched everywhere it means anything. Pinned by
+  `TestPastTheLineIsStillWorseThanExactlyEmpty` and
+  `TestHoverStatusNeverShowsPositiveSlackOnAnEmptyWindow`.
+
+### Changed
+
+- **The dashboard's gauge is retired and no window column is ever dropped.** The
+  bar was seventeen columns of one window, and which window was the derivation
+  this release removes; the row of percentages is the gauge now, read across,
+  with per-cell colour. As the terminal narrows the whole window block collapses
+  to a single WORST cell rather than losing limits one at a time — safe because
+  with every cell reading percentage USED the worst window is the max, so nothing
+  the collapsed cell hides is worse than what it shows. Pinned by
+  `TestTheQuotaBlockSurvivesEveryWidth` and
+  `TestTheWindowBlockIsNeverPartiallyShown`.
+- **`ccdad status` no longer carries USED, WINDOW or PACE, and `ccdad list` no
+  longer carries LEFT.** They were the derived columns. Every window's pace,
+  including the projection, is still in `ccdad status --json`, and `ccdad runway`
+  is the human answer to "how fast". Scripts parsing those columns must read
+  `--json`, whose contract is unchanged.
+
 ## [0.10.1] — 2026-09-04
 
 The release that stops a full bar from being painted green.
@@ -3003,7 +3095,8 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.10.1...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/Kweiza/ccdaddy/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/Kweiza/ccdaddy/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/Kweiza/ccdaddy/compare/v0.9.10...v0.10.0
 [0.9.10]: https://github.com/Kweiza/ccdaddy/compare/v0.9.9...v0.9.10

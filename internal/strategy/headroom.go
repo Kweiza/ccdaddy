@@ -364,6 +364,33 @@ func HeadroomFor(s *usage.Snapshot, model string, t Thresholds) Headroom {
 		}
 		thr := t.For(w.Name)
 		slack := thr - pct
+		// A window with NOTHING LEFT never reports positive slack, whatever its
+		// threshold says.
+		//
+		// Under hover a threshold is a PACE TARGET and nothing clamps it: a
+		// window far enough through its own cycle is measured against a figure
+		// above 100, which is the mode saying "no restraint, there is nobody to
+		// hand the work to". That is a sound thing to say about PACING and a
+		// false thing to say about ROOM. Measured on a live fleet: a five-hour
+		// window at 100% used, held to 116, reported +16 -- so on the axis the
+		// ranking orders by, a window that could not serve one more prompt
+		// looked roomier than a healthy window early in its own cycle, and the
+		// engine parked a session on it while three accounts with five-hour room
+		// sat behind it.
+		//
+		// The clamp is 100-pct rather than a flat zero so the arithmetic stays
+		// monotone past the line: a window at 105% is worse than one at exactly
+		// 100, and an ordering that flattened them would shuffle two spent
+		// accounts by uuid.
+		//
+		// It fires only when the window is empty, so no window with room left is
+		// touched and hover's pacing is unchanged everywhere it means anything.
+		// Threshold is still carried as the number the pace target actually was,
+		// so the two stop subtracting here -- which `ccdad hover status` already
+		// prints a footer about, for this very reason.
+		if pct >= 100 && slack > 0 {
+			slack = 100 - pct
+		}
 		// Taken BEFORE the binding test below sets Known, so the first readable
 		// window seeds the minimum rather than being compared against a zero
 		// that no window reported.

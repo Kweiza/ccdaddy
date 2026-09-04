@@ -441,7 +441,12 @@ func primaryCredit(c Candidate) bool {
 // window names: a caller looking it up in Snapshot.AllWindows finds nothing,
 // which is the true answer -- there is no window behind it and no reset, so
 // recoveryOf answers "no recovery" without needing to be told about this axis.
-const creditWindow usage.WindowName = "extra_usage"
+const CreditWindow usage.WindowName = "extra_usage"
+
+// creditWindow is CreditWindow under its old in-package spelling, so exporting
+// the name moved no line inside this package. Nothing outside it may use this
+// one; nothing inside it needs the exported spelling.
+const creditWindow = CreditWindow
 
 // creditHeadroom is the axis a PRIMARY credit seat is ranked on.
 //
