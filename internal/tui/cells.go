@@ -11,6 +11,7 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 	"github.com/Kweiza/ccdaddy/internal/theme"
+	"github.com/Kweiza/ccdaddy/internal/usage"
 	"github.com/Kweiza/ccdaddy/internal/view"
 )
 
@@ -163,6 +164,67 @@ func gaugeRole(r view.Row) theme.Role {
 		return theme.RoleGaugeWarn
 	}
 	return theme.RoleGaugeOK
+}
+
+// cellRole is one window cell's colour, and it is the whole of what replaced
+// the gauge.
+//
+// EMPTY IS ANSWERED FIRST, ahead of the band, and that order is load-bearing:
+// under hover a threshold is an unclamped pace target, so a window far enough
+// through its own cycle with nothing left in it can be measured against a
+// figure above 100. The engine now clamps that at its source, and this asks
+// anyway -- a cell must not depend on an invariant held one package away to
+// avoid painting a spent window the colour of a healthy one.
+func cellRole(r view.Row, n usage.WindowName) theme.Role {
+	switch r.CellState(n) {
+	case view.CellUnknown:
+		return theme.RoleMuted
+	case view.CellAbsent:
+		return theme.RoleMuted
+	case view.CellOver:
+		return theme.RoleGaugeOver
+	case view.CellWarn:
+		return theme.RoleGaugeWarn
+	}
+	return theme.RoleGaugeOK
+}
+
+// worstCell is the whole quota block in one cell, for a terminal too narrow to
+// carry the block itself.
+//
+// It is what the ladder does INSTEAD of dropping window columns, and the reason
+// it is safe where dropping is not: every cell reads percentage USED, so the
+// worst window is the MAX, and nothing this cell hides is worse than what it
+// shows. A partial column set can make no such statement -- the limit it left
+// out could be the one that is gone.
+//
+// It names the window as well as the number. A percentage with no window beside
+// it is precisely what this table stopped doing.
+func worstCell(r view.Row, cols view.Columns) string {
+	worst, header, any := "", "", false
+	unread := false
+	best := -1.0
+	for _, w := range cols.Windows {
+		pct, state := r.WindowPct(w.Name)
+		switch state {
+		case view.WindowUnreadable:
+			unread = true
+		case view.WindowRead:
+			if pct > best {
+				best, header, any = pct, w.Header, true
+			}
+		}
+	}
+	if !any {
+		return view.Unreadable
+	}
+	worst = fmt.Sprintf("%.0f%% %s", best, header)
+	if unread {
+		// One window could not be read, so the max is a lower bound. Saying so
+		// costs one character and stops the cell claiming more than it knows.
+		worst += "+"
+	}
+	return worst
 }
 
 // stateCell is one self-describing cell: a glyph, a word, and the role that

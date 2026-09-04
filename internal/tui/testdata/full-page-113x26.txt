@@ -16,11 +16,11 @@
 │ ▀▀  ▀▀  ▀▀  ▀▀    ▀▀  ▀▀   ▀▀       ▀▀ ▀▀ ▀▀ ▀▀                                                               │
 │                                                                                                               │
 │Active: work@example.com (work)  |  Strategy: headroom  |  Mode: headroom                                      │
-│IDX ACCOUNT               TYPE          USED               WINDOW          RESETS IN  STATE        AUTO        │
-│* 1 work@example.com (..  subscription  [█████████▒]  87%  five_hour       1h22m      ▪ active     yes         │
-│  2 enterprise@co.exam..  credit        [██████████] 100%  seven_day_opus  5m         ✗ exhausted  no          │
-│  3 spare@example.com     subscription  [█████▒▒▒▒▒]  52%  five_hour       4h11m      ◉ candidate  yes         │
-│  4 keyonly@example.co..  api-key       ?                  -               -          ◌ unknown    yes         │
+│IDX ACCOUNT                     TYPE          5H   7D OPUS  5H IN  7D OPUS IN  STATE        AUTO  AGE          │
+│* 1 work@example.com (work)     subscription  87%  -        1h22m  ?           ▪ active     yes   4m           │
+│  2 enterprise@co.example       credit        -    100%     ?      5m          ✗ exhausted  no    2m           │
+│  3 spare@example.com           subscription  52%  -        4h11m  ?           ◉ candidate  yes   6m           │
+│  4 keyonly@example.com (key)   api-key       ?    ?        ?      ?           ◌ unknown    yes   ?            │
 │                                                                                                               │
 │a add  s switch  d daemon  c strategy  q quit  l list                      Daemon: running (pid 8123, up 2h05m)│
 ╰───────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

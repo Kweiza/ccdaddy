@@ -515,10 +515,10 @@ func (a App) pageKey(msg tea.KeyPressMsg, k KeyMap) (App, tea.Cmd, bool) {
 		return a, a.tailLog(), true
 
 	case key.Matches(msg, k.List):
-		if a.m.Set == SetStatus {
-			a.m.Set = SetList
+		if a.m.Set == SetFull {
+			a.m.Set = SetCompact
 		} else {
-			a.m.Set = SetStatus
+			a.m.Set = SetFull
 		}
 		a.m = scrolled(a.m)
 		return a, nil, true
@@ -752,7 +752,7 @@ func scrolled(m Model) Model {
 	// happens to hold at the current offset.
 	probe := m
 	probe.Top = 0
-	shown, _ := probe.window(Plan(m.Set, m.Width, m.Height, n,
+	shown, _ := probe.window(Plan(m.Set, m.Cols, m.Width, m.Height, n,
 		len(m.Snap.Notices) > 0, m.runwayLine() != ""))
 	room := len(shown)
 	if room < 1 {

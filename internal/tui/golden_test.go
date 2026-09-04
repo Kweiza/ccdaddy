@@ -141,7 +141,7 @@ func goldenWant(t *testing.T, name, got string) string {
 //     is usedCell's absence rule and not a rounding. 43x9 sits below collapseAt
 //     where USED is the bare percentage, and the zero-accounts page has no
 //     account row to draw one on.
-//   - STATE is four rows wherever ColState survived the WIDTH ladder, one per
+//   - STATE is four rows wherever col(ColState) survived the WIDTH ladder, one per
 //     account. 56 and 43 columns have both dropped that column by then; the
 //     zero-accounts page keeps the heading and has nothing under it.
 //   - WIDEST is exactly the width and never merely within it. footer pads
@@ -177,12 +177,22 @@ func TestEveryGoldenPageCarriesTheGlyphClassesItsRungAllows(t *testing.T) {
 		stateRows     int
 		sevenBitASCII bool
 	}{
-		{goldenFullPage, 113, 26, true, 3, 4, false},
-		{goldenDesignTarget, 80, 24, true, 3, 4, false},
-		{goldenShort, 80, 13, true, 3, 4, false},
-		{goldenNotice, 80, 20, true, 3, 4, false},
+		// gaugeRows is 0 on every page now. The gauge is retired: it was
+		// seventeen columns of ONE window, and which window was the derivation
+		// this table stopped making -- three windows would be fifty-one columns
+		// of bar, and one bar would be the derived window back under a new
+		// name. The row of percentages is the gauge, read across, and it draws
+		// no glyphs at all.
+		//
+		// narrow-56x10 is now entirely 7-bit ASCII for the same reason and for
+		// no other: it carries no state markers at its rung, and the gauge was
+		// the only other non-ASCII thing on it.
+		{goldenFullPage, 113, 26, true, 0, 4, false},
+		{goldenDesignTarget, 80, 24, true, 0, 4, false},
+		{goldenShort, 80, 13, true, 0, 4, false},
+		{goldenNotice, 80, 20, true, 0, 4, false},
 		{goldenZeroAccounts, 80, 13, true, 0, 0, false},
-		{goldenNarrow, 56, 10, false, 3, 0, false},
+		{goldenNarrow, 56, 10, false, 0, 0, true},
 		{goldenCollapsed, 43, 9, false, 0, 0, true},
 	} {
 		t.Run(tc.file, func(t *testing.T) {
