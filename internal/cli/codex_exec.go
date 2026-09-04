@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/Kweiza/ccdaddy/internal/config"
 )
@@ -103,3 +104,86 @@ func codexBinary() (string, error) {
 // anyway, and what the secret authorises is exactly one route for one launch --
 // never an OAuth token, and nothing on any other ccdad surface.
 const codexKeyEnv = "CCDAD_CODEX_KEY"
+
+// loopbackHost is the ONE entry that exempts a loopback base_url from a proxy
+// named in the environment.
+//
+// MEASURED against codex 0.151.0, all three: an HTTP_PROXY or ALL_PROXY in the
+// environment captures a request to http://127.0.0.1:<port>; a NO_PROXY of
+// `localhost` does not exempt it; and a NO_PROXY of `127.0.0.1:<port>` does not
+// exempt it either. Only the bare host does. The symptom of getting this wrong
+// is not an error message -- it is codex's own endless "Reconnecting... waiting
+// for network", with the request sitting in somebody's corporate proxy log.
+const loopbackHost = "127.0.0.1"
+
+// withNoProxyLoopback returns env with NO_PROXY and no_proxy each carrying a
+// bare loopback entry.
+//
+// BOTH spellings, and each keeps its OWN value where it has one and borrows the
+// other's where it does not. Go's http.ProxyFromEnvironment reads NO_PROXY and
+// falls back to no_proxy; other runtimes read only the lower-case one; and a
+// user who set one of them meant it. Merging them into a single value would
+// rewrite a variable that is theirs, and setting only one would leave the two
+// saying different things about the same machine.
+//
+// On Windows the environment is case-insensitive and os/exec folds the two into
+// one entry, keeping the last. That is harmless here precisely because the two
+// values can only differ when both were set, which on Windows cannot happen.
+//
+// Nothing is ever REMOVED. HTTP_PROXY, HTTPS_PROXY and ALL_PROXY reach the
+// child exactly as the user exported them: this makes an exception for one
+// host, it does not turn their proxy off.
+//
+// ONE RESIDUAL, stated rather than papered over: codex has an opt-in setting
+// that makes it read the operating system's own proxy configuration on macOS
+// and Windows instead of the environment, and that path does not consult
+// NO_PROXY at all. A user who turned it on and whose system proxy covers
+// loopback is not exempted by anything here. Nothing in a child's environment
+// can reach that setting, so the honest answer is that it is a machine ccdad
+// cannot route rather than a case to pretend is handled.
+func withNoProxyLoopback(env []string) []string {
+	upper, lower := envValueOf(env, "NO_PROXY"), envValueOf(env, "no_proxy")
+	up, low := upper, lower
+	if up == "" {
+		up = lower
+	}
+	if low == "" {
+		low = upper
+	}
+	env = setEnv(env, "NO_PROXY", withLoopback(up))
+	return setEnv(env, "no_proxy", withLoopback(low))
+}
+
+// envValueOf reads one variable out of a child environment slice.
+//
+// The LAST occurrence wins, which is what os/exec hands the child and therefore
+// what the child would have read.
+func envValueOf(env []string, name string) string {
+	prefix := name + "="
+	value := ""
+	for _, kv := range env {
+		if strings.HasPrefix(kv, prefix) {
+			value = kv[len(prefix):]
+		}
+	}
+	return value
+}
+
+// withLoopback appends the loopback host to a NO_PROXY value unless a bare
+// entry for it is already there.
+//
+// Entries are compared WHOLE and trimmed. A substring test would read
+// `127.0.0.1:8080` as the exemption, which it is not -- and a value that
+// already ends in a comma must not gain an empty component, which some proxy
+// readers treat as "exempt everything" and others as a parse error.
+func withLoopback(value string) string {
+	for _, entry := range strings.Split(value, ",") {
+		if strings.TrimSpace(entry) == loopbackHost {
+			return value
+		}
+	}
+	if strings.TrimSpace(value) == "" {
+		return loopbackHost
+	}
+	return strings.TrimRight(value, ", ") + "," + loopbackHost
+}
