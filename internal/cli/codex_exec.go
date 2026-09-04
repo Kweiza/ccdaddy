@@ -588,8 +588,15 @@ func newCodexExecCmd() *cobra.Command {
 			return runCodexLaunch(cmd, codexLaunchOptions{Args: args})
 		},
 	}
-	// Everything after the separator must reach codex verbatim. Without this,
-	// cobra parses `-c` as its own and exits 2 before RunE.
+	// An argument list typed WITHOUT `--` stops flag parsing at the first bare
+	// word, so a `-c` after it reaches codex instead of cobra.
+	//
+	// That form is the one a user types by hand: the shim spells the separator
+	// out, but `ccdad codex exec exec -c model=x` typed at a prompt has nothing
+	// to tell cobra where its own flags stop. Interspersed on, cobra reads that
+	// `-c` as an unknown shorthand of its own and exits 2 before RunE. A `--`
+	// tail is not what this defends -- pflag appends the remainder of one
+	// verbatim either way, and removing this line breaks none of it.
 	cmd.Flags().SetInterspersed(false)
 	return cmd
 }
