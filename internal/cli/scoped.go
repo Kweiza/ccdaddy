@@ -355,6 +355,15 @@ var scopedSessionAllowed = map[string]bool{
 	"ccdad codex":     true,
 	"ccdad codex add": true,
 
+	// The shim writes <CCDAD_HOME>/bin and the user's shell startup file. A
+	// session scopes Claude Code's credential and config homes and nothing
+	// else, so both writes land exactly where they would from outside one --
+	// and the binary the shim names is this same ccdad either way. Its
+	// counterpart is `uninstall`, which IS refused, for a reason that has
+	// nothing to do with PATH.
+	"ccdad codex shim":         true,
+	"ccdad codex shim install": true,
+
 	// Cobra's own. They read no state.
 	"ccdad help":                  true,
 	"ccdad completion":            true,
