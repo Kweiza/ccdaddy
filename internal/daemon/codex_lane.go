@@ -145,6 +145,14 @@ func (e *Engine) codexDispatch(ctx context.Context, s *store.Store, accounts []s
 			// The account's row says needs-relogin, which is the answer.
 			continue
 		}
+		// A reading the proxy already took off a real turn is committed instead
+		// of being paid for again with a poll. It was taken by a request the
+		// user actually made, so it is both free and more current than anything
+		// this lane's fifteen-minute floor can produce.
+		if snap, ok := e.CodexSample(a.UUID); ok {
+			e.codexCommit(a, snap, thr, now, a.UUID == serving, nil)
+			continue
+		}
 		entry, has := cache.Get(a.UUID)
 		if !codexDue(entry, has, now) {
 			continue

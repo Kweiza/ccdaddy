@@ -228,6 +228,14 @@ type Engine struct {
 	// machine. Latched for the same reason -- the tick reaches it at 1 Hz.
 	saidUnreadable bool
 
+	// codexRankedUUIDs is the Codex lane's last ranking, best first, and
+	// codexSamples holds the usage readings the Codex proxy took off real
+	// inference responses. Both are beside cfg and polls under the same mutex
+	// because the proxy reads and writes them from request goroutines while
+	// the tick writes and reads them from this one.
+	codexRankedUUIDs []string
+	codexSamples     map[string]*usage.Snapshot
+
 	wg sync.WaitGroup
 }
 
@@ -478,6 +486,9 @@ func (e *Engine) Tick(ctx context.Context) error {
 	if codexErr != nil {
 		e.logf("the codex lane failed: %v", codexErr)
 	}
+	// The proxy serves new threads from the same order the lane would rotate
+	// through, so the two never disagree about which account is next.
+	e.SetCodexRanked(rankedUUIDs(codexEv))
 	e.codexRelogin = codexReloginSet(s, accounts)
 	e.publish(accounts, cache, ev, codexEv, thresholds, quarantined)
 
