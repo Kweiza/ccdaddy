@@ -206,15 +206,25 @@ func TestWithNoProxyLoopbackNeverRemovesAProxyVariable(t *testing.T) {
 
 // setEnv replaces rather than appends, so a variable the parent exported twice
 // does not reach the child twice with two different values.
+//
+// The single copy that survives carries the LAST of them, which is the value
+// os/exec would have handed the child and therefore the one it would have read.
+// Counting alone does not say that: reading the FIRST occurrence instead still
+// leaves exactly one copy, and it holds a value the child was never going to
+// see.
 func TestWithNoProxyLoopbackLeavesOneCopyOfEachVariable(t *testing.T) {
 	env := withNoProxyLoopback([]string{"NO_PROXY=a", "NO_PROXY=b"})
-	n := 0
+	n, got := 0, ""
 	for _, kv := range env {
 		if strings.HasPrefix(kv, "NO_PROXY=") {
 			n++
+			got = kv
 		}
 	}
 	if n != 1 {
 		t.Errorf("the child environment holds %d copies of NO_PROXY: %q", n, env)
+	}
+	if want := "NO_PROXY=b,127.0.0.1"; got != want {
+		t.Errorf("the surviving copy of NO_PROXY is %q, want %q", got, want)
 	}
 }
