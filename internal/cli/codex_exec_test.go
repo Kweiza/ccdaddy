@@ -1,10 +1,19 @@
 package cli
 
 import (
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/Kweiza/ccdaddy/internal/codexproxy"
+	"github.com/Kweiza/ccdaddy/internal/daemon"
 )
 
 // The configured binary is the escape hatch for a machine where the walk
@@ -226,5 +235,187 @@ func TestWithNoProxyLoopbackLeavesOneCopyOfEachVariable(t *testing.T) {
 	}
 	if want := "NO_PROXY=b,127.0.0.1"; got != want {
 		t.Errorf("the surviving copy of NO_PROXY is %q, want %q", got, want)
+	}
+}
+
+// writeCodexProxyStatus publishes the one field of the status document these
+// tests are about. It writes the real file rather than stubbing a reader,
+// because the launcher's whole claim is that it reads what the daemon
+// published -- there being no other channel between the two processes.
+func writeCodexProxyStatus(t *testing.T, port int) {
+	t.Helper()
+	path := mustPath(daemon.StatusPath())
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Sprintf(`{"schemaVersion":1,"codexProxyPort":%d}`, port)
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// fakeProxy is a listener answering ccdad's health route, and its port.
+func fakeProxy(t *testing.T) int {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != codexproxy.HealthPath {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		io.WriteString(w, `{"ccdad":"test","port":0}`)
+	}))
+	t.Cleanup(srv.Close)
+	_, portText, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return port
+}
+
+// A held singleton is NOT evidence of a proxy. `ccdad auto` holds the same lock
+// and runs no listener at all, and a daemon whose bind failed holds it too --
+// so a launch that stopped at the lock would point codex at a port nothing
+// answers, whose only symptom is codex's endless "Reconnecting" with no error
+// text anywhere.
+func TestTheCodexLaunchProvesTheListenerAndNotTheSingleton(t *testing.T) {
+	isolate(t)
+	stubDaemonWorld(t, &fakeDaemon{held: true})
+	unsetForTest(t, "CLAUDE_SECURESTORAGE_CONFIG_DIR")
+	// A daemon that is running and publishing, with no proxy port in what it
+	// published. `ccdad auto` holds the same singleton and runs no listener at
+	// all, and a daemon whose bind failed holds it too.
+	writeCodexProxyStatus(t, 0)
+
+	port, reason := codexProxyForLaunch()
+	if reason == "" {
+		t.Fatalf("the launch took a held singleton as proof of a proxy and answered port %d", port)
+	}
+	if !strings.Contains(reason, "codex proxy port") {
+		t.Errorf("the reason does not say what was missing: %q", reason)
+	}
+}
+
+func TestTheCodexLaunchTakesThePortTheDaemonPublished(t *testing.T) {
+	isolate(t)
+	stubDaemonWorld(t, &fakeDaemon{held: true})
+	unsetForTest(t, "CLAUDE_SECURESTORAGE_CONFIG_DIR")
+	want := fakeProxy(t)
+	writeCodexProxyStatus(t, want)
+
+	got, reason := codexProxyForLaunch()
+	if reason != "" {
+		t.Fatalf("codexProxyForLaunch refused a live proxy: %s", reason)
+	}
+	if got != want {
+		t.Errorf("codexProxyForLaunch = %d, want the published %d", got, want)
+	}
+}
+
+// A published port that nothing answers is a refusal rather than an answer.
+// The daemon may have died since it published, or something else may have taken
+// the port -- and both leave codex talking to nothing.
+func TestTheCodexLaunchRefusesAPortNothingAnswers(t *testing.T) {
+	isolate(t)
+	stubDaemonWorld(t, &fakeDaemon{held: true})
+	unsetForTest(t, "CLAUDE_SECURESTORAGE_CONFIG_DIR")
+	// Port 1 is privileged and nothing in a test environment listens on it.
+	writeCodexProxyStatus(t, 1)
+
+	if port, reason := codexProxyForLaunch(); reason == "" {
+		t.Fatalf("codexProxyForLaunch accepted port %d with nothing listening on it", port)
+	}
+}
+
+// The health probe must not go through the environment's own proxy. The
+// launcher's shell may export HTTP_PROXY or ALL_PROXY, and a client that
+// consulted them would meet, one process earlier, the very capture the child's
+// NO_PROXY exempts it from.
+//
+// TWO arms, because the end-to-end one cannot fail on its own. MEASURED: Go's
+// http.ProxyFromEnvironment already answers nil for a 127.0.0.1 target with
+// HTTP_PROXY and ALL_PROXY both exported, so the request below reaches its
+// listener whether or not this client was handed a proxy function. The second
+// arm asserts the guarantee where it actually lives -- a transport that
+// consults nothing for ANY host, which is the half a loopback request can never
+// show and the half a mutation can break.
+func TestTheCodexHealthProbeIgnoresTheEnvironmentsProxy(t *testing.T) {
+	isolate(t)
+	stubDaemonWorld(t, &fakeDaemon{held: true})
+	unsetForTest(t, "CLAUDE_SECURESTORAGE_CONFIG_DIR")
+	t.Setenv("HTTP_PROXY", "http://127.0.0.1:1")
+	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:1")
+	t.Setenv("ALL_PROXY", "http://127.0.0.1:1")
+	want := fakeProxy(t)
+	writeCodexProxyStatus(t, want)
+
+	got, reason := codexProxyForLaunch()
+	if reason != "" {
+		t.Fatalf("the health probe went through the environment's proxy: %s", reason)
+	}
+	if got != want {
+		t.Errorf("codexProxyForLaunch = %d, want %d", got, want)
+	}
+
+	tr, ok := codexHealthClient.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("codexHealthClient.Transport is %T, want a *http.Transport naming no proxy", codexHealthClient.Transport)
+	}
+	if tr.Proxy != nil {
+		t.Error("codexHealthClient carries a proxy function, and this probe must consult none: " +
+			"the loopback exemption it would be relying on is the standard library's own policy, " +
+			"not a promise ccdad made")
+	}
+}
+
+// The refusal predicate is shared with the auto-start hook, and this is the arm
+// that matters here: inside a `ccdad run` session, no daemon may be started,
+// and the launcher has to say so rather than spawning one.
+func TestTheCodexLaunchWillNotStartADaemonInsideASession(t *testing.T) {
+	isolate(t)
+	f := stubDaemonWorld(t, &fakeDaemon{})
+	unsetForTest(t, "CLAUDE_SECURESTORAGE_CONFIG_DIR")
+	enterFullProfileSession(t, "acct-1")
+
+	_, reason := codexProxyForLaunch()
+	if reason == "" {
+		t.Fatal("the launcher started a daemon from inside a `ccdad run --full-profile` session")
+	}
+	if f.spawns != 0 {
+		t.Errorf("the launcher spawned %d daemons from inside a session", f.spawns)
+	}
+}
+
+// With no daemon and nothing refusing, the launcher starts one and WAITS -- the
+// auto-start hook deliberately does not wait, and a launcher that did not
+// either would point codex at a port that has not been published yet.
+func TestTheCodexLaunchStartsADaemonAndWaitsForIt(t *testing.T) {
+	isolate(t)
+	f := stubDaemonWorld(t, &fakeDaemon{takeAfter: 2})
+	unsetForTest(t, "CLAUDE_SECURESTORAGE_CONFIG_DIR")
+	want := fakeProxy(t)
+	writeCodexProxyStatus(t, want)
+
+	got, reason := codexProxyForLaunch()
+	if reason != "" {
+		t.Fatalf("codexProxyForLaunch = %q, want a port", reason)
+	}
+	if got != want {
+		t.Errorf("codexProxyForLaunch = %d, want %d", got, want)
+	}
+	if f.spawns != 1 {
+		t.Errorf("the launcher spawned %d daemons, want exactly 1", f.spawns)
+	}
+	// The WAIT, which none of the three assertions above can see: the port is
+	// already published and the listener already up, so a launcher that returned
+	// the moment it had spawned answers the same port just as fast. What tells
+	// the two apart is the daemon's state at the moment of the answer. This fake
+	// takes two probes to reach its first lock, so a launcher that did not wait
+	// leaves it still starting.
+	if !f.held {
+		t.Error("codexProxyForLaunch answered before the daemon it started had taken the singleton")
 	}
 }

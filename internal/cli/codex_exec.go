@@ -2,12 +2,18 @@ package cli
 
 import (
 	"errors"
+	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/Kweiza/ccdaddy/internal/codexproxy"
 	"github.com/Kweiza/ccdaddy/internal/config"
+	"github.com/Kweiza/ccdaddy/internal/daemon"
 )
 
 // codexProgramName is what PATH is searched for. It carries no extension:
@@ -186,4 +192,138 @@ func withLoopback(value string) string {
 		return loopbackHost
 	}
 	return strings.TrimRight(value, ", ") + "," + loopbackHost
+}
+
+// codexHealthClient probes ccdad's own listener, and it NEVER consults the
+// environment's proxy variables.
+//
+// Transport.Proxy is nil rather than left at http.ProxyFromEnvironment, and the
+// honest reason is narrower than the child's. MEASURED on this Go: with
+// HTTP_PROXY and ALL_PROXY both exported, http.ProxyFromEnvironment answers nil
+// for http://127.0.0.1:9999 and the proxy URL for http://example.com -- the
+// standard library exempts a loopback host by itself, unconditionally, with no
+// NO_PROXY entry involved. So this is a policy pinned rather than a bug fixed.
+// The exemption the child needs is spelled out by hand one process later
+// exactly because ITS runtime does not carry that rule, and ccdad's own
+// readiness check should not rest on a default that merely happens to agree.
+//
+// The timeout is short because the answer is local. A health route that takes
+// two seconds on loopback is a daemon that is not answering, and the caller
+// polls, so a long timeout would only spend the whole launch budget on one try.
+var codexHealthClient = &http.Client{
+	Timeout:   2 * time.Second,
+	Transport: &http.Transport{Proxy: nil},
+}
+
+// codexProxyHealth asks the port whether ccdad is behind it.
+//
+// The route is unauthenticated and answers nothing but a version and a port,
+// which is what makes it safe to be the one thing a launcher can ask before it
+// has a launch secret to ask with.
+func codexProxyHealth(port int) error {
+	resp, err := codexHealthClient.Get(fmt.Sprintf("http://127.0.0.1:%d%s", port, codexproxy.HealthPath))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	// Drained and capped: an unread body leaves the connection unusable, and
+	// something that is not ccdad on this port could answer with anything at
+	// all.
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("it answered %s", resp.Status)
+	}
+	return nil
+}
+
+// codexProxyReady polls until the published port answers ccdad's health route,
+// and reports the LAST reason it did not.
+//
+// The last reason rather than the first: a launch that started a daemon walks
+// through "no document yet", "no port yet" and "not listening yet" on its way
+// to an answer, and only the state it ended in is worth telling a user about.
+func codexProxyReady() (int, error) {
+	deadline := time.Now().Add(daemonWaitTimeout)
+	last := "the ccdad daemon published no codex proxy port"
+	for {
+		s, ok, err := daemon.ReadStatus()
+		switch {
+		case err != nil:
+			last = fmt.Sprintf("the ccdad daemon's status document cannot be read (%v)", err)
+		case !ok:
+			last = "the ccdad daemon has published no status document"
+		case s.CodexProxyPort == 0:
+			last = "the ccdad daemon published no codex proxy port"
+		default:
+			port := s.CodexProxyPort
+			herr := codexProxyHealth(port)
+			if herr == nil {
+				return port, nil
+			}
+			last = fmt.Sprintf("nothing answered ccdad on 127.0.0.1:%d (%v)", port, herr)
+		}
+		if !time.Now().Before(deadline) {
+			return 0, errors.New(last)
+		}
+		time.Sleep(daemonPollInterval)
+	}
+}
+
+// ensureCodexDaemon is step 3 of a launch: use the daemon that is there, start
+// one, or say why neither is possible. It returns "" when a daemon should now
+// exist.
+//
+// spawnDaemon plus waitForSingleton, and deliberately NOT startDaemonFrom.
+// That function carries the Claude-login refusals -- a credential home another
+// store claims, and a repair of an unreadable login that can put an interactive
+// keychain prompt in front of a user who asked to run codex. None of those are
+// this launch's business: a Codex session touches no Claude credential at all,
+// and a keychain prompt in the middle of `codex` is the kind of surprise that
+// makes people stop using a tool.
+func ensureCodexDaemon() string {
+	held, err := singletonHeld()
+	if err == nil && held {
+		return ""
+	}
+	if reason := autoStartRefusal(); reason != "" {
+		return reason
+	}
+	if err != nil {
+		// "Cannot determine" never becomes "not running". Spawning on an
+		// unprobeable lock is a daemon per invocation forever on a filesystem
+		// where locks do not work.
+		return fmt.Sprintf("the ccdad singleton lock cannot be probed (%v)", err)
+	}
+	if err := spawnDaemon(""); err != nil {
+		return fmt.Sprintf("a ccdad daemon could not be started (%v)", err)
+	}
+	// It WAITS, where the auto-start hook deliberately does not. The hook's
+	// caller is doing something else and the next command benefits; this
+	// caller's whole next step is to ask that daemon for a port.
+	up, err := waitForSingleton(true)
+	if err != nil {
+		return fmt.Sprintf("the ccdad singleton lock cannot be probed (%v)", err)
+	}
+	if !up {
+		return fmt.Sprintf("a ccdad daemon was started but had not taken the singleton after %s", daemonWaitTimeout)
+	}
+	return ""
+}
+
+// codexProxyForLaunch is steps 3 and 4 together: the port codex should be
+// pointed at, or the reason there is none.
+//
+// Two steps and not one, because a held singleton is not evidence of a proxy.
+// `ccdad auto` holds the same lock with no listener at all, and a daemon whose
+// bind failed holds it too -- so the process question and the listener question
+// have different answers and a launch needs the second one.
+func codexProxyForLaunch() (int, string) {
+	if reason := ensureCodexDaemon(); reason != "" {
+		return 0, reason
+	}
+	port, err := codexProxyReady()
+	if err != nil {
+		return 0, err.Error()
+	}
+	return port, ""
 }
