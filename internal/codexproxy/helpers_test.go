@@ -167,6 +167,14 @@ func (f *fixture) serving(t *testing.T, uuid string) {
 	}
 }
 
+// forget drops an account's credential blob, which is what a store row whose
+// credential file is gone looks like from the proxy's side.
+func (f *fixture) forget(uuid string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.creds, uuid)
+}
+
 // logged returns everything the Log hook was handed, already formatted.
 func (f *fixture) logged() []string {
 	f.mu.Lock()
