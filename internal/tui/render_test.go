@@ -264,12 +264,15 @@ func TestWithRoomForOneRowTheAccountWinsAndTheCountGoes(t *testing.T) {
 // would silently stop covering if the placeholder data were edited.
 func TestTheFixtureDataStillCoversTheUnreadableRowAndTheEmptyState(t *testing.T) {
 	var unreadable, full, unknownToTheEngine bool
+	cols := view.ColumnsOf(fixtureRows())
 	for _, r := range fixtureRows() {
-		switch r.UsedLabel() {
-		case view.Unreadable:
-			unreadable = true
-		case "100%":
-			full = true
+		for _, w := range cols.Windows {
+			switch r.WindowCell(w.Name) {
+			case view.Unreadable:
+				unreadable = true
+			case "100%":
+				full = true
+			}
 		}
 		if r.Engine.State == daemon.StateUnknown {
 			unknownToTheEngine = true
