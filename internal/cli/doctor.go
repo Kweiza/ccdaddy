@@ -2021,11 +2021,30 @@ func checkCodexProxy(root string, usable, accountsUsable bool, report daemon.Rep
 // and both mean codex sessions are spending an account ccdad neither chose nor
 // can measure, which nothing else on this machine says.
 //
-// The FAIL arm is the one that is not a warning, and it is narrow: a shim on
-// PATH with no other codex behind it. `codex` then resolves to a script that
-// runs `ccdad codex exec`, which finds nothing to run and refuses -- so the
-// machine has a codex command that cannot work at all, and only this row can
-// say why.
+// The FAIL arm is the one that is not a warning, and it is narrow: a bare
+// `codex` that RESOLVES to the shim, with no other codex behind it. `codex`
+// then runs a script that calls `ccdad codex exec`, which finds nothing to run
+// and refuses -- so the machine has a codex command that cannot work at all,
+// and only this row can say why.
+//
+// It is decided after the lookup rather than before it, because "the shim file
+// exists" and "a bare `codex` is the shim" are different machines. On one whose
+// shim directory never reached PATH, `codex` resolves to nothing at all rather
+// than to a script with nothing behind it, and the failure's advice -- install
+// a codex, or name one -- leaves the shim unreachable however many codexes get
+// installed. That machine needs `ccdad setup-path` and a new terminal, which is
+// an arm below, and it only becomes reachable once the failure asks about the
+// lookup.
+//
+// The executable bit is asked about on its own rather than folded into
+// "installed", and the reason is what the row says rather than what it advises:
+// both states are repaired by `ccdad codex shim install`, but a shim that is
+// present and unusable is not a shim that is absent, and a row calling it
+// absent would offer to put one where one already is. Leaving it out of the row
+// altogether is worse than either, because exec.LookPath steps over a
+// non-executable file: the row then reports whatever it found instead and
+// answers a permission problem with `ccdad setup-path`, on a machine whose PATH
+// is already right.
 //
 // Windows is skipped rather than warned about. There is no shim there in this
 // version, so a warning would be a permanent one about something the user
@@ -2051,19 +2070,19 @@ func checkCodexShim(root string, usable, accountsUsable bool) check {
 	}
 
 	dir, shim := shimDir(), shimPath()
-	installed := false
+	installed, runnable := false, false
 	if shim != "" {
 		if info, serr := os.Stat(shim); serr == nil && info.Mode().IsRegular() {
 			installed = true
+			// Whether a PATH search would take the shim if it reached it. The
+			// same call the search itself makes rather than a permission-bit
+			// test, because an owner or an ACL can withhold execute from THIS
+			// user on a file whose mode reads 0o755.
+			_, xerr := exec.LookPath(shim)
+			runnable = xerr == nil
 		}
 	}
 	real, rerr := realCodexPath(dir)
-	if installed && rerr != nil {
-		return check{"codex-shim", levelFail, fmt.Sprintf(
-			"%s is the ccdad shim and there is no other codex on PATH behind it, so `codex` runs a "+
-				"script that has nothing to start. Install codex, or name the one to use with "+
-				"`ccdad config set codex.binary <path>`", shim)}
-	}
 	// What a bare `codex` resolves to RIGHT NOW, which is the question the user
 	// is actually asking. exec.LookPath and not the walk above: this one must
 	// see the shim.
@@ -2074,6 +2093,10 @@ func checkCodexShim(root string, usable, accountsUsable bool) check {
 			"there is no codex shim, so codex sessions are not routed through ccdad and spend whatever "+
 				"codex's own home holds — an account ccdad neither chose nor can see. "+
 				"`ccdad codex shim install` puts one at %s", shim)}
+	case !runnable:
+		return check{"codex-shim", levelWarn, fmt.Sprintf(
+			"%s is there but is not executable, so a PATH search steps over it and codex sessions are "+
+				"not routed through ccdad. `ccdad codex shim install` puts the bit back", shim)}
 	case ferr != nil:
 		return check{"codex-shim", levelWarn, fmt.Sprintf(
 			"%s exists, but this shell resolves no `codex` at all (%v), so codex sessions are not "+
@@ -2082,6 +2105,11 @@ func checkCodexShim(root string, usable, accountsUsable bool) check {
 		return check{"codex-shim", levelWarn, fmt.Sprintf(
 			"%s exists, but a bare `codex` resolves to %s, so codex sessions are not routed through "+
 				"ccdad. Open a new terminal, or run `ccdad setup-path` to put %s first", shim, first, dir)}
+	case rerr != nil:
+		return check{"codex-shim", levelFail, fmt.Sprintf(
+			"%s is the ccdad shim and there is no other codex on PATH behind it, so `codex` runs a "+
+				"script that has nothing to start. Install codex, or name the one to use with "+
+				"`ccdad config set codex.binary <path>`", shim)}
 	}
 	return check{"codex-shim", levelOK, fmt.Sprintf(
 		"`codex` resolves to the ccdad shim at %s, and the codex behind it is %s", shim, real)}
