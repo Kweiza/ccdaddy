@@ -93,8 +93,6 @@ func TestAutoStartDoesNotFireForCommandsThatMustNotHaveOne(t *testing.T) {
 			"engine for a machine that has no accounts yet"},
 		{[]string{"strategy", "headroom"}, "selecting a policy is configuration, not using an account"},
 		{[]string{daemon.RunArg}, "the child is itself ccdad, so this one is a fork bomb rather than a bug"},
-		{[]string{"run", "nobody"}, "run exports a scoped credential home into its child, and a daemon " +
-			"auto-started before that would manage the live one while the user is deliberately elsewhere"},
 		{[]string{"probe", "nobody"}, "a probe is the engine's errand and the daemon re-execs it, so " +
 			"auto-starting here leaves the recursion guard as the only fuse"},
 		{[]string{"bootstrap"}, "a container entrypoint runs bootstrap before it starts the daemon " +
@@ -268,4 +266,83 @@ func TestAutoStartDoesNotWaitForTheDaemonToComeUp(t *testing.T) {
 	if f.probes != 2 {
 		t.Fatalf("status probed the lock %d times, want one auto-start probe and one dashboard probe", f.probes)
 	}
+}
+
+// `ccdad run` and `ccdad codex exec` are on the allow-list, and that is a
+// REVERSAL of what this table said before rather than an addition nobody
+// thought about.
+//
+// The old reasoning was that run exports a scoped credential home into its
+// child, so a daemon started first would manage the live one "while the user is
+// deliberately elsewhere". That is about the CHILD's scope. run replaces the
+// scope in the child outright and its own process is an ordinary shell, so the
+// daemon it starts manages the live login — which is what a daemon does. The
+// case that genuinely must not spawn is a run invoked from INSIDE a session,
+// and that is the scoped-session arm of autoStartRefusal, which still fires.
+//
+// The new reason to be here is `ccdad run <codex-account>`: the account it
+// names is served by the daemon's own loopback proxy, so without a daemon there
+// is nothing to route the session through and the launch refuses.
+func TestRunAutoStartsADaemon(t *testing.T) {
+	isolate(t)
+	f := stubDaemonWorld(t, &fakeDaemon{})
+	stubDaemonRun(t)
+	enableAutoStart(t)
+
+	// An account that does not exist. The hook fires in the root's pre-run,
+	// before the command resolves anything, which is the whole point of asking
+	// about the spawn rather than about the command's outcome.
+	runRoot(t, "run", "nobody")
+	if f.spawns != 1 {
+		t.Fatalf("`ccdad run` spawned %d daemons, want exactly 1", f.spawns)
+	}
+}
+
+// `ccdad codex exec` is pinned as a MAP entry rather than as a run, because the
+// command does not exist yet at this point in the tree and a run would report
+// the spawn that never happened as a policy decision. The launcher's own task
+// drives it end to end.
+func TestCodexExecIsOnTheAutoStartAllowList(t *testing.T) {
+	if !autoStartCommands["ccdad codex exec"] {
+		t.Error("`ccdad codex exec` is not on the auto-start allow-list. The account it serves is " +
+			"reached through the daemon's own loopback proxy, so without a daemon there is nothing " +
+			"to route the session through")
+	}
+}
+
+// The predicate is the reason the two callers cannot drift. autostart's hook
+// and the codex launcher both refuse in exactly these four places, and two
+// copies of the list would diverge in the direction of a daemon pinned to a
+// directory that is about to be deleted.
+func TestAutoStartRefusalNamesEveryPlaceADaemonMustNotBeStarted(t *testing.T) {
+	t.Run("a plain shell refuses nothing", func(t *testing.T) {
+		isolate(t)
+		os.Unsetenv("CLAUDE_SECURESTORAGE_CONFIG_DIR")
+		if got := autoStartRefusal(); got != "" {
+			t.Errorf("autoStartRefusal() = %q on a plain shell, want no refusal", got)
+		}
+	})
+	t.Run("a process ccdad started", func(t *testing.T) {
+		isolate(t)
+		os.Unsetenv("CLAUDE_SECURESTORAGE_CONFIG_DIR")
+		t.Setenv(daemon.ChildEnvVar, "1")
+		if autoStartRefusal() == "" {
+			t.Error("autoStartRefusal() allowed a spawn from a process ccdad itself started")
+		}
+	})
+	t.Run("a scoped credential environment", func(t *testing.T) {
+		isolate(t)
+		t.Setenv("CLAUDE_SECURESTORAGE_CONFIG_DIR", t.TempDir())
+		if autoStartRefusal() == "" {
+			t.Error("autoStartRefusal() allowed a spawn into a shell whose credential home is scoped to one terminal")
+		}
+	})
+	t.Run("inside a full-profile session", func(t *testing.T) {
+		isolate(t)
+		os.Unsetenv("CLAUDE_SECURESTORAGE_CONFIG_DIR")
+		enterFullProfileSession(t, "acct-1")
+		if autoStartRefusal() == "" {
+			t.Error("autoStartRefusal() allowed a spawn from inside a `ccdad run --full-profile` session")
+		}
+	})
 }
