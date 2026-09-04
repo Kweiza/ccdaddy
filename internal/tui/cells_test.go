@@ -14,45 +14,6 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/view"
 )
 
-// progress.ViewAs takes a float64 and has no absence channel: measured on a
-// 10-cell bar, 0.0, -0.5, NaN and +Inf all render "..........". An unread
-// account would be byte-identical to one at 0%, which is the bug that parked
-// cswap's engine -- one expired token made every account look empty and it
-// settled on whichever reset last.
-//
-// There are TWO absences here and they arrive by different routes.
-func TestAnAccountThatCouldNotBeReadRendersAQuestionMarkAndNoBar(t *testing.T) {
-	g := newGauge(UnicodeGlyphs)
-	for _, tc := range []struct {
-		name string
-		row  view.Row
-	}{
-		{"no cache entry at all", rowWithNoEntry()},
-		{"an entry whose headroom is unknown", rowWithUnknownHeadroom()},
-		{"a present window that reported no utilization", rowWithSilentWindow(usage.WindowFiveHour)},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got := usedCell(tc.row, g)
-			if got != view.Unreadable {
-				t.Fatalf("usedCell = %q, want exactly %q", got, view.Unreadable)
-			}
-			if strings.ContainsAny(got, "█▒[]") {
-				t.Fatalf("usedCell = %q: a bracket implies a reading, and there was none", got)
-			}
-		})
-	}
-}
-
-// The other half. Zero is a READING and must render as one, or the fix for the
-// test above is "never draw a bar".
-func TestAnAccountAtZeroPercentStillRendersAnEmptyBarAndNotAQuestionMark(t *testing.T) {
-	got := usedCell(rowAtPercent(0), newGauge(UnicodeGlyphs))
-	want := "[▒▒▒▒▒▒▒▒▒▒]   0%"
-	if got != want {
-		t.Fatalf("usedCell(0%%) = %q, want %q", got, want)
-	}
-}
-
 // AccountState is a STRING type, so a switch with no default falls out of every
 // case and leaves the caller holding its zero value -- which reads as active.
 // The document contract is additive and guarantees a newer daemon publishing a
@@ -174,18 +135,6 @@ func TestALongAddressLosesItsTailAndKeepsItsHead(t *testing.T) {
 	}
 }
 
-// The gauge is 17 columns at full width and 4 when the ladder collapses it.
-// Both forms are asserted, because the collapsed one is a different code path
-// and is the one no fixture above 43 columns exercises.
-func TestTheCollapsedGaugeIsTheBarePercentageAndKeepsTheAbsenceRule(t *testing.T) {
-	if got := usedCellCollapsed(rowAtPercent(87)); got != "87%" {
-		t.Errorf("usedCellCollapsed(87%%) = %q, want \"87%%\"", got)
-	}
-	if got := usedCellCollapsed(rowWithNoEntry()); got != view.Unreadable {
-		t.Errorf("usedCellCollapsed(unread) = %q, want %q", got, view.Unreadable)
-	}
-}
-
 // The cells this package builds by hand carry no escape byte under the None
 // theme, and the state cell's ROLE is now checked through a rendered style
 // rather than through the text alone.
@@ -199,12 +148,12 @@ func TestTheCollapsedGaugeIsTheBarePercentageAndKeepsTheAbsenceRule(t *testing.T
 // starts painting the cell it was watching, so it renders the style now.
 func TestThePlainPathEmitsNoEscapeByte(t *testing.T) {
 	pal := theme.Of(theme.None)
-	g := newGauge(UnicodeGlyphs)
+	cols := testCols()
 	rows := []view.Row{rowAtPercent(0), rowAtPercent(87), rowAtPercent(100), rowWithNoEntry(), enabledRow(), disabledRow()}
 	for _, r := range rows {
 		for _, cell := range []string{
-			usedCell(r, g),
-			usedCellCollapsed(r),
+			r.WindowCell(usage.WindowFiveHour),
+			worstCell(r, cols),
 			autoCell(r),
 			accountCell(r.ListLabel(), 20, UnicodeGlyphs.Cue),
 		} {
@@ -311,5 +260,15 @@ func TestTheTypeCellCallsACodexRowCodex(t *testing.T) {
 	}}
 	if got := typeCell(claude); got == "codex" {
 		t.Errorf("typeCell called a claude row codex")
+	}
+}
+
+// The collapsed block keeps the absence rule the gauge used to keep. It is the
+// one cell a terminal too narrow for the window block gets, and it must not
+// turn "nobody could read this account" into a percentage.
+func TestTheCollapsedBlockKeepsTheAbsenceRule(t *testing.T) {
+	cols := testCols()
+	if got := worstCell(rowWithNoEntry(), cols); got != view.Unreadable {
+		t.Errorf("worstCell on an unread row = %q, want %q", got, view.Unreadable)
 	}
 }
