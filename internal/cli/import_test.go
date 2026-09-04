@@ -546,7 +546,7 @@ func TestImportNamesTheSchemaVersionADocumentDeclares(t *testing.T) {
 // The all-or-nothing promise stopped at accounts.toml. A row that fails AFTER
 // its store.Add — an I/O failure on the fourth of five credential writes, not
 // a defect in the document — left every row before it on disk as a credential
-// file no accounts.toml named: a live refresh token that `ccdad list`, `ccdad
+// file no accounts.toml named: a live refresh token that `ccdad status`, `ccdad
 // remove` and `ccdad doctor` cannot see, because all three read the document.
 //
 // The failure is injected by putting a DIRECTORY where the second account's

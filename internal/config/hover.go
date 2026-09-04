@@ -25,16 +25,16 @@ func (c Config) Effective() Config {
 	return c
 }
 
-// KeyHover is the config key `ccdad hover` writes. It is the one key a command
-// outside this package names directly, so it is exported rather than spelled as
-// a literal there: a second copy of the name is exactly the drift keys.go exists
-// to prevent.
+// KeyHover is the compatibility key `ccdad strategy` writes for the hover
+// policy. It is exported so the command does not duplicate its on-disk name.
 const KeyHover = keyHover
 
-// KeyManual is the config key `ccdad manual` writes, exported for the same
-// reason KeyHover is: the command that writes it lives outside this package and
-// a second copy of the name is exactly the drift keys.go exists to prevent.
+// KeyManual is the compatibility key `ccdad strategy` writes for the manual
+// policy, exported for the same reason as KeyHover.
 const KeyManual = keyManual
+
+// KeyStrategy is the automatic-policy key written by `ccdad strategy`.
+const KeyStrategy = keyStrategy
 
 // hoverOverrides is every key hover derives for itself, so a value in the file
 // stops being read the moment hover is on.

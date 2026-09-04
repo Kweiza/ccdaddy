@@ -9,6 +9,20 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/theme"
 )
 
+func TestTheKeybarWrapsWithoutDroppingAMainPageCommand(t *testing.T) {
+	k := DefaultKeys()
+	lines := keybar(newHelp(UnicodeGlyphs.Cue, theme.Palette{}), k, 35, UnicodeGlyphs.Cue)
+	for _, binding := range k.ShortHelp() {
+		help := binding.Help()
+		if !strings.Contains(lines, help.Key+" "+help.Desc) {
+			t.Errorf("35-column keybar dropped %q:\n%s", help.Key+" "+help.Desc, lines)
+		}
+	}
+	if !strings.Contains(lines, "\n") {
+		t.Fatalf("35-column keybar did not wrap:\n%s", lines)
+	}
+}
+
 // help.SetWidth is not a bound. shouldAddItem returns "add it anyway" when the
 // item overflows AND the ellipsis also does not fit, and the loop then keeps
 // adding every remaining binding. Measured on this 53-wide keybar: SetWidth(30)
@@ -24,66 +38,25 @@ func TestTheKeybarNeverExceedsTheWidthItWasGiven(t *testing.T) {
 	h, k := newHelp(UnicodeGlyphs.Cue, theme.Of(theme.Dark)), DefaultKeys()
 	for _, w := range []int{20, 30, 37, 45, 53, 80, 113} {
 		got := keybar(h, k, w, UnicodeGlyphs.Cue)
-		if n := ansi.StringWidth(got); n > w {
-			t.Errorf("keybar at width %d is %d columns wide: %q", w, n, got)
+		for _, line := range strings.Split(got, "\n") {
+			if n := ansi.StringWidth(line); n > w {
+				t.Errorf("keybar line at width %d is %d columns wide: %q", w, n, line)
+			}
 		}
 	}
 }
 
-// help truncates from the RIGHT, so the last binding is the first casualty.
-// Quit must never be it: a user stranded in a full-screen program with no
-// advertised way out is a worse failure than a missing list toggle, and the
-// table already is the list.
-func TestQuitOutlivesListInTheKeybar(t *testing.T) {
-	order := DefaultKeys().ShortHelp()
-	iq, il := -1, -1
-	for i, b := range order {
-		switch b.Help().Key {
-		case "q":
-			iq = i
-		case "l":
-			il = i
-		}
-	}
-	if iq < 0 || il < 0 {
-		t.Fatal("the keybar does not offer both q and l")
-	}
-	if iq > il {
-		t.Fatalf("q is at %d and l at %d: help drops from the right, so this strands the user", iq, il)
-	}
-}
-
-// TestQuitOutlivesListInTheKeybar checks ShortHelp's ORDER; this checks the
-// actual RENDERED bar, because the order alone does not say at which widths q
-// really survives -- that depends on how many columns the bindings ahead of
-// it cost too. Measured directly against keybar()'s output: q is entirely
-// absent below width 45 (at 37, for instance, the bar cuts off inside "c
-// strategy" and never reaches q at all) and present at 45 and every width
-// from there up to the full 53. Below 45, every truncated rendering must end
-// in the cue -- the visual cue that something was cut, which an empty tail
-// silently omitted at exactly the widths this task exists to fix.
-//
-// Both loops strip, and the bar is drawn from the palette that PAINTS rather
-// than from a colourless one, which is the pairing that makes them mean
-// anything. The assertions are about the characters a reader sees and the
-// escapes sit exactly where they would break them: "q" is followed by an SGR
-// reset before its space, so Contains(got, "q ") misses on a bar that is
-// showing q perfectly well, and a cut bar ends in the cue followed by a reset,
-// so HasSuffix misses on a bar that flagged its cut correctly. Asserting on the
-// colourless bar instead would keep them green and stop them covering the bar
-// this program actually draws.
-func TestTheKeybarShowsQAsSoonAsItFitsAndFlagsWhenItCuts(t *testing.T) {
+// Wrapping keeps every command visible, including quit, instead of replacing
+// the right side with a truncation cue.
+func TestTheKeybarShowsEveryCommandAtEveryViableWidth(t *testing.T) {
 	h, k := newHelp(UnicodeGlyphs.Cue, theme.Of(theme.Dark)), DefaultKeys()
-	for _, w := range []int{45, 53, 80, 113} {
+	for _, w := range []int{20, 30, 37, 45, 53, 80, 113} {
 		got := ansi.Strip(keybar(h, k, w, UnicodeGlyphs.Cue))
-		if !strings.Contains(got, "q ") {
-			t.Errorf("keybar at width %d does not show q: %q", w, got)
-		}
-	}
-	for _, w := range []int{20, 30, 37} {
-		got := ansi.Strip(keybar(h, k, w, UnicodeGlyphs.Cue))
-		if !strings.HasSuffix(got, UnicodeGlyphs.Cue) {
-			t.Errorf("keybar at width %d was cut but does not end in the cue: %q", w, got)
+		for _, binding := range k.ShortHelp() {
+			help := binding.Help()
+			if !strings.Contains(got, help.Key+" "+help.Desc) {
+				t.Errorf("keybar at width %d dropped %q: %q", w, help.Key+" "+help.Desc, got)
+			}
 		}
 	}
 }

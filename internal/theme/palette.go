@@ -44,8 +44,10 @@ var (
 		RoleMuted:       lipgloss.Color("#d4d4d4"),
 		RoleHeader:      lipgloss.Color("#ffffff"),
 		RoleNotice:      lipgloss.Color("#fff7bf"),
+		RoleGaugeCool:   lipgloss.Color("#7db7ff"),
 		RoleGaugeOK:     lipgloss.Color("#3ae0a5"),
 		RoleGaugeWarn:   lipgloss.Color("#f3b818"),
+		RoleGaugeHigh:   lipgloss.Color("#ffad66"),
 		RoleGaugeOver:   lipgloss.Color("#ff7469"),
 		RoleGaugeEmpty:  lipgloss.Color("#e4e4e4"),
 	}}
@@ -62,8 +64,10 @@ var (
 		RoleMuted:       lipgloss.Color("#4c4c4c"),
 		RoleHeader:      lipgloss.Color("#1a1a1a"),
 		RoleNotice:      lipgloss.Color("#36310f"),
+		RoleGaugeCool:   lipgloss.Color("#003f8c"),
 		RoleGaugeOK:     lipgloss.Color("#08724a"),
 		RoleGaugeWarn:   lipgloss.Color("#835406"),
+		RoleGaugeHigh:   lipgloss.Color("#a64700"),
 		RoleGaugeOver:   lipgloss.Color("#7d0e1e"),
 		RoleGaugeEmpty:  lipgloss.Color("#000000"),
 	}}
@@ -83,8 +87,10 @@ var (
 		RoleMuted:       lipgloss.BrightBlack,
 		RoleHeader:      lipgloss.White,
 		RoleNotice:      lipgloss.Yellow,
+		RoleGaugeCool:   lipgloss.BrightBlue,
 		RoleGaugeOK:     lipgloss.Green,
 		RoleGaugeWarn:   lipgloss.Yellow,
+		RoleGaugeHigh:   lipgloss.BrightYellow,
 		RoleGaugeOver:   lipgloss.BrightRed,
 		RoleGaugeEmpty:  lipgloss.BrightBlack,
 	}}

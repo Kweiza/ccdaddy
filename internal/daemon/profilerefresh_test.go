@@ -13,7 +13,7 @@ import (
 )
 
 // pollFor runs one poll the way Refresh dispatches it, so these tests exercise
-// the same seam `ccdad list --refresh` and the daemon's own tick both go
+// the same seam `ccdad status --refresh` and the daemon's own tick both go
 // through rather than a path only a test can reach.
 func pollFor(t *testing.T, e *Engine, a store.Account) error {
 	t.Helper()

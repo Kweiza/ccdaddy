@@ -13,34 +13,6 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/view"
 )
 
-// newTuiCmd is the terminal dashboard under the name a user types for it.
-//
-// It declares NO --json flag, and that silence is a decision rather than an
-// omission. Its output is a rendering; `ccdad status --json` is the document
-// form and already exists. TestJSONContractCoversEveryJSONCommand fires only
-// for a command that declares the flag, so adding one here would pull a
-// full-screen program into four contract rules it cannot honestly satisfy.
-func newTuiCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "tui",
-		Short: "Open the dashboard",
-		Long: "tui is the interactive dashboard: the accounts, their quota, the daemon's\n" +
-			"own state, and a key for each of the things a reader of it does next.\n\n" +
-			"It reads what is already on disk and never fetches -- the usage endpoint\n" +
-			"allows roughly 28-30 requests per identity per rolling hour on a sliding\n" +
-			"window, so a dashboard that polled would let one burst saturate an account\n" +
-			"for a full hour.\n\n" +
-			"Every key that changes something runs the ordinary command for it, so it\n" +
-			"gets the same refusals, the same wording and the same exit codes you would\n" +
-			"see typing it. Bare `ccdad` opens this too.\n\n" +
-			"With stdout redirected it renders the dashboard once and exits.",
-		Args:          usageArgs(cobra.NoArgs),
-		SilenceUsage:  true,
-		SilenceErrors: true,
-		RunE:          runTui,
-	}
-}
-
 // runProgram is tui.Run, as a package var beside stdoutIsTTY and consoleVT --
 // the same idiom, for the same reason: a real tea.Program is not something a
 // test can arrange, and the decision hanging on it (does bare `ccdad` launch
@@ -48,33 +20,14 @@ func newTuiCmd() *cobra.Command {
 // launching one. runTui calls THIS, never tui.Run.
 var runProgram = tui.Run
 
-// runTui is the dashboard, factored out of the command so bare `ccdad` can
-// dispatch to exactly this and not to a near-copy of it.
-//
-// The split is stdout AND stdin, the same gate bare `ccdad` uses and for a
-// reason that is stronger here: a full-screen program needs a terminal on
-// stdin even more than a printed dashboard did.
-//
-// Off a terminal it ANSWERS rather than refusing, and that is the whole
-// difference from bare `ccdad`, which keeps its usage error there: this one is
-// an explicit verb somebody asked for by name. It renders once, through the
-// colour writer, and exits 0.
+// runTui launches the dashboard after runBare has established that stdin and
+// stdout are both terminals.
 func runTui(cmd *cobra.Command, _ []string) error {
-	if stdoutIsTTY() && stdinIsTTY() {
-		// loadSnapshot writes every notice to cmd.ErrOrStderr() as well as
-		// into the Snapshot it returns. That is right for `status` and wrong
-		// for a program that owns the terminal: Load runs again on every
-		// refresh tick, from inside the event loop, and each of those lines
-		// would be painted across the page by a writer bubbletea knows
-		// nothing about and cannot redraw over. The page has a notice rung of
-		// its own and the Snapshot carries the copy it draws from -- which is
-		// what loadSnapshot's own comment says that copy is for -- so this
-		// half takes them from there and silences the stream.
-		cmd.SetErr(io.Discard)
-		return runProgram(tuiOptions(cmd))
-	}
-	_, err := tui.Render(tuiOptions(cmd))
-	return err
+	// loadSnapshot writes every notice to cmd.ErrOrStderr() as well as into
+	// the Snapshot it returns. A full-screen program owns the terminal, so it
+	// renders the copy in Snapshot.Notices and silences the side channel.
+	cmd.SetErr(io.Discard)
+	return runProgram(tuiOptions(cmd))
 }
 
 // tuiOptions is everything package tui may not read for itself, built once so
@@ -119,7 +72,7 @@ func tuiOptions(cmd *cobra.Command) tui.Options {
 			// daemon probe's own value, which `status --json` needs and a
 			// rendering does not: loadSnapshot has already turned it into the
 			// sentence in Snapshot.Notices, which is what the page draws.
-			snap, _, err := loadSnapshot(cmd, now)
+			snap, _, err := loadSnapshot(cmd, now, false)
 			return snap, err
 		},
 		Exec: freshRootExec(cmd),

@@ -31,7 +31,7 @@ const EnvSwitchWithoutElicitation = "CCDAD_MCP_SWITCH_WITHOUT_ELICITATION"
 const confirmID = "confirm_switch"
 
 type switchIn struct {
-	Account string `json:"account" jsonschema:"the account to make live: a display index, an alias, an email address, or a uuid prefix of at least eight characters, as ccdad list shows them"`
+	Account string `json:"account" jsonschema:"the account to make live: a display index, an alias, an email address, or a uuid prefix of at least eight characters, as ccdad status shows them"`
 }
 
 // credentialMutator is the annotation set for the one tool in this server that
@@ -197,12 +197,10 @@ func confirmParams(account string, p provider.ID) *mcp.ElicitParams {
 
 // providerOfRef answers which provider a model-supplied account reference names.
 //
-// It resolves IN PROCESS, against accounts.toml, and that is not an
-// optimisation. The obvious alternative -- shelling out to `ccdad list --json`
-// through the Exec seam -- hides disabled rows, and a disabled account is a
-// perfectly legal explicit switch target. A consent built from a listing that
-// could not see the account would fall back to the wrong sentence for exactly
-// the rows a person is most likely to be asked about.
+// It resolves IN PROCESS, against accounts.toml, because the consent prompt
+// needs the provider before the command is allowed to run. Re-entering the CLI
+// through the Exec seam would be a second parse and a second policy surface for
+// an answer the store already owns.
 //
 // Every failure answers Claude: an unreadable store, an unresolvable reference,
 // an ambiguous one. That is the conservative direction, because the Claude

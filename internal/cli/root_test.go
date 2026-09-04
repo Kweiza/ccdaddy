@@ -228,10 +228,8 @@ func TestBareCcdadIsADashboardOnlyWhenStdoutAndStdinAreBothTTYs(t *testing.T) {
 	}
 }
 
-// The interactive half is `ccdad tui` itself, not a second renderer that agrees
-// with it today. runTui exists factored out for exactly this, and the assertion
-// is equality rather than a keyword: a near-copy would pass any "contains a
-// table" check and then drift on the first change to either.
+// The bare interactive path reaches the same dashboard renderer as the
+// one-shot path. runTui exists factored out so the test can observe that seam.
 //
 // Neither invocation opens a Program, and the reason is the stub rather than
 // the harness. An earlier draft of this task claimed the test's buffered stdout
@@ -243,7 +241,7 @@ func TestBareCcdadIsADashboardOnlyWhenStdoutAndStdinAreBothTTYs(t *testing.T) {
 // The stdout assertion is the "and nothing else" half. Equal Options would
 // still be equal for a runBare that rendered the dashboard AND printed a footer
 // under it, which is exactly what this slot did until this release.
-func TestBareCcdadRendersTheDashboardItselfAndNothingElse(t *testing.T) {
+func TestBareCcdadRendersTheDashboardAndNothingElse(t *testing.T) {
 	isolate(t)
 	freezeClock(t, statusNow)
 	stubDaemon(t, daemon.Report{State: daemon.DaemonStopped}, nil)
@@ -251,7 +249,7 @@ func TestBareCcdadRendersTheDashboardItselfAndNothingElse(t *testing.T) {
 	stubTTYs(t, true, true)
 
 	const wrote = "<<the program owned the terminal>>\n"
-	page := func(t *testing.T, args ...string) string {
+	page := func(t *testing.T) string {
 		t.Helper()
 		var got tui.Options
 		stubProgram(t, func(o tui.Options) error {
@@ -259,15 +257,15 @@ func TestBareCcdadRendersTheDashboardItselfAndNothingElse(t *testing.T) {
 			_, err := io.WriteString(o.Out, wrote)
 			return err
 		})
-		code, stdout, _, top := runRoot(t, args...)
+		code, stdout, _, top := runRoot(t)
 		if code != ExitOK {
-			t.Fatalf("`ccdad %s` = %d (%s), want %d", strings.Join(args, " "), code, top, ExitOK)
+			t.Fatalf("bare ccdad = %d (%s), want %d", code, top, ExitOK)
 		}
 		if got.Load == nil {
-			t.Fatalf("`ccdad %s` never reached the dashboard at all", strings.Join(args, " "))
+			t.Fatal("bare ccdad never reached the dashboard at all")
 		}
 		if stdout != wrote {
-			t.Fatalf("`ccdad %s` wrote something besides the dashboard:\n%q", strings.Join(args, " "), stdout)
+			t.Fatalf("bare ccdad wrote something besides the dashboard:\n%q", stdout)
 		}
 		// The page as a string. Out has already been spent on the line above,
 		// and Render skips a nil one.
@@ -279,9 +277,8 @@ func TestBareCcdadRendersTheDashboardItselfAndNothingElse(t *testing.T) {
 		return body
 	}
 
-	bare, viaVerb := page(t), page(t, "tui")
-	if bare != viaVerb {
-		t.Fatalf("bare ccdad is not `ccdad tui`.\nbare:\n%s\ntui:\n%s", bare, viaVerb)
+	if bare := page(t); !strings.Contains(bare, "work@example.com") {
+		t.Fatalf("bare dashboard does not contain the managed account:\n%s", bare)
 	}
 }
 
@@ -339,9 +336,8 @@ func TestAnExplicitHelpOrVersionIsAnsweredWithNoTerminal(t *testing.T) {
 	}
 }
 
-// autostart.go left this decision to this task. The dashboard is `ccdad tui`
-// under another name and `tui` IS on the allow-list, for the same reason
-// `status` is, so the interactive half starts an engine — and the usage-error
+// The dashboard auto-starts for the same reason `status` does, so the
+// interactive half starts an engine — and the usage-error
 // half must not, or `ccdad | head` in a script spawns a daemon while
 // returning 2.
 //

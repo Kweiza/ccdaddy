@@ -324,7 +324,7 @@ func TestLockFileIsNeverWrittenOrUnlinked(t *testing.T) {
 // TestAccountsFileIsNotItselfLocked. Locking the data file is the trap: Save
 // renames a new inode over the old one, so the descriptor holding the lock
 // refers to a file nobody will ever see again — and on Windows, where locks are
-// mandatory, it would make `ccdad list` fail with ERROR_LOCK_VIOLATION while
+// mandatory, it would make `ccdad status` fail with ERROR_LOCK_VIOLATION while
 // the daemon writes. The evidence is that the lock lives on its own path.
 func TestAccountsFileIsNotItselfLocked(t *testing.T) {
 	root := withStore(t)

@@ -24,7 +24,7 @@ func TestTheStatusPayloadReportsAWeeklyCapItCouldNotName(t *testing.T) {
 	}
 	row := view.Row{HasEntry: true, Entry: usage.Entry{Snapshot: snap, FetchedAt: time.Unix(0, 0).UTC()}}
 
-	out := usageJSON(row, time.Unix(0, 0).UTC())
+	out := usageJSON(row, time.Unix(0, 0).UTC(), false)
 	if got, ok := out["unnamableWeeklyCaps"]; !ok || got != 1 {
 		t.Errorf("unnamableWeeklyCaps = %v, %v; want 1, true — a cap that vanishes with nothing saying so is quota the ranking spends without knowing it exists", got, ok)
 	}
@@ -47,7 +47,7 @@ func TestAnOrdinaryReadingCarriesNoUnnamableCount(t *testing.T) {
 	}
 	row := view.Row{HasEntry: true, Entry: usage.Entry{Snapshot: snap, FetchedAt: time.Unix(0, 0).UTC()}}
 
-	if _, ok := usageJSON(row, time.Unix(0, 0).UTC())["unnamableWeeklyCaps"]; ok {
+	if _, ok := usageJSON(row, time.Unix(0, 0).UTC(), false)["unnamableWeeklyCaps"]; ok {
 		t.Error("unnamableWeeklyCaps is present on a reading with nothing to report")
 	}
 }

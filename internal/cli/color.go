@@ -24,7 +24,7 @@ import (
 // The four surfaces that call renderTarget below -- list, status, doctor and
 // the daemon summary -- and every screen of the dashboard now paint from
 // internal/theme, so this writer is the whole reason
-// `ccdad list > accounts.txt` is still a file of plain text.
+// `ccdad status > accounts.txt` is still a file of plain text.
 //
 // The profile writer downgrades to whatever the destination can carry, which
 // for a bytes.Buffer or a redirected file is nothing. It reads NO_COLOR and

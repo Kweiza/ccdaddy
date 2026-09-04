@@ -77,7 +77,7 @@ func TestResolveRejectsShortUUIDPrefix(t *testing.T) {
 }
 
 // An ambiguous prefix names its candidates, so the user can see which
-// characters would disambiguate without running `ccdad list` first.
+// characters would disambiguate without running `ccdad status` first.
 func TestResolveAmbiguousUUIDPrefixNamesTheCandidates(t *testing.T) {
 	accts := []Account{
 		{UUID: "aaaaaaaa-1111-2222-3333-444444444444", Email: "one@example.com", Idx: 1},
@@ -179,7 +179,7 @@ func TestResolveEmailBeatsUUIDPrefix(t *testing.T) {
 
 // uuids are hex, so roughly 2.3% of them begin with eight digits. An index miss
 // must fall through to step 4 rather than ending the search, or those accounts
-// are unreachable by the prefix `ccdad list` prints for them.
+// are unreachable by a numeric-looking UUID prefix.
 func TestResolveFindsAUUIDPrefixThatIsAllDigits(t *testing.T) {
 	accts := []Account{{UUID: "12345678-1111-2222-3333-444444444444", Idx: 1}}
 

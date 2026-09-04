@@ -25,7 +25,7 @@ func TestFreshRootExecRunsACommandAndReportsWhatItWroteAndExited(t *testing.T) {
 	parent.SetContext(context.Background())
 	exec := freshRootExec(parent)
 
-	code, stdout, _ := exec([]string{"list"})
+	code, stdout, _ := exec([]string{"status"})
 	if code != int(ExitOK) {
 		t.Fatalf("code = %d, want %d", code, ExitOK)
 	}
@@ -87,7 +87,7 @@ func TestFreshRootExecNeverFallsBackToTheProcesssArgv(t *testing.T) {
 	stubTTYs(t, false, false)
 	saved := os.Args
 	t.Cleanup(func() { os.Args = saved })
-	os.Args = []string{saved[0], "list", "--json"}
+	os.Args = []string{saved[0], "status", "--json"}
 
 	parent := &cobra.Command{}
 	parent.SetContext(context.Background())
@@ -129,7 +129,7 @@ func TestFreshRootExecPropagatesTheParentsContext(t *testing.T) {
 	}
 
 	exec := freshRootExec(parent)
-	exec([]string{"list", "--refresh"})
+	exec([]string{"status", "--refresh"})
 
 	if gotCtx == nil {
 		t.Fatal("the engine was never asked, so context propagation went unverified")
@@ -159,7 +159,7 @@ func TestTheMCPSeamEmitsNoEscapeByteWithColourForced(t *testing.T) {
 	t.Setenv("NO_COLOR", "1")
 
 	exec := freshRootExec(NewRootCmd())
-	for _, argv := range [][]string{{"status"}, {"list"}, {"doctor"}, {"daemon", "status"}} {
+	for _, argv := range [][]string{{"status"}, {"status"}, {"doctor"}, {"daemon", "status"}} {
 		_, stdout, stderr := exec(argv)
 		if strings.ContainsRune(stdout, 0x1b) {
 			t.Errorf("`%s` wrote an escape byte into a tool result: %q", strings.Join(argv, " "), stdout)

@@ -75,7 +75,7 @@ func newRunwayCmd() *cobra.Command {
 			accounts := s.Accounts()
 
 			// The cache is the authority for every LEVEL on this page, as it is
-			// for `ccdad status` and `ccdad list`. An unreadable one is a notice
+			// for `ccdad status`. An unreadable one is a notice
 			// and not a refusal, for the same reason it is there: this is a
 			// command a user reaches for when something is already wrong.
 			cache, err := usage.LoadCache()
@@ -258,9 +258,9 @@ func fleetForecast(accounts []store.Account, cache *usage.Cache, now time.Time) 
 		// Claude switch can never make a Codex account the live login, so its
 		// quota is quota this page must not promise.
 		//
-		// Filtered HERE rather than at the call sites, because `ccdad list`
-		// calls this function too and two filters would drift -- one page
-		// would report a fleet the other does not.
+		// Filtered HERE rather than at the call sites, because status calls this
+		// function too and two filters would drift -- one page would report a
+		// fleet the other does not.
 		if a.Provider != provider.Claude {
 			continue
 		}
@@ -452,8 +452,8 @@ func runwayBasisLine(f forecast.Fleet) string {
 }
 
 // forecastJSON is the `forecast` object, and it is the SAME object `ccdad
-// status --json` and `ccdad list --json` publish under that key: three commands
-// describing one measurement must not describe it three ways.
+// status --json` publishes under that key: two commands describing one
+// measurement must not describe it two ways.
 //
 // Every key is omitted rather than zeroed when its value could not be read,
 // following the rule the rest of these payloads keep — an unreported figure is

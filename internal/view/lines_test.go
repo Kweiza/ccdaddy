@@ -27,7 +27,7 @@ func TestADaemonStateThisBinaryDoesNotKnowRendersAsUnknownAndNeverAsStopped(t *t
 }
 
 // The two wordings are two on purpose, and a future edit that merges them
-// would silently change one of the two commands that print them.
+// would silently change one of the two surfaces that print them.
 func TestTheTwoDaemonWordingsStayTwo(t *testing.T) {
 	report := daemon.Report{
 		State:     daemon.DaemonRunning,
@@ -55,21 +55,11 @@ func TestTheTwoDaemonWordingsStayTwo(t *testing.T) {
 	}
 }
 
-// The label column is nine characters wide across every line the dashboard
-// stacks, and Hover: joins Daemon:, Active: and Mode: in it. It is measured
-// rather than asserted as a literal, because a line that sets its own width is
-// the failure: one value out of the column reads as a different table.
-func TestTheHoverLineStandsInTheSameLabelColumnAsTheRest(t *testing.T) {
-	lines := map[string]string{
-		"Daemon": DaemonLine(daemon.Report{State: daemon.DaemonStopped}, time.Time{}),
-		"Mode":   ModeLine(strategy.ModeHeadroom),
-		"Hover":  HoverLine(),
-	}
-	want := valueColumn(lines["Daemon"])
-	for _, name := range []string{"Mode", "Hover"} {
-		if got := valueColumn(lines[name]); got != want {
-			t.Errorf("%s's value starts at column %d, want %d to match Daemon's: %q", name, got, want, lines[name])
-		}
+// Current is the live engine outcome, distinct from the selected Strategy.
+func TestTheCurrentLineUsesTheCurrentLabel(t *testing.T) {
+	line := CurrentLine(strategy.ModeHeadroom)
+	if !strings.HasPrefix(line, "Current:") || !strings.Contains(line, "headroom") {
+		t.Fatalf("CurrentLine(headroom) = %q", line)
 	}
 }
 
@@ -82,16 +72,6 @@ func valueColumn(line string) int {
 	}
 	rest := line[colon+1:]
 	return colon + 1 + len(rest) - len(strings.TrimLeft(rest, " "))
-}
-
-// The line says where the derived numbers can be read. "on" by itself leaves a
-// reader who has just seen a threshold they never set with nowhere to go, and
-// the whole argument for handing the wheel over is that nothing is hidden.
-func TestTheHoverLineSaysWhereTheDerivedNumbersCanBeRead(t *testing.T) {
-	line := HoverLine()
-	if !strings.Contains(line, "ccdad hover status") {
-		t.Errorf("HoverLine() = %q, want it to name the command that prints the numbers in force", line)
-	}
 }
 
 // The daemon publishes an observation and never a verdict, so the comparison
@@ -147,8 +127,7 @@ func TestTheUpdateLineComparesAgainstTheRunningBinary(t *testing.T) {
 					t.Errorf("UpdateLine() = %q, want it to name %q", line, want)
 				}
 			}
-			// The nine-column label field the Daemon:, Active: and Mode: lines
-			// lead with, so all four line up on one dashboard.
+			// The standard short label field used by Daemon:, Active: and Update:.
 			if !strings.HasPrefix(line, "Update:  ") {
 				t.Errorf("UpdateLine() = %q, want the nine-column label field", line)
 			}
@@ -171,11 +150,11 @@ func TestTheUpdateLineComparesAgainstTheRunningBinary(t *testing.T) {
 //
 // Case-insensitively, because "Exhausted" at the start of a clause is the same
 // word on the same page.
-func TestNoModeLineBranchSaysExhausted(t *testing.T) {
+func TestNoCurrentLineBranchSaysExhausted(t *testing.T) {
 	const (
 		forbidden    = "exhaust"
 		file         = "lines.go"
-		fn           = "ModeLine"
+		fn           = "CurrentLine"
 		wantBranches = 3
 	)
 
@@ -187,8 +166,8 @@ func TestNoModeLineBranchSaysExhausted(t *testing.T) {
 		strategy.ModeConsumeFirst,
 		strategy.Mode(99),
 	} {
-		if line := ModeLine(m); strings.Contains(strings.ToLower(line), forbidden) {
-			t.Errorf("ModeLine(%v) = %q; the human table keeps that word to the --json projection", m, line)
+		if line := CurrentLine(m); strings.Contains(strings.ToLower(line), forbidden) {
+			t.Errorf("CurrentLine(%v) = %q; the human table keeps that word to the --json projection", m, line)
 		}
 	}
 

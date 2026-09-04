@@ -8,9 +8,8 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 )
 
-// ThresholdsFor is internal/cli's thresholdsFrom with its notices RETURNED
-// rather than written to a cobra command, so a caller with no command can use
-// it. Package cli's own wrapper prints them and is otherwise unchanged.
+// ThresholdsFor returns notices alongside the resolver so both CLI and TUI
+// callers can publish them through the output channel they own.
 //
 // The plan is read only when hover is on; with hover off it is ignored
 // entirely, including its error.

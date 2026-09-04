@@ -14,7 +14,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"golang.org/x/term"
 
-	"github.com/Kweiza/ccdaddy/internal/daemon"
 	"github.com/Kweiza/ccdaddy/internal/theme"
 	"github.com/Kweiza/ccdaddy/internal/view"
 )
@@ -80,7 +79,7 @@ type Model struct {
 func newModel(snap view.Snapshot, width, height int, pal theme.Palette, g Glyphs) Model {
 	return Model{
 		Snap: snap,
-		// The same constructor `ccdad list` and `ccdad status` call, on the
+		// The same constructor `ccdad status` calls, on the
 		// same rows, so all three name the same windows in the same order under
 		// the same headers. Computed once per model rather than per frame: it
 		// is a function of the snapshot, and the snapshot does not change
@@ -155,16 +154,6 @@ const (
 	unboundedHeight = 1 << 20
 )
 
-// minKeybarWidth is how much room the footer keeps for the keybar before it
-// starts shortening the daemon indicator instead.
-//
-// The rule the ladder states is that the daemon indicator is never truncated
-// away and the keybar is what loses bindings — but a footer that spent every
-// column on the daemon would advertise no way out of a full-screen program at
-// all. Seven columns is "a add" plus the two-character cue that says more was
-// cut, which is the least that still answers "what can I press".
-const minKeybarWidth = 7
-
 // noCursor is the value that says nobody is pointing at any row at all.
 //
 // The cursor CHARACTER is Glyphs.Cursor now, and the rule it used to carry is
@@ -235,8 +224,14 @@ func (m Model) Body() string {
 	// not: the wording is the same at every terminal size and only the cut
 	// moves. Asking once also means the height budget and the page below it
 	// cannot disagree about whether there is a line.
-	runway := m.runwayLine()
-	l := Plan(m.Set, m.Cols, m.Width, m.Height, rows, len(m.Snap.Notices) > 0, runway != "")
+	runway := m.runwayLines()
+	footerWidth := m.Width - 2
+	if footerWidth < 1 {
+		footerWidth = m.Width
+	}
+	footerRows := len(m.footerLines(footerWidth))
+	l := planWithRows(m.Set, m.Cols, m.Width, m.Height, rows,
+		len(m.Snap.Notices) > 0, len(runway) > 0, footerRows, len(runway))
 	if l.TooNarrow || l.TooShort {
 		return m.floors(l)
 	}
@@ -333,28 +328,13 @@ func (m Model) Body() string {
 		add(m.headerLine(inner))
 	}
 	if l.Runway {
-		// Under the labels and above everything about the rows, which is where
-		// `ccdad status` puts the same wording: it is an answer about the fleet,
-		// like Active and Mode above it, and not a column of the table.
-		//
-		// The label is "Runway: " with one space, matching the header line
-		// directly above it, rather than the nine-column "Runway:  " that
-		// command uses to line up with a Daemon: and an Active: label this page
-		// draws nowhere.
-		//
-		// truncateCue rather than a bare cut, for the reason the header line
-		// uses one: this line ends in an absolute moment and a span, and a date
-		// cut mid-value reads as a date rather than as a line that did not fit.
-		//
-		// Its bytes are not this package's to choose, and that is the
-		// narrow claim that survives: the shared wording separates its
-		// clauses with U+00B7, one display column wide and measured as one
-		// by every width function here. The page around it now draws box
-		// characters and blocks by design, so what used to be the one
-		// exception is just another line -- but it is still the only one
-		// whose characters came from a value somebody else computed rather
-		// than from this package's own vocabulary.
-		add(truncateCue("Runway: "+runway, inner, m.Glyphs.Cue))
+		for i, line := range runway {
+			label := "         "
+			if i == 0 {
+				label = "Runway:  "
+			}
+			add(truncateCue(label+line, inner, m.Glyphs.Cue))
+		}
 	}
 	if l.Notice {
 		addRole(theme.RoleNotice, noticeLine(m.Snap.Notices, inner, m.Glyphs.Cue))
@@ -363,7 +343,7 @@ func (m Model) Body() string {
 	if l.Blanks {
 		add("")
 	}
-	lines = append(lines, m.footer(inner))
+	lines = append(lines, m.footerLines(inner)...)
 
 	page := strings.Join(lines, "\n")
 	if !l.Border {
@@ -389,8 +369,8 @@ func (m Model) Body() string {
 	return frame.Render(page)
 }
 
-// floors is the page below the minimum viable size: what it needs, and the
-// footer, and nothing else. Both messages appear when both floors are under
+// floors is the page below the minimum viable size: what it needs, and nothing
+// else. Both messages appear when both floors are under
 // water, because a terminal that is too small in one dimension is usually too
 // small in the other and naming only one sends the user back for a second try.
 func (m Model) floors(l Layout) string {
@@ -399,12 +379,13 @@ func (m Model) floors(l Layout) string {
 		lines = append(lines, truncate("ccdad needs 35 columns", m.Width))
 	}
 	if l.TooShort {
-		lines = append(lines, truncate("ccdad needs 3 rows", m.Width))
+		lines = append(lines, truncate(fmt.Sprintf("ccdad needs %d rows", l.FooterRows+2), m.Width))
 	}
-	return strings.Join(append(lines, m.footer(m.Width)), "\n")
+	return strings.Join(lines, "\n")
 }
 
-// runwayLine is the measured-burn summary this page draws, or "" when there is
+// runwayLines is the measured-burn summary this page draws, one axis or
+// supporting fact per row.
 // nothing to say.
 //
 // Two gates, and neither subsumes the other. HasForecast says whether the
@@ -422,11 +403,11 @@ func (m Model) floors(l Layout) string {
 // own. A page that resolved the zone itself would print one hour in the
 // author's terminal and another in CI, where nothing sets TZ, and no fixture
 // could pin either.
-func (m Model) runwayLine() string {
+func (m Model) runwayLines() []string {
 	if !m.Snap.HasForecast {
-		return ""
+		return nil
 	}
-	return view.RunwayLine(m.Snap.Forecast, m.Snap.Now, m.Snap.Now.Location())
+	return view.CompactRunwayLines(m.Snap.Forecast, m.Snap.Now, m.Snap.Now.Location())
 }
 
 // headerLine is who is live, what the engine is set to, and what it decided.
@@ -435,7 +416,7 @@ func (m Model) runwayLine() string {
 // hover the configured strategy has stopped being read, and naming it here made
 // a page under a fully automatic mode look exactly like one that was not.
 //
-// The Mode clause is present only when the pass Decided. A zero Plan does not
+// The Current clause is present only when the pass Decided. A zero Plan does not
 // stringify to nothing — it stringifies to plausible values, and the zero Mode
 // is "headroom" — so a line built from a pass that never ran would print a
 // real answer nobody computed.
@@ -452,7 +433,7 @@ func (m Model) headerLine(width int) string {
 	line := lab.Render("Active: ") + m.Snap.ActiveLine() +
 		"  |  " + lab.Render("Strategy: ") + m.Snap.StrategyLabel()
 	if m.Snap.HasMode {
-		line += "  |  " + lab.Render("Mode: ") + m.Snap.Mode.String()
+		line += "  |  " + lab.Render("Current: ") + m.Snap.Mode.String()
 	}
 	// The LABELS take the heading role and the answers take none, which is the
 	// rule the table one block down already pays: the column headings carry
@@ -496,64 +477,14 @@ func noticeLine(notices []string, width int, cue string) string {
 	return truncateCue(prefix+truncateCue(notices[0], room, cue)+suffix, width, cue)
 }
 
-// footer is the keybar and the daemon indicator on one line, the indicator
-// pushed to the right edge.
-//
-// The indicator wins every contest for the space: it shortens by dropping its
-// own detail (see daemonFooter) and never by being cut off, because "is the
-// engine running" is the one fact a dashboard exists to answer, while a
-// keybinding a user cannot see is one they can still press.
-func (m Model) footer(width int) string {
+// footerLines shows every main-page binding, wrapped to the available width.
+// Daemon health remains one keystroke away on the daemon screen; keeping it on
+// this line would consume a second row even when every command fits on one.
+func (m Model) footerLines(width int) []string {
 	if width <= 0 {
-		return ""
+		return nil
 	}
-	foot := m.daemonFooter(width)
-	room := width - ansi.StringWidth(foot)
-	bar := ""
-	if room > 0 {
-		bar = keybar(m.Help, m.Keys, room, m.Glyphs.Cue)
-	}
-	gap := width - ansi.StringWidth(bar) - ansi.StringWidth(foot)
-	return truncate(bar+spaces(gap)+foot, width)
-}
-
-// daemonFooter is the daemon indicator at the widest form that still leaves
-// the keybar room to say something: the full wording first, then the same
-// wording without the parenthesised detail, then the bare state with the
-// label dropped.
-func (m Model) daemonFooter(width int) string {
-	for _, form := range []string{
-		"Daemon: " + m.daemonPhrase(true),
-		"Daemon: " + m.daemonPhrase(false),
-		m.daemonPhrase(false),
-	} {
-		if width-ansi.StringWidth(form) >= minKeybarWidth {
-			return form
-		}
-	}
-	return m.daemonPhrase(false)
-}
-
-// daemonPhrase is the wording `ccdad daemon status` already prints, rather
-// than a fourth one. Three exist in this binary already, and the reason for
-// reusing one is the reason for having one: a fourth is a fourth thing to keep
-// in step.
-//
-// The default arm is the unknown state and every future value. "Cannot tell"
-// is never folded into "no": a supervisor gating on that folding respawns
-// forever on a filesystem where locks do not work.
-func (m Model) daemonPhrase(detailed bool) string {
-	switch m.Snap.Report.State {
-	case daemon.DaemonRunning:
-		if detailed {
-			return view.DescribeRunning(m.Snap.Report, m.Snap.Now)
-		}
-		return "running"
-	case daemon.DaemonStopped:
-		return "not running"
-	default:
-		return "unknown"
-	}
+	return keybarLines(m.Help, m.Keys.ShortHelp(), width)
 }
 
 // moreLabel is the row that names what the window is not showing, and which way
@@ -773,8 +704,7 @@ func (m Model) markerRow(cols []Column, l Layout, text string) []string {
 // exactly one of these, and each of those is one line over a view.Row method,
 // so no percentage, span or absence is spelled twice in this binary.
 //
-// ACCOUNT is `ccdad list`'s form — the address and the handle — rather than
-// `ccdad status`'s alias alone. That is a deliberate divergence: this is the
+// ACCOUNT is the address-and-handle form `ccdad status` also uses. This is the
 // column a user reads immediately before pressing a hotkey that can move a
 // credential, and an alias-only label leaves someone who has aliased two
 // accounts unable to tell which address is which.
@@ -823,10 +753,7 @@ func (m Model) markerCell(r view.Row, at int) string {
 	return r.Marker()
 }
 
-// headerName is the heading each column carries. USED and LEFT are separate
-// columns with separate headings on purpose: `status` prints how much is
-// spent and `list` prints how much is left, and one heading carrying two
-// polarities is the drift the two tables have avoided since they were written.
+// headerName is the heading each dashboard column carries.
 func headerName(c Column, cols view.Columns) string {
 	switch c.Kind {
 	case ColIdx:
@@ -895,7 +822,7 @@ func isNoColor(c color.Color) bool {
 // instead of tidying. Package cli's one-shot tables did read it, on the
 // argument that one cache beats two; the argument was wrong on its own numbers,
 // because a sync.OnceValue is once per PROCESS and every one of those listings
-// is its own process, so `ccdad list` paid the full four seconds under the
+// is its own process, so `ccdad status` paid the full four seconds under the
 // default theme on a terminal that never answers. They take the same defined
 // dark default this function returns when it declines to ask, and the thing
 // that keeps them off this name is a syntax walk in that package which spells

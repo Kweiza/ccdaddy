@@ -42,8 +42,10 @@ const (
 	RoleMuted
 	RoleHeader
 	RoleNotice
+	RoleGaugeCool
 	RoleGaugeOK
 	RoleGaugeWarn
+	RoleGaugeHigh
 	RoleGaugeOver
 	// RoleGaugeEmpty is the unfilled track, which is a half-coverage glyph
 	// rather than solid ink. Its contrast is therefore the ink blended into
@@ -52,6 +54,25 @@ const (
 
 	numRoles
 )
+
+// UtilizationRole maps a used percentage to five equal visual bands. Every
+// percentage remains printed as text; colour is emphasis, never the only copy
+// of the value. Values outside the endpoint's ordinary 0..100 range are
+// clamped by the comparisons naturally: negative is coolest and 100+ hottest.
+func UtilizationRole(pct float64) Role {
+	switch {
+	case pct < 20:
+		return RoleGaugeCool
+	case pct < 40:
+		return RoleGaugeOK
+	case pct < 60:
+		return RoleGaugeWarn
+	case pct < 80:
+		return RoleGaugeHigh
+	default:
+		return RoleGaugeOver
+	}
+}
 
 // Name is a theme's name as the user spells it in the config file. It is a
 // string rather than an int so that a config round-trip is the identity: the

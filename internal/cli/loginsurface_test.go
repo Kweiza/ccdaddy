@@ -51,7 +51,7 @@ func TestTheLoginSurfaceFlagsDoNotContradictTheSurfaceTheySelect(t *testing.T) {
 // `ccdad add-token`. That command works, and the account it stores has no
 // claudeAiOauth record — so daemon.pollable skips it on every cadence, no
 // reading is ever produced, and the account can never be ranked or rotated
-// into. `ccdad list` says nothing about it. A person who hit this in a
+// into. `ccdad status` says nothing about it. A person who hit this in a
 // container followed the advice and got a fleet that silently does not rotate.
 //
 // The refusal has to carry that consequence, because the alternative it is

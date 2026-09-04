@@ -98,7 +98,7 @@ func EngineOptions() Options {
 func engineForDaemon() *Engine {
 	e := NewEngine()
 	// The ONE place this is wired. Everywhere else the resolver is nil and the
-	// check never runs, which is what keeps `ccdad list --refresh` and every
+	// check never runs, which is what keeps `ccdad status --refresh` and every
 	// test in this package off the release origin.
 	e.LatestRelease = release.NewClient().Latest
 	// The Codex lane's seams, wired here for the same reason and a sharper one:
@@ -126,7 +126,7 @@ func wireCodex(e *Engine) {
 // access token, and spend it on the usage endpoint.
 //
 // It is EXPORTED and the refresher is not, and that split is the whole of how
-// "only the daemon refreshes a Codex token" is kept. `ccdad list --refresh`
+// "only the daemon refreshes a Codex token" is kept. `ccdad status --refresh`
 // builds an Engine of its own and needs exactly these two; a function that also
 // handed back a refresher would make that process a second spender of a
 // single-use grant, and the endpoint kills a refresh token that is used twice.

@@ -23,17 +23,13 @@ const unreadable = view.Unreadable
 // anyway -- a cell must not depend on an invariant held one package away to
 // avoid painting a spent window the colour of a healthy one.
 func cellRole(r view.Row, n usage.WindowName) theme.Role {
-	switch r.CellState(n) {
-	case view.CellUnknown:
+	pct, state := r.WindowPct(n)
+	switch state {
+	case view.WindowUnreadable, view.WindowAbsent:
 		return theme.RoleMuted
-	case view.CellAbsent:
-		return theme.RoleMuted
-	case view.CellOver:
-		return theme.RoleGaugeOver
-	case view.CellWarn:
-		return theme.RoleGaugeWarn
+	default:
+		return theme.UtilizationRole(pct)
 	}
-	return theme.RoleGaugeOK
 }
 
 // worstCell is the whole quota block in one cell, for a terminal too narrow to

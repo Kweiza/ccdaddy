@@ -344,7 +344,7 @@ func TestTheDaemonsEngineCarriesTheLastDaemonsReleaseState(t *testing.T) {
 
 	e := engineForDaemon()
 	// The one constructor that wires the resolver. NewEngine must not, or every
-	// `ccdad list --refresh` acquires a release check.
+	// `ccdad status --refresh` acquires a release check.
 	if e.LatestRelease == nil {
 		t.Fatal("the daemon's engine has no release resolver, so the check can never run")
 	}

@@ -73,7 +73,7 @@ func chooseTarget(cmd *cobra.Command, s *store.Store, strategyName, model string
 		// with no --strategy at all, and the unguarded form printed
 		// "so --strategy  was not applied" with a hole where the name goes.
 		fmt.Fprintf(stderr, "note: hover is on and derives the ranking for itself, so --strategy %s was not applied. "+
-			"Name an account to choose one yourself, or run 'ccdad hover off' to hand the ranking back.\n", strategyName)
+			"Name an account to choose one yourself, or select another policy with 'ccdad strategy'.\n", strategyName)
 	}
 	if ev.Forced {
 		// --force is the explicit bypass of the anti-flap margins, and only
@@ -104,7 +104,7 @@ func chooseTarget(cmd *cobra.Command, s *store.Store, strategyName, model string
 func exactlyOneAccount(verb string) cobra.PositionalArgs {
 	return func(_ *cobra.Command, args []string) error {
 		if len(args) != 1 {
-			return UsageError("%s needs exactly one account; run 'ccdad list' to see them", verb)
+			return UsageError("%s needs exactly one account; run 'ccdad status' to see them", verb)
 		}
 		return nil
 	}
@@ -120,7 +120,7 @@ func exactlyOneAccount(verb string) cobra.PositionalArgs {
 func atMostOneAccount(verb string) cobra.PositionalArgs {
 	return func(_ *cobra.Command, args []string) error {
 		if len(args) > 1 {
-			return UsageError("%s takes at most one account; run 'ccdad list' to see them", verb)
+			return UsageError("%s takes at most one account; run 'ccdad status' to see them", verb)
 		}
 		return nil
 	}
@@ -192,7 +192,7 @@ func checkSwitchFlags(args []string, strategyName, model, providerName string) e
 			// the most easily mistyped command in the tree the one that
 			// silently rewrites the live login.
 			return UsageError("switch needs an account, or --strategy to let the engine choose one; " +
-				"run 'ccdad list' to see them")
+				"run 'ccdad status' to see them")
 		}
 		return nil
 	}
@@ -212,15 +212,15 @@ func newSwitchCmd() *cobra.Command {
 		Long: "ACCOUNT may be a display index, an alias, an email address, or a uuid prefix.\n\n" +
 			"With no ACCOUNT, --strategy lets the auto-switch engine choose, under the same\n" +
 			"anti-flap margins the daemon uses and reading the same on-disk usage cache.\n" +
-			"It never polls: run the daemon, or 'ccdad list --refresh', to freshen the cache.\n\n" +
+			"It never polls: run the daemon, or 'ccdad status --refresh', to freshen the cache.\n\n" +
 			"--model names the model the session will run, which NARROWS the ranking: the\n" +
 			"weekly caps scoped to other models stop counting against an account, so one\n" +
 			"whose Opus week is spent can still be chosen for a Sonnet session. Caps that\n" +
 			"are not per-model always count.\n\n" +
 			"While hover is on it derives the ranking for itself, so the strategy named here\n" +
 			"is not applied and the switch says so on stderr. --strategy is still required by\n" +
-			"the targetless grammar; name an ACCOUNT to choose one yourself, or turn hover\n" +
-			"off to hand the ranking back.",
+			"the targetless grammar; name an ACCOUNT to choose one yourself, or select\n" +
+			"another policy with 'ccdad strategy'.",
 		Args:          atMostOneAccount("switch"),
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -302,7 +302,7 @@ func newSwitchCmd() *cobra.Command {
 			// live Claude login instead.
 			if providerName != "" && target.Provider != asserted {
 				return UsageError("%s is a %s account and --provider %s was asserted; "+
-					"run 'ccdad list' to see which is which",
+					"run 'ccdad status' to see which is which",
 					target.Label(), target.Provider, asserted)
 			}
 
@@ -396,7 +396,7 @@ func newSwitchCmd() *cobra.Command {
 				}
 				fmt.Fprintln(cmd.ErrOrStderr(),
 					"  Installing it would hand Claude Code a rotation that moves the refresh token\n"+
-						"  out from under ccdad's copy. Try `ccdad list --refresh` first.")
+						"  out from under ccdad's copy. Try `ccdad status --refresh` first.")
 				return WithCode(errSilent, ExitBlocked)
 			}
 

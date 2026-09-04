@@ -113,14 +113,14 @@ func jsonContractCases() []jsonContractCase {
 		stubDaemon(t, daemon.Report{State: daemon.DaemonStopped}, nil)
 	}
 	return []jsonContractCase{{
-		path:  "list",
+		path:  "status",
 		args:  []string{"--json"},
 		setup: seedHealthyMachine,
 		want:  ExitOK,
-		keys:  []string{"accounts"},
+		keys:  []string{"daemon", "accounts", "strategy"},
 	}, {
-		path: "list",
-		name: "list/codex",
+		path: "status",
+		name: "status/codex",
 		args: []string{"--json"},
 		// The row that pins codexServingUuid. It is a SECOND row rather than a
 		// key added to the one above, because the key is conditional: the row
@@ -132,7 +132,7 @@ func jsonContractCases() []jsonContractCase {
 			seedServedCodexMachine(t)
 		},
 		want: ExitOK,
-		keys: []string{"accounts", "codexServingUuid"},
+		keys: []string{"daemon", "accounts", "strategy", "codexServingUuid"},
 	}, {
 		path:  "which",
 		name:  "which/attributed",
@@ -153,16 +153,6 @@ func jsonContractCases() []jsonContractCase {
 		},
 		want: ExitProbeNegative,
 		keys: []string{"attributed", "via"},
-	}, {
-		path: "status",
-		args: []string{"--json"},
-		setup: func(t *testing.T) {
-			t.Helper()
-			seedHealthyMachine(t)
-			stopped(t)
-		},
-		want: ExitOK,
-		keys: []string{"daemon", "accounts"},
 	}, {
 		path: "daemon status",
 		name: "daemon status/running",
@@ -299,26 +289,6 @@ func jsonContractCases() []jsonContractCase {
 		keys:   []string{"kind", "at"},
 		stream: true,
 	}, {
-		path: "hover",
-		name: "hover/on",
-		args: []string{"status", "--json"},
-		setup: func(t *testing.T) {
-			t.Helper()
-			seedHealthyMachine(t)
-			writeConfig(t, "hover = true\n")
-		},
-		want: ExitOK,
-		keys: []string{"hover", "usableAccounts", "windows"},
-	}, {
-		path: "hover",
-		name: "hover/off",
-		// The mode is off, which is a negative answer to a probe rather than a
-		// failure: the payload is still written, and the exit code is still 5.
-		setup: seedHealthyMachine,
-		args:  []string{"status", "--json"},
-		want:  ExitProbeNegative,
-		keys:  []string{"hover", "usableAccounts", "windows"},
-	}, {
 		path: "update",
 		args: []string{"--json"},
 		// The dev-build refusal is the arm this table can reach with no origin
@@ -423,7 +393,7 @@ func TestJSONContractNegativeAnswersStillCarryTheirPayload(t *testing.T) {
 	// named after — be deleted and stay green on the strength of the other
 	// three. Naming them is what makes the guard about coverage rather than
 	// about arithmetic.
-	for _, path := range []string{"which", "daemon status", "config get", "doctor", "auto", "hover"} {
+	for _, path := range []string{"which", "daemon status", "config get", "doctor", "auto"} {
 		if !negatives[path] {
 			t.Errorf("`ccdad %s` has a rendered non-zero answer and no negative row in the table", path)
 		}
@@ -534,7 +504,7 @@ func TestJSONContractOnlyAutoIsLineOriented(t *testing.T) {
 // on its own has rows where it cannot see one:
 //
 //   - A command that maps every write failure to an error fails the first half
-//     (`ccdad list --json | head -1` exits 0).
+//     (`ccdad status --json | head -1` exits 0).
 //   - A command that SWALLOWS write failures — the bufio.Writer flushed in a
 //     defer, which is how this arrives in practice — still exits with whatever
 //     code its ANSWER earned. On a row whose answer is 0 that is
@@ -585,8 +555,8 @@ func TestJSONContractWriteFailures(t *testing.T) {
 //
 // This is the rule that only exists BETWEEN commands. Each payload builder is
 // correct on its own: engineJSON puts a time.Time in the map and lets the
-// encoder render it, warmupJSON formats its own string, and both are readable
-// in isolation. What they cannot see is that the moments reaching them come
+// encoder render it, and that is readable in isolation. What one builder
+// cannot see is that the moments reaching a whole document come
 // from different places — time.Now() carries the machine's offset, a window's
 // resets_at is parsed off a wire string ending in Z and carries UTC — so a
 // document assembled from several of them carries several zones. A live store
@@ -863,7 +833,7 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// A closed reader is not an error, end to end: `ccdad list --json | head -1`
+// A closed reader is not an error, end to end: `ccdad status --json | head -1`
 // exits 0.
 //
 // Every other test in this file injects the write error, which asserts the
@@ -878,7 +848,7 @@ func TestMain(m *testing.M) {
 // -1` that has already exited is the case that matters, and a handshake would
 // be the only other way to make the write land after the close.
 func TestJSONContractAClosedReaderExitsZero(t *testing.T) {
-	for _, argv := range []string{"list --json", "auto --once --json"} {
+	for _, argv := range []string{"status --json", "auto --once --json"} {
 		t.Run(argv, func(t *testing.T) {
 			// The child gets this test's sandbox through the environment,
 			// which t.Setenv has already put on the real process: the store,
@@ -932,14 +902,13 @@ func TestJSONContractAClosedReaderExitsZero(t *testing.T) {
 // statement about the binary rather than about the account. The contract is
 // additive, so the key can only ever be added.
 //
-// It is one test over two surfaces rather than a row in the table above,
-// because that table pins TOP-LEVEL keys and this key is inside an array.
+// It is a separate test rather than a row in the table above because that
+// table pins TOP-LEVEL keys and this key is inside an array.
 func TestJSONContractEveryAccountObjectCarriesItsProvider(t *testing.T) {
 	for _, tc := range []struct {
 		path string
 		key  string
 	}{
-		{"list", "accounts"},
 		{"status", "accounts"},
 	} {
 		t.Run(tc.path, func(t *testing.T) {

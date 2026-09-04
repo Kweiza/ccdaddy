@@ -40,12 +40,12 @@ var tagline = []string{
 // it is the one row that fills the full 48 columns on its own, with no
 // padding at either end.
 var figures = []string{
-	`  ____     ____     ____             ________   `,
-	` / oo \   / oo \   / oo \           | o    o |  `,
-	`|  __  | |  __  | |  __  |         _|__ >< __|_ `,
-	`| |  | | | |  | | | |  | |        |   ~~~~~~~  |`,
-	`|_|  |_| |_|  |_| |_|  |_|        |___________| `,
-	`  ||||     ||||     ||||             ||     ||  `,
+	`  ___      ^      ___     .^.         ______    `,
+	` /o o\   .---.   /o o\   .---.      _/______\_  `,
+	`|  ^  | [|o o|] |  ^  | [|o o|]    /| _    _ |\ `,
+	`| \_/ |  |_-_|  | \_/ |  |_-_|   | |  ~~~~  | | `,
+	` \___/   '---'   \___/   '---'    |_|________|_|`,
+	`  ||      / \      ||     / \       ||      ||  `,
 }
 
 // titleLine is the one-row replacement the height ladder swaps the wordmark

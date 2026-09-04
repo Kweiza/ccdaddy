@@ -193,7 +193,7 @@ func codexThresholds(cfg config.Config) strategy.Thresholds {
 }
 
 // codexPoll takes one reading. It returns the error so that
-// Engine.Refresh -- the `ccdad list --refresh` path, which reports per account
+// Engine.Refresh -- the `ccdad status --refresh` path, which reports per account
 // -- can say what happened; the tick's own dispatch ignores it, because a
 // failed poll has already been recorded where the next tick will read it.
 func (e *Engine) codexPoll(ctx context.Context, a store.Account, thr strategy.Thresholds, serving bool) error {

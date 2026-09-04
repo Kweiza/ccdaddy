@@ -410,8 +410,8 @@ func TestRunwayNamesTheMixedTiersItSummedAcross(t *testing.T) {
 	}
 }
 
-// An empty store is an answer, not a failure — the same call `ccdad list` and
-// `ccdad status` make. --json still writes its document, because the contract
+// An empty store is an answer, not a failure — the same call `ccdad status`
+// makes. --json still writes its document, because the contract
 // is that the flag changes the representation and never the answer.
 func TestRunwayWithNoAccountsSaysSoAndStillAnswers(t *testing.T) {
 	isolate(t)
@@ -497,8 +497,8 @@ func TestRunwayRendersTheCreditsItMeasured(t *testing.T) {
 	// fleet with no readable paid usage, which is the fail-closed side of the
 	// rule; a payload that never published the object at all would satisfy that
 	// assertion perfectly. This is the side that says the key exists when the
-	// money was read, and `ccdad status --json` and `ccdad list --json` carry
-	// this same object under this same key.
+	// money was read, and `ccdad status --json` carries this same object under
+	// this same key.
 	code, doc, _, top := runRoot(t, "runway", "--json")
 	if code != ExitOK {
 		t.Fatalf("code = %v, want ExitOK (%s)", code, top)
@@ -997,7 +997,7 @@ func TestASearchThatReachedItsBoundIsPublishedAsABound(t *testing.T) {
 	}
 }
 
-// The one-line summary `ccdad status` and `ccdad list` share carries the seat
+// The one-line summary `ccdad status` carries the seat
 // count only when the fleet is SHORT. A fleet that holds already has its answer
 // in the word "holds", and a line read at a glance beside Daemon: and Active:
 // cannot spend a clause on good news.
@@ -1010,12 +1010,10 @@ func TestTheSummaryLineNamesTheNeedOnlyForAFleetThatCannotHold(t *testing.T) {
 		freezeClock(t, statusNow)
 		seedBurningFleet(t)
 
-		for _, cmd := range []string{"status", "list"} {
-			_, out, _, top := runRoot(t, cmd)
-			line := runwaySummaryLine(t, out)
-			if !strings.Contains(line, "need 9 (7 more)") {
-				t.Errorf("%s (%s): the line names no seat count: %q", cmd, top, line)
-			}
+		_, out, _, top := runRoot(t, "status")
+		line := runwaySummaryLine(t, out)
+		if !strings.Contains(line, "need 9 (7 more)") {
+			t.Errorf("status (%s): the line names no seat count: %q", top, line)
 		}
 	})
 
@@ -1024,15 +1022,13 @@ func TestTheSummaryLineNamesTheNeedOnlyForAFleetThatCannotHold(t *testing.T) {
 		freezeClock(t, statusNow)
 		seedAccountClimbingAt(t, "uuid-a", "a@example.com", 0, 0)
 
-		for _, cmd := range []string{"status", "list"} {
-			_, out, _, top := runRoot(t, cmd)
-			line := runwaySummaryLine(t, out)
-			if !strings.Contains(line, "holds on both axes") {
-				t.Fatalf("%s (%s): the fixture no longer holds, so the absence below is not the one under test: %q", cmd, top, line)
-			}
-			if strings.Contains(line, "need") {
-				t.Errorf("%s: a fleet that holds was told how many accounts it needs: %q", cmd, line)
-			}
+		_, out, _, top := runRoot(t, "status")
+		line := runwaySummaryLine(t, out)
+		if !strings.Contains(line, "holds on both axes") {
+			t.Fatalf("status (%s): the fixture no longer holds, so the absence below is not the one under test: %q", top, line)
+		}
+		if strings.Contains(line, "need") {
+			t.Errorf("a fleet that holds was told how many accounts it needs: %q", line)
 		}
 	})
 }

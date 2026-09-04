@@ -238,7 +238,6 @@ var scopedSessionAllowed = map[string]bool{
 	// is the true one for the shell the question was asked in. doctor says so
 	// out loud rather than leaving the reader to notice.
 	"ccdad":        true,
-	"ccdad list":   true,
 	"ccdad status": true,
 	"ccdad which":  true,
 	"ccdad doctor": true,
@@ -260,8 +259,6 @@ var scopedSessionAllowed = map[string]bool{
 	// and the dashboard renders the refusal in that command's own words. If
 	// that ever stops being true -- if a key calls an internal directly --
 	// this entry flips to a refusal in the same commit.
-	"ccdad tui": true,
-
 	// run REPLACES the scope in the child it launches: newSession and
 	// newProfile both set the child's variables outright, so a session inside
 	// a session is two independent sessions.
@@ -303,18 +300,9 @@ var scopedSessionAllowed = map[string]bool{
 	"ccdad config list":  true,
 	"ccdad config path":  true,
 
-	// hover writes one key of config.toml and reads the usage cache and the
-	// engine state, all of which live under CCDAD_HOME. A session scopes Claude
-	// Code's credential and config homes and nothing else, so all three verbs
-	// answer the same in here as outside -- which is why they share one verdict
-	// rather than being split by whether they write.
-	"ccdad hover": true,
-
-	// manual is hover's twin here for the same reason: it writes one key of
-	// config.toml and reads nothing else, and config.toml lives under CCDAD_HOME
-	// rather than under either home a session scopes. All three verbs answer the
-	// same in here as outside, so they share one verdict.
-	"ccdad manual": true,
+	// strategy writes ccdad's own config.toml under CCDAD_HOME, which a session
+	// does not scope.
+	"ccdad strategy": true,
 
 	// setup-path registers the directory holding the running binary into the
 	// user's shell configuration, or the Windows user environment. A session
@@ -350,7 +338,7 @@ var scopedSessionAllowed = map[string]bool{
 	// This verdict is allowed BECAUSE that re-entry exists. If a tool ever
 	// calls an internal directly instead, the gate stops firing for it and this
 	// entry flips to a refusal in the same commit. It is the same sentence
-	// `ccdad tui` carries, for the same reason and about the same seam.
+	// the dashboard carries, for the same reason and about the same seam.
 	"ccdad mcp": true,
 
 	// The Codex commands write only ccdad's OWN store, which CCDAD_HOME points

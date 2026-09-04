@@ -5,9 +5,9 @@
 // cli exports nine identifiers and none of them is a row, so a second renderer
 // would have had to spell every percentage, every reset span and every "could
 // not be read" a second time — and the two spellings would agree until the day
-// one of them changed. That `ccdad status`, `ccdad list` and the terminal
-// dashboard can never disagree is a property of there being ONE of each of
-// these, not of three of them being written carefully.
+// one of them changed. That `ccdad status` and the terminal dashboard can never
+// disagree is a property of there being ONE of each of these, not of two of
+// them being written carefully.
 //
 // Nothing here reads the clock, the filesystem or the environment. A Row is
 // built from documents somebody else read.
@@ -15,6 +15,7 @@ package view
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/daemon"
@@ -63,13 +64,12 @@ type Row struct {
 
 // Rows pairs every account with its cached reading.
 //
-// `list` builds its rows through this too, and that is what "`ccdad list` and
-// `ccdad status --json` can never disagree" actually rests on: one cache, read
-// one way, into one shape. Two commands each deriving headroom for themselves
-// would agree until the day one of them was changed.
+// Both status forms and the dashboard build their rows through this: one cache,
+// read one way, into one shape. Separate renderers deriving headroom for
+// themselves would agree until the day one of them changed.
 //
 // Engine state is deliberately NOT filled in here. It comes from status.json,
-// which is the daemon's own document and no part of what `list` reports.
+// the daemon's own document, and loadSnapshot joins it after building rows.
 func Rows(accounts []store.Account, cache *usage.Cache, active store.Account,
 	hasActive bool, now time.Time, thresholds func(uuid string) strategy.Thresholds) []Row {
 
@@ -139,8 +139,7 @@ func (r Row) Reported() (usage.NamedWindow, bool) {
 
 func (r Row) Empty() (empty, known bool) { return strategy.OutOfQuota(r.Headroom) }
 
-// Marker is the active-row marker: the character `status` and `list` both
-// already print in front of the IDX column.
+// Marker is the active-row marker printed in front of the IDX column.
 func (r Row) Marker() string {
 	if r.Active {
 		return "*"
@@ -160,26 +159,32 @@ func (r Row) AgeLabel(now time.Time) string {
 	return HumanDuration(d)
 }
 
-// StatusFlags is the suffix `ccdad status` prints after the age column. It is
-// NOT `ccdad list`'s: that one joins primary and disabled, because a listing is
-// where an account is chosen and an account can carry both flags at once.
+// StatusFlags is the suffix `ccdad status` prints after the age column. An
+// account may carry more than one flag, so they are joined in one suffix.
 func (r Row) StatusFlags() string {
+	var flags []string
+	if r.Account.Primary {
+		flags = append(flags, "primary")
+	}
 	if r.Account.Disabled {
-		return "  (disabled)"
+		flags = append(flags, "disabled")
 	}
 	// An account another machine drives is never chosen here either, and the
 	// dashboard is where a reader asks why nothing is rotating to it.
 	if r.Account.Elsewhere {
-		return "  (another machine)"
+		flags = append(flags, "another machine")
 	}
-	return ""
+	if len(flags) == 0 {
+		return ""
+	}
+	return "  (" + strings.Join(flags, ", ") + ")"
 }
 
 func (r Row) StatusLabel() string { return r.Account.Label() }
 
 // ListLabel is both the address and the handle, which is NOT Account.Label():
-// that one returns the alias alone, and a listing is where a user learns which
-// alias belongs to which address.
+// that one returns the alias alone, and the dashboard is where a user learns
+// which alias belongs to which address.
 func (r Row) ListLabel() string {
 	if r.Account.Alias == "" {
 		return r.Account.Email
@@ -189,19 +194,17 @@ func (r Row) ListLabel() string {
 
 // TypeLabel is what the TYPE column says about an account.
 //
-// It now has three callers rather than one, and the reason is the reason it
-// stopped being derivable from Kind alone. Every ChatGPT plan is a
+// It is shared by status and the dashboard because it cannot be derived from
+// Kind alone. Every ChatGPT plan is a
 // subscription, so a codex row rendered from Kind would say "subscription" --
 // true, and useless: it would be the word on every codex row and on most of the
 // Claude rows beside them, distinguishing nothing. What a reader needs in that
 // column is which side of the machine the row belongs to, because that is what
 // decides which command moves it.
 //
-// So `list`, `status` and the dashboard all call this rather than formatting
-// Kind themselves. Three renderers formatting one value three ways is the exact
-// "one value, two spellings" failure package view exists to remove -- and here
-// it would have shown as two tables calling an account a subscription while the
-// third called it codex.
+// Status and the dashboard both call this rather than formatting Kind
+// themselves. Two renderers formatting one value two ways is the exact failure
+// package view exists to remove.
 func (r Row) TypeLabel() string {
 	if r.Account.Provider == provider.Codex {
 		return "codex"

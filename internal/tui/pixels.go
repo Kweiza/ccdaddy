@@ -190,38 +190,23 @@ var wordArt = artGrid{W: 48, Rows: []string{
 	`...11111.11111.11111.......11111.11111...1......`,
 }}
 
-// figureArt is the row of small creatures and the moustached "Daddy" figure
-// beneath the wordmark in the mockup image. 48x12 pixels (48x6 terminal
-// cells folded).
-//
-// Traced first (crop (203,328)-(916,621) of the mockup, thresholded against
-// its salmon ink at #eb9384), then hand-redrawn twice. The first hand pass
-// drew the four creatures as overlapping rectangles sharing one silhouette,
-// which read as one fused blob with eye-holes rather than four bodies: three
-// of its twelve pixel rows -- including the whole row at the "waist" -- had
-// no gap anywhere across the 32-column cluster, so there was nothing for a
-// reader's eye to trace between one creature and the next. This is the
-// second pass: each creature is its own lane (0-7, 9-16, 18-25, 27-31) and
-// columns 8, 17 and 26 are a deliberate seam of ground that no creature's
-// rectangle ever reaches, in ANY of the twelve rows -- not a notch cut into a
-// shared mass. The back-center creature is tallest and alone at the top; the
-// others start lower, and each carries its own punched pair of eyes. A
-// 5-column gap separates the cluster from the "Daddy" figure in the last 11
-// columns: a wide hat brim over a narrower crown, a head with two eye-slit
-// punches, a moustache carved as a gap under the cheeks (so it folds as ink
-// on the chin half and ground on the lip half), shoulders, and its own set of
-// legs -- unchanged from the first pass, which already read correctly.
+// figureArt is a four-child family and the moustached Daddy beneath the
+// wordmark: Claude, Codex, Claude, Codex, then their father. Claude has the
+// rounded creature silhouette from the README art; Codex has an antenna and a
+// recessed screen face. Daddy gets the broad hat, eyebrows, moustache,
+// shoulders and separated legs that make him read as the adult at this scale.
+// The grid remains 48x12 pixels (48x6 terminal cells folded).
 var figureArt = artGrid{W: 48, Rows: []string{
-	`.........11111111....................11111111111`,
-	`.........11111111......................1111111..`,
-	`11111111.11.11.11..........11111......11.111.11.`,
-	`11111111.11.11.11.11111111.11111......11.111.11.`,
-	`11.11.11.11111111.11111111.1.1.1......111111111.`,
-	`11.11.11.11111111.11.11.11.1.1.1......111111111.`,
-	`11111111.11111111.11.11.11.11111......11.....11.`,
-	`11111111.11111111.11111111.11111......111111111.`,
-	`11111111.11111111.11111111.11111.....11111111111`,
-	`.11..11..11..11....11..11...11.......11111111111`,
-	`.11..11..11..11....11..11...11.......11.11.11.11`,
-	`.11..11..11..11....11..11...11.......11.11.11.11`,
+	`.11111.....1................1.........111111....`,
+	`1111111..11111....111.....111........11111111...`,
+	`11.1.11.1111111..11111...11111.....111111111111.`,
+	`1111111.1.1.1.1.11.1.11.11.1.11.....1111111111..`,
+	`1.111.1.1.....1.1111111.11...11.....11.1111.11..`,
+	`1111111.1.111.1.1.111.1.11.1.11.....1111111111..`,
+	`1111111.1.....1.1111111.11...11111..111....111..`,
+	`.11111..1111111.1111111..11111......1111..1111..`,
+	`.11.11...1.1.1...11111...1.1.1.....111111111111.`,
+	`.11.11...1.1.1...11.11...1.1.1.....11111..11111.`,
+	`.1...1...1...1...1...1...1...1......11......11..`,
+	`.1...1...1...1...1...1...1...1......11......11..`,
 }}
