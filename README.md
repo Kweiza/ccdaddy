@@ -925,7 +925,7 @@ runway, daemon state, and every available key command.
 
 | Key | What it does |
 |---|---|
-| `a` | Add an account — hands the terminal to `ccdad add` and comes back |
+| `a` | Add an account — asks which provider, then hands the terminal to `ccdad add` or `ccdad codex add` and comes back |
 | `s` | Switch the live login |
 | `d` | The daemon screen — `S` starts, `x` stops, `R` restarts, and the log tails |
 | `c` | Change the switching strategy |

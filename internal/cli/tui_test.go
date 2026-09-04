@@ -15,6 +15,49 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/view"
 )
 
+// The add key builds a command line and releases the terminal to it for
+// minutes, and until now nothing outside package tui ever checked that line
+// against the tree it is run through. Package tui cannot check it — the
+// dependency runs the other way, package cli imports package tui to register
+// the dashboard — so this is the only side the question can be asked from.
+//
+// The LEAF assertion is the arm that bites, and a resolvable path is not enough
+// to replace it. Cobra's Find walks as far as it can and hands back the last
+// command it reached with whatever it could not consume, so a spelling that
+// became a group answers with the group itself, an empty tail and exactly the
+// path that was asked for — and a login the user asked for would print a help
+// screen onto a terminal the dashboard had already let go of.
+func TestEveryProviderTheAddKeyOffersResolvesToALeafCommand(t *testing.T) {
+	argvs := tui.AddArgvs()
+	if len(argvs) == 0 {
+		// A for-all over an empty list is vacuously true, so an add key that
+		// offered nothing would ship past this test as well as past the screen.
+		t.Fatal("the add key offers no provider, so this test asserts nothing")
+	}
+	for _, argv := range argvs {
+		line := "ccdad " + strings.Join(argv, " ")
+		cmd, rest, err := NewRootCmd().Find(argv)
+		if err != nil {
+			t.Errorf("the add key offers `%s`, which does not resolve: %v", line, err)
+			continue
+		}
+		if len(rest) != 0 {
+			t.Errorf("`%s` resolved to %q with %v left over, so the dashboard would hand a "+
+				"login arguments it does not take", line, cmd.CommandPath(), rest)
+			continue
+		}
+		if cmd.CommandPath() != line {
+			t.Errorf("`%s` resolved to %q, which is a different command from the one the key names",
+				line, cmd.CommandPath())
+			continue
+		}
+		if cmd.HasSubCommands() {
+			t.Errorf("`%s` is a group and not a login: the released terminal would get a usage "+
+				"error or a help screen instead of the provider's own prose", line)
+		}
+	}
+}
+
 // stubProgram swaps runProgram for a stub that returns immediately with canned
 // output, so a test can drive the interactive branch of runTui without ever
 // opening a real tea.Program against a terminal `go test` does not have.

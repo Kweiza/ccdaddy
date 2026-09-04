@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 )
 
 // addNeedsStderr is why the add key refuses when stderr is not a terminal.
@@ -23,6 +24,63 @@ const addNeedsStderr = "add needs a terminal on stderr: the login writes its pro
 // event loop: the error, and nothing else. Everything the login had to say it
 // said on the user's terminal while it held it.
 type addFinishedMsg struct{ err error }
+
+// addChoices is every provider the add key can open a login for, and the
+// command line each one runs.
+//
+// The label and the argv are declared together for the reason every pickerItem
+// is: the words a user reads immediately before releasing their terminal for
+// several minutes cannot be allowed to drift away from what actually runs.
+//
+// The labels are the providers' own names rather than the command lines. A user
+// on this screen is answering "which account am I adding", and `codex add`
+// against `add` would make the answer look like a difference in spelling.
+func addChoices() []pickerItem {
+	return []pickerItem{
+		{label: "Claude", argv: []string{"add"}},
+		{label: "Codex", argv: []string{"codex", "add"}},
+	}
+}
+
+// AddArgvs is every command line the add key can run, for the one test that can
+// check them and does not live here.
+//
+// The dashboard builds these argv itself and hands them to a fresh command
+// tree, so a spelling that stopped resolving — or that grew children and became
+// a group — would only be discovered by a user watching their terminal go
+// somewhere unexpected. Package tui cannot check them for itself: package cli
+// imports THIS package to register the dashboard, so the command tree is not
+// visible from here and the dependency cannot be turned around.
+//
+// It clones, so a caller cannot edit the command line this key releases the
+// terminal to.
+func AddArgvs() [][]string {
+	choices := addChoices()
+	argvs := make([][]string, 0, len(choices))
+	for _, it := range choices {
+		argvs = append(argvs, slices.Clone(it.argv))
+	}
+	return argvs
+}
+
+// addPicker is the provider choice, drawn as a picker and handled as its own
+// screen.
+//
+// NOTHING is marked and the cursor opens on the first choice, every time. The
+// mark on the other two pickers answers "which value is already in force", and
+// there is no such value for an add: a user is not switching from one provider
+// to another, they are adding an account to one of them. Nor is the last choice
+// remembered — the picker is built fresh on each keypress — because a
+// remembered position would make the same two keystrokes add a Claude account
+// today and a Codex one tomorrow.
+func addPicker(g Glyphs) picker {
+	return picker{
+		title:   "Add an account for which provider?",
+		items:   addChoices(),
+		current: -1,
+		glyphs:  g,
+	}
+}
 
 // selfPath is os.Executable behind a name so the failure below can be
 // exercised, and because that failure is real rather than theoretical: on
@@ -58,7 +116,16 @@ var selfPath = os.Executable
 //
 // And a panic in the login is a dead child and an exit status, not a dead
 // dashboard.
-func addChild() (*exec.Cmd, error) {
+//
+// The argv comes from the provider the user chose. An EMPTY one is refused
+// rather than run, and that guard earns its place: `exec.Command(self)` with
+// nothing after it is the dashboard itself, launched into the terminal this
+// dashboard has just let go of — a second full-screen program on the same tty,
+// with the first one blocked until it exits.
+func addChild(argv []string) (*exec.Cmd, error) {
+	if len(argv) == 0 {
+		return nil, errors.New("no provider was chosen, and ccdad with no arguments is the dashboard itself")
+	}
 	self, err := selfPath()
 	if err != nil {
 		return nil, fmt.Errorf("ccdad could not locate its own binary to run the login: %w", err)
@@ -71,7 +138,7 @@ func addChild() (*exec.Cmd, error) {
 	//
 	// SysProcAttr stays nil too. Setting it takes the child out of this
 	// process group, and Ctrl-C then never reaches it.
-	return exec.Command(self, "add"), nil
+	return exec.Command(self, argv...), nil
 }
 
 // addOutcome maps the child's exit onto ccdad's own contract.
