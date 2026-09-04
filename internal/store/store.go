@@ -228,6 +228,25 @@ func AccountsAt(root string) ([]Account, error) {
 	return s.Accounts(), nil
 }
 
+// CredentialsAt reads one account's stored keys from a root, without opening
+// the store.
+//
+// It is the same read Store.Credentials performs, with Open's tree creation,
+// mode tightening and accounts.toml parse left out, for the reason AccountsAt
+// leaves them out: a caller that already resolved the root should not have the
+// store brought into existence, or refused, on its behalf.
+//
+// The codex proxy is the caller that needed it. It is handed a credential
+// reader once, at daemon start, and reads through it on every forwarded turn.
+// An opened store there would have made an accounts.toml this build cannot
+// parse -- a hand edit, a truncated write, a restored backup -- a refusal to
+// start the daemon at all, and opening per turn would have put a MkdirAll and
+// two chmods on the path of every codex request.
+func CredentialsAt(root, uuid string) (cclink.Blob, error) {
+	s := &Store{root: root}
+	return s.Credentials(uuid)
+}
+
 // CredentialsDirAt and AccountsFileAt name a store's two on-disk parts without
 // resolving, creating or opening anything.
 //
