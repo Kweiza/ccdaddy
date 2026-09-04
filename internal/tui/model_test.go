@@ -376,8 +376,146 @@ func TestACommandsOutcomeIsShownVerbatimAndTriggersAReread(t *testing.T) {
 	}
 }
 
-// The add key refuses a redirected stderr and names the redirect, without
-// spawning anything: the login writes every line of its prose there.
+// There are two providers and neither of them is what `a` has always meant, so
+// the key opens a choice instead of a login. Nothing is released until somebody
+// has said which one.
+func TestTheAddKeyOffersAProviderChoiceRatherThanStartingALogin(t *testing.T) {
+	a := appAt(t, fixtureOptions(), 113, 26)
+	next, cmd, ok := a.key(keyPress("a"))
+	if !ok {
+		t.Fatal("the add key was not handled")
+	}
+	if cmd != nil {
+		t.Fatal("the add key released the terminal before anybody had chosen a provider")
+	}
+	if next.scr != screenAddProvider {
+		t.Fatalf("the add key opened screen %d, want the provider choice", next.scr)
+	}
+	body := next.body()
+	for _, want := range []string{"Claude", "Codex"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the choice does not offer %s:\n%s", want, body)
+		}
+	}
+}
+
+// The cursor opens on the first choice with nothing marked, and it opens there
+// again next time. There is no provider "in force" for an add — the mark on the
+// other two pickers answers "which value is already live", and an add has no
+// such value — and a remembered position would make the same keystrokes add a
+// different provider on the second press than on the first.
+func TestTheProviderChoiceOpensOnTheFirstChoiceWithNothingMarkedAndForgetsIt(t *testing.T) {
+	a := appAt(t, fixtureOptions(), 113, 26)
+
+	a, _, _ = a.key(keyPress("a"))
+	if a.pick.cursor != 0 {
+		t.Fatalf("the choice opened on item %d, want the first", a.pick.cursor)
+	}
+	if a.pick.current != -1 {
+		t.Fatalf("item %d is marked as already in force, and no provider is in force for an add", a.pick.current)
+	}
+	if strings.Contains(a.body(), "* ") {
+		t.Errorf("the choice drew an in-force mark:\n%s", a.body())
+	}
+
+	a, _, _ = a.key(keyPress("down"))
+	if a.pick.cursor != 1 {
+		t.Fatalf("down left the cursor on item %d", a.pick.cursor)
+	}
+	a, _, _ = a.key(keyPress("esc"))
+	a, _, _ = a.key(keyPress("a"))
+	if a.pick.cursor != 0 {
+		t.Fatalf("the choice reopened on item %d: the provider was remembered between invocations", a.pick.cursor)
+	}
+}
+
+// The three motion keys mean one thing across both lists. They are one arm
+// called from both handlers rather than two copies, so up, down and esc cannot
+// come to mean two things on two lists that a user moves through identically.
+func TestTheProviderChoiceMovesAndCancelsLikeEveryOtherPicker(t *testing.T) {
+	a := appAt(t, fixtureOptions(), 113, 26)
+	a, _, _ = a.key(keyPress("a"))
+
+	a, _, _ = a.key(keyPress("down"))
+	a, _, _ = a.key(keyPress("up"))
+	if a.pick.cursor != 0 {
+		t.Fatalf("down then up left the cursor on item %d", a.pick.cursor)
+	}
+	// The ends hold rather than wrapping, for the reason the switch list's do:
+	// a held key that wrapped would leave the highlight on a provider the user
+	// was not looking at when they let go.
+	a, _, _ = a.key(keyPress("up"))
+	if a.pick.cursor != 0 {
+		t.Fatalf("up past the top wrapped to item %d", a.pick.cursor)
+	}
+
+	next, cmd, ok := a.key(keyPress("esc"))
+	if !ok {
+		t.Fatal("esc was not handled on the provider choice")
+	}
+	if cmd != nil {
+		t.Fatal("esc started something")
+	}
+	if next.scr != screenPage {
+		t.Fatalf("esc left screen %d showing, want the page", next.scr)
+	}
+}
+
+// Enter here RELEASES the terminal to a login, and that is why this screen has
+// its own handler rather than another arm of pickerKey. Every other picker's
+// enter runs its argv through the executor, which captures the command's bytes
+// into a panel; a login run that way would have its code, its URL and its paste
+// prompt swallowed, and the dashboard would sit blank waiting for something the
+// user was never shown.
+func TestEnterOnTheProviderChoiceReleasesTheTerminalRatherThanCapturingBytes(t *testing.T) {
+	var ran [][]string
+	o := fixtureOptions()
+	o.Exec = recorder(&ran)
+
+	a := appAt(t, o, 113, 26)
+	a, _, _ = a.key(keyPress("a"))
+	next, cmd, ok := a.key(keyPress("enter"))
+	if !ok {
+		t.Fatal("enter was not handled on the provider choice")
+	}
+	if cmd == nil {
+		t.Fatal("enter on the provider choice started nothing")
+	}
+	for _, msg := range drain(cmd) {
+		if _, isRan := msg.(ranMsg); isRan {
+			t.Fatal("the login was put through the executor, which captures its output into a panel")
+		}
+	}
+	if len(ran) != 0 {
+		t.Fatalf("the executor ran %v", ran)
+	}
+	if next.scr != screenPage {
+		t.Fatalf("the choice stayed on screen %d behind the released login", next.scr)
+	}
+}
+
+// Every screen a keypress can arrive in is probed, or Handles answers for a
+// dashboard smaller than the one that ships and a keybar can advertise a key
+// nothing on the reachable screens does anything with.
+func TestEveryScreenAKeypressCanArriveInIsProbed(t *testing.T) {
+	seen := map[screen]bool{}
+	for _, a := range probes() {
+		if seen[a.scr] {
+			t.Errorf("two probes sit on screen %d, so some other screen has none", a.scr)
+		}
+		seen[a.scr] = true
+	}
+	for s := screenPage; s <= screenAddProvider; s++ {
+		if !seen[s] {
+			t.Errorf("screen %d is not probed: Handles cannot see the keys that live there", s)
+		}
+	}
+}
+
+// The stderr gate is asked BEFORE any choice is offered, and that order is the
+// point rather than an accident of layout: it is a question about the terminal
+// every login will need, not about which login it is, and offering a choice
+// first would make a user pick a provider on the way to being refused.
 func TestTheAddKeyRefusesARedirectedStderrWithoutSpawningAnything(t *testing.T) {
 	o := fixtureOptions()
 	o.StderrTTY = false
@@ -394,7 +532,8 @@ func TestTheAddKeyRefusesARedirectedStderrWithoutSpawningAnything(t *testing.T) 
 		t.Fatalf("the refusal does not name the redirect:\n%s", next.body())
 	}
 	if next.scr != screenPanel {
-		t.Error("the refusal was not put on screen")
+		t.Errorf("the refusal was not put on screen; screen %d is showing, and a provider "+
+			"choice here would ask the user to pick on the way to being refused", next.scr)
 	}
 }
 

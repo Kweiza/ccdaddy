@@ -108,16 +108,19 @@ type logMsg struct {
 // where the ladder is already dropping blocks there is nothing left to take.
 type screen int
 
+// screenAddProvider stays LAST. probes() is asserted to cover every value from
+// screenPage up to it, which is how a screen added without a probe is caught.
 const (
 	screenPage screen = iota
 	screenPicker
 	screenPanel
 	screenDaemon
 	screenHelp
+	screenAddProvider
 )
 
 // App is the dashboard as a running program: the page, the injected world, and
-// which of the five screens is showing.
+// which of the six screens is showing.
 //
 // The page itself is Model, which is pure and stays pure. Everything with a
 // clock, a terminal or a signal disposition is here.
@@ -126,7 +129,7 @@ type App struct {
 	opts Options
 
 	scr  screen
-	pick picker // valid while scr is screenPicker
+	pick picker // valid while scr is screenPicker or screenAddProvider
 	res  result // a command's own bytes, while scr is screenPanel
 	note string // a sentence this package wrote, while scr is screenPanel
 	// back is where dismissing the panel goes. A daemon key runs its command
@@ -327,11 +330,16 @@ func (a App) View() tea.View {
 	return v
 }
 
-// body is which screen is drawn. The page is Model's; the other four are cut
+// body is which screen is drawn. The page is Model's; the other five are cut
 // to the terminal here.
+//
+// The provider choice shares the picker's rendering and not its handler. What a
+// list of choices LOOKS like is the same question on both screens — a title,
+// two marker columns, one line a keystroke moves — and what enter MEANS on them
+// is not.
 func (a App) body() string {
 	switch a.scr {
-	case screenPicker:
+	case screenPicker, screenAddProvider:
 		return fit(a.pick.Body(a.m.Width, a.m.Pal), a.m.Width, a.m.Height)
 	case screenPanel:
 		// a.note is untouched: it is a sentence this package wrote and has no
@@ -413,6 +421,8 @@ func (a App) key(msg tea.KeyPressMsg) (App, tea.Cmd, bool) {
 	switch a.scr {
 	case screenPicker:
 		return a.pickerKey(msg, k)
+	case screenAddProvider:
+		return a.addProviderKey(msg, k)
 	case screenPanel, screenHelp:
 		switch {
 		case key.Matches(msg, k.Quit):
@@ -433,8 +443,7 @@ func (a App) key(msg tea.KeyPressMsg) (App, tea.Cmd, bool) {
 // keystroke never moves a credential, and a key that fell through to the page
 // underneath would act on something the user cannot see.
 func (a App) pickerKey(msg tea.KeyPressMsg, k KeyMap) (App, tea.Cmd, bool) {
-	switch {
-	case key.Matches(msg, k.Enter):
+	if key.Matches(msg, k.Enter) {
 		argv := a.pick.Chosen()
 		a.scr = screenPage
 		if argv == nil {
@@ -444,6 +453,45 @@ func (a App) pickerKey(msg tea.KeyPressMsg, k KeyMap) (App, tea.Cmd, bool) {
 		}
 		a, cmd := a.starting(argv)
 		return a, cmd, true
+	}
+	return a.pickMotion(msg, k)
+}
+
+// addProviderKey is the provider choice, and it is a SEPARATE handler from
+// pickerKey for one word: enter.
+//
+// Enter on every other picker runs an argv through the executor and shows the
+// bytes it captured. Enter here hands the whole terminal to a login for as long
+// as it takes a person to approve it somewhere else — no bytes are captured,
+// because they are being written on the user's own screen. Those are different
+// enough that putting both behind one handler would make every pickerItem in
+// the program carry an unasked question: is this one of the released ones?
+//
+// The empty-store branch has no counterpart here. This list is built from a
+// constant and is never empty, and a guard for a state that cannot arise would
+// be a claim that it can.
+func (a App) addProviderKey(msg tea.KeyPressMsg, k KeyMap) (App, tea.Cmd, bool) {
+	if key.Matches(msg, k.Enter) {
+		argv := a.pick.Chosen()
+		a.scr = screenPage
+		c, err := addChild(argv)
+		if err != nil {
+			return a, func() tea.Msg { return addFinishedMsg{err: err} }, true
+		}
+		return a, tea.ExecProcess(c, func(err error) tea.Msg { return addFinishedMsg{err: err} }), true
+	}
+	return a.pickMotion(msg, k)
+}
+
+// pickMotion is up, down and esc — the three keys both lists share.
+//
+// They are one arm called from both handlers rather than two copies of three
+// cases. A user moves through both lists with the same keys, and two spellings
+// of "down" would agree until the day one of them was changed: an end that
+// wrapped on one list and held on the other, or an esc that cancelled one and
+// chose on the other, is the kind of drift a reader only finds by pressing it.
+func (a App) pickMotion(msg tea.KeyPressMsg, k KeyMap) (App, tea.Cmd, bool) {
+	switch {
 	case key.Matches(msg, k.Esc):
 		a.scr = screenPage
 		return a, nil, true
@@ -491,14 +539,16 @@ func (a App) pageKey(msg tea.KeyPressMsg, k KeyMap) (App, tea.Cmd, bool) {
 		return a, tea.Quit, true
 
 	case key.Matches(msg, k.Add):
+		// The terminal question comes FIRST, before any choice is offered. It
+		// is about the terminal every login will need and not about which login
+		// it is, so a user under a redirect is refused straight away rather
+		// than asked to pick a provider on the way to being told no.
 		if !a.opts.StderrTTY {
 			return a.saying(addNeedsStderr), nil, true
 		}
-		c, err := addChild()
-		if err != nil {
-			return a, func() tea.Msg { return addFinishedMsg{err: err} }, true
-		}
-		return a, tea.ExecProcess(c, func(err error) tea.Msg { return addFinishedMsg{err: err} }), true
+		a.pick = addPicker(a.m.Glyphs)
+		a.scr = screenAddProvider
+		return a, nil, true
 
 	case key.Matches(msg, k.Switch):
 		a.pick = switchPicker(a.m.Snap.Rows, a.m.Cursor, a.m.Glyphs)
@@ -581,7 +631,9 @@ func probes() []App {
 	engine.scr = screenDaemon
 	long := base
 	long.scr = screenHelp
-	return []App{base, pick, panel, engine, long}
+	provider := base
+	provider.scr, provider.pick = screenAddProvider, addPicker(base.m.Glyphs)
+	return []App{base, pick, panel, engine, long, provider}
 }
 
 // namedKeys is every non-printable key this program binds, by the name the

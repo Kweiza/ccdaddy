@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -15,7 +16,7 @@ import (
 // to os.Stderr. Setting any of them here takes the login off the terminal the
 // user is looking at.
 func TestTheChildLeavesItsThreeStreamsForBubbleteaToFill(t *testing.T) {
-	c, err := addChild()
+	c, err := addChild([]string{"add"})
 	if err != nil {
 		t.Skipf("os.Executable() is unavailable here: %v", err)
 	}
@@ -30,18 +31,82 @@ func TestTheChildLeavesItsThreeStreamsForBubbleteaToFill(t *testing.T) {
 	}
 }
 
-// The login ships as a bare `ccdad add`, with no --activate. The command
-// deliberately does not switch after adding and the switch key is the next one
-// over, so leaving the flag off keeps the two keys meaning what they say.
+// Every login ships bare, with no --activate. The commands deliberately do not
+// switch after adding and the switch key is the next one over, so leaving the
+// flag off keeps the two keys meaning what they say.
 func TestTheChildCarriesNoFlagsTheUserDidNotAskFor(t *testing.T) {
-	c, err := addChild()
-	if err != nil {
-		t.Skipf("os.Executable() is unavailable here: %v", err)
-	}
-	for _, arg := range c.Args[1:] {
-		if strings.HasPrefix(arg, "-") {
-			t.Fatalf("the child carries %q, which nobody chose on this key", arg)
+	for _, argv := range AddArgvs() {
+		c, err := addChild(argv)
+		if err != nil {
+			t.Skipf("os.Executable() is unavailable here: %v", err)
 		}
+		for _, arg := range c.Args[1:] {
+			if strings.HasPrefix(arg, "-") {
+				t.Fatalf("the child carries %q, which nobody chose on this key", arg)
+			}
+		}
+	}
+}
+
+// The child runs the command line the chosen provider names, word for word.
+// The choice is the only thing that decides which login opens, and a child
+// assembled from anything else would hand the terminal to the other provider.
+func TestTheChildRunsTheCommandLineTheChosenProviderNames(t *testing.T) {
+	for _, argv := range AddArgvs() {
+		c, err := addChild(argv)
+		if err != nil {
+			t.Skipf("os.Executable() is unavailable here: %v", err)
+		}
+		if !slices.Equal(c.Args[1:], argv) {
+			t.Errorf("the child runs %v for the choice %v", c.Args[1:], argv)
+		}
+	}
+}
+
+// An empty argv is refused rather than executed, and the reason is not
+// hygiene. `exec.Command(self)` with nothing after it is the dashboard itself,
+// opened inside the terminal this dashboard has just released — a second
+// full-screen program on the same tty, with the first one blocked waiting for
+// it to exit.
+func TestAnEmptyArgvIsRefusedRatherThanReopeningTheDashboard(t *testing.T) {
+	for _, argv := range [][]string{nil, {}} {
+		c, err := addChild(argv)
+		if err == nil {
+			t.Fatalf("addChild(%v) produced a child that would re-open the dashboard on the released terminal", argv)
+		}
+		if c != nil {
+			t.Fatalf("addChild(%v) produced both an error and a command", argv)
+		}
+	}
+}
+
+// The exported list and the list the screen draws are one list. Two spellings
+// of "which providers can be added" would agree until the day one of them
+// grew a provider, and the tripwire in package cli reads the exported one.
+func TestTheExportedArgvsAreTheOnesTheScreenOffers(t *testing.T) {
+	choices := addChoices()
+	argvs := AddArgvs()
+	if len(argvs) != len(choices) {
+		t.Fatalf("AddArgvs offers %d command lines and the screen draws %d choices", len(argvs), len(choices))
+	}
+	for i, it := range choices {
+		if !slices.Equal(argvs[i], it.argv) {
+			t.Errorf("choice %q runs %v and AddArgvs reports %v", it.label, it.argv, argvs[i])
+		}
+	}
+}
+
+// The exported list hands out copies. A caller that wrote into it would be
+// editing the command line the add key runs, from outside the package that
+// owns it.
+func TestTheExportedArgvsCannotBeEditedFromOutside(t *testing.T) {
+	got := AddArgvs()
+	if len(got) == 0 || len(got[0]) == 0 {
+		t.Fatal("AddArgvs is empty, so this test asserts nothing")
+	}
+	got[0][0] = "uninstall"
+	if AddArgvs()[0][0] == "uninstall" {
+		t.Fatal("a caller edited the command line the add key releases the terminal to")
 	}
 }
 
@@ -118,7 +183,7 @@ func TestAnUnresolvableSelfIsReportedRatherThanSwallowed(t *testing.T) {
 	selfPath = func() (string, error) {
 		return "", errors.New("/proc/self/exe: no such file or directory")
 	}
-	c, err := addChild()
+	c, err := addChild([]string{"add"})
 	if err == nil {
 		t.Fatal("an unresolvable self produced a child anyway")
 	}

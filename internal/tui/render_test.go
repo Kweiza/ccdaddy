@@ -641,14 +641,21 @@ func fixtureModelGlyphs(width, height int, g Glyphs) Model {
 	return newModel(fixtureSnapshot(fixtureReport(width, height)), width, height, theme.Of(theme.None), g)
 }
 
+// fixtureOptions is the world every key test starts from, and StderrTTY is
+// TRUE in it deliberately. The add key's first act is to ask that question, so
+// a fixture that answered "not a terminal" would quietly turn the key into a
+// refusal in every test that never thought about it — and a test asserting what
+// the choice offers would be asserting what the refusal says instead. The two
+// tests that are about the refusal set it false for themselves.
 func fixtureOptions() Options {
 	snap := fixtureSnapshot(fixtureReport(113, 26))
 	return Options{
-		Load:     func(time.Time) (view.Snapshot, error) { return snap, nil },
-		Now:      func() time.Time { return fixtureNow },
-		Out:      io.Discard,
-		Theme:    theme.None,
-		GlyphSet: "unicode",
+		Load:      func(time.Time) (view.Snapshot, error) { return snap, nil },
+		Now:       func() time.Time { return fixtureNow },
+		Out:       io.Discard,
+		Theme:     theme.None,
+		GlyphSet:  "unicode",
+		StderrTTY: true,
 	}
 }
 
