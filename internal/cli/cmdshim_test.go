@@ -9,11 +9,11 @@ import (
 	"testing"
 )
 
-// shimDir is the directory a fixture pretends to sit in. Spelled as a Windows
+// npmShimDir is the directory a fixture pretends to sit in. Spelled as a Windows
 // path on purpose, including on Linux: %dp0% expands to a Windows path in the
 // only place this code ever runs, and a fixture written in the host's spelling
 // would test the one arrangement that never happens.
-const shimDir = `C:\Users\dev\AppData\Roaming\npm`
+const npmShimDir = `C:\Users\dev\AppData\Roaming\npm`
 
 func readFixture(t *testing.T, name string) string {
 	t.Helper()
@@ -36,7 +36,7 @@ func TestTheShimFixturesKeepTheLineEndingsNpmWrites(t *testing.T) {
 }
 
 func TestParseNpmShim(t *testing.T) {
-	script := shimDir + `\` + `\node_modules\@anthropic-ai\claude-code\cli.js`
+	script := npmShimDir + `\` + `\node_modules\@anthropic-ai\claude-code\cli.js`
 	for _, tc := range []struct {
 		name     string
 		fixture  string
@@ -48,7 +48,7 @@ func TestParseNpmShim(t *testing.T) {
 		{
 			name:     "the ordinary node package",
 			fixture:  "env-node.cmd",
-			prog:     shimDir + `\` + `\node.exe`,
+			prog:     npmShimDir + `\` + `\node.exe`,
 			fallback: "node",
 			args:     []string{script},
 		},
@@ -57,14 +57,14 @@ func TestParseNpmShim(t *testing.T) {
 			// the script; appending them would hand them to claude instead.
 			name:     "interpreter flags from a -S shebang",
 			fixture:  "env-dash-s-flags.cmd",
-			prog:     shimDir + `\` + `\node.exe`,
+			prog:     npmShimDir + `\` + `\node.exe`,
 			fallback: "node",
 			args:     []string{"--experimental-vm-modules", script},
 		},
 		{
 			name:     "variables the shebang asked for",
 			fixture:  "env-with-vars.cmd",
-			prog:     shimDir + `\` + `\node.exe`,
+			prog:     npmShimDir + `\` + `\node.exe`,
 			fallback: "node",
 			args:     []string{script},
 			env:      []string{"FOO=bar"},
@@ -74,7 +74,7 @@ func TestParseNpmShim(t *testing.T) {
 			// it is right; what to do about it is resolvePastShim's problem.
 			name:     "an absolute POSIX interpreter, emitted verbatim",
 			fixture:  "absolute-node.cmd",
-			prog:     shimDir + `\` + `\/usr/bin/node.exe`,
+			prog:     npmShimDir + `\` + `\/usr/bin/node.exe`,
 			fallback: "/usr/bin/node",
 			args:     []string{script},
 		},
@@ -86,7 +86,7 @@ func TestParseNpmShim(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			shim, ok := parseNpmShim(readFixture(t, tc.fixture), shimDir)
+			shim, ok := parseNpmShim(readFixture(t, tc.fixture), npmShimDir)
 			if !ok {
 				t.Fatalf("%s did not parse", tc.fixture)
 			}
@@ -134,7 +134,7 @@ func TestParseNpmShimRefusesWhatItDoesNotRecognise(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if shim, ok := parseNpmShim(tc.text, shimDir); ok {
+			if shim, ok := parseNpmShim(tc.text, npmShimDir); ok {
 				t.Fatalf("parsed as %+v; it should have been refused", shim)
 			}
 		})
@@ -145,7 +145,7 @@ func TestParseNpmShimRefusesWhatItDoesNotRecognise(t *testing.T) {
 // that rewrote it — is still that shim.
 func TestParseNpmShimAcceptsAShimWhoseLineEndingsWereConverted(t *testing.T) {
 	lf := strings.ReplaceAll(readFixture(t, "env-node.cmd"), "\r\n", "\n")
-	shim, ok := parseNpmShim(lf, shimDir)
+	shim, ok := parseNpmShim(lf, npmShimDir)
 	if !ok {
 		t.Fatal("an LF-converted shim did not parse")
 	}
@@ -180,7 +180,7 @@ func TestParseNpmShimAcceptsAShimCarryingLinesItDoesNotModel(t *testing.T) {
 		t.Fatal("the insertion point moved; this test is measuring the unmodified fixture")
 	}
 
-	shim, ok := parseNpmShim(extra, shimDir)
+	shim, ok := parseNpmShim(extra, npmShimDir)
 	if !ok {
 		t.Fatal("a shim with two unmodelled lines was refused — the seam this pins has been closed; read the comment above before deleting this test")
 	}
@@ -193,7 +193,7 @@ func TestParseNpmShimAcceptsAShimCarryingLinesItDoesNotModel(t *testing.T) {
 }
 
 func TestResolvePastShim(t *testing.T) {
-	beside := shimDir + `\` + `\node.exe`
+	beside := npmShimDir + `\` + `\node.exe`
 	shim := npmShim{prog: beside, fallback: "node", args: []string{"cli.js"}, env: []string{"FOO=bar"}}
 
 	t.Run("prefers the node beside the shim, as the shim does", func(t *testing.T) {
@@ -256,7 +256,7 @@ func TestResolvePastShim(t *testing.T) {
 	// The no-shebang shape leans on cmd.exe's own file association, which
 	// ccdad cannot reproduce: a .js there goes to the Windows Script Host.
 	t.Run("declines a shim with no interpreter at all", func(t *testing.T) {
-		none := npmShim{prog: shimDir + `\cli.js`}
+		none := npmShim{prog: npmShimDir + `\cli.js`}
 		if _, err := resolvePastShim(none,
 			func(string) bool { return true },
 			func(string) (string, error) {
