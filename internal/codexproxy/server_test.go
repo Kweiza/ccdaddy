@@ -1,6 +1,7 @@
 package codexproxy
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -353,4 +354,90 @@ func TestTheDefaultClientNeverFollowsAnUpstreamRedirect(t *testing.T) {
 	if w.Code != http.StatusTemporaryRedirect {
 		t.Fatalf("status = %d, want the 307 handed back to codex unfollowed", w.Code)
 	}
+}
+
+// The never-500 guarantee has to survive a fault raised by the delegate's own
+// WriteHeader, and there is a reachable one: net/http's response READER accepts
+// any three-digit status, including 000-099, while its WRITER panics in
+// checkWriteHeaderCode on anything below 100. writeBack hands the upstream's
+// status straight through, so an upstream status line of `HTTP/1.1 000 Nothing`
+// becomes WriteHeader(0) on a real connection and panics inside it.
+//
+// The guard can only answer while the status line is unspent, so trackedWriter
+// must not call it spent until the delegate has actually written it. If it
+// marks it first, this recovers into panic(http.ErrAbortHandler) and codex gets
+// a closed connection with no status line at all -- a bare hang-up, which is
+// the outcome the whole never-500 rule exists to avoid. A real listener and a
+// real client rather than a recorder, because the harm being pinned is what
+// arrives on the wire.
+func TestAnUpstreamStatusTooLowToWriteIsStillAnsweredNotHungUpOn(t *testing.T) {
+	f := newFixture(t, func(w http.ResponseWriter, r *http.Request) {})
+	cfg := f.config()
+	cfg.Upstream = rawStatusLineUpstream(t, "HTTP/1.1 000 Nothing")
+	a := f.add("uuid-a", "a@example.com", "access-a")
+	f.serving(t, a.UUID)
+	s := f.server(t, cfg)
+
+	proxy := httptest.NewServer(s.Handler())
+	defer proxy.Close()
+
+	req, err := http.NewRequest(http.MethodPost, proxy.URL+ResponsesPath, strings.NewReader(`{"input":[]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+unpinnedSecret)
+	res, err := proxy.Client().Do(req)
+	if err != nil {
+		t.Fatalf("the client got no status line at all: %v", err)
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429", res.StatusCode)
+	}
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Error struct {
+			Type string `json:"type"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &doc); err != nil {
+		t.Fatalf("body is not the branded JSON: %v (%s)", err, body)
+	}
+	if doc.Error.Type != "ccdad_unavailable" {
+		t.Fatalf("error type = %q, want ccdad_unavailable", doc.Error.Type)
+	}
+}
+
+// rawStatusLineUpstream serves one hand-written status line and nothing else.
+// It is a bare listener rather than an httptest server because the whole point
+// is to answer with a status line net/http's writer would refuse to produce.
+func rawStatusLineUpstream(t *testing.T, statusLine string) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				req, err := http.ReadRequest(bufio.NewReader(c))
+				if err != nil {
+					return
+				}
+				_, _ = io.Copy(io.Discard, req.Body)
+				_, _ = io.WriteString(c, statusLine+"\r\nContent-Length: 0\r\n\r\n")
+			}(c)
+		}
+	}()
+	return "http://" + ln.Addr().String() + ResponsesPath
 }

@@ -64,11 +64,17 @@ by `uuid` or `alias`.
   answers a 500 with thirty requests over twenty-five seconds and a refused
   connection with unbounded reconnects, so every internal fault — a nil seam, a
   store that will not open, a credential that will not parse, a panic anywhere in
-  the handler — comes back as 401, 404 or 429 instead. The one exception is
-  deliberate and is not a 5xx: once a byte of the answer has reached the client
-  the connection is broken rather than having a branded JSON body glued onto the
-  end of an event stream. Pinned by `TestTheProxyNeverAnswersFiveHundred`,
-  `TestAFaultBeforeAnyBytesIsAFourTwentyNineAndNeverAFiveHundred` and
+  the handler — comes back as 401, 404 or 429 instead. That holds for a fault
+  raised while the status line itself is being written: the guard does not treat
+  the line as spent until the delegate has taken it, so an upstream answering a
+  status net/http will read but refuse to write — anything below 100, which its
+  reader accepts and its writer panics on — still earns the branded 429 rather
+  than a bare hang-up. The one exception is deliberate and is not a 5xx: once a
+  byte of the answer has reached the client the connection is broken rather than
+  having a branded JSON body glued onto the end of an event stream. Pinned by
+  `TestTheProxyNeverAnswersFiveHundred`,
+  `TestAFaultBeforeAnyBytesIsAFourTwentyNineAndNeverAFiveHundred`,
+  `TestAnUpstreamStatusTooLowToWriteIsStillAnsweredNotHungUpOn` and
   `TestAFaultAfterTheFirstByteBreaksTheConnectionRatherThanBrandingIt`.
 
 - **A thread stays with the account that answered it first.** Every codex request
