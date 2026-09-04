@@ -585,6 +585,70 @@ func TestCodexExecKeepsASecondSeparator(t *testing.T) {
 	}
 }
 
+// An argument list typed with NO separator is the form that pins interspersed
+// parsing off. The shim spells the `--` out, but a user typing the command by
+// hand does not, and `ccdad codex exec exec -c model=x` then has nothing in it
+// to tell cobra where its own flags stop: with interspersed parsing left on,
+// cobra reads that `-c` as an unknown shorthand of its own and exits 2 before
+// RunE, having started no codex at all.
+//
+// This is the ONLY shape that can see the setting. Every other test here types
+// `--` immediately after `exec`, and pflag appends the remainder of a `--` tail
+// verbatim whichever way interspersed is set -- so all of them stay green with
+// the line deleted.
+func TestCodexExecTakesACodexFlagWithNoSeparator(t *testing.T) {
+	isolate(t)
+	stub, _ := routedWorld(t, ExitOK, nil)
+
+	code, _, errOut, top := runRoot(t, "codex", "exec", "exec", "-c", "model=x")
+	if code != ExitOK {
+		t.Fatalf("codex exec = %d, want 0: a `-c` with no `--` in front of it was parsed by cobra "+
+			"rather than handed to codex\n%s\n%s", code, errOut, top)
+	}
+	if !stub.started {
+		t.Fatal("codex exec started no child")
+	}
+	want := []string{"exec", "-c", "model=x"}
+	if len(stub.spec.Args) < len(want) {
+		t.Fatalf("codex was given %q, want a tail of %q", stub.spec.Args, want)
+	}
+	tail := stub.spec.Args[len(stub.spec.Args)-len(want):]
+	for i := range want {
+		if tail[i] != want[i] {
+			t.Fatalf("the tail codex was handed is %q, want %q verbatim\nfull: %q", tail, want, stub.spec.Args)
+		}
+	}
+}
+
+// The exit status is codex's, not ccdad's: this command is a runner. A wrapper
+// that reported 0 for a codex that failed would break every `&&`, every `set
+// -e` script and every CI step downstream of it -- and it would do so silently,
+// because the child has already printed whatever it had to say.
+//
+// So nothing is printed on top either. ccdad adds no failure line of its own to
+// a failure that is not its own.
+func TestCodexExecReportsCodexsExitStatusAsItsOwn(t *testing.T) {
+	isolate(t)
+	// A status ccdad itself cannot produce. Its own contract runs 0 to 5 plus
+	// 130, so a green here cannot be ccdad having failed on its own account and
+	// happening to agree with the child.
+	const childCode ExitCode = 42
+	stub, _ := routedWorld(t, childCode, nil)
+
+	code, _, errOut, top := runRoot(t, "codex", "exec", "--", "exec", "boom")
+	if !stub.started {
+		t.Fatal("codex exec started no child, so its exit status proves nothing")
+	}
+	if code != childCode {
+		t.Errorf("codex exec = %d, want codex's own %d: a runner that swallows the child's status "+
+			"reports success for a session that failed", code, childCode)
+	}
+	if errOut != "" || top != "" {
+		t.Errorf("ccdad reported codex's exit status in its own words; the child has already spoken\n"+
+			"stderr: %q\ntop: %q", errOut, top)
+	}
+}
+
 // `codex login` and `codex logout` both REVOKE the stored grant server-side,
 // with no undo. Routed through the proxy, a logout would revoke a grant ccdad
 // manages -- so they go to the real codex untouched, with no overrides and no
