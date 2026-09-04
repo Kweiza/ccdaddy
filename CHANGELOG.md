@@ -178,15 +178,21 @@ by `uuid` or `alias`.
   thread stays with the account it started on. `codex login` and `codex logout`
   are handed to the real codex untouched, since both revoke a grant
   server-side with no undo — a pinned `ccdad run` refuses those two tails
-  instead, because neither verb so much as reads the account it was given. And
-  `codex login status` still answers about `~/.codex`, which ccdad does not
-  use. Pinned by `TestTheCodexShimIsExactlyTheTwoLinesItHasToBe`,
+  instead, because neither verb so much as reads the account it was given. It
+  refuses `--full-profile` on the same account for the same kind of reason: the
+  flag scopes a Claude Code config home, a codex session reads none, and a
+  launch that accepted the word and dropped it would report a success that did
+  not do what was asked. And `codex login status` still answers about
+  `~/.codex`, which ccdad does not use. Pinned by
+  `TestTheCodexShimIsExactlyTheTwoLinesItHasToBe`,
   `TestCodexShimInstallWritesTheShimAndRegistersItsDirectory`,
   `TestCodexExecSpawnsCodexWithTheSevenOverridesAndTheKey`,
   `TestRunOnACodexAccountPinsTheLaunch`,
   `TestRunOnACodexAccountRefusesWhenThereIsNoProxy`,
   `TestCodexLoginAndLogoutAreNotRouted`,
-  `TestRunOnACodexAccountRefusesTheLoginAndLogoutTails` and
+  `TestRunOnACodexAccountRefusesTheLoginAndLogoutTails`,
+  `TestRunOnACodexAccountRefusesTheFlagsItCannotHonour`,
+  `TestRunOnACodexAccountWithNoRefusedFlagStillLaunches` and
   `TestARealCodexReachesTheUpstreamThroughTheProxy`.
 
 - **`ccdad setup-path` now registers a set of directories it derives on every

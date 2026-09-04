@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/pflag"
+
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/ccver"
@@ -1437,6 +1439,99 @@ func TestRunOnACodexAccountRefusesAnotherProgram(t *testing.T) {
 	}
 	if !strings.Contains(errOut+top, "codex") {
 		t.Errorf("the refusal does not say what the tail has to begin with:\n%s\n%s", errOut, top)
+	}
+}
+
+// A flag `ccdad run` defines for the Claude route is refused on the Codex route
+// rather than swallowed, and the asymmetry is why: the TAIL spelling of the same
+// word was always refused loudly -- `ccdad run <acct> -- --full-profile` does
+// not begin with `codex` -- while the FLAG spelling was parsed, accepted, and
+// dropped before it was ever read. A user who asked for a scoped config home
+// and was silently given something else has no way to find out.
+//
+// One subtest per refusable flag: the table is what makes adding a flag without
+// deciding about it fail here rather than in somebody's terminal.
+func TestRunOnACodexAccountRefusesTheFlagsItCannotHonour(t *testing.T) {
+	for _, flag := range []string{"--full-profile"} {
+		t.Run(flag, func(t *testing.T) {
+			isolate(t)
+			seedCodexAccount(t, "cx-run-6", "c@example.com")
+			stub, _ := routedWorld(t, ExitOK, nil)
+
+			code, _, errOut, top := runRoot(t, "run", flag, "c@example.com")
+			if code != ExitUsage {
+				t.Fatalf("run on a codex account with %s = %d, want %d\n%s\n%s",
+					flag, code, ExitUsage, errOut, top)
+			}
+			// The load-bearing half. A refusal that still launched would be
+			// the defect with a warning printed over it.
+			if stub.started {
+				t.Errorf("the refusal started codex anyway, as %q", stub.spec.Args)
+			}
+			said := errOut + top
+			if !strings.Contains(said, flag) {
+				t.Errorf("the refusal does not name %s:\n%s", flag, said)
+			}
+			if !strings.Contains(said, "c@example.com") {
+				t.Errorf("the refusal does not name the account:\n%s", said)
+			}
+			// Naming the flag is not enough: "it does not apply" without a
+			// reason reads as a bug in ccdad rather than as a decision.
+			if !strings.Contains(said, "Claude Code") {
+				t.Errorf("the refusal does not say why the flag cannot apply:\n%s", said)
+			}
+			// The help and the behaviour, checked against each other. A flag
+			// that is refused without the help saying so is a trap laid in
+			// the one place a user looks first.
+			if long := newRunCmd().Long; !strings.Contains(long, flag) {
+				t.Errorf("`ccdad run` help does not mention %s, which the Codex route refuses:\n%s", flag, long)
+			}
+		})
+	}
+}
+
+// The control for the refusal above, and it is the half a broken guard breaks:
+// a check that read the flag's VALUE instead of whether it was typed would
+// refuse every Codex launch on this machine, and every refusal test in this
+// file would still pass.
+func TestRunOnACodexAccountWithNoRefusedFlagStillLaunches(t *testing.T) {
+	isolate(t)
+	seedCodexAccount(t, "cx-run-7", "c@example.com")
+	stub, _ := routedWorld(t, ExitOK, nil)
+
+	code, _, errOut, top := runRoot(t, "run", "c@example.com")
+	if code != ExitOK {
+		t.Fatalf("run on a codex account with no flag = %d, want 0\n%s\n%s", code, errOut, top)
+	}
+	if !stub.started {
+		t.Fatal("no codex was started")
+	}
+}
+
+// Every flag `ccdad run` defines has an answer on the Codex route: a reason it
+// is refused, or a place on the list of flags a Codex launch honours. The walk
+// itself is default-deny, so an unlisted flag is already refused rather than
+// swallowed -- what this test adds is that it is refused with a REASON, which
+// is the difference between a decision and an oversight the user reads.
+func TestEveryRunFlagHasAnAnswerOnTheCodexRoute(t *testing.T) {
+	cmd := newRunCmd()
+	// Cobra adds --help during execute(), not at construction, so a walk over
+	// a freshly built command would not see the one flag the command does not
+	// define itself.
+	cmd.InitDefaultHelpFlag()
+	seen := 0
+	cmd.Flags().VisitAll(func(f *pflag.Flag) {
+		seen++
+		if codexRunNeutralFlags[f.Name] {
+			return
+		}
+		if codexRunFlagRefusals[f.Name] == "" {
+			t.Errorf("`ccdad run` defines --%s and the Codex route has no answer for it: "+
+				"give it a reason it is refused, or name it as one a Codex launch honours", f.Name)
+		}
+	})
+	if seen == 0 {
+		t.Fatal("no flags were walked, so this test asserts nothing")
 	}
 }
 
