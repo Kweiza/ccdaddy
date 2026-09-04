@@ -136,8 +136,9 @@ func (s *Server) responses(w http.ResponseWriter, r *http.Request) {
 	// machine can serve from until somebody logs in again, which is a different
 	// answer from an account that is merely out of quota for an hour.
 	var (
-		first *attempt
-		dead  []string
+		first       *attempt
+		dead        []string
+		unreachable bool
 	)
 
 	for i, uuid := range order {
@@ -153,6 +154,7 @@ func (s *Server) responses(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			s.logf("the codex proxy could not reach the upstream for %s: %v", short(uuid), err)
+			unreachable = true
 			continue
 		}
 		if a.stream != nil {
@@ -191,11 +193,17 @@ func (s *Server) responses(w http.ResponseWriter, r *http.Request) {
 		writeBack(w, a)
 		return
 	}
-	if first != nil {
-		writeBack(w, first)
+	// Everything that could be tried has been. The partition below answers from
+	// what the whole search learned rather than from whichever account happened
+	// to refuse first.
+	if first == nil && len(dead) == 0 && unreachable {
+		// Nothing was learned about any account: ccdad could not reach the
+		// upstream at all. Naming an account here would send somebody to fix a
+		// login that is not broken.
+		writeUnavailable(w)
 		return
 	}
-	writeUnavailable(w)
+	s.outOfAccounts(w, order, dead)
 }
 
 // send makes one upstream attempt as one account.
