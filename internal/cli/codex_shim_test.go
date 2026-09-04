@@ -15,10 +15,16 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 )
 
-// denyExecute puts the machine into the one state this tree has to tell apart
-// from a missing execute bit: a file whose mode says 0o755 and which THIS user
-// still cannot run. It is what an ACL entry and a hostile ownership both look
-// like from Go, and it is the state no chmod ccdad makes can leave.
+// denyExecute puts the machine into the one state no mode can show: a file this
+// user OWNS, whose owner execute bit is set, and which this user still cannot
+// run. That is what an ACL deny entry looks like from Go, and it is the state no
+// chmod ccdad makes can leave.
+//
+// It is not the ownership state. A shim somebody else owns is unrunnable for a
+// different reason and takes a different repair -- `sudo chown`, not `chmod -N`
+// -- and ownedByAnother below is that one. Two helpers because the tree now
+// tells the two apart, and a helper that produced "either of these" could not
+// pin which.
 //
 // A REAL ACL wherever the platform will make one. Measured on darwin:
 // `chmod +a "user:<me> deny execute" <file>` leaves the file mode 0o755, leaves
@@ -67,6 +73,42 @@ func denyExecute(t *testing.T, path string) {
 		return saved(p)
 	}
 	t.Logf("no ACL could be made here, so the runnable probe is stubbed for %s", path)
+}
+
+// ownedByAnother puts the machine into the state the ACL arm has to be told
+// apart from: a shim whose mode grants execute to its OWNER and whose owner is
+// not this user. Neither remedy the other arm offers reaches it -- there is no
+// deny entry for `chmod -N` to clear, and `ccdad codex shim install` chmods a
+// file this user does not own, which the kernel refuses before it starts.
+//
+// A stub, and it is the only construction there is: making a file another uid
+// owns is chown's, chown to a uid that is not yours is root's, and an arm
+// covered only when the suite happens to run as root is an arm this suite does
+// not cover. What it redirects is one answer -- ccdad's "who owns THIS file",
+// matched by os.SameFile so no other path is touched -- and the mode, the
+// runnability and every other thing the row reads stay real. From ccdad's side
+// the result is indistinguishable from the machine this is about: a root-owned
+// shim at 0o700, which is what one `sudo ccdad codex shim install` leaves
+// behind.
+//
+// It returns the uid the shim now reads as owned by, so the caller can pin that
+// the row names the owner it found rather than describing owners in general.
+func ownedByAnother(t *testing.T, path string) int {
+	t.Helper()
+	target, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := os.Getuid() + 1
+	saved := shimOwner
+	t.Cleanup(func() { shimOwner = saved })
+	shimOwner = func(info fs.FileInfo) (int, bool) {
+		if os.SameFile(info, target) {
+			return other, true
+		}
+		return saved(info)
+	}
+	return other
 }
 
 // The shim body is pinned BYTE FOR BYTE, and every word of it is load-bearing.
@@ -287,6 +329,16 @@ func TestCodexShimInstallRefusesAShimItCannotMakeRunnable(t *testing.T) {
 	if strings.Contains(said, "already") {
 		t.Errorf("the refusal still reports the shim as already installed:\n%s", said)
 	}
+	// It says which one it found. The refusal used to name an ACL entry and the
+	// file's ownership together and then offer only the ACL's remedy, which is
+	// advice that cannot work on the machine whose shim is somebody else's --
+	// and TestCodexShimInstallRefusesAShimThisUserDoesNotOwn is that machine.
+	if strings.Contains(said, "owned by uid") {
+		t.Errorf("the refusal blames an owner on a file this user owns:\n%s", said)
+	}
+	if strings.Contains(said, "chown") {
+		t.Errorf("the refusal offers a chown for a file this user already owns:\n%s", said)
+	}
 }
 
 // The same refusal from the other side of the early return: with the record
@@ -326,6 +378,116 @@ func TestCodexShimInstallDoesNotClaimAChmodItCannotMake(t *testing.T) {
 	// back for a shim ccdad just found it cannot run.
 	if _, err := os.Stat(shimRecordPath()); err == nil {
 		t.Error("install wrote the install record for a shim it refused")
+	}
+}
+
+// A shim at 0o655 is executable by everybody except the one user who matters,
+// and install must REPAIR it rather than refuse. mode&0o111 reads 0o011 there
+// and says "executable", but the kernel reads one class of bits and not all
+// three: for the file's owner it reads the owner's, and this owner has none. So
+// the shim is unrunnable with two execute bits set, which took it to the refusal
+// -- and that refusal told the user an ACL entry or the file's ownership was
+// withholding execute, on a machine where a permission bit was and where this
+// very chmod puts it back.
+//
+// No stub anywhere in this test. Measured on darwin: mode 0o655 with the file's
+// uid equal to this process's gives exec.LookPath "permission denied".
+func TestCodexShimInstallPutsBackAnExecuteBitThatIsNotThisUsers(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("there is no shim on Windows; the refusal has its own test")
+	}
+	isolate(t)
+	t.Setenv("SHELL", "/bin/bash")
+	t.Setenv("PATH", "/usr/bin:/bin")
+	t.Setenv("HOMEBREW_PREFIX", "")
+	t.Setenv("SCOOP", "")
+	stubExecutable(t, filepath.Join(t.TempDir(), "ccdad"))
+
+	if code, _, errOut, _ := runRoot(t, "codex", "shim", "install"); code != ExitOK {
+		t.Fatalf("the first install = %d, want %d\n%s", code, ExitOK, errOut)
+	}
+	if err := os.Chmod(shimPath(), 0o655); err != nil {
+		t.Fatal(err)
+	}
+	// The premise, and the reason this is not the plain missing-bit test: the
+	// mode HAS execute bits, and this user still cannot run the file.
+	if info, err := os.Stat(shimPath()); err != nil {
+		t.Fatal(err)
+	} else if info.Mode().Perm()&0o111 == 0 {
+		t.Fatalf("the shim is %04o, which has no execute bit at all", info.Mode().Perm())
+	}
+	if err := shimRunnable(shimPath()); err == nil {
+		t.Fatal("a shim at 0655 is runnable by its owner here, so this machine cannot pose the question")
+	}
+
+	code, _, errOut, top := runRoot(t, "codex", "shim", "install")
+	if code != ExitOK {
+		t.Fatalf("install over a shim whose missing bit is a chmod away = %d, want %d\n%s\n%s",
+			code, ExitOK, errOut, top)
+	}
+	if err := shimRunnable(shimPath()); err != nil {
+		t.Errorf("install reported success and the shim still will not run: %v", err)
+	}
+	info, err := os.Stat(shimPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm()&0o100 == 0 {
+		t.Errorf("the shim is %04o, and the owner's execute bit is the one the kernel reads",
+			info.Mode().Perm())
+	}
+}
+
+// A shim somebody ELSE owns is the other half of what the old refusal named and
+// could not act on. Its mode grants execute to its owner, so it walks past every
+// bit test install makes, and `chmod -N` clears nothing there because there is
+// no deny entry -- the mode's execute bits simply are not this user's. ccdad's
+// one repair is a chmod, and a chmod on another user's file is refused before it
+// starts, so the refusal has to name the owner and send the user to chown.
+func TestCodexShimInstallRefusesAShimThisUserDoesNotOwn(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("there is no shim on Windows; the refusal has its own test")
+	}
+	isolate(t)
+	t.Setenv("SHELL", "/bin/bash")
+	t.Setenv("PATH", "/usr/bin:/bin")
+	t.Setenv("HOMEBREW_PREFIX", "")
+	t.Setenv("SCOOP", "")
+	stubExecutable(t, filepath.Join(t.TempDir(), "ccdad"))
+
+	if code, _, errOut, _ := runRoot(t, "codex", "shim", "install"); code != ExitOK {
+		t.Fatalf("the first install = %d, want %d\n%s", code, ExitOK, errOut)
+	}
+	// 0o700: the owner may execute it, and the owner is not this user.
+	if err := os.Chmod(shimPath(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	other := ownedByAnother(t, shimPath())
+	denyExecute(t, shimPath())
+
+	code, _, errOut, top := runRoot(t, "codex", "shim", "install")
+	if code != ExitBlocked {
+		t.Fatalf("install over a shim this user does not own = %d, want %d (its chmod would be "+
+			"refused)\n%s\n%s", code, ExitBlocked, errOut, top)
+	}
+	said := errOut + top
+	if !strings.Contains(said, fmt.Sprintf("owned by uid %d", other)) {
+		t.Errorf("the refusal does not name the owner it found:\n%s", said)
+	}
+	if !strings.Contains(said, fmt.Sprintf("sudo chown %d", os.Getuid())) {
+		t.Errorf("the refusal does not name what the user can do about the owner:\n%s", said)
+	}
+	if strings.Contains(said, "chmod -N") {
+		t.Errorf("the refusal offers an ACL repair for a file with no deny entry to clear:\n%s", said)
+	}
+	// The mode is spelled the way every other permission report in this tree
+	// spells one -- `%04o`, as in doctor's "<path> is 0755, want 0700" -- and not
+	// as the `-rwx------` a %v of an fs.FileMode prints.
+	if !strings.Contains(said, "is 0700 ") {
+		t.Errorf("the refusal does not spell the mode in octal:\n%s", said)
+	}
+	if strings.Contains(said, "rwx") {
+		t.Errorf("the refusal spells the mode as a symbolic string:\n%s", said)
 	}
 }
 
