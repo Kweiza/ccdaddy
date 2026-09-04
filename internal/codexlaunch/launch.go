@@ -246,8 +246,12 @@ func lookupHash(dir, h string) (Record, LookupResult, error) {
 	// under the same DEAD bearer would have one of them answered Valid, which
 	// authorises a launch that no longer exists and hands back the account its
 	// record pinned. Measured here, 200 rounds of two concurrent lookups of one
-	// planted dead record: an exclusive probe answered Valid between 15 and 44
-	// times out of 400, a shared probe none. internal/daemon/singleton.go
+	// planted dead record: an exclusive probe answered Valid on every run and
+	// never fewer than 13 times out of 400, a shared probe none. The count
+	// itself moves with what else the machine is doing -- 13 to 44 across nine
+	// runs here, higher again under -race -- so it is the ZERO that is the
+	// property, and the test asserts that rather than a number.
+	// internal/daemon/singleton.go
 	// measured the same thing about its own probe with this same library —
 	// sixteen concurrent exclusive probers against a free lock produced 2059
 	// false "running" answers out of 8000, and the same run with shared locks
