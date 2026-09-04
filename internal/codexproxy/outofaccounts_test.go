@@ -207,3 +207,91 @@ func TestAStoreWithNoCodexAccountsAtAllIsUnavailableRatherThanAFault(t *testing.
 		t.Fatalf("body = %s, want the unavailable answer", w.Body.String())
 	}
 }
+
+// WAITING and DEAD present at the SAME time is the only request that can say
+// which arm of the partition wins, and until this row existed nothing drove it:
+// every other test in this file produces one state or the other, so swapping
+// the two switch arms left the whole package green.
+//
+// Account a is out of quota with a stated reset; account b's credential blob is
+// gone, which is what a revoked grant looks like from the proxy's side. The
+// answer has to be the 429. Getting it backwards tells the user that
+// b@example.com needs a new login -- an account that was never the reason this
+// turn failed -- and leaves the one that will come back in an hour unmentioned.
+func TestAWaitingAccountIsAnsweredEvenWhenAnotherIsDead(t *testing.T) {
+	f := newFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		io.WriteString(w, `{"error":{"type":"usage_limit_reached","resets_at":`+strconv.Itoa(earlierReset)+`}}`)
+	})
+	f.add("uuid-a", "a@example.com", "access-a")
+	f.add("uuid-b", "b@example.com", "access-b")
+	f.forget("uuid-b")
+	cfg := f.config()
+	cfg.Now = func() time.Time { return time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC) }
+	cfg.RankedEligible = func() []string { return []string{"uuid-a", "uuid-b"} }
+	s := f.server(t, cfg)
+
+	w := post(s, unpinnedSecret, nil, `{"input":[]}`)
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429; body = %s", w.Code, strings.TrimSpace(w.Body.String()))
+	}
+	want := `{"error":{"type":"usage_limit_reached","resets_at":` + strconv.Itoa(earlierReset) + `}}`
+	if got := strings.TrimSpace(w.Body.String()); got != want {
+		t.Fatalf("body =\n%s\nwant\n%s", got, want)
+	}
+	// Both halves of the partition really were populated. Without this the row
+	// degrades into the waiting-only case above, which passes whichever order
+	// the arms are in, and the assertion above would be measuring nothing.
+	if n := len(f.took()); n != 1 {
+		t.Fatalf("the upstream saw %d requests, want only the account that still had a credential to send", n)
+	}
+	var sawDead bool
+	for _, line := range f.logged() {
+		if strings.Contains(line, "cannot serve") && strings.Contains(line, "uuid-b") {
+			sawDead = true
+		}
+	}
+	if !sawDead {
+		t.Fatalf("logs = %v, want uuid-b reported as unable to serve", f.logged())
+	}
+}
+
+// An account can be in BOTH sets at once, and then it is dead: the book keeps a
+// 429 for as long as the window it describes, so an account that ran out of
+// quota an hour ago and has since lost its credential is still recorded as
+// waiting when the next request finds it dead. Waiting has to be read as "has
+// quota coming back", which a dead account does not, so the WAITING scan skips
+// anything the search marked dead.
+//
+// Reporting it as merely waiting hands codex a reset time and a machine that
+// waits out a clock for an account that will never answer again -- and never
+// tells the user the one thing that would fix it. Nothing else here drives an
+// account into both sets, so dropping that skip left the package green.
+func TestADeadAccountIsNeverAnsweredAsMerelyWaiting(t *testing.T) {
+	f := newFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		io.WriteString(w, `{"error":{"type":"usage_limit_reached","resets_at":`+strconv.Itoa(earlierReset)+`}}`)
+	})
+	f.add("uuid-a", "a@example.com", "access-a")
+	cfg := f.config()
+	cfg.Now = func() time.Time { return time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC) }
+	cfg.RankedEligible = func() []string { return []string{"uuid-a"} }
+	s := f.server(t, cfg)
+
+	// The 429 that puts uuid-a in the book, with a reset far enough ahead of
+	// the pinned clock that it is still in force for the second request.
+	if first := post(s, unpinnedSecret, nil, `{"input":[]}`); first.Code != http.StatusTooManyRequests {
+		t.Fatalf("the first request answered %d, want the 429 that records the limit", first.Code)
+	}
+	// And then the grant goes, between one request and the next.
+	f.forget("uuid-a")
+
+	w := post(s, unpinnedSecret, nil, `{"input":[]}`)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401; body = %s", w.Code, strings.TrimSpace(w.Body.String()))
+	}
+	want := "{\"error\":{\"type\":\"ccdad_needs_relogin\",\"message\":\"ccdad: a@example.com needs a new login; run `ccdad codex add`\"}}"
+	if got := strings.TrimSpace(w.Body.String()); got != want {
+		t.Fatalf("body =\n%s\nwant\n%s", got, want)
+	}
+}

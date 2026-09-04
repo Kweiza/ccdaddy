@@ -94,7 +94,9 @@ by `uuid` or `alias`.
   `TestALaunchPinBeatsTheThreadPinAndThePointer`,
   `TestAThreadKeepsTheAccountThatAnsweredItFirst`,
   `TestEveryAccountWaitingAnswersWithTheEarliestReset`,
-  `TestAWaitingAccountWithNoStatedResetOmitsTheField` and
+  `TestAWaitingAccountWithNoStatedResetOmitsTheField`,
+  `TestAWaitingAccountIsAnsweredEvenWhenAnotherIsDead`,
+  `TestADeadAccountIsNeverAnsweredAsMerelyWaiting` and
   `TestAnUnreachableAccountIsNeverNamedAlongsideADeadOne`.
 
 - **A Codex account's quota is now read off the requests it is already making.**
