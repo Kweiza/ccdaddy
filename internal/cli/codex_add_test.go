@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -626,4 +627,162 @@ func TestCodexAddFallsBackToARealClientWhenTheSeamReturnsNil(t *testing.T) {
 	// lines would already have panicked.
 	_ = sawStartClient.Timeout
 	_ = sawPollClient.Timeout
+}
+
+// codexShimEnvironment describes a machine the shim installer can actually
+// succeed on. Every line of it is an input the installer reads from outside the
+// process — the login shell, the live PATH, the two package-manager variables,
+// and where this binary sits — so a test that left any of them alone would pass
+// or fail depending on whose shell ran it.
+func codexShimEnvironment(t *testing.T) {
+	t.Helper()
+	t.Setenv("SHELL", "/bin/bash")
+	t.Setenv("PATH", "/usr/bin:/bin")
+	t.Setenv("HOMEBREW_PREFIX", "")
+	t.Setenv("SCOOP", "")
+	stubExecutable(t, filepath.Join(t.TempDir(), "ccdad"))
+}
+
+// The shim is what makes typing `codex` reach ccdad at all, and until this the
+// add said nothing about it — at exactly the moment `ccdad doctor` starts
+// warning that codex is unrouted.
+func TestAddingACodexAccountInstallsTheShim(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("there is no shim on Windows; the installer's own refusal has its own test")
+	}
+	isolate(t)
+	realShimAutoInstall(t)
+	codexShimEnvironment(t)
+	stubCodexDevice(t, ownerPayload, nil)
+
+	code, _, stderr, top := runRoot(t, "add", "codex")
+	if code != ExitOK {
+		t.Fatalf("exit = %d, want %d\n%s%s", code, ExitOK, stderr, top)
+	}
+
+	body, err := os.ReadFile(shimPath())
+	if err != nil {
+		t.Fatalf("the add stored the account and installed no shim: %v", err)
+	}
+	if string(body) != codexShimBody {
+		t.Errorf("the shim is %q, want %q", body, codexShimBody)
+	}
+	rc := filepath.Join(os.Getenv("HOME"), ".bashrc")
+	block, err := os.ReadFile(rc)
+	if err != nil {
+		t.Fatalf("no startup file registers the shim directory: %v", err)
+	}
+	if !strings.Contains(string(block), shimDir()) {
+		t.Errorf("%s does not register %s, so a new terminal still finds the real codex:\n%s", rc, shimDir(), block)
+	}
+	// Said out loud. A command that edits the user's startup files silently is
+	// the worse half of doing it automatically.
+	if !strings.Contains(stderr, shimPath()) {
+		t.Errorf("the add wrote %s and never said so:\n%s", shimPath(), stderr)
+	}
+}
+
+// TestASecondCodexAddSaysNothingAboutTheShimAndMovesNoTimestamp is idempotence,
+// and it asserts TIMESTAMPS rather than bytes because bytes cannot see the
+// failure: replaceFile renames a fresh file over the path, so a rewrite with
+// identical content still moves the stamp, and a dotfiles repository then
+// reports a change that is not one.
+func TestASecondCodexAddSaysNothingAboutTheShimAndMovesNoTimestamp(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("there is no shim on Windows; the installer's own refusal has its own test")
+	}
+	isolate(t)
+	realShimAutoInstall(t)
+	codexShimEnvironment(t)
+	stubCodexDevice(t, ownerPayload, nil)
+
+	if code, _, stderr, top := runRoot(t, "add", "codex"); code != ExitOK {
+		t.Fatalf("the first add = %d, want %d\n%s%s", code, ExitOK, stderr, top)
+	}
+
+	home := os.Getenv("HOME")
+	// Both startup files bash gets, not just the one: targetFiles writes the
+	// interactive file AND the login file, and a guard dropped from the writer
+	// moves whichever of them this test forgot.
+	touched := []string{filepath.Join(home, ".bashrc"), filepath.Join(home, ".profile"), shimPath()}
+	past := time.Now().Add(-72 * time.Hour)
+	stamps := make(map[string]time.Time, len(touched))
+	for _, path := range touched {
+		if err := os.Chtimes(path, past, past); err != nil {
+			t.Fatalf("the first add left no %s to stamp: %v", path, err)
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stamps[path] = info.ModTime()
+	}
+
+	code, _, stderr, top := runRoot(t, "add", "codex")
+	if code != ExitOK {
+		t.Fatalf("the second add = %d, want %d\n%s%s", code, ExitOK, stderr, top)
+	}
+	for _, path := range touched {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !info.ModTime().Equal(stamps[path]) {
+			t.Errorf("the second add moved %s's timestamp from %s to %s; the bytes may be identical "+
+				"and a dotfiles repository still sees a change",
+				path, stamps[path].Format(time.RFC3339), info.ModTime().Format(time.RFC3339))
+		}
+	}
+	// And it says nothing. Exit 3 out of the installer is the whole rule: the
+	// world is already as the user asked, so there is nothing to report.
+	for _, word := range []string{"PATH", "shim", shimPath()} {
+		if strings.Contains(stderr, word) {
+			t.Errorf("the second add still talks about the shim (%q):\n%s", word, stderr)
+		}
+	}
+}
+
+// TestAShimThatCannotBeInstalledDoesNotFailTheAdd is what the hook's signature
+// is for. The account is stored and the success line is already printed by the
+// time the shim is attempted, so a shim that cannot be installed must not turn
+// that into a failure.
+//
+// SHELL="" drives it because that refusal needs no privilege and no platform:
+// ccdad cannot tell which startup file to write, says so, and names the two
+// ways out it already has.
+func TestAShimThatCannotBeInstalledDoesNotFailTheAdd(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("there is no shim on Windows; the installer's own refusal has its own test")
+	}
+	isolate(t)
+	realShimAutoInstall(t)
+	codexShimEnvironment(t)
+	t.Setenv("SHELL", "")
+	stubCodexDevice(t, ownerPayload, nil)
+
+	code, _, stderr, top := runRoot(t, "add", "codex")
+	if code != ExitOK {
+		t.Fatalf("a shim that could not be installed failed the add: exit %d, want %d\n%s%s",
+			code, ExitOK, stderr, top)
+	}
+	s, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.Get("user-abc"); !ok {
+		t.Fatalf("the login succeeded and the account is not stored: %+v", s.Accounts())
+	}
+	if !strings.Contains(stderr, "does not reach ccdad yet") {
+		t.Errorf("the add never says the shim is missing, so nothing tells the user codex is unrouted:\n%s", stderr)
+	}
+	// The refusal's OWN remedy, passed through rather than replaced. Re-running
+	// `ccdad codex shim install` here would refuse in exactly the same place.
+	for _, want := range []string{"$SHELL is unset", "--shell"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("the refusal's remedy (%q) did not reach the user:\n%s", want, stderr)
+		}
+	}
+	if strings.Contains(stderr, "to try again") {
+		t.Errorf("a refusal that names its own remedy was told to try again unchanged:\n%s", stderr)
+	}
 }

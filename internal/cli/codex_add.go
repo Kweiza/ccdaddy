@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/http"
@@ -209,7 +210,80 @@ func runCodexAdd(cmd *cobra.Command, allowWorkspaceMember bool) error {
 	// that refuses the moment it is followed is worse than no advice.
 	fmt.Fprintf(stderr, ").\nIt is logged in and stored.\n"+
 		"`ccdad switch %s` makes it the account ccdad serves codex from.\n", label)
+
+	// AFTER the success line, and after every refusal above it. The shim is a
+	// follow-up to a login that has already happened -- it is what makes typing
+	// `codex` reach ccdad at all -- and putting it here is what keeps it
+	// unreachable from the paths that stored nothing.
+	autoInstallShim(cmd)
 	return nil
+}
+
+// autoInstallShim is the hook runCodexAdd runs once the account is stored. It
+// is a package var for the same reason autoStart is one: it writes the user's
+// shell startup files and reads $SHELL, and neither is an input a test may be
+// left pointed at for real -- so the suite silences it and the tests that mean
+// to describe it put it back by name. Production never reassigns it.
+var autoInstallShim = autoInstallCodexShim
+
+// autoInstallCodexShim installs the codex shim after a successful add and says
+// what it did.
+//
+// It returns NOTHING, and that signature is the guarantee rather than a
+// convenience: by the time it runs the account is stored and the add has
+// already reported success, so a shim that cannot be installed must not turn
+// that into a failure. A function with no error to return cannot be wired into
+// one by a later change, and TestAShimThatCannotBeInstalledDoesNotFailTheAdd is
+// what holds the outcome.
+//
+// The installer's output is CAPTURED rather than written straight through,
+// because whether to say anything at all is decided by the exit code and the
+// exit code is only known once the work is done.
+//
+// Exit 3 says nothing, and that is the whole idempotence rule. Exit 3 IS the
+// "would this change anything" predicate, computed by the code that would do
+// the write; a second copy of that predicate here would be one that can
+// disagree with the writer, and the direction it disagrees in is a second
+// `ccdad add codex` reporting a startup-file edit it did not make.
+//
+// Exit 4 is a refusal that already names its own remedy -- csh, an unset
+// $SHELL, an ACL, a shim owned by another uid -- so it is passed through and
+// nothing is added. "Try again" on a refusal that nothing has changed since is
+// advice that fails the moment it is followed.
+//
+// There is no Windows branch. runCodexShimInstall refuses there first, with a
+// message naming `ccdad codex exec`, which leaves one fewer place in this tree
+// that has to know about Windows.
+func autoInstallCodexShim(cmd *cobra.Command) {
+	// One buffer for both streams. Everything the installer writes is prose for
+	// the person who has just logged in, and this command puts its prose on
+	// stderr; stdout is captured too because the csh refusal prints the lines it
+	// wants pasted THERE, and those lines are its remedy.
+	var said bytes.Buffer
+	sink := &cobra.Command{}
+	sink.SetOut(&said)
+	sink.SetErr(&said)
+
+	err := runCodexShimInstall(sink)
+	out := cmd.ErrOrStderr()
+	if err == nil {
+		fmt.Fprint(out, said.String())
+		return
+	}
+	code := CodeFor(err)
+	if code == ExitNothingToDo {
+		return
+	}
+	fmt.Fprint(out, "Typing `codex` does not reach ccdad yet:\n")
+	fmt.Fprint(out, said.String())
+	// A silent error has already said its piece into the buffer above; every
+	// other one carries the sentence.
+	if msg := err.Error(); msg != "" {
+		fmt.Fprintf(out, "%s\n", msg)
+	}
+	if code != ExitBlocked {
+		fmt.Fprint(out, "Run `ccdad codex shim install` to try again.\n")
+	}
 }
 
 // codexWorkspaceSeat names the workspace this login is in and reports whether
