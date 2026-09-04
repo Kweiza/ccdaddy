@@ -112,33 +112,118 @@ var shimRunnable = func(path string) error {
 	return err
 }
 
+// shimOwner reports the uid that owns a file, and whether the platform says at
+// all. See shimFileOwner for why that second answer exists.
+//
+// A var for the same reason shimRunnable is one: the arm it turns on is a shim
+// owned by ANOTHER user, and no test process can build one -- chown to a uid
+// that is not yours is root's, and an arm covered only under root is an arm
+// this suite does not cover. In production it is the uid out of stat and
+// nothing else, and production never reassigns it.
+var shimOwner = shimFileOwner
+
+// shimHold is WHY a shim that is on disk will not run for this user. There are
+// three, they do not share a repair, and telling them apart is one comparison
+// against os.Getuid() on a stat ccdad has already taken.
+//
+// Naming two of them at once was a defect, not a hedge. "An ACL entry or the
+// file's ownership" with only `chmod -N` under it is advice that cannot work on
+// half the machines it is printed on: `chmod -N` clears nothing on a file this
+// user does not own, and it is not even the right question on a shim at 0o655,
+// where the thing withholding execute is a permission BIT and `ccdad codex shim
+// install` puts it back.
+type shimHold int
+
+const (
+	// shimBitMissing: the execute bit the kernel reads FOR THIS USER is clear.
+	// Repairable, and by ccdad: install's chmod is exactly this.
+	shimBitMissing shimHold = iota
+	// shimNotOurs: somebody else owns the file. A chmod from here is refused
+	// before it starts, so no reinstall reaches it; the user's own chown does.
+	shimNotOurs
+	// shimDenied: this user owns the file, the bit the kernel reads for them is
+	// set, and it still will not run. Nothing in the mode says why, which is
+	// what an ACL deny entry looks like from Go.
+	shimDenied
+)
+
+// shimHoldOn decides which of the three a shim on disk is in.
+//
+// The ownership question comes FIRST because it outranks the mode: the execute
+// bits on a file this user does not own are somebody else's permission, and no
+// reading of them says anything about what this user may do or what ccdad may
+// repair.
+//
+// Then the OWNER's bit, not mode&0o111. The kernel consults one class of bits
+// and not all three -- the owner's for the owner, and the group's and other's
+// for everybody else -- so a shim at 0o655 that this user owns is unrunnable
+// with two execute bits set in its mode. Measured: mode 0o655 with a matching
+// uid gives exec.LookPath "permission denied" while mode&0o111 reads 0o011.
+func shimHoldOn(info fs.FileInfo) (shimHold, int) {
+	owner, known := shimOwner(info)
+	if known && owner != os.Getuid() {
+		return shimNotOurs, owner
+	}
+	if info.Mode().Perm()&0o100 == 0 {
+		return shimBitMissing, owner
+	}
+	return shimDenied, owner
+}
+
+// shimHoldSays names what is withholding execute and what the USER can do about
+// it, and it is the one place both the doctor row and the install refusal read
+// that from. They used to carry a sentence each, and the two drifted into
+// naming a cause neither of them could act on.
+//
+// Unlinking the file and writing a fresh one is deliberately NOT offered as
+// ccdad's own repair for either of these. It is somebody's decision -- an
+// administrator's, a management profile's, the user's own -- and stepping out
+// from under it with nothing said is worse than refusing. It is also not
+// reliable: measured on darwin, a directory carrying `deny execute,file_inherit`
+// hands the entry straight to a file created inside it, so the fresh shim is
+// born unrunnable and install would report success on a machine it had not
+// fixed.
+func shimHoldSays(hold shimHold, owner int, path string) string {
+	if hold == shimNotOurs {
+		return fmt.Sprintf(
+			"It is owned by uid %d and not by this user, so those execute bits are somebody else's and "+
+				"ccdad's only repair -- a chmod -- is refused before it starts. Take the file back "+
+				"yourself -- `sudo chown %d %s` -- and run `ccdad codex shim install` again",
+			owner, os.Getuid(), path)
+	}
+	return fmt.Sprintf(
+		"This user owns it and this user's own execute bit is set, so no permission bit is withholding "+
+			"execute and an ACL entry is. ccdad repairs the mode and nothing else, so no reinstall will "+
+			"put it back. Clear the deny entry yourself -- `chmod -N %s` on macOS, `setfacl -b %s` on "+
+			"Linux -- and when %s hands the entry down by inheritance, clear it there too",
+		path, path, filepath.Dir(path))
+}
+
 // errShimUnrunnable is the refusal for a shim ccdad cannot make runnable.
 //
-// The only repair ccdad has is os.Chmod, and it reaches the permission bits and
-// nothing else: it cannot clear an ACL entry and it cannot change who owns the
-// file. So on a shim whose mode already says executable and which still will
-// not run, BOTH of the things install would otherwise say are false -- "already
+// The only repair ccdad has is os.Chmod, and it reaches the permission bits of
+// a file this user owns and nothing else: it cannot clear an ACL entry and it
+// cannot change who owns the file. So on a shim ccdad's chmod cannot reach,
+// BOTH of the things install would otherwise say are false -- "already
 // installed", of a shim that cannot start, and "a new terminal runs `codex`
 // through ccdad", of a shim no terminal will run.
+//
+// It takes the stat itself rather than being handed a mode and an owner. The
+// mode it prints and the cause it names have to agree, and one call is the only
+// way to be sure they do -- the caller past the chmod knows the mode it asked
+// for and not who owns the file it chmod'ed, which for root is not this user.
 //
 // Exit 4 and not 1: the user asked for something, it is blocked, and there is a
 // different command to run. It is theirs and not ccdad's, which is the whole
 // content of the message.
-//
-// Unlinking the file and writing a fresh one is deliberately NOT ccdad's repair
-// here. It is somebody's decision -- an administrator's, a management profile's,
-// the user's own -- and stepping out from under it with nothing said is worse
-// than refusing. It is also not reliable: measured on darwin, a directory
-// carrying `deny execute,file_inherit` hands the entry straight to a file
-// created inside it, so the fresh shim is born unrunnable and install would
-// report success on a machine it had not fixed.
-func errShimUnrunnable(path string, mode fs.FileMode, cause error) error {
-	return WithCode(fmt.Errorf(
-		"%s is mode %v and this user still cannot execute it (%v). That is an ACL entry or the file's "+
-			"ownership, not a permission bit, and ccdad repairs the mode and nothing else, so no "+
-			"reinstall will put it back. Clear the deny entry yourself -- `chmod -N %s` on macOS, "+
-			"`setfacl -b %s` on Linux -- and when %s hands the entry down by inheritance, clear it there "+
-			"too", path, mode, cause, path, path, filepath.Dir(path)), ExitBlocked)
+func errShimUnrunnable(path string, cause error) error {
+	mode, hold, owner := fs.FileMode(0), shimDenied, 0
+	if info, err := os.Stat(path); err == nil {
+		mode = info.Mode().Perm()
+		hold, owner = shimHoldOn(info)
+	}
+	return WithCode(fmt.Errorf("%s is %04o and this user still cannot execute it (%v). %s",
+		path, mode, cause, shimHoldSays(hold, owner, path)), ExitBlocked)
 }
 
 // shimRecordPath is <CCDAD_HOME>/codex-shim.json.
@@ -322,11 +407,16 @@ func writeCodexShim() (bool, error) {
 	// still first on PATH with the right body in it. Comparing the body alone
 	// would answer "nothing to do" to exactly the machine that needs the chmod
 	// below, and put the only repair there is out of reach.
+	//
+	// shimHoldOn and not mode&0o111, because the question is whether the chmod
+	// below would change anything for THIS user: a shim at 0o655 that this user
+	// owns has two execute bits and none of them theirs, and reading it as
+	// executable sends it to the refusal instead of to the one chmod that
+	// repairs it.
 	executable := false
-	var mode fs.FileMode
 	if info, statErr := os.Stat(path); statErr == nil {
-		mode = info.Mode().Perm()
-		executable = mode&0o111 != 0
+		hold, _ := shimHoldOn(info)
+		executable = hold != shimBitMissing
 	}
 	_, hadRecord := shimRecord()
 	if string(existing) == codexShimBody && hadRecord && executable {
@@ -336,7 +426,7 @@ func writeCodexShim() (bool, error) {
 		// whose `codex` cannot start, and that user follows the advice, nothing
 		// happens, and nothing on the machine says why.
 		if rerr := shimRunnable(path); rerr != nil {
-			return false, errShimUnrunnable(path, mode, rerr)
+			return false, errShimUnrunnable(path, rerr)
 		}
 		return false, nil
 	}
@@ -354,7 +444,7 @@ func writeCodexShim() (bool, error) {
 	// as unrunnable as it was. The record is written only past this point, so
 	// the record continues to mean ccdad believes this shim works.
 	if rerr := shimRunnable(path); rerr != nil {
-		return false, errShimUnrunnable(path, 0o755, rerr)
+		return false, errShimUnrunnable(path, rerr)
 	}
 	rec, err := json.Marshal(codexShimRecord{
 		SchemaVersion: 1,

@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -2625,6 +2626,116 @@ func TestDoctorDoesNotOfferAnInstallForAnACLItCannotClear(t *testing.T) {
 	}
 	if !strings.Contains(detail, "chmod -N") {
 		t.Errorf("the row does not name anything the user can actually do: %s", detail)
+	}
+	// It names the one it FOUND. The row used to say "an ACL entry or the file's
+	// ownership" and then offer only `chmod -N`, which does nothing to an owner
+	// -- and TestDoctorDoesNotOfferAnACLRepairForAShimThisUserDoesNotOwn is the
+	// machine that half was printed on.
+	if strings.Contains(detail, "owned by uid") {
+		t.Errorf("the row blames an owner on a file this user owns: %s", detail)
+	}
+	if strings.Contains(detail, "chown") {
+		t.Errorf("the row offers a chown for a file this user already owns: %s", detail)
+	}
+	// The mode is spelled the way every other permission report in this file
+	// spells one: `%04o`, as in "<path> is 0755, want 0700".
+	if !strings.Contains(detail, "is 0755 ") {
+		t.Errorf("the row does not spell the mode in octal: %s", detail)
+	}
+	if strings.Contains(detail, "rwx") {
+		t.Errorf("the row spells the mode as a symbolic string: %s", detail)
+	}
+}
+
+// A shim somebody ELSE owns reaches the same arm and takes a different repair.
+// Its owner's execute bit is set, so nothing in the mode marks it out; what
+// marks it out is one comparison against os.Getuid() on the stat the row has
+// already taken. Without that comparison the row printed `chmod -N` at a file
+// with no deny entry on it, which is the same defect as the install it stopped
+// printing: advice that cannot work on the machine it is printed on.
+//
+// What is stubbed here is narrow and named: ownedByAnother redirects ccdad's
+// answer to who owns this one file, because chown to a uid that is not yours is
+// root's. The mode is real and the shim really is unrunnable.
+func TestDoctorDoesNotOfferAnACLRepairForAShimThisUserDoesNotOwn(t *testing.T) {
+	real := codexShimWorld(t)
+	writeExecutable(t, shimDir(), codexProgramName)
+	writeExecutable(t, real, codexProgramName)
+	shim := filepath.Join(shimDir(), codexProgramName)
+	// 0o700: the owner may execute it, which is what puts this file past every
+	// permission-bit test and into the arm under test.
+	if err := os.Chmod(shim, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	other := ownedByAnother(t, shim)
+	denyExecute(t, shim)
+
+	_, r, _ := runDoctor(t)
+	if got := r.level(t, "codex-shim"); got != string(levelWarn) {
+		t.Fatalf("codex-shim = %q, want warn when the shim is owned by somebody else: %s",
+			got, r.detail(t, "codex-shim"))
+	}
+	detail := r.detail(t, "codex-shim")
+	if !strings.Contains(detail, fmt.Sprintf("owned by uid %d", other)) {
+		t.Errorf("the row does not say which of the two causes it found: %s", detail)
+	}
+	if !strings.Contains(detail, fmt.Sprintf("sudo chown %d", os.Getuid())) {
+		t.Errorf("the row does not name a remedy that reaches an owner: %s", detail)
+	}
+	if strings.Contains(detail, "chmod -N") {
+		t.Errorf("the row offers an ACL repair for a file with no deny entry to clear: %s", detail)
+	}
+	if !strings.Contains(detail, "is 0700 ") {
+		t.Errorf("the row does not spell the mode in octal: %s", detail)
+	}
+}
+
+// A shim at 0o655 has two execute bits and neither of them is this user's: the
+// kernel reads the OWNER's three for the owner, and this owner has none. So the
+// mode says executable, the file is not, and the arm that used to catch it told
+// the user an ACL entry or the file's ownership was withholding execute -- on a
+// machine where a permission bit was, and where `ccdad codex shim install` puts
+// it back. The row has to name the install here, and
+// TestCodexShimInstallPutsBackAnExecuteBitThatIsNotThisUsers pins that it works.
+//
+// Nothing is stubbed. Measured on darwin: a file at 0o655 whose uid is this
+// process's gives exec.LookPath "permission denied".
+func TestDoctorNamesTheInstallForAnExecuteBitThatIsNotThisUsers(t *testing.T) {
+	real := codexShimWorld(t)
+	writeExecutable(t, shimDir(), codexProgramName)
+	writeExecutable(t, real, codexProgramName)
+	shim := filepath.Join(shimDir(), codexProgramName)
+	if err := os.Chmod(shim, 0o655); err != nil {
+		t.Fatal(err)
+	}
+	// The premise: the mode has execute bits, so no bit test tells this machine
+	// from a healthy one, and the file still will not run.
+	if info, err := os.Stat(shim); err != nil {
+		t.Fatal(err)
+	} else if info.Mode().Perm()&0o111 == 0 {
+		t.Fatalf("the shim is %04o, which has no execute bit at all", info.Mode().Perm())
+	}
+	if err := shimRunnable(shim); err == nil {
+		t.Fatal("a shim at 0655 is runnable by its owner here, so this machine cannot pose the question")
+	}
+
+	_, r, _ := runDoctor(t)
+	if got := r.level(t, "codex-shim"); got != string(levelWarn) {
+		t.Fatalf("codex-shim = %q, want warn when this user has no execute bit: %s",
+			got, r.detail(t, "codex-shim"))
+	}
+	detail := r.detail(t, "codex-shim")
+	if !strings.Contains(detail, "ccdad codex shim install") {
+		t.Errorf("the row does not name the repair, which here is ccdad's own: %s", detail)
+	}
+	if strings.Contains(detail, "ACL") || strings.Contains(detail, "chmod -N") {
+		t.Errorf("the row blames an ACL for a permission bit: %s", detail)
+	}
+	if strings.Contains(detail, "owned by uid") {
+		t.Errorf("the row blames an owner on a file this user owns: %s", detail)
+	}
+	if !strings.Contains(detail, "is 0655,") {
+		t.Errorf("the row does not print the mode this user cannot execute: %s", detail)
 	}
 }
 

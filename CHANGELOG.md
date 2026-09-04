@@ -210,19 +210,27 @@ by `uuid` or `alias`.
   `codex-shim` row saying which codex a bare `codex` resolves to, and `ccdad
   run` and `ccdad codex exec` are now allowed to start a daemon, because the
   account they serve is reached through one. There is no shim on Windows: run
-  `ccdad codex exec -- <args>` there. The row also tells a missing execute bit
-  from a shim ccdad cannot repair at all: a mode that already reads `0755` on a
-  file this user still cannot run is an ACL entry or the file's ownership,
-  ccdad's only repair is a chmod and no chmod reaches either, so the row names
-  `chmod -N` (or `setfacl -b`) instead of an install that would find an
-  executable mode and report the shim as already there — and
-  `ccdad codex shim install` now refuses that machine rather than agreeing with
-  the old advice. Pinned by
-  `TestSetupPathKeepsTheShimDirectoryOnALaterPlainRun`,
+  `ccdad codex exec -- <args>` there. The row also says why a shim that is
+  there will not run, and it names the one cause it found rather than a list:
+  an execute bit this user does not have on a file this user owns is ccdad's
+  own repair, and `ccdad codex shim install` puts it back — including on a mode
+  like `0655`, whose two execute bits belong to group and other and none of
+  them to the owner the kernel reads them for; a file owned by somebody else is
+  a `sudo chown`, because ccdad's chmod on it is refused before it starts; and
+  a file this user owns whose own execute bit is set and which still will not
+  run is an ACL entry, which is `chmod -N` (or `setfacl -b`) and no reinstall.
+  `ccdad codex shim install` agrees with the row on all three — it repairs the
+  first and refuses the other two — and every mode in both is spelled the way
+  the rest of `ccdad doctor` spells one, `0755` rather than `-rwxr-xr-x`.
+  Pinned by `TestSetupPathKeepsTheShimDirectoryOnALaterPlainRun`,
   `TestSetupPathRegistersTheShimDirectoryForAPackageManagerInstall`,
   `TestDoctorWarnsWhenCodexIsNotRoutedThroughCcdad`,
   `TestDoctorDoesNotOfferAnInstallForAnACLItCannotClear`,
+  `TestDoctorDoesNotOfferAnACLRepairForAShimThisUserDoesNotOwn`,
+  `TestDoctorNamesTheInstallForAnExecuteBitThatIsNotThisUsers`,
   `TestCodexShimInstallRefusesAShimItCannotMakeRunnable`,
+  `TestCodexShimInstallRefusesAShimThisUserDoesNotOwn`,
+  `TestCodexShimInstallPutsBackAnExecuteBitThatIsNotThisUsers`,
   `TestCodexShimInstallDoesNotClaimAChmodItCannotMake`,
   `TestCodexExecIsOnTheAutoStartAllowList` and
   `TestCodexShimInstallRefusesOnWindows`.
