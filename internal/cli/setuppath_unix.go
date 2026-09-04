@@ -89,7 +89,7 @@ func resolveShell(opts setupPathOptions) (shellKind, string, error) {
 // a preview that shows something other than what gets written has stopped
 // previewing — and because `ccdad setup-path --print >> ~/.zshrc` has to
 // produce a block a later run can find and rewrite in place.
-func setupPathPrint(cmd *cobra.Command, dir string, opts setupPathOptions) error {
+func setupPathPrint(cmd *cobra.Command, dirs []string, opts setupPathOptions) error {
 	k, source, err := resolveShell(opts)
 	if err != nil {
 		// --print is total for a machine ccdad cannot READ: an undetectable
@@ -108,11 +108,14 @@ func setupPathPrint(cmd *cobra.Command, dir string, opts setupPathOptions) error
 		k, source = shellPOSIX, "no shell detected, so this is the portable sh form"
 	}
 	if k == shellCsh {
-		fmt.Fprintf(cmd.OutOrStdout(), "%s\n", cshLine(dir))
-		fmt.Fprintf(cmd.ErrOrStderr(), "For csh and tcsh (%s). Add it to ~/.cshrc or ~/.tcshrc.\n", source)
+		for _, dir := range dirs {
+			fmt.Fprintf(cmd.OutOrStdout(), "%s\n", cshLine(dir))
+		}
+		fmt.Fprintf(cmd.ErrOrStderr(), "For csh and tcsh (%s). Add %s to ~/.cshrc or ~/.tcshrc.\n",
+			source, plural(len(dirs), "that line", "those lines"))
 		return nil
 	}
-	fmt.Fprint(cmd.OutOrStdout(), renderBlock(dir, k))
+	fmt.Fprint(cmd.OutOrStdout(), renderBlock(dirs, k))
 	fmt.Fprintf(cmd.ErrOrStderr(), "The block above is for %s (%s). It writes nothing on its own. "+
 		"Run `ccdad setup-path` to have ccdad place it, or paste it at the END of a startup file — "+
 		"appending it to a file that does not end in a newline glues the first marker onto the last "+
@@ -130,7 +133,7 @@ func cshLine(dir string) string {
 }
 
 // setupPathApply is the write path.
-func setupPathApply(cmd *cobra.Command, dir string, opts setupPathOptions) error {
+func setupPathApply(cmd *cobra.Command, dirs []string, opts setupPathOptions) error {
 	out := cmd.ErrOrStderr()
 
 	// Under sudo the home directory is whatever the sudoers policy leaves —
@@ -147,9 +150,12 @@ func setupPathApply(cmd *cobra.Command, dir string, opts setupPathOptions) error
 		return err
 	}
 	if k == shellCsh {
-		fmt.Fprintf(cmd.OutOrStdout(), "%s\n", cshLine(dir))
+		for _, dir := range dirs {
+			fmt.Fprintf(cmd.OutOrStdout(), "%s\n", cshLine(dir))
+		}
 		fmt.Fprintf(out, "ccdad does not write csh startup files — they share no syntax with the block it "+
-			"manages, and a wrong dialect errors on every shell start. Add the line above to ~/.cshrc.\n")
+			"manages, and a wrong dialect errors on every shell start. Add the %s above to ~/.cshrc.\n",
+			plural(len(dirs), "line", "lines"))
 		return WithCode(errSilent, ExitBlocked)
 	}
 
@@ -157,7 +163,8 @@ func setupPathApply(cmd *cobra.Command, dir string, opts setupPathOptions) error
 	if err != nil {
 		return err
 	}
-	block := renderBlock(dir, k)
+	block := renderBlock(dirs, k)
+	named := joinAnd(dirs)
 
 	wrote := false
 	for _, file := range files {
@@ -167,16 +174,24 @@ func setupPathApply(cmd *cobra.Command, dir string, opts setupPathOptions) error
 		}
 		switch {
 		case created:
-			fmt.Fprintf(out, "Created %s and put %s on your PATH there.\n", file, dir)
+			fmt.Fprintf(out, "Created %s and put %s on your PATH there.\n", file, named)
 		case changed:
-			fmt.Fprintf(out, "Updated the ccdad block in %s to put %s on your PATH.\n", file, dir)
+			fmt.Fprintf(out, "Updated the ccdad block in %s to put %s on your PATH.\n", file, named)
 		default:
-			fmt.Fprintf(out, "%s already registers %s.\n", file, dir)
+			fmt.Fprintf(out, "%s already registers %s.\n", file, named)
 		}
 		wrote = wrote || changed
 	}
 
-	onPath := onPathList(os.Getenv("PATH"), dir, livePathRules)
+	// EVERY directory, not the first: a block that registers two and has one of
+	// them already on this shell's PATH is not a shell that has read the block.
+	onPath := true
+	for _, dir := range dirs {
+		if !onPathList(os.Getenv("PATH"), dir, livePathRules) {
+			onPath = false
+			break
+		}
+	}
 	if !wrote {
 		// Exit 3 keys off what is REGISTERED, never off the live $PATH. The two
 		// are independent, and a $PATH-keyed 3 is the failure this command
@@ -193,7 +208,7 @@ func setupPathApply(cmd *cobra.Command, dir string, opts setupPathOptions) error
 		return WithCode(errSilent, ExitNothingToDo)
 	}
 	if onPath {
-		fmt.Fprintf(out, "%s was already on THIS shell's PATH; the block is what makes a new terminal find it too.\n", dir)
+		fmt.Fprintf(out, "%s was already on THIS shell's PATH; the block is what makes a new terminal find it too.\n", named)
 	} else {
 		fmt.Fprintf(out, "Open a new terminal to pick it up, or run `. %s` now (shell: %s, from %s).\n",
 			files[len(files)-1], k, source)

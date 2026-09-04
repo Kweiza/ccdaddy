@@ -9,6 +9,8 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/Kweiza/ccdaddy/internal/ccpath"
 )
 
 // setupPathWorld is a machine with a home directory, a shell and a ccdad
@@ -257,8 +259,8 @@ func TestSetupPathPrintWritesNothingAtAll(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("setup-path --print = %d, want %d\n%s", code, ExitOK, errOut)
 	}
-	if stdout != renderBlock(dir, shellBash) {
-		t.Errorf("--print emitted\n%q\nwant the exact bytes the writer writes\n%q", stdout, renderBlock(dir, shellBash))
+	if stdout != renderBlock([]string{dir}, shellBash) {
+		t.Errorf("--print emitted\n%q\nwant the exact bytes the writer writes\n%q", stdout, renderBlock([]string{dir}, shellBash))
 	}
 	if strings.Contains(stdout, "ccdad setup-path`") && !strings.Contains(stdout, setupPathBegin) {
 		t.Error("--print put a human notice on stdout, where the block a user pipes has to stand alone")
@@ -557,14 +559,14 @@ func TestSetupPathPrintEmitsTheDialectOfTheShellItNames(t *testing.T) {
 		flag  []string
 		want  func(dir string) string
 	}{
-		{name: "bash from $SHELL", shell: "/bin/bash", want: func(d string) string { return renderBlock(d, shellBash) }},
-		{name: "fish from $SHELL", shell: "/usr/bin/fish", want: func(d string) string { return renderBlock(d, shellFish) }},
-		{name: "sh from $SHELL", shell: "/bin/dash", want: func(d string) string { return renderBlock(d, shellPOSIX) }},
+		{name: "bash from $SHELL", shell: "/bin/bash", want: func(d string) string { return renderBlock([]string{d}, shellBash) }},
+		{name: "fish from $SHELL", shell: "/usr/bin/fish", want: func(d string) string { return renderBlock([]string{d}, shellFish) }},
+		{name: "sh from $SHELL", shell: "/bin/dash", want: func(d string) string { return renderBlock([]string{d}, shellPOSIX) }},
 		{name: "csh from $SHELL", shell: "/bin/tcsh", want: func(d string) string { return cshLine(d) + "\n" }},
 		{name: "--shell wins", shell: "/bin/bash", flag: []string{"--shell", "fish"},
-			want: func(d string) string { return renderBlock(d, shellFish) }},
+			want: func(d string) string { return renderBlock([]string{d}, shellFish) }},
 		{name: "no $SHELL falls back to the portable form", shell: "",
-			want: func(d string) string { return renderBlock(d, shellPOSIX) }},
+			want: func(d string) string { return renderBlock([]string{d}, shellPOSIX) }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, dir := setupPathWorld(t, tc.shell)
@@ -903,12 +905,19 @@ func TestUninstallFindsAZdotdirBlockWithoutTheVariable(t *testing.T) {
 // shell. bash and dash are both here; every one of these runs in both.
 func sourceBlock(t *testing.T, shell, dir, initialPATH string, opts ...string) string {
 	t.Helper()
+	return sourceBlockDirs(t, shell, []string{dir}, initialPATH, opts...)
+}
+
+// sourceBlockDirs is the same, for the block's other shape: a set of two
+// directories, which is what a machine with the codex shim installed gets.
+func sourceBlockDirs(t *testing.T, shell string, dirs []string, initialPATH string, opts ...string) string {
+	t.Helper()
 	bin, err := exec.LookPath(shell)
 	if err != nil {
 		t.Skipf("%s is not installed", shell)
 	}
 	file := filepath.Join(t.TempDir(), "block.sh")
-	if err := os.WriteFile(file, []byte(renderBlock(dir, shellPOSIX)), 0o644); err != nil {
+	if err := os.WriteFile(file, []byte(renderBlock(dirs, shellPOSIX)), 0o644); err != nil {
 		t.Fatalf("writing the block: %v", err)
 	}
 	script := strings.Join(opts, "\n") + "\n. " + file + "\n. " + file + "\n. " + file + "\nprintf %s \"$PATH\"\n"
@@ -918,7 +927,7 @@ func sourceBlock(t *testing.T, shell, dir, initialPATH string, opts ...string) s
 	cmd.Env = []string{"PATH=" + initialPATH}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("%s rejected the block: %v\n%s\n--- block ---\n%s", shell, err, out, renderBlock(dir, shellPOSIX))
+		t.Fatalf("%s rejected the block: %v\n%s\n--- block ---\n%s", shell, err, out, renderBlock(dirs, shellPOSIX))
 	}
 	return string(out)
 }
@@ -1036,4 +1045,107 @@ func TestConfigHomeIgnoresARelativeXDGConfigHome(t *testing.T) {
 			}
 		})
 	}
+}
+
+// writeShimRecord puts the shim install record where registeredDirs looks for
+// it, without running the install command. These tests are about the DERIVED
+// SET, not about the writer, and coupling them to it would make one failure
+// read as two.
+func writeShimRecord(t *testing.T) {
+	t.Helper()
+	root := mustPath(ccpath.StoreHome())
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"schemaVersion":1,"path":"` + filepath.Join(shimDir(), "codex") +
+		`","installedAt":"2026-09-02T00:00:00Z"}`
+	if err := os.WriteFile(filepath.Join(root, shimRecordName), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The block's directory set is derived on EVERY run, so a plain `ccdad
+// setup-path` after a shim install keeps the shim directory instead of quietly
+// dropping it. A set that was remembered rather than derived would be dropped
+// by exactly the command a user runs to fix an unrelated PATH problem, and the
+// symptom -- codex silently stops being routed through ccdad -- names neither
+// command.
+func TestSetupPathKeepsTheShimDirectoryOnALaterPlainRun(t *testing.T) {
+	home, dir := setupPathWorld(t, "/bin/bash")
+	writeShimRecord(t)
+
+	code, _, errOut, _ := runRoot(t, "setup-path")
+	if code != ExitOK {
+		t.Fatalf("setup-path = %d, want %d\n%s", code, ExitOK, errOut)
+	}
+	body := read(t, filepath.Join(home, ".bashrc"))
+	if !strings.Contains(body, shimDir()) {
+		t.Errorf("the block does not register the shim directory %s:\n%s", shimDir(), body)
+	}
+	if !strings.Contains(body, dir) {
+		t.Errorf("the block dropped ccdad's own directory %s:\n%s", dir, body)
+	}
+
+	// And a second run changes nothing, which is what "derived" has to mean:
+	// the same machine has to produce the same block.
+	if code, _, _, _ := runRoot(t, "setup-path"); code != ExitNothingToDo {
+		t.Errorf("a second setup-path = %d, want %d", code, ExitNothingToDo)
+	}
+	if again := read(t, filepath.Join(home, ".bashrc")); again != body {
+		t.Errorf("the second run rewrote the file:\n--- first ---\n%s\n--- second ---\n%s", body, again)
+	}
+}
+
+// The package-manager refusal applies to ccdad's OWN directory and to nothing
+// else. Registering a versioned Cellar path is what that refusal exists to
+// prevent; <CCDAD_HOME>/bin is ccdad's own directory whoever installed the
+// binary, so a Homebrew ccdad still registers the shim -- otherwise every
+// Homebrew user's codex silently bypasses ccdad and nothing says so.
+func TestSetupPathRegistersTheShimDirectoryForAPackageManagerInstall(t *testing.T) {
+	home, _ := setupPathWorld(t, "/bin/bash")
+	brew := filepath.Join(t.TempDir(), "homebrew")
+	t.Setenv("HOMEBREW_PREFIX", brew)
+	stubExecutable(t, filepath.Join(brew, "bin", "ccdad"))
+	writeShimRecord(t)
+
+	code, _, errOut, _ := runRoot(t, "setup-path")
+	if code != ExitOK {
+		t.Fatalf("setup-path on a Homebrew ccdad with a shim installed = %d, want %d\n%s", code, ExitOK, errOut)
+	}
+	body := read(t, filepath.Join(home, ".bashrc"))
+	if !strings.Contains(body, shimDir()) {
+		t.Errorf("a Homebrew ccdad did not register the shim directory %s:\n%s", shimDir(), body)
+	}
+	if strings.Contains(body, filepath.Join(brew, "bin")) {
+		t.Errorf("the block registered %s, which Homebrew manages:\n%s", filepath.Join(brew, "bin"), body)
+	}
+	if !strings.Contains(errOut, "Homebrew") {
+		t.Errorf("the report does not say Homebrew still manages ccdad's own PATH:\n%s", errOut)
+	}
+}
+
+// The control for both tests above: with no shim record the set is what it has
+// always been, and a Homebrew install is still refused outright.
+func TestSetupPathWithNoShimRecordStillRefusesAPackageManagerInstall(t *testing.T) {
+	setupPathWorld(t, "/bin/bash")
+	brew := filepath.Join(t.TempDir(), "homebrew")
+	t.Setenv("HOMEBREW_PREFIX", brew)
+	stubExecutable(t, filepath.Join(brew, "bin", "ccdad"))
+
+	code, _, errOut, _ := runRoot(t, "setup-path")
+	if code != ExitBlocked {
+		t.Fatalf("setup-path on a Homebrew ccdad with no shim = %d, want %d\n%s", code, ExitBlocked, errOut)
+	}
+}
+
+// The derived set is a LIST, and its order on PATH is the order it was given
+// rather than the order the block writes. Each entry PREPENDS, so the renderer
+// walks the set backwards; a forward walk reverses it silently.
+func TestPOSIXBlockPutsTwoDirectoriesOnPATHInTheOrderTheyWereGiven(t *testing.T) {
+	eachPOSIXShell(t, func(t *testing.T, shell string) {
+		got := sourceBlockDirs(t, shell, []string{"/opt/ccdad", "/opt/ccdad/bin"}, "/usr/bin:/bin")
+		if want := "/opt/ccdad:/opt/ccdad/bin:/usr/bin:/bin"; got != want {
+			t.Errorf("PATH after sourcing a two-directory block three times = %q, want %q", got, want)
+		}
+	})
 }

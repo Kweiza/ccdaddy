@@ -286,45 +286,61 @@ func quoteDouble(s string, chars string) string {
 // trailing newline glues the first marker onto the last line, which breaks that
 // line and hides the block. The stderr notice says so.)
 //
+// It takes a SET of directories rather than one, because the set is derived on
+// every run rather than remembered: ccdad's own directory, and the codex shim's
+// directory whenever this machine has asked for a shim. One block, rewritten in
+// place from the current set, is what keeps a plain `ccdad setup-path` from
+// silently dropping the shim — and what keeps `uninstall` able to take back
+// everything with one removal.
+//
+// The walk is BACKWARDS, and that is the whole of the ordering rule: every
+// entry PREPENDS, so the last one written ends up leftmost. Walking forwards
+// would reverse the set silently.
+//
 // It returns "" for a dialect that has no block: csh and unknown are refusals,
-// decided by the caller, not silently-empty writes.
-func renderBlock(dir string, k shellKind) string {
+// decided by the caller, not silently-empty writes. An empty set returns ""
+// for the same reason — a header and a footer with nothing between them is a
+// block that claims a registration nobody made.
+func renderBlock(dirs []string, k shellKind) string {
 	header := setupPathBegin + "\n" +
 		"# Managed by `ccdad setup-path`. Edits inside this block are overwritten;\n" +
 		"# `ccdad uninstall` removes it. The guard makes a second source a no-op.\n"
-	switch k {
-	case shellFish:
-		// `contains` + `set -gx`, never `fish_add_path`: that helper stores
-		// $fish_user_paths as a UNIVERSAL variable, in fish_variables, outside
-		// this file — so the entry would survive deleting this block and
-		// neither a rerun nor `ccdad uninstall` could un-register it.
-		q := quoteDouble(dir, `\"$`)
-		return header +
-			"if not contains -- \"" + q + "\" $PATH\n" +
-			"    set -gx PATH \"" + q + "\" $PATH\n" +
-			"end\n" +
-			setupPathEnd + "\n"
-	case shellPOSIX, shellBash, shellZsh:
-		q := quoteDouble(dir, "\\\"$`")
-		// Three things here are load-bearing and each was verified by running
-		// it, not by reading it:
-		//
-		//   `":${PATH:-}:"`      survives a user's own `set -u` earlier in the
-		//                        file, which otherwise aborts their startup.
-		//   the case guard       makes a second source a no-op. Unguarded,
-		//                        sourcing three times gives DIR:DIR:DIR:...
-		//   `${PATH:+:$PATH}`    keeps a trailing empty component off PATH when
-		//                        PATH is unset. An empty component means the
-		//                        WORKING DIRECTORY, so the naive form puts
-		//                        every directory the user cd's into on PATH.
-		return header +
-			"case \":${PATH:-}:\" in\n" +
-			"\t*\":" + q + ":\"*) ;;\n" +
-			"\t*) export PATH=\"" + q + "${PATH:+:$PATH}\" ;;\n" +
-			"esac\n" +
-			setupPathEnd + "\n"
+	var body strings.Builder
+	for i := len(dirs) - 1; i >= 0; i-- {
+		dir := dirs[i]
+		switch k {
+		case shellFish:
+			// `contains` + `set -gx`, never `fish_add_path`: that helper stores
+			// $fish_user_paths as a UNIVERSAL variable, in fish_variables, outside
+			// this file — so the entry would survive deleting this block and
+			// neither a rerun nor `ccdad uninstall` could un-register it.
+			q := quoteDouble(dir, `\"$`)
+			body.WriteString("if not contains -- \"" + q + "\" $PATH\n" +
+				"    set -gx PATH \"" + q + "\" $PATH\n" +
+				"end\n")
+		case shellPOSIX, shellBash, shellZsh:
+			q := quoteDouble(dir, "\\\"$`")
+			// Three things here are load-bearing and each was verified by running
+			// it, not by reading it:
+			//
+			//   `":${PATH:-}:"`      survives a user's own `set -u` earlier in the
+			//                        file, which otherwise aborts their startup.
+			//   the case guard       makes a second source a no-op. Unguarded,
+			//                        sourcing three times gives DIR:DIR:DIR:...
+			//   `${PATH:+:$PATH}`    keeps a trailing empty component off PATH when
+			//                        PATH is unset. An empty component means the
+			//                        WORKING DIRECTORY, so the naive form puts
+			//                        every directory the user cd's into on PATH.
+			body.WriteString("case \":${PATH:-}:\" in\n" +
+				"\t*\":" + q + ":\"*) ;;\n" +
+				"\t*) export PATH=\"" + q + "${PATH:+:$PATH}\" ;;\n" +
+				"esac\n")
+		}
 	}
-	return ""
+	if body.Len() == 0 {
+		return ""
+	}
+	return header + body.String() + setupPathEnd + "\n"
 }
 
 // splitKeep cuts a file into lines WITH their terminators, so that every byte
@@ -617,6 +633,10 @@ func runSetupPath(cmd *cobra.Command, opts setupPathOptions) error {
 	if err != nil {
 		return err
 	}
+	dirs, err := registeredDirs()
+	if err != nil {
+		return err
+	}
 	if opts.print {
 		if owner := packageManagerOwning(exe); owner != "" {
 			// The write path refuses this install; the print path must not
@@ -628,14 +648,28 @@ func runSetupPath(cmd *cobra.Command, opts setupPathOptions) error {
 				"Note: %s installed ccdad at %s and manages its PATH — run %s instead of pasting this.\n",
 				owner, exe, shellenvHint(owner))
 		}
-		return setupPathPrint(cmd, dir, opts)
+		// --print is a preview and never a refusal, so a package-manager
+		// install with no shim still gets ccdad's own directory here — that is
+		// the block the note above has just told them not to paste, and
+		// printing nothing instead would leave the note pointing at an empty
+		// stdout.
+		if len(dirs) == 0 {
+			dirs = []string{dir}
+		}
+		return setupPathPrint(cmd, dirs, opts)
 	}
 
 	// A package manager that installed ccdad also owns its PATH, and its own
 	// directory layout: registering it here would pin a versioned Cellar path
 	// that the next upgrade moves. uninstall.go refuses to delete such a binary
 	// for the same reason, through the same predicate.
-	if owner := packageManagerOwning(exe); owner != "" {
+	//
+	// The refusal now fires on an EMPTY derived set rather than on the owner
+	// alone, because the two stopped being the same question the moment the set
+	// could hold a second directory: a Homebrew ccdad with a shim installed has
+	// something of its own to register, and refusing there would take codex off
+	// ccdad's proxy for every Homebrew user.
+	if owner := packageManagerOwning(exe); owner != "" && len(dirs) == 0 {
 		out := cmd.ErrOrStderr()
 		if onPathList(os.Getenv("PATH"), dir, livePathRules) {
 			// The ONE place exit 3 is decided by the live PATH, and it is not
@@ -654,7 +688,12 @@ func runSetupPath(cmd *cobra.Command, opts setupPathOptions) error {
 			owner, exe, owner, shellenvHint(owner))
 		return WithCode(errSilent, ExitBlocked)
 	}
-	return setupPathApply(cmd, dir, opts)
+	if owner := packageManagerOwning(exe); owner != "" {
+		fmt.Fprintf(cmd.ErrOrStderr(), "%s installed ccdad at %s, so %s manages that directory's PATH — "+
+			"ccdad is registering %s, which holds the codex shim. If a new terminal cannot find ccdad, run %s.\n",
+			owner, exe, owner, joinAnd(dirs), shellenvHint(owner))
+	}
+	return setupPathApply(cmd, dirs, opts)
 }
 
 // shellenvHint is the package manager's own instruction for putting its
@@ -701,4 +740,42 @@ func assignsZDOTDIR(body []byte) bool {
 		}
 	}
 	return false
+}
+
+// registeredDirs is the set of directories the fenced block puts on PATH, in
+// the order they should appear on it.
+//
+// DERIVED on every run and remembered nowhere. That is what makes a plain
+// `ccdad setup-path` after a shim install keep the shim directory: the block is
+// rewritten in place from this set every time, so which directories are
+// registered is a property of the machine rather than of which command last
+// wrote the file. A remembered set would be dropped by the command a user runs
+// to fix an unrelated PATH problem, and the symptom — codex quietly stops going
+// through ccdad — names neither command.
+//
+// The package-manager refusal applies to ccdad's OWN directory and to nothing
+// else. Registering a versioned Cellar path is what that refusal exists to
+// prevent, and Homebrew manages its own PATH; <CCDAD_HOME>/bin is ccdad's
+// directory whoever installed the binary, so a Homebrew ccdad still registers
+// the shim. Without that asymmetry every Homebrew user's codex would bypass
+// ccdad with nothing anywhere saying so.
+//
+// An EMPTY result is a real answer and not an error: a package-manager install
+// with no shim registers nothing, which is what runSetupPath's refusal branch
+// is for.
+func registeredDirs() ([]string, error) {
+	exe, dir, err := ccdadDir()
+	if err != nil {
+		return nil, err
+	}
+	var dirs []string
+	if packageManagerOwning(exe) == "" {
+		dirs = append(dirs, dir)
+	}
+	if _, ok := shimRecord(); ok {
+		if shim := shimDir(); shim != "" {
+			dirs = append(dirs, shim)
+		}
+	}
+	return dirs, nil
 }
