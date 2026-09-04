@@ -174,3 +174,19 @@ func TestASingleThresholdCannotInvert(t *testing.T) {
 		}
 	}
 }
+
+// The clamp is 100-pct and not a flat zero, so the arithmetic stays MONOTONE
+// past the line: a window five points over is worse than one exactly empty. An
+// ordering that flattened them would shuffle two spent accounts by uuid.
+func TestPastTheLineIsStillWorseThanExactlyEmpty(t *testing.T) {
+	exact := measure(hoverAt("exact", 0.92, 100), hoverOpts().withHover([]Candidate{hoverAt("exact", 0.92, 100)})).Headroom
+	over := measure(hoverAt("over", 0.92, 105), hoverOpts().withHover([]Candidate{hoverAt("over", 0.92, 105)})).Headroom
+
+	if exact.Slack != 0 {
+		t.Errorf("an exactly empty window reports %v of slack, want 0", exact.Slack)
+	}
+	if over.Slack >= exact.Slack {
+		t.Errorf("105%% used reports %v and 100%% reports %v; past the line has to be worse",
+			over.Slack, exact.Slack)
+	}
+}

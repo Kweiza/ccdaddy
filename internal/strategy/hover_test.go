@@ -606,3 +606,29 @@ func TestTheWeeklyResetIsReadFromTheSameTableTheHeadroomWas(t *testing.T) {
 			r[0].WeeklyResetsAt)
 	}
 }
+
+// `ccdad hover status` must not print a slack the engine did not rank on. Its
+// rows are built by a second pass, so the clamp has to be in both or the table
+// says an empty window has room while the ranking says it has none.
+func TestHoverStatusNeverShowsPositiveSlackOnAnEmptyWindow(t *testing.T) {
+	pool := []Candidate{hoverAt("solo", 0.92, 100)}
+	plan := HoverThresholds(pool, hoverOpts())
+
+	found := false
+	for _, row := range plan.Windows {
+		if row.UUID != "solo" || row.Window != usage.WindowSevenDay {
+			continue
+		}
+		found = true
+		if row.Threshold <= 100 {
+			t.Fatalf("Threshold = %v; this test is pointless unless the pace target ran past 100", row.Threshold)
+		}
+		if row.Slack > 0 {
+			t.Errorf("Slack = %+v on a window at 100%% used, held to %v — the table would show room the engine does not rank on",
+				row.Slack, row.Threshold)
+		}
+	}
+	if !found {
+		t.Fatal("no seven_day row for the account; the fixture no longer says what it claims")
+	}
+}

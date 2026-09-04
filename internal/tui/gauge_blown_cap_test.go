@@ -81,11 +81,17 @@ func TestTheGaugeAsksTheWindowItDrewEvenWhenTheSlackLooksHealthy(t *testing.T) {
 	}
 	r := view.Row{HasEntry: true, Entry: usage.Entry{Snapshot: s}, Headroom: strategy.Headroom{
 		Known: true, Binding: usage.WindowFiveHour, Pct: 90, Slack: 40, Threshold: 50,
+		// MinAnyModelPct is deliberately NOT zero: Empty() has to answer false
+		// here, or the account clause above catches the row and this one is
+		// never reached.
 		MinPct: 0, MinWindow: usage.WindowSevenDay,
-		MinAnyModelPct: 0, MinAnyModelWindow: usage.WindowSevenDay,
+		MinAnyModelPct: 20, MinAnyModelWindow: usage.WindowFiveHour,
 		HasFloor: true, Floor: usage.WindowSevenDay, FloorSlack: 40, FloorThreshold: 140,
 	}}
 
+	if empty, known := r.Empty(); !known || empty {
+		t.Fatalf("Empty() = (%v, %v), want (false, true) — the account clause must not catch this row", empty, known)
+	}
 	if slack, _, ok := r.ReportedSlack(); !ok || slack <= warnBand {
 		t.Fatalf("ReportedSlack() = %v — this fixture must reach the band with room to spare", slack)
 	}
