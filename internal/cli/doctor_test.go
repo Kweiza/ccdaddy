@@ -2496,6 +2496,85 @@ func TestDoctorWarnsWhenSomethingElseIsAheadOfTheShim(t *testing.T) {
 	}
 }
 
+// A shim the shell cannot reach is a WARNING and not the failure, and the
+// difference is the whole point of the row: the file is there, its directory
+// is not on PATH, and a bare `codex` resolves to nothing at all. Calling that
+// "a shim with no codex behind it" would name a shim the shell never reaches
+// and offer to install a codex the shell would not reach either -- leaving the
+// only repair that works, putting the directory on PATH, unsaid.
+func TestDoctorWarnsWhenTheShellResolvesNoCodexAtAll(t *testing.T) {
+	codexShimWorld(t)
+	writeExecutable(t, shimDir(), codexProgramName)
+	// A PATH with no codex on it and no shim directory either.
+	t.Setenv("PATH", t.TempDir())
+
+	_, r, _ := runDoctor(t)
+	if got := r.level(t, "codex-shim"); got != string(levelWarn) {
+		t.Fatalf("codex-shim = %q, want warn when the shim is off PATH and nothing else resolves: %s",
+			got, r.detail(t, "codex-shim"))
+	}
+	detail := r.detail(t, "codex-shim")
+	if !strings.Contains(detail, "resolves no `codex` at all") {
+		t.Errorf("the row does not say what the shell resolves: %s", detail)
+	}
+	if !strings.Contains(detail, "ccdad setup-path") {
+		t.Errorf("the row does not name the repair that reaches the shim: %s", detail)
+	}
+}
+
+// No shim and no codex ANYWHERE is the warning about an unrouted codex, not a
+// failure about a shim that was never installed. The two are one `installed &&`
+// apart in the row, and without this the seam is free to be dropped: the
+// machine flips from exit 0 and "install the shim" to exit 1 naming a path that
+// does not exist.
+func TestDoctorWarnsRatherThanFailsWithNeitherShimNorCodex(t *testing.T) {
+	codexShimWorld(t)
+	// No shim written, and a PATH with no codex on it.
+	t.Setenv("PATH", t.TempDir())
+
+	code, r, _ := runDoctor(t)
+	if got := r.level(t, "codex-shim"); got != string(levelWarn) {
+		t.Fatalf("codex-shim = %q, want warn with codex accounts and neither shim nor codex: %s",
+			got, r.detail(t, "codex-shim"))
+	}
+	if !strings.Contains(r.detail(t, "codex-shim"), "ccdad codex shim install") {
+		t.Errorf("the row does not name the fix: %s", r.detail(t, "codex-shim"))
+	}
+	if code != ExitOK {
+		t.Errorf("doctor exited %d, want %d: a machine that has never installed the shim is not broken",
+			code, ExitOK)
+	}
+}
+
+// A shim that lost its executable bit is skipped by PATH lookup, so the row
+// must name the command that puts the bit back rather than the one that
+// reorders PATH. TestCodexShimInstallRestoresAnExecutableBitSomebodyTookAway
+// pins that `ccdad codex shim install` is that command.
+func TestDoctorNamesTheShimInstallWhenTheShimIsNotExecutable(t *testing.T) {
+	real := codexShimWorld(t)
+	writeExecutable(t, shimDir(), codexProgramName)
+	writeExecutable(t, real, codexProgramName)
+	if err := os.Chmod(filepath.Join(shimDir(), codexProgramName), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, r, _ := runDoctor(t)
+	if got := r.level(t, "codex-shim"); got != string(levelWarn) {
+		t.Fatalf("codex-shim = %q, want warn when the shim is not executable: %s",
+			got, r.detail(t, "codex-shim"))
+	}
+	detail := r.detail(t, "codex-shim")
+	if !strings.Contains(detail, "not executable") {
+		t.Errorf("the row does not say why the shim is skipped: %s", detail)
+	}
+	if !strings.Contains(detail, "ccdad codex shim install") {
+		t.Errorf("the row does not name the repair: %s", detail)
+	}
+	if strings.Contains(detail, "setup-path") {
+		t.Errorf("the row offers a PATH repair for a permission problem: %s", detail)
+	}
+}
+
 // Windows has no shim in v1, so the row is skipped there rather than warning
 // forever about a thing that cannot be installed.
 func TestDoctorSkipsTheShimRowOnWindows(t *testing.T) {
