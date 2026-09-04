@@ -27,34 +27,6 @@ type authHit struct {
 	checkedAt time.Time
 }
 
-// responses is the whole request path, and the ORDER of its first three steps
-// is the security property:
-//
-//  1. the bearer is read out of the header;
-//  2. it is validated against the launch records;
-//  3. only then is the body read.
-//
-// A proxy that buffered first would let anything on this machine hand the
-// daemon 32 MiB per connection without being anybody at all.
-func (s *Server) responses(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		s.notFound(w, r)
-		return
-	}
-	_, ok := s.authorize(r)
-	if !ok {
-		writeUnknownLaunch(w)
-		return
-	}
-	if _, ok := readBody(r); !ok {
-		writeUnavailable(w)
-		return
-	}
-	// Forwarding lands with the account choice; until then an authenticated
-	// request gets the proxy's own unavailable answer rather than a 5xx.
-	writeUnavailable(w)
-}
-
 // authorize validates the request's bearer and returns the launch record.
 func (s *Server) authorize(r *http.Request) (codexlaunch.Record, bool) {
 	bearer := bearerOf(r.Header.Get("Authorization"))
