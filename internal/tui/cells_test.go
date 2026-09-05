@@ -53,7 +53,7 @@ func pageCell(t *testing.T, k view.ColumnKind, r view.Row) string {
 	m := fixtureModel(113, 26)
 	m.Cursor = noCursor
 	return m.cell(view.ListColumn{Kind: k, Index: -1},
-		view.ListRow{Row: r, At: 0}, Layout{AccountWide: accountComfort})
+		view.ListRow{Row: r, At: 0}, Layout{AccountWide: accountComfort}, m.Cols)
 }
 
 // stateCellOf is the dashboard's STATE cell for one engine state: the shared

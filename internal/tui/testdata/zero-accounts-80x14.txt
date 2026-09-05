@@ -4,9 +4,10 @@
 │Active (Codex): cx@example.com                                                │
 │Strategy: headroom                                                            │
 │Current: headroom                                                             │
-│IDX ACCOUNT               5H  7D OPUS  5H IN  7D OPUS IN  STATE               │
 │    CLAUDE                                                                    │
+│IDX ACCOUNT               TYPE  QUOTA  STATE  AUTO  AGE                       │
 │    CODEX                                                                     │
+│IDX ACCOUNT               TYPE  QUOTA  STATE  AUTO  AGE                       │
 │    no accounts                                                               │
 │a add  s switch  d daemon  c strategy  up/k up  down/j down  r refresh  ? help│
 │q quit                                                                        │

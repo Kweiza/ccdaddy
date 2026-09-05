@@ -292,9 +292,18 @@ func withoutColumns(cols []view.ListColumn, drop ...view.ListColumn) []view.List
 	return out
 }
 
-// sectionRows is what the provider headings cost the page: one table row per
-// section, and internal/view returns both sections whatever the fleet holds, so
-// the number is a CONSTANT rather than a function of the accounts.
+// sectionRows is what the provider sections cost the page: TWO table rows per
+// section -- the provider's name and the column names under it -- and
+// internal/view returns both sections whatever the fleet holds, so the number is
+// a CONSTANT rather than a function of the accounts.
+//
+// The column names are inside this charge rather than beside it because they are
+// inside the same decision. Each section draws its own quota block, so each needs
+// its own names over it; a page that gave up the headings and kept two sets of
+// column names would be labelling two halves it no longer tells apart. Where the
+// rung takes the sections away the table draws ONE header row, the way it did
+// before sections existed, and that row is not this budget's -- it is the
+// table's own, and headerRows is what pays for it.
 //
 // That is the whole reason the headings can be budgeted at all, and it is what
 // lets them have a rung of their own rather than a permanent charge. A count
@@ -306,7 +315,12 @@ func withoutColumns(cols []view.ListColumn, drop ...view.ListColumn) []view.List
 // The rung decides only whether the page can afford them. It does not decide
 // how many there are: a fleet with one provider still draws both, at every
 // height where the headings are drawn at all.
-const sectionRows = 2
+const sectionRows = 4
+
+// headerRows is the ONE row of column names a page without sections draws. It is
+// separate from sectionRows because the two are alternatives: a page has either
+// one header row or one per section, never both and never neither.
+const headerRows = 1
 
 // The height ladder's row budget: wordmark 5 rows, tagline 2 rows plus its
 // blank, figures 6 rows plus its blank, the border 2 rows, the two remaining
@@ -410,7 +424,11 @@ func planHeight(l *Layout, height, rows, summaryRows int, notice, runway bool) {
 	l.Title, l.Header = true, true
 	l.Sections = true
 
-	need := fixedRows + sectionRows + rows + summaryRows
+	// The sections and the table's own header row are ALTERNATIVES: with the
+	// sections on, each draws its own column names and the table has no header
+	// row of its own, so the one fixedRows already charges for is handed back.
+	// Where the rung takes the sections away it is charged again below.
+	need := fixedRows - headerRows + sectionRows + rows + summaryRows
 	need += l.FooterRows - 1
 	if notice {
 		need += saveNotice
@@ -455,7 +473,7 @@ func planHeight(l *Layout, height, rows, summaryRows int, notice, runway bool) {
 		l.Border = false
 	}
 	if need > height {
-		need -= sectionRows
+		need -= sectionRows - headerRows
 		l.Sections = false
 	}
 	if need > height {

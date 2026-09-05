@@ -459,84 +459,77 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 	}
 	fmt.Fprintln(out)
 
-	// The same constructor the dashboard calls, which is what makes both
-	// surfaces name the same windows in the same order under the same headers.
-	block := view.ColumnsOf(rows)
-	cols := statusColumns(block)
+	// One quota block PER SECTION, so a Claude row is not given a CX 1 cell it
+	// can only fill with "-" and a Codex row is not given a 5H one. Measured on
+	// a nine-account fleet: nine quota columns of which four were dead in each
+	// half, forty-two characters of table per row saying nothing.
+	//
+	// The two halves are still ONE table, which is what keeps IDX, ACCOUNT, TYPE
+	// and TIER lining up across the seam -- two tables would size their columns
+	// independently and the fleet would come out under headings that do not line
+	// up. What makes that possible is that every line here is a DATA row,
+	// including the column headings: a lipgloss table has exactly one header row
+	// and this table needs one per section.
+	secs := view.Sections(rows)
+	// The WIDEST section is what the column list is built from, and every other
+	// section is laid out in the slots it reserved -- view.SectionColumns pads
+	// the difference with blanks, so STATE and AGE land at the same index in
+	// both halves and stay under one another across the seam.
+	widest := view.Columns{}
+	for _, sec := range secs {
+		if c := sec.Columns(); len(c.Windows)+len(c.Resets) > len(widest.Windows)+len(widest.Resets) {
+			widest = c
+		}
+	}
+	planned := statusColumns(widest)
 
-	head := make([]string, 0, len(cols))
-	// firstWindow is where the quota block starts and accountCol is where the
-	// section headings' text goes, both asked for rather than written down: the
-	// style function indexes block.Windows off the first and paints the second,
-	// and a constant here would be a second statement of which column is which
-	// -- true today and silently wrong the moment the list above changes.
-	firstWindow, accountCol := len(cols), -1
-	for i, c := range cols {
+	lines := make([]statusLine, 0, len(rows)+2*len(secs))
+	for _, sec := range secs {
+		block := sec.Columns()
+		cols := view.SectionColumns(planned, block)
+		lines = append(lines,
+			statusLine{heading: sec.Header, block: block, cols: cols},
+			statusLine{header: true, block: block, cols: cols},
+		)
+		for _, line := range sec.Rows {
+			lines = append(lines, statusLine{row: line.Row, block: block, cols: cols})
+		}
+	}
+
+	// accountCol is where a section heading's text goes and firstWindow is where
+	// every section's quota block starts. Both are asked for rather than written
+	// down, and firstWindow is the same integer in every section because the
+	// columns in front of the block are fixed -- which is the property the
+	// padding below relies on.
+	firstWindow, accountCol := len(lines[0].cols), -1
+	for i, c := range lines[0].cols {
 		if c.Kind == view.ColumnWindow && i < firstWindow {
 			firstWindow = i
 		}
 		if c.Kind == view.ColumnAccount {
 			accountCol = i
 		}
-		head = append(head, statusHeader(c))
 	}
 
-	// The lines this table draws: each provider's heading and that provider's
-	// accounts under it, in internal/view's own grouping. The style function
-	// below is handed the same list, so the integer it is asked about and the
-	// integer that produced the cells are one integer rather than two slices
-	// that happen to agree -- which is what the grouping makes load-bearing,
-	// since it puts lines in the table that no account list has.
-	display := view.ListRows(view.Sections(rows))
-
-	cells := make([][]string, 0, len(display))
-	for _, line := range display {
-		// A heading is a TABLE ROW carrying its text in the ACCOUNT cell and
-		// nothing anywhere else. A line printed above the table could not know
-		// the column widths this table is about to measure, and one table per
-		// section would size its columns independently -- so the two halves of
-		// one fleet would come out under headings that do not line up.
-		if line.Header != "" {
-			row := make([]string, len(cols))
-			for i, c := range cols {
-				if c.Kind == view.ColumnAccount {
-					row[i] = line.Header
-				}
-			}
-			cells = append(cells, row)
-			continue
-		}
-		r := line.Row
-		row := make([]string, 0, len(cols))
-		for _, c := range cols {
-			cell := r.ListCell(c, block, now, snap.Hover)
-			// StatusFlags rides on the AGE cell, which is what the trailing
-			// %s%s in the format string this replaced was doing, and for the
-			// same reason the flags ride on the last cell: a suffix that
-			// belongs to one account reads better beside that account's own
-			// figure than at a fixed offset far to its right.
-			if c.Kind == view.ColumnAge {
-				cell += r.StatusFlags()
-			}
-			row = append(row, cell)
-		}
-		cells = append(cells, row)
+	cells := make([][]string, 0, len(lines))
+	for _, line := range lines {
+		cells = append(cells, line.cells(now, snap.Hover))
 	}
-	if err := columns(out, head, cells, windowCellStyle(pal, display, accountCol, firstWindow, block)); err != nil {
+	if err := columns(out, nil, cells, sectionCellStyle(pal, lines, accountCol, firstWindow)); err != nil {
 		return err
 	}
-	// Under the table, because each of these explains a column the reader is
-	// already looking at, and in internal/view's order rather than in one
-	// spelled out here: which sentence follows which is a fact about the TABLE,
-	// so the surface that draws the table does not get its own answer. The
-	// stranded sentence is handed in because it is a fact about the RANKING
-	// rather than about these rows -- nothing on the table can explain why two
-	// accounts at the same point of the same window carry different
-	// thresholds, so this is the only place the reader can be told. PACE left
-	// this table with the derived window it was read off -- `ccdad runway` is
-	// the human answer to "how fast", and `--json` still carries every window's
-	// pace including the projection.
-	for _, line := range view.TrailerLines(rows, block, snap.Hover, snap.StrandedNote(), snap.BurnNote()) {
+	// One legend per section, each naming the provider it explains, because with
+	// per-section columns there are now two of them and nothing in the text of
+	// either would say which half of the table it belongs to.
+	for _, sec := range secs {
+		if legend := view.SectionLegend(sec.Header, sec.Columns()); legend != "" {
+			fmt.Fprintln(out, view.WrapLabeled(legend, outWidth(cmd.OutOrStdout())))
+		}
+	}
+	// The whole fleet's block, for the one sentence under here that is about the
+	// fleet rather than about a section: a window nothing ranks is not something
+	// a reader should have to notice once per provider.
+	for _, line := range view.TrailerLines(rows, view.ColumnsOf(rows), snap.Hover, snap.StrandedNote(), snap.BurnNote()) {
 		fmt.Fprintln(out, view.WrapLabeled(line, outWidth(cmd.OutOrStdout())))
 	}
 	return nil

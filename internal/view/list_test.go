@@ -560,16 +560,22 @@ func TestSectionsLoseNoRow(t *testing.T) {
 func TestListRowsInterleaveEachHeadingWithTheAccountsBelowIt(t *testing.T) {
 	rows := []Row{codexRow("cx-1"), claudeRow("cl-1"), claudeRow("cl-2")}
 	got := ListRows(Sections(rows))
+	// Two lines per section: the provider's name and the column names under it.
+	// The second is what per-section quota blocks cost -- each half of the table
+	// draws its own windows, so each needs its own names over them.
 	want := []struct {
 		header string
+		names  bool
 		uuid   string
 		at     int
 	}{
-		{ClaudeSection, "", -1},
-		{"", "cl-1", 1},
-		{"", "cl-2", 2},
-		{CodexSection, "", -1},
-		{"", "cx-1", 0},
+		{ClaudeSection, false, "", -1},
+		{"", true, "", -1},
+		{"", false, "cl-1", 1},
+		{"", false, "cl-2", 2},
+		{CodexSection, false, "", -1},
+		{"", true, "", -1},
+		{"", false, "cx-1", 0},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("ListRows = %d lines, want %d", len(got), len(want))
@@ -580,6 +586,9 @@ func TestListRowsInterleaveEachHeadingWithTheAccountsBelowIt(t *testing.T) {
 		}
 		if got[i].Row.Account.UUID != w.uuid {
 			t.Errorf("line %d account = %q, want %q", i, got[i].Row.Account.UUID, w.uuid)
+		}
+		if got[i].ColumnHeader != w.names {
+			t.Errorf("line %d ColumnHeader = %v, want %v", i, got[i].ColumnHeader, w.names)
 		}
 		if got[i].At != w.at {
 			t.Errorf("line %d At = %d, want %d", i, got[i].At, w.at)
@@ -611,9 +620,9 @@ func TestAnAccountRowRemembersWhereTheGroupingMovedItFrom(t *testing.T) {
 // of Codex, which is the one case the sections were added for.
 func TestListRowsDrawTheHeadingOverASectionWithNoRows(t *testing.T) {
 	got := ListRows(Sections([]Row{claudeRow("cl-1")}))
-	want := []string{ClaudeSection, "", CodexSection}
+	want := []string{ClaudeSection, "", "", CodexSection, ""}
 	if len(got) != len(want) {
-		t.Fatalf("ListRows = %v, want a heading, one account, and the empty section's heading", lines(got))
+		t.Fatalf("ListRows = %v, want each heading, each section's column names, and the one account", lines(got))
 	}
 	for i, w := range want {
 		if got[i].Header != w {
@@ -627,11 +636,14 @@ func TestListRowsDrawTheHeadingOverASectionWithNoRows(t *testing.T) {
 // once under both headings rather than twice, once under each.
 func TestListRowsOnAnEmptyStoreAreTheTwoHeadingsAndNothingElse(t *testing.T) {
 	got := ListRows(Sections(nil))
-	if len(got) != 2 {
-		t.Fatalf("ListRows on an empty fleet = %v, want the two headings", lines(got))
+	if len(got) != 4 {
+		t.Fatalf("ListRows on an empty fleet = %v, want the two headings and their column names", lines(got))
 	}
-	if got[0].Header != ClaudeSection || got[1].Header != CodexSection {
+	if got[0].Header != ClaudeSection || got[2].Header != CodexSection {
 		t.Errorf("ListRows on an empty fleet = %v, want %q then %q", lines(got), ClaudeSection, CodexSection)
+	}
+	if !got[1].ColumnHeader || !got[3].ColumnHeader {
+		t.Errorf("ListRows on an empty fleet = %v, want each heading followed by its column names", lines(got))
 	}
 }
 
@@ -683,38 +695,56 @@ func TestTrailerLinesAreOneOrderedSlice(t *testing.T) {
 		{Name: usage.WindowName("weekly_scoped:project:Atlas"), Header: "ATLAS", Reset: -1},
 	}}
 
+	// The legend is NOT here. Each provider's half of the table draws its own
+	// windows, so there is one legend per section and SectionLegend is what
+	// builds it; a whole-fleet legend under here would name columns no section
+	// draws.
 	got := TrailerLines(rows, c, true, "", "")
-	if len(got) != 4 {
-		t.Fatalf("TrailerLines = %d lines, want 4:\n%s", len(got), strings.Join(got, "\n"))
+	if len(got) != 3 {
+		t.Fatalf("TrailerLines = %d lines, want 3:\n%s", len(got), strings.Join(got, "\n"))
 	}
-	if got[0] != c.Legend() {
-		t.Errorf("line 0 = %q, want the legend", got[0])
+	if got[0] != HoverNote {
+		t.Errorf("line 0 = %q, want the hover sentence", got[0])
 	}
-	if got[1] != HoverNote {
-		t.Errorf("line 1 = %q, want the hover sentence", got[1])
+	if got[1] != c.UnrankedNote() {
+		t.Errorf("line 1 = %q, want the unranked note", got[1])
 	}
-	if got[2] != c.UnrankedNote() {
-		t.Errorf("line 2 = %q, want the unranked note", got[2])
-	}
-	if !strings.HasPrefix(got[3], "credit:   ") || !strings.Contains(got[3], credit.StatusLabel()) {
-		t.Errorf("line 3 = %q, want the credit line naming its account", got[3])
+	if !strings.HasPrefix(got[2], "credit:   ") || !strings.Contains(got[2], credit.StatusLabel()) {
+		t.Errorf("line 2 = %q, want the credit line naming its account", got[2])
 	}
 }
 
 func TestTrailerLinesOmitEveryLineWithNothingToSay(t *testing.T) {
 	rows := []Row{listRow()}
-	got := TrailerLines(rows, ColumnsOf(rows), false, "", "")
-	if len(got) != 1 {
-		t.Fatalf("TrailerLines = %d lines, want the legend alone:\n%s", len(got), strings.Join(got, "\n"))
+	if n := len(TrailerLines(rows, ColumnsOf(rows), false, "", "")); n != 0 {
+		t.Fatalf("TrailerLines = %d lines, want none: off hover, with nothing unranked and no "+
+			"credit seat, there is nothing left under the table", n)
 	}
-	if !strings.HasPrefix(got[0], "windows:") {
-		t.Errorf("the one line is %q, want the legend", got[0])
-	}
-	// A fleet nobody could read has no legend either, and then there is nothing
-	// under the table at all.
+	// A fleet nobody could read is the same answer reached another way.
 	blind := []Row{{Account: store.Account{UUID: "u-1"}}}
 	if n := len(TrailerLines(blind, ColumnsOf(blind), false, "", "")); n != 0 {
 		t.Errorf("TrailerLines on an unreadable fleet = %d lines, want none", n)
+	}
+}
+
+// The legend moved out from under the table and into one line per SECTION, each
+// naming the provider it explains -- and the provider is lowercased there, so a
+// grep for the all-caps heading still finds a heading and nothing else.
+func TestEachSectionsLegendNamesItsProviderWithoutAnsweringAHeadingGrep(t *testing.T) {
+	rows := []Row{listRow()}
+	got := SectionLegend(ClaudeSection, ColumnsOf(rows))
+	if !strings.HasPrefix(got, "windows claude: ") {
+		t.Errorf("SectionLegend = %q, want it to name its provider", got)
+	}
+	if strings.Contains(got, ClaudeSection) {
+		t.Errorf("SectionLegend = %q; it answers a grep for the %s heading", got, ClaudeSection)
+	}
+	if !strings.Contains(got, "5H = five_hour") {
+		t.Errorf("SectionLegend = %q, want the mapping back to the wire keys", got)
+	}
+	// A section with nothing readable in it publishes no mapping at all.
+	if got := SectionLegend(CodexSection, Columns{}); got != "" {
+		t.Errorf("SectionLegend over an empty block = %q, want nothing", got)
 	}
 }
 
