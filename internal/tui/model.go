@@ -564,7 +564,7 @@ func (a App) pageKey(msg tea.KeyPressMsg, k KeyMap) (App, tea.Cmd, bool) {
 		return a, nil, true
 
 	case key.Matches(msg, k.Switch):
-		a.pick = switchPicker(a.m.Snap.Rows, a.m.Cursor, a.m.Glyphs)
+		a.pick = switchPicker(a.m.Snap.Rows, a.m.cursorUUID(), a.m.Snap.CodexServingUUID, a.m.Glyphs)
 		a.scr = screenPicker
 		return a, nil, true
 
@@ -637,7 +637,7 @@ func probes() []App {
 	base.m.Snap.Report.State = daemon.DaemonRunning
 
 	pick := base
-	pick.scr, pick.pick = screenPicker, switchPicker(nil, 0, base.m.Glyphs)
+	pick.scr, pick.pick = screenPicker, switchPicker(nil, "", "", base.m.Glyphs)
 	panel := base
 	panel.scr = screenPanel
 	engine := base
@@ -870,6 +870,22 @@ func (m Model) drawsAt(l Layout, top, at int) bool {
 		}
 	}
 	return false
+}
+
+// cursorUUID names the account the cursor is standing on, and is empty when it
+// is standing on nothing -- an empty store, or the one-shot page, which sets
+// Cursor to noCursor because nobody is pointing at anything there.
+//
+// It exists so that what leaves this page is the ACCOUNT and never the index.
+// Cursor indexes Snap.Rows and every list drawn from those rows is grouped by
+// provider before it is drawn, so the same integer names a different account on
+// either side of the grouping. Handing an index to the switch picker offered one
+// account while the page pointed at another; handing the uuid cannot.
+func (m Model) cursorUUID() string {
+	if m.Cursor < 0 || m.Cursor >= len(m.Snap.Rows) {
+		return ""
+	}
+	return m.Snap.Rows[m.Cursor].Account.UUID
 }
 
 // fit cuts a block to the terminal it is drawn in and says how many rows it

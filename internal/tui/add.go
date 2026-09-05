@@ -74,16 +74,17 @@ func AddArgvs() [][]string {
 // NOTHING is marked and the cursor opens on the first choice, every time. The
 // mark on the other two pickers answers "which value is already in force", and
 // there is no such value for an add: a user is not switching from one provider
-// to another, they are adding an account to one of them. Nor is the last choice
+// to another, they are adding an account to one of them. Nothing here says so
+// in code because nothing has to: addChoices builds items whose inForce is the
+// zero value, and that zero value IS the answer. Nor is the last choice
 // remembered — the picker is built fresh on each keypress — because a
 // remembered position would make the same two keystrokes add a Claude account
 // today and a Codex one tomorrow.
 func addPicker(g Glyphs) picker {
 	return picker{
-		title:   "Add an account for which provider?",
-		items:   addChoices(),
-		current: -1,
-		glyphs:  g,
+		title:  "Add an account for which provider?",
+		items:  addChoices(),
+		glyphs: g,
 	}
 }
 
