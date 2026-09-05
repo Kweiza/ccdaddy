@@ -232,6 +232,7 @@ func loadSnapshot(cmd *cobra.Command, now time.Time, refresh bool) (snap view.Sn
 		Strategy:          selectedStrategy(cfg),
 		Hover:             cfg.Hover,
 		HoverAccounts:     hoverAccounts(cfg, plan),
+		BurnPerMin:        hoverBurn(cfg, plan),
 		Manual:            cfg.Manual,
 		Mode:              mode,
 		HasMode:           hasMode,
@@ -260,6 +261,21 @@ func hoverAccounts(cfg config.Config, plan strategy.Plan) []strategy.HoverAccoun
 		return nil
 	}
 	return plan.Hover.Accounts
+}
+
+// hoverBurn is the measured rate hover priced its licence floor in, or zero when
+// there is none.
+//
+// Zero is safe as the "no measurement" answer HERE and only here: it reaches a
+// note that is printed when the figure is positive, so an unmeasured fleet and a
+// measured idle one produce the same page -- which is right, because neither has
+// a rate that moved a threshold. The engine keeps the two apart, where the
+// difference decides an arm.
+func hoverBurn(cfg config.Config, plan strategy.Plan) float64 {
+	if !cfg.Hover || plan.Hover == nil || !plan.Hover.HasBurn {
+		return 0
+	}
+	return plan.Hover.BurnPerMin
 }
 
 // enginePlan is the decision the engine would make right now, asked for rather
@@ -520,7 +536,7 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 	// this table with the derived window it was read off -- `ccdad runway` is
 	// the human answer to "how fast", and `--json` still carries every window's
 	// pace including the projection.
-	for _, line := range view.TrailerLines(rows, block, snap.Hover, snap.StrandedNote()) {
+	for _, line := range view.TrailerLines(rows, block, snap.Hover, snap.StrandedNote(), snap.BurnNote()) {
 		fmt.Fprintln(out, view.WrapLabeled(line, outWidth(cmd.OutOrStdout())))
 	}
 	return nil

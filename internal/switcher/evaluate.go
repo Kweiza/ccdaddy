@@ -266,6 +266,11 @@ func engineCandidates(s *store.Store, accounts []store.Account, c *usage.Cache, 
 			// The poller's own 429 record. The pre-emptive switch is its only
 			// reader; Candidate.LastRateLimited says why it is not a tier.
 			cand.LastRateLimited = e.Poll.LastRateLimited
+			// The measured rate, for the rule that asks how long a candidate
+			// would carry the work running now. It travels with the stamps
+			// above because it is the same kind of fact: something the poller
+			// observed, which the engine may read but must not re-derive.
+			cand.BurnPerMin, cand.HasBurn = e.Poll.BurnPerMin, e.Poll.HasBurn
 		}
 		out = append(out, cand)
 	}

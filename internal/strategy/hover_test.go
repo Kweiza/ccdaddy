@@ -671,10 +671,10 @@ func TestThePoolSizeNowReachesTheOrderAndNotOnlyTheThresholds(t *testing.T) {
 	}
 	th := opts().Thresholds()
 
-	if _, stranded, _ := hoverStranded(s, "", th, 2, now); stranded != 50 {
+	if _, stranded, _ := hoverStranded(s, "", th, 2, now, 0, false); stranded != 50 {
 		t.Errorf("with two accounts stranded = %v, want 50: the pair reaches 40 of the 90 points left", stranded)
 	}
-	if _, stranded, _ := hoverStranded(s, "", th, 5, now); stranded != 0 {
+	if _, stranded, _ := hoverStranded(s, "", th, 5, now, 0, false); stranded != 0 {
 		t.Errorf("with five accounts stranded = %v, want 0: the rotation reaches all 90", stranded)
 	}
 }

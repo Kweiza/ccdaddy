@@ -249,7 +249,7 @@ func (m Model) plan() Layout {
 // it qualifies the hover sentence, so a page that does not print the first has
 // nothing for the second to qualify.
 func (m Model) trailerLines() []string {
-	return view.TrailerLines(m.Snap.Rows, m.Cols, false, "")
+	return view.TrailerLines(m.Snap.Rows, m.Cols, false, "", "")
 }
 
 // Body is the whole page as one string.

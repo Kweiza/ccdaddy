@@ -139,6 +139,10 @@ func projectedExhaustion(s *usage.Snapshot, model string, now time.Time, horizon
 func preemptTarget(byUUID map[string]Candidate, res Result, activeUUID string, o Options) (Ranked, bool) {
 	var throttled Ranked
 	hasThrottled := false
+	// The rate the work is running at, measured once for the walk. It is the
+	// pool's maximum because only one account is being spent at a time -- see
+	// SessionBurnPerMin.
+	burn, hasBurn := SessionBurnPerMin(poolOf(byUUID))
 	for _, r := range res.Order {
 		// The live account, reached in ranking order, ENDS the walk rather than
 		// being skipped over.
@@ -184,6 +188,24 @@ func preemptTarget(byUUID map[string]Candidate, res Result, activeUUID string, o
 		if horizon, ok := preemptHorizon(c, o.PreemptLead); ok &&
 			projectedExhaustion(c.Usage, o.Model, o.Now, horizon, o.thresholdsFor(c)) {
 			continue
+		}
+		// And the same question asked the other way round, because the one above
+		// cannot answer it. projectedExhaustion reads THIS candidate's own pace,
+		// and a candidate nobody is spending has none -- so an account a session
+		// would empty in nine minutes passes that test on every fleet there is.
+		//
+		// This asks how long the account would carry the work running NOW, at the
+		// rate that work was measured at, and refuses a target that cannot
+		// survive the same horizon the live account is being pre-empted over.
+		// Moving to an account that runs out inside the horizon spends a switch
+		// to arrange the identical outcome a few minutes later.
+		//
+		// With no measured rate it never fires, so a fleet ccdad has read only
+		// once behaves exactly as it did before the rate existed.
+		if horizon, ok := preemptHorizon(c, o.PreemptLead); ok {
+			if carries, known := CarriesFor(r.Headroom, burn, hasBurn, horizon); known && !carries {
+				continue
+			}
 		}
 		if recentlyRateLimited(c, o.Now) {
 			if !hasThrottled {
@@ -266,4 +288,15 @@ func preempt(byUUID map[string]Candidate, res Result, activeUUID string, o Optio
 		return Ranked{}, false
 	}
 	return preemptTarget(byUUID, res, activeUUID, o)
+}
+
+// poolOf is the candidate map as a slice, for the readers that measure across
+// the pool rather than looking one account up. Order is irrelevant to every one
+// of them -- SessionBurnPerMin takes a maximum -- so the map's own is fine.
+func poolOf(byUUID map[string]Candidate) []Candidate {
+	out := make([]Candidate, 0, len(byUUID))
+	for _, c := range byUUID {
+		out = append(out, c)
+	}
+	return out
 }

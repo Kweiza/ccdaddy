@@ -311,6 +311,13 @@ type HoverPlan struct {
 	CreditThreshold float64
 	// PreemptLead is derived from the observed poll gap; see hoverPreemptLead.
 	PreemptLead time.Duration
+	// BurnPerMin is the rate the licence floor was priced in, and HasBurn whether
+	// one was measured. Both are REPORTING as well as input: a floor stated in
+	// points of work is a floor a reader cannot reconstruct unless the rate it
+	// used is on the page beside it, which is the objection hover's own note
+	// raises against reading a rate at all.
+	BurnPerMin float64
+	HasBurn    bool
 	// Accounts is the per-account half of the derivation, in pool order.
 	//
 	// It is new because the share stopped being one number for the whole pool.
@@ -398,6 +405,12 @@ func HoverThresholds(cands []Candidate, o Options) HoverPlan {
 	}
 	p.Usable = len(pool)
 	p.PreemptLead = hoverPreemptLead(pool)
+	// The measured rate the licence floor is priced in. It is taken over the same
+	// pool the shares are divided over, once, so every account's floor is stated
+	// in the same units -- points of work a session actually spends, rather than
+	// points of clock.
+	burn, hasBurn := SessionBurnPerMin(pool)
+	p.BurnPerMin, p.HasBurn = burn, hasBurn
 
 	// The CONFIGURED table decides what may bind, and hover decides what it is
 	// worth. The two are not the same question. A weekly cap filed under a scope
@@ -467,7 +480,7 @@ func HoverThresholds(cands []Candidate, o Options) HoverPlan {
 		// the whole point: the perishable window is the one window that can
 		// never bind, so a figure that stayed on it would never reach the
 		// comparator. withHover says why at length.
-		sw, stranded, hasStranded := hoverStranded(c.Usage, o.Model, configured, p.Usable, o.Now)
+		sw, stranded, hasStranded := hoverStranded(c.Usage, o.Model, configured, p.Usable, o.Now, burn, hasBurn)
 		share := hoverShare(p.Usable, stranded)
 		acct := HoverAccount{
 			UUID:        c.UUID,
@@ -593,7 +606,7 @@ func hoverPoolShare(usable int) float64 {
 // outright to an account holding less than one cooldown of work on any window
 // a model choice cannot dodge, which is the one case where a widening buys a
 // switch and nothing to serve on the far side of it.
-func hoverStranded(s *usage.Snapshot, model string, t Thresholds, usable int, now time.Time) (usage.NamedWindow, float64, bool) {
+func hoverStranded(s *usage.Snapshot, model string, t Thresholds, usable int, now time.Time, burnPerMin float64, hasBurn bool) (usage.NamedWindow, float64, bool) {
 	if usable < 1 {
 		// hoverPoolShare's own clamp, for the same reason: a pool of none is a
 		// pool of one, and a rotation of nobody absorbs one account's worth
@@ -722,7 +735,7 @@ func hoverStranded(s *usage.Snapshot, model string, t Thresholds, usable int, no
 	//
 	// The clamp, and the test that pinned it against OutOfQuota, came in
 	// fe1a5fe.
-	if !absorbsACooldown(s, model, t) {
+	if !absorbsACooldown(s, model, t, burnPerMin, hasBurn) {
 		stranded = 0
 	}
 	return best, stranded, true
@@ -761,7 +774,18 @@ func hoverStranded(s *usage.Snapshot, model string, t Thresholds, usable int, no
 // band between the two -- which the old equality left open -- is covered by
 // this alone. TestTheLicenceFloorFiresBeforeTheEmptyTierDoes is that pairing,
 // row by row, and its two sliver rows are the cases the equality could not say.
-func absorbsACooldown(s *usage.Snapshot, model string, t Thresholds) bool {
+// burnPerMin is the MEASURED rate the work is running at, and hasBurn whether
+// there was one. Where there is, it replaces the clock figure below, and the
+// difference is the whole reason this parameter exists: 100 x HoverCooldown /
+// length is how far the WINDOW gets in two minutes -- 0.667 points of a
+// five-hour one -- while a session measured on this fleet on 2026-09-05 spends
+// 5.4 points a minute, which is 10.8 points in the same two minutes. Sixteen
+// times. So the floor blessed an account with one point left as able to absorb a
+// cooldown of work; what it could absorb was four seconds.
+//
+// With no measurement it is the clock figure exactly as before, which is what
+// keeps a fleet ccdad has read only once behaving as it did.
+func absorbsACooldown(s *usage.Snapshot, model string, t Thresholds, burnPerMin float64, hasBurn bool) bool {
 	okAny, okAll := true, true
 	haveAny := false
 	for _, w := range bindingWindows(s, model, t) {
@@ -770,7 +794,13 @@ func absorbsACooldown(s *usage.Snapshot, model string, t Thresholds) bool {
 			continue
 		}
 		short := false
-		if length, ok := usage.WindowLengthOf(w.Name, w.Window); ok && length > 0 {
+		if hasBurn && burnPerMin > 0 {
+			// A cooldown of WORK, in this window's own points. It does not
+			// depend on the window's length: the session spends what it spends,
+			// and a two-minute hold costs the same points whether the window it
+			// is charged against is five hours or a week.
+			short = 100-pct < burnPerMin*HoverCooldown.Minutes()
+		} else if length, ok := usage.WindowLengthOf(w.Name, w.Window); ok && length > 0 {
 			short = 100-pct < 100*float64(HoverCooldown)/float64(length)
 		}
 		okAll = okAll && !short

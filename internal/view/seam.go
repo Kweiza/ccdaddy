@@ -50,6 +50,14 @@ type Snapshot struct {
 	// threshold they cannot reconstruct. StrandedNote is what turns it into a
 	// sentence.
 	HoverAccounts []strategy.HoverAccount
+	// BurnPerMin is the rate hover priced its licence floor in, in points of a
+	// binding window a minute, and zero when nothing was measured.
+	//
+	// It is published for the reason the thresholds themselves are: a floor
+	// stated in points of WORK cannot be reconstructed from the table unless the
+	// rate it was stated in is on the page. hover.go's own note refuses to read
+	// a rate the user cannot follow, and this is what makes the reading legal.
+	BurnPerMin float64
 	// Manual is compatibility storage for the manual policy. The selected
 	// strategy remains explicit so a healthy ranking under manual cannot look
 	// like a broken engine.
@@ -160,4 +168,24 @@ func ActiveLine(claude, codex string) string {
 		return claude
 	}
 	return "Claude: " + claude + " · Codex: " + codex
+}
+
+// BurnNote is the sentence that publishes the measured rate, and empty when
+// there is nothing to publish.
+//
+// It rides inside the hover gate with the other two sentences because it
+// explains a figure only hover derives: the licence floor an account has to
+// clear is one HoverCooldown of WORK, and how many points that is depends
+// entirely on this rate. Without it a reader can see the thresholds and cannot
+// close the arithmetic behind them.
+//
+// A rate of zero prints nothing. An unmeasured fleet and a measured idle one
+// have the same page to draw here, and a line reading "0 points a minute" would
+// invite a reader to divide by it.
+func (s Snapshot) BurnNote() string {
+	if !s.Hover || s.BurnPerMin <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("hover:    measured burn %.1f pts/min, so an account needs %.1f points to be worth switching to",
+		s.BurnPerMin, s.BurnPerMin*strategy.HoverCooldown.Minutes())
 }
