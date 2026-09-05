@@ -141,9 +141,9 @@ func goldenWant(t *testing.T, name, got string) string {
 //     is usedCell's absence rule and not a rounding. 43x9 sits below collapseAt
 //     where USED is the bare percentage, and the zero-accounts page has no
 //     account row to draw one on.
-//   - STATE is four rows wherever col(ColState) survived the WIDTH ladder, one per
-//     account. 56 and 43 columns have both dropped that column by then; the
-//     zero-accounts page keeps the heading and has nothing under it.
+//   - STATE is four rows wherever view.ColumnState survived the WIDTH ladder,
+//     one per account. 56 and 43 columns have both dropped that column by then;
+//     the zero-accounts page keeps the heading and has nothing under it.
 //   - WIDTH is an upper bound. Framed pages fill it by construction; frameless
 //     pages need not manufacture trailing spaces after the old combined
 //     summary line was split into short, independent facts.

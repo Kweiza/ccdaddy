@@ -428,7 +428,23 @@ func renderRunway(cmd *cobra.Command, f forecast.Fleet, accounts []store.Account
 			"  " + idx, label, window, left, burn, view.RunwayEmpty(r, now, loc),
 		})
 	}
-	return columns(out, []string{"  IDX", "ACCOUNT", "WINDOW", "LEFT", "BURN", "EMPTY"}, cells, nil)
+	// This table keeps its own four columns and does not read view.ListColumns,
+	// because it is not an account list: every account contributes SEVERAL rows,
+	// one per window, and WINDOW, LEFT, BURN and EMPTY are facts about a
+	// forecast axis rather than about an account. There is no shared constant
+	// for any of them, and adding one would put four headings into the account
+	// list that no account table has ever drawn.
+	//
+	// IDX and ACCOUNT are the two it genuinely shares. They say WHICH account,
+	// in the same words and with the same meaning they carry in `ccdad status`
+	// and the dashboard, so they are read off the shared constants: a rename
+	// there has to move this table too, and a literal here would be the one
+	// place it could be left behind. The two leading spaces stay the surface's,
+	// for the reason the cells above give.
+	return columns(out, []string{
+		"  " + view.IdxHeader, view.AccountHeader,
+		"WINDOW", "LEFT", "BURN", "EMPTY",
+	}, cells, nil)
 }
 
 // runwayBasisLine is the evidence the answer rests on, printed above it so a
