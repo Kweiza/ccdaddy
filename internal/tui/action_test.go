@@ -1,11 +1,14 @@
 package tui
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/Kweiza/ccdaddy/internal/provider"
+	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/theme"
 	"github.com/Kweiza/ccdaddy/internal/view"
 )
@@ -19,7 +22,7 @@ import (
 func TestTheSwitchPickerPassesAFullUuidAndNeverTheDisplayOrdinal(t *testing.T) {
 	rows := fixtureRows()
 	for i := range rows {
-		argv := switchPicker(rows, i, UnicodeGlyphs).Chosen()
+		argv := switchPicker(rows, rows[i].Account.UUID, "", UnicodeGlyphs).Chosen()
 		if len(argv) != 2 || argv[0] != "switch" {
 			t.Fatalf("Chosen() = %v, want [switch <uuid>]", argv)
 		}
@@ -35,7 +38,7 @@ func TestTheSwitchPickerPassesAFullUuidAndNeverTheDisplayOrdinal(t *testing.T) {
 // The picker names the target the way the table does, or a user who aliased two
 // accounts cannot tell which address they are about to move to.
 func TestThePickerNamesTargetsTheWayTheTableDoes(t *testing.T) {
-	body := switchPicker(fixtureRows(), 0, UnicodeGlyphs).Body(60, theme.Of(theme.None))
+	body := switchPicker(fixtureRows(), "", "", UnicodeGlyphs).Body(60, theme.Of(theme.None))
 	if !strings.Contains(body, "work@example.com (work)") {
 		t.Fatalf("the picker does not name the account as the table does:\n%s", body)
 	}
@@ -49,8 +52,225 @@ func TestTheSwitchPickerStillOffersAnAccountHeldOutOfRotation(t *testing.T) {
 	if !rows[1].Account.Disabled {
 		t.Fatal("the fixture pool no longer has a disabled account, so this proves nothing")
 	}
-	if got := len(switchPicker(rows, 0, UnicodeGlyphs).items); got != len(rows) {
+	if got := len(choosable(switchPicker(rows, "", "", UnicodeGlyphs))); got != len(rows) {
 		t.Fatalf("the picker offers %d of %d accounts", got, len(rows))
+	}
+}
+
+// choosable is every item of a picker a user can put the cursor on, which is
+// every item that is not a section heading.
+func choosable(p picker) []pickerItem {
+	var out []pickerItem
+	for _, it := range p.items {
+		if !it.header {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+// mixedPool is a fleet of both providers, built here rather than borrowed from
+// the goldens' pool, and INTERLEAVED in store order on purpose: a Claude
+// account, a Codex one, a Claude one, a Codex one. Sectioning has to reorder
+// that, which is what makes a store index and a picker index disagree -- a pool
+// the grouping left alone could not tell a uuid-based restore from an
+// index-based one.
+//
+// The first Claude account is live. No codex account is served: which one the
+// proxy points at is the caller's fact, and each test that needs it names it.
+func mixedPool() []view.Row {
+	row := func(uuid, email string, p provider.ID) view.Row {
+		return view.Row{Account: store.Account{UUID: uuid, Email: email, Provider: p}}
+	}
+	rows := []view.Row{
+		row("0c1a0000-0000-4000-8000-00000000c1a1", "one@claude.example", provider.Claude),
+		row("0c0d0000-0000-4000-8000-00000000c0d1", "one@codex.example", provider.Codex),
+		row("0c1a0000-0000-4000-8000-00000000c1a2", "two@claude.example", provider.Claude),
+		row("0c0d0000-0000-4000-8000-00000000c0d2", "two@codex.example", provider.Codex),
+	}
+	rows[0].Active = true
+	return rows
+}
+
+// A mixed fleet is offered under the same two headings the account table
+// draws, in the table's own order: every Claude account under CLAUDE, then
+// every Codex account under CODEX, whatever order the store held them in. The
+// heading text is the table's constant and not a second spelling of it.
+func TestTheSwitchPickerSectionsAMixedPoolUnderTheTablesHeadings(t *testing.T) {
+	p := switchPicker(mixedPool(), "", "", UnicodeGlyphs)
+	var got []string
+	for _, it := range p.items {
+		if it.header {
+			got = append(got, "["+it.label+"]")
+			continue
+		}
+		got = append(got, it.label)
+	}
+	want := []string{
+		"[" + view.ClaudeSection + "]", "one@claude.example", "two@claude.example",
+		"[" + view.CodexSection + "]", "one@codex.example", "two@codex.example",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("the picker lists\n  %q\nwant\n  %q", got, want)
+	}
+}
+
+// Every account of a mixed fleet is still choosable -- sectioning adds lines
+// and removes none -- and what enter would run on each is that account's own
+// uuid, in the order the table draws them.
+func TestEveryAccountOfAMixedPoolIsStillChoosable(t *testing.T) {
+	rows := mixedPool()
+	var want []string
+	for _, s := range view.Sections(rows) {
+		for _, line := range s.Rows {
+			want = append(want, line.Row.Account.UUID)
+		}
+	}
+	var got []string
+	for _, it := range choosable(switchPicker(rows, "", "", UnicodeGlyphs)) {
+		if len(it.argv) != 2 || it.argv[0] != "switch" {
+			t.Fatalf("a choosable item carries %v, want [switch <uuid>]", it.argv)
+		}
+		got = append(got, it.argv[1])
+	}
+	if len(got) != len(rows) || !slices.Equal(got, want) {
+		t.Fatalf("the picker offers %q, want every account in the table's order %q", got, want)
+	}
+}
+
+// The cursor never rests on a heading, in either direction. A heading is drawn
+// and cannot be chosen, so a highlight left on one would be a cursor pointing
+// at nothing on the one screen where enter moves a credential. Down off the
+// last account of a section lands on the first account of the next, and up off
+// that one lands back on it: the heading between them is stepped over both
+// ways.
+func TestThePickerCursorNeverRestsOnAHeading(t *testing.T) {
+	rows := mixedPool()
+	p := switchPicker(rows, "", "", UnicodeGlyphs)
+	if it := p.items[p.cursor]; it.header {
+		t.Fatalf("the picker opened on the heading %q", it.label)
+	}
+	for _, delta := range []int{1, -1} {
+		for range len(p.items) {
+			p = p.Move(delta)
+			if it := p.items[p.cursor]; it.header {
+				t.Fatalf("moving %d left the cursor on the heading %q", delta, it.label)
+			}
+		}
+	}
+	lastClaude, firstCodex := p.indexOf(rows[2].Account.UUID), p.indexOf(rows[1].Account.UUID)
+	if !p.items[lastClaude+1].header {
+		t.Fatal("no heading sits between the last Claude account and the first Codex one, so there is nothing to step over")
+	}
+	p.cursor = lastClaude
+	if got := p.Move(1).cursor; got != firstCodex {
+		t.Errorf("down off the last Claude account landed on %d (%q), want the first Codex one at %d", got, p.items[got].label, firstCodex)
+	}
+	p.cursor = firstCodex
+	if got := p.Move(-1).cursor; got != lastClaude {
+		t.Errorf("up off the first Codex account landed on %d (%q), want the last Claude one at %d", got, p.items[got].label, lastClaude)
+	}
+}
+
+// Up from the first account stays on it. There is a heading above it and
+// nothing above that, so a settle that only ever continued the way the cursor
+// was travelling would come to rest on the heading; the fallback the other way
+// is what puts it back on the account.
+func TestUpFromTheFirstAccountStaysOnIt(t *testing.T) {
+	p := switchPicker(mixedPool(), "", "", UnicodeGlyphs)
+	if !p.items[0].header {
+		t.Fatal("the first line is not a heading, so up from the first account has nothing to step over")
+	}
+	first := p.cursor
+	if got := p.Move(-1).cursor; got != first {
+		t.Fatalf("up from the first account moved the cursor from %d to %d (%q)", first, got, p.items[got].label)
+	}
+}
+
+// Chosen refuses a heading on the type and not merely by construction. The
+// constructor never gives a heading an argv, so a test over what it builds
+// would be green under a Chosen that simply handed back the nil argv it found;
+// this one hand-builds the item the type can express and the constructor does
+// not -- a heading carrying a command -- and puts the cursor on it.
+func TestChosenRefusesAHeadingEvenWhenItCarriesAnArgv(t *testing.T) {
+	p := picker{items: []pickerItem{{
+		label:  view.ClaudeSection,
+		header: true,
+		argv:   []string{"switch", mixedPool()[0].Account.UUID},
+	}}}
+	if got := p.Chosen(); got != nil {
+		t.Fatalf("Chosen() on a heading = %v, want nil", got)
+	}
+}
+
+// A one-provider fleet gets no headings. The account table draws both headings
+// for such a fleet so a reader can see the other provider exists; the picker is
+// a list of things to choose, a heading there labels nothing a reader has to
+// tell apart, and it costs two of the rows the picker is drawn in.
+func TestASingleProviderPickerDrawsNoHeadings(t *testing.T) {
+	for _, only := range []provider.ID{provider.Claude, provider.Codex} {
+		var rows []view.Row
+		for _, r := range mixedPool() {
+			if r.Account.Provider == only {
+				rows = append(rows, r)
+			}
+		}
+		if len(rows) < 2 {
+			t.Fatalf("the pool has %d %s accounts, so a one-provider list here is not a list", len(rows), only)
+		}
+		p := switchPicker(rows, "", "", UnicodeGlyphs)
+		for _, it := range p.items {
+			if it.header {
+				t.Fatalf("a %s-only picker drew the heading %q", only, it.label)
+			}
+		}
+		if got := len(p.items); got != len(rows) {
+			t.Fatalf("a %s-only picker has %d lines for %d accounts", only, got, len(rows))
+		}
+		body := p.Body(60, theme.Of(theme.None))
+		if strings.Contains(body, view.ClaudeSection) || strings.Contains(body, view.CodexSection) {
+			t.Fatalf("a %s-only picker drew a section heading:\n%s", only, body)
+		}
+	}
+}
+
+// Both providers' live accounts are marked. Claude's live credential and the
+// account the codex proxy serves new threads from are two different facts about
+// two different accounts, exactly one of each can hold, and a picker that could
+// carry only one mark would have to choose which provider to be honest about.
+func TestBothProvidersLiveAccountsAreMarked(t *testing.T) {
+	rows := mixedPool()
+	serving := rows[3].Account.UUID
+	p := switchPicker(rows, "", serving, UnicodeGlyphs)
+	var marked []string
+	for _, it := range p.items {
+		if it.inForce {
+			marked = append(marked, it.argv[1])
+		}
+	}
+	if want := []string{rows[0].Account.UUID, serving}; !slices.Equal(marked, want) {
+		t.Fatalf("the picker marks %q as in force, want Claude's live account and the served codex one %q", marked, want)
+	}
+	if body := p.Body(60, theme.Of(theme.None)); strings.Count(body, "* ") != 2 {
+		t.Fatalf("the picker drew %d in-force marks, want one per provider:\n%s", strings.Count(body, "* "), body)
+	}
+}
+
+// The picker opens on the account it was handed, found by uuid, and never on
+// that account's index in the store. Sectioning reorders: the pool's second
+// account is a codex one and is drawn under the second heading, so its store
+// index names a Claude account in the picker. An account no longer in the pool
+// opens the picker at the top -- on the first account, not the heading over it.
+func TestThePickerOpensOnTheAccountItWasHandedAndNotOnItsStoreIndex(t *testing.T) {
+	rows := mixedPool()
+	for _, r := range rows {
+		if got := switchPicker(rows, r.Account.UUID, "", UnicodeGlyphs).Chosen(); len(got) != 2 || got[1] != r.Account.UUID {
+			t.Errorf("handed %s, the picker opened on %v", r.Account.Email, got)
+		}
+	}
+	gone := "00000000-0000-4000-8000-000000000000"
+	if got := switchPicker(rows, gone, "", UnicodeGlyphs).Chosen(); len(got) != 2 || got[1] != rows[0].Account.UUID {
+		t.Errorf("handed an account that is gone, the picker opened on %v, want the first account", got)
 	}
 }
 
@@ -95,21 +315,26 @@ func TestAnUnrecognisedCurrentStrategyMarksNothing(t *testing.T) {
 // The cursor stops at the ends. A held-down key that wrapped past the bottom
 // would put the highlight on an account at the top that the user was not
 // looking at when they let go -- on a list where enter moves a credential.
+//
+// The ends are the ends of the CHOOSABLE list, which is what the picker opens on
+// and what the last item is: a section heading is drawn between them and is
+// neither.
 func TestTheCursorStopsAtTheEndsRatherThanWrapping(t *testing.T) {
 	rows := fixtureRows()
-	p := switchPicker(rows, 0, UnicodeGlyphs)
-	if got := p.Move(-1).cursor; got != 0 {
-		t.Errorf("up from the top landed on %d, want 0", got)
+	p := switchPicker(rows, "", "", UnicodeGlyphs)
+	top := p.cursor
+	if got := p.Move(-1).cursor; got != top {
+		t.Errorf("up from the top landed on %d, want %d", got, top)
 	}
-	if got := p.Move(len(rows) + 5).cursor; got != len(rows)-1 {
-		t.Errorf("down past the bottom landed on %d, want %d", got, len(rows)-1)
+	if got := p.Move(len(p.items) + 5).cursor; got != len(p.items)-1 {
+		t.Errorf("down past the bottom landed on %d, want %d", got, len(p.items)-1)
 	}
 }
 
 // An empty store is a real state -- a fresh install -- and it reaches the
 // picker as a list with nothing in it rather than as a panic.
 func TestAPickerOverAnEmptyStoreChoosesNothingAndSaysSo(t *testing.T) {
-	p := switchPicker(nil, 0, UnicodeGlyphs)
+	p := switchPicker(nil, "", "", UnicodeGlyphs)
 	if got := p.Chosen(); got != nil {
 		t.Fatalf("Chosen() over an empty store = %v, want nil", got)
 	}
@@ -211,7 +436,7 @@ func TestThePickerNeverExceedsTheWidthItWasGiven(t *testing.T) {
 	rows := append(fixtureRows(), view.Row{})
 	rows[len(rows)-1].Account.Email = strings.Repeat("long", 30) + "@example.com"
 	for _, width := range []int{20, 40, 60} {
-		for i, line := range strings.Split(switchPicker(rows, 0, UnicodeGlyphs).Body(width, theme.Of(theme.Dark)), "\n") {
+		for i, line := range strings.Split(switchPicker(rows, "", "", UnicodeGlyphs).Body(width, theme.Of(theme.Dark)), "\n") {
 			if got := ansi.StringWidth(line); got > width {
 				t.Errorf("at width %d line %d is %d columns: %q", width, i, got, line)
 			}

@@ -1185,11 +1185,17 @@ func TestTheStrategyPickerMarksHoverWhenHoverIsSelected(t *testing.T) {
 
 	a := appAt(t, o, 113, 26)
 	a, _, _ = a.key(keyPress("c"))
-	if a.pick.current < 0 {
+	marked := ""
+	for _, it := range a.pick.items {
+		if it.inForce {
+			marked = it.label
+		}
+	}
+	if marked == "" {
 		t.Fatal("the strategy picker marks nothing as current under hover")
 	}
-	if got := a.pick.items[a.pick.current].label; got != "hover" {
-		t.Errorf("the picker marks %q as current, want hover", got)
+	if marked != "hover" {
+		t.Errorf("the picker marks %q as current, want hover", marked)
 	}
 }
 

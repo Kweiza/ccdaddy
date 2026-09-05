@@ -28,6 +28,25 @@ const (
 type pickerItem struct {
 	label string
 	argv  []string
+	// header marks a line that is DRAWN and never chosen -- a section heading
+	// over the rows beneath it.
+	//
+	// The flag lives on the item rather than the list being nested, and the zero
+	// value is what makes that safe: a picker built without ever mentioning
+	// headings is a picker of choosable rows, so a list that has no sections is
+	// untouched by their existence. A two-level structure would push Body, Move,
+	// Chosen and the cursor clamp into two-level indexing and would force every
+	// section-less picker to express itself as one anonymous section.
+	header bool
+	// inForce marks the item already in force. It is marked rather than hidden:
+	// "you are here" is the fact that makes the rest of the list mean something.
+	//
+	// It is per ITEM and not one index on the picker, because there is more than
+	// one such fact on a mixed fleet. Claude's live credential and Codex's
+	// serving pointer are two different answers about two different accounts,
+	// exactly one of each can hold, and a single index could only ever carry one
+	// of them.
+	inForce bool
 }
 
 // picker is the two-keystroke confirm every mutating key goes through. One
@@ -38,10 +57,6 @@ type picker struct {
 	title  string
 	items  []pickerItem
 	cursor int
-	// current is the item already in force, or -1 when none is. It is marked
-	// rather than hidden: "you are here" is the fact that makes the rest of
-	// the list mean something.
-	current int
 	// glyphs is this page's vocabulary, carried so the picker's cursor is the
 	// same character as the table's. Two lists that a user moves through with
 	// the same keys and that point with two different characters is the drift
@@ -61,38 +76,90 @@ type picker struct {
 // A disabled account is still offered. Disabled holds an account out of
 // AUTOMATIC rotation and is not a lock: an explicit switch still activates
 // one, and hiding it here would make the dashboard disagree with the command.
-func switchPicker(rows []view.Row, cursor int, g Glyphs) picker {
-	p := picker{title: "Switch to which account?", current: -1, glyphs: g}
-	for i, r := range rows {
-		if r.Active {
-			p.current = i
+//
+// The list is SECTIONED by provider, under the headings the account table
+// already draws, and it is grouped by the same function that table groups with
+// so the two orders cannot come apart. Headings appear only where more than one
+// section has rows: on a one-provider machine they would label nothing a reader
+// has to tell apart, and they cost two of the rows the picker is drawn in.
+//
+// `at` is the account the page's cursor was standing on, BY UUID and never by
+// index. Sectioning reorders, so a display position stops naming the same row --
+// the picker would offer one account while the page underneath pointed at
+// another. `serving` is the account the codex proxy serves new threads from, and
+// it is a second in-force fact rather than a replacement for the first: Claude's
+// live credential is still Row.Active, and both are marked.
+func switchPicker(rows []view.Row, at, serving string, g Glyphs) picker {
+	p := picker{title: "Switch to which account?", glyphs: g}
+	secs := view.Sections(rows)
+	filled := 0
+	for _, s := range secs {
+		if len(s.Rows) > 0 {
+			filled++
 		}
-		p.items = append(p.items, pickerItem{
-			// The same form the table draws, for the same reason: this is the
-			// name a user reads immediately before pressing the key that
-			// moves the credential.
-			label: r.ListLabel(),
-			argv:  []string{"switch", r.Account.UUID},
-		})
 	}
-	p.cursor = clampCursor(cursor, len(p.items))
+	for _, s := range secs {
+		if len(s.Rows) == 0 {
+			continue
+		}
+		if filled > 1 {
+			p.items = append(p.items, pickerItem{label: s.Header, header: true})
+		}
+		for _, line := range s.Rows {
+			r := line.Row
+			p.items = append(p.items, pickerItem{
+				// The same form the table draws, for the same reason: this is the
+				// name a user reads immediately before pressing the key that
+				// moves the credential.
+				label:   r.ListLabel(),
+				argv:    []string{"switch", r.Account.UUID},
+				inForce: r.Active || (serving != "" && r.Account.UUID == serving),
+			})
+		}
+	}
+	p.cursor = p.settle(clampCursor(p.indexOf(at), len(p.items)), 1)
 	return p
+}
+
+// indexOf is the item carrying one account's uuid, or 0 when no item does.
+//
+// Zero rather than "not found" because every caller wants a cursor: a page whose
+// cursor was on an account that has since gone opens the picker at the top,
+// which is where a picker with nothing to restore opens anyway.
+func (p picker) indexOf(uuid string) int {
+	if uuid == "" {
+		return 0
+	}
+	for i, it := range p.items {
+		if len(it.argv) == 2 && it.argv[1] == uuid {
+			return i
+		}
+	}
+	return 0
 }
 
 // strategyPicker mirrors the four choices of `ccdad strategy`. Recovery is not
 // one of them: it is a current engine outcome, not a policy a user selects.
+//
+// It appends nothing but choosable rows -- every item's header is the zero
+// value -- so sections cost this list nothing. The cursor opens on the value
+// already in force, tracked in a local rather than read back off the picker,
+// because "which item is in force" is now a fact about each item and a list can
+// hold more than one of them.
 func strategyPicker(current string, g Glyphs) picker {
-	p := picker{title: "Choose a switching strategy", current: -1, glyphs: g}
+	p := picker{title: "Choose a switching strategy", glyphs: g}
+	at := -1
 	for i, name := range []string{"hover", "manual", "headroom", "consume-first"} {
 		if name == current {
-			p.current = i
+			at = i
 		}
 		p.items = append(p.items, pickerItem{
-			label: name,
-			argv:  []string{"strategy", name},
+			label:   name,
+			argv:    []string{"strategy", name},
+			inForce: name == current,
 		})
 	}
-	p.cursor = clampCursor(p.current, len(p.items))
+	p.cursor = clampCursor(at, len(p.items))
 	return p
 }
 
@@ -102,9 +169,49 @@ func strategyPicker(current string, g Glyphs) picker {
 // where enter moves a credential, and a held-down key that wraps past the
 // bottom puts the highlight on an account at the top that the user was not
 // looking at when they let go.
+//
+// settle is what keeps the cursor off a section heading, and it is applied here
+// rather than in Body: a heading the highlight rests on is not a drawing fault
+// that redrawing fixes, it is a cursor pointing at nothing, and enter on it
+// would be a keystroke that does nothing on the one screen where every keystroke
+// is meant to.
 func (p picker) Move(delta int) picker {
-	p.cursor = clampCursor(p.cursor+delta, len(p.items))
+	p.cursor = p.settle(clampCursor(p.cursor+delta, len(p.items)), delta)
 	return p
+}
+
+// settle moves an index onto a choosable item, preferring the direction of
+// travel and falling back to the other.
+//
+// The fallback is what makes up from the first account stay on it: there is a
+// heading above it and nothing above that, so a walk that only ever continued
+// the way it was going would come to rest on the heading. Continuing the
+// direction first is what keeps the ordinary case moving -- down off the last
+// account of a section lands on the first account of the next, never back on the
+// one it just left.
+//
+// Both walks are bounded by the list length and the input comes back when
+// neither finds anything. A picker of nothing but headings cannot be built --
+// switchPicker draws a heading only over rows it has -- so that answer is
+// unreachable today; an unbounded search for the row it is looking for would
+// hang the event loop rather than mis-draw a line, which is the wrong way round
+// for a list nobody can leave.
+func (p picker) settle(at, dir int) int {
+	step := 1
+	if dir < 0 {
+		step = -1
+	}
+	for _, d := range [2]int{step, -step} {
+		for i, walked := at, 0; walked < len(p.items); i, walked = i+d, walked+1 {
+			if i < 0 || i >= len(p.items) {
+				break
+			}
+			if !p.items[i].header {
+				return i
+			}
+		}
+	}
+	return at
 }
 
 func clampCursor(at, n int) int {
@@ -120,8 +227,17 @@ func clampCursor(at, n int) int {
 // Chosen is the argv the cursor is on, or nil when there is nothing to choose.
 // An empty store is a real state — a fresh install — and it reaches here as a
 // picker with no items rather than as a panic.
+//
+// A heading is refused on the TYPE and not merely by construction. A heading
+// carries no argv, so the nil it already hands back would be the same answer;
+// what the guard covers is the item the type can express and the constructor
+// does not build — a heading WITH an argv — which would otherwise run a command
+// off a line the user cannot put the cursor on.
 func (p picker) Chosen() []string {
 	if p.cursor < 0 || p.cursor >= len(p.items) {
+		return nil
+	}
+	if p.items[p.cursor].header {
 		return nil
 	}
 	return p.items[p.cursor].argv
@@ -151,18 +267,25 @@ func (p picker) Body(width int, pal theme.Palette) string {
 	lines := make([]string, 0, len(p.items)+2)
 	lines = append(lines, pal.Style(theme.RoleHeader).Render(p.title))
 	for i, it := range p.items {
+		// A heading takes the two marker columns as blanks so its text starts
+		// where every label under it does, and it takes the table's heading role
+		// so one thing is spelled one way twice on the same screen.
+		if it.header {
+			lines = append(lines, pal.Style(theme.RoleHeader).Render("    "+it.label))
+			continue
+		}
 		cursor, mark := "  ", "  "
 		if i == p.cursor {
 			cursor = p.glyphs.Cursor + " "
 		}
-		if i == p.current {
+		if it.inForce {
 			mark = "* "
 		}
 		line := cursor + mark + it.label
 		// "You are here" is the fact that makes the rest of the list mean
 		// something, and it is the one line in this block a reader is comparing
 		// everything else against.
-		if i == p.current {
+		if it.inForce {
 			line = pal.Style(theme.RoleAccent).Render(line)
 		}
 		lines = append(lines, line)

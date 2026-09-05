@@ -297,6 +297,66 @@ func TestTheSwitchKeyOpensAPickerAndRunsNothing(t *testing.T) {
 	}
 }
 
+// The switch picker opens on the row the page's cursor is standing on, for
+// EVERY row, and it finds that row by uuid. Cursor indexes Snap.Rows and the
+// picker is grouped by provider before it is drawn, with a heading over each
+// group -- so from the second row down, a restore that carried the index across
+// would open the picker one line off, on an account the page was not pointing
+// at. The first row is the one case an index restore gets right by luck (the
+// heading it lands on is settled onto that same account), which is why every
+// row is asked and not just one.
+func TestTheSwitchPickerOpensOnTheRowThePageIsPointingAt(t *testing.T) {
+	n := len(appAt(t, fixtureOptions(), 113, 26).m.Snap.Rows)
+	if n < 2 {
+		t.Fatalf("the fixture has %d rows, so the cursor cannot point anywhere but the top", n)
+	}
+	for i := range n {
+		a := appAt(t, fixtureOptions(), 113, 26)
+		for range i {
+			a, _, _ = a.key(keyPress("down"))
+		}
+		if a.m.Cursor != i {
+			t.Fatalf("%d downs put the page's cursor on row %d", i, a.m.Cursor)
+		}
+		a, _, _ = a.key(keyPress("s"))
+		want := a.m.Snap.Rows[i].Account.UUID
+		if got := a.pick.Chosen(); len(got) != 2 || got[1] != want {
+			t.Errorf("with the page on row %d (%s) the picker opened on %v", i, a.m.Snap.Rows[i].Account.Email, got)
+		}
+	}
+}
+
+// Under the fixture's snapshot the Claude credential and the codex serving
+// pointer are two different rows, and the picker marks both. The serving uuid
+// comes off the SNAPSHOT and not off a row: no row carries it, so a picker
+// built from the rows alone could mark only the Claude side.
+func TestTheSwitchPickerMarksBothProvidersLiveAccounts(t *testing.T) {
+	a := appAt(t, fixtureOptions(), 113, 26)
+	serving := a.m.Snap.CodexServingUUID
+	if serving == "" {
+		t.Fatal("the fixture serves no codex account, so this proves nothing")
+	}
+	live := ""
+	for _, r := range a.m.Snap.Rows {
+		if r.Active {
+			live = r.Account.UUID
+		}
+	}
+	if live == "" || live == serving {
+		t.Fatalf("the fixture's live account is %q and its served one %q; two different rows are what this is about", live, serving)
+	}
+	a, _, _ = a.key(keyPress("s"))
+	var marked []string
+	for _, it := range a.pick.items {
+		if it.inForce {
+			marked = append(marked, it.argv[1])
+		}
+	}
+	if want := []string{live, serving}; !slices.Equal(marked, want) {
+		t.Fatalf("the picker marks %q as in force, want %q", marked, want)
+	}
+}
+
 // Esc leaves the picker without running anything, which is the other half of
 // the two-keystroke confirm.
 func TestEscapeLeavesThePickerWithoutRunningAnything(t *testing.T) {
@@ -413,8 +473,10 @@ func TestTheProviderChoiceOpensOnTheFirstChoiceWithNothingMarkedAndForgetsIt(t *
 	if a.pick.cursor != 0 {
 		t.Fatalf("the choice opened on item %d, want the first", a.pick.cursor)
 	}
-	if a.pick.current != -1 {
-		t.Fatalf("item %d is marked as already in force, and no provider is in force for an add", a.pick.current)
+	for i, it := range a.pick.items {
+		if it.inForce {
+			t.Fatalf("item %d is marked as already in force, and no provider is in force for an add", i)
+		}
 	}
 	if strings.Contains(a.body(), "* ") {
 		t.Errorf("the choice drew an in-force mark:\n%s", a.body())
