@@ -292,7 +292,7 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 	// runway line below has its own wrap, because its spaces are inside its
 	// values and these are between words.
 	//
-	// THE WIDTH IS MEASURED ON cmd.OutOrStdout() AND NEVER ON out, at all eleven
+	// THE WIDTH IS MEASURED ON cmd.OutOrStdout() AND NEVER ON out, at all eight
 	// sites below, and the distinction is the whole reason this paragraph
 	// exists. out is renderTarget's writer -- the same destination wearing a
 	// palette -- and outWidth answers by asserting *os.File. A wrapper fails
@@ -314,7 +314,7 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 	// sets up either. The other half is held by
 	// TestEveryLineOfTheStatusBlockFoldsAtTheFilesWidth, which reads this
 	// function's source rather than its output, so every site is covered
-	// whatever a fixture happens to render and the count of eleven below is
+	// whatever a fixture happens to render and the count of eight below is
 	// asserted there rather than only written here.
 	//
 	// Both names are written on one line each, deliberately. The name this
@@ -424,53 +424,94 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 
 	// The same constructor the dashboard calls, which is what makes both
 	// surfaces name the same windows in the same order under the same headers.
-	cols := view.ColumnsOf(rows)
+	block := view.ColumnsOf(rows)
+	cols := statusColumns(block)
+
+	head := make([]string, 0, len(cols))
+	// firstWindow is where the quota block starts, asked for rather than
+	// written down: the style function indexes block.Windows off it, and a
+	// constant here would be a second statement of how many fixed columns come
+	// first -- true today and silently wrong the moment the list above changes.
+	firstWindow := len(cols)
+	for i, c := range cols {
+		if c.Kind == view.ColumnWindow && i < firstWindow {
+			firstWindow = i
+		}
+		head = append(head, statusHeader(c))
+	}
+
 	cells := make([][]string, 0, len(rows))
 	for _, r := range rows {
-		// StatusFlags rides on the AGE cell, which is what the trailing %s%s in
-		// the format string this replaced was doing, and for the same reason
-		// the flags ride on the last cell: a suffix that belongs to one
-		// account reads better beside that account's own figure than at a
-		// fixed offset far to its right.
-		row := []string{
-			fmt.Sprintf("%s %d", r.Marker(), r.Account.Idx), r.ListLabel(), r.TypeLabel(), r.TierLabel(),
+		row := make([]string, 0, len(cols))
+		for _, c := range cols {
+			cell := r.ListCell(c, block, now, snap.Hover)
+			// StatusFlags rides on the AGE cell, which is what the trailing
+			// %s%s in the format string this replaced was doing, and for the
+			// same reason the flags ride on the last cell: a suffix that
+			// belongs to one account reads better beside that account's own
+			// figure than at a fixed offset far to its right.
+			if c.Kind == view.ColumnAge {
+				cell += r.StatusFlags()
+			}
+			row = append(row, cell)
 		}
-		if snap.Hover {
-			row = append(row, r.HoverCells(cols, now)...)
-		} else {
-			row = append(row, r.Cells(cols, now)...)
-		}
-		row = append(row, r.AgeLabel(now)+r.StatusFlags())
 		cells = append(cells, row)
 	}
-	head := append([]string{"  IDX", "ACCOUNT", "TYPE", "TIER"}, cols.Headers()...)
-	head = append(head, "AGE")
-	if err := columns(out, head, cells, windowCellStyle(pal, rows, 4, cols)); err != nil {
+	if err := columns(out, head, cells, windowCellStyle(pal, rows, firstWindow, block)); err != nil {
 		return err
 	}
 	// Under the table, because each of these explains a column the reader is
-	// already looking at. PACE left this table with the derived window it was
-	// read off -- `ccdad runway` is the human answer to "how fast", and
-	// `--json` still carries every window's pace including the projection.
-	if legend := cols.Legend(); legend != "" {
-		fmt.Fprintln(out, view.WrapLabeled(legend, outWidth(cmd.OutOrStdout())))
-	}
-	if snap.Hover {
-		fmt.Fprintln(out, view.WrapLabeled(
-			"hover:    quota cells show used/threshold; thresholds are derived per account and window",
-			outWidth(cmd.OutOrStdout())))
-	}
-	if note := cols.UnrankedNote(); note != "" {
-		fmt.Fprintln(out, view.WrapLabeled(note, outWidth(cmd.OutOrStdout())))
-	}
-	for _, r := range rows {
-		line, ok := r.CreditLine()
-		if !ok {
-			continue
-		}
-		fmt.Fprintln(out, view.WrapLabeled("credit:   "+r.StatusLabel()+"  "+line, outWidth(cmd.OutOrStdout())))
+	// already looking at, and in internal/view's order rather than in one
+	// spelled out here: which sentence follows which is a fact about the TABLE,
+	// so the surface that draws the table does not get its own answer. PACE
+	// left this table with the derived window it was read off -- `ccdad runway`
+	// is the human answer to "how fast", and `--json` still carries every
+	// window's pace including the projection.
+	for _, line := range view.TrailerLines(rows, block, snap.Hover) {
+		fmt.Fprintln(out, view.WrapLabeled(line, outWidth(cmd.OutOrStdout())))
 	}
 	return nil
+}
+
+// statusColumns is the account table `ccdad status` prints: the shared column
+// list, less the two columns this surface does not draw.
+//
+// It reads view.ListColumns rather than restating an order, which is the whole
+// point of there being a list: the columns below, and the order they come in,
+// are now one definition that the terminal dashboard reads too, so neither
+// surface can grow a column the other has never heard of.
+//
+// STATE and AUTO are what is dropped. Both are the dashboard's today, and this
+// is a refactor: adding a column here would change what a scripted `ccdad
+// status | awk` reads out of a field, which is a decision for a commit that
+// says so and not a side effect of moving the list.
+func statusColumns(block view.Columns) []view.ListColumn {
+	full := view.ListColumns(block)
+	out := make([]view.ListColumn, 0, len(full))
+	for _, c := range full {
+		if c.Kind == view.ColumnState || c.Kind == view.ColumnAuto {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+// statusHeader is one heading over that table: the column's own, and the IDX
+// one shifted right past the marker in front of it.
+//
+// The two spaces are an ALIGNMENT and not a second name for the column. The
+// IDX cell is Row.Marker and the index together -- "* 3" on the live account
+// and "  3" on every other -- so a heading printed flush left would stand over
+// the marker rather than over the number it names. Every one-shot table in
+// this package has spelled it this way since the first one, and the shift is
+// the surface's because the marker is: what shares that cell is a fact about
+// the report being drawn.
+func statusHeader(c view.ListColumn) string {
+	if c.Kind == view.ColumnIdx {
+		return "  " + c.Header
+	}
+	return c.Header
 }
 
 func statusPayload(snap view.Snapshot, probeErr error) map[string]any {

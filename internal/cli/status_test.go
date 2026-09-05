@@ -1479,9 +1479,15 @@ func proseOf(block []string) []string {
 // only that one.
 //
 // So this asks the structural question, where no fixture gets a vote: every
-// Fprintln into out in this function folds, and there are eleven of them. A
-// twelfth line turns this red on purpose. That is the whole mechanism -- the
+// Fprintln into out in this function folds, and there are eight of them. A
+// ninth line turns this red on purpose. That is the whole mechanism -- the
 // paragraph in status.go cannot make anybody read it, and this can.
+//
+// Eight and not the eleven this counted before: the four trailer lines under
+// the table are printed by ONE loop over view.TrailerLines now, so the sites
+// went down while the lines did not. That is what the count is for -- it
+// cannot be moved without being argued, and the fold it guards is still on
+// every line, because the loop that replaced the four folds what it prints.
 //
 // The width EXPRESSION is pinned too, by source rather than by value.
 // TestTheFoldMeasuresTheFileAndNotTheWriterItPaintsThrough holds that half at
@@ -1492,7 +1498,7 @@ func TestEveryLineOfTheStatusBlockFoldsAtTheFilesWidth(t *testing.T) {
 	const (
 		file      = "status.go"
 		fn        = "renderStatus"
-		wantSites = 11
+		wantSites = 8
 		wantWidth = "outWidth(cmd.OutOrStdout())"
 	)
 

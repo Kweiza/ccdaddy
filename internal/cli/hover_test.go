@@ -545,6 +545,60 @@ func TestListReportsTheOverriddenKeysInJSON(t *testing.T) {
 	}
 }
 
+// A hover table on a fleet with nothing readable keeps AGE in the AGE column.
+//
+// The quota block is never empty. With no visible row carrying a readable
+// window it is ONE placeholder column headed QUOTA whose cells all say "?",
+// which is the honest statement -- a table that simply stopped having quota
+// columns would read as a build with no quota feature rather than as a fleet
+// nobody could read.
+//
+// Row.Cells has answered it that way since it was written. Row.HoverCells never
+// did: it builds its slice from the window list alone, so on an empty one it
+// returned NO cells and the row came out one short of its own header. Every
+// cell after the block then slid one column left, and the figure standing under
+// QUOTA was the AGE.
+//
+// It takes a fleet with no reading at all to reach, which is why no fixture
+// here had it -- every other hover case in this file seeds a window. The cell
+// switch in internal/view answers the placeholder the same way whether hover is
+// on or off, so the table that reads it prints the same shape either way, and
+// this is what holds that.
+func TestAHoverTableWithNothingReadableStillPutsAgeUnderAge(t *testing.T) {
+	isolate(t)
+	freezeClock(t, hoverEpoch)
+	writeConfig(t, "hover = true\n")
+	seedHoverAccount(t, "u-1", "work@example.com")
+
+	code, stdout, _, top := runRoot(t, "status")
+	if code != ExitOK {
+		t.Fatalf("exit = %d (%s)", code, top)
+	}
+	lines := strings.Split(stdout, "\n")
+	head := -1
+	for i, l := range lines {
+		if strings.Contains(l, "QUOTA") && strings.Contains(l, "AGE") {
+			head = i
+			break
+		}
+	}
+	if head < 0 || head+1 >= len(lines) {
+		t.Fatalf("no quota header with a row under it:\n%s", stdout)
+	}
+	row := lines[head+1]
+	// The offsets are the HEADER's, which is what makes this an alignment
+	// question rather than a count of fields: the ACCOUNT cell holds an
+	// address, so splitting the row on whitespace would answer about spaces
+	// instead of about columns.
+	for _, col := range []string{"QUOTA", "AGE"} {
+		at := strings.Index(lines[head], col)
+		if at < 0 || at >= len(row) || row[at] != '?' {
+			t.Errorf("nothing readable stands under %s at column %d of\n%s\n%s",
+				col, at, lines[head], row)
+		}
+	}
+}
+
 // seedLiveAs writes Claude Code's credentials file holding one stored account's
 // login, which is what makes switcher.Evaluate able to name the live account.
 func seedLiveAs(t *testing.T, uuid string) {
