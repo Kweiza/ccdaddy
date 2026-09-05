@@ -169,6 +169,24 @@ type Candidate struct {
 	// figure, and which therefore has something to lose by running to an account
 	// whose numbers it cannot check.
 	LastRateLimited time.Time
+	// BurnPerMin is the rate measured across this account's last two readings,
+	// in points of its binding window a minute, and HasBurn whether one could be
+	// taken at all. Both are copied from usage.PollState.
+	//
+	// It is a fact about the SESSION rather than about the account, and that is
+	// the whole of how it must be read. An account nobody is spending measures
+	// zero; the moment a session moves onto it, it burns at whatever rate that
+	// session burns. So the figure that answers "how long would this candidate
+	// last" is the LIVE account's rate applied to the candidate's room -- never
+	// the candidate's own, which is zero for every account the engine might move
+	// to and would report that each of them lasts forever.
+	//
+	// HasBurn false is "cannot say" and never "nothing is being spent". A
+	// measured idle account carries zero with HasBurn true, and the two send the
+	// engine down different arms: no measurement leaves every rule exactly as it
+	// was before this field existed.
+	BurnPerMin float64
+	HasBurn    bool
 }
 
 // Options configures one ranking pass.

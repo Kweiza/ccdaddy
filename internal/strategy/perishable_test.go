@@ -164,7 +164,7 @@ func TestTheStrandedShareNeverExceedsTheQuotaTheAccountHolds(t *testing.T) {
 		for elapsed := 0.0; elapsed <= 100; elapsed += 5 {
 			for util := 0.0; util <= 100; util += 5 {
 				s := &usage.Snapshot{SevenDay: elapsedWindow(weekLen, elapsed/100, util)}
-				_, stranded, _ := hoverStranded(s, "", opts().Thresholds(), usable, now)
+				_, stranded, _ := hoverStranded(s, "", opts().Thresholds(), usable, now, 0, false)
 				share := hoverShare(usable, stranded)
 				flat := hoverPoolShare(usable)
 				switch {
@@ -186,7 +186,7 @@ func TestTheStrandedShareNeverExceedsTheQuotaTheAccountHolds(t *testing.T) {
 // quota it does not hold.
 func TestAnEmptyWeeklyStrandsNothing(t *testing.T) {
 	s := &usage.Snapshot{SevenDay: elapsedWindow(weekLen, 0.91, 100)}
-	if _, stranded, _ := hoverStranded(s, "", opts().Thresholds(), 4, now); stranded != 0 {
+	if _, stranded, _ := hoverStranded(s, "", opts().Thresholds(), 4, now, 0, false); stranded != 0 {
 		t.Errorf("stranded = %v, want 0 for a week with nothing left in it", stranded)
 	}
 }
@@ -200,7 +200,7 @@ func TestAWeeklyThatHasAlreadyRolledStrandsNothing(t *testing.T) {
 	stale := usage.NewWindow(ptr(1.0), ptr(now.Add(-2*time.Hour)))
 	s := &usage.Snapshot{SevenDay: stale}
 
-	_, stranded, has := hoverStranded(s, "", opts().Thresholds(), 4, now)
+	_, stranded, has := hoverStranded(s, "", opts().Thresholds(), 4, now, 0, false)
 	if has || stranded != 0 {
 		t.Errorf("stranded = %v (has %v), want 0: the window has already rolled", stranded, has)
 	}
@@ -238,7 +238,7 @@ func TestTheLicenceFloorFiresBeforeTheEmptyTierDoes(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			th := opts().Thresholds()
-			got := absorbsACooldown(tc.s, "", th)
+			got := absorbsACooldown(tc.s, "", th, 0, false)
 			if got != tc.absorbs {
 				t.Errorf("absorbsACooldown = %v, want %v", got, tc.absorbs)
 			}
@@ -421,7 +421,7 @@ func TestTheStrandedWindowIsTheOneAModelChoiceCannotDodge(t *testing.T) {
 		SevenDayOpus: elapsedWindow(weekLen, 0.91, 0),
 	}
 
-	w, stranded, has := hoverStranded(s, "", opts().Thresholds(), 2, now)
+	w, stranded, has := hoverStranded(s, "", opts().Thresholds(), 2, now, 0, false)
 	if !has || w.Name != usage.WindowSevenDay {
 		t.Fatalf("priced %s, want seven_day: a cap on one model family cannot be the perishable window while an all-model week is readable", w.Name)
 	}
@@ -444,7 +444,7 @@ func TestTheStrandedWindowIsTheOneAModelChoiceCannotDodge(t *testing.T) {
 		// runs -- and it is 90% spent with half its week left.
 		Limits: []usage.Limit{scoped("", "Claude Code", 90, remaining(weekLen, 0.50))},
 	}
-	w, stranded, has = hoverStranded(reversed, "", opts().Thresholds(), 2, now)
+	w, stranded, has = hoverStranded(reversed, "", opts().Thresholds(), 2, now, 0, false)
 	if kind, ok := usage.ScopeKindOf(w.Name); !has || !ok || kind != usage.ScopeSurface {
 		t.Fatalf("priced %s, want the surface-scoped week: reaching a per-model cap first must not make it the perishable window", w.Name)
 	}

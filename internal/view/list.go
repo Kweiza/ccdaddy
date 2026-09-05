@@ -580,13 +580,20 @@ const HoverNote = "hover:    quota cells show used/threshold; thresholds are der
 // has to be: the width is a terminal's, and the label the fold hangs under is
 // found in the line rather than passed, so a wrap belongs where the terminal
 // is known.
-func TrailerLines(rows []Row, c Columns, hover bool, stranded string) []string {
+// burn is Snapshot.BurnNote, passed for the same reason stranded is: it is a
+// fact about the RANKING rather than about these rows, and it is empty on every
+// fleet with no measurement. It comes second because the reader meets the
+// thresholds first and the rate is what those thresholds were priced in.
+func TrailerLines(rows []Row, c Columns, hover bool, stranded, burn string) []string {
 	var out []string
 	if legend := c.Legend(); legend != "" {
 		out = append(out, legend)
 	}
 	if hover {
 		out = append(out, HoverNote)
+		if burn != "" {
+			out = append(out, burn)
+		}
 		if stranded != "" {
 			out = append(out, "hover:    "+stranded)
 		}
