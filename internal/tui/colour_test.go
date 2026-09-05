@@ -21,23 +21,74 @@ import (
 // The role style comes from the same call that produced the glyph and the word,
 // so a colour can never describe a different state than the text beside it.
 // This asserts the pairing through cellStyle rather than through stateCell,
-// because cellStyle is where the row index decides which of the three kinds of
+// because cellStyle is where the row index decides which of the four kinds of
 // row is being painted.
+//
+// The indices are DISPLAY positions and the offset is the point: the fixture
+// pool's first account is the second line of the table, because the CLAUDE
+// heading is above it. A style function indexing accounts while the table draws
+// display rows would paint every row with the verdict of the one above it --
+// and rows 1 and 6 here, the two the headings shifted, are the pair that
+// catches it.
+//
+// The two heading rows are walked as well, and their STATE cell takes NOTHING:
+// it is empty, and the row's own role goes on the cell that has text in it.
+// TestASectionHeadingIsPaintedOnItsTextAndNowhereElse is where that is argued.
 func TestTheStateColumnTakesTheRoleOfTheStateItPrints(t *testing.T) {
 	pal := theme.Of(theme.Dark)
-	shown := fixtureRows()
 	cols := []view.ListColumn{{Kind: view.ColumnIdx}, {Kind: view.ColumnAccount}, {Kind: view.ColumnState}}
 	const state = 2
 
-	for at, want := range map[int]theme.Role{
-		0: theme.RoleActive,
-		1: theme.RoleExhausted,
-		2: theme.RoleCandidate,
-		3: theme.RoleMuted,
+	for at, want := range map[int]color.Color{
+		0: lipgloss.NoColor{},             // CLAUDE, an empty cell
+		1: pal.Color(theme.RoleActive),    // work@example.com
+		2: pal.Color(theme.RoleExhausted), // enterprise@co.example
+		3: pal.Color(theme.RoleCandidate), // spare@example.com
+		4: pal.Color(theme.RoleMuted),     // keyonly@example.com, unknown to the engine
+		5: lipgloss.NoColor{},             // CODEX, an empty cell
+		6: pal.Color(theme.RoleActive),    // cx@example.com, serving
 	} {
-		got := cellStyle(UnicodeGlyphs, pal, displayRows(shown), cols, testCols(), at, state, len(cols)-1).GetForeground()
-		if got != pal.Color(want) {
-			t.Errorf("row %d's STATE cell takes %v, want %v (%v)", at, got, pal.Color(want), want)
+		got := cellStyle(UnicodeGlyphs, pal, displayRows(fixtureRows()), cols, testCols(), at, state, len(cols)-1).GetForeground()
+		if got != want {
+			t.Errorf("display row %d's STATE cell takes %v, want %v", at, got, want)
+		}
+	}
+}
+
+// A section heading is not about any account. The cell holding its text takes
+// the heading role, and every other cell of that row takes NO role at all.
+//
+// Both halves are load-bearing and neither is the other's default. The window
+// column is why the row needs an arm of its own: a heading's ListRow carries a
+// zero view.Row, so a style function that fell through to the window arm would
+// ask that row for a percentage nobody read and band the heading at whatever
+// UtilizationRole makes of an absent reading. And the empty cells are why the
+// arm stops at ACCOUNT: a style on an empty cell wraps its padding in escape
+// bytes, which the one-shot table's trim then cannot reach.
+func TestASectionHeadingIsPaintedOnItsTextAndNowhereElse(t *testing.T) {
+	pal := theme.Of(theme.Dark)
+	block := testCols()
+	cols := []view.ListColumn{
+		{Kind: view.ColumnIdx}, {Kind: view.ColumnAccount},
+		{Kind: view.ColumnWindow, Index: 0}, {Kind: view.ColumnState},
+	}
+	shown := displayRows(fixtureRows())
+	for _, at := range []int{0, 5} {
+		if shown[at].Header == "" {
+			t.Fatalf("display row %d is not a heading; the fixture pool's shape has moved", at)
+		}
+		for col, c := range cols {
+			got := cellStyle(UnicodeGlyphs, pal, shown, cols, block, at, col, len(cols)-1).GetForeground()
+			if c.Kind == view.ColumnAccount {
+				if got != pal.Color(theme.RoleHeader) {
+					t.Errorf("the %s heading's own cell takes %v, want RoleHeader", shown[at].Header, got)
+				}
+				continue
+			}
+			if got != (lipgloss.NoColor{}) {
+				t.Errorf("the %s heading's empty column %d is painted %v, want nothing",
+					shown[at].Header, col, got)
+			}
 		}
 	}
 }
@@ -53,9 +104,11 @@ func TestAMarkerRowIsMutedAndNotWhateverTheRowsAroundItAre(t *testing.T) {
 	pal := theme.Of(theme.Dark)
 	cols := []view.ListColumn{{Kind: view.ColumnIdx}, {Kind: view.ColumnAccount}, {Kind: view.ColumnState}}
 
-	// The scrolling marker: three rows shown, the marker at index 3.
+	// The scrolling marker sits directly after the last DRAWN row, whatever
+	// mixture of headings and accounts that window held.
+	shown := displayRows(fixtureRows()[:3])
 	for col := range cols {
-		got := cellStyle(UnicodeGlyphs, pal, displayRows(fixtureRows()[:3]), cols, testCols(), 3, col, len(cols)-1).GetForeground()
+		got := cellStyle(UnicodeGlyphs, pal, shown, cols, testCols(), len(shown), col, len(cols)-1).GetForeground()
 		if got != pal.Color(theme.RoleMuted) {
 			t.Errorf("the +N-more marker's column %d takes %v, want RoleMuted", col, got)
 		}
@@ -216,7 +269,7 @@ func opener(pal theme.Palette, r theme.Role) string {
 // that looks fine.
 func TestEachRoleLandsOnTheCellItNames(t *testing.T) {
 	pal := theme.Of(theme.Dark)
-	m := darkModel(113, 29)
+	m := darkModel(113, 34)
 	page := sgr(t, m.Body(), colorprofile.TrueColor)
 	open := func(r theme.Role) string { return opener(pal, r) }
 
@@ -226,6 +279,8 @@ func TestEachRoleLandsOnTheCellItNames(t *testing.T) {
 		{"the tagline", open(theme.RoleMuted) + tagline[0]},
 		{"the summary's active label", open(theme.RoleHeader) + "Active (Claude): "},
 		{"the column headings", open(theme.RoleHeader) + "IDX"},
+		{"a section heading", open(theme.RoleHeader) + view.ClaudeSection},
+		{"the trailer's legend", open(theme.RoleMuted) + "windows:  "},
 		{"an active row's state", open(theme.RoleActive) + m.Glyphs.Active + " active"},
 		{"an exhausted row's state", open(theme.RoleExhausted) + m.Glyphs.Exhausted + " exhausted"},
 		{"a candidate row's state", open(theme.RoleCandidate) + m.Glyphs.Candidate + " candidate"},
@@ -260,11 +315,11 @@ func TestEachRoleLandsOnTheCellItNames(t *testing.T) {
 }
 
 // The note line takes a role of its own, and it takes it at the rung the height
-// ladder actually keeps one: the notice is dropped SECOND, so 80x20 is the
-// shortest fixture that renders it and 80x13 would pin its absence.
+// ladder actually keeps one: the notice is dropped after the trailer, so 80x22
+// is the shortest page that renders it and 80x13 would pin its absence.
 func TestTheNoticeLineIsPaintedAsANotice(t *testing.T) {
 	pal := theme.Of(theme.Dark)
-	m := darkModel(80, 21)
+	m := darkModel(80, 22)
 	m.Snap.Notices = []string{"hover thresholds could not be read"}
 	page := sgr(t, m.Body(), colorprofile.TrueColor)
 	if want := opener(pal, theme.RoleNotice) + "note: "; !strings.Contains(page, want) {

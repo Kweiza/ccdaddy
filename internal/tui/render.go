@@ -202,12 +202,15 @@ func (m Model) AfterLoad(snap view.Snapshot, err error) Model {
 	return m
 }
 
-// Body is the whole page as one string.
-//
-// It reads nothing: the layout comes from Plan, which is a pure function of
-// four numbers, and every cell comes from a Snapshot somebody else built. That
-// is what makes the fixtures below comparable as whole strings.
-func (m Model) Body() string {
+// plan is the layout this page would be drawn under, and it is a method rather
+// than ten arguments assembled at each call site because there are two callers:
+// Body draws the page, and scrolled asks the same question to find out which
+// rows the cursor can be on. Every block whose LENGTH the ladder is told -- the
+// summary, the runway, the footer, the trailer -- is measured here once, so the
+// two cannot come to hold different ideas of how tall any of them is. A second
+// call site passing a zero for one of them is exactly how the cursor comes to
+// scroll past the bottom of a page that is drawing a trailer.
+func (m Model) plan() Layout {
 	// The table always draws at least one row — an account, or the explicit
 	// "no accounts" row below — so the height budget is asked about at least
 	// one, never about zero. Budgeting for zero and then drawing one is how a
@@ -228,15 +231,37 @@ func (m Model) Body() string {
 	if footerWidth < 1 {
 		footerWidth = m.Width
 	}
-	footerRows := len(m.footerLines(footerWidth))
-	// The trailer under the table -- the legend, the unranked note, the credit
-	// lines -- is drawn by `ccdad status` and not yet by this page, so the
-	// ladder is told it costs no rows and every rung answers as it did before
-	// there was a trailer at all. The day the block is drawn, its length is the
-	// only thing that changes here.
-	const trailerRows = 0
-	l := planWithRows(m.Cols, m.Width, m.Height, rows,
-		len(m.Snap.Notices) > 0, len(runway) > 0, footerRows, len(runway), len(summary), trailerRows)
+	return planWithRows(m.Cols, m.Width, m.Height, rows,
+		len(m.Snap.Notices) > 0, len(runway) > 0, len(m.footerLines(footerWidth)),
+		len(runway), len(summary), len(m.trailerLines()))
+}
+
+// trailerLines is the block printed under the table: the legend, the unranked
+// note and one credit line per credit-metered seat, in internal/view's order.
+//
+// hover is FALSE and that is a statement about this page rather than about the
+// fleet. The hover sentence explains quota cells that read used-against-
+// threshold, and this table has always drawn the bare percentage -- it is the
+// row of percentages that IS the gauge, banded by cellStyle. Passing Snap.Hover
+// through would print a sentence describing cells that are not on the page.
+func (m Model) trailerLines() []string {
+	return view.TrailerLines(m.Snap.Rows, m.Cols, false)
+}
+
+// Body is the whole page as one string.
+//
+// It reads nothing: the layout comes from plan, which is a pure function of the
+// Model, and every cell comes from a Snapshot somebody else built. That is what
+// makes the fixtures below comparable as whole strings.
+//
+// The summary and the runway lines are asked for a second time here, and that
+// is not a repeat of what plan did. plan needs their COUNT, which is a row
+// budget and does not move with the width; this needs their TEXT, cut to the
+// width the frame leaves.
+func (m Model) Body() string {
+	summary := m.summaryLines(m.Width)
+	runway := m.runwayLines()
+	l := m.plan()
 	if l.TooNarrow || l.TooShort {
 		return m.floors(l)
 	}
@@ -349,6 +374,20 @@ func (m Model) Body() string {
 		addRole(theme.RoleNotice, noticeLine(m.Snap.Notices, inner, m.Glyphs.Cue))
 	}
 	lines = append(lines, m.tableBlock(l, inner)...)
+	if l.Trailer {
+		// Muted, because every one of these lines is about a column the reader
+		// is already looking at rather than about an account, which is the same
+		// role the table's own sentences about itself take.
+		//
+		// Cut and never wrapped. The ladder reserved exactly len(trailer) rows
+		// for this block, and a fold would spend one it was not given -- so the
+		// line ends in the page's own cut cue instead, which is what says a
+		// sentence continued past the frame.
+		st := m.Pal.Style(theme.RoleMuted)
+		for _, line := range m.trailerLines() {
+			lines = append(lines, st.Render(truncateCue(line, inner, m.Glyphs.Cue)))
+		}
+	}
 	if l.Blanks {
 		add("")
 	}
@@ -547,6 +586,15 @@ func (m Model) tableBlock(l Layout, inner int) []string {
 
 	data := make([][]string, 0, len(shown)+1)
 	for _, line := range shown {
+		// A section heading is a TABLE ROW carrying its text in the ACCOUNT
+		// cell -- markerRow's shape exactly, and for markerRow's reason. A line
+		// drawn above the table could not know the column widths, and one table
+		// per section would size its columns independently, so the two halves
+		// of one fleet would come out under headings that do not line up.
+		if line.Header != "" {
+			data = append(data, m.markerRow(cols, l, line.Header))
+			continue
+		}
 		cells := make([]string, len(cols))
 		for i, c := range cols {
 			cells[i] = m.cell(c, line, l)
@@ -554,14 +602,18 @@ func (m Model) tableBlock(l Layout, inner int) []string {
 		data = append(data, cells)
 	}
 	// Zero accounts is a valid state — a fresh install, or every account
-	// removed — and it renders as a header plus one explicit row. A bordered
-	// box with nothing inside it reads as a dashboard that failed rather than
-	// as a store that is empty.
+	// removed — and it renders as the headings plus one explicit row. A
+	// bordered box with nothing inside it reads as a dashboard that failed
+	// rather than as a store that is empty.
+	//
+	// ONE line, under both headings rather than one under each: the sentence is
+	// about the STORE and not about a section, and a machine with no accounts
+	// at all has not made a separate statement about Claude and about Codex.
 	switch {
 	case len(m.Snap.Rows) == 0:
 		data = append(data, m.markerRow(cols, l, "no accounts"))
 	case more > 0:
-		data = append(data, m.markerRow(cols, l, moreLabel(m.Glyphs, m.Top, len(shown), len(m.Snap.Rows), more)))
+		data = append(data, m.markerRow(cols, l, moreLabel(m.Glyphs, m.Top, accountsIn(shown), len(m.Snap.Rows), more)))
 	}
 
 	t := table.New().
@@ -588,18 +640,33 @@ func (m Model) tableBlock(l Layout, inner int) []string {
 }
 
 // cellStyle is the table's per-cell style: the state column's own role, the
-// muted marker rows, the column headings, and the column gaps.
+// muted marker rows, the column and section headings, and the column gaps.
 //
-// Three kinds of row reach here and each answers differently. The heading row
-// is not about any account. An account row takes the role of the state it
-// prints, from the SAME call that produced the glyph and the word, so a colour
-// can never describe a different state than the text beside it. And a marker
-// row -- "no accounts", "+3 more  (j/k)" -- is this package's own sentence
-// about the table rather than about anybody's account, so it takes RoleMuted
-// across every column. It was previously excluded from the state arm by the
-// `row < len(shown)` bound and then fell out of the switch with no style at
-// all, which left the empty-store line wearing the terminal's default
-// foreground in a table where everything around it is painted.
+// Four kinds of row reach here and each answers differently. The column heading
+// row is not about any account. A SECTION heading is not about any account
+// either and takes the same heading role, which is what makes the two read as
+// one structure -- the reader is looking at a column of names, and the
+// provider's name is the widest bracket over them. An account row takes the
+// role of the state it prints, from the SAME call that produced the glyph and
+// the word, so a colour can never describe a different state than the text
+// beside it. And a marker row -- "no accounts", "+3 more  (j/k)" -- is this
+// package's own sentence about the table rather than about anybody's account,
+// so it takes RoleMuted across every column. It was previously excluded from
+// the state arm by the `row < len(shown)` bound and then fell out of the switch
+// with no style at all, which left the empty-store line wearing the terminal's
+// default foreground in a table where everything around it is painted.
+//
+// The section arm has to come BEFORE the two column arms and not merely beside
+// them. A heading's ListRow carries a zero view.Row, whose engine state is the
+// empty string and whose windows are all absent, so the state arm would paint
+// it the absence role and the window arm would band a percentage nobody read.
+//
+// Inside that arm only the cell HOLDING the text takes the role, and every
+// other cell of the row is left plain. A style on an empty cell wraps its own
+// padding in escape bytes, which is invisible here -- the frame pads the page
+// anyway -- and is not on the one-shot table, where the trailing spaces then
+// sit behind a reset and out of reach of the trim. One rule for both surfaces,
+// argued where it can actually be measured, is better than two.
 //
 // The rows arrive as internal/view's ListRow, which is the type the table draws
 // and the type this indexes, so the integer this is handed and the integer that
@@ -639,6 +706,10 @@ func cellStyle(g Glyphs, pal theme.Palette, shown []view.ListRow, cols []view.Li
 		st = pal.Style(theme.RoleHeader)
 	case row >= len(shown):
 		st = pal.Style(theme.RoleMuted)
+	case shown[row].Header != "":
+		if cols[col].Kind == view.ColumnAccount {
+			st = pal.Style(theme.RoleHeader)
+		}
 	case cols[col].Kind == view.ColumnState:
 		_, role := stateCell(g, shown[row].Row.Engine.State)
 		st = pal.Style(role)
@@ -668,21 +739,36 @@ func cellStyle(g Glyphs, pal theme.Palette, shown []view.ListRow, cols []view.Li
 	}
 }
 
-// window is which account rows are drawn, and how many are not.
+// window is which table rows are drawn, and how many ACCOUNTS are not.
+//
+// The two units in that sentence are the whole of what makes this function
+// tricky, and neither may be swapped for the other. The BUDGET is table rows,
+// because a section heading occupies one and a page that budgeted in accounts
+// would draw two more lines than the ladder gave it. The COUNT is accounts,
+// because "+3 more (j/k)" advertises a key that moves the cursor, and the
+// cursor moves between accounts: a figure that counted the headings would
+// promise three presses and deliver one.
+//
+// Top is an ACCOUNT offset for the same reason, so a window that starts inside
+// a section starts on an account with its heading already scrolled past. The
+// heading is then REDRAWN at the top of the window, because a heading you have
+// scrolled past has stopped working -- the reader is looking at a column of
+// addresses with nothing on the page saying which provider they belong to.
 //
 // At the scrolling rung the last visible line is spent naming what is off the
-// page rather than on one more account: a table that silently stops at the
-// bottom of the terminal is one a user reads as complete.
+// page rather than on one more row: a table that silently stops at the bottom
+// of the terminal is one a user reads as complete.
 //
-// With room for exactly ONE row, that trade inverts and the row wins. Two of
-// the ladder's rules meet at that size and disagree: the scrolling rung says
-// to show the height minus two and spend the last line on the count, which at
-// three rows leaves no account on screen at all, while the never-dropped list
-// says at least one account row survives every rung. The list wins, because a
-// dashboard with a header, a count of four and no accounts has stopped being a
-// dashboard — and j/k, which the count advertises, would have nothing to move
-// through. The cost is real and is stated rather than hidden: at exactly three
-// rows there is nowhere left to say that more exist.
+// With room for exactly ONE row, that trade inverts twice over and the ACCOUNT
+// wins both times -- over the count, and over its own heading. Three of the
+// ladder's rules meet at that size and disagree: the scrolling rung wants the
+// last line for the count, the sections want the first for a heading, and the
+// never-dropped list says at least one account row survives every rung. The
+// list wins, because a page showing a provider's name, a count of four and no
+// accounts at all has stopped being a dashboard -- and j/k, which the count
+// advertises, would have nothing to move through. The cost is real and is
+// stated rather than hidden: at exactly that size there is nowhere left to say
+// which provider the one visible account belongs to, or that more exist.
 func (m Model) window(l Layout) (rows []view.ListRow, more int) {
 	all := displayRows(m.Snap.Rows)
 	if l.VisibleRows >= len(all) {
@@ -692,48 +778,109 @@ func (m Model) window(l Layout) (rows []view.ListRow, more int) {
 	if top < 0 {
 		top = 0
 	}
-	if top > len(all) {
-		top = len(all)
-	}
+	// With room for one line there is nowhere to say that more exist, so the
+	// count is not merely unwritten -- it is not CLAIMED. A zero here is what
+	// keeps the caller from drawing a marker row the ladder gave it no room
+	// for, which would put the page one row past the terminal it was planned
+	// for with nothing reporting it.
 	if l.VisibleRows < 2 {
-		n := l.VisibleRows
-		if top+n > len(all) {
-			n = len(all) - top
-		}
-		return all[top : top+n], 0
+		return packFrom(all, top, l.VisibleRows), 0
 	}
-	// One line off the visible count, spent on the count itself.
-	n := l.VisibleRows - 1
-	if top+n > len(all) {
-		n = len(all) - top
-	}
-	return all[top : top+n], len(all) - n
+	// One line off the budget, spent on the count itself.
+	shown := packFrom(all, top, l.VisibleRows-1)
+	// Every account row appears in the drawable list exactly once -- that is
+	// what view.Sections returning both buckets buys -- so the accounts that
+	// are off the page are the store's own count less the ones drawn.
+	return shown, len(m.Snap.Rows) - accountsIn(shown)
 }
 
-// displayRows is the list of lines the table draws, which is exactly the
-// account rows: one display line per account, each remembering the index it
-// came from.
+// packFrom fills a window of budget TABLE ROWS with the accounts from the top'th
+// one on, each under the heading of the section it belongs to.
 //
-// It is a function rather than a slice built in place because that index has to
-// survive whatever the list becomes. The cursor, the switch key and the marker
-// column all name an account by its position in Snap.Rows, and a display
-// position stops being that position the moment the list carries anything other
-// than accounts -- so every caller here reads ListRow.At and none of them counts
-// its way down the window.
-func displayRows(rows []view.Row) []view.ListRow {
-	out := make([]view.ListRow, 0, len(rows))
-	for i, r := range rows {
-		out = append(out, view.ListRow{Row: r, At: i})
+// It walks the DRAWABLE list rather than a slice of accounts, so which section
+// an account sits in is internal/view's answer read off the list it built. A
+// second grouping here -- a provider comparison, say -- would agree with the
+// first until the day the zero provider stopped meaning Claude.
+//
+// A heading is emitted only when the account under it is emitted too, which is
+// what keeps a window from ending on a provider name with nothing beneath it.
+// Where there is no room for the pair the loop STOPS rather than drawing the
+// account bare, because an account drawn under the previous section's heading
+// is filed under the wrong provider -- a page that shows a Codex account as a
+// Claude one is worse than a page that shows one row fewer.
+//
+// The one exception is an EMPTY window, and it is the one-row rung: with a
+// budget of one there is no pair to fit, and the account wins over its heading
+// rather than the page spending its only line on a provider name. It can only
+// ever be the first line drawn, so no account can be filed under a heading that
+// is not its own.
+func packFrom(all []view.ListRow, top, budget int) []view.ListRow {
+	out := make([]view.ListRow, 0, budget)
+	section, drawn, skipped := "", "", 0
+	for _, line := range all {
+		if line.Header != "" {
+			section = line.Header
+			continue
+		}
+		if skipped < top {
+			skipped++
+			continue
+		}
+		if len(out) >= budget {
+			break
+		}
+		if section != drawn {
+			switch {
+			case len(out)+2 <= budget:
+				out = append(out, view.ListRow{Header: section, At: -1})
+			case len(out) > 0:
+				return out
+			}
+			drawn = section
+		}
+		out = append(out, line)
 	}
 	return out
 }
 
-// markerRow is a table row that is not an account: the empty-store line, or
-// the count of the rows scrolling took away. It carries its text in the
-// ACCOUNT column, padded exactly as an account label is, so the column keeps
-// the width the layout gave it. Every other cell is empty rather than a dash —
-// a dash in these tables means "there is a value here and it could not be
-// read", and there is no account here at all.
+// accountsIn counts the ACCOUNT rows of a drawn window, which is the unit the
+// "+K more" figure is in: it advertises j and k, and those move between
+// accounts. A figure that counted the headings would promise three presses and
+// deliver one.
+func accountsIn(lines []view.ListRow) int {
+	n := 0
+	for _, line := range lines {
+		if line.Header == "" {
+			n++
+		}
+	}
+	return n
+}
+
+// displayRows is the list of lines the table draws: each provider's heading and
+// that provider's accounts under it, in internal/view's own grouping.
+//
+// It is a function rather than a slice built in place because an account's
+// index has to survive whatever the list becomes. The cursor, the switch key
+// and the marker column all name an account by its position in Snap.Rows, and
+// the grouping REORDERS -- a codex account listed first in the store is drawn
+// below every Claude one -- so every caller here reads ListRow.At and none of
+// them counts its way down the window.
+func displayRows(rows []view.Row) []view.ListRow {
+	return view.ListRows(view.Sections(rows))
+}
+
+// markerRow is a table row that is not an account: a section heading, the
+// empty-store line, or the count of the rows scrolling took away. It carries
+// its text in the ACCOUNT column, padded exactly as an account label is, so the
+// column keeps the width the layout gave it. Every other cell is empty rather
+// than a dash — a dash in these tables means "there is a value here and it
+// could not be read", and there is no account here at all.
+//
+// The padding is what makes a heading safe at every width. ACCOUNT is squeezed
+// to no less than accountFloor, and internal/view holds its headings inside
+// that, so accountCell's cut is never reached and a heading can never come out
+// as a provider name that is not one.
 func (m Model) markerRow(cols []view.ListColumn, l Layout, text string) []string {
 	cells := make([]string, len(cols))
 	for i, c := range cols {

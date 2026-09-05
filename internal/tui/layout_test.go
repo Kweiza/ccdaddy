@@ -46,10 +46,22 @@ func hasColumn(cols []view.ListColumn, k view.ColumnKind) bool {
 //
 // Read as: by the time TYPE is gone, AUTO and TIER already are. By the time the
 // block collapses, every optional column already is.
+//
+// TIER leads the list, which is where the dashboard adopting it is visible as
+// an order: it is on the page at the widths that have room for everything and
+// is the first thing given up below them, because a plan name is a fact about
+// the subscription rather than about today's fleet.
 func TestTheWidthLadderDropsColumnsInTheOrderItSays(t *testing.T) {
 	cols := testCols()
 	// Lowest priority first, which is the order they must vanish in.
-	order := []view.ColumnKind{view.ColumnAuto, view.ColumnType, view.ColumnAge, view.ColumnState}
+	order := []view.ColumnKind{view.ColumnTier, view.ColumnAuto, view.ColumnType, view.ColumnAge, view.ColumnState}
+
+	// TIER is in the set at all, which the order above cannot say on its own:
+	// a page that never drew it would satisfy every prefix claim below by
+	// having dropped it at every width.
+	if !hasColumn(Plan(cols, 200, 40, 4, false, false).Columns, view.ColumnTier) {
+		t.Fatal("TIER is on no page at any width, so the order below is asserted of a column the dashboard does not draw")
+	}
 
 	for w := 35; w <= 200; w++ {
 		l := Plan(cols, w, 40, 4, false, false)
@@ -171,25 +183,30 @@ func TestTheWindowBlockIsNeverPartiallyShown(t *testing.T) {
 // The height ladder, rung by rung. Walked with a fixed 4 account rows, the
 // tagline and then the blank separators give first so the family remains
 // visible at the 80x24 design target after the summary gained its own rows.
+//
+// Every rung is two rows taller than it was before the table carried section
+// headings, and that is sectionRows and nothing else: both headings are drawn
+// whatever the fleet holds, so they are a constant cost added to the budget
+// before the first rung fires rather than a block with a rung of its own.
 func TestTheHeightLadderDropsBlocksInTheOrderItSays(t *testing.T) {
 	const rows = 4
 	for _, tc := range []struct {
 		height                                                    int
 		wordmark, tagline, figures, border, blanks, title, header bool
 	}{
-		{27, true, true, true, true, true, true, true},  // nothing dropped: 23+N
-		{26, true, false, true, true, true, true, true}, // tagline dropped: 20+N
-		{24, true, false, true, true, true, true, true},
-		{23, true, false, true, true, false, true, true}, // blank separators dropped: 18+N
-		{22, true, false, true, true, false, true, true},
-		{21, true, false, false, true, false, true, true}, // figures also dropped: 11+N
-		{15, true, false, false, true, false, true, true},
-		{14, false, false, false, true, false, true, true}, // wordmark replaced: 7+N
-		{11, false, false, false, true, false, true, true},
-		{10, false, false, false, false, false, true, true}, // border dropped: 5+N
-		{9, false, false, false, false, false, true, true},
-		{8, false, false, false, false, false, false, true},  // title dropped: 4+N
-		{7, false, false, false, false, false, false, false}, // summary dropped: 2+N
+		{29, true, true, true, true, true, true, true},  // nothing dropped: 25+N
+		{28, true, false, true, true, true, true, true}, // tagline dropped: 22+N
+		{26, true, false, true, true, true, true, true},
+		{25, true, false, true, true, false, true, true}, // blank separators dropped: 20+N
+		{24, true, false, true, true, false, true, true},
+		{23, true, false, false, true, false, true, true}, // figures also dropped: 13+N
+		{17, true, false, false, true, false, true, true},
+		{16, false, false, false, true, false, true, true}, // wordmark replaced: 9+N
+		{13, false, false, false, true, false, true, true},
+		{12, false, false, false, false, false, true, true}, // border dropped: 7+N
+		{11, false, false, false, false, false, true, true},
+		{10, false, false, false, false, false, false, true}, // title dropped: 6+N
+		{9, false, false, false, false, false, false, false}, // summary dropped: 4+N
 		{6, false, false, false, false, false, false, false},
 	} {
 		l := Plan(testCols(), 80, tc.height, rows, false, false)
@@ -236,52 +253,52 @@ func TestTheHeightLadderDropsBlocksInTheOrderItSays(t *testing.T) {
 func TestTheNoticeRungFollowsTheDecorativeBlocks(t *testing.T) {
 	const rows = 4
 
-	// 27 fits everything when there is no notice to show.
-	without := Plan(testCols(), 80, 27, rows, false, false)
+	// 29 fits everything when there is no notice to show.
+	without := Plan(testCols(), 80, 29, rows, false, false)
 	if !without.Figures || without.Notice || !without.Tagline {
-		t.Fatalf("80x27 without a notice: Figures=%v Notice=%v Tagline=%v, want true/false/true",
+		t.Fatalf("80x29 without a notice: Figures=%v Notice=%v Tagline=%v, want true/false/true",
 			without.Figures, without.Notice, without.Tagline)
 	}
 
-	// The same 27 rows no longer fit everything once notice=true shifts the
+	// The same 29 rows no longer fit everything once notice=true shifts the
 	// budget up by one: the tagline gives first and the family remains.
-	with := Plan(testCols(), 80, 27, rows, true, false)
+	with := Plan(testCols(), 80, 29, rows, true, false)
 	if !with.Figures {
-		t.Fatal("80x27 with a notice dropped the figure block before the tagline")
+		t.Fatal("80x29 with a notice dropped the figure block before the tagline")
 	}
 	if !with.Notice {
-		t.Fatal("80x27 with a notice dropped the notice line before either decorative block was gone")
+		t.Fatal("80x29 with a notice dropped the notice line before either decorative block was gone")
 	}
 	if with.Tagline {
-		t.Fatal("80x27 with a notice kept the tagline instead of the family")
+		t.Fatal("80x29 with a notice kept the tagline instead of the family")
 	}
 
-	// At 23 the family still fits after the blank separators give; at 22 it
+	// At 25 the family still fits after the blank separators give; at 24 it
 	// gives and the notice remains.
-	if l := Plan(testCols(), 80, 23, rows, true, false); !l.Figures || !l.Notice || l.Tagline {
-		t.Fatalf("80x23 with a notice: Figures=%v Notice=%v Tagline=%v, want true/true/false",
+	if l := Plan(testCols(), 80, 25, rows, true, false); !l.Figures || !l.Notice || l.Tagline {
+		t.Fatalf("80x25 with a notice: Figures=%v Notice=%v Tagline=%v, want true/true/false",
 			l.Figures, l.Notice, l.Tagline)
 	}
-	if l := Plan(testCols(), 80, 22, rows, true, false); l.Figures || !l.Notice || l.Tagline {
-		t.Fatalf("80x22 with a notice: Figures=%v Notice=%v Tagline=%v, want false/true/false",
+	if l := Plan(testCols(), 80, 24, rows, true, false); l.Figures || !l.Notice || l.Tagline {
+		t.Fatalf("80x24 with a notice: Figures=%v Notice=%v Tagline=%v, want false/true/false",
 			l.Figures, l.Notice, l.Tagline)
 	}
 
-	// At 15, the notice line gives next. Both cases converge once it is gone:
+	// At 17, the notice line gives next. Both cases converge once it is gone:
 	// the plain page was never carrying one, and the page with a notice just dropped
 	// it, so the two arrive at the identical visible Layout.
-	notice15 := Plan(testCols(), 80, 15, rows, true, false)
-	plain15 := Plan(testCols(), 80, 15, rows, false, false)
-	if notice15.Figures != plain15.Figures || notice15.Notice != plain15.Notice || notice15.Tagline != plain15.Tagline {
-		t.Fatalf("80x15 did not converge: with notice=%+v without=%+v",
-			struct{ Figures, Notice, Tagline bool }{notice15.Figures, notice15.Notice, notice15.Tagline},
-			struct{ Figures, Notice, Tagline bool }{plain15.Figures, plain15.Notice, plain15.Tagline})
+	notice17 := Plan(testCols(), 80, 17, rows, true, false)
+	plain17 := Plan(testCols(), 80, 17, rows, false, false)
+	if notice17.Figures != plain17.Figures || notice17.Notice != plain17.Notice || notice17.Tagline != plain17.Tagline {
+		t.Fatalf("80x17 did not converge: with notice=%+v without=%+v",
+			struct{ Figures, Notice, Tagline bool }{notice17.Figures, notice17.Notice, notice17.Tagline},
+			struct{ Figures, Notice, Tagline bool }{plain17.Figures, plain17.Notice, plain17.Tagline})
 	}
 
 	// Further down the ladder the notice line stays dropped, same as any
 	// other block once its rung has fired.
-	if l := Plan(testCols(), 80, 14, rows, true, false); l.Notice {
-		t.Fatal("80x14 with a notice put the notice line back")
+	if l := Plan(testCols(), 80, 16, rows, true, false); l.Notice {
+		t.Fatal("80x16 with a notice put the notice line back")
 	}
 }
 
@@ -310,61 +327,65 @@ func TestTheRunwayRungFollowsTheDecorativeBlocksAndNotice(t *testing.T) {
 
 	const runwayRows = 4
 
-	// 27 fits everything when there are no runway rows to show.
-	without := Plan(testCols(), 80, 27, rows, false, false)
+	// 29 fits everything when there are no runway rows to show.
+	without := Plan(testCols(), 80, 29, rows, false, false)
 	if !without.Figures || without.Runway || !without.Tagline {
-		t.Fatalf("80x27 without a runway line: Figures=%v Runway=%v Tagline=%v, want true/false/true",
+		t.Fatalf("80x29 without a runway line: Figures=%v Runway=%v Tagline=%v, want true/false/true",
 			without.Figures, without.Runway, without.Tagline)
 	}
 
 	// Four runway rows spend the tagline and blank separators before any runway
 	// fact or the family art is lost.
-	with := planWithRows(testCols(), 80, 27, rows, false, true, 1, runwayRows, 2, 0)
+	with := planWithRows(testCols(), 80, 29, rows, false, true, 1, runwayRows, 2, 0)
 	if !with.Figures {
-		t.Fatal("80x27 with runway rows dropped the family after whitespace had already made enough room")
+		t.Fatal("80x29 with runway rows dropped the family after whitespace had already made enough room")
 	}
 	if !with.Runway {
-		t.Fatal("80x27 with runway rows dropped them before either decorative block was gone")
+		t.Fatal("80x29 with runway rows dropped them before either decorative block was gone")
 	}
 	if with.Tagline {
-		t.Fatal("80x27 with runway rows kept the tagline instead of spending it first")
+		t.Fatal("80x29 with runway rows kept the tagline instead of spending it first")
 	}
 
-	// Down to 19, all runway rows still fit after every decorative block is gone.
-	if l := planWithRows(testCols(), 80, 19, rows, false, true, 1, runwayRows, 2, 0); l.Figures || !l.Runway || l.Tagline {
-		t.Fatalf("80x19 with runway rows: Figures=%v Runway=%v Tagline=%v, want false/true/false",
+	// Down to 21, all runway rows still fit after every decorative block is gone.
+	if l := planWithRows(testCols(), 80, 21, rows, false, true, 1, runwayRows, 2, 0); l.Figures || !l.Runway || l.Tagline {
+		t.Fatalf("80x21 with runway rows: Figures=%v Runway=%v Tagline=%v, want false/true/false",
 			l.Figures, l.Runway, l.Tagline)
 	}
 
-	// At 18 the runway block gives next.
-	if l := planWithRows(testCols(), 80, 18, rows, false, true, 1, runwayRows, 2, 0); l.Figures || l.Runway || l.Tagline {
-		t.Fatalf("80x18 with runway rows: Figures=%v Runway=%v Tagline=%v, want false/false/false",
+	// At 20 the runway block gives next.
+	if l := planWithRows(testCols(), 80, 20, rows, false, true, 1, runwayRows, 2, 0); l.Figures || l.Runway || l.Tagline {
+		t.Fatalf("80x20 with runway rows: Figures=%v Runway=%v Tagline=%v, want false/false/false",
 			l.Figures, l.Runway, l.Tagline)
 	}
 
-	// The notice adds a fifth conditional row. At 20 both blocks fit after the
-	// decorative blocks are gone; at 19 the notice gives and runway remains.
-	if l := planWithRows(testCols(), 80, 20, rows, true, true, 1, runwayRows, 2, 0); !l.Notice || !l.Runway {
-		t.Fatalf("80x20 with both blocks: Notice=%v Runway=%v, want true/true", l.Notice, l.Runway)
+	// The notice adds a fifth conditional row. At 22 both blocks fit after the
+	// decorative blocks are gone; at 21 the notice gives and runway remains.
+	if l := planWithRows(testCols(), 80, 22, rows, true, true, 1, runwayRows, 2, 0); !l.Notice || !l.Runway {
+		t.Fatalf("80x22 with both blocks: Notice=%v Runway=%v, want true/true", l.Notice, l.Runway)
 	}
-	if l := planWithRows(testCols(), 80, 19, rows, true, true, 1, runwayRows, 2, 0); l.Notice || !l.Runway {
-		t.Fatalf("80x19 with both blocks: Notice=%v Runway=%v, want false/true — the note gives before runway does",
+	if l := planWithRows(testCols(), 80, 21, rows, true, true, 1, runwayRows, 2, 0); l.Notice || !l.Runway {
+		t.Fatalf("80x21 with both blocks: Notice=%v Runway=%v, want false/true — the note gives before runway does",
 			l.Notice, l.Runway)
 	}
 
 	// A page with no runway line never plans one, at any rung of the ladder.
-	for _, h := range []int{26, 21, 20, 19, 12, 6, 3} {
+	for _, h := range []int{28, 23, 22, 21, 14, 6, 3} {
 		if l := Plan(testCols(), 80, h, rows, true, false); l.Runway {
 			t.Errorf("height %d planned a runway line for a page that has none", h)
 		}
 	}
 }
 
-// The trailer's two places on the height ladder, asked about here because
-// nothing draws one yet: Model.Body passes a length of zero, so a page cannot
-// exercise either, and a rung no test walks is a rung nobody has checked.
+// The trailer's two places on the height ladder.
 //
-// Three claims, and the first is what every golden page under testdata rests
+// It is asked about HERE rather than through a page because a rendered page can
+// only ever exercise the trailer its own fixture pool produces: Model.Body
+// passes the length internal/view hands it, which for that pool is one line.
+// Three lines is what makes the arithmetic visible, and an arithmetic claim
+// that only ever sees the number one is a claim nobody has checked.
+//
+// Four claims, and the first is what every golden page under testdata rests
 // on.
 func TestATrailerCostsItsRowsAndIsGivenUpBeforeTheNotice(t *testing.T) {
 	const (
@@ -413,9 +434,9 @@ func TestATrailerCostsItsRowsAndIsGivenUpBeforeTheNotice(t *testing.T) {
 		if l.Trailer && !l.Notice {
 			t.Errorf("at 80x%d the notice was given up while the trailer above it stayed", h)
 		}
-		if l.Trailer && l.VisibleRows != rows {
-			t.Errorf("at 80x%d a trailer is planned over a scrolling table: %d of %d rows visible",
-				h, l.VisibleRows, rows)
+		if l.Trailer && l.VisibleRows != rows+sectionRows {
+			t.Errorf("at 80x%d a trailer is planned over a scrolling table: %d of %d table rows visible",
+				h, l.VisibleRows, rows+sectionRows)
 		}
 		if !l.Trailer && l.Notice {
 			sawTheDrop = true
@@ -423,6 +444,29 @@ func TestATrailerCostsItsRowsAndIsGivenUpBeforeTheNotice(t *testing.T) {
 	}
 	if !sawTheDrop {
 		t.Fatal("no height between 4 and 40 drops the trailer and keeps the notice, so the order above is asserted of nothing")
+	}
+
+	// And it goes AFTER the three decorative blocks, which is the other half of
+	// "the highest a block carrying real information can sit". The claim above
+	// bounds the trailer from below and this one bounds it from above: without
+	// it, a ladder that spent the trailer before the tagline would still drop it
+	// before the notice and would still pass.
+	sawTheKeep := false
+	for h := 4; h <= 40; h++ {
+		l := planWithRows(testCols(), 80, h, rows, true, false, 1, 0, 2, trailerRows)
+		if l.TooShort {
+			continue
+		}
+		if l.Trailer && !l.Figures && !l.Tagline && !l.Blanks {
+			sawTheKeep = true
+		}
+		if !l.Trailer && (l.Figures || l.Tagline || l.Blanks) {
+			t.Errorf("at 80x%d the trailer was given up while a decorative block below it stayed: "+
+				"Figures=%v Tagline=%v Blanks=%v", h, l.Figures, l.Tagline, l.Blanks)
+		}
+	}
+	if !sawTheKeep {
+		t.Fatal("no height between 4 and 40 keeps the trailer with every decorative block gone")
 	}
 }
 

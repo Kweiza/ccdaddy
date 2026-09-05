@@ -28,20 +28,24 @@ type Layout struct {
 	Title, Header              bool // Header is the Active/Strategy/Current summary block
 	// Trailer is the block printed UNDER the table -- the legend, the hover
 	// sentence, the unranked note and the credit lines, which internal/view
-	// hands over as one ordered slice.
-	//
-	// The dashboard draws none of them yet, so planWithRows is told a length of
-	// zero and both of the places this touches the ladder answer exactly as
-	// they did before it existed: Trailer is false, so nothing is subtracted
-	// from the page's budget and nothing is reclaimed by the rung below.
+	// hands over as one ordered slice. TrailerRows is how many lines that is.
 	Trailer     bool
 	TrailerRows int
 
-	// VisibleRows is an UPPER BOUND on how many account rows to render, not a
-	// count of rows that are actually shown: at the scrolling rung the last
-	// of them is spent on "+K more (j/k)" rather than an account row, and
-	// below that rung it is clamped to the real row count so a renderer
-	// slicing Rows[Top:Top+VisibleRows] never reads past the end.
+	// VisibleRows is an UPPER BOUND on how many TABLE ROWS to render -- section
+	// headings and account rows together -- and not a count of rows actually
+	// shown: at the scrolling rung the last of them is spent on "+K more (j/k)"
+	// rather than on another line of table, and below that rung it is clamped
+	// to what the fleet can actually fill so a renderer slicing the display
+	// list never reads past the end.
+	//
+	// It counts DISPLAY rows and not accounts, which is the one thing about it
+	// that changed when the table gained its headings. The two counts differ by
+	// a fixed sectionRows, and spending the budget in the unit the table is
+	// drawn in is what keeps a heading from being written over the row below
+	// the page's last line. What stays counted in ACCOUNTS is the "+K more"
+	// figure and the cursor's room, because both are about accounts a reader
+	// can move to and a heading is not one.
 	VisibleRows int
 	FooterRows  int
 	RunwayRows  int
@@ -173,12 +177,14 @@ func planWithRows(cols view.Columns, width, height, rows int,
 // column is already on the page (width >= fullAt) does unused width finally
 // reach ACCOUNT, growing it up to accountMax.
 func planWidth(l *Layout, cols view.Columns, width int) {
-	// The fixed order is internal/view's, less TIER: the shared list is the
-	// UNION of what the two surfaces draw, and TIER is the one column in it
-	// this page has never carried. Taking it out here rather than reordering
-	// the list is what keeps the two tables in one order while they are being
-	// moved onto it -- and putting it back is a change to what the dashboard
-	// SHOWS, which belongs in a commit that says so.
+	// The fixed order is internal/view's, whole. TIER was held out of it while
+	// the two surfaces were being moved onto the shared list, so that adopting
+	// the list could be proved to move no page; it is in now, which is a change
+	// to what the dashboard SHOWS and is why this commit moves every golden.
+	//
+	// TIER is also the first column ListDrops gives up, so the fleet-wide cost
+	// is one rung rather than a column: below the full width it is not on the
+	// page at all, and the widths where it is are the ones with room to spare.
 	//
 	// The never-dropped columns, and their absence from the drop order below IS
 	// the argument: IDX and ACCOUNT say WHICH account, and every window column
@@ -189,13 +195,7 @@ func planWidth(l *Layout, cols view.Columns, width int) {
 	// where dropping is not: with every cell reading percentage USED, the worst
 	// window is the MAX, so nothing the collapsed cell hides is worse than what
 	// it shows. A partial column set can make no such statement.
-	var full []view.ListColumn
-	for _, c := range view.ListColumns(cols) {
-		if c.Kind == view.ColumnTier {
-			continue
-		}
-		full = append(full, c)
-	}
+	full := view.ListColumns(cols)
 
 	// Drop order, lowest priority first, and internal/view's own. It is a fixed
 	// priority list walked from the tail and NEVER a greedy packer: greedy is
@@ -203,12 +203,6 @@ func planWidth(l *Layout, cols view.Columns, width int) {
 	// defect class the ACCOUNT reservation below exists to prevent. The price
 	// is that at some widths the page holds slack it cannot spend, and that is
 	// stated rather than hidden.
-	//
-	// It offers TIER, which this page does not draw. Dropping a column that is
-	// not there removes nothing and costs one comparison, so the list is taken
-	// whole rather than filtered: the priority of a column against its
-	// neighbours is the shared list's answer, and half of it here would be a
-	// second answer.
 	drops := view.ListDrops(cols)
 
 	total := func(cs []view.ListColumn) int {
@@ -289,13 +283,27 @@ func withoutColumns(cols []view.ListColumn, drop ...view.ListColumn) []view.List
 	return out
 }
 
+// sectionRows is what the provider headings cost the page: one table row per
+// section, and internal/view returns both sections whatever the fleet holds, so
+// the number is a CONSTANT rather than a function of the accounts.
+//
+// That is the whole reason the headings can be budgeted at all. A count that
+// moved with the fleet -- one heading on a Claude-only machine, two once a
+// codex account is added -- would make the height ladder's rungs depend on
+// which providers are logged in, and the page would lose its tagline on the day
+// somebody ran `ccdad add codex`.
+const sectionRows = 2
+
 // The height ladder's row budget: wordmark 5 rows, tagline 2 rows plus its
 // blank, figures 6 rows plus its blank, the border 2 rows, the two remaining
-// blank separators and the one-row title. Fixed rows total 21, independent of
-// the account row count and the summary block -- both are added on top in
-// planHeight, never folded into this constant. Neither the notice line nor the
-// runway line is part of the fixed 21 either: each exists only when Plan is
-// told it does, which is exactly what Plan's notice and runway parameters say.
+// blank separators, the one-row title and the table's column header. Fixed rows
+// total 21, independent of the account row count and the summary block -- both
+// are added on top in planHeight, never folded into this constant. Neither the
+// notice line nor the runway line is part of the fixed 21 either: each exists
+// only when Plan is told it does, which is exactly what Plan's notice and
+// runway parameters say. The section headings are unconditional and could have
+// been folded in, and are not: sectionRows above says what they are and why
+// their count does not move, which a 23 here would hide.
 const (
 	fixedRows    = 21
 	saveFigures  = 7 // 6 rows plus its blank
@@ -350,7 +358,7 @@ func planHeight(l *Layout, height, rows, summaryRows int, notice, runway bool) {
 	l.Border, l.Blanks = true, true
 	l.Title, l.Header = true, true
 
-	need := fixedRows + rows + summaryRows
+	need := fixedRows + sectionRows + rows + summaryRows
 	need += l.FooterRows - 1
 	if notice {
 		need += saveNotice
@@ -407,23 +415,29 @@ func planHeight(l *Layout, height, rows, summaryRows int, notice, runway bool) {
 	// the wrapped footer, whatever chrome above them survived, and every row of
 	// a trailer that survived its own rung above. It is an upper bound, not
 	// a target: at heights where the whole page fits comfortably, height-2
-	// can be far larger than the real row count, and a renderer slicing
-	// Rows[Top:Top+VisibleRows] on that unclamped number would read past the
-	// end of the slice. Clamping to rows makes VisibleRows == rows whenever
-	// everything already fits, and only less than that -- with the last line
-	// spent on "+K more (j/k)" -- once scrolling genuinely starts.
+	// can be far larger than the table's real length, and a renderer slicing
+	// the display list on that unclamped number would read past its end.
+	// Clamping makes VisibleRows the whole table whenever everything already
+	// fits, and only less than that -- with the last line spent on
+	// "+K more (j/k)" -- once scrolling genuinely starts.
+	//
+	// The clamp is rows PLUS the headings, because that is how long the table
+	// is: the ladder spends this budget in table rows and the table draws a
+	// heading per section. Clamping to the account count alone would leave the
+	// bottom two accounts of a fleet that fits comfortably reported as
+	// scrolled off a page with room for them.
 	//
 	// The trailer has to be subtracted HERE as well as counted in need above,
 	// and the two are not the same statement. need decides which blocks the
-	// page can afford at all; this decides how many account rows are left once
-	// they are drawn, and a trailer left out of it would be written over the
-	// bottom of the table by rows the ladder had already promised room to.
+	// page can afford at all; this decides how much table is left once they
+	// are drawn, and a trailer left out of it would be written over the bottom
+	// of the table by rows the ladder had already promised room to.
 	l.VisibleRows = height - 1 - l.FooterRows
 	if l.Trailer {
 		l.VisibleRows -= l.TrailerRows
 	}
-	if l.VisibleRows > rows {
-		l.VisibleRows = rows
+	if l.VisibleRows > rows+sectionRows {
+		l.VisibleRows = rows + sectionRows
 	}
 }
 

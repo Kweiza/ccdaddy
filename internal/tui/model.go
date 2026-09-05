@@ -786,11 +786,35 @@ func (a App) dismissed() App {
 
 // scrolled keeps the cursor on a row that is actually drawn.
 //
-// The visible count is asked of the renderer's own window rather than
-// recomputed here: the height ladder's scrolling rung spends its last line on
-// the count of what is off the page, EXCEPT where that would leave no account
-// row at all, and a second spelling of that exception would agree with the
-// first until the day one of them changed.
+// The window is ASKED rather than a capacity computed and the offset derived
+// from it, and that is the whole shape of this function. A count of how many
+// accounts fit stopped being a property of the page the day the table gained
+// section headings: a window that stays inside one section pays for one
+// heading and a window that crosses the boundary pays for two, so the same
+// budget holds one fewer account depending on WHERE it starts.
+//
+// A capacity measured from the top of the list is therefore the capacity of the
+// easiest window rather than of the one the cursor is in, and using it puts the
+// cursor on an account the page does not draw. Measured, at 80x8 on a fleet of
+// four Claude seats and one codex seat: the window from the top holds three
+// accounts, so the offset for the last account comes out at 2 -- and the window
+// at 2 crosses into CODEX, pays for the second heading, and holds two. The
+// cursor pointed at an account that was not on the page.
+//
+// So both offsets below are found by walking, and each walk is one sentence:
+//
+//   - `last` is the SMALLEST offset whose window still reaches the bottom of
+//     the list. Scrolling past it takes rows off the top to leave blank space
+//     at the bottom, which is what the old n-room clamp was for.
+//   - the forward walk stops at the first offset whose window actually holds
+//     the cursor's account. It terminates because an offset equal to the cursor
+//     always draws it -- that account is the first the window packs.
+//
+// The order matters and is not free choice. The pull-back runs first because it
+// only ever makes the window cover MORE of the list -- window(last) starts at
+// or before any offset it replaces and reaches the same end -- so it cannot
+// take the cursor's account off the page. The forward walk then starts from an
+// offset at or below `last` and stops at or before it.
 func scrolled(m Model) Model {
 	n := len(m.Snap.Rows)
 	if n == 0 {
@@ -803,37 +827,43 @@ func scrolled(m Model) Model {
 	if m.Cursor < 0 {
 		m.Cursor = 0
 	}
-
-	// From the top, so this is the window's CAPACITY rather than what it
-	// happens to hold at the current offset.
-	probe := m
-	probe.Top = 0
-	footerWidth := m.Width - 2
-	if footerWidth < 1 {
-		footerWidth = m.Width
-	}
-	runway := m.runwayLines()
-	shown, _ := probe.window(planWithRows(m.Cols, m.Width, m.Height, n,
-		len(m.Snap.Notices) > 0, len(runway) > 0, len(m.footerLines(footerWidth)), len(runway),
-		len(m.summaryLines(m.Width)), 0))
-	room := len(shown)
-	if room < 1 {
-		room = 1
-	}
-
-	if m.Top > m.Cursor {
-		m.Top = m.Cursor
-	}
-	if m.Cursor >= m.Top+room {
-		m.Top = m.Cursor - room + 1
-	}
-	if m.Top > n-room {
-		m.Top = n - room
-	}
 	if m.Top < 0 {
 		m.Top = 0
 	}
+	if m.Top > m.Cursor {
+		m.Top = m.Cursor
+	}
+
+	l := m.plan()
+	last := 0
+	for last < n-1 && !m.drawsAt(l, last, n-1) {
+		last++
+	}
+	if m.Top > last {
+		m.Top = last
+	}
+	for m.Top < m.Cursor && !m.drawsAt(l, m.Top, m.Cursor) {
+		m.Top++
+	}
 	return m
+}
+
+// drawsAt is whether the window starting at offset top draws the account stored
+// at index at.
+//
+// It asks by ListRow.At and never by position, which is what makes the answer
+// survive the grouping: a codex account listed first in the store is drawn
+// below every Claude one, so counting down the window would answer about a
+// different account than the one it was asked about.
+func (m Model) drawsAt(l Layout, top, at int) bool {
+	m.Top = top
+	rows, _ := m.window(l)
+	for _, line := range rows {
+		if line.At == at {
+			return true
+		}
+	}
+	return false
 }
 
 // fit cuts a block to the terminal it is drawn in and says how many rows it

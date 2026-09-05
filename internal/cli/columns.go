@@ -146,7 +146,7 @@ var tableCell = strings.NewReplacer("\n", " ", "\r", " ", "\t", " ")
 // them by the same integer, so a surface whose display list holds anything an
 // account list does not would otherwise be painting row N with account N's
 // verdict.
-func windowCellStyle(pal theme.Palette, display []view.ListRow, firstWindowCol int,
+func windowCellStyle(pal theme.Palette, display []view.ListRow, accountCol, firstWindowCol int,
 	cols view.Columns) func(row, col int) lipgloss.Style {
 
 	return func(row, col int) lipgloss.Style {
@@ -154,6 +154,27 @@ func windowCellStyle(pal theme.Palette, display []view.ListRow, firstWindowCol i
 			return pal.Style(theme.RoleHeader)
 		}
 		if row < 0 || row >= len(display) {
+			return lipgloss.NewStyle()
+		}
+		// A section heading takes the same role as the column headings above
+		// it, which is what makes the two read as one structure. It has to be
+		// answered BEFORE the arms below and not beside them: a heading's
+		// ListRow carries a zero view.Row, so the active arm would ask an
+		// account that is not there and the window arm would band a percentage
+		// nobody read.
+		//
+		// Only the cell HOLDING the text is painted, and every other cell of
+		// that row is left plain. That is not tidiness: a heading row is one
+		// word and a line of empty cells, and a style on an empty cell wraps
+		// its padding in escape bytes, which puts the line's trailing spaces
+		// out of reach of the TrimRight above. The coloured table would then
+		// strip to something the plain table is not -- which is exactly what
+		// TestAColouredTableIsThePlainTableWithColourAddedAndNothingMoved
+		// forbids, and what it caught.
+		if display[row].Header != "" {
+			if col == accountCol {
+				return pal.Style(theme.RoleHeader)
+			}
 			return lipgloss.NewStyle()
 		}
 		r := display[row].Row

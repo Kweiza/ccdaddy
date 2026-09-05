@@ -99,17 +99,14 @@ func TestTheLadderReservesWhatTheSharedColumnsAskFor(t *testing.T) {
 // terminal. So the narrowest width whose ACCOUNT is one wider than the comfort
 // stop is fullAt + 1.
 //
-// TIER is subtracted because the ladder has not adopted it yet: it is in the
-// shared fixed order and not in planWidth's own, which is the one difference
-// between the two sets while the surfaces are still being moved over.
+// TIER is counted, and this is where the ladder adopting it shows up as a
+// number: the two sets are now the same set, so the sum is over the shared
+// list whole and there is no column left to subtract.
 func TestTheLaddersFullWidthIsTheSumOfWhatTheSharedColumnsAskFor(t *testing.T) {
 	block := view.ColumnsOf(fixtureRows())
 
 	want := 2 // the border
 	for _, c := range view.ListColumns(block) {
-		if c.Kind == view.ColumnTier {
-			continue
-		}
 		f, ok := ladderFootprint(c)
 		if !ok {
 			t.Fatalf("%s is a column kind the ladder reserves nothing for", c.Kind)

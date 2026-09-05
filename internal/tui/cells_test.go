@@ -268,17 +268,18 @@ func setNamedWindow(s *usage.Snapshot, name usage.WindowName, w usage.Window) {
 // it was the one nothing asserted. list and status are pinned end to end by
 // their own tests, but those call view.Row.TypeLabel directly and never reached
 // this page's TYPE cell -- so replacing the wrapper's body with
-// r.Account.Kind.String() left this package green, all seven byte-compared
-// golden pages included.
+// r.Account.Kind.String() left this package green, every byte-compared golden
+// page included.
 //
 // There is no wrapper left to break: the cell is view.Row.ListCell now. What
 // can still go wrong is the wiring, and it is what this asks about -- a TYPE
 // column drawn from the wrong kind, or a page that stopped drawing TYPE at all,
 // answers something other than "codex" here.
 //
-// A unit test rather than a fixture account: the golden pages compare bytes,
-// and a codex row in fixtureRows() would churn all seven of them for a
-// property that belongs to one cell.
+// A UNIT test, kept even though fixtureRows() now carries a codex seat and the
+// golden pages draw its TYPE cell. The two ask different questions: a page
+// compares as one string and goes red for any reason at all, so it can tell you
+// that something moved and never that this cell is the thing that moved.
 func TestTheTypeCellCallsACodexRowCodex(t *testing.T) {
 	codex := view.Row{Account: store.Account{
 		Provider: provider.Codex,

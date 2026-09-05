@@ -139,7 +139,16 @@ func TestListMarksTheActiveAccount(t *testing.T) {
 	}
 
 	_, out, _, _ := runRoot(t, "status")
-	for _, line := range strings.Split(out, "\n") {
+	// The TABLE's rows and not every line that names the account: the summary
+	// block above spells the live seat out as "Active (Claude): b@example.com",
+	// which is three whitespace-separated fields and would be read here as an
+	// account row whose marker column says "Active". The blank line under the
+	// summary is the separator, and everything past it is the table.
+	_, table, ok := strings.Cut(out, "\n\n")
+	if !ok {
+		t.Fatalf("no blank separator between the summary block and the table:\n%s", out)
+	}
+	for _, line := range strings.Split(table, "\n") {
 		fields := strings.Fields(ansi.Strip(line))
 		if strings.Contains(line, "b@example.com") && len(fields) >= 3 && fields[0] != "*" {
 			t.Fatalf("the live account is not marked:\n%s", out)

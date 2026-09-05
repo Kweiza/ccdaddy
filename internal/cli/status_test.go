@@ -228,7 +228,7 @@ func TestStatusHeadingRowIsExactlyTheSharedColumnNames(t *testing.T) {
 	want := []string{
 		"IDX", "ACCOUNT", "TYPE", "TIER",
 		"5H", "7D", "7D OPUS", "5H IN", "7D IN", "7D OPUS IN",
-		"AGE",
+		"STATE", "AGE",
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("heading row = %q, want %q\nfrom:\n%s", got, want, stdout)
@@ -243,13 +243,69 @@ func TestStatusHeadingRowIsExactlyTheSharedColumnNames(t *testing.T) {
 		{1, view.AccountHeader},
 		{2, view.TypeHeader},
 		{3, view.TierHeader},
-		{10, view.AgeHeader},
+		{10, view.StateHeader},
+		{11, view.AgeHeader},
 	} {
 		if want[c.at] != c.shared {
 			t.Errorf("column %d is pinned here as %q, but internal/view now spells it %q: "+
 				"either `ccdad status` stopped reading the shared list or the rename is "+
 				"unfinished", c.at, want[c.at], c.shared)
 		}
+	}
+}
+
+// The table is SECTIONED by provider, and both headings draw whatever the fleet
+// holds -- including over a section with no rows in it.
+//
+// The empty section is the whole point on this surface. A machine with Claude
+// accounts and no codex one is the common case, and a table that drew only the
+// heading it had rows for would render exactly as a build that has never heard
+// of Codex -- which is precisely what the reader is trying to find out.
+//
+// Both are read at the ACCOUNT column's own offset rather than by Contains,
+// because that is what makes them table ROWS: a line printed above the table
+// would satisfy any substring check and would sit flush left, out of line with
+// the addresses it is a heading for.
+func TestStatusSectionsTheTableAndDrawsBothHeadings(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	seedAccount(t, "uuid-a", "work@example.com")
+
+	code, stdout, _, top := runRoot(t, "status")
+	if code != ExitOK {
+		t.Fatalf("exit %d, want 0 (%s)\n%s", code, top, stdout)
+	}
+
+	lines := strings.Split(stdout, "\n")
+	head := -1
+	for i, l := range lines {
+		if strings.Contains(l, view.AccountHeader) && strings.Contains(l, view.IdxHeader) {
+			head = i
+			break
+		}
+	}
+	if head < 0 {
+		t.Fatalf("no column heading row:\n%s", stdout)
+	}
+	at := strings.Index(lines[head], view.AccountHeader)
+
+	// Claude first, then Codex, in the order internal/view groups them, and
+	// each one alone on its row.
+	want := []string{view.ClaudeSection, view.CodexSection}
+	var got []string
+	for _, line := range lines[head+1:] {
+		fields := strings.Fields(line)
+		if len(fields) != 1 || (fields[0] != view.ClaudeSection && fields[0] != view.CodexSection) {
+			continue
+		}
+		got = append(got, fields[0])
+		if i := strings.Index(line, fields[0]); i != at {
+			t.Errorf("%s starts at column %d and ACCOUNT at %d; the heading is not in the account column",
+				fields[0], i, at)
+		}
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("the table's section headings are %q, want %q\nfrom:\n%s", got, want, stdout)
 	}
 }
 
@@ -1496,7 +1552,7 @@ func TestEveryLabelledLineFitsTheTerminalItIsPrintedOn(t *testing.T) {
 	block := labelBlockOf(t, wide)
 	// Each label named explicitly. A block that stopped printing one of these
 	// would otherwise quietly shrink what this test covers.
-	for _, label := range []string{"Daemon:", "Update:", "Active:", "Strategy:", "Current:", "Runway:"} {
+	for _, label := range []string{"Daemon:", "Update:", "Active (Claude):", "Strategy:", "Current:", "Runway:"} {
 		if !strings.HasPrefix(strings.Join(block, "\n"), label) && !strings.Contains(strings.Join(block, "\n"), "\n"+label) {
 			t.Fatalf("no %s line in the block, so this test no longer covers it:\n%s", label, wide)
 		}
@@ -1584,15 +1640,16 @@ func proseOf(block []string) []string {
 // only that one.
 //
 // So this asks the structural question, where no fixture gets a vote: every
-// Fprintln into out in this function folds, and there are eight of them. A
-// ninth line turns this red on purpose. That is the whole mechanism -- the
+// Fprintln into out in this function folds, and there are six of them. A
+// seventh line turns this red on purpose. That is the whole mechanism -- the
 // paragraph in status.go cannot make anybody read it, and this can.
 //
-// Eight and not the eleven this counted before: the four trailer lines under
-// the table are printed by ONE loop over view.TrailerLines now, so the sites
-// went down while the lines did not. That is what the count is for -- it
-// cannot be moved without being argued, and the fold it guards is still on
-// every line, because the loop that replaced the four folds what it prints.
+// Six and not the eleven this counted before there were loops here. Two loops
+// replaced five sites: view.TrailerLines prints the block under the table, and
+// Snapshot.SummaryLines prints Active, Strategy and Current -- which is now one
+// line PER PROVIDER, so that block grew a line while losing two sites. That is
+// what the count is for. It cannot be moved without being argued, and the fold
+// it guards is still on every line, because each loop folds what it prints.
 //
 // The width EXPRESSION is pinned too, by source rather than by value.
 // TestTheFoldMeasuresTheFileAndNotTheWriterItPaintsThrough holds that half at
@@ -1603,7 +1660,7 @@ func TestEveryLineOfTheStatusBlockFoldsAtTheFilesWidth(t *testing.T) {
 	const (
 		file      = "status.go"
 		fn        = "renderStatus"
-		wantSites = 8
+		wantSites = 6
 		wantWidth = "outWidth(cmd.OutOrStdout())"
 	)
 

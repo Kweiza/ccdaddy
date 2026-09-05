@@ -575,17 +575,22 @@ func TestAHoverTableWithNothingReadableStillPutsAgeUnderAge(t *testing.T) {
 		t.Fatalf("exit = %d (%s)", code, top)
 	}
 	lines := strings.Split(stdout, "\n")
-	head := -1
+	head, at := -1, -1
 	for i, l := range lines {
-		if strings.Contains(l, "QUOTA") && strings.Contains(l, "AGE") {
+		switch {
+		case head < 0 && strings.Contains(l, "QUOTA") && strings.Contains(l, "AGE"):
 			head = i
-			break
+		case strings.Contains(l, "work@example.com"):
+			at = i
 		}
 	}
-	if head < 0 || head+1 >= len(lines) {
+	if head < 0 || at < 0 {
 		t.Fatalf("no quota header with a row under it:\n%s", stdout)
 	}
-	row := lines[head+1]
+	// The row is found by its ADDRESS and not by stepping one line down from
+	// the heading: the line under a column heading is the CLAUDE section
+	// heading, whose cells are all empty by design.
+	row := lines[at]
 	// The offsets are the HEADER's, which is what makes this an alignment
 	// question rather than a count of fields: the ACCOUNT cell holds an
 	// address, so splitting the row on whitespace would answer about spaces

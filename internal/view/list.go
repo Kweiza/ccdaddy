@@ -528,13 +528,20 @@ func Sections(rows []Row) []Section {
 // ListRows is the sections as one drawable slice: each heading, then that
 // section's accounts, in section order.
 //
-// An EMPTY section contributes nothing, heading included, and that is the one
-// place this disagrees with Sections above. The two are answering different
-// questions. Sections is the grouping, where both buckets always exist so that
-// nothing can be lost between them; this is the drawing, and a heading over no
-// rows is a claim about accounts that are not there. A machine with one
-// provider therefore gets one heading -- which is still a heading, and still
-// says which provider its rows belong to.
+// EVERY heading is drawn, including the one over a section with no rows in it,
+// and that is a decision rather than a fallout of the loop being simple. A
+// heading over nothing says the provider exists and this machine has no account
+// on it -- which is the question a reader of a one-provider fleet is most
+// likely to be asking, and the answer they would otherwise have to know ccdad's
+// history to infer. The alternative, drawing a heading only where there are
+// rows under it, makes the page silent about exactly the case the sections were
+// added for: a machine with four Claude accounts and no Codex one renders
+// identically to a build that has never heard of Codex.
+//
+// The cost is two rows on a page that is short of them, and it is paid at the
+// top of the height ladder like any other block rather than hidden: the count
+// is FIXED at one per section, so a surface can reserve for it without knowing
+// the fleet.
 func ListRows(secs []Section) []ListRow {
 	n := 0
 	for _, s := range secs {
@@ -542,9 +549,6 @@ func ListRows(secs []Section) []ListRow {
 	}
 	out := make([]ListRow, 0, n)
 	for _, s := range secs {
-		if len(s.Rows) == 0 {
-			continue
-		}
 		out = append(out, ListRow{Header: s.Header, At: -1})
 		out = append(out, s.Rows...)
 	}

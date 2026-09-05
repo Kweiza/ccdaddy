@@ -10,26 +10,43 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// The seven pages, by the size that produced each. The size is in the name
+// The eight pages, by the size that produced each. The size is in the name
 // because it is the first thing a reader needs and the only thing that makes
 // two of them different.
+//
+// The notice page moved from 80x21 to 80x23 and the trailer page is new. Both
+// are the same fact about the same commit: the table grew two section headings
+// and the fleet grew a fifth account and a second Active line, so a page that
+// used to have room for a notice at 21 rows does not, and a page that draws the
+// trailer needs more height than any fixture here had. A fixture whose size no
+// longer produces the rung it is named for pins the absence and calls it the
+// presence, so the size in the name moves with the rung.
+//
+// 23 and not 22, which is where the notice first survives. 22 is where it
+// survives INSTEAD of the trailer, and the two then trade places when the
+// notice is taken away -- so a page with no notice would not be that page minus
+// one line, and TestAnEmptyNoticesRendersNoLineAndNoGap, which builds its
+// expectation by deleting that line, would be asserting against a page the
+// renderer never draws. At 23 both blocks fit and the note line is the only
+// difference between the two.
 const (
 	goldenFullPage     = "full-page-113x26.txt"
+	goldenTrailer      = "trailer-113x34.txt"
 	goldenDesignTarget = "design-target-80x24.txt"
 	goldenShort        = "short-80x13.txt"
 	goldenNarrow       = "narrow-56x10.txt"
 	goldenCollapsed    = "collapsed-43x9.txt"
-	goldenNotice       = "notice-80x21.txt"
+	goldenNotice       = "notice-80x23.txt"
 	goldenZeroAccounts = "zero-accounts-80x13.txt"
 )
 
 // update rewrites the pages under testdata from what the renderer produced.
 //
-// Regeneration had no mechanism before this: the seven pages were raw string
+// Regeneration had no mechanism before this: the pages were raw string
 // literals in a test file, column-aligned by hand, and the only way to change
 // one was to print the page and paste it back between two backticks. That is
 // not a procedure, it is a dare -- and the change that motivated this one
-// touches all seven at once.
+// touched all of them at once.
 //
 //	go test ./internal/tui -update -count=1
 //
@@ -52,7 +69,7 @@ var wroteGolden = map[string]string{}
 // checkGolden compares a rendered page against the file that holds it.
 //
 // The page is stripped of escape sequences before the comparison, and on the
-// seven pages that reach here the strip still removes nothing -- but the reason
+// eight pages that reach here the strip still removes nothing -- but the reason
 // has moved, and the difference is the whole of what a reader needs to know.
 // It is no longer that this package emits no escape byte: it emits them on five
 // screens now, which TestTheNoneThemeEmitsNoEscapeBytesAndTheDarkThemeDoes
@@ -65,7 +82,7 @@ var wroteGolden = map[string]string{}
 // The strip stays, and it is not dead weight. It is what stops that narrow fact
 // from being load-bearing: a fixture rebuilt under any other palette would pin
 // the exact truecolor spelling of every role into testdata, and a palette
-// change nobody meant to review would then arrive as seven unreadable diffs.
+// change nobody meant to review would then arrive as eight unreadable diffs.
 // Stripping is what lets the goldens go on answering the question they were
 // written for -- where does every character sit -- and leaves which role was
 // painted on which cell to the tests that ask that directly.
@@ -116,14 +133,14 @@ func goldenWant(t *testing.T, name, got string) string {
 	return got
 }
 
-// The seven pages, checked against the LADDER instead of against the renderer
+// The eight pages, checked against the LADDER instead of against the renderer
 // that drew them.
 //
-// This is the assertion that closes the hole -update leaves open. Six of these
-// files are transcriptions of what the renderer produced, so checkGolden on its
-// own is a renderer agreeing with itself: regenerate under a bug and the bug is
-// written to disk and blessed, with nothing between that and a release but a
-// human reading a diff. Every number below is read off the two ladders in
+// This is the assertion that closes the hole -update leaves open. Seven of
+// these files are transcriptions of what the renderer produced, so checkGolden
+// on its own is a renderer agreeing with itself: regenerate under a bug and the
+// bug is written to disk and blessed, with nothing between that and a release
+// but a human reading a diff. Every number below is read off the two ladders in
 // layout.go -- which rung drops the border, which drops the STATE column, which
 // collapses the gauge -- and off the fixture pool's own shape, so a golden that
 // recorded the wrong page fails here even while matching the renderer perfectly.
@@ -133,30 +150,51 @@ func goldenWant(t *testing.T, name, got string) string {
 //   - FRAME is all-or-nothing and never a count in between. saveBorder is a
 //     single rung of the height ladder, and a page that kept its border draws a
 //     rule on every one of its rows: the two edge rows from the corners and the
-//     horizontal rule, every content row from the two vertical ones. 56x10 and
-//     43x9 are below that rung; the four 80- and 113-column pages are above it.
-//   - GAUGE is three rows on every page that draws the bar, because the fixture
-//     pool is four accounts of which exactly three have a reading. The fourth
-//     is unreadable and renders as a bare "?" with no bracket and no bar, which
-//     is usedCell's absence rule and not a rounding. 43x9 sits below collapseAt
-//     where USED is the bare percentage, and the zero-accounts page has no
-//     account row to draw one on.
-//   - STATE is four rows wherever view.ColumnState survived the WIDTH ladder,
-//     one per account. 56 and 43 columns have both dropped that column by then;
-//     the zero-accounts page keeps the heading and has nothing under it.
+//     horizontal rule, every content row from the two vertical ones. THREE
+//     pages are below that rung now rather than two. 56x10 and 43x9 always
+//     were; 80x13 joined them, because the table under it grew two section
+//     headings and a fifth account and the summary above it grew a second
+//     Active line, which is four rows the ladder has to find at a height that
+//     had none to spare. The 113s, 80x24 and the notice page stay above it.
+//
+//   - GAUGE is 0 everywhere. The gauge is retired: it was seventeen columns of
+//     ONE window, and which window was the derivation this table stopped
+//     making. The row of percentages is the gauge, read across, and it draws no
+//     glyph from either fill cell.
+//
+//   - STATE is one row per ACCOUNT ROW DRAWN, wherever view.ColumnState
+//     survived the WIDTH ladder -- five now, not four, because the fixture pool
+//     gained a codex seat whose serving state takes the active marker.
+//
+//     "Drawn" is the word that has to be checked rather than assumed, and the
+//     section headings are why: they are table rows, so a page whose budget the
+//     headings ate would show four accounts and a count, and would report four
+//     here while looking entirely reasonable. It has not happened on any of
+//     these five. VisibleRows is clamped to rows+sectionRows, which is seven,
+//     and every one of them plans at or above it: 113x34 has 31 before the
+//     clamp, 113x26 has 23, 80x24 has 20, the notice page has 19, and 80x13 has
+//     10 with no trailer to pay for. 56x10 lands on exactly 7 and 43x9 on 5 --
+//     the one page here that scrolls -- and both have dropped STATE at their
+//     width anyway, so neither can report a marker either way.
+//
 //   - WIDTH is an upper bound. Framed pages fill it by construction; frameless
 //     pages need not manufacture trailing spaces after the old combined
 //     summary line was split into short, independent facts.
+//
 //   - LINES is within the height the page was planned for, which is the whole
 //     of what the height ladder promises.
-//   - ASCII says the entire file is 7-bit, and only the 43x9 page is. That rung
-//     has dropped the frame, collapsed the gauge and dropped the STATE column;
-//     the chrome above it is dropped by the ladder at this height, so there is
-//     no art vocabulary at stake either; the cut cue and the two scroll
-//     marks are ASCII in both sets; and no page here claims a forecast, so the
-//     one line that would carry a computed value's own U+00B7 is never drawn.
-//     It is a stronger claim than the three counts above precisely because it
-//     catches a character from a class nobody thought to enumerate.
+//
+//   - ASCII says the entire file is 7-bit, and the two narrowest pages are.
+//     Both rungs have dropped the frame and the STATE column, both are below
+//     the height at which any chrome survives so there is no art vocabulary at
+//     stake, and no page here claims a forecast, so the one line that would
+//     carry a computed value's own U+00B7 is never drawn. 43x9 now draws a
+//     scroll mark for the first time -- its five-row budget cannot hold seven
+//     table rows once the headings are among them -- and the claim survives it
+//     because MoreAbove and MoreBelow are "^" and "v" in BOTH glyph sets, the
+//     same reason the cut cue is "..". It is a stronger claim than the counts
+//     above precisely because it catches a character from a class nobody
+//     thought to enumerate.
 //
 // The classes are spelled from UnicodeGlyphs rather than as literals, and that
 // does not weaken anything: WHICH characters the set holds is pinned by value
@@ -176,20 +214,22 @@ func TestEveryGoldenPageCarriesTheGlyphClassesItsRungAllows(t *testing.T) {
 		stateRows     int
 		sevenBitASCII bool
 	}{
-		// gaugeRows is 0 on every page now. The gauge is retired: it was
-		// seventeen columns of ONE window, and which window was the derivation
-		// this table stopped making -- three windows would be fifty-one columns
-		// of bar, and one bar would be the derived window back under a new
-		// name. The row of percentages is the gauge, read across, and it draws
-		// no glyphs at all.
-		//
-		// narrow-56x10 is now entirely 7-bit ASCII for the same reason and for
-		// no other: it carries no state markers at its rung, and the gauge was
-		// the only other non-ASCII thing on it.
-		{goldenFullPage, 113, 26, true, 0, 4, false},
-		{goldenDesignTarget, 80, 24, true, 0, 4, false},
-		{goldenShort, 80, 13, true, 0, 4, false},
-		{goldenNotice, 80, 21, true, 0, 4, false},
+		// The five rows carrying a state marker are the five accounts, and the
+		// fifth is the codex seat: StateServing takes the ACTIVE glyph, which
+		// stateClass holds, so it counts exactly as the other four do. The
+		// section headings themselves carry none -- every cell of a heading row
+		// but ACCOUNT is empty, STATE included.
+		{goldenTrailer, 113, 34, true, 0, 5, false},
+		{goldenFullPage, 113, 26, true, 0, 5, false},
+		{goldenDesignTarget, 80, 24, true, 0, 5, false},
+		{goldenNotice, 80, 23, true, 0, 5, false},
+		// 80x13 has lost its frame. Its five state markers are what makes it
+		// non-ASCII on their own now, where before the frame was carrying that
+		// claim as well.
+		{goldenShort, 80, 13, false, 0, 5, false},
+		// The zero-accounts page keeps every column heading and has nothing
+		// under them but the two section headings and one sentence about the
+		// store, none of which is an account.
 		{goldenZeroAccounts, 80, 13, true, 0, 0, false},
 		{goldenNarrow, 56, 10, false, 0, 0, true},
 		{goldenCollapsed, 43, 9, false, 0, 0, true},
