@@ -22,13 +22,15 @@ import (
 // longer produces the rung it is named for pins the absence and calls it the
 // presence, so the size in the name moves with the rung.
 //
-// 23 and not 22, which is where the notice first survives. 22 is where it
-// survives INSTEAD of the trailer, and the two then trade places when the
-// notice is taken away -- so a page with no notice would not be that page minus
-// one line, and TestAnEmptyNoticesRendersNoLineAndNoGap, which builds its
-// expectation by deleting that line, would be asserting against a page the
-// renderer never draws. At 23 both blocks fit and the note line is the only
-// difference between the two.
+// 23 and not 22, and the reason for it is no longer the one it was. The trailer
+// is given up ahead of the notice at every height now -- its rung sits above the
+// family art and the note's below it -- so the two never trade places and 22 is
+// simply where the note itself gives. What 23 buys is that the fixture is not
+// standing ON its own rung: a page pinned one row above the height where its
+// block disappears is one grown block away from recording the absence and
+// calling it the presence. It costs nothing, because the ladder has decided
+// every block by 22 and does not move again until 29, where the trailer comes
+// back: the same 22 lines are drawn at every height in between.
 const (
 	goldenFullPage     = "full-page-113x26.txt"
 	goldenTrailer      = "trailer-113x34.txt"
@@ -151,11 +153,21 @@ func goldenWant(t *testing.T, name, got string) string {
 //     single rung of the height ladder, and a page that kept its border draws a
 //     rule on every one of its rows: the two edge rows from the corners and the
 //     horizontal rule, every content row from the two vertical ones. THREE
-//     pages are below that rung now rather than two. 56x10 and 43x9 always
-//     were; 80x13 joined them, because the table under it grew two section
-//     headings and a fifth account and the summary above it grew a second
-//     Active line, which is four rows the ladder has to find at a height that
-//     had none to spare. The 113s, 80x24 and the notice page stay above it.
+//     pages are below that rung. 56x10 and 43x9 always were; 80x13 joined them
+//     when the table grew two section headings and a fifth account and the
+//     summary above it grew a second Active line, which is four rows the ladder
+//     had to find at a height that had none to spare.
+//
+//     80x13 does NOT get its frame back now that the headings have a rung of
+//     their own, and the arithmetic says why rather than the page. With every
+//     block on, that page needs 34 rows for this fleet. The tagline, the blank
+//     separators, the trailer and the family art take it to 21, the wordmark to
+//     17 -- and the frame's rung is reached at 17 against a terminal of 13, so
+//     the frame goes and 15 is still two too many. The headings' rung is the
+//     next one down and it lands the page on exactly 13. So the two rows the
+//     headings hand back are spent on the title line and the summary block, one
+//     rung further down again, and not on the frame that had already gone. The
+//     113s, 80x24, the notice page and the empty store stay above the rung.
 //
 //   - GAUGE is 0 everywhere. The gauge is retired: it was seventeen columns of
 //     ONE window, and which window was the derivation this table stopped
@@ -170,12 +182,16 @@ func goldenWant(t *testing.T, name, got string) string {
 //     section headings are why: they are table rows, so a page whose budget the
 //     headings ate would show four accounts and a count, and would report four
 //     here while looking entirely reasonable. It has not happened on any of
-//     these five. VisibleRows is clamped to rows+sectionRows, which is seven,
-//     and every one of them plans at or above it: 113x34 has 31 before the
-//     clamp, 113x26 has 23, 80x24 has 20, the notice page has 19, and 80x13 has
-//     10 with no trailer to pay for. 56x10 lands on exactly 7 and 43x9 on 5 --
-//     the one page here that scrolls -- and both have dropped STATE at their
-//     width anyway, so neither can report a marker either way.
+//     these five, and NONE of the eight scrolls. The clamp is the table's own
+//     length -- rows plus the headings on a page that kept them, rows alone on
+//     one that gave them up -- so it is 7 on the four pages that draw headings
+//     and 5 on the three that do not, and each has at least that much budget:
+//     113x34 has 31 before the clamp, 113x26 has 24, 80x24 has 21, the notice
+//     page has 20, and 80x13 has 10 against a table of 5. 56x10 has 7 and 43x9
+//     lands on exactly 5, which is the whole fleet -- 43x9 was the one page here
+//     that scrolled, and it stopped when the headings' rung handed it back the
+//     two rows that were pushing two accounts off. Both have dropped STATE at
+//     their width anyway, so neither can report a marker either way.
 //
 //   - WIDTH is an upper bound. Framed pages fill it by construction; frameless
 //     pages need not manufacture trailing spaces after the old combined
@@ -188,13 +204,12 @@ func goldenWant(t *testing.T, name, got string) string {
 //     Both rungs have dropped the frame and the STATE column, both are below
 //     the height at which any chrome survives so there is no art vocabulary at
 //     stake, and no page here claims a forecast, so the one line that would
-//     carry a computed value's own U+00B7 is never drawn. 43x9 now draws a
-//     scroll mark for the first time -- its five-row budget cannot hold seven
-//     table rows once the headings are among them -- and the claim survives it
+//     carry a computed value's own U+00B7 is never drawn. Neither scrolls, so
+//     neither draws a scroll mark -- and if one did the claim would survive it,
 //     because MoreAbove and MoreBelow are "^" and "v" in BOTH glyph sets, the
-//     same reason the cut cue is "..". It is a stronger claim than the counts
-//     above precisely because it catches a character from a class nobody
-//     thought to enumerate.
+//     same reason the cut cue that DOES appear on both of these pages is "..".
+//     It is a stronger claim than the counts above precisely because it catches
+//     a character from a class nobody thought to enumerate.
 //
 // The classes are spelled from UnicodeGlyphs rather than as literals, and that
 // does not weaken anything: WHICH characters the set holds is pinned by value
@@ -223,13 +238,17 @@ func TestEveryGoldenPageCarriesTheGlyphClassesItsRungAllows(t *testing.T) {
 		{goldenFullPage, 113, 26, true, 0, 5, false},
 		{goldenDesignTarget, 80, 24, true, 0, 5, false},
 		{goldenNotice, 80, 23, true, 0, 5, false},
-		// 80x13 has lost its frame. Its five state markers are what makes it
-		// non-ASCII on their own now, where before the frame was carrying that
-		// claim as well.
+		// 80x13 has lost its frame and its section headings, and has kept the
+		// title line and every fact in the summary. Its five state markers are
+		// what makes it non-ASCII on their own now, where before the frame was
+		// carrying that claim as well.
 		{goldenShort, 80, 13, false, 0, 5, false},
 		// The zero-accounts page keeps every column heading and has nothing
 		// under them but the two section headings and one sentence about the
-		// store, none of which is an account.
+		// store, none of which is an account. It is the same 13 rows as the page
+		// above and keeps its frame and its headings where that one gives both
+		// up, which is the fleet and not the height: four account rows fewer is
+		// four rows the ladder never has to find.
 		{goldenZeroAccounts, 80, 13, true, 0, 0, false},
 		{goldenNarrow, 56, 10, false, 0, 0, true},
 		{goldenCollapsed, 43, 9, false, 0, 0, true},

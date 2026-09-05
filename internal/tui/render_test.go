@@ -50,10 +50,11 @@ const fixtureVersion = "v0.2.0"
 //     where WIDENING a terminal narrowed the address column, and holding
 //     ACCOUNT at its comfort width is the fix for it.
 //  3. THE REFERENCE IS STALE ON THE HEIGHT-DROP ORDER. The ladder spends the
-//     tagline and blank separators before the family art. Farther down it
-//     drops the trailer, the frame and the title, and the summary block is the
-//     last thing to give -- which at 80x13, 56x10 and 43x9 it now does, on a
-//     fleet of five accounts under two section headings.
+//     tagline and the blank separators, then the trailer, then the family art.
+//     Farther down it drops the frame, then the section headings, then the
+//     title, and the summary block is the last thing to give -- which at 56x10
+//     and 43x9 it does, on a fleet of five accounts. At 80x13 the headings are
+//     what gives and the facts under them stay.
 //  4. THE FIGURE BLOCK IS ANCHORED, NOT INDENTED. The chrome transcribes the
 //     block against its own leftmost content across all six rows rather than
 //     against the reference's first column, so it sits one column further
@@ -82,11 +83,11 @@ func TestThePageRendersByteForByteAtEveryLadderRung(t *testing.T) {
 		file          string
 	}{
 		{"every block, trailer included", 113, 34, goldenTrailer},
-		{"every column the ladder fits, art spent", 113, 26, goldenFullPage},
-		{"the design target, art spent", 80, 24, goldenDesignTarget},
-		{"chrome and summary gone, the table left", 80, 13, goldenShort},
+		{"every column the ladder fits, legend and art spent", 113, 26, goldenFullPage},
+		{"the design target, legend and art spent", 80, 24, goldenDesignTarget},
+		{"the frame and the headings gone, the facts kept", 80, 13, goldenShort},
 		{"the frame dropped", 56, 10, goldenNarrow},
-		{"the block collapsed and the table scrolling", 43, 9, goldenCollapsed},
+		{"the block collapsed and the headings spent", 43, 9, goldenCollapsed},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			checkGolden(t, tc.file, fixtureModel(tc.width, tc.height).Body())
@@ -136,15 +137,15 @@ func TestThePageNeverScrollsHorizontally(t *testing.T) {
 		prep func(*Model)
 	}{
 		{"every block, trailer included", 113, 34, nil},
-		{"every column the ladder fits, art spent", 113, 26, nil},
-		{"the design target, art spent", 80, 24, nil},
+		{"every column the ladder fits, legend and art spent", 113, 26, nil},
+		{"the design target, legend and art spent", 80, 24, nil},
 		{"one notice", 80, 23, func(m *Model) {
 			m.Snap.Notices = []string{"hover thresholds could not be read"}
 		}},
-		{"chrome and summary gone, the table left", 80, 13, nil},
+		{"the frame and the headings gone, the facts kept", 80, 13, nil},
 		{"zero accounts", 80, 13, func(m *Model) { m.Snap.Rows = nil }},
 		{"the frame dropped", 56, 10, nil},
-		{"the block collapsed and the table scrolling", 43, 9, nil},
+		{"the block collapsed and the headings spent", 43, 9, nil},
 		{"the smallest page that still renders", 35, 3, nil},
 	} {
 		m := fixtureModel(tc.w, tc.h)
@@ -217,17 +218,18 @@ func TestTheScrollingRungNamesWhatIsOffThePage(t *testing.T) {
 	}
 }
 
-// With room for exactly one row the trade inverts TWICE and the account wins
-// both times: over the count, and over its own section heading. A page showing
-// a provider's name, a count of four and no accounts at all has stopped being a
-// dashboard -- and j/k, which the count advertises, would have had nothing to
-// move through.
+// With room for exactly one row the account wins over the count. A page showing
+// a count of four and no accounts at all has stopped being a dashboard -- and
+// j/k, which the count advertises, would have had nothing to move through.
 //
-// The heading is the half that is easy to lose. The drawable list opens with
-// CLAUDE, so the naive window -- slice the display rows and take the first one
-// -- puts a provider's name on the page and no account at all, which is the one
-// arrangement this rung exists to refuse. That is why the assertion is on the
-// ADDRESS and not merely on the absence of a count.
+// It wins over a section heading too, and at this size that is now the LADDER's
+// doing rather than the window's: a page this short gave the headings up rungs
+// ago, so the list under it is accounts and there is no heading left to take the
+// only line. The assertion stays, because what it pins is the page -- one line,
+// and an address on it -- and it would catch either mechanism failing. It is
+// made on the ADDRESS and not merely on the absence of a count for that reason:
+// a window that put a provider's name on the page and no account at all is the
+// one arrangement this rung exists to refuse, wherever it came from.
 func TestWithRoomForOneRowTheAccountWinsAndTheCountGoes(t *testing.T) {
 	body := fixtureModel(35, 5).Body()
 	lines := strings.Split(body, "\n")
@@ -318,9 +320,74 @@ func TestAnEmptyStoreDrawsBothHeadingsAndSaysItOnce(t *testing.T) {
 	}
 }
 
+// A page below the headings' rung draws no heading and still draws every
+// account, in the order the grouping put them in.
+//
+// The order is the half a check for the absent words would miss. Losing the
+// headings is losing the LABELS, and the drawable list is filtered rather than
+// rebuilt from Snap.Rows, so the codex seat stays at the bottom where the
+// heading used to be. A renderer that went back to the store's own order would
+// move an account up the page as the terminal got shorter, and would do it at
+// exactly the heights where nothing is left on the page to explain the move.
+//
+// 80x13 is the shortest page that keeps every account, which is what makes it
+// the one to ask: the two lines the headings were spending are the two that pay
+// for the title and the summary block one rung further down.
+func TestAPageBelowTheHeadingsRungKeepsEveryAccountAndItsOrder(t *testing.T) {
+	m := fixtureModel(80, 13)
+	if l := m.plan(); l.Sections {
+		t.Fatal("80x13 still plans its section headings, so this asks nothing")
+	}
+	// The codex seat is moved to the FRONT of the store, which is what makes the
+	// order claim measurable at all: the fixture pool already lists it last, so
+	// against that pool a page reading Snap.Rows and one reading the grouping
+	// draw the same five lines. Moved here, the grouping still puts it under
+	// every Claude account and the store no longer agrees.
+	stored := m.Snap.Rows
+	m.Snap.Rows = append([]view.Row{stored[len(stored)-1]}, stored[:len(stored)-1]...)
+	body := m.Body()
+	for _, gone := range []string{view.ClaudeSection, view.CodexSection} {
+		if strings.Contains(body, gone) {
+			t.Errorf("the page draws %s at a height that gave the headings up:\n%s", gone, body)
+		}
+	}
+	// From the column heading down, so the Active lines above the table -- which
+	// name two of these accounts in a fixed order of their own -- cannot answer
+	// for the rows.
+	lines := strings.Split(body, "\n")
+	head := 0
+	for i, line := range lines {
+		if strings.Contains(line, view.AccountHeader) && strings.Contains(line, view.IdxHeader) {
+			head = i + 1
+			break
+		}
+	}
+	at := 0
+	for _, r := range fixtureRows() {
+		name, _, _ := strings.Cut(r.Account.Email, "@")
+		row := -1
+		for i, line := range lines[head:] {
+			if strings.Contains(line, name) {
+				row = i
+				break
+			}
+		}
+		if row < 0 {
+			t.Fatalf("%s is not in the table:\n%s", r.Account.Email, body)
+		}
+		if row < at {
+			t.Errorf("%s is drawn above the account before it; the grouping's order did not survive:\n%s",
+				r.Account.Email, body)
+		}
+		at = row
+	}
+}
+
 // A fleet with one provider still gets BOTH headings, which is the case the
 // sections were added for: a machine with four Claude accounts and no codex one
-// would otherwise render exactly as a build that has never heard of Codex.
+// would otherwise render exactly as a build that has never heard of Codex. It
+// is asked at 113x34, which is above the headings' rung: what that rung decides
+// is whether a terminal has room for the pair, never how many there are.
 func TestAOneProviderFleetStillDrawsTheOtherProvidersHeading(t *testing.T) {
 	m := fixtureModel(113, 34)
 	m.Snap.Rows = m.Snap.Rows[:4] // the four Claude accounts
@@ -335,25 +402,31 @@ func TestAOneProviderFleetStillDrawsTheOtherProvidersHeading(t *testing.T) {
 // capacity. Both are what a reader can move the cursor to, and a section
 // heading is not one.
 //
-// 43x9 is the rung that can tell the two apart: its budget is five table rows,
-// one is spent on the count and one on the CLAUDE heading, so three accounts of
-// five are drawn. Counting display rows instead would say three are missing --
-// seven lines less the four drawn -- and would promise a press of j that does
-// not exist.
+// It is asked of window and not of a page, and the reason is the sections rung
+// rather than a preference for unit tests. The rung fires while the ladder is
+// still trying to fit the whole table, so every page that reaches the scrolling
+// one has already handed its headings back and its display list is accounts --
+// which makes the two counts agree on every page this package can draw, and
+// leaves nothing on any of them able to tell a correct count from one that
+// included the headings. window takes a Layout rather than a height exactly so
+// the question can still be put to it.
+//
+// Five table rows over a list that HAS its headings is the case that tells them
+// apart: one line is spent on the count and one on the CLAUDE heading, so three
+// accounts of five are drawn. Counting display rows instead would say three are
+// missing -- seven lines less the four drawn -- and would promise a press of j
+// that does not exist.
 func TestTheCountOfHiddenRowsIsInAccountsAndNotInTableRows(t *testing.T) {
-	body := fixtureModel(43, 9).Body()
-	if !strings.Contains(body, "+2 more") {
-		t.Fatalf("the count is not the two accounts that are off the page:\n%s", body)
+	m := fixtureModel(43, 9)
+	shown, more := m.window(Layout{Sections: true, VisibleRows: 5})
+	if more != 2 {
+		t.Errorf("the window says %d accounts are off the page, want the 2 it did not draw", more)
 	}
-	shown := 0
-	for _, r := range fixtureRows() {
-		if strings.Contains(body, strings.SplitN(r.Account.Email, "@", 2)[0]+"@") {
-			shown++
-		}
+	if len(shown) != 4 {
+		t.Fatalf("the window drew %d of its 5 table rows, want 4 and a count: %+v", len(shown), shown)
 	}
-	if shown+2 != len(fixtureRows()) {
-		t.Fatalf("%d of %d accounts are drawn and the page says 2 are missing:\n%s",
-			shown, len(fixtureRows()), body)
+	if got := accountsIn(shown); got != 3 {
+		t.Errorf("the window drew %d accounts, want 3 -- the fourth line is the CLAUDE heading", got)
 	}
 }
 
@@ -396,18 +469,23 @@ func TestTheCursorLandsOnAnAccountAndNeverOnASectionHeading(t *testing.T) {
 	}
 }
 
-// Scrolling names the account the cursor is on, whatever mixture of headings
-// and accounts the window ends up holding.
+// Scrolling names the account the cursor is on, at every offset the cursor can
+// take.
 //
 // The cursor's room is measured in ACCOUNTS -- see scrolled -- and this is what
 // that buys. A room counted in table rows would be one too many at every offset
 // inside a section and two too many across the boundary, so pressing j to the
 // bottom of the list would leave the cursor pointing at an account the page has
 // already scrolled past.
+//
+// 80x7 and not 80x8, which is where this used to be asked: the headings' rung
+// hands two rows back to the table, and at 8 rows the whole fleet fits again
+// and there is nothing left to scroll. A test named for scrolling that renders
+// a page holding every account passes without asking anything.
 func TestScrollingKeepsTheCursorsAccountOnThePage(t *testing.T) {
 	rows := fixtureRows()
 	for i, r := range rows {
-		m := fixtureModel(80, 8)
+		m := fixtureModel(80, 7)
 		m.Cursor = i
 		m = scrolled(m)
 		body := m.Body()
@@ -1264,11 +1342,11 @@ func TestAForecastTheSnapshotDoesNotClaimMovesNoGolden(t *testing.T) {
 		file          string
 	}{
 		{"every block, trailer included", 113, 34, nil, goldenTrailer},
-		{"every column the ladder fits, art spent", 113, 26, nil, goldenFullPage},
-		{"the design target, art spent", 80, 24, nil, goldenDesignTarget},
-		{"chrome and summary gone, the table left", 80, 13, nil, goldenShort},
+		{"every column the ladder fits, legend and art spent", 113, 26, nil, goldenFullPage},
+		{"the design target, legend and art spent", 80, 24, nil, goldenDesignTarget},
+		{"the frame and the headings gone, the facts kept", 80, 13, nil, goldenShort},
 		{"the frame dropped", 56, 10, nil, goldenNarrow},
-		{"the block collapsed and the table scrolling", 43, 9, nil, goldenCollapsed},
+		{"the block collapsed and the headings spent", 43, 9, nil, goldenCollapsed},
 		{"one notice", 80, 23, func(m *Model) {
 			m.Snap.Notices = []string{"hover thresholds could not be read"}
 		}, goldenNotice},

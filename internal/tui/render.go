@@ -749,28 +749,35 @@ func cellStyle(g Glyphs, pal theme.Palette, shown []view.ListRow, cols []view.Li
 // cursor moves between accounts: a figure that counted the headings would
 // promise three presses and deliver one.
 //
+// On a PLANNED page the two now coincide, and that is the sections rung rather
+// than an argument for collapsing them here. The rung fires while the ladder is
+// still trying to fit the whole table, and scrolling is what happens after the
+// ladder has run out of rungs and the table still does not fit -- so a page that
+// scrolls has already handed its headings back and the list below is accounts.
+// This function is handed a list and a budget and never a height: keeping the
+// two units apart is what makes it right for the list it is given, on a page
+// planned by a ladder whose rungs are not this function's to know.
+//
 // Top is an ACCOUNT offset for the same reason, so a window that starts inside
-// a section starts on an account with its heading already scrolled past. The
-// heading is then REDRAWN at the top of the window, because a heading you have
-// scrolled past has stopped working -- the reader is looking at a column of
-// addresses with nothing on the page saying which provider they belong to.
+// a section starts on an account with its heading already scrolled past, and
+// packFrom draws that heading again at the top of the window -- a heading you
+// have scrolled past has stopped working, because the reader is looking at a
+// column of addresses with nothing on the page saying which provider they
+// belong to.
 //
 // At the scrolling rung the last visible line is spent naming what is off the
 // page rather than on one more row: a table that silently stops at the bottom
 // of the terminal is one a user reads as complete.
 //
-// With room for exactly ONE row, that trade inverts twice over and the ACCOUNT
-// wins both times -- over the count, and over its own heading. Three of the
-// ladder's rules meet at that size and disagree: the scrolling rung wants the
-// last line for the count, the sections want the first for a heading, and the
-// never-dropped list says at least one account row survives every rung. The
-// list wins, because a page showing a provider's name, a count of four and no
-// accounts at all has stopped being a dashboard -- and j/k, which the count
-// advertises, would have nothing to move through. The cost is real and is
-// stated rather than hidden: at exactly that size there is nowhere left to say
-// which provider the one visible account belongs to, or that more exist.
+// With room for exactly ONE row that trade inverts and the ACCOUNT wins: the
+// scrolling rung wants the last line for the count and the never-dropped list
+// says at least one account row survives every rung, and the list wins, because
+// a page showing a count of four and no accounts at all has stopped being a
+// dashboard -- and j/k, which the count advertises, would have nothing to move
+// through. The cost is real and is stated rather than hidden: at exactly that
+// size there is nowhere left to say that more exist.
 func (m Model) window(l Layout) (rows []view.ListRow, more int) {
-	all := displayRows(m.Snap.Rows)
+	all := m.displayList(l)
 	if l.VisibleRows >= len(all) {
 		return all, 0
 	}
@@ -814,6 +821,16 @@ func (m Model) window(l Layout) (rows []view.ListRow, more int) {
 // rather than the page spending its only line on a provider name. It can only
 // ever be the first line drawn, so no account can be filed under a heading that
 // is not its own.
+//
+// A list with no headings in it walks straight through all of that: section
+// stays empty, drawn stays empty, the two never differ and nothing is emitted
+// but accounts. That is the list every page that actually scrolls hands over
+// today, because the sections rung fires before the scrolling one can -- which
+// makes the pairing above the answer to "what does this do with a heading" and
+// not a description of what the dashboard currently draws. It is written that
+// way on purpose: this function is correct for the list it is handed, and the
+// day the rung moves is not the day to find out that the pairing had been
+// deleted as unreachable.
 func packFrom(all []view.ListRow, top, budget int) []view.ListRow {
 	out := make([]view.ListRow, 0, budget)
 	section, drawn, skipped := "", "", 0
@@ -857,8 +874,9 @@ func accountsIn(lines []view.ListRow) int {
 	return n
 }
 
-// displayRows is the list of lines the table draws: each provider's heading and
-// that provider's accounts under it, in internal/view's own grouping.
+// displayRows is the grouped list: each provider's heading and that provider's
+// accounts under it, in internal/view's own order. What a given page draws is
+// displayList below, which is this filtered by the headings' rung.
 //
 // It is a function rather than a slice built in place because an account's
 // index has to survive whatever the list becomes. The cursor, the switch key
@@ -868,6 +886,33 @@ func accountsIn(lines []view.ListRow) int {
 // them counts its way down the window.
 func displayRows(rows []view.Row) []view.ListRow {
 	return view.ListRows(view.Sections(rows))
+}
+
+// displayList is that list as this layout draws it: whole where the headings
+// survived their rung, and the account rows alone where they did not.
+//
+// It FILTERS the grouped list rather than going back to Snap.Rows, and the
+// difference is what a page loses when the headings go. Losing them is losing
+// the LABELS; the order stays internal/view's own, so a codex account is still
+// drawn below every Claude one and no row moves up the page when the terminal
+// gets shorter. Reading Snap.Rows instead would put the store's order back at
+// exactly the heights where nothing is left on the page to explain it.
+//
+// Every ListRow.At survives the filter unchanged, which is what the cursor, the
+// switch key and the marker column read: dropping the headings changes which
+// LINES are drawn and never which account any of them names.
+func (m Model) displayList(l Layout) []view.ListRow {
+	all := displayRows(m.Snap.Rows)
+	if l.Sections {
+		return all
+	}
+	out := make([]view.ListRow, 0, len(all))
+	for _, line := range all {
+		if line.Header == "" {
+			out = append(out, line)
+		}
+	}
+	return out
 }
 
 // markerRow is a table row that is not an account: a section heading, the

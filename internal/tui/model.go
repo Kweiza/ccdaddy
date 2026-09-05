@@ -791,15 +791,21 @@ func (a App) dismissed() App {
 // accounts fit stopped being a property of the page the day the table gained
 // section headings: a window that stays inside one section pays for one
 // heading and a window that crosses the boundary pays for two, so the same
-// budget holds one fewer account depending on WHERE it starts.
+// budget held one fewer account depending on WHERE it started. Measured while
+// that was so, at 80x8 on a fleet of four Claude seats and one codex seat: the
+// window from the top held three accounts, so the offset for the last account
+// came out at 2 -- and the window at 2 crossed into CODEX, paid for the second
+// heading, and held two. The cursor pointed at an account that was not on the
+// page.
 //
-// A capacity measured from the top of the list is therefore the capacity of the
-// easiest window rather than of the one the cursor is in, and using it puts the
-// cursor on an account the page does not draw. Measured, at 80x8 on a fleet of
-// four Claude seats and one codex seat: the window from the top holds three
-// accounts, so the offset for the last account comes out at 2 -- and the window
-// at 2 crosses into CODEX, pays for the second heading, and holds two. The
-// cursor pointed at an account that was not on the page.
+// Every window is uniform again today, and that is a fact about the height
+// ladder rather than about this function: the headings have a rung of their own
+// and it fires before the ladder reaches the scrolling one, so a page that
+// scrolls has already given them up and each window holds its whole budget in
+// accounts. Asking costs nothing and reads the same answer the page will draw.
+// Computing a capacity here would be a second statement of what packFrom does
+// with a budget, agreeing with it only for as long as no rung moves -- and a
+// rung moving is not something this function is in a position to notice.
 //
 // So both offsets below are found by walking, and each walk is one sentence:
 //
