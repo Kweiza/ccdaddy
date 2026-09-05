@@ -645,6 +645,191 @@ func TestOnAMachineWithNoRegistrationTheUnwireIsSilentAndClean(t *testing.T) {
 	}
 }
 
+// installedCodexShim puts a real codex shim on an otherwise bare machine: no
+// startup file of any kind, a binary this command may delete, and a $SHELL
+// whose dialect the PATH block is written in.
+//
+// It runs the real `ccdad codex shim install` rather than writing the script,
+// the record and the block by hand. What the tests below ask is whether a
+// REMOVAL reaches everything an install left, and a removal checked against a
+// hand-built fixture only proves that the fixture was built to match it.
+//
+// It returns the startup file the install creates, which on a home directory
+// with nothing in it is bash's ~/.bashrc.
+func installedCodexShim(t *testing.T) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("ccdad installs no shim on Windows, so there is nothing here to take back")
+	}
+	isolate(t)
+	stubDaemonWorld(t, &fakeDaemon{})
+	t.Setenv("SHELL", "/bin/bash")
+	t.Setenv("PATH", "/usr/bin:/bin")
+	// packageManagerOwning reads both of these, and a developer running the
+	// suite under Homebrew would otherwise get the refusal branch where CI gets
+	// the removal.
+	t.Setenv("HOMEBREW_PREFIX", "")
+	t.Setenv("SCOOP", "")
+	fakeBinary(t)
+
+	if code, _, errOut, top := runRoot(t, "codex", "shim", "install"); code != ExitOK {
+		t.Fatalf("codex shim install = %d, want %d\n%s%s", code, ExitOK, errOut, top)
+	}
+	if _, ok := shimRecord(); !ok {
+		t.Fatal("the install wrote no record, so these tests would be describing a machine with no shim")
+	}
+	return filepath.Join(os.Getenv("HOME"), ".bashrc")
+}
+
+// `ccdad add codex` installs the shim without being asked, so this enumeration
+// is the only place a user who never ran `ccdad codex shim install` is told
+// that a file called `codex` sits on their PATH at all -- and they are told it
+// at the moment it is about to go. A confirmation prompt that does not name
+// what it destroys is a prompt people say yes to.
+//
+// The line is keyed on the RECORD, which is what both subtests are for. The
+// record is what says this machine wants <CCDAD_HOME>/bin on PATH --
+// setup-path's derived directory set reads it and nothing else -- and a script
+// somebody deleted by hand is something they have already said something
+// about. Keying on the script would go silent on exactly the machine whose
+// record and PATH entry are still there and still being removed.
+func TestUninstallNamesTheCodexShimItIsTakingBack(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		dropScript bool
+	}{
+		{name: "with the script on disk"},
+		{name: "with the record but no script", dropScript: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			installedCodexShim(t)
+			if tc.dropScript {
+				if err := os.Remove(shimPath()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			stubEnvironment(t, true, false)
+
+			cmd := newUninstallCmd()
+			cmd.SetIn(strings.NewReader("n\n"))
+			err, _, errOut := runCmd(t, cmd)
+			if CodeFor(err) != ExitNothingToDo {
+				t.Fatalf("answering no = %d, want %d\n%s", CodeFor(err), ExitNothingToDo, errOut)
+			}
+			if !strings.Contains(errOut, shimPath()) {
+				t.Errorf("the enumeration does not name the codex shim at %s:\n%s", shimPath(), errOut)
+			}
+		})
+	}
+}
+
+// The removal itself is already there -- "bin" and "codex-shim.json" are store
+// markers, os.RemoveAll takes both, and unregisterPath removes the whole fenced
+// block -- and "already there" is the claim worth checking rather than
+// repeating. All three, because they go by three different mechanisms: the
+// script goes with the directory tree, the record goes with it as a sibling,
+// and the PATH entry is a rewrite of a file outside the store entirely.
+func TestUninstallTakesTheShimTheRecordAndThePathEntry(t *testing.T) {
+	rc := installedCodexShim(t)
+	before, err := os.ReadFile(rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(before), shimDir()) {
+		t.Fatalf("%s does not register %s, so this test would prove nothing:\n%s", rc, shimDir(), before)
+	}
+
+	code, _, errOut, top := runRoot(t, "uninstall", "--yes")
+	if code != ExitOK {
+		t.Fatalf("uninstall = %d, want %d\n%s%s", code, ExitOK, errOut, top)
+	}
+	for _, path := range []string{shimPath(), shimRecordPath(), shimDir()} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("%s survived the uninstall (stat err = %v)", path, err)
+		}
+	}
+	after, err := os.ReadFile(rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(after), setupPathBegin) || strings.Contains(string(after), shimDir()) {
+		t.Errorf("%s still carries ccdad's PATH block:\n%s", rc, after)
+	}
+}
+
+// THE LIMIT, written down rather than repaired: a startup file ccdad itself
+// created is left behind EMPTY. removeRC writes zero bytes over it, and
+// os.Remove is never called on a startup file anywhere in this tree.
+//
+// Deleting it would be worse, and not marginally. Nothing on the machine
+// records which startup files ccdad created -- writeRC returns the flag that
+// prints "Created" for the person watching and writes it down nowhere, and the
+// one place a note could have been kept, the store, is deleted several steps
+// before unregisterPath runs. So the only evidence available at removal time
+// is that the file is now empty, and an empty startup file is evidence of
+// nothing: a user who ran `touch ~/.zshrc` to silence a first-run prompt, and
+// one whose dotfiles repository tracks an empty one, have exactly the same
+// file.
+//
+// The two mistakes also do not cost the same. An empty ~/.bashrc costs its
+// owner nothing -- the shell reads it and does nothing -- while an unlink takes
+// a path other things point at: replaceFile resolves symlinks precisely because
+// these files are so often a stow or chezmoi checkout, and removing the link
+// leaves that repository with an entry no ccdad command can put back.
+func TestUninstallLeavesAStartupFileItCreatedBehindEmpty(t *testing.T) {
+	installedCodexShim(t)
+	home := os.Getenv("HOME")
+
+	code, _, errOut, top := runRoot(t, "uninstall", "--yes")
+	if code != ExitOK {
+		t.Fatalf("uninstall = %d, want %d\n%s%s", code, ExitOK, errOut, top)
+	}
+	// Both files bash gets, because both were created by the install and the
+	// argument above is about neither one in particular.
+	for _, name := range []string{".bashrc", ".profile"} {
+		path := filepath.Join(home, name)
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Errorf("%s was deleted; a startup file ccdad created is left in place, empty: %v", path, err)
+			continue
+		}
+		if info.Size() != 0 {
+			body, _ := os.ReadFile(path)
+			t.Errorf("%s is %d bytes after the removal, not empty:\n%s", path, info.Size(), body)
+		}
+	}
+}
+
+// The other half of the same line: a machine that never installed a shim is
+// told nothing about one. Without the record guard every `ccdad uninstall` on a
+// Claude-only machine names a file that is not there, in the middle of the one
+// list a user reads before answering yes to a destructive command.
+func TestUninstallSaysNothingAboutAShimWhenThereIsNoRecord(t *testing.T) {
+	isolate(t)
+	stubDaemonWorld(t, &fakeDaemon{})
+	stubEnvironment(t, true, false)
+	fakeBinary(t)
+	seedAccount(t, "u-1", "work@example.com")
+
+	cmd := newUninstallCmd()
+	cmd.SetIn(strings.NewReader("n\n"))
+	err, _, errOut := runCmd(t, cmd)
+	if CodeFor(err) != ExitNothingToDo {
+		t.Fatalf("answering no = %d, want %d\n%s", CodeFor(err), ExitNothingToDo, errOut)
+	}
+	// t.TempDir names its directories after the test, so every path in the
+	// output below carries this test's own name -- including the word the
+	// assertion is looking for. Take the name out first: what is under test
+	// here is the prose.
+	prose := strings.ReplaceAll(errOut, t.Name(), "<test>")
+	if strings.Contains(strings.ToLower(prose), "shim") {
+		t.Errorf("the confirmation names a shim on a machine that has none:\n%s", errOut)
+	}
+	if strings.Contains(errOut, shimDir()) {
+		t.Errorf("the confirmation names the shim directory on a machine that has none:\n%s", errOut)
+	}
+}
+
 // A store holding only the install record is still a ccdad store. Without this,
 // a machine whose accounts were all removed -- or one where the only thing
 // ccdad ever did was register the server -- is refused as "not a ccdad store"
