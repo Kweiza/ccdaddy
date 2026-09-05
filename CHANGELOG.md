@@ -16,6 +16,14 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.18.0] — 2026-09-05
+
+The release that puts the two providers on the same level. `ccdad add claude`
+and `ccdad add codex` are peers rather than a default and an afterthought, the
+codex shim installs itself at the moment it becomes useful, and both account
+lists are sectioned by provider and drawn from one definition of what an
+account list is.
+
 ### Changed
 
 - **BREAKING: `ccdad add` is a group, and the two logins are `ccdad add claude`
@@ -3519,7 +3527,8 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.17.0...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.18.0...HEAD
+[0.18.0]: https://github.com/Kweiza/ccdaddy/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/Kweiza/ccdaddy/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/Kweiza/ccdaddy/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/Kweiza/ccdaddy/compare/v0.14.0...v0.15.0
