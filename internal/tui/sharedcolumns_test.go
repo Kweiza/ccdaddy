@@ -8,13 +8,38 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/view"
 )
 
-// ladderFootprint is what the width ladder reserves for one shared column
-// today, column kind by column kind.
+// ladderFootprint is what the width ladder reserved for one shared column,
+// column kind by column kind, as the ladder itself spelled it.
 //
-// IDX and ACCOUNT are spelled here because planWidth's cost function spells
-// them as literals rather than as named constants; every other arm names the
-// constant itself, so a footprint that moves moves this test with it.
+// It is a TRANSCRIPT and it lives here on purpose. planWidth held a constant
+// per column until the shared list published a heading and a content width for
+// each; it now measures what the column says instead, which is what makes the
+// two agree by construction rather than by two people keeping two tables in
+// step. That leaves this test asking a question a table read out of view could
+// not: are the numbers the same ones the dashboard has always reserved? Only a
+// hand-written copy can answer it, so the copy is here, where a reader looking
+// at a failure can see what the page used to reserve and what it reserves now.
+//
+// Every value is the constant planWidth carried before, verbatim: 6 for IDX and
+// accountComfort+2 for ACCOUNT, which cost() spelled as literals, and the eight
+// named footprints. ACCOUNT keeps its constant because accountComfort is still
+// production's -- the ladder's ACCOUNT stops are not a column width the shared
+// list publishes.
 func ladderFootprint(c view.ListColumn) (int, bool) {
+	const (
+		typeFootprint  = 14 // 12 content + 2 gap
+		autoFootprint  = 6  // 4 content + 2 gap
+		stateFootprint = 15 // 13 content + 2 gap
+		tierFootprint  = 8  // 6 content + 2 gap
+		ageFootprint   = 8  // 6 content + 2 gap
+		// worstFootprint held "100% " plus a header of HeaderBudget, which is
+		// what the collapsed block renders.
+		worstFootprint = view.HeaderBudget + 7
+	)
+	// The window and reset footprints were functions rather than constants,
+	// because the content half is fixed and small -- a percentage is at most
+	// "100%" and a countdown at most "1d16h" -- so the HEADER is what decides,
+	// and a header is the fleet's own.
 	switch c.Kind {
 	case view.ColumnIdx:
 		return 6, true
@@ -25,9 +50,9 @@ func ladderFootprint(c view.ListColumn) (int, bool) {
 	case view.ColumnTier:
 		return tierFootprint, true
 	case view.ColumnWindow:
-		return windowFootprint(c.Header), true
+		return maxInt(ansi.StringWidth(c.Header), 4) + 2, true
 	case view.ColumnReset:
-		return resetFootprint(c.Header), true
+		return maxInt(ansi.StringWidth(c.Header), 5) + 2, true
 	case view.ColumnWorst:
 		return worstFootprint, true
 	case view.ColumnState:
@@ -40,10 +65,10 @@ func ladderFootprint(c view.ListColumn) (int, bool) {
 	return 0, false
 }
 
-// The shared column set publishes a heading and a content width so that this
+// The shared column set publishes a heading and a content width so that the
 // ladder can read them instead of holding a second copy of the same numbers.
 // Adopting them may not move a page, which means every column has to ask for
-// exactly what the ladder already reserves.
+// exactly what the ladder reserved before it did.
 //
 // The reservation is max(heading, content) + 2: the content, or the heading
 // when it is wider, plus the standard gap that follows a column.

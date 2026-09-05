@@ -3,8 +3,6 @@
 package tui
 
 import (
-	"fmt"
-
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 	"github.com/Kweiza/ccdaddy/internal/theme"
 	"github.com/Kweiza/ccdaddy/internal/usage"
@@ -32,50 +30,13 @@ func cellRole(r view.Row, n usage.WindowName) theme.Role {
 	}
 }
 
-// worstCell is the whole quota block in one cell, for a terminal too narrow to
-// carry the block itself.
+// stateCell is the emphasis on one state cell: the glyph in front of the word,
+// and the role that colours both. The WORD is view.StateLabel's, which is what
+// keeps one list of states in this binary rather than two; the glyph is
+// redundant emphasis, so the column survives NO_COLOR, a monochrome terminal
+// and the None theme with nothing lost.
 //
-// It is what the ladder does INSTEAD of dropping window columns, and the reason
-// it is safe where dropping is not: every cell reads percentage USED, so the
-// worst window is the MAX, and nothing this cell hides is worse than what it
-// shows. A partial column set can make no such statement -- the limit it left
-// out could be the one that is gone.
-//
-// It names the window as well as the number. A percentage with no window beside
-// it is precisely what this table stopped doing.
-func worstCell(r view.Row, cols view.Columns) string {
-	worst, header, any := "", "", false
-	unread := false
-	best := -1.0
-	for _, w := range cols.Windows {
-		pct, state := r.WindowPct(w.Name)
-		switch state {
-		case view.WindowUnreadable:
-			unread = true
-		case view.WindowRead:
-			if pct > best {
-				best, header, any = pct, w.Header, true
-			}
-		}
-	}
-	if !any {
-		return view.Unreadable
-	}
-	worst = fmt.Sprintf("%.0f%% %s", best, header)
-	if unread {
-		// One window could not be read, so the max is a lower bound. Saying so
-		// costs one character and stops the cell claiming more than it knows.
-		worst += "+"
-	}
-	return worst
-}
-
-// stateCell is one self-describing cell: a glyph, a word, and the role that
-// colours both. The glyph is redundant emphasis and the word carries the
-// meaning, so the column survives NO_COLOR, a monochrome terminal and the None
-// theme with nothing lost.
-//
-// The third return is a theme.Role and not a lipgloss.Style, and that is the
+// The role is a theme.Role and not a lipgloss.Style, and that is the
 // whole reason this signature changed. This function used to hand back one of
 // six empty styles held in a package var block, justified by the claim that
 // lipgloss v2 has no auto-adaptive fallback. That claim was wrong. What v2
@@ -97,11 +58,14 @@ func worstCell(r view.Row, cols view.Columns) string {
 // "the terminal's own foreground on an active account". The document format is
 // additive by contract: a newer daemon may publish a state this binary has
 // never heard of, and that happens on the day somebody upgrades one half of a
-// machine. Carry the value through and render it.
+// machine. The word view.StateLabel carries through gets the glyph that says
+// this build could not place it.
 //
 // The empty string is its own arm and it is not an error. AccountStatus.State
 // is omitempty and is filled from a map lookup that returns the zero value on a
-// miss, so an account no daemon has ever published carries "".
+// miss, so an account no daemon has ever published carries "". It takes NO
+// glyph: the cell is the "-" that says there is no state here, and a mark in
+// front of it would be emphasis on an absence.
 //
 // StateEmpty takes RoleExhausted rather than a role of its own. The two are
 // different facts -- one is past the number it was given, the other has nothing
@@ -115,54 +79,39 @@ func worstCell(r view.Row, cols view.Columns) string {
 // documents, two questions, and when they disagree that disagreement is the
 // most useful thing on the page -- which the old shared "*" hid, because
 // agreement and a rendering coincidence looked identical.
-func stateCell(g Glyphs, s daemon.AccountState) (glyph, text string, role theme.Role) {
+func stateCell(g Glyphs, s daemon.AccountState) (glyph string, role theme.Role) {
 	switch s {
 	case daemon.StateActive:
-		return g.Active, "active", theme.RoleActive
+		return g.Active, theme.RoleActive
 	case daemon.StateCandidate:
-		return g.Candidate, "candidate", theme.RoleCandidate
+		return g.Candidate, theme.RoleCandidate
 	case daemon.StateExhausted:
-		return g.Exhausted, "exhausted", theme.RoleExhausted
+		return g.Exhausted, theme.RoleExhausted
 	case daemon.StateEmpty:
-		return g.Empty, "empty", theme.RoleExhausted
+		return g.Empty, theme.RoleExhausted
 	case daemon.StateQuarantined:
-		return g.Quarantined, "quarantined", theme.RoleQuarantined
+		return g.Quarantined, theme.RoleQuarantined
 	case daemon.StateServing:
 		// The codex proxy's account. It takes the ACTIVE glyph and the active
 		// role because it answers the same question for the other provider --
 		// "which account would a session started now be billed to" -- and the
 		// WORD is what tells the two apart, exactly as it does for empty and
 		// exhausted, which share a role for the same kind of reason.
-		return g.Active, "serving", theme.RoleActive
+		return g.Active, theme.RoleActive
 	case daemon.StateNeedsRelogin:
 		// A dead grant is held out of rotation until a person runs a command,
 		// which is what quarantined means on the Claude side, so it is painted
 		// the same and the word carries the difference: a quarantine lapses on
 		// a timer and this one does not.
-		return g.Quarantined, "needs-relogin", theme.RoleQuarantined
+		return g.Quarantined, theme.RoleQuarantined
 	case daemon.StateDisabled:
-		return g.Disabled, "disabled", theme.RoleMuted
+		return g.Disabled, theme.RoleMuted
 	case daemon.StateUnknown:
-		return g.Unknown, "unknown", theme.RoleMuted
+		return g.Unknown, theme.RoleMuted
 	case "":
-		return "", "-", theme.RoleMuted
+		return "", theme.RoleMuted
 	}
-	return g.Unknown, string(s), theme.RoleMuted
-}
-
-// autoCell is whether the engine may rotate to this account. It is a rotation
-// policy and not a lock: an explicit `ccdad switch` still activates a disabled
-// account.
-//
-// The mockup showed per-row strategy names here. There is no per-account
-// strategy anywhere in this tree -- strategy is one global config key with two
-// values -- so the column carries the fact that does exist. The global name is
-// in the summary block.
-func autoCell(r view.Row) string {
-	if r.Account.Disabled {
-		return "no"
-	}
-	return "yes"
+	return g.Unknown, theme.RoleMuted
 }
 
 // accountCell truncates a label to width, head-preserving, ending in the page's
@@ -203,11 +152,3 @@ func spaces(n int) string {
 	}
 	return string(b)
 }
-
-// The pass-throughs the page reads. Each is one line over a view.Row method
-// (or, for idxCell, the one field the fixtures' IDX column shows), existing
-// so the column table has one shape: every cell this package draws is a
-// func(view.Row, ...) string, not a mix of methods and functions.
-func idxCell(r view.Row) string  { return fmt.Sprintf("%d", r.Account.Idx) }
-func typeCell(r view.Row) string { return r.TypeLabel() }
-func tierCell(r view.Row) string { return r.TierLabel() }

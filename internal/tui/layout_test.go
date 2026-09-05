@@ -27,7 +27,7 @@ func TestWideningTheTerminalNeverNarrowsTheAccountColumn(t *testing.T) {
 // hasColumn asks by KIND, because a window column is not named by a constant:
 // how many there are and which windows they stand for is a fact about the
 // fleet, so a case that wants "is there a window column" has to ask that.
-func hasColumn(cols []Column, k ColKind) bool {
+func hasColumn(cols []view.ListColumn, k view.ColumnKind) bool {
 	for _, got := range cols {
 		if got.Kind == k {
 			return true
@@ -49,7 +49,7 @@ func hasColumn(cols []Column, k ColKind) bool {
 func TestTheWidthLadderDropsColumnsInTheOrderItSays(t *testing.T) {
 	cols := testCols()
 	// Lowest priority first, which is the order they must vanish in.
-	order := []ColKind{ColAuto, ColType, ColAge, ColState}
+	order := []view.ColumnKind{view.ColumnAuto, view.ColumnType, view.ColumnAge, view.ColumnState}
 
 	for w := 35; w <= 200; w++ {
 		l := Plan(cols, w, 40, 4, false, false)
@@ -62,7 +62,7 @@ func TestTheWidthLadderDropsColumnsInTheOrderItSays(t *testing.T) {
 		for _, k := range order {
 			present := hasColumn(l.Columns, k)
 			if seenPresent && !present {
-				t.Fatalf("width %d: kind %d was dropped while something cheaper than it is still on the page: %+v",
+				t.Fatalf("width %d: %s was dropped while something cheaper than it is still on the page: %+v",
 					w, k, l.Columns)
 			}
 			if present {
@@ -70,10 +70,10 @@ func TestTheWidthLadderDropsColumnsInTheOrderItSays(t *testing.T) {
 			}
 		}
 		// The block is the last thing to go, after every optional column.
-		if !hasColumn(l.Columns, ColWindow) {
+		if !hasColumn(l.Columns, view.ColumnWindow) {
 			for _, k := range order {
 				if hasColumn(l.Columns, k) {
-					t.Fatalf("width %d: the window block collapsed while kind %d is still on the page: %+v",
+					t.Fatalf("width %d: the window block collapsed while %s is still on the page: %+v",
 						w, k, l.Columns)
 				}
 			}
@@ -90,19 +90,19 @@ func TestTheWidthLadderDropsColumnsInTheOrderItSays(t *testing.T) {
 // priority list instead.
 func TestWideningNeverRemovesAColumn(t *testing.T) {
 	cols := testCols()
-	var prev []Column
+	var prev []view.ListColumn
 	for w := 35; w <= 200; w++ {
 		l := Plan(cols, w, 40, 4, false, false)
 		if l.TooNarrow {
 			continue
 		}
 		for _, c := range prev {
-			// ColWorst is the exception, and it is a PROMOTION rather than a
-			// removal: the collapsed cell is replaced by the whole window
-			// block, which is strictly more of the same information. Every
-			// other column has to survive verbatim.
-			if c.Kind == ColWorst {
-				if !hasColumn(l.Columns, ColWorst) && !hasColumn(l.Columns, ColWindow) {
+			// The collapsed WORST cell is the exception, and its going is a
+			// PROMOTION rather than a removal: the collapsed cell is replaced
+			// by the whole window block, which is strictly more of the same
+			// information. Every other column has to survive verbatim.
+			if c.Kind == view.ColumnWorst {
+				if !hasColumn(l.Columns, view.ColumnWorst) && !hasColumn(l.Columns, view.ColumnWindow) {
 					t.Fatalf("width %d has neither the block nor its collapsed cell, and width %d had one", w, w-1)
 				}
 				continue
@@ -115,7 +115,7 @@ func TestWideningNeverRemovesAColumn(t *testing.T) {
 	}
 }
 
-func hasColumnExact(cols []Column, c Column) bool {
+func hasColumnExact(cols []view.ListColumn, c view.ListColumn) bool {
 	for _, got := range cols {
 		if got == c {
 			return true
@@ -137,12 +137,12 @@ func hasColumnExact(cols []Column, c Column) bool {
 func TestTheQuotaBlockSurvivesEveryWidth(t *testing.T) {
 	for w := 35; w <= 140; w++ {
 		l := Plan(testCols(), w, 40, 4, false, false)
-		for _, k := range []ColKind{ColIdx, ColAccount} {
+		for _, k := range []view.ColumnKind{view.ColumnIdx, view.ColumnAccount} {
 			if !hasColumn(l.Columns, k) {
-				t.Fatalf("width %d: kind %d is missing, and it must never be dropped", w, k)
+				t.Fatalf("width %d: %s is missing, and it must never be dropped", w, k)
 			}
 		}
-		if !hasColumn(l.Columns, ColWindow) && !hasColumn(l.Columns, ColWorst) {
+		if !hasColumn(l.Columns, view.ColumnWindow) && !hasColumn(l.Columns, view.ColumnWorst) {
 			t.Fatalf("width %d: the page carries no quota cell at all: %+v", w, l.Columns)
 		}
 	}
@@ -157,7 +157,7 @@ func TestTheWindowBlockIsNeverPartiallyShown(t *testing.T) {
 		l := Plan(cols, w, 40, 4, false, false)
 		n := 0
 		for _, c := range l.Columns {
-			if c.Kind == ColWindow {
+			if c.Kind == view.ColumnWindow {
 				n++
 			}
 		}
@@ -319,7 +319,7 @@ func TestTheRunwayRungFollowsTheDecorativeBlocksAndNotice(t *testing.T) {
 
 	// Four runway rows spend the tagline and blank separators before any runway
 	// fact or the family art is lost.
-	with := planWithRows(testCols(), 80, 27, rows, false, true, 1, runwayRows, 2)
+	with := planWithRows(testCols(), 80, 27, rows, false, true, 1, runwayRows, 2, 0)
 	if !with.Figures {
 		t.Fatal("80x27 with runway rows dropped the family after whitespace had already made enough room")
 	}
@@ -331,23 +331,23 @@ func TestTheRunwayRungFollowsTheDecorativeBlocksAndNotice(t *testing.T) {
 	}
 
 	// Down to 19, all runway rows still fit after every decorative block is gone.
-	if l := planWithRows(testCols(), 80, 19, rows, false, true, 1, runwayRows, 2); l.Figures || !l.Runway || l.Tagline {
+	if l := planWithRows(testCols(), 80, 19, rows, false, true, 1, runwayRows, 2, 0); l.Figures || !l.Runway || l.Tagline {
 		t.Fatalf("80x19 with runway rows: Figures=%v Runway=%v Tagline=%v, want false/true/false",
 			l.Figures, l.Runway, l.Tagline)
 	}
 
 	// At 18 the runway block gives next.
-	if l := planWithRows(testCols(), 80, 18, rows, false, true, 1, runwayRows, 2); l.Figures || l.Runway || l.Tagline {
+	if l := planWithRows(testCols(), 80, 18, rows, false, true, 1, runwayRows, 2, 0); l.Figures || l.Runway || l.Tagline {
 		t.Fatalf("80x18 with runway rows: Figures=%v Runway=%v Tagline=%v, want false/false/false",
 			l.Figures, l.Runway, l.Tagline)
 	}
 
 	// The notice adds a fifth conditional row. At 20 both blocks fit after the
 	// decorative blocks are gone; at 19 the notice gives and runway remains.
-	if l := planWithRows(testCols(), 80, 20, rows, true, true, 1, runwayRows, 2); !l.Notice || !l.Runway {
+	if l := planWithRows(testCols(), 80, 20, rows, true, true, 1, runwayRows, 2, 0); !l.Notice || !l.Runway {
 		t.Fatalf("80x20 with both blocks: Notice=%v Runway=%v, want true/true", l.Notice, l.Runway)
 	}
-	if l := planWithRows(testCols(), 80, 19, rows, true, true, 1, runwayRows, 2); l.Notice || !l.Runway {
+	if l := planWithRows(testCols(), 80, 19, rows, true, true, 1, runwayRows, 2, 0); l.Notice || !l.Runway {
 		t.Fatalf("80x19 with both blocks: Notice=%v Runway=%v, want false/true — the note gives before runway does",
 			l.Notice, l.Runway)
 	}
@@ -357,6 +357,72 @@ func TestTheRunwayRungFollowsTheDecorativeBlocksAndNotice(t *testing.T) {
 		if l := Plan(testCols(), 80, h, rows, true, false); l.Runway {
 			t.Errorf("height %d planned a runway line for a page that has none", h)
 		}
+	}
+}
+
+// The trailer's two places on the height ladder, asked about here because
+// nothing draws one yet: Model.Body passes a length of zero, so a page cannot
+// exercise either, and a rung no test walks is a rung nobody has checked.
+//
+// Three claims, and the first is what every golden page under testdata rests
+// on.
+func TestATrailerCostsItsRowsAndIsGivenUpBeforeTheNotice(t *testing.T) {
+	const (
+		rows        = 4
+		trailerRows = 3
+	)
+
+	// A trailer of no lines is not a block: nothing is reserved for it, no rung
+	// fires for it, and the page is the page it was before there was a trailer
+	// at all.
+	for h := 4; h <= 40; h++ {
+		if l := Plan(testCols(), 80, h, rows, true, false); l.Trailer || l.TrailerRows != 0 {
+			t.Fatalf("at 80x%d a page with no trailer planned one: Trailer=%v TrailerRows=%d",
+				h, l.Trailer, l.TrailerRows)
+		}
+	}
+
+	// A trailer that IS drawn costs exactly its own rows, and the way to see
+	// that from outside is a block below it on the ladder: the tagline is given
+	// up at a page three rows taller.
+	taglineGoesAt := func(trailer int) int {
+		for h := 40; h >= 4; h-- {
+			if !planWithRows(testCols(), 80, h, rows, true, false, 1, 0, 2, trailer).Tagline {
+				return h
+			}
+		}
+		return 0
+	}
+	if got, want := taglineGoesAt(trailerRows), taglineGoesAt(0)+trailerRows; got != want {
+		t.Errorf("with a %d-line trailer the tagline is spent at %d rows, want %d",
+			trailerRows, got, want)
+	}
+
+	// The trailer goes before the notice, and while it is on the page the table
+	// is not scrolling. The second half is why a trailer can never be drawn
+	// over an account row: its rung sits high enough that a page keeping one
+	// still has room for every row it was asked about, so the reservation
+	// VisibleRows makes for it is arithmetic that agrees rather than a row
+	// taken from the table.
+	sawTheDrop := false
+	for h := 4; h <= 40; h++ {
+		l := planWithRows(testCols(), 80, h, rows, true, false, 1, 0, 2, trailerRows)
+		if l.TooShort {
+			continue
+		}
+		if l.Trailer && !l.Notice {
+			t.Errorf("at 80x%d the notice was given up while the trailer above it stayed", h)
+		}
+		if l.Trailer && l.VisibleRows != rows {
+			t.Errorf("at 80x%d a trailer is planned over a scrolling table: %d of %d rows visible",
+				h, l.VisibleRows, rows)
+		}
+		if !l.Trailer && l.Notice {
+			sawTheDrop = true
+		}
+	}
+	if !sawTheDrop {
+		t.Fatal("no height between 4 and 40 drops the trailer and keeps the notice, so the order above is asserted of nothing")
 	}
 }
 

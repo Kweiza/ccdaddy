@@ -139,17 +139,24 @@ var tableCell = strings.NewReplacer("\n", " ", "\r", " ", "\t", " ")
 // yellow, orange, then red. Unknown readings remain muted, the active marker
 // remains accented, and the percentage text preserves the ordered value when
 // colour is unavailable.
-func windowCellStyle(pal theme.Palette, rows []view.Row, firstWindowCol int,
+//
+// It is handed the DISPLAY list -- internal/view's ListRow, the same type the
+// table's cells were built from -- rather than the account rows, and the two
+// are not always the same list. A table draws its lines by integer and styles
+// them by the same integer, so a surface whose display list holds anything an
+// account list does not would otherwise be painting row N with account N's
+// verdict.
+func windowCellStyle(pal theme.Palette, display []view.ListRow, firstWindowCol int,
 	cols view.Columns) func(row, col int) lipgloss.Style {
 
 	return func(row, col int) lipgloss.Style {
 		if row == table.HeaderRow {
 			return pal.Style(theme.RoleHeader)
 		}
-		if row < 0 || row >= len(rows) {
+		if row < 0 || row >= len(display) {
 			return lipgloss.NewStyle()
 		}
-		r := rows[row]
+		r := display[row].Row
 		if col == 0 && r.Active {
 			return pal.Style(theme.RoleActive)
 		}

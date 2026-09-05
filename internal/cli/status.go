@@ -440,8 +440,19 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 		head = append(head, statusHeader(c))
 	}
 
-	cells := make([][]string, 0, len(rows))
-	for _, r := range rows {
+	// The lines this table draws, which are exactly its account rows: one
+	// display line per account, each remembering the index it came from. The
+	// style function below is handed the same list, so the integer it is asked
+	// about and the integer that produced the cells are one integer rather than
+	// two slices that happen to agree.
+	display := make([]view.ListRow, 0, len(rows))
+	for i, r := range rows {
+		display = append(display, view.ListRow{Row: r, At: i})
+	}
+
+	cells := make([][]string, 0, len(display))
+	for _, line := range display {
+		r := line.Row
 		row := make([]string, 0, len(cols))
 		for _, c := range cols {
 			cell := r.ListCell(c, block, now, snap.Hover)
@@ -457,7 +468,7 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 		}
 		cells = append(cells, row)
 	}
-	if err := columns(out, head, cells, windowCellStyle(pal, rows, firstWindow, block)); err != nil {
+	if err := columns(out, head, cells, windowCellStyle(pal, display, firstWindow, block)); err != nil {
 		return err
 	}
 	// Under the table, because each of these explains a column the reader is

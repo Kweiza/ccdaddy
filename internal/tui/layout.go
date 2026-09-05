@@ -6,51 +6,18 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/view"
 )
 
-// ColKind is what a column IS. It is separate from Column below because a
-// window column cannot be named by a constant: how many there are, and which
-// windows they stand for, is a fact about the fleet rather than about this
-// package.
-type ColKind int
-
-const (
-	ColIdx ColKind = iota
-	ColAccount
-	ColType
-	ColTier
-	// ColWindow is one window's cell, and Column.Win indexes
-	// view.Columns.Windows.
-	ColWindow
-	// ColReset is one rollover's countdown, and Column.Win indexes
-	// view.Columns.Resets.
-	ColReset
-	// ColWorst is the whole window block collapsed into one cell, for a
-	// terminal too narrow to carry the block itself. It is what this ladder
-	// does INSTEAD of dropping a window column.
-	ColWorst
-	ColState
-	ColAuto
-	ColAge
-)
-
-// Column is one rendered column: its kind, and for a window or a reset, which
-// one.
-//
-// It is a comparable struct, so dropping a column is still `==` and the ladder
-// below reads the way it did when every column had a constant of its own.
-type Column struct {
-	Kind ColKind
-	Win  int
-}
-
-func col(k ColKind) Column   { return Column{Kind: k} }
-func windowCol(i int) Column { return Column{Kind: ColWindow, Win: i} }
-func resetCol(i int) Column  { return Column{Kind: ColReset, Win: i} }
-
 // Layout is the answer to "what fits", computed once per frame from the
 // terminal size and the row count, and read by nothing but the renderer: it
 // carries no styling and touches no string.
+//
+// The columns are internal/view's, kind for kind and header for header. This
+// package had its own vocabulary for them -- a ColKind enum, a Column struct
+// and a switch per surface -- and every one of those was a second statement of
+// something the shared list already says. What is left here is the arithmetic
+// that vocabulary was for: how much room a column costs, and which ones a
+// terminal has room for.
 type Layout struct {
-	Columns     []Column
+	Columns     []view.ListColumn
 	AccountWide int
 	Collapsed   bool // USED is the bare percentage, not the gauge
 
@@ -59,6 +26,16 @@ type Layout struct {
 	Runway                     bool // the "Runway: ..." line; see Plan's runway parameter
 	Border, Blanks             bool
 	Title, Header              bool // Header is the Active/Strategy/Current summary block
+	// Trailer is the block printed UNDER the table -- the legend, the hover
+	// sentence, the unranked note and the credit lines, which internal/view
+	// hands over as one ordered slice.
+	//
+	// The dashboard draws none of them yet, so planWithRows is told a length of
+	// zero and both of the places this touches the ladder answer exactly as
+	// they did before it existed: Trailer is false, so nothing is subtracted
+	// from the page's budget and nothing is reclaimed by the rung below.
+	Trailer     bool
+	TrailerRows int
 
 	// VisibleRows is an UPPER BOUND on how many account rows to render, not a
 	// count of rows that are actually shown: at the scrolling rung the last
@@ -84,42 +61,20 @@ const (
 	accountMax     = 32
 )
 
-// Each column's own reserved width: its content plus the standard 2-column gap
-// before the next column. planWidth subtracts them from a full-page width to
-// compute each rung's boundary directly, rather than restating the result as a
-// literal that could drift from the arithmetic that produced it.
+// footprint is what one column costs the page: its content, or its heading
+// where that is wider, plus the standard 2-column gap before the next column.
+// planWidth subtracts them from a full-page width to compute each rung's
+// boundary directly, rather than restating the result as a literal that could
+// drift from the arithmetic that produced it.
 //
-// TYPE, AUTO and STATE keep the content widths (12, 4 and 13) back-computed
-// from the width ladder this was built on, and are only as trustworthy as that
-// subtraction. The three that are new are measured against what they actually
-// hold: a window cell is a percentage, "100%" at its widest, and its header is
-// view.HeaderBudget; a reset cell is a HumanDuration, "1d16h" at its widest,
-// under a header that is a window header plus " IN"; AGE is the same duration
-// without the header.
-const (
-	typeFootprint  = 14 // 12 content + 2 gap
-	autoFootprint  = 6  // 4 content + 2 gap
-	stateFootprint = 15 // 13 content + 2 gap
-	tierFootprint  = 8  // 6 content + 2 gap
-	ageFootprint   = 8  // 6 content + 2 gap
-	// worstFootprint holds "100% " plus a header of HeaderBudget, which is
-	// what the collapsed block renders.
-	worstFootprint = view.HeaderBudget + 7
-)
-
-// windowFootprint and resetFootprint are per COLUMN and depend on the header,
-// which is the fleet's own and not this package's, so they are functions rather
-// than constants.
-//
-// The content half is fixed and small -- a percentage is at most "100%" and a
-// countdown at most "1d16h" -- so the header is what decides, which is why
-// view.HeaderBudget exists at all.
-func windowFootprint(header string) int {
-	return maxInt(ansi.StringWidth(header), 4) + 2
-}
-
-func resetFootprint(header string) int {
-	return maxInt(ansi.StringWidth(header), 5) + 2
+// BOTH NUMBERS ARE THE SHARED COLUMN'S OWN and neither is spelled here. This
+// package used to hold a constant per column -- fourteen for TYPE, fifteen for
+// STATE, and so on -- and each was the same reservation written a second time,
+// so the day a heading grew, the ladder went on reserving the old width and the
+// table drew past its own frame. A column now says how wide it is once, where
+// it is defined, and this measures what it says.
+func footprint(c view.ListColumn) int {
+	return maxInt(ansi.StringWidth(c.Header), c.Content) + 2
 }
 
 func maxInt(a, b int) int {
@@ -164,14 +119,18 @@ func Plan(cols view.Columns, width, height, rows int, notice, runway bool) Layou
 	}
 	// Active and Strategy always exist. Model.Body supplies the exact count,
 	// including an optional Codex active row and Current, through planWithRows.
-	return planWithRows(cols, width, height, rows, notice, runway, 1, runwayRows, 2)
+	return planWithRows(cols, width, height, rows, notice, runway, 1, runwayRows, 2, 0)
 }
 
 // planWithRows extends Plan with the dynamic vertical blocks: the wrapped key
-// bar, the one-line-per-fact runway summary, and the one-line-per-fact status
-// summary.
+// bar, the one-line-per-fact runway summary, the one-line-per-fact status
+// summary, and the trailer under the table.
+//
+// trailerRows is how many lines internal/view would print below the table, and
+// zero says the page draws none. It is a COUNT and not a bool because every
+// line of it is one row of the terminal, and the ladder spends rows.
 func planWithRows(cols view.Columns, width, height, rows int,
-	notice, runway bool, footerRows, runwayRows, summaryRows int) Layout {
+	notice, runway bool, footerRows, runwayRows, summaryRows, trailerRows int) Layout {
 	var l Layout
 	l.FooterRows = 1
 	if footerRows > 0 {
@@ -183,6 +142,7 @@ func planWithRows(cols view.Columns, width, height, rows int,
 	if runwayRows > 0 {
 		l.RunwayRows = runwayRows
 	}
+	l.TrailerRows = trailerRows
 
 	// 35 columns is the stated minimum viable width. Height also has to carry
 	// the wrapped footer, the table heading and one account row.
@@ -213,67 +173,48 @@ func planWithRows(cols view.Columns, width, height, rows int,
 // column is already on the page (width >= fullAt) does unused width finally
 // reach ACCOUNT, growing it up to accountMax.
 func planWidth(l *Layout, cols view.Columns, width int) {
-	// The never-dropped four, and their absence from the drop order below IS
+	// The fixed order is internal/view's, less TIER: the shared list is the
+	// UNION of what the two surfaces draw, and TIER is the one column in it
+	// this page has never carried. Taking it out here rather than reordering
+	// the list is what keeps the two tables in one order while they are being
+	// moved onto it -- and putting it back is a change to what the dashboard
+	// SHOWS, which belongs in a commit that says so.
+	//
+	// The never-dropped columns, and their absence from the drop order below IS
 	// the argument: IDX and ACCOUNT say WHICH account, and every window column
 	// says how much of one limit is gone. Dropping a window column would take a
 	// limit off the page silently -- and the one most likely to matter is
 	// exactly the one that is spent, because that is the row a reader came to
-	// look at. The block collapses to ColWorst instead, which is safe where
-	// dropping is not: with every cell reading percentage USED, the worst
+	// look at. The block collapses to one WORST cell instead, which is safe
+	// where dropping is not: with every cell reading percentage USED, the worst
 	// window is the MAX, so nothing the collapsed cell hides is worse than what
 	// it shows. A partial column set can make no such statement.
-	full := []Column{col(ColIdx), col(ColAccount), col(ColType)}
-	for i := range cols.Windows {
-		full = append(full, windowCol(i))
-	}
-	for i := range cols.Resets {
-		full = append(full, resetCol(i))
-	}
-	full = append(full, col(ColState), col(ColAuto), col(ColAge))
-
-	// Drop order, lowest priority first. It is a fixed priority list walked
-	// from the tail and NEVER a greedy packer: greedy is non-monotone, so a
-	// column can vanish when the terminal WIDENS -- the same defect class the
-	// ACCOUNT reservation below exists to prevent. The price is that at some
-	// widths the page holds slack it cannot spend, and that is stated rather
-	// than hidden.
-	drops := []Column{col(ColAuto), col(ColType), col(ColAge), col(ColState)}
-	// Reset columns from the LAST plan-order one back, so the rollover a reader
-	// is most likely to be waiting on -- the soonest, which sorts first -- is
-	// the last to go.
-	for i := len(cols.Resets) - 1; i >= 0; i-- {
-		drops = append(drops, resetCol(i))
-	}
-
-	cost := func(c Column) int {
-		switch c.Kind {
-		case ColIdx:
-			return 6
-		case ColAccount:
-			return accountComfort + 2
-		case ColType:
-			return typeFootprint
-		case ColTier:
-			return tierFootprint
-		case ColWindow:
-			return windowFootprint(cols.Windows[c.Win].Header)
-		case ColReset:
-			return resetFootprint(cols.Resets[c.Win].Header)
-		case ColWorst:
-			return worstFootprint
-		case ColState:
-			return stateFootprint
-		case ColAuto:
-			return autoFootprint
-		case ColAge:
-			return ageFootprint
+	var full []view.ListColumn
+	for _, c := range view.ListColumns(cols) {
+		if c.Kind == view.ColumnTier {
+			continue
 		}
-		return 0
+		full = append(full, c)
 	}
-	total := func(cs []Column) int {
+
+	// Drop order, lowest priority first, and internal/view's own. It is a fixed
+	// priority list walked from the tail and NEVER a greedy packer: greedy is
+	// non-monotone, so a column can vanish when the terminal WIDENS -- the same
+	// defect class the ACCOUNT reservation below exists to prevent. The price
+	// is that at some widths the page holds slack it cannot spend, and that is
+	// stated rather than hidden.
+	//
+	// It offers TIER, which this page does not draw. Dropping a column that is
+	// not there removes nothing and costs one comparison, so the list is taken
+	// whole rather than filtered: the priority of a column against its
+	// neighbours is the shared list's answer, and half of it here would be a
+	// second answer.
+	drops := view.ListDrops(cols)
+
+	total := func(cs []view.ListColumn) int {
 		n := 2 // the border
 		for _, c := range cs {
-			n += cost(c)
+			n += footprint(c)
 		}
 		return n
 	}
@@ -295,23 +236,11 @@ func planWidth(l *Layout, cols view.Columns, width int) {
 	}
 	// Still too wide with every optional column gone: collapse the whole window
 	// block to one cell rather than take limits off the page one at a time.
-	if total(shown) > width && len(cols.Windows) > 0 {
-		var kept []Column
-		placed := false
-		for _, c := range shown {
-			if c.Kind == ColWindow {
-				if !placed {
-					kept = append(kept, col(ColWorst))
-					placed = true
-				}
-				continue
-			}
-			kept = append(kept, c)
-		}
-		shown = kept
+	if total(shown) > width {
+		shown = view.CollapseWindows(shown)
 	}
 	l.Columns = shown
-	l.Collapsed = len(cols.Windows) > 0 && !hasKind(shown, ColWindow)
+	l.Collapsed = len(cols.Windows) > 0 && !hasKind(shown, view.ColumnWindow)
 
 	switch {
 	case width < 43:
@@ -331,7 +260,7 @@ func planWidth(l *Layout, cols view.Columns, width int) {
 	}
 }
 
-func hasKind(cs []Column, k ColKind) bool {
+func hasKind(cs []view.ListColumn, k view.ColumnKind) bool {
 	for _, c := range cs {
 		if c.Kind == k {
 			return true
@@ -340,8 +269,11 @@ func hasKind(cs []Column, k ColKind) bool {
 	return false
 }
 
-func withoutColumns(cols []Column, drop ...Column) []Column {
-	out := make([]Column, 0, len(cols))
+// withoutColumns removes each dropped column by VALUE, which is what
+// view.ListDrops publishing whole columns rather than kinds is for: a reset
+// column is one of several and only the one the drop names may go.
+func withoutColumns(cols []view.ListColumn, drop ...view.ListColumn) []view.ListColumn {
+	out := make([]view.ListColumn, 0, len(cols))
 	for _, c := range cols {
 		dropped := false
 		for _, d := range drop {
@@ -385,6 +317,15 @@ const (
 // bar, that order keeps the family visible at the 80x24 design target while
 // spending only vertical whitespace.
 //
+// The trailer goes directly after those three and ahead of the notice and the
+// runway line, which is the highest a block carrying real information can sit.
+// Every line of it explains a column whose HEADING is already on the page and
+// readable without it -- the legend maps a heading back to its wire key, the
+// unranked note says which of them nothing switches away from -- while the
+// notice below it reports that something could not be READ, which changes what
+// the figures in those columns mean. A page that kept the map and dropped the
+// warning would be keeping the smaller answer.
+//
 // The runway line sits one rung below the notice, which decides what happens at
 // the single height where exactly one of the two fits: the note gives and the
 // runway line stays. Both cost one row and the ladder had to order them. The
@@ -405,6 +346,7 @@ func planHeight(l *Layout, height, rows, summaryRows int, notice, runway bool) {
 	l.Wordmark, l.Tagline, l.Figures = true, true, true
 	l.Notice = notice
 	l.Runway = runway
+	l.Trailer = l.TrailerRows > 0
 	l.Border, l.Blanks = true, true
 	l.Title, l.Header = true, true
 
@@ -415,6 +357,9 @@ func planHeight(l *Layout, height, rows, summaryRows int, notice, runway bool) {
 	}
 	if runway {
 		need += l.RunwayRows
+	}
+	if l.Trailer {
+		need += l.TrailerRows
 	}
 
 	if need > height {
@@ -428,6 +373,10 @@ func planHeight(l *Layout, height, rows, summaryRows int, notice, runway bool) {
 	if need > height {
 		need -= saveFigures
 		l.Figures = false
+	}
+	if l.Trailer && need > height {
+		need -= l.TrailerRows
+		l.Trailer = false
 	}
 	if l.Notice && need > height {
 		need -= saveNotice
@@ -455,14 +404,24 @@ func planHeight(l *Layout, height, rows, summaryRows int, notice, runway bool) {
 	}
 
 	// The subtraction reserves one row for the column header and every row in
-	// the wrapped footer, whatever chrome above them survived. It is an upper bound, not
+	// the wrapped footer, whatever chrome above them survived, and every row of
+	// a trailer that survived its own rung above. It is an upper bound, not
 	// a target: at heights where the whole page fits comfortably, height-2
 	// can be far larger than the real row count, and a renderer slicing
 	// Rows[Top:Top+VisibleRows] on that unclamped number would read past the
 	// end of the slice. Clamping to rows makes VisibleRows == rows whenever
 	// everything already fits, and only less than that -- with the last line
 	// spent on "+K more (j/k)" -- once scrolling genuinely starts.
+	//
+	// The trailer has to be subtracted HERE as well as counted in need above,
+	// and the two are not the same statement. need decides which blocks the
+	// page can afford at all; this decides how many account rows are left once
+	// they are drawn, and a trailer left out of it would be written over the
+	// bottom of the table by rows the ladder had already promised room to.
 	l.VisibleRows = height - 1 - l.FooterRows
+	if l.Trailer {
+		l.VisibleRows -= l.TrailerRows
+	}
 	if l.VisibleRows > rows {
 		l.VisibleRows = rows
 	}

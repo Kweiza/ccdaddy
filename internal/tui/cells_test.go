@@ -19,20 +19,48 @@ import (
 // The document contract is additive and guarantees a newer daemon publishing a
 // state this binary has never heard of, on upgrade day.
 //
-// stateCell's third return IS asserted, in the test below, and that is new:
-// it used to be a lipgloss.Style, which carries a []color.Color field and a
-// func field and therefore has no ==, so a test could only ever check that two
-// styles were both the zero value -- which is to say it could check nothing at
-// all while every style var in cells.go was unset. It is a theme.Role now,
-// which is an int.
+// stateCell's role IS asserted, in the test below, and that is new: it used to
+// be a lipgloss.Style, which carries a []color.Color field and a func field and
+// therefore has no ==, so a test could only ever check that two styles were
+// both the zero value -- which is to say it could check nothing at all while
+// every style var in cells.go was unset. It is a theme.Role now, which is an
+// int.
+//
+// The WORD is view.StateLabel's and is asserted through the cell the page
+// draws, because that is where the two halves meet: this page owns the glyph in
+// front and internal/view owns everything after it, and a test of either alone
+// would pass on a page that had stopped putting them together.
 func TestAStateThisBinaryHasNeverHeardOfIsCarriedThroughAndNeverReadsAsActive(t *testing.T) {
-	glyph, text, _ := stateCell(UnicodeGlyphs, daemon.AccountState("draining"))
-	if glyph != UnicodeGlyphs.Unknown {
-		t.Errorf("glyph = %q, want %q", glyph, UnicodeGlyphs.Unknown)
+	got := stateCellOf(t, daemon.AccountState("draining"))
+	if want := UnicodeGlyphs.Unknown + " draining"; got != want {
+		t.Errorf("the state cell is %q, want %q", got, want)
 	}
-	if text != "draining" {
-		t.Errorf("text = %q, want the raw value carried through", text)
-	}
+}
+
+// pageCell is what the dashboard draws in one column of one row.
+//
+// It goes through Model.cell rather than through a view.Row method directly,
+// and that is the whole point of it: the cells are internal/view's now, so a
+// test that called the method would assert what internal/view already asserts
+// and would stay green on a page that had stopped drawing that column, or drew
+// it from the wrong kind.
+//
+// Nobody is pointing at the row -- the cursor decoration has its own tests up
+// in render_test.go -- and ACCOUNT is given the comfort width, so a label short
+// enough to fit comes back with only its padding added.
+func pageCell(t *testing.T, k view.ColumnKind, r view.Row) string {
+	t.Helper()
+	m := fixtureModel(113, 26)
+	m.Cursor = noCursor
+	return m.cell(view.ListColumn{Kind: k, Index: -1},
+		view.ListRow{Row: r, At: 0}, Layout{AccountWide: accountComfort})
+}
+
+// stateCellOf is the dashboard's STATE cell for one engine state: the shared
+// cell function's word, with this page's glyph in front of it.
+func stateCellOf(t *testing.T, s daemon.AccountState) string {
+	t.Helper()
+	return pageCell(t, view.ColumnState, view.Row{Engine: daemon.AccountStatus{State: s}})
 }
 
 // Which colour each state will be painted in, asserted by VALUE, one commit
@@ -64,7 +92,7 @@ func TestEveryStateNamesTheRoleItWillBePaintedIn(t *testing.T) {
 		{"", theme.RoleMuted},
 		{daemon.AccountState("draining"), theme.RoleMuted},
 	} {
-		if _, _, got := stateCell(UnicodeGlyphs, tc.state); got != tc.role {
+		if _, got := stateCell(UnicodeGlyphs, tc.state); got != tc.role {
 			t.Errorf("stateCell(%q) names role %d, want role %d", tc.state, got, tc.role)
 		}
 	}
@@ -74,9 +102,11 @@ func TestEveryStateNamesTheRoleItWillBePaintedIn(t *testing.T) {
 // filled from a map lookup that returns the zero value on a miss, so an account
 // no daemon has ever published carries "".
 func TestAnAccountNoDaemonHasEverPublishedRendersADashAndNoGlyph(t *testing.T) {
-	glyph, text, _ := stateCell(UnicodeGlyphs, "")
-	if glyph != "" || text != "-" {
-		t.Fatalf("stateCell(\"\") = (%q, %q), want (\"\", \"-\")", glyph, text)
+	if glyph, _ := stateCell(UnicodeGlyphs, ""); glyph != "" {
+		t.Errorf("stateCell(\"\") draws the glyph %q over an absence", glyph)
+	}
+	if got := stateCellOf(t, ""); got != "-" {
+		t.Fatalf("the state cell of an unpublished account is %q, want \"-\"", got)
 	}
 }
 
@@ -93,15 +123,14 @@ func TestEveryAccountStateHasItsOwnCell(t *testing.T) {
 		daemon.StateQuarantined, daemon.StateDisabled, daemon.StateUnknown,
 		daemon.StateServing, daemon.StateNeedsRelogin,
 	} {
-		glyph, text, _ := stateCell(UnicodeGlyphs, s)
-		if text != string(s) {
-			t.Errorf("stateCell(%q) text = %q, want the state's own name", s, text)
+		cell := stateCellOf(t, s)
+		if !strings.HasSuffix(cell, " "+string(s)) {
+			t.Errorf("the state cell of %q is %q, want the state's own name after the glyph", s, cell)
 		}
-		key := glyph + " " + text
-		if seen[key] {
-			t.Errorf("two states render the same cell %q", key)
+		if seen[cell] {
+			t.Errorf("two states render the same cell %q", cell)
 		}
-		seen[key] = true
+		seen[cell] = true
 	}
 	if len(seen) != 8 {
 		t.Fatalf("eight named states rendered %d distinct cells", len(seen))
@@ -111,11 +140,11 @@ func TestEveryAccountStateHasItsOwnCell(t *testing.T) {
 // The mockup's per-row "Best"/"Nearest" name strategies that exist nowhere in
 // this tree. The column is a rotation policy and carries two strings.
 func TestAutoIsARotationPolicyAndNotAStrategyName(t *testing.T) {
-	if got := autoCell(enabledRow()); got != "yes" {
-		t.Errorf("autoCell(enabled) = %q, want \"yes\"", got)
+	if got := pageCell(t, view.ColumnAuto, enabledRow()); got != "yes" {
+		t.Errorf("the AUTO cell of an enabled account = %q, want \"yes\"", got)
 	}
-	if got := autoCell(disabledRow()); got != "no" {
-		t.Errorf("autoCell(disabled) = %q, want \"no\"", got)
+	if got := pageCell(t, view.ColumnAuto, disabledRow()); got != "no" {
+		t.Errorf("the AUTO cell of a disabled account = %q, want \"no\"", got)
 	}
 }
 
@@ -148,14 +177,13 @@ func TestALongAddressLosesItsTailAndKeepsItsHead(t *testing.T) {
 // starts painting the cell it was watching, so it renders the style now.
 func TestThePlainPathEmitsNoEscapeByte(t *testing.T) {
 	pal := theme.Of(theme.None)
-	cols := testCols()
 	rows := []view.Row{rowAtPercent(0), rowAtPercent(87), rowAtPercent(100), rowWithNoEntry(), enabledRow(), disabledRow()}
 	for _, r := range rows {
 		for _, cell := range []string{
 			r.WindowCell(usage.WindowFiveHour),
-			worstCell(r, cols),
-			autoCell(r),
-			accountCell(r.ListLabel(), 20, UnicodeGlyphs.Cue),
+			pageCell(t, view.ColumnWorst, r),
+			pageCell(t, view.ColumnAuto, r),
+			pageCell(t, view.ColumnAccount, r),
 		} {
 			if strings.ContainsRune(cell, 0x1b) {
 				t.Fatalf("cell %q carries an escape byte under the None theme", cell)
@@ -166,9 +194,9 @@ func TestThePlainPathEmitsNoEscapeByte(t *testing.T) {
 		daemon.StateActive, daemon.StateCandidate, daemon.StateExhausted,
 		daemon.StateQuarantined, daemon.StateDisabled, daemon.StateUnknown, "",
 	} {
-		glyph, text, role := stateCell(UnicodeGlyphs, s)
-		if styled := pal.Style(role).Render(text); strings.ContainsRune(glyph, 0x1b) || strings.ContainsRune(styled, 0x1b) {
-			t.Fatalf("stateCell(%q) carries an escape byte under the None theme", s)
+		_, role := stateCell(UnicodeGlyphs, s)
+		if styled := pal.Style(role).Render(stateCellOf(t, s)); strings.ContainsRune(styled, 0x1b) {
+			t.Fatalf("the state cell of %q carries an escape byte under the None theme", s)
 		}
 	}
 }
@@ -238,9 +266,15 @@ func setNamedWindow(s *usage.Snapshot, name usage.WindowName, w usage.Window) {
 
 // The dashboard is the THIRD table that has to call a codex account codex, and
 // it was the one nothing asserted. list and status are pinned end to end by
-// their own tests, but those call view.Row.TypeLabel directly and never reach
-// this wrapper -- so replacing typeCell's body with r.Account.Kind.String()
-// left this package green, all seven byte-compared golden pages included.
+// their own tests, but those call view.Row.TypeLabel directly and never reached
+// this page's TYPE cell -- so replacing the wrapper's body with
+// r.Account.Kind.String() left this package green, all seven byte-compared
+// golden pages included.
+//
+// There is no wrapper left to break: the cell is view.Row.ListCell now. What
+// can still go wrong is the wiring, and it is what this asks about -- a TYPE
+// column drawn from the wrong kind, or a page that stopped drawing TYPE at all,
+// answers something other than "codex" here.
 //
 // A unit test rather than a fixture account: the golden pages compare bytes,
 // and a codex row in fixtureRows() would churn all seven of them for a
@@ -250,16 +284,16 @@ func TestTheTypeCellCallsACodexRowCodex(t *testing.T) {
 		Provider: provider.Codex,
 		Kind:     identity.KindSubscription,
 	}}
-	if got := typeCell(codex); got != "codex" {
-		t.Errorf("typeCell on a codex row = %q, want codex", got)
+	if got := pageCell(t, view.ColumnType, codex); got != "codex" {
+		t.Errorf("the TYPE cell of a codex row = %q, want codex", got)
 	}
 
 	claude := view.Row{Account: store.Account{
 		Provider: provider.Claude,
 		Kind:     identity.KindSubscription,
 	}}
-	if got := typeCell(claude); got == "codex" {
-		t.Errorf("typeCell called a claude row codex")
+	if got := pageCell(t, view.ColumnType, claude); got == "codex" {
+		t.Errorf("the TYPE cell called a claude row codex")
 	}
 }
 
@@ -267,8 +301,7 @@ func TestTheTypeCellCallsACodexRowCodex(t *testing.T) {
 // one cell a terminal too narrow for the window block gets, and it must not
 // turn "nobody could read this account" into a percentage.
 func TestTheCollapsedBlockKeepsTheAbsenceRule(t *testing.T) {
-	cols := testCols()
-	if got := worstCell(rowWithNoEntry(), cols); got != view.Unreadable {
-		t.Errorf("worstCell on an unread row = %q, want %q", got, view.Unreadable)
+	if got := pageCell(t, view.ColumnWorst, rowWithNoEntry()); got != view.Unreadable {
+		t.Errorf("the collapsed cell of an unread row = %q, want %q", got, view.Unreadable)
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/Kweiza/ccdaddy/internal/theme"
+	"github.com/Kweiza/ccdaddy/internal/view"
 )
 
 // The role style comes from the same call that produced the glyph and the word,
@@ -25,7 +26,7 @@ import (
 func TestTheStateColumnTakesTheRoleOfTheStateItPrints(t *testing.T) {
 	pal := theme.Of(theme.Dark)
 	shown := fixtureRows()
-	cols := []Column{col(ColIdx), col(ColAccount), col(ColState)}
+	cols := []view.ListColumn{{Kind: view.ColumnIdx}, {Kind: view.ColumnAccount}, {Kind: view.ColumnState}}
 	const state = 2
 
 	for at, want := range map[int]theme.Role{
@@ -34,7 +35,7 @@ func TestTheStateColumnTakesTheRoleOfTheStateItPrints(t *testing.T) {
 		2: theme.RoleCandidate,
 		3: theme.RoleMuted,
 	} {
-		got := cellStyle(UnicodeGlyphs, pal, shown, cols, testCols(), at, state, len(cols)-1).GetForeground()
+		got := cellStyle(UnicodeGlyphs, pal, displayRows(shown), cols, testCols(), at, state, len(cols)-1).GetForeground()
 		if got != pal.Color(want) {
 			t.Errorf("row %d's STATE cell takes %v, want %v (%v)", at, got, pal.Color(want), want)
 		}
@@ -50,11 +51,11 @@ func TestTheStateColumnTakesTheRoleOfTheStateItPrints(t *testing.T) {
 // them is painted.
 func TestAMarkerRowIsMutedAndNotWhateverTheRowsAroundItAre(t *testing.T) {
 	pal := theme.Of(theme.Dark)
-	cols := []Column{col(ColIdx), col(ColAccount), col(ColState)}
+	cols := []view.ListColumn{{Kind: view.ColumnIdx}, {Kind: view.ColumnAccount}, {Kind: view.ColumnState}}
 
 	// The scrolling marker: three rows shown, the marker at index 3.
 	for col := range cols {
-		got := cellStyle(UnicodeGlyphs, pal, fixtureRows()[:3], cols, testCols(), 3, col, len(cols)-1).GetForeground()
+		got := cellStyle(UnicodeGlyphs, pal, displayRows(fixtureRows()[:3]), cols, testCols(), 3, col, len(cols)-1).GetForeground()
 		if got != pal.Color(theme.RoleMuted) {
 			t.Errorf("the +N-more marker's column %d takes %v, want RoleMuted", col, got)
 		}
@@ -72,8 +73,8 @@ func TestAMarkerRowIsMutedAndNotWhateverTheRowsAroundItAre(t *testing.T) {
 // account, and they were already the one row cellStyle treated separately.
 func TestTheColumnHeadingsTakeTheHeaderRole(t *testing.T) {
 	pal := theme.Of(theme.Dark)
-	cols := []Column{col(ColIdx), col(ColAccount), col(ColState)}
-	got := cellStyle(UnicodeGlyphs, pal, fixtureRows(), cols, testCols(), table.HeaderRow, 0, len(cols)-1).GetForeground()
+	cols := []view.ListColumn{{Kind: view.ColumnIdx}, {Kind: view.ColumnAccount}, {Kind: view.ColumnState}}
+	got := cellStyle(UnicodeGlyphs, pal, displayRows(fixtureRows()), cols, testCols(), table.HeaderRow, 0, len(cols)-1).GetForeground()
 	if got != pal.Color(theme.RoleHeader) {
 		t.Fatalf("the heading row takes %v, want RoleHeader", got)
 	}
@@ -82,10 +83,10 @@ func TestTheColumnHeadingsTakeTheHeaderRole(t *testing.T) {
 // The gaps are the width ladder's own arithmetic and a palette may not move
 // them: one column after IDX, two after every other, none after the last.
 func TestPaintingACellDoesNotMoveItsGap(t *testing.T) {
-	cols := []Column{col(ColIdx), col(ColAccount), col(ColState)}
+	cols := []view.ListColumn{{Kind: view.ColumnIdx}, {Kind: view.ColumnAccount}, {Kind: view.ColumnState}}
 	for _, pal := range []theme.Palette{theme.Of(theme.None), theme.Of(theme.Dark)} {
 		for col, want := range map[int]int{0: 1, 1: 2, 2: 0} {
-			got := cellStyle(UnicodeGlyphs, pal, fixtureRows(), cols, testCols(), 0, col, len(cols)-1).GetPaddingRight()
+			got := cellStyle(UnicodeGlyphs, pal, displayRows(fixtureRows()), cols, testCols(), 0, col, len(cols)-1).GetPaddingRight()
 			if got != want {
 				t.Errorf("under %v, column %d pads %d, want %d", pal.Name(), col, got, want)
 			}
