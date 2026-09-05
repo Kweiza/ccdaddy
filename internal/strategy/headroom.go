@@ -623,6 +623,7 @@ func NextResetAmong(s *usage.Snapshot, model string, t Thresholds, now time.Time
 	return out, found
 }
 
+
 // recoveryOf is when the named window rolls over: the moment it stops holding
 // the account back. A window that reported no reset has no recovery, which is
 // not the same as recovering now.

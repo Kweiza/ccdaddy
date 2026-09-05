@@ -1058,6 +1058,29 @@ func (e *Engine) probeDue(a store.Account, entry usage.Entry, cfg config.Config,
 	if !entry.MayProbe(now, w, rollover, !rollover.IsZero()) {
 		return "", "", false
 	}
+	// The phase, and it is the last gate rather than the first because it is the
+	// only one that says "not yet" to a warm-up every other rule has approved.
+	//
+	// Without it the fleet's anchors re-form into one batch every cycle: each
+	// account's next rollover is set by its last warm-up, and every warm-up
+	// happens within a minute of the rollover that triggered it, so a fleet
+	// warmed together stays warmed together forever. Measured on this fleet on
+	// 2026-09-05: six five-hour windows resetting inside a forty-minute band of a
+	// three-hundred-minute cycle. The consequence is not a shortage -- `ccdad
+	// runway` scored the five-hour axis "holds" with a 1.99x margin on the same
+	// afternoon three accounts sat at 100% together -- it is that all 120 pp/h of
+	// replenishment arrives at once and the hours between it have none.
+	//
+	// It is deliberately NOT done by delaying the poll. warmTarget aims a poll AT
+	// a rollover and warmClamp declines any target further out than the ordinary
+	// cadence would reach, so a phase added there is silently dropped and the
+	// batch survives. The probe is the thing whose timing sets the anchor, so the
+	// probe is what has to wait.
+	if wait := warmPhase(a.UUID, entry.Snapshot, w); wait > 0 && !rollover.IsZero() {
+		if now.Before(rollover.Add(wait)) {
+			return "", "", false
+		}
+	}
 	return w, probeModel(w), true
 }
 
@@ -1580,6 +1603,76 @@ func (e *Engine) warmTarget(s *usage.Snapshot, thr strategy.Thresholds, now time
 		return time.Time{}
 	}
 	return at.Add(usage.ProbeWakeMargin + time.Duration(e.rand()*float64(usage.ProbeWakeMargin)))
+}
+
+// warmPhase is how long this account's warm-up waits after its rollover, so the
+// fleet's anchors stop landing in one band.
+//
+// The phase is derived from the UUID rather than from a position in a list,
+// because there is no list here: probeDue is asked about one account, and the
+// identity peers it could reach are a singleton on a fleet where every account
+// carries its own organization. A hash is stable across restarts -- a per-process
+// seed would re-phase the whole fleet on every daemon start, which is the batch
+// re-forming by another route -- needs nothing but the account, and spreads a
+// fleet of any size without any account having to know the size.
+//
+// It is capped at HALF the window, and the cap is the cost being bounded rather
+// than tidiness: a delayed warm-up leaves that account's clock stopped for the
+// delay, which is elapsed window time the account does not get back. Half a
+// cycle turns this fleet's forty-minute band into a hundred-and-fifty-minute
+// one, which is enough to break the batch, while holding the worst case to
+// something an axis with a 1.99x margin can pay.
+//
+// A window whose length this build cannot name gets no phase. That is the codex
+// window with no limit_window_seconds, and it is the same "no scale to state
+// this on" the licence floor answers with silence rather than with a guess.
+//
+// The length comes from the COLD window itself and not from the next rollover
+// among the readable ones, and that is not interchangeable: at the moment this
+// is asked the window has already rolled over, so it has no future reset for a
+// walk to find, and a phase derived that way would be zero on every account this
+// gate exists to spread.
+func warmPhase(uuid string, s *usage.Snapshot, name usage.WindowName) time.Duration {
+	length, ok := windowLength(s, name)
+	if !ok || length <= 0 {
+		return 0
+	}
+	return time.Duration(uuidPhase(uuid) * float64(length) / 2)
+}
+
+// windowLength is how long the named window is, read off the reading that
+// carries it. A codex window states its own length on the wire; the fixed keys
+// are known by name.
+func windowLength(s *usage.Snapshot, name usage.WindowName) (time.Duration, bool) {
+	if s == nil {
+		return 0, false
+	}
+	for _, w := range s.AllWindows() {
+		if w.Name != name {
+			continue
+		}
+		return usage.WindowLengthOf(w.Name, w.Window)
+	}
+	return 0, false
+}
+
+// uuidPhase is a stable number in [0, 1) for one account.
+//
+// FNV-1a and not maphash: this decides when a probe spends the user's quota, so
+// it has to answer the same thing on every process and on every machine. A
+// per-process seed would re-phase the whole fleet on every daemon restart, which
+// is the batch re-forming by another route.
+func uuidPhase(uuid string) float64 {
+	const (
+		offset64 = 14695981039346656037
+		prime64  = 1099511628211
+	)
+	h := uint64(offset64)
+	for i := 0; i < len(uuid); i++ {
+		h ^= uint64(uuid[i])
+		h *= prime64
+	}
+	return float64(h%1_000_000) / 1_000_000
 }
 
 // warmClamp is the next poll instant, given the one the cadence chose and the
