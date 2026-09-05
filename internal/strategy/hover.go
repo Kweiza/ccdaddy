@@ -18,7 +18,8 @@ import (
 //	threshold = elapsed share of the window + share
 //	share     = max(100 / usable accounts, stranded)
 //	stranded  = (100 - weekly used) - usable x (100 - weekly elapsed),
-//	            floored at zero and capped by the room the account has
+//	            floored at zero, and refused outright to an account that
+//	            cannot absorb one HoverCooldown of work
 //
 // Read it as a pace target. An account further through its quota than through
 // its window, by more than its own slice of what is left, should hand the next
@@ -329,9 +330,9 @@ type HoverPlan struct {
 // threshold rises because of the seven-day row's numbers, so the window is
 // named here rather than left to be discovered by a reader comparing rows.
 //
-// Stranded is the EFFECTIVE figure, after the cap, because that is the one that
-// widened the share. Room is carried beside it so a reader can see whether the
-// cap bound at all.
+// Stranded is the EFFECTIVE figure, after the cooldown floor, because that is
+// the one that widened the share: zero for an account the floor refused,
+// however much of its week is about to expire.
 type HoverAccount struct {
 	UUID string
 	// Share is what this account's thresholds were built on: the larger of
@@ -346,9 +347,6 @@ type HoverAccount struct {
 	// them the share is the flat slice.
 	HasStranded bool
 	Stranded    float64
-	// Room is the quota the account can actually serve, which is what caps
-	// Stranded. See hoverRoom.
-	Room float64
 	// Window is the perishable window Stranded was priced on, and ResetsAt when
 	// it goes. Both are zero when HasStranded is false.
 	Window   usage.WindowName
@@ -477,7 +475,6 @@ func HoverThresholds(cands []Candidate, o Options) HoverPlan {
 			PoolShare:   hoverPoolShare(p.Usable),
 			HasStranded: hasStranded,
 			Stranded:    stranded,
-			Room:        hoverRoom(c.Usage, o.Model, configured),
 		}
 		if hasStranded {
 			acct.Window = sw.Name
@@ -592,8 +589,10 @@ func hoverPoolShare(usable int) float64 {
 // direction to have. `usable` counts accounts that are readable and eligible,
 // some of which may have nothing left to take a turn with, which OVERSTATES
 // what the rotation absorbs. It prices one account in isolation, when pointing
-// the whole fleet at this one would strand the others. And it is capped by the
-// room this account actually has.
+// the whole fleet at this one would strand the others. And it is refused
+// outright to an account holding less than one cooldown of work on any window
+// a model choice cannot dodge, which is the one case where a widening buys a
+// switch and nothing to serve on the far side of it.
 func hoverStranded(s *usage.Snapshot, model string, t Thresholds, usable int, now time.Time) (usage.NamedWindow, float64, bool) {
 	if usable < 1 {
 		// hoverPoolShare's own clamp, for the same reason: a pool of none is a
@@ -666,7 +665,8 @@ func hoverStranded(s *usage.Snapshot, model string, t Thresholds, usable int, no
 	//
 	// The error is in the direction this function already chose, for the reasons
 	// on its own doc: understating what strands means widening a licence less
-	// often, and the licence is a claim on the next session. Closing it would
+	// often, and a widening is a claim on the ranking that every other account
+	// then has to clear. Closing it would
 	// mean reading a fleet-wide burn rate, which is exactly the edge
 	// TestTheEngineDoesNotImportTheForecast forbids -- a threshold a user could
 	// no longer follow in `ccdad status`, because it would depend on a
@@ -675,68 +675,115 @@ func hoverStranded(s *usage.Snapshot, model string, t Thresholds, usable int, no
 	if stranded < 0 {
 		stranded = 0
 	}
-	// Capped by the room the account actually has. Hover prices the figure on
-	// the perishable window's own terms; this is where it becomes a claim on the
-	// NEXT SESSION, so this is where it has to answer "could this account serve
-	// that session at all". An account with ten points left on the window no
-	// model choice can dodge can absorb ten points of work, so ten points is the
-	// most its licence may be widened by, however much of its week is about to
-	// expire.
+	// A licence is a claim on the RANKING and not on a session, and this used
+	// to confuse the two. The figure was clamped by the room the account holds
+	// right now, on the ground that "this is where it becomes a claim on the
+	// NEXT SESSION, so this is where it has to answer could this account serve
+	// that session at all" -- and ccdad never hands out a session. It moves one
+	// MID SESSION: HoverCooldown is two minutes, so the engine re-reads and
+	// re-ranks the fleet thirty times an hour, and "could this account carry a
+	// session" is not a property the ordering has to protect.
 	//
-	// Without it, measured: an account with 10 points of five-hour room and a
-	// week 91% elapsed at 1% used scored a licence of 81, a five-hour pace
-	// target of 171, and OUTRANKED an account holding 90 points -- and Decide
-	// switched onto it. TestANearlyEmptyAccountCannotBuyTheFrontOfTheQueue.
+	// The two mechanisms that do hold that line read RAW ROOM and no threshold
+	// at all, so no licence can weaken them. OutOfQuota files an account with
+	// nothing left in headroomTier 3, which lessHeadroom compares BEFORE slack,
+	// so no widening of any size lifts an empty account --
+	// TestHoverRanksTheEmptyAccountLast and TestHoverSwitchesOffTheEmptyAccount
+	// are that pair. And preemptTarget refuses a candidate projected to run out
+	// inside its own blind interval.
 	//
-	// At zero room the figure is zero, which is the same instant OutOfQuota
-	// files the account empty, so the two guards agree rather than merely
-	// coexist. TestTheStrandedCapAndTheEmptyTierReadTheSameRoom pins that.
-	if room := hoverRoom(s, model, t); stranded > room {
-		stranded = room
-	}
-	if stranded < 0 {
+	// What neither covers is the SLIVER: room strictly between zero and one
+	// cooldown of work. OutOfQuota is a <= 0 test, so an account with 0.05
+	// points of a five-hour window -- nine seconds of work -- sits in the roomy
+	// tier, and on a licence priced off its week it leads the order and Decide
+	// switches onto it, buying nine seconds with a two-minute cooldown. That is
+	// the one cost a widening can impose that nothing else refuses, so it is the
+	// one question asked here, and it is a BOOLEAN rather than a bound: the
+	// price of a switch is fixed, so what is worth asking is whether the account
+	// clears it, not by how much.
+	//
+	// The clamp could not ask it, because it compared across axes. stranded is
+	// in points of a WEEK, and on that axis the clamp was vacuous: usable is at
+	// least one and expected is under 100, so the figure is already at most
+	// 100 - pct, which TestTheStrandedShareNeverExceedsTheQuotaTheAccountHolds
+	// pins. It could only ever bind by reaching across to a SHORTER window's
+	// room, and a five-hour point and a weekly point are different quantities
+	// -- internal/forecast refuses that comparison outright on its Both axis.
+	// So it could only ever bind where it was wrong.
+	//
+	// Measured on the fleet of 2026-09-05: an account held 61 points of a week
+	// six hours from its reset, and the clamp cut its licence from 38.5 to the
+	// 9 points left on a five-hour window that reset 28 minutes later -- below
+	// the flat 16.67, so the widening did not shrink, it vanished, and the
+	// account ranked last of six. Half an hour later the same account,
+	// unchanged, priced at 38.5 under either rule: a quantity a clock deletes
+	// without any work being done was never a statement about what the account
+	// can serve. TestAPerishableWeekOutlivesAFiveHourWindowAboutToRoll.
+	//
+	// The clamp, and the test that pinned it against OutOfQuota, came in
+	// fe1a5fe.
+	if !absorbsACooldown(s, model, t) {
 		stranded = 0
 	}
 	return best, stranded, true
 }
 
-// hoverRoom is the least raw room among the windows a MODEL CHOICE CANNOT
-// DODGE, falling back to the least room anywhere when none of those was
-// readable, and zero for an account nothing could be read from.
+// absorbsACooldown is whether every window a MODEL CHOICE CANNOT DODGE still
+// holds at least one HoverCooldown of work, falling back to every readable
+// window when none of those was readable.
 //
-// It is OutOfQuota's rule stated as a number rather than as a verdict, over the
-// same window set, so the figure that caps a licence and the figure that files
-// an account empty go to zero at the same instant. It exists as a second
-// spelling of a rule HeadroomFor already applies, and a second spelling that
-// drifts is how a blown Fable cap would come to zero a licence that OutOfQuota
-// would not zero -- so the two are pinned together by a test rather than by
-// this comment.
-func hoverRoom(s *usage.Snapshot, model string, t Thresholds) float64 {
-	minAny, minAll := 0.0, 0.0
-	haveAny, haveAll := false, false
+// It is what is left of the room cap, and it is deliberately a floor on the
+// LICENCE rather than a filter on the switch. The two are not the same guard:
+// an account whose own slack already leads needs no widening to be switched
+// to, and refusing it there is how the last points of every account become
+// unreachable -- TestTheLastPointOfEachAccountIsReachableUnderHover is that
+// line, and it is why preemptTarget's "not itself about to run out" test stays
+// on the pre-emptive arm where it lives. This refuses only to MANUFACTURE a
+// lead for an account that cannot pay for the switch it would win.
+//
+// The comparison is per window and in that window's own points, which is the
+// unit the clamp got wrong. One cooldown of a window is
+// 100 x HoverCooldown / length: 0.667 points of a five-hour window and 0.0198
+// of a week, both two minutes, read off usage.WindowLengthOf -- the same table
+// usage.ExpectedPct paces with, so a codex week a plan makes thirty days long
+// is judged by its length rather than by its name. A window with no length
+// this build can name says nothing rather than refusing: there is no scale to
+// state a cooldown on, and zeroing a licence over it would be arithmetic on a
+// number nobody reported. It still counts as SEEN, so an account whose only
+// all-model window is one such is judged on it and not on a model cap beside
+// it -- the same window set OutOfQuota reads, with the same all-model-first
+// fallback, which is what keeps a blown Fable cap from zeroing a licence
+// OutOfQuota would not zero.
+//
+// The pairing with the empty tier holds in the direction that matters and now
+// strictly: the floor fires while room is still POSITIVE, so an account
+// OutOfQuota files empty is one this has already refused to widen, and the
+// band between the two -- which the old equality left open -- is covered by
+// this alone. TestTheLicenceFloorFiresBeforeTheEmptyTierDoes is that pairing,
+// row by row, and its two sliver rows are the cases the equality could not say.
+func absorbsACooldown(s *usage.Snapshot, model string, t Thresholds) bool {
+	okAny, okAll := true, true
+	haveAny := false
 	for _, w := range bindingWindows(s, model, t) {
 		pct, ok := w.Percent()
 		if !ok {
 			continue
 		}
-		room := 100 - pct
-		if !haveAll || room < minAll {
-			minAll, haveAll = room, true
+		short := false
+		if length, ok := usage.WindowLengthOf(w.Name, w.Window); ok && length > 0 {
+			short = 100-pct < 100*float64(HoverCooldown)/float64(length)
 		}
+		okAll = okAll && !short
 		if capsOneModelFamily(w.Name) {
 			continue
 		}
-		if !haveAny || room < minAny {
-			minAny, haveAny = room, true
-		}
+		haveAny = true
+		okAny = okAny && !short
 	}
-	switch {
-	case haveAny:
-		return minAny
-	case haveAll:
-		return minAll
+	if haveAny {
+		return okAny
 	}
-	return 0
+	return okAll
 }
 
 // hoverElapsedPct is the share of itself a window has run through, and whether

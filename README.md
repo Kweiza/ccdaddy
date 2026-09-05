@@ -631,9 +631,16 @@ stranded  = (100 - weekly used) - usable x (100 - weekly elapsed)
 The second half of the share is what makes hover spend perishable quota. An
 account whose week ends soon while it still holds most of it is holding quota the
 rotation cannot reach in time: sharing it out buys nothing, because there is no
-*later* to share it into. `stranded` prices exactly that part, floored at zero
-and capped by the room the account actually has, and the share widens to cover
-it. A pool keeping up with its weeks strands nothing and gets the flat slice.
+*later* to share it into. `stranded` prices exactly that part, floored at zero,
+and the share widens to cover it. A pool keeping up with its weeks strands
+nothing and gets the flat slice.
+
+The one thing that can refuse the widening is a switch it cannot pay for. Moving
+costs a two-minute cooldown whatever the account has left, so an account holding
+less than two minutes of work on any window a model choice cannot dodge — 0.667
+points of a five-hour window, 0.0198 of a week — gets the flat slice instead. An
+account with *nothing* left is handled a step earlier and more bluntly: it sorts
+last outright, whatever its pace says.
 
 **It is not capped, and a target above 100 is meaningful.** A window far enough
 through its own cycle earns more than 100, which reads as *no restraint*: there
