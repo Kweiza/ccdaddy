@@ -12,8 +12,18 @@ import (
 // mixedFleet seeds one Claude account and one Codex one, each carrying only its
 // own provider's windows. That is the shape the union used to spend columns on:
 // four cells per row that could say nothing but "-".
+// isolate FIRST, and it is not boilerplate. Without it store.Open resolves the
+// REAL CCDAD_HOME, so the seeds below land in the user's own account store --
+// and `ccdad status` is on auto-start's allow-list, so runRoot spawns a real
+// daemon from os.Executable(), which under `go test` is the test binary itself.
+// On Linux and macOS that child is invisible; on Windows it holds the running
+// executable open, and `go test` then fails its own cleanup with
+// "unlinkat cli.test.exe: Access is denied" after every package has passed.
+// isolate's CLAUDE_SECURESTORAGE_CONFIG_DIR is auto-start's third refusal.
 func mixedFleet(t *testing.T) {
 	t.Helper()
+	isolate(t)
+	freezeClock(t, statusNow)
 	seedAccount(t, "uuid-a", "work@example.com")
 	seedUsageEntry(t, "uuid-a", usage.Entry{
 		FetchedAt: statusNow,

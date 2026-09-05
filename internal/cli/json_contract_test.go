@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -830,7 +831,57 @@ func TestMain(m *testing.M) {
 		os.Args = append([]string{os.Args[0]}, strings.Fields(argv)...)
 		os.Exit(int(Execute()))
 	}
-	os.Exit(m.Run())
+	os.Exit(sandboxed(m))
+}
+
+// sandboxed runs the suite with a FLOOR under it: a package-wide temporary home
+// that a test which forgets isolate falls onto instead of the user's own.
+//
+// isolate is still what a test uses -- it gives each one a home of its own, and
+// t.Setenv layers over this. What this covers is the test that never calls it,
+// and the two things such a test did before it existed are not theoretical.
+// Both were measured on 2026-09-05.
+//
+// The first is that store.Open resolved the REAL CCDAD_HOME, so the fixture's
+// seeds landed in the user's account store and showed up in their `ccdad
+// status` as accounts they never added.
+//
+// The second is why this is here rather than only in a review note. `ccdad
+// status` is on auto-start's allow-list, so running it spawns a daemon from
+// os.Executable() -- which under `go test` is the test binary. On Linux and
+// macOS that child is invisible: both unlink a running executable happily. On
+// Windows it holds the file, and `go test` fails its own cleanup with
+// "unlinkat cli.test.exe: Access is denied" AFTER every package has reported
+// ok. So the whole class is silent on two of the three platforms in the matrix
+// and only ever discovered on main. CLAUDE_SECURESTORAGE_CONFIG_DIR being
+// DEFINED is auto-start's third refusal, and that is the one that matters here.
+//
+// os.Setenv rather than t.Setenv: there is no *testing.T at this point, and the
+// process is about to exit either way.
+func sandboxed(m *testing.M) int {
+	root, err := os.MkdirTemp("", "ccdad-cli-suite")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cannot make the suite's sandbox: %v\n", err)
+		return 1
+	}
+	defer os.RemoveAll(root)
+
+	claude := filepath.Join(root, "claude")
+	if err := os.MkdirAll(claude, 0o700); err != nil {
+		fmt.Fprintf(os.Stderr, "cannot make the suite's sandbox: %v\n", err)
+		return 1
+	}
+	for k, v := range map[string]string{
+		"CCDAD_HOME":                      filepath.Join(root, "ccdad"),
+		"CLAUDE_CONFIG_DIR":               claude,
+		"CLAUDE_SECURESTORAGE_CONFIG_DIR": claude,
+	} {
+		if err := os.Setenv(k, v); err != nil {
+			fmt.Fprintf(os.Stderr, "cannot set %s: %v\n", k, err)
+			return 1
+		}
+	}
+	return m.Run()
 }
 
 // A closed reader is not an error, end to end: `ccdad status --json | head -1`
