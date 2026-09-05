@@ -16,16 +16,20 @@ one *before* a rate limit stops you.
 ```console
 $ ccdad status
 Daemon:  running  pid 48213  up 2h06m
-Active:  work@example.com (work)
+Active (Claude): work@example.com (work)
+Active (Codex): cx@example.com
 Strategy: headroom
-Current:  headroom
-Runway:  7d dry 2026-08-25 20:53 UTC (1d15h)  ·  5h holds  ·  basis 4h00m
+Current:  headroom  (at least one account has room, or could not be read)
+Runway:  7d dry 2026-08-24 01:19 UTC (1d13h)  ·  5h holds  ·  basis 4h00m  ·  need 4 (2 more)
 
-  IDX  ACCOUNT                  TYPE          TIER  5H   7D   FABLE  5H IN  7D IN  AGE
-* 1    work@example.com (work)  subscription  max   82%  61%  100%   1h14m  4d3h   41s
-  2    personal@example.com     subscription  pro   17%  44%  38%    3h02m  6d1h   2m
-  3    ci@example.org (ci)      api-key       -     ?    ?    ?      ?      ?      ?
-windows:  5H = five_hour   7D = seven_day   FABLE = weekly_scoped:model:Fable
+  IDX  ACCOUNT                  TYPE          TIER        5H   7D   CX 1  FABLE  5H IN  7D IN  CX 1 IN  FABLE IN  STATE      AGE
+       CLAUDE
+* 1    work@example.com (work)  subscription  claude_max  82%  61%  -     100%   1h14m  4d3h   ?        4d3h      active     41s
+  2    personal@example.com     subscription  claude_pro  17%  44%  -     38%    3h02m  6d1h   ?        4d3h      candidate  2m
+  3    ci@example.org (ci)      api-key       -           ?    ?    ?     ?      ?      ?      ?        ?         -          ?
+       CODEX
+  4    cx@example.com           codex         -           -    -    31%   -      ?      ?      3h09m    ?         serving    3m
+windows:  5H = five_hour   7D = seven_day   CX 1 = codex_primary   FABLE = weekly_scoped:model:Fable
 
 $ ccdad status --json
 {
@@ -341,16 +345,19 @@ Not `rm` — there is a daemon to stop and a credential directory to clear.
 ## Quick start
 
 ```sh
-ccdad add work          # opens a browser; 'work' becomes the alias
-ccdad add personal
+ccdad add claude work   # opens a browser; 'work' becomes the alias
+ccdad add claude personal
+ccdad add codex         # a Codex account: prints a device code, no browser
 ccdad status            # accounts, quota, strategy, runway, and daemon state
 ccdad which             # who Claude Code is logged in as right now
 ccdad switch personal   # move the live login
 ccdad daemon start      # watch quota and switch automatically from now on
 ```
 
-`ccdad add` does not switch to the account it just added. Pass `--activate`
-if you want both.
+The provider is part of the command: `ccdad add claude` and `ccdad add codex`
+are the two logins, and bare `ccdad add` is a usage error naming both rather
+than a default to Claude. `ccdad add claude` does not switch to the account it
+just added. Pass `--activate` if you want both.
 
 On a headless machine, or when a token came from somewhere else:
 
@@ -367,12 +374,12 @@ is a usage error rather than a silent hang. Pass the token, or `-`.
 | Command | What it does |
 |---|---|
 | `ccdad` | The dashboard, at a terminal. In a pipe, a redirect or cron it is usage on stderr and exit `2` |
-| `ccdad add [ALIAS]` | Log in through the browser and manage the account |
+| `ccdad add claude [ALIAS]`, `add codex` | Log an account in and manage it — through the browser for Claude, through a device code for Codex. Bare `ccdad add` names both and exits `2` |
 | `ccdad add-token [TOKEN\|-]` | Register an `sk-ant-oat…` setup token or an `sk-ant-api…` key |
 | `ccdad which` | Show which managed account Claude Code is logged in as |
 | `ccdad switch [ACCOUNT]` | Make an account the live login |
 | `ccdad run <ACCOUNT> [args…]` | Start a session as an account, without changing the live login. A Codex account starts codex instead of claude |
-| `ccdad codex add\|shim install\|exec` | Log a Codex account in, put ccdad's `codex` on your PATH, or run codex through ccdad — see [Codex accounts](#codex-accounts) |
+| `ccdad codex shim install\|exec` | Put ccdad's `codex` on your PATH by hand (`ccdad add codex` already does), or run codex through ccdad — see [Codex accounts](#codex-accounts) |
 | `ccdad probe <ACCOUNT>` | Spend one tiny request to start a window's clock early |
 | `ccdad auto` | Run the auto-switch engine, once or continuously |
 | `ccdad strategy hover\|manual\|headroom\|consume-first` | Select the one account-switching policy |
@@ -925,8 +932,8 @@ runway, daemon state, and every available key command.
 
 | Key | What it does |
 |---|---|
-| `a` | Add an account — asks which provider, then hands the terminal to `ccdad add` or `ccdad codex add` and comes back |
-| `s` | Switch the live login |
+| `a` | Add an account — asks which provider, then hands the terminal to `ccdad add claude` or `ccdad add codex` and comes back |
+| `s` | Switch the live login — the list is sectioned by provider, and both the Claude login and the account serving codex are marked |
 | `d` | The daemon screen — `S` starts, `x` stops, `R` restarts, and the log tails |
 | `c` | Change the switching strategy |
 | `q` | Quit (`ctrl+c` too) |
@@ -946,8 +953,13 @@ account for a full hour.
 
 It is designed for 80×24 and gets narrower gracefully: columns drop out in a
 fixed order, while the complete key bar wraps onto as many rows as it needs.
-Below 35 columns or 3 rows it says what it needs instead of drawing a page
-nobody can read. Run `ccdad status` for a redirectable snapshot.
+It gets shorter gracefully too, and gives up decoration before facts: the
+legend under the table goes before the family art, since `ccdad status` prints
+every line of it, and the `CLAUDE` / `CODEX` headings go before the version
+line and the summary, so a short terminal keeps what it knows about the fleet
+and loses the grouping. Below 35 columns or 3 rows it says what it needs
+instead of drawing a page nobody can read. Run `ccdad status` for a
+redirectable snapshot; it draws the same columns from the same definition.
 
 It is in colour, and the frame, the gauges and the state markers are drawn
 with box-drawing characters. If yours shows boxes where those should be — a
@@ -1138,13 +1150,14 @@ reports 128 plus the signal number, as a shell would.
 
 **Inside a session, the commands that write Claude Code's own state refuse.** A
 session is a whole Claude Code, and everything you — or the model — type in
-there inherits the session's credential home. `ccdad switch`, `auto`, `add`,
-`add-token`, `remove`, `uninstall`, `ccdad daemon start` and `ccdad daemon
-restart` would act on the session's copy while reporting they had changed the
-live login, so they exit `2` and name the session instead. Reads are untouched:
-`list`, `which`, `status`, `doctor` and `export` answer for the shell you are
-in, and `ccdad doctor` says which session that is. Run the refused ones from a
-shell outside the session.
+there inherits the session's credential home. `ccdad switch`, `auto`,
+`add claude`, `add-token`, `remove`, `uninstall`, `ccdad daemon start` and
+`ccdad daemon restart` would act on the session's copy while reporting they had
+changed the live login, so they exit `2` and name the session instead. Reads
+are untouched: `list`, `which`, `status`, `doctor` and `export` answer for the
+shell you are in, and `ccdad doctor` says which session that is. So is
+`ccdad add codex`, which writes only ccdad's own store and never a Claude
+login. Run the refused ones from a shell outside the session.
 
 ## Codex accounts
 
@@ -1160,22 +1173,31 @@ out of the OAuth path instead: the daemon runs a loopback proxy, codex holds no
 token at all, and `ccdad` owns the login, the refresh and the quota reading.
 
 ```sh
-ccdad codex add                 # log in, into ccdad's own store
-ccdad codex shim install        # put ~/.ccdad/bin/codex on your PATH
-codex                           # ...and this now goes through ccdad
+ccdad add codex                 # log in, into ccdad's own store; the shim is installed for you
+codex                           # ...and this now goes through ccdad, from the next terminal on
 ```
 
-`ccdad codex add` is a device-code login: it prints a code and a URL, and stores
+`ccdad add codex` is a device-code login: it prints a code and a URL, and stores
 the result in ccdad's own store. It never writes `~/.codex`, and it never runs
 `codex login` or `codex logout` — both of those revoke the stored grant
 server-side, with no undo.
 
-The shim is a two-line script at `~/.ccdad/bin/codex`. `ccdad codex shim
-install` writes it and registers that directory through the same marker-fenced
-block `ccdad setup-path` manages, so there is one block on the machine and
-`ccdad uninstall` takes it back with everything else. `ccdad doctor` reports
-which codex a bare `codex` actually resolves to, which is the question that
-matters after a fresh install and before a new terminal.
+The shim is a two-line script at `~/.ccdad/bin/codex`, and `ccdad add codex`
+installs it once the account is stored: it writes the script, registers that
+directory through the same marker-fenced block `ccdad setup-path` manages, says
+which startup files it touched, and names the undo — `ccdad uninstall` takes it
+back with everything else, and its list of what goes names the shim. A second
+add says nothing about the shim and moves no timestamp on any startup file, and
+a shim that cannot be installed — a shell ccdad does not write for, a `codex`
+in the way that ccdad cannot fix — does not fail the add: the account is
+stored, the refusal's own remedy is printed, and the login still exits `0`.
+`ccdad codex shim install` is optional; it is the same install by hand, for a
+shim that was refused or removed. There is one block on the machine, and the
+one thing the uninstall does not undo is a startup file it had to create,
+which is left in place, empty, because deleting a dotfile on the belief that
+ccdad created it is worse. `ccdad doctor` reports which codex a bare `codex`
+actually resolves to, which is the question that matters after a fresh install
+and before a new terminal.
 
 `ccdad codex exec -- <args>` is what the shim runs, and you can run it by name.
 `ccdad run <ACCOUNT> [-- codex <args>]` starts a session pinned to one account
@@ -1213,7 +1235,7 @@ Two kinds of codex session are not routed, and both are deliberate:
 Also not in v1: the `hover` strategy, `ccdad runway`'s forecast, `ccdad primary`
 and `ccdad auto` are Claude-only, and the credit axis with them — ccdad reads no
 Codex credit balance and counts no reset credits. There is no import of an
-existing `~/.codex/auth.json` and no browser login: `ccdad codex add` is a
+existing `~/.codex/auth.json` and no browser login: `ccdad add codex` is a
 device-code login. One person's account in two workspaces is one account to
 ccdad. The model list is codex's bundled presets rather than the remote
 catalog. codex's keyring, auto and ephemeral credential stores are not used —
@@ -1538,7 +1560,7 @@ absent only when nothing has ever been polled. In this mode it reads:
 
 ```console
 Daemon:  running  pid 48213  up 2h06m
-Active:  work@example.com (work)
+Active (Claude): work@example.com (work)
 Current: recovery  (every account is over its threshold; empty accounts last, then soonest reset inside an hour, then slack)
 ```
 
@@ -1838,7 +1860,7 @@ credential between machines.
 docker volume create ccdad-prod
 
 docker run -it --rm -v ccdad-prod:/data ccdaddy \
-  ccdad add --alias seat-a --no-browser --activate --timeout 15m
+  ccdad add claude --alias seat-a --no-browser --activate --timeout 15m
 ```
 
 Once per account per environment, and never again: the login lands on the volume,
@@ -1856,8 +1878,8 @@ a machine that is not the one running the container. `--activate` is worth
 passing on the first account of a fresh environment: without a live login there
 is no reading to rank, and the environment sits idle until the first poll lands.
 
-Each `ccdad add` starts its own login, so a second one needs a second browser
-tab. A code pasted into the wrong one is refused outright rather than re-prompted:
+Each `ccdad add claude` starts its own login, so a second one needs a second
+browser tab. A code pasted into the wrong one is refused outright rather than re-prompted:
 the state it carries belongs to the login that is no longer waiting.
 
 An enterprise seat metered only in credits takes the DEFAULT surface, not
@@ -2147,7 +2169,7 @@ Common answers it gives:
 | `fail credential-home` naming NFS or CIFS | Claude Code's credential home is on a filesystem without working locks, so ccdad cannot tell whether a second store is driving this login. The engine keeps running, unguarded |
 | `warn credential-home … the running daemon is driving` | The daemon is writing a different credential home from the one this shell resolves, so its switches change a login nothing here reads. It was started from a shell that resolved a different home — `CLAUDE_SECURESTORAGE_CONFIG_DIR` decides that when it is defined, `CLAUDE_CONFIG_DIR` otherwise. Restart it from the shell whose configuration you want it to serve. Inside a `ccdad run` session the two differ by design, and the row says so rather than telling you to restart anything |
 | `warn credential-files … belong to no account` | A file under the store's `credentials/` holds a live refresh token that `accounts.toml` does not name, so `list`, `remove` and the account rows above cannot see it. The path is in the message. Delete it once you have looked — `doctor` never will |
-| `fail accounts-file … is GONE` | `accounts.toml` itself is missing while credential files still sit beside it — ccdad's whole account list is gone, not just one account. **Do not delete those files**; each is a login you can still recover. Restore the document from a backup, `ccdad import` an export, or run `ccdad add` once per account |
+| `fail accounts-file … is GONE` | `accounts.toml` itself is missing while credential files still sit beside it — ccdad's whole account list is gone, not just one account. **Do not delete those files**; each is a login you can still recover. Restore the document from a backup, `ccdad import` an export, or run `ccdad add claude` (or `ccdad add codex`) once per account |
 | `skipped profiles/primary-accounts/credential-files … cannot be trusted` | The `accounts-file` row above already failed, so these three have no account list to check against — read that row instead of this one |
 | `ok mcp-tools` | Which spelling this machine's ccdad MCP tools have — `mcp__ccdad__*` from `ccdad mcp install`, `mcp__plugin_ccdad_ccdad__*` from the plugin. A rule written for one never fires under the other. `CLAUDE_PLUGIN_ROOT` decides the answer when ccdad is itself running as the plugin's server; in a shell the row reads Claude Code's plugin registry instead |
 
