@@ -34,9 +34,16 @@ func newCodexCmd() *cobra.Command {
 			"ccdad never writes codex's own home and never runs 'codex login' or\n" +
 			"'codex logout' — both of those revoke the stored grant server-side, with no\n" +
 			"undo, and would destroy an account ccdad is managing.",
-		Args:          codexArgs,
-		SilenceUsage:  true,
-		SilenceErrors: true,
+		Args: codexArgs,
+		// Unknown flags survive parsing so the tombstone below can be reached.
+		// `ccdad codex add --allow-workspace-member` is the shape a script
+		// written against the old spelling actually has, and --allow-workspace-member
+		// now lives on a leaf this group does not define. Cobra parses flags
+		// before it validates positionals, so without this pflag answers first
+		// and `add` never reaches codexArgs.
+		FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
+		SilenceUsage:       true,
+		SilenceErrors:      true,
 		RunE: func(*cobra.Command, []string) error {
 			// Cobra's own answer is to print help and exit 0. A caller that
 			// meant to type a verb gets a usage error, as everywhere else.
@@ -57,6 +64,11 @@ func newCodexCmd() *cobra.Command {
 // the alias was eventually removed, by which time nothing would connect the
 // failure to this rename. A usage error naming the new spelling costs one run
 // and is read by the person who can fix it.
+//
+// That last sentence only holds while the group whitelists unknown flags. The
+// old login took flags, and a real invocation carries them; a flagged one used
+// to die in pflag with cobra's unknown-flag line, which names a flag rather
+// than the rename, so the run it cost taught the reader nothing.
 func codexArgs(cmd *cobra.Command, args []string) error {
 	if len(args) > 0 && args[0] == "add" {
 		return UsageError("'ccdad codex add' is now 'ccdad add codex', beside 'ccdad add claude'")

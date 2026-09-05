@@ -289,16 +289,37 @@ func TestCodexWithNoSubcommandIsAUsageError(t *testing.T) {
 // This fires from the parent's own Args, which cobra reaches before any
 // persistent pre-run hook, so the tombstone is what a user sees from inside a
 // `ccdad run` session too.
+//
+// The flagged row is the shape a real caller has: the old login took flags, and
+// --allow-workspace-member now lives on a leaf this group does not define. Args
+// runs after flag parsing, so that row answered `unknown flag` and the tombstone
+// never ran — the one run it was supposed to cost taught its reader a flag name
+// instead of the rename. It reaches the tombstone only because the group
+// whitelists unknown flags.
 func TestTheOldCodexAddSpellingIsATombstoneAndNotAnAlias(t *testing.T) {
-	isolate(t)
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"bare", []string{"codex", "add"}},
+		{"with a flag the old login took", []string{"codex", "add", "--allow-workspace-member"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolate(t)
 
-	code, _, _, top := runRoot(t, "codex", "add")
+			code, _, _, top := runRoot(t, tc.args...)
 
-	if code != ExitUsage {
-		t.Fatalf("exit = %d, want %d\ntop: %s", code, ExitUsage, top)
-	}
-	if !strings.Contains(top, "ccdad add codex") {
-		t.Errorf("the tombstone does not name the spelling that works:\n%s", top)
+			if code != ExitUsage {
+				t.Fatalf("exit = %d, want %d\ntop: %s", code, ExitUsage, top)
+			}
+			if !strings.Contains(top, "ccdad add codex") {
+				t.Errorf("the tombstone does not name the spelling that works:\n%s", top)
+			}
+			if strings.Contains(top, "unknown flag") {
+				t.Errorf("pflag answered ahead of Args, so the run cost the caller a flag "+
+					"name rather than the rename:\n%s", top)
+			}
+		})
 	}
 }
 
