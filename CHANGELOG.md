@@ -16,6 +16,93 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING: `ccdad add` is a group, and the two logins are `ccdad add claude`
+  and `ccdad add codex`.** Bare `ccdad add` is a usage error naming both rather
+  than a default to Claude — the providers are peers in the store and now in the
+  CLI. **Read this before upgrading: `ccdad add codex` is a command that already
+  works today, and it means something else.** Through 0.14.0 the word after
+  `add` was an ALIAS, so `ccdad add codex` logged in a CLAUDE account and gave it
+  the handle `codex`; from this release the same words log in a CODEX account.
+  Both exit 0, and no grammar can tell them apart — a first positional is a
+  subcommand in every CLI there is. `ccdad add claude` is the mild half of the
+  same change: it now logs in without the alias `claude`, which `ccdad alias`
+  puts back. An alias in the provider's place is answered rather than swallowed,
+  so `ccdad add work` says the alias goes on `ccdad add claude work` instead of
+  cobra's `unknown command "work"`, and it says it with the old flags on the line
+  too. Pinned by `TestYesterdaysAliasGrammarIsToldWhereTheAliasGoesNow`.
+
+- **`ccdad codex add` is retired.** Typing it names the new spelling and exits 2,
+  rather than living on as a hidden alias that exits 0 and never tells a script
+  anything. `ccdad codex` keeps `exec` and `shim install`: those are codex-only
+  verbs with no Claude counterpart, and `ccdad codex exec` is written byte for
+  byte into every shim already on a user's PATH, so renaming it would orphan
+  them. Pinned by `TestTheOldCodexAddSpellingIsATombstoneAndNotAnAlias`.
+
+- **Both account lists are sectioned by provider, and the dashboard and
+  `ccdad status` now draw the same table from one definition.** `CLAUDE` and
+  `CODEX` headings appear on both surfaces and on a single-provider fleet too —
+  a heading over nothing is how a reader learns the other provider exists here.
+  `ccdad status` gained the STATE column it was already publishing in `--json`,
+  the dashboard gained TIER and the legend, and `Active:` became the two lines
+  the dashboard always drew, on both. A short terminal gives up the headings and
+  the legend before the summary block and the family art: the legend is printed
+  in full by `ccdad status` at any size, and the facts outrank the grouping.
+  Pinned by `TestAOneProviderFleetStillDrawsTheOtherProvidersHeading`,
+  `TestStatusSectionsTheTableAndDrawsBothHeadings` and
+  `TestAnEmptyStoreDrawsBothHeadingsAndSaysItOnce`.
+
+### Added
+
+- **`ccdad add codex` installs the PATH shim itself, and says how to take it
+  back.** Typing `codex` reaches ccdad from the next terminal on, with no second
+  command to discover. It is installed at the end of a login that stored an
+  account and never from a refusal, so an abandoned or refused add writes
+  nothing. A second add says nothing and moves no timestamp on any startup file.
+  A shim that cannot be installed does not fail the add — the account is stored,
+  the refusal's own remedy is printed, and the login still exits 0. Not done at
+  install or upgrade time: the installers never edit a shell profile, and a shim
+  on a machine with no codex would turn the shell's own `command not found`
+  into ccdad's exit 1. `ccdad codex shim install` remains, for a shim that was
+  refused or removed. Pinned by `TestAddingACodexAccountInstallsTheShim`,
+  `TestASecondCodexAddSaysNothingAboutTheShimAndMovesNoTimestamp` and
+  `TestAShimThatCannotBeInstalledDoesNotFailTheAdd`.
+
+- **`ccdad uninstall` names the codex shim it is taking back**, because nobody
+  asked for it. One thing it does not undo: a startup file ccdad had to CREATE
+  is left in place, empty. Deleting a dotfile on the belief that ccdad created
+  it is worse than leaving an empty one, and removal cannot tell the two apart.
+  Pinned by `TestUninstallNamesTheCodexShimItIsTakingBack`,
+  `TestUninstallTakesTheShimTheRecordAndThePathEntry` and
+  `TestUninstallSaysNothingAboutAShimWhenThereIsNoRecord`.
+
+- **The dashboard can add a Codex account.** The `a` key asks which provider
+  before it hands over the terminal; until now it ran the Claude login and there
+  was no way to add a Codex account from the dashboard at all. Its switch list
+  is sectioned too, and marks BOTH live accounts — the Claude credential and the
+  account serving codex are different facts about different accounts, and only
+  the first was representable before. The cursor cannot rest on a heading and
+  enter cannot choose one. Pinned by
+  `TestEveryProviderTheAddKeyOffersResolvesToALeafCommand`,
+  `TestTheSwitchPickerSectionsAMixedPoolUnderTheTablesHeadings`,
+  `TestBothProvidersLiveAccountsAreMarked` and
+  `TestChosenRefusesAHeadingEvenWhenItCarriesAnArgv`.
+
+### Fixed
+
+- **A hover table with nothing readable printed its AGE figure under the QUOTA
+  heading.** The hover row was built from the window list alone, so with no
+  readable window it came out one cell short of its own header and every value
+  after it slid left. Found by moving both surfaces onto one cell function.
+  Pinned by `TestAHoverTableWithNothingReadableStillPutsAgeUnderAge`.
+
+- **The dashboard could put its cursor on an account it was not drawing.** The
+  scroll arithmetic measured a window's capacity from the top of the list, which
+  is the capacity of the easiest window: one inside a single section pays for one
+  heading, one crossing the boundary pays for two. Pinned by
+  `TestScrollingKeepsTheCursorsAccountOnThePage`.
+
 ## [0.14.0] — 2026-09-04
 
 The release that points `codex` itself at the proxy: a shim ahead of it on
