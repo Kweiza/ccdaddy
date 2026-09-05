@@ -6,15 +6,6 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/view"
 )
 
-// ColumnSet describes the full dashboard table and its compact test/layout
-// variant. The interactive page always uses SetFull; there is no table toggle.
-type ColumnSet int
-
-const (
-	SetFull    ColumnSet = iota // IDX ACCOUNT TYPE <windows> <resets> STATE AUTO
-	SetCompact                  // IDX ACCOUNT TYPE TIER <windows> <resets>
-)
-
 // ColKind is what a column IS. It is separate from Column below because a
 // window column cannot be named by a constant: how many there are, and which
 // windows they stand for, is a fact about the fleet rather than about this
@@ -139,7 +130,7 @@ func maxInt(a, b int) int {
 }
 
 // Plan reads nothing and calls nothing: it is a pure function of the six
-// arguments, so the same (set, width, height, rows, notice, runway) always
+// arguments, so the same (cols, width, height, rows, notice, runway) always
 // answers the same way and a test can walk every boundary without a terminal.
 //
 // notice is whether Snapshot.Notices is non-empty. Plan has no other way to
@@ -164,22 +155,22 @@ func maxInt(a, b int) int {
 // came out of the one flex column. Widening a terminal must never narrow an
 // address. The fix implemented below is to hold ACCOUNT at its comfort width
 // while columns are added back one at a time, and to only let it grow once
-// every optional column for the current table is already on the page — so
-// crossing a column threshold can never claim width ACCOUNT already had.
-func Plan(set ColumnSet, cols view.Columns, width, height, rows int, notice, runway bool) Layout {
+// every optional column is already on the page — so crossing a column
+// threshold can never claim width ACCOUNT already had.
+func Plan(cols view.Columns, width, height, rows int, notice, runway bool) Layout {
 	runwayRows := 0
 	if runway {
 		runwayRows = 1
 	}
 	// Active and Strategy always exist. Model.Body supplies the exact count,
 	// including an optional Codex active row and Current, through planWithRows.
-	return planWithRows(set, cols, width, height, rows, notice, runway, 1, runwayRows, 2)
+	return planWithRows(cols, width, height, rows, notice, runway, 1, runwayRows, 2)
 }
 
 // planWithRows extends Plan with the dynamic vertical blocks: the wrapped key
 // bar, the one-line-per-fact runway summary, and the one-line-per-fact status
 // summary.
-func planWithRows(set ColumnSet, cols view.Columns, width, height, rows int,
+func planWithRows(cols view.Columns, width, height, rows int,
 	notice, runway bool, footerRows, runwayRows, summaryRows int) Layout {
 	var l Layout
 	l.FooterRows = 1
@@ -205,7 +196,7 @@ func planWithRows(set ColumnSet, cols view.Columns, width, height, rows int,
 		return l
 	}
 
-	planWidth(&l, set, cols, width)
+	planWidth(&l, cols, width)
 	planHeight(&l, height, rows, summaryRows, notice, runway)
 
 	return l
@@ -219,9 +210,9 @@ func planWithRows(set ColumnSet, cols view.Columns, width, height, rows int,
 // reserved for the next optional column's rung rather than spent, on purpose
 // -- it is what makes the anti-narrowing invariant possible without knowing
 // in advance which width will need the reservation. Only once every optional
-// column for the current set is already on the page (width >= fullAt) does
-// unused width finally reach ACCOUNT, growing it up to accountMax.
-func planWidth(l *Layout, set ColumnSet, cols view.Columns, width int) {
+// column is already on the page (width >= fullAt) does unused width finally
+// reach ACCOUNT, growing it up to accountMax.
+func planWidth(l *Layout, cols view.Columns, width int) {
 	// The never-dropped four, and their absence from the drop order below IS
 	// the argument: IDX and ACCOUNT say WHICH account, and every window column
 	// says how much of one limit is gone. Dropping a window column would take a
@@ -232,18 +223,13 @@ func planWidth(l *Layout, set ColumnSet, cols view.Columns, width int) {
 	// window is the MAX, so nothing the collapsed cell hides is worse than what
 	// it shows. A partial column set can make no such statement.
 	full := []Column{col(ColIdx), col(ColAccount), col(ColType)}
-	if set == SetCompact {
-		full = append(full, col(ColTier))
-	}
 	for i := range cols.Windows {
 		full = append(full, windowCol(i))
 	}
 	for i := range cols.Resets {
 		full = append(full, resetCol(i))
 	}
-	if set == SetFull {
-		full = append(full, col(ColState), col(ColAuto), col(ColAge))
-	}
+	full = append(full, col(ColState), col(ColAuto), col(ColAge))
 
 	// Drop order, lowest priority first. It is a fixed priority list walked
 	// from the tail and NEVER a greedy packer: greedy is non-monotone, so a
@@ -251,17 +237,7 @@ func planWidth(l *Layout, set ColumnSet, cols view.Columns, width int) {
 	// ACCOUNT reservation below exists to prevent. The price is that at some
 	// widths the page holds slack it cannot spend, and that is stated rather
 	// than hidden.
-	drops := []Column{}
-	if set == SetCompact {
-		drops = append(drops, col(ColTier))
-	}
-	if set == SetFull {
-		drops = append(drops, col(ColAuto))
-	}
-	drops = append(drops, col(ColType))
-	if set == SetFull {
-		drops = append(drops, col(ColAge), col(ColState))
-	}
+	drops := []Column{col(ColAuto), col(ColType), col(ColAge), col(ColState)}
 	// Reset columns from the LAST plan-order one back, so the rollover a reader
 	// is most likely to be waiting on -- the soonest, which sorts first -- is
 	// the last to go.

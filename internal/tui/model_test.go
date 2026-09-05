@@ -325,17 +325,17 @@ func TestAnOpenPickerEatsThePagesKeys(t *testing.T) {
 
 	a := appAt(t, o, 113, 26)
 	a, _, _ = a.key(keyPress("s"))
-	before := a.m.Set
-	next, cmd, ok := a.key(keyPress("l"))
+	// The daemon key, which the PAGE binds and the picker does not: a key
+	// nothing binds anywhere would leave every assertion below true for the
+	// wrong reason. Reaching the page would open the daemon screen, so the
+	// screen this ends on is what says the keystroke was eaten.
+	next, cmd, ok := a.key(keyPress("d"))
 	drain(cmd)
 	if ok {
-		t.Error("the list key was answered while a picker was open")
-	}
-	if next.m.Set != before {
-		t.Error("a key handled by the page reached it through an open picker")
+		t.Error("the daemon key was answered while a picker was open")
 	}
 	if next.scr != screenPicker {
-		t.Error("the picker was dismissed by a key it does not bind")
+		t.Error("a key handled by the page reached it through an open picker")
 	}
 }
 
@@ -969,7 +969,7 @@ func assertCursorIsDrawn(t *testing.T, m Model, width, height int) {
 	if footerWidth < 1 {
 		footerWidth = m.Width
 	}
-	l := planWithRows(m.Set, testCols(), m.Width, m.Height, n, len(m.Snap.Notices) > 0,
+	l := planWithRows(testCols(), m.Width, m.Height, n, len(m.Snap.Notices) > 0,
 		len(runway) > 0, len(m.footerLines(footerWidth)), len(runway), len(m.summaryLines(m.Width)))
 	if l.TooNarrow || l.TooShort {
 		return

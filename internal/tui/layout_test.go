@@ -16,26 +16,9 @@ import (
 func TestWideningTheTerminalNeverNarrowsTheAccountColumn(t *testing.T) {
 	prev := 0
 	for w := 35; w <= 140; w++ {
-		got := Plan(SetFull, testCols(), w, 40, 4, false, false).AccountWide
+		got := Plan(testCols(), w, 40, 4, false, false).AccountWide
 		if got < prev {
 			t.Fatalf("ACCOUNT went from %d columns at %d to %d columns at %d", prev, w-1, got, w)
-		}
-		prev = got
-	}
-}
-
-// The same anti-narrowing invariant, for SetCompact. It carries the identical
-// accountFloor/accountComfort/accountMax constants and the identical
-// hold-then-grow mechanism, keyed to its own fullAt (77, where TYPE -- its
-// one optional column -- is fully back on the page) rather than SetFull's
-// 113, so this is not redundant with the test above: it is the same claim
-// checked against a different fullAt.
-func TestWideningTheTerminalNeverNarrowsTheAccountColumnForSetCompactToo(t *testing.T) {
-	prev := 0
-	for w := 35; w <= 140; w++ {
-		got := Plan(SetCompact, testCols(), w, 40, 4, false, false).AccountWide
-		if got < prev {
-			t.Fatalf("SetCompact: ACCOUNT went from %d columns at %d to %d columns at %d", prev, w-1, got, w)
 		}
 		prev = got
 	}
@@ -69,7 +52,7 @@ func TestTheWidthLadderDropsColumnsInTheOrderItSays(t *testing.T) {
 	order := []ColKind{ColAuto, ColType, ColAge, ColState}
 
 	for w := 35; w <= 200; w++ {
-		l := Plan(SetFull, cols, w, 40, 4, false, false)
+		l := Plan(cols, w, 40, 4, false, false)
 		if l.TooNarrow {
 			continue
 		}
@@ -109,7 +92,7 @@ func TestWideningNeverRemovesAColumn(t *testing.T) {
 	cols := testCols()
 	var prev []Column
 	for w := 35; w <= 200; w++ {
-		l := Plan(SetFull, cols, w, 40, 4, false, false)
+		l := Plan(cols, w, 40, 4, false, false)
 		if l.TooNarrow {
 			continue
 		}
@@ -152,17 +135,15 @@ func hasColumnExact(cols []Column, c Column) bool {
 // collapses the block to a single WORST cell instead, and the invariant is
 // "there is always a quota cell", never "there are always N of them".
 func TestTheQuotaBlockSurvivesEveryWidth(t *testing.T) {
-	for _, set := range []ColumnSet{SetFull, SetCompact} {
-		for w := 35; w <= 140; w++ {
-			l := Plan(set, testCols(), w, 40, 4, false, false)
-			for _, k := range []ColKind{ColIdx, ColAccount} {
-				if !hasColumn(l.Columns, k) {
-					t.Fatalf("set %d width %d: kind %d is missing, and it must never be dropped", set, w, k)
-				}
+	for w := 35; w <= 140; w++ {
+		l := Plan(testCols(), w, 40, 4, false, false)
+		for _, k := range []ColKind{ColIdx, ColAccount} {
+			if !hasColumn(l.Columns, k) {
+				t.Fatalf("width %d: kind %d is missing, and it must never be dropped", w, k)
 			}
-			if !hasColumn(l.Columns, ColWindow) && !hasColumn(l.Columns, ColWorst) {
-				t.Fatalf("set %d width %d: the page carries no quota cell at all: %+v", set, w, l.Columns)
-			}
+		}
+		if !hasColumn(l.Columns, ColWindow) && !hasColumn(l.Columns, ColWorst) {
+			t.Fatalf("width %d: the page carries no quota cell at all: %+v", w, l.Columns)
 		}
 	}
 }
@@ -173,7 +154,7 @@ func TestTheQuotaBlockSurvivesEveryWidth(t *testing.T) {
 func TestTheWindowBlockIsNeverPartiallyShown(t *testing.T) {
 	cols := testCols()
 	for w := 35; w <= 140; w++ {
-		l := Plan(SetFull, cols, w, 40, 4, false, false)
+		l := Plan(cols, w, 40, 4, false, false)
 		n := 0
 		for _, c := range l.Columns {
 			if c.Kind == ColWindow {
@@ -211,7 +192,7 @@ func TestTheHeightLadderDropsBlocksInTheOrderItSays(t *testing.T) {
 		{7, false, false, false, false, false, false, false}, // summary dropped: 2+N
 		{6, false, false, false, false, false, false, false},
 	} {
-		l := Plan(SetFull, testCols(), 80, tc.height, rows, false, false)
+		l := Plan(testCols(), 80, tc.height, rows, false, false)
 		if l.Wordmark != tc.wordmark {
 			t.Errorf("height %d: Wordmark=%v, want %v", tc.height, l.Wordmark, tc.wordmark)
 		}
@@ -238,7 +219,7 @@ func TestTheHeightLadderDropsBlocksInTheOrderItSays(t *testing.T) {
 	// Never dropped: the column header row, at least one account row, and the
 	// footer. Below all of that, rows scroll instead: VisibleRows = height-2.
 	for _, height := range []int{5, 4, 3} {
-		l := Plan(SetFull, testCols(), 80, height, rows, false, false)
+		l := Plan(testCols(), 80, height, rows, false, false)
 		if l.TooShort {
 			t.Fatalf("height %d tripped the short floor; the floor is below 3", height)
 		}
@@ -256,7 +237,7 @@ func TestTheNoticeRungFollowsTheDecorativeBlocks(t *testing.T) {
 	const rows = 4
 
 	// 27 fits everything when there is no notice to show.
-	without := Plan(SetFull, testCols(), 80, 27, rows, false, false)
+	without := Plan(testCols(), 80, 27, rows, false, false)
 	if !without.Figures || without.Notice || !without.Tagline {
 		t.Fatalf("80x27 without a notice: Figures=%v Notice=%v Tagline=%v, want true/false/true",
 			without.Figures, without.Notice, without.Tagline)
@@ -264,7 +245,7 @@ func TestTheNoticeRungFollowsTheDecorativeBlocks(t *testing.T) {
 
 	// The same 27 rows no longer fit everything once notice=true shifts the
 	// budget up by one: the tagline gives first and the family remains.
-	with := Plan(SetFull, testCols(), 80, 27, rows, true, false)
+	with := Plan(testCols(), 80, 27, rows, true, false)
 	if !with.Figures {
 		t.Fatal("80x27 with a notice dropped the figure block before the tagline")
 	}
@@ -277,11 +258,11 @@ func TestTheNoticeRungFollowsTheDecorativeBlocks(t *testing.T) {
 
 	// At 23 the family still fits after the blank separators give; at 22 it
 	// gives and the notice remains.
-	if l := Plan(SetFull, testCols(), 80, 23, rows, true, false); !l.Figures || !l.Notice || l.Tagline {
+	if l := Plan(testCols(), 80, 23, rows, true, false); !l.Figures || !l.Notice || l.Tagline {
 		t.Fatalf("80x23 with a notice: Figures=%v Notice=%v Tagline=%v, want true/true/false",
 			l.Figures, l.Notice, l.Tagline)
 	}
-	if l := Plan(SetFull, testCols(), 80, 22, rows, true, false); l.Figures || !l.Notice || l.Tagline {
+	if l := Plan(testCols(), 80, 22, rows, true, false); l.Figures || !l.Notice || l.Tagline {
 		t.Fatalf("80x22 with a notice: Figures=%v Notice=%v Tagline=%v, want false/true/false",
 			l.Figures, l.Notice, l.Tagline)
 	}
@@ -289,8 +270,8 @@ func TestTheNoticeRungFollowsTheDecorativeBlocks(t *testing.T) {
 	// At 15, the notice line gives next. Both cases converge once it is gone:
 	// the plain page was never carrying one, and the page with a notice just dropped
 	// it, so the two arrive at the identical visible Layout.
-	notice15 := Plan(SetFull, testCols(), 80, 15, rows, true, false)
-	plain15 := Plan(SetFull, testCols(), 80, 15, rows, false, false)
+	notice15 := Plan(testCols(), 80, 15, rows, true, false)
+	plain15 := Plan(testCols(), 80, 15, rows, false, false)
 	if notice15.Figures != plain15.Figures || notice15.Notice != plain15.Notice || notice15.Tagline != plain15.Tagline {
 		t.Fatalf("80x15 did not converge: with notice=%+v without=%+v",
 			struct{ Figures, Notice, Tagline bool }{notice15.Figures, notice15.Notice, notice15.Tagline},
@@ -299,7 +280,7 @@ func TestTheNoticeRungFollowsTheDecorativeBlocks(t *testing.T) {
 
 	// Further down the ladder the notice line stays dropped, same as any
 	// other block once its rung has fired.
-	if l := Plan(SetFull, testCols(), 80, 14, rows, true, false); l.Notice {
+	if l := Plan(testCols(), 80, 14, rows, true, false); l.Notice {
 		t.Fatal("80x14 with a notice put the notice line back")
 	}
 }
@@ -307,10 +288,10 @@ func TestTheNoticeRungFollowsTheDecorativeBlocks(t *testing.T) {
 // The floors. Below them the page says what it needs rather than rendering
 // something unreadable.
 func TestBelowTheFloorsThePageSaysWhatItNeeds(t *testing.T) {
-	if l := Plan(SetFull, testCols(), 34, 40, 4, false, false); !l.TooNarrow {
+	if l := Plan(testCols(), 34, 40, 4, false, false); !l.TooNarrow {
 		t.Error("34 columns did not trip the narrow floor")
 	}
-	if l := Plan(SetFull, testCols(), 80, 2, 4, false, false); !l.TooShort {
+	if l := Plan(testCols(), 80, 2, 4, false, false); !l.TooShort {
 		t.Error("2 rows did not trip the short floor")
 	}
 }
@@ -330,7 +311,7 @@ func TestTheRunwayRungFollowsTheDecorativeBlocksAndNotice(t *testing.T) {
 	const runwayRows = 4
 
 	// 27 fits everything when there are no runway rows to show.
-	without := Plan(SetFull, testCols(), 80, 27, rows, false, false)
+	without := Plan(testCols(), 80, 27, rows, false, false)
 	if !without.Figures || without.Runway || !without.Tagline {
 		t.Fatalf("80x27 without a runway line: Figures=%v Runway=%v Tagline=%v, want true/false/true",
 			without.Figures, without.Runway, without.Tagline)
@@ -338,7 +319,7 @@ func TestTheRunwayRungFollowsTheDecorativeBlocksAndNotice(t *testing.T) {
 
 	// Four runway rows spend the tagline and blank separators before any runway
 	// fact or the family art is lost.
-	with := planWithRows(SetFull, testCols(), 80, 27, rows, false, true, 1, runwayRows, 2)
+	with := planWithRows(testCols(), 80, 27, rows, false, true, 1, runwayRows, 2)
 	if !with.Figures {
 		t.Fatal("80x27 with runway rows dropped the family after whitespace had already made enough room")
 	}
@@ -350,30 +331,30 @@ func TestTheRunwayRungFollowsTheDecorativeBlocksAndNotice(t *testing.T) {
 	}
 
 	// Down to 19, all runway rows still fit after every decorative block is gone.
-	if l := planWithRows(SetFull, testCols(), 80, 19, rows, false, true, 1, runwayRows, 2); l.Figures || !l.Runway || l.Tagline {
+	if l := planWithRows(testCols(), 80, 19, rows, false, true, 1, runwayRows, 2); l.Figures || !l.Runway || l.Tagline {
 		t.Fatalf("80x19 with runway rows: Figures=%v Runway=%v Tagline=%v, want false/true/false",
 			l.Figures, l.Runway, l.Tagline)
 	}
 
 	// At 18 the runway block gives next.
-	if l := planWithRows(SetFull, testCols(), 80, 18, rows, false, true, 1, runwayRows, 2); l.Figures || l.Runway || l.Tagline {
+	if l := planWithRows(testCols(), 80, 18, rows, false, true, 1, runwayRows, 2); l.Figures || l.Runway || l.Tagline {
 		t.Fatalf("80x18 with runway rows: Figures=%v Runway=%v Tagline=%v, want false/false/false",
 			l.Figures, l.Runway, l.Tagline)
 	}
 
 	// The notice adds a fifth conditional row. At 20 both blocks fit after the
 	// decorative blocks are gone; at 19 the notice gives and runway remains.
-	if l := planWithRows(SetFull, testCols(), 80, 20, rows, true, true, 1, runwayRows, 2); !l.Notice || !l.Runway {
+	if l := planWithRows(testCols(), 80, 20, rows, true, true, 1, runwayRows, 2); !l.Notice || !l.Runway {
 		t.Fatalf("80x20 with both blocks: Notice=%v Runway=%v, want true/true", l.Notice, l.Runway)
 	}
-	if l := planWithRows(SetFull, testCols(), 80, 19, rows, true, true, 1, runwayRows, 2); l.Notice || !l.Runway {
+	if l := planWithRows(testCols(), 80, 19, rows, true, true, 1, runwayRows, 2); l.Notice || !l.Runway {
 		t.Fatalf("80x19 with both blocks: Notice=%v Runway=%v, want false/true — the note gives before runway does",
 			l.Notice, l.Runway)
 	}
 
 	// A page with no runway line never plans one, at any rung of the ladder.
 	for _, h := range []int{26, 21, 20, 19, 12, 6, 3} {
-		if l := Plan(SetFull, testCols(), 80, h, rows, true, false); l.Runway {
+		if l := Plan(testCols(), 80, h, rows, true, false); l.Runway {
 			t.Errorf("height %d planned a runway line for a page that has none", h)
 		}
 	}

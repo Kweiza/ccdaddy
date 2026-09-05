@@ -813,7 +813,7 @@ func scrolled(m Model) Model {
 		footerWidth = m.Width
 	}
 	runway := m.runwayLines()
-	shown, _ := probe.window(planWithRows(m.Set, m.Cols, m.Width, m.Height, n,
+	shown, _ := probe.window(planWithRows(m.Cols, m.Width, m.Height, n,
 		len(m.Snap.Notices) > 0, len(runway) > 0, len(m.footerLines(footerWidth)), len(runway),
 		len(m.summaryLines(m.Width))))
 	room := len(shown)
