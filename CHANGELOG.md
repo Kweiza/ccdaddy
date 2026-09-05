@@ -16,6 +16,105 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.19.0] — 2026-09-05
+
+The release that makes the engine measure what a session actually spends. Every
+rule that asked "can this account carry the work" was answering with a clock
+rather than with a burn rate, and every one of them was out by a factor of
+sixteen or more. The account table stops spending columns on windows a provider
+does not have, and the dashboard's `s` key stops asking twice.
+
+### Changed
+
+- **The engine measures the burn rate between every two readings, and judges a
+  switch target by the work running NOW.** Two rules asked whether an account
+  could carry a session and both were measuring something else. `preemptTarget`
+  refused a candidate "about to run out" by reading that candidate's own pace —
+  and a candidate nobody is spending has no pace, so every account in every
+  fleet passed, including one a session would empty in nine minutes. Hover's
+  licence floor priced a cooldown of work as `100 x HoverCooldown / length`,
+  which is 0.667 points of a five-hour window: how far the CLOCK gets in two
+  minutes. Measured on a live fleet on 2026-09-05, a session spends 5.4 points a
+  minute — 10.8 in the same two minutes, nineteen times more — so the floor was
+  blessing an account with one point left as able to absorb two minutes of work
+  when what it could absorb was four seconds. The rate belongs to the SESSION
+  rather than to the seat, and it is the pool's maximum: only one account is live
+  at a time, so only one account's window is moving. **With no measurement every
+  rule behaves exactly as it did**, which is what keeps a fleet ccdad has read
+  once from being narrowed by a number nobody took. The figure is published under
+  the table, because a floor stated in points of work cannot be reconstructed
+  unless the rate it was stated in is on the page. Pinned by
+  `TestTheLicenceFloorIsPricedInWorkNotInClock`,
+  `TestAnAccountCarriesTheSessionForItsRoomOverTheRate` and
+  `TestTheSessionsRateIsThePoolsMaximum`.
+
+- **BREAKING for anyone reading the table by column: each provider's half draws
+  its OWN windows, under its own column names, with its own legend.** The table
+  drew the union, so every Claude row carried a `CX 1` cell it could only fill
+  with `-` and every Codex row carried a `5H` one — measured on a nine-account
+  fleet, nine quota columns of which four were dead in each half. It is still ONE
+  table: the column names are data rows, one set per section, and the narrower
+  section pads its block so `STATE` and `AGE` stay under one another across the
+  seam. The legend under the table is now one line per section, naming its
+  provider in lowercase — `windows claude:` — so a grep for the all-caps heading
+  still finds a heading and nothing else. Pinned by
+  `TestEachSectionDrawsOnlyItsOwnProvidersWindows`,
+  `TestTheColumnsAfterTheQuotaBlockLineUpAcrossTheSeam` and
+  `TestEachSectionCarriesItsOwnLegend`.
+
+- **BREAKING for muscle memory: `s` on the dashboard switches to the account
+  under the cursor, in one keystroke.** The list it replaces was a second
+  rendering of the list the reader was already looking at, opened on the row they
+  were already pointing at, and enter on it chose what had already been chosen.
+  The rule it spends — one keystroke never moves a credential — was worth holding
+  while the key named nothing; `s` on a row does say which account, because the
+  account is on the screen under the cursor. What survives is that no key moves a
+  credential without the account it moves to being visible when it is pressed. On
+  the account already live it says so rather than spending a rotation. Pinned by
+  `TestTheSwitchKeyMovesToTheAccountUnderTheCursor` and
+  `TestTheSwitchKeyOnTheLiveRowSaysSoAndRunsNothing`.
+
+- **The empty-account waiver asks about the TARGET as well.** The gate waives
+  every margin to get a session off an account with nothing in it, and asked only
+  whether the LIVE account was out of quota. Where the target had nothing in it
+  either, moving ended the same session in the same place one credential rotation
+  later. Measured: eighteen switches between two accounts in two and a half
+  hours, every one logged with `used=100.0` on the target, spaced `HoverCooldown`
+  plus one tick apart. The refusal is `ActionBlocked` — `ccdad auto --once` exits
+  4 — and carries the soonest rollover as its retry, because the session is the
+  thing about to stop. Unreadable is still not empty. Pinned by
+  `TestAFleetWithNothingLeftStaysPutInsteadOfSwappingEmptyForEmpty` and
+  `TestAnUnreadableTargetIsStillWorthTryingFromAnEmptyAccount`.
+
+- **Warm-ups are staggered, so a fleet's windows stop rolling over together.**
+  Each account's next rollover is set by its last warm-up and every warm-up
+  happens within a minute of the rollover that triggered it, so a fleet warmed
+  together stays warmed together forever: six five-hour windows resetting inside
+  a forty-minute band of a three-hundred-minute cycle. `ccdad runway` scored that
+  axis "holds" with a 1.99x margin on the same afternoon three accounts sat at
+  100% together — all the replenishment arrives at once and the hours between it
+  have none. The phase is derived from the account's uuid, capped at half the
+  window, and stable across daemon restarts. Pinned by
+  `TestTheWarmUpWaitsOutItsPhaseAfterTheRollover` and
+  `TestDifferentAccountsGetDifferentPhases`.
+
+### Fixed
+
+- **The dashboard drew one column headed `QUOTA` with `?` in every cell, on
+  every fleet.** `Model.Cols` is derived from the snapshot and was assigned in
+  one place — `newModel` — while the interactive program's only construction site
+  builds a Model from an EMPTY snapshot, because the read is asynchronous and has
+  not happened yet. So the page was born with no quota columns, every load
+  replaced the rows and left the block behind, and the placeholder arm drew
+  forever. No golden page could see it: they all call `newModel` with a populated
+  snapshot, which is the one path that was never broken. Pinned by
+  `TestTheQuotaBlockFollowsTheSnapshotIntoTheLivePage`.
+
+- **A blocked fleet says when it comes back.** The arm that reports every account
+  spent now carries the soonest rollover as its retry instant, on the same terms
+  the new refusal does: a blocked answer that cannot say when it ends reads as
+  permanent. Pinned by `TestEveryAccountSpentAlsoSaysWhenTheFleetComesBack`.
+
 ## [0.18.0] — 2026-09-05
 
 The release that puts the two providers on the same level. `ccdad add claude`
@@ -3527,7 +3626,8 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.18.0...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.19.0...HEAD
+[0.19.0]: https://github.com/Kweiza/ccdaddy/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/Kweiza/ccdaddy/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/Kweiza/ccdaddy/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/Kweiza/ccdaddy/compare/v0.15.0...v0.16.0
