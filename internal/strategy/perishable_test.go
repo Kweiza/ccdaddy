@@ -303,4 +303,27 @@ func TestTheStrandedWindowIsTheOneAModelChoiceCannotDodge(t *testing.T) {
 	if stranded != 0 {
 		t.Errorf("stranded = %v, want 0: the week the session actually spends is 90 percent gone", stranded)
 	}
+
+	// The same rule with the wire order REVERSED, which is the half that
+	// actually tests the preference. The fixed windows are walked in the
+	// schema's order, so an all-model week is normally reached before any
+	// per-model cap and a rule that merely took the first readable weekly would
+	// pass the case above unchanged. Here the only all-model week is a
+	// SURFACE-scoped entry out of limits[], which is walked after the fixed
+	// five: the per-model cap is found FIRST and must still lose.
+	reversed := &usage.Snapshot{
+		FiveHour: elapsedWindow(fiveHourLen, 0.30, 10),
+		// The model cap: untouched, nearly elapsed, and reached first.
+		SevenDayOpus: elapsedWindow(weekLen, 0.91, 0),
+		// Claude Code is itself a surface, so this one binds whatever model
+		// runs -- and it is 90% spent with half its week left.
+		Limits: []usage.Limit{scoped("", "Claude Code", 90, remaining(weekLen, 0.50))},
+	}
+	w, stranded, has = hoverStranded(reversed, "", opts().Thresholds(), 2, now)
+	if kind, ok := usage.ScopeKindOf(w.Name); !has || !ok || kind != usage.ScopeSurface {
+		t.Fatalf("priced %s, want the surface-scoped week: reaching a per-model cap first must not make it the perishable window", w.Name)
+	}
+	if stranded != 0 {
+		t.Errorf("stranded = %v, want 0", stranded)
+	}
 }
