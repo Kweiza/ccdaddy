@@ -16,6 +16,16 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.17.0] — 2026-09-05
+
+The release that stops `hover` measuring a clock. The licence a perishable week
+earns was capped by the room left in whichever window had the least — the
+five-hour window in every case where the cap bound — so a deadline hours away was
+cancelled by a figure that reset in minutes, in a different unit. The premise
+behind the cap was that a licence is a claim on the next session; ccdad hands
+out no session and moves mid-session, so what the ranking protects is live
+utilization, and the two mechanisms that already read it are left to do so.
+
 ### Fixed
 
 - **`hover` no longer deletes a perishable week's licence because a five-hour
@@ -3422,7 +3432,8 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.16.0...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.17.0...HEAD
+[0.17.0]: https://github.com/Kweiza/ccdaddy/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/Kweiza/ccdaddy/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/Kweiza/ccdaddy/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/Kweiza/ccdaddy/compare/v0.13.0...v0.14.0
