@@ -29,7 +29,7 @@ Runway:  7d dry 2026-08-24 01:19 UTC (1d13h)  ·  5h holds  ·  basis 4h00m  · 
   3    ci@example.org (ci)      api-key       -           ?    ?    ?      ?      ?      ?         -          ?
        CODEX
   IDX  ACCOUNT                  TYPE          TIER        CX 1  CX 1 IN                  STATE      AGE
-  4    cx@example.com           codex         pro         31%   3h09m                    serving    3m
+  1    cx@example.com           codex         pro         31%   3h09m                    serving    3m
 windows claude: 5H = five_hour   7D = seven_day   FABLE = weekly_scoped:model:Fable
 windows codex: CX 1 = codex_primary
 
@@ -42,6 +42,7 @@ $ ccdad status --json
     {
       "uuid": "0d9e4e6a-1f1a-4b5e-9c3a-2f7b6a1d8e40",
       "idx": 1,
+      "ref": "c1",
       "email": "work@example.com",
       "alias": "work",
       "kind": "subscription",
@@ -62,6 +63,7 @@ $ ccdad status --json
     {
       "uuid": "5b2c7f31-8a4d-4c9e-9d0a-3e6f1b2c9a71",
       "idx": 2,
+      "ref": "c2",
       "email": "personal@example.com",
       "kind": "subscription",
       "tier": "pro",
@@ -81,6 +83,7 @@ $ ccdad status --json
     {
       "uuid": "c1a8e2d4-6b3f-4a1e-8c5d-9f0b7e2a3c62",
       "idx": 3,
+      "ref": "c3",
       "email": "ci@example.org",
       "alias": "ci",
       "kind": "api-key",
@@ -391,7 +394,7 @@ is a usage error rather than a silent hang. Pass the token, or `-`.
 | `ccdad mcp` | Serve ccdad's tools to Claude Code over the Model Context Protocol. Claude Code starts it; you do not |
 | `ccdad mcp install\|uninstall` | Register that server with Claude Code, or take it back out |
 | `ccdad config get\|set\|unset\|list\|path` | Read and write `~/.ccdad/config.toml` |
-| `ccdad alias`, `move` | Give an account a handle; reorder the display |
+| `ccdad alias`, `move` | Give an account a handle; reorder the display within its provider |
 | `ccdad disable`, `enable` | Hold an account out of automatic rotation, or return it |
 | `ccdad own [ACCOUNT...]` | Declare which accounts THIS machine drives — see [Running ccdad on more than one machine](#running-ccdad-on-more-than-one-machine) |
 | `ccdad primary <ACCOUNT> on\|off` | Rank a credit-metered seat with the subscriptions, and let it spend unattended |
@@ -407,6 +410,13 @@ Anywhere a command takes an `ACCOUNT`, it accepts a display index, an alias, an
 email address, or a uuid prefix of at least eight characters. Alias, email and
 uuid matching are case-insensitive, and there is no fuzzy matching: an ambiguous
 reference is a usage error rather than a guess.
+
+The display index is numbered **within a provider** — `1`, `2`, `3` under
+`CLAUDE` and `1`, `2` under `CODEX` — so on a fleet holding both, a bare number
+names two accounts. Prefix it to name one: `c2` is the second Claude account
+and `x1` the first Codex one. A bare number still works wherever only one
+provider carries it, and where both do, the error names both candidates in the
+prefixed form so the fix is the line you just read.
 
 `ccdad --help` and `ccdad <command> --help` are the authority; every command
 documents its own flags there.
@@ -784,8 +794,8 @@ Fleet:   137 of 200 points left on the weekly axis
 Accounts:  2 usable, 6 needed to hold at this rate  (4 more)
 
   IDX  ACCOUNT               WINDOW     LEFT  BURN      EMPTY
-  2    personal@example.com  seven_day  83    0.5 pp/h  2026-08-25 20:28 UTC
-  1    work                  seven_day  54    3.0 pp/h  2026-08-25 20:53 UTC
+  c2   personal@example.com  seven_day  83    0.5 pp/h  2026-08-25 20:28 UTC
+  c1   work                  seven_day  54    3.0 pp/h  2026-08-25 20:53 UTC
 ```
 
 **The basis is printed above the answer, on purpose.** A four-hour rate is a
@@ -954,6 +964,7 @@ runway, daemon state, and every available key command.
 |---|---|
 | `a` | Add an account — asks which provider, then hands the terminal to `ccdad add claude` or `ccdad add codex` and comes back |
 | `s` | Switch to the account the cursor is on, in one keystroke. On the account already live it says so rather than spending a credential rotation |
+| `m` | Pick the row up and reorder it — `up`/`down` carry it, `enter` places it, `esc` puts it back. The TUI's half of `ccdad move` |
 | `d` | The daemon screen — `S` starts, `x` stops, `R` restarts, and the log tails |
 | `c` | Change the switching strategy |
 | `q` | Quit (`ctrl+c` too) |
@@ -965,6 +976,14 @@ Every key that changes something runs the ordinary command for it, through a
 fresh command tree. It gets the same refusals, the same wording and the same
 exit codes typing it would give — a switch from the dashboard inside a `ccdad
 run` session is refused in that command's own words.
+
+`m` is that rule with a mode in front of it. The row you pick up is reordered
+on screen only — the rows are renumbered as you carry them, so the `IDX` column
+always agrees with what you are looking at — and nothing is stored until
+`enter` runs the same `ccdad move` you could have typed. `esc` costs nothing to
+undo because nothing was done. A row cannot leave its own provider, since that
+is what the position counts; every other key is ignored while a row is in hand,
+and the key bar shows only the four that are not.
 
 It never fetches. Everything on the page is read from disk, because the usage
 endpoint allows roughly 28–30 requests per identity per rolling hour on a
@@ -2075,8 +2094,13 @@ Every read command takes `--json` and prints a single object with a
 
 ### Stability contract
 
-> **`idx` is a display ordinal, not a key.** It is recompacted whenever an
-> account is removed. Scripts must reference accounts by `uuid` or `alias`.
+> **`idx` is a display ordinal, not a key.** It is numbered per provider —
+> `c1`, `c2` for Claude and `x1`, `x2` for Codex — and recompacted whenever an
+> account is removed. A bare number is refused when both providers carry one.
+> Scripts must reference accounts by `uuid` or `alias`.
+
+`--json` carries both: `idx` stays a number, scoped to the provider, and `ref`
+is the prefixed spelling that names exactly one account.
 
 This is printed by `ccdad --help` too. It is the one promise made before 1.0.
 

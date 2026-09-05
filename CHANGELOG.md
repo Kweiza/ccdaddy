@@ -10,11 +10,69 @@ that would surprise an upgrader gets written down.
 
 While the version is below `1.0.0`, the CLI surface may change between minor
 versions. The one thing that is already a promise is the stability contract
-`ccdad --help` prints: **`idx` is a display ordinal, not a key.** It is
-recompacted whenever an account is removed, so scripts must reference accounts
-by `uuid` or `alias`.
+`ccdad --help` prints: **`idx` is a display ordinal, not a key.** It is numbered
+per provider and recompacted whenever an account is removed, so scripts must
+reference accounts by `uuid` or `alias`.
 
 ## [Unreleased]
+
+### Changed
+
+- **BREAKING for anyone typing a bare index on a fleet with both providers: the
+  display index is numbered WITHIN a provider.** The account tables are drawn in
+  provider sections and the index was numbered across the whole store, so the two
+  disagreed on every mixed fleet: a store holding claude, codex, claude, codex,
+  claude drew `CLAUDE` 1, 3, 5 over `CODEX` 2, 4, which reads as a table that has
+  lost rows. It is `CLAUDE` 1, 2, 3 over `CODEX` 1, 2 now. The index is therefore
+  no longer unique, and a bare number that both providers carry is refused with
+  both candidates named rather than resolved to one — the commands that take a
+  reference overwrite a credentials file. **Prefix it to name one:** `c2` is the
+  second Claude account, `x1` the first Codex one; a bare number still works
+  wherever only one provider carries it. `ccdad runway`, the add and move
+  confirmations and both resolution errors print the prefixed form, because none
+  of them is grouped by provider; inside a grouped table the heading is already
+  the prefix, so the number under it stays bare. `--json` keeps `idx` as a number
+  and publishes `ref` beside it. An alias may no longer be spelled like a
+  reference, for the reason one may not be all digits — but an alias of that shape
+  stored by an earlier build goes on naming its account. Pinned by
+  `TestTheIndexIsPerProviderAndTheSliceIsGrouped`,
+  `TestABareIndexThatBothProvidersCarryIsAmbiguous`,
+  `TestTheProviderScopedIndexResolves` and
+  `TestALegacyAliasShapedLikeAReferenceStillWins`.
+
+- **The dashboard cursor walks the page instead of jumping between the two
+  halves of it.** Same cause: the cursor steps through the store's slice while
+  the page draws the grouping, so on an interleaved store one press of `down`
+  moved the marker from the first `CLAUDE` row to the first `CODEX` row and the
+  next press moved it back up. The store's slice is grouped the way every account
+  list is drawn, which makes the two orders one number. Pinned by
+  `TestTheCursorsIndexIsItsPositionOnThePage`.
+
+- **`ccdad move` counts its position within the account's own provider.** That is
+  what the number it sets means, and it is what keeps the store grouped: a
+  position past that provider's last account is that provider's last, and no
+  position moves an account to the other provider. Pinned by
+  `TestMoveCountsPositionsWithinTheProvider` and
+  `TestMoveClampsToTheProvidersOwnEnd`.
+
+### Added
+
+- **`m` reorders the account list from the dashboard.** It picks the row under
+  the cursor up, the arrow keys carry it, `enter` puts it down and `esc` puts it
+  back — the TUI's half of `ccdad move`, which was the one account command with
+  no key on the page. The reorder is a PREVIEW: the rows are renumbered as they
+  move, so the `IDX` column agrees with the order on screen at every step, and
+  the store hears about it exactly once, from the same command a user could have
+  typed. A row cannot be carried out of its own provider, the reload clock is
+  suspended for the duration so a refresh cannot replace the preview, and every
+  other key is swallowed — `s` moves a credential and `a` releases the terminal
+  to a login, and neither may act against an order the store has never been told
+  about. The key bar is replaced with the four that are left. Pinned by
+  `TestTheArrowKeysCarryTheRowAndTheCursorGoesWithIt`,
+  `TestEnterReleasesTheMoveCommandWithAProviderScopedPosition`,
+  `TestARowCannotBeCarriedIntoTheOtherProvider`,
+  `TestThePagesOwnKeysAreSwallowedWhileARowIsInHand` and
+  `TestAReloadDoesNotLandWhileARowIsInHand`.
 
 ## [0.19.0] — 2026-09-05
 
