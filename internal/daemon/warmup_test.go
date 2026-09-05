@@ -36,13 +36,17 @@ func TestTheDaemonWarmsAWindowWhoseClockHasRunDown(t *testing.T) {
 	isolateEngine(t)
 	seedAccount(t, "u-1", "org-1")
 	seedLiveHolder(t, "u-live")
+	// Past this account's own stagger phase, so what is under test is the
+	// rollover arm rather than the wait in front of it -- warmPhase has its own
+	// cases in stagger_test.go.
+	ago := warmPhase("u-1", rolledOver(time.Minute), usage.WindowFiveHour) + time.Minute
 	seedEntry(t, "u-1", usage.Entry{
-		Snapshot:  rolledOver(time.Minute),
+		Snapshot:  rolledOver(ago),
 		FetchedAt: tickEpoch.Add(-10 * time.Minute),
 	})
 
 	e := engineFor(t, tokensAreFine, func(context.Context, string) (*usage.Snapshot, error) {
-		return rolledOver(time.Minute), nil
+		return rolledOver(ago), nil
 	})
 	probes := stubProbe(t, e)
 	tick(t, e)
@@ -214,6 +218,9 @@ func TestTheNextPollIsAimedAtTheRollover(t *testing.T) {
 	tick(t, e)
 
 	got, _ := cacheEntry(t, "u-1")
+	// The poll still aims straight at the rollover. The fleet's ANCHORS are
+	// spread by holding the probe back, not by holding the reading back -- see
+	// warmPhase, and TestTheWarmUpWaitsOutItsPhaseAfterTheRollover.
 	want := tickEpoch.Add(5*time.Minute + usage.ProbeWakeMargin)
 	if !got.NextPollAt.Equal(want) {
 		t.Errorf("NextPollAt = %s, want %s — the idle cadence would look ten minutes out and find "+
