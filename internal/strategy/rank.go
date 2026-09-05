@@ -535,14 +535,31 @@ func measure(c Candidate, o Options) Ranked {
 	// per account, and it is the same call below so the two window sets this
 	// function reads cannot be built from different tables.
 	h := HeadroomFor(c.Usage, o.Model, o.thresholdsFor(c))
-	// A primary seat is metered in credits rather than in plan windows, so it
-	// is ranked on the credit allowance instead. This is a reassignment rather
-	// than a second opinion: such a seat carries no plan windows, so the line
-	// above found nothing for it and everything below still works off h --
-	// recoveryOf looks for a window named extra_usage and finds none, so it
-	// answers "no recovery", which is true of a credit allowance, and
-	// weeklyResetOf ranges over an account carrying no plan windows at all and
-	// answers the same way.
+	// A primary seat is metered in credits rather than in plan windows, so it is
+	// ranked on the credit allowance instead. This REPLACES the plan headroom
+	// above rather than being compared with it, and that is a real choice with a
+	// real cost, not the no-op the comment here used to claim.
+	//
+	// What it used to claim was that such a seat carries no plan windows, so the
+	// line above found nothing for it. That is false. identity.Classify files an
+	// account KindCredit off Snapshot.HasSubscriptionWindows, which iterates
+	// RateLimitWindows -- the fixed five and the two codex keys, and nothing
+	// else -- so a weekly cap that arrived in limits[] is invisible to it. A
+	// seat with no fixed windows, extra_usage enabled and a real scoped weekly
+	// is both a credit seat AND an account carrying quota, and HeadroomFor
+	// answers Known for it.
+	//
+	// So this line can discard a measured plan headroom. Measured: a seat whose
+	// opted-in weekly is 99.9% used reports plan slack near -50 and is ranked
+	// here on a credit allowance of 85, which puts it FIRST. The pre-emptive
+	// switch no longer walks onto such a seat -- it reads the derived table now,
+	// and the seat derives one -- but the ORDINARY better-target rule still can.
+	//
+	// Taking the minimum of the two instead is the obvious repair and it is not
+	// made here, because it would move Spent for a credit seat, and Spent feeds
+	// MainPoolExhausted, which is the one decision in ccdad that spends the
+	// user's money. That needs its own investigation and its own release rather
+	// than a line in this one.
 	if primaryCredit(c) {
 		h = creditHeadroom(c, o)
 	}

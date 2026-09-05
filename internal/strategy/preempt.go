@@ -118,8 +118,11 @@ func projectedExhaustion(s *usage.Snapshot, model string, now time.Time, horizon
 //     into the roomy tier ahead of every spent one, so wherever such a candidate
 //     exists this still reaches it first. The change only adds candidates where
 //     there were none.
-//   - Not itself about to run out, asked with the SAME projection the live
-//     account was judged by, over the candidate own blind interval. Moving from
+//   - Not itself about to run out, asked with the SAME projection AND THE SAME
+//     THRESHOLD TABLE the live account was judged by, over the candidate own
+//     blind interval. The table half of that was untrue for as long as this
+//     bullet has existed -- preempt judged the live account on the configured
+//     bundle and this walk judges candidates on the derived one. Moving from
 //     an account that exhausts in five minutes to one that exhausts in six
 //     trades one cut-off session for another and spends the cooldown doing it.
 //   - Not one whose poller is throttled, PREFERABLY. A 429 on the usage endpoint
@@ -246,7 +249,20 @@ func preempt(byUUID map[string]Candidate, res Result, activeUUID string, o Optio
 	if !ok {
 		return Ranked{}, false
 	}
-	if !projectedExhaustion(active.Usage, o.Model, o.Now, horizon, o.Thresholds()) {
+	// thresholdsFor and NOT Thresholds, so the live account is judged on the
+	// same table its candidates are. The two used to disagree, and under hover
+	// the configured bundle is precisely the set of numbers hover overrides --
+	// so this rule asked one question of the account it might leave and a
+	// different one of every account it might go to.
+	//
+	// It is a no-op today and it is written down as one rather than dressed up.
+	// projectedExhaustion reads a table only through bindingWindows, whose only
+	// threshold-dependent arm is the unknown-scope opt-in, and once a primary
+	// credit seat derives a table like every other account the two admit the
+	// same set for every account there is. What makes this worth landing is that
+	// the equality is now a property of the pass rather than a coincidence a
+	// future edit is free to break.
+	if !projectedExhaustion(active.Usage, o.Model, o.Now, horizon, o.thresholdsFor(active)) {
 		return Ranked{}, false
 	}
 	return preemptTarget(byUUID, res, activeUUID, o)

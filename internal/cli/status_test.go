@@ -1048,8 +1048,13 @@ func TestARowTheHoverPassNeverSawIsMeasuredAsHoverWouldMeasureIt(t *testing.T) {
 	if !ok {
 		t.Fatalf("no usage object:\n%s", out)
 	}
-	if got := u["windowThreshold"]; got != 80.0 {
-		t.Errorf("windowThreshold = %v, want 80 -- hover ignores `threshold`, so the configured 60 is a number nothing would have used", got)
+	// 150 is the answer hover gives for an account its pass never saw: the
+	// assumed elapsed share of a window it cannot date, plus a pool share, and
+	// with no pool the share is the whole 100. The DISCRIMINATOR is that it is
+	// not 60 -- hover ignores `threshold`, so the configured number is one
+	// nothing would have used.
+	if got := u["windowThreshold"]; got != 150.0 {
+		t.Errorf("windowThreshold = %v, want 150 -- hover ignores `threshold`, so the configured 60 is a number nothing would have used", got)
 	}
 }
 
