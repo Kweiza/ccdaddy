@@ -153,13 +153,21 @@ func isolate(t *testing.T) string {
 	// policy put the real hook back by name.
 	suppressAutoStart(t)
 
-	// The codex shim's auto-install is suppressed for the same reason and needs
-	// the same care: it is reached from `ccdad add codex`, it writes the startup
-	// files under the home directory above, and it reads $SHELL — which nothing
-	// in this suite sets, so an unsuppressed hook would write whatever dialect
-	// the developer happens to run and every codex-add test would assert on
-	// output that depends on it. The tests that describe the automatic install
-	// call realShimAutoInstall by name.
+	// The codex shim's auto-install is suppressed for the same reason, and what
+	// it is protecting is not the write: `ccdad add codex` reaches the hook and
+	// the hook writes shell startup files, but the two home variables above
+	// already put those under a t.TempDir(), so the developer's own ~/.bashrc
+	// was never in reach. What is unsandboxed is everything the installer
+	// READS. $SHELL picks the dialect and isolate deliberately sets no value for
+	// it — the tests that mean to describe one set it themselves, by name — and
+	// the live PATH, HOMEBREW_PREFIX, SCOOP and os.Executable together decide
+	// which directories the block registers. An unsuppressed hook therefore
+	// writes a bash block on one developer's machine, a fish block on the next
+	// and refuses outright on a csh one, registering on PATH whichever build
+	// directory `go test` left this binary in — and every codex-add test would
+	// be asserting on output that changes with whose shell ran it. The tests
+	// that describe the automatic install call realShimAutoInstall by name and
+	// pin those inputs with codexShimEnvironment.
 	suppressShimAutoInstall(t)
 
 	// The network is isolated for the same reason the filesystem is. A test that
