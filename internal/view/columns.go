@@ -446,15 +446,7 @@ func (r Row) Cells(c Columns, now time.Time) []string {
 func (r Row) HoverCells(c Columns, now time.Time) []string {
 	out := make([]string, 0, len(c.Windows)+len(c.Resets))
 	for _, w := range c.Windows {
-		pct, state := r.WindowPct(w.Name)
-		switch state {
-		case WindowAbsent:
-			out = append(out, NoQuantity)
-		case WindowUnreadable:
-			out = append(out, Unreadable)
-		default:
-			out = append(out, fmt.Sprintf("%.0f%%/%.0f%%", pct, r.WindowThreshold(w.Name)))
-		}
+		out = append(out, r.hoverWindowCell(w.Name))
 	}
 	for _, reset := range c.Resets {
 		out = append(out, r.ResetCell(reset, now))
