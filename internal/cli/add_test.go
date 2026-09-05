@@ -99,18 +99,44 @@ func TestArgCountViolationsAreUsageErrors(t *testing.T) {
 // Claude for the whole of this program's life, so a silent default is exactly
 // the shape that logs somebody into Claude when they typed those words meaning
 // to add a Codex account — and both spellings exit 0, so nothing would say so.
+//
+// The flagged rows are the same command line as a user actually types it. The
+// old grammar carried the login's flags on `add` itself, so the real mistake is
+// `ccdad add --activate`, not the bare word — and the last row is copied from
+// this repository's own README, which still documents that spelling. Flags are
+// parsed before Args and RunE, so all three of those answered `unknown flag`
+// until the group whitelisted unknown flags: the message below was written for
+// exactly these lines and reached none of them.
 func TestBareAddNamesBothProvidersRatherThanDefaultingToOne(t *testing.T) {
-	isolate(t)
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"bare", []string{"add"}},
+		{"old activate flag", []string{"add", "--activate"}},
+		{"old alias and browser flags", []string{"add", "--alias", "seat-a", "--no-browser"}},
+		{"the whole documented recipe", []string{
+			"add", "--alias", "seat-a", "--no-browser", "--activate", "--timeout", "15m",
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolate(t)
 
-	code, _, _, top := runRoot(t, "add")
+			code, _, _, top := runRoot(t, tc.args...)
 
-	if code != ExitUsage {
-		t.Fatalf("exit = %d, want %d\ntop: %s", code, ExitUsage, top)
-	}
-	for _, want := range []string{"claude", "codex"} {
-		if !strings.Contains(top, want) {
-			t.Errorf("the refusal does not name %q:\n%s", want, top)
-		}
+			if code != ExitUsage {
+				t.Fatalf("exit = %d, want %d\ntop: %s", code, ExitUsage, top)
+			}
+			for _, want := range []string{"claude", "codex"} {
+				if !strings.Contains(top, want) {
+					t.Errorf("the refusal does not name %q:\n%s", want, top)
+				}
+			}
+			if strings.Contains(top, "unknown flag") {
+				t.Errorf("pflag answered ahead of the group, so the message naming both "+
+					"providers never ran:\n%s", top)
+			}
+		})
 	}
 }
 
@@ -122,19 +148,71 @@ func TestBareAddNamesBothProvidersRatherThanDefaultingToOne(t *testing.T) {
 // The group's own Args answers instead, and it fires BEFORE the scoped-session
 // gate: cobra validates positional arguments ahead of every persistent pre-run
 // hook, so inside a `ccdad run` session this is still the message a user gets.
+//
+// The flagged row is the same mistake with a flag still on the line, which is
+// how the old grammar was actually spelled. Args runs after flag parsing, so
+// that row died in pflag with `unknown flag: --activate` and this message never
+// ran — the alias the user typed was lost to a line naming neither it nor the
+// provider. It reaches the message only because the group whitelists unknown
+// flags, and this row is what would notice that being taken away.
 func TestYesterdaysAliasGrammarIsToldWhereTheAliasGoesNow(t *testing.T) {
-	isolate(t)
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"bare", []string{"add", "work"}},
+		{"with a flag from the old grammar", []string{"add", "work", "--activate"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolate(t)
 
-	code, _, _, top := runRoot(t, "add", "work")
+			code, _, _, top := runRoot(t, tc.args...)
 
-	if code != ExitUsage {
-		t.Fatalf("exit = %d, want %d\ntop: %s", code, ExitUsage, top)
+			if code != ExitUsage {
+				t.Fatalf("exit = %d, want %d\ntop: %s", code, ExitUsage, top)
+			}
+			if !strings.Contains(top, "ccdad add claude work") {
+				t.Errorf("the refusal does not say where the alias goes now:\n%s", top)
+			}
+			if strings.Contains(top, "unknown command") {
+				t.Errorf("cobra's own answer got through:\n%s", top)
+			}
+			if strings.Contains(top, "unknown flag") {
+				t.Errorf("pflag answered ahead of Args, so the alias is gone from the "+
+					"message that reports it:\n%s", top)
+			}
+		})
 	}
-	if !strings.Contains(top, "ccdad add claude work") {
-		t.Errorf("the refusal does not say where the alias goes now:\n%s", top)
-	}
-	if strings.Contains(top, "unknown command") {
-		t.Errorf("cobra's own answer got through:\n%s", top)
+}
+
+// The unknown-flag whitelist is on the GROUPS and must not reach the leaves.
+//
+// It is there so a line written in the old grammar survives parsing long enough
+// to be told where the provider goes, and a group defines no flags of its own,
+// so nothing is lost by letting one through. A leaf is the opposite case: it
+// owns every flag it accepts, and whitelisting there would make `--activat`
+// silently mean nothing at all — the login would run, exit 0, and not activate,
+// which is the one outcome this whole area exists to prevent. Cobra's whitelist
+// is per-command and does not inherit, so this holds by construction; it is
+// pinned because nothing in the group's own declaration says so.
+func TestAMisspeltFlagOnALoginLeafIsStillRefused(t *testing.T) {
+	for _, args := range [][]string{
+		{"add", "claude", "--activat"},
+		{"add", "codex", "--allow-workspace-membr"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			isolate(t)
+
+			code, _, _, top := runRoot(t, args...)
+
+			if code != ExitUsage {
+				t.Fatalf("exit = %d, want %d\ntop: %s", code, ExitUsage, top)
+			}
+			if !strings.Contains(top, "unknown flag") {
+				t.Errorf("the leaf swallowed a flag it does not define, so the login would "+
+					"run without doing what the line asked:\n%s", top)
+			}
+		})
 	}
 }
 

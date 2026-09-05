@@ -106,6 +106,15 @@ func newProfileClient() *identity.Client {
 // and --allow-workspace-member describes a workspace Claude does not have, so a
 // persistent flag on this group would offer each provider the other's options
 // and fail somewhere further in.
+//
+// Which is exactly why unknown flags are whitelisted here. The old grammar was
+// `ccdad add --alias seat-a --no-browser --activate`, so the line a user retypes
+// from muscle memory — or copies out of this repository's own README — carries
+// leaf flags this group does not define. Cobra parses flags before it validates
+// positionals, so without the whitelist pflag fails first and the answer is
+// `unknown flag: --alias`, which names nothing about the rename and loses any
+// alias that was on the line. Whitelisting keeps parsing alive to the point
+// where the group's own Args and RunE can say where the provider goes.
 func newAddCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "add",
@@ -113,9 +122,10 @@ func newAddCmd() *cobra.Command {
 		Long: "Every account starts here, and the provider is part of the command:\n" +
 			"'ccdad add claude' opens a browser login, 'ccdad add codex' prints a device code.\n\n" +
 			"Adding an account does not switch to it.",
-		Args:          addProviderArgs,
-		SilenceUsage:  true,
-		SilenceErrors: true,
+		Args:               addProviderArgs,
+		FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
+		SilenceUsage:       true,
+		SilenceErrors:      true,
 		RunE: func(*cobra.Command, []string) error {
 			// Cobra's own answer is to print help and exit 0. A caller that
 			// meant to add an account gets a usage error, as everywhere else.
@@ -127,12 +137,20 @@ func newAddCmd() *cobra.Command {
 	return cmd
 }
 
-// addProviderArgs answers the grammar this rename broke.
+// addProviderArgs answers the grammar this rename broke — but only because the
+// group whitelists unknown flags, and on its own it answered one shape of it.
 //
 // `ccdad add work` was how an alias was given until this release, and it is the
 // mistake the rename guarantees. Cobra's own answer is `unknown command "work"
 // for "ccdad add"`, which names neither the provider that is missing nor where
 // the alias went — so the alias moves in the message that reports it.
+//
+// A validator alone reaches none of that when a flag is on the line. Args runs
+// after flag parsing, so `ccdad add work --activate` died in pflag with
+// `unknown flag: --activate` and this function never ran — the alias message
+// lost to a line that names neither the alias nor the provider. The whitelist
+// on the group is what gets the positional here at all, and the two belong
+// together: removing it silently narrows this back to the bare shape.
 //
 // It fires ahead of the scoped-session gate and the auto-start hook, because
 // cobra validates positional arguments before every persistent pre-run hook.
