@@ -16,6 +16,16 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-09-05
+
+The release that makes `hover` spend a week before it expires. The mode derived
+a threshold per account and per window and then ranked on the tightest of them,
+which is structurally the window an account is furthest AHEAD of pace on — so
+the window whose quota was about to be thrown away was the one window the
+ranking could never be looking at. The licence an account may run ahead by now
+travels on the account rather than on a window, and the surfaces that print it
+say which account is running wide, by how much, and what is expiring.
+
 ### Fixed
 
 - **`hover` now spends a week that is about to expire.** The mode derives a
@@ -43,6 +53,8 @@ by `uuid` or `alias`.
   one that ranks in `headroom`. The widening is capped by the room the account
   actually has, so an account with nothing left is unaffected and still sorts
   last.
+
+### Added
 
 - **`ccdad status` and the daemon log now say when an account is running wide of
   pace on purpose.** The share used to be one number for the whole pool and a
@@ -3309,7 +3321,8 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/Kweiza/ccdaddy/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/Kweiza/ccdaddy/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/Kweiza/ccdaddy/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/Kweiza/ccdaddy/compare/v0.11.0...v0.12.0
