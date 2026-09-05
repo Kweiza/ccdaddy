@@ -2,6 +2,7 @@ package view
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/daemon"
@@ -55,6 +56,19 @@ const (
 	ColumnState
 	ColumnAuto
 	ColumnAge
+	// ColumnBlank is a column that holds nothing: the room a section's quota
+	// block does not need and a wider section's does.
+	//
+	// It exists so that the columns AFTER the block -- STATE, AUTO, AGE -- land
+	// at the same index in every section, which is what keeps them under one
+	// another across the seam in a table whose two halves draw different
+	// windows. Its cell is the empty string and never NoQuantity: "-" is a claim
+	// that the quantity does not exist for this account, and this column carries
+	// no claim at all.
+	//
+	// Appended LAST. Nothing persists these values, but they are switched on in
+	// four packages, and a renumbering is a diff nobody can review.
+	ColumnBlank
 )
 
 // String names a kind, for a test failure that would otherwise print an
@@ -81,6 +95,8 @@ func (k ColumnKind) String() string {
 		return "AUTO"
 	case ColumnAge:
 		return "AGE"
+	case ColumnBlank:
+		return "BLANK"
 	}
 	return fmt.Sprintf("ColumnKind(%d)", int(k))
 }
@@ -202,6 +218,84 @@ func ListColumns(c Columns) []ListColumn {
 		ListColumn{Kind: ColumnAuto, Index: -1, Header: AutoHeader, Content: autoContent},
 		ListColumn{Kind: ColumnAge, Index: -1, Header: AgeHeader, Content: ageContent},
 	)
+}
+
+// SectionColumns is one section's column list, laid out in the slots a PLANNED
+// list reserved.
+//
+// It is the piece that lets two halves of one table draw different windows and
+// still line up. The planned list is the widest section's, which is what a width
+// ladder measured and what every column's width was reserved for; this swaps the
+// quota block for the section's own and pads out the difference with blanks, so
+// STATE, AUTO and AGE land at the same index in every section.
+//
+// The columns in FRONT of the block are untouched, and that is what makes the
+// swap safe rather than lucky: IDX, ACCOUNT, TYPE and TIER are the same columns
+// in every section, so the block always starts at the same slot.
+//
+// A COLLAPSED plan keeps its one ColumnWorst and still takes the section's own
+// rollovers. The worst cell reads the block it is handed, so it is already this
+// section's answer; the reset columns are the half that has to be re-indexed,
+// because ListColumn.Index points into Columns.Resets and the planned list's
+// indices are the widest section's. Handing that list back whole is what put a
+// Claude rollover's index into a Codex block and read past the end of it.
+//
+// A section needing more slots than the plan reserved is cut to fit, keeping the
+// soonest rollovers -- which is the direction ListDrops takes them in anyway. It
+// is reachable only from a caller that planned against some other list, and
+// shearing every column after the block would be the alternative.
+func SectionColumns(planned []ListColumn, c Columns) []ListColumn {
+	slots, collapsed := 0, false
+	for _, p := range planned {
+		switch p.Kind {
+		case ColumnWorst:
+			collapsed = true
+			slots++
+		case ColumnWindow, ColumnReset, ColumnBlank:
+			slots++
+		}
+	}
+	own := make([]ListColumn, 0, slots)
+	if collapsed {
+		own = append(own, ListColumn{
+			Kind: ColumnWorst, Index: -1, Header: WorstHeader, Content: worstContent,
+		})
+		for i, r := range c.Resets {
+			own = append(own, ListColumn{
+				Kind: ColumnReset, Index: i, Header: r.Header, Content: resetContent,
+			})
+		}
+	} else {
+		for _, l := range ListColumns(c) {
+			if l.Kind == ColumnWindow || l.Kind == ColumnReset {
+				own = append(own, l)
+			}
+		}
+	}
+	// A section wider than the plan cannot happen -- the plan is the widest
+	// section's -- but a caller that passed some other list would otherwise
+	// silently lengthen the row and shear every column after the block.
+	if len(own) > slots {
+		own = own[:slots]
+	}
+	for len(own) < slots {
+		own = append(own, ListColumn{Kind: ColumnBlank, Index: -1, Content: windowContent})
+	}
+
+	out := make([]ListColumn, 0, len(planned))
+	placed := false
+	for _, p := range planned {
+		switch p.Kind {
+		case ColumnWindow, ColumnReset, ColumnBlank:
+			if !placed {
+				out = append(out, own...)
+				placed = true
+			}
+		default:
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // ListDrops is the drop priority, LOWEST FIRST: a caller too narrow for every
@@ -336,6 +430,8 @@ func (r Row) ListCell(c ListColumn, block Columns, now time.Time, hover bool) st
 		return r.AutoLabel()
 	case ColumnAge:
 		return r.AgeLabel(now)
+	case ColumnBlank:
+		return ""
 	}
 	return ""
 }
@@ -468,6 +564,33 @@ type Section struct {
 	Rows []ListRow
 }
 
+// SectionLegend is the legend for one section, prefixed with the provider it
+// belongs to.
+//
+// The prefix is what makes two legends readable as two: under a sectioned table
+// with per-section columns there are now two "windows:" lines and nothing in the
+// text of either says which half of the table it explains. It is the section's
+// own Header, so the word a reader matches on is the word they just read over
+// the rows.
+//
+// The provider is LOWERCASED here, and that is not a style choice. ClaudeSection
+// and CodexSection are all-caps and 7-bit precisely so that a grep for one of
+// them finds a heading and nothing else -- three tests assert the ABSENCE of a
+// string by searching for it, and a legend carrying "CLAUDE" would answer those
+// greps from under the table. Lowercase is the same word to a reader and a
+// different string to a search.
+//
+// Empty when the section has no windows, which covers both the empty section and
+// the one nobody could read -- there is no key to publish either way, and a
+// legend naming the placeholder would be a mapping from QUOTA to nothing.
+func SectionLegend(header string, c Columns) string {
+	legend := c.Legend()
+	if legend == "" {
+		return ""
+	}
+	return "windows " + strings.ToLower(header) + ": " + strings.TrimPrefix(legend, "windows:  ")
+}
+
 // ListRow is one line of a rendered account list: an account row, or the
 // heading over a section.
 //
@@ -481,6 +604,17 @@ type ListRow struct {
 	// Header is the section heading this line carries, and empty on every
 	// account row. It is what tells the two apart.
 	Header string
+	// ColumnHeader marks the line of column names that follows a section
+	// heading. It is a line of the table rather than the table's own header row
+	// because there is now ONE PER SECTION: each provider's half draws its own
+	// quota block, so each needs its own names over it, and a table library has
+	// exactly one header row to give.
+	//
+	// It is a third kind of line rather than a second flag on Header for the
+	// reason Header is not a nested list: every surface draws these by integer
+	// and styles them by the same integer, so a line the renderer counts and the
+	// style function does not is a line whose colour belongs to its neighbour.
+	ColumnHeader bool
 	// At is this account's index in the slice Sections was given, and -1 on a
 	// heading.
 	//
@@ -525,6 +659,27 @@ func Sections(rows []Row) []Section {
 	return []Section{claude, codex}
 }
 
+// Columns is the quota block this section's own rows need.
+//
+// It is ColumnsOf over this section alone, which is the whole of the change: the
+// union over a mixed fleet gives every Claude row a CX 1 cell it can only fill
+// with "-" and every Codex row a 5H cell it can only fill the same way. Measured
+// on a nine-account fleet: nine quota columns of which four were dead in each
+// section, forty-two characters of table per row saying nothing.
+//
+// A section with no rows has no windows, and its block is the placeholder -- one
+// column headed QUOTA. That is the same answer the whole-fleet block gives for a
+// fleet nobody could read, and it is right here for the same reason: a heading
+// over an empty section says the provider exists, and a heading over nothing at
+// all with no columns under it would read as a table that forgot a provider.
+func (s Section) Columns() Columns {
+	rows := make([]Row, 0, len(s.Rows))
+	for _, line := range s.Rows {
+		rows = append(rows, line.Row)
+	}
+	return ColumnsOf(rows)
+}
+
 // ListRows is the sections as one drawable slice: each heading, then that
 // section's accounts, in section order.
 //
@@ -538,18 +693,25 @@ func Sections(rows []Row) []Section {
 // added for: a machine with four Claude accounts and no Codex one renders
 // identically to a build that has never heard of Codex.
 //
-// The cost is two rows on a page that is short of them, and a surface short of
+// Each section carries TWO lines of its own: the provider's name, and the column
+// names under it. The second is what per-section quota blocks cost -- each half
+// of the table draws its own windows, so each needs its own names over them --
+// and it is a line of the table rather than the table's own header row because a
+// table library has exactly one of those to give.
+//
+// The cost is four rows on a page that is short of them, and a surface short of
 // rows gives them up like any other block rather than being handed a shorter
-// list: the count is FIXED at one per section, so it can be budgeted, spent and
+// list: the count is FIXED at two per section, so it can be budgeted, spent and
 // handed back without knowing anything about the fleet.
 func ListRows(secs []Section) []ListRow {
 	n := 0
 	for _, s := range secs {
-		n += len(s.Rows) + 1
+		n += len(s.Rows) + 2
 	}
 	out := make([]ListRow, 0, n)
 	for _, s := range secs {
 		out = append(out, ListRow{Header: s.Header, At: -1})
+		out = append(out, ListRow{ColumnHeader: true, At: -1})
 		out = append(out, s.Rows...)
 	}
 	return out
@@ -559,9 +721,20 @@ func ListRows(secs []Section) []ListRow {
 // quota cells stop being a bare percentage there and nothing else says so.
 const HoverNote = "hover:    quota cells show used/threshold; thresholds are derived per account and window"
 
-// TrailerLines is everything printed UNDER an account table, in order: the
-// legend, the hover sentences, the unranked note, and one credit line per
-// credit-metered seat.
+// TrailerLines is everything printed UNDER an account table that is not a
+// legend, in order: the hover sentences, the unranked note, and one credit line
+// per credit-metered seat.
+//
+// The legend left this list when the table gained per-section columns. There is
+// no longer ONE legend to print -- each provider's half of the table carries its
+// own windows, so each carries its own mapping back to the wire keys -- and a
+// list that still held a whole-fleet legend would print a third one naming
+// columns no section draws. SectionLegend is where that lives now, and the
+// surface emits one per section immediately under the table.
+//
+// The Columns handed in is still the WHOLE FLEET's, because the unranked note is
+// a statement about the fleet rather than about a section: a window nothing
+// ranks is not something a reader should have to notice twice.
 //
 // One ordered slice rather than a sequence of prints in each surface, because
 // the order is a fact about the TABLE and not about the surface drawing it.
@@ -586,9 +759,6 @@ const HoverNote = "hover:    quota cells show used/threshold; thresholds are der
 // thresholds first and the rate is what those thresholds were priced in.
 func TrailerLines(rows []Row, c Columns, hover bool, stranded, burn string) []string {
 	var out []string
-	if legend := c.Legend(); legend != "" {
-		out = append(out, legend)
-	}
 	if hover {
 		out = append(out, HoverNote)
 		if burn != "" {

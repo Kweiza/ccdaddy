@@ -39,7 +39,7 @@ const (
 	goldenNarrow       = "narrow-56x10.txt"
 	goldenCollapsed    = "collapsed-43x9.txt"
 	goldenNotice       = "notice-80x23.txt"
-	goldenZeroAccounts = "zero-accounts-80x13.txt"
+	goldenZeroAccounts = "zero-accounts-80x14.txt"
 )
 
 // update rewrites the pages under testdata from what the renderer produced.
@@ -249,7 +249,7 @@ func TestEveryGoldenPageCarriesTheGlyphClassesItsRungAllows(t *testing.T) {
 		// above and keeps its frame and its headings where that one gives both
 		// up, which is the fleet and not the height: four account rows fewer is
 		// four rows the ladder never has to find.
-		{goldenZeroAccounts, 80, 13, true, 0, 0, false},
+		{goldenZeroAccounts, 80, 14, true, 0, 0, false},
 		{goldenNarrow, 56, 10, false, 0, 0, true},
 		{goldenCollapsed, 43, 9, false, 0, 0, true},
 	} {

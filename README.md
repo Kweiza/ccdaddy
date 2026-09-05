@@ -22,14 +22,16 @@ Strategy: headroom
 Current:  headroom  (at least one account has room, or could not be read)
 Runway:  7d dry 2026-08-24 01:19 UTC (1d13h)  ·  5h holds  ·  basis 4h00m  ·  need 4 (2 more)
 
-  IDX  ACCOUNT                  TYPE          TIER        5H   7D   CX 1  FABLE  5H IN  7D IN  CX 1 IN  FABLE IN  STATE      AGE
        CLAUDE
-* 1    work@example.com (work)  subscription  claude_max  82%  61%  -     100%   1h14m  4d3h   ?        4d3h      active     41s
-  2    personal@example.com     subscription  claude_pro  17%  44%  -     38%    3h02m  6d1h   ?        4d3h      candidate  2m
-  3    ci@example.org (ci)      api-key       -           ?    ?    ?     ?      ?      ?      ?        ?         -          ?
+  IDX  ACCOUNT                  TYPE          TIER        5H   7D   FABLE  5H IN  7D IN  FABLE IN  STATE      AGE
+* 1    work@example.com (work)  subscription  claude_max  82%  61%  100%   1h14m  4d3h   4d3h      active     41s
+  2    personal@example.com     subscription  claude_pro  17%  44%  38%    3h02m  6d1h   4d3h      candidate  2m
+  3    ci@example.org (ci)      api-key       -           ?    ?    ?      ?      ?      ?         -          ?
        CODEX
-  4    cx@example.com           codex         -           -    -    31%   -      ?      ?      3h09m    ?         serving    3m
-windows:  5H = five_hour   7D = seven_day   CX 1 = codex_primary   FABLE = weekly_scoped:model:Fable
+  IDX  ACCOUNT                  TYPE          TIER        CX 1  CX 1 IN                  STATE      AGE
+  4    cx@example.com           codex         pro         31%   3h09m                    serving    3m
+windows claude: 5H = five_hour   7D = seven_day   FABLE = weekly_scoped:model:Fable
+windows codex: CX 1 = codex_primary
 
 $ ccdad status --json
 {
@@ -699,12 +701,14 @@ $ ccdad status
 Strategy: hover
 Current:  headroom
 
+       CLAUDE
   IDX  ACCOUNT            5H        7D       CREDIT
 * 1    work@example.com   12%/100%  52%/76%  -
   2    spare@example.com  74%/100%  31%/76%  -
   3    seat@example.com   -         -        61%/95%  (primary, metered in credits)
-windows:  5H = five_hour   7D = seven_day   CREDIT = extra_usage
+windows claude: 5H = five_hour   7D = seven_day   CREDIT = extra_usage
 hover:    quota cells show used/threshold; thresholds are derived per account and window
+hover:    measured burn 5.4 pts/min, so an account needs 10.8 points to be worth switching to
 ```
 
 `*` marks the account Claude Code is logged in as, `-` is a window the account
@@ -949,7 +953,7 @@ runway, daemon state, and every available key command.
 | Key | What it does |
 |---|---|
 | `a` | Add an account — asks which provider, then hands the terminal to `ccdad add claude` or `ccdad add codex` and comes back |
-| `s` | Switch the live login — the list is sectioned by provider, and both the Claude login and the account serving codex are marked |
+| `s` | Switch to the account the cursor is on, in one keystroke. On the account already live it says so rather than spending a credential rotation |
 | `d` | The daemon screen — `S` starts, `x` stops, `R` restarts, and the log tails |
 | `c` | Change the switching strategy |
 | `q` | Quit (`ctrl+c` too) |
@@ -973,7 +977,10 @@ It gets shorter gracefully too, and gives up decoration before facts: the
 legend under the table goes before the family art, since `ccdad status` prints
 every line of it, and the `CLAUDE` / `CODEX` headings go before the version
 line and the summary, so a short terminal keeps what it knows about the fleet
-and loses the grouping. Below 35 columns or 3 rows it says what it needs
+and loses the grouping. Giving up the headings takes each section's own column
+names with them and the table falls back to one header row, because the two are
+alternatives: each provider's half draws its own windows only while there is a
+heading to tell the halves apart. Below 35 columns or 3 rows it says what it needs
 instead of drawing a page nobody can read. Run `ccdad status` for a
 redirectable snapshot; it draws the same columns from the same definition.
 

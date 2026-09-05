@@ -10,7 +10,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"charm.land/lipgloss/v2/table"
 	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/x/ansi"
 
@@ -34,6 +33,26 @@ import (
 // The two heading rows are walked as well, and their STATE cell takes NOTHING:
 // it is empty, and the row's own role goes on the cell that has text in it.
 // TestASectionHeadingIsPaintedOnItsTextAndNowhereElse is where that is argued.
+
+// styleAt is cellStyle with the per-line slices it now takes, built from ONE
+// column list and ONE block.
+//
+// Those slices are parallel to the drawn table and carry each line's own
+// section, which is what lets two halves of the table draw different windows.
+// Every case here is about a single section, so filling them with one answer is
+// the same page and one fewer thing for a case to say.
+func styleAt(g Glyphs, pal theme.Palette, shown []view.ListRow, cols []view.ListColumn,
+	block view.Columns, row, col, last int) lipgloss.Style {
+
+	n := len(shown) + 2
+	blocks := make([]view.Columns, n)
+	perRow := make([][]view.ListColumn, n)
+	for i := range blocks {
+		blocks[i], perRow[i] = block, cols
+	}
+	return cellStyle(g, pal, shown, blocks, perRow, row, col, last)
+}
+
 func TestTheStateColumnTakesTheRoleOfTheStateItPrints(t *testing.T) {
 	pal := theme.Of(theme.Dark)
 	cols := []view.ListColumn{{Kind: view.ColumnIdx}, {Kind: view.ColumnAccount}, {Kind: view.ColumnState}}
@@ -41,14 +60,16 @@ func TestTheStateColumnTakesTheRoleOfTheStateItPrints(t *testing.T) {
 
 	for at, want := range map[int]color.Color{
 		0: lipgloss.NoColor{},             // CLAUDE, an empty cell
-		1: pal.Color(theme.RoleActive),    // work@example.com
-		2: pal.Color(theme.RoleExhausted), // enterprise@co.example
-		3: pal.Color(theme.RoleCandidate), // spare@example.com
-		4: pal.Color(theme.RoleMuted),     // keyonly@example.com, unknown to the engine
-		5: lipgloss.NoColor{},             // CODEX, an empty cell
-		6: pal.Color(theme.RoleActive),    // cx@example.com, serving
+		1: pal.Color(theme.RoleHeader),    // the CLAUDE section's column names
+		2: pal.Color(theme.RoleActive),    // work@example.com
+		3: pal.Color(theme.RoleExhausted), // enterprise@co.example
+		4: pal.Color(theme.RoleCandidate), // spare@example.com
+		5: pal.Color(theme.RoleMuted),     // keyonly@example.com, unknown to the engine
+		6: lipgloss.NoColor{},             // CODEX, an empty cell
+		7: pal.Color(theme.RoleHeader),    // the CODEX section's column names
+		8: pal.Color(theme.RoleActive),    // cx@example.com, serving
 	} {
-		got := cellStyle(UnicodeGlyphs, pal, displayRows(fixtureRows()), cols, testCols(), at, state, len(cols)-1).GetForeground()
+		got := styleAt(UnicodeGlyphs, pal, displayRows(fixtureRows()), cols, testCols(), at, state, len(cols)-1).GetForeground()
 		if got != want {
 			t.Errorf("display row %d's STATE cell takes %v, want %v", at, got, want)
 		}
@@ -73,12 +94,12 @@ func TestASectionHeadingIsPaintedOnItsTextAndNowhereElse(t *testing.T) {
 		{Kind: view.ColumnWindow, Index: 0}, {Kind: view.ColumnState},
 	}
 	shown := displayRows(fixtureRows())
-	for _, at := range []int{0, 5} {
+	for _, at := range []int{0, 6} {
 		if shown[at].Header == "" {
 			t.Fatalf("display row %d is not a heading; the fixture pool's shape has moved", at)
 		}
 		for col, c := range cols {
-			got := cellStyle(UnicodeGlyphs, pal, shown, cols, block, at, col, len(cols)-1).GetForeground()
+			got := styleAt(UnicodeGlyphs, pal, shown, cols, block, at, col, len(cols)-1).GetForeground()
 			if c.Kind == view.ColumnAccount {
 				if got != pal.Color(theme.RoleHeader) {
 					t.Errorf("the %s heading's own cell takes %v, want RoleHeader", shown[at].Header, got)
@@ -108,14 +129,14 @@ func TestAMarkerRowIsMutedAndNotWhateverTheRowsAroundItAre(t *testing.T) {
 	// mixture of headings and accounts that window held.
 	shown := displayRows(fixtureRows()[:3])
 	for col := range cols {
-		got := cellStyle(UnicodeGlyphs, pal, shown, cols, testCols(), len(shown), col, len(cols)-1).GetForeground()
+		got := styleAt(UnicodeGlyphs, pal, shown, cols, testCols(), len(shown), col, len(cols)-1).GetForeground()
 		if got != pal.Color(theme.RoleMuted) {
 			t.Errorf("the +N-more marker's column %d takes %v, want RoleMuted", col, got)
 		}
 	}
 	// The empty-store marker: no rows shown at all, the marker at index 0.
 	for col := range cols {
-		got := cellStyle(UnicodeGlyphs, pal, nil, cols, testCols(), 0, col, len(cols)-1).GetForeground()
+		got := styleAt(UnicodeGlyphs, pal, nil, cols, testCols(), 0, col, len(cols)-1).GetForeground()
 		if got != pal.Color(theme.RoleMuted) {
 			t.Errorf("the no-accounts marker's column %d takes %v, want RoleMuted", col, got)
 		}
@@ -127,9 +148,15 @@ func TestAMarkerRowIsMutedAndNotWhateverTheRowsAroundItAre(t *testing.T) {
 func TestTheColumnHeadingsTakeTheHeaderRole(t *testing.T) {
 	pal := theme.Of(theme.Dark)
 	cols := []view.ListColumn{{Kind: view.ColumnIdx}, {Kind: view.ColumnAccount}, {Kind: view.ColumnState}}
-	got := cellStyle(UnicodeGlyphs, pal, displayRows(fixtureRows()), cols, testCols(), table.HeaderRow, 0, len(cols)-1).GetForeground()
-	if got != pal.Color(theme.RoleHeader) {
-		t.Fatalf("the heading row takes %v, want RoleHeader", got)
+	shown := displayRows(fixtureRows())
+	if !shown[1].ColumnHeader {
+		t.Fatalf("display row 1 is not the column names; the fixture pool's shape has moved")
+	}
+	for col := range cols {
+		got := styleAt(UnicodeGlyphs, pal, shown, cols, testCols(), 1, col, len(cols)-1).GetForeground()
+		if got != pal.Color(theme.RoleHeader) {
+			t.Fatalf("the heading row's column %d takes %v, want RoleHeader", col, got)
+		}
 	}
 }
 
@@ -139,7 +166,7 @@ func TestPaintingACellDoesNotMoveItsGap(t *testing.T) {
 	cols := []view.ListColumn{{Kind: view.ColumnIdx}, {Kind: view.ColumnAccount}, {Kind: view.ColumnState}}
 	for _, pal := range []theme.Palette{theme.Of(theme.None), theme.Of(theme.Dark)} {
 		for col, want := range map[int]int{0: 1, 1: 2, 2: 0} {
-			got := cellStyle(UnicodeGlyphs, pal, displayRows(fixtureRows()), cols, testCols(), 0, col, len(cols)-1).GetPaddingRight()
+			got := styleAt(UnicodeGlyphs, pal, displayRows(fixtureRows()), cols, testCols(), 0, col, len(cols)-1).GetPaddingRight()
 			if got != want {
 				t.Errorf("under %v, column %d pads %d, want %d", pal.Name(), col, got, want)
 			}
@@ -269,7 +296,7 @@ func opener(pal theme.Palette, r theme.Role) string {
 // that looks fine.
 func TestEachRoleLandsOnTheCellItNames(t *testing.T) {
 	pal := theme.Of(theme.Dark)
-	m := darkModel(113, 34)
+	m := darkModel(113, 35)
 	page := sgr(t, m.Body(), colorprofile.TrueColor)
 	open := func(r theme.Role) string { return opener(pal, r) }
 
@@ -280,7 +307,7 @@ func TestEachRoleLandsOnTheCellItNames(t *testing.T) {
 		{"the summary's active label", open(theme.RoleHeader) + "Active (Claude): "},
 		{"the column headings", open(theme.RoleHeader) + "IDX"},
 		{"a section heading", open(theme.RoleHeader) + view.ClaudeSection},
-		{"the trailer's legend", open(theme.RoleMuted) + "windows:  "},
+		{"the trailer's legend", open(theme.RoleMuted) + "windows claude: "},
 		{"an active row's state", open(theme.RoleActive) + m.Glyphs.Active + " active"},
 		{"an exhausted row's state", open(theme.RoleExhausted) + m.Glyphs.Exhausted + " exhausted"},
 		{"a candidate row's state", open(theme.RoleCandidate) + m.Glyphs.Candidate + " candidate"},
@@ -319,7 +346,7 @@ func TestEachRoleLandsOnTheCellItNames(t *testing.T) {
 // is the shortest page that renders it and 80x13 would pin its absence.
 func TestTheNoticeLineIsPaintedAsANotice(t *testing.T) {
 	pal := theme.Of(theme.Dark)
-	m := darkModel(80, 22)
+	m := darkModel(80, 23)
 	m.Snap.Notices = []string{"hover thresholds could not be read"}
 	page := sgr(t, m.Body(), colorprofile.TrueColor)
 	if want := opener(pal, theme.RoleNotice) + "note: "; !strings.Contains(page, want) {

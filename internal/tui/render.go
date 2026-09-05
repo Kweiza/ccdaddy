@@ -70,6 +70,65 @@ type Model struct {
 	Glyphs Glyphs
 }
 
+// sectionBlock is the quota block one provider's half of the table draws.
+//
+// It is view.Section.Columns over the same grouping the table is drawn from, so
+// the windows a section shows and the rows it shows are answered by one
+// function. A heading whose text matches no section -- which nothing builds --
+// answers the empty block, and the placeholder column is what that renders.
+func (m Model) sectionBlock(header string) view.Columns {
+	for _, s := range view.Sections(m.Snap.Rows) {
+		if s.Header == header {
+			return s.Columns()
+		}
+	}
+	return view.Columns{}
+}
+
+// sectionOf is the quota block the FIRST drawn line belongs to.
+//
+// It is asked by the account's own index into the snapshot's rows -- ListRow.At,
+// which survives the grouping precisely so a display position never has to be
+// read back as a store position. A window that opens on a heading, or on nothing
+// at all, answers the widest block: that is what the plan reserved slots for, so
+// the columns line up whatever is drawn under them.
+func (m Model) sectionOf(shown []view.ListRow) view.Columns {
+	if len(shown) == 0 || shown[0].At < 0 {
+		return m.widestBlock()
+	}
+	for _, s := range view.Sections(m.Snap.Rows) {
+		for _, line := range s.Rows {
+			if line.At == shown[0].At {
+				return s.Columns()
+			}
+		}
+	}
+	return m.widestBlock()
+}
+
+// widestBlock is the section block the width ladder plans against: the one whose
+// quota block needs the most columns.
+//
+// The ladder measures ONE column list, and every section is laid out in the
+// slots it reserved -- view.SectionColumns is what does the laying out. Planning
+// against the widest is what makes that safe: a narrower section pads, and no
+// section ever needs a slot the plan did not reserve.
+//
+// Ties go to the first, which is CLAUDE. Nothing depends on which of two equally
+// wide blocks is chosen -- they reserve the same number of slots -- but the
+// answer has to be stable or the page would re-plan itself between two frames
+// that read the same fleet.
+func (m Model) widestBlock() view.Columns {
+	out, best := view.Columns{}, -1
+	for _, s := range view.Sections(m.Snap.Rows) {
+		c := s.Columns()
+		if n := len(c.Windows) + len(c.Resets); n > best {
+			out, best = c, n
+		}
+	}
+	return out
+}
+
 // newModel is the one place a Model's library values are built, so a second
 // construction site cannot hand the page a differently-configured gauge, a
 // keybar with the library's own colours back on, or -- now that there are two
@@ -243,7 +302,7 @@ func (m Model) plan() Layout {
 	if footerWidth < 1 {
 		footerWidth = m.Width
 	}
-	return planWithRows(m.Cols, m.Width, m.Height, rows,
+	return planWithRows(m.widestBlock(), m.Width, m.Height, rows,
 		len(m.Snap.Notices) > 0, len(runway) > 0, len(m.footerLines(footerWidth)),
 		len(runway), len(summary), len(m.trailerLines()))
 }
@@ -261,7 +320,20 @@ func (m Model) plan() Layout {
 // it qualifies the hover sentence, so a page that does not print the first has
 // nothing for the second to qualify.
 func (m Model) trailerLines() []string {
-	return view.TrailerLines(m.Snap.Rows, m.Cols, false, "", "")
+	// One legend per section, each naming the provider it explains, because each
+	// half of the table draws its own windows and nothing in the text of a bare
+	// "windows:" line would say which half it belongs to.
+	//
+	// They come FIRST, above the sentences, for the reason the whole-fleet legend
+	// used to: a reader meets the column names in the table and the mapping back
+	// to the wire keys immediately under it.
+	var out []string
+	for _, s := range view.Sections(m.Snap.Rows) {
+		if legend := view.SectionLegend(s.Header, s.Columns()); legend != "" {
+			out = append(out, legend)
+		}
+	}
+	return append(out, view.TrailerLines(m.Snap.Rows, m.Cols, false, "", "")...)
 }
 
 // Body is the whole page as one string.
@@ -595,10 +667,20 @@ func (m Model) tableBlock(l Layout, inner int) []string {
 	cols := l.Columns
 	last := len(cols) - 1
 
-	headers := make([]string, len(cols))
-	for i, c := range cols {
-		headers[i] = c.Header
-	}
+	// One quota block PER SECTION, laid out in the slots the width ladder
+	// reserved for the widest of them. blocks and perRow are parallel to data,
+	// so the style function can ask each line about the windows its OWN half of
+	// the table draws rather than about a fleet-wide block that names a
+	// different window at the same index above and below the seam.
+	blocks := make([]view.Columns, 0, len(shown)+1)
+	perRow := make([][]view.ListColumn, 0, len(shown)+1)
+	// The window can START mid-section: at the bottom rungs of the height ladder
+	// there is not room for a heading, its column names AND an account, so the
+	// accounts are drawn bare. Those rows still belong to a section and still
+	// have to be read against its windows, so the leading section is resolved
+	// from the account itself rather than left at whatever the last heading set.
+	section := m.sectionOf(shown)
+	secCols := view.SectionColumns(cols, section)
 
 	data := make([][]string, 0, len(shown)+1)
 	for _, line := range shown {
@@ -608,14 +690,29 @@ func (m Model) tableBlock(l Layout, inner int) []string {
 		// per section would size its columns independently, so the two halves
 		// of one fleet would come out under headings that do not line up.
 		if line.Header != "" {
+			section = m.sectionBlock(line.Header)
+			secCols = view.SectionColumns(cols, section)
 			data = append(data, m.markerRow(cols, l, line.Header))
+			blocks, perRow = append(blocks, section), append(perRow, secCols)
 			continue
 		}
-		cells := make([]string, len(cols))
-		for i, c := range cols {
-			cells[i] = m.cell(c, line, l)
+		// The column names, once per section, because each section draws its own
+		// windows and a table library has exactly one header row to give.
+		if line.ColumnHeader {
+			names := make([]string, len(secCols))
+			for i, c := range secCols {
+				names[i] = c.Header
+			}
+			data = append(data, names)
+			blocks, perRow = append(blocks, section), append(perRow, secCols)
+			continue
+		}
+		cells := make([]string, len(secCols))
+		for i, c := range secCols {
+			cells[i] = m.cell(c, line, l, section)
 		}
 		data = append(data, cells)
+		blocks, perRow = append(blocks, section), append(perRow, secCols)
 	}
 	// Zero accounts is a valid state — a fresh install, or every account
 	// removed — and it renders as the headings plus one explicit row. A
@@ -643,10 +740,20 @@ func (m Model) tableBlock(l Layout, inner int) []string {
 		// so to the library as well.
 		Wrap(false).
 		StyleFunc(func(row, col int) lipgloss.Style {
-			return cellStyle(m.Glyphs, m.Pal, shown, cols, m.Cols, row, col, last)
+			return cellStyle(m.Glyphs, m.Pal, shown, blocks, perRow, row, col, last)
 		}).
-		Headers(headers...).
 		Rows(data...)
+	// A page whose rung took the sections away draws ONE header row, the way it
+	// did before sections existed. The two are alternatives and never both: with
+	// the sections on, each half of the table names its own windows, and a table
+	// library has exactly one header row to give.
+	if !l.Sections {
+		headers := make([]string, len(cols))
+		for i, c := range cols {
+			headers[i] = c.Header
+		}
+		t = t.Headers(headers...)
+	}
 
 	out := strings.Split(t.String(), "\n")
 	for i, line := range out {
@@ -713,15 +820,34 @@ func (m Model) tableBlock(l Layout, inner int) []string {
 // column carries the standard two, and the last carries none, so the table's
 // natural width is where the frame's padding starts rather than a column of
 // trailing space the frame then pads again.
-func cellStyle(g Glyphs, pal theme.Palette, shown []view.ListRow, cols []view.ListColumn,
-	block view.Columns, row, col, last int) lipgloss.Style {
+func cellStyle(g Glyphs, pal theme.Palette, shown []view.ListRow, blocks []view.Columns,
+	perRow [][]view.ListColumn, row, col, last int) lipgloss.Style {
 
 	st := lipgloss.NewStyle()
+	// Every line is a DATA row now, the column names included: there is one set
+	// of them per section, and a table library has exactly one header row. So the
+	// heading role is reached through the line rather than through the library's
+	// own HeaderRow sentinel.
+	cols := []view.ListColumn(nil)
+	block := view.Columns{}
+	if row >= 0 && row < len(perRow) {
+		cols, block = perRow[row], blocks[row]
+	}
+	if col < 0 || col >= len(cols) {
+		cols = nil
+	}
 	switch {
+	// The library's own header row, which a page WITHOUT sections still draws:
+	// with sections on there is one set of column names per section and they
+	// arrive as data rows instead.
 	case row == table.HeaderRow:
 		st = pal.Style(theme.RoleHeader)
+	case cols == nil:
+		st = pal.Style(theme.RoleMuted)
 	case row >= len(shown):
 		st = pal.Style(theme.RoleMuted)
+	case shown[row].ColumnHeader:
+		st = pal.Style(theme.RoleHeader)
 	case shown[row].Header != "":
 		if cols[col].Kind == view.ColumnAccount {
 			st = pal.Style(theme.RoleHeader)
@@ -855,6 +981,14 @@ func packFrom(all []view.ListRow, top, budget int) []view.ListRow {
 			section = line.Header
 			continue
 		}
+		// The column-header line is redrawn with its section rather than
+		// carried across from the drawable list, for the same reason the
+		// heading is: which section a window lands in depends on where the
+		// scroll starts, and a line copied from the list would arrive without
+		// the heading it belongs under.
+		if line.ColumnHeader {
+			continue
+		}
 		if skipped < top {
 			skipped++
 			continue
@@ -863,9 +997,14 @@ func packFrom(all []view.ListRow, top, budget int) []view.ListRow {
 			break
 		}
 		if section != drawn {
+			// Three rather than two: the heading, the column names under it,
+			// and at least one account beneath both. A heading and a set of
+			// column names with nothing under them is two rows spent saying
+			// that a section exists, on a page that is already out of rows.
 			switch {
-			case len(out)+2 <= budget:
+			case len(out)+3 <= budget:
 				out = append(out, view.ListRow{Header: section, At: -1})
+				out = append(out, view.ListRow{ColumnHeader: true, At: -1})
 			case len(out) > 0:
 				return out
 			}
@@ -883,7 +1022,7 @@ func packFrom(all []view.ListRow, top, budget int) []view.ListRow {
 func accountsIn(lines []view.ListRow) int {
 	n := 0
 	for _, line := range lines {
-		if line.Header == "" {
+		if line.Header == "" && !line.ColumnHeader {
 			n++
 		}
 	}
@@ -924,7 +1063,12 @@ func (m Model) displayList(l Layout) []view.ListRow {
 	}
 	out := make([]view.ListRow, 0, len(all))
 	for _, line := range all {
-		if line.Header == "" {
+		// Both of a section's own lines go together: the provider's name and the
+		// column names under it are one decision, and a page that kept two sets
+		// of column names with no headings between them would be labelling two
+		// halves it no longer tells apart. Such a page draws ONE header row
+		// instead, from the widest block -- see tableBlock.
+		if line.Header == "" && !line.ColumnHeader {
 			out = append(out, line)
 		}
 	}
@@ -984,8 +1128,8 @@ func (m Model) markerRow(cols []view.ListColumn, l Layout, text string) []string
 // and banded by cellStyle. Passing Snap.Hover through would change every quota
 // cell on a hover machine, which is a change to the page rather than to where
 // the page reads its cells from.
-func (m Model) cell(c view.ListColumn, line view.ListRow, l Layout) string {
-	text := line.Row.ListCell(c, m.Cols, m.Snap.Now, false)
+func (m Model) cell(c view.ListColumn, line view.ListRow, l Layout, block view.Columns) string {
+	text := line.Row.ListCell(c, block, m.Snap.Now, false)
 	switch c.Kind {
 	case view.ColumnIdx:
 		return m.markerCell(line) + strings.TrimPrefix(text, line.Row.Marker())

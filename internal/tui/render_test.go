@@ -143,7 +143,7 @@ func TestThePageNeverScrollsHorizontally(t *testing.T) {
 			m.Snap.Notices = []string{"hover thresholds could not be read"}
 		}},
 		{"the frame and the headings gone, the facts kept", 80, 13, nil},
-		{"zero accounts", 80, 13, func(m *Model) { m.Snap.Rows = nil }},
+		{"zero accounts", 80, 14, func(m *Model) { m.Snap.Rows = nil }},
 		{"the frame dropped", 56, 10, nil},
 		{"the block collapsed and the headings spent", 43, 9, nil},
 		{"the smallest page that still renders", 35, 3, nil},
@@ -271,10 +271,13 @@ func TestEachProviderHeadingIsATableRowInTheAccountColumn(t *testing.T) {
 	if head < 0 {
 		t.Fatalf("no column heading row:\n%s", strings.Join(lines, "\n"))
 	}
+	// The headings come ABOVE their column names now, one set per section, so
+	// the search starts at the top of the page rather than under the first
+	// heading row -- the first CLAUDE line is one row ABOVE the first IDX one.
 	at := strings.Index(lines[head], view.AccountHeader)
 	for _, want := range []string{view.ClaudeSection, view.CodexSection} {
 		found := false
-		for _, line := range lines[head+1:] {
+		for _, line := range lines {
 			i := strings.Index(line, want)
 			if i < 0 {
 				continue
@@ -292,7 +295,7 @@ func TestEachProviderHeadingIsATableRowInTheAccountColumn(t *testing.T) {
 			}
 		}
 		if !found {
-			t.Errorf("no %s heading under the column heading row:\n%s", want, strings.Join(lines, "\n"))
+			t.Errorf("no %s heading on the page:\n%s", want, strings.Join(lines, "\n"))
 		}
 	}
 }
@@ -411,22 +414,22 @@ func TestAOneProviderFleetStillDrawsTheOtherProvidersHeading(t *testing.T) {
 // included the headings. window takes a Layout rather than a height exactly so
 // the question can still be put to it.
 //
-// Five table rows over a list that HAS its headings is the case that tells them
-// apart: one line is spent on the count and one on the CLAUDE heading, so three
-// accounts of five are drawn. Counting display rows instead would say three are
-// missing -- seven lines less the four drawn -- and would promise a press of j
-// that does not exist.
+// Five table rows over a list that HAS its sections is the case that tells them
+// apart: one line is spent on the count, one on the CLAUDE heading and one on
+// that section's column names, so two accounts of five are drawn. Counting
+// display rows instead would say one is missing -- five lines less the four
+// drawn -- and would promise presses of j that do not exist.
 func TestTheCountOfHiddenRowsIsInAccountsAndNotInTableRows(t *testing.T) {
 	m := fixtureModel(43, 9)
 	shown, more := m.window(Layout{Sections: true, VisibleRows: 5})
-	if more != 2 {
-		t.Errorf("the window says %d accounts are off the page, want the 2 it did not draw", more)
+	if more != 3 {
+		t.Errorf("the window says %d accounts are off the page, want the 3 it did not draw", more)
 	}
 	if len(shown) != 4 {
 		t.Fatalf("the window drew %d of its 5 table rows, want 4 and a count: %+v", len(shown), shown)
 	}
-	if got := accountsIn(shown); got != 3 {
-		t.Errorf("the window drew %d accounts, want 3 -- the fourth line is the CLAUDE heading", got)
+	if got := accountsIn(shown); got != 2 {
+		t.Errorf("the window drew %d accounts, want 2 -- the other two lines are the CLAUDE heading and its column names", got)
 	}
 }
 
@@ -538,7 +541,7 @@ func TestTheFixtureDataStillCoversTheUnreadableRowAndTheEmptyState(t *testing.T)
 // for the reason golden_test.go gives beside the file name. A fixture at 13
 // would have pinned the absence and called it the presence.
 func TestANonEmptyNoticeRendersDirectlyAboveTheColumnHeader(t *testing.T) {
-	m := fixtureModel(80, 23)
+	m := fixtureModel(80, 24)
 	m.Snap.Notices = []string{"hover thresholds could not be read"}
 	got := m.Body()
 	if !strings.Contains(got, "note: hover thresholds could not be read") {
@@ -547,8 +550,12 @@ func TestANonEmptyNoticeRendersDirectlyAboveTheColumnHeader(t *testing.T) {
 	lines := strings.Split(got, "\n")
 	for i, line := range lines {
 		if strings.Contains(line, "note: ") {
-			if i+1 >= len(lines) || !strings.Contains(lines[i+1], "IDX ACCOUNT") {
-				t.Fatalf("the note line is not directly above the column header:\n%s", got)
+			// The table now opens on a section heading, and the column names
+			// are the line under it: each provider draws its own windows, so
+			// each carries its own names.
+			if i+2 >= len(lines) || !strings.Contains(lines[i+1], view.ClaudeSection) ||
+				!strings.Contains(lines[i+2], "IDX ACCOUNT") {
+				t.Fatalf("the note line is not directly above the table:\n%s", got)
 			}
 		}
 	}
@@ -559,7 +566,7 @@ func TestANonEmptyNoticeRendersDirectlyAboveTheColumnHeader(t *testing.T) {
 // page that shows the first of four and says nothing about the other three
 // tells a user the first is all there was.
 func TestMoreNoticesThanFitAreCountedRatherThanDropped(t *testing.T) {
-	m := fixtureModel(80, 23)
+	m := fixtureModel(80, 24)
 	m.Snap.Notices = []string{"hover thresholds could not be read", "b", "c"}
 	if got := m.Body(); !strings.Contains(got, "(+2 more)") {
 		t.Fatalf("three notices rendered no count of what did not fit:\n%s", got)
@@ -597,7 +604,7 @@ func TestAnEmptyNoticesRendersNoLineAndNoGap(t *testing.T) {
 // discover by accident. The table renders its header and an explicit row,
 // never an empty bordered box with nothing inside it.
 func TestZeroAccountsRendersAnExplicitRowNotAnEmptyBox(t *testing.T) {
-	m := fixtureModel(80, 13)
+	m := fixtureModel(80, 14)
 	m.Snap.Rows = nil
 	got := m.Body()
 	if !strings.Contains(got, "no accounts") {
@@ -1287,7 +1294,7 @@ func fixtureHoldingFleet() forecast.Fleet {
 // TestTheRunwayLineIsCutToTheFrameRatherThanWrappingIt asks it, at 80 and at
 // four other widths.
 func TestTheDashboardRunwayRowsNameTheSeatsOnlyAShortFleetNeeds(t *testing.T) {
-	short := fixtureModel(113, 24)
+	short := fixtureModel(113, 25)
 	short.Snap.Forecast, short.Snap.HasForecast = fixtureFleet(), true
 	if body := short.Body(); !strings.Contains(body, "need 9 (4 more)") {
 		t.Errorf("a fleet of five that needs nine drew no seat count:\n%s", body)
@@ -1356,7 +1363,7 @@ func TestAForecastTheSnapshotDoesNotClaimMovesNoGolden(t *testing.T) {
 		{"one notice", 80, 23, func(m *Model) {
 			m.Snap.Notices = []string{"hover thresholds could not be read"}
 		}, goldenNotice},
-		{"zero accounts", 80, 13, func(m *Model) { m.Snap.Rows = nil }, goldenZeroAccounts},
+		{"zero accounts", 80, 14, func(m *Model) { m.Snap.Rows = nil }, goldenZeroAccounts},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := fixtureModel(tc.width, tc.height)
@@ -1392,7 +1399,7 @@ func TestAForecastTheSnapshotDoesNotClaimMovesNoGolden(t *testing.T) {
 // and both are conditional: at 24 the ladder gives the note up and there is no
 // ordering left to assert.
 func TestTheRunwayLineSitsUnderTheHeaderLineAndAboveTheNote(t *testing.T) {
-	m := fixtureModel(113, 25)
+	m := fixtureModel(113, 26)
 	m.Snap.Forecast, m.Snap.HasForecast = fixtureFleet(), true
 	m.Snap.Notices = []string{"hover thresholds could not be read"}
 
@@ -1405,7 +1412,9 @@ func TestTheRunwayLineSitsUnderTheHeaderLineAndAboveTheNote(t *testing.T) {
 		}
 		return -1
 	}
-	current, runway, note, table := at("Current: "), at(fixtureRunwayLine), at("note: "), at("IDX ACCOUNT")
+	// The table starts at its first SECTION HEADING now, with that section's own
+	// column names on the line under it.
+	current, runway, note, table := at("Current: "), at(fixtureRunwayLine), at("note: "), at(view.ClaudeSection)
 	if runway < 0 {
 		t.Fatalf("a claimed forecast drew no runway line, or drew a different one:\n%s", m.Body())
 	}
@@ -1417,7 +1426,7 @@ func TestTheRunwayLineSitsUnderTheHeaderLineAndAboveTheNote(t *testing.T) {
 		t.Errorf("the runway line is at %d and the summary ends at %d; it belongs directly under the labels", runway, current)
 	}
 	if note != runway+4 || table != note+1 {
-		t.Errorf("runway=%d note=%d table=%d; want the note after four runway rows and before the column header",
+		t.Errorf("runway=%d note=%d table=%d; want the note after four runway rows and before the table",
 			runway, note, table)
 	}
 }
@@ -1498,7 +1507,7 @@ func TestTheRunwayLineIsCutToTheFrameRatherThanWrappingIt(t *testing.T) {
 // and at 24 the ladder has already given it up on a five-account fleet under
 // two section headings.
 func TestTheRunwayRowsKeepTheirBasisVisible(t *testing.T) {
-	m := fixtureModel(80, 25)
+	m := fixtureModel(80, 26)
 	m.Snap.Forecast, m.Snap.HasForecast = fixtureFleet(), true
 
 	body := m.Body()
@@ -1516,7 +1525,7 @@ func TestTheRunwayRowsKeepTheirBasisVisible(t *testing.T) {
 // different hour in CI, where nothing sets TZ, and no fixture could pin either.
 func TestTheRunwayLineRendersInTheSnapshotsOwnZone(t *testing.T) {
 	kst := time.FixedZone("KST", 9*3600)
-	m := fixtureModel(113, 24)
+	m := fixtureModel(113, 25)
 	m.Snap.Now = fixtureNow.In(kst)
 	m.Snap.Forecast, m.Snap.HasForecast = fixtureFleet(), true
 

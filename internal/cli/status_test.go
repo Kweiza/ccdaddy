@@ -207,9 +207,15 @@ func TestStatusHeadingRowIsExactlyTheSharedColumnNames(t *testing.T) {
 	// its text cannot then be surprised by its text.
 	lines := strings.Split(stdout, "\n")
 	head := ""
+	// The table opens on a SECTION heading now, and the column names are the
+	// line under it: each provider's half draws its own quota block, so each
+	// carries its own names over it.
 	for i, l := range lines {
-		if strings.TrimSpace(l) == "" && i+1 < len(lines) {
-			head = lines[i+1]
+		if strings.TrimSpace(l) == "" && i+2 < len(lines) {
+			if strings.TrimSpace(lines[i+1]) != view.ClaudeSection {
+				t.Fatalf("the table does not open on the %s heading: %q", view.ClaudeSection, lines[i+1])
+			}
+			head = lines[i+2]
 			break
 		}
 	}
@@ -291,9 +297,11 @@ func TestStatusSectionsTheTableAndDrawsBothHeadings(t *testing.T) {
 
 	// Claude first, then Codex, in the order internal/view groups them, and
 	// each one alone on its row.
+	// From the top of the page: the first heading is one row ABOVE the first
+	// column-name row now, so a search that started under it would miss it.
 	want := []string{view.ClaudeSection, view.CodexSection}
 	var got []string
-	for _, line := range lines[head+1:] {
+	for _, line := range lines {
 		fields := strings.Fields(line)
 		if len(fields) != 1 || (fields[0] != view.ClaudeSection && fields[0] != view.CodexSection) {
 			continue
@@ -1665,7 +1673,7 @@ func TestEveryLineOfTheStatusBlockFoldsAtTheFilesWidth(t *testing.T) {
 	const (
 		file      = "status.go"
 		fn        = "renderStatus"
-		wantSites = 6
+		wantSites = 7
 		wantWidth = "outWidth(cmd.OutOrStdout())"
 	)
 
