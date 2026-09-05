@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -144,6 +145,110 @@ func TestStatusRendersTheDashboard(t *testing.T) {
 	for _, unwanted := range []string{"USED", "WINDOW", "LEFT", "PACE"} {
 		if strings.Contains(stdout, unwanted) {
 			t.Errorf("the dashboard still carries the derived column %q:\n%s", unwanted, stdout)
+		}
+	}
+}
+
+// statusHeadingSeparator is the gap between two cells of a rendered table: at
+// least two spaces, because columns() pads every cell but the last out to its
+// column's width and then adds two more. A heading's OWN words are separated by
+// one space, which is what makes splitting on this exact rather than
+// approximate -- "7D OPUS IN" comes back as one field instead of three.
+var statusHeadingSeparator = regexp.MustCompile(` {2,}`)
+
+// The heading over `ccdad status`'s account table, word for word.
+//
+// Every other assertion in this package that touches that row is tolerant by
+// construction: strings.Contains and strings.Index both match a heading with a
+// suffix glued onto it, and the colour test matches a derived quota heading by
+// SHAPE before its exact-text map is ever consulted. Renaming a column in
+// internal/view therefore reached the terminal with nothing in internal/cli
+// objecting, and the only thing that went red was the terminal dashboard's
+// golden ladder -- which is the wrong package to hear it from, because all it
+// can say is that the DASHBOARD moved.
+//
+// The row is pinned twice over, and both halves are the point. The printed
+// heading is compared field for field against the words themselves, so a rename
+// anywhere between view.ListColumns and stdout reddens this; and each fixed word
+// is then compared against the constant internal/view holds it in, so a
+// status.go that stopped reading the shared list and spelled the same strings
+// itself reddens on the next rename instead of drifting quietly apart. The
+// window and rollover headings have no constant to pin to -- they are built out
+// of the fleet's own window names -- so they are pinned as words only.
+//
+// It belongs here rather than in internal/view because this row is the CLI's
+// published output: a script reading a field out of `ccdad status` by position
+// breaks when a column is renamed, reordered or inserted, and internal/view has
+// never heard of that script.
+func TestStatusHeadingRowIsExactlyTheSharedColumnNames(t *testing.T) {
+	isolate(t)
+	freezeClock(t, statusNow)
+	// Three windows rather than one, so the order INSIDE the quota block is
+	// pinned too, along with the rollover columns that trail it: a fixture with
+	// a single window would pass a renderer that emitted the block in any order
+	// at all.
+	seedAccount(t, "uuid-a", "work@example.com")
+	seedUsageEntry(t, "uuid-a", usage.Entry{
+		FetchedAt: statusNow,
+		Snapshot: &usage.Snapshot{
+			FiveHour:     window(60, statusNow.Add(2*time.Hour)),
+			SevenDay:     window(30, statusNow.Add(48*time.Hour)),
+			SevenDayOpus: window(10, statusNow.Add(72*time.Hour)),
+		},
+	})
+
+	code, stdout, _, top := runRoot(t, "status")
+	if code != ExitOK {
+		t.Fatalf("exit %d, want 0 (%s)\n%s", code, top, stdout)
+	}
+	// The heading is the line under the blank separator the report prints
+	// between its labelled block and the table. Found by that structure rather
+	// than by looking for a column name, because a test that locates the row by
+	// its text cannot then be surprised by its text.
+	lines := strings.Split(stdout, "\n")
+	head := ""
+	for i, l := range lines {
+		if strings.TrimSpace(l) == "" && i+1 < len(lines) {
+			head = lines[i+1]
+			break
+		}
+	}
+	if strings.TrimSpace(head) == "" {
+		t.Fatalf("no table heading under the blank separator:\n%s", stdout)
+	}
+	// Exactly two spaces in front. The IDX cell is the marker and the index
+	// together, so the heading over it is shifted past the marker, and that
+	// shift is this surface's own -- internal/view knows nothing about the
+	// glyph sharing that cell.
+	if !strings.HasPrefix(head, "  ") || strings.HasPrefix(head, "   ") {
+		t.Errorf("the heading does not open shifted two spaces past the marker: %q", head)
+	}
+
+	got := statusHeadingSeparator.Split(strings.TrimLeft(head, " "), -1)
+	want := []string{
+		"IDX", "ACCOUNT", "TYPE", "TIER",
+		"5H", "7D", "7D OPUS", "5H IN", "7D IN", "7D OPUS IN",
+		"AGE",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("heading row = %q, want %q\nfrom:\n%s", got, want, stdout)
+	}
+	// And the fixed words above are internal/view's, not this file's second
+	// spelling of them.
+	for _, c := range []struct {
+		at     int
+		shared string
+	}{
+		{0, view.IdxHeader},
+		{1, view.AccountHeader},
+		{2, view.TypeHeader},
+		{3, view.TierHeader},
+		{10, view.AgeHeader},
+	} {
+		if want[c.at] != c.shared {
+			t.Errorf("column %d is pinned here as %q, but internal/view now spells it %q: "+
+				"either `ccdad status` stopped reading the shared list or the rename is "+
+				"unfinished", c.at, want[c.at], c.shared)
 		}
 	}
 }
