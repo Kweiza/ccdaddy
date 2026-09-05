@@ -128,20 +128,6 @@ func TestTheExportedArgvsAreTheOnesTheScreenOffers(t *testing.T) {
 	}
 }
 
-// The exported list hands out copies. A caller that wrote into it would be
-// editing the command line the add key runs, from outside the package that
-// owns it.
-func TestTheExportedArgvsCannotBeEditedFromOutside(t *testing.T) {
-	got := AddArgvs()
-	if len(got) == 0 || len(got[0]) == 0 {
-		t.Fatal("AddArgvs is empty, so this test asserts nothing")
-	}
-	got[0][0] = "uninstall"
-	if AddArgvs()[0][0] == "uninstall" {
-		t.Fatal("a caller edited the command line the add key releases the terminal to")
-	}
-}
-
 // Exit 130 is an interrupted login and not a failure: `ccdad add claude`
 // installs its own scoped SIGINT trap for the span of the login and exits 130
 // when it fires. Measured over a pty: the child exited 130, the parent dropped

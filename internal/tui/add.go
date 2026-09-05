@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"slices"
 )
 
 // addNeedsStderr is why the add key refuses when stderr is not a terminal.
@@ -53,13 +52,18 @@ func addChoices() []pickerItem {
 // imports THIS package to register the dashboard, so the command tree is not
 // visible from here and the dependency cannot be turned around.
 //
-// It clones, so a caller cannot edit the command line this key releases the
-// terminal to.
+// It hands back what addChoices just built, uncopied, and that is safe for one
+// reason: addChoices builds the argv fresh on every call, so no two callers
+// ever hold the same array and there is nothing here for a caller to corrupt.
+// A defensive copy stood here and defended nothing — removing it left the whole
+// suite green, because the aliasing it named could not happen. Hoisting the
+// choices to a package-level value is what would make these shared, and the
+// copy has to come back the day that happens.
 func AddArgvs() [][]string {
 	choices := addChoices()
 	argvs := make([][]string, 0, len(choices))
 	for _, it := range choices {
-		argvs = append(argvs, slices.Clone(it.argv))
+		argvs = append(argvs, it.argv)
 	}
 	return argvs
 }
@@ -118,11 +122,17 @@ var selfPath = os.Executable
 // And a panic in the login is a dead child and an exit status, not a dead
 // dashboard.
 //
-// The argv comes from the provider the user chose. An EMPTY one is refused
-// rather than run, and that guard earns its place: `exec.Command(self)` with
-// nothing after it is the dashboard itself, launched into the terminal this
-// dashboard has just let go of — a second full-screen program on the same tty,
-// with the first one blocked until it exits.
+// The argv comes from picker.Chosen, whose contract is the argv the cursor is
+// on OR nil when there is nothing to choose — the empty store a fresh install
+// really has. Today's add picker is never that one: it is built from addChoices
+// and its cursor is clamped into range, so the screen above cannot reach here
+// with nothing, and the guard below is not a claim that it can. The guard is
+// here because this is the last thing before exec and the value it is handed is
+// documented to be nil-able. `exec.Command(self)` with nothing after it is the
+// dashboard itself, launched into the terminal this dashboard has just let go
+// of — a second full-screen program on the same tty, with the first one blocked
+// until it exits. One comparison buys that, and it is the only thing standing
+// there the day the provider list stops being a constant.
 func addChild(argv []string) (*exec.Cmd, error) {
 	if len(argv) == 0 {
 		return nil, errors.New("no provider was chosen, and ccdad with no arguments is the dashboard itself")
