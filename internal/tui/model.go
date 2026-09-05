@@ -478,9 +478,11 @@ var execProcess = tea.ExecProcess
 // enough that putting both behind one handler would make every pickerItem in
 // the program carry an unasked question: is this one of the released ones?
 //
-// The empty-store branch has no counterpart here. This list is built from a
-// constant and is never empty, and a guard for a state that cannot arise would
-// be a claim that it can.
+// The empty-store branch has no counterpart here, and not because nothing could
+// ever arrive empty: addChild refuses an empty argv, and its refusal comes back
+// as an addFinishedMsg, which is the path every other failure on this key
+// already takes. A second check here would report one state twice, in two
+// wordings, one screen apart.
 func (a App) addProviderKey(msg tea.KeyPressMsg, k KeyMap) (App, tea.Cmd, bool) {
 	if key.Matches(msg, k.Enter) {
 		argv := a.pick.Chosen()
