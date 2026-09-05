@@ -377,18 +377,25 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 		return nil
 	}
 
-	// ActiveLabel is loadSnapshot's, not recomputed here: two loops over rows
-	// producing the same "which account is active" sentence is the exact "one
-	// value, two spellings" failure this task exists to remove.
+	// The summary block is internal/view's, line for line, which is what makes
+	// this table and the dashboard's header ONE block rather than two that
+	// happen to agree. Every fact owns a row, and Active owns one PER PROVIDER:
+	// the single `Claude: x · Codex: y` sentence this replaced put two accounts
+	// on one line, where a long label is cut and takes the provider beside it
+	// with it.
 	//
-	// ActiveLine and not ActiveLabel: on a machine with a codex account the
-	// answer to "what is this machine spending" has two halves, and the
-	// dashboard's header renders the identical sentence from the identical
-	// method.
-	fmt.Fprintln(out, view.WrapLabeled("Active:  "+snap.ActiveLine(), outWidth(cmd.OutOrStdout())))
-	fmt.Fprintln(out, view.WrapLabeled(view.StrategyLine(snap.StrategyLabel()), outWidth(cmd.OutOrStdout())))
-	if snap.HasMode {
-		fmt.Fprintln(out, view.WrapLabeled(view.CurrentLine(snap.Mode), outWidth(cmd.OutOrStdout())))
+	// The values come off the Snapshot rather than being recomputed here. Two
+	// loops over rows producing the same "which account is active" sentence is
+	// the exact "one value, two spellings" failure package view exists to
+	// remove.
+	//
+	// The pair is joined back into a line before it is folded, because the fold
+	// finds its own label: WrapLabeled hangs continuation lines under the value,
+	// and it locates the label by looking for the colon and the padding after
+	// it. Handing it Label and Value separately would be a second answer to a
+	// question splitLabel already answers.
+	for _, line := range snap.SummaryLines() {
+		fmt.Fprintln(out, view.WrapLabeled(line.Label+line.Value, outWidth(cmd.OutOrStdout())))
 	}
 	// The empty string is the gate: view.RunwayLine returns one when there is
 	// no measurement, and that is how this renderer and the dashboard both
@@ -428,30 +435,47 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 	cols := statusColumns(block)
 
 	head := make([]string, 0, len(cols))
-	// firstWindow is where the quota block starts, asked for rather than
-	// written down: the style function indexes block.Windows off it, and a
-	// constant here would be a second statement of how many fixed columns come
-	// first -- true today and silently wrong the moment the list above changes.
-	firstWindow := len(cols)
+	// firstWindow is where the quota block starts and accountCol is where the
+	// section headings' text goes, both asked for rather than written down: the
+	// style function indexes block.Windows off the first and paints the second,
+	// and a constant here would be a second statement of which column is which
+	// -- true today and silently wrong the moment the list above changes.
+	firstWindow, accountCol := len(cols), -1
 	for i, c := range cols {
 		if c.Kind == view.ColumnWindow && i < firstWindow {
 			firstWindow = i
 		}
+		if c.Kind == view.ColumnAccount {
+			accountCol = i
+		}
 		head = append(head, statusHeader(c))
 	}
 
-	// The lines this table draws, which are exactly its account rows: one
-	// display line per account, each remembering the index it came from. The
-	// style function below is handed the same list, so the integer it is asked
-	// about and the integer that produced the cells are one integer rather than
-	// two slices that happen to agree.
-	display := make([]view.ListRow, 0, len(rows))
-	for i, r := range rows {
-		display = append(display, view.ListRow{Row: r, At: i})
-	}
+	// The lines this table draws: each provider's heading and that provider's
+	// accounts under it, in internal/view's own grouping. The style function
+	// below is handed the same list, so the integer it is asked about and the
+	// integer that produced the cells are one integer rather than two slices
+	// that happen to agree -- which is what the grouping makes load-bearing,
+	// since it puts lines in the table that no account list has.
+	display := view.ListRows(view.Sections(rows))
 
 	cells := make([][]string, 0, len(display))
 	for _, line := range display {
+		// A heading is a TABLE ROW carrying its text in the ACCOUNT cell and
+		// nothing anywhere else. A line printed above the table could not know
+		// the column widths this table is about to measure, and one table per
+		// section would size its columns independently -- so the two halves of
+		// one fleet would come out under headings that do not line up.
+		if line.Header != "" {
+			row := make([]string, len(cols))
+			for i, c := range cols {
+				if c.Kind == view.ColumnAccount {
+					row[i] = line.Header
+				}
+			}
+			cells = append(cells, row)
+			continue
+		}
 		r := line.Row
 		row := make([]string, 0, len(cols))
 		for _, c := range cols {
@@ -468,7 +492,7 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 		}
 		cells = append(cells, row)
 	}
-	if err := columns(out, head, cells, windowCellStyle(pal, display, firstWindow, block)); err != nil {
+	if err := columns(out, head, cells, windowCellStyle(pal, display, accountCol, firstWindow, block)); err != nil {
 		return err
 	}
 	// Under the table, because each of these explains a column the reader is
@@ -485,22 +509,33 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 }
 
 // statusColumns is the account table `ccdad status` prints: the shared column
-// list, less the two columns this surface does not draw.
+// list, less the one column this surface does not draw.
 //
 // It reads view.ListColumns rather than restating an order, which is the whole
 // point of there being a list: the columns below, and the order they come in,
-// are now one definition that the terminal dashboard reads too, so neither
-// surface can grow a column the other has never heard of.
+// are one definition that the terminal dashboard reads too, so neither surface
+// can grow a column the other has never heard of.
 //
-// STATE and AUTO are what is dropped. Both are the dashboard's today, and this
-// is a refactor: adding a column here would change what a scripted `ccdad
-// status | awk` reads out of a field, which is a decision for a commit that
-// says so and not a side effect of moving the list.
+// STATE is now here, and AUTO is deliberately not. The two look like one
+// decision and are not.
+//
+// STATE is what the engine last decided about an account, and this command
+// already has the fact and already publishes it -- `--json` carries it under
+// the engine key. The human table was the only surface hiding it, which left a
+// reader running `ccdad status` unable to see the difference between an account
+// the engine has quarantined and one it merely has not chosen, on the one
+// surface people actually read.
+//
+// AUTO is the rotation policy, and this table already spells it: an account
+// held out of rotation prints `(disabled)` in the flags that ride on the AGE
+// cell. A yes/no column beside that would state the same fact twice on one row,
+// and a reader would reasonably assume two columns saying the same thing must
+// mean two different things.
 func statusColumns(block view.Columns) []view.ListColumn {
 	full := view.ListColumns(block)
 	out := make([]view.ListColumn, 0, len(full))
 	for _, c := range full {
-		if c.Kind == view.ColumnState || c.Kind == view.ColumnAuto {
+		if c.Kind == view.ColumnAuto {
 			continue
 		}
 		out = append(out, c)

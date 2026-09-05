@@ -2,30 +2,30 @@ package cli
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 )
 
-// activeLineOf is `status`'s Active: line, verbatim. A test that wants to pin
-// the whole line rather than a fragment of it needs the line isolated first --
-// grepping the raw multi-line stdout for a substring is exactly the weaker
-// check this helper exists to replace.
-func activeLineOf(t *testing.T, stdout string) string {
-	t.Helper()
+// activeLinesOf is every Active line `status` printed, verbatim and in order. A
+// test that wants to pin the whole line rather than a fragment of it needs the
+// line isolated first -- grepping the raw multi-line stdout for a substring is
+// exactly the weaker check this helper exists to replace.
+//
+// It returns a SLICE because there is one line per provider now: Claude's
+// always, Codex's when a codex account is being served. Handing back the whole
+// set is what lets a caller assert the count as well as the text, which is the
+// half that catches a renderer printing a clause twice -- the first of two
+// identical lines still equals what the caller wants, and a helper that looked
+// at one match would never see the second.
+func activeLinesOf(stdout string) []string {
 	var lines []string
 	for _, line := range strings.Split(stdout, "\n") {
-		if strings.HasPrefix(line, "Active:") {
+		if strings.HasPrefix(line, "Active") {
 			lines = append(lines, line)
 		}
 	}
-	// Exactly one. A renderer that printed the clause twice would otherwise
-	// pass silently: the first of the two identical lines still equals what
-	// the caller wants, and a helper that only ever looked at the first match
-	// would never notice the second.
-	if len(lines) != 1 {
-		t.Fatalf("%d Active: lines in stdout, want exactly 1:\n%s", len(lines), stdout)
-	}
-	return lines[0]
+	return lines
 }
 
 // All three tables go through one method, so they cannot disagree about what a
@@ -104,11 +104,15 @@ func TestWhichIsUnchangedOnAMachineWithNoCodexAccount(t *testing.T) {
 	}
 }
 
-// The whole line, compared with ==, and not a Contains on one fragment of it:
-// a mutation that reordered the two clauses, duplicated the Active: line, or
-// appended stray text after it would still contain "Codex: codex@example.com"
-// and pass a Contains check that only ever asked whether one known-good
-// fragment survived. == is what actually pins the one-spelling property.
+// The whole block, compared line for line, and not a Contains on one fragment
+// of it: a mutation that swapped the two lines, duplicated one, or appended
+// stray text after either would still contain "codex@example.com" and pass a
+// Contains check that only ever asked whether one known-good fragment survived.
+//
+// One line per provider, which is what this command changed to: a single
+// `Claude: x · Codex: y` sentence put two accounts on one line, where a long
+// label is cut and takes the provider beside it with it. The dashboard has
+// always drawn them apart and this is the surface that moved.
 func TestStatusNamesBothProvidersWhenCodexIsServed(t *testing.T) {
 	isolate(t)
 	seedAccount(t, "cl-1", "claude@example.com")
@@ -122,9 +126,12 @@ func TestStatusNamesBothProvidersWhenCodexIsServed(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit = %d", code)
 	}
-	want := "Active:  Claude: claude@example.com · Codex: codex@example.com"
-	if got := activeLineOf(t, stdout); got != want {
-		t.Fatalf("Active line = %q, want %q", got, want)
+	want := []string{
+		"Active (Claude): claude@example.com",
+		"Active (Codex): codex@example.com",
+	}
+	if got := activeLinesOf(stdout); !slices.Equal(got, want) {
+		t.Fatalf("Active lines = %q, want %q\nfrom:\n%s", got, want, stdout)
 	}
 }
 
@@ -191,8 +198,15 @@ func TestStatusNamesNoCodexWhenNoAccountHasBeenSwitchedTo(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit = %d", code)
 	}
-	if strings.Contains(stdout, "Codex:") {
-		t.Fatalf("status names a codex account nothing has switched to:\n%s", stdout)
+	// The Active BLOCK, not a grep for "Codex:". This command's codex clause
+	// used to be `Codex: <label>` inside one Active line and is now a line of
+	// its own headed `Active (Codex): `, so a case still grepping for the old
+	// spelling would pass under a renderer that had stopped answering the
+	// question at all -- and would go on passing forever.
+	want := []string{"Active (Claude): claude@example.com"}
+	if got := activeLinesOf(stdout); !slices.Equal(got, want) {
+		t.Fatalf("status names a codex account nothing has switched to: %q, want %q\nfrom:\n%s",
+			got, want, stdout)
 	}
 }
 
@@ -218,8 +232,13 @@ func TestStatusNamesNoCodexWhenThePointerNamesARemovedAccount(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit = %d", code)
 	}
-	if strings.Contains(stdout, "Codex:") {
-		t.Fatalf("status names a codex account nobody switched to, after the pointer's own account was removed:\n%s", stdout)
+	// The Active BLOCK and not a grep for "Codex:", for the reason given on
+	// TestStatusNamesNoCodexWhenNoAccountHasBeenSwitchedTo above: the old
+	// spelling is gone from this command, so a grep for it can no longer fail.
+	want := []string{"Active (Claude): claude@example.com"}
+	if got := activeLinesOf(stdout); !slices.Equal(got, want) {
+		t.Fatalf("status names a codex account nobody switched to, after the pointer's own account was removed: "+
+			"%q, want %q\nfrom:\n%s", got, want, stdout)
 	}
 }
 

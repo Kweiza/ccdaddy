@@ -40,34 +40,29 @@ func TestTypeLabelOnAZeroProviderIsNotCodex(t *testing.T) {
 	}
 }
 
-// A machine with no codex accounts renders exactly what it rendered before this
-// field existed. That is not politeness: seven byte-compared dashboard pages
-// and every `ccdad status` fixture in the tree assert those bytes, and a clause
-// that appeared unconditionally would move all of them for a machine that has
-// no second provider on it.
+// A machine with no codex accounts gets exactly what it got before this field
+// existed. `ccdad which` is read by shells, so a clause that appeared
+// unconditionally would change what every one of them parses out of a machine
+// that has no second provider on it.
 func TestTheActiveLineIsUnchangedWithNoCodexAccount(t *testing.T) {
-	s := Snapshot{ActiveLabel: "work@example.com (work)"}
-	if got := s.ActiveLine(); got != "work@example.com (work)" {
+	if got := ActiveLine("work@example.com (work)", ""); got != "work@example.com (work)" {
 		t.Fatalf("ActiveLine = %q, want the bare label", got)
 	}
 }
 
 func TestTheActiveLineNamesBothProvidersWhenCodexIsServed(t *testing.T) {
-	s := Snapshot{ActiveLabel: "work@example.com (work)", CodexServingLabel: "cx@example.com"}
 	want := "Claude: work@example.com (work) · Codex: cx@example.com"
-	if got := s.ActiveLine(); got != want {
+	if got := ActiveLine("work@example.com (work)", "cx@example.com"); got != want {
 		t.Fatalf("ActiveLine = %q, want %q", got, want)
 	}
 }
 
-// The free function is what lets `ccdad which` -- which has no Snapshot --
-// produce the identical sentence. Two spellings of one line is how the two
-// commands come to disagree about a machine neither of them measured twice.
-func TestActiveLineIsOneSpellingForEveryCaller(t *testing.T) {
-	if got := ActiveLine("a", "b"); got != "Claude: a · Codex: b" {
-		t.Fatalf("ActiveLine = %q", got)
-	}
-	if got := ActiveLine("a", ""); got != "a" {
-		t.Fatalf("ActiveLine with no codex = %q, want the bare Claude label", got)
+// The joined line is `ccdad which`'s and belongs to no Snapshot. A surface with
+// a Snapshot has room for a block and draws SummaryLines instead, one line per
+// provider, so this must not grow a second entry point that would put a joined
+// line back on a page that has already chosen the other shape.
+func TestNoSnapshotCanProduceTheJoinedLine(t *testing.T) {
+	if _, ok := any(Snapshot{}).(interface{ ActiveLine() string }); ok {
+		t.Fatal("Snapshot has an ActiveLine method again; the joined line is `ccdad which`'s alone")
 	}
 }

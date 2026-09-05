@@ -12,6 +12,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 	"github.com/Kweiza/ccdaddy/internal/forecast"
 	"github.com/Kweiza/ccdaddy/internal/identity"
+	"github.com/Kweiza/ccdaddy/internal/provider"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/theme"
@@ -23,7 +24,7 @@ import (
 // every release reddens the golden.
 const fixtureVersion = "v0.2.0"
 
-// The seven pages live under testdata and are regenerated with -update rather
+// The eight pages live under testdata and are regenerated with -update rather
 // than retyped: `go test ./internal/tui -run TestThePage -update -count=1`
 // writes each file from what the renderer produced, and the diff it leaves is
 // reviewed like any other change to a file. One of them, the 80x24 design
@@ -50,8 +51,9 @@ const fixtureVersion = "v0.2.0"
 //     ACCOUNT at its comfort width is the fix for it.
 //  3. THE REFERENCE IS STALE ON THE HEIGHT-DROP ORDER. The ladder spends the
 //     tagline and blank separators before the family art. Farther down it
-//     drops the frame and title to retain the three summary facts at 56x10;
-//     at 43x9 the complete summary block gives to the table and footer.
+//     drops the trailer, the frame and the title, and the summary block is the
+//     last thing to give -- which at 80x13, 56x10 and 43x9 it now does, on a
+//     fleet of five accounts under two section headings.
 //  4. THE FIGURE BLOCK IS ANCHORED, NOT INDENTED. The chrome transcribes the
 //     block against its own leftmost content across all six rows rather than
 //     against the reference's first column, so it sits one column further
@@ -64,20 +66,27 @@ const fixtureVersion = "v0.2.0"
 //
 // A sixth class would be a renderer bug. There is not one.
 
-// The five fixtures are the acceptance criterion. They are compared whole
+// The six fixtures are the acceptance criterion. They are compared whole
 // rather than by keyword: a near-miss passes any "contains a table" check and
 // then drifts on the first change to either side.
+//
+// The tall page leads them, and it is the only one that draws the whole page:
+// the wordmark, the tagline, the family art, both blank separators, the
+// sectioned table and the trailer under it. Every rung below it is that page
+// with something taken away, and a set whose tallest member had already lost a
+// block could not say which rung took it.
 func TestThePageRendersByteForByteAtEveryLadderRung(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
 		width, height int
 		file          string
 	}{
-		{"the full page with every column", 113, 26, goldenFullPage},
-		{"the design target, family retained", 80, 24, goldenDesignTarget},
-		{"wordmark and tagline dropped", 80, 13, goldenShort},
+		{"every block, trailer included", 113, 34, goldenTrailer},
+		{"every column the ladder fits, art spent", 113, 26, goldenFullPage},
+		{"the design target, art spent", 80, 24, goldenDesignTarget},
+		{"chrome and summary gone, the table left", 80, 13, goldenShort},
 		{"the frame dropped", 56, 10, goldenNarrow},
-		{"the gauge collapsed", 43, 9, goldenCollapsed},
+		{"the block collapsed and the table scrolling", 43, 9, goldenCollapsed},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			checkGolden(t, tc.file, fixtureModel(tc.width, tc.height).Body())
@@ -90,7 +99,7 @@ func TestThePageRendersByteForByteAtEveryLadderRung(t *testing.T) {
 // two -- a block emitted outside the budget, or a rung that saves the wrong
 // number of rows, shows up here and nowhere else.
 func TestEveryFixtureFitsTheTerminalItWasPlannedFor(t *testing.T) {
-	for _, tc := range []struct{ w, h int }{{113, 26}, {80, 24}, {80, 13}, {56, 10}, {43, 9}, {80, 20}, {80, 5}, {35, 3}} {
+	for _, tc := range []struct{ w, h int }{{113, 34}, {113, 26}, {80, 24}, {80, 13}, {56, 10}, {43, 9}, {80, 23}, {80, 5}, {35, 3}} {
 		got := len(strings.Split(fixtureModel(tc.w, tc.h).Body(), "\n"))
 		if got > tc.h {
 			t.Errorf("at %dx%d the page is %d rows, which is %d more than the terminal has", tc.w, tc.h, got, got-tc.h)
@@ -110,8 +119,8 @@ func TestEveryFixtureFitsTheTerminalItWasPlannedFor(t *testing.T) {
 // so a file too wide would mean a render too wide and this would be red before
 // the comparison was. The notice page and the zero-accounts page were not
 // covered at all, because neither is drawn at a shape this table held -- one is
-// 80x20 with a notice set, the other 80x13 with the rows taken away -- so two
-// of the seven files had nothing independent bounding their width, and a
+// 80x23 with a notice set, the other 80x13 with the rows taken away -- so two
+// of the eight files had nothing independent bounding their width, and a
 // regeneration would have blessed whatever came out of the renderer.
 //
 // The nil-rows case builds its model the way the zero-accounts golden does --
@@ -126,15 +135,16 @@ func TestThePageNeverScrollsHorizontally(t *testing.T) {
 		w, h int
 		prep func(*Model)
 	}{
-		{"the full page with every column", 113, 26, nil},
-		{"the design target, family retained", 80, 24, nil},
-		{"one notice", 80, 21, func(m *Model) {
+		{"every block, trailer included", 113, 34, nil},
+		{"every column the ladder fits, art spent", 113, 26, nil},
+		{"the design target, art spent", 80, 24, nil},
+		{"one notice", 80, 23, func(m *Model) {
 			m.Snap.Notices = []string{"hover thresholds could not be read"}
 		}},
-		{"wordmark and tagline dropped", 80, 13, nil},
+		{"chrome and summary gone, the table left", 80, 13, nil},
 		{"zero accounts", 80, 13, func(m *Model) { m.Snap.Rows = nil }},
 		{"the frame dropped", 56, 10, nil},
-		{"the gauge collapsed", 43, 9, nil},
+		{"the block collapsed and the table scrolling", 43, 9, nil},
 		{"the smallest page that still renders", 35, 3, nil},
 	} {
 		m := fixtureModel(tc.w, tc.h)
@@ -196,8 +206,8 @@ func TestTheScrollingRungNamesWhatIsOffThePage(t *testing.T) {
 	if len(lines) != 5 {
 		t.Fatalf("at 80x5 the page is %d rows:\n%s", len(lines), body)
 	}
-	if !strings.Contains(body, "+3 more") {
-		t.Fatalf("three accounts fell off the page and nothing said so:\n%s", body)
+	if !strings.Contains(body, "+4 more") {
+		t.Fatalf("four accounts fell off the page and nothing said so:\n%s", body)
 	}
 	if !strings.Contains(body, "(j/k)") {
 		t.Fatalf("the count does not say how to reach the rest:\n%s", body)
@@ -207,10 +217,17 @@ func TestTheScrollingRungNamesWhatIsOffThePage(t *testing.T) {
 	}
 }
 
-// With room for exactly one row the trade inverts: the account wins and the
-// count is what goes. A header, a count of four and no accounts at all has
-// stopped being a dashboard -- and j/k, which the count advertises, would have
-// had nothing to move through.
+// With room for exactly one row the trade inverts TWICE and the account wins
+// both times: over the count, and over its own section heading. A page showing
+// a provider's name, a count of four and no accounts at all has stopped being a
+// dashboard -- and j/k, which the count advertises, would have had nothing to
+// move through.
+//
+// The heading is the half that is easy to lose. The drawable list opens with
+// CLAUDE, so the naive window -- slice the display rows and take the first one
+// -- puts a provider's name on the page and no account at all, which is the one
+// arrangement this rung exists to refuse. That is why the assertion is on the
+// ADDRESS and not merely on the absence of a count.
 func TestWithRoomForOneRowTheAccountWinsAndTheCountGoes(t *testing.T) {
 	body := fixtureModel(35, 5).Body()
 	lines := strings.Split(body, "\n")
@@ -220,11 +237,183 @@ func TestWithRoomForOneRowTheAccountWinsAndTheCountGoes(t *testing.T) {
 	if strings.Contains(body, "more") {
 		t.Fatalf("the one row left was spent on a count instead of an account:\n%s", body)
 	}
+	if strings.Contains(body, view.ClaudeSection) {
+		t.Fatalf("the one row left was spent on a section heading instead of an account:\n%s", body)
+	}
 	// The address is cut to the ACCOUNT column's hard floor at this width, so
 	// the head is what there is to look for -- which is the half the
 	// head-preserving truncation exists to keep.
 	if !strings.Contains(body, "work@examp") {
 		t.Fatalf("the never-dropped account row was dropped:\n%s", body)
+	}
+}
+
+// Both headings are drawn, and both are drawn as TABLE ROWS: the text sits in
+// the ACCOUNT column, under the ACCOUNT heading, with every other cell of the
+// row empty.
+//
+// The column offset is the whole assertion. A heading printed as a line above
+// the table would satisfy any Contains check and would sit flush left, out of
+// line with the addresses it is a heading for -- which is the arrangement the
+// table-row shape was chosen over, because a line above the table cannot know
+// what the width ladder gave the ACCOUNT column.
+func TestEachProviderHeadingIsATableRowInTheAccountColumn(t *testing.T) {
+	lines := strings.Split(fixtureModel(113, 34).Body(), "\n")
+	head := -1
+	for i, line := range lines {
+		if strings.Contains(line, view.AccountHeader) && strings.Contains(line, view.IdxHeader) {
+			head = i
+			break
+		}
+	}
+	if head < 0 {
+		t.Fatalf("no column heading row:\n%s", strings.Join(lines, "\n"))
+	}
+	at := strings.Index(lines[head], view.AccountHeader)
+	for _, want := range []string{view.ClaudeSection, view.CodexSection} {
+		found := false
+		for _, line := range lines[head+1:] {
+			i := strings.Index(line, want)
+			if i < 0 {
+				continue
+			}
+			found = true
+			if i != at {
+				t.Errorf("%s starts at column %d and ACCOUNT at %d; the heading is not in the account column",
+					want, i, at)
+			}
+			// Everything else on the row is whitespace and the frame. A
+			// heading that carried an index, a state or an age would be
+			// claiming those facts about a provider.
+			if got := strings.Fields(strings.Trim(line, "│ ")); len(got) != 1 || got[0] != want {
+				t.Errorf("the %s row carries %q; a heading row is one word and empty cells", want, got)
+			}
+		}
+		if !found {
+			t.Errorf("no %s heading under the column heading row:\n%s", want, strings.Join(lines, "\n"))
+		}
+	}
+}
+
+// A heading over NO accounts still draws, and the empty-store sentence is
+// printed ONCE under both of them rather than once under each.
+//
+// The two halves are one decision. A heading over nothing says the provider
+// exists and this machine has no account on it, which is what a reader of a
+// one-provider fleet is asking; and "no accounts" is a fact about the STORE
+// rather than about either section, so a copy under each heading would be the
+// page claiming two separate findings where there is one.
+func TestAnEmptyStoreDrawsBothHeadingsAndSaysItOnce(t *testing.T) {
+	m := fixtureModel(80, 13)
+	m.Snap.Rows = nil
+	body := m.Body()
+	for _, want := range []string{view.ClaudeSection, view.CodexSection} {
+		if strings.Count(body, want) != 1 {
+			t.Errorf("%s appears %d times on an empty store, want once:\n%s",
+				want, strings.Count(body, want), body)
+		}
+	}
+	if n := strings.Count(body, "no accounts"); n != 1 {
+		t.Errorf("the empty-store sentence appears %d times, want once:\n%s", n, body)
+	}
+}
+
+// A fleet with one provider still gets BOTH headings, which is the case the
+// sections were added for: a machine with four Claude accounts and no codex one
+// would otherwise render exactly as a build that has never heard of Codex.
+func TestAOneProviderFleetStillDrawsTheOtherProvidersHeading(t *testing.T) {
+	m := fixtureModel(113, 34)
+	m.Snap.Rows = m.Snap.Rows[:4] // the four Claude accounts
+	m.Snap.CodexServingLabel, m.Snap.CodexServingUUID = "", ""
+	body := m.Body()
+	if !strings.Contains(body, view.CodexSection) {
+		t.Fatalf("a Claude-only fleet drew no CODEX heading, so the page cannot be told from one with no codex support:\n%s", body)
+	}
+}
+
+// The count of what is off the page is in ACCOUNTS, and so is the window's own
+// capacity. Both are what a reader can move the cursor to, and a section
+// heading is not one.
+//
+// 43x9 is the rung that can tell the two apart: its budget is five table rows,
+// one is spent on the count and one on the CLAUDE heading, so three accounts of
+// five are drawn. Counting display rows instead would say three are missing --
+// seven lines less the four drawn -- and would promise a press of j that does
+// not exist.
+func TestTheCountOfHiddenRowsIsInAccountsAndNotInTableRows(t *testing.T) {
+	body := fixtureModel(43, 9).Body()
+	if !strings.Contains(body, "+2 more") {
+		t.Fatalf("the count is not the two accounts that are off the page:\n%s", body)
+	}
+	shown := 0
+	for _, r := range fixtureRows() {
+		if strings.Contains(body, strings.SplitN(r.Account.Email, "@", 2)[0]+"@") {
+			shown++
+		}
+	}
+	if shown+2 != len(fixtureRows()) {
+		t.Fatalf("%d of %d accounts are drawn and the page says 2 are missing:\n%s",
+			shown, len(fixtureRows()), body)
+	}
+}
+
+// The cursor cannot land on a section heading, and the reason is STRUCTURAL
+// rather than a guard: Model.Cursor indexes Snap.Rows, headings are not in
+// Snap.Rows, and the marker column is drawn from ListRow.At -- which a heading
+// carries as -1 and no cursor can be.
+//
+// It is walked over every account rather than asserted once, because the
+// failure this rules out is off-by-one: a page that drew the cursor at a
+// DISPLAY position would put it one row above the account it names for the four
+// Claude seats and two rows above for the codex one, landing it on CLAUDE for
+// the first and on the last Claude account for the fifth.
+func TestTheCursorLandsOnAnAccountAndNeverOnASectionHeading(t *testing.T) {
+	m := fixtureModel(113, 34)
+	for i, r := range fixtureRows() {
+		m.Cursor = i
+		var marked []string
+		for _, line := range strings.Split(m.Body(), "\n") {
+			if strings.Contains(line, m.Glyphs.Cursor) {
+				marked = append(marked, line)
+			}
+		}
+		if r.Active {
+			// The live account keeps its own marker; see noCursor for why it
+			// wins that cell.
+			if len(marked) != 0 {
+				t.Errorf("cursor %d is on the live account and something drew a cursor glyph: %q", i, marked)
+			}
+			continue
+		}
+		if len(marked) != 1 {
+			t.Fatalf("cursor %d is drawn on %d rows, want exactly 1: %q", i, len(marked), marked)
+		}
+		// The head of the address, because ACCOUNT is cut to 20 columns at this
+		// width once TIER is in the fixed order.
+		if head, _, _ := strings.Cut(r.Account.Email, "@"); !strings.Contains(marked[0], head) {
+			t.Errorf("cursor %d is drawn on %q, which is not %s", i, marked[0], r.Account.Email)
+		}
+	}
+}
+
+// Scrolling names the account the cursor is on, whatever mixture of headings
+// and accounts the window ends up holding.
+//
+// The cursor's room is measured in ACCOUNTS -- see scrolled -- and this is what
+// that buys. A room counted in table rows would be one too many at every offset
+// inside a section and two too many across the boundary, so pressing j to the
+// bottom of the list would leave the cursor pointing at an account the page has
+// already scrolled past.
+func TestScrollingKeepsTheCursorsAccountOnThePage(t *testing.T) {
+	rows := fixtureRows()
+	for i, r := range rows {
+		m := fixtureModel(80, 8)
+		m.Cursor = i
+		m = scrolled(m)
+		body := m.Body()
+		if head, _, _ := strings.Cut(r.Account.Email, "@"); !strings.Contains(body, head) {
+			t.Errorf("the cursor is on %s (row %d) and the page does not draw it:\n%s", r.Account.Email, i, body)
+		}
 	}
 }
 
@@ -265,12 +454,13 @@ func TestTheFixtureDataStillCoversTheUnreadableRowAndTheEmptyState(t *testing.T)
 //
 // It is drawn at 20 rows rather than at the 13 the short fixture uses, and
 // that is the height ladder's own arithmetic rather than a preference: the
-// notice rung is dropped SECOND, before the tagline is even considered, so at
-// 13 rows a notice never survives to be rendered at all. Twenty is the
-// shortest terminal that keeps one. A fixture at 13 would have pinned the
-// absence and called it the presence.
+// notice rung is dropped high on the ladder, before the tagline is even
+// considered, so at 13 rows a notice never survives to be rendered at all.
+// Twenty-two is the shortest terminal that keeps one, and this renders at 23
+// for the reason golden_test.go gives beside the file name. A fixture at 13
+// would have pinned the absence and called it the presence.
 func TestANonEmptyNoticeRendersDirectlyAboveTheColumnHeader(t *testing.T) {
-	m := fixtureModel(80, 21)
+	m := fixtureModel(80, 23)
 	m.Snap.Notices = []string{"hover thresholds could not be read"}
 	got := m.Body()
 	if !strings.Contains(got, "note: hover thresholds could not be read") {
@@ -291,7 +481,7 @@ func TestANonEmptyNoticeRendersDirectlyAboveTheColumnHeader(t *testing.T) {
 // page that shows the first of four and says nothing about the other three
 // tells a user the first is all there was.
 func TestMoreNoticesThanFitAreCountedRatherThanDropped(t *testing.T) {
-	m := fixtureModel(80, 21)
+	m := fixtureModel(80, 23)
 	m.Snap.Notices = []string{"hover thresholds could not be read", "b", "c"}
 	if got := m.Body(); !strings.Contains(got, "(+2 more)") {
 		t.Fatalf("three notices rendered no count of what did not fit:\n%s", got)
@@ -307,7 +497,7 @@ func TestMoreNoticesThanFitAreCountedRatherThanDropped(t *testing.T) {
 // "no line and no gap", and a second golden would have pinned whichever of the
 // two the renderer happened to produce.
 func TestAnEmptyNoticesRendersNoLineAndNoGap(t *testing.T) {
-	quiet := fixtureModel(80, 21)
+	quiet := fixtureModel(80, 23)
 	quiet.Snap.Notices = nil
 	got := quiet.Body()
 	if strings.Contains(got, "note:") {
@@ -360,21 +550,28 @@ func TestAFleetWithNothingReadableStillDrawsOneQuotaColumn(t *testing.T) {
 	m.Cursor = noCursor
 
 	lines := strings.Split(m.Body(), "\n")
-	head := -1
+	head, account := -1, -1
 	for i, l := range lines {
-		if strings.Contains(l, view.PlaceholderHeader) && strings.Contains(l, "ACCOUNT") {
+		switch {
+		case head < 0 && strings.Contains(l, view.PlaceholderHeader) && strings.Contains(l, "ACCOUNT"):
 			head = i
-			break
+		case strings.Contains(l, "unread@example.com"):
+			account = i
 		}
 	}
-	if head < 0 || head+1 >= len(lines) {
+	if head < 0 || account < 0 {
 		t.Fatalf("no quota column over a row:\n%s", m.Body())
 	}
+	// The row is found by its ADDRESS rather than by stepping one line down
+	// from the heading, because the line under a column heading is a SECTION
+	// heading now. A test that walked to head+1 would be reading a row with no
+	// account on it, and would pass or fail on a cell that is empty by design.
+	//
 	// The offset is the HEADER's, so this asks where the cell SITS rather than
 	// counting fields: the ACCOUNT cell holds an address and splitting the row
 	// on whitespace would answer about spaces instead of about columns.
 	at := strings.Index(lines[head], view.PlaceholderHeader)
-	if row := lines[head+1]; at >= len(row) || row[at] != '?' {
+	if row := lines[account]; at >= len(row) || row[at] != '?' {
 		t.Errorf("nothing readable stands under %s at column %d of\n%s\n%s",
 			view.PlaceholderHeader, at, lines[head], row)
 	}
@@ -443,8 +640,14 @@ func TestTheOneShotRenderIsEightyColumnsWideWithNoHeightLadder(t *testing.T) {
 // plain-text blocks in chrome.go and never reach artRow -- the whole reason
 // Glyphs.Art exists is a console or a width mode where the art is wrong, and
 // a fallback that quietly kept drawing the art anyway would defeat it.
+//
+// It is rendered at the tall 113x34 shape and not at the 113x26 one, because
+// the figure block is only on a page the height ladder has room for it on: at
+// 26 rows a five-account fleet under two section headings has already spent the
+// family art, and a test asking whether the ASCII fallback was drawn would be
+// asking about a block neither vocabulary puts on the page.
 func TestASCIIGlyphsDrawTheFallbackBlocksAndNoArtRune(t *testing.T) {
-	got := fixtureModelGlyphs(113, 26, ASCIIGlyphs).Body()
+	got := fixtureModelGlyphs(113, 34, ASCIIGlyphs).Body()
 	if !strings.Contains(got, figures[0]) {
 		t.Error("ASCIIGlyphs did not draw the figure block's own first row")
 	}
@@ -481,7 +684,9 @@ func TestAnExplicitUnicodeGlyphSetStillFallsBackToTheTypedBlocksInEastAsianMode(
 			g.Name, g.Art)
 	}
 
-	got := fixtureModelGlyphs(113, 26, g).Body()
+	// 34 rows and not 26, for the reason the test above gives: at 26 the
+	// figure block is not on the page in either vocabulary.
+	got := fixtureModelGlyphs(113, 34, g).Body()
 	if !strings.Contains(got, figures[0]) {
 		t.Error("Name==\"unicode\", Art==false did not draw the figure block's own typed fallback row")
 	}
@@ -515,8 +720,21 @@ func TestAOneShotRenderReportsALoadFailureRatherThanDrawingAnEmptyPage(t *testin
 var fixtureNow = time.Date(2026, 3, 4, 12, 0, 0, 0, time.UTC)
 
 // fixtureRows is the placeholder pool: one subscription part-spent, one credit
-// account fully spent and held out of rotation, one idle alternate, and one
-// api-key seat that could not be read at all.
+// account fully spent and held out of rotation, one idle alternate, one
+// api-key seat that could not be read at all, and one CODEX seat the proxy is
+// serving.
+//
+// The codex row was ADDED and nothing was converted to it. Rows two and four
+// carry coverage TestTheFixtureDataStillCoversTheUnreadableRowAndTheEmptyState
+// exists to protect -- the 100% window, the unreadable seat, the state no
+// daemon has published -- and re-flagging one of them as codex would have moved
+// that coverage into the codex section and taken it out of the Claude one,
+// which is the half every page drew before there were two.
+//
+// It carries a FiveHour reading and nothing else, which is deliberate: the
+// quota block is a function of what the fleet carries, so a codex row with a
+// window of its own would add a column and move every page for a reason that
+// has nothing to do with sections.
 //
 // MinPct and MinWindow are filled on every row that has a reading, and the
 // second row's floor carries its own slack pair. Neither is decoration.
@@ -597,6 +815,27 @@ func fixtureRows() []view.Row {
 			},
 			Engine: daemon.AccountStatus{UUID: "b6a4c2d0-8e15-4f37-a9c6-3d5b7e1f0a48", State: daemon.StateUnknown},
 		},
+		{
+			Account: store.Account{
+				UUID:  "4a9e0c17-6b32-4d58-8107-c2f4e6a9d3b5",
+				Email: "cx@example.com", Idx: 5,
+				Kind: identity.KindSubscription, Tier: "chatgpt_plus",
+				Provider: provider.Codex,
+			},
+			HasEntry: true,
+			Entry: usage.Entry{
+				Snapshot:  &usage.Snapshot{FiveHour: usage.NewWindow(pct(31), in(3*time.Hour+9*time.Minute))},
+				FetchedAt: fixtureNow.Add(-3 * time.Minute),
+			},
+			Headroom: strategy.Headroom{
+				Known: true, Binding: usage.WindowFiveHour, Pct: 69, Slack: 49, Threshold: 80,
+				MinPct: 69, MinWindow: usage.WindowFiveHour,
+			},
+			// Serving is the codex lane's own live state, and it is what puts
+			// the second Active fact on the page: the proxy has a pointer, so
+			// the summary block names both providers.
+			Engine: daemon.AccountStatus{UUID: "4a9e0c17-6b32-4d58-8107-c2f4e6a9d3b5", State: daemon.StateServing},
+		},
 	}
 }
 
@@ -622,16 +861,22 @@ func fixtureReport(width, height int) daemon.Report {
 	}
 }
 
+// fixtureSnapshot names BOTH providers' live seats, which is what puts the
+// two-line Active block on every page below. The codex label is the pool's
+// fifth row, and the uuid beside it is that row's own: a label with no account
+// behind it would render a summary the table below it does not corroborate.
 func fixtureSnapshot(report daemon.Report) view.Snapshot {
 	return view.Snapshot{
-		Now:         fixtureNow,
-		Rows:        fixtureRows(),
-		Report:      report,
-		ActiveLabel: "work@example.com (work)",
-		Strategy:    "headroom",
-		Mode:        strategy.ModeHeadroom,
-		HasMode:     true,
-		Version:     fixtureVersion,
+		Now:               fixtureNow,
+		Rows:              fixtureRows(),
+		Report:            report,
+		ActiveLabel:       "work@example.com (work)",
+		CodexServingLabel: "cx@example.com",
+		CodexServingUUID:  "4a9e0c17-6b32-4d58-8107-c2f4e6a9d3b5",
+		Strategy:          "headroom",
+		Mode:              strategy.ModeHeadroom,
+		HasMode:           true,
+		Version:           fixtureVersion,
 	}
 }
 
@@ -771,12 +1016,11 @@ func TestTheCursorFollowsTheRowAndNotTheScreenPositionOnceItScrolls(t *testing.T
 // long account label nor the second provider can push Strategy or Current off
 // the right edge of the terminal.
 //
-// fixtureRows deliberately carries no codex account, which keeps the golden
-// fixtures focused on the ordinary page. This direct case fixes the four-row
-// form without making every fixture depend on a second provider.
+// The four lines are named here as VALUES, which is what the golden pages
+// cannot do: they draw the same block, but a page compares as one string and
+// says nothing about where one fact ends and the next begins.
 func TestEachSummaryFactAndActiveProviderOwnsItsOwnLine(t *testing.T) {
 	snap := fixtureSnapshot(fixtureReport(113, 26))
-	snap.CodexServingLabel = "cx@example.com"
 	m := newModel(snap, 113, 26, theme.Of(theme.None), UnicodeGlyphs)
 
 	got := m.summaryLines(200)
@@ -794,8 +1038,15 @@ func TestEachSummaryFactAndActiveProviderOwnsItsOwnLine(t *testing.T) {
 // No codex pointer means there is no codex fact to print. The remaining facts
 // still keep their own rows rather than collapsing back into the old pipe-
 // separated sentence.
+//
+// The pointer is taken OFF the fixture rather than a codex-less snapshot being
+// built here, because that is the machine this asserts about: one that has a
+// codex account in the store and nothing serving from it. The label is the
+// gate and the account list is not, so a renderer that drew the line off "is
+// there a codex row" is caught here and by nothing else.
 func TestSummaryOmitsOnlyTheAbsentCodexProvider(t *testing.T) {
 	m := fixtureModel(80, 24)
+	m.Snap.CodexServingLabel = ""
 	got := m.summaryLines(200)
 	want := []string{
 		"Active (Claude): work@example.com (work)",
@@ -808,11 +1059,12 @@ func TestSummaryOmitsOnlyTheAbsentCodexProvider(t *testing.T) {
 }
 
 // The fourth line is part of the layout budget, not text appended after the
-// page was planned. Thirteen rows is deliberately tight enough to drive the
-// height ladder while still retaining the complete summary block.
+// page was planned. Fourteen rows is deliberately tight enough to drive the
+// height ladder while still retaining the complete summary block: it is the
+// shortest page the summary survives on at all, so a fourth line the budget did
+// not know about would push the page past the terminal here first.
 func TestTheCodexActiveLineIsIncludedInTheHeightBudget(t *testing.T) {
-	m := fixtureModel(80, 13)
-	m.Snap.CodexServingLabel = "cx@example.com"
+	m := fixtureModel(80, 14)
 	body := m.Body()
 	if got := len(strings.Split(body, "\n")); got > m.Height {
 		t.Fatalf("page with a codex active line is %d rows in a %d-row terminal:\n%s", got, m.Height, body)
@@ -986,7 +1238,7 @@ func TestTheDashboardRunwayRowsNameTheSeatsOnlyAShortFleetNeeds(t *testing.T) {
 const fixtureRunwayLine = "Runway:  5h holds"
 
 // A populated forecast that the Snapshot does not claim moves no golden. All
-// seven whole-page fixtures are compared byte for byte, and every one of them
+// eight whole-page fixtures are compared byte for byte, and every one of them
 // was drawn on a machine with no history behind it — which is the state of
 // every machine for the first hours after a release that starts recording.
 //
@@ -995,13 +1247,15 @@ const fixtureRunwayLine = "Runway:  5h holds"
 // fully populated and says the fleet runs dry, so an implementation that drew
 // the line off the Fleet's own contents instead of off the flag is caught here.
 //
-// Three of the seven catch it, measured rather than assumed: 113x26, 80x24 and
-// the 80x20 notice page. The other four are shorter than 20 rows, where the
-// height ladder has already dropped the runway line for reasons of its own, so
-// they would look identical under that mutation and rule nothing out. They are
-// walked anyway — the four that cannot see this failure are exactly the four
-// that would see a runway line drawn at a rung that is supposed to have taken
-// it away.
+// TWO of the eight catch it, measured rather than assumed: 113x34 and 113x26.
+// It was three before the table grew its section headings and the fleet its
+// fifth account — 80x24 and the notice page have both dropped below the rung
+// that keeps a four-row runway block since — and the number is re-measured here
+// rather than carried, because a count nobody re-measures is how a table of
+// fixtures comes to claim coverage it stopped having. The other six would look
+// identical under that mutation and rule nothing out. They are walked anyway:
+// the six that cannot see this failure are exactly the six that would see a
+// runway line drawn at a rung that is supposed to have taken it away.
 func TestAForecastTheSnapshotDoesNotClaimMovesNoGolden(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
@@ -1009,12 +1263,13 @@ func TestAForecastTheSnapshotDoesNotClaimMovesNoGolden(t *testing.T) {
 		prep          func(*Model)
 		file          string
 	}{
-		{"the full page with every column", 113, 26, nil, goldenFullPage},
-		{"the design target with family art", 80, 24, nil, goldenDesignTarget},
-		{"wordmark and tagline dropped", 80, 13, nil, goldenShort},
+		{"every block, trailer included", 113, 34, nil, goldenTrailer},
+		{"every column the ladder fits, art spent", 113, 26, nil, goldenFullPage},
+		{"the design target, art spent", 80, 24, nil, goldenDesignTarget},
+		{"chrome and summary gone, the table left", 80, 13, nil, goldenShort},
 		{"the frame dropped", 56, 10, nil, goldenNarrow},
-		{"the gauge collapsed", 43, 9, nil, goldenCollapsed},
-		{"one notice", 80, 21, func(m *Model) {
+		{"the block collapsed and the table scrolling", 43, 9, nil, goldenCollapsed},
+		{"one notice", 80, 23, func(m *Model) {
 			m.Snap.Notices = []string{"hover thresholds could not be read"}
 		}, goldenNotice},
 		{"zero accounts", 80, 13, func(m *Model) { m.Snap.Rows = nil }, goldenZeroAccounts},
@@ -1048,8 +1303,12 @@ func TestAForecastTheSnapshotDoesNotClaimMovesNoGolden(t *testing.T) {
 // test that searched for the cut form would be pinning the truncator's arithmetic
 // in a test about row order. Nothing here depends on the width: the four lines
 // are drawn in the same order at every rung that draws them.
+//
+// 25 rows because the page has to carry the runway block AND the note at once,
+// and both are conditional: at 24 the ladder gives the note up and there is no
+// ordering left to assert.
 func TestTheRunwayLineSitsUnderTheHeaderLineAndAboveTheNote(t *testing.T) {
-	m := fixtureModel(113, 24)
+	m := fixtureModel(113, 25)
 	m.Snap.Forecast, m.Snap.HasForecast = fixtureFleet(), true
 	m.Snap.Notices = []string{"hover thresholds could not be read"}
 
@@ -1090,20 +1349,22 @@ func TestTheRunwayLineSitsUnderTheHeaderLineAndAboveTheNote(t *testing.T) {
 // out as two rows that are each inside the frame, every width assertion passes,
 // and the page is one row taller than the height ladder budgeted for. At 43
 // columns the wrap was reproduced before this was written. Twenty rows is where
-// it bites: with four accounts and a runway line the ladder drops the figure
-// block and lands on exactly twenty, so one wrapped row is one row over.
+// it bit: with the four accounts this pool then had and a runway line the ladder
+// dropped the figure block and landed on exactly twenty, so one wrapped row was
+// one row over.
 //
 // The heights walk the rungs the line is taken away at, not just the one it
-// survives. Twenty is where it is kept with the figure block dropped; nineteen,
-// sixteen and twelve are the first height below each of the next three rungs for
-// this fixture's four rows, measured. A page rendered only at twenty pins the
-// renderer where the ladder's verdict happens to be true, and a renderer that
-// consulted the WORDING rather than the plan — drawing whenever the line is
-// non-empty — passes every one of those assertions while putting twenty rows in
-// a nineteen-row terminal, seventeen in a sixteen and thirteen in a twelve. That
-// is the same one-row overrun as the wrap above, arriving from the other side,
-// and the equality below is what tells the two apart: the page draws the line
-// exactly when Plan budgeted a row for it.
+// survives -- and they are kept where they were rather than re-derived for the
+// taller fleet, because what each of them tests is the AGREEMENT below and not a
+// particular rung: the equality holds at every height, and a set of heights that
+// straddles several rungs is what makes it worth asserting. A page rendered at
+// one height pins the renderer where the ladder's verdict happens to be true,
+// and a renderer that consulted the WORDING rather than the plan — drawing
+// whenever the line is non-empty — passes that single assertion while putting
+// four rows of runway into a page that budgeted none. That is the same one-row
+// overrun as the wrap above, arriving from the other side, and the equality
+// below is what tells the two apart: the page draws the line exactly when the
+// plan budgeted rows for it.
 //
 // This is also the one line on the page whose bytes above 0x7F came from a
 // VALUE rather than from this package's own vocabulary: the shared wording
@@ -1131,15 +1392,13 @@ func TestTheRunwayLineIsCutToTheFrameRatherThanWrappingIt(t *testing.T) {
 					t.Errorf("at %dx%d line %d is %d columns wide: %q", w, height, i, got, line)
 				}
 			}
-			// len(m.Snap.Rows) rather than a literal, and false for the notice,
-			// because Body plans with exactly those: a mismatch here would
-			// compare the page against a layout nobody rendered.
-			footerWidth := w - 2
-			if footerWidth < 1 {
-				footerWidth = w
-			}
-			want := planWithRows(testCols(), w, height, len(m.Snap.Rows), false, true,
-				len(m.footerLines(footerWidth)), len(m.runwayLines()), len(m.summaryLines(w)), 0).Runway
+			// The plan is asked of the MODEL rather than restated here from
+			// its parts. This case used to spell out every argument Body
+			// passes, which made it a second copy of that call -- and a copy
+			// that had already drifted: it handed the ladder a trailer length
+			// of zero, so the day the page drew one it would have compared the
+			// render against a layout nobody rendered.
+			want := m.plan().Runway
 			if got := strings.Contains(body, "Runway: "); got != want {
 				t.Errorf("at %dx%d the page draws a runway line: %v; the height ladder budgeted a row for one: %v:\n%s",
 					w, height, got, want, body)
@@ -1150,8 +1409,12 @@ func TestTheRunwayLineIsCutToTheFrameRatherThanWrappingIt(t *testing.T) {
 
 // Each runway fact owns a row, so the basis remains visible without competing
 // with either quota axis for horizontal space.
+//
+// 25 rows and not the 24 of the design target: the runway block is four rows,
+// and at 24 the ladder has already given it up on a five-account fleet under
+// two section headings.
 func TestTheRunwayRowsKeepTheirBasisVisible(t *testing.T) {
-	m := fixtureModel(80, 24)
+	m := fixtureModel(80, 25)
 	m.Snap.Forecast, m.Snap.HasForecast = fixtureFleet(), true
 
 	body := m.Body()
@@ -1195,8 +1458,8 @@ func TestTheCountOfHiddenRowsSaysWhichWayTheyLie(t *testing.T) {
 		top  int
 		want string
 	}{
-		{"at the top, everything hidden is below", 0, UnicodeGlyphs.MoreBelow + " +3 more  (j/k)"},
-		{"scrolled to the bottom, everything hidden is above", 3, UnicodeGlyphs.MoreAbove + " +3 more  (j/k)"},
+		{"at the top, everything hidden is below", 0, UnicodeGlyphs.MoreBelow + " +4 more  (j/k)"},
+		{"scrolled to the bottom, everything hidden is above", 4, UnicodeGlyphs.MoreAbove + " +4 more  (j/k)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := fixtureModel(80, 5)

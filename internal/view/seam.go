@@ -28,7 +28,8 @@ type Snapshot struct {
 	//
 	// EMPTY IS LOAD-BEARING. It is what keeps every surface rendering the exact
 	// bytes it rendered before codex existed on a machine that has no codex
-	// account -- seven byte-compared dashboard pages among them.
+	// account: `ccdad which` prints the bare Claude label, and the block
+	// SummaryLines builds draws one Active line rather than two.
 	CodexServingLabel string
 	// CodexServingUUID is the same account's key, for the --json payloads. A
 	// label is for a person and a uuid is what a script keys on, and deriving
@@ -77,12 +78,20 @@ func (s Snapshot) StrategyLabel() string {
 	return s.Strategy
 }
 
-// ActiveLine is who this machine is spending, in one sentence.
+// ActiveLine is who this machine is spending, in ONE line, for `ccdad which`
+// and for nothing else.
 //
-// It is a free function as well as a method because `ccdad which` has no
-// Snapshot to build and must produce the identical line: two spellings of one
-// sentence is how two commands come to describe one machine two ways, which is
-// the failure this whole package exists to prevent.
+// One line is what `which` is: a command written to be read by a shell, whose
+// whole output is the answer. Every surface with room for a block prints one
+// line PER PROVIDER instead -- Snapshot.SummaryLines is where that lives -- so
+// that a long account label cannot be cut in a way that takes the other
+// provider beside it along.
+//
+// It is a free function and no longer also a method on Snapshot. It was both
+// while `ccdad status` printed this same joined sentence; status prints the
+// two-line block now, so the method had no caller left, and an exported method
+// that puts two accounts on one line is exactly the third spelling of "who is
+// live" this package exists not to have.
 //
 // With no codex account it is the Claude label ALONE, unlabelled. That is not a
 // degradation -- it is the answer every reader and every script had before
@@ -94,6 +103,3 @@ func ActiveLine(claude, codex string) string {
 	}
 	return "Claude: " + claude + " · Codex: " + codex
 }
-
-// ActiveLine is this snapshot's.
-func (s Snapshot) ActiveLine() string { return ActiveLine(s.ActiveLabel, s.CodexServingLabel) }

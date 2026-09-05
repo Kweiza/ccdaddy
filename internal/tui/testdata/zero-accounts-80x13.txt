@@ -1,9 +1,12 @@
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ccdad v0.2.0                                                                  │
 │Active (Claude): work@example.com (work)                                      │
+│Active (Codex): cx@example.com                                                │
 │Strategy: headroom                                                            │
 │Current: headroom                                                             │
 │IDX ACCOUNT               5H  7D OPUS  5H IN  7D OPUS IN  STATE               │
+│    CLAUDE                                                                    │
+│    CODEX                                                                     │
 │    no accounts                                                               │
 │a add  s switch  d daemon  c strategy  up/k up  down/j down  r refresh  ? help│
 │q quit                                                                        │

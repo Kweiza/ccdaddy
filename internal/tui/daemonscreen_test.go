@@ -143,10 +143,10 @@ func TestTheCadenceBlockReadsTheNumbersRatherThanRestatingThem(t *testing.T) {
 			t.Errorf("the cadence block does not carry %q:\n%s", want, body)
 		}
 	}
-	// Four accounts on one identity, so the per-account cadence is four times
+	// Five accounts on one identity, so the per-account cadence is five times
 	// the floor. This is the figure a user needs to explain why an account
 	// they are watching has not been polled.
-	if !strings.Contains(body, "12m apiece") {
+	if !strings.Contains(body, "15m apiece") {
 		t.Errorf("the per-identity cadence is not derived from the account count:\n%s", body)
 	}
 }

@@ -606,21 +606,32 @@ func TestAnAccountRowRemembersWhereTheGroupingMovedItFrom(t *testing.T) {
 	}
 }
 
-// Sections always returns both buckets so that nothing can be lost between
-// them; drawing is a different question, and a heading over no rows is a claim
-// about accounts that are not there.
-func TestListRowsDrawNoHeadingOverASectionWithNoRows(t *testing.T) {
+// A heading over NO rows still draws. A machine with four Claude accounts and
+// no Codex one would otherwise render exactly as a build that has never heard
+// of Codex, which is the one case the sections were added for.
+func TestListRowsDrawTheHeadingOverASectionWithNoRows(t *testing.T) {
 	got := ListRows(Sections([]Row{claudeRow("cl-1")}))
-	if len(got) != 2 {
-		t.Fatalf("ListRows = %v, want a heading and one account", lines(got))
+	want := []string{ClaudeSection, "", CodexSection}
+	if len(got) != len(want) {
+		t.Fatalf("ListRows = %v, want a heading, one account, and the empty section's heading", lines(got))
 	}
-	for _, r := range got {
-		if r.Header == CodexSection {
-			t.Error("a CODEX heading was drawn over no codex accounts")
+	for i, w := range want {
+		if got[i].Header != w {
+			t.Errorf("line %d header = %q, want %q", i, got[i].Header, w)
 		}
 	}
-	if n := len(ListRows(Sections(nil))); n != 0 {
-		t.Errorf("ListRows on an empty fleet = %d lines, want none", n)
+}
+
+// An empty STORE is still two providers. The sentence about having no accounts
+// belongs to the store rather than to either section, so the surfaces print it
+// once under both headings rather than twice, once under each.
+func TestListRowsOnAnEmptyStoreAreTheTwoHeadingsAndNothingElse(t *testing.T) {
+	got := ListRows(Sections(nil))
+	if len(got) != 2 {
+		t.Fatalf("ListRows on an empty fleet = %v, want the two headings", lines(got))
+	}
+	if got[0].Header != ClaudeSection || got[1].Header != CodexSection {
+		t.Errorf("ListRows on an empty fleet = %v, want %q then %q", lines(got), ClaudeSection, CodexSection)
 	}
 }
 
