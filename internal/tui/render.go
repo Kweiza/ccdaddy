@@ -187,9 +187,21 @@ const refreshFailed = "could not refresh; these are the last good numbers: "
 //
 // A load that succeeds replaces the snapshot whole, which is what takes the
 // notice away again — there is no separate clearing step to forget.
+// The quota block is DERIVED from the snapshot, so it is rebuilt here with it.
+//
+// Leaving it behind was invisible in this package and total in the shipping
+// binary. newModel is the only other place Cols is assigned, and the live
+// program's only construction site is newApp -- which builds a Model from an
+// EMPTY snapshot, because the read is asynchronous and has not happened yet. So
+// the dashboard was born with ColumnsOf(nil), every load replaced the rows and
+// left that behind, and view.ListColumns' placeholder arm drew one column headed
+// QUOTA with "?" in every cell, on every fleet, forever. The one-shot render was
+// unaffected because it loads first and calls newModel with the result, which is
+// exactly why no golden page could see it.
 func (m Model) AfterLoad(snap view.Snapshot, err error) Model {
 	if err == nil {
 		m.Snap = snap
+		m.Cols = view.ColumnsOf(snap.Rows)
 		return m
 	}
 	kept := make([]string, 0, len(m.Snap.Notices)+1)
