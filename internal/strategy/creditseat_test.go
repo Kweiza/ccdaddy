@@ -99,12 +99,26 @@ func TestPreemptionWillNotRunToASeatWhoseOptedInCapRunsOutFirst(t *testing.T) {
 	// with an hour to run on a seven-day length.
 	seat := seatWithCap("b-seat", 10, 99.9, time.Hour)
 	seat.FetchedAt, seat.NextPollAt = now.Add(-time.Minute), now.Add(time.Minute)
-	healthy := polled(burning("c-healthy", 5), 1800*time.Second)
+	// 20 and not a fresh account, because the walk stops at the first candidate
+	// it accepts. At a three-account share the seat's own meter reports 85 and
+	// this reports 73.3, so the SEAT is reached first and the assertion is about
+	// the rule rejecting it rather than about the order never offering it.
+	healthy := polled(burning("c-healthy", 20), 1800*time.Second)
+	pool := []Candidate{live, seat, healthy}
 
-	p := Decide([]Candidate{live, seat, healthy}, seatOpts(), Config{}, NewState(), "a-live")
+	// The premise, asserted rather than assumed: the seat must outrank the
+	// healthy account, or this test passes for the wrong reason.
+	if got := order(Rank(pool, seatOpts())); got[0] != "b-seat" {
+		t.Fatalf("order = %v, want the seat first -- otherwise the walk never offers it", got)
+	}
 
-	if p.Action == ActionSwitch && p.Target.UUID == "b-seat" {
-		t.Errorf("pre-empted onto %s, whose own opted-in cap dies inside the horizon", p.Target.UUID)
+	p := Decide(pool, seatOpts(), Config{}, NewState(), "a-live")
+
+	if p.Action != ActionSwitch {
+		t.Fatalf("Action = %v (%s), want a switch off an account about to hit its limit", p.Action, p.Reason)
+	}
+	if p.Target.UUID != "c-healthy" {
+		t.Errorf("pre-empted onto %s, whose own opted-in cap dies inside the horizon; want c-healthy", p.Target.UUID)
 	}
 }
 
