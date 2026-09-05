@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -756,7 +757,12 @@ func TestASecondCodexAddSaysNothingAboutTheShimAndMovesNoTimestamp(t *testing.T)
 	}
 	// And it says nothing. Exit 3 out of the installer is the whole rule: the
 	// world is already as the user asked, so there is nothing to report.
-	for _, word := range []string{"PATH", "shim", shimPath()} {
+	//
+	// "uninstall" is in the list because the undo line belongs to the arm that
+	// WROTE something. Printed unconditionally it would land here, on a run that
+	// changed nothing, and read as an offer to take back a machine ccdad has
+	// just left exactly as it found it.
+	for _, word := range []string{"PATH", "shim", "uninstall", shimPath()} {
 		if strings.Contains(stderr, word) {
 			t.Errorf("the second add still talks about the shim (%q):\n%s", word, stderr)
 		}
@@ -805,5 +811,117 @@ func TestAShimThatCannotBeInstalledDoesNotFailTheAdd(t *testing.T) {
 	}
 	if strings.Contains(stderr, "to try again") {
 		t.Errorf("a refusal that names its own remedy was told to try again unchanged:\n%s", stderr)
+	}
+}
+
+// TestTheAddThatInstalledTheShimNamesTheUndo is the other half of the automatic
+// install. Nothing here was asked for: a login created or edited ~/.bashrc and
+// ~/.profile and put an executable called `codex` ahead of the real one on the
+// user's PATH, and the only `ccdad uninstall` on the machine is inside the
+// block written into the startup file — which is not a place the person who
+// has just finished a login reads.
+//
+// `ccdad uninstall` is the command that takes all three back, and it names the
+// shim in its own enumeration, so this pointer lands somewhere rather than
+// leaving the user to find out what a removal would cover.
+func TestTheAddThatInstalledTheShimNamesTheUndo(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("there is no shim on Windows; the installer's own refusal has its own test")
+	}
+	isolate(t)
+	realShimAutoInstall(t)
+	codexShimEnvironment(t)
+	stubCodexDevice(t, ownerPayload, nil)
+
+	code, _, stderr, top := runRoot(t, "add", "codex")
+	if code != ExitOK {
+		t.Fatalf("exit = %d, want %d\n%s%s", code, ExitOK, stderr, top)
+	}
+	if !strings.Contains(stderr, "`ccdad uninstall`") {
+		t.Errorf("the add edited the user's startup files and wrote an executable onto their PATH "+
+			"without naming a way to take any of it back:\n%s", stderr)
+	}
+}
+
+// TestARefusedCodexAddWritesNoShimAndNoStartupFile holds WHERE the hook is
+// called from, which is the one thing about it a reader cannot check by reading
+// it: the call sits after the success line and after every refusal above it,
+// and nothing but this test says so.
+//
+// The member-seat refusal with no terminal is the sharpest driver there is. It
+// exits 2 having stored nothing at all, so every file below belongs to a login
+// ccdad declined — and hoisting the call to the top of runCodexAdd leaves the
+// package green while that same refusal creates two startup files and puts an
+// executable named `codex` ahead of the real one on the user's PATH.
+func TestARefusedCodexAddWritesNoShimAndNoStartupFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("there is no shim on Windows; the installer's own refusal has its own test")
+	}
+	isolate(t)
+	stubEnvironment(t, false, false)
+	realShimAutoInstall(t)
+	codexShimEnvironment(t)
+	stubCodexDevice(t, memberPayload, nil)
+
+	code, _, stderr, top := runRoot(t, "add", "codex")
+	if code != ExitUsage {
+		t.Fatalf("exit = %d, want %d\n%s%s", code, ExitUsage, stderr, top)
+	}
+	s, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Accounts()) != 0 {
+		t.Fatalf("the refused login was stored, so this test is no longer describing an add that "+
+			"stored nothing: %+v", s.Accounts())
+	}
+	// fs.ErrNotExist and not "is the content right": the file must not be there
+	// at all. A startup file this add created is one the user gets to keep,
+	// because nothing on the refusal path knows to remove it again.
+	for _, path := range []string{shimPath(), filepath.Join(os.Getenv("HOME"), ".bashrc")} {
+		if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("an add that stored nothing wrote %s (stat: %v)", path, err)
+		}
+	}
+}
+
+// TestAShimTheInstallerCouldNotWriteTellsTheUserToTryAgain is the generic
+// failure arm, and it is the only one that gets "try again": a refusal that
+// names its own remedy — csh, an unset $SHELL, an ACL, a shim owned by somebody
+// else — is passed through untouched, and TestAShimThatCannotBeInstalledDoesNotFailTheAdd
+// holds that half. Deleting the arm below leaves only its ABSENCE pinned, which
+// is a green that means nothing.
+//
+// A DIRECTORY where the shim script goes is what drives it. The installer gets
+// past its own refusals, past the store, and fails on the write itself, which
+// is exactly the shape the arm is for: something went wrong that nothing on the
+// machine has said anything about, and running the install again is the only
+// thing the user can be told.
+func TestAShimTheInstallerCouldNotWriteTellsTheUserToTryAgain(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("there is no shim on Windows; the installer's own refusal has its own test")
+	}
+	isolate(t)
+	realShimAutoInstall(t)
+	codexShimEnvironment(t)
+	stubCodexDevice(t, ownerPayload, nil)
+	if err := os.MkdirAll(shimPath(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	code, _, stderr, top := runRoot(t, "add", "codex")
+	if code != ExitOK {
+		t.Fatalf("a shim that could not be written failed the add: exit %d, want %d\n%s%s",
+			code, ExitOK, stderr, top)
+	}
+	s, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.Get("user-abc"); !ok {
+		t.Fatalf("the login succeeded and the account is not stored: %+v", s.Accounts())
+	}
+	if !strings.Contains(stderr, "Run `ccdad codex shim install` to try again.") {
+		t.Errorf("the shim could not be written and the user is left with nothing to run:\n%s", stderr)
 	}
 }

@@ -215,6 +215,12 @@ func runCodexAdd(cmd *cobra.Command, allowWorkspaceMember bool) error {
 	// follow-up to a login that has already happened -- it is what makes typing
 	// `codex` reach ccdad at all -- and putting it here is what keeps it
 	// unreachable from the paths that stored nothing.
+	//
+	// TestARefusedCodexAddWritesNoShimAndNoStartupFile is what holds the
+	// placement, and it is the whole claim above stated as an outcome: hoisted
+	// to the top of this function, the member-seat refusal exits 2 having stored
+	// nothing and still creates ~/.bashrc, ~/.profile and an executable named
+	// codex on the user's PATH.
 	autoInstallShim(cmd)
 	return nil
 }
@@ -229,12 +235,14 @@ var autoInstallShim = autoInstallCodexShim
 // autoInstallCodexShim installs the codex shim after a successful add and says
 // what it did.
 //
-// It returns NOTHING, and that signature is the guarantee rather than a
-// convenience: by the time it runs the account is stored and the add has
+// It returns NOTHING: by the time it runs the account is stored and the add has
 // already reported success, so a shim that cannot be installed must not turn
-// that into a failure. A function with no error to return cannot be wired into
-// one by a later change, and TestAShimThatCannotBeInstalledDoesNotFailTheAdd is
-// what holds the outcome.
+// that into a failure. The signature says that out loud and guarantees nothing
+// -- widening it to return an error and returning that from runCodexAdd is
+// three lines. What refuses those three lines is a test:
+// TestAShimThatCannotBeInstalledDoesNotFailTheAdd drives an install that
+// refuses and reads the add's exit code, and it goes red the moment a failed
+// shim becomes one.
 //
 // The installer's output is CAPTURED rather than written straight through,
 // because whether to say anything at all is decided by the exit code and the
@@ -268,6 +276,16 @@ func autoInstallCodexShim(cmd *cobra.Command) {
 	out := cmd.ErrOrStderr()
 	if err == nil {
 		fmt.Fprint(out, said.String())
+		// The undo, named at the one moment somebody is reading. Nothing above
+		// this was asked for: a login has just put an executable on the user's
+		// PATH and edited startup files they never named, and until here the
+		// only `ccdad uninstall` on the machine was inside the block written
+		// into one of those files, which is not where the person who has just
+		// logged in is looking.
+		//
+		// Only on this arm. Exit 3 changed nothing and has nothing to take
+		// back, and a refusal has already printed a remedy of its own.
+		fmt.Fprint(out, "`ccdad uninstall` takes it back.\n")
 		return
 	}
 	code := CodeFor(err)
