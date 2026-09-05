@@ -9,7 +9,7 @@ import (
 var burnNow = time.Date(2026, 9, 5, 15, 0, 0, 0, time.UTC)
 
 func sample(pct float64, at time.Time, reset time.Time) BindingSample {
-	return BindingSample{Pct: pct, At: at, Reset: reset}
+	return BindingSample{Window: WindowFiveHour, Pct: pct, At: at, Reset: reset}
 }
 
 func closeTo(t *testing.T, got, want float64) {
@@ -147,4 +147,17 @@ func TestAnAccountWithNoRoomLastsNoMinutes(t *testing.T) {
 		t.Fatal("no answer for an account past its limit")
 	}
 	closeTo(t, left, 0)
+}
+
+// Two readings of DIFFERENT windows are not a rate. The binding window moves on
+// its own: a five-hour window that rolls over stops being the tightest, and the
+// next reading is of the weekly window instead. Subtracting a fresh weekly 5%
+// from a spent five-hour 96% is arithmetic on two unrelated quantities.
+func TestTwoDifferentWindowsAreNotAPair(t *testing.T) {
+	at := burnNow.Add(3 * time.Hour)
+	prev := BindingSample{Window: WindowFiveHour, Pct: 20, At: burnNow, Reset: at}
+	cur := BindingSample{Window: WindowSevenDay, Pct: 60, At: burnNow.Add(10 * time.Minute), Reset: at}
+	if _, ok := BurnPerMin(prev, cur); ok {
+		t.Error("reported a rate across two different windows")
+	}
 }

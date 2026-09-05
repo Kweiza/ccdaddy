@@ -82,6 +82,35 @@ type PollState struct {
 	// cadence on every start.
 	LastBindingPct float64 `json:"last_binding_pct,omitempty"`
 	HasLastBinding bool    `json:"has_last_binding,omitempty"`
+	// LastBindingAt is when LastBindingPct was read, and LastBindingReset the
+	// binding window's rollover at that moment. Together with the next reading
+	// they are the two points BurnPerMin subtracts.
+	//
+	// The reset is stored beside the percentage rather than derived later, and
+	// that is the whole reason this is three fields instead of one: a rate taken
+	// across a rollover is meaningless, and by the time the next reading lands
+	// the previous window's reset is not recoverable from anything on disk. The
+	// poll policy has never needed it -- movement is a comparison it is happy to
+	// get wrong once per cycle -- so it is carried here rather than pushed into
+	// pollpolicy.State, where it would be a field the policy does not read.
+	LastBindingAt    time.Time `json:"last_binding_at,omitempty"`
+	LastBindingReset time.Time `json:"last_binding_reset,omitempty"`
+	// LastBindingWindow names which window the anchor is OF. The binding window
+	// moves on its own -- a five-hour window that rolls over stops being the
+	// tightest one and the weekly window takes over -- so without this the pair
+	// can be two readings of two different quantities.
+	LastBindingWindow WindowName `json:"last_binding_window,omitempty"`
+	// BurnPerMin is the measured rate between the last two readings, in points
+	// of the binding window a minute, and HasBurn whether one could be taken.
+	//
+	// It is computed at commit and stored rather than derived by every reader,
+	// for the reason the poll interval is: the two points it came from are
+	// overwritten by the very reading that produces it, so a reader arriving
+	// later has nothing to subtract. HasBurn false is "cannot say" and never
+	// "nothing is being spent" -- a measured idle account reports zero with
+	// HasBurn true, and the two answers send the engine down different arms.
+	BurnPerMin float64 `json:"burn_per_min,omitempty"`
+	HasBurn    bool    `json:"has_burn,omitempty"`
 }
 
 // Entry is one account's cached reading.
