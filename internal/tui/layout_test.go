@@ -181,33 +181,39 @@ func TestTheWindowBlockIsNeverPartiallyShown(t *testing.T) {
 }
 
 // The height ladder, rung by rung. Walked with a fixed 4 account rows, the
-// tagline and then the blank separators give first so the family remains
-// visible at the 80x24 design target after the summary gained its own rows.
+// tagline and then the blank separators give first, because between them they
+// spend nothing but vertical whitespace.
 //
-// Every rung is two rows taller than it was before the table carried section
-// headings, and that is sectionRows and nothing else: both headings are drawn
-// whatever the fleet holds, so they are a constant cost added to the budget
-// before the first rung fires rather than a block with a rung of its own.
+// The section headings are a rung of their own now rather than a constant
+// charged before the first rung fires, and this table is where that is visible
+// as an ORDER: they go after the wordmark and the frame, which say nothing
+// about any account, and before the title line and the summary block, which are
+// the page's own facts about the fleet. Everything below their rung therefore
+// fires two rows lower than it used to -- that is sectionRows handed back, and
+// a rung that flipped the flag without giving the rows up would leave the title
+// and the headings vanishing at the same height.
 func TestTheHeightLadderDropsBlocksInTheOrderItSays(t *testing.T) {
 	const rows = 4
 	for _, tc := range []struct {
-		height                                                    int
-		wordmark, tagline, figures, border, blanks, title, header bool
+		height                                                              int
+		wordmark, tagline, figures, border, blanks, sections, title, header bool
 	}{
-		{29, true, true, true, true, true, true, true},  // nothing dropped: 25+N
-		{28, true, false, true, true, true, true, true}, // tagline dropped: 22+N
-		{26, true, false, true, true, true, true, true},
-		{25, true, false, true, true, false, true, true}, // blank separators dropped: 20+N
-		{24, true, false, true, true, false, true, true},
-		{23, true, false, false, true, false, true, true}, // figures also dropped: 13+N
-		{17, true, false, false, true, false, true, true},
-		{16, false, false, false, true, false, true, true}, // wordmark replaced: 9+N
-		{13, false, false, false, true, false, true, true},
-		{12, false, false, false, false, false, true, true}, // border dropped: 7+N
-		{11, false, false, false, false, false, true, true},
-		{10, false, false, false, false, false, false, true}, // title dropped: 6+N
-		{9, false, false, false, false, false, false, false}, // summary dropped: 4+N
-		{6, false, false, false, false, false, false, false},
+		{29, true, true, true, true, true, true, true, true},  // nothing dropped: 25+N
+		{28, true, false, true, true, true, true, true, true}, // tagline dropped: 22+N
+		{26, true, false, true, true, true, true, true, true},
+		{25, true, false, true, true, false, true, true, true}, // blank separators dropped: 20+N
+		{24, true, false, true, true, false, true, true, true},
+		{23, true, false, false, true, false, true, true, true}, // figures also dropped: 13+N
+		{17, true, false, false, true, false, true, true, true},
+		{16, false, false, false, true, false, true, true, true}, // wordmark replaced: 9+N
+		{13, false, false, false, true, false, true, true, true},
+		{12, false, false, false, false, false, true, true, true}, // border dropped: 7+N
+		{11, false, false, false, false, false, true, true, true},
+		{10, false, false, false, false, false, false, true, true}, // headings dropped: 5+N
+		{9, false, false, false, false, false, false, true, true},
+		{8, false, false, false, false, false, false, false, true},  // title dropped: 4+N
+		{7, false, false, false, false, false, false, false, false}, // summary dropped: 2+N
+		{6, false, false, false, false, false, false, false, false},
 	} {
 		l := Plan(testCols(), 80, tc.height, rows, false, false)
 		if l.Wordmark != tc.wordmark {
@@ -224,6 +230,9 @@ func TestTheHeightLadderDropsBlocksInTheOrderItSays(t *testing.T) {
 		}
 		if l.Blanks != tc.blanks {
 			t.Errorf("height %d: Blanks=%v, want %v", tc.height, l.Blanks, tc.blanks)
+		}
+		if l.Sections != tc.sections {
+			t.Errorf("height %d: Sections=%v, want %v", tc.height, l.Sections, tc.sections)
 		}
 		if l.Title != tc.title {
 			t.Errorf("height %d: Title=%v, want %v", tc.height, l.Title, tc.title)
@@ -446,27 +455,95 @@ func TestATrailerCostsItsRowsAndIsGivenUpBeforeTheNotice(t *testing.T) {
 		t.Fatal("no height between 4 and 40 drops the trailer and keeps the notice, so the order above is asserted of nothing")
 	}
 
-	// And it goes AFTER the three decorative blocks, which is the other half of
-	// "the highest a block carrying real information can sit". The claim above
-	// bounds the trailer from below and this one bounds it from above: without
-	// it, a ladder that spent the trailer before the tagline would still drop it
+	// And it goes AFTER the whitespace and BEFORE the family art, which is the
+	// other half of the order and the half that was reversed. The claim above
+	// bounds the trailer from below and these bound it from above: without them,
+	// a ladder that spent the trailer before the tagline would still drop it
 	// before the notice and would still pass.
-	sawTheKeep := false
+	//
+	// The witness is a height that has spent the legend and still draws the
+	// drawing. Every line the trailer holds is printed in full by `ccdad status`
+	// at any width; the art is on no other command at all, so the block that can
+	// be read elsewhere is the one given up first.
+	sawTheArtOutliveIt := false
 	for h := 4; h <= 40; h++ {
 		l := planWithRows(testCols(), 80, h, rows, true, false, 1, 0, 2, trailerRows)
 		if l.TooShort {
 			continue
 		}
-		if l.Trailer && !l.Figures && !l.Tagline && !l.Blanks {
-			sawTheKeep = true
+		if l.Trailer && !l.Figures {
+			t.Errorf("at 80x%d the family art was given up while the trailer, which goes first, stayed", h)
 		}
-		if !l.Trailer && (l.Figures || l.Tagline || l.Blanks) {
-			t.Errorf("at 80x%d the trailer was given up while a decorative block below it stayed: "+
-				"Figures=%v Tagline=%v Blanks=%v", h, l.Figures, l.Tagline, l.Blanks)
+		if !l.Trailer && (l.Tagline || l.Blanks) {
+			t.Errorf("at 80x%d the trailer was given up while whitespace below it stayed: "+
+				"Tagline=%v Blanks=%v", h, l.Tagline, l.Blanks)
+		}
+		if !l.Trailer && l.Figures {
+			sawTheArtOutliveIt = true
 		}
 	}
-	if !sawTheKeep {
-		t.Fatal("no height between 4 and 40 keeps the trailer with every decorative block gone")
+	if !sawTheArtOutliveIt {
+		t.Fatal("no height between 4 and 40 spends the trailer and keeps the family art, so the order above is asserted of nothing")
+	}
+}
+
+// The section headings' rung, from both sides, and what it hands back.
+//
+// The order first. They go AFTER the wordmark and the frame, which say nothing
+// about any account, and BEFORE the title line and the summary block, which are
+// what the page knows about the fleet: a short terminal keeps the facts and
+// loses the grouping. Both bounds are walked rather than sampled, because a
+// rung placed one line either side of where it belongs still passes at most
+// heights.
+//
+// Then the arithmetic, and it is the half a boolean cannot show. The title's
+// rung fires exactly sectionRows below the headings' own, which is only true if
+// the rung SUBTRACTS what it gives up: a rung that flipped Sections and left
+// need alone would take the title away at the same height as the headings, and
+// every page under it would be planned two rows taller than it is drawn.
+//
+// And VisibleRows follows, which is the same fact at the other end of the
+// function. It is an upper bound on TABLE rows, and the table is two rows
+// shorter once the headings are gone -- a bound that went on counting them
+// would hand a renderer two lines the list cannot fill.
+func TestTheSectionHeadingsAreGivenUpBeforeTheTitleAndTheSummary(t *testing.T) {
+	const rows = 4
+
+	sectionsGoAt, titleGoesAt := 0, 0
+	for h := 40; h >= 4; h-- {
+		l := Plan(testCols(), 80, h, rows, false, false)
+		if l.TooShort {
+			continue
+		}
+		if !l.Sections && (l.Wordmark || l.Border) {
+			t.Errorf("at 80x%d the headings were given up while the chrome above them stayed: Wordmark=%v Border=%v",
+				h, l.Wordmark, l.Border)
+		}
+		if l.Sections && (!l.Title || !l.Header) {
+			t.Errorf("at 80x%d the page kept its headings and gave up a fact under them: Title=%v Header=%v",
+				h, l.Title, l.Header)
+		}
+		if sectionsGoAt == 0 && !l.Sections {
+			sectionsGoAt = h
+		}
+		if titleGoesAt == 0 && !l.Title {
+			titleGoesAt = h
+		}
+		want := rows
+		if l.Sections {
+			want += sectionRows
+		}
+		if l.VisibleRows > want {
+			t.Errorf("at 80x%d VisibleRows is %d, more than the %d rows the table draws", h, l.VisibleRows, want)
+		}
+	}
+	if sectionsGoAt == 0 || titleGoesAt == 0 {
+		t.Fatalf("no height between 4 and 40 gives up the headings (%d) or the title (%d), so the order above is asserted of nothing",
+			sectionsGoAt, titleGoesAt)
+	}
+	if want := sectionsGoAt - sectionRows; titleGoesAt != want {
+		t.Errorf("the headings go at %d rows and the title at %d, want %d -- the rung did not hand its %d rows back",
+			sectionsGoAt, titleGoesAt, want, sectionRows)
 	}
 }
 

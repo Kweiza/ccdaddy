@@ -538,10 +538,10 @@ func Sections(rows []Row) []Section {
 // added for: a machine with four Claude accounts and no Codex one renders
 // identically to a build that has never heard of Codex.
 //
-// The cost is two rows on a page that is short of them, and it is paid at the
-// top of the height ladder like any other block rather than hidden: the count
-// is FIXED at one per section, so a surface can reserve for it without knowing
-// the fleet.
+// The cost is two rows on a page that is short of them, and a surface short of
+// rows gives them up like any other block rather than being handed a shorter
+// list: the count is FIXED at one per section, so it can be budgeted, spent and
+// handed back without knowing anything about the fleet.
 func ListRows(secs []Section) []ListRow {
 	n := 0
 	for _, s := range secs {

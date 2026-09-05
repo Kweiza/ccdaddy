@@ -26,6 +26,14 @@ type Layout struct {
 	Runway                     bool // the "Runway: ..." line; see Plan's runway parameter
 	Border, Blanks             bool
 	Title, Header              bool // Header is the Active/Strategy/Current summary block
+	// Sections is whether the table draws a heading over each provider's
+	// accounts. It is a rung of the height ladder like every other block here,
+	// and it is NOT a statement about the fleet: with it true both headings are
+	// drawn whatever this machine is logged in to, which is what makes a
+	// Claude-only page distinguishable from a build that has never heard of
+	// Codex. What it answers is only whether the terminal is tall enough to say
+	// which provider an address belongs to.
+	Sections bool
 	// Trailer is the block printed UNDER the table -- the legend, the hover
 	// sentence, the unranked note and the credit lines, which internal/view
 	// hands over as one ordered slice. TrailerRows is how many lines that is.
@@ -41,11 +49,12 @@ type Layout struct {
 	//
 	// It counts DISPLAY rows and not accounts, which is the one thing about it
 	// that changed when the table gained its headings. The two counts differ by
-	// a fixed sectionRows, and spending the budget in the unit the table is
-	// drawn in is what keeps a heading from being written over the row below
-	// the page's last line. What stays counted in ACCOUNTS is the "+K more"
-	// figure and the cursor's room, because both are about accounts a reader
-	// can move to and a heading is not one.
+	// sectionRows on a page whose headings survived and by nothing at all on one
+	// whose did not, and spending the budget in the unit the table is drawn in
+	// is what keeps a heading from being written over the row below the page's
+	// last line. What stays counted in ACCOUNTS is the "+K more" figure and the
+	// cursor's room, because both are about accounts a reader can move to and a
+	// heading is not one.
 	VisibleRows int
 	FooterRows  int
 	RunwayRows  int
@@ -287,11 +296,16 @@ func withoutColumns(cols []view.ListColumn, drop ...view.ListColumn) []view.List
 // section, and internal/view returns both sections whatever the fleet holds, so
 // the number is a CONSTANT rather than a function of the accounts.
 //
-// That is the whole reason the headings can be budgeted at all. A count that
-// moved with the fleet -- one heading on a Claude-only machine, two once a
+// That is the whole reason the headings can be budgeted at all, and it is what
+// lets them have a rung of their own rather than a permanent charge. A count
+// that moved with the fleet -- one heading on a Claude-only machine, two once a
 // codex account is added -- would make the height ladder's rungs depend on
 // which providers are logged in, and the page would lose its tagline on the day
 // somebody ran `ccdad add codex`.
+//
+// The rung decides only whether the page can afford them. It does not decide
+// how many there are: a fleet with one provider still draws both, at every
+// height where the headings are drawn at all.
 const sectionRows = 2
 
 // The height ladder's row budget: wordmark 5 rows, tagline 2 rows plus its
@@ -301,9 +315,10 @@ const sectionRows = 2
 // are added on top in planHeight, never folded into this constant. Neither the
 // notice line nor the runway line is part of the fixed 21 either: each exists
 // only when Plan is told it does, which is exactly what Plan's notice and
-// runway parameters say. The section headings are unconditional and could have
-// been folded in, and are not: sectionRows above says what they are and why
-// their count does not move, which a 23 here would hide.
+// runway parameters say. The section headings are not part of it either, and
+// that is now load-bearing rather than a matter of presentation: they have a
+// rung, so a 23 here would charge for two rows the ladder can hand back and
+// every page below that rung would be planned two rows too tall.
 const (
 	fixedRows    = 21
 	saveFigures  = 7 // 6 rows plus its blank
@@ -320,18 +335,33 @@ const (
 // dropped. The column header row, at least one account row and the footer are
 // never dropped — dropping past them is what VisibleRows scrolling is for.
 //
-// The tagline is the first decorative block to go. The two blank separators
-// go next, before the family art. With the multi-row summary and a complete key
-// bar, that order keeps the family visible at the 80x24 design target while
-// spending only vertical whitespace.
+// The tagline is the first decorative block to go, and the two blank separators
+// go next: between them they spend nothing but vertical whitespace, which is
+// why they are ahead of every block that carries a character.
 //
-// The trailer goes directly after those three and ahead of the notice and the
-// runway line, which is the highest a block carrying real information can sit.
-// Every line of it explains a column whose HEADING is already on the page and
-// readable without it -- the legend maps a heading back to its wire key, the
-// unranked note says which of them nothing switches away from -- while the
-// notice below it reports that something could not be READ, which changes what
-// the figures in those columns mean. A page that kept the map and dropped the
+// The trailer goes next, ahead of the family art and everything under it. Every
+// line of it is printed IN FULL by `ccdad status`, at any width and on any
+// terminal -- the legend that maps a column heading back to its wire key, the
+// note saying which rows nothing switches away from -- so a dashboard that
+// gives it up has moved a block to another command rather than taken it off the
+// machine. The drawing is on no other command at all, and a page that spent it
+// to keep a legend would be throwing away the only thing here that cannot be
+// read anywhere else.
+//
+// The price is that the two rungs are far apart, and it is stated rather than
+// hidden: the trailer is one row per line it has and the art is seven, so
+// between the two sits a band of heights that has already given up the legend
+// and still cannot afford the drawing. A page in that band is a row shorter
+// than it needs to be and has gained nothing for it. The alternative is a
+// ladder that looks ahead -- give up the trailer only where doing so saves the
+// art -- and that is a different mechanism from the one every other rung here
+// uses, not a tweak to this one.
+//
+// The trailer still sits ahead of the notice and the runway line, which is the
+// half of its old argument that survives the reversal. It explains columns
+// whose HEADINGS are already on the page and readable without it, while the
+// notice reports that something could not be READ, which changes what the
+// figures in those columns mean. A page that kept the map and dropped the
 // warning would be keeping the smaller answer.
 //
 // The runway line sits one rung below the notice, which decides what happens at
@@ -341,6 +371,27 @@ const (
 // runway line is the reading's conclusion, when the fleet stops working. A
 // dashboard that dropped the conclusion to keep a caveat about it would be
 // keeping the footnote and throwing away the sentence.
+//
+// The section headings are the last thing given up above the page's own facts,
+// and they are given up BEFORE the title line and the summary block: a short
+// terminal keeps what it knows about the fleet and loses the grouping. They are
+// on the ladder at all because they are two rows like any other two rows -- a
+// page that charged for them unconditionally pushed itself down two rungs, and
+// at 80x13 that cost it the version line and every fact in the summary while
+// the grouping it was paying for stayed. The frame was already gone at that
+// height and stays gone: its rung is above this one, so the two rows handed
+// back here are spent below it and never on it.
+//
+// They outlive the wordmark and the frame, which is the other end of the same
+// judgement. Those two say nothing about any account; a heading says which
+// provider four addresses belong to, and at the widths where a short terminal
+// lives the TYPE column that would otherwise answer that is already gone.
+//
+// One consequence is worth naming because it is not obvious from the order: a
+// SCROLLING page never has headings. The rung fires while the ladder is still
+// trying to make the whole table fit, and scrolling is what happens when it has
+// run out of rungs and the table still does not -- so by the time VisibleRows
+// is short enough to hide an account, sectionRows has already been handed back.
 //
 // Title and Wordmark can both be true at once, and that is not redundant:
 // while Wordmark is true the version string rides on the wordmark's own last
@@ -357,6 +408,7 @@ func planHeight(l *Layout, height, rows, summaryRows int, notice, runway bool) {
 	l.Trailer = l.TrailerRows > 0
 	l.Border, l.Blanks = true, true
 	l.Title, l.Header = true, true
+	l.Sections = true
 
 	need := fixedRows + sectionRows + rows + summaryRows
 	need += l.FooterRows - 1
@@ -378,13 +430,13 @@ func planHeight(l *Layout, height, rows, summaryRows int, notice, runway bool) {
 		need -= saveBlanks
 		l.Blanks = false
 	}
-	if need > height {
-		need -= saveFigures
-		l.Figures = false
-	}
 	if l.Trailer && need > height {
 		need -= l.TrailerRows
 		l.Trailer = false
+	}
+	if need > height {
+		need -= saveFigures
+		l.Figures = false
 	}
 	if l.Notice && need > height {
 		need -= saveNotice
@@ -401,6 +453,10 @@ func planHeight(l *Layout, height, rows, summaryRows int, notice, runway bool) {
 	if need > height {
 		need -= saveBorder
 		l.Border = false
+	}
+	if need > height {
+		need -= sectionRows
+		l.Sections = false
 	}
 	if need > height {
 		need -= saveTitle
@@ -421,11 +477,14 @@ func planHeight(l *Layout, height, rows, summaryRows int, notice, runway bool) {
 	// fits, and only less than that -- with the last line spent on
 	// "+K more (j/k)" -- once scrolling genuinely starts.
 	//
-	// The clamp is rows PLUS the headings, because that is how long the table
-	// is: the ladder spends this budget in table rows and the table draws a
-	// heading per section. Clamping to the account count alone would leave the
-	// bottom two accounts of a fleet that fits comfortably reported as
-	// scrolled off a page with room for them.
+	// The clamp is tableLength, which is rows plus the headings on a page that
+	// kept them and rows alone on one that did not, because that is how long the
+	// table is: the ladder spends this budget in table rows and the table draws
+	// a heading per section only while Sections says so. Clamping to the account
+	// count alone would leave the bottom two accounts of a fleet that fits
+	// comfortably reported as scrolled off a page with room for them; clamping
+	// to rows+sectionRows unconditionally would leave a page whose headings the
+	// ladder took away claiming room for two rows the table no longer has.
 	//
 	// The trailer has to be subtracted HERE as well as counted in need above,
 	// and the two are not the same statement. need decides which blocks the
@@ -436,9 +495,24 @@ func planHeight(l *Layout, height, rows, summaryRows int, notice, runway bool) {
 	if l.Trailer {
 		l.VisibleRows -= l.TrailerRows
 	}
-	if l.VisibleRows > rows+sectionRows {
-		l.VisibleRows = rows + sectionRows
+	if n := tableLength(*l, rows); l.VisibleRows > n {
+		l.VisibleRows = n
 	}
+}
+
+// tableLength is how many lines the table draws for a fleet of rows accounts
+// under this layout: one per account, plus the provider headings where they
+// survived their rung.
+//
+// It takes the Layout rather than a bool because the length is a fact about the
+// PLAN and not a second decision: the clamp below and the display list the
+// renderer packs are both read off Sections, so the budget and the list it is
+// spent on cannot come to disagree about whether two of these lines exist.
+func tableLength(l Layout, rows int) int {
+	if l.Sections {
+		return rows + sectionRows
+	}
+	return rows
 }
 
 // truncate cuts s to width display columns without ever wrapping it. A
