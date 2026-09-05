@@ -1492,7 +1492,7 @@ func TestEveryLineOfTheStatusBlockFoldsAtTheFilesWidth(t *testing.T) {
 	const (
 		file      = "status.go"
 		fn        = "renderStatus"
-		wantSites = 11
+		wantSites = 12
 		wantWidth = "outWidth(cmd.OutOrStdout())"
 	)
 

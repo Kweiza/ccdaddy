@@ -1,6 +1,8 @@
 package view
 
 import (
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/daemon"
@@ -37,6 +39,16 @@ type Snapshot struct {
 	CodexServingUUID string
 	Strategy         string // the selected policy: hover, manual, headroom or consume-first
 	Hover            bool   // compatibility storage for the hover policy
+	// HoverAccounts is the per-account half of hover's derivation, empty when
+	// hover is off or when no pass ran.
+	//
+	// The rows already carry the thresholds; this carries the SECOND TERM every
+	// one of them was built from. It used to be one number for the whole pool
+	// and a reader could hold it in their head; it is now per account, so a
+	// table that did not publish it would be asking a reader to accept a
+	// threshold they cannot reconstruct. StrandedNote is what turns it into a
+	// sentence.
+	HoverAccounts []strategy.HoverAccount
 	// Manual is compatibility storage for the manual policy. The selected
 	// strategy remains explicit so a healthy ranking under manual cannot look
 	// like a broken engine.
@@ -62,6 +74,52 @@ type Snapshot struct {
 	// in two places.
 	Forecast    forecast.Fleet
 	HasForecast bool
+}
+
+// StrandedNote names every account whose share is wider than the pool's flat
+// slice, and says what is expiring to make it so.
+//
+// Empty when nothing strands, which is the ordinary case and the reason this is
+// a note rather than a column: a fleet keeping up with its weeks would carry a
+// column of identical numbers on every row forever.
+//
+// It exists because the hover footer's promise -- "thresholds are derived per
+// account and window" -- stopped being enough the moment the share varied. A
+// reader looking at two accounts whose windows elapsed identically and whose
+// thresholds differ by forty points has no way to ask why, and the answer is
+// not in any cell on the table.
+func (s Snapshot) StrandedNote() string {
+	if !s.Hover {
+		return ""
+	}
+	label := map[string]string{}
+	for _, r := range s.Rows {
+		label[r.Account.UUID] = r.ListLabel()
+	}
+	parts := make([]string, 0, len(s.HoverAccounts))
+	for _, a := range s.HoverAccounts {
+		if a.Stranded <= 0 || a.Share <= a.PoolShare {
+			continue
+		}
+		who := label[a.UUID]
+		if who == "" {
+			who = a.UUID
+		}
+		parts = append(parts, fmt.Sprintf("%s share %.0f (pool %.0f): %.0f pts of %s expire %s",
+			who, a.Share, a.PoolShare, a.Stranded, a.Window, a.ResetsAt.In(s.zone()).Format("Mon 15:04")))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "running wide of pace on purpose -- " + strings.Join(parts, "; ")
+}
+
+// zone is the location the note renders instants in, which is the reader's own.
+func (s Snapshot) zone() *time.Location {
+	if s.Now.Location() != nil {
+		return s.Now.Location()
+	}
+	return time.Local
 }
 
 // StrategyLabel is the single user-facing switching policy. New snapshots

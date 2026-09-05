@@ -16,6 +16,42 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`hover` now spends a week that is about to expire.** The mode derives a
+  threshold per account and per window, and the ranking reads whichever window
+  has the least slack. A weekly window that is nearly elapsed and barely used
+  carries a very high threshold — which is very high slack, so it was the one
+  window that could never be the one the ranking read. The perishable-quota
+  answer `hover` claimed to have folded in was inert in exactly the case it was
+  claimed for. Measured on a four-account fleet: the account holding 99 points
+  of a week that expired in fifteen hours ranked LAST of four, behind an account
+  with ninety hours left to spend its own, on a 1.3-point spread of five-hour
+  pace. The share an account is licensed to run ahead by is now the larger of
+  its slice of the pool and the quota its own rotation cannot reach before the
+  window resets, so the licence travels on the account and reaches the
+  comparator. `TestHoverRaisesTheShareOfAnAccountItsRotationCannotDrain` and
+  `TestHoverSwitchesToTheAccountWhoseWeekIsAboutToBeStranded` are that fleet,
+  ranked and switched.
+
+  Two consequences worth knowing before upgrading. **The pool size now reaches
+  the order**, not only the thresholds: `100 / usable` cancelled from every
+  comparison, and the new half does not, so adding or removing an account can
+  reorder a pool rather than only retune it. And **an account holding perishable
+  quota is less likely to read as spent**, because `Spent` measures the same
+  slack — which can turn a pool that would have ranked in `recovery` mode into
+  one that ranks in `headroom`. The widening is capped by the room the account
+  actually has, so an account with nothing left is unaffected and still sorts
+  last.
+
+- **`ccdad status` and the daemon log now say when an account is running wide of
+  pace on purpose.** The share used to be one number for the whole pool and a
+  reader could hold it in their head; it is per account now, so two accounts at
+  the same point of the same window can carry different thresholds. The human
+  table gains a `hover:` line naming the account, its share, and the window that
+  is expiring; `--json` gains `hoverShare`, `strandedPct` and `strandedWindow`;
+  and a switch onto such an account says so on the line that records it.
+
 ## [0.14.0] — 2026-09-04
 
 The release that points `codex` itself at the proxy: a shim ahead of it on

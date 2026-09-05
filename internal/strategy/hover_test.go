@@ -496,16 +496,68 @@ func TestHoverPutsItsDerivedLeadOnTheRankingPass(t *testing.T) {
 	}
 }
 
-// consume-first is one of the keys hover overrides. Hover has already spent the
-// perishable window first by giving it a high threshold as its reset nears, and
-// re-ordering by reset instant would discard every threshold it derived.
+// consume-first is one of the keys hover overrides, and hover has to reach the
+// same answer for it to be allowed to.
+//
+// The override is what it always was: the mode ranks in ModeHeadroom on the
+// thresholds it derived, rather than re-sorting on the reset instant and
+// discarding them. What this case did not used to check is whether the derived
+// order AGREES with the strategy it overrides -- its pool was two identical
+// accounts carrying one window each, so seven_day was the binding window by
+// construction and no ordering difference could have been observed even if
+// there were one. That is exactly the shape the subsumption is true in, and it
+// is not the shape a real account has; withHover's own comment says why.
+//
+// So the pool here is two accounts that differ ONLY in when their week ends,
+// each carrying both windows, and the five-hour window is what binds for both.
+// The mode must still be headroom, and the sooner week must still lead.
 func TestHoverOverridesTheConfiguredStrategy(t *testing.T) {
-	pool := hoverPool(t, 2, usage.WindowSevenDay, elapsedWindow(7*24*time.Hour, 0.43, 10))
+	week := 7 * 24 * time.Hour
+	acct := func(uuid string, weekElapsed float64) Candidate {
+		return sub(uuid, &usage.Snapshot{
+			FiveHour: elapsedWindow(5*time.Hour, 0.20, 10),
+			SevenDay: elapsedWindow(week, weekElapsed, 5),
+		})
+	}
+	pool := []Candidate{acct("u-later", 0.43), acct("u-sooner", 0.93)}
 	o := opts()
 	o.Hover, o.Strategy = true, StrategyConsumeFirst
 
-	if got := Rank(pool, o).Mode; got != ModeHeadroom {
-		t.Errorf("Mode = %v, want %v: hover derives the thresholds the ranking runs on", got, ModeHeadroom)
+	res := Rank(pool, o)
+	if res.Mode != ModeHeadroom {
+		t.Errorf("Mode = %v, want %v: hover derives the thresholds the ranking runs on", res.Mode, ModeHeadroom)
+	}
+	for _, r := range res.Order {
+		if r.Headroom.Binding != usage.WindowFiveHour {
+			t.Fatalf("%s binds on %s, want five_hour: the override is only worth checking where the perishable window does not bind", r.UUID, r.Headroom.Binding)
+		}
+	}
+	eq(t, order(res), []string{"u-sooner", "u-later"})
+}
+
+// The pool size reaches the ORDER now, and not only the thresholds.
+//
+// 100/N cancels from every comparison, so under the flat share alone a pool of
+// two and a pool of four rank the same accounts the same way. The stranded half
+// does not cancel: N is what says how much of a week the rotation can absorb, so
+// the same account can strand quota in a small pool and none in a large one.
+// This is a real behaviour change and it is asserted rather than left to be
+// discovered.
+func TestThePoolSizeNowReachesTheOrderAndNotOnlyTheThresholds(t *testing.T) {
+	week := 7 * 24 * time.Hour
+	// A week 80% elapsed at 10% used: 90 points left and a fifth of the week to
+	// spend them in. One account absorbs 20, two absorb 40, five absorb 100.
+	s := &usage.Snapshot{
+		FiveHour: elapsedWindow(5*time.Hour, 0.20, 10),
+		SevenDay: elapsedWindow(week, 0.80, 10),
+	}
+	th := opts().Thresholds()
+
+	if _, stranded, _ := hoverStranded(s, "", th, 2, now); stranded != 50 {
+		t.Errorf("with two accounts stranded = %v, want 50: the pair reaches 40 of the 90 points left", stranded)
+	}
+	if _, stranded, _ := hoverStranded(s, "", th, 5, now); stranded != 0 {
+		t.Errorf("with five accounts stranded = %v, want 0: the rotation reaches all 90", stranded)
 	}
 }
 
@@ -514,11 +566,20 @@ func TestHoverOverridesTheConfiguredStrategy(t *testing.T) {
 // here -- and an infinite share would put every later threshold at the cap
 // through arithmetic rather than through the reason the cap exists.
 func TestHoverShareOfAnEmptyPoolIsTheWholeQuota(t *testing.T) {
-	if got := hoverShare(0); got != 100 {
+	if got := hoverShare(0, 0); got != 100 {
 		t.Errorf("hoverShare(0) = %v, want 100 -- with nobody to hand to, the honest share is everything", got)
 	}
-	if got := hoverShare(4); got != 25 {
+	if got := hoverShare(4, 0); got != 25 {
 		t.Errorf("hoverShare(4) = %v, want 25", got)
+	}
+	// The two halves are a MAXIMUM, pinned in both directions: stranded quota
+	// widens the slice when it is the larger claim, and an account already
+	// licensed to run 33 points ahead needs no second licence for 7.
+	if got := hoverShare(4, 63); got != 63 {
+		t.Errorf("hoverShare(4, 63) = %v, want 63 -- stranded quota widens the slice", got)
+	}
+	if got := hoverShare(2, 33); got != 50 {
+		t.Errorf("hoverShare(2, 33) = %v, want the wider pool slice of 50", got)
 	}
 }
 
