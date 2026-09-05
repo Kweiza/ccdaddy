@@ -338,6 +338,48 @@ func TestZeroAccountsRendersAnExplicitRowNotAnEmptyBox(t *testing.T) {
 	checkGolden(t, goldenZeroAccounts, got)
 }
 
+// A fleet nobody could read still has a quota block, and this page draws the
+// same one `ccdad status` does: ONE column headed QUOTA whose cells all say
+// "?".
+//
+// It is a page this dashboard did not draw before it read its columns from
+// internal/view. The ladder built the block out of the fleet's windows, so a
+// fleet with none had no quota column at all -- a table that reads as a build
+// with no quota feature rather than as a fleet nobody could read, and one whose
+// columns the two surfaces disagreed about at exactly the moment a reader is
+// asking why there are no numbers.
+//
+// No golden covers it, which is why it is asserted here. It is also the only
+// case that reaches the placeholder's INDEX: that column stands for no window,
+// so it indexes nothing, and the style function has to ask whether a window
+// column names a window before it looks one up.
+func TestAFleetWithNothingReadableStillDrawsOneQuotaColumn(t *testing.T) {
+	snap := fixtureSnapshot(fixtureReport(113, 26))
+	snap.Rows = []view.Row{{Account: store.Account{Email: "unread@example.com", Idx: 1}}}
+	m := newModel(snap, 113, 26, theme.Of(theme.None), UnicodeGlyphs)
+	m.Cursor = noCursor
+
+	lines := strings.Split(m.Body(), "\n")
+	head := -1
+	for i, l := range lines {
+		if strings.Contains(l, view.PlaceholderHeader) && strings.Contains(l, "ACCOUNT") {
+			head = i
+			break
+		}
+	}
+	if head < 0 || head+1 >= len(lines) {
+		t.Fatalf("no quota column over a row:\n%s", m.Body())
+	}
+	// The offset is the HEADER's, so this asks where the cell SITS rather than
+	// counting fields: the ACCOUNT cell holds an address and splitting the row
+	// on whitespace would answer about spaces instead of about columns.
+	at := strings.Index(lines[head], view.PlaceholderHeader)
+	if row := lines[head+1]; at >= len(row) || row[at] != '?' {
+		t.Errorf("nothing readable stands under %s at column %d of\n%s\n%s",
+			view.PlaceholderHeader, at, lines[head], row)
+	}
+}
+
 // A load that fails mid-session -- accounts.toml deleted, a contended lock --
 // keeps the numbers that were already on the page and says so. Emptying the
 // table would read as "you have no accounts", and keeping the numbers with no
@@ -1097,7 +1139,7 @@ func TestTheRunwayLineIsCutToTheFrameRatherThanWrappingIt(t *testing.T) {
 				footerWidth = w
 			}
 			want := planWithRows(testCols(), w, height, len(m.Snap.Rows), false, true,
-				len(m.footerLines(footerWidth)), len(m.runwayLines()), len(m.summaryLines(w))).Runway
+				len(m.footerLines(footerWidth)), len(m.runwayLines()), len(m.summaryLines(w)), 0).Runway
 			if got := strings.Contains(body, "Runway: "); got != want {
 				t.Errorf("at %dx%d the page draws a runway line: %v; the height ladder budgeted a row for one: %v:\n%s",
 					w, height, got, want, body)

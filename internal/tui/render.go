@@ -229,8 +229,14 @@ func (m Model) Body() string {
 		footerWidth = m.Width
 	}
 	footerRows := len(m.footerLines(footerWidth))
+	// The trailer under the table -- the legend, the unranked note, the credit
+	// lines -- is drawn by `ccdad status` and not yet by this page, so the
+	// ladder is told it costs no rows and every rung answers as it did before
+	// there was a trailer at all. The day the block is drawn, its length is the
+	// only thing that changes here.
+	const trailerRows = 0
 	l := planWithRows(m.Cols, m.Width, m.Height, rows,
-		len(m.Snap.Notices) > 0, len(runway) > 0, footerRows, len(runway), len(summary))
+		len(m.Snap.Notices) > 0, len(runway) > 0, footerRows, len(runway), len(summary), trailerRows)
 	if l.TooNarrow || l.TooShort {
 		return m.floors(l)
 	}
@@ -536,17 +542,14 @@ func (m Model) tableBlock(l Layout, inner int) []string {
 
 	headers := make([]string, len(cols))
 	for i, c := range cols {
-		headers[i] = headerName(c, m.Cols)
+		headers[i] = c.Header
 	}
 
 	data := make([][]string, 0, len(shown)+1)
-	for at, r := range shown {
+	for _, line := range shown {
 		cells := make([]string, len(cols))
 		for i, c := range cols {
-			// The row's own index in Snap.Rows, not its index in the window:
-			// the cursor is a position in the table and the window is a view
-			// onto it, and the two differ by Top the moment scrolling starts.
-			cells[i] = m.cell(c, r, l, m.Cols, m.Top+at)
+			cells[i] = m.cell(c, line, l)
 		}
 		data = append(data, cells)
 	}
@@ -598,11 +601,23 @@ func (m Model) tableBlock(l Layout, inner int) []string {
 // all, which left the empty-store line wearing the terminal's default
 // foreground in a table where everything around it is painted.
 //
-// The glyph set is passed through and only the third return is read. It is
-// taken rather than defaulted because stateCell is one function with one
-// signature and a second call site spelling its own vocabulary is exactly the
-// drift the set exists to remove -- even here, where the vocabulary cannot
-// reach the output.
+// The rows arrive as internal/view's ListRow, which is the type the table draws
+// and the type this indexes, so the integer this is handed and the integer that
+// produced the cell are the same integer by construction rather than by two
+// slices happening to be the same length.
+//
+// The window arm asks for a named window and not merely for a window column.
+// The quota block is never empty: a fleet where no visible row carries a
+// readable window still gets ONE column, headed QUOTA, whose cells all say "?"
+// -- and that column stands for no window at all, so there is nothing to look
+// up a utilization for and nothing to band. It takes the plain style, which is
+// what `ccdad status` paints it, and asking for its window would be an index
+// into an empty slice.
+//
+// The glyph set is passed through and only the role is read. It is taken rather
+// than defaulted because stateCell is one function with one signature and a
+// second call site spelling its own vocabulary is exactly the drift the set
+// exists to remove -- even here, where the vocabulary cannot reach the output.
 //
 // The style is built from the palette on every call and never cached. Palette
 // stores colours, so Style hands back a fresh lipgloss.Style each time and the
@@ -615,7 +630,7 @@ func (m Model) tableBlock(l Layout, inner int) []string {
 // column carries the standard two, and the last carries none, so the table's
 // natural width is where the frame's padding starts rather than a column of
 // trailing space the frame then pads again.
-func cellStyle(g Glyphs, pal theme.Palette, shown []view.Row, cols []Column,
+func cellStyle(g Glyphs, pal theme.Palette, shown []view.ListRow, cols []view.ListColumn,
 	block view.Columns, row, col, last int) lipgloss.Style {
 
 	st := lipgloss.NewStyle()
@@ -624,10 +639,10 @@ func cellStyle(g Glyphs, pal theme.Palette, shown []view.Row, cols []Column,
 		st = pal.Style(theme.RoleHeader)
 	case row >= len(shown):
 		st = pal.Style(theme.RoleMuted)
-	case cols[col].Kind == ColState:
-		_, _, role := stateCell(g, shown[row].Engine.State)
+	case cols[col].Kind == view.ColumnState:
+		_, role := stateCell(g, shown[row].Row.Engine.State)
 		st = pal.Style(role)
-	case cols[col].Kind == ColWindow:
+	case cols[col].Kind == view.ColumnWindow && cols[col].Index >= 0:
 		// The row of percentages IS the gauge, read across, and this is what
 		// makes it one: each cell is coloured for its own window, against the
 		// threshold that window was measured with.
@@ -641,7 +656,7 @@ func cellStyle(g Glyphs, pal theme.Palette, shown []view.Row, cols []Column,
 		// difference is the STATE column beside it: colour is never the only
 		// thing carrying a distinction, and on this page the account's verdict
 		// has a word of its own. Neither CLI table has one at any width.
-		st = pal.Style(cellRole(shown[row], block.Windows[cols[col].Win].Name))
+		st = pal.Style(cellRole(shown[row].Row, block.Windows[cols[col].Index].Name))
 	}
 	switch col {
 	case last:
@@ -668,8 +683,8 @@ func cellStyle(g Glyphs, pal theme.Palette, shown []view.Row, cols []Column,
 // dashboard — and j/k, which the count advertises, would have nothing to move
 // through. The cost is real and is stated rather than hidden: at exactly three
 // rows there is nowhere left to say that more exist.
-func (m Model) window(l Layout) (rows []view.Row, more int) {
-	all := m.Snap.Rows
+func (m Model) window(l Layout) (rows []view.ListRow, more int) {
+	all := displayRows(m.Snap.Rows)
 	if l.VisibleRows >= len(all) {
 		return all, 0
 	}
@@ -695,100 +710,101 @@ func (m Model) window(l Layout) (rows []view.Row, more int) {
 	return all[top : top+n], len(all) - n
 }
 
+// displayRows is the list of lines the table draws, which is exactly the
+// account rows: one display line per account, each remembering the index it
+// came from.
+//
+// It is a function rather than a slice built in place because that index has to
+// survive whatever the list becomes. The cursor, the switch key and the marker
+// column all name an account by its position in Snap.Rows, and a display
+// position stops being that position the moment the list carries anything other
+// than accounts -- so every caller here reads ListRow.At and none of them counts
+// its way down the window.
+func displayRows(rows []view.Row) []view.ListRow {
+	out := make([]view.ListRow, 0, len(rows))
+	for i, r := range rows {
+		out = append(out, view.ListRow{Row: r, At: i})
+	}
+	return out
+}
+
 // markerRow is a table row that is not an account: the empty-store line, or
 // the count of the rows scrolling took away. It carries its text in the
 // ACCOUNT column, padded exactly as an account label is, so the column keeps
 // the width the layout gave it. Every other cell is empty rather than a dash —
 // a dash in these tables means "there is a value here and it could not be
 // read", and there is no account here at all.
-func (m Model) markerRow(cols []Column, l Layout, text string) []string {
+func (m Model) markerRow(cols []view.ListColumn, l Layout, text string) []string {
 	cells := make([]string, len(cols))
 	for i, c := range cols {
-		if c.Kind == ColAccount {
+		if c.Kind == view.ColumnAccount {
 			cells[i] = accountCell(text, l.AccountWide, m.Glyphs.Cue)
 		}
 	}
 	return cells
 }
 
-// cell is one field of one row. Every cell this package draws comes from
-// exactly one of these, and each of those is one line over a view.Row method,
-// so no percentage, span or absence is spelled twice in this binary.
+// cell is one field of one row: internal/view's answer, plus the three
+// decorations this page owns and nothing else.
 //
-// ACCOUNT is the address-and-handle form `ccdad status` also uses. This is the
-// column a user reads immediately before pressing a hotkey that can move a
-// credential, and an alias-only label leaves someone who has aliased two
-// accounts unable to tell which address is which.
-func (m Model) cell(c Column, r view.Row, l Layout, cols view.Columns, at int) string {
+// The switch used to be this package's own -- ten arms, each one line over a
+// view.Row method through a wrapper of its own in cells.go -- and that is what
+// it stopped being. A cell is what a column SAYS, which is the same sentence on
+// every surface that draws an account list; what a terminal adds to it is a
+// fact about the terminal. So the answer comes from one function, the wrappers
+// that could only ever have disagreed with it are gone, and the three additions
+// are argued here:
+//
+//   - IDX. The shared cell leads with Row.Marker, which answers "which login
+//     would a session get". A page with a CURSOR draws its own glyph in that
+//     position on the row the cursor is on -- and only in that position, so the
+//     index after it is still the shared cell's.
+//   - ACCOUNT. The shared cell is the whole address-and-handle label, uncut and
+//     unpadded, because what it is cut to is a column width and a column width
+//     comes off a terminal. This is the column a user reads immediately before
+//     pressing a hotkey that can move a credential, and an alias-only label
+//     leaves someone who has aliased two accounts unable to tell which address
+//     is which.
+//   - STATE. The shared cell is the word; the glyph in front of it is redundant
+//     emphasis, and which glyph set a console can carry is the machine fact
+//     internal/view never reads.
+//
+// The hover form is not drawn here and the false says so. `ccdad status`
+// renders each quota cell as used against the threshold the row was measured
+// with when the fleet is under hover; this page has always drawn the bare
+// percentage, and it is the row of percentages that IS the gauge, read across
+// and banded by cellStyle. Passing Snap.Hover through would change every quota
+// cell on a hover machine, which is a change to the page rather than to where
+// the page reads its cells from.
+func (m Model) cell(c view.ListColumn, line view.ListRow, l Layout) string {
+	text := line.Row.ListCell(c, m.Cols, m.Snap.Now, false)
 	switch c.Kind {
-	case ColIdx:
-		return m.markerCell(r, at) + " " + idxCell(r)
-	case ColAccount:
-		return accountCell(r.ListLabel(), l.AccountWide, m.Glyphs.Cue)
-	case ColType:
-		return typeCell(r)
-	case ColWindow:
-		return r.WindowCell(cols.Windows[c.Win].Name)
-	case ColReset:
-		return r.ResetCell(cols.Resets[c.Win], m.Snap.Now)
-	case ColWorst:
-		// The whole block in one cell, for a terminal too narrow to carry it.
-		// It names the window as well as the number, because a percentage with
-		// no window beside it is the thing this table stopped doing.
-		return worstCell(r, cols)
-	case ColState:
-		glyph, text, _ := stateCell(m.Glyphs, r.Engine.State)
-		if glyph == "" {
-			return text
+	case view.ColumnIdx:
+		return m.markerCell(line) + strings.TrimPrefix(text, line.Row.Marker())
+	case view.ColumnAccount:
+		return accountCell(text, l.AccountWide, m.Glyphs.Cue)
+	case view.ColumnState:
+		if glyph, _ := stateCell(m.Glyphs, line.Row.Engine.State); glyph != "" {
+			return glyph + " " + text
 		}
-		return glyph + " " + text
-	case ColAuto:
-		return autoCell(r)
-	case ColTier:
-		return tierCell(r)
-	case ColAge:
-		return r.AgeLabel(m.Snap.Now)
 	}
-	return ""
+	return text
 }
 
 // markerCell is the one column in front of the index: the live account, the
 // row the cursor is on, or neither.
 //
+// The row is asked where it came FROM rather than where it is drawn, which is
+// what ListRow.At is for: Cursor indexes Snap.Rows, and a display position stops
+// naming the same account as soon as the list holds anything a store never had.
+//
 // See noCursor above for why the live account wins where they meet, and why a
 // page nobody is pointing at draws no cursor at all.
-func (m Model) markerCell(r view.Row, at int) string {
-	if !r.Active && at == m.Cursor {
+func (m Model) markerCell(line view.ListRow) string {
+	if !line.Row.Active && line.At == m.Cursor {
 		return m.Glyphs.Cursor
 	}
-	return r.Marker()
-}
-
-// headerName is the heading each dashboard column carries.
-func headerName(c Column, cols view.Columns) string {
-	switch c.Kind {
-	case ColIdx:
-		return "IDX"
-	case ColAccount:
-		return "ACCOUNT"
-	case ColType:
-		return "TYPE"
-	case ColTier:
-		return "TIER"
-	case ColWindow:
-		return cols.Windows[c.Win].Header
-	case ColReset:
-		return cols.Resets[c.Win].Header
-	case ColWorst:
-		return "WORST"
-	case ColState:
-		return "STATE"
-	case ColAuto:
-		return "AUTO"
-	case ColAge:
-		return "AGE"
-	}
-	return ""
+	return line.Row.Marker()
 }
 
 func truncateCue(s string, width int, cue string) string {

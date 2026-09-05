@@ -207,9 +207,10 @@ func (d daemonScreen) lastDecision() []string {
 	return append(out, "  last switch "+d.ago(s.LastSwitchAt)+", to "+d.label(s.LastSwitchTo))
 }
 
-// pollSchedule is one line per account the daemon published, reusing the same
-// state cell the main table draws so the two can never disagree about what a
-// state is called.
+// pollSchedule is one line per account the daemon published, drawing the state
+// exactly as the main table does: internal/view's word for it, with this page's
+// glyph in front. Neither surface holds a word of its own, so the two cannot
+// disagree about what a state is called.
 //
 // It is the only place slack, threshold and the binding window appear, and
 // they appear together or not at all. All three come from ONE Headroom and
@@ -231,10 +232,10 @@ func (d daemonScreen) pollSchedule() []string {
 	cols := make([][4]string, len(accounts))
 	var wide [4]int
 	for i, a := range accounts {
-		glyph, text, role := stateCell(d.Glyphs, a.State)
-		state := text
+		glyph, role := stateCell(d.Glyphs, a.State)
+		state := view.StateLabel(a.State)
 		if glyph != "" {
-			state = glyph + " " + text
+			state = glyph + " " + state
 		}
 		// Painted here, BEFORE the width is taken. Every measurement in this
 		// block is ansi.StringWidth already, so the escape bytes cost the column
