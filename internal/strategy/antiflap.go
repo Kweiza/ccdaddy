@@ -195,6 +195,17 @@ const (
 	// was appended last: the numbers are named in a report and a notification,
 	// and renumbering them is a diff nobody can review.
 	ReasonManual
+	// ReasonNothingCanServe: the live account is out of quota and so is every
+	// account it could move to, so the move buys the session nothing and costs a
+	// credential rotation. Appended last, for the reason the two above were.
+	//
+	// It is NOT ReasonAllExhausted. That one is about the pool the ranking was
+	// given -- every account spent against its THRESHOLD, with no credit pool
+	// behind it -- and it is answered before a target is ever chosen. This one
+	// is about the pair in hand: a target was ranked first and it has nothing in
+	// it either. Plan.RetryAt carries the soonest rollover, because that is the
+	// instant the answer can change.
+	ReasonNothingCanServe
 )
 
 func (r Reason) String() string {
@@ -227,6 +238,8 @@ func (r Reason) String() string {
 		return "the live account is projected to hit its limit before the next reading"
 	case ReasonManual:
 		return "manual mode is on, so ccdad watches and never switches"
+	case ReasonNothingCanServe:
+		return "no account has quota left to serve a session"
 	}
 	return "unknown"
 }
@@ -425,7 +438,16 @@ func Decide(cands []Candidate, o Options, cfg Config, st *State, activeUUID stri
 		best := res.Order[0]
 		if !isActive(best.UUID, activeUUID) {
 			if reason, blocked, retry := gate(res, best, activeUUID, cfg, st, o.Now); blocked {
+				// Every margin refusal is ActionStay: the engine compared two
+				// accounts and preferred the one it is on. ReasonNothingCanServe
+				// is not that. It is "wanted to move and there was nowhere",
+				// which is the sentence ActionBlocked exists for and the one
+				// `ccdad auto --once` exits 4 on -- the exit a user alerts on,
+				// because their session is the thing about to stop.
 				plan.Action = ActionStay
+				if reason == ReasonNothingCanServe {
+					plan.Action = ActionBlocked
+				}
 				plan.Reason = reason
 				if !retry.IsZero() {
 					plan.RetryAt, plan.HasRetryAt = retry, true
@@ -470,6 +492,13 @@ func Decide(cands []Candidate, o Options, cfg Config, st *State, activeUUID stri
 	if len(res.Credit) == 0 {
 		plan.Action = ActionBlocked
 		plan.Reason = ReasonAllExhausted
+		// When it lifts, on the same terms ReasonNothingCanServe answers it:
+		// this is the same fleet in the same state, reached by the other door --
+		// the live account was already ranked first, so no gate ran. A blocked
+		// answer that cannot say when it ends reads as permanent.
+		if at := soonestRollover(res); !at.IsZero() {
+			plan.RetryAt, plan.HasRetryAt = at, true
+		}
 		return plan
 	}
 
@@ -569,7 +598,26 @@ func gate(res Result, target Ranked, activeUUID string, cfg Config, st *State, n
 	//
 	// The cooldown is deliberately still in force: it ran above, and a switch
 	// storm is a different failure that nothing here bounds.
+	//
+	// The waiver asks about the TARGET as well, and that half is not symmetry
+	// for its own sake. "Staying costs the user the session" is only true where
+	// moving does not cost them the same session: a target with nothing in it
+	// either ends the session exactly where the live account would, one
+	// credential rotation later. Measured on 2026-09-05: eighteen switches
+	// between two accounts in two and a half hours, every one of them logged
+	// with used=100.0 on the target, spaced HoverCooldown plus one tick apart --
+	// because this waiver fired on every tick and every margin below it was
+	// skipped. The 0.10.0 fix narrowed WHO reads as empty; this narrows what the
+	// waiver is a licence to DO.
+	//
+	// Unreadable is not empty, and OutOfQuota is three-valued so that this line
+	// can say so. A candidate nobody could read is a maybe worth trying -- the
+	// same answer preemptTarget gives it -- and folding it into "empty" would
+	// strand a session on a spent account every time a poll failed.
 	if empty, known := OutOfQuota(active.Headroom); known && empty {
+		if spent, known := OutOfQuota(target.Headroom); known && spent {
+			return ReasonNothingCanServe, true, soonestRollover(res)
+		}
 		return ReasonBetterTarget, false, time.Time{}
 	}
 
@@ -634,6 +682,28 @@ func gate(res Result, target Ranked, activeUUID string, cfg Config, st *State, n
 // quarantined — waiting is not caution, it is downtime, and it cannot storm:
 // every move lands on an account that is eligible and not quarantined, so the
 // next evaluation has a baseline again and the cooldown is back in force.
+// soonestRollover is the first instant any ranked account's binding window
+// comes back, which is when "nothing can serve" stops being true.
+//
+// It reads Ranked.RecoversAt rather than the snapshots, because that is the
+// instant the ranking itself computed for the window that is holding each
+// account back -- so the retry cannot name a rollover the engine was not
+// measuring. An account that named no rollover contributes nothing, and a pool
+// where none did leaves the zero time: a refusal with no knowable end says so
+// rather than inventing one.
+func soonestRollover(res Result) time.Time {
+	var out time.Time
+	for _, r := range res.Order {
+		if !r.HasRecovery {
+			continue
+		}
+		if out.IsZero() || r.RecoversAt.Before(out) {
+			out = r.RecoversAt
+		}
+	}
+	return out
+}
+
 func cooldownGate(res Result, activeUUID string, cfg Config, st *State, now time.Time) (Reason, bool, time.Time) {
 	if _, hasBaseline := find(res, activeUUID); !hasBaseline {
 		return ReasonBetterTarget, false, time.Time{}
