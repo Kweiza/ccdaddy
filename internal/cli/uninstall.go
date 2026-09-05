@@ -555,6 +555,24 @@ func enumerate(out io.Writer, s storeInspection, exe string, exeErr error, owner
 				"will lose its login.\n", n, filepath.Join(s.root, SessionsDirName))
 		}
 	}
+	// The codex shim, keyed on the RECORD and never on the script. The record is
+	// what says this machine wants <CCDAD_HOME>/bin on PATH -- setup-path's
+	// derived directory set reads it and nothing else -- and a script somebody
+	// deleted by hand is something they have already said something about, so
+	// keying on the file would go silent on exactly the machine whose record and
+	// PATH entry are still there and still about to be removed.
+	//
+	// The removal itself needs nothing: "bin" and "codex-shim.json" are store
+	// markers, os.RemoveAll takes both, and unregisterPath takes the whole
+	// fenced block. What is owed is the SENTENCE. `ccdad add codex` installs the
+	// shim without being asked, so a user can have a file called `codex` ahead
+	// of the real one on their PATH having never typed `ccdad codex shim
+	// install` -- and this list is the only place they are told it exists, at
+	// the moment it goes.
+	if _, ok := shimRecord(); ok {
+		fmt.Fprintf(out, "It will also remove the codex shim at %s; a bare `codex` then runs the real "+
+			"codex directly instead of through ccdad.\n", shimPath())
+	}
 	if dir, present := credentialHomeResidue(); present {
 		fmt.Fprintf(out, "ccdad's claim files in %s will be LEFT in place; see the note after the removal.\n", dir)
 	}
