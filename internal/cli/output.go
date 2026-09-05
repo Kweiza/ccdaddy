@@ -79,10 +79,18 @@ func writeJSON(cmd *cobra.Command, payload any) error {
 // uuid leads because it is the key; idx is included for display but `ccdad
 // --help` states, in its stability contract, that it is an ordinal rather than
 // a key — and no payload is ever keyed on it.
+//
+// idx keeps its type and its name and is now scoped to the provider, so a
+// consumer reading it alone reads a number that repeats across the payload. ref
+// is published beside it rather than instead of it: the two together are what a
+// consumer needs to reproduce a row of any ccdad table, and replacing idx with
+// a string would break every reader that formats it as a number for a reason
+// that has nothing to do with them.
 func accountJSON(a store.Account) map[string]any {
 	out := map[string]any{
 		"uuid":  a.UUID,
 		"idx":   a.Idx,
+		"ref":   a.Ref(),
 		"email": a.Email,
 		"kind":  a.Kind.String(),
 		// Unconditional, unlike the four optional keys below it. A consumer

@@ -2,9 +2,10 @@
 //
 // Identity has four axes and three roles. uuid is the durable primary key: it
 // survives an email change and a reordering, and it is what --json and exports
-// carry. idx is a display ordinal for typing and for TUI hotkeys. email is the
-// human label and may legitimately repeat across organizations. alias is an
-// optional user handle.
+// carry. idx is a display ordinal for typing and for TUI hotkeys, numbered
+// within a provider and therefore not unique on its own -- Account.Ref is the
+// spelling that names exactly one account. email is the human label and may
+// legitimately repeat across organizations. alias is an optional user handle.
 //
 // idx is deliberately NOT a key. cswap keys its slots by number and has to move
 // backups, aliases and session directories every time two accounts swap places;
@@ -12,11 +13,43 @@
 package store
 
 import (
+	"strconv"
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/provider"
 )
+
+// ClaudePrefix and CodexPrefix scope a display ordinal to its provider.
+//
+// One character each, so a reference stays as short to type as the bare number
+// it replaces. Codex takes 'x' rather than the initial it shares with nothing:
+// 'c' is already Claude's, and a prefix that has to be looked up is a prefix
+// nobody types.
+//
+// They are lowercase because that is what a user types, and ValidateAlias
+// refuses an alias of this shape for the same reason it refuses an all-digit
+// one -- two axes that spell the same token must not name two accounts.
+const (
+	ClaudePrefix = "c"
+	CodexPrefix  = "x"
+)
+
+// ProviderPrefix is the ordinal prefix for a provider, and "" for a provider
+// this build does not know. The empty answer is never a reference: Ref on a
+// zero-provider account would spell a bare number, which is exactly the
+// ambiguous form the prefix exists to replace, so callers holding an account
+// off the store -- where load has already refused an unparseable provider --
+// are the only ones that may print it.
+func ProviderPrefix(p provider.ID) string {
+	switch p {
+	case provider.Claude:
+		return ClaudePrefix
+	case provider.Codex:
+		return CodexPrefix
+	}
+	return ""
+}
 
 // Account is one managed Claude Code account.
 type Account struct {
@@ -29,8 +62,21 @@ type Account struct {
 	// Alias is an optional short handle, unique across accounts. Stored in its
 	// normalized form; see NormalizeAlias.
 	Alias string `toml:"alias,omitempty"`
-	// Idx is the 1-based display ordinal. Stored rather than derived so it is
-	// stable across restarts.
+	// Idx is the 1-based display ordinal WITHIN this account's provider: a
+	// fleet of three Claude seats and two Codex ones numbers them 1-3 and 1-2,
+	// not 1-5. Stored rather than derived so it is stable across restarts.
+	//
+	// It is therefore NOT unique across the store. It became per-provider
+	// because the account list is drawn in provider sections and a store-wide
+	// ordinal interleaves them -- the CLAUDE half numbered 1, 3, 4 and the
+	// CODEX half 2, 5 on the same fleet -- which reads as a table that has lost
+	// rows, and which made the dashboard cursor jump between the two halves on
+	// every keypress because it stepped through the store's order and not the
+	// page's.
+	//
+	// Nothing may look an account up by this alone. Resolve answers a bare
+	// number only while exactly one provider claims it, and Ref is the form
+	// that always names one account.
 	Idx int `toml:"idx"`
 	// Kind is how the account is metered. Callers set this one.
 	Kind identity.Kind `toml:"-"`
@@ -179,6 +225,19 @@ type CreditBalance struct {
 	// time means no reading ever has been.
 	ObservedAt time.Time `toml:"observed_at,omitempty"`
 }
+
+// Ref is the display ordinal in the spelling that names exactly one account:
+// the provider's prefix and the per-provider number, e.g. "c2" or "x1".
+//
+// Every surface that prints an ordinal OUTSIDE a table grouped by provider
+// prints this one, and Resolve accepts it. Inside a grouped table the section
+// heading IS the prefix, so the bare number under it is already unambiguous and
+// printing the letter twice would only make the column wider.
+//
+// It is deliberately typeable rather than pretty: what a table prints is what
+// the next command takes, so a user reading a row can act on it without
+// translating anything.
+func (a Account) Ref() string { return ProviderPrefix(a.Provider) + strconv.Itoa(a.Idx) }
 
 // Label is the account's best human name: the alias when it has one, else the
 // email, else a short uuid.

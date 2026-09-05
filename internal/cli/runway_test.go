@@ -239,8 +239,11 @@ func TestRunwayRendersTheMeasuredFleet(t *testing.T) {
 		// to the 4.0 pp/h on the 7-day row above them, which is the column's
 		// whole point. The label, not the uuid — the forecast knows nothing but
 		// uuids, so a renderer that skipped the lookup would print one.
-		"1 a@example.com seven_day 52 2.0 pp/h ",
-		"2 b@example.com seven_day 52 2.0 pp/h ",
+		// The IDX cell is the REFERENCE here and a bare number in the account
+		// tables. This table is one flat list over both providers, so a
+		// per-provider number in it would name two accounts.
+		"c1 a@example.com seven_day 52 2.0 pp/h ",
+		"c2 b@example.com seven_day 52 2.0 pp/h ",
 	} {
 		if !hasRow(rows, want) {
 			t.Errorf("no row %q in:\n%s", want, out)

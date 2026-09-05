@@ -58,6 +58,11 @@ type simWindow struct {
 // breaks ties in the choice of live account: two accounts with identical room
 // must be picked in the same order on every run, or six runs of one fleet
 // disagree about a fleet that never changed.
+//
+// Idx alone stopped being enough to break them. It is numbered per provider, so
+// a Claude seat and a Codex one routinely carry the same number, and the uuid
+// beside it is what finishes the order -- unique by definition, and the one
+// field on this struct that cannot repeat.
 type simAccount struct {
 	uuid    string
 	idx     int
@@ -274,7 +279,7 @@ func catchUpResets(state []simAccount, now time.Time) {
 }
 
 // chooseLive picks the account that takes the work: the usable one with the
-// most room, ties broken by ascending Idx.
+// most room, ties broken by ascending Idx and then by uuid.
 //
 // Ranking on room is close to what strategy.Rank does and deliberately does not
 // import it. The choice barely moves the weekly answer -- total weekly capacity
@@ -290,11 +295,25 @@ func chooseLive(state []simAccount) (int, bool) {
 			continue
 		}
 		room := a.minRoom()
-		if !found || room > bestRoom || (room == bestRoom && a.idx < state[best].idx) {
+		if !found || room > bestRoom || (room == bestRoom && a.before(state[best])) {
 			best, bestRoom, found = i, room, true
 		}
 	}
 	return best, found
+}
+
+// before is the total order two accounts with equal room are picked in: the
+// lower Idx, and the lower uuid when they share one.
+//
+// It is TOTAL rather than a comparison that can come out equal, and that is the
+// property the determinism rests on. Falling back to slice position would be
+// stable too, but only for as long as every caller reached this through a
+// stable sort -- and chooseLive is a scan and not a sort.
+func (a simAccount) before(b simAccount) bool {
+	if a.idx != b.idx {
+		return a.idx < b.idx
+	}
+	return a.uuid < b.uuid
 }
 
 // nextEvent is the interval to the next thing that changes the fleet: the live
