@@ -21,8 +21,10 @@ func NewRootCmd() *cobra.Command {
 		Short: "Claude Code Daemon: Always Drilling Don't Yap",
 		Long: "ccdad manages multiple Claude Code accounts and switches between them\n" +
 			"before a rate limit stops you.\n\n" +
-			"Stability contract: idx is a display ordinal, not a key. It is recompacted\n" +
-			"when an account is removed. Scripts must reference accounts by uuid or alias.",
+			"Stability contract: idx is a display ordinal, not a key. It is numbered per\n" +
+			"provider — c1, c2 for Claude and x1, x2 for Codex — and recompacted when an\n" +
+			"account is removed. A bare number is refused when both providers carry one.\n" +
+			"Scripts must reference accounts by uuid or alias.",
 		Version:       buildinfo.String(),
 		SilenceUsage:  true,
 		SilenceErrors: true,

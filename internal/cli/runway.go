@@ -415,9 +415,14 @@ func renderRunway(cmd *cobra.Command, f forecast.Fleet, accounts []store.Account
 		// dropping it would leave the rows above and below it claiming to sum
 		// to a fleet figure that counted it.
 		a, known := labels[r.UUID]
+		// The REFERENCE and not the bare index. This table is one flat list
+		// over the whole fleet -- it is not grouped by provider the way the
+		// account tables are -- so a per-provider number in it would appear
+		// twice against two different accounts with nothing on the row to tell
+		// them apart.
 		idx, label := "?", r.UUID
 		if known {
-			idx, label = fmt.Sprintf("%d", a.Idx), a.Label()
+			idx, label = a.Ref(), a.Label()
 		}
 		window, left, burn := view.RunwayRowCells(r)
 		// The two leading spaces are part of the IDX cell, exactly as they were

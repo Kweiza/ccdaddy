@@ -228,10 +228,16 @@ func newMoveCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "move <ACCOUNT> <POSITION>",
 		Short: "Put an account at a display position",
-		Long: "Put an account at a 1-based display position and renumber the rest.\n\n" +
-			"A position past the end means last. Every account between the old and new\n" +
-			"position changes number: idx is a display ordinal, not a key, so scripts must\n" +
-			"reference accounts by uuid or alias.",
+		Long: "Put an account at a 1-based display position within its own provider and\n" +
+			"renumber that provider's rest.\n\n" +
+			"The position counts the account's own provider only, because that is what the\n" +
+			"index numbers: 'ccdad move x2 1' puts the second Codex account at the top of\n" +
+			"the CODEX section and moves no Claude account. A position past that provider's\n" +
+			"last account means last, and no position moves an account to the other\n" +
+			"provider.\n\n" +
+			"Every account between the old and new position changes number: idx is a\n" +
+			"display ordinal, not a key, so scripts must reference accounts by uuid or\n" +
+			"alias.",
 		Args:          usageArgs(cobra.ExactArgs(2)),
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -259,7 +265,7 @@ func newMoveCmd() *cobra.Command {
 				return err
 			}
 			if !moved {
-				fmt.Fprintf(cmd.ErrOrStderr(), "%s is already at %d.\n", target.Label(), target.Idx)
+				fmt.Fprintf(cmd.ErrOrStderr(), "%s is already at %s.\n", target.Label(), target.Ref())
 				return WithCode(errSilent, ExitNothingToDo)
 			}
 
@@ -267,7 +273,7 @@ func newMoveCmd() *cobra.Command {
 			// number past the end clamped, and saying "moved to 99" would be a
 			// lie the very first time someone used it that way.
 			landed, _ := s.Get(target.UUID)
-			fmt.Fprintf(cmd.ErrOrStderr(), "%s is now at %d.\n", target.Label(), landed.Idx)
+			fmt.Fprintf(cmd.ErrOrStderr(), "%s is now at %s.\n", target.Label(), landed.Ref())
 			return nil
 		},
 	}
