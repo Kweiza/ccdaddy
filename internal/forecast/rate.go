@@ -9,6 +9,23 @@
 // No strategy.Thresholds value may enter this package. Hover rewrites
 // thresholds every tick, and a forecast that moved because a ranking moved
 // would report a change in the fleet that never happened.
+//
+// That rule is now checked rather than only written down, in both directions:
+// TestTheForecastDoesNotImportTheEngine here, and
+// TestTheEngineDoesNotImportTheForecast in internal/strategy. Each half is asked
+// from inside the package whose own sources decide it, because `go list -deps`
+// runs in a subprocess and its answer is cached against the asking binary's
+// inputs -- a half asked from the other side stays green through the very edit
+// it exists to catch.
+//
+// The separation costs something real and it is worth naming so nobody
+// rediscovers it as a bug. The fleet answer this package computes is invariant
+// under routing: replacing the simulation's live-account rule with its inverse,
+// and then with a fixed account, moved AccountsNeeded, NeededBy, PointsLeft and
+// every verdict by nothing at all. So the engine could not use this measurement
+// to route better even if it could see it. What routing does move is
+// perishability -- quota that expires before anyone reaches it -- and that is
+// derived inside the engine, from each account's own reading, by hoverStranded.
 package forecast
 
 import (

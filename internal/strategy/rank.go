@@ -268,6 +268,23 @@ type Ranked struct {
 	// key and is reported so `ccdad status` can explain that order rather than
 	// only obey it.
 	CreditRoom float64
+	// HoverShare is the share this account's thresholds were derived with, and
+	// Stranded the quota its rotation cannot reach before StrandedWindow
+	// resets. All three are zero when hover is off.
+	//
+	// REPORTING ONLY. No comparator reads them, and none may: the ordering
+	// already carries the figure, because Headroom.Threshold was derived WITH
+	// HoverShare and Headroom.Slack is measured against it. Reading them here
+	// as well would count the same licence twice.
+	//
+	// They are carried because the consumers that print the ranking never see
+	// the pass it came from -- `ccdad auto --json` renders a []Ranked and holds
+	// no HoverPlan -- and a table that printed a threshold whose second term is
+	// no longer 100/usable, without saying what that term was, would be
+	// arithmetic a reader cannot close.
+	HoverShare     float64
+	Stranded       float64
+	StrandedWindow usage.WindowName
 	// HasCreditRoom is whether there is any. False covers every refusal the
 	// gate would make — no ceiling configured, overage switched off, spend
 	// unreadable, the armed cap spent — so it is not a claim that the account
@@ -518,14 +535,31 @@ func measure(c Candidate, o Options) Ranked {
 	// per account, and it is the same call below so the two window sets this
 	// function reads cannot be built from different tables.
 	h := HeadroomFor(c.Usage, o.Model, o.thresholdsFor(c))
-	// A primary seat is metered in credits rather than in plan windows, so it
-	// is ranked on the credit allowance instead. This is a reassignment rather
-	// than a second opinion: such a seat carries no plan windows, so the line
-	// above found nothing for it and everything below still works off h --
-	// recoveryOf looks for a window named extra_usage and finds none, so it
-	// answers "no recovery", which is true of a credit allowance, and
-	// weeklyResetOf ranges over an account carrying no plan windows at all and
-	// answers the same way.
+	// A primary seat is metered in credits rather than in plan windows, so it is
+	// ranked on the credit allowance instead. This REPLACES the plan headroom
+	// above rather than being compared with it, and that is a real choice with a
+	// real cost, not the no-op the comment here used to claim.
+	//
+	// What it used to claim was that such a seat carries no plan windows, so the
+	// line above found nothing for it. That is false. identity.Classify files an
+	// account KindCredit off Snapshot.HasSubscriptionWindows, which iterates
+	// RateLimitWindows -- the fixed five and the two codex keys, and nothing
+	// else -- so a weekly cap that arrived in limits[] is invisible to it. A
+	// seat with no fixed windows, extra_usage enabled and a real scoped weekly
+	// is both a credit seat AND an account carrying quota, and HeadroomFor
+	// answers Known for it.
+	//
+	// So this line can discard a measured plan headroom. Measured: a seat whose
+	// opted-in weekly is 99.9% used reports plan slack near -50 and is ranked
+	// here on a credit allowance of 85, which puts it FIRST. The pre-emptive
+	// switch no longer walks onto such a seat -- it reads the derived table now,
+	// and the seat derives one -- but the ORDINARY better-target rule still can.
+	//
+	// Taking the minimum of the two instead is the obvious repair and it is not
+	// made here, because it would move Spent for a credit seat, and Spent feeds
+	// MainPoolExhausted, which is the one decision in ccdad that spends the
+	// user's money. That needs its own investigation and its own release rather
+	// than a line in this one.
 	if primaryCredit(c) {
 		h = creditHeadroom(c, o)
 	}
@@ -553,6 +587,13 @@ func measure(c Candidate, o Options) Ranked {
 	// horizon. Treating "no answer" as "back immediately" would put the least
 	// knowable account at the front of the queue.
 	r.ReturnsInsideHorizon = rec.ok && !rec.at.After(o.Now.Add(o.horizon()))
+	// The derivation's own figures, copied for the renderers. Nothing below
+	// reads them; see the fields' own doc.
+	if o.hover != nil {
+		if a, ok := o.hover.AccountFor(c.UUID); ok {
+			r.HoverShare, r.Stranded, r.StrandedWindow = a.Share, a.Stranded, a.Window
+		}
+	}
 	return r
 }
 

@@ -103,6 +103,165 @@ by `uuid` or `alias`.
   heading, one crossing the boundary pays for two. Pinned by
   `TestScrollingKeepsTheCursorsAccountOnThePage`.
 
+## [0.17.0] — 2026-09-05
+
+The release that stops `hover` measuring a clock. The licence a perishable week
+earns was capped by the room left in whichever window had the least — the
+five-hour window in every case where the cap bound — so a deadline hours away was
+cancelled by a figure that reset in minutes, in a different unit. The premise
+behind the cap was that a licence is a claim on the next session; ccdad hands
+out no session and moves mid-session, so what the ranking protects is live
+utilization, and the two mechanisms that already read it are left to do so.
+
+### Fixed
+
+- **`hover` no longer deletes a perishable week's licence because a five-hour
+  window is nearly full.** The widening was capped by the least room in any
+  window a model choice cannot dodge, read at the instant of the poll — the
+  five-hour window's room in every case where the cap bound, so a week's
+  licence was bounded by a window that rolls over 33.6 times inside it, and by
+  a figure in a different unit. Measured on the fleet of 2026-09-05: an account
+  holding 61 points of a week six hours from its reset priced 38.5 stranded,
+  was clamped to the 9 points its five-hour window had left half an hour before
+  that window reset, and 9 is under the pool slice of 16.67 — so the widening
+  vanished, the account ranked last of six, and the same account, unchanged,
+  priced 38.5 half an hour later.
+
+  The cap is gone. The premise behind it was that a licence is a claim on the
+  next session; ccdad hands out no session and moves mid-session after
+  `HoverCooldown`, so what the ranking has to protect is live utilization, and
+  the empty tier and the pre-emptive switch already do. What stays is a floor:
+  an account holding less than one cooldown of work on such a window — 0.667
+  points of a five-hour window, 0.0198 of a week, two minutes of either — gets
+  no widening, because a switch onto it would spend two minutes buying seconds.
+  An account with nothing left still sorts last; that was always the empty
+  tier's doing. On the drain harness the staggered fleet now spends 9.33 and
+  7.90 weekly points on the two accounts whose weeks expire inside the run
+  against 1.45 and 3.80 on the two with days left, on 125 switches against 139.
+
+  `ccdad status` now prints the running-wide-of-pace note for such an account
+  (the capped share equalled the pool slice, so the one account the note
+  existed for was the one it omitted), and `--json` `strandedPct` and the
+  daemon's switch line report the weekly figure rather than a count of
+  five-hour points labelled `seven_day`. `HoverAccount.Room` is removed: it was
+  written for the cap and read by nothing.
+
+## [0.16.0] — 2026-09-05
+
+The release that puts every `hover` threshold on one scale. The mode derived a
+pace target for every window it could read and dropped a flat 80 on the ones it
+could not — a number from the configured scale, not this one, whose implied
+meaning moved with the pool and moved the wrong way. Alongside it, a primary
+credit seat now derives a threshold table like every other account, which is what
+stops the pre-emptive switch from disagreeing with itself about whether that
+seat's own weekly cap exists.
+
+### Fixed
+
+- **A window `hover` cannot date is now measured on the same scale as one it
+  can.** Every derived threshold is the share of the window that has elapsed plus
+  the account's share of the pool, so for a pool of *n* the scale runs from
+  `100/n` to `100 + 100/n`. A window with no readable reset used to take a flat
+  80 instead, which is the threshold of a window `80 - 100/n` percent elapsed
+  — an implied position that moved with the pool, and moved backwards: 30%
+  elapsed with two accounts, 55% with four, and in a pool of one not on the scale
+  at all. Such a window now takes an assumed elapsed share of 50 and goes through
+  the same arithmetic as every measured one, so the pool's own size still decides
+  what it is worth.
+
+  Both directions of the old error were reproduced. The strict one crossed the
+  spent tier, which the ranking compares before slack, so an account holding
+  fifteen points of its week ranked behind one holding three and no anti-flap
+  margin could have recovered it. It could not be probed away either: the warm-up
+  loop correctly refuses a window that has been spent against, so the figure was
+  permanent.
+
+- **A reset further out than the window is long now reads as a window that has
+  just started.** That is what it is — a local clock a little behind the
+  endpoint's — and the elapsed share is zero. It used to take the same flat
+  figure as a window with no reset at all, which on a fresh five-hour window
+  bought a 55-point lead with one minute of skew, on a row nothing marked as a
+  guess.
+
+- **A primary credit seat derives a threshold table like every other account.**
+  It used to be handed one with no per-window entries, on the ground that a seat
+  metered in credits carries no plan windows. That is not true: an account is
+  classified as credit-metered from the fixed windows alone, so a weekly cap that
+  arrived in the `limits` array is invisible to the test and such a seat can
+  carry real quota. The empty table dropped every `window_threshold` opt-in for
+  that one account, and the pre-emptive switch — which judged the live account
+  on the configured table and every candidate on the derived one — disagreed
+  with itself about whether the seat's cap existed. Measured: ccdad pre-empted
+  *onto* a seat whose opted-in weekly died thirty minutes inside the horizon it
+  had just used to condemn the account it left. The seat's own credit meter is
+  unchanged, and so is the credit gate.
+
+- **The pre-emptive switch reads one threshold table on both sides.** It judged
+  the account it might leave against the configured numbers and every account it
+  might go to against the derived ones. With the seat fix above this is a no-op
+  today, and it is landed so that the equality is a property of the pass rather
+  than a coincidence.
+
+### Changed
+
+- **The engine and the fleet forecast may not import each other, and both
+  directions are now checked.** The forecast measures how fast a whole fleet is
+  spending and when it runs dry; the engine decides which one account the next
+  session goes to. Only one direction failed before, and only by accident — an
+  ordinary tidy-up of an unrelated pass-through call would have opened the edge
+  with every gate still green. Each half is asked from inside the package whose
+  own sources decide it, because a dependency question asked from the wrong side
+  is cached against inputs that cannot change when the answer does.
+
+
+## [0.15.0] — 2026-09-05
+
+The release that makes `hover` spend a week before it expires. The mode derived
+a threshold per account and per window and then ranked on the tightest of them,
+which is structurally the window an account is furthest AHEAD of pace on — so
+the window whose quota was about to be thrown away was the one window the
+ranking could never be looking at. The licence an account may run ahead by now
+travels on the account rather than on a window, and the surfaces that print it
+say which account is running wide, by how much, and what is expiring.
+
+### Fixed
+
+- **`hover` now spends a week that is about to expire.** The mode derives a
+  threshold per account and per window, and the ranking reads whichever window
+  has the least slack. A weekly window that is nearly elapsed and barely used
+  carries a very high threshold — which is very high slack, so it was the one
+  window that could never be the one the ranking read. The perishable-quota
+  answer `hover` claimed to have folded in was inert in exactly the case it was
+  claimed for. Measured on a four-account fleet: the account holding 99 points
+  of a week that expired in fifteen hours ranked LAST of four, behind an account
+  with ninety hours left to spend its own, on a 1.3-point spread of five-hour
+  pace. The share an account is licensed to run ahead by is now the larger of
+  its slice of the pool and the quota its own rotation cannot reach before the
+  window resets, so the licence travels on the account and reaches the
+  comparator. `TestHoverRaisesTheShareOfAnAccountItsRotationCannotDrain` and
+  `TestHoverSwitchesToTheAccountWhoseWeekIsAboutToBeStranded` are that fleet,
+  ranked and switched.
+
+  Two consequences worth knowing before upgrading. **The pool size now reaches
+  the order**, not only the thresholds: `100 / usable` cancelled from every
+  comparison, and the new half does not, so adding or removing an account can
+  reorder a pool rather than only retune it. And **an account holding perishable
+  quota is less likely to read as spent**, because `Spent` measures the same
+  slack — which can turn a pool that would have ranked in `recovery` mode into
+  one that ranks in `headroom`. The widening is capped by the room the account
+  actually has, so an account with nothing left is unaffected and still sorts
+  last.
+
+### Added
+
+- **`ccdad status` and the daemon log now say when an account is running wide of
+  pace on purpose.** The share used to be one number for the whole pool and a
+  reader could hold it in their head; it is per account now, so two accounts at
+  the same point of the same window can carry different thresholds. The human
+  table gains a `hover:` line naming the account, its share, and the window that
+  is expiring; `--json` gains `hoverShare`, `strandedPct` and `strandedWindow`;
+  and a switch onto such an account says so on the line that records it.
+
 ## [0.14.0] — 2026-09-04
 
 The release that points `codex` itself at the proxy: a shim ahead of it on
@@ -3360,7 +3519,10 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.17.0...HEAD
+[0.17.0]: https://github.com/Kweiza/ccdaddy/compare/v0.16.0...v0.17.0
+[0.16.0]: https://github.com/Kweiza/ccdaddy/compare/v0.15.0...v0.16.0
+[0.15.0]: https://github.com/Kweiza/ccdaddy/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/Kweiza/ccdaddy/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/Kweiza/ccdaddy/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/Kweiza/ccdaddy/compare/v0.11.0...v0.12.0

@@ -231,6 +231,7 @@ func loadSnapshot(cmd *cobra.Command, now time.Time, refresh bool) (snap view.Sn
 		CodexServingUUID:  codexUUID,
 		Strategy:          selectedStrategy(cfg),
 		Hover:             cfg.Hover,
+		HoverAccounts:     hoverAccounts(cfg, plan),
 		Manual:            cfg.Manual,
 		Mode:              mode,
 		HasMode:           hasMode,
@@ -246,6 +247,19 @@ func loadSnapshot(cmd *cobra.Command, now time.Time, refresh bool) (snap view.Sn
 		// golden fixtures still on a machine that has recorded nothing.
 		HasForecast: fleet.Basis.Known || fleet.Credit.Known,
 	}, probeErr, nil
+}
+
+// hoverAccounts is the per-account half of hover's derivation, or nothing.
+//
+// It is guarded on cfg.Hover as well as on the pass, and the redundancy is the
+// point: view.ThresholdsFor already refuses to read a plan with hover off, and a
+// snapshot that carried the shares anyway would let a renderer print a licence
+// nothing was measured against.
+func hoverAccounts(cfg config.Config, plan strategy.Plan) []strategy.HoverAccount {
+	if !cfg.Hover || plan.Hover == nil {
+		return nil
+	}
+	return plan.Hover.Accounts
 }
 
 // enginePlan is the decision the engine would make right now, asked for rather
@@ -498,11 +512,15 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 	// Under the table, because each of these explains a column the reader is
 	// already looking at, and in internal/view's order rather than in one
 	// spelled out here: which sentence follows which is a fact about the TABLE,
-	// so the surface that draws the table does not get its own answer. PACE
-	// left this table with the derived window it was read off -- `ccdad runway`
-	// is the human answer to "how fast", and `--json` still carries every
-	// window's pace including the projection.
-	for _, line := range view.TrailerLines(rows, block, snap.Hover) {
+	// so the surface that draws the table does not get its own answer. The
+	// stranded sentence is handed in because it is a fact about the RANKING
+	// rather than about these rows -- nothing on the table can explain why two
+	// accounts at the same point of the same window carry different
+	// thresholds, so this is the only place the reader can be told. PACE left
+	// this table with the derived window it was read off -- `ccdad runway` is
+	// the human answer to "how fast", and `--json` still carries every window's
+	// pace including the projection.
+	for _, line := range view.TrailerLines(rows, block, snap.Hover, snap.StrandedNote()) {
 		fmt.Fprintln(out, view.WrapLabeled(line, outWidth(cmd.OutOrStdout())))
 	}
 	return nil

@@ -560,7 +560,7 @@ func ListRows(secs []Section) []ListRow {
 const HoverNote = "hover:    quota cells show used/threshold; thresholds are derived per account and window"
 
 // TrailerLines is everything printed UNDER an account table, in order: the
-// legend, the hover sentence, the unranked note, and one credit line per
+// legend, the hover sentences, the unranked note, and one credit line per
 // credit-metered seat.
 //
 // One ordered slice rather than a sequence of prints in each surface, because
@@ -568,17 +568,28 @@ const HoverNote = "hover:    quota cells show used/threshold; thresholds are der
 // Each line explains a column the reader is already looking at, and the two
 // that describe the quota block come before the ones that describe a row.
 //
+// stranded is the second hover sentence, and it is passed rather than derived
+// because it is a fact about the RANKING and not about these rows: it says
+// some account's share is wider than the pool's slice, which is what lets two
+// accounts at the same point of the same window carry different thresholds.
+// Empty when no account is in that position. It rides inside the hover gate
+// with the sentence it qualifies -- a table drawing bare percentages would
+// otherwise explain a threshold none of its cells show.
+//
 // The lines arrive UNWRAPPED. Folding one onto a width is the caller's, and
 // has to be: the width is a terminal's, and the label the fold hangs under is
 // found in the line rather than passed, so a wrap belongs where the terminal
 // is known.
-func TrailerLines(rows []Row, c Columns, hover bool) []string {
+func TrailerLines(rows []Row, c Columns, hover bool, stranded string) []string {
 	var out []string
 	if legend := c.Legend(); legend != "" {
 		out = append(out, legend)
 	}
 	if hover {
 		out = append(out, HoverNote)
+		if stranded != "" {
+			out = append(out, "hover:    "+stranded)
+		}
 	}
 	if note := c.UnrankedNote(); note != "" {
 		out = append(out, note)

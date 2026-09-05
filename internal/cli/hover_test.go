@@ -371,14 +371,16 @@ func TestHoverStatusPromisesNoWarmUpForAWindowThatIsAlreadyInUse(t *testing.T) {
 	if strings.Contains(stdout, "warm-up at") || strings.Contains(stdout, "probe is queued") {
 		t.Errorf("stdout promises a warm-up for a window no warm-up targets:\n%s", stdout)
 	}
-	if !strings.Contains(stdout, "80%") {
-		t.Errorf("stdout does not carry the fallback threshold:\n%s", stdout)
-	}
-	// The cell carries the pair it always carries: 30% used against the
-	// fallback threshold. ELAPSED left the human table for --json, which is
-	// checked below -- and it is left OUT there rather than reported as zero,
-	// because a 0 reads as a window that has only just rolled over.
-	if !strings.Contains(stdout, "30%/80%") {
+	// The cell carries the pair it always carries: 30% used against the derived
+	// threshold. 150 and not 80, because a window that will not say how far
+	// through it is takes an ASSUMED elapsed share on the same scale as every
+	// measured one -- 50 assumed, plus the whole 100 of a one-account share,
+	// because with nobody to hand the work to nothing is being held back.
+	//
+	// ELAPSED left the human table for --json, and it is left OUT there rather
+	// than reported as zero, because a 0 reads as a window that has only just
+	// rolled over.
+	if !strings.Contains(stdout, "30%/150%") {
 		t.Errorf("stdout does not carry the used/threshold pair:\n%s", stdout)
 	}
 }
