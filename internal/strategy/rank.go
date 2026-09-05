@@ -268,6 +268,23 @@ type Ranked struct {
 	// key and is reported so `ccdad status` can explain that order rather than
 	// only obey it.
 	CreditRoom float64
+	// HoverShare is the share this account's thresholds were derived with, and
+	// Stranded the quota its rotation cannot reach before StrandedWindow
+	// resets. All three are zero when hover is off.
+	//
+	// REPORTING ONLY. No comparator reads them, and none may: the ordering
+	// already carries the figure, because Headroom.Threshold was derived WITH
+	// HoverShare and Headroom.Slack is measured against it. Reading them here
+	// as well would count the same licence twice.
+	//
+	// They are carried because the consumers that print the ranking never see
+	// the pass it came from -- `ccdad auto --json` renders a []Ranked and holds
+	// no HoverPlan -- and a table that printed a threshold whose second term is
+	// no longer 100/usable, without saying what that term was, would be
+	// arithmetic a reader cannot close.
+	HoverShare     float64
+	Stranded       float64
+	StrandedWindow usage.WindowName
 	// HasCreditRoom is whether there is any. False covers every refusal the
 	// gate would make — no ceiling configured, overage switched off, spend
 	// unreadable, the armed cap spent — so it is not a claim that the account
@@ -553,6 +570,13 @@ func measure(c Candidate, o Options) Ranked {
 	// horizon. Treating "no answer" as "back immediately" would put the least
 	// knowable account at the front of the queue.
 	r.ReturnsInsideHorizon = rec.ok && !rec.at.After(o.Now.Add(o.horizon()))
+	// The derivation's own figures, copied for the renderers. Nothing below
+	// reads them; see the fields' own doc.
+	if o.hover != nil {
+		if a, ok := o.hover.AccountFor(c.UUID); ok {
+			r.HoverShare, r.Stranded, r.StrandedWindow = a.Share, a.Stranded, a.Window
+		}
+	}
 	return r
 }
 

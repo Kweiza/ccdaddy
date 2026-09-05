@@ -623,8 +623,17 @@ to: not disabled, not an api-key account, carrying a usage reading, and not
 currently quarantined.
 
 ```text
-threshold = elapsed% of this window + 100 / usable accounts
+threshold = elapsed% of this window + share
+share     = max(100 / usable accounts, stranded)
+stranded  = (100 - weekly used) - usable x (100 - weekly elapsed)
 ```
+
+The second half of the share is what makes hover spend perishable quota. An
+account whose week ends soon while it still holds most of it is holding quota the
+rotation cannot reach in time: sharing it out buys nothing, because there is no
+*later* to share it into. `stranded` prices exactly that part, floored at zero
+and capped by the room the account actually has, and the share widens to cover
+it. A pool keeping up with its weeks strands nothing and gets the flat slice.
 
 **It is not capped, and a target above 100 is meaningful.** A window far enough
 through its own cycle earns more than 100, which reads as *no restraint*: there
@@ -1561,9 +1570,15 @@ an engine parks itself permanently on one expired token.
 If you have set `strategy` to `consume-first`, that is the mode you get instead,
 whatever the thresholds say: it is a different question — spend perishable weekly
 quota before it expires — and it is answered first. Not under `hover`, which
-stops reading the key and ranks on headroom: a window close to its reset already
-carries a high derived threshold, so hover puts the perishable-quota answer on
-the slack axis instead of into a mode of its own.
+stops reading the key and ranks on headroom: hover puts the perishable-quota
+answer into the SHARE instead of into a mode of its own, so the account holding
+quota that is about to expire leads the ordinary slack order.
+
+It used to be claimed here that the high threshold a window near its reset earns
+was already enough. It is not, and the direction it failed in is the one that
+mattered: a high threshold is high slack, and the ranking reads the LOWEST slack
+an account has, so the perishable window was the one window that could never be
+the one it ranked on.
 
 ### Switching before the limit, not after it
 

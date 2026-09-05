@@ -231,6 +231,7 @@ func loadSnapshot(cmd *cobra.Command, now time.Time, refresh bool) (snap view.Sn
 		CodexServingUUID:  codexUUID,
 		Strategy:          selectedStrategy(cfg),
 		Hover:             cfg.Hover,
+		HoverAccounts:     hoverAccounts(cfg, plan),
 		Manual:            cfg.Manual,
 		Mode:              mode,
 		HasMode:           hasMode,
@@ -246,6 +247,19 @@ func loadSnapshot(cmd *cobra.Command, now time.Time, refresh bool) (snap view.Sn
 		// golden fixtures still on a machine that has recorded nothing.
 		HasForecast: fleet.Basis.Known || fleet.Credit.Known,
 	}, probeErr, nil
+}
+
+// hoverAccounts is the per-account half of hover's derivation, or nothing.
+//
+// It is guarded on cfg.Hover as well as on the pass, and the redundancy is the
+// point: view.ThresholdsFor already refuses to read a plan with hover off, and a
+// snapshot that carried the shares anyway would let a renderer print a licence
+// nothing was measured against.
+func hoverAccounts(cfg config.Config, plan strategy.Plan) []strategy.HoverAccount {
+	if !cfg.Hover || plan.Hover == nil {
+		return nil
+	}
+	return plan.Hover.Accounts
 }
 
 // enginePlan is the decision the engine would make right now, asked for rather
@@ -292,7 +306,7 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 	// runway line below has its own wrap, because its spaces are inside its
 	// values and these are between words.
 	//
-	// THE WIDTH IS MEASURED ON cmd.OutOrStdout() AND NEVER ON out, at all eleven
+	// THE WIDTH IS MEASURED ON cmd.OutOrStdout() AND NEVER ON out, at all twelve
 	// sites below, and the distinction is the whole reason this paragraph
 	// exists. out is renderTarget's writer -- the same destination wearing a
 	// palette -- and outWidth answers by asserting *os.File. A wrapper fails
@@ -314,7 +328,7 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 	// sets up either. The other half is held by
 	// TestEveryLineOfTheStatusBlockFoldsAtTheFilesWidth, which reads this
 	// function's source rather than its output, so every site is covered
-	// whatever a fixture happens to render and the count of eleven below is
+	// whatever a fixture happens to render and the count of twelve below is
 	// asserted there rather than only written here.
 	//
 	// Both names are written on one line each, deliberately. The name this
@@ -456,6 +470,13 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 		fmt.Fprintln(out, view.WrapLabeled(
 			"hover:    quota cells show used/threshold; thresholds are derived per account and window",
 			outWidth(cmd.OutOrStdout())))
+		// Only when some account's share is wider than the pool's slice, which
+		// is what makes two accounts at the same point of the same window carry
+		// different thresholds. Nothing on the table can explain that, so this
+		// is the only place the reader can be told.
+		if note := snap.StrandedNote(); note != "" {
+			fmt.Fprintln(out, view.WrapLabeled("hover:    "+note, outWidth(cmd.OutOrStdout())))
+		}
 	}
 	if note := cols.UnrankedNote(); note != "" {
 		fmt.Fprintln(out, view.WrapLabeled(note, outWidth(cmd.OutOrStdout())))

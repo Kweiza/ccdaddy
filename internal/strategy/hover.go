@@ -15,13 +15,23 @@ import (
 // ruinous with one account four hours into a five-hour window, so a user who
 // tunes for one of those is mis-tuned for the other every day.
 //
-//	threshold = min(99, elapsed share of the window + 100 / usable accounts)
+//	threshold = elapsed share of the window + share
+//	share     = max(100 / usable accounts, stranded)
+//	stranded  = (100 - weekly used) - usable x (100 - weekly elapsed),
+//	            floored at zero and capped by the room the account has
 //
 // Read it as a pace target. An account further through its quota than through
 // its window, by more than its own slice of what is left, should hand the next
 // session to a peer. With four accounts and a week 43% gone that is 68; with
 // one account left it is the cap, because there is nobody to hand to and
 // holding quota back buys nothing.
+//
+// The stranded half is the same sentence about a pool that has run out of
+// LATER rather than out of peers. Quota an account holds that the rotation
+// cannot reach before its window resets is quota nobody is going to get back,
+// so restraint about it buys nothing either -- and the share says so by
+// widening to cover it. hoverStranded is where that is priced and hoverShare is
+// where the two halves meet.
 
 const (
 	// HoverDisplayCap is the highest threshold a HUMAN table prints. Nothing
@@ -99,6 +109,17 @@ const (
 	// moves headroom by a point or two with no usage at all. What bounds the
 	// flap RATE is HoverCooldown below, which is the mechanism for that job; a
 	// margin sized to do it as well is a margin that strands quota.
+	//
+	// Three is unchanged now that the share carries a perishability term, and
+	// the term is what makes the figure do the job it was sized for. A pool with
+	// nothing at risk still separates by the same handful of points it always
+	// did, so the margin still holds the engine still. A pool with quota about
+	// to expire separates by tens: on the fleet of 2026-09-05 the whole pool
+	// spanned 1.327 points and this margin was 2.3 times the entire spread,
+	// which is how the account holding a week that expired in fifteen hours sat
+	// last and stayed there; with the widened share the gap to it is 15.668. The
+	// noise floor is untouched -- the wire reports utilization as a whole
+	// percent and one point of it still moves slack by exactly one point.
 	HoverHysteresisPct = 3.0
 
 	// HoverHeadroomRatio is 1.0, which is "no multiplicative margin".
@@ -249,8 +270,71 @@ type HoverPlan struct {
 	CreditThreshold float64
 	// PreemptLead is derived from the observed poll gap; see hoverPreemptLead.
 	PreemptLead time.Duration
+	// Accounts is the per-account half of the derivation, in pool order.
+	//
+	// It is new because the share stopped being one number for the whole pool.
+	// Every row in Windows still satisfies Threshold = ExpectedPct + share, and
+	// a reader who cannot see WHICH share cannot close that arithmetic -- which
+	// is the whole of what this mode promises in exchange for overriding the
+	// numbers a user typed.
+	Accounts []HoverAccount
 
 	byUUID map[string]Thresholds
+}
+
+// HoverAccount is one account's share and the figures that widened it.
+//
+// Window and ResetsAt are carried because Stranded is the one figure in this
+// table taken off a DIFFERENT row than the one it moves: the five-hour row's
+// threshold rises because of the seven-day row's numbers, so the window is
+// named here rather than left to be discovered by a reader comparing rows.
+//
+// Stranded is the EFFECTIVE figure, after the cap, because that is the one that
+// widened the share. Room is carried beside it so a reader can see whether the
+// cap bound at all.
+type HoverAccount struct {
+	UUID string
+	// Share is what this account's thresholds were built on: the larger of
+	// PoolShare and Stranded.
+	Share float64
+	// PoolShare is the flat slice, 100 divided between the usable accounts.
+	PoolShare float64
+	// Stranded is the quota the rotation cannot reach before it expires, and
+	// HasStranded whether there was a perishable window to price at all. False
+	// spans every silence -- no weekly window in the narrowed set, one with no
+	// readable utilization, one whose reset has already passed -- and in each of
+	// them the share is the flat slice.
+	HasStranded bool
+	Stranded    float64
+	// Room is the quota the account can actually serve, which is what caps
+	// Stranded. See hoverRoom.
+	Room float64
+	// Window is the perishable window Stranded was priced on, and ResetsAt when
+	// it goes. Both are zero when HasStranded is false.
+	Window   usage.WindowName
+	ResetsAt time.Time
+}
+
+// AccountFor is one account's row of the per-account table.
+func (p HoverPlan) AccountFor(uuid string) (HoverAccount, bool) {
+	for _, a := range p.Accounts {
+		if a.UUID == uuid {
+			return a, true
+		}
+	}
+	return HoverAccount{}, false
+}
+
+// ShareFor is the share one account's thresholds were derived with.
+//
+// An account that was not in the pool this plan was built from gets the flat
+// slice, which is the same fallback For makes for the same reason: there is no
+// perishable window on record for it, so there is nothing to widen.
+func (p HoverPlan) ShareFor(uuid string) float64 {
+	if a, ok := p.AccountFor(uuid); ok {
+		return a.Share
+	}
+	return hoverPoolShare(p.Usable)
 }
 
 // HoverThresholds derives the whole table for one pool.
@@ -276,7 +360,6 @@ func HoverThresholds(cands []Candidate, o Options) HoverPlan {
 	}
 	p.Usable = len(pool)
 	p.PreemptLead = hoverPreemptLead(pool)
-	share := hoverShare(p.Usable)
 
 	// The CONFIGURED table decides what may bind, and hover decides what it is
 	// worth. The two are not the same question. A weekly cap filed under a scope
@@ -315,6 +398,28 @@ func HoverThresholds(cands []Candidate, o Options) HoverPlan {
 		// the table mark a window the loop never targets.
 		cold, rollover, isCold := ColdWindow(c.Usage, o.Model, configured, o.Now)
 		credits := WarmUpWouldSpendCredits(c.Usage, o.Model, configured)
+
+		// The share, decided ONCE per account and before any row is derived.
+		// Every row below reads it, which is what makes the widening a licence
+		// the ACCOUNT holds rather than a property of one window -- and that is
+		// the whole point: the perishable window is the one window that can
+		// never bind, so a figure that stayed on it would never reach the
+		// comparator. withHover says why at length.
+		sw, stranded, hasStranded := hoverStranded(c.Usage, o.Model, configured, p.Usable, o.Now)
+		share := hoverShare(p.Usable, stranded)
+		acct := HoverAccount{
+			UUID:        c.UUID,
+			Share:       share,
+			PoolShare:   hoverPoolShare(p.Usable),
+			HasStranded: hasStranded,
+			Stranded:    stranded,
+			Room:        hoverRoom(c.Usage, o.Model, configured),
+		}
+		if hasStranded {
+			acct.Window = sw.Name
+			acct.ResetsAt, _ = sw.Reset()
+		}
+		p.Accounts = append(p.Accounts, acct)
 
 		per := map[usage.WindowName]float64{}
 		for _, w := range bindingWindows(c.Usage, o.Model, configured) {
@@ -379,11 +484,182 @@ func (p HoverPlan) For(uuid string) Thresholds {
 // A pool of none is answered as a pool of one rather than as a division by
 // zero. With nothing to hand work to, the honest threshold is the cap -- spend
 // what is left -- which is what a share of 100 produces.
-func hoverShare(usable int) float64 {
+func hoverPoolShare(usable int) float64 {
 	if usable < 1 {
 		usable = 1
 	}
 	return 100 / float64(usable)
+}
+
+// hoverStranded is the quota an account holds that the pool's own rotation
+// cannot reach before it expires, in points of the weekly window that expires
+// first among those a model choice cannot dodge.
+//
+// It adds no assumption to hover's model; it spells out the one the divisor was
+// already making. That model says the usable accounts each burn one window per
+// window-length. The same sentence says what ONE account does while it is the
+// one being served: it takes all of that work, so it runs at `usable` times its
+// own pace. Over the window-time left -- 100 - ExpectedPct -- an account given
+// every turn from here on can absorb at most usable x (100 - ExpectedPct)
+// points, and whatever of 100 - Utilization sits above that cannot be spent by
+// ANYBODY before the window resets.
+//
+// Zero is the ordinary answer. A pool keeping up with its weeks strands nothing,
+// which is why the term is inert on every fixture hover was tuned on --
+// TestAPoolDrainingAtPaceGetsTheFlatShare is that check, over all three of them.
+//
+// It is CONSERVATIVE in all three directions it can be, and that is the
+// direction to have. `usable` counts accounts that are readable and eligible,
+// some of which may have nothing left to take a turn with, which OVERSTATES
+// what the rotation absorbs. It prices one account in isolation, when pointing
+// the whole fleet at this one would strand the others. And it is capped by the
+// room this account actually has.
+func hoverStranded(s *usage.Snapshot, model string, t Thresholds, usable int, now time.Time) (usage.NamedWindow, float64, bool) {
+	if usable < 1 {
+		// hoverPoolShare's own clamp, for the same reason: a pool of none is a
+		// pool of one, and a rotation of nobody absorbs one account's worth
+		// rather than nothing at all.
+		usable = 1
+	}
+
+	var best usage.NamedWindow
+	var bestAt time.Time
+	found, anyModel := false, false
+	for _, w := range bindingWindows(s, model, t) {
+		// LENGTH first, name second -- the same rule weeklyResetOf and the
+		// weekly floor apply, spelled here too so a codex window whose plan
+		// makes it thirty days long is judged by what it is rather than by what
+		// it is called.
+		if !usage.IsWeeklyOf(w.Name, w.Window) {
+			continue
+		}
+		if _, ok := w.Percent(); !ok {
+			continue
+		}
+		at, ok := w.Reset()
+		if !ok {
+			continue
+		}
+		// An all-model window outranks a model-scoped one OUTRIGHT, and only
+		// then does the soonest reset decide. Taking the largest surplus over
+		// every weekly instead would let an untouched Fable cap, on an account
+		// whose all-model week is spent, buy that account the front of the
+		// queue for quota the session was never going to run.
+		// TestTheStrandedWindowIsTheOneAModelChoiceCannotDodge is that pair.
+		wide := !capsOneModelFamily(w.Name)
+		if !found || (wide && !anyModel) || (wide == anyModel && at.Before(bestAt)) {
+			best, bestAt, anyModel, found = w, at, wide, true
+		}
+	}
+	if !found {
+		return usage.NamedWindow{}, 0, false
+	}
+
+	pct, _ := best.Percent()
+	expected, ok := usage.ExpectedPct(best.Name, best.Window, now)
+	// A reset already in the past is a window that has ALREADY rolled over and
+	// whose refresh has not landed yet. ExpectedPct caps the elapsed share at
+	// 100 for one -- correctly, a window cannot be more than fully elapsed --
+	// and read as urgency that is the LARGEST licence this mode can express,
+	// handed out at the exact instant the urgency ended, on a figure the next
+	// poll deletes. Measured on the shipped shape: share 99, slack 108, a
+	// 48-point lead over a healthy account, and a switch that reverses one tick
+	// later. TestAWeeklyThatHasAlreadyRolledStrandsNothing.
+	if !ok || !bestAt.After(now) || expected >= 100 {
+		return best, 0, false
+	}
+
+	stranded := (100 - pct) - float64(usable)*(100-expected)
+	if stranded < 0 {
+		stranded = 0
+	}
+	// Capped by the room the account actually has. Hover prices the figure on
+	// the perishable window's own terms; this is where it becomes a claim on the
+	// NEXT SESSION, so this is where it has to answer "could this account serve
+	// that session at all". An account with ten points left on the window no
+	// model choice can dodge can absorb ten points of work, so ten points is the
+	// most its licence may be widened by, however much of its week is about to
+	// expire.
+	//
+	// Without it, measured: an account with 10 points of five-hour room and a
+	// week 91% elapsed at 1% used scored a licence of 81, a five-hour pace
+	// target of 171, and OUTRANKED an account holding 90 points -- and Decide
+	// switched onto it. TestANearlyEmptyAccountCannotBuyTheFrontOfTheQueue.
+	//
+	// At zero room the figure is zero, which is the same instant OutOfQuota
+	// files the account empty, so the two guards agree rather than merely
+	// coexist. TestTheStrandedCapAndTheEmptyTierReadTheSameRoom pins that.
+	if room := hoverRoom(s, model, t); stranded > room {
+		stranded = room
+	}
+	if stranded < 0 {
+		stranded = 0
+	}
+	return best, stranded, true
+}
+
+// hoverRoom is the least raw room among the windows a MODEL CHOICE CANNOT
+// DODGE, falling back to the least room anywhere when none of those was
+// readable, and zero for an account nothing could be read from.
+//
+// It is OutOfQuota's rule stated as a number rather than as a verdict, over the
+// same window set, so the figure that caps a licence and the figure that files
+// an account empty go to zero at the same instant. It exists as a second
+// spelling of a rule HeadroomFor already applies, and a second spelling that
+// drifts is how a blown Fable cap would come to zero a licence that OutOfQuota
+// would not zero -- so the two are pinned together by a test rather than by
+// this comment.
+func hoverRoom(s *usage.Snapshot, model string, t Thresholds) float64 {
+	minAny, minAll := 0.0, 0.0
+	haveAny, haveAll := false, false
+	for _, w := range bindingWindows(s, model, t) {
+		pct, ok := w.Percent()
+		if !ok {
+			continue
+		}
+		room := 100 - pct
+		if !haveAll || room < minAll {
+			minAll, haveAll = room, true
+		}
+		if capsOneModelFamily(w.Name) {
+			continue
+		}
+		if !haveAny || room < minAny {
+			minAny, haveAny = room, true
+		}
+	}
+	switch {
+	case haveAny:
+		return minAny
+	case haveAll:
+		return minAll
+	}
+	return 0
+}
+
+// hoverShare is how far ahead of its own pace an account may run before the work
+// belongs with a peer.
+//
+// Two reasons that is not simply the pool slice, and they are one reason said
+// twice: restraint is worth nothing unless the quota it preserves is still there
+// to be spent. hoverPoolShare says it once -- with one account there is nobody
+// to hand to, so the share is the whole 100. This says it the other way round --
+// with quota the rotation cannot reach before it expires, there is no LATER to
+// hand it to, so the share is at least the part that would otherwise be thrown
+// away.
+//
+// The LARGER of the two and not the sum, because they are two statements of one
+// licence and adding them would license the same points twice. The maximum is
+// also what keeps this inert in the ordinary case: on the fleet of 2026-08-25,
+// three accounts one, three and five days from their resets strand 7.14 points
+// against a pool share of 33.33, and an account already licensed to run 33
+// points ahead needs no second licence for 7. Measured: the final-day spread
+// TestHoverHoldsEveryAccountNearItsOwnPaceLine pins is unchanged to the digit.
+func hoverShare(usable int, stranded float64) float64 {
+	if pool := hoverPoolShare(usable); pool > stranded {
+		return pool
+	}
+	return stranded
 }
 
 // hoverPreemptLead is how far ahead of a projected exhaustion to switch, taken
@@ -461,11 +737,39 @@ func (o Options) withHover(cands []Candidate) Options {
 	o.CreditThreshold = p.CreditThreshold
 	o.PreemptLead = p.PreemptLead
 	// The strategy is one of the keys hover overrides, and this is where that
-	// happens. Consume-first spends the quota that expires soonest; hover has
-	// already expressed that on the slack axis, because a window close to its
-	// reset has a high elapsed share and therefore a high threshold. Ordering by
-	// reset instant on top of that would discard every threshold hover just
-	// derived and rank on a quantity none of them came from.
+	// happens. Consume-first spends the quota that expires soonest, and hover
+	// carries that answer on the SHARE rather than in a mode of its own:
+	// hoverShare widens an account's licence by exactly the quota its own
+	// rotation cannot reach in time, so the perishable account leads the slack
+	// order that the ranking, headroomGate and lessRecovery all already read.
+	//
+	// The wording here used to say the elapsed share already expressed this, and
+	// it was wrong in the one direction that mattered. A window near its reset
+	// does carry a high threshold -- and a high threshold is high SLACK, which
+	// is what HeadroomFor's minimum throws away, so the perishable window was
+	// the one window guaranteed never to bind. Writing the derivation out,
+	// slack_w = share + (expected_w - util_w) with the share constant per
+	// account, so argmin slack is argmax (util - expected): the binding window
+	// is the one furthest AHEAD of pace, while a window with quota about to
+	// expire is by definition the one furthest behind it. The subsumption was
+	// inert in exactly the case it was claimed for.
+	//
+	// Measured on the fleet of 2026-09-05: four accounts separated by 1.327
+	// points of five-hour pace, the account holding 99 points of a week that
+	// expired in fifteen hours ranked LAST of four, and the account with ninety
+	// hours left to spend its own ranked ahead of it. The licence has to travel
+	// on the ACCOUNT, not on the window, or it never reaches the comparator at
+	// all. TestHoverRaisesTheShareOfAnAccountItsRotationCannotDrain is that
+	// pool, and TestHoverSwitchesToTheAccountWhoseWeekIsAboutToBeStranded is the
+	// same pool through Decide -- which is the half a comparator-only fix leaves
+	// red, because the additive margin measures the same slack the ranking does.
+	//
+	// The key is still overridden, and now for a reason that survives reading.
+	// consume-first ranks on the reset INSTANT alone: it discards the binding
+	// window, so it would hand the session to an account whose five-hour window
+	// is empty because its week expires first, it ranks a week already spent
+	// ahead of one that is not, and it sorts an account with no weekly reset
+	// last -- which demotes a primary credit seat for having no week.
 	o.Strategy = StrategyHeadroom
 	return o
 }

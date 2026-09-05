@@ -179,6 +179,14 @@ func TestHoverDrainsTheWholePoolFromAMidWeekSpread(t *testing.T) {
 // max 24.23, on 12 switches. Without it: mean 9.89, max 14.43, on 9 switches --
 // half the error for fewer moves. The bound below sits between the two, so
 // restoring any clamp on the derived threshold turns this red.
+//
+// The share gained a second half after that was measured, and the numbers here
+// are unchanged to the digit -- which is the property rather than a
+// coincidence, and worth naming so a later reader does not take this green as
+// coverage of it. The accounts in this pool strand 7.14 points against a pool
+// share of 33.33, so hoverShare's maximum returns the flat slice on every tick
+// and the pace identity above is untouched. The case that actually exercises
+// the other half is TestHoverSpendsAWeekThatWouldOtherwiseExpireUnspent.
 func TestHoverHoldsEveryAccountNearItsOwnPaceLine(t *testing.T) {
 	base := time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC)
 	const week = 7 * 24 * time.Hour
@@ -327,11 +335,22 @@ func runPaceSim(t *testing.T, n int, load float64) (float64, int, int) {
 // accounts for one person and fifty seats for a team, and share = 100/N is the
 // one place N enters the formula.
 //
-// It does NOT enter the ORDERING: share is added identically to every account,
-// so it cancels from every comparison the ranking makes. Now that nothing clamps
-// the derived threshold, that cancellation is exact rather than approximate --
-// which is the property this case exists to keep. What N does reach is the Spent
-// boundary (util > expected + 100/N), and through it allOver and ModeRecovery.
+// The POOL half of the share does not enter the ORDERING: 100/N is added
+// identically to every account, so it cancels from every comparison the ranking
+// makes. Now that nothing clamps the derived threshold, that cancellation is
+// exact rather than approximate -- which is the property this case exists to
+// keep. What N does reach is the Spent boundary (util > expected + 100/N), and
+// through it allOver and ModeRecovery.
+//
+// The STRANDED half does not cancel, and that is a real difference this case is
+// deliberately blind to. It is per account, so adding or quarantining an account
+// can now reorder a pool rather than only retune it -- N appears in the stranded
+// arithmetic too, and an account whose week the rotation could reach with four
+// peers may strand quota with two. The pool here works at 95% of its own
+// capacity, so utilization tracks pace and every account strands zero at every N
+// below; that is what makes the measured means comparable across sizes, and it
+// is why this case measures the cancellation that survives rather than the one
+// that no longer holds in general.
 //
 // Measured, final-day spread of (util - expected) across the pool, fleet worked
 // at 95% of its own capacity, weekly windows only:
@@ -358,5 +377,180 @@ func TestThePaceInvariantHoldsAcrossFleetSizes(t *testing.T) {
 		if mean > 35 {
 			t.Errorf("N=%d: final-day spread mean %.2f, want under 35", n, mean)
 		}
+	}
+}
+
+// Q5: does the engine spend a week that is about to expire, or throw it away?
+//
+// Every case above drives a pool whose accounts all reset together, which is the
+// one shape in which the question cannot arise. A real fleet is staggered --
+// accounts are added on different days and their weeks end on different days
+// ever after -- and then the pool holds quota with a deadline on it. What this
+// measures is the only thing that matters about that: how many weekly points
+// reach their reset unspent.
+//
+// The five-hour window is modelled at its true relation to the week rather than
+// as a second free axis. A week is 33.6 times longer than a five-hour window, so
+// the same turn of work climbs the five-hour window 33.6 times faster; that is
+// what forces the rotation, and it is why an account cannot simply be left live
+// until its week is gone.
+type wasteAccount struct {
+	uuid string
+	// weekUtil and fiveUtil are the two windows, and weekAt and fiveAt when each
+	// next rolls over.
+	weekUtil, fiveUtil float64
+	weekAt, fiveAt     time.Time
+	// served is how much weekly quota this account actually absorbed, and
+	// wasted how much reached a reset unspent.
+	served, wasted float64
+}
+
+// fiveHoursPerWeek is how many five-hour windows fit in a week, which is the
+// factor the same work climbs the shorter window by.
+const fiveHoursPerWeek = float64(7*24*time.Hour) / float64(5*time.Hour)
+
+// runWasteSim drives Decide over a staggered fleet for a day and returns the
+// weekly points thrown away at rollovers, plus what each account absorbed.
+func runWasteSim(t *testing.T, label string, accts []wasteAccount, hover bool, weeklyPerTick float64, ticks int) ([]wasteAccount, float64) {
+	t.Helper()
+	base := time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC)
+	const tick = 2 * time.Minute
+	const week = 7 * 24 * time.Hour
+	const five = 5 * time.Hour
+
+	st := NewState()
+	live := accts[0].uuid
+	switches := 0
+
+	for i := 0; i < ticks; i++ {
+		now := base.Add(time.Duration(i) * tick)
+
+		for j := range accts {
+			// A weekly rollover is where the accounting happens: whatever the
+			// window still held is gone, and no later tick can spend it.
+			if !now.Before(accts[j].weekAt) {
+				accts[j].wasted += 100 - accts[j].weekUtil
+				accts[j].weekUtil, accts[j].weekAt = 0, accts[j].weekAt.Add(week)
+			}
+			if !now.Before(accts[j].fiveAt) {
+				accts[j].fiveUtil, accts[j].fiveAt = 0, accts[j].fiveAt.Add(five)
+			}
+		}
+
+		cands := make([]Candidate, 0, len(accts))
+		for _, a := range accts {
+			fiveUtil, weekUtil := a.fiveUtil, a.weekUtil
+			c := sub(a.uuid, &usage.Snapshot{
+				FiveHour: usage.NewWindow(&fiveUtil, tp(a.fiveAt)),
+				SevenDay: usage.NewWindow(&weekUtil, tp(a.weekAt)),
+			})
+			c.FetchedAt, c.NextPollAt = now.Add(-time.Minute), now.Add(time.Minute)
+			cands = append(cands, c)
+		}
+		o := Options{Now: now, Hover: hover}
+		if !hover {
+			o.Threshold = 80
+		}
+		p := Decide(cands, o, Config{}, st, live)
+		if p.Action == ActionSwitch {
+			live, switches = p.Target.UUID, switches+1
+			st.RecordSwitch(live, now)
+		}
+
+		for j := range accts {
+			if accts[j].uuid != live {
+				continue
+			}
+			// The turn is served only if BOTH windows can take it. A five-hour
+			// window at its limit stops the session however much of the week is
+			// left, which is the constraint that makes the staggering matter.
+			w := weeklyPerTick
+			if room := 100 - accts[j].weekUtil; w > room {
+				w = room
+			}
+			if room := (100 - accts[j].fiveUtil) / fiveHoursPerWeek; w > room {
+				w = room
+			}
+			if w <= 0 {
+				break
+			}
+			accts[j].weekUtil += w
+			accts[j].fiveUtil += w * fiveHoursPerWeek
+			accts[j].served += w
+			break
+		}
+	}
+
+	total := 0.0
+	for _, a := range accts {
+		total += a.wasted
+		t.Logf("   %-10s served %6.2f  wasted at rollover %6.2f", a.uuid, a.served, a.wasted)
+	}
+	t.Logf("%s: %d switches, %.2f weekly points thrown away", label, switches, total)
+	return accts, total
+}
+
+// staggeredFleet is the shape of the pool that reported the defect: four
+// accounts barely into their weeks, with those weeks ending 15, 22, 48 and 90
+// hours out, and five-hour windows on two reset cohorts ten minutes apart.
+func staggeredFleet() []wasteAccount {
+	base := time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC)
+	return []wasteAccount{
+		{uuid: "a-90h", weekUtil: 2, fiveUtil: 8, weekAt: base.Add(90 * time.Hour), fiveAt: base.Add(4*time.Hour + 7*time.Minute)},
+		{uuid: "b-48h", weekUtil: 2, fiveUtil: 7, weekAt: base.Add(48 * time.Hour), fiveAt: base.Add(4*time.Hour + 7*time.Minute)},
+		{uuid: "c-22h", weekUtil: 1, fiveUtil: 4, weekAt: base.Add(22 * time.Hour), fiveAt: base.Add(4*time.Hour + 17*time.Minute)},
+		{uuid: "d-15h", weekUtil: 1, fiveUtil: 5, weekAt: base.Add(15 * time.Hour), fiveAt: base.Add(4*time.Hour + 17*time.Minute)},
+	}
+}
+
+// The fix, stated as the work it moves onto the deadline.
+//
+// The run stops at the FIRST weekly rollover, and that bound is the whole
+// measurement rather than a convenience. What the change claims is that quota
+// about to expire gets spent while it still exists, so the quantity to measure
+// is what each account absorbed BEFORE the deadline. Run past it and the figure
+// reverses on its own and says nothing: an account that has just been given
+// extra turns sits that much further up its five-hour window afterwards, ranks
+// last for a while, and gives the work back. That is correct and it is not what
+// this case is asking about.
+//
+// What the change does NOT claim, and what an earlier version of this case
+// wrongly asserted, is that the total thrown away falls to near zero. It cannot.
+// The five-hour window is 33.6 times shorter than the week, so one account can
+// absorb at most about 3 weekly points per five-hour window whatever the
+// ranking says -- roughly 9 points in the fifteen hours this account has left,
+// against the 99 it is holding. Ninety of those points were never reachable by
+// any engine, and a test that credited the ordering with saving them would be
+// measuring the fixture's demand rather than the fix.
+//
+// Measured here: the two accounts whose weeks expire inside the run absorb 6.55
+// and 6.50 points against 4.65 and 4.80 for the two with days left, a 38% shift
+// onto the deadline.
+func TestHoverSpendsAWeekThatWouldOtherwiseExpireUnspent(t *testing.T) {
+	// 450 ticks of two minutes is fifteen hours, which is exactly when the
+	// first week ends.
+	final, _ := runWasteSim(t, "hover, a staggered four-account fleet up to the first weekly rollover",
+		staggeredFleet(), true, 0.05, 450)
+
+	by := map[string]wasteAccount{}
+	for _, a := range final {
+		by[a.uuid] = a
+	}
+	for _, soon := range []string{"d-15h", "c-22h"} {
+		for _, later := range []string{"a-90h", "b-48h"} {
+			if by[soon].served <= by[later].served {
+				t.Errorf("%s absorbed %.2f and %s absorbed %.2f: the engine is spreading the work "+
+					"evenly over a deadline it cannot see",
+					soon, by[soon].served, later, by[later].served)
+			}
+		}
+	}
+	// The size of the shift, not only its direction. A tie-break that moved one
+	// tick would satisfy the comparisons above and save nothing.
+	deadline := by["d-15h"].served + by["c-22h"].served
+	spare := by["a-90h"].served + by["b-48h"].served
+	if deadline < spare*1.25 {
+		t.Errorf("the two accounts with deadlines absorbed %.2f against %.2f for the two without, "+
+			"want at least a quarter more", deadline, spare)
 	}
 }
