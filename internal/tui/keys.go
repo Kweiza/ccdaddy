@@ -15,9 +15,9 @@ import (
 // shown only in the long help; Start through Restart belong to the daemon
 // screen and are not offered anywhere else.
 type KeyMap struct {
-	Add, Switch, Daemon, Strategy, Quit key.Binding
-	Up, Down, Refresh, Help, Esc, Enter key.Binding
-	Start, Stop, Restart                key.Binding
+	Add, Switch, Move, Daemon, Strategy, Quit key.Binding
+	Up, Down, Refresh, Help, Esc, Enter       key.Binding
+	Start, Stop, Restart                      key.Binding
 }
 
 // DefaultKeys is the one KeyMap this program has.
@@ -25,6 +25,7 @@ func DefaultKeys() KeyMap {
 	return KeyMap{
 		Add:      key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "add")),
 		Switch:   key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "switch")),
+		Move:     key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "move")),
 		Daemon:   key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "daemon")),
 		Strategy: key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "strategy")),
 		Quit:     key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
@@ -52,7 +53,28 @@ func DefaultKeys() KeyMap {
 // complete set; order no longer decides which commands disappear at a narrow
 // width.
 func (k KeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Add, k.Switch, k.Daemon, k.Strategy, k.Up, k.Down, k.Refresh, k.Help, k.Quit}
+	return []key.Binding{k.Add, k.Switch, k.Move, k.Daemon, k.Strategy, k.Up, k.Down, k.Refresh, k.Help, k.Quit}
+}
+
+// MovingHelp is the keybar while a row is in hand, and it REPLACES the bar
+// above rather than adding to it.
+//
+// Every key it does not list is swallowed while a row is being moved, so
+// listing them would advertise commands that do nothing -- and the two it
+// re-labels are the reason the bar has to change at all: up and down stop
+// walking the list and start carrying a row, and a bar that still read "up /
+// down" would describe the mode the user just left.
+//
+// The bindings are COPIES with their help overridden. They must keep the same
+// keys, because the same switch answers them either way; what differs is only
+// what the line says they will do.
+func (k KeyMap) MovingHelp() []key.Binding {
+	up, down, place, cancel := k.Up, k.Down, k.Enter, k.Esc
+	up.SetHelp("up/k", "up one")
+	down.SetHelp("down/j", "down one")
+	place.SetHelp("enter", "place")
+	cancel.SetHelp("esc", "cancel")
+	return []key.Binding{up, down, place, cancel}
 }
 
 // FullHelp groups every binding for the long help view: the main-page set,

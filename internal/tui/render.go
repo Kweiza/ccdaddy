@@ -46,6 +46,17 @@ type Model struct {
 	Width  int
 	Height int
 	Cursor int // index into Snap.Rows
+	// Moving is whether the row under the cursor has been picked up: the arrow
+	// keys are reordering the list rather than walking it, and Snap.Rows is a
+	// PREVIEW of an order nothing has been asked to store yet.
+	//
+	// It lives on the page rather than beside the event loop's other five
+	// screens because it is not a screen. A picker is drawn INSTEAD of the
+	// page; this is the page itself, drawn with one row in hand -- the table,
+	// the quota block and the height ladder are all the ones the reader was
+	// already looking at, and a reorder they cannot see against the rows around
+	// it is a reorder they cannot judge.
+	Moving bool
 	Top    int // first visible row, for the scrolling rung of the height ladder
 	Help   help.Model
 	Keys   KeyMap
@@ -624,11 +635,21 @@ func noticeLine(notices []string, width int, cue string) string {
 // footerLines shows every main-page binding, wrapped to the available width.
 // Daemon health remains one keystroke away on the daemon screen; keeping it on
 // this line would consume a second row even when every command fits on one.
+//
+// While a row is in hand the bar is the move mode's four and not the page's
+// ten, because the page's ten are swallowed there. This is the ONE function
+// that answers it, which is what keeps the height ladder honest: plan() budgets
+// the footer by calling this, so a mode whose bar wraps to a different number of
+// lines is budgeted for the bar it actually draws.
 func (m Model) footerLines(width int) []string {
 	if width <= 0 {
 		return nil
 	}
-	return keybarLines(m.Help, m.Keys.ShortHelp(), width)
+	bindings := m.Keys.ShortHelp()
+	if m.Moving {
+		bindings = m.Keys.MovingHelp()
+	}
+	return keybarLines(m.Help, bindings, width)
 }
 
 // moreLabel is the row that names what the window is not showing, and which way
@@ -1143,8 +1164,8 @@ func (m Model) cell(c view.ListColumn, line view.ListRow, l Layout, block view.C
 	return text
 }
 
-// markerCell is the one column in front of the index: the live account, the
-// row the cursor is on, or neither.
+// markerCell is the one column in front of the index: the row in hand, the live
+// account, the row the cursor is on, or none of them.
 //
 // The row is asked where it came FROM rather than where it is drawn, which is
 // what ListRow.At is for: Cursor indexes Snap.Rows, and a display position stops
@@ -1152,7 +1173,19 @@ func (m Model) cell(c view.ListColumn, line view.ListRow, l Layout, block view.C
 //
 // See noCursor above for why the live account wins where they meet, and why a
 // page nobody is pointing at draws no cursor at all.
+//
+// The grabbed row is the one exception to that precedence, and it is deliberate.
+// A row being moved wins over the live-account marker, because the marker
+// answers a question the reader is not asking at that moment: they are looking
+// for the row their arrow keys are carrying, and the account a session would
+// get is the same account it was before the move started and will be after.
+// Losing sight of the row in hand -- which is exactly what happens when the
+// account being reordered is the live one -- leaves the reader pressing arrows
+// with nothing on the page telling them what is moving.
 func (m Model) markerCell(line view.ListRow) string {
+	if m.Moving && line.At == m.Cursor {
+		return m.Glyphs.Grabbed
+	}
 	if !line.Row.Active && line.At == m.Cursor {
 		return m.Glyphs.Cursor
 	}

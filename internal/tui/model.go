@@ -161,6 +161,19 @@ type App struct {
 	// hasLoaded is whether any read has ever succeeded. Until one has there
 	// are no last good numbers, and a failure has to say something else.
 	hasLoaded bool
+
+	// moveBackup and moveFrom are what esc restores while Model.Moving: the
+	// row order the store still holds, and the index the carried row started
+	// at. They live here rather than on the page because they are not drawn --
+	// the page shows the PREVIEW, and these are what it is a preview against.
+	//
+	// The backup is a clone. Snap.Rows is reordered in place while a row is in
+	// hand, so a backup sharing that array would be reordered with it and esc
+	// would restore the order it was cancelling.
+	moveBackup []view.Row
+	// moveFrom is also what decides whether enter has anything to ask for: a
+	// row put back where it started is a move nobody needs to run.
+	moveFrom int
 }
 
 // neverLoaded is what a failure says while there is nothing behind it. The
@@ -418,6 +431,15 @@ func (a App) key(msg tea.KeyPressMsg) (App, tea.Cmd, bool) {
 		return a, tea.Quit, true
 	}
 
+	// A row in hand is answered BEFORE the screen, and only ever on the page.
+	// The mode is page state rather than a screen of its own, so nothing else
+	// in this switch knows about it; putting it first is what makes "every key
+	// is swallowed while a row is being carried" a property of one branch
+	// rather than of five.
+	if a.m.Moving && a.scr == screenPage {
+		return a.movingKey(msg, k)
+	}
+
 	switch a.scr {
 	case screenPicker:
 		return a.pickerKey(msg, k)
@@ -596,6 +618,14 @@ func (a App) pageKey(msg tea.KeyPressMsg, k KeyMap) (App, tea.Cmd, bool) {
 		next, cmd := a.starting([]string{"switch", uuid})
 		return next, cmd, true
 
+	case key.Matches(msg, k.Move):
+		// The cursor IS the choice here for the reason it is on `s`: the row
+		// under it is the row the reader is looking at, and a picker would be a
+		// second rendering of the list they are already reading. Unlike `s`,
+		// this one cannot move a credential at all -- the keystroke opens a
+		// mode, and what it does is undone by esc.
+		return a.grabbing(), nil, true
+
 	case key.Matches(msg, k.Strategy):
 		a.pick = strategyPicker(a.m.Snap.StrategyLabel(), a.m.Glyphs)
 		a.scr = screenPicker
@@ -716,6 +746,20 @@ func keyPress(name string) tea.KeyPressMsg {
 // something just changed, and the read already running may have started before
 // it did -- and issued the moment the first comes back.
 func (a App) reloading() (App, tea.Cmd) {
+	// A row in hand suspends the reload clock, and the request is DROPPED
+	// rather than deferred. A load replaces the snapshot whole, and the
+	// snapshot is what the preview lives in -- so a refresh landing mid-move
+	// would put the rows back in the store's order under a cursor that is
+	// carrying one of them, with nothing on the page to say why.
+	//
+	// Dropping is right rather than pending: pending is only consulted when a
+	// load COMPLETES, and there is no load in flight to complete. The clock
+	// itself is untouched, so the next tick after the mode ends reads
+	// everything the dropped one would have -- a reload is a fresh look at the
+	// world and never a delta, so nothing is lost by missing one.
+	if a.m.Moving {
+		return a, nil
+	}
 	if a.loading {
 		a.pending = true
 		return a, nil

@@ -902,8 +902,12 @@ func fixtureRows() []view.Row {
 		},
 		{
 			Account: store.Account{
-				UUID:  "4a9e0c17-6b32-4d58-8107-c2f4e6a9d3b5",
-				Email: "cx@example.com", Idx: 5,
+				UUID: "4a9e0c17-6b32-4d58-8107-c2f4e6a9d3b5",
+				// Idx 1 and not 5. The index is numbered within a provider, so
+				// the only Codex seat on this fleet is the first one whatever
+				// four Claude accounts sit above it -- and the goldens are
+				// where that is visible as a table rather than as a rule.
+				Email: "cx@example.com", Idx: 1,
 				Kind: identity.KindSubscription, Tier: "chatgpt_plus",
 				Provider: provider.Codex,
 			},
