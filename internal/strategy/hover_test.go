@@ -119,21 +119,138 @@ func TestHoverDerivesEveryThresholdFromTheClockAndThePool(t *testing.T) {
 }
 
 // A window that reported no reset has no elapsed share, so there is no pace to
-// derive from. It falls back to a fixed figure and is marked as the row a probe
-// would fix, which is the only thing that can put a reset on the window at all.
-func TestHoverFallsBackAndMarksAWindowWithNoReset(t *testing.T) {
-	pct := 30.0
-	pool := []Candidate{sub("u-1", &usage.Snapshot{SevenDay: usage.NewWindow(&pct, nil)})}
+// derive from -- and the figure it gets is still on the derived scale, because
+// the share the pool decides is added to an ASSUMED elapsed share rather than
+// replaced by a constant.
+//
+// The pool sweep is the point. A flat number would answer the same whatever the
+// pool was, and that is exactly what was wrong with the 80 this replaced: it was
+// the threshold of a window 80 - 100/n percent elapsed, an implied position that
+// moved with the pool and moved the wrong way. The row is still marked as one a
+// probe would fix, and still says its share was not measured.
+func TestHoverPutsAWindowWithNoClockOnTheDerivedScale(t *testing.T) {
+	for _, tc := range []struct {
+		accounts int
+		want     float64
+	}{
+		{1, 150}, // nobody to hand to: the share is the whole 100
+		{2, 100},
+		{4, 75},
+		{8, 62.5},
+	} {
+		pct := 30.0
+		pool := make([]Candidate, 0, tc.accounts)
+		for i := 0; i < tc.accounts; i++ {
+			pool = append(pool, sub(fmt.Sprintf("u-%d", i), &usage.Snapshot{SevenDay: usage.NewWindow(&pct, nil)}))
+		}
 
+		p := HoverThresholds(pool, opts())
+		if got := p.For("u-0").For(usage.WindowSevenDay); got != tc.want {
+			t.Errorf("threshold with %d accounts = %v, want %v", tc.accounts, got, tc.want)
+		}
+		row, ok := rowFor(p, "u-0", usage.WindowSevenDay)
+		if !ok {
+			t.Fatalf("no row derived with %d accounts", tc.accounts)
+		}
+		if !row.ProbeWanted || row.HasExpected {
+			t.Errorf("row = %+v, want ProbeWanted with no MEASURED elapsed share", row)
+		}
+	}
+}
+
+// A window with no clock is not a spent account, and this is the half no margin
+// could ever have recovered.
+//
+// Under the flat 80 an account 85% through a window it will not date reported
+// slack -5, which makes it SPENT -- and headroomTier is compared before slack in
+// lessHeadroom, so it went to a strictly worse tier than every account with room
+// and no value of HoverHysteresisPct could have brought it back. Fifteen points
+// of a week left is not a spent account.
+//
+// The ORDER is deliberately not asserted. Where such an account sorts depends on
+// the elapsed share hover ASSUMED for it, and asserting that would be asserting
+// the guess. What the fix guarantees is the tier, which is a statement about
+// evidence rather than about pace: nothing here is known to be over anything.
+//
+// It also cannot be probed away. ColdWindow refuses a window that has been spent
+// against -- correctly, because another turn buys the same unreadable field back
+// -- so this figure is the one the account lives with.
+func TestAWindowWithNoClockDoesNotFileTheAccountAsSpent(t *testing.T) {
+	noclock := 85.0
+	b := sub("b-noclock", &usage.Snapshot{
+		FiveHour: win(0, 5*time.Hour),
+		SevenDay: usage.NewWindow(&noclock, nil),
+	})
+	pool := []Candidate{b, sub("a-roomy", snap(win(0, 5*time.Hour), win(10, 7*24*time.Hour)))}
+
+	res := Rank(pool, hoverOpts())
+	got, ok := find(res, "b-noclock")
+	if !ok {
+		t.Fatal("b-noclock is not in the ranking")
+	}
+	if spent, known := Spent(got.Headroom); known && spent {
+		t.Errorf("Spent = %v; 15 points of a week left is not a spent account", spent)
+	}
+	if got.Headroom.Slack <= 0 {
+		t.Errorf("slack = %v, want a positive figure", got.Headroom.Slack)
+	}
+	if tier := headroomTier(got); tier != 0 {
+		t.Errorf("tier = %d, want 0 -- a window that will not say is not evidence of anything", tier)
+	}
+
+	// And it stays that way: nothing is going to give the window a reset.
+	if _, _, ok := ColdWindow(b.Usage, "", opts().Thresholds(), now); ok {
+		t.Error("ColdWindow targets a window that has been spent against; the threshold cannot be probed away and must be right on its own")
+	}
+}
+
+// A reset FURTHER OUT than the window is long is not an unknown window. It is a
+// window that has just started, seen through a clock a little behind the
+// endpoint's, and the elapsed share is zero.
+//
+// It used to take the same flat figure as a window with no reset at all, which
+// on a fresh five-hour window against a pool at 25 bought a 55-point lead with
+// one minute of skew -- on a row nothing marked as a guess.
+func TestAResetPastTheWindowLengthReadsAsAWindowThatHasJustStarted(t *testing.T) {
+	five := 5 * time.Hour
+	skewed := 0.0
+	skew := sub("skew", &usage.Snapshot{FiveHour: usage.NewWindow(&skewed, tp(now.Add(five+time.Minute)))})
+	pool := []Candidate{
+		skew,
+		sub("u-a", &usage.Snapshot{FiveHour: win(0, five)}),
+		sub("u-b", &usage.Snapshot{FiveHour: win(0, five)}),
+		sub("u-c", &usage.Snapshot{FiveHour: win(0, five)}),
+	}
+
+	p := HoverThresholds(pool, hoverOpts())
+	row, ok := rowFor(p, "skew", usage.WindowFiveHour)
+	if !ok {
+		t.Fatal("no row for the skewed account")
+	}
+	if row.ExpectedPct != 0 || !row.HasExpected {
+		t.Errorf("elapsed = %v (measured %v), want a measured 0", row.ExpectedPct, row.HasExpected)
+	}
+	if row.Threshold != 25 {
+		t.Errorf("threshold = %v, want 25 -- the same figure the three unskewed accounts get", row.Threshold)
+	}
+}
+
+// Every door that answers "hover derived nothing for this" is on the derived
+// scale too, and strictly positive.
+//
+// Positive is load-bearing rather than tidy: bindingWindows reads a non-positive
+// per-window entry as "not opted in", so a zero here would silently revoke a
+// user's consent for an unknown-scope cap.
+func TestEveryHoverDefaultIsPositiveAndOnTheDerivedScale(t *testing.T) {
+	var none HoverPlan
+	if got := none.For("nobody").Default; got != 150 {
+		t.Errorf("zero plan threshold = %v, want 150 -- hoverPoolShare clamps a pool of none to a pool of one", got)
+	}
+	week := 7 * 24 * time.Hour
+	pool := hoverPool(t, 2, usage.WindowSevenDay, elapsedWindow(week, 0.43, 10))
 	p := HoverThresholds(pool, opts())
-	if got := p.For("u-1").For(usage.WindowSevenDay); got != HoverFallbackThreshold {
-		t.Errorf("threshold = %v, want %v for a window that named no reset", got, HoverFallbackThreshold)
-	}
-	if len(p.Windows) != 1 {
-		t.Fatalf("Windows = %+v, want one row", p.Windows)
-	}
-	if !p.Windows[0].ProbeWanted || p.Windows[0].HasExpected {
-		t.Errorf("row = %+v, want ProbeWanted with no elapsed share", p.Windows[0])
+	if got := p.For("u-0").Default; got != 100 {
+		t.Errorf("Default = %v, want 100 -- 50 assumed elapsed plus a two-account share of 50", got)
 	}
 }
 
@@ -200,9 +317,10 @@ func TestHoverCountsOnlyAccountsItCanRead(t *testing.T) {
 	if got := p.For("u-0").For(usage.WindowSevenDay); got != 93 {
 		t.Errorf("threshold = %v, want 93 -- the unread account must not narrow the share", got)
 	}
-	// And it still gets an answer if it is ever asked about.
-	if got := p.For("u-unread").For(usage.WindowSevenDay); got != HoverFallbackThreshold {
-		t.Errorf("threshold for the unread account = %v, want %v", got, HoverFallbackThreshold)
+	// And it still gets an answer if it is ever asked about -- on the same
+	// derived scale, from the same pool: 50 assumed elapsed plus a share of 50.
+	if got := p.For("u-unread").For(usage.WindowSevenDay); got != 100 {
+		t.Errorf("threshold for the unread account = %v, want 100", got)
 	}
 }
 
@@ -232,9 +350,9 @@ func TestHoverHonoursTheUnknownScopeOptInAndStillDerivesItsValue(t *testing.T) {
 		t.Error("hover derived a threshold for a scope nobody opted in to; the mode must not grant consent")
 	}
 
-	// 50 rather than 80: DefaultThreshold IS 80 and the fallback IS 80, so a
-	// hover that simply copied the configured number through would be
-	// indistinguishable from one that ignored it.
+	// 50 rather than 80: DefaultThreshold IS 80, so a hover that simply copied
+	// the configured number through would be indistinguishable from one that
+	// ignored it.
 	o := perWindow(map[usage.WindowName]float64{name: 50})
 	p := HoverThresholds(pool, o)
 
