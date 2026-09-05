@@ -172,35 +172,6 @@ func TestTheNoneThemeEmitsNoEscapeBytesAndTheDarkThemeDoes(t *testing.T) {
 	}
 }
 
-// The list toggle changes the columns AND the heading, because the two
-// percentages run opposite ways: status prints how much is spent, list prints
-// how much is left. One heading carrying two polarities is the drift the two
-// tables have avoided since they were written.
-// The two sets differ in what each surface KNOWS, not in the polarity of one
-// derived column: both are gone, and every window has a cell in both tables.
-func TestTheTwoColumnSetsDifferByWhatTheSurfaceKnows(t *testing.T) {
-	full := fixtureModel(113, 26).Body()
-	m := fixtureModel(113, 26)
-	m.Set = SetCompact
-	compact := m.Body()
-
-	if !strings.Contains(full, "STATE") || !strings.Contains(full, "AGE") {
-		t.Error("the dashboard's table does not carry the engine state and the reading's age")
-	}
-	if strings.Contains(compact, "STATE") {
-		t.Error("the compact table carries STATE, which the listing has no source for")
-	}
-	if !strings.Contains(compact, "TIER") {
-		t.Error("the compact table does not carry TIER, which is the column it exists for")
-	}
-	// The windows are in BOTH, which is the whole change: no set derives one.
-	for _, want := range []string{"5H", "7D"} {
-		if !strings.Contains(full, want) || !strings.Contains(compact, want) {
-			t.Errorf("%q is missing from one of the two tables", want)
-		}
-	}
-}
-
 // The floors. Below them the page says what it needs, rather than rendering
 // something unreadable or panicking on a negative width.
 func TestBelowTheFloorsThePageRendersWhatItNeeds(t *testing.T) {
@@ -1125,7 +1096,7 @@ func TestTheRunwayLineIsCutToTheFrameRatherThanWrappingIt(t *testing.T) {
 			if footerWidth < 1 {
 				footerWidth = w
 			}
-			want := planWithRows(m.Set, testCols(), w, height, len(m.Snap.Rows), false, true,
+			want := planWithRows(testCols(), w, height, len(m.Snap.Rows), false, true,
 				len(m.footerLines(footerWidth)), len(m.runwayLines()), len(m.summaryLines(w))).Runway
 			if got := strings.Contains(body, "Runway: "); got != want {
 				t.Errorf("at %dx%d the page draws a runway line: %v; the height ladder budgeted a row for one: %v:\n%s",

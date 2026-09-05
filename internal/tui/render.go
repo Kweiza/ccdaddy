@@ -43,7 +43,6 @@ type Model struct {
 	// the same constructor the two CLI tables call, so no surface can grow a
 	// column the others do not have.
 	Cols   view.Columns
-	Set    ColumnSet
 	Width  int
 	Height int
 	Cursor int // index into Snap.Rows
@@ -85,7 +84,6 @@ func newModel(snap view.Snapshot, width, height int, pal theme.Palette, g Glyphs
 		// is a function of the snapshot, and the snapshot does not change
 		// under a frame.
 		Cols:   view.ColumnsOf(snap.Rows),
-		Set:    SetFull,
 		Width:  width,
 		Height: height,
 		Pal:    pal,
@@ -231,7 +229,7 @@ func (m Model) Body() string {
 		footerWidth = m.Width
 	}
 	footerRows := len(m.footerLines(footerWidth))
-	l := planWithRows(m.Set, m.Cols, m.Width, m.Height, rows,
+	l := planWithRows(m.Cols, m.Width, m.Height, rows,
 		len(m.Snap.Notices) > 0, len(runway) > 0, footerRows, len(runway), len(summary))
 	if l.TooNarrow || l.TooShort {
 		return m.floors(l)
