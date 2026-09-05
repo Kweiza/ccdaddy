@@ -518,6 +518,18 @@ func rankingJSON(order []strategy.Ranked) []map[string]any {
 			row["slack"] = r.Headroom.Slack
 			row["windowThreshold"] = r.Headroom.Threshold
 		}
+		// The second term of every derived threshold. Under hover it is no
+		// longer 100 divided by the pool, so a consumer that has the threshold
+		// and the elapsed share still cannot close the arithmetic without it.
+		if r.HoverShare > 0 {
+			row["hoverShare"] = r.HoverShare
+		}
+		// Why this account's share is wider than the pool's slice: quota its
+		// own rotation cannot reach before the named window resets.
+		if r.Stranded > 0 {
+			row["strandedPct"] = r.Stranded
+			row["strandedWindow"] = string(r.StrandedWindow)
+		}
 		if r.HasRecovery {
 			row["recoversAt"] = r.RecoversAt.In(readerZone()).Format(time.RFC3339)
 			row["returnsInsideHorizon"] = r.ReturnsInsideHorizon

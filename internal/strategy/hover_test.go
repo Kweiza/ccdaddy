@@ -119,21 +119,138 @@ func TestHoverDerivesEveryThresholdFromTheClockAndThePool(t *testing.T) {
 }
 
 // A window that reported no reset has no elapsed share, so there is no pace to
-// derive from. It falls back to a fixed figure and is marked as the row a probe
-// would fix, which is the only thing that can put a reset on the window at all.
-func TestHoverFallsBackAndMarksAWindowWithNoReset(t *testing.T) {
-	pct := 30.0
-	pool := []Candidate{sub("u-1", &usage.Snapshot{SevenDay: usage.NewWindow(&pct, nil)})}
+// derive from -- and the figure it gets is still on the derived scale, because
+// the share the pool decides is added to an ASSUMED elapsed share rather than
+// replaced by a constant.
+//
+// The pool sweep is the point. A flat number would answer the same whatever the
+// pool was, and that is exactly what was wrong with the 80 this replaced: it was
+// the threshold of a window 80 - 100/n percent elapsed, an implied position that
+// moved with the pool and moved the wrong way. The row is still marked as one a
+// probe would fix, and still says its share was not measured.
+func TestHoverPutsAWindowWithNoClockOnTheDerivedScale(t *testing.T) {
+	for _, tc := range []struct {
+		accounts int
+		want     float64
+	}{
+		{1, 150}, // nobody to hand to: the share is the whole 100
+		{2, 100},
+		{4, 75},
+		{8, 62.5},
+	} {
+		pct := 30.0
+		pool := make([]Candidate, 0, tc.accounts)
+		for i := 0; i < tc.accounts; i++ {
+			pool = append(pool, sub(fmt.Sprintf("u-%d", i), &usage.Snapshot{SevenDay: usage.NewWindow(&pct, nil)}))
+		}
 
+		p := HoverThresholds(pool, opts())
+		if got := p.For("u-0").For(usage.WindowSevenDay); got != tc.want {
+			t.Errorf("threshold with %d accounts = %v, want %v", tc.accounts, got, tc.want)
+		}
+		row, ok := rowFor(p, "u-0", usage.WindowSevenDay)
+		if !ok {
+			t.Fatalf("no row derived with %d accounts", tc.accounts)
+		}
+		if !row.ProbeWanted || row.HasExpected {
+			t.Errorf("row = %+v, want ProbeWanted with no MEASURED elapsed share", row)
+		}
+	}
+}
+
+// A window with no clock is not a spent account, and this is the half no margin
+// could ever have recovered.
+//
+// Under the flat 80 an account 85% through a window it will not date reported
+// slack -5, which makes it SPENT -- and headroomTier is compared before slack in
+// lessHeadroom, so it went to a strictly worse tier than every account with room
+// and no value of HoverHysteresisPct could have brought it back. Fifteen points
+// of a week left is not a spent account.
+//
+// The ORDER is deliberately not asserted. Where such an account sorts depends on
+// the elapsed share hover ASSUMED for it, and asserting that would be asserting
+// the guess. What the fix guarantees is the tier, which is a statement about
+// evidence rather than about pace: nothing here is known to be over anything.
+//
+// It also cannot be probed away. ColdWindow refuses a window that has been spent
+// against -- correctly, because another turn buys the same unreadable field back
+// -- so this figure is the one the account lives with.
+func TestAWindowWithNoClockDoesNotFileTheAccountAsSpent(t *testing.T) {
+	noclock := 85.0
+	b := sub("b-noclock", &usage.Snapshot{
+		FiveHour: win(0, 5*time.Hour),
+		SevenDay: usage.NewWindow(&noclock, nil),
+	})
+	pool := []Candidate{b, sub("a-roomy", snap(win(0, 5*time.Hour), win(10, 7*24*time.Hour)))}
+
+	res := Rank(pool, hoverOpts())
+	got, ok := find(res, "b-noclock")
+	if !ok {
+		t.Fatal("b-noclock is not in the ranking")
+	}
+	if spent, known := Spent(got.Headroom); known && spent {
+		t.Errorf("Spent = %v; 15 points of a week left is not a spent account", spent)
+	}
+	if got.Headroom.Slack <= 0 {
+		t.Errorf("slack = %v, want a positive figure", got.Headroom.Slack)
+	}
+	if tier := headroomTier(got); tier != 0 {
+		t.Errorf("tier = %d, want 0 -- a window that will not say is not evidence of anything", tier)
+	}
+
+	// And it stays that way: nothing is going to give the window a reset.
+	if _, _, ok := ColdWindow(b.Usage, "", opts().Thresholds(), now); ok {
+		t.Error("ColdWindow targets a window that has been spent against; the threshold cannot be probed away and must be right on its own")
+	}
+}
+
+// A reset FURTHER OUT than the window is long is not an unknown window. It is a
+// window that has just started, seen through a clock a little behind the
+// endpoint's, and the elapsed share is zero.
+//
+// It used to take the same flat figure as a window with no reset at all, which
+// on a fresh five-hour window against a pool at 25 bought a 55-point lead with
+// one minute of skew -- on a row nothing marked as a guess.
+func TestAResetPastTheWindowLengthReadsAsAWindowThatHasJustStarted(t *testing.T) {
+	five := 5 * time.Hour
+	skewed := 0.0
+	skew := sub("skew", &usage.Snapshot{FiveHour: usage.NewWindow(&skewed, tp(now.Add(five+time.Minute)))})
+	pool := []Candidate{
+		skew,
+		sub("u-a", &usage.Snapshot{FiveHour: win(0, five)}),
+		sub("u-b", &usage.Snapshot{FiveHour: win(0, five)}),
+		sub("u-c", &usage.Snapshot{FiveHour: win(0, five)}),
+	}
+
+	p := HoverThresholds(pool, hoverOpts())
+	row, ok := rowFor(p, "skew", usage.WindowFiveHour)
+	if !ok {
+		t.Fatal("no row for the skewed account")
+	}
+	if row.ExpectedPct != 0 || !row.HasExpected {
+		t.Errorf("elapsed = %v (measured %v), want a measured 0", row.ExpectedPct, row.HasExpected)
+	}
+	if row.Threshold != 25 {
+		t.Errorf("threshold = %v, want 25 -- the same figure the three unskewed accounts get", row.Threshold)
+	}
+}
+
+// Every door that answers "hover derived nothing for this" is on the derived
+// scale too, and strictly positive.
+//
+// Positive is load-bearing rather than tidy: bindingWindows reads a non-positive
+// per-window entry as "not opted in", so a zero here would silently revoke a
+// user's consent for an unknown-scope cap.
+func TestEveryHoverDefaultIsPositiveAndOnTheDerivedScale(t *testing.T) {
+	var none HoverPlan
+	if got := none.For("nobody").Default; got != 150 {
+		t.Errorf("zero plan threshold = %v, want 150 -- hoverPoolShare clamps a pool of none to a pool of one", got)
+	}
+	week := 7 * 24 * time.Hour
+	pool := hoverPool(t, 2, usage.WindowSevenDay, elapsedWindow(week, 0.43, 10))
 	p := HoverThresholds(pool, opts())
-	if got := p.For("u-1").For(usage.WindowSevenDay); got != HoverFallbackThreshold {
-		t.Errorf("threshold = %v, want %v for a window that named no reset", got, HoverFallbackThreshold)
-	}
-	if len(p.Windows) != 1 {
-		t.Fatalf("Windows = %+v, want one row", p.Windows)
-	}
-	if !p.Windows[0].ProbeWanted || p.Windows[0].HasExpected {
-		t.Errorf("row = %+v, want ProbeWanted with no elapsed share", p.Windows[0])
+	if got := p.For("u-0").Default; got != 100 {
+		t.Errorf("Default = %v, want 100 -- 50 assumed elapsed plus a two-account share of 50", got)
 	}
 }
 
@@ -200,9 +317,10 @@ func TestHoverCountsOnlyAccountsItCanRead(t *testing.T) {
 	if got := p.For("u-0").For(usage.WindowSevenDay); got != 93 {
 		t.Errorf("threshold = %v, want 93 -- the unread account must not narrow the share", got)
 	}
-	// And it still gets an answer if it is ever asked about.
-	if got := p.For("u-unread").For(usage.WindowSevenDay); got != HoverFallbackThreshold {
-		t.Errorf("threshold for the unread account = %v, want %v", got, HoverFallbackThreshold)
+	// And it still gets an answer if it is ever asked about -- on the same
+	// derived scale, from the same pool: 50 assumed elapsed plus a share of 50.
+	if got := p.For("u-unread").For(usage.WindowSevenDay); got != 100 {
+		t.Errorf("threshold for the unread account = %v, want 100", got)
 	}
 }
 
@@ -232,9 +350,9 @@ func TestHoverHonoursTheUnknownScopeOptInAndStillDerivesItsValue(t *testing.T) {
 		t.Error("hover derived a threshold for a scope nobody opted in to; the mode must not grant consent")
 	}
 
-	// 50 rather than 80: DefaultThreshold IS 80 and the fallback IS 80, so a
-	// hover that simply copied the configured number through would be
-	// indistinguishable from one that ignored it.
+	// 50 rather than 80: DefaultThreshold IS 80, so a hover that simply copied
+	// the configured number through would be indistinguishable from one that
+	// ignored it.
 	o := perWindow(map[usage.WindowName]float64{name: 50})
 	p := HoverThresholds(pool, o)
 
@@ -496,16 +614,68 @@ func TestHoverPutsItsDerivedLeadOnTheRankingPass(t *testing.T) {
 	}
 }
 
-// consume-first is one of the keys hover overrides. Hover has already spent the
-// perishable window first by giving it a high threshold as its reset nears, and
-// re-ordering by reset instant would discard every threshold it derived.
+// consume-first is one of the keys hover overrides, and hover has to reach the
+// same answer for it to be allowed to.
+//
+// The override is what it always was: the mode ranks in ModeHeadroom on the
+// thresholds it derived, rather than re-sorting on the reset instant and
+// discarding them. What this case did not used to check is whether the derived
+// order AGREES with the strategy it overrides -- its pool was two identical
+// accounts carrying one window each, so seven_day was the binding window by
+// construction and no ordering difference could have been observed even if
+// there were one. That is exactly the shape the subsumption is true in, and it
+// is not the shape a real account has; withHover's own comment says why.
+//
+// So the pool here is two accounts that differ ONLY in when their week ends,
+// each carrying both windows, and the five-hour window is what binds for both.
+// The mode must still be headroom, and the sooner week must still lead.
 func TestHoverOverridesTheConfiguredStrategy(t *testing.T) {
-	pool := hoverPool(t, 2, usage.WindowSevenDay, elapsedWindow(7*24*time.Hour, 0.43, 10))
+	week := 7 * 24 * time.Hour
+	acct := func(uuid string, weekElapsed float64) Candidate {
+		return sub(uuid, &usage.Snapshot{
+			FiveHour: elapsedWindow(5*time.Hour, 0.20, 10),
+			SevenDay: elapsedWindow(week, weekElapsed, 5),
+		})
+	}
+	pool := []Candidate{acct("u-later", 0.43), acct("u-sooner", 0.93)}
 	o := opts()
 	o.Hover, o.Strategy = true, StrategyConsumeFirst
 
-	if got := Rank(pool, o).Mode; got != ModeHeadroom {
-		t.Errorf("Mode = %v, want %v: hover derives the thresholds the ranking runs on", got, ModeHeadroom)
+	res := Rank(pool, o)
+	if res.Mode != ModeHeadroom {
+		t.Errorf("Mode = %v, want %v: hover derives the thresholds the ranking runs on", res.Mode, ModeHeadroom)
+	}
+	for _, r := range res.Order {
+		if r.Headroom.Binding != usage.WindowFiveHour {
+			t.Fatalf("%s binds on %s, want five_hour: the override is only worth checking where the perishable window does not bind", r.UUID, r.Headroom.Binding)
+		}
+	}
+	eq(t, order(res), []string{"u-sooner", "u-later"})
+}
+
+// The pool size reaches the ORDER now, and not only the thresholds.
+//
+// 100/N cancels from every comparison, so under the flat share alone a pool of
+// two and a pool of four rank the same accounts the same way. The stranded half
+// does not cancel: N is what says how much of a week the rotation can absorb, so
+// the same account can strand quota in a small pool and none in a large one.
+// This is a real behaviour change and it is asserted rather than left to be
+// discovered.
+func TestThePoolSizeNowReachesTheOrderAndNotOnlyTheThresholds(t *testing.T) {
+	week := 7 * 24 * time.Hour
+	// A week 80% elapsed at 10% used: 90 points left and a fifth of the week to
+	// spend them in. One account absorbs 20, two absorb 40, five absorb 100.
+	s := &usage.Snapshot{
+		FiveHour: elapsedWindow(5*time.Hour, 0.20, 10),
+		SevenDay: elapsedWindow(week, 0.80, 10),
+	}
+	th := opts().Thresholds()
+
+	if _, stranded, _ := hoverStranded(s, "", th, 2, now); stranded != 50 {
+		t.Errorf("with two accounts stranded = %v, want 50: the pair reaches 40 of the 90 points left", stranded)
+	}
+	if _, stranded, _ := hoverStranded(s, "", th, 5, now); stranded != 0 {
+		t.Errorf("with five accounts stranded = %v, want 0: the rotation reaches all 90", stranded)
 	}
 }
 
@@ -514,11 +684,20 @@ func TestHoverOverridesTheConfiguredStrategy(t *testing.T) {
 // here -- and an infinite share would put every later threshold at the cap
 // through arithmetic rather than through the reason the cap exists.
 func TestHoverShareOfAnEmptyPoolIsTheWholeQuota(t *testing.T) {
-	if got := hoverShare(0); got != 100 {
+	if got := hoverShare(0, 0); got != 100 {
 		t.Errorf("hoverShare(0) = %v, want 100 -- with nobody to hand to, the honest share is everything", got)
 	}
-	if got := hoverShare(4); got != 25 {
+	if got := hoverShare(4, 0); got != 25 {
 		t.Errorf("hoverShare(4) = %v, want 25", got)
+	}
+	// The two halves are a MAXIMUM, pinned in both directions: stranded quota
+	// widens the slice when it is the larger claim, and an account already
+	// licensed to run 33 points ahead needs no second licence for 7.
+	if got := hoverShare(4, 63); got != 63 {
+		t.Errorf("hoverShare(4, 63) = %v, want 63 -- stranded quota widens the slice", got)
+	}
+	if got := hoverShare(2, 33); got != 50 {
+		t.Errorf("hoverShare(2, 33) = %v, want the wider pool slice of 50", got)
 	}
 }
 

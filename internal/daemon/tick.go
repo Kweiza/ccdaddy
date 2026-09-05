@@ -634,6 +634,16 @@ func switchLogLine(ev switcher.Evaluation, target store.Account) string {
 	}
 	fmt.Fprintf(&b, " (binding=%s slack=%.1f thr=%.1f used=%.1f)",
 		h.Binding, h.Slack, h.Threshold, 100-h.Pct)
+	// Under hover the threshold's second term is the account's own share, which
+	// is the pool's flat slice UNLESS this account is holding quota its rotation
+	// cannot reach in time. Where it is, the line above is a threshold a reader
+	// cannot derive, so the reason it is that high is said here rather than left
+	// to be inferred from a number that used to be 100/usable and no longer is.
+	t := ev.Plan.Target
+	if t.Stranded > 0 {
+		fmt.Fprintf(&b, "; share=%.0f, %.0f pts of %s would otherwise expire unspent",
+			t.HoverShare, t.Stranded, t.StrandedWindow)
+	}
 	return b.String()
 }
 

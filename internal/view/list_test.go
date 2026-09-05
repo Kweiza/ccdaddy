@@ -683,7 +683,7 @@ func TestTrailerLinesAreOneOrderedSlice(t *testing.T) {
 		{Name: usage.WindowName("weekly_scoped:project:Atlas"), Header: "ATLAS", Reset: -1},
 	}}
 
-	got := TrailerLines(rows, c, true)
+	got := TrailerLines(rows, c, true, "")
 	if len(got) != 4 {
 		t.Fatalf("TrailerLines = %d lines, want 4:\n%s", len(got), strings.Join(got, "\n"))
 	}
@@ -703,7 +703,7 @@ func TestTrailerLinesAreOneOrderedSlice(t *testing.T) {
 
 func TestTrailerLinesOmitEveryLineWithNothingToSay(t *testing.T) {
 	rows := []Row{listRow()}
-	got := TrailerLines(rows, ColumnsOf(rows), false)
+	got := TrailerLines(rows, ColumnsOf(rows), false, "")
 	if len(got) != 1 {
 		t.Fatalf("TrailerLines = %d lines, want the legend alone:\n%s", len(got), strings.Join(got, "\n"))
 	}
@@ -713,7 +713,7 @@ func TestTrailerLinesOmitEveryLineWithNothingToSay(t *testing.T) {
 	// A fleet nobody could read has no legend either, and then there is nothing
 	// under the table at all.
 	blind := []Row{{Account: store.Account{UUID: "u-1"}}}
-	if n := len(TrailerLines(blind, ColumnsOf(blind), false)); n != 0 {
+	if n := len(TrailerLines(blind, ColumnsOf(blind), false, "")); n != 0 {
 		t.Errorf("TrailerLines on an unreadable fleet = %d lines, want none", n)
 	}
 }
@@ -722,7 +722,7 @@ func TestOneCreditLinePerCreditMeteredSeat(t *testing.T) {
 	credit := creditOnlyRow(t, 60.2255)
 	rows := []Row{listRow(), credit, credit}
 	n := 0
-	for _, line := range TrailerLines(rows, ColumnsOf(rows), false) {
+	for _, line := range TrailerLines(rows, ColumnsOf(rows), false, "") {
 		if strings.HasPrefix(line, "credit:") {
 			n++
 		}

@@ -244,8 +244,12 @@ func (m Model) plan() Layout {
 // threshold, and this table has always drawn the bare percentage -- it is the
 // row of percentages that IS the gauge, banded by cellStyle. Passing Snap.Hover
 // through would print a sentence describing cells that are not on the page.
+//
+// The stranded sentence is empty for the same reason and not for a second one:
+// it qualifies the hover sentence, so a page that does not print the first has
+// nothing for the second to qualify.
 func (m Model) trailerLines() []string {
-	return view.TrailerLines(m.Snap.Rows, m.Cols, false)
+	return view.TrailerLines(m.Snap.Rows, m.Cols, false, "")
 }
 
 // Body is the whole page as one string.
