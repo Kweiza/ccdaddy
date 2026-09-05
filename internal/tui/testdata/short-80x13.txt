@@ -8,6 +8,6 @@ IDX ACCOUNT               5H   7D OPUS  5H IN  7D OPUS IN  STATE
   2 enterprise@co.exam..  -    100%     ?      5m          ✗ exhausted
   3 spare@example.com     52%  -        4h11m  ?           ◉ candidate
   4 keyonly@example.co..  ?    ?        ?      ?           ◌ unknown  
-  5 cx@example.com        31%  -        3h09m  ?           ▪ serving  
-a add  s switch  d daemon  c strategy  up/k up  down/j down  r refresh  ? help
-q quit
+  1 cx@example.com        31%  -        3h09m  ?           ▪ serving  
+a add  s switch  m move  d daemon  c strategy  up/k up  down/j down  r refresh
+? help  q quit

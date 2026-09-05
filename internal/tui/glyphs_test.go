@@ -156,7 +156,7 @@ func TestTheAmbiguousGlyphSetIsExactlyTheFrameAndTheGauge(t *testing.T) {
 // the population the width rule is about.
 func markerGlyphs(g Glyphs) []struct{ name, glyph string } {
 	return []struct{ name, glyph string }{
-		{"cursor", g.Cursor}, {"active", g.Active}, {"candidate", g.Candidate},
+		{"cursor", g.Cursor}, {"grabbed", g.Grabbed}, {"active", g.Active}, {"candidate", g.Candidate},
 		{"exhausted", g.Exhausted}, {"empty", g.Empty}, {"quarantined", g.Quarantined},
 		{"disabled", g.Disabled}, {"unknown", g.Unknown},
 		{"more-above", g.MoreAbove}, {"more-below", g.MoreBelow},

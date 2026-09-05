@@ -16,7 +16,7 @@
 │  4 keyonly@example.co..  ?    ?        ?      ?           ◌ unknown          │
 │    CODEX                                                                     │
 │IDX ACCOUNT               5H   5H IN                       STATE              │
-│  5 cx@example.com        31%  3h09m                       ▪ serving          │
-│a add  s switch  d daemon  c strategy  up/k up  down/j down  r refresh  ? help│
-│q quit                                                                        │
+│  1 cx@example.com        31%  3h09m                       ▪ serving          │
+│a add  s switch  m move  d daemon  c strategy  up/k up  down/j down  r refresh│
+│? help  q quit                                                                │
 ╰──────────────────────────────────────────────────────────────────────────────╯
