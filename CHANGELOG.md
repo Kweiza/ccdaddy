@@ -16,6 +16,74 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.16.0] — 2026-09-05
+
+The release that puts every `hover` threshold on one scale. The mode derived a
+pace target for every window it could read and dropped a flat 80 on the ones it
+could not — a number from the configured scale, not this one, whose implied
+meaning moved with the pool and moved the wrong way. Alongside it, a primary
+credit seat now derives a threshold table like every other account, which is what
+stops the pre-emptive switch from disagreeing with itself about whether that
+seat's own weekly cap exists.
+
+### Fixed
+
+- **A window `hover` cannot date is now measured on the same scale as one it
+  can.** Every derived threshold is the share of the window that has elapsed plus
+  the account's share of the pool, so for a pool of *n* the scale runs from
+  `100/n` to `100 + 100/n`. A window with no readable reset used to take a flat
+  80 instead, which is the threshold of a window `80 - 100/n` percent elapsed
+  — an implied position that moved with the pool, and moved backwards: 30%
+  elapsed with two accounts, 55% with four, and in a pool of one not on the scale
+  at all. Such a window now takes an assumed elapsed share of 50 and goes through
+  the same arithmetic as every measured one, so the pool's own size still decides
+  what it is worth.
+
+  Both directions of the old error were reproduced. The strict one crossed the
+  spent tier, which the ranking compares before slack, so an account holding
+  fifteen points of its week ranked behind one holding three and no anti-flap
+  margin could have recovered it. It could not be probed away either: the warm-up
+  loop correctly refuses a window that has been spent against, so the figure was
+  permanent.
+
+- **A reset further out than the window is long now reads as a window that has
+  just started.** That is what it is — a local clock a little behind the
+  endpoint's — and the elapsed share is zero. It used to take the same flat
+  figure as a window with no reset at all, which on a fresh five-hour window
+  bought a 55-point lead with one minute of skew, on a row nothing marked as a
+  guess.
+
+- **A primary credit seat derives a threshold table like every other account.**
+  It used to be handed one with no per-window entries, on the ground that a seat
+  metered in credits carries no plan windows. That is not true: an account is
+  classified as credit-metered from the fixed windows alone, so a weekly cap that
+  arrived in the `limits` array is invisible to the test and such a seat can
+  carry real quota. The empty table dropped every `window_threshold` opt-in for
+  that one account, and the pre-emptive switch — which judged the live account
+  on the configured table and every candidate on the derived one — disagreed
+  with itself about whether the seat's cap existed. Measured: ccdad pre-empted
+  *onto* a seat whose opted-in weekly died thirty minutes inside the horizon it
+  had just used to condemn the account it left. The seat's own credit meter is
+  unchanged, and so is the credit gate.
+
+- **The pre-emptive switch reads one threshold table on both sides.** It judged
+  the account it might leave against the configured numbers and every account it
+  might go to against the derived ones. With the seat fix above this is a no-op
+  today, and it is landed so that the equality is a property of the pass rather
+  than a coincidence.
+
+### Changed
+
+- **The engine and the fleet forecast may not import each other, and both
+  directions are now checked.** The forecast measures how fast a whole fleet is
+  spending and when it runs dry; the engine decides which one account the next
+  session goes to. Only one direction failed before, and only by accident — an
+  ordinary tidy-up of an unrelated pass-through call would have opened the edge
+  with every gate still green. Each half is asked from inside the package whose
+  own sources decide it, because a dependency question asked from the wrong side
+  is cached against inputs that cannot change when the answer does.
+
+
 ## [0.15.0] — 2026-09-05
 
 The release that makes `hover` spend a week before it expires. The mode derived
@@ -3321,7 +3389,8 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/Kweiza/ccdaddy/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/Kweiza/ccdaddy/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/Kweiza/ccdaddy/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/Kweiza/ccdaddy/compare/v0.12.0...v0.13.0
