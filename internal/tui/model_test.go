@@ -258,106 +258,6 @@ func TestAKeyNobodyBoundIsNotReportedAsHandled(t *testing.T) {
 }
 
 // One keystroke never moves a credential: s opens a picker, and only enter on
-// the picker runs anything.
-func TestTheSwitchKeyOpensAPickerAndRunsNothing(t *testing.T) {
-	var ran [][]string
-	o := fixtureOptions()
-	o.Exec = recorder(&ran)
-
-	a := appAt(t, o, 113, 26)
-	next, cmd, ok := a.key(keyPress("s"))
-	if !ok {
-		t.Fatal("the switch key was not handled")
-	}
-	drain(cmd)
-	if len(ran) != 0 {
-		t.Fatalf("pressing s ran %v", ran)
-	}
-	if next.scr != screenPicker {
-		t.Fatal("pressing s did not open a picker")
-	}
-
-	after, cmd, _ := next.key(keyPress("enter"))
-	drain(cmd)
-	if len(ran) != 1 {
-		t.Fatalf("enter on the picker ran %d commands, want 1", len(ran))
-	}
-	if ran[0][0] != "switch" {
-		t.Errorf("enter on the switch picker ran %v", ran[0])
-	}
-	// The WHOLE uuid of the row the cursor was on, never the display ordinal
-	// and never a prefix: the ordinal is recompacted when an account is
-	// removed, so an argv built from the number on the screen moves whichever
-	// credential now occupies that slot.
-	if want := a.m.Snap.Rows[a.m.Cursor].Account.UUID; len(ran[0]) < 2 || ran[0][1] != want {
-		t.Errorf("enter on the switch picker ran %v, want the uuid %q", ran[0], want)
-	}
-	if after.scr == screenPicker {
-		t.Error("the picker is still up after choosing")
-	}
-}
-
-// The switch picker opens on the row the page's cursor is standing on, for
-// EVERY row, and it finds that row by uuid. Cursor indexes Snap.Rows and the
-// picker is grouped by provider before it is drawn, with a heading over each
-// group -- so from the second row down, a restore that carried the index across
-// would open the picker one line off, on an account the page was not pointing
-// at. The first row is the one case an index restore gets right by luck (the
-// heading it lands on is settled onto that same account), which is why every
-// row is asked and not just one.
-func TestTheSwitchPickerOpensOnTheRowThePageIsPointingAt(t *testing.T) {
-	n := len(appAt(t, fixtureOptions(), 113, 26).m.Snap.Rows)
-	if n < 2 {
-		t.Fatalf("the fixture has %d rows, so the cursor cannot point anywhere but the top", n)
-	}
-	for i := range n {
-		a := appAt(t, fixtureOptions(), 113, 26)
-		for range i {
-			a, _, _ = a.key(keyPress("down"))
-		}
-		if a.m.Cursor != i {
-			t.Fatalf("%d downs put the page's cursor on row %d", i, a.m.Cursor)
-		}
-		a, _, _ = a.key(keyPress("s"))
-		want := a.m.Snap.Rows[i].Account.UUID
-		if got := a.pick.Chosen(); len(got) != 2 || got[1] != want {
-			t.Errorf("with the page on row %d (%s) the picker opened on %v", i, a.m.Snap.Rows[i].Account.Email, got)
-		}
-	}
-}
-
-// Under the fixture's snapshot the Claude credential and the codex serving
-// pointer are two different rows, and the picker marks both. The serving uuid
-// comes off the SNAPSHOT and not off a row: no row carries it, so a picker
-// built from the rows alone could mark only the Claude side.
-func TestTheSwitchPickerMarksBothProvidersLiveAccounts(t *testing.T) {
-	a := appAt(t, fixtureOptions(), 113, 26)
-	serving := a.m.Snap.CodexServingUUID
-	if serving == "" {
-		t.Fatal("the fixture serves no codex account, so this proves nothing")
-	}
-	live := ""
-	for _, r := range a.m.Snap.Rows {
-		if r.Active {
-			live = r.Account.UUID
-		}
-	}
-	if live == "" || live == serving {
-		t.Fatalf("the fixture's live account is %q and its served one %q; two different rows are what this is about", live, serving)
-	}
-	a, _, _ = a.key(keyPress("s"))
-	var marked []string
-	for _, it := range a.pick.items {
-		if it.inForce {
-			marked = append(marked, it.argv[1])
-		}
-	}
-	if want := []string{live, serving}; !slices.Equal(marked, want) {
-		t.Fatalf("the picker marks %q as in force, want %q", marked, want)
-	}
-}
-
-// Esc leaves the picker without running anything, which is the other half of
 // the two-keystroke confirm.
 func TestEscapeLeavesThePickerWithoutRunningAnything(t *testing.T) {
 	var ran [][]string
@@ -365,7 +265,7 @@ func TestEscapeLeavesThePickerWithoutRunningAnything(t *testing.T) {
 	o.Exec = recorder(&ran)
 
 	a := appAt(t, o, 113, 26)
-	a, _, _ = a.key(keyPress("s"))
+	a, _, _ = a.key(keyPress("c"))
 	a, cmd, _ := a.key(keyPress("esc"))
 	drain(cmd)
 	if len(ran) != 0 {
@@ -384,7 +284,7 @@ func TestAnOpenPickerEatsThePagesKeys(t *testing.T) {
 	o.Exec = recorder(&ran)
 
 	a := appAt(t, o, 113, 26)
-	a, _, _ = a.key(keyPress("s"))
+	a, _, _ = a.key(keyPress("c"))
 	// The daemon key, which the PAGE binds and the picker does not: a key
 	// nothing binds anywhere would leave every assertion below true for the
 	// wrong reason. Reaching the page would open the daemon screen, so the
@@ -410,7 +310,7 @@ func TestACommandsOutcomeIsShownVerbatimAndTriggersAReread(t *testing.T) {
 	}
 
 	a := appAt(t, o, 113, 26)
-	a, _, _ = a.key(keyPress("s"))
+	a, _, _ = a.key(keyPress("c"))
 	_, cmd, _ := a.key(keyPress("enter"))
 
 	var res result
@@ -1121,7 +1021,7 @@ func TestTheQuitKeyQuitsFromEveryScreenThatIsNotAConfirm(t *testing.T) {
 	// An open picker is the exception, and it is the deliberate one: it eats
 	// every key it does not bind, so a keystroke cannot act on a page the user
 	// is no longer looking at.
-	a, _, _ := base.key(keyPress("s"))
+	a, _, _ := base.key(keyPress("c"))
 	if _, _, ok := a.key(keyPress("q")); ok {
 		t.Error("q was answered while a picker was open")
 	}

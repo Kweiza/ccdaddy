@@ -564,9 +564,37 @@ func (a App) pageKey(msg tea.KeyPressMsg, k KeyMap) (App, tea.Cmd, bool) {
 		return a, nil, true
 
 	case key.Matches(msg, k.Switch):
-		a.pick = switchPicker(a.m.Snap.Rows, a.m.cursorUUID(), a.m.Snap.CodexServingUUID, a.m.Glyphs)
-		a.scr = screenPicker
-		return a, nil, true
+		// The cursor IS the choice. The page already lists every account, the
+		// arrow keys already move between them, and the row under the cursor is
+		// already the one the picker used to open on -- so the list was a second
+		// rendering of a list the reader was looking at, and enter on it was a
+		// keystroke that chose what had already been chosen.
+		//
+		// This does spend the rule the picker was built to hold: one keystroke
+		// now moves a credential. What made that rule worth holding was that the
+		// key named nothing -- `a` starts a login, `c` sets a policy, and neither
+		// says which. `s` on a row does say which: the account is on the screen,
+		// under the cursor, spelled the same way the confirmation afterwards
+		// spells it. What is left of the rule is that no key moves a credential
+		// without the account it moves to being visible at the moment it is
+		// pressed, and that still holds.
+		//
+		// By uuid, never by the display position: the table is grouped by
+		// provider, so a row index names a different account than the store's
+		// own order does, and an argv built from the number on the screen would
+		// move a credential belonging to whoever now occupies that slot.
+		uuid := a.m.cursorUUID()
+		if uuid == "" {
+			// The cursor is on no account -- an empty store, or a page whose
+			// rows have not arrived. Nothing to switch to, and nothing to say
+			// that the empty table is not already saying.
+			return a, nil, true
+		}
+		if a.m.cursorIsLive() {
+			return a.saying(alreadyLive), nil, true
+		}
+		next, cmd := a.starting([]string{"switch", uuid})
+		return next, cmd, true
 
 	case key.Matches(msg, k.Strategy):
 		a.pick = strategyPicker(a.m.Snap.StrategyLabel(), a.m.Glyphs)
@@ -637,7 +665,7 @@ func probes() []App {
 	base.m.Snap.Report.State = daemon.DaemonRunning
 
 	pick := base
-	pick.scr, pick.pick = screenPicker, switchPicker(nil, "", "", base.m.Glyphs)
+	pick.scr, pick.pick = screenPicker, strategyPicker("", base.m.Glyphs)
 	panel := base
 	panel.scr = screenPanel
 	engine := base
@@ -887,6 +915,26 @@ func (m Model) cursorUUID() string {
 	}
 	return m.Snap.Rows[m.Cursor].Account.UUID
 }
+
+// cursorIsLive is whether the row under the cursor is already the login a
+// session would get.
+//
+// It is Row.Active and not a comparison against a uuid, because Row.Active is
+// what the marker in the IDX column is drawn from: the answer the user is
+// looking at when they press the key has to be the answer the key acts on.
+func (m Model) cursorIsLive() bool {
+	if m.Cursor < 0 || m.Cursor >= len(m.Snap.Rows) {
+		return false
+	}
+	return m.Snap.Rows[m.Cursor].Active
+}
+
+// alreadyLive is what `s` says on the row a session is already running as.
+//
+// It is a sentence rather than a silent no-op: a key that does nothing reads as
+// a key that failed, and `ccdad switch` itself exits 3 with a sentence in the
+// same situation rather than exiting 0 in silence.
+const alreadyLive = "That account is already the live login. Move the cursor with the arrow keys and press s again."
 
 // fit cuts a block to the terminal it is drawn in and says how many rows it
 // took away, rather than ending at the last row in silence -- a screen that
