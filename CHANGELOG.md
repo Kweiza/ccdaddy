@@ -16,6 +16,17 @@ reference accounts by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.20.0] — 2026-09-06
+
+The release that stops the account list numbering two providers as one. The
+tables have been drawn in `CLAUDE` and `CODEX` sections for several releases and
+the display index went on counting across the whole store, so a mixed fleet drew
+`CLAUDE` 1, 3, 5 over `CODEX` 2, 4 — and the dashboard cursor, which steps
+through the store's order while the page draws the grouping, jumped between the
+two halves on every arrow key. Both are the same disagreement, and the store is
+where it is settled. The dashboard also gains the one account command it never
+had a key for: `m` picks a row up and the arrow keys carry it.
+
 ### Changed
 
 - **BREAKING for anyone typing a bare index on a fleet with both providers: the
@@ -3684,7 +3695,8 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.19.0...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.20.0...HEAD
+[0.20.0]: https://github.com/Kweiza/ccdaddy/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/Kweiza/ccdaddy/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/Kweiza/ccdaddy/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/Kweiza/ccdaddy/compare/v0.16.0...v0.17.0
