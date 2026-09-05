@@ -206,34 +206,48 @@ func TestAWeeklyThatHasAlreadyRolledStrandsNothing(t *testing.T) {
 	}
 }
 
-// The cap and the empty tier read the SAME room, and this is the pair that stops
-// the second spelling drifting. hoverRoom is OutOfQuota's rule as a number, so
-// it must go to zero at exactly the instant OutOfQuota files the account empty
-// -- otherwise a blown model-scoped cap comes to zero a licence that OutOfQuota
-// would not zero.
-func TestTheStrandedCapAndTheEmptyTierReadTheSameRoom(t *testing.T) {
+// The floor and the empty tier read the same window set and agree in the
+// direction that matters: an account OutOfQuota files empty is one the floor
+// has already refused to widen. They no longer go to zero at the same instant
+// -- the floor fires first, while room is still positive -- and the two sliver
+// rows are exactly the band the old equality between the room figure and
+// OutOfQuota (fe1a5fe) could not express. The blown-sub-cap row is why both
+// range over the all-model windows first: a spent Fable cap beside a week with
+// room may not zero a licence OutOfQuota would not zero. The half-a-point row
+// is what stops the floor being a constant: 0.5 of a week is fifty minutes of
+// work, and reading it against the five-hour figure would throw it away.
+func TestTheLicenceFloorFiresBeforeTheEmptyTierDoes(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		s    *usage.Snapshot
+		name    string
+		s       *usage.Snapshot
+		absorbs bool
 	}{
-		{"room in both", snap(win(10, time.Hour), win(20, weekLen/2))},
-		{"the week is empty", snap(win(10, time.Hour), win(100, weekLen/2))},
-		{"the five-hour window is empty", snap(win(100, time.Hour), win(20, weekLen/2))},
+		{"room in both", snap(win(10, time.Hour), win(20, weekLen/2)), true},
+		{"the week is empty", snap(win(10, time.Hour), win(100, weekLen/2)), false},
+		{"the five-hour window is empty", snap(win(100, time.Hour), win(20, weekLen/2)), false},
 		{"a blown sub-cap beside a week with room", &usage.Snapshot{
 			FiveHour:     win(10, time.Hour),
 			SevenDay:     win(20, weekLen/2),
 			SevenDayOpus: win(100, weekLen/2),
-		}},
+		}, true},
+		{"a sliver of a five-hour window", snap(win(99.9, time.Hour), win(20, weekLen/2)), false},
+		{"a sliver of a week", snap(win(10, time.Hour), win(99.99, weekLen/2)), false},
+		{"half a point of a week", snap(win(10, time.Hour), win(99.5, weekLen/2)), true},
+		{"nothing but a spent model cap", &usage.Snapshot{SevenDayOpus: win(100, weekLen/2)}, false},
+		{"nothing but a model cap with room", &usage.Snapshot{SevenDayOpus: win(20, weekLen/2)}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			th := opts().Thresholds()
-			room := hoverRoom(tc.s, "", th)
+			got := absorbsACooldown(tc.s, "", th)
+			if got != tc.absorbs {
+				t.Errorf("absorbsACooldown = %v, want %v", got, tc.absorbs)
+			}
 			empty, known := OutOfQuota(HeadroomFor(tc.s, "", th))
 			if !known {
 				t.Fatal("OutOfQuota could not answer for a readable snapshot")
 			}
-			if (room <= 0) != empty {
-				t.Errorf("hoverRoom = %v but OutOfQuota says empty=%v: the two spellings have drifted", room, empty)
+			if empty && got {
+				t.Error("OutOfQuota files the account empty but the floor would still widen its licence")
 			}
 		})
 	}
@@ -243,40 +257,151 @@ func TestTheStrandedCapAndTheEmptyTierReadTheSameRoom(t *testing.T) {
 // directly rather than as a share of a length.
 func ptr[T any](v T) *T { return &v }
 
-// The hole the room cap closes, which is the one way this term could hand the
-// session to an account that cannot serve it.
+// What is left of the room cap, and where it stops.
 //
-// An account whose five-hour window is nearly spent still holds a whole week
-// that expires in fifteen hours. Priced on the week alone its licence is 81
-// points and its five-hour pace target 171, which puts it AHEAD of an account
-// holding sixty -- and Decide then switches onto an account with ten points of
-// room. The cap is what says a licence is a claim on the next session, so it
-// may not exceed what the account could serve.
-func TestANearlyEmptyAccountCannotBuyTheFrontOfTheQueue(t *testing.T) {
-	// Ten points of five-hour room, and a week 91% elapsed at 1% used: 99
-	// points that nothing but this account can reach, and it cannot reach them
-	// either.
-	nearly := sub("a-nearly-empty", &usage.Snapshot{
-		FiveHour: elapsedWindow(fiveHourLen, 0.90, 90),
-		SevenDay: elapsedWindow(weekLen, 0.91, 1),
-	})
-	// Sixty points of week left and half the week to spend them in, so its
-	// rotation reaches all of it and nothing strands.
-	roomy := sub("b-roomy", &usage.Snapshot{
-		FiveHour: elapsedWindow(fiveHourLen, 0.70, 10),
-		SevenDay: elapsedWindow(weekLen, 0.50, 40),
-	})
-	pool := []Candidate{nearly, roomy}
+// The fixture is the one the cap was added for in fe1a5fe: ten points of
+// five-hour room beside a week 91% elapsed at 1% used, 99 points that nothing
+// but this account can reach. The cap read ten points as "cannot serve the next
+// session" and refused the licence. ccdad does not hand out sessions; it moves
+// after HoverCooldown, and ten points is thirty minutes of work with a fresh
+// window half an hour out -- fifteen cooldowns -- so the licence is 81 and
+// Decide switches onto it. Driven forward to the weekly rollover that is 51
+// switches against 63 and 9.23 weekly points absorbed against 8.93, on a
+// fixture drain_test.go already puts the physical ceiling of at about 9.
+//
+// What a widening may not do is manufacture a lead for an account that cannot
+// pay for the switch: the 0.7 and 0.6 rows straddle one cooldown of a five-hour
+// window, 0.667 points, and below it the licence is refused, the share falls
+// back to the flat slice and the engine stays. At zero it is the empty tier,
+// not the floor, that files the account last.
+func TestAnAccountThatCannotAbsorbOneCooldownGetsNoWidening(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		room     float64
+		stranded float64
+		order    []string
+		action   Action
+	}{
+		{"ten points, fifteen cooldowns", 10, 81, []string{"a-nearly-empty", "b-roomy"}, ActionSwitch},
+		{"just over one cooldown", 0.7, 81, []string{"a-nearly-empty", "b-roomy"}, ActionSwitch},
+		{"just under one cooldown", 0.6, 0, []string{"b-roomy", "a-nearly-empty"}, ActionStay},
+		{"nine seconds of work", 0.05, 0, []string{"b-roomy", "a-nearly-empty"}, ActionStay},
+		{"nothing at all", 0, 0, []string{"b-roomy", "a-nearly-empty"}, ActionStay},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			nearly := sub("a-nearly-empty", &usage.Snapshot{
+				FiveHour: elapsedWindow(fiveHourLen, 0.90, 100-tc.room),
+				SevenDay: elapsedWindow(weekLen, 0.91, 1),
+			})
+			// Sixty points of week left and half the week to spend them in,
+			// so its rotation reaches all of it and nothing strands.
+			roomy := sub("b-roomy", &usage.Snapshot{
+				FiveHour: elapsedWindow(fiveHourLen, 0.70, 10),
+				SevenDay: elapsedWindow(weekLen, 0.50, 40),
+			})
+			pool := []Candidate{nearly, roomy}
 
-	p := HoverThresholds(pool, hoverOpts())
-	a, ok := p.AccountFor("a-nearly-empty")
-	if !ok || a.Stranded != 10 {
-		t.Fatalf("stranded = %v, want the 10 points of room the account actually has", a.Stranded)
+			p := HoverThresholds(pool, hoverOpts())
+			a, ok := p.AccountFor("a-nearly-empty")
+			if !ok {
+				t.Fatal("no derivation for a-nearly-empty")
+			}
+			if diff := a.Stranded - tc.stranded; diff > 1e-9 || diff < -1e-9 {
+				t.Errorf("stranded = %v, want %v", a.Stranded, tc.stranded)
+			}
+			if tc.stranded == 0 && a.Share != a.PoolShare {
+				t.Errorf("share = %v against a pool slice of %v: a refused licence must fall back to the flat slice", a.Share, a.PoolShare)
+			}
+			eq(t, order(Rank(pool, hoverOpts())), tc.order)
+			if d := Decide(pool, hoverOpts(), Config{}, NewState(), "b-roomy"); d.Action != tc.action {
+				t.Errorf("Action = %v (%s), want %v", d.Action, d.Reason, tc.action)
+			}
+		})
 	}
-	eq(t, order(Rank(pool, hoverOpts())), []string{"b-roomy", "a-nearly-empty"})
+}
 
-	if d := Decide(pool, hoverOpts(), Config{}, NewState(), "b-roomy"); d.Action != ActionStay {
-		t.Errorf("Action = %v onto %s, want a stay: it has ten points left", d.Action, d.Target.UUID)
+// The fleet of 2026-09-05T14:40+09:00, as the live cache reported it: six
+// usable accounts, a pool slice of 16.667, and one five-hour cohort 90.56%
+// elapsed with 28 minutes to run. mintc.chan holds 61 points of a week that
+// expires in 6h18m -- 38.5 of them beyond what six accounts can absorb in the
+// 3.75% of the week left -- and its five-hour window is 91% used. The cap
+// clamped its licence to the nine five-hour points, under the pool slice, and
+// it ranked LAST of six.
+//
+// It does not reach first, and that is the binding window doing its job: 91%
+// used is 91% used for the next half hour. What it may not be is sixth, behind
+// four accounts with days of week left. Rolling the five-hour windows -- the
+// same fleet 28 minutes later, no work done -- puts it ahead of every account
+// that has a week at all, with the same stranded figure. That is the clock
+// proof: the clamp measured which window happened to be near its reset, not
+// the account.
+//
+// The one account it still trails after the roll is ejalrnrmf, added minutes
+// earlier and never spent against, so no window of its reports a reset and
+// every one takes the assumed elapsed share. A fresh account leading on a
+// guess is a different question -- HoverUnknownElapsedPct -- and it is not
+// asserted here either way.
+func fleetOf20260905T1440(fiveElapsed float64) []Candidate {
+	five := func(pct float64) usage.Window {
+		if fiveElapsed < 0.01 {
+			pct = 0 // a window that has just rolled holds nothing
+		}
+		return elapsedWindow(fiveHourLen, fiveElapsed, pct)
+	}
+	week := func(hoursLeft, pct float64) usage.Window {
+		return elapsedWindow(weekLen, 1-hoursLeft/168, pct)
+	}
+	zero := 0.0
+	return []Candidate{
+		sub("ejalrnrmf", &usage.Snapshot{
+			FiveHour: usage.NewWindow(&zero, nil),
+			SevenDay: usage.NewWindow(&zero, nil),
+		}),
+		sub("tlfyvhsdlek", &usage.Snapshot{FiveHour: five(60), SevenDay: week(39.3, 32)}),
+		sub("kweizaa", &usage.Snapshot{FiveHour: five(69), SevenDay: week(13.3, 35.02)}),
+		sub("mintc.official", &usage.Snapshot{FiveHour: five(48), SevenDay: week(81.3, 30)}),
+		sub("mintc.junseong", &usage.Snapshot{
+			FiveHour: elapsedWindow(fiveHourLen, 0.0361, 0),
+			SevenDay: week(145.3, 0),
+		}),
+		sub("mintc.chan", &usage.Snapshot{FiveHour: five(91), SevenDay: week(6.3, 39)}),
+	}
+}
+
+func TestAPerishableWeekOutlivesAFiveHourWindowAboutToRoll(t *testing.T) {
+	// As reported: the cohort 90.56% through its five-hour window.
+	pool := fleetOf20260905T1440(0.9056)
+	p := HoverThresholds(pool, hoverOpts())
+	chan1, _ := p.AccountFor("mintc.chan")
+	if diff := chan1.Stranded - 38.5; diff > 0.05 || diff < -0.05 {
+		t.Errorf("stranded = %v, want the 38.5 points of the week that expires in six hours", chan1.Stranded)
+	}
+	if chan1.Share <= chan1.PoolShare {
+		t.Errorf("share = %v against a pool slice of %v: the widening vanished", chan1.Share, chan1.PoolShare)
+	}
+	got := order(Rank(pool, hoverOpts()))
+	if got[len(got)-1] == "mintc.chan" {
+		t.Fatalf("order = %v: the account whose week expires first is last", got)
+	}
+
+	// The same fleet 28 minutes later, every five-hour window just rolled, no
+	// work done. The stranded figure must not have moved, because nothing
+	// about the account did.
+	rolled := fleetOf20260905T1440(0.001)
+	p2 := HoverThresholds(rolled, hoverOpts())
+	chan2, _ := p2.AccountFor("mintc.chan")
+	if diff := chan2.Stranded - chan1.Stranded; diff > 0.05 || diff < -0.05 {
+		t.Errorf("stranded moved from %v to %v with no work done: the licence was measuring a clock", chan1.Stranded, chan2.Stranded)
+	}
+	got2 := order(Rank(rolled, hoverOpts()))
+	pos := -1
+	for i, u := range got2 {
+		if u == "mintc.chan" {
+			pos = i
+		}
+	}
+	if pos != 1 || got2[0] != "ejalrnrmf" {
+		t.Errorf("order after the roll = %v: want mintc.chan ahead of every account that has a week, behind only the never-spent one", got2)
 	}
 }
 

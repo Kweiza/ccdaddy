@@ -16,6 +16,39 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`hover` no longer deletes a perishable week's licence because a five-hour
+  window is nearly full.** The widening was capped by the least room in any
+  window a model choice cannot dodge, read at the instant of the poll — the
+  five-hour window's room in every case where the cap bound, so a week's
+  licence was bounded by a window that rolls over 33.6 times inside it, and by
+  a figure in a different unit. Measured on the fleet of 2026-09-05: an account
+  holding 61 points of a week six hours from its reset priced 38.5 stranded,
+  was clamped to the 9 points its five-hour window had left half an hour before
+  that window reset, and 9 is under the pool slice of 16.67 — so the widening
+  vanished, the account ranked last of six, and the same account, unchanged,
+  priced 38.5 half an hour later.
+
+  The cap is gone. The premise behind it was that a licence is a claim on the
+  next session; ccdad hands out no session and moves mid-session after
+  `HoverCooldown`, so what the ranking has to protect is live utilization, and
+  the empty tier and the pre-emptive switch already do. What stays is a floor:
+  an account holding less than one cooldown of work on such a window — 0.667
+  points of a five-hour window, 0.0198 of a week, two minutes of either — gets
+  no widening, because a switch onto it would spend two minutes buying seconds.
+  An account with nothing left still sorts last; that was always the empty
+  tier's doing. On the drain harness the staggered fleet now spends 9.33 and
+  7.90 weekly points on the two accounts whose weeks expire inside the run
+  against 1.45 and 3.80 on the two with days left, on 125 switches against 139.
+
+  `ccdad status` now prints the running-wide-of-pace note for such an account
+  (the capped share equalled the pool slice, so the one account the note
+  existed for was the one it omitted), and `--json` `strandedPct` and the
+  daemon's switch line report the weekly figure rather than a count of
+  five-hour points labelled `seven_day`. `HoverAccount.Room` is removed: it was
+  written for the cap and read by nothing.
+
 ## [0.16.0] — 2026-09-05
 
 The release that puts every `hover` threshold on one scale. The mode derived a

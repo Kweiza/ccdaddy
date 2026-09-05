@@ -523,9 +523,14 @@ func staggeredFleet() []wasteAccount {
 // any engine, and a test that credited the ordering with saving them would be
 // measuring the fixture's demand rather than the fix.
 //
-// Measured here: the two accounts whose weeks expire inside the run absorb 6.55
-// and 6.50 points against 4.65 and 4.80 for the two with days left, a 38% shift
-// onto the deadline.
+// Measured here: the two accounts whose weeks expire inside the run absorb 9.33
+// and 7.90 points against 1.45 and 3.80 for the two with days left, more than
+// three times the work onto the deadline, on 125 switches. Those were 6.55 and
+// 6.50 against 4.65 and 4.80 on 139 switches while the licence was clamped by
+// the room a five-hour window held at the instant it was read: almost every
+// account here has a five-hour window resetting inside its own weekly deadline,
+// so almost every licence was being clipped by a window that would have rolled
+// over long before the quota it clipped expired.
 func TestHoverSpendsAWeekThatWouldOtherwiseExpireUnspent(t *testing.T) {
 	// 450 ticks of two minutes is fifteen hours, which is exactly when the
 	// first week ends.
