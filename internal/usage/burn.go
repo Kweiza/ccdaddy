@@ -39,19 +39,27 @@ import "time"
 // where it is not, which is the dangerous one because it reads as a slow burn
 // on an account that has just had a whole window handed back.
 type BindingSample struct {
-	Pct   float64
-	At    time.Time
-	Reset time.Time
+	// Window names which window this reading is OF. Two samples of different
+	// windows are not a rate, and the binding window changes on its own -- a
+	// five-hour window that rolls over stops being the tightest one, and the
+	// next reading is then of the weekly window instead. Subtracting across
+	// that pair reads a fresh window's low number against a spent one's high
+	// number, or the reverse, and neither is a burn.
+	Window WindowName
+	Pct    float64
+	At     time.Time
+	Reset  time.Time
 }
 
 // BurnPerMin is the rate between two readings of the same window, in points per
 // minute, and whether one could be taken at all.
 //
-// It refuses in four cases, and each refusal is "cannot say" rather than "zero":
-// no baseline, a clock that did not advance, a reset that moved, and a reading
-// that fell. The last two are the same event seen from two sides -- a window
-// that rolled over -- and the fall is checked as well as the reset because a
-// window that has never named a reset can still roll.
+// It refuses in five cases, and each refusal is "cannot say" rather than "zero":
+// no baseline, a clock that did not advance, a window that is not the same
+// window, a reset that moved, and a reading that fell. The last two are the same
+// event seen from two sides -- a window that rolled over -- and the fall is
+// checked as well as the reset because a window that has never named a reset can
+// still roll.
 //
 // An unchanged reading IS a rate, and it is zero. That distinction carries the
 // whole meaning of this figure for a candidate: an account nobody is spending
@@ -60,6 +68,9 @@ type BindingSample struct {
 // will never run out".
 func BurnPerMin(prev, cur BindingSample) (float64, bool) {
 	if prev.At.IsZero() || !cur.At.After(prev.At) {
+		return 0, false
+	}
+	if prev.Window != cur.Window {
 		return 0, false
 	}
 	if !prev.Reset.IsZero() && !cur.Reset.IsZero() && !prev.Reset.Equal(cur.Reset) {

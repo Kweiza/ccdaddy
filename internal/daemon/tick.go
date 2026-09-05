@@ -1400,8 +1400,47 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now time.Time,
 		// outranks the clock, which is the same order every other schedule here
 		// obeys.
 		entry.NextPollAt = warmClamp(entry.NextPollAt, e.warmTarget(entry.Snapshot, thr, now), now, entry.ScheduledTTL())
+		// The burn rate, taken BEFORE the anchors are overwritten: the reading
+		// that produces a rate is the same one that replaces the point it was
+		// measured from, so a reader arriving later has nothing left to
+		// subtract. prev is what the previous poll stored; cur is what this one
+		// just read, and BurnPerMin refuses the pair where the window rolled
+		// between them.
+		//
+		// Only a reading that actually landed moves the anchor. A failed poll
+		// leaves both alone, so the next success measures across the whole gap
+		// rather than against a point it never took -- which is the honest
+		// reading of a fleet whose polls are being refused.
+		prev := usage.BindingSample{
+			Window: entry.Poll.LastBindingWindow,
+			Pct:    entry.Poll.LastBindingPct,
+			At:     entry.Poll.LastBindingAt,
+			Reset:  entry.Poll.LastBindingReset,
+		}
+		burn, hasBurn := entry.Poll.BurnPerMin, entry.Poll.HasBurn
+		lastAt, lastReset := entry.Poll.LastBindingAt, entry.Poll.LastBindingReset
+		lastWindow := entry.Poll.LastBindingWindow
+		if reading.Known {
+			resetAt, _ := entry.Snapshot.ResetFor(h.Binding)
+			cur := usage.BindingSample{Window: h.Binding, Pct: reading.BindingPct, At: now, Reset: resetAt}
+			// The anchor moves on every reading that landed, including the
+			// FIRST one -- which measures nothing and is the point: without it
+			// the second reading has nothing to subtract from and the rate
+			// never starts. An older cache carries a zero LastBindingAt, and
+			// BurnPerMin reads that as no baseline, so the upgrade heals itself
+			// on the second poll.
+			if entry.Poll.HasLastBinding {
+				if rate, ok := usage.BurnPerMin(prev, cur); ok {
+					burn, hasBurn = rate, true
+				}
+			}
+			lastAt, lastReset, lastWindow = now, resetAt, h.Binding
+		}
 		entry.Poll = usage.PollState{Interval: next.Interval, LastRateLimited: next.LastRateLimited}
 		entry.Poll.LastBindingPct, entry.Poll.HasLastBinding = next.LastBindingPct, next.HasLastBinding
+		entry.Poll.LastBindingAt, entry.Poll.LastBindingReset = lastAt, lastReset
+		entry.Poll.LastBindingWindow = lastWindow
+		entry.Poll.BurnPerMin, entry.Poll.HasBurn = burn, hasBurn
 		// entry.StandDownUntil is read and written back untouched, and that is
 		// what makes the two writers safe: this account's poll never edits the
 		// field its identity's live account owns, so the order the two goroutines
