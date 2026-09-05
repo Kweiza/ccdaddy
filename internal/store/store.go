@@ -458,7 +458,7 @@ func (s *Store) add(a Account, creds cclink.Blob) error {
 		a.Primary = existing.Primary
 		a.Elsewhere = existing.Elsewhere
 	} else {
-		a.Idx = s.nextIdx()
+		a.Idx = s.nextIdx(a.Provider)
 		if a.AddedAt.IsZero() {
 			a.AddedAt = time.Now().UTC()
 		}
@@ -765,36 +765,104 @@ func (s *Store) rollback() error {
 	return errors.Join(errs...)
 }
 
-func (s *Store) nextIdx() int {
+// nextIdx is the ordinal a new account of provider p takes: one past the
+// highest that provider already carries.
+//
+// Scoped to the provider because the ordinal is. A store-wide maximum would
+// hand the first Codex seat on a four-Claude fleet the number 5, which
+// sortAndReindex would immediately compact back to 1 -- so the two would
+// disagree for exactly as long as it takes to save, and every caller that read
+// the number back off the account it was handed would print the wrong one.
+func (s *Store) nextIdx(p provider.ID) int {
 	max := 0
 	for _, a := range s.data.Accounts {
-		if a.Idx > max {
+		if a.Provider == p && a.Idx > max {
 			max = a.Idx
 		}
 	}
 	return max + 1
 }
 
-// sortAndReindex puts the slice into stored-Idx order and renumbers it.
-// Compacting on removal is why the stability contract says idx is an ordinal
-// and not a key.
+// providerRank is the order providers are stored in: Claude, then Codex, then
+// -- unreachably, because load refuses a row whose provider will not parse --
+// anything else.
+//
+// It is the SAME order internal/view groups its sections in, and that agreement
+// is the point rather than a coincidence. Every account list is built from this
+// slice and then grouped for drawing, so a slice already grouped makes the two
+// orders one. Two things fall out of that and neither is cosmetic: each
+// provider's ordinals come out CONTIGUOUS under its own heading, and the
+// dashboard cursor -- which steps through this slice -- steps down the page
+// instead of jumping between the CLAUDE and CODEX halves on every keypress.
+func providerRank(p provider.ID) int {
+	switch p {
+	case provider.Claude:
+		return 0
+	case provider.Codex:
+		return 1
+	}
+	return 2
+}
+
+// sortAndReindex groups the slice by provider, puts each group into stored-Idx
+// order and renumbers it from 1. Compacting on removal is why the stability
+// contract says idx is an ordinal and not a key.
+//
+// The provider is the FIRST sort key and the ordinal only breaks ties within
+// it. Sorting on the ordinal alone would interleave the two providers -- both
+// number from 1, so a stable sort would file claude 1, codex 1, claude 2 in
+// that order -- and the grouping every account list draws would then have to
+// undo it.
 //
 // Move must NOT call this. It sorts by the Idx already on disk, so a reordered
 // slice is sorted straight back into the order it had; reindex alone is what a
 // caller wants once the slice itself is the answer.
 func (s *Store) sortAndReindex() {
 	sort.SliceStable(s.data.Accounts, func(i, j int) bool {
-		return s.data.Accounts[i].Idx < s.data.Accounts[j].Idx
+		a, b := s.data.Accounts[i], s.data.Accounts[j]
+		if ra, rb := providerRank(a.Provider), providerRank(b.Provider); ra != rb {
+			return ra < rb
+		}
+		return a.Idx < b.Idx
 	})
 	s.reindex()
 }
 
 // reindex renumbers the accounts from their current slice positions, without
-// reordering them.
+// reordering them: each provider counts from 1 over its own rows and skips
+// everybody else's.
 func (s *Store) reindex() {
+	next := make(map[provider.ID]int, 2)
 	for i := range s.data.Accounts {
-		s.data.Accounts[i].Idx = i + 1
+		p := s.data.Accounts[i].Provider
+		next[p]++
+		s.data.Accounts[i].Idx = next[p]
 	}
+}
+
+// block is the half-open range of the slice holding one provider's accounts,
+// and 0,0 when it holds none.
+//
+// It reads the range off the slice rather than counting, which is only correct
+// because the slice is GROUPED: sortAndReindex is the only thing that orders it
+// and it groups by provider, add and remove both end in it, and Move -- the one
+// mutation that reorders without it -- is bounded by this function and so
+// cannot break the grouping it depends on.
+func (s *Store) block(p provider.ID) (start, end int) {
+	start = -1
+	for i := range s.data.Accounts {
+		if s.data.Accounts[i].Provider != p {
+			continue
+		}
+		if start < 0 {
+			start = i
+		}
+		end = i + 1
+	}
+	if start < 0 {
+		return 0, 0
+	}
+	return start, end
 }
 
 // SetDisabled holds an account out of auto-rotation, or puts it back, and
@@ -927,7 +995,19 @@ func (s *Store) SetPrimary(uuid string, primary bool) (changed bool, err error) 
 	return changed, nil
 }
 
-// Move puts an account at a 1-based display position and renumbers the rest.
+// Move puts an account at a 1-based display position WITHIN ITS OWN PROVIDER
+// and renumbers that provider's rest.
+//
+// Scoped to the provider because the position it sets is the ordinal, and the
+// ordinal is per-provider. The alternative -- a store-wide position -- would let
+// `ccdad move c3 1` land a Claude seat above every Codex one or below them,
+// depending on nothing the caller said, and the number it came to rest at would
+// not be the number they asked for.
+//
+// So a position past the provider's last account is that provider's last, never
+// the store's, and a Claude account cannot be moved into the Codex block at any
+// position. That is also what keeps the slice grouped, which block, the account
+// lists and the dashboard cursor all depend on.
 //
 // A position past the end clamps to the end rather than erroring: "put it last"
 // is what a caller who typed a big number meant, and the alternative is making
@@ -961,11 +1041,16 @@ func (s *Store) Move(uuid string, position int) (changed bool, err error) {
 		if from < 0 {
 			return fmt.Errorf("%w: %q", ErrNotFound, uuid)
 		}
-		to := position - 1
-		if to < 0 {
-			to = 0
+		// Both ends of the clamp are the PROVIDER's block and not the slice's,
+		// which is the whole of what makes the position mean the ordinal. from
+		// is inside that block by construction -- it is one of its rows -- so
+		// the move stays inside it and the grouping survives.
+		start, end := s.block(s.data.Accounts[from].Provider)
+		to := start + position - 1
+		if to < start {
+			to = start
 		}
-		if last := len(s.data.Accounts) - 1; to > last {
+		if last := end - 1; to > last {
 			to = last
 		}
 		if to == from {

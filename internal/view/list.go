@@ -39,6 +39,14 @@ type ColumnKind int
 const (
 	// ColumnIdx is the live-account marker and the store index, together, in
 	// the one cell that carries both.
+	//
+	// The index is BARE here -- the number and not store.Account.Ref -- and
+	// that is a fact about this table rather than about the index. The index is
+	// numbered per provider, so it repeats across a mixed fleet; what makes it
+	// unambiguous in this column is that every table drawing it is grouped into
+	// provider sections, and the heading over the rows is the prefix Ref would
+	// have printed on each of them. A surface that lists accounts WITHOUT that
+	// grouping -- `ccdad runway` is the one -- prints Ref instead.
 	ColumnIdx ColumnKind = iota
 	ColumnAccount
 	ColumnType
@@ -402,6 +410,8 @@ func CollapseWindows(cols []ListColumn) []ListColumn {
 func (r Row) ListCell(c ListColumn, block Columns, now time.Time, hover bool) string {
 	switch c.Kind {
 	case ColumnIdx:
+		// See ColumnIdx: bare, because the section heading over this row is
+		// already the provider half of the reference.
 		return fmt.Sprintf("%s %d", r.Marker(), r.Account.Idx)
 	case ColumnAccount:
 		return r.ListLabel()

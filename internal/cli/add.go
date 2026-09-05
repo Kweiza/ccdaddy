@@ -463,7 +463,11 @@ func runAdd(cmd *cobra.Command, opts addOptions) error {
 	if existed {
 		verb = "Re-authenticated"
 	}
-	fmt.Fprintf(stderr, "\n%s %s (%s, index %d).\n", verb, saved.Label(), saved.Kind, saved.Idx)
+	// saved.Ref and not saved.Idx: the index is per provider now, so a bare
+	// number here names two accounts on any fleet holding both, and this line
+	// is the one place a user learns what the account they just added is
+	// called.
+	fmt.Fprintf(stderr, "\n%s %s (%s, index %s).\n", verb, saved.Label(), saved.Kind, saved.Ref())
 
 	if opts.activate {
 		// --activate IS a switch, so the unknown-key probe belongs here too.
@@ -491,7 +495,10 @@ func runAdd(cmd *cobra.Command, opts addOptions) error {
 		// real switch will not recover on its own.
 		noteProfileSync(cmd, switcher.SyncGlobalConfigIdentity(s, saved, store.Account{}, false))
 	} else {
-		fmt.Fprintf(stderr, "Run 'ccdad switch %d' to use it.\n", saved.Idx)
+		// The reference and not the bare index, because this line is a command
+		// to be pasted: a bare number would be refused as ambiguous the moment
+		// the other provider numbers an account with it.
+		fmt.Fprintf(stderr, "Run 'ccdad switch %s' to use it.\n", saved.Ref())
 	}
 	return nil
 }
@@ -945,11 +952,11 @@ func runAddToken(cmd *cobra.Command, token string, isAPIKey bool, email, alias s
 	if !ok {
 		return fmt.Errorf("the account was stored but cannot be read back; the store may be corrupt")
 	}
-	fmt.Fprintf(stderr, "Added %s (%s, index %d).\n", saved.Label(), saved.Kind, saved.Idx)
+	fmt.Fprintf(stderr, "Added %s (%s, index %s).\n", saved.Label(), saved.Kind, saved.Ref())
 
 	if !activate {
 		if isAPIKey {
-			fmt.Fprintf(stderr, "Run 'ccdad switch %d' to make it the credential Claude Code uses.\n", saved.Idx)
+			fmt.Fprintf(stderr, "Run 'ccdad switch %s' to make it the credential Claude Code uses.\n", saved.Ref())
 		} else {
 			fmt.Fprintf(stderr, "Claude Code reads a setup token from %s only; export it to use this account.\n", envVar)
 		}
