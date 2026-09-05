@@ -289,7 +289,9 @@ func TestMovePastTheEndClampsRatherThanFailing(t *testing.T) {
 		t.Fatalf("move past the end = %d (%s), want 0 with a clamp", code, stderr)
 	}
 	// Echoing "moved to 99" would be a lie; the landed position is read back.
-	if !strings.Contains(stderr, "now at 2") {
+	// As a reference and not a bare number: the index is per provider, so the
+	// line a user reads has to be the one they can type back.
+	if !strings.Contains(stderr, "now at c2") {
 		t.Errorf("stderr = %q, want the position it actually landed at", stderr)
 	}
 	s, _ := store.Open()

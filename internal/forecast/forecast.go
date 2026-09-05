@@ -253,9 +253,14 @@ type Fleet struct {
 type Input struct {
 	UUID string
 
-	// Idx is the account's index in the store, and it is what breaks ties: two
-	// accounts with identical room must be picked in the same order on every
-	// run, or six runs of one fleet disagree about a fleet that never changed.
+	// Idx is the account's display index in the store, and it is the FIRST of
+	// the two things that break ties: two accounts with identical room must be
+	// picked in the same order on every run, or six runs of one fleet disagree
+	// about a fleet that never changed.
+	//
+	// It does not break them on its own, because it is numbered per provider --
+	// a Claude seat and a Codex one carry the same number as a matter of course.
+	// UUID above finishes the order; see simAccount.before.
 	Idx int
 
 	// Tier is rate_limit_tier, and "" is a real state -- an account added
