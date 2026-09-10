@@ -69,23 +69,11 @@ type Glyphs struct {
 	// "unicode", which is the one place the escape hatch is narrowed. The
 	// narrowing is exact: the frame, the cursor and the eight markers are still
 	// Unicode there, because their widths are still ones the page can predict.
-	Art        bool
-	Border     lipgloss.Border
-	GaugeFull  rune
-	GaugeEmpty rune
-	Cursor     string
-	// Grabbed is the row the move key has picked up: the one the arrow keys
-	// are reordering rather than moving between.
-	//
-	// It is a THIRD marker in that column and not the cursor drawn twice,
-	// because move mode changes what the arrow keys do. A reader who cannot
-	// tell the two modes apart cannot tell whether the next press walks the
-	// list or reorders it, and both look like a cursor moving down one row.
-	//
-	// U+21C5 measures one column in BOTH width modes, which is the rule every
-	// marker in this column is chosen against; the ASCII set takes '=' for the
-	// grip, which is the one unused ASCII marker in this vocabulary.
-	Grabbed     string
+	Art         bool
+	Border      lipgloss.Border
+	GaugeFull   rune
+	GaugeEmpty  rune
+	Cursor      string
 	Active      string
 	Candidate   string
 	Exhausted   string
@@ -122,7 +110,6 @@ var UnicodeGlyphs = Glyphs{
 	GaugeFull:   '█',
 	GaugeEmpty:  '▒',
 	Cursor:      "❯",
-	Grabbed:     "⇅",
 	Active:      "▪",
 	Candidate:   "◉",
 	Exhausted:   "✗",
@@ -154,7 +141,6 @@ var ASCIIGlyphs = Glyphs{
 	GaugeFull:   '#',
 	GaugeEmpty:  '.',
 	Cursor:      ">",
-	Grabbed:     "=",
 	Active:      "*",
 	Candidate:   "+",
 	Exhausted:   "!",
