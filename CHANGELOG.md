@@ -16,6 +16,8 @@ must reference accounts by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.22.1] — 2026-09-10
+
 ### Fixed
 
 - Subscription profiles refresh independently of usage polling and its 429
@@ -3680,7 +3682,8 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.22.0...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.22.1...HEAD
+[0.22.1]: https://github.com/Kweiza/ccdaddy/compare/v0.22.0...v0.22.1
 [0.22.0]: https://github.com/Kweiza/ccdaddy/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/Kweiza/ccdaddy/compare/v0.20.0...v0.21.0
 [0.19.0]: https://github.com/Kweiza/ccdaddy/compare/v0.18.0...v0.19.0
