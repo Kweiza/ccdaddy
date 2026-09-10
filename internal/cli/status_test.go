@@ -69,7 +69,7 @@ func seedAccountAddedAt(t *testing.T, uuid, email string, at time.Time) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Add(store.Account{Provider: provider.Claude, UUID: uuid, Email: email, AddedAt: at}, credsFor("RT-"+uuid)); err != nil {
+	if err := s.Add(store.Account{Provider: provider.Claude, SubscriptionStatus: "active", UUID: uuid, Email: email, AddedAt: at}, credsFor("RT-"+uuid)); err != nil {
 		t.Fatal(err)
 	}
 }

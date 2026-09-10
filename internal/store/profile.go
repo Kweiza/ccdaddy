@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/identity"
+	"github.com/Kweiza/ccdaddy/internal/provider"
 )
 
 // ProfileTTL is how long a profile reading stands before a poll spends a
@@ -71,6 +72,7 @@ func (a *Account) AdoptProfile(p *identity.Profile, at time.Time) {
 	a.SeatTier = p.SeatTier
 	a.OrganizationUUID = p.OrganizationUUID
 	a.ProfileFetchedAt = at
+	a.ProfileRetryAt = time.Time{}
 }
 
 // ApplyProfile records a fresh profile reading against one stored account. It
@@ -103,4 +105,36 @@ func (s *Store) applyProfile(uuid string, p *identity.Profile, observedAt time.T
 		}
 	}
 	return fmt.Errorf("%w: %q", ErrNotFound, uuid)
+}
+
+// ProfileRetryInterval bounds retries across daemon ticks, restarts and CLI
+// refreshes. Quota endpoint backoff does not apply to the profile endpoint.
+const ProfileRetryInterval = 15 * time.Minute
+
+// BeginProfileRefresh claims a due lookup under the store lock before any
+// network call. A failed lookup keeps this retry deadline; success clears it.
+func (s *Store) BeginProfileRefresh(uuid string, now time.Time, force bool) (bool, error) {
+	claimed := false
+	err := s.mutate(func() error {
+		for i := range s.data.Accounts {
+			a := &s.data.Accounts[i]
+			if a.UUID != uuid {
+				continue
+			}
+			if a.Provider != provider.Claude {
+				return nil
+			}
+			if !a.ProfileStale(now) && (!force || now.Sub(a.ProfileFetchedAt) < ProfileRetryInterval) {
+				return nil
+			}
+			if a.ProfileRetryAt.After(now) && a.ProfileRetryAt.Sub(now) <= ProfileTTL {
+				return nil
+			}
+			a.ProfileRetryAt = now.Add(ProfileRetryInterval)
+			claimed = true
+			return nil
+		}
+		return fmt.Errorf("%w: %q", ErrNotFound, uuid)
+	})
+	return claimed, err
 }

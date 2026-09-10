@@ -435,6 +435,9 @@ func (r Row) ListCell(c ListColumn, block Columns, now time.Time, hover bool) st
 	case ColumnWorst:
 		return r.WorstCell(block)
 	case ColumnState:
+		if r.Account.SubscriptionPending() {
+			return "checking"
+		}
 		if r.Account.SubscriptionInactive() {
 			return "unsubscribed"
 		}
@@ -528,6 +531,8 @@ func StateLabel(s daemon.AccountState) string {
 		return "serving"
 	case daemon.StateNeedsRelogin:
 		return "needs-relogin"
+	case daemon.StateSubscriptionPending:
+		return "checking"
 	case daemon.StateSubscriptionInactive:
 		return "unsubscribed"
 	case daemon.StateDisabled:
@@ -544,7 +549,7 @@ func StateLabel(s daemon.AccountState) string {
 // policy and not a lock: an explicit `ccdad switch` still activates a disabled
 // account.
 func (r Row) AutoLabel() string {
-	if r.Account.Disabled || r.Account.SubscriptionInactive() {
+	if r.Account.Disabled || r.Account.SubscriptionInactive() || r.Account.SubscriptionPending() {
 		return "no"
 	}
 	return "yes"

@@ -16,6 +16,17 @@ must reference accounts by `uuid` or `alias`.
 
 ## [Unreleased]
 
+### Fixed
+
+- Subscription profiles refresh independently of usage polling and its 429
+  backoff. This fixes 0.22.0 leaving canceled subscriptions as candidates while
+  their first subscription check waited behind a quota retry deadline.
+- Unverified Claude subscriptions show `checking` and cannot be selected for
+  automatic switching or warm-ups. An unknown status is not reported as expired.
+- Profile lookup failures have a persisted 15-minute retry deadline shared by
+  daemon ticks and manual status refreshes, preventing repeated requests on
+  every tick or restart. Profile checks do not change quota backoff.
+
 ## [0.22.0] — 2026-09-10
 
 ### Changed

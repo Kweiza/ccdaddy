@@ -457,7 +457,7 @@ func seedAccount(t *testing.T, uuid, email string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Add(store.Account{Provider: provider.Claude, UUID: uuid, Email: email}, credsFor("RT-"+uuid)); err != nil {
+	if err := s.Add(store.Account{Provider: provider.Claude, SubscriptionStatus: "active", UUID: uuid, Email: email}, credsFor("RT-"+uuid)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -471,7 +471,7 @@ func seedDisabledAccount(t *testing.T, uuid, email string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Add(store.Account{Provider: provider.Claude, UUID: uuid, Email: email, Disabled: true}, credsFor("RT-"+uuid)); err != nil {
+	if err := s.Add(store.Account{Provider: provider.Claude, SubscriptionStatus: "active", UUID: uuid, Email: email, Disabled: true}, credsFor("RT-"+uuid)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -489,7 +489,7 @@ func seedAPIKeyAccount(t *testing.T, uuid, email string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Add(store.Account{Provider: provider.Claude, UUID: uuid, Email: email, Kind: identity.KindAPIKey},
+	if err := s.Add(store.Account{Provider: provider.Claude, SubscriptionStatus: "active", UUID: uuid, Email: email, Kind: identity.KindAPIKey},
 		cclink.Blob{cclink.TokenKey: rec}); err != nil {
 		t.Fatal(err)
 	}
@@ -505,7 +505,7 @@ func seedCreditAccount(t *testing.T, uuid, email string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Add(store.Account{Provider: provider.Claude, UUID: uuid, Email: email, Kind: identity.KindCredit}, credsFor("RT-"+uuid)); err != nil {
+	if err := s.Add(store.Account{Provider: provider.Claude, SubscriptionStatus: "active", UUID: uuid, Email: email, Kind: identity.KindCredit}, credsFor("RT-"+uuid)); err != nil {
 		t.Fatal(err)
 	}
 }

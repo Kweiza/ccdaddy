@@ -65,6 +65,7 @@ const (
 	// StateDisabled was taken out of rotation by the user.
 	StateDisabled             AccountState = "disabled"
 	StateSubscriptionInactive AccountState = "subscription_inactive"
+	StateSubscriptionPending  AccountState = "subscription_pending"
 	// StateUnknown is an account whose usage could not be read. It is NOT an
 	// empty account, and it must never render as 0%.
 	StateUnknown AccountState = "unknown"

@@ -211,6 +211,9 @@ func loadSnapshot(cmd *cobra.Command, now time.Time, refresh bool) (snap view.Sn
 	rows := view.Rows(accounts, cache, active, hasActive, now, resolve)
 	for i := range rows {
 		rows[i].Engine = engine[rows[i].Account.UUID]
+		if rows[i].Account.SubscriptionPending() {
+			rows[i].Engine.State = daemon.StateSubscriptionPending
+		}
 		if rows[i].Account.SubscriptionInactive() {
 			rows[i].Engine.State = daemon.StateSubscriptionInactive
 		}
