@@ -63,17 +63,15 @@ type CodexConfig struct {
 	// CrossAccountReplay allows a 429 in the MIDDLE of a thread to be replayed
 	// on another account.
 	//
-	// It defaults to false, and that is a fact about how codex sends a turn
-	// rather than caution: every request carries the whole history including
-	// the reasoning content the previous account produced, so a replay bills a
-	// second account for a thread the first started and hands it material it
-	// did not generate. The default answer to a mid-thread 429 is to return it
-	// and let the user start a new thread, which lands on the new account
-	// cleanly.
+	// It defaults to true so an unpinned thread can continue on another
+	// eligible account when its current account reaches a limit. An explicit
+	// false returns the original 429 instead. A launch pinned to one account
+	// never replays on another, and no replay starts after response bytes have
+	// reached the client.
 	//
-	// The default is provisional rather than settled: the paragraph above is
-	// reasoned from the shape of a codex request and is unmeasured, so a
-	// measurement made before release may turn it on.
+	// Replay forwards the existing history, including encrypted reasoning.
+	// The replacement may reject that history; enabling replay does not
+	// guarantee that another account can serve it.
 	CrossAccountReplay bool
 }
 

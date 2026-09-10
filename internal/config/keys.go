@@ -64,8 +64,8 @@ const (
 	// binary names the real codex when the PATH walk should not decide.
 	// proxy_port pins the loopback port when it must be stable across
 	// restarts. cross_account_replay allows a mid-thread 429 to be replayed on
-	// another account, which bills a second account for a thread the first
-	// started and is therefore off unless it is asked for.
+	// another account. It defaults on; an explicit false keeps a live thread
+	// on its account when that account reaches a limit.
 	//
 	// The rule at the top of this file is not relaxed for them. None is a
 	// credential and none may become one.

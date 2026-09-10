@@ -37,14 +37,14 @@ func TestTheCodexDefaults(t *testing.T) {
 	if d.ProxyPort != 0 {
 		t.Errorf("Codex.ProxyPort = %d, want 0, which means resolve one", d.ProxyPort)
 	}
-	if d.CrossAccountReplay {
-		t.Error("Codex.CrossAccountReplay is on by default; it bills a second account for a thread the first started")
+	if !d.CrossAccountReplay {
+		t.Error("Codex.CrossAccountReplay is off by default; an unpinned thread cannot retry on another account after a 429")
 	}
 }
 
 func TestParseReadsTheCodexTable(t *testing.T) {
 	cfg, err := Parse([]byte("[codex]\nthreshold = 65\nbinary = \"/opt/codex/bin/codex\"\n" +
-		"proxy_port = 24680\ncross_account_replay = true\n"))
+		"proxy_port = 24680\ncross_account_replay = false\n"))
 	if err != nil {
 		t.Fatalf("Parse() = %v, want nil", err)
 	}
@@ -57,8 +57,8 @@ func TestParseReadsTheCodexTable(t *testing.T) {
 	if cfg.Codex.ProxyPort != 24680 {
 		t.Errorf("Codex.ProxyPort = %d, want 24680", cfg.Codex.ProxyPort)
 	}
-	if !cfg.Codex.CrossAccountReplay {
-		t.Error("Codex.CrossAccountReplay = false after the file said true")
+	if cfg.Codex.CrossAccountReplay {
+		t.Error("Codex.CrossAccountReplay = true after the file said false")
 	}
 }
 
@@ -73,7 +73,7 @@ func TestACodexTableWithOneKeyLeavesTheRestAlone(t *testing.T) {
 	if cfg.Codex.Threshold != Defaults().Codex.Threshold {
 		t.Errorf("Codex.Threshold = %v, want the default %v", cfg.Codex.Threshold, Defaults().Codex.Threshold)
 	}
-	if cfg.Codex.CrossAccountReplay {
+	if !cfg.Codex.CrossAccountReplay {
 		t.Error("Codex.CrossAccountReplay changed for a file that never mentioned it")
 	}
 }
@@ -116,6 +116,7 @@ func TestTheCodexKeysRoundTripThroughSetAndValue(t *testing.T) {
 		{"codex.binary", "/opt/codex", "/opt/codex"},
 		{"codex.proxy_port", "24680", "24680"},
 		{"codex.cross_account_replay", "true", "true"},
+		{"codex.cross_account_replay", "false", "false"},
 	} {
 		t.Run(tc.key, func(t *testing.T) {
 			d := newDocument()

@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/Kweiza/ccdaddy/internal/config"
 )
 
 // limited429 is the answer codex's own upstream sends when an account is spent.
@@ -39,7 +41,9 @@ func rateLimitedThenFine(t *testing.T, retryAfter string) (*fixture, *int32) {
 func TestALaunchPinNeverBillsAnotherAccount(t *testing.T) {
 	f, _ := rateLimitedThenFine(t, "")
 	f.serving(t, "uuid-a")
-	s := f.server(t, f.config())
+	cfg := f.config()
+	cfg.CrossAccountReplay = config.Defaults().Codex.CrossAccountReplay
+	s := f.server(t, cfg)
 
 	w := post(s, pinnedPrefix+"uuid-a", map[string]string{threadIDHeader: "thread-1"}, `{"input":[]}`)
 	if w.Code != http.StatusTooManyRequests {
@@ -94,7 +98,7 @@ func TestAThreadsFirstRequestIsReplayedOnTheNextAccount(t *testing.T) {
 	}
 }
 
-func TestAThreadWithPriorResponsesIsNotMovedByDefault(t *testing.T) {
+func TestAThreadWithPriorResponsesIsNotMovedWhenCrossAccountReplayIsOff(t *testing.T) {
 	f, _ := rateLimitedThenFine(t, "")
 	cfg := f.config()
 	cfg.RankedEligible = func() []string { return []string{"uuid-a", "uuid-b"} }
@@ -110,11 +114,11 @@ func TestAThreadWithPriorResponsesIsNotMovedByDefault(t *testing.T) {
 	}
 }
 
-func TestAThreadWithPriorResponsesMovesWhenCrossAccountReplayIsOn(t *testing.T) {
+func TestAThreadWithPriorResponsesMovesByDefault(t *testing.T) {
 	f, _ := rateLimitedThenFine(t, "")
 	cfg := f.config()
 	cfg.RankedEligible = func() []string { return []string{"uuid-a", "uuid-b"} }
-	cfg.CrossAccountReplay = true
+	cfg.CrossAccountReplay = config.Defaults().Codex.CrossAccountReplay
 	s := f.server(t, cfg)
 	s.rememberThread("thread-1", "uuid-a")
 

@@ -284,7 +284,7 @@ func TestEveryKeyCanBeSetAndReadBack(t *testing.T) {
 		keyCodexThreshold:          "65",
 		keyCodexBinary:             "/opt/codex/bin/codex",
 		keyCodexProxyPort:          "24680",
-		keyCodexCrossAccountReplay: "true",
+		keyCodexCrossAccountReplay: "false",
 
 		// Neither is the default, for the reason the booleans above are not: a
 		// key set to the value it already had would pass this test without the
@@ -349,7 +349,7 @@ func TestEveryKeyCanBeSetAndReadBack(t *testing.T) {
 			Threshold:          65,
 			Binary:             "/opt/codex/bin/codex",
 			ProxyPort:          24680,
-			CrossAccountReplay: true,
+			CrossAccountReplay: false,
 		},
 	}
 	// Equal rather than ==: Config carries the per-window table now, and a
@@ -383,7 +383,7 @@ func TestTheEffectiveValueOfEveryKeyIsFormattable(t *testing.T) {
 		keyCodexThreshold:          "80",
 		keyCodexBinary:             "",
 		keyCodexProxyPort:          "0",
-		keyCodexCrossAccountReplay: "false",
+		keyCodexCrossAccountReplay: "true",
 
 		keyTUITheme:  "auto",
 		keyTUIGlyphs: "auto",

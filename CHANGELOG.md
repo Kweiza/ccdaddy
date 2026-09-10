@@ -16,6 +16,15 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+### Changed
+
+- Codex cross-account replay now defaults to `true`. When an unpinned thread's
+  account returns HTTP 429, the proxy tries another eligible account before any
+  response bytes reach the client. Existing explicit `false` settings still
+  disable replay, and account-pinned launches keep their account. Restart the
+  daemon after upgrading to use the new default. A replacement may still reject
+  the existing conversation history; continuation is not guaranteed.
+
 ## [0.19.0] — 2026-09-05
 
 The release that makes the engine measure what a session actually spends. Every
