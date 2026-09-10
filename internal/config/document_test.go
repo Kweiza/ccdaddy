@@ -291,6 +291,7 @@ func TestEveryKeyCanBeSetAndReadBack(t *testing.T) {
 		// set having landed anywhere.
 		keyTUITheme:  "dark",
 		keyTUIGlyphs: "ascii",
+		keyAutoSort:  "true",
 	}
 	d := newDocument()
 	for _, k := range Keys() {
@@ -345,6 +346,7 @@ func TestEveryKeyCanBeSetAndReadBack(t *testing.T) {
 		UpdateCheck:                 false,
 		TUITheme:                    "dark",
 		TUIGlyphs:                   "ascii",
+		AutoSort:                    true,
 		Codex: CodexConfig{
 			Threshold:          65,
 			Binary:             "/opt/codex/bin/codex",
@@ -387,6 +389,7 @@ func TestTheEffectiveValueOfEveryKeyIsFormattable(t *testing.T) {
 
 		keyTUITheme:  "auto",
 		keyTUIGlyphs: "auto",
+		keyAutoSort:  "false",
 	}
 	for _, k := range Keys() {
 		if _, named := want[k]; !named {

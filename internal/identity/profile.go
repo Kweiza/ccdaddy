@@ -95,6 +95,8 @@ type Profile struct {
 	// really does hold a contracted subscription. No allowlist on this field
 	// can reach such an account; see Classify and noPlanWindowProfile.
 	BillingType string
+	// SubscriptionStatus is the live subscription lifecycle, e.g. active or canceled.
+	SubscriptionStatus string
 	// HasExtraUsage is the organization's has_extra_usage_enabled overage
 	// switch. It is recorded as a secondary axis and is deliberately NOT
 	// classification evidence: subscription organizations turn it on too.
@@ -130,6 +132,7 @@ type wire struct {
 		SeatTier             string `json:"seat_tier"`
 		HasExtraUsageEnabled bool   `json:"has_extra_usage_enabled"`
 		BillingType          string `json:"billing_type"`
+		SubscriptionStatus   string `json:"subscription_status"`
 	} `json:"organization"`
 }
 
@@ -197,13 +200,14 @@ func (c *Client) FetchProfile(ctx context.Context, accessToken string) (*Profile
 	}
 
 	return &Profile{
-		AccountUUID:      w.Account.UUID,
-		Email:            w.Account.Email,
-		OrganizationUUID: w.Organization.UUID,
-		OrganizationType: w.Organization.OrganizationType,
-		RateLimitTier:    w.Organization.RateLimitTier,
-		SeatTier:         w.Organization.SeatTier,
-		BillingType:      w.Organization.BillingType,
-		HasExtraUsage:    w.Organization.HasExtraUsageEnabled,
+		AccountUUID:        w.Account.UUID,
+		Email:              w.Account.Email,
+		OrganizationUUID:   w.Organization.UUID,
+		OrganizationType:   w.Organization.OrganizationType,
+		RateLimitTier:      w.Organization.RateLimitTier,
+		SeatTier:           w.Organization.SeatTier,
+		BillingType:        w.Organization.BillingType,
+		SubscriptionStatus: w.Organization.SubscriptionStatus,
+		HasExtraUsage:      w.Organization.HasExtraUsageEnabled,
 	}, nil
 }

@@ -25,7 +25,7 @@ const ProfileTTL = 24 * time.Hour
 // SeatTier is missing. A build that treated "never measured" as fresh would
 // leave exactly the broken population unrepaired.
 func (a Account) ProfileStale(now time.Time) bool {
-	if a.ProfileFetchedAt.IsZero() {
+	if a.ProfileFetchedAt.IsZero() || a.SubscriptionStatus == "" {
 		return true
 	}
 	// A stamp in the future is a clock that moved, not a reading from ahead of
@@ -62,6 +62,10 @@ func (a *Account) AdoptProfile(p *identity.Profile, at time.Time) {
 	if p == nil {
 		return
 	}
+	a.SubscriptionStatus = p.SubscriptionStatus
+	if a.SubscriptionStatus == "" {
+		a.SubscriptionStatus = "unknown"
+	}
 	a.Tier = p.OrganizationType
 	a.RateLimitTier = p.RateLimitTier
 	a.SeatTier = p.SeatTier
@@ -91,6 +95,9 @@ func (s *Store) applyProfile(uuid string, p *identity.Profile, observedAt time.T
 	// back a defensive copy and a change made to one never reaches the disk.
 	for i := range s.data.Accounts {
 		if s.data.Accounts[i].UUID == uuid {
+			if observedAt.Before(s.data.Accounts[i].ProfileFetchedAt) {
+				return nil
+			}
 			s.data.Accounts[i].AdoptProfile(p, observedAt)
 			return nil
 		}

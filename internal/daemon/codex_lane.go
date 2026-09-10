@@ -9,6 +9,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/codexauth"
 	"github.com/Kweiza/ccdaddy/internal/codexswitch"
+	"github.com/Kweiza/ccdaddy/internal/codexusage"
 	"github.com/Kweiza/ccdaddy/internal/config"
 	"github.com/Kweiza/ccdaddy/internal/history"
 	"github.com/Kweiza/ccdaddy/internal/pollpolicy"
@@ -253,8 +254,9 @@ func (e *Engine) codexPoll(ctx context.Context, a store.Account, thr strategy.Th
 		}
 	}
 	var snap *usage.Snapshot
+	var identity codexusage.Identity
 	if err == nil {
-		snap, _, err = e.CodexFetchUsage(ctx, token, accountID)
+		snap, identity, err = e.CodexFetchUsage(ctx, token, accountID)
 	}
 
 	now := e.now()
@@ -264,6 +266,12 @@ func (e *Engine) codexPoll(ctx context.Context, a store.Account, thr strategy.Th
 		return err
 	}
 	e.codexCommit(a, snap, thr, now, serving, nil)
+	if identity.PlanType != "" && (identity.UserID == "" || identity.UserID == a.UUID) &&
+		(identity.AccountID == "" || identity.AccountID == accountID) {
+		if err := store.WithStore(func(s *store.Store) error { return s.ApplyCodexPlan(a.UUID, identity.PlanType, now) }); err != nil && !errors.Is(err, store.ErrNotFound) {
+			e.logf("updating %s's Codex plan failed: %v", a.UUID, err)
+		}
+	}
 	return nil
 }
 

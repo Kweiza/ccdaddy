@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/provider"
@@ -124,4 +125,29 @@ func (s *Store) accountsOf(p provider.ID) []Account {
 		}
 	}
 	return out
+}
+
+// ApplyCodexPlan records the tier returned by a successful usage poll. An
+// omitted tier or an older result must not erase a newer observation.
+func (s *Store) ApplyCodexPlan(uuid, plan string, at time.Time) error {
+	if plan == "" {
+		return nil
+	}
+	return s.mutate(func() error {
+		for i := range s.data.Accounts {
+			a := &s.data.Accounts[i]
+			if a.UUID != uuid {
+				continue
+			}
+			if a.Provider != provider.Codex {
+				return fmt.Errorf("%s is not a Codex account", uuid)
+			}
+			if at.Before(a.ProfileFetchedAt) {
+				return nil
+			}
+			a.Tier, a.ProfileFetchedAt = plan, at
+			return nil
+		}
+		return fmt.Errorf("%w: %q", ErrNotFound, uuid)
+	})
 }

@@ -14,6 +14,7 @@ package store
 
 import (
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/identity"
@@ -108,6 +109,9 @@ type Account struct {
 	CodexReloginFor string `toml:"codex_relogin_for,omitempty"`
 	// Tier is organization_type, e.g. claude_max.
 	Tier string `toml:"tier,omitempty"`
+	// SubscriptionStatus is the last observed Claude subscription state.
+	// Empty means this version has not checked it; unknown means the profile omitted it.
+	SubscriptionStatus string `toml:"subscription_status,omitempty"`
 	// RateLimitTier is rate_limit_tier, e.g. default_claude_max_20x.
 	RateLimitTier string `toml:"rate_limit_tier,omitempty"`
 	// SeatTier is seat_tier, e.g. standard or enterprise_usage_based.
@@ -268,4 +272,17 @@ func (a Account) Label() string {
 func (a Account) NeedsRelogin(currentRefreshTokenHash string) bool {
 	return a.CodexReloginFor != "" && currentRefreshTokenHash != "" &&
 		a.CodexReloginFor == currentRefreshTokenHash
+}
+
+// SubscriptionInactive requires an explicit terminal subscription state.
+// A missing status, a usage error, or a credit-metered seat is not expiry.
+func (a Account) SubscriptionInactive() bool {
+	if a.Provider != provider.Claude {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(a.SubscriptionStatus)) {
+	case "canceled", "cancelled", "expired", "unpaid", "incomplete_expired":
+		return true
+	}
+	return false
 }

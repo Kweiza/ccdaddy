@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/config"
+	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/provider"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/usage"
@@ -207,5 +208,23 @@ func TestTheProjectionCarriesThePrimaryFlag(t *testing.T) {
 		if want := c.UUID == "u-2"; c.Primary != want {
 			t.Errorf("%s: Primary = %v, want %v", c.UUID, c.Primary, want)
 		}
+	}
+}
+
+func TestCanceledSubscriptionsAreExcludedDespiteCachedQuota(t *testing.T) {
+	isolate(t)
+	seed(t, "u-1", "one@example.com")
+	seedReading(t, "u-1", 90)
+	s := openStore(t)
+	if err := s.ApplyProfile("u-1", &identity.Profile{AccountUUID: "u-1", SubscriptionStatus: "canceled"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	cache, err := usage.LoadCache()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cands := engineCandidates(s, s.Accounts(), cache, provider.Claude)
+	if len(cands) != 1 || !cands[0].Disabled {
+		t.Fatalf("canceled account still eligible: %+v", cands)
 	}
 }

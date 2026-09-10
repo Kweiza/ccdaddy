@@ -29,7 +29,7 @@ Runway:  7d dry 2026-08-24 01:19 UTC (1d13h)  ·  5h holds  ·  basis 4h00m  · 
   3    ci@example.org (ci)      api-key       -           ?    ?    ?      ?      ?      ?         -          ?
        CODEX
   IDX  ACCOUNT                  TYPE          TIER        CX 1  CX 1 IN                  STATE      AGE
-  4    cx@example.com           codex         pro         31%   3h09m                    serving    3m
+  1    cx@example.com           codex         pro         31%   3h09m                    serving    3m
 windows claude: 5H = five_hour   7D = seven_day   FABLE = weekly_scoped:model:Fable
 windows codex: CX 1 = codex_primary
 
@@ -42,6 +42,7 @@ $ ccdad status --json
     {
       "uuid": "0d9e4e6a-1f1a-4b5e-9c3a-2f7b6a1d8e40",
       "idx": 1,
+      "ref": "c1",
       "email": "work@example.com",
       "alias": "work",
       "kind": "subscription",
@@ -62,6 +63,7 @@ $ ccdad status --json
     {
       "uuid": "5b2c7f31-8a4d-4c9e-9d0a-3e6f1b2c9a71",
       "idx": 2,
+      "ref": "c2",
       "email": "personal@example.com",
       "kind": "subscription",
       "tier": "pro",
@@ -81,6 +83,7 @@ $ ccdad status --json
     {
       "uuid": "c1a8e2d4-6b3f-4a1e-8c5d-9f0b7e2a3c62",
       "idx": 3,
+      "ref": "c3",
       "email": "ci@example.org",
       "alias": "ci",
       "kind": "api-key",
@@ -408,6 +411,12 @@ email address, or a uuid prefix of at least eight characters. Alias, email and
 uuid matching are case-insensitive, and there is no fuzzy matching: an ambiguous
 reference is a usage error rather than a guess.
 
+Indexes start at 1 within each provider: Claude 1, 2, 3 and Codex 1, 2.
+Use `c1` for the first Claude account and `x1` for the first Codex account.
+A bare number is refused when both providers have that index. UUIDs and aliases
+remain stable when the display is reordered; account JSON includes the prefixed
+`ref` alongside the numeric `idx`.
+
 `ccdad --help` and `ccdad <command> --help` are the authority; every command
 documents its own flags there.
 
@@ -602,6 +611,7 @@ codex.proxy_port                0         default  honoured
 codex.cross_account_replay      true      default  honoured
 tui.theme                       auto      default  honoured
 tui.glyphs                      auto      default  honoured
+auto_sort                       false     default  honoured
 ```
 
 One `window_threshold` entry is still read for something other than its number.
@@ -956,7 +966,27 @@ runway, daemon state, and every available key command.
 | `s` | Switch to the account the cursor is on, in one keystroke. On the account already live it says so rather than spending a credential rotation |
 | `d` | The daemon screen — `S` starts, `x` stops, `R` restarts, and the log tails |
 | `c` | Change the switching strategy |
+| `o` | Toggle automatic account sorting by the nearest 7-day reset |
 | `q` | Quit (`ctrl+c` too) |
+
+Enable automatic sorting with `ccdad config set auto_sort true`, or press `o`.
+The dashboard shows `Sort: 7d reset` while it is enabled. Each provider is sorted
+separately and numbered in the displayed order; the cursor stays on the same
+account when a refresh changes that order. Claude uses its overall 7-day window;
+Codex uses a window explicitly reported as seven days. Unknown or already-past
+resets and inactive subscriptions sort last, with ties retaining their order.
+Sorting uses cached readings and makes no network requests. Set `auto_sort` to
+`false` to use the stored order. Store writes made while sorting is enabled can
+persist that order; use `ccdad move` with sorting off to arrange it manually.
+
+Claude subscription status is refreshed from the profile endpoint even when a
+usage lookup fails. Explicit canceled, expired, or unpaid subscriptions show as
+`unsubscribed` and are excluded from automatic switching and quota warm-ups.
+A timeout or a 429 alone is not evidence of expiry. A later active profile makes
+the account eligible again without changing its manual enable/disable setting.
+Existing accounts backfill the new status at their next permitted poll. Profiles
+normally refresh daily; permission failures can trigger an earlier recheck.
+Codex polls also update the stored plan from the usage response.
 
 `up`/`k` and `down`/`j` move, `r` reloads from disk, `esc` goes back, and `?`
 opens the full key list.
@@ -1303,6 +1333,7 @@ codex.proxy_port                0         default
 codex.cross_account_replay      true      default
 tui.theme                       auto      default
 tui.glyphs                      auto      default
+auto_sort                       false     default
 ```
 
 `credit.max_auto_spend` defaults to `0`, and that is the point: an account
@@ -2084,8 +2115,9 @@ Every read command takes `--json` and prints a single object with a
 
 ### Stability contract
 
-> **`idx` is a display ordinal, not a key.** It is recompacted whenever an
-> account is removed. Scripts must reference accounts by `uuid` or `alias`.
+> **`idx` is a display ordinal, not a key.** It is numbered per provider and
+> recompacted whenever accounts are removed or sorted. Scripts must reference
+> accounts by `uuid` or `alias`.
 
 This is printed by `ccdad --help` too. It is the one promise made before 1.0.
 

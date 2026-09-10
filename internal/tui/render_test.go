@@ -231,10 +231,10 @@ func TestTheScrollingRungNamesWhatIsOffThePage(t *testing.T) {
 // a window that put a provider's name on the page and no account at all is the
 // one arrangement this rung exists to refuse, wherever it came from.
 func TestWithRoomForOneRowTheAccountWinsAndTheCountGoes(t *testing.T) {
-	body := fixtureModel(35, 5).Body()
+	body := fixtureModel(35, 6).Body()
 	lines := strings.Split(body, "\n")
-	if len(lines) != 5 {
-		t.Fatalf("at 35x5 the page is %d rows:\n%s", len(lines), body)
+	if len(lines) != 6 {
+		t.Fatalf("at 35x6 the page is %d rows:\n%s", len(lines), body)
 	}
 	if strings.Contains(body, "more") {
 		t.Fatalf("the one row left was spent on a count instead of an account:\n%s", body)
@@ -903,7 +903,7 @@ func fixtureRows() []view.Row {
 		{
 			Account: store.Account{
 				UUID:  "4a9e0c17-6b32-4d58-8107-c2f4e6a9d3b5",
-				Email: "cx@example.com", Idx: 5,
+				Email: "cx@example.com", Idx: 1,
 				Kind: identity.KindSubscription, Tier: "chatgpt_plus",
 				Provider: provider.Codex,
 			},

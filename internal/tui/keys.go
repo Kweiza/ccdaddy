@@ -15,9 +15,9 @@ import (
 // shown only in the long help; Start through Restart belong to the daemon
 // screen and are not offered anywhere else.
 type KeyMap struct {
-	Add, Switch, Daemon, Strategy, Quit key.Binding
-	Up, Down, Refresh, Help, Esc, Enter key.Binding
-	Start, Stop, Restart                key.Binding
+	Add, Switch, Daemon, Strategy, Sort, Quit key.Binding
+	Up, Down, Refresh, Help, Esc, Enter       key.Binding
+	Start, Stop, Restart                      key.Binding
 }
 
 // DefaultKeys is the one KeyMap this program has.
@@ -26,6 +26,7 @@ func DefaultKeys() KeyMap {
 		Add:      key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "add")),
 		Switch:   key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "switch")),
 		Daemon:   key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "daemon")),
+		Sort:     key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "auto-sort")),
 		Strategy: key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "strategy")),
 		Quit:     key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
 
@@ -52,7 +53,7 @@ func DefaultKeys() KeyMap {
 // complete set; order no longer decides which commands disappear at a narrow
 // width.
 func (k KeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Add, k.Switch, k.Daemon, k.Strategy, k.Up, k.Down, k.Refresh, k.Help, k.Quit}
+	return []key.Binding{k.Add, k.Switch, k.Daemon, k.Strategy, k.Sort, k.Up, k.Down, k.Refresh, k.Help, k.Quit}
 }
 
 // FullHelp groups every binding for the long help view: the main-page set,

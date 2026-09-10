@@ -163,6 +163,9 @@ func (r Row) AgeLabel(now time.Time) string {
 // account may carry more than one flag, so they are joined in one suffix.
 func (r Row) StatusFlags() string {
 	var flags []string
+	if r.Account.SubscriptionInactive() {
+		flags = append(flags, "subscription "+r.Account.SubscriptionStatus)
+	}
 	if r.Account.Primary {
 		flags = append(flags, "primary")
 	}

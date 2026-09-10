@@ -304,6 +304,11 @@ func LoadCache() (*Cache, error) {
 	if err != nil {
 		return nil, err
 	}
+	return LoadCacheAt(root)
+}
+
+// LoadCacheAt reads one store without consulting the process environment.
+func LoadCacheAt(root string) (*Cache, error) {
 	c := &Cache{data: cacheFile{Version: 1, Accounts: map[string]Entry{}}}
 
 	raw, err := os.ReadFile(filepath.Join(root, CacheFileName))
