@@ -76,9 +76,8 @@ type Engine struct {
 	AccessToken func(ctx context.Context, uuid string) (string, error)
 	FetchUsage  func(ctx context.Context, accessToken string) (*usage.Snapshot, error)
 	// FetchProfile reads /api/oauth/profile for the account a token belongs
-	// to. It is a SECOND endpoint on the poll path and it is called rarely on
-	// purpose: see poll, which spends a request on it only when the stored
-	// profile is older than store.ProfileTTL.
+	// to. Its refresh schedule is independent of usage backoff: missing or
+	// stale profiles are dispatched separately, with persisted retry deadlines.
 	//
 	// NIL MEANS DO NOT CALL, matching Freshen and ResolveOwner. A test that
 	// has not asked for the profile endpoint cannot reach it by forgetting to
@@ -845,6 +844,17 @@ func (e *Engine) dispatch(ctx context.Context, s *store.Store, accounts []store.
 		if a.Elsewhere && !(activeKnown && a.UUID == active) {
 			continue
 		}
+		if e.profileDue(a, now) {
+			if e.claim(a.UUID) {
+				e.wg.Add(1)
+				go func() {
+					defer e.wg.Done()
+					defer e.release(a.UUID)
+					e.pollProfile(ctx, a)
+				}()
+			}
+			continue
+		}
 		entry, has := cache.Get(a.UUID)
 		if !due(entry, has, now, a.UUID == active) {
 			continue
@@ -1026,7 +1036,7 @@ func (e *Engine) probeDue(a store.Account, entry usage.Entry, cfg config.Config,
 	if a.Provider != provider.Claude {
 		return "", "", false
 	}
-	if !cfg.ProbeUnknown || a.Disabled || a.SubscriptionInactive() || quarantined[a.UUID] {
+	if !cfg.ProbeUnknown || a.Disabled || a.SubscriptionInactive() || a.SubscriptionPending() || quarantined[a.UUID] {
 		return "", "", false
 	}
 	// Which account is live has to be KNOWN, not merely unequal. An empty active
@@ -1216,11 +1226,11 @@ func (e *Engine) poll(ctx context.Context, a store.Account, cfg config.Config,
 	now := e.now()
 	e.record(a.UUID, now, err)
 	if token != "" {
-		profileAccount := a
-		if errors.Is(err, usage.ErrForbidden) && !a.SubscriptionInactive() && now.Sub(a.ProfileFetchedAt) >= usage.ServeTTL {
-			profileAccount.ProfileFetchedAt = time.Time{}
+		if errors.Is(err, usage.ErrForbidden) && !a.SubscriptionInactive() {
+			e.checkProfile(ctx, a, token, now, true)
+		} else {
+			e.refreshProfile(ctx, a, token, now)
 		}
-		e.refreshProfile(ctx, profileAccount, token, now)
 	}
 	if err != nil {
 		e.handleFailure(a, cfg, thresholds, err, now, identity, active)
@@ -1256,27 +1266,7 @@ func (e *Engine) refreshProfile(ctx context.Context, a store.Account, token stri
 	if e.FetchProfile == nil || token == "" || !a.ProfileStale(now) {
 		return
 	}
-	p, err := e.FetchProfile(ctx, token)
-	if err != nil {
-		e.logf("re-reading %s's profile failed: %v", a.UUID, err)
-		return
-	}
-	if p == nil || p.AccountUUID != a.UUID {
-		e.logf("re-reading %s's profile returned a different or missing account", a.UUID)
-		return
-	}
-	// Out here rather than inside commit's usage-cache callback, for the reason
-	// history.Record and ApplyUsage are both out there: this takes the store's
-	// mkdir mutex, and taking one of those while holding the usage cache's
-	// would hold the cache shut against every reader for as long as the store
-	// happened to be contended.
-	if serr := store.WithStore(func(s *store.Store) error {
-		return s.ApplyProfile(a.UUID, p, now)
-	}); serr != nil && !errors.Is(serr, store.ErrNotFound) {
-		// An account that is no longer in the store is an ordinary race with
-		// `ccdad remove`, not a failure worth logging.
-		e.logf("recording %s's re-read profile failed: %v", a.UUID, serr)
-	}
+	e.checkProfile(ctx, a, token, now, false)
 }
 
 // handleFailure decides what a failed poll means. Only ONE of the failures says
@@ -1959,6 +1949,8 @@ func accountState(a store.Account, cache *usage.Cache, quarantined, needsRelogin
 	// is BELOW active only because the two are mutually exclusive by provider,
 	// so the order between them never decides anything.
 	switch {
+	case a.SubscriptionPending():
+		return StateSubscriptionPending
 	case a.SubscriptionInactive():
 		return StateSubscriptionInactive
 	case a.Disabled:

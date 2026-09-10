@@ -984,8 +984,12 @@ usage lookup fails. Explicit canceled, expired, or unpaid subscriptions show as
 `unsubscribed` and are excluded from automatic switching and quota warm-ups.
 A timeout or a 429 alone is not evidence of expiry. A later active profile makes
 the account eligible again without changing its manual enable/disable setting.
-Existing accounts backfill the new status at their next permitted poll. Profiles
-normally refresh daily; permission failures can trigger an earlier recheck.
+Existing accounts backfill the status independently of usage polling, including
+when quota requests are held by a 429. Until a subscription has been checked,
+it shows `checking` and cannot be selected automatically. `ccdad status --refresh`
+also refreshes due profiles while leaving quota backoff intact. Profiles normally
+refresh daily; permission failures can trigger an earlier recheck. Failed profile
+checks retry after 15 minutes, and this deadline survives daemon restarts.
 Codex polls also update the stored plan from the usage response.
 
 `up`/`k` and `down`/`j` move, `r` reloads from disk, `esc` goes back, and `?`

@@ -101,8 +101,8 @@ func seedAccount(t *testing.T, uuid, org string) store.Account {
 	// drops any reading dated before its account was added, and a real
 	// time.Now() stamp would be hours after tickEpoch.
 	a := store.Account{
-		Provider: provider.Claude,
-		UUID:     uuid, Email: uuid + "@example.com", OrganizationUUID: org,
+		Provider: provider.Claude, SubscriptionStatus: "active",
+		UUID: uuid, Email: uuid + "@example.com", OrganizationUUID: org,
 		AddedAt: tickEpoch.Add(-24 * time.Hour),
 	}
 	if err := s.Add(a, oauthBlob("RT-"+uuid)); err != nil {
@@ -125,7 +125,7 @@ func seedTokenAccount(t *testing.T, uuid string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Add(store.Account{Provider: provider.Claude,
+	if err := s.Add(store.Account{Provider: provider.Claude, SubscriptionStatus: "active",
 		UUID: uuid, Email: uuid + "@example.com", AddedAt: tickEpoch.Add(-24 * time.Hour),
 	}, cclink.Blob{cclink.TokenKey: rec}); err != nil {
 		t.Fatal(err)
@@ -1902,7 +1902,7 @@ func TestProbeDueRefusesAnUnknownLiveAccountAndNotMerelyAnEmptyOne(t *testing.T)
 	isolateEngine(t)
 	e := NewEngine()
 	e.Now = func() time.Time { return tickEpoch }
-	a := store.Account{UUID: "u-1", Provider: provider.Claude}
+	a := store.Account{UUID: "u-1", Provider: provider.Claude, SubscriptionStatus: "active"}
 	entry := usage.Entry{Snapshot: unusedWindow(), FetchedAt: tickEpoch.Add(-10 * time.Minute)}
 	cfg := config.Defaults()
 

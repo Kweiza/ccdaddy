@@ -23,3 +23,13 @@ func TestCanceledSubscriptionsOverrideAStaleEngineStateOnThePage(t *testing.T) {
 		t.Fatal("renewal did not restore eligibility")
 	}
 }
+
+func TestUnverifiedSubscriptionShowsCheckingWithoutClaimingExpiry(t *testing.T) {
+	r := Row{Account: store.Account{Provider: provider.Claude, SubscriptionStatus: "unknown"}, Engine: daemon.AccountStatus{State: daemon.StateCandidate}}
+	if got := r.ListCell(ListColumn{Kind: ColumnState}, Columns{}, time.Now(), false); got != "checking" {
+		t.Fatalf("state = %q", got)
+	}
+	if r.AutoLabel() != "no" || r.Account.SubscriptionInactive() {
+		t.Fatal("unknown status was treated as eligible or expired")
+	}
+}

@@ -228,3 +228,21 @@ func TestCanceledSubscriptionsAreExcludedDespiteCachedQuota(t *testing.T) {
 		t.Fatalf("canceled account still eligible: %+v", cands)
 	}
 }
+
+func TestUnverifiedSubscriptionCannotUseOldQuotaToBecomeATarget(t *testing.T) {
+	isolate(t)
+	a := seed(t, "u-1", "one@example.com")
+	s := openStore(t)
+	a.SubscriptionStatus = ""
+	if err := s.Add(a, oauthBlob("RT-u-1")); err != nil {
+		t.Fatal(err)
+	}
+	seedReading(t, "u-1", 90)
+	ev, err := Evaluate(s, EvalOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev.HasTarget || ev.Plan.Action == strategy.ActionSwitch {
+		t.Fatalf("unverified account selected: %+v", ev.Target)
+	}
+}

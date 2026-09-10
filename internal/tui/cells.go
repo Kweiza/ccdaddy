@@ -104,6 +104,8 @@ func stateCell(g Glyphs, s daemon.AccountState) (glyph string, role theme.Role) 
 		// the same and the word carries the difference: a quarantine lapses on
 		// a timer and this one does not.
 		return g.Quarantined, theme.RoleQuarantined
+	case daemon.StateSubscriptionPending:
+		return g.Unknown, theme.RoleMuted
 	case daemon.StateSubscriptionInactive:
 		return g.Quarantined, theme.RoleQuarantined
 	case daemon.StateDisabled:

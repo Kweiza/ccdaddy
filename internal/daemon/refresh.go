@@ -81,6 +81,7 @@ type RefreshResult struct {
 func (e *Engine) Refresh(ctx context.Context, s *store.Store, want []store.Account,
 	cfg config.Config, active string) []RefreshResult {
 
+	e.refreshProfiles(ctx, s, want)
 	out := make([]RefreshResult, len(want))
 	for i, a := range want {
 		out[i].Account = a

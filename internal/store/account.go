@@ -112,6 +112,8 @@ type Account struct {
 	// SubscriptionStatus is the last observed Claude subscription state.
 	// Empty means this version has not checked it; unknown means the profile omitted it.
 	SubscriptionStatus string `toml:"subscription_status,omitempty"`
+	// ProfileRetryAt throttles failed profile lookups independently of usage.
+	ProfileRetryAt time.Time `toml:"profile_retry_at,omitempty"`
 	// RateLimitTier is rate_limit_tier, e.g. default_claude_max_20x.
 	RateLimitTier string `toml:"rate_limit_tier,omitempty"`
 	// SeatTier is seat_tier, e.g. standard or enterprise_usage_based.
@@ -285,4 +287,11 @@ func (a Account) SubscriptionInactive() bool {
 		return true
 	}
 	return false
+}
+
+// SubscriptionPending means a Claude subscription has not been checked yet.
+// It is held out of rotation without being labeled expired or user-disabled.
+func (a Account) SubscriptionPending() bool {
+	status := strings.ToLower(strings.TrimSpace(a.SubscriptionStatus))
+	return a.Provider == provider.Claude && a.Kind == identity.KindSubscription && (status == "" || status == "unknown")
 }

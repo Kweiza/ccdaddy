@@ -279,7 +279,7 @@ func fleetForecast(accounts []store.Account, cache *usage.Cache, now time.Time) 
 		// no switch can reach would promise quota the fleet cannot spend.
 		input := forecast.Input{
 			UUID: a.UUID, Idx: a.Idx, Tier: a.RateLimitTier,
-			Eligible: !a.Disabled && !a.SubscriptionInactive() && !a.Elsewhere && a.Kind != identity.KindAPIKey,
+			Eligible: !a.Disabled && !a.SubscriptionInactive() && !a.SubscriptionPending() && !a.Elsewhere && a.Kind != identity.KindAPIKey,
 		}
 		if e, ok := cache.Get(a.UUID); ok {
 			input.Snapshot = e.Snapshot

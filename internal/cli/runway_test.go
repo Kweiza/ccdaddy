@@ -47,7 +47,7 @@ func seedAccountWithTier(t *testing.T, uuid, email, rateLimitTier string, addedA
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Add(store.Account{Provider: provider.Claude,
+	if err := s.Add(store.Account{Provider: provider.Claude, SubscriptionStatus: "active",
 		UUID: uuid, Email: email, RateLimitTier: rateLimitTier, AddedAt: addedAt,
 	}, credsFor("RT-"+uuid)); err != nil {
 		t.Fatal(err)
