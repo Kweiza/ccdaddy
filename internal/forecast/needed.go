@@ -223,14 +223,7 @@ func tightestFirst(sim []simAccount) []simAccount {
 		if r := cmp.Compare(a.minRoom(), b.minRoom()); r != 0 {
 			return r
 		}
-		if r := cmp.Compare(a.idx, b.idx); r != 0 {
-			return r
-		}
-		// The uuid finishes the order for the reason simAccount.before gives:
-		// Idx is per provider, so the two halves of a mixed fleet share
-		// numbers, and a sort that stopped at Idx would leave the tie to the
-		// input's order.
-		return cmp.Compare(a.uuid, b.uuid)
+		return cmp.Compare(a.idx, b.idx)
 	})
 	return out
 }
