@@ -16,7 +16,18 @@ by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.21.0] — 2026-09-10
+
 ### Changed
+
+- **Account indexes are numbered across the whole store again.** This reverts
+  the provider-scoped numbering introduced in 0.20.0. Bare indexes resolve
+  across providers; `c1` and `x1` no longer select provider-scoped positions.
+  Account JSON no longer includes the derived `ref` field. Use a UUID or alias
+  for a stable reference when upgrading.
+
+- The dashboard's `m` reorder mode is removed. Use `ccdad move` to reorder
+  accounts from the CLI; positions are counted across the whole store.
 
 - Codex cross-account replay now defaults to `true`. When an unpinned thread's
   account returns HTTP 429, the proxy tries another eligible account before any
@@ -3635,7 +3646,8 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.19.0...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.21.0...HEAD
+[0.21.0]: https://github.com/Kweiza/ccdaddy/compare/v0.20.0...v0.21.0
 [0.19.0]: https://github.com/Kweiza/ccdaddy/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/Kweiza/ccdaddy/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/Kweiza/ccdaddy/compare/v0.16.0...v0.17.0
