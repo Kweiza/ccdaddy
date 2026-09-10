@@ -202,3 +202,20 @@ func TestMissingSubscriptionStatusIsBackfilledOnce(t *testing.T) {
 		t.Fatal("a missing wire status caused repeated lookups or an expiry verdict")
 	}
 }
+
+func TestAProfileRefreshRepairsAFutureSubscriptionStamp(t *testing.T) {
+	s := seed(t, identity.KindSubscription)
+	p := enterpriseProfile()
+	p.SubscriptionStatus = "active"
+	if err := s.ApplyProfile("acct-1", p, observed.Add(72*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	p.SubscriptionStatus = "canceled"
+	if err := s.ApplyProfile("acct-1", p, observed); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := reopen(t).Get("acct-1")
+	if !a.SubscriptionInactive() || !a.ProfileFetchedAt.Equal(observed) {
+		t.Fatal("a future stamp prevented subscription refresh")
+	}
+}
