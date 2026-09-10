@@ -16,6 +16,8 @@ must reference accounts by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.22.0] — 2026-09-10
+
 ### Changed
 
 - Account indexes start at 1 within each provider again. The stored slice and
@@ -3667,7 +3669,8 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.21.0...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.22.0...HEAD
+[0.22.0]: https://github.com/Kweiza/ccdaddy/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/Kweiza/ccdaddy/compare/v0.20.0...v0.21.0
 [0.19.0]: https://github.com/Kweiza/ccdaddy/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/Kweiza/ccdaddy/compare/v0.17.0...v0.18.0
