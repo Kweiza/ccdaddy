@@ -95,7 +95,7 @@ func (s *Store) applyProfile(uuid string, p *identity.Profile, observedAt time.T
 	// back a defensive copy and a change made to one never reaches the disk.
 	for i := range s.data.Accounts {
 		if s.data.Accounts[i].UUID == uuid {
-			if observedAt.Before(s.data.Accounts[i].ProfileFetchedAt) {
+			if observedAt.Before(s.data.Accounts[i].ProfileFetchedAt) && !s.data.Accounts[i].ProfileStale(observedAt) {
 				return nil
 			}
 			s.data.Accounts[i].AdoptProfile(p, observedAt)

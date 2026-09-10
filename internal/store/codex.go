@@ -142,7 +142,7 @@ func (s *Store) ApplyCodexPlan(uuid, plan string, at time.Time) error {
 			if a.Provider != provider.Codex {
 				return fmt.Errorf("%s is not a Codex account", uuid)
 			}
-			if at.Before(a.ProfileFetchedAt) {
+			if at.Before(a.ProfileFetchedAt) && a.ProfileFetchedAt.Sub(at) <= ProfileTTL {
 				return nil
 			}
 			a.Tier, a.ProfileFetchedAt = plan, at
