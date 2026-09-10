@@ -232,16 +232,16 @@ func TestTheConfiguredProxyPortIsTheOneBound(t *testing.T) {
 func TestTheConfiguredCrossAccountReplayReachesTheProxy(t *testing.T) {
 	root := isolate(t)
 	e := NewEngine()
-	if cfg, err := e.codexProxyConfig(root); err != nil || cfg.CrossAccountReplay {
-		t.Fatalf("codexProxyConfig() = (CrossAccountReplay %v, %v) for a store with no config file, want it off", cfg.CrossAccountReplay, err)
+	if cfg, err := e.codexProxyConfig(root); err != nil || !cfg.CrossAccountReplay {
+		t.Fatalf("codexProxyConfig() = (CrossAccountReplay %v, %v) for a store with no config file, want it on", cfg.CrossAccountReplay, err)
 	}
-	writeConfig(t, "[codex]\ncross_account_replay = true\n")
+	writeConfig(t, "[codex]\ncross_account_replay = false\n")
 	cfg, err := e.codexProxyConfig(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.CrossAccountReplay {
-		t.Fatal("the proxy was built with cross-account replay off after config.toml turned it on; a mid-thread 429 would be returned rather than replayed, forever")
+	if cfg.CrossAccountReplay {
+		t.Fatal("the proxy was built with cross-account replay on after config.toml turned it off")
 	}
 }
 

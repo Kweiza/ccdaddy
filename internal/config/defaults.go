@@ -111,11 +111,9 @@ func Defaults() Config {
 			// 0 means resolve one. A number here is a machine saying it needs
 			// the port to be stable, which is a choice rather than a default.
 			ProxyPort: 0,
-			// False, and this is an answer rather than caution: every codex
-			// request carries the whole thread including the reasoning content
-			// the previous account produced, so a mid-thread replay bills a
-			// second account for a thread the first started.
-			CrossAccountReplay: false,
+			// Keep an unpinned thread moving when its account reaches a limit.
+			// An explicit false retains the account and returns its 429.
+			CrossAccountReplay: true,
 		},
 	}
 }

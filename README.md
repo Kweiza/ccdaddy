@@ -599,7 +599,7 @@ credit.max_auto_spend           0         default  honoured
 codex.threshold                 80        default  honoured
 codex.binary                              default  honoured
 codex.proxy_port                0         default  honoured
-codex.cross_account_replay      false     default  honoured
+codex.cross_account_replay      true      default  honoured
 tui.theme                       auto      default  honoured
 tui.glyphs                      auto      default  honoured
 ```
@@ -1232,7 +1232,16 @@ did not name and report success.
 conversation, including reasoning encrypted for the account that produced it, so
 `ccdad` keeps a thread with the account it started on. `ccdad switch <a Codex
 account>` and the daemon's own rotation both take effect on your next new
-thread; the thread you are in keeps its account until you start another one.
+thread. An existing thread keeps its account while it can serve requests. If
+that account returns HTTP 429, an unpinned thread now retries on another eligible
+account by default, before any response bytes reach the client. A successful
+retry moves the thread to that account. The existing history is forwarded, so a
+replacement can still reject it; replay does not guarantee continuation.
+
+Set `codex.cross_account_replay` to `false` to return the original account's
+limit instead. An explicit setting is preserved on upgrade. Restart the daemon
+after changing this setting; the proxy reads it at startup. Sessions started
+with `ccdad run <ACCOUNT>` remain pinned regardless of this setting.
 
 **`codex login status` answers about `~/.codex`, which ccdad does not use.** It
 will tell you that you are logged out, or logged in as somebody else, and both
@@ -1291,7 +1300,7 @@ credit.max_auto_spend           0         default
 codex.threshold                 80        default
 codex.binary                              default
 codex.proxy_port                0         default
-codex.cross_account_replay      false     default
+codex.cross_account_replay      true      default
 tui.theme                       auto      default
 tui.glyphs                      auto      default
 ```
