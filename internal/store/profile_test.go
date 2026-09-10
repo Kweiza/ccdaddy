@@ -153,7 +153,7 @@ func TestProfileStale(t *testing.T) {
 		{"stamped absurdly in the future", now.Add(72 * time.Hour), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			a := Account{ProfileFetchedAt: tc.fetched}
+			a := Account{ProfileFetchedAt: tc.fetched, SubscriptionStatus: "active"}
 			if got := a.ProfileStale(now); got != tc.want {
 				t.Errorf("ProfileStale() = %v, want %v", got, tc.want)
 			}
@@ -168,5 +168,37 @@ func TestProfileStale(t *testing.T) {
 func TestProfileTTLMatchesClaudeCodesOwn(t *testing.T) {
 	if ProfileTTL != 24*time.Hour {
 		t.Errorf("ProfileTTL = %v, want 24h — Claude Code's XH is 86400000 ms", ProfileTTL)
+	}
+}
+
+func TestSubscriptionStatusRenewsWithoutChangingManualFlags(t *testing.T) {
+	s := seed(t, identity.KindSubscription)
+	p := enterpriseProfile()
+	p.SubscriptionStatus = "canceled"
+	if err := s.ApplyProfile("acct-1", p, observed); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := reopen(t).Get("acct-1")
+	if !a.SubscriptionInactive() {
+		t.Fatal("canceled subscription is eligible")
+	}
+	p.SubscriptionStatus = "active"
+	if err := s.ApplyProfile("acct-1", p, observed.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	a, _ = reopen(t).Get("acct-1")
+	if a.SubscriptionInactive() || a.Disabled {
+		t.Fatal("renewed subscription remains held out")
+	}
+}
+
+func TestMissingSubscriptionStatusIsBackfilledOnce(t *testing.T) {
+	a := Account{ProfileFetchedAt: observed}
+	if !a.ProfileStale(observed) {
+		t.Fatal("old profile without subscription state was treated as current")
+	}
+	a.AdoptProfile(enterpriseProfile(), observed)
+	if a.ProfileStale(observed) || a.SubscriptionInactive() {
+		t.Fatal("a missing wire status caused repeated lookups or an expiry verdict")
 	}
 }

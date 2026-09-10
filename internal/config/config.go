@@ -177,6 +177,8 @@ type Config struct {
 	// resolves against the console's code page and against an environment
 	// variable read once at process start, and the daemon has neither.
 	TUIGlyphs string
+	// AutoSort orders each provider by its nearest known seven-day reset.
+	AutoSort bool
 	// Codex is the [codex] table. See CodexConfig.
 	Codex CodexConfig
 }
@@ -208,6 +210,7 @@ func (c Config) Equal(o Config) bool {
 		c.UpdateCheck == o.UpdateCheck &&
 		c.TUITheme == o.TUITheme &&
 		c.TUIGlyphs == o.TUIGlyphs &&
+		c.AutoSort == o.AutoSort &&
 		c.Codex == o.Codex &&
 		maps.Equal(c.WindowThreshold, o.WindowThreshold)
 }
@@ -316,6 +319,7 @@ type fileShape struct {
 	ProbeUnknown       *bool    `toml:"probe_unknown"`
 	Hover              *bool    `toml:"hover"`
 	Manual             *bool    `toml:"manual"`
+	AutoSort           *bool    `toml:"auto_sort"`
 
 	// Apart from the rest because it is the one key here that is not an engine
 	// knob, and a pointer for the same reason as the others: absence has to be
@@ -407,6 +411,7 @@ func Parse(raw []byte) (Config, error) {
 	applyBool(&cfg.ProbeUnknown, f.ProbeUnknown)
 	applyBool(&cfg.Hover, f.Hover)
 	applyBool(&cfg.Manual, f.Manual)
+	applyBool(&cfg.AutoSort, f.AutoSort)
 	applyBool(&cfg.MCPSwitchWithoutElicitation, f.MCPSwitchWithoutElicitation)
 	applyBool(&cfg.UpdateCheck, f.UpdateCheck)
 	if err := applyWindowThresholds(&cfg, f.WindowThreshold); err != nil {

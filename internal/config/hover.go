@@ -101,6 +101,7 @@ var hoverHonours = map[string]bool{
 	keyUpdateCheck:                 true,
 	keyTUITheme:                    true,
 	keyTUIGlyphs:                   true,
+	keyAutoSort:                    true,
 	keyCodexThreshold:              true,
 	keyCodexBinary:                 true,
 	keyCodexProxyPort:              true,

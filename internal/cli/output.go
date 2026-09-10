@@ -108,6 +108,9 @@ func accountJSON(a store.Account) map[string]any {
 	if a.Alias != "" {
 		out["alias"] = a.Alias
 	}
+	if a.SubscriptionStatus != "" {
+		out["subscription_status"] = a.SubscriptionStatus
+	}
 	if a.Tier != "" {
 		out["tier"] = a.Tier
 	}

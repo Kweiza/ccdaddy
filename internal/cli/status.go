@@ -122,6 +122,11 @@ func loadSnapshot(cmd *cobra.Command, now time.Time, refresh bool) (snap view.Sn
 			}
 		}
 		refreshUsage(cmd, s, pollable, active, hasActive, now)
+		s, err = store.Open()
+		if err != nil {
+			return view.Snapshot{}, nil, err
+		}
+		accounts = s.Accounts()
 	}
 
 	report, probeErr := observeDaemon()
@@ -206,6 +211,9 @@ func loadSnapshot(cmd *cobra.Command, now time.Time, refresh bool) (snap view.Sn
 	rows := view.Rows(accounts, cache, active, hasActive, now, resolve)
 	for i := range rows {
 		rows[i].Engine = engine[rows[i].Account.UUID]
+		if rows[i].Account.SubscriptionInactive() {
+			rows[i].Engine.State = daemon.StateSubscriptionInactive
+		}
 	}
 
 	activeLabel := noActiveAccountLabel
@@ -223,6 +231,7 @@ func loadSnapshot(cmd *cobra.Command, now time.Time, refresh bool) (snap view.Sn
 	}
 
 	return view.Snapshot{
+		AutoSort:          cfg.AutoSort,
 		Now:               now,
 		Rows:              rows,
 		Report:            report,

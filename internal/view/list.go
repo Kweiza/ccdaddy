@@ -435,6 +435,9 @@ func (r Row) ListCell(c ListColumn, block Columns, now time.Time, hover bool) st
 	case ColumnWorst:
 		return r.WorstCell(block)
 	case ColumnState:
+		if r.Account.SubscriptionInactive() {
+			return "unsubscribed"
+		}
 		return StateLabel(r.Engine.State)
 	case ColumnAuto:
 		return r.AutoLabel()
@@ -525,6 +528,8 @@ func StateLabel(s daemon.AccountState) string {
 		return "serving"
 	case daemon.StateNeedsRelogin:
 		return "needs-relogin"
+	case daemon.StateSubscriptionInactive:
+		return "unsubscribed"
 	case daemon.StateDisabled:
 		return "disabled"
 	case daemon.StateUnknown:
@@ -539,7 +544,7 @@ func StateLabel(s daemon.AccountState) string {
 // policy and not a lock: an explicit `ccdad switch` still activates a disabled
 // account.
 func (r Row) AutoLabel() string {
-	if r.Account.Disabled {
+	if r.Account.Disabled || r.Account.SubscriptionInactive() {
 		return "no"
 	}
 	return "yes"
@@ -843,6 +848,9 @@ func (s Snapshot) SummaryLines() []SummaryLine {
 		lines = append(lines, activeCodexLabel+s.CodexServingLabel)
 	}
 	lines = append(lines, StrategyLine(s.StrategyLabel()))
+	if s.AutoSort {
+		lines = append(lines, "Sort: 7d reset")
+	}
 	if s.HasMode {
 		lines = append(lines, CurrentLine(s.Mode))
 	}

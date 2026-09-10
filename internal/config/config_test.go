@@ -494,7 +494,7 @@ func TestTheKeySetIsClosed(t *testing.T) {
 		"probe_unknown", "hover", "manual", "mcp_switch_without_elicitation", "update_check",
 		"credit.threshold", "credit.max_auto_spend",
 		"codex.threshold", "codex.binary", "codex.proxy_port", "codex.cross_account_replay",
-		"tui.theme", "tui.glyphs",
+		"tui.theme", "tui.glyphs", "auto_sort",
 	}
 	got := Keys()
 	if len(got) != len(want) {

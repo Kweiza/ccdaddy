@@ -39,6 +39,7 @@ type Snapshot struct {
 	// pointer this snapshot has already read.
 	CodexServingUUID string
 	Strategy         string // the selected policy: hover, manual, headroom or consume-first
+	AutoSort         bool   // account lists follow the nearest seven-day reset
 	Hover            bool   // compatibility storage for the hover policy
 	// HoverAccounts is the per-account half of hover's derivation, empty when
 	// hover is off or when no pass ran.

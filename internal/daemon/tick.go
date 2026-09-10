@@ -1026,7 +1026,7 @@ func (e *Engine) probeDue(a store.Account, entry usage.Entry, cfg config.Config,
 	if a.Provider != provider.Claude {
 		return "", "", false
 	}
-	if !cfg.ProbeUnknown || a.Disabled || quarantined[a.UUID] {
+	if !cfg.ProbeUnknown || a.Disabled || a.SubscriptionInactive() || quarantined[a.UUID] {
 		return "", "", false
 	}
 	// Which account is live has to be KNOWN, not merely unequal. An empty active
@@ -1215,12 +1215,18 @@ func (e *Engine) poll(ctx context.Context, a store.Account, cfg config.Config,
 
 	now := e.now()
 	e.record(a.UUID, now, err)
+	if token != "" {
+		profileAccount := a
+		if errors.Is(err, usage.ErrForbidden) && !a.SubscriptionInactive() && now.Sub(a.ProfileFetchedAt) >= usage.ServeTTL {
+			profileAccount.ProfileFetchedAt = time.Time{}
+		}
+		e.refreshProfile(ctx, profileAccount, token, now)
+	}
 	if err != nil {
 		e.handleFailure(a, cfg, thresholds, err, now, identity, active)
 		return err
 	}
 	e.commit(a, snap, now, identity, thresholds, active, nil)
-	e.refreshProfile(ctx, a, token, now)
 	return nil
 }
 
@@ -1238,12 +1244,9 @@ func (e *Engine) poll(ctx context.Context, a store.Account, cfg config.Config,
 // `ccdad add claude` already prints when a profile lookup fails -- "the tier
 // will fill in on the first usage refresh" -- was simply untrue until this ran.
 //
-// IT IS DELIBERATELY AFTER commit AND CANNOT AFFECT IT. The usage reading is
-// what a poll exists for and it is already recorded by the time this runs, so a
-// profile endpoint that is down, slow or rate-limiting costs the fleet nothing
-// that matters. Every failure here is logged and dropped for that reason: there
-// is no schedule to back off, because the only thing a failure delays is a
-// re-read of a fact that changes a handful of times in an account's life.
+// Usage and profile results are independent. A canceled subscription can
+// refuse usage while still returning a profile, so a failed usage request must
+// not skip this lookup. Profile errors never replace the usage result.
 //
 // IT SPENDS A SECOND REQUEST, which is why the gate is a day rather than a
 // tick. The endpoint's allowance belongs to the identity and every poll already
@@ -1256,6 +1259,10 @@ func (e *Engine) refreshProfile(ctx context.Context, a store.Account, token stri
 	p, err := e.FetchProfile(ctx, token)
 	if err != nil {
 		e.logf("re-reading %s's profile failed: %v", a.UUID, err)
+		return
+	}
+	if p == nil || p.AccountUUID != a.UUID {
+		e.logf("re-reading %s's profile returned a different or missing account", a.UUID)
 		return
 	}
 	// Out here rather than inside commit's usage-cache callback, for the reason
@@ -1952,6 +1959,8 @@ func accountState(a store.Account, cache *usage.Cache, quarantined, needsRelogin
 	// is BELOW active only because the two are mutually exclusive by provider,
 	// so the order between them never decides anything.
 	switch {
+	case a.SubscriptionInactive():
+		return StateSubscriptionInactive
 	case a.Disabled:
 		return StateDisabled
 	case quarantined:

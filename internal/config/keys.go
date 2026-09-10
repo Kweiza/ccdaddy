@@ -74,6 +74,7 @@ const (
 	keyCodexProxyPort          = "codex.proxy_port"
 	keyCodexCrossAccountReplay = "codex.cross_account_replay"
 
+	keyAutoSort  = "auto_sort"
 	keyTUITheme  = "tui.theme"
 	keyTUIGlyphs = "tui.glyphs"
 
@@ -172,6 +173,7 @@ func Keys() []string {
 		keyCodexCrossAccountReplay,
 		keyTUITheme,
 		keyTUIGlyphs,
+		keyAutoSort,
 	}
 }
 

@@ -10,11 +10,32 @@ that would surprise an upgrader gets written down.
 
 While the version is below `1.0.0`, the CLI surface may change between minor
 versions. The one thing that is already a promise is the stability contract
-`ccdad --help` prints: **`idx` is a display ordinal, not a key.** It is
-recompacted whenever an account is removed, so scripts must reference accounts
-by `uuid` or `alias`.
+`ccdad --help` prints: **`idx` is a display ordinal, not a key.** It is numbered
+per provider and recompacted when accounts are removed or sorted, so scripts
+must reference accounts by `uuid` or `alias`.
 
 ## [Unreleased]
+
+### Changed
+
+- Account indexes start at 1 within each provider again. The stored slice and
+  TUI cursor follow the displayed Claude-then-Codex order. Use `c1` or `x1` when
+  a bare index is ambiguous; JSON includes `ref` beside `idx`.
+
+### Added
+
+- Optional account sorting by the nearest seven-day reset: set `auto_sort` to
+  `true` or press `o` in the dashboard. Sorting stays within each provider,
+  places unknown or passed resets last, and keeps cursor selection by UUID.
+
+### Fixed
+
+- Claude profile polling reads subscription status even after a usage failure.
+  Canceled, expired, and unpaid subscriptions are shown as `unsubscribed` and
+  excluded from automatic switching and warm-ups until a later profile restores
+  their entitlement. Existing profile records backfill the new field.
+- Codex usage polling updates the stored plan instead of discarding it.
+- A status refresh displays profile changes from that same refresh.
 
 ## [0.21.0] — 2026-09-10
 

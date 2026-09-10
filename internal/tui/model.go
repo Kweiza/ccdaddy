@@ -596,6 +596,10 @@ func (a App) pageKey(msg tea.KeyPressMsg, k KeyMap) (App, tea.Cmd, bool) {
 		next, cmd := a.starting([]string{"switch", uuid})
 		return next, cmd, true
 
+	case key.Matches(msg, k.Sort):
+		next, cmd := a.starting([]string{"config", "set", "auto_sort", fmt.Sprintf("%t", !a.m.Snap.AutoSort)})
+		return next, cmd, true
+
 	case key.Matches(msg, k.Strategy):
 		a.pick = strategyPicker(a.m.Snap.StrategyLabel(), a.m.Glyphs)
 		a.scr = screenPicker

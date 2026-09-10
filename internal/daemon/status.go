@@ -63,7 +63,8 @@ const (
 	// StateQuarantined is held out of rotation by a dead refresh token.
 	StateQuarantined AccountState = "quarantined"
 	// StateDisabled was taken out of rotation by the user.
-	StateDisabled AccountState = "disabled"
+	StateDisabled             AccountState = "disabled"
+	StateSubscriptionInactive AccountState = "subscription_inactive"
 	// StateUnknown is an account whose usage could not be read. It is NOT an
 	// empty account, and it must never render as 0%.
 	StateUnknown AccountState = "unknown"

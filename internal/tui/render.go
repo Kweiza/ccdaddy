@@ -259,6 +259,13 @@ const refreshFailed = "could not refresh; these are the last good numbers: "
 // exactly why no golden page could see it.
 func (m Model) AfterLoad(snap view.Snapshot, err error) Model {
 	if err == nil {
+		uuid := m.cursorUUID()
+		for i, row := range snap.Rows {
+			if row.Account.UUID == uuid {
+				m.Cursor = i
+				break
+			}
+		}
 		m.Snap = snap
 		m.Cols = view.ColumnsOf(snap.Rows)
 		return m

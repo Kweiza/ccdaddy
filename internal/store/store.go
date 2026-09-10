@@ -175,6 +175,7 @@ func (s *Store) load() error {
 		a.Provider = p
 	}
 	s.sortAndReindex()
+	s.applyAutoSort(time.Now())
 	return nil
 }
 
