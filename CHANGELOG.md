@@ -16,6 +16,8 @@ must reference accounts by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.23.0] — 2026-09-11
+
 ### Changed
 
 - Existing unpinned Codex conversations follow the current serving account on
@@ -3691,7 +3693,8 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.22.1...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.23.0...HEAD
+[0.23.0]: https://github.com/Kweiza/ccdaddy/compare/v0.22.1...v0.23.0
 [0.22.1]: https://github.com/Kweiza/ccdaddy/compare/v0.22.0...v0.22.1
 [0.22.0]: https://github.com/Kweiza/ccdaddy/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/Kweiza/ccdaddy/compare/v0.20.0...v0.21.0
