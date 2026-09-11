@@ -583,7 +583,7 @@ func newCodexExecCmd() *cobra.Command {
 		Short: "Run codex through ccdad's local proxy",
 		Long: "exec starts the real codex with its API base pointed at the loopback proxy the\n" +
 			"ccdad daemon runs, so the session is billed to the account ccdad is serving and\n" +
-			"the next new thread follows a switch. codex holds no OAuth token of its own:\n" +
+			"the next request follows a switch. codex holds no OAuth token of its own:\n" +
 			"ccdad owns the login, the refresh and the quota reading.\n\n" +
 			"This is what `~/.ccdad/bin/codex` runs, so `ccdad codex shim install` and then\n" +
 			"typing `codex` is the same thing. Run it by name on Windows, where there is no\n" +

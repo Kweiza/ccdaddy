@@ -85,8 +85,8 @@ func TestAThreadsFirstRequestIsReplayedOnTheNextAccount(t *testing.T) {
 	if got := took[1].header.Get("Authorization"); got != "Bearer access-b" {
 		t.Errorf("replay Authorization = %q, want the next account's", got)
 	}
-	if got := took[0].header.Get("X-Codex-Turn-State"); got != "ts-1" {
-		t.Errorf("first attempt lost the turn state: %q", got)
+	if got := took[0].header.Get("X-Codex-Turn-State"); got != "" {
+		t.Errorf("first attempt carried turn state with unknown ownership: %q", got)
 	}
 	// The turn state is meaningful only to the account that issued it.
 	if got := took[1].header.Get("X-Codex-Turn-State"); got != "" {

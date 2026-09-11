@@ -16,6 +16,15 @@ must reference accounts by `uuid` or `alias`.
 
 ## [Unreleased]
 
+### Changed
+
+- Existing unpinned Codex conversations follow the current serving account on
+  their next request, without waiting for an HTTP 429. Explicit account pins
+  remain fixed, and responses already in flight finish on their original account.
+- Account changes remove the previous account's turn-state header, including
+  when ownership is unknown after a daemon restart. Conversation history is
+  forwarded unchanged. Successful thread/account changes are logged for diagnosis.
+
 ## [0.22.1] — 2026-09-10
 
 ### Fixed

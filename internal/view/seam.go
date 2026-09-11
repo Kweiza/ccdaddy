@@ -25,8 +25,8 @@ type Snapshot struct {
 	Rows        []Row
 	Report      daemon.Report
 	ActiveLabel string // "work@example.com (work)", or "none of the managed accounts"
-	// CodexServingLabel is the account ccdad's codex proxy serves new threads
-	// from, or "" when there is no pointer or it names no stored account.
+	// CodexServingLabel is the account ccdad's proxy tries first for the next
+	// request in each unpinned Codex session, or "" when there is no pointer or it names no stored account.
 	//
 	// EMPTY IS LOAD-BEARING. It is what keeps every surface rendering the exact
 	// bytes it rendered before codex existed on a machine that has no codex

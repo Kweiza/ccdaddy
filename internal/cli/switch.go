@@ -440,9 +440,8 @@ func newSwitchCmd() *cobra.Command {
 // stored login -- which is why it takes a root and an account rather than the
 // store.
 //
-// The sentence names the NEW THREAD because that is the honest scope of the
-// change: the proxy keeps a thread with the account that produced its earlier
-// turns, so a session already running goes on being billed where it was.
+// Existing unpinned sessions follow the pointer on their next request.
+// Explicit account pins and responses already in flight are unchanged.
 func runCodexSwitch(cmd *cobra.Command, root string, target store.Account) error {
 	if serving, ok := codexswitch.ReadServing(root); ok && serving == target.UUID {
 		// Exit 3 is "the world is already as you asked". Reporting 0 would tell
@@ -459,7 +458,7 @@ func runCodexSwitch(cmd *cobra.Command, root string, target store.Account) error
 			// re-switch. Say what is actually being served, the same honest
 			// split the daemon's own codexTick makes on this same error.
 			fmt.Fprintf(cmd.ErrOrStderr(),
-				"Serving codex from %s from the next new thread, but its switch cooldown was not recorded: %v\n"+
+				"Serving codex from %s from the next request in unpinned sessions, but its switch cooldown was not recorded: %v\n"+
 					"  A poll shortly after this could repoint again immediately.\n",
 				target.Label(), err)
 			return WithCode(errSilent, ExitFailure)
@@ -467,11 +466,11 @@ func runCodexSwitch(cmd *cobra.Command, root string, target store.Account) error
 		return err
 	}
 	if daemonIsRunning() {
-		fmt.Fprintf(cmd.ErrOrStderr(), "Serving codex from %s from the next new thread.\n", target.Label())
+		fmt.Fprintf(cmd.ErrOrStderr(), "Serving codex from %s from the next request in unpinned sessions.\n", target.Label())
 		return nil
 	}
 	fmt.Fprintf(cmd.ErrOrStderr(),
-		"Serving codex from %s from the next new thread, once the daemon runs.\n", target.Label())
+		"Serving codex from %s from the next request in unpinned sessions, once the daemon runs.\n", target.Label())
 	return nil
 }
 

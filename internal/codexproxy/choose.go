@@ -19,37 +19,19 @@ const threadIDHeader = "thread-id"
 // does not say.
 func threadIDOf(r *http.Request) string { return r.Header.Get(threadIDHeader) }
 
-// chooseOrder decides which accounts a request may be served from, best first,
-// and whether the choice is a launch pin.
-//
-// The precedence is not arbitrary. The HTTP path is stateless: every request
-// carries the whole history, including the encrypted reasoning items produced
-// by whichever account served the earlier turns of the thread. So an account
-// that has already answered inside a thread is the one that can read what that
-// thread carries, and moving a live thread is a decision with a cost rather
-// than a free rotation.
-//
-//  1. the launch pin, when the launcher bound this codex to one account. It
-//     never falls through: a pin that billed a second account would make
-//     `ccdad run <acct>` a suggestion.
-//  2. the thread pin, from the first successful response of this thread.
-//  3. the serving pointer, read from the file on EVERY request. That is what
-//     makes repointing apply to new threads and leave live ones alone.
-//
-// The pin and the pointer are not filtered by eligibility. Disabled is a
-// rotation policy and not a per-request gate: an account the user pointed at
-// keeps serving, and the lane rotates away on its next decision.
+// chooseOrder starts each request on the current serving account, including
+// requests from existing threads. Only an explicit launch pin overrides it.
+// The remembered account is a fallback when no valid serving pointer exists;
+// it also identifies which account issued the incoming turn-state header.
 func (s *Server) chooseOrder(rec codexlaunch.Record, threadID string) ([]string, bool) {
 	if rec.Pin != "" {
 		return []string{rec.Pin}, true
 	}
 	ranked := s.rankedEligible()
-	if threadID != "" {
-		if uuid, ok := s.threadAccount(threadID); ok {
-			return lead(uuid, ranked), false
-		}
-	}
 	if uuid, ok := codexswitch.ReadServing(s.cfg.Root); ok && s.stored(uuid) {
+		return lead(uuid, ranked), false
+	}
+	if uuid, ok := s.threadAccount(threadID); ok && s.stored(uuid) {
 		return lead(uuid, ranked), false
 	}
 	return ranked, false
@@ -163,8 +145,7 @@ func (s *Server) threadAccount(threadID string) (string, bool) {
 	return uuid, ok
 }
 
-// rememberThread binds a thread to the account that produced its first
-// response.
+// rememberThread records the account that most recently answered this thread.
 func (s *Server) rememberThread(threadID, uuid string) {
 	if threadID == "" || uuid == "" {
 		return

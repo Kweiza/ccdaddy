@@ -69,13 +69,13 @@ const (
 	// StateUnknown is an account whose usage could not be read. It is NOT an
 	// empty account, and it must never render as 0%.
 	StateUnknown AccountState = "unknown"
-	// StateServing is the Codex account ccdad's proxy serves new threads from.
+	// StateServing is the account tried first for unpinned Codex requests.
 	//
 	// It is a SEPARATE value from active rather than the same word for both
 	// providers, and the difference is what it promises: active names the login
 	// Claude Code's next request carries, and serving names the account the
-	// proxy will bill a codex thread STARTED FROM NOW to -- threads already in
-	// flight keep the account that produced their reasoning content.
+	// proxy will try on the next unpinned request. Responses already in flight
+	// finish on their original account; explicit launch pins override serving.
 	StateServing AccountState = "serving"
 	// StateNeedsRelogin is a Codex account whose refresh grant the endpoint has
 	// rejected. It is distinct from quarantined because the remedy is: a

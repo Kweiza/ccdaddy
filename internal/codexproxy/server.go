@@ -121,9 +121,8 @@ type Server struct {
 	unauth chan struct{}
 
 	mu sync.Mutex
-	// threads maps a thread id to the account that produced its first
-	// response, so a thread stays with the account whose encrypted reasoning
-	// its later turns carry.
+	// threads records the last responding account, so forwarding can discard
+	// account-specific turn state when the serving pointer changes.
 	threads map[string]string
 	// auth caches a bearer's hash for a short window, so a burst of turns does
 	// not stat and lock the same record on every request.
