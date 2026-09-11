@@ -62,7 +62,7 @@ func (e *Engine) codexTick(ctx context.Context, s *store.Store, cfg config.Confi
 	if ev.HasTarget {
 		switch serr := codexswitch.Execute(root, ev.Target.UUID); {
 		case serr == nil:
-			e.logf("codex: serving %s from the next new thread (%s)",
+			e.logf("codex: serving %s from the next request in unpinned sessions (%s)",
 				ev.Target.Label(), ev.Plan.Reason)
 			// publish reads THIS evaluation, and it was taken before the
 			// pointer moved. Carry the move into it, or the document names the
@@ -82,7 +82,7 @@ func (e *Engine) codexTick(ctx context.Context, s *store.Store, cfg config.Confi
 			// while the machine actually serves the new one. Logged distinctly
 			// from the success case because the missing stamp means the next
 			// tick can repoint again immediately, with nothing holding it back.
-			e.logf("codex: serving %s from the next new thread, but its switch cooldown was not recorded: %v",
+			e.logf("codex: serving %s from the next request in unpinned sessions, but its switch cooldown was not recorded: %v",
 				ev.Target.Label(), serr)
 			ev.Live, ev.LiveKnown = ev.Target, true
 			ev.LastSwitchAt, ev.LastSwitchTo = now, ev.Target.UUID

@@ -39,7 +39,7 @@ func TestSwitchToACodexAccountMovesThePointerAndNotTheLogin(t *testing.T) {
 		t.Fatalf("serving = %q, want cx-1", got)
 	}
 	assertNoLiveCredentials(t)
-	if !strings.Contains(stderr, "from the next new thread") {
+	if !strings.Contains(stderr, "from the next request in unpinned sessions") {
 		t.Fatalf("stderr does not say when the repoint takes effect:\n%s", stderr)
 	}
 }
@@ -184,7 +184,7 @@ func TestSwitchToACodexAccountSaysSoWhenThePointerMovedButTheCooldownDidNot(t *t
 	if code != ExitFailure {
 		t.Fatalf("exit = %d, want %d (ExitFailure)\n%s%s", code, ExitFailure, stderr, top)
 	}
-	if !strings.Contains(stderr, "Serving codex from codex@example.com from the next new thread") {
+	if !strings.Contains(stderr, "Serving codex from codex@example.com from the next request in unpinned sessions") {
 		t.Fatalf("stderr does not say the pointer moved:\n%s", stderr)
 	}
 	if !strings.Contains(stderr, "cooldown was not recorded") {

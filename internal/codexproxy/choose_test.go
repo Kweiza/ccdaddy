@@ -39,7 +39,7 @@ func TestALaunchPinBeatsTheThreadPinAndThePointer(t *testing.T) {
 	}
 }
 
-func TestAThreadKeepsTheAccountThatAnsweredItFirst(t *testing.T) {
+func TestAnExistingThreadFollowsTheServingPointer(t *testing.T) {
 	f, s := threeAccounts(t)
 	f.serving(t, "uuid-c")
 	s.rememberThread("thread-7", "uuid-b")
@@ -48,11 +48,11 @@ func TestAThreadKeepsTheAccountThatAnsweredItFirst(t *testing.T) {
 	if pinned {
 		t.Error("a thread pin reported as a launch pin; a launch pin must never bill another account and a thread pin may")
 	}
-	if len(order) == 0 || order[0] != "uuid-b" {
-		t.Fatalf("order = %v, want uuid-b first", order)
+	if len(order) == 0 || order[0] != "uuid-c" {
+		t.Fatalf("order = %v, want uuid-c first", order)
 	}
-	if !reflect.DeepEqual(order, []string{"uuid-b", "uuid-a", "uuid-c"}) {
-		t.Fatalf("order = %v, want the thread's account then the rest of the ranking", order)
+	if !reflect.DeepEqual(order, []string{"uuid-c", "uuid-a", "uuid-b"}) {
+		t.Fatalf("order = %v, want the serving account then the rest of the ranking", order)
 	}
 }
 
@@ -171,41 +171,15 @@ func TestAnAccountFromAnotherProviderIsNotEligible(t *testing.T) {
 	}
 }
 
-// The thread map is state that every in-flight request touches, and codex runs
-// a session's turns against this proxy concurrently, so two requests carrying
-// the same thread id arriving at once is the ordinary case rather than an edge
-// one. The mutex around s.threads is what makes that safe -- but `go test
-// -race` only reports the races it actually OBSERVES, and every other test in
-// this package touches s.threads from the test's own goroutine alone. Without
-// something like this the detector looks at a map that never sees two
-// goroutines, finds nothing to report, and the lock is covered by no test at
-// all no matter how many times CI runs with -race.
-//
-// Half the workers are a turn that has just finished and is writing its
-// binding back; half are the next turn asking where to go. Both shapes run at
-// once, which is what one request answering while another starts looks like.
-// Every chooser must come back with uuid-b, and the fixture is arranged so
-// that neither fallback could be mistaken for success: the ranking's head is
-// uuid-a and the serving pointer is uuid-c, so a lost thread pin shows up as a
-// different account in the failure message.
-//
-// Take the lock out of rememberThread or threadAccount and this goes down two
-// ways at once: the race detector reports the unsynchronised map, and even
-// with -race off the runtime throws "concurrent map read and map write" and
-// kills the test binary.
-func TestConcurrentRequestsOnOneThreadAllLandOnItsAccount(t *testing.T) {
+// Concurrent responses update the remembered account while new requests read
+// it for turn-state ownership. Routing must still follow the serving pointer.
+func TestConcurrentRequestsFollowServingWhileRememberingThreadAccounts(t *testing.T) {
 	f, s := threeAccounts(t)
 	f.serving(t, "uuid-c")
 	s.rememberThread("thread-7", "uuid-b")
 
 	const workers = 64
-	// Each worker owns one element, so the slice itself is not shared writing.
-	// Nothing else on this path is either: the stubbed ranking hands back a
-	// fresh slice per call and the thread-pin branch returns before the config
-	// closures or the pointer file are touched, so s.threads is the only
-	// mutable state two goroutines can be inside at once. That matters -- a
-	// lock somewhere else in the fixture would serialise the workers and hide
-	// exactly the bug this is here to catch.
+	// Each worker writes only its own result.
 	leads := make([]string, workers)
 	start := make(chan struct{})
 	var wg sync.WaitGroup
@@ -218,6 +192,7 @@ func TestConcurrentRequestsOnOneThreadAllLandOnItsAccount(t *testing.T) {
 				s.rememberThread("thread-7", "uuid-b")
 				return
 			}
+			s.threadAccount("thread-7")
 			order, _ := s.chooseOrder(codexlaunch.Record{}, "thread-7")
 			if len(order) > 0 {
 				leads[i] = order[0]
@@ -228,8 +203,8 @@ func TestConcurrentRequestsOnOneThreadAllLandOnItsAccount(t *testing.T) {
 	wg.Wait()
 
 	for i := 1; i < workers; i += 2 {
-		if leads[i] != "uuid-b" {
-			t.Fatalf("worker %d led with %q, want uuid-b: every request on a live thread goes to the account that answered it first", i, leads[i])
+		if leads[i] != "uuid-c" {
+			t.Fatalf("worker %d led with %q, want uuid-c: the serving pointer overrides the previous account", i, leads[i])
 		}
 	}
 }

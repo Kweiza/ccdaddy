@@ -1262,20 +1262,23 @@ whatever the rest of the machine is serving; that form needs the daemon and
 refuses rather than falling back, because falling back would bill an account you
 did not name and report success.
 
-**A switch applies to NEW threads.** Every request codex makes carries the whole
-conversation, including reasoning encrypted for the account that produced it, so
-`ccdad` keeps a thread with the account it started on. `ccdad switch <a Codex
-account>` and the daemon's own rotation both take effect on your next new
-thread. An existing thread keeps its account while it can serve requests. If
-that account returns HTTP 429, an unpinned thread now retries on another eligible
-account by default, before any response bytes reach the client. A successful
-retry moves the thread to that account. The existing history is forwarded, so a
-replacement can still reject it; replay does not guarantee continuation.
+**Existing unpinned sessions follow a switch on their next request.**
+`ccdad switch <a Codex account>` and automatic rotation change which account the
+proxy tries first for every unpinned request, including existing conversations.
+Responses already in flight finish on their original account. Sessions started
+with `ccdad run <ACCOUNT>` keep their explicit account pin.
 
-Set `codex.cross_account_replay` to `false` to return the original account's
-limit instead. An explicit setting is preserved on upgrade. Restart the daemon
-after changing this setting; the proxy reads it at startup. Sessions started
-with `ccdad run <ACCOUNT>` remain pinned regardless of this setting.
+When accounts change, ccdad removes the previous account's turn-state header and
+forwards the existing conversation history unchanged. A replacement can still
+reject that history; switching does not guarantee continuation. The daemon logs
+the thread and account prefixes when a thread first receives a response or
+changes accounts, so the actual route can be checked with `ccdad daemon logs`.
+Codex's usage display updates when it receives usage information from a response.
+
+`codex.cross_account_replay` controls whether a mid-thread HTTP 429 is retried on
+another eligible account; it defaults to `true`. It does not disable following
+the serving pointer. Set it to `false` to return that 429 without trying another
+account. Restart the daemon after changing this setting or upgrading the proxy.
 
 **`codex login status` answers about `~/.codex`, which ccdad does not use.** It
 will tell you that you are logged out, or logged in as somebody else, and both

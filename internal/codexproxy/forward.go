@@ -128,7 +128,7 @@ func (s *Server) responses(w http.ResponseWriter, r *http.Request) {
 	// Read BEFORE the first attempt: a thread that already has responses is
 	// carrying one account's encrypted reasoning, and whether it may be moved is
 	// a different question from whether a brand-new thread may be.
-	_, midThread := s.threadAccount(threadID)
+	previous, midThread := s.threadAccount(threadID)
 
 	// first is the rate limit that started the search. A replacement that fails
 	// for some unrelated reason must not turn a "you are out of quota" into a
@@ -144,9 +144,10 @@ func (s *Server) responses(w http.ResponseWriter, r *http.Request) {
 	)
 
 	for i, uuid := range order {
-		// Every attempt after the first strips the turn state: it is a
-		// continuation token only the account that issued it can read.
-		a, verdict, err := s.sendWithRefresh(r.Context(), uuid, r, body, i > 0, &refreshed)
+		// A serving change can move the FIRST attempt to another account.
+		// Unknown ownership after a daemon restart must also drop turn state.
+		stripTurnState := i > 0 || previous != uuid
+		a, verdict, err := s.sendWithRefresh(r.Context(), uuid, r, body, stripTurnState, &refreshed)
 		if err != nil {
 			if errors.Is(err, errNoCredential) {
 				// The request never left this process. That is a fact about the
@@ -168,6 +169,9 @@ func (s *Server) responses(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if a.stream != nil {
+			if threadID != "" && previous != uuid {
+				s.logf("codex thread %s is using account %s", short(threadID), short(uuid))
+			}
 			s.rememberThread(threadID, uuid)
 			// Past this call a byte may have reached the client, so nothing
 			// after it may be replayed.
@@ -185,7 +189,7 @@ func (s *Server) responses(w http.ResponseWriter, r *http.Request) {
 				writeBack(w, a)
 				return
 			case midThread && !s.cfg.CrossAccountReplay:
-				// The user starts a new thread and lands on the new account.
+				// The configured policy refuses a retry after this 429.
 				writeBack(w, a)
 				return
 			}
