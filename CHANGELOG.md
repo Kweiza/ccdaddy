@@ -16,6 +16,14 @@ must reference accounts by `uuid` or `alias`.
 
 ## [Unreleased]
 
+### Changed
+
+- Codex request bodies now default to a 256 MiB limit, configurable with
+  `codex.max_body_mib`. Restart the daemon after changing this setting.
+- Oversized requests return HTTP 413 Payload Too Large instead of HTTP 429.
+  Errors include the limit and request size in bytes. Unknown-length streams
+  report the observed minimum size and stop reading after one overflow byte.
+
 ## [0.23.0] — 2026-09-11
 
 ### Changed

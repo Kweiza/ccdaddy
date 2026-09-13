@@ -119,6 +119,7 @@ func (e *Engine) codexProxyConfig(root string) (codexproxy.Config, error) {
 		Credentials:        func(uuid string) (cclink.Blob, error) { return store.CredentialsAt(root, uuid) },
 		RankedEligible:     e.codexRanked,
 		CrossAccountReplay: cfg.Codex.CrossAccountReplay,
+		MaxBodyBytes:       int64(cfg.Codex.MaxBodyMiB) << 20,
 		Harvest:            e.harvestCodexSample,
 		Log:                e.logf,
 	}, nil

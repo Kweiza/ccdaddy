@@ -105,6 +105,7 @@ var hoverHonours = map[string]bool{
 	keyCodexThreshold:              true,
 	keyCodexBinary:                 true,
 	keyCodexProxyPort:              true,
+	keyCodexMaxBodyMiB:             true,
 	keyCodexCrossAccountReplay:     true,
 }
 

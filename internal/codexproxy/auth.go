@@ -3,6 +3,7 @@ package codexproxy
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -89,19 +90,46 @@ func (s *Server) forgetHit(h string) {
 	delete(s.auth, h)
 }
 
-// readBody buffers the request body, refusing anything over the cap.
-//
-// The cap is checked by reading ONE byte past it rather than by trusting
-// Content-Length, which is a number the caller chose.
-func readBody(r *http.Request) ([]byte, bool) {
-	data, err := io.ReadAll(io.LimitReader(r.Body, MaxBody+1))
+// bodyTooLarge describes the request's declared size, or the observed lower
+// bound when it has no usable Content-Length. Never drain an unbounded stream
+// merely to report a total size after it has already exceeded the limit.
+type bodyTooLarge struct {
+	LimitBytes         int64 `json:"limit_bytes"`
+	ActualBytes        int64 `json:"actual_bytes"`
+	ActualBytesAtLeast bool  `json:"actual_bytes_at_least"`
+}
+
+func (e *bodyTooLarge) Error() string {
+	qualifier := ""
+	if e.ActualBytesAtLeast {
+		qualifier = "at least "
+	}
+	return fmt.Sprintf("ccdad: Payload Too Large: request body is %s%d bytes; limit is %d bytes (codex.max_body_mib)", qualifier, e.ActualBytes, e.LimitBytes)
+}
+
+// readBody buffers only up to the configured cap plus one overflow byte.
+// A declared oversized body is refused before allocation; a missing or smaller
+// Content-Length cannot bypass the bound on bytes actually read.
+func readBody(r *http.Request, limit int64) ([]byte, error) {
+	if r.ContentLength > limit {
+		return nil, &bodyTooLarge{LimitBytes: limit, ActualBytes: r.ContentLength}
+	}
+	data, err := io.ReadAll(io.LimitReader(r.Body, limit+1))
+	if int64(len(data)) > limit {
+		return nil, &bodyTooLarge{LimitBytes: limit, ActualBytes: int64(len(data)), ActualBytesAtLeast: true}
+	}
 	if err != nil {
-		return nil, false
+		return nil, err
 	}
-	if len(data) > MaxBody {
-		return nil, false
-	}
-	return data, true
+	return data, nil
+}
+
+func writeBodyTooLarge(w http.ResponseWriter, err *bodyTooLarge) {
+	writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"error": map[string]any{
+		"type": "ccdad_payload_too_large", "message": err.Error(),
+		"limit_bytes": err.LimitBytes, "actual_bytes": err.ActualBytes,
+		"actual_bytes_at_least": err.ActualBytesAtLeast,
+	}})
 }
 
 // bearerOf reads the token out of an Authorization header, and only ever a

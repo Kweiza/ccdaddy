@@ -38,7 +38,7 @@ import (
 // FileName is the config file's basename inside the ccdad store.
 const FileName = "config.toml"
 
-// CodexConfig is the [codex] table: the four knobs the Codex lane, the
+// CodexConfig is the [codex] table: the knobs the Codex lane, the
 // launcher and the proxy read.
 //
 // It is a nested struct rather than four fields on Config with codex- prefixes,
@@ -60,6 +60,8 @@ type CodexConfig struct {
 	// ordinary state. A configured port that cannot be bound fails daemon
 	// start loudly; a resolved one falls back.
 	ProxyPort int
+	// MaxBodyMiB caps buffered Codex request bodies in mebibytes.
+	MaxBodyMiB int
 	// CrossAccountReplay allows a 429 in the MIDDLE of a thread to be replayed
 	// on another account.
 	//
@@ -355,11 +357,12 @@ type creditFile struct {
 
 // Every field is a pointer for the reason every key in this file is one:
 // absence has to be distinguishable from an explicit zero or false, or a
-// [codex] table naming one key would reset the other three.
+// [codex] table naming one key would reset every omitted value.
 type codexFile struct {
 	Threshold          *float64 `toml:"threshold"`
 	Binary             *string  `toml:"binary"`
 	ProxyPort          *int     `toml:"proxy_port"`
+	MaxBodyMiB         *int     `toml:"max_body_mib"`
 	CrossAccountReplay *bool    `toml:"cross_account_replay"`
 }
 
@@ -445,6 +448,12 @@ func Parse(raw []byte) (Config, error) {
 				return Config{}, fmt.Errorf("%s in %s: %w", keyCodexProxyPort, FileName, err)
 			}
 			cfg.Codex.ProxyPort = *f.Codex.ProxyPort
+		}
+		if f.Codex.MaxBodyMiB != nil {
+			if err := validMaxBodyMiB(*f.Codex.MaxBodyMiB); err != nil {
+				return Config{}, fmt.Errorf("%s in %s: %w", keyCodexMaxBodyMiB, FileName, err)
+			}
+			cfg.Codex.MaxBodyMiB = *f.Codex.MaxBodyMiB
 		}
 		applyBool(&cfg.Codex.CrossAccountReplay, f.Codex.CrossAccountReplay)
 	}
@@ -798,6 +807,17 @@ func validMaxAutoSpend(v float64) error {
 	}
 	if v < 0 {
 		return fmt.Errorf("%v is negative", v)
+	}
+	return nil
+}
+
+// DefaultCodexMaxBodyMiB is shared with the proxy's standalone configuration.
+const DefaultCodexMaxBodyMiB = 256
+
+func validMaxBodyMiB(v int) error {
+	// Leave room for the extra byte used to detect overflow, even on 32-bit hosts.
+	if v < 1 || uint64(v) > uint64(^uint(0)>>1)>>20 {
+		return fmt.Errorf("%d is not a positive request body limit representable in bytes", v)
 	}
 	return nil
 }

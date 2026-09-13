@@ -101,7 +101,7 @@ type attempt struct {
 //  3. only then is the body read.
 //
 // A proxy that buffered first would let anything on this machine hand the
-// daemon 32 MiB per connection without being anybody at all.
+// daemon a full request buffer per connection without being anybody at all.
 func (s *Server) responses(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		s.notFound(w, r)
@@ -112,9 +112,14 @@ func (s *Server) responses(w http.ResponseWriter, r *http.Request) {
 		writeUnknownLaunch(w)
 		return
 	}
-	body, ok := readBody(r)
-	if !ok {
-		writeUnavailable(w)
+	body, err := readBody(r, s.cfg.MaxBodyBytes)
+	if err != nil {
+		var tooLarge *bodyTooLarge
+		if errors.As(err, &tooLarge) {
+			writeBodyTooLarge(w, tooLarge)
+		} else {
+			writeUnavailable(w)
+		}
 		return
 	}
 

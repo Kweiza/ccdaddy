@@ -16,6 +16,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/codexauth"
 	"github.com/Kweiza/ccdaddy/internal/codexlaunch"
+	"github.com/Kweiza/ccdaddy/internal/config"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
@@ -30,10 +31,8 @@ const (
 	ResponsesPath = "/responses"
 	// DefaultUpstream is where a forwarded request goes.
 	DefaultUpstream = "https://chatgpt.com/backend-api/codex/responses"
-	// MaxBody caps the request body held in memory. A turn carries the whole
-	// history, so this is generous on purpose; unbounded it would be a way for
-	// anything on the machine to exhaust the daemon.
-	MaxBody = 32 << 20
+	// DefaultMaxBody is used when Config.MaxBodyBytes is omitted.
+	DefaultMaxBody = config.DefaultCodexMaxBodyMiB << 20
 	// MaxUnauthenticated caps how many bearers may be checked at once. The
 	// check is a stat and a try-lock, so this is not a throughput limit; it is
 	// what stops an unauthenticated flood from turning into filesystem work.
@@ -70,6 +69,8 @@ type Config struct {
 	PortSource string
 	// Version is what the health route reports.
 	Version string
+	// MaxBodyBytes caps request buffering. Zero uses DefaultMaxBody.
+	MaxBodyBytes int64
 	// Upstream is the URL every forwarded request goes to. Empty means
 	// DefaultUpstream.
 	Upstream string
@@ -163,6 +164,12 @@ func New(cfg Config) (*Server, error) {
 func newServer(cfg Config) (*Server, error) {
 	if cfg.Root == "" {
 		return nil, errors.New("the codex proxy was given no store root")
+	}
+	if cfg.MaxBodyBytes == 0 {
+		cfg.MaxBodyBytes = DefaultMaxBody
+	}
+	if cfg.MaxBodyBytes < 0 || uint64(cfg.MaxBodyBytes) >= uint64(^uint(0)>>1) {
+		return nil, errors.New("the codex proxy request body limit must be positive and leave room for an overflow byte")
 	}
 	if cfg.Upstream == "" {
 		cfg.Upstream = DefaultUpstream

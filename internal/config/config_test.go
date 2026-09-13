@@ -493,7 +493,7 @@ func TestTheKeySetIsClosed(t *testing.T) {
 		"cooldown", "recovery_hysteresis", "preempt_lead", "strategy",
 		"probe_unknown", "hover", "manual", "mcp_switch_without_elicitation", "update_check",
 		"credit.threshold", "credit.max_auto_spend",
-		"codex.threshold", "codex.binary", "codex.proxy_port", "codex.cross_account_replay",
+		"codex.threshold", "codex.binary", "codex.proxy_port", "codex.max_body_mib", "codex.cross_account_replay",
 		"tui.theme", "tui.glyphs", "auto_sort",
 	}
 	got := Keys()

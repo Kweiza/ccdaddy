@@ -608,6 +608,7 @@ credit.max_auto_spend           0         default  honoured
 codex.threshold                 80        default  honoured
 codex.binary                              default  honoured
 codex.proxy_port                0         default  honoured
+codex.max_body_mib              256       default  honoured
 codex.cross_account_replay      true      default  honoured
 tui.theme                       auto      default  honoured
 tui.glyphs                      auto      default  honoured
@@ -1280,6 +1281,15 @@ another eligible account; it defaults to `true`. It does not disable following
 the serving pointer. Set it to `false` to return that 429 without trying another
 account. Restart the daemon after changing this setting or upgrading the proxy.
 
+Codex request bodies are limited to **256 MiB** by default (1 MiB = 1,048,576
+bytes). Set a positive integer limit with `ccdad config set codex.max_body_mib 512`, then restart the daemon with `ccdad daemon restart`. The proxy reads this
+setting at startup. Requests over the limit receive **413 Payload Too Large**,
+with `limit_bytes` and `actual_bytes` in the JSON error and its message.
+For requests with Content-Length, the size is the declared complete body size;
+for unknown-length requests, the proxy stops after one byte over the limit and
+reports `actual_bytes_at_least: true` rather than claiming to know the full size.
+Oversized requests never reach an upstream account and are not quota errors.
+
 **`codex login status` answers about `~/.codex`, which ccdad does not use.** It
 will tell you that you are logged out, or logged in as somebody else, and both
 answers are true about that file and about nothing else. `ccdad which` names the
@@ -1337,6 +1347,7 @@ credit.max_auto_spend           0         default
 codex.threshold                 80        default
 codex.binary                              default
 codex.proxy_port                0         default
+codex.max_body_mib              256       default
 codex.cross_account_replay      true      default
 tui.theme                       auto      default
 tui.glyphs                      auto      default
