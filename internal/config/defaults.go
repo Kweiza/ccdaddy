@@ -110,7 +110,8 @@ func Defaults() Config {
 			Binary: "",
 			// 0 means resolve one. A number here is a machine saying it needs
 			// the port to be stable, which is a choice rather than a default.
-			ProxyPort: 0,
+			ProxyPort:  0,
+			MaxBodyMiB: DefaultCodexMaxBodyMiB,
 			// Keep an unpinned thread moving when its account reaches a limit.
 			// An explicit false retains the account and returns its 429.
 			CrossAccountReplay: true,

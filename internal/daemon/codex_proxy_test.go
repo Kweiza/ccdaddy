@@ -414,3 +414,17 @@ func TestAnUnparseableAccountsFileDoesNotStopTheProxy(t *testing.T) {
 	}
 	closeProxy(t, proxy)
 }
+
+func TestCodexBodyLimitDefaultAndOverrideReachTheProxy(t *testing.T) {
+	root := isolate(t)
+	e := NewEngine()
+	cfg, err := e.codexProxyConfig(root)
+	if err != nil || cfg.MaxBodyBytes != 256<<20 {
+		t.Fatalf("default proxy limit = %d, %v", cfg.MaxBodyBytes, err)
+	}
+	writeConfig(t, "[codex]\nmax_body_mib = 512\n")
+	cfg, err = e.codexProxyConfig(root)
+	if err != nil || cfg.MaxBodyBytes != 512<<20 {
+		t.Fatalf("configured proxy limit = %d, %v", cfg.MaxBodyBytes, err)
+	}
+}

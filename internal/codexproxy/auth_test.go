@@ -223,14 +223,14 @@ func TestTooManyUnauthenticatedRequestsAreRefusedWithoutTouchingTheFilesystem(t 
 }
 
 func TestABodyOverTheCapIsRefusedRatherThanBuffered(t *testing.T) {
-	r := httptest.NewRequest(http.MethodPost, ResponsesPath, io.LimitReader(zeroes{}, MaxBody+1))
-	if _, ok := readBody(r); ok {
+	r := httptest.NewRequest(http.MethodPost, ResponsesPath, io.LimitReader(zeroes{}, 1025))
+	if _, err := readBody(r, 1024); err == nil {
 		t.Fatal("readBody accepted a body over the cap")
 	}
 	r = httptest.NewRequest(http.MethodPost, ResponsesPath, strings.NewReader("small"))
-	body, ok := readBody(r)
-	if !ok || string(body) != "small" {
-		t.Fatalf("readBody() = (%q, %v), want (\"small\", true)", body, ok)
+	body, err := readBody(r, 1024)
+	if err != nil || string(body) != "small" {
+		t.Fatalf("readBody() = (%q, %v), want (\"small\", nil)", body, err)
 	}
 }
 

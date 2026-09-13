@@ -284,6 +284,7 @@ func TestEveryKeyCanBeSetAndReadBack(t *testing.T) {
 		keyCodexThreshold:          "65",
 		keyCodexBinary:             "/opt/codex/bin/codex",
 		keyCodexProxyPort:          "24680",
+		keyCodexMaxBodyMiB:         "512",
 		keyCodexCrossAccountReplay: "false",
 
 		// Neither is the default, for the reason the booleans above are not: a
@@ -351,6 +352,7 @@ func TestEveryKeyCanBeSetAndReadBack(t *testing.T) {
 			Threshold:          65,
 			Binary:             "/opt/codex/bin/codex",
 			ProxyPort:          24680,
+			MaxBodyMiB:         512,
 			CrossAccountReplay: false,
 		},
 	}
@@ -385,6 +387,7 @@ func TestTheEffectiveValueOfEveryKeyIsFormattable(t *testing.T) {
 		keyCodexThreshold:          "80",
 		keyCodexBinary:             "",
 		keyCodexProxyPort:          "0",
+		keyCodexMaxBodyMiB:         "256",
 		keyCodexCrossAccountReplay: "true",
 
 		keyTUITheme:  "auto",

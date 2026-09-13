@@ -63,7 +63,8 @@ const (
 	//
 	// binary names the real codex when the PATH walk should not decide.
 	// proxy_port pins the loopback port when it must be stable across
-	// restarts. cross_account_replay allows a mid-thread 429 to be replayed on
+	// restarts. max_body_mib limits request buffering in MiB.
+	// cross_account_replay allows a mid-thread 429 to be replayed on
 	// another account. It defaults on; an explicit false keeps a live thread
 	// on its account when that account reaches a limit.
 	//
@@ -72,6 +73,7 @@ const (
 	keyCodexThreshold          = "codex.threshold"
 	keyCodexBinary             = "codex.binary"
 	keyCodexProxyPort          = "codex.proxy_port"
+	keyCodexMaxBodyMiB         = "codex.max_body_mib"
 	keyCodexCrossAccountReplay = "codex.cross_account_replay"
 
 	keyAutoSort  = "auto_sort"
@@ -83,7 +85,7 @@ const (
 	creditSection = "credit"
 
 	// codexSection is the fourth table, closed by NAME the way [credit] and
-	// [tui] are: all four of its keys are in Keys(), so isKnownKey matches
+	// [tui] are: all of its keys are in Keys(), so isKnownKey matches
 	// them whole and needs no prefix arm.
 	codexSection = "codex"
 
@@ -170,6 +172,7 @@ func Keys() []string {
 		keyCodexThreshold,
 		keyCodexBinary,
 		keyCodexProxyPort,
+		keyCodexMaxBodyMiB,
 		keyCodexCrossAccountReplay,
 		keyTUITheme,
 		keyTUIGlyphs,

@@ -319,6 +319,8 @@ func coerce(key, value string) (any, error) {
 		return strings.TrimSpace(value), nil
 	case keyCodexProxyPort:
 		return coerceInt(key, value, validProxyPort)
+	case keyCodexMaxBodyMiB:
+		return coerceInt(key, value, validMaxBodyMiB)
 	case keyHysteresisPct:
 		return coerceFloat(key, value, validHysteresisPct)
 	case keyHeadroomRatio:
@@ -494,6 +496,8 @@ func (c Config) Value(key string) (string, error) {
 		return c.Codex.Binary, nil
 	case keyCodexProxyPort:
 		return format(int64(c.Codex.ProxyPort)), nil
+	case keyCodexMaxBodyMiB:
+		return format(int64(c.Codex.MaxBodyMiB)), nil
 	case keyCodexCrossAccountReplay:
 		return format(c.Codex.CrossAccountReplay), nil
 	}

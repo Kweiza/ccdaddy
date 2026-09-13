@@ -6,11 +6,11 @@ import (
 	"testing"
 )
 
-// The four Codex keys are in the closed set, so `ccdad config set` accepts
+// The Codex keys are in the closed set, so `ccdad config set` accepts
 // them and the loader reads them. A key in one and not the other is the drift
 // keys.go exists to prevent -- it would print a key `config set` then refuses.
 func TestTheCodexKeysAreInTheClosedSet(t *testing.T) {
-	want := []string{"codex.threshold", "codex.binary", "codex.proxy_port", "codex.cross_account_replay"}
+	want := []string{"codex.threshold", "codex.binary", "codex.proxy_port", "codex.max_body_mib", "codex.cross_account_replay"}
 	keys := Keys()
 	for _, k := range want {
 		if !slices.Contains(keys, k) {
@@ -28,6 +28,9 @@ func TestTheCodexKeysAreInTheClosedSet(t *testing.T) {
 // The defaults, each an answer rather than an omission.
 func TestTheCodexDefaults(t *testing.T) {
 	d := Defaults().Codex
+	if d.MaxBodyMiB != 256 {
+		t.Fatalf("MaxBodyMiB = %d, want 256", d.MaxBodyMiB)
+	}
 	if d.Threshold != 80 {
 		t.Errorf("Codex.Threshold = %v, want 80", d.Threshold)
 	}
@@ -62,7 +65,7 @@ func TestParseReadsTheCodexTable(t *testing.T) {
 	}
 }
 
-// A [codex] table naming ONE key leaves the other three at their defaults. It
+// A [codex] table naming ONE key leaves the others at their defaults. It
 // is the reason the table is a pointer to a struct of pointers rather than a
 // value: without it, writing `binary` would reset the threshold to zero.
 func TestACodexTableWithOneKeyLeavesTheRestAlone(t *testing.T) {
@@ -109,12 +112,13 @@ func TestTheProxyPortIsValidated(t *testing.T) {
 	}
 }
 
-// `ccdad config set` and `ccdad config get` answer for all four.
+// `ccdad config set` and `ccdad config get` answer for every key.
 func TestTheCodexKeysRoundTripThroughSetAndValue(t *testing.T) {
 	for _, tc := range []struct{ key, set, want string }{
 		{"codex.threshold", "65", "65"},
 		{"codex.binary", "/opt/codex", "/opt/codex"},
 		{"codex.proxy_port", "24680", "24680"},
+		{"codex.max_body_mib", "512", "512"},
 		{"codex.cross_account_replay", "true", "true"},
 		{"codex.cross_account_replay", "false", "false"},
 	} {
@@ -136,5 +140,24 @@ func TestTheCodexKeysRoundTripThroughSetAndValue(t *testing.T) {
 				t.Errorf("Value(%q) = %q, want %q", tc.key, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestCodexBodyLimitParsingRejectsInvalidAndOverflowingValues(t *testing.T) {
+	for _, value := range []string{"0", "-1", "1.5", "8796093022208", "9223372036854775807"} {
+		if _, err := Parse([]byte("[codex]\nmax_body_mib = " + value + "\n")); err == nil {
+			t.Fatalf("accepted body limit %s", value)
+		}
+		if err := newDocument().Set("codex.max_body_mib", value); err == nil {
+			t.Fatalf("Set accepted body limit %s", value)
+		}
+	}
+	cfg, err := Parse([]byte("[codex]\nmax_body_mib = 512\n"))
+	if err != nil || cfg.Codex.MaxBodyMiB != 512 {
+		t.Fatalf("parsed limit = %d, %v", cfg.Codex.MaxBodyMiB, err)
+	}
+	cfg, err = Parse([]byte("[codex]\nthreshold = 60\n"))
+	if err != nil || cfg.Codex.MaxBodyMiB != 256 {
+		t.Fatalf("omitted limit = %d, %v", cfg.Codex.MaxBodyMiB, err)
 	}
 }
