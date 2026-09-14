@@ -16,6 +16,8 @@ must reference accounts by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.24.0] — 2026-09-14
+
 ### Changed
 
 - Codex request bodies now default to a 256 MiB limit, configurable with
@@ -3701,7 +3703,8 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.23.0...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.24.0...HEAD
+[0.24.0]: https://github.com/Kweiza/ccdaddy/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/Kweiza/ccdaddy/compare/v0.22.1...v0.23.0
 [0.22.1]: https://github.com/Kweiza/ccdaddy/compare/v0.22.0...v0.22.1
 [0.22.0]: https://github.com/Kweiza/ccdaddy/compare/v0.21.0...v0.22.0
