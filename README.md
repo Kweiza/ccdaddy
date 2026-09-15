@@ -1,172 +1,57 @@
 <p align="center">
-  <img src="assets/ccdaddy.png" width="760"
-       alt="Pixel-art wordmark reading CCDaddy (ccdad) over an amber terminal frame. Below it: four small Claude characters crowded together and, off to the right, a larger one in a hat and moustache pointing at them. The caption reads 'Hey, quota's down again? You were Yap-ping!' — the Daddy Daemon.">
+  <img src="assets/ccdad-tui.png" width="1100"
+       alt="ccdad terminal dashboard showing separate Claude and Codex accounts, quota usage, reset times, active and serving accounts, an unsubscribed account, and keyboard shortcuts.">
+  <br>
+  <sub>The actual ccdad TUI, captured with example accounts and no real credentials.</sub>
 </p>
 
 # ccdaddy
 
-**Claude Code Daemon: Always Drilling, Don't Yap.** A single static binary,
-`ccdad`, that manages several Claude Code accounts and moves you to the next
-one *before* a rate limit stops you.
+**Quota-aware account management for Claude Code and Codex.**
+
+`ccdad` stores your accounts, monitors usage, and rotates accounts as quota runs
+low. Its terminal dashboard brings account status, usage windows, reset times,
+switching policy, and capacity forecasts into one view.
 
 [![ci](https://github.com/Kweiza/ccdaddy/actions/workflows/ci.yml/badge.svg)](https://github.com/Kweiza/ccdaddy/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/Kweiza/ccdaddy?sort=semver)](https://github.com/Kweiza/ccdaddy/releases)
 [![license](https://img.shields.io/github/license/Kweiza/ccdaddy)](LICENSE)
 
-```console
-$ ccdad status
-Daemon:  running  pid 48213  up 2h06m
-Active (Claude): work@example.com (work)
-Active (Codex): cx@example.com
-Strategy: headroom
-Current:  headroom  (at least one account has room, or could not be read)
-Runway:  7d dry 2026-08-24 01:19 UTC (1d13h)  ·  5h holds  ·  basis 4h00m  ·  need 4 (2 more)
+| | Claude Code | Codex |
+|---|---|---|
+| Add an account | `ccdad add claude` | `ccdad add codex` |
+| How requests use it | ccdad updates the managed Claude login, including macOS Keychain storage | ccdad routes requests through a local authenticated proxy |
+| Follow account changes | Sessions using the managed login can follow switches | Already-routed, unpinned conversations follow the serving account on their next request |
+| Pin a session | `ccdad run c1` | `ccdad run x1` |
+| Display indexes | `1, 2, 3, …` within Claude | `1, 2, 3, …` within Codex |
 
-       CLAUDE
-  IDX  ACCOUNT                  TYPE          TIER        5H   7D   FABLE  5H IN  7D IN  FABLE IN  STATE      AGE
-* 1    work@example.com (work)  subscription  claude_max  82%  61%  100%   1h14m  4d3h   4d3h      active     41s
-  2    personal@example.com     subscription  claude_pro  17%  44%  38%    3h02m  6d1h   4d3h      candidate  2m
-  3    ci@example.org (ci)      api-key       -           ?    ?    ?      ?      ?      ?         -          ?
-       CODEX
-  IDX  ACCOUNT                  TYPE          TIER        CX 1  CX 1 IN                  STATE      AGE
-  1    cx@example.com           codex         pro         31%   3h09m                    serving    3m
-windows claude: 5H = five_hour   7D = seven_day   FABLE = weekly_scoped:model:Fable
-windows codex: CX 1 = codex_primary
-
-$ ccdad status --json
-{
-  "schemaVersion": 1,
-  "daemon": { "state": "running", "pid": 48213 },
-  "strategy": "headroom",
-  "accounts": [
-    {
-      "uuid": "0d9e4e6a-1f1a-4b5e-9c3a-2f7b6a1d8e40",
-      "idx": 1,
-      "ref": "c1",
-      "email": "work@example.com",
-      "alias": "work",
-      "kind": "subscription",
-      "tier": "max",
-      "active": true,
-      "usage": {
-        "fetchedAt": "2026-08-24T05:45:10Z",
-        "ageSeconds": 41,
-        "headroomPct": 18,
-        "slack": -2,
-        "windowThreshold": 80,
-        "bindingWindow": "five_hour",
-        "windows": {
-          "five_hour": { "utilizationPct": 82, "resetsAt": "2026-08-24T06:59:51Z" }
-        }
-      }
-    },
-    {
-      "uuid": "5b2c7f31-8a4d-4c9e-9d0a-3e6f1b2c9a71",
-      "idx": 2,
-      "ref": "c2",
-      "email": "personal@example.com",
-      "kind": "subscription",
-      "tier": "pro",
-      "active": false,
-      "usage": {
-        "fetchedAt": "2026-08-24T05:45:10Z",
-        "ageSeconds": 41,
-        "headroomPct": 83,
-        "slack": 63,
-        "windowThreshold": 80,
-        "bindingWindow": "seven_day",
-        "windows": {
-          "seven_day": { "utilizationPct": 17, "resetsAt": "2026-08-28T08:45:51Z" }
-        }
-      }
-    },
-    {
-      "uuid": "c1a8e2d4-6b3f-4a1e-8c5d-9f0b7e2a3c62",
-      "idx": 3,
-      "ref": "c3",
-      "email": "ci@example.org",
-      "alias": "ci",
-      "kind": "api-key",
-      "active": false
-    }
-  ],
-  "activeUuid": "0d9e4e6a-1f1a-4b5e-9c3a-2f7b6a1d8e40",
-  "forecast": {
-    "basis": {
-      "windowSeconds": 14400,
-      "observedSeconds": 14400,
-      "readings": 18,
-      "accounts": 3,
-      "unmeasured": 0,
-      "unreadable": 0,
-      "ineligible": 1
-    },
-    "axes": {
-      "five_hour": {
-        "burnPpPerHour": 8,
-        "burnPpPerHourHigh": 8.5,
-        "replenishPpPerHour": 40,
-        "holds": true
-      },
-      "weekly": {
-        "burnPpPerHour": 3.5,
-        "burnPpPerHourHigh": 4,
-        "replenishPpPerHour": 1.1904761904761905,
-        "holds": false,
-        "dryAt": "2026-08-25T20:53:44.285714285Z"
-      }
-    },
-    "fleet": {
-      "accountsNeeded": 7,
-      "accountsNeededBy": "weekly",
-      "accountsUsable": 2,
-      "dryAt": "2026-08-25T20:53:44.285714285Z",
-      "pointsLeft": 137,
-      "pointsTotal": 200
-    }
-  }
-}
-
-```
-
-`ccdad` is an unofficial, third-party tool. It is not affiliated with,
-endorsed by, or supported by Anthropic.
+**Codex must run through the ccdad wrapper to use ccdad's accounts.** A provider
+shown as `openai` in Codex's `/status` is a direct session; changing ccdad's serving
+account does not move it. See [Codex accounts](#codex-accounts).
 
 ## Contents
 
-- [Why](#why)
 - [Install](#install)
 - [Quick start](#quick-start)
-- [Commands](#commands)
 - [The dashboard](#the-dashboard)
+- [Commands](#commands)
+- [Account references and ordering](#account-references-and-ordering)
+- [Codex accounts](#codex-accounts)
+- [Switching strategies](#switching-strategies)
+- [Configuration](#configuration)
+- [Running sessions side by side](#running-sessions-side-by-side)
+- [Running ccdad on more than one machine](#running-ccdad-on-more-than-one-machine)
 - [Claude Code's own tools](#claude-codes-own-tools)
 - [How the switch stays safe](#how-the-switch-stays-safe)
-- [Running sessions side by side](#running-sessions-side-by-side)
-- [Codex accounts](#codex-accounts)
-- [Configuration](#configuration)
 - [Containers](#containers)
 - [Scripting](#scripting)
-- [What is not here yet](#what-is-not-here-yet)
-- [Building from source](#building-from-source)
 - [Troubleshooting](#troubleshooting)
-
-## Why
-
-Claude Code stores one login at a time. If you have more than one account, you
-either edit `~/.claude/.credentials.json` by hand — which is how people destroy
-the MCP server logins that live in the same file — or you notice you have hit a
-limit, log out, log in again, and lose your place.
-
-`ccdad` keeps each account's credentials in its own store, watches how much of
-each account's quota is left, and swaps the live login when the account you are
-on is running out and another one is not. The swap takes Claude Code's own
-locks, so a session in flight picks up the new login on its next request with
-no restart.
+- [Building from source](#building-from-source)
 
 ## Install
 
-The published installers verify a SHA-256 checksum before they will put
-anything on your disk, and abort rather than warn when they cannot.
+Install Claude Code or Codex separately. ccdad's release binaries are standalone;
+they do not require Go or Node.js to run.
 
 **macOS and Linux**
 
@@ -174,170 +59,77 @@ anything on your disk, and abort rather than warn when they cannot.
 curl -fsSL https://raw.githubusercontent.com/Kweiza/ccdaddy/main/install.sh | bash
 ```
 
-**Windows (PowerShell 5.1 or newer)**
+The default destination is `~/.local/bin`. If it is not on your PATH yet:
+
+```sh
+~/.local/bin/ccdad setup-path
+```
+
+Open a new terminal after changing shell startup files.
+
+**Windows — PowerShell 5.1 or newer**
 
 ```powershell
 irm https://raw.githubusercontent.com/Kweiza/ccdaddy/main/install.ps1 | iex
 ```
 
-On an unpatched Windows PowerShell 5.1 host, TLS 1.2 is not the default and
-`irm` fails before it reaches the script. Put the protocol in front of it:
+On older PowerShell 5.1 hosts, enable TLS 1.2 first if the download fails:
 
 ```powershell
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-irm https://raw.githubusercontent.com/Kweiza/ccdaddy/main/install.ps1 | iex
 ```
 
-PowerShell 7 needs neither line.
+The Windows installer adds `%LOCALAPPDATA%\Programs\ccdad` to the user PATH and
+updates the current PowerShell session. Release targets are Linux, macOS and
+Windows, each on amd64 and arm64.
 
 ### Installer options
 
-Both installers take their options from the environment, because `curl | bash`
-and `irm | iex` cannot pass arguments.
-
-| Variable | Meaning | Default |
+| Environment variable | Meaning | Default |
 |---|---|---|
-| `CCDAD_INSTALL_DIR` | Where the binary goes | `~/.local/bin` · `%LOCALAPPDATA%\Programs\ccdad` |
-| `CCDAD_VERSION` | A released tag to pin, e.g. `v1.2.3` | the latest non-prerelease |
-| `CCDAD_BASE_URL` | Download origin, for mirrors | GitHub releases |
+| `CCDAD_INSTALL_DIR` | Installation directory | `~/.local/bin` on Unix; `%LOCALAPPDATA%\Programs\ccdad` on Windows |
+| `CCDAD_VERSION` | A specific release tag | Latest stable release |
+| `CCDAD_BASE_URL` | Release download origin for a mirror | GitHub releases |
 
-The two differ on `PATH`, deliberately. **`install.ps1` registers it for you**:
-it appends the install directory to the user `PATH` in the registry, broadcasts
-the change so a new shell has it, and also updates the running session's own
-`PATH` — `irm | iex` evaluates the script in your current shell, not a child
-process, so `ccdad` works right there without opening a new window.
-**`install.sh` does not touch a shell profile** — the script itself is on
-stdin under `curl | bash`, so it
-cannot ask permission, and a startup file guessed at is a startup file that can
-be corrupted. It points at [`ccdad setup-path`](#ccdad-setup-path), and prints the
-`export PATH=…` line underneath for the shell you are standing in.
-
-### Verifying the download
-
-Every release publishes three things you can check, and they are independent
-claims rather than layers of one:
-
-| Artifact | What it proves |
-|---|---|
-| `sha256sums.txt` | the bytes you have are the bytes that were published — both installers enforce it and abort rather than warn |
-| `sha256sums.txt.minisig` | those checksums were signed by this repository's release key, for the release the signature names |
-| a keyless build-provenance attestation | the binaries came out of this repository's own workflow |
-
-The signature is the one you can check offline, with the stock
-[minisign](https://jedisct1.github.io/minisign/) tool and the public key
-committed at the root of this repository as `ccdaddy.pub`:
-
-```sh
-tag=v0.7.0
-base=https://github.com/Kweiza/ccdaddy/releases/download/$tag
-curl -fsSLO "$base/sha256sums.txt"
-curl -fsSLO "$base/sha256sums.txt.minisig"
-curl -fsSLO https://raw.githubusercontent.com/Kweiza/ccdaddy/main/ccdaddy.pub
-
-minisign -Vm sha256sums.txt -p ccdaddy.pub
-sha256sum --ignore-missing -c sha256sums.txt   # macOS: shasum -a 256 --ignore-missing -c
-```
-
-**The `curl` for `ccdaddy.pub` above is the convenient path, not the strong
-one.** Fetching the key from `raw.githubusercontent.com` at verification time
-checks that GitHub agrees with itself, which is not what a signature is for.
-Its value is against everything else in the path a download can take: a
-mirror, a CDN, a release asset swapped after publishing. If you already hold a
-clone of this repository, use the `ccdaddy.pub` in it instead of fetching a
-fresh copy.
-
-`minisign -Vm` prints two lines:
-
-```
-Signature and comment signature verified
-Trusted comment: file:sha256sums.txt	ccdaddy:v0.7.0
-```
-
-**Read the second one.** The `ccdaddy:` field names the release the signature
-was made for, and that is what is worth reading: `sha256sums.txt` itself
-carries no version, so an old release's checksums and its signature stay a
-genuine, correctly signed pair forever, and this line is what tells you which
-release they are a pair *for*. The `.minisig` file also holds an *untrusted*
-comment above this one — run `cat sha256sums.txt.minisig` to see it — which
-minisign never authenticates, so it can say anything and the verify command
-does not print it.
-
-**Do not pass `-H`.** It means "require a prehashed signature" and rejects the
-legacy form published here, failing with `Legacy (non-prehashed) signature
-found` — a message that names the signature, not your command, so it reads as
-though the release is broken rather than as though a flag needs to come off.
-Plain `-V` accepts it.
-
-If verification fails, minisign says why when it can: a key id mismatch names
-both ids. But a public key that differs from `ccdaddy.pub` only in its key
-material, not its key id — the shape of a mistyped paste, not a wrong
-download — fails with the same generic `Signature verification failed` a
-tampered file gets. Compare the key you used against `ccdaddy.pub` in this
-repository before treating that message as a bad release rather than a bad
-paste.
-
-`ccdaddy.pub` is committed here rather than only served from a page, so you can
-compare it against the key compiled into a binary you already trust:
-
-```sh
-if ccdad_bin=$(command -v ccdad); then
-  grep -Faq "$(sed -n 2p ccdaddy.pub)" "$ccdad_bin" \
-    && echo "same key" || echo "no key found; this build predates ccdad update"
-else
-  echo "no ccdad on PATH"
-fi
-```
-
-The `command -v` is a separate step because it can fail. Inlined, a machine
-with no `ccdad` on `PATH` leaves `grep` an empty filename to open, and the
-else-arm then reports "this build predates ccdad update" about a build that is
-not there at all.
-
-A plain `grep -q … && echo` would print nothing both when the key differs and
-when this build carries no key at all, and those are different things to be
-told in a section that exists to answer "is this tampering?" — the second arm
-names the build-predates-it case so the first arm can mean only one thing:
-the keys actually differ. A build predates `ccdad update` when it was built
-before this command shipped; nothing else compiles the key in.
-
-The attestation is a separate check with separate tooling:
-
-```sh
-gh attestation verify ccdad-linux-amd64 --repo Kweiza/ccdaddy
-```
-
-It covers `sha256sums.txt.minisig` too, because the signature is produced
-before the attestation step runs. The reverse is not true — the signature says
-nothing about the attestation — so they are two claims, not one that reinforces
-the other.
-
-Windows binaries are not Authenticode-signed yet, so SmartScreen will warn.
-
-Each release also carries `LICENSE`, `NOTICE` and `THIRD-PARTY-LICENSES.txt`
-as assets, hashed into the same `sha256sums.txt` and covered by the same
-signature and the same attestation — so a binary downloaded on its own still
-arrives with the notices the modules inside it require.
+Both installers verify SHA-256 checksums before replacing the binary. The Unix
+installer does not edit shell startup files; `ccdad setup-path` manages those.
+Windows binaries are not Authenticode-signed, so SmartScreen may show a warning.
 
 ### Upgrading
 
 ```sh
-ccdad update
+ccdad update --check            # check availability and installation writability
+ccdad update                    # verify and install the latest stable release
+ccdad update --version v0.24.0   # select a specific release, including a downgrade
 ```
 
-It verifies a signature over the release's `sha256sums.txt` before it replaces
-anything — see [`ccdad update`](#ccdad-update) for what it refuses and why.
+`ccdad update` verifies signed checksums, checks the downloaded binary, and
+restarts the daemon if one was running. It has no verification-bypass option.
+Package-manager installations must be upgraded through their package manager.
 
-Re-running the one-liner still works, and it is the way onto a **different
-architecture**: `ccdad update` always fetches the asset for the architecture
-this binary was built for, so an amd64 build under Rosetta or Windows-on-ARM
-stays on amd64.
+The updater keeps the architecture of the running binary. Re-run the installer
+to move from an amd64 build under emulation to a native arm64 build. Re-running
+an installer stops the old daemon; normal account commands or
+`ccdad daemon start` bring it back.
 
-Both installers stop the running daemon before replacing the binary and neither
-restarts it: it comes back on the next command that is allowed to auto-start
-one — bare `ccdad`, `add`, `add-token`, `status`, `switch` or
-`which`. `ccdad daemon status` is not one of them, on purpose, so a supervisor
-loop cannot start what it was only asked to look at. `ccdad update` does
-restart it, from the binary it has just written.
+### Verifying the download
+
+Releases include six binaries, `sha256sums.txt`, `sha256sums.txt.minisig`, license
+notices, and GitHub build-provenance attestations. Using a trusted checkout's
+[public key](ccdaddy.pub), verify downloaded checksums and their named release:
+
+```sh
+minisign -Vm sha256sums.txt -p ccdaddy.pub
+sha256sum --ignore-missing -c sha256sums.txt
+```
+
+On macOS, use `shasum -a 256 --ignore-missing -c sha256sums.txt` for the second
+command. Check that the signed trusted comment names the release you intended
+to download. An attestation can be checked independently:
+
+```sh
+gh attestation verify ccdad-linux-amd64 --repo Kweiza/ccdaddy
+```
 
 ### Removing it
 
@@ -345,1661 +137,586 @@ restart it, from the binary it has just written.
 ccdad uninstall
 ```
 
-Not `rm` — there is a daemon to stop and a credential directory to clear.
+This stops the daemon and removes ccdad's store, registration, and binary. Use it
+instead of deleting the binary alone.
 
 ## Quick start
 
-```sh
-ccdad add claude work   # opens a browser; 'work' becomes the alias
-ccdad add claude personal
-ccdad add codex         # a Codex account: prints a device code, no browser
-ccdad status            # accounts, quota, strategy, runway, and daemon state
-ccdad which             # who Claude Code is logged in as right now
-ccdad switch personal   # move the live login
-ccdad daemon start      # watch quota and switch automatically from now on
-```
-
-The provider is part of the command: `ccdad add claude` and `ccdad add codex`
-are the two logins, and bare `ccdad add` is a usage error naming both rather
-than a default to Claude. `ccdad add claude` does not switch to the account it
-just added. Pass `--activate` if you want both.
-
-On a headless machine, or when a token came from somewhere else:
+### Claude Code
 
 ```sh
-ccdad add-token          # prompts without echoing, on a terminal
-ccdad add-token -        # reads from stdin
+ccdad add claude --alias work --activate
+ccdad add claude --alias personal
+ccdad status
+ccdad                       # interactive dashboard; requires a terminal
+claude
 ```
 
-With no argument and no terminal — in a script, or under `nohup` — `add-token`
-is a usage error rather than a silent hang. Pass the token, or `-`.
+Adding an account stores it without switching unless you pass `--activate`.
+For a browser login from a headless terminal:
+
+```sh
+ccdad add claude --no-browser --timeout 15m
+```
+
+The pasted-code flow still requires a terminal on stdin. `ccdad add-token` accepts
+API keys and setup tokens, but those are not refreshable browser logins and do
+not provide the usage polling needed for automatic rotation.
+
+### Codex
+
+```sh
+ccdad add codex              # device-code login
+ccdad codex shim install     # Unix wrapper; add also attempts this automatically
+# Open a new terminal, then verify the wrapper is first on PATH:
+command -v codex
+codex
+```
+
+On Unix, `command -v codex` should resolve to `~/.ccdad/bin/codex`. In Codex,
+`/status` should show provider **`ccdad`**. To route explicitly, independently of
+shell PATH order, use:
+
+```sh
+ccdad codex exec
+```
+
+On Windows, use this explicit launcher; ccdad does not install a Windows Codex
+shim. See [Routing and resuming sessions](#routing-and-resuming-sessions).
+
+## The dashboard
+
+Run bare `ccdad` in a terminal. Use `ccdad status` for a text listing or
+`ccdad status --json` for scripts.
+
+The dashboard groups accounts by provider. Each group has its own quota columns:
+Claude's 5-hour, 7-day and scoped windows; Codex's primary and secondary windows
+with durations supplied by its API. `?` means unknown; `-` means that quantity is
+not present. A failed reading is never displayed as zero usage.
+
+| Key | Action |
+|---|---|
+| `up` / `k`, `down` / `j` | Move between accounts in displayed order |
+| `s` | Switch to the account under the cursor |
+| `a` | Choose a provider and add an account |
+| `o` | Toggle automatic sorting by the nearest 7-day reset |
+| `c` | Choose the switching strategy |
+| `d` | Open daemon status and logs; `S` starts, `x` stops, `R` restarts |
+| `r` | Reload local state; does not force a network usage request |
+| `?` | Show help |
+| `esc` | Return to the previous screen |
+| `q` / `ctrl+c` | Quit the dashboard |
+
+Quota and profile refreshes belong to the daemon. Use `ccdad status --refresh`
+for a manual refresh; it still respects quota backoff. The TUI reloads local
+state periodically and keeps the selected account by UUID when rows reorder.
+
+### Subscription status
+
+Claude profiles are checked independently of usage polling. A quota API 429 does
+not postpone a due subscription check.
+
+- `checking`: the subscription has not been verified; automatic selection is held.
+- `unsubscribed`: the profile explicitly reports a canceled, expired, or unpaid
+  subscription; it is excluded from automatic selection and warm-ups.
+- A later profile confirming renewal restores eligibility, unless you manually
+  disabled the account or assigned it to another machine.
+
+Profile checks normally run daily, with earlier checks after permission failures.
+Failed checks have a persisted 15-minute retry interval. A network error or an
+empty usage window alone is not treated as subscription expiry. Codex usage
+polls also refresh the stored plan; a free Codex plan is not automatically disabled.
 
 ## Commands
 
-| Command | What it does |
+Run `ccdad <command> --help` for exact flags and argument handling.
+
+| Command | Purpose |
 |---|---|
-| `ccdad` | The dashboard, at a terminal. In a pipe, a redirect or cron it is usage on stderr and exit `2` |
-| `ccdad add claude [ALIAS]`, `add codex` | Log an account in and manage it — through the browser for Claude, through a device code for Codex. Bare `ccdad add` names both and exits `2` |
-| `ccdad add-token [TOKEN\|-]` | Register an `sk-ant-oat…` setup token or an `sk-ant-api…` key |
-| `ccdad which` | Show which managed account Claude Code is logged in as |
-| `ccdad switch [ACCOUNT]` | Make an account the live login |
-| `ccdad run <ACCOUNT> [args…]` | Start a session as an account, without changing the live login. A Codex account starts codex instead of claude |
-| `ccdad codex shim install\|exec` | Put ccdad's `codex` on your PATH by hand (`ccdad add codex` already does), or run codex through ccdad — see [Codex accounts](#codex-accounts) |
-| `ccdad probe <ACCOUNT>` | Spend one tiny request to start a window's clock early |
-| `ccdad auto` | Run the auto-switch engine, once or continuously |
-| `ccdad strategy hover\|manual\|headroom\|consume-first` | Select the one account-switching policy |
-| `ccdad status` | The unified account, quota, strategy, runway, and daemon dashboard |
-| `ccdad runway` | How fast the accounts are spending quota, and when it runs out — measured from readings already taken |
-| `ccdad daemon start\|stop\|restart\|status\|logs` | Drive the background daemon directly |
-| `ccdad mcp` | Serve ccdad's tools to Claude Code over the Model Context Protocol. Claude Code starts it; you do not |
-| `ccdad mcp install\|uninstall` | Register that server with Claude Code, or take it back out |
-| `ccdad config get\|set\|unset\|list\|path` | Read and write `~/.ccdad/config.toml` |
-| `ccdad alias`, `move` | Give an account a handle; reorder the display |
-| `ccdad disable`, `enable` | Hold an account out of automatic rotation, or return it |
-| `ccdad own [ACCOUNT...]` | Declare which accounts THIS machine drives — see [Running ccdad on more than one machine](#running-ccdad-on-more-than-one-machine) |
-| `ccdad primary <ACCOUNT> on\|off` | Rank a credit-metered seat with the subscriptions, and let it spend unattended |
-| `ccdad export`, `import` | Move the account store between machines; `--base64` writes one line for a secret store |
-| `ccdad bootstrap` | Import an account document named by `CCDAD_IMPORT`; a no-op when it is unset — see [Containers](#containers) |
-| `ccdad remove` | Stop managing an account and delete its stored credentials |
-| `ccdad doctor` | Check the layout ccdad depends on, and the hazards around it |
-| `ccdad setup-path` | Put the directory holding `ccdad` on your `PATH`, durably |
-| `ccdad update` | Verify and install the latest signed release; `--check` only looks |
-| `ccdad uninstall` | Stop the daemon, delete the store, remove the binary |
+| `ccdad` | Interactive terminal dashboard |
+| `ccdad status [--refresh] [--json]` | Accounts, quota, strategy, forecast, and daemon state |
+| `ccdad which` | Managed Claude login and Codex serving account |
+| `ccdad add claude` / `ccdad add codex` | Add a provider account |
+| `ccdad add-token` | Read a token without echoing; use `-` to read stdin |
+| `ccdad switch ACCOUNT` | Switch the managed Claude login or Codex serving pointer |
+| `ccdad switch --strategy headroom` | Ask the Claude ranking engine to select a target |
+| `ccdad run ACCOUNT` | Start a session pinned to an account |
+| `ccdad codex exec` | Launch Codex through the local proxy |
+| `ccdad codex shim install` / `uninstall` | Manage the Unix Codex wrapper |
+| `ccdad strategy hover` / `manual` / `headroom` / `consume-first` | Select one switching policy |
+| `ccdad auto --once` | Run one automatic decision from cached state |
+| `ccdad auto` | Run the continuous engine in the foreground |
+| `ccdad runway` | Estimate quota runway from measured usage history |
+| `ccdad probe ACCOUNT` | Spend a small Claude request to start an unused quota window |
+| `ccdad alias ACCOUNT NAME` | Give an account a stable handle |
+| `ccdad move ACCOUNT POSITION` | Reorder within that account's provider |
+| `ccdad disable ACCOUNT` / `enable ACCOUNT` | Change manual eligibility for automatic rotation |
+| `ccdad own [ACCOUNT...]` | Declare which accounts this machine drives |
+| `ccdad primary ACCOUNT on` / `off` | Set a credit-metered account's primary-pool policy |
+| `ccdad remove ACCOUNT` | Remove an account and its stored credentials |
+| `ccdad daemon start` / `stop` / `restart` / `status` / `logs` | Manage the daemon |
+| `ccdad config get` / `set` / `unset` / `list` / `path` | Manage configuration |
+| `ccdad setup-path` | Register executable directories in shell startup files |
+| `ccdad export` / `import` / `bootstrap` | Transfer or provision account stores |
+| `ccdad mcp install` / `uninstall` | Register the MCP server with Claude Code |
+| `ccdad doctor` | Diagnose credentials, routing, configuration, and daemon health |
+| `ccdad update` | Install a verified release |
+| `ccdad uninstall` | Remove ccdad |
 
-Anywhere a command takes an `ACCOUNT`, it accepts a display index, an alias, an
-email address, or a uuid prefix of at least eight characters. Alias, email and
-uuid matching are case-insensitive, and there is no fuzzy matching: an ambiguous
-reference is a usage error rather than a guess.
+Normal account commands can auto-start a missing daemon. Administrative commands
+such as `config`, `update`, and `daemon status` do not. The daemon is self-managed;
+there are no supplied launchd, systemd, or Windows service units.
 
-Indexes start at 1 within each provider: Claude 1, 2, 3 and Codex 1, 2.
-Use `c1` for the first Claude account and `x1` for the first Codex account.
-A bare number is refused when both providers have that index. UUIDs and aliases
-remain stable when the display is reordered; account JSON includes the prefixed
-`ref` alongside the numeric `idx`.
+## Account references and ordering
 
-`ccdad --help` and `ccdad <command> --help` are the authority; every command
-documents its own flags there.
+Display indexes start at 1 **within each provider**. Use `c1` for Claude's first
+account and `x1` for Codex's first. A bare number works only when it identifies a
+single account; a number present in both groups is refused as ambiguous.
 
-### `ccdad switch`
-
-```sh
-ccdad switch work                        # by alias
-ccdad switch --strategy headroom         # let the engine choose
-ccdad switch --strategy headroom \
-             --model sonnet              # ...for a Sonnet session
-```
-
-With no account, `--strategy` runs the same ranking and the same anti-flap
-margins the daemon uses, against the same on-disk usage cache. It never polls
-on its own — run the daemon, or `ccdad status --refresh`, so there is something
-fresh to choose on.
-
-`--model` names the model the session will run, and **narrows** the ranking: the
-weekly caps scoped to other models stop counting against an account, so one
-whose Opus week is spent can still be chosen for a Sonnet session. It only ever
-raises an account's headroom. Caps that are not per-model — the five-hour and
-all-model weekly windows, and any cap scoped to a *surface* rather than a model —
-always count. Name a family (`opus`, `sonnet`, `haiku`, `fable`), with or
-without a version; a name `ccdad` cannot place is refused rather than quietly
-ignored.
-
-### `ccdad setup-path`
-
-The answer to `ccdad: command not found` right after an install. `curl | bash`
-has the installer's own script on stdin, so `install.sh` cannot ask permission
-to edit a startup file, and a file it guessed at is a file it can corrupt — so
-it hands the job to a command you run yourself.
+Commands also accept aliases, email addresses, and UUID prefixes of at least
+eight characters. Matching is case-insensitive. An ambiguous email or prefix is
+an error rather than a guess.
 
 ```sh
-ccdad setup-path            # register it
-ccdad setup-path --print    # show the block, write nothing
+ccdad switch c2
+ccdad switch x1
+ccdad alias x1 codex-work
+ccdad move c3 1
 ```
 
-It writes a marker-fenced block into the startup files your shell actually
-reads, and running it twice leaves one block:
-
-- **bash** — `~/.bashrc` *and* your login file (the first of `~/.bash_profile`,
-  `~/.bash_login`, `~/.profile` that exists). Both, because a login shell reads
-  only the second and a terminal-emulator shell reads only the first. It never
-  *creates* `~/.bash_profile`: doing so would stop bash login shells from ever
-  reading `~/.profile` again.
-- **zsh** — `$ZDOTDIR/.zshrc`, else `~/.zshrc`.
-- **fish** — `$XDG_CONFIG_HOME/fish/config.fish`, else `~/.config/fish/config.fish`.
-- **sh, dash, ksh** — `~/.profile`.
-- **csh, tcsh** — not written. The line is printed for you to add.
-- **Windows** — no startup file: the install directory goes into
-  `HKCU\Environment` with its value kind preserved, the change is broadcast to
-  running programs, and what was added is recorded under `HKCU\Software\ccdad`
-  so `ccdad uninstall` can take back that entry and only that entry. This is the
-  same write `install.ps1` performs.
-
-The block guards itself, so sourcing it twice cannot duplicate a `PATH` entry,
-and it is written so that an empty `PATH` never gains an empty component — which
-would put the working directory on `PATH`.
-
-Exit `3` means nothing was written, which is either "already registered" or
-"already registered, and this shell has not read the file yet". It is keyed on
-what is *registered*, never on the live `$PATH`: a directory that is on `$PATH`
-only because you pasted an `export` line into the shell you are standing in has
-no durable registration at all, and reporting "already on PATH" there would send
-you away with the next terminal still failing.
-
-`ccdad uninstall` takes it back, and takes back only what ccdad can prove it
-added: on Unix that is what lies between ccdad's markers, so a `PATH` line you
-wrote yourself is never touched; on Windows there are no markers, so
-`setup-path` and `install.ps1` record the directory they added under
-`HKCU\Software\ccdad` and an entry with no such record is left alone and named.
-That matters for a `go install` or a zip install, where the directory is one you
-put on `PATH` yourself and it holds your other tools.
-
-### `ccdad probe`
-
-A five-hour window is anchored at *first use* and does not stretch when more is
-spent against it, so a clock started early is elapsed time the account gets for
-free: exhaust a window four hours in and you wait an hour, exhaust one that
-started when you did and you wait five. A window with no clock running also has
-no pace, no projection, and nothing for the engine to rank on, and polling does
-not fix that — the endpoint reports a reset only once something has been spent.
-This spends the smallest thing that counts, to start the clock.
+### Automatic list sorting
 
 ```sh
-ccdad probe work                 # wake this account's five-hour window
-ccdad probe work --model opus    # wake its Opus weekly cap instead
-ccdad probe --all
+ccdad config set auto_sort true
+ccdad config set auto_sort false
 ```
 
-It runs `claude -p "hi" --max-turns 1` in a throwaway credential home — the same
-`CLAUDE_SECURESTORAGE_CONFIG_DIR` scoping `ccdad run` uses, out of the same code
-— then carries any login that turn refreshed back into the store and deletes the
-session directory. **The live credentials file is never written**, which a test
-pins on its bytes across a probe. `--max-turns 1` is what stops a model that
-reaches for a tool from turning one word into a run of turns.
+The TUI's `o` key changes the same setting. It defaults to `false`.
 
-It spends your quota. That is the trade, and it is said on stderr the first time
-an invocation is about to spend it — once per command, not once per account.
-`probe_unknown` defaults to `true` and `hover` forces it back on; see
-[Configuration](#configuration) for turning it off.
+Sorting stays within each provider and renumbers the displayed indexes. Claude
+uses the overall seven-day reset; Codex uses a window explicitly reported as
+seven days. Unknown or already-passed resets and inactive subscriptions sort
+last. Ties keep their relative order. Sorting reads the cache without requesting
+new usage data.
 
-`--model` names a model *family* (`opus`, `sonnet`, and so on) and chooses the
-window as well as the model: with it the turn is spent against that family's
-weekly cap, without it against the five-hour window every account has. A name
-carrying no family ccdad knows still wakes the five-hour window, which is the
-only one such a probe could honestly promise.
+Disabling automatic sorting uses the stored order. Store writes while it is
+on can persist the sorted order; turn it off before arranging accounts manually
+with `ccdad move`.
 
-Five things are refused rather than spent on. An account whose credential is a
-setup token or an API key has no OAuth refresh grant, so no reading could ever
-be taken for it and the quota would go nowhere. A Claude Code old enough to
-predate `CLAUDE_SECURESTORAGE_CONFIG_DIR` is refused for the reason
-[What is not here yet](#what-is-not-here-yet) gives: the child would run as the
-machine's *live* login and spend the wrong account's quota. A shell that
-already exports `ANTHROPIC_AUTH_TOKEN` or `CLAUDE_CODE_OAUTH_TOKEN` is refused
-too — `ccdad run`'s own displaced-credential check, unconditionally, because
-that variable is what claude actually authenticates the child with, ahead of
-the scoped credentials file the probe seeds; without this the turn is spent
-against whatever account the variable names while the account you asked to
-probe is stamped as done. A window whose clock is already running — a reset
-still in the *future* — has nothing to start; one whose reset has passed is a
-clock that ran down, and that is the ordinary case rather than a refusal. That
-one gets exactly one probe per rollover. A window whose probes wake nothing
-backs off instead: 15m, 1h, 2h, 4h and then six hours between attempts, which is
-what a probe used to cost unconditionally, so an account nothing can wake is
-never tried more often than before. The verdict is taken from the window and
-never from the exit code — a turn can be billed and still fail, and the two look
-identical from outside — so it is the *next reading* that decides, ten minutes
-on, and never the poll a minute after the probe. `--force` bypasses the last two
-and never the first three. `ccdad probe --all` skips disabled accounts, since a reading for
-one the engine will not switch to buys nothing; a disabled account named
-explicitly is still probed, because that is a human asking.
+> **`idx` is a display ordinal, not a key.** Scripts should use UUIDs or aliases.
+> JSON account objects include both numeric `idx` and the provider-prefixed `ref`.
 
-Exit `3` when no account needed one, `1` when every probe attempted failed, and
-`2` with no `claude` on `PATH`. The daemon runs the same probe on its own, and
-there a missing `claude` is a warning once per daemon lifetime and an account
-that keeps no reset time. The daemon also never probes the account a session is
-running on: that is the one probe that duplicates work outright and the one that
-could cut the session off, and `ccdad probe <ACCOUNT>` stays available to a human
-who wants it now. It does not poll straight afterwards either — the probe has
-already spent inference budget and the reading is not there yet, so the poll that
-reads what it woke replaces this tick's poll and lands a minute later. It aims
-the poll *after* that at the moment the clock it just started will run down, so
-the next one begins seconds after the rollover rather than whenever the idle
-cadence next happens to look. And it declines outright on an account with a
-window at 100% whose overage switch is not demonstrably off, because a turn there
-can be billed to credits and unattended spending takes its own two opt-ins.
+## Codex accounts
+
+ccdad owns the stored Codex login, token refresh, quota polling, and local HTTP
+proxy. Routed Codex processes authenticate to that proxy with a per-launch
+secret; the proxy supplies the selected account's upstream credential.
+
+### Routing and resuming sessions
+
+A successful shim installation does not guarantee that a running shell uses it.
+NVM, standalone Codex installers, shell command caches, aliases, or an earlier
+PATH entry can still select another executable.
+
+```sh
+command -v codex
+ccdad doctor
+```
+
+For Unix shells, the ccdad wrapper directory must precede directories containing
+other Codex executables. `ccdad setup-path` registers directories but preserves
+an existing entry's position; fix precedence in your shell startup configuration
+if the wrapper is already present later in PATH. Then open a new terminal or
+reload the startup file and clear the shell's command cache. For the current
+Bash or Zsh session, you can put the wrapper first with:
+
+```sh
+export PATH="$HOME/.ccdad/bin${PATH:+:$PATH}"
+```
+
+Use `hash -r` in Bash or `rehash` in Zsh if the shell cached the old executable.
+
+The explicit form bypasses PATH ambiguity:
+
+```sh
+ccdad codex exec -- resume
+```
+
+Exit the affected Codex process first, run the command in its project directory,
+and select the existing conversation. Already-running `openai` sessions cannot
+be rerouted by changing PATH, updating ccdad, or restarting its daemon. Confirm
+provider `ccdad` in `/status` after resuming. When the wrapper is first on PATH,
+plain `codex` and `codex resume` use the same route.
+
+Editor or desktop clients that launch their own Codex executable do not
+necessarily use the shell wrapper. Check the actual session's provider rather
+than assuming the terminal's PATH applies to them.
+
+### Serving, pins, and retries
+
+**Existing routed, unpinned conversations follow the current serving account on
+their next request.** Manual switching and automatic rotation use the same
+pointer. Responses already in flight finish on their original account.
+
+```sh
+ccdad switch x2
+ccdad run x1                 # explicitly pinned; does not follow the serving pointer
+```
+
+The serving pointer is the account tried first. An unpinned request can fall
+back to another eligible account when the first cannot serve it. In particular,
+`codex.cross_account_replay` controls retrying a mid-conversation HTTP 429 on
+another account and defaults to `true`. Setting it to `false` stops that retry;
+it does not stop following the serving pointer on the next request.
+
+On an account change, ccdad drops the prior account's turn-state header and
+forwards conversation history unchanged. Upstream may still reject that history;
+continuation across accounts is not guaranteed. Codex's usage display updates
+when a response provides new usage information, rather than when ccdad changes
+the pointer. Successful thread/account route changes are logged with ID prefixes:
+
+```sh
+ccdad daemon logs
+```
+
+`codex login status` describes Codex's own login, not the account the proxy uses.
+`ccdad which` reports the serving pointer. The wrapper passes `codex login` and
+`codex logout` to Codex directly; an account-pinned `ccdad run` refuses those
+commands because they do not operate on the named account. ccdad does not write
+Codex's own authentication files.
+
+An unpinned launch that cannot establish the proxy warns and falls back to a
+direct Codex launch. A pinned launch refuses instead. Read that warning: a direct
+launch uses Codex's own account and is outside ccdad's routing.
+
+### Request body limits
+
+The default limit is **256 MiB** (268,435,456 bytes). To change it:
+
+```sh
+ccdad config set codex.max_body_mib 512
+ccdad daemon restart
+```
+
+The value is a positive integer in MiB. An oversized request returns **HTTP 413
+Payload Too Large**, not a quota-style 429, and is never forwarded upstream.
+The JSON error includes `limit_bytes`, `actual_bytes`, and
+`actual_bytes_at_least`. With Content-Length, the complete declared size is
+reported. For unknown-length streams, the proxy stops at one byte over the cap
+and reports the observed lower bound with `actual_bytes_at_least: true`.
+
+The proxy also reads `codex.proxy_port` and `codex.cross_account_replay` at startup;
+restart the daemon after changing these settings.
+
+## Switching strategies
 
 ### `ccdad strategy`
+
+| Policy | Behavior |
+|---|---|
+| `headroom` | Prefer accounts with the most room under their thresholds; the default |
+| `consume-first` | Prefer using perishable weekly quota before it resets |
+| `hover` | Derive per-account pacing thresholds and switching margins from usage windows |
+| `manual` | Keep observing usage but suppress automatic switches |
 
 ```sh
 ccdad strategy hover
 ccdad strategy manual
 ccdad strategy headroom
-ccdad strategy consume-first
 ccdad status
 ```
 
-`ccdad strategy` selects exactly one switching policy. `headroom` prefers the
-account with the most room, `consume-first` spends perishable weekly quota
-before it expires, `hover` derives pacing targets, and `manual` keeps polling
-while suppressing automatic switches. `ccdad status` shows the selected policy
-alongside the account table and hover's derived threshold for each window.
+Use this command to select the policy instead of independently editing the
+compatibility `hover` and `manual` flags. The dashboard's `c` key uses it too.
 
-Hover hands the tuning to the engine. It stops reading `threshold`,
-`hysteresis_pct`, `headroom_ratio`, `cooldown`, `recovery_hysteresis`,
-`preempt_lead`, `strategy`, `probe_unknown`, `credit.threshold` and every
-`window_threshold` entry — and `ccdad config list` grows a `HOVER` column marking
-each of them, rather than hiding the row, so a number you tuned and then stopped
-seeing the effect of explains itself:
+Hover derives the Claude lane's threshold, hysteresis, headroom ratio, cooldown,
+recovery, preemption, and probe settings. `ccdad config list` identifies overridden
+values; status shows the thresholds in use. Hover does not override account
+ownership, manual eligibility, credit-spend permission, or Codex-specific settings.
 
-```console
-$ ccdad config list
-KEY                             VALUE     SOURCE   HOVER
-threshold                       80        default  overriding
-hysteresis_pct                  10        default  overriding
-headroom_ratio                  2         default  overriding
-cooldown                        5m0s      default  overriding
-recovery_hysteresis             5m0s      default  overriding
-preempt_lead                    6m0s      default  overriding
-strategy                        headroom  default  overriding
-probe_unknown                   true      default  overriding
-hover                           true      file     honoured
-mcp_switch_without_elicitation  false     default  honoured
-update_check                    true      default  honoured
-credit.threshold                80        default  overriding
-credit.max_auto_spend           0         default  honoured
-codex.threshold                 80        default  honoured
-codex.binary                              default  honoured
-codex.proxy_port                0         default  honoured
-codex.max_body_mib              256       default  honoured
-codex.cross_account_replay      true      default  honoured
-tui.theme                       auto      default  honoured
-tui.glyphs                      auto      default  honoured
-auto_sort                       false     default  honoured
+### `ccdad switch`
+
+```sh
+ccdad switch work
+ccdad switch --strategy headroom
+ccdad switch --strategy headroom --model sonnet
 ```
 
-One `window_threshold` entry is still read for something other than its number.
-A weekly cap scoped to a key this build cannot name is ranked only because a
-positive entry opted it in, and that opt-in survives hover — hover replaces the
-threshold, not the decision to measure the window at all. Such a key never
-appears as a row in `ccdad config list`, marked or otherwise; it gets a note on
-stderr instead, because `ccdad config set` cannot name it either.
+Targetless selection uses cached readings and the engine's switching margins.
+An explicit account names the target directly. Use `ccdad status --refresh` or
+run the daemon to keep the cache current; switching does not itself poll usage.
 
-**It does not override `credit.max_auto_spend`, `primary` or `disabled`.** Fully
-automatic must not quietly become fully automatic *spending*: the ceiling is one
-of the two independent opt-ins unattended overage requires, and a mode cannot
-supply an opt-in on your behalf. `primary` and `disabled` are facts about an
-account rather than tuning.
+### Recovery and preemption
 
-**And its thresholds do not open the credit pool.** The question "is the free
-pool finished, may the paid one be reached" is asked against the threshold *you*
-configured, never against the one hover derived. Hover's figure is a pace target
-computed from how far through its window each account is — with six accounts a
-fortnight into a week it can sit at 31 — and reading it there would start buying
-credits with two thirds of the week's subscription quota unspent, on a number you
-never saw.
+When all eligible main-pool accounts are over their thresholds, the headroom
+strategy enters recovery mode. Empty accounts sort behind accounts with some
+quota; resets within the next hour take priority, followed by remaining slack.
+Unknown usage is not treated as exhausted quota.
 
-The threshold it picks is a pace target rather than a number. Each window gets
-the share of *itself* that has already elapsed, plus one account's slice of what
-is left — where *usable* means an account the engine could actually hand the work
-to: not disabled, not an api-key account, carrying a usage reading, and not
-currently quarantined.
+The engine also projects usage across its polling interval plus `preempt_lead`.
+Measured burn between readings informs that projection; without a measurement it
+falls back to the existing quota-based rules. Polling delay and upstream behavior
+mean automatic switching cannot guarantee that every limit is avoided.
 
-```text
-threshold = elapsed% of this window + share
-share     = max(100 / usable accounts, stranded)
-stranded  = (100 - weekly used) - usable x (100 - weekly elapsed)
+### `ccdad probe`
+
+```sh
+ccdad probe work
+ccdad probe --all
 ```
 
-The second half of the share is what makes hover spend perishable quota. An
-account whose week ends soon while it still holds most of it is holding quota the
-rotation cannot reach in time: sharing it out buys nothing, because there is no
-*later* to share it into. `stranded` prices exactly that part, floored at zero,
-and the share widens to cover it. A pool keeping up with its weeks strands
-nothing and gets the flat slice.
-
-The one thing that can refuse the widening is a switch it cannot pay for. Moving
-costs a two-minute cooldown whatever the account has left, so an account holding
-less than two minutes of work on any window a model choice cannot dodge — 0.667
-points of a five-hour window, 0.0198 of a week — gets the flat slice instead. An
-account with *nothing* left is handled a step earlier and more bluntly: it sorts
-last outright, whatever its pace says.
-
-**It is not capped, and a target above 100 is meaningful.** A window far enough
-through its own cycle earns more than 100, which reads as *no restraint*: there
-is nobody to hand the work to, so nothing is being held back. Clamping it used to
-seem safe and was not — the clamp fires on whichever account is furthest through
-its own window, which is exactly the account whose quota expires soonest, and
-above the clamp the elapsed term is gone and the pool is ordered on raw
-utilization instead of on pace. Measured on three accounts resetting one, three
-and five days out, the clamp doubled how far the fleet drifted from its own pace
-lines *and* cost more switches doing it. Both the human table and `--json` carry
-the real figure, because `slack` is measured against it.
-
-A weekly window 43% elapsed — three days into a week — with four accounts gives
-68, which is 43 plus 25: an account running ahead of that pace hands the work on
-while the others are behind it. One account left gives 99, because there is
-nobody to hand it to, so spend what is there. A five-hour window four hours in is
-already 80% elapsed, so with five accounts or fewer it lands on 99 too, which is
-right — it resets within the hour anyway; with eight it is 92.
-
-A window with no elapsed share to derive from takes a fixed 80 instead, and that
-covers two cases. One is a window with no clock running, which reports no reset
-at all — hover forces `probe_unknown` back on so the engine's own probe path
-starts it. `ccdad status` shows the fallback usage/threshold pair on that row;
-`ccdad daemon status` and `ccdad doctor` remain the places to diagnose daemon
-or probe failures. The other case is a reset further out than the window is
-long, which is a clock no probe can fix, so that row carries no mark. A primary
-credit seat has no window and no reset either, so it
-is held to a fixed 95 — credits do not come back at all, and the last few points
-are the ones worth keeping for a session already running.
-
-Hover also sets its own anti-flap margins: `hysteresis_pct = 3`, no
-multiplicative `headroom_ratio`, a two-minute cooldown, a five-minute recovery
-hysteresis, and a pre-emption lead taken from the widest poll gap actually
-observed instead of from the file. The ratio is dropped because it runs on raw
-headroom while the ranking orders on slack, and the two disagree hardest exactly
-where hover operates. The margin is `3` rather than the stock `10` because
-hover's thresholds move: two accounts binding on windows of the same length have
-thresholds that rise at the same rate, so the gap between their slacks does not
-close with time at all — only burn closes it, on the very account the margin is
-holding you to. A margin above the spread a real pool shows will sit on an
-account with ten points left while one with thirty waits.
-
-With hover selected, `ccdad status` prints each window as
-`utilization/threshold`; `--json` additionally carries elapsed pace and slack,
-so the arithmetic can be checked rather than accepted:
-
-```console
-$ ccdad status
-Strategy: hover
-Current:  headroom
-
-       CLAUDE
-  IDX  ACCOUNT            5H        7D       CREDIT
-* 1    work@example.com   12%/100%  52%/76%  -
-  2    spare@example.com  74%/100%  31%/76%  -
-  3    seat@example.com   -         -        61%/95%  (primary, metered in credits)
-windows claude: 5H = five_hour   7D = seven_day   CREDIT = extra_usage
-hover:    quota cells show used/threshold; thresholds are derived per account and window
-hover:    measured burn 5.4 pts/min, so an account needs 10.8 points to be worth switching to
-```
-
-`*` marks the account Claude Code is logged in as, `-` is a window the account
-does not carry, and each cell is `used/threshold`. The engine ranks on the real
-uncapped threshold; `ccdad status --json` carries the corresponding slack.
-
-The unified status command always answers as a dashboard rather than as a
-boolean probe. Its `strategy` field is the scriptable answer to which policy is
-selected, while each hover window carries `thresholdPct` and `slackPct`.
-
-#### Manual strategy
-
-```
-ccdad strategy manual
-ccdad status
-ccdad strategy headroom
-```
-
-Manual mode leaves the engine running and stops it moving the live login.
-
-Everything else keeps working, and that is the whole point of it. It polls on
-the same cadence, refreshes the OAuth grants, writes the usage cache and the
-history `ccdad runway` is measured from, derives hover's thresholds, and answers
-`ccdad status`, `ccdad runway` and the dashboard with exactly the
-numbers it would without the mode.
-
-`ccdad switch <account>` still works and still sticks. This is a policy for the
-auto engine, not a lock — the same line [`ccdad disable`](#ccdad-disable) takes
-about itself.
-
-**Use it instead of disabling every account.** Disabling reaches the same
-silence by emptying the ranking pool, and it takes a great deal with it: the
-probe that fills a window reporting no reset time stops, `ccdad runway` and the
-accounts-needed verdict measure nothing, and `ccdad auto --once` exits `4`
-forever. It also re-arms
-itself, because an account added later defaults to enabled. None of that happens
-here, and it is one command rather than one per account.
-
-`ccdad auto --once` exits `3` in this mode, not `4`. The world is already how
-you asked for it, and `4` is the code worth alerting on.
-
-Status, doctor and the daemon log all say when manual is selected, because a
-fleet that has stopped switching must never look like one that is broken.
-Selecting any other strategy hands the wheel back; strategies are mutually
-exclusive.
+A probe spends a small real Claude request to start a quota window whose reset
+time is unknown. It is not a free metadata query. `probe_unknown` defaults to
+`true`; set it to `false` to disable automatic probes under configured strategies.
+Hover derives its own probing policy and enables probes.
 
 ### `ccdad runway`
 
-`ccdad status` reports levels: how much of each window is spent right now. A
-level cannot tell you whether that is an hour of work away from a stop or three
-days. `ccdad runway` reports the *slope* — how fast the accounts have actually
-been spending — and what it implies.
-
-The daemon was already taking these readings; now it keeps them, in
-`~/.ccdad/history.json`. The rate is measured over the last four hours of them.
-Nothing here fetches: it costs no request against the usage endpoint, and it
-does not start a daemon to answer a question about the past.
-
-```console
-$ ccdad runway
-Basis:   the last 4h00m  (3 accounts, 18 readings, 0 unreadable, 1 not in rotation)
-Fleet:   137 of 200 points left on the weekly axis
-
-  AXIS     BURN      REPLENISHES  VERDICT
-  5-hour   8.0 pp/h  40.0 pp/h    holds
-  7-day    3.5 pp/h  1.2 pp/h     runs dry 2026-08-25 20:53 UTC  (in 1d15h)
-  Credits  ?         -            ?
-
-  The two window rows ask whether resets give quota back faster than the fleet
-  spends it. Credits do not reset: that row is a balance divided by a rate,
-  with nothing coming back.
-
-Accounts:  2 usable, 6 needed to hold at this rate  (4 more)
-
-  IDX  ACCOUNT               WINDOW     LEFT  BURN      EMPTY
-  2    personal@example.com  seven_day  83    0.5 pp/h  2026-08-25 20:28 UTC
-  1    work                  seven_day  54    3.0 pp/h  2026-08-25 20:53 UTC
-```
-
-**The basis is printed above the answer, on purpose.** A four-hour rate is a
-speedometer: twenty minutes of readings and four hours of them support very
-different claims, and you are the one who has to weigh that. `not in rotation`
-counts the accounts no switch can reach — disabled, owned by another machine,
-or an API key — because their quota is not the pool's to spend and none of the
-figures above covers them.
-
-**A verdict is a simulation, not a subtraction.** `REPLENISHES` is what an axis
-gives back when every account's window rolls over on time. It explains the
-verdict rather than deciding it, and it is deliberately generous: it counts
-accounts that are already out on the *other* axis, and windows that reported no
-reset at all. The verdict comes from running the rotation forward instead — one
-live login at a time, spending at the measured rate, taking each rollover as it
-arrives — which is how an axis whose replenishment looks ample can still run
-dry.
-
-**`Accounts:` answers that block from the other end.** The rows above say when
-the pool runs out; this says how many accounts it would take for it not to. It
-is the same simulation run again with seats the fleet does not have yet
-appended — never a burn rate divided by a replenishment rate — so you cannot be
-told `runs dry` and `you have enough accounts` on two adjacent lines. It is
-measured at the *upper* end of the band, for the same reason `holds` is: the
-figure has to be one that is provably enough, and being told to buy six and
-running dry on six is the failure worth being conservative about.
-
-Five forms, and no sixth:
-
-| The fleet | The line |
-|---|---|
-| Is short | `5 usable, 9 needed to hold at this rate  (4 more)` |
-| Holds, with room to spare | `5 usable, 3 needed to hold at this rate  (2 to spare)` |
-| Holds exactly | `5 usable, 5 needed to hold at this rate` |
-| Needs more than the search will look for | `5 usable, more than 256 needed to hold at this rate` |
-| Has no basis to search from | `5 usable, ? needed  (not enough history)` |
-
-That last form is most of the page on a machine that has been recording for ten
-minutes. There is no axis block for the line to sit under, so it follows
-`Fleet:` and the command stops there: how many accounts the pool has to work
-with is read off the current readings like the points above it, and it is only
-the search for a count that needs history.
-
-Which axis asks for the extra seat is measured rather than assumed — the two
-imply different counts, and which is larger depends on the ratio of the two
-measured rates. The search stops at 256 accounts and prints `more than 256`
-instead of going on: at that size the weekly axis gives back 152 points an hour,
-so a fleet that appears to need more than that has a measurement problem rather
-than a purchasing one.
-
-**Rates are per axis, and the axes are never added.** A percentage point of a
-five-hour window and a point of a weekly one are different quantities, so there
-is a rate per row and no total. Both are percentage points per hour, `pp/h`.
-
-**`?` is unknown and never zero.** A machine that has been recording for ten
-minutes is told so, rather than handed a burn of nothing and a runway of
-forever; nothing is projected from a single reading. The same rule covers the
-money row — a credit spend that cannot be assembled prints `?` rather than a
-figure, because every default available there would only lengthen a runway made
-of money. It reads `?` above for the ordinary reason: no account in the pool is
-metered in credits. It also refuses when two accounts bill in different
-currencies, since those amounts do not add, and when an account with no monthly
-limit is spending, since a pool with no bottom cannot be given a date. The `-`
-beside it is the other verdict, and it is not the same one: paid usage reports
-no renewal boundary at all, so that quantity does not exist here rather than
-failing to be read.
-
-If the accounts are on different plan tiers, a note on stderr says so. A
-percentage point of a Pro window and a point of a Max window are not the same
-amount of work, and every sum above adds them anyway — and the seat count is
-the figure that notice matters most for, because `needed` counts accounts on
-the plan the fleet already has, which is not a well-defined unit on a fleet
-whose plans disagree.
-
-`ccdad status` and the terminal dashboard carry the same
-measurement as a single `Runway:` line, and print no line at all when there is
-no basis for one. That line picks up `· need 9 (4 more)` when the fleet is
-short and nothing when it holds: a fleet that holds has its answer in the word
-`holds`, and the spare count is worth a block and not a glance.
-
-`ccdad runway --json` and `ccdad status --json` publish the
-identical object under `forecast`. Its `fleet` object always carries
-`accountsUsable` — a count of zero is a reading — and carries `accountsNeeded`
-with `accountsNeededBy` only when there was a basis to search from, absent
-rather than zero when there was not. A search that reached its ceiling adds
-`accountsNeededCapped`, which turns the count above it into a bound.
-
-**`--out PATH` writes that document to a file** instead of stdout, at mode
-`0600`, with only a confirmation on stderr — the spelling, the mode and the
-writer `ccdad export --out` already uses. It needs `--json` as well, and says
-so rather than choosing for you if you leave it off: this command has two
-representations, a table for a person and a document for a program, and a
-destination does not say which one you meant.
-
 ```sh
-ccdad runway --json --out runway.json
+ccdad runway
+ccdad runway --json
 ```
 
-`ccdad runway --json > runway.json` already works — the `--json` contract puts
-one document on stdout and every human word on stderr — so the flag is not there
-to make redirection possible. It is there for three things a redirect does not
-do:
-
-1. **The mode.** A shell redirect creates the file at your umask, typically
-   `0644`. This writes `0600`.
-2. **Atomicity.** A redirect truncates the target before the command runs, so a
-   command that then fails leaves an empty file where a good one was. This
-   renames into place or leaves the old file alone.
-3. **Windows.** `>` in Windows PowerShell 5.1 — the version that ships with the
-   operating system — writes UTF-16 with a byte-order mark, and the result is
-   not the document.
-
-### `ccdad update`
-
-```sh
-ccdad update                    # verify, then replace this binary
-ccdad update --check            # is there one? change nothing
-ccdad update --version v0.6.1   # pin a tag, including an older one
-```
-
-It downloads `sha256sums.txt` and `sha256sums.txt.minisig`, checks the signature
-against a public key compiled into this binary, and only then reads the checksum
-row for this platform. The order matters: a checksum file whose shape has been
-inspected is still a file somebody else wrote.
-
-A release whose signature does not verify is refused, and the message
-deliberately does **not** tell you to re-run the installer. Neither installer
-checks a signature, so that would be the one path that accepts the altered
-release, on checksums the same attacker controls. The refusals that *are* a
-choice somebody made — a release with no signature, one signed by a key this
-build predates — do name the installer.
-
-There is no `--no-verify` and no `--yes`. A mirror that does not carry the
-signature and an attacker who removed it are the same bytes on the wire, and
-naming a tag with `--version` is the consent for a downgrade. Without
-`--version`, a release older than the one running is refused.
-
-`--check` stops before the download, so it answers everything a full run answers
-except three things only the asset can tell you: its size, its checksum, and
-whether it runs on this machine. It is not read-only — it creates and removes a
-directory beside the binary, which is what makes its answer about writability a
-real one.
-
-The daemon is stopped first and started again from the new binary. Inside a
-`ccdad run` session it is stopped and **not** restarted — a daemon spawned from
-inside a session would manage that session's credential directory for the rest
-of its life. Run `ccdad status` from a normal shell to bring it back; only the
-commands that may auto-start a daemon do, and `ccdad daemon status` is not one
-of them.
-
-A Homebrew or Scoop install is refused rather than replaced: run
-`brew upgrade ccdad` or `scoop update ccdad`, which own that binary and its
-`PATH` entry.
-
-Exit codes follow the tree-wide contract. `0` replaced it, or `--check` found
-one; `3` you are already on it; `4` the release was refused; `1` ccdad could not
-do it. With `--json` every non-zero answer carries a `reason`.
-
-## The dashboard
-
-Bare `ccdad` opens the interactive dashboard when stdin and stdout are both a
-terminal. It shows the accounts, quota, selected strategy, current engine mode,
-runway, daemon state, and every available key command.
-
-| Key | What it does |
-|---|---|
-| `a` | Add an account — asks which provider, then hands the terminal to `ccdad add claude` or `ccdad add codex` and comes back |
-| `s` | Switch to the account the cursor is on, in one keystroke. On the account already live it says so rather than spending a credential rotation |
-| `d` | The daemon screen — `S` starts, `x` stops, `R` restarts, and the log tails |
-| `c` | Change the switching strategy |
-| `o` | Toggle automatic account sorting by the nearest 7-day reset |
-| `q` | Quit (`ctrl+c` too) |
-
-Enable automatic sorting with `ccdad config set auto_sort true`, or press `o`.
-The dashboard shows `Sort: 7d reset` while it is enabled. Each provider is sorted
-separately and numbered in the displayed order; the cursor stays on the same
-account when a refresh changes that order. Claude uses its overall 7-day window;
-Codex uses a window explicitly reported as seven days. Unknown or already-past
-resets and inactive subscriptions sort last, with ties retaining their order.
-Sorting uses cached readings and makes no network requests. Set `auto_sort` to
-`false` to use the stored order. Store writes made while sorting is enabled can
-persist that order; use `ccdad move` with sorting off to arrange it manually.
-
-Claude subscription status is refreshed from the profile endpoint even when a
-usage lookup fails. Explicit canceled, expired, or unpaid subscriptions show as
-`unsubscribed` and are excluded from automatic switching and quota warm-ups.
-A timeout or a 429 alone is not evidence of expiry. A later active profile makes
-the account eligible again without changing its manual enable/disable setting.
-Existing accounts backfill the status independently of usage polling, including
-when quota requests are held by a 429. Until a subscription has been checked,
-it shows `checking` and cannot be selected automatically. `ccdad status --refresh`
-also refreshes due profiles while leaving quota backoff intact. Profiles normally
-refresh daily; permission failures can trigger an earlier recheck. Failed profile
-checks retry after 15 minutes, and this deadline survives daemon restarts.
-Codex polls also update the stored plan from the usage response.
-
-`up`/`k` and `down`/`j` move, `r` reloads from disk, `esc` goes back, and `?`
-opens the full key list.
-
-Every key that changes something runs the ordinary command for it, through a
-fresh command tree. It gets the same refusals, the same wording and the same
-exit codes typing it would give — a switch from the dashboard inside a `ccdad
-run` session is refused in that command's own words.
-
-It never fetches. Everything on the page is read from disk, because the usage
-endpoint allows roughly 28–30 requests per identity per rolling hour on a
-sliding window and a dashboard that polled would let one burst saturate an
-account for a full hour.
-
-It is designed for 80×24 and gets narrower gracefully: columns drop out in a
-fixed order, while the complete key bar wraps onto as many rows as it needs.
-It gets shorter gracefully too, and gives up decoration before facts: the
-legend under the table goes before the family art, since `ccdad status` prints
-every line of it, and the `CLAUDE` / `CODEX` headings go before the version
-line and the summary, so a short terminal keeps what it knows about the fleet
-and loses the grouping. Giving up the headings takes each section's own column
-names with them and the table falls back to one header row, because the two are
-alternatives: each provider's half draws its own windows only while there is a
-heading to tell the halves apart. Below 35 columns or 3 rows it says what it needs
-instead of drawing a page nobody can read. Run `ccdad status` for a
-redirectable snapshot; it draws the same columns from the same definition.
-
-It is in colour, and the frame, the gauges and the state markers are drawn
-with box-drawing characters. If yours shows boxes where those should be — a
-font without them, or a Windows console on a code page other than 65001 —
-`ccdad config set tui.glyphs ascii` puts the plain `+--+` frame and the
-`[#####.....]` gauges back, and `ccdad config set tui.theme none` turns
-colour off without touching the glyphs. `NO_COLOR` does the same for one run.
-Nothing on the page needs colour to be read: every state keeps its own glyph
-at every width, and its word wherever the STATE column still fits.
-
-## Claude Code's own tools
-
-`ccdad mcp` serves ccdad's commands to Claude Code over the Model Context
-Protocol, so a session can look at your accounts and move the live login
-without you leaving it. It is not a command to run by hand — Claude Code starts
-it, talks to it over that process's standard input and output, and stops it
-when the session ends.
-
-```sh
-ccdad mcp install              # register it, machine-wide
-ccdad mcp install --scope local    # this directory only
-ccdad mcp install --scope project  # ./.mcp.json, committed to the repository
-ccdad mcp install --print-config   # print the entry, write nothing
-ccdad mcp uninstall            # remove it again
-```
-
-**The default scope is `user`, and that is not `claude mcp add`'s default.**
-Anthropic's command registers into the current project (`local`); ccdad manages
-a machine's logins rather than a repository's, so machine-wide is the honest
-default here. Running the installer twice is exit `3` and one entry; an entry
-pointing somewhere else is rewritten and both endpoints are printed.
-
-Sixteen tools, in four classes:
-
-| Class | Tools | What it can do |
-|---|---|---|
-| read | `list`, `status`, `which`, `doctor`, `config_get`, `runway` | Answers a question and changes nothing ccdad owns. Three of them may start the background daemon, and say so |
-| store | `enable`, `disable`, `alias`, `move`, `primary` | Writes ccdad's own account file. Never Claude Code's login |
-| credential | `switch` | Rewrites the live login. **Asks the person at the keyboard first**, through the client's own confirmation prompt, and refuses on a client that cannot ask |
-| daemon | `daemon_start`, `daemon_stop`, `daemon_restart`, `daemon_status` | Drives the background process, which outlives the session that started it |
-
-Eight ccdad verbs are deliberately **not** tools, and their absence is enforced
-rather than noted — a handler registered under any of these names is refused
-before it runs:
-
-| Verb | Why not |
-|---|---|
-| `add`, `add-token` | Need a terminal, open a browser or read a secret from one, and block for minutes |
-| `run` | Replaces the process |
-| `export`, `import` | Move refresh tokens off and onto the machine through text a model can read |
-| `uninstall` | Deletes the thing holding your logins |
-| `setup-path` | Edits shell startup files |
-| `bootstrap` | Imports a secret document, as a container entrypoint concern |
-
-`ccdad mcp` declares no `--json` flag. Its standard output carries the protocol
-and nothing else; diagnostics go to standard error, which the client treats as
-server logs.
-
-### The plugin
-
-The same server is also packaged as a Claude Code plugin, installable through
-`/plugin` from this repository's own marketplace. It is optional — the
-one-liners at the top of this file remain the first-class way to install ccdad
-— and it is **MCP wiring only**: it ships no skills, no agents and no hooks,
-and it still needs the `ccdad` binary on your PATH. Without one the plugin
-installs, reports as enabled, and only `claude mcp list` says the server failed
-to connect.
-
-Installing by both paths is safe and does not run two servers. Claude Code
-de-duplicates MCP servers by **endpoint** — the command plus its arguments —
-and both entries name `ccdad mcp`, so a direct registration replaces the
-plugin's copy rather than running beside it.
-
-**It does rename every tool**, and that is the part worth reading twice:
-
-```
-mcp__ccdad__switch                 # registered by `ccdad mcp install`
-mcp__plugin_ccdad_ccdad__switch    # registered by the plugin
-```
-
-A permission rule, a hook matcher or an allowed-tools entry written for one
-spelling silently never fires under the other — no error, no warning, no log
-line. `ccdad mcp install` says so when it finds the plugin already installed,
-`ccdad doctor`'s `mcp-tools` row names the spelling this machine has, and
-`ccdad mcp uninstall` hands the server back to the plugin. The plugin's own
-[README](plugins/README.md) carries the same warning from the other direction.
-
-## How the switch stays safe
-
-`~/.claude/.credentials.json` holds more than your login. `mcpOAuth` — every
-MCP server you have authenticated to — lives in the same file, and so do
-several machine-scoped keys that Claude Code has added over time.
-
-So the swap is a **deny-list**, not an allow-list. `ccdad` replaces the five
-keys it knows are account-scoped and preserves everything else, including keys
-it has never heard of. `ccdad doctor` tells you when it sees one, because a new
-unknown key is how a tool like this silently starts leaking state between
-accounts.
-
-The rest of the protocol matters just as much:
-
-- Claude Code's three lock directories are taken **in Claude Code's own order**,
-  so the two programs cannot deadlock against each other.
-- The file is re-read **under** the lock, never before it.
-- The write is an atomic rename, so a reader sees the old file or the new one
-  and never a half-written one.
-- No network call ever happens while a lock is held.
-- The credential path is opened `O_NOFOLLOW`: a symlink planted there is
-  refused rather than followed.
-
-## Running sessions side by side
-
-```sh
-ccdad run work                 # a session as 'work'; the live login is untouched
-ccdad run work -- --model opus # a Claude account takes claude's args verbatim
-```
-
-A Codex account takes a different tail. `ccdad run` starts codex rather than
-claude for one, through the loopback proxy the daemon runs, so the tail must be
-empty or begin with `codex`; anything else is exit `2`. So is `--full-profile`
-on one: the flag scopes a Claude Code config home, a codex session reads none,
-and a launch that took the word and dropped it would report a success that did
-not do what you asked. The rest of this section is about a Claude account — see
-[Codex accounts](#codex-accounts) for the other kind.
-
-`ccdad run` gives the session a credential home of its own containing only that
-account's login — the smallest blast radius available. The cost is that MCP
-logins do not come with it, because Claude Code keeps them in the same file.
-
-That default needs **Claude Code 2.1.113 or later**. It scopes with
-`CLAUDE_SECURESTORAGE_CONFIG_DIR`, and that variable does not exist in 2.1.112 or
-earlier — an older build would ignore it, read the machine's own credentials
-file, and run the session as your live account while ccdad reported success.
-ccdad reads the installed version off the launcher and refuses to start rather
-than run as the wrong account, naming `--full-profile`, which scopes
-`CLAUDE_CONFIG_DIR` and works on every era. `ccdad doctor` reports the same fact
-as `fail claude-version`.
-
-That refusal is only for accounts whose login is a credentials file. A
-**setup-token** account is scoped by `CLAUDE_CODE_OAUTH_TOKEN` in the session's
-environment instead — a variable every era of Claude Code reads, and one it
-prefers over the stored login — so an old build cannot defeat that scoping and
-the version refusal never reaches those accounts. Preferred over the login is not
-preferred over everything, which is what the third refusal below is about.
-
-`--full-profile` gives the account a whole config home instead, kept under the
-ccdad store between runs, so its MCP logins and trust answers survive. It is
-seeded once from your live config home — top-level files only, never project
-history.
-
-It is also the only mode that can run an **API-key account**. Claude Code reads
-an API key from `primaryApiKey` in its global config rather than from a
-credential home, and the default mode leaves that file shared with your live
-session on purpose — so there is nowhere to put one without changing your
-machine. A profile owns a global config of its own, and the key goes there and
-nowhere else. The default mode refuses and says so.
-
-**`ccdad run` also refuses when your own shell already carries a credential
-Claude Code reads before the session's.** Claude Code reads a stored login last on the
-OAuth axis, so a token, a helper, an Anthropic CLI profile or a host-injected
-file already in the environment you launch from outranks the login ccdad just
-installed: the session would authenticate as that credential while ccdad reported
-success. It applies in **both** modes — `--full-profile` scopes a different
-directory, not the environment, which is inherited either way. An
-`ANTHROPIC_API_KEY` wins on a different axis that this refusal does not read, so
-a key exported in your shell can still take the session; `ccdad doctor`'s
-`api-key` row is what reports that one.
-
-ccdad refuses rather than removing the offending variable. Stripping would make
-the guarantee true for the sources that *are* variables and leave it false for
-the ones that are not, and silently overriding something you exported on purpose
-is the same harm this command exists to prevent, pointed the other way. There is
-no flag to override it, because the shell already has one: the refusal names
-`env -u VAR ccdad run …` where there is a variable to unset, and Claude Code's
-own remedy where there is not. It names the source it found rather than listing
-them, so what you read is what ccdad measured. It fires before ccdad creates the
-session's credential home or a `--full-profile` profile, so a refused run leaves
-nothing behind to clean up. Exit `2`, like the other two refusals.
-
-A `CLAUDE_CODE_OAUTH_TOKEN` already exported in your shell is **not** one of
-these for a setup-token account: ccdad sets that variable to the account's own
-token for the session it starts, so the session runs as the account you named.
-For an account whose credential is a login it is one, because Claude Code reads
-that variable before any credentials file.
-
-The exit status is `claude`'s, not ccdad's. A session killed by a signal
-reports 128 plus the signal number, as a shell would.
-
-**Inside a session, the commands that write Claude Code's own state refuse.** A
-session is a whole Claude Code, and everything you — or the model — type in
-there inherits the session's credential home. `ccdad switch`, `auto`,
-`add claude`, `add-token`, `remove`, `uninstall`, `ccdad daemon start` and
-`ccdad daemon restart` would act on the session's copy while reporting they had
-changed the live login, so they exit `2` and name the session instead. Reads
-are untouched: `list`, `which`, `status`, `doctor` and `export` answer for the
-shell you are in, and `ccdad doctor` says which session that is. So is
-`ccdad add codex`, which writes only ccdad's own store and never a Claude
-login. Run the refused ones from a shell outside the session.
-
-## Codex accounts
-
-`ccdad` manages OpenAI Codex accounts alongside Claude ones, and it does it a
-different way, because Codex needs one.
-
-Claude Code reads its credential from a file on every request, which is why
-swapping that file moves a session already in flight. Codex caches its
-credential in memory for the life of the process and re-reads it on exactly one
-condition — an HTTP 401 — while running out of quota is a 429. The two never
-meet, so no amount of file swapping moves a running codex. `ccdad` takes codex
-out of the OAuth path instead: the daemon runs a loopback proxy, codex holds no
-token at all, and `ccdad` owns the login, the refresh and the quota reading.
-
-```sh
-ccdad add codex                 # log in, into ccdad's own store; the shim is installed for you
-codex                           # ...and this now goes through ccdad, from the next terminal on
-```
-
-`ccdad add codex` is a device-code login: it prints a code and a URL, and stores
-the result in ccdad's own store. It never writes `~/.codex`, and it never runs
-`codex login` or `codex logout` — both of those revoke the stored grant
-server-side, with no undo.
-
-The shim is a two-line script at `~/.ccdad/bin/codex`, and `ccdad add codex`
-installs it once the account is stored: it writes the script, registers that
-directory through the same marker-fenced block `ccdad setup-path` manages, says
-which startup files it touched, and names the undo — `ccdad uninstall` takes it
-back with everything else, and its list of what goes names the shim. A second
-add says nothing about the shim and moves no timestamp on any startup file, and
-a shim that cannot be installed — a shell ccdad does not write for, a `codex`
-in the way that ccdad cannot fix — does not fail the add: the account is
-stored, the refusal's own remedy is printed, and the login still exits `0`.
-`ccdad codex shim install` is optional; it is the same install by hand, for a
-shim that was refused or removed. There is one block on the machine, and the
-one thing the uninstall does not undo is a startup file it had to create,
-which is left in place, empty, because deleting a dotfile on the belief that
-ccdad created it is worse. `ccdad doctor` reports which codex a bare `codex`
-actually resolves to, which is the question that matters after a fresh install
-and before a new terminal.
-
-`ccdad codex exec -- <args>` is what the shim runs, and you can run it by name.
-`ccdad run <ACCOUNT> [-- codex <args>]` starts a session pinned to one account
-whatever the rest of the machine is serving; that form needs the daemon and
-refuses rather than falling back, because falling back would bill an account you
-did not name and report success.
-
-**Existing unpinned sessions follow a switch on their next request.**
-`ccdad switch <a Codex account>` and automatic rotation change which account the
-proxy tries first for every unpinned request, including existing conversations.
-Responses already in flight finish on their original account. Sessions started
-with `ccdad run <ACCOUNT>` keep their explicit account pin.
-
-When accounts change, ccdad removes the previous account's turn-state header and
-forwards the existing conversation history unchanged. A replacement can still
-reject that history; switching does not guarantee continuation. The daemon logs
-the thread and account prefixes when a thread first receives a response or
-changes accounts, so the actual route can be checked with `ccdad daemon logs`.
-Codex's usage display updates when it receives usage information from a response.
-
-`codex.cross_account_replay` controls whether a mid-thread HTTP 429 is retried on
-another eligible account; it defaults to `true`. It does not disable following
-the serving pointer. Set it to `false` to return that 429 without trying another
-account. Restart the daemon after changing this setting or upgrading the proxy.
-
-Codex request bodies are limited to **256 MiB** by default (1 MiB = 1,048,576
-bytes). Set a positive integer limit with `ccdad config set codex.max_body_mib 512`, then restart the daemon with `ccdad daemon restart`. The proxy reads this
-setting at startup. Requests over the limit receive **413 Payload Too Large**,
-with `limit_bytes` and `actual_bytes` in the JSON error and its message.
-For requests with Content-Length, the size is the declared complete body size;
-for unknown-length requests, the proxy stops after one byte over the limit and
-reports `actual_bytes_at_least: true` rather than claiming to know the full size.
-Oversized requests never reach an upstream account and are not quota errors.
-
-**`codex login status` answers about `~/.codex`, which ccdad does not use.** It
-will tell you that you are logged out, or logged in as somebody else, and both
-answers are true about that file and about nothing else. `ccdad which` names the
-account ccdad serves codex from.
-
-Two kinds of codex session are not routed, and both are deliberate:
-
-- **An IDE or a desktop app that spawns codex itself.** It never consults your
-  shell's PATH, so the shim is not in front of it. Those sessions read
-  `~/.codex` and spend whatever is in it, and ccdad cannot see them at all —
-  they never enter ccdad, so nothing here counts them or names the account they
-  spent. `ccdad doctor` answers the neighbouring questions instead: its
-  `codex-shim` row says which codex a bare `codex` in your shell resolves to,
-  and its `codex-proxy` row counts only the launches ccdad itself had to start
-  with no proxy in front of them.
-- **Windows.** There is no shim there. It would have to be a `.cmd`, which puts
-  `cmd.exe` in front of every prompt codex is given, and `ccdad` refuses that
-  launch rather than letting `cmd.exe` re-interpret an argument. Run `ccdad
-  codex exec -- <args>`, or `ccdad run <ACCOUNT> -- codex <args>`; both work on
-  every platform.
-
-Also not in v1: the `hover` strategy, `ccdad runway`'s forecast, `ccdad primary`
-and `ccdad auto` are Claude-only, and the credit axis with them — ccdad reads no
-Codex credit balance and counts no reset credits. There is no import of an
-existing `~/.codex/auth.json` and no browser login: `ccdad add codex` is a
-device-code login. One person's account in two workspaces is one account to
-ccdad. The model list is codex's bundled presets rather than the remote
-catalog. codex's keyring, auto and ephemeral credential stores are not used —
-a routed codex holds no credential at all. And a codex inside a container
-cannot reach a daemon on the host, because loopback is per network namespace;
-WSL2 works, since its loopback is shared with the Windows side and the launch
-secret is the gate.
-
-## Configuration
-
-`~/.ccdad/config.toml`, written by `ccdad config set` and readable by hand.
-No credential ever goes in it — this is the file people paste into bug reports.
-
-```console
-$ ccdad config list
-KEY                             VALUE     SOURCE
-threshold                       80        default
-hysteresis_pct                  10        default
-headroom_ratio                  2         default
-cooldown                        5m0s      default
-recovery_hysteresis             5m0s      default
-preempt_lead                    6m0s      default
-strategy                        headroom  default
-probe_unknown                   true      default
-hover                           false     default
-mcp_switch_without_elicitation  false     default
-update_check                    true      default
-credit.threshold                80        default
-credit.max_auto_spend           0         default
-codex.threshold                 80        default
-codex.binary                              default
-codex.proxy_port                0         default
-codex.max_body_mib              256       default
-codex.cross_account_replay      true      default
-tui.theme                       auto      default
-tui.glyphs                      auto      default
-auto_sort                       false     default
-```
-
-`credit.max_auto_spend` defaults to `0`, and that is the point: an account
-billed by credit is a **last resort**. Subscription quota is spent first,
-unattended spending needs two independent opt-ins, and a switch that cannot
-read the current spend fails closed rather than guessing. `credit.threshold` is
-a different number for a different kind of account, and
-[Credit-metered accounts](#credit-metered-accounts) is what it does.
-
-`codex.threshold`, `codex.binary`, `codex.proxy_port` and
-`codex.cross_account_replay` are the `[codex]` table: the same shape, one lane
-over, read by the launcher and the local proxy rather than by the Claude
-switching engine — which is why hover leaves all four of them alone.
-
-`window_threshold` is a table rather than a key, and the listing above shows a
-row only for the windows your file actually names. There is no default row,
-because a window can be named after a model or a surface the server invented —
-the legal names are not a list ccdad can print in advance. A window with no
-entry of its own is measured against the top-level `threshold`. Setting one is
-`ccdad config set window_threshold.seven_day 60`, and
-[Per-window thresholds](#per-window-thresholds) is what it changes.
-
-`probe_unknown` defaults to `true`, and it is the one default that **spends your
-quota without being asked**. A window that has never been used reports no reset
-time, so it has no pace, nothing to rank on, and no way to get one except to
-spend against it — so ccdad runs a single one-turn `claude` request against such
-an account and schedules a poll a minute later; [`ccdad probe`](#ccdad-probe) is
-the same thing on request. Set it to `false` and the window
-never gains one: an unused window still reads as nothing spent, so the account
-keeps the most slack in the pool and sits at the FRONT of the ordinary ranking.
-What it has no answer for is pace, the projection, and where it belongs once
-every account is spent. `hover` defaults to `false`; turning it on
-hands every threshold and every anti-flap margin to the engine, which derives
-them from each window's own elapsed fraction instead of reading them from this
-file. It takes `strategy` and `probe_unknown` with them, and it forces
-`probe_unknown` back **on**: a window nothing has ever spent against reports no
-elapsed share, so hover has nothing to derive a threshold from until a turn wakes
-it. `credit.max_auto_spend` is the one number hover leaves alone, and
-[`ccdad strategy`](#ccdad-strategy) is the command that turns it on, and status shows every
-number it chose.
-
-`mcp_switch_without_elicitation` is not an engine knob — it is the one key in
-this file that governs a different surface. ccdad's MCP server refuses to
-rewrite the live login without asking the person at the keyboard; on a client
-that cannot carry that question, this key is how you allow it anyway. It
-defaults to `false`, which refuses.
-`CCDAD_MCP_SWITCH_WITHOUT_ELICITATION` in the environment of the process
-running `ccdad mcp` does the same thing for one client, and it **decides**
-whenever it is set — an explicit `false` there takes back what the file granted
-for the machine. On a client that *can* ask, you are still asked even with the
-key granted: it is a fallback, not an override. Hover honours it rather than
-deriving it, because hover is a policy for the switching engine and a mode that
-supplied this one would be deciding that unattended also means unconfirmed.
-
-`tui.theme` and `tui.glyphs` are the other two keys here that govern a surface
-instead of the engine. They change what bare `ccdad` and the `status`, `doctor`
-and `daemon status` tables look like, and nothing
-about which account gets switched to or when.
-
-`tui.theme` takes `auto`, `dark`, `light`, `ansi` or `none`, and defaults to
-`auto`. What `auto` resolves to depends on which surface is asking, and the
-split is deliberate rather than an inconsistency to route around.
-
-The dashboard — stdin and stdout both terminals — really does ask: it
-requests the background colour once, through bubbletea's own
-`tea.BackgroundColorMsg`, asynchronously, and keeps drawing with the dark
-default while the reply is in flight. A terminal that never answers just
-keeps that default; nothing in the dashboard blocks waiting for the question.
-
-`ccdad status`, `doctor`, and `daemon status` never ask at all — `auto`
-resolves straight to `dark`, full
-stop. The reason is the query's cost, not a shortcut taken for its own sake:
-lipgloss's background probe runs against stdin and then against stdout, two
-seconds each with no guard for the two being the same file, so a terminal
-that answers neither OSC 11 nor DA1 makes the ask cost four seconds flat. A
-live dashboard can absorb that once, because it asks on the way in and then
-runs for minutes — four seconds disappears into a program a user is about to
-sit in front of. A listing that would otherwise print in thirty milliseconds
-cannot, and caching the answer does not rescue it: each one-shot command is
-its own process, so a per-process cache is filled and thrown away inside the
-single invocation it was meant to amortise across. Measured against a silent
-pty: `ccdad status` cost 4.05s with the query still in place, 0.03s without it.
-Dark without asking is the only version of `auto` that keeps these commands
-at their ordinary speed.
-
-The cost of that default is a listing that opens dark-toned on a light
-terminal for anyone who never opens `config.toml`. `ccdad config set
-tui.theme light` is the one-line, once-per-machine fix; `dark`, `ansi` and
-`none` are there for the same reason, on the same command. `tui.theme` never
-resolves to `ansi` on its own, because fitting a 24-bit palette to a 256- or
-16-colour terminal happens on every render anyway; `ansi` is the opposite
-choice, for a user who would rather their own terminal theme owned the
-sixteen standard slots. `none` emits no escape byte at all.
-
-`tui.glyphs` takes `auto`, `unicode` or `ascii`, and also defaults to `auto`
-— which resolves to `ascii` on a Windows console whose output code page is
-not 65001, and whenever `RUNEWIDTH_EASTASIAN` is set, because that variable
-makes eight of the frame and gauge glyphs two columns wide and every page
-here is drawn to a measured width. ccdad **reads** that code page and never
-sets it: the output code page belongs to a console shared with every other
-process attached to it, and changing it for one `ccdad status` would garble
-every non-ASCII byte anything else wrote to that window afterwards. An
-explicit value wins in both directions — `unicode` on a console that cannot
-carry it ships mojibake, and that is your call to make.
-
-Neither key is read by the daemon, which draws nothing, and neither reaches
-`ccdad mcp`, whose tool results are plain text by construction rather than by
-exclusion. `--json` is unaffected on every command that has it.
-
-`update_check` is the last key here that is not an engine knob, and the only
-one in the file behind which there is a request to a host other than
-`api.anthropic.com`. With it on — the default — the daemon asks
-`https://github.com/Kweiza/ccdaddy/releases/latest` once a day what the newest
-release is, sends `ccdad/<version>` as its user agent and nothing else, and
-publishes what it heard: `ccdad status` grows an `Update:` line, `ccdad doctor`
-grows an `update-check` row, and `ccdad status --json` carries the same reading
-in its `daemon` block. No account, no credential, no identifier, no usage
-figure. `update_check = false` stops the request, which is what an
-egress-filtered or air-gapped machine wants.
-
-**It does not gate `ccdad update`.** A key that silently disabled a command you
-typed would be a worse surprise than the network call it exists to prevent, so
-the command asks whatever the file says. Stopping a fleet from upgrading itself
-is something you do to the binary, not to this key. The check is one request
-per day per *store*, not per machine: the daemon singleton is keyed on the
-store, so a machine running two ccdad stores runs two daemons on purpose.
-
-Keys this version does not recognise are left alone rather than deleted, so a
-file written by a newer release survives an older one. Trying to *set* an
-unknown key is still an error — a typo that is quietly accepted is a setting
-that does nothing. Inside `window_threshold` the same rule applies one level
-down: a name that is not a window ccdad could rank is refused by `config set`
-with exit `2`, and a well-formed name this build does not know round-trips
-through the file untouched.
-
-### Per-window thresholds
-
-One threshold for every window says "80% used is spent" whether the window comes
-back in four hours or in six days. `[window_threshold]` gives each window its own
-line:
-
-```toml
-threshold = 80              # the default for any window with no key of its own
-
-[window_threshold]
-five_hour = 85
-seven_day = 60
-seven_day_opus = 50
-"weekly_scoped:model:Opus 4.5" = 40
-```
-
-A key inside the table has to name a window ccdad can rank: one of `five_hour`,
-`seven_day`, `seven_day_oauth_apps`, `seven_day_opus`, `seven_day_sonnet`, or a
-scoped weekly cap beginning `weekly_scoped:model:` or `weekly_scoped:surface:`.
-Anything else is refused with exit `2` and the reason, because a threshold on a
-name nothing reports is a setting that silently does nothing. `cinder_cove` is
-refused too even though it is a real window: its reset time is an expiry rather
-than a rollover, so it is never ranked and a threshold on it would never be
-consulted.
-
-Two rules follow from the table:
-
-- **An account is spent when any window ccdad ranks is past its own threshold.**
-  The weekly cap over 60 marks the account spent whatever the five-hour window
-  says, and the five-hour cap over 85 marks it spent whatever the week says.
-  Past means strictly past: sitting exactly on a threshold is not over it.
-- **When a weekly cap is over, `bindingWindow` in `ccdad status --json` names
-  it**, because it is the one that will not come back for days: telling a
-  machine to wait eight minutes for a five-hour rollover, when the week is gone
-  until Friday, is the wrong answer. If more than one weekly cap is over, the
-  one with the least slack is named.
-
-**The human tables no longer choose.** Every window an account carries has a
-column of its own, so nothing is reported *against* one window in preference to
-another and no reader has to work out which one a figure came from. That
-question survives only in `--json`, where a machine asks it deliberately.
-
-**Reporting and ordering are two different questions.** The figures an account
-is ranked with — its slack, the percentage left, and the threshold those came
-from — are always taken from the window with the *least slack*, whichever family
-it belongs to. So an account can be reported against its weekly cap and ranked
-on its five-hour one in the same pass, and `bindingWindow` need not name the
-one that decided where the account sits in the list. `ccdad status --json` and
-`ccdad status --json` publishes `slack` and `windowThreshold` on each account's
-`usage` object — the numbers the ordering was actually made on — and `ccdad auto
---json` carries the same two on every row of its `order[]`. An account whose
-reading could not be taken carries neither, exactly as it carries no
-`headroomPct`: unknown is never rendered as a number.
-
-The weekly rule is not inert everywhere, though. In the ordinary order it moves
-nothing. Once every account is spent the ranking switches to recovery order
-(below), and a blown weekly cap is then what an account has to *wait out* — so
-an account whose five-hour window rolls over in ten minutes still ranks behind
-one that is genuinely back inside the hour.
-
-Slack is `threshold − used`, for whichever window has least. The engine orders on
-it rather than on raw percent left, because with a tight weekly floor those are
-different questions: an account fifteen points clear of its five-hour line is a
-better target than one five points from its weekly floor, even though the second
-has more quota left on paper.
-
-**One thing outranks slack: having nothing left.** Past a threshold and *empty*
-are two different facts, and ccdad keeps two words for them. Slack says whether
-an account should go on spending; it cannot say whether it *can*, and under
-`hover` the two come apart badly. Hover caps a derived threshold at 99, so an
-account at 100% is measured against 99 and reports a slack of `-1` — the best
-figure in a pool where an account with half its week unspent, but early enough to
-be judged harshly, reports `-22`. Ranked on slack alone the empty account wins
-and the engine hands the session to the one account that cannot serve it.
-
-So an account with a window at 100% is filed behind every account that still has
-something, in both orders, and the anti-flap margins do not hold the engine on
-one: the margin runs on slack, which saturates there, so no candidate could ever
-clear it. The cooldown still applies. `ccdad status` and `ccdad status --json`
-report the two states separately — `exhausted` is past its threshold, `empty` has
-nothing left.
-
-The same rule reads a credit-metered seat's allowance rather than a plan window,
-so an enterprise seat that has spent its credits is filed the same way.
-
-**With no `[window_threshold]` table nothing changes.** Every window on `80`
-makes slack the old headroom shifted by a constant, so the order and the
-spent/not-spent verdict are identical to every release before this one. There is
-a test that pins it.
-
-**One seam worth knowing about before you tighten a window.** `hysteresis_pct`
-moved onto the slack axis with the ranking. `headroom_ratio` did not — a ratio is
-not shift-invariant and is undefined on a negative slack, so it still measures
-raw percent left. Set `seven_day = 60` and an account sitting at 59% is one point
-from that floor while still showing 41 points of raw headroom, so
-`headroom_ratio` (default `2`) can refuse a switch the ranking wanted. If you
-tighten a window threshold and the engine stops moving, **set `headroom_ratio` to
-`1`**, which switches that margin off; `1` is the lowest value the config
-accepts, because anything less would let an account with less headroom displace
-the live one. `hover` is not a second answer to this, it is the same one applied
-for you — it sets the ratio to `1` itself. `ccdad switch --strategy headroom
---force` overrides the hold for one switch; `--force` reaches the margins only on
-the targetless grammar, so a bare `ccdad switch --force` is a usage error.
-
-**A weekly cap ccdad cannot name.** The usage endpoint files a scoped weekly cap
-under a scope key, and ccdad names two of them, `model` and `surface`. That
-schema is not a closed contract, so a cap can arrive under a key this build has
-never seen. ccdad keeps such a cap rather than dropping it — you can see it in
-the `windows` map of `ccdad status --json` — but it does **not** rank it, because
-ccdad cannot state what it caps. Writing a threshold on its name is how you say
-you know: add
-
-```toml
-[window_threshold]
-"weekly_scoped:region:eu" = 60
-```
-
-to `config.toml` **by hand** — quoted, because the name carries colons — and it
-joins the ranking from the next reading that carries it. `ccdad config set` will
-not write that line: with no reading in hand it cannot tell a scope the server
-really sends from a typo, so it refuses both. `ccdad config list` names such an
-entry in a note of its own, separate from the one about keys that really are
-ignored, and says it is being read — the loader carries a `window_threshold`
-entry whatever its name is. A window name that is simply misspelled gets the
-ignored note instead, which is the honest answer: no reading ever produces it. Removing the line is how you turn it back off — a `0` is refused, not
-an opt-out.
-
-A cap ccdad cannot name **at all** — no display name, and no scope key it can
-build a name from — produces no window and cannot be opted into. It is counted
-instead: `ccdad status --json` carries `unnamableWeeklyCaps` on the account's
-`usage` object, written only when it is not zero. Absence means zero rather than
-an older ccdad. There is nothing to do about a non-zero value except know that
-the account is carrying quota this build has no handle on.
-
-### When every account is over its threshold
-
-Nothing is left to switch *to*, and the engine does not stop. It changes the
-question it is asking: instead of "who has the most room", it ranks by **who
-comes back first**, inside a one-hour horizon, and by who has the most slack left
-outside it. The hour is fixed and there is no key for it.
-
-An account that is actually *empty* — some window of it at 100% — sorts behind
-every account that still has something, ahead of both of those keys. The soonest
-reset belongs to the window that has been running longest, which is the window
-most likely to be the one that ran out, so without this the mode hands the
-session to the single account that cannot serve it and the user waits out the
-horizon for a switch that was available immediately.
-
-`ccdad status` prints the mode on every run where a ranking could be made —
-`headroom` and `consume-first` name themselves the same way, and the line is
-absent only when nothing has ever been polled. In this mode it reads:
-
-```console
-Daemon:  running  pid 48213  up 2h06m
-Active (Claude): work@example.com (work)
-Current: recovery  (every account is over its threshold; empty accounts last, then soonest reset inside an hour, then slack)
-```
-
-`ccdad status --json` carries the same answer as `mode`, and `ccdad auto --json`
-has always emitted it on its `evaluated` events. The key is absent rather than
-`headroom` when no ranking could run, so a script cannot mistake "never polled"
-for "plenty of room".
-
-The pool this is about is the accounts still in the running: the subscription
-accounts plus any credit seat marked primary, minus anything a rejected refresh
-token has quarantined. A failed poll is not one of those: it leaves the account
-unreadable, which holds the engine OUT of this mode rather than out of the pool. Last-resort credit accounts are not in it — they are metered in
-money and have no plan window, so their headroom is unknown forever and counting
-them would put this mode permanently out of reach.
-
-One account that could not be read holds the engine out of this mode. An
-unreadable account is neither spent nor unspent, and treating it as spent is how
-an engine parks itself permanently on one expired token.
-
-If you have set `strategy` to `consume-first`, that is the mode you get instead,
-whatever the thresholds say: it is a different question — spend perishable weekly
-quota before it expires — and it is answered first. Not under `hover`, which
-stops reading the key and ranks on headroom: hover puts the perishable-quota
-answer into the SHARE instead of into a mode of its own, so the account holding
-quota that is about to expire leads the ordinary slack order.
-
-It used to be claimed here that the high threshold a window near its reset earns
-was already enough. It is not, and the direction it failed in is the one that
-mattered: a high threshold is high slack, and the ranking reads the LOWEST slack
-an account has, so the perishable window was the one window that could never be
-the one it ranked on.
-
-### Switching before the limit, not after it
-
-A switch that happens when an account reads 100% happens too late: the session is
-already refused. So the engine projects.
-
-```
-horizon   = the interval ccdad is blind for  +  preempt_lead  (default 6m)
-projected = used now  +  burn rate × horizon
-```
-
-The blind interval is the gap between when the current reading was **taken** and
-when the scheduler means to poll again — the two stamps in the cache, not the
-clock — so it is the engine's real exposure rather than a constant. If any window
-that binds the model on the active account projects to 100% at or before the end
-of it, and some other account still has room, the engine moves.
-
-It reads **the window that runs out first**, which is deliberately not the window
-the ranking orders on. Those are different windows whenever burn rates differ,
-and they always differ: a five-hour window is thirty-three times shorter than a
-weekly one, so an account whose weekly cap binds at one point of slack thirty-
-eight hours out would sit unswitched while its five-hour cap cut the session in
-fourteen minutes.
-
-Where it goes is the best-ranked account that is not the live one, is not
-**empty**, and is not itself projected to run out inside the same horizon —
-moving from an account that stops working in five minutes to one that stops in
-six buys nothing and spends the cooldown. An account whose usage poller is
-sitting on a `429` is taken only when nothing cleaner is on offer: the throttle
-means its reading cannot be refreshed, which is a reason to prefer a candidate
-ccdad can still see, and never a reason to call it spent.
-
-That last set of tests replaced a requirement for positive **slack**, which said
-the same thing only while thresholds were numbers you typed. Under `hover` the
-threshold is a pace target, an ordinary pool is negative across the board, and
-the requirement meant this rule could not fire at all — silently, while accounts
-still held quota.
-
-The projection runs ahead of every margin that compares two accounts as they
-stand — `hysteresis_pct` and `headroom_ratio` — because a comparison that is
-about to be false is not a reason to stay. It does **not** override the cooldown,
-which is the only thing bounding a switch storm; when the projection fires and
-the cooldown holds it, what you are told is the cooldown. It cannot reach the
-last-resort credit pool at all — a pre-emptive move walks the main ranking only,
-which is the subscription accounts plus any credit seat marked primary, and it
-can land on one of those like any other.
-
-The rule corrects itself, which is why the horizon is the real poll interval
-rather than a constant. Polling every 60 s gives a short horizon and the switch
-lands late and close to the limit, wasting almost nothing. Polling every 1800 s —
-where a `429` backoff puts it — gives a long horizon and the switch lands early.
-**Polling is blocked; the session is not.**
-
-Set `preempt_lead` to `0` and the projection is off entirely. That is a supported
-answer, not a broken one: the ordinary margins still run. The exception is
-`hover`, which derives its own lead from the widest poll gap it has actually
-observed, held between 60 s and 10 minutes, and stops reading the key — so
-turning pre-emption off means leaving hover off too.
-
-**The danger band, and what it actually buys.** At or above 95% used on the
-binding window — 95% of the endpoint's limit, not of your threshold — the account
-Claude Code is logged in as is exempted from sharing its identity's budget and
-polls every 180 s regardless of how many accounts that identity carries. It needs
-a reading that was actually taken: a poll that failed says nothing about the
-account and does not put it in the band. Read honestly:
-
-- `/api/oauth/usage` allows roughly **28-30 requests per identity per rolling
-  hour**, over a sliding window — capacity comes back only as old requests age
-  out, so a burst saturates the identity for up to a full hour and waiting gives
-  none of it back early.
-- 180 s is 20 requests an hour, which fits inside that with headroom to spare, and
-  it is a **floor no rule may argue past**. Both the per-identity division and the
-  post-429 backoff can only lengthen it. One thing does move in the shorter
-  direction — every interval is spread by up to a tenth either way, so an
-  individual poll lands between 162 and 198 seconds. That spread is not a tuning
-  knob, it is what stops daemons which paused together from coming back together:
-  a laptop waking, or a fleet restarting across machines, would otherwise empty
-  the shared hourly budget in a single burst. A `429` imposes a 360-second floor
-  and an estimate that multiplies by 1.5 each time up to 1800 s, and the estimate
-  always outruns the floor — one `429` alone earns 540 s.
-- What the band buys is the **ordering**, not a faster clock. An account inside it
-  would otherwise take the exhausted or candidate cadence, both 600 s, so this is
-  3.3x the freshness on the one account a session can be cut off on. On a shared
-  identity it also skips the divisor: three accounts on one identity would put the
-  live one on 540 s, and the band holds it at 180 s while the alternates stand
-  down to about thirty minutes.
-
-The band used to poll every 60 s and shorten its own freshness gate to 30 s to
-let that through. That was 60 requests an hour against an allowance of 28-30 —
-twice the budget, held for as long as an account sat in the band, with no movement
-requirement to end it and, on a single-account identity, no division to soften it.
-It is fixed, and the shape of the fix is worth stating because it is the shape
-both `cswap` and `quota-board` arrived at independently: **the sustained rate is
-structure, not policy.** A rule may ask for any cadence it likes and the floor
-holds it, in one place, after every other rule has had its say. A floor that only
-holds as long as every author remembers it is not a floor.
-
-The one exemption is the urgent cadence — the live account both *moving* and
-within 15 points of its threshold — which still polls at 60 s. That one is
-self-limiting: sustaining it for an hour would take 60 points of movement inside a
-15-point band, so it is a burst of about fifteen requests and then the account
-leaves the band on its own.
-
-`ccdad status --refresh` is deliberately not shortened either — the hand-held path
-serves any reading under 180 s old — so a scripted refresh cannot outrun the same
-allowance on the one account where a `429` costs most.
-
-### Running ccdad on more than one machine
-
-**Declare which accounts each machine drives, with `ccdad own`.** This is the one
-piece of multi-machine setup ccdad cannot do for you, and skipping it is the
-failure it exists to prevent.
-
-Ranking is a pure function of readings the *server* shares between your machines,
-and every comparator ends in the same tie-break. Two installs given the same pool
-therefore pick the same target at the same moment: both sessions land on one
-account, burn its five-hour window twice as fast, and hit a rate limit while the
-rest of the pool sits idle. Nothing detects it at runtime — every lock ccdad holds
-is a file lock on one machine, and the same is true of both projects it was
-written against.
-
-```console
-$ # on the laptop
-$ ccdad own work@example.com personal@example.com
-This machine drives: personal@example.com, work@example.com
-Another machine drives: ci@example.org, spare@example.com
-
-$ # on the desktop, the other half
-$ ccdad own ci@example.org spare@example.com
-```
-
-An account this machine does not own is neither rotated into nor polled on a
-cadence, and **an account added later belongs to another machine by default** —
-declaring a split once is meant to stay declared. Two things still work by name,
-because naming an account by hand says what you want more clearly than the split
-does: `ccdad switch` activates one, and `ccdad status --refresh` reads one.
-
-The live account is always polled even when another machine owns it. ccdad's
-thresholds, its anti-flap hysteresis and its pre-emptive switch are all statements
-about the account Claude Code is logged in as, and a machine blind to its own live
-login has no baseline to make them from.
-
-Run `ccdad own` with no arguments to see the current split, and `ccdad own
---clear` to give every account back to this machine.
+Runway estimates depletion, rollover, and needed capacity from usage samples that
+have already been collected. It does not generate traffic to measure the fleet.
+Accounts with too little history remain unknown. Runway currently forecasts
+Claude accounts only; it explicitly reports Codex accounts as not forecast.
+Codex usage and reset windows remain visible in the account dashboard.
 
 ### Credit-metered accounts
 
-By default an account billed in credits is a **last resort**: it is kept out of
-the main ranking and ordered in a pool of its own, by how much spend the ceiling
-arms rather than by headroom, and the engine reaches that pool only once every
-account in the main pool is known to be spent. Reaching one then needs two
-independent opt-ins — the account's own extra-usage setting, and
-`credit.max_auto_spend` raised above `0`. That is right when credits are overage
-on top of a subscription: quota already paid for should be spent first.
+Extra-usage credits are normally a last-resort pool, after the main pool's quota
+is exhausted. Unattended fallback requires both the account's extra-usage setting
+and a positive `credit.max_auto_spend`; the latter defaults to zero.
 
-It is wrong for an enterprise seat that is metered in credits and nothing else.
-There is no subscription quota to prefer, and a gate that defaults to `0` means
-the account can never be used at all.
+A seat billed in credits as its normal meter can be marked primary:
 
 ```sh
 ccdad primary work on
 ```
 
-marks that account as one. A primary account is ranked alongside the subscription
-accounts on `credit.threshold − extra_usage.utilization`, and
-`credit.max_auto_spend` no longer gates it — **the flag is the opt-in**, typed by
-a human. Turning it on prints what it costs before it writes, so someone who
-typed it by mistake reads it while the flag is still off; turning it off writes
-without a notice, because there is nothing to warn about. Its money figures are
-not consulted on this path at all: `monthly_limit` and `used_credits` stay the
-last-resort pool's axis.
+Primary credit seats join the main pool and bypass `credit.max_auto_spend`;
+marking one primary is permission to spend that way. Profiles identifying a
+credit-only entitlement can receive this default when first added. Re-adding an
+account preserves its existing primary setting. `credit.threshold` controls the
+utilization threshold for credit-metered accounts.
 
-A primary account is metered on credits rather than on a plan window, so it
-reports no reset time and never has a recovery to rank on. In recovery mode that
-puts it behind every account known to come back inside the hour; against the ones
-that come back later it is ranked on slack like any other — unless its credits
-are gone, which files it behind everything that has any. A credit utilization
-that could not be read is unknown — not spent, not empty — and because a primary
-seat is in the main pool, one it cannot read keeps the last-resort credit pool
-closed for everyone.
+## Configuration
 
-`ccdad status` shows the flag as a suffix, while `ccdad status --json` and
-`ccdad which --json` carry `primary` on the account object. `ccdad export`
-carries it too so it survives a move between machines, and `ccdad doctor`
-names every account holding it — because "this account can spend money
-unattended" is not a fact that should live only in a file.
+`ccdad config path` locates the store's `config.toml` (normally
+`~/.ccdad/config.toml`). It contains settings, not credentials.
 
-`ccdad status --json` also carries a `usage.credit`
-object on any account whose latest reading had overage switched on — primary
-or not, since the axis is what the wire reported rather than something only a
-primary account can have:
-
-```json
-{
-  "credit": {
-    "state": "enabled",
-    "currency": "USD",
-    "monthlyLimit": 100,
-    "usedCredits": 25.5,
-    "utilizationPct": 25.5
-  }
-}
+```sh
+ccdad config list
+ccdad config get codex.max_body_mib
+ccdad config set auto_sort true
+ccdad config unset auto_sort
 ```
 
-`monthlyLimit` and `usedCredits` are already converted to the currency's major
-unit — the one `max_auto_spend` is written in — and either is absent rather than
-`0` when the wire did not report it: an unreported cap is not a cap of zero,
-and an unreadable spend is not a spend of zero. `state` is `enabled`,
-`disabled`, `blocked`, or `unknown`; `disabledReason` is added when an
-organization refused overage and named why.
+An unset key uses its default. Unknown keys already in a file are preserved, but
+`config set` rejects unknown names rather than silently accepting typos.
 
-A credit-only account carries no five-hour or seven-day window, so its plan
-columns read `-` and its balance goes on a line under the table, where money can
-be spelled as money: with both figures on the wire it prints `used/limit`, e.g.
-`25.50/100.00 used, 74.50 left (USD)`; with only `usedCredits` it prints what was
-spent and says the account sets no limit of its own. A percentage of a balance
-hides the balance, and only one of the two tells a reader whether to top up. `?`
-is still what an account that failed to poll at all shows.
+| Key | Default | Purpose |
+|---|---|---|
+| `threshold` | `80` | Claude quota utilization threshold (%) |
+| `hysteresis_pct` | `10` | Minimum improvement for switching |
+| `headroom_ratio` | `2` | Required relative headroom improvement |
+| `cooldown` | `5m0s` | Hold between ordinary switches |
+| `recovery_hysteresis` | `5m0s` | Reset-time margin during recovery |
+| `preempt_lead` | `6m0s` | Extra time covered by preemption |
+| `strategy` | `headroom` | Configured ranking strategy |
+| `probe_unknown` | `true` | Permit automatic Claude quota warm-ups |
+| `hover` | `false` | Compatibility storage for the hover policy |
+| `manual` | `false` | Compatibility storage for the manual policy |
+| `credit.threshold` | `80` | Credit utilization threshold (%) |
+| `credit.max_auto_spend` | `0` | Unattended fallback credit-spend ceiling |
+| `codex.threshold` | `80` | Codex quota utilization threshold (%) |
+| `codex.binary` | Empty | Override the real Codex executable |
+| `codex.proxy_port` | `0` | Auto-resolve a stable local proxy port |
+| `codex.max_body_mib` | `256` | Maximum buffered request body in MiB |
+| `codex.cross_account_replay` | `true` | Retry a mid-thread 429 on another account |
+| `auto_sort` | `false` | Order accounts by nearest seven-day reset |
+| `tui.theme` | `auto` | `auto`, `dark`, `light`, `ansi`, or `none` |
+| `tui.glyphs` | `auto` | `auto`, `unicode`, or `ascii` |
+| `update_check` | `true` | Check for a newer release daily; does not install it |
+| `mcp_switch_without_elicitation` | `false` | Allow MCP switching when the client cannot ask for confirmation |
+
+### Per-window thresholds
+
+```toml
+threshold = 80
+
+[window_threshold]
+five_hour = 85
+seven_day = 60
+seven_day_opus = 50
+```
+
+A window without an override uses the lane's default threshold. Scoped weekly
+windows can also be named, for example `weekly_scoped:model:Opus 4.5`; use names
+reported by your accounts. Unrecognized scope names require an explicit opt-in
+and are reported separately. Hover derives the threshold values instead of
+using the numbers in this table.
+
+### Appearance
+
+The interactive TUI asks the terminal for its background color when the theme is
+`auto`. One-shot listings use dark colors without a terminal background query.
+Select `tui.theme light` explicitly for light-terminal listings, or `none` for no
+color. JSON output is unaffected.
+
+Automatic glyph selection uses ASCII on incompatible Windows consoles and under
+`RUNEWIDTH_EASTASIAN`. ccdad does not change the console code page. Use
+`ccdad config set tui.glyphs ascii` if characters do not align or display correctly.
 
 ### Environment
 
-| Variable | Effect |
+| Variable | Purpose |
 |---|---|
-| `CCDAD_HOME` | ccdad's own store (default `~/.ccdad`) |
-| `CLAUDE_CONFIG_DIR` | Claude Code's config root, honoured exactly as Claude Code honours it |
-| `CLAUDE_SECURESTORAGE_CONFIG_DIR` | Claude Code's credential root, which it scopes independently |
+| `CCDAD_HOME` | ccdad store root; defaults to `~/.ccdad` |
+| `CLAUDE_CONFIG_DIR` | Claude configuration root |
+| `CLAUDE_SECURESTORAGE_CONFIG_DIR` | Independently scoped Claude credential root |
+| `CODEX_HOME` | Codex's own configuration/session home; not ccdad's credential store |
+| `CCDAD_IMPORT` | Account export path, or `-` for stdin, consumed by bootstrap |
+| `CCDAD_MCP_SWITCH_WITHOUT_ELICITATION` | Per-MCP-process override for unavailable confirmation support |
 
-These are two independent axes, and setting only the first is the trap.
-`CCDAD_HOME` moves ccdad's own state; it does **not** move the Claude Code login
-ccdad manages, which stays wherever `CLAUDE_CONFIG_DIR` (or
-`CLAUDE_SECURESTORAGE_CONFIG_DIR`) points. Two shells with different
-`CCDAD_HOME` values and the same credential root therefore run two engines over
-one login, and they undo each other's switches — nothing is corrupted, the
-account simply keeps changing back. ccdad refuses the second engine and
-`ccdad doctor` names the state, but the fix is to give each store its own
-`CLAUDE_CONFIG_DIR`.
+`CCDAD_HOME` does not move the Claude login. Separate stores should also use
+separate Claude configuration/credential homes; otherwise their engines can
+compete over one login. `ccdad doctor` diagnoses the resolved paths and ownership.
+
+## Running sessions side by side
+
+```sh
+ccdad run work
+ccdad run work -- --model opus
+ccdad run --full-profile work
+ccdad run x1
+```
+
+Claude sessions receive isolated credentials without changing the machine's
+live login. The default scopes credentials only; MCP logins do not accompany it.
+It requires Claude Code 2.1.113 or later because earlier builds ignore the scoped
+credential-home variable.
+
+`--full-profile` instead gives a Claude account a persistent configuration home,
+seeded from top-level configuration without copying project history. Its MCP
+logins and trust choices survive subsequent runs. API-key accounts require this
+mode. Setup-token accounts are passed through the session's environment.
+
+A shell can carry credentials that outrank the selected account: token variables,
+a helper, a hosted-session token, or an Anthropic CLI profile. ccdad refuses a
+launch it cannot scope reliably and identifies the conflicting source. It does
+not silently remove your environment settings. Read `ccdad doctor`'s API-key and
+OAuth-source checks when the observed account differs from the intended one.
+
+For a Codex account, `run` launches Codex through ccdad with an explicit account
+pin. Its tail may be empty or begin with `codex`; `--full-profile` is not supported
+for Codex. The exit status is the child application's status.
+
+Commands that would change the machine's Claude login are refused from inside a
+scoped Claude session. Run those commands from a plain shell outside the session.
+
+## Running ccdad on more than one machine
+
+Declare a separate pool for each machine:
+
+```sh
+ccdad own work personal
+ccdad own                   # show this machine's assignment
+ccdad own --clear           # return all accounts to this machine
+```
+
+Accounts assigned elsewhere are not automatically selected or polled here, except
+for observing the currently live account. Accounts added after a split are
+assigned elsewhere by default. Explicitly naming an account for a switch or
+manual refresh is separate from the automatic ownership policy.
+
+Prefer separate logins on each machine to copying a live refresh grant. A copied
+grant can be rotated by one holder while the other still has the previous value.
+Multiple machines also share provider-side quota and API rate limits; ccdad's
+local locks do not coordinate separate hosts.
+
+## Claude Code's own tools
+
+### MCP registration
+
+```sh
+ccdad mcp install
+ccdad mcp install --scope local
+ccdad mcp install --scope project
+ccdad mcp install --print-config
+ccdad mcp uninstall
+```
+
+The default scope is `user`. Claude Code starts `ccdad mcp` as a stdio server;
+its stdout is reserved for the protocol.
+
+| Tool group | Tools |
+|---|---|
+| Read | `list`, `status`, `which`, `doctor`, `config_get`, `runway` |
+| Store | `enable`, `disable`, `alias`, `move`, `primary` |
+| Switch | `switch` |
+| Daemon | `daemon_start`, `daemon_stop`, `daemon_restart`, `daemon_status` |
+
+The switch tool asks for confirmation when the client supports it. If it cannot,
+switching is refused unless explicitly enabled through
+`mcp_switch_without_elicitation` or `CCDAD_MCP_SWITCH_WITHOUT_ELICITATION`.
+That permission does not suppress confirmation on a client that can ask.
+Credential-export, login, shell-setup, and uninstall commands are not exposed as
+MCP tools.
+
+### The plugin
+
+The optional [Claude Code plugin](plugins/README.md) registers the same MCP
+server and still requires the ccdad binary on PATH. It contains MCP wiring, not
+the executable, skills, agents, or hooks.
+
+Tool names depend on how the server is registered:
+
+| Registration | Example tool name |
+|---|---|
+| `ccdad mcp install` | `mcp__ccdad__switch` |
+| Plugin | `mcp__plugin_ccdad_ccdad__switch` |
+
+Permission rules and hook matchers must use the matching name. Direct and plugin
+registrations naming the same command are deduplicated by Claude Code.
+
+## How the switch stays safe
+
+On macOS, ccdad follows Claude Code's Keychain-first credential behavior and
+file fallback. It does not assume `.credentials.json` is always the active
+source. Locked or inaccessible credential storage is an error, not proof that
+no account is signed in.
+
+Claude credential swaps preserve non-account data, including MCP logins and
+unrecognized keys. ccdad rereads credentials under Claude Code's locks, uses
+atomic file replacement, and refuses unsafe file paths. Network refresh work is
+kept outside those credential locks. `ccdad doctor` reports storage conflicts
+and unexpected credential keys.
+
+On Windows, file protection relies on the inherited ACL rather than Unix mode
+bits. Account exports containing credentials must be treated as secrets.
 
 ## Containers
 
-There is no published image. The `Dockerfile` at the root of this repository is a
-reference: build it from a binary you built.
+The [Dockerfile](Dockerfile) is a reference image you build yourself, not a
+published container image. It includes Claude Code; install Codex separately if
+you need it in a derived image.
 
 ```sh
 CGO_ENABLED=0 GOOS=linux go build -o ccdad ./cmd/ccdad
 docker build -t ccdaddy .
+docker volume create ccdad-data
+
+docker run -it --rm -v ccdad-data:/data ccdaddy \
+  ccdad add claude --alias work --no-browser --activate --timeout 15m
 ```
 
-It carries node, `@anthropic-ai/claude-code` and `ccdad`, so a session runs
-inside it with no further setup.
+Build the binary for the architecture of the container you will run. Keep `/data`
+on a persistent volume: it contains the account store, credentials, usage history,
+and engine state. The image sets both `CCDAD_HOME` and `CLAUDE_CONFIG_DIR`.
 
-### `add-token` is not enough
-
-Worth knowing before you build a provisioning script around it. A `sk-ant-oat…`
-setup token and an `sk-ant-api…` key are both stored **without** a
-`claudeAiOauth` record — there is no refresh grant behind either — so the daemon
-skips the account on every poll and nothing ever produces a reading to rank it
-on. Such an account is stored, and it is usable as a credential, and it can
-**never be ranked**. A container provisioned that way has no auto-switching at
-all, which is the entire product, and nothing in `ccdad status` says so.
-
-Two things carry a rankable account, and they are not equivalent. The first is a
-login performed **inside** the container, below. The second is
-`ccdad export --full`: `ccdad bootstrap` reads one from `CCDAD_IMPORT` — a path,
-or `-` for stdin — and the entrypoint runs it before it starts the engine.
-
-### Logging in inside the container
-
-This is the one to reach for first, and it is the only one that does not copy a
-credential between machines.
-
-```sh
-docker volume create ccdad-prod
-
-docker run -it --rm -v ccdad-prod:/data ccdaddy \
-  ccdad add claude --alias seat-a --no-browser --activate --timeout 15m
-```
-
-Once per account per environment, and never again: the login lands on the volume,
-and replacing the container does not touch the volume. Nothing about ccdad's
-stored state is bound to a machine, so the same volume works wherever it is
-mounted.
-
-**`-t` is not optional.** `--no-browser` leaves a pasted code as the only way in,
-and that path needs a terminal on stdin — `docker run -i` with a pipe, a heredoc,
-or a `compose run` without a TTY all refuse before the login starts. The refusal
-names `ccdad add-token`, which is the trap the section above describes.
-
-`--timeout` defaults to five minutes, which is short for a browser round trip on
-a machine that is not the one running the container. `--activate` is worth
-passing on the first account of a fresh environment: without a live login there
-is no reading to rank, and the environment sits idle until the first poll lands.
-
-Each `ccdad add claude` starts its own login, so a second one needs a second
-browser tab. A code pasted into the wrong one is refused outright rather than re-prompted:
-the state it carries belongs to the login that is no longer waiting.
-
-An enterprise seat metered only in credits takes the DEFAULT surface, not
-`--console`. Both are logins and only one of them mints a claude.ai credential;
-`--console` is for an API-billed Console account, which is a different thing from
-a claude.ai seat whose meter happens to be money.
-
-### Two environments, one set of accounts
-
-A staging container and a production container can hold the same accounts, and the
-right way to do it is a login in each rather than an export from one into the
-other. Each login is its own grant. An export copies ONE grant to a second
-holder, and a refresh rotates it — so whichever side refreshes first leaves the
-other holding a superseded token, which reaches ccdad as a failed refresh and
-takes that account out of rotation until it is added again.
-
-Two environments do share one thing they cannot partition: the usage endpoint's
-per-identity allowance, roughly 28-30 requests per rolling hour. Two idle engines
-over one organization fit inside it. Two engines both watching an account that is
-close to its limit do not — the cadence tightens on both at once, because both
-are reading the same numbers and reaching the same conclusion. If both
-environments do not need to be live at the same time, run the second one only
-when it is being used.
-
-
-### That document holds refresh tokens
-
-**Never put it in an environment variable inline.** `-e CCDAD_IMPORT="$(cat
-backup.json)"` is visible in `docker inspect`, and in `/proc/<pid>/environ` to
-anything else in the namespace. `ccdad bootstrap` refuses a `CCDAD_IMPORT` that
-holds a document instead of a path, and never prints the value back either way —
-its output is a container log. Mount it read-only and point the variable at the
-path:
+A full export can provision the volume:
 
 ```sh
 ccdad export --full --out backup.json
@@ -2010,175 +727,71 @@ docker run -d --name ccdad \
   ccdaddy ccdad daemon logs --follow
 ```
 
-or pipe it through `-`, and the container never has it on disk at all:
+`CCDAD_IMPORT` takes a file path or `-`, never inline JSON or a base64 document.
+Full exports contain refresh tokens; mount them as secrets rather than putting
+their contents in the container environment. `--base64` encodes the same export
+as one line but does not encrypt it.
 
-```sh
-ccdad export --full | docker run -i --rm \
-  -v ccdad-data:/data -e CCDAD_IMPORT=- ccdaddy ccdad status
-```
-
-`ccdad bootstrap` is idempotent, so running it on every start is the intended
-use: an account already there at that uuid is updated, one that is not is added,
-and an account's age is not moved by a re-run. A credential refreshed inside the
-container is **not** overwritten by the older one in the document — pass
-`--force` if that is what you want. It exits `0` when there was nothing to do and
-when `CCDAD_IMPORT` is not set at all, and it prints nothing out of the document,
-including when it refuses one: run `ccdad import` against the file from a shell
-to find out what is wrong with it.
-
-### A secret store carries one line, so `--base64` writes one
-
-A GitHub Actions secret, a `.env` entry and most CI secret stores hold a single
-string. A JSON document pasted into one arrives with its newlines intact and
-breaks the file it landed in. `--base64` writes the same document as one
-unwrapped line:
-
-```sh
-ccdad export --full --base64 --out export.b64   # 0600, one line, no wrapping
-gh secret set CCDAD_EXPORT < export.b64
-```
-
-`import` and `bootstrap` read either form and are not told which — they sniff
-it, because a ccdad export is a JSON object and so begins with `{`, which is in
-neither base64 alphabet. Whitespace inside the blob is ignored, so a document
-that went through `base64` without `-w0` and came back wrapped at 76 columns
-still imports, and the url-safe alphabet and missing padding are both accepted:
-
-```yaml
-- run: echo "${{ secrets.CCDAD_EXPORT }}" | ccdad bootstrap
-  env:
-    CCDAD_IMPORT: "-"
-```
-
-**`--base64` is an encoding, not encryption.** The blob is exactly as much of a
-secret as the JSON it holds, which is why `--out` still writes it `0600`, why
-`--full --base64` to a terminal is still refused, and why `CCDAD_IMPORT` still
-takes a path or `-` and never the document itself — a one-line document is
-temptingly easy to paste into the variable, so `bootstrap` recognizes one there
-and refuses it by name rather than by echoing it.
-
-### `/data` must be a volume
-
-Without one, every restart loses the account store, the usage cache and the
-anti-flap state, and re-imports from the secret. The cache is the expensive half:
-the usage endpoint allows roughly 28-30 requests per identity per rolling hour,
-so a container that starts cold spends that budget again from zero.
-
-### Both path variables are set, on purpose
-
-`CCDAD_HOME` and `CLAUDE_CONFIG_DIR` are independent axes — see
-[Environment](#environment) — and the image sets both. Setting only the first
-would move ccdad's store onto the volume and leave the Claude Code login inside
-the image layer, so two containers sharing one volume would run two engines over
-one login and undo each other's switches.
-
-### What the entrypoint does
-
-```sh
-ccdad bootstrap                 # a no-op unless CCDAD_IMPORT is set
-ccdad daemon start || {         # 3 means one is already running
-	status=$?
-	[ "$status" -eq 3 ] || exit "$status"
-}
-exec "$@"
-```
-
-Exit `3` is tolerated by number rather than with `|| true`, and the status is
-captured and re-raised rather than written as the shorter
-`ccdad daemon start || [ "$?" -eq 3 ]`: under `set -e` that form exits with the
-status of the failed `[`, which is `1`, so a `4` — another store's engine is
-already driving this login — would reach a restart policy as an ordinary crash.
-`1` and `4` both mean the container would come up with no engine behind it, and
-neither is tolerated.
-
-The command is `exec`'d, so the container's exit status is its own. Do not make
-that command `ccdad auto`: the daemon already holds the engine singleton, and
-the continuous form of `auto` answers `3` when it does. `sh` is the default, and
-`ccdad daemon logs --follow` is the long-running command to give it when you
-want the container to stay up on its own.
+The entrypoint runs bootstrap, starts the daemon, and executes the supplied
+command. Do not run the continuous `ccdad auto` beside that daemon: they share
+the engine singleton. API keys and setup tokens alone do not supply the
+refreshable OAuth usage data needed for quota-based rotation.
 
 ## Scripting
 
 ### Exit codes
 
-One contract across the command tree, which is what makes them worth branching
-on. Two commands are deliberately outside it: `ccdad doctor` answers `0` when
-nothing failed and `1` when something did — a warning is not a failure — and
-`ccdad run` exits with **claude's** status, because it is a runner.
-
 | Code | Meaning |
 |---|---|
-| `0` | The requested action was taken |
-| `1` | Runtime failure — network, I/O, lock contention, token refresh |
-| `2` | **Usage errors, and `ccdad run`'s refusals** — a bad flag, a bad combination, an unknown account, or a session `ccdad run` will not start because it would authenticate as something other than the account you named. `ccdad auto` and `ccdad switch` report that same displaced credential as `4`, because for them it is a blocked action rather than a command that cannot be run |
-| `3` | Understood, nothing to do (already on that account; daemon already stopped) |
-| `4` | Blocked: wanted to act, no viable target (everything exhausted, credit gate refused, or another OAuth source outranks the credentials file) |
-| `5` | A negative answer to a question, not a failure to answer it — no daemon running or nothing attributable. It has nothing to do with the `ccdad probe` command, which reports under the codes above like any other action |
-| `130` | SIGINT |
+| `0` | Success |
+| `1` | Runtime failure |
+| `2` | Invalid usage or a refused session launch |
+| `3` | Understood, nothing to do |
+| `4` | Blocked: no viable target or the action cannot proceed |
+| `5` | Negative query result, such as no daemon running |
+| `130` | Interrupted by SIGINT |
 
-`3` versus `4` is the actionability line — **alert on `4`, ignore `3`** — and
-`2` is kept exclusively for usage errors so a cron job can tell a typo from a
-no-op. `5` exists so `ccdad daemon status; [ $? -eq 5 ] && ccdad daemon start`
-is safe: "no daemon" and "cannot determine whether there is a daemon" are different
-answers, and a supervisor that conflates them respawns forever on a filesystem
-where locks do not work.
-
-A closed pipe is not an error: `ccdad status --json | head -1` exits `0`.
+`ccdad doctor` returns 0 when no checks fail and 1 otherwise; warnings alone do
+not fail it. Session launchers return the child application's exit status.
+`ccdad daemon status` does not start the daemon it is querying.
 
 ### `--json`
 
-Every read command takes `--json` and prints a single object with a
-`schemaVersion`. The one exception is `ccdad auto --json`, which emits **NDJSON**
-— one event per line — because it is a stream.
+Commands with `--json` document it in their help. Status and other read results
+use a single JSON object with `schemaVersion`; `ccdad auto --json` emits NDJSON
+(one event per line). Missing values mean unknown, not zero. Key scripts on
+account UUID or alias, not mutable indexes.
 
-### Stability contract
+```sh
+ccdad status --json
+ccdad which --json
+ccdad runway --json
+```
 
-> **`idx` is a display ordinal, not a key.** It is numbered per provider and
-> recompacted whenever accounts are removed or sorted. Scripts must reference
-> accounts by `uuid` or `alias`.
+## Troubleshooting
 
-This is printed by `ccdad --help` too. It is the one promise made before 1.0.
+Start with `ccdad doctor`. Use `ccdad daemon logs` to inspect account routing,
+profile failures, token refresh, and daemon activity.
 
-## What is not here yet
+| Symptom | What to check |
+|---|---|
+| `ccdad` is not found | Run the installed binary's `setup-path` command, then open a new terminal. |
+| Codex spends a different account from the serving display | Check `/status` for provider `ccdad`, wrapper precedence with `command -v codex`, explicit account pins, and route/fallback logs. Resume direct sessions through ccdad. |
+| Codex still displays the old usage after a switch | The display needs new usage information from a response. Verify actual routing; do not infer it from a cached usage panel alone. |
+| Codex returns `413 Payload Too Large` | Read the size and limit in the error; adjust `codex.max_body_mib` and restart the daemon if appropriate. |
+| Account shows `checking` | Subscription verification is pending. Due profile checks run independently of quota backoff; failed checks retry after 15 minutes. |
+| Account shows `unsubscribed` | The profile explicitly reports an inactive subscription. Re-add only if authentication needs repair; a later renewal profile can restore eligibility. |
+| Usage remains stale after `status --refresh` | The quota endpoint's freshness floor or 429 backoff still applies. Profile refresh and quota refresh are separate. |
+| Codex shows `needs-relogin` | Its refresh grant was rejected; use `ccdad add codex`. |
+| Claude switches do not affect the session | Check credential-root resolution, Keychain access, overriding token/helper settings, and whether the session is scoped. |
+| Two daemons fight over a login | Give separate stores separate credential homes; inspect `doctor`'s ownership report. |
+| `accounts.toml` is missing but credential files remain | Restore a backup or recover the accounts; do not delete the remaining credentials. |
+| MCP tools disappeared after changing installation method | Check direct versus plugin-prefixed tool names. |
+| TUI glyphs are broken | Select `tui.glyphs ascii`; for light terminals, choose `tui.theme light`. |
 
-Deliberate, and listed so you can tell a gap from a bug.
-
-- **No OS service integration.** The daemon manages itself — a detached
-  process, a `flock` singleton, a pidfile, auto-started by any `ccdad` command.
-  There is no launchd, systemd or Windows service unit in v1.
-- **A setup token cannot be activated.** Claude Code reads one from
-  `CLAUDE_CODE_OAUTH_TOKEN` only, never from the credential file, so there is
-  nothing for `ccdad switch` to install. `ccdad run ACCOUNT` does set the
-  variable for the session it starts, so that path works today; it is the live
-  login that a setup token cannot become. API keys *can* be activated, with
-  `--activate`.
-- **`ccdad which` does not attribute `ANTHROPIC_API_KEY`.** Claude Code gates
-  that variable on an approved-suffix list and races it against `apiKeyHelper`
-  and `primaryApiKey`; guessing would be worse than declining.
-- **A weekly cap scoped to another *surface* still counts against an account.**
-  Claude Code is itself one surface, so a surface cap can be the very window
-  that binds a session, and the response gives no way to tell which surface name
-  is this client's own — so `ccdad` counts them all. `--model` narrows models,
-  never surfaces.
-- **Windows file modes.** `chmod` is a no-op there, so the store relies on the
-  ACL inherited from `%USERPROFILE%`. Windows binaries are also unsigned.
-- **`ccdad run` launches past npm's `claude.cmd`.** If `claude` on your PATH is
-  npm's batch shim, ccdad reads it and runs the interpreter it names — `node
-  cli.js` — directly, for every invocation rather than only the ones carrying an
-  argument `cmd.exe` would eat. That takes `cmd.exe` out of the launch, so the
-  arguments Windows hands your session are the ones you typed. A shim ccdad does
-  not recognise still runs through `cmd.exe` as before, and there an argument
-  containing `& | < > ^ % "` is refused rather than mangled.
-- **The macOS Keychain is not used**, because Claude Code no longer uses it.
-  `ccdad doctor` reports a *stale* keychain item, since a downgraded Claude
-  Code would still read one — and names which remedy applies, because on
-  2.1.112 or earlier that item is your live login and deleting it undoes itself.
-- **Claude Code 2.1.112 and earlier are not supported.** That is the last
-  release whose credential store reads the macOS Keychain before
-  `.credentials.json`, and the last that does not know
-  `CLAUDE_SECURESTORAGE_CONFIG_DIR` — so a switch can be silently shadowed and
-  `ccdad run`'s default scoping does nothing. `ccdad doctor` fails on such a
-  machine and `ccdad run` refuses; `--full-profile` still works.
+For bug reports, include ccdad's version, OS, provider, relevant command, and
+sanitized diagnostics. Never include tokens, credential files, or full account
+exports. Report security issues through [SECURITY.md](SECURITY.md).
 
 ## Building from source
 
@@ -2186,90 +799,25 @@ Deliberate, and listed so you can tell a gap from a bug.
 git clone https://github.com/Kweiza/ccdaddy
 cd ccdaddy
 go build ./cmd/ccdad
-```
-
-Go 1.26.4 or newer. The third-party modules are all Go and `go.mod` is the
-authority on which; the released binaries are static and need no runtime.
-
-```sh
 scripts/ci.sh all
 ```
 
-runs exactly what CI runs: `gofmt`, `go vet`, `go test ./... -race`, and a
-`CGO_ENABLED=0` build of all six release targets.
+[go.mod](go.mod) is the authority for the required Go version and dependencies
+(currently Go 1.26.4 or newer). `scripts/ci.sh` runs formatting, vet, race tests,
+six target builds without cgo, citation checks, and plugin validation when the
+Claude CLI is available. GitHub CI runs tests on Linux, macOS, and Windows.
 
-### `go install`
-
-```sh
-go install github.com/Kweiza/ccdaddy/cmd/ccdad@latest
-```
-
-This works, with one caveat worth knowing before you rely on it: **a binary
-built this way cannot be version-checked or upgraded by the installer.** The
-version stamp comes from link-time flags that only the release build sets, so
-`go install` falls back to the VCS revision and `ccdad --version` reports a
-commit rather than a tag. Nothing can compare that to a release, so upgrades
-are yours to manage.
-
-## Troubleshooting
-
-Start here:
-
-```sh
-ccdad doctor
-```
-
-Twenty-two checks over the store, whether this binary is on your `PATH`, the
-store's permissions, whether file locking works on this filesystem at all, the
-daemon's pidfile and status file, the usage cache, the engine state, the config,
-leftover session directories, whether the account list itself still exists,
-`--full-profile` profiles whose account is gone, the accounts marked primary,
-stored credential files no account names, whether a second ccdad store is
-driving the same Claude Code login, which Claude Code is installed and whether
-ccdad's model fits it, Claude Code's credential file and its top-level keys, a
-stale legacy keychain item, the environment variables that would make a switch
-a no-op, which API key Claude Code would actually use, and which OAuth source
-it would take a session's credential from.
-
-It **reports**; it repairs nothing and creates nothing it is checking for — a
-diagnostic that manufactures the directory it was asked about is a diagnostic
-that lies. It never prints a credential value, which is what makes
-`ccdad doctor --json` safe to paste into an issue.
-
-Common answers it gives:
-
-| It says | It means |
-|---|---|
-| `warn store … does not exist` | Either ccdad has never run here, or `CCDAD_HOME` points somewhere unintended |
-| `fail locks` naming NFS or CIFS | The store is on a filesystem without working locks. Move `CCDAD_HOME` onto local storage |
-| `fail tick-health` | The daemon is running and getting nothing done: its tick loop has failed this many times in a row since that moment, so no switch has happened in between. The row carries the error. Every other daemon row reports **liveness** and will read `ok` throughout. The daemon replaces itself after five minutes of this, three times; past that it keeps running and this row is the only thing that says so |
-| `fail tick-health … interaction-not-allowed` | The daemon cannot read the keychain: it was started from a session macOS will not let it decrypt from, which is what a headless or SSH login gives. Its automatic replacements inherit the same session, so restart it from a shell where `security find-generic-password -a "$USER" -s "Claude Code-credentials"` exits 0. Note `ccdad update` restarts the daemon, so running it from such a shell re-wedges a healthy one |
-| `warn environment … CLAUDE_CODE_OAUTH_TOKEN` | Claude Code reads that instead of the credential file. An unattended switch is **refused** rather than made pointless — `ccdad auto` reports exit 4 |
-| `warn path … is not on PATH` | `ccdad` only works by its full path. Run `ccdad setup-path`. If it says the entry is *registered*, the block is already written and you just need a new shell |
-| `warn api-key … makes it ignore the credentials file` | An `apiKeyHelper`, `ANTHROPIC_API_KEY` or a host-injected key (the descriptor variable, or `/home/claude/.claude/remote/.api_key`) wins over the login, so a switch writes a file nothing reads. The stored `~/.claude.json` key is **not** this — it does not displace a login, and ccdad writes it for every api-key account |
-| `warn profiles … belong to no account` | A `ccdad run --full-profile` directory outlived its account and may still hold that account's API key. `ccdad remove` no longer leaves these |
-| `fail claude-version` naming 2.1.112 | Claude Code predates the release ccdad is built against. A switch can be shadowed by a keychain item and `ccdad run`'s default scoping is ignored. Upgrade to 2.1.113 or later; `--full-profile` works meanwhile |
-| `warn claude-version … cannot name its version` | ccdad found a `claude` launcher in a layout it does not recognise, so it cannot tell which era you are on. Nothing is broken; the keychain remedy just stays two-sided |
-| `warn oauth-source … /home/claude/.claude/remote/.oauth_token` | A session host injected a token at a path compiled into Claude Code. It outranks the login, `ccdad run` does not scope around it, and there is no variable to unset — the fix is on the host session, not here |
-| `warn oauth-source … does not carry user:inference` | The credentials file holds a login object Claude Code will not authenticate with. Sign in again |
-| `warn credential-keys` | Claude Code has added a key ccdad does not know. It is preserved, not destroyed — but please open an issue |
-| `warn credential-home` naming another store | Two `CCDAD_HOME` stores are driving one Claude Code login, and they undo each other's switches. Give one of them its own `CLAUDE_CONFIG_DIR`, or stop its engine |
-| `fail credential-home` naming NFS or CIFS | Claude Code's credential home is on a filesystem without working locks, so ccdad cannot tell whether a second store is driving this login. The engine keeps running, unguarded |
-| `warn credential-home … the running daemon is driving` | The daemon is writing a different credential home from the one this shell resolves, so its switches change a login nothing here reads. It was started from a shell that resolved a different home — `CLAUDE_SECURESTORAGE_CONFIG_DIR` decides that when it is defined, `CLAUDE_CONFIG_DIR` otherwise. Restart it from the shell whose configuration you want it to serve. Inside a `ccdad run` session the two differ by design, and the row says so rather than telling you to restart anything |
-| `warn credential-files … belong to no account` | A file under the store's `credentials/` holds a live refresh token that `accounts.toml` does not name, so `list`, `remove` and the account rows above cannot see it. The path is in the message. Delete it once you have looked — `doctor` never will |
-| `fail accounts-file … is GONE` | `accounts.toml` itself is missing while credential files still sit beside it — ccdad's whole account list is gone, not just one account. **Do not delete those files**; each is a login you can still recover. Restore the document from a backup, `ccdad import` an export, or run `ccdad add claude` (or `ccdad add codex`) once per account |
-| `skipped profiles/primary-accounts/credential-files … cannot be trusted` | The `accounts-file` row above already failed, so these three have no account list to check against — read that row instead of this one |
-| `ok mcp-tools` | Which spelling this machine's ccdad MCP tools have — `mcp__ccdad__*` from `ccdad mcp install`, `mcp__plugin_ccdad_ccdad__*` from the plugin. A rule written for one never fires under the other. `CLAUDE_PLUGIN_ROOT` decides the answer when ccdad is itself running as the plugin's server; in a shell the row reads Claude Code's plugin registry instead |
+`go install github.com/Kweiza/ccdaddy/cmd/ccdad@latest` also builds a binary, but
+without the release version stamp. Use published releases for automatic version
+comparison and `ccdad update`. Release binaries include the required license
+notices and signed checksum metadata.
 
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Issues and pull requests are welcome;
-open an issue first for anything that changes behaviour.
-
-Security reports do **not** go in the issue tracker — see
-[SECURITY.md](SECURITY.md).
+open an issue before a change to account-switching behavior.
 
 ## License
 
-MIT. See [LICENSE](LICENSE), [NOTICE](NOTICE) and
+MIT. See [LICENSE](LICENSE), [NOTICE](NOTICE), and
 [THIRD-PARTY-LICENSES.txt](THIRD-PARTY-LICENSES.txt).
