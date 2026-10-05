@@ -178,7 +178,7 @@ func windowCellStyle(pal theme.Palette, display []view.ListRow, accountCol, firs
 			return lipgloss.NewStyle()
 		}
 		r := display[row].Row
-		if col == 0 && r.Active {
+		if col == 0 && r.Marked() {
 			return pal.Style(theme.RoleActive)
 		}
 		i := col - firstWindowCol
@@ -206,7 +206,7 @@ func quotaCellStyle(pal theme.Palette, rows []view.Row, quotaCol int,
 			return lipgloss.NewStyle()
 		}
 		r := rows[row]
-		if col == 0 && r.Active {
+		if col == 0 && r.Marked() {
 			return pal.Style(theme.RoleActive)
 		}
 		// "Could not be read" stays distinct from "no such value" and from

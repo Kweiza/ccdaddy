@@ -453,11 +453,11 @@ func TestTheCursorLandsOnAnAccountAndNeverOnASectionHeading(t *testing.T) {
 				marked = append(marked, line)
 			}
 		}
-		if r.Active {
-			// The live account keeps its own marker; see noCursor for why it
-			// wins that cell.
+		if r.Marked() {
+			// The live account, and the codex account being served from, keep
+			// their own marker; see noCursor for why it wins that cell.
 			if len(marked) != 0 {
-				t.Errorf("cursor %d is on the live account and something drew a cursor glyph: %q", i, marked)
+				t.Errorf("cursor %d is on a marked account and something drew a cursor glyph: %q", i, marked)
 			}
 			continue
 		}
@@ -554,7 +554,7 @@ func TestANonEmptyNoticeRendersDirectlyAboveTheColumnHeader(t *testing.T) {
 			// are the line under it: each provider draws its own windows, so
 			// each carries its own names.
 			if i+2 >= len(lines) || !strings.Contains(lines[i+1], view.ClaudeSection) ||
-				!strings.Contains(lines[i+2], "IDX ACCOUNT") {
+				!strings.Contains(strings.Join(strings.Fields(lines[i+2]), " "), "IDX ACCOUNT") {
 				t.Fatalf("the note line is not directly above the table:\n%s", got)
 			}
 		}
@@ -841,7 +841,7 @@ func fixtureRows() []view.Row {
 		{
 			Account: store.Account{
 				UUID:  "d3b07384-d9a0-4f9b-9a2c-5f0c3a1e7b21",
-				Email: "work@example.com", Alias: "work", Idx: 1,
+				Email: "work@example.com", Alias: "work", Idx: 1, Provider: provider.Claude, SubscriptionStatus: "active",
 				Kind: identity.KindSubscription, Tier: "claude_max",
 			},
 			Active:   true,
@@ -859,7 +859,7 @@ func fixtureRows() []view.Row {
 		{
 			Account: store.Account{
 				UUID:  "1c8f9a52-4e6b-4d18-8f77-2a9d5c0b6e34",
-				Email: "enterprise@co.example", Idx: 2,
+				Email: "enterprise@co.example", Idx: 2, Provider: provider.Claude,
 				Kind: identity.KindCredit, Disabled: true,
 			},
 			HasEntry: true,
@@ -878,7 +878,7 @@ func fixtureRows() []view.Row {
 		{
 			Account: store.Account{
 				UUID:  "7f2e1b90-3c45-4a6d-9e08-b1d7c4a5f6e2",
-				Email: "spare@example.com", Idx: 3,
+				Email: "spare@example.com", Idx: 3, Provider: provider.Claude, SubscriptionStatus: "active",
 				Kind: identity.KindSubscription, Tier: "claude_pro",
 			},
 			HasEntry: true,
@@ -895,7 +895,7 @@ func fixtureRows() []view.Row {
 		{
 			Account: store.Account{
 				UUID:  "b6a4c2d0-8e15-4f37-a9c6-3d5b7e1f0a48",
-				Email: "keyonly@example.com", Alias: "key", Idx: 4,
+				Email: "keyonly@example.com", Alias: "key", Idx: 4, Provider: provider.Claude,
 				Kind: identity.KindAPIKey,
 			},
 			Engine: daemon.AccountStatus{UUID: "b6a4c2d0-8e15-4f37-a9c6-3d5b7e1f0a48", State: daemon.StateUnknown},
@@ -920,6 +920,9 @@ func fixtureRows() []view.Row {
 			// the second Active fact on the page: the proxy has a pointer, so
 			// the summary block names both providers.
 			Engine: daemon.AccountStatus{UUID: "4a9e0c17-6b32-4d58-8107-c2f4e6a9d3b5", State: daemon.StateServing},
+			// The snapshot's CodexServingUUID names this row, and package cli
+			// sets Serving off that same pointer.
+			Serving: true,
 		},
 	}
 }
@@ -1013,7 +1016,7 @@ func TestTheCursorIsDrawnOnTheRowItIsOn(t *testing.T) {
 	lines := strings.Split(m.Body(), "\n")
 	var marked []string
 	for _, line := range lines {
-		if strings.Contains(line, m.Glyphs.Cursor+" 2 ") {
+		if strings.Contains(line, m.Glyphs.Cursor+" c2 ") {
 			marked = append(marked, line)
 		}
 	}
@@ -1042,10 +1045,10 @@ func TestTheLiveAccountKeepsTheMarkerWhenTheCursorIsOnIt(t *testing.T) {
 	m.Cursor = 0 // the fixture pool's first row is the live account
 
 	body := m.Body()
-	if !strings.Contains(body, "* 1 ") {
+	if !strings.Contains(body, "* c1 ") {
 		t.Fatalf("the live account lost its marker to the cursor:\n%s", body)
 	}
-	if strings.Contains(body, m.Glyphs.Cursor+" 1 ") {
+	if strings.Contains(body, m.Glyphs.Cursor+" c1 ") {
 		t.Fatalf("the cursor took the live account's marker:\n%s", body)
 	}
 }
@@ -1075,7 +1078,7 @@ func TestTheOneShotRenderDrawsNoCursor(t *testing.T) {
 		t.Fatalf("the one-shot render drew a cursor:\n%s", page)
 	}
 	// The live account's own marker is untouched by the same change.
-	if !strings.Contains(page, "* 3 ") {
+	if !strings.Contains(page, "* c3 ") {
 		t.Fatalf("the one-shot render lost the live account's marker:\n%s", page)
 	}
 }
@@ -1089,10 +1092,10 @@ func TestTheCursorFollowsTheRowAndNotTheScreenPositionOnceItScrolls(t *testing.T
 	m := fixtureModel(80, 5)
 	m.Top, m.Cursor = 3, 3
 	body := m.Body()
-	if !strings.Contains(body, m.Glyphs.Cursor+" 4 ") {
+	if !strings.Contains(body, m.Glyphs.Cursor+" c4 ") {
 		t.Fatalf("the cursor is not on the row it indexes:\n%s", body)
 	}
-	if strings.Contains(body, m.Glyphs.Cursor+" 3 ") {
+	if strings.Contains(body, m.Glyphs.Cursor+" c3 ") {
 		t.Fatalf("the cursor is drawn against the screen position rather than the row:\n%s", body)
 	}
 }

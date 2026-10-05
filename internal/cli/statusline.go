@@ -123,7 +123,7 @@ func sectionCellStyle(pal theme.Palette, lines []statusLine, accountCol, firstWi
 			}
 			return lipgloss.NewStyle()
 		}
-		if col == 0 && l.row.Active {
+		if col == 0 && l.row.Marked() {
 			return pal.Style(theme.RoleActive)
 		}
 		i := col - firstWindowCol

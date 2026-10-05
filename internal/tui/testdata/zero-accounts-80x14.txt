@@ -5,9 +5,9 @@
 │Strategy: headroom                                                            │
 │Current: headroom                                                             │
 │    CLAUDE                                                                    │
-│IDX ACCOUNT               TYPE  QUOTA  STATE  AUTO  AGE                       │
+│IDX ACCOUNT               TYPE  QUOTA  STATE  AGE                             │
 │    CODEX                                                                     │
-│IDX ACCOUNT               TYPE  QUOTA  STATE  AUTO  AGE                       │
+│IDX ACCOUNT               TYPE  QUOTA  STATE  AGE                             │
 │    no accounts                                                               │
 │a add  s switch  X remove  d daemon  c strategy  o auto-sort  up/k up         │
 │down/j down  r refresh  ? help  q quit                                        │

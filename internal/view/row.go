@@ -43,8 +43,17 @@ const NoQuantity = "-"
 // Row is one account with everything the dashboard knows about it, from each
 // field's one authoritative source.
 type Row struct {
-	Account  store.Account
-	Active   bool
+	Account store.Account
+	Active  bool
+	// Serving is whether this is the Codex account the proxy serves new threads
+	// from: the one Snapshot.CodexServingUUID names, read from the same pointer
+	// as the "Active (Codex)" line above the table.
+	//
+	// It is Codex's half of what Active is for Claude, and a SEPARATE field
+	// because Active means the Claude login everywhere else it is read -- the
+	// --json "active" key and the switch key's already-live refusal among them.
+	// Only the marker reads both.
+	Serving  bool
 	Entry    usage.Entry
 	HasEntry bool
 	Headroom strategy.Headroom
@@ -139,9 +148,15 @@ func (r Row) Reported() (usage.NamedWindow, bool) {
 
 func (r Row) Empty() (empty, known bool) { return strategy.OutOfQuota(r.Headroom) }
 
-// Marker is the active-row marker printed in front of the IDX column.
+// Marked is whether this row is the account a new session of its provider
+// would get: the live Claude login, or the Codex account being served from.
+func (r Row) Marked() bool { return r.Active || r.Serving }
+
+// Marker is the marker printed in front of the IDX column, on whichever row is
+// Marked. One per provider at most, and each table section is one provider, so
+// a section never carries two.
 func (r Row) Marker() string {
-	if r.Active {
+	if r.Marked() {
 		return "*"
 	}
 	return " "

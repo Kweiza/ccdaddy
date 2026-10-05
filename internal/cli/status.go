@@ -232,6 +232,12 @@ func loadSnapshot(cmd *cobra.Command, now time.Time, refresh bool) (snap view.Sn
 	if serving, ok := codexServingAccount(accounts); ok {
 		codexLabel, codexUUID = serving.Label(), serving.UUID
 	}
+	// The row's marker comes off the same read as the line above the table, so
+	// the "*" in the Codex section and "Active (Codex)" cannot name two
+	// different accounts.
+	for i := range rows {
+		rows[i].Serving = codexUUID != "" && rows[i].Account.UUID == codexUUID
+	}
 
 	return view.Snapshot{
 		AutoSort:          cfg.AutoSort,

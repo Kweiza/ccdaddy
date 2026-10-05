@@ -156,7 +156,7 @@ func TestOnlyAWindowOrAResetColumnIndexesAnything(t *testing.T) {
 func TestEveryListColumnReservesWhatTheDashboardReservesToday(t *testing.T) {
 	c := ColumnsOf([]Row{listRow()})
 	want := map[string]int{
-		"IDX": 6, "ACCOUNT": 22, "TYPE": 14, "TIER": 8,
+		"IDX": 7, "ACCOUNT": 22, "TYPE": 14, "TIER": 8,
 		"5H": 6, "7D": 6, "5H IN": 7, "7D IN": 7,
 		"STATE": 15, "AUTO": 6, "AGE": 8,
 	}

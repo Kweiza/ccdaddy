@@ -1160,7 +1160,7 @@ func (m Model) cell(c view.ListColumn, line view.ListRow, l Layout, block view.C
 // See noCursor above for why the live account wins where they meet, and why a
 // page nobody is pointing at draws no cursor at all.
 func (m Model) markerCell(line view.ListRow) string {
-	if !line.Row.Active && line.At == m.Cursor {
+	if !line.Row.Marked() && line.At == m.Cursor {
 		return m.Glyphs.Cursor
 	}
 	return line.Row.Marker()
