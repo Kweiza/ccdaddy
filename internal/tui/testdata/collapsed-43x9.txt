@@ -4,6 +4,6 @@ IDX ACCOUNT               WORST
   3 spare@example.com     52% 5H      
   4 keyonly@example.co..  ?           
   1 cx@example.com        31% 5H      
-a add  s switch  d daemon  c strategy
-o auto-sort  up/k up  down/j down
-r refresh  ? help  q quit
+a add  s switch  X remove  d daemon
+c strategy  o auto-sort  up/k up
+down/j down  r refresh  ? help  q quit

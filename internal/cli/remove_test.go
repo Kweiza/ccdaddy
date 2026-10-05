@@ -176,3 +176,45 @@ func TestRemoveSaysNothingAboutAProfileThatDoesNotExist(t *testing.T) {
 		t.Errorf("the removal mentions a profile that was never created: %q", stderr)
 	}
 }
+
+// One email can be a Claude login and a Codex login at once, and the display
+// index restarts per provider, so neither the email nor the bare number tells a
+// reader which of the two a removal is about to delete. Every sentence the
+// command prints about its target -- the refusal, the prompt, the result -- has
+// to carry the provider and the reference that names exactly one.
+func TestRemoveNamesTheProviderOfAnEmailBothProvidersShare(t *testing.T) {
+	isolate(t)
+	stubEnvironment(t, false, false)
+	seedAccount(t, "claude-0001", "a@example.com")
+	seedCodexAccount(t, "codex-0001", "a@example.com")
+
+	code, _, stderr, top := runRoot(t, "remove", "x1")
+	if code != ExitUsage {
+		t.Fatalf("remove x1 without --yes = %d (%s / %s), want %d", code, stderr, top, ExitUsage)
+	}
+	if want := "a@example.com (codex, index x1)"; !strings.Contains(top, want) {
+		t.Errorf("the refusal %q does not name %q", top, want)
+	}
+
+	stubEnvironment(t, true, false)
+	cmd := newRemoveCmd()
+	cmd.SetIn(strings.NewReader("n\n"))
+	if _, _, errOut := runCmd(t, cmd, "x1"); !strings.Contains(errOut, "Remove a@example.com (codex, index x1) ") {
+		t.Errorf("the prompt %q does not say which provider's account it would delete", errOut)
+	}
+
+	code, _, stderr, top = runRoot(t, "remove", "x1", "--yes")
+	if code != ExitOK {
+		t.Fatalf("remove x1 --yes = %d (%s / %s), want 0", code, stderr, top)
+	}
+	if want := "Removed a@example.com (codex, index x1)."; !strings.Contains(stderr, want) {
+		t.Errorf("the result %q does not say %q", stderr, want)
+	}
+	s, _ := store.Open()
+	if _, ok := s.Get("codex-0001"); ok {
+		t.Fatal("remove x1 --yes left the codex account in the store")
+	}
+	if _, ok := s.Get("claude-0001"); !ok {
+		t.Fatal("remove x1 --yes deleted the claude account that shares its email")
+	}
+}

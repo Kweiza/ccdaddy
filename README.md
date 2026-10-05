@@ -198,6 +198,7 @@ not present. A failed reading is never displayed as zero usage.
 |---|---|
 | `up` / `k`, `down` / `j` | Move between accounts in displayed order |
 | `s` | Switch to the account under the cursor |
+| `X` | Remove the account under the cursor, after a confirmation that names its provider |
 | `a` | Choose a provider and add an account |
 | `o` | Toggle automatic sorting by the nearest 7-day reset |
 | `c` | Choose the switching strategy |
@@ -282,6 +283,7 @@ ccdad switch c2
 ccdad switch x1
 ccdad alias x1 codex-work
 ccdad move c3 1
+ccdad remove x1
 ```
 
 ### Automatic list sorting

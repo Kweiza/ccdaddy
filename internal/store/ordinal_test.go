@@ -126,6 +126,24 @@ func TestRefIsThePrefixAndTheNumber(t *testing.T) {
 	}
 }
 
+// One email under both providers is two accounts with the same Label, so the
+// name a destructive command confirms with carries the provider and the Ref
+// that tell them apart.
+func TestUnambiguousNamesTheProviderAndTheRef(t *testing.T) {
+	for _, tc := range []struct {
+		a    Account
+		want string
+	}{
+		{Account{Provider: provider.Claude, Idx: 4, Email: "a@example.com"}, "a@example.com (claude, index c4)"},
+		{Account{Provider: provider.Codex, Idx: 1, Email: "a@example.com"}, "a@example.com (codex, index x1)"},
+		{Account{Provider: provider.Codex, Idx: 2, Email: "a@example.com", Alias: "work"}, "work (codex, index x2)"},
+	} {
+		if got := tc.a.Unambiguous(); got != tc.want {
+			t.Errorf("Unambiguous() = %q, want %q", got, tc.want)
+		}
+	}
+}
+
 // A position is counted in the account's OWN provider.
 //
 // Moving the second Codex seat to position 1 puts it above the first Codex seat
