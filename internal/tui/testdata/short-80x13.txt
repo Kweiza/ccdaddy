@@ -9,5 +9,5 @@ IDX ACCOUNT               5H   7D OPUS  5H IN  7D OPUS IN  STATE
   3 spare@example.com     52%  -        4h11m  ?           ◉ candidate
   4 keyonly@example.co..  ?    ?        ?      ?           ◌ unknown  
   1 cx@example.com        31%  -        3h09m  ?           ▪ serving  
-a add  s switch  d daemon  c strategy  o auto-sort  up/k up  down/j down
-r refresh  ? help  q quit
+a add  s switch  X remove  d daemon  c strategy  o auto-sort  up/k up
+down/j down  r refresh  ? help  q quit

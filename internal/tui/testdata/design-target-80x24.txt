@@ -17,6 +17,6 @@
 │    CODEX                                                                     │
 │IDX ACCOUNT               5H   5H IN                       STATE              │
 │  1 cx@example.com        31%  3h09m                       ▪ serving          │
-│a add  s switch  d daemon  c strategy  o auto-sort  up/k up  down/j down      │
-│r refresh  ? help  q quit                                                     │
+│a add  s switch  X remove  d daemon  c strategy  o auto-sort  up/k up         │
+│down/j down  r refresh  ? help  q quit                                        │
 ╰──────────────────────────────────────────────────────────────────────────────╯

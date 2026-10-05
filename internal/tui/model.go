@@ -448,7 +448,9 @@ func (a App) pickerKey(msg tea.KeyPressMsg, k KeyMap) (App, tea.Cmd, bool) {
 		a.scr = screenPage
 		if argv == nil {
 			// An empty store is a real state, and enter on it chooses
-			// nothing rather than running a command with no target.
+			// nothing rather than running a command with no target. So is
+			// "keep it" on the remove confirmation, which is an item with no
+			// command on purpose.
 			return a, nil, true
 		}
 		a, cmd := a.starting(argv)
@@ -595,6 +597,19 @@ func (a App) pageKey(msg tea.KeyPressMsg, k KeyMap) (App, tea.Cmd, bool) {
 		}
 		next, cmd := a.starting([]string{"switch", uuid})
 		return next, cmd, true
+
+	case key.Matches(msg, k.Remove):
+		// The live row is not refused, as it is for `s`: removing it is a real
+		// thing to want -- an account whose subscription ended -- and `ccdad
+		// remove` allows it and says afterwards that the login is still
+		// installed. That sentence reaches the panel unedited.
+		row, ok := a.m.cursorRow()
+		if !ok {
+			return a, nil, true
+		}
+		a.pick = removePicker(row, a.m.Glyphs)
+		a.scr = screenPicker
+		return a, nil, true
 
 	case key.Matches(msg, k.Sort):
 		next, cmd := a.starting([]string{"config", "set", "auto_sort", fmt.Sprintf("%t", !a.m.Snap.AutoSort)})
@@ -914,10 +929,18 @@ func (m Model) drawsAt(l Layout, top, at int) bool {
 // either side of the grouping. Handing an index to the switch picker offered one
 // account while the page pointed at another; handing the uuid cannot.
 func (m Model) cursorUUID() string {
+	row, _ := m.cursorRow()
+	return row.Account.UUID
+}
+
+// cursorRow is the whole row under the cursor, for the key that has to name
+// its account in words before acting on it, and false where cursorUUID is
+// empty.
+func (m Model) cursorRow() (view.Row, bool) {
 	if m.Cursor < 0 || m.Cursor >= len(m.Snap.Rows) {
-		return ""
+		return view.Row{}, false
 	}
-	return m.Snap.Rows[m.Cursor].Account.UUID
+	return m.Snap.Rows[m.Cursor], true
 }
 
 // cursorIsLive is whether the row under the cursor is already the login a

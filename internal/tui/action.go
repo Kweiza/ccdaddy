@@ -101,6 +101,40 @@ func strategyPicker(current string, g Glyphs) picker {
 	return p
 }
 
+// removePicker is the confirmation `X` opens on the account under the cursor.
+//
+// `X` is the one page key that goes through a picker although the row already
+// names its target, and the reason is what it does rather than what it says: a
+// switch can be switched back, and a removal throws the stored login away. So
+// it asks, the way `ccdad remove` itself asks at a terminal, and it opens on
+// keeping the account -- the [y/N] default of that prompt -- so X and a
+// reflexive enter delete nothing.
+//
+// The account is named with its provider and Ref, never by email alone: one
+// email can be a Claude login and a Codex login at once, and the confirmation
+// is the last place a reader can tell which of the two is going.
+//
+// The removal runs by uuid and with --yes. The uuid because the table is
+// grouped by provider and the ordinal restarts in each group; --yes because the
+// executor has no terminal to answer [y/N] at, and the question it would ask is
+// the one this picker has just asked. The profile is mentioned as "any" because
+// whether one exists is a filesystem fact this package may not read; the
+// command's own output, shown afterwards, says whether it went.
+func removePicker(row view.Row, g Glyphs) picker {
+	a := row.Account
+	return picker{
+		title: "Remove " + a.Unambiguous() + "?",
+		items: []pickerItem{
+			{label: "keep it"},
+			{
+				label: "remove it, deleting its stored credentials and any --full-profile session profile",
+				argv:  []string{"remove", a.UUID, "--yes"},
+			},
+		},
+		glyphs: g,
+	}
+}
+
 // Move walks the cursor and stops at the ends rather than wrapping.
 //
 // Wrapping is the friendlier default in a list nobody acts on. This is a list

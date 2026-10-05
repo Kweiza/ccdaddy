@@ -16,6 +16,19 @@ must reference accounts by `uuid` or `alias`.
 
 ## [Unreleased]
 
+### Added
+
+- The dashboard removes accounts: `X` on a row opens a confirmation that
+  opens on keeping the account, and confirming runs `ccdad remove` on that
+  row's UUID.
+
+### Changed
+
+- `ccdad remove` names its target with the provider and reference, e.g.
+  `a@example.com (codex, index x1)`, in its prompt, its refusal, and its
+  result. One email can be both a Claude and a Codex account, and the email
+  alone did not say which one was going.
+
 ## [0.24.0] — 2026-09-14
 
 ### Changed

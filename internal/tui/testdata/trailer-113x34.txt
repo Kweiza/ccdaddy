@@ -28,5 +28,5 @@
 │windows claude: 5H = five_hour   7D OPUS = seven_day_opus                                                      │
 │windows codex: 5H = five_hour                                                                                  │
 │                                                                                                               │
-│a add  s switch  d daemon  c strategy  o auto-sort  up/k up  down/j down  r refresh  ? help  q quit            │
+│a add  s switch  X remove  d daemon  c strategy  o auto-sort  up/k up  down/j down  r refresh  ? help  q quit  │
 ╰───────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

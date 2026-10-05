@@ -83,9 +83,9 @@ func newRemoveCmd() *cobra.Command {
 			// explicitly, or a script deletes credentials nobody meant to lose.
 			if !assumeYes {
 				if !stdinIsTTY() {
-					return UsageError("removing %s deletes its stored credentials%s; pass --yes to confirm", target.Label(), alsoProfile)
+					return UsageError("removing %s deletes its stored credentials%s; pass --yes to confirm", target.Unambiguous(), alsoProfile)
 				}
-				fmt.Fprintf(cmd.ErrOrStderr(), "Remove %s and delete its stored credentials%s? [y/N] ", target.Label(), alsoProfile)
+				fmt.Fprintf(cmd.ErrOrStderr(), "Remove %s and delete its stored credentials%s? [y/N] ", target.Unambiguous(), alsoProfile)
 				var answer string
 				_, _ = fmt.Fscanln(cmd.InOrStdin(), &answer)
 				if answer != "y" && answer != "Y" {
@@ -97,7 +97,7 @@ func newRemoveCmd() *cobra.Command {
 			if err := s.Remove(target.UUID); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.ErrOrStderr(), "Removed %s.\n", target.Label())
+			fmt.Fprintf(cmd.ErrOrStderr(), "Removed %s.\n", target.Unambiguous())
 
 			// The profile is a SECOND place this account's credentials live,
 			// and since `ccdad run --full-profile` began writing an API-key

@@ -15,16 +15,21 @@ import (
 // shown only in the long help; Start through Restart belong to the daemon
 // screen and are not offered anywhere else.
 type KeyMap struct {
-	Add, Switch, Daemon, Strategy, Sort, Quit key.Binding
-	Up, Down, Refresh, Help, Esc, Enter       key.Binding
-	Start, Stop, Restart                      key.Binding
+	Add, Switch, Remove, Daemon, Strategy, Sort, Quit key.Binding
+	Up, Down, Refresh, Help, Esc, Enter               key.Binding
+	Start, Stop, Restart                              key.Binding
 }
 
 // DefaultKeys is the one KeyMap this program has.
 func DefaultKeys() KeyMap {
 	return KeyMap{
-		Add:      key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "add")),
-		Switch:   key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "switch")),
+		Add:    key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "add")),
+		Switch: key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "switch")),
+		// Capitalized for two reasons. Lowercase x is the daemon screen's Stop,
+		// and FullHelp renders both together; and this is the one page key that
+		// throws a stored login away, so it is the one a stray keystroke should
+		// have to reach for.
+		Remove:   key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "remove")),
 		Daemon:   key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "daemon")),
 		Sort:     key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "auto-sort")),
 		Strategy: key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "strategy")),
@@ -53,7 +58,7 @@ func DefaultKeys() KeyMap {
 // complete set; order no longer decides which commands disappear at a narrow
 // width.
 func (k KeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Add, k.Switch, k.Daemon, k.Strategy, k.Sort, k.Up, k.Down, k.Refresh, k.Help, k.Quit}
+	return []key.Binding{k.Add, k.Switch, k.Remove, k.Daemon, k.Strategy, k.Sort, k.Up, k.Down, k.Refresh, k.Help, k.Quit}
 }
 
 // FullHelp groups every binding for the long help view: the main-page set,

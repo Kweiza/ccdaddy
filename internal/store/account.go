@@ -260,6 +260,19 @@ func (a Account) Label() string {
 	return a.UUID
 }
 
+// Unambiguous is Label with the provider and the Ref beside it, e.g.
+// "a@example.com (codex, index x1)": the name a destructive action confirms
+// with.
+//
+// Label alone is not enough there. One email can be a Claude login and a Codex
+// login at once, and the display index restarts per provider, so "Remove
+// a@example.com?" asks a question whose answer could be either. The shape is
+// add's own "(kind, index c3)" with the provider in the kind's place, because
+// kind is "subscription" for most Claude accounts and says nothing about which.
+func (a Account) Unambiguous() string {
+	return a.Label() + " (" + a.Provider.String() + ", index " + a.Ref() + ")"
+}
+
 // NeedsRelogin reports whether this account's grant is known dead.
 //
 // currentRefreshTokenHash is the hash of the token the account holds RIGHT
