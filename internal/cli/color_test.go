@@ -283,16 +283,15 @@ var styledRun = regexp.MustCompile("\x1b\\[[0-9;]*m([^\x1b]*)\x1b\\[[0-9;]*m")
 
 // markerCell is the IDX cell of the live row, and it needs its own shape
 // because that cell is the one thing in either table painted WHOLE rather than
-// as a label. `list` and `status` both build it as
-// fmt.Sprintf("%s %d", r.Marker(), idx) and quotaCellStyle paints column 0 of
-// the active row, so the styled run is "* 1" and there is no styled run
-// anywhere that is a bare "*".
+// as a label. `list` and `status` both build it as r.Marker() + " " + the
+// account's Ref, and quotaCellStyle paints column 0 of the active row, so the
+// styled run is "* c1" and there is no styled run anywhere that is a bare "*".
 //
 // Matched by shape rather than listed by value, so this stays a test about the
 // rule and not about how many accounts the fixture happened to seed. The "* "
-// is still the glyph carrying the distinction: strip every escape and "* 1"
+// is still the glyph carrying the distinction: strip every escape and "* c1"
 // says live exactly as loudly as it did painted.
-var markerCell = regexp.MustCompile(`^\* [0-9]+$`)
+var markerCell = regexp.MustCompile(`^\* [cx][0-9]+$`)
 
 // windowHeaderCell is the shape of a derived quota header: the short name
 // view.WindowHeader builds, alone or followed by " IN" for a rollover column.
@@ -380,4 +379,28 @@ func TestColourIsNeverTheSoleCarrierInAOneShotTable(t *testing.T) {
 				"unexercised:\n%q", argv, out)
 		}
 	}
+}
+
+// The serving Codex row's marker is painted as the live Claude row's is. The
+// "*" means the same thing in both sections, so it looks the same in both.
+func TestStatusPaintsTheServingCodexMarkerAsItPaintsTheLiveOne(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "claude-0001", "a@example.com")
+	seedUsage(t, "claude-0001", 4)
+	seedCodexAccount(t, "codex-0001", "a@example.com")
+	seedCodexUsage(t, "codex-0001", 50)
+	if code, _, _, top := runRoot(t, "switch", "x1"); code != ExitOK {
+		t.Fatalf("switch x1 = %d (%s)", code, top)
+	}
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("TTY_FORCE", "1")
+	t.Setenv("CLICOLOR_FORCE", "1")
+
+	_, out, _, _ := runRoot(t, "status")
+	for _, m := range styledRun.FindAllStringSubmatch(out, -1) {
+		if strings.TrimSpace(m[1]) == "* x1" {
+			return
+		}
+	}
+	t.Errorf("`ccdad status` did not paint the serving codex row's marker:\n%q", out)
 }

@@ -37,16 +37,15 @@ import (
 type ColumnKind int
 
 const (
-	// ColumnIdx is the live-account marker and the store index, together, in
-	// the one cell that carries both.
+	// ColumnIdx is the marker and the account's reference, together, in the
+	// one cell that carries both: "* c1", "  x2".
 	//
-	// The index is BARE here -- the number and not store.Account.Ref -- and
-	// that is a fact about this table rather than about the index. The index is
-	// numbered per provider, so it repeats across a mixed fleet; what makes it
-	// unambiguous in this column is that every table drawing it is grouped into
-	// provider sections, and the heading over the rows is the prefix Ref would
-	// have printed on each of them. A surface that lists accounts WITHOUT that
-	// grouping -- `ccdad runway` is the one -- prints Ref instead.
+	// The reference is store.Account.Ref and not the bare number. The number
+	// is per provider, so a mixed fleet shows "1" under both headings, and the
+	// headings did not make it read as two different things: a reader looking
+	// at a Claude row and a Codex row with the same email and the same "1" had
+	// no way to tell what to type to act on one of them. Ref is what every
+	// command takes, so the cell is now what the next command is given.
 	ColumnIdx ColumnKind = iota
 	ColumnAccount
 	ColumnType
@@ -123,7 +122,8 @@ func (k ColumnKind) String() string {
 // reserves exactly what internal/tui reserves today, column for column, and
 // adopting these moves no page. The derivation, footprint by footprint:
 //
-//	IDX      4   the ladder reserves 6, and "IDX" is 3 wide
+//	IDX      5   measured: "* c12", the marker and a two-digit Ref; it was 4,
+//	             back-computed, while the cell held the bare number
 //	ACCOUNT 20   the ladder's own accountComfort; it reserves that plus 2
 //	TYPE    12   typeFootprint is 14, stated there as 12 content + 2 gap
 //	TIER     6   tierFootprint is 8, stated there as 6 content + 2 gap
@@ -135,12 +135,14 @@ func (k ColumnKind) String() string {
 //	AUTO     4   autoFootprint is 6, stated there as 4 content + 2 gap
 //	AGE      6   ageFootprint is 8, stated there as 6 content + 2 gap
 //
-// Four of them -- IDX, TYPE, AUTO and STATE -- are back-computed from a width
-// table rather than measured against what they hold, and they are carried over
-// AS THEY ARE on purpose. Re-deriving one honestly changes what fits at some
+// Three of them -- TYPE, AUTO and STATE -- are back-computed from a width table
+// rather than measured against what they hold, and they are carried over AS
+// THEY ARE on purpose. Re-deriving one honestly changes what fits at some
 // width, which is a change to the page and belongs in a commit that says so.
+// IDX was the fourth, and the commit that put the Ref in its cell is that
+// commit for it.
 const (
-	idxContent     = 4
+	idxContent     = 5
 	accountContent = 20
 	typeContent    = 12
 	tierContent    = 6
@@ -410,9 +412,8 @@ func CollapseWindows(cols []ListColumn) []ListColumn {
 func (r Row) ListCell(c ListColumn, block Columns, now time.Time, hover bool) string {
 	switch c.Kind {
 	case ColumnIdx:
-		// See ColumnIdx: bare, because the section heading over this row is
-		// already the provider half of the reference.
-		return fmt.Sprintf("%s %d", r.Marker(), r.Account.Idx)
+		// See ColumnIdx: the Ref, because it is what the next command takes.
+		return r.Marker() + " " + r.Account.Ref()
 	case ColumnAccount:
 		return r.ListLabel()
 	case ColumnType:

@@ -2032,3 +2032,40 @@ func TestStatusWarnsWhenTheCodexProxyFellBackAndTheDaemonStateIsUnknown(t *testi
 		t.Errorf("a daemon whose lock could not be probed silenced the fallback warning, and a probe that cannot answer is not a daemon that is stopped:\n%s", stdout)
 	}
 }
+
+// The table prints the Ref a command takes, and the Codex account being served
+// from carries the same "*" the live Claude login does -- read off the same
+// pointer as the "Active (Codex)" line, so the two cannot disagree.
+func TestStatusPrintsRefsAndMarksTheServingCodexAccount(t *testing.T) {
+	isolate(t)
+	stubEnvironment(t, false, false)
+	seedAccount(t, "claude-0001", "a@example.com")
+	seedCodexAccount(t, "codex-0001", "a@example.com")
+	seedCodexAccount(t, "codex-0002", "b@example.com")
+	if code, _, _, top := runRoot(t, "switch", "x2"); code != ExitOK {
+		t.Fatalf("setup switch x2 = %d (%s)", code, top)
+	}
+
+	code, stdout, _, top := runRoot(t, "status")
+	if code != ExitOK {
+		t.Fatalf("status = %d (%s)", code, top)
+	}
+	row := func(email, ref string) string {
+		for _, l := range strings.Split(ansi.Strip(stdout), "\n") {
+			if strings.Contains(l, email) && strings.Contains(l, ref+" ") {
+				return l
+			}
+		}
+		t.Fatalf("no row carries %s and %s:\n%s", ref, email, stdout)
+		return ""
+	}
+	if l := row("b@example.com", "x2"); !strings.HasPrefix(strings.TrimLeft(l, " "), "* x2 ") {
+		t.Errorf("the serving codex row is not marked: %q", l)
+	}
+	if l := row("a@example.com", "x1"); !strings.HasPrefix(l, "  x1 ") {
+		t.Errorf("a codex row nobody serves from is marked, or does not print its Ref: %q", l)
+	}
+	if l := row("a@example.com", "c1"); !strings.Contains(l, " c1 ") {
+		t.Errorf("the claude row does not print its Ref: %q", l)
+	}
+}

@@ -24,6 +24,12 @@ must reference accounts by `uuid` or `alias`.
 
 ### Changed
 
+- The IDX column of `ccdad status` and the dashboard prints the reference a
+  command takes -- `c1`, `x2` -- instead of the bare per-provider number,
+  which repeated across the Claude and Codex sections. The column is one
+  character wider.
+- The Codex account being served from carries the same `*` in front of its
+  index as the live Claude login, in `ccdad status` and in the dashboard.
 - `ccdad remove` names its target with the provider and reference, e.g.
   `a@example.com (codex, index x1)`, in its prompt, its refusal, and its
   result. One email can be both a Claude and a Codex account, and the email

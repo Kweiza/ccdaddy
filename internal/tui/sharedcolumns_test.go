@@ -42,7 +42,9 @@ func ladderFootprint(c view.ListColumn) (int, bool) {
 	// and a header is the fleet's own.
 	switch c.Kind {
 	case view.ColumnIdx:
-		return 6, true
+		// 6 until the cell began printing the Ref: "* c12" is one column wider
+		// than the "* 12" the old reservation was cut for.
+		return 7, true
 	case view.ColumnAccount:
 		return accountComfort + 2, true
 	case view.ColumnType:
