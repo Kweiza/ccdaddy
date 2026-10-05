@@ -16,6 +16,8 @@ must reference accounts by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.25.0] — 2026-10-05
+
 ### Added
 
 - The dashboard removes accounts: `X` on a row opens a confirmation that
@@ -27,7 +29,8 @@ must reference accounts by `uuid` or `alias`.
 - The IDX column of `ccdad status` and the dashboard prints the reference a
   command takes -- `c1`, `x2` -- instead of the bare per-provider number,
   which repeated across the Claude and Codex sections. The column is one
-  character wider.
+  character wider. `--json` output is unchanged: `idx` stays a number and
+  `ref` already carried this spelling.
 - The Codex account being served from carries the same `*` in front of its
   index as the live Claude login, in `ccdad status` and in the dashboard.
 - `ccdad remove` names its target with the provider and reference, e.g.
@@ -3722,7 +3725,8 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.24.0...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.25.0...HEAD
+[0.25.0]: https://github.com/Kweiza/ccdaddy/compare/v0.24.0...v0.25.0
 [0.24.0]: https://github.com/Kweiza/ccdaddy/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/Kweiza/ccdaddy/compare/v0.22.1...v0.23.0
 [0.22.1]: https://github.com/Kweiza/ccdaddy/compare/v0.22.0...v0.22.1
