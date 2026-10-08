@@ -812,7 +812,7 @@ func validMaxAutoSpend(v float64) error {
 }
 
 // DefaultCodexMaxBodyMiB is shared with the proxy's standalone configuration.
-const DefaultCodexMaxBodyMiB = 256
+const DefaultCodexMaxBodyMiB = 512
 
 func validMaxBodyMiB(v int) error {
 	// Leave room for the extra byte used to detect overflow, even on 32-bit hosts.

@@ -16,6 +16,16 @@ must reference accounts by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.26.0] — 2026-10-08
+
+### Changed
+
+- The default Codex request body limit is 512 MiB, up from 256 MiB. Long
+  Codex sessions that carry many inline screenshots outgrew 256 MiB and
+  failed every turn with HTTP 413. A `codex.max_body_mib` already set in
+  `config.toml` is unchanged; restart the daemon after upgrading for the new
+  default to take effect.
+
 ## [0.25.0] — 2026-10-05
 
 ### Added
@@ -3725,7 +3735,8 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.25.0...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.26.0...HEAD
+[0.26.0]: https://github.com/Kweiza/ccdaddy/compare/v0.25.0...v0.26.0
 [0.25.0]: https://github.com/Kweiza/ccdaddy/compare/v0.24.0...v0.25.0
 [0.24.0]: https://github.com/Kweiza/ccdaddy/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/Kweiza/ccdaddy/compare/v0.22.1...v0.23.0

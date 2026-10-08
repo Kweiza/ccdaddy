@@ -31,17 +31,17 @@ func TestCodexRequestsAboveThirtyTwoMiBAreForwardedIntact(t *testing.T) {
 	}
 }
 
-func TestCodexDefaultBodyLimitRejectsOverTwoHundredFiftySixMiBWith413(t *testing.T) {
+func TestCodexDefaultBodyLimitRejectsOverFiveHundredTwelveMiBWith413(t *testing.T) {
 	f := newFixture(t, func(w http.ResponseWriter, r *http.Request) { t.Error("oversized body reached upstream") })
 	s := f.server(t, f.config())
-	size := int64(256<<20) + 17
+	size := int64(512<<20) + 17
 	reader := &countBody{remaining: size}
 	r := httptest.NewRequest(http.MethodPost, ResponsesPath, reader)
 	r.ContentLength = size
 	r.Header.Set("Authorization", "Bearer "+unpinnedSecret)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
-	assertBodyLimitError(t, w, 256<<20, size, false)
+	assertBodyLimitError(t, w, 512<<20, size, false)
 	if reader.read != 0 {
 		t.Fatalf("read %d bytes despite an oversized Content-Length", reader.read)
 	}
