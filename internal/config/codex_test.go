@@ -28,8 +28,8 @@ func TestTheCodexKeysAreInTheClosedSet(t *testing.T) {
 // The defaults, each an answer rather than an omission.
 func TestTheCodexDefaults(t *testing.T) {
 	d := Defaults().Codex
-	if d.MaxBodyMiB != 256 {
-		t.Fatalf("MaxBodyMiB = %d, want 256", d.MaxBodyMiB)
+	if d.MaxBodyMiB != 512 {
+		t.Fatalf("MaxBodyMiB = %d, want 512", d.MaxBodyMiB)
 	}
 	if d.Threshold != 80 {
 		t.Errorf("Codex.Threshold = %v, want 80", d.Threshold)
@@ -118,7 +118,7 @@ func TestTheCodexKeysRoundTripThroughSetAndValue(t *testing.T) {
 		{"codex.threshold", "65", "65"},
 		{"codex.binary", "/opt/codex", "/opt/codex"},
 		{"codex.proxy_port", "24680", "24680"},
-		{"codex.max_body_mib", "512", "512"},
+		{"codex.max_body_mib", "1024", "1024"},
 		{"codex.cross_account_replay", "true", "true"},
 		{"codex.cross_account_replay", "false", "false"},
 	} {
@@ -152,12 +152,12 @@ func TestCodexBodyLimitParsingRejectsInvalidAndOverflowingValues(t *testing.T) {
 			t.Fatalf("Set accepted body limit %s", value)
 		}
 	}
-	cfg, err := Parse([]byte("[codex]\nmax_body_mib = 512\n"))
-	if err != nil || cfg.Codex.MaxBodyMiB != 512 {
+	cfg, err := Parse([]byte("[codex]\nmax_body_mib = 1024\n"))
+	if err != nil || cfg.Codex.MaxBodyMiB != 1024 {
 		t.Fatalf("parsed limit = %d, %v", cfg.Codex.MaxBodyMiB, err)
 	}
 	cfg, err = Parse([]byte("[codex]\nthreshold = 60\n"))
-	if err != nil || cfg.Codex.MaxBodyMiB != 256 {
+	if err != nil || cfg.Codex.MaxBodyMiB != 512 {
 		t.Fatalf("omitted limit = %d, %v", cfg.Codex.MaxBodyMiB, err)
 	}
 }

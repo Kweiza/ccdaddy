@@ -387,7 +387,7 @@ func TestTheEffectiveValueOfEveryKeyIsFormattable(t *testing.T) {
 		keyCodexThreshold:          "80",
 		keyCodexBinary:             "",
 		keyCodexProxyPort:          "0",
-		keyCodexMaxBodyMiB:         "256",
+		keyCodexMaxBodyMiB:         "512",
 		keyCodexCrossAccountReplay: "true",
 
 		keyTUITheme:  "auto",

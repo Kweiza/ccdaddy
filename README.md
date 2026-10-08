@@ -393,10 +393,10 @@ launch uses Codex's own account and is outside ccdad's routing.
 
 ### Request body limits
 
-The default limit is **256 MiB** (268,435,456 bytes). To change it:
+The default limit is **512 MiB** (536,870,912 bytes). To change it:
 
 ```sh
-ccdad config set codex.max_body_mib 512
+ccdad config set codex.max_body_mib 1024
 ccdad daemon restart
 ```
 
@@ -535,7 +535,7 @@ An unset key uses its default. Unknown keys already in a file are preserved, but
 | `codex.threshold` | `80` | Codex quota utilization threshold (%) |
 | `codex.binary` | Empty | Override the real Codex executable |
 | `codex.proxy_port` | `0` | Auto-resolve a stable local proxy port |
-| `codex.max_body_mib` | `256` | Maximum buffered request body in MiB |
+| `codex.max_body_mib` | `512` | Maximum buffered request body in MiB |
 | `codex.cross_account_replay` | `true` | Retry a mid-thread 429 on another account |
 | `auto_sort` | `false` | Order accounts by nearest seven-day reset |
 | `tui.theme` | `auto` | `auto`, `dark`, `light`, `ansi`, or `none` |
