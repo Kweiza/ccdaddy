@@ -34,8 +34,8 @@ func TestOutOfQuotaReadsACreditSeatsAllowance(t *testing.T) {
 		wantTier  int
 	}{
 		{40, false, false, 0},
-		{97, true, false, 2}, // past HoverCreditThreshold territory, still has 3 points
-		{100, true, true, 3}, // nothing left
+		{97, true, false, 2},         // past HoverCreditThreshold territory, still has 3 points
+		{100, true, true, tierEmpty}, // nothing left
 	} {
 		r := measure(seatAt("c", tc.pct), o)
 		spent, _ := Spent(r.Headroom)

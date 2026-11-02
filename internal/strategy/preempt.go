@@ -98,6 +98,44 @@ func projectedExhaustion(s *usage.Snapshot, model string, now time.Time, horizon
 	return false
 }
 
+// measuredExhaustion is projectedExhaustion's question asked at the rate the work
+// was last MEASURED at, on the window it was measured on.
+//
+// PaceOf's rate is the average since the window opened. On a five-hour window a
+// session is most of that average; on a week it is diluted by days of nothing.
+// Measured on the fleet of 2026-11-02, a week at 99% that a session was spending
+// at 7.6 points an hour projected as an hour and twenty-three minutes from its
+// limit, when it was eight. A verified Ultra seat has no shorter window to see the
+// wall coming on, so the average is not good enough for this rule to read alone.
+//
+// It reads the candidate's own rate rather than the session's, which is the
+// question this rule asks: not how long the work would last there, which is
+// CarriesFor, but whether this account is being run out right now.
+func measuredExhaustion(c Candidate, model string, horizon time.Duration, t Thresholds) bool {
+	if !c.HasBurn {
+		return false
+	}
+	for _, w := range bindingWindows(c.Usage, model, t) {
+		if w.Name != c.BurnWindow {
+			continue
+		}
+		pct, ok := w.Percent()
+		if !ok {
+			return false
+		}
+		minutes, ok := usage.MinutesAtRate(100-pct, c.BurnPerMin)
+		return ok && time.Duration(minutes*float64(time.Minute)) <= horizon
+	}
+	return false
+}
+
+// runsOutWithin is whether this account is projected to reach a limit inside the
+// horizon, on either rate. The earlier of the two is the one that costs a session.
+func runsOutWithin(c Candidate, o Options, horizon time.Duration) bool {
+	t := o.thresholdsFor(c)
+	return projectedExhaustion(c.Usage, o.Model, o.Now, horizon, t) || measuredExhaustion(c, o.Model, horizon, t)
+}
+
 // preemptTarget is where a pre-emptive move goes: the best-ranked account that
 // is not the live one and is somewhere the session can actually keep running.
 //
@@ -142,7 +180,7 @@ func preemptTarget(byUUID map[string]Candidate, res Result, activeUUID string, o
 	// The rate the work is running at, measured once for the walk. It is the
 	// pool's maximum because only one account is being spent at a time -- see
 	// SessionBurnPerMin.
-	burn, hasBurn := SessionBurnPerMin(poolOf(byUUID))
+	burn := measuredSessionBurn(poolOf(byUUID))
 	for _, r := range res.Order {
 		// The live account, reached in ranking order, ENDS the walk rather than
 		// being skipped over.
@@ -185,8 +223,7 @@ func preemptTarget(byUUID map[string]Candidate, res Result, activeUUID string, o
 		// "cannot say" rather than "will run out": the emptiness test above has
 		// already done the work that matters, and refusing here would narrow the
 		// rule for the accounts it knows least about.
-		if horizon, ok := preemptHorizon(c, o.PreemptLead); ok &&
-			projectedExhaustion(c.Usage, o.Model, o.Now, horizon, o.thresholdsFor(c)) {
+		if horizon, ok := preemptHorizon(c, o.PreemptLead); ok && runsOutWithin(c, o, horizon) {
 			continue
 		}
 		// And the same question asked the other way round, because the one above
@@ -203,7 +240,8 @@ func preemptTarget(byUUID map[string]Candidate, res Result, activeUUID string, o
 		// With no measured rate it never fires, so a fleet ccdad has read only
 		// once behaves exactly as it did before the rate existed.
 		if horizon, ok := preemptHorizon(c, o.PreemptLead); ok {
-			if carries, known := CarriesFor(r.Headroom, burn, hasBurn, horizon); known && !carries {
+			perMin, applies := burn.onWindow(r.Headroom.MinAnyModelWindow)
+			if carries, known := CarriesFor(r.Headroom, perMin, applies, horizon); known && !carries {
 				continue
 			}
 		}
@@ -284,7 +322,7 @@ func preempt(byUUID map[string]Candidate, res Result, activeUUID string, o Optio
 	// same set for every account there is. What makes this worth landing is that
 	// the equality is now a property of the pass rather than a coincidence a
 	// future edit is free to break.
-	if !projectedExhaustion(active.Usage, o.Model, o.Now, horizon, o.thresholdsFor(active)) {
+	if !runsOutWithin(active, o, horizon) {
 		return Ranked{}, false
 	}
 	return preemptTarget(byUUID, res, activeUUID, o)

@@ -156,8 +156,8 @@ func TestAnEmptyAccountIsSpentEvenWhenItsPaceTargetIsAbove100(t *testing.T) {
 	if empty, known := OutOfQuota(h); !known || !empty {
 		t.Errorf("OutOfQuota = %v (known %v); MinPct = %v", empty, known, h.MinPct)
 	}
-	if got := headroomTier(measure(pool[0], o)); got != 3 {
-		t.Errorf("headroomTier = %d, want 3: an account with nothing in it is not roomy", got)
+	if got := headroomTier(measure(pool[0], o)); got != tierEmpty {
+		t.Errorf("headroomTier = %d, want tierEmpty: an account with nothing in it is not roomy", got)
 	}
 }
 

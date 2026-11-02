@@ -116,10 +116,10 @@ func TestTheLicenceFloorIsPricedInWorkNotInClock(t *testing.T) {
 	s := snap(win(95, 2*time.Hour), win(10, 72*time.Hour))
 	th := opts().Thresholds()
 
-	if !absorbsACooldown(s, "", th, 0, false) {
+	if !absorbsACooldown(s, "", th, sessionBurn{}) {
 		t.Error("with no measurement the floor must read exactly as it did: five points clears 0.667")
 	}
-	if absorbsACooldown(s, "", th, 5.4, true) {
+	if absorbsACooldown(s, "", th, sessionBurn{perMin: 5.4, has: true}) {
 		t.Error("five points cleared a floor of 10.8 points of measured work")
 	}
 }
@@ -129,7 +129,7 @@ func TestTheLicenceFloorIsPricedInWorkNotInClock(t *testing.T) {
 // account the measurement just cleared.
 func TestAnIdleFleetClearsTheLicenceFloorEverywhere(t *testing.T) {
 	s := snap(win(99, 2*time.Hour), win(10, 72*time.Hour))
-	if !absorbsACooldown(s, "", opts().Thresholds(), 0, true) {
+	if !absorbsACooldown(s, "", opts().Thresholds(), sessionBurn{has: true}) {
 		t.Error("a measured zero rate refused a licence; nothing is being spent")
 	}
 }

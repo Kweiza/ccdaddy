@@ -187,6 +187,9 @@ type Candidate struct {
 	// was before this field existed.
 	BurnPerMin float64
 	HasBurn    bool
+	// BurnWindow is the window BurnPerMin was measured on. Empty on a reading
+	// cached before it was recorded; see sessionBurn.on for how that is read.
+	BurnWindow usage.WindowName
 }
 
 // Options configures one ranking pass.
@@ -273,6 +276,9 @@ type Ranked struct {
 	UUID     string
 	Kind     identity.Kind
 	Headroom Headroom
+	// LastPoint is whether hover is handing this account off because its week is
+	// down to the last point it can report; see lastWeeklyPoint.
+	LastPoint bool
 	// RecoversAt is when the binding window rolls over.
 	RecoversAt  time.Time
 	HasRecovery bool
@@ -593,9 +599,12 @@ func measure(c Candidate, o Options) Ranked {
 	weekly := weeklyResetOf(c.Usage, o.Model, o.thresholdsFor(c))
 
 	r := Ranked{
-		UUID:           c.UUID,
-		Kind:           c.Kind,
-		Headroom:       h,
+		UUID:     c.UUID,
+		Kind:     c.Kind,
+		Headroom: h,
+		// Under hover only. A threshold a user typed is where they said to stop,
+		// and it is not this rule's to move.
+		LastPoint:      o.hover != nil && lastWeeklyPoint(h),
 		RecoversAt:     rec.at,
 		HasRecovery:    rec.ok,
 		WeeklyResetsAt: weekly.at,
@@ -664,9 +673,9 @@ func Rank(cands []Candidate, o Options) Result {
 	return res
 }
 
-// headroomTier separates four kinds of candidate, because "we know it has room"
+// headroomTier separates the kinds of candidate, because "we know it has room"
 // and "we have no idea" and "we know it is past its pace" and "we know it is
-// empty" are four answers, not two. The unknown sits second: a maybe beats a no,
+// empty" are four answers, not two, and hover's last point is a fifth. The unknown sits second: a maybe beats a no,
 // and trying it is how a pool of unreadable accounts stops being a dead end.
 //
 // The last tier is categorical on purpose, and it is the one place in the
@@ -678,18 +687,32 @@ func Rank(cands []Candidate, o Options) Result {
 // empty account outrank a roomy one by a point of arithmetic.
 func headroomTier(r Ranked) int {
 	if empty, known := OutOfQuota(r.Headroom); known && empty {
-		return 3
+		return tierEmpty
+	}
+	if r.LastPoint {
+		return tierLastPoint
 	}
 	over, known := Spent(r.Headroom)
 	switch {
 	case known && !over:
-		return 0
+		return tierRoomy
 	case !known:
-		return 1
+		return tierUnknown
 	default:
-		return 2
+		return tierPastPace
 	}
 }
+
+// The tiers lessHeadroom compares before slack, best first.
+const (
+	tierRoomy = iota
+	tierUnknown
+	tierPastPace
+	// tierLastPoint is hover handing an account off; see lastWeeklyPoint. It sits
+	// above empty so the last point is still reachable once nothing better is left.
+	tierLastPoint
+	tierEmpty
+)
 
 // emptyTier is headroomTier's last distinction on its own, for the recovery
 // order -- which tiers on the recovery instant instead and so cannot reach
