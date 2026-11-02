@@ -57,11 +57,10 @@ func CompactRunwayLines(f forecast.Fleet, now time.Time, loc *time.Location) []s
 	if seg, ok := compactFleetSegment(f, now, loc); ok {
 		parts = append(parts, seg)
 	}
-	parts = append(parts,
-		compactAxisSegment("5h", f.FiveHour, now, loc),
-		compactAxisSegment("7d", f.Weekly, now, loc),
-		runwayBasis(f),
-	)
+	for _, a := range reportedAxes(f) {
+		parts = append(parts, compactAxisSegment(a.label, a.axis, now, loc))
+	}
+	parts = append(parts, runwayBasis(f))
 	if seg := RunwayNeedSegment(f); seg != "" {
 		parts = append(parts, seg)
 	}
@@ -83,7 +82,7 @@ func compactAxisSegment(label string, a forecast.Axis, now time.Time, loc *time.
 }
 
 func compactFleetSegment(f forecast.Fleet, now time.Time, loc *time.Location) (string, bool) {
-	holds := f.FiveHour.Verdict == forecast.VerdictHolds && f.Weekly.Verdict == forecast.VerdictHolds
+	holds := axesHold(f)
 	switch f.Both.Verdict {
 	case forecast.VerdictRunsDry:
 		if !f.Both.HasDryAt {
@@ -101,6 +100,44 @@ func compactFleetSegment(f forecast.Fleet, now time.Time, loc *time.Location) (s
 		}
 	}
 	return "", false
+}
+
+// runwayAxis is one axis with the label every surface prints it under.
+type runwayAxis struct {
+	label string
+	axis  forecast.Axis
+}
+
+// reportedAxes is the axes this fleet has a limit on, in reading order.
+//
+// A fleet of verified Ultra seats has no five-hour window, and an axis it does not
+// have gets no clause: "5h cannot tell yet" would sit on the line forever, and
+// "holds" would be a claim about a limit that is not there.
+func reportedAxes(f forecast.Fleet) []runwayAxis {
+	week := runwayAxis{"7d", f.Weekly}
+	if f.FiveHour.Verdict == forecast.VerdictNoWindow {
+		return []runwayAxis{week}
+	}
+	return []runwayAxis{{"5h", f.FiveHour}, week}
+}
+
+// axesHold is whether every axis this fleet has a limit on holds.
+func axesHold(f forecast.Fleet) bool {
+	for _, a := range reportedAxes(f) {
+		if a.axis.Verdict != forecast.VerdictHolds {
+			return false
+		}
+	}
+	return true
+}
+
+// holdsSentence is the whole answer for a fleet that holds, and it counts axes only
+// when there are two to count.
+func holdsSentence(f forecast.Fleet) string {
+	if len(reportedAxes(f)) == 2 {
+		return "holds on both axes at this rate"
+	}
+	return "holds at this rate"
 }
 
 // runwaySep is what separates the clauses of the runway line. The spaces are
@@ -139,22 +176,15 @@ func RunwayLine(f forecast.Fleet, now time.Time, loc *time.Location) string {
 	if !f.Basis.Known {
 		return ""
 	}
-	fleetAgrees := f.Both.Verdict == forecast.VerdictHolds
-	if fleetAgrees && f.FiveHour.Verdict == forecast.VerdictHolds && f.Weekly.Verdict == forecast.VerdictHolds {
-		return "holds on both axes at this rate" + runwaySep + runwayBasis(f)
+	if f.Both.Verdict == forecast.VerdictHolds && axesHold(f) {
+		return holdsSentence(f) + runwaySep + runwayBasis(f)
 	}
 
-	axes := []struct {
-		label string
-		axis  forecast.Axis
-	}{{"5h", f.FiveHour}, {"7d", f.Weekly}}
+	axes := reportedAxes(f)
 	// The answer leads: a dry axis before one that holds, the earlier of two dry
 	// ones first, and an axis that decided nothing last. A reader who stops
 	// after the first clause has then read the worst of it.
-	slices.SortStableFunc(axes, func(x, y struct {
-		label string
-		axis  forecast.Axis
-	}) int {
+	slices.SortStableFunc(axes, func(x, y runwayAxis) int {
 		if r := verdictRank(x.axis.Verdict) - verdictRank(y.axis.Verdict); r != 0 {
 			return r
 		}
@@ -258,7 +288,7 @@ func RunwayWrap(label, line string, width int) string {
 // the two axes do not already carry it: when nothing else says the fleet
 // empties, or when the fleet empties before the earliest axis that does.
 func fleetSegment(f forecast.Fleet, now time.Time, loc *time.Location) (string, bool) {
-	holds := f.FiveHour.Verdict == forecast.VerdictHolds && f.Weekly.Verdict == forecast.VerdictHolds
+	holds := axesHold(f)
 	switch f.Both.Verdict {
 	case forecast.VerdictRunsDry:
 		if !f.Both.HasDryAt {
@@ -378,6 +408,8 @@ func RunwayVerdict(a forecast.Axis, now time.Time, loc *time.Location) string {
 		return runsDryAt(a.DryAt, now, loc)
 	case forecast.VerdictHolds:
 		return "holds"
+	case forecast.VerdictNoWindow:
+		return NoQuantity
 	default:
 		return Unreadable
 	}
@@ -499,7 +531,7 @@ func RunwayCreditBasis(c forecast.CreditFleet) string {
 // RunwayCreditVerdict is when the fleet's paid balance reaches zero, or
 // Unreadable when the figure was refused.
 //
-// It means something different from the two window rows above it and the
+// It means something different from the window rows above it and the
 // command says so in prose beside the block: those ask whether resets replenish
 // faster than the fleet spends, and this is a balance divided by a rate with
 // nothing coming back.

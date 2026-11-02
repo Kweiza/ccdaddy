@@ -57,7 +57,8 @@ type probeOptions struct {
 	claude string
 	// model is --model verbatim, "" for whatever claude defaults to.
 	model string
-	// window is the window this probe means to wake, derived from model.
+	// window is the window this probe means to wake. It is per account, because
+	// it depends on which windows the account has; see probeWindow.
 	window usage.WindowName
 	force  bool
 	now    time.Time
@@ -81,18 +82,25 @@ func probeArgs(model string) []string {
 // The mapping is by FAMILY rather than by model name, through the same
 // ModelFamily the ranking narrows a per-model window with: the wire gives a
 // per-model weekly window only a display name — "Opus 4.5" — and a user typing
-// --model types the family. A name carrying no family ccdad knows still spends
-// the five-hour window, which is the window every account has and the only one
-// such a probe can honestly promise to wake.
-func probeWindow(model string) usage.WindowName {
-	family, ok := strategy.ModelFamily(model)
-	if !ok {
+// --model types the family.
+//
+// A name carrying no family ccdad knows spends the shortest window the account
+// has. That used to be the five-hour window unconditionally, on the ground that
+// every account had one, and a verified Ultra seat does not: the probe found no
+// reset on a window that does not exist, spent a turn waking it, and recorded a
+// strike against it. Such a seat is asked about its week instead, whose running
+// clock is the honest reason not to spend anything. An account nobody has read
+// yet keeps the five-hour answer, because nothing says it lacks one.
+func probeWindow(model string, s *usage.Snapshot) usage.WindowName {
+	if family, ok := strategy.ModelFamily(model); ok {
+		if w, ok := strategy.WindowForFixedFamily(family); ok {
+			return w
+		}
+	}
+	if s == nil || s.FiveHour.Present || !s.SevenDay.Present {
 		return usage.WindowFiveHour
 	}
-	if w, ok := strategy.WindowForFixedFamily(family); ok {
-		return w
-	}
-	return usage.WindowFiveHour
+	return usage.WindowSevenDay
 }
 
 // credentialWord names a stored token record in words a refusal can use.
@@ -328,8 +336,8 @@ func newProbeCmd() *cobra.Command {
 			"takes an exact uuid and nothing else, for callers that must not depend on a display\n" +
 			"ordinal that is recompacted whenever an account is removed.\n\n" +
 			"--model names the family the turn is spent against, which is how a per-model weekly\n" +
-			"window is woken: 'opus' and 'sonnet' wake theirs, and any other name still wakes the\n" +
-			"five-hour window every account has.\n\n" +
+			"window is woken: 'opus' and 'sonnet' wake theirs, and any other name wakes the\n" +
+			"five-hour window, or the seven-day one on an account that has no five-hour window.\n\n" +
 			"An account whose clock for that window is already running is not probed. A window\n" +
 			"that has rolled over gets one warm-up per rollover, and one whose warm-ups wake\n" +
 			"nothing backs off 15m, 1h, 2h, 4h and then " + usage.ProbeRetryAfter.String() + " between attempts. --force spends\n" +
@@ -377,7 +385,6 @@ func newProbeCmd() *cobra.Command {
 			o := probeOptions{
 				claude: path,
 				model:  model,
-				window: probeWindow(model),
 				force:  force,
 				now:    timeNow(),
 			}
@@ -444,6 +451,7 @@ func newProbeCmd() *cobra.Command {
 					continue
 				}
 				entry, _ := cache.Get(a.UUID)
+				o.window = probeWindow(o.model, entry.Snapshot)
 				if reason, mistake := probeSkip(a, blob, entry, o); reason != "" {
 					if all {
 						fmt.Fprintf(stderr, "note: %s\n", reason)

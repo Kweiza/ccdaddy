@@ -1,6 +1,6 @@
 IDX  ACCOUNT               5H   7D OPUS  5H IN
 * c1 work@example.com (..  87%  -        1h22m
-  c2 enterprise@co.exam..  -    100%     ?    
+  c2 enterprise@co.exam..  -    100%     -    
   c3 spare@example.com     52%  -        4h11m
   c4 keyonly@example.co..  ?    ?        ?    
 * x1 cx@example.com        31%  -        3h09m
