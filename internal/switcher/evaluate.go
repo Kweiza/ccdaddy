@@ -270,7 +270,7 @@ func engineCandidates(s *store.Store, accounts []store.Account, c *usage.Cache, 
 			// would carry the work running now. It travels with the stamps
 			// above because it is the same kind of fact: something the poller
 			// observed, which the engine may read but must not re-derive.
-			cand.BurnPerMin, cand.HasBurn = e.Poll.BurnPerMin, e.Poll.HasBurn
+			cand.BurnPerMin, cand.HasBurn, cand.BurnWindow = e.Poll.BurnPerMin, e.Poll.HasBurn, e.Poll.BurnWindow
 		}
 		out = append(out, cand)
 	}

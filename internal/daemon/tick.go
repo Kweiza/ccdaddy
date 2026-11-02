@@ -1437,7 +1437,7 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now time.Time,
 			At:     entry.Poll.LastBindingAt,
 			Reset:  entry.Poll.LastBindingReset,
 		}
-		burn, hasBurn := entry.Poll.BurnPerMin, entry.Poll.HasBurn
+		burn, hasBurn, burnWindow := entry.Poll.BurnPerMin, entry.Poll.HasBurn, entry.Poll.BurnWindow
 		lastAt, lastReset := entry.Poll.LastBindingAt, entry.Poll.LastBindingReset
 		lastWindow := entry.Poll.LastBindingWindow
 		if reading.Known {
@@ -1451,7 +1451,7 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now time.Time,
 			// on the second poll.
 			if entry.Poll.HasLastBinding {
 				if rate, ok := usage.BurnPerMin(prev, cur); ok {
-					burn, hasBurn = rate, true
+					burn, hasBurn, burnWindow = rate, true, h.Binding
 				}
 			}
 			lastAt, lastReset, lastWindow = now, resetAt, h.Binding
@@ -1460,7 +1460,7 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now time.Time,
 		entry.Poll.LastBindingPct, entry.Poll.HasLastBinding = next.LastBindingPct, next.HasLastBinding
 		entry.Poll.LastBindingAt, entry.Poll.LastBindingReset = lastAt, lastReset
 		entry.Poll.LastBindingWindow = lastWindow
-		entry.Poll.BurnPerMin, entry.Poll.HasBurn = burn, hasBurn
+		entry.Poll.BurnPerMin, entry.Poll.HasBurn, entry.Poll.BurnWindow = burn, hasBurn, burnWindow
 		// entry.StandDownUntil is read and written back untouched, and that is
 		// what makes the two writers safe: this account's poll never edits the
 		// field its identity's live account owns, so the order the two goroutines

@@ -409,8 +409,8 @@ func HoverThresholds(cands []Candidate, o Options) HoverPlan {
 	// pool the shares are divided over, once, so every account's floor is stated
 	// in the same units -- points of work a session actually spends, rather than
 	// points of clock.
-	burn, hasBurn := SessionBurnPerMin(pool)
-	p.BurnPerMin, p.HasBurn = burn, hasBurn
+	burn := measuredSessionBurn(pool)
+	p.BurnPerMin, p.HasBurn = burn.perMin, burn.has
 
 	// The CONFIGURED table decides what may bind, and hover decides what it is
 	// worth. The two are not the same question. A weekly cap filed under a scope
@@ -480,7 +480,7 @@ func HoverThresholds(cands []Candidate, o Options) HoverPlan {
 		// the whole point: the perishable window is the one window that can
 		// never bind, so a figure that stayed on it would never reach the
 		// comparator. withHover says why at length.
-		sw, stranded, hasStranded := hoverStranded(c.Usage, o.Model, configured, p.Usable, o.Now, burn, hasBurn)
+		sw, stranded, hasStranded := hoverStranded(c.Usage, o.Model, configured, p.Usable, o.Now, burn)
 		share := hoverShare(p.Usable, stranded)
 		acct := HoverAccount{
 			UUID:        c.UUID,
@@ -606,7 +606,7 @@ func hoverPoolShare(usable int) float64 {
 // outright to an account holding less than one cooldown of work on any window
 // a model choice cannot dodge, which is the one case where a widening buys a
 // switch and nothing to serve on the far side of it.
-func hoverStranded(s *usage.Snapshot, model string, t Thresholds, usable int, now time.Time, burnPerMin float64, hasBurn bool) (usage.NamedWindow, float64, bool) {
+func hoverStranded(s *usage.Snapshot, model string, t Thresholds, usable int, now time.Time, burn sessionBurn) (usage.NamedWindow, float64, bool) {
 	if usable < 1 {
 		// hoverPoolShare's own clamp, for the same reason: a pool of none is a
 		// pool of one, and a rotation of nobody absorbs one account's worth
@@ -735,7 +735,7 @@ func hoverStranded(s *usage.Snapshot, model string, t Thresholds, usable int, no
 	//
 	// The clamp, and the test that pinned it against OutOfQuota, came in
 	// fe1a5fe.
-	if !absorbsACooldown(s, model, t, burnPerMin, hasBurn) {
+	if !absorbsACooldown(s, model, t, burn) {
 		stranded = 0
 	}
 	return best, stranded, true
@@ -774,9 +774,8 @@ func hoverStranded(s *usage.Snapshot, model string, t Thresholds, usable int, no
 // band between the two -- which the old equality left open -- is covered by
 // this alone. TestTheLicenceFloorFiresBeforeTheEmptyTierDoes is that pairing,
 // row by row, and its two sliver rows are the cases the equality could not say.
-// burnPerMin is the MEASURED rate the work is running at, and hasBurn whether
-// there was one. Where there is, it replaces the clock figure below, and the
-// difference is the whole reason this parameter exists: 100 x HoverCooldown /
+// burn is the MEASURED rate the work is running at. Where it applies to a window,
+// it replaces the clock figure below, and the difference is the whole reason this parameter exists: 100 x HoverCooldown /
 // length is how far the WINDOW gets in two minutes -- 0.667 points of a
 // five-hour one -- while a session measured on this fleet on 2026-09-05 spends
 // 5.4 points a minute, which is 10.8 points in the same two minutes. Sixteen
@@ -785,7 +784,7 @@ func hoverStranded(s *usage.Snapshot, model string, t Thresholds, usable int, no
 //
 // With no measurement it is the clock figure exactly as before, which is what
 // keeps a fleet ccdad has read only once behaving as it did.
-func absorbsACooldown(s *usage.Snapshot, model string, t Thresholds, burnPerMin float64, hasBurn bool) bool {
+func absorbsACooldown(s *usage.Snapshot, model string, t Thresholds, burn sessionBurn) bool {
 	okAny, okAll := true, true
 	haveAny := false
 	for _, w := range bindingWindows(s, model, t) {
@@ -794,13 +793,13 @@ func absorbsACooldown(s *usage.Snapshot, model string, t Thresholds, burnPerMin 
 			continue
 		}
 		short := false
-		if hasBurn && burnPerMin > 0 {
-			// A cooldown of WORK, in this window's own points. It does not
-			// depend on the window's length: the session spends what it spends,
-			// and a two-minute hold costs the same points whether the window it
-			// is charged against is five hours or a week.
-			short = 100-pct < burnPerMin*HoverCooldown.Minutes()
-		} else if length, ok := usage.WindowLengthOf(w.Name, w.Window); ok && length > 0 {
+		length, hasLength := usage.WindowLengthOf(w.Name, w.Window)
+		if perMin, ok := burn.on(length, hasLength); ok && perMin > 0 {
+			// A cooldown of WORK, in points of a window as long as the one the
+			// rate was measured on. A window of another length falls through to
+			// the clock figure: sessionBurn says why the points do not convert.
+			short = 100-pct < perMin*HoverCooldown.Minutes()
+		} else if hasLength && length > 0 {
 			short = 100-pct < 100*float64(HoverCooldown)/float64(length)
 		}
 		okAll = okAll && !short

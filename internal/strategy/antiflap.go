@@ -490,6 +490,18 @@ func Decide(cands []Candidate, o Options, cfg Config, st *State, activeUUID stri
 
 	// The credit pool, and only now.
 	if len(res.Credit) == 0 {
+		// subExhausted was asked of the numbers the USER typed, because it opens
+		// money, and hover's table is a pace target that says nothing about being
+		// out. With no credit pool there is no money to open, so under hover that
+		// answer has nothing left to decide: an account with room that is already
+		// the best one is simply where the session belongs. Reporting it as
+		// blocked is the exit `ccdad auto --once` alerts on, over accounts
+		// merely past 80% with hours of work left in them.
+		if o.hover != nil && activeHasRoom(res, activeUUID) {
+			plan.Action = ActionStay
+			plan.Reason = ReasonAlreadyBest
+			return plan
+		}
 		plan.Action = ActionBlocked
 		plan.Reason = ReasonAllExhausted
 		// When it lifts, on the same terms ReasonNothingCanServe answers it:
@@ -542,6 +554,16 @@ func Decide(cands []Candidate, o Options, cfg Config, st *State, activeUUID stri
 	plan.Reason = ReasonCreditGate
 	plan.Credit = firstRefusal
 	return plan
+}
+
+// activeHasRoom is whether the live account is ranked and known to hold quota.
+func activeHasRoom(res Result, activeUUID string) bool {
+	active, ok := find(res, activeUUID)
+	if !ok {
+		return false
+	}
+	empty, known := OutOfQuota(active.Headroom)
+	return known && !empty
 }
 
 // extraUsageOf is a candidate's credit axis. A candidate with no reading has an
@@ -618,6 +640,15 @@ func gate(res Result, target Ranked, activeUUID string, cfg Config, st *State, n
 		if spent, known := OutOfQuota(target.Headroom); known && spent {
 			return ReasonNothingCanServe, true, soonestRollover(res)
 		}
+		return ReasonBetterTarget, false, time.Time{}
+	}
+	// The same waiver one point earlier, for the same reason: slack cannot see
+	// this. An account a day from its reset reads as generously on pace at 99%,
+	// so a candidate merely ahead of its own pace can never clear a margin
+	// against it, and the session runs into the wall with quota sitting next door.
+	// The ranking only puts a roomier account ahead of a last-point one, so a
+	// target that is itself on its last point takes the margins below instead.
+	if active.LastPoint && !target.LastPoint {
 		return ReasonBetterTarget, false, time.Time{}
 	}
 

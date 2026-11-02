@@ -111,6 +111,11 @@ type PollState struct {
 	// HasBurn true, and the two answers send the engine down different arms.
 	BurnPerMin float64 `json:"burn_per_min,omitempty"`
 	HasBurn    bool    `json:"has_burn,omitempty"`
+	// BurnWindow is the window BurnPerMin was measured on. It is its own field
+	// and not LastBindingWindow: the anchor moves on every reading, and a pair
+	// across a change of binding window takes no new rate, so the anchor can name
+	// a window the rate standing beside it was never measured on.
+	BurnWindow WindowName `json:"burn_window,omitempty"`
 }
 
 // Entry is one account's cached reading.

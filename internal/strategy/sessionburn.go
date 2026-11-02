@@ -42,16 +42,64 @@ import (
 // until that account is next read. The error is in the safe direction: a rate
 // that is too high switches EARLIER, which is the whole point of the mechanism.
 func SessionBurnPerMin(pool []Candidate) (float64, bool) {
-	out, found := 0.0, false
+	burn := measuredSessionBurn(pool)
+	return burn.perMin, burn.has
+}
+
+// sessionBurn is the session's rate together with the window it was measured on.
+//
+// A rate is in points of ONE window, and the same work is a different number of
+// points on a window of a different length. That stopped being academic when
+// verified Ultra seats lost their five-hour window: a fleet can now hold a Max
+// seat whose binding window is five hours beside Ultra seats that only have a
+// week, and five points a minute of the first is not five points a minute of the
+// second. Read across, it told a seat holding twenty points of a week -- hours of
+// work -- that it could not last five minutes.
+type sessionBurn struct {
+	perMin float64
+	has    bool
+	window usage.WindowName
+}
+
+// measuredSessionBurn is SessionBurnPerMin's measurement, keeping the window the
+// maximum came from.
+func measuredSessionBurn(pool []Candidate) sessionBurn {
+	var out sessionBurn
 	for _, c := range pool {
 		if !c.HasBurn {
 			continue
 		}
-		if !found || c.BurnPerMin > out {
-			out, found = c.BurnPerMin, true
+		if !out.has || c.BurnPerMin > out.perMin {
+			out = sessionBurn{perMin: c.BurnPerMin, has: true, window: c.BurnWindow}
 		}
 	}
-	return out, found
+	return out
+}
+
+// on is the rate as it applies to a window of the given length, and whether it
+// applies at all. A rate whose window is unnamed applies everywhere, because that
+// is how a reading cached before the name existed has always been read. A length
+// that differs, or that nobody can state, is "cannot say": there is no conversion
+// between the two windows' points that is not a guess about the plan.
+func (b sessionBurn) on(length time.Duration, known bool) (float64, bool) {
+	if !b.has {
+		return 0, false
+	}
+	if b.window == "" {
+		return b.perMin, true
+	}
+	from, ok := usage.WindowLength(b.window)
+	if !ok || !known || from != length {
+		return 0, false
+	}
+	return b.perMin, true
+}
+
+// onWindow is on for a window named by a Headroom, which carries no reading to
+// ask for a length.
+func (b sessionBurn) onWindow(n usage.WindowName) (float64, bool) {
+	length, known := usage.WindowLength(n)
+	return b.on(length, known)
 }
 
 // RoomOf is the raw room the session will actually be stopped by: the least room

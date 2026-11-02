@@ -690,3 +690,42 @@ func HeadroomOrCredit(s *usage.Snapshot, t Thresholds) Headroom {
 	}
 	return creditHeadroomOf(e, t)
 }
+
+// handoffRoomPct is how much of a week counts as its last point. It is one because
+// the endpoint reports whole percents: 99 is the last reading anyone gets before
+// the one that says the account has stopped.
+const handoffRoomPct = 1.0
+
+// lastWeeklyPoint is whether the window that will stop this account's session is
+// a week, down to the last point the endpoint can report.
+//
+// Hover's slack cannot see this, because its threshold is a pace target that runs
+// past 100: an account a day from its reset reads 32 points of slack at 99%, and
+// outranks a healthy account that merely ran ahead of its own week. Nothing else
+// was looking while a five-hour window stood in front of the week. A verified
+// Ultra seat has none, so this is the only warning its session gets. Measured
+// against the engine on 2026-11-02, it held such a seat through 99.9% and moved at
+// 100%, which is after the session stopped.
+//
+// A static floor and not a rate, because a rate cannot hold this line. One account
+// is live at a time, so the moment a session leaves, the account it left measures
+// zero, reads as idle, ranks first again and takes the session back: the flap
+// preemptTarget's own note measured at sixty-five switches in fifty-four minutes.
+// A level does not change when the session moves.
+//
+// One point covers the measured burn. At the 12 points an hour the same fleet
+// peaked at, the 180 s danger cadence reads 99 with two minutes in hand, and the
+// margin only grows at a slower rate. A heavier burn can step from 98 past 100
+// between two readings; measuredExhaustion is what speaks to that, where another
+// account already ranks ahead.
+//
+// The cost is to the purpose this rule competes with: up to one point of a week
+// can expire unspent while another account still has real room. The tier sits
+// above the empty one, so the point is still spent the moment nothing better is
+// left. TestTheLastPointOfEachAccountIsReachableUnderHover holds that half.
+//
+// Weekly by name, so a Codex window, whose length is a property of its reading,
+// keeps the behaviour it had.
+func lastWeeklyPoint(h Headroom) bool {
+	return h.Known && usage.IsWeekly(h.MinAnyModelWindow) && h.MinAnyModelPct <= handoffRoomPct
+}

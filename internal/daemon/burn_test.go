@@ -146,3 +146,32 @@ func TestAFailedPollKeepsTheAnchorItNeverMoved(t *testing.T) {
 			entry.Poll.BurnPerMin)
 	}
 }
+
+// A rate names the window it was measured on, and that name does not follow the
+// anchor. When the binding window changes, no new rate is taken, so the old rate
+// is still a statement about the OLD window while the anchor has moved on.
+func TestTheBurnRateKeepsTheWindowItWasMeasuredOn(t *testing.T) {
+	isolateEngine(t)
+	a := store.Account{UUID: "acct-1"}
+	e := NewEngine()
+	e.Rand = midJitter
+	commit := func(s *usage.Snapshot, at time.Duration) usage.PollState {
+		e.commit(a, s, tickEpoch.Add(at), []string{a.UUID}, burnThresholds(), true, nil)
+		entry, ok := cacheEntry(t, a.UUID)
+		if !ok {
+			t.Fatal("commit() wrote no cache entry")
+		}
+		return entry.Poll
+	}
+	commit(windowsUsed(10, 5), 0)
+	if got := commit(windowsUsed(64, 5), 10*time.Minute); got.BurnWindow != usage.WindowFiveHour {
+		t.Fatalf("BurnWindow = %q, want five_hour", got.BurnWindow)
+	}
+	got := commit(rolledWindows(0, 75), 20*time.Minute)
+	if got.LastBindingWindow != usage.WindowSevenDay {
+		t.Fatalf("LastBindingWindow = %q; the fixture needs the binding window to move", got.LastBindingWindow)
+	}
+	if got.BurnWindow != usage.WindowFiveHour {
+		t.Errorf("BurnWindow = %q, want five_hour: a rate taken on five_hour was relabelled", got.BurnWindow)
+	}
+}
