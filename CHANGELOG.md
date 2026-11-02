@@ -16,6 +16,8 @@ must reference accounts by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.27.0] — 2026-11-02
+
 Claude's $200 plan is now Ultra, and a verified Ultra account reports no
 five-hour window. Its identifiers did not change (`claude_max`,
 `default_claude_max_20x`), so ccdad keeps reading these accounts correctly; what
@@ -3768,7 +3770,8 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.26.0...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.27.0...HEAD
+[0.27.0]: https://github.com/Kweiza/ccdaddy/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/Kweiza/ccdaddy/compare/v0.25.0...v0.26.0
 [0.25.0]: https://github.com/Kweiza/ccdaddy/compare/v0.24.0...v0.25.0
 [0.24.0]: https://github.com/Kweiza/ccdaddy/compare/v0.23.0...v0.24.0
