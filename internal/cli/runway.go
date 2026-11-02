@@ -15,6 +15,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/provider"
 	"github.com/Kweiza/ccdaddy/internal/store"
+	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/usage"
 	"github.com/Kweiza/ccdaddy/internal/view"
 	"github.com/Kweiza/ccdaddy/internal/zone"
@@ -41,7 +42,7 @@ func newRunwayCmd() *cobra.Command {
 		Long: "runway reads the readings the daemon has already taken and measures the\n" +
 			"fleet's burn rate over the last few hours. It never fetches: nothing here\n" +
 			"costs a request against the usage endpoint.\n\n" +
-			"The two window rows are verdicts — whether resets give quota back faster\n" +
+			"The window rows are verdicts — whether resets give quota back faster\n" +
 			"than the fleet spends it. The credit row is a balance divided by a rate,\n" +
 			"with nothing coming back.\n\n" +
 			"A rate is per axis and the axes are never summed: one percentage point of\n" +
@@ -249,6 +250,18 @@ func fleetForecast(accounts []store.Account, cache *usage.Cache, now time.Time) 
 		notice = fmt.Sprintf("The usage history could not be parsed: %v\nNo rate can be measured from it.\n", h.LoadError())
 	}
 
+	// An engine state nobody can read holds nobody out, which leaves this page
+	// answering as it did before it read quarantines. `ccdad doctor` reports the
+	// unreadable file; this page is not the one to refuse over it.
+	state, serr := strategy.LoadState()
+	quarantined := func(uuid string) bool {
+		if serr != nil {
+			return false
+		}
+		_, held := state.Quarantined(uuid, now)
+		return held
+	}
+
 	in := make([]forecast.Input, 0, len(accounts))
 	for _, a := range accounts {
 		// The fleet is ONE provider's, and it is Claude's.
@@ -277,9 +290,15 @@ func fleetForecast(accounts []store.Account, cache *usage.Cache, now time.Time) 
 		// eligible() in internal/strategy/rank.go is the one statement of what
 		// the rotation can hand work to, and a runway that counted an account
 		// no switch can reach would promise quota the fleet cannot spend.
+		//
+		// A quarantine is the other half of that sentence, which Decide applies
+		// just before the ranking. It is an account whose refresh token is dead,
+		// and every hour it is retried it is held out again until someone logs in,
+		// so counting it reported "holds" over a fleet with one working seat.
 		input := forecast.Input{
 			UUID: a.UUID, Idx: a.Idx, Tier: a.RateLimitTier,
-			Eligible: !a.Disabled && !a.SubscriptionInactive() && !a.SubscriptionPending() && !a.Elsewhere && a.Kind != identity.KindAPIKey,
+			Eligible: !a.Disabled && !a.SubscriptionInactive() && !a.SubscriptionPending() && !a.Elsewhere && a.Kind != identity.KindAPIKey &&
+				!quarantined(a.UUID),
 		}
 		if e, ok := cache.Get(a.UUID); ok {
 			input.Snapshot = e.Snapshot
@@ -366,12 +385,15 @@ func renderRunway(cmd *cobra.Command, f forecast.Fleet, accounts []store.Account
 	// an unmeasured axis must never say.
 	rows := make([][]string, 0, 3)
 	if f.Basis.Known {
-		rows = append(rows,
-			[]string{"  5-hour", view.RunwayBurn(f.FiveHour.Burn), view.RunwayReplenish(f.FiveHour.Replenish),
-				view.RunwayVerdict(f.FiveHour, now, loc)},
-			[]string{"  7-day", view.RunwayBurn(f.Weekly.Burn), view.RunwayReplenish(f.Weekly.Replenish),
-				view.RunwayVerdict(f.Weekly, now, loc)},
-		)
+		// An axis no account has a window on has no row, for the reason the
+		// paragraph above gives: a row of "-" invites a conclusion about a limit
+		// that is not there.
+		if f.FiveHour.Verdict != forecast.VerdictNoWindow {
+			rows = append(rows, []string{"  5-hour", view.RunwayBurn(f.FiveHour.Burn), view.RunwayReplenish(f.FiveHour.Replenish),
+				view.RunwayVerdict(f.FiveHour, now, loc)})
+		}
+		rows = append(rows, []string{"  7-day", view.RunwayBurn(f.Weekly.Burn), view.RunwayReplenish(f.Weekly.Replenish),
+			view.RunwayVerdict(f.Weekly, now, loc)})
 	}
 	rows = append(rows, []string{"  Credits", view.RunwayCreditBurn(f.Credit), view.RunwayCreditReplenish(),
 		view.RunwayCreditVerdict(f.Credit, now, loc)})
@@ -383,7 +405,7 @@ func renderRunway(cmd *cobra.Command, f forecast.Fleet, accounts []store.Account
 	// The credit row means something different from the window rows, and a
 	// table cannot say so on its own.
 	if f.Basis.Known {
-		fmt.Fprintln(out, "\n  The two window rows ask whether resets give quota back faster than the fleet\n"+
+		fmt.Fprintln(out, "\n  The window rows ask whether resets give quota back faster than the fleet\n"+
 			"  spends it. Credits do not reset: that row is a balance divided by a rate,\n"+
 			"  with nothing coming back.")
 	} else {
@@ -506,10 +528,15 @@ func forecastJSON(f forecast.Fleet) map[string]any {
 		// hold.
 		basis["windowSeconds"] = int(f.Basis.Window.Seconds())
 		basis["observedSeconds"] = int(f.Basis.Observed.Seconds())
-		out["axes"] = map[string]any{
-			axisKeyFiveHour: axisJSON(f.FiveHour),
-			axisKeyWeekly:   axisJSON(f.Weekly),
+		// An axis no account has a window on is ABSENT, the way a figure nobody
+		// measured is. Publishing it with no `holds` would read as the two runs
+		// having disagreed, which is what that absence means on an axis that
+		// exists.
+		axes := map[string]any{axisKeyWeekly: axisJSON(f.Weekly)}
+		if f.FiveHour.Verdict != forecast.VerdictNoWindow {
+			axes[axisKeyFiveHour] = axisJSON(f.FiveHour)
 		}
+		out["axes"] = axes
 	}
 
 	fleet := map[string]any{

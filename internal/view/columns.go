@@ -461,10 +461,20 @@ func (r Row) ResetCell(c ResetColumn, now time.Time) string {
 		// window, which nobody established.
 		return Unreadable
 	}
+	carried := false
 	for _, n := range c.Windows {
 		if at, ok := r.WindowReset(n); ok {
 			return HumanDuration(at.Sub(now))
 		}
+		if _, state := r.WindowPct(n); state != WindowAbsent {
+			carried = true
+		}
+	}
+	// The same line the quota cell beside it draws: a verified Ultra seat has no
+	// five_hour window, so its countdown does not exist, and "?" would send a
+	// reader looking for a reading that was never going to arrive.
+	if !carried {
+		return NoQuantity
 	}
 	return Unreadable
 }

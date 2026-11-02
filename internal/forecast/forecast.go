@@ -23,6 +23,19 @@ const (
 	VerdictUnknown Verdict = iota
 	VerdictHolds
 	VerdictRunsDry
+	// VerdictNoWindow is a five-hour axis no account in the fleet reports a window
+	// for.
+	//
+	// It is not VerdictUnknown. That one says the evidence is not in yet and more
+	// of it may settle the question; a fleet of verified Ultra seats reports no
+	// five_hour at all, so nothing is ever going to settle anything, and "cannot
+	// tell yet" there would be a promise of an answer that stays on the screen
+	// forever. There is no limit on this axis to run out of.
+	//
+	// The weekly axis does not get it. Every Claude plan has a week, so a fleet
+	// reporting none is a fleet nobody has read properly, and "cannot tell" is
+	// exactly right. TestAnAxisWithNoWindowOfItsOwnPromisesNothing is that line.
+	VerdictNoWindow
 )
 
 // Basis is what the measurement was made from, so a reader can weigh it. Every
@@ -399,6 +412,9 @@ func Of(in []Input, now time.Time) Fleet {
 	f.FiveHour = decide(f.FiveHour, sim, lowRates, highRates, five, now, anyKnown(rates, five))
 	f.Weekly = decide(f.Weekly, sim, lowRates, highRates, weekly, now, anyKnown(rates, weekly))
 	f.Both = decide(f.Both, sim, lowRates, highRates, both, now, f.Basis.Known)
+	if len(accounts) > 0 && !reportsFiveHour(accounts) {
+		f.FiveHour.Verdict = VerdictNoWindow
+	}
 
 	// How many accounts it would take is the same runs asked once more, with
 	// seats the fleet does not have yet appended. It is answered here, beside
@@ -668,6 +684,20 @@ func carrying(accounts []account, inAxis func(usage.WindowName) bool) int {
 		}
 	}
 	return n
+}
+
+// reportsFiveHour is whether any account's reading carries a five-hour window,
+// including one it could not fill in. That last part is why this does not read
+// account.order, which holds only the readable windows: a window that came back
+// with no utilization is a limit nobody can see, and that is VerdictUnknown's to
+// say rather than VerdictNoWindow's.
+func reportsFiveHour(accounts []account) bool {
+	for _, a := range accounts {
+		if a.in.Snapshot != nil && a.in.Snapshot.FiveHour.Present {
+			return true
+		}
+	}
+	return false
 }
 
 // isFiveHour is the five-hour axis's membership test, written as a function so

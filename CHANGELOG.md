@@ -16,6 +16,39 @@ must reference accounts by `uuid` or `alias`.
 
 ## [Unreleased]
 
+Claude's $200 plan is now Ultra, and a verified Ultra account reports no
+five-hour window. Its identifiers did not change (`claude_max`,
+`default_claude_max_20x`), so ccdad keeps reading these accounts correctly; what
+changes here is everything that assumed a five-hour window would be there.
+
+### Fixed
+
+- `hover` no longer runs a session into a weekly limit when another account has
+  room. An account a day from its weekly reset reads as well on pace even at 99%,
+  so it stayed ahead of any account running ahead of its own week, and the switch
+  came at 100%, after the session had stopped. An account down to its last weekly
+  point is now handed off and not returned to while another account has real room.
+  Up to one point of a week can expire unspent as a result.
+- The pre-emptive switch also projects at the measured burn rate. It used to read
+  only the average since the window opened, which on a week can be ten times too
+  slow.
+- A burn rate measured on a five-hour window is no longer applied to a weekly one.
+  In a fleet mixing the two, it told an account holding thirty points of a week that
+  it could not last six minutes.
+- `hover` no longer reports `blocked: every account is spent` for a live account
+  with room when every account is past the configured threshold and there is no
+  credit pool. `ccdad auto --once` exited 4 on this.
+- `ccdad runway` and `ccdad status` no longer print `5h cannot tell yet` forever
+  for a fleet with no five-hour window. The axis is left out, the line reads
+  `holds at this rate`, and `forecast.axes.five_hour` is absent from the JSON.
+- The forecast no longer counts a quarantined account as usable. A dead refresh
+  token left it in the fleet's points, so the runway said `holds` over one working
+  seat.
+- A reset column shows `-` for a window the account does not have, matching the
+  quota column beside it, instead of `?`.
+- `ccdad probe` aims at the seven-day window on an account with no five-hour window.
+  It used to spend a turn waking a window that does not exist.
+
 ## [0.26.0] — 2026-10-08
 
 ### Changed
