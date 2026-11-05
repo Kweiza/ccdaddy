@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"io"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/credhome"
 	"github.com/Kweiza/ccdaddy/internal/theme"
 	"github.com/Kweiza/ccdaddy/internal/tui"
+	"github.com/Kweiza/ccdaddy/internal/usage"
 	"github.com/Kweiza/ccdaddy/internal/view"
 )
 
@@ -70,15 +72,13 @@ func tuiOptions(cmd *cobra.Command) tui.Options {
 	// probe's own value, which `status --json` needs and a rendering does not:
 	// loadSnapshot has already turned it into the sentence in Snapshot.Notices,
 	// which is what the page draws.
-	read := func(refresh bool) func(time.Time) (view.Snapshot, error) {
-		return func(now time.Time) (view.Snapshot, error) {
-			snap, _, err := loadSnapshot(cmd, now, refresh)
-			return snap, err
-		}
+	read := func(now time.Time, refresh bool) (view.Snapshot, error) {
+		snap, _, err := loadSnapshot(cmd, now, refresh)
+		return snap, err
 	}
 	return tui.Options{
-		Load:    read(false),
-		Refresh: read(true),
+		Load:    func(now time.Time) (view.Snapshot, error) { return read(now, false) },
+		Refresh: spacedRefresh(read),
 		Exec:    freshRootExec(cmd),
 		Now:     timeNow,
 		// Out is where the ONE-SHOT render writes, and it is filled for both
@@ -111,6 +111,32 @@ func tuiOptions(cmd *cobra.Command) tui.Options {
 		Theme:       configuredTheme(cfg.TUITheme),
 		GlyphSet:    cfg.TUIGlyphs,
 		ConsoleUTF8: consoleUTF8(),
+	}
+}
+
+// spacedRefresh lets the dashboard reach the endpoints at most once per serve
+// TTL, and reloads in between with a sentence saying when it can ask again.
+//
+// The poller's own gate is per account and counts READINGS, and a failed poll
+// leaves none: with an account whose usage call keeps failing, a held key
+// would ask again the moment each answer came back. Spacing the attempts
+// themselves, by the figure that gate uses for a good reading, is what makes
+// "at most once every three minutes" true whether the endpoint answers or not.
+//
+// The state lives in this closure, and that is safe because the dashboard runs
+// one read at a time; a second caller would need a lock it does not have.
+func spacedRefresh(read func(now time.Time, refresh bool) (view.Snapshot, error)) func(time.Time) (view.Snapshot, error) {
+	var last time.Time
+	return func(now time.Time) (view.Snapshot, error) {
+		if wait := last.Add(usage.ServeTTL).Sub(now); !last.IsZero() && wait > 0 {
+			snap, err := read(now, false)
+			n := fmt.Sprintf("Refreshed %s ago; r asks the endpoints again in %s.\n",
+				humanDuration(now.Sub(last)), humanDuration(wait))
+			snap.Notices = append([]string{n}, snap.Notices...)
+			return snap, err
+		}
+		last = now
+		return read(now, true)
 	}
 }
 

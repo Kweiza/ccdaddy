@@ -10,8 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/daemon"
+	"github.com/Kweiza/ccdaddy/internal/pollpolicy"
 	"github.com/Kweiza/ccdaddy/internal/theme"
 	"github.com/Kweiza/ccdaddy/internal/tui"
 	"github.com/Kweiza/ccdaddy/internal/usage"
@@ -144,21 +147,17 @@ func TestTheInteractiveHalfKeepsNoticesOffTheTerminalItDoesNotOwn(t *testing.T) 
 	}
 }
 
-// The r key's read is `status --refresh`'s, on the same serve-TTL gate, and the
-// clock's read never fetches. The refresh's own notices must reach the Snapshot:
-// the dashboard silences stderr, so a "nothing needed refreshing" written only
-// there would answer the key with no sign that it ran at all.
+// The r key's read is `status --refresh`'s, and the clock's read never
+// fetches. The refresh's own notices reach the Snapshot: the dashboard silences
+// stderr, so a sentence written only there would answer the key with no sign
+// that it ran at all.
 func TestTheDashboardsRefreshFetchesAndItsReloadDoesNot(t *testing.T) {
 	isolate(t)
 	now := listNow
 	movableClock(t, &now)
 	seedAccount(t, "uuid-a", "work@example.com")
 	calls := stubRefresh(t, func() (*usage.Snapshot, error) { return snapshotUsing(now, 25), nil })
-
-	root := NewRootCmd()
-	root.SetContext(context.Background())
-	root.SetErr(io.Discard)
-	o := tuiOptions(root)
+	o := tuiOptions(dashboardRoot())
 
 	if _, err := o.Load(o.Now()); err != nil {
 		t.Fatalf("Options.Load: %v", err)
@@ -172,21 +171,73 @@ func TestTheDashboardsRefreshFetchesAndItsReloadDoesNot(t *testing.T) {
 	if calls.Load() != 1 {
 		t.Fatalf("the refresh fetched %d times, want 1", calls.Load())
 	}
+}
 
+// The poller's gate counts readings, and a failed poll leaves none, so the
+// dashboard spaces the attempts themselves. Without that, a held key against an
+// account whose usage call keeps failing asks again the moment each answer
+// comes back -- and the allowance belongs to the whole identity.
+func TestTheDashboardAsksTheEndpointsAtMostOncePerServeTTLEvenWhenPollsFail(t *testing.T) {
+	isolate(t)
+	now := listNow
+	movableClock(t, &now)
+	seedAccount(t, "uuid-a", "work@example.com")
+	calls := stubRefresh(t, func() (*usage.Snapshot, error) { return nil, errors.New("503") })
+	o := tuiOptions(dashboardRoot())
+
+	o.Refresh(o.Now())
+	now = listNow.Add(pollpolicy.ServeTTL - time.Second)
 	snap, err := o.Refresh(o.Now())
 	if err != nil {
 		t.Fatalf("Options.Refresh: %v", err)
 	}
 	if calls.Load() != 1 {
-		t.Fatalf("a second refresh inside the serve TTL fetched again (%d fetches)", calls.Load())
+		t.Fatalf("a second refresh inside the serve TTL fetched again after a failure (%d fetches)", calls.Load())
 	}
-	said := false
-	for _, n := range snap.Notices {
-		said = said || strings.Contains(n, "Nothing needed refreshing")
+	if len(snap.Notices) == 0 || !strings.Contains(snap.Notices[0], "asks the endpoints again in") {
+		t.Fatalf("Notices = %q, want the first to say when r can ask again", snap.Notices)
 	}
-	if !said {
-		t.Fatalf("Notices = %q, want the refresh to say why it fetched nothing", snap.Notices)
+
+	now = listNow.Add(pollpolicy.ServeTTL)
+	o.Refresh(o.Now())
+	if calls.Load() != 2 {
+		t.Fatalf("fetches = %d once the serve TTL had passed, want 2", calls.Load())
 	}
+}
+
+// A refresh's readings are stamped by the poller's clock, which runs after the
+// page's own moment was taken. Measured against the earlier moment, every row
+// it just fetched has an age nobody can state, and AGE reads "?".
+func TestARefreshedRowHasAnAge(t *testing.T) {
+	isolate(t)
+	now := listNow
+	movableClock(t, &now)
+	seedAccount(t, "uuid-a", "work@example.com")
+	stubRefresh(t, func() (*usage.Snapshot, error) {
+		now = now.Add(time.Second) // the network pass takes time
+		return snapshotUsing(now, 25), nil
+	})
+
+	snap, err := tuiOptions(dashboardRoot()).Refresh(listNow)
+	if err != nil {
+		t.Fatalf("Options.Refresh: %v", err)
+	}
+	if len(snap.Rows) != 1 {
+		t.Fatalf("%d rows for one seeded account", len(snap.Rows))
+	}
+	if _, ok := snap.Rows[0].Entry.Age(snap.Now); !ok {
+		t.Fatalf("the row just fetched at %s has no age at the page's moment %s",
+			snap.Rows[0].Entry.FetchedAt, snap.Now)
+	}
+}
+
+// dashboardRoot is the command the dashboard's reads run under: a context to
+// carry into the poller, and stderr silenced as runTui silences it.
+func dashboardRoot() *cobra.Command {
+	root := NewRootCmd()
+	root.SetContext(context.Background())
+	root.SetErr(io.Discard)
+	return root
 }
 
 // The executor is the whole interaction layer's contract, and it is V0's

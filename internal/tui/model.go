@@ -146,20 +146,23 @@ type App struct {
 	log    []string
 	logErr error
 
-	// loading is whether a read is already in flight and queued is the read
+	// inFlight is the read already running, if any, and queued is the read
 	// something asked for while it was. One outstanding read at a time is what
 	// stops a held-down refresh key from reproducing the very cost profile the
 	// split cadence exists to avoid, and it is what lets Options.Load and
 	// Options.Refresh stay functions nobody ever promised were safe to call from
 	// two goroutines at once.
-	loading bool
-	queued  read
+	inFlight read
+	queued   read
 
 	// running is whether a command is already in flight. A terminal repeats a
 	// held key, and one held x on the daemon screen would otherwise be N
 	// concurrent `ccdad daemon stop` invocations, each of them a fresh command
 	// tree reaching for the same locks.
 	running bool
+	// deferred is a command asked for while a refresh was in flight, run when
+	// the refresh comes back. See reading for why the two never overlap.
+	deferred []string
 
 	// hasLoaded is whether any read has ever succeeded. Until one has there
 	// are no last good numbers, and a failure has to say something else.
@@ -176,6 +179,9 @@ const (
 	readLocal
 	readNetwork
 )
+
+// refreshingNote is what the notice line says while a refresh is in flight.
+const refreshingNote = "refreshing usage and due profile checks; keys that change something wait for it"
 
 // neverLoaded is what a failure says while there is nothing behind it. The
 // ordinary failed-refresh notice promises the last good numbers, and an empty
@@ -284,7 +290,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.reloading()
 
 	case loadedMsg:
-		a.loading = false
+		a.inFlight = readNone
 		switch {
 		case msg.err == nil:
 			a.hasLoaded = true
@@ -297,11 +303,20 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.m.Snap.Notices = []string{neverLoaded + msg.err.Error()}
 		}
 		a.m = scrolled(a.m)
+		var cmds []tea.Cmd
+		if argv := a.deferred; argv != nil {
+			a.deferred = nil
+			var cmd tea.Cmd
+			a, cmd = a.starting(argv)
+			cmds = append(cmds, cmd)
+		}
 		if next := a.queued; next != readNone {
 			a.queued = readNone
-			return a.reading(next)
+			var cmd tea.Cmd
+			a, cmd = a.reading(next)
+			cmds = append(cmds, cmd)
 		}
-		return a, nil
+		return a, tea.Batch(cmds...)
 
 	case logMsg:
 		a.log, a.logErr = msg.lines, msg.err
@@ -757,15 +772,26 @@ func (a App) refreshing() (App, tea.Cmd) { return a.reading(readNetwork) }
 // behind a timer's reload is remembered AS a refresh: keeping only "something
 // asked" would answer the key with a local read, which is the bug the key was
 // changed to fix.
+//
+// A REFRESH AND A COMMAND NEVER OVERLAP, whichever comes second waits for the
+// first. Both can reach the same credentials: a refresh polls through the
+// token source, which may spend an account's single-use refresh grant, and a
+// switch freshens the account it installs through that same source. Run
+// together, the two can spend one grant twice and leave one side holding a
+// revoked token. A local read touches no grant, so it never waits.
 func (a App) reading(r read) (App, tea.Cmd) {
-	if a.loading {
+	if a.inFlight != readNone || (r == readNetwork && a.running) {
 		a.queued = max(a.queued, r)
 		return a, nil
 	}
-	a.loading = true
+	a.inFlight = r
 	load, now := a.opts.Load, a.opts.Now
 	if r == readNetwork {
 		load = a.opts.Refresh
+		// Said while it runs, because it can take as long as the endpoints
+		// do, and a page that looks idle invites the key again. A successful
+		// load replaces the notices whole; AfterLoad drops this on a failure.
+		a.m.Snap.Notices = append([]string{refreshingNote}, a.m.Snap.Notices...)
 	}
 	return a, func() tea.Msg {
 		snap, err := load(now())
@@ -781,6 +807,15 @@ func (a App) reading(r read) (App, tea.Cmd) {
 // and the keys that come through here are the ones that change something.
 func (a App) starting(argv []string) (App, tea.Cmd) {
 	if a.running {
+		return a, nil
+	}
+	if a.inFlight == readNetwork {
+		// Not dropped: the key was pressed once, on purpose, and the refresh
+		// it waits for ends in seconds. The first one is kept, for the reason
+		// a held key runs its command once.
+		if a.deferred == nil {
+			a.deferred = argv
+		}
 		return a, nil
 	}
 	a.running = true

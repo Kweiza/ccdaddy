@@ -138,6 +138,11 @@ func loadSnapshot(cmd *cobra.Command, now time.Time, refresh bool) (snap view.Sn
 			return view.Snapshot{}, nil, err
 		}
 		accounts = s.Accounts()
+		// The page is measured AFTER the network pass. The readings it just
+		// took are stamped with the poller's later clock, and an entry dated
+		// after the page's own moment has an age nobody can state, so every
+		// row it fetched would read "?" instead of how fresh it now is.
+		now = timeNow()
 	}
 
 	report, probeErr := observeDaemon()
