@@ -203,17 +203,23 @@ not present. A failed reading is never displayed as zero usage.
 | `o` | Toggle automatic sorting by the nearest 7-day reset |
 | `c` | Choose the switching strategy |
 | `d` | Open daemon status and logs; `S` starts, `x` stops, `R` restarts |
-| `r` | Refresh usage and due profile checks, as `ccdad status --refresh` does |
+| `r` | Refresh usage and due profile checks, as `ccdad status --refresh` does; at most once every three minutes |
 | `?` | Show help |
 | `esc` | Return to the previous screen |
 | `q` / `ctrl+c` | Quit the dashboard |
 
 Quota and profile refreshes belong to the daemon. For a manual refresh, press
 `r` in the dashboard or run `ccdad status --refresh`. Both skip readings under
-three minutes old and respect quota backoff, so a held key asks each account at
-most once every three minutes. Between key presses the dashboard reloads local
-state every ten seconds without network requests, and keeps the selected
-account by UUID when rows reorder.
+three minutes old and respect quota backoff. The dashboard also starts at most
+one network refresh every three minutes, counted from the end of the last one
+and whether or not it succeeded; pressed sooner, `r` reloads local state and
+says when it can ask again. A refresh and a command never run at once, because
+both can spend the same single-use refresh grant: a refresh waits for a running
+command, and the first command key pressed during a refresh (switch, remove,
+strategy, sort, or a daemon key) runs when it ends. Quitting during either
+waits for it to finish; press `q` again to quit at once. Between key presses
+the dashboard reloads local state every ten seconds without network requests,
+and keeps the selected account by UUID when rows reorder.
 
 ### Subscription status
 

@@ -315,6 +315,30 @@ func TestARotationUnderTheLiveReadIsStillAdopted(t *testing.T) {
 	}
 }
 
+// "Not that account's" has to be shown, not assumed. An account whose stored
+// credential cannot be read might be the one the switch installed, so the read
+// refuses rather than adopting the live login as this account's rotation.
+func TestAnUnreadableCredentialIsNotCountedAsSomebodyElses(t *testing.T) {
+	isolate(t)
+	a := oauthRecord("AT-A", "RT-A", time.Now().Add(7*time.Hour), "")
+	seed(t, "u-a", a)
+	seed(t, "u-b", oauthRecord("AT-B", "RT-B", time.Now().Add(7*time.Hour), ""))
+	path := filepath.Join(os.Getenv("CCDAD_HOME"), "credentials", "u-b.json")
+	if err := os.WriteFile(path, []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeLive(t, a)
+	landInTheWindow(t, func() { writeLive(t, oauthRecord("AT-B", "RT-B", time.Now().Add(7*time.Hour), "")) })
+
+	src := sourceFor(t, refusingEndpoint(t))
+	if _, err := src.AccessToken(context.Background(), "u-a"); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("AccessToken() with another account unreadable = %v, want ErrUnavailable", err)
+	}
+	if rec := storedRecord(t, "u-a"); rec.RefreshToken != "RT-A" {
+		t.Fatalf("u-a's stored grant became %q", rec.RefreshToken)
+	}
+}
+
 // landInTheWindow runs fn between the identity check and the locked re-read.
 func landInTheWindow(t *testing.T, fn func()) {
 	t.Helper()

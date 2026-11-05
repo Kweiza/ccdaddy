@@ -21,10 +21,17 @@ must reference accounts by `uuid` or `alias`.
 - The dashboard's `r` now refreshes usage and due profile checks, as
   `ccdad status --refresh` does. It used to re-read local files only, so a
   key labelled `refresh` changed nothing a reload ten seconds later would not
-  have. Readings under three minutes old are still not fetched again and 429
-  backoff still holds, so a held key asks each account at most once every three
-  minutes. What the refresh did, such as "Nothing needed refreshing", now
-  appears on the dashboard's notice line.
+  have. It starts at most one network refresh every three minutes, counted
+  from the end of the last one and whether or not it succeeded; pressed sooner,
+  it reloads and says when it can ask again. The notice line, on the page and
+  on the daemon screen, says while a refresh is running and reports anything it
+  could not refresh. A refresh and a command never run at once, because both
+  can spend the same single-use refresh grant: a refresh waits for a running
+  command, and the first command key pressed during a refresh runs when it
+  ends.
+- Quitting the dashboard while a refresh or a command is running waits for it
+  to finish, instead of exiting part-way through a token rotation and leaving a
+  spent refresh grant behind. Press `q` or `ctrl+c` again to quit at once.
 
 ### Fixed
 
@@ -32,6 +39,12 @@ must reference accounts by `uuid` or `alias`.
   a day. A subscription renewed after its profile said `canceled` stayed
   `unsubscribed` and out of rotation for up to a day, and a manual refresh could
   not re-check it sooner.
+- A switch to another managed account that landed while ccdad was reading the
+  live login's token no longer files that account's grant under the account
+  being read. The next switch to it logged in as the other one. A rotation of
+  the live login itself is still adopted.
+- `ccdad status --refresh` shows an age for the rows it has just fetched, instead
+  of `?` in AGE and no `ageSeconds` in the JSON.
 
 ## [0.27.0] — 2026-11-02
 
