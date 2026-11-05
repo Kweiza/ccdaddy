@@ -54,10 +54,10 @@ func TestPermissionFailureRechecksAnActiveSubscriptionBeforeTheDailyTTL(t *testi
 	}
 }
 
-// The usage endpoint answers a renewed account exactly as it answered the lapsed
-// one, so only a profile re-read can notice the renewal, and it has to come
-// sooner than the daily TTL or the account sits out of rotation for a day.
-func TestATickNoticesARenewalWithinTheRetryInterval(t *testing.T) {
+// seedCanceledSubscription stores an account whose profile said canceled one
+// retry interval before the frozen clock, so it is due for a re-read now.
+func seedCanceledSubscription(t *testing.T) store.Account {
+	t.Helper()
 	isolate(t)
 	s, err := store.Open()
 	if err != nil {
@@ -71,6 +71,14 @@ func TestATickNoticesARenewalWithinTheRetryInterval(t *testing.T) {
 	if err := s.Add(a, oauthBlob("RT-lapsed")); err != nil {
 		t.Fatal(err)
 	}
+	return a
+}
+
+// The usage endpoint answers a renewed account exactly as it answered the lapsed
+// one, so only a profile re-read can notice the renewal, and it has to come
+// sooner than the daily TTL or the account sits out of rotation for a day.
+func TestATickNoticesARenewalWithinTheRetryInterval(t *testing.T) {
+	a := seedCanceledSubscription(t)
 	var profiles atomic.Int32
 	e := engineFor(t, tokensAreFine, func(context.Context, string) (*usage.Snapshot, error) { return snapshotWith(20), nil })
 	e.FetchProfile = func(context.Context, string) (*identity.Profile, error) {
@@ -84,6 +92,33 @@ func TestATickNoticesARenewalWithinTheRetryInterval(t *testing.T) {
 	got := seedAccountRead(t, a.UUID)
 	if got.SubscriptionInactive() || got.Tier != "claude_max" {
 		t.Fatalf("renewal was not stored: status %q tier %q", got.SubscriptionStatus, got.Tier)
+	}
+}
+
+// The cost side of the shorter interval. An account that stays canceled for
+// good is re-read on the retry interval and no faster, however many ticks run
+// in between.
+func TestAStillCanceledSubscriptionIsRereadOncePerRetryInterval(t *testing.T) {
+	a := seedCanceledSubscription(t)
+	var profiles atomic.Int32
+	e := engineFor(t, tokensAreFine, func(context.Context, string) (*usage.Snapshot, error) { return snapshotWith(20), nil })
+	e.FetchProfile = func(context.Context, string) (*identity.Profile, error) {
+		profiles.Add(1)
+		return &identity.Profile{AccountUUID: a.UUID, OrganizationType: "claude_free", SubscriptionStatus: "canceled"}, nil
+	}
+	at := func(d time.Duration) {
+		e.Now = func() time.Time { return tickEpoch.Add(d) }
+		tick(t, e)
+	}
+	at(0)
+	at(time.Second)
+	at(store.ProfileRetryInterval - time.Second)
+	if profiles.Load() != 1 {
+		t.Fatalf("profile lookups inside one interval = %d, want 1", profiles.Load())
+	}
+	at(store.ProfileRetryInterval)
+	if profiles.Load() != 2 {
+		t.Fatalf("profile lookups after one interval = %d, want 2", profiles.Load())
 	}
 }
 
