@@ -50,8 +50,8 @@ import (
 // only moves every minute to ten anyway, so one dashboard left open would
 // saturate an account for a full hour and learn nothing for it. The r key does
 // reach it, through Options.Refresh, because a person pressing it is asking for
-// exactly that -- and the serve TTL holds a held key to one request per
-// account per three minutes, which is the bound `status --refresh` already has.
+// exactly that -- and Options.Refresh is held to one network pass per serve
+// TTL by its caller, whether the endpoints answer or not.
 const (
 	contentCadence = 1500 * time.Millisecond
 	reloadCadence  = 10 * time.Second
@@ -163,6 +163,9 @@ type App struct {
 	// deferred is a command asked for while a refresh was in flight, run when
 	// the refresh comes back. See reading for why the two never overlap.
 	deferred []string
+	// quitting is a quit asked for while a refresh or a command was in flight.
+	// See quit.
+	quitting bool
 
 	// hasLoaded is whether any read has ever succeeded. Until one has there
 	// are no last good numbers, and a failure has to say something else.
@@ -181,7 +184,10 @@ const (
 )
 
 // refreshingNote is what the notice line says while a refresh is in flight.
-const refreshingNote = "refreshing usage and due profile checks; keys that change something wait for it"
+const refreshingNote = "refreshing usage and due profile checks; a command key pressed now runs when it ends"
+
+// quittingNote is what it says when a quit is waiting for work in flight.
+const quittingNote = "quitting when the refresh or command in flight ends; press q again to quit now"
 
 // neverLoaded is what a failure says while there is nothing behind it. The
 // ordinary failed-refresh notice promises the last good numbers, and an empty
@@ -291,6 +297,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case loadedMsg:
 		a.inFlight = readNone
+		if a.quitting && !a.running {
+			return a, tea.Quit
+		}
 		switch {
 		case msg.err == nil:
 			a.hasLoaded = true
@@ -327,6 +336,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// the page is re-read now rather than at the next tick -- and so is the
 		// log, when the key that ran it was one of the daemon screen's.
 		a.running = false
+		if a.quitting && a.inFlight != readNetwork {
+			return a, tea.Quit
+		}
 		next, cmd := a.showing(msg.res).reloading()
 		if next.back == screenDaemon {
 			return next, tea.Batch(cmd, next.tailLog())
@@ -413,6 +425,7 @@ func (a App) daemonScreen() daemonScreen {
 		Glyphs:         a.m.Glyphs,
 		Pal:            a.m.Pal,
 		Version:        a.m.Snap.Version,
+		Notices:        a.m.Snap.Notices,
 	}
 }
 
@@ -444,7 +457,8 @@ func (a App) key(msg tea.KeyPressMsg) (App, tea.Cmd, bool) {
 	// terminal user tries first, and a screen that ate it would strand
 	// somebody inside a full-screen program.
 	if msg.String() == "ctrl+c" {
-		return a, tea.Quit, true
+		a, cmd := a.quit()
+		return a, cmd, true
 	}
 
 	switch a.scr {
@@ -455,7 +469,8 @@ func (a App) key(msg tea.KeyPressMsg) (App, tea.Cmd, bool) {
 	case screenPanel, screenHelp:
 		switch {
 		case key.Matches(msg, k.Quit):
-			return a, tea.Quit, true
+			a, cmd := a.quit()
+			return a, cmd, true
 		case key.Matches(msg, k.Esc, k.Enter):
 			return a.dismissed(), nil, true
 		case a.scr == screenHelp && key.Matches(msg, k.Help):
@@ -568,7 +583,8 @@ func (a App) daemonKey(msg tea.KeyPressMsg, k KeyMap) (App, tea.Cmd, bool) {
 		a.scr = screenPage
 		return a, nil, true
 	case key.Matches(msg, k.Quit):
-		return a, tea.Quit, true
+		a, cmd := a.quit()
+		return a, cmd, true
 	case key.Matches(msg, k.Refresh):
 		a, cmd := a.refreshing()
 		return a, tea.Batch(cmd, a.tailLog()), true
@@ -580,7 +596,8 @@ func (a App) daemonKey(msg tea.KeyPressMsg, k KeyMap) (App, tea.Cmd, bool) {
 func (a App) pageKey(msg tea.KeyPressMsg, k KeyMap) (App, tea.Cmd, bool) {
 	switch {
 	case key.Matches(msg, k.Quit):
-		return a, tea.Quit, true
+		a, cmd := a.quit()
+		return a, cmd, true
 
 	case key.Matches(msg, k.Add):
 		// The terminal question comes FIRST, before any choice is offered. It
@@ -821,6 +838,26 @@ func (a App) starting(argv []string) (App, tea.Cmd) {
 	a.running = true
 	ex := a.opts.Exec
 	return a, func() tea.Msg { return ranMsg{res: run(ex, argv)} }
+}
+
+// quit ends the program, unless a refresh or a command is in flight.
+//
+// Either can be part-way through rotating a refresh grant: the server has spent
+// the old token and the new pair is written nowhere yet, and bubbletea does not
+// wait for a command's goroutine before the process exits. Quitting then throws
+// away the only copy of the new pair, and the account needs a fresh login. So
+// the first quit waits for the work in hand and drops anything queued behind
+// it, and the program ends when that work comes back. A second quit is the user
+// overruling that, and goes at once -- which is also what keeps ctrl+c from
+// ever stranding anybody. A local read spends nothing and does not hold it up.
+func (a App) quit() (App, tea.Cmd) {
+	if a.quitting || (a.inFlight != readNetwork && !a.running) {
+		return a, tea.Quit
+	}
+	a.quitting = true
+	a.deferred, a.queued = nil, readNone
+	a.m.Snap.Notices = append([]string{quittingNote}, a.m.Snap.Notices...)
+	return a, nil
 }
 
 // tailLog is the bounded read behind the [D] screen.

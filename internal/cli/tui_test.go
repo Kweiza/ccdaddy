@@ -177,28 +177,49 @@ func TestTheDashboardsRefreshFetchesAndItsReloadDoesNot(t *testing.T) {
 // dashboard spaces the attempts themselves. Without that, a held key against an
 // account whose usage call keeps failing asks again the moment each answer
 // comes back -- and the allowance belongs to the whole identity.
+//
+// The interval runs from the end of a pass: its readings are stamped as it
+// goes, so counted from its start the next pass finds them all still fresh,
+// fetches nothing, and spends the slot.
 func TestTheDashboardAsksTheEndpointsAtMostOncePerServeTTLEvenWhenPollsFail(t *testing.T) {
 	isolate(t)
 	now := listNow
 	movableClock(t, &now)
 	seedAccount(t, "uuid-a", "work@example.com")
-	calls := stubRefresh(t, func() (*usage.Snapshot, error) { return nil, errors.New("503") })
+	const pass = 10 * time.Second
+	calls := stubRefresh(t, func() (*usage.Snapshot, error) {
+		now = now.Add(pass)
+		return nil, errors.New("503")
+	})
 	o := tuiOptions(dashboardRoot())
 
-	o.Refresh(o.Now())
-	now = listNow.Add(pollpolicy.ServeTTL - time.Second)
+	first, err := o.Refresh(o.Now())
+	if err != nil {
+		t.Fatalf("Options.Refresh: %v", err)
+	}
+	// The refresh's own report reaches the page, which cannot read stderr.
+	said := false
+	for _, n := range first.Notices {
+		said = said || strings.Contains(n, "could not be refreshed")
+	}
+	if !said {
+		t.Fatalf("Notices = %q, want the failed account named", first.Notices)
+	}
+
+	ended := listNow.Add(pass)
+	now = ended.Add(pollpolicy.ServeTTL - time.Second)
 	snap, err := o.Refresh(o.Now())
 	if err != nil {
 		t.Fatalf("Options.Refresh: %v", err)
 	}
 	if calls.Load() != 1 {
-		t.Fatalf("a second refresh inside the serve TTL fetched again after a failure (%d fetches)", calls.Load())
+		t.Fatalf("a refresh inside the serve TTL of the last pass's end fetched again (%d fetches)", calls.Load())
 	}
-	if len(snap.Notices) == 0 || !strings.Contains(snap.Notices[0], "asks the endpoints again in") {
+	if len(snap.Notices) == 0 || !strings.Contains(snap.Notices[0], "asks again in") {
 		t.Fatalf("Notices = %q, want the first to say when r can ask again", snap.Notices)
 	}
 
-	now = listNow.Add(pollpolicy.ServeTTL)
+	now = ended.Add(pollpolicy.ServeTTL)
 	o.Refresh(o.Now())
 	if calls.Load() != 2 {
 		t.Fatalf("fetches = %d once the serve TTL had passed, want 2", calls.Load())

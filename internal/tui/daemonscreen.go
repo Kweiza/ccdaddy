@@ -32,6 +32,8 @@ type daemonScreen struct {
 	// an observation, and a verdict computed there would be a 0.6.1 daemon
 	// telling a 0.7.0 dashboard to upgrade to what it is already running.
 	Version string
+	// Notices is the page's notice stream, drawn as the page draws it.
+	Notices []string
 	// CredentialHome is THIS process's own resolution of the Claude Code
 	// credential home, for comparison against the one the daemon published.
 	// A daemon started from a shell that resolved a different one manages that
@@ -76,6 +78,12 @@ func (d daemonScreen) Keys(base KeyMap) KeyMap {
 // Body is the screen, in five blocks, cut to the size it was given.
 func (d daemonScreen) Body(width, height int) string {
 	var lines []string
+	// The page's notice line, drawn the page's way. The r key works here too,
+	// and a refresh that says nothing while it runs, or a command key that
+	// waits for one without a word, is the same silence on either screen.
+	if len(d.Notices) > 0 {
+		lines = append(lines, noticeLine(d.Notices, width, d.Glyphs.Cue), "")
+	}
 	lines = append(lines, d.liveness()...)
 	lines = append(lines, "")
 	lines = append(lines, d.lastDecision()...)

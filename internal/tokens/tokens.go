@@ -24,6 +24,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/cclock"
 	"github.com/Kweiza/ccdaddy/internal/oauth"
+	"github.com/Kweiza/ccdaddy/internal/provider"
 	"github.com/Kweiza/ccdaddy/internal/store"
 )
 
@@ -239,8 +240,8 @@ func (s *Source) liveToken(ctx context.Context, uuid string, stored record) (str
 	// adopting what it left would file that account's grant under this uuid,
 	// and the next switch to this account would log in as the other one. A
 	// rotation of THIS login is not stored anywhere yet, so "matches another
-	// account's record" is exactly what tells the two apart. Only a resolved
-	// identity may be written.
+	// account's record" is what tells a switch from a rotation. See liveOwner
+	// for what it cannot tell apart.
 	if !isLiveLogin(stored, live) {
 		if owner, err := liveOwner(live, uuid); err != nil {
 			return "", err
@@ -689,24 +690,28 @@ func (rec record) apply(fresh *oauth.TokenResponse, now time.Time) (json.RawMess
 	return encoded, nil
 }
 
-// isLiveLogin reports whether this stored record is the login Claude Code is
-// currently using. Both tokens are compared because a record can carry either
-// one alone, which is the same anchor `ccdad which` attributes on.
-// liveOwner is the managed account other than except whose stored record the
-// live login is, or "" when it is nobody's -- which is what a fresh rotation
-// looks like, because the rotated pair has not been stored anywhere yet.
+// liveOwner is the managed Claude account other than except whose stored
+// record the live login is, or "" when it is none of theirs -- which is what a
+// fresh rotation of except looks like, because the rotated pair has not been
+// stored anywhere yet.
+//
+// "" is an inference by elimination and not a resolved identity: a login this
+// store does not hold at all also answers "". Telling those apart needs the
+// identity oracle, which is the daemon's (resolveLive) and not this package's.
+// What this does rule out is the case a switch produces, and a credential it
+// cannot read is reported rather than counted as "not that account's".
 func liveOwner(live cclink.Blob, except string) (string, error) {
 	st, err := store.Open()
 	if err != nil {
 		return "", err
 	}
 	for _, a := range st.Accounts() {
-		if a.UUID == except {
+		if a.UUID == except || a.Provider != provider.Claude {
 			continue
 		}
 		creds, err := st.Credentials(a.UUID)
 		if err != nil {
-			continue
+			return "", fmt.Errorf("%w: cannot rule out that the live login is %s's: %v", ErrUnavailable, a.UUID, err)
 		}
 		if rec, ok := recordOf(creds); ok && isLiveLogin(rec, live) {
 			return a.UUID, nil
@@ -715,6 +720,9 @@ func liveOwner(live cclink.Blob, except string) (string, error) {
 	return "", nil
 }
 
+// isLiveLogin reports whether this stored record is the login Claude Code is
+// currently using. Both tokens are compared because a record can carry either
+// one alone, which is the same anchor `ccdad which` attributes on.
 func isLiveLogin(rec record, live cclink.Blob) bool {
 	current, ok := recordOf(live)
 	if !ok {

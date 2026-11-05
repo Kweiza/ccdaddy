@@ -78,7 +78,7 @@ func tuiOptions(cmd *cobra.Command) tui.Options {
 	}
 	return tui.Options{
 		Load:    func(now time.Time) (view.Snapshot, error) { return read(now, false) },
-		Refresh: spacedRefresh(read),
+		Refresh: spacedRefresh(read, timeNow),
 		Exec:    freshRootExec(cmd),
 		Now:     timeNow,
 		// Out is where the ONE-SHOT render writes, and it is filled for both
@@ -119,24 +119,30 @@ func tuiOptions(cmd *cobra.Command) tui.Options {
 //
 // The poller's own gate is per account and counts READINGS, and a failed poll
 // leaves none: with an account whose usage call keeps failing, a held key
-// would ask again the moment each answer came back. Spacing the attempts
+// would ask again the moment each answer came back. Spacing the passes
 // themselves, by the figure that gate uses for a good reading, is what makes
 // "at most once every three minutes" true whether the endpoint answers or not.
 //
+// The interval runs from the END of a pass, by the clock read after it. The
+// readings a pass takes are stamped as it goes, so counted from its start the
+// next pass would find every one of them still under the serve TTL, fetch
+// nothing, and spend the slot.
+//
 // The state lives in this closure, and that is safe because the dashboard runs
 // one read at a time; a second caller would need a lock it does not have.
-func spacedRefresh(read func(now time.Time, refresh bool) (view.Snapshot, error)) func(time.Time) (view.Snapshot, error) {
+func spacedRefresh(read func(now time.Time, refresh bool) (view.Snapshot, error), clock func() time.Time) func(time.Time) (view.Snapshot, error) {
 	var last time.Time
 	return func(now time.Time) (view.Snapshot, error) {
 		if wait := last.Add(usage.ServeTTL).Sub(now); !last.IsZero() && wait > 0 {
 			snap, err := read(now, false)
-			n := fmt.Sprintf("Refreshed %s ago; r asks the endpoints again in %s.\n",
+			n := fmt.Sprintf("r last asked the endpoints %s ago, and asks again in %s.\n",
 				humanDuration(now.Sub(last)), humanDuration(wait))
 			snap.Notices = append([]string{n}, snap.Notices...)
 			return snap, err
 		}
-		last = now
-		return read(now, true)
+		snap, err := read(now, true)
+		last = clock()
+		return snap, err
 	}
 }
 

@@ -1322,6 +1322,102 @@ func TestTheNoticeLineSaysARefreshIsRunningUntilItEnds(t *testing.T) {
 	}
 }
 
+// quits reports whether a command, once run, ends the program.
+func quits(cmd tea.Cmd) bool {
+	for _, msg := range drain(cmd) {
+		if _, ok := msg.(tea.QuitMsg); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// A refresh or a command can be part-way through rotating a refresh grant,
+// and the process does not wait for either before it exits. So a quit waits
+// for the work in hand and then ends the program; a second quit goes at once,
+// which is what keeps ctrl+c from stranding anybody.
+func TestAQuitDuringARefreshWaitsForItAndASecondQuitDoesNot(t *testing.T) {
+	stubTick(t)
+	for _, k := range []string{"q", "ctrl+c"} {
+		var ran [][]string
+		o := fixtureOptions()
+		o.Exec = recorder(&ran)
+		a := appAt(t, o, 113, 26)
+		for a.m.cursorIsLive() {
+			a, _, _ = a.key(keyPress("down"))
+		}
+		a, cmd, _ := a.key(keyPress("r"))
+		drain(cmd)
+		a, cmd, _ = a.key(keyPress("s"))
+		drain(cmd)
+
+		waiting, cmd, _ := a.key(keyPress(k))
+		if quits(cmd) {
+			t.Fatalf("%s during a refresh quit at once", k)
+		}
+		if len(waiting.m.Snap.Notices) == 0 || waiting.m.Snap.Notices[0] != quittingNote {
+			t.Fatalf("%s: Notices = %q, want the page to say it is waiting", k, waiting.m.Snap.Notices)
+		}
+		next, cmd := waiting.Update(loadedMsg{snap: fixtureSnapshot(fixtureReport(113, 26))})
+		if !quits(cmd) {
+			t.Fatalf("%s: the refresh came back and the program did not end", k)
+		}
+		if len(ran) != 0 {
+			t.Fatalf("%s: the switch queued behind the refresh still ran on the way out: %v", k, ran)
+		}
+		_ = next
+
+		_, cmd, _ = waiting.key(keyPress(k))
+		if !quits(cmd) {
+			t.Fatalf("a second %s did not quit at once", k)
+		}
+	}
+}
+
+// The same for a command: the switch's own freshen can be the rotation.
+func TestAQuitDuringACommandWaitsForIt(t *testing.T) {
+	stubTick(t)
+	var ran [][]string
+	o := fixtureOptions()
+	o.Exec = recorder(&ran)
+	a := appAt(t, o, 113, 26)
+	for a.m.cursorIsLive() {
+		a, _, _ = a.key(keyPress("down"))
+	}
+	a, cmd, _ := a.key(keyPress("s"))
+	drain(cmd)
+	a, cmd, _ = a.key(keyPress("q"))
+	if quits(cmd) {
+		t.Fatal("q during a command quit at once")
+	}
+	if _, cmd = a.Update(ranMsg{res: result{Code: exitOK, Argv: ran[0]}}); !quits(cmd) {
+		t.Fatal("the command came back and the program did not end")
+	}
+}
+
+// A local read spends nothing, so it does not hold a quit up.
+func TestAQuitDuringALocalReadIsImmediate(t *testing.T) {
+	stubTick(t)
+	a := appAt(t, fixtureOptions(), 113, 26)
+	a, cmd := a.reloading()
+	drain(cmd)
+	if _, cmd, _ = a.key(keyPress("q")); !quits(cmd) {
+		t.Fatal("q during a local read did not quit")
+	}
+}
+
+// r works on the daemon screen too, so that screen carries the page's notice
+// line: a refresh that says nothing while it runs is the same silence there.
+func TestTheDaemonScreenSaysARefreshIsRunning(t *testing.T) {
+	stubTick(t)
+	a := appAt(t, fixtureOptions(), 113, 26)
+	a.scr = screenDaemon
+	a, _, _ = a.key(keyPress("r"))
+	if body := a.body(); !strings.Contains(body, "refreshing usage") {
+		t.Fatalf("the daemon screen during a refresh does not say so:\n%s", body)
+	}
+}
+
 // A terminal repeats a held key, and these are the keys that change something.
 func TestAHeldMutatingKeyRunsItsCommandOnce(t *testing.T) {
 	stubTick(t)
