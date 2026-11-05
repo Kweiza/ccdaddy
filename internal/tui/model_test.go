@@ -1332,34 +1332,40 @@ func quits(cmd tea.Cmd) bool {
 	return false
 }
 
-// A refresh or a command can be part-way through rotating a refresh grant,
-// and the process does not wait for either before it exits. So a quit waits
-// for the work in hand, says so on a panel, and then ends the program. A
-// second quit goes at once -- but not one that lands inside the key-repeat
-// delay, which is a held key and not a decision.
-func TestAQuitDuringARefreshWaitsForItAndASecondQuitDoesNot(t *testing.T) {
+// waitingApp is a dashboard with a switch deferred behind a refresh in flight,
+// on a clock the test moves, with what the executor ran recorded.
+func waitingApp(t *testing.T, clock *time.Time, ran *[][]string) App {
+	t.Helper()
+	o := fixtureOptions()
+	o.Now = func() time.Time { return *clock }
+	o.Exec = recorder(ran)
+	a := appAt(t, o, 113, 26)
+	for a.m.cursorIsLive() {
+		a, _, _ = a.key(keyPress("down"))
+	}
+	a, cmd, _ := a.key(keyPress("r"))
+	drain(cmd)
+	a, cmd, _ = a.key(keyPress("s"))
+	drain(cmd)
+	return a
+}
+
+// A refresh can be part-way through rotating a refresh grant, and the process
+// does not wait for it before it exits. So a quit waits for it, says so on a
+// panel -- including that the switch queued behind it will not run -- and
+// ends the program when it comes back, starting nothing on the way out.
+func TestAQuitDuringARefreshWaitsForIt(t *testing.T) {
 	stubTick(t)
 	for _, k := range []string{"q", "ctrl+c"} {
 		clock := fixtureNow
 		var ran [][]string
-		o := fixtureOptions()
-		o.Now = func() time.Time { return clock }
-		o.Exec = recorder(&ran)
-		a := appAt(t, o, 113, 26)
-		for a.m.cursorIsLive() {
-			a, _, _ = a.key(keyPress("down"))
-		}
-		a, cmd, _ := a.key(keyPress("r"))
-		drain(cmd)
-		a, cmd, _ = a.key(keyPress("s"))
-		drain(cmd)
-
-		waiting, cmd, _ := a.key(keyPress(k))
+		waiting, cmd, _ := waitingApp(t, &clock, &ran).key(keyPress(k))
 		if quits(cmd) {
 			t.Fatalf("%s during a refresh quit at once", k)
 		}
-		if waiting.scr != screenPanel || waiting.note != quittingNote {
-			t.Fatalf("%s: showing screen %d %q, want the panel saying it is waiting", k, waiting.scr, waiting.note)
+		if waiting.scr != screenPanel || !strings.HasPrefix(waiting.note, refreshWaitNote) ||
+			!strings.Contains(waiting.note, droppedNote) {
+			t.Fatalf("%s: showing screen %d %q, want the refresh's waiting panel naming the dropped key", k, waiting.scr, waiting.note)
 		}
 		next, cmd := waiting.Update(loadedMsg{snap: fixtureSnapshot(fixtureReport(113, 26))})
 		if !quits(cmd) {
@@ -1368,80 +1374,116 @@ func TestAQuitDuringARefreshWaitsForItAndASecondQuitDoesNot(t *testing.T) {
 		if len(ran) != 0 {
 			t.Fatalf("%s: the switch queued behind the refresh still ran on the way out: %v", k, ran)
 		}
-		// Work asked for after the arm returned tea.Quit, before the program
-		// has actually ended, must not start: a key can still arrive then.
-		// Asked of the two gates directly, because the waiting panel does not
-		// bind the keys that would reach them.
+		// Asked of the two gates directly: the waiting panel does not bind
+		// the keys that would reach them, but a key can still arrive between
+		// the arm returning tea.Quit and the program ending.
 		if _, cmd := next.(App).starting([]string{"switch", "x"}); cmd != nil {
 			t.Fatalf("%s: a command could start on the way out", k)
 		}
 		if _, cmd := next.(App).refreshing(); cmd != nil {
 			t.Fatalf("%s: a refresh could start on the way out", k)
 		}
+	}
+}
 
-		clock = clock.Add(forceQuitAfter - time.Millisecond)
-		if _, cmd, _ = waiting.key(keyPress(k)); quits(cmd) {
-			t.Fatalf("%s repeated inside the key-repeat delay quit at once", k)
+// A held q repeats every few tens of milliseconds, and each repeat must
+// restart the pause rather than count as the second press. Only a press after
+// the key has been let go for a pause quits at once.
+func TestAHeldQuitKeyIsNotTheSecondPress(t *testing.T) {
+	stubTick(t)
+	clock := fixtureNow
+	var ran [][]string
+	a, _, _ := waitingApp(t, &clock, &ran).key(keyPress("q"))
+	for i := 0; i < 100; i++ {
+		clock = clock.Add(30 * time.Millisecond)
+		var cmd tea.Cmd
+		if a, cmd, _ = a.key(keyPress("q")); quits(cmd) {
+			t.Fatalf("a held q quit after %s of repeats", time.Duration(i+1)*30*time.Millisecond)
 		}
-		clock = fixtureNow.Add(forceQuitAfter)
-		if _, cmd, _ = waiting.key(keyPress(k)); !quits(cmd) {
-			t.Fatalf("a second %s after %s did not quit at once", k, forceQuitAfter)
+	}
+	clock = clock.Add(forceQuitAfter)
+	if _, cmd, _ := a.key(keyPress("q")); !quits(cmd) {
+		t.Fatal("a q pressed after a pause did not quit at once")
+	}
+}
+
+// Dismissing the waiting panel is staying. The keys behind it would otherwise
+// all be dead with no word why, and the switch the refresh was holding runs
+// as the refresh's own note promised.
+func TestEscOnTheWaitingPanelCallsTheQuitOff(t *testing.T) {
+	stubTick(t)
+	clock := fixtureNow
+	var ran [][]string
+	a, _, _ := waitingApp(t, &clock, &ran).key(keyPress("q"))
+	a, _, _ = a.key(keyPress("esc"))
+	if a.quitting {
+		t.Fatal("esc on the waiting panel left the quit pending")
+	}
+	// quits runs the command it is given, so this also runs the held switch.
+	if _, cmd := a.Update(loadedMsg{snap: fixtureSnapshot(fixtureReport(113, 26))}); quits(cmd) {
+		t.Fatal("the refresh came back and the program ended after esc")
+	}
+	if len(ran) != 1 || ran[0][0] != "switch" {
+		t.Fatalf("after staying, the commands run were %v, want the switch the refresh held", ran)
+	}
+}
+
+// A command can be the rotation too -- a switch freshens the account it
+// installs -- so a quit waits for it. It ends by SHOWING the result, whatever
+// the exit code: a switch exiting 0 can still say the login it wrote will not
+// be used, and one that failed must not end the program unseen. The reload
+// clock keeps reading meanwhile and must not take the wait off the screen.
+func TestAQuitDuringACommandWaitsAndShowsItsResult(t *testing.T) {
+	stubTick(t)
+	for _, code := range []int{exitOK, 1} {
+		var ran [][]string
+		o := fixtureOptions()
+		o.Exec = recorder(&ran)
+		a := appAt(t, o, 113, 26)
+		for a.m.cursorIsLive() {
+			a, _, _ = a.key(keyPress("down"))
+		}
+		a, cmd, _ := a.key(keyPress("s"))
+		drain(cmd)
+		if a, cmd, _ = a.key(keyPress("q")); quits(cmd) {
+			t.Fatalf("exit %d: q during a command quit at once", code)
+		}
+		reloaded, cmd := a.Update(loadedMsg{snap: fixtureSnapshot(fixtureReport(113, 26))})
+		if quits(cmd) {
+			t.Fatalf("exit %d: a reload that finished while the command ran ended the program", code)
+		}
+		if r := reloaded.(App); r.scr != screenPanel || r.note != commandWaitNote {
+			t.Fatalf("exit %d: after a reload the screen is %d %q, want the waiting panel", code, r.scr, r.note)
+		}
+		next, cmd := reloaded.Update(ranMsg{res: result{Code: code, Argv: ran[0], Stderr: "said something"}})
+		if quits(cmd) {
+			t.Fatalf("exit %d: the command came back and the program ended without showing it", code)
+		}
+		got := next.(App)
+		if got.scr != screenPanel || got.res.Code != code || got.quitting {
+			t.Fatalf("exit %d: screen %d, result %d, quitting %v; want the result shown and the wait over",
+				code, got.scr, got.res.Code, got.quitting)
+		}
+		if _, cmd, _ = got.key(keyPress("q")); !quits(cmd) {
+			t.Fatalf("exit %d: q on the result did not quit", code)
 		}
 	}
 }
 
-// The same for a command: the switch's own freshen can be the rotation. The
-// reload clock keeps reading while a command runs, and the wait must still be
-// on screen when it comes back.
-func TestAQuitDuringACommandWaitsForIt(t *testing.T) {
+// An immediate quit closes the gates too. tea.Quit arrives asynchronously, so
+// a key read in the same burst as q is handled before the program ends.
+func TestAnImmediateQuitStartsNothingAfterIt(t *testing.T) {
 	stubTick(t)
-	var ran [][]string
-	o := fixtureOptions()
-	o.Exec = recorder(&ran)
-	a := appAt(t, o, 113, 26)
-	for a.m.cursorIsLive() {
-		a, _, _ = a.key(keyPress("down"))
+	a := appAt(t, fixtureOptions(), 113, 26)
+	a, cmd, _ := a.key(keyPress("q"))
+	if !quits(cmd) {
+		t.Fatal("q with nothing in flight did not quit")
 	}
-	a, cmd, _ := a.key(keyPress("s"))
-	drain(cmd)
-	a, cmd, _ = a.key(keyPress("q"))
-	if quits(cmd) {
-		t.Fatal("q during a command quit at once")
+	if _, cmd := a.starting([]string{"switch", "x"}); cmd != nil {
+		t.Fatal("a command could start after an immediate quit")
 	}
-	reloaded, cmd := a.Update(loadedMsg{snap: fixtureSnapshot(fixtureReport(113, 26))})
-	if quits(cmd) {
-		t.Fatal("a reload that finished while the command ran ended the program")
-	}
-	if r := reloaded.(App); r.scr != screenPanel || r.note != quittingNote {
-		t.Fatalf("after a reload the screen is %d %q, want the waiting panel still up", r.scr, r.note)
-	}
-	if _, cmd = reloaded.Update(ranMsg{res: result{Code: exitOK, Argv: ran[0]}}); !quits(cmd) {
-		t.Fatal("the command came back and the program did not end")
-	}
-}
-
-// A command that did not do what it was asked is shown, not exited past: a
-// failed switch would otherwise end the program with the user believing it
-// happened.
-func TestAQuitWaitingOnAFailedCommandShowsTheFailureInstead(t *testing.T) {
-	stubTick(t)
-	var ran [][]string
-	o := fixtureOptions()
-	o.Exec = recorder(&ran)
-	a := appAt(t, o, 113, 26)
-	for a.m.cursorIsLive() {
-		a, _, _ = a.key(keyPress("down"))
-	}
-	a, cmd, _ := a.key(keyPress("s"))
-	drain(cmd)
-	a, _, _ = a.key(keyPress("q"))
-	next, cmd := a.Update(ranMsg{res: result{Code: 1, Argv: ran[0], Stderr: "switch refused"}})
-	if quits(cmd) {
-		t.Fatal("a failed command was exited past")
-	}
-	if got := next.(App); got.scr != screenPanel || got.res.Code != 1 || got.quitting {
-		t.Fatalf("screen %d, result %d, quitting %v; want the failure shown and the quit called off",
-			got.scr, got.res.Code, got.quitting)
+	if _, cmd := a.refreshing(); cmd != nil {
+		t.Fatal("a refresh could start after an immediate quit")
 	}
 }
 

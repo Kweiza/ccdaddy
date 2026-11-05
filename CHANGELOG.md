@@ -29,11 +29,12 @@ must reference accounts by `uuid` or `alias`.
   can spend the same single-use refresh grant: a refresh waits for a running
   command, and the first command key pressed during a refresh runs when it
   ends.
-- `q` or `ctrl+c` while a dashboard refresh or command is running waits for it
-  to finish, instead of exiting part-way through a token rotation and leaving a
-  spent refresh grant behind. Pressed again a second or more later, it quits at
-  once. A command that failed is shown instead of exited past. Closing the
-  terminal still ends the dashboard at once.
+- `q` or `ctrl+c` while a dashboard refresh or command is running no longer
+  exits part-way through a token rotation, leaving a spent refresh grant
+  behind. During a refresh it waits for it and then quits; during a command it
+  waits and shows the command's result, so a switch that failed or warned is
+  not exited past unseen. `esc` on that panel stays, and `q` again after a
+  pause quits at once. Closing the terminal still ends the dashboard at once.
 
 ### Fixed
 
