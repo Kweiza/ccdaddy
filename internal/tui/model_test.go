@@ -1153,7 +1153,7 @@ func TestOnlyOneReadIsEverInFlight(t *testing.T) {
 	if *refreshes != 2 || *loads != 0 {
 		t.Fatalf("%d refreshes and %d local reads ran; the remembered one was remembered twice", *refreshes, *loads)
 	}
-	if last.(App).loading {
+	if last.(App).inFlight != readNone {
 		t.Error("the loop still thinks a read is in flight")
 	}
 }
@@ -1184,6 +1184,7 @@ func TestOnlyTheRefreshKeyReachesTheEndpoints(t *testing.T) {
 		"the reload clock":    reloadMsg(fixtureNow),
 		"the startup read":    startMsg{},
 		"a command's outcome": ranMsg{res: result{Code: exitOK, Argv: []string{"switch", "x"}}},
+		"a finished login":    addFinishedMsg{},
 	} {
 		o, loads, refreshes := countedOptions()
 		a := appAt(t, o, 113, 26)
@@ -1217,6 +1218,107 @@ func TestARefreshAskedForBehindAReloadIsRememberedAsARefresh(t *testing.T) {
 	drain(cmd)
 	if *refreshes != 1 || *loads != 1 {
 		t.Fatalf("after the reload came back: %d refreshes and %d local reads, want the queued refresh", *refreshes, *loads)
+	}
+}
+
+// The queue keeps the LARGER of what it was asked for, not the latest. A
+// reload tick that lands behind a queued refresh must not turn it back into a
+// local read, or the key press is lost to whichever tick came after it.
+func TestALaterReloadDoesNotDowngradeAQueuedRefresh(t *testing.T) {
+	stubTick(t)
+	o, loads, refreshes := countedOptions()
+	a := appAt(t, o, 113, 26)
+	*loads = 0
+
+	a, cmd := a.reloading()
+	drain(cmd)
+	a, cmd, _ = a.key(keyPress("r"))
+	drain(cmd)
+	next, cmd := a.Update(reloadMsg(fixtureNow))
+	drain(cmd)
+	_, cmd = next.(App).Update(loadedMsg{snap: fixtureSnapshot(fixtureReport(113, 26))})
+	drain(cmd)
+	if *refreshes != 1 {
+		t.Fatalf("a reload tick behind a queued refresh left %d refreshes, want the refresh kept", *refreshes)
+	}
+}
+
+// A refresh and a command can both spend an account's single-use refresh
+// grant, so the dashboard never runs them at once. A command asked for while a
+// refresh is in flight runs when it comes back, rather than being dropped.
+func TestACommandAskedForDuringARefreshWaitsForIt(t *testing.T) {
+	stubTick(t)
+	var ran [][]string
+	o, _, _ := countedOptions()
+	o.Exec = recorder(&ran)
+	a := appAt(t, o, 113, 26)
+	for a.m.cursorIsLive() {
+		a, _, _ = a.key(keyPress("down"))
+	}
+
+	a, cmd, _ := a.key(keyPress("r"))
+	drain(cmd)
+	a, cmd, _ = a.key(keyPress("s"))
+	drain(cmd)
+	if len(ran) != 0 {
+		t.Fatalf("a switch ran while a refresh was in flight: %v", ran)
+	}
+	_, cmd = a.Update(loadedMsg{snap: fixtureSnapshot(fixtureReport(113, 26))})
+	drain(cmd)
+	if len(ran) != 1 || ran[0][0] != "switch" {
+		t.Fatalf("after the refresh came back the commands run were %v, want the waiting switch", ran)
+	}
+}
+
+// And the other order: a refresh asked for while a command runs waits for the
+// command, and is still a refresh when it goes.
+func TestARefreshAskedForDuringACommandWaitsForIt(t *testing.T) {
+	stubTick(t)
+	var ran [][]string
+	o, loads, refreshes := countedOptions()
+	o.Exec = recorder(&ran)
+	a := appAt(t, o, 113, 26)
+	*loads = 0
+	for a.m.cursorIsLive() {
+		a, _, _ = a.key(keyPress("down"))
+	}
+
+	a, cmd, _ := a.key(keyPress("s"))
+	drain(cmd)
+	a, cmd, _ = a.key(keyPress("r"))
+	drain(cmd)
+	if *refreshes != 0 {
+		t.Fatalf("a refresh ran while a command was in flight")
+	}
+	next, cmd := a.Update(ranMsg{res: result{Code: exitOK, Argv: ran[0]}})
+	drain(cmd)
+	_, cmd = next.(App).Update(loadedMsg{snap: fixtureSnapshot(fixtureReport(113, 26))})
+	drain(cmd)
+	if *refreshes != 1 {
+		t.Fatalf("after the command came back %d refreshes ran, want the waiting one", *refreshes)
+	}
+}
+
+// A refresh can take as long as the endpoints do, so the page says one is
+// running -- and says nothing of the kind once it has ended, however it ended.
+func TestTheNoticeLineSaysARefreshIsRunningUntilItEnds(t *testing.T) {
+	stubTick(t)
+	o := fixtureOptions()
+	o.Refresh = func(time.Time) (view.Snapshot, error) { return view.Snapshot{}, errors.New("unreachable") }
+	a := appAt(t, o, 113, 26)
+
+	a, cmd, _ := a.key(keyPress("r"))
+	if len(a.m.Snap.Notices) == 0 || a.m.Snap.Notices[0] != refreshingNote {
+		t.Fatalf("Notices while refreshing = %q, want %q first", a.m.Snap.Notices, refreshingNote)
+	}
+	var next tea.Model = a
+	for _, msg := range drain(cmd) {
+		next, _ = next.Update(msg)
+	}
+	for _, n := range next.(App).m.Snap.Notices {
+		if n == refreshingNote {
+			t.Fatalf("the failed refresh left %q on the page", refreshingNote)
+		}
 	}
 }
 

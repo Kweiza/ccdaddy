@@ -272,7 +272,7 @@ func (m Model) AfterLoad(snap view.Snapshot, err error) Model {
 	}
 	kept := make([]string, 0, len(m.Snap.Notices)+1)
 	for _, n := range m.Snap.Notices {
-		if !strings.HasPrefix(n, refreshFailed) {
+		if !strings.HasPrefix(n, refreshFailed) && n != refreshingNote {
 			kept = append(kept, n)
 		}
 	}
