@@ -198,8 +198,14 @@ func (s *Source) AccessToken(ctx context.Context, uuid string) (string, error) {
 	return s.refresh(ctx, uuid, rec)
 }
 
+// afterIdentityCheck runs between AccessToken's unlocked identity check and
+// liveToken's locked re-read, and does nothing. A test replaces it to land a
+// switch in that window, which no timing can arrange reliably.
+var afterIdentityCheck = func() {}
+
 // liveToken answers for the account Claude Code is logged in as.
 func (s *Source) liveToken(ctx context.Context, uuid string, stored record) (string, error) {
+	afterIdentityCheck()
 	lockDir, err := cclock.OAuthRefreshLockDir()
 	if err != nil {
 		return "", err
@@ -226,6 +232,21 @@ func (s *Source) liveToken(ctx context.Context, uuid string, stored record) (str
 	if !ok {
 		// The file changed under us between the identity check and this read.
 		return "", fmt.Errorf("%w: the live credentials file no longer holds an OAuth login", ErrUnavailable)
+	}
+
+	// The identity check in AccessToken ran BEFORE this lock, and a switch can
+	// land in between: it installs another managed account's stored record, so
+	// adopting what it left would file that account's grant under this uuid,
+	// and the next switch to this account would log in as the other one. A
+	// rotation of THIS login is not stored anywhere yet, so "matches another
+	// account's record" is exactly what tells the two apart. Only a resolved
+	// identity may be written.
+	if !isLiveLogin(stored, live) {
+		if owner, err := liveOwner(live, uuid); err != nil {
+			return "", err
+		} else if owner != "" {
+			return "", fmt.Errorf("%w: the live login moved to %s while %s's was being read", ErrUnavailable, owner, uuid)
+		}
 	}
 
 	// Adopt whatever Claude Code has rotated to, so a later `ccdad switch` back
@@ -671,6 +692,29 @@ func (rec record) apply(fresh *oauth.TokenResponse, now time.Time) (json.RawMess
 // isLiveLogin reports whether this stored record is the login Claude Code is
 // currently using. Both tokens are compared because a record can carry either
 // one alone, which is the same anchor `ccdad which` attributes on.
+// liveOwner is the managed account other than except whose stored record the
+// live login is, or "" when it is nobody's -- which is what a fresh rotation
+// looks like, because the rotated pair has not been stored anywhere yet.
+func liveOwner(live cclink.Blob, except string) (string, error) {
+	st, err := store.Open()
+	if err != nil {
+		return "", err
+	}
+	for _, a := range st.Accounts() {
+		if a.UUID == except {
+			continue
+		}
+		creds, err := st.Credentials(a.UUID)
+		if err != nil {
+			continue
+		}
+		if rec, ok := recordOf(creds); ok && isLiveLogin(rec, live) {
+			return a.UUID, nil
+		}
+	}
+	return "", nil
+}
+
 func isLiveLogin(rec record, live cclink.Blob) bool {
 	current, ok := recordOf(live)
 	if !ok {
