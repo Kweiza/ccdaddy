@@ -51,9 +51,10 @@ var (
 	// fleet out over one outage.
 	ErrUnavailable = errors.New("the token endpoint could not be reached")
 
-	// ErrLiveMoved means the live login changed hands while it was being read:
-	// it is now another managed account's. Nothing was written, nothing was
-	// spent, and the next read asks again. It says nothing about the account.
+	// ErrLiveMoved means the live login changed while it was being read: it is
+	// now another managed account's, or no OAuth login at all. Nothing was
+	// written, nothing was spent, and the next read asks again. It says nothing
+	// about the account.
 	ErrLiveMoved = errors.New("the live login changed while it was being read")
 
 	// ErrNoOAuthCredential means the account has no claudeAiOauth to refresh.
