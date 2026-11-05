@@ -2,7 +2,9 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"io"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,6 +14,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 	"github.com/Kweiza/ccdaddy/internal/theme"
 	"github.com/Kweiza/ccdaddy/internal/tui"
+	"github.com/Kweiza/ccdaddy/internal/usage"
 	"github.com/Kweiza/ccdaddy/internal/view"
 )
 
@@ -141,6 +144,51 @@ func TestTheInteractiveHalfKeepsNoticesOffTheTerminalItDoesNotOwn(t *testing.T) 
 	}
 }
 
+// The r key's read is `status --refresh`'s, on the same serve-TTL gate, and the
+// clock's read never fetches. The refresh's own notices must reach the Snapshot:
+// the dashboard silences stderr, so a "nothing needed refreshing" written only
+// there would answer the key with no sign that it ran at all.
+func TestTheDashboardsRefreshFetchesAndItsReloadDoesNot(t *testing.T) {
+	isolate(t)
+	now := listNow
+	movableClock(t, &now)
+	seedAccount(t, "uuid-a", "work@example.com")
+	calls := stubRefresh(t, func() (*usage.Snapshot, error) { return snapshotUsing(now, 25), nil })
+
+	root := NewRootCmd()
+	root.SetContext(context.Background())
+	root.SetErr(io.Discard)
+	o := tuiOptions(root)
+
+	if _, err := o.Load(o.Now()); err != nil {
+		t.Fatalf("Options.Load: %v", err)
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("the reload fetched %d times, want 0", calls.Load())
+	}
+	if _, err := o.Refresh(o.Now()); err != nil {
+		t.Fatalf("Options.Refresh: %v", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("the refresh fetched %d times, want 1", calls.Load())
+	}
+
+	snap, err := o.Refresh(o.Now())
+	if err != nil {
+		t.Fatalf("Options.Refresh: %v", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("a second refresh inside the serve TTL fetched again (%d fetches)", calls.Load())
+	}
+	said := false
+	for _, n := range snap.Notices {
+		said = said || strings.Contains(n, "Nothing needed refreshing")
+	}
+	if !said {
+		t.Fatalf("Notices = %q, want the refresh to say why it fetched nothing", snap.Notices)
+	}
+}
+
 // The executor is the whole interaction layer's contract, and it is V0's
 // freshRootExec -- this test exercises it through this package's call site
 // rather than re-testing exec.go's own unit tests for it. SetArgs must never be
@@ -191,6 +239,9 @@ func TestEveryFieldPackageTuiCannotReadForItselfIsFilledIn(t *testing.T) {
 
 	if o.Load == nil {
 		t.Fatal("Options.Load is nil: the page would report the store unreadable on its first tick")
+	}
+	if o.Refresh == nil {
+		t.Fatal("Options.Refresh is nil: the refresh key would panic instead of asking the endpoints")
 	}
 	if o.Exec == nil {
 		t.Fatal("Options.Exec is nil: every mutating key would panic instead of running a command")

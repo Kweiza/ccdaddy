@@ -45,10 +45,13 @@ import (
 // Splitting them for real means splitting the seam, which is not this file's
 // to split.
 //
-// Nothing here ever reaches the network. The usage endpoint allows roughly
+// Neither clock ever reaches the network. The usage endpoint allows roughly
 // 28-30 requests per identity per rolling hour on a sliding window, and quota
 // only moves every minute to ten anyway, so one dashboard left open would
-// saturate an account for a full hour and learn nothing for it.
+// saturate an account for a full hour and learn nothing for it. The r key does
+// reach it, through Options.Refresh, because a person pressing it is asking for
+// exactly that -- and the serve TTL holds a held key to one request per
+// account per three minutes, which is the bound `status --refresh` already has.
 const (
 	contentCadence = 1500 * time.Millisecond
 	reloadCadence  = 10 * time.Second
@@ -78,10 +81,10 @@ type contentMsg time.Time
 // reloadMsg is the expensive clock: one Load, and the next one scheduled.
 type reloadMsg time.Time
 
-// refreshMsg is one Load with no clock behind it -- the startup read, sent
+// startMsg is one Load with no clock behind it -- the startup read, sent
 // from Init because Init returns a command and not a model, and the in-flight
 // bookkeeping below lives on the model.
-type refreshMsg struct{}
+type startMsg struct{}
 
 // loadedMsg is one Load's whole result, error included. The error is carried
 // rather than dropped because a failed refresh is a thing the page says out
@@ -143,14 +146,14 @@ type App struct {
 	log    []string
 	logErr error
 
-	// loading is whether a read is already in flight and pending is whether
-	// something asked for another while it was. One outstanding read at a time
-	// is what stops a held-down refresh key from reproducing the very cost
-	// profile the split cadence exists to avoid, and it is what lets
-	// Options.Load stay a function nobody ever promised was safe to call from
+	// loading is whether a read is already in flight and queued is the read
+	// something asked for while it was. One outstanding read at a time is what
+	// stops a held-down refresh key from reproducing the very cost profile the
+	// split cadence exists to avoid, and it is what lets Options.Load and
+	// Options.Refresh stay functions nobody ever promised were safe to call from
 	// two goroutines at once.
 	loading bool
-	pending bool
+	queued  read
 
 	// running is whether a command is already in flight. A terminal repeats a
 	// held key, and one held x on the daemon screen would otherwise be N
@@ -162,6 +165,17 @@ type App struct {
 	// are no last good numbers, and a failure has to say something else.
 	hasLoaded bool
 }
+
+// read is which of the two reads a request asks for. The order is meaningful:
+// a network read ends in a complete local one, so it answers a local request as
+// well, and a queue holding both only has to remember the larger.
+type read int
+
+const (
+	readNone read = iota
+	readLocal
+	readNetwork
+)
 
 // neverLoaded is what a failure says while there is nothing behind it. The
 // ordinary failed-refresh notice promises the last good numbers, and an empty
@@ -195,7 +209,7 @@ func newApp(o Options) App {
 // must not be the change that makes it one.
 func (a App) Init() tea.Cmd {
 	return tea.Batch(
-		func() tea.Msg { return refreshMsg{} },
+		func() tea.Msg { return startMsg{} },
 		a.tickContent(),
 		a.tickReload(),
 		tea.RequestBackgroundColor,
@@ -266,7 +280,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, tea.Batch(cmds...)
 
-	case refreshMsg:
+	case startMsg:
 		return a.reloading()
 
 	case loadedMsg:
@@ -283,9 +297,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.m.Snap.Notices = []string{neverLoaded + msg.err.Error()}
 		}
 		a.m = scrolled(a.m)
-		if a.pending {
-			a.pending = false
-			return a.reloading()
+		if next := a.queued; next != readNone {
+			a.queued = readNone
+			return a.reading(next)
 		}
 		return a, nil
 
@@ -541,7 +555,7 @@ func (a App) daemonKey(msg tea.KeyPressMsg, k KeyMap) (App, tea.Cmd, bool) {
 	case key.Matches(msg, k.Quit):
 		return a, tea.Quit, true
 	case key.Matches(msg, k.Refresh):
-		a, cmd := a.reloading()
+		a, cmd := a.refreshing()
 		return a, tea.Batch(cmd, a.tailLog()), true
 	}
 	return a, nil, false
@@ -635,7 +649,7 @@ func (a App) pageKey(msg tea.KeyPressMsg, k KeyMap) (App, tea.Cmd, bool) {
 		return a, nil, true
 
 	case key.Matches(msg, k.Refresh):
-		a, cmd := a.reloading()
+		a, cmd := a.refreshing()
 		return a, cmd, true
 
 	case key.Matches(msg, k.Help):
@@ -723,7 +737,13 @@ func keyPress(name string) tea.KeyPressMsg {
 	return tea.KeyPressMsg{}
 }
 
-// reloading asks for one whole read of the documents the page draws.
+// reloading asks for one whole read of the documents the page draws, and
+// refreshing asks for the endpoints to be read first. Every clock and every
+// command outcome reloads; only the r key refreshes.
+func (a App) reloading() (App, tea.Cmd)  { return a.reading(readLocal) }
+func (a App) refreshing() (App, tea.Cmd) { return a.reading(readNetwork) }
+
+// reading is the one place a read is issued.
 //
 // It is one call because that is the seam: the snapshot is built by the
 // command tree, which owns the read order and the notice stream, so a loop
@@ -733,14 +753,20 @@ func keyPress(name string) tea.KeyPressMsg {
 // At most one is ever in flight. A second request while one is running is
 // REMEMBERED rather than dropped -- the thing that asked usually asked because
 // something just changed, and the read already running may have started before
-// it did -- and issued the moment the first comes back.
-func (a App) reloading() (App, tea.Cmd) {
+// it did -- and issued the moment the first comes back. A refresh asked for
+// behind a timer's reload is remembered AS a refresh: keeping only "something
+// asked" would answer the key with a local read, which is the bug the key was
+// changed to fix.
+func (a App) reading(r read) (App, tea.Cmd) {
 	if a.loading {
-		a.pending = true
+		a.queued = max(a.queued, r)
 		return a, nil
 	}
 	a.loading = true
 	load, now := a.opts.Load, a.opts.Now
+	if r == readNetwork {
+		load = a.opts.Refresh
+	}
 	return a, func() tea.Msg {
 		snap, err := load(now())
 		return loadedMsg{snap: snap, err: err}

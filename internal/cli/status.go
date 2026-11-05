@@ -114,6 +114,15 @@ func loadSnapshot(cmd *cobra.Command, now time.Time, refresh bool) (snap view.Sn
 	// is what a user reaches for when something is already wrong.
 	live, _ := cclink.Load()
 	active, hasActive := attributeLive(live, accounts, s.Credentials)
+
+	// Every notice is said on stderr AND kept for the Snapshot, through this one
+	// arm, so no notice can reach one of the two and not the other.
+	var notices []string
+	say := func(n string) {
+		fmt.Fprint(cmd.ErrOrStderr(), n)
+		notices = append(notices, n)
+	}
+
 	if refresh {
 		pollable := make([]store.Account, 0, len(accounts))
 		for _, account := range accounts {
@@ -121,7 +130,9 @@ func loadSnapshot(cmd *cobra.Command, now time.Time, refresh bool) (snap view.Sn
 				pollable = append(pollable, account)
 			}
 		}
-		refreshUsage(cmd, s, pollable, active, hasActive, now)
+		for _, n := range refreshUsage(cmd, s, pollable, active, hasActive, now) {
+			say(n)
+		}
 		s, err = store.Open()
 		if err != nil {
 			return view.Snapshot{}, nil, err
@@ -130,18 +141,13 @@ func loadSnapshot(cmd *cobra.Command, now time.Time, refresh bool) (snap view.Sn
 	}
 
 	report, probeErr := observeDaemon()
-	var notices []string
 	if probeErr != nil {
 		// A human notice, so a --json caller still receives exactly one document
 		// on stdout.
-		n := fmt.Sprintf("Cannot tell whether a daemon is running: %v\n", probeErr)
-		fmt.Fprint(cmd.ErrOrStderr(), n)
-		notices = append(notices, n)
+		say(fmt.Sprintf("Cannot tell whether a daemon is running: %v\n", probeErr))
 	}
 	if report.StatusErr != nil {
-		n := fmt.Sprintf("The daemon's status file could not be read: %v\n", report.StatusErr)
-		fmt.Fprint(cmd.ErrOrStderr(), n)
-		notices = append(notices, n)
+		say(fmt.Sprintf("The daemon's status file could not be read: %v\n", report.StatusErr))
 	}
 
 	// The cache is the authority for quota. Status has no second source for a
@@ -151,9 +157,7 @@ func loadSnapshot(cmd *cobra.Command, now time.Time, refresh bool) (snap view.Sn
 		return view.Snapshot{}, probeErr, err
 	}
 	if cerr := cache.LoadError(); cerr != nil {
-		n := fmt.Sprintf("The usage cache could not be read: %v\n", cerr)
-		fmt.Fprint(cmd.ErrOrStderr(), n)
-		notices = append(notices, n)
+		say(fmt.Sprintf("The usage cache could not be read: %v\n", cerr))
 	}
 
 	// The measurement is taken HERE, in the one place that already holds both
@@ -167,8 +171,7 @@ func loadSnapshot(cmd *cobra.Command, now time.Time, refresh bool) (snap view.Sn
 	// something is already wrong.
 	fleet, historyNotice := fleetForecast(accounts, cache, now)
 	if historyNotice != "" {
-		fmt.Fprint(cmd.ErrOrStderr(), historyNotice)
-		notices = append(notices, historyNotice)
+		say(historyNotice)
 	}
 
 	engine := map[string]daemon.AccountStatus{}
@@ -183,16 +186,13 @@ func loadSnapshot(cmd *cobra.Command, now time.Time, refresh bool) (snap view.Sn
 	// acquire a second source for a number it already had.
 	cfg, configNotice := configOrDefaults()
 	if configNotice != "" {
-		fmt.Fprint(cmd.ErrOrStderr(), configNotice)
-		notices = append(notices, configNotice)
+		say(configNotice)
 	}
 	plan, decided, planErr := enginePlan(s, now)
 	if planErr != nil {
 		// Said out loud: the Mode line simply disappears otherwise, which reads
 		// as "the engine has nothing to say" rather than "it could not be asked".
-		n := fmt.Sprintf("The engine could not be asked which mode it is ranking in: %v\n", planErr)
-		fmt.Fprint(cmd.ErrOrStderr(), n)
-		notices = append(notices, n)
+		say(fmt.Sprintf("The engine could not be asked which mode it is ranking in: %v\n", planErr))
 	}
 	var mode strategy.Mode
 	hasMode := false
@@ -204,8 +204,7 @@ func loadSnapshot(cmd *cobra.Command, now time.Time, refresh bool) (snap view.Sn
 	// carry them without owning a cobra command or a second policy path.
 	resolve, hoverNotices := view.ThresholdsFor(cfg, now, plan, planErr)
 	for _, n := range hoverNotices {
-		fmt.Fprint(cmd.ErrOrStderr(), n)
-		notices = append(notices, n)
+		say(n)
 	}
 
 	rows := view.Rows(accounts, cache, active, hasActive, now, resolve)

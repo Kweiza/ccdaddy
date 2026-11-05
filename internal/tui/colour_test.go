@@ -518,7 +518,7 @@ func TestTheProgramAsksTheTerminalWhatColourItIs(t *testing.T) {
 	}
 	var reads, others int
 	for _, msg := range msgs {
-		if _, ok := msg.(refreshMsg); ok {
+		if _, ok := msg.(startMsg); ok {
 			reads++
 			continue
 		}
