@@ -272,6 +272,57 @@ func TestLiveLoginIsAdoptedNotRefreshed(t *testing.T) {
 	}
 }
 
+// A switch can land between AccessToken's identity check and the locked
+// re-read. Adopting what it installed would file the other account's grant
+// under this uuid, and the next switch to this account would log in as the
+// other one.
+func TestASwitchUnderTheLiveReadIsNotAdoptedAsThisAccount(t *testing.T) {
+	isolate(t)
+	a := oauthRecord("AT-A", "RT-A", time.Now().Add(7*time.Hour), "")
+	b := oauthRecord("AT-B", "RT-B", time.Now().Add(7*time.Hour), "")
+	seed(t, "u-a", a)
+	seed(t, "u-b", b)
+	writeLive(t, a)
+	landInTheWindow(t, func() { writeLive(t, b) })
+
+	src := sourceFor(t, refusingEndpoint(t))
+	if _, err := src.AccessToken(context.Background(), "u-a"); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("AccessToken() after a switch to another account = %v, want ErrUnavailable", err)
+	}
+	if rec := storedRecord(t, "u-a"); rec.RefreshToken != "RT-A" {
+		t.Fatalf("u-a's stored grant became %q, the other account's", rec.RefreshToken)
+	}
+}
+
+// The other side of the same window: Claude Code rotating THIS login there is
+// stored nowhere yet, so it must still be adopted, or a switch back to this
+// account would install a grant the server has already revoked.
+func TestARotationUnderTheLiveReadIsStillAdopted(t *testing.T) {
+	isolate(t)
+	a := oauthRecord("AT-A", "RT-A", time.Now().Add(7*time.Hour), "")
+	seed(t, "u-a", a)
+	seed(t, "u-b", oauthRecord("AT-B", "RT-B", time.Now().Add(7*time.Hour), ""))
+	writeLive(t, a)
+	landInTheWindow(t, func() { writeLive(t, oauthRecord("AT-A2", "RT-A2", time.Now().Add(8*time.Hour), "")) })
+
+	src := sourceFor(t, refusingEndpoint(t))
+	got, err := src.AccessToken(context.Background(), "u-a")
+	if err != nil || got != "AT-A2" {
+		t.Fatalf("AccessToken() after a rotation = %q, %v; want the rotated token", got, err)
+	}
+	if rec := storedRecord(t, "u-a"); rec.RefreshToken != "RT-A2" {
+		t.Fatalf("u-a's stored grant is %q, want the rotated one adopted", rec.RefreshToken)
+	}
+}
+
+// landInTheWindow runs fn between the identity check and the locked re-read.
+func landInTheWindow(t *testing.T, fn func()) {
+	t.Helper()
+	saved := afterIdentityCheck
+	t.Cleanup(func() { afterIdentityCheck = saved })
+	afterIdentityCheck = fn
+}
+
 // Reading the live login takes Claude Code's refresh lock, so the read cannot
 // land between Claude Code's write of a new access token and its write of the
 // matching refresh token.
