@@ -16,6 +16,11 @@ must reference accounts by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.28.0] — 2026-11-05
+
+The dashboard's `r` now refreshes from the network, and a renewed subscription
+is noticed within 15 minutes instead of a day.
+
 ### Changed
 
 - The dashboard's `r` now refreshes usage and due profile checks, as
@@ -3805,7 +3810,8 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.27.0...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.28.0...HEAD
+[0.28.0]: https://github.com/Kweiza/ccdaddy/compare/v0.27.0...v0.28.0
 [0.27.0]: https://github.com/Kweiza/ccdaddy/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/Kweiza/ccdaddy/compare/v0.25.0...v0.26.0
 [0.25.0]: https://github.com/Kweiza/ccdaddy/compare/v0.24.0...v0.25.0
