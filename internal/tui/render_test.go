@@ -997,6 +997,7 @@ func fixtureOptions() Options {
 	snap := fixtureSnapshot(fixtureReport(113, 26))
 	return Options{
 		Load:      func(time.Time) (view.Snapshot, error) { return snap, nil },
+		Refresh:   func(time.Time) (view.Snapshot, error) { return snap, nil },
 		Now:       func() time.Time { return fixtureNow },
 		Out:       io.Discard,
 		Theme:     theme.None,

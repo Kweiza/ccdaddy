@@ -24,20 +24,25 @@ var newEngine = daemon.NewEngine
 // only spender.
 var codexReadSeams = daemon.CodexReadSeams
 
-// refreshUsage implements `ccdad status --refresh`.
+// refreshUsage implements `ccdad status --refresh` and the dashboard's r key.
 //
 // Disabled accounts stay visible in status but are deliberately absent from
 // want: refreshing is an action, and disabled means the account is held out of
 // automatic work. Every failure is a notice and none changes status's exit
 // code; the cached dashboard still answers, while usage.fetchedAt remains the
 // machine-readable freshness signal.
+//
+// The notices are RETURNED rather than written, so loadSnapshot can put them
+// where it puts every other one: on stderr and in Snapshot.Notices. The
+// dashboard silences stderr, and a refresh written only there would answer a
+// keypress with nothing at all -- not even why nothing was fetched.
 func refreshUsage(cmd *cobra.Command, s *store.Store, want []store.Account,
-	active store.Account, hasActive bool, now time.Time) {
+	active store.Account, hasActive bool, now time.Time) []string {
 
-	errw := cmd.ErrOrStderr()
+	var notices []string
 	cfg, err := config.Load()
 	if err != nil {
-		fmt.Fprintf(errw, "note: %v; refreshing on the built-in defaults\n", err)
+		notices = append(notices, fmt.Sprintf("note: %v; refreshing on the built-in defaults\n", err))
 		cfg = config.Defaults()
 	}
 
@@ -56,17 +61,18 @@ func refreshUsage(cmd *cobra.Command, s *store.Store, want []store.Account,
 		case daemon.RefreshCached:
 			cached++
 		case daemon.RefreshHeld:
-			fmt.Fprintf(errw, "%s: the usage endpoint rate-limited ccdad; a refresh is allowed again in %s.\n",
-				r.Account.Label(), humanDuration(r.At.Sub(now)))
+			notices = append(notices, fmt.Sprintf("%s: the usage endpoint rate-limited ccdad; a refresh is allowed again in %s.\n",
+				r.Account.Label(), humanDuration(r.At.Sub(now))))
 		case daemon.RefreshFailed:
-			fmt.Fprintf(errw, "%s could not be refreshed: %v\n", r.Account.Label(), r.Err)
+			notices = append(notices, fmt.Sprintf("%s could not be refreshed: %v\n", r.Account.Label(), r.Err))
 		case daemon.RefreshUnpollable:
 			// There is no OAuth grant behind an add-token account, so this is
 			// its ordinary state and the row already renders it as unreadable.
 		}
 	}
 	if fetched == 0 && cached > 0 {
-		fmt.Fprintf(errw, "Nothing needed refreshing: every reading is under %s old.\n",
-			humanDuration(usage.ServeTTL))
+		notices = append(notices, fmt.Sprintf("Nothing needed refreshing: every reading is under %s old.\n",
+			humanDuration(usage.ServeTTL)))
 	}
+	return notices
 }

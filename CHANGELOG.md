@@ -16,12 +16,22 @@ must reference accounts by `uuid` or `alias`.
 
 ## [Unreleased]
 
+### Changed
+
+- The dashboard's `r` now refreshes usage and due profile checks, as
+  `ccdad status --refresh` does. It used to re-read local files only, so a
+  key labelled `refresh` changed nothing a reload ten seconds later would not
+  have. Readings under three minutes old are still not fetched again and 429
+  backoff still holds, so a held key asks each account at most once every three
+  minutes. What the refresh did, such as "Nothing needed refreshing", now
+  appears on the dashboard's notice line.
+
 ### Fixed
 
 - The daemon re-checks an `unsubscribed` account every 15 minutes instead of once
   a day. A subscription renewed after its profile said `canceled` stayed
-  `unsubscribed` and out of rotation for up to a day, and neither the dashboard's
-  `r` nor `ccdad status --refresh` could re-check it sooner.
+  `unsubscribed` and out of rotation for up to a day, and a manual refresh could
+  not re-check it sooner.
 
 ## [0.27.0] — 2026-11-02
 

@@ -203,14 +203,17 @@ not present. A failed reading is never displayed as zero usage.
 | `o` | Toggle automatic sorting by the nearest 7-day reset |
 | `c` | Choose the switching strategy |
 | `d` | Open daemon status and logs; `S` starts, `x` stops, `R` restarts |
-| `r` | Reload local state; does not force a network usage request |
+| `r` | Refresh usage and due profile checks, as `ccdad status --refresh` does |
 | `?` | Show help |
 | `esc` | Return to the previous screen |
 | `q` / `ctrl+c` | Quit the dashboard |
 
-Quota and profile refreshes belong to the daemon. Use `ccdad status --refresh`
-for a manual refresh; it still respects quota backoff. The TUI reloads local
-state periodically and keeps the selected account by UUID when rows reorder.
+Quota and profile refreshes belong to the daemon. For a manual refresh, press
+`r` in the dashboard or run `ccdad status --refresh`. Both skip readings under
+three minutes old and respect quota backoff, so a held key asks each account at
+most once every three minutes. Between key presses the dashboard reloads local
+state every ten seconds without network requests, and keeps the selected
+account by UUID when rows reorder.
 
 ### Subscription status
 

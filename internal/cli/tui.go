@@ -66,17 +66,21 @@ func runTui(cmd *cobra.Command, _ []string) error {
 // would tell a user with an unreadable config file about it twice per tick.
 func tuiOptions(cmd *cobra.Command) tui.Options {
 	cfg, _ := configOrDefaults()
-	return tui.Options{
-		Load: func(now time.Time) (view.Snapshot, error) {
-			// probeErr is dropped rather than folded into the error. It is the
-			// daemon probe's own value, which `status --json` needs and a
-			// rendering does not: loadSnapshot has already turned it into the
-			// sentence in Snapshot.Notices, which is what the page draws.
-			snap, _, err := loadSnapshot(cmd, now, false)
+	// probeErr is dropped rather than folded into the error. It is the daemon
+	// probe's own value, which `status --json` needs and a rendering does not:
+	// loadSnapshot has already turned it into the sentence in Snapshot.Notices,
+	// which is what the page draws.
+	read := func(refresh bool) func(time.Time) (view.Snapshot, error) {
+		return func(now time.Time) (view.Snapshot, error) {
+			snap, _, err := loadSnapshot(cmd, now, refresh)
 			return snap, err
-		},
-		Exec: freshRootExec(cmd),
-		Now:  timeNow,
+		}
+	}
+	return tui.Options{
+		Load:    read(false),
+		Refresh: read(true),
+		Exec:    freshRootExec(cmd),
+		Now:     timeNow,
 		// Out is where the ONE-SHOT render writes, and it is filled for both
 		// halves because tui.Run ignores it: a live Program probes the
 		// terminal it was given and makes the colour decision for itself,

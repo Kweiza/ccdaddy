@@ -1108,26 +1108,36 @@ func TestTheReadIsGivenTheClockFromOptions(t *testing.T) {
 	}
 }
 
+// countedOptions is fixtureOptions with each of its two reads counted, so a
+// test can say which one a message asked for.
+func countedOptions() (o Options, loads, refreshes *int) {
+	loads, refreshes = new(int), new(int)
+	o = fixtureOptions()
+	load, refresh := o.Load, o.Refresh
+	o.Load = func(now time.Time) (view.Snapshot, error) { *loads++; return load(now) }
+	o.Refresh = func(now time.Time) (view.Snapshot, error) { *refreshes++; return refresh(now) }
+	return o, loads, refreshes
+}
+
 // A held refresh key repeats. Without a gate it reproduces exactly the cost
 // profile the split cadence exists to avoid -- and it quietly requires
-// Options.Load to be safe to call from twenty goroutines at once, which
+// Options.Refresh to be safe to call from twenty goroutines at once, which
 // nothing has ever promised.
 func TestOnlyOneReadIsEverInFlight(t *testing.T) {
 	stubTick(t)
-	reads := 0
+	o, loads, refreshes := countedOptions()
 	snap := fixtureSnapshot(fixtureReport(113, 26))
-	o := fixtureOptions()
-	o.Load = func(time.Time) (view.Snapshot, error) { reads++; return snap, nil }
 
 	a := appAt(t, o, 113, 26)
-	reads = 0 // appAt does its own read to build the page; count from here
+	*loads = 0 // appAt does its own read to build the page; count from here
 	for i := 0; i < 20; i++ {
 		var cmd tea.Cmd
 		a, cmd, _ = a.key(keyPress("r"))
 		drain(cmd)
 	}
-	if reads != 1 {
-		t.Fatalf("twenty presses of the refresh key issued %d reads, want 1", reads)
+	if *refreshes != 1 || *loads != 0 {
+		t.Fatalf("twenty presses of the refresh key issued %d refreshes and %d local reads, want 1 and 0",
+			*refreshes, *loads)
 	}
 
 	// The nineteen that were refused are ONE remembered read, not nineteen:
@@ -1135,16 +1145,78 @@ func TestOnlyOneReadIsEverInFlight(t *testing.T) {
 	// already running may have started before it did.
 	next, cmd := a.Update(loadedMsg{snap: snap})
 	drain(cmd)
-	if reads != 2 {
-		t.Fatalf("after the read came back %d had run, want the one remembered re-read", reads)
+	if *refreshes != 2 {
+		t.Fatalf("after the read came back %d refreshes had run, want the one remembered re-read", *refreshes)
 	}
 	last, cmd := next.(App).Update(loadedMsg{snap: snap})
 	drain(cmd)
-	if reads != 2 {
-		t.Fatalf("%d reads ran; the remembered one was remembered twice", reads)
+	if *refreshes != 2 || *loads != 0 {
+		t.Fatalf("%d refreshes and %d local reads ran; the remembered one was remembered twice", *refreshes, *loads)
 	}
 	if last.(App).loading {
 		t.Error("the loop still thinks a read is in flight")
+	}
+}
+
+// The r key asks the endpoints, on the page and on the daemon screen alike: one
+// key with two meanings depending on what is showing is one a user cannot rely
+// on. Nothing else may: the clock, the startup read and a command's outcome all
+// reload from disk, because a dashboard left open must not spend an account's
+// hourly allowance on its own.
+func TestOnlyTheRefreshKeyReachesTheEndpoints(t *testing.T) {
+	stubTick(t)
+	for _, scr := range []screen{screenPage, screenDaemon} {
+		o, loads, refreshes := countedOptions()
+		a := appAt(t, o, 113, 26)
+		*loads = 0
+		a.scr = scr
+		_, cmd, ok := a.key(keyPress("r"))
+		if !ok {
+			t.Fatalf("screen %d: the refresh key was not handled", scr)
+		}
+		drain(cmd)
+		if *refreshes != 1 || *loads != 0 {
+			t.Errorf("screen %d: r ran %d refreshes and %d local reads, want 1 and 0", scr, *refreshes, *loads)
+		}
+	}
+
+	for name, msg := range map[string]tea.Msg{
+		"the reload clock":    reloadMsg(fixtureNow),
+		"the startup read":    startMsg{},
+		"a command's outcome": ranMsg{res: result{Code: exitOK, Argv: []string{"switch", "x"}}},
+	} {
+		o, loads, refreshes := countedOptions()
+		a := appAt(t, o, 113, 26)
+		*loads = 0
+		_, cmd := a.Update(msg)
+		drain(cmd)
+		if *refreshes != 0 || *loads != 1 {
+			t.Errorf("%s ran %d refreshes and %d local reads, want 0 and 1", name, *refreshes, *loads)
+		}
+	}
+}
+
+// A refresh asked for while the clock's reload is still running is kept as a
+// REFRESH. Remembering only that something asked would answer the key with a
+// second local read, and the key would do nothing for one press in every
+// ten-second window that a reload happened to be in flight.
+func TestARefreshAskedForBehindAReloadIsRememberedAsARefresh(t *testing.T) {
+	stubTick(t)
+	o, loads, refreshes := countedOptions()
+	a := appAt(t, o, 113, 26)
+	*loads = 0
+
+	a, cmd := a.reloading()
+	drain(cmd)
+	a, cmd, _ = a.key(keyPress("r"))
+	drain(cmd)
+	if *loads != 1 || *refreshes != 0 {
+		t.Fatalf("with a reload in flight, r ran %d refreshes and %d local reads, want it queued", *refreshes, *loads)
+	}
+	_, cmd = a.Update(loadedMsg{snap: fixtureSnapshot(fixtureReport(113, 26))})
+	drain(cmd)
+	if *refreshes != 1 || *loads != 1 {
+		t.Fatalf("after the reload came back: %d refreshes and %d local reads, want the queued refresh", *refreshes, *loads)
 	}
 }
 
@@ -1352,7 +1424,7 @@ func TestAFirstReadThatFailsDoesNotPromiseNumbersItDoesNotHave(t *testing.T) {
 	}
 
 	// And a second failure replaces it rather than stacking.
-	next, cmd := m.Update(refreshMsg{})
+	next, cmd := m.Update(startMsg{})
 	for _, out := range drain(cmd) {
 		next, _ = next.Update(out)
 	}

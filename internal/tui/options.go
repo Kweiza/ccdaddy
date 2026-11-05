@@ -47,6 +47,11 @@ type Options struct {
 	// A failed Load is not fatal and must not empty the table — see
 	// Model.AfterLoad, which is the rule that says what happens instead.
 	Load func(now time.Time) (view.Snapshot, error)
+	// Refresh is Load after asking the endpoints first -- `ccdad status
+	// --refresh`'s read, on the same gate: a reading younger than the serve TTL
+	// is not asked for again and a 429's floor is honoured. It is what the r
+	// key runs, and nothing on a timer may run it.
+	Refresh func(now time.Time) (view.Snapshot, error)
 	// Exec runs one ccdad command through a FRESH cobra root. Every key that
 	// changes anything goes through here rather than calling an internal, so
 	// the scoped-session refusal, the wording and the exit contract all stay
