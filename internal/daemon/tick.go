@@ -1240,9 +1240,9 @@ func (e *Engine) poll(ctx context.Context, a store.Account, cfg config.Config,
 	return nil
 }
 
-// refreshProfile re-reads the account's profile when the stored one has aged
-// past store.ProfileTTL, and writes the four fields a profile decides back to
-// the store.
+// refreshProfile re-reads the account's profile when store.Account.ProfileStale
+// says the stored one is old, and writes the four fields a profile decides back
+// to the store.
 //
 // WHY THIS EXISTS. Tier, RateLimitTier, SeatTier and OrganizationUUID were
 // written once, by `ccdad add claude`, and by nothing else for the life of the
@@ -1262,6 +1262,9 @@ func (e *Engine) poll(ctx context.Context, a store.Account, cfg config.Config,
 // tick. The endpoint's allowance belongs to the identity and every poll already
 // spends one on usage; doubling that permanently, for a value that is stable
 // for months, would buy nothing. store.ProfileTTL is Claude Code's own figure.
+// The one exception is a subscription last read as inactive, which is re-read
+// every store.ProfileRetryInterval because its renewal is the change a user is
+// waiting on -- see store.Account.ProfileStale.
 func (e *Engine) refreshProfile(ctx context.Context, a store.Account, token string, now time.Time) {
 	if e.FetchProfile == nil || token == "" || !a.ProfileStale(now) {
 		return

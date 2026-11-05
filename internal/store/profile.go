@@ -16,6 +16,11 @@ import (
 // `XH=86400000` in 2.1.246 -- one day. Picking a different figure here would
 // mean the two programs re-read the same endpoint on different schedules for
 // the same account, which is a second poller nobody asked for.
+//
+// It does not govern a subscription last read as inactive. That account is held
+// out of rotation, so Claude Code is not ordinarily running on it and there is
+// no schedule of its to match; profileTTL below re-reads it on
+// ProfileRetryInterval.
 const ProfileTTL = 24 * time.Hour
 
 // ProfileStale reports whether this account's profile-derived fields are old
