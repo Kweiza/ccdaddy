@@ -31,10 +31,11 @@ must reference accounts by `uuid` or `alias`.
   ends.
 - `q` or `ctrl+c` while a dashboard refresh or command is running no longer
   exits part-way through a token rotation, leaving a spent refresh grant
-  behind. During a refresh it waits for it and then quits; during a command it
-  waits and shows the command's result, so a switch that failed or warned is
-  not exited past unseen. `esc` on that panel stays, and `q` again after a
-  pause quits at once. Closing the terminal still ends the dashboard at once.
+  behind. During a refresh it waits for it and then quits, dropping a command
+  key pressed during the refresh; during a command it waits and shows the
+  command's result, so a switch that failed or warned is not exited past
+  unseen. `esc` on that panel stays, and `q` again after a two-second pause
+  quits at once. Closing the terminal still ends the dashboard at once.
 
 ### Fixed
 

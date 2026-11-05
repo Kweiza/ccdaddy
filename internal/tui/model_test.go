@@ -1405,26 +1405,87 @@ func TestAHeldQuitKeyIsNotTheSecondPress(t *testing.T) {
 	if _, cmd, _ := a.key(keyPress("q")); !quits(cmd) {
 		t.Fatal("a q pressed after a pause did not quit at once")
 	}
+	// A repeat the terminal reports as one never acts, however late.
+	clock = clock.Add(forceQuitAfter)
+	held := tea.KeyPressMsg{Code: 'q', Text: "q", IsRepeat: true}
+	if _, cmd, _ := a.key(held); quits(cmd) {
+		t.Fatal("a reported key repeat quit")
+	}
 }
 
-// Dismissing the waiting panel is staying. The keys behind it would otherwise
-// all be dead with no word why, and the switch the refresh was holding runs
-// as the refresh's own note promised.
+// Dismissing the waiting panel is staying: the keys behind it would otherwise
+// all be dead with no word why. The switch the refresh was holding stays
+// dropped, as the panel said it would be; esc must not bring it back.
 func TestEscOnTheWaitingPanelCallsTheQuitOff(t *testing.T) {
 	stubTick(t)
 	clock := fixtureNow
 	var ran [][]string
 	a, _, _ := waitingApp(t, &clock, &ran).key(keyPress("q"))
 	a, _, _ = a.key(keyPress("esc"))
-	if a.quitting {
-		t.Fatal("esc on the waiting panel left the quit pending")
+	if a.quitState != quitNone {
+		t.Fatalf("esc on the waiting panel left the quit at %d", a.quitState)
 	}
-	// quits runs the command it is given, so this also runs the held switch.
+	// quits runs the command it is given, so this also runs anything queued.
 	if _, cmd := a.Update(loadedMsg{snap: fixtureSnapshot(fixtureReport(113, 26))}); quits(cmd) {
 		t.Fatal("the refresh came back and the program ended after esc")
 	}
-	if len(ran) != 1 || ran[0][0] != "switch" {
-		t.Fatalf("after staying, the commands run were %v, want the switch the refresh held", ran)
+	if len(ran) != 0 {
+		t.Fatalf("the switch the panel said would not run ran after esc: %v", ran)
+	}
+}
+
+// Once the arm has returned tea.Quit the quit is ENDING, and esc cannot undo
+// it: the exit is on its way, and re-opening the gates would let a command
+// start that the exit then cuts off.
+func TestEscCannotCallOffAQuitThatIsEnding(t *testing.T) {
+	stubTick(t)
+	clock := fixtureNow
+	var ran [][]string
+	a, _, _ := waitingApp(t, &clock, &ran).key(keyPress("q"))
+	next, cmd := a.Update(loadedMsg{snap: fixtureSnapshot(fixtureReport(113, 26))})
+	if !quits(cmd) {
+		t.Fatal("the refresh came back and the program did not end")
+	}
+	ending, _, _ := next.(App).key(keyPress("esc"))
+	if ending.quitState != quitEnding {
+		t.Fatalf("esc after tea.Quit moved the quit to %d", ending.quitState)
+	}
+	if _, cmd := ending.starting([]string{"switch", "x"}); cmd != nil {
+		t.Fatal("a command could start after esc on an ending quit")
+	}
+}
+
+// A refresh queued behind a command survives a quit that waited on that
+// command and was called off: the user's r still runs.
+func TestARefreshQueuedBehindACommandSurvivesACalledOffQuit(t *testing.T) {
+	stubTick(t)
+	var ran [][]string
+	o, loads, refreshes := countedOptions()
+	o.Exec = recorder(&ran)
+	a := appAt(t, o, 113, 26)
+	*loads = 0
+	for a.m.cursorIsLive() {
+		a, _, _ = a.key(keyPress("down"))
+	}
+	a, cmd, _ := a.key(keyPress("s"))
+	drain(cmd)
+	a, cmd, _ = a.key(keyPress("r"))
+	drain(cmd)
+	a, _, _ = a.key(keyPress("q"))
+
+	// The reload clock's read lands while the command still runs.
+	reloading, cmd := a.reloading()
+	drain(cmd)
+	read, cmd := reloading.Update(loadedMsg{snap: fixtureSnapshot(fixtureReport(113, 26))})
+	if quits(cmd) {
+		t.Fatal("a local read during the command's wait ended the program")
+	}
+	shown, cmd := read.Update(ranMsg{res: result{Code: exitOK, Argv: ran[0]}})
+	drain(cmd)
+	_, cmd = shown.(App).Update(loadedMsg{snap: fixtureSnapshot(fixtureReport(113, 26))})
+	drain(cmd)
+	if *refreshes != 1 {
+		t.Fatalf("the r pressed during the command ran %d times after the quit was called off, want 1", *refreshes)
 	}
 }
 
@@ -1432,12 +1493,16 @@ func TestEscOnTheWaitingPanelCallsTheQuitOff(t *testing.T) {
 // installs -- so a quit waits for it. It ends by SHOWING the result, whatever
 // the exit code: a switch exiting 0 can still say the login it wrote will not
 // be used, and one that failed must not end the program unseen. The reload
-// clock keeps reading meanwhile and must not take the wait off the screen.
+// clock keeps reading meanwhile and must not take the wait off the screen. A
+// q landing just as the result arrives -- a held key, or a second tap -- must
+// not exit past it either; one after a pause quits.
 func TestAQuitDuringACommandWaitsAndShowsItsResult(t *testing.T) {
 	stubTick(t)
 	for _, code := range []int{exitOK, 1} {
+		clock := fixtureNow
 		var ran [][]string
 		o := fixtureOptions()
+		o.Now = func() time.Time { return clock }
 		o.Exec = recorder(&ran)
 		a := appAt(t, o, 113, 26)
 		for a.m.cursorIsLive() {
@@ -1460,12 +1525,17 @@ func TestAQuitDuringACommandWaitsAndShowsItsResult(t *testing.T) {
 			t.Fatalf("exit %d: the command came back and the program ended without showing it", code)
 		}
 		got := next.(App)
-		if got.scr != screenPanel || got.res.Code != code || got.quitting {
-			t.Fatalf("exit %d: screen %d, result %d, quitting %v; want the result shown and the wait over",
-				code, got.scr, got.res.Code, got.quitting)
+		if got.scr != screenPanel || got.res.Code != code || got.quitState != quitNone {
+			t.Fatalf("exit %d: screen %d, result %d, quit %d; want the result shown and the wait over",
+				code, got.scr, got.res.Code, got.quitState)
 		}
+		clock = clock.Add(30 * time.Millisecond)
+		if got, cmd, _ = got.key(keyPress("q")); quits(cmd) {
+			t.Fatalf("exit %d: a q right after the result exited past it", code)
+		}
+		clock = clock.Add(forceQuitAfter)
 		if _, cmd, _ = got.key(keyPress("q")); !quits(cmd) {
-			t.Fatalf("exit %d: q on the result did not quit", code)
+			t.Fatalf("exit %d: q after a pause on the result did not quit", code)
 		}
 	}
 }
