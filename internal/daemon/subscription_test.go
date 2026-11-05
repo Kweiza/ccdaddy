@@ -3,11 +3,14 @@ package daemon
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/codexusage"
 	"github.com/Kweiza/ccdaddy/internal/identity"
+	"github.com/Kweiza/ccdaddy/internal/provider"
+	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
@@ -48,6 +51,39 @@ func TestPermissionFailureRechecksAnActiveSubscriptionBeforeTheDailyTTL(t *testi
 	_ = pollFor(t, e, a)
 	if !seedAccountRead(t, a.UUID).SubscriptionInactive() {
 		t.Fatal("permission refusal left the paid subscription cached for a day")
+	}
+}
+
+// The usage endpoint answers a renewed account exactly as it answered the lapsed
+// one, so only a profile re-read can notice the renewal, and it has to come
+// sooner than the daily TTL or the account sits out of rotation for a day.
+func TestATickNoticesARenewalWithinTheRetryInterval(t *testing.T) {
+	isolate(t)
+	s, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := store.Account{
+		UUID: "lapsed", Provider: provider.Claude, Email: "lapsed@example.com", Tier: "claude_free",
+		SubscriptionStatus: "canceled", ProfileFetchedAt: tickEpoch.Add(-store.ProfileRetryInterval),
+		AddedAt: tickEpoch.Add(-24 * time.Hour),
+	}
+	if err := s.Add(a, oauthBlob("RT-lapsed")); err != nil {
+		t.Fatal(err)
+	}
+	var profiles atomic.Int32
+	e := engineFor(t, tokensAreFine, func(context.Context, string) (*usage.Snapshot, error) { return snapshotWith(20), nil })
+	e.FetchProfile = func(context.Context, string) (*identity.Profile, error) {
+		profiles.Add(1)
+		return &identity.Profile{AccountUUID: a.UUID, OrganizationType: "claude_max", SubscriptionStatus: "active"}, nil
+	}
+	tick(t, e)
+	if profiles.Load() != 1 {
+		t.Fatalf("profile lookups = %d, want the canceled subscription re-read", profiles.Load())
+	}
+	got := seedAccountRead(t, a.UUID)
+	if got.SubscriptionInactive() || got.Tier != "claude_max" {
+		t.Fatalf("renewal was not stored: status %q tier %q", got.SubscriptionStatus, got.Tier)
 	}
 }
 

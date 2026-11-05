@@ -16,6 +16,13 @@ must reference accounts by `uuid` or `alias`.
 
 ## [Unreleased]
 
+### Fixed
+
+- A renewed subscription is noticed within 15 minutes. An account whose profile
+  said `canceled` was re-checked only once a day, so it stayed `unsubscribed` and
+  out of rotation for up to a day after the renewal. Neither the dashboard's `r`
+  nor `ccdad status --refresh` could hurry it.
+
 ## [0.27.0] — 2026-11-02
 
 Claude's $200 plan is now Ultra, and a verified Ultra account reports no

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/identity"
+	"github.com/Kweiza/ccdaddy/internal/provider"
 )
 
 // enterpriseProfile is the shape measured on a live claude_enterprise seat on
@@ -189,6 +190,25 @@ func TestSubscriptionStatusRenewsWithoutChangingManualFlags(t *testing.T) {
 	a, _ = reopen(t).Get("acct-1")
 	if a.SubscriptionInactive() || a.Disabled {
 		t.Fatal("renewed subscription remains held out")
+	}
+}
+
+func TestAnInactiveSubscriptionIsRereadOnTheRetryInterval(t *testing.T) {
+	for _, tc := range []struct {
+		status string
+		age    time.Duration
+		want   bool
+	}{
+		{"canceled", ProfileRetryInterval - time.Minute, false},
+		{"canceled", ProfileRetryInterval, true},
+		{"expired", ProfileRetryInterval, true},
+		{"active", ProfileRetryInterval, false},
+		{"active", ProfileTTL - time.Minute, false},
+	} {
+		a := Account{Provider: provider.Claude, SubscriptionStatus: tc.status, ProfileFetchedAt: observed.Add(-tc.age)}
+		if got := a.ProfileStale(observed); got != tc.want {
+			t.Errorf("%s profile read %s ago: ProfileStale() = %v, want %v", tc.status, tc.age, got, tc.want)
+		}
 	}
 }
 

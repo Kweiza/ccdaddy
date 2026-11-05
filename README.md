@@ -224,7 +224,8 @@ not postpone a due subscription check.
   disabled the account or assigned it to another machine.
 
 Profile checks normally run daily, with earlier checks after permission failures.
-Failed checks have a persisted 15-minute retry interval. A network error or an
+An `unsubscribed` account is checked every 15 minutes instead, so a renewal is
+noticed within that. Failed checks have a persisted 15-minute retry interval. A network error or an
 empty usage window alone is not treated as subscription expiry. Codex usage
 polls also refresh the stored plan; a free Codex plan is not automatically disabled.
 
@@ -782,7 +783,7 @@ profile failures, token refresh, and daemon activity.
 | Codex still displays the old usage after a switch | The display needs new usage information from a response. Verify actual routing; do not infer it from a cached usage panel alone. |
 | Codex returns `413 Payload Too Large` | Read the size and limit in the error; adjust `codex.max_body_mib` and restart the daemon if appropriate. |
 | Account shows `checking` | Subscription verification is pending. Due profile checks run independently of quota backoff; failed checks retry after 15 minutes. |
-| Account shows `unsubscribed` | The profile explicitly reports an inactive subscription. Re-add only if authentication needs repair; a later renewal profile can restore eligibility. |
+| Account shows `unsubscribed` | The profile explicitly reports an inactive subscription. Re-add only if authentication needs repair; a renewal is noticed within 15 minutes and restores eligibility. |
 | Usage remains stale after `status --refresh` | The quota endpoint's freshness floor or 429 backoff still applies. Profile refresh and quota refresh are separate. |
 | Codex shows `needs-relogin` | Its refresh grant was rejected; use `ccdad add codex`. |
 | Claude switches do not affect the session | Check credential-root resolution, Keychain access, overriding token/helper settings, and whether the session is scoped. |

@@ -36,7 +36,23 @@ func (a Account) ProfileStale(now time.Time) bool {
 	if a.ProfileFetchedAt.After(now.Add(ProfileTTL)) {
 		return true
 	}
-	return now.Sub(a.ProfileFetchedAt) >= ProfileTTL
+	return now.Sub(a.ProfileFetchedAt) >= a.profileTTL()
+}
+
+// profileTTL is ProfileTTL, except for a subscription the profile last called
+// inactive, which is re-read on the retry interval instead.
+//
+// Renewal is the transition a user is waiting on, and nothing else notices it:
+// the usage endpoint answers a renewed account exactly as it answered the lapsed
+// one. The opposite mistake already has its own early check -- a 403 on usage
+// forces a re-read of a subscription believed active -- so without this the
+// two directions were not symmetric, and a renewed account stayed held out of
+// rotation for up to a day.
+func (a Account) profileTTL() time.Duration {
+	if a.SubscriptionInactive() {
+		return ProfileRetryInterval
+	}
+	return ProfileTTL
 }
 
 // AdoptProfile writes the fields ONE profile lookup decides, and stamps when it
