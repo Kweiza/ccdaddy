@@ -51,6 +51,11 @@ var (
 	// fleet out over one outage.
 	ErrUnavailable = errors.New("the token endpoint could not be reached")
 
+	// ErrLiveMoved means the live login changed hands while it was being read:
+	// it is now another managed account's. Nothing was written, nothing was
+	// spent, and the next read asks again. It says nothing about the account.
+	ErrLiveMoved = errors.New("the live login changed while it was being read")
+
 	// ErrNoOAuthCredential means the account has no claudeAiOauth to refresh.
 	// A `ccdad add-token` account is the ordinary case: Claude Code reads those
 	// from an environment variable or ~/.claude.json, and there is no refresh
@@ -246,7 +251,7 @@ func (s *Source) liveToken(ctx context.Context, uuid string, stored record) (str
 		if owner, err := liveOwner(live, uuid); err != nil {
 			return "", err
 		} else if owner != "" {
-			return "", fmt.Errorf("%w: the live login moved to %s while %s's was being read", ErrUnavailable, owner, uuid)
+			return "", fmt.Errorf("%w: it is now %s's, not %s's", ErrLiveMoved, owner, uuid)
 		}
 	}
 
@@ -698,8 +703,14 @@ func (rec record) apply(fresh *oauth.TokenResponse, now time.Time) (json.RawMess
 // "" is an inference by elimination and not a resolved identity: a login this
 // store does not hold at all also answers "". Telling those apart needs the
 // identity oracle, which is the daemon's (resolveLive) and not this package's.
-// What this does rule out is the case a switch produces, and a credential it
-// cannot read is reported rather than counted as "not that account's".
+// What this does rule out is the case a switch produces.
+//
+// An account whose credential cannot be read is SKIPPED, and that is not
+// "cannot read it, so assume it is not the owner". A switch installs the record
+// it reads from that very file, so an account whose file is unreadable now is
+// not one a switch has just installed. Refusing there instead would leave a
+// genuine rotation of except unadopted, and the next read would spend the
+// grant Claude Code has already rotated away.
 func liveOwner(live cclink.Blob, except string) (string, error) {
 	st, err := store.Open()
 	if err != nil {
@@ -711,7 +722,7 @@ func liveOwner(live cclink.Blob, except string) (string, error) {
 		}
 		creds, err := st.Credentials(a.UUID)
 		if err != nil {
-			return "", fmt.Errorf("%w: cannot rule out that the live login is %s's: %v", ErrUnavailable, a.UUID, err)
+			continue
 		}
 		if rec, ok := recordOf(creds); ok && isLiveLogin(rec, live) {
 			return a.UUID, nil

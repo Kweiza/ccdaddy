@@ -163,9 +163,10 @@ type App struct {
 	// deferred is a command asked for while a refresh was in flight, run when
 	// the refresh comes back. See reading for why the two never overlap.
 	deferred []string
-	// quitting is a quit asked for while a refresh or a command was in flight.
-	// See quit.
-	quitting bool
+	// quitting is a quit asked for while a refresh or a command was in flight,
+	// and quitAsked when. See quit.
+	quitting  bool
+	quitAsked time.Time
 
 	// hasLoaded is whether any read has ever succeeded. Until one has there
 	// are no last good numbers, and a failure has to say something else.
@@ -186,8 +187,14 @@ const (
 // refreshingNote is what the notice line says while a refresh is in flight.
 const refreshingNote = "refreshing usage and due profile checks; a command key pressed now runs when it ends"
 
-// quittingNote is what it says when a quit is waiting for work in flight.
-const quittingNote = "quitting when the refresh or command in flight ends; press q again to quit now"
+// quittingNote is what the panel says when a quit is waiting for work in flight.
+const quittingNote = "Quitting when the refresh or command in flight ends, so a token it is rotating is not lost.\n" +
+	"Press q or ctrl+c again to quit now."
+
+// forceQuitAfter is how long after the first quit a second one counts. It is
+// longer than a terminal's key-repeat delay, typically 250-600 ms, so a held q
+// repeating itself is not taken for the deliberate second press.
+const forceQuitAfter = time.Second
 
 // neverLoaded is what a failure says while there is nothing behind it. The
 // ordinary failed-refresh notice promises the last good numbers, and an empty
@@ -336,8 +343,15 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// the page is re-read now rather than at the next tick -- and so is the
 		// log, when the key that ran it was one of the daemon screen's.
 		a.running = false
-		if a.quitting && a.inFlight != readNetwork {
-			return a, tea.Quit
+		if a.quitting {
+			if msg.res.Code == exitOK || msg.res.Code == exitNothingToDo {
+				return a, tea.Quit
+			}
+			// A command that did not do what it was asked is shown rather
+			// than exited past: a switch that failed would otherwise end the
+			// program with the user believing it happened. The quit is
+			// called off; the panel is in front of them and q is one key.
+			a.quitting = false
 		}
 		next, cmd := a.showing(msg.res).reloading()
 		if next.back == screenDaemon {
@@ -797,6 +811,9 @@ func (a App) refreshing() (App, tea.Cmd) { return a.reading(readNetwork) }
 // together, the two can spend one grant twice and leave one side holding a
 // revoked token. A local read touches no grant, so it never waits.
 func (a App) reading(r read) (App, tea.Cmd) {
+	if a.quitting && r == readNetwork {
+		return a, nil
+	}
 	if a.inFlight != readNone || (r == readNetwork && a.running) {
 		a.queued = max(a.queued, r)
 		return a, nil
@@ -823,7 +840,10 @@ func (a App) reading(r read) (App, tea.Cmd) {
 // One at a time, for the reason the running flag gives: a held key repeats,
 // and the keys that come through here are the ones that change something.
 func (a App) starting(argv []string) (App, tea.Cmd) {
-	if a.running {
+	// Once a quit is waiting, nothing new may start: the program can end the
+	// moment the work in hand comes back, and a command begun in between
+	// would be cut off mid-rotation, which is what the wait exists to stop.
+	if a.running || a.quitting {
 		return a, nil
 	}
 	if a.inFlight == readNetwork {
@@ -851,12 +871,24 @@ func (a App) starting(argv []string) (App, tea.Cmd) {
 // is the user overruling that, and goes at once -- which is also what keeps
 // ctrl+c from ever stranding anybody. A local read spends nothing and does not
 // hold it up.
+//
+// The wait is said on a PANEL, not on the notice line: every screen can show a
+// panel, and a reload that lands while a command runs would replace the
+// notices and take the sentence away, inviting exactly the second press that
+// does not wait.
 func (a App) quit() (App, tea.Cmd) {
-	if a.quitting || (a.inFlight != readNetwork && !a.running) {
+	now := a.opts.Now()
+	if a.quitting {
+		if now.Sub(a.quitAsked) < forceQuitAfter {
+			return a, nil
+		}
 		return a, tea.Quit
 	}
-	a.quitting = true
-	a.m.Snap.Notices = append([]string{quittingNote}, a.m.Snap.Notices...)
+	if a.inFlight != readNetwork && !a.running {
+		return a, tea.Quit
+	}
+	a = a.saying(quittingNote)
+	a.quitting, a.quitAsked = true, now
 	return a, nil
 }
 

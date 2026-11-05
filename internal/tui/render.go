@@ -625,7 +625,11 @@ func noticeLine(notices []string, width int, cue string) string {
 	// line whole, after the reservation and both cuts, so no escape sequence is
 	// ever in front of a measurement here.
 	room := width - ansi.StringWidth(prefix) - ansi.StringWidth(suffix)
-	return truncateCue(prefix+truncateCue(notices[0], room, cue)+suffix, width, cue)
+	// ONE row, whatever the sentence carries. Notices are written for stderr
+	// and end in a newline, which has no width, so it survives the cut and the
+	// line a layout counted as one is drawn as two.
+	first := strings.ReplaceAll(strings.TrimRight(notices[0], "\n"), "\n", " ")
+	return truncateCue(prefix+truncateCue(first, room, cue)+suffix, width, cue)
 }
 
 // footerLines shows every main-page binding, wrapped to the available width.
