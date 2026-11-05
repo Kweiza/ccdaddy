@@ -846,16 +846,16 @@ func (a App) starting(argv []string) (App, tea.Cmd) {
 // the old token and the new pair is written nowhere yet, and bubbletea does not
 // wait for a command's goroutine before the process exits. Quitting then throws
 // away the only copy of the new pair, and the account needs a fresh login. So
-// the first quit waits for the work in hand and drops anything queued behind
-// it, and the program ends when that work comes back. A second quit is the user
-// overruling that, and goes at once -- which is also what keeps ctrl+c from
-// ever stranding anybody. A local read spends nothing and does not hold it up.
+// the first quit waits for the work in hand, and the program ends when that
+// work comes back, before anything queued behind it can start. A second quit
+// is the user overruling that, and goes at once -- which is also what keeps
+// ctrl+c from ever stranding anybody. A local read spends nothing and does not
+// hold it up.
 func (a App) quit() (App, tea.Cmd) {
 	if a.quitting || (a.inFlight != readNetwork && !a.running) {
 		return a, tea.Quit
 	}
 	a.quitting = true
-	a.deferred, a.queued = nil, readNone
 	a.m.Snap.Notices = append([]string{quittingNote}, a.m.Snap.Notices...)
 	return a, nil
 }
