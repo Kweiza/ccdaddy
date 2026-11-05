@@ -197,12 +197,20 @@ const (
 	droppedNote = "The command key pressed during the refresh will not run."
 )
 
-// forceQuitAfter is the pause a quit key has to follow the last one by before
-// it acts again. Every press inside it restarts it, so a held q never counts:
-// it repeats every few tens of milliseconds once it starts, and it starts
-// after the system's initial repeat delay, which reaches about 1.8 s at the
-// longest macOS setting -- hence two seconds, not one.
+// forceQuitAfter is the pause a quit key has to follow the last one by to
+// overrule a WAITING quit. Every press inside it restarts it, so a held q does
+// not force the exit: it repeats every few tens of milliseconds once it
+// starts, and it starts after the system's initial repeat delay, which
+// reaches about 1.8 s at the longest macOS setting -- hence two seconds. It
+// applies only while the waiting panel is up, which says so.
 const forceQuitAfter = 2 * time.Second
+
+// keyRepeatGap is how close behind the last quit press another one has to be
+// to be read as a held key's repeat rather than a press. Repeats arrive every
+// few tens of milliseconds; a person's taps do not. It is what keeps a q held
+// through a command's end from exiting past the result the wait just showed,
+// and it is short enough that tapping q never strands anybody.
+const keyRepeatGap = 200 * time.Millisecond
 
 // quitState is the three places a quit can stand, and the reason it is three
 // and not a flag. A WAITING quit can still be called off -- esc on its panel,
@@ -497,12 +505,7 @@ func (a App) key(msg tea.KeyPressMsg) (App, tea.Cmd, bool) {
 	// ignored, so it is an ordinary key here -- but it is the key every
 	// terminal user tries first, and a screen that ate it would strand
 	// somebody inside a full-screen program.
-	if msg.String() == "ctrl+c" || (msg.IsRepeat && key.Matches(msg, k.Quit)) {
-		// A repeat the terminal reports as one is a held key, never a press;
-		// quit's own pause covers the terminals that do not report it.
-		if msg.IsRepeat {
-			return a, nil, true
-		}
+	if msg.String() == "ctrl+c" {
 		a, cmd := a.quit()
 		return a, cmd, true
 	}
@@ -583,6 +586,11 @@ var execProcess = tea.ExecProcess
 // wordings, one screen apart.
 func (a App) addProviderKey(msg tea.KeyPressMsg, k KeyMap) (App, tea.Cmd, bool) {
 	if key.Matches(msg, k.Enter) {
+		if a.quitState == quitEnding {
+			// The one start that does not go through starting: an ending
+			// quit refuses it for the same reason.
+			return a, nil, true
+		}
 		argv := a.pick.Chosen()
 		a.scr = screenPage
 		c, err := addChild(argv)
@@ -912,12 +920,12 @@ func (a App) starting(argv []string) (App, tea.Cmd) {
 // pressed a key and then q has not yet seen. A local read spends nothing and
 // does not hold a quit up.
 //
-// A press within forceQuitAfter of the last one does nothing and restarts the
-// pause: that is a held key, or a second tap landing as the work ends, and
-// either would otherwise exit past what the wait exists to protect or show.
-// A press after the pause, while still waiting, is the user overruling it and
-// ends the program at once -- which is also what keeps ctrl+c from ever
-// stranding anybody.
+// A press within keyRepeatGap of the last one is a held key and does nothing.
+// While WAITING, a press within forceQuitAfter of the last does nothing too
+// and restarts the pause, which the panel on screen explains; a press after
+// it is the user overruling the wait and ends the program at once. Outside a
+// wait no press is swallowed beyond a repeat, so tapping q or ctrl+c always
+// gets out.
 //
 // The command key a refresh was holding is DROPPED by the wait, and the panel
 // says so. Left in place, esc would bring back a switch the screen had just
@@ -928,10 +936,13 @@ func (a App) starting(argv []string) (App, tea.Cmd) {
 // notices and take the sentence away.
 func (a App) quit() (App, tea.Cmd) {
 	now := a.opts.Now()
-	recent := !a.quitAsked.IsZero() && now.Sub(a.quitAsked) < forceQuitAfter
+	within := func(d time.Duration) bool { return !a.quitAsked.IsZero() && now.Sub(a.quitAsked) < d }
+	repeat, paused := within(keyRepeatGap), !within(forceQuitAfter)
 	a.quitAsked = now
 	switch {
-	case a.quitState == quitEnding, recent:
+	case a.quitState == quitEnding, repeat:
+		return a, nil
+	case a.quitState == quitWaiting && !paused:
 		return a, nil
 	case a.quitState == quitWaiting:
 		a.quitState = quitEnding

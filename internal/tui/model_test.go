@@ -1405,12 +1405,6 @@ func TestAHeldQuitKeyIsNotTheSecondPress(t *testing.T) {
 	if _, cmd, _ := a.key(keyPress("q")); !quits(cmd) {
 		t.Fatal("a q pressed after a pause did not quit at once")
 	}
-	// A repeat the terminal reports as one never acts, however late.
-	clock = clock.Add(forceQuitAfter)
-	held := tea.KeyPressMsg{Code: 'q', Text: "q", IsRepeat: true}
-	if _, cmd, _ := a.key(held); quits(cmd) {
-		t.Fatal("a reported key repeat quit")
-	}
 }
 
 // Dismissing the waiting panel is staying: the keys behind it would otherwise
@@ -1560,14 +1554,53 @@ func TestAQuitDuringACommandWaitsAndShowsItsResult(t *testing.T) {
 			t.Fatalf("exit %d: screen %d, result %d, quit %d; want the result shown and the wait over",
 				code, got.scr, got.res.Code, got.quitState)
 		}
+		// A held q's repeat landing as the result arrives does not exit past
+		// it; a tap a second later -- someone tapping, not holding -- does,
+		// because outside a wait nothing beyond a repeat is swallowed.
 		clock = clock.Add(30 * time.Millisecond)
 		if got, cmd, _ = got.key(keyPress("q")); quits(cmd) {
-			t.Fatalf("exit %d: a q right after the result exited past it", code)
+			t.Fatalf("exit %d: a held q's repeat exited past the result", code)
 		}
-		clock = clock.Add(forceQuitAfter)
+		clock = clock.Add(time.Second)
 		if _, cmd, _ = got.key(keyPress("q")); !quits(cmd) {
-			t.Fatalf("exit %d: q after a pause on the result did not quit", code)
+			t.Fatalf("exit %d: a tap a second after the result did not quit", code)
 		}
+	}
+}
+
+// After esc calls a wait off, the next quit is an ordinary one: it is not
+// swallowed by the pause that only protects a wait, so tapping q gets out.
+func TestAQuitAfterACalledOffWaitIsNotSwallowed(t *testing.T) {
+	stubTick(t)
+	clock := fixtureNow
+	var ran [][]string
+	a, _, _ := waitingApp(t, &clock, &ran).key(keyPress("q"))
+	a, _, _ = a.key(keyPress("esc"))
+	next, cmd := a.Update(loadedMsg{snap: fixtureSnapshot(fixtureReport(113, 26))})
+	drain(cmd)
+	clock = clock.Add(time.Second)
+	if _, cmd, _ := next.(App).key(keyPress("q")); !quits(cmd) {
+		t.Fatal("q a second after a called-off wait, with nothing in flight, did not quit")
+	}
+}
+
+// The add login is the one start that does not go through starting, and an
+// ending quit refuses it as well: ctrl+c and enter can arrive in one burst.
+func TestAnEndingQuitRefusesTheAddLogin(t *testing.T) {
+	stubTick(t)
+	var released bool
+	saved := execProcess
+	t.Cleanup(func() { execProcess = saved })
+	execProcess = func(c *exec.Cmd, fn tea.ExecCallback) tea.Cmd { released = true; return nil }
+	a := appAt(t, fixtureOptions(), 113, 26)
+	a, _, _ = a.key(keyPress("a"))
+	a, _, _ = a.key(keyPress("ctrl+c"))
+	if a.quitState != quitEnding {
+		t.Fatalf("ctrl+c on the provider list left the quit at %d", a.quitState)
+	}
+	a.key(keyPress("enter"))
+	if released {
+		t.Fatal("enter after an ending quit released the terminal to a login")
 	}
 }
 
