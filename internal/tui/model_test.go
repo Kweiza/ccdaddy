@@ -1455,6 +1455,37 @@ func TestEscCannotCallOffAQuitThatIsEnding(t *testing.T) {
 	}
 }
 
+// A forced quit during a command is ENDING, and the command coming back
+// before the exit does not call it off: showing the result would reset the
+// quit and re-open the gates the exit is relying on.
+func TestACommandComingBackDoesNotCallOffAForcedQuit(t *testing.T) {
+	stubTick(t)
+	clock := fixtureNow
+	var ran [][]string
+	o := fixtureOptions()
+	o.Now = func() time.Time { return clock }
+	o.Exec = recorder(&ran)
+	a := appAt(t, o, 113, 26)
+	for a.m.cursorIsLive() {
+		a, _, _ = a.key(keyPress("down"))
+	}
+	a, cmd, _ := a.key(keyPress("s"))
+	drain(cmd)
+	a, _, _ = a.key(keyPress("q"))
+	clock = clock.Add(forceQuitAfter)
+	a, cmd, _ = a.key(keyPress("q"))
+	if !quits(cmd) {
+		t.Fatal("a q after the pause did not force the quit")
+	}
+	next, _ := a.Update(ranMsg{res: result{Code: exitOK, Argv: ran[0]}})
+	if got := next.(App); got.quitState != quitEnding {
+		t.Fatalf("the command coming back moved a forced quit to %d", got.quitState)
+	}
+	if _, cmd := next.(App).starting([]string{"switch", "x"}); cmd != nil {
+		t.Fatal("a command could start after a forced quit's command came back")
+	}
+}
+
 // A refresh queued behind a command survives a quit that waited on that
 // command and was called off: the user's r still runs.
 func TestARefreshQueuedBehindACommandSurvivesACalledOffQuit(t *testing.T) {
