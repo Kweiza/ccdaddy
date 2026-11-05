@@ -216,9 +216,10 @@ and whether or not it succeeded; pressed sooner, `r` reloads local state and
 says when it can ask again. A refresh and a command never run at once, because
 both can spend the same single-use refresh grant: a refresh waits for a running
 command, and the first command key pressed during a refresh (switch, remove,
-strategy, sort, or a daemon key) runs when it ends. `q` or `ctrl+c` during
-either waits for it to finish and says so; pressed again a second or more
-later, it quits at once. Closing the terminal still ends the dashboard at once.
+strategy, sort, or a daemon key) runs when it ends. `q` or `ctrl+c` during a
+refresh waits for it to finish and then quits; during a command it waits and
+shows the command's result. `esc` on that panel stays, and `q` again after a
+pause quits at once. Closing the terminal still ends the dashboard at once.
 Between key presses
 the dashboard reloads local state every ten seconds without network requests,
 and keeps the selected account by UUID when rows reorder.

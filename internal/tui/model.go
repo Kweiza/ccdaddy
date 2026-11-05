@@ -187,13 +187,20 @@ const (
 // refreshingNote is what the notice line says while a refresh is in flight.
 const refreshingNote = "refreshing usage and due profile checks; a command key pressed now runs when it ends"
 
-// quittingNote is what the panel says when a quit is waiting for work in flight.
-const quittingNote = "Quitting when the refresh or command in flight ends, so a token it is rotating is not lost.\n" +
-	"Press q or ctrl+c again to quit now."
+// The two panels a quit waits behind. Each line fits the 80-column design
+// target, because a panel cuts what does not fit.
+const (
+	refreshWaitNote = "Quitting when the refresh in flight ends, so a token it rotates is not lost.\n" +
+		"Press esc to stay, or q again after a pause to quit now."
+	commandWaitNote = "Waiting for the command in flight, so a token it rotates is not lost.\n" +
+		"Its result is shown when it ends. Press q again after a pause to quit now."
+	droppedNote = "The command key pressed during the refresh will not run."
+)
 
-// forceQuitAfter is how long after the first quit a second one counts. It is
-// longer than a terminal's key-repeat delay, typically 250-600 ms, so a held q
-// repeating itself is not taken for the deliberate second press.
+// forceQuitAfter is the pause a second quit has to follow. Every quit pressed
+// inside it restarts it, so a held q -- which repeats every few tens of
+// milliseconds once it starts -- never counts as the second press; only one
+// after the key has been let go does.
 const forceQuitAfter = time.Second
 
 // neverLoaded is what a failure says while there is nothing behind it. The
@@ -305,6 +312,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case loadedMsg:
 		a.inFlight = readNone
 		if a.quitting && !a.running {
+			// A refresh's wait, or an immediate quit that a local read beat
+			// to the loop. A command's wait ends in ranMsg instead.
 			return a, tea.Quit
 		}
 		switch {
@@ -343,16 +352,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// the page is re-read now rather than at the next tick -- and so is the
 		// log, when the key that ran it was one of the daemon screen's.
 		a.running = false
-		if a.quitting {
-			if msg.res.Code == exitOK || msg.res.Code == exitNothingToDo {
-				return a, tea.Quit
-			}
-			// A command that did not do what it was asked is shown rather
-			// than exited past: a switch that failed would otherwise end the
-			// program with the user believing it happened. The quit is
-			// called off; the panel is in front of them and q is one key.
-			a.quitting = false
-		}
+		// A quit that waited on this command ends HERE, by showing what the
+		// command did rather than exiting past it. Its exit code cannot be
+		// the test: a switch that exits 0 can still say the login it wrote
+		// will not be used, and one that failed must not end the program with
+		// the user believing it happened. q is one key away.
+		a.quitting = false
 		next, cmd := a.showing(msg.res).reloading()
 		if next.back == screenDaemon {
 			return next, tea.Batch(cmd, next.tailLog())
@@ -486,6 +491,9 @@ func (a App) key(msg tea.KeyPressMsg) (App, tea.Cmd, bool) {
 			a, cmd := a.quit()
 			return a, cmd, true
 		case key.Matches(msg, k.Esc, k.Enter):
+			// Dismissing the panel a quit is waiting behind is staying: the
+			// keys behind it would otherwise all be dead, with no word why.
+			a.quitting = false
 			return a.dismissed(), nil, true
 		case a.scr == screenHelp && key.Matches(msg, k.Help):
 			return a.dismissed(), nil, true
@@ -872,6 +880,14 @@ func (a App) starting(argv []string) (App, tea.Cmd) {
 // ctrl+c from ever stranding anybody. A local read spends nothing and does not
 // hold it up.
 //
+// A refresh's wait ends in the program ending. A command's ends in its result
+// being shown, which is the one thing a user who pressed a key and then q has
+// not yet seen; another q then quits.
+//
+// quitting is set on EVERY path, the immediate one included. tea.Quit is
+// delivered asynchronously, so a key read in the same burst as q is handled
+// first, and starting and reading refuse new work only while quitting is set.
+//
 // The wait is said on a PANEL, not on the notice line: every screen can show a
 // panel, and a reload that lands while a command runs would replace the
 // notices and take the sentence away, inviting exactly the second press that
@@ -880,16 +896,21 @@ func (a App) quit() (App, tea.Cmd) {
 	now := a.opts.Now()
 	if a.quitting {
 		if now.Sub(a.quitAsked) < forceQuitAfter {
+			a.quitAsked = now
 			return a, nil
 		}
 		return a, tea.Quit
 	}
-	if a.inFlight != readNetwork && !a.running {
-		return a, tea.Quit
-	}
-	a = a.saying(quittingNote)
 	a.quitting, a.quitAsked = true, now
-	return a, nil
+	switch {
+	case a.running:
+		return a.saying(commandWaitNote), nil
+	case a.inFlight == readNetwork && a.deferred != nil:
+		return a.saying(refreshWaitNote + "\n" + droppedNote), nil
+	case a.inFlight == readNetwork:
+		return a.saying(refreshWaitNote), nil
+	}
+	return a, tea.Quit
 }
 
 // tailLog is the bounded read behind the [D] screen.

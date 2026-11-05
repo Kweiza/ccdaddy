@@ -237,28 +237,13 @@ func (s *Source) liveToken(ctx context.Context, uuid string, stored record) (str
 	current, ok := recordOf(live)
 	if !ok {
 		// The file changed under us between the identity check and this read.
-		return "", fmt.Errorf("%w: the live credentials file no longer holds an OAuth login", ErrUnavailable)
-	}
-
-	// The identity check in AccessToken ran BEFORE this lock, and a switch can
-	// land in between: it installs another managed account's stored record, so
-	// adopting what it left would file that account's grant under this uuid,
-	// and the next switch to this account would log in as the other one. A
-	// rotation of THIS login is not stored anywhere yet, so "matches another
-	// account's record" is what tells a switch from a rotation. See liveOwner
-	// for what it cannot tell apart.
-	if !isLiveLogin(stored, live) {
-		if owner, err := liveOwner(live, uuid); err != nil {
-			return "", err
-		} else if owner != "" {
-			return "", fmt.Errorf("%w: it is now %s's, not %s's", ErrLiveMoved, owner, uuid)
-		}
+		return "", fmt.Errorf("%w: the live credentials file no longer holds an OAuth login", ErrLiveMoved)
 	}
 
 	// Adopt whatever Claude Code has rotated to, so a later `ccdad switch` back
 	// to this account does not install a token the server has already revoked.
 	if current.AccessToken != stored.AccessToken || current.RefreshToken != stored.RefreshToken {
-		if err := s.save(uuid, current.raw, stored.RefreshToken); err != nil {
+		if err := s.adopt(uuid, live, current, stored); err != nil {
 			return "", err
 		}
 	}
@@ -485,27 +470,55 @@ func (s *Source) logMint(uuid string, live bool, storeErr, liveErr error) {
 // that its own holder does not know about. The real mitigation is upstream: the
 // daemon singleton means only one process polls.
 func (s *Source) save(uuid string, updated json.RawMessage, expect string) error {
-	return store.WithStore(func(st *store.Store) error {
-		current, err := st.Credentials(uuid)
-		if err != nil {
-			return err
-		}
-		if theirs, ok := recordOf(current); ok && theirs.RefreshToken != expect {
-			// Something rotated this account while the request was in flight.
-			return nil
-		}
-		next := cclink.Blob{}
-		for k, v := range current {
-			next[k] = v
-		}
-		next["claudeAiOauth"] = updated
+	return store.WithStore(func(st *store.Store) error { return writeRecord(st, uuid, updated, expect) })
+}
 
-		acct, ok := st.Get(uuid)
-		if !ok {
-			return fmt.Errorf("%w: %q", store.ErrNotFound, uuid)
+// adopt takes the live login into this account's stored snapshot, deciding
+// whose it is in the SAME store transaction that writes it.
+//
+// The identity check in AccessToken ran before Claude Code's refresh lock was
+// taken, and a switch can land in between: it installs another managed
+// account's stored record, so adopting what it left would file that account's
+// grant under this uuid, and the next switch to this account would log in as
+// the other one. A rotation of THIS login is not stored anywhere yet, so
+// "matches another account's record" is what tells a switch from a rotation.
+// See liveOwner for what it cannot tell apart.
+//
+// Under one lock, because a decision taken outside it can be overtaken: a
+// remove deletes an account's credential file before its entry, and a scan
+// that ran in between would miss the account it was looking for.
+func (s *Source) adopt(uuid string, live cclink.Blob, current, stored record) error {
+	return store.WithStore(func(st *store.Store) error {
+		if !isLiveLogin(stored, live) {
+			if owner := liveOwner(st, live, uuid); owner != "" {
+				return fmt.Errorf("%w: it is now %s's, not %s's", ErrLiveMoved, owner, uuid)
+			}
 		}
-		return st.Add(acct, next)
+		return writeRecord(st, uuid, current.raw, stored.RefreshToken)
 	})
+}
+
+// writeRecord is save's body, for a caller already inside the store lock.
+func writeRecord(st *store.Store, uuid string, updated json.RawMessage, expect string) error {
+	current, err := st.Credentials(uuid)
+	if err != nil {
+		return err
+	}
+	if theirs, ok := recordOf(current); ok && theirs.RefreshToken != expect {
+		// Something rotated this account while the request was in flight.
+		return nil
+	}
+	next := cclink.Blob{}
+	for k, v := range current {
+		next[k] = v
+	}
+	next["claudeAiOauth"] = updated
+
+	acct, ok := st.Get(uuid)
+	if !ok {
+		return fmt.Errorf("%w: %q", store.ErrNotFound, uuid)
+	}
+	return st.Add(acct, next)
 }
 
 func (s *Source) now() time.Time {
@@ -705,17 +718,14 @@ func (rec record) apply(fresh *oauth.TokenResponse, now time.Time) (json.RawMess
 // identity oracle, which is the daemon's (resolveLive) and not this package's.
 // What this does rule out is the case a switch produces.
 //
-// An account whose credential cannot be read is SKIPPED, and that is not
-// "cannot read it, so assume it is not the owner". A switch installs the record
-// it reads from that very file, so an account whose file is unreadable now is
-// not one a switch has just installed. Refusing there instead would leave a
-// genuine rotation of except unadopted, and the next read would spend the
-// grant Claude Code has already rotated away.
-func liveOwner(live cclink.Blob, except string) (string, error) {
-	st, err := store.Open()
-	if err != nil {
-		return "", err
-	}
+// It runs inside the store lock, and an account whose credential cannot be
+// read is SKIPPED. Under the lock no remove is half done, so an unreadable file
+// is a broken one, and a switch installs the record it reads from that very
+// file: an account whose file cannot be read now is not one a switch has just
+// installed. Refusing there instead would leave a genuine rotation of except
+// unadopted, and the next read would spend the grant Claude Code has already
+// rotated away.
+func liveOwner(st *store.Store, live cclink.Blob, except string) string {
 	for _, a := range st.Accounts() {
 		if a.UUID == except || a.Provider != provider.Claude {
 			continue
@@ -725,10 +735,10 @@ func liveOwner(live cclink.Blob, except string) (string, error) {
 			continue
 		}
 		if rec, ok := recordOf(creds); ok && isLiveLogin(rec, live) {
-			return a.UUID, nil
+			return a.UUID
 		}
 	}
-	return "", nil
+	return ""
 }
 
 // isLiveLogin reports whether this stored record is the login Claude Code is
