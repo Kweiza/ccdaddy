@@ -749,6 +749,55 @@ func TestABlockedSeatIsEmptyAtAnyUtilization(t *testing.T) {
 	}
 }
 
+// A credit meter is spent over all four extra-usage states, read once: a
+// seat whose overage is off, or that is blocked, is spent at whatever
+// utilization; an enabled one at its limit and not below it; and one whose
+// state could not be read is not -- unreadable is not empty, even with its
+// utilization at 100. The gate's own refusals of the two refusing states are
+// the ones they always were.
+func TestACreditMeterIsSpentByStateAndLevel(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		state usage.ExtraUsageState
+		pct   float64
+		spent bool
+		gate  CreditReason
+	}{
+		{"unknown", usage.ExtraUsageUnknown, 100, false, CreditSpendUnreadable},
+		{"enabled below its limit", usage.ExtraUsageEnabled, 50, false, CreditAllowed},
+		{"enabled at its limit", usage.ExtraUsageEnabled, 100, true, CreditNoRoom},
+		{"disabled", usage.ExtraUsageDisabled, 10, true, CreditAccountDisabled},
+		{"blocked", usage.ExtraUsageBlocked, 10, true, CreditAccountBlocked},
+	} {
+		e := usage.ExtraUsageFor(usage.ExtraUsageInput{
+			State: tc.state, Currency: "USD", MonthlyLimit: pf(1000), UsedCredits: pf(tc.pct * 10), Utilization: pf(tc.pct),
+		})
+		if got := creditSpent(creditWith("c", e), hoverOpts()); got != tc.spent {
+			t.Errorf("%s: spent %v, want %v", tc.name, got, tc.spent)
+		}
+		if got := CreditGate(e, 500, true).Reason; got != tc.gate {
+			t.Errorf("%s: the gate says %q, want %q", tc.name, got, tc.gate)
+		}
+	}
+}
+
+// A live seat whose overage is off takes a held-out seat with room as its last
+// resort, whatever its utilization reads. No main pool, the cooldown long over:
+// c1 was left closing on its week, which has not rolled, and has room and armed
+// balance; c2, live, is a pool seat whose extra usage is disabled.
+func TestADisabledLiveSeatTakesAHeldOutSeat(t *testing.T) {
+	armed := usage.ExtraUsageFor(usage.ExtraUsageInput{
+		State: usage.ExtraUsageEnabled, Currency: "USD", MonthlyLimit: pf(100000), UsedCredits: pf(0), Utilization: pf(0),
+	})
+	c1 := credit("c1", &usage.Snapshot{SevenDay: win(60, 3*day), ExtraUsage: armed})
+	c2 := creditWith("c2", usage.ExtraUsageFor(usage.ExtraUsageInput{State: usage.ExtraUsageDisabled, Currency: "USD"}))
+	p := Decide([]Candidate{c1, c2}, hoverOpts(), Config{MaxAutoSpend: 500}, leftAt("c1", usage.WindowSevenDay), "c2")
+	if r, _ := find(p.Result, "c1"); r.HeldOut == "" {
+		t.Fatalf("c1 is not held out: the case is not the one named")
+	}
+	want(t, p, ActionSwitch, ReasonBetterTarget, "c1")
+}
+
 // A live seat out of credits takes a held-out seat with room as its last
 // resort, whatever its own utilization reads. No main pool, the cooldown long
 // over: c1 was left closing on its week, which has not rolled, and has room and
