@@ -532,11 +532,10 @@ func (e *Engine) Tick(ctx context.Context) error {
 	e.setLive(active, activeKnown)
 	quarantined := quarantinedSet(ev)
 	// The same table `ev` was just ranked against, not a second one rebuilt from
-	// cfg. Under hover the two disagree on purpose — hover's threshold divides
-	// the pool by the accounts THIS pass judged usable, which dispatch and
-	// publish cannot see from cfg alone — and a rebuilt table would publish a
-	// candidate the ranking had already excluded, poll it at the wrong cadence,
-	// and probe the wrong binding window.
+	// cfg. Under hover the two disagree on purpose -- hover holds every window
+	// an account reports to its own hand-off line, not to the user's -- and the
+	// configured table would poll at the wrong cadence, file a roomy account as
+	// exhausted, and probe the wrong binding window.
 	thresholds := hoverThresholds(cfg, ev)
 	e.dispatch(ctx, s, accounts, cache, cfg, thresholds, now, active, activeKnown, quarantined)
 	// The Codex lane runs AFTER the Claude one and its failure is logged rather
@@ -1885,25 +1884,46 @@ func configuredThresholds(cfg config.Config) func(uuid string) strategy.Threshol
 }
 
 // hoverThresholds is the one table this tick's dispatch, commit, probeDue and
-// publish all measure against.
+// publish all measure against: the table the pass ranked on (thresholdsOf).
 //
-// The status renderer solves the identical problem through view.ThresholdsFor:
-// route through the engine's own HoverPlan when hover is on,
-// because hover divides the quota by a pool (usable, non-quarantined
-// accounts) that only a ranking pass knows — and this is the same fix for the
-// daemon's own scheduling and state-publishing paths, which had never made
-// that call at all: they read cfg.Thresholds() directly, so hover changed what
-// `ccdad auto` ranked on without changing what the daemon polled on, probed
-// on, or reported as engine.state.
+// The status renderer solves the identical problem through view.ThresholdsFor.
+// Under hover every window an account reports is held to the hand-off line,
+// and which windows it admits is that account's own reading and the user's
+// opt-ins -- so a poll measured on cfg.Thresholds() instead reads the user's
+// line where hover holds the account to its own, and files an account hover
+// has room on as exhausted.
 //
-// ev.Plan.Hover is nil when hover is on but the pass never ran — nothing has
-// been polled yet — and the configured bundle is the only answer there is
-// nothing to derive one from.
+// ev.Plan.Hover is nil when hover is on but the pass never ran -- nothing has
+// been polled yet -- and the configured bundle is then the only answer.
 func hoverThresholds(cfg config.Config, ev switcher.Evaluation) func(uuid string) strategy.Thresholds {
-	if !cfg.Hover || ev.Plan.Hover == nil {
+	return thresholdsOf(cfg, ev.Plan.Hover)
+}
+
+// thresholdsOf is the table a poll is measured against: hover's plan when hover
+// is on and there is one, else the configured bundle.
+func thresholdsOf(cfg config.Config, plan *strategy.HoverPlan) func(uuid string) strategy.Thresholds {
+	if !cfg.Hover || plan == nil {
 		return configuredThresholds(cfg)
 	}
-	return ev.Plan.Hover.For
+	return plan.For
+}
+
+// cachedHoverPlan is hover's table built from the cached readings, for a poll
+// with no ranking pass behind it -- a manual refresh. The table needs no pass:
+// it is each account's own windows at hover's line, with the user's opt-ins.
+// Nil when hover is off.
+func cachedHoverPlan(cfg config.Config, accounts []store.Account, cache *usage.Cache, now time.Time) *strategy.HoverPlan {
+	if !cfg.Hover {
+		return nil
+	}
+	cands := make([]strategy.Candidate, 0, len(accounts))
+	for _, a := range accounts {
+		if e, ok := cache.Get(a.UUID); ok {
+			cands = append(cands, strategy.Candidate{UUID: a.UUID, Kind: a.Kind, Primary: a.Primary, Usage: e.Snapshot})
+		}
+	}
+	plan := strategy.HoverThresholds(cands, cfg.RankOptions(now))
+	return &plan
 }
 
 func quarantinedSet(ev switcher.Evaluation) map[string]bool {
