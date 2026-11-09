@@ -138,6 +138,33 @@ type LiveBurn struct {
 // LiveBurn is not.
 func (b LiveBurn) Measured() bool { return !b.At.IsZero() }
 
+// ReadingQuantum is the smallest change in a window's utilization a reading can
+// show, in percentage points: the endpoint reports whole percents
+// (internal/forecast, minSamples, where thirty live values read across six
+// accounts were integers without exception). Two readings that differ by less
+// cannot tell work from none.
+const ReadingQuantum = 1.0
+
+// Running is whether the pair saw the work running: its two readings moved by
+// at least one quantum. A pair that did not -- with whole-percent readings, one
+// that did not move at all -- is a pause, or work too slow for one pair to see,
+// and it is not a rate. Half a quantum is the line so that a rise of exactly
+// one step, divided and multiplied back through a rate, is not lost to
+// rounding.
+func (b LiveBurn) Running() bool {
+	return b.PerMin*b.At.Sub(b.From).Minutes() >= ReadingQuantum/2
+}
+
+// LiveAnchor is whether the anchor reading of an account -- the one the next
+// reading will be paired with -- was taken live in the stint the account is in
+// now: taken live (anchorLive), and no earlier than the switch that last made
+// the account live (liveSince, zero when no switch is known). An anchor from an
+// earlier stint pairs across the absence between, and the rate that pair
+// measures is diluted by however long the work was elsewhere.
+func LiveAnchor(anchorLive bool, anchorAt, liveSince time.Time) bool {
+	return anchorLive && !anchorAt.Before(liveSince)
+}
+
 // LivePairs is the work's rate on every window two consecutive readings of one
 // account both carry, when both were taken live (prevLive, curLive) -- one
 // LiveBurn per window BurnPerMin can take a rate across. It is the one statement
@@ -193,22 +220,38 @@ func windowOf(s *Snapshot, name WindowName) (Window, bool) {
 // MergeLiveBurns is kept with each window fresh measured replaced by its new
 // measurement: a window this pair could not measure keeps the last rate the work
 // was measured at on it.
+//
+// A pause never replaces a running rate. The rate kept here is the rate of the
+// work WHILE IT RUNS, and pausing is not working slower: a session that stopped
+// for ten minutes near a limit resumes at the rate it stopped at, and a zero
+// stored over that rate would switch the projection off exactly when the
+// resumed work is about to need it. Any newer running pair does replace it,
+// lower ones included, so a real slowdown still lowers the rate.
+// TestAPauseDoesNotReplaceTheWorksRate.
 func MergeLiveBurns(kept, fresh []LiveBurn) []LiveBurn {
 	if len(fresh) == 0 {
 		return kept
 	}
-	out := append([]LiveBurn(nil), fresh...)
+	out := make([]LiveBurn, 0, len(kept)+len(fresh))
 	for _, k := range kept {
-		replaced := false
-		for _, f := range fresh {
-			if f.Window == k.Window {
-				replaced = true
-				break
-			}
-		}
-		if !replaced {
+		if f, ok := burnOn(fresh, k.Window); !ok || !f.Running() && k.Running() {
 			out = append(out, k)
 		}
 	}
+	for _, f := range fresh {
+		if k, ok := burnOn(kept, f.Window); !ok || f.Running() || !k.Running() {
+			out = append(out, f)
+		}
+	}
 	return out
+}
+
+// burnOn is the rate in bs taken on window n, and whether there is one.
+func burnOn(bs []LiveBurn, n WindowName) (LiveBurn, bool) {
+	for _, b := range bs {
+		if b.Window == n {
+			return b, true
+		}
+	}
+	return LiveBurn{}, false
 }

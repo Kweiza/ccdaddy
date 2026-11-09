@@ -711,10 +711,16 @@ func measure(c Candidate, o Options) Ranked {
 // Rank orders the eligible accounts, best first. It does not reorder its input.
 func Rank(cands []Candidate, o Options) Result {
 	o = o.withHover(cands)
-	if o.work == nil {
-		w := workOf(eligibleOf(cands), nil)
-		o.work = &w
+	var w work
+	if o.work != nil {
+		w = *o.work
+	} else {
+		w = workOf(eligibleOf(cands), nil)
 	}
+	// The rates once the table is: only a window that is a limit for this pass
+	// sets the work's rate on it (workRatesOf).
+	w.rates = o.workRatesOf(w.seen)
+	o.work = &w
 	// Under hover every reading is read as it stands now (usage.Snapshot.AsOf):
 	// a window whose reset the reading names and has passed is a window that
 	// has rolled, and hover's levels are the whole of how it files an account

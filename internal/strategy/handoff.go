@@ -61,10 +61,26 @@ const (
 )
 
 // workRate is the work's rate on windows of one length: the most recent rate
-// measured across two readings both taken while the account measured was live.
+// measured across two readings both taken while the account measured was live,
+// and whether that pair saw the work running (usage.LiveBurn.Running).
 type workRate struct {
-	perMin float64
-	at     time.Time
+	perMin  float64
+	at      time.Time
+	running bool
+}
+
+// replaces is whether r is the work's rate rather than cur: a running pair over
+// a pause whatever their ages, because the rate is the work's while it runs
+// and pausing is not working slower; then the later; then, measured at the
+// same reading, the higher.
+func (r workRate) replaces(cur workRate) bool {
+	if r.running != cur.running {
+		return r.running
+	}
+	if !r.at.Equal(cur.at) {
+		return r.at.After(cur.at)
+	}
+	return r.perMin > cur.perMin
 }
 
 // workRates is the work's rate by window length.
@@ -85,35 +101,44 @@ type workRates map[time.Duration]workRate
 
 // workRatesOf is the table for one pass.
 //
-// The latest measurement for each length, over every account the pass can see:
-// the work moves between accounts and its rate goes with it, so right after a
-// switch it is the rate measured on the account just left, until the new live
-// account has a pair of its own. A pair whose readings straddle the last switch
-// onto that same account spans an absence -- the account was left and taken
-// back between its two readings -- and is diluted by it, so it is dropped; a
-// pair taken before the account was left is the work as it was then, and stays. An idle pair never enters at all: usage.LiveBurn is set only from
-// a live one. Of the windows of one length one pair measured -- a week, a
-// surface's weekly cap, a model's -- the highest is the work's: a cap that counts
-// part of the work moves no faster than the window that counts all of it, so the
-// highest is the whole, and an error that way only hands off sooner.
-func workRatesOf(cands []Candidate, switchedAt time.Time, switchedTo string) workRates {
+// The latest running measurement for each length, over every account the pass
+// can see: the work moves between accounts and its rate goes with it, so right
+// after a switch it is the rate measured on the account just left, until the
+// new live account has a pair of its own. A pause -- a pair that did not move --
+// stands only where nothing running was measured (workRate.replaces). An idle
+// pair never enters at all: usage.LiveBurn is set only from a live one, and only
+// within one live stint (usage.LiveAnchor), so a pair spanning an absence is
+// never stored to be read here.
+//
+// Only pairs on the windows that are limits for this pass (bindingWindows on
+// the table the pass ranks on). A model family's cap is not one under hover,
+// and a Fable cap climbing thirty points while the full week climbs one would
+// otherwise set the week's rate and hand an account off two hours early; a
+// model named with --model makes its own family's cap a limit, and its rate
+// with it. Of the limit windows of one length one pair measured -- a week and a
+// surface's weekly cap -- the highest is the work's: a cap that counts part of
+// the work moves no faster than the window that counts all of it.
+// TestAModelCapsRateIsNotTheWeeksRate.
+func (o Options) workRatesOf(cands []Candidate) workRates {
 	out := workRates{}
 	for _, c := range cands {
+		limits := map[usage.WindowName]bool{}
+		for _, w := range bindingWindows(c.Usage, o.Model, o.thresholdsFor(c)) {
+			limits[w.Name] = true
+		}
 		for _, b := range c.LiveBurns {
-			if !b.Measured() {
-				continue
-			}
-			if isActive(c.UUID, switchedTo) && b.From.Before(switchedAt) && b.At.After(switchedAt) {
+			if !b.Measured() || !limits[b.Window] {
 				continue
 			}
 			length, ok := usage.WindowLength(b.Window)
 			if !ok {
 				continue
 			}
-			if cur, has := out[length]; has && (b.At.Before(cur.at) || b.At.Equal(cur.at) && b.PerMin <= cur.perMin) {
+			r := workRate{perMin: b.PerMin, at: b.At, running: b.Running()}
+			if cur, has := out[length]; has && !r.replaces(cur) {
 				continue
 			}
-			out[length] = workRate{perMin: b.PerMin, at: b.At}
+			out[length] = r
 		}
 	}
 	return out
@@ -121,8 +146,12 @@ func workRatesOf(cands []Candidate, switchedAt time.Time, switchedTo string) wor
 
 // work is what one pass knows about the work running now.
 type work struct {
-	// rates is hover's: the work's rate by window length.
+	// rates is hover's: the work's rate by window length, filled in by Rank
+	// once the table the pass ranks on is known (workRatesOf reads it).
 	rates workRates
+	// seen is every account the pass can see the work's rate on, the
+	// quarantined included: the rate belongs to the work.
+	seen []Candidate
 	// poolMax is the configured strategies' carry rate: the pool's maximum
 	// measured rate, as it has always been there. See closingWindow.
 	poolMax sessionBurn
@@ -144,7 +173,7 @@ func workOf(cands []Candidate, st *State) work {
 		w.switchedAt, w.switchedTo = st.LastSwitch()
 		w.left = st.departuresFor("")
 	}
-	w.rates = workRatesOf(cands, w.switchedAt, w.switchedTo)
+	w.seen = cands
 	w.poolMax = measuredSessionBurn(cands)
 	return w
 }
