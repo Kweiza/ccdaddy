@@ -1362,7 +1362,10 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now, sent time.Ti
 
 		// The work's rate on every window, when this reading and the one it
 		// replaces were both taken live; see usage.LivePairs. Taken before the
-		// reading is overwritten, for the reason the burn below is.
+		// reading is overwritten, for the reason the burn below is. Beside it,
+		// whether the latest such pair saw the work running, which a reading
+		// that makes no pair leaves as it was.
+		// TestTheCommitRecordsWhetherTheLatestLivePairRan.
 		liveBurns, anchorLive := entry.Poll.LiveBurns, entry.Poll.AnchorLive
 		pairRunning := entry.Poll.LastPairRunning
 		if snap != nil {
@@ -1439,7 +1442,8 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now, sent time.Ti
 		// The prompt poll the switch scheduled, derived again from what this
 		// poll left: the reading it took, the 429 it may have been refused with
 		// -- congestion outranks the prompt as it outranks every clock here --
-		// and the floor the identity shares. TestAPromptPollYieldsToA429InFlight.
+		// and the floor the identity shares. TestAPromptPollYieldsToA429InFlight,
+		// TestTheCommitsPromptIsTheIdentitysShare.
 		if switched {
 			if prompt := pollpolicy.PromptPollAt(entry.FetchedAt, entry.NextPollAt, next.LastRateLimited, now, len(identity)); prompt.Before(entry.NextPollAt) {
 				entry.NextPollAt = prompt

@@ -67,13 +67,14 @@ func TestTheWorksRateIsTheMostRecentLiveMeasurement(t *testing.T) {
 // the time the work was elsewhere, and is never the work's rate -- even when it
 // was stored, as it is when the daemon stopped between recording the switch and
 // marking the account live. T was switched back to two minutes ago; its stored
-// pair runs from four minutes ago to now at a tenth of a point a minute. The
-// work's rate is the half point a minute measured on L.
+// pair runs from four minutes ago to now at a quarter point a minute -- a point
+// moved, so it runs, and it is later than any other. The work's rate is the
+// half point a minute measured on L.
 func TestAPairSpanningAReturnIsNeverTheWorksRate(t *testing.T) {
 	l := idleOn(maxAcct("l-left", 60, 3*time.Hour, 40, 3*day))
 	l.LiveBurns = []usage.LiveBurn{{PerMin: 0.5, Window: usage.WindowFiveHour, From: now.Add(-9 * time.Minute), At: now.Add(-6 * time.Minute)}}
 	tl := idleOn(maxAcct("t-live", 10, 4*time.Hour, 30, 4*day))
-	tl.LiveBurns = []usage.LiveBurn{{PerMin: 0.1, Window: usage.WindowFiveHour, From: now.Add(-4 * time.Minute), At: now}}
+	tl.LiveBurns = []usage.LiveBurn{{PerMin: 0.25, Window: usage.WindowFiveHour, From: now.Add(-4 * time.Minute), At: now}}
 	c := idleOn(maxAcct("c", 70, 4*time.Hour, 30, 4*day))
 	st := NewState()
 	st.RecordSwitch("t-live", now.Add(-2*time.Minute), Departure{})
