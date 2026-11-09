@@ -834,19 +834,19 @@ func (o Options) secondMeterEmptyOf(c Candidate, plan Headroom) usage.WindowName
 }
 
 // creditSpent is whether a credit seat has no credit left to spend, by its
-// own reading, over all four extra-usage states: Disabled or Blocked, the
-// account refuses it at whatever utilization (creditRefused); Enabled, its
-// meter is at or past its monthly limit; Unknown, never -- unreadable is not
-// empty. It is about the account's ability to serve, not ccdad's spend policy:
-// max_auto_spend has no part in it. TestABlockedSeatIsEmptyAtAnyUtilization,
+// own reading: a refusal state says so (creditRefused -- Disabled or Blocked,
+// at whatever utilization), or the meter, where there is one, reads at or
+// past its monthly limit, whatever the state. So over the four states:
+// Disabled and Blocked are spent; Enabled and Unknown are spent at their limit
+// and not below it; and an Unknown with no meter reading is not -- unreadable
+// is not empty. Whether ccdad can price spending on the seat is the gate's
+// question, not this one. It is about the account's ability to serve, not
+// ccdad's spend policy: max_auto_spend has no part in it.
+// TestABlockedSeatIsEmptyAtAnyUtilization,
 // TestACreditMeterIsSpentByStateAndLevel.
 func creditSpent(c Candidate, o Options) bool {
-	e := extraUsageOf(c)
-	if creditRefused(e) {
+	if creditRefused(extraUsageOf(c)) {
 		return true
-	}
-	if _, metered := creditStateOf(e); !metered {
-		return false
 	}
 	out, known := OutOfQuota(creditHeadroom(c, o))
 	return known && out

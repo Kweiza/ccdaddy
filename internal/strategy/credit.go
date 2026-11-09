@@ -147,19 +147,19 @@ type Decision struct {
 	DisabledReason string
 }
 
-// creditStateOf is the one reading of the four extra-usage states that both
-// the gate (CreditGate) and a seat's spent credit meter (creditSpent) take:
-// the reason the account itself refuses to spend credit, or CreditAllowed when
-// it does not, and whether its meter is the word on what it has left.
+// creditStateOf is the one reading of the four extra-usage states: the reason
+// the account itself refuses to spend credit, or CreditAllowed when it does
+// not, and whether ccdad can price spending on it. The refusal is read by both
+// the gate (CreditGate) and a seat's spent credit meter (creditRefused,
+// creditSpent); whether spending can be priced is the gate's question alone.
 //   - Disabled: overage is off for the account -- CreditAccountDisabled.
 //   - Blocked: out of credits, or another refusal its holder or organization
 //     set -- CreditAccountBlocked.
-//   - Enabled: no refusal, and the meter is read: the account is spent only
-//     at its limit.
-//   - Unknown: neither -- an account whose credit could not be read is not
-//     known to refuse it and has no meter to read, and unreadable is not empty
-//     here as anywhere else; the gate refuses it on its own ground.
-func creditStateOf(e usage.ExtraUsage) (refusal CreditReason, metered bool) {
+//   - Enabled: no refusal, and priceable.
+//   - Unknown: no refusal, and not priceable -- the state could not be read,
+//     and the gate refuses it as unreadable. Whether its meter is spent is
+//     not the state's to say: creditSpent reads the meter where there is one.
+func creditStateOf(e usage.ExtraUsage) (refusal CreditReason, priceable bool) {
 	switch e.State {
 	case usage.ExtraUsageDisabled:
 		return CreditAccountDisabled, false
@@ -218,11 +218,11 @@ func CreditGate(e usage.ExtraUsage, ceiling float64, mainPoolExhausted bool) Dec
 	// they all carry Blocked.
 	d.Blocked = true
 
-	switch refusal, metered := creditStateOf(e); {
+	switch refusal, priceable := creditStateOf(e); {
 	case refusal != CreditAllowed:
 		d.Reason = refusal
 		return d
-	case !metered:
+	case !priceable:
 		// An account whose credit axis could not be read is one ccdad cannot
 		// price. Refuse, and say which of the two it is.
 		d.Reason = CreditSpendUnreadable
