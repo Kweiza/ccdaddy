@@ -682,13 +682,18 @@ func (m limitMover) moveIn(res Result) limitMove {
 
 // waitsOnAReading is whether a move left from the live account waits on its
 // own reading, given the move reachable found (none): the one decision that a
-// hold is a reading wait. Three moves open on a reading and on nothing else.
-// Another account's last point opens once the live account reads empty
-// (lastResort). The credit pool opens once it reads empty too
-// (creditWaitsOn). And every account dearer than the live one -- a primary
-// seat a carrier, a bridge or a last resort -- opens once it reads at its last
-// point (reachable), so the move among the whole order is the move that
-// reading would make.
+// hold is a reading wait. A wait says a move follows the reading, so each case
+// is judged on the state that reading makes. Another account's last point
+// opens once the live account reads empty (lastResort). The credit pool opens
+// once it reads empty too (creditWaitsOn). And every account dearer than the
+// live one opens once it reads at its limit (reachable); the move that follows
+// is the walk from a live account at its limit, whose stop the reading has
+// moved to now -- so no bridge outlasts it, and what is left is a last resort:
+// a dearer account the work would not empty before the next look
+// (outlastsTheNextLook). A bridge judged on the projection before the reading
+// is not that move, and claiming a wait on one hid the blocked state when no
+// move came. TestADearerSeatThatCannotCarryWaitsForTheLiveReading,
+// TestAWaitIsNotClaimedOnABridgeTheReadingEnds.
 func (m limitMover) waitsOnAReading(reachableMove limitMove) bool {
 	if reachableMove.waitsForEmpty || m.p.creditWaitsOn(m.live) {
 		return true
@@ -697,8 +702,13 @@ func (m limitMover) waitsOnAReading(reachableMove limitMove) bool {
 		// reachable is the whole order already: nothing dearer is shut.
 		return false
 	}
-	opened := m.moveIn(m.p.Result)
-	return opened.found || opened.waitsForEmpty
+	cost := m.p.seatCost(m.live)
+	for _, r := range m.p.Result.Order {
+		if m.p.seatCost(r) > cost && outlastsTheNextLook(r, m.now) {
+			return true
+		}
+	}
+	return false
 }
 
 // earliest is the earlier of two instants, either of which may be the zero
@@ -1115,13 +1125,7 @@ func bridge(res Result, live Ranked, cooldown time.Duration) (Ranked, bool) {
 func lastResort(res Result, live Ranked, now time.Time) (target Ranked, found, waitsForEmpty bool) {
 	_, liveEmpty := live.Empty()
 	for _, r := range res.Order {
-		if r.UUID == live.UUID {
-			continue
-		}
-		if _, empty := r.Empty(); empty {
-			continue
-		}
-		if r.HasRunway && !r.RunsOutAt.IsZero() && !r.RunsOutAt.After(now.Add(outLead)) {
+		if r.UUID == live.UUID || !outlastsTheNextLook(r, now) {
 			continue
 		}
 		if r.LastPoint != "" && !liveEmpty {
@@ -1133,6 +1137,16 @@ func lastResort(res Result, live Ranked, now time.Time) (target Ranked, found, w
 		}
 	}
 	return target, found, waitsForEmpty && !found
+}
+
+// outlastsTheNextLook is whether r is a last resort to a live account that
+// reads empty: not empty itself, and with work left past the engine's next
+// look.
+func outlastsTheNextLook(r Ranked, now time.Time) bool {
+	if _, empty := r.Empty(); empty {
+		return false
+	}
+	return !r.HasRunway || r.RunsOutAt.IsZero() || r.RunsOutAt.After(now.Add(outLead))
 }
 
 // outlastsForLastResort is lastResort's preference: a runway nothing stops, then
