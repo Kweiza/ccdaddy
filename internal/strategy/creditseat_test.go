@@ -130,20 +130,25 @@ func TestPreemptionWillNotRunToASeatWhoseOptedInCapRunsOutFirst(t *testing.T) {
 //
 // The control is the same pool with no opt-in. Hover's order still moves the
 // session -- the five-hour account has room and the seat is weekly-only -- but
-// as a return, not as a pre-emption, and the reason is what tells the two
-// apart: the projection is the opt-in's doing.
+// as a return, not as a hand-off at a limit, and the reason and the mark are
+// what tell the two apart: the limit is the opt-in's doing. The cap is at its
+// last point, so the limit the seat is left at is that level, on that cap.
 func TestAnOptedInCapStillPreemptsFromAPrimaryCreditSeat(t *testing.T) {
 	seat := seatWithCap("a-seat", 10, 99.9, time.Hour)
 	seat.FetchedAt, seat.NextPollAt = now.Add(-time.Minute), now.Add(time.Minute)
 	room := polled(burning("b-room", 23), 1800*time.Second)
 	pool := []Candidate{seat, room}
 
-	want(t, Decide(pool, seatOpts(), Config{}, NewState(), "a-seat"), ActionSwitch, ReasonProjectedExhaustion, "b-room")
+	p := Decide(pool, seatOpts(), Config{}, NewState(), "a-seat")
+	want(t, p, ActionSwitch, ReasonLastPoint, "b-room")
+	if p.Departure.Closing != seatCap {
+		t.Errorf("Departure = %+v, want the seat left on %s", p.Departure, seatCap)
+	}
 
 	off := opts()
 	off.Hover = true
-	if p := Decide(pool, off, Config{}, NewState(), "a-seat"); p.Reason == ReasonProjectedExhaustion {
-		t.Errorf("pre-empted to %s with no opt-in; there is nothing to project without the consent", p.Target.UUID)
+	if p := Decide(pool, off, Config{}, NewState(), "a-seat"); p.Reason == ReasonLastPoint || p.Departure.Closing != "" {
+		t.Errorf("left at a limit (%s, %+v) with no opt-in; there is no limit without the consent", p.Reason, p.Departure)
 	}
 }
 

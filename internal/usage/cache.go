@@ -116,12 +116,12 @@ type PollState struct {
 	// across a change of binding window takes no new rate, so the anchor can name
 	// a window the rate standing beside it was never measured on.
 	BurnWindow WindowName `json:"burn_window,omitempty"`
-	// AnchorLive is whether the anchor reading above was taken while this
-	// account was live, and LiveBurn the last rate measured across two readings
-	// that both were; see LiveBurn. A pointer so that a cache with no such pair
-	// writes nothing, and an older cache reads as none.
-	AnchorLive bool      `json:"anchor_live,omitempty"`
-	LiveBurn   *LiveBurn `json:"live_burn,omitempty"`
+	// AnchorLive is whether the reading this entry holds was taken while the
+	// account was live, and LiveBurns the last rate measured on each window
+	// across two readings that both were; see LiveBurn and LivePairs. A cache
+	// with no such pair writes nothing, and an older cache reads as none.
+	AnchorLive bool       `json:"anchor_live,omitempty"`
+	LiveBurns  []LiveBurn `json:"live_burns,omitempty"`
 }
 
 // Entry is one account's cached reading.

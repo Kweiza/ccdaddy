@@ -523,30 +523,48 @@ func TestATargetlessSwitchRemembersTheAccountItLeftAtALimit(t *testing.T) {
 // blocked -- and --force overrides the switching margins and the cooldown, not a
 // limit. A targetless forced switch refuses with the blocked exit and leaves the
 // login where it is; naming the account still moves it.
+//
+// It holds on the last point and past it -- at 99.5% every account is past its
+// last point, which is recovery mode, and the same hand-off runs there -- and it
+// holds inside a running cooldown, where the hold the cooldown makes is the one
+// --force overrides: the target is chosen before the cooldown, so a cooldown
+// hold never names an account at a limit for --force to take.
 func TestAForcedSwitchUnderHoverDoesNotMoveOntoAnotherLimit(t *testing.T) {
-	isolate(t)
-	writeConfig(t, "hover = true\n")
-	seedAccount(t, "u-1", "a@example.com")
-	seedAccount(t, "u-2", "b@example.com")
-	if code, _, _, top := runRoot(t, "switch", "1"); code != ExitOK {
-		t.Fatalf("setup switch = %d (%s)", code, top)
-	}
-	// Both ON the last point of their five-hour window and not past it: past it,
-	// every account would be, and that is recovery mode, whose order is when
-	// each comes back rather than hover's.
-	seedUsage(t, "u-1", 1)
-	seedUsage(t, "u-2", 1)
-	clearCooldown(t)
+	for _, tc := range []struct {
+		name    string
+		left    float64
+		cooling bool
+	}{
+		{"on the last point", 1, false},
+		{"on the last point inside a cooldown", 1, true},
+		{"past the last point", 0.5, false},
+		{"past the last point inside a cooldown", 0.5, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolate(t)
+			writeConfig(t, "hover = true\n")
+			seedAccount(t, "u-1", "a@example.com")
+			seedAccount(t, "u-2", "b@example.com")
+			if code, _, _, top := runRoot(t, "switch", "1"); code != ExitOK {
+				t.Fatalf("setup switch = %d (%s)", code, top)
+			}
+			seedUsage(t, "u-1", tc.left)
+			seedUsage(t, "u-2", tc.left)
+			if !tc.cooling {
+				clearCooldown(t)
+			}
 
-	code, _, errOut, _ := runRoot(t, "switch", "--strategy", "headroom", "--force")
-	if code != ExitBlocked || !strings.Contains(errOut, "No account can be switched to") {
-		t.Errorf("exit = %d (%s), want %d: no account can be switched to", code, errOut, ExitBlocked)
-	}
-	if got := liveUUIDOf(t); got != "u-1" {
-		t.Fatalf("live account = %q, want u-1 left where it was", got)
-	}
-	if code, _, _, top := runRoot(t, "switch", "2"); code != ExitOK || liveUUIDOf(t) != "u-2" {
-		t.Errorf("a named switch = %d (%s), want it to move the login to u-2", code, top)
+			code, _, errOut, _ := runRoot(t, "switch", "--strategy", "headroom", "--force")
+			if code != ExitBlocked || !strings.Contains(errOut, "No account can be switched to") {
+				t.Errorf("exit = %d (%s), want %d: no account can be switched to", code, errOut, ExitBlocked)
+			}
+			if got := liveUUIDOf(t); got != "u-1" {
+				t.Fatalf("live account = %q, want u-1 left where it was", got)
+			}
+			if code, _, _, top := runRoot(t, "switch", "2"); code != ExitOK || liveUUIDOf(t) != "u-2" {
+				t.Errorf("a named switch = %d (%s), want it to move the login to u-2", code, top)
+			}
+		})
 	}
 }
 

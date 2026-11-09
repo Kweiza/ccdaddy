@@ -138,17 +138,77 @@ type LiveBurn struct {
 // LiveBurn is not.
 func (b LiveBurn) Measured() bool { return !b.At.IsZero() }
 
-// LivePair is the work's rate across two consecutive readings, and whether the
-// pair is one: both taken live (prevLive, curLive), and a pair BurnPerMin can
-// take a rate across at all. It is the one statement of when a pair is the
-// work's, and both the daemon's commit and the weekly simulation's poller ask it.
-func LivePair(prev BindingSample, prevLive bool, cur BindingSample, curLive bool) (LiveBurn, bool) {
-	if !prevLive || !curLive {
-		return LiveBurn{}, false
+// LivePairs is the work's rate on every window two consecutive readings of one
+// account both carry, when both were taken live (prevLive, curLive) -- one
+// LiveBurn per window BurnPerMin can take a rate across. It is the one statement
+// of when a pair is the work's, and both the daemon's commit and the weekly
+// simulation's poller ask it.
+//
+// Every window and not only the binding one, because the binding window is the
+// one with the least slack, and that is not the one that runs out first: a
+// five-hour window climbs thirty-odd times faster than the week beside it, so on
+// an account whose week is the tighter of the two by slack the five-hour rate is
+// never measured -- and the five-hour window then runs out between two readings
+// with nothing projecting it.
+func LivePairs(prev *Snapshot, prevAt time.Time, prevLive bool, cur *Snapshot, curAt time.Time, curLive bool) []LiveBurn {
+	if !prevLive || !curLive || prev == nil || cur == nil {
+		return nil
 	}
-	rate, ok := BurnPerMin(prev, cur)
-	if !ok {
-		return LiveBurn{}, false
+	var out []LiveBurn
+	for _, c := range cur.AllWindows() {
+		cp, ok := c.Percent()
+		if !ok {
+			continue
+		}
+		p, found := windowOf(prev, c.Name)
+		if !found {
+			continue
+		}
+		pp, ok := p.Percent()
+		if !ok {
+			continue
+		}
+		pr, _ := p.Reset()
+		cr, _ := c.Reset()
+		rate, ok := BurnPerMin(BindingSample{Window: c.Name, Pct: pp, At: prevAt, Reset: pr},
+			BindingSample{Window: c.Name, Pct: cp, At: curAt, Reset: cr})
+		if !ok {
+			continue
+		}
+		out = append(out, LiveBurn{PerMin: rate, Window: c.Name, From: prevAt, At: curAt})
 	}
-	return LiveBurn{PerMin: rate, Window: cur.Window, From: prev.At, At: cur.At}, true
+	return out
+}
+
+// windowOf is the named window of a reading, and whether it carries one.
+func windowOf(s *Snapshot, name WindowName) (Window, bool) {
+	for _, w := range s.AllWindows() {
+		if w.Name == name {
+			return w.Window, true
+		}
+	}
+	return Window{}, false
+}
+
+// MergeLiveBurns is kept with each window fresh measured replaced by its new
+// measurement: a window this pair could not measure keeps the last rate the work
+// was measured at on it.
+func MergeLiveBurns(kept, fresh []LiveBurn) []LiveBurn {
+	if len(fresh) == 0 {
+		return kept
+	}
+	out := append([]LiveBurn(nil), fresh...)
+	for _, k := range kept {
+		replaced := false
+		for _, f := range fresh {
+			if f.Window == k.Window {
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			out = append(out, k)
+		}
+	}
+	return out
 }

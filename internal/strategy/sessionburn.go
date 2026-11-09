@@ -31,47 +31,17 @@ type sessionBurn struct {
 	window usage.WindowName
 }
 
-// workBurnOf is the work's measured rate for one pass: the LIVE account's, because
-// the work is running there, and the pool's maximum only when no live account is
-// named.
-//
-// The live account's and not the pool's maximum, and the difference is the rule
-// closingWindow is built on. A rate goes stale by up to one poll interval: an
-// account the session has just left keeps the rate it had until it is next read,
-// up to ten idle minutes later. Taken as the work's rate, that stale figure
-// would judge the very account it belongs to -- its own stale burn condemning it
-// by the back door -- and judge every other candidate on a session that is no
-// longer running. A live account whose reading cannot name a rate yet says
-// "cannot say", which carries every candidate: a missing measurement is never
-// evidence.
-//
-// It reads one account on purpose, and it moves no threshold for doing so. The
-// objection to a fleet-wide rate is that a threshold a user cannot follow in
-// `ccdad status` is one they cannot argue with; this rate sets none. It only asks
-// of an account the work is not on whether that work would run it out, and it is
-// two consecutive readings of one window, a figure the same table shows.
-func workBurnOf(cands []Candidate, live string) sessionBurn {
-	for _, c := range cands {
-		if !isActive(c.UUID, live) {
-			continue
-		}
-		if !c.HasBurn {
-			return sessionBurn{}
-		}
-		return sessionBurn{perMin: c.BurnPerMin, has: true, window: c.BurnWindow}
-	}
-	return measuredSessionBurn(eligibleOf(cands))
-}
-
 // measuredSessionBurn is how fast the work running right now is spending quota,
-// in points of a binding window a minute, with the window it was measured on --
-// for a pass that cannot name the live account.
+// in points of a binding window a minute, with the window it was measured on, as
+// the configured strategies read it (closingWindow). Hover reads the work's rate
+// from live pairs instead (workRatesOf).
 //
 // It is the MAXIMUM over the pool, and that is a measurement rather than a
 // heuristic: only one account is live at a time, so only one account's binding
 // window is moving, and every other measured rate is a zero taken while nothing
-// was being spent there. The maximum is therefore the live account's rate, up
-// to the staleness workBurnOf describes.
+// was being spent there. The maximum is therefore the live account's rate --
+// or, for up to one idle poll after a switch, the rate still on the account the
+// session just left, which is what keeps a pre-emptive walk off that account.
 func measuredSessionBurn(pool []Candidate) sessionBurn {
 	var out sessionBurn
 	for _, c := range pool {

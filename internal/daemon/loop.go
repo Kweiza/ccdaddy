@@ -8,11 +8,13 @@ import (
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
+	"github.com/Kweiza/ccdaddy/internal/strategy"
 )
 
 const (
-	// tickInterval is the tick loop's cadence: once a second.
-	tickInterval = time.Second
+	// tickInterval is the tick loop's cadence: once a second, the interval the
+	// engine's hand-off rule counts "before it is asked again" in.
+	tickInterval = strategy.EvaluationInterval
 
 	// recoveryRearmAfter is how long a wedge may last before a loop with no
 	// replacement budget left is allowed one more attempt.

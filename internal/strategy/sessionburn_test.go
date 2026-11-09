@@ -13,10 +13,14 @@ func burned(uuid string, rate float64) Candidate {
 	return c
 }
 
-// Only one account is live at a time, so only one account's window is moving and
-// every other measured rate is a zero taken while nothing was spent there. The
-// maximum is therefore the live account's rate, without this having to be told
-// which account is live.
+// The configured strategies' rate for the work is the pool's highest measured
+// rate: only one account is live at a time, so the highest is the live
+// account's, without this having to be told which account is live. It is
+// theirs alone. Hover reads the work's rate off pairs of readings both taken
+// live (TestTheWorksRateIsTheMostRecentLiveMeasurement), because the pool
+// maximum also counts a pair that straddles a switch -- the account just left,
+// read once while the work ran and once after it went -- and that pair is
+// neither the work's rate nor zero.
 func TestTheSessionsRateIsThePoolsMaximum(t *testing.T) {
 	pool := []Candidate{burned("idle-1", 0), burned("live", 5.4), burned("idle-2", 0)}
 	got := measuredSessionBurn(pool)

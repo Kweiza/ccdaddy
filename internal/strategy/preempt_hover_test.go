@@ -67,21 +67,26 @@ func TestPreemptionWillNotRunToAnEmptyAccount(t *testing.T) {
 	}
 }
 
-// A candidate the work running now would run out inside its own horizon is no
-// place to pre-empt to: the session is cut off there instead, a switch later.
-// The question is asked at the WORK's rate -- the live account's measured burn --
+// A candidate the work running now would run out before its first live reading
+// is no place to pre-empt to: the session is cut off there instead, a switch
+// later. The question is asked at the WORK's rate -- the one measured live --
 // because the candidate's own reading says nothing about what the session would
-// do to it.
+// do to it. The live account is stopping (twenty-four minutes against a
+// thirty-minute blind), and the candidate's ten minutes do not outlast it by a
+// cooldown either, so nothing can serve yet; a last resort comes at the live
+// account's projected stop.
 func TestPreemptionWillNotRunToAnAccountTheWorkWouldRunOut(t *testing.T) {
 	live := polled(burning("a-live", 88), 1800*time.Second)
 	live.BurnPerMin, live.HasBurn, live.BurnWindow = 0.5, true, usage.WindowFiveHour
+	live.LiveBurns = []usage.LiveBurn{{PerMin: 0.5, Window: usage.WindowFiveHour, From: now.Add(-30 * time.Minute), At: now}}
 	// Five points of the same window: ten minutes at the work's rate, against a
 	// horizon of half an hour and more.
 	pool := []Candidate{live, polled(burning("b-worse", 95), 1800*time.Second)}
 
 	p := Decide(pool, hoverPreemptOpts(), Config{}, NewState(), "a-live")
-	if r, _ := find(p.Result, "b-worse"); r.Closing != usage.WindowFiveHour {
-		t.Fatalf("b-worse closing on %q; the work's rate should run it out inside its horizon", r.Closing)
+	if r, _ := find(p.Result, "b-worse"); r.Carries || r.Closing != "" {
+		t.Fatalf("b-worse carries %v, closing on %q; the work's rate runs it out before its first live reading, "+
+			"and an account the session is not on is never closing", r.Carries, r.Closing)
 	}
 	if p.Action == ActionSwitch {
 		t.Fatalf("pre-empted onto %s, which the work would run out inside the same horizon", p.Target.UUID)

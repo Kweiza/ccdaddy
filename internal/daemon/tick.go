@@ -1391,6 +1391,15 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now time.Time,
 		// callback then writes the FetchedAt that ends the wait.
 		entry.Probe = entry.Probe.Judged(entry.FetchedAt, snap, now)
 
+		// The work's rate on every window, when this reading and the one it
+		// replaces were both taken live; see usage.LivePairs. Taken before the
+		// reading is overwritten, for the reason the burn below is.
+		liveBurns, anchorLive := entry.Poll.LiveBurns, entry.Poll.AnchorLive
+		if snap != nil {
+			fresh := usage.LivePairs(entry.Snapshot, entry.FetchedAt, entry.Poll.AnchorLive, snap, now, active)
+			liveBurns, anchorLive = usage.MergeLiveBurns(liveBurns, fresh), active
+		}
+
 		if snap != nil {
 			entry.Snapshot, entry.FetchedAt = snap, now
 		} else if !had {
@@ -1473,7 +1482,6 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now time.Time,
 		burn, hasBurn, burnWindow := entry.Poll.BurnPerMin, entry.Poll.HasBurn, entry.Poll.BurnWindow
 		lastAt, lastReset := entry.Poll.LastBindingAt, entry.Poll.LastBindingReset
 		lastWindow := entry.Poll.LastBindingWindow
-		anchorLive, liveBurn := entry.Poll.AnchorLive, entry.Poll.LiveBurn
 		if reading.Known {
 			resetAt, _ := entry.Snapshot.ResetFor(h.Binding)
 			cur := usage.BindingSample{Window: h.Binding, Pct: reading.BindingPct, At: now, Reset: resetAt}
@@ -1487,21 +1495,15 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now time.Time,
 				if rate, ok := usage.BurnPerMin(prev, cur); ok {
 					burn, hasBurn, burnWindow = rate, true, h.Binding
 				}
-				// The work's rate, when both readings were taken live: the one a
-				// switch away carries forward. See usage.LiveBurn.
-				if pair, ok := usage.LivePair(prev, entry.Poll.AnchorLive, cur, active); ok {
-					liveBurn = &pair
-				}
 			}
 			lastAt, lastReset, lastWindow = now, resetAt, h.Binding
-			anchorLive = active
 		}
 		entry.Poll = usage.PollState{Interval: next.Interval, LastRateLimited: next.LastRateLimited}
 		entry.Poll.LastBindingPct, entry.Poll.HasLastBinding = next.LastBindingPct, next.HasLastBinding
 		entry.Poll.LastBindingAt, entry.Poll.LastBindingReset = lastAt, lastReset
 		entry.Poll.LastBindingWindow = lastWindow
 		entry.Poll.BurnPerMin, entry.Poll.HasBurn, entry.Poll.BurnWindow = burn, hasBurn, burnWindow
-		entry.Poll.AnchorLive, entry.Poll.LiveBurn = anchorLive, liveBurn
+		entry.Poll.AnchorLive, entry.Poll.LiveBurns = anchorLive, liveBurns
 		// entry.StandDownUntil is read and written back untouched, and that is
 		// what makes the two writers safe: this account's poll never edits the
 		// field its identity's live account owns, so the order the two goroutines

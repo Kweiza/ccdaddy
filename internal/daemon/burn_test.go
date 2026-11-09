@@ -228,29 +228,45 @@ func TestAPairAcrossASwitchIsNotALiveRate(t *testing.T) {
 	a := store.Account{UUID: "acct-1"}
 	e := NewEngine()
 	e.Rand = midJitter
-	commit := func(five float64, at time.Duration, live bool) usage.PollState {
-		e.commit(a, windowsUsed(five, 5), tickEpoch.Add(at), []string{a.UUID}, burnThresholds(), live, nil)
+	commit := func(five, week float64, at time.Duration, live bool) usage.PollState {
+		e.commit(a, windowsUsed(five, week), tickEpoch.Add(at), []string{a.UUID}, burnThresholds(), live, nil)
 		entry, ok := cacheEntry(t, a.UUID)
 		if !ok {
 			t.Fatal("commit() wrote no cache entry")
 		}
 		return entry.Poll
 	}
+	rateOn := func(p usage.PollState, w usage.WindowName) (usage.LiveBurn, bool) {
+		for _, b := range p.LiveBurns {
+			if b.Window == w {
+				return b, true
+			}
+		}
+		return usage.LiveBurn{}, false
+	}
 
-	commit(10, 0, false)
-	if got := commit(20, 10*time.Minute, true); got.LiveBurn != nil {
-		t.Fatalf("LiveBurn = %+v from an idle anchor and a live reading", *got.LiveBurn)
+	// The week is the binding window throughout -- sixty points against the
+	// five-hour window's fifty at most -- and the five-hour rate is measured
+	// all the same: it is the window that runs out first.
+	commit(10, 60, 0, false)
+	if got := commit(20, 60.1, 10*time.Minute, true); len(got.LiveBurns) != 0 {
+		t.Fatalf("LiveBurns = %+v from an idle anchor and a live reading", got.LiveBurns)
 	}
-	got := commit(50, 20*time.Minute, true)
-	if got.LiveBurn == nil || math.Abs(got.LiveBurn.PerMin-3) > 1e-9 || got.LiveBurn.Window != usage.WindowFiveHour {
-		t.Fatalf("LiveBurn = %+v after two live readings, want 3 a minute on five_hour", got.LiveBurn)
+	got := commit(50, 60.4, 20*time.Minute, true)
+	five, ok := rateOn(got, usage.WindowFiveHour)
+	if !ok || math.Abs(five.PerMin-3) > 1e-9 {
+		t.Fatalf("LiveBurns = %+v after two live readings, want 3 a minute on five_hour", got.LiveBurns)
 	}
-	if !got.LiveBurn.From.Equal(tickEpoch.Add(10*time.Minute)) || !got.LiveBurn.At.Equal(tickEpoch.Add(20*time.Minute)) {
-		t.Errorf("LiveBurn spans %s..%s, want the two live readings", got.LiveBurn.From, got.LiveBurn.At)
+	if week, ok := rateOn(got, usage.WindowSevenDay); !ok || math.Abs(week.PerMin-0.03) > 1e-9 {
+		t.Errorf("LiveBurns = %+v, want 0.03 a minute on seven_day too", got.LiveBurns)
 	}
-	if got := commit(50, 30*time.Minute, false); got.LiveBurn == nil || got.LiveBurn.PerMin != 3 || got.AnchorLive {
-		t.Errorf("after an idle reading LiveBurn = %+v, AnchorLive = %v; want the live rate kept and an idle anchor",
-			got.LiveBurn, got.AnchorLive)
+	if !five.From.Equal(tickEpoch.Add(10*time.Minute)) || !five.At.Equal(tickEpoch.Add(20*time.Minute)) {
+		t.Errorf("the five-hour rate spans %s..%s, want the two live readings", five.From, five.At)
+	}
+	got = commit(50, 60.4, 30*time.Minute, false)
+	if five, ok := rateOn(got, usage.WindowFiveHour); !ok || five.PerMin != 3 || got.AnchorLive {
+		t.Errorf("after an idle reading LiveBurns = %+v, AnchorLive = %v; want the live rate kept and an idle anchor",
+			got.LiveBurns, got.AnchorLive)
 	}
 }
 

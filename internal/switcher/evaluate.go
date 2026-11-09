@@ -270,9 +270,7 @@ func engineCandidates(s *store.Store, accounts []store.Account, c *usage.Cache, 
 			// above because it is the same kind of fact: something the poller
 			// observed, which the engine may read but must not re-derive.
 			cand.BurnPerMin, cand.HasBurn, cand.BurnWindow = e.Poll.BurnPerMin, e.Poll.HasBurn, e.Poll.BurnWindow
-			if e.Poll.LiveBurn != nil {
-				cand.LiveBurn = *e.Poll.LiveBurn
-			}
+			cand.LiveBurns = e.Poll.LiveBurns
 		}
 		out = append(out, cand)
 	}
@@ -289,18 +287,31 @@ func anyReading(cands []strategy.Candidate) bool {
 	return false
 }
 
-// forceableTarget is the best account Force may move to: the top of the
-// ranking, when that is not already the live one. A credit account is never
-// returned, which is what keeps Force away from the credit gate.
+// forceableTarget is the account Force may move to: the move the hold refused
+// (Plan.Held), when the hold named one, and never a credit account, which is
+// what keeps Force away from the credit gate.
+//
+// A hold that names no move is a hold with nowhere to go, and Force overrides a
+// margin or the cooldown, never a limit -- so under hover it moves nothing. The
+// configured strategies' holds name no move outside their margin gate, and
+// there the top of the ranking is what Force has always taken.
 func forceableTarget(plan strategy.Plan, liveUUID string) (strategy.Ranked, bool) {
-	if len(plan.Result.Order) == 0 {
+	target := plan.Held
+	if target.UUID == "" {
+		if plan.Hover != nil || len(plan.Result.Order) == 0 {
+			return strategy.Ranked{}, false
+		}
+		target = plan.Result.Order[0]
+	}
+	if target.UUID == liveUUID {
 		return strategy.Ranked{}, false
 	}
-	best := plan.Result.Order[0]
-	if best.UUID == liveUUID {
-		return strategy.Ranked{}, false
+	for _, r := range plan.Result.Credit {
+		if r.UUID == target.UUID {
+			return strategy.Ranked{}, false
+		}
 	}
-	return best, true
+	return target, true
 }
 
 // Explain turns a plan into a sentence, adding the detail the reason alone

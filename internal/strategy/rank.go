@@ -190,11 +190,12 @@ type Candidate struct {
 	// BurnWindow is the window BurnPerMin was measured on. Empty on a reading
 	// cached before it was recorded; see sessionBurn.onWindow for how that is read.
 	BurnWindow usage.WindowName
-	// LiveBurn is the last rate measured across two readings of this account
-	// that were both taken while it was live -- the work's rate rather than the
-	// account's -- copied from usage.PollState. Hover reads the pool's latest one
-	// per window length as the work's rate; see workRates.
-	LiveBurn usage.LiveBurn
+	// LiveBurns is the last rate measured on each of this account's windows
+	// across two readings that were both taken while it was live -- the work's
+	// rate rather than the account's -- copied from usage.PollState. Hover reads
+	// the pool's latest one per window length as the work's rate; see
+	// workRatesOf.
+	LiveBurns []usage.LiveBurn
 }
 
 // Options configures one ranking pass.
@@ -249,14 +250,15 @@ type Options struct {
 	// sees no mark, exactly as it sees no hover pass it did not install.
 	departures departures
 	// live is the account the work is running on, set by Decide from the same
-	// activeUUID every margin is held against. closingWindow judges it on its
-	// own rates and every other account on the work's; a caller that reaches
-	// Rank directly names no live account, so every account is judged on the
-	// work's rate there.
+	// activeUUID every margin is held against. A caller that reaches Rank
+	// directly names no live account.
 	live string
-	// workBurn is the work's measured rate for this pass, taken once by Rank;
-	// see workBurnOf.
-	workBurn sessionBurn
+	// work is what the pass knows of the work running now -- its rate and the
+	// last switch -- installed by Decide from every eligible account, the
+	// quarantined included: the rate belongs to the work, not to whether the
+	// account it was measured on can be used. nil until installed; Rank takes it
+	// from its own candidates for a caller that reaches it directly.
+	work *work
 	// MaxAutoSpend is the credit gate's ceiling, and it is here for ONE reason:
 	// the credit pool is ordered by armed room, and room cannot be computed
 	// without it.
@@ -305,13 +307,28 @@ type Ranked struct {
 	// or "" when it carries none: the tier hover orders on, read off the
 	// reading's presence rather than its utilization. See shortWindowOf.
 	ShortWindow usage.WindowName
-	// Closing names the window this account would run out of before its next
-	// reading lands, plus the lead, or "" when none would -- including whenever
-	// pre-emption is off. The live account is judged on its own rates and every
-	// other account on the work's (closingWindow). Asked once here, so the rule
-	// that leaves the live account, the walk that refuses a candidate, the order
-	// and the gate read one answer.
+	// Closing names the window this account would run out of before the
+	// engine can act on it, or "" when none would.
+	//
+	// Under hover it is set on the LIVE account only, and it means the work
+	// would stop it before the reading after next (liveLimitOf): an account the
+	// session is not on is filed by its levels and its mark alone, and whether
+	// it could take the work is Carries. Under the configured strategies it is
+	// the pre-emptive projection over the blind interval plus preempt_lead
+	// (closingWindow), "" whenever pre-emption is off.
 	Closing usage.WindowName
+	// HasRunway is whether the work running now has a rate to project on this
+	// account's windows, and RunsOutAt when that projection has the work stop
+	// it, on RunsOutOn; a zero RunsOutAt with HasRunway is a runway nothing
+	// stops. See runwayOf. Computed for every account, read only by hover's
+	// decision and by what reports it.
+	HasRunway bool
+	RunsOutAt time.Time
+	RunsOutOn usage.WindowName
+	// Carries is whether the account would not be at a limit at its first live
+	// reading if the work moved to it now: hover's carrier test (Options.carries).
+	// An account the order prefers that does not carry the work is passed over.
+	Carries bool
 	// HeldOut names the window that holds this account out of hover's order --
 	// the one it was left at a limit on, which has not rolled since -- or ""
 	// when nothing holds it. Under hover only; see departure.go.
@@ -336,6 +353,10 @@ type Ranked struct {
 	// PRIMARY credit seat, where no room was priced at all: Rank routes such a
 	// seat into Result.Order and the ceiling never applied to it.
 	HasCreditRoom bool
+
+	// limit is the live account's state against the work's runway under hover:
+	// closing, stopping or out (liveLimitOf). Zero on every other account.
+	limit liveLimit
 }
 
 // Result is one ranking pass.
@@ -652,7 +673,6 @@ func measure(c Candidate, o Options) Ranked {
 		// and it is not this rule's to move.
 		LastPoint:      o.lastPointOf(h, plan),
 		ShortWindow:    shortWindowOf(c.Usage),
-		Closing:        o.closingWindow(c, h),
 		RecoversAt:     rec.at,
 		HasRecovery:    rec.ok,
 		WeeklyResetsAt: weekly.at,
@@ -662,6 +682,19 @@ func measure(c Candidate, o Options) Ranked {
 	// the configured strategies rank on nothing they could hold.
 	if o.hover != nil {
 		r.HeldOut = o.departures.holding(c, o.Now)
+	}
+	// The work's runway, once per account, so the live account's limit, every
+	// carrier test and the reporters read one projection (handoff.go).
+	rw := o.runwayOf(c)
+	r.HasRunway, r.RunsOutAt, r.RunsOutOn = rw.known, rw.at, rw.on
+	r.Carries = o.carries(c, r, rw)
+	switch {
+	case o.hover == nil:
+		r.Closing = o.closingWindow(c, h)
+	case isActive(c.UUID, o.live):
+		if r.limit = o.liveLimitOf(c, rw); r.limit != liveRoom {
+			r.Closing = rw.on
+		}
 	}
 	// A binding window with no reset cannot be said to return inside the
 	// horizon. Treating "no answer" as "back immediately" would put the least
@@ -673,7 +706,20 @@ func measure(c Candidate, o Options) Ranked {
 // Rank orders the eligible accounts, best first. It does not reorder its input.
 func Rank(cands []Candidate, o Options) Result {
 	o = o.withHover(cands)
-	o.workBurn = workBurnOf(cands, o.live)
+	if o.work == nil {
+		w := workOf(eligibleOf(cands), nil)
+		o.work = &w
+	}
+	// Under hover every reading is read as it stands now (usage.Snapshot.AsOf):
+	// a window whose reset the reading names and has passed is a window that
+	// has rolled, and hover's levels are the whole of how it files an account
+	// the session is not on -- an account read empty on a window that rolled a
+	// minute ago is the one fresh window in the fleet, not an empty one.
+	// TestARolledReadingIsReadAsRolled. The configured strategies rank on the
+	// reading as it was taken, as they always have.
+	if o.hover != nil {
+		cands = asOf(cands, o.Now)
+	}
 	measured := make([]Ranked, 0, len(cands))
 	credit := make([]Ranked, 0)
 	// True until some MAIN-POOL candidate turns out not to be known-and-over.
@@ -956,4 +1002,15 @@ func MainPoolExhausted(cands []Candidate, o Options) bool {
 // quietly means less than it used to.
 func SubscriptionExhausted(cands []Candidate, o Options) bool {
 	return MainPoolExhausted(cands, o)
+}
+
+// asOf is cands with every reading as it stands at now; see usage.Snapshot.AsOf.
+// It does not touch its input.
+func asOf(cands []Candidate, now time.Time) []Candidate {
+	out := make([]Candidate, len(cands))
+	for i, c := range cands {
+		c.Usage = c.Usage.AsOf(now)
+		out[i] = c
+	}
+	return out
 }
