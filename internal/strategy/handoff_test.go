@@ -693,6 +693,49 @@ func TestAnEmptyLiveSeatTakesAHeldOutSeat(t *testing.T) {
 	want(t, p, ActionSwitch, ReasonBetterTarget, "c1")
 }
 
+// spentPoolSeat is a pool seat metered in credits alone, its $10 monthly limit
+// spent as far as used reaches.
+func spentPoolSeat(uuid string, used float64) Candidate {
+	return creditWith(uuid, usage.ExtraUsageFor(usage.ExtraUsageInput{
+		State: usage.ExtraUsageEnabled, Currency: "USD", MonthlyLimit: pf(1000), UsedCredits: pf(used * 10), Utilization: pf(used),
+	}))
+}
+
+// A pool seat is empty when its credit balance is spent, as a primary seat is
+// when either of its meters is: one predicate, which every reader of
+// emptiness -- the rung, the walk, the last resort -- then agrees on. With
+// balance left, it is not.
+func TestAPoolSeatIsEmptyWhenItsBalanceIsSpent(t *testing.T) {
+	for _, hover := range []bool{false, true} {
+		o := opts()
+		o.Hover = hover
+		res := Rank([]Candidate{spentPoolSeat("c-spent", 100), spentPoolSeat("c-left", 50)}, o)
+		if r, _ := find(res, "c-spent"); func() bool { _, e := r.Empty(); return !e }() {
+			t.Errorf("hover %v: a pool seat with its limit spent is not empty", hover)
+		}
+		if r, _ := find(res, "c-left"); func() bool { _, e := r.Empty(); return e }() {
+			t.Errorf("hover %v: a pool seat with half its limit left is empty", hover)
+		}
+	}
+}
+
+// A live pool seat whose credit balance is spent has nothing left, and takes a
+// held-out seat with room as its last resort. No main pool, the cooldown long
+// over: c1 was left closing on its week, which has not rolled, but has room
+// and armed balance; c2, live, is metered in credits alone and its $10 limit is
+// spent. The session goes to c1.
+func TestASpentLivePoolSeatTakesAHeldOutSeat(t *testing.T) {
+	armed := usage.ExtraUsageFor(usage.ExtraUsageInput{
+		State: usage.ExtraUsageEnabled, Currency: "USD", MonthlyLimit: pf(100000), UsedCredits: pf(0), Utilization: pf(0),
+	})
+	c1 := credit("c1", &usage.Snapshot{SevenDay: win(60, 3*day), ExtraUsage: armed})
+	p := Decide([]Candidate{c1, spentPoolSeat("c2", 100)}, hoverOpts(), Config{MaxAutoSpend: 500}, leftAt("c1", usage.WindowSevenDay), "c2")
+	if r, _ := find(p.Result, "c1"); r.HeldOut == "" {
+		t.Fatalf("c1 is not held out: the case is not the one named")
+	}
+	want(t, p, ActionSwitch, ReasonBetterTarget, "c1")
+}
+
 // A wait for the credit pool is a wait for a move a seat can take. S is on its
 // last point, A is empty and a pool seat is registered, but with max_auto_spend
 // at its default of 0 the gate arms nothing: the session is blocked as any dry

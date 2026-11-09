@@ -317,10 +317,10 @@ type Ranked struct {
 	// reason Closing and HeldOut are: the departure mark waits for THAT window
 	// to roll over.
 	LastPoint usage.WindowName
-	// planEmpty names the plan window a primary credit seat has nothing left
-	// on, under hover, when its Headroom is the credit meter and so cannot say
-	// so; see Empty.
-	planEmpty usage.WindowName
+	// secondMeterEmpty names the window of a credit seat's second meter --
+	// the one its Headroom is not -- that has nothing left; see Empty and
+	// Options.secondMeterEmptyOf.
+	secondMeterEmpty usage.WindowName
 	// ShortWindow names the window shorter than a week this account carries,
 	// or "" when it carries none: the tier hover orders on, read off the
 	// reading's presence rather than its utilization. See shortWindowOf.
@@ -692,13 +692,13 @@ func measure(c Candidate, o Options) Ranked {
 		Headroom: h,
 		// Under hover only. A threshold a user typed is where they said to stop,
 		// and it is not this rule's to move.
-		LastPoint:      o.lastPointOf(h, plan),
-		planEmpty:      o.planEmptyOf(c, plan),
-		ShortWindow:    shortWindowOf(c.Usage),
-		RecoversAt:     rec.at,
-		HasRecovery:    rec.ok,
-		WeeklyResetsAt: weekly.at,
-		HasWeeklyReset: weekly.ok,
+		LastPoint:        o.lastPointOf(h, plan),
+		secondMeterEmpty: o.secondMeterEmptyOf(c, plan),
+		ShortWindow:      shortWindowOf(c.Usage),
+		RecoversAt:       rec.at,
+		HasRecovery:      rec.ok,
+		WeeklyResetsAt:   weekly.at,
+		HasWeeklyReset:   weekly.ok,
 	}
 	// Under hover only, like the last point: the marks are hover's order, and
 	// the configured strategies rank on nothing they could hold.
