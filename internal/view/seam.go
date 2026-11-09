@@ -86,9 +86,10 @@ type Snapshot struct {
 // by whose week ends first.
 //
 // In recovery mode the order is not hover's: every account is past its last
-// point, and the pass ranks on which comes back first. The lines then say so and
-// describe each account by its rollover, because a rung printed beside an order
-// the rungs did not make would explain a decision nobody took.
+// point, and the pass ranks on emptiness, then on which comes back first. The
+// lines then say so and describe each account by what that order ranked it on,
+// because a rung printed beside an order the rungs did not make would explain a
+// decision nobody took.
 func (s Snapshot) HoverLines() []string {
 	if !s.Hover {
 		return nil
@@ -142,16 +143,30 @@ func (s Snapshot) placeOf(r strategy.Ranked, row Row) string {
 }
 
 // HoverRecoveryNote is the line that says the order below it is the recovery
-// order rather than hover's.
-const HoverRecoveryNote = "hover:    recovery: every account is past its last point, so the soonest back comes first"
+// order rather than hover's, and states that order's keys in the order
+// strategy's lessRecovery applies them: an account with anything left before an
+// empty one, then one back within the recovery horizon (an hour,
+// strategy.DefaultRecoveryHorizon) before one that is not, the soonest first,
+// and the rest by how little they are past their line.
+const HoverRecoveryNote = "hover:    recovery: every account is past its last point; accounts with something left come " +
+	"before empty ones, and within each, those back within the hour come first, soonest first, " +
+	"then the rest, the least past its line first"
 
-// comesBack describes one account in the recovery order by the one fact that
-// order ranks on.
+// comesBack describes one account in the recovery order by the fact that order
+// ranked it on: emptiness, the rollover when that is inside the horizon, and how
+// far past its line it is when it is not.
 func (s Snapshot) comesBack(r strategy.Ranked, _ Row) string {
-	if !r.HasRecovery {
-		return "names no rollover"
+	back := "names no rollover"
+	if r.HasRecovery {
+		back = "back at " + s.clock(r.RecoversAt)
 	}
-	return "back at " + s.clock(r.RecoversAt)
+	if empty, known := strategy.OutOfQuota(r.Headroom); known && empty {
+		return fmt.Sprintf("nothing left on %s · %s", r.AtLimit(), back)
+	}
+	if r.ReturnsInsideHorizon {
+		return back
+	}
+	return fmt.Sprintf("%.1f past its line · %s", -r.Headroom.Slack, back)
 }
 
 // clock renders an instant in the reader's own zone, to the minute, with the
