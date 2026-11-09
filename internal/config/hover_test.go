@@ -107,20 +107,22 @@ func TestEveryKeyIsClassifiedAgainstHover(t *testing.T) {
 	}
 }
 
-// Hover stopped deriving the three margins when it stopped pacing, and a listing
-// that still marked them overridden would report the user's own numbers as ones
-// nothing reads -- recovery_hysteresis above all, which is the margin hover now
-// moves weekly-only seats on.
-func TestHoverHonoursTheMarginsItNoLongerDerives(t *testing.T) {
-	for _, key := range []string{keyHysteresisPct, keyHeadroomRatio, keyRecoveryHysteresis} {
-		if HoverOverrides(key) || !hoverHonours[key] {
-			t.Errorf("%s: overridden=%v honoured=%v, want honoured", key, HoverOverrides(key), hoverHonours[key])
-		}
+// Hover stopped deriving recovery_hysteresis when it stopped pacing, and it is
+// the margin hover moves weekly-only seats on: a listing that marked it
+// overridden would report the user's own number as one nothing reads. The two
+// margins on room, hysteresis_pct and headroom_ratio, are the other way round:
+// no hover move reads them, and a listing that printed them as in force would
+// show a setting that does nothing.
+func TestHoverHonoursTheMarginsItReads(t *testing.T) {
+	if HoverOverrides(keyRecoveryHysteresis) || !hoverHonours[keyRecoveryHysteresis] {
+		t.Errorf("recovery_hysteresis: overridden=%v honoured=%v, want honoured",
+			HoverOverrides(keyRecoveryHysteresis), hoverHonours[keyRecoveryHysteresis])
 	}
-	// And the keys hover still sets for itself are still marked.
-	for _, key := range []string{keyThreshold, keyCooldown, keyStrategy, keyPreemptLead, keyProbeUnknown, keyCreditThreshold} {
+	// And the keys hover sets for itself or does not read are marked.
+	for _, key := range []string{keyThreshold, keyCooldown, keyStrategy, keyPreemptLead, keyProbeUnknown, keyCreditThreshold,
+		keyHysteresisPct, keyHeadroomRatio} {
 		if !HoverOverrides(key) {
-			t.Errorf("%s is not marked overridden; hover sets it itself", key)
+			t.Errorf("%s is not marked overridden; hover sets it itself or does not read it", key)
 		}
 	}
 }
