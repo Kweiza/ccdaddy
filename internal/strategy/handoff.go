@@ -46,12 +46,19 @@ const (
 	//
 	// A longer reserve tolerates a sharper rise in the work between two
 	// readings and throws away more of every window the session leaves.
-	// CandidateMaxInterval (600 s) was measured against this over a simulated
-	// week and lost: it left more than twice the five-hour points behind,
-	// stopped today's fleet for 3427 s under production load where this stops
-	// it for none, and stopped with room on another account in five variants
-	// where this does in two. It was better in one, a burst on two Max
-	// accounts alone, by 23 s of 1177 -- the burst gap no reserve closes
+	// CandidateMaxInterval (600 s) was measured against this over the
+	// simulated week -- whole-percent readings, the daemon's warm-ups, the
+	// pause load -- and lost on the whole: 4298 s stopped with room on
+	// another account across every fleet and load, against 3562 s here, and
+	// more left behind, today's five-hour account reaching its weekly reset
+	// 3.98 points unspent against 1.98. It was better in five variants:
+	// today's fleet and the big Ultras under burst load, 29 s to none each;
+	// two Max under heavy load, 1641 to 1272; two Max, three Ultras under
+	// heavy load, 239 to 233, and under production load, 346 to 234. It was
+	// worse in the other five: today's fleet under production load, none to
+	// 422; two Max under burst load, 958 to 1370, and under production load,
+	// 136 to 430; two Max, three Ultras under the pause load, 5 to 91; two
+	// Ultras under production load, 37 to 104
 	// (TestEveryFleetHandsOffBeforeTheLimit).
 	hoverReserve = pollpolicy.MinInterval
 	// hoverBlind is B, the longest an unthrottled live account goes unread. It
@@ -400,6 +407,22 @@ const (
 //
 // The next reading is the one the scheduler has set, or now when it is
 // overdue: a look already due is the next thing that happens.
+//
+// A residual, kept on purpose: NextPollAt can hold an instant the daemon's
+// due() gate refuses. The danger band schedules the live account a minute
+// after its reading, and no poll is made sooner than ServeTTL, three minutes,
+// after the last, so the next reading can come later than this files it. An
+// account that will stop before that reading then reads as closing until it
+// reads as out: "stopping", and the bridge it opens, is skipped. That is the
+// two Max, three Ultras pause load's 5 s. Holding next to FetchedAt +
+// ServeTTL, as due() does, was measured over the simulated week and not
+// taken: stopped with room on another account went from 3562 s to 3739 s in
+// all. It lowered that pause load's 5 s to 2 (a different stop), two Max
+// under heavy load from 1641 to 1547 and under production load from 136 to
+// 104, and two Max, three Ultras under production load from 346 to 345; it
+// raised two Max under burst load from 958 to 1107, and two Max, three Ultras
+// under burst load from 142 to 250 and under heavy load from 239 to 289; and
+// the pause load switched 70 times where this switches 44.
 func (o Options) liveLimitOf(c Candidate, rw runway) liveLimit {
 	next := c.NextPollAt
 	if next.Before(o.Now) {

@@ -156,12 +156,17 @@ quota, which can now expire unspent.
   unspent a week on today's fleet under steady heavy use.
 
   The three-minute reserve is the poll policy's normal floor. A ten-minute
-  one, the idle cadence, was measured against it before readings were whole
-  percents: it left more than twice the five-hour points behind, stopped
-  today's fleet under production load for 3427 seconds where three minutes
-  stopped it for none, and stopped with room on another account in five
-  variants. It did better in one, two Max accounts under the burst load, by
-  23 seconds.
+  one, the idle cadence, was measured against it in the same simulated week
+  and lost on the whole: 4298 seconds stopped with room on another account
+  across every fleet and load, against 3562, and today's five-hour account
+  reaching its weekly reset 3.98 points unspent against 1.98. It did better in
+  five variants: today's fleet and the big Ultras under burst load, 29
+  seconds to none each; two Max accounts under heavy load, 1641 to 1272; two
+  Max and three Ultras under heavy load, 239 to 233, and under production
+  load, 346 to 234. It did worse in the other five: today's fleet under
+  production load, none to 422; two Max accounts under burst load, 958 to
+  1370, and under production load, 136 to 430; two Max and three Ultras
+  under the pause load, 5 to 91; two Ultras under production load, 37 to 104.
 - **Ultra weekly quota can now expire unspent.** A weekly-only seat is used
   only while every five-hour account is at a limit, and then only the one whose
   week ends first. On a fleet with several such seats most of their weekly
