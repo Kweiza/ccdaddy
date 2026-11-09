@@ -478,21 +478,36 @@ nothing else has room. Weekly-only quota is spent only while every five-hour
 account is at a limit, so on a fleet with several such seats most of their
 weekly quota can expire unspent.
 
-A burst that resumes after a pause near a limit can still stop a session. The
-rate is measured between two readings, and a pair taken across the pause reads
-the work at half its rate or less, so the live account can run out before the
-next reading shows it. On a fleet with spare room elsewhere the session has
-already moved by then; on a fleet with none it can stop for seconds to minutes
-a week. In a simulated week of work alternating three minutes at twice the
-heavy rate with three minutes of nothing, two Max accounts alone stopped for
-1177 seconds while the other still held its last few points, and two Max
-accounts beside three nearly spent Ultra seats for 17 seconds; no other
-simulated fleet or load stopped while another account had room. The remedy
-not taken is a reserve on the live account's level: handing off with enough
-left to cover such a burst through one reading interval means leaving about
-five to eight five-hour points at every hand-off, whatever the work is doing.
-On today's fleet under steady heavy use that is an estimated 140 to 235 more
-five-hour points left unspent a week, on top of the 100 left now.
+Hover cannot see the work between two readings, and a session can still stop
+at a limit while another account has room. Hover projects the live account at
+the rate the work was last measured running -- a pause is not taken for slower
+work, so a pause near a limit hands off before the work resumes -- and the
+projection comes too late when:
+
+- the work runs faster than its last running rate, as a burst does after a
+  quiet stretch;
+- the readings are whole percents, so the live account can be up to a point
+  further spent than it reads, a rate is measured to the nearest point, and an
+  account holding less than a point reads the same 99 as one holding a whole
+  one;
+- the rate was measured on another plan, whose points are not this one's.
+
+The live account then runs out before its next reading shows it, and the
+session stops until that reading lands. Two cases weaken the projection
+further: the first two live readings after the daemon starts have no rate at
+all, so accounts are judged by their levels alone; and accounts sharing one
+organization share its polling budget, so the first look at an account after
+a move can come later than the reserve assumes.
+
+In a simulated week, with whole-percent readings and the daemon's warm-ups, a
+session stopped while another account had room in ten of 27 fleet-and-load
+variants, for between 5 and 1641 seconds, and in none of the rest. Those
+figures belong to the simulated fleets and loads; they are not a bound on what
+a real week can cost. The remedy not taken is a reserve on the live account's
+level: handing off with enough left to cover a step and a burst through one
+reading interval, about five to eight five-hour points at every hand-off
+whatever the work is doing -- an estimated 140 to 235 more five-hour points
+left unspent a week on today's fleet under steady heavy use.
 
 When the live account is at a limit and no account is better placed, hover
 reports the switch as blocked until the soonest rollover. When every account
@@ -501,8 +516,8 @@ says so.
 
 Hover sets the threshold, credit threshold, strategy, preemption lead (the
 three minutes above), probe setting, and cooldown (2m) itself. It uses your
-`recovery_hysteresis`; `hysteresis_pct` and `headroom_ratio` apply only on the
-way back from a credit seat once every account is past its last point.
+`recovery_hysteresis`, and does not read `hysteresis_pct` or `headroom_ratio`:
+every hover move is made on the order's own rules.
 `ccdad config list` identifies overridden values; status shows the order hover
 is using, and says of an account that would not carry the work running now
 how soon it would run out. Hover does not
