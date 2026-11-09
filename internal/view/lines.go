@@ -139,7 +139,7 @@ func CurrentLine(m strategy.Mode) string {
 	case strategy.ModeConsumeFirst:
 		return "Current:  consume-first  (spending perishable weekly quota before it expires)"
 	case strategy.ModeHover:
-		return "Current:  hover  (five-hour accounts first, then the soonest weekly reset; an account is left only at a limit)"
+		return "Current:  hover  (five-hour accounts first, then the soonest weekly reset; a five-hour account is left only at a limit)"
 	default:
 		return "Current:  headroom  (at least one account has room, or could not be read)"
 	}
@@ -149,7 +149,7 @@ func CurrentLine(m strategy.Mode) string {
 func StrategyLine(name string) string {
 	switch name {
 	case "hover":
-		return "Strategy: hover  (five-hour accounts first, then the soonest weekly reset; left only at a limit)"
+		return "Strategy: hover  (five-hour accounts first, then the soonest weekly reset; a five-hour account is left only at a limit)"
 	case "manual":
 		return "Strategy: manual  (ccdad watches and never switches; 'ccdad switch <account>' still works)"
 	default:

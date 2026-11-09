@@ -35,8 +35,13 @@ const KeyManual = keyManual
 // KeyStrategy is the automatic-policy key written by `ccdad strategy`.
 const KeyStrategy = keyStrategy
 
-// hoverOverrides is every key hover derives for itself, so a value in the file
-// stops being read the moment hover is on.
+// hoverOverrides is every key whose value in the file stops being read the
+// moment hover is on: the ones hover derives for itself, and the two margins
+// its order has no use for. hysteresis_pct and headroom_ratio compare two
+// accounts' room, and hover moves the session on the order's own rules --
+// a better rung, a sooner week by recovery_hysteresis, a limit -- so no hover
+// move reads either. A listing that printed them as in force would show a
+// setting that does nothing.
 //
 // It is a table rather than a condition because the CLI has to be able to MARK
 // each of them. A listing that quietly stopped applying a number the user tuned
@@ -49,6 +54,8 @@ var hoverOverrides = map[string]bool{
 	keyPreemptLead:     true,
 	keyProbeUnknown:    true,
 	keyCreditThreshold: true,
+	keyHysteresisPct:   true,
+	keyHeadroomRatio:   true,
 }
 
 // hoverHonours is the other half, and the reason this is two tables rather than
@@ -90,16 +97,11 @@ var hoverOverrides = map[string]bool{
 // switched on -- and the order is the very thing a manual-mode user is
 // watching, so the two are useful together rather than exclusive.
 //
-// The three margins are here because hover stopped deriving them when it
-// stopped pacing. recovery_hysteresis is the margin between two weekly-only
-// seats -- how much sooner one week must end before the session moves to it --
-// and a user who wants an hour rather than five minutes can say so.
-// hysteresis_pct and headroom_ratio are reached only in recovery mode, where
-// every account is past its last point and the stock figures mean what they
-// mean outside hover.
+// recovery_hysteresis is here because hover stopped deriving it when it
+// stopped pacing. It is the margin between two weekly-only seats -- how much
+// sooner one week must end before the session moves to it -- and a user who
+// wants an hour rather than five minutes can say so.
 var hoverHonours = map[string]bool{
-	keyHysteresisPct:               true,
-	keyHeadroomRatio:               true,
 	keyRecoveryHysteresis:          true,
 	keyMaxAutoSpend:                true,
 	keyHover:                       true,

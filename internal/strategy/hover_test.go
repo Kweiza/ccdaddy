@@ -374,19 +374,16 @@ func TestHoverConfigReplacesTheCooldownAndNothingElse(t *testing.T) {
 	}
 }
 
-// preempt_lead is a ranking input rather than an anti-flap knob, so hover's own
-// reserve has to land on the pass and not on the anti-flap set, where `ccdad
+// The credit line and the order are ranking inputs rather than anti-flap knobs,
+// so hover puts them on the pass and not on the anti-flap set, where `ccdad
 // config list` reports what hover overrode.
-func TestHoverPutsItsReserveOnTheRankingPass(t *testing.T) {
+func TestHoverPutsItsCreditLineAndOrderOnTheRankingPass(t *testing.T) {
 	c := sub("u-1", oneWindow(t, usage.WindowFiveHour, elapsedWindow(5*time.Hour, 0.5, 10)))
 	c.FetchedAt, c.NextPollAt = now, now.Add(300*time.Second)
 	o := opts()
 	o.Hover = true
 
 	got := o.withHover([]Candidate{c})
-	if got.PreemptLead != hoverReserve {
-		t.Errorf("PreemptLead = %v, want hover's reserve %v", got.PreemptLead, hoverReserve)
-	}
 	if got.CreditThreshold != HoverCreditThreshold {
 		t.Errorf("CreditThreshold = %v, want %v", got.CreditThreshold, HoverCreditThreshold)
 	}

@@ -84,12 +84,7 @@ const (
 type HoverPlan struct {
 	// CreditThreshold is what a primary credit seat is measured on.
 	CreditThreshold float64
-	// PreemptLead is the reserve hover projects the live account over, beyond
-	// its next reading: a constant of the poll policy (hoverReserve), carried
-	// here so a reporter can say what it is.
-	PreemptLead time.Duration
-
-	byUUID map[string]Thresholds
+	byUUID          map[string]Thresholds
 }
 
 // HoverThresholds builds the table for one pool: every window an account can
@@ -113,7 +108,6 @@ func HoverThresholds(cands []Candidate, o Options) HoverPlan {
 		}
 		pool = append(pool, c)
 	}
-	p.PreemptLead = hoverReserve
 
 	// The CONFIGURED table decides what may bind, and hover decides what it is
 	// held to. The two are not the same question. A weekly cap filed under a
@@ -185,16 +179,16 @@ func hoverTable(per map[usage.WindowName]float64) Thresholds {
 // HoverConfig is the anti-flap set hover imposes: the cooldown, and nothing
 // else.
 //
-// hysteresis_pct, headroom_ratio and recovery_hysteresis are the user's again,
-// because none of them is a pace knob any longer. The first two are reached only
-// on the way back from a credit seat in ModeRecovery's far tier -- hoverMove
-// makes every other hover move, and it asks the order's own rules, not a margin
-// on room. recovery_hysteresis is the margin on the reset axis, which is what
-// hover moves weekly-only seats on, so a user who wants two Ultra seats to trade
-// places only when one week ends an hour sooner can say so.
+// recovery_hysteresis is the user's again, because it is not a pace knob any
+// longer: it is the margin on the reset axis, which is what hover moves
+// weekly-only seats on, so a user who wants two Ultra seats to trade places only
+// when one week ends an hour sooner can say so. hysteresis_pct and
+// headroom_ratio are passed through untouched and read by nothing under hover:
+// hoverMove makes every hover move, on the order's own rules rather than a
+// margin on room (config.HoverOverrides marks them so).
 //
-// preempt_lead is absent because it is not an anti-flap knob: it is a ranking
-// input and travels on Options, where withHover puts the derived one.
+// preempt_lead is absent because it is not an anti-flap knob, and hover does not
+// read it: the live account's reserve is the poll policy's (hoverReserve).
 //
 // MaxAutoSpend is deliberately not touched, and that is the line this function
 // exists to hold. Fully automatic must not become fully automatic SPENDING: the
@@ -219,7 +213,6 @@ func (o Options) withHover(cands []Candidate) Options {
 	p := HoverThresholds(cands, o)
 	o.hover = &p
 	o.CreditThreshold = p.CreditThreshold
-	o.PreemptLead = p.PreemptLead
 	// The strategy is one of the keys hover overrides, and this is where that
 	// happens: consume-first's own case comes first in Rank, so left on it would
 	// sort the whole pool on the reset instant and the tier order would never
