@@ -214,6 +214,17 @@ func (p Pace) Projection() (Projection, bool) {
 	return Projection{ExhaustionAt: p.exhaustionAt, WillLastToReset: p.willLastToReset}, true
 }
 
+// LastsToReset is whether a window projected to be spent at exhaustionAt lasts
+// until it resets at reset: exhaustion exactly at the reset still lasts, because
+// the reset hands the window back as the last point goes.
+//
+// It is the one statement of the rule. PaceOf's projection reports it, and the
+// engine's own projections at a measured rate ask it before calling a window
+// closing, so the two cannot disagree about a window on the edge of its reset.
+func LastsToReset(exhaustionAt, reset time.Time) bool {
+	return !exhaustionAt.Before(reset)
+}
+
 // PaceOf measures one window against the clock.
 func PaceOf(name WindowName, w Window, now time.Time) Pace {
 	length, ok := WindowLengthOf(name, w)
@@ -273,7 +284,7 @@ func PaceOf(name WindowName, w Window, now time.Time) Pace {
 			secs = max
 		}
 		p.exhaustionAt = now.Add(time.Duration(secs) * time.Second)
-		p.willLastToReset = !p.exhaustionAt.Before(reset)
+		p.willLastToReset = LastsToReset(p.exhaustionAt, reset)
 		p.hasProjection = true
 	}
 	return p

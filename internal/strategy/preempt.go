@@ -68,13 +68,14 @@ func preemptHorizon(c Candidate, lead time.Duration) (time.Duration, bool) {
 // carry tests make goes through this one rule, so the three of them cannot
 // disagree about a window on the edge of its reset. A reset already in the past
 // is a window that has rolled and whose refresh has not landed, which is lasting
-// by the same rule. TestAWindowThatResetsBeforeItRunsOutIsNotClosing.
+// by the same rule. TestAWindowThatResetsBeforeItRunsOutIsNotClosing. The rule
+// itself is usage.LastsToReset, the one PaceOf's projection reports too.
 func runsOutBy(w usage.Window, at, deadline time.Time) bool {
 	if at.After(deadline) {
 		return false
 	}
 	reset, hasReset := w.Reset()
-	return !hasReset || at.Before(reset)
+	return !hasReset || !usage.LastsToReset(at, reset)
 }
 
 // atRate is when a window holding `room` points is spent at perMin, and whether
