@@ -5,10 +5,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/store"
+	"github.com/Kweiza/ccdaddy/internal/strategy"
+	"github.com/Kweiza/ccdaddy/internal/usage"
 )
 
 // A destructive command with no terminal to confirm at must be told explicitly,
@@ -216,5 +219,48 @@ func TestRemoveNamesTheProviderOfAnEmailBothProvidersShare(t *testing.T) {
 	}
 	if _, ok := s.Get("claude-0001"); !ok {
 		t.Fatal("remove x1 --yes deleted the claude account that shares its email")
+	}
+}
+
+// What the engine remembers about an account is keyed by its uuid, and so is the
+// account a later `ccdad add` brings back under the same login. Removing one
+// therefore drops its quarantine and its departure mark, or the account returns
+// quarantined, or held out until a window of its previous life rolls over. The
+// other account's entries stay: this is a prune of the removed, not a reset.
+func TestRemoveForgetsWhatTheEngineRememberedAboutTheAccount(t *testing.T) {
+	isolate(t)
+	stubEnvironment(t, false, false)
+	seedAccount(t, "u-1", "a@example.com")
+	seedAccount(t, "u-2", "b@example.com")
+	at := time.Now()
+	if err := strategy.WithState(time.Second, func(st *strategy.State) error {
+		for _, uuid := range []string{"u-1", "u-2"} {
+			st.Quarantine(uuid, at, time.Hour, "dead refresh token")
+			st.RecordSwitch("", at, strategy.Departure{From: uuid, Closing: usage.WindowFiveHour})
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if code, _, _, top := runRoot(t, "remove", "1", "--yes"); code != ExitOK {
+		t.Fatalf("remove = %d (%s), want 0", code, top)
+	}
+
+	marks := departuresOnDisk(t)
+	quarantined := map[string]bool{}
+	if err := strategy.WithState(time.Second, func(st *strategy.State) error {
+		for _, uuid := range []string{"u-1", "u-2"} {
+			_, quarantined[uuid] = st.Quarantined(uuid, at)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, held := marks["u-1"]; held || quarantined["u-1"] {
+		t.Errorf("the removed account is still remembered: mark %v, quarantined %v", marks["u-1"], quarantined["u-1"])
+	}
+	if _, held := marks["u-2"]; !held || !quarantined["u-2"] {
+		t.Errorf("the account left in the store lost its state: mark %v, quarantined %v", held, quarantined["u-2"])
 	}
 }
