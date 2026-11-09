@@ -296,17 +296,24 @@ func (c *Cache) MayFetch(uuid string, now time.Time) bool {
 // removed and added again — and letting that through would hand a fresh login
 // the headroom its predecessor had already spent.
 //
-// An entry is dated by the latest thing written to it: its reading, or for a row
-// a switch created before the account was ever read, the switch's record
-// (PollState.LiveSince). TestCacheKeepsTheRowASwitchWroteBeforeAnyReading.
+// The measurements are dated by the reading: one taken before AddedAt is the
+// predecessor's, and goes -- the snapshot, its rates and its flags with it. A
+// switch's record (PollState.LiveSince) written since is the account's own,
+// and stays as a row holding nothing else: a switch onto an account not yet
+// read, or onto one whose row is still the predecessor's, is a switch onto an
+// account with no reading, which is due now.
+// TestCacheKeepsTheRowASwitchWroteBeforeAnyReading.
 func (c *Cache) Prune(accounts map[string]time.Time) {
 	for uuid, e := range c.data.Accounts {
 		addedAt, managed := accounts[uuid]
-		written := e.FetchedAt
-		if e.Poll.LiveSince.After(written) {
-			written = e.Poll.LiveSince
-		}
-		if !managed || written.Before(addedAt) {
+		switch {
+		case !managed:
+			delete(c.data.Accounts, uuid)
+		case !e.FetchedAt.Before(addedAt):
+			// The account's own reading: the row stands whole.
+		case !e.Poll.LiveSince.Before(addedAt):
+			c.data.Accounts[uuid] = Entry{Poll: PollState{LiveSince: e.Poll.LiveSince}}
+		default:
 			delete(c.data.Accounts, uuid)
 		}
 	}

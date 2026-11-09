@@ -408,20 +408,33 @@ func TestCachePrunesRemovedAndReAddedAccounts(t *testing.T) {
 // A switch onto an account that has never been read writes a row holding only
 // its record (PollState.LiveSince), and that row is the account's own: it is
 // dated by the switch rather than by a reading it does not have, and dropped
-// only when the uuid was added again after it.
+// only when the uuid was added again after it. A switch onto a uuid added
+// again whose row still holds its predecessor's reading keeps the record and
+// nothing else: the reading, its rates and its flags were measured on the
+// account that was removed.
 func TestCacheKeepsTheRowASwitchWroteBeforeAnyReading(t *testing.T) {
 	isolate(t)
 	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
+	used := 90.0
+	predecessor := Entry{
+		Snapshot: &Snapshot{FiveHour: NewWindow(&used, nil)}, FetchedAt: now.Add(-time.Hour),
+		Poll: PollState{
+			LiveBurns:       []LiveBurn{{PerMin: 2, Window: WindowFiveHour, From: now.Add(-63 * time.Minute), At: now.Add(-time.Hour)}},
+			LastPairRunning: true, LastPairAt: now.Add(-time.Hour), LiveSince: now,
+		},
+	}
 	_ = WithCache(time.Second, func(c *Cache) error {
 		c.Put("switched-onto", Entry{Poll: PollState{LiveSince: now}})
 		c.Put("re-added", Entry{Poll: PollState{LiveSince: now}})
+		c.Put("re-added-and-switched-onto", predecessor)
 		return nil
 	})
 
 	err := WithCache(time.Second, func(c *Cache) error {
 		c.Prune(map[string]time.Time{
-			"switched-onto": now.Add(-time.Minute),
-			"re-added":      now.Add(time.Minute),
+			"switched-onto":              now.Add(-time.Minute),
+			"re-added":                   now.Add(time.Minute),
+			"re-added-and-switched-onto": now.Add(-time.Minute),
 		})
 		return nil
 	})
@@ -435,6 +448,13 @@ func TestCacheKeepsTheRowASwitchWroteBeforeAnyReading(t *testing.T) {
 	}
 	if _, ok := c.Get("re-added"); ok {
 		t.Error("Prune() kept a switch's record from before the uuid was added again")
+	}
+	e, ok := c.Get("re-added-and-switched-onto")
+	if !ok || !e.Poll.LiveSince.Equal(now) {
+		t.Fatalf("Prune() dropped the switch's record (row %v)", ok)
+	}
+	if e.Snapshot != nil || !e.FetchedAt.IsZero() || len(e.Poll.LiveBurns) != 0 || e.Poll.LastPairRunning || !e.Poll.LastPairAt.IsZero() {
+		t.Errorf("Prune() kept the predecessor's measurements beside the switch's record: %+v", e)
 	}
 }
 
