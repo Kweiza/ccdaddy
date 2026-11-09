@@ -433,7 +433,7 @@ restart the daemon after changing these settings.
 |---|---|
 | `headroom` | Prefer accounts with the most room under their thresholds; the default |
 | `consume-first` | Prefer using perishable weekly quota before it resets |
-| `hover` | Derive per-account pacing thresholds and switching margins from usage windows |
+| `hover` | Use accounts with a five-hour window first, then the soonest weekly reset; hand off just before any limit |
 | `manual` | Keep observing usage but suppress automatic switches |
 
 ```sh
@@ -446,10 +446,31 @@ ccdad status
 Use this command to select the policy instead of independently editing the
 compatibility `hover` and `manual` flags. The dashboard's `c` key uses it too.
 
-Hover derives the Claude lane's threshold, hysteresis, headroom ratio, cooldown,
-recovery, preemption, and probe settings. `ccdad config list` identifies overridden
-values; status shows the thresholds in use. Hover does not override account
-ownership, manual eligibility, credit-spend permission, or Codex-specific settings.
+Hover orders the Claude lane's accounts instead of comparing their room:
+
+1. Accounts with a five-hour window come first. The one whose week resets
+   soonest is used, and it is kept until it reaches a limit; it is never left
+   for another five-hour account that merely has more room.
+2. Then weekly-only accounts, such as verified Ultra seats, which report no
+   five-hour window. The session always goes to the one whose week resets
+   soonest, once that week ends more than `recovery_hysteresis` (default 5m)
+   sooner than the current one's.
+3. The session returns to a five-hour account as soon as it has room again.
+4. An account is handed off one point before any limit it cannot avoid by
+   changing model, or earlier when the next reading would land past the limit.
+
+An account left at a limit is held out until the window that stopped it rolls
+over, so the session is not taken straight back to it; it is still used when
+nothing else has room. Weekly-only quota is spent only while every five-hour
+account is at a limit, so on a fleet with several such seats most of their
+weekly quota can expire unspent.
+
+Hover sets the threshold, credit threshold, strategy, preemption lead, probe
+setting, and cooldown (2m) itself. It uses your `hysteresis_pct`,
+`headroom_ratio`, and `recovery_hysteresis`. `ccdad config list` identifies
+overridden values; status shows the order hover is using. Hover does not
+override account ownership, manual eligibility, credit-spend permission, or
+Codex-specific settings, and the Codex lane does not use it.
 
 ### `ccdad switch`
 
@@ -485,7 +506,8 @@ ccdad probe --all
 A probe spends a small real Claude request to start a quota window whose reset
 time is unknown. It is not a free metadata query. `probe_unknown` defaults to
 `true`; set it to `false` to disable automatic probes under configured strategies.
-Hover derives its own probing policy and enables probes.
+Hover enables probes: a window that has reported no reset cannot be placed in the
+reset order hover uses.
 
 ### `ccdad runway`
 
@@ -572,8 +594,9 @@ seven_day_opus = 50
 A window without an override uses the lane's default threshold. Scoped weekly
 windows can also be named, for example `weekly_scoped:model:Opus 4.5`; use names
 reported by your accounts. Unrecognized scope names require an explicit opt-in
-and are reported separately. Hover derives the threshold values instead of
-using the numbers in this table.
+and are reported separately. Hover holds every window to its hand-off point
+instead of using the numbers in this table; an entry still opts an
+unrecognized scope in.
 
 ### Appearance
 

@@ -16,6 +16,96 @@ must reference accounts by `uuid` or `alias`.
 
 ## [Unreleased]
 
+Hover becomes an order: accounts with a five-hour window first, then the
+weekly-only seat whose week resets soonest, with every hand-off made before a
+limit. A simulated week of a one-Max, three-Ultra fleet goes from 202 switches
+to 57 under heavy use and from 43 to 2 when the five-hour window never fills.
+The cost is Ultra weekly quota, which can now expire unspent.
+
+### Changed
+
+- **Hover no longer paces.** It used to derive a threshold for every account
+  and window from how far through its window each account was and how many
+  accounts shared the pool, and moved the session whenever another account had
+  fallen further behind its own clock. It now ranks the pool on one order:
+  1. Accounts with a five-hour window come first. The one whose week resets
+     soonest is entered first and kept until it reaches a limit; it is never
+     left for another five-hour account that merely has more room.
+  2. Weekly-only accounts come next, such as verified Ultra seats that report
+     no five-hour window. The session always goes to the one whose week resets
+     soonest.
+  3. The session returns to a five-hour account as soon as it has room again.
+  4. Every hand-off happens one point before any limit a model choice cannot
+     avoid -- the five-hour window now as well as the week -- or earlier when
+     the next reading would land past the limit.
+
+  Measured over a simulated week of the 2026-11-09 fleet (one Max account and
+  three Ultra seats), before and after; "unspent" is weekly quota that reached
+  a weekly reset unused, for the five-hour account and for the three Ultra
+  seats:
+
+  | Load | Switches | Unspent, five-hour | Unspent, weekly-only | Ticks a limit stopped the session |
+  |---|---|---|---|---|
+  | idle (window never fills) | 43 → 2 | 31.79 → 0.99 | 137.56 → 184.55 | 0 → 0 |
+  | light (fills in five hours) | 51 → 54 | 28.50 → 0.98 | 120.30 → 169.00 | 0 → 0 |
+  | heavy (fills in two hours) | 202 → 57 | 6.00 → 0.95 | 29.30 → 46.35 | 0 → 0 |
+
+  Hover now switches twice for each five-hour window it fills: once at the
+  limit and once when the window resets. Light load fills its window minutes
+  before the reset, so it switches as often as heavy load.
+- **Ultra weekly quota can now expire unspent.** A weekly-only seat is used
+  only while every five-hour account is at a limit, and then only the one whose
+  week ends first. On a fleet with several such seats most of their weekly
+  quota now expires unused; the pace rotation used to spread work across them.
+- **Hover now uses your `hysteresis_pct`, `headroom_ratio`, and
+  `recovery_hysteresis`.** It still sets the threshold, credit threshold,
+  strategy, preemption lead, probe setting, and cooldown (2m) itself, and
+  `ccdad config list` no longer marks the other three as overridden.
+  `recovery_hysteresis` (default 5m) is now the margin between two weekly-only
+  seats: the session moves to one whose week ends sooner only when it ends at
+  least that much sooner, so two seats whose weeks end seconds apart do not
+  trade it back and forth.
+- **A primary credit seat is hover's last choice before an account at a
+  limit.** It has no window and no weekly reset, so it sorts after every
+  weekly-only seat whose week can expire.
+- **consume-first ignores a weekly reset that has already passed.** A cached
+  reading whose week has reset, before the refresh lands, used to read as the
+  soonest reset and pull the session onto the one account holding a fresh week.
+- **Under hover, `ccdad status` quota cells show each window's own
+  utilization**, as under every other strategy, instead of used/threshold.
+  Under the table, hover prints its rule and one line per account giving its
+  place in the order and why: for example "held out until five_hour rolls over
+  at Fri 14:00" or "at its limit on five_hour". `ccdad status --json` still
+  reports each window's `thresholdPct`, which under hover is 99.
+- **`ccdad auto --json` is schema version 2.** Order rows no longer carry
+  `hoverShare`, `strandedPct`, or `strandedWindow`, and now carry `rung` (under
+  hover), `shortWindow`, `lastPoint`, `closing`, and `heldOut`.
+- **The daemon's switch log line and the `explanation` in `ccdad auto --json`
+  name the window** a limit hand-off left the previous account on.
+
+### Added
+
+- **An account left at a limit is held out until the window that stopped it
+  resets.** Leaving an account because its five-hour window was about to run
+  out drops its measured rate to zero, so its reading looks roomy again
+  minutes later; taking it straight back is what once switched sixty-five
+  times in fifty-four minutes. `strategy.json` gains `departures`: for each
+  account, the window it was left on and when. Each account has its own entry,
+  so leaving a second five-hour account does not release the first. A
+  held-out account is still used when nothing else has room, and a targetless
+  `ccdad switch` records one the same way the daemon does.
+- Mode `hover`, and four reasons: "the live account is down to its last point
+  before a limit", "a short-window account has room again", "another
+  weekly-only account's week resets sooner", and "staying on the short-window
+  account until it reaches a limit".
+
+### Removed
+
+- **Hover's pace rotation**: derived per-window thresholds, the pool share,
+  the extra share for quota about to expire, its minimum-room rule, and the
+  measured-rate line under the status table. With them goes the work that
+  spread across Ultra seats to spend their weeks before they reset.
+
 ## [0.28.0] — 2026-11-05
 
 The dashboard's `r` now refreshes from the network, and a renewed subscription
