@@ -36,7 +36,7 @@ func TestASuccessfulPollRevisesAnAccountsClassification(t *testing.T) {
 
 	e := NewEngine()
 	thr := configuredThresholds(config.Config{Threshold: 80, CreditThreshold: 80})
-	e.commit(acct, creditOnlySnapshot(60.2255), tickEpoch, []string{acct.UUID}, thr, false, nil)
+	e.commit(acct, creditOnlySnapshot(60.2255), tickEpoch, tickEpoch, []string{acct.UUID}, thr, false, nil)
 
 	after, err := store.Open()
 	if err != nil {
@@ -74,7 +74,7 @@ func TestAFailedPollLeavesAnAccountClassifiedAsItWas(t *testing.T) {
 
 	e := NewEngine()
 	thr := configuredThresholds(config.Config{Threshold: 80, CreditThreshold: 80})
-	e.commit(acct, nil, tickEpoch, []string{acct.UUID}, thr, false, nil)
+	e.commit(acct, nil, tickEpoch, tickEpoch, []string{acct.UUID}, thr, false, nil)
 
 	after, err := store.Open()
 	if err != nil {

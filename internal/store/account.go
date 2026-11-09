@@ -289,6 +289,32 @@ func (a Account) NeedsRelogin(currentRefreshTokenHash string) bool {
 		a.CodexReloginFor == currentRefreshTokenHash
 }
 
+// Identity is the polling budget an account draws on. The allowance is per
+// organization, so accounts sharing one share it; an account whose profile
+// reported no organization cannot be SHOWN to share with anyone, so it is its
+// own identity rather than being lumped in with every other unknown.
+func (a Account) Identity() string {
+	if a.OrganizationUUID == "" {
+		return "uuid:" + a.UUID
+	}
+	return "org:" + a.OrganizationUUID
+}
+
+// SharingIdentity is how many of accounts draw on the same budget as a, a
+// included: the divisor every poll of a is scheduled by.
+func SharingIdentity(accounts []Account, a Account) int {
+	n := 0
+	for _, o := range accounts {
+		if o.Identity() == a.Identity() {
+			n++
+		}
+	}
+	if n == 0 {
+		return 1
+	}
+	return n
+}
+
 // SubscriptionInactive requires an explicit terminal subscription state.
 // A missing status, a usage error, or a credit-metered seat is not expiry.
 func (a Account) SubscriptionInactive() bool {

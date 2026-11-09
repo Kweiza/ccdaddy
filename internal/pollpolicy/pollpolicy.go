@@ -567,14 +567,22 @@ func (t Table) ServeTTLFor(in Input) time.Duration {
 // would only be refused; a 429's schedule is congestion, which outranks the
 // clock here as everywhere else in this package.
 //
+// The floor is the identity's, as every other look is: accounts is how many
+// draw on this account's budget, and the serve floor is shared among them by
+// the scheduler's own rule (Share). A switch is one prompt poll, and switches
+// among the accounts of one identity come a cooldown apart, so without it a
+// rotation among three of them asks thirty times an hour on an allowance of
+// 28-30 before any ordinary look. TestPromptPollsKeepAnIdentityInsideItsBudget.
+//
 // It is one function because three places need the same instant: the switch
 // writes it, hover's hand-off rule predicts it for an account it might move to,
 // and the weekly simulation schedules by it.
-func (t Table) PromptPollAt(fetched, next, lastRateLimited, now time.Time) time.Time {
+func (t Table) PromptPollAt(fetched, next, lastRateLimited, now time.Time, accounts int) time.Time {
 	if !lastRateLimited.IsZero() && now.Sub(lastRateLimited) < t.Recent429Window {
 		return next
 	}
-	prompt := latestOf(now, fetched.Add(t.ServeTTL))
+	floor := t.Share(t.ServeTTL, accounts, Input{Now: now, Active: true})
+	prompt := latestOf(now, fetched.Add(floor))
 	if scheduled := latestOf(now, next); scheduled.Before(prompt) {
 		return scheduled
 	}
@@ -789,8 +797,8 @@ func Share(d time.Duration, accounts int, in Input) time.Duration {
 }
 
 // PromptPollAt is Claude.PromptPollAt.
-func PromptPollAt(fetched, next, lastRateLimited, now time.Time) time.Time {
-	return Claude.PromptPollAt(fetched, next, lastRateLimited, now)
+func PromptPollAt(fetched, next, lastRateLimited, now time.Time, accounts int) time.Time {
+	return Claude.PromptPollAt(fetched, next, lastRateLimited, now, accounts)
 }
 
 // ServeTTLFor is Claude.ServeTTLFor.

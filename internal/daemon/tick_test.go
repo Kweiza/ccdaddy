@@ -1041,7 +1041,7 @@ func TestThePollCadenceMovesWhenHoverMovesAnAccountOffSpent(t *testing.T) {
 		t.Helper()
 		e := NewEngine()
 		e.Rand = midJitter
-		e.commit(a, snap, tickEpoch, []string{a.UUID}, thresholds, true, nil)
+		e.commit(a, snap, tickEpoch, tickEpoch, []string{a.UUID}, thresholds, true, nil)
 		entry, ok := cacheEntry(t, a.UUID)
 		if !ok {
 			t.Fatal("commit() wrote no cache entry")
@@ -1106,7 +1106,7 @@ func TestThePollCadenceReadsTheBindingWindowsOwnThreshold(t *testing.T) {
 		})
 		e := NewEngine()
 		e.Rand = midJitter
-		e.commit(a, windowsUsed(10, 50), tickEpoch, []string{a.UUID}, configuredThresholds(cfg), true, nil)
+		e.commit(a, windowsUsed(10, 50), tickEpoch, tickEpoch, []string{a.UUID}, configuredThresholds(cfg), true, nil)
 		entry, ok := cacheEntry(t, a.UUID)
 		if !ok {
 			t.Fatal("commit() wrote no cache entry")
@@ -2131,7 +2131,7 @@ func TestThePublishedScheduleIsTheOneTheDispatcherWillHonour(t *testing.T) {
 	e := NewEngine()
 	e.Now = func() time.Time { return tickEpoch }
 	e.Rand = func() float64 { return 0.5 }
-	e.commit(accounts[0], snapshotWith(20), tickEpoch, []string{"u-2"}, thresholds, false, nil)
+	e.commit(accounts[0], snapshotWith(20), tickEpoch, tickEpoch, []string{"u-2"}, thresholds, false, nil)
 	e.publish(accounts, cache, live("u-1"), switcher.Evaluation{}, thresholds, nil)
 	if got := nextPollOf(t, e.Snapshot(), "u-2"); !got.Equal(stood) {
 		t.Errorf("published %s for a stood-down alternate this process polled, want %s", got, stood)

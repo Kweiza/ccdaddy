@@ -254,6 +254,8 @@ func engineCandidates(s *store.Store, accounts []store.Account, c *usage.Cache, 
 			continue
 		}
 		cand := strategy.Candidate{UUID: a.UUID, Kind: a.Kind, Disabled: a.Disabled || a.SubscriptionInactive() || a.SubscriptionPending(), Elsewhere: a.Elsewhere, Primary: a.Primary}
+		// The identity the account polls on, for the carry test's first live look.
+		cand.SharedBy = store.SharingIdentity(accounts, a)
 		if e, ok := c.Get(a.UUID); ok {
 			cand.Usage = e.Snapshot
 			// The two stamps the scheduler wrote. The pre-emptive switch

@@ -196,6 +196,12 @@ type Candidate struct {
 	// the pool's latest one per window length as the work's rate; see
 	// workRatesOf.
 	LiveBurns []usage.LiveBurn
+	// SharedBy is how many accounts draw on this account's polling budget, itself
+	// included (store.SharingIdentity); zero reads as one. The scheduler divides
+	// the identity's cadence among them, the prompt poll a switch schedules
+	// too, so the first live reading after a move onto this account is that much
+	// later -- which the carry test has to count (carries).
+	SharedBy int
 }
 
 // Options configures one ranking pass.

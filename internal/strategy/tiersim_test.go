@@ -414,7 +414,7 @@ func runTierSim(t *testing.T, label string, accts []tierAccount, load tierLoad, 
 					// just moved to.
 					for j := range accts {
 						if accts[j].uuid == live && pollers[j].snap != nil {
-							pollers[j].nextPollAt = pollpolicy.PromptPollAt(pollers[j].fetchedAt, pollers[j].nextPollAt, time.Time{}, now)
+							pollers[j].nextPollAt = pollpolicy.PromptPollAt(pollers[j].fetchedAt, pollers[j].nextPollAt, time.Time{}, now, 1)
 						}
 					}
 				}

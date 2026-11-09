@@ -843,9 +843,54 @@ func TestPromptPollAtIsTheServeFloorAndNeverLater(t *testing.T) {
 		{"no schedule and no reading is now", time.Time{}, time.Time{}, time.Time{}, now},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := PromptPollAt(tc.fetched, tc.next, tc.limited, now); !got.Equal(tc.want) {
+			if got := PromptPollAt(tc.fetched, tc.next, tc.limited, now, 1); !got.Equal(tc.want) {
 				t.Errorf("PromptPollAt = %s, want %s", got.Sub(now), tc.want.Sub(now))
 			}
 		})
+	}
+}
+
+// A switch is one prompt poll, and hover can switch among the accounts of one
+// identity a cooldown apart. Three of them rotated every two minutes for three
+// hours, each polled at the prompt the switch schedules and otherwise on its
+// shared cadence, stay inside the identity's 28 requests in any rolling hour --
+// because the prompt's serve floor is shared among them as every other look's
+// is. Unshared, the same rotation asks thirty times an hour.
+func TestPromptPollsKeepAnIdentityInsideItsBudget(t *testing.T) {
+	const budget = 28
+	rotate := func(accounts int) int {
+		const members = 3
+		var fetched, next [members]time.Time
+		var polls []time.Time
+		for at := epoch; at.Before(epoch.Add(3 * time.Hour)); at = at.Add(time.Second) {
+			if live := int(at.Sub(epoch)/(2*time.Minute)) % members; at.Sub(epoch)%(2*time.Minute) == 0 {
+				next[live] = PromptPollAt(fetched[live], next[live], time.Time{}, at, accounts)
+			}
+			for i := range next {
+				if !at.Before(next[i]) {
+					polls = append(polls, at)
+					fetched[i], next[i] = at, at.Add(PerIdentity(CandidateMaxInterval, accounts))
+				}
+			}
+		}
+		most := 0
+		for i, p := range polls {
+			n := 0
+			for _, q := range polls[i:] {
+				if q.Sub(p) < time.Hour {
+					n++
+				}
+			}
+			if n > most {
+				most = n
+			}
+		}
+		return most
+	}
+	if got := rotate(3); got > budget {
+		t.Errorf("%d polls in one rolling hour on an identity of three, want at most %d", got, budget)
+	}
+	if got := rotate(1); got <= budget {
+		t.Errorf("the unshared control asks %d times an hour, want more than %d: the test is blind", got, budget)
 	}
 }

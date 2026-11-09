@@ -8,8 +8,10 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/config"
 	"github.com/Kweiza/ccdaddy/internal/identity"
+	"github.com/Kweiza/ccdaddy/internal/pollpolicy"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
+	"github.com/Kweiza/ccdaddy/internal/switcher"
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
 
@@ -37,8 +39,8 @@ func commitTwice(t *testing.T, first, second *usage.Snapshot) usage.PollState {
 	a := store.Account{UUID: "acct-1"}
 	e := NewEngine()
 	e.Rand = midJitter
-	e.commit(a, first, tickEpoch, []string{a.UUID}, burnThresholds(), true, nil)
-	e.commit(a, second, tickEpoch.Add(10*time.Minute), []string{a.UUID}, burnThresholds(), true, nil)
+	e.commit(a, first, tickEpoch, tickEpoch, []string{a.UUID}, burnThresholds(), true, nil)
+	e.commit(a, second, tickEpoch.Add(10*time.Minute), tickEpoch.Add(10*time.Minute), []string{a.UUID}, burnThresholds(), true, nil)
 	entry, ok := cacheEntry(t, a.UUID)
 	if !ok {
 		t.Fatal("commit() wrote no cache entry")
@@ -69,7 +71,7 @@ func TestTheFirstPollLeavesAnAnchorAndNoRate(t *testing.T) {
 	a := store.Account{UUID: "acct-1"}
 	e := NewEngine()
 	e.Rand = midJitter
-	e.commit(a, windowsUsed(10, 5), tickEpoch, []string{a.UUID}, burnThresholds(), true, nil)
+	e.commit(a, windowsUsed(10, 5), tickEpoch, tickEpoch, []string{a.UUID}, burnThresholds(), true, nil)
 
 	entry, ok := cacheEntry(t, a.UUID)
 	if !ok {
@@ -132,9 +134,9 @@ func TestAFailedPollKeepsTheAnchorItNeverMoved(t *testing.T) {
 	a := store.Account{UUID: "acct-1"}
 	e := NewEngine()
 	e.Rand = midJitter
-	e.commit(a, windowsUsed(10, 5), tickEpoch, []string{a.UUID}, burnThresholds(), true, nil)
-	e.commit(a, nil, tickEpoch.Add(3*time.Minute), []string{a.UUID}, burnThresholds(), true, nil)
-	e.commit(a, windowsUsed(64, 5), tickEpoch.Add(10*time.Minute), []string{a.UUID}, burnThresholds(), true, nil)
+	e.commit(a, windowsUsed(10, 5), tickEpoch, tickEpoch, []string{a.UUID}, burnThresholds(), true, nil)
+	e.commit(a, nil, tickEpoch.Add(3*time.Minute), tickEpoch.Add(3*time.Minute), []string{a.UUID}, burnThresholds(), true, nil)
+	e.commit(a, windowsUsed(64, 5), tickEpoch.Add(10*time.Minute), tickEpoch.Add(10*time.Minute), []string{a.UUID}, burnThresholds(), true, nil)
 
 	entry, ok := cacheEntry(t, a.UUID)
 	if !ok {
@@ -158,7 +160,7 @@ func TestTheBurnRateKeepsTheWindowItWasMeasuredOn(t *testing.T) {
 	e := NewEngine()
 	e.Rand = midJitter
 	commit := func(s *usage.Snapshot, at time.Duration) usage.PollState {
-		e.commit(a, s, tickEpoch.Add(at), []string{a.UUID}, burnThresholds(), true, nil)
+		e.commit(a, s, tickEpoch.Add(at), tickEpoch.Add(at), []string{a.UUID}, burnThresholds(), true, nil)
 		entry, ok := cacheEntry(t, a.UUID)
 		if !ok {
 			t.Fatal("commit() wrote no cache entry")
@@ -203,8 +205,8 @@ func TestABlownModelCapIsNotTheWindowAPollUnderHoverMeasures(t *testing.T) {
 		strategy.Options{Now: tickEpoch, Hover: true})
 	e := NewEngine()
 	e.Rand = midJitter
-	e.commit(a, reading(10), tickEpoch, []string{a.UUID}, plan.For, true, nil)
-	e.commit(a, reading(64), tickEpoch.Add(10*time.Minute), []string{a.UUID}, plan.For, true, nil)
+	e.commit(a, reading(10), tickEpoch, tickEpoch, []string{a.UUID}, plan.For, true, nil)
+	e.commit(a, reading(64), tickEpoch.Add(10*time.Minute), tickEpoch.Add(10*time.Minute), []string{a.UUID}, plan.For, true, nil)
 
 	entry, ok := cacheEntry(t, a.UUID)
 	if !ok {
@@ -229,7 +231,7 @@ func TestAPairAcrossASwitchIsNotALiveRate(t *testing.T) {
 	e := NewEngine()
 	e.Rand = midJitter
 	commit := func(five, week float64, at time.Duration, live bool) usage.PollState {
-		e.commit(a, windowsUsed(five, week), tickEpoch.Add(at), []string{a.UUID}, burnThresholds(), live, nil)
+		e.commit(a, windowsUsed(five, week), tickEpoch.Add(at), tickEpoch.Add(at), []string{a.UUID}, burnThresholds(), live, nil)
 		entry, ok := cacheEntry(t, a.UUID)
 		if !ok {
 			t.Fatal("commit() wrote no cache entry")
@@ -294,5 +296,93 @@ func TestAReadingIsLiveByWhoIsLiveWhenItIsCommitted(t *testing.T) {
 	}
 	if !entry.Poll.AnchorLive {
 		t.Error("the reading committed after the switch was labelled idle")
+	}
+}
+
+// The race the label cannot close: a poll sent while the account was idle, a
+// switch onto it landing while that poll is in flight -- before the daemon
+// relabels anything -- and then the poll committing. The switch's own record,
+// written and read under the cache lock, makes the reading the live account's
+// and keeps the prompt poll it scheduled; the prompt poll itself, sent after
+// the switch, clears the record.
+func TestAPollInFlightAcrossASwitchKeepsThePromptPoll(t *testing.T) {
+	isolateEngine(t)
+	a := store.Account{UUID: "acct-1"}
+	now := tickEpoch
+	cfg := config.Config{Threshold: 80, CreditThreshold: 80}
+	e := movableEngine(t, &now, func(context.Context, string) (*usage.Snapshot, error) {
+		return windowsUsed(10, 5), nil
+	})
+	e.setLive("someone-else", true)
+	if err := e.poll(context.Background(), a, cfg, configuredThresholds(cfg), []string{a.UUID}, false); err != nil {
+		t.Fatal(err)
+	}
+
+	now = tickEpoch.Add(10 * time.Minute)
+	var prompt time.Time
+	e.FetchUsage = func(context.Context, string) (*usage.Snapshot, error) {
+		now = now.Add(time.Second)
+		if err := switcher.SchedulePromptPoll(a.UUID, now, 1); err != nil {
+			t.Fatal(err)
+		}
+		entry, _ := cacheEntry(t, a.UUID)
+		prompt = entry.NextPollAt
+		now = now.Add(2 * time.Second)
+		return windowsUsed(11, 5), nil
+	}
+	if err := e.poll(context.Background(), a, cfg, configuredThresholds(cfg), []string{a.UUID}, false); err != nil {
+		t.Fatal(err)
+	}
+	entry, _ := cacheEntry(t, a.UUID)
+	if !entry.Poll.AnchorLive {
+		t.Error("the reading in flight across the switch was labelled idle")
+	}
+	if entry.NextPollAt.After(prompt) {
+		t.Errorf("next poll %s after the switch, want the prompt poll at %s", entry.NextPollAt.Sub(tickEpoch), prompt.Sub(tickEpoch))
+	}
+	if entry.Poll.PromptAt.IsZero() {
+		t.Error("the prompt poll's record was cleared by a reading sent before the switch")
+	}
+
+	e.FetchUsage = func(context.Context, string) (*usage.Snapshot, error) { return windowsUsed(12, 5), nil }
+	now = now.Add(pollpolicy.ServeTTL)
+	if err := e.poll(context.Background(), a, cfg, configuredThresholds(cfg), []string{a.UUID}, true); err != nil {
+		t.Fatal(err)
+	}
+	if entry, _ := cacheEntry(t, a.UUID); !entry.Poll.PromptAt.IsZero() {
+		t.Error("the prompt poll, sent after the switch, left the record standing")
+	}
+}
+
+// A pair is stored only within one live stint. A was read live twice, three
+// minutes apart; the work then went elsewhere and came back, and A's next live
+// reading is ten minutes after its last. That pair spans the absence -- its rate
+// is diluted by however long the work was away -- so it is not stored, and the
+// rate kept is the one measured before A was left.
+func TestAPairAcrossAnAbsenceIsNotStored(t *testing.T) {
+	isolateEngine(t)
+	e := NewEngine()
+	a := store.Account{UUID: "acct-1"}
+	commit := func(five float64, at time.Duration) {
+		e.commit(a, windowsUsed(five, 5), tickEpoch.Add(at), tickEpoch.Add(at), []string{a.UUID}, burnThresholds(), true, nil)
+	}
+	commit(10, 0)
+	commit(13, 3*time.Minute)
+	before, _ := cacheEntry(t, a.UUID)
+	if err := switcher.SchedulePromptPoll(a.UUID, tickEpoch.Add(10*time.Minute), 1); err != nil {
+		t.Fatal(err)
+	}
+	commit(14, 13*time.Minute)
+	after, _ := cacheEntry(t, a.UUID)
+	five := func(e usage.Entry) usage.LiveBurn {
+		for _, b := range e.Poll.LiveBurns {
+			if b.Window == usage.WindowFiveHour {
+				return b
+			}
+		}
+		return usage.LiveBurn{}
+	}
+	if got, want := five(after), five(before); got != want || math.Abs(want.PerMin-1) > 1e-9 {
+		t.Errorf("five-hour rate %+v after the return, want the 1 a minute measured before it (%+v)", got, want)
 	}
 }

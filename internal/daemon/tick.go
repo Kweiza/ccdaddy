@@ -32,10 +32,9 @@ import (
 // account falls into a tier of its own with no figure to compare it on.
 const defaultPollTimeout = 45 * time.Second
 
-// cacheTimeout bounds the wait for the usage cache's own lock. Every writer is
-// a sub-second read-modify-write; the contention is between poller goroutines
-// of this process and a `ccdad status --refresh` beside it.
-const cacheTimeout = 5 * time.Second
+// cacheTimeout bounds the wait for the usage cache's own lock: the cache's own
+// figure (usage.LockTimeout).
+const cacheTimeout = usage.LockTimeout
 
 // stateTimeout bounds the wait for the engine state lock.
 const stateTimeout = 5 * time.Second
@@ -158,10 +157,10 @@ type Engine struct {
 	status          Status
 	// live is the account the most recent tick left the login on, and
 	// liveKnown whether it could be named at all. A poll reads it when its
-	// reading is COMMITTED, not when it was dispatched: a poll in flight across
-	// a switch otherwise labels the new live account's first reading idle --
-	// leaving no live pair to measure the work on, and writing the idle cadence
-	// over the prompt poll the switch scheduled. See liveAtCommit.
+	// reading is COMMITTED, not when it was dispatched (liveAtCommit). It is set
+	// only after a switch returns, so a poll that commits between the switch and
+	// that is labelled by the switch's own record in the cache instead
+	// (usage.PollState.LiveSince, read in commit).
 	live      string
 	liveKnown bool
 	// The daily release check's whole state, beside cfg and polls under the
@@ -900,20 +899,9 @@ func (e *Engine) dispatch(ctx context.Context, s *store.Store, accounts []store.
 			defer e.release(a.UUID)
 			// Discarded: a tick reports through the status document, and
 			// the failure is already in this account's pollRecord.
-			_ = e.poll(ctx, a, cfg, thresholds, members[identityOf(a)], a.UUID == active)
+			_ = e.poll(ctx, a, cfg, thresholds, members[a.Identity()], a.UUID == active)
 		}(a)
 	}
-}
-
-// identityOf is the budget an account draws on. The allowance is per
-// organization, so accounts sharing one share it; an account whose profile
-// reported no organization cannot be SHOWN to share with anyone, so it is its
-// own identity rather than being lumped in with every other unknown.
-func identityOf(a store.Account) string {
-	if a.OrganizationUUID == "" {
-		return "uuid:" + a.UUID
-	}
-	return "org:" + a.OrganizationUUID
 }
 
 // identityMembers maps each identity to every account that draws on it. The
@@ -922,7 +910,7 @@ func identityOf(a store.Account) string {
 func identityMembers(accounts []store.Account) map[string][]string {
 	out := make(map[string][]string, len(accounts))
 	for _, a := range accounts {
-		id := identityOf(a)
+		id := a.Identity()
 		out[id] = append(out[id], a.UUID)
 	}
 	return out
@@ -1217,6 +1205,9 @@ func (e *Engine) poll(ctx context.Context, a store.Account, cfg config.Config,
 	thresholds func(uuid string) strategy.Thresholds, identity []string, active bool) error {
 	ctx, cancel := context.WithTimeout(ctx, e.pollTimeout())
 	defer cancel()
+	// When the poll was sent, which says whether a switch onto the account came
+	// while it was in flight (commit).
+	sent := e.now()
 
 	token, err := e.AccessToken(ctx, a.UUID)
 	var snap *usage.Snapshot
@@ -1238,10 +1229,10 @@ func (e *Engine) poll(ctx context.Context, a store.Account, cfg config.Config,
 	}
 	active = e.liveAtCommit(a.UUID, active)
 	if err != nil {
-		e.handleFailure(a, cfg, thresholds, err, now, identity, active)
+		e.handleFailure(a, cfg, thresholds, err, now, sent, identity, active)
 		return err
 	}
-	e.commit(a, snap, now, identity, thresholds, active, nil)
+	e.commit(a, snap, now, sent, identity, thresholds, active, nil)
 	return nil
 }
 
@@ -1306,7 +1297,7 @@ func (e *Engine) refreshProfile(ctx context.Context, a store.Account, token stri
 // anything about the account.
 func (e *Engine) handleFailure(a store.Account, cfg config.Config,
 	thresholds func(uuid string) strategy.Thresholds, err error,
-	now time.Time, identity []string, active bool) {
+	now, sent time.Time, identity []string, active bool) {
 	switch {
 	case errors.Is(err, tokens.ErrNoOAuthCredential):
 		// Nothing to poll with, and pollable() should already have caught it.
@@ -1319,7 +1310,7 @@ func (e *Engine) handleFailure(a store.Account, cfg config.Config,
 		// Code has not run in eight hours — so there is no session whose
 		// rotation is urgent, and this must not feed AIMD or quarantine
 		// anything. It reschedules at the ordinary cadence and waits.
-		e.commit(a, nil, now, identity, thresholds, active, nil)
+		e.commit(a, nil, now, sent, identity, thresholds, active, nil)
 		return
 
 	case errors.Is(err, usage.ErrRateLimited):
@@ -1329,7 +1320,7 @@ func (e *Engine) handleFailure(a store.Account, cfg config.Config,
 		if errors.As(err, &se) {
 			retry, hasRetry = se.RetryAfter()
 		}
-		e.commit(a, nil, now, identity, thresholds, active, func(st pollpolicy.State) pollpolicy.State {
+		e.commit(a, nil, now, sent, identity, thresholds, active, func(st pollpolicy.State) pollpolicy.State {
 			return pollpolicy.RateLimited(st, now, retry, hasRetry)
 		})
 		return
@@ -1343,7 +1334,7 @@ func (e *Engine) handleFailure(a store.Account, cfg config.Config,
 	if strategy.ClassifyRefresh(err).Quarantines() {
 		e.quarantine(a.UUID, cfg, now)
 	}
-	e.commit(a, nil, now, identity, thresholds, active, nil)
+	e.commit(a, nil, now, sent, identity, thresholds, active, nil)
 }
 
 func (e *Engine) quarantine(uuid string, cfg config.Config, now time.Time) {
@@ -1366,7 +1357,7 @@ func (e *Engine) quarantine(uuid string, cfg config.Config, now time.Time) {
 // be read is UNKNOWN, and an unknown one that used to have evidence still has
 // that evidence — throwing it away would make one bad minute look like a fresh
 // account with no history.
-func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now time.Time,
+func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now, sent time.Time,
 	identity []string, thresholds func(uuid string) strategy.Thresholds, active bool,
 	adjust func(pollpolicy.State) pollpolicy.State) {
 
@@ -1379,6 +1370,17 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now time.Time,
 	err := usage.WithCache(cacheTimeout, func(c *usage.Cache) error {
 		entry, had := c.Get(a.UUID)
 		state := pollStateOf(entry)
+		// A switch that made this account live while this poll was in flight:
+		// the poll was sent idle, and the daemon's live label is set only after
+		// the switch returns. The switch's own record is read here instead,
+		// under the lock it was written under, so the reading commits as the
+		// live account's and the prompt poll the switch scheduled stands.
+		// TestAPollInFlightAcrossASwitchKeepsThePromptPoll.
+		liveSince, promptAt := entry.Poll.LiveSince, entry.Poll.PromptAt
+		switched := liveSince.After(sent)
+		if switched {
+			active = true
+		}
 		if adjust != nil {
 			state = adjust(state)
 		}
@@ -1396,7 +1398,8 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now time.Time,
 		// reading is overwritten, for the reason the burn below is.
 		liveBurns, anchorLive := entry.Poll.LiveBurns, entry.Poll.AnchorLive
 		if snap != nil {
-			fresh := usage.LivePairs(entry.Snapshot, entry.FetchedAt, entry.Poll.AnchorLive, snap, now, active)
+			fresh := usage.LivePairs(entry.Snapshot, entry.FetchedAt,
+				usage.LiveAnchor(entry.Poll.AnchorLive, entry.FetchedAt, liveSince), snap, now, active)
 			liveBurns, anchorLive = usage.MergeLiveBurns(liveBurns, fresh), active
 		}
 
@@ -1462,6 +1465,9 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now time.Time,
 		// outranks the clock, which is the same order every other schedule here
 		// obeys.
 		entry.NextPollAt = pollpolicy.WarmClamp(entry.NextPollAt, e.warmTarget(entry.Snapshot, thr, now), now, entry.ScheduledTTL())
+		if switched && !promptAt.IsZero() && promptAt.Before(entry.NextPollAt) {
+			entry.NextPollAt = promptAt
+		}
 		// The burn rate, taken BEFORE the anchors are overwritten: the reading
 		// that produces a rate is the same one that replaces the point it was
 		// measured from, so a reader arriving later has nothing left to
@@ -1504,6 +1510,12 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now time.Time,
 		entry.Poll.LastBindingWindow = lastWindow
 		entry.Poll.BurnPerMin, entry.Poll.HasBurn, entry.Poll.BurnWindow = burn, hasBurn, burnWindow
 		entry.Poll.AnchorLive, entry.Poll.LiveBurns = anchorLive, liveBurns
+		// The switch's record outlives the reading it was waiting for only while
+		// that reading is still to come: a poll sent after the switch is it.
+		entry.Poll.LiveSince = liveSince
+		if switched {
+			entry.Poll.PromptAt = promptAt
+		}
 		// entry.StandDownUntil is read and written back untouched, and that is
 		// what makes the two writers safe: this account's poll never edits the
 		// field its identity's live account owns, so the order the two goroutines
