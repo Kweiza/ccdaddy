@@ -109,26 +109,46 @@ func atRate(now time.Time, room, perMin float64) (time.Time, bool) {
 // honest -- a per-model weekly cap belonging to another family cannot pre-empt a
 // session that will never touch it.
 //
-// It asks usage.PaceOf for each extrapolation rather than dividing here, so the
-// engine and `ccdad status --json` read ONE projection and cannot come to two
-// different answers about the same account. That includes the suppression: a
-// window inside its first seventh has numbers too noisy to extrapolate from, and
-// this reads that as "say nothing about this window", never as "not yet" and
-// never as a reason to stop asking about the others.
+// It asks usage.PaceOf for each extrapolation (paceStop) rather than dividing
+// here, so the engine and `ccdad status --json` read ONE projection and cannot
+// come to two different answers about the same account. That includes the
+// suppression: a window inside its first seventh has numbers too noisy to
+// extrapolate from, and this reads that as "say nothing about this window",
+// never as "not yet" and never as a reason to stop asking about the others.
 func projectedExhaustion(ws []usage.NamedWindow, now time.Time, horizon time.Duration) usage.WindowName {
 	deadline := now.Add(horizon)
 	var first usage.WindowName
 	var firstAt time.Time
 	for _, w := range ws {
-		proj, ok := usage.PaceOf(w.Name, w.Window, now).Projection()
-		if !ok || !runsOutBy(w.Window, proj.ExhaustionAt, deadline) {
+		at, ok := paceStop(w, now)
+		if !ok || !runsOutBy(w.Window, at, deadline) {
 			continue
 		}
-		if first == "" || proj.ExhaustionAt.Before(firstAt) {
-			first, firstAt = w.Name, proj.ExhaustionAt
+		if first == "" || at.Before(firstAt) {
+			first, firstAt = w.Name, at
 		}
 	}
 	return first
+}
+
+// An account's own evidence of when a window runs out, read by both
+// projections: the configured strategies' (runsOutWithin) and, for a window
+// nobody has measured the work on yet, hover's live account (Options.stopOf).
+// Each is asked here once, so the two cannot come to read the same reading
+// two ways.
+
+// paceStop is when window w is spent at its own average since it opened
+// (usage.PaceOf), and whether the average can say: a window inside its first
+// seventh says nothing.
+func paceStop(w usage.NamedWindow, now time.Time) (time.Time, bool) {
+	proj, ok := usage.PaceOf(w.Name, w.Window, now).Projection()
+	return proj.ExhaustionAt, ok
+}
+
+// ownBurnOn is the rate the account's own last two readings measured on window
+// n, and whether they measured one there (Candidate.HasBurn, BurnWindow).
+func ownBurnOn(c Candidate, n usage.WindowName) (float64, bool) {
+	return c.BurnPerMin, c.HasBurn && c.BurnWindow == n
 }
 
 // measuredExhaustion is projectedExhaustion's question asked at the rate the work
@@ -145,18 +165,16 @@ func projectedExhaustion(ws []usage.NamedWindow, now time.Time, horizon time.Dur
 // does not -- including when that window is not one of ws, so a rate measured on
 // a model-scoped cap projects nothing under hover.
 func measuredExhaustion(c Candidate, ws []usage.NamedWindow, now time.Time, horizon time.Duration) usage.WindowName {
-	if !c.HasBurn {
-		return ""
-	}
 	for _, w := range ws {
-		if w.Name != c.BurnWindow {
+		perMin, measured := ownBurnOn(c, w.Name)
+		if !measured {
 			continue
 		}
 		pct, ok := w.Percent()
 		if !ok {
 			return ""
 		}
-		if at, ok := atRate(now, 100-pct, c.BurnPerMin); ok && runsOutBy(w.Window, at, now.Add(horizon)) {
+		if at, ok := atRate(now, 100-pct, perMin); ok && runsOutBy(w.Window, at, now.Add(horizon)) {
 			return w.Name
 		}
 		return ""
