@@ -1032,9 +1032,11 @@ func TestAFiveHourWindowRunsToItsNextReadingAndAWeekKeepsItsReserve(t *testing.T
 // point is taken only once a reading shows the live account empty. The live
 // Max reads 99 with the work running at 5.4 points a minute, three minutes
 // after its reading, so the projection has it out; a reading cannot tell that
-// from a point still there, and the move waits. Read empty, it goes. Every
-// tier ahead of the last resort is shut throughout: the other account holds
-// one point, which carries nothing and bridges nothing.
+// from a point still there, and the move waits -- for the live account's next
+// reading, which is what the hold names, and not for a rollover hours out.
+// Read empty, it goes. Every tier ahead of the last resort is shut throughout:
+// the other account holds one point, which carries nothing and bridges
+// nothing.
 func TestEveryLastPointIsConfirmedSpentBeforeTheNext(t *testing.T) {
 	for _, other := range []Candidate{
 		idleOn(maxAcct("b-last", 99, 2*time.Hour, 60, 3*day)),
@@ -1048,8 +1050,9 @@ func TestEveryLastPointIsConfirmedSpentBeforeTheNext(t *testing.T) {
 			t.Fatalf("live at limit %d, last resort open %v, b on last point %q: the case is two last points with the live one projected out",
 				live.limit, live.lastResortOpen(), b.LastPoint)
 		}
-		if p.Action == ActionSwitch {
-			t.Errorf("moved to %s (%s) on a projection; the live account still reads its last point", p.Target.UUID, p.Reason)
+		want(t, p, ActionStay, ReasonWaitsForAReading, "")
+		if next := nextReading(projected, now); !p.HasRetryAt || !p.RetryAt.Equal(next) || next.Sub(now) != 2*time.Minute {
+			t.Errorf("RetryAt %s (set %v), want the live account's next reading two minutes out", p.RetryAt.Sub(now), p.HasRetryAt)
 		}
 
 		p = Decide([]Candidate{pausedMax("a-live", 100, true), other}, hoverOpts(), Config{}, NewState(), "a-live")

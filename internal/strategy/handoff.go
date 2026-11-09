@@ -621,20 +621,26 @@ func (p *Plan) hoverMove(activeUUID string, cfg Config, st *State, o Options, by
 			return
 		}
 	}
+	lastPointWaits := false
 	if live.lastResortOpen() {
-		if target, ok := lastResort(res, live, o.Now); ok {
+		target, ok, waits := lastResort(res, live, o.Now)
+		if ok {
 			p.moveOrHold(target, leaveReason(live, target), activeUUID, cfg, st, o.Now)
 			return
 		}
+		lastPointWaits = waits
 	}
 	if p.creditOpen() {
 		p.creditWalk(byUUID, activeUUID, cfg, st, o.Now)
 		return
 	}
-	if p.moneyWaitsOn(live, activeUUID, byUUID, o.Now) {
+	if lastPointWaits || p.moneyWaitsOn(live, activeUUID, byUUID, o.Now) {
 		// What lifts this hold is the live account's own reading, not a
-		// rollover hours out. TestAnEmptyReadingsWaitNamesTheNextReading,
-		// TestAProjectionDoesNotMoveOntoAPrimarySeat.
+		// rollover hours out: the one that shows it empty, for another
+		// account's last point, or at its last point or empty, for money.
+		// TestAnEmptyReadingsWaitNamesTheNextReading,
+		// TestAProjectionDoesNotMoveOntoAPrimarySeat,
+		// TestEveryLastPointIsConfirmedSpentBeforeTheNext.
 		p.hold(ReasonWaitsForAReading, nextReading(byUUID[live.UUID], o.Now))
 		return
 	}
@@ -1053,10 +1059,13 @@ func bridge(res Result, live Ranked, cooldown time.Duration) (Ranked, bool) {
 // that fleet's burst figure from 142 to 76). Its cost is the same whole-percent
 // blindness the rule above pays for on last points, paid on accounts holding
 // several points as well.
-func lastResort(res Result, live Ranked, now time.Time) (Ranked, bool) {
+//
+// With no target it says whether one was passed over only because the live
+// account does not yet read empty: an account on its last point the work
+// would not empty before the next look. That move waits on the live account's
+// own reading, and the hold says so (hoverMove).
+func lastResort(res Result, live Ranked, now time.Time) (target Ranked, found, waitsForEmpty bool) {
 	_, liveEmpty := live.Empty()
-	var best Ranked
-	found := false
 	for _, r := range res.Order {
 		if r.UUID == live.UUID {
 			continue
@@ -1064,17 +1073,18 @@ func lastResort(res Result, live Ranked, now time.Time) (Ranked, bool) {
 		if _, empty := r.Empty(); empty {
 			continue
 		}
-		if r.LastPoint != "" && !liveEmpty {
-			continue
-		}
 		if r.HasRunway && !r.RunsOutAt.IsZero() && !r.RunsOutAt.After(now.Add(outLead)) {
 			continue
 		}
-		if !found || outlastsForLastResort(r, best) {
-			best, found = r, true
+		if r.LastPoint != "" && !liveEmpty {
+			waitsForEmpty = true
+			continue
+		}
+		if !found || outlastsForLastResort(r, target) {
+			target, found = r, true
 		}
 	}
-	return best, found
+	return target, found, waitsForEmpty && !found
 }
 
 // outlastsForLastResort is lastResort's preference: a runway nothing stops, then

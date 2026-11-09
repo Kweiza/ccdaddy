@@ -339,8 +339,9 @@ quota, which can now expire unspent.
   before a limit", "a short-window account has room again", "another
   weekly-only account's week resets sooner", "staying on the short-window
   account until it reaches a limit", "the account the order prefers cannot
-  carry the work running now", and "the next account costs money, and the
-  move waits for a reading that shows the live account at its limit".
+  carry the work running now", and "the move waits for a reading that shows
+  the live account at its limit" -- the move onto money, or onto another
+  account's last point, while the live account does not yet read that.
 
 ### Removed
 

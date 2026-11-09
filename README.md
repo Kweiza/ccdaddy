@@ -574,9 +574,11 @@ whatever the work is doing -- an estimated 140 to 235 more five-hour points
 left unspent a week on today's fleet under steady heavy use.
 
 When the live account is at a limit and no account is better placed, hover
-reports the switch as blocked until the soonest rollover. When every account
-is past its last point, it orders them by which comes back first, and status
-says so.
+reports the switch as blocked until the soonest rollover. When the move left
+waits on the live account's own reading -- onto money, or onto another
+account's last point -- hover stays and names that reading instead. When
+every account is past its last point, it orders them by which comes back
+first, and status says so.
 
 Hover sets the threshold, credit threshold, strategy, preemption lead (the
 three minutes above), probe setting, and cooldown (2m) itself. It uses your
