@@ -397,7 +397,7 @@ const tierSimTick = EvaluationInterval
 // reasons, the same served and unspent quota, the same five-hour points left
 // and the same stopped seconds as asking every second. Re-measured on the
 // harness as it now stands -- whole-percent readings, the daemon's warm-ups,
-// the pause load, and downward tiers that wait for the work to be seen running
+// the pause load, and a last resort that waits for the work to be seen running
 // -- and still the same in every run, line for line.
 const tierSimDrift = 10 * time.Second
 
