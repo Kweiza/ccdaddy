@@ -537,7 +537,7 @@ func rankingJSON(plan strategy.Plan) []map[string]any {
 		if plan.Result.Mode == strategy.ModeHover {
 			row["rung"] = r.Rung().String()
 		}
-		if r.LastPoint {
+		if r.LastPoint != "" {
 			row["lastPoint"] = true
 		}
 		if r.HeldOut != "" {

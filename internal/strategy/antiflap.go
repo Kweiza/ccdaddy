@@ -834,7 +834,7 @@ func hoverGate(res Result, active, target Ranked, cfg Config) (Reason, bool, tim
 // TestTheReasonForLeavingIsTheLiveAccountsLimit.
 func leaveReason(active, target Ranked) Reason {
 	switch {
-	case active.LastPoint:
+	case active.LastPoint != "":
 		return ReasonLastPoint
 	case active.Closing != "":
 		return ReasonProjectedExhaustion

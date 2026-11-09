@@ -110,8 +110,8 @@ func TestPreemptionWillNotRunToASeatWhoseOptedInCapRunsOutFirst(t *testing.T) {
 	healthy := polled(burning("c-healthy", 20), 1800*time.Second)
 
 	p := Decide([]Candidate{live, seat, healthy}, seatOpts(), Config{}, NewState(), "a-live")
-	if r, ok := find(p.Result, "b-seat"); !ok || !r.LastPoint || r.Rung() != RungAtLimit {
-		t.Fatalf("the seat is at rung %d (last point %v): the opted-in cap is what its level has to see", r.Rung(), r.LastPoint)
+	if r, ok := find(p.Result, "b-seat"); !ok || r.LastPoint != seatCap || r.Rung() != RungAtLimit {
+		t.Fatalf("the seat is at rung %d (last point on %q): the opted-in cap is what its level has to see", r.Rung(), r.LastPoint)
 	}
 	want(t, p, ActionSwitch, ReasonProjectedExhaustion, "c-healthy")
 
@@ -144,5 +144,25 @@ func TestAnOptedInCapStillPreemptsFromAPrimaryCreditSeat(t *testing.T) {
 	off.Hover = true
 	if p := Decide(pool, off, Config{}, NewState(), "a-seat"); p.Reason == ReasonProjectedExhaustion {
 		t.Errorf("pre-empted to %s with no opt-in; there is nothing to project without the consent", p.Target.UUID)
+	}
+}
+
+// A seat handed off at its plan meter's last point is at a limit on THAT cap, and
+// the mark it leaves names it: the cap's rollover is what lets the seat back, and
+// a credit balance does not roll over. Its credit meter is roomy, so a name read
+// off the meter it is ranked on would name a window that is not at any limit.
+//
+// No poll stamps, so nothing projects and the level alone moves the session.
+func TestAPrimaryCreditSeatAtItsPlanLastPointIsAtALimitOnThatCap(t *testing.T) {
+	seat := seatWithCap("a-seat", 10, 99.5, 2*24*time.Hour)
+	room := sub("b-room", snap(win(20, 3*time.Hour), win(30, 3*24*time.Hour)))
+
+	p := Decide([]Candidate{seat, room}, seatOpts(), Config{}, NewState(), "a-seat")
+	if r, _ := find(p.Result, "a-seat"); r.LastPoint != seatCap || r.AtLimit() != seatCap {
+		t.Fatalf("last point on %q, at a limit on %q, want both on %s", r.LastPoint, r.AtLimit(), seatCap)
+	}
+	want(t, p, ActionSwitch, ReasonLastPoint, "b-room")
+	if p.Departure != (Departure{From: "a-seat", Closing: seatCap}) {
+		t.Errorf("Departure = %+v, want a-seat left on %s", p.Departure, seatCap)
 	}
 }

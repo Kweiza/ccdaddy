@@ -99,11 +99,16 @@ func shortWindowOf(s *usage.Snapshot) usage.WindowName {
 // Three ways, each one that precedes the 429 rather than following it: nothing
 // left (OutOfQuota), the last point before the endpoint reports nothing left
 // (lastPoint, hover's alone), or a projection that the next reading lands past
-// the limit (Closing). The levels name the window their room was read off; the
-// projection names the window it saw run out.
+// the limit (Closing). Emptiness names the window its room was read off, the
+// last point the window that is on it -- on a primary credit seat that can be a
+// plan cap beside the credit meter it is ranked on -- and the projection the
+// window it saw run out.
 func (r Ranked) AtLimit() usage.WindowName {
-	if empty, known := OutOfQuota(r.Headroom); (known && empty) || r.LastPoint {
+	if empty, known := OutOfQuota(r.Headroom); known && empty {
 		return roomWindow(r.Headroom)
+	}
+	if r.LastPoint != "" {
+		return r.LastPoint
 	}
 	return r.Closing
 }
