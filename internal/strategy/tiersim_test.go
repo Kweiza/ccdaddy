@@ -321,12 +321,13 @@ const tierSimTick = EvaluationInterval
 // is when the clock alone moves a hand-off: stopping and out are instants a
 // projection reaches between two readings.
 //
-// The clock moves the projections too, and nextAsk asks at each instant it
-// does: a reading's next poll is held back to ServeTTL after it, so a live
-// account's next look can be overdue and the reserve then runs from the clock,
-// and a target whose prompt poll would be now stops being a carrier when its
-// runway falls inside the blind interval and the reserve. Without those
-// instants this step showed up as different figures: measured against the
+// The clock moves the projections too, and nextAsk asks at each instant the
+// engine says it does (Ranked.clockTurns): a reading's next poll is held back
+// to ServeTTL after it, so a live account's next look can be overdue and the
+// reserve then runs from the clock, and a target whose prompt poll would be now
+// stops being a carrier when its runway falls inside the blind interval and the
+// reserve. Without those instants this step showed up as different figures,
+// first measured with the reserve at ten minutes: against the
 // harness asking every second (this constant set to tierSimTick), every
 // projected hand-off came up to the step late, and the two Max, three Ultras
 // fleet at heavy load stopped in eight seconds with room the step had hidden.
@@ -338,8 +339,8 @@ const tierSimDrift = 10 * time.Second
 // nextAsk is the next second the engine has to be asked even if no reading
 // lands before it: every second while the live account is at a limit, else the
 // drift step, or sooner if the cooldown ends, a rollover one of the readings
-// names comes first, or the clock reaches an instant a projection in the order
-// turns on (projectionTurns).
+// names comes first, or the clock reaches an instant the engine says one of the
+// order's projections turns on (Ranked.clockTurns).
 func nextAsk(now time.Time, st *State, pollers []tierPoller, order []Ranked, atLimit bool) time.Time {
 	if atLimit {
 		return now.Add(tierSimTick)
@@ -356,28 +357,13 @@ func nextAsk(now time.Time, st *State, pollers []tierPoller, order []Ranked, atL
 		}
 	}
 	for _, r := range order {
-		for _, turn := range projectionTurns(r) {
+		for _, turn := range r.clockTurns() {
 			if turn.After(now) && turn.Before(at) {
 				at = turn
 			}
 		}
 	}
 	return at
-}
-
-// projectionTurns is every instant the clock alone can change what the engine
-// makes of an account's runway: out and stopping a tick before it, closing a
-// reserve before it, and no longer a carrier a blind interval and a reserve
-// before it (liveLimitOf, carries).
-func projectionTurns(r Ranked) []time.Time {
-	if !r.HasRunway || r.RunsOutAt.IsZero() {
-		return nil
-	}
-	return []time.Time{
-		r.RunsOutAt.Add(-EvaluationInterval),
-		r.RunsOutAt.Add(-hoverReserve),
-		r.RunsOutAt.Add(-hoverBlind - hoverReserve),
-	}
 }
 
 // tierDecide asks the engine about the fleet as its readings stand, the way the

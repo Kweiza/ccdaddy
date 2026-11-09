@@ -313,6 +313,17 @@ const (
 	liveOut
 )
 
+// The leads, before the end of a runway, that the hand-off measures from a
+// look: out and stopping are a tick before it, closing a reserve before it,
+// and a carrier must outlast a live cadence and a reserve after its first live
+// reading. Each is stated here once, for liveLimitOf, carries and lastResort
+// and for clockTurns, which says when the clock reaches them.
+const (
+	outLead     = EvaluationInterval
+	closingLead = hoverReserve
+	carrierLead = hoverBlind + hoverReserve
+)
+
 // liveLimitOf files the live account against its runway.
 //
 // The next reading is the one the scheduler has set, or now when it is
@@ -323,14 +334,34 @@ func (o Options) liveLimitOf(c Candidate, rw runway) liveLimit {
 		next = o.Now
 	}
 	switch {
-	case rw.stopsBy(o.Now.Add(EvaluationInterval)):
+	case rw.stopsBy(o.Now.Add(outLead)):
 		return liveOut
-	case rw.stopsBy(next.Add(EvaluationInterval)):
+	case rw.stopsBy(next.Add(outLead)):
 		return liveStopping
-	case rw.stopsBy(next.Add(hoverReserve)):
+	case rw.stopsBy(next.Add(closingLead)):
 		return liveClosing
 	}
 	return liveRoom
+}
+
+// clockTurns is every instant at which the clock alone can change what the
+// hand-off makes of this account's runway, with no reading landing and no
+// switch: each lead above, counted back from the runway's end. A live
+// account's next look can be overdue -- no poll is made sooner than ServeTTL
+// after the last -- and a target's prompt poll is now once its reading is that
+// old, so from then on each lead runs from the clock. Between two of these
+// instants a pass over
+// the same readings and the same state gives the same answer, which is what
+// lets the weekly simulation skip the seconds in between.
+func (r Ranked) clockTurns() []time.Time {
+	if !r.HasRunway || r.RunsOutAt.IsZero() {
+		return nil
+	}
+	return []time.Time{
+		r.RunsOutAt.Add(-outLead),
+		r.RunsOutAt.Add(-closingLead),
+		r.RunsOutAt.Add(-carrierLead),
+	}
 }
 
 // carries is whether an account the session is not on is a CARRIER: it would
@@ -352,7 +383,7 @@ func (o Options) carries(c Candidate, r Ranked, rw runway) bool {
 		return true
 	}
 	first := pollpolicy.PromptPollAt(c.FetchedAt, c.NextPollAt, c.LastRateLimited, o.Now)
-	return rw.at.After(first.Add(hoverBlind + hoverReserve))
+	return rw.at.After(first.Add(carrierLead))
 }
 
 // roomyByLevel is whether an account has room by its levels alone: not empty,
@@ -535,7 +566,7 @@ func lastResort(res Result, live Ranked, now time.Time) (Ranked, bool) {
 		if empty, known := OutOfQuota(r.Headroom); known && empty {
 			continue
 		}
-		if r.HasRunway && !r.RunsOutAt.IsZero() && !r.RunsOutAt.After(now.Add(EvaluationInterval)) {
+		if r.HasRunway && !r.RunsOutAt.IsZero() && !r.RunsOutAt.After(now.Add(outLead)) {
 			continue
 		}
 		if !found || outlastsForLastResort(r, best) {
