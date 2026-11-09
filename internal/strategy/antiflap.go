@@ -233,6 +233,12 @@ const (
 	// the order prefers would not carry the work running now -- it would be at
 	// a limit at its first live reading -- so the session stays.
 	ReasonCannotCarry
+	// ReasonWaitsForAReading: under hover, the live account is projected at a
+	// limit and every move left costs money -- the credit pool, or a primary
+	// seat dearer than the account the session is on -- and money is decided
+	// on readings: the session stays until one shows the live account at its
+	// last point or empty. Plan.RetryAt carries that reading. Appended last.
+	ReasonWaitsForAReading
 )
 
 func (r Reason) String() string {
@@ -277,6 +283,8 @@ func (r Reason) String() string {
 		return "staying on the short-window account until it reaches a limit"
 	case ReasonCannotCarry:
 		return "the account the order prefers cannot carry the work running now"
+	case ReasonWaitsForAReading:
+		return "the next account costs money, and the move waits for a reading that shows the live account at its limit"
 	}
 	return "unknown"
 }
@@ -564,10 +572,9 @@ func Decide(cands []Candidate, o Options, cfg Config, st *State, activeUUID stri
 func (p *Plan) creditWalk(byUUID map[string]Candidate, activeUUID string, cfg Config, st *State, now time.Time) {
 	var firstRefusal Decision
 	for _, r := range p.Result.Credit {
-		if isActive(r.UUID, activeUUID) {
-			// The seat the session is on is not somewhere to move to: a
-			// live seat at its own limit walks to the next one.
-			// TestTheCreditWalkSkipsTheLiveSeat.
+		live := isActive(r.UUID, activeUUID)
+		if live && r.AtLimit() != "" {
+			// A live seat at its own limit walks on to the next one.
 			continue
 		}
 		c := byUUID[r.UUID]
@@ -581,6 +588,14 @@ func (p *Plan) creditWalk(byUUID map[string]Candidate, activeUUID string, cfg Co
 		}
 		p.CreditConsulted = true
 		p.Credit = d
+		if live {
+			// The walk reached the seat the session is on, and the gate arms
+			// it: staying is the walk's answer. Skipping it instead sent the
+			// session to the next seat, and from there back again, every
+			// cooldown. TestTheCreditWalkSkipsTheLiveSeat.
+			p.hold(ReasonAlreadyBest, time.Time{})
+			return
+		}
 		// The cooldown, and ONLY the cooldown. The other margins are
 		// comparisons between two accounts metered the same way, and a credit
 		// account carries no plan windows at all: its headroom is permanently
@@ -588,11 +603,6 @@ func (p *Plan) creditWalk(byUUID map[string]Candidate, activeUUID string, cfg Co
 		// against it would be arithmetic on a number that does not exist.
 		// What makes this move safe is the credit gate, which has already run.
 		p.moveOrHold(r, ReasonBetterTarget, activeUUID, cfg, st, now)
-		return
-	}
-	if !p.CreditConsulted && p.isCredit(activeUUID) {
-		// No seat but the live one: the session is on the only one there is.
-		p.hold(ReasonAlreadyBest, time.Time{})
 		return
 	}
 	p.Action = ActionBlocked
