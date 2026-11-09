@@ -123,3 +123,31 @@ func TestHoverLinesAreEmptyWithHoverOff(t *testing.T) {
 		t.Errorf("HoverLines = %q with hover off, want nothing", got)
 	}
 }
+
+// An account whose levels say it has room is never "at its limit" -- its rung
+// reads levels alone -- and when the work running now would run it out before
+// its first live reading, the line says that instead, with when. An idle Max with
+// eight points at three points a minute is the case: the hand-off passes it over,
+// and a line that printed only its rung would leave that unexplained.
+func TestHoverLinesSayWhenAnAccountCannotCarryTheWork(t *testing.T) {
+	five := func(pct float64) *usage.Snapshot {
+		return &usage.Snapshot{FiveHour: window(pct, colNow.Add(3*time.Hour)), SevenDay: window(40, colNow.Add(40*time.Hour))}
+	}
+	live := strategy.Candidate{UUID: "u-a", Kind: identity.KindSubscription, Usage: five(40),
+		FetchedAt: colNow, NextPollAt: colNow.Add(3 * time.Minute),
+		LiveBurns: []usage.LiveBurn{{PerMin: 3, Window: usage.WindowFiveHour, From: colNow.Add(-3 * time.Minute), At: colNow}}}
+	idle := strategy.Candidate{UUID: "u-b", Kind: identity.KindSubscription, Usage: five(92),
+		FetchedAt: colNow, NextPollAt: colNow.Add(10 * time.Minute)}
+	o := strategy.Options{Now: colNow, Hover: true}
+	p := strategy.Decide([]strategy.Candidate{live, idle}, o, strategy.Config{}, strategy.NewState(), "u-a")
+
+	s := Snapshot{Now: colNow, Hover: true, HasMode: true, Mode: p.Result.Mode, HoverOrder: p.Result.Order,
+		Rows: []Row{hoverRow("u-a", "a@example.com", true), hoverRow("u-b", "b@example.com", false)}}
+	got := strings.Join(s.HoverLines(), "\n")
+	if want := "b@example.com  short-window · week resets Sun 04:00 · cannot carry the work running now (runs out in 3 min)"; !strings.Contains(got, want) {
+		t.Errorf("HoverLines =\n%s\nwant a line ending %q", got, want)
+	}
+	if strings.Contains(got, "at its limit") {
+		t.Errorf("HoverLines =\n%s\nsay an account with room is at its limit", got)
+	}
+}
