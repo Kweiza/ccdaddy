@@ -96,6 +96,23 @@ func shortWindowOf(s *usage.Snapshot) usage.WindowName {
 	return ""
 }
 
+// Empty is whether this account has nothing left on a window no model choice
+// can dodge, and which window: the one "nothing left" every decision reads --
+// the rung, the limit, the last resort, the empty-live waiver, the carry and
+// bridge tests.
+//
+// A primary credit seat carries two meters. Its Headroom is the credit
+// balance, and under hover its plan's windows are a limit too where the user
+// opted them in; an opted-in cap at 100% stops the seat whatever its balance
+// says, and reading the balance alone would pick it as the last place to go.
+// TestAnEmptyOptedInCapIsEmptyWhateverTheBalance.
+func (r Ranked) Empty() (usage.WindowName, bool) {
+	if out, known := OutOfQuota(r.Headroom); known && out {
+		return roomWindow(r.Headroom), true
+	}
+	return r.planEmpty, r.planEmpty != ""
+}
+
 // AtLimit names the window that has this account at a limit, or "" when it is
 // not at one.
 //
@@ -107,8 +124,8 @@ func shortWindowOf(s *usage.Snapshot) usage.WindowName {
 // plan cap beside the credit meter it is ranked on -- and the projection the
 // window it saw run out.
 func (r Ranked) AtLimit() usage.WindowName {
-	if empty, known := OutOfQuota(r.Headroom); known && empty {
-		return roomWindow(r.Headroom)
+	if on, empty := r.Empty(); empty {
+		return on
 	}
 	if r.LastPoint != "" {
 		return r.LastPoint
@@ -123,7 +140,7 @@ func (r Ranked) AtLimit() usage.WindowName {
 // taken back, and an account at a limit is not somewhere to take a session
 // whatever the hold says.
 func (r Ranked) Rung() Rung {
-	if empty, known := OutOfQuota(r.Headroom); known && empty {
+	if _, empty := r.Empty(); empty {
 		return RungEmpty
 	}
 	if r.AtLimit() != "" {

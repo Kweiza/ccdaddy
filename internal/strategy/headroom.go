@@ -803,6 +803,19 @@ func (o Options) lastPointOf(h, plan Headroom) usage.WindowName {
 	return ""
 }
 
+// planEmptyOf is the plan window a primary credit seat has nothing left on,
+// under hover, or "" when it has none -- the plan meter's half of Ranked.Empty.
+// Every other account has one meter, which Empty reads already.
+func (o Options) planEmptyOf(c Candidate, plan Headroom) usage.WindowName {
+	if o.hover == nil || !primaryCredit(c) {
+		return ""
+	}
+	if out, known := OutOfQuota(plan); known && out {
+		return roomWindow(plan)
+	}
+	return ""
+}
+
 // handoffRoom is the room hover's line leaves on this account's binding meter:
 // one point of a plan window, which every window under hover is held to
 // (HoverHandoffThreshold), and on a primary credit seat what HoverCreditThreshold

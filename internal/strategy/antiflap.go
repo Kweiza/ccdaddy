@@ -699,8 +699,8 @@ func gate(res Result, target Ranked, activeUUID string, cfg Config, st *State, n
 	// can say so. A candidate nobody could read is a maybe worth trying -- the
 	// same answer preemptTarget gives it -- and folding it into "empty" would
 	// strand a session on a spent account every time a poll failed.
-	if empty, known := OutOfQuota(active.Headroom); known && empty {
-		if spent, known := OutOfQuota(target.Headroom); known && spent {
+	if _, empty := active.Empty(); empty {
+		if _, spent := target.Empty(); spent {
 			return ReasonNothingCanServe, true, soonestRollover(res)
 		}
 		return ReasonBetterTarget, false, time.Time{}
@@ -815,7 +815,7 @@ func hoverGate(active, target Ranked, cfg Config) (Reason, bool, time.Time) {
 // TestTheReasonForLeavingIsTheLiveAccountsLimit. An empty live account reports
 // what the configured strategies' empty waiver always has.
 func leaveReason(active, target Ranked) Reason {
-	if empty, known := OutOfQuota(active.Headroom); known && empty {
+	if _, empty := active.Empty(); empty {
 		return ReasonBetterTarget
 	}
 	switch {
