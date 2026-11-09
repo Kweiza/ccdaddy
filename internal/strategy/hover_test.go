@@ -284,6 +284,54 @@ func TestHoverThresholdDoesNotOpenTheCreditPool(t *testing.T) {
 	want(t, p, ActionBlocked, ReasonNothingCanServe, "")
 }
 
+// Under hover money comes after every free point of subscription quota, and
+// the same state gives the same answer whichever account the order puts first.
+// The user's thresholds say the main pool is exhausted and the seat is opted
+// in, so the gate would sell: while the live account still holds its last
+// point, and while another account holds one, it is not asked.
+func TestCreditsComeAfterEveryFreePointUnderHover(t *testing.T) {
+	seat := creditWith("c", usage.ExtraUsageFor(usage.ExtraUsageInput{
+		State:        usage.ExtraUsageEnabled,
+		Currency:     "USD",
+		MonthlyLimit: pf(10000),
+		UsedCredits:  pf(0),
+		Utilization:  pf(41),
+	}))
+	o := opts()
+	o.Hover = true
+	o.Threshold = 90
+	cfg := Config{MaxAutoSpend: 500}
+	for _, tc := range []struct {
+		name  string
+		bIn   time.Duration
+		first string
+	}{
+		{"the live account sorting first", 5 * day, "a"},
+		{"the other account sorting first", 2 * day, "b"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := func(pct float64) Candidate { return sub("a", &usage.Snapshot{SevenDay: win(pct, 3*day)}) }
+			b := func(pct float64) Candidate { return sub("b", &usage.Snapshot{SevenDay: win(pct, tc.bIn)}) }
+
+			p := Decide([]Candidate{a(99.5), b(99.5), seat}, o, cfg, NewState(), "a")
+			if first := p.Result.Order[0].UUID; first != tc.first {
+				t.Fatalf("the order puts %s first, want %s", first, tc.first)
+			}
+			want(t, p, ActionBlocked, ReasonNothingCanServe, "")
+			if p.CreditConsulted {
+				t.Error("the credit pool was consulted while the live account held its last point")
+			}
+			p = Decide([]Candidate{a(100), b(99.5), seat}, o, cfg, NewState(), "a")
+			want(t, p, ActionSwitch, ReasonBetterTarget, "b")
+			if p.CreditConsulted {
+				t.Error("the credit pool was consulted while another account held its last point")
+			}
+			p = Decide([]Candidate{a(100), b(100), seat}, o, cfg, NewState(), "a")
+			want(t, p, ActionSwitch, ReasonBetterTarget, "c")
+		})
+	}
+}
+
 // The plan hover ran on is reported, and nil is what says the mode was not in
 // force.
 func TestDecideReportsThePlanHoverRanOn(t *testing.T) {
