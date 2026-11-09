@@ -537,11 +537,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	// budget the prompt's floor exists to share. The dispatch reads what the
 	// switch wrote. TestASwitchsPromptHoldsInTheTickThatMadeIt.
 	if res.Outcome == switcher.Switched {
-		if fresh, err := usage.LoadCache(); err == nil {
-			cache = fresh
-		} else {
-			e.logf("re-reading the usage cache after the switch failed, so this tick polls from the copy read before it: %v", err)
-		}
+		cache = e.cacheAfterSwitch(cache)
 	}
 	quarantined := quarantinedSet(ev)
 	// The same table `ev` was just ranked against, not a second one rebuilt from
@@ -573,6 +569,25 @@ func (e *Engine) Tick(ctx context.Context) error {
 		e.logf("%s", switchLogLine(ev, res.Target))
 	}
 	return nil
+}
+
+// cacheAfterSwitch is the cache a tick that switched dispatches from: the one
+// the switch wrote, or, when it cannot be read, pre -- the one read before it.
+// A cache that fails to load comes back empty with its error in LoadError, and
+// dispatching from that would have every account due at once, the one just
+// read and the identity's floor included; the copy read before the switch
+// misses only the prompt's schedule, which the next tick reads.
+// TestAFailedReReadAfterASwitchKeepsTheCacheReadBeforeIt.
+func (e *Engine) cacheAfterSwitch(pre *usage.Cache) *usage.Cache {
+	fresh, err := usage.LoadCache()
+	if err == nil {
+		err = fresh.LoadError()
+	}
+	if err != nil {
+		e.logf("re-reading the usage cache after the switch failed, so this tick polls from the copy read before it: %v", err)
+		return pre
+	}
+	return fresh
 }
 
 // reportManualMode writes one line whenever manual mode changes, and on the
@@ -1352,16 +1367,28 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now, sent time.Ti
 	// and the cache's record second (switcher.Execute), so a crash or a failed
 	// write between the two leaves only this one saying the account was away;
 	// without it the pair the next reading makes would span the absence, and
-	// be stored. An unreadable state says nothing, and the cache's record
-	// stands alone. TestAPairAcrossAnAbsenceOnlyTheStateRecordsIsNotStored.
+	// be stored. A state that cannot be read cannot say where the stint began,
+	// so this reading makes no pair at all; the reading and its schedule are
+	// still kept. TestAPairAcrossAnAbsenceOnlyTheStateRecordsIsNotStored,
+	// TestAnUnreadableStateMakesNoLivePair.
 	var stateSwitchOnto time.Time
-	if st, err := strategy.LoadState(); err == nil {
+	st, stErr := strategy.LoadState()
+	stateKnown := stErr == nil && st.LoadError() == nil
+	if stateKnown {
 		if at, to := st.LastSwitch(); to == a.UUID {
 			stateSwitchOnto = at
 		}
 	}
 	err := usage.WithCache(cacheTimeout, func(c *usage.Cache) error {
+		// Only what is this account's own: a row kept from a predecessor at the
+		// same uuid, removed and added again, brings its reading, rates and
+		// flags back to life otherwise -- Prune clears them from an
+		// evaluation's copy, not from the row this commit rewrites.
+		// TestACommitDropsAPredecessorsMeasurements.
 		entry, had := c.Get(a.UUID)
+		if had {
+			entry, had = entry.OwnedSince(a.AddedAt)
+		}
 		state := pollStateOf(entry)
 		// A switch that made this account live while this poll was in flight:
 		// the poll was sent idle, and the daemon's live label is set only after
@@ -1399,8 +1426,8 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now, sent time.Ti
 			stintSince = stateSwitchOnto
 		}
 		if snap != nil {
-			fresh := usage.LivePairs(entry.Snapshot, entry.FetchedAt,
-				usage.LiveAnchor(entry.Poll.AnchorLive, entry.FetchedAt, stintSince), snap, now, active)
+			anchor := stateKnown && usage.LiveAnchor(entry.Poll.AnchorLive, entry.FetchedAt, stintSince)
+			fresh := usage.LivePairs(entry.Snapshot, entry.FetchedAt, anchor, snap, now, active)
 			liveBurns, anchorLive = usage.MergeLiveBurns(liveBurns, fresh), active
 			if len(fresh) > 0 {
 				pairRunning, pairAt = usage.AnyRunning(fresh), now

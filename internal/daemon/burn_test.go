@@ -4,6 +4,8 @@ import (
 	"context"
 	"math"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -377,6 +379,103 @@ func TestAPairAcrossAnAbsenceIsNotStored(t *testing.T) {
 	}
 	if got, want := five(after), five(before); got != want || math.Abs(want.PerMin-1) > 1e-9 {
 		t.Errorf("five-hour rate %+v after the return, want the 1 a minute measured before it (%+v)", got, want)
+	}
+}
+
+// An engine state that cannot be read cannot say where the account's stint
+// began, so a commit then makes no live pair: two live readings three minutes
+// apart, with a state file that does not parse, store the reading and its
+// schedule and no rate.
+func TestAnUnreadableStateMakesNoLivePair(t *testing.T) {
+	isolateEngine(t)
+	e := NewEngine()
+	a := store.Account{UUID: "acct-a"}
+	path, err := strategy.StatePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	e.commit(a, windowsUsed(10, 5), tickEpoch, tickEpoch, []string{a.UUID}, burnThresholds(), true, nil)
+	e.commit(a, windowsUsed(13, 5), tickEpoch.Add(3*time.Minute), tickEpoch.Add(3*time.Minute), []string{a.UUID}, burnThresholds(), true, nil)
+
+	entry, ok := cacheEntry(t, a.UUID)
+	if !ok || entry.Snapshot == nil || !entry.FetchedAt.Equal(tickEpoch.Add(3*time.Minute)) || entry.NextPollAt.IsZero() {
+		t.Fatalf("the reading and its schedule were not kept: row %v, %+v", ok, entry)
+	}
+	if len(entry.Poll.LiveBurns) != 0 || !entry.Poll.LastPairAt.IsZero() {
+		t.Errorf("a pair was made while the engine state could not be read: %+v", entry.Poll.LiveBurns)
+	}
+}
+
+// A uuid removed and added again keeps nothing its predecessor measured. The
+// row still holds the predecessor's reading from an hour before the account
+// was added, with a rate and a running flag beside it; a switch onto the new
+// account records itself, and the first reading commits. What the row then
+// holds is that reading and nothing measured before it.
+func TestACommitDropsAPredecessorsMeasurements(t *testing.T) {
+	isolateEngine(t)
+	e := NewEngine()
+	e.Rand = midJitter
+	a := store.Account{UUID: "acct-a", AddedAt: tickEpoch}
+	if err := usage.WithCache(time.Second, func(c *usage.Cache) error {
+		c.Put(a.UUID, usage.Entry{
+			Snapshot: windowsUsed(90, 50), FetchedAt: tickEpoch.Add(-time.Hour),
+			Poll: usage.PollState{
+				AnchorLive: true, LastPairRunning: true, LastPairAt: tickEpoch.Add(-time.Hour),
+				LiveBurns: []usage.LiveBurn{{PerMin: 2, Window: usage.WindowFiveHour, From: tickEpoch.Add(-63 * time.Minute), At: tickEpoch.Add(-time.Hour)}},
+			},
+		})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := switcher.SchedulePromptPoll(a.UUID, tickEpoch.Add(time.Minute), 1); err != nil {
+		t.Fatal(err)
+	}
+	e.commit(a, windowsUsed(10, 5), tickEpoch.Add(2*time.Minute), tickEpoch.Add(2*time.Minute), []string{a.UUID}, burnThresholds(), true, nil)
+
+	entry, _ := cacheEntry(t, a.UUID)
+	if len(entry.Poll.LiveBurns) != 0 || entry.Poll.LastPairRunning || !entry.Poll.LastPairAt.IsZero() || entry.Poll.HasBurn {
+		t.Errorf("the predecessor's measurements came back with the first reading: %+v", entry.Poll)
+	}
+	if !entry.FetchedAt.Equal(tickEpoch.Add(2 * time.Minute)) {
+		t.Errorf("the row holds a reading from %s, want the first one", entry.FetchedAt.Sub(tickEpoch))
+	}
+}
+
+// A tick that switched and then could not re-read the cache dispatches from the
+// copy it read before the switch, not from the empty cache a failed load
+// returns -- which would have every account due at once.
+func TestAFailedReReadAfterASwitchKeepsTheCacheReadBeforeIt(t *testing.T) {
+	isolateEngine(t)
+	if err := usage.WithCache(time.Second, func(c *usage.Cache) error {
+		c.Put("acct-a", usage.Entry{Snapshot: snapshotWith(10), FetchedAt: tickEpoch, NextPollAt: tickEpoch.Add(time.Minute)})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	pre, err := usage.LoadCache()
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := NewEngine()
+	if got := e.cacheAfterSwitch(pre); got == pre {
+		t.Error("a re-read that succeeded was not taken")
+	}
+	path, err := usage.CachePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.cacheAfterSwitch(pre); got != pre {
+		t.Error("a failed re-read replaced the cache read before the switch")
 	}
 }
 
