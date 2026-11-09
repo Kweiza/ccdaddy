@@ -1027,6 +1027,38 @@ func TestAFiveHourWindowRunsToItsNextReadingAndAWeekKeepsItsReserve(t *testing.T
 	want(t, p, ActionBlocked, ReasonNothingCanServe, "")
 }
 
+// The reserve is each window's own, and the live account is closing when any
+// window's stop falls inside its own reserve after the next reading -- not
+// only the window that stops first. The live Max is read now and next in nine
+// and a half minutes. Its five-hour window, ten points at a point a minute,
+// stops at ten minutes: after that reading, and with no reserve it is room.
+// Its week, two points at 0.18 a minute, stops a minute later, inside the
+// three minutes after the reading a week keeps. The account is closing on its
+// week, and is left on it for the Ultra that carries the work.
+func TestEveryWindowKeepsItsOwnReserve(t *testing.T) {
+	live := polled(maxAcct("a-live", 90, 3*time.Hour, 98, 3*day), 9*time.Minute+30*time.Second)
+	live.LiveBurns = []usage.LiveBurn{
+		{PerMin: 1, Window: usage.WindowFiveHour, From: now.Add(-3 * time.Minute), At: now},
+		{PerMin: 0.18, Window: usage.WindowSevenDay, From: now.Add(-3 * time.Minute), At: now},
+	}
+	live.WorkRunning, live.LastPairAt = true, now
+	carrier := idleOn(weekOnly("u-carrier", 20, 5*day))
+
+	p := Decide([]Candidate{live, carrier}, hoverOpts(), Config{}, NewState(), "a-live")
+	r, _ := find(p.Result, "a-live")
+	if r.RunsOutOn != usage.WindowFiveHour || runsOutIn(t, r) != 10*time.Minute {
+		t.Fatalf("the live account runs out on %q in %s; the case is the five-hour window stopping first, at ten minutes",
+			r.RunsOutOn, r.RunsOutAt.Sub(now))
+	}
+	if r.limit != liveClosing || r.Closing != usage.WindowSevenDay {
+		t.Errorf("live account at limit %d, closing %q: want closing on its week", r.limit, r.Closing)
+	}
+	want(t, p, ActionSwitch, ReasonProjectedExhaustion, "u-carrier")
+	if p.Departure != (Departure{From: "a-live", Closing: usage.WindowSevenDay}) {
+		t.Errorf("Departure = %+v, want a-live left on its week", p.Departure)
+	}
+}
+
 // When every account is down to its last point they are spent one at a time,
 // each confirmed spent before the session moves on: another account's last
 // point is taken only once a reading shows the live account empty. The live

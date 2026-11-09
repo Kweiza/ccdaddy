@@ -73,8 +73,6 @@ func (hoverRules) limitsOf(o Options, c Candidate, h, plan Headroom, rw runway) 
 	if !isActive(c.UUID, o.live) {
 		return out
 	}
-	if out.live = o.liveLimitOf(c, rw); out.live != liveRoom {
-		out.closing = rw.on
-	}
+	out.live, out.closing = o.liveLimitOf(c, rw)
 	return out
 }

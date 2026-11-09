@@ -261,11 +261,16 @@ type runway struct {
 	// window resets before it is spent.
 	at time.Time
 	on usage.WindowName
-	// closesAt is at less that window's reserve (closingReserve): a look that
-	// comes no later than it finds the account closing. The live account's
-	// alone, the one account a runway is fixed for between two readings and
-	// the one liveLimitOf files; zero on any other.
+	// closesAt is the earliest of every stopping window's stop less that
+	// window's own reserve (closingReserve), and closesOn the window it is
+	// on: a look that comes no later than it finds the account closing on
+	// that window. The window that stops first need not be it -- a five-hour
+	// stop a minute before a week's leaves the week the one inside its
+	// reserve. The live account's alone, the one account a runway is fixed
+	// for between two readings and the one liveLimitOf files; zero on any
+	// other.
 	closesAt time.Time
+	closesOn usage.WindowName
 }
 
 // stopsBy is whether the work stops this account no later than t.
@@ -273,10 +278,10 @@ func (r runway) stopsBy(t time.Time) bool {
 	return r.known && !r.at.IsZero() && !r.at.After(t)
 }
 
-// closesBy is whether the work stops this account within its window's reserve
-// after t.
+// closesBy is whether the work stops this account on some window within that
+// window's reserve after t.
 func (r runway) closesBy(t time.Time) bool {
-	return r.known && !r.at.IsZero() && !r.closesAt.After(t)
+	return r.known && !r.closesAt.IsZero() && !r.closesAt.After(t)
 }
 
 // runwayOf is THE projection: when the work running now would stop this account.
@@ -334,9 +339,9 @@ func (o Options) runwayOf(c Candidate) runway {
 		}
 		if out.at.IsZero() || at.Before(out.at) {
 			out.at, out.on = at, w.Name
-			if live {
-				out.closesAt = at.Add(-closingReserve(w))
-			}
+		}
+		if closes := at.Add(-closingReserve(w)); live && (out.closesAt.IsZero() || closes.Before(out.closesAt)) {
+			out.closesAt, out.closesOn = closes, w.Name
 		}
 	}
 	return out
@@ -441,11 +446,11 @@ func sinceReset(from time.Time, win usage.Window) time.Time {
 }
 
 // liveLimit is the live account's state against the work's runway: closing when
-// the work would stop it within its window's reserve after the next reading
-// (closingReserve), stopping when before the next reading, and out when before
-// the engine looks again. Each is a narrower version of the one before -- on a
-// window with no reserve closing and stopping are a tick apart -- and the
-// window named is the one that stops it.
+// the work would stop it on some window within that window's reserve after the
+// next reading (closingReserve), stopping when before the next reading, and out
+// when before the engine looks again. Each is a narrower version of the one
+// before -- on a window with no reserve closing and stopping are a tick apart
+// -- and liveLimitOf names the window each is on.
 type liveLimit int
 
 const (
@@ -488,7 +493,9 @@ func closingReserve(w usage.NamedWindow) time.Duration {
 	return hoverReserve
 }
 
-// liveLimitOf files the live account against its runway.
+// liveLimitOf files the live account against its runway, and names the window
+// that files it there: the one that stops it first when it is stopping or out,
+// and the one whose own reserve it is inside when it is closing (runway.closesOn).
 //
 // The next reading is the one the scheduler has set, or now when it is
 // overdue: a look already due is the next thing that happens.
@@ -512,20 +519,20 @@ func closingReserve(w usage.NamedWindow) time.Duration {
 // from 958 to 1107, and two Max, three Ultras under burst load from 142 to 250
 // and under heavy load from 239 to 289; and the pause load switched 70 times
 // where this switches 44.
-func (o Options) liveLimitOf(c Candidate, rw runway) liveLimit {
+func (o Options) liveLimitOf(c Candidate, rw runway) (liveLimit, usage.WindowName) {
 	next := c.NextPollAt
 	if next.Before(o.Now) {
 		next = o.Now
 	}
 	switch {
 	case rw.stopsBy(o.Now.Add(outLead)):
-		return liveOut
+		return liveOut, rw.on
 	case rw.stopsBy(next.Add(outLead)):
-		return liveStopping
+		return liveStopping, rw.on
 	case rw.closesBy(next):
-		return liveClosing
+		return liveClosing, rw.closesOn
 	}
-	return liveRoom
+	return liveRoom, ""
 }
 
 // carries is whether an account the session is not on is a CARRIER: it would
