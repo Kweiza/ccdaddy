@@ -97,7 +97,15 @@ type Window struct {
 	// zero out of an unknown is the bug this whole type exists to prevent.
 	length    time.Duration
 	hasLength bool
+	// rolledAt is when the window the reading described reset, for a window
+	// AsOf has read as rolled; zero otherwise. See RolledAt.
+	rolledAt time.Time
 }
+
+// RolledAt is when this window reset after it was read, and whether it has:
+// set only on a reading AsOf has read as rolled. Anything worked against the
+// window before that instant spent the window that reset, not this one.
+func (w Window) RolledAt() (time.Time, bool) { return w.rolledAt, !w.rolledAt.IsZero() }
 
 // Percent is the window's utilization as a percent of 0-100, and whether it was
 // reported at all. It is never scaled: the body is already a percent.
@@ -411,6 +419,9 @@ type Limit struct {
 	hasPct  bool
 	reset   time.Time
 	hasTime bool
+	// rolledAt is when the limit the reading described reset, for one AsOf has
+	// read as rolled; see Window.RolledAt.
+	rolledAt time.Time
 }
 
 // Percent is this limit's utilization as a percent of 0-100, and whether it was
@@ -613,11 +624,12 @@ func scopedWindowOf(l Limit, scope, display string) ScopedWindow {
 			// percent could not be read is still a window that IS there,
 			// which is the same distinction Window.Present draws.
 			Window: Window{
-				Present: true,
-				pct:     l.pct,
-				hasPct:  l.hasPct,
-				reset:   l.reset,
-				hasTime: l.hasTime,
+				Present:  true,
+				pct:      l.pct,
+				hasPct:   l.hasPct,
+				reset:    l.reset,
+				hasTime:  l.hasTime,
+				rolledAt: l.rolledAt,
 			},
 		},
 		Model:   l.ModelDisplayName,
@@ -716,7 +728,8 @@ func (s *Snapshot) UnnamableLimits() int {
 // AsOf is this reading as it stands at now: every window whose reset has come
 // and gone reads as a window nothing has spent against since it rolled -- 0%,
 // and no reset until a turn starts its clock -- because that is what it now
-// is. Everything else is the reading as it was taken. A reading
+// is, and remembers when it rolled (Window.RolledAt). Everything else is the
+// reading as it was taken. A reading
 // with nothing rolled is returned as it is.
 //
 // A reading is as old as its poll, and the poll that sees a rollover lands a
@@ -735,12 +748,14 @@ func (s *Snapshot) AsOf(now time.Time) *Snapshot {
 	for _, w := range []*Window{&c.FiveHour, &c.SevenDay, &c.SevenDayOAuthApps, &c.SevenDayOpus,
 		&c.SevenDaySonnet, &c.CodexPrimary, &c.CodexSecondary} {
 		if w.Present && rolledOver(w.reset, w.hasTime, now) {
+			w.rolledAt = w.reset
 			w.pct, w.hasPct, w.reset, w.hasTime = 0, true, time.Time{}, false
 			changed = true
 		}
 	}
 	for i := range c.Limits {
 		if l := &c.Limits[i]; rolledOver(l.reset, l.hasTime, now) {
+			l.rolledAt = l.reset
 			l.pct, l.hasPct, l.reset, l.hasTime = 0, true, time.Time{}, false
 			changed = true
 		}

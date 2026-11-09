@@ -229,7 +229,7 @@ func (o Options) runwayOf(c Candidate) runway {
 func (o Options) stopOf(c Candidate, w usage.NamedWindow, room float64, from time.Time, live bool) (time.Time, bool) {
 	length, hasLength := usage.WindowLengthOf(w.Name, w.Window)
 	if rate, ok := o.work.rateOn(length); hasLength && ok {
-		room -= rate.perMin * o.work.workedAfterReading(c).Minutes()
+		room -= rate.perMin * o.work.workedAfterReading(c, w.Window).Minutes()
 		at, spends := atRate(from, room, rate.perMin)
 		if !spends {
 			return time.Time{}, true
@@ -284,20 +284,32 @@ func (w *work) spendingFrom(c Candidate) time.Time {
 	return c.FetchedAt
 }
 
-// workedAfterReading is how long the work ran on an account after its last
-// reading was taken, by its departure mark: the span between the reading and
-// the departure, when the account was left after it was read. The live account
-// is asked too -- one the work has come back to is still short what it spent
-// before it was left, until its next reading says so.
-func (w *work) workedAfterReading(c Candidate) time.Duration {
+// workedAfterReading is how long the work ran against window win of an account
+// after its last reading was taken, by its departure mark: the span between the
+// reading and the departure, when the account was left after it was read. The
+// live account is asked too -- one the work has come back to is still short
+// what it spent before it was left, until its next reading says so.
+//
+// Only within the window the reading describes. A window that has reset since
+// (usage.Window.RolledAt) is a new window, and what the work spent before the
+// reset spent the old one: it cannot spend the room the reset restored.
+// TestWorkBeforeAResetDoesNotSpendTheRoomTheResetRestored.
+func (w *work) workedAfterReading(c Candidate, win usage.Window) time.Duration {
 	if w == nil {
 		return 0
 	}
 	m, ok := w.left[c.UUID]
-	if !ok || !m.At.After(c.FetchedAt) {
+	if !ok {
 		return 0
 	}
-	return m.At.Sub(c.FetchedAt)
+	from := c.FetchedAt
+	if at, rolled := win.RolledAt(); rolled && at.After(from) {
+		from = at
+	}
+	if !m.At.After(from) {
+		return 0
+	}
+	return m.At.Sub(from)
 }
 
 // liveLimit is the live account's state against the work's runway: closing when
