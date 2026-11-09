@@ -470,8 +470,10 @@ Hover orders the Claude lane's accounts instead of comparing their room:
    latest pair of live readings saw the work running -- it moves to whichever
    account lasts longest. A credit seat comes after all of these, only when
    every account reads empty and your thresholds say the main pool is
-   exhausted. From a credit seat the session goes back to any account that is
-   not empty and not on its last point.
+   exhausted. A primary credit seat is moved to only when the account the
+   session is on reads at its last point or empty. From a credit seat the
+   session goes back to any cheaper account that is not empty and not on its
+   last point, free quota first.
 6. The account the session moves to is read straight after the switch rather
    than at its idle cadence.
 
@@ -524,13 +526,19 @@ something:
   running and the live account is projected near its limit, ccdad can move
   the login to an account holding a cooldown's worth more than the live one
   has left and less than a carrier's -- at 5.4 points a minute, up to about 43
-  to 59 points -- and later back again. No session is cut and no credit is
-  bought, but each move writes the credential, polls the account and updates
-  Claude Code's settings, and if the work resumes just after a move, the next
-  move waits out the cooldown.
-- Credits are bought on readings alone. With credits opted in and every
-  account dry, a live account that runs out between two readings stops the
-  session until the reading that shows it empty, up to three minutes later.
+  to 59 points -- and later back again. No session is cut, no credit is
+  bought, and a primary seat's balance is moved onto only from an account
+  that reads at its last point; but each move writes the credential, polls the
+  account and updates Claude Code's settings, and if the work resumes just
+  after a move, the next move waits out the cooldown.
+- Money is decided on readings alone, in both directions. With credits opted
+  in and every account dry, a live account that runs out between two readings
+  stops the session until the reading that shows it empty: three minutes at
+  the live cadence, and longer while the usage endpoint throttles the poll,
+  360 to 1800 seconds after a 429. And the session moves onto a primary credit
+  seat only when the free account it is on reads at its last point or empty,
+  so work that outruns the readings can stop it at that account's limit until
+  a reading shows it there.
 
 In a simulated week, with whole-percent readings and the daemon's warm-ups, a
 session stopped while another account had room in eleven of 28 fleet-and-load
