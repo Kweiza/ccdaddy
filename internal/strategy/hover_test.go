@@ -78,7 +78,7 @@ func TestHoverHoldsEveryWindowToTheHandoffLine(t *testing.T) {
 // Every door that answers "hover built nothing for this" is the same line, and
 // it is strictly positive and short of 100.
 //
-// Positive is load-bearing rather than tidy: bindingWindows reads a non-positive
+// Positive is load-bearing rather than tidy: admittedWindows reads a non-positive
 // per-window entry as "not opted in", so a zero here would silently revoke a
 // user's consent for an unknown-scope cap. Short of 100 is the hand-off itself:
 // a line at 100 is crossed only once the session has stopped.
