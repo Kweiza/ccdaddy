@@ -19,11 +19,11 @@ must reference accounts by `uuid` or `alias`.
 Hover becomes an order: accounts with a five-hour window first, then the
 weekly-only seat whose week resets soonest, with every hand-off aimed before
 a limit -- a week's a reserve before it, a five-hour window's at the last
-reading before it, so a burst can still stop the session for seconds. A
-simulated week of a one-Max, three-Ultra fleet goes from 183 switches to 56
-under heavy use and from 33 to 2 when the five-hour window never fills, and a
-blown model cap no longer stops the session. The cost is Ultra weekly
-quota, which can now expire unspent.
+reading before it, so a burst can still stop the session for about half a
+minute. A simulated week of a one-Max, three-Ultra fleet goes from 183
+switches to 56 under heavy use and from 33 to 2 when the five-hour window
+never fills, and a blown model cap no longer stops the session. The cost is
+Ultra weekly quota, which can now expire unspent.
 
 ### Changed
 
@@ -43,9 +43,9 @@ quota, which can now expire unspent.
      the work running now would run the live account out: on a five-hour
      window, before its next reading, and on a week, within three minutes
      after it. A five-hour window is run that close because it comes back in
-     hours; a burst that outruns the reading before the hand-off can stop the
-     session for seconds. A cap on one model family, such as a blown Fable
-     week, is not such a limit.
+     hours; work that outruns the reading before the hand-off can stop the
+     session for up to about half a minute each time. A cap on one model
+     family, such as a blown Fable week, is not such a limit.
 
   An account the session is not on is placed in the order by its levels and
   its hold alone: it is at a limit only when it is empty or on its last point.
@@ -153,7 +153,10 @@ quota, which can now expire unspent.
   out before its next reading shows it. On a week a three-minute reserve
   absorbs most of that; a five-hour window, handed off at the last reading
   before the work would stop it, has none, so there these cases stop the
-  session for seconds. Six more cases cost the session something:
+  session, most often for about half a minute; a reading due before the
+  hand-off that is slow or fails, a poll taking up to 45 seconds, leaves the
+  hand-off to the projection alone. Six more cases cost the session
+  something:
   - A rate stands until a newer running measurement replaces it, across window
     resets and daemon restarts alike. A five-hour rate measured in a burst can
     outlive it: above about 12.5 points a minute even a freshly reset
