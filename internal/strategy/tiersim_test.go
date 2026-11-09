@@ -3,6 +3,7 @@ package strategy
 import (
 	"fmt"
 	"math"
+	"reflect"
 	"sort"
 	"testing"
 	"time"
@@ -459,17 +460,13 @@ func TestTodaysFleetOverAWeek(t *testing.T) {
 		{"light", 0.01, 2*fiveHourWindows + 4},
 		{"heavy", 0.025, 2*fiveHourWindows + 4},
 	} {
-		for _, fleet := range []struct {
-			name string
-			of   func() []tierAccount
-		}{
-			{"today", todaysFleet},
-			{"Fable blown", fableBlownFleet},
-		} {
-			load, fleet := load, fleet
-			t.Run(load.name+"/"+fleet.name, func(t *testing.T) {
-				t.Parallel()
-				res := runTierSim(t, fmt.Sprintf("hover, %s fleet, %s load", fleet.name, load.name), fleet.of(), load.rate, week)
+		load := load
+		t.Run(load.name, func(t *testing.T) {
+			t.Parallel()
+			today := runTierSim(t, fmt.Sprintf("hover, today's fleet, %s load", load.name), todaysFleet(), load.rate, week)
+			fable := runTierSim(t, fmt.Sprintf("hover, Fable week past its last point, %s load", load.name),
+				fableBlownFleet(), load.rate, week)
+			for _, res := range []tierSimResult{today, fable} {
 				// The harness has to close its own books before any figure it
 				// reports can be read: everything served came out of somebody's
 				// week, and nothing was served that the load did not ask for.
@@ -495,7 +492,16 @@ func TestTodaysFleetOverAWeek(t *testing.T) {
 				if got := res.unspent["short-window"]; got > handoffRoomPct {
 					t.Errorf("%.2f points of the five-hour account's week expired unspent, want at most %v", got, handoffRoomPct)
 				}
-			})
-		}
+			}
+			// A cap on one model family is not a limit, so it moves nothing hover
+			// decides: the week with the Max account's Fable week past its last
+			// point is today's week, switch for switch and point for point. It is
+			// asserted whole because a cap leaking into any one rule -- the window
+			// the poller measures, a projection, the weekly reset the order sorts
+			// on -- shows up as a different week rather than as a broken bound.
+			if !reflect.DeepEqual(today, fable) {
+				t.Errorf("a cap on one model family changed the week:\ntoday %+v\nFable %+v", today, fable)
+			}
+		})
 	}
 }
