@@ -443,6 +443,69 @@ func TestSwitchWithNoTargetLetsTheEngineChoose(t *testing.T) {
 	}
 }
 
+// departuresOnDisk is the departure marks strategy.json holds, read as the file
+// says them rather than through the engine, which never reads its own record
+// back except to rank.
+func departuresOnDisk(t *testing.T) map[string]map[string]any {
+	t.Helper()
+	path, err := strategy.StatePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Departures map[string]map[string]any `json:"departures"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("strategy.json does not parse: %v\n%s", err, raw)
+	}
+	return doc.Departures
+}
+
+// A targetless switch is the ENGINE's choice, so an account it leaves at a limit
+// is remembered exactly as the daemon would remember it -- or the next tick
+// takes the session straight back. A switch to a named account is the person's
+// choice and leaves no mark.
+func TestATargetlessSwitchRemembersTheAccountItLeftAtALimit(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		argv   []string
+		marked bool
+	}{
+		{"the engine chose", []string{"switch", "--strategy", "headroom"}, true},
+		{"a person named the account", []string{"switch", "2"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolate(t)
+			seedAccount(t, "u-1", "a@example.com")
+			seedAccount(t, "u-2", "b@example.com")
+			if code, _, _, top := runRoot(t, "switch", "1"); code != ExitOK {
+				t.Fatalf("setup switch = %d (%s)", code, top)
+			}
+			seedUsage(t, "u-1", 0)
+			seedUsage(t, "u-2", 80)
+			clearCooldown(t)
+
+			if code, _, errOut, top := runRoot(t, tc.argv...); code != ExitOK {
+				t.Fatalf("exit = %d (%s / %s), want 0", code, errOut, top)
+			}
+			if got := liveUUIDOf(t); got != "u-2" {
+				t.Fatalf("live account = %q, want u-2", got)
+			}
+			mark, held := departuresOnDisk(t)["u-1"]
+			if held != tc.marked {
+				t.Fatalf("u-1 marked = %v (%v), want %v", held, mark, tc.marked)
+			}
+			if held && mark["closing"] != "five_hour" {
+				t.Errorf("mark = %v, want u-1 left on its empty five-hour window", mark)
+			}
+		})
+	}
+}
+
 // The engine must obey the strategy it was given, not just the default.
 func TestSwitchHonoursTheNamedStrategy(t *testing.T) {
 	isolate(t)
