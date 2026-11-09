@@ -550,6 +550,39 @@ func TestADearerSeatThatCannotCarryWaitsForTheLiveReading(t *testing.T) {
 	want(t, p, ActionSwitch, ReasonBetterTarget, "p-seat")
 }
 
+// A wait says a move follows the reading, and is judged on the state that
+// reading makes. The live Max is roomy by its level and projected out two
+// minutes ago. The primary seat P is roomy by its levels too, but it was left
+// an hour ago, ten minutes after its reading, and the work spent its ten
+// five-hour points and more in that time: its runway ends now. Against the
+// Max's stale projection P would bridge it by the cooldown; once the Max reads
+// at its limit its stop is now, no bridge outlasts it, and P is no last resort
+// either -- the work empties it before the next look. No move follows, so the
+// hold is "nothing can serve", blocked, and not a wait.
+func TestAWaitIsNotClaimedOnABridgeTheReadingEnds(t *testing.T) {
+	live := pausedMax("a-live", 96, true)
+	seat := credit("p-seat", &usage.Snapshot{
+		FiveHour: win(90, 3*time.Hour),
+		ExtraUsage: usage.ExtraUsageFor(usage.ExtraUsageInput{
+			State: usage.ExtraUsageEnabled, Currency: "USD", MonthlyLimit: pf(10000), UsedCredits: pf(5000), Utilization: pf(50),
+		}),
+	})
+	seat.Primary = true
+	seat.FetchedAt, seat.NextPollAt = now.Add(-70*time.Minute), now.Add(10*time.Minute)
+
+	p := Decide([]Candidate{live, seat}, hoverOpts(), Config{}, leftAt("p-seat", usage.WindowFiveHour), "a-live")
+	l, _ := find(p.Result, "a-live")
+	s, _ := find(p.Result, "p-seat")
+	if l.limit != liveOut || !l.roomyByLevel() || !s.roomyByLevel() || s.Carries || !s.HasRunway || s.RunsOutAt.After(now) {
+		t.Fatalf("live at limit %d, roomy %v; seat roomy %v, carries %v, runway %v ending %s: the case is a roomy seat whose runway ends now",
+			l.limit, l.roomyByLevel(), s.roomyByLevel(), s.Carries, s.HasRunway, s.RunsOutAt.Sub(now))
+	}
+	if _, ok := bridge(p.Result, l, HoverCooldown); !ok {
+		t.Fatalf("the seat does not bridge the live account's projection; the case is a bridge the reading ends")
+	}
+	want(t, p, ActionBlocked, ReasonNothingCanServe, "")
+}
+
 // A reading wait retries at the live account's next reading, or at a rollover
 // that comes before it. The live Max's poll is held off by a 429 for half an
 // hour; the other account, on its last point, has its five-hour window back in
