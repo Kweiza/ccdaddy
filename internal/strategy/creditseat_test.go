@@ -41,13 +41,13 @@ func seatOpts() Options {
 //
 // It used to return early for such a seat, on the ground that a seat metered in
 // credits carries no plan windows. The cost was a Thresholds with no PerWindow,
-// and bindingWindows reads exactly that map to decide whether an unknown scope
+// and admittedWindows reads exactly that map to decide whether an unknown scope
 // was opted into -- so every opt-in the user typed was dropped for this one
 // account.
 //
 // The assertion is SET EQUALITY rather than one threshold, because the failure
 // it guards is a window going MISSING. It also catches a future derived value
-// that is not strictly positive, since bindingWindows reads a non-positive entry
+// that is not strictly positive, since admittedWindows reads a non-positive entry
 // as "not opted in" and would drop the window on that route instead.
 func TestHoverDerivesATableForAPrimaryCreditSeatToo(t *testing.T) {
 	week := 7 * 24 * time.Hour
@@ -60,7 +60,7 @@ func TestHoverDerivesATableForAPrimaryCreditSeatToo(t *testing.T) {
 	names := func(t *testing.T, tbl Thresholds) map[usage.WindowName]bool {
 		t.Helper()
 		out := map[usage.WindowName]bool{}
-		for _, w := range bindingWindows(seat.Usage, "", tbl) {
+		for _, w := range admittedWindows(seat.Usage, "", tbl) {
 			out[w.Name] = true
 		}
 		return out

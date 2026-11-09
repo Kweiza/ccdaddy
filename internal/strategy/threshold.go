@@ -20,7 +20,28 @@ type Thresholds struct {
 	// meter different things: Default is a share of a plan window, this is a
 	// share of a credit balance.
 	Credit float64
+	// ModelCaps is whether a window that caps one model family binds. The zero
+	// value is that it does, which is every table a user's configuration builds.
+	ModelCaps ModelCaps
 }
+
+// ModelCaps is whether a window that caps ONE model family -- a fixed per-model
+// window, or a weekly_scoped entry under the model scope (capsOneModelFamily) --
+// binds an account measured on a table.
+type ModelCaps uint8
+
+const (
+	// ModelCapsBind: such a window binds like any other. It is the configured
+	// strategies' rule, the one bindingWindows has always stated: counting a
+	// window that does not bind costs one conservative switch, and a threshold a
+	// user typed is where they said to stop, whatever the window caps.
+	ModelCapsBind ModelCaps = iota
+	// ModelCapsDodged: such a window does not bind, because a session stopped
+	// on one model family goes on with another -- unless nothing else on the
+	// account could be read, when it is all anyone knows. It is hover's rule
+	// (D5): one line, and only for limits that stop the session.
+	ModelCapsDodged
+)
 
 // For is the threshold for one window: its own entry when it has one, Default
 // when it does not.

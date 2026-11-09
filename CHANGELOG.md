@@ -83,6 +83,14 @@ quota, which can now expire unspent.
   after them and ahead of accounts nobody could read, accounts held out, and
   accounts at a limit. It is handed off at 95% of its balance, hover's credit
   threshold, because credits do not come back.
+- **Under hover, a cap on one model family is left out of everything that
+  decides a limit.** A Fable or Opus week past 99% used to become the
+  account's binding window, so the daemon measured the session's rate on a
+  window nothing was spending against, read it as zero, and projected the
+  account as if it were idle. The rate, the poll cadence, the projection, and
+  the weekly reset the order sorts on now come from the windows that can stop
+  the session. A warm-up still refuses an account whose turn could be billed
+  to credits on such a cap.
 - **Under hover, a live account at a limit with nowhere better to go is
   reported as blocked** until the soonest reset, instead of "already on the
   best account", whichever account the order puts first. `ccdad auto --once`

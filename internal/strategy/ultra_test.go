@@ -64,7 +64,7 @@ func TestAMeasuredBurnSeesWhatTheWeekAverageCannot(t *testing.T) {
 	live.BurnPerMin, live.HasBurn, live.BurnWindow = 1.0, true, usage.WindowSevenDay
 	o := hoverPreemptOpts()
 	th := o.thresholdsFor(live)
-	if w := projectedExhaustion(o.limitWindows(live.Usage, th), o.Now, 3*time.Minute); w != "" {
+	if w := projectedExhaustion(bindingWindows(live.Usage, o.Model, th), o.Now, 3*time.Minute); w != "" {
 		t.Fatalf("the average already saw %s, so this fixture proves nothing about the rate", w)
 	}
 	if got := o.runsOutWithin(live, 3*time.Minute); got != usage.WindowSevenDay {
@@ -81,7 +81,7 @@ func TestAMeasuredBurnIsReadOnlyOnItsOwnWindow(t *testing.T) {
 	c := polled(sub("a", &usage.Snapshot{FiveHour: win(10, time.Hour), SevenDay: win(97, 31*time.Hour)}), 180*time.Second)
 	c.BurnPerMin, c.HasBurn, c.BurnWindow = 5.4, true, usage.WindowFiveHour
 	o := hoverPreemptOpts()
-	if measuredExhaustion(c, o.limitWindows(c.Usage, o.thresholdsFor(c)), o.Now, 3*time.Minute) != "" {
+	if measuredExhaustion(c, bindingWindows(c.Usage, o.Model, o.thresholdsFor(c)), o.Now, 3*time.Minute) != "" {
 		t.Error("read a five-hour rate against the week it was not measured on")
 	}
 }
@@ -92,7 +92,7 @@ func TestAnUnnamedBurnProjectsNothing(t *testing.T) {
 	c := weekOnly("a", 99, 31*time.Hour)
 	c.BurnPerMin, c.HasBurn = 50, true
 	o := hoverPreemptOpts()
-	if measuredExhaustion(c, o.limitWindows(c.Usage, o.thresholdsFor(c)), o.Now, time.Hour) != "" {
+	if measuredExhaustion(c, bindingWindows(c.Usage, o.Model, o.thresholdsFor(c)), o.Now, time.Hour) != "" {
 		t.Error("projected from a rate nobody can attribute to a window")
 	}
 }
