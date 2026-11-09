@@ -253,8 +253,8 @@ func newConfigListCmd() *cobra.Command {
 			if cfg.Hover {
 				fmt.Fprint(cmd.ErrOrStderr(),
 					"note: hover is on, so the keys marked 'overriding' below are not being read; "+
-						"their values are derived per account and per window. "+
-						"Run 'ccdad status' to see the numbers in force.\n")
+						"hover orders the accounts itself and holds every window to its hand-off line. "+
+						"Run 'ccdad status' to see the order in force.\n")
 			}
 
 			type row struct {

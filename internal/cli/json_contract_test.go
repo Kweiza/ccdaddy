@@ -687,8 +687,8 @@ func decodeContractStream(t *testing.T, stdout string) []map[string]any {
 		if err := json.Unmarshal([]byte(line), &ev); err != nil {
 			t.Fatalf("line %d does not parse on its own (%v): %q", i+1, err, line)
 		}
-		if ev["schemaVersion"] != float64(1) {
-			t.Fatalf("line %d: schemaVersion = %v, want the number 1: %q", i+1, ev["schemaVersion"], line)
+		if ev["schemaVersion"] != float64(autoSchemaVersion) {
+			t.Fatalf("line %d: schemaVersion = %v, want the number %d: %q", i+1, ev["schemaVersion"], autoSchemaVersion, line)
 		}
 		events = append(events, ev)
 	}

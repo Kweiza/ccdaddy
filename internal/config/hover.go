@@ -5,12 +5,11 @@ import "strings"
 // Effective is the configuration the engine actually runs on.
 //
 // It is the parsed file everywhere except under hover, where one key changes:
-// probe_unknown is forced on. Hover derives every threshold from how far
-// through its own window each account is, and a window that has never been
-// spent against reports no reset -- so it has no share elapsed, falls back to a
-// fixed 80, and stays there. Only a turn spent against that window puts a reset
-// on it, so probe_unknown off under hover is the one state hover cannot climb
-// out of by itself.
+// probe_unknown is forced on. Hover orders accounts by when their week resets,
+// and a window that has never been spent against reports no reset -- so it
+// cannot be placed on that axis, sorts last among its kind, and stays there.
+// Only a turn spent against that window puts a reset on it, so probe_unknown
+// off under hover is the one state hover cannot climb out of by itself.
 //
 // It is deliberately NOT applied by Parse or by Document.Config. `ccdad config
 // list` reads those, and a listing that printed `probe_unknown true` beside the
@@ -44,15 +43,12 @@ const KeyStrategy = keyStrategy
 // is the same failure as an accepted typo -- a setting that does nothing --
 // reached from the other side.
 var hoverOverrides = map[string]bool{
-	keyThreshold:          true,
-	keyHysteresisPct:      true,
-	keyHeadroomRatio:      true,
-	keyCooldown:           true,
-	keyRecoveryHysteresis: true,
-	keyStrategy:           true,
-	keyPreemptLead:        true,
-	keyProbeUnknown:       true,
-	keyCreditThreshold:    true,
+	keyThreshold:       true,
+	keyCooldown:        true,
+	keyStrategy:        true,
+	keyPreemptLead:     true,
+	keyProbeUnknown:    true,
+	keyCreditThreshold: true,
 }
 
 // hoverHonours is the other half, and the reason this is two tables rather than
@@ -88,12 +84,23 @@ var hoverOverrides = map[string]bool{
 // question about a different provider out of a fact about Claude's quota.
 //
 // manual is here because the two modes answer different questions and compose
-// rather than conflict. Hover decides WHAT THE NUMBERS ARE; manual decides
-// WHETHER THE ENGINE ACTS ON THEM. A hover that derived manual would be
+// rather than conflict. Hover decides WHAT THE ORDER IS; manual decides
+// WHETHER THE ENGINE ACTS ON IT. A hover that derived manual would be
 // deciding, out of a fact about quota, that the user did not mean the mode they
-// switched on -- and the derived thresholds are the very thing a manual-mode
-// user is watching, so the two are useful together rather than exclusive.
+// switched on -- and the order is the very thing a manual-mode user is
+// watching, so the two are useful together rather than exclusive.
+//
+// The three margins are here because hover stopped deriving them when it
+// stopped pacing. recovery_hysteresis is the margin between two weekly-only
+// seats -- how much sooner one week must end before the session moves to it --
+// and a user who wants an hour rather than five minutes can say so.
+// hysteresis_pct and headroom_ratio are reached only in recovery mode, where
+// every account is past its last point and the stock figures mean what they
+// mean outside hover.
 var hoverHonours = map[string]bool{
+	keyHysteresisPct:               true,
+	keyHeadroomRatio:               true,
+	keyRecoveryHysteresis:          true,
 	keyMaxAutoSpend:                true,
 	keyHover:                       true,
 	keyManual:                      true,

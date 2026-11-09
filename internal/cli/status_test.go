@@ -1007,18 +1007,17 @@ func TestNeitherAWeeklyCapNorATighterWindowHidesTheOther(t *testing.T) {
 	}
 }
 
-// Under hover the engine ranks on thresholds it derived from each window's own
-// elapsed share and the size of the pool, and the dashboard has to report those.
-// A row measured against the number still sitting in the config file has a slack
-// that is arithmetic the engine never did, and it can name a different binding
-// window as well, because the binding window is the one with the least slack and
-// slack moves with the threshold. Hover's whole claim is that an automatic mode
-// a user cannot audit is one they have to take on trust.
+// Under hover the engine measures every window against its own hand-off line,
+// and the dashboard has to report that one. A row measured against the number
+// still sitting in the config file has a slack that is arithmetic the engine
+// never did, and it can name a different binding window as well, because the
+// binding window is the one with the least slack and slack moves with the
+// threshold. An automatic mode a user cannot audit is one they have to take on
+// trust.
 func TestStatusReportsTheThresholdsHoverRankedOn(t *testing.T) {
 	isolate(t)
 	freezeClock(t, statusNow)
-	// 43% of a seven-day window gone, with two accounts to divide what is left
-	// between: 43 + 100/2 = 93, where the configured default is 80.
+	// The configured default is 80; hover holds the window to 99.
 	reset := statusNow.Add(time.Duration(0.57 * float64(7*24*time.Hour)))
 	// Added BEFORE the frozen clock, because the engine prunes a reading older
 	// than its account's AddedAt as one that belonged to a previous login at the
@@ -1041,11 +1040,11 @@ func TestStatusReportsTheThresholdsHoverRankedOn(t *testing.T) {
 	if !ok {
 		t.Fatalf("no usage object in status --json:\n%s", out)
 	}
-	if got := u["windowThreshold"]; got != 93.0 {
-		t.Errorf("windowThreshold = %v, want the 93 hover derived rather than the configured 80", got)
+	if got := u["windowThreshold"]; got != strategy.HoverHandoffThreshold {
+		t.Errorf("windowThreshold = %v, want hover's %v rather than the configured 80", got, strategy.HoverHandoffThreshold)
 	}
-	if got := u["slack"]; got != -2.0 {
-		t.Errorf("slack = %v, want -2, which is 93 against 95%% used", got)
+	if got := u["slack"]; got != strategy.HoverHandoffThreshold-95 {
+		t.Errorf("slack = %v, want %v against 95%% used", got, strategy.HoverHandoffThreshold-95)
 	}
 }
 
@@ -1192,10 +1191,10 @@ func TestTheDashboardSaysSoWhenHoversThresholdsCannotBeRead(t *testing.T) {
 
 // A row the dashboard renders and the engine discarded. `status` reports every
 // account from the cache; the engine prunes a reading older than its account's
-// AddedAt, so with only such readings it makes no pass and there is no derived
+// AddedAt, so with only such readings it makes no pass and there is no hover
 // table at all. What the row must NOT be measured against is `threshold`, which
 // is the first key hover stops reading -- so the configured 60 here is the wrong
-// answer and hover's own 80 for an account it never saw is the right one.
+// answer and hover's own line, for an account it never saw, is the right one.
 func TestARowTheHoverPassNeverSawIsMeasuredAsHoverWouldMeasureIt(t *testing.T) {
 	isolate(t)
 	freezeClock(t, statusNow)
@@ -1217,13 +1216,11 @@ func TestARowTheHoverPassNeverSawIsMeasuredAsHoverWouldMeasureIt(t *testing.T) {
 	if !ok {
 		t.Fatalf("no usage object:\n%s", out)
 	}
-	// 150 is the answer hover gives for an account its pass never saw: the
-	// assumed elapsed share of a window it cannot date, plus a pool share, and
-	// with no pool the share is the whole 100. The DISCRIMINATOR is that it is
-	// not 60 -- hover ignores `threshold`, so the configured number is one
-	// nothing would have used.
-	if got := u["windowThreshold"]; got != 150.0 {
-		t.Errorf("windowThreshold = %v, want 150 -- hover ignores `threshold`, so the configured 60 is a number nothing would have used", got)
+	// The DISCRIMINATOR is that it is not 60 -- hover ignores `threshold`, so
+	// the configured number is one nothing would have used.
+	if got := u["windowThreshold"]; got != strategy.HoverHandoffThreshold {
+		t.Errorf("windowThreshold = %v, want %v -- hover ignores `threshold`, so the configured 60 is a number nothing would have used",
+			got, strategy.HoverHandoffThreshold)
 	}
 }
 
@@ -1387,8 +1384,8 @@ func TestStatusSaysWhenHoverIsOn(t *testing.T) {
 	if !strings.Contains(on, "Strategy: hover") {
 		t.Errorf("the dashboard does not say hover is on:\n%s", on)
 	}
-	if !strings.Contains(on, "used/threshold") {
-		t.Errorf("the dashboard names hover without explaining its quota cells:\n%s", on)
+	if !strings.Contains(on, view.HoverNote) {
+		t.Errorf("the dashboard names hover without saying what it decides:\n%s", on)
 	}
 }
 

@@ -440,20 +440,6 @@ func (r Row) Cells(c Columns, now time.Time) []string {
 	return out
 }
 
-// HoverCells is Cells with each quota cell expanded to used/threshold. The
-// reset cells are unchanged. It lets unified status carry the extra figure the
-// former hover-specific report existed to show.
-func (r Row) HoverCells(c Columns, now time.Time) []string {
-	out := make([]string, 0, len(c.Windows)+len(c.Resets))
-	for _, w := range c.Windows {
-		out = append(out, r.hoverWindowCell(w.Name))
-	}
-	for _, reset := range c.Resets {
-		out = append(out, r.ResetCell(reset, now))
-	}
-	return out
-}
-
 // ResetCell is one countdown, for the group a column points into.
 func (r Row) ResetCell(c ResetColumn, now time.Time) string {
 	if !r.HasEntry {

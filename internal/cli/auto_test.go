@@ -541,3 +541,73 @@ func TestAutoStreamRendersEveryTimeInOneZone(t *testing.T) {
 		}
 	}
 }
+
+// evaluatedEvent is the one `evaluated` event the emitter writes for plan.
+func evaluatedEvent(t *testing.T, plan strategy.Plan) map[string]any {
+	t.Helper()
+	var buf bytes.Buffer
+	em := &autoEmitter{json: true, enc: json.NewEncoder(&buf), now: time.Now}
+	em.evaluated(switcher.Evaluation{Decided: true, Plan: plan}, "switch", plan.Reason.String())
+	var ev map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &ev); err != nil {
+		t.Fatalf("the event does not parse: %v\n%s", err, buf.String())
+	}
+	return ev
+}
+
+// Under hover the order is the decision, so each row says where hover filed the
+// account and the fact behind it, and the explanation names the window a limit
+// hand-off left the live account on. The pace rotation's own fields went with
+// it, which is why the schema moved.
+func TestTheAutoStreamCarriesHoversOrder(t *testing.T) {
+	var hover strategy.HoverPlan
+	plan := strategy.Plan{
+		Action:    strategy.ActionSwitch,
+		Reason:    strategy.ReasonProjectedExhaustion,
+		Hover:     &hover,
+		Departure: strategy.Departure{From: "uuid-live", Closing: "five_hour"},
+		Result: strategy.Result{Order: []strategy.Ranked{
+			{UUID: "uuid-ultra", Headroom: strategy.Headroom{Known: true, MinAnyModelPct: 60, MinAnyModelWindow: "seven_day"}},
+			{UUID: "uuid-held", ShortWindow: "five_hour", HeldOut: "five_hour",
+				Headroom: strategy.Headroom{Known: true, MinAnyModelPct: 15, MinAnyModelWindow: "five_hour"}},
+			{UUID: "uuid-live", ShortWindow: "five_hour", Closing: "five_hour",
+				Headroom: strategy.Headroom{Known: true, MinAnyModelPct: 9, MinAnyModelWindow: "five_hour"}},
+		}},
+	}
+	ev := evaluatedEvent(t, plan)
+	if ev["schemaVersion"] != float64(2) {
+		t.Errorf("schemaVersion = %v, want 2: fields were removed", ev["schemaVersion"])
+	}
+	if got, _ := ev["explanation"].(string); !strings.Contains(got, "leaving five_hour at its limit") {
+		t.Errorf("explanation = %q, want the window the live account was left on", got)
+	}
+	order, _ := ev["order"].([]any)
+	if len(order) != 3 {
+		t.Fatalf("order = %v, want three rows", ev["order"])
+	}
+	for i, want := range []map[string]any{
+		{"rung": "weekly-only"},
+		{"rung": "held-out", "shortWindow": "five_hour", "heldOut": "five_hour"},
+		{"rung": "at-limit", "shortWindow": "five_hour", "closing": "five_hour"},
+	} {
+		row, _ := order[i].(map[string]any)
+		for k, v := range want {
+			if row[k] != v {
+				t.Errorf("order[%d][%q] = %v, want %v (row %v)", i, k, row[k], v, row)
+			}
+		}
+		for _, gone := range []string{"hoverShare", "strandedPct", "strandedWindow"} {
+			if _, ok := row[gone]; ok {
+				t.Errorf("order[%d] still carries %q", i, gone)
+			}
+		}
+	}
+
+	// The rung is hover's outer key, and beside an order some other strategy
+	// made it would explain an order that was not made.
+	plan.Hover = nil
+	order, _ = evaluatedEvent(t, plan)["order"].([]any)
+	if row, _ := order[0].(map[string]any); row["rung"] != nil {
+		t.Errorf("rung = %v on an order hover did not make", row["rung"])
+	}
+}

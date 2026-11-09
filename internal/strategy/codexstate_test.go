@@ -14,7 +14,7 @@ import (
 func TestAClaudeSwitchLeavesTheCodexStampAlone(t *testing.T) {
 	st := NewState()
 	st.RecordCodexSwitch("cx-1", now.Add(-time.Hour))
-	st.RecordSwitch("cl-1", now)
+	st.RecordSwitch("cl-1", now, Departure{})
 
 	at, to := st.CodexLastSwitch()
 	if !at.Equal(now.Add(-time.Hour)) || to != "cx-1" {
@@ -24,7 +24,7 @@ func TestAClaudeSwitchLeavesTheCodexStampAlone(t *testing.T) {
 
 func TestACodexSwitchLeavesTheClaudeStampAlone(t *testing.T) {
 	st := NewState()
-	st.RecordSwitch("cl-1", now.Add(-time.Hour))
+	st.RecordSwitch("cl-1", now.Add(-time.Hour), Departure{})
 	st.RecordCodexSwitch("cx-1", now)
 
 	at, to := st.LastSwitch()
@@ -38,7 +38,7 @@ func TestACodexSwitchLeavesTheClaudeStampAlone(t *testing.T) {
 // that name rather than growing a second cooldown gate.
 func TestForProviderPresentsTheCodexPairAsTheLastSwitch(t *testing.T) {
 	st := NewState()
-	st.RecordSwitch("cl-1", now.Add(-time.Hour))
+	st.RecordSwitch("cl-1", now.Add(-time.Hour), Departure{})
 	st.RecordCodexSwitch("cx-1", now)
 
 	at, to := st.ForProvider(provider.Codex).LastSwitch()
@@ -71,7 +71,7 @@ func TestTheCodexCooldownHoldsThroughForProvider(t *testing.T) {
 // lose: a Claude stamp must not hold the Codex lane off a move.
 func TestAClaudeStampDoesNotHoldTheCodexLane(t *testing.T) {
 	st := NewState()
-	st.RecordSwitch("b", now)
+	st.RecordSwitch("b", now, Departure{})
 
 	p := Decide([]Candidate{hr("a", 20, time.Hour), hr("b", 50, time.Hour)},
 		at(time.Minute), Config{}, st.ForProvider(provider.Codex), "a")

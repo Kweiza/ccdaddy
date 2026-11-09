@@ -14,12 +14,10 @@ const unreadable = view.Unreadable
 // cellRole is one window cell's colour, and it is the whole of what replaced
 // the gauge.
 //
-// EMPTY IS ANSWERED FIRST, ahead of the band, and that order is load-bearing:
-// under hover a threshold is an unclamped pace target, so a window far enough
-// through its own cycle with nothing left in it can be measured against a
-// figure above 100. The engine now clamps that at its source, and this asks
-// anyway -- a cell must not depend on an invariant held one package away to
-// avoid painting a spent window the colour of a healthy one.
+// The band is read off the window's own utilization and never off a threshold:
+// a threshold is a line some policy chose, and the colour of a window with
+// nothing left in it must not depend on which policy is running or on an
+// invariant held one package away.
 func cellRole(r view.Row, n usage.WindowName) theme.Role {
 	pct, state := r.WindowPct(n)
 	switch state {

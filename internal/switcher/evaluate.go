@@ -315,6 +315,12 @@ func Explain(plan strategy.Plan) string {
 			msg += " (" + plan.Credit.DisabledReason + ")"
 		}
 	}
+	// The window is the half of a limit hand-off the reason cannot carry: the
+	// same sentence covers a five-hour window and a week, and only the name says
+	// which one the account will be held out on until it rolls.
+	if plan.Departure.Closing != "" {
+		msg += fmt.Sprintf("; leaving %s at its limit", plan.Departure.Closing)
+	}
 	if plan.HasRetryAt {
 		msg += fmt.Sprintf("; try again after %s", plan.RetryAt.Format(time.Kitchen))
 	}

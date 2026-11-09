@@ -104,32 +104,3 @@ func TestRoomAndEmptinessReadTheSameWindow(t *testing.T) {
 		t.Errorf("an account with no room carried a minute (carries=%v known=%v)", carries, known)
 	}
 }
-
-// The licence floor is priced in points of WORK once there is a measurement,
-// and that is a nineteen-fold correction rather than a tweak. 100 x
-// HoverCooldown / length is how far the window's own clock gets in two minutes
-// -- 0.667 points of a five-hour window -- while the session measured on this
-// fleet spends 5.4 points a minute, which is 10.8 in the same two minutes. Under
-// the clock figure an account with five points left could "absorb a cooldown of
-// work"; what it could absorb was fifty-five seconds.
-func TestTheLicenceFloorIsPricedInWorkNotInClock(t *testing.T) {
-	s := snap(win(95, 2*time.Hour), win(10, 72*time.Hour))
-	th := opts().Thresholds()
-
-	if !absorbsACooldown(s, "", th, sessionBurn{}) {
-		t.Error("with no measurement the floor must read exactly as it did: five points clears 0.667")
-	}
-	if absorbsACooldown(s, "", th, sessionBurn{perMin: 5.4, has: true}) {
-		t.Error("five points cleared a floor of 10.8 points of measured work")
-	}
-}
-
-// A measured idle fleet spends nothing, so nothing is short of a cooldown of it
-// -- and the floor must not then fall back to the clock figure and refuse an
-// account the measurement just cleared.
-func TestAnIdleFleetClearsTheLicenceFloorEverywhere(t *testing.T) {
-	s := snap(win(99, 2*time.Hour), win(10, 72*time.Hour))
-	if !absorbsACooldown(s, "", opts().Thresholds(), sessionBurn{has: true}) {
-		t.Error("a measured zero rate refused a licence; nothing is being spent")
-	}
-}

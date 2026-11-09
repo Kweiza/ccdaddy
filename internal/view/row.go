@@ -64,8 +64,9 @@ type Row struct {
 	// field, so the bundle a cell reads and the bundle the row was ranked on
 	// are one object by construction rather than two calls that agree until the
 	// day one of them moves. Under hover that matters twice over: the table is
-	// derived per account and per window, so a second resolution could hand a
-	// cell a number no part of this row was measured with.
+	// hover's own, built per account from the engine's pass, so a second
+	// resolution could hand a cell a number no part of this row was measured
+	// with.
 	Thresholds strategy.Thresholds
 	Pace       map[usage.WindowName]usage.Pace
 	Engine     daemon.AccountStatus

@@ -26,7 +26,7 @@ import (
 func clearCooldown(t *testing.T) {
 	t.Helper()
 	if err := strategy.WithState(time.Second, func(st *strategy.State) error {
-		st.RecordSwitch("", time.Time{})
+		st.RecordSwitch("", time.Time{}, strategy.Departure{})
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -703,7 +703,7 @@ func TestATargetlessSwitchWithNoViableTargetIsBlocked(t *testing.T) {
 	seedUsage(t, "u-1", 10)
 	seedUsage(t, "u-2", 80)
 	if err := strategy.WithState(time.Second, func(st *strategy.State) error {
-		st.RecordSwitch("", time.Time{})
+		st.RecordSwitch("", time.Time{}, strategy.Departure{})
 		st.Quarantine("u-1", time.Now(), time.Hour, "dead refresh token")
 		st.Quarantine("u-2", time.Now(), time.Hour, "dead refresh token")
 		return nil

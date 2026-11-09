@@ -13,14 +13,15 @@ func weekOnly(uuid string, pct float64, resetsIn time.Duration) Candidate {
 	return polled(sub(uuid, &usage.Snapshot{SevenDay: win(pct, resetsIn)}), 180*time.Second)
 }
 
-// The case that stops a session: the live seat is a day from its reset, so hover
-// reads it as generously on pace, and the only other seat is ahead of its own
-// week. Slack prefers the live one right up to the wall.
-func TestALastWeeklyPointHandsOffToASeatAheadOfItsPace(t *testing.T) {
+// The case that stops a session: the live seat's week ends first, so the order
+// would keep it first right up to the wall. Its last point is what moves the
+// session, and the reason says so.
+func TestALastWeeklyPointHandsOffToAWeeklyOnlySeatWithRoom(t *testing.T) {
 	pool := []Candidate{weekOnly("a-live", 99, 31*time.Hour), weekOnly("b-other", 80, 120*time.Hour)}
 	p := Decide(pool, hoverPreemptOpts(), Config{}, NewState(), "a-live")
-	if p.Action != ActionSwitch || p.Target.UUID != "b-other" {
-		t.Fatalf("at 99%% of its week: %s (%s) to %q, want a switch to b-other", p.Action, p.Reason, p.Target.UUID)
+	want(t, p, ActionSwitch, ReasonLastPoint, "b-other")
+	if p.Departure != (Departure{From: "a-live", Closing: usage.WindowSevenDay}) {
+		t.Errorf("Departure = %+v, want a-live left at its week", p.Departure)
 	}
 }
 
@@ -34,8 +35,8 @@ func TestALastWeeklyPointDoesNotTakeTheSessionBack(t *testing.T) {
 	}
 }
 
-// Two points left is still pace's to judge. This is the line that keeps the rule
-// from buying its one point of safety with quota the other purpose wants spent.
+// Two points left is not a limit. This is the line that keeps the rule from
+// buying its one point of safety with quota the session could still spend.
 func TestTwoPointsLeftIsNotALastPoint(t *testing.T) {
 	pool := []Candidate{weekOnly("a-live", 98, 31*time.Hour), weekOnly("b-other", 80, 120*time.Hour)}
 	p := Decide(pool, hoverPreemptOpts(), Config{}, NewState(), "a-live")
@@ -45,7 +46,7 @@ func TestTwoPointsLeftIsNotALastPoint(t *testing.T) {
 }
 
 // A threshold a user typed is where they said to stop, and it is theirs to set to
-// 100. The rule belongs to hover's pace target, which nobody typed.
+// 100. The rule belongs to hover's hand-off line, which nobody typed.
 func TestALastWeeklyPointIsHoversRuleAlone(t *testing.T) {
 	r := Rank([]Candidate{weekOnly("a", 99, 31*time.Hour)}, opts())
 	if r.Order[0].LastPoint {
@@ -57,34 +58,20 @@ func TestALastWeeklyPointIsHoversRuleAlone(t *testing.T) {
 	}
 }
 
-// The recovery order is the other ordering hover can land in: every seat past its
-// pace. It sorts on who comes back soonest, so without its own tier the seat on its
-// last point would lead for having the nearer reset.
-func TestALastWeeklyPointGoesBehindARoomierSeatInTheRecoveryOrderToo(t *testing.T) {
-	pool := []Candidate{weekOnly("a-live", 99, 120*time.Hour), weekOnly("b-other", 90, 130*time.Hour)}
-	r := Rank(pool, hoverPreemptOpts())
-	if r.Mode != ModeRecovery {
-		t.Fatalf("mode = %s; the fixture needs every seat past its pace", r.Mode)
-	}
-	if r.Order[0].UUID != "b-other" {
-		t.Errorf("order = %v, want the seat with room first", order(r))
-	}
-}
-
 // A week averaged over quiet days says hours; the rate just measured says minutes.
 func TestAMeasuredBurnSeesWhatTheWeekAverageCannot(t *testing.T) {
 	live := weekOnly("a-live", 97, 31*time.Hour)
 	live.BurnPerMin, live.HasBurn, live.BurnWindow = 1.0, true, usage.WindowSevenDay
 	o := hoverPreemptOpts()
 	th := o.thresholdsFor(live)
-	if projectedExhaustion(live.Usage, o.Model, o.Now, 3*time.Minute, th) {
-		t.Fatal("the average already saw it, so this fixture proves nothing about the rate")
+	if w := projectedExhaustion(live.Usage, o.Model, o.Now, 3*time.Minute, th); w != "" {
+		t.Fatalf("the average already saw %s, so this fixture proves nothing about the rate", w)
 	}
-	if !runsOutWithin(live, o, 3*time.Minute) {
-		t.Error("three points at one a minute did not project inside three minutes")
+	if got := runsOutWithin(live, o, 3*time.Minute); got != usage.WindowSevenDay {
+		t.Errorf("three points at one a minute projected %q inside three minutes, want seven_day", got)
 	}
-	if runsOutWithin(live, o, 2*time.Minute) {
-		t.Error("three points at one a minute projected inside two minutes")
+	if got := runsOutWithin(live, o, 2*time.Minute); got != "" {
+		t.Errorf("three points at one a minute projected %q inside two minutes", got)
 	}
 }
 
@@ -94,7 +81,7 @@ func TestAMeasuredBurnIsReadOnlyOnItsOwnWindow(t *testing.T) {
 	c := polled(sub("a", &usage.Snapshot{FiveHour: win(10, time.Hour), SevenDay: win(97, 31*time.Hour)}), 180*time.Second)
 	c.BurnPerMin, c.HasBurn, c.BurnWindow = 5.4, true, usage.WindowFiveHour
 	o := hoverPreemptOpts()
-	if measuredExhaustion(c, o.Model, 3*time.Minute, o.thresholdsFor(c)) {
+	if measuredExhaustion(c, o.Model, 3*time.Minute, o.thresholdsFor(c)) != "" {
 		t.Error("read a five-hour rate against the week it was not measured on")
 	}
 }
@@ -105,7 +92,7 @@ func TestAnUnnamedBurnProjectsNothing(t *testing.T) {
 	c := weekOnly("a", 99, 31*time.Hour)
 	c.BurnPerMin, c.HasBurn = 50, true
 	o := hoverPreemptOpts()
-	if measuredExhaustion(c, o.Model, time.Hour, o.thresholdsFor(c)) {
+	if measuredExhaustion(c, o.Model, time.Hour, o.thresholdsFor(c)) != "" {
 		t.Error("projected from a rate nobody can attribute to a window")
 	}
 }
@@ -136,22 +123,6 @@ func TestASessionRateAppliesOnlyToWindowsOfItsOwnLength(t *testing.T) {
 	}
 	if perMin, ok := (sessionBurn{perMin: 2, has: true}).onWindow(usage.WindowFiveHour); !ok || perMin != 2 {
 		t.Errorf("an unnamed rate: %v %v", perMin, ok)
-	}
-}
-
-// The licence floor is the other reader of the session's rate. Five points a
-// minute of a five-hour window must not read as a week being emptied in ten
-// minutes, or that week's perishable quota loses its widening.
-func TestTheLicenceFloorDoesNotPriceAWeekInFiveHourPoints(t *testing.T) {
-	s := &usage.Snapshot{SevenDay: win(95, 31*time.Hour)}
-	th := opts().Thresholds()
-	five := sessionBurn{perMin: 5.4, has: true, window: usage.WindowFiveHour}
-	if !absorbsACooldown(s, "", th, five) {
-		t.Error("five points of a week refused on a five-hour rate")
-	}
-	week := sessionBurn{perMin: 5.4, has: true, window: usage.WindowSevenDay}
-	if absorbsACooldown(s, "", th, week) {
-		t.Error("a weekly rate that really would empty the week was waved through")
 	}
 }
 

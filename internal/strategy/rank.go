@@ -89,7 +89,7 @@ func ParseStrategy(name string) (Strategy, bool) {
 	return StrategyHeadroom, false
 }
 
-// Mode is the situation the ranking actually found itself in — one of the three
+// Mode is the situation the ranking actually found itself in — one of the four
 // below. It is reported so `ccdad status` can say WHY an order looks the way it
 // does.
 type Mode uint8
@@ -104,6 +104,11 @@ const (
 	ModeRecovery
 	// ModeConsumeFirst: the user asked for perishable quota to be spent first.
 	ModeConsumeFirst
+	// ModeHover: hover's order -- five-hour accounts first, then the soonest
+	// weekly reset; see tier.go. Appended LAST, for the reason Reason's late
+	// values are: the numbers are named in a report, and renumbering them is a
+	// diff nobody can review.
+	ModeHover
 )
 
 func (m Mode) String() string {
@@ -114,6 +119,8 @@ func (m Mode) String() string {
 		return "recovery"
 	case ModeConsumeFirst:
 		return "consume-first"
+	case ModeHover:
+		return "hover"
 	}
 	return "unknown"
 }
@@ -229,15 +236,20 @@ type Options struct {
 	// name ccdad cannot place belongs at the CLI, where there is a user to tell.
 	// Reaching the engine, an unplaceable name simply narrows nothing.
 	Model string
-	// Hover replaces every threshold in this struct with one derived per account
-	// and per window. It is a mode rather than a knob, so it is a plain bool with
-	// no default to fall back to.
+	// Hover replaces the ranking with hover's order and every threshold in this
+	// struct with the hand-off line. It is a mode rather than a knob, so it is a
+	// plain bool with no default to fall back to.
 	Hover bool
 	// hover is the pass Hover asked for, installed by withHover. It is
 	// unexported because it can only be built from the POOL -- a caller cannot
 	// set it, and one that could would be setting a table for accounts the
 	// ranking never saw.
 	hover *HoverPlan
+	// departures is every account the engine left at a limit, read off the
+	// state by Decide; departure.go says what a mark holds. Unexported for the
+	// reason hover is: a caller that reaches Rank directly has no state, so it
+	// sees no mark, exactly as it sees no hover pass it did not install.
+	departures departures
 	// MaxAutoSpend is the credit gate's ceiling, and it is here for ONE reason:
 	// the credit pool is ordered by armed room, and room cannot be computed
 	// without it.
@@ -276,9 +288,24 @@ type Ranked struct {
 	UUID     string
 	Kind     identity.Kind
 	Headroom Headroom
-	// LastPoint is whether hover is handing this account off because its week is
-	// down to the last point it can report; see lastWeeklyPoint.
+	// LastPoint is whether hover is handing this account off because a window
+	// a model choice cannot dodge is down to the last point it can report; see
+	// lastPoint.
 	LastPoint bool
+	// ShortWindow names the window shorter than a week this account carries,
+	// or "" when it carries none: the tier hover orders on, read off the
+	// reading's presence rather than its utilization. See shortWindowOf.
+	ShortWindow usage.WindowName
+	// Closing names the window this account is projected to run out of before
+	// its next reading lands, plus the lead, or "" when none is -- including
+	// whenever pre-emption is off. It is the pre-emptive switch's own question,
+	// asked once here so the rule that leaves the live account and the walk
+	// that refuses a candidate read one answer; see closingWindow.
+	Closing usage.WindowName
+	// HeldOut names the window that holds this account out of hover's order --
+	// the one it was left at a limit on, which has not rolled since -- or ""
+	// when nothing holds it. Under hover only; see departure.go.
+	HeldOut usage.WindowName
 	// RecoversAt is when the binding window rolls over.
 	RecoversAt  time.Time
 	HasRecovery bool
@@ -292,23 +319,6 @@ type Ranked struct {
 	// key and is reported so `ccdad status` can explain that order rather than
 	// only obey it.
 	CreditRoom float64
-	// HoverShare is the share this account's thresholds were derived with, and
-	// Stranded the quota its rotation cannot reach before StrandedWindow
-	// resets. All three are zero when hover is off.
-	//
-	// REPORTING ONLY. No comparator reads them, and none may: the ordering
-	// already carries the figure, because Headroom.Threshold was derived WITH
-	// HoverShare and Headroom.Slack is measured against it. Reading them here
-	// as well would count the same licence twice.
-	//
-	// They are carried because the consumers that print the ranking never see
-	// the pass it came from -- `ccdad auto --json` renders a []Ranked and holds
-	// no HoverPlan -- and a table that printed a threshold whose second term is
-	// no longer 100/usable, without saying what that term was, would be
-	// arithmetic a reader cannot close.
-	HoverShare     float64
-	Stranded       float64
-	StrandedWindow usage.WindowName
 	// HasCreditRoom is whether there is any. False covers every refusal the
 	// gate would make — no ceiling configured, overage switched off, spend
 	// unreadable, the armed cap spent — so it is not a claim that the account
@@ -334,7 +344,8 @@ type Result struct {
 	// is in Order, ranked on the credit utilization that is its ordinary meter.
 	Credit []Ranked
 	// AllOverThreshold is true only when every MAIN-POOL candidate is KNOWN
-	// to be over threshold. An account that could not be read makes it false:
+	// to be over threshold -- under hover, past its last point; see
+	// pastItsLine. An account that could not be read makes it false:
 	// it is neither over nor under, and letting one expired token decide this
 	// is how cswap's engine came to park itself permanently. Last-resort credit
 	// accounts are excluded, or a registered credit account's permanently
@@ -365,19 +376,40 @@ func eligible(c Candidate) bool {
 // It is three-valued on purpose. An account that could not be read is neither
 // spent nor unspent, and folding that into a boolean is the bug that left cswap
 // parked on the account that reset last.
+//
 // The MinPct clause states "empty implies spent" STRUCTURALLY rather than
-// leaving it to arithmetic on a threshold constant. It used to be free: hover
-// clamped every threshold below 100, so a used-up window could only ever report
-// negative slack. With the clamp gone a window at 100% late in its own cycle is
-// measured against a pace target above 100 and reports POSITIVE slack -- which
-// would file an account with nothing in it in the roomy tier, and, because
-// allOver is built from this predicate, would make ModeRecovery unreachable for
-// the whole pool on the strength of one such account.
+// leaving it to arithmetic on a threshold. A threshold of exactly 100 is one a
+// user may set, and under it a window with nothing left reports a slack of
+// zero, not a negative one -- which would file an account with nothing in it
+// as unspent and, because allOver is built from this predicate, keep
+// ModeRecovery from the whole pool on the strength of that one account.
 func Spent(h Headroom) (spent, known bool) {
 	if !h.Known {
 		return false, false
 	}
 	return h.Slack < 0 || h.MinPct <= 0, true
+}
+
+// pastItsLine is whether an account is known to be past the line this pass holds
+// it to, which is what allOver asks of every account before the pass turns to
+// soonest recovery.
+//
+// On a configured table that line is the user's, and the answer is Spent. Under
+// hover it is the last point on a window no model choice can dodge -- RoomOf's
+// window, OutOfQuota's own reading -- and not Spent. Hover holds every window to
+// one line, a model-scoped cap's included, so Spent there would call an account
+// done because its Fable week is gone while it holds half a week for every other
+// model; a fleet in that state would be ranked on when its Fable caps come back
+// instead of on hover's order. A blown cap on one model family is not a limit:
+// TestABlownModelCapEverywhereDoesNotPutHoverIntoRecovery.
+func (o Options) pastItsLine(h Headroom) (past, known bool) {
+	if o.hover == nil {
+		return Spent(h)
+	}
+	if !h.Known {
+		return false, false
+	}
+	return RoomOf(h) < handoffRoomPct, true
 }
 
 // OutOfQuota is whether some window this account carries has nothing left in it
@@ -386,16 +418,9 @@ func Spent(h Headroom) (spent, known bool) {
 // The two questions were one question for as long as every window shared one
 // threshold: at a flat 80, slack is raw room shifted by twenty, so "past its
 // threshold" and "nearly empty" ordered accounts identically and one predicate
-// answered both. Per-window thresholds broke that, and hover derives a fresh
-// per-window table on every tick, so under hover they are never the same
-// question again.
-//
-// What makes them come apart at the top is that hover's threshold is a PACE
-// TARGET and nothing clamps it. A window far enough through its own cycle is
-// measured against a figure above 100, so an account with one point left reports
-// POSITIVE slack and lands in the roomy tier ahead of an account holding sixty.
-// Ranked on slack alone the near-empty account wins, and the engine hands the
-// session to the one account that cannot serve it.
+// answered both. Per-window thresholds broke that: a week held to 60 and a
+// five-hour window held to 95 measure slack from two different lines, and
+// which window is past its line says nothing about which one has run dry.
 //
 // It reads a MINIMUM rather than Pct for the reason those minima exist: Pct
 // describes whichever window is tightest on the SLACK axis, and the window that
@@ -444,7 +469,15 @@ func OutOfQuota(h Headroom) (out, known bool) {
 // It reads the same narrowed set the headroom does, so --model means one thing
 // in both strategies: a session that named Sonnet does not go chasing an Opus
 // cap's expiry, because that is not quota it is going to spend.
-func weeklyResetOf(s *usage.Snapshot, model string, t Thresholds) timeValue {
+//
+// Only a FUTURE reset counts. One at or before now is a week that has already
+// rolled and whose refresh has not landed yet: the account holds a fresh week,
+// which is the least perishable quota in the pool, and reading the stale
+// instant as "soonest" would hand the session to exactly the account whose
+// quota is in no danger. Both consume-first and hover's weekly-only rung sort on
+// this, so the two cannot disagree about a week that has ended.
+// TestWhenTheLiveUltrasWeekResetsTheNextSoonestTakesOver.
+func weeklyResetOf(s *usage.Snapshot, model string, t Thresholds, now time.Time) timeValue {
 	var out timeValue
 	for _, w := range bindingWindows(s, model, t) {
 		// Length first, name second -- the same rule the weekly floor applies,
@@ -455,7 +488,7 @@ func weeklyResetOf(s *usage.Snapshot, model string, t Thresholds) timeValue {
 			continue
 		}
 		at, ok := w.Reset()
-		if !ok {
+		if !ok || !at.After(now) {
 			continue
 		}
 		if !out.ok || at.Before(out.at) {
@@ -555,9 +588,9 @@ func creditHeadroomOf(e usage.ExtraUsage, t Thresholds) Headroom {
 }
 
 func measure(c Candidate, o Options) Ranked {
-	// thresholdsFor rather than Thresholds: under hover the table is derived
-	// per account, and it is the same call below so the two window sets this
-	// function reads cannot be built from different tables.
+	// thresholdsFor rather than Thresholds: under hover the table is hover's
+	// own, and it is the same call below so the two window sets this function
+	// reads cannot be built from different tables.
 	h := HeadroomFor(c.Usage, o.Model, o.thresholdsFor(c))
 	// A primary seat is metered in credits rather than in plan windows, so it is
 	// ranked on the credit allowance instead. This REPLACES the plan headroom
@@ -573,11 +606,12 @@ func measure(c Candidate, o Options) Ranked {
 	// is both a credit seat AND an account carrying quota, and HeadroomFor
 	// answers Known for it.
 	//
-	// So this line can discard a measured plan headroom. Measured: a seat whose
-	// opted-in weekly is 99.9% used reports plan slack near -50 and is ranked
-	// here on a credit allowance of 85, which puts it FIRST. The pre-emptive
-	// switch no longer walks onto such a seat -- it reads the derived table now,
-	// and the seat derives one -- but the ORDINARY better-target rule still can.
+	// So this line can discard a measured plan headroom. Measured under the pace
+	// rotation hover used to run: a seat whose opted-in weekly was 99.9% used
+	// reported plan slack near -50 and was ranked here on a credit allowance of
+	// 85, which put it FIRST. The pre-emptive switch does not walk onto such a
+	// seat -- the cap is what Ranked.Closing projects -- but the ORDINARY move
+	// still can, because every level the ranking reads is the credit one.
 	//
 	// Taking the minimum of the two instead is the obvious repair and it is not
 	// made here, because it would move Spent for a credit seat, and Spent feeds
@@ -596,7 +630,7 @@ func measure(c Candidate, o Options) Ranked {
 		clears = h.Floor
 	}
 	rec := recoveryOf(c.Usage, clears)
-	weekly := weeklyResetOf(c.Usage, o.Model, o.thresholdsFor(c))
+	weekly := weeklyResetOf(c.Usage, o.Model, o.thresholdsFor(c), o.Now)
 
 	r := Ranked{
 		UUID:     c.UUID,
@@ -604,23 +638,23 @@ func measure(c Candidate, o Options) Ranked {
 		Headroom: h,
 		// Under hover only. A threshold a user typed is where they said to stop,
 		// and it is not this rule's to move.
-		LastPoint:      o.hover != nil && lastWeeklyPoint(h),
+		LastPoint:      o.hover != nil && lastPoint(h),
+		ShortWindow:    shortWindowOf(c.Usage),
+		Closing:        closingWindow(c, o),
 		RecoversAt:     rec.at,
 		HasRecovery:    rec.ok,
 		WeeklyResetsAt: weekly.at,
 		HasWeeklyReset: weekly.ok,
 	}
+	// Under hover only, like the last point: the marks are hover's order, and
+	// the configured strategies rank on nothing they could hold.
+	if o.hover != nil {
+		r.HeldOut = o.departures.holding(c, o.Now)
+	}
 	// A binding window with no reset cannot be said to return inside the
 	// horizon. Treating "no answer" as "back immediately" would put the least
 	// knowable account at the front of the queue.
 	r.ReturnsInsideHorizon = rec.ok && !rec.at.After(o.Now.Add(o.horizon()))
-	// The derivation's own figures, copied for the renderers. Nothing below
-	// reads them; see the fields' own doc.
-	if o.hover != nil {
-		if a, ok := o.hover.AccountFor(c.UUID); ok {
-			r.HoverShare, r.Stranded, r.StrandedWindow = a.Share, a.Stranded, a.Window
-		}
-	}
 	return r
 }
 
@@ -652,7 +686,7 @@ func Rank(cands []Candidate, o Options) Result {
 		}
 		measured = append(measured, r)
 
-		if over, known := Spent(r.Headroom); !known || !over {
+		if past, known := o.pastItsLine(r.Headroom); !known || !past {
 			allOver = false
 		}
 	}
@@ -664,8 +698,14 @@ func Rank(cands []Candidate, o Options) Result {
 		res.Mode = ModeConsumeFirst
 		sort.SliceStable(measured, func(i, j int) bool { return lessConsumeFirst(measured[i], measured[j]) })
 	case allOver && len(measured) > 0:
+		// Ahead of hover's own order, and under hover this is that order's own
+		// rule restated for a pool with nothing left: every account is past
+		// its last point, so the question is which one comes back first.
 		res.Mode = ModeRecovery
 		sort.SliceStable(measured, func(i, j int) bool { return lessRecovery(measured[i], measured[j]) })
+	case o.hover != nil:
+		res.Mode = ModeHover
+		sort.SliceStable(measured, func(i, j int) bool { return lessHover(measured[i], measured[j]) })
 	default:
 		res.Mode = ModeHeadroom
 		sort.SliceStable(measured, func(i, j int) bool { return lessHeadroom(measured[i], measured[j]) })
@@ -674,23 +714,21 @@ func Rank(cands []Candidate, o Options) Result {
 }
 
 // headroomTier separates the kinds of candidate, because "we know it has room"
-// and "we have no idea" and "we know it is past its pace" and "we know it is
-// empty" are four answers, not two, and hover's last point is a fifth. The unknown sits second: a maybe beats a no,
-// and trying it is how a pool of unreadable accounts stops being a dead end.
+// and "we have no idea" and "we know it is past its threshold" and "we know it
+// is empty" are four answers, not two. The unknown sits second: a maybe beats a
+// no, and trying it is how a pool of unreadable accounts stops being a dead end.
 //
 // The last tier is categorical on purpose, and it is the one place in the
-// ranking where raw room outranks pace outright. Every other comparison here is
+// ranking where raw room outranks slack outright. Every other comparison here is
 // a judgement about which account SHOULD spend next; this one is about which
-// account CAN, and no amount of being nicely on pace makes a window with nothing
-// left in it able to serve a prompt. Keeping it as a tier rather than folding it
-// into the slack comparison is what stops the cap at HoverCap from letting an
-// empty account outrank a roomy one by a point of arithmetic.
+// account CAN, and no amount of slack against some other window's line makes a
+// window with nothing left in it able to serve a prompt. Keeping it as a tier
+// rather than folding it into the slack comparison is what stops a per-window
+// table from letting an empty account outrank a roomy one by a point of
+// arithmetic.
 func headroomTier(r Ranked) int {
 	if empty, known := OutOfQuota(r.Headroom); known && empty {
 		return tierEmpty
-	}
-	if r.LastPoint {
-		return tierLastPoint
 	}
 	over, known := Spent(r.Headroom)
 	switch {
@@ -699,7 +737,7 @@ func headroomTier(r Ranked) int {
 	case !known:
 		return tierUnknown
 	default:
-		return tierPastPace
+		return tierPastThreshold
 	}
 }
 
@@ -707,10 +745,7 @@ func headroomTier(r Ranked) int {
 const (
 	tierRoomy = iota
 	tierUnknown
-	tierPastPace
-	// tierLastPoint is hover handing an account off; see lastWeeklyPoint. It sits
-	// above empty so the last point is still reachable once nothing better is left.
-	tierLastPoint
+	tierPastThreshold
 	tierEmpty
 )
 
@@ -865,14 +900,12 @@ func lessConsumeFirst(a, b Ranked) bool {
 // already bought rather than to start spending because one poll failed. A pool
 // with nothing in it is exhausted trivially.
 //
-// The test is OutOfQuota and NOT Spent, and on this path the difference is
-// money. Spent asks whether an account is past the number it was given, and
-// under hover that number is a PACE target -- so a pool of six accounts every
-// one of which is merely running ahead of schedule answers "exhausted" while
-// carrying, between them, a fifth of a week of quota already paid for. Opening
-// the last-resort pool there starts buying credits to avoid spending
-// subscription quota that nobody is going to get back. The gate may only open
-// once the free quota is actually gone.
+// The test is Spent against the table o carries, and on this path WHICH table
+// is the money question. Decide asks before hover is installed, so it is the
+// CONFIGURED one: the threshold a user typed is them saying where they want an
+// account to stop, and only a number they chose may open a pool that buys
+// credits. Hover's own line is not theirs:
+// TestHoverThresholdDoesNotOpenTheCreditPool.
 func MainPoolExhausted(cands []Candidate, o Options) bool {
 	main := make([]Candidate, 0, len(cands))
 	for _, c := range cands {

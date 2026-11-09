@@ -55,17 +55,16 @@ func TestStrategyDependsOnNothingThatReadsTheCredentialsFile(t *testing.T) {
 // decides which ONE account the next session goes to, from the readings in front
 // of it. Those are different questions with different inputs, and the ranking
 // deriving a threshold from a fleet-wide burn rate is the specific outcome this
-// forbids -- the mode's whole promise is that a user can follow every derived
-// number in `ccdad status`, and a figure that depends on a measurement taken
-// over the last four hours of every other account is not one they can.
+// forbids -- a user has to be able to follow every number the engine acts on in
+// `ccdad status`, and a figure that depends on a measurement taken over the
+// last four hours of every other account is not one they can.
 //
-// It was checked rather than assumed that the two do not already meet: the
-// perishability term hover derives credits the rotation with usable x 100 /
-// window_length points an hour, which is forecast.replenish's expression
-// character for character. Two packages had independently written down the same
-// model of how a pool drains. That is the shape this gate exists to keep
-// intentional -- one of them may be wrong, and they must be allowed to be wrong
-// separately.
+// The two once met without the import: the perishability term hover's pace
+// rotation derived credited the rotation with usable x 100 / window_length
+// points an hour, which is forecast.replenish's expression character for
+// character. Two packages had independently written down the same model of how
+// a pool drains, and this gate is what kept that intentional -- one of them may
+// be wrong, and they must be allowed to be wrong separately.
 //
 // The direction is asked HERE, from inside internal/strategy, and the other
 // direction is asked from inside internal/forecast, which is not tidiness. A

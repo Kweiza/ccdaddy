@@ -719,7 +719,7 @@ func TestAWordWiderThanTheTerminalOverflowsRatherThanBeingCut(t *testing.T) {
 // to come out exactly as its builder spelled it. So does a terminal too narrow
 // to hold the label, where wrapping into no room produces a column of words.
 func TestAnUnknownWidthLeavesALabelledLineExactlyAsItWas(t *testing.T) {
-	line := "Strategy: hover  (thresholds are derived per account and window)"
+	line := view.StrategyLine("hover")
 	for _, width := range []int{0, -1, 9, 4} {
 		if got := view.WrapLabeled(line, width); got != line {
 			t.Errorf("WrapLabeled(width=%d) =\n\t%q\nwant\n\t%q", width, got, line)

@@ -82,7 +82,7 @@ func TestAReverseMoveIsPossibleOnceTheTargetHasBurnedDown(t *testing.T) {
 
 	forward := Decide([]Candidate{hr("a", 20, time.Hour), hr("b", 50, time.Hour)}, opts(), Config{}, st, "a")
 	want(t, forward, ActionSwitch, ReasonBetterTarget, "b")
-	st.RecordSwitch("b", now)
+	st.RecordSwitch("b", now, Departure{})
 
 	// b has burned from 50 points of headroom down to 9 while a sat still.
 	// Nothing latches, so the numbers alone put a back in front.
@@ -94,7 +94,7 @@ func TestAReverseMoveIsPossibleOnceTheTargetHasBurnedDown(t *testing.T) {
 // a candidate that is merely ahead does not get to move.
 func TestAReverseMoveIsRefusedWhileTheBurnIsSmall(t *testing.T) {
 	st := NewState()
-	st.RecordSwitch("b", now.Add(-time.Hour))
+	st.RecordSwitch("b", now.Add(-time.Hour), Departure{})
 
 	p := Decide([]Candidate{hr("a", 20, time.Hour), hr("b", 15, time.Hour)}, opts(), Config{}, st, "b")
 	want(t, p, ActionStay, ReasonHysteresis, "")
@@ -177,7 +177,7 @@ func TestAnUntriedCandidateIsNotHeldToAMarginItHasNoNumberFor(t *testing.T) {
 
 func TestCooldownHoldsASecondSwitchOffAndSaysWhenItLifts(t *testing.T) {
 	st := NewState()
-	st.RecordSwitch("b", now)
+	st.RecordSwitch("b", now, Departure{})
 
 	p := Decide([]Candidate{hr("a", 20, time.Hour), hr("b", 50, time.Hour)}, at(time.Minute), Config{}, st, "a")
 	want(t, p, ActionStay, ReasonCooldown, "")
@@ -191,7 +191,7 @@ func TestCooldownHoldsASecondSwitchOffAndSaysWhenItLifts(t *testing.T) {
 
 func TestCooldownLapsesAfterFiveMinutes(t *testing.T) {
 	st := NewState()
-	st.RecordSwitch("b", now)
+	st.RecordSwitch("b", now, Departure{})
 
 	p := Decide([]Candidate{hr("a", 20, time.Hour), hr("b", 50, time.Hour)}, at(DefaultCooldown), Config{}, st, "a")
 	want(t, p, ActionSwitch, ReasonBetterTarget, "b")
@@ -202,7 +202,7 @@ func TestCooldownLapsesAfterFiveMinutes(t *testing.T) {
 // downtime rather than caution.
 func TestCooldownDoesNotStrandAnEngineWithNothingLive(t *testing.T) {
 	st := NewState()
-	st.RecordSwitch("b", now)
+	st.RecordSwitch("b", now, Departure{})
 
 	p := Decide([]Candidate{hr("a", 20, time.Hour), hr("b", 50, time.Hour)}, at(time.Minute), Config{}, st, "")
 	want(t, p, ActionSwitch, ReasonBetterTarget, "b")
@@ -210,7 +210,7 @@ func TestCooldownDoesNotStrandAnEngineWithNothingLive(t *testing.T) {
 
 func TestCooldownDoesNotStrandAnEngineOnAQuarantinedAccount(t *testing.T) {
 	st := NewState()
-	st.RecordSwitch("a", now)
+	st.RecordSwitch("a", now, Departure{})
 	st.Quarantine("a", now, time.Hour, "dead")
 
 	p := Decide([]Candidate{hr("a", 50, time.Hour), hr("b", 20, time.Hour)}, at(time.Minute), Config{}, st, "a")
@@ -221,7 +221,7 @@ func TestCooldownDoesNotStrandAnEngineOnAQuarantinedAccount(t *testing.T) {
 // and the caller must not be told a switch was held back.
 func TestBeingOnTheBestAccountOutranksTheCooldown(t *testing.T) {
 	st := NewState()
-	st.RecordSwitch("b", now)
+	st.RecordSwitch("b", now, Departure{})
 
 	p := Decide([]Candidate{hr("a", 20, time.Hour), hr("b", 50, time.Hour)}, at(time.Minute), Config{}, st, "b")
 	want(t, p, ActionStay, ReasonAlreadyBest, "")
@@ -436,7 +436,7 @@ func TestTheCreditPoolIsUsedOnceSubscriptionIsExhaustedAndOptedIn(t *testing.T) 
 // The cooldown still applies to a move that costs money.
 func TestTheCooldownAppliesToACreditSwitchToo(t *testing.T) {
 	st := NewState()
-	st.RecordSwitch("a", now)
+	st.RecordSwitch("a", now, Departure{})
 	cands := []Candidate{hr("a", 5, 4*time.Hour), creditWith("c", enabledExtra(nil, f(0)))}
 
 	want(t, Decide(cands, at(time.Minute), Config{MaxAutoSpend: 100}, st, "a"), ActionStay, ReasonCooldown, "")
@@ -540,7 +540,7 @@ func TestConfiguredMarginsAreHonoured(t *testing.T) {
 	want(t, Decide(cands, opts(), Config{HeadroomRatio: 1.5}, NewState(), "a"), ActionSwitch, ReasonBetterTarget, "b")
 
 	st := NewState()
-	st.RecordSwitch("a", now)
+	st.RecordSwitch("a", now, Departure{})
 	want(t, Decide(cands, at(6*time.Minute), Config{HeadroomRatio: 1.5, Cooldown: 10 * time.Minute}, st, "a"),
 		ActionStay, ReasonCooldown, "")
 }
@@ -554,7 +554,7 @@ func TestActionsAndReasonsAllHaveNames(t *testing.T) {
 	if got := Action(200).String(); got != "unknown" {
 		t.Errorf("Action(200) = %q, want unknown", got)
 	}
-	for r := ReasonBetterTarget; r <= ReasonProjectedExhaustion; r++ {
+	for r := ReasonBetterTarget; r <= ReasonStayUntilLimit; r++ {
 		if r.String() == "unknown" {
 			t.Errorf("Reason(%d) has no name", r)
 		}
@@ -579,7 +579,7 @@ func TestCooldownRemainingReadsTheRecordedSwitch(t *testing.T) {
 		t.Error("a state that has never switched is not in cooldown")
 	}
 
-	st.RecordSwitch("a", now)
+	st.RecordSwitch("a", now, Departure{})
 	left, cooling := st.CooldownRemaining(now.Add(2*time.Minute), DefaultCooldown)
 	if !cooling || left != 3*time.Minute {
 		t.Errorf("CooldownRemaining = %v/%v, want 3m", left, cooling)
@@ -593,7 +593,7 @@ func TestCooldownRemainingReadsTheRecordedSwitch(t *testing.T) {
 // conservative direction and the wait is bounded by the cooldown itself.
 func TestCooldownHonoursAClockThatMovedBackwards(t *testing.T) {
 	st := NewState()
-	st.RecordSwitch("a", now.Add(time.Hour))
+	st.RecordSwitch("a", now.Add(time.Hour), Departure{})
 
 	if _, cooling := st.CooldownRemaining(now, DefaultCooldown); !cooling {
 		t.Error("a switch stamped in the future must still hold the cooldown")
@@ -607,7 +607,7 @@ func TestTheCooldownSurvivesARestart(t *testing.T) {
 	isolate(t)
 
 	if err := WithState(time.Second, func(s *State) error {
-		s.RecordSwitch("b", now)
+		s.RecordSwitch("b", now, Departure{})
 		return nil
 	}); err != nil {
 		t.Fatalf("WithState: %v", err)
@@ -656,7 +656,7 @@ func TestWithStateWritesAPrivateFile(t *testing.T) {
 	root := isolate(t)
 
 	if err := WithState(time.Second, func(s *State) error {
-		s.RecordSwitch("a", now)
+		s.RecordSwitch("a", now, Departure{})
 		return nil
 	}); err != nil {
 		t.Fatalf("WithState: %v", err)
@@ -686,7 +686,7 @@ func TestWithStateWritesAPrivateFile(t *testing.T) {
 func TestWithStateLeavesTheFileAloneWhenFnFails(t *testing.T) {
 	root := isolate(t)
 	if err := WithState(time.Second, func(s *State) error {
-		s.RecordSwitch("a", now)
+		s.RecordSwitch("a", now, Departure{})
 		return nil
 	}); err != nil {
 		t.Fatalf("WithState: %v", err)
@@ -698,7 +698,7 @@ func TestWithStateLeavesTheFileAloneWhenFnFails(t *testing.T) {
 
 	boom := errors.New("boom")
 	if err := WithState(time.Second, func(s *State) error {
-		s.RecordSwitch("z", now.Add(time.Hour))
+		s.RecordSwitch("z", now.Add(time.Hour), Departure{})
 		s.Quarantine("z", now, time.Hour, "dead")
 		return boom
 	}); !errors.Is(err, boom) {
@@ -970,7 +970,7 @@ func TestARecoveryMarginNeedsAnInstantOnBothSides(t *testing.T) {
 // most expensive flap there is.
 func TestTheCooldownHoldsAnEngineSittingOnCredit(t *testing.T) {
 	st := NewState()
-	st.RecordSwitch("c", now)
+	st.RecordSwitch("c", now, Departure{})
 	cands := []Candidate{hr("a", 50, time.Hour), creditWith("c", enabledExtra(nil, f(0)))}
 
 	want(t, Decide(cands, at(time.Minute), Config{MaxAutoSpend: 100}, st, "c"), ActionStay, ReasonCooldown, "")
@@ -982,7 +982,7 @@ func TestTheCooldownHoldsAnEngineSittingOnCredit(t *testing.T) {
 // that has no login underneath it.
 func TestAnUnattributableLoginMatchesNoAccount(t *testing.T) {
 	st := NewState()
-	st.RecordSwitch("b", now)
+	st.RecordSwitch("b", now, Departure{})
 	cands := []Candidate{sub("", &usage.Snapshot{FiveHour: win(50, time.Hour)}), hr("b", 20, time.Hour)}
 
 	want(t, Decide(cands, at(time.Minute), Config{}, st, ""), ActionSwitch, ReasonBetterTarget, "")

@@ -14,6 +14,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/credhome"
 	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/store"
+	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/switcher"
 )
 
@@ -354,7 +355,7 @@ func switchToAPIKey(cmd *cobra.Command, s *store.Store, target store.Account, ke
 	if err := s.SetActive(target.UUID); err != nil {
 		return err
 	}
-	noteCooldown(cmd, switcher.RecordSwitch(target.UUID))
+	noteCooldown(cmd, switcher.RecordSwitch(target.UUID, strategy.Departure{}))
 
 	fmt.Fprintf(stderr, "Switched to %s.\n", target.Label())
 	switch {

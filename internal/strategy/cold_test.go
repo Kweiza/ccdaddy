@@ -121,8 +121,8 @@ func TestWarmUpWouldSpendCreditsRefusesOnlyWhereQuotaIsActuallyGone(t *testing.T
 	}
 	full := Thresholds{Default: 80}
 
-	t.Run("past the pace threshold is not out of quota", func(t *testing.T) {
-		// 80% of the week against a 46% pace target: a fifth of the quota is
+	t.Run("past its threshold is not out of quota", func(t *testing.T) {
+		// 80% of the week under a threshold of 46: a fifth of the quota is
 		// still in hand and the turn lands on it. Reading "past its threshold"
 		// as "out" would stop warming most of a busy fleet for no risk at all.
 		s := snap(noReset(0), win(80, 3*24*time.Hour))

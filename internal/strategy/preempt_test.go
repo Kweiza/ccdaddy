@@ -75,7 +75,7 @@ func TestPreemptionIsOffWithoutALead(t *testing.T) {
 // fast-burning account into a swap every tick.
 func TestPreemptionDoesNotBypassTheCooldown(t *testing.T) {
 	st := NewState()
-	st.RecordSwitch("a-live", now.Add(-time.Minute))
+	st.RecordSwitch("a-live", now.Add(-time.Minute), Departure{})
 
 	p := Decide(preemptPool(1800*time.Second), preemptOpts(), Config{}, st, "a-live")
 	want(t, p, ActionStay, ReasonCooldown, "")
@@ -103,8 +103,8 @@ func TestPreemptionNeverReachesTheCreditPool(t *testing.T) {
 // cut-off session for another while spending the cooldown on it.
 //
 // This used to be phrased as "no candidate has positive slack", which said the
-// same thing only while thresholds were numbers a person typed; hover derives a
-// pace target instead, under which no candidate ever has positive slack and the
+// same thing only while thresholds were numbers a person typed; under the pace
+// target hover used to derive, no candidate ever had positive slack and the
 // whole rule went silent. The bar is now what it was always reaching for.
 //
 // The margin is genuinely narrow — b runs out at 1908 s against a 1920 s horizon
@@ -130,7 +130,7 @@ func TestPreemptionNeedsACandidateNotAlsoRunningOut(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s has no horizon; the fixture lost its provenance", c.UUID)
 		}
-		if !projectedExhaustion(c.Usage, o.Model, o.Now, horizon, o.Thresholds()) {
+		if projectedExhaustion(c.Usage, o.Model, o.Now, horizon, o.Thresholds()) == "" {
 			t.Fatalf("%s is NOT projected to run out inside %v; this case no longer says "+
 				"what it claims — it is meant to be a pool with nowhere to go", c.UUID, horizon)
 		}

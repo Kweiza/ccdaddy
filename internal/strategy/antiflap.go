@@ -22,6 +22,14 @@ import (
 // because an account burning four times faster than the one it displaced has to
 // be able to lose its place. Nothing here latches: every mechanism is a MARGIN
 // that a changing headroom can cross back over.
+//
+// Hover's departure marks are the one remembered fact that is not a margin, and
+// they are not a latch either. A latch remembers the TARGET and holds the engine
+// on it; a mark remembers an account the engine LEFT at a limit and yields to
+// the one reading that can give it room again -- its window starting afresh.
+// It is a rung in the order rather than a filter on it, so a held-out account
+// is still the first choice the moment everything above it is at a limit.
+// departure.go has the whole argument.
 
 const (
 	// DefaultHysteresisPct is the hysteresis margin, in percentage points of
@@ -90,8 +98,8 @@ type Config struct {
 	// a zero is honoured rather than replaced.
 	MaxAutoSpend float64
 	// Manual holds the engine to WATCHING. It still polls, still ranks, still
-	// derives hover's thresholds and still fills the history the forecast is
-	// built on; it just never moves the login.
+	// builds hover's table and still fills the history the forecast is built
+	// on; it just never moves the login.
 	//
 	// It is a field on Config rather than on Options because Config is the half
 	// that comes from config.toml and is copied into the pass, and because the
@@ -206,6 +214,21 @@ const (
 	// it either. Plan.RetryAt carries the soonest rollover, because that is the
 	// instant the answer can change.
 	ReasonNothingCanServe
+	// ReasonLastPoint: the live account is down to its last point on a window
+	// no model choice can dodge, and the target is not at a limit. The four
+	// hover reasons are appended last for the reason every value since
+	// ReasonProjectedExhaustion was.
+	ReasonLastPoint
+	// ReasonShortWindowRoom: under hover, a five-hour account has room again and
+	// the live account is not one -- the return rule 3 of hover's order names.
+	ReasonShortWindowRoom
+	// ReasonSoonerWeeklyReset: under hover, a weekly-only account whose week
+	// ends sooner than the live one's by more than recovery_hysteresis.
+	ReasonSoonerWeeklyReset
+	// ReasonStayUntilLimit: under hover, another five-hour account ranks first
+	// but the live one is a five-hour account with room, and a five-hour
+	// account is left only at a limit.
+	ReasonStayUntilLimit
 )
 
 func (r Reason) String() string {
@@ -240,6 +263,14 @@ func (r Reason) String() string {
 		return "manual mode is on, so ccdad watches and never switches"
 	case ReasonNothingCanServe:
 		return "no account has quota left to serve a session"
+	case ReasonLastPoint:
+		return "the live account is down to its last point before a limit"
+	case ReasonShortWindowRoom:
+		return "a short-window account has room again"
+	case ReasonSoonerWeeklyReset:
+		return "another weekly-only account's week resets sooner"
+	case ReasonStayUntilLimit:
+		return "staying on the short-window account until it reaches a limit"
 	}
 	return "unknown"
 }
@@ -252,6 +283,11 @@ type Plan struct {
 	Reason Reason
 	// Target is where to move, set only when Action is ActionSwitch.
 	Target Ranked
+	// Departure is the account a switch leaves and the window that had it at a
+	// limit, set only when Action is ActionSwitch. The caller hands it to
+	// State.RecordSwitch once the move has happened, which is what puts the
+	// mark hover's order reads; Decide itself never writes.
+	Departure Departure
 	// Result is the ranking this plan was made from. It covers the pool AFTER
 	// quarantined accounts were removed, so the mode it reports is the mode the
 	// decision was actually made in.
@@ -330,27 +366,28 @@ func Decide(cands []Candidate, o Options, cfg Config, st *State, activeUUID stri
 	}
 	sort.Strings(held)
 
-	// Installed ONCE, here, over the pool quarantine has already filtered. Rank
-	// would install a pass of its own, and the anti-flap set below has to be
-	// derived from the same pool the ranking ran on: a second pass would set a
-	// pre-emptive lead from accounts the ranking never considered.
+	// The marks hover's order reads, minus the live account's own; see
+	// departuresFor. Read here so the ranking stays pure: Decide never writes
+	// the state, and a caller that reaches Rank directly sees no mark.
+	o.departures = st.departuresFor(activeUUID)
+
 	// Asked BEFORE hover is installed, and the order is the whole point.
 	//
 	// This is the question that opens the LAST-RESORT CREDIT POOL, which is the
-	// one decision in ccdad that spends the user's money. Hover derives a
-	// threshold per window per tick out of how far through its window each
-	// account is -- a PACE target, not a stop line -- so a pool of six accounts
-	// every one of which is merely running ahead of schedule answers "spent"
-	// while carrying a fifth of a week of quota between them, already paid for.
-	// Opening the paid pool there buys credits to avoid spending subscription
-	// quota nobody is going to get back.
-	//
-	// HoverThresholds already refuses to supply the opt-in a scoped weekly cap
-	// needs, on the ground that hover overrides numbers a user typed but may not
-	// consent on their behalf. Money is that rule's strongest case: the
-	// configured threshold IS the user saying where they want to stop, and only
-	// a number they chose may authorise a purchase.
+	// one decision in ccdad that spends the user's money. Hover holds every
+	// window to its hand-off line, a number nobody typed, and opening the paid
+	// pool on it would buy credits on the strength of a line the user never
+	// chose. HoverThresholds already refuses to supply the opt-in a scoped
+	// weekly cap needs, on the ground that hover overrides numbers a user typed
+	// but may not consent on their behalf. Money is that rule's strongest case:
+	// the configured threshold IS the user saying where they want to stop, and
+	// only a number they chose may authorise a purchase.
 	subExhausted := MainPoolExhausted(pool, o)
+
+	// Installed ONCE, here, over the pool quarantine has already filtered. Rank
+	// would install a pass of its own, and the pre-emptive lead below has to be
+	// derived from the same pool the ranking ran on: a second pass would set it
+	// from accounts the ranking never considered.
 
 	o = o.withHover(pool)
 	if o.hover != nil {
@@ -425,9 +462,7 @@ func Decide(cands []Candidate, o Options, cfg Config, st *State, activeUUID stri
 			}
 			return plan
 		}
-		plan.Action = ActionSwitch
-		plan.Reason = ReasonProjectedExhaustion
-		plan.Target = target
+		plan.switchTo(target, ReasonProjectedExhaustion, activeUUID)
 		return plan
 	}
 
@@ -437,7 +472,8 @@ func Decide(cands []Candidate, o Options, cfg Config, st *State, activeUUID stri
 	if len(res.Order) > 0 && !(activeIsCredit && subExhausted) {
 		best := res.Order[0]
 		if !isActive(best.UUID, activeUUID) {
-			if reason, blocked, retry := gate(res, best, activeUUID, cfg, st, o.Now); blocked {
+			reason, blocked, retry := gate(res, best, activeUUID, cfg, st, o.Now)
+			if blocked {
 				// Every margin refusal is ActionStay: the engine compared two
 				// accounts and preferred the one it is on. ReasonNothingCanServe
 				// is not that. It is "wanted to move and there was nowhere",
@@ -454,9 +490,9 @@ func Decide(cands []Candidate, o Options, cfg Config, st *State, activeUUID stri
 				}
 				return plan
 			}
-			plan.Action = ActionSwitch
-			plan.Reason = ReasonBetterTarget
-			plan.Target = best
+			// The gate's own reason, because under hover it is the sentence
+			// that says which of the order's rules moved the session.
+			plan.switchTo(best, reason, activeUUID)
 			return plan
 		}
 		// Already on the best subscription account. That is the end of it
@@ -491,11 +527,11 @@ func Decide(cands []Candidate, o Options, cfg Config, st *State, activeUUID stri
 	// The credit pool, and only now.
 	if len(res.Credit) == 0 {
 		// subExhausted was asked of the numbers the USER typed, because it opens
-		// money, and hover's table is a pace target that says nothing about being
-		// out. With no credit pool there is no money to open, so under hover that
-		// answer has nothing left to decide: an account with room that is already
-		// the best one is simply where the session belongs. Reporting it as
-		// blocked is the exit `ccdad auto --once` alerts on, over accounts
+		// money, and under hover those numbers are not the ones the session is
+		// held to. With no credit pool there is no money to open, so under hover
+		// that answer has nothing left to decide: an account with room that is
+		// already the best one is simply where the session belongs. Reporting it
+		// as blocked is the exit `ccdad auto --once` alerts on, over accounts
 		// merely past 80% with hours of work left in them.
 		if o.hover != nil && activeHasRoom(res, activeUUID) {
 			plan.Action = ActionStay
@@ -544,9 +580,7 @@ func Decide(cands []Candidate, o Options, cfg Config, st *State, activeUUID stri
 			}
 			return plan
 		}
-		plan.Action = ActionSwitch
-		plan.Reason = ReasonBetterTarget
-		plan.Target = r
+		plan.switchTo(r, ReasonBetterTarget, activeUUID)
 		return plan
 	}
 
@@ -554,6 +588,15 @@ func Decide(cands []Candidate, o Options, cfg Config, st *State, activeUUID stri
 	plan.Reason = ReasonCreditGate
 	plan.Credit = firstRefusal
 	return plan
+}
+
+// switchTo fills a plan that moves the login: where to, why, and what the move
+// leaves behind. One place for every arm that switches, so none of them can
+// forget the departure -- an arm that did would leave its account unmarked for
+// hover's order to take straight back.
+func (p *Plan) switchTo(target Ranked, reason Reason, activeUUID string) {
+	p.Action, p.Reason, p.Target = ActionSwitch, reason, target
+	p.Departure = departureFrom(p.Result, activeUUID)
 }
 
 // activeHasRoom is whether the live account is ranked and known to hold quota.
@@ -609,14 +652,14 @@ func gate(res Result, target Ranked, activeUUID string, cfg Config, st *State, n
 	// the candidate is enough BETTER to be worth the disruption of moving, and
 	// that question has no content here: staying costs the user the session.
 	//
-	// It is not a convenience. The additive margin runs on slack, and slack
-	// SATURATES for an empty account -- hover measures one against a threshold
-	// capped at HoverCap, so the worst it can report is -1, while a candidate
-	// with a fifth of its week left but early enough to be judged harshly
-	// reports -33. No candidate can clear a five-point margin against -1, so
-	// without this the ranking correctly files the empty account last and the
-	// gate then refuses every move off it, forever. The ratio already carried
-	// this reasoning for its own axis; the margin needs it for the other.
+	// It is not a convenience. The additive margin runs on slack, and under a
+	// per-window table slack does not order by room: an empty window held to
+	// 99 reports -1 while a candidate with a fifth of its week left, held to a
+	// tight weekly line of the user's, can report -33. No candidate can clear a
+	// margin against -1 from there, so without this the ranking correctly
+	// files the empty account last and the gate then refuses every move off
+	// it, forever. The ratio already carried this reasoning for its own axis;
+	// the margin needs it for the other.
 	//
 	// The cooldown is deliberately still in force: it ran above, and a switch
 	// storm is a different failure that nothing here bounds.
@@ -642,14 +685,14 @@ func gate(res Result, target Ranked, activeUUID string, cfg Config, st *State, n
 		}
 		return ReasonBetterTarget, false, time.Time{}
 	}
-	// The same waiver one point earlier, for the same reason: slack cannot see
-	// this. An account a day from its reset reads as generously on pace at 99%,
-	// so a candidate merely ahead of its own pace can never clear a margin
-	// against it, and the session runs into the wall with quota sitting next door.
-	// The ranking only puts a roomier account ahead of a last-point one, so a
-	// target that is itself on its last point takes the margins below instead.
-	if active.LastPoint && !target.LastPoint {
-		return ReasonBetterTarget, false, time.Time{}
+	// The same waiver one point earlier, for the same reason: staying runs the
+	// session into the wall with quota sitting next door. It asks the target
+	// the whole of "at a limit" and not only the last point, because a target
+	// projected to run out before its next reading is no more somewhere to go
+	// than one on its own last point; that target takes the arms below, and in
+	// hover's order they keep the session where it is.
+	if active.LastPoint && target.AtLimit() == "" {
+		return ReasonLastPoint, false, time.Time{}
 	}
 
 	// Every caller reaches here with target = res.Order[0], so the ranking has
@@ -686,24 +729,70 @@ func gate(res Result, target Ranked, activeUUID string, cfg Config, st *State, n
 		return headroomGate(active, target, cfg)
 
 	case ModeConsumeFirst:
-		// Ranked by soonest weekly reset, so the margin goes on that axis. No
-		// number is fixed for it — consume-first has no margin of its own —
-		// and RecoveryHysteresis is borrowed rather than a second knob
-		// invented: it is the same question, "is this timestamp meaningfully
-		// sooner", on a quantity that moves even more slowly.
-		if target.HasWeeklyReset != active.HasWeeklyReset {
-			return ReasonBetterTarget, false, time.Time{}
-		}
-		if target.HasWeeklyReset {
-			if target.WeeklyResetsAt.After(active.WeeklyResetsAt.Add(-cfg.RecoveryHysteresis)) {
-				return ReasonWeeklyResetMargin, true, time.Time{}
-			}
-		}
-		return ReasonBetterTarget, false, time.Time{}
+		return weeklyResetGate(active, target, cfg, ReasonBetterTarget)
+
+	case ModeHover:
+		return hoverGate(active, target, cfg)
 
 	default:
 		return headroomGate(active, target, cfg)
 	}
+}
+
+// weeklyResetGate is the margin on the soonest-weekly-reset axis, which both
+// consume-first and hover's weekly-only rung order on. allow is the reason a
+// move that clears it reports, so each mode says its own sentence over one
+// margin.
+//
+// No number is fixed for it -- neither mode has a margin of its own -- and
+// RecoveryHysteresis is borrowed rather than a second knob invented: it is the
+// same question, "is this timestamp meaningfully sooner", on a quantity that
+// moves even more slowly. Reset instants do not move between rollovers, so the
+// comparison is static and two seats whose weeks end seconds apart are refused
+// from either side: TestTwoUltrasSecondsApartDoNotPingPong.
+func weeklyResetGate(active, target Ranked, cfg Config, allow Reason) (Reason, bool, time.Time) {
+	if target.HasWeeklyReset != active.HasWeeklyReset {
+		return allow, false, time.Time{}
+	}
+	if target.HasWeeklyReset && target.WeeklyResetsAt.After(active.WeeklyResetsAt.Add(-cfg.RecoveryHysteresis)) {
+		return ReasonWeeklyResetMargin, true, time.Time{}
+	}
+	return allow, false, time.Time{}
+}
+
+// hoverGate is hover's order turned into a decision between the live account
+// and the one ranked first.
+//
+// The target is Order[0], so its rung is never worse than the live account's,
+// and a BETTER rung is always a move: that is the order saying the session
+// belongs elsewhere -- back on a five-hour account with room, or off an account
+// at a limit. The limits themselves need no margin, because each of them is a
+// level or a projection the live account's own reading crossed.
+//
+// The SAME rung is where the order's rules differ by tier:
+//
+//   - Two five-hour accounts: stay. The one ranked first may have its week
+//     ending sooner, but a five-hour account is left only at a limit, and
+//     rotating between two with room is the move hover exists not to make.
+//     The order still decides which one is ENTERED -- from a weekly-only seat,
+//     at start-up, or when the live one reaches its limit.
+//   - Two weekly-only accounts: the soonest weekly reset, past the margin.
+//   - Anything else -- two unreadable accounts, two at a limit -- has nothing
+//     that makes the first one a better place for the session, so it stays
+//     where it is and spends what is left there.
+func hoverGate(active, target Ranked, cfg Config) (Reason, bool, time.Time) {
+	ra, rt := active.Rung(), target.Rung()
+	switch {
+	case rt < ra && rt == RungShortWindow:
+		return ReasonShortWindowRoom, false, time.Time{}
+	case rt < ra:
+		return ReasonBetterTarget, false, time.Time{}
+	case rt == RungShortWindow:
+		return ReasonStayUntilLimit, true, time.Time{}
+	case rt == RungWeeklyOnly:
+		return weeklyResetGate(active, target, cfg, ReasonSoonerWeeklyReset)
+	}
+	return ReasonAlreadyBest, true, time.Time{}
 }
 
 // cooldownGate is the 5-minute cooldown.

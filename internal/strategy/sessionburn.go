@@ -23,18 +23,16 @@ import (
 // heuristic: only one account is live at a time, so only one account's binding
 // window is moving, and every other measured rate is a zero taken while nothing
 // was being spent there. The maximum is therefore the live account's rate,
-// without this function having to be told which account that is -- which matters
-// because HoverThresholds does not know either, and threading an activeUUID into
-// the pass to recover a number the pass already holds would be two sources for
-// one fact.
+// without this function having to be told which account that is -- threading an
+// activeUUID into the walk to recover a number the pool already holds would be
+// two sources for one fact.
 //
-// It reads across accounts on purpose, and that is the one objection worth
-// stating: hover.go's own note refuses to read a FLEET-WIDE burn rate on the
-// ground that a threshold a user cannot follow in `ccdad status` is a threshold
-// they cannot argue with. This is a weaker version of the same thing and it
-// survives the objection only because the figure is published -- `ccdad status`
-// prints it beside the projection it moves, so the arithmetic stays closeable by
-// hand.
+// It reads across accounts on purpose, and it moves no threshold for doing so.
+// The objection to a fleet-wide rate is that a threshold a user cannot follow
+// in `ccdad status` is one they cannot argue with; this rate sets none. It only
+// refuses a pre-emptive target that would run out inside the horizon the live
+// account is being left over, and it is two consecutive readings of one window,
+// a figure the same table shows.
 //
 // A rate goes stale by at most one poll interval. The poller recomputes it on
 // every reading, and an account that has stopped being spent measures zero at
@@ -76,12 +74,16 @@ func measuredSessionBurn(pool []Candidate) sessionBurn {
 	return out
 }
 
-// on is the rate as it applies to a window of the given length, and whether it
-// applies at all. A rate whose window is unnamed applies everywhere, because that
-// is how a reading cached before the name existed has always been read. A length
-// that differs, or that nobody can state, is "cannot say": there is no conversion
-// between the two windows' points that is not a guess about the plan.
-func (b sessionBurn) on(length time.Duration, known bool) (float64, bool) {
+// onWindow is the rate as it applies to the named window, and whether it applies
+// at all. A rate whose window is unnamed applies everywhere, because that is how
+// a reading cached before the name existed has always been read. A window of a
+// different length, or of a length nobody can state, is "cannot say": there is
+// no conversion between the two windows' points that is not a guess about the
+// plan.
+//
+// The window is named by a Headroom, which carries no reading to ask for a
+// length, so the length is the name's.
+func (b sessionBurn) onWindow(n usage.WindowName) (float64, bool) {
 	if !b.has {
 		return 0, false
 	}
@@ -89,17 +91,11 @@ func (b sessionBurn) on(length time.Duration, known bool) (float64, bool) {
 		return b.perMin, true
 	}
 	from, ok := usage.WindowLength(b.window)
+	length, known := usage.WindowLength(n)
 	if !ok || !known || from != length {
 		return 0, false
 	}
 	return b.perMin, true
-}
-
-// onWindow is on for a window named by a Headroom, which carries no reading to
-// ask for a length.
-func (b sessionBurn) onWindow(n usage.WindowName) (float64, bool) {
-	length, known := usage.WindowLength(n)
-	return b.on(length, known)
 }
 
 // RoomOf is the raw room the session will actually be stopped by: the least room
@@ -114,6 +110,15 @@ func RoomOf(h Headroom) float64 {
 		return h.MinPct
 	}
 	return h.MinAnyModelPct
+}
+
+// roomWindow names the window RoomOf read its figure off, by the same fallback,
+// so a rule that acts on the room can say which window it was.
+func roomWindow(h Headroom) usage.WindowName {
+	if h.MinAnyModelWindow == "" {
+		return h.MinWindow
+	}
+	return h.MinAnyModelWindow
 }
 
 // CarriesFor reports whether an account's room would carry the session for d at

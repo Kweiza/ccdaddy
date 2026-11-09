@@ -58,7 +58,7 @@ func isQuota(c view.ListColumn) bool {
 // everywhere else: "-" is a claim that the quantity does not exist for this
 // account, and these cells carry no claim at all -- they are the room a wider
 // section needs and this one does not.
-func (l statusLine) cells(now time.Time, hover bool) []string {
+func (l statusLine) cells(now time.Time) []string {
 	out := make([]string, 0, len(l.cols))
 	for _, c := range l.cols {
 		switch {
@@ -73,7 +73,7 @@ func (l statusLine) cells(now time.Time, hover bool) []string {
 		case l.header:
 			out = append(out, statusHeader(c))
 		default:
-			cell := l.row.ListCell(c, l.block, now, hover)
+			cell := l.row.ListCell(c, l.block, now)
 			// StatusFlags rides on the AGE cell: a suffix that belongs to one
 			// account reads better beside that account's own figure than at a
 			// fixed offset far to its right.

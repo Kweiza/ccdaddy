@@ -317,15 +317,11 @@ func (m Model) plan() Layout {
 // trailerLines is the block printed under the table: the legend, the unranked
 // note and one credit line per credit-metered seat, in internal/view's order.
 //
-// hover is FALSE and that is a statement about this page rather than about the
-// fleet. The hover sentence explains quota cells that read used-against-
-// threshold, and this table has always drawn the bare percentage -- it is the
-// row of percentages that IS the gauge, banded by cellStyle. Passing Snap.Hover
-// through would print a sentence describing cells that are not on the page.
-//
-// The stranded sentence is empty for the same reason and not for a second one:
-// it qualifies the hover sentence, so a page that does not print the first has
-// nothing for the second to qualify.
+// The hover block is NOT printed here, and that is a statement about this page
+// rather than about the fleet. It is one line per account under the rule, and
+// a page that budgets every row cannot spend a fleet's worth of them on it;
+// the Current and Strategy lines above the table already say hover is
+// choosing, and `ccdad status` carries the order.
 func (m Model) trailerLines() []string {
 	// One legend per section, each naming the provider it explains, because each
 	// half of the table draws its own windows and nothing in the text of a bare
@@ -340,7 +336,7 @@ func (m Model) trailerLines() []string {
 			out = append(out, legend)
 		}
 	}
-	return append(out, view.TrailerLines(m.Snap.Rows, m.Cols, false, "", "")...)
+	return append(out, view.TrailerLines(m.Snap.Rows, m.Cols, nil)...)
 }
 
 // Body is the whole page as one string.
@@ -1132,15 +1128,11 @@ func (m Model) markerRow(cols []view.ListColumn, l Layout, text string) []string
 //     emphasis, and which glyph set a console can carry is the machine fact
 //     internal/view never reads.
 //
-// The hover form is not drawn here and the false says so. `ccdad status`
-// renders each quota cell as used against the threshold the row was measured
-// with when the fleet is under hover; this page has always drawn the bare
-// percentage, and it is the row of percentages that IS the gauge, read across
-// and banded by cellStyle. Passing Snap.Hover through would change every quota
-// cell on a hover machine, which is a change to the page rather than to where
-// the page reads its cells from.
+// A quota cell is the window's own percentage here as on every surface, and it
+// is the row of percentages that IS the gauge, read across and banded by
+// cellStyle.
 func (m Model) cell(c view.ListColumn, line view.ListRow, l Layout, block view.Columns) string {
-	text := line.Row.ListCell(c, block, m.Snap.Now, false)
+	text := line.Row.ListCell(c, block, m.Snap.Now)
 	switch c.Kind {
 	case view.ColumnIdx:
 		return m.markerCell(line) + strings.TrimPrefix(text, line.Row.Marker())
