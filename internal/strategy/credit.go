@@ -147,13 +147,36 @@ type Decision struct {
 	DisabledReason string
 }
 
-// creditRefused is whether the account itself refuses to spend credit: its
-// extra-usage reading is Blocked -- out of credits, or another refusal its
-// holder or organization set -- whatever its utilization says. It is the gate's
-// blocked refusal, and half of a seat's spent credit meter (creditSpent), so
-// the two never disagree about which readings mean no credit.
+// creditStateOf is the one reading of the four extra-usage states that both
+// the gate (CreditGate) and a seat's spent credit meter (creditSpent) take:
+// the reason the account itself refuses to spend credit, or CreditAllowed when
+// it does not, and whether its meter is the word on what it has left.
+//   - Disabled: overage is off for the account -- CreditAccountDisabled.
+//   - Blocked: out of credits, or another refusal its holder or organization
+//     set -- CreditAccountBlocked.
+//   - Enabled: no refusal, and the meter is read: the account is spent only
+//     at its limit.
+//   - Unknown: neither -- an account whose credit could not be read is not
+//     known to refuse it and has no meter to read, and unreadable is not empty
+//     here as anywhere else; the gate refuses it on its own ground.
+func creditStateOf(e usage.ExtraUsage) (refusal CreditReason, metered bool) {
+	switch e.State {
+	case usage.ExtraUsageDisabled:
+		return CreditAccountDisabled, false
+	case usage.ExtraUsageBlocked:
+		return CreditAccountBlocked, false
+	case usage.ExtraUsageEnabled:
+		return CreditAllowed, true
+	}
+	return CreditAllowed, false
+}
+
+// creditRefused is whether the account itself refuses to spend credit, at
+// whatever utilization: its state carries a refusal reason (creditStateOf).
+// TestACreditMeterIsSpentByStateAndLevel.
 func creditRefused(e usage.ExtraUsage) bool {
-	return e.State == usage.ExtraUsageBlocked
+	refusal, _ := creditStateOf(e)
+	return refusal != CreditAllowed
 }
 
 // CreditGate is the last two steps of the credit gate, applied to one
@@ -195,15 +218,11 @@ func CreditGate(e usage.ExtraUsage, ceiling float64, mainPoolExhausted bool) Dec
 	// they all carry Blocked.
 	d.Blocked = true
 
-	if creditRefused(e) {
-		d.Reason = CreditAccountBlocked
+	switch refusal, metered := creditStateOf(e); {
+	case refusal != CreditAllowed:
+		d.Reason = refusal
 		return d
-	}
-	switch e.State {
-	case usage.ExtraUsageDisabled:
-		d.Reason = CreditAccountDisabled
-		return d
-	case usage.ExtraUsageUnknown:
+	case !metered:
 		// An account whose credit axis could not be read is one ccdad cannot
 		// price. Refuse, and say which of the two it is.
 		d.Reason = CreditSpendUnreadable
