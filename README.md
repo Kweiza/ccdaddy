@@ -453,17 +453,24 @@ Hover orders the Claude lane's accounts instead of comparing their room:
    for another five-hour account that merely has more room.
 2. Then weekly-only accounts, such as verified Ultra seats, which report no
    five-hour window. The session always goes to the one whose week resets
-   soonest, once that week ends more than `recovery_hysteresis` (default 5m)
+   soonest, once that week ends at least `recovery_hysteresis` (default 5m)
    sooner than the current one's.
 3. The session returns to a five-hour account as soon as it has room again.
 4. An account is handed off one point before any limit it cannot avoid by
-   changing model, or earlier when the next reading would land past the limit.
+   changing model (a primary credit seat at 95% of its balance), or earlier
+   when the next reading would land past the limit. The session is not moved
+   to an account the work running now would run out before its next reading.
 
 An account left at a limit is held out until the window that stopped it rolls
 over, so the session is not taken straight back to it; it is still used when
 nothing else has room. Weekly-only quota is spent only while every five-hour
 account is at a limit, so on a fleet with several such seats most of their
 weekly quota can expire unspent.
+
+When the live account is at a limit and no account is better placed, hover
+reports the switch as blocked until the soonest rollover. When every account
+is past its last point, it orders them by which comes back first, and status
+says so.
 
 Hover sets the threshold, credit threshold, strategy, preemption lead, probe
 setting, and cooldown (2m) itself. It uses your `hysteresis_pct`,

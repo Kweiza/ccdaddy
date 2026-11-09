@@ -1617,8 +1617,8 @@ func (e *Engine) warmTarget(s *usage.Snapshot, thr strategy.Thresholds, now time
 // something an axis with a 1.99x margin can pay.
 //
 // A window whose length this build cannot name gets no phase. That is the codex
-// window with no limit_window_seconds, and it is the same "no scale to state
-// this on" the licence floor answers with silence rather than with a guess.
+// window with no limit_window_seconds: with no scale to state a phase on, the
+// answer is silence rather than a guess.
 //
 // The length comes from the COLD window itself and not from the next rollover
 // among the readable ones, and that is not interchangeable: at the moment this
