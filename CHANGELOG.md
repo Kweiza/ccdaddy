@@ -18,8 +18,8 @@ must reference accounts by `uuid` or `alias`.
 
 Hover becomes an order: accounts with a five-hour window first, then the
 weekly-only seat whose week resets soonest, with every hand-off made before a
-limit. A simulated week of a one-Max, three-Ultra fleet goes from 210 switches
-to 57 under heavy use and from 43 to 2 when the five-hour window never fills,
+limit. A simulated week of a one-Max, three-Ultra fleet goes from 183 switches
+to 56 under heavy use and from 33 to 2 when the five-hour window never fills,
 and a blown model cap no longer stops the session. The cost is Ultra weekly
 quota, which can now expire unspent.
 
@@ -56,86 +56,101 @@ quota, which can now expire unspent.
 
   The work's rate is measured only between two readings of an account that
   were both taken while it was live, on every window they carry, and it
-  follows the work across a switch. Until such a pair exists -- the first two
-  live readings -- an account is judged by its levels alone. An account's own
-  average pace, or a rate measured on it before the session left, no longer
-  counts against it, so an idle account with room is not passed over.
+  follows the work across a switch; a pause is not taken for slower work, so
+  the last running rate stands through it. Until such a pair exists -- the
+  first two live readings -- an account the session is not on is judged by its
+  levels alone, and the live account by its own window average. An account's
+  own average pace, or a rate measured on it before the session left, no
+  longer counts against it, so an idle account with room is not passed over.
 
   Measured over a simulated week of the 2026-11-09 fleet (one Max account and
   three Ultra seats), and of the same fleet with the Max account's Fable week
   at 99.5%, before and after. The simulation reads each account only when the
-  daemon's own poll schedule would and decides once a second, as the daemon
-  does. "Unspent" is weekly quota that reached a weekly reset unused, for the
+  daemon's own poll schedule would, in the whole percents the endpoint
+  reports, warms idle accounts by the daemon's own rules, and decides once a
+  second, as the daemon does. "Unspent" is weekly quota that reached a weekly reset unused, for the
   five-hour account and for the three Ultra seats:
 
   | Load | Fleet | Switches | Unspent, five-hour | Unspent, weekly-only | Seconds a limit stopped the session |
   |---|---|---|---|---|---|
-  | idle (window never fills) | today | 43 → 2 | 31.78 → 0.98 | 137.59 → 184.57 | 0 → 0 |
-  | idle | Fable at 99.5% | 29 → 2 | 41.00 → 0.98 | 128.35 → 184.57 | 0 → 0 |
-  | light (fills in five hours) | today | 52 → 54 | 28.71 → 1.00 | 120.11 → 168.91 | 0 → 0 |
-  | light | Fable at 99.5% | 33 → 54 | 41.00 → 1.00 | 107.80 → 168.91 | 0 → 0 |
-  | heavy (fills in two hours) | today | 210 → 57 | 6.04 → 0.94 | 28.79 → 46.20 | 0 → 0 |
-  | heavy | Fable at 99.5% | 165 → 57 | 33.46 → 0.94 | 9.22 → 46.20 | 484 → 0 |
+  | idle (window never fills) | today | 33 → 2 | 31.28 → 2.00 | 138.08 → 183.55 | 0 → 0 |
+  | idle | Fable at 99.5% | 27 → 2 | 41.00 → 2.00 | 128.35 → 183.55 | 0 → 0 |
+  | light (fills in five hours) | today | 38 → 54 | 28.47 → 1.98 | 120.35 → 167.98 | 0 → 0 |
+  | light | Fable at 99.5% | 30 → 54 | 41.00 → 1.98 | 107.82 → 167.98 | 0 → 0 |
+  | heavy (fills in two hours) | today | 183 → 56 | 5.64 → 1.98 | 29.84 → 45.13 | 0 → 0 |
+  | heavy | Fable at 99.5% | 155 → 56 | 33.28 → 1.98 | 10.93 → 45.13 | 210 → 0 |
 
-  Hover now switches twice for each five-hour window it fills: once just
+  Hover now switches about twice for each five-hour window it fills: once just
   before the limit and once when the window resets. Light load fills its window
-  minutes before the reset, so it switches as often as heavy load.
+  minutes before the reset, so it switches as often as heavy load. On a fleet
+  that runs dry, the endgame between accounts' last points adds a few more.
 
   The same simulation over four more fleets -- two Max accounts with and
   without three Ultra seats, today's fleet with Ultra weeks four times a Max
   week, and a Max beside two Ultra seats whose weeks end an hour apart -- and
-  two more loads: the 5.4 five-hour points a minute measured in production on
-  2026-09-05, in two-hour sessions, and heavy load's mean in three-minute
-  bursts. Seconds a limit stopped the session while another account still had
+  three more loads: the 5.4 five-hour points a minute measured in production on
+  2026-09-05, in two-hour sessions; heavy load's mean in three-minute bursts;
+  and the production rate in bursts of 2-9 minutes with pauses of 3-15 minutes
+  between them, on today's fleet and on two Max accounts with three Ultra
+  seats. Seconds a limit stopped the session while another account still had
   room, before and after, wherever either is not zero:
 
   | Fleet | Load | Before | After |
   |---|---|---|---|
-  | today | production | 79 | 0 |
-  | two Max, three Ultras | light | 107 | 0 |
-  | two Max, three Ultras | heavy | 1472 | 0 |
-  | two Max, three Ultras | production | 1500 | 0 |
-  | two Max, three Ultras | burst | 928 | 17 |
-  | two Max | heavy | 6156 | 0 |
-  | two Max | production | 2424 | 0 |
-  | two Max | burst | 4884 | 1177 |
-  | two Ultras | production | 428 | 0 |
+  | today | production | 184 | 0 |
+  | today | burst | 0 | 29 |
+  | today with larger Ultra weeks | burst | 0 | 29 |
+  | two Max, three Ultras | light | 167 | 0 |
+  | two Max, three Ultras | heavy | 1457 | 239 |
+  | two Max, three Ultras | production | 2370 | 346 |
+  | two Max, three Ultras | burst | 831 | 142 |
+  | two Max, three Ultras | pause | 244 | 5 |
+  | two Max | heavy | 5362 | 1641 |
+  | two Max | production | 1765 | 136 |
+  | two Max | burst | 4768 | 958 |
+  | a Max and two Ultras | production | 336 | 37 |
 
-  What is left is not zero, and it is plainly said here: **a burst that
-  resumes after a pause near a limit can still stop a session**, for seconds
-  to minutes a week, on a fleet with no spare room. The work's rate is
-  measured between two readings, a pair taken across the pause reads it at
-  half its rate or less, and the live account then runs out before the next
-  reading shows it. Under the burst load above that is 17 seconds a week for
-  two Max accounts beside three nearly spent Ultra seats, and 1177 seconds
-  for two Max accounts alone, in which the other account held only its last
-  few points. The remedy not taken is a reserve on the live account's level:
-  handing off with enough left to cover such a burst through one reading
-  interval means leaving about five to eight five-hour points at every
-  hand-off whatever the work is doing, an estimated 140 to 235 more five-hour
-  points left unspent a week on today's fleet under steady heavy use, on top
-  of the 100 left now.
+  **What is left is not zero, and a session can still stop at a limit while
+  another account has room.** Hover cannot see the work between two readings.
+  It projects the live account at the rate the work was last measured running,
+  and the projection comes too late when the work runs faster than that rate,
+  as a burst does after a quiet stretch; when the readings are whole percents,
+  so the live account can be up to a point further spent than it reads, a rate
+  is measured to the nearest point, and an account holding less than a point
+  reads the same 99 as one holding a whole one; and when the rate was measured
+  on another plan, whose points are not this one's. The live account then runs
+  out before its next reading shows it. The first two live readings after the
+  daemon starts have no rate at all, and accounts sharing one organization
+  share its polling budget, so the first look after a move can come later
+  than the reserve assumes. The figures above belong to the simulated fleets
+  and loads; they are not a bound on what a real week can cost.
+
+  The remedy not taken is a reserve on the live account's level: handing off
+  with enough left to cover a reading step and a burst through one reading
+  interval, about five to eight five-hour points at every hand-off whatever
+  the work is doing -- an estimated 140 to 235 more five-hour points left
+  unspent a week on today's fleet under steady heavy use.
 
   The three-minute reserve is the poll policy's normal floor. A ten-minute
-  one, the idle cadence, was measured against it: it left more than twice the
-  five-hour points behind, stopped today's fleet under production load for
-  3427 seconds where three minutes stops it for none, and stopped with room
-  on another account in five of these variants. It did better in one, two Max
-  accounts under the burst load, by 23 seconds.
+  one, the idle cadence, was measured against it before readings were whole
+  percents: it left more than twice the five-hour points behind, stopped
+  today's fleet under production load for 3427 seconds where three minutes
+  stopped it for none, and stopped with room on another account in five
+  variants. It did better in one, two Max accounts under the burst load, by
+  23 seconds.
 - **Ultra weekly quota can now expire unspent.** A weekly-only seat is used
   only while every five-hour account is at a limit, and then only the one whose
   week ends first. On a fleet with several such seats most of their weekly
   quota now expires unused; the pace rotation used to spread work across them.
-- **Hover no longer overrides `hysteresis_pct`, `headroom_ratio`, or
-  `recovery_hysteresis`.** It still sets the threshold, credit threshold,
-  strategy, preemption lead (now the three minutes above), probe setting, and
-  cooldown (2m) itself, and `ccdad config list` no longer marks the other
-  three as overridden. `recovery_hysteresis` (default 5m) is now the margin
-  between two weekly-only seats: the session moves to one whose week ends
-  sooner only when it ends at least that much sooner, so two seats whose weeks
-  end seconds apart do not trade it back and forth. `hysteresis_pct` and
-  `headroom_ratio` apply under hover only on the way back from a credit seat
-  once every account is past its last point.
+- **Hover no longer overrides `recovery_hysteresis`.** It still sets the
+  threshold, credit threshold, strategy, preemption lead (now the three minutes
+  above), probe setting, and cooldown (2m) itself, and `ccdad config list` no
+  longer marks `recovery_hysteresis` as overridden. It is now the margin
+  between two weekly-only seats (default 5m): the session moves to one whose
+  week ends sooner only when it ends at least that much sooner, so two seats
+  whose weeks end seconds apart do not trade it back and forth.
+  `hysteresis_pct` and `headroom_ratio` stay marked overridden: no hover move
+  reads them.
 - **Under hover, a primary credit seat sorts after every weekly-only seat
   whose week can expire.** It has no window and no weekly reset, so it comes
   after them and ahead of accounts nobody could read, accounts held out, and
@@ -144,9 +159,12 @@ quota, which can now expire unspent.
 - **Under hover, credits are the last place the session goes.** A credit seat
   is considered only when the live account is out and no subscription account
   has any work left to give, and then only when your thresholds say the main
-  pool is exhausted, whichever account the order puts first. It used to be considered whenever the live account sorted first and
-  the main pool read exhausted, which could move a session onto credits while
-  another account's last points were still unspent.
+  pool is exhausted, whichever account the order puts first. It used to be
+  considered whenever the live account sorted first and the main pool read
+  exhausted, which could move a session onto credits while another account's
+  last points were still unspent. From a live credit seat the session goes
+  back only to an account that can carry the work, and `--force` there cannot
+  take it onto one at a limit.
 - **Under hover, a cap on one model family is left out of everything that
   decides a limit.** A Fable or Opus week past 99% used to become the
   account's binding window, so the daemon measured the session's rate on a
@@ -217,7 +235,11 @@ quota, which can now expire unspent.
   or left at a later rate-limit floor, so the first look at the work on its new
   account is a reading taken there rather than one from before the move. Every
   switch ccdad makes does this: the daemon's, `ccdad auto --once`'s, and
-  `ccdad switch`'s.
+  `ccdad switch`'s. A poll of that account already in flight when the switch
+  lands commits as the live account's reading and leaves the prompt poll
+  standing, and the prompt's floor is shared among the accounts of one
+  organization the way every other look is, so rotating among them stays
+  inside the organization's polling allowance.
 - Mode `hover`, and five reasons: "the live account is down to its last point
   before a limit", "a short-window account has room again", "another
   weekly-only account's week resets sooner", "staying on the short-window
@@ -233,6 +255,11 @@ quota, which can now expire unspent.
 
 ### Fixed
 
+- **`ccdad status --refresh` and the dashboard's `r` measure on hover's table
+  under hover**, as the daemon's own polls do. On the configured table a live
+  account above your threshold but short of hover's line was filed exhausted
+  and read on the ten-minute exhausted cadence, which pulled its hand-off
+  forward.
 - **`ccdad remove` forgets what the engine remembered about the account.** An
   account removed and added back under the same login came back quarantined
   if it had been. Its quarantine, and the mark that holds it out of hover's
