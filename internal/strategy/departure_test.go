@@ -153,9 +153,9 @@ func TestNoOutAndBackInsideAFiveHourCycle(t *testing.T) {
 		{uuid: "a-max", short: true, weekUtil: 10, weekAt: tierSimEpoch.Add(4 * day)},
 		{uuid: "u-ultra", weekUtil: 10, weekAt: tierSimEpoch.Add(5 * day)},
 	}
-	// Five hours and a few ticks: the window started on the first turn, so it
-	// rolls at tick 150.
-	res := runTierSim(t, "one five-hour cycle", fleet, 0.05, 155)
+	// Five hours and ten minutes: the window started on the first turn, so it
+	// rolls at five hours, and the poll that sees it is a margin after that.
+	res := runTierSim(t, "one five-hour cycle", fleet, 0.025, 5*time.Hour+10*time.Minute)
 	if res.total != 2 {
 		t.Errorf("%d switches in one five-hour cycle, want 2: out at the limit and back at the rollover", res.total)
 	}

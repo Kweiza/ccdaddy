@@ -18,9 +18,10 @@ must reference accounts by `uuid` or `alias`.
 
 Hover becomes an order: accounts with a five-hour window first, then the
 weekly-only seat whose week resets soonest, with every hand-off made before a
-limit. A simulated week of a one-Max, three-Ultra fleet goes from 202 switches
-to 57 under heavy use and from 43 to 2 when the five-hour window never fills.
-The cost is Ultra weekly quota, which can now expire unspent.
+limit. A simulated week of a one-Max, three-Ultra fleet goes from 210 switches
+to 59 under heavy use and from 43 to 2 when the five-hour window never fills,
+and a blown model cap no longer stops the session. The cost is Ultra weekly
+quota, which can now expire unspent.
 
 ### Changed
 
@@ -37,22 +38,34 @@ The cost is Ultra weekly quota, which can now expire unspent.
   3. The session returns to a five-hour account as soon as it has room again.
   4. Every hand-off happens one point before any limit a model choice cannot
      avoid -- the five-hour window now as well as the week -- or earlier when
-     the next reading would land past the limit.
+     the next reading would land past the limit. A cap on one model family,
+     such as a blown Fable week, is not such a limit.
+
+  An account the session is not on is at a limit only when it is empty or on
+  its last point, or when the work running now, at the live account's measured
+  rate, would run it out before that account's next reading. Its own average
+  pace, or a rate measured before the session left it, no longer counts
+  against it, so an idle account with room is not passed over.
 
   Measured over a simulated week of the 2026-11-09 fleet (one Max account and
-  three Ultra seats), before and after; "unspent" is weekly quota that reached
-  a weekly reset unused, for the five-hour account and for the three Ultra
-  seats:
+  three Ultra seats), and of the same fleet with the Max account's Fable week
+  blown, before and after. The simulation reads each account only when the
+  daemon's own poll schedule would and decides once a second, as the daemon
+  does. "Unspent" is weekly quota that reached a weekly reset unused, for the
+  five-hour account and for the three Ultra seats:
 
-  | Load | Switches | Unspent, five-hour | Unspent, weekly-only | Ticks a limit stopped the session |
-  |---|---|---|---|---|
-  | idle (window never fills) | 43 → 2 | 31.79 → 0.99 | 137.56 → 184.55 | 0 → 0 |
-  | light (fills in five hours) | 51 → 54 | 28.50 → 0.98 | 120.30 → 169.00 | 0 → 0 |
-  | heavy (fills in two hours) | 202 → 57 | 6.00 → 0.95 | 29.30 → 46.35 | 0 → 0 |
+  | Load | Fleet | Switches | Unspent, five-hour | Unspent, weekly-only | Seconds a limit stopped the session |
+  |---|---|---|---|---|---|
+  | idle (window never fills) | today | 43 → 2 | 31.78 → 0.98 | 137.59 → 184.56 | 0 → 0 |
+  | idle | Fable blown | 29 → 2 | 41.00 → 0.98 | 128.35 → 184.56 | 0 → 0 |
+  | light (fills in five hours) | today | 52 → 54 | 28.71 → 0.99 | 120.11 → 168.44 | 0 → 0 |
+  | light | Fable blown | 33 → 56 | 41.00 → 0.99 | 107.80 → 168.45 | 0 → 0 |
+  | heavy (fills in two hours) | today | 210 → 59 | 6.04 → 0.97 | 28.79 → 45.15 | 0 → 0 |
+  | heavy | Fable blown | 141 → 61 | 41.00 → 0.96 | 5.56 → 45.16 | 136 → 0 |
 
-  Hover now switches twice for each five-hour window it fills: once at the
-  limit and once when the window resets. Light load fills its window minutes
-  before the reset, so it switches as often as heavy load.
+  Hover now switches twice for each five-hour window it fills: once just
+  before the limit and once when the window resets. Light load fills its window
+  minutes before the reset, so it switches as often as heavy load.
 - **Ultra weekly quota can now expire unspent.** A weekly-only seat is used
   only while every five-hour account is at a limit, and then only the one whose
   week ends first. On a fleet with several such seats most of their weekly
@@ -65,9 +78,19 @@ The cost is Ultra weekly quota, which can now expire unspent.
   seats: the session moves to one whose week ends sooner only when it ends at
   least that much sooner, so two seats whose weeks end seconds apart do not
   trade it back and forth.
-- **A primary credit seat is hover's last choice before an account at a
-  limit.** It has no window and no weekly reset, so it sorts after every
-  weekly-only seat whose week can expire.
+- **Under hover, a primary credit seat sorts after every weekly-only seat
+  whose week can expire.** It has no window and no weekly reset, so it comes
+  after them and ahead of accounts nobody could read, accounts held out, and
+  accounts at a limit. It is handed off at 95% of its balance, hover's credit
+  threshold, because credits do not come back.
+- **Under hover, a live account at a limit with nowhere better to go is
+  reported as blocked** until the soonest reset, instead of "already on the
+  best account", whichever account the order puts first. `ccdad auto --once`
+  exits 4 there.
+- **When every account is past its last point, hover says so.** The lines
+  under the status table name recovery mode and say when each account comes
+  back, and `ccdad auto --json` order rows carry no `rung`, because the order
+  in force is not hover's.
 - **consume-first ignores a weekly reset that has already passed.** A cached
   reading whose week has reset, before the refresh lands, used to read as the
   soonest reset and pull the session onto the one account holding a fresh week.
@@ -78,8 +101,13 @@ The cost is Ultra weekly quota, which can now expire unspent.
   at Fri 14:00" or "at its limit on five_hour". `ccdad status --json` still
   reports each window's `thresholdPct`, which under hover is 99.
 - **`ccdad auto --json` is schema version 2.** Order rows no longer carry
-  `hoverShare`, `strandedPct`, or `strandedWindow`, and now carry `rung` (under
-  hover), `shortWindow`, `lastPoint`, `closing`, and `heldOut`.
+  `hoverShare`, `strandedPct`, or `strandedWindow`, and now carry `rung` (on
+  hover's own order), `shortWindow`, `lastPoint`, `closing`, and `heldOut`.
+- **Pre-emption leaves an account only for a limit it would reach before its
+  window resets.** An account three points from its limit with its window
+  resetting in four minutes used to be left and taken back at the reset: two
+  switches for a stop that was never going to happen. This applies under every
+  strategy.
 - **The daemon's switch log line and the `explanation` in `ccdad auto --json`
   name the window** a limit hand-off left the previous account on.
 
@@ -93,7 +121,8 @@ The cost is Ultra weekly quota, which can now expire unspent.
   account, the window it was left on and when. Each account has its own entry,
   so leaving a second five-hour account does not release the first. A
   held-out account is still used when nothing else has room, and a targetless
-  `ccdad switch` records one the same way the daemon does.
+  `ccdad switch`, with or without `--force`, records one the same way the
+  daemon does.
 - Mode `hover`, and four reasons: "the live account is down to its last point
   before a limit", "a short-window account has room again", "another
   weekly-only account's week resets sooner", and "staying on the short-window
@@ -105,6 +134,13 @@ The cost is Ultra weekly quota, which can now expire unspent.
   the extra share for quota about to expire, its minimum-room rule, and the
   measured-rate line under the status table. With them goes the work that
   spread across Ultra seats to spend their weeks before they reset.
+
+### Fixed
+
+- **`ccdad remove` forgets what the engine remembered about the account.** An
+  account removed and added back under the same login came back quarantined
+  if it had been. Its quarantine, and the mark that holds it out of hover's
+  order, are now dropped when it is removed.
 
 ## [0.28.0] — 2026-11-05
 
