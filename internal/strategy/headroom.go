@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
 
@@ -804,9 +805,28 @@ func (o Options) lastPointOf(h, plan Headroom) usage.WindowName {
 	return ""
 }
 
+// secondMeterEmptyOf is the window of a credit seat's second meter that has
+// nothing left, or "" -- the half of Ranked.Empty its Headroom cannot say. A
+// primary seat is ranked on its credit balance, and its second meter is its
+// plan's opted-in cap (planEmptyOf). A seat of the last-resort pool is ranked
+// on its plan windows, and its second meter is the credit balance: a seat whose
+// monthly limit is spent has nothing left to give, whatever its windows read.
+// Every other account has one meter, which Empty reads already.
+// TestAPoolSeatIsEmptyWhenItsBalanceIsSpent.
+func (o Options) secondMeterEmptyOf(c Candidate, plan Headroom) usage.WindowName {
+	switch {
+	case primaryCredit(c):
+		return o.planEmptyOf(c, plan)
+	case c.Kind == identity.KindCredit:
+		if out, known := OutOfQuota(creditHeadroom(c, o)); known && out {
+			return CreditWindow
+		}
+	}
+	return ""
+}
+
 // planEmptyOf is the plan window a primary credit seat has nothing left on,
 // under hover, or "" when it has none -- the plan meter's half of Ranked.Empty.
-// Every other account has one meter, which Empty reads already.
 func (o Options) planEmptyOf(c Candidate, plan Headroom) usage.WindowName {
 	if o.hover == nil || !primaryCredit(c) {
 		return ""

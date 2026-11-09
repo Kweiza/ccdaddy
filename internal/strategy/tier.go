@@ -101,16 +101,20 @@ func shortWindowOf(s *usage.Snapshot) usage.WindowName {
 // the rung, the limit, the last resort, the empty-live waiver, the carry and
 // bridge tests.
 //
-// A primary credit seat carries two meters. Its Headroom is the credit
-// balance, and under hover its plan's windows are a limit too where the user
-// opted them in; an opted-in cap at 100% stops the seat whatever its balance
-// says, and reading the balance alone would pick it as the last place to go.
-// TestAnEmptyOptedInCapIsEmptyWhateverTheBalance.
+// A credit seat carries two meters, and either one spent empties it. A primary
+// seat's Headroom is the credit balance, and under hover its plan's windows
+// are a limit too where the user opted them in; an opted-in cap at 100% stops
+// the seat whatever its balance says, and reading the balance alone would pick
+// it as the last place to go. A pool seat's Headroom is its plan windows, and
+// its credit balance is the other meter: a spent monthly limit leaves it
+// nothing whatever its windows read.
+// TestAnEmptyOptedInCapIsEmptyWhateverTheBalance,
+// TestAPoolSeatIsEmptyWhenItsBalanceIsSpent.
 func (r Ranked) Empty() (usage.WindowName, bool) {
 	if out, known := OutOfQuota(r.Headroom); known && out {
 		return roomWindow(r.Headroom), true
 	}
-	return r.planEmpty, r.planEmpty != ""
+	return r.secondMeterEmpty, r.secondMeterEmpty != ""
 }
 
 // AtLimit names the window that has this account at a limit, or "" when it is
