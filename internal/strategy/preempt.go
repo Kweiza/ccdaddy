@@ -99,7 +99,7 @@ func atRate(now time.Time, room, perMin float64) (time.Time, bool) {
 // least-slack window leaves the engine sitting on an account whose five-hour cap
 // lands in ten minutes because its weekly cap is nearer its threshold.
 //
-// ws is Options.limitWindows: the set the ranking measures, and under hover only
+// ws is bindingWindows: the set the ranking measures, and on hover's table only
 // the part of it no model choice can dodge. That is what keeps the widening
 // honest -- a per-model weekly cap belonging to another family cannot pre-empt a
 // session that will never touch it.
@@ -164,7 +164,7 @@ func measuredExhaustion(c Candidate, ws []usage.NamedWindow, now time.Time, hori
 // on it -- or "" when it is not. The average is asked first because it reads
 // every window; the measured rate reads only the one it was taken on.
 func (o Options) runsOutWithin(c Candidate, horizon time.Duration) usage.WindowName {
-	ws := o.limitWindows(c.Usage, o.thresholdsFor(c))
+	ws := bindingWindows(c.Usage, o.Model, o.thresholdsFor(c))
 	if w := projectedExhaustion(ws, o.Now, horizon); w != "" {
 		return w
 	}

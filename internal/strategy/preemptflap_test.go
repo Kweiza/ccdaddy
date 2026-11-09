@@ -80,7 +80,7 @@ func TestTheControlPoolReachesThePreemptiveRule(t *testing.T) {
 	if !ok {
 		t.Fatal("the live account has no horizon; the fixture lost its provenance")
 	}
-	if projectedExhaustion(o.limitWindows(live.Usage, o.Thresholds()), o.Now, horizon) == "" {
+	if projectedExhaustion(bindingWindows(live.Usage, o.Model, o.Thresholds()), o.Now, horizon) == "" {
 		t.Fatalf("the live account is NOT projected to run out inside %v; this test would pass on a build where pre-emption never fires", horizon)
 	}
 }

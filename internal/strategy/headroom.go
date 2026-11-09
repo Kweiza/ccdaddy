@@ -75,9 +75,10 @@ type Headroom struct {
 	//
 	// MinPct is deliberately left alone. It is the honest "least room anywhere"
 	// figure, Spent still reads it so a blown sub-cap still counts as spent, and
-	// the display still names the blown window through Floor. This field answers
-	// the narrower question the empty tier was always asking: can this account
-	// serve a prompt at all.
+	// the display still names the blown window through Floor -- on a table whose
+	// model caps bind; hover's leaves them out of the set (ModelCapsDodged). This
+	// field answers the narrower question the empty tier was always asking: can
+	// this account serve a prompt at all.
 	// MinAnyModelWindow being EMPTY is how a consumer tells "no window binding
 	// every model was readable" from "one was, and it is full". There is no
 	// third field carrying that: a bool would have to be exported for the
@@ -248,14 +249,40 @@ func capsOneModelFamily(n usage.WindowName) bool {
 }
 
 // bindingWindows is the set of windows that bind for one ranking pass: the
-// --model narrowing rule (README, "ccdad switch").
+// windows the pass admits (admittedWindows), less the ones a model choice can
+// dodge when the table says those do not bind (ModelCapsDodged).
 //
-// With no model named EVERY window binds, scoped ones included. That is the
-// direction the fixed five already went — seven_day_opus binds today whatever a
-// session is going to run — and it is the same asymmetry HeadroomOf was written
-// on: counting a window that does not bind costs one conservative switch, while
-// missing one that does bind hands work to an account that is already out of
-// quota.
+// That second half is hover's rule, and it is stated in the TABLE rather than
+// in the pass so that everything measured on a table agrees about it without
+// asking which mode is on: the binding window HeadroomFor names, Spent, the
+// projections pre-emption makes, and -- the reason it lives here -- the window
+// the daemon's poller measures a burn rate on and schedules its next look by.
+// Held to hover's one line, a model-family cap past it was the tightest window
+// on the account, so the poller read the rate off a cap nothing was spending
+// against: zero, while the week it sat beside was eight minutes from its limit.
+// TestABlownModelCapIsNotTheWindowAPollUnderHoverMeasures, in internal/daemon.
+func bindingWindows(s *usage.Snapshot, model string, t Thresholds) []usage.NamedWindow {
+	ws := admittedWindows(s, model, t)
+	if t.ModelCaps == ModelCapsDodged {
+		return nonDodgeable(ws)
+	}
+	return ws
+}
+
+// admittedWindows is every window one pass may read on an account: the --model
+// narrowing rule (README, "ccdad switch") and the opt-in for scopes this build
+// cannot name. It is the set bindingWindows narrows, and the one the questions
+// that are not about a limit ask -- whether a turn could reach credits, which
+// stopped clock a warm-up starts, which rollover a poll aims at -- because a
+// warm-up turn runs on whatever model claude defaults to, and a cap hover does
+// not count as a limit still bills that turn.
+//
+// With no model named EVERY window is admitted, scoped ones included. That is
+// the direction the fixed five already went — seven_day_opus binds today
+// whatever a session is going to run — and it is the same asymmetry HeadroomOf
+// was written on: counting a window that does not bind costs one conservative
+// switch, while missing one that does bind hands work to an account that is
+// already out of quota.
 //
 // Naming a model NARROWS, and only ever narrows: the per-model windows scoped to
 // a DIFFERENT family drop out, and nothing new is added. So --model can only
@@ -277,7 +304,7 @@ func capsOneModelFamily(n usage.WindowName) bool {
 // meaning nobody can give. A threshold naming it in the per-window table IS the
 // say so, and nothing else is: consent is per window, because a table set for
 // five_hour is not a statement about a scope the user has never seen.
-func bindingWindows(s *usage.Snapshot, model string, t Thresholds) []usage.NamedWindow {
+func admittedWindows(s *usage.Snapshot, model string, t Thresholds) []usage.NamedWindow {
 	if s == nil {
 		return nil
 	}
@@ -319,27 +346,6 @@ func bindingWindows(s *usage.Snapshot, model string, t Thresholds) []usage.Named
 		out = append(out, w.NamedWindow)
 	}
 	return out
-}
-
-// limitWindows is the set of windows a LIMIT is judged on in this pass: the ones
-// a projection may find closing.
-//
-// Under hover it is the part of bindingWindows no model choice can dodge. A
-// blown cap on one model family stops that family and not the session, which is
-// OutOfQuota's rule and the one the last point already follows through RoomOf;
-// a projection that read the cap anyway filed an account whose Fable week was
-// gone at a limit -- a week-long departure mark, and a fleet whose Fable weeks
-// were all gone sorted on when they came back instead of on hover's order.
-// TestAModelScopedCapIsNotALimitUnderHover.
-//
-// The configured strategies keep the whole binding set, as they always have:
-// pre-emption there is the user's tool for every window the ranking measures.
-func (o Options) limitWindows(s *usage.Snapshot, t Thresholds) []usage.NamedWindow {
-	ws := bindingWindows(s, o.Model, t)
-	if o.hover == nil {
-		return ws
-	}
-	return nonDodgeable(ws)
 }
 
 // nonDodgeable is ws less every window that caps one model family -- unless
@@ -525,8 +531,9 @@ func neverSpent(w usage.NamedWindow) bool {
 	return !has
 }
 
-// ColdWindow is the first window in an account's own candidate set — the same
-// set HeadroomFor ranges over — whose clock is not running, together with the
+// ColdWindow is the first window in an account's own candidate set — the
+// windows its table admits (admittedWindows), a cap hover does not count as a
+// limit included — whose clock is not running, together with the
 // rollover the reading reported for it and whether there was one.
 //
 // A five-hour window is anchored at first use and does not stretch when more is
@@ -557,7 +564,7 @@ func neverSpent(w usage.NamedWindow) bool {
 // window — first in wire order — wins over a weekly one when both qualify, and
 // that is the window worth having.
 func ColdWindow(s *usage.Snapshot, model string, t Thresholds, now time.Time) (usage.WindowName, time.Time, bool) {
-	for _, w := range bindingWindows(s, model, t) {
+	for _, w := range admittedWindows(s, model, t) {
 		if neverSpent(w) {
 			return w.Name, time.Time{}, true
 		}
@@ -607,9 +614,12 @@ func WarmUpWouldSpendCredits(s *usage.Snapshot, model string, t Thresholds) bool
 //
 // Every window rather than the binding one: HeadroomFor picks the least SLACK,
 // which under a per-window threshold is not the most spent window, and the
-// question here is about quota rather than about a line.
+// question here is about quota rather than about a line. Every ADMITTED window,
+// not only the binding ones: hover's table does not bind on a cap one model
+// family can dodge, but a warm-up turn runs on whatever model claude defaults to,
+// and a blown cap on that model bills the turn.
 func capped(s *usage.Snapshot, model string, t Thresholds) bool {
-	for _, w := range bindingWindows(s, model, t) {
+	for _, w := range admittedWindows(s, model, t) {
 		if pct, ok := w.Percent(); ok && pct >= 100 {
 			return true
 		}
@@ -625,10 +635,11 @@ func capped(s *usage.Snapshot, model string, t Thresholds) bool {
 // window is routinely a weekly one whose reset is days out while the five-hour
 // clock this exists to restart runs down within hours. A reset already in the
 // past is not a schedule either — it is the event that has already happened, and
-// ColdWindow is what answers for it.
+// ColdWindow is what answers for it. The set is ColdWindow's, so a poll is aimed
+// at every rollover a warm-up could follow.
 func NextResetAmong(s *usage.Snapshot, model string, t Thresholds, now time.Time) (time.Time, bool) {
 	out, found := time.Time{}, false
-	for _, w := range bindingWindows(s, model, t) {
+	for _, w := range admittedWindows(s, model, t) {
 		at, has := w.Reset()
 		if !has || !at.After(now) {
 			continue
@@ -746,9 +757,9 @@ const handoffRoomPct = 1.0
 // The room is RoomOf's, so an account whose only readable window is
 // model-scoped is judged on that one rather than on a figure nobody wrote.
 //
-// It is AT the line, `<=`, where Options.pastItsLine is PAST it, `<`: an account
-// on its last point is handed off, and only an account past it counts towards
-// recovery mode -- the same strictness Spent has. The pair is deliberate.
+// It is AT the line, `<=`, where Spent on hover's table is PAST it, `<`: an
+// account on its last point is handed off, and only an account past it counts
+// towards recovery mode. The pair is deliberate.
 func lastPoint(h Headroom) bool {
 	return h.Known && RoomOf(h) <= handoffRoom(h)
 }

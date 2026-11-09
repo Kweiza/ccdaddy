@@ -335,14 +335,17 @@ func todaysFleet() []tierAccount {
 	}
 }
 
-// fableBlownFleet is today's fleet with the Max account's Fable week already
-// gone, rolling with the rest of its week. Under hover's one line that cap is
-// the Max account's tightest window -- and its binding one, so the daemon
-// measures its rate on a window nothing is spending -- while every other model
-// still has the whole of the account's room.
+// fableBlownFleet is today's fleet with the Max account's Fable week past its
+// last point, rolling with the rest of its week, while every other model still
+// has the whole of the account's room. 99.5 and not 100 is the case that bites:
+// a cap with nothing left already stops being the binding window, and one past
+// hover's line and not yet empty is the account's tightest window on any table
+// that binds it -- so the poll, which schedules and measures its rate through
+// the same HeadroomOrCredit the daemon calls, would read a rate of zero off a
+// window nothing is spending against.
 func fableBlownFleet() []tierAccount {
 	f := todaysFleet()
-	f[0].fableUtil, f[0].fableAt = 100, f[0].weekAt
+	f[0].fableUtil, f[0].fableAt = 99.5, f[0].weekAt
 	return f
 }
 

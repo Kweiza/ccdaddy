@@ -354,13 +354,13 @@ type Result struct {
 	// is in Order, ranked on the credit utilization that is its ordinary meter.
 	Credit []Ranked
 	// AllOverThreshold is true only when every MAIN-POOL candidate is KNOWN
-	// to be over threshold -- under hover, past its last point; see
-	// pastItsLine. An account that could not be read makes it false:
-	// it is neither over nor under, and letting one expired token decide this
-	// is how cswap's engine came to park itself permanently. Last-resort credit
-	// accounts are excluded, or a registered credit account's permanently
-	// unknown headroom would pin this to false and make ModeRecovery
-	// unreachable.
+	// to be over threshold (Spent) -- under hover, past its last point on a
+	// window no model choice can dodge. An account that could not be read
+	// makes it false: it is neither over nor under, and letting one expired
+	// token decide this is how cswap's engine came to park itself permanently.
+	// Last-resort credit accounts are excluded, or a registered credit
+	// account's permanently unknown headroom would pin this to false and make
+	// ModeRecovery unreachable.
 	AllOverThreshold bool
 	Mode             Mode
 }
@@ -406,37 +406,19 @@ func eligibleOf(cands []Candidate) []Candidate {
 // zero, not a negative one -- which would file an account with nothing in it
 // as unspent and, because allOver is built from this predicate, keep
 // ModeRecovery from the whole pool on the strength of that one account.
+//
+// On hover's table the line is the last point, and the windows it is asked of
+// are the ones no model choice can dodge (ModelCapsDodged), so a blown cap on one
+// model family is not spent: a fleet whose Fable weeks are all gone still ranks
+// on hover's order rather than on when those caps come back.
+// TestABlownModelCapEverywhereDoesNotPutHoverIntoRecovery. It is PAST the line,
+// where lastPoint is AT it: an account on its last point still has that point
+// to spend, and recovery is for a pool that has none.
 func Spent(h Headroom) (spent, known bool) {
 	if !h.Known {
 		return false, false
 	}
 	return h.Slack < 0 || h.MinPct <= 0, true
-}
-
-// pastItsLine is whether an account is known to be past the line this pass holds
-// it to, which is what allOver asks of every account before the pass turns to
-// soonest recovery.
-//
-// On a configured table that line is the user's, and the answer is Spent. Under
-// hover it is the last point on a window no model choice can dodge -- RoomOf's
-// window, OutOfQuota's own reading -- and not Spent. Hover holds every window to
-// one line, a model-scoped cap's included, so Spent there would call an account
-// done because its Fable week is gone while it holds half a week for every other
-// model; a fleet in that state would be ranked on when its Fable caps come back
-// instead of on hover's order. A blown cap on one model family is not a limit:
-// TestABlownModelCapEverywhereDoesNotPutHoverIntoRecovery.
-//
-// It is PAST the line, `<`, where lastPoint is AT it, `<=`: an account on its
-// last point still has that point to spend, and recovery is for a pool that has
-// none. The pair is deliberate, and it is Spent's own strictness.
-func (o Options) pastItsLine(h Headroom) (past, known bool) {
-	if o.hover == nil {
-		return Spent(h)
-	}
-	if !h.Known {
-		return false, false
-	}
-	return RoomOf(h) < handoffRoom(h), true
 }
 
 // OutOfQuota is whether some window this account carries has nothing left in it
@@ -717,7 +699,7 @@ func Rank(cands []Candidate, o Options) Result {
 		}
 		measured = append(measured, r)
 
-		if past, known := o.pastItsLine(r.Headroom); !known || !past {
+		if spent, known := Spent(r.Headroom); !known || !spent {
 			allOver = false
 		}
 	}

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/config"
+	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/usage"
@@ -173,5 +174,45 @@ func TestTheBurnRateKeepsTheWindowItWasMeasuredOn(t *testing.T) {
 	}
 	if got.BurnWindow != usage.WindowFiveHour {
 		t.Errorf("BurnWindow = %q, want five_hour: a rate taken on five_hour was relabelled", got.BurnWindow)
+	}
+}
+
+// Under hover a cap on one model family is not a limit, so it is not the window
+// a poll measures the rate on either. Held to hover's one line, a Fable week past
+// it used to be the account's tightest window, and the poller read a rate of zero
+// off a cap nothing was spending against while the five-hour window beside it
+// filled -- so the work's rate read zero, every candidate carried it, and the
+// live account's own measured projection read a window its limits never look at.
+//
+// 99.5 rather than 100: a cap with nothing left already stops being the ordering
+// axis once an all-model window is readable (strategy.HeadroomFor), and the hole
+// was the cap past hover's line and not yet empty.
+func TestABlownModelCapIsNotTheWindowAPollUnderHoverMeasures(t *testing.T) {
+	isolateEngine(t)
+	reading := func(five float64) *usage.Snapshot {
+		s := windowsUsed(five, 5)
+		pct, at := 99.5, tickEpoch.Add(72*time.Hour)
+		s.Limits = []usage.Limit{usage.LimitFor(usage.LimitInput{
+			Kind: "weekly_scoped", Model: "Fable", Percent: &pct, ResetsAt: &at,
+		})}
+		return s
+	}
+	a := store.Account{UUID: "acct-1"}
+	plan := strategy.HoverThresholds([]strategy.Candidate{{UUID: a.UUID, Kind: identity.KindSubscription, Usage: reading(10)}},
+		strategy.Options{Now: tickEpoch, Hover: true})
+	e := NewEngine()
+	e.Rand = midJitter
+	e.commit(a, reading(10), tickEpoch, []string{a.UUID}, plan.For, true, nil)
+	e.commit(a, reading(64), tickEpoch.Add(10*time.Minute), []string{a.UUID}, plan.For, true, nil)
+
+	entry, ok := cacheEntry(t, a.UUID)
+	if !ok {
+		t.Fatal("commit() wrote no cache entry")
+	}
+	if entry.Poll.BurnWindow != usage.WindowFiveHour || !entry.Poll.HasBurn {
+		t.Fatalf("rate measured on %q (has %v), want five_hour", entry.Poll.BurnWindow, entry.Poll.HasBurn)
+	}
+	if math.Abs(entry.Poll.BurnPerMin-5.4) > 0.0001 {
+		t.Errorf("BurnPerMin = %v, want the five-hour window's 5.4", entry.Poll.BurnPerMin)
 	}
 }

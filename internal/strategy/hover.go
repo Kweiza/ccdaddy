@@ -45,10 +45,10 @@ const (
 	// Hover has no pace line, so the only line room is measured against is the
 	// one it hands off at, and that is what `ccdad status --json` prints beside
 	// each window. It also fixes what the shared machinery means under hover:
-	// ModeRecovery is every account past this line on a window no model choice
-	// can dodge (Options.pastItsLine), which is when soonest-recovery is the
-	// right question -- and a blown cap on one model family does not get it
-	// there. And it is positive, which bindingWindows relies on: a
+	// ModeRecovery is every account Spent -- past this line on a window no
+	// model choice can dodge, because hover's table does not bind on the others
+	// (ModelCapsDodged) -- which is when soonest-recovery is the right question,
+	// and a blown cap on one model family does not get it there. And it is positive, which bindingWindows relies on: a
 	// non-positive per-window entry reads as "not opted in", and would silently
 	// revoke a user's consent for an unknown-scope cap.
 	HoverHandoffThreshold = 100 - handoffRoomPct
@@ -138,16 +138,18 @@ func HoverThresholds(cands []Candidate, o Options) HoverPlan {
 		// else -- so an account with no fixed windows, extra_usage enabled and a
 		// real scoped weekly classifies as a credit seat AND carries quota.
 		// Skipping seats here once left such a seat with no PerWindow at all, and
-		// bindingWindows reads exactly that map to decide whether an unknown
+		// admittedWindows reads exactly that map to decide whether an unknown
 		// scope was opted into, so every opt-in the user typed was dropped for
 		// that one account. TestHoverDerivesATableForAPrimaryCreditSeatToo pins
 		// the two window sets equal.
 		//
-		// bindingWindows, so the set hover holds to a line is exactly the set
-		// the ranking measures against -- cinder_cove excluded, and the model
-		// narrowing applied once rather than twice.
+		// The windows the configured table admits, so the windows hover holds
+		// to a line are the ones the user's table admits -- cinder_cove
+		// excluded, the opt-ins kept, and the model narrowing applied once
+		// rather than twice. Which of them BIND is the hover table's own rule
+		// (hoverTable).
 		per := map[usage.WindowName]float64{}
-		for _, w := range bindingWindows(c.Usage, o.Model, configured) {
+		for _, w := range admittedWindows(c.Usage, o.Model, configured) {
 			if _, ok := w.Percent(); !ok {
 				// Nothing to compare a line against. This window cannot bind,
 				// and a window hover holds to nothing is not one the ranking
@@ -156,11 +158,7 @@ func HoverThresholds(cands []Candidate, o Options) HoverPlan {
 			}
 			per[w.Name] = HoverHandoffThreshold
 		}
-		p.byUUID[c.UUID] = Thresholds{
-			Default:   HoverHandoffThreshold,
-			PerWindow: per,
-			Credit:    HoverCreditThreshold,
-		}
+		p.byUUID[c.UUID] = hoverTable(per)
 	}
 	return p
 }
@@ -173,7 +171,22 @@ func (p HoverPlan) For(uuid string) Thresholds {
 	// An account that was not in the pool this plan was built from -- one with
 	// no reading at all, or one that arrived after the pass. Anything it later
 	// reports is held to the same line as everything else.
-	return Thresholds{Default: HoverHandoffThreshold, Credit: HoverCreditThreshold}
+	return hoverTable(nil)
+}
+
+// hoverTable is the table hover measures an account on: every window held to the
+// hand-off line, a primary credit seat's meter to the credit threshold, and the
+// windows a model choice can dodge left out of what binds (ModelCapsDodged, D5).
+// per carries the user's opt-ins, at hover's line. It is one function so that the
+// table an account was ranked on and the one an account outside the pass is
+// answered with cannot differ in anything but those opt-ins.
+func hoverTable(per map[usage.WindowName]float64) Thresholds {
+	return Thresholds{
+		Default:   HoverHandoffThreshold,
+		PerWindow: per,
+		Credit:    HoverCreditThreshold,
+		ModelCaps: ModelCapsDodged,
+	}
 }
 
 // hoverPreemptLead is how far ahead of a projected exhaustion to switch, taken
