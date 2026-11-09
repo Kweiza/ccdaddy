@@ -30,10 +30,11 @@ import (
 // line, so the two cannot drift into saying different things.
 const pastePrompt = "Paste code here: "
 
-// quarantineLiftTimeout bounds the wait for the engine state lock. The only
+// engineStateTimeout bounds the wait for the engine state lock when a command
+// edits it -- lifting a quarantine, forgetting a removed account. The only
 // other writer is the daemon stamping a cooldown, which holds it for a
 // sub-second write, so this is generous already.
-const quarantineLiftTimeout = 5 * time.Second
+const engineStateTimeout = 5 * time.Second
 
 // liftQuarantine clears an auto-switch quarantine after a successful add.
 //
@@ -49,7 +50,7 @@ func liftQuarantine(stderr io.Writer, uuid string) {
 	// The lock is taken unconditionally rather than after a lock-free peek: a
 	// peek would race a quarantine landing from the refresh that used the OLD
 	// credential, which is exactly the one this is here to clear.
-	if err := strategy.WithState(quarantineLiftTimeout, func(st *strategy.State) error {
+	if err := strategy.WithState(engineStateTimeout, func(st *strategy.State) error {
 		lifted = st.ClearQuarantine(uuid)
 		return nil
 	}); err != nil {

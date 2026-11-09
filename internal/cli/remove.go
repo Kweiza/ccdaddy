@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/codexswitch"
 	"github.com/Kweiza/ccdaddy/internal/store"
+	"github.com/Kweiza/ccdaddy/internal/strategy"
 )
 
 // profilePathFor is where `ccdad run --full-profile` keeps an account's config
@@ -39,6 +41,29 @@ func profilePathFor(uuid string) string {
 func profileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// forgetEngineState drops what the engine remembers about accounts the store no
+// longer manages: quarantines, and the departure marks hover's order holds an
+// account out on. Both are keyed by uuid, so an account added again under the
+// same uuid would otherwise come back quarantined, or held out until a window
+// that belonged to its previous login rolls over.
+//
+// It never fails the command, for the reason liftQuarantine does not: the
+// account is gone from the store by the time this runs, and a removal that
+// worked is not reported as one that did not.
+func forgetEngineState(stderr io.Writer, remaining []store.Account) {
+	managed := make(map[string]bool, len(remaining))
+	for _, a := range remaining {
+		managed[a.UUID] = true
+	}
+	if err := strategy.WithState(engineStateTimeout, func(st *strategy.State) error {
+		st.Prune(managed)
+		return nil
+	}); err != nil {
+		fmt.Fprintf(stderr, "note: the auto-switch state could not be updated (%v); "+
+			"if this account is added again it may start quarantined or held out of rotation.\n", err)
+	}
 }
 
 func newRemoveCmd() *cobra.Command {
@@ -98,6 +123,7 @@ func newRemoveCmd() *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(cmd.ErrOrStderr(), "Removed %s.\n", target.Unambiguous())
+			forgetEngineState(cmd.ErrOrStderr(), s.Accounts())
 
 			// The profile is a SECOND place this account's credentials live,
 			// and since `ccdad run --full-profile` began writing an API-key
