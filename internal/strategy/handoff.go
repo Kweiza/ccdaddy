@@ -649,6 +649,26 @@ func bridge(res Result, live Ranked, cooldown time.Duration) (Ranked, bool) {
 // left in it, the longest runway first and an account with no runway last. Its
 // last point is allowed here and nowhere else -- one point is better than a stop
 // -- and an empty account never is.
+//
+// A residual, kept on purpose: an idle fleet whose accounts all sit at their
+// last point can trade the login between them. The live one projects out at the
+// rate the work last ran, any other account with work left is a last resort, and
+// the one just left, re-read idle, has its dregs back -- so with no work running
+// the session moves every cooldown and each move buys nothing. Nothing is
+// running, so no session pays for it.
+//
+// The rule that stops it -- a last resort must outlast the live account, holding
+// more of the work than the live one does -- was measured and rejected. It
+// raised the seconds a session stopped with room elsewhere where work does run:
+// two Max accounts under heavy load from 1641 to 3342, under burst load from 958
+// to 1004, two Max and three Ultras under heavy load from 239 to 322 and under
+// production load from 346 to 408 (and lowered that fleet's burst figure from
+// 142 to 76). The cause is that the engine cannot tell an idle live account from
+// a running one at whole-percent resolution: a live account that has really
+// spent its last point still reads the 99 it was read at until the next poll,
+// exactly as an idle one does, so the rule refuses the dregs of another account
+// in the very moment the session needs them. Stopping a session outranks idle
+// churn.
 func lastResort(res Result, live Ranked, now time.Time) (Ranked, bool) {
 	var best Ranked
 	found := false

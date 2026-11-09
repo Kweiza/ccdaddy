@@ -122,8 +122,11 @@ quota, which can now expire unspent.
   out before its next reading shows it. The first two live readings after the
   daemon starts have no rate at all, and accounts sharing one organization
   share its polling budget, so the first look after a move can come later
-  than the reserve assumes. The figures above belong to the simulated fleets
-  and loads; they are not a bound on what a real week can cost.
+  than the reserve assumes. And when every account is at its last point and
+  nothing is running, ccdad may switch the login back and forth between them;
+  with no session running, it costs none anything. The figures above belong
+  to the simulated fleets and loads; they are not a bound on what a real week
+  can cost.
 
   The remedy not taken is a reserve on the live account's level: handing off
   with enough left to cover a reading step and a burst through one reading

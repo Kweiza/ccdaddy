@@ -498,6 +498,9 @@ further: the first two live readings after the daemon starts have no rate at
 all, so accounts are judged by their levels alone; and accounts sharing one
 organization share its polling budget, so the first look at an account after
 a move can come later than the reserve assumes.
+And when every account is at its last point and nothing is running, ccdad may
+switch the login back and forth between them; with no session running, it
+costs none anything.
 
 In a simulated week, with whole-percent readings and the daemon's warm-ups, a
 session stopped while another account had room in ten of 27 fleet-and-load
