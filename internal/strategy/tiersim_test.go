@@ -34,7 +34,8 @@ import (
 // right in a simulation and stop a session in the field. So here:
 //
 //   - the engine sees only what each account's last poll read (tierPoller),
-//     and decides at the daemon's own cadence, once a second;
+//     and decides at the daemon's own cadence, once a second (asked as
+//     tierSimDrift says, which is the same answers);
 //   - each account is polled on the schedule the daemon gives it -- the
 //     cadence from pollpolicy.Next, behind the serve-TTL floor due() holds,
 //     pulled to its next rollover by pollpolicy.WarmClamp -- and FetchedAt and
@@ -66,7 +67,7 @@ type tierAccount struct {
 	// nothing has started, which the reading carries as {null,null}.
 	fiveUtil float64
 	fiveAt   time.Time
-	// fableAt is when a model-scoped Fable week that is already blown rolls
+	// fableAt is when a model-scoped Fable week that is past its last point rolls
 	// over, for the variant whose account has one; zero for an account that
 	// carries none. The work never spends Fable, which is what a blown cap
 	// leaves a session to do, so it stays where it rolled to.
@@ -245,9 +246,63 @@ var tierSimEpoch = time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC)
 // real bound here and not one the tick size satisfies on its own.
 const tierSimTick = time.Second
 
-// runTierSim drives Decide over the fleet once a second for span, with the live
-// account spending weeklyPerMin points of its week a minute and, where it has
-// one, fiveHoursPerWeek times that of its five-hour window.
+// tierSimDrift is how long the harness lets the engine go unasked when nothing
+// it reads has changed.
+//
+// The daemon asks once a second, and asking a week of seconds is what made this
+// file take half a minute. Most of those answers cannot differ from the one a
+// second before: Decide reads the cached readings, the state and the clock, and
+// every change but the clock's is an event the loop already sees -- a reading
+// landing, the cooldown ending, a rollover a reading names passing. Each of
+// those is asked at its own second (nextAsk). What moves with the clock alone is
+// a projection's deadline, a window's average pace and the recovery horizon,
+// and this step bounds how late the harness can notice one of them -- at heavy
+// load the live five-hour window moves a seventh of a point in it.
+//
+// Measured once against the harness asking every second (this constant set to
+// tierSimTick): every load and fleet below gave the same switches, by the same
+// reasons, the same unspent quota to the hundredth, and the same zero stopped
+// seconds.
+const tierSimDrift = 10 * time.Second
+
+// nextAsk is the next second the engine has to be asked even if no reading
+// lands before it: the drift step, or sooner if the cooldown ends or a rollover
+// one of the readings names comes first.
+func nextAsk(now time.Time, st *State, pollers []tierPoller) time.Time {
+	at := now.Add(tierSimDrift)
+	if left, cooling := st.CooldownRemaining(now, HoverCooldown); cooling && now.Add(left).Before(at) {
+		at = now.Add(left)
+	}
+	for _, p := range pollers {
+		for _, w := range p.snap.AllWindows() {
+			if reset, ok := w.Reset(); ok && reset.After(now) && reset.Before(at) {
+				at = reset
+			}
+		}
+	}
+	return at
+}
+
+// tierDecide asks the engine about the fleet as its readings stand, the way the
+// daemon's evaluation does, and reports false when there is nothing to ask about
+// yet: before the first poll there is no reading, and the daemon acts on none.
+func tierDecide(accts []tierAccount, pollers []tierPoller, now time.Time, st *State, live string) (Plan, bool) {
+	cands := make([]Candidate, 0, len(accts))
+	for j := range accts {
+		if pollers[j].snap != nil {
+			cands = append(cands, pollers[j].candidate(accts[j].uuid))
+		}
+	}
+	if len(cands) == 0 {
+		return Plan{}, false
+	}
+	return Decide(cands, Options{Now: now, Hover: true}, Config{}, st, live), true
+}
+
+// runTierSim drives Decide over the fleet for span, at the daemon's one-second
+// cadence (asked as tierSimDrift says), with the live account spending
+// weeklyPerMin points of its week a minute and, where it has one,
+// fiveHoursPerWeek times that of its five-hour window.
 func runTierSim(t *testing.T, label string, accts []tierAccount, weeklyPerMin float64, span time.Duration) tierSimResult {
 	t.Helper()
 	res := tierSimResult{switches: map[string]int{}, unspent: map[string]float64{}, served: map[string]float64{}}
@@ -255,36 +310,35 @@ func runTierSim(t *testing.T, label string, accts []tierAccount, weeklyPerMin fl
 	live := accts[0].uuid
 	pollers := make([]tierPoller, len(accts))
 	want := weeklyPerMin * tierSimTick.Minutes()
+	thr := HoverPlan{}.For
+	var askAt time.Time
 
 	for now := tierSimEpoch; now.Before(tierSimEpoch.Add(span)); now = now.Add(tierSimTick) {
 		for j := range accts {
 			res.unspent[accts[j].tierOf()] += accts[j].roll(now)
 		}
 
-		cands := make([]Candidate, 0, len(accts))
-		for j := range accts {
-			if pollers[j].snap != nil {
-				cands = append(cands, pollers[j].candidate(accts[j].uuid))
-			}
-		}
-		thr := HoverPlan{}.For
-		if len(cands) > 0 {
-			p := Decide(cands, Options{Now: now, Hover: true}, Config{}, st, live)
-			if p.Action == ActionSwitch {
-				live = p.Target.UUID
-				st.RecordSwitch(live, now, p.Departure)
-				res.switches[p.Reason.String()]++
-				res.total++
-			}
-			if p.Hover != nil {
-				thr = p.Hover.For
+		if !now.Before(askAt) {
+			if p, asked := tierDecide(accts, pollers, now, st, live); asked {
+				if p.Action == ActionSwitch {
+					live = p.Target.UUID
+					st.RecordSwitch(live, now, p.Departure)
+					res.switches[p.Reason.String()]++
+					res.total++
+				}
+				if p.Hover != nil {
+					thr = p.Hover.For
+				}
+				askAt = nextAsk(now, st, pollers)
 			}
 		}
 		// After the decision, as the daemon dispatches its polls: an account
-		// that just became live is polled as the live one.
+		// that just became live is polled as the live one, and the reading is
+		// the engine's to read at the next second.
 		for j := range accts {
 			if pollers[j].due(now) {
 				pollers[j].poll(accts[j].read(), thr(accts[j].uuid), accts[j].uuid == live, now)
+				askAt = now.Add(tierSimTick)
 			}
 		}
 
@@ -352,21 +406,24 @@ func fableBlownFleet() []tierAccount {
 // A week of today's fleet at three loads: idle, where a five-hour window never
 // fills; light, where it takes its whole five hours to fill; heavy, where it
 // fills in two. Each runs on today's fleet and on the same fleet with the Max
-// account's Fable week blown. Unspent is weekly quota that reached a weekly
+// account's Fable week past its last point. Unspent is weekly quota that reached a weekly
 // rollover unspent, per tier; stopped is seconds a limit cut the session off.
 //
 // Measured with this harness on both codes: the pace rotation hover ran before,
 // on the commit this branch was cut from, and the order. Load is weekly points a
-// minute; unspent is short-window / weekly-only; stopped is in seconds.
+// minute; unspent is short-window / weekly-only; stopped is in seconds. The pace
+// rotation was asked every second (tierSimDrift at tierSimTick), because the
+// thresholds it derived moved with the clock and the drift measurement above was
+// taken on the order.
 //
 //	                          pace rotation                    the order
 //	load           fleet   switches  unspent         stopped   switches  unspent         stopped
 //	idle  0.0075   today         43  31.78 / 137.59        0          2  0.98 / 184.56         0
 //	idle  0.0075   Fable         29  41.00 / 128.35        0          2  0.98 / 184.56         0
 //	light 0.01     today         52  28.71 / 120.11        0         54  0.99 / 168.44         0
-//	light 0.01     Fable         33  41.00 / 107.80        0         56  0.99 / 168.45         0
+//	light 0.01     Fable         33  41.00 / 107.80        0         54  0.99 / 168.44         0
 //	heavy 0.025    today        210   6.04 /  28.79        0         59  0.97 /  45.15         0
-//	heavy 0.025    Fable        141  41.00 /   5.56      136         61  0.96 /  45.16         0
+//	heavy 0.025    Fable        165  33.46 /   9.22      484         59  0.97 /  45.15         0
 //
 // Two hundred moves a week was the cost the owner measured another way: every
 // switch rewrites the prompt cache of a running session, and the rotation spent
@@ -375,10 +432,11 @@ func fableBlownFleet() []tierAccount {
 // the rollover -- and not otherwise, which is why light load, whose window fills
 // in the last minutes of its five hours, costs as many moves as heavy load does.
 //
-// The blown Fable week is the variant the rotation failed outright: it read the
-// cap as the Max account's limit, left the account's week unspent, and stopped
-// the session for 136 seconds while other accounts had room. Under the order a
-// cap on one model family is not a limit, and the week is the same week.
+// The Fable week past its last point is the variant the rotation failed
+// outright: it read the cap as the Max account's limit, left most of the
+// account's week unspent, and stopped the session for 484 seconds while other
+// accounts had room. Under the order a cap on one model family is not a limit,
+// and the week is the same week to the hundredth.
 //
 // What it costs is the weekly-only seats' quota, stated plainly: they are spent
 // only while the five-hour account is at a limit, and then only the one whose
