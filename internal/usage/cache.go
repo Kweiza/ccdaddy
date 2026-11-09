@@ -122,15 +122,13 @@ type PollState struct {
 	// with no such pair writes nothing, and an older cache reads as none.
 	AnchorLive bool       `json:"anchor_live,omitempty"`
 	LiveBurns  []LiveBurn `json:"live_burns,omitempty"`
-	// LiveSince is when a switch last made this account live, and PromptAt the
-	// prompt poll that switch scheduled, while it is still ahead. A switch
-	// writes both under the cache lock; a commit reads them under the same
-	// lock, so a poll that was in flight across the switch -- dispatched while
-	// the account was idle -- commits as the live account's reading and leaves
-	// the prompt poll standing (PromptPending). LiveSince also bounds the stint a
-	// live pair may span (LiveAnchor).
+	// LiveSince is when a switch last made this account live. A switch writes it
+	// under the cache lock, creating the row if the account has none; a commit
+	// reads it under the same lock, so a poll that was in flight across the
+	// switch -- sent while the account was idle -- commits as the live
+	// account's reading, on the prompt poll's schedule. It also bounds the stint
+	// a live pair may span (LiveAnchor).
 	LiveSince time.Time `json:"live_since,omitempty"`
-	PromptAt  time.Time `json:"prompt_at,omitempty"`
 	// LastPairRunning is whether the most recent live pair of this account saw
 	// the work running (LiveBurn.Running): false after a pause, which a running
 	// rate kept in LiveBurns outlives, and false for an account never paired.
@@ -292,10 +290,18 @@ func (c *Cache) MayFetch(uuid string, now time.Time) bool {
 // than its account's AddedAt belonged to a previous account at the same uuid —
 // removed and added again — and letting that through would hand a fresh login
 // the headroom its predecessor had already spent.
+//
+// An entry is dated by the latest thing written to it: its reading, or for a row
+// a switch created before the account was ever read, the switch's record
+// (PollState.LiveSince).
 func (c *Cache) Prune(accounts map[string]time.Time) {
 	for uuid, e := range c.data.Accounts {
 		addedAt, managed := accounts[uuid]
-		if !managed || e.FetchedAt.Before(addedAt) {
+		written := e.FetchedAt
+		if e.Poll.LiveSince.After(written) {
+			written = e.Poll.LiveSince
+		}
+		if !managed || written.Before(addedAt) {
 			delete(c.data.Accounts, uuid)
 		}
 	}

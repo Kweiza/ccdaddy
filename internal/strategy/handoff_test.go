@@ -63,6 +63,28 @@ func TestTheWorksRateIsTheMostRecentLiveMeasurement(t *testing.T) {
 	}
 }
 
+// A pair whose first reading precedes the last switch onto its account spans
+// the time the work was elsewhere, and is never the work's rate -- even when it
+// was stored, as it is when the daemon stopped between recording the switch and
+// marking the account live. T was switched back to two minutes ago; its stored
+// pair runs from four minutes ago to now at a tenth of a point a minute. The
+// work's rate is the half point a minute measured on L.
+func TestAPairSpanningAReturnIsNeverTheWorksRate(t *testing.T) {
+	l := idleOn(maxAcct("l-left", 60, 3*time.Hour, 40, 3*day))
+	l.LiveBurns = []usage.LiveBurn{{PerMin: 0.5, Window: usage.WindowFiveHour, From: now.Add(-9 * time.Minute), At: now.Add(-6 * time.Minute)}}
+	tl := idleOn(maxAcct("t-live", 10, 4*time.Hour, 30, 4*day))
+	tl.LiveBurns = []usage.LiveBurn{{PerMin: 0.1, Window: usage.WindowFiveHour, From: now.Add(-4 * time.Minute), At: now}}
+	c := idleOn(maxAcct("c", 70, 4*time.Hour, 30, 4*day))
+	st := NewState()
+	st.RecordSwitch("t-live", now.Add(-2*time.Minute), Departure{})
+
+	p := Decide([]Candidate{l, tl, c}, hoverOpts(), Config{}, st, "t-live")
+	r, _ := find(p.Result, "c")
+	if got := runsOutIn(t, r); math.Abs(got.Minutes()-30/0.5) > 1e-6 {
+		t.Errorf("c runs out in %s, want 60m: the pair spanning the return is not the work's rate", got)
+	}
+}
+
 // Only a window that is a limit for the pass sets the work's rate on its
 // length. In three minutes the live account's full week went from 49% to 50%
 // and its Fable cap from 0 to 30: the week's rate is a third of a point a

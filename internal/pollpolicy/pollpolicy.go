@@ -555,8 +555,7 @@ func (t Table) ServeTTLFor(in Input) time.Duration {
 }
 
 // PromptPollAt is when to read an account the work has just moved to: as soon as
-// the serve floor allows, never later than the look already scheduled, and never
-// inside a 429's floor.
+// the identity's serve floor allows, and never inside a 429's floor.
 //
 // fetched and next are the account's last reading and its scheduled next one,
 // lastRateLimited its poller's last 429, zero for never. The account was being
@@ -574,6 +573,11 @@ func (t Table) ServeTTLFor(in Input) time.Duration {
 // rotation among three of them asks thirty times an hour on an allowance of
 // 28-30 before any ordinary look. TestPromptPollsKeepAnIdentityInsideItsBudget.
 //
+// A look already scheduled earlier than the floor is held to it too. It is not
+// the identity's: the schedule a live account in the danger band left behind
+// is the band's undivided one, and taking it when the session comes back to
+// that account spends the budget the floor exists to share.
+//
 // It is one function because three places need the same instant: the switch
 // writes it, hover's hand-off rule predicts it for an account it might move to,
 // and the weekly simulation schedules by it.
@@ -581,12 +585,7 @@ func (t Table) PromptPollAt(fetched, next, lastRateLimited, now time.Time, accou
 	if !lastRateLimited.IsZero() && now.Sub(lastRateLimited) < t.Recent429Window {
 		return next
 	}
-	floor := t.Share(t.ServeTTL, accounts, Input{Now: now, Active: true})
-	prompt := latestOf(now, fetched.Add(floor))
-	if scheduled := latestOf(now, next); scheduled.Before(prompt) {
-		return scheduled
-	}
-	return prompt
+	return latestOf(now, fetched.Add(t.Share(t.ServeTTL, accounts, Input{Now: now, Active: true})))
 }
 
 // latestOf is the later of two instants.

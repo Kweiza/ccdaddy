@@ -590,24 +590,23 @@ func SyncGlobalConfigIdentity(s *store.Store, target, previousLive store.Account
 // It writes NextPollAt once, here, and the account's own next commit overwrites
 // it with the live cadence, whether that poll succeeds or fails -- so a poll
 // that keeps failing backs off as it always has rather than retrying at the
-// tick rate. An account with no reading yet is due already and is left alone.
+// tick rate.
 //
 // Beside it, under the same lock, it records that the switch made the account
-// live at now (PollState.LiveSince) and the prompt it scheduled (PromptAt). A
-// poll of the account already in flight was dispatched while it was idle, and
-// the daemon's live label is set only after Execute returns; the commit reads
-// these two under the cache lock instead, so that poll commits as the live
-// account's reading and leaves the prompt poll standing rather than writing an
-// idle cadence over it. accounts is how many draw on the account's polling
-// budget (store.SharingIdentity), which the prompt's floor is shared among.
+// live at now (PollState.LiveSince). A poll of the account already in flight
+// was sent while it was idle, and the daemon's live label is set only after
+// Execute returns; the commit reads the record under the cache lock instead, so
+// that poll commits as the live account's reading and on the prompt's schedule
+// rather than writing an idle cadence over it. An account with no row yet -- its
+// first poll may be the one in flight -- gets a row holding just the record;
+// with no reading it is due already. accounts is how many draw on the
+// account's polling budget (store.SharingIdentity), which the prompt's floor is
+// shared among. TestASwitchOntoAnAccountWithNoRowStillRecordsIt.
 func SchedulePromptPoll(uuid string, now time.Time, accounts int) error {
 	err := usage.WithCache(usage.LockTimeout, func(c *usage.Cache) error {
-		e, ok := c.Get(uuid)
-		if !ok {
-			return nil
-		}
+		e, _ := c.Get(uuid)
 		e.NextPollAt = pollpolicy.PromptPollAt(e.FetchedAt, e.NextPollAt, e.Poll.LastRateLimited, now, accounts)
-		e.Poll.LiveSince, e.Poll.PromptAt = now, e.NextPollAt
+		e.Poll.LiveSince = now
 		c.Put(uuid, e)
 		return nil
 	})
