@@ -138,16 +138,30 @@ func TestHoverLinesSayWhenAnAccountCannotCarryTheWork(t *testing.T) {
 		LiveBurns: []usage.LiveBurn{{PerMin: 3, Window: usage.WindowFiveHour, From: colNow.Add(-3 * time.Minute), At: colNow}}}
 	idle := strategy.Candidate{UUID: "u-b", Kind: identity.KindSubscription, Usage: five(92),
 		FetchedAt: colNow, NextPollAt: colNow.Add(10 * time.Minute)}
+	// A carrier and an account on its last point, so the note is seen to be
+	// the non-carrier's alone: the one carries the work, and the other is at a
+	// limit, which its rung already says.
+	roomy := strategy.Candidate{UUID: "u-c", Kind: identity.KindSubscription, Usage: five(10),
+		FetchedAt: colNow, NextPollAt: colNow.Add(10 * time.Minute)}
+	last := strategy.Candidate{UUID: "u-d", Kind: identity.KindSubscription, Usage: five(99.5),
+		FetchedAt: colNow, NextPollAt: colNow.Add(10 * time.Minute)}
 	o := strategy.Options{Now: colNow, Hover: true}
-	p := strategy.Decide([]strategy.Candidate{live, idle}, o, strategy.Config{}, strategy.NewState(), "u-a")
+	p := strategy.Decide([]strategy.Candidate{live, idle, roomy, last}, o, strategy.Config{}, strategy.NewState(), "u-a")
 
 	s := Snapshot{Now: colNow, Hover: true, HasMode: true, Mode: p.Result.Mode, HoverOrder: p.Result.Order,
-		Rows: []Row{hoverRow("u-a", "a@example.com", true), hoverRow("u-b", "b@example.com", false)}}
-	got := strings.Join(s.HoverLines(), "\n")
+		Rows: []Row{hoverRow("u-a", "a@example.com", true), hoverRow("u-b", "b@example.com", false),
+			hoverRow("u-c", "c@example.com", false), hoverRow("u-d", "d@example.com", false)}}
+	lines := s.HoverLines()
+	got := strings.Join(lines, "\n")
 	if want := "b@example.com  short-window · week resets Sun 04:00 · cannot carry the work running now (runs out in 3 min)"; !strings.Contains(got, want) {
 		t.Errorf("HoverLines =\n%s\nwant a line ending %q", got, want)
 	}
-	if strings.Contains(got, "at its limit") {
-		t.Errorf("HoverLines =\n%s\nsay an account with room is at its limit", got)
+	for _, l := range lines {
+		if strings.Contains(l, "at its limit") && !strings.Contains(l, "d@example.com") {
+			t.Errorf("HoverLines =\n%s\nsay an account with room is at its limit", got)
+		}
+		if strings.Contains(l, "cannot carry") && !strings.Contains(l, "b@example.com") {
+			t.Errorf("line %q says it cannot carry the work: only b's should", l)
+		}
 	}
 }
