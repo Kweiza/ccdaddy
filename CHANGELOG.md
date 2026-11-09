@@ -1,4 +1,5 @@
 # Changelog
+  | two Max | pause | 1127 | 250 |
 
 Notable changes, in the format of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 following [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -50,9 +51,10 @@ quota, which can now expire unspent.
     left after the engine has read it twice on that work;
   - when the live account would stop before its next reading, an account that
     outlasts it by the cooldown;
-  - when the live account is out, whichever account with work left lasts
-    longest;
-  - and only then a credit seat, below.
+  - when the live account is out -- empty, or projected out while the latest
+    pair of live readings saw the work running -- whichever account with work
+    left lasts longest;
+  - and only then, when every account reads empty, a credit seat, below.
 
   The work's rate is measured only between two readings of an account that
   were both taken while it was live, on every window they carry, and it
@@ -93,9 +95,9 @@ quota, which can now expire unspent.
   three more loads: the 5.4 five-hour points a minute measured in production on
   2026-09-05, in two-hour sessions; heavy load's mean in three-minute bursts;
   and the production rate in bursts of 2-9 minutes with pauses of 3-15 minutes
-  between them, on today's fleet and on two Max accounts with three Ultra
-  seats. Seconds a limit stopped the session while another account still had
-  room, before and after, wherever either is not zero:
+  between them, on today's fleet and on two Max accounts with and without
+  three Ultra seats. Seconds a limit stopped the session while another account
+  still had room, before and after, wherever either is not zero:
 
   | Fleet | Load | Before | After |
   |---|---|---|---|
@@ -110,6 +112,7 @@ quota, which can now expire unspent.
   | two Max | heavy | 5362 | 1641 |
   | two Max | production | 1765 | 136 |
   | two Max | burst | 4768 | 958 |
+  | two Max | pause | 1127 | 250 |
   | a Max and two Ultras | production | 336 | 37 |
 
   **What is left is not zero, and a session can still stop at a limit while
@@ -121,8 +124,8 @@ quota, which can now expire unspent.
   is measured to the nearest point, and an account holding less than a point
   reads the same 99 as one holding a whole one; and when the rate was measured
   on another plan, whose points are not this one's. The live account then runs
-  out before its next reading shows it. Four more cases weaken the
-  projection:
+  out before its next reading shows it. Five more cases cost the session
+  something:
   - A rate stands until a newer running measurement replaces it, across window
     resets and daemon restarts alike. A five-hour rate measured in a burst can
     outlive it: above about 12.5 points a minute even a freshly reset
@@ -138,13 +141,20 @@ quota, which can now expire unspent.
     come at the live cadence times the number of accounts sharing it.
   - A pause is not taken for slower work. At 5.4 points a minute a paused live
     account more than about 57% spent is handed to an account that can carry
-    the work before the work resumes; a pause never moves it onto credits or
-    onto another account's last points. But while nothing runs, two accounts
-    holding between a cooldown's and a carrier's worth of work -- about 11 to
-    60 points at that rate -- can trade the login every few minutes. No
-    session is cut; each move writes the credential, polls the account and
-    updates Claude Code's settings, and a session resuming just after one waits
-    out the cooldown for the next.
+    the work before the work resumes. Another account's last points wait for
+    the latest pair of live readings, on whichever account made it, to have
+    seen the work running: a pause that pair saw keeps them shut, but one that
+    began after it, with every account's stint since too short to make a pair,
+    does not. While nothing runs, the login can still trade between two
+    accounts -- onto the other's last points on that pair's word, or onto an
+    account holding a cooldown's worth more than the live one has left and
+    less than a carrier's, up to about 43 to 59 points at that rate. No session
+    is cut and no credit is bought; each move writes the credential, polls the
+    account and updates Claude Code's settings, and a session resuming just
+    after one waits out the cooldown for the next.
+  - Credits are bought on readings alone. With credits opted in and every
+    account dry, a live account that runs out between two readings stops the
+    session until the reading that shows it empty, up to three minutes later.
 
   The figures above belong to the simulated fleets and loads; they are not a
   bound on what a real week can cost.
@@ -185,17 +195,19 @@ quota, which can now expire unspent.
   after them and ahead of accounts nobody could read, accounts held out, and
   accounts at a limit. It is handed off at 95% of its balance, hover's credit
   threshold, because credits do not come back.
-- **Under hover, credits are the last place the session goes.** A credit seat
-  is considered only when the live account is out and no subscription account
-  has any work left to give, and then only when your thresholds say the main
-  pool is exhausted, whichever account the order puts first. It used to be
+- **Under hover, credits are the last place the session goes, and they are
+  bought on readings alone.** A credit seat is considered only when every
+  account, the live one included, reads empty, and then only when your
+  thresholds say the main pool is exhausted, whichever account the order puts
+  first. An account that could not be read keeps them shut. It used to be
   considered whenever the live account sorted first and the main pool read
   exhausted, which could move a session onto credits while another account's
-  last points were still unspent. A live account projected out across a pause
-  does not open them: only one seen running, or one with nothing left. From a
-  live credit seat the session goes back to any account that can carry the
-  work, one held out at a limit included, and `--force` there cannot take it
-  onto one at a limit.
+  last points were still unspent -- or, under a projection, while the live
+  account's own were. From a live credit seat, or a primary one, the session
+  goes back to free quota on its levels: to an account that can carry the work
+  if there is one, and otherwise to any that is not empty and not on its last
+  point, one held out at a limit included. `--force` there cannot take it onto
+  one at a limit.
 - **Under hover, a cap on one model family is left out of everything that
   decides a limit.** A Fable or Opus week past 99% used to become the
   account's binding window, so the daemon measured the session's rate on a
@@ -269,8 +281,10 @@ quota, which can now expire unspent.
   `ccdad switch`'s. A poll of that account already in flight when the switch
   lands commits as the live account's reading and leaves the prompt poll
   standing, and the prompt's floor is shared among the accounts of one
-  organization the way every other look is, so rotating among them stays
-  inside the organization's polling allowance.
+  organization the way every other look is -- a rate-limit floor shorter than
+  that share included, and the polls the daemon starts in the same tick as the
+  switch -- so rotating among them stays inside the organization's polling
+  allowance.
 - Mode `hover`, and five reasons: "the live account is down to its last point
   before a limit", "a short-window account has room again", "another
   weekly-only account's week resets sooner", "staying on the short-window

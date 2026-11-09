@@ -466,9 +466,12 @@ Hover orders the Claude lane's accounts instead of comparing their room:
    minutes of that work left after the engine has read it twice on it. When
    none would, the session stays until the live account would stop before its
    next reading, and then moves to an account that outlasts it by the
-   cooldown; once the live account is out, it moves to whichever account lasts
-   longest. A credit seat comes after all of these, and only when your
-   thresholds say the main pool is exhausted.
+   cooldown; once the live account is out -- empty, or projected out while the
+   latest pair of live readings saw the work running -- it moves to whichever
+   account lasts longest. A credit seat comes after all of these, only when
+   every account reads empty and your thresholds say the main pool is
+   exhausted. From a credit seat the session goes back to any account that is
+   not empty and not on its last point.
 6. The account the session moves to is read straight after the switch rather
    than at its idle cadence.
 
@@ -483,9 +486,10 @@ at a limit while another account has room. Hover projects the live account at
 the rate the work was last measured running. A pause is not taken for slower
 work: at 5.4 points a minute, a paused live account more than about 57% spent
 is projected near its limit and handed to an account that can carry the work,
-before the work resumes. A pause never moves it onto credits or onto another
-account's last points; those wait for the work to be seen running, or for the
-account to be empty. The projection comes too late when:
+before the work resumes. Another account's last points wait for the latest
+pair of live readings, on whichever account made it, to have seen the work
+running, and credits wait for every account to read empty: no projection opens
+them. The projection comes too late when:
 
 - the work runs faster than its last running rate, as a burst does after a
   quiet stretch;
@@ -496,7 +500,8 @@ account to be empty. The projection comes too late when:
 - the rate was measured on another plan, whose points are not this one's.
 
 The live account then runs out before its next reading shows it, and the
-session stops until that reading lands. Four more cases weaken the projection:
+session stops until that reading lands. Five more cases cost the session
+something:
 
 - A rate stands until a newer running measurement replaces it, across window
   resets and daemon restarts alike. A five-hour rate measured in a burst can
@@ -513,17 +518,22 @@ session stops until that reading lands. Four more cases weaken the projection:
   at an account after a move is the shared floor the hand-off already counts,
   but the looks after it come at the live cadence times the number of accounts
   sharing it, later than a single account's would.
-- When nothing is running and the live account is projected near its limit,
-  ccdad can still move the login to an account that outlasts it by the
-  cooldown, and later back again: two accounts holding between a cooldown's and
-  a carrier's worth of work -- at 5.4 points a minute, between about 11 and 60
-  points -- can trade it every few minutes for as long as the pause lasts. No
-  session is cut, but each move writes the credential, polls the account and
-  updates Claude Code's settings, and if the work resumes just after a move,
-  the next move waits out the cooldown.
+- A pause that began after the latest live pair, with every account's stint
+  since too short to make one, is not seen: the login can still move onto
+  another account's last points on that pair's word. And when nothing is
+  running and the live account is projected near its limit, ccdad can move
+  the login to an account holding a cooldown's worth more than the live one
+  has left and less than a carrier's -- at 5.4 points a minute, up to about 43
+  to 59 points -- and later back again. No session is cut and no credit is
+  bought, but each move writes the credential, polls the account and updates
+  Claude Code's settings, and if the work resumes just after a move, the next
+  move waits out the cooldown.
+- Credits are bought on readings alone. With credits opted in and every
+  account dry, a live account that runs out between two readings stops the
+  session until the reading that shows it empty, up to three minutes later.
 
 In a simulated week, with whole-percent readings and the daemon's warm-ups, a
-session stopped while another account had room in ten of 27 fleet-and-load
+session stopped while another account had room in eleven of 28 fleet-and-load
 variants, for between 5 and 1641 seconds, and in none of the rest. Those
 figures belong to the simulated fleets and loads; they are not a bound on what
 a real week can cost. The remedy not taken is a reserve on the live account's
