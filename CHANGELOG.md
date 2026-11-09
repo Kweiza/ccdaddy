@@ -94,7 +94,12 @@ quota, which can now expire unspent.
 - **Under hover, a live account at a limit with nowhere better to go is
   reported as blocked** until the soonest reset, instead of "already on the
   best account", whichever account the order puts first. `ccdad auto --once`
-  exits 4 there.
+  exits 4 there. `ccdad switch --force` without an account does not move the
+  session in that state either: it says no account can be switched to and
+  exits 4, because `--force` overrides the switching margins and the cooldown,
+  not a limit, and every other account is at one too. Name an account,
+  `ccdad switch <account>`, to move anyway. When every account is past its
+  last point rather than on it, hover is in recovery mode instead, below.
 - **When every account is past its last point, hover says so.** The lines
   under the status table name recovery mode and say when each account comes
   back, and `ccdad auto --json` order rows carry no `rung`, because the order
