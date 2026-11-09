@@ -568,8 +568,9 @@ func (p *Plan) hoverMove(activeUUID string, cfg Config, st *State, o Options, by
 	live, inPass := find(res, activeUUID)
 	if !inPass {
 		// No baseline: the live login is not an account in the pass. Anything
-		// beats staying on it, and the cooldown agrees (cooldownGate).
-		target, ok := firstCarrier(res, activeUUID, byUUID, o.Now)
+		// beats staying on it, and the cooldown agrees (cooldownGate) --
+		// cheapest first.
+		target, ok := p.cheapestCarrier(res, activeUUID, byUUID, o.Now)
 		if !ok {
 			target = res.Order[0]
 		}
@@ -582,11 +583,11 @@ func (p *Plan) hoverMove(activeUUID string, cfg Config, st *State, o Options, by
 		return
 	}
 
-	// At a limit: the first carrier, then a bridge if the live account would
+	// At a limit: the cheapest carrier, then a bridge if the live account would
 	// stop unseen, then a last resort if it has nothing left, then money --
 	// each among the accounts a move from here may reach (reachable).
 	res = p.reachable(live)
-	if target, ok := firstCarrier(res, activeUUID, byUUID, o.Now); ok {
+	if target, ok := p.cheapestCarrier(res, activeUUID, byUUID, o.Now); ok {
 		p.moveOrHold(target, leaveReason(live, target), activeUUID, cfg, st, o.Now)
 		return
 	}
@@ -606,13 +607,44 @@ func (p *Plan) hoverMove(activeUUID string, cfg Config, st *State, o Options, by
 		p.creditWalk(byUUID, activeUUID, cfg, st, o.Now)
 		return
 	}
-	retry := soonestRollover(p.Result)
-	if p.creditWaitsOn(live) {
-		// What lifts this hold is the live account's own empty reading, not a
-		// rollover hours out. TestAnEmptyReadingsWaitNamesTheNextReading.
-		retry = nextReading(byUUID[live.UUID], o.Now)
+	if p.moneyWaitsOn(live, activeUUID, byUUID, o.Now) {
+		// What lifts this hold is the live account's own reading, not a
+		// rollover hours out. TestAnEmptyReadingsWaitNamesTheNextReading,
+		// TestAProjectionDoesNotMoveOntoAPrimarySeat.
+		p.hold(ReasonWaitsForAReading, nextReading(byUUID[live.UUID], o.Now))
+		return
 	}
-	p.hold(ReasonNothingCanServe, retry)
+	p.hold(ReasonNothingCanServe, soonestRollover(p.Result))
+}
+
+// moneyWaitsOn is whether every move left from live costs money and waits on
+// its own reading: the credit pool, open once live reads empty
+// (creditWaitsOn), or a dearer seat that could carry the work, reachable once
+// live reads its last point (reachable).
+func (p *Plan) moneyWaitsOn(live Ranked, activeUUID string, byUUID map[string]Candidate, now time.Time) bool {
+	if p.creditWaitsOn(live) {
+		return true
+	}
+	if !live.roomyByLevel() {
+		return false
+	}
+	target, ok := firstCarrier(p.Result, activeUUID, byUUID, now)
+	return ok && p.seatCost(target) > p.seatCost(live)
+}
+
+// cheapestCarrier is the first carrier in res on the cheapest rung of cost
+// that has one (seatCost), in the order's own order within the rung: free
+// quota an unread or held-out account can carry is taken before a primary
+// seat's balance the order puts ahead of it.
+// TestALastPointGoesToFreeQuotaFirst.
+func (p *Plan) cheapestCarrier(res Result, activeUUID string, byUUID map[string]Candidate, now time.Time) (Ranked, bool) {
+	for cost := costFree; cost <= costOverage; cost++ {
+		rung := p.orderWhere(res, func(r Ranked) bool { return p.seatCost(r) == cost })
+		if target, ok := firstCarrier(rung, activeUUID, byUUID, now); ok {
+			return target, true
+		}
+	}
+	return Ranked{}, false
 }
 
 // reachable is the order a move off live may go to: every account when live
@@ -633,20 +665,20 @@ func (p *Plan) reachable(live Ranked) Result {
 		return p.Result
 	}
 	cost := p.seatCost(live)
-	return p.orderWhere(func(r Ranked) bool { return p.seatCost(r) <= cost })
+	return p.orderWhere(p.Result, func(r Ranked) bool { return p.seatCost(r) <= cost })
 }
 
-// orderWhere is the pass with its order narrowed to the accounts keep admits,
-// in the order's own order.
-func (p *Plan) orderWhere(keep func(Ranked) bool) Result {
-	res := p.Result
-	res.Order = nil
-	for _, r := range p.Result.Order {
+// orderWhere is res with its order narrowed to the accounts keep admits, in
+// the order's own order.
+func (p *Plan) orderWhere(res Result, keep func(Ranked) bool) Result {
+	narrowed := res
+	narrowed.Order = nil
+	for _, r := range res.Order {
 		if keep(r) {
-			res.Order = append(res.Order, r)
+			narrowed.Order = append(narrowed.Order, r)
 		}
 	}
-	return res
+	return narrowed
 }
 
 // nextReading is when c is next read: its schedule, held to the serve floor
@@ -739,8 +771,8 @@ func (p *Plan) creditSeatReturn(live Ranked, activeUUID string, cfg Config, st *
 		}
 		p.moveOrHold(target, reason, activeUUID, cfg, st, now)
 	}
-	for cost := 0; cost < p.seatCost(live); cost++ {
-		rung := p.orderWhere(func(r Ranked) bool { return !isActive(r.UUID, activeUUID) && p.seatCost(r) == cost })
+	for cost := costFree; cost < p.seatCost(live); cost++ {
+		rung := p.orderWhere(p.Result, func(r Ranked) bool { return !isActive(r.UUID, activeUUID) && p.seatCost(r) == cost })
 		if target, ok := firstCarrier(rung, activeUUID, byUUID, now); ok {
 			back(target)
 			return
@@ -755,17 +787,28 @@ func (p *Plan) creditSeatReturn(live Ranked, activeUUID string, cfg Config, st *
 	p.hold(ReasonNoSubscriptionRoom, time.Time{})
 }
 
-// seatCost is what a point of work on r costs the user, cheapest first: a
-// subscription's quota is paid for whether it is spent or not, a primary credit
-// seat's balance is quota bought ahead, and the last-resort pool is overage.
-func (p *Plan) seatCost(r Ranked) int {
+// costRung is what a point of work on an account costs the user, cheapest
+// first.
+type costRung int
+
+const (
+	// costFree is a subscription's quota, paid for whether it is spent or not.
+	costFree costRung = iota
+	// costPrepaid is a primary credit seat's balance: quota bought ahead.
+	costPrepaid
+	// costOverage is the last-resort credit pool.
+	costOverage
+)
+
+// seatCost is the rung of cost r is on.
+func (p *Plan) seatCost(r Ranked) costRung {
 	switch {
 	case p.isCredit(r.UUID):
-		return 2
+		return costOverage
 	case r.Kind == identity.KindCredit:
-		return 1
+		return costPrepaid
 	}
-	return 0
+	return costFree
 }
 
 // creditOpen is whether hover may walk the last-resort credit pool, and it is
@@ -811,7 +854,7 @@ func (p *Plan) creditGateOpen() bool {
 // empty on a window no model choice can dodge.
 func (p *Plan) mainPoolEmptyBut(skip string) bool {
 	for _, r := range p.Result.Order {
-		if r.UUID == skip {
+		if isActive(r.UUID, skip) {
 			continue
 		}
 		if _, empty := r.Empty(); !empty {
