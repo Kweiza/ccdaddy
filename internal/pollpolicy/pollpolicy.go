@@ -554,6 +554,41 @@ func (t Table) ServeTTLFor(in Input) time.Duration {
 	return t.ServeTTL
 }
 
+// PromptPollAt is when to read an account the work has just moved to: as soon as
+// the serve floor allows, never later than the look already scheduled, and never
+// inside a 429's floor.
+//
+// fetched and next are the account's last reading and its scheduled next one,
+// lastRateLimited its poller's last 429, zero for never. The account was being
+// read on an idle cadence -- up to CandidateMaxInterval -- and the work's first
+// reading on it is the one that says how the move went, so leaving it there
+// blinds the engine on the only account a session can be cut off on for as long
+// as ten minutes. The floor is the one due() holds, so asking sooner than that
+// would only be refused; a 429's schedule is congestion, which outranks the
+// clock here as everywhere else in this package.
+//
+// It is one function because three places need the same instant: the switch
+// writes it, hover's hand-off rule predicts it for an account it might move to,
+// and the weekly simulation schedules by it.
+func (t Table) PromptPollAt(fetched, next, lastRateLimited, now time.Time) time.Time {
+	if !lastRateLimited.IsZero() && now.Sub(lastRateLimited) < t.Recent429Window {
+		return next
+	}
+	prompt := latestOf(now, fetched.Add(t.ServeTTL))
+	if scheduled := latestOf(now, next); scheduled.Before(prompt) {
+		return scheduled
+	}
+	return prompt
+}
+
+// latestOf is the later of two instants.
+func latestOf(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
+}
+
 // WarmClamp is the next poll instant, given the one the cadence chose and the
 // one a rollover wants.
 //
@@ -751,6 +786,11 @@ func InDangerBand(in Input) bool { return Claude.InDangerBand(in) }
 // Share is Claude.Share.
 func Share(d time.Duration, accounts int, in Input) time.Duration {
 	return Claude.Share(d, accounts, in)
+}
+
+// PromptPollAt is Claude.PromptPollAt.
+func PromptPollAt(fetched, next, lastRateLimited, now time.Time) time.Time {
+	return Claude.PromptPollAt(fetched, next, lastRateLimited, now)
 }
 
 // ServeTTLFor is Claude.ServeTTLFor.

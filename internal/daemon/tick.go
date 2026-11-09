@@ -807,6 +807,9 @@ func (e *Engine) act(ctx context.Context, s *store.Store, ev switcher.Evaluation
 	if res.CooldownErr != nil {
 		e.logf("%v", res.CooldownErr)
 	}
+	if res.PromptPollErr != nil {
+		e.logf("%v", res.PromptPollErr)
+	}
 	if res.KeyErr != nil {
 		e.logf("the API key in Claude Code's config could not be cleared: %v", res.KeyErr)
 	}
