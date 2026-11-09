@@ -501,7 +501,7 @@ func Execute(s *store.Store, req Request) (Result, error) {
 	if err := s.SetActive(req.Target.UUID); err != nil {
 		return res, err
 	}
-	res.CooldownErr = RecordSwitch(req.Target.UUID, req.Departure)
+	res.CooldownErr = RecordSwitchAt(req.Target.UUID, req.now(), req.Departure)
 	res.PromptPollErr = SchedulePromptPoll(req.Target.UUID, req.now(), store.SharingIdentity(accounts, req.Target))
 	res.ClearedKeyOwner, res.ClearedKey, res.KeyErr = releaseManagedAPIKey(s)
 	if !res.EnvTokenWins {
@@ -633,9 +633,20 @@ func SchedulePromptPoll(uuid string, now time.Time, accounts int) error {
 // without its stamp, or the reverse, is a state no single switch produces. A
 // write that fails loses both, which degrades towards more switching -- the
 // direction the cooldown's own failure already takes.
+//
+// It stamps the wall clock, which is the clock of the commands that call it
+// directly; Execute, which runs on the request's clock, calls RecordSwitchAt.
 func RecordSwitch(uuid string, left strategy.Departure) error {
+	return RecordSwitchAt(uuid, time.Now(), left)
+}
+
+// RecordSwitchAt is RecordSwitch at the instant at, on the caller's clock:
+// Execute's is the request's (Request.now), the one the prompt poll beside it
+// is scheduled on, so a switch on an injected clock stamps its cooldown on that
+// clock too.
+func RecordSwitchAt(uuid string, at time.Time, left strategy.Departure) error {
 	err := strategy.WithState(stateTimeout, func(st *strategy.State) error {
-		st.RecordSwitch(uuid, time.Now(), left)
+		st.RecordSwitch(uuid, at, left)
 		return nil
 	})
 	if err != nil {
