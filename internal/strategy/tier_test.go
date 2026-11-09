@@ -370,7 +370,7 @@ func TestALastPointHandsOffToAnAccountThatOutlastsIt(t *testing.T) {
 		{"B stopping hands to A, a bridge", points(cadence), points(cadence + HoverCooldown + time.Minute), true, ReasonProjectedExhaustion},
 		{"B stopping keeps a bridge short of a cooldown", points(cadence), points(cadence + HoverCooldown/2), false, ReasonNothingCanServe},
 		{"B out hands to A, a last resort", 0.005, points(HoverCooldown * 3 / 4), true, ReasonLastPoint},
-		{"B out waits to read empty before A's last point", 0.005, points(HoverCooldown / 2), false, ReasonNothingCanServe},
+		{"B out waits to read empty before A's last point", 0.005, points(HoverCooldown / 2), false, ReasonWaitsForAReading},
 		{"B empty hands to A's last point", 0, points(HoverCooldown / 2), true, ReasonBetterTarget},
 		{"B out never takes an empty A", 0.005, 0, false, ReasonNothingCanServe},
 		{"B out never takes an A the work would empty before the next look", 0.005, points(EvaluationInterval / 2), false, ReasonNothingCanServe},

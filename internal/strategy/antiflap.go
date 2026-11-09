@@ -235,11 +235,13 @@ const (
 	ReasonCannotCarry
 	// ReasonWaitsForAReading: under hover, the live account is at a limit --
 	// projected there, or for the credit pool on its last point by level --
-	// and every move left costs money: the credit pool, with a seat the gate
-	// arms, or a primary seat dearer than the account the session is on. Money
-	// is decided on readings, so the session stays until one shows the live
-	// account at its last point or empty, as each move needs. Plan.RetryAt
-	// carries that reading. Appended last.
+	// and every move left waits on its own reading. Either the move costs
+	// money -- the credit pool, with a seat the gate arms, or a primary seat
+	// dearer than the account the session is on -- and money is decided on
+	// readings; or it is onto another account's last point, which is taken
+	// only once the live account reads empty (lastResort). The session stays
+	// until a reading shows the live account at its last point or empty, as
+	// the move needs. Plan.RetryAt carries that reading. Appended last.
 	ReasonWaitsForAReading
 )
 
@@ -286,7 +288,7 @@ func (r Reason) String() string {
 	case ReasonCannotCarry:
 		return "the account the order prefers cannot carry the work running now"
 	case ReasonWaitsForAReading:
-		return "the next account costs money, and the move waits for a reading that shows the live account at its limit"
+		return "the move waits for a reading that shows the live account at its limit"
 	}
 	return "unknown"
 }
