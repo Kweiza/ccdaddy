@@ -52,11 +52,46 @@ func TestTheWorksRateIsTheMostRecentLiveMeasurement(t *testing.T) {
 		t.Errorf("c runs out in %s, want 100m: the newest live pair is the work's rate", got)
 	}
 
-	// A pair whose first reading precedes the switch back onto its account
-	// spans the absence between, and is not the work's.
-	rates := workRatesOf([]Candidate{tl}, now.Add(-2*time.Minute), "t-live")
-	if _, ok := rates[5*time.Hour]; ok {
-		t.Errorf("a pair spanning a return onto its account was taken as the work's rate")
+	// A newer pause on T is not a rate: the work's rate is the older running
+	// one on L, the rate the work runs at when it runs.
+	tl.LiveBurns = []usage.LiveBurn{{PerMin: 0, Window: usage.WindowFiveHour, From: now.Add(-5 * time.Minute), At: now}}
+	l.LiveBurns[0].PerMin = 0.5
+	p = Decide([]Candidate{l, tl, c}, hoverOpts(), Config{}, NewState(), "t-live")
+	r, _ = find(p.Result, "c")
+	if got := runsOutIn(t, r); math.Abs(got.Minutes()-30/0.5) > 1e-6 {
+		t.Errorf("c runs out in %s after a pause, want 60m: a pause is not working slower", got)
+	}
+}
+
+// Only a window that is a limit for the pass sets the work's rate on its
+// length. In three minutes the live account's full week went from 49% to 50%
+// and its Fable cap from 0 to 30: the week's rate is a third of a point a
+// minute, and the Fable cap, which hover dodges, does not make it ten. Its
+// fifty points last two and a half hours. Named with --model, the Fable cap is
+// the session's limit and its rate is in force: the account runs out no later
+// than the seven minutes the cap's seventy points last.
+func TestAModelCapsRateIsNotTheWeeksRate(t *testing.T) {
+	fable := usage.ScopedWindowName(usage.ScopeModel, "Fable")
+	live := polled(sub("a-live", &usage.Snapshot{
+		FiveHour: win(10, 4*time.Hour), SevenDay: win(50, 3*day),
+		Limits: []usage.Limit{scoped("Fable", "", 30, 3*day)},
+	}), 180*time.Second)
+	live.LiveBurns = []usage.LiveBurn{
+		{PerMin: 1.0 / 3, Window: usage.WindowSevenDay, From: now.Add(-3 * time.Minute), At: now},
+		{PerMin: 10, Window: fable, From: now.Add(-3 * time.Minute), At: now},
+	}
+	p := Decide([]Candidate{live}, hoverOpts(), Config{}, NewState(), "a-live")
+	r, _ := find(p.Result, "a-live")
+	if got := runsOutIn(t, r); r.RunsOutOn != usage.WindowSevenDay || math.Abs(got.Minutes()-150) > 1e-6 {
+		t.Errorf("the live account runs out on %q in %s, want the week in 150m", r.RunsOutOn, got)
+	}
+
+	o := hoverOpts()
+	o.Model = "fable"
+	p = Decide([]Candidate{live}, o, Config{}, NewState(), "a-live")
+	r, _ = find(p.Result, "a-live")
+	if got := runsOutIn(t, r); got > 7*time.Minute+time.Millisecond {
+		t.Errorf("with --model fable the live account runs out on %q in %s, want within the Fable cap's 7m", r.RunsOutOn, got)
 	}
 }
 

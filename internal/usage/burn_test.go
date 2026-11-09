@@ -184,3 +184,42 @@ func TestALivePairReplacesOnlyTheWindowsItMeasured(t *testing.T) {
 		t.Errorf("a pair that measured nothing left %+v, want both kept", same)
 	}
 }
+
+// The rate kept is the work's while it runs. A pause -- a live pair whose
+// readings did not move -- never replaces a running rate, and any newer running
+// pair does, a slower one included. With nothing running kept, the pause is the
+// measurement there is.
+func TestAPauseDoesNotReplaceTheWorksRate(t *testing.T) {
+	running := LiveBurn{PerMin: 1, Window: WindowFiveHour, From: burnNow.Add(-3 * time.Minute), At: burnNow}
+	pause := LiveBurn{PerMin: 0, Window: WindowFiveHour, From: burnNow, At: burnNow.Add(5 * time.Minute)}
+	slower := LiveBurn{PerMin: 0.5, Window: WindowFiveHour, From: burnNow.Add(5 * time.Minute), At: burnNow.Add(9 * time.Minute)}
+
+	if got := MergeLiveBurns([]LiveBurn{running}, []LiveBurn{pause}); len(got) != 1 || got[0] != running {
+		t.Errorf("after a pause the rate is %+v, want the running %+v", got, running)
+	}
+	if got := MergeLiveBurns([]LiveBurn{running}, []LiveBurn{slower}); len(got) != 1 || got[0] != slower {
+		t.Errorf("after a slower running pair the rate is %+v, want %+v", got, slower)
+	}
+	if got := MergeLiveBurns(nil, []LiveBurn{pause}); len(got) != 1 || got[0] != pause {
+		t.Errorf("a pause with nothing kept stored %+v, want the pause", got)
+	}
+	if !running.Running() || pause.Running() || !slower.Running() {
+		t.Errorf("Running: %v %v %v, want true false true", running.Running(), pause.Running(), slower.Running())
+	}
+}
+
+// A pair is the work's only within one live stint: an anchor taken live before
+// the switch that last made the account live pairs across the time the work
+// was elsewhere.
+func TestAnAnchorFromAnEarlierStintIsNotLive(t *testing.T) {
+	back := burnNow
+	if LiveAnchor(true, back.Add(-time.Minute), back) {
+		t.Error("an anchor read before the account was switched back to is live")
+	}
+	if !LiveAnchor(true, back.Add(time.Minute), back) || !LiveAnchor(true, back, time.Time{}) {
+		t.Error("an anchor read in the stint is not live")
+	}
+	if LiveAnchor(false, back.Add(time.Minute), back) {
+		t.Error("an idle anchor is live")
+	}
+}
