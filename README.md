@@ -458,10 +458,12 @@ Hover orders the Claude lane's accounts instead of comparing their room:
 3. The session returns to a five-hour account as soon as it has room again.
 4. An account is handed off one point before any limit it cannot avoid by
    changing model (a primary credit seat at 95% of its balance), or earlier
-   when the work running now would run it out within three minutes of its
-   next reading. The work's rate is taken only between two readings of an
-   account that were both made while it was live, and it follows the work
-   across a switch.
+   when the work running now would run it out: on a five-hour window, before
+   its next reading; on a week, within three minutes after it. A five-hour
+   window is run that close because it comes back in hours, and a burst that
+   outruns the reading before the hand-off can stop the session for seconds.
+   The work's rate is taken only between two readings of an account that were
+   both made while it was live, and it follows the work across a switch.
 5. The session is moved only to an account that would still have three
    minutes of that work left after the engine has read it twice on it. When
    none would, the session stays until the live account would stop before its
@@ -503,8 +505,15 @@ opens them. The projection comes too late when:
 - the rate was measured on another plan, whose points are not this one's.
 
 The live account then runs out before its next reading shows it, and the
-session stops until that reading lands. Six more cases cost the session
-something:
+session stops until that reading lands. On a week a three-minute reserve
+absorbs most of that; a five-hour window has none, since it is handed off at
+the last reading before the work would stop it, so on a five-hour account
+these cases stop the session for seconds. In the simulated week, today's
+fleet under the production rate of 5.4 points a minute leaves 0.5 five-hour
+points at a hand-off on average, and stops five times a week for up to ten
+seconds, 46 in all; under steady heavy use it stops six times, 174 seconds in
+all. With the reserve on five-hour windows too it left 27 points a hand-off
+and stopped for none. Six more cases cost the session something:
 
 - A rate stands until a newer running measurement replaces it, across window
   resets and daemon restarts alike. A five-hour rate measured in a burst can
@@ -552,9 +561,11 @@ something:
   after a 429.
 
 In a simulated week, with whole-percent readings and the daemon's warm-ups, a
-session stopped while another account had room in eleven of 28 fleet-and-load
-variants, for between 5 and 4181 seconds, and in none of the rest; most of the
-larger figures are the wait for a last point to read empty. Those
+session stopped while another account had room in eighteen of 28
+fleet-and-load variants, for between 36 and 3501 seconds, and in none of the
+rest, every light and idle load among them. On the fleets that do not run dry
+those are mostly the five-hour hand-offs above, up to 37 seconds a stop; on
+the two that do, they also hold the wait for a last point to read empty. Those
 figures belong to the simulated fleets and loads; they are not a bound on what
 a real week can cost. The remedy not taken is a reserve on the live account's
 level: handing off with enough left to cover a step and a burst through one

@@ -497,7 +497,8 @@ func TestAnEmptyReadingsWaitNamesTheNextReading(t *testing.T) {
 }
 
 // A projection never moves the session onto a primary seat's balance. S, a Max
-// at 70%, is closing at the rate the work runs; the primary seat P could carry
+// at 85%, would stop before its next reading at the rate the work runs, and
+// at 70% has room; the primary seat P could carry
 // the work, and the move to it would be paid for. S stays until its own reading
 // says its last point -- the hold says so, and names S's next reading as when
 // it lifts -- and then goes. From P the session goes back to S on S's level --
@@ -508,12 +509,12 @@ func TestAProjectionDoesNotMoveOntoAPrimarySeat(t *testing.T) {
 		return measuredLive(polled(maxAcct("s-max", pct, 3*time.Hour, 40, 3*day), 180*time.Second), 5.4, usage.WindowFiveHour)
 	}
 	seat := primarySeat("p-seat", 41)
-	p := Decide([]Candidate{s(70), seat}, hoverOpts(), Config{}, NewState(), "s-max")
+	p := Decide([]Candidate{s(85), seat}, hoverOpts(), Config{}, NewState(), "s-max")
 	if r, _ := find(p.Result, "s-max"); r.Closing == "" {
 		t.Fatalf("S is not closing: the case is not a projection")
 	}
 	want(t, p, ActionStay, ReasonWaitsForAReading, "")
-	if next := s(70).NextPollAt; !p.HasRetryAt || !p.RetryAt.Equal(next) {
+	if next := s(85).NextPollAt; !p.HasRetryAt || !p.RetryAt.Equal(next) {
 		t.Errorf("RetryAt %s (set %v), want S's next reading at %s", p.RetryAt.Sub(now), p.HasRetryAt, next.Sub(now))
 	}
 	p = Decide([]Candidate{s(99.5), seat}, hoverOpts(), Config{}, NewState(), "s-max")
@@ -981,6 +982,49 @@ func TestTheWorksRunningFlagIsTheLatestPairs(t *testing.T) {
 			t.Errorf("A's later pair running %v: %s (%s) to %q", aRunning, p.Action, p.Reason, p.Target.UUID)
 		}
 	}
+}
+
+// The reserve is the stopping window's length class's (closingReserve): a
+// five-hour window is run to its next reading, and a week is handed off a
+// reserve before it. Each live account below is read a minute before its next
+// reading and the work would stop it half a reserve after that reading, with an
+// Ultra beside it that carries the work. On a five-hour window that is room,
+// and the session stays; on a week it is closing, and the session moves.
+func TestAFiveHourWindowRunsToItsNextReadingAndAWeekKeepsItsReserve(t *testing.T) {
+	const cadence = time.Minute
+	stopsIn := cadence + hoverReserve/2
+	carrier := idleOn(weekOnly("u-carrier", 20, 5*day))
+
+	const fiveRate = 2.0
+	five := measuredLive(polled(maxAcct("a-live", 100-fiveRate*stopsIn.Minutes(), 3*time.Hour, 50, 4*day), cadence),
+		fiveRate, usage.WindowFiveHour)
+	p := Decide([]Candidate{five, carrier}, hoverOpts(), Config{}, NewState(), "a-live")
+	if live, _ := find(p.Result, "a-live"); live.limit != liveRoom || live.Closing != "" || runsOutIn(t, live) != stopsIn {
+		t.Errorf("five-hour live account at limit %d, closing %q, out in %s: want room, out half a reserve after its next reading",
+			live.limit, live.Closing, live.RunsOutAt.Sub(now))
+	}
+	if p.Action == ActionSwitch {
+		t.Errorf("moved to %s (%s) a reserve before the five-hour window's stop", p.Target.UUID, p.Reason)
+	}
+
+	const weekRate = 1.0
+	week := measuredLive(polled(sub("a-live", &usage.Snapshot{SevenDay: win(100-weekRate*stopsIn.Minutes(), 3*day)}), cadence),
+		weekRate, usage.WindowSevenDay)
+	p = Decide([]Candidate{week, carrier}, hoverOpts(), Config{}, NewState(), "a-live")
+	if live, _ := find(p.Result, "a-live"); live.limit != liveClosing || live.Closing != usage.WindowSevenDay {
+		t.Errorf("weekly live account at limit %d, closing %q: want closing on its week", live.limit, live.Closing)
+	}
+	want(t, p, ActionSwitch, ReasonProjectedExhaustion, "u-carrier")
+
+	// Closing is not stopping: an account that would only bridge the week --
+	// eight points, past the live one's stop by more than a cooldown and short
+	// of a carrier's -- is not taken a reserve early.
+	bridge := idleOn(weekOnly("u-bridge", 92, 5*day))
+	p = Decide([]Candidate{week, bridge}, hoverOpts(), Config{}, NewState(), "a-live")
+	if b, _ := find(p.Result, "u-bridge"); b.Carries {
+		t.Fatalf("u-bridge carries the work; the case is a bridge")
+	}
+	want(t, p, ActionBlocked, ReasonNothingCanServe, "")
 }
 
 // When every account is down to its last point they are spent one at a time,

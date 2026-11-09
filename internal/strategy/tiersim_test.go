@@ -631,8 +631,9 @@ func twoUltraFleet() []tierAccount {
 // where it takes its whole five hours; heavy, where it fills in two; production,
 // the 5.4 five-hour points a minute measured on a live fleet on 2026-09-05, in
 // two-hour sessions twelve hours apart; and a burst at heavy load's mean,
-// alternating double and nothing in three-minute blocks -- which is what the
-// reserve is for.
+// alternating double and nothing in three-minute blocks -- which is what a
+// week's reserve is for, and what a five-hour window, run to its next reading,
+// stops on.
 var tierLoads = []tierLoad{
 	steady("idle", 0.0075),
 	steady("light", 0.01),
@@ -668,10 +669,10 @@ var tierPauseLoad = paused("pause", 5.4/fiveHoursPerWeek,
 //	load           fleet   switches  unspent         stopped   switches  unspent         stopped
 //	idle  0.0075   today         33  31.28 / 138.08        0          2  2.00 / 183.55         0
 //	idle  0.0075   Fable         27  41.00 / 128.35        0          2  2.00 / 183.55         0
-//	light 0.01     today         38  28.47 / 120.35        0         54  1.98 / 167.98         0
-//	light 0.01     Fable         30  41.00 / 107.82        0         54  1.98 / 167.98         0
-//	heavy 0.025    today        183   5.64 /  29.84        0         56  1.98 /  45.13         0
-//	heavy 0.025    Fable        155  33.28 /  10.93      210         56  1.98 /  45.13         0
+//	light 0.01     today         38  28.47 / 120.35        0         54  1.99 / 168.14         0
+//	light 0.01     Fable         30  41.00 / 107.82        0         54  1.99 / 168.14         0
+//	heavy 0.025    today        183   5.64 /  29.84        0         56  1.94 /  45.66       174
+//	heavy 0.025    Fable        155  33.28 /  10.93      210         56  1.94 /  45.66       174
 //
 // Readings are whole percents and the daemon's warm-ups start the idle
 // accounts' clocks, in both codes; the five-hour account's week is spent to
@@ -705,10 +706,13 @@ func TestTodaysFleetOverAWeek(t *testing.T) {
 		// that never fills a window leaves only the rollovers and the week's
 		// own last point.
 		most float64
+		// stopped is the seconds a limit stops the session in the week, as
+		// measured: every one of them with another account holding room.
+		stopped int
 	}{
-		{tierLoads[0], 2 + 4},
-		{tierLoads[1], 2*fiveHourWindows + 4},
-		{tierLoads[2], 2*fiveHourWindows + 4},
+		{tierLoads[0], 2 + 4, 0},
+		{tierLoads[1], 2*fiveHourWindows + 4, 0},
+		{tierLoads[2], 2*fiveHourWindows + 4, 174},
 	} {
 		load := load
 		t.Run(load.load.name, func(t *testing.T) {
@@ -718,12 +722,16 @@ func TestTodaysFleetOverAWeek(t *testing.T) {
 				fableBlownFleet(), load.load, week)
 			for _, res := range []tierSimResult{today, fable} {
 				checkTierBooks(t, res)
-				// Purpose 2, and it is absolute: no limit stops the session while
-				// another account could have carried it. This fleet never runs
-				// dry inside the week, so no second may stop at all.
-				if res.stoppedWithRoom != 0 || res.stopped != 0 {
-					t.Errorf("%d seconds stopped by a limit, %d of them with another account holding room",
-						res.stopped, res.stoppedWithRoom)
+				// Purpose 2. This fleet never runs dry inside the week, so a
+				// second a limit stops the session is one another account could
+				// have carried. A week's reserve keeps those at none; a five-hour
+				// window is run to its next reading (closingReserve), and under
+				// heavy load the whole-percent step lets the work outrun the
+				// reading before the hand-off six times a week, for up to 29
+				// seconds. Those are pinned as measured.
+				if res.stopped != load.stopped || res.stoppedWithRoom != load.stopped {
+					t.Errorf("%d seconds stopped by a limit, %d of them with another account holding room, measured %d",
+						res.stopped, res.stoppedWithRoom, load.stopped)
 				}
 				if float64(res.total) > load.most {
 					t.Errorf("%d switches in a week, want at most %.0f: the order is moving the session "+
@@ -768,30 +776,49 @@ func checkTierBooks(t *testing.T, res tierSimResult) {
 // under production load have less quota in a week than the load asks for -- so
 // a stopped second is allowed there, and only while nothing else had room.
 //
-// Eleven variants do not meet it. Their figures are pinned here as measured
+// Eighteen variants do not meet it. Their figures are pinned here as measured
 // (stoppedWithRoomMeasured) rather than left out, and every other variant
-// measures zero -- the pause load on today's fleet among them:
+// measures zero -- every light and idle load among them. The gaps named are
+// the ones each figure is known to hold:
 //
 //	fleet                  load        stopped   with room elsewhere   gap
-//	today                  burst            29        29             burst
-//	big Ultras             burst            29        29             burst
-//	two Max, three Ultras  burst           252       252             burst, last point
-//	two Max                burst         61343      1170             burst, last point
-//	two Max                heavy        122628      4181             step, last point
-//	two Max                production    69692       136             step
-//	two Max                pause          8372      1133             burst, last point
-//	two Max, three Ultras  heavy           560       560             step, last point
-//	two Max, three Ultras  production    11576       350             step, last point
-//	two Max, three Ultras  pause             5         5             step
-//	two Ultras             production      159       159             step, last point
+//	today                  heavy           174       174             five-hour
+//	today                  production       46        46             five-hour
+//	today                  burst           145       145             five-hour, burst
+//	today                  pause           107       107             five-hour
+//	big Ultras             heavy           174       174             five-hour
+//	big Ultras             production       46        46             five-hour
+//	big Ultras             burst           145       145             five-hour, burst
+//	two Ultras             heavy           145       145             five-hour
+//	two Ultras             production       36        36             five-hour
+//	two Ultras             burst            58        58             five-hour
+//	two Max, three Ultras  heavy           637       637             five-hour, step, last point
+//	two Max, three Ultras  production    11674       257             five-hour, step, last point
+//	two Max, three Ultras  burst           525       525             five-hour, burst, last point
+//	two Max, three Ultras  pause            84        84             five-hour, step
+//	two Max                heavy        122628      3501             five-hour, step, last point
+//	two Max                production    69692       161             five-hour, step
+//	two Max                burst         61343       605             five-hour, burst, last point
+//	two Max                pause          8372       666             five-hour, burst, last point
 //
-// The last-point gap is a rule's price rather than a projection's miss.
-// Another account's last point is taken only once the live account reads
-// empty (lastResort), so a live account that runs out while it still reads
-// short of empty stops the session until the reading that shows it empty,
-// though the other account holds a point. It is most of the seconds where it
-// appears: before it, those seven variants measured 142, 958, 1641, 250, 239,
-// 346 and 37.
+// Two of the gaps are rules' prices rather than projections' misses.
+//
+// The five-hour gap: a five-hour window is run to its next reading
+// (closingReserve), so work that outruns the reading before the hand-off --
+// the step under a steady load, a burst -- stops the session until the next
+// reading, for up to 37 seconds a stop on the fleets that do not run dry. With
+// the reserve, today's fleet and the big Ultras stopped only under burst load,
+// 29 s each, and none of the rest of those three fleets but the two Ultras
+// under production load, 159 s; the two dry fleets measured two Max 1170,
+// 4181, 136 and 1133 under burst, heavy, production and pause load, and two
+// Max, three Ultras 252, 560, 350 and 5.
+//
+// The last-point gap: another account's last point is taken only once the
+// live account reads empty (lastResort), so a live account that runs out while
+// it still reads short of empty stops the session until the reading that shows
+// it empty, though the other account holds a point. Before it, and with the
+// five-hour reserve, the seven variants it raised measured 142, 958, 1641,
+// 250, 239, 346 and 37.
 //
 // The burst gap is the one no projection closes, at any reserve. A pair of
 // readings wholly inside a block of nothing is a pause and is not a rate, but a
@@ -866,21 +893,26 @@ func TestEveryFleetHandsOffBeforeTheLimit(t *testing.T) {
 // stoppedWithRoomMeasured is the table above, by subtest name: the variants
 // whose stopped-with-room seconds are not zero, at the figure they measure.
 var stoppedWithRoomMeasured = map[string]int{
-	// The burst gap: a running pair partly across a pause understates the burst.
-	"today/burst":                 29,
-	"big Ultras/burst":            29,
-	"two Max, three Ultras/burst": 252,
-	"two Max/burst":               1170,
-	// The burst gap's other half: a pair across the pause has the work not seen
-	// running when it resumes, and the last resort waits for an empty reading.
-	"two Max/pause": 1133,
-	// The step gap: the live account reads up to a step behind what it has
-	// spent, a pair measures the work to a step, and the room left elsewhere is
-	// mostly under a step a reading can show.
-	"two Max/heavy":                    4181,
-	"two Max/production":               136,
-	"two Max, three Ultras/heavy":      560,
-	"two Max, three Ultras/production": 350,
-	"two Max, three Ultras/pause":      5,
-	"two Ultras/production":            159,
+	// The five-hour gap alone, or with the burst's: the fleets that do not run
+	// dry, whose five-hour windows are run to their next readings.
+	"today/heavy":           174,
+	"today/production":      46,
+	"today/burst":           145,
+	"today/pause":           107,
+	"big Ultras/heavy":      174,
+	"big Ultras/production": 46,
+	"big Ultras/burst":      145,
+	"two Ultras/heavy":      145,
+	"two Ultras/production": 36,
+	"two Ultras/burst":      58,
+	// The fleets that run dry, where the step, the burst and the wait for a
+	// last point to read empty add to the five-hour gap.
+	"two Max, three Ultras/heavy":      637,
+	"two Max, three Ultras/production": 257,
+	"two Max, three Ultras/burst":      525,
+	"two Max, three Ultras/pause":      84,
+	"two Max/heavy":                    3501,
+	"two Max/production":               161,
+	"two Max/burst":                    605,
+	"two Max/pause":                    666,
 }
