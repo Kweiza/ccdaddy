@@ -542,6 +542,27 @@ func TestAutoStreamRendersEveryTimeInOneZone(t *testing.T) {
 	}
 }
 
+// `ccdad auto --once` executes the engine's own plan, so the account it leaves
+// at a limit is remembered exactly as the daemon would remember it.
+func TestAutoOnceRemembersTheAccountItLeftAtALimit(t *testing.T) {
+	isolate(t)
+	seedAccount(t, "u-1", "a@example.com")
+	seedAccount(t, "u-2", "b@example.com")
+	if code, _, _, top := runRoot(t, "switch", "1"); code != ExitOK {
+		t.Fatalf("setup switch = %d (%s)", code, top)
+	}
+	seedUsage(t, "u-1", 0)
+	seedUsage(t, "u-2", 80)
+	clearCooldown(t)
+
+	if code, _, errOut, top := runRoot(t, "auto", "--once"); code != ExitOK {
+		t.Fatalf("exit = %d (%s / %s), want 0", code, errOut, top)
+	}
+	if mark := departuresOnDisk(t)["u-1"]; mark["closing"] != "five_hour" {
+		t.Errorf("u-1's mark = %v, want it left on its empty five-hour window", mark)
+	}
+}
+
 // evaluatedEvent is the one `evaluated` event the emitter writes for plan.
 func evaluatedEvent(t *testing.T, plan strategy.Plan) map[string]any {
 	t.Helper()
