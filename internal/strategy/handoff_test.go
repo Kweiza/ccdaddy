@@ -601,6 +601,59 @@ func TestTheCreditWalkSkipsTheLiveSeat(t *testing.T) {
 	}
 }
 
+// A seat at its own limit is nowhere to go, live or not. From c2 the walk
+// passes c1, whose plan window is spent though its balance is armed, and stays;
+// it does not trade the session onto c1 and back every cooldown. A lone seat
+// with nothing left blocks until its window comes back, with that as its
+// RetryAt; a lone seat on its last point still serves, and the session stays.
+func TestTheCreditWalkSkipsASpentSeat(t *testing.T) {
+	armed := usage.ExtraUsageFor(usage.ExtraUsageInput{
+		State: usage.ExtraUsageEnabled, Currency: "USD", MonthlyLimit: pf(100000), UsedCredits: pf(0), Utilization: pf(0),
+	})
+	c2 := creditWith("c2", usage.ExtraUsageFor(usage.ExtraUsageInput{
+		State: usage.ExtraUsageEnabled, Currency: "USD", MonthlyLimit: pf(1000), UsedCredits: pf(0), Utilization: pf(0),
+	}))
+	seatAt := func(pct float64) Candidate {
+		return credit("c1", &usage.Snapshot{FiveHour: win(pct, time.Hour), ExtraUsage: armed})
+	}
+	cfg := Config{MaxAutoSpend: 500}
+	for _, hover := range []bool{false, true} {
+		o := opts()
+		o.Hover = hover
+		want(t, Decide([]Candidate{seatAt(100), c2}, o, cfg, NewState(), "c2"), ActionStay, ReasonAlreadyBest, "")
+		p := Decide([]Candidate{seatAt(100)}, o, cfg, NewState(), "c1")
+		want(t, p, ActionBlocked, ReasonNothingCanServe, "")
+		if r, _ := find(p.Result, "c1"); !p.HasRetryAt || !p.RetryAt.Equal(r.RecoversAt) {
+			t.Errorf("hover %v: RetryAt %s (set %v), want the seat's own recovery at %s", hover, p.RetryAt.Sub(now), p.HasRetryAt, r.RecoversAt.Sub(now))
+		}
+	}
+	o := hoverOpts()
+	p := Decide([]Candidate{seatAt(99.5)}, o, cfg, NewState(), "c1")
+	if r, _ := find(p.Result, "c1"); r.LastPoint == "" {
+		t.Fatalf("the seat is not on its last point: the case is not the one named")
+	}
+	want(t, p, ActionStay, ReasonAlreadyBest, "")
+}
+
+// A wait for the credit pool is a wait for a move a seat can take. S is on its
+// last point, A is empty and a pool seat is registered, but with max_auto_spend
+// at its default of 0 the gate arms nothing: the session is blocked as any dry
+// fleet is, not told that a paid move is coming. Opted in, it waits for S's
+// reading.
+func TestACreditWaitNeedsASeatTheGateArms(t *testing.T) {
+	s := maxAcct("s-live", 99.5, 3*time.Hour, 40, 3*day)
+	a := maxAcct("a-empty", 100, 2*time.Hour, 60, 3*day)
+	o := hoverOpts()
+	o.Threshold = 70
+	p := Decide([]Candidate{s, a, openSeat()}, o, Config{}, NewState(), "s-live")
+	if p.Reason == ReasonWaitsForAReading {
+		t.Errorf("%s (%s): no seat is armed, so no move onto money is coming", p.Action, p.Reason)
+	}
+	want(t, p, ActionBlocked, ReasonNothingCanServe, "")
+	p = Decide([]Candidate{s, a, openSeat()}, o, Config{MaxAutoSpend: 500}, NewState(), "s-live")
+	want(t, p, ActionStay, ReasonWaitsForAReading, "")
+}
+
 // A live Ultra moved from 98% to 99% of its week in three minutes: one quantum,
 // a third of a point a minute, which has it out by the next reading. Every
 // other account is empty and the seat is opted in, but the Ultra's last point
