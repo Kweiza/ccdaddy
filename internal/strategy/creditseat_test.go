@@ -85,18 +85,20 @@ func TestHoverDerivesATableForAPrimaryCreditSeatToo(t *testing.T) {
 	}
 }
 
-// Pre-emption may not run to a seat whose own opted-in cap runs out inside the
-// horizon it just used to condemn the account it is leaving.
+// Pre-emption may not run to a seat whose own opted-in cap is all but gone.
 //
-// Under hover the order refuses it before the walk does: the cap is the window
-// the seat is CLOSING on, so the seat sits on the limit rung. That premise is
-// asserted rather than assumed, because it is the opt-in reaching the
-// projection -- a hover table that dropped the consent would leave the seat
-// roomy on its own meter, with nothing at a limit for the order to see.
+// Under hover the seat is at a limit on that cap: its last point reads the plan
+// meter as well as the credit one, so the seat sits on the limit rung and the
+// walk turns it away. That premise is asserted rather than assumed, because it is
+// the opt-in reaching the level -- a hover table that dropped the consent would
+// leave the seat roomy on its own meter, with nothing at a limit for the order to
+// see. It is NOT the seat's own projection any longer: the seat is not live, and
+// its own rate says nothing about what the session would do to it.
 //
 // The third account is in the fixture on purpose: without it the assertion would
 // be that pre-emption does not fire, which a dozen unrelated changes could
-// satisfy. With it the assertion is about WHERE the session goes.
+// satisfy. With it the assertion is about WHERE the session goes; and without it
+// the session must still not go to the seat.
 func TestPreemptionWillNotRunToASeatWhoseOptedInCapRunsOutFirst(t *testing.T) {
 	// 88% of a five-hour window three hours in: its limit is close enough that
 	// the blind interval reaches it.
@@ -106,15 +108,16 @@ func TestPreemptionWillNotRunToASeatWhoseOptedInCapRunsOutFirst(t *testing.T) {
 	seat := seatWithCap("b-seat", 10, 99.9, time.Hour)
 	seat.FetchedAt, seat.NextPollAt = now.Add(-time.Minute), now.Add(time.Minute)
 	healthy := polled(burning("c-healthy", 20), 1800*time.Second)
-	pool := []Candidate{live, seat, healthy}
 
-	r, ok := find(Rank(pool, seatOpts()), "b-seat")
-	if !ok || r.Closing != seatCap {
-		t.Fatalf("the seat is closing on %q, want %q: the opted-in cap is what the projection has to see", r.Closing, seatCap)
+	p := Decide([]Candidate{live, seat, healthy}, seatOpts(), Config{}, NewState(), "a-live")
+	if r, ok := find(p.Result, "b-seat"); !ok || !r.LastPoint || r.Rung() != RungAtLimit {
+		t.Fatalf("the seat is at rung %d (last point %v): the opted-in cap is what its level has to see", r.Rung(), r.LastPoint)
 	}
-
-	p := Decide(pool, seatOpts(), Config{}, NewState(), "a-live")
 	want(t, p, ActionSwitch, ReasonProjectedExhaustion, "c-healthy")
+
+	if p := Decide([]Candidate{live, seat}, seatOpts(), Config{}, NewState(), "a-live"); p.Action == ActionSwitch {
+		t.Errorf("switched to %s (%s): the seat's cap is at its last point", p.Target.UUID, p.Reason)
+	}
 }
 
 // The fix may not close the defect by revoking the user's consent.

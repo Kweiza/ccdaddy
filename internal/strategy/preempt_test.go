@@ -130,7 +130,7 @@ func TestPreemptionNeedsACandidateNotAlsoRunningOut(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s has no horizon; the fixture lost its provenance", c.UUID)
 		}
-		if projectedExhaustion(c.Usage, o.Model, o.Now, horizon, o.Thresholds()) == "" {
+		if projectedExhaustion(o.limitWindows(c.Usage, o.Thresholds()), o.Now, horizon) == "" {
 			t.Fatalf("%s is NOT projected to run out inside %v; this case no longer says "+
 				"what it claims — it is meant to be a pool with nowhere to go", c.UUID, horizon)
 		}

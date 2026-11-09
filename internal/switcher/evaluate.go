@@ -217,7 +217,10 @@ func Evaluate(s *store.Store, opts EvalOptions) (Evaluation, error) {
 	if ev.Plan.Action == strategy.ActionStay && opts.Force {
 		if best, ok := forceableTarget(ev.Plan, liveUUID); ok {
 			ev.Forced = true
-			ev.Plan.Action, ev.Plan.Target = strategy.ActionSwitch, best
+			// MoveTo and not the two fields by hand: the move has to carry what
+			// it leaves behind, or an account forced off at a limit is taken
+			// straight back. The reason stays the hold this overrides.
+			ev.Plan.MoveTo(best, liveUUID)
 		}
 	}
 

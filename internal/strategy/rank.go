@@ -195,7 +195,7 @@ type Candidate struct {
 	BurnPerMin float64
 	HasBurn    bool
 	// BurnWindow is the window BurnPerMin was measured on. Empty on a reading
-	// cached before it was recorded; see sessionBurn.on for how that is read.
+	// cached before it was recorded; see sessionBurn.onWindow for how that is read.
 	BurnWindow usage.WindowName
 }
 
@@ -250,6 +250,15 @@ type Options struct {
 	// reason hover is: a caller that reaches Rank directly has no state, so it
 	// sees no mark, exactly as it sees no hover pass it did not install.
 	departures departures
+	// live is the account the work is running on, set by Decide from the same
+	// activeUUID every margin is held against. closingWindow judges it on its
+	// own rates and every other account on the work's; a caller that reaches
+	// Rank directly names no live account, so every account is judged on the
+	// work's rate there.
+	live string
+	// workBurn is the work's measured rate for this pass, taken once by Rank;
+	// see workBurnOf.
+	workBurn sessionBurn
 	// MaxAutoSpend is the credit gate's ceiling, and it is here for ONE reason:
 	// the credit pool is ordered by armed room, and room cannot be computed
 	// without it.
@@ -296,11 +305,12 @@ type Ranked struct {
 	// or "" when it carries none: the tier hover orders on, read off the
 	// reading's presence rather than its utilization. See shortWindowOf.
 	ShortWindow usage.WindowName
-	// Closing names the window this account is projected to run out of before
-	// its next reading lands, plus the lead, or "" when none is -- including
-	// whenever pre-emption is off. It is the pre-emptive switch's own question,
-	// asked once here so the rule that leaves the live account and the walk
-	// that refuses a candidate read one answer; see closingWindow.
+	// Closing names the window this account would run out of before its next
+	// reading lands, plus the lead, or "" when none would -- including whenever
+	// pre-emption is off. The live account is judged on its own rates and every
+	// other account on the work's (closingWindow). Asked once here, so the rule
+	// that leaves the live account, the walk that refuses a candidate, the order
+	// and the gate read one answer.
 	Closing usage.WindowName
 	// HeldOut names the window that holds this account out of hover's order --
 	// the one it was left at a limit on, which has not rolled since -- or ""
@@ -367,6 +377,19 @@ func eligible(c Candidate) bool {
 	return !c.Disabled && !c.Elsewhere && c.Kind != identity.KindAPIKey
 }
 
+// eligibleOf is the candidates eligible keeps. The work's rate is measured over
+// these and no others: an account another machine's ccdad owns can be burning
+// for a session that is not this one.
+func eligibleOf(cands []Candidate) []Candidate {
+	out := make([]Candidate, 0, len(cands))
+	for _, c := range cands {
+		if eligible(c) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // Spent is whether an account is past a threshold on any window it carries.
 //
 // One test covers them all: a negative slack means the binding window is over
@@ -402,6 +425,10 @@ func Spent(h Headroom) (spent, known bool) {
 // model; a fleet in that state would be ranked on when its Fable caps come back
 // instead of on hover's order. A blown cap on one model family is not a limit:
 // TestABlownModelCapEverywhereDoesNotPutHoverIntoRecovery.
+//
+// It is PAST the line, `<`, where lastPoint is AT it, `<=`: an account on its
+// last point still has that point to spend, and recovery is for a pool that has
+// none. The pair is deliberate, and it is Spent's own strictness.
 func (o Options) pastItsLine(h Headroom) (past, known bool) {
 	if o.hover == nil {
 		return Spent(h)
@@ -409,7 +436,7 @@ func (o Options) pastItsLine(h Headroom) (past, known bool) {
 	if !h.Known {
 		return false, false
 	}
-	return RoomOf(h) < handoffRoomPct, true
+	return RoomOf(h) < handoffRoom(h), true
 }
 
 // OutOfQuota is whether some window this account carries has nothing left in it
@@ -609,15 +636,18 @@ func measure(c Candidate, o Options) Ranked {
 	// So this line can discard a measured plan headroom. Measured under the pace
 	// rotation hover used to run: a seat whose opted-in weekly was 99.9% used
 	// reported plan slack near -50 and was ranked here on a credit allowance of
-	// 85, which put it FIRST. The pre-emptive switch does not walk onto such a
-	// seat -- the cap is what Ranked.Closing projects -- but the ORDINARY move
-	// still can, because every level the ranking reads is the credit one.
+	// 85, which put it FIRST.
 	//
 	// Taking the minimum of the two instead is the obvious repair and it is not
 	// made here, because it would move Spent for a credit seat, and Spent feeds
 	// MainPoolExhausted, which is the one decision in ccdad that spends the
 	// user's money. That needs its own investigation and its own release rather
-	// than a line in this one.
+	// than a line in this one. What IS made here is the narrower half hover
+	// needs: its last point reads the plan meter as well as the credit one, so a
+	// seat whose opted-in cap is down to its last point is at a limit in hover's
+	// order and the pre-emptive walk turns it away -- without moving Spent.
+	// TestPreemptionWillNotRunToASeatWhoseOptedInCapRunsOutFirst.
+	plan := h
 	if primaryCredit(c) {
 		h = creditHeadroom(c, o)
 	}
@@ -638,9 +668,9 @@ func measure(c Candidate, o Options) Ranked {
 		Headroom: h,
 		// Under hover only. A threshold a user typed is where they said to stop,
 		// and it is not this rule's to move.
-		LastPoint:      o.hover != nil && lastPoint(h),
+		LastPoint:      o.hover != nil && (lastPoint(h) || lastPoint(plan)),
 		ShortWindow:    shortWindowOf(c.Usage),
-		Closing:        closingWindow(c, o),
+		Closing:        o.closingWindow(c, h),
 		RecoversAt:     rec.at,
 		HasRecovery:    rec.ok,
 		WeeklyResetsAt: weekly.at,
@@ -661,6 +691,7 @@ func measure(c Candidate, o Options) Ranked {
 // Rank orders the eligible accounts, best first. It does not reorder its input.
 func Rank(cands []Candidate, o Options) Result {
 	o = o.withHover(cands)
+	o.workBurn = workBurnOf(cands, o.live)
 	measured := make([]Ranked, 0, len(cands))
 	credit := make([]Ranked, 0)
 	// True until some MAIN-POOL candidate turns out not to be known-and-over.

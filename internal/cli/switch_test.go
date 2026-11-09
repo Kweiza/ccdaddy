@@ -469,14 +469,21 @@ func departuresOnDisk(t *testing.T) map[string]map[string]any {
 // is remembered exactly as the daemon would remember it -- or the next tick
 // takes the session straight back. A switch to a named account is the person's
 // choice and leaves no mark.
+//
+// --force is still the engine choosing: it overrides the hold, not the choice of
+// target, so a move it forces off an account at a limit carries the same mark.
+// The case keeps the setup switch's cooldown in force, because the cooldown is
+// the hold --force is there to override.
 func TestATargetlessSwitchRemembersTheAccountItLeftAtALimit(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		argv   []string
-		marked bool
+		name    string
+		argv    []string
+		cooling bool
+		marked  bool
 	}{
-		{"the engine chose", []string{"switch", "--strategy", "headroom"}, true},
-		{"a person named the account", []string{"switch", "2"}, false},
+		{"the engine chose", []string{"switch", "--strategy", "headroom"}, false, true},
+		{"a person named the account", []string{"switch", "2"}, false, false},
+		{"--force overrode the cooldown", []string{"switch", "--strategy", "headroom", "--force"}, true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			isolate(t)
@@ -487,10 +494,16 @@ func TestATargetlessSwitchRemembersTheAccountItLeftAtALimit(t *testing.T) {
 			}
 			seedUsage(t, "u-1", 0)
 			seedUsage(t, "u-2", 80)
-			clearCooldown(t)
+			if !tc.cooling {
+				clearCooldown(t)
+			}
 
-			if code, _, errOut, top := runRoot(t, tc.argv...); code != ExitOK {
+			code, _, errOut, top := runRoot(t, tc.argv...)
+			if code != ExitOK {
 				t.Fatalf("exit = %d (%s / %s), want 0", code, errOut, top)
+			}
+			if tc.cooling && !strings.Contains(errOut, "--force is overriding the anti-flap hold ("+strategy.ReasonCooldown.String()+")") {
+				t.Fatalf("stderr = %q; the move was not the one --force overrides a cooldown for", errOut)
 			}
 			if got := liveUUIDOf(t); got != "u-2" {
 				t.Fatalf("live account = %q, want u-2", got)

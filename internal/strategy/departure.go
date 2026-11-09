@@ -94,24 +94,19 @@ func (d departures) holding(c Candidate, now time.Time) usage.WindowName {
 // hold that is only a rung: the account is still reachable, so the cost of a
 // wrong hold is an order, while the cost of a wrong release is the flap.
 func rolledSince(s *usage.Snapshot, name usage.WindowName, at, now time.Time) bool {
-	for _, w := range s.AllWindows() {
-		if w.Name != name {
-			continue
-		}
-		if _, used := w.Percent(); !used || neverSpent(w) {
-			return true
-		}
-		reset, hasReset := w.Reset()
-		if !hasReset {
-			return false
-		}
-		if !reset.After(now) {
-			return true
-		}
-		length, known := usage.WindowLengthOf(w.Name, w.Window)
-		return known && reset.Add(-length).After(at)
+	w := usage.NamedWindow{Name: name, Window: windowNamed(s, name)}
+	if _, used := w.Percent(); !used || neverSpent(w) {
+		return true
 	}
-	return true
+	reset, hasReset := w.Reset()
+	if !hasReset {
+		return false
+	}
+	if !reset.After(now) {
+		return true
+	}
+	length, known := usage.WindowLengthOf(w.Name, w.Window)
+	return known && reset.Add(-length).After(at)
 }
 
 // departureFrom is the departure a switch off the live account makes: who it
