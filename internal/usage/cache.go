@@ -296,27 +296,40 @@ func (c *Cache) MayFetch(uuid string, now time.Time) bool {
 // removed and added again — and letting that through would hand a fresh login
 // the headroom its predecessor had already spent.
 //
-// The measurements are dated by the reading: one taken before AddedAt is the
-// predecessor's, and goes -- the snapshot, its rates and its flags with it. A
-// switch's record (PollState.LiveSince) written since is the account's own,
-// and stays as a row holding nothing else: a switch onto an account not yet
-// read, or onto one whose row is still the predecessor's, is a switch onto an
-// account with no reading, which is due now.
+// What of a row is the account's own is OwnedSince's to say, and the commit
+// that writes the account's next reading asks it too.
 // TestCacheKeepsTheRowASwitchWroteBeforeAnyReading.
 func (c *Cache) Prune(accounts map[string]time.Time) {
 	for uuid, e := range c.data.Accounts {
 		addedAt, managed := accounts[uuid]
-		switch {
-		case !managed:
+		if !managed {
 			delete(c.data.Accounts, uuid)
-		case !e.FetchedAt.Before(addedAt):
-			// The account's own reading: the row stands whole.
-		case !e.Poll.LiveSince.Before(addedAt):
-			c.data.Accounts[uuid] = Entry{Poll: PollState{LiveSince: e.Poll.LiveSince}}
-		default:
+			continue
+		}
+		if own, ok := e.OwnedSince(addedAt); ok {
+			c.data.Accounts[uuid] = own
+		} else {
 			delete(c.data.Accounts, uuid)
 		}
 	}
+}
+
+// OwnedSince is what of e belongs to an account added at addedAt, and whether
+// anything does. The measurements are dated by the reading: one taken before
+// addedAt is a predecessor's at the same uuid, and goes -- the snapshot, its
+// rates, its flags and its poll state with it. A switch's record
+// (PollState.LiveSince) written since is the account's own, and stays as a row
+// holding nothing else: a switch onto an account not yet read, or onto one
+// whose row is still the predecessor's, is a switch onto an account with no
+// reading, which is due now.
+func (e Entry) OwnedSince(addedAt time.Time) (Entry, bool) {
+	switch {
+	case !e.FetchedAt.Before(addedAt):
+		return e, true
+	case !e.Poll.LiveSince.Before(addedAt):
+		return Entry{Poll: PollState{LiveSince: e.Poll.LiveSince}}, true
+	}
+	return Entry{}, false
 }
 
 // storeRoot returns ccdad's state directory, refusing a relative one for the
