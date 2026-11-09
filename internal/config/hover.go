@@ -35,9 +35,11 @@ const KeyManual = keyManual
 // KeyStrategy is the automatic-policy key written by `ccdad strategy`.
 const KeyStrategy = keyStrategy
 
-// hoverOverrides is every key whose value in the file stops being read the
-// moment hover is on: the ones hover derives for itself, and the two margins
-// its order has no use for. hysteresis_pct and headroom_ratio compare two
+// hoverOverrides is every key whose value in the file stops being read by the
+// Claude lane the moment hover is on: the ones hover derives for itself, and
+// the two margins its order has no use for. The Codex lane, which hover does not
+// drive, still reads the ones it uses -- the two margins among them
+// (switcher.EvaluateCodex hands Decide the configured anti-flap set). hysteresis_pct and headroom_ratio compare two
 // accounts' room, and hover moves the session on the order's own rules --
 // a better rung, a sooner week by recovery_hysteresis, a limit -- so no hover
 // move reads either. A listing that printed them as in force would show a

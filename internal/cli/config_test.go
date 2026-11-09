@@ -311,6 +311,27 @@ func TestListPrintsNoWindowRowUntilTheFileNamesOne(t *testing.T) {
 	}
 }
 
+// Under hover the two margins on room are marked overridden, and that is the
+// Claude lane's answer only: the Codex lane, which hover does not drive, still
+// reads them. The note says which lane does not read the marked keys, and that
+// the other does.
+func TestTheHoverNoteNamesTheLaneThatStopsReading(t *testing.T) {
+	isolate(t)
+	writeConfig(t, "hover = true\nhysteresis_pct = 12\n")
+
+	code, stdout, stderr, _ := runRoot(t, "config", "list")
+	if code != ExitOK {
+		t.Fatalf("exit = %d", code)
+	}
+	if !strings.Contains(stderr, "the Claude lane does not read the keys marked 'overriding'") ||
+		!strings.Contains(stderr, "The Codex lane, which hover does not drive, still reads") {
+		t.Errorf("stderr = %q; the note must name the lane that stops reading and the one that does not", stderr)
+	}
+	if !strings.Contains(stdout, "hysteresis_pct") {
+		t.Errorf("stdout = %q; the margin is listed", stdout)
+	}
+}
+
 func TestListAnswersInJSON(t *testing.T) {
 	isolate(t)
 	writeConfig(t, "threshold = 55\nfuture_knob = 1\n\n[window_threshold]\nfive_hour = 85\nthirty_day = 5\n")
