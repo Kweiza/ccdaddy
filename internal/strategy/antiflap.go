@@ -229,6 +229,10 @@ const (
 	// but the live one is a five-hour account with room, and a five-hour
 	// account is left only at a limit.
 	ReasonStayUntilLimit
+	// ReasonCannotCarry: under hover, the live account has room and the account
+	// the order prefers would not carry the work running now -- it would be at
+	// a limit at its first live reading -- so the session stays.
+	ReasonCannotCarry
 )
 
 func (r Reason) String() string {
@@ -271,6 +275,8 @@ func (r Reason) String() string {
 		return "another weekly-only account's week resets sooner"
 	case ReasonStayUntilLimit:
 		return "staying on the short-window account until it reaches a limit"
+	case ReasonCannotCarry:
+		return "the account the order prefers cannot carry the work running now"
 	}
 	return "unknown"
 }
@@ -315,6 +321,12 @@ type Plan struct {
 	RetryAt time.Time
 	// HasRetryAt is whether RetryAt was set. A zero time is a real instant.
 	HasRetryAt bool
+	// Held is the move a hold refused, set only when the hold was about one
+	// target: the cooldown holding a move the decision had already chosen, or a
+	// margin refusing the account ranked first. It is the move `ccdad switch
+	// --force` may make -- an override of a margin or the cooldown, never of a
+	// limit, so a hold with nowhere to go names nothing.
+	Held Ranked
 }
 
 // Decide is the anti-flap margins and the credit gate's order over one
@@ -370,9 +382,12 @@ func Decide(cands []Candidate, o Options, cfg Config, st *State, activeUUID stri
 	// departuresFor. Read here so the ranking stays pure: Decide never writes
 	// the state, and a caller that reaches Rank directly sees no mark.
 	o.departures = st.departuresFor(activeUUID)
-	// And whose rates are the work's: the live account is judged on its own,
-	// every other account on the work's; see closingWindow.
+	// The account the work is running on, and what the pass knows of the work:
+	// its rate and the last switch, from every eligible account -- the
+	// quarantined included, because the rate belongs to the work. See workOf.
 	o.live = activeUUID
+	w := workOf(eligibleOf(cands), st)
+	o.work = &w
 
 	// Asked BEFORE hover is installed, and the order is the whole point.
 	//
@@ -456,7 +471,16 @@ func Decide(cands []Candidate, o Options, cfg Config, st *State, activeUUID stri
 	// about to be false, so hysteresis_pct and headroom_ratio are overridden
 	// here — but the cooldown is not, because a switch storm is a different
 	// failure and the cooldown is the only thing that bounds it.
-	if target, moving := preempt(byUUID, res, activeUUID, o); moving {
+	//
+	// Hover makes every move of its own in one place, hoverMove, which picks a
+	// target before it applies the cooldown -- the projection included. The one
+	// state it leaves to the arms below is a live account in the credit pool:
+	// returning from one is the subscription arm's question.
+	if o.hover != nil && !activeIsCredit {
+		plan.hoverMove(activeUUID, cfg, st, o, byUUID)
+		return plan
+	}
+	if target, moving := preempt(byUUID, res, activeUUID, o); o.hover == nil && moving {
 		if reason, blocked, retry := cooldownGate(res, activeUUID, cfg, st, o.Now); blocked {
 			plan.hold(reason, retry)
 			return plan
@@ -474,6 +498,7 @@ func Decide(cands []Candidate, o Options, cfg Config, st *State, activeUUID stri
 			reason, blocked, retry := gate(res, best, activeUUID, cfg, st, o.Now)
 			if blocked {
 				plan.hold(reason, retry)
+				plan.Held = best
 				return plan
 			}
 			// The gate's own reason, because under hover it is the sentence
@@ -485,7 +510,7 @@ func Decide(cands []Candidate, o Options, cfg Config, st *State, activeUUID stri
 		// unless the whole pool is spent, which is the only thing that opens
 		// the credit pool.
 		if !subExhausted {
-			plan.stayOnBest(activeUUID)
+			plan.hold(ReasonAlreadyBest, time.Time{})
 			return plan
 		}
 	}
@@ -511,17 +536,6 @@ func Decide(cands []Candidate, o Options, cfg Config, st *State, activeUUID stri
 
 	// The credit pool, and only now.
 	if len(res.Credit) == 0 {
-		// subExhausted was asked of the numbers the USER typed, because it opens
-		// money, and under hover those numbers are not the ones the session is
-		// held to. With no credit pool there is no money to open, so under hover
-		// that answer has nothing left to decide: an account with room that is
-		// already the best one is simply where the session belongs. Reporting it
-		// as blocked is the exit `ccdad auto --once` alerts on, over accounts
-		// merely past 80% with hours of work left in them.
-		if o.hover != nil && activeHasRoom(res, activeUUID) {
-			plan.stayOnBest(activeUUID)
-			return plan
-		}
 		plan.Action = ActionBlocked
 		plan.Reason = ReasonAllExhausted
 		// When it lifts, on the same terms ReasonNothingCanServe answers it:
@@ -534,40 +548,42 @@ func Decide(cands []Candidate, o Options, cfg Config, st *State, activeUUID stri
 		return plan
 	}
 
-	// Result.Credit is ordered by most armed room, uuid last, and this walks it
-	// in that order — so the first account it reaches is the one with the most
-	// money armed under the credit gate's cap.
+	plan.creditWalk(byUUID, activeUUID, cfg, st, o.Now)
+	return plan
+}
+
+// creditWalk is the move into the last-resort credit pool: the first account the
+// credit gate arms, under the cooldown, or blocked with the gate's first refusal.
+// Result.Credit is ordered by most armed room, uuid last, and this walks it in
+// that order -- so the first account it reaches is the one with the most money
+// armed under the credit gate's cap. Both the configured strategies and hover
+// reach it, each at its own point; the walk itself is one.
+func (p *Plan) creditWalk(byUUID map[string]Candidate, activeUUID string, cfg Config, st *State, now time.Time) {
 	var firstRefusal Decision
-	for _, r := range res.Credit {
+	for _, r := range p.Result.Credit {
 		c := byUUID[r.UUID]
 		d := CreditGate(extraUsageOf(c), cfg.MaxAutoSpend, true)
 		if !d.Allow {
-			if !plan.CreditConsulted {
+			if !p.CreditConsulted {
 				firstRefusal = d
-				plan.CreditConsulted = true
+				p.CreditConsulted = true
 			}
 			continue
 		}
-		plan.CreditConsulted = true
-		plan.Credit = d
+		p.CreditConsulted = true
+		p.Credit = d
 		// The cooldown, and ONLY the cooldown. The other margins are
 		// comparisons between two accounts metered the same way, and a credit
 		// account carries no plan windows at all: its headroom is permanently
 		// unknown and it never recovers, so a headroom or recovery margin
 		// against it would be arithmetic on a number that does not exist.
 		// What makes this move safe is the credit gate, which has already run.
-		if reason, blocked, retry := cooldownGate(res, activeUUID, cfg, st, o.Now); blocked {
-			plan.hold(reason, retry)
-			return plan
-		}
-		plan.switchTo(r, ReasonBetterTarget, activeUUID)
-		return plan
+		p.moveOrHold(r, ReasonBetterTarget, activeUUID, cfg, st, now)
+		return
 	}
-
-	plan.Action = ActionBlocked
-	plan.Reason = ReasonCreditGate
-	plan.Credit = firstRefusal
-	return plan
+	p.Action = ActionBlocked
+	p.Reason = ReasonCreditGate
+	p.Credit = firstRefusal
 }
 
 // switchTo fills a plan that moves the login, with the reason this decision
@@ -608,34 +624,6 @@ func (p *Plan) hold(reason Reason, retry time.Time) {
 	if !retry.IsZero() {
 		p.RetryAt, p.HasRetryAt = retry, true
 	}
-}
-
-// stayOnBest is the answer when the live account is already where the order
-// puts the session.
-//
-// Under hover that is not always "already on the best account". A live account
-// at a limit that still ranks first has nowhere better to go -- everything
-// behind it is at a limit too -- and that is the state hoverGate reports when
-// the account ranked first is some OTHER account on the same rung. The two are
-// one state reached from two sides, so they report one way: nothing can serve,
-// blocked until the soonest rollover. Which account happens to sort first
-// between two at a limit is not a fact the answer may depend on.
-func (p *Plan) stayOnBest(activeUUID string) {
-	if live, ok := find(p.Result, activeUUID); ok && p.Result.Mode == ModeHover && live.AtLimit() != "" {
-		p.hold(ReasonNothingCanServe, soonestRollover(p.Result))
-		return
-	}
-	p.hold(ReasonAlreadyBest, time.Time{})
-}
-
-// activeHasRoom is whether the live account is ranked and known to hold quota.
-func activeHasRoom(res Result, activeUUID string) bool {
-	active, ok := find(res, activeUUID)
-	if !ok {
-		return false
-	}
-	empty, known := OutOfQuota(active.Headroom)
-	return known && !empty
 }
 
 // extraUsageOf is a candidate's credit axis. A candidate with no reading has an
@@ -751,7 +739,7 @@ func gate(res Result, target Ranked, activeUUID string, cfg Config, st *State, n
 		return weeklyResetGate(active, target, cfg, ReasonBetterTarget)
 
 	case ModeHover:
-		return hoverGate(res, active, target, cfg)
+		return hoverGate(active, target, cfg)
 
 	default:
 		return headroomGate(active, target, cfg)
@@ -779,19 +767,14 @@ func weeklyResetGate(active, target Ranked, cfg Config, allow Reason) (Reason, b
 	return allow, false, time.Time{}
 }
 
-// hoverGate is hover's order turned into a decision between the live account
-// and the one ranked first.
+// hoverGate is hover's order turned into a decision between a live account with
+// room and an account ahead of it that can carry the work (hoverMoveWithRoom).
+// A live account at a limit never reaches it: hoverMove answers that state by
+// tier, whichever account sorts first.
 //
-// The target is Order[0], so its rung is never worse than the live account's,
-// and a BETTER rung is always a move: that is the order saying the session
-// belongs elsewhere -- back on a five-hour account with room, or off an account
-// at a limit. The limits themselves need no margin, because each of them is a
-// level or a projection the live account's own reading crossed. That includes
-// the last point: a live account on it is on the limit rung, so this rule
-// already moves it to anything better, and a separate last-point waiver in gate
-// would be a second implementation of one decision. leaveReason says why.
-//
-// The SAME rung is where the order's rules differ by tier:
+// A BETTER rung is a move: that is the order saying the session belongs
+// elsewhere -- back on a five-hour account with room, or onto room from an
+// unreadable account. The SAME rung is where the order's rules differ by tier:
 //
 //   - Two five-hour accounts: stay. The one ranked first may have its week
 //     ending sooner, but a five-hour account is left only at a limit, and
@@ -799,23 +782,18 @@ func weeklyResetGate(active, target Ranked, cfg Config, allow Reason) (Reason, b
 //     The order still decides which one is ENTERED -- from a weekly-only seat,
 //     at start-up, or when the live one reaches its limit.
 //   - Two weekly-only accounts: the soonest weekly reset, past the margin.
-//   - Two at a limit: the engine wanted to move and had nowhere better to go,
-//     which is ReasonNothingCanServe, blocked until the soonest rollover --
-//     stayOnBest answers the same state the same way when the live account is
-//     the one that sorts first.
 //   - Two unreadable accounts: nothing makes the first a better place for the
 //     session, so it stays where it is.
 //
 // An EMPTY target never reaches here ahead of a live account that is not empty:
-// the empty rung sorts last. That is the eighteen-switch incident's guard,
+// the empty rung sorts last, and it is never a carrier. That is the
+// eighteen-switch incident's guard,
 // TestAFleetWithNothingLeftStaysPutInsteadOfSwappingEmptyForEmpty.
-func hoverGate(res Result, active, target Ranked, cfg Config) (Reason, bool, time.Time) {
+func hoverGate(active, target Ranked, cfg Config) (Reason, bool, time.Time) {
 	ra, rt := active.Rung(), target.Rung()
 	switch {
 	case rt < ra:
 		return leaveReason(active, target), false, time.Time{}
-	case ra >= RungAtLimit:
-		return ReasonNothingCanServe, true, soonestRollover(res)
 	case rt == RungShortWindow:
 		return ReasonStayUntilLimit, true, time.Time{}
 	case rt == RungWeeklyOnly:
@@ -824,15 +802,19 @@ func hoverGate(res Result, active, target Ranked, cfg Config) (Reason, bool, tim
 	return ReasonAlreadyBest, true, time.Time{}
 }
 
-// leaveReason is why hover leaves the live account for a better rung, said from
-// the live account's side: the reason is what was wrong with staying.
+// leaveReason is why hover leaves the live account, said from the live
+// account's side: the reason is what was wrong with staying.
 //
 // A live account at a limit reports the limit -- its last point, or the
 // projection -- whatever the target is, because "a short-window account has
 // room again" said of a move off an account about to run out is a true sentence
 // about the target and the wrong answer to why the session moved.
-// TestTheReasonForLeavingIsTheLiveAccountsLimit.
+// TestTheReasonForLeavingIsTheLiveAccountsLimit. An empty live account reports
+// what the configured strategies' empty waiver always has.
 func leaveReason(active, target Ranked) Reason {
+	if empty, known := OutOfQuota(active.Headroom); known && empty {
+		return ReasonBetterTarget
+	}
 	switch {
 	case active.LastPoint != "":
 		return ReasonLastPoint

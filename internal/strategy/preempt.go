@@ -71,9 +71,13 @@ func preemptHorizon(c Candidate, lead time.Duration) (time.Duration, bool) {
 // by the same rule. TestAWindowThatResetsBeforeItRunsOutIsNotClosing. The rule
 // itself is usage.LastsToReset, the one PaceOf's projection reports too.
 func runsOutBy(w usage.Window, at, deadline time.Time) bool {
-	if at.After(deadline) {
-		return false
-	}
+	return !at.After(deadline) && stopsBeforeReset(w, at)
+}
+
+// stopsBeforeReset is whether a window spent at `at` is spent before it resets:
+// runsOutBy without the deadline, for a projection that has no horizon of its
+// own and wants only the instant.
+func stopsBeforeReset(w usage.Window, at time.Time) bool {
 	reset, hasReset := w.Reset()
 	return !hasReset || !usage.LastsToReset(at, reset)
 }
@@ -172,42 +176,26 @@ func (o Options) runsOutWithin(c Candidate, horizon time.Duration) usage.WindowN
 	return measuredExhaustion(c, ws, o.Now, horizon)
 }
 
-// closingWindow names the window this account is projected to run out of inside
-// its OWN horizon -- its blind interval plus the lead -- or "" when none is.
-// measure asks it once of every account, so the order, the pre-emptive walk and
-// the gate read one answer.
+// closingWindow is the configured strategies' projection: the window this
+// account is projected to run out of inside its OWN horizon -- its blind interval
+// plus preempt_lead -- or "" when none is. Hover asks a different question of a
+// different horizon (runwayOf, liveLimitOf) and never this one.
 //
-// WHOSE RATE is the whole question, and it is not the same for every account.
-//
-// The LIVE account is judged on its own rates, because its rate is the work's:
-// the window average and the burn last measured on it are what the session is
-// doing to it right now.
-//
-// Every OTHER account is asked the work's question instead: would the work
-// running now run it out inside its horizon (workBurn.runsOut). Its own rates
-// say nothing about that. Nobody is spending it, so its window average is a fact
-// about some earlier session, and the burn its reading still carries is the one
-// it had before the session left -- kept until its next poll, up to ten idle
-// minutes later. The rejected alternative is exactly that: judging an idle
-// account on its own average and stale burn. Over a twenty-minute horizon it
-// files idle accounts holding real room at a limit -- a five-hour account three
-// hours into its window at 90% reads as closing -- so the last-point hand-off
-// refused them and the order stopped returning to them, and a session at its
-// last point ran into the wall with an account holding ten points beside it.
-// TestALastPointHandsOffToAnAccountWhoseOwnRatesWouldHaveCondemnedIt.
-//
-// The configured strategies keep the rule they have always applied to a
-// candidate, its own rates AND the work's, because nothing they decide is meant
-// to move with hover's order; under them this field is read only as the
-// pre-emptive walk's refusal.
+// The live account is judged on its own rates, the window average and the burn
+// last measured on it. Every other account is judged on its own rates AND on
+// whether the work would run it out inside its horizon at the pool's maximum
+// measured rate, which is the rule these strategies have always applied to a
+// pre-emptive target: only one account is being spent at a time, so the maximum
+// is the live account's rate, and the stale maximum still on the account just
+// left is what keeps the walk off that account. Under them this field is read
+// only as the walk's refusal. TestNonHoverPreemptionKeepsThePoolMaximum.
 //
 // A lead of zero switches pre-emption OFF, and that is an answer rather than an
 // omission: config supplies the default, so a zero here means a user set
 // preempt_lead to nothing on purpose. It is the same direction MaxAutoSpend
 // takes, and for the same reason -- this is an opt-out somebody may
 // legitimately want, not an anti-flap mechanism that must never be switched
-// off. With it off nothing is closing, so nothing pre-empts and hover's order
-// files no account at a limit on a projection.
+// off.
 //
 // A reading with no provenance yields no horizon, and that is read as "cannot
 // say" rather than "will run out": refusing on it would narrow the rule for the
@@ -220,17 +208,15 @@ func (o Options) closingWindow(c Candidate, h Headroom) usage.WindowName {
 	if !ok {
 		return ""
 	}
-	live := isActive(c.UUID, o.live)
-	if live || o.hover == nil {
-		if w := o.runsOutWithin(c, horizon); w != "" || live {
-			return w
-		}
+	if w := o.runsOutWithin(c, horizon); w != "" || isActive(c.UUID, o.live) {
+		return w
 	}
-	return o.workBurn.runsOut(c.Usage, h, o.Now, horizon)
+	return o.work.carryRate().runsOut(c.Usage, h, o.Now, horizon)
 }
 
-// preemptTarget is where a pre-emptive move goes: the best-ranked account that
-// is not the live one and is somewhere the session can actually keep running.
+// preemptTarget is where a pre-emptive move goes under the configured
+// strategies: the best-ranked account that is not the live one and is somewhere
+// the session can actually keep running. Hover makes its moves in hoverMove.
 //
 // It used to require POSITIVE SLACK, on the reasoning that an account already
 // past one of its own window thresholds is not somewhere to run to. That holds
@@ -291,15 +277,6 @@ func preemptTarget(byUUID map[string]Candidate, res Result, activeUUID string, o
 		// Staying is the right answer when nothing is better. The projection is
 		// still true and the account will still run out; what is false is the
 		// premise that somewhere else is preferable.
-		//
-		// Under hover a closing live account sits on the limit rung, so a
-		// five-hour account with room no longer ends the walk before it begins.
-		// The accounts ahead of it are those on a better rung AND those on the
-		// same limit rung whose week resets sooner; the second kind is at a limit
-		// too, and the AtLimit refusal below is what turns it away -- without it
-		// a last-point Ultra ahead of a closing Max took the session, and the
-		// last-point rule handed it straight back.
-		// TestPreemptionDoesNotRunToAnAccountOnItsLastPoint.
 		if isActive(r.UUID, activeUUID) {
 			break
 		}

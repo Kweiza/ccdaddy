@@ -78,25 +78,15 @@ const (
 	// only at a limit. The out-and-back two minutes and one second apart that
 	// this cooldown once allowed needs none of the three.
 	HoverCooldown = 2 * time.Minute
-
-	// HoverMinPreemptLead is 60 s, which is the tightest cadence the poll
-	// policy ever runs at. A lead shorter than one poll is a lead the engine
-	// cannot act inside of.
-	HoverMinPreemptLead = 60 * time.Second
-
-	// HoverMaxPreemptLead is 10 minutes. Every second of lead is quota on the
-	// live account deliberately left unspent, and the only cadence that
-	// produces a wider gap is the post-429 ceiling of 1800 s -- where the
-	// pre-emptive horizon already carries that whole blind interval, so the
-	// lead does not have to carry it a second time.
-	HoverMaxPreemptLead = 600 * time.Second
 )
 
 // HoverPlan is one hover pass over one pool.
 type HoverPlan struct {
 	// CreditThreshold is what a primary credit seat is measured on.
 	CreditThreshold float64
-	// PreemptLead is derived from the observed poll gap; see hoverPreemptLead.
+	// PreemptLead is the reserve hover projects the live account over, beyond
+	// its next reading: a constant of the poll policy (hoverReserve), carried
+	// here so a reporter can say what it is.
 	PreemptLead time.Duration
 
 	byUUID map[string]Thresholds
@@ -105,9 +95,9 @@ type HoverPlan struct {
 // HoverThresholds builds the table for one pool: every window an account can
 // be stopped by, held to the hand-off line.
 //
-// It takes the pool AFTER quarantine rather than the whole store, because the
-// pre-emptive lead is read off the poll gaps of the accounts the ranking will
-// actually consider, and a quarantined account is not one of them.
+// It takes the pool AFTER quarantine rather than the whole store: the table is
+// for the accounts the ranking will actually consider, and a quarantined account
+// is not one of them.
 func HoverThresholds(cands []Candidate, o Options) HoverPlan {
 	p := HoverPlan{
 		CreditThreshold: HoverCreditThreshold,
@@ -123,7 +113,7 @@ func HoverThresholds(cands []Candidate, o Options) HoverPlan {
 		}
 		pool = append(pool, c)
 	}
-	p.PreemptLead = hoverPreemptLead(pool)
+	p.PreemptLead = hoverReserve
 
 	// The CONFIGURED table decides what may bind, and hover decides what it is
 	// held to. The two are not the same question. A weekly cap filed under a
@@ -192,57 +182,16 @@ func hoverTable(per map[usage.WindowName]float64) Thresholds {
 	}
 }
 
-// hoverPreemptLead is how far ahead of a projected exhaustion to switch, taken
-// from the gap the scheduler actually left rather than from a number in the
-// file.
-//
-// The configured key exists because a user has to guess how long their next turn
-// will be. Hover does not guess: the widest observed gap between a reading and
-// the poll meant to follow it is how stale the decision will be by the time
-// anything acts on it, and that is the quantity the lead is covering. It is
-// self-correcting in the same direction the horizon is -- a 429 that stretches
-// the cadence stretches the lead with it, and a tight cadence spends less quota
-// getting out of the way early.
-func hoverPreemptLead(pool []Candidate) time.Duration {
-	widest := time.Duration(0)
-	for _, c := range pool {
-		// preemptHorizon carrying no lead of its own IS the observed blind
-		// interval, and asking it rather than subtracting here inherits both of
-		// its refusals. A reading with no FetchedAt has no provenance and yields
-		// no gap: Sub against the zero time saturates at about 292 years, so
-		// one such account would otherwise drag every OTHER account's lead
-		// straight to the ceiling. And a next poll dated before the reading is a
-		// clock that moved rather than a negative interval.
-		gap, ok := preemptHorizon(c, 0)
-		if !ok {
-			continue
-		}
-		if gap > widest {
-			widest = gap
-		}
-	}
-	// No stamps at all lands on the floor, which is the right answer: nothing
-	// has been observed, so the tightest cadence the policy runs at is the least
-	// the lead can safely be.
-	switch {
-	case widest < HoverMinPreemptLead:
-		return HoverMinPreemptLead
-	case widest > HoverMaxPreemptLead:
-		return HoverMaxPreemptLead
-	}
-	return widest
-}
-
 // HoverConfig is the anti-flap set hover imposes: the cooldown, and nothing
 // else.
 //
 // hysteresis_pct, headroom_ratio and recovery_hysteresis are the user's again,
 // because none of them is a pace knob any longer. The first two are reached only
-// in ModeRecovery's far tier, where both accounts are past their last point and
-// the stock figures mean what they mean outside hover. recovery_hysteresis is
-// the margin on the reset axis, which is what hover moves weekly-only seats on,
-// so a user who wants two Ultra seats to trade places only when one week ends
-// an hour sooner can say so.
+// on the way back from a credit seat in ModeRecovery's far tier -- hoverMove
+// makes every other hover move, and it asks the order's own rules, not a margin
+// on room. recovery_hysteresis is the margin on the reset axis, which is what
+// hover moves weekly-only seats on, so a user who wants two Ultra seats to trade
+// places only when one week ends an hour sooner can say so.
 //
 // preempt_lead is absent because it is not an anti-flap knob: it is a ranking
 // input and travels on Options, where withHover puts the derived one.
@@ -259,8 +208,8 @@ func HoverConfig(cfg Config) Config {
 // withHover installs a hover pass over cands when hover is on and one has not
 // been installed already.
 //
-// Decide installs it once for the whole evaluation, because the pre-emptive lead
-// it derives has to come from the same pool the ranking ran on. This is the guard
+// Decide installs it once for the whole evaluation, over the same pool the
+// ranking runs on. This is the guard
 // for the callers that reach Rank directly: without it, Options.Hover would be a
 // field that reads as "on" and silently changes nothing.
 func (o Options) withHover(cands []Candidate) Options {

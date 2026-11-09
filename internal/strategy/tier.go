@@ -37,8 +37,11 @@ const (
 	// Above the limit rungs, so it is the first choice once nothing roomier is
 	// left.
 	RungHeldOut
-	// RungAtLimit is an account down to its last point, or projected to run
-	// out before its next reading lands.
+	// RungAtLimit is an account down to its last point, or the live account
+	// projected to run out inside the reserve after its next reading. An
+	// account the session is not on is filed by its levels and its mark only:
+	// whether it can carry the work is the hand-off's question (handoff.go),
+	// asked of it where the order is walked, not a rung.
 	RungAtLimit
 	// RungEmpty is an account with nothing left on a window no model choice
 	// can dodge.

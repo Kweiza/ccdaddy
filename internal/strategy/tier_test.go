@@ -1,10 +1,12 @@
 package strategy
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/identity"
+	"github.com/Kweiza/ccdaddy/internal/pollpolicy"
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
 
@@ -290,20 +292,30 @@ func idleOn(c Candidate) Candidate {
 	return polled(c, 600*time.Second)
 }
 
-// workingAt is the live account with the work's rate measured on it, and no poll
-// stamps -- so nothing projects for it and only its level can put it at a
-// limit, which isolates the hand-off this file is about from pre-emption.
-func workingAt(c Candidate, perMin float64, on usage.WindowName) Candidate {
+// measuredLive is an account with the work's rate measured on it the way the
+// poller measures it: across two readings both taken live (usage.LiveBurn), the
+// later at now, with the same rate as its own last-pair burn.
+func measuredLive(c Candidate, perMin float64, on usage.WindowName) Candidate {
 	c.BurnPerMin, c.HasBurn, c.BurnWindow = perMin, true, on
+	c.LiveBurns = []usage.LiveBurn{{PerMin: perMin, Window: on, From: now.Add(-3 * time.Minute), At: now}}
 	return c
 }
 
+// workingAt is the live account with the work's rate measured on it, and no poll
+// stamps -- so nothing projects for it and only its level can put it at a
+// limit, which isolates the hand-off this file is about from the projection.
+// The rate is still the work's, and every other account is judged on it.
+func workingAt(c Candidate, perMin float64, on usage.WindowName) Candidate {
+	return measuredLive(c, perMin, on)
+}
+
 // A session at its last point is handed off to anything better -- and NOT onto
-// an account that is itself at a limit, because the move buys nothing there. The
-// three refusals are the three ways a target can be at a limit: on its own last
-// point, empty (the eighteen-switch incident), or one the work running now would
-// run out inside its own horizon. In each the engine wanted to move and had
-// nowhere to go, which is blocked, not a quiet stay.
+// an account that is itself at a limit by its level, because the move buys
+// nothing there: one on its own last point, or one with nothing left (the
+// eighteen-switch incident). With no projection for the live account -- its
+// reading carries no stamps -- nothing can say it is about to stop, so neither
+// tier that reaches past a carrier applies, and the engine wanted to move and
+// had nowhere to go: blocked, not a quiet stay.
 func TestTheLastPointHandOffDoesNotMoveOntoALimit(t *testing.T) {
 	live := workingAt(maxAcct("a-live", 99, 4*time.Hour, 50, 4*day), 1, usage.WindowFiveHour)
 	for _, tc := range []struct {
@@ -312,14 +324,11 @@ func TestTheLastPointHandOffDoesNotMoveOntoALimit(t *testing.T) {
 	}{
 		{"a target on its own last point", idleOn(maxAcct("b", 99, 4*time.Hour, 50, 1*day))},
 		{"an empty target", idleOn(maxAcct("b", 100, 4*time.Hour, 50, 1*day))},
-		// Ten points at the work's point a minute is ten minutes, inside the
-		// twenty an idle account's horizon spans.
-		{"a target the work cannot carry", idleOn(maxAcct("b", 90, 4*time.Hour, 50, 1*day))},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := Decide([]Candidate{live, tc.target}, hoverOpts(), Config{}, NewState(), "a-live")
-			if b, _ := find(p.Result, "b"); b.AtLimit() == "" {
-				t.Fatalf("b is not at a limit; the fixture is not testing what it says")
+			if b, _ := find(p.Result, "b"); b.Carries {
+				t.Fatalf("b carries the work; the fixture is not testing what it says")
 			}
 			if p.Action != ActionBlocked || p.Reason != ReasonNothingCanServe {
 				t.Errorf("%s (%s) to %q, want blocked: the live account wanted to move and had nowhere better",
@@ -329,45 +338,94 @@ func TestTheLastPointHandOffDoesNotMoveOntoALimit(t *testing.T) {
 	}
 }
 
-// What the root cause was: an account the work is not on was judged on its OWN
-// rates -- the window average since it opened, and the burn its reading still
-// carried from before the session left -- over a twenty-minute horizon, which
-// filed an idle account holding ten points at a limit. The session at its last
-// point then refused it and ran into the wall. Judged on the work's rate the
-// account carries, and the hand-off takes it, before the limit.
-func TestALastPointHandsOffToAnAccountWhoseOwnRatesWouldHaveCondemnedIt(t *testing.T) {
-	// A1 was left at 90% an hour into its window: its own average is 90 points
-	// an hour, and its reading still carries the five a minute it was burning.
-	a1 := idleOn(maxAcct("a1-left", 90, 4*time.Hour, 40, 3*day))
-	a1.BurnPerMin, a1.HasBurn, a1.BurnWindow = 5, true, usage.WindowFiveHour
-	a2 := workingAt(maxAcct("a2-live", 99, 3*time.Hour, 40, 4*day), 0.3, usage.WindowFiveHour)
-	ultra := idleOn(weekOnly("u-empty", 100, 2*day))
-	st := leftAt("a1-left", usage.WindowFiveHour)
+// R1, the case the round-1 rule failed: two five-hour accounts, the Ultras
+// absent, the work at 0.84 points a minute. A was left at a limit and is held
+// out; B is live and read on a three-minute cadence. Whether B may hand off to A
+// is a question about the two of them, asked in tiers: A as a carrier if it
+// would not be at a limit at its first live reading, as a bridge if B would stop
+// before its next reading and A outlasts it by a cooldown, and as a last resort
+// if B has nothing left at all. The points are derived from the horizons, so the
+// tiers hold for any reserve the poll policy sets.
+func TestALastPointHandsOffToAnAccountThatOutlastsIt(t *testing.T) {
+	const rate = 0.84
+	points := func(d time.Duration) float64 { return rate * d.Minutes() }
+	// A is read idle at now and next at the idle cadence, so its prompt poll is
+	// the serve floor after now.
+	carrierNeeds := pollpolicy.ServeTTL + hoverBlind + hoverReserve
+	cadence := 180 * time.Second
 
-	p := Decide([]Candidate{a1, a2, ultra}, hoverOpts(), Config{}, st, "a2-live")
-	if r, _ := find(p.Result, "a1-left"); r.AtLimit() != "" || r.HeldOut == "" {
-		t.Fatalf("a1-left at a limit on %q (held on %q): its own rates are condemning it again", r.AtLimit(), r.HeldOut)
+	for _, tc := range []struct {
+		name       string
+		bRoom      float64 // B's points left, live
+		aRoom      float64 // A's points left, held out
+		wantSwitch bool
+		reason     Reason
+	}{
+		{"B with room stays", points(cadence + hoverReserve + 5*time.Minute), points(carrierNeeds + 2*time.Minute), false, ReasonAlreadyBest},
+		{"B closing hands to A, a carrier", points(cadence + hoverReserve/2), points(carrierNeeds + 2*time.Minute), true, ReasonProjectedExhaustion},
+		{"B closing does not take a bridge", points(cadence + hoverReserve/2), points(cadence + HoverCooldown + 3*time.Minute), false, ReasonNothingCanServe},
+		{"B stopping hands to A, a bridge", points(cadence), points(cadence + HoverCooldown + time.Minute), true, ReasonProjectedExhaustion},
+		{"B stopping keeps a bridge short of a cooldown", points(cadence), points(cadence + HoverCooldown/2), false, ReasonNothingCanServe},
+		{"B out hands to A, a last resort", 0.005, points(HoverCooldown / 2), true, ReasonLastPoint},
+		{"B out never takes an empty A", 0.005, 0, false, ReasonNothingCanServe},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := measuredLive(polled(maxAcct("b-live", 100-tc.bRoom, 3*time.Hour, 50, 4*day), cadence), rate, usage.WindowFiveHour)
+			a := idleOn(maxAcct("a-left", 100-tc.aRoom, 3*time.Hour, 50, 3*day))
+			p := Decide([]Candidate{a, b}, hoverOpts(), Config{}, leftAt("a-left", usage.WindowFiveHour), "b-live")
+			if tc.wantSwitch {
+				want(t, p, ActionSwitch, tc.reason, "a-left")
+				return
+			}
+			if p.Action == ActionSwitch || p.Reason != tc.reason {
+				t.Errorf("%s (%s) to %q, want %s", p.Action, p.Reason, p.Target.UUID, tc.reason)
+			}
+		})
 	}
-	want(t, p, ActionSwitch, ReasonLastPoint, "a1-left")
 }
 
-// The ordinary move may not take a target the pre-emptive walk refused. An Ultra
+// What the root cause of round one was, and what the rate source has to get
+// right: an account the work is not on is judged on the WORK's rate, never on its
+// own. A1 was left at 90% and its reading still carries the five points a minute
+// it was burning when it was live; A2 is live now, at its last point, with a
+// newer measurement of the work. The newer one is the work's rate, so A1 outlasts
+// A2 and takes the session before the limit -- at 0.3 a minute as a carrier, and
+// at 0.84 a minute, when A2 would stop before its next reading, as a bridge.
+func TestALastPointHandsOffToAnAccountWhoseOwnRatesWouldHaveCondemnedIt(t *testing.T) {
+	for _, rate := range []float64{0.3, 0.84} {
+		t.Run(fmt.Sprintf("%.2f a minute", rate), func(t *testing.T) {
+			a1 := idleOn(maxAcct("a1-left", 90, 4*time.Hour, 40, 3*day))
+			a1.BurnPerMin, a1.HasBurn, a1.BurnWindow = 5, true, usage.WindowFiveHour
+			a1.LiveBurns = []usage.LiveBurn{{PerMin: 5, Window: usage.WindowFiveHour,
+				From: now.Add(-2 * time.Hour), At: now.Add(-time.Hour)}}
+			a2 := measuredLive(polled(maxAcct("a2-live", 99, 3*time.Hour, 40, 4*day), 180*time.Second),
+				rate, usage.WindowFiveHour)
+			ultra := idleOn(weekOnly("u-empty", 100, 2*day))
+
+			p := Decide([]Candidate{a1, a2, ultra}, hoverOpts(), Config{}, leftAt("a1-left", usage.WindowFiveHour), "a2-live")
+			if r, _ := find(p.Result, "a1-left"); r.AtLimit() != "" || r.HeldOut == "" {
+				t.Fatalf("a1-left at a limit on %q (held on %q): its own rates are condemning it again", r.AtLimit(), r.HeldOut)
+			}
+			want(t, p, ActionSwitch, ReasonLastPoint, "a1-left")
+		})
+	}
+}
+
+// The ordinary move may not take a target the hand-off would refuse. An Ultra
 // at 98.5% is one and a half points from a limit the work spends at a point a
-// minute; it is at a limit on the work's rate, and the walk turns it away. The
-// order now says the same thing, so the ordinary move does not pick it up on a
-// better rung -- which once handed the session to an account that stopped it
-// ninety seconds later, with a two-minute cooldown holding it there.
+// minute: it does not carry the work, and the one verdict every move reads says
+// so -- which once handed the session to an account that stopped it ninety
+// seconds later, with a two-minute cooldown holding it there.
 func TestTheOrdinaryMoveDoesNotTakeATargetTheWalkRefused(t *testing.T) {
-	a := polled(weekOnly("a-live", 95, 3*day), 180*time.Second)
-	a.BurnPerMin, a.HasBurn, a.BurnWindow = 1, true, usage.WindowSevenDay
+	a := measuredLive(polled(weekOnly("a-live", 95, 3*day), 180*time.Second), 1, usage.WindowSevenDay)
 	b := idleOn(weekOnly("b-ultra", 98.5, 1*day))
 
 	p := Decide([]Candidate{a, b}, hoverOpts(), Config{}, NewState(), "a-live")
-	if r, _ := find(p.Result, "b-ultra"); r.AtLimit() == "" {
-		t.Fatalf("b-ultra is not at a limit; the work would run it out in ninety seconds")
+	if r, _ := find(p.Result, "b-ultra"); r.Carries {
+		t.Fatalf("b-ultra carries the work; the work would run it out in ninety seconds")
 	}
 	if p.Action == ActionSwitch {
-		t.Errorf("switched to %s (%s): the walk refused it, and the order must agree", p.Target.UUID, p.Reason)
+		t.Errorf("switched to %s (%s): it cannot carry the work", p.Target.UUID, p.Reason)
 	}
 }
 
@@ -411,6 +469,33 @@ func TestAWindowThatResetsBeforeItRunsOutIsNotClosing(t *testing.T) {
 	resets := idleOn(maxAcct("b-resets", 96, 90*time.Second, 40, 3*day))
 	p := Decide([]Candidate{closing, resets}, hoverOpts(), Config{}, NewState(), "a-live")
 	want(t, p, ActionSwitch, ReasonProjectedExhaustion, "b-resets")
+}
+
+// A reading is as old as its poll. An account read empty on a five-hour window
+// that rolled a minute ago, and not polled since, has a fresh window -- and
+// under hover, whose levels are the whole of how it files an account the
+// session is not on, it is filed as the fresh window it is: a short-window
+// account with room, which the session on an Ultra moves to. The configured
+// strategies rank on the reading as it was taken.
+func TestARolledReadingIsReadAsRolled(t *testing.T) {
+	rolled := maxAcct("a-rolled", 100, -time.Minute, 40, 3*day)
+	pool := []Candidate{rolled, idleOn(weekOnly("u-live", 30, 2*day))}
+
+	r := Rank(pool, hoverOpts())
+	if len(r.Order) == 0 || r.Order[0].UUID != "a-rolled" || r.Order[0].Rung() != RungShortWindow {
+		t.Fatalf("hover order %v, want the rolled account first as a short-window account", order(r))
+	}
+	if got := r.Order[0].Headroom.Pct; got != 60 {
+		t.Errorf("rolled account's headroom %v under hover, want the week's 60: the five-hour window is fresh", got)
+	}
+	p := Decide(pool, hoverOpts(), Config{}, NewState(), "u-live")
+	want(t, p, ActionSwitch, ReasonShortWindowRoom, "a-rolled")
+
+	for _, c := range Rank(pool, opts()).Order {
+		if c.UUID == "a-rolled" && c.Headroom.Pct != 0 {
+			t.Errorf("rolled account's headroom %v under a configured strategy, want the reading's 0", c.Headroom.Pct)
+		}
+	}
 }
 
 // Credits do not come back, so a primary credit seat is handed off at the line

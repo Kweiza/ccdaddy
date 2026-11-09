@@ -155,7 +155,7 @@ func TestNoOutAndBackInsideAFiveHourCycle(t *testing.T) {
 	}
 	// Five hours and ten minutes: the window started on the first turn, so it
 	// rolls at five hours, and the poll that sees it is a margin after that.
-	res := runTierSim(t, "one five-hour cycle", fleet, 0.025, 5*time.Hour+10*time.Minute)
+	res := runTierSim(t, "one five-hour cycle", fleet, steady("heavy", 0.025), 5*time.Hour+10*time.Minute)
 	if res.total != 2 {
 		t.Errorf("%d switches in one five-hour cycle, want 2: out at the limit and back at the rollover", res.total)
 	}

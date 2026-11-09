@@ -185,48 +185,6 @@ func TestHoverHonoursTheUnknownScopeOptInAndStillDerivesItsValue(t *testing.T) {
 	}
 }
 
-// The lead comes from the gap the scheduler actually left, not from a number in
-// the file. A 429 that stretches the cadence stretches the lead with it, and a
-// tight cadence spends less quota getting out of the way early.
-func TestHoverTakesThePreemptLeadFromTheObservedPollGap(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		gap  time.Duration
-		want time.Duration
-	}{
-		{"nothing observed yet", 0, HoverMinPreemptLead},
-		{"below the floor", 30 * time.Second, HoverMinPreemptLead},
-		{"an ordinary cadence", 300 * time.Second, 300 * time.Second},
-		{"the post-429 ceiling", 1800 * time.Second, HoverMaxPreemptLead},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			c := sub("u-1", oneWindow(t, usage.WindowFiveHour, elapsedWindow(5*time.Hour, 0.5, 10)))
-			if tc.gap > 0 {
-				c.FetchedAt, c.NextPollAt = now, now.Add(tc.gap)
-			}
-			if got := HoverThresholds([]Candidate{c}, opts()).PreemptLead; got != tc.want {
-				t.Errorf("PreemptLead = %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
-
-// A reading with a next poll and no FetchedAt has no gap, and subtracting the
-// zero time does not produce one either: Sub saturates at about 292 years, so an
-// account with no provenance would otherwise drag every OTHER account's lead to
-// the ceiling. The refusal is preemptHorizon's, and going through it is what
-// keeps one answer to "how blind is this engine" rather than two.
-func TestHoverIgnoresAPollGapWithNoProvenance(t *testing.T) {
-	blind := sub("u-0", oneWindow(t, usage.WindowFiveHour, elapsedWindow(5*time.Hour, 0.5, 10)))
-	blind.NextPollAt = now.Add(time.Hour)
-	seen := sub("u-1", oneWindow(t, usage.WindowFiveHour, elapsedWindow(5*time.Hour, 0.5, 10)))
-	seen.FetchedAt, seen.NextPollAt = now, now.Add(120*time.Second)
-
-	if got := HoverThresholds([]Candidate{blind, seen}, opts()).PreemptLead; got != 120*time.Second {
-		t.Errorf("PreemptLead = %v, want the one gap that was actually observed, 2m", got)
-	}
-}
-
 // The keys hover ignores stop mattering, and the ONE key it does not ignore
 // still does. Two accounts identical but for the primary flag, under a ceiling
 // of 0 -- which is the default, and one of the two independent opt-ins
@@ -257,8 +215,17 @@ func TestHoverIgnoresTheTuningAndNotTheMoneyGate(t *testing.T) {
 	o.Threshold = 90
 	tuned := Config{HysteresisPct: 90, HeadroomRatio: 5, Cooldown: time.Hour}
 
-	// max_auto_spend is 0, and the seat is not primary.
+	// max_auto_spend is 0, and the seat is not primary. Money is consulted only
+	// once every free point is gone -- the live account out, and nothing in
+	// the subscription pool to take -- so with room left the gate is not asked
+	// at all, and with the account empty it refuses.
 	p := Decide([]Candidate{spent, seat}, o, tuned, NewState(), "a")
+	want(t, p, ActionStay, ReasonAlreadyBest, "")
+	if p.CreditConsulted {
+		t.Error("the credit pool was consulted while the live account held free quota")
+	}
+	empty := sub("a", &usage.Snapshot{SevenDay: elapsedWindow(7*24*time.Hour, 0.43, 100)})
+	p = Decide([]Candidate{empty, seat}, o, tuned, NewState(), "a")
 	want(t, p, ActionBlocked, ReasonCreditGate, "")
 	if p.Credit.Reason != CreditNotOptedIn {
 		t.Errorf("Credit.Reason = %v, want %v: hover must not switch on unattended spending",
@@ -312,7 +279,9 @@ func TestHoverThresholdDoesNotOpenTheCreditPool(t *testing.T) {
 	if p.CreditConsulted {
 		t.Errorf("the credit pool was consulted: hover's hand-off line must not authorise a purchase")
 	}
-	want(t, p, ActionStay, ReasonAlreadyBest, "")
+	// On its last point with nowhere to go, which is blocked -- and still no
+	// purchase on a line the user did not choose.
+	want(t, p, ActionBlocked, ReasonNothingCanServe, "")
 }
 
 // The plan hover ran on is reported, and nil is what says the mode was not in
@@ -357,18 +326,18 @@ func TestHoverConfigReplacesTheCooldownAndNothingElse(t *testing.T) {
 	}
 }
 
-// preempt_lead is a ranking input rather than an anti-flap knob, so hover's
-// derived lead has to land on the pass and not on the anti-flap set. A lead left
-// behind here is the pre-emptive switch silently off.
-func TestHoverPutsItsDerivedLeadOnTheRankingPass(t *testing.T) {
+// preempt_lead is a ranking input rather than an anti-flap knob, so hover's own
+// reserve has to land on the pass and not on the anti-flap set, where `ccdad
+// config list` reports what hover overrode.
+func TestHoverPutsItsReserveOnTheRankingPass(t *testing.T) {
 	c := sub("u-1", oneWindow(t, usage.WindowFiveHour, elapsedWindow(5*time.Hour, 0.5, 10)))
 	c.FetchedAt, c.NextPollAt = now, now.Add(300*time.Second)
 	o := opts()
 	o.Hover = true
 
 	got := o.withHover([]Candidate{c})
-	if got.PreemptLead != 300*time.Second {
-		t.Errorf("PreemptLead = %v, want the observed gap of 300s", got.PreemptLead)
+	if got.PreemptLead != hoverReserve {
+		t.Errorf("PreemptLead = %v, want hover's reserve %v", got.PreemptLead, hoverReserve)
 	}
 	if got.CreditThreshold != HoverCreditThreshold {
 		t.Errorf("CreditThreshold = %v, want %v", got.CreditThreshold, HoverCreditThreshold)
