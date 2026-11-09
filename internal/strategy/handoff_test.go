@@ -120,6 +120,25 @@ func TestAnAccountLeftClosingIsNeverACarrier(t *testing.T) {
 	}
 }
 
+// What the work spent on an account between its reading and its departure is
+// taken off that reading's window -- and only that window. A was read thirty
+// minutes ago and left ten minutes ago at 5.4 points a minute, which is 108
+// points; its five-hour window reset just now, so all of them were spent on the
+// window that reset, and the fresh one has its whole hundred. A carries.
+func TestWorkBeforeAResetDoesNotSpendTheRoomTheResetRestored(t *testing.T) {
+	left := sub("a-left", &usage.Snapshot{FiveHour: win(60, 0), SevenDay: win(40, 3*day)})
+	left.FetchedAt, left.NextPollAt = now.Add(-30*time.Minute), now.Add(10*time.Minute)
+	live := measuredLive(polled(maxAcct("b-live", 50, 3*time.Hour, 50, 4*day), 180*time.Second), 5.4, usage.WindowFiveHour)
+	st := NewState()
+	st.RecordSwitch("b-live", now.Add(-10*time.Minute), Departure{From: "a-left", Closing: usage.WindowFiveHour})
+
+	p := Decide([]Candidate{left, live}, hoverOpts(), Config{}, st, "b-live")
+	if r, _ := find(p.Result, "a-left"); !r.Carries {
+		t.Errorf("a-left carries %v, runs out on %q at %s: the reset restored its whole window",
+			r.Carries, r.RunsOutOn, r.RunsOutAt.Sub(now))
+	}
+}
+
 // I5: a carrier is not closing when the work arrives, nor at its first live
 // reading -- so the move is never followed by a second move on the same rate.
 // Swept over rooms on either side of the carrier threshold at two rates: every

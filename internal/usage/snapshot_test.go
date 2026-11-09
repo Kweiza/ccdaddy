@@ -1263,6 +1263,12 @@ func TestARolledWindowReadsAsRolled(t *testing.T) {
 	if at, ok := rolled.FiveHour.Reset(); ok {
 		t.Errorf("rolled five-hour window still names a reset at %s", at)
 	}
+	if at, ok := rolled.FiveHour.RolledAt(); !ok || !at.Equal(mustTime(t, "2026-08-22T09:00:00Z")) {
+		t.Errorf("rolled five-hour window says it rolled at %s, %v; want the reset it named", at, ok)
+	}
+	if _, ok := rolled.SevenDay.RolledAt(); ok {
+		t.Error("a running week says it rolled")
+	}
 	if pct, _ := rolled.SevenDay.Percent(); pct != 41 {
 		t.Errorf("a running week reads %v after another window rolled, want 41", pct)
 	}
