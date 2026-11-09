@@ -209,6 +209,20 @@ func TestWhoIsLiveDoesNotChangeWhetherAnAccountCarries(t *testing.T) {
 	}
 }
 
+// A live account with room that stays because the account ahead of it in the
+// order cannot carry the work says so. The Max sorts first -- it has a
+// five-hour window -- but its week has five points, and at half a point a
+// minute the work would spend them in ten minutes: "already on the best
+// account" would be false of the session on the Ultra.
+func TestALiveAccountKeptByAnAccountThatCannotCarryTheWorkSaysSo(t *testing.T) {
+	pool := []Candidate{
+		idleOn(maxAcct("a-max", 10, 3*time.Hour, 95, 3*day)),
+		measuredLive(weekOnly("u-live", 30, 2*day), 0.5, usage.WindowSevenDay),
+	}
+	p := Decide(pool, hoverOpts(), Config{}, NewState(), "u-live")
+	want(t, p, ActionStay, ReasonCannotCarry, "")
+}
+
 // The target is chosen first and the cooldown applied second. At a limit with
 // nowhere to go is blocked whether or not a cooldown is running and whichever
 // account sorts first -- at the last point and past it alike -- and a carrier
