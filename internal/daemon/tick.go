@@ -1364,10 +1364,14 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now, sent time.Ti
 		// replaces were both taken live; see usage.LivePairs. Taken before the
 		// reading is overwritten, for the reason the burn below is.
 		liveBurns, anchorLive := entry.Poll.LiveBurns, entry.Poll.AnchorLive
+		pairRunning := entry.Poll.LastPairRunning
 		if snap != nil {
 			fresh := usage.LivePairs(entry.Snapshot, entry.FetchedAt,
 				usage.LiveAnchor(entry.Poll.AnchorLive, entry.FetchedAt, liveSince), snap, now, active)
 			liveBurns, anchorLive = usage.MergeLiveBurns(liveBurns, fresh), active
+			if len(fresh) > 0 {
+				pairRunning = usage.AnyRunning(fresh)
+			}
 		}
 
 		if snap != nil {
@@ -1477,6 +1481,7 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now, sent time.Ti
 		entry.Poll.LastBindingWindow = lastWindow
 		entry.Poll.BurnPerMin, entry.Poll.HasBurn, entry.Poll.BurnWindow = burn, hasBurn, burnWindow
 		entry.Poll.AnchorLive, entry.Poll.LiveBurns = anchorLive, liveBurns
+		entry.Poll.LastPairRunning = pairRunning
 		// The switch's record outlives the reading it was waiting for only while
 		// that reading is still to come: a poll sent after the switch is it.
 		entry.Poll.LiveSince = liveSince

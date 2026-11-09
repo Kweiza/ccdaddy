@@ -202,6 +202,11 @@ type Candidate struct {
 	// too, so the first live reading after a move onto this account is that much
 	// later -- which the carry test has to count (carries).
 	SharedBy int
+	// WorkRunning is whether this account's most recent live pair saw the work
+	// running (usage.PollState.LastPairRunning). Only the live account's is read:
+	// it says whether a projection that has the account out is a measurement or a
+	// forecast across a pause (Ranked.downwardOpen).
+	WorkRunning bool
 }
 
 // Options configures one ranking pass.
@@ -335,6 +340,8 @@ type Ranked struct {
 	HasRunway bool
 	RunsOutAt time.Time
 	RunsOutOn usage.WindowName
+	// workRunning is the candidate's WorkRunning, for the live account's limit.
+	workRunning bool
 	// Carries is whether the account would not be at a limit at its first live
 	// reading if the work moved to it now: hover's carrier test (Options.carries).
 	// An account the order prefers that does not carry the work is passed over.
@@ -698,6 +705,7 @@ func measure(c Candidate, o Options) Ranked {
 	// carrier test and the reporters read one projection (handoff.go).
 	rw := o.runwayOf(c)
 	r.HasRunway, r.RunsOutAt, r.RunsOutOn = rw.known, rw.at, rw.on
+	r.workRunning = c.WorkRunning
 	r.Carries = o.carries(c, r, rw)
 	switch {
 	case o.hover == nil:
