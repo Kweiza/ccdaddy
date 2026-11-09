@@ -38,14 +38,28 @@ quota, which can now expire unspent.
   3. The session returns to a five-hour account as soon as it has room again.
   4. Every hand-off happens one point before any limit a model choice cannot
      avoid -- the five-hour window now as well as the week -- or earlier when
-     the next reading would land past the limit. A cap on one model family,
-     such as a blown Fable week, is not such a limit.
+     the work running now would run the live account out within ten minutes
+     of its next reading. A cap on one model family, such as a blown Fable
+     week, is not such a limit.
 
-  An account the session is not on is at a limit only when it is empty or on
-  its last point, or when the work running now, at the live account's measured
-  rate, would run it out before that account's next reading. Its own average
-  pace, or a rate measured before the session left it, no longer counts
-  against it, so an idle account with room is not passed over.
+  An account the session is not on is placed in the order by its levels and
+  its hold alone: it is at a limit only when it is empty or on its last point.
+  Whether it can take the work is a separate question, asked of the account
+  the session would move to, and a move goes, in this order, to:
+  - an account that would still have ten minutes of the work running now left
+    after the engine has read it twice on that work;
+  - when the live account would stop before its next reading, an account that
+    outlasts it by the cooldown;
+  - when the live account is out, whichever account with work left lasts
+    longest;
+  - and only then a credit seat, below.
+
+  The work's rate is measured only between two readings of an account that
+  were both taken while it was live, on every window they carry, and it
+  follows the work across a switch. Until such a pair exists -- the first two
+  live readings -- an account is judged by its levels alone. An account's own
+  average pace, or a rate measured on it before the session left, no longer
+  counts against it, so an idle account with room is not passed over.
 
   Measured over a simulated week of the 2026-11-09 fleet (one Max account and
   three Ultra seats), and of the same fleet with the Max account's Fable week
@@ -56,33 +70,69 @@ quota, which can now expire unspent.
 
   | Load | Fleet | Switches | Unspent, five-hour | Unspent, weekly-only | Seconds a limit stopped the session |
   |---|---|---|---|---|---|
-  | idle (window never fills) | today | 43 → 2 | 31.78 → 0.98 | 137.59 → 184.56 | 0 → 0 |
-  | idle | Fable at 99.5% | 29 → 2 | 41.00 → 0.98 | 128.35 → 184.56 | 0 → 0 |
-  | light (fills in five hours) | today | 52 → 54 | 28.71 → 0.99 | 120.11 → 168.44 | 0 → 0 |
-  | light | Fable at 99.5% | 33 → 54 | 41.00 → 0.99 | 107.80 → 168.44 | 0 → 0 |
-  | heavy (fills in two hours) | today | 210 → 59 | 6.04 → 0.97 | 28.79 → 45.15 | 0 → 0 |
-  | heavy | Fable at 99.5% | 165 → 59 | 33.46 → 0.97 | 9.22 → 45.15 | 484 → 0 |
+  | idle (window never fills) | today | 43 → 2 | 31.78 → 0.98 | 137.59 → 184.57 | 0 → 0 |
+  | idle | Fable at 99.5% | 29 → 2 | 41.00 → 0.98 | 128.35 → 184.57 | 0 → 0 |
+  | light (fills in five hours) | today | 52 → 54 | 28.71 → 0.99 | 120.11 → 168.45 | 0 → 0 |
+  | light | Fable at 99.5% | 33 → 54 | 41.00 → 0.99 | 107.80 → 168.45 | 0 → 0 |
+  | heavy (fills in two hours) | today | 210 → 59 | 6.04 → 0.95 | 28.79 → 45.13 | 0 → 0 |
+  | heavy | Fable at 99.5% | 165 → 59 | 33.46 → 0.95 | 9.22 → 45.13 | 484 → 0 |
 
   Hover now switches twice for each five-hour window it fills: once just
   before the limit and once when the window resets. Light load fills its window
   minutes before the reset, so it switches as often as heavy load.
+
+  The same simulation over four more fleets -- two Max accounts with and
+  without three Ultra seats, today's fleet with Ultra weeks four times a Max
+  week, and a Max beside two Ultra seats whose weeks end an hour apart -- and
+  two more loads: the 5.4
+  five-hour points a minute measured in production on 2026-09-05, in two-hour
+  sessions, and heavy load's mean in three-minute bursts. Seconds a limit
+  stopped the session while another account still had room, before and after,
+  wherever either is not zero:
+
+  | Fleet | Load | Before | After |
+  |---|---|---|---|
+  | today | production | 79 | 75 |
+  | two Max, three Ultras | light | 107 | 0 |
+  | two Max, three Ultras | heavy | 1472 | 8 |
+  | two Max, three Ultras | production | 1500 | 149 |
+  | two Max, three Ultras | burst | 928 | 71 |
+  | two Max | heavy | 6156 | 0 |
+  | two Max | production | 2424 | 0 |
+  | two Max | burst | 4884 | 1154 |
+  | two Ultras | production | 428 | 0 |
+
+  What is left is not zero. Where the fleet runs dry, the session is moved
+  from one account's last few points to the next, and a window that resets
+  inside the cooldown of the last such move waits out the rest of it. Under
+  the burst load a rate read across a pause understates the work, the live
+  account runs out between two readings, and the session stops until the
+  next reading shows it out.
 - **Ultra weekly quota can now expire unspent.** A weekly-only seat is used
   only while every five-hour account is at a limit, and then only the one whose
   week ends first. On a fleet with several such seats most of their weekly
   quota now expires unused; the pace rotation used to spread work across them.
-- **Hover now uses your `hysteresis_pct`, `headroom_ratio`, and
+- **Hover no longer overrides `hysteresis_pct`, `headroom_ratio`, or
   `recovery_hysteresis`.** It still sets the threshold, credit threshold,
-  strategy, preemption lead, probe setting, and cooldown (2m) itself, and
-  `ccdad config list` no longer marks the other three as overridden.
-  `recovery_hysteresis` (default 5m) is now the margin between two weekly-only
-  seats: the session moves to one whose week ends sooner only when it ends at
-  least that much sooner, so two seats whose weeks end seconds apart do not
-  trade it back and forth.
+  strategy, preemption lead (now the ten minutes above), probe setting, and
+  cooldown (2m) itself, and `ccdad config list` no longer marks the other
+  three as overridden. `recovery_hysteresis` (default 5m) is now the margin
+  between two weekly-only seats: the session moves to one whose week ends
+  sooner only when it ends at least that much sooner, so two seats whose weeks
+  end seconds apart do not trade it back and forth. `hysteresis_pct` and
+  `headroom_ratio` apply under hover only on the way back from a credit seat
+  once every account is past its last point.
 - **Under hover, a primary credit seat sorts after every weekly-only seat
   whose week can expire.** It has no window and no weekly reset, so it comes
   after them and ahead of accounts nobody could read, accounts held out, and
   accounts at a limit. It is handed off at 95% of its balance, hover's credit
   threshold, because credits do not come back.
+- **Under hover, credits are the last place the session goes.** A credit seat
+  is considered only when the live account is out and no subscription account
+  has any work left to give, and then only when your thresholds say the main
+  pool is exhausted, whichever account the order puts first. It used to be considered whenever the live account sorted first and
+  the main pool read exhausted, which could move a session onto credits while
+  another account's last points were still unspent.
 - **Under hover, a cap on one model family is left out of everything that
   decides a limit.** A Fable or Opus week past 99% used to become the
   account's binding window, so the daemon measured the session's rate on a
@@ -97,9 +147,10 @@ quota, which can now expire unspent.
   exits 4 there. `ccdad switch --force` without an account does not move the
   session in that state either: it says no account can be switched to and
   exits 4, because `--force` overrides the switching margins and the cooldown,
-  not a limit, and every other account is at one too. Name an account,
-  `ccdad switch <account>`, to move anyway. When every account is past its
-  last point rather than on it, hover is in recovery mode instead, below.
+  not a limit, and every other account is at one too. It refuses the same way
+  inside a running cooldown, and when every account is past its last point
+  rather than on it, which is recovery mode, below. Name an account,
+  `ccdad switch <account>`, to move anyway.
 - **When every account is past its last point, hover says so.** The lines
   under the status table name recovery mode and say when each account comes
   back, and `ccdad auto --json` order rows carry no `rung`, because the order
@@ -111,11 +162,22 @@ quota, which can now expire unspent.
   utilization**, as under every other strategy, instead of used/threshold.
   Under the table, hover prints its rule and one line per account giving its
   place in the order and why: for example "held out until five_hour rolls over
-  at Fri 14:00" or "at its limit on five_hour". `ccdad status --json` still
-  reports each window's `thresholdPct`, which under hover is 99.
+  at Fri 14:00" or "at its limit on five_hour". An account whose levels have
+  room but which would not carry the work running now says so -- "cannot
+  carry the work running now (runs out in 12 min)" -- and is never said to be
+  at its limit. `ccdad status --json` still reports each window's
+  `thresholdPct`, which under hover is 99.
 - **`ccdad auto --json` is schema version 2.** Order rows no longer carry
   `hoverShare`, `strandedPct`, or `strandedWindow`, and now carry `rung` (on
-  hover's own order), `shortWindow`, `lastPoint`, `closing`, and `heldOut`.
+  hover's own order), `shortWindow`, `lastPoint`, `closing`, and `heldOut`,
+  and under hover `carries` and, when the work's rate gives one, `runsOutAt`.
+- **Under hover, a window whose reset has passed reads as reset** before the
+  poll that refreshes it lands, so an account read empty on a five-hour window
+  that rolled a minute ago is the fresh account it now is, not an empty one.
+- **`--model <family>` makes that family's own cap a limit, under every
+  strategy.** Naming a model already left every other family's cap out; the
+  named family's cap now stays in, so a targetless `ccdad switch --model opus`
+  no longer reads an account whose Opus week is spent as room.
 - **Pre-emption leaves an account only for a limit it would reach before its
   window resets.** An account three points from its limit with its window
   resetting in four minutes used to be left and taken back at the reset: two
@@ -136,10 +198,17 @@ quota, which can now expire unspent.
   held-out account is still used when nothing else has room, and a targetless
   `ccdad switch`, with or without `--force`, records one the same way the
   daemon does.
-- Mode `hover`, and four reasons: "the live account is down to its last point
+- **A switch has the account it moved to read straight away.** Its next poll
+  is brought forward to the soonest the usage endpoint serves a fresh reading,
+  or left at a later rate-limit floor, so the first look at the work on its new
+  account is a reading taken there rather than one from before the move. Every
+  switch ccdad makes does this: the daemon's, `ccdad auto --once`'s, and
+  `ccdad switch`'s.
+- Mode `hover`, and five reasons: "the live account is down to its last point
   before a limit", "a short-window account has room again", "another
-  weekly-only account's week resets sooner", and "staying on the short-window
-  account until it reaches a limit".
+  weekly-only account's week resets sooner", "staying on the short-window
+  account until it reaches a limit", and "the account the order prefers cannot
+  carry the work running now".
 
 ### Removed
 

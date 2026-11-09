@@ -458,8 +458,19 @@ Hover orders the Claude lane's accounts instead of comparing their room:
 3. The session returns to a five-hour account as soon as it has room again.
 4. An account is handed off one point before any limit it cannot avoid by
    changing model (a primary credit seat at 95% of its balance), or earlier
-   when the next reading would land past the limit. The session is not moved
-   to an account the work running now would run out before its next reading.
+   when the work running now would run it out within ten minutes of its next
+   reading. The work's rate is taken only between two readings of an account
+   that were both made while it was live, and it follows the work across a
+   switch.
+5. The session is moved only to an account that would still have ten minutes
+   of that work left after the engine has read it twice on it. When none
+   would, the session stays until the live account would stop before its next
+   reading, and then moves to an account that outlasts it by the cooldown;
+   once the live account is out, it moves to whichever account lasts longest.
+   A credit seat comes after all of these, and only when your thresholds say
+   the main pool is exhausted.
+6. The account the session moves to is read straight after the switch rather
+   than at its idle cadence.
 
 An account left at a limit is held out until the window that stopped it rolls
 over, so the session is not taken straight back to it; it is still used when
@@ -472,10 +483,13 @@ reports the switch as blocked until the soonest rollover. When every account
 is past its last point, it orders them by which comes back first, and status
 says so.
 
-Hover sets the threshold, credit threshold, strategy, preemption lead, probe
-setting, and cooldown (2m) itself. It uses your `hysteresis_pct`,
-`headroom_ratio`, and `recovery_hysteresis`. `ccdad config list` identifies
-overridden values; status shows the order hover is using. Hover does not
+Hover sets the threshold, credit threshold, strategy, preemption lead (the ten
+minutes above), probe setting, and cooldown (2m) itself. It uses your
+`recovery_hysteresis`; `hysteresis_pct` and `headroom_ratio` apply only on the
+way back from a credit seat once every account is past its last point.
+`ccdad config list` identifies overridden values; status shows the order hover
+is using, and says of an account that would not carry the work running now
+how soon it would run out. Hover does not
 override account ownership, manual eligibility, credit-spend permission, or
 Codex-specific settings, and the Codex lane does not use it.
 
