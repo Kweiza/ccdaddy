@@ -383,27 +383,19 @@ func TestHoverStatusPromisesNoWarmUpForAWindowThatIsAlreadyInUse(t *testing.T) {
 	}
 }
 
-// The row a warm-up DOES target: a five-hour window nothing has ever spent
-// against. The row still carries both windows' own figures.
-func TestHoverStatusQueuesAWarmUpForAStoppedClock(t *testing.T) {
+// An account whose five-hour clock is stopped -- a window nothing has spent
+// against, {0, null}, the shape a warm-up targets -- is still a row with its own
+// figures: 0% on the stopped window beside the week's 30%, not a blank cell.
+// Status says nothing about the warm-up itself; that is the daemon's (probeDue),
+// and no line here promises one.
+func TestHoverStatusShowsAStoppedClocksOwnFigures(t *testing.T) {
 	isolate(t)
 	freezeClock(t, hoverEpoch)
 	writeConfig(t, "hover = true\n")
 	seedHoverAccount(t, "u-1", "fresh@example.com")
-	// A second account holding the live login. Without one, which account is
-	// live cannot be worked out, and the daemon refuses every warm-up in that
-	// state — so the table would honestly say "held" and this test would be
-	// asserting the wrong sentence.
-	seedHoverAccount(t, "u-2", "live@example.com")
-	seedLiveAs(t, "u-2")
-	seedUsageEntry(t, "u-2", usage.Entry{
-		FetchedAt: hoverEpoch,
-		Snapshot:  &usage.Snapshot{FiveHour: window(4, hoverEpoch.Add(4*time.Hour))},
-	})
 	idle, spent := 0.0, 30.0
 	seedUsageEntry(t, "u-1", usage.Entry{
-		FetchedAt:  hoverEpoch,
-		NextPollAt: hoverEpoch.Add(7 * time.Minute),
+		FetchedAt: hoverEpoch,
 		Snapshot: &usage.Snapshot{
 			FiveHour: usage.NewWindow(&idle, nil),
 			SevenDay: usage.NewWindow(&spent, nil),
@@ -423,6 +415,9 @@ func TestHoverStatusQueuesAWarmUpForAStoppedClock(t *testing.T) {
 		if !found {
 			t.Errorf("status omitted %q from the stopped-clock account's row %v:\n%s", want, row, stdout)
 		}
+	}
+	if strings.Contains(stdout, "warm-up") || strings.Contains(stdout, "probe is queued") {
+		t.Errorf("status speaks of a warm-up, which it does not report:\n%s", stdout)
 	}
 }
 
