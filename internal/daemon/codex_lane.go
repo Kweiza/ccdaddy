@@ -34,7 +34,7 @@ import (
 //   - refreshProfile. There is no Anthropic profile behind a Codex account.
 //   - probeDue / probeNow. A probe runs a real Claude Code out of a scratch
 //     credential home; there is nothing to seed one with here.
-//   - warmClamp. It aims the next look at a Claude window's rollover.
+//   - pollpolicy.WarmClamp. It aims the next look at a Claude window's rollover.
 //   - switcher.Execute, store.SetActive, cclink.ActivateWith. The act is a
 //     pointer file and nothing else.
 func (e *Engine) codexTick(ctx context.Context, s *store.Store, cfg config.Config, now time.Time) (switcher.Evaluation, error) {
@@ -341,8 +341,8 @@ func (e *Engine) codexEntry(uuid string) (usage.Entry, bool) {
 // sample.
 //
 // It is the Claude commit with four things removed: ApplyUsage, the profile
-// re-read, the probe verdict and warmClamp. Each is named in codexTick's own
-// comment with the reason it cannot apply here.
+// re-read, the probe verdict and pollpolicy.WarmClamp. Each is named in
+// codexTick's own comment with the reason it cannot apply here.
 func (e *Engine) codexCommit(a store.Account, snap *usage.Snapshot, thr strategy.Thresholds,
 	now time.Time, serving bool, adjust func(pollpolicy.State) pollpolicy.State) {
 

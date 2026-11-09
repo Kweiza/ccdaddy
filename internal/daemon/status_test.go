@@ -634,9 +634,9 @@ var kst = time.FixedZone("KST", 9*60*60)
 // nextPollAt has two writers. The ordinary cadence is now.Add(interval) and
 // carries the machine's zone; an account whose next look is pulled to a window
 // rollover inherits the wire's, because resets_at is parsed from a string
-// ending in Z and warmClamp returns that instant verbatim. Both are the same
-// moment written two ways, and a reader comparing the rows against one wall
-// clock reads the second kind as hours overdue. It is not a hypothetical: a
+// ending in Z and pollpolicy.WarmClamp returns that instant verbatim. Both are
+// the same moment written two ways, and a reader comparing the rows against one
+// wall clock reads the second kind as hours overdue. It is not a hypothetical: a
 // live store carried five rows at +09:00 beside one at Z, and the Z row was
 // four minutes in the FUTURE.
 //
