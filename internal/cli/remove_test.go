@@ -264,3 +264,40 @@ func TestRemoveForgetsWhatTheEngineRememberedAboutTheAccount(t *testing.T) {
 		t.Errorf("the account left in the store lost its state: mark %v, quarantined %v", held, quarantined["u-2"])
 	}
 }
+
+// The removal forgets the account it removed and nothing else -- including an
+// account this process's copy of the store never saw. That is the one another
+// `ccdad add` writes between this command reading the store and taking the
+// engine-state lock: it is quarantined or marked in the state, and absent from
+// every set this command could have built. A prune of whatever is not in the
+// store would delete its fresh state.
+func TestRemoveForgetsOnlyTheAccountItRemoved(t *testing.T) {
+	isolate(t)
+	stubEnvironment(t, false, false)
+	seedAccount(t, "u-1", "a@example.com")
+	at := time.Now()
+	if err := strategy.WithState(time.Second, func(st *strategy.State) error {
+		for _, uuid := range []string{"u-1", "u-new"} {
+			st.Quarantine(uuid, at, time.Hour, "dead refresh token")
+			st.RecordSwitch("", at, strategy.Departure{From: uuid, Closing: usage.WindowFiveHour})
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if code, _, _, top := runRoot(t, "remove", "1", "--yes"); code != ExitOK {
+		t.Fatalf("remove = %d (%s), want 0", code, top)
+	}
+
+	var quarantined bool
+	if err := strategy.WithState(time.Second, func(st *strategy.State) error {
+		_, quarantined = st.Quarantined("u-new", at)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, held := departuresOnDisk(t)["u-new"]; !held || !quarantined {
+		t.Errorf("an account the removal never saw lost its state: mark %v, quarantined %v", held, quarantined)
+	}
+}

@@ -43,22 +43,18 @@ func profileExists(path string) bool {
 	return err == nil
 }
 
-// forgetEngineState drops what the engine remembers about accounts the store no
-// longer manages: quarantines, and the departure marks hover's order holds an
-// account out on. Both are keyed by uuid, so an account added again under the
-// same uuid would otherwise come back quarantined, or held out until a window
-// that belonged to its previous login rolls over.
+// forgetEngineState drops what the engine remembers about the account just
+// removed: its quarantine, and the departure mark hover's order holds it out on.
+// Both are keyed by uuid, so an account added again under the same uuid would
+// otherwise come back quarantined, or held out until a window that belonged to
+// its previous login rolls over. Only that uuid: State.Forget says why.
 //
 // It never fails the command, for the reason liftQuarantine does not: the
 // account is gone from the store by the time this runs, and a removal that
 // worked is not reported as one that did not.
-func forgetEngineState(stderr io.Writer, remaining []store.Account) {
-	managed := make(map[string]bool, len(remaining))
-	for _, a := range remaining {
-		managed[a.UUID] = true
-	}
+func forgetEngineState(stderr io.Writer, removed string) {
 	if err := strategy.WithState(engineStateTimeout, func(st *strategy.State) error {
-		st.Prune(managed)
+		st.Forget(removed)
 		return nil
 	}); err != nil {
 		fmt.Fprintf(stderr, "note: the auto-switch state could not be updated (%v); "+
@@ -123,7 +119,7 @@ func newRemoveCmd() *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(cmd.ErrOrStderr(), "Removed %s.\n", target.Unambiguous())
-			forgetEngineState(cmd.ErrOrStderr(), s.Accounts())
+			forgetEngineState(cmd.ErrOrStderr(), target.UUID)
 
 			// The profile is a SECOND place this account's credentials live,
 			// and since `ccdad run --full-profile` began writing an API-key

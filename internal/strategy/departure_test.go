@@ -203,9 +203,9 @@ func TestTheCodexViewCarriesNoDeparture(t *testing.T) {
 
 // A removed account must not come back held out when it is added again under
 // the same uuid.
-func TestPruneDropsTheDepartureOfARemovedAccount(t *testing.T) {
+func TestForgetDropsTheDepartureOfTheForgottenAccount(t *testing.T) {
 	st := leftAt("a-left", usage.WindowFiveHour)
-	st.Prune(map[string]bool{"someone-else": true})
+	st.Forget("a-left")
 	if got := st.departuresFor(""); len(got) != 0 {
 		t.Errorf("departures = %v after the account was removed", got)
 	}

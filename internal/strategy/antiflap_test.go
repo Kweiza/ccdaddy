@@ -794,13 +794,13 @@ func TestTheStateFileIsKeyedByUUID(t *testing.T) {
 }
 
 // A removed account's quarantine must not come back to haunt the account added
-// again under the same uuid.
-func TestPruneDropsQuarantinesForAccountsThatAreGone(t *testing.T) {
+// again under the same uuid -- and forgetting one account touches no other.
+func TestForgetDropsTheQuarantineOfThatAccountAlone(t *testing.T) {
 	st := NewState()
 	st.Quarantine("a", now, time.Hour, "dead")
 	st.Quarantine("b", now, time.Hour, "dead")
 
-	st.Prune(map[string]bool{"a": true})
+	st.Forget("b")
 
 	if got := st.QuarantinedUUIDs(now); len(got) != 1 || got[0] != "a" {
 		t.Errorf("QuarantinedUUIDs = %v, want [a]", got)
