@@ -211,6 +211,42 @@ func TestTheProjectionCarriesThePrimaryFlag(t *testing.T) {
 	}
 }
 
+// Candidate.WorkRunning is what lets a projection open the downward tiers
+// (strategy.Ranked.downwardOpen), and the engine has it only through this
+// projection of the cache row. Dropped here, a live account projected out would
+// wait to be empty by level before its last resort or its credits, while every
+// strategy test, which builds its candidates by hand, still passed.
+func TestTheProjectionCarriesWhetherTheWorkWasSeenRunning(t *testing.T) {
+	isolate(t)
+	seed(t, "u-1", "one@example.com")
+	seed(t, "u-2", "two@example.com")
+	seedReading(t, "u-1", 50)
+	seedReading(t, "u-2", 50)
+	if err := usage.WithCache(time.Second, func(c *usage.Cache) error {
+		e, _ := c.Get("u-2")
+		e.Poll.LastPairRunning = true
+		c.Put("u-2", e)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	s := openStore(t)
+	cache, err := usage.LoadCache()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cands := engineCandidates(s, s.Accounts(), cache, provider.Claude)
+	if len(cands) != 2 {
+		t.Fatalf("engineCandidates() returned %d candidates, want both accounts", len(cands))
+	}
+	for _, c := range cands {
+		if want := c.UUID == "u-2"; c.WorkRunning != want {
+			t.Errorf("%s: WorkRunning = %v, want %v", c.UUID, c.WorkRunning, want)
+		}
+	}
+}
+
 func TestCanceledSubscriptionsAreExcludedDespiteCachedQuota(t *testing.T) {
 	isolate(t)
 	seed(t, "u-1", "one@example.com")

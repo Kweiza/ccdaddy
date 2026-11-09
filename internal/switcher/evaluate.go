@@ -273,6 +273,9 @@ func engineCandidates(s *store.Store, accounts []store.Account, c *usage.Cache, 
 			// observed, which the engine may read but must not re-derive.
 			cand.BurnPerMin, cand.HasBurn, cand.BurnWindow = e.Poll.BurnPerMin, e.Poll.HasBurn, e.Poll.BurnWindow
 			cand.LiveBurns = e.Poll.LiveBurns
+			// Whether the latest of those pairs saw the work running, which a
+			// projection needs before it opens the downward tiers.
+			// TestTheProjectionCarriesWhetherTheWorkWasSeenRunning.
 			cand.WorkRunning = e.Poll.LastPairRunning
 		}
 		out = append(out, cand)

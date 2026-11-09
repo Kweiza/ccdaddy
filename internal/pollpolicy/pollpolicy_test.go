@@ -854,31 +854,49 @@ func TestPromptPollAtIsTheIdentitysServeFloor(t *testing.T) {
 // A switch is one prompt poll, and hover can switch among the accounts of one
 // identity a cooldown apart. Three of them rotated every two minutes for three
 // hours, each read at 96% -- so while it is live the danger band polls it on its
-// undivided cadence -- stay inside the identity's 28 requests in any rolling
-// hour: the prompt's serve floor is shared among them as every other look's
-// is, and the band's schedule an account was left with is held to that floor
-// when the session comes back to it. Unshared, the same rotation asks more than
-// the allowance.
+// undivided cadence, and its poll stands the other two down (StandDownUntil) --
+// stay inside the identity's 28 requests in any rolling hour: the prompt's
+// serve floor is shared among them as every other look's is, and the band's
+// schedule an account was left with, which its stand-down kept it from
+// spending while it was idle, is held to that floor when the session comes back
+// to it. Unshared, the same rotation asks more than the allowance.
 func TestPromptPollsKeepAnIdentityInsideItsBudget(t *testing.T) {
 	const budget = 28
 	rotate := func(accounts int) int {
 		const members = 3
-		var fetched, next [members]time.Time
+		var fetched, next, standDown [members]time.Time
 		var polls []time.Time
 		for at := epoch; at.Before(epoch.Add(3 * time.Hour)); at = at.Add(time.Second) {
-			if live := int(at.Sub(epoch)/(2*time.Minute)) % members; at.Sub(epoch)%(2*time.Minute) == 0 {
+			live := int(at.Sub(epoch)/(2*time.Minute)) % members
+			if at.Sub(epoch)%(2*time.Minute) == 0 {
 				next[live] = PromptPollAt(fetched[live], next[live], time.Time{}, at, accounts)
 			}
 			for i := range next {
-				if !at.Before(next[i]) {
-					polls = append(polls, at)
-					live := int(at.Sub(epoch)/(2*time.Minute))%members == i
-					in := Input{Now: at, Active: live, Reading: Reading{Known: true, BindingPct: 96}}
-					cadence := PerIdentity(CandidateMaxInterval, accounts)
-					if live {
-						cadence = Share(MinInterval, accounts, in)
+				// usage.Entry.PollAt: a stand-down holds every account but the
+				// live one.
+				due := next[i]
+				if i != live && standDown[i].After(due) {
+					due = standDown[i]
+				}
+				if at.Before(due) {
+					continue
+				}
+				polls = append(polls, at)
+				in := Input{Now: at, Active: i == live, Reading: Reading{Known: true, BindingPct: 96}}
+				cadence := PerIdentity(CandidateMaxInterval, accounts)
+				if i == live {
+					cadence = Share(MinInterval, accounts, in)
+				}
+				fetched[i], next[i] = at, at.Add(cadence)
+				if i != live || !InDangerBand(in) {
+					continue
+				}
+				// The daemon's standDown: every other account already read
+				// yields its share, and one standing down is not renewed.
+				for j := range standDown {
+					if j != i && !fetched[j].IsZero() && !at.Before(standDown[j]) {
+						standDown[j] = StandDownUntil(at, 0.5)
 					}
-					fetched[i], next[i] = at, at.Add(cadence)
 				}
 			}
 		}

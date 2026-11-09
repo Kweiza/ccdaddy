@@ -293,7 +293,7 @@ func (c *Cache) MayFetch(uuid string, now time.Time) bool {
 //
 // An entry is dated by the latest thing written to it: its reading, or for a row
 // a switch created before the account was ever read, the switch's record
-// (PollState.LiveSince).
+// (PollState.LiveSince). TestCacheKeepsTheRowASwitchWroteBeforeAnyReading.
 func (c *Cache) Prune(accounts map[string]time.Time) {
 	for uuid, e := range c.data.Accounts {
 		addedAt, managed := accounts[uuid]

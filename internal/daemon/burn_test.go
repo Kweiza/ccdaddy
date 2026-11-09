@@ -379,21 +379,56 @@ func TestAPairAcrossAnAbsenceIsNotStored(t *testing.T) {
 	}
 }
 
+// Whether the account's latest live pair saw the work running is what lets a
+// projection open the downward tiers (strategy.Ranked.downwardOpen), and the
+// engine has it only from the cache row: a pair that moved records the work
+// running, one that did not records a pause, and a reading that makes no live
+// pair leaves the record of the last one as it was.
+func TestTheCommitRecordsWhetherTheLatestLivePairRan(t *testing.T) {
+	isolateEngine(t)
+	e := NewEngine()
+	e.Rand = midJitter
+	a := store.Account{UUID: "acct-1"}
+	commit := func(five float64, at time.Duration, live bool) bool {
+		t.Helper()
+		e.commit(a, windowsUsed(five, 5), tickEpoch.Add(at), tickEpoch.Add(at), []string{a.UUID}, burnThresholds(), live, nil)
+		entry, ok := cacheEntry(t, a.UUID)
+		if !ok {
+			t.Fatal("commit() wrote no cache entry")
+		}
+		return entry.Poll.LastPairRunning
+	}
+	commit(10, 0, true)
+	if !commit(40, 10*time.Minute, true) {
+		t.Error("a live pair that moved thirty points recorded a pause")
+	}
+	if commit(40, 20*time.Minute, true) {
+		t.Error("a live pair that did not move recorded the work running")
+	}
+	if !commit(70, 30*time.Minute, true) {
+		t.Error("the work resuming did not replace the pause")
+	}
+	if !commit(70, 40*time.Minute, false) {
+		t.Error("an idle reading, which makes no live pair, overwrote the record of the last one")
+	}
+}
+
 // inFlightSwitch runs one poll of a during which a switch onto a lands: the
 // poll is sent while a is idle, the switch writes its record, and the poll
-// returns reply. It is the race the switch's record exists for.
-func inFlightSwitch(t *testing.T, e *Engine, now *time.Time, a store.Account, reply func() (*usage.Snapshot, error)) {
+// returns reply. It is the race the switch's record exists for. identity is the
+// accounts a polls its budget with, a among them.
+func inFlightSwitch(t *testing.T, e *Engine, now *time.Time, a store.Account, identity []string, reply func() (*usage.Snapshot, error)) {
 	t.Helper()
 	cfg := config.Config{Threshold: 80, CreditThreshold: 80}
 	e.FetchUsage = func(context.Context, string) (*usage.Snapshot, error) {
 		*now = now.Add(time.Second)
-		if err := switcher.SchedulePromptPoll(a.UUID, *now, 1); err != nil {
+		if err := switcher.SchedulePromptPoll(a.UUID, *now, len(identity)); err != nil {
 			t.Fatal(err)
 		}
 		*now = now.Add(2 * time.Second)
 		return reply()
 	}
-	_ = e.poll(context.Background(), a, cfg, configuredThresholds(cfg), []string{a.UUID}, false)
+	_ = e.poll(context.Background(), a, cfg, configuredThresholds(cfg), identity, false)
 }
 
 // An account with no cache row yet -- its first poll is the one in flight --
@@ -405,7 +440,7 @@ func TestASwitchOntoAnAccountWithNoRowStillRecordsIt(t *testing.T) {
 	now := tickEpoch
 	e := movableEngine(t, &now, nil)
 	e.setLive("someone-else", true)
-	inFlightSwitch(t, e, &now, a, func() (*usage.Snapshot, error) { return windowsUsed(10, 5), nil })
+	inFlightSwitch(t, e, &now, a, []string{a.UUID}, func() (*usage.Snapshot, error) { return windowsUsed(10, 5), nil })
 	entry, ok := cacheEntry(t, a.UUID)
 	if !ok || !entry.Poll.AnchorLive {
 		t.Errorf("the first reading, in flight across the switch, was labelled idle (row %v)", ok)
@@ -429,12 +464,40 @@ func TestAPromptPollYieldsToA429InFlight(t *testing.T) {
 		t.Fatal(err)
 	}
 	now = tickEpoch.Add(10 * time.Minute)
-	inFlightSwitch(t, e, &now, a, func() (*usage.Snapshot, error) {
+	inFlightSwitch(t, e, &now, a, []string{a.UUID}, func() (*usage.Snapshot, error) {
 		return nil, usage.StatusErrorFrom(429, http.Header{"Retry-After": []string{"600"}}, now)
 	})
 	entry, _ := cacheEntry(t, a.UUID)
 	if floor := now.Add(600 * time.Second); entry.NextPollAt.Before(floor) {
 		t.Errorf("next poll %s after a 429 with Retry-After 600, want no sooner than %s",
+			entry.NextPollAt.Sub(now), floor.Sub(now))
+	}
+}
+
+// The prompt the commit derives again is the identity's, as the switch's was:
+// three accounts of one organization share its serve floor three ways, and the
+// poll in flight across the switch does not buy the new live account the whole
+// of it. That is the budget TestPromptPollsKeepAnIdentityInsideItsBudget
+// counts.
+func TestTheCommitsPromptIsTheIdentitysShare(t *testing.T) {
+	isolateEngine(t)
+	a := store.Account{UUID: "acct-1"}
+	identity := []string{a.UUID, "acct-2", "acct-3"}
+	now := tickEpoch
+	cfg := config.Config{Threshold: 80, CreditThreshold: 80}
+	e := movableEngine(t, &now, func(context.Context, string) (*usage.Snapshot, error) { return windowsUsed(10, 5), nil })
+	e.setLive("someone-else", true)
+	if err := e.poll(context.Background(), a, cfg, configuredThresholds(cfg), identity, false); err != nil {
+		t.Fatal(err)
+	}
+	now = tickEpoch.Add(10 * time.Minute)
+	inFlightSwitch(t, e, &now, a, identity, func() (*usage.Snapshot, error) { return windowsUsed(11, 5), nil })
+	entry, _ := cacheEntry(t, a.UUID)
+	if !entry.Poll.AnchorLive {
+		t.Fatal("the reading in flight across the switch was labelled idle")
+	}
+	if floor := now.Add(pollpolicy.PerIdentity(pollpolicy.ServeTTL, len(identity))); entry.NextPollAt.Before(floor) {
+		t.Errorf("next poll %s after the switch, want no sooner than the identity's share of the floor, %s",
 			entry.NextPollAt.Sub(now), floor.Sub(now))
 	}
 }

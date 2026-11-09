@@ -405,6 +405,39 @@ func TestCachePrunesRemovedAndReAddedAccounts(t *testing.T) {
 	}
 }
 
+// A switch onto an account that has never been read writes a row holding only
+// its record (PollState.LiveSince), and that row is the account's own: it is
+// dated by the switch rather than by a reading it does not have, and dropped
+// only when the uuid was added again after it.
+func TestCacheKeepsTheRowASwitchWroteBeforeAnyReading(t *testing.T) {
+	isolate(t)
+	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
+	_ = WithCache(time.Second, func(c *Cache) error {
+		c.Put("switched-onto", Entry{Poll: PollState{LiveSince: now}})
+		c.Put("re-added", Entry{Poll: PollState{LiveSince: now}})
+		return nil
+	})
+
+	err := WithCache(time.Second, func(c *Cache) error {
+		c.Prune(map[string]time.Time{
+			"switched-onto": now.Add(-time.Minute),
+			"re-added":      now.Add(time.Minute),
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("WithCache() error = %v", err)
+	}
+
+	c, _ := LoadCache()
+	if _, ok := c.Get("switched-onto"); !ok {
+		t.Error("Prune() dropped the record a switch wrote onto an account not yet read")
+	}
+	if _, ok := c.Get("re-added"); ok {
+		t.Error("Prune() kept a switch's record from before the uuid was added again")
+	}
+}
+
 // The write is a rename, so a reader never sees a partial document.
 func TestCacheWritesAtomically(t *testing.T) {
 	dir := isolate(t)
