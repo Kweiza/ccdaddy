@@ -412,6 +412,77 @@ func TestAnUnreadableStateMakesNoLivePair(t *testing.T) {
 	}
 }
 
+// The same rule for a poll in flight when the state breaks. The first tick
+// reads the live account; the second, with the state still parsing, sends the
+// next poll, and the state file stops parsing while that poll is out. The
+// reading it brings back is kept and makes no live pair: the state is read
+// when the reading commits, not when the tick that sent the poll ran. With the
+// state left alone the same two readings make a pair, which is what says the
+// case can tell the two apart.
+func TestAStateThatBreaksWhileAPollIsInFlightMakesNoLivePair(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		breaks bool
+	}{
+		{"the state parses", false},
+		{"the state breaks", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateEngine(t)
+			seedAccount(t, "u-1", "org-1")
+			liveAs(t, "u-1")
+			sent := make(chan struct{})
+			release := make(chan struct{})
+			var mu sync.Mutex
+			polls := 0
+			e := engineFor(t, tokensAreFine, func(context.Context, string) (*usage.Snapshot, error) {
+				mu.Lock()
+				polls++
+				first := polls == 1
+				mu.Unlock()
+				if first {
+					return snapshotWith(10), nil
+				}
+				close(sent)
+				<-release
+				return snapshotWith(13), nil
+			})
+			tick(t, e)
+			if entry, ok := cacheEntry(t, "u-1"); !ok || !entry.Poll.AnchorLive {
+				t.Fatalf("the first reading was not taken live (row %v, %+v)", ok, entry.Poll)
+			}
+
+			e.Now = func() time.Time { return tickEpoch.Add(10 * time.Minute) }
+			if err := e.Tick(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			<-sent
+			if tc.breaks {
+				path, err := strategy.StatePath()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			close(release)
+			e.Wait()
+
+			entry, _ := cacheEntry(t, "u-1")
+			if !entry.FetchedAt.Equal(tickEpoch.Add(10 * time.Minute)) {
+				t.Fatalf("the reading in flight was not kept: fetched at %s", entry.FetchedAt.Sub(tickEpoch))
+			}
+			if paired := len(entry.Poll.LiveBurns) > 0; paired == tc.breaks {
+				t.Errorf("state broken %v: live pairs %+v", tc.breaks, entry.Poll.LiveBurns)
+			}
+		})
+	}
+}
+
 // A uuid removed and added again keeps nothing its predecessor measured. The
 // row still holds the predecessor's reading from an hour before the account
 // was added, with a rate and a running flag beside it; a switch onto the new

@@ -163,9 +163,6 @@ type Engine struct {
 	// (usage.PollState.LiveSince, read in commit).
 	live      string
 	liveKnown bool
-	// switches is the engine state's record of the last switch as the most
-	// recent tick read it, for the commits after it (switchViewOf).
-	switches switchView
 	// The daily release check's whole state, beside cfg and polls under the
 	// same lock. It is deliberately NOT inside status: publish() replaces that
 	// field wholesale on every tick, so anything kept there would be erased
@@ -533,7 +530,6 @@ func (e *Engine) Tick(ctx context.Context) error {
 	// live one, this tick rather than next.
 	active, activeKnown := activeAfter(ev, res)
 	e.setLive(active, activeKnown)
-	e.setSwitches(switchViewOf(ev, res))
 	// A switch rescheduled the account it made live (switcher.SchedulePromptPoll,
 	// held to the identity's floor by pollpolicy.PromptPollAt), and the cache
 	// read above predates it: dispatching from that copy would take the old
@@ -1239,59 +1235,6 @@ func (e *Engine) poll(ctx context.Context, a store.Account, cfg config.Config,
 	return nil
 }
 
-// switchView is the engine state's record of the last switch, as one read of
-// the state file gave it.
-type switchView struct {
-	// read is whether a tick has read it at all; a commit with no tick behind
-	// it reads the state for itself.
-	read bool
-	// known is whether the state could be read: an unreadable state says
-	// nothing about where a stint began.
-	known bool
-	at    time.Time
-	to    string
-}
-
-// switchViewOf is the state's record of the last switch as this tick leaves
-// it: what the evaluation read, or, when this tick switched, the state read
-// again after the switch wrote it -- one read a tick, and a second only on the
-// tick that changed it.
-func switchViewOf(ev switcher.Evaluation, res switcher.Result) switchView {
-	if res.Outcome == switcher.Switched {
-		return loadSwitchView()
-	}
-	return switchView{read: true, known: ev.StateErr == nil, at: ev.LastSwitchAt, to: ev.LastSwitchTo}
-}
-
-// loadSwitchView reads the state's record of the last switch from disk.
-func loadSwitchView() switchView {
-	st, err := strategy.LoadState()
-	if err != nil || st.LoadError() != nil {
-		return switchView{read: true}
-	}
-	at, to := st.LastSwitch()
-	return switchView{read: true, known: true, at: at, to: to}
-}
-
-func (e *Engine) setSwitches(v switchView) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.switches = v
-}
-
-// switchesForCommit is the record a commit reads: the latest tick's, or the
-// state read now when no tick has run -- the hand-held refresh, which polls
-// without one.
-func (e *Engine) switchesForCommit() switchView {
-	e.mu.Lock()
-	v := e.switches
-	e.mu.Unlock()
-	if v.read {
-		return v
-	}
-	return loadSwitchView()
-}
-
 // setLive records the account a tick left the login on, for the polls that
 // commit after it.
 func (e *Engine) setLive(uuid string, known bool) {
@@ -1444,15 +1387,18 @@ func (e *Engine) commitReading(in commitInput) {
 	// without it the pair the next reading makes would span the absence, and
 	// be stored. A state that cannot be read cannot say where the stint began,
 	// so this reading makes no pair at all; the reading and its schedule are
-	// still kept. The record is the one the latest tick read (switchesForCommit),
-	// not a read of the state file per poll.
-	// TestAPairAcrossAnAbsenceOnlyTheStateRecordsIsNotStored,
-	// TestAnUnreadableStateMakesNoLivePair.
-	switches := e.switchesForCommit()
-	stateKnown := switches.known
+	// still kept. It is read here, when the reading commits, and not when the
+	// tick that sent the poll ran: the state can stop parsing while a poll is
+	// in flight. TestAPairAcrossAnAbsenceOnlyTheStateRecordsIsNotStored,
+	// TestAnUnreadableStateMakesNoLivePair,
+	// TestAStateThatBreaksWhileAPollIsInFlightMakesNoLivePair.
 	var stateSwitchOnto time.Time
-	if stateKnown && switches.to == a.UUID {
-		stateSwitchOnto = switches.at
+	st, stErr := strategy.LoadState()
+	stateKnown := stErr == nil && st.LoadError() == nil
+	if stateKnown {
+		if at, to := st.LastSwitch(); to == a.UUID {
+			stateSwitchOnto = at
+		}
 	}
 	err := usage.WithCache(cacheTimeout, func(c *usage.Cache) error {
 		// Only what is this account's own: a row kept from a predecessor at the
