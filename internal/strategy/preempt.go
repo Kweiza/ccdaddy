@@ -58,8 +58,37 @@ func preemptHorizon(c Candidate, lead time.Duration) (time.Duration, bool) {
 	return blind + lead, true
 }
 
-// projectedExhaustion names the window that binds and reaches 100% soonest
-// within horizon of now, or "" when none does.
+// runsOutBy reports whether a window projected to reach 100% at `at` does so by
+// the deadline AND before it resets.
+//
+// A window that resets first is not about to stop the session, however steep the
+// projection: the reset hands back a whole window before the session reaches its
+// limit, and leaving it costs two switches -- out now, back at the rollover --
+// for a stop that was never going to happen. Every projection the closing and
+// carry tests make goes through this one rule, so the three of them cannot
+// disagree about a window on the edge of its reset. A reset already in the past
+// is a window that has rolled and whose refresh has not landed, which is lasting
+// by the same rule. TestAWindowThatResetsBeforeItRunsOutIsNotClosing.
+func runsOutBy(w usage.Window, at, deadline time.Time) bool {
+	if at.After(deadline) {
+		return false
+	}
+	reset, hasReset := w.Reset()
+	return !hasReset || at.Before(reset)
+}
+
+// atRate is when a window holding `room` points is spent at perMin, and whether
+// that is anywhere at all: a rate of nothing spends nothing.
+func atRate(now time.Time, room, perMin float64) (time.Time, bool) {
+	minutes, ok := usage.MinutesAtRate(room, perMin)
+	if !ok {
+		return time.Time{}, false
+	}
+	return now.Add(time.Duration(minutes * float64(time.Minute))), true
+}
+
+// projectedExhaustion names the window of ws that reaches 100% soonest within
+// horizon of now, before it resets, or "" when none does.
 //
 // It reads the window that RUNS OUT FIRST, which is deliberately not the window
 // the ranking orders on. Ordering is on slack — the distance to a window's own
@@ -70,13 +99,10 @@ func preemptHorizon(c Candidate, lead time.Duration) (time.Duration, bool) {
 // least-slack window leaves the engine sitting on an account whose five-hour cap
 // lands in ten minutes because its weekly cap is nearer its threshold.
 //
-// The set is bindingWindows and not every window the response carried, and that
-// is what keeps the widening honest: it is exactly the set the slack minimum is
-// taken over, so a per-model weekly cap belonging to another family cannot
-// pre-empt a session that will never touch it. That is why the thresholds come
-// in rather than being defaulted here — the set depends on them, and a bundle
-// built for convenience at this one call site would project over windows the
-// ranking never ordered on, or miss one it did.
+// ws is Options.limitWindows: the set the ranking measures, and under hover only
+// the part of it no model choice can dodge. That is what keeps the widening
+// honest -- a per-model weekly cap belonging to another family cannot pre-empt a
+// session that will never touch it.
 //
 // It asks usage.PaceOf for each extrapolation rather than dividing here, so the
 // engine and `ccdad status --json` read ONE projection and cannot come to two
@@ -84,13 +110,13 @@ func preemptHorizon(c Candidate, lead time.Duration) (time.Duration, bool) {
 // window inside its first seventh has numbers too noisy to extrapolate from, and
 // this reads that as "say nothing about this window", never as "not yet" and
 // never as a reason to stop asking about the others.
-func projectedExhaustion(s *usage.Snapshot, model string, now time.Time, horizon time.Duration, t Thresholds) usage.WindowName {
+func projectedExhaustion(ws []usage.NamedWindow, now time.Time, horizon time.Duration) usage.WindowName {
 	deadline := now.Add(horizon)
 	var first usage.WindowName
 	var firstAt time.Time
-	for _, w := range bindingWindows(s, model, t) {
+	for _, w := range ws {
 		proj, ok := usage.PaceOf(w.Name, w.Window, now).Projection()
-		if !ok || proj.ExhaustionAt.After(deadline) {
+		if !ok || !runsOutBy(w.Window, proj.ExhaustionAt, deadline) {
 			continue
 		}
 		if first == "" || proj.ExhaustionAt.Before(firstAt) {
@@ -101,7 +127,7 @@ func projectedExhaustion(s *usage.Snapshot, model string, now time.Time, horizon
 }
 
 // measuredExhaustion is projectedExhaustion's question asked at the rate the work
-// was last MEASURED at, on the window it was measured on.
+// was last MEASURED at on this account, on the window it was measured on.
 //
 // PaceOf's rate is the average since the window opened. On a five-hour window a
 // session is most of that average; on a week it is diluted by days of nothing.
@@ -110,15 +136,14 @@ func projectedExhaustion(s *usage.Snapshot, model string, now time.Time, horizon
 // limit, when it was eight. A verified Ultra seat has no shorter window to see the
 // wall coming on, so the average is not good enough for this rule to read alone.
 //
-// It reads the candidate's own rate rather than the session's, which is the
-// question this rule asks: not how long the work would last there, which is
-// CarriesFor, but whether this account is being run out right now. It names the
-// window the rate was measured on when it is, and "" when it is not.
-func measuredExhaustion(c Candidate, model string, horizon time.Duration, t Thresholds) usage.WindowName {
+// It names the window the rate was measured on when it runs out, and "" when it
+// does not -- including when that window is not one of ws, so a rate measured on
+// a model-scoped cap projects nothing under hover.
+func measuredExhaustion(c Candidate, ws []usage.NamedWindow, now time.Time, horizon time.Duration) usage.WindowName {
 	if !c.HasBurn {
 		return ""
 	}
-	for _, w := range bindingWindows(c.Usage, model, t) {
+	for _, w := range ws {
 		if w.Name != c.BurnWindow {
 			continue
 		}
@@ -126,7 +151,7 @@ func measuredExhaustion(c Candidate, model string, horizon time.Duration, t Thre
 		if !ok {
 			return ""
 		}
-		if minutes, ok := usage.MinutesAtRate(100-pct, c.BurnPerMin); ok && time.Duration(minutes*float64(time.Minute)) <= horizon {
+		if at, ok := atRate(now, 100-pct, c.BurnPerMin); ok && runsOutBy(w.Window, at, now.Add(horizon)) {
 			return w.Name
 		}
 		return ""
@@ -135,21 +160,45 @@ func measuredExhaustion(c Candidate, model string, horizon time.Duration, t Thre
 }
 
 // runsOutWithin names the window this account is projected to run out of inside
-// the horizon, on either rate, or "" when it is not projected to run out. The
-// average is asked first because it reads every window; the measured rate reads
-// only the one it was taken on.
-func runsOutWithin(c Candidate, o Options, horizon time.Duration) usage.WindowName {
-	t := o.thresholdsFor(c)
-	if w := projectedExhaustion(c.Usage, o.Model, o.Now, horizon, t); w != "" {
+// the horizon on its OWN rates -- the window average and the burn last measured
+// on it -- or "" when it is not. The average is asked first because it reads
+// every window; the measured rate reads only the one it was taken on.
+func (o Options) runsOutWithin(c Candidate, horizon time.Duration) usage.WindowName {
+	ws := o.limitWindows(c.Usage, o.thresholdsFor(c))
+	if w := projectedExhaustion(ws, o.Now, horizon); w != "" {
 		return w
 	}
-	return measuredExhaustion(c, o.Model, horizon, t)
+	return measuredExhaustion(c, ws, o.Now, horizon)
 }
 
-// closingWindow is runsOutWithin over this account's OWN horizon: its blind
-// interval plus the lead. measure asks it of every account, so the rule that
-// leaves the live account and the walk that refuses a candidate read one
-// answer, computed once, on one threshold table.
+// closingWindow names the window this account is projected to run out of inside
+// its OWN horizon -- its blind interval plus the lead -- or "" when none is.
+// measure asks it once of every account, so the order, the pre-emptive walk and
+// the gate read one answer.
+//
+// WHOSE RATE is the whole question, and it is not the same for every account.
+//
+// The LIVE account is judged on its own rates, because its rate is the work's:
+// the window average and the burn last measured on it are what the session is
+// doing to it right now.
+//
+// Every OTHER account is asked the work's question instead: would the work
+// running now run it out inside its horizon (workBurn.runsOut). Its own rates
+// say nothing about that. Nobody is spending it, so its window average is a fact
+// about some earlier session, and the burn its reading still carries is the one
+// it had before the session left -- kept until its next poll, up to ten idle
+// minutes later. The rejected alternative is exactly that: judging an idle
+// account on its own average and stale burn. Over a twenty-minute horizon it
+// files idle accounts holding real room at a limit -- a five-hour account three
+// hours into its window at 90% reads as closing -- so the last-point hand-off
+// refused them and the order stopped returning to them, and a session at its
+// last point ran into the wall with an account holding ten points beside it.
+// TestALastPointHandsOffToAnAccountWhoseOwnRatesWouldHaveCondemnedIt.
+//
+// The configured strategies keep the rule they have always applied to a
+// candidate, its own rates AND the work's, because nothing they decide is meant
+// to move with hover's order; under them this field is read only as the
+// pre-emptive walk's refusal.
 //
 // A lead of zero switches pre-emption OFF, and that is an answer rather than an
 // omission: config supplies the default, so a zero here means a user set
@@ -162,7 +211,7 @@ func runsOutWithin(c Candidate, o Options, horizon time.Duration) usage.WindowNa
 // A reading with no provenance yields no horizon, and that is read as "cannot
 // say" rather than "will run out": refusing on it would narrow the rule for the
 // accounts it knows least about.
-func closingWindow(c Candidate, o Options) usage.WindowName {
+func (o Options) closingWindow(c Candidate, h Headroom) usage.WindowName {
 	if o.PreemptLead <= 0 {
 		return ""
 	}
@@ -170,7 +219,13 @@ func closingWindow(c Candidate, o Options) usage.WindowName {
 	if !ok {
 		return ""
 	}
-	return runsOutWithin(c, o, horizon)
+	live := isActive(c.UUID, o.live)
+	if live || o.hover == nil {
+		if w := o.runsOutWithin(c, horizon); w != "" || live {
+			return w
+		}
+	}
+	return o.workBurn.runsOut(c.Usage, h, o.Now, horizon)
 }
 
 // preemptTarget is where a pre-emptive move goes: the best-ranked account that
@@ -185,24 +240,24 @@ func closingWindow(c Candidate, o Options) usage.WindowName {
 // exists to move a session before its account hits a hard limit, could not fire
 // AT ALL while five accounts still held quota.
 //
-// Three tests replace it, each the narrowest statement of one thing that would
+// Two tests replace it, each the narrowest statement of one thing that would
 // waste the move:
 //
-//   - Not EMPTY. This is what positive slack was reaching for and is now sayable
-//     directly. It is strictly weaker: any account with positive slack sorts
-//     into the roomy tier ahead of every spent one, so wherever such a candidate
-//     exists this still reaches it first. The change only adds candidates where
-//     there were none.
-//   - Not itself about to run out: Ranked.Closing, which is the SAME question
-//     the live account was judged by, asked over the candidate's own blind
-//     interval on the same table. Moving from an account that exhausts in five
-//     minutes to one that exhausts in six trades one cut-off session for
-//     another and spends the cooldown doing it.
+//   - Not AT A LIMIT: Ranked.AtLimit, the one answer the order and the gate read
+//     too. It covers an empty account, which is what positive slack was reaching
+//     for; an account on its last point; and an account the work running now
+//     would run out inside its own horizon -- moving from an account that
+//     exhausts in five minutes to one that exhausts in six trades one cut-off
+//     session for another and spends the cooldown doing it.
 //   - Not one whose poller is throttled, PREFERABLY. A 429 on the usage endpoint
 //     says the reading cannot be refreshed, never that the account is spent, so
 //     it is a preference and not a filter: a throttled candidate is remembered
 //     and returned when nothing cleaner turns up. A filter would hand this rule
 //     a fresh way to fire never, which is the bug being fixed.
+//
+// An account nobody could read is skipped as well: nothing can be projected for
+// it, so this rule, which acts on a projection, has nothing to send a session
+// there on. The ordinary move still reaches one.
 //
 // It walks Result.Order and never Result.Credit, and that is how the credit gate
 // stays out of this: a pre-emptive move cannot reach a credit account at all, so
@@ -212,10 +267,6 @@ func closingWindow(c Candidate, o Options) usage.WindowName {
 func preemptTarget(byUUID map[string]Candidate, res Result, activeUUID string, o Options) (Ranked, bool) {
 	var throttled Ranked
 	hasThrottled := false
-	// The rate the work is running at, measured once for the walk. It is the
-	// pool's maximum because only one account is being spent at a time -- see
-	// SessionBurnPerMin.
-	burn := measuredSessionBurn(poolOf(byUUID))
 	for _, r := range res.Order {
 		// The live account, reached in ranking order, ENDS the walk rather than
 		// being skipped over.
@@ -240,19 +291,18 @@ func preemptTarget(byUUID map[string]Candidate, res Result, activeUUID string, o
 		// still true and the account will still run out; what is false is the
 		// premise that somewhere else is preferable.
 		//
-		// Under hover the premise holds because of the order and not in spite
-		// of it. A live five-hour account with room is FIRST in hover's order
-		// and would end this walk before it began; but the projection that
-		// brought the walk here is Ranked.Closing, and a closing account is on
-		// the limit rung. So the accounts ahead of it are exactly the ones not
-		// at a limit, and the walk needs no hover branch of its own.
+		// Under hover a closing live account sits on the limit rung, so a
+		// five-hour account with room no longer ends the walk before it begins.
+		// The accounts ahead of it are those on a better rung AND those on the
+		// same limit rung whose week resets sooner; the second kind is at a limit
+		// too, and the AtLimit refusal below is what turns it away -- without it
+		// a last-point Ultra ahead of a closing Max took the session, and the
+		// last-point rule handed it straight back.
+		// TestPreemptionDoesNotRunToAnAccountOnItsLastPoint.
 		if isActive(r.UUID, activeUUID) {
 			break
 		}
-		if !r.Headroom.Known {
-			continue
-		}
-		if empty, known := OutOfQuota(r.Headroom); known && empty {
+		if !r.Headroom.Known || r.AtLimit() != "" {
 			continue
 		}
 		c, ok := byUUID[r.UUID]
@@ -260,28 +310,6 @@ func preemptTarget(byUUID map[string]Candidate, res Result, activeUUID string, o
 			// Ranked with no candidate behind it. Nothing can be projected for
 			// it, so it is not somewhere this rule may send a session.
 			continue
-		}
-		if r.Closing != "" {
-			continue
-		}
-		// And the same question asked the other way round, because the one above
-		// cannot answer it. projectedExhaustion reads THIS candidate's own pace,
-		// and a candidate nobody is spending has none -- so an account a session
-		// would empty in nine minutes passes that test on every fleet there is.
-		//
-		// This asks how long the account would carry the work running NOW, at the
-		// rate that work was measured at, and refuses a target that cannot
-		// survive the same horizon the live account is being pre-empted over.
-		// Moving to an account that runs out inside the horizon spends a switch
-		// to arrange the identical outcome a few minutes later.
-		//
-		// With no measured rate it never fires, so a fleet ccdad has read only
-		// once behaves exactly as it did before the rate existed.
-		if horizon, ok := preemptHorizon(c, o.PreemptLead); ok {
-			perMin, applies := burn.onWindow(r.Headroom.MinAnyModelWindow)
-			if carries, known := CarriesFor(r.Headroom, perMin, applies, horizon); known && !carries {
-				continue
-			}
 		}
 		if recentlyRateLimited(c, o.Now) {
 			if !hasThrottled {
@@ -326,15 +354,4 @@ func preempt(byUUID map[string]Candidate, res Result, activeUUID string, o Optio
 		return Ranked{}, false
 	}
 	return preemptTarget(byUUID, res, activeUUID, o)
-}
-
-// poolOf is the candidate map as a slice, for the readers that measure across
-// the pool rather than looking one account up. Order is irrelevant to every one
-// of them -- SessionBurnPerMin takes a maximum -- so the map's own is fine.
-func poolOf(byUUID map[string]Candidate) []Candidate {
-	out := make([]Candidate, 0, len(byUUID))
-	for _, c := range byUUID {
-		out = append(out, c)
-	}
-	return out
 }

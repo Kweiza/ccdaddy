@@ -321,6 +321,49 @@ func bindingWindows(s *usage.Snapshot, model string, t Thresholds) []usage.Named
 	return out
 }
 
+// limitWindows is the set of windows a LIMIT is judged on in this pass: the ones
+// a projection may find closing.
+//
+// Under hover it is the part of bindingWindows no model choice can dodge. A
+// blown cap on one model family stops that family and not the session, which is
+// OutOfQuota's rule and the one the last point already follows through RoomOf;
+// a projection that read the cap anyway filed an account whose Fable week was
+// gone at a limit -- a week-long departure mark, and a fleet whose Fable weeks
+// were all gone sorted on when they came back instead of on hover's order.
+// TestAModelScopedCapIsNotALimitUnderHover.
+//
+// The configured strategies keep the whole binding set, as they always have:
+// pre-emption there is the user's tool for every window the ranking measures.
+func (o Options) limitWindows(s *usage.Snapshot, t Thresholds) []usage.NamedWindow {
+	ws := bindingWindows(s, o.Model, t)
+	if o.hover == nil {
+		return ws
+	}
+	return nonDodgeable(ws)
+}
+
+// nonDodgeable is ws less every window that caps one model family -- unless
+// none of what is left could be read, in which case it is ws whole. That
+// fallback is RoomOf's and OutOfQuota's: an account whose only readable window is
+// model-scoped has nothing else to be judged on.
+func nonDodgeable(ws []usage.NamedWindow) []usage.NamedWindow {
+	out := make([]usage.NamedWindow, 0, len(ws))
+	readable := false
+	for _, w := range ws {
+		if capsOneModelFamily(w.Name) {
+			continue
+		}
+		out = append(out, w)
+		if _, ok := w.Percent(); ok {
+			readable = true
+		}
+	}
+	if !readable {
+		return ws
+	}
+	return out
+}
+
 // HeadroomOf finds the binding window for a session that has not named a model,
 // which is every caller that is reporting rather than choosing.
 func HeadroomOf(s *usage.Snapshot, t Thresholds) Headroom {
@@ -702,6 +745,22 @@ const handoffRoomPct = 1.0
 //
 // The room is RoomOf's, so an account whose only readable window is
 // model-scoped is judged on that one rather than on a figure nobody wrote.
+//
+// It is AT the line, `<=`, where Options.pastItsLine is PAST it, `<`: an account
+// on its last point is handed off, and only an account past it counts towards
+// recovery mode -- the same strictness Spent has. The pair is deliberate.
 func lastPoint(h Headroom) bool {
-	return h.Known && RoomOf(h) <= handoffRoomPct
+	return h.Known && RoomOf(h) <= handoffRoom(h)
+}
+
+// handoffRoom is the room hover's line leaves on this account's binding meter:
+// one point of a plan window, which every window under hover is held to
+// (HoverHandoffThreshold), and on a primary credit seat what HoverCreditThreshold
+// leaves of its balance. It is read off the threshold the headroom was measured
+// against rather than chosen by kind, so the seat is handed off at its own line
+// through the one predicate every other account goes through: credits do not
+// come back, and their last few points are the only warning the seat gives.
+// TestAPrimaryCreditSeatIsAtALimitAtHoversCreditThreshold.
+func handoffRoom(h Headroom) float64 {
+	return 100 - h.Threshold
 }

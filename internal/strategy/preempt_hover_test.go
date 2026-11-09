@@ -44,13 +44,11 @@ func TestPreemptionFiresWhenTheLiveAccountIsClosingAndAnotherHasRoom(t *testing.
 	pool := hoverBurnPool()
 	o := hoverPreemptOpts()
 
-	res := Rank(pool, o)
-	if live, _ := find(res, "a-live"); live.Closing != usage.WindowFiveHour || live.Rung() != RungAtLimit {
+	p := Decide(pool, o, Config{}, NewState(), "a-live")
+	if live, _ := find(p.Result, "a-live"); live.Closing != usage.WindowFiveHour || live.Rung() != RungAtLimit {
 		t.Fatalf("a-live is closing on %q at rung %d; the fixture no longer projects the live account out",
 			live.Closing, live.Rung())
 	}
-
-	p := Decide(pool, o, Config{}, NewState(), "a-live")
 	want(t, p, ActionSwitch, ReasonProjectedExhaustion, "b-room")
 	if p.Departure != (Departure{From: "a-live", Closing: usage.WindowFiveHour}) {
 		t.Errorf("Departure = %+v, want a-live left on its five-hour window", p.Departure)
@@ -69,15 +67,24 @@ func TestPreemptionWillNotRunToAnEmptyAccount(t *testing.T) {
 	}
 }
 
-func TestPreemptionWillNotRunToAnAccountAboutToRunOutItself(t *testing.T) {
-	// b burns harder than a: 95% three hours into the same five-hour window.
-	pool := []Candidate{
-		polled(burning("a-live", 88), 1800*time.Second),
-		polled(burning("b-worse", 95), 1800*time.Second),
-	}
+// A candidate the work running now would run out inside its own horizon is no
+// place to pre-empt to: the session is cut off there instead, a switch later.
+// The question is asked at the WORK's rate -- the live account's measured burn --
+// because the candidate's own reading says nothing about what the session would
+// do to it.
+func TestPreemptionWillNotRunToAnAccountTheWorkWouldRunOut(t *testing.T) {
+	live := polled(burning("a-live", 88), 1800*time.Second)
+	live.BurnPerMin, live.HasBurn, live.BurnWindow = 0.5, true, usage.WindowFiveHour
+	// Five points of the same window: ten minutes at the work's rate, against a
+	// horizon of half an hour and more.
+	pool := []Candidate{live, polled(burning("b-worse", 95), 1800*time.Second)}
+
 	p := Decide(pool, hoverPreemptOpts(), Config{}, NewState(), "a-live")
-	if p.Action == ActionSwitch && p.Target.UUID == "b-worse" {
-		t.Fatal("pre-empted onto an account projected to run out inside the same horizon")
+	if r, _ := find(p.Result, "b-worse"); r.Closing != usage.WindowFiveHour {
+		t.Fatalf("b-worse closing on %q; the work's rate should run it out inside its horizon", r.Closing)
+	}
+	if p.Action == ActionSwitch {
+		t.Fatalf("pre-empted onto %s, which the work would run out inside the same horizon", p.Target.UUID)
 	}
 }
 
