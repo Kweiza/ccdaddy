@@ -540,7 +540,9 @@ something:
   At 5.4 points a minute a reading three minutes apart rarely lands on the one
   point a last point is, so a running hand-off onto the seat usually stops the
   session at the free account's limit until the next reading: 0 to 180
-  seconds, about 90 on average, by calculation rather than measurement.
+  seconds, about 90 on average, by calculation rather than measurement, and
+  longer while the usage endpoint throttles the poll, 360 to 1800 seconds
+  after a 429.
 
 In a simulated week, with whole-percent readings and the daemon's warm-ups, a
 session stopped while another account had room in eleven of 28 fleet-and-load

@@ -835,13 +835,28 @@ func (p *Plan) creditOpen() bool {
 }
 
 // creditWaitsOn is whether the credit pool waits on live's own reading alone:
-// everything else creditOpen asks of the pass holds, and live does not read
-// empty yet.
+// everything else creditOpen asks of the pass holds, live does not read empty
+// yet, and the walk would have a seat to take once it does. With no seat the
+// gate arms -- max_auto_spend at its default of 0, overage off, every seat
+// refused or at its own limit -- there is no move to wait for, and the hold is
+// the one any dry fleet gets. TestACreditWaitNeedsASeatTheGateArms.
 func (p *Plan) creditWaitsOn(live Ranked) bool {
 	if _, empty := live.Empty(); empty {
 		return false
 	}
-	return p.creditGateOpen() && p.mainPoolEmptyBut(live.UUID)
+	return p.creditGateOpen() && p.seatArmed() && p.mainPoolEmptyBut(live.UUID)
+}
+
+// seatArmed is whether the credit gate arms some seat the walk would take: one
+// with armed room under the same ceiling the walk asks the gate with
+// (Ranked.HasCreditRoom), and not at its own limit.
+func (p *Plan) seatArmed() bool {
+	for _, r := range p.Result.Credit {
+		if r.HasCreditRoom && r.AtLimit() == "" {
+			return true
+		}
+	}
+	return false
 }
 
 // creditGateOpen is the half of creditOpen that reads no level: the user's

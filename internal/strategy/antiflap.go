@@ -233,11 +233,13 @@ const (
 	// the order prefers would not carry the work running now -- it would be at
 	// a limit at its first live reading -- so the session stays.
 	ReasonCannotCarry
-	// ReasonWaitsForAReading: under hover, the live account is projected at a
-	// limit and every move left costs money -- the credit pool, or a primary
-	// seat dearer than the account the session is on -- and money is decided
-	// on readings: the session stays until one shows the live account at its
-	// last point or empty. Plan.RetryAt carries that reading. Appended last.
+	// ReasonWaitsForAReading: under hover, the live account is at a limit --
+	// projected there, or for the credit pool on its last point by level --
+	// and every move left costs money: the credit pool, with a seat the gate
+	// arms, or a primary seat dearer than the account the session is on. Money
+	// is decided on readings, so the session stays until one shows the live
+	// account at its last point or empty, as each move needs. Plan.RetryAt
+	// carries that reading. Appended last.
 	ReasonWaitsForAReading
 )
 
@@ -572,11 +574,14 @@ func Decide(cands []Candidate, o Options, cfg Config, st *State, activeUUID stri
 func (p *Plan) creditWalk(byUUID map[string]Candidate, activeUUID string, cfg Config, st *State, now time.Time) {
 	var firstRefusal Decision
 	for _, r := range p.Result.Credit {
-		live := isActive(r.UUID, activeUUID)
-		if live && r.AtLimit() != "" {
-			// A live seat at its own limit walks on to the next one.
+		if r.AtLimit() != "" {
+			// A seat at its own limit is nowhere to go, the live one or
+			// another: the gate reads only the credit balance, and passing a
+			// spent seat traded the session onto it and off again every
+			// cooldown until its window rolled. TestTheCreditWalkSkipsASpentSeat.
 			continue
 		}
+		live := isActive(r.UUID, activeUUID)
 		c := byUUID[r.UUID]
 		d := CreditGate(extraUsageOf(c), cfg.MaxAutoSpend, true)
 		if !d.Allow {
@@ -605,9 +610,29 @@ func (p *Plan) creditWalk(byUUID map[string]Candidate, activeUUID string, cfg Co
 		p.moveOrHold(r, ReasonBetterTarget, activeUUID, cfg, st, now)
 		return
 	}
+	if !p.CreditConsulted {
+		p.everySeatAtItsLimit(activeUUID)
+		return
+	}
 	p.Action = ActionBlocked
 	p.Reason = ReasonCreditGate
 	p.Credit = firstRefusal
+}
+
+// everySeatAtItsLimit is the walk's answer when every seat was at its own
+// limit and no gate was asked, so the sentence is not the gate's. A live seat
+// on its last point still serves the session, which stays on it; otherwise
+// nothing can serve it until a window comes back -- the soonest the pass and
+// its seats name, since with no main pool the pass alone names none.
+// TestTheCreditWalkSkipsASpentSeat.
+func (p *Plan) everySeatAtItsLimit(activeUUID string) {
+	if live, ok := find(p.Result, activeUUID); ok && p.isCredit(activeUUID) {
+		if _, empty := live.Empty(); !empty {
+			p.hold(ReasonAlreadyBest, time.Time{})
+			return
+		}
+	}
+	p.hold(ReasonNothingCanServe, soonestRecoveryIn(append(append([]Ranked(nil), p.Result.Order...), p.Result.Credit...)))
 }
 
 // switchTo fills a plan that moves the login, with the reason this decision
@@ -867,8 +892,14 @@ func leaveReason(active, target Ranked) Reason {
 // where none did leaves the zero time: a refusal with no knowable end says so
 // rather than inventing one.
 func soonestRollover(res Result) time.Time {
+	return soonestRecoveryIn(res.Order)
+}
+
+// soonestRecoveryIn is the first instant any of rs comes back, or the zero
+// time when none names one.
+func soonestRecoveryIn(rs []Ranked) time.Time {
 	var out time.Time
-	for _, r := range res.Order {
+	for _, r := range rs {
 		if !r.HasRecovery {
 			continue
 		}

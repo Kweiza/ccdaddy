@@ -554,7 +554,7 @@ func TestActionsAndReasonsAllHaveNames(t *testing.T) {
 	if got := Action(200).String(); got != "unknown" {
 		t.Errorf("Action(200) = %q, want unknown", got)
 	}
-	for r := ReasonBetterTarget; r <= ReasonStayUntilLimit; r++ {
+	for r := ReasonBetterTarget; r <= ReasonWaitsForAReading; r++ {
 		if r.String() == "unknown" {
 			t.Errorf("Reason(%d) has no name", r)
 		}

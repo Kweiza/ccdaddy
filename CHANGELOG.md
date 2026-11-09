@@ -162,7 +162,8 @@ quota, which can now expire unspent.
     one point a last point is, so a running hand-off onto the seat usually
     stops the session at the free account's limit until the next reading: 0
     to 180 seconds, about 90 on average, by calculation rather than
-    measurement.
+    measurement, and longer while the usage endpoint throttles the poll, 360
+    to 1800 seconds after a 429.
 
   The figures above belong to the simulated fleets and loads; they are not a
   bound on what a real week can cost.
