@@ -329,6 +329,55 @@ func TestATickGoesFromReadingToSwap(t *testing.T) {
 	}
 }
 
+// The daemon's swap carries the plan's departure into the same write as the
+// cooldown: an account it left with nothing left on its five-hour window is
+// remembered, and hover's order holds it out until that window resets.
+func TestATickRemembersTheAccountItLeftAtALimit(t *testing.T) {
+	isolateEngine(t)
+	writeConfig(t, "hover = true\n")
+	seedAccount(t, "u-1", "org-1")
+	seedAccount(t, "u-2", "org-2")
+	liveAs(t, "u-1")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		used := 100.0
+		if auth := r.Header.Get("Authorization"); auth == "Bearer AT-u-2" {
+			used = 5
+		}
+		fmt.Fprintf(w, `{"five_hour":{"utilization":%v,"resets_at":null}}`, used)
+	}))
+	defer srv.Close()
+
+	client := usage.NewClient()
+	client.BaseURL = srv.URL
+	e := engineFor(t, tokensAreFine, client.FetchUsage)
+	tick(t, e)
+	tick(t, e)
+	if got := liveUUID(t); got != "u-2" {
+		t.Fatalf("live = %q, want u-2 — the account with room", got)
+	}
+
+	path, err := strategy.StatePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Departures map[string]struct {
+			Closing string `json:"closing"`
+		} `json:"departures"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("strategy.json does not parse: %v\n%s", err, raw)
+	}
+	if got := doc.Departures["u-1"].Closing; got != string(usage.WindowFiveHour) {
+		t.Errorf("u-1's mark = %q, want five_hour: the daemon left it with nothing on that window\n%s", got, raw)
+	}
+}
+
 func lastSwitchOnDisk(t *testing.T) (time.Time, string) {
 	t.Helper()
 	st, err := strategy.LoadState()
