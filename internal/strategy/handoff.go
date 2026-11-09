@@ -386,14 +386,20 @@ func (o Options) liveLimitOf(c Candidate, rw runway) liveLimit {
 }
 
 // clockTurns is every instant at which the clock alone can change what the
-// hand-off makes of this account's runway, with no reading landing and no
-// switch: each lead above, counted back from the runway's end. A live
-// account's next look can be overdue -- no poll is made sooner than ServeTTL
-// after the last -- and a target's prompt poll is now once its reading is that
-// old, so from then on each lead runs from the clock. Between two of these
-// instants a pass over
-// the same readings and the same state gives the same answer, which is what
-// lets the weekly simulation skip the seconds in between.
+// hand-off makes of the LIVE account's runway, with no reading landing and no
+// switch: each lead above, counted back from the runway's end. Its runway runs
+// from its reading, so the end is fixed between readings, and its next look can
+// be overdue -- no poll is made sooner than ServeTTL after the last -- so each
+// lead then runs from the clock.
+//
+// That is the contract, and it is the live account's alone. The runway of an
+// account the session is not on runs from now, so its end moves with the clock
+// and these instants never come; its verdicts can still change by the clock --
+// the carry test while its prompt poll is ahead of now, a bridge as the live
+// account nears its stop -- and clockTurns does not report them. The weekly
+// simulation, its one reader, asks every second while the live account is at a
+// limit, which is when a bridge or a last resort can matter, and its figures
+// were measured equal to asking every second throughout.
 func (r Ranked) clockTurns() []time.Time {
 	if !r.HasRunway || r.RunsOutAt.IsZero() {
 		return nil
@@ -409,11 +415,17 @@ func (r Ranked) clockTurns() []time.Time {
 // not be at a limit at its first live reading.
 //
 // After a move the engine first reads the account at its prompt poll
-// (pollpolicy.PromptPollAt, the instant the switch writes), and that reading's
-// next poll is at most one live cadence later, hoverBlind; at that reading the
-// account is closing if the work stops it within the reserve. So outlasting the
-// prompt poll, a live cadence and the reserve is exactly "the move is not
-// followed by a second move on the same rate" (TestACarrierIsNotClosingAtItsFirstLiveReading).
+// (pollpolicy.PromptPollAt, the instant the switch writes, shared among the
+// accounts of its identity), and that reading's next poll is at most one live
+// cadence later, hoverBlind; at that reading the account is closing if the work
+// stops it within the reserve. So outlasting the prompt poll, a live cadence
+// and the reserve is exactly "the move is not followed by a second move on the
+// same rate": TestACarrierIsNotClosingAtItsFirstLiveReading. On a shared
+// identity the live cadence is shared too, outside the danger band, and that
+// promise holds only for the first reading: the live account's own limit
+// (liveLimitOf) reads its real next poll, so the session is not stopped, but it
+// may be moved again sooner than a cadence of one would allow.
+//
 // An account with no runway is a carrier by its level, which is the cold start;
 // an empty one, or one on its last point, never is.
 func (o Options) carries(c Candidate, r Ranked, rw runway) bool {
@@ -481,7 +493,7 @@ func (p *Plan) hoverMove(activeUUID string, cfg Config, st *State, o Options, by
 		return
 	}
 	if live.limit >= liveStopping {
-		if target, ok := bridge(res, live); ok {
+		if target, ok := bridge(res, live, cfg.Cooldown); ok {
 			p.moveOrHold(target, leaveReason(live, target), activeUUID, cfg, st, o.Now)
 			return
 		}
@@ -615,10 +627,10 @@ func firstCarrier(res Result, activeUUID string, byUUID map[string]Candidate, no
 // every leg is at least two cooldowns and the endgame between two short-window
 // accounts is bounded. Only a known runway can be compared, so an account with
 // none is a carrier or nothing here.
-func bridge(res Result, live Ranked) (Ranked, bool) {
+func bridge(res Result, live Ranked, cooldown time.Duration) (Ranked, bool) {
 	var best Ranked
 	found := false
-	beyond := live.RunsOutAt.Add(HoverCooldown)
+	beyond := live.RunsOutAt.Add(cooldown)
 	for _, r := range res.Order {
 		if r.UUID == live.UUID || !r.roomyByLevel() || !r.HasRunway || r.RunsOutAt.IsZero() {
 			continue

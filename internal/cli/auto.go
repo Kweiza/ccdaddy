@@ -29,11 +29,12 @@ import (
 // closing and heldOut took their place.
 const autoSchemaVersion = 2
 
-// autoTickInterval is the continuous form's cadence, the tick loop's one
-// second. It matches the daemon deliberately: `auto` exists to be the daemon's
+// autoTickInterval is the continuous form's cadence: the engine's own τ
+// (strategy.EvaluationInterval), which the daemon's tick reads too. It matches
+// the daemon deliberately: `auto` exists to be the daemon's
 // engine with nothing detached, and an engine that evaluated on a different
 // rhythm would not be describing the thing it is standing in for.
-const autoTickInterval = time.Second
+const autoTickInterval = strategy.EvaluationInterval
 
 func newAutoCmd() *cobra.Command {
 	var once, asJSON bool

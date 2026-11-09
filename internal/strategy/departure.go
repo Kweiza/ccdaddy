@@ -10,18 +10,18 @@ import (
 // at a limit, and on which window.
 //
 // It cannot be read back off the readings, and that is the whole reason it is
-// state. An account left because its five-hour window was CLOSING -- projected
-// to run out before the next reading, at the rate the session was spending it --
-// is not empty when it is left. It may hold fifteen points. The moment the
-// session moves, the rate on it drops to zero, because the rate is a fact about
-// the session and not about the account, and the projection that condemned it
-// now says it will last. Read as it stands, it has room again; the order takes
-// the session back; the rate returns; the projection fires; and the two
-// alternate. That is the flap preemptTarget's own note measured at sixty-five
-// switches in fifty-four minutes. The quantity that would stop it -- the
-// session's burn in the left account's own window units -- is not observable
-// after the switch: the session is now spending some other window, and
-// sessionBurn refuses to convert a weekly rate into five-hour points.
+// state. An account left because its five-hour window was CLOSING -- the work
+// would run it out within the reserve after its next reading -- is not empty
+// when it is left. It may hold fifteen points, and the order files an account
+// the session is not on by its levels alone: read as it stands, it has room
+// again. The work's rate does travel with it across the switch, so the carry
+// test would refuse it while that rate is fresh (handoff.go) -- but the order's
+// preference for a five-hour account is a rung, and a rung the levels say is
+// roomy is where the order sends the session the moment the carry test says
+// yes: after a slower measurement, or a rate measured on another plan. The session goes back, the work resumes, the account closes
+// again, and the two alternate. That is the flap preemptTarget's own note
+// measured at sixty-five switches in fifty-four minutes. The mark is what says
+// the account was LEFT at a limit on this window, which no level shows.
 //
 // So the left account is remembered, and held out until the window that had it
 // at a limit has rolled over. It is NOT a latch, in the sense antiflap.go
