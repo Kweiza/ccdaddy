@@ -285,6 +285,16 @@ func bindingWindows(s *usage.Snapshot, model string, t Thresholds) []usage.Named
 	return ws
 }
 
+// hasWindow is whether ws holds the window named n.
+func hasWindow(ws []usage.NamedWindow, n usage.WindowName) bool {
+	for _, w := range ws {
+		if w.Name == n {
+			return true
+		}
+	}
+	return false
+}
+
 // admittedWindows is every window one pass may read on an account: the --model
 // narrowing rule (README, "ccdad switch") and the opt-in for scopes this build
 // cannot name. It is the set bindingWindows narrows, and the one the questions
@@ -328,17 +338,18 @@ func admittedWindows(s *usage.Snapshot, model string, t Thresholds) []usage.Name
 	if model != "" {
 		want, narrow = ModelFamily(model)
 	}
+	// The list RateLimitWindows builds afresh is narrowed in place and extended,
+	// rather than copied into a second one: every pass walks this several times
+	// an account.
 	fixed := s.RateLimitWindows()
-	scoped := s.ScopedWindows()
-	unknown := s.UnknownScopeWindows()
-	out := make([]usage.NamedWindow, 0, len(fixed)+len(scoped)+len(unknown))
+	out := fixed[:0]
 	for _, w := range fixed {
 		if fam, ok := FixedWindowFamily(w.Name); ok && narrow && fam != want {
 			continue
 		}
 		out = append(out, w)
 	}
-	for _, w := range scoped {
+	for _, w := range s.ScopedWindows() {
 		if w.Model != "" && narrow {
 			if fam, ok := ModelFamily(w.Model); ok && fam != want {
 				continue
@@ -346,7 +357,7 @@ func admittedWindows(s *usage.Snapshot, model string, t Thresholds) []usage.Name
 		}
 		out = append(out, w.NamedWindow)
 	}
-	for _, w := range unknown {
+	for _, w := range s.UnknownScopeWindows() {
 		// The map is read directly rather than through Thresholds.For, which
 		// answers the default for a window with no entry and so cannot tell an
 		// opted-in window from any other. The positivity test is the one For
@@ -369,20 +380,26 @@ func admittedWindows(s *usage.Snapshot, model string, t Thresholds) []usage.Name
 // ws whole. That
 // fallback is RoomOf's and OutOfQuota's: an account whose only readable window is
 // model-scoped has nothing else to be judged on.
+//
+// It narrows ws in place, which is bindingWindows' to give: the list is the one
+// admittedWindows has just built for it. So the fallback is decided before
+// anything is moved.
 func nonDodgeable(ws []usage.NamedWindow, model string) []usage.NamedWindow {
-	out := make([]usage.NamedWindow, 0, len(ws))
 	readable := false
 	for _, w := range ws {
-		if dodgeable(w.Name, model) {
-			continue
-		}
-		out = append(out, w)
-		if _, ok := w.Percent(); ok {
+		if _, ok := w.Percent(); ok && !dodgeable(w.Name, model) {
 			readable = true
+			break
 		}
 	}
 	if !readable {
 		return ws
+	}
+	out := ws[:0]
+	for _, w := range ws {
+		if !dodgeable(w.Name, model) {
+			out = append(out, w)
+		}
 	}
 	return out
 }

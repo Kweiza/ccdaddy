@@ -99,16 +99,6 @@ func HoverThresholds(cands []Candidate, o Options) HoverPlan {
 		byUUID:          map[string]Thresholds{},
 	}
 
-	pool := make([]Candidate, 0, len(cands))
-	for _, c := range cands {
-		// An account with no reading is not one the work can go to, and it is
-		// not evidence either: it is neither over nor under anything.
-		if !eligible(c) || c.Usage == nil {
-			continue
-		}
-		pool = append(pool, c)
-	}
-
 	// The CONFIGURED table decides what may bind, and hover decides what it is
 	// held to. The two are not the same question. A weekly cap filed under a
 	// scope key this build cannot name binds only where a threshold names it,
@@ -118,7 +108,12 @@ func HoverThresholds(cands []Candidate, o Options) HoverPlan {
 	// rather than its own.
 	configured := o.Thresholds()
 
-	for _, c := range pool {
+	for _, c := range cands {
+		// An account with no reading is not one the work can go to, and it is
+		// not evidence either: it is neither over nor under anything.
+		if !eligible(c) || c.Usage == nil {
+			continue
+		}
 		// A primary credit seat gets its table like every other account. A seat
 		// is filed KindCredit off Snapshot.HasSubscriptionWindows, which iterates
 		// RateLimitWindows -- the fixed five and the two codex keys, and nothing

@@ -738,32 +738,64 @@ func (s *Snapshot) UnnamableLimits() int {
 // is filed empty for that whole margin -- the one account with a fresh window,
 // passed over while the session waits, on a reset instant the reading itself
 // names. CinderCove is not touched: its resets_at is an expiry, not a rollover.
+//
+// The copy is made only for a reading that has something to roll (rolledBy),
+// which most readings at most instants do not: the engine asks this of every
+// account on every look.
 func (s *Snapshot) AsOf(now time.Time) *Snapshot {
-	if s == nil {
-		return nil
+	if !s.rolledBy(now) {
+		return s
 	}
 	c := *s
 	c.Limits = append([]Limit(nil), s.Limits...)
-	changed := false
-	for _, w := range []*Window{&c.FiveHour, &c.SevenDay, &c.SevenDayOAuthApps, &c.SevenDayOpus,
-		&c.SevenDaySonnet, &c.CodexPrimary, &c.CodexSecondary} {
-		if w.Present && rolledOver(w.reset, w.hasTime, now) {
+	for _, w := range c.recurringWindows() {
+		if w.resetBy(now) {
 			w.rolledAt = w.reset
 			w.pct, w.hasPct, w.reset, w.hasTime = 0, true, time.Time{}, false
-			changed = true
 		}
 	}
 	for i := range c.Limits {
-		if l := &c.Limits[i]; rolledOver(l.reset, l.hasTime, now) {
+		if l := &c.Limits[i]; l.resetBy(now) {
 			l.rolledAt = l.reset
 			l.pct, l.hasPct, l.reset, l.hasTime = 0, true, time.Time{}, false
-			changed = true
 		}
 	}
-	if !changed {
-		return s
-	}
 	return &c
+}
+
+// rolledBy is whether any window AsOf reads as rolled has reset by now.
+func (s *Snapshot) rolledBy(now time.Time) bool {
+	if s == nil {
+		return false
+	}
+	for _, w := range s.recurringWindows() {
+		if w.resetBy(now) {
+			return true
+		}
+	}
+	for i := range s.Limits {
+		if s.Limits[i].resetBy(now) {
+			return true
+		}
+	}
+	return false
+}
+
+// recurringWindows is every recurring window of the reading, by address, for
+// AsOf to roll in place.
+func (s *Snapshot) recurringWindows() []*Window {
+	return []*Window{&s.FiveHour, &s.SevenDay, &s.SevenDayOAuthApps, &s.SevenDayOpus,
+		&s.SevenDaySonnet, &s.CodexPrimary, &s.CodexSecondary}
+}
+
+// resetBy is whether this window names a reset and it has come by now.
+func (w *Window) resetBy(now time.Time) bool {
+	return w.Present && rolledOver(w.reset, w.hasTime, now)
+}
+
+// resetBy is whether this limit names a reset and it has come by now.
+func (l *Limit) resetBy(now time.Time) bool {
+	return rolledOver(l.reset, l.hasTime, now)
 }
 
 // rolledOver is whether a window that names its reset has reset by now.
