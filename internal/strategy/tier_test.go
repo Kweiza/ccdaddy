@@ -224,6 +224,41 @@ func TestEveryAccountPastItsLastPointIsRecoveryModeUnderHover(t *testing.T) {
 	}
 }
 
+// A cap on one model family is a limit the moment the evaluation names that
+// family: a session that will only run Opus cannot go on with another model, so
+// an account whose Opus week is gone has nothing to give it. With no model named
+// the same account holds most of a week for every other family, and the cap is
+// not a limit at all. The fixed seven_day_opus window and a scoped Fable cap are
+// the two shapes a family cap arrives in.
+func TestANamedModelsOwnCapIsALimitUnderHover(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		model string
+		capOn func(*usage.Snapshot)
+		cap   usage.WindowName
+	}{
+		{"seven_day_opus", "opus",
+			func(s *usage.Snapshot) { s.SevenDayOpus = win(100, 2*day) }, usage.WindowSevenDayOpus},
+		{"a scoped Fable week", "fable",
+			func(s *usage.Snapshot) { s.Limits = []usage.Limit{scoped("Fable", "", 100, 2*day)} },
+			"weekly_scoped:model:Fable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			acct := maxAcct("a-max", 10, 3*time.Hour, 40, 4*day)
+			tc.capOn(acct.Usage)
+
+			named := hoverOpts()
+			named.Model = tc.model
+			if r := Rank([]Candidate{acct}, named).Order[0]; r.AtLimit() != tc.cap || r.Rung() != RungEmpty {
+				t.Errorf("--model %s: at a limit on %q at rung %s, want empty on %s", tc.model, r.AtLimit(), r.Rung(), tc.cap)
+			}
+			if r := Rank([]Candidate{acct}, hoverOpts()).Order[0]; r.AtLimit() != "" || r.Rung() != RungShortWindow {
+				t.Errorf("no model: at a limit on %q at rung %s, want a short-window account with room", r.AtLimit(), r.Rung())
+			}
+		})
+	}
+}
+
 // A blown cap on one model family is not a limit, and that holds for the mode as
 // well as for the rung. A fleet whose Fable weeks are all gone, every account
 // holding half a week for every other model, is not a pool with nothing left:
