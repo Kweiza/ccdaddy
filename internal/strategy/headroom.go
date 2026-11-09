@@ -806,35 +806,45 @@ func (o Options) lastPointOf(h, plan Headroom) usage.WindowName {
 }
 
 // secondMeterEmptyOf is the window of a credit seat's second meter that has
-// nothing left, or "" -- the half of Ranked.Empty its Headroom cannot say. A
-// primary seat is ranked on its credit balance, and its second meter is its
-// plan's opted-in cap (planEmptyOf). A seat of the last-resort pool is ranked
-// on its plan windows, and its second meter is the credit balance: a seat whose
-// monthly limit is spent has nothing left to give, whatever its windows read.
-// Every other account has one meter, which Empty reads already.
-// TestAPoolSeatIsEmptyWhenItsBalanceIsSpent.
+// nothing left, under hover, or "" -- the half of Ranked.Empty its Headroom
+// cannot say. A primary seat is ranked on its credit balance, and its second
+// meter is its plan's opted-in cap, read off plan. A seat of the last-resort
+// pool is ranked on its plan windows, and its second meter is the credit
+// balance (creditSpent). Every other account has one meter, which Empty reads
+// already.
+//
+// Under hover only, as the plan cap is: the configured strategies read a credit
+// seat's emptiness as they always have, and the empty-live waiver in their
+// margins is not this rule's to move.
+// TestAPoolSeatIsEmptyWhenItsBalanceIsSpent,
+// TestTheConfiguredMarginsDoNotReadAPoolSeatsBalance.
 func (o Options) secondMeterEmptyOf(c Candidate, plan Headroom) usage.WindowName {
+	if o.hover == nil {
+		return ""
+	}
 	switch {
 	case primaryCredit(c):
-		return o.planEmptyOf(c, plan)
-	case c.Kind == identity.KindCredit:
-		if out, known := OutOfQuota(creditHeadroom(c, o)); known && out {
-			return CreditWindow
+		if out, known := OutOfQuota(plan); known && out {
+			return roomWindow(plan)
 		}
+	case c.Kind == identity.KindCredit && creditSpent(c, o):
+		return CreditWindow
 	}
 	return ""
 }
 
-// planEmptyOf is the plan window a primary credit seat has nothing left on,
-// under hover, or "" when it has none -- the plan meter's half of Ranked.Empty.
-func (o Options) planEmptyOf(c Candidate, plan Headroom) usage.WindowName {
-	if o.hover == nil || !primaryCredit(c) {
-		return ""
+// creditSpent is whether a credit seat has no credit left to spend, by its
+// own reading: the account refuses it (creditRefused -- out of credits, among
+// others, at whatever utilization), or its meter is at or past its monthly
+// limit. It is about the account's ability to serve, not ccdad's spend policy:
+// max_auto_spend has no part in it.
+// TestABlockedSeatIsEmptyAtAnyUtilization.
+func creditSpent(c Candidate, o Options) bool {
+	if creditRefused(extraUsageOf(c)) {
+		return true
 	}
-	if out, known := OutOfQuota(plan); known && out {
-		return roomWindow(plan)
-	}
-	return ""
+	out, known := OutOfQuota(creditHeadroom(c, o))
+	return known && out
 }
 
 // handoffRoom is the room hover's line leaves on this account's binding meter:

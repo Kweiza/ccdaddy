@@ -701,22 +701,89 @@ func spentPoolSeat(uuid string, used float64) Candidate {
 	}))
 }
 
-// A pool seat is empty when its credit balance is spent, as a primary seat is
-// when either of its meters is: one predicate, which every reader of
-// emptiness -- the rung, the walk, the last resort -- then agrees on. With
-// balance left, it is not.
+// emptyIn is whether uuid reads empty in res.
+func emptyIn(res Result, uuid string) bool {
+	r, _ := find(res, uuid)
+	_, empty := r.Empty()
+	return empty
+}
+
+// blockedPoolSeat is a pool seat metered in credits alone that the account
+// refuses to spend: out of credits at 77.85% of its monthly limit, the live
+// reading in usage's liveMaxUsageBlocked fixture.
+func blockedPoolSeat(uuid string) Candidate {
+	return creditWith(uuid, usage.ExtraUsageFor(usage.ExtraUsageInput{
+		State: usage.ExtraUsageBlocked, DisabledReason: "out_of_credits", Currency: "USD",
+		MonthlyLimit: pf(1000), UsedCredits: pf(778.5), Utilization: pf(77.85),
+	}))
+}
+
+// Under hover a pool seat is empty when its credit balance is spent, as a
+// primary seat is when either of its meters is: one predicate, which every
+// reader of emptiness -- the rung, the walk, the last resort -- then agrees on.
+// With balance left, it is not. The configured strategies read a credit seat's
+// emptiness as they always have.
 func TestAPoolSeatIsEmptyWhenItsBalanceIsSpent(t *testing.T) {
-	for _, hover := range []bool{false, true} {
-		o := opts()
-		o.Hover = hover
-		res := Rank([]Candidate{spentPoolSeat("c-spent", 100), spentPoolSeat("c-left", 50)}, o)
-		if r, _ := find(res, "c-spent"); func() bool { _, e := r.Empty(); return !e }() {
-			t.Errorf("hover %v: a pool seat with its limit spent is not empty", hover)
-		}
-		if r, _ := find(res, "c-left"); func() bool { _, e := r.Empty(); return e }() {
-			t.Errorf("hover %v: a pool seat with half its limit left is empty", hover)
-		}
+	pool := []Candidate{spentPoolSeat("c-spent", 100), spentPoolSeat("c-left", 50)}
+	res := Rank(pool, hoverOpts())
+	if !emptyIn(res, "c-spent") || emptyIn(res, "c-left") {
+		t.Errorf("under hover: spent seat empty %v, seat with half left empty %v; want true, false",
+			emptyIn(res, "c-spent"), emptyIn(res, "c-left"))
 	}
+	if res := Rank(pool, opts()); emptyIn(res, "c-spent") {
+		t.Error("outside hover, the spent balance made a pool seat empty")
+	}
+}
+
+// A seat the account refuses credit is empty under hover whatever its
+// utilization reads: out of credits at 77.85%. A seat with balance left is not
+// empty with max_auto_spend at its default of 0 -- that is ccdad's spend
+// policy, not the account's ability to serve.
+func TestABlockedSeatIsEmptyAtAnyUtilization(t *testing.T) {
+	p := Decide([]Candidate{blockedPoolSeat("c-out"), spentPoolSeat("c-left", 50)}, hoverOpts(), Config{}, NewState(), "c-left")
+	if !emptyIn(p.Result, "c-out") {
+		t.Error("a seat out of credits at 77.85% is not empty")
+	}
+	if emptyIn(p.Result, "c-left") {
+		t.Error("a seat with half its limit left is empty with max_auto_spend at 0")
+	}
+}
+
+// A live seat out of credits takes a held-out seat with room as its last
+// resort, whatever its own utilization reads. No main pool, the cooldown long
+// over: c1 was left closing on its week, which has not rolled, and has room and
+// armed balance; c2, live, is refused credit at 77.85% of its limit.
+func TestAnOutOfCreditsLiveSeatTakesAHeldOutSeat(t *testing.T) {
+	armed := usage.ExtraUsageFor(usage.ExtraUsageInput{
+		State: usage.ExtraUsageEnabled, Currency: "USD", MonthlyLimit: pf(100000), UsedCredits: pf(0), Utilization: pf(0),
+	})
+	c1 := credit("c1", &usage.Snapshot{SevenDay: win(60, 3*day), ExtraUsage: armed})
+	p := Decide([]Candidate{c1, blockedPoolSeat("c2")}, hoverOpts(), Config{MaxAutoSpend: 500}, leftAt("c1", usage.WindowSevenDay), "c2")
+	if r, _ := find(p.Result, "c1"); r.HeldOut == "" {
+		t.Fatalf("c1 is not held out: the case is not the one named")
+	}
+	want(t, p, ActionSwitch, ReasonBetterTarget, "c1")
+}
+
+// The configured strategies' margins do not read a pool seat's credit balance:
+// hover and pre-emption off, the cooldown over, a threshold of 80. The live
+// pool seat's opted-in model cap is at 20% -- sixty points of slack -- though
+// its credit is spent; the subscription account is at 40%, forty points. The
+// candidate is not ahead, and the session stays for the hysteresis margin, as
+// it always has: the empty-live waiver is not reached through the balance.
+func TestTheConfiguredMarginsDoNotReadAPoolSeatsBalance(t *testing.T) {
+	fable := usage.ScopedWindowName(usage.ScopeModel, "Fable")
+	seat := credit("c-live", &usage.Snapshot{
+		Limits: []usage.Limit{scoped("Fable", "", 20, 3*day)},
+		ExtraUsage: usage.ExtraUsageFor(usage.ExtraUsageInput{
+			State: usage.ExtraUsageEnabled, Currency: "USD", MonthlyLimit: pf(1000), UsedCredits: pf(1000), Utilization: pf(100),
+		}),
+	})
+	o := opts()
+	o.Threshold = 80
+	o.WindowThreshold = map[usage.WindowName]float64{fable: 80}
+	p := Decide([]Candidate{seat, maxAcct("s-sub", 40, 3*time.Hour, 40, 3*day)}, o, Config{HysteresisPct: 25}, NewState(), "c-live")
+	want(t, p, ActionStay, ReasonHysteresis, "")
 }
 
 // A live pool seat whose credit balance is spent has nothing left, and takes a
