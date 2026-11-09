@@ -371,8 +371,8 @@ func TestEveryHoverMoveIsToACarrierABridgeOrALastResort(t *testing.T) {
 		case live.AtLimit() == "":
 			t.Fatalf("pool %d: a live account with room moved to %s, which does not carry the work", i, tgt.UUID)
 		case live.limit >= liveStopping && tgt.HasRunway && tgt.roomyByLevel() && tgt.RunsOutAt.After(live.RunsOutAt.Add(HoverCooldown)):
-		case live.out(now):
-			if empty, known := OutOfQuota(tgt.Headroom); known && empty {
+		case live.out():
+			if _, empty := tgt.Empty(); empty {
 				t.Fatalf("pool %d: a last resort onto %s, which is empty", i, tgt.UUID)
 			}
 		default:

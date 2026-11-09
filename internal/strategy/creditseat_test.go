@@ -171,3 +171,21 @@ func TestAPrimaryCreditSeatAtItsPlanLastPointIsAtALimitOnThatCap(t *testing.T) {
 		t.Errorf("Departure = %+v, want a-seat left on %s", p.Departure, seatCap)
 	}
 }
+
+// A primary credit seat whose opted-in plan cap is empty is empty, whatever its
+// balance says: the cap stops it. The live Max is out, the seat has 90% of its
+// credits and nothing on the cap, and no live rate is measured yet, so only
+// the levels can judge it -- and the one predicate every decision reads files
+// it empty, so it is never the last resort the session is moved to.
+func TestAnEmptyOptedInCapIsEmptyWhateverTheBalance(t *testing.T) {
+	live := maxAcct("a-live", 100, 2*time.Hour, 60, 3*day)
+	seat := seatWithCap("b-seat", 10, 100, time.Hour)
+	p := Decide([]Candidate{live, seat}, seatOpts(), Config{}, NewState(), "a-live")
+	r, _ := find(p.Result, "b-seat")
+	if on, empty := r.Empty(); !empty || on != seatCap || r.Rung() != RungEmpty {
+		t.Errorf("the seat is empty %v on %q at rung %s, want empty on %s", empty, on, r.Rung(), seatCap)
+	}
+	if p.Action == ActionSwitch {
+		t.Errorf("switched to %s (%s): the seat's opted-in cap is empty", p.Target.UUID, p.Reason)
+	}
+}

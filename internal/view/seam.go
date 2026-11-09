@@ -178,7 +178,7 @@ func (s Snapshot) comesBack(r strategy.Ranked, _ Row) string {
 	if r.HasRecovery {
 		back = "back at " + s.clock(r.RecoversAt)
 	}
-	if empty, known := strategy.OutOfQuota(r.Headroom); known && empty {
+	if _, empty := r.Empty(); empty {
 		return fmt.Sprintf("nothing left on %s · %s", r.AtLimit(), back)
 	}
 	if r.ReturnsInsideHorizon {

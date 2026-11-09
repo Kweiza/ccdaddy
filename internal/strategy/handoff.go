@@ -389,7 +389,7 @@ func (o Options) carries(c Candidate, r Ranked, rw runway) bool {
 // roomyByLevel is whether an account has room by its levels alone: not empty,
 // and not on its last point.
 func (r Ranked) roomyByLevel() bool {
-	if empty, known := OutOfQuota(r.Headroom); known && empty {
+	if _, empty := r.Empty(); empty {
 		return false
 	}
 	return r.LastPoint == ""
@@ -445,7 +445,7 @@ func (p *Plan) hoverMove(activeUUID string, cfg Config, st *State, o Options, by
 			return
 		}
 	}
-	if live.out(o.Now) {
+	if live.out() {
 		if target, ok := lastResort(res, live, o.Now); ok {
 			p.moveOrHold(target, leaveReason(live, target), activeUUID, cfg, st, o.Now)
 			return
@@ -536,8 +536,8 @@ func (p *Plan) moveOrHold(target Ranked, reason Reason, activeUUID string, cfg C
 
 // out is whether the live account has nothing left that one more evaluation
 // would see: empty by level, or projected out before the engine looks again.
-func (r Ranked) out(now time.Time) bool {
-	if empty, known := OutOfQuota(r.Headroom); known && empty {
+func (r Ranked) out() bool {
+	if _, empty := r.Empty(); empty {
 		return true
 	}
 	return r.limit == liveOut
@@ -603,7 +603,7 @@ func lastResort(res Result, live Ranked, now time.Time) (Ranked, bool) {
 		if r.UUID == live.UUID {
 			continue
 		}
-		if empty, known := OutOfQuota(r.Headroom); known && empty {
+		if _, empty := r.Empty(); empty {
 			continue
 		}
 		if r.HasRunway && !r.RunsOutAt.IsZero() && !r.RunsOutAt.After(now.Add(outLead)) {

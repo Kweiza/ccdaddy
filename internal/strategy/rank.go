@@ -303,6 +303,10 @@ type Ranked struct {
 	// reason Closing and HeldOut are: the departure mark waits for THAT window
 	// to roll over.
 	LastPoint usage.WindowName
+	// planEmpty names the plan window a primary credit seat has nothing left
+	// on, under hover, when its Headroom is the credit meter and so cannot say
+	// so; see Empty.
+	planEmpty usage.WindowName
 	// ShortWindow names the window shorter than a week this account carries,
 	// or "" when it carries none: the tier hover orders on, read off the
 	// reading's presence rather than its utilization. See shortWindowOf.
@@ -672,6 +676,7 @@ func measure(c Candidate, o Options) Ranked {
 		// Under hover only. A threshold a user typed is where they said to stop,
 		// and it is not this rule's to move.
 		LastPoint:      o.lastPointOf(h, plan),
+		planEmpty:      o.planEmptyOf(c, plan),
 		ShortWindow:    shortWindowOf(c.Usage),
 		RecoversAt:     rec.at,
 		HasRecovery:    rec.ok,
@@ -786,7 +791,7 @@ func Rank(cands []Candidate, o Options) Result {
 // table from letting an empty account outrank a roomy one by a point of
 // arithmetic.
 func headroomTier(r Ranked) int {
-	if empty, known := OutOfQuota(r.Headroom); known && empty {
+	if _, empty := r.Empty(); empty {
 		return tierEmpty
 	}
 	over, known := Spent(r.Headroom)
@@ -818,7 +823,7 @@ const (
 // other way round. The only thing they must agree on is that an empty account
 // goes last.
 func emptyTier(r Ranked) int {
-	if empty, known := OutOfQuota(r.Headroom); known && empty {
+	if _, empty := r.Empty(); empty {
 		return 1
 	}
 	return 0
