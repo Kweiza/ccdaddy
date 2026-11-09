@@ -101,10 +101,13 @@ func (r workRate) replaces(cur workRate) bool {
 // one plan is not a point on another, and the wire carries no plan size. The
 // rejected alternative was to confirm the unit per capacity class, which would
 // read "cannot say" on almost every account for want of a size nobody reports.
-// The error is bounded instead: the prompt poll a switch schedules gives the new
-// live account a live pair of its own within the serve floor and one live
-// cadence (pollpolicy.ServeTTL + hoverBlind), after which its own rate stands,
-// and the last-point level hand-off catches whatever the projection misses.
+// The error is bounded instead, while the work runs: the prompt poll a switch
+// schedules gives the new live account a live pair of its own within the serve
+// floor and one live cadence (pollpolicy.ServeTTL + hoverBlind), and a running
+// pair replaces the rate from the other plan. A pause does not
+// (workRate.replaces), so across a pause the other plan's rate stands until the
+// work is seen running again; the last-point level hand-off catches whatever
+// the projection misses either way.
 type workRates map[time.Duration]workRate
 
 // workRatesOf is the table for one pass.
@@ -191,6 +194,40 @@ type work struct {
 	// account was last left at a limit, which says how long the work ran on it
 	// after its reading.
 	left departures
+	// running is whether the work was seen running (workSeenRunning), filled in
+	// by Rank beside the rates.
+	running bool
+}
+
+// workSeenRunning is whether the work was seen running: what the latest live
+// pair across every account the pass can see said. It is the work's and not
+// the live account's, as its rate is, because the work is what runs or pauses
+// -- an account's own record is only as fresh as its last stint, and a stint
+// too short for a pair would otherwise read the stint before, as one that
+// followed a pause read the running stint before that.
+// TestTheWorksRunningFlagIsTheLatestPairs.
+//
+// A residual, kept on purpose: the verdict has no age. When no account has
+// made a pair since -- an endgame of stints too short for one, each a hop
+// between last points -- the last pair's verdict stands, and a pause that
+// began after it is not seen: two accounts on their last points can still
+// trade the login across it. An age cap at the serve floor and a live cadence
+// (pollpolicy.ServeTTL + hoverBlind) was measured and not taken. On two Max
+// accounts under the pause load it cut the week's switches from 119 to 95 and
+// raised the seconds stopped with room on another account from 250 to 845; it
+// raised two Max under burst load from 958 to 967, two Max and three Ultras
+// under burst load from 142 to 168 and under production load from 346 to 347,
+// and lowered that fleet under heavy load from 239 to 143. A running endgame
+// makes no pairs either, so the cap closed the last resort on work that was
+// running, and a stop outranks a trade that costs no money (creditOpen).
+func (o Options) workSeenRunning(cands []Candidate) bool {
+	var latest Candidate
+	for _, c := range cands {
+		if c.LastPairAt.After(latest.LastPairAt) {
+			latest = c
+		}
+	}
+	return latest.WorkRunning && !latest.LastPairAt.IsZero()
 }
 
 // workOf is the work for a pass over cands, with the last switch from st when
@@ -414,16 +451,18 @@ const (
 // after its reading, and no poll is made sooner than ServeTTL, three minutes,
 // after the last, so the next reading can come later than this files it. An
 // account that will stop before that reading then reads as closing until it
-// reads as out: "stopping", and the bridge it opens, is skipped. That is the
-// two Max, three Ultras pause load's 5 s. Holding next to FetchedAt +
-// ServeTTL, as due() does, was measured over the simulated week and not
-// taken: stopped with room on another account went from 3562 s to 3739 s in
-// all. It lowered that pause load's 5 s to 2 (a different stop), two Max
-// under heavy load from 1641 to 1547 and under production load from 136 to
-// 104, and two Max, three Ultras under production load from 346 to 345; it
-// raised two Max under burst load from 958 to 1107, and two Max, three Ultras
-// under burst load from 142 to 250 and under heavy load from 239 to 289; and
-// the pause load switched 70 times where this switches 44.
+// reads as out: "stopping", and the bridge it opens, is skipped. That is why
+// the two Max, three Ultras pause load's five seconds -- a projection a step
+// late, as the weekly simulation's table files them -- were not bridged a
+// hundred seconds before. Holding next to FetchedAt + ServeTTL, as due()
+// does, was measured over the simulated week and not taken: stopped with room
+// on another account went from 3562 s to 3739 s in all. It lowered that pause
+// load's 5 s to 2 (a different stop), two Max under heavy load from 1641 to
+// 1547 and under production load from 136 to 104, and two Max, three Ultras
+// under production load from 346 to 345; it raised two Max under burst load
+// from 958 to 1107, and two Max, three Ultras under burst load from 142 to 250
+// and under heavy load from 239 to 289; and the pause load switched 70 times
+// where this switches 44.
 func (o Options) liveLimitOf(c Candidate, rw runway) liveLimit {
 	next := c.NextPollAt
 	if next.Before(o.Now) {
@@ -794,12 +833,17 @@ func bridge(res Result, live Ranked, cooldown time.Duration) (Ranked, bool) {
 // login between them: the live one projected out at the rate the work last ran,
 // any other account with work left was a last resort, and the one just left,
 // re-read idle, had its dregs back. The last resort now opens on a projection
-// only while the live account's latest pair saw the work running
-// (Ranked.lastResortOpen), so a pause no longer reaches here at all. What is left
-// of the trade is the bridge's: two accounts each holding more than a cooldown
-// of work and less than a carrier's can still trade the login across a pause,
-// each move a credential write, a prompt poll and a settings sync, and a
-// session that resumes right after one waits out the cooldown for the next.
+// only while the work was seen running (Ranked.lastResortOpen): the latest live
+// pair on any account saw it run. A pause the engine has read closes it. One it
+// has not read -- the work stopping just after a running pair, with every stint
+// since too short to make a pair -- leaves it open, and accounts on their last
+// points can still trade the login across it (workSeenRunning says why that is
+// kept). The bridge can trade it too: an account holding a cooldown's worth
+// more than the live one's remainder and less than a carrier's can take the
+// login across a pause and, its own projection run out in turn, hand it back.
+// Each move is a credential write, a prompt poll and a settings sync, a session
+// that resumes right after one waits out the cooldown for the next, and none of
+// them spends money (creditOpen).
 //
 // The rule that would stop the trade here even while the work is seen running
 // -- a last resort must outlast the live account, holding more of the work than

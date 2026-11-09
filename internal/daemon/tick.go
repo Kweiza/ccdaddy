@@ -530,6 +530,19 @@ func (e *Engine) Tick(ctx context.Context) error {
 	// live one, this tick rather than next.
 	active, activeKnown := activeAfter(ev, res)
 	e.setLive(active, activeKnown)
+	// A switch rescheduled the account it made live (switcher.SchedulePromptPoll,
+	// held to the identity's floor by pollpolicy.PromptPollAt), and the cache
+	// read above predates it: dispatching from that copy would take the old
+	// schedule this same tick, a stale danger-band one included, and spend the
+	// budget the prompt's floor exists to share. The dispatch reads what the
+	// switch wrote. TestASwitchsPromptHoldsInTheTickThatMadeIt.
+	if res.Outcome == switcher.Switched {
+		if fresh, err := usage.LoadCache(); err == nil {
+			cache = fresh
+		} else {
+			e.logf("re-reading the usage cache after the switch failed, so this tick polls from the copy read before it: %v", err)
+		}
+	}
 	quarantined := quarantinedSet(ev)
 	// The same table `ev` was just ranked against, not a second one rebuilt from
 	// cfg. Under hover the two disagree on purpose -- hover holds every window
@@ -1334,6 +1347,19 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now, sent time.Ti
 	// status below are measured against the same per-account table the ranking
 	// just used, not the raw config bundle hover otherwise ignores.
 	thr := thresholds(a.UUID)
+	// The last switch onto this account as the engine state records it, the
+	// other half of where a live stint begins. A switch writes the state first
+	// and the cache's record second (switcher.Execute), so a crash or a failed
+	// write between the two leaves only this one saying the account was away;
+	// without it the pair the next reading makes would span the absence, and
+	// be stored. An unreadable state says nothing, and the cache's record
+	// stands alone. TestAPairAcrossAnAbsenceOnlyTheStateRecordsIsNotStored.
+	var stateSwitchOnto time.Time
+	if st, err := strategy.LoadState(); err == nil {
+		if at, to := st.LastSwitch(); to == a.UUID {
+			stateSwitchOnto = at
+		}
+	}
 	err := usage.WithCache(cacheTimeout, func(c *usage.Cache) error {
 		entry, had := c.Get(a.UUID)
 		state := pollStateOf(entry)
@@ -1363,17 +1389,21 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now, sent time.Ti
 		// The work's rate on every window, when this reading and the one it
 		// replaces were both taken live; see usage.LivePairs. Taken before the
 		// reading is overwritten, for the reason the burn below is. Beside it,
-		// whether the latest such pair saw the work running, which a reading
-		// that makes no pair leaves as it was.
+		// whether the latest such pair saw the work running and when, which a
+		// reading that makes no pair leaves as it was.
 		// TestTheCommitRecordsWhetherTheLatestLivePairRan.
 		liveBurns, anchorLive := entry.Poll.LiveBurns, entry.Poll.AnchorLive
-		pairRunning := entry.Poll.LastPairRunning
+		pairRunning, pairAt := entry.Poll.LastPairRunning, entry.Poll.LastPairAt
+		stintSince := liveSince
+		if stateSwitchOnto.After(stintSince) {
+			stintSince = stateSwitchOnto
+		}
 		if snap != nil {
 			fresh := usage.LivePairs(entry.Snapshot, entry.FetchedAt,
-				usage.LiveAnchor(entry.Poll.AnchorLive, entry.FetchedAt, liveSince), snap, now, active)
+				usage.LiveAnchor(entry.Poll.AnchorLive, entry.FetchedAt, stintSince), snap, now, active)
 			liveBurns, anchorLive = usage.MergeLiveBurns(liveBurns, fresh), active
 			if len(fresh) > 0 {
-				pairRunning = usage.AnyRunning(fresh)
+				pairRunning, pairAt = usage.AnyRunning(fresh), now
 			}
 		}
 
@@ -1491,7 +1521,7 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now, sent time.Ti
 		entry.Poll.LastBindingWindow = lastWindow
 		entry.Poll.BurnPerMin, entry.Poll.HasBurn, entry.Poll.BurnWindow = burn, hasBurn, burnWindow
 		entry.Poll.AnchorLive, entry.Poll.LiveBurns = anchorLive, liveBurns
-		entry.Poll.LastPairRunning = pairRunning
+		entry.Poll.LastPairRunning, entry.Poll.LastPairAt = pairRunning, pairAt
 		entry.Poll.LiveSince = liveSince
 		// entry.StandDownUntil is read and written back untouched, and that is
 		// what makes the two writers safe: this account's poll never edits the
