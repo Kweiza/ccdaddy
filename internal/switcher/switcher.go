@@ -9,9 +9,11 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/credhome"
 	"github.com/Kweiza/ccdaddy/internal/identity"
+	"github.com/Kweiza/ccdaddy/internal/pollpolicy"
 	"github.com/Kweiza/ccdaddy/internal/provider"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
+	"github.com/Kweiza/ccdaddy/internal/usage"
 )
 
 // stateTimeout bounds the wait for the engine state lock. The only writers are
@@ -274,6 +276,10 @@ type Result struct {
 	// Execute's error would report a completed swap as a failure.
 	CooldownErr error
 	KeyErr      error
+	// PromptPollErr is a failure to bring the new live account's next poll
+	// forward (SchedulePromptPoll). The account is then read on the schedule
+	// it already had, which is how every switch behaved before this existed.
+	PromptPollErr error
 	// ProfileSyncErr is a failure to keep ~/.claude.json's oauthAccount
 	// pointed at Target -- see SyncGlobalConfigIdentity. Left nil (and
 	// SyncGlobalConfigIdentity never called) when EnvTokenWins: something
@@ -496,6 +502,7 @@ func Execute(s *store.Store, req Request) (Result, error) {
 		return res, err
 	}
 	res.CooldownErr = RecordSwitch(req.Target.UUID, req.Departure)
+	res.PromptPollErr = SchedulePromptPoll(req.Target.UUID, time.Now())
 	res.ClearedKeyOwner, res.ClearedKey, res.KeyErr = releaseManagedAPIKey(s)
 	if !res.EnvTokenWins {
 		res.ProfileSyncErr = SyncGlobalConfigIdentity(s, req.Target, res.Live, res.LiveKnown)
@@ -574,6 +581,30 @@ func SyncGlobalConfigIdentity(s *store.Store, target, previousLive store.Account
 		return nil
 	}
 	return s.SetOAuthAccountSnapshot(previousLive.UUID, captured)
+}
+
+// SchedulePromptPoll brings the next poll of the account a switch just made live
+// forward to pollpolicy.PromptPollAt, so the work's first reading on it does not
+// wait out the idle cadence it was being read on.
+//
+// It writes NextPollAt once, here, and the account's own next commit overwrites
+// it with the live cadence, whether that poll succeeds or fails -- so a poll
+// that keeps failing backs off as it always has rather than retrying at the
+// tick rate. An account with no reading yet is due already and is left alone.
+func SchedulePromptPoll(uuid string, now time.Time) error {
+	err := usage.WithCache(stateTimeout, func(c *usage.Cache) error {
+		e, ok := c.Get(uuid)
+		if !ok {
+			return nil
+		}
+		e.NextPollAt = pollpolicy.PromptPollAt(e.FetchedAt, e.NextPollAt, e.Poll.LastRateLimited, now)
+		c.Put(uuid, e)
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("the new live account's next poll could not be brought forward: %w", err)
+	}
+	return nil
 }
 
 // RecordSwitch stamps the anti-flap cooldown after a swap has succeeded.

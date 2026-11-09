@@ -818,3 +818,34 @@ func TestWarmClampKeepsTheTargetPollReachable(t *testing.T) {
 		})
 	}
 }
+
+// The look after a move: as soon as the serve floor allows, never later than the
+// look already scheduled, and never inside a 429's floor.
+func TestPromptPollAtIsTheServeFloorAndNeverLater(t *testing.T) {
+	now := epoch
+	for _, tc := range []struct {
+		name                   string
+		fetched, next, limited time.Time
+		want                   time.Time
+	}{
+		{"an old reading is read now",
+			now.Add(-10 * time.Minute), now.Add(5 * time.Minute), time.Time{}, now},
+		{"a reading 100 s old waits out the serve floor",
+			now.Add(-100 * time.Second), now.Add(8 * time.Minute), time.Time{}, now.Add(-100 * time.Second).Add(ServeTTL)},
+		{"never later than the look already scheduled",
+			now.Add(-100 * time.Second), now.Add(30 * time.Second), time.Time{}, now.Add(30 * time.Second)},
+		{"a look already due is now",
+			now.Add(-10 * time.Minute), now.Add(-time.Minute), time.Time{}, now},
+		{"a 429's floor stands",
+			now.Add(-10 * time.Minute), now.Add(20 * time.Minute), now.Add(-time.Minute), now.Add(20 * time.Minute)},
+		{"a 429 long past is no floor",
+			now.Add(-10 * time.Minute), now.Add(20 * time.Minute), now.Add(-2 * Recent429Window), now},
+		{"no schedule and no reading is now", time.Time{}, time.Time{}, time.Time{}, now},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := PromptPollAt(tc.fetched, tc.next, tc.limited, now); !got.Equal(tc.want) {
+				t.Errorf("PromptPollAt = %s, want %s", got.Sub(now), tc.want.Sub(now))
+			}
+		})
+	}
+}
