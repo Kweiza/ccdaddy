@@ -241,7 +241,8 @@ const (
 	// readings; or it is onto another account's last point, which is taken
 	// only once the live account reads empty (lastResort). The session stays
 	// until a reading shows the live account at its last point or empty, as
-	// the move needs. Plan.RetryAt carries that reading. Appended last.
+	// the move needs. Plan.RetryAt carries that reading, or a rollover that
+	// comes before it. Appended last.
 	ReasonWaitsForAReading
 )
 
@@ -702,7 +703,10 @@ func (p *Plan) MoveTo(target Ranked, activeUUID string) {
 // preferred the one it is on. ReasonNothingCanServe is not that. It is "wanted
 // to move and there was nowhere", which is the sentence ActionBlocked exists for
 // and the one `ccdad auto --once` exits 4 on -- the exit a user alerts on,
-// because their session is the thing about to stop.
+// because their session is the thing about to stop. ReasonWaitsForAReading is
+// a stay, though the session may be stopping: the engine has a move and is
+// waiting for the live account's next reading to make it, by its own rule, so
+// there is nothing for the user to do but let that reading land.
 func (p *Plan) hold(reason Reason, retry time.Time) {
 	p.Action = ActionStay
 	if reason == ReasonNothingCanServe {

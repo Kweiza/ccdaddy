@@ -524,6 +524,48 @@ func TestAProjectionDoesNotMoveOntoAPrimarySeat(t *testing.T) {
 	want(t, p, ActionSwitch, ReasonBetterTarget, "s-max")
 }
 
+// The same wait when the dearer seat cannot carry the work. The live Max reads
+// 96%, room by its level, and the work running has it out; the primary seat P
+// is on its last point, at 96% of its balance, so it carries nothing and
+// bridges nothing. A move onto P's balance opens once a reading shows the Max
+// at its limit (reachable), and onto P's last point once one shows it empty
+// (lastResort): the hold is a wait for the Max's next reading, not "nothing
+// can serve" until a rollover. Read empty, the session goes to P.
+func TestADearerSeatThatCannotCarryWaitsForTheLiveReading(t *testing.T) {
+	seat := primarySeat("p-seat", 96)
+	live := pausedMax("a-live", 96, true)
+	p := Decide([]Candidate{live, seat}, hoverOpts(), Config{}, NewState(), "a-live")
+	l, _ := find(p.Result, "a-live")
+	s, _ := find(p.Result, "p-seat")
+	if l.limit != liveOut || !l.roomyByLevel() || s.Carries || s.LastPoint == "" {
+		t.Fatalf("live at limit %d, roomy by level %v; seat carries %v, on last point %q: the case is a roomy live account projected out and a seat that cannot carry",
+			l.limit, l.roomyByLevel(), s.Carries, s.LastPoint)
+	}
+	want(t, p, ActionStay, ReasonWaitsForAReading, "")
+	if next := nextReading(live, now); !p.HasRetryAt || !p.RetryAt.Equal(next) {
+		t.Errorf("RetryAt %s (set %v), want the live account's next reading at %s", p.RetryAt.Sub(now), p.HasRetryAt, next.Sub(now))
+	}
+
+	p = Decide([]Candidate{pausedMax("a-live", 100, true), seat}, hoverOpts(), Config{}, NewState(), "a-live")
+	want(t, p, ActionSwitch, ReasonBetterTarget, "p-seat")
+}
+
+// A reading wait retries at the live account's next reading, or at a rollover
+// that comes before it. The live Max's poll is held off by a 429 for half an
+// hour; the other account, on its last point, has its five-hour window back in
+// ten minutes, and that is when the hold can next change.
+func TestAReadingWaitRetriesAtARolloverThatComesFirst(t *testing.T) {
+	live := pausedMax("a-live", 99, true)
+	live.NextPollAt, live.LastRateLimited = now.Add(30*time.Minute), now.Add(-time.Minute)
+	other := idleOn(maxAcct("b-last", 99, 10*time.Minute, 60, 3*day))
+	p := Decide([]Candidate{live, other}, hoverOpts(), Config{}, NewState(), "a-live")
+	want(t, p, ActionStay, ReasonWaitsForAReading, "")
+	if !p.HasRetryAt || !p.RetryAt.Equal(now.Add(10*time.Minute)) {
+		t.Errorf("RetryAt %s (set %v), want the rollover ten minutes out, before the reading thirty minutes out",
+			p.RetryAt.Sub(now), p.HasRetryAt)
+	}
+}
+
 // A last point reached on a reading may move onto a primary seat, but free
 // quota comes first: U has never been read, a cold start the order puts behind
 // the seat P, and it carries the work by its level, so S on its last point goes

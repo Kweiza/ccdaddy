@@ -461,11 +461,13 @@ const (
 )
 
 // The leads, before the end of a runway, that the hand-off measures from a
-// look: out and stopping are a tick before it, closing its window's reserve
-// before it (closingReserve), and a carrier must outlast a live cadence and a
-// reserve after its first live reading. Each is stated here once, for
-// liveLimitOf, carries and lastResort, and for the weekly simulation's
-// clockTurns (clockturns_test.go), which says when the clock reaches them.
+// look: out and stopping are a tick before the earliest stop, and a carrier
+// must outlast a live cadence and a reserve after its first live reading.
+// Closing is not one of them: each window's reserve is counted back from that
+// window's own stop (closingReserve, runway.closesAt). Each is stated here
+// once, for liveLimitOf, carries and lastResort, and for the weekly
+// simulation's clockTurns (clockturns_test.go), which says when the clock
+// reaches them.
 const (
 	outLead     = EvaluationInterval
 	carrierLead = hoverBlind + hoverReserve
@@ -479,13 +481,12 @@ const (
 //
 // A five-hour window is run to its next reading: the session is handed off at
 // the last reading before the work would stop it, not a reserve before that.
-// Measured over the simulated week with no reserve on any window, today's fleet
-// under production load left 0.5 five-hour points at a hand-off on average,
-// against 26 with the reserve, for five stops a week of up to ten seconds, 46
-// in all, when the work outran the reading before the hand-off. A five-hour
-// window comes back in hours, and the points it would leave are spent work. A
-// week does not: its reserve is the one hand-off that comes before its stop,
-// and it is kept.
+// Measured over the simulated week, today's fleet under production load leaves
+// 0.5 five-hour points at a hand-off on average, against 27 with the reserve,
+// for five stops a week of up to ten seconds, 46 in all, when the work outruns
+// the reading before the hand-off. A five-hour window comes back in hours, and
+// the points it would leave are spent work. A week does not: its reserve is
+// the one hand-off that comes before its stop, and it is kept.
 func closingReserve(w usage.NamedWindow) time.Duration {
 	if isShortWindow(w) {
 		return 0
@@ -614,59 +615,99 @@ func (p *Plan) hoverMove(activeUUID string, cfg Config, st *State, o Options, by
 		return
 	}
 
-	// At a limit: the cheapest carrier, then a bridge if the live account would
-	// stop unseen, then a last resort if it has nothing left, then money --
-	// each among the accounts a move from here may reach (reachable).
-	res = p.reachable(live)
-	if target, ok := p.cheapestCarrier(res, activeUUID, byUUID, o.Now); ok {
-		p.moveOrHold(target, leaveReason(live, target), activeUUID, cfg, st, o.Now)
+	// At a limit: a move among the accounts a move from here may reach
+	// (reachable), then money.
+	m := limitMover{p: p, live: live, activeUUID: activeUUID, cooldown: cfg.Cooldown, byUUID: byUUID, now: o.Now}
+	move := m.moveIn(p.reachable(live))
+	if move.found {
+		p.moveOrHold(move.target, leaveReason(live, move.target), activeUUID, cfg, st, o.Now)
 		return
-	}
-	if live.limit >= liveStopping {
-		if target, ok := bridge(res, live, cfg.Cooldown); ok {
-			p.moveOrHold(target, leaveReason(live, target), activeUUID, cfg, st, o.Now)
-			return
-		}
-	}
-	lastPointWaits := false
-	if live.lastResortOpen() {
-		target, ok, waits := lastResort(res, live, o.Now)
-		if ok {
-			p.moveOrHold(target, leaveReason(live, target), activeUUID, cfg, st, o.Now)
-			return
-		}
-		lastPointWaits = waits
 	}
 	if p.creditOpen() {
 		p.creditWalk(byUUID, activeUUID, cfg, st, o.Now)
 		return
 	}
-	if lastPointWaits || p.moneyWaitsOn(live, activeUUID, byUUID, o.Now) {
+	if m.waitsOnAReading(move) {
 		// What lifts this hold is the live account's own reading, not a
-		// rollover hours out: the one that shows it empty, for another
-		// account's last point, or at its last point or empty, for money.
+		// rollover hours out -- unless a rollover comes first, as one does
+		// while the live account's poll is held off by a 429.
 		// TestAnEmptyReadingsWaitNamesTheNextReading,
 		// TestAProjectionDoesNotMoveOntoAPrimarySeat,
-		// TestEveryLastPointIsConfirmedSpentBeforeTheNext.
-		p.hold(ReasonWaitsForAReading, nextReading(byUUID[live.UUID], o.Now))
+		// TestEveryLastPointIsConfirmedSpentBeforeTheNext,
+		// TestADearerSeatThatCannotCarryWaitsForTheLiveReading,
+		// TestAReadingWaitRetriesAtARolloverThatComesFirst.
+		p.hold(ReasonWaitsForAReading, earliest(nextReading(byUUID[live.UUID], o.Now), soonestRollover(p.Result)))
 		return
 	}
 	p.hold(ReasonNothingCanServe, soonestRollover(p.Result))
 }
 
-// moneyWaitsOn is whether every move left from live costs money and waits on
-// its own reading: the credit pool, open once live reads empty
-// (creditWaitsOn), or a dearer seat that could carry the work, reachable once
-// live reads its last point (reachable).
-func (p *Plan) moneyWaitsOn(live Ranked, activeUUID string, byUUID map[string]Candidate, now time.Time) bool {
-	if p.creditWaitsOn(live) {
+// limitMover finds the move off a live account at a limit: one pass's live
+// account and what the move rules read beside it.
+type limitMover struct {
+	p          *Plan
+	live       Ranked
+	activeUUID string
+	cooldown   time.Duration
+	byUUID     map[string]Candidate
+	now        time.Time
+}
+
+// limitMove is limitMover's answer: the account the login goes to, or, with
+// none, whether a last resort was passed over only because the live account
+// does not yet read empty (lastResort).
+type limitMove struct {
+	target        Ranked
+	found         bool
+	waitsForEmpty bool
+}
+
+// moveIn is the move among res: the cheapest carrier, then a bridge if the
+// live account would stop unseen, then a last resort if it has nothing left.
+func (m limitMover) moveIn(res Result) limitMove {
+	if target, ok := m.p.cheapestCarrier(res, m.activeUUID, m.byUUID, m.now); ok {
+		return limitMove{target: target, found: true}
+	}
+	if m.live.limit >= liveStopping {
+		if target, ok := bridge(res, m.live, m.cooldown); ok {
+			return limitMove{target: target, found: true}
+		}
+	}
+	if !m.live.lastResortOpen() {
+		return limitMove{}
+	}
+	target, found, waits := lastResort(res, m.live, m.now)
+	return limitMove{target: target, found: found, waitsForEmpty: waits}
+}
+
+// waitsOnAReading is whether a move left from the live account waits on its
+// own reading, given the move reachable found (none): the one decision that a
+// hold is a reading wait. Three moves open on a reading and on nothing else.
+// Another account's last point opens once the live account reads empty
+// (lastResort). The credit pool opens once it reads empty too
+// (creditWaitsOn). And every account dearer than the live one -- a primary
+// seat a carrier, a bridge or a last resort -- opens once it reads at its last
+// point (reachable), so the move among the whole order is the move that
+// reading would make.
+func (m limitMover) waitsOnAReading(reachableMove limitMove) bool {
+	if reachableMove.waitsForEmpty || m.p.creditWaitsOn(m.live) {
 		return true
 	}
-	if !live.roomyByLevel() {
+	if !m.live.roomyByLevel() {
+		// reachable is the whole order already: nothing dearer is shut.
 		return false
 	}
-	target, ok := firstCarrier(p.Result, activeUUID, byUUID, now)
-	return ok && p.seatCost(target) > p.seatCost(live)
+	opened := m.moveIn(m.p.Result)
+	return opened.found || opened.waitsForEmpty
+}
+
+// earliest is the earlier of two instants, either of which may be the zero
+// time for none.
+func earliest(a, b time.Time) time.Time {
+	if a.IsZero() || (!b.IsZero() && b.Before(a)) {
+		return b
+	}
+	return a
 }
 
 // cheapestCarrier is the first carrier in res on the cheapest rung of cost

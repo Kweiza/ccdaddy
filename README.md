@@ -461,8 +461,9 @@ Hover orders the Claude lane's accounts instead of comparing their room:
    when the work running now would run it out: on a five-hour window, before
    its next reading; on a week, within three minutes after it. A five-hour
    window is run that close because it comes back in hours, and work that
-   outruns the reading before the hand-off can stop the session for up to
-   about half a minute each time.
+   outruns the reading before the hand-off can stop the session, most often
+   for about half a minute; the longest stop in the simulated week was 37
+   seconds.
    The work's rate is taken only between two readings of an account that were
    both made while it was live, and it follows the work across a switch.
 5. The session is moved only to an account that would still have three
@@ -583,9 +584,9 @@ left unspent a week on today's fleet under steady heavy use.
 When the live account is at a limit and no account is better placed, hover
 reports the switch as blocked until the soonest rollover. When the move left
 waits on the live account's own reading -- onto money, or onto another
-account's last point -- hover stays and names that reading instead. When
-every account is past its last point, it orders them by which comes back
-first, and status says so.
+account's last point -- hover stays and names that reading instead, or a
+rollover that comes before it. When every account is past its last point, it
+orders them by which comes back first, and status says so.
 
 Hover sets the threshold, credit threshold, strategy, preemption lead (the
 three minutes above), probe setting, and cooldown (2m) itself. It uses your
