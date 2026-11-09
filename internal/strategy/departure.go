@@ -18,10 +18,11 @@ import (
 // test would refuse it while that rate is fresh (handoff.go) -- but the order's
 // preference for a five-hour account is a rung, and a rung the levels say is
 // roomy is where the order sends the session the moment the carry test says
-// yes: after a slower measurement, or a rate measured on another plan. The session goes back, the work resumes, the account closes
-// again, and the two alternate. That is the flap preemptTarget's own note
-// measured at sixty-five switches in fifty-four minutes. The mark is what says
-// the account was LEFT at a limit on this window, which no level shows.
+// yes: after a slower measurement, or a rate measured on another plan. The
+// session goes back, the work resumes, the account closes again, and the two
+// alternate. That is the flap preemptTarget's own note measured at sixty-five
+// switches in fifty-four minutes. The mark is what says the account was LEFT
+// at a limit on this window, which no level shows.
 //
 // So the left account is remembered, and held out until the window that had it
 // at a limit has rolled over. It is NOT a latch, in the sense antiflap.go
