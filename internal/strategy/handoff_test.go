@@ -227,6 +227,72 @@ func TestALiveAccountKeptByAnAccountThatCannotCarryTheWorkSaysSo(t *testing.T) {
 	want(t, p, ActionStay, ReasonCannotCarry, "")
 }
 
+// The hold names the rule that kept the session, not the carry test, when the
+// rule would have kept it anyway. B's week resets sooner, so it sorts ahead of
+// the live A, and it could not carry the work -- but a five-hour account is
+// left only at a limit, and that is why the session stays. Nothing is held for
+// --force to take: B would run the work out.
+func TestTheHoldNamesTheRuleThatKeptTheSession(t *testing.T) {
+	pool := []Candidate{
+		idleOn(maxAcct("b", 95, 3*time.Hour, 40, 2*day)),
+		measuredLive(polled(maxAcct("a-live", 40, 3*time.Hour, 50, 5*day), 180*time.Second), 1, usage.WindowFiveHour),
+	}
+	p := Decide(pool, hoverOpts(), Config{}, NewState(), "a-live")
+	want(t, p, ActionStay, ReasonStayUntilLimit, "")
+	if p.Held.UUID != "" {
+		t.Errorf("held %q, which the work would run out", p.Held.UUID)
+	}
+}
+
+// From a live last-resort credit seat the session goes back to subscription
+// quota the way every hover move goes: to a carrier. A Max whose five points
+// the work would spend in five minutes is not one, and a Max on its last point
+// is not one either; the seat stays, and nothing is held for --force.
+func TestALiveCreditSeatReturnsOnlyToACarrier(t *testing.T) {
+	seat := creditWith("c-seat", usage.ExtraUsageFor(usage.ExtraUsageInput{
+		State: usage.ExtraUsageEnabled, Currency: "USD", MonthlyLimit: pf(10000), UsedCredits: pf(0), Utilization: pf(10),
+	}))
+	maxAt := func(pct float64) Candidate {
+		return measuredLive(idleOn(maxAcct("b", pct, 3*time.Hour, 40, 3*day)), 1, usage.WindowFiveHour)
+	}
+	for _, tc := range []struct {
+		name   string
+		pct    float64
+		action Action
+		reason Reason
+		target string
+	}{
+		{"a carrier", 50, ActionSwitch, ReasonShortWindowRoom, "b"},
+		{"an account the work would run out", 95, ActionStay, ReasonCannotCarry, ""},
+		{"an account on its last point", 99.5, ActionStay, ReasonNoSubscriptionRoom, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := Decide([]Candidate{maxAt(tc.pct), seat}, hoverOpts(), Config{}, NewState(), "c-seat")
+			want(t, p, tc.action, tc.reason, tc.target)
+			if p.Action != ActionSwitch && p.Held.UUID != "" {
+				t.Errorf("held %q for --force", p.Held.UUID)
+			}
+		})
+	}
+}
+
+// With nothing in the main pool -- the live Max quarantined, a last-resort
+// credit seat the only account left -- hover asks the credit arms exactly as
+// the configured strategies do, and the gate answers: refused, at the default
+// spend ceiling of zero.
+func TestAnEmptyMainPoolUnderHoverIsTheCreditGatesToAnswer(t *testing.T) {
+	seat := creditWith("c-seat", usage.ExtraUsageFor(usage.ExtraUsageInput{
+		State: usage.ExtraUsageEnabled, Currency: "USD", MonthlyLimit: pf(10000), UsedCredits: pf(0), Utilization: pf(10),
+	}))
+	st := NewState()
+	st.Quarantine("a-live", now, time.Hour, "dead refresh token")
+	p := Decide([]Candidate{maxAcct("a-live", 40, 3*time.Hour, 50, 3*day), seat}, hoverOpts(), Config{}, st, "a-live")
+	want(t, p, ActionBlocked, ReasonCreditGate, "")
+	if p.Credit.Reason != CreditNotOptedIn {
+		t.Errorf("Credit.Reason = %v, want %v", p.Credit.Reason, CreditNotOptedIn)
+	}
+}
+
 // The target is chosen first and the cooldown applied second. At a limit with
 // nowhere to go is blocked whether or not a cooldown is running and whichever
 // account sorts first -- at the last point and past it alike -- and a carrier

@@ -405,6 +405,15 @@ func (r Ranked) roomyByLevel() bool {
 // whichever account sorts first, and a hold the cooldown imposes names the move
 // it held (Plan.Held), which is the one `ccdad switch --force` may take.
 // TestTheTargetIsChosenBeforeTheCooldown.
+//
+// A live login on a last-resort credit seat is walked the same way: the seat is
+// in the pass, so the return to subscription quota is a move to a carrier like
+// any other, and an account at a limit is never where it goes back to.
+// TestALiveCreditSeatReturnsOnlyToACarrier.
+//
+// The caller asks only when the main pool has an account in it. With none, the
+// configured strategies' credit arms are the whole of the answer, under hover
+// as everywhere else.
 func (p *Plan) hoverMove(activeUUID string, cfg Config, st *State, o Options, byUUID map[string]Candidate) {
 	res := p.Result
 	live, inPass := find(res, activeUUID)
@@ -455,32 +464,63 @@ func (p *Plan) hoverMove(activeUUID string, cfg Config, st *State, o Options, by
 
 // hoverMoveWithRoom is the move from a live account with room: to the first
 // account ahead of it in the order that can carry the work, on the order's own
-// same-rung rules (hoverGate). An account ahead of it that cannot carry the work
-// is passed over, and if nothing else moves the session the hold says so.
+// same-rung rules (hoverGate).
+//
+// The order's rule is asked first and the carry test second, so a hold names
+// what actually kept the session: an account the rule would not move to anyway
+// is held by that rule (StayUntilLimit, the weekly-reset margin), and only an
+// account the rule would move to and the work would run out is "cannot carry".
+// The first such reason in the order is the one reported, because it is the
+// move the session would otherwise have made. A hold names its target (Held)
+// only when that target carries, so --force never takes the session onto an
+// account the work would run out. TestTheHoldNamesTheRuleThatKeptTheSession.
+//
+// A live credit seat is not in the order, so the whole order is ahead of it;
+// with nothing there to go back to, it stays for the reason the configured
+// strategies give, no subscription room.
 func (p *Plan) hoverMoveWithRoom(live Ranked, activeUUID string, cfg Config, st *State, now time.Time) {
-	passedOver := false
+	stay, retryAt := ReasonAlreadyBest, time.Time{}
+	kept := false
 	for _, target := range p.Result.Order {
 		if isActive(target.UUID, activeUUID) {
 			break
 		}
-		if !target.Carries {
-			passedOver = true
+		reason, refused, retry := hoverGate(live, target, cfg)
+		if refused && reason == ReasonAlreadyBest {
+			// Not ahead of the live account by the order's own rules: a
+			// credit seat's walk reaches accounts no better than it.
 			continue
 		}
-		reason, refused, retry := hoverGate(live, target, cfg)
-		if refused {
+		switch {
+		case refused && target.Carries:
 			p.hold(reason, retry)
 			p.Held = target
 			return
+		case target.Carries:
+			p.moveOrHold(target, reason, activeUUID, cfg, st, now)
+			return
+		case kept:
+			continue
+		case refused:
+			stay, retryAt, kept = reason, retry, true
+		default:
+			stay, kept = ReasonCannotCarry, true
 		}
-		p.moveOrHold(target, reason, activeUUID, cfg, st, now)
-		return
 	}
-	if passedOver {
-		p.hold(ReasonCannotCarry, time.Time{})
-		return
+	if !kept && p.isCredit(activeUUID) {
+		stay = ReasonNoSubscriptionRoom
 	}
-	p.hold(ReasonAlreadyBest, time.Time{})
+	p.hold(stay, retryAt)
+}
+
+// isCredit is whether uuid is one of the pass's last-resort credit seats.
+func (p *Plan) isCredit(uuid string) bool {
+	for _, r := range p.Result.Credit {
+		if isActive(r.UUID, uuid) {
+			return true
+		}
+	}
+	return false
 }
 
 // moveOrHold moves to target unless the cooldown holds the engine, in which case
