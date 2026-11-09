@@ -244,7 +244,9 @@ func (o Options) runwayOf(c Candidate) runway {
 		if !ok {
 			continue
 		}
-		at, known := o.stopOf(c, w, 100-pct, from, live)
+		// A window that has reset since the reading is a new window: the work
+		// spends it from the reset, not from the reading.
+		at, known := o.stopOf(c, w, 100-pct, sinceReset(from, w.Window), live)
 		if !known {
 			continue
 		}
@@ -338,14 +340,23 @@ func (w *work) workedAfterReading(c Candidate, win usage.Window) time.Duration {
 	if !ok {
 		return 0
 	}
-	from := c.FetchedAt
-	if at, rolled := win.RolledAt(); rolled && at.After(from) {
-		from = at
-	}
+	from := sinceReset(c.FetchedAt, win)
 	if !m.At.After(from) {
 		return 0
 	}
 	return m.At.Sub(from)
+}
+
+// sinceReset is from, or the instant window win reset after it
+// (usage.Window.RolledAt), whichever is later: the work spends a window from
+// when it began, and a window that reset is one that began again. Both the live
+// account's projection and the departure correction read it.
+// TestTheLiveAccountsRunwayRunsFromAResetAfterItsReading.
+func sinceReset(from time.Time, win usage.Window) time.Time {
+	if at, rolled := win.RolledAt(); rolled && at.After(from) {
+		return at
+	}
+	return from
 }
 
 // liveLimit is the live account's state against the work's runway: closing when

@@ -252,8 +252,10 @@ func newConfigListCmd() *cobra.Command {
 
 			if cfg.Hover {
 				fmt.Fprint(cmd.ErrOrStderr(),
-					"note: hover is on, so the keys marked 'overriding' below are not being read; "+
+					"note: hover is on, so the Claude lane does not read the keys marked 'overriding' below; "+
 						"hover orders the accounts itself and holds every window to its hand-off line. "+
+						"The Codex lane, which hover does not drive, still reads the ones it uses, "+
+						"hysteresis_pct and headroom_ratio among them. "+
 						"Run 'ccdad status' to see the order in force.\n")
 			}
 

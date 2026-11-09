@@ -196,6 +196,22 @@ func TestWorkBeforeAResetDoesNotSpendTheRoomTheResetRestored(t *testing.T) {
 	}
 }
 
+// The live account's projection runs from its window's reset when the window
+// reset after the reading. Read twenty minutes ago, its five-hour window reset
+// five minutes ago, so the work has been spending a fresh window for five
+// minutes: at two points a minute its hundred points last until forty-five
+// minutes from now, not thirty.
+func TestTheLiveAccountsRunwayRunsFromAResetAfterItsReading(t *testing.T) {
+	live := sub("a-live", &usage.Snapshot{FiveHour: win(80, -5*time.Minute), SevenDay: win(20, 4*day)})
+	live.FetchedAt, live.NextPollAt = now.Add(-20*time.Minute), now.Add(time.Minute)
+	live = measuredLive(live, 2, usage.WindowFiveHour)
+	p := Decide([]Candidate{live}, hoverOpts(), Config{}, NewState(), "a-live")
+	r, _ := find(p.Result, "a-live")
+	if r.RunsOutOn != usage.WindowFiveHour || math.Abs(runsOutIn(t, r).Minutes()-45) > 1e-6 {
+		t.Errorf("the live account runs out on %q in %s, want the fresh five-hour window in 45m", r.RunsOutOn, runsOutIn(t, r))
+	}
+}
+
 // I5: a carrier is not closing when the work arrives, nor at its first live
 // reading -- so the move is never followed by a second move on the same rate.
 // Swept over rooms on either side of the carrier threshold at two rates: every
