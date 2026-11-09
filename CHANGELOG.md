@@ -49,7 +49,7 @@ quota, which can now expire unspent.
 
   Measured over a simulated week of the 2026-11-09 fleet (one Max account and
   three Ultra seats), and of the same fleet with the Max account's Fable week
-  blown, before and after. The simulation reads each account only when the
+  at 99.5%, before and after. The simulation reads each account only when the
   daemon's own poll schedule would and decides once a second, as the daemon
   does. "Unspent" is weekly quota that reached a weekly reset unused, for the
   five-hour account and for the three Ultra seats:
@@ -57,11 +57,11 @@ quota, which can now expire unspent.
   | Load | Fleet | Switches | Unspent, five-hour | Unspent, weekly-only | Seconds a limit stopped the session |
   |---|---|---|---|---|---|
   | idle (window never fills) | today | 43 → 2 | 31.78 → 0.98 | 137.59 → 184.56 | 0 → 0 |
-  | idle | Fable blown | 29 → 2 | 41.00 → 0.98 | 128.35 → 184.56 | 0 → 0 |
+  | idle | Fable at 99.5% | 29 → 2 | 41.00 → 0.98 | 128.35 → 184.56 | 0 → 0 |
   | light (fills in five hours) | today | 52 → 54 | 28.71 → 0.99 | 120.11 → 168.44 | 0 → 0 |
-  | light | Fable blown | 33 → 56 | 41.00 → 0.99 | 107.80 → 168.45 | 0 → 0 |
+  | light | Fable at 99.5% | 33 → 54 | 41.00 → 0.99 | 107.80 → 168.44 | 0 → 0 |
   | heavy (fills in two hours) | today | 210 → 59 | 6.04 → 0.97 | 28.79 → 45.15 | 0 → 0 |
-  | heavy | Fable blown | 141 → 61 | 41.00 → 0.96 | 5.56 → 45.16 | 136 → 0 |
+  | heavy | Fable at 99.5% | 165 → 59 | 33.46 → 0.97 | 9.22 → 45.15 | 484 → 0 |
 
   Hover now switches twice for each five-hour window it fills: once just
   before the limit and once when the window resets. Light load fills its window
