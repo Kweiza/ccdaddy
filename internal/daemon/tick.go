@@ -156,6 +156,14 @@ type Engine struct {
 	inFlight        map[string]struct{}
 	polls           map[string]pollRecord
 	status          Status
+	// live is the account the most recent tick left the login on, and
+	// liveKnown whether it could be named at all. A poll reads it when its
+	// reading is COMMITTED, not when it was dispatched: a poll in flight across
+	// a switch otherwise labels the new live account's first reading idle --
+	// leaving no live pair to measure the work on, and writing the idle cadence
+	// over the prompt poll the switch scheduled. See liveAtCommit.
+	live      string
+	liveKnown bool
 	// The daily release check's whole state, beside cfg and polls under the
 	// same lock. It is deliberately NOT inside status: publish() replaces that
 	// field wholesale on every tick, so anything kept there would be erased
@@ -522,6 +530,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	// already reflected: the account that just became live is polled as the
 	// live one, this tick rather than next.
 	active, activeKnown := activeAfter(ev, res)
+	e.setLive(active, activeKnown)
 	quarantined := quarantinedSet(ev)
 	// The same table `ev` was just ranked against, not a second one rebuilt from
 	// cfg. Under hover the two disagree on purpose — hover's threshold divides
@@ -1224,12 +1233,38 @@ func (e *Engine) poll(ctx context.Context, a store.Account, cfg config.Config,
 			e.refreshProfile(ctx, a, token, now)
 		}
 	}
+	active = e.liveAtCommit(a.UUID, active)
 	if err != nil {
 		e.handleFailure(a, cfg, thresholds, err, now, identity, active)
 		return err
 	}
 	e.commit(a, snap, now, identity, thresholds, active, nil)
 	return nil
+}
+
+// setLive records the account a tick left the login on, for the polls that
+// commit after it.
+func (e *Engine) setLive(uuid string, known bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.live, e.liveKnown = uuid, known
+}
+
+// liveAtCommit is whether account uuid is live as its reading is committed: the
+// live account the most recent tick named, or dispatched -- whether it was live
+// when the poll was sent -- when no tick has named one yet.
+//
+// Commit time and not dispatch time, because the two differ exactly across a
+// switch, and that is when the label matters most: the reading is the new live
+// account's first, its cadence is the one the live account needs, and a rate is
+// the work's only when both of its readings were taken live (usage.LiveBurn).
+func (e *Engine) liveAtCommit(uuid string, dispatched bool) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if !e.liveKnown {
+		return dispatched
+	}
+	return e.live == uuid
 }
 
 // refreshProfile re-reads the account's profile when store.Account.ProfileStale
@@ -1435,6 +1470,7 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now time.Time,
 		burn, hasBurn, burnWindow := entry.Poll.BurnPerMin, entry.Poll.HasBurn, entry.Poll.BurnWindow
 		lastAt, lastReset := entry.Poll.LastBindingAt, entry.Poll.LastBindingReset
 		lastWindow := entry.Poll.LastBindingWindow
+		anchorLive, liveBurn := entry.Poll.AnchorLive, entry.Poll.LiveBurn
 		if reading.Known {
 			resetAt, _ := entry.Snapshot.ResetFor(h.Binding)
 			cur := usage.BindingSample{Window: h.Binding, Pct: reading.BindingPct, At: now, Reset: resetAt}
@@ -1448,14 +1484,21 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now time.Time,
 				if rate, ok := usage.BurnPerMin(prev, cur); ok {
 					burn, hasBurn, burnWindow = rate, true, h.Binding
 				}
+				// The work's rate, when both readings were taken live: the one a
+				// switch away carries forward. See usage.LiveBurn.
+				if pair, ok := usage.LivePair(prev, entry.Poll.AnchorLive, cur, active); ok {
+					liveBurn = &pair
+				}
 			}
 			lastAt, lastReset, lastWindow = now, resetAt, h.Binding
+			anchorLive = active
 		}
 		entry.Poll = usage.PollState{Interval: next.Interval, LastRateLimited: next.LastRateLimited}
 		entry.Poll.LastBindingPct, entry.Poll.HasLastBinding = next.LastBindingPct, next.HasLastBinding
 		entry.Poll.LastBindingAt, entry.Poll.LastBindingReset = lastAt, lastReset
 		entry.Poll.LastBindingWindow = lastWindow
 		entry.Poll.BurnPerMin, entry.Poll.HasBurn, entry.Poll.BurnWindow = burn, hasBurn, burnWindow
+		entry.Poll.AnchorLive, entry.Poll.LiveBurn = anchorLive, liveBurn
 		// entry.StandDownUntil is read and written back untouched, and that is
 		// what makes the two writers safe: this account's poll never edits the
 		// field its identity's live account owns, so the order the two goroutines

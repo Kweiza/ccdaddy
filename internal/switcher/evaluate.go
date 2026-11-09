@@ -270,6 +270,9 @@ func engineCandidates(s *store.Store, accounts []store.Account, c *usage.Cache, 
 			// above because it is the same kind of fact: something the poller
 			// observed, which the engine may read but must not re-derive.
 			cand.BurnPerMin, cand.HasBurn, cand.BurnWindow = e.Poll.BurnPerMin, e.Poll.HasBurn, e.Poll.BurnWindow
+			if e.Poll.LiveBurn != nil {
+				cand.LiveBurn = *e.Poll.LiveBurn
+			}
 		}
 		out = append(out, cand)
 	}

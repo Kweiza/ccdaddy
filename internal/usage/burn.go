@@ -108,3 +108,47 @@ func MinutesAtRate(room, perMin float64) (float64, bool) {
 	}
 	return room / perMin, true
 }
+
+// LiveBurn is a rate measured across two readings of one account that were both
+// taken while that account was the live one: the rate of the WORK, rather than
+// of the account.
+//
+// A rate taken across any other pair says less than it seems to. Across an idle
+// pair it is zero, which is true of the account and says nothing about the
+// session -- and it is the figure a just-left account and a just-entered one
+// both carry for up to an idle poll interval, so a reader that took it as the
+// work's rate would see the work stop the moment it moved. Across an idle anchor
+// and a live reading it is diluted by however long the account sat unused before
+// the work arrived. So this is set only from a live pair, and kept across later
+// idle readings: it is the last thing the work was measured doing on this
+// account, which is exactly what a switch away should not forget.
+//
+// From and At are the pair's two readings. From is what a reader checks against
+// the last switch onto this account: a pair whose first reading precedes a
+// return spans an absence, and its rate is diluted the same way.
+type LiveBurn struct {
+	PerMin float64    `json:"per_min"`
+	Window WindowName `json:"window"`
+	From   time.Time  `json:"from"`
+	At     time.Time  `json:"at"`
+}
+
+// Measured is whether a rate was taken at all. A zero rate is a measurement --
+// a live session that spent nothing between two readings -- and the zero
+// LiveBurn is not.
+func (b LiveBurn) Measured() bool { return !b.At.IsZero() }
+
+// LivePair is the work's rate across two consecutive readings, and whether the
+// pair is one: both taken live (prevLive, curLive), and a pair BurnPerMin can
+// take a rate across at all. It is the one statement of when a pair is the
+// work's, and both the daemon's commit and the weekly simulation's poller ask it.
+func LivePair(prev BindingSample, prevLive bool, cur BindingSample, curLive bool) (LiveBurn, bool) {
+	if !prevLive || !curLive {
+		return LiveBurn{}, false
+	}
+	rate, ok := BurnPerMin(prev, cur)
+	if !ok {
+		return LiveBurn{}, false
+	}
+	return LiveBurn{PerMin: rate, Window: cur.Window, From: prev.At, At: cur.At}, true
+}

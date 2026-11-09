@@ -190,6 +190,11 @@ type Candidate struct {
 	// BurnWindow is the window BurnPerMin was measured on. Empty on a reading
 	// cached before it was recorded; see sessionBurn.onWindow for how that is read.
 	BurnWindow usage.WindowName
+	// LiveBurn is the last rate measured across two readings of this account
+	// that were both taken while it was live -- the work's rate rather than the
+	// account's -- copied from usage.PollState. Hover reads the pool's latest one
+	// per window length as the work's rate; see workRates.
+	LiveBurn usage.LiveBurn
 }
 
 // Options configures one ranking pass.

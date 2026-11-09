@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"math"
 	"testing"
 	"time"
@@ -214,5 +215,68 @@ func TestABlownModelCapIsNotTheWindowAPollUnderHoverMeasures(t *testing.T) {
 	}
 	if math.Abs(entry.Poll.BurnPerMin-5.4) > 0.0001 {
 		t.Errorf("BurnPerMin = %v, want the five-hour window's 5.4", entry.Poll.BurnPerMin)
+	}
+}
+
+// The work's rate is taken only across two readings that were both live. A pair
+// from an idle anchor to the first live reading is diluted by however long the
+// account sat unused, so it sets nothing; the next live pair sets it; and a later
+// idle reading keeps it, because it is the last thing the work was measured doing
+// here and a switch away must not forget it.
+func TestAPairAcrossASwitchIsNotALiveRate(t *testing.T) {
+	isolateEngine(t)
+	a := store.Account{UUID: "acct-1"}
+	e := NewEngine()
+	e.Rand = midJitter
+	commit := func(five float64, at time.Duration, live bool) usage.PollState {
+		e.commit(a, windowsUsed(five, 5), tickEpoch.Add(at), []string{a.UUID}, burnThresholds(), live, nil)
+		entry, ok := cacheEntry(t, a.UUID)
+		if !ok {
+			t.Fatal("commit() wrote no cache entry")
+		}
+		return entry.Poll
+	}
+
+	commit(10, 0, false)
+	if got := commit(20, 10*time.Minute, true); got.LiveBurn != nil {
+		t.Fatalf("LiveBurn = %+v from an idle anchor and a live reading", *got.LiveBurn)
+	}
+	got := commit(50, 20*time.Minute, true)
+	if got.LiveBurn == nil || math.Abs(got.LiveBurn.PerMin-3) > 1e-9 || got.LiveBurn.Window != usage.WindowFiveHour {
+		t.Fatalf("LiveBurn = %+v after two live readings, want 3 a minute on five_hour", got.LiveBurn)
+	}
+	if !got.LiveBurn.From.Equal(tickEpoch.Add(10*time.Minute)) || !got.LiveBurn.At.Equal(tickEpoch.Add(20*time.Minute)) {
+		t.Errorf("LiveBurn spans %s..%s, want the two live readings", got.LiveBurn.From, got.LiveBurn.At)
+	}
+	if got := commit(50, 30*time.Minute, false); got.LiveBurn == nil || got.LiveBurn.PerMin != 3 || got.AnchorLive {
+		t.Errorf("after an idle reading LiveBurn = %+v, AnchorLive = %v; want the live rate kept and an idle anchor",
+			got.LiveBurn, got.AnchorLive)
+	}
+}
+
+// A poll dispatched before a switch and committed after it is the new live
+// account's first live reading, and it is labelled by who is live when it is
+// COMMITTED -- or the account's first live pair waits a whole poll longer, and
+// the idle cadence it would be given overwrites the prompt poll the switch asked
+// for.
+func TestAReadingIsLiveByWhoIsLiveWhenItIsCommitted(t *testing.T) {
+	isolateEngine(t)
+	a := store.Account{UUID: "acct-1"}
+	now := tickEpoch
+	e := movableEngine(t, &now, func(context.Context, string) (*usage.Snapshot, error) {
+		return windowsUsed(10, 5), nil
+	})
+	cfg := config.Config{Threshold: 80, CreditThreshold: 80}
+	e.setLive("someone-else", true)
+	e.setLive(a.UUID, true) // the switch landed while the poll was in flight
+	if err := e.poll(context.Background(), a, cfg, configuredThresholds(cfg), []string{a.UUID}, false); err != nil {
+		t.Fatal(err)
+	}
+	entry, ok := cacheEntry(t, a.UUID)
+	if !ok {
+		t.Fatal("poll() wrote no cache entry")
+	}
+	if !entry.Poll.AnchorLive {
+		t.Error("the reading committed after the switch was labelled idle")
 	}
 }
