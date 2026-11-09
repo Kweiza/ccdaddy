@@ -1075,10 +1075,10 @@ func (e *Engine) probeDue(a store.Account, entry usage.Entry, cfg config.Config,
 	// replenishment arrives at once and the hours between it have none.
 	//
 	// It is deliberately NOT done by delaying the poll. warmTarget aims a poll AT
-	// a rollover and warmClamp declines any target further out than the ordinary
-	// cadence would reach, so a phase added there is silently dropped and the
-	// batch survives. The probe is the thing whose timing sets the anchor, so the
-	// probe is what has to wait.
+	// a rollover and pollpolicy.WarmClamp declines any target further out than
+	// the ordinary cadence would reach, so a phase added there is silently
+	// dropped and the batch survives. The probe is the thing whose timing sets
+	// the anchor, so the probe is what has to wait.
 	if wait := warmPhase(a.UUID, entry.Snapshot, w); wait > 0 && !rollover.IsZero() {
 		if now.Before(rollover.Add(wait)) {
 			return "", "", false
@@ -1415,7 +1415,7 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now time.Time,
 		// restarted at rollover UNLESS the endpoint is refusing us — congestion
 		// outranks the clock, which is the same order every other schedule here
 		// obeys.
-		entry.NextPollAt = warmClamp(entry.NextPollAt, e.warmTarget(entry.Snapshot, thr, now), now, entry.ScheduledTTL())
+		entry.NextPollAt = pollpolicy.WarmClamp(entry.NextPollAt, e.warmTarget(entry.Snapshot, thr, now), now, entry.ScheduledTTL())
 		// The burn rate, taken BEFORE the anchors are overwritten: the reading
 		// that produces a rate is the same one that replaces the point it was
 		// measured from, so a reader arriving later has nothing left to
@@ -1666,38 +1666,6 @@ func uuidPhase(uuid string) float64 {
 		h *= prime64
 	}
 	return float64(h%1_000_000) / 1_000_000
-}
-
-// warmClamp is the next poll instant, given the one the cadence chose and the
-// one a rollover wants.
-//
-// Three cases, and the middle one is the only surprising one:
-//
-//   - the cadence would look at or after the target: take the target. This is
-//     the ordinary idle account, whose ten-minute cadence would otherwise walk
-//     past the rollover.
-//   - the cadence would look shortly BEFORE the target: pull that look back so
-//     the reading it takes is a full ttl old by the time the target arrives.
-//     Without this the poll at the target is refused by due()'s own freshness
-//     floor — the reading is younger than ScheduledTTL — and the warm-up slips a
-//     whole interval on roughly a third of cycles. The pull-back is skipped when
-//     it would land in the past, because a reading taken now cannot be made
-//     older by scheduling.
-//   - the cadence would look long before the target: leave it. Its reading will
-//     have aged past the floor on its own.
-//
-// A zero target means there is nothing to aim at and the cadence stands.
-func warmClamp(natural, target, now time.Time, ttl time.Duration) time.Time {
-	if target.IsZero() {
-		return natural
-	}
-	if !natural.Before(target) {
-		return target
-	}
-	if pull := target.Add(-ttl); natural.After(pull) && pull.After(now) {
-		return pull
-	}
-	return natural
 }
 
 // standDown pushes every other account on one identity to the congestion ceiling

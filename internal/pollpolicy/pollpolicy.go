@@ -554,6 +554,42 @@ func (t Table) ServeTTLFor(in Input) time.Duration {
 	return t.ServeTTL
 }
 
+// WarmClamp is the next poll instant, given the one the cadence chose and the
+// one a rollover wants.
+//
+// Three cases, and the middle one is the only surprising one:
+//
+//   - the cadence would look at or after the target: take the target. This is
+//     the ordinary idle account, whose ten-minute cadence would otherwise walk
+//     past the rollover.
+//   - the cadence would look shortly BEFORE the target: pull that look back so
+//     the reading it takes is a full ttl old by the time the target arrives.
+//     Without this the poll at the target is refused by the scheduler's own
+//     freshness floor — the reading is younger than ttl — and the warm-up slips
+//     a whole interval on roughly a third of cycles. The pull-back is skipped
+//     when it would land in the past, because a reading taken now cannot be
+//     made older by scheduling.
+//   - the cadence would look long before the target: leave it. Its reading will
+//     have aged past the floor on its own.
+//
+// A zero target means there is nothing to aim at and the cadence stands.
+//
+// It lives with the cadence it adjusts rather than in the daemon that calls it,
+// so the schedule has one implementation: the weekly tier simulation in
+// internal/strategy schedules its polls through this same function.
+func WarmClamp(natural, target, now time.Time, ttl time.Duration) time.Time {
+	if target.IsZero() {
+		return natural
+	}
+	if !natural.Before(target) {
+		return target
+	}
+	if pull := target.Add(-ttl); natural.After(pull) && pull.After(now) {
+		return pull
+	}
+	return natural
+}
+
 // StandDownUntil is when an account that yielded its share of the identity's
 // budget may be polled again. rnd is a uniform sample in [0,1), as in Next.
 //

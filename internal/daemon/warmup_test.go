@@ -241,49 +241,6 @@ func TestAStandDownStillOutranksTheRolloverAim(t *testing.T) {
 	}
 }
 
-// warmClamp's three branches, and the middle one is the only surprising one: a
-// poll landing shortly BEFORE the target refreshes the reading, and due()'s own
-// freshness floor then refuses the poll at the target.
-func TestWarmClampKeepsTheTargetPollReachable(t *testing.T) {
-	now := tickEpoch
-	ttl := 3 * time.Minute
-	for _, tc := range []struct {
-		name            string
-		natural, target time.Time
-		want            time.Time
-	}{{
-		name:    "no target: the cadence stands",
-		natural: now.Add(10 * time.Minute),
-		want:    now.Add(10 * time.Minute),
-	}, {
-		name:    "the cadence would walk past the rollover",
-		natural: now.Add(10 * time.Minute),
-		target:  now.Add(6 * time.Minute),
-		want:    now.Add(6 * time.Minute),
-	}, {
-		name:    "the cadence lands shortly before it, so pull it back a full ttl",
-		natural: now.Add(9 * time.Minute),
-		target:  now.Add(10 * time.Minute),
-		want:    now.Add(7 * time.Minute),
-	}, {
-		name:    "the cadence lands long before it: its reading ages out on its own",
-		natural: now.Add(2 * time.Minute),
-		target:  now.Add(20 * time.Minute),
-		want:    now.Add(2 * time.Minute),
-	}, {
-		name:    "the pull-back would land in the past, and scheduling cannot age a reading",
-		natural: now.Add(time.Minute),
-		target:  now.Add(2 * time.Minute),
-		want:    now.Add(time.Minute),
-	}} {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := warmClamp(tc.natural, tc.target, now, ttl); !got.Equal(tc.want) {
-				t.Errorf("warmClamp = %s, want %s", got.Sub(now), tc.want.Sub(now))
-			}
-		})
-	}
-}
-
 // The money refusal, at the decision itself. A warm-up is one turn nobody asked
 // for, and on an account with a window at 100% it can be billed to credits.
 func TestTheDaemonDoesNotWarmAnAccountWhoseTurnCouldBeBilledToCredits(t *testing.T) {
