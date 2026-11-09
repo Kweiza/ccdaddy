@@ -175,8 +175,8 @@ func TestAModelScopedCapIsNotALimitUnderHover(t *testing.T) {
 	pool := []Candidate{live, idleOn(weekOnly("u-ultra", 20, 3*day))}
 
 	p := Decide(pool, hoverOpts(), Config{}, NewState(), "a-live")
-	if r, _ := find(p.Result, "a-live"); r.LastPoint || r.AtLimit() != "" {
-		t.Errorf("LastPoint = %v, at limit on %q: a blown Fable cap leaves a fifth of the week for every other model",
+	if r, _ := find(p.Result, "a-live"); r.LastPoint != "" || r.AtLimit() != "" {
+		t.Errorf("LastPoint = %q, at limit on %q: a blown Fable cap leaves a fifth of the week for every other model",
 			r.LastPoint, r.AtLimit())
 	}
 	want(t, p, ActionStay, ReasonAlreadyBest, "")

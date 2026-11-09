@@ -297,10 +297,12 @@ type Ranked struct {
 	UUID     string
 	Kind     identity.Kind
 	Headroom Headroom
-	// LastPoint is whether hover is handing this account off because a window
-	// a model choice cannot dodge is down to the last point it can report; see
-	// lastPoint.
-	LastPoint bool
+	// LastPoint names the window hover is handing this account off on because
+	// it is down to the last point it can report, or is "" when none is; see
+	// lastPoint and Options.lastPointOf. It is a name and not a flag for the
+	// reason Closing and HeldOut are: the departure mark waits for THAT window
+	// to roll over.
+	LastPoint usage.WindowName
 	// ShortWindow names the window shorter than a week this account carries,
 	// or "" when it carries none: the tier hover orders on, read off the
 	// reading's presence rather than its utilization. See shortWindowOf.
@@ -650,7 +652,7 @@ func measure(c Candidate, o Options) Ranked {
 		Headroom: h,
 		// Under hover only. A threshold a user typed is where they said to stop,
 		// and it is not this rule's to move.
-		LastPoint:      o.hover != nil && (lastPoint(h) || lastPoint(plan)),
+		LastPoint:      o.lastPointOf(h, plan),
 		ShortWindow:    shortWindowOf(c.Usage),
 		Closing:        o.closingWindow(c, h),
 		RecoversAt:     rec.at,

@@ -49,11 +49,11 @@ func TestTwoPointsLeftIsNotALastPoint(t *testing.T) {
 // 100. The rule belongs to hover's hand-off line, which nobody typed.
 func TestALastWeeklyPointIsHoversRuleAlone(t *testing.T) {
 	r := Rank([]Candidate{weekOnly("a", 99, 31*time.Hour)}, opts())
-	if r.Order[0].LastPoint {
+	if r.Order[0].LastPoint != "" {
 		t.Error("flagged a last point outside hover")
 	}
 	h := Rank([]Candidate{weekOnly("a", 99, 31*time.Hour)}, hoverOpts())
-	if !h.Order[0].LastPoint {
+	if h.Order[0].LastPoint != usage.WindowSevenDay {
 		t.Error("did not flag a last point under hover")
 	}
 }

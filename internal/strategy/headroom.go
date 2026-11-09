@@ -764,6 +764,29 @@ func lastPoint(h Headroom) bool {
 	return h.Known && RoomOf(h) <= handoffRoom(h)
 }
 
+// lastPointOf names the window an account is on its last point on under hover,
+// or "" when it is on none -- and "" always off hover, where a threshold a user
+// typed is where they said to stop, and it is not this rule's to move.
+//
+// h is what the account is ranked on and plan is its plan windows. They are the
+// same reading for every account but a primary credit seat, which is ranked on
+// its credit meter and asked of its plan windows as well, and the name is the
+// meter that is actually there: a seat whose opted-in cap is down to its last
+// point is handed off on that cap, and the mark it leaves waits for that cap's
+// rollover rather than for a credit balance that does not roll.
+// TestAPrimaryCreditSeatAtItsPlanLastPointIsAtALimitOnThatCap.
+func (o Options) lastPointOf(h, plan Headroom) usage.WindowName {
+	if o.hover == nil {
+		return ""
+	}
+	for _, m := range []Headroom{h, plan} {
+		if lastPoint(m) {
+			return roomWindow(m)
+		}
+	}
+	return ""
+}
+
 // handoffRoom is the room hover's line leaves on this account's binding meter:
 // one point of a plan window, which every window under hover is held to
 // (HoverHandoffThreshold), and on a primary credit seat what HoverCreditThreshold
