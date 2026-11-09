@@ -24,8 +24,10 @@
 // and then with a fixed account, moved AccountsNeeded, NeededBy, PointsLeft and
 // every verdict by nothing at all. So the engine could not use this measurement
 // to route better even if it could see it. What routing does move is
-// perishability -- quota that expires before anyone reaches it -- and that is
-// derived inside the engine, from each account's own reading, by hoverStranded.
+// perishability -- quota that expires before anyone reaches it -- and the engine
+// answers that from each account's own reading: hover's order takes the soonest
+// weekly reset first, through the comparator consume-first ranks by
+// (lessConsumeFirst).
 package forecast
 
 import (

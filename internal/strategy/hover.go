@@ -44,10 +44,11 @@ const (
 	//
 	// Hover has no pace line, so the only line room is measured against is the
 	// one it hands off at, and that is what `ccdad status --json` prints beside
-	// each window. It also fixes what the shared machinery means under hover.
-	// Spent is a window past 99, so ModeRecovery -- every account Spent -- is
-	// every account at or past its last point, which is when soonest-recovery is
-	// the right question. And it is positive, which bindingWindows relies on: a
+	// each window. It also fixes what the shared machinery means under hover:
+	// ModeRecovery is every account past this line on a window no model choice
+	// can dodge (Options.pastItsLine), which is when soonest-recovery is the
+	// right question -- and a blown cap on one model family does not get it
+	// there. And it is positive, which bindingWindows relies on: a
 	// non-positive per-window entry reads as "not opted in", and would silently
 	// revoke a user's consent for an unknown-scope cap.
 	HoverHandoffThreshold = 100 - handoffRoomPct

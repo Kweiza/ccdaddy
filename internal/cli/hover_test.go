@@ -557,11 +557,12 @@ func TestListReportsTheOverriddenKeysInJSON(t *testing.T) {
 // columns would read as a build with no quota feature rather than as a fleet
 // nobody could read.
 //
-// Row.Cells has answered it that way since it was written. Row.HoverCells never
-// did: it builds its slice from the window list alone, so on an empty one it
-// returned NO cells and the row came out one short of its own header. Every
-// cell after the block then slid one column left, and the figure standing under
-// QUOTA was the AGE.
+// Row.Cells has answered it that way since it was written. The hover table once
+// had a cell builder of its own that did not: it built its slice from the window
+// list alone, so on an empty one it returned NO cells and the row came out one
+// short of its own header. Every cell after the block then slid one column left,
+// and the figure standing under QUOTA was the AGE. Hover now builds its rows
+// through Row.Cells like every other table, and this keeps it that way.
 //
 // It takes a fleet with no reading at all to reach, which is why no fixture
 // here had it -- every other hover case in this file seeds a window. The cell

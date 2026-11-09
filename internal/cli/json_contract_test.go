@@ -687,8 +687,11 @@ func decodeContractStream(t *testing.T, stdout string) []map[string]any {
 		if err := json.Unmarshal([]byte(line), &ev); err != nil {
 			t.Fatalf("line %d does not parse on its own (%v): %q", i+1, err, line)
 		}
-		if ev["schemaVersion"] != float64(autoSchemaVersion) {
-			t.Fatalf("line %d: schemaVersion = %v, want the number %d: %q", i+1, ev["schemaVersion"], autoSchemaVersion, line)
+		// The literal and not autoSchemaVersion: a contract test that reads the
+		// constant it guards moves with it, and a version bump nobody meant would
+		// pass here. Changing this number is the deliberate act a bump is.
+		if ev["schemaVersion"] != float64(2) {
+			t.Fatalf("line %d: schemaVersion = %v, want the number 2: %q", i+1, ev["schemaVersion"], line)
 		}
 		events = append(events, ev)
 	}

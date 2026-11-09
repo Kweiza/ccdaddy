@@ -61,7 +61,7 @@ func TestDifferentAccountsGetDifferentPhases(t *testing.T) {
 }
 
 // A window whose length this build cannot name gets no phase, rather than a
-// guess. It is the same silence the licence floor answers a nameless scale with.
+// guess: there is no scale to state one on.
 func TestAWindowWithNoNameableLengthGetsNoPhase(t *testing.T) {
 	if got := warmPhase("u-1", rolledOver(time.Minute), usage.WindowName("not_a_window")); got != 0 {
 		t.Errorf("warmPhase = %v for a window this build cannot measure, want 0", got)
