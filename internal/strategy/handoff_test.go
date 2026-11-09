@@ -736,6 +736,35 @@ func TestASpentLivePoolSeatTakesAHeldOutSeat(t *testing.T) {
 	want(t, p, ActionSwitch, ReasonBetterTarget, "c1")
 }
 
+// A walk that finds every pool seat's balance spent reports the gate's own
+// refusal of the first one -- the allowed spend is used up -- rather than that
+// no account has quota: the seats are passed as at their limit, and the
+// sentence is still the one a user can act on. Under hover and outside it,
+// with a spent subscription account live, and with no main pool at all.
+func TestASpentBalanceIsReportedByTheGate(t *testing.T) {
+	empty := maxAcct("a-empty", 100, 2*time.Hour, 60, 3*day)
+	cfg := Config{MaxAutoSpend: 500}
+	for _, hover := range []bool{false, true} {
+		for _, tc := range []struct {
+			name string
+			pool []Candidate
+			live string
+		}{
+			{"a spent subscription account live", []Candidate{empty, spentPoolSeat("c1", 100), spentPoolSeat("c2", 100)}, "a-empty"},
+			{"no main pool", []Candidate{spentPoolSeat("c1", 100), spentPoolSeat("c2", 100)}, "c1"},
+			{"a lone seat", []Candidate{spentPoolSeat("c1", 100)}, "c1"},
+		} {
+			o := opts()
+			o.Hover = hover
+			p := Decide(tc.pool, o, cfg, NewState(), tc.live)
+			if p.Action != ActionBlocked || p.Reason != ReasonCreditGate || p.Credit.Reason != CreditNoRoom {
+				t.Errorf("hover %v, %s: %s (%s), credit %q; want blocked by the gate: %s",
+					hover, tc.name, p.Action, p.Reason, p.Credit.Reason, CreditNoRoom)
+			}
+		}
+	}
+}
+
 // A wait for the credit pool is a wait for a move a seat can take. S is on its
 // last point, A is empty and a pool seat is registered, but with max_auto_spend
 // at its default of 0 the gate arms nothing: the session is blocked as any dry

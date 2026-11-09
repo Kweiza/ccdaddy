@@ -573,13 +573,29 @@ func Decide(cands []Candidate, o Options, cfg Config, st *State, activeUUID stri
 // reach it, each at its own point; the walk itself is one.
 func (p *Plan) creditWalk(byUUID map[string]Candidate, activeUUID string, cfg Config, st *State, now time.Time) {
 	var firstRefusal Decision
+	refused := func(d Decision) {
+		if !p.CreditConsulted {
+			firstRefusal = d
+			p.CreditConsulted = true
+		}
+	}
 	admitHeld := p.heldOutSeatsAdmitted(activeUUID)
 	for _, r := range p.Result.Credit {
-		if r.AtLimit() != "" {
+		if on := r.AtLimit(); on != "" {
 			// A seat at its own limit is nowhere to go, the live one or
 			// another: the gate reads only the credit balance, and passing a
 			// spent seat traded the session onto it and off again every
 			// cooldown until its window rolled. TestTheCreditWalkSkipsASpentSeat.
+			//
+			// A seat whose limit is its credit balance is the gate's to
+			// describe, though: its own refusal names the spend as used up,
+			// and that is the sentence a walk that finds nowhere reports.
+			// TestASpentBalanceIsReportedByTheGate.
+			if on == CreditWindow {
+				if d := CreditGate(extraUsageOf(byUUID[r.UUID]), cfg.MaxAutoSpend, true); !d.Allow {
+					refused(d)
+				}
+			}
 			continue
 		}
 		if r.HeldOut != "" && !admitHeld {
@@ -595,10 +611,7 @@ func (p *Plan) creditWalk(byUUID map[string]Candidate, activeUUID string, cfg Co
 		c := byUUID[r.UUID]
 		d := CreditGate(extraUsageOf(c), cfg.MaxAutoSpend, true)
 		if !d.Allow {
-			if !p.CreditConsulted {
-				firstRefusal = d
-				p.CreditConsulted = true
-			}
+			refused(d)
 			continue
 		}
 		p.CreditConsulted = true
