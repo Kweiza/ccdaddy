@@ -147,6 +147,15 @@ type Decision struct {
 	DisabledReason string
 }
 
+// creditRefused is whether the account itself refuses to spend credit: its
+// extra-usage reading is Blocked -- out of credits, or another refusal its
+// holder or organization set -- whatever its utilization says. It is the gate's
+// blocked refusal, and half of a seat's spent credit meter (creditSpent), so
+// the two never disagree about which readings mean no credit.
+func creditRefused(e usage.ExtraUsage) bool {
+	return e.State == usage.ExtraUsageBlocked
+}
+
 // CreditGate is the last two steps of the credit gate, applied to one
 // LAST-RESORT credit account: when the configured ceiling is 0, its default,
 // answer blocked — exit 4 and a notification — rather than switch; and refuse
@@ -186,12 +195,13 @@ func CreditGate(e usage.ExtraUsage, ceiling float64, mainPoolExhausted bool) Dec
 	// they all carry Blocked.
 	d.Blocked = true
 
+	if creditRefused(e) {
+		d.Reason = CreditAccountBlocked
+		return d
+	}
 	switch e.State {
 	case usage.ExtraUsageDisabled:
 		d.Reason = CreditAccountDisabled
-		return d
-	case usage.ExtraUsageBlocked:
-		d.Reason = CreditAccountBlocked
 		return d
 	case usage.ExtraUsageUnknown:
 		// An account whose credit axis could not be read is one ccdad cannot
