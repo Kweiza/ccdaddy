@@ -480,6 +480,94 @@ func TestAStaleRunningFlagDoesNotOpenTheCreditPool(t *testing.T) {
 	noCredit(t, p, "a stale running flag opened the credit pool while B's reading showed room")
 }
 
+// The hold that waits for the live account's empty reading names that reading
+// as when it lifts -- B's next poll, a minute out -- rather than a rollover
+// hours away: it is the reading, not the clock, that opens the pool.
+func TestAnEmptyReadingsWaitNamesTheNextReading(t *testing.T) {
+	b := sub("b-live", &usage.Snapshot{FiveHour: win(76, 3*time.Hour), SevenDay: win(50, 4*day)})
+	b.FetchedAt, b.NextPollAt = now.Add(-5*time.Minute), now.Add(time.Minute)
+	b.LiveBurns = []usage.LiveBurn{{PerMin: 5.4, Window: usage.WindowFiveHour, From: now.Add(-10 * time.Minute), At: now.Add(-7 * time.Minute)}}
+	o := hoverOpts()
+	o.Threshold = 70
+	p := Decide([]Candidate{b, maxAcct("a-empty", 100, 2*time.Hour, 60, 3*day), openSeat()}, o, Config{MaxAutoSpend: 500}, NewState(), "b-live")
+	want(t, p, ActionBlocked, ReasonNothingCanServe, "")
+	if !p.HasRetryAt || !p.RetryAt.Equal(b.NextPollAt) {
+		t.Errorf("RetryAt %s (set %v), want B's next reading at %s", p.RetryAt.Sub(now), p.HasRetryAt, b.NextPollAt.Sub(now))
+	}
+}
+
+// A projection never moves the session onto a primary seat's balance. S, a Max
+// at 70%, is closing at the rate the work runs; the primary seat P could carry
+// the work, and the move to it would be paid for. S stays until its own reading
+// says its last point, and then goes. From P the session goes back to S on S's
+// level -- S has room -- and the way back up is shut while S reads room, so the
+// two cannot trade the login every cooldown across a pause.
+func TestAProjectionDoesNotMoveOntoAPrimarySeat(t *testing.T) {
+	s := func(pct float64) Candidate {
+		return measuredLive(polled(maxAcct("s-max", pct, 3*time.Hour, 40, 3*day), 180*time.Second), 5.4, usage.WindowFiveHour)
+	}
+	seat := primarySeat("p-seat", 41)
+	p := Decide([]Candidate{s(70), seat}, hoverOpts(), Config{}, NewState(), "s-max")
+	if r, _ := find(p.Result, "s-max"); r.Closing == "" {
+		t.Fatalf("S is not closing: the case is not a projection")
+	}
+	if p.Action == ActionSwitch {
+		t.Errorf("switched to %s (%s) on a projection: the move onto the seat's balance waits for S's level", p.Target.UUID, p.Reason)
+	}
+	p = Decide([]Candidate{s(99.5), seat}, hoverOpts(), Config{}, NewState(), "s-max")
+	want(t, p, ActionSwitch, ReasonLastPoint, "p-seat")
+
+	p = Decide([]Candidate{s(70), seat}, hoverOpts(), Config{}, leftAt("s-max", usage.WindowFiveHour), "p-seat")
+	want(t, p, ActionSwitch, ReasonBetterTarget, "s-max")
+}
+
+// Nor does an unreadable account trade the login with a primary seat. U has
+// never been read: from the seat the session goes back to it, a cold start
+// being a carrier by its level; from U the order would put the seat ahead -- a
+// known weekly-only seat before an unread one -- but U reads no limit, so the
+// move up to the seat's balance is not made.
+func TestAnUnreadableAccountDoesNotTradeWithAPrimarySeat(t *testing.T) {
+	u := sub("u-unread", nil)
+	seat := primarySeat("p-seat", 41)
+	p := Decide([]Candidate{u, seat}, hoverOpts(), Config{}, NewState(), "p-seat")
+	want(t, p, ActionSwitch, ReasonBetterTarget, "u-unread")
+	p = Decide([]Candidate{u, seat}, hoverOpts(), Config{}, NewState(), "u-unread")
+	if p.Action == ActionSwitch {
+		t.Errorf("switched from the unread account to %s (%s)", p.Target.UUID, p.Reason)
+	}
+}
+
+// From a live pool seat the way back is walked cheapest first: S, a Max with
+// forty points the work would spend before its second reading, is free quota,
+// and it is taken before the primary seat P that could carry the work.
+func TestAPoolSeatReturnsToFreeQuotaBeforeAPrimarySeat(t *testing.T) {
+	s := measuredLive(idleOn(maxAcct("s-max", 60, 3*time.Hour, 40, 3*day)), 10, usage.WindowFiveHour)
+	seat := primarySeat("p-seat", 41)
+	p := Decide([]Candidate{s, seat, openSeat()}, hoverOpts(), Config{}, NewState(), "c-seat")
+	if r, _ := find(p.Result, "p-seat"); !r.Carries {
+		t.Fatalf("the primary seat does not carry the work: the case is not the ladder's order")
+	}
+	want(t, p, ActionSwitch, ReasonShortWindowRoom, "s-max")
+}
+
+// The credit walk does not move the session onto the seat it is on. With no
+// main pool, a live seat walks to the next one; alone, it stays where it is.
+func TestTheCreditWalkSkipsTheLiveSeat(t *testing.T) {
+	seat := func(uuid string, limit float64) Candidate {
+		return creditWith(uuid, usage.ExtraUsageFor(usage.ExtraUsageInput{
+			State: usage.ExtraUsageEnabled, Currency: "USD", MonthlyLimit: pf(limit), UsedCredits: pf(0), Utilization: pf(0),
+		}))
+	}
+	for _, hover := range []bool{false, true} {
+		o := opts()
+		o.Hover = hover
+		p := Decide([]Candidate{seat("c1", 100000), seat("c2", 1000)}, o, Config{MaxAutoSpend: 500}, NewState(), "c1")
+		want(t, p, ActionSwitch, ReasonBetterTarget, "c2")
+		p = Decide([]Candidate{seat("c1", 100000)}, o, Config{MaxAutoSpend: 500}, NewState(), "c1")
+		want(t, p, ActionStay, ReasonAlreadyBest, "")
+	}
+}
+
 // A live Ultra moved from 98% to 99% of its week in three minutes: one quantum,
 // a third of a point a minute, which has it out by the next reading. Every
 // other account is empty and the seat is opted in, but the Ultra's last point

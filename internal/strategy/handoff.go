@@ -103,8 +103,10 @@ func (r workRate) replaces(cur workRate) bool {
 // read "cannot say" on almost every account for want of a size nobody reports.
 // The error is bounded instead, while the work runs: the prompt poll a switch
 // schedules gives the new live account a live pair of its own within the serve
-// floor and one live cadence (pollpolicy.ServeTTL + hoverBlind), and a running
-// pair replaces the rate from the other plan. A pause does not
+// floor and one live cadence (pollpolicy.ServeTTL + hoverBlind) on an identity
+// of one -- an identity that shares its budget divides both, and a 429 holds
+// the poll to its backoff, so the pair comes later there -- and a running pair
+// replaces the rate from the other plan. A pause does not
 // (workRate.replaces), so across a pause the other plan's rate stands until the
 // work is seen running again; the last-point level hand-off catches whatever
 // the projection misses either way.
@@ -219,7 +221,8 @@ type work struct {
 // under burst load from 142 to 168 and under production load from 346 to 347,
 // and lowered that fleet under heavy load from 239 to 143. A running endgame
 // makes no pairs either, so the cap closed the last resort on work that was
-// running, and a stop outranks a trade that costs no money (creditOpen).
+// running, and a stop outranks a trade that buys no credits (creditOpen) and
+// moves onto no primary seat's balance before a last point reads (reachable).
 func (o Options) workSeenRunning(cands []Candidate) bool {
 	var latest Candidate
 	for _, c := range cands {
@@ -580,7 +583,9 @@ func (p *Plan) hoverMove(activeUUID string, cfg Config, st *State, o Options, by
 	}
 
 	// At a limit: the first carrier, then a bridge if the live account would
-	// stop unseen, then a last resort if it has nothing left, then money.
+	// stop unseen, then a last resort if it has nothing left, then money --
+	// each among the accounts a move from here may reach (reachable).
+	res = p.reachable(live)
 	if target, ok := firstCarrier(res, activeUUID, byUUID, o.Now); ok {
 		p.moveOrHold(target, leaveReason(live, target), activeUUID, cfg, st, o.Now)
 		return
@@ -601,7 +606,61 @@ func (p *Plan) hoverMove(activeUUID string, cfg Config, st *State, o Options, by
 		p.creditWalk(byUUID, activeUUID, cfg, st, o.Now)
 		return
 	}
-	p.hold(ReasonNothingCanServe, soonestRollover(res))
+	retry := soonestRollover(p.Result)
+	if p.creditWaitsOn(live) {
+		// What lifts this hold is the live account's own empty reading, not a
+		// rollover hours out. TestAnEmptyReadingsWaitNamesTheNextReading.
+		retry = nextReading(byUUID[live.UUID], o.Now)
+	}
+	p.hold(ReasonNothingCanServe, retry)
+}
+
+// reachable is the order a move off live may go to: every account when live
+// reads at its last point or empty, and otherwise only those no dearer than
+// live (seatCost). Money is decided on readings, the way in to a dearer seat as
+// the way out of it (creditSeatReturn) and the way in to the credit pool
+// (creditOpen): a projection may choose among accounts metered alike, and never
+// buys a move onto a primary seat's balance. Read on a level in both
+// directions, the move down (the target has room) and the move up (the live
+// account has none) cannot both hold of one account at once, so the session
+// cannot cycle between free quota and a seat, and no free quota is left behind
+// for money. The cost: a session whose work outruns the readings can stop at a
+// free account's limit until a reading shows it there, and only then move to
+// the seat. TestAProjectionDoesNotMoveOntoAPrimarySeat,
+// TestAnUnreadableAccountDoesNotTradeWithAPrimarySeat.
+func (p *Plan) reachable(live Ranked) Result {
+	if !live.roomyByLevel() {
+		return p.Result
+	}
+	cost := p.seatCost(live)
+	return p.orderWhere(func(r Ranked) bool { return p.seatCost(r) <= cost })
+}
+
+// orderWhere is the pass with its order narrowed to the accounts keep admits,
+// in the order's own order.
+func (p *Plan) orderWhere(keep func(Ranked) bool) Result {
+	res := p.Result
+	res.Order = nil
+	for _, r := range p.Result.Order {
+		if keep(r) {
+			res.Order = append(res.Order, r)
+		}
+	}
+	return res
+}
+
+// nextReading is when c is next read: its schedule, held to the serve floor
+// after its last reading the way the daemon's due() holds it, and no sooner
+// than now. A schedule a 429 set is in NextPollAt already.
+func nextReading(c Candidate, now time.Time) time.Time {
+	at := c.NextPollAt
+	if floor := c.FetchedAt.Add(pollpolicy.ServeTTL); floor.After(at) {
+		at = floor
+	}
+	if now.After(at) {
+		at = now
+	}
+	return at
 }
 
 // hoverMoveWithRoom is the move from a live account with room: to the first
@@ -626,7 +685,7 @@ func (p *Plan) hoverMoveWithRoom(live Ranked, activeUUID string, cfg Config, st 
 	}
 	stay, retryAt := ReasonAlreadyBest, time.Time{}
 	kept := false
-	for _, target := range p.Result.Order {
+	for _, target := range p.reachable(live).Order {
 		if isActive(target.UUID, activeUUID) {
 			break
 		}
@@ -661,16 +720,16 @@ func (p *Plan) hoverMoveWithRoom(live Ranked, activeUUID string, cfg Config, st 
 // last-resort pool, or a primary seat, whose work is paid for by the point. It
 // goes back to quota that is cheaper (seatCost) on the levels alone, whatever
 // the account's rung -- one held out included -- and whether or not it can
-// carry the work: an account that can is taken first, and with none, any that
-// is not empty and not on its last point. Free quota is spent before money even
-// when that means another move once the free account runs out, and the move
-// out of it, back onto credits, is again decided on its levels (creditOpen).
-// The cooldown still applies. With no such account the seat stays.
+// carry the work, cheapest first: on each rung of cost below the seat's, an
+// account that can carry the work, then any that is not empty and not on its
+// last point. Free quota is spent before money even when that means another
+// move once the free account runs out, and the move out of it, back onto a
+// seat, is again decided on its levels (reachable, creditOpen). The cooldown
+// still applies. With no such account the seat stays.
 // TestALiveCreditSeatReturnsToFreeQuota,
-// TestALiveCreditSeatReturnsToAHeldOutCarrier.
+// TestALiveCreditSeatReturnsToAHeldOutCarrier,
+// TestAPoolSeatReturnsToFreeQuotaBeforeAPrimarySeat.
 func (p *Plan) creditSeatReturn(live Ranked, activeUUID string, cfg Config, st *State, now time.Time, byUUID map[string]Candidate) {
-	cost := p.seatCost(live)
-	cheaper := func(r Ranked) bool { return !isActive(r.UUID, activeUUID) && p.seatCost(r) < cost }
 	back := func(target Ranked) {
 		// The order's own reason when the order would make this move, so the
 		// sentence says which rule it is; else why the seat is left.
@@ -680,14 +739,17 @@ func (p *Plan) creditSeatReturn(live Ranked, activeUUID string, cfg Config, st *
 		}
 		p.moveOrHold(target, reason, activeUUID, cfg, st, now)
 	}
-	if target, ok := firstCarrier(p.Result, activeUUID, byUUID, now); ok && cheaper(target) {
-		back(target)
-		return
-	}
-	for _, r := range p.Result.Order {
-		if cheaper(r) && r.roomyByLevel() {
-			back(r)
+	for cost := 0; cost < p.seatCost(live); cost++ {
+		rung := p.orderWhere(func(r Ranked) bool { return !isActive(r.UUID, activeUUID) && p.seatCost(r) == cost })
+		if target, ok := firstCarrier(rung, activeUUID, byUUID, now); ok {
+			back(target)
 			return
+		}
+		for _, r := range rung.Order {
+			if r.roomyByLevel() {
+				back(r)
+				return
+			}
 		}
 	}
 	p.hold(ReasonNoSubscriptionRoom, time.Time{})
@@ -719,15 +781,39 @@ func (p *Plan) seatCost(r Ranked) int {
 // seat's last point -- because the decision rested on the forecast. The cost is
 // the other direction: with credits opted in and the whole fleet dry, a session
 // whose live account runs out between two readings waits for the reading that
-// shows it empty, up to the serve floor (pollpolicy.ServeTTL, three minutes)
-// after the last one. TestAPausedLiveAccountDoesNotOpenTheCreditPool,
+// shows it empty -- the serve floor (pollpolicy.ServeTTL, three minutes) at the
+// live cadence, and longer while the usage endpoint throttles the poll, 360 to
+// 1800 seconds after a 429. That is a wait, not a bound.
+// TestAPausedLiveAccountDoesNotOpenTheCreditPool,
 // TestAStaleRunningFlagDoesNotOpenTheCreditPool,
 // TestAWeeklySeatsLastPointDoesNotOpenTheCreditPool.
 func (p *Plan) creditOpen() bool {
-	if !p.SubscriptionExhausted || len(p.Result.Credit) == 0 {
+	return p.creditGateOpen() && p.mainPoolEmptyBut("")
+}
+
+// creditWaitsOn is whether the credit pool waits on live's own reading alone:
+// everything else creditOpen asks of the pass holds, and live does not read
+// empty yet.
+func (p *Plan) creditWaitsOn(live Ranked) bool {
+	if _, empty := live.Empty(); empty {
 		return false
 	}
+	return p.creditGateOpen() && p.mainPoolEmptyBut(live.UUID)
+}
+
+// creditGateOpen is the half of creditOpen that reads no level: the user's
+// thresholds call the main pool exhausted, and there is a seat to walk.
+func (p *Plan) creditGateOpen() bool {
+	return p.SubscriptionExhausted && len(p.Result.Credit) > 0
+}
+
+// mainPoolEmptyBut is whether every account of the main pool but skip reads
+// empty on a window no model choice can dodge.
+func (p *Plan) mainPoolEmptyBut(skip string) bool {
 	for _, r := range p.Result.Order {
+		if r.UUID == skip {
+			continue
+		}
 		if _, empty := r.Empty(); !empty {
 			return false
 		}
@@ -842,8 +928,11 @@ func bridge(res Result, live Ranked, cooldown time.Duration) (Ranked, bool) {
 // more than the live one's remainder and less than a carrier's can take the
 // login across a pause and, its own projection run out in turn, hand it back.
 // Each move is a credential write, a prompt poll and a settings sync, a session
-// that resumes right after one waits out the cooldown for the next, and none of
-// them spends money (creditOpen).
+// that resumes right after one waits out the cooldown for the next. None of
+// them buys credits (creditOpen), and none moves onto a primary seat's balance
+// unless the live account reads at its last point or empty (reachable); a
+// pause then leaves the session on that balance, spent only if the work
+// resumes.
 //
 // The rule that would stop the trade here even while the work is seen running
 // -- a last resort must outlast the live account, holding more of the work than
