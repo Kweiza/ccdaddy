@@ -328,9 +328,10 @@ type Ranked struct {
 	// Closing names the window this account would run out of before the
 	// engine can act on it, or "" when none would. Each mode states what
 	// "before the engine can act" is in its own rules (passrules.go): under
-	// hover, before the live account's reading after next, and on the live
-	// account alone (hoverRules); under the configured strategies, inside each
-	// account's own pre-emptive horizon (configuredRules).
+	// hover, within its window's reserve after the live account's next
+	// reading, and on the live account alone (hoverRules); under the
+	// configured strategies, inside each account's own pre-emptive horizon
+	// (configuredRules).
 	Closing usage.WindowName
 	// HasRunway is whether the work running now has a rate to project on this
 	// account's windows, and RunsOutAt when that projection has the work stop
@@ -340,6 +341,10 @@ type Ranked struct {
 	HasRunway bool
 	RunsOutAt time.Time
 	RunsOutOn usage.WindowName
+	// closesAt is RunsOutAt less the reserve of the window it is on
+	// (closingReserve): a look no later than it finds the live account
+	// closing. Zero on an account the session is not on.
+	closesAt time.Time
 	// workRunning is whether the work was seen running (work.running), for the
 	// live account's limit.
 	workRunning bool
@@ -707,6 +712,7 @@ func measure(c Candidate, o Options) Ranked {
 		HasRunway:        rw.known,
 		RunsOutAt:        rw.at,
 		RunsOutOn:        rw.on,
+		closesAt:         rw.closesAt,
 		workRunning:      o.work != nil && o.work.running,
 		HeldOut:          lim.heldOut,
 		RecoversAt:       rec.at,

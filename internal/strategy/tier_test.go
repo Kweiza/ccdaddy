@@ -148,10 +148,9 @@ func TestAShortWindowAccountAtItsLastPointHandsOffToAnUltraWhenNoShortHasRoom(t 
 // it began and the session would run into the wall with an Ultra seat roomy
 // beside it.
 func TestAShortWindowAccountAboutToRunOutIsPreemptedOntoTheBackstop(t *testing.T) {
-	// Ten points left, burning five a minute, read a minute ago and next read in
-	// a minute: two minutes of work against a horizon the observed gaps make
-	// four minutes long.
-	live := polled(maxAcct("a-live", 90, 4*time.Hour, 50, 4*day), 60*time.Second)
+	// Four points left, burning five a minute, read now and next read in a
+	// minute: the five-hour window runs out before that reading.
+	live := polled(maxAcct("a-live", 96, 4*time.Hour, 50, 4*day), 60*time.Second)
 	live.BurnPerMin, live.HasBurn, live.BurnWindow = 5, true, usage.WindowFiveHour
 	pool := []Candidate{live, weekOnly("u-ultra", 20, 2*day)}
 
@@ -346,8 +345,9 @@ func TestTheLastPointHandOffDoesNotMoveOntoALimit(t *testing.T) {
 // would not be at a limit at its first live reading, as a bridge if B would stop
 // before its next reading and A outlasts it by a cooldown, and as a last resort
 // if B has nothing left at all -- onto A's last point only once B reads empty.
-// The points are derived from the horizons, so the tiers hold for any reserve
-// the poll policy sets.
+// B's limit is its five-hour window, which is run to its next reading: a stop
+// a reserve after that reading is room. The points are derived from the
+// horizons, so the tiers hold for any reserve the poll policy sets.
 func TestALastPointHandsOffToAnAccountThatOutlastsIt(t *testing.T) {
 	const rate = 0.84
 	points := func(d time.Duration) float64 { return rate * d.Minutes() }
@@ -364,8 +364,9 @@ func TestALastPointHandsOffToAnAccountThatOutlastsIt(t *testing.T) {
 		reason     Reason
 	}{
 		{"B with room stays", points(cadence + hoverReserve + 5*time.Minute), points(carrierNeeds + 2*time.Minute), false, ReasonAlreadyBest},
-		{"B closing hands to A, a carrier", points(cadence + hoverReserve/2), points(carrierNeeds + 2*time.Minute), true, ReasonProjectedExhaustion},
-		{"B closing does not take a bridge", points(cadence + hoverReserve/2), points(cadence + HoverCooldown + 3*time.Minute), false, ReasonNothingCanServe},
+		{"B out a reserve after its next reading keeps a carrier", points(cadence + hoverReserve/2), points(carrierNeeds + 2*time.Minute), false, ReasonAlreadyBest},
+		{"B stopping hands to A, a carrier", points(cadence - 30*time.Second), points(carrierNeeds + 2*time.Minute), true, ReasonProjectedExhaustion},
+		{"B out a reserve after its next reading keeps a bridge", points(cadence + hoverReserve/2), points(cadence + HoverCooldown + 3*time.Minute), false, ReasonAlreadyBest},
 		{"B stopping hands to A, a bridge", points(cadence), points(cadence + HoverCooldown + time.Minute), true, ReasonProjectedExhaustion},
 		{"B stopping keeps a bridge short of a cooldown", points(cadence), points(cadence + HoverCooldown/2), false, ReasonNothingCanServe},
 		{"B out hands to A, a last resort", 0.005, points(HoverCooldown * 3 / 4), true, ReasonLastPoint},
@@ -434,11 +435,12 @@ func TestTheOrdinaryMoveDoesNotTakeATargetTheWalkRefused(t *testing.T) {
 	}
 }
 
-// The walk turns away a target on its last point. Ahead of a closing Max on the
-// limit rung sorts an Ultra on its last point whose week ends sooner; taking it
-// moved the session A to B, and B's last point moved it straight back.
+// The walk turns away a target on its last point. Ahead of a Max on the limit
+// rung -- eight points at three a minute, out before its next reading -- sorts
+// an Ultra on its last point whose week ends sooner; taking it moved the
+// session A to B, and B's last point moved it straight back.
 func TestPreemptionDoesNotRunToAnAccountOnItsLastPoint(t *testing.T) {
-	a := polled(maxAcct("a-live", 85, 50*time.Minute, 50, 4*day), 180*time.Second)
+	a := polled(maxAcct("a-live", 92, 50*time.Minute, 50, 4*day), 180*time.Second)
 	a.BurnPerMin, a.HasBurn, a.BurnWindow = 3, true, usage.WindowFiveHour
 	b := idleOn(weekOnly("b-ultra", 99, 3*day))
 
@@ -466,11 +468,11 @@ func TestAWindowThatResetsBeforeItRunsOutIsNotClosing(t *testing.T) {
 		t.Errorf("%s (%s) to %q, want a stay: the window resets before it runs out", p.Action, p.Reason, p.Target.UUID)
 	}
 
-	// At two points a minute the live account runs out half a reserve after its
-	// next reading, a minute away: it is closing, whatever the reserve. The
-	// target has four points the work would spend in two minutes -- but its
-	// window resets in ninety seconds.
-	room := 2 * (time.Minute + hoverReserve/2).Minutes()
+	// At two points a minute the live account runs out three quarters of a
+	// minute in, before its next reading a minute away: it is at a limit,
+	// whatever the reserve. The target has four points the work would spend in
+	// two minutes -- but its window resets in ninety seconds.
+	room := 2 * (3 * time.Minute / 4).Minutes()
 	closing := polled(maxAcct("a-live", 100-room, 3*time.Hour, 50, 4*day), 60*time.Second)
 	closing.BurnPerMin, closing.HasBurn, closing.BurnWindow = 2, true, usage.WindowFiveHour
 	resets := idleOn(maxAcct("b-resets", 96, 90*time.Second, 40, 3*day))
@@ -525,9 +527,9 @@ func TestAPrimaryCreditSeatIsAtALimitAtHoversCreditThreshold(t *testing.T) {
 // not take the only other account -- nobody could read it -- reports the
 // projection, not "a better target".
 func TestTheReasonForLeavingIsTheLiveAccountsLimit(t *testing.T) {
-	// Three points at two a minute is ninety seconds, inside a horizon of two
-	// minutes -- the one observed gap plus the least lead.
-	live := polled(maxAcct("a-live", 97, 3*time.Hour, 50, 4*day), 60*time.Second)
+	// A point and a half at two a minute is forty-five seconds, before the next
+	// reading a minute away.
+	live := polled(maxAcct("a-live", 98.5, 3*time.Hour, 50, 4*day), 60*time.Second)
 	live.BurnPerMin, live.HasBurn, live.BurnWindow = 2, true, usage.WindowFiveHour
 	unread := Candidate{UUID: "b-unread", Kind: identity.KindSubscription}
 

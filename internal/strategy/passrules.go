@@ -59,9 +59,9 @@ func (configuredRules) limitsOf(o Options, c Candidate, h, _ Headroom, _ runway)
 // limits in its order.
 //
 // Closing is set on the LIVE account only, and means the work would stop it
-// before the reading after next (liveLimitOf): an account the session is not
-// on is filed by its levels and its mark alone, and whether it could take the
-// work is Carries.
+// within its window's reserve after its next reading (liveLimitOf): an account
+// the session is not on is filed by its levels and its mark alone, and whether
+// it could take the work is Carries.
 type hoverRules struct{}
 
 func (hoverRules) limitsOf(o Options, c Candidate, h, plan Headroom, rw runway) passLimits {

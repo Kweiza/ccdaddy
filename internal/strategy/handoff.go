@@ -40,20 +40,23 @@ const EvaluationInterval = time.Second
 // The hand-off rule's horizons, each a constant of the poll policy rather than a
 // number of this file's own. TestTheHorizonTermsAreThePollPolicysOwn.
 const (
-	// hoverReserve is λ: the live account is closing when the work would stop it
-	// within λ after its next reading. It is the poll policy's normal floor, the
-	// shortest gap it leaves between two ordinary readings, so a live account
-	// that would stop inside it may well stop before the engine reads it again.
+	// hoverReserve is λ: a live account the work would stop on a week is
+	// closing when it would stop within λ after its next reading
+	// (closingReserve; a five-hour window has none). It is the poll policy's
+	// normal floor, the shortest gap it leaves between two ordinary readings,
+	// so a live account that would stop inside it may well stop before the
+	// engine reads it again.
 	//
 	// A longer reserve tolerates a sharper rise in the work between two
 	// readings and throws away more of every window the session leaves.
 	// CandidateMaxInterval (600 s) was measured against this over the
 	// simulated week -- whole-percent readings, the daemon's warm-ups, the
-	// pause load -- on the engine of 2026-11-09, before the last-point rule
-	// (lastResort), and lost on the whole: 4298 s stopped with room on
-	// another account across every fleet and load, against 3562 s here, and
-	// more left behind, today's five-hour account reaching its weekly reset
-	// 3.98 points unspent against 1.98. It was better in five variants:
+	// pause load -- on the engine of 2026-11-09, before the last-point rule and
+	// the five-hour window's reserve went, and lost on the whole: 4298 s
+	// stopped with room on another account across every fleet and load,
+	// against 3562 s there, and more left behind, today's five-hour account
+	// reaching its weekly reset 3.98 points unspent against 1.98. It was
+	// better in five variants:
 	// today's fleet and the big Ultras under burst load, 29 s to none each;
 	// two Max under heavy load, 1641 to 1272; two Max, three Ultras under
 	// heavy load, 239 to 233, and under production load, 346 to 234. It was
@@ -216,12 +219,13 @@ type work struct {
 // login can still move across it onto an account that holds more than its
 // last point and cannot carry the work (lastResort). An age cap at the serve
 // floor and a live cadence (pollpolicy.ServeTTL + hoverBlind) was measured and
-// not taken, on the engine of 2026-11-09, before the last-point rule. On two
-// Max accounts under the pause load it cut the week's switches from 119 to 95
-// and raised the seconds stopped with room on another account from 250 to 845;
-// it raised two Max under burst load from 958 to 967, two Max and three Ultras
-// under burst load from 142 to 168 and under production load from 346 to 347,
-// and lowered that fleet under heavy load from 239 to 143. A running endgame
+// not taken, on the engine of 2026-11-09, before the last-point rule and the
+// five-hour window's reserve went. On two Max accounts under the pause load it
+// cut the week's switches from 119 to 95 and raised the seconds stopped with
+// room on another account from 250 to 845; it raised two Max under burst load
+// from 958 to 967, two Max and three Ultras under burst load from 142 to 168
+// and under production load from 346 to 347, and lowered that fleet under
+// heavy load from 239 to 143. A running endgame
 // makes no pairs either, so the cap closed the last resort on work that was
 // running, and a stop outranks a trade that buys no credits (creditOpen) and
 // moves onto no primary seat's balance before a last point reads (reachable).
@@ -257,11 +261,22 @@ type runway struct {
 	// window resets before it is spent.
 	at time.Time
 	on usage.WindowName
+	// closesAt is at less that window's reserve (closingReserve): a look that
+	// comes no later than it finds the account closing. The live account's
+	// alone, the one account a runway is fixed for between two readings and
+	// the one liveLimitOf files; zero on any other.
+	closesAt time.Time
 }
 
 // stopsBy is whether the work stops this account no later than t.
 func (r runway) stopsBy(t time.Time) bool {
 	return r.known && !r.at.IsZero() && !r.at.After(t)
+}
+
+// closesBy is whether the work stops this account within its window's reserve
+// after t.
+func (r runway) closesBy(t time.Time) bool {
+	return r.known && !r.at.IsZero() && !r.closesAt.After(t)
 }
 
 // runwayOf is THE projection: when the work running now would stop this account.
@@ -319,6 +334,9 @@ func (o Options) runwayOf(c Candidate) runway {
 		}
 		if out.at.IsZero() || at.Before(out.at) {
 			out.at, out.on = at, w.Name
+			if live {
+				out.closesAt = at.Add(-closingReserve(w))
+			}
 		}
 	}
 	return out
@@ -423,9 +441,11 @@ func sinceReset(from time.Time, win usage.Window) time.Time {
 }
 
 // liveLimit is the live account's state against the work's runway: closing when
-// the work would stop it before the reading after next, stopping when before the
-// next one, and out when before the engine looks again. Each is a narrower
-// version of the one before, and the window named is the one that stops it.
+// the work would stop it within its window's reserve after the next reading
+// (closingReserve), stopping when before the next reading, and out when before
+// the engine looks again. Each is a narrower version of the one before -- on a
+// window with no reserve closing and stopping are a tick apart -- and the
+// window named is the one that stops it.
 type liveLimit int
 
 const (
@@ -436,16 +456,37 @@ const (
 )
 
 // The leads, before the end of a runway, that the hand-off measures from a
-// look: out and stopping are a tick before it, closing a reserve before it,
-// and a carrier must outlast a live cadence and a reserve after its first live
-// reading. Each is stated here once, for liveLimitOf, carries and lastResort,
-// and for the weekly simulation's clockTurns (clockturns_test.go), which says
-// when the clock reaches them.
+// look: out and stopping are a tick before it, closing its window's reserve
+// before it (closingReserve), and a carrier must outlast a live cadence and a
+// reserve after its first live reading. Each is stated here once, for
+// liveLimitOf, carries and lastResort, and for the weekly simulation's
+// clockTurns (clockturns_test.go), which says when the clock reaches them.
 const (
 	outLead     = EvaluationInterval
-	closingLead = hoverReserve
 	carrierLead = hoverBlind + hoverReserve
 )
+
+// closingReserve is how long after its next reading a live account the work
+// would stop on window w is closing: none on a window shorter than a week, and
+// hoverReserve on a week -- or on a window whose length nobody can state, which
+// is read the way it was before the classes were split. It is the length's
+// class that decides, and nothing about the account or the pass.
+//
+// A five-hour window is run to its next reading: the session is handed off at
+// the last reading before the work would stop it, not a reserve before that.
+// Measured over the simulated week with no reserve on any window, today's fleet
+// under production load left 0.5 five-hour points at a hand-off on average,
+// against 26 with the reserve, for five stops a week of up to ten seconds, 46
+// in all, when the work outran the reading before the hand-off. A five-hour
+// window comes back in hours, and the points it would leave are spent work. A
+// week does not: its reserve is the one hand-off that comes before its stop,
+// and it is kept.
+func closingReserve(w usage.NamedWindow) time.Duration {
+	if isShortWindow(w) {
+		return 0
+	}
+	return hoverReserve
+}
 
 // liveLimitOf files the live account against its runway.
 //
@@ -462,8 +503,9 @@ const (
 // late, as the weekly simulation's table files them -- were not bridged a
 // hundred seconds before. Holding next to FetchedAt + ServeTTL, as due()
 // does, was measured over the simulated week, on the engine of 2026-11-09
-// before the last-point rule (lastResort), and not taken: stopped with room
-// on another account went from 3562 s to 3739 s in all. It lowered that pause
+// before the last-point rule and the five-hour window's reserve went, and not
+// taken: stopped with room on another account went from 3562 s to 3739 s in
+// all. It lowered that pause
 // load's 5 s to 2 (a different stop), two Max under heavy load from 1641 to
 // 1547 and under production load from 136 to 104, and two Max, three Ultras
 // under production load from 346 to 345; it raised two Max under burst load
@@ -480,7 +522,7 @@ func (o Options) liveLimitOf(c Candidate, rw runway) liveLimit {
 		return liveOut
 	case rw.stopsBy(next.Add(outLead)):
 		return liveStopping
-	case rw.stopsBy(next.Add(closingLead)):
+	case rw.closesBy(next):
 		return liveClosing
 	}
 	return liveRoom
@@ -495,7 +537,11 @@ func (o Options) liveLimitOf(c Candidate, rw runway) liveLimit {
 // cadence later, hoverBlind; at that reading the account is closing if the work
 // stops it within the reserve. So outlasting the prompt poll, a live cadence
 // and the reserve is exactly "the move is not followed by a second move on the
-// same rate": TestACarrierIsNotClosingAtItsFirstLiveReading. On a shared
+// same rate": TestACarrierIsNotClosingAtItsFirstLiveReading. The reserve here
+// is λ on every window, a five-hour one included, though a five-hour window
+// closes with none (closingReserve): the carry test asks more of a five-hour
+// carrier than its first live reading needs, and was kept as it was measured
+// when the five-hour reserve went. On a shared
 // identity the live cadence is shared too, outside the danger band, and that
 // promise holds only for the first reading: the live account's own limit
 // (liveLimitOf) reads its real next poll, so the session is not stopped, but it

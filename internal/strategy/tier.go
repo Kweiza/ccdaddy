@@ -86,14 +86,19 @@ func shortWindowOf(s *usage.Snapshot) usage.WindowName {
 		return ""
 	}
 	for _, w := range s.RateLimitWindows() {
-		if !w.Present {
-			continue
-		}
-		if _, known := usage.WindowLengthOf(w.Name, w.Window); known && !usage.IsWeeklyOf(w.Name, w.Window) {
+		if w.Present && isShortWindow(w) {
 			return w.Name
 		}
 	}
 	return ""
+}
+
+// isShortWindow is whether w is known to be shorter than a week: the length
+// class the tier reads an account by (shortWindowOf) and the hand-off reserves
+// by (closingReserve).
+func isShortWindow(w usage.NamedWindow) bool {
+	_, known := usage.WindowLengthOf(w.Name, w.Window)
+	return known && !usage.IsWeeklyOf(w.Name, w.Window)
 }
 
 // Empty is whether this account has nothing left on a window no model choice

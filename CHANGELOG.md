@@ -18,9 +18,11 @@ must reference accounts by `uuid` or `alias`.
 
 Hover becomes an order: accounts with a five-hour window first, then the
 weekly-only seat whose week resets soonest, with every hand-off aimed before
-a limit. A simulated week of a one-Max, three-Ultra fleet goes from 183 switches
-to 56 under heavy use and from 33 to 2 when the five-hour window never fills,
-and a blown model cap no longer stops the session. The cost is Ultra weekly
+a limit -- a week's a reserve before it, a five-hour window's at the last
+reading before it, so a burst can still stop the session for seconds. A
+simulated week of a one-Max, three-Ultra fleet goes from 183 switches to 56
+under heavy use and from 33 to 2 when the five-hour window never fills, and a
+blown model cap no longer stops the session. The cost is Ultra weekly
 quota, which can now expire unspent.
 
 ### Changed
@@ -38,8 +40,11 @@ quota, which can now expire unspent.
   3. The session returns to a five-hour account as soon as it has room again.
   4. Every hand-off happens one point before any limit a model choice cannot
      avoid -- the five-hour window now as well as the week -- or earlier when
-     the work running now would run the live account out within three minutes
-     of its next reading. A cap on one model family, such as a blown Fable
+     the work running now would run the live account out: on a five-hour
+     window, before its next reading, and on a week, within three minutes
+     after it. A five-hour window is run that close because it comes back in
+     hours; a burst that outruns the reading before the hand-off can stop the
+     session for seconds. A cap on one model family, such as a blown Fable
      week, is not such a limit.
 
   An account the session is not on is placed in the order by its levels and
@@ -78,14 +83,14 @@ quota, which can now expire unspent.
   |---|---|---|---|---|---|
   | idle (window never fills) | today | 33 → 2 | 31.28 → 2.00 | 138.08 → 183.55 | 0 → 0 |
   | idle | Fable at 99.5% | 27 → 2 | 41.00 → 2.00 | 128.35 → 183.55 | 0 → 0 |
-  | light (fills in five hours) | today | 38 → 54 | 28.47 → 1.98 | 120.35 → 167.98 | 0 → 0 |
-  | light | Fable at 99.5% | 30 → 54 | 41.00 → 1.98 | 107.82 → 167.98 | 0 → 0 |
-  | heavy (fills in two hours) | today | 183 → 56 | 5.64 → 1.98 | 29.84 → 45.13 | 0 → 0 |
-  | heavy | Fable at 99.5% | 155 → 56 | 33.28 → 1.98 | 10.93 → 45.13 | 210 → 0 |
+  | light (fills in five hours) | today | 38 → 54 | 28.47 → 1.99 | 120.35 → 168.14 | 0 → 0 |
+  | light | Fable at 99.5% | 30 → 54 | 41.00 → 1.99 | 107.82 → 168.14 | 0 → 0 |
+  | heavy (fills in two hours) | today | 183 → 56 | 5.64 → 1.94 | 29.84 → 45.66 | 0 → 174 |
+  | heavy | Fable at 99.5% | 155 → 56 | 33.28 → 1.94 | 10.93 → 45.66 | 210 → 174 |
 
   Hover now switches about twice for each five-hour window it fills: once
-  before the limit -- at the production rate of 5.4 points a minute, with 16
-  to 41 points of the window left and 28 on average in the simulated week --
+  before the limit -- at the production rate of 5.4 points a minute, with 0 to
+  2.7 points of the window left and 0.5 on average in the simulated week --
   and once when the window resets. Light load fills its window minutes before
   the reset, so it switches as often as heavy load. On a fleet that runs dry,
   the endgame between accounts' last points adds a few more.
@@ -102,28 +107,39 @@ quota, which can now expire unspent.
 
   | Fleet | Load | Before | After |
   |---|---|---|---|
-  | today | production | 184 | 0 |
-  | today | burst | 0 | 29 |
-  | today with larger Ultra weeks | burst | 0 | 29 |
+  | today | production | 184 | 46 |
+  | today | burst | 0 | 145 |
+  | today | pause | 0 | 107 |
+  | today with larger Ultra weeks | heavy | 0 | 174 |
+  | today with larger Ultra weeks | production | 0 | 46 |
+  | today with larger Ultra weeks | burst | 0 | 145 |
   | two Max, three Ultras | light | 167 | 0 |
-  | two Max, three Ultras | heavy | 1457 | 560 |
-  | two Max, three Ultras | production | 2370 | 350 |
-  | two Max, three Ultras | burst | 831 | 252 |
-  | two Max, three Ultras | pause | 244 | 5 |
-  | two Max | heavy | 5362 | 4181 |
-  | two Max | production | 1765 | 136 |
-  | two Max | burst | 4768 | 1170 |
-  | two Max | pause | 1127 | 1133 |
-  | a Max and two Ultras | production | 336 | 159 |
+  | two Max, three Ultras | heavy | 1457 | 637 |
+  | two Max, three Ultras | production | 2370 | 257 |
+  | two Max, three Ultras | burst | 831 | 525 |
+  | two Max, three Ultras | pause | 244 | 84 |
+  | two Max | heavy | 5362 | 3501 |
+  | two Max | production | 1765 | 161 |
+  | two Max | burst | 4768 | 605 |
+  | two Max | pause | 1127 | 666 |
+  | a Max and two Ultras | heavy | 0 | 145 |
+  | a Max and two Ultras | production | 336 | 36 |
+  | a Max and two Ultras | burst | 0 | 58 |
 
-  Most of what is left in the larger figures is the wait for a last point to
-  read empty: another account's last point is taken only once the live account
-  reads empty, and a live account that runs out while it still reads short of
-  empty stops the session until that reading, though another account holds a
-  point. Without that wait those seven figures were 239, 346, 142, 1641, 958,
-  250 and 37, and the two Max and the two Max, three Ultras fleets switched
-  more: under the pause load 119 times against 81, under burst load 140
-  against 117.
+  Two rules account for much of what is left, each a price paid on purpose.
+  A five-hour window is handed off at the last reading before the work would
+  stop it, with no reserve, so work that outruns that reading stops the
+  session until the next one: on the fleets that never run dry, up to 37
+  seconds a stop, and today's fleet under production load five times a week
+  for up to ten seconds, 46 in all. With a three-minute reserve on five-hour
+  windows as on weeks, today's fleet left 27 points of the window at a
+  hand-off and stopped under no load but burst, 29 seconds. And another
+  account's last point is taken only once the live account reads empty, so a
+  live account that runs out while it still reads short of empty stops the
+  session until that reading, though another account holds a point; it
+  raised the two fleets that run dry, and the two Max accounts under the
+  pause load switch 31 times a week where they switched 119 without either
+  rule.
 
   **What is left is not zero, and a session can still stop at a limit while
   another account has room.** Hover cannot see the work between two readings.
@@ -134,8 +150,10 @@ quota, which can now expire unspent.
   is measured to the nearest point, and an account holding less than a point
   reads the same 99 as one holding a whole one; and when the rate was measured
   on another plan, whose points are not this one's. The live account then runs
-  out before its next reading shows it. Six more cases cost the session
-  something:
+  out before its next reading shows it. On a week a three-minute reserve
+  absorbs most of that; a five-hour window, handed off at the last reading
+  before the work would stop it, has none, so there these cases stop the
+  session for seconds. Six more cases cost the session something:
   - A rate stands until a newer running measurement replaces it, across window
     resets and daemon restarts alike. A five-hour rate measured in a burst can
     outlive it: above about 12.5 points a minute even a freshly reset
@@ -193,7 +211,8 @@ quota, which can now expire unspent.
 
   The three-minute reserve is the poll policy's normal floor. A ten-minute
   one, the idle cadence, was measured against it in the same simulated week,
-  before last points waited for an empty reading, and lost on the whole: 4298 seconds stopped with room on another account
+  before last points waited for an empty reading and while a five-hour window
+  kept the reserve too, and lost on the whole: 4298 seconds stopped with room on another account
   across every fleet and load, against 3562, and today's five-hour account
   reaching its weekly reset 3.98 points unspent against 1.98. It did better in
   five variants: today's fleet and the big Ultras under burst load, 29
