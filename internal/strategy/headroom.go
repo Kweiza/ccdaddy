@@ -248,6 +248,21 @@ func capsOneModelFamily(n usage.WindowName) bool {
 	return ok && scope == usage.ScopeModel
 }
 
+// dodgeable reports whether the session this evaluation is for can avoid a
+// window by the model it runs: a window that caps one model family, in an
+// evaluation that has not named its model.
+//
+// Naming one IS the model choice. admittedWindows has already dropped every cap
+// a different family holds, so a cap still standing is the named family's own --
+// or one whose family nobody could identify, kept for the same reason the
+// narrowing keeps it -- and it is the session's limit: an account whose Opus
+// week is gone cannot serve a session that will only run Opus. With no model
+// named the session can go on with another family, and the cap is not a limit
+// (D5). TestANamedModelsOwnCapIsALimitUnderHover.
+func dodgeable(n usage.WindowName, model string) bool {
+	return model == "" && capsOneModelFamily(n)
+}
+
 // bindingWindows is the set of windows that bind for one ranking pass: the
 // windows the pass admits (admittedWindows), less the ones a model choice can
 // dodge when the table says those do not bind (ModelCapsDodged).
@@ -264,7 +279,7 @@ func capsOneModelFamily(n usage.WindowName) bool {
 func bindingWindows(s *usage.Snapshot, model string, t Thresholds) []usage.NamedWindow {
 	ws := admittedWindows(s, model, t)
 	if t.ModelCaps == ModelCapsDodged {
-		return nonDodgeable(ws)
+		return nonDodgeable(ws, model)
 	}
 	return ws
 }
@@ -348,15 +363,16 @@ func admittedWindows(s *usage.Snapshot, model string, t Thresholds) []usage.Name
 	return out
 }
 
-// nonDodgeable is ws less every window that caps one model family -- unless
-// none of what is left could be read, in which case it is ws whole. That
+// nonDodgeable is ws less every window a session running model can dodge
+// (dodgeable) -- unless none of what is left could be read, in which case it is
+// ws whole. That
 // fallback is RoomOf's and OutOfQuota's: an account whose only readable window is
 // model-scoped has nothing else to be judged on.
-func nonDodgeable(ws []usage.NamedWindow) []usage.NamedWindow {
+func nonDodgeable(ws []usage.NamedWindow, model string) []usage.NamedWindow {
 	out := make([]usage.NamedWindow, 0, len(ws))
 	readable := false
 	for _, w := range ws {
-		if capsOneModelFamily(w.Name) {
+		if dodgeable(w.Name, model) {
 			continue
 		}
 		out = append(out, w)
@@ -401,7 +417,7 @@ func HeadroomFor(s *usage.Snapshot, model string, t Thresholds) Headroom {
 	// model-scoped cap can come before either.
 	anyModelReadable := false
 	for _, w := range windows {
-		if _, ok := w.Percent(); ok && !capsOneModelFamily(w.Name) {
+		if _, ok := w.Percent(); ok && !dodgeable(w.Name, model) {
 			anyModelReadable = true
 			break
 		}
@@ -428,7 +444,7 @@ func HeadroomFor(s *usage.Snapshot, model string, t Thresholds) Headroom {
 		// guard is on it rather than on out.Known: an account whose only
 		// readable window is model-scoped leaves this pair untouched, and
 		// OutOfQuota reads that as "no figure" rather than as a zero.
-		if !capsOneModelFamily(w.Name) {
+		if !dodgeable(w.Name, model) {
 			if room := 100 - pct; out.MinAnyModelWindow == "" || room < out.MinAnyModelPct {
 				out.MinAnyModelPct, out.MinAnyModelWindow = room, w.Name
 			}
@@ -461,7 +477,7 @@ func HeadroomFor(s *usage.Snapshot, model string, t Thresholds) Headroom {
 		// is the half that keeps the account honest, and skipping the rest of
 		// the iteration would drop the blown sub-cap out of the very column that
 		// exists to name it.
-		ordering := !(pct >= 100 && capsOneModelFamily(w.Name) && anyModelReadable)
+		ordering := !(pct >= 100 && dodgeable(w.Name, model) && anyModelReadable)
 		// The !out.Known guard is what makes the first readable window win
 		// outright. out.Slack is zero before it, so a first window with any
 		// positive slack would otherwise never be taken.
