@@ -78,10 +78,10 @@ func TestHoverDerivesATableForAPrimaryCreditSeatToo(t *testing.T) {
 		t.Fatalf("neither table admits %s; the fixture is not testing what it says", seatCap)
 	}
 
-	// The credit row is still there, still on its own fixed figure, and still
-	// first -- a seat's own meter is not a plan window.
-	if len(p.Windows) == 0 || !p.Windows[0].Credit || p.Windows[0].Threshold != HoverCreditThreshold {
-		t.Errorf("first row = %+v, want the credit row at %v", p.Windows, HoverCreditThreshold)
+	// The seat's own meter is still on its own fixed figure: it is not a plan
+	// window.
+	if got := p.For("c-seat").CreditThreshold(); got != HoverCreditThreshold {
+		t.Errorf("credit threshold = %v, want %v", got, HoverCreditThreshold)
 	}
 }
 

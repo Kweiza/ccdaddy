@@ -355,8 +355,9 @@ func TestStatusWithHoverOffReportsTheSelectedStrategy(t *testing.T) {
 //
 // This test used to assert the opposite. It asserted the literal string "a probe
 // is queued" on exactly this row, which is how the defect survived: the note was
-// rendered from ProbeWanted alone, ProbeWanted is "named no reset" and nothing
-// more, and the daemon's own gate had a condition the note could not see.
+// rendered from a "named no reset" flag alone, and the daemon's own gate had a
+// condition the note could not see. No warm-up note is printed any more, and this
+// keeps it from coming back on that flag.
 func TestHoverStatusPromisesNoWarmUpForAWindowThatIsAlreadyInUse(t *testing.T) {
 	isolate(t)
 	freezeClock(t, hoverEpoch)
@@ -383,8 +384,7 @@ func TestHoverStatusPromisesNoWarmUpForAWindowThatIsAlreadyInUse(t *testing.T) {
 }
 
 // The row a warm-up DOES target: a five-hour window nothing has ever spent
-// against. The note names an instant rather than a promise, and the JSON carries
-// the state a caller can branch on without matching English.
+// against. The row still carries both windows' own figures.
 func TestHoverStatusQueuesAWarmUpForAStoppedClock(t *testing.T) {
 	isolate(t)
 	freezeClock(t, hoverEpoch)

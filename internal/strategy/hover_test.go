@@ -45,18 +45,6 @@ func hoverPool(t *testing.T, n int, name usage.WindowName, w usage.Window) []Can
 	return out
 }
 
-// rowFor is the row for one account's one window, or nothing when hover built
-// none. A missing row and a row with a fallback threshold are different answers,
-// and a test that could not tell them apart would pass on either.
-func rowFor(p HoverPlan, uuid string, name usage.WindowName) (HoverWindow, bool) {
-	for _, row := range p.Windows {
-		if row.UUID == uuid && row.Window == name {
-			return row, true
-		}
-	}
-	return HoverWindow{}, false
-}
-
 // Every window is held to the hand-off line, whatever the pool and whatever the
 // clock. The pace rotation this replaced derived a different figure for every
 // one of these cases -- 68, 143 and 130 -- and the sweep over pool size and
@@ -80,12 +68,8 @@ func TestHoverHoldsEveryWindowToTheHandoffLine(t *testing.T) {
 			if got := p.For(pool[0].UUID).For(tc.window); got != HoverHandoffThreshold {
 				t.Errorf("threshold for %s = %v, want the hand-off line %v", tc.window, got, HoverHandoffThreshold)
 			}
-			row, ok := rowFor(p, pool[0].UUID, tc.window)
-			if !ok {
-				t.Fatalf("no row for %s", tc.window)
-			}
-			if row.Threshold != HoverHandoffThreshold || row.Slack != HoverHandoffThreshold-10 {
-				t.Errorf("row = %+v, want threshold %v and slack %v", row, HoverHandoffThreshold, HoverHandoffThreshold-10)
+			if got := p.For(pool[0].UUID).PerWindow[tc.window]; got != HoverHandoffThreshold {
+				t.Errorf("the table's own entry for %s = %v, want the hand-off line %v", tc.window, got, HoverHandoffThreshold)
 			}
 		})
 	}
@@ -112,18 +96,6 @@ func TestEveryHoverDefaultIsThePositiveHandoffLine(t *testing.T) {
 	}
 }
 
-// A window with a reset needs no probe. A probe spends the user's quota, so it
-// is marked only where it is the one thing that can answer the question.
-func TestHoverMarksNoProbeWhenTheWindowNamedItsReset(t *testing.T) {
-	pool := hoverPool(t, 2, usage.WindowFiveHour, elapsedWindow(5*time.Hour, 0.80, 10))
-
-	for _, row := range HoverThresholds(pool, opts()).Windows {
-		if row.ProbeWanted {
-			t.Errorf("row = %+v is marked for a probe: it named a reset", row)
-		}
-	}
-}
-
 // A primary credit seat has no window and no reset, so it gets a fixed figure of
 // its own. It is short of the hand-off line because credits do not come back.
 func TestHoverGivesAPrimaryCreditSeatAFixedThreshold(t *testing.T) {
@@ -144,31 +116,16 @@ func TestHoverGivesAPrimaryCreditSeatAFixedThreshold(t *testing.T) {
 		t.Errorf("For(c-1).CreditThreshold() = %v, want %v",
 			p.For("c-1").CreditThreshold(), HoverCreditThreshold)
 	}
-	if len(p.Windows) != 1 {
-		t.Fatalf("Windows = %+v; there is one row to print for this seat", p.Windows)
-	}
-	row := p.Windows[0]
-	if !row.Credit || row.Window != creditWindow {
-		t.Errorf("row = %+v, want the credit row", row)
-	}
-	if row.Threshold != HoverCreditThreshold || row.Utilization != 41 || row.Slack != 54 {
-		t.Errorf("credit row = %+v, want threshold %v against 41%% used", row, HoverCreditThreshold)
-	}
 }
 
-// An account nobody could read gets no row -- there is nothing to hold to a line
-// -- and still gets an answer if it is ever asked about, the same line as
+// An account nobody could read is not in the pass hover built its tables from,
+// and still gets an answer if it is ever asked about: the same line as
 // everything else.
-func TestHoverCountsOnlyAccountsItCanRead(t *testing.T) {
+func TestAnAccountHoverCouldNotReadIsHeldToTheSameLine(t *testing.T) {
 	pool := hoverPool(t, 2, usage.WindowSevenDay, elapsedWindow(7*24*time.Hour, 0.43, 10))
 	pool = append(pool, Candidate{UUID: "u-unread", Kind: pool[0].Kind})
 
 	p := HoverThresholds(pool, opts())
-	for _, row := range p.Windows {
-		if row.UUID == "u-unread" {
-			t.Errorf("row = %+v for an account with no reading", row)
-		}
-	}
 	if got := p.For("u-unread").For(usage.WindowSevenDay); got != HoverHandoffThreshold {
 		t.Errorf("threshold for the unread account = %v, want %v", got, HoverHandoffThreshold)
 	}
@@ -194,10 +151,14 @@ func TestHoverHonoursTheUnknownScopeOptInAndStillDerivesItsValue(t *testing.T) {
 	}
 	pool := []Candidate{sub("u-0", snap()), sub("u-1", snap())}
 
-	// No entry in the table: hover builds nothing for it, exactly as the
-	// ranking binds nothing on it.
-	if _, ok := rowFor(HoverThresholds(pool, opts()), "u-0", name); ok {
-		t.Error("hover built a row for a scope nobody opted in to; the mode must not grant consent")
+	// No entry in the configured table: hover's table has none either, and the
+	// window does not bind.
+	bare := HoverThresholds(pool, opts()).For("u-0")
+	if _, ok := bare.PerWindow[name]; ok {
+		t.Error("hover's table names a scope nobody opted in to; the mode must not grant consent")
+	}
+	if h := HeadroomFor(pool[0].Usage, "", bare); h.Binding == name {
+		t.Errorf("Binding = %q with no opt-in", h.Binding)
 	}
 
 	// 50 rather than 80: DefaultThreshold IS 80, so a hover that simply copied
@@ -206,12 +167,8 @@ func TestHoverHonoursTheUnknownScopeOptInAndStillDerivesItsValue(t *testing.T) {
 	o := perWindow(map[usage.WindowName]float64{name: 50})
 	p := HoverThresholds(pool, o)
 
-	row, ok := rowFor(p, "u-0", name)
-	if !ok {
-		t.Fatalf("Windows = %+v; a threshold on the name is the opt-in and hover has to honour it", p.Windows)
-	}
-	if row.Threshold != HoverHandoffThreshold {
-		t.Errorf("row = %+v, want the hand-off line", row)
+	if _, ok := p.For("u-0").PerWindow[name]; !ok {
+		t.Fatalf("PerWindow = %v; a threshold on the name is the opt-in and hover has to honour it", p.For("u-0").PerWindow)
 	}
 	if got := p.For("u-0").For(name); got != HoverHandoffThreshold {
 		t.Errorf("threshold = %v, want %v; the configured 50 is a number hover replaces", got, HoverHandoffThreshold)
@@ -221,7 +178,7 @@ func TestHoverHonoursTheUnknownScopeOptInAndStillDerivesItsValue(t *testing.T) {
 	// same set, or a window admitted to one is narrowed out of the other.
 	h := HeadroomFor(pool[0].Usage, "", p.For("u-0"))
 	if h.Binding != name {
-		t.Errorf("Binding = %q, want %q -- the hover table has to re-admit the window it built a row for", h.Binding, name)
+		t.Errorf("Binding = %q, want %q -- the hover table has to re-admit the window the user opted in to", h.Binding, name)
 	}
 	if h.Slack != HoverHandoffThreshold-95 {
 		t.Errorf("Slack = %v, want %v", h.Slack, HoverHandoffThreshold-95)

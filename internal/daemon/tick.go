@@ -1004,9 +1004,8 @@ func due(e usage.Entry, has bool, now time.Time, live bool) bool {
 // the single window with the least slack, because that is the one the ranking
 // cares about — but a five-hour window can have a stopped clock beside a weekly
 // cap that binds tighter and has a running one of its own, and the five-hour
-// clock is the one whose lockout a warm-up shortens. The scheduler reads the
-// same ColdWindow and the same gate (strategy.HoverWindow.Warmup), so what
-// the table says is queued and what this fires on cannot drift.
+// clock is the one whose lockout a warm-up shortens. ColdWindow is the one place
+// that picks it.
 //
 // The live account is skipped, and that is the one exclusion worth spelling out.
 // It is the account something else is already spending against, so a probe of it
