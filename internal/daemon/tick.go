@@ -1385,10 +1385,8 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now, sent time.Ti
 		// flags back to life otherwise -- Prune clears them from an
 		// evaluation's copy, not from the row this commit rewrites.
 		// TestACommitDropsAPredecessorsMeasurements.
-		entry, had := c.Get(a.UUID)
-		if had {
-			entry, had = entry.OwnedSince(a.AddedAt)
-		}
+		entry, _ := c.Get(a.UUID)
+		entry, _ = entry.OwnedSince(a.AddedAt)
 		state := pollStateOf(entry)
 		// A switch that made this account live while this poll was in flight:
 		// the poll was sent idle, and the daemon's live label is set only after
@@ -1436,12 +1434,15 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now, sent time.Ti
 
 		if snap != nil {
 			entry.Snapshot, entry.FetchedAt = snap, now
-		} else if !had {
-			// There is no prior reading to keep, and an entry the cache prunes
-			// is a backoff that does not survive the next evaluation: Prune
-			// drops anything dated before the account was added. Stamping the
-			// attempt keeps the schedule alive; Snapshot stays nil, which is
-			// what every reader takes as "no reading".
+		} else if entry.FetchedAt.IsZero() {
+			// There is no reading to keep -- no row at all, or a row holding
+			// only a switch's record, which is a marker and not a reading --
+			// and an entry dated before the account was added is a backoff
+			// that does not survive the next commit or evaluation (OwnedSince
+			// keeps only a marker of it). Stamping the attempt keeps the
+			// schedule the failure earned; Snapshot stays nil, which is what
+			// every reader takes as "no reading".
+			// TestAReAddedAccountsBackoffSurvivesItsFirst429s.
 			entry.FetchedAt = now
 		}
 
