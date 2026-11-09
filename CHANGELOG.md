@@ -19,11 +19,11 @@ must reference accounts by `uuid` or `alias`.
 Hover becomes an order: accounts with a five-hour window first, then the
 weekly-only seat whose week resets soonest, with every hand-off aimed before
 a limit -- a week's a reserve before it, a five-hour window's at the last
-reading before it, so a burst can still stop the session for about half a
-minute. A simulated week of a one-Max, three-Ultra fleet goes from 183
-switches to 56 under heavy use and from 33 to 2 when the five-hour window
-never fills, and a blown model cap no longer stops the session. The cost is
-Ultra weekly quota, which can now expire unspent.
+reading before it, so a burst can still stop the session, for up to 37
+seconds in the simulated week. A simulated week of a one-Max, three-Ultra
+fleet goes from 183 switches to 56 under heavy use and from 33 to 2 when the
+five-hour window never fills, and a blown model cap no longer stops the
+session. The cost is Ultra weekly quota, which can now expire unspent.
 
 ### Changed
 
@@ -44,8 +44,9 @@ Ultra weekly quota, which can now expire unspent.
      window, before its next reading, and on a week, within three minutes
      after it. A five-hour window is run that close because it comes back in
      hours; work that outruns the reading before the hand-off can stop the
-     session for up to about half a minute each time. A cap on one model
-     family, such as a blown Fable week, is not such a limit.
+     session, most often for about half a minute and in the simulated week
+     for 37 seconds at the longest. A cap on one model family, such as a
+     blown Fable week, is not such a limit.
 
   An account the session is not on is placed in the order by its levels and
   its hold alone: it is at a limit only when it is empty or on its last point.

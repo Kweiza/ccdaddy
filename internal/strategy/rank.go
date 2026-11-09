@@ -328,10 +328,10 @@ type Ranked struct {
 	// Closing names the window this account would run out of before the
 	// engine can act on it, or "" when none would. Each mode states what
 	// "before the engine can act" is in its own rules (passrules.go): under
-	// hover, within its window's reserve after the live account's next
-	// reading, and on the live account alone (hoverRules); under the
-	// configured strategies, inside each account's own pre-emptive horizon
-	// (configuredRules).
+	// hover, on some window within that window's own reserve after the live
+	// account's next reading, and on the live account alone (hoverRules);
+	// under the configured strategies, inside each account's own pre-emptive
+	// horizon (configuredRules).
 	Closing usage.WindowName
 	// HasRunway is whether the work running now has a rate to project on this
 	// account's windows, and RunsOutAt when that projection has the work stop
