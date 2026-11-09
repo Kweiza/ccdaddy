@@ -17,8 +17,8 @@ must reference accounts by `uuid` or `alias`.
 ## [Unreleased]
 
 Hover becomes an order: accounts with a five-hour window first, then the
-weekly-only seat whose week resets soonest, with every hand-off made before a
-limit. A simulated week of a one-Max, three-Ultra fleet goes from 183 switches
+weekly-only seat whose week resets soonest, with every hand-off aimed before
+a limit. A simulated week of a one-Max, three-Ultra fleet goes from 183 switches
 to 56 under heavy use and from 33 to 2 when the five-hour window never fills,
 and a blown model cap no longer stops the session. The cost is Ultra weekly
 quota, which can now expire unspent.
@@ -80,10 +80,12 @@ quota, which can now expire unspent.
   | heavy (fills in two hours) | today | 183 → 56 | 5.64 → 1.98 | 29.84 → 45.13 | 0 → 0 |
   | heavy | Fable at 99.5% | 155 → 56 | 33.28 → 1.98 | 10.93 → 45.13 | 210 → 0 |
 
-  Hover now switches about twice for each five-hour window it fills: once just
-  before the limit and once when the window resets. Light load fills its window
-  minutes before the reset, so it switches as often as heavy load. On a fleet
-  that runs dry, the endgame between accounts' last points adds a few more.
+  Hover now switches about twice for each five-hour window it fills: once
+  before the limit -- at the production rate of 5.4 points a minute, with 16
+  to 41 points of the window left and 28 on average in the simulated week --
+  and once when the window resets. Light load fills its window minutes before
+  the reset, so it switches as often as heavy load. On a fleet that runs dry,
+  the endgame between accounts' last points adds a few more.
 
   The same simulation over four more fleets -- two Max accounts with and
   without three Ultra seats, today's fleet with Ultra weeks four times a Max
@@ -119,14 +121,33 @@ quota, which can now expire unspent.
   is measured to the nearest point, and an account holding less than a point
   reads the same 99 as one holding a whole one; and when the rate was measured
   on another plan, whose points are not this one's. The live account then runs
-  out before its next reading shows it. The first two live readings after the
-  daemon starts have no rate at all, and accounts sharing one organization
-  share its polling budget, so the first look after a move can come later
-  than the reserve assumes. And when every account is at its last point and
-  nothing is running, ccdad may switch the login back and forth between them;
-  with no session running, it costs none anything. The figures above belong
-  to the simulated fleets and loads; they are not a bound on what a real week
-  can cost.
+  out before its next reading shows it. Four more cases weaken the
+  projection:
+  - A rate stands until a newer running measurement replaces it, across window
+    resets and daemon restarts alike. A five-hour rate measured in a burst can
+    outlive it: above about 12.5 points a minute even a freshly reset
+    five-hour account cannot be moved to, so a session on a weekly-only seat
+    stays there until that seat's limit. A weekly rate is usually one point
+    over a few minutes, several times the true weekly rate, and leaves about
+    one more point of a five-hour account's week unspent.
+  - Right after install, before any account has been measured twice while
+    live, there is no rate: other accounts are judged by their levels and the
+    live account by its own window's average.
+  - Accounts sharing one organization share its polling budget. The first look
+    after a move is the shared floor the hand-off counts; the looks after it
+    come at the live cadence times the number of accounts sharing it.
+  - A pause is not taken for slower work. At 5.4 points a minute a paused live
+    account more than about 57% spent is handed to an account that can carry
+    the work before the work resumes; a pause never moves it onto credits or
+    onto another account's last points. But while nothing runs, two accounts
+    holding between a cooldown's and a carrier's worth of work -- about 11 to
+    60 points at that rate -- can trade the login every few minutes. No
+    session is cut; each move writes the credential, polls the account and
+    updates Claude Code's settings, and a session resuming just after one waits
+    out the cooldown for the next.
+
+  The figures above belong to the simulated fleets and loads; they are not a
+  bound on what a real week can cost.
 
   The remedy not taken is a reserve on the live account's level: handing off
   with enough left to cover a reading step and a burst through one reading
@@ -165,9 +186,11 @@ quota, which can now expire unspent.
   pool is exhausted, whichever account the order puts first. It used to be
   considered whenever the live account sorted first and the main pool read
   exhausted, which could move a session onto credits while another account's
-  last points were still unspent. From a live credit seat the session goes
-  back only to an account that can carry the work, and `--force` there cannot
-  take it onto one at a limit.
+  last points were still unspent. A live account projected out across a pause
+  does not open them: only one seen running, or one with nothing left. From a
+  live credit seat the session goes back to any account that can carry the
+  work, one held out at a limit included, and `--force` there cannot take it
+  onto one at a limit.
 - **Under hover, a cap on one model family is left out of everything that
   decides a limit.** A Fable or Opus week past 99% used to become the
   account's binding window, so the daemon measured the session's rate on a

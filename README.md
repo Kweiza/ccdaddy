@@ -480,9 +480,12 @@ weekly quota can expire unspent.
 
 Hover cannot see the work between two readings, and a session can still stop
 at a limit while another account has room. Hover projects the live account at
-the rate the work was last measured running -- a pause is not taken for slower
-work, so a pause near a limit hands off before the work resumes -- and the
-projection comes too late when:
+the rate the work was last measured running. A pause is not taken for slower
+work: at 5.4 points a minute, a paused live account more than about 57% spent
+is projected near its limit and handed to an account that can carry the work,
+before the work resumes. A pause never moves it onto credits or onto another
+account's last points; those wait for the work to be seen running, or for the
+account to be empty. The projection comes too late when:
 
 - the work runs faster than its last running rate, as a burst does after a
   quiet stretch;
@@ -493,14 +496,31 @@ projection comes too late when:
 - the rate was measured on another plan, whose points are not this one's.
 
 The live account then runs out before its next reading shows it, and the
-session stops until that reading lands. Two cases weaken the projection
-further: the first two live readings after the daemon starts have no rate at
-all, so accounts are judged by their levels alone; and accounts sharing one
-organization share its polling budget, so the first look at an account after
-a move can come later than the reserve assumes.
-And when every account is at its last point and nothing is running, ccdad may
-switch the login back and forth between them; with no session running, it
-costs none anything.
+session stops until that reading lands. Four more cases weaken the projection:
+
+- A rate stands until a newer running measurement replaces it, across window
+  resets and daemon restarts alike. A five-hour rate measured in a burst can
+  outlive the burst: above about 12.5 points a minute even a freshly reset
+  five-hour account is not one the work can be moved to, so a session on a
+  weekly-only seat stays there until that seat's limit. A weekly rate is
+  usually one point over a few minutes, several times the true weekly rate,
+  which keeps a week near its end from taking the work and leaves about one
+  more point of a five-hour account's week unspent.
+- Right after ccdad is installed, before any account has been measured twice
+  while live, there is no rate: other accounts are judged by their levels, and
+  the live account by its own window's average.
+- Accounts sharing one organization share its polling budget. The first look
+  at an account after a move is the shared floor the hand-off already counts,
+  but the looks after it come at the live cadence times the number of accounts
+  sharing it, later than a single account's would.
+- When nothing is running and the live account is projected near its limit,
+  ccdad can still move the login to an account that outlasts it by the
+  cooldown, and later back again: two accounts holding between a cooldown's and
+  a carrier's worth of work -- at 5.4 points a minute, between about 11 and 60
+  points -- can trade it every few minutes for as long as the pause lasts. No
+  session is cut, but each move writes the credential, polls the account and
+  updates Claude Code's settings, and if the work resumes just after a move,
+  the next move waits out the cooldown.
 
 In a simulated week, with whole-percent readings and the daemon's warm-ups, a
 session stopped while another account had room in ten of 27 fleet-and-load

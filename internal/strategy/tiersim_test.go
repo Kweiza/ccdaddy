@@ -395,7 +395,10 @@ const tierSimTick = EvaluationInterval
 // fleet at heavy load stopped in eight seconds with room the step had hidden.
 // With them, every fleet and load below gives the same switches, by the same
 // reasons, the same served and unspent quota, the same five-hour points left
-// and the same stopped seconds as asking every second.
+// and the same stopped seconds as asking every second. Re-measured on the
+// harness as it now stands -- whole-percent readings, the daemon's warm-ups,
+// the pause load, and downward tiers that wait for the work to be seen running
+// -- and still the same in every run, line for line.
 const tierSimDrift = 10 * time.Second
 
 // nextAsk is the next second the engine has to be asked even if no reading
@@ -779,8 +782,9 @@ func checkTierBooks(t *testing.T, res tierSimResult) {
 //	two Ultras             production       37        37             step
 //
 // The burst gap is the one no projection closes, at any reserve. A pair of
-// readings taken across a three-minute block of nothing, or half of one,
-// measures the work at half its rate or less, so when the burst resumes near a
+// readings wholly inside a block of nothing is a pause and is not a rate, but a
+// pair that is partly one -- half a block of work, half of nothing -- runs, and
+// measures the work at half its rate or less; so when the burst resumes near a
 // limit the live account runs out between two readings, sooner than its
 // projection said, and the session stops until the next reading shows it out.
 //
@@ -834,7 +838,7 @@ func TestEveryFleetHandsOffBeforeTheLimit(t *testing.T) {
 // stoppedWithRoomMeasured is the table above, by subtest name: the variants
 // whose stopped-with-room seconds are not zero, at the figure they measure.
 var stoppedWithRoomMeasured = map[string]int{
-	// The burst gap: a pair read across a pause understates the burst.
+	// The burst gap: a running pair partly across a pause understates the burst.
 	"today/burst":                 29,
 	"big Ultras/burst":            29,
 	"two Max, three Ultras/burst": 142,

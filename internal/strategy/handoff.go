@@ -123,6 +123,19 @@ type workRates map[time.Duration]workRate
 // surface's weekly cap -- the highest is the work's: a cap that counts part of
 // the work moves no faster than the window that counts all of it.
 // TestAModelCapsRateIsNotTheWeeksRate.
+//
+// A rate has no age. It stands until a newer running pair on its length
+// replaces it -- across a reset, and across a restart, since the cache keeps it
+// -- and two costs follow, named here rather than mended by a decay the engine
+// does not have. A five-hour rate measured in a burst seals itself while the
+// session is on weekly-only seats, where no five-hour pair is taken: above
+// about 12.5 points a minute even a freshly rolled Max is no carrier -- its
+// hundred points must outlast a prompt poll, a live cadence and the reserve,
+// eight minutes -- so the session stays on the Ultra until that seat's own
+// limit. And a weekly rate is most often one quantum over one pair, a point in
+// a few minutes, several times what the week is spent at: it keeps a week near
+// its end from carrying, and in the simulated week left about one point more of
+// the five-hour account's week unspent.
 func (o Options) workRatesOf(cands []Candidate, switchedAt time.Time, switchedTo string) workRates {
 	out := workRates{}
 	for _, c := range cands {
@@ -705,25 +718,29 @@ func bridge(res Result, live Ranked, cooldown time.Duration) (Ranked, bool) {
 // last point is allowed here and nowhere else -- one point is better than a stop
 // -- and an empty account never is.
 //
-// A residual, kept on purpose: an idle fleet whose accounts all sit at their
-// last point can trade the login between them. The live one projects out at the
-// rate the work last ran, any other account with work left is a last resort, and
-// the one just left, re-read idle, has its dregs back -- so with no work running
-// the session moves every cooldown and each move buys nothing. Nothing is
-// running, so no session pays for it.
+// An idle fleet whose accounts all sit at their last point used to trade the
+// login between them: the live one projected out at the rate the work last ran,
+// any other account with work left was a last resort, and the one just left,
+// re-read idle, had its dregs back. The downward tiers now open on a projection
+// only while the live account's latest pair saw the work running
+// (Ranked.downwardOpen), so a pause no longer reaches here at all. What is left
+// of the trade is the bridge's: two accounts each holding more than a cooldown
+// of work and less than a carrier's can still trade the login across a pause,
+// each move a credential write, a prompt poll and a settings sync, and a
+// session that resumes right after one waits out the cooldown for the next.
 //
-// The rule that stops it -- a last resort must outlast the live account, holding
-// more of the work than the live one does -- was measured and rejected. It
-// raised the seconds a session stopped with room elsewhere where work does run:
-// two Max accounts under heavy load from 1641 to 3342, under burst load from 958
-// to 1004, two Max and three Ultras under heavy load from 239 to 322 and under
-// production load from 346 to 408 (and lowered that fleet's burst figure from
-// 142 to 76). The cause is that the engine cannot tell an idle live account from
-// a running one at whole-percent resolution: a live account that has really
-// spent its last point still reads the 99 it was read at until the next poll,
-// exactly as an idle one does, so the rule refuses the dregs of another account
-// in the very moment the session needs them. Stopping a session outranks idle
-// churn.
+// The rule that would stop the trade here even while the work is seen running
+// -- a last resort must outlast the live account, holding more of the work than
+// the live one does -- was measured and rejected. It raised the seconds a
+// session stopped with room elsewhere where work does run: two Max accounts
+// under heavy load from 1641 to 3342, under burst load from 958 to 1004, two
+// Max and three Ultras under heavy load from 239 to 322 and under production
+// load from 346 to 408 (and lowered that fleet's burst figure from 142 to 76).
+// The cause is whole-percent resolution between two readings: a live account
+// that has really spent its last point still reads the 99 it was read at until
+// the next poll, exactly as one that has not, so the rule refuses the dregs of
+// another account in the very moment the session needs them. Stopping a
+// session outranks idle churn.
 func lastResort(res Result, live Ranked, now time.Time) (Ranked, bool) {
 	var best Ranked
 	found := false
