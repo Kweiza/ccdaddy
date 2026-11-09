@@ -775,15 +775,23 @@ func checkTierBooks(t *testing.T, res tierSimResult) {
 //	fleet                  load        stopped   with room elsewhere   gap
 //	today                  burst            29        29             burst
 //	big Ultras             burst            29        29             burst
-//	two Max, three Ultras  burst           142       142             burst
-//	two Max                burst         61343       958             burst
-//	two Max                heavy        122628      1641             step
+//	two Max, three Ultras  burst           252       252             burst, last point
+//	two Max                burst         61343      1170             burst, last point
+//	two Max                heavy        122628      4181             step, last point
 //	two Max                production    69692       136             step
-//	two Max                pause          8372       250             burst
-//	two Max, three Ultras  heavy           239       239             step
-//	two Max, three Ultras  production    11576       346             step
+//	two Max                pause          8372      1133             burst, last point
+//	two Max, three Ultras  heavy           560       560             step, last point
+//	two Max, three Ultras  production    11576       350             step, last point
 //	two Max, three Ultras  pause             5         5             step
-//	two Ultras             production       37        37             step
+//	two Ultras             production      159       159             step, last point
+//
+// The last-point gap is a rule's price rather than a projection's miss.
+// Another account's last point is taken only once the live account reads
+// empty (lastResort), so a live account that runs out while it still reads
+// short of empty stops the session until the reading that shows it empty,
+// though the other account holds a point. It is most of the seconds where it
+// appears: before it, those seven variants measured 142, 958, 1641, 250, 239,
+// 346 and 37.
 //
 // The burst gap is the one no projection closes, at any reserve. A pair of
 // readings wholly inside a block of nothing is a pause and is not a rate, but a
@@ -792,22 +800,22 @@ func checkTierBooks(t *testing.T, res tierSimResult) {
 // limit the live account runs out between two readings, sooner than its
 // projection said, and the session stops until the next reading shows it out.
 //
-// The pause load on two Max accounts alone is the burst gap's other half. Five
-// sixths of its seconds are three stops of 32 to 88 s: the work resumes on an
-// account a few points from its limit, the pair its reading before made across
-// the pause saw nothing move, so the work is not seen running and the last
-// resort onto the other account's last points stays shut
+// The pause load on two Max accounts alone is the burst gap's other half.
+// Before the last-point rule, five sixths of its 250 seconds were three stops
+// of 32 to 88 s: the work resumes on an account a few points from its limit,
+// the pair its reading before made across the pause saw nothing move, so the
+// work is not seen running and the last resort stays shut
 // (Ranked.lastResortOpen) until a reading shows the live account empty. The
-// rest is the step's.
+// rest was the step's.
 //
 // The step gap is the whole-percent reading's. A reading of 99 is anything from
 // 99 to just under 100, so the live account can be up to a step further spent
 // than the projection starts from -- eleven seconds at 5.4 points a minute --
 // and a pair of readings measures the work to a step, which at a one- or
 // three-minute cadence is a fifth to half of the rate. Across the six variants,
-// two thirds of these seconds had the other account holding less than one step:
-// room a whole-percent reading cannot show, which reads as the 99 an account
-// is handed off at.
+// before the last-point rule, two thirds of these seconds had the other account
+// holding less than one step: room a whole-percent reading cannot show, which
+// reads as the 99 an account is handed off at.
 //
 // The two Max, three Ultras pause load's five seconds were traced: the live
 // Max read 91% at the production rate, its projection began 0.81 of a point
@@ -861,18 +869,18 @@ var stoppedWithRoomMeasured = map[string]int{
 	// The burst gap: a running pair partly across a pause understates the burst.
 	"today/burst":                 29,
 	"big Ultras/burst":            29,
-	"two Max, three Ultras/burst": 142,
-	"two Max/burst":               958,
+	"two Max, three Ultras/burst": 252,
+	"two Max/burst":               1170,
 	// The burst gap's other half: a pair across the pause has the work not seen
 	// running when it resumes, and the last resort waits for an empty reading.
-	"two Max/pause": 250,
+	"two Max/pause": 1133,
 	// The step gap: the live account reads up to a step behind what it has
 	// spent, a pair measures the work to a step, and the room left elsewhere is
 	// mostly under a step a reading can show.
-	"two Max/heavy":                    1641,
+	"two Max/heavy":                    4181,
 	"two Max/production":               136,
-	"two Max, three Ultras/heavy":      239,
-	"two Max, three Ultras/production": 346,
+	"two Max, three Ultras/heavy":      560,
+	"two Max, three Ultras/production": 350,
 	"two Max, three Ultras/pause":      5,
-	"two Ultras/production":            37,
+	"two Ultras/production":            159,
 }
