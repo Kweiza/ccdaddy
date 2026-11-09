@@ -536,9 +536,11 @@ something:
   stops the session until the reading that shows it empty: three minutes at
   the live cadence, and longer while the usage endpoint throttles the poll,
   360 to 1800 seconds after a 429. And the session moves onto a primary credit
-  seat only when the free account it is on reads at its last point or empty,
-  so work that outruns the readings can stop it at that account's limit until
-  a reading shows it there.
+  seat only when the free account it is on reads at its last point or empty.
+  At 5.4 points a minute a reading three minutes apart rarely lands on the one
+  point a last point is, so a running hand-off onto the seat usually stops the
+  session at the free account's limit until the next reading: 0 to 180
+  seconds, about 90 on average, by calculation rather than measurement.
 
 In a simulated week, with whole-percent readings and the daemon's warm-ups, a
 session stopped while another account had room in eleven of 28 fleet-and-load

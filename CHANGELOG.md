@@ -157,9 +157,12 @@ quota, which can now expire unspent.
     stops the session until the reading that shows it empty: three minutes at
     the live cadence, and longer while the usage endpoint throttles the poll,
     360 to 1800 seconds after a 429. And a session moves onto a primary credit
-    seat only when the free account it is on reads at its last point or empty,
-    so work that outruns the readings can stop it at that account's limit
-    until a reading shows it there.
+    seat only when the free account it is on reads at its last point or empty.
+    At 5.4 points a minute a reading three minutes apart rarely lands on the
+    one point a last point is, so a running hand-off onto the seat usually
+    stops the session at the free account's limit until the next reading: 0
+    to 180 seconds, about 90 on average, by calculation rather than
+    measurement.
 
   The figures above belong to the simulated fleets and loads; they are not a
   bound on what a real week can cost.
@@ -295,11 +298,12 @@ quota, which can now expire unspent.
   allowance, save for the poll policy's one accepted exemption: a live account
   in the danger band keeps its undivided cadence after its first reading, the
   first reading of a poll in flight across a switch included.
-- Mode `hover`, and five reasons: "the live account is down to its last point
+- Mode `hover`, and six reasons: "the live account is down to its last point
   before a limit", "a short-window account has room again", "another
   weekly-only account's week resets sooner", "staying on the short-window
-  account until it reaches a limit", and "the account the order prefers cannot
-  carry the work running now".
+  account until it reaches a limit", "the account the order prefers cannot
+  carry the work running now", and "the next account costs money, and the
+  move waits for a reading that shows the live account at its limit".
 
 ### Removed
 
