@@ -1243,3 +1243,44 @@ func TestTheLiveMaxReadingBlocksRatherThanDisablesWhenOutOfCredits(t *testing.T)
 		t.Error("HasSubscriptionWindows() = false — turning overage on did not take the plan away")
 	}
 }
+
+// A reading taken before a rollover still says what the window held before it
+// reset. AsOf reads it as the rollover left it: every window whose named reset
+// has passed is 0% with no reset, and every other window -- one still running,
+// one that never named a reset, and the cinder_cove grant, whose resets_at is
+// an expiry -- is the reading as it was taken. The reading itself is not
+// changed, and one with nothing rolled is the same reading.
+func TestARolledWindowReadsAsRolled(t *testing.T) {
+	s := mustParse(t, realBody)
+	if same := s.AsOf(mustTime(t, "2026-08-22T08:59:59Z")); same != s {
+		t.Error("AsOf before any reset returned a different reading")
+	}
+
+	rolled := s.AsOf(mustTime(t, "2026-08-22T09:00:00Z"))
+	if pct, ok := rolled.FiveHour.Percent(); !ok || pct != 0 {
+		t.Errorf("rolled five-hour window reads %v, %v; want 0, true", pct, ok)
+	}
+	if at, ok := rolled.FiveHour.Reset(); ok {
+		t.Errorf("rolled five-hour window still names a reset at %s", at)
+	}
+	if pct, _ := rolled.SevenDay.Percent(); pct != 41 {
+		t.Errorf("a running week reads %v after another window rolled, want 41", pct)
+	}
+	if pct, _ := s.FiveHour.Percent(); pct != 92.5 {
+		t.Errorf("AsOf changed the reading it was asked about: five-hour now %v", pct)
+	}
+
+	later := s.AsOf(mustTime(t, "2026-09-30T00:00:00Z"))
+	if pct, _ := later.CinderCove.Percent(); pct != 10 {
+		t.Errorf("cinder_cove reads %v at its resets_at, want 10: that is an expiry", pct)
+	}
+	if pct, _ := later.Limits[0].Percent(); pct != 0 {
+		t.Errorf("a rolled scoped weekly limit reads %v, want 0", pct)
+	}
+	if pct, _ := later.Limits[1].Percent(); pct != 0 {
+		t.Errorf("a scoped limit naming no reset reads %v, want the reading's 0", pct)
+	}
+	if pct, _ := s.Limits[0].Percent(); pct != 12.5 {
+		t.Errorf("AsOf changed the reading's limits: now %v", pct)
+	}
+}
