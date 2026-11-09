@@ -368,6 +368,7 @@ func TestALastPointHandsOffToAnAccountThatOutlastsIt(t *testing.T) {
 		{"B stopping keeps a bridge short of a cooldown", points(cadence), points(cadence + HoverCooldown/2), false, ReasonNothingCanServe},
 		{"B out hands to A, a last resort", 0.005, points(HoverCooldown / 2), true, ReasonLastPoint},
 		{"B out never takes an empty A", 0.005, 0, false, ReasonNothingCanServe},
+		{"B out never takes an A the work would empty before the next look", 0.005, points(EvaluationInterval / 2), false, ReasonNothingCanServe},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b := measuredLive(polled(maxAcct("b-live", 100-tc.bRoom, 3*time.Hour, 50, 4*day), cadence), rate, usage.WindowFiveHour)

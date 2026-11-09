@@ -161,3 +161,26 @@ func TestTwoDifferentWindowsAreNotAPair(t *testing.T) {
 		t.Error("reported a rate across two different windows")
 	}
 }
+
+// A pair measures what it can, and the windows it could not measure keep the
+// last rate the work was measured at on them: a five-hour window that rolled
+// between two readings gives no rate, and forgetting the five-hour rate there
+// would leave the next five-hour window with nothing projecting it.
+func TestALivePairReplacesOnlyTheWindowsItMeasured(t *testing.T) {
+	later := burnNow.Add(3 * time.Minute)
+	kept := []LiveBurn{
+		{PerMin: 1, Window: WindowFiveHour, From: burnNow.Add(-3 * time.Minute), At: burnNow},
+		{PerMin: 0.03, Window: WindowSevenDay, From: burnNow.Add(-3 * time.Minute), At: burnNow},
+	}
+	got := MergeLiveBurns(kept, []LiveBurn{{PerMin: 0.05, Window: WindowSevenDay, From: burnNow, At: later}})
+	byWindow := map[WindowName]LiveBurn{}
+	for _, b := range got {
+		byWindow[b.Window] = b
+	}
+	if len(got) != 2 || byWindow[WindowSevenDay].PerMin != 0.05 || byWindow[WindowFiveHour].PerMin != 1 {
+		t.Errorf("merged %+v; want the week's new 0.05 and the five-hour window's kept 1", got)
+	}
+	if same := MergeLiveBurns(kept, nil); len(same) != 2 {
+		t.Errorf("a pair that measured nothing left %+v, want both kept", same)
+	}
+}
