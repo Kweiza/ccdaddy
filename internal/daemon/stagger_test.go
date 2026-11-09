@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
 
@@ -13,9 +14,9 @@ import (
 func TestEveryPhaseIsInsideHalfTheWindow(t *testing.T) {
 	s := rolledOver(time.Minute)
 	for _, uuid := range []string{"a", "b", "c", "0d9e4e6a-1f1a-4b5e-9c3a-2f7b6a1d8e40", "", "u-1"} {
-		got := warmPhase(uuid, s, usage.WindowFiveHour)
+		got := strategy.WarmPhase(uuid, s, usage.WindowFiveHour)
 		if got < 0 || got > 150*time.Minute {
-			t.Errorf("warmPhase(%q) = %v, want inside [0, 2h30m]", uuid, got)
+			t.Errorf("strategy.WarmPhase(%q) = %v, want inside [0, 2h30m]", uuid, got)
 		}
 	}
 }
@@ -25,9 +26,9 @@ func TestEveryPhaseIsInsideHalfTheWindow(t *testing.T) {
 // route -- and the log shows four restarts in one afternoon.
 func TestThePhaseIsStableAcrossCalls(t *testing.T) {
 	s := rolledOver(time.Minute)
-	first := warmPhase("u-1", s, usage.WindowFiveHour)
+	first := strategy.WarmPhase("u-1", s, usage.WindowFiveHour)
 	for i := 0; i < 100; i++ {
-		if got := warmPhase("u-1", s, usage.WindowFiveHour); got != first {
+		if got := strategy.WarmPhase("u-1", s, usage.WindowFiveHour); got != first {
 			t.Fatalf("warmPhase moved from %v to %v on call %d", first, got, i)
 		}
 	}
@@ -39,7 +40,7 @@ func TestDifferentAccountsGetDifferentPhases(t *testing.T) {
 	s := rolledOver(time.Minute)
 	seen := map[time.Duration]string{}
 	for _, uuid := range []string{"u-1", "u-2", "u-3", "u-4", "u-5", "u-6"} {
-		got := warmPhase(uuid, s, usage.WindowFiveHour)
+		got := strategy.WarmPhase(uuid, s, usage.WindowFiveHour)
 		if other, dup := seen[got]; dup {
 			t.Errorf("%s and %s share a phase of %v", uuid, other, got)
 		}
@@ -63,10 +64,10 @@ func TestDifferentAccountsGetDifferentPhases(t *testing.T) {
 // A window whose length this build cannot name gets no phase, rather than a
 // guess: there is no scale to state one on.
 func TestAWindowWithNoNameableLengthGetsNoPhase(t *testing.T) {
-	if got := warmPhase("u-1", rolledOver(time.Minute), usage.WindowName("not_a_window")); got != 0 {
+	if got := strategy.WarmPhase("u-1", rolledOver(time.Minute), usage.WindowName("not_a_window")); got != 0 {
 		t.Errorf("warmPhase = %v for a window this build cannot measure, want 0", got)
 	}
-	if got := warmPhase("u-1", nil, usage.WindowFiveHour); got != 0 {
+	if got := strategy.WarmPhase("u-1", nil, usage.WindowFiveHour); got != 0 {
 		t.Errorf("warmPhase = %v with no reading at all, want 0", got)
 	}
 }
@@ -85,7 +86,7 @@ func TestTheWarmUpWaitsOutItsPhaseAfterTheRollover(t *testing.T) {
 		FetchedAt: tickEpoch.Add(-10 * time.Minute),
 	})
 
-	phase := warmPhase("u-1", rolledOver(time.Minute), usage.WindowFiveHour)
+	phase := strategy.WarmPhase("u-1", rolledOver(time.Minute), usage.WindowFiveHour)
 	if phase <= time.Minute {
 		t.Fatalf("this fixture's phase is %v; it cannot exercise the wait", phase)
 	}
@@ -108,7 +109,7 @@ func TestTheWarmUpRunsOnceThePhaseHasPassed(t *testing.T) {
 	seedAccount(t, "u-1", "org-1")
 	seedLiveHolder(t, "u-live")
 
-	phase := warmPhase("u-1", rolledOver(time.Minute), usage.WindowFiveHour)
+	phase := strategy.WarmPhase("u-1", rolledOver(time.Minute), usage.WindowFiveHour)
 	ago := phase + time.Minute
 	seedEntry(t, "u-1", usage.Entry{
 		Snapshot:  rolledOver(ago),

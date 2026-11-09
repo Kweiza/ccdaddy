@@ -299,6 +299,17 @@ func (e Entry) MayProbe(now time.Time, w WindowName, rollover time.Time, hasRoll
 	return e.Probe.MayProbe(now, w, rollover, hasRollover)
 }
 
+// Attempted is this record with an attempt at w made at at, and its outcome
+// when known (nil for none). It records that an attempt happened and nothing
+// about whether it worked: the verdict is Judged's, on the reading after it.
+func (p ProbeState) Attempted(at time.Time, w WindowName, probeErr error) ProbeState {
+	p.LastAttemptAt, p.Window, p.LastError = at, w, ""
+	if probeErr != nil {
+		p.LastError = probeErr.Error()
+	}
+	return p
+}
+
 // RecordProbe stamps a probe attempt against an account and schedules the poll
 // that will read what the probe woke.
 //
@@ -331,12 +342,7 @@ func RecordProbe(timeout time.Duration, uuid string, at time.Time, w WindowName,
 			// has shown a window with no reset, and then there is an entry.
 			e.FetchedAt = at
 		}
-		e.Probe.LastAttemptAt = at
-		e.Probe.Window = w
-		e.Probe.LastError = ""
-		if probeErr != nil {
-			e.Probe.LastError = probeErr.Error()
-		}
+		e.Probe = e.Probe.Attempted(at, w, probeErr)
 		e.NextPollAt = at.Add(ProbePollDelay)
 		c.Put(uuid, e)
 		return nil
