@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
 
@@ -39,7 +40,7 @@ func TestTheDaemonWarmsAWindowWhoseClockHasRunDown(t *testing.T) {
 	// Past this account's own stagger phase, so what is under test is the
 	// rollover arm rather than the wait in front of it -- warmPhase has its own
 	// cases in stagger_test.go.
-	ago := warmPhase("u-1", rolledOver(time.Minute), usage.WindowFiveHour) + time.Minute
+	ago := strategy.WarmPhase("u-1", rolledOver(time.Minute), usage.WindowFiveHour) + time.Minute
 	seedEntry(t, "u-1", usage.Entry{
 		Snapshot:  rolledOver(ago),
 		FetchedAt: tickEpoch.Add(-10 * time.Minute),
