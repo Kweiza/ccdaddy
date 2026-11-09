@@ -554,8 +554,9 @@ func (t Table) ServeTTLFor(in Input) time.Duration {
 	return t.ServeTTL
 }
 
-// PromptPollAt is when to read an account the work has just moved to: as soon as
-// the identity's serve floor allows, and never inside a 429's floor.
+// PromptPollAt is when to read an account the work has just moved to: as soon
+// as the identity's serve floor allows, and never inside a 429's floor -- nor,
+// on a 429's schedule, inside the identity's.
 //
 // fetched and next are the account's last reading and its scheduled next one,
 // lastRateLimited its poller's last 429, zero for never. The account was being
@@ -576,16 +577,22 @@ func (t Table) ServeTTLFor(in Input) time.Duration {
 // A look already scheduled earlier than the floor is held to it too. It is not
 // the identity's: the schedule a live account in the danger band left behind
 // is the band's undivided one, and taking it when the session comes back to
-// that account spends the budget the floor exists to share.
+// that account spends the budget the floor exists to share. A 429's schedule is
+// held to it as well: the backoff says the endpoint is congested, not that the
+// identity's budget has room, and on an identity of four a backoff shorter than
+// four floors would still overspend it.
+// TestAPromptOnA429ScheduleIsHeldToTheIdentitysFloor.
 //
-// It is one function because three places need the same instant: the switch
-// writes it, hover's hand-off rule predicts it for an account it might move to,
-// and the weekly simulation schedules by it.
+// It is one function because every place a prompt is taken needs the same
+// instant: the switch writes it, the commit of a poll in flight across a switch
+// derives it again, hover's hand-off rule predicts it for an account it might
+// move to, and the weekly simulation schedules by it.
 func (t Table) PromptPollAt(fetched, next, lastRateLimited, now time.Time, accounts int) time.Time {
+	floor := latestOf(now, fetched.Add(t.Share(t.ServeTTL, accounts, Input{Now: now, Active: true})))
 	if !lastRateLimited.IsZero() && now.Sub(lastRateLimited) < t.Recent429Window {
-		return next
+		return latestOf(next, floor)
 	}
-	return latestOf(now, fetched.Add(t.Share(t.ServeTTL, accounts, Input{Now: now, Active: true})))
+	return floor
 }
 
 // latestOf is the later of two instants.

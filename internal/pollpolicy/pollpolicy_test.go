@@ -851,6 +851,24 @@ func TestPromptPollAtIsTheIdentitysServeFloor(t *testing.T) {
 	}
 }
 
+// A 429's schedule is held to the identity's floor too. Four accounts share the
+// budget, the account was read a minute ago and refused within the hour, and
+// the schedule it was left with is nine minutes after its reading -- the
+// danger band's three-floor cadence. The prompt is the later of that and the
+// identity's share of the floor, twelve minutes after the reading.
+func TestAPromptOnA429ScheduleIsHeldToTheIdentitysFloor(t *testing.T) {
+	now := epoch
+	fetched := now.Add(-time.Minute)
+	next := fetched.Add(3 * ServeTTL)
+	got := PromptPollAt(fetched, next, now.Add(-10*time.Minute), now, 4)
+	if want := fetched.Add(PerIdentity(ServeTTL, 4)); !got.Equal(want) {
+		t.Errorf("PromptPollAt = %s after the reading, want the identity's floor, %s", got.Sub(fetched), want.Sub(fetched))
+	}
+	if later := fetched.Add(30 * time.Minute); !PromptPollAt(fetched, later, now.Add(-10*time.Minute), now, 4).Equal(later) {
+		t.Error("a 429's schedule later than the floor was not kept")
+	}
+}
+
 // A switch is one prompt poll, and hover can switch among the accounts of one
 // identity a cooldown apart. Three of them rotated every two minutes for three
 // hours, each read at 96% -- so while it is live the danger band polls it on its
