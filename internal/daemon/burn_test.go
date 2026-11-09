@@ -448,6 +448,46 @@ func TestACommitDropsAPredecessorsMeasurements(t *testing.T) {
 	}
 }
 
+// The backoff a re-added account earns survives its next commit. The row holds
+// a predecessor's reading from before the account was added, and a switch's
+// record since; the account's first two polls are refused with a 429 and no
+// Retry-After. The second backoff is longer than the first: the schedule the
+// first refusal earned is the account's own, and is not dropped with the
+// predecessor's measurements.
+func TestAReAddedAccountsBackoffSurvivesItsFirst429s(t *testing.T) {
+	isolateEngine(t)
+	a := store.Account{UUID: "acct-a", AddedAt: tickEpoch}
+	if err := usage.WithCache(time.Second, func(c *usage.Cache) error {
+		c.Put(a.UUID, usage.Entry{Snapshot: windowsUsed(90, 50), FetchedAt: tickEpoch.Add(-time.Hour)})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := switcher.SchedulePromptPoll(a.UUID, tickEpoch.Add(time.Minute), 1); err != nil {
+		t.Fatal(err)
+	}
+	now := tickEpoch.Add(2 * time.Minute)
+	cfg := config.Config{Threshold: 80, CreditThreshold: 80}
+	e := movableEngine(t, &now, func(context.Context, string) (*usage.Snapshot, error) {
+		return nil, usage.StatusErrorFrom(429, http.Header{}, now)
+	})
+	e.setLive(a.UUID, true)
+	backoff := func() time.Duration {
+		t.Helper()
+		_ = e.poll(context.Background(), a, cfg, configuredThresholds(cfg), []string{a.UUID}, true)
+		entry, ok := cacheEntry(t, a.UUID)
+		if !ok {
+			t.Fatal("the poll left no row")
+		}
+		return entry.NextPollAt.Sub(now)
+	}
+	first := backoff()
+	now = now.Add(first)
+	if second := backoff(); second <= first {
+		t.Errorf("the second 429's backoff is %s, the first's %s: the first was dropped with the predecessor's row", second, first)
+	}
+}
+
 // A tick that switched and then could not re-read the cache dispatches from the
 // copy it read before the switch, not from the empty cache a failed load
 // returns -- which would have every account due at once.
