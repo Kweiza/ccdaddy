@@ -356,30 +356,36 @@ func TestTheHoldNamesTheFirstReasonInTheOrder(t *testing.T) {
 	}
 }
 
-// From a live last-resort credit seat the session goes back to subscription
-// quota the way every hover move goes: to a carrier. A Max whose five points
-// the work would spend in five minutes is not one, and a Max on its last point
-// is not one either; the seat stays, and nothing is held for --force.
-func TestALiveCreditSeatReturnsOnlyToACarrier(t *testing.T) {
+// From a live last-resort credit seat the session goes back to free quota on the
+// levels alone: to a carrier, and to an account that is not one as well -- forty
+// points the work would spend in four minutes, five it would spend in one --
+// because a point of quota already paid for is spent before a point of money,
+// even when another move follows. A Max on its last point is not free quota to
+// go back to; the seat stays, and nothing is held for --force.
+func TestALiveCreditSeatReturnsToFreeQuota(t *testing.T) {
 	seat := creditWith("c-seat", usage.ExtraUsageFor(usage.ExtraUsageInput{
 		State: usage.ExtraUsageEnabled, Currency: "USD", MonthlyLimit: pf(10000), UsedCredits: pf(0), Utilization: pf(10),
 	}))
-	maxAt := func(pct float64) Candidate {
-		return measuredLive(idleOn(maxAcct("b", pct, 3*time.Hour, 40, 3*day)), 1, usage.WindowFiveHour)
-	}
 	for _, tc := range []struct {
-		name   string
-		pct    float64
-		action Action
-		reason Reason
-		target string
+		name    string
+		pct     float64
+		rate    float64
+		carries bool
+		action  Action
+		reason  Reason
+		target  string
 	}{
-		{"a carrier", 50, ActionSwitch, ReasonShortWindowRoom, "b"},
-		{"an account the work would run out", 95, ActionStay, ReasonCannotCarry, ""},
-		{"an account on its last point", 99.5, ActionStay, ReasonNoSubscriptionRoom, ""},
+		{"a carrier", 50, 1, true, ActionSwitch, ReasonShortWindowRoom, "b"},
+		{"forty points that cannot carry the work", 60, 10, false, ActionSwitch, ReasonShortWindowRoom, "b"},
+		{"five points that cannot carry the work", 95, 5, false, ActionSwitch, ReasonShortWindowRoom, "b"},
+		{"an account on its last point", 99.5, 1, false, ActionStay, ReasonNoSubscriptionRoom, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			p := Decide([]Candidate{maxAt(tc.pct), seat}, hoverOpts(), Config{}, NewState(), "c-seat")
+			b := measuredLive(idleOn(maxAcct("b", tc.pct, 3*time.Hour, 40, 3*day)), tc.rate, usage.WindowFiveHour)
+			p := Decide([]Candidate{b, seat}, hoverOpts(), Config{}, NewState(), "c-seat")
+			if r, _ := find(p.Result, "b"); r.Carries != tc.carries {
+				t.Fatalf("b carries %v, want %v: the case is not the one named", r.Carries, tc.carries)
+			}
 			want(t, p, tc.action, tc.reason, tc.target)
 			if p.Action != ActionSwitch && p.Held.UUID != "" {
 				t.Errorf("held %q for --force", p.Held.UUID)
@@ -417,30 +423,85 @@ func pausedMax(uuid string, pct float64, running bool) Candidate {
 	return c
 }
 
-// A pause does not open the credit pool. The live Max holds fifteen points;
-// every other subscription account is empty, the user's thresholds call the
-// main pool exhausted, and the seat is opted in. Projected at the rate the work
-// last ran the Max is out -- but its most recent live pair saw nothing move, so
-// that projection is a forecast of a burst that may not come, and money is not
-// spent on a forecast. When the pair saw the work running, the walk opens as
-// before.
-func TestAPausedLiveAccountDoesNotOpenTheCreditPool(t *testing.T) {
-	seat := creditWith("c-seat", usage.ExtraUsageFor(usage.ExtraUsageInput{
+// openSeat is a last-resort credit seat the user has opted into spending on.
+func openSeat() Candidate {
+	return creditWith("c-seat", usage.ExtraUsageFor(usage.ExtraUsageInput{
 		State: usage.ExtraUsageEnabled, Currency: "USD", MonthlyLimit: pf(10000), UsedCredits: pf(0), Utilization: pf(10),
 	}))
+}
+
+// noCredit fails the test when the plan reached the credit pool: money is not
+// spent while a reading shows free quota.
+func noCredit(t *testing.T, p Plan, why string) {
+	t.Helper()
+	if p.Action == ActionSwitch || p.CreditConsulted {
+		t.Errorf("%s (%s) to %q, credit consulted %v: %s", p.Action, p.Reason, p.Target.UUID, p.CreditConsulted, why)
+	}
+}
+
+// A projection does not open the credit pool, paused or running. The live Max
+// holds fifteen points; every other subscription account is empty, the user's
+// thresholds call the main pool exhausted, and the seat is opted in. Projected
+// at the rate the work last ran, the Max is out -- but its reading shows fifteen
+// points, and money is decided on readings (creditOpen). The walk opens when
+// the Max is read empty.
+func TestAPausedLiveAccountDoesNotOpenTheCreditPool(t *testing.T) {
 	empty := maxAcct("b-empty", 100, 2*time.Hour, 60, 3*day)
 	o := hoverOpts()
 	o.Threshold = 80
 	cfg := Config{MaxAutoSpend: 500}
 
-	p := Decide([]Candidate{pausedMax("a-live", 85, false), empty, seat}, o, cfg, NewState(), "a-live")
-	if r, _ := find(p.Result, "a-live"); r.limit != liveOut {
-		t.Fatalf("the live Max is at limit %d, not projected out: the case is not the pause", r.limit)
+	for _, running := range []bool{false, true} {
+		p := Decide([]Candidate{pausedMax("a-live", 85, running), empty, openSeat()}, o, cfg, NewState(), "a-live")
+		if r, _ := find(p.Result, "a-live"); r.limit != liveOut {
+			t.Fatalf("the live Max is at limit %d, not projected out: the case is not the projection", r.limit)
+		}
+		noCredit(t, p, fmt.Sprintf("a projection opened the credit pool (running %v)", running))
 	}
-	if p.Action == ActionSwitch || p.CreditConsulted {
-		t.Errorf("%s (%s) to %q, credit consulted %v: a pause opened the credit pool", p.Action, p.Reason, p.Target.UUID, p.CreditConsulted)
+	p := Decide([]Candidate{pausedMax("a-live", 100, true), empty, openSeat()}, o, cfg, NewState(), "a-live")
+	want(t, p, ActionSwitch, ReasonBetterTarget, "c-seat")
+}
+
+// The work moved to B, which holds twenty-four points, and paused there. B's
+// running flag is still true, from the stint before; projected at the rate the
+// work last ran, B is out. A is empty and the seat is opted in, but B's reading
+// shows room, and no flag and no projection outweighs a reading.
+func TestAStaleRunningFlagDoesNotOpenTheCreditPool(t *testing.T) {
+	b := sub("b-live", &usage.Snapshot{FiveHour: win(76, 3*time.Hour), SevenDay: win(50, 4*day)})
+	b.FetchedAt, b.NextPollAt = now.Add(-5*time.Minute), now.Add(time.Minute)
+	b.LiveBurns = []usage.LiveBurn{{PerMin: 5.4, Window: usage.WindowFiveHour, From: now.Add(-10 * time.Minute), At: now.Add(-7 * time.Minute)}}
+	b.WorkRunning = true
+	o := hoverOpts()
+	o.Threshold = 70
+	p := Decide([]Candidate{b, maxAcct("a-empty", 100, 2*time.Hour, 60, 3*day), openSeat()}, o, Config{MaxAutoSpend: 500}, NewState(), "b-live")
+	if r, _ := find(p.Result, "b-live"); r.limit != liveOut {
+		t.Fatalf("B is at limit %d, not projected out: the case is not the projection", r.limit)
 	}
-	p = Decide([]Candidate{pausedMax("a-live", 85, true), empty, seat}, o, cfg, NewState(), "a-live")
+	noCredit(t, p, "a stale running flag opened the credit pool while B's reading showed room")
+}
+
+// A live Ultra moved from 98% to 99% of its week in three minutes: one quantum,
+// a third of a point a minute, which has it out by the next reading. Every
+// other account is empty and the seat is opted in, but the Ultra's last point
+// is free work, and nothing is bought until a reading shows it spent.
+func TestAWeeklySeatsLastPointDoesNotOpenTheCreditPool(t *testing.T) {
+	ultra := func(pct float64) Candidate {
+		u := weekOnly("u-live", pct, 2*day)
+		u.FetchedAt, u.NextPollAt = now.Add(-3*time.Minute), now.Add(30*time.Second)
+		u.LiveBurns = []usage.LiveBurn{{PerMin: 1.0 / 3, Window: usage.WindowSevenDay, From: now.Add(-6 * time.Minute), At: now.Add(-3 * time.Minute)}}
+		u.WorkRunning = true
+		return u
+	}
+	o := hoverOpts()
+	o.Threshold = 70
+	cfg := Config{MaxAutoSpend: 500}
+	empty := maxAcct("a-empty", 100, 2*time.Hour, 60, 3*day)
+	p := Decide([]Candidate{ultra(99), empty, openSeat()}, o, cfg, NewState(), "u-live")
+	if r, _ := find(p.Result, "u-live"); r.limit != liveOut {
+		t.Fatalf("the Ultra is at limit %d, not projected out: the case is not the projection", r.limit)
+	}
+	noCredit(t, p, "one quantum of rate on a seat's last point opened the credit pool")
+	p = Decide([]Candidate{ultra(100), empty, openSeat()}, o, cfg, NewState(), "u-live")
 	want(t, p, ActionSwitch, ReasonBetterTarget, "c-seat")
 }
 
@@ -552,7 +613,7 @@ func TestEveryHoverMoveIsToACarrierABridgeOrALastResort(t *testing.T) {
 		case live.AtLimit() == "":
 			t.Fatalf("pool %d: a live account with room moved to %s, which does not carry the work", i, tgt.UUID)
 		case live.limit >= liveStopping && tgt.HasRunway && tgt.roomyByLevel() && tgt.RunsOutAt.After(live.RunsOutAt.Add(HoverCooldown)):
-		case live.downwardOpen():
+		case live.lastResortOpen():
 			if _, empty := tgt.Empty(); empty {
 				t.Fatalf("pool %d: a last resort onto %s, which is empty", i, tgt.UUID)
 			}

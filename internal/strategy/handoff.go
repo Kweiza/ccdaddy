@@ -3,6 +3,7 @@ package strategy
 import (
 	"time"
 
+	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/pollpolicy"
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
@@ -513,10 +514,9 @@ func (r Ranked) roomyByLevel() bool {
 // it held (Plan.Held), which is the one `ccdad switch --force` may take.
 // TestTheTargetIsChosenBeforeTheCooldown.
 //
-// A live login on a last-resort credit seat is walked the same way: the seat is
-// in the pass, so the return to subscription quota is a move to a carrier like
-// any other, and an account at a limit is never where it goes back to.
-// TestALiveCreditSeatReturnsOnlyToACarrier.
+// A live login on a credit seat goes back to free quota on the levels alone
+// (creditSeatReturn), and money is entered on the levels alone (creditOpen):
+// what the user pays for is never decided on a projection.
 //
 // The caller asks only when the main pool has an account in it. With none, the
 // configured strategies' credit arms are the whole of the answer, under hover
@@ -552,19 +552,15 @@ func (p *Plan) hoverMove(activeUUID string, cfg Config, st *State, o Options, by
 			return
 		}
 	}
-	if live.downwardOpen() {
+	if live.lastResortOpen() {
 		if target, ok := lastResort(res, live, o.Now); ok {
 			p.moveOrHold(target, leaveReason(live, target), activeUUID, cfg, st, o.Now)
 			return
 		}
-		// Money comes after every free point of subscription quota, and only
-		// on the user's own thresholds. Why at this point and not at the first
-		// limit: until the live account is out, it still holds free quota of
-		// its own, and a bridge or a last resort may yet appear.
-		if p.SubscriptionExhausted && len(res.Credit) > 0 {
-			p.creditWalk(byUUID, activeUUID, cfg, st, o.Now)
-			return
-		}
+	}
+	if p.creditOpen() {
+		p.creditWalk(byUUID, activeUUID, cfg, st, o.Now)
+		return
 	}
 	p.hold(ReasonNothingCanServe, soonestRollover(res))
 }
@@ -585,7 +581,7 @@ func (p *Plan) hoverMove(activeUUID string, cfg Config, st *State, o Options, by
 // TestTheHoldNamesTheRuleThatKeptTheSession,
 // TestTheHoldNamesTheFirstReasonInTheOrder.
 func (p *Plan) hoverMoveWithRoom(live Ranked, activeUUID string, cfg Config, st *State, now time.Time, byUUID map[string]Candidate) {
-	if p.isCredit(activeUUID) {
+	if p.seatCost(live) > 0 {
 		p.creditSeatReturn(live, activeUUID, cfg, st, now, byUUID)
 		return
 	}
@@ -622,26 +618,82 @@ func (p *Plan) hoverMoveWithRoom(live Ranked, activeUUID string, cfg Config, st 
 	p.hold(stay, retryAt)
 }
 
-// creditSeatReturn is the move off a live last-resort credit seat with room. The
-// seat is not in the order and money is last, so it goes back to any account
-// that can carry the work, whatever that account's rung -- one held out
-// included: the hold says where the session would rather be, and nothing about
-// paying for work free quota can carry. With no carrier it stays, and says why:
-// an account with room that cannot carry the work, or no subscription room.
-// TestALiveCreditSeatReturnsOnlyToACarrier.
+// creditSeatReturn is the move off a live credit seat with room: a seat of the
+// last-resort pool, or a primary seat, whose work is paid for by the point. It
+// goes back to quota that is cheaper (seatCost) on the levels alone, whatever
+// the account's rung -- one held out included -- and whether or not it can
+// carry the work: an account that can is taken first, and with none, any that
+// is not empty and not on its last point. Free quota is spent before money even
+// when that means another move once the free account runs out, and the move
+// out of it, back onto credits, is again decided on its levels (creditOpen).
+// The cooldown still applies. With no such account the seat stays.
+// TestALiveCreditSeatReturnsToFreeQuota,
+// TestALiveCreditSeatReturnsToAHeldOutCarrier.
 func (p *Plan) creditSeatReturn(live Ranked, activeUUID string, cfg Config, st *State, now time.Time, byUUID map[string]Candidate) {
-	if target, ok := firstCarrier(p.Result, activeUUID, byUUID, now); ok {
-		p.moveOrHold(target, leaveReason(live, target), activeUUID, cfg, st, now)
+	cost := p.seatCost(live)
+	cheaper := func(r Ranked) bool { return !isActive(r.UUID, activeUUID) && p.seatCost(r) < cost }
+	back := func(target Ranked) {
+		// The order's own reason when the order would make this move, so the
+		// sentence says which rule it is; else why the seat is left.
+		reason, refused, _ := hoverGate(live, target, cfg)
+		if refused {
+			reason = leaveReason(live, target)
+		}
+		p.moveOrHold(target, reason, activeUUID, cfg, st, now)
+	}
+	if target, ok := firstCarrier(p.Result, activeUUID, byUUID, now); ok && cheaper(target) {
+		back(target)
 		return
 	}
-	stay := ReasonNoSubscriptionRoom
 	for _, r := range p.Result.Order {
-		if r.roomyByLevel() {
-			stay = ReasonCannotCarry
-			break
+		if cheaper(r) && r.roomyByLevel() {
+			back(r)
+			return
 		}
 	}
-	p.hold(stay, time.Time{})
+	p.hold(ReasonNoSubscriptionRoom, time.Time{})
+}
+
+// seatCost is what a point of work on r costs the user, cheapest first: a
+// subscription's quota is paid for whether it is spent or not, a primary credit
+// seat's balance is quota bought ahead, and the last-resort pool is overage.
+func (p *Plan) seatCost(r Ranked) int {
+	switch {
+	case p.isCredit(r.UUID):
+		return 2
+	case r.Kind == identity.KindCredit:
+		return 1
+	}
+	return 0
+}
+
+// creditOpen is whether hover may walk the last-resort credit pool, and it is
+// decided on readings alone: the user's own thresholds call the main pool
+// exhausted (MainPoolExhausted, Plan.SubscriptionExhausted), there is a seat to
+// walk, and every account of the main pool -- the live one included -- reads
+// empty on a window no model choice can dodge. An account that could not be
+// read is not known to be empty, and holds the pool shut.
+//
+// Never on a projection, a pause or the work's running flag. Each round of
+// review found another way for a forecast to spend money while free quota
+// remained -- a paused account, a stale running flag, one quantum of rate on a
+// seat's last point -- because the decision rested on the forecast. The cost is
+// the other direction: with credits opted in and the whole fleet dry, a session
+// whose live account runs out between two readings waits for the reading that
+// shows it empty, up to the serve floor (pollpolicy.ServeTTL, three minutes)
+// after the last one. TestAPausedLiveAccountDoesNotOpenTheCreditPool,
+// TestAStaleRunningFlagDoesNotOpenTheCreditPool,
+// TestAWeeklySeatsLastPointDoesNotOpenTheCreditPool.
+func (p *Plan) creditOpen() bool {
+	if !p.SubscriptionExhausted || len(p.Result.Credit) == 0 {
+		return false
+	}
+	for _, r := range p.Result.Order {
+		if _, empty := r.Empty(); !empty {
+			return false
+		}
+	}
+	return true
 }
 
 // isCredit is whether uuid is one of the pass's last-resort credit seats.
@@ -665,22 +717,19 @@ func (p *Plan) moveOrHold(target Ranked, reason Reason, activeUUID string, cfg C
 	p.switchTo(target, reason, activeUUID)
 }
 
-// downwardOpen is whether the live account's limit opens the downward tiers --
-// the last resort and the credit walk: empty by level always, and out by
-// projection -- before the engine looks again -- only while its most recent
-// live pair saw the work running.
+// lastResortOpen is whether the live account's limit opens the last resort:
+// empty by level always, and out by projection -- before the engine looks
+// again -- only while the work was seen running (Ranked.workRunning).
 //
 // The work's rate outlives a pause (workRate.replaces), which is right for a
 // carrier: a move to an account that can carry the work is safe whether the
 // work resumes or not, and the bridge outlasts the live account by a cooldown.
 // But after a pause the projection that has the live account out is a forecast
 // of a burst that may not come, and a forecast may justify a move that is safe
-// either way, not one that costs money or buys nothing: a paused Max holding
-// fifteen points moved onto credits, or two accounts under a cadence of work
-// each trading the login every cooldown while nothing runs.
-// TestAPausedLiveAccountDoesNotOpenTheCreditPool,
-// TestTwoAccountsDoNotTradeAPausedSession.
-func (r Ranked) downwardOpen() bool {
+// either way, not one that buys nothing: two accounts under a cadence of work
+// each trading the login every cooldown while nothing runs. Money is not
+// decided here at all (creditOpen). TestTwoAccountsDoNotTradeAPausedSession.
+func (r Ranked) lastResortOpen() bool {
 	if _, empty := r.Empty(); empty {
 		return true
 	}
@@ -744,9 +793,9 @@ func bridge(res Result, live Ranked, cooldown time.Duration) (Ranked, bool) {
 // An idle fleet whose accounts all sit at their last point used to trade the
 // login between them: the live one projected out at the rate the work last ran,
 // any other account with work left was a last resort, and the one just left,
-// re-read idle, had its dregs back. The downward tiers now open on a projection
+// re-read idle, had its dregs back. The last resort now opens on a projection
 // only while the live account's latest pair saw the work running
-// (Ranked.downwardOpen), so a pause no longer reaches here at all. What is left
+// (Ranked.lastResortOpen), so a pause no longer reaches here at all. What is left
 // of the trade is the bridge's: two accounts each holding more than a cooldown
 // of work and less than a carrier's can still trade the login across a pause,
 // each move a credential write, a prompt poll and a settings sync, and a
