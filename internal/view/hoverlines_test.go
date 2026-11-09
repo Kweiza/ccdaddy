@@ -99,7 +99,11 @@ func TestHoverLinesSayRecoveryWhenTheOrderIsRecovery(t *testing.T) {
 	}
 	want := []string{
 		HoverNote,
-		HoverRecoveryNote,
+		// Spelled out rather than HoverRecoveryNote, so the sentence is held to
+		// the order below it and not to itself.
+		"hover:    recovery: every account is past its last point; accounts with something left come " +
+			"before empty ones, and within each, those back within the hour come first, soonest first, " +
+			"then the rest, the least past its line first",
 		"hover:    1. c@example.com  back at Fri 12:30",
 		"hover:    2. a@example.com  0.2 past its line · back at Mon 12:00 · live",
 		"hover:    3. b@example.com  0.8 past its line · back at Sun 12:00",
