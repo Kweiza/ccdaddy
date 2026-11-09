@@ -68,7 +68,7 @@ func TestTheDaemonPollCadenceMeasuresAgainstThePerWindowTable(t *testing.T) {
 		t.Helper()
 		e := NewEngine()
 		e.Rand = midJitter
-		e.commit(a, perWindowSnapshot(), tickEpoch, []string{a.UUID}, configuredThresholds(cfg), true, nil)
+		e.commit(a, perWindowSnapshot(), tickEpoch, tickEpoch, []string{a.UUID}, configuredThresholds(cfg), true, nil)
 		var at time.Time
 		if err := usage.WithCache(cacheTimeout, func(c *usage.Cache) error {
 			entry, ok := c.Get(a.UUID)

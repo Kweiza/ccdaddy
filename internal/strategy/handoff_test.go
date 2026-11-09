@@ -193,7 +193,7 @@ func TestACarrierIsNotClosingAtItsFirstLiveReading(t *testing.T) {
 			carriers++
 			// The move happens now. The first live reading is at the prompt
 			// poll, with the work spent up to it and one live cadence ahead.
-			first := pollpolicy.PromptPollAt(cand.FetchedAt, cand.NextPollAt, cand.LastRateLimited, now)
+			first := pollpolicy.PromptPollAt(cand.FetchedAt, cand.NextPollAt, cand.LastRateLimited, now, 1)
 			spent := rate * first.Sub(now).Minutes()
 			live := sub("t", &usage.Snapshot{FiveHour: win(100-room+spent, 4*time.Hour-first.Sub(now)), SevenDay: win(30, 4*day)})
 			o := hoverOpts()

@@ -122,6 +122,15 @@ type PollState struct {
 	// with no such pair writes nothing, and an older cache reads as none.
 	AnchorLive bool       `json:"anchor_live,omitempty"`
 	LiveBurns  []LiveBurn `json:"live_burns,omitempty"`
+	// LiveSince is when a switch last made this account live, and PromptAt the
+	// prompt poll that switch scheduled, while it is still ahead. A switch
+	// writes both under the cache lock; a commit reads them under the same
+	// lock, so a poll that was in flight across the switch -- dispatched while
+	// the account was idle -- commits as the live account's reading and leaves
+	// the prompt poll standing (PromptPending). LiveSince also bounds the stint a
+	// live pair may span (LiveAnchor).
+	LiveSince time.Time `json:"live_since,omitempty"`
+	PromptAt  time.Time `json:"prompt_at,omitempty"`
 }
 
 // Entry is one account's cached reading.
@@ -393,6 +402,12 @@ func (c *Cache) save(root string) error {
 // mkdir-based advisory mutex ccdad already uses against Claude Code, with the
 // same staleness recovery — rather than a second lock mechanism.
 //
+// LockTimeout bounds the wait for this cache's own lock, for every caller that
+// has no reason to wait longer or shorter. Every writer is a sub-second
+// read-modify-write; the contention is between the daemon's poller goroutines,
+// a `ccdad status --refresh` beside them, and a switch's prompt poll.
+const LockTimeout = 5 * time.Second
+
 // fn returning an error leaves the file exactly as it was: a poll that failed
 // halfway must not persist half a reading.
 func WithCache(timeout time.Duration, fn func(*Cache) error) (err error) {

@@ -423,7 +423,7 @@ func (o Options) carries(c Candidate, r Ranked, rw runway) bool {
 	if !rw.known || rw.at.IsZero() {
 		return true
 	}
-	first := pollpolicy.PromptPollAt(c.FetchedAt, c.NextPollAt, c.LastRateLimited, o.Now)
+	first := pollpolicy.PromptPollAt(c.FetchedAt, c.NextPollAt, c.LastRateLimited, o.Now, c.SharedBy)
 	return rw.at.After(first.Add(carrierLead))
 }
 

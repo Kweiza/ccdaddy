@@ -41,7 +41,7 @@ func TestASwitchSchedulesAPromptPoll(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	want := pollpolicy.PromptPollAt(fetched, idle, time.Time{}, before)
+	want := pollpolicy.PromptPollAt(fetched, idle, time.Time{}, before, 1)
 	if got.NextPollAt.Before(want) || got.NextPollAt.After(time.Now()) {
 		t.Errorf("NextPollAt = %s from now, want the prompt poll (%s), not the idle %s",
 			time.Until(got.NextPollAt), time.Until(want), time.Until(idle))
