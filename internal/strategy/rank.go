@@ -733,7 +733,7 @@ func Rank(cands []Candidate, o Options) Result {
 	}
 	// The rates once the table is: only a window that is a limit for this pass
 	// sets the work's rate on it (workRatesOf).
-	w.rates = o.workRatesOf(w.seen)
+	w.rates = o.workRatesOf(w.seen, w.switchedAt, w.switchedTo)
 	o.work = &w
 	// Under hover every reading is read as it stands now (usage.Snapshot.AsOf):
 	// a window whose reset the reading names and has passed is a window that

@@ -1341,9 +1341,9 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now, sent time.Ti
 		// the poll was sent idle, and the daemon's live label is set only after
 		// the switch returns. The switch's own record is read here instead,
 		// under the lock it was written under, so the reading commits as the
-		// live account's and the prompt poll the switch scheduled stands.
+		// live account's and on the prompt poll's schedule.
 		// TestAPollInFlightAcrossASwitchKeepsThePromptPoll.
-		liveSince, promptAt := entry.Poll.LiveSince, entry.Poll.PromptAt
+		liveSince := entry.Poll.LiveSince
 		switched := liveSince.After(sent)
 		if switched {
 			active = true
@@ -1436,8 +1436,14 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now, sent time.Ti
 		// outranks the clock, which is the same order every other schedule here
 		// obeys.
 		entry.NextPollAt = pollpolicy.WarmClamp(entry.NextPollAt, strategy.WarmTarget(entry.Snapshot, thr, now, e.rand()), now, entry.ScheduledTTL())
-		if switched && !promptAt.IsZero() && promptAt.Before(entry.NextPollAt) {
-			entry.NextPollAt = promptAt
+		// The prompt poll the switch scheduled, derived again from what this
+		// poll left: the reading it took, the 429 it may have been refused with
+		// -- congestion outranks the prompt as it outranks every clock here --
+		// and the floor the identity shares. TestAPromptPollYieldsToA429InFlight.
+		if switched {
+			if prompt := pollpolicy.PromptPollAt(entry.FetchedAt, entry.NextPollAt, next.LastRateLimited, now, len(identity)); prompt.Before(entry.NextPollAt) {
+				entry.NextPollAt = prompt
+			}
 		}
 		// The burn rate, taken BEFORE the anchors are overwritten: the reading
 		// that produces a rate is the same one that replaces the point it was
@@ -1482,12 +1488,7 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now, sent time.Ti
 		entry.Poll.BurnPerMin, entry.Poll.HasBurn, entry.Poll.BurnWindow = burn, hasBurn, burnWindow
 		entry.Poll.AnchorLive, entry.Poll.LiveBurns = anchorLive, liveBurns
 		entry.Poll.LastPairRunning = pairRunning
-		// The switch's record outlives the reading it was waiting for only while
-		// that reading is still to come: a poll sent after the switch is it.
 		entry.Poll.LiveSince = liveSince
-		if switched {
-			entry.Poll.PromptAt = promptAt
-		}
 		// entry.StandDownUntil is read and written back untouched, and that is
 		// what makes the two writers safe: this account's poll never edits the
 		// field its identity's live account owns, so the order the two goroutines

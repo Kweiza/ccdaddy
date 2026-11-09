@@ -819,9 +819,10 @@ func TestWarmClampKeepsTheTargetPollReachable(t *testing.T) {
 	}
 }
 
-// The look after a move: as soon as the serve floor allows, never later than the
-// look already scheduled, and never inside a 429's floor.
-func TestPromptPollAtIsTheServeFloorAndNeverLater(t *testing.T) {
+// The look after a move: as soon as the identity's serve floor allows, a look
+// already scheduled sooner held to the same floor, and never inside a 429's
+// floor.
+func TestPromptPollAtIsTheIdentitysServeFloor(t *testing.T) {
 	now := epoch
 	for _, tc := range []struct {
 		name                   string
@@ -832,8 +833,8 @@ func TestPromptPollAtIsTheServeFloorAndNeverLater(t *testing.T) {
 			now.Add(-10 * time.Minute), now.Add(5 * time.Minute), time.Time{}, now},
 		{"a reading 100 s old waits out the serve floor",
 			now.Add(-100 * time.Second), now.Add(8 * time.Minute), time.Time{}, now.Add(-100 * time.Second).Add(ServeTTL)},
-		{"never later than the look already scheduled",
-			now.Add(-100 * time.Second), now.Add(30 * time.Second), time.Time{}, now.Add(30 * time.Second)},
+		{"a look scheduled inside the floor is held to it",
+			now.Add(-100 * time.Second), now.Add(30 * time.Second), time.Time{}, now.Add(-100 * time.Second).Add(ServeTTL)},
 		{"a look already due is now",
 			now.Add(-10 * time.Minute), now.Add(-time.Minute), time.Time{}, now},
 		{"a 429's floor stands",
@@ -852,10 +853,12 @@ func TestPromptPollAtIsTheServeFloorAndNeverLater(t *testing.T) {
 
 // A switch is one prompt poll, and hover can switch among the accounts of one
 // identity a cooldown apart. Three of them rotated every two minutes for three
-// hours, each polled at the prompt the switch schedules and otherwise on its
-// shared cadence, stay inside the identity's 28 requests in any rolling hour --
-// because the prompt's serve floor is shared among them as every other look's
-// is. Unshared, the same rotation asks thirty times an hour.
+// hours, each read at 96% -- so while it is live the danger band polls it on its
+// undivided cadence -- stay inside the identity's 28 requests in any rolling
+// hour: the prompt's serve floor is shared among them as every other look's
+// is, and the band's schedule an account was left with is held to that floor
+// when the session comes back to it. Unshared, the same rotation asks more than
+// the allowance.
 func TestPromptPollsKeepAnIdentityInsideItsBudget(t *testing.T) {
 	const budget = 28
 	rotate := func(accounts int) int {
@@ -869,7 +872,13 @@ func TestPromptPollsKeepAnIdentityInsideItsBudget(t *testing.T) {
 			for i := range next {
 				if !at.Before(next[i]) {
 					polls = append(polls, at)
-					fetched[i], next[i] = at, at.Add(PerIdentity(CandidateMaxInterval, accounts))
+					live := int(at.Sub(epoch)/(2*time.Minute))%members == i
+					in := Input{Now: at, Active: live, Reading: Reading{Known: true, BindingPct: 96}}
+					cadence := PerIdentity(CandidateMaxInterval, accounts)
+					if live {
+						cadence = Share(MinInterval, accounts, in)
+					}
+					fetched[i], next[i] = at, at.Add(cadence)
 				}
 			}
 		}

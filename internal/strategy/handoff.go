@@ -108,7 +108,11 @@ type workRates map[time.Duration]workRate
 // stands only where nothing running was measured (workRate.replaces). An idle
 // pair never enters at all: usage.LiveBurn is set only from a live one, and only
 // within one live stint (usage.LiveAnchor), so a pair spanning an absence is
-// never stored to be read here.
+// not stored to be read here. And a pair whose first reading precedes the last
+// switch onto its own account is never adopted even so: the stint rule rests on
+// the cache record the switch writes after the state's, and a crash between the
+// two, or a failed write, leaves the pair stored -- spanning the absence, its
+// rate diluted by it. TestAPairSpanningAReturnIsNeverTheWorksRate.
 //
 // Only pairs on the windows that are limits for this pass (bindingWindows on
 // the table the pass ranks on). A model family's cap is not one under hover,
@@ -119,7 +123,7 @@ type workRates map[time.Duration]workRate
 // surface's weekly cap -- the highest is the work's: a cap that counts part of
 // the work moves no faster than the window that counts all of it.
 // TestAModelCapsRateIsNotTheWeeksRate.
-func (o Options) workRatesOf(cands []Candidate) workRates {
+func (o Options) workRatesOf(cands []Candidate, switchedAt time.Time, switchedTo string) workRates {
 	out := workRates{}
 	for _, c := range cands {
 		limits := map[usage.WindowName]bool{}
@@ -128,6 +132,9 @@ func (o Options) workRatesOf(cands []Candidate) workRates {
 		}
 		for _, b := range c.LiveBurns {
 			if !b.Measured() || !limits[b.Window] {
+				continue
+			}
+			if isActive(c.UUID, switchedTo) && b.From.Before(switchedAt) && b.At.After(switchedAt) {
 				continue
 			}
 			length, ok := usage.WindowLength(b.Window)

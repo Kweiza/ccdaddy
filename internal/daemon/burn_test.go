@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"math"
+	"net/http"
 	"testing"
 	"time"
 
@@ -337,20 +338,11 @@ func TestAPollInFlightAcrossASwitchKeepsThePromptPoll(t *testing.T) {
 	if !entry.Poll.AnchorLive {
 		t.Error("the reading in flight across the switch was labelled idle")
 	}
-	if entry.NextPollAt.After(prompt) {
-		t.Errorf("next poll %s after the switch, want the prompt poll at %s", entry.NextPollAt.Sub(tickEpoch), prompt.Sub(tickEpoch))
-	}
-	if entry.Poll.PromptAt.IsZero() {
-		t.Error("the prompt poll's record was cleared by a reading sent before the switch")
-	}
-
-	e.FetchUsage = func(context.Context, string) (*usage.Snapshot, error) { return windowsUsed(12, 5), nil }
-	now = now.Add(pollpolicy.ServeTTL)
-	if err := e.poll(context.Background(), a, cfg, configuredThresholds(cfg), []string{a.UUID}, true); err != nil {
-		t.Fatal(err)
-	}
-	if entry, _ := cacheEntry(t, a.UUID); !entry.Poll.PromptAt.IsZero() {
-		t.Error("the prompt poll, sent after the switch, left the record standing")
+	// The prompt, derived again from the reading the in-flight poll took: the
+	// next look as soon as that reading's serve floor allows, not the idle
+	// cadence the poll was sent on.
+	if limit := now.Add(pollpolicy.ServeTTL); entry.NextPollAt.After(limit) || prompt.After(limit) {
+		t.Errorf("next poll %s after the switch, want the prompt poll by %s", entry.NextPollAt.Sub(tickEpoch), limit.Sub(tickEpoch))
 	}
 }
 
@@ -384,5 +376,65 @@ func TestAPairAcrossAnAbsenceIsNotStored(t *testing.T) {
 	}
 	if got, want := five(after), five(before); got != want || math.Abs(want.PerMin-1) > 1e-9 {
 		t.Errorf("five-hour rate %+v after the return, want the 1 a minute measured before it (%+v)", got, want)
+	}
+}
+
+// inFlightSwitch runs one poll of a during which a switch onto a lands: the
+// poll is sent while a is idle, the switch writes its record, and the poll
+// returns reply. It is the race the switch's record exists for.
+func inFlightSwitch(t *testing.T, e *Engine, now *time.Time, a store.Account, reply func() (*usage.Snapshot, error)) {
+	t.Helper()
+	cfg := config.Config{Threshold: 80, CreditThreshold: 80}
+	e.FetchUsage = func(context.Context, string) (*usage.Snapshot, error) {
+		*now = now.Add(time.Second)
+		if err := switcher.SchedulePromptPoll(a.UUID, *now, 1); err != nil {
+			t.Fatal(err)
+		}
+		*now = now.Add(2 * time.Second)
+		return reply()
+	}
+	_ = e.poll(context.Background(), a, cfg, configuredThresholds(cfg), []string{a.UUID}, false)
+}
+
+// An account with no cache row yet -- its first poll is the one in flight --
+// still gets the switch's record, so that first reading commits as the live
+// account's and on the prompt's schedule rather than the idle cadence.
+func TestASwitchOntoAnAccountWithNoRowStillRecordsIt(t *testing.T) {
+	isolateEngine(t)
+	a := store.Account{UUID: "acct-1"}
+	now := tickEpoch
+	e := movableEngine(t, &now, nil)
+	e.setLive("someone-else", true)
+	inFlightSwitch(t, e, &now, a, func() (*usage.Snapshot, error) { return windowsUsed(10, 5), nil })
+	entry, ok := cacheEntry(t, a.UUID)
+	if !ok || !entry.Poll.AnchorLive {
+		t.Errorf("the first reading, in flight across the switch, was labelled idle (row %v)", ok)
+	}
+	if limit := now.Add(pollpolicy.ServeTTL); entry.NextPollAt.After(limit) {
+		t.Errorf("next poll %s, want the prompt poll by %s", entry.NextPollAt.Sub(tickEpoch), limit.Sub(tickEpoch))
+	}
+}
+
+// The prompt poll yields to a 429. The poll in flight across the switch was
+// refused with Retry-After 600, and the next look waits that out: congestion
+// outranks the prompt as it outranks every other clock here.
+func TestAPromptPollYieldsToA429InFlight(t *testing.T) {
+	isolateEngine(t)
+	a := store.Account{UUID: "acct-1"}
+	now := tickEpoch
+	cfg := config.Config{Threshold: 80, CreditThreshold: 80}
+	e := movableEngine(t, &now, func(context.Context, string) (*usage.Snapshot, error) { return windowsUsed(10, 5), nil })
+	e.setLive("someone-else", true)
+	if err := e.poll(context.Background(), a, cfg, configuredThresholds(cfg), []string{a.UUID}, false); err != nil {
+		t.Fatal(err)
+	}
+	now = tickEpoch.Add(10 * time.Minute)
+	inFlightSwitch(t, e, &now, a, func() (*usage.Snapshot, error) {
+		return nil, usage.StatusErrorFrom(429, http.Header{"Retry-After": []string{"600"}}, now)
+	})
+	entry, _ := cacheEntry(t, a.UUID)
+	if floor := now.Add(600 * time.Second); entry.NextPollAt.Before(floor) {
+		t.Errorf("next poll %s after a 429 with Retry-After 600, want no sooner than %s",
+			entry.NextPollAt.Sub(now), floor.Sub(now))
 	}
 }
