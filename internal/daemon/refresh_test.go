@@ -83,6 +83,34 @@ func TestRefreshFetchesAndSchedulesThroughThePollPolicy(t *testing.T) {
 	}
 }
 
+// A manual refresh under hover measures on hover's table, as the tick does. The
+// live account is at 85% under a configured threshold of 80: on that table it is
+// spent, and the commit would put it on the ten-minute exhausted cadence; on
+// hover's, held to its last point, it is a live account with room, read on the
+// live cadence.
+func TestARefreshUnderHoverMeasuresOnHoversTable(t *testing.T) {
+	isolateEngine(t)
+	seedAccount(t, "u-1", "org-1")
+	now := tickEpoch
+	e := movableEngine(t, &now, func(context.Context, string) (*usage.Snapshot, error) {
+		return snapshotWith(85), nil
+	})
+	s, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Defaults()
+	cfg.Hover, cfg.Threshold = true, 80
+	if res := onlyResult(t, e.Refresh(context.Background(), s, s.Accounts(), cfg, "u-1")); res.State != RefreshFetched {
+		t.Fatalf("state = %v, want RefreshFetched", res.State)
+	}
+	entry, _ := cacheEntry(t, "u-1")
+	if limit := tickEpoch.Add(pollpolicy.ActiveMaxInterval); entry.NextPollAt.After(limit) {
+		t.Errorf("next poll %s after the refresh, want the live cadence (at most %s): the account was filed exhausted",
+			entry.NextPollAt.Sub(tickEpoch), pollpolicy.ActiveMaxInterval)
+	}
+}
+
 // The poll policy's serveTTL, and the whole reason `--refresh` is safe to put
 // under a human finger: a reading younger than 180 s is served from the cache.
 func TestRefreshServesAReadingInsideTheServeTTLFromTheCache(t *testing.T) {

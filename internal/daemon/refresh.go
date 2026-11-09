@@ -102,6 +102,7 @@ func (e *Engine) Refresh(ctx context.Context, s *store.Store, want []store.Accou
 	// Sized over EVERY account, not over `want`. The allowance belongs to the
 	// identity, so an account left out of the listing still draws on it.
 	members := identityMembers(s.Accounts())
+	thresholds := thresholdsOf(cfg, cachedHoverPlan(cfg, s.Accounts(), cache, now))
 
 	var wg sync.WaitGroup
 	for i := range want {
@@ -138,12 +139,14 @@ func (e *Engine) Refresh(ctx context.Context, s *store.Store, want []store.Accou
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			// The configured bundle, not the tick's hoverThresholds: a
-			// hand-held refresh has no switcher.Evaluation to derive hover's
-			// per-account table from — asking for one would be the ranking
-			// pass this button is not a substitute for — so it measures the
-			// same way `ccdad auto`'s own poll does whenever it cannot ask.
-			if perr := e.poll(ctx, a, cfg, configuredThresholds(cfg), members[a.Identity()], a.UUID == active); perr != nil {
+			// The table the tick measures on (thresholdsOf): under hover,
+			// hover's, built from the cached readings since a hand-held refresh
+			// has no ranking pass behind it. Measured on the configured
+			// bundle, an 85% live account under a threshold of 80 committed as
+			// exhausted, was put on the ten-minute exhausted cadence, and that
+			// next look stretched the closing horizon the hand-off reads.
+			// TestARefreshUnderHoverMeasuresOnHoversTable.
+			if perr := e.poll(ctx, a, cfg, thresholds, members[a.Identity()], a.UUID == active); perr != nil {
 				res.State, res.Err = RefreshFailed, perr
 				return
 			}
