@@ -782,9 +782,10 @@ func lastPoint(h Headroom) bool {
 	return h.Known && RoomOf(h) <= handoffRoom(h)
 }
 
-// lastPointOf names the window an account is on its last point on under hover,
-// or "" when it is on none -- and "" always off hover, where a threshold a user
-// typed is where they said to stop, and it is not this rule's to move.
+// lastPointOf names the window an account is on its last point on, or "" when
+// it is on none. Hover's rule alone (hoverRules): under the configured
+// strategies a threshold a user typed is where they said to stop, and it is
+// not this rule's to move.
 //
 // h is what the account is ranked on and plan is its plan windows. They are the
 // same reading for every account but a primary credit seat, which is ranked on
@@ -793,10 +794,7 @@ func lastPoint(h Headroom) bool {
 // point is handed off on that cap, and the mark it leaves waits for that cap's
 // rollover rather than for a credit balance that does not roll.
 // TestAPrimaryCreditSeatAtItsPlanLastPointIsAtALimitOnThatCap.
-func (o Options) lastPointOf(h, plan Headroom) usage.WindowName {
-	if o.hover == nil {
-		return ""
-	}
+func lastPointOf(h, plan Headroom) usage.WindowName {
 	for _, m := range []Headroom{h, plan} {
 		if lastPoint(m) {
 			return roomWindow(m)
@@ -806,22 +804,18 @@ func (o Options) lastPointOf(h, plan Headroom) usage.WindowName {
 }
 
 // secondMeterEmptyOf is the window of a credit seat's second meter that has
-// nothing left, under hover, or "" -- the half of Ranked.Empty its Headroom
-// cannot say. A primary seat is ranked on its credit balance, and its second
-// meter is its plan's opted-in cap, read off plan. A seat of the last-resort
-// pool is ranked on its plan windows, and its second meter is the credit
-// balance (creditSpent). Every other account has one meter, which Empty reads
-// already.
+// nothing left, or "" -- the half of Ranked.Empty its Headroom cannot say. A
+// primary seat is ranked on its credit balance, and its second meter is its
+// plan's opted-in cap, read off plan. A seat of the last-resort pool is ranked
+// on its plan windows, and its second meter is the credit balance
+// (creditSpent). Every other account has one meter, which Empty reads already.
 //
-// Under hover only, as the plan cap is: the configured strategies read a credit
-// seat's emptiness as they always have, and the empty-live waiver in their
-// margins is not this rule's to move.
+// Hover's rule alone (hoverRules), as the plan cap is: the configured
+// strategies read a credit seat's emptiness as they always have, and the
+// empty-live waiver in their margins is not this rule's to move.
 // TestAPoolSeatIsEmptyWhenItsBalanceIsSpent,
 // TestTheConfiguredMarginsDoNotReadAPoolSeatsBalance.
 func (o Options) secondMeterEmptyOf(c Candidate, plan Headroom) usage.WindowName {
-	if o.hover == nil {
-		return ""
-	}
 	switch {
 	case primaryCredit(c):
 		if out, known := OutOfQuota(plan); known && out {

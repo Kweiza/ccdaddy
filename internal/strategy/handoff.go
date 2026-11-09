@@ -340,11 +340,11 @@ func (o Options) stopOf(c Candidate, w usage.NamedWindow, room float64, from tim
 	}
 	var earliest time.Time
 	known := false
-	if proj, ok := usage.PaceOf(w.Name, w.Window, o.Now).Projection(); ok {
-		earliest, known = proj.ExhaustionAt, true
+	if at, ok := paceStop(w, o.Now); ok {
+		earliest, known = at, true
 	}
-	if c.HasBurn && c.BurnWindow == w.Name {
-		if at, spends := atRate(from, room, c.BurnPerMin); spends && (!known || at.Before(earliest)) {
+	if perMin, measured := ownBurnOn(c, w.Name); measured {
+		if at, spends := atRate(from, room, perMin); spends && (!known || at.Before(earliest)) {
 			earliest = at
 		}
 		known = true

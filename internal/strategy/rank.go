@@ -313,7 +313,7 @@ type Ranked struct {
 	Headroom Headroom
 	// LastPoint names the window hover is handing this account off on because
 	// it is down to the last point it can report, or is "" when none is; see
-	// lastPoint and Options.lastPointOf. It is a name and not a flag for the
+	// lastPoint and lastPointOf. It is a name and not a flag for the
 	// reason Closing and HeldOut are: the departure mark waits for THAT window
 	// to roll over.
 	LastPoint usage.WindowName
@@ -326,14 +326,11 @@ type Ranked struct {
 	// reading's presence rather than its utilization. See shortWindowOf.
 	ShortWindow usage.WindowName
 	// Closing names the window this account would run out of before the
-	// engine can act on it, or "" when none would.
-	//
-	// Under hover it is set on the LIVE account only, and it means the work
-	// would stop it before the reading after next (liveLimitOf): an account the
-	// session is not on is filed by its levels and its mark alone, and whether
-	// it could take the work is Carries. Under the configured strategies it is
-	// the pre-emptive projection over the blind interval plus preempt_lead
-	// (closingWindow), "" whenever pre-emption is off.
+	// engine can act on it, or "" when none would. Each mode states what
+	// "before the engine can act" is in its own rules (passrules.go): under
+	// hover, before the live account's reading after next, and on the live
+	// account alone (hoverRules); under the configured strategies, inside each
+	// account's own pre-emptive horizon (configuredRules).
 	Closing usage.WindowName
 	// HasRunway is whether the work running now has a rate to project on this
 	// account's windows, and RunsOutAt when that projection has the work stop
@@ -686,39 +683,31 @@ func measure(c Candidate, o Options) Ranked {
 	rec := recoveryOf(c.Usage, clears)
 	weekly := weeklyResetOf(c.Usage, o.Model, o.thresholdsFor(c), o.Now)
 
+	// The work's runway, once per account, so the live account's limit, every
+	// carrier test and the reporters read one projection (handoff.go).
+	rw := o.runwayOf(c)
+	// What the pass's own rules file the account at (passrules.go).
+	lim := o.rules().limitsOf(o, c, h, plan, rw)
 	r := Ranked{
-		UUID:     c.UUID,
-		Kind:     c.Kind,
-		Headroom: h,
-		// Under hover only. A threshold a user typed is where they said to stop,
-		// and it is not this rule's to move.
-		LastPoint:        o.lastPointOf(h, plan),
-		secondMeterEmpty: o.secondMeterEmptyOf(c, plan),
+		UUID:             c.UUID,
+		Kind:             c.Kind,
+		Headroom:         h,
+		LastPoint:        lim.lastPoint,
+		secondMeterEmpty: lim.secondMeterEmpty,
 		ShortWindow:      shortWindowOf(c.Usage),
+		Closing:          lim.closing,
+		HasRunway:        rw.known,
+		RunsOutAt:        rw.at,
+		RunsOutOn:        rw.on,
+		workRunning:      o.work != nil && o.work.running,
+		HeldOut:          lim.heldOut,
 		RecoversAt:       rec.at,
 		HasRecovery:      rec.ok,
 		WeeklyResetsAt:   weekly.at,
 		HasWeeklyReset:   weekly.ok,
+		limit:            lim.live,
 	}
-	// Under hover only, like the last point: the marks are hover's order, and
-	// the configured strategies rank on nothing they could hold.
-	if o.hover != nil {
-		r.HeldOut = o.departures.holding(c, o.Now)
-	}
-	// The work's runway, once per account, so the live account's limit, every
-	// carrier test and the reporters read one projection (handoff.go).
-	rw := o.runwayOf(c)
-	r.HasRunway, r.RunsOutAt, r.RunsOutOn = rw.known, rw.at, rw.on
-	r.workRunning = o.work != nil && o.work.running
 	r.Carries = o.carries(c, r, rw)
-	switch {
-	case o.hover == nil:
-		r.Closing = o.closingWindow(c, h)
-	case isActive(c.UUID, o.live):
-		if r.limit = o.liveLimitOf(c, rw); r.limit != liveRoom {
-			r.Closing = rw.on
-		}
-	}
 	// A binding window with no reset cannot be said to return inside the
 	// horizon. Treating "no answer" as "back immediately" would put the least
 	// knowable account at the front of the queue.
