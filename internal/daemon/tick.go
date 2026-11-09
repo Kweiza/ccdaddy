@@ -163,6 +163,9 @@ type Engine struct {
 	// (usage.PollState.LiveSince, read in commit).
 	live      string
 	liveKnown bool
+	// switches is the engine state's record of the last switch as the most
+	// recent tick read it, for the commits after it (switchViewOf).
+	switches switchView
 	// The daily release check's whole state, beside cfg and polls under the
 	// same lock. It is deliberately NOT inside status: publish() replaces that
 	// field wholesale on every tick, so anything kept there would be erased
@@ -530,6 +533,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	// live one, this tick rather than next.
 	active, activeKnown := activeAfter(ev, res)
 	e.setLive(active, activeKnown)
+	e.setSwitches(switchViewOf(ev, res))
 	// A switch rescheduled the account it made live (switcher.SchedulePromptPoll,
 	// held to the identity's floor by pollpolicy.PromptPollAt), and the cache
 	// read above predates it: dispatching from that copy would take the old
@@ -1222,13 +1226,70 @@ func (e *Engine) poll(ctx context.Context, a store.Account, cfg config.Config,
 			e.refreshProfile(ctx, a, token, now)
 		}
 	}
-	active = e.liveAtCommit(a.UUID, active)
+	in := commitInput{
+		account: a, now: now, sent: sent, identity: identity,
+		thresholds: thresholds, active: e.liveAtCommit(a.UUID, active),
+	}
 	if err != nil {
-		e.handleFailure(a, cfg, thresholds, err, now, sent, identity, active)
+		e.handleFailure(in, cfg, err)
 		return err
 	}
-	e.commit(a, snap, now, sent, identity, thresholds, active, nil)
+	in.snap = snap
+	e.commitReading(in)
 	return nil
+}
+
+// switchView is the engine state's record of the last switch, as one read of
+// the state file gave it.
+type switchView struct {
+	// read is whether a tick has read it at all; a commit with no tick behind
+	// it reads the state for itself.
+	read bool
+	// known is whether the state could be read: an unreadable state says
+	// nothing about where a stint began.
+	known bool
+	at    time.Time
+	to    string
+}
+
+// switchViewOf is the state's record of the last switch as this tick leaves
+// it: what the evaluation read, or, when this tick switched, the state read
+// again after the switch wrote it -- one read a tick, and a second only on the
+// tick that changed it.
+func switchViewOf(ev switcher.Evaluation, res switcher.Result) switchView {
+	if res.Outcome == switcher.Switched {
+		return loadSwitchView()
+	}
+	return switchView{read: true, known: ev.StateErr == nil, at: ev.LastSwitchAt, to: ev.LastSwitchTo}
+}
+
+// loadSwitchView reads the state's record of the last switch from disk.
+func loadSwitchView() switchView {
+	st, err := strategy.LoadState()
+	if err != nil || st.LoadError() != nil {
+		return switchView{read: true}
+	}
+	at, to := st.LastSwitch()
+	return switchView{read: true, known: true, at: at, to: to}
+}
+
+func (e *Engine) setSwitches(v switchView) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.switches = v
+}
+
+// switchesForCommit is the record a commit reads: the latest tick's, or the
+// state read now when no tick has run -- the hand-held refresh, which polls
+// without one.
+func (e *Engine) switchesForCommit() switchView {
+	e.mu.Lock()
+	v := e.switches
+	e.mu.Unlock()
+	if v.read {
+		return v
+	}
+	return loadSwitchView()
 }
 
 // setLive records the account a tick left the login on, for the polls that
@@ -1290,9 +1351,7 @@ func (e *Engine) refreshProfile(ctx context.Context, a store.Account, token stri
 
 // handleFailure decides what a failed poll means. Only ONE of the failures says
 // anything about the account.
-func (e *Engine) handleFailure(a store.Account, cfg config.Config,
-	thresholds func(uuid string) strategy.Thresholds, err error,
-	now, sent time.Time, identity []string, active bool) {
+func (e *Engine) handleFailure(in commitInput, cfg config.Config, err error) {
 	switch {
 	case errors.Is(err, tokens.ErrNoOAuthCredential):
 		// Nothing to poll with, and pollable() should already have caught it.
@@ -1305,7 +1364,7 @@ func (e *Engine) handleFailure(a store.Account, cfg config.Config,
 		// Code has not run in eight hours — so there is no session whose
 		// rotation is urgent, and this must not feed AIMD or quarantine
 		// anything. It reschedules at the ordinary cadence and waits.
-		e.commit(a, nil, now, sent, identity, thresholds, active, nil)
+		e.commitReading(in)
 		return
 
 	case errors.Is(err, usage.ErrRateLimited):
@@ -1315,9 +1374,10 @@ func (e *Engine) handleFailure(a store.Account, cfg config.Config,
 		if errors.As(err, &se) {
 			retry, hasRetry = se.RetryAfter()
 		}
-		e.commit(a, nil, now, sent, identity, thresholds, active, func(st pollpolicy.State) pollpolicy.State {
-			return pollpolicy.RateLimited(st, now, retry, hasRetry)
-		})
+		in.adjust = func(st pollpolicy.State) pollpolicy.State {
+			return pollpolicy.RateLimited(st, in.now, retry, hasRetry)
+		}
+		e.commitReading(in)
 		return
 	}
 
@@ -1327,9 +1387,9 @@ func (e *Engine) handleFailure(a store.Account, cfg config.Config,
 	// a REJECTED refresh token qualifies, and ClassifyRefresh is the only thing
 	// allowed to say so.
 	if strategy.ClassifyRefresh(err).Quarantines() {
-		e.quarantine(a.UUID, cfg, now)
+		e.quarantine(in.account.UUID, cfg, in.now)
 	}
-	e.commit(a, nil, now, sent, identity, thresholds, active, nil)
+	e.commitReading(in)
 }
 
 func (e *Engine) quarantine(uuid string, cfg config.Config, now time.Time) {
@@ -1345,23 +1405,38 @@ func (e *Engine) quarantine(uuid string, cfg config.Config, now time.Time) {
 	}
 }
 
-// commit writes the reading and the next schedule. snap is nil for a poll that
-// produced no reading, and adjust is the rate-limit rule when there was one.
+// commitInput is one poll's outcome, as commitReading writes it.
+type commitInput struct {
+	account store.Account
+	// snap is nil for a poll that produced no reading, and adjust is the
+	// rate-limit rule when there was one.
+	snap   *usage.Snapshot
+	adjust func(pollpolicy.State) pollpolicy.State
+	// now is when the reading landed, and sent when its poll was sent.
+	now, sent time.Time
+	// identity is the accounts that share this one's polling budget, and
+	// thresholds the table the ranking used.
+	identity   []string
+	thresholds func(uuid string) strategy.Thresholds
+	// active is whether the account was live when the reading committed.
+	active bool
+}
+
+// commitReading writes the reading and the next schedule.
 //
 // A failed poll never erases the last good reading: an account that could not
 // be read is UNKNOWN, and an unknown one that used to have evidence still has
 // that evidence — throwing it away would make one bad minute look like a fresh
 // account with no history.
-func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now, sent time.Time,
-	identity []string, thresholds func(uuid string) strategy.Thresholds, active bool,
-	adjust func(pollpolicy.State) pollpolicy.State) {
+func (e *Engine) commitReading(in commitInput) {
+	a, snap, now, sent, identity, active, adjust := in.account, in.snap, in.now, in.sent, in.identity, in.active, in.adjust
 
 	// Resolved once, before the cache callback: it is read twice inside and the
 	// value is the same for the whole call. thresholds(a.UUID) rather than
 	// cfg.Thresholds() so that under hover the poll cadence and the Exhausted
 	// status below are measured against the same per-account table the ranking
 	// just used, not the raw config bundle hover otherwise ignores.
-	thr := thresholds(a.UUID)
+	thr := in.thresholds(a.UUID)
 	// The last switch onto this account as the engine state records it, the
 	// other half of where a live stint begins. A switch writes the state first
 	// and the cache's record second (switcher.Execute), so a crash or a failed
@@ -1369,15 +1444,15 @@ func (e *Engine) commit(a store.Account, snap *usage.Snapshot, now, sent time.Ti
 	// without it the pair the next reading makes would span the absence, and
 	// be stored. A state that cannot be read cannot say where the stint began,
 	// so this reading makes no pair at all; the reading and its schedule are
-	// still kept. TestAPairAcrossAnAbsenceOnlyTheStateRecordsIsNotStored,
+	// still kept. The record is the one the latest tick read (switchesForCommit),
+	// not a read of the state file per poll.
+	// TestAPairAcrossAnAbsenceOnlyTheStateRecordsIsNotStored,
 	// TestAnUnreadableStateMakesNoLivePair.
+	switches := e.switchesForCommit()
+	stateKnown := switches.known
 	var stateSwitchOnto time.Time
-	st, stErr := strategy.LoadState()
-	stateKnown := stErr == nil && st.LoadError() == nil
-	if stateKnown {
-		if at, to := st.LastSwitch(); to == a.UUID {
-			stateSwitchOnto = at
-		}
+	if stateKnown && switches.to == a.UUID {
+		stateSwitchOnto = switches.at
 	}
 	err := usage.WithCache(cacheTimeout, func(c *usage.Cache) error {
 		// Only what is this account's own: a row kept from a predecessor at the
