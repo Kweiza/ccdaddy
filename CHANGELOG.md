@@ -52,7 +52,9 @@ quota, which can now expire unspent.
     outlasts it by the cooldown;
   - when the live account is out -- empty, or projected out while the latest
     pair of live readings saw the work running -- whichever account with work
-    left lasts longest;
+    left lasts longest, and another account's last point only once the live
+    account reads empty, so when every account is down to its last point they
+    are spent one at a time;
   - and only then, when every account reads empty, a credit seat, below.
 
   The work's rate is measured only between two readings of an account that
@@ -104,15 +106,24 @@ quota, which can now expire unspent.
   | today | burst | 0 | 29 |
   | today with larger Ultra weeks | burst | 0 | 29 |
   | two Max, three Ultras | light | 167 | 0 |
-  | two Max, three Ultras | heavy | 1457 | 239 |
-  | two Max, three Ultras | production | 2370 | 346 |
-  | two Max, three Ultras | burst | 831 | 142 |
+  | two Max, three Ultras | heavy | 1457 | 560 |
+  | two Max, three Ultras | production | 2370 | 350 |
+  | two Max, three Ultras | burst | 831 | 252 |
   | two Max, three Ultras | pause | 244 | 5 |
-  | two Max | heavy | 5362 | 1641 |
+  | two Max | heavy | 5362 | 4181 |
   | two Max | production | 1765 | 136 |
-  | two Max | burst | 4768 | 958 |
-  | two Max | pause | 1127 | 250 |
-  | a Max and two Ultras | production | 336 | 37 |
+  | two Max | burst | 4768 | 1170 |
+  | two Max | pause | 1127 | 1133 |
+  | a Max and two Ultras | production | 336 | 159 |
+
+  Most of what is left in the larger figures is the wait for a last point to
+  read empty: another account's last point is taken only once the live account
+  reads empty, and a live account that runs out while it still reads short of
+  empty stops the session until that reading, though another account holds a
+  point. Without that wait those seven figures were 239, 346, 142, 1641, 958,
+  250 and 37, and the two Max and the two Max, three Ultras fleets switched
+  more: under the pause load 119 times against 81, under burst load 140
+  against 117.
 
   **What is left is not zero, and a session can still stop at a limit while
   another account has room.** Hover cannot see the work between two readings.
@@ -123,7 +134,7 @@ quota, which can now expire unspent.
   is measured to the nearest point, and an account holding less than a point
   reads the same 99 as one holding a whole one; and when the rate was measured
   on another plan, whose points are not this one's. The live account then runs
-  out before its next reading shows it. Five more cases cost the session
+  out before its next reading shows it. Six more cases cost the session
   something:
   - A rate stands until a newer running measurement replaces it, across window
     resets and daemon restarts alike. A five-hour rate measured in a burst can
@@ -138,20 +149,26 @@ quota, which can now expire unspent.
   - Accounts sharing one organization share its polling budget. The first look
     after a move is the shared floor the hand-off counts; the looks after it
     come at the live cadence times the number of accounts sharing it.
+  - When the only accounts with anything left are on their last points, a
+    live account that runs out while it still reads short of empty stops the
+    session until the reading that shows it empty, though another account
+    holds a point: that reading is what confirms the live account spent before
+    the next one is started.
   - A pause is not taken for slower work. At 5.4 points a minute a paused live
     account more than about 57% spent is handed to an account that can carry
-    the work before the work resumes. Another account's last points wait for
-    the latest pair of live readings, on whichever account made it, to have
-    seen the work running: a pause that pair saw keeps them shut, but one that
-    began after it, with every account's stint since too short to make a pair,
-    does not. While nothing runs, the login can still trade between two
-    accounts -- onto the other's last points on that pair's word, or onto an
-    account holding a cooldown's worth more than the live one has left and
-    less than a carrier's, up to about 43 to 59 points at that rate. No session
-    is cut, no credit is bought, and a primary seat's balance is moved onto
-    only from an account that reads at its last point; each move writes the
-    credential, polls the account and updates Claude Code's settings, and a
-    session resuming just after one waits out the cooldown for the next.
+    the work before the work resumes. An account that cannot carry the work is
+    a last resort only while the latest pair of live readings, on whichever
+    account made it, saw the work running: a pause that pair saw keeps it shut,
+    but one that began after it, with every account's stint since too short to
+    make a pair, does not. While nothing runs, the login can still trade
+    between two accounts -- onto one holding more than its last point and too
+    little to carry the work, on that pair's word, or onto one holding a
+    cooldown's worth more than the live one has left and less than a
+    carrier's, up to about 43 to 59 points at that rate. No session is cut, no
+    credit is bought, and a primary seat's balance is moved onto only from an
+    account that reads at its last point; each move writes the credential,
+    polls the account and updates Claude Code's settings, and a session
+    resuming just after one waits out the cooldown for the next.
   - Money is decided on readings alone, in both directions. With credits opted
     in and every account dry, a live account that runs out between two readings
     stops the session until the reading that shows it empty: three minutes at
@@ -175,8 +192,8 @@ quota, which can now expire unspent.
   unspent a week on today's fleet under steady heavy use.
 
   The three-minute reserve is the poll policy's normal floor. A ten-minute
-  one, the idle cadence, was measured against it in the same simulated week
-  and lost on the whole: 4298 seconds stopped with room on another account
+  one, the idle cadence, was measured against it in the same simulated week,
+  before last points waited for an empty reading, and lost on the whole: 4298 seconds stopped with room on another account
   across every fleet and load, against 3562, and today's five-hour account
   reaching its weekly reset 3.98 points unspent against 1.98. It did better in
   five variants: today's fleet and the big Ultras under burst load, 29

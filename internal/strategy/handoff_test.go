@@ -948,38 +948,68 @@ func TestAWeeklySeatsLastPointDoesNotOpenTheCreditPool(t *testing.T) {
 }
 
 // Nor does a pause open the last resort. The live Max is projected out across a
-// pause, and the only other account holds its last point: no carrier, no
-// bridge, and a move to the last point would buy nothing while nothing runs --
-// the trade two such accounts made every cooldown.
+// pause, and the only other account holds three points, half a minute of the
+// work: no carrier, no bridge, and a move to it would buy nothing while nothing
+// runs -- the trade two such accounts made every cooldown.
 func TestTwoAccountsDoNotTradeAPausedSession(t *testing.T) {
-	last := idleOn(maxAcct("b-last", 99, 2*time.Hour, 60, 3*day))
-	p := Decide([]Candidate{pausedMax("a-live", 85, false), last}, hoverOpts(), Config{}, NewState(), "a-live")
+	short := idleOn(maxAcct("b-short", 97, 2*time.Hour, 60, 3*day))
+	p := Decide([]Candidate{pausedMax("a-live", 85, false), short}, hoverOpts(), Config{}, NewState(), "a-live")
 	if p.Action == ActionSwitch {
 		t.Errorf("switched to %s (%s) across a pause", p.Target.UUID, p.Reason)
 	}
-	p = Decide([]Candidate{pausedMax("a-live", 85, true), last}, hoverOpts(), Config{}, NewState(), "a-live")
-	want(t, p, ActionSwitch, ReasonProjectedExhaustion, "b-last")
+	p = Decide([]Candidate{pausedMax("a-live", 85, true), short}, hoverOpts(), Config{}, NewState(), "a-live")
+	want(t, p, ActionSwitch, ReasonProjectedExhaustion, "b-short")
 }
 
 // The work's running flag is the latest live pair's across the pass, whichever
 // account made it. B is live and projected out, and its own latest pair, four
 // minutes old, says one thing; A, which the work came from and left empty, has
 // made one since that says the other. A's is the work's: when it saw a pause
-// the last resort onto C's last point stays shut whatever B's record says, and
-// when it saw the work running the last resort opens though B's own pair saw
-// a pause.
+// the last resort onto C's three points stays shut whatever B's record says,
+// and when it saw the work running the last resort opens though B's own pair
+// saw a pause.
 func TestTheWorksRunningFlagIsTheLatestPairs(t *testing.T) {
-	last := idleOn(maxAcct("c-last", 99, 2*time.Hour, 60, 3*day))
+	short := idleOn(maxAcct("c-short", 97, 2*time.Hour, 60, 3*day))
 	for _, aRunning := range []bool{false, true} {
 		b := pausedMax("b-live", 85, !aRunning)
 		b.LastPairAt = now.Add(-4 * time.Minute)
 		a := idleOn(maxAcct("a-left", 100, 2*time.Hour, 60, 3*day))
 		a.WorkRunning, a.LastPairAt = aRunning, now.Add(-time.Minute)
 
-		p := Decide([]Candidate{b, a, last}, hoverOpts(), Config{}, NewState(), "b-live")
-		if moved := p.Action == ActionSwitch && p.Target.UUID == "c-last"; moved != aRunning {
+		p := Decide([]Candidate{b, a, short}, hoverOpts(), Config{}, NewState(), "b-live")
+		if moved := p.Action == ActionSwitch && p.Target.UUID == "c-short"; moved != aRunning {
 			t.Errorf("A's later pair running %v: %s (%s) to %q", aRunning, p.Action, p.Reason, p.Target.UUID)
 		}
+	}
+}
+
+// When every account is down to its last point they are spent one at a time,
+// each confirmed spent before the session moves on: another account's last
+// point is taken only once a reading shows the live account empty. The live
+// Max reads 99 with the work running at 5.4 points a minute, three minutes
+// after its reading, so the projection has it out; a reading cannot tell that
+// from a point still there, and the move waits. Read empty, it goes. Every
+// tier ahead of the last resort is shut throughout: the other account holds
+// one point, which carries nothing and bridges nothing.
+func TestEveryLastPointIsConfirmedSpentBeforeTheNext(t *testing.T) {
+	for _, other := range []Candidate{
+		idleOn(maxAcct("b-last", 99, 2*time.Hour, 60, 3*day)),
+		weekOnly("b-last", 99, 2*day),
+	} {
+		projected := pausedMax("a-live", 99, true)
+		p := Decide([]Candidate{projected, other}, hoverOpts(), Config{}, NewState(), "a-live")
+		live, _ := find(p.Result, "a-live")
+		b, _ := find(p.Result, "b-last")
+		if live.limit != liveOut || !live.lastResortOpen() || b.LastPoint == "" {
+			t.Fatalf("live at limit %d, last resort open %v, b on last point %q: the case is two last points with the live one projected out",
+				live.limit, live.lastResortOpen(), b.LastPoint)
+		}
+		if p.Action == ActionSwitch {
+			t.Errorf("moved to %s (%s) on a projection; the live account still reads its last point", p.Target.UUID, p.Reason)
+		}
+
+		p = Decide([]Candidate{pausedMax("a-live", 100, true), other}, hoverOpts(), Config{}, NewState(), "a-live")
+		want(t, p, ActionSwitch, ReasonBetterTarget, "b-last")
 	}
 }
 
@@ -1033,7 +1063,8 @@ func TestTheTargetIsChosenBeforeTheCooldown(t *testing.T) {
 
 // Every hover move goes to an account that passes the tier the live account's
 // state allows: a carrier always; a bridge only when the live account would stop
-// before its next reading; a last resort only when it has nothing left. Checked
+// before its next reading; a last resort only when it has nothing left, and
+// onto another account's last point only when it reads empty. Checked
 // over generated pools -- levels, rates, cadences and marks drawn from a fixed
 // seed -- so a branch that slipped a non-carrier through shows up somewhere.
 func TestEveryHoverMoveIsToACarrierABridgeOrALastResort(t *testing.T) {
@@ -1080,6 +1111,9 @@ func TestEveryHoverMoveIsToACarrierABridgeOrALastResort(t *testing.T) {
 		case live.lastResortOpen():
 			if _, empty := tgt.Empty(); empty {
 				t.Fatalf("pool %d: a last resort onto %s, which is empty", i, tgt.UUID)
+			}
+			if _, liveEmpty := live.Empty(); tgt.LastPoint != "" && !liveEmpty {
+				t.Fatalf("pool %d: a last resort onto %s's last point from a live account that does not read empty", i, tgt.UUID)
 			}
 		default:
 			t.Fatalf("pool %d: moved to %s, which is no carrier, no bridge and no last resort", i, tgt.UUID)

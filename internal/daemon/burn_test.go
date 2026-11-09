@@ -601,20 +601,21 @@ func TestTheCommitRecordsWhetherTheLatestLivePairRan(t *testing.T) {
 // After a move, a pause opens no last resort before the new account has a live
 // pair of its own -- through the commit that records the pairs and the
 // evaluation that reads them. B ran first: 90% to 96% in three minutes, so its
-// own record says running. The work then moved to A, on its last point, and a
-// pair there saw a pause. It moved back to B, whose first live reading makes no
-// pair; projected at the rate the work last ran, B is out before its second.
-// The only place left is A's last point, and the work has paused: nothing
-// moves, whatever B's own record says. Had A's pair seen the work running, the
-// last resort would open, which is what says the case can tell the two apart.
+// own record says running. The work then moved to A, two points from its
+// limit, and a pair there saw a pause. It moved back to B, whose first live
+// reading makes no pair; projected at the rate the work last ran, B is out
+// before its second. The only place left is A's two points, too few to carry
+// the work or to bridge it, and the work has paused: nothing moves, whatever
+// B's own record says. Had A's pair seen the work running, the last resort
+// would open, which is what says the case can tell the two apart.
 func TestAPauseAfterAMoveOpensNoLastResortBeforeTheNewAccountsPair(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		aFrom  float64
 		moving bool
 	}{
-		{"the work paused on A", 99, false},
-		{"the work ran on A", 97, true},
+		{"the work paused on A", 98, false},
+		{"the work ran on A", 96, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			isolateEngine(t)
@@ -634,7 +635,7 @@ func TestAPauseAfterAMoveOpensNoLastResortBeforeTheNewAccountsPair(t *testing.T)
 			commit(b, 96, 3*time.Minute)
 			switchTo(a, 3*time.Minute)
 			commit(a, tc.aFrom, 4*time.Minute)
-			commit(a, 99, 5*time.Minute)
+			commit(a, 98, 5*time.Minute)
 			switchTo(b, 6*time.Minute)
 			commit(b, 96, 6*time.Minute)
 			liveAs(t, b.UUID)
@@ -660,7 +661,7 @@ func TestAPauseAfterAMoveOpensNoLastResortBeforeTheNewAccountsPair(t *testing.T)
 			}
 			moved := ev.Plan.Action == strategy.ActionSwitch && ev.Plan.Target.UUID == a.UUID
 			if moved != tc.moving {
-				t.Errorf("%s (%s) to %q; want a move to A's last point %v", ev.Plan.Action, ev.Plan.Reason, ev.Plan.Target.UUID, tc.moving)
+				t.Errorf("%s (%s) to %q; want a move to A %v", ev.Plan.Action, ev.Plan.Reason, ev.Plan.Target.UUID, tc.moving)
 			}
 		})
 	}

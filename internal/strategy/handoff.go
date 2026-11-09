@@ -49,7 +49,8 @@ const (
 	// readings and throws away more of every window the session leaves.
 	// CandidateMaxInterval (600 s) was measured against this over the
 	// simulated week -- whole-percent readings, the daemon's warm-ups, the
-	// pause load -- and lost on the whole: 4298 s stopped with room on
+	// pause load -- on the engine of 2026-11-09, before the last-point rule
+	// (lastResort), and lost on the whole: 4298 s stopped with room on
 	// another account across every fleet and load, against 3562 s here, and
 	// more left behind, today's five-hour account reaching its weekly reset
 	// 3.98 points unspent against 1.98. It was better in five variants:
@@ -210,14 +211,15 @@ type work struct {
 // TestTheWorksRunningFlagIsTheLatestPairs.
 //
 // A residual, kept on purpose: the verdict has no age. When no account has
-// made a pair since -- an endgame of stints too short for one, each a hop
-// between last points -- the last pair's verdict stands, and a pause that
-// began after it is not seen: two accounts on their last points can still
-// trade the login across it. An age cap at the serve floor and a live cadence
-// (pollpolicy.ServeTTL + hoverBlind) was measured and not taken. On two Max
-// accounts under the pause load it cut the week's switches from 119 to 95 and
-// raised the seconds stopped with room on another account from 250 to 845; it
-// raised two Max under burst load from 958 to 967, two Max and three Ultras
+// made a pair since -- an endgame of stints too short for one -- the last
+// pair's verdict stands, and a pause that began after it is not seen: the
+// login can still move across it onto an account that holds more than its
+// last point and cannot carry the work (lastResort). An age cap at the serve
+// floor and a live cadence (pollpolicy.ServeTTL + hoverBlind) was measured and
+// not taken, on the engine of 2026-11-09, before the last-point rule. On two
+// Max accounts under the pause load it cut the week's switches from 119 to 95
+// and raised the seconds stopped with room on another account from 250 to 845;
+// it raised two Max under burst load from 958 to 967, two Max and three Ultras
 // under burst load from 142 to 168 and under production load from 346 to 347,
 // and lowered that fleet under heavy load from 239 to 143. A running endgame
 // makes no pairs either, so the cap closed the last resort on work that was
@@ -459,7 +461,8 @@ const (
 // the two Max, three Ultras pause load's five seconds -- a projection a step
 // late, as the weekly simulation's table files them -- were not bridged a
 // hundred seconds before. Holding next to FetchedAt + ServeTTL, as due()
-// does, was measured over the simulated week and not taken: stopped with room
+// does, was measured over the simulated week, on the engine of 2026-11-09
+// before the last-point rule (lastResort), and not taken: stopped with room
 // on another account went from 3562 s to 3739 s in all. It lowered that pause
 // load's 5 s to 2 (a different stop), two Max under heavy load from 1641 to
 // 1547 and under production load from 136 to 104, and two Max, three Ultras
@@ -953,41 +956,59 @@ func bridge(res Result, live Ranked, cooldown time.Duration) (Ranked, bool) {
 
 // lastResort is where a live account with nothing left goes: anything with work
 // left in it, the longest runway first and an account with no runway last. Its
-// last point is allowed here and nowhere else -- one point is better than a stop
-// -- and an empty account never is.
+// last point is allowed here and nowhere else, and an empty account never is.
 //
-// An idle fleet whose accounts all sit at their last point used to trade the
-// login between them: the live one projected out at the rate the work last ran,
-// any other account with work left was a last resort, and the one just left,
-// re-read idle, had its dregs back. The last resort now opens on a projection
-// only while the work was seen running (Ranked.lastResortOpen): the latest live
-// pair on any account saw it run. A pause the engine has read closes it. One it
-// has not read -- the work stopping just after a running pair, with every stint
-// since too short to make a pair -- leaves it open, and accounts on their last
-// points can still trade the login across it (workSeenRunning says why that is
-// kept). The bridge can trade it too: an account holding a cooldown's worth
-// more than the live one's remainder and less than a carrier's can take the
-// login across a pause and, its own projection run out in turn, hand it back.
-// Each move is a credential write, a prompt poll and a settings sync, a session
-// that resumes right after one waits out the cooldown for the next. None of
-// them buys credits (creditOpen), and none moves onto a primary seat's balance
-// unless the live account reads at its last point or empty (reachable); a
-// pause then leaves the session on that balance, spent only if the work
-// resumes.
+// Another account's LAST POINT is a last resort only once the live account
+// READS empty: a projection that has it out is not enough. When every account
+// is down to its last point they are spent one at a time, each confirmed spent
+// before the session moves on, which is what the owner asked for, and a
+// projection cannot confirm it. Readings are whole percents, so a live account
+// that has spent its last point reads the 99 it was read at until the next
+// poll, exactly as one that has not; moving on the projection left the live
+// account's dregs behind, and let accounts on their last points trade the
+// login while nothing ran. An account holding more than its last point is still
+// a last resort on the projection, as a carrier and a bridge are moves on it.
+// TestEveryLastPointIsConfirmedSpentBeforeTheNext.
 //
-// The rule that would stop the trade here even while the work is seen running
-// -- a last resort must outlast the live account, holding more of the work than
-// the live one does -- was measured and rejected. It raised the seconds a
-// session stopped with room elsewhere where work does run: two Max accounts
-// under heavy load from 1641 to 3342, under burst load from 958 to 1004, two
-// Max and three Ultras under heavy load from 239 to 322 and under production
-// load from 346 to 408 (and lowered that fleet's burst figure from 142 to 76).
-// The cause is whole-percent resolution between two readings: a live account
-// that has really spent its last point still reads the 99 it was read at until
-// the next poll, exactly as one that has not, so the rule refuses the dregs of
-// another account in the very moment the session needs them. Stopping a
-// session outranks idle churn.
+// The cost is a stop: a live account that runs out while it still reads short
+// of empty stops the session until the reading that shows it empty, though
+// another account holds a point. Measured over the simulated week it raised
+// the seconds a session stopped with room elsewhere: two Max accounts under
+// heavy load from 1641 to 4181, under burst load from 958 to 1170 and under
+// the pause load from 250 to 1133; two Max and three Ultras under heavy load
+// from 239 to 560, under burst load from 142 to 252 and under production load
+// from 346 to 350; a Max and two Ultras under production load from 37 to 159.
+// It cut the switches in the same fleets -- the two Max pause load from 119 to
+// 81, the two Max and three Ultras burst load from 140 to 117 -- and today's
+// fleet under production load from 34 to 32.
+//
+// The last resort opens on a projection only while the work was seen running
+// (Ranked.lastResortOpen): the latest live pair on any account saw it run. A
+// pause the engine has read closes it. One it has not read -- the work stopping
+// just after a running pair, with every stint since too short to make a pair
+// -- leaves it open, and the login can still move across it onto an account
+// holding more than its last point and too little to carry the work
+// (workSeenRunning says why that is kept). The bridge can trade it too: an
+// account holding a cooldown's worth more than the live one's remainder and
+// less than a carrier's can take the login across a pause and, its own
+// projection run out in turn, hand it back. Each move is a credential write, a
+// prompt poll and a settings sync, a session that resumes right after one
+// waits out the cooldown for the next. None of them buys credits (creditOpen),
+// and none moves onto a primary seat's balance unless the live account reads
+// at its last point or empty (reachable); a pause then leaves the session on
+// that balance, spent only if the work resumes.
+//
+// The wider rule -- a last resort must outlast the live account, holding more
+// of the work than the live one does, whatever it holds -- was measured before
+// the one above and rejected. It raised the seconds a session stopped with room
+// elsewhere where work does run: two Max accounts under heavy load from 1641 to
+// 3342, under burst load from 958 to 1004, two Max and three Ultras under heavy
+// load from 239 to 322 and under production load from 346 to 408 (and lowered
+// that fleet's burst figure from 142 to 76). Its cost is the same whole-percent
+// blindness the rule above pays for on last points, paid on accounts holding
+// several points as well.
 func lastResort(res Result, live Ranked, now time.Time) (Ranked, bool) {
+	_, liveEmpty := live.Empty()
 	var best Ranked
 	found := false
 	for _, r := range res.Order {
@@ -995,6 +1016,9 @@ func lastResort(res Result, live Ranked, now time.Time) (Ranked, bool) {
 			continue
 		}
 		if _, empty := r.Empty(); empty {
+			continue
+		}
+		if r.LastPoint != "" && !liveEmpty {
 			continue
 		}
 		if r.HasRunway && !r.RunsOutAt.IsZero() && !r.RunsOutAt.After(now.Add(outLead)) {

@@ -345,8 +345,9 @@ func TestTheLastPointHandOffDoesNotMoveOntoALimit(t *testing.T) {
 // is a question about the two of them, asked in tiers: A as a carrier if it
 // would not be at a limit at its first live reading, as a bridge if B would stop
 // before its next reading and A outlasts it by a cooldown, and as a last resort
-// if B has nothing left at all. The points are derived from the horizons, so the
-// tiers hold for any reserve the poll policy sets.
+// if B has nothing left at all -- onto A's last point only once B reads empty.
+// The points are derived from the horizons, so the tiers hold for any reserve
+// the poll policy sets.
 func TestALastPointHandsOffToAnAccountThatOutlastsIt(t *testing.T) {
 	const rate = 0.84
 	points := func(d time.Duration) float64 { return rate * d.Minutes() }
@@ -367,7 +368,9 @@ func TestALastPointHandsOffToAnAccountThatOutlastsIt(t *testing.T) {
 		{"B closing does not take a bridge", points(cadence + hoverReserve/2), points(cadence + HoverCooldown + 3*time.Minute), false, ReasonNothingCanServe},
 		{"B stopping hands to A, a bridge", points(cadence), points(cadence + HoverCooldown + time.Minute), true, ReasonProjectedExhaustion},
 		{"B stopping keeps a bridge short of a cooldown", points(cadence), points(cadence + HoverCooldown/2), false, ReasonNothingCanServe},
-		{"B out hands to A, a last resort", 0.005, points(HoverCooldown / 2), true, ReasonLastPoint},
+		{"B out hands to A, a last resort", 0.005, points(HoverCooldown * 3 / 4), true, ReasonLastPoint},
+		{"B out waits to read empty before A's last point", 0.005, points(HoverCooldown / 2), false, ReasonNothingCanServe},
+		{"B empty hands to A's last point", 0, points(HoverCooldown / 2), true, ReasonBetterTarget},
 		{"B out never takes an empty A", 0.005, 0, false, ReasonNothingCanServe},
 		{"B out never takes an A the work would empty before the next look", 0.005, points(EvaluationInterval / 2), false, ReasonNothingCanServe},
 	} {
