@@ -48,9 +48,12 @@ const (
 	// ModeRecovery is every account Spent -- past this line on a window no
 	// model choice can dodge, because hover's table does not bind on the others
 	// (ModelCapsDodged) -- which is when soonest-recovery is the right question,
-	// and a blown cap on one model family does not get it there. And it is positive, which bindingWindows relies on: a
-	// non-positive per-window entry reads as "not opted in", and would silently
-	// revoke a user's consent for an unknown-scope cap.
+	// and a blown cap on one model family does not get it there.
+	//
+	// And it is positive, which admittedWindows relies on when it reads the
+	// opt-in for a scope this build cannot name: a non-positive per-window entry
+	// reads as "not opted in", and hover's table carries the user's opt-ins at
+	// this line, so a non-positive one would silently revoke that consent.
 	HoverHandoffThreshold = 100 - handoffRoomPct
 
 	// HoverCreditThreshold is the figure a primary credit seat is measured on.
