@@ -341,9 +341,13 @@ type Ranked struct {
 	HasRunway bool
 	RunsOutAt time.Time
 	RunsOutOn usage.WindowName
-	// closesAt is RunsOutAt less the reserve of the window it is on
-	// (closingReserve): a look no later than it finds the live account
-	// closing. Zero on an account the session is not on.
+	// closesAt is the instant a look finds the live account closing: the
+	// earliest of its windows' stops less each window's reserve
+	// (runway.closesAt). Zero on an account the session is not on. The engine
+	// reads the limit it yields (limit), not this; it is here for its one
+	// reader, the weekly simulation's clockTurns (clockturns_test.go), which
+	// needs the instant the clock alone turns the verdict and has only the
+	// ranking to read it from.
 	closesAt time.Time
 	// workRunning is whether the work was seen running (work.running), for the
 	// live account's limit.
