@@ -419,7 +419,7 @@ func pausedMax(uuid string, pct float64, running bool) Candidate {
 	c := sub(uuid, &usage.Snapshot{FiveHour: win(pct, 3*time.Hour), SevenDay: win(50, 4*day)})
 	c.FetchedAt, c.NextPollAt = now.Add(-3*time.Minute), now.Add(2*time.Minute)
 	c.LiveBurns = []usage.LiveBurn{{PerMin: 5.4, Window: usage.WindowFiveHour, From: now.Add(-8 * time.Minute), At: now.Add(-5 * time.Minute)}}
-	c.WorkRunning = running
+	c.WorkRunning, c.LastPairAt = running, c.FetchedAt
 	return c
 }
 
@@ -470,7 +470,7 @@ func TestAStaleRunningFlagDoesNotOpenTheCreditPool(t *testing.T) {
 	b := sub("b-live", &usage.Snapshot{FiveHour: win(76, 3*time.Hour), SevenDay: win(50, 4*day)})
 	b.FetchedAt, b.NextPollAt = now.Add(-5*time.Minute), now.Add(time.Minute)
 	b.LiveBurns = []usage.LiveBurn{{PerMin: 5.4, Window: usage.WindowFiveHour, From: now.Add(-10 * time.Minute), At: now.Add(-7 * time.Minute)}}
-	b.WorkRunning = true
+	b.WorkRunning, b.LastPairAt = true, now.Add(-7*time.Minute)
 	o := hoverOpts()
 	o.Threshold = 70
 	p := Decide([]Candidate{b, maxAcct("a-empty", 100, 2*time.Hour, 60, 3*day), openSeat()}, o, Config{MaxAutoSpend: 500}, NewState(), "b-live")
@@ -489,7 +489,7 @@ func TestAWeeklySeatsLastPointDoesNotOpenTheCreditPool(t *testing.T) {
 		u := weekOnly("u-live", pct, 2*day)
 		u.FetchedAt, u.NextPollAt = now.Add(-3*time.Minute), now.Add(30*time.Second)
 		u.LiveBurns = []usage.LiveBurn{{PerMin: 1.0 / 3, Window: usage.WindowSevenDay, From: now.Add(-6 * time.Minute), At: now.Add(-3 * time.Minute)}}
-		u.WorkRunning = true
+		u.WorkRunning, u.LastPairAt = true, now.Add(-3*time.Minute)
 		return u
 	}
 	o := hoverOpts()
@@ -517,6 +517,28 @@ func TestTwoAccountsDoNotTradeAPausedSession(t *testing.T) {
 	}
 	p = Decide([]Candidate{pausedMax("a-live", 85, true), last}, hoverOpts(), Config{}, NewState(), "a-live")
 	want(t, p, ActionSwitch, ReasonProjectedExhaustion, "b-last")
+}
+
+// The work's running flag is the latest live pair's across the pass, whichever
+// account made it. B is live and projected out, and its own latest pair, four
+// minutes old, says one thing; A, which the work came from and left empty, has
+// made one since that says the other. A's is the work's: when it saw a pause
+// the last resort onto C's last point stays shut whatever B's record says, and
+// when it saw the work running the last resort opens though B's own pair saw
+// a pause.
+func TestTheWorksRunningFlagIsTheLatestPairs(t *testing.T) {
+	last := idleOn(maxAcct("c-last", 99, 2*time.Hour, 60, 3*day))
+	for _, aRunning := range []bool{false, true} {
+		b := pausedMax("b-live", 85, !aRunning)
+		b.LastPairAt = now.Add(-4 * time.Minute)
+		a := idleOn(maxAcct("a-left", 100, 2*time.Hour, 60, 3*day))
+		a.WorkRunning, a.LastPairAt = aRunning, now.Add(-time.Minute)
+
+		p := Decide([]Candidate{b, a, last}, hoverOpts(), Config{}, NewState(), "b-live")
+		if moved := p.Action == ActionSwitch && p.Target.UUID == "c-last"; moved != aRunning {
+			t.Errorf("A's later pair running %v: %s (%s) to %q", aRunning, p.Action, p.Reason, p.Target.UUID)
+		}
+	}
 }
 
 // A live credit seat goes back to any account that can carry the work, one held

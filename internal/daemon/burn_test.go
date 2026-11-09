@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
@@ -379,38 +380,203 @@ func TestAPairAcrossAnAbsenceIsNotStored(t *testing.T) {
 	}
 }
 
-// Whether the account's latest live pair saw the work running is what lets a
-// projection open the downward tiers (strategy.Ranked.downwardOpen), and the
-// engine has it only from the cache row: a pair that moved records the work
-// running, one that did not records a pause, and a reading that makes no live
-// pair leaves the record of the last one as it was.
+// A pair across an absence is not stored even when the cache never heard of the
+// absence. A was read live twice, three minutes apart; the work went to B; then
+// a switch back to A was recorded in the engine state, and the daemon stopped
+// before the cache's record of it was written. A's next live reading, ten
+// minutes after its last, would pair across the absence. It is not stored, so
+// a later switch to B -- after which no selection-time check names A any more
+// -- finds only the rate measured before A was left.
+func TestAPairAcrossAnAbsenceOnlyTheStateRecordsIsNotStored(t *testing.T) {
+	isolateEngine(t)
+	e := NewEngine()
+	a := store.Account{UUID: "acct-a"}
+	commit := func(five float64, at time.Duration) {
+		e.commit(a, windowsUsed(five, 5), tickEpoch.Add(at), tickEpoch.Add(at), []string{a.UUID}, burnThresholds(), true, nil)
+	}
+	recordSwitch := func(to string, at time.Duration) {
+		if err := strategy.WithState(time.Second, func(st *strategy.State) error {
+			st.RecordSwitch(to, tickEpoch.Add(at), strategy.Departure{})
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	commit(10, 0)
+	commit(13, 3*time.Minute)
+	recordSwitch("acct-b", 4*time.Minute)
+	if err := switcher.SchedulePromptPoll("acct-b", tickEpoch.Add(4*time.Minute), 1); err != nil {
+		t.Fatal(err)
+	}
+	recordSwitch(a.UUID, 10*time.Minute)
+	commit(14, 13*time.Minute)
+	recordSwitch("acct-b", 14*time.Minute)
+
+	entry, _ := cacheEntry(t, a.UUID)
+	for _, b := range entry.Poll.LiveBurns {
+		if b.Window == usage.WindowFiveHour && (!b.At.Equal(tickEpoch.Add(3*time.Minute)) || math.Abs(b.PerMin-1) > 1e-9) {
+			t.Errorf("five-hour rate %+v, want the 1 a minute measured before A was left", b)
+		}
+	}
+	if !entry.Poll.LastPairAt.Equal(tickEpoch.Add(3 * time.Minute)) {
+		t.Errorf("A's latest pair is dated %s, want the one before it was left", entry.Poll.LastPairAt.Sub(tickEpoch))
+	}
+}
+
+// Whether the account's latest live pair saw the work running, and when, is
+// what the engine reads to say whether the work is running
+// (strategy.Options.workSeenRunning), and it has them only from the cache row:
+// a pair that moved records the work running, one that did not records a
+// pause, each at its reading, and a reading that makes no live pair leaves the
+// record as it was -- dated by its pair, so the engine sees how old it is
+// rather than reading it as this reading's.
 func TestTheCommitRecordsWhetherTheLatestLivePairRan(t *testing.T) {
 	isolateEngine(t)
 	e := NewEngine()
 	e.Rand = midJitter
 	a := store.Account{UUID: "acct-1"}
-	commit := func(five float64, at time.Duration, live bool) bool {
+	commit := func(five float64, at time.Duration, live bool) (bool, time.Duration) {
 		t.Helper()
 		e.commit(a, windowsUsed(five, 5), tickEpoch.Add(at), tickEpoch.Add(at), []string{a.UUID}, burnThresholds(), live, nil)
 		entry, ok := cacheEntry(t, a.UUID)
 		if !ok {
 			t.Fatal("commit() wrote no cache entry")
 		}
-		return entry.Poll.LastPairRunning
+		return entry.Poll.LastPairRunning, entry.Poll.LastPairAt.Sub(tickEpoch)
 	}
 	commit(10, 0, true)
-	if !commit(40, 10*time.Minute, true) {
-		t.Error("a live pair that moved thirty points recorded a pause")
+	if running, at := commit(40, 10*time.Minute, true); !running || at != 10*time.Minute {
+		t.Errorf("a live pair that moved thirty points recorded running %v at %s", running, at)
 	}
-	if commit(40, 20*time.Minute, true) {
-		t.Error("a live pair that did not move recorded the work running")
+	if running, at := commit(40, 20*time.Minute, true); running || at != 20*time.Minute {
+		t.Errorf("a live pair that did not move recorded running %v at %s", running, at)
 	}
-	if !commit(70, 30*time.Minute, true) {
-		t.Error("the work resuming did not replace the pause")
+	if running, at := commit(70, 30*time.Minute, true); !running || at != 30*time.Minute {
+		t.Errorf("the work resuming recorded running %v at %s", running, at)
 	}
-	if !commit(70, 40*time.Minute, false) {
-		t.Error("an idle reading, which makes no live pair, overwrote the record of the last one")
+	if running, at := commit(70, 40*time.Minute, false); !running || at != 30*time.Minute {
+		t.Errorf("an idle reading, which makes no live pair, left running %v at %s; want the last pair's record, dated by that pair", running, at)
 	}
+}
+
+// After a move, a pause opens no last resort before the new account has a live
+// pair of its own -- through the commit that records the pairs and the
+// evaluation that reads them. B ran first: 90% to 96% in three minutes, so its
+// own record says running. The work then moved to A, on its last point, and a
+// pair there saw a pause. It moved back to B, whose first live reading makes no
+// pair; projected at the rate the work last ran, B is out before its second.
+// The only place left is A's last point, and the work has paused: nothing
+// moves, whatever B's own record says. Had A's pair seen the work running, the
+// last resort would open, which is what says the case can tell the two apart.
+func TestAPauseAfterAMoveOpensNoLastResortBeforeTheNewAccountsPair(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		aFrom  float64
+		moving bool
+	}{
+		{"the work paused on A", 99, false},
+		{"the work ran on A", 97, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateEngine(t)
+			a := seedAccount(t, "acct-a", "org-a")
+			b := seedAccount(t, "acct-b", "org-b")
+			e := NewEngine()
+			e.Rand = midJitter
+			commit := func(acct store.Account, five float64, at time.Duration) {
+				e.commit(acct, windowsUsed(five, 5), tickEpoch.Add(at), tickEpoch.Add(at), []string{acct.UUID}, burnThresholds(), true, nil)
+			}
+			switchTo := func(acct store.Account, at time.Duration) {
+				if err := switcher.SchedulePromptPoll(acct.UUID, tickEpoch.Add(at), 1); err != nil {
+					t.Fatal(err)
+				}
+			}
+			commit(b, 90, 0)
+			commit(b, 96, 3*time.Minute)
+			switchTo(a, 3*time.Minute)
+			commit(a, tc.aFrom, 4*time.Minute)
+			commit(a, 99, 5*time.Minute)
+			switchTo(b, 6*time.Minute)
+			commit(b, 96, 6*time.Minute)
+			liveAs(t, b.UUID)
+
+			s, err := store.Open()
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg := config.Defaults()
+			cfg.Hover = true
+			at := tickEpoch.Add(8*time.Minute + 5*time.Second)
+			ev, err := switcher.Evaluate(s, switcher.EvalOptions{Now: at, Config: func() (config.Config, error) { return cfg, nil }})
+			if err != nil {
+				t.Fatal(err)
+			}
+			live := findRanked(t, ev.Plan.Result, b.UUID)
+			if live.AtLimit() == "" || live.RunsOutAt.After(at) {
+				t.Fatalf("B is at limit %q, out at %s: the case is not a live account projected out", live.AtLimit(), live.RunsOutAt.Sub(tickEpoch))
+			}
+			if entry, _ := cacheEntry(t, b.UUID); !entry.Poll.LastPairRunning || !entry.NextPollAt.After(tickEpoch.Add(6*time.Minute)) {
+				t.Fatalf("B's record says running %v, next poll %s: the case is B's stale record before its second reading",
+					entry.Poll.LastPairRunning, entry.NextPollAt.Sub(tickEpoch))
+			}
+			moved := ev.Plan.Action == strategy.ActionSwitch && ev.Plan.Target.UUID == a.UUID
+			if moved != tc.moving {
+				t.Errorf("%s (%s) to %q; want a move to A's last point %v", ev.Plan.Action, ev.Plan.Reason, ev.Plan.Target.UUID, tc.moving)
+			}
+		})
+	}
+}
+
+// The prompt a switch schedules holds in the tick that made the switch. Three
+// accounts of one organization: the live one is nearly spent and u-2 has room,
+// so the tick moves the login. u-2 was last read six minutes ago and left with
+// a danger-band schedule three minutes past, so the cache the tick read before
+// the switch has it due; the switch holds it to the identity's share of the
+// serve floor, nine minutes from that reading, and the tick polls nobody.
+func TestASwitchsPromptHoldsInTheTickThatMadeIt(t *testing.T) {
+	isolateEngine(t)
+	for _, uuid := range []string{"u-1", "u-2", "u-3"} {
+		seedAccount(t, uuid, "org-1")
+	}
+	liveAs(t, "u-1")
+	if err := usage.WithCache(time.Second, func(c *usage.Cache) error {
+		c.Put("u-1", usage.Entry{Snapshot: snapshotWith(95), FetchedAt: tickEpoch.Add(-time.Minute), NextPollAt: tickEpoch.Add(time.Minute)})
+		c.Put("u-2", usage.Entry{Snapshot: snapshotWith(5), FetchedAt: tickEpoch.Add(-6 * time.Minute), NextPollAt: tickEpoch.Add(-3 * time.Minute)})
+		c.Put("u-3", usage.Entry{Snapshot: snapshotWith(50), FetchedAt: tickEpoch.Add(-time.Minute), NextPollAt: tickEpoch.Add(time.Hour)})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var polled []string
+	e := engineFor(t, tokensAreFine, func(_ context.Context, token string) (*usage.Snapshot, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		polled = append(polled, token)
+		return snapshotWith(5), nil
+	})
+	tick(t, e)
+	if got := liveUUID(t); got != "u-2" {
+		t.Fatalf("live = %q, want u-2: the case is a tick that switches", got)
+	}
+	if len(polled) != 0 {
+		t.Errorf("the tick that switched polled %v; the prompt holds u-2 to the identity's floor", polled)
+	}
+	if entry, _ := cacheEntry(t, "u-2"); entry.NextPollAt.Before(tickEpoch.Add(3 * time.Minute)) {
+		t.Errorf("u-2's next poll %s, want the identity's share of the floor after its reading", entry.NextPollAt.Sub(tickEpoch))
+	}
+}
+
+// findRanked is the account uuid as res ranked it.
+func findRanked(t *testing.T, res strategy.Result, uuid string) strategy.Ranked {
+	t.Helper()
+	for _, r := range append(append([]strategy.Ranked(nil), res.Order...), res.Credit...) {
+		if r.UUID == uuid {
+			return r
+		}
+	}
+	t.Fatalf("%s is not in the pass", uuid)
+	return strategy.Ranked{}
 }
 
 // inFlightSwitch runs one poll of a during which a switch onto a lands: the

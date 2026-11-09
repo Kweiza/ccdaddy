@@ -203,10 +203,13 @@ type Candidate struct {
 	// later -- which the carry test has to count (carries).
 	SharedBy int
 	// WorkRunning is whether this account's most recent live pair saw the work
-	// running (usage.PollState.LastPairRunning). Only the live account's is read:
-	// it says whether a projection that has the account out is a measurement or a
-	// forecast across a pause (Ranked.downwardOpen).
+	// running, and LastPairAt when that pair's later reading was taken
+	// (usage.PollState.LastPairRunning, LastPairAt). The latest pair across the
+	// pass is the work's, like its rate (work.running): it says whether a
+	// projection that has the live account out is a measurement or a forecast
+	// across a pause (Ranked.lastResortOpen).
 	WorkRunning bool
+	LastPairAt  time.Time
 }
 
 // Options configures one ranking pass.
@@ -340,7 +343,8 @@ type Ranked struct {
 	HasRunway bool
 	RunsOutAt time.Time
 	RunsOutOn usage.WindowName
-	// workRunning is the candidate's WorkRunning, for the live account's limit.
+	// workRunning is whether the work was seen running (work.running), for the
+	// live account's limit.
 	workRunning bool
 	// Carries is whether the account would not be at a limit at its first live
 	// reading if the work moved to it now: hover's carrier test (Options.carries).
@@ -705,7 +709,7 @@ func measure(c Candidate, o Options) Ranked {
 	// carrier test and the reporters read one projection (handoff.go).
 	rw := o.runwayOf(c)
 	r.HasRunway, r.RunsOutAt, r.RunsOutOn = rw.known, rw.at, rw.on
-	r.workRunning = c.WorkRunning
+	r.workRunning = o.work != nil && o.work.running
 	r.Carries = o.carries(c, r, rw)
 	switch {
 	case o.hover == nil:
@@ -734,6 +738,7 @@ func Rank(cands []Candidate, o Options) Result {
 	// The rates once the table is: only a window that is a limit for this pass
 	// sets the work's rate on it (workRatesOf).
 	w.rates = o.workRatesOf(w.seen, w.switchedAt, w.switchedTo)
+	w.running = o.workSeenRunning(w.seen)
 	o.work = &w
 	// Under hover every reading is read as it stands now (usage.Snapshot.AsOf):
 	// a window whose reset the reading names and has passed is a window that

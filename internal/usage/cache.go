@@ -132,7 +132,12 @@ type PollState struct {
 	// LastPairRunning is whether the most recent live pair of this account saw
 	// the work running (LiveBurn.Running): false after a pause, which a running
 	// rate kept in LiveBurns outlives, and false for an account never paired.
-	LastPairRunning bool `json:"last_pair_running,omitempty"`
+	// LastPairAt is when that pair's later reading was taken, zero for never: a
+	// reading that makes no pair leaves both as they were, so the record is
+	// dated, and whoever reads it can tell a pair from this stint from one left
+	// over from the last.
+	LastPairRunning bool      `json:"last_pair_running,omitempty"`
+	LastPairAt      time.Time `json:"last_pair_at,omitempty"`
 }
 
 // Entry is one account's cached reading.

@@ -227,8 +227,10 @@ type tierPoller struct {
 	liveSince time.Time
 	probe     usage.ProbeState
 	// workRunning is whether the most recent live pair saw the work running,
-	// as the daemon's commit records it (PollState.LastPairRunning).
+	// and lastPairAt when it was taken, as the daemon's commit records them
+	// (PollState.LastPairRunning, LastPairAt).
 	workRunning bool
+	lastPairAt  time.Time
 }
 
 // due is the daemon's due(): never read is due, and otherwise the reading has to
@@ -274,7 +276,7 @@ func (p *tierPoller) poll(s *usage.Snapshot, thr Thresholds, live bool, now time
 	fresh := usage.LivePairs(p.snap, p.fetchedAt, anchor, s, now, live)
 	p.liveBurns = usage.MergeLiveBurns(p.liveBurns, fresh)
 	if len(fresh) > 0 {
-		p.workRunning = usage.AnyRunning(fresh)
+		p.workRunning, p.lastPairAt = usage.AnyRunning(fresh), now
 	}
 	p.snap, p.fetchedAt, p.state, p.anchorLive = s, now, next, live
 }
@@ -285,7 +287,7 @@ func (p *tierPoller) candidate(uuid string) Candidate {
 	c.FetchedAt, c.NextPollAt = p.fetchedAt, p.nextPollAt
 	c.BurnPerMin, c.HasBurn, c.BurnWindow = p.burn, p.hasBurn, p.burnWindow
 	c.LiveBurns = p.liveBurns
-	c.WorkRunning = p.workRunning
+	c.WorkRunning, c.LastPairAt = p.workRunning, p.lastPairAt
 	return c
 }
 
@@ -642,7 +644,8 @@ var tierLoads = []tierLoad{
 // tierPauseLoad is the production rate stopping and starting: bursts of 2-9
 // minutes at 5.4 five-hour points a minute, with pauses of 3-15 minutes between
 // them. It runs on the two fleets with room to spare, where a stop is never the
-// fleet running dry.
+// fleet running dry, and on two Max accounts alone, where the endgame between
+// last points meets a pause.
 var tierPauseLoad = paused("pause", 5.4/fiveHoursPerWeek,
 	[]time.Duration{4 * time.Minute, 7 * time.Minute, 2 * time.Minute, 9 * time.Minute, 5 * time.Minute, 3 * time.Minute, 6 * time.Minute},
 	[]time.Duration{3 * time.Minute, 15 * time.Minute, 8 * time.Minute, 5 * time.Minute, 12 * time.Minute})
@@ -765,7 +768,7 @@ func checkTierBooks(t *testing.T, res tierSimResult) {
 // under production load have less quota in a week than the load asks for -- so
 // a stopped second is allowed there, and only while nothing else had room.
 //
-// Ten variants do not meet it. Their figures are pinned here as measured
+// Eleven variants do not meet it. Their figures are pinned here as measured
 // (stoppedWithRoomMeasured) rather than left out, and every other variant
 // measures zero -- the pause load on today's fleet among them:
 //
@@ -776,6 +779,7 @@ func checkTierBooks(t *testing.T, res tierSimResult) {
 //	two Max                burst         61343       958             burst
 //	two Max                heavy        122628      1641             step
 //	two Max                production    69692       136             step
+//	two Max                pause          8372       250             burst
 //	two Max, three Ultras  heavy           239       239             step
 //	two Max, three Ultras  production    11576       346             step
 //	two Max, three Ultras  pause             5         5             step
@@ -788,6 +792,14 @@ func checkTierBooks(t *testing.T, res tierSimResult) {
 // limit the live account runs out between two readings, sooner than its
 // projection said, and the session stops until the next reading shows it out.
 //
+// The pause load on two Max accounts alone is the burst gap's other half. Five
+// sixths of its seconds are three stops of 32 to 88 s: the work resumes on an
+// account a few points from its limit, the pair its reading before made across
+// the pause saw nothing move, so the work is not seen running and the last
+// resort onto the other account's last points stays shut
+// (Ranked.lastResortOpen) until a reading shows the live account empty. The
+// rest is the step's.
+//
 // The step gap is the whole-percent reading's. A reading of 99 is anything from
 // 99 to just under 100, so the live account can be up to a step further spent
 // than the projection starts from -- eleven seconds at 5.4 points a minute --
@@ -796,6 +808,14 @@ func checkTierBooks(t *testing.T, res tierSimResult) {
 // two thirds of these seconds had the other account holding less than one step:
 // room a whole-percent reading cannot show, which reads as the 99 an account
 // is handed off at.
+//
+// The two Max, three Ultras pause load's five seconds were traced: the live
+// Max read 91% at the production rate, its projection began 0.81 of a point
+// short of what it had spent and at a rate measured to the step, 5.33 points a
+// minute, and ran out ten seconds after the account did -- the step. A bridge
+// to an Ultra outlasting it was there a hundred seconds before, and was not
+// taken because the next reading was filed as due when the serve floor held it
+// (liveLimitOf's residual).
 //
 // What closes both is a reserve on the live account's level rather than on its
 // rate, and that is a trade-off not taken here: it would hand every account off
@@ -816,7 +836,7 @@ func TestEveryFleetHandsOffBeforeTheLimit(t *testing.T) {
 	}{
 		{"today", todaysFleet, append(tierLoads[:len(tierLoads):len(tierLoads)], tierPauseLoad)},
 		{"two Max, three Ultras", twoMaxThreeUltraFleet, append(tierLoads[:len(tierLoads):len(tierLoads)], tierPauseLoad)},
-		{"two Max", twoMaxFleet, tierLoads},
+		{"two Max", twoMaxFleet, append(tierLoads[:len(tierLoads):len(tierLoads)], tierPauseLoad)},
 		{"big Ultras", bigUltraFleet, tierLoads},
 		{"two Ultras", twoUltraFleet, tierLoads},
 	} {
@@ -843,6 +863,9 @@ var stoppedWithRoomMeasured = map[string]int{
 	"big Ultras/burst":            29,
 	"two Max, three Ultras/burst": 142,
 	"two Max/burst":               958,
+	// The burst gap's other half: a pair across the pause has the work not seen
+	// running when it resumes, and the last resort waits for an empty reading.
+	"two Max/pause": 250,
 	// The step gap: the live account reads up to a step behind what it has
 	// spent, a pair measures the work to a step, and the room left elsewhere is
 	// mostly under a step a reading can show.

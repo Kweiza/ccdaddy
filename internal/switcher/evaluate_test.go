@@ -211,20 +211,22 @@ func TestTheProjectionCarriesThePrimaryFlag(t *testing.T) {
 	}
 }
 
-// Candidate.WorkRunning is what lets a projection open the downward tiers
-// (strategy.Ranked.downwardOpen), and the engine has it only through this
+// Candidate.WorkRunning and LastPairAt are what tell the engine whether the
+// work was seen running, and so whether a projection opens the last resort
+// (strategy.Ranked.lastResortOpen); the engine has them only through this
 // projection of the cache row. Dropped here, a live account projected out would
-// wait to be empty by level before its last resort or its credits, while every
-// strategy test, which builds its candidates by hand, still passed.
+// wait to be empty by level before its last resort, while every strategy test,
+// which builds its candidates by hand, still passed.
 func TestTheProjectionCarriesWhetherTheWorkWasSeenRunning(t *testing.T) {
 	isolate(t)
 	seed(t, "u-1", "one@example.com")
 	seed(t, "u-2", "two@example.com")
 	seedReading(t, "u-1", 50)
 	seedReading(t, "u-2", 50)
+	pairAt := time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC)
 	if err := usage.WithCache(time.Second, func(c *usage.Cache) error {
 		e, _ := c.Get("u-2")
-		e.Poll.LastPairRunning = true
+		e.Poll.LastPairRunning, e.Poll.LastPairAt = true, pairAt
 		c.Put("u-2", e)
 		return nil
 	}); err != nil {
@@ -241,8 +243,8 @@ func TestTheProjectionCarriesWhetherTheWorkWasSeenRunning(t *testing.T) {
 		t.Fatalf("engineCandidates() returned %d candidates, want both accounts", len(cands))
 	}
 	for _, c := range cands {
-		if want := c.UUID == "u-2"; c.WorkRunning != want {
-			t.Errorf("%s: WorkRunning = %v, want %v", c.UUID, c.WorkRunning, want)
+		if want := c.UUID == "u-2"; c.WorkRunning != want || c.LastPairAt.Equal(pairAt) != want {
+			t.Errorf("%s: WorkRunning = %v at %s, want %v", c.UUID, c.WorkRunning, c.LastPairAt, want)
 		}
 	}
 }
