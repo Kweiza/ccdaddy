@@ -635,6 +635,64 @@ func TestTheCreditWalkSkipsASpentSeat(t *testing.T) {
 	want(t, p, ActionStay, ReasonAlreadyBest, "")
 }
 
+// A seat the session left closing is not taken back while it is held out. With
+// no main pool, c1 -- the seat with the most armed room -- is live with its
+// opted-in week at 98%, spent at half a point a minute and next read in three
+// minutes: closing, so the walk passes it and the session moves to c2, leaving
+// c1 marked. From c2, after the cooldown, c1 reads roomy again -- a projection
+// is the live account's alone -- but it is held out, and the session stays,
+// whether the work on c2 is running or paused.
+func TestACreditSeatLeftClosingIsNotTakenBack(t *testing.T) {
+	armed := func(limit float64) usage.ExtraUsage {
+		return usage.ExtraUsageFor(usage.ExtraUsageInput{
+			State: usage.ExtraUsageEnabled, Currency: "USD", MonthlyLimit: pf(limit), UsedCredits: pf(0), Utilization: pf(0),
+		})
+	}
+	c1 := credit("c1", &usage.Snapshot{SevenDay: win(98, 3*day), ExtraUsage: armed(100000)})
+	c1.FetchedAt, c1.NextPollAt = now, now.Add(3*time.Minute)
+	c1.LiveBurns = []usage.LiveBurn{{PerMin: 0.5, Window: usage.WindowSevenDay, From: now.Add(-3 * time.Minute), At: now}}
+	c1.WorkRunning, c1.LastPairAt = true, now
+	cfg := Config{MaxAutoSpend: 500}
+
+	p := Decide([]Candidate{c1, creditWith("c2", armed(1000))}, hoverOpts(), cfg, NewState(), "c1")
+	if r, _ := find(p.Result, "c1"); r.Closing == "" {
+		t.Fatalf("c1 is not closing: the case is not the one named")
+	}
+	want(t, p, ActionSwitch, ReasonBetterTarget, "c2")
+
+	for _, running := range []bool{true, false} {
+		c2 := creditWith("c2", armed(1000))
+		c2.FetchedAt, c2.NextPollAt = now, now.Add(3*time.Minute)
+		c2.WorkRunning, c2.LastPairAt = running, now
+		st := NewState()
+		st.RecordSwitch("c2", now.Add(-time.Hour), p.Departure)
+		back := Decide([]Candidate{c1, c2}, hoverOpts(), cfg, st, "c2")
+		if r, _ := find(back.Result, "c1"); r.HeldOut == "" {
+			t.Fatalf("c1 is not held out: the departure was not recorded")
+		}
+		if back.Action == ActionSwitch {
+			t.Errorf("running %v: switched back to %s (%s) while c1 is held out", running, back.Target.UUID, back.Reason)
+		}
+		want(t, back, ActionStay, ReasonAlreadyBest, "")
+	}
+}
+
+// A held-out seat is a last resort, and a live seat with nothing left takes
+// it: c2 is spent, c1 was left at a limit on a week that has not rolled but has
+// room now, and the session goes there rather than reporting nothing can serve.
+func TestAnEmptyLiveSeatTakesAHeldOutSeat(t *testing.T) {
+	armed := usage.ExtraUsageFor(usage.ExtraUsageInput{
+		State: usage.ExtraUsageEnabled, Currency: "USD", MonthlyLimit: pf(1000), UsedCredits: pf(0), Utilization: pf(0),
+	})
+	c1 := credit("c1", &usage.Snapshot{SevenDay: win(60, 3*day), ExtraUsage: armed})
+	c2 := credit("c2", &usage.Snapshot{FiveHour: win(100, time.Hour), ExtraUsage: armed})
+	p := Decide([]Candidate{c1, c2}, hoverOpts(), Config{MaxAutoSpend: 500}, leftAt("c1", usage.WindowSevenDay), "c2")
+	if r, _ := find(p.Result, "c1"); r.HeldOut == "" {
+		t.Fatalf("c1 is not held out: the case is not the one named")
+	}
+	want(t, p, ActionSwitch, ReasonBetterTarget, "c1")
+}
+
 // A wait for the credit pool is a wait for a move a seat can take. S is on its
 // last point, A is empty and a pool seat is registered, but with max_auto_spend
 // at its default of 0 the gate arms nothing: the session is blocked as any dry

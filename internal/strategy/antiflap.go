@@ -573,12 +573,22 @@ func Decide(cands []Candidate, o Options, cfg Config, st *State, activeUUID stri
 // reach it, each at its own point; the walk itself is one.
 func (p *Plan) creditWalk(byUUID map[string]Candidate, activeUUID string, cfg Config, st *State, now time.Time) {
 	var firstRefusal Decision
+	admitHeld := p.heldOutSeatsAdmitted(activeUUID)
 	for _, r := range p.Result.Credit {
 		if r.AtLimit() != "" {
 			// A seat at its own limit is nowhere to go, the live one or
 			// another: the gate reads only the credit balance, and passing a
 			// spent seat traded the session onto it and off again every
 			// cooldown until its window rolled. TestTheCreditWalkSkipsASpentSeat.
+			continue
+		}
+		if r.HeldOut != "" && !admitHeld {
+			// A seat left at a limit on a window that has not rolled reads
+			// roomy once the session is off it -- a projection is the live
+			// account's alone -- so the walk would take it back, and it would
+			// close again. The mark is a rung, as in the order: such a seat is
+			// a last resort, taken only from a live seat with nothing left.
+			// TestACreditSeatLeftClosingIsNotTakenBack.
 			continue
 		}
 		live := isActive(r.UUID, activeUUID)
@@ -619,8 +629,22 @@ func (p *Plan) creditWalk(byUUID map[string]Candidate, activeUUID string, cfg Co
 	p.Credit = firstRefusal
 }
 
+// heldOutSeatsAdmitted is whether the walk may take a seat that is held out
+// (Ranked.HeldOut): when the live account reads empty, where a last resort is
+// all there is, and when the live login is no account of the pass, where
+// anything beats staying on it.
+func (p *Plan) heldOutSeatsAdmitted(activeUUID string) bool {
+	live, ok := find(p.Result, activeUUID)
+	if !ok {
+		return true
+	}
+	_, empty := live.Empty()
+	return empty
+}
+
 // everySeatAtItsLimit is the walk's answer when every seat was at its own
-// limit and no gate was asked, so the sentence is not the gate's. A live seat
+// limit, or held out from a live seat that still has room, and no gate was
+// asked, so the sentence is not the gate's. A live seat
 // on its last point still serves the session, which stays on it; otherwise
 // nothing can serve it until a window comes back -- the soonest the pass and
 // its seats name, since with no main pool the pass alone names none.
