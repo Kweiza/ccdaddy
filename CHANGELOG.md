@@ -19,7 +19,7 @@ must reference accounts by `uuid` or `alias`.
 Hover becomes an order: accounts with a five-hour window first, then the
 weekly-only seat whose week resets soonest, with every hand-off made before a
 limit. A simulated week of a one-Max, three-Ultra fleet goes from 210 switches
-to 59 under heavy use and from 43 to 2 when the five-hour window never fills,
+to 57 under heavy use and from 43 to 2 when the five-hour window never fills,
 and a blown model cap no longer stops the session. The cost is Ultra weekly
 quota, which can now expire unspent.
 
@@ -38,7 +38,7 @@ quota, which can now expire unspent.
   3. The session returns to a five-hour account as soon as it has room again.
   4. Every hand-off happens one point before any limit a model choice cannot
      avoid -- the five-hour window now as well as the week -- or earlier when
-     the work running now would run the live account out within ten minutes
+     the work running now would run the live account out within three minutes
      of its next reading. A cap on one model family, such as a blown Fable
      week, is not such a limit.
 
@@ -46,8 +46,8 @@ quota, which can now expire unspent.
   its hold alone: it is at a limit only when it is empty or on its last point.
   Whether it can take the work is a separate question, asked of the account
   the session would move to, and a move goes, in this order, to:
-  - an account that would still have ten minutes of the work running now left
-    after the engine has read it twice on that work;
+  - an account that would still have three minutes of the work running now
+    left after the engine has read it twice on that work;
   - when the live account would stop before its next reading, an account that
     outlasts it by the cooldown;
   - when the live account is out, whichever account with work left lasts
@@ -72,10 +72,10 @@ quota, which can now expire unspent.
   |---|---|---|---|---|---|
   | idle (window never fills) | today | 43 → 2 | 31.78 → 0.98 | 137.59 → 184.57 | 0 → 0 |
   | idle | Fable at 99.5% | 29 → 2 | 41.00 → 0.98 | 128.35 → 184.57 | 0 → 0 |
-  | light (fills in five hours) | today | 52 → 54 | 28.71 → 0.99 | 120.11 → 168.45 | 0 → 0 |
-  | light | Fable at 99.5% | 33 → 54 | 41.00 → 0.99 | 107.80 → 168.45 | 0 → 0 |
-  | heavy (fills in two hours) | today | 210 → 59 | 6.04 → 0.95 | 28.79 → 45.13 | 0 → 0 |
-  | heavy | Fable at 99.5% | 165 → 59 | 33.46 → 0.95 | 9.22 → 45.13 | 484 → 0 |
+  | light (fills in five hours) | today | 52 → 54 | 28.71 → 1.00 | 120.11 → 168.91 | 0 → 0 |
+  | light | Fable at 99.5% | 33 → 54 | 41.00 → 1.00 | 107.80 → 168.91 | 0 → 0 |
+  | heavy (fills in two hours) | today | 210 → 57 | 6.04 → 0.94 | 28.79 → 46.20 | 0 → 0 |
+  | heavy | Fable at 99.5% | 165 → 57 | 33.46 → 0.94 | 9.22 → 46.20 | 484 → 0 |
 
   Hover now switches twice for each five-hour window it fills: once just
   before the limit and once when the window resets. Light load fills its window
@@ -84,37 +84,51 @@ quota, which can now expire unspent.
   The same simulation over four more fleets -- two Max accounts with and
   without three Ultra seats, today's fleet with Ultra weeks four times a Max
   week, and a Max beside two Ultra seats whose weeks end an hour apart -- and
-  two more loads: the 5.4
-  five-hour points a minute measured in production on 2026-09-05, in two-hour
-  sessions, and heavy load's mean in three-minute bursts. Seconds a limit
-  stopped the session while another account still had room, before and after,
-  wherever either is not zero:
+  two more loads: the 5.4 five-hour points a minute measured in production on
+  2026-09-05, in two-hour sessions, and heavy load's mean in three-minute
+  bursts. Seconds a limit stopped the session while another account still had
+  room, before and after, wherever either is not zero:
 
   | Fleet | Load | Before | After |
   |---|---|---|---|
-  | today | production | 79 | 75 |
+  | today | production | 79 | 0 |
   | two Max, three Ultras | light | 107 | 0 |
-  | two Max, three Ultras | heavy | 1472 | 8 |
-  | two Max, three Ultras | production | 1500 | 149 |
-  | two Max, three Ultras | burst | 928 | 71 |
+  | two Max, three Ultras | heavy | 1472 | 0 |
+  | two Max, three Ultras | production | 1500 | 0 |
+  | two Max, three Ultras | burst | 928 | 17 |
   | two Max | heavy | 6156 | 0 |
   | two Max | production | 2424 | 0 |
-  | two Max | burst | 4884 | 1154 |
+  | two Max | burst | 4884 | 1177 |
   | two Ultras | production | 428 | 0 |
 
-  What is left is not zero. Where the fleet runs dry, the session is moved
-  from one account's last few points to the next, and a window that resets
-  inside the cooldown of the last such move waits out the rest of it. Under
-  the burst load a rate read across a pause understates the work, the live
-  account runs out between two readings, and the session stops until the
-  next reading shows it out.
+  What is left is not zero, and it is plainly said here: **a burst that
+  resumes after a pause near a limit can still stop a session**, for seconds
+  to minutes a week, on a fleet with no spare room. The work's rate is
+  measured between two readings, a pair taken across the pause reads it at
+  half its rate or less, and the live account then runs out before the next
+  reading shows it. Under the burst load above that is 17 seconds a week for
+  two Max accounts beside three nearly spent Ultra seats, and 1177 seconds
+  for two Max accounts alone, in which the other account held only its last
+  few points. The remedy not taken is a reserve on the live account's level:
+  handing off with enough left to cover such a burst through one reading
+  interval means leaving about five to eight five-hour points at every
+  hand-off whatever the work is doing, an estimated 140 to 235 more five-hour
+  points left unspent a week on today's fleet under steady heavy use, on top
+  of the 100 left now.
+
+  The three-minute reserve is the poll policy's normal floor. A ten-minute
+  one, the idle cadence, was measured against it: it left more than twice the
+  five-hour points behind, stopped today's fleet under production load for
+  3427 seconds where three minutes stops it for none, and stopped with room
+  on another account in five of these variants. It did better in one, two Max
+  accounts under the burst load, by 23 seconds.
 - **Ultra weekly quota can now expire unspent.** A weekly-only seat is used
   only while every five-hour account is at a limit, and then only the one whose
   week ends first. On a fleet with several such seats most of their weekly
   quota now expires unused; the pace rotation used to spread work across them.
 - **Hover no longer overrides `hysteresis_pct`, `headroom_ratio`, or
   `recovery_hysteresis`.** It still sets the threshold, credit threshold,
-  strategy, preemption lead (now the ten minutes above), probe setting, and
+  strategy, preemption lead (now the three minutes above), probe setting, and
   cooldown (2m) itself, and `ccdad config list` no longer marks the other
   three as overridden. `recovery_hysteresis` (default 5m) is now the margin
   between two weekly-only seats: the session moves to one whose week ends

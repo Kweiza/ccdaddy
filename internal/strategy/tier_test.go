@@ -462,10 +462,12 @@ func TestAWindowThatResetsBeforeItRunsOutIsNotClosing(t *testing.T) {
 		t.Errorf("%s (%s) to %q, want a stay: the window resets before it runs out", p.Action, p.Reason, p.Target.UUID)
 	}
 
-	// Ten points at two a minute is five minutes, inside the horizon: the live
-	// account is closing. The target has four points the work would spend in
-	// two minutes -- but its window resets in ninety seconds.
-	closing := polled(maxAcct("a-live", 90, 3*time.Hour, 50, 4*day), 60*time.Second)
+	// At two points a minute the live account runs out half a reserve after its
+	// next reading, a minute away: it is closing, whatever the reserve. The
+	// target has four points the work would spend in two minutes -- but its
+	// window resets in ninety seconds.
+	room := 2 * (time.Minute + hoverReserve/2).Minutes()
+	closing := polled(maxAcct("a-live", 100-room, 3*time.Hour, 50, 4*day), 60*time.Second)
 	closing.BurnPerMin, closing.HasBurn, closing.BurnWindow = 2, true, usage.WindowFiveHour
 	resets := idleOn(maxAcct("b-resets", 96, 90*time.Second, 40, 3*day))
 	p := Decide([]Candidate{closing, resets}, hoverOpts(), Config{}, NewState(), "a-live")

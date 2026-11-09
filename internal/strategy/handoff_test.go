@@ -2,6 +2,10 @@ package strategy
 
 import (
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"go/types"
 	"math"
 	"math/rand"
 	"testing"
@@ -317,12 +321,26 @@ func TestEveryHoverMoveIsToACarrierABridgeOrALastResort(t *testing.T) {
 // The hand-off rule's horizons are the poll policy's own constants, and the
 // reserve and the first live cadence together outlast the cooldown: a carrier
 // cannot be one the cooldown would have to hold on.
+//
+// Comparing values cannot see a literal of the same value standing in for the
+// constant -- 180 * time.Second passes for pollpolicy.MinInterval until the
+// poll policy changes and the hand-off silently does not -- so the declarations
+// are read from the source as well.
 func TestTheHorizonTermsAreThePollPolicysOwn(t *testing.T) {
-	if hoverReserve != pollpolicy.CandidateMaxInterval {
-		t.Errorf("hoverReserve = %s, want pollpolicy.CandidateMaxInterval", hoverReserve)
+	if hoverReserve != pollpolicy.MinInterval {
+		t.Errorf("hoverReserve = %s, want pollpolicy.MinInterval", hoverReserve)
 	}
 	if hoverBlind != pollpolicy.ActiveMaxInterval {
 		t.Errorf("hoverBlind = %s, want pollpolicy.ActiveMaxInterval", hoverBlind)
+	}
+	declared := constDeclarations(t, "handoff.go")
+	for name, want := range map[string]string{
+		"hoverReserve": "pollpolicy.MinInterval",
+		"hoverBlind":   "pollpolicy.ActiveMaxInterval",
+	} {
+		if got := declared[name]; got != want {
+			t.Errorf("%s is declared as %q, want %s itself", name, got, want)
+		}
 	}
 	if hoverBlind+hoverReserve <= HoverCooldown {
 		t.Errorf("hoverBlind + hoverReserve = %s, not beyond the cooldown %s", hoverBlind+hoverReserve, HoverCooldown)
@@ -330,6 +348,32 @@ func TestTheHorizonTermsAreThePollPolicysOwn(t *testing.T) {
 	if EvaluationInterval != time.Second {
 		t.Errorf("EvaluationInterval = %s, want the daemon's one-second tick", EvaluationInterval)
 	}
+}
+
+// constDeclarations is every constant a file of this package declares with a
+// value, by name, as the source writes that value.
+func constDeclarations(t *testing.T, file string) map[string]string {
+	t.Helper()
+	f, err := parser.ParseFile(token.NewFileSet(), file, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]string{}
+	for _, d := range f.Decls {
+		gen, ok := d.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			vs := spec.(*ast.ValueSpec)
+			for i, name := range vs.Names {
+				if i < len(vs.Values) {
+					out[name.Name] = types.ExprString(vs.Values[i])
+				}
+			}
+		}
+	}
+	return out
 }
 
 // R5: the configured strategies keep the pool maximum as the carry rate, as they

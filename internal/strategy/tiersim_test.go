@@ -591,10 +591,10 @@ var tierLoads = []tierLoad{
 //	load           fleet   switches  unspent         stopped   switches  unspent         stopped
 //	idle  0.0075   today         43  31.78 / 137.59        0          2  0.98 / 184.57         0
 //	idle  0.0075   Fable         29  41.00 / 128.35        0          2  0.98 / 184.57         0
-//	light 0.01     today         52  28.71 / 120.11        0         54  0.99 / 168.45         0
-//	light 0.01     Fable         33  41.00 / 107.80        0         54  0.99 / 168.45         0
-//	heavy 0.025    today        210   6.04 /  28.79        0         59  0.95 /  45.13         0
-//	heavy 0.025    Fable        165  33.46 /   9.22      484         59  0.95 /  45.13         0
+//	light 0.01     today         52  28.71 / 120.11        0         54  1.00 / 168.91         0
+//	light 0.01     Fable         33  41.00 / 107.80        0         54  1.00 / 168.91         0
+//	heavy 0.025    today        210   6.04 /  28.79        0         57  0.94 /  46.20         0
+//	heavy 0.025    Fable        165  33.46 /   9.22      484         57  0.94 /  46.20         0
 //
 // Two hundred moves a week was the cost the owner measured another way: every
 // switch rewrites the prompt cache of a running session, and the rotation spent
@@ -685,30 +685,28 @@ func checkTierBooks(t *testing.T, res tierSimResult) {
 // under production load have less quota in a week than the load asks for -- so
 // a stopped second is allowed there, and only while nothing else had room.
 //
-// Five variants do not meet it. Their figures are pinned here as measured
-// (stoppedWithRoomMeasured) rather than left out, and every other variant
-// measures zero:
+// Two variants do not meet it, both under the burst load. Their figures are
+// pinned here as measured (stoppedWithRoomMeasured) rather than left out, and
+// every other variant measures zero:
 //
-//	fleet                  load         stopped   with room elsewhere
-//	today                  production      3427       75
-//	two Max, three Ultras  production     11576      149
-//	two Max, three Ultras  heavy            571        8
-//	two Max, three Ultras  burst            609       71
-//	two Max                burst          61314     1154
+//	fleet                  load   stopped   with room elsewhere
+//	two Max, three Ultras  burst       17       17
+//	two Max                burst    61314     1177
 //
-// The first three are dregs under the cooldown. The fleet is dry, the session
-// is moved from one account's last few points to the next as each runs out, and
-// a window that rolls over inside the cooldown of the last such move waits out
-// the rest of it: at most HoverCooldown less the dreg that move bought.
+// Both are the burst gap no projection closes, at any reserve. A pair of
+// readings taken across a three-minute block of nothing, or half of one,
+// measures the work at half its rate or less, so when the burst resumes near a
+// limit the live account runs out between two readings, sooner than its
+// projection said, and the session stops until the next reading shows it out.
+// What closes it is a reserve on the live account's level rather than on its
+// rate, and that is a trade-off not taken here: it would hand every account off
+// several points early whatever the work is doing.
 //
-// The two bursts are the gap no projection closes. A pair of readings taken
-// across a three-minute block of nothing, or half of one, measures the work at
-// half its rate or less, so the live account runs out between two readings,
-// sooner than its projection said, and the session stops until the next
-// reading shows it out. In the three Ultras' fleet every point left is then on
-// an account at its last point, which the order takes only once the live
-// account is seen out. Two Max accounts alone also bridge back to each other
-// on the understated rate, and the cooldown then holds the last resort.
+// The reserve was set against these figures. At CandidateMaxInterval (600 s)
+// five variants stopped with room elsewhere -- today's fleet under production
+// load for 75 s, two Max and three Ultras for 149 s under production, 8 s under
+// heavy and 71 s under burst load -- and two Max accounts alone under burst load
+// for 1154 s, the one figure 180 s does worse on.
 func TestEveryFleetHandsOffBeforeTheLimit(t *testing.T) {
 	const week = 7 * day
 	for _, fleet := range []struct {
@@ -739,9 +737,13 @@ func TestEveryFleetHandsOffBeforeTheLimit(t *testing.T) {
 // stoppedWithRoomMeasured is the table above, by subtest name: the variants
 // whose stopped-with-room seconds are not zero, at the figure they measure.
 var stoppedWithRoomMeasured = map[string]int{
-	"today/production":                 75,
-	"two Max, three Ultras/production": 149,
-	"two Max, three Ultras/heavy":      8,
-	"two Max, three Ultras/burst":      71,
-	"two Max/burst":                    1154,
+	// The burst gap, once: the live Max runs out sixteen seconds before its
+	// next reading, and every point left in the fleet is on an account at its
+	// last point, which the order takes only once the live account is seen
+	// out.
+	"two Max, three Ultras/burst": 17,
+	// The burst gap, every five-hour window the burst fills: the live Max runs
+	// out between two readings with the other Max on its last point, or, in
+	// 149 of these seconds, holding the few points it was handed off with.
+	"two Max/burst": 1177,
 }

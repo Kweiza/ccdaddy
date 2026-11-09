@@ -40,10 +40,20 @@ const EvaluationInterval = time.Second
 // number of this file's own. TestTheHorizonTermsAreThePollPolicysOwn.
 const (
 	// hoverReserve is λ: the live account is closing when the work would stop it
-	// before the reading after next. It is the widest gap an idle account is
-	// read at, which is what the pool-wide lead this replaces always came to on
-	// a fleet with an idle account in it.
-	hoverReserve = pollpolicy.CandidateMaxInterval
+	// within λ after its next reading. It is the poll policy's normal floor, the
+	// shortest gap it leaves between two ordinary readings, so a live account
+	// that would stop inside it may well stop before the engine reads it again.
+	//
+	// A longer reserve tolerates a sharper rise in the work between two
+	// readings and throws away more of every window the session leaves.
+	// CandidateMaxInterval (600 s) was measured against this over a simulated
+	// week and lost: it left more than twice the five-hour points behind,
+	// stopped today's fleet for 3427 s under production load where this stops
+	// it for none, and stopped with room on another account in five variants
+	// where this does in two. It was better in one, a burst on two Max
+	// accounts alone, by 23 s of 1177 -- the burst gap no reserve closes
+	// (TestEveryFleetHandsOffBeforeTheLimit).
+	hoverReserve = pollpolicy.MinInterval
 	// hoverBlind is B, the longest an unthrottled live account goes unread. It
 	// is also the cadence the first live poll after a move gets, because that
 	// poll measures no movement against the idle anchor before it.
