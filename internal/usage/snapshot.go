@@ -713,6 +713,49 @@ func (s *Snapshot) UnnamableLimits() int {
 	return n
 }
 
+// AsOf is this reading as it stands at now: every window whose reset has come
+// and gone reads as a window nothing has spent against since it rolled -- 0%,
+// and no reset until a turn starts its clock -- because that is what it now
+// is. Everything else is the reading as it was taken. A reading
+// with nothing rolled is returned as it is.
+//
+// A reading is as old as its poll, and the poll that sees a rollover lands a
+// margin after it. Until then the reading still says what the window held
+// before it reset, and an account read empty on a window that has since rolled
+// is filed empty for that whole margin -- the one account with a fresh window,
+// passed over while the session waits, on a reset instant the reading itself
+// names. CinderCove is not touched: its resets_at is an expiry, not a rollover.
+func (s *Snapshot) AsOf(now time.Time) *Snapshot {
+	if s == nil {
+		return nil
+	}
+	c := *s
+	c.Limits = append([]Limit(nil), s.Limits...)
+	changed := false
+	for _, w := range []*Window{&c.FiveHour, &c.SevenDay, &c.SevenDayOAuthApps, &c.SevenDayOpus,
+		&c.SevenDaySonnet, &c.CodexPrimary, &c.CodexSecondary} {
+		if w.Present && rolledOver(w.reset, w.hasTime, now) {
+			w.pct, w.hasPct, w.reset, w.hasTime = 0, true, time.Time{}, false
+			changed = true
+		}
+	}
+	for i := range c.Limits {
+		if l := &c.Limits[i]; rolledOver(l.reset, l.hasTime, now) {
+			l.pct, l.hasPct, l.reset, l.hasTime = 0, true, time.Time{}, false
+			changed = true
+		}
+	}
+	if !changed {
+		return s
+	}
+	return &c
+}
+
+// rolledOver is whether a window that names its reset has reset by now.
+func rolledOver(reset time.Time, named bool, now time.Time) bool {
+	return named && !reset.After(now)
+}
+
 // AllWindows is every window an account can be ranked on: the five recurring
 // ones and the scoped weekly windows. It is what a caller holding a binding
 // window's NAME looks it up in — the ranking may narrow which of these bind for
