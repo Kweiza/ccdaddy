@@ -46,17 +46,20 @@ import (
 //     consecutive readings of that account's binding window, and the work's
 //     rate on every window across two readings both taken live (usage.LivePairs), a reading
 //     being live by who is live when it is taken;
+//   - a reading reports whole percents, as the endpoint does (reported), so a
+//     pair of readings moves in whole steps or not at all;
+//   - an idle account's cold window is started by the daemon's own warm-up
+//     rules (WarmUpDue), at the poll the daemon would replace with it, and the
+//     poll that judges it is the one usage.RecordProbe schedules;
 //   - the true state rolls over at its reset, and the reading shows it at the
 //     next poll;
-//   - every switch is recorded in State, so the cooldown binds.
+//   - every switch is recorded in State, so the cooldown binds, and on the
+//     account switched to, so a live pair never spans an absence
+//     (usage.LiveAnchor).
 //
-// What it does not model, and why each is safe to leave out here: 429s and the
-// stand-down (every account here carries its own organization, so a stand-down
-// has no peer to hold back, and nothing is refused); and the warm-up probe, which
-// starts a cold window's clock unasked -- the five-hour account's cold window is
-// re-entered at the poll that finds it cold, which starts the same clock within
-// the same second, and a weekly window here re-anchors at its rollover, as a
-// probed one does.
+// What it does not model, and why it is safe to leave out here: 429s and the
+// stand-down -- every account here carries its own organization, so a
+// stand-down has no peer to hold back, and nothing is refused.
 
 // tierAccount is one account of the simulated fleet: its TRUE state, which the
 // engine never reads directly.
@@ -73,7 +76,8 @@ type tierAccount struct {
 	// wrong number on another's, which the engine has no way to see.
 	weekScale float64
 	// fiveUtil and fiveAt are the five-hour window. A zero fiveAt is a window
-	// nothing has started, which the reading carries as {null,null}.
+	// nothing has started, which the reading carries as the endpoint does: 0%,
+	// and no reset -- the cold window a warm-up starts (ColdWindow).
 	fiveUtil float64
 	fiveAt   time.Time
 	// fableAt is when a model-scoped Fable week that is past its last point rolls
@@ -115,19 +119,29 @@ func (a tierAccount) canServe(want float64) float64 {
 	return math.Max(0, math.Min(want, math.Min((100-a.weekUtil)/a.scale(), a.fiveRoom())))
 }
 
-// read is what a poll of this account returns at this instant.
+// reported is a utilization as the endpoint reports it: in whole steps of
+// usage.ReadingQuantum, rounded down, as production readings are
+// (internal/forecast explains why one delta of them is not a rate). A reading
+// at 99.6% says 99.
+func reported(pct float64) float64 {
+	return math.Floor(pct/usage.ReadingQuantum) * usage.ReadingQuantum
+}
+
+// read is what a poll of this account returns at this instant, in the whole
+// percents the endpoint reports.
 func (a tierAccount) read() *usage.Snapshot {
-	week, weekAt := a.weekUtil, a.weekAt
+	week, weekAt := reported(a.weekUtil), a.weekAt
 	s := &usage.Snapshot{SevenDay: usage.NewWindow(&week, &weekAt)}
 	if a.short {
-		s.FiveHour = usage.NewWindow(nil, nil)
+		cold := 0.0
+		s.FiveHour = usage.NewWindow(&cold, nil)
 		if !a.fiveAt.IsZero() {
-			five, fiveAt := a.fiveUtil, a.fiveAt
+			five, fiveAt := reported(a.fiveUtil), a.fiveAt
 			s.FiveHour = usage.NewWindow(&five, &fiveAt)
 		}
 	}
 	if !a.fableAt.IsZero() {
-		pct, at := a.fableUtil, a.fableAt
+		pct, at := reported(a.fableUtil), a.fableAt
 		s.Limits = []usage.Limit{usage.LimitFor(usage.LimitInput{
 			Kind: "weekly_scoped", Model: "Fable", Percent: &pct, ResetsAt: &at,
 		})}
@@ -181,6 +195,15 @@ func (a *tierAccount) spend(w float64, now time.Time) {
 	}
 }
 
+// warm is a warm-up of window w: a turn too small to count, which starts that
+// window's clock if it is cold. In this fleet only a five-hour window goes cold;
+// a week here always names its reset.
+func (a *tierAccount) warm(w usage.WindowName, now time.Time) {
+	if w == usage.WindowFiveHour && a.short && a.fiveAt.IsZero() {
+		a.fiveAt = now.Add(5 * time.Hour)
+	}
+}
+
 // tierSimJitter is the sample every jittered range is drawn at: the midpoint,
 // which is each cadence exactly as pollpolicy states it and each warm-up target
 // halfway through its margin.
@@ -198,6 +221,11 @@ type tierPoller struct {
 	burnWindow            usage.WindowName
 	anchorLive            bool
 	liveBurns             []usage.LiveBurn
+	// liveSince is the last switch onto the account, as
+	// switcher.SchedulePromptPoll records it, and probe the warm-up record the
+	// daemon keeps (usage.ProbeState).
+	liveSince time.Time
+	probe     usage.ProbeState
 }
 
 // due is the daemon's due(): never read is due, and otherwise the reading has to
@@ -226,12 +254,10 @@ func (p *tierPoller) poll(s *usage.Snapshot, thr Thresholds, live bool, now time
 	in := pollpolicy.Input{Now: now, Active: live, Reading: reading, Threshold: thr.For(h.Binding)}
 	at, next := pollpolicy.Next(p.state, in, tierSimJitter)
 	natural := now.Add(pollpolicy.Share(at.Sub(now), 1, in))
-	// The daemon's warmTarget: the next rollover, a jittered margin after it.
-	var warm time.Time
-	if reset, ok := NextResetAmong(s, "", thr, now); ok {
-		warm = reset.Add(usage.ProbeWakeMargin + time.Duration(tierSimJitter*float64(usage.ProbeWakeMargin)))
-	}
-	p.nextPollAt = pollpolicy.WarmClamp(natural, warm, now, pollpolicy.ServeTTL)
+	p.nextPollAt = pollpolicy.WarmClamp(natural, WarmTarget(s, thr, now, tierSimJitter), now, pollpolicy.ServeTTL)
+	// The verdict on the last warm-up, before the reading it is judged on
+	// replaces the one it was waiting behind, as the daemon's commit takes it.
+	p.probe = p.probe.Judged(p.fetchedAt, s, now)
 
 	if reading.Known {
 		reset, _ := s.ResetFor(h.Binding)
@@ -241,7 +267,8 @@ func (p *tierPoller) poll(s *usage.Snapshot, thr Thresholds, live bool, now time
 		}
 		p.last = cur
 	}
-	p.liveBurns = usage.MergeLiveBurns(p.liveBurns, usage.LivePairs(p.snap, p.fetchedAt, p.anchorLive, s, now, live))
+	anchor := usage.LiveAnchor(p.anchorLive, p.fetchedAt, p.liveSince)
+	p.liveBurns = usage.MergeLiveBurns(p.liveBurns, usage.LivePairs(p.snap, p.fetchedAt, anchor, s, now, live))
 	p.snap, p.fetchedAt, p.state, p.anchorLive = s, now, next, live
 }
 
@@ -277,6 +304,31 @@ func sessions(name string, perMin float64, on, off time.Duration) tierLoad {
 	}}
 }
 
+// paused is work at perMin in bursts with pauses between them, inside two-hour
+// sessions twelve hours apart: the bursts last the minutes in on and the pauses
+// the minutes in off, each list cycled on its own, so the pauses fall at every
+// level a window fills to -- some of them between 85% and 99%, where a rate read
+// across a pause would switch the projection off.
+func paused(name string, perMin float64, on, off []time.Duration) tierLoad {
+	const session, apart = 2 * time.Hour, 12 * time.Hour
+	return tierLoad{name: name, perMin: func(offset time.Duration) float64 {
+		t := offset % apart
+		if t >= session {
+			return 0
+		}
+		for i := 0; ; i++ {
+			if t < on[i%len(on)] {
+				return perMin
+			}
+			t -= on[i%len(on)]
+			if t < off[i%len(off)] {
+				return 0
+			}
+			t -= off[i%len(off)]
+		}
+	}}
+}
+
 // tierSimResult is what one run measured.
 type tierSimResult struct {
 	// switches counts every move, by the reason the plan gave for it.
@@ -297,6 +349,8 @@ type tierSimResult struct {
 	// account could have taken all of it. The second is the one that is a
 	// defect: the first also counts a fleet that has simply run out.
 	stopped, stoppedWithRoom int
+	// warmUps is how many warm-ups the daemon's rules started.
+	warmUps int
 }
 
 // tierSimEpoch is where every tier simulation starts, and the instant the
@@ -411,10 +465,11 @@ func runTierSim(t *testing.T, label string, accts []tierAccount, load tierLoad, 
 					res.switches[p.Reason.String()]++
 					res.total++
 					// switcher.Execute's prompt poll of the account the work
-					// just moved to.
+					// just moved to, and its record of the switch.
 					for j := range accts {
 						if accts[j].uuid == live && pollers[j].snap != nil {
 							pollers[j].nextPollAt = pollpolicy.PromptPollAt(pollers[j].fetchedAt, pollers[j].nextPollAt, time.Time{}, now, 1)
+							pollers[j].liveSince = now
 						}
 					}
 				}
@@ -427,12 +482,25 @@ func runTierSim(t *testing.T, label string, accts []tierAccount, load tierLoad, 
 		}
 		// After the decision, as the daemon dispatches its polls: an account
 		// that just became live is polled as the live one, and the reading is
-		// the engine's to read at the next second.
+		// the engine's to read at the next second. A due account the session is
+		// not on is warmed instead when the daemon's warm-up rules say so
+		// (WarmUpDue): the probe replaces that poll, starts the cold window's
+		// clock with a turn too small to count, and the poll that judges it is
+		// ProbePollDelay out, as usage.RecordProbe schedules it.
 		for j := range accts {
-			if pollers[j].due(now) {
-				pollers[j].poll(accts[j].read(), thr(accts[j].uuid), accts[j].uuid == live, now)
-				askAt = now.Add(tierSimTick)
+			p, a := &pollers[j], &accts[j]
+			if !p.due(now) {
+				continue
 			}
+			if w, warm := WarmUpDue(a.uuid, p.snap, p.probe, thr(a.uuid), now); warm && a.uuid != live {
+				a.warm(w, now)
+				p.probe = p.probe.Attempted(now, w, nil)
+				p.nextPollAt = now.Add(usage.ProbePollDelay)
+				res.warmUps++
+				continue
+			}
+			p.poll(a.read(), thr(a.uuid), a.uuid == live, now)
+			askAt = now.Add(tierSimTick)
 		}
 
 		want := load.perMin(now.Sub(tierSimEpoch)) * tierSimTick.Minutes()
@@ -470,6 +538,7 @@ func runTierSim(t *testing.T, label string, accts []tierAccount, load tierLoad, 
 		t.Logf("   %-12s served %7.2f  unspent at weekly rollovers %7.2f", tier, res.served[tier], res.unspent[tier])
 	}
 	t.Logf("   five-hour points left in %d windows the session had left: %.2f", res.fiveWindowsLeft, res.fiveLeft)
+	t.Logf("   warm-ups %d", res.warmUps)
 	t.Logf("   session-stopping seconds %d, of which another account had room in %d", res.stopped, res.stoppedWithRoom)
 	return res
 }
@@ -559,6 +628,14 @@ var tierLoads = []tierLoad{
 	sessions("burst", 0.05, 3*time.Minute, 3*time.Minute),
 }
 
+// tierPauseLoad is the production rate stopping and starting: bursts of 2-9
+// minutes at 5.4 five-hour points a minute, with pauses of 3-15 minutes between
+// them. It runs on the two fleets with room to spare, where a stop is never the
+// fleet running dry.
+var tierPauseLoad = paused("pause", 5.4/fiveHoursPerWeek,
+	[]time.Duration{4 * time.Minute, 7 * time.Minute, 2 * time.Minute, 9 * time.Minute, 5 * time.Minute, 3 * time.Minute, 6 * time.Minute},
+	[]time.Duration{3 * time.Minute, 15 * time.Minute, 8 * time.Minute, 5 * time.Minute, 12 * time.Minute})
+
 // A week of today's fleet at three loads: idle, where a five-hour window never
 // fills; light, where it takes its whole five hours to fill; heavy, where it
 // fills in two. Each runs on today's fleet and on the same fleet with the Max
@@ -575,23 +652,27 @@ var tierLoads = []tierLoad{
 //
 //	                          pace rotation                    the order
 //	load           fleet   switches  unspent         stopped   switches  unspent         stopped
-//	idle  0.0075   today         43  31.78 / 137.59        0          2  0.98 / 184.57         0
-//	idle  0.0075   Fable         29  41.00 / 128.35        0          2  0.98 / 184.57         0
-//	light 0.01     today         52  28.71 / 120.11        0         54  1.00 / 168.91         0
-//	light 0.01     Fable         33  41.00 / 107.80        0         54  1.00 / 168.91         0
-//	heavy 0.025    today        210   6.04 /  28.79        0         57  0.94 /  46.20         0
-//	heavy 0.025    Fable        165  33.46 /   9.22      484         57  0.94 /  46.20         0
+//	idle  0.0075   today         33  31.28 / 138.08        0          2  2.00 / 183.55         0
+//	idle  0.0075   Fable         27  41.00 / 128.35        0          2  2.00 / 183.55         0
+//	light 0.01     today         38  28.47 / 120.35        0         54  1.98 / 167.98         0
+//	light 0.01     Fable         30  41.00 / 107.82        0         54  1.98 / 167.98         0
+//	heavy 0.025    today        183   5.64 /  29.84        0         56  1.98 /  45.13         0
+//	heavy 0.025    Fable        155  33.28 /  10.93      210         56  1.98 /  45.13         0
 //
-// Two hundred moves a week was the cost the owner measured another way: every
-// switch rewrites the prompt cache of a running session, and the rotation spent
-// that to hold four accounts level with their own clocks. The order moves the
+// Readings are whole percents and the daemon's warm-ups start the idle
+// accounts' clocks, in both codes; the five-hour account's week is spent to
+// within a reading step of its last point.
+//
+// Nearly two hundred moves a week was the cost the owner measured another way:
+// every switch rewrites the prompt cache of a running session, and the rotation
+// spent that to hold four accounts level with their own clocks. The order moves the
 // session twice per five-hour window it fills -- out before the limit, back at
 // the rollover -- and not otherwise, which is why light load, whose window fills
 // in the last minutes of its five hours, costs as many moves as heavy load does.
 //
 // The Fable week past its last point is the variant the rotation failed
 // outright: it read the cap as the Max account's limit, left most of the
-// account's week unspent, and stopped the session for 484 seconds while other
+// account's week unspent, and stopped the session for 210 seconds while other
 // accounts had room. Under the order a cap on one model family is not a limit,
 // and the week is the same week to the hundredth.
 //
@@ -636,9 +717,11 @@ func TestTodaysFleetOverAWeek(t *testing.T) {
 				}
 				// The five-hour tier is spent to its last point before its week
 				// ends: one account, one rollover, at most the one point the
-				// hand-off line keeps back.
-				if got := res.unspent["short-window"]; got > handoffRoomPct {
-					t.Errorf("%.2f points of the five-hour account's week expired unspent, want at most %v", got, handoffRoomPct)
+				// hand-off line keeps back and the one step a whole-percent
+				// reading can lag the week by.
+				if most := handoffRoomPct + usage.ReadingQuantum; res.unspent["short-window"] > most {
+					t.Errorf("%.2f points of the five-hour account's week expired unspent, want at most %v",
+						res.unspent["short-window"], most)
 				}
 			}
 			// A cap on one model family is not a limit, so it moves nothing hover
@@ -671,41 +754,61 @@ func checkTierBooks(t *testing.T, res tierSimResult) {
 // under production load have less quota in a week than the load asks for -- so
 // a stopped second is allowed there, and only while nothing else had room.
 //
-// Two variants do not meet it, both under the burst load. Their figures are
-// pinned here as measured (stoppedWithRoomMeasured) rather than left out, and
-// every other variant measures zero:
+// Ten variants do not meet it. Their figures are pinned here as measured
+// (stoppedWithRoomMeasured) rather than left out, and every other variant
+// measures zero -- the pause load on today's fleet among them:
 //
-//	fleet                  load   stopped   with room elsewhere
-//	two Max, three Ultras  burst       17       17
-//	two Max                burst    61314     1177
+//	fleet                  load        stopped   with room elsewhere   gap
+//	today                  burst            29        29             burst
+//	big Ultras             burst            29        29             burst
+//	two Max, three Ultras  burst           142       142             burst
+//	two Max                burst         61343       958             burst
+//	two Max                heavy        122628      1641             step
+//	two Max                production    69692       136             step
+//	two Max, three Ultras  heavy           239       239             step
+//	two Max, three Ultras  production    11576       346             step
+//	two Max, three Ultras  pause             5         5             step
+//	two Ultras             production       37        37             step
 //
-// Both are the burst gap no projection closes, at any reserve. A pair of
+// The burst gap is the one no projection closes, at any reserve. A pair of
 // readings taken across a three-minute block of nothing, or half of one,
 // measures the work at half its rate or less, so when the burst resumes near a
 // limit the live account runs out between two readings, sooner than its
 // projection said, and the session stops until the next reading shows it out.
-// What closes it is a reserve on the live account's level rather than on its
+//
+// The step gap is the whole-percent reading's. A reading of 99 is anything from
+// 99 to just under 100, so the live account can be up to a step further spent
+// than the projection starts from -- eleven seconds at 5.4 points a minute --
+// and a pair of readings measures the work to a step, which at a one- or
+// three-minute cadence is a fifth to half of the rate. Across the six variants,
+// two thirds of these seconds had the other account holding less than one step:
+// room a whole-percent reading cannot show, which reads as the 99 an account
+// is handed off at.
+//
+// What closes both is a reserve on the live account's level rather than on its
 // rate, and that is a trade-off not taken here: it would hand every account off
 // several points early whatever the work is doing.
 //
-// The reserve was set against these figures. At CandidateMaxInterval (600 s)
-// five variants stopped with room elsewhere -- today's fleet under production
-// load for 75 s, two Max and three Ultras for 149 s under production, 8 s under
-// heavy and 71 s under burst load -- and two Max accounts alone under burst load
-// for 1154 s, the one figure 180 s does worse on.
+// Before these readings were whole percents and before the warm-up was modelled,
+// the same harness measured two of these variants above zero (two Max, three
+// Ultras under burst load for 17 s; two Max under burst load for 1177 s), and the
+// reserve was set against those: at CandidateMaxInterval (600 s) five variants
+// stopped with room elsewhere, and two Max accounts alone under burst load for
+// 1154 s, the one figure 180 s did worse on.
 func TestEveryFleetHandsOffBeforeTheLimit(t *testing.T) {
 	const week = 7 * day
 	for _, fleet := range []struct {
-		name string
-		of   func() []tierAccount
+		name  string
+		of    func() []tierAccount
+		loads []tierLoad
 	}{
-		{"today", todaysFleet},
-		{"two Max, three Ultras", twoMaxThreeUltraFleet},
-		{"two Max", twoMaxFleet},
-		{"big Ultras", bigUltraFleet},
-		{"two Ultras", twoUltraFleet},
+		{"today", todaysFleet, append(tierLoads[:len(tierLoads):len(tierLoads)], tierPauseLoad)},
+		{"two Max, three Ultras", twoMaxThreeUltraFleet, append(tierLoads[:len(tierLoads):len(tierLoads)], tierPauseLoad)},
+		{"two Max", twoMaxFleet, tierLoads},
+		{"big Ultras", bigUltraFleet, tierLoads},
+		{"two Ultras", twoUltraFleet, tierLoads},
 	} {
-		for _, load := range tierLoads {
+		for _, load := range fleet.loads {
 			fleet, load := fleet, load
 			t.Run(fleet.name+"/"+load.name, func(t *testing.T) {
 				t.Parallel()
@@ -723,13 +826,18 @@ func TestEveryFleetHandsOffBeforeTheLimit(t *testing.T) {
 // stoppedWithRoomMeasured is the table above, by subtest name: the variants
 // whose stopped-with-room seconds are not zero, at the figure they measure.
 var stoppedWithRoomMeasured = map[string]int{
-	// The burst gap, once: the live Max runs out sixteen seconds before its
-	// next reading, and every point left in the fleet is on an account at its
-	// last point, which the order takes only once the live account is seen
-	// out.
-	"two Max, three Ultras/burst": 17,
-	// The burst gap, every five-hour window the burst fills: the live Max runs
-	// out between two readings with the other Max on its last point, or, in
-	// 149 of these seconds, holding the few points it was handed off with.
-	"two Max/burst": 1177,
+	// The burst gap: a pair read across a pause understates the burst.
+	"today/burst":                 29,
+	"big Ultras/burst":            29,
+	"two Max, three Ultras/burst": 142,
+	"two Max/burst":               958,
+	// The step gap: the live account reads up to a step behind what it has
+	// spent, a pair measures the work to a step, and the room left elsewhere is
+	// mostly under a step a reading can show.
+	"two Max/heavy":                    1641,
+	"two Max/production":               136,
+	"two Max, three Ultras/heavy":      239,
+	"two Max, three Ultras/production": 346,
+	"two Max, three Ultras/pause":      5,
+	"two Ultras/production":            37,
 }

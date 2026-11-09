@@ -735,10 +735,11 @@ func HeadroomOrCredit(s *usage.Snapshot, t Thresholds) Headroom {
 	return creditHeadroomOf(e, t)
 }
 
-// handoffRoomPct is how much of a window counts as its last point. It is one
-// because the endpoint reports whole percents: 99 is the last reading anyone gets
-// before the one that says the account has stopped.
-const handoffRoomPct = 1.0
+// handoffRoomPct is how much of a window counts as its last point: one reading
+// step (usage.ReadingQuantum), because the endpoint reports whole percents and 99
+// is the last reading anyone gets before the one that says the account has
+// stopped.
+const handoffRoomPct = usage.ReadingQuantum
 
 // lastPoint is whether a window that will stop this account's session -- one no
 // model choice can dodge -- is down to the last point the endpoint can report.
