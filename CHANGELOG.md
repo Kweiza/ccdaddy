@@ -1,5 +1,4 @@
 # Changelog
-  | two Max | pause | 1127 | 250 |
 
 Notable changes, in the format of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 following [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -149,12 +148,18 @@ quota, which can now expire unspent.
     accounts -- onto the other's last points on that pair's word, or onto an
     account holding a cooldown's worth more than the live one has left and
     less than a carrier's, up to about 43 to 59 points at that rate. No session
-    is cut and no credit is bought; each move writes the credential, polls the
-    account and updates Claude Code's settings, and a session resuming just
-    after one waits out the cooldown for the next.
-  - Credits are bought on readings alone. With credits opted in and every
-    account dry, a live account that runs out between two readings stops the
-    session until the reading that shows it empty, up to three minutes later.
+    is cut, no credit is bought, and a primary seat's balance is moved onto
+    only from an account that reads at its last point; each move writes the
+    credential, polls the account and updates Claude Code's settings, and a
+    session resuming just after one waits out the cooldown for the next.
+  - Money is decided on readings alone, in both directions. With credits opted
+    in and every account dry, a live account that runs out between two readings
+    stops the session until the reading that shows it empty: three minutes at
+    the live cadence, and longer while the usage endpoint throttles the poll,
+    360 to 1800 seconds after a 429. And a session moves onto a primary credit
+    seat only when the free account it is on reads at its last point or empty,
+    so work that outruns the readings can stop it at that account's limit
+    until a reading shows it there.
 
   The figures above belong to the simulated fleets and loads; they are not a
   bound on what a real week can cost.
@@ -204,10 +209,13 @@ quota, which can now expire unspent.
   exhausted, which could move a session onto credits while another account's
   last points were still unspent -- or, under a projection, while the live
   account's own were. From a live credit seat, or a primary one, the session
-  goes back to free quota on its levels: to an account that can carry the work
-  if there is one, and otherwise to any that is not empty and not on its last
-  point, one held out at a limit included. `--force` there cannot take it onto
-  one at a limit.
+  goes back to cheaper quota on its levels, free quota first: to an account
+  that can carry the work if there is one, and otherwise to any that is not
+  empty and not on its last point, one held out at a limit included. The way
+  up is read on levels too -- a session moves onto a primary seat's balance
+  only when the account it is on reads at its last point or empty -- so the
+  two cannot trade the login. `--force` there cannot take it onto one at a
+  limit, and the credit walk never picks the seat the session is already on.
 - **Under hover, a cap on one model family is left out of everything that
   decides a limit.** A Fable or Opus week past 99% used to become the
   account's binding window, so the daemon measured the session's rate on a
@@ -284,7 +292,9 @@ quota, which can now expire unspent.
   organization the way every other look is -- a rate-limit floor shorter than
   that share included, and the polls the daemon starts in the same tick as the
   switch -- so rotating among them stays inside the organization's polling
-  allowance.
+  allowance, save for the poll policy's one accepted exemption: a live account
+  in the danger band keeps its undivided cadence after its first reading, the
+  first reading of a poll in flight across a switch included.
 - Mode `hover`, and five reasons: "the live account is down to its last point
   before a limit", "a short-window account has room again", "another
   weekly-only account's week resets sooner", "staying on the short-window
