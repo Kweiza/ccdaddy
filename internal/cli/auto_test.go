@@ -587,7 +587,7 @@ func TestTheAutoStreamCarriesHoversOrder(t *testing.T) {
 		Reason:    strategy.ReasonProjectedExhaustion,
 		Hover:     &hover,
 		Departure: strategy.Departure{From: "uuid-live", Closing: "five_hour"},
-		Result: strategy.Result{Order: []strategy.Ranked{
+		Result: strategy.Result{Mode: strategy.ModeHover, Order: []strategy.Ranked{
 			{UUID: "uuid-ultra", Headroom: strategy.Headroom{Known: true, MinAnyModelPct: 60, MinAnyModelWindow: "seven_day"}},
 			{UUID: "uuid-held", ShortWindow: "five_hour", HeldOut: "five_hour",
 				Headroom: strategy.Headroom{Known: true, MinAnyModelPct: 15, MinAnyModelWindow: "five_hour"}},
@@ -624,11 +624,18 @@ func TestTheAutoStreamCarriesHoversOrder(t *testing.T) {
 		}
 	}
 
-	// The rung is hover's outer key, and beside an order some other strategy
-	// made it would explain an order that was not made.
-	plan.Hover = nil
-	order, _ = evaluatedEvent(t, plan)["order"].([]any)
-	if row, _ := order[0].(map[string]any); row["rung"] != nil {
-		t.Errorf("rung = %v on an order hover did not make", row["rung"])
+	// The rung is hover's outer key, and beside an order some other mode made it
+	// would explain an order that was not made -- recovery included, which
+	// hover runs in when every account is past its last point.
+	for _, mode := range []strategy.Mode{strategy.ModeRecovery, strategy.ModeHeadroom} {
+		plan.Result.Mode = mode
+		ev := evaluatedEvent(t, plan)
+		order, _ = ev["order"].([]any)
+		if row, _ := order[0].(map[string]any); row["rung"] != nil {
+			t.Errorf("rung = %v on an order %s made", row["rung"], mode)
+		}
+		if ev["mode"] != mode.String() {
+			t.Errorf("mode = %v, want %v", ev["mode"], mode)
+		}
 	}
 }

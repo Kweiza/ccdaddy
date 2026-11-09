@@ -511,9 +511,9 @@ func (e *autoEmitter) emit(payload map[string]any) {
 // with the figures it ranked on — so a consumer can explain the choice rather
 // than only observe it.
 //
-// It takes the plan rather than the order because whether hover ran is part of
+// It takes the plan rather than the order because which order ran is part of
 // what the order means: the rung is hover's outer key, and printed beside an
-// order some other strategy made it would explain an order that was not made.
+// order some other mode made it would explain an order that was not made.
 func rankingJSON(plan strategy.Plan) []map[string]any {
 	out := make([]map[string]any, 0, len(plan.Result.Order))
 	for _, r := range plan.Result.Order {
@@ -529,9 +529,12 @@ func rankingJSON(plan strategy.Plan) []map[string]any {
 		}
 		// Under hover the order IS the decision, and the rung is its outer
 		// key: a consumer that has the reset and the room still cannot tell a
-		// held-out account from one with room without it. lastPoint and heldOut
-		// are hover's alone and set nowhere else, so they need no guard.
-		if plan.Hover != nil {
+		// held-out account from one with room without it. Only while hover's
+		// order is the one in force -- in recovery mode the event's `mode` says
+		// recovery and the order is soonest-back, which the rung did not make.
+		// lastPoint and heldOut are hover's alone and set nowhere else, so they
+		// need no guard.
+		if plan.Result.Mode == strategy.ModeHover {
 			row["rung"] = r.Rung().String()
 		}
 		if r.LastPoint {

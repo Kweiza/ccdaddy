@@ -58,6 +58,29 @@ func TestHoverLinesSayWhereTheOrderPutEachAccountAndWhy(t *testing.T) {
 	}
 }
 
+// In recovery mode the order in force is soonest-back, not hover's rungs, and the
+// lines have to say so: a rung printed beside an order the rungs did not make
+// explains a decision nobody took.
+func TestHoverLinesSayRecoveryWhenTheOrderIsRecovery(t *testing.T) {
+	s := Snapshot{
+		Now: colNow, Hover: true, HasMode: true, Mode: strategy.ModeRecovery,
+		Rows: []Row{hoverRow("u-a", "a@example.com", true), hoverRow("u-b", "b@example.com", false)},
+		HoverOrder: []strategy.Ranked{
+			{UUID: "u-b", ShortWindow: usage.WindowFiveHour, HasRecovery: true, RecoversAt: colNow.Add(2 * time.Hour)},
+			{UUID: "u-a", ShortWindow: usage.WindowFiveHour},
+		},
+	}
+	want := []string{
+		HoverNote,
+		HoverRecoveryNote,
+		"hover:    1. b@example.com  back at Fri 14:00",
+		"hover:    2. a@example.com  names no rollover · live",
+	}
+	if got := s.HoverLines(); !eq(got, want) {
+		t.Errorf("HoverLines =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
 // Off hover there is nothing to say: the order is not hover's, and the rule the
 // first line states is not the one moving the session.
 func TestHoverLinesAreEmptyWithHoverOff(t *testing.T) {

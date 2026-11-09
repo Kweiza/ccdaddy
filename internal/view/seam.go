@@ -84,6 +84,11 @@ type Snapshot struct {
 // until the line beside it says it was left at its limit and is held out until
 // its window rolls, and an Ultra seat holding half its week is explained only
 // by whose week ends first.
+//
+// In recovery mode the order is not hover's: every account is past its last
+// point, and the pass ranks on which comes back first. The lines then say so and
+// describe each account by its rollover, because a rung printed beside an order
+// the rungs did not make would explain a decision nobody took.
 func (s Snapshot) HoverLines() []string {
 	if !s.Hover {
 		return nil
@@ -93,13 +98,18 @@ func (s Snapshot) HoverLines() []string {
 		rows[r.Account.UUID] = r
 	}
 	out := []string{HoverNote}
+	describe := s.placeOf
+	if s.HasMode && s.Mode == strategy.ModeRecovery {
+		out = append(out, HoverRecoveryNote)
+		describe = s.comesBack
+	}
 	for i, ranked := range s.HoverOrder {
 		row, ok := rows[ranked.UUID]
 		who := ranked.UUID
 		if ok {
 			who = row.ListLabel()
 		}
-		line := fmt.Sprintf("hover:    %d. %s  %s", i+1, who, s.placeOf(ranked, row))
+		line := fmt.Sprintf("hover:    %d. %s  %s", i+1, who, describe(ranked, row))
 		if row.Active {
 			line += " · live"
 		}
@@ -129,6 +139,19 @@ func (s Snapshot) placeOf(r strategy.Ranked, row Row) string {
 		return fmt.Sprintf("nothing left on %s", r.AtLimit())
 	}
 	return "unreadable"
+}
+
+// HoverRecoveryNote is the line that says the order below it is the recovery
+// order rather than hover's.
+const HoverRecoveryNote = "hover:    recovery: every account is past its last point, so the soonest back comes first"
+
+// comesBack describes one account in the recovery order by the one fact that
+// order ranks on.
+func (s Snapshot) comesBack(r strategy.Ranked, _ Row) string {
+	if !r.HasRecovery {
+		return "names no rollover"
+	}
+	return "back at " + s.clock(r.RecoversAt)
 }
 
 // clock renders an instant in the reader's own zone, to the minute, with the
