@@ -162,6 +162,19 @@ func TestWarmUpWouldSpendCreditsRefusesOnlyWhereQuotaIsActuallyGone(t *testing.T
 		})
 	}
 
+	t.Run("a blown model cap on hover's table", func(t *testing.T) {
+		// Hover's table does not BIND on a cap one model family can dodge, and
+		// that is a statement about limits, not about money: a warm-up turn runs
+		// on whatever model claude defaults to, and a blown cap on that model
+		// bills the turn. The gate asks every admitted window.
+		s := snap(noReset(0), win(40, 3*24*time.Hour))
+		s.Limits = []usage.Limit{scoped("Fable", "", 100, 3*24*time.Hour)}
+		s.ExtraUsage = overage(usage.ExtraUsageEnabled)
+		if !WarmUpWouldSpendCredits(s, "", hoverTable(nil)) {
+			t.Error("a turn on the blown Fable cap could be billed to credits and was not refused")
+		}
+	})
+
 	t.Run("no reading is not a spent one", func(t *testing.T) {
 		if WarmUpWouldSpendCredits(nil, "", full) {
 			t.Error("an account nothing has read was refused as though it were spent")
