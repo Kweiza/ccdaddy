@@ -635,11 +635,14 @@ func creditHeadroomOf(e usage.ExtraUsage, t Thresholds) Headroom {
 	}
 }
 
-func measure(c Candidate, o Options) Ranked {
+// rankedOn is the axis an account is ranked on, h, and its plan windows,
+// plan: the same reading for every account but a primary credit seat. It is
+// the ONE place that chooses the axis, for measure and MainPoolExhausted.
+func rankedOn(c Candidate, o Options) (h, plan Headroom) {
 	// thresholdsFor rather than Thresholds: under hover the table is hover's
-	// own, and it is the same call below so the two window sets this function
+	// own, and it is the same call measure makes so the two window sets it
 	// reads cannot be built from different tables.
-	h := HeadroomFor(c.Usage, o.Model, o.thresholdsFor(c))
+	h = HeadroomFor(c.Usage, o.Model, o.thresholdsFor(c))
 	// A primary seat is metered in credits rather than in plan windows, so it is
 	// ranked on the credit allowance instead. This REPLACES the plan headroom
 	// above rather than being compared with it, and that is a real choice with a
@@ -668,10 +671,15 @@ func measure(c Candidate, o Options) Ranked {
 	// seat whose opted-in cap is down to its last point is at a limit in hover's
 	// order and the pre-emptive walk turns it away -- without moving Spent.
 	// TestPreemptionWillNotRunToASeatWhoseOptedInCapRunsOutFirst.
-	plan := h
+	plan = h
 	if primaryCredit(c) {
 		h = creditHeadroom(c, o)
 	}
+	return h, plan
+}
+
+func measure(c Candidate, o Options) Ranked {
+	h, plan := rankedOn(c, o)
 	// Recovery is the moment the account stops being spent, and that is not
 	// always the binding window's rollover. A blown WEEKLY window still holds the
 	// account back after the five-hour window has come back, so when there is one
@@ -998,13 +1006,15 @@ func MainPoolExhausted(cands []Candidate, o Options) bool {
 		return true
 	}
 	for _, c := range main {
-		// measure is the ONE place that chooses which axis a candidate is
+		// rankedOn is the ONE place that chooses which axis a candidate is
 		// ranked on -- plan windows, or the credit allowance for a primary
-		// seat -- so this asks it rather than choosing again here. "Is this
-		// account spent" already has more than one implementation in this
-		// tree; a second copy of "on which axis" would be the next one, and it
-		// would be the copy that silently drops the --model narrowing.
-		spent, known := Spent(measure(c, o).Headroom)
+		// seat -- and measure asks it too, so this asks it rather than
+		// choosing again here. "Is this account spent" already has more than
+		// one implementation in this tree; a second copy of "on which axis"
+		// would be the next one, and it would be the copy that silently drops
+		// the --model narrowing.
+		h, _ := rankedOn(c, o)
+		spent, known := Spent(h)
 		if !known || !spent {
 			return false
 		}

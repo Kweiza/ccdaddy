@@ -152,12 +152,12 @@ type workRates map[time.Duration]workRate
 func (o Options) workRatesOf(cands []Candidate, switchedAt time.Time, switchedTo string) workRates {
 	out := workRates{}
 	for _, c := range cands {
-		limits := map[usage.WindowName]bool{}
-		for _, w := range bindingWindows(c.Usage, o.Model, o.thresholdsFor(c)) {
-			limits[w.Name] = true
+		if len(c.LiveBurns) == 0 {
+			continue
 		}
+		limits := bindingWindows(c.Usage, o.Model, o.thresholdsFor(c))
 		for _, b := range c.LiveBurns {
-			if !b.Measured() || !limits[b.Window] {
+			if !b.Measured() || !hasWindow(limits, b.Window) {
 				continue
 			}
 			if isActive(c.UUID, switchedTo) && b.From.Before(switchedAt) && b.At.After(switchedAt) {
@@ -644,16 +644,24 @@ func (p *Plan) reachable(live Ranked) Result {
 }
 
 // orderWhere is res with its order narrowed to the accounts keep admits, in
-// the order's own order.
+// the order's own order. An order keep admits whole is res itself, which is
+// what a pass with no seat dearer than the live one asks for on every look; a
+// narrowed one is a copy, and neither is written to.
 func (p *Plan) orderWhere(res Result, keep func(Ranked) bool) Result {
-	narrowed := res
-	narrowed.Order = nil
-	for _, r := range res.Order {
+	for i, r := range res.Order {
 		if keep(r) {
-			narrowed.Order = append(narrowed.Order, r)
+			continue
 		}
+		narrowed := res
+		narrowed.Order = append([]Ranked(nil), res.Order[:i]...)
+		for _, r := range res.Order[i+1:] {
+			if keep(r) {
+				narrowed.Order = append(narrowed.Order, r)
+			}
+		}
+		return narrowed
 	}
-	return narrowed
+	return res
 }
 
 // nextReading is when c is next read: its schedule, held to the serve floor
