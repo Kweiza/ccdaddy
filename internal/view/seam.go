@@ -2,6 +2,7 @@ package view
 
 import (
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/daemon"
@@ -111,6 +112,9 @@ func (s Snapshot) HoverLines() []string {
 			who = row.ListLabel()
 		}
 		line := fmt.Sprintf("hover:    %d. %s  %s", i+1, who, describe(ranked, row))
+		if note := s.carryNote(ranked, row); note != "" {
+			line += " · " + note
+		}
 		if row.Active {
 			line += " · live"
 		}
@@ -140,6 +144,20 @@ func (s Snapshot) placeOf(r strategy.Ranked, row Row) string {
 		return fmt.Sprintf("nothing left on %s", r.AtLimit())
 	}
 	return "unreadable"
+}
+
+// carryNote is what an account the session is not on cannot do, when its levels
+// say it has room and the work running now would still run it out before its
+// first live reading: the hand-off passes it over, and a line that printed only
+// its rung would leave that unexplained. It never says "at its limit" -- a rung
+// reads levels alone -- and it is silent for the live account, whose own limit
+// is its rung.
+func (s Snapshot) carryNote(r strategy.Ranked, row Row) string {
+	if row.Active || r.Carries || !r.HasRunway || r.RunsOutAt.IsZero() || r.AtLimit() != "" {
+		return ""
+	}
+	minutes := int(math.Ceil(r.RunsOutAt.Sub(s.Now).Minutes()))
+	return fmt.Sprintf("cannot carry the work running now (runs out in %d min)", minutes)
 }
 
 // HoverRecoveryNote is the line that says the order below it is the recovery

@@ -588,8 +588,8 @@ func TestTheAutoStreamCarriesHoversOrder(t *testing.T) {
 		Hover:     &hover,
 		Departure: strategy.Departure{From: "uuid-live", Closing: "five_hour"},
 		Result: strategy.Result{Mode: strategy.ModeHover, Order: []strategy.Ranked{
-			{UUID: "uuid-ultra", Headroom: strategy.Headroom{Known: true, MinAnyModelPct: 60, MinAnyModelWindow: "seven_day"}},
-			{UUID: "uuid-held", ShortWindow: "five_hour", HeldOut: "five_hour",
+			{UUID: "uuid-ultra", Carries: true, Headroom: strategy.Headroom{Known: true, MinAnyModelPct: 60, MinAnyModelWindow: "seven_day"}},
+			{UUID: "uuid-held", ShortWindow: "five_hour", HeldOut: "five_hour", HasRunway: true, RunsOutAt: time.Now().Add(9 * time.Minute),
 				Headroom: strategy.Headroom{Known: true, MinAnyModelPct: 15, MinAnyModelWindow: "five_hour"}},
 			{UUID: "uuid-live", ShortWindow: "five_hour", Closing: "five_hour",
 				Headroom: strategy.Headroom{Known: true, MinAnyModelPct: 9, MinAnyModelWindow: "five_hour"}},
@@ -607,8 +607,8 @@ func TestTheAutoStreamCarriesHoversOrder(t *testing.T) {
 		t.Fatalf("order = %v, want three rows", ev["order"])
 	}
 	for i, want := range []map[string]any{
-		{"rung": "weekly-only"},
-		{"rung": "held-out", "shortWindow": "five_hour", "heldOut": "five_hour"},
+		{"rung": "weekly-only", "carries": true},
+		{"rung": "held-out", "shortWindow": "five_hour", "heldOut": "five_hour", "carries": false},
 		{"rung": "at-limit", "shortWindow": "five_hour", "closing": "five_hour"},
 	} {
 		row, _ := order[i].(map[string]any)
@@ -616,6 +616,9 @@ func TestTheAutoStreamCarriesHoversOrder(t *testing.T) {
 			if row[k] != v {
 				t.Errorf("order[%d][%q] = %v, want %v (row %v)", i, k, row[k], v, row)
 			}
+		}
+		if _, has := row["runsOutAt"]; has != (i == 1) {
+			t.Errorf("order[%d] runsOutAt present %v; only the held-out row has a runway", i, has)
 		}
 		for _, gone := range []string{"hoverShare", "strandedPct", "strandedWindow"} {
 			if _, ok := row[gone]; ok {

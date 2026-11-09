@@ -537,6 +537,15 @@ func rankingJSON(plan strategy.Plan) []map[string]any {
 		if plan.Result.Mode == strategy.ModeHover {
 			row["rung"] = r.Rung().String()
 		}
+		// Whether the hand-off would take the account, and when the work running
+		// now would stop it there: hover's verdict beside its order, which reads
+		// levels only, so a consumer can tell "passed over" from "at a limit".
+		if plan.Hover != nil {
+			row["carries"] = r.Carries
+			if r.HasRunway && !r.RunsOutAt.IsZero() {
+				row["runsOutAt"] = r.RunsOutAt.In(readerZone()).Format(time.RFC3339)
+			}
+		}
 		if r.LastPoint != "" {
 			row["lastPoint"] = true
 		}
