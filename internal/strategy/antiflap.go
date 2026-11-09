@@ -564,6 +564,12 @@ func Decide(cands []Candidate, o Options, cfg Config, st *State, activeUUID stri
 func (p *Plan) creditWalk(byUUID map[string]Candidate, activeUUID string, cfg Config, st *State, now time.Time) {
 	var firstRefusal Decision
 	for _, r := range p.Result.Credit {
+		if isActive(r.UUID, activeUUID) {
+			// The seat the session is on is not somewhere to move to: a
+			// live seat at its own limit walks to the next one.
+			// TestTheCreditWalkSkipsTheLiveSeat.
+			continue
+		}
 		c := byUUID[r.UUID]
 		d := CreditGate(extraUsageOf(c), cfg.MaxAutoSpend, true)
 		if !d.Allow {
@@ -582,6 +588,11 @@ func (p *Plan) creditWalk(byUUID map[string]Candidate, activeUUID string, cfg Co
 		// against it would be arithmetic on a number that does not exist.
 		// What makes this move safe is the credit gate, which has already run.
 		p.moveOrHold(r, ReasonBetterTarget, activeUUID, cfg, st, now)
+		return
+	}
+	if !p.CreditConsulted && p.isCredit(activeUUID) {
+		// No seat but the live one: the session is on the only one there is.
+		p.hold(ReasonAlreadyBest, time.Time{})
 		return
 	}
 	p.Action = ActionBlocked
