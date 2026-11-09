@@ -33,10 +33,11 @@ func newStrategyCmd() *cobra.Command {
 		Use:       "strategy hover|manual|headroom|consume-first",
 		Short:     "Choose how ccdad switches accounts",
 		ValidArgs: selectableStrategies,
-		Long: "Choose exactly one switching policy. hover derives thresholds from each\n" +
-			"window's pace; manual keeps every reading current but never switches;\n" +
-			"headroom prefers the account with the most room; consume-first spends\n" +
-			"perishable weekly quota before it expires.\n\n" +
+		Long: "Choose exactly one switching policy. hover uses accounts with a five-hour\n" +
+			"window first, then the weekly-only account whose week resets soonest, and\n" +
+			"hands an account off just before any limit; manual keeps every reading\n" +
+			"current but never switches; headroom prefers the account with the most\n" +
+			"room; consume-first spends perishable weekly quota before it expires.\n\n" +
 			"The selected policy is shown by `ccdad status` and in the dashboard.",
 		Args:          usageArgs(cobra.ExactArgs(1)),
 		SilenceUsage:  true,

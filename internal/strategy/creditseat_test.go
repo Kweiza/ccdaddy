@@ -79,7 +79,7 @@ func TestHoverDerivesATableForAPrimaryCreditSeatToo(t *testing.T) {
 	}
 
 	// The credit row is still there, still on its own fixed figure, and still
-	// first -- a seat's own meter is not a plan window and is not paced.
+	// first -- a seat's own meter is not a plan window.
 	if len(p.Windows) == 0 || !p.Windows[0].Credit || p.Windows[0].Threshold != HoverCreditThreshold {
 		t.Errorf("first row = %+v, want the credit row at %v", p.Windows, HoverCreditThreshold)
 	}
@@ -87,6 +87,12 @@ func TestHoverDerivesATableForAPrimaryCreditSeatToo(t *testing.T) {
 
 // Pre-emption may not run to a seat whose own opted-in cap runs out inside the
 // horizon it just used to condemn the account it is leaving.
+//
+// Under hover the order refuses it before the walk does: the cap is the window
+// the seat is CLOSING on, so the seat sits on the limit rung. That premise is
+// asserted rather than assumed, because it is the opt-in reaching the
+// projection -- a hover table that dropped the consent would leave the seat
+// roomy on its own meter, with nothing at a limit for the order to see.
 //
 // The third account is in the fixture on purpose: without it the assertion would
 // be that pre-emption does not fire, which a dozen unrelated changes could
@@ -99,64 +105,41 @@ func TestPreemptionWillNotRunToASeatWhoseOptedInCapRunsOutFirst(t *testing.T) {
 	// with an hour to run on a seven-day length.
 	seat := seatWithCap("b-seat", 10, 99.9, time.Hour)
 	seat.FetchedAt, seat.NextPollAt = now.Add(-time.Minute), now.Add(time.Minute)
-	// 20 and not a fresh account, because the walk stops at the first candidate
-	// it accepts. At a three-account share the seat's own meter reports 85 and
-	// this reports 73.3, so the SEAT is reached first and the assertion is about
-	// the rule rejecting it rather than about the order never offering it.
 	healthy := polled(burning("c-healthy", 20), 1800*time.Second)
 	pool := []Candidate{live, seat, healthy}
 
-	// The premise, asserted rather than assumed: the seat must outrank the
-	// healthy account, or this test passes for the wrong reason.
-	if got := order(Rank(pool, seatOpts())); got[0] != "b-seat" {
-		t.Fatalf("order = %v, want the seat first -- otherwise the walk never offers it", got)
+	r, ok := find(Rank(pool, seatOpts()), "b-seat")
+	if !ok || r.Closing != seatCap {
+		t.Fatalf("the seat is closing on %q, want %q: the opted-in cap is what the projection has to see", r.Closing, seatCap)
 	}
 
 	p := Decide(pool, seatOpts(), Config{}, NewState(), "a-live")
-
-	if p.Action != ActionSwitch {
-		t.Fatalf("Action = %v (%s), want a switch off an account about to hit its limit", p.Action, p.Reason)
-	}
-	if p.Target.UUID != "c-healthy" {
-		t.Errorf("pre-empted onto %s, whose own opted-in cap dies inside the horizon; want c-healthy", p.Target.UUID)
-	}
+	want(t, p, ActionSwitch, ReasonProjectedExhaustion, "c-healthy")
 }
 
 // The fix may not close the defect by revoking the user's consent.
 //
-// This is the test that forbids the OTHER fix -- making preempt read the derived
-// table without first giving the seat a derived table worth reading. That change
-// alone silently drops the opt-in for a live seat, so the cap the user asked to
-// be watched stops being projected and the engine sits still while the seat runs
+// This is the test that forbids the OTHER fix -- making preempt read the hover
+// table without first giving the seat a table worth reading. That change alone
+// silently drops the opt-in for a live seat, so the cap the user asked to be
+// watched stops being projected and the engine sits on the seat while it runs
 // out.
 //
-// The two accounts are two points apart, inside HoverHysteresisPct, so nothing
-// but pre-emption can move this engine. The control on the same pool with no
-// opt-in asserts a stay, which is what proves the switch is the opt-in's doing
-// rather than the ranking's.
+// The control is the same pool with no opt-in. Hover's order still moves the
+// session -- the five-hour account has room and the seat is weekly-only -- but
+// as a return, not as a pre-emption, and the reason is what tells the two
+// apart: the projection is the opt-in's doing.
 func TestAnOptedInCapStillPreemptsFromAPrimaryCreditSeat(t *testing.T) {
 	seat := seatWithCap("a-seat", 10, 99.9, time.Hour)
 	seat.FetchedAt, seat.NextPollAt = now.Add(-time.Minute), now.Add(time.Minute)
-	// 23 rather than a fresh account, and the figure is arithmetic rather than
-	// taste. burning() is 60% through its five-hour window, so at a two-account
-	// share its threshold is 110 and its slack is 87 -- exactly TWO points above
-	// the 85 the seat's own meter reports. Two is inside HoverHysteresisPct, so
-	// the ordinary better-target rule refuses the move, and it is above zero, so
-	// the candidate sorts ahead of the live account and pre-emption's walk can
-	// reach it. Nothing but pre-emption can move this engine.
 	room := polled(burning("b-room", 23), 1800*time.Second)
 	pool := []Candidate{seat, room}
 
-	if p := Decide(pool, seatOpts(), Config{}, NewState(), "a-seat"); p.Action != ActionSwitch {
-		t.Errorf("Action = %v (%s), want a switch off a seat whose opted-in cap is about to run out", p.Action, p.Reason)
-	}
+	want(t, Decide(pool, seatOpts(), Config{}, NewState(), "a-seat"), ActionSwitch, ReasonProjectedExhaustion, "b-room")
 
-	// The control: the same pool with the opt-in withdrawn. The cap is then
-	// quota ccdad cannot name, it binds on nothing, and there is nothing to
-	// project.
 	off := opts()
 	off.Hover = true
-	if p := Decide(pool, off, Config{}, NewState(), "a-seat"); p.Action == ActionSwitch {
-		t.Errorf("switched to %s with no opt-in; the move above must be the consent's doing", p.Target.UUID)
+	if p := Decide(pool, off, Config{}, NewState(), "a-seat"); p.Reason == ReasonProjectedExhaustion {
+		t.Errorf("pre-empted to %s with no opt-in; there is nothing to project without the consent", p.Target.UUID)
 	}
 }

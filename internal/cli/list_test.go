@@ -781,13 +781,13 @@ func TestListReportsBothPerAccountFlagsAtOnce(t *testing.T) {
 	}
 }
 
-// Status measures usage against thresholds hover derived. A reader who set
-// threshold = 80 and sees a row held to 93 needs the applied threshold beside
-// the reading to distinguish that policy from a defect.
+// Under hover the session is moved by an order and not by the threshold a
+// reader set, so a reader who set threshold = 80 and sees an account at 85 left
+// alone needs the rule beside the table to tell that policy from a defect.
 //
-// The note is on stderr, so a piped listing is unchanged, and it is human-only:
-// --json already carries the real per-row windowThreshold, which is a better
-// answer than a sentence about a column that document does not have.
+// The note is human-only: --json already carries the real per-row
+// windowThreshold and the rung, which is a better answer than a sentence about
+// a table that document does not have.
 func TestListSaysWhenItsNumbersCameFromHover(t *testing.T) {
 	isolate(t)
 	freezeClock(t, listNow)
@@ -811,13 +811,12 @@ func TestListSaysWhenItsNumbersCameFromHover(t *testing.T) {
 		t.Fatalf("exit %d, want 0\n%s", code, stdout)
 	}
 	if !strings.Contains(stdout, note) {
-		t.Errorf("status does not say its cells use hover thresholds:\n%s", stdout)
+		t.Errorf("status does not say hover is choosing the account:\n%s", stdout)
 	}
-	// It names what hover actually moved. There is no single derived column
-	// left for it to name -- every window has a cell -- so what hover changes
-	// here is the thresholds the cells are coloured against.
-	if !strings.Contains(stdout, "threshold") {
-		t.Errorf("status credits hover without saying what it moved:\n%s", stdout)
+	// It names what hover actually decides: which kind of account comes first,
+	// and when one is handed off.
+	if !strings.Contains(stdout, "five-hour accounts first") || !strings.Contains(stdout, "handed off") {
+		t.Errorf("status credits hover without saying what it decided:\n%s", stdout)
 	}
 
 	if _, jsonOut, jsonErr, _ := runRoot(t, "status", "--json"); jsonErr != "" || !strings.Contains(jsonOut, `"hover": true`) {
@@ -826,14 +825,13 @@ func TestListSaysWhenItsNumbersCameFromHover(t *testing.T) {
 }
 
 // The note has to describe the cells truthfully. A cell is one window's raw
-// utilization and no threshold enters it; what hover derives is the number the
-// cell is COLOURED against.
+// utilization and no threshold enters it.
 //
 // The test above pins that the note exists. Neither of them constrains what it
 // claims, which is how a note saying the number was "measured against the
-// thresholds hover derived" stood while the same command printed a raw figure:
-// a reader doing the subtraction the sentence invited gets margin that is not
-// there.
+// thresholds hover derived" once stood while the same command printed a raw
+// figure: a reader doing the subtraction the sentence invited gets margin that
+// is not there.
 func TestTheHoverNoteDoesNotClaimACellIsMeasuredAgainstAThreshold(t *testing.T) {
 	isolate(t)
 	freezeClock(t, listNow)
@@ -864,11 +862,10 @@ func TestTheHoverNoteDoesNotClaimACellIsMeasuredAgainstAThreshold(t *testing.T) 
 			t.Errorf("the note still claims a cell is threshold-relative (%q):\n%s", wrong, stdout)
 		}
 	}
-	// It must still say what hover DID move, or it explains nothing. With a
-	// cell per window there is no chosen window left to name; what hover
-	// derives is the threshold each cell is judged against.
-	if !strings.Contains(stdout, "derived per account and window") {
-		t.Errorf("the note does not say what hover derives:\n%s", stdout)
+	// It must still say what hover DID decide, or it explains nothing: the
+	// order, which no cell shows.
+	if !strings.Contains(stdout, "five-hour accounts first, then the soonest weekly reset") {
+		t.Errorf("the note does not say what hover decides:\n%s", stdout)
 	}
 }
 
@@ -898,7 +895,7 @@ func TestTheHoverNoteIsNotPrintedAboveAnEmptyListing(t *testing.T) {
 		t.Fatalf("the disabled account is not visible:\n%s", stdout)
 	}
 	if !strings.Contains(stdout, note) {
-		t.Errorf("a rendered quota table does not explain its hover thresholds:\n%s", stdout)
+		t.Errorf("a rendered quota table does not carry the hover block:\n%s", stdout)
 	}
 }
 

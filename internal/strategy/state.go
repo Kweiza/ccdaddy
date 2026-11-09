@@ -18,9 +18,9 @@ import (
 
 // The engine's anti-flap state, on disk.
 //
-// The cooldown and the quarantine are not derivable from anything else, and
-// they are the two anti-flap mechanisms whose whole job is to remember
-// something across time. A daemon that auto-restarts from any CLI command
+// The cooldown, the quarantine and hover's departure marks are not derivable
+// from anything else, and they are the anti-flap mechanisms whose whole job is
+// to remember something across time. A daemon that auto-restarts from any CLI command
 // would reset an in-memory cooldown on every restart and become the exact
 // switch storm the cooldown exists to prevent, so this lives in a file rather
 // than in a process.
@@ -111,6 +111,14 @@ type stateFile struct {
 	// store.sortAndReindex recompacts idx on every removal, so a file keyed on
 	// it would quarantine a different account after any `ccdad remove`.
 	Quarantine map[string]Quarantine `json:"quarantine,omitempty"`
+	// Departures is every account the engine left at a limit, keyed by uuid
+	// for the reason Quarantine is; departure.go says what a mark holds and
+	// why it has to be remembered at all. It lives beside the cooldown for the
+	// cooldown's own reason: a daemon that restarted would otherwise forget it
+	// and take the session straight back. Absent in a document written before
+	// this build, which reads as no account held out -- the direction every
+	// unreadable state here degrades in, towards more switching.
+	Departures departures `json:"departures,omitempty"`
 }
 
 // State is the parsed anti-flap state.
@@ -136,12 +144,45 @@ func (s *State) LastSwitch() (time.Time, string) {
 	return s.data.LastSwitchAt, s.data.LastSwitchTo
 }
 
-// RecordSwitch stamps a completed switch. The caller records it AFTER the
-// credential swap succeeded: a cooldown earned by a switch that failed would
-// hold the engine off the retry.
-func (s *State) RecordSwitch(uuid string, at time.Time) {
+// RecordSwitch stamps a completed switch to the account to, and remembers the
+// account left when a limit was what it was left at. The caller records it
+// AFTER the credential swap succeeded: a cooldown earned by a switch that
+// failed would hold the engine off the retry, and a mark left by a move that
+// never happened would hold an account out for a departure it never made.
+//
+// A departure that names no closing window writes nothing, and it does not
+// clear an older mark either. The mark answers one question -- has the window
+// that had this account at a limit rolled since? -- and leaving the account
+// for some other reason does not answer it.
+func (s *State) RecordSwitch(to string, at time.Time, left Departure) {
 	s.data.LastSwitchAt = at
-	s.data.LastSwitchTo = uuid
+	s.data.LastSwitchTo = to
+	if left.From == "" || left.Closing == "" {
+		return
+	}
+	if s.data.Departures == nil {
+		s.data.Departures = departures{}
+	}
+	s.data.Departures[left.From] = departureMark{Closing: left.Closing, At: at}
+}
+
+// departuresFor is every remembered departure except the live account's own.
+//
+// A mark holds an account out of being TAKEN BACK, and the live account is not
+// being taken anywhere. Left in, it would file the account the session is
+// running on below every account with room, and the order would then move the
+// session off a five-hour account that has not reached a limit -- the one move
+// the order exists to refuse. The live account carries a mark only when the
+// engine came back to it because nothing else could serve, or when something
+// other than the engine moved the login; neither is a reason to leave it.
+func (s *State) departuresFor(live string) departures {
+	out := make(departures, len(s.data.Departures))
+	for uuid, m := range s.data.Departures {
+		if uuid != live {
+			out[uuid] = m
+		}
+	}
+	return out
 }
 
 // CodexLastSwitch is when the Codex lane last repointed the serving account and
@@ -178,6 +219,10 @@ func (s *State) ForProvider(p provider.ID) *State {
 	out := &State{data: s.data, loadErr: s.loadErr}
 	out.data.LastSwitchAt = s.data.CodexLastSwitchAt
 	out.data.LastSwitchTo = s.data.CodexLastSwitchTo
+	// The departures are the Claude lane's: every mark names a Claude account
+	// left on a Claude window, and the Codex lane runs no hover order to read
+	// them with.
+	out.data.Departures = nil
 	return out
 }
 
@@ -246,13 +291,18 @@ func (s *State) QuarantinedUUIDs(now time.Time) []string {
 	return out
 }
 
-// Prune drops quarantines for accounts that are no longer managed, so a removed
-// account cannot come back quarantined when it is added again under the same
-// uuid.
+// Prune drops quarantines and departures for accounts that are no longer
+// managed, so a removed account cannot come back quarantined, or held out of the
+// order, when it is added again under the same uuid.
 func (s *State) Prune(managed map[string]bool) {
 	for uuid := range s.data.Quarantine {
 		if !managed[uuid] {
 			delete(s.data.Quarantine, uuid)
+		}
+	}
+	for uuid := range s.data.Departures {
+		if !managed[uuid] {
+			delete(s.data.Departures, uuid)
 		}
 	}
 }
@@ -311,6 +361,7 @@ func LoadState() (*State, error) {
 	s.data.LastSwitchTo = parsed.LastSwitchTo
 	s.data.CodexLastSwitchAt = parsed.CodexLastSwitchAt
 	s.data.CodexLastSwitchTo = parsed.CodexLastSwitchTo
+	s.data.Departures = parsed.Departures
 	s.data.Version = parsed.Version
 	return s, nil
 }

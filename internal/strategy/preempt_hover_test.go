@@ -8,29 +8,20 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
 
-// Pre-emption used to require a candidate with POSITIVE slack, which under hover
-// is a condition an ordinary pool never meets: hover's threshold is a pace
-// target, so every account ahead of its pace is negative and the rule that
-// exists to move a session before its account hits a hard limit could not fire
-// at all.
-//
 // The live account here is three hours into a five-hour window at 88%, which
 // extrapolates to its limit 1472 s out, and the blind interval is the 1800 s
-// ceiling a 429 earns -- so the projection reaches it. Every account is negative
-// on the hover axis.
+// ceiling a 429 earns -- so the projection reaches it.
 func hoverBurnPool() []Candidate {
 	pool := []Candidate{
 		// 88% three hours into a five-hour window: its limit is 1472 s out, and
 		// the 1800 s blind interval a 429 earns reaches it.
 		polled(burning("a-live", 88), 1800*time.Second),
-		// 79% of the same window. Two points past the pace hover derives for it,
-		// so it is NEGATIVE like everything else here -- and 21 points from its
-		// limit, which is 48 minutes away and well outside the horizon.
+		// 79% of the same window: 21 points from its limit, which is 48 minutes
+		// away and well outside the horizon.
 		polled(burning("b-room", 79), 1800*time.Second),
 	}
-	// Four more, so the share is 100/6 rather than a figure a two-account pool
-	// flatters. Weekly windows only: a five-hour window this early would give
-	// them positive slack and stop the pool reproducing the dead case.
+	// Four weekly-only seats behind it, so the five-hour account is chosen by the
+	// order's first rule and not by being the only roomy account in the pool.
 	for i := 0; i < 4; i++ {
 		c := sub(string(rune('c'+i))+"-spent", &usage.Snapshot{
 			SevenDay: elapsedWindow(7*24*time.Hour, 0.20, 85),
@@ -46,20 +37,24 @@ func hoverPreemptOpts() Options {
 	return o
 }
 
-func TestPreemptionFiresWhenEveryAccountIsOverItsPace(t *testing.T) {
+// The live five-hour account would be FIRST in hover's order on its reading
+// alone, and the pre-emptive walk ends at the live account. What lets the walk
+// reach the account behind it is that a closing account is on the limit rung.
+func TestPreemptionFiresWhenTheLiveAccountIsClosingAndAnotherHasRoom(t *testing.T) {
 	pool := hoverBurnPool()
 	o := hoverPreemptOpts()
 
-	// Precondition: nothing has positive slack, which is what used to kill it.
-	oh := o.withHover(pool)
-	for _, c := range pool {
-		if h := measure(c, oh).Headroom; h.Slack > 0 {
-			t.Fatalf("%s has slack %+.1f; the fixture no longer reproduces the dead case", c.UUID, h.Slack)
-		}
+	res := Rank(pool, o)
+	if live, _ := find(res, "a-live"); live.Closing != usage.WindowFiveHour || live.Rung() != RungAtLimit {
+		t.Fatalf("a-live is closing on %q at rung %d; the fixture no longer projects the live account out",
+			live.Closing, live.Rung())
 	}
 
 	p := Decide(pool, o, Config{}, NewState(), "a-live")
 	want(t, p, ActionSwitch, ReasonProjectedExhaustion, "b-room")
+	if p.Departure != (Departure{From: "a-live", Closing: usage.WindowFiveHour}) {
+		t.Errorf("Departure = %+v, want a-live left on its five-hour window", p.Departure)
+	}
 }
 
 // It still refuses the two moves that would waste the switch.

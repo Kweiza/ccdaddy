@@ -23,7 +23,11 @@ import (
 // fields and event kinds may be added, so a consumer must ignore both rather
 // than fail on them, and this only moves for a change that removes or
 // reinterprets something.
-const autoSchemaVersion = 1
+//
+// 2: an order row's hoverShare, strandedPct and strandedWindow went with the
+// pace rotation that produced them, and hover's rung, shortWindow, lastPoint,
+// closing and heldOut took their place.
+const autoSchemaVersion = 2
 
 // autoTickInterval is the continuous form's cadence, the tick loop's one
 // second. It matches the daemon deliberately: `auto` exists to be the daemon's
@@ -227,7 +231,8 @@ func autoPass(ctx context.Context, em *autoEmitter, s *store.Store) (ExitCode, e
 	}
 	res, err := switcher.Execute(s, switcher.Request{
 		Target: ev.Target, LiveUUID: live, Unattended: true,
-		Freshen: freshenWith(ctx),
+		Departure: ev.Plan.Departure,
+		Freshen:   freshenWith(ctx),
 	})
 	if len(res.UnknownKeys) > 0 && (res.Outcome == switcher.Switched || err != nil) {
 		em.notice("unrecognized keys in the credentials file are being preserved unchanged: %s",
@@ -451,7 +456,7 @@ func (e *autoEmitter) evaluated(ev switcher.Evaluation, action, reason string) {
 		}
 		payload["credit"] = credit
 	}
-	if order := rankingJSON(ev.Plan.Result.Order); len(order) > 0 {
+	if order := rankingJSON(ev.Plan); len(order) > 0 {
 		payload["order"] = order
 	}
 	e.emit(payload)
@@ -505,9 +510,13 @@ func (e *autoEmitter) emit(payload map[string]any) {
 // rankingJSON renders the subscription pool in the order the engine ranked it,
 // with the figures it ranked on — so a consumer can explain the choice rather
 // than only observe it.
-func rankingJSON(order []strategy.Ranked) []map[string]any {
-	out := make([]map[string]any, 0, len(order))
-	for _, r := range order {
+//
+// It takes the plan rather than the order because whether hover ran is part of
+// what the order means: the rung is hover's outer key, and printed beside an
+// order some other strategy made it would explain an order that was not made.
+func rankingJSON(plan strategy.Plan) []map[string]any {
+	out := make([]map[string]any, 0, len(plan.Result.Order))
+	for _, r := range plan.Result.Order {
 		row := map[string]any{"uuid": r.UUID, "kind": r.Kind.String()}
 		if r.Headroom.Known {
 			row["headroomPct"] = r.Headroom.Pct
@@ -518,17 +527,25 @@ func rankingJSON(order []strategy.Ranked) []map[string]any {
 			row["slack"] = r.Headroom.Slack
 			row["windowThreshold"] = r.Headroom.Threshold
 		}
-		// The second term of every derived threshold. Under hover it is no
-		// longer 100 divided by the pool, so a consumer that has the threshold
-		// and the elapsed share still cannot close the arithmetic without it.
-		if r.HoverShare > 0 {
-			row["hoverShare"] = r.HoverShare
+		// Under hover the order IS the decision, and the rung is its outer
+		// key: a consumer that has the reset and the room still cannot tell a
+		// held-out account from one with room without it. lastPoint and heldOut
+		// are hover's alone and set nowhere else, so they need no guard.
+		if plan.Hover != nil {
+			row["rung"] = r.Rung().String()
 		}
-		// Why this account's share is wider than the pool's slice: quota its
-		// own rotation cannot reach before the named window resets.
-		if r.Stranded > 0 {
-			row["strandedPct"] = r.Stranded
-			row["strandedWindow"] = string(r.StrandedWindow)
+		if r.LastPoint {
+			row["lastPoint"] = true
+		}
+		if r.HeldOut != "" {
+			row["heldOut"] = string(r.HeldOut)
+		}
+		// Facts of the reading in every mode, and absent when there is none.
+		if r.ShortWindow != "" {
+			row["shortWindow"] = string(r.ShortWindow)
+		}
+		if r.Closing != "" {
+			row["closing"] = string(r.Closing)
 		}
 		if r.HasRecovery {
 			row["recoversAt"] = r.RecoversAt.In(readerZone()).Format(time.RFC3339)

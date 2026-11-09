@@ -131,7 +131,7 @@ func TestTheClaudeCooldownDoesNotHoldTheCodexLane(t *testing.T) {
 	seedReading(t, "cx-2", 90)
 	servingIs(t, "cx-1")
 	clearCodexCooldown(t)
-	if err := RecordSwitch("cl-1"); err != nil {
+	if err := RecordSwitch("cl-1", strategy.Departure{}); err != nil {
 		t.Fatalf("RecordSwitch: %v", err)
 	}
 

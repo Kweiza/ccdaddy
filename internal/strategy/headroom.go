@@ -122,11 +122,11 @@ type Headroom struct {
 	// describe two different windows. Every human view resolves the window it
 	// reports through Floor -- a blown weekly is what a user has to be told
 	// about -- and then has nothing but Slack to reach for, which is a number
-	// measured on some other window entirely. The live shape: a five-hour
-	// window 85% elapsed at 98% used binds with 3.667 of slack while the weekly
-	// beside it is 92% elapsed with nothing left in it, reporting 8.667 against
-	// a pace target of 108.667. A bar drawn at the weekly's 100% and coloured
-	// from the binding window's 3.667 is a full bar that says "plenty of room".
+	// measured on some other window entirely. The shape it was found on, under
+	// the pace rotation hover used to run: a five-hour window at 98% used bound
+	// with 3.667 of slack while the weekly beside it had nothing left in it. A
+	// bar drawn at the weekly's 100% and coloured from the binding window's
+	// 3.667 is a full bar that says "plenty of room".
 	//
 	// Taken in the pass that already computes them rather than recovered by a
 	// second one. A second pass would have to rebuild the window set, and then
@@ -363,34 +363,11 @@ func HeadroomFor(s *usage.Snapshot, model string, t Thresholds) Headroom {
 			continue
 		}
 		thr := t.For(w.Name)
+		// No threshold reaches past 100 -- config refuses one, and hover holds
+		// every window to its last point -- so a window with nothing left
+		// reports no positive slack by arithmetic alone, and the pair always
+		// subtracts.
 		slack := thr - pct
-		// A window with NOTHING LEFT never reports positive slack, whatever its
-		// threshold says.
-		//
-		// Under hover a threshold is a PACE TARGET and nothing clamps it: a
-		// window far enough through its own cycle is measured against a figure
-		// above 100, which is the mode saying "no restraint, there is nobody to
-		// hand the work to". That is a sound thing to say about PACING and a
-		// false thing to say about ROOM. Measured on a live fleet: a five-hour
-		// window at 100% used, held to 116, reported +16 -- so on the axis the
-		// ranking orders by, a window that could not serve one more prompt
-		// looked roomier than a healthy window early in its own cycle, and the
-		// engine parked a session on it while three accounts with five-hour room
-		// sat behind it.
-		//
-		// The clamp is 100-pct rather than a flat zero so the arithmetic stays
-		// monotone past the line: a window at 105% is worse than one at exactly
-		// 100, and an ordering that flattened them would shuffle two spent
-		// accounts by uuid.
-		//
-		// It fires only when the window is empty, so no window with room left is
-		// touched and hover's pacing is unchanged everywhere it means anything.
-		// Threshold is still carried as the number the pace target actually was,
-		// so the two stop subtracting here -- which `ccdad status` explains in
-		// its hover footer.
-		if pct >= 100 && slack > 0 {
-			slack = 100 - pct
-		}
 		// Taken BEFORE the binding test below sets Known, so the first readable
 		// window seeds the minimum rather than being compared against a zero
 		// that no window reported.
@@ -456,14 +433,11 @@ func HeadroomFor(s *usage.Snapshot, model string, t Thresholds) Headroom {
 		//     IS the line past which they consider the account unusable, so a
 		//     weekly at 85 under a threshold of 80 has to clear before the
 		//     account is theirs to use again.
-		//   - EMPTY. Under hover no threshold is a stop line -- it is a pace
-		//     target -- so "past it" says nothing about whether the account is
-		//     usable, and the test above answers on a figure that moves with the
-		//     SIZE OF THE POOL. Worse, a pace target runs past 100 late in a
-		//     window, so a weekly with nothing left in it reported POSITIVE
-		//     slack and was not a floor at all. That is the case this arm is
-		//     for, and it is the one that matters: a blown weekly holds the
-		//     account back until it rolls, whatever any threshold says.
+		//   - EMPTY. A threshold of exactly 100 is one a user may set, and under
+		//     it a weekly with nothing left reports a slack of zero, which "past
+		//     its number" does not see. That is the case this arm is for, and
+		//     it is the one that matters: a blown weekly holds the account back
+		//     until it rolls, whatever any threshold says.
 		empty := pct >= 100
 		// The READING is asked, not the name. A codex window's length is a
 		// property of the plan and only the endpoint knows it, so the same name
@@ -473,9 +447,9 @@ func HeadroomFor(s *usage.Snapshot, model string, t Thresholds) Headroom {
 		if (slack < 0 || empty) && usage.IsWeeklyOf(w.Name, w.Window) {
 			// An EMPTY floor outranks one that is merely past its number,
 			// whatever the slack says. Least-slack alone is the wrong key once
-			// the two arms can both fire: a blown weekly reporting +8 of slack
-			// against a pace target above 100 would lose to one five points past
-			// its threshold and still holding quota, and it is the blown one
+			// the two arms can both fire: a blown weekly reporting zero slack
+			// under a threshold of 100 would lose to one five points past a
+			// threshold of 60 and still holding quota, and it is the blown one
 			// that decides when the account comes back.
 			better := !out.HasFloor || (empty && !floorEmpty) ||
 				(empty == floorEmpty && slack < floorSlack)
@@ -564,11 +538,11 @@ func ColdWindow(s *usage.Snapshot, model string, t Thresholds, now time.Time) (u
 //
 // Two conditions, and the first is the narrow one on purpose. A turn only
 // reaches credits when there is no subscription quota LEFT, which is a window at
-// 100%, not a window past the pace threshold hover derived for it: an account
-// 80% through its week against a 46% pace target has a fifth of its quota in
-// hand and the turn lands on that. Reading "past its threshold" as "out" here
-// would have stopped warming five of the six accounts on the fleet this was
-// written against, which is most of the benefit for none of the risk.
+// 100%, not a window past its threshold: an account at 80% of its week under a
+// threshold of 46 has a fifth of its quota in hand and the turn lands on that.
+// Reading "past its threshold" as "out" here would have stopped warming five of
+// the six accounts on the fleet this was written against, which is most of the
+// benefit for none of the risk.
 //
 // The second fails closed the way credit.go's every branch does. Only an
 // account whose overage is demonstrably off — Disabled, or Blocked by an org or
@@ -589,8 +563,8 @@ func WarmUpWouldSpendCredits(s *usage.Snapshot, model string, t Thresholds) bool
 // in it.
 //
 // Every window rather than the binding one: HeadroomFor picks the least SLACK,
-// which under a derived per-window threshold is not the most spent window, and
-// the question here is about quota rather than about pace.
+// which under a per-window threshold is not the most spent window, and the
+// question here is about quota rather than about a line.
 func capped(s *usage.Snapshot, model string, t Thresholds) bool {
 	for _, w := range bindingWindows(s, model, t) {
 		if pct, ok := w.Percent(); ok && pct >= 100 {
@@ -691,20 +665,22 @@ func HeadroomOrCredit(s *usage.Snapshot, t Thresholds) Headroom {
 	return creditHeadroomOf(e, t)
 }
 
-// handoffRoomPct is how much of a week counts as its last point. It is one because
-// the endpoint reports whole percents: 99 is the last reading anyone gets before
-// the one that says the account has stopped.
+// handoffRoomPct is how much of a window counts as its last point. It is one
+// because the endpoint reports whole percents: 99 is the last reading anyone gets
+// before the one that says the account has stopped.
 const handoffRoomPct = 1.0
 
-// lastWeeklyPoint is whether the window that will stop this account's session is
-// a week, down to the last point the endpoint can report.
+// lastPoint is whether a window that will stop this account's session -- one no
+// model choice can dodge -- is down to the last point the endpoint can report.
 //
-// Hover's slack cannot see this, because its threshold is a pace target that runs
-// past 100: an account a day from its reset reads 32 points of slack at 99%, and
-// outranks a healthy account that merely ran ahead of its own week. Nothing else
-// was looking while a five-hour window stood in front of the week. A verified
-// Ultra seat has none, so this is the only warning its session gets. Measured
-// against the engine on 2026-11-02, it held such a seat through 99.9% and moved at
+// It is hover's hand-off line, and it is the same line on every such window: the
+// five-hour window, the all-model week, seven_day_oauth_apps, a surface cap, an
+// opted-in unknown scope. It used to be asked of a week alone, because a pace
+// target stood in front of the five-hour window and handed the session on long
+// before its last point. Hover has no pace target now; a five-hour account is
+// run to its limit on purpose, so its five-hour window needs the same one-point
+// hand-off the week always had. Measured against the engine on 2026-11-02, a
+// verified Ultra seat with no line at all was held through 99.9% and moved at
 // 100%, which is after the session stopped.
 //
 // A static floor and not a rate, because a rate cannot hold this line. One account
@@ -716,16 +692,16 @@ const handoffRoomPct = 1.0
 // One point covers the measured burn. At the 12 points an hour the same fleet
 // peaked at, the 180 s danger cadence reads 99 with two minutes in hand, and the
 // margin only grows at a slower rate. A heavier burn can step from 98 past 100
-// between two readings; measuredExhaustion is what speaks to that, where another
-// account already ranks ahead.
+// between two readings; measuredExhaustion is what speaks to that, through
+// Ranked.Closing.
 //
-// The cost is to the purpose this rule competes with: up to one point of a week
-// can expire unspent while another account still has real room. The tier sits
-// above the empty one, so the point is still spent the moment nothing better is
-// left. TestTheLastPointOfEachAccountIsReachableUnderHover holds that half.
+// The cost is up to one point of a window left unspent at each hand-off -- on a
+// five-hour window, three minutes of its clock. The rung sits above the empty
+// one, so the point is still spent the moment nothing better is left:
+// TestTheLastPointOfEachAccountIsReachableUnderHover.
 //
-// Weekly by name, so a Codex window, whose length is a property of its reading,
-// keeps the behaviour it had.
-func lastWeeklyPoint(h Headroom) bool {
-	return h.Known && usage.IsWeekly(h.MinAnyModelWindow) && h.MinAnyModelPct <= handoffRoomPct
+// The room is RoomOf's, so an account whose only readable window is
+// model-scoped is judged on that one rather than on a figure nobody wrote.
+func lastPoint(h Headroom) bool {
+	return h.Known && RoomOf(h) <= handoffRoomPct
 }

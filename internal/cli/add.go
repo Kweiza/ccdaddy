@@ -981,7 +981,7 @@ func runAddToken(cmd *cobra.Command, token string, isAPIKey bool, email, alias s
 	if err := s.SetActive(saved.UUID); err != nil {
 		return err
 	}
-	noteCooldown(cmd, switcher.RecordSwitch(saved.UUID))
+	noteCooldown(cmd, switcher.RecordSwitch(saved.UUID, strategy.Departure{}))
 	fmt.Fprintf(stderr, "Switched to %s.\n", saved.Label())
 	noteDisplacingAuth(cmd, token)
 	return nil

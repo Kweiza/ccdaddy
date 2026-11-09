@@ -198,6 +198,14 @@ type Request struct {
 	// the file under the lock like LiveUUID is: a file that has become a
 	// managed account's since then is a race, not a foreign login.
 	LiveForeign bool
+
+	// Departure is what the engine's plan says this swap leaves behind --
+	// strategy.Plan.Departure -- and it is recorded with the cooldown once the
+	// swap has happened. Every swap the engine chose passes it, a targetless
+	// `ccdad switch` included; a swap to an account a person named passes the
+	// zero value, because the mark is the engine's own record of an account it
+	// left at a limit and a hand switch is not one.
+	Departure strategy.Departure
 }
 
 func (r Request) now() time.Time {
@@ -487,7 +495,7 @@ func Execute(s *store.Store, req Request) (Result, error) {
 	if err := s.SetActive(req.Target.UUID); err != nil {
 		return res, err
 	}
-	res.CooldownErr = RecordSwitch(req.Target.UUID)
+	res.CooldownErr = RecordSwitch(req.Target.UUID, req.Departure)
 	res.ClearedKeyOwner, res.ClearedKey, res.KeyErr = releaseManagedAPIKey(s)
 	if !res.EnvTokenWins {
 		res.ProfileSyncErr = SyncGlobalConfigIdentity(s, req.Target, res.Live, res.LiveKnown)
@@ -579,9 +587,15 @@ func SyncGlobalConfigIdentity(s *store.Store, target, previousLive store.Account
 // live credential: installing an api-key account writes ~/.claude.json instead,
 // and a cooldown that only some switches stamped would let the engine override
 // exactly the ones it did not see.
-func RecordSwitch(uuid string) error {
+//
+// left is the departure the engine's plan named, written in the SAME locked
+// write as the cooldown: hover's order reads the two together, and a mark
+// without its stamp, or the reverse, is a state no single switch produces. A
+// write that fails loses both, which degrades towards more switching -- the
+// direction the cooldown's own failure already takes.
+func RecordSwitch(uuid string, left strategy.Departure) error {
 	err := strategy.WithState(stateTimeout, func(st *strategy.State) error {
-		st.RecordSwitch(uuid, time.Now())
+		st.RecordSwitch(uuid, time.Now(), left)
 		return nil
 	})
 	if err != nil {

@@ -12,6 +12,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/usage"
+	"github.com/Kweiza/ccdaddy/internal/view"
 )
 
 // hoverEpoch is the clock every case below runs against, so "43% of a week
@@ -190,14 +191,11 @@ func TestHoverRefusesJSONOnTheWritingVerbs(t *testing.T) {
 	}
 }
 
-// The whole point of an omakase mode being acceptable: every number chosen on
-// the user's behalf is printed, together with the two figures it was derived
-// from.
-// One row per account, one cell per window, each cell "used/threshold". The
-// pair is what this command exists to show: an omakase mode is only acceptable
-// if you can see what it chose, and both halves of that are here. ELAPSED and
-// SLACK moved to --json, which carries the whole derivation.
-func TestHoverStatusShowsWhatEachWindowUsedAndWhatItIsHeldTo(t *testing.T) {
+// The whole point of an automatic mode being acceptable: what it decided is on
+// the page. Hover's decision is the ORDER, which no cell carries, so the table
+// is the ordinary one -- every cell the window's own utilization -- and under it
+// one line per account says where the order put it and why.
+func TestHoverStatusShowsWhatEachWindowUsedAndTheOrder(t *testing.T) {
 	isolate(t)
 	freezeClock(t, hoverEpoch)
 	writeConfig(t, "hover = true\n")
@@ -214,22 +212,25 @@ func TestHoverStatusShowsWhatEachWindowUsedAndWhatItIsHeldTo(t *testing.T) {
 		// The unified table headers and the legend that maps them
 		// back to the keys `ccdad config` takes a threshold on.
 		"5H", "7D", "5H = five_hour", "7D = seven_day",
-		// Two usable accounts, so a weekly window 43% elapsed is held to 93.
-		"55%/93%", "72%/93%",
-		// The five-hour window resets within the hour, so its pace target is
-		// 80 + 50 = 130: no restraint at all.
-		"62%/130%", "91%/130%",
-		"quota cells show used/threshold",
+		"62%", "55%", "91%", "72%",
+		view.HoverNote,
+		// Both carry a five-hour window and their weeks end together, so the
+		// uuid decides which is entered first.
+		"hover:    1. work@example.com  short-window · week resets",
+		"hover:    2. spare@example.com  short-window · week resets",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("stdout does not carry %q:\n%s", want, stdout)
 		}
 	}
-	// One row per ACCOUNT. Two accounts carrying two windows each used to be
-	// four rows; a reader of a real fleet had twelve.
+	if strings.Contains(stdout, "%/") {
+		t.Errorf("a quota cell carries a threshold beside its figure:\n%s", stdout)
+	}
+	// One table row per ACCOUNT. Two accounts carrying two windows each used to
+	// be four rows; a reader of a real fleet had twelve.
 	rows := 0
 	for _, line := range strings.Split(stdout, "\n") {
-		if strings.Contains(line, "@example.com") {
+		if strings.Contains(line, "@example.com") && !strings.HasPrefix(line, "hover:") {
 			rows++
 		}
 	}
@@ -283,11 +284,14 @@ func TestHoverStatusMarksTheLiveAccountAndTheCreditSeat(t *testing.T) {
 	if !marked {
 		t.Errorf("no row is marked as the live account's:\n%s", stdout)
 	}
-	// A credit seat has no window and no reset, so pace says nothing about it
-	// and 95 is the figure it is held to instead. It gets a CREDIT column of
-	// its own, and the legend names the key it is filed under.
-	if !strings.Contains(stdout, "/95%") {
-		t.Errorf("the credit seat is not shown against the 95%% it is held to:\n%s", stdout)
+	// A credit seat has no window and no reset. It gets a CREDIT column of its
+	// own, the legend names the key it is filed under, and the order files it
+	// behind every week that can expire: credits do not.
+	if row := rowFor(t, stdout, "seat@example.com"); !strings.Contains(row, "41%") {
+		t.Errorf("the credit seat's own meter is not on its row: %q", row)
+	}
+	if !strings.Contains(stdout, "seat@example.com  weekly-only · no weekly reset") {
+		t.Errorf("the order does not say where the credit seat sits:\n%s", stdout)
 	}
 	if !strings.Contains(stdout, "CREDIT = extra_usage") {
 		t.Errorf("the legend does not name the credit column's key:\n%s", stdout)
@@ -338,7 +342,7 @@ func TestStatusWithHoverOffReportsTheSelectedStrategy(t *testing.T) {
 	if top != "" {
 		t.Errorf("ExecuteWith printed %q; a rendered answer is not a runtime failure", top)
 	}
-	if !strings.Contains(stdout, "Strategy: headroom") || strings.Contains(stdout, "used/threshold") {
+	if !strings.Contains(stdout, "Strategy: headroom") || strings.Contains(stdout, "hover:") {
 		t.Errorf("stdout = %q, want ordinary headroom status", stdout)
 	}
 }
@@ -371,17 +375,10 @@ func TestHoverStatusPromisesNoWarmUpForAWindowThatIsAlreadyInUse(t *testing.T) {
 	if strings.Contains(stdout, "warm-up at") || strings.Contains(stdout, "probe is queued") {
 		t.Errorf("stdout promises a warm-up for a window no warm-up targets:\n%s", stdout)
 	}
-	// The cell carries the pair it always carries: 30% used against the derived
-	// threshold. 150 and not 80, because a window that will not say how far
-	// through it is takes an ASSUMED elapsed share on the same scale as every
-	// measured one -- 50 assumed, plus the whole 100 of a one-account share,
-	// because with nobody to hand the work to nothing is being held back.
-	//
-	// ELAPSED left the human table for --json, and it is left OUT there rather
-	// than reported as zero, because a 0 reads as a window that has only just
-	// rolled over.
-	if !strings.Contains(stdout, "30%/150%") {
-		t.Errorf("stdout does not carry the used/threshold pair:\n%s", stdout)
+	// The cell carries the window's own figure, which is all the table ever
+	// promises about a window that will not say when it resets.
+	if row := rowFor(t, stdout, "fresh@example.com"); !strings.Contains(row, "30%") {
+		t.Errorf("the row does not carry the window's utilization: %q", row)
 	}
 }
 
@@ -417,9 +414,14 @@ func TestHoverStatusQueuesAWarmUpForAStoppedClock(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit = %d (%s)", code, top)
 	}
-	for _, want := range []string{"fresh@example.com", "0%/", "30%/"} {
-		if !strings.Contains(stdout, want) {
-			t.Errorf("status omitted %q from the stopped-clock account:\n%s", want, stdout)
+	row := strings.Fields(rowFor(t, stdout, "fresh@example.com"))
+	for _, want := range []string{"0%", "30%"} {
+		found := false
+		for _, cell := range row {
+			found = found || cell == want
+		}
+		if !found {
+			t.Errorf("status omitted %q from the stopped-clock account's row %v:\n%s", want, row, stdout)
 		}
 	}
 }
@@ -455,7 +457,7 @@ func TestHoverStatusAnswersInJSON(t *testing.T) {
 	account := payload.Accounts[0]
 	week := account.Usage.Windows["seven_day"]
 	if account.Email != "work@example.com" || week["utilizationPct"] != float64(55) ||
-		week["thresholdPct"] != float64(143) || week["slackPct"] != float64(88) {
+		week["thresholdPct"] != strategy.HoverHandoffThreshold || week["slackPct"] != strategy.HoverHandoffThreshold-55 {
 		t.Errorf("account = %+v, seven_day = %+v", account, week)
 	}
 	if account.Usage.Pace["seven_day"]["expectedPct"] != float64(43) {

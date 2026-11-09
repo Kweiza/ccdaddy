@@ -28,7 +28,7 @@ func envVarFor(kind string) string {
 // switcher.Evaluate — the same call `ccdad auto` and the daemon make, because
 // the moment there are two copies the hand-verified path and the unattended
 // path diverge. What stays here is the wording.
-func chooseTarget(cmd *cobra.Command, s *store.Store, strategyName, model string, force bool) (store.Account, error) {
+func chooseTarget(cmd *cobra.Command, s *store.Store, strategyName, model string, force bool) (store.Account, strategy.Departure, error) {
 	stderr := cmd.ErrOrStderr()
 
 	// Parsed, not defaulted: checkSwitchFlags has already refused an unknown
@@ -40,7 +40,7 @@ func chooseTarget(cmd *cobra.Command, s *store.Store, strategyName, model string
 		Strategy: chosen, HasStrategy: true, Force: force, Model: model,
 	})
 	if err != nil {
-		return store.Account{}, err
+		return store.Account{}, strategy.Departure{}, err
 	}
 	if ev.LiveErr != nil {
 		fmt.Fprintf(stderr, "note: could not read the current login (%v); ranking without it\n", ev.LiveErr)
@@ -83,18 +83,18 @@ func chooseTarget(cmd *cobra.Command, s *store.Store, strategyName, model string
 	if ev.NoReadings {
 		fmt.Fprintln(stderr, "ccdad has no usage readings yet, so there is nothing to choose on.")
 		fmt.Fprintln(stderr, "Name an account explicitly, or let the daemon poll first.")
-		return store.Account{}, WithCode(errSilent, ExitBlocked)
+		return store.Account{}, strategy.Departure{}, WithCode(errSilent, ExitBlocked)
 	}
 
 	switch ev.Plan.Action {
 	case strategy.ActionSwitch:
-		return ev.Target, nil
+		return ev.Target, ev.Plan.Departure, nil
 	case strategy.ActionBlocked:
 		fmt.Fprintf(stderr, "No account can be switched to: %s.\n", switcher.Explain(ev.Plan))
-		return store.Account{}, WithCode(errSilent, ExitBlocked)
+		return store.Account{}, strategy.Departure{}, WithCode(errSilent, ExitBlocked)
 	default:
 		fmt.Fprintf(stderr, "Staying put: %s.\n", switcher.Explain(ev.Plan))
-		return store.Account{}, WithCode(errSilent, ExitNothingToDo)
+		return store.Account{}, strategy.Departure{}, WithCode(errSilent, ExitNothingToDo)
 	}
 }
 
@@ -269,6 +269,12 @@ func newSwitchCmd() *cobra.Command {
 			}
 
 			var target store.Account
+			// What the engine's choice leaves behind. Only the targetless form
+			// has one: there the ENGINE chose, and an account it left at a
+			// limit has to be remembered the way the daemon would remember it,
+			// or the next tick takes the session straight back. A named
+			// account is the person's choice and leaves no mark.
+			var left strategy.Departure
 			if len(args) == 1 {
 				target, err = store.Resolve(accounts, args[0])
 				if err != nil {
@@ -287,7 +293,7 @@ func newSwitchCmd() *cobra.Command {
 					return err
 				}
 			} else {
-				target, err = chooseTarget(cmd, s, strategyName, model, force)
+				target, left, err = chooseTarget(cmd, s, strategyName, model, force)
 				if err != nil {
 					return err
 				}
@@ -348,7 +354,7 @@ func newSwitchCmd() *cobra.Command {
 			// Attended: nobody is left guessing, so the executor reports rather
 			// than refuses. Its Unattended half is the daemon's.
 			res, err := switcher.Execute(s, switcher.Request{
-				Target: target, LiveUUID: liveUUID, Force: force,
+				Target: target, LiveUUID: liveUUID, Force: force, Departure: left,
 				Freshen: freshenWith(cmd.Context()),
 			})
 			// The unknown-key probe: drift in the credentials file is

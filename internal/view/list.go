@@ -7,7 +7,6 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 	"github.com/Kweiza/ccdaddy/internal/provider"
-	"github.com/Kweiza/ccdaddy/internal/usage"
 )
 
 // This file is ONE definition of what the account list is: which columns exist
@@ -388,10 +387,10 @@ func CollapseWindows(cols []ListColumn) []ListColumn {
 // ListCell is one field of one row: the switch every surface drawing an
 // account list used to own half of.
 //
-// hover selects the quota cells' form -- the bare percentage, or used against
-// the threshold the row was measured with -- and nothing else. It is a
-// parameter and not a field on Row because it is a fact about the REPORT being
-// drawn rather than about the account.
+// A quota cell is the window's own utilization on every surface and under every
+// strategy. Hover once drew used against a threshold it derived per window; it
+// holds every window to the same hand-off line now, and a column of identical
+// thresholds beside every figure says nothing.
 //
 // Three cells are deliberately shorter than what a surface finally prints, and
 // in each case the missing half is something this package may not know:
@@ -409,7 +408,7 @@ func CollapseWindows(cols []ListColumn) []ListColumn {
 // this cell as a suffix, and that is right where it is: the flags belong to
 // the ACCOUNT rather than to the column, and a suffix reads better beside that
 // account's own figure than at a fixed offset far to its right.
-func (r Row) ListCell(c ListColumn, block Columns, now time.Time, hover bool) string {
+func (r Row) ListCell(c ListColumn, block Columns, now time.Time) string {
 	switch c.Kind {
 	case ColumnIdx:
 		// See ColumnIdx: the Ref, because it is what the next command takes.
@@ -426,11 +425,7 @@ func (r Row) ListCell(c ListColumn, block Columns, now time.Time, hover bool) st
 		if c.Index < 0 {
 			return Unreadable
 		}
-		n := block.Windows[c.Index].Name
-		if hover {
-			return r.hoverWindowCell(n)
-		}
-		return r.WindowCell(n)
+		return r.WindowCell(block.Windows[c.Index].Name)
 	case ColumnReset:
 		return r.ResetCell(block.Resets[c.Index], now)
 	case ColumnWorst:
@@ -451,23 +446,6 @@ func (r Row) ListCell(c ListColumn, block Columns, now time.Time, hover bool) st
 		return ""
 	}
 	return ""
-}
-
-// hoverWindowCell is one quota cell under hover: used against the threshold
-// this row was actually measured with.
-//
-// It is HoverCells' own body, lifted so the pair is spelled once. A second
-// spelling of "%.0f%%/%.0f%%" would agree with the first until the day one of
-// them changed.
-func (r Row) hoverWindowCell(n usage.WindowName) string {
-	pct, state := r.WindowPct(n)
-	switch state {
-	case WindowAbsent:
-		return NoQuantity
-	case WindowUnreadable:
-		return Unreadable
-	}
-	return fmt.Sprintf("%.0f%%/%.0f%%", pct, r.WindowThreshold(n))
 }
 
 // WorstCell is the whole quota block in one cell, for a table too narrow to
@@ -738,13 +716,14 @@ func ListRows(secs []Section) []ListRow {
 	return out
 }
 
-// HoverNote is the sentence a hover table prints under itself, because the
-// quota cells stop being a bare percentage there and nothing else says so.
-const HoverNote = "hover:    quota cells show used/threshold; thresholds are derived per account and window"
+// HoverNote is the sentence a hover table prints under itself: the rule that
+// moves the session, which no cell shows. The order lines follow it.
+const HoverNote = "hover:    five-hour accounts first, then the soonest weekly reset; an account is handed off " +
+	"one point before any window's limit, or earlier when the next reading would land past it"
 
 // TrailerLines is everything printed UNDER an account table that is not a
-// legend, in order: the hover sentences, the unranked note, and one credit line
-// per credit-metered seat.
+// legend, in order: the hover block, the unranked note, and one credit line per
+// credit-metered seat.
 //
 // The legend left this list when the table gained per-section columns. There is
 // no longer ONE legend to print -- each provider's half of the table carries its
@@ -762,33 +741,16 @@ const HoverNote = "hover:    quota cells show used/threshold; thresholds are der
 // Each line explains a column the reader is already looking at, and the two
 // that describe the quota block come before the ones that describe a row.
 //
-// stranded is the second hover sentence, and it is passed rather than derived
-// because it is a fact about the RANKING and not about these rows: it says
-// some account's share is wider than the pool's slice, which is what lets two
-// accounts at the same point of the same window carry different thresholds.
-// Empty when no account is in that position. It rides inside the hover gate
-// with the sentence it qualifies -- a table drawing bare percentages would
-// otherwise explain a threshold none of its cells show.
+// hover is Snapshot.HoverLines, passed rather than derived because it is a fact
+// about the RANKING and not about these rows, and empty for a surface that does
+// not print it. It comes first because the order is what the table is for.
 //
 // The lines arrive UNWRAPPED. Folding one onto a width is the caller's, and
 // has to be: the width is a terminal's, and the label the fold hangs under is
 // found in the line rather than passed, so a wrap belongs where the terminal
 // is known.
-// burn is Snapshot.BurnNote, passed for the same reason stranded is: it is a
-// fact about the RANKING rather than about these rows, and it is empty on every
-// fleet with no measurement. It comes second because the reader meets the
-// thresholds first and the rate is what those thresholds were priced in.
-func TrailerLines(rows []Row, c Columns, hover bool, stranded, burn string) []string {
-	var out []string
-	if hover {
-		out = append(out, HoverNote)
-		if burn != "" {
-			out = append(out, burn)
-		}
-		if stranded != "" {
-			out = append(out, "hover:    "+stranded)
-		}
-	}
+func TrailerLines(rows []Row, c Columns, hover []string) []string {
+	out := append([]string(nil), hover...)
 	if note := c.UnrankedNote(); note != "" {
 		out = append(out, note)
 	}

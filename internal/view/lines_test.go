@@ -155,7 +155,7 @@ func TestNoCurrentLineBranchSaysExhausted(t *testing.T) {
 		forbidden    = "exhaust"
 		file         = "lines.go"
 		fn           = "CurrentLine"
-		wantBranches = 3
+		wantBranches = 4
 	)
 
 	// Every mode this binary declares, plus one it has never heard of, which is
@@ -164,6 +164,7 @@ func TestNoCurrentLineBranchSaysExhausted(t *testing.T) {
 		strategy.ModeHeadroom,
 		strategy.ModeRecovery,
 		strategy.ModeConsumeFirst,
+		strategy.ModeHover,
 		strategy.Mode(99),
 	} {
 		if line := CurrentLine(m); strings.Contains(strings.ToLower(line), forbidden) {

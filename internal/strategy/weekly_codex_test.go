@@ -51,7 +51,7 @@ func TestABlownFiveHourCodexWindowIsNotAFloor(t *testing.T) {
 func TestWeeklyResetOfTakesTheThirtyDayCodexReset(t *testing.T) {
 	s := codexPrimarySnap(40, 20*24*time.Hour, 30*24*time.Hour)
 
-	got := weeklyResetOf(s, opts().Model, thr())
+	got := weeklyResetOf(s, opts().Model, thr(), now)
 	if !got.ok {
 		t.Fatal("weeklyResetOf() reported no reset; the thirty-day codex window carries one")
 	}
@@ -70,7 +70,7 @@ func TestTheClaudeWindowsStillAnswerOffTheirNames(t *testing.T) {
 	if !h.HasFloor || h.Floor != usage.WindowSevenDay {
 		t.Fatalf("Floor = (%q, %v), want (seven_day, true)", h.Floor, h.HasFloor)
 	}
-	got := weeklyResetOf(s, opts().Model, thr())
+	got := weeklyResetOf(s, opts().Model, thr(), now)
 	if want := now.Add(48 * time.Hour); !got.ok || !got.at.Equal(want) {
 		t.Fatalf("weeklyResetOf() = (%v, %v), want (%v, true)", got.at, got.ok, want)
 	}

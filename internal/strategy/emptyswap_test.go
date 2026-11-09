@@ -12,10 +12,11 @@ import (
 // through its own cycle, and a healthy week underneath so five_hour is the only
 // thing that is out.
 //
-// The elapsed shares are what made the ranking move. Hover's threshold is
-// elapsed + share, so the account furthest through its window carries the
-// highest threshold and therefore the least negative slack -- which is the whole
-// of what "a better target" meant on every one of those eighteen lines.
+// The elapsed shares are what made the ranking move under the pace rotation
+// hover ran then. Its threshold was elapsed + share, so the account furthest
+// through its window carried the highest threshold and therefore the least
+// negative slack -- which was the whole of what "a better target" meant on
+// every one of those eighteen lines.
 func spentFleetOf20260905() []Candidate {
 	shares := []float64{0.98, 0.95, 0.90, 0.85}
 	names := []string{"1-official", "2-tlfyvhsdlek", "3-chan", "4-ejalrnrmf"}

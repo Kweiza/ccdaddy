@@ -623,8 +623,10 @@ func switchLogLine(ev switcher.Evaluation, target store.Account) string {
 		return b.String()
 	}
 
+	// Explain and not the bare reason, so daemon.log says what a terminal says
+	// -- including which window a limit hand-off left the account on.
 	b.WriteString(": ")
-	b.WriteString(ev.Plan.Reason.String())
+	b.WriteString(switcher.Explain(ev.Plan))
 
 	h := ev.Plan.Target.Headroom
 	if !h.Known {
@@ -633,16 +635,6 @@ func switchLogLine(ev switcher.Evaluation, target store.Account) string {
 	}
 	fmt.Fprintf(&b, " (binding=%s slack=%.1f thr=%.1f used=%.1f)",
 		h.Binding, h.Slack, h.Threshold, 100-h.Pct)
-	// Under hover the threshold's second term is the account's own share, which
-	// is the pool's flat slice UNLESS this account is holding quota its rotation
-	// cannot reach in time. Where it is, the line above is a threshold a reader
-	// cannot derive, so the reason it is that high is said here rather than left
-	// to be inferred from a number that used to be 100/usable and no longer is.
-	t := ev.Plan.Target
-	if t.Stranded > 0 {
-		fmt.Fprintf(&b, "; share=%.0f, %.0f pts of %s would otherwise expire unspent",
-			t.HoverShare, t.Stranded, t.StrandedWindow)
-	}
 	return b.String()
 }
 
@@ -737,6 +729,7 @@ func (e *Engine) act(ctx context.Context, s *store.Store, ev switcher.Evaluation
 	}
 	res, err := switcher.Execute(s, switcher.Request{
 		Target: ev.Target, LiveUUID: live, Unattended: true, LiveForeign: foreign,
+		Departure: ev.Plan.Departure,
 		// The engine's clock, not the swap's own: every other decision this
 		// tick is dated from it, and a staleness answer taken from a
 		// different clock is a different tick's answer.

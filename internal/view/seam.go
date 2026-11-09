@@ -2,7 +2,6 @@ package view
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/daemon"
@@ -41,24 +40,15 @@ type Snapshot struct {
 	Strategy         string // the selected policy: hover, manual, headroom or consume-first
 	AutoSort         bool   // account lists follow the nearest seven-day reset
 	Hover            bool   // compatibility storage for the hover policy
-	// HoverAccounts is the per-account half of hover's derivation, empty when
+	// HoverOrder is the main pool in the order hover's pass left it, empty when
 	// hover is off or when no pass ran.
 	//
-	// The rows already carry the thresholds; this carries the SECOND TERM every
-	// one of them was built from. It used to be one number for the whole pool
-	// and a reader could hold it in their head; it is now per account, so a
-	// table that did not publish it would be asking a reader to accept a
-	// threshold they cannot reconstruct. StrandedNote is what turns it into a
-	// sentence.
-	HoverAccounts []strategy.HoverAccount
-	// BurnPerMin is the rate hover priced its licence floor in, in points of a
-	// binding window a minute, and zero when nothing was measured.
-	//
-	// It is published for the reason the thresholds themselves are: a floor
-	// stated in points of WORK cannot be reconstructed from the table unless the
-	// rate it was stated in is on the page. hover.go's own note refuses to read
-	// a rate the user cannot follow, and this is what makes the reading legal.
-	BurnPerMin float64
+	// It is carried because hover's whole decision IS the order, and no cell
+	// on the table shows it: every quota cell is a raw utilization, and which
+	// account the session goes to next -- or why an account with room is not
+	// it -- is a fact about the ranking, not about any row. HoverLines turns it
+	// into one sentence per account.
+	HoverOrder []strategy.Ranked
 	// Manual is compatibility storage for the manual policy. The selected
 	// strategy remains explicit so a healthy ranking under manual cannot look
 	// like a broken engine.
@@ -86,42 +76,65 @@ type Snapshot struct {
 	HasForecast bool
 }
 
-// StrandedNote names every account whose share is wider than the pool's flat
-// slice, and says what is expiring to make it so.
+// HoverLines is the hover block printed under the table: what the mode does, and
+// then the order its pass left the pool in, one line per account.
 //
-// Empty when nothing strands, which is the ordinary case and the reason this is
-// a note rather than a column: a fleet keeping up with its weeks would carry a
-// column of identical numbers on every row forever.
-//
-// It exists because the hover footer's promise -- "thresholds are derived per
-// account and window" -- stopped being enough the moment the share varied. A
-// reader looking at two accounts whose windows elapsed identically and whose
-// thresholds differ by forty points has no way to ask why, and the answer is
-// not in any cell on the table.
-func (s Snapshot) StrandedNote() string {
+// Nothing when hover is off. The order lines are the half no cell can carry:
+// a five-hour account at 85% that the session is not on reads like a mistake
+// until the line beside it says it was left at its limit and is held out until
+// its window rolls, and an Ultra seat holding half its week is explained only
+// by whose week ends first.
+func (s Snapshot) HoverLines() []string {
 	if !s.Hover {
-		return ""
+		return nil
 	}
-	label := map[string]string{}
+	rows := map[string]Row{}
 	for _, r := range s.Rows {
-		label[r.Account.UUID] = r.ListLabel()
+		rows[r.Account.UUID] = r
 	}
-	parts := make([]string, 0, len(s.HoverAccounts))
-	for _, a := range s.HoverAccounts {
-		if a.Stranded <= 0 || a.Share <= a.PoolShare {
-			continue
+	out := []string{HoverNote}
+	for i, ranked := range s.HoverOrder {
+		row, ok := rows[ranked.UUID]
+		who := ranked.UUID
+		if ok {
+			who = row.ListLabel()
 		}
-		who := label[a.UUID]
-		if who == "" {
-			who = a.UUID
+		line := fmt.Sprintf("hover:    %d. %s  %s", i+1, who, s.placeOf(ranked, row))
+		if row.Active {
+			line += " · live"
 		}
-		parts = append(parts, fmt.Sprintf("%s share %.0f (pool %.0f): %.0f pts of %s expire %s",
-			who, a.Share, a.PoolShare, a.Stranded, a.Window, a.ResetsAt.In(s.zone()).Format("Mon 15:04")))
+		out = append(out, line)
 	}
-	if len(parts) == 0 {
-		return ""
+	return out
+}
+
+// placeOf says where hover's order filed one account and the one fact that put
+// it there.
+func (s Snapshot) placeOf(r strategy.Ranked, row Row) string {
+	switch rung := r.Rung(); rung {
+	case strategy.RungShortWindow, strategy.RungWeeklyOnly:
+		if !r.HasWeeklyReset {
+			return rung.String() + " · no weekly reset"
+		}
+		return rung.String() + " · week resets " + s.clock(r.WeeklyResetsAt)
+	case strategy.RungHeldOut:
+		// ResetFor is nil-safe, so a row with no reading names no instant.
+		if at, ok := row.Entry.Snapshot.ResetFor(r.HeldOut); ok {
+			return fmt.Sprintf("held out until %s rolls over at %s", r.HeldOut, s.clock(at))
+		}
+		return fmt.Sprintf("held out until %s rolls over", r.HeldOut)
+	case strategy.RungAtLimit:
+		return fmt.Sprintf("at its limit on %s", r.AtLimit())
+	case strategy.RungEmpty:
+		return fmt.Sprintf("nothing left on %s", r.AtLimit())
 	}
-	return "running wide of pace on purpose -- " + strings.Join(parts, "; ")
+	return "unreadable"
+}
+
+// clock renders an instant in the reader's own zone, to the minute, with the
+// weekday a weekly reset needs.
+func (s Snapshot) clock(at time.Time) string {
+	return at.In(s.zone()).Format("Mon 15:04")
 }
 
 // zone is the location the note renders instants in, which is the reader's own.
@@ -169,24 +182,4 @@ func ActiveLine(claude, codex string) string {
 		return claude
 	}
 	return "Claude: " + claude + " · Codex: " + codex
-}
-
-// BurnNote is the sentence that publishes the measured rate, and empty when
-// there is nothing to publish.
-//
-// It rides inside the hover gate with the other two sentences because it
-// explains a figure only hover derives: the licence floor an account has to
-// clear is one HoverCooldown of WORK, and how many points that is depends
-// entirely on this rate. Without it a reader can see the thresholds and cannot
-// close the arithmetic behind them.
-//
-// A rate of zero prints nothing. An unmeasured fleet and a measured idle one
-// have the same page to draw here, and a line reading "0 points a minute" would
-// invite a reader to divide by it.
-func (s Snapshot) BurnNote() string {
-	if !s.Hover || s.BurnPerMin <= 0 {
-		return ""
-	}
-	return fmt.Sprintf("hover:    measured burn %.1f pts/min, so an account needs %.1f points to be worth switching to",
-		s.BurnPerMin, s.BurnPerMin*strategy.HoverCooldown.Minutes())
 }

@@ -24,8 +24,9 @@ func TestHoverReachesTheRankingPass(t *testing.T) {
 }
 
 // probe_unknown is one of the keys hover overrides, and it is the only one whose
-// override has to survive as far as the daemon: hover cannot pace a window that
-// has never reported a reset, and a probe is the only thing that puts one there.
+// override has to survive as far as the daemon: hover cannot place a window that
+// has never reported a reset on the reset axis it orders by, and a probe is the
+// only thing that puts one there.
 func TestHoverForcesTheProbeOnInTheEffectiveConfig(t *testing.T) {
 	off, err := Parse([]byte("hover = true\nprobe_unknown = false\n"))
 	if err != nil {
@@ -103,5 +104,23 @@ func TestEveryKeyIsClassifiedAgainstHover(t *testing.T) {
 	// asks only that every key is in exactly one of the two tables.
 	if HoverOverrides(keyMCPSwitchWithoutElicitation) {
 		t.Fatal("hover overrides the MCP confirm permission; a mode must not grant a permission on the person's behalf")
+	}
+}
+
+// Hover stopped deriving the three margins when it stopped pacing, and a listing
+// that still marked them overridden would report the user's own numbers as ones
+// nothing reads -- recovery_hysteresis above all, which is the margin hover now
+// moves weekly-only seats on.
+func TestHoverHonoursTheMarginsItNoLongerDerives(t *testing.T) {
+	for _, key := range []string{keyHysteresisPct, keyHeadroomRatio, keyRecoveryHysteresis} {
+		if HoverOverrides(key) || !hoverHonours[key] {
+			t.Errorf("%s: overridden=%v honoured=%v, want honoured", key, HoverOverrides(key), hoverHonours[key])
+		}
+	}
+	// And the keys hover still sets for itself are still marked.
+	for _, key := range []string{keyThreshold, keyCooldown, keyStrategy, keyPreemptLead, keyProbeUnknown, keyCreditThreshold} {
+		if !HoverOverrides(key) {
+			t.Errorf("%s is not marked overridden; hover sets it itself", key)
+		}
 	}
 }

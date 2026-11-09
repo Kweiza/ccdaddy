@@ -260,7 +260,7 @@ func TestCollapseWindowsDeclinesOnThePlaceholderQuotaColumn(t *testing.T) {
 		t.Fatalf("CollapseWindows = %v, want the columns unchanged", kinds(got))
 	}
 	r := Row{Account: store.Account{UUID: "u-1"}}
-	if cell := r.ListCell(got[4], Columns{}, colNow, false); cell != Unreadable {
+	if cell := r.ListCell(got[4], Columns{}, colNow); cell != Unreadable {
 		t.Errorf("the placeholder cell = %q, want %q either way", cell, Unreadable)
 	}
 }
@@ -280,7 +280,7 @@ func TestListCellAnswersEveryColumnKind(t *testing.T) {
 		"STATE": "active", "AUTO": "yes", "AGE": "4m",
 	}
 	for _, col := range cols {
-		if got := r.ListCell(col, c, colNow, false); got != want[col.Header] {
+		if got := r.ListCell(col, c, colNow); got != want[col.Header] {
 			t.Errorf("%s = %q, want %q", col.Header, got, want[col.Header])
 		}
 	}
@@ -290,27 +290,8 @@ func TestListCellAnswersEveryColumnKind(t *testing.T) {
 			continue
 		}
 		want := map[string]string{"5H": "87%", "7D": "42%"}[col.Header]
-		if got := r.ListCell(col, c, colNow, false); got != want {
+		if got := r.ListCell(col, c, colNow); got != want {
 			t.Errorf("%s = %q, want %q", col.Header, got, want)
-		}
-	}
-}
-
-// hover selects the quota cells' form and nothing else: the countdown beside
-// them is the same span under either report.
-func TestListCellUnderHoverShowsUsedAgainstTheThreshold(t *testing.T) {
-	r := listRow()
-	c := ColumnsOf([]Row{r})
-	for _, col := range ListColumns(c) {
-		switch col.Header {
-		case "5H":
-			if got, want := r.ListCell(col, c, colNow, true), "87%/80%"; got != want {
-				t.Errorf("5H under hover = %q, want %q", got, want)
-			}
-		case "5H IN":
-			if got, want := r.ListCell(col, c, colNow, true), "2h00m"; got != want {
-				t.Errorf("5H IN under hover = %q, want %q — a countdown has no threshold", got, want)
-			}
 		}
 	}
 }
@@ -321,11 +302,11 @@ func TestListCellUnderHoverShowsUsedAgainstTheThreshold(t *testing.T) {
 func TestTheIdxCellCarriesTheLiveMarkerAndTheStoreIndex(t *testing.T) {
 	r := listRow()
 	col := ListColumns(ColumnsOf([]Row{r}))[0]
-	if got := r.ListCell(col, Columns{}, colNow, false); got != "* 3" {
+	if got := r.ListCell(col, Columns{}, colNow); got != "* 3" {
 		t.Errorf("IDX on the live account = %q, want %q", got, "* 3")
 	}
 	r.Active = false
-	if got := r.ListCell(col, Columns{}, colNow, false); got != "  3" {
+	if got := r.ListCell(col, Columns{}, colNow); got != "  3" {
 		t.Errorf("IDX on an idle account = %q, want %q", got, "  3")
 	}
 }
@@ -336,7 +317,7 @@ func TestTheAccountCellIsTheWholeLabelAndIsNotCut(t *testing.T) {
 	r := listRow()
 	r.Account.Email = "a-very-long-address-indeed@example.com"
 	col := ListColumns(ColumnsOf([]Row{r}))[1]
-	if got, want := r.ListCell(col, Columns{}, colNow, false), r.ListLabel(); got != want {
+	if got, want := r.ListCell(col, Columns{}, colNow), r.ListLabel(); got != want {
 		t.Errorf("ACCOUNT = %q, want %q", got, want)
 	}
 }
@@ -351,7 +332,7 @@ func TestTheAgeCellCarriesNoStatusFlags(t *testing.T) {
 	if col.Kind != ColumnAge {
 		t.Fatalf("column 10 is %s, want AGE", col.Kind)
 	}
-	if got := r.ListCell(col, Columns{}, colNow, false); got != "4m" {
+	if got := r.ListCell(col, Columns{}, colNow); got != "4m" {
 		t.Errorf("AGE = %q, want %q with the flags left to their own suffix", got, "4m")
 	}
 	if r.StatusFlags() == "" {
@@ -360,7 +341,7 @@ func TestTheAgeCellCarriesNoStatusFlags(t *testing.T) {
 }
 
 func TestAnUnknownColumnKindRendersNothing(t *testing.T) {
-	if got := listRow().ListCell(ListColumn{Kind: ColumnKind(99)}, Columns{}, colNow, false); got != "" {
+	if got := listRow().ListCell(ListColumn{Kind: ColumnKind(99)}, Columns{}, colNow); got != "" {
 		t.Errorf("an unknown kind rendered %q, want the empty string", got)
 	}
 }
@@ -699,7 +680,7 @@ func TestTrailerLinesAreOneOrderedSlice(t *testing.T) {
 	// windows, so there is one legend per section and SectionLegend is what
 	// builds it; a whole-fleet legend under here would name columns no section
 	// draws.
-	got := TrailerLines(rows, c, true, "", "")
+	got := TrailerLines(rows, c, []string{HoverNote})
 	if len(got) != 3 {
 		t.Fatalf("TrailerLines = %d lines, want 3:\n%s", len(got), strings.Join(got, "\n"))
 	}
@@ -716,13 +697,13 @@ func TestTrailerLinesAreOneOrderedSlice(t *testing.T) {
 
 func TestTrailerLinesOmitEveryLineWithNothingToSay(t *testing.T) {
 	rows := []Row{listRow()}
-	if n := len(TrailerLines(rows, ColumnsOf(rows), false, "", "")); n != 0 {
+	if n := len(TrailerLines(rows, ColumnsOf(rows), nil)); n != 0 {
 		t.Fatalf("TrailerLines = %d lines, want none: off hover, with nothing unranked and no "+
 			"credit seat, there is nothing left under the table", n)
 	}
 	// A fleet nobody could read is the same answer reached another way.
 	blind := []Row{{Account: store.Account{UUID: "u-1"}}}
-	if n := len(TrailerLines(blind, ColumnsOf(blind), false, "", "")); n != 0 {
+	if n := len(TrailerLines(blind, ColumnsOf(blind), nil)); n != 0 {
 		t.Errorf("TrailerLines on an unreadable fleet = %d lines, want none", n)
 	}
 }
@@ -752,7 +733,7 @@ func TestOneCreditLinePerCreditMeteredSeat(t *testing.T) {
 	credit := creditOnlyRow(t, 60.2255)
 	rows := []Row{listRow(), credit, credit}
 	n := 0
-	for _, line := range TrailerLines(rows, ColumnsOf(rows), false, "", "") {
+	for _, line := range TrailerLines(rows, ColumnsOf(rows), nil) {
 		if strings.HasPrefix(line, "credit:") {
 			n++
 		}

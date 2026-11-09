@@ -17,18 +17,18 @@ func hoverAt(uuid string, share, util float64) Candidate {
 	))
 }
 
-// livePoolOf20260824 is the pool that produced this whole change: six accounts,
-// every one past the threshold hover derived for it, and the one with NOTHING
-// left ranked first because HoverCap capped its threshold at 99 and so capped
-// its slack at -1.
+// livePoolOf20260824 is the pool that produced the empty tier: six accounts, and
+// the one with NOTHING left ranked first under the pace rotation hover ran then,
+// because its threshold was capped at 99 and so its slack at -1 while every
+// other account's pace target was far below its utilization.
 func livePoolOf20260824() []Candidate {
 	return []Candidate{
-		hoverAt("1-official", 0.90, 100),   // 0 points left, slack -1
-		hoverAt("2-kweizaa", 0.30, 80),     // 20 points left, slack -33
-		hoverAt("3-tlfyvhsdlek", 0.15, 53), // 47 points left, slack -22
-		hoverAt("4-ejalrnrmf", 0.35, 70),   // 30 points left, slack -18
-		hoverAt("5-junseong", 0.51, 79),    // 21 points left, slack -11
-		hoverAt("6-chan", 0.34, 80),        // 20 points left, slack -29
+		hoverAt("1-official", 0.90, 100),   // 0 points left
+		hoverAt("2-kweizaa", 0.30, 80),     // 20 points left
+		hoverAt("3-tlfyvhsdlek", 0.15, 53), // 47 points left
+		hoverAt("4-ejalrnrmf", 0.35, 70),   // 30 points left
+		hoverAt("5-junseong", 0.51, 79),    // 21 points left
+		hoverAt("6-chan", 0.34, 80),        // 20 points left
 	}
 }
 
@@ -38,7 +38,7 @@ func hoverOpts() Options {
 	return o
 }
 
-// The account with nothing left goes last, whatever its pace says.
+// The account with nothing left goes last.
 func TestHoverRanksTheEmptyAccountLast(t *testing.T) {
 	r := Rank(livePoolOf20260824(), hoverOpts())
 	got := order(r)
@@ -76,19 +76,18 @@ func TestHoverSwitchesOffTheEmptyAccount(t *testing.T) {
 }
 
 // MinPct is not Pct, and the case where they disagree is the reason it exists:
-// Pct is read off the least-SLACK window, which is not always the window that
-// has run out.
+// Pct is read off the least-SLACK window, which under a per-window table is not
+// always the window that will run out.
 func TestMinPctNamesTheWindowThatActuallyRanOut(t *testing.T) {
-	// five_hour: 3% through its cycle at 25% used -> low threshold, least slack.
-	// seven_day: 90% through the week at 95% used -> threshold 99, more slack.
+	// five_hour held to 20 at 25% used: least slack. seven_day held to 99 at
+	// 95% used: more slack, and five points of room.
 	c := sub("x", &usage.Snapshot{
 		FiveHour: elapsedWindow(5*time.Hour, 0.03, 25),
 		SevenDay: elapsedWindow(7*24*time.Hour, 0.90, 95),
 	})
-	pool := append([]Candidate{c}, hoverAt("f1", 0.5, 10), hoverAt("f2", 0.5, 10),
-		hoverAt("f3", 0.5, 10), hoverAt("f4", 0.5, 10), hoverAt("f5", 0.5, 10))
+	o := perWindow(map[usage.WindowName]float64{usage.WindowFiveHour: 20, usage.WindowSevenDay: 99})
 
-	h := measure(pool[0], hoverOpts().withHover(pool)).Headroom
+	h := measure(c, o).Headroom
 	if h.Binding != usage.WindowFiveHour {
 		t.Fatalf("Binding = %v, want five_hour: the fixture is not exercising the disagreement", h.Binding)
 	}
@@ -101,12 +100,12 @@ func TestMinPctNamesTheWindowThatActuallyRanOut(t *testing.T) {
 	}
 }
 
-// Spent and OutOfQuota are different questions, and under hover they routinely
-// give different answers for the same account.
+// Spent and OutOfQuota are different questions, and under a threshold short of
+// 100 they routinely give different answers for the same account.
 func TestSpentAndOutOfQuotaAreDifferentQuestions(t *testing.T) {
-	o := hoverOpts()
+	o := opts()
+	o.Threshold = 60
 	pool := livePoolOf20260824()
-	o = o.withHover(pool)
 
 	spentCount, emptyCount := 0, 0
 	for _, c := range pool {
@@ -118,52 +117,45 @@ func TestSpentAndOutOfQuotaAreDifferentQuestions(t *testing.T) {
 			emptyCount++
 		}
 	}
-	if spentCount != 6 {
-		t.Errorf("Spent said %d of 6; the whole pool is ahead of its pace", spentCount)
+	if spentCount != 5 {
+		t.Errorf("Spent said %d of 6; five accounts are past 60", spentCount)
 	}
 	if emptyCount != 1 {
 		t.Errorf("OutOfQuota said %d of 6; exactly one account has nothing left", emptyCount)
 	}
 }
 
-// "Empty implies spent" used to be arithmetic on a clamp -- 100 > HoverCap
-// guaranteed a used-up window reported negative slack -- and the clamp is gone.
-// So the pace target of an account far enough through its own window now runs
-// PAST 100, and a window with nothing in it reports POSITIVE slack.
+// "Empty implies spent" holds whatever the threshold. Under a threshold of
+// exactly 100 -- one a user may set -- a window with nothing in it reports a
+// slack of zero, not a negative one, so Spent's `Slack < 0` clause is false and
+// the MinPct clause is the only one that can fire.
 //
 // Spent has to say so anyway. It gates allOver, which is the only thing that
 // reaches ModeRecovery, so one account like this reading as roomy would take
 // recovery mode away from the whole pool -- and headroomTier would file it in
 // tier 0, ahead of every account that actually has quota.
-func TestAnEmptyAccountIsSpentEvenWhenItsPaceTargetIsAbove100(t *testing.T) {
-	// One usable account, so the share is the whole 100 points: a weekly window
-	// 92% elapsed is measured against 192, and at 100% used that is +92 of slack.
-	pool := []Candidate{hoverAt("solo", 0.92, 100)}
-	o := hoverOpts().withHover(pool)
+func TestAnEmptyAccountIsSpentWhateverItsThreshold(t *testing.T) {
+	o := opts()
+	o.Threshold = 100
+	r := measure(hoverAt("solo", 0.92, 100), o)
 
-	h := measure(pool[0], o).Headroom
-	// Not negative is the premise. The pace target is 192, so the subtraction
-	// gives +92; the clamp on an empty window brings that to exactly 0. Either
-	// way Spent's `Slack < 0` clause is false and the MinPct clause is the only
-	// one that can fire, which is what this test holds.
-	if h.Slack < 0 {
-		t.Fatalf("Slack = %v; this test is pointless unless the slack is non-negative", h.Slack)
+	if r.Headroom.Slack != 0 {
+		t.Fatalf("Slack = %v; this test is pointless unless the slack is exactly zero", r.Headroom.Slack)
 	}
-	if spent, known := Spent(h); !known || !spent {
-		t.Errorf("Spent = %v (known %v) on an account at 100%% used with slack %+.0f",
-			spent, known, h.Slack)
+	if spent, known := Spent(r.Headroom); !known || !spent {
+		t.Errorf("Spent = %v (known %v) on an account at 100%% used", spent, known)
 	}
-	if empty, known := OutOfQuota(h); !known || !empty {
-		t.Errorf("OutOfQuota = %v (known %v); MinPct = %v", empty, known, h.MinPct)
+	if empty, known := OutOfQuota(r.Headroom); !known || !empty {
+		t.Errorf("OutOfQuota = %v (known %v); MinPct = %v", empty, known, r.Headroom.MinPct)
 	}
-	if got := headroomTier(measure(pool[0], o)); got != tierEmpty {
+	if got := headroomTier(r); got != tierEmpty {
 		t.Errorf("headroomTier = %d, want tierEmpty: an account with nothing in it is not roomy", got)
 	}
 }
 
 // A single threshold cannot produce the inversion at all: slack is raw room
 // shifted by a constant, so the two axes order identically. This is what bounds
-// the whole defect to per-window thresholds, which is to say to hover.
+// the whole defect to per-window thresholds.
 func TestASingleThresholdCannotInvert(t *testing.T) {
 	o := opts()
 	o.Threshold = 80
@@ -175,16 +167,15 @@ func TestASingleThresholdCannotInvert(t *testing.T) {
 	}
 }
 
-// The clamp is 100-pct and not a flat zero, so the arithmetic stays MONOTONE
-// past the line: a window five points over is worse than one exactly empty. An
-// ordering that flattened them would shuffle two spent accounts by uuid.
+// The arithmetic stays MONOTONE past the line: a window five points over is
+// worse than one exactly empty. An ordering that flattened them -- a clamp of
+// any kind on an empty window -- would shuffle two spent accounts by uuid.
 func TestPastTheLineIsStillWorseThanExactlyEmpty(t *testing.T) {
-	exact := measure(hoverAt("exact", 0.92, 100), hoverOpts().withHover([]Candidate{hoverAt("exact", 0.92, 100)})).Headroom
-	over := measure(hoverAt("over", 0.92, 105), hoverOpts().withHover([]Candidate{hoverAt("over", 0.92, 105)})).Headroom
+	o := opts()
+	o.Threshold = 100
+	exact := measure(hoverAt("exact", 0.92, 100), o).Headroom
+	over := measure(hoverAt("over", 0.92, 105), o).Headroom
 
-	if exact.Slack != 0 {
-		t.Errorf("an exactly empty window reports %v of slack, want 0", exact.Slack)
-	}
 	if over.Slack >= exact.Slack {
 		t.Errorf("105%% used reports %v and 100%% reports %v; past the line has to be worse",
 			over.Slack, exact.Slack)

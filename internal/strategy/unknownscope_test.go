@@ -168,7 +168,7 @@ func TestAnOptedInUnknownScopeWindowIsAWeeklyResetLikeAnyOther(t *testing.T) {
 	}
 
 	o := perWindow(map[usage.WindowName]float64{"weekly_scoped:region:eu": 80})
-	got := weeklyResetOf(s, o.Model, o.Thresholds())
+	got := weeklyResetOf(s, o.Model, o.Thresholds(), o.Now)
 	if !got.ok {
 		t.Fatal("weeklyResetOf() reported no reset; the opted-in window carries one")
 	}
@@ -176,7 +176,7 @@ func TestAnOptedInUnknownScopeWindowIsAWeeklyResetLikeAnyOther(t *testing.T) {
 		t.Errorf("weeklyResetOf() = %v, want %v — the opted-in weekly cap resets first", got.at, want)
 	}
 
-	if bare := weeklyResetOf(s, opts().Model, thr()); !bare.ok || !bare.at.Equal(now.Add(96*time.Hour)) {
+	if bare := weeklyResetOf(s, opts().Model, thr(), now); !bare.ok || !bare.at.Equal(now.Add(96*time.Hour)) {
 		t.Errorf("weeklyResetOf() without the opt-in = %v, want the seven_day reset — an unnamed scope must not reach this pass either", bare.at)
 	}
 }

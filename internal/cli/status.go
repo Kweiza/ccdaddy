@@ -253,8 +253,7 @@ func loadSnapshot(cmd *cobra.Command, now time.Time, refresh bool) (snap view.Sn
 		CodexServingUUID:  codexUUID,
 		Strategy:          selectedStrategy(cfg),
 		Hover:             cfg.Hover,
-		HoverAccounts:     hoverAccounts(cfg, plan),
-		BurnPerMin:        hoverBurn(cfg, plan),
+		HoverOrder:        hoverOrder(cfg, plan),
 		Manual:            cfg.Manual,
 		Mode:              mode,
 		HasMode:           hasMode,
@@ -272,32 +271,17 @@ func loadSnapshot(cmd *cobra.Command, now time.Time, refresh bool) (snap view.Sn
 	}, probeErr, nil
 }
 
-// hoverAccounts is the per-account half of hover's derivation, or nothing.
+// hoverOrder is the main pool in the order hover's pass left it, or nothing.
 //
 // It is guarded on cfg.Hover as well as on the pass, and the redundancy is the
 // point: view.ThresholdsFor already refuses to read a plan with hover off, and a
-// snapshot that carried the shares anyway would let a renderer print a licence
-// nothing was measured against.
-func hoverAccounts(cfg config.Config, plan strategy.Plan) []strategy.HoverAccount {
+// snapshot that carried the order anyway would let a renderer explain an order
+// the engine was not running.
+func hoverOrder(cfg config.Config, plan strategy.Plan) []strategy.Ranked {
 	if !cfg.Hover || plan.Hover == nil {
 		return nil
 	}
-	return plan.Hover.Accounts
-}
-
-// hoverBurn is the measured rate hover priced its licence floor in, or zero when
-// there is none.
-//
-// Zero is safe as the "no measurement" answer HERE and only here: it reaches a
-// note that is printed when the figure is positive, so an unmeasured fleet and a
-// measured idle one produce the same page -- which is right, because neither has
-// a rate that moved a threshold. The engine keeps the two apart, where the
-// difference decides an arm.
-func hoverBurn(cfg config.Config, plan strategy.Plan) float64 {
-	if !cfg.Hover || plan.Hover == nil || !plan.Hover.HasBurn {
-		return 0
-	}
-	return plan.Hover.BurnPerMin
+	return plan.Result.Order
 }
 
 // enginePlan is the decision the engine would make right now, asked for rather
@@ -535,7 +519,7 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 
 	cells := make([][]string, 0, len(lines))
 	for _, line := range lines {
-		cells = append(cells, line.cells(now, snap.Hover))
+		cells = append(cells, line.cells(now))
 	}
 	if err := columns(out, nil, cells, sectionCellStyle(pal, lines, accountCol, firstWindow)); err != nil {
 		return err
@@ -551,7 +535,7 @@ func renderStatus(cmd *cobra.Command, snap view.Snapshot) error {
 	// The whole fleet's block, for the one sentence under here that is about the
 	// fleet rather than about a section: a window nothing ranks is not something
 	// a reader should have to notice once per provider.
-	for _, line := range view.TrailerLines(rows, view.ColumnsOf(rows), snap.Hover, snap.StrandedNote(), snap.BurnNote()) {
+	for _, line := range view.TrailerLines(rows, view.ColumnsOf(rows), snap.HoverLines()) {
 		fmt.Fprintln(out, view.WrapLabeled(line, outWidth(cmd.OutOrStdout())))
 	}
 	return nil

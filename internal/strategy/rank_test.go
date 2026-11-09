@@ -497,7 +497,7 @@ func TestSubscriptionExhausted(t *testing.T) {
 }
 
 func TestModesAllHaveNames(t *testing.T) {
-	for m := ModeHeadroom; m <= ModeConsumeFirst; m++ {
+	for m := ModeHeadroom; m <= ModeHover; m++ {
 		if m.String() == "" || m.String() == "unknown" {
 			t.Errorf("Mode(%d) has no name", m)
 		}

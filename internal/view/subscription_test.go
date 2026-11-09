@@ -12,7 +12,7 @@ import (
 
 func TestCanceledSubscriptionsOverrideAStaleEngineStateOnThePage(t *testing.T) {
 	r := Row{Account: store.Account{Provider: provider.Claude, SubscriptionStatus: "canceled"}, Engine: daemon.AccountStatus{State: daemon.StateCandidate}}
-	if got := r.ListCell(ListColumn{Kind: ColumnState}, Columns{}, time.Now(), false); got != "unsubscribed" {
+	if got := r.ListCell(ListColumn{Kind: ColumnState}, Columns{}, time.Now()); got != "unsubscribed" {
 		t.Fatalf("state = %q", got)
 	}
 	if r.AutoLabel() != "no" || !strings.Contains(r.StatusFlags(), "subscription canceled") {
@@ -26,7 +26,7 @@ func TestCanceledSubscriptionsOverrideAStaleEngineStateOnThePage(t *testing.T) {
 
 func TestUnverifiedSubscriptionShowsCheckingWithoutClaimingExpiry(t *testing.T) {
 	r := Row{Account: store.Account{Provider: provider.Claude, SubscriptionStatus: "unknown"}, Engine: daemon.AccountStatus{State: daemon.StateCandidate}}
-	if got := r.ListCell(ListColumn{Kind: ColumnState}, Columns{}, time.Now(), false); got != "checking" {
+	if got := r.ListCell(ListColumn{Kind: ColumnState}, Columns{}, time.Now()); got != "checking" {
 		t.Fatalf("state = %q", got)
 	}
 	if r.AutoLabel() != "no" || r.Account.SubscriptionInactive() {

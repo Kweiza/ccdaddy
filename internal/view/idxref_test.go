@@ -34,7 +34,7 @@ func TestTheIdxCellIsTheRef(t *testing.T) {
 		{Row{Account: store.Account{Provider: provider.Claude, Idx: 2}}, "  c2"},
 		{Row{Account: store.Account{Provider: provider.Codex, Idx: 1}}, "  x1"},
 	} {
-		if got := tc.row.ListCell(c, Columns{}, colNow, false); got != tc.want {
+		if got := tc.row.ListCell(c, Columns{}, colNow); got != tc.want {
 			t.Errorf("%s %d: IDX cell = %q, want %q", tc.row.Account.Provider, tc.row.Account.Idx, got, tc.want)
 		}
 	}
@@ -48,7 +48,7 @@ func TestTheServingCodexRowCarriesTheMarker(t *testing.T) {
 	if got := r.Marker(); got != "*" {
 		t.Errorf("Marker() on the serving codex row = %q, want %q", got, "*")
 	}
-	if got := r.ListCell(idxColumn(t), Columns{}, colNow, false); got != "* x2" {
+	if got := r.ListCell(idxColumn(t), Columns{}, colNow); got != "* x2" {
 		t.Errorf("IDX cell on the serving codex row = %q, want %q", got, "* x2")
 	}
 	if !r.Marked() {
@@ -63,7 +63,7 @@ func TestTheServingCodexRowCarriesTheMarker(t *testing.T) {
 // reserved less would draw a fleet of ten past its own frame.
 func TestTheIdxColumnHoldsATwoDigitRef(t *testing.T) {
 	c := idxColumn(t)
-	cell := Row{Account: store.Account{Provider: provider.Claude, Idx: 12}, Active: true}.ListCell(c, Columns{}, colNow, false)
+	cell := Row{Account: store.Account{Provider: provider.Claude, Idx: 12}, Active: true}.ListCell(c, Columns{}, colNow)
 	if w := ansi.StringWidth(cell); w > c.Content {
 		t.Errorf("IDX cell %q is %d wide; the column reserves %d", cell, w, c.Content)
 	}
