@@ -473,20 +473,23 @@ func Decide(cands []Candidate, o Options, cfg Config, st *State, activeUUID stri
 	// failure and the cooldown is the only thing that bounds it.
 	//
 	// Hover makes every move of its own in one place, hoverMove, which picks a
-	// target before it applies the cooldown -- the projection included. The one
-	// state it leaves to the arms below is a live account in the credit pool:
-	// returning from one is the subscription arm's question.
-	if o.hover != nil && !activeIsCredit {
+	// target before it applies the cooldown -- the projection included, and the
+	// return from a live credit seat. The one state it leaves to the arms below
+	// is a main pool with nothing in it, where the credit arms are the whole
+	// answer under every strategy (TestAnEmptyMainPoolUnderHoverIsTheCreditGatesToAnswer).
+	if o.hover != nil && len(res.Order) > 0 {
 		plan.hoverMove(activeUUID, cfg, st, o, byUUID)
 		return plan
 	}
-	if target, moving := preempt(byUUID, res, activeUUID, o); o.hover == nil && moving {
-		if reason, blocked, retry := cooldownGate(res, activeUUID, cfg, st, o.Now); blocked {
-			plan.hold(reason, retry)
+	if o.hover == nil {
+		if target, moving := preempt(byUUID, res, activeUUID, o); moving {
+			if reason, blocked, retry := cooldownGate(res, activeUUID, cfg, st, o.Now); blocked {
+				plan.hold(reason, retry)
+				return plan
+			}
+			plan.switchTo(target, ReasonProjectedExhaustion, activeUUID)
 			return plan
 		}
-		plan.switchTo(target, ReasonProjectedExhaustion, activeUUID)
-		return plan
 	}
 
 	// The subscription pool first. The one situation where it is skipped is an
