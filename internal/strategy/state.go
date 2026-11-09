@@ -291,20 +291,20 @@ func (s *State) QuarantinedUUIDs(now time.Time) []string {
 	return out
 }
 
-// Prune drops quarantines and departures for accounts that are no longer
-// managed, so a removed account cannot come back quarantined, or held out of the
-// order, when it is added again under the same uuid.
-func (s *State) Prune(managed map[string]bool) {
-	for uuid := range s.data.Quarantine {
-		if !managed[uuid] {
-			delete(s.data.Quarantine, uuid)
-		}
-	}
-	for uuid := range s.data.Departures {
-		if !managed[uuid] {
-			delete(s.data.Departures, uuid)
-		}
-	}
+// Forget drops what the engine remembers about one account -- its quarantine
+// and the departure mark hover's order holds it out on -- so an account removed
+// and added again under the same uuid comes back neither quarantined nor held
+// out.
+//
+// It is told the uuid that went rather than the set that stays, and that is the
+// whole of its contract. The caller's set is its own copy of the store, read
+// before this lock was taken, so an account another process added in between
+// is not in it: a prune of everything outside the set would delete that
+// account's fresh quarantine. Naming the one account touches nothing else.
+// TestRemoveForgetsOnlyTheAccountItRemoved.
+func (s *State) Forget(uuid string) {
+	delete(s.data.Quarantine, uuid)
+	delete(s.data.Departures, uuid)
 }
 
 // storeRoot returns ccdad's state directory, refusing a relative one for the

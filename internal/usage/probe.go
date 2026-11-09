@@ -116,13 +116,13 @@ func probeBackoff(strikes int) time.Duration {
 // settle it. This is the schedule of an attempt to take a READING, which is what
 // NextPollAt and PollState in this same entry already are. Cache.Prune drops an
 // entry dated before its account's AddedAt, so an account removed and added
-// again at the same uuid gets a fresh probe budget — where strategy.State.Prune
-// only drops uuids that are gone, and would hand a new login its predecessor's
-// backoff. And the engine state is written only when the engine actually moves
-// or quarantines, on purpose, so that an engine-rate writer is not put behind a
-// poller-rate lock; a probe stamp is a poller-rate event — it is followed a
-// minute later by a poll writing this very entry — and putting it there would be
-// that same mistake in the other direction.
+// again at the same uuid gets a fresh probe budget — where strategy.State.Forget
+// runs only when `ccdad remove` does, and a login replaced any other way would
+// inherit its predecessor's backoff. And the engine state is written only when
+// the engine actually moves or quarantines, on purpose, so that an engine-rate
+// writer is not put behind a poller-rate lock; a probe stamp is a poller-rate
+// event — it is followed a minute later by a poll writing this very entry — and
+// putting it there would be that same mistake in the other direction.
 type ProbeState struct {
 	// LastAttemptAt is when a probe was last ATTEMPTED, whatever came of it.
 	// The zero time means never.
