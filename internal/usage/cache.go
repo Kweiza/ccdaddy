@@ -131,6 +131,10 @@ type PollState struct {
 	// live pair may span (LiveAnchor).
 	LiveSince time.Time `json:"live_since,omitempty"`
 	PromptAt  time.Time `json:"prompt_at,omitempty"`
+	// LastPairRunning is whether the most recent live pair of this account saw
+	// the work running (LiveBurn.Running): false after a pause, which a running
+	// rate kept in LiveBurns outlives, and false for an account never paired.
+	LastPairRunning bool `json:"last_pair_running,omitempty"`
 }
 
 // Entry is one account's cached reading.

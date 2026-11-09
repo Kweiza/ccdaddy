@@ -155,6 +155,17 @@ func (b LiveBurn) Running() bool {
 	return b.PerMin*b.At.Sub(b.From).Minutes() >= ReadingQuantum/2
 }
 
+// AnyRunning is whether any of bs saw the work running: of the pairs one reading
+// made, whether the work moved on any window it carries.
+func AnyRunning(bs []LiveBurn) bool {
+	for _, b := range bs {
+		if b.Running() {
+			return true
+		}
+	}
+	return false
+}
+
 // LiveAnchor is whether the anchor reading of an account -- the one the next
 // reading will be paired with -- was taken live in the stint the account is in
 // now: taken live (anchorLive), and no earlier than the switch that last made

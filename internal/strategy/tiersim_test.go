@@ -226,6 +226,9 @@ type tierPoller struct {
 	// daemon keeps (usage.ProbeState).
 	liveSince time.Time
 	probe     usage.ProbeState
+	// workRunning is whether the most recent live pair saw the work running,
+	// as the daemon's commit records it (PollState.LastPairRunning).
+	workRunning bool
 }
 
 // due is the daemon's due(): never read is due, and otherwise the reading has to
@@ -268,7 +271,11 @@ func (p *tierPoller) poll(s *usage.Snapshot, thr Thresholds, live bool, now time
 		p.last = cur
 	}
 	anchor := usage.LiveAnchor(p.anchorLive, p.fetchedAt, p.liveSince)
-	p.liveBurns = usage.MergeLiveBurns(p.liveBurns, usage.LivePairs(p.snap, p.fetchedAt, anchor, s, now, live))
+	fresh := usage.LivePairs(p.snap, p.fetchedAt, anchor, s, now, live)
+	p.liveBurns = usage.MergeLiveBurns(p.liveBurns, fresh)
+	if len(fresh) > 0 {
+		p.workRunning = usage.AnyRunning(fresh)
+	}
 	p.snap, p.fetchedAt, p.state, p.anchorLive = s, now, next, live
 }
 
@@ -278,6 +285,7 @@ func (p *tierPoller) candidate(uuid string) Candidate {
 	c.FetchedAt, c.NextPollAt = p.fetchedAt, p.nextPollAt
 	c.BurnPerMin, c.HasBurn, c.BurnWindow = p.burn, p.hasBurn, p.burnWindow
 	c.LiveBurns = p.liveBurns
+	c.WorkRunning = p.workRunning
 	return c
 }
 

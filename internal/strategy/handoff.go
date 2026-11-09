@@ -482,7 +482,7 @@ func (p *Plan) hoverMove(activeUUID string, cfg Config, st *State, o Options, by
 	}
 
 	if live.AtLimit() == "" {
-		p.hoverMoveWithRoom(live, activeUUID, cfg, st, o.Now)
+		p.hoverMoveWithRoom(live, activeUUID, cfg, st, o.Now, byUUID)
 		return
 	}
 
@@ -498,7 +498,7 @@ func (p *Plan) hoverMove(activeUUID string, cfg Config, st *State, o Options, by
 			return
 		}
 	}
-	if live.out() {
+	if live.downwardOpen() {
 		if target, ok := lastResort(res, live, o.Now); ok {
 			p.moveOrHold(target, leaveReason(live, target), activeUUID, cfg, st, o.Now)
 			return
@@ -524,14 +524,17 @@ func (p *Plan) hoverMove(activeUUID string, cfg Config, st *State, o Options, by
 // is held by that rule (StayUntilLimit, the weekly-reset margin), and only an
 // account the rule would move to and the work would run out is "cannot carry".
 // The first such reason in the order is the one reported, because it is the
-// move the session would otherwise have made. A hold names its target (Held)
-// only when that target carries, so --force never takes the session onto an
-// account the work would run out. TestTheHoldNamesTheRuleThatKeptTheSession.
-//
-// A live credit seat is not in the order, so the whole order is ahead of it;
-// with nothing there to go back to, it stays for the reason the configured
-// strategies give, no subscription room.
-func (p *Plan) hoverMoveWithRoom(live Ranked, activeUUID string, cfg Config, st *State, now time.Time) {
+// move the session would otherwise have made -- a later carrier the rule
+// refuses is still named as the move held (Held), but not as the reason. A hold
+// names its target only when that target carries, so --force never takes the
+// session onto an account the work would run out.
+// TestTheHoldNamesTheRuleThatKeptTheSession,
+// TestTheHoldNamesTheFirstReasonInTheOrder.
+func (p *Plan) hoverMoveWithRoom(live Ranked, activeUUID string, cfg Config, st *State, now time.Time, byUUID map[string]Candidate) {
+	if p.isCredit(activeUUID) {
+		p.creditSeatReturn(live, activeUUID, cfg, st, now, byUUID)
+		return
+	}
 	stay, retryAt := ReasonAlreadyBest, time.Time{}
 	kept := false
 	for _, target := range p.Result.Order {
@@ -540,13 +543,15 @@ func (p *Plan) hoverMoveWithRoom(live Ranked, activeUUID string, cfg Config, st 
 		}
 		reason, refused, retry := hoverGate(live, target, cfg)
 		if refused && reason == ReasonAlreadyBest {
-			// Not ahead of the live account by the order's own rules: a
-			// credit seat's walk reaches accounts no better than it.
+			// Not ahead of the live account by the order's own rules.
 			continue
 		}
 		switch {
 		case refused && target.Carries:
-			p.hold(reason, retry)
+			if !kept {
+				stay, retryAt = reason, retry
+			}
+			p.hold(stay, retryAt)
 			p.Held = target
 			return
 		case target.Carries:
@@ -560,10 +565,29 @@ func (p *Plan) hoverMoveWithRoom(live Ranked, activeUUID string, cfg Config, st 
 			stay, kept = ReasonCannotCarry, true
 		}
 	}
-	if !kept && p.isCredit(activeUUID) {
-		stay = ReasonNoSubscriptionRoom
-	}
 	p.hold(stay, retryAt)
+}
+
+// creditSeatReturn is the move off a live last-resort credit seat with room. The
+// seat is not in the order and money is last, so it goes back to any account
+// that can carry the work, whatever that account's rung -- one held out
+// included: the hold says where the session would rather be, and nothing about
+// paying for work free quota can carry. With no carrier it stays, and says why:
+// an account with room that cannot carry the work, or no subscription room.
+// TestALiveCreditSeatReturnsOnlyToACarrier.
+func (p *Plan) creditSeatReturn(live Ranked, activeUUID string, cfg Config, st *State, now time.Time, byUUID map[string]Candidate) {
+	if target, ok := firstCarrier(p.Result, activeUUID, byUUID, now); ok {
+		p.moveOrHold(target, leaveReason(live, target), activeUUID, cfg, st, now)
+		return
+	}
+	stay := ReasonNoSubscriptionRoom
+	for _, r := range p.Result.Order {
+		if r.roomyByLevel() {
+			stay = ReasonCannotCarry
+			break
+		}
+	}
+	p.hold(stay, time.Time{})
 }
 
 // isCredit is whether uuid is one of the pass's last-resort credit seats.
@@ -587,13 +611,26 @@ func (p *Plan) moveOrHold(target Ranked, reason Reason, activeUUID string, cfg C
 	p.switchTo(target, reason, activeUUID)
 }
 
-// out is whether the live account has nothing left that one more evaluation
-// would see: empty by level, or projected out before the engine looks again.
-func (r Ranked) out() bool {
+// downwardOpen is whether the live account's limit opens the downward tiers --
+// the last resort and the credit walk: empty by level always, and out by
+// projection -- before the engine looks again -- only while its most recent
+// live pair saw the work running.
+//
+// The work's rate outlives a pause (workRate.replaces), which is right for a
+// carrier: a move to an account that can carry the work is safe whether the
+// work resumes or not, and the bridge outlasts the live account by a cooldown.
+// But after a pause the projection that has the live account out is a forecast
+// of a burst that may not come, and a forecast may justify a move that is safe
+// either way, not one that costs money or buys nothing: a paused Max holding
+// fifteen points moved onto credits, or two accounts under a cadence of work
+// each trading the login every cooldown while nothing runs.
+// TestAPausedLiveAccountDoesNotOpenTheCreditPool,
+// TestTwoAccountsDoNotTradeAPausedSession.
+func (r Ranked) downwardOpen() bool {
 	if _, empty := r.Empty(); empty {
 		return true
 	}
-	return r.limit == liveOut
+	return r.limit == liveOut && r.workRunning
 }
 
 // firstCarrier is the first account in the order, the live one excluded, that

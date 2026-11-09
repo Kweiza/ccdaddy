@@ -298,6 +298,25 @@ func TestTheHoldNamesTheRuleThatKeptTheSession(t *testing.T) {
 	}
 }
 
+// The first reason in the order is the one the hold reports. The session is on
+// an Ultra. Ahead of it, the Max the order prefers cannot carry the work -- its
+// week has five points, ten minutes at half a point a minute -- and after the
+// Max, another Ultra whose week ends two minutes sooner, inside the reset
+// margin, could. The session stays because the Max cannot carry it; the Ultra is
+// the move held, for --force.
+func TestTheHoldNamesTheFirstReasonInTheOrder(t *testing.T) {
+	pool := []Candidate{
+		idleOn(maxAcct("a-max", 10, 3*time.Hour, 95, 3*day)),
+		idleOn(weekOnly("b-ultra", 30, 2*day-2*time.Minute)),
+		measuredLive(weekOnly("u-live", 30, 2*day), 0.5, usage.WindowSevenDay),
+	}
+	p := Decide(pool, hoverOpts(), Config{}, NewState(), "u-live")
+	want(t, p, ActionStay, ReasonCannotCarry, "")
+	if p.Held.UUID != "b-ultra" {
+		t.Errorf("held %q, want the Ultra the margin refused", p.Held.UUID)
+	}
+}
+
 // From a live last-resort credit seat the session goes back to subscription
 // quota the way every hover move goes: to a carrier. A Max whose five points
 // the work would spend in five minutes is not one, and a Max on its last point
@@ -345,6 +364,75 @@ func TestAnEmptyMainPoolUnderHoverIsTheCreditGatesToAnswer(t *testing.T) {
 	if p.Credit.Reason != CreditNotOptedIn {
 		t.Errorf("Credit.Reason = %v, want %v", p.Credit.Reason, CreditNotOptedIn)
 	}
+}
+
+// pausedMax is a live Max at pct of its five-hour window, read three minutes
+// ago, with the work measured at the production rate before it paused: at that
+// rate its fifteen points at 85% ran out of its projection seconds ago. running
+// is what its most recent live pair saw.
+func pausedMax(uuid string, pct float64, running bool) Candidate {
+	c := sub(uuid, &usage.Snapshot{FiveHour: win(pct, 3*time.Hour), SevenDay: win(50, 4*day)})
+	c.FetchedAt, c.NextPollAt = now.Add(-3*time.Minute), now.Add(2*time.Minute)
+	c.LiveBurns = []usage.LiveBurn{{PerMin: 5.4, Window: usage.WindowFiveHour, From: now.Add(-8 * time.Minute), At: now.Add(-5 * time.Minute)}}
+	c.WorkRunning = running
+	return c
+}
+
+// A pause does not open the credit pool. The live Max holds fifteen points;
+// every other subscription account is empty, the user's thresholds call the
+// main pool exhausted, and the seat is opted in. Projected at the rate the work
+// last ran the Max is out -- but its most recent live pair saw nothing move, so
+// that projection is a forecast of a burst that may not come, and money is not
+// spent on a forecast. When the pair saw the work running, the walk opens as
+// before.
+func TestAPausedLiveAccountDoesNotOpenTheCreditPool(t *testing.T) {
+	seat := creditWith("c-seat", usage.ExtraUsageFor(usage.ExtraUsageInput{
+		State: usage.ExtraUsageEnabled, Currency: "USD", MonthlyLimit: pf(10000), UsedCredits: pf(0), Utilization: pf(10),
+	}))
+	empty := maxAcct("b-empty", 100, 2*time.Hour, 60, 3*day)
+	o := hoverOpts()
+	o.Threshold = 80
+	cfg := Config{MaxAutoSpend: 500}
+
+	p := Decide([]Candidate{pausedMax("a-live", 85, false), empty, seat}, o, cfg, NewState(), "a-live")
+	if r, _ := find(p.Result, "a-live"); r.limit != liveOut {
+		t.Fatalf("the live Max is at limit %d, not projected out: the case is not the pause", r.limit)
+	}
+	if p.Action == ActionSwitch || p.CreditConsulted {
+		t.Errorf("%s (%s) to %q, credit consulted %v: a pause opened the credit pool", p.Action, p.Reason, p.Target.UUID, p.CreditConsulted)
+	}
+	p = Decide([]Candidate{pausedMax("a-live", 85, true), empty, seat}, o, cfg, NewState(), "a-live")
+	want(t, p, ActionSwitch, ReasonBetterTarget, "c-seat")
+}
+
+// Nor does a pause open the last resort. The live Max is projected out across a
+// pause, and the only other account holds its last point: no carrier, no
+// bridge, and a move to the last point would buy nothing while nothing runs --
+// the trade two such accounts made every cooldown.
+func TestTwoAccountsDoNotTradeAPausedSession(t *testing.T) {
+	last := idleOn(maxAcct("b-last", 99, 2*time.Hour, 60, 3*day))
+	p := Decide([]Candidate{pausedMax("a-live", 85, false), last}, hoverOpts(), Config{}, NewState(), "a-live")
+	if p.Action == ActionSwitch {
+		t.Errorf("switched to %s (%s) across a pause", p.Target.UUID, p.Reason)
+	}
+	p = Decide([]Candidate{pausedMax("a-live", 85, true), last}, hoverOpts(), Config{}, NewState(), "a-live")
+	want(t, p, ActionSwitch, ReasonProjectedExhaustion, "b-last")
+}
+
+// A live credit seat goes back to any account that can carry the work, one held
+// out included: money is last, and the hold says only where the session would
+// rather be. The Max was left at a limit on its five-hour window, which has not
+// rolled, and it has fifty points the work would take hours to spend.
+func TestALiveCreditSeatReturnsToAHeldOutCarrier(t *testing.T) {
+	seat := creditWith("c-seat", usage.ExtraUsageFor(usage.ExtraUsageInput{
+		State: usage.ExtraUsageEnabled, Currency: "USD", MonthlyLimit: pf(10000), UsedCredits: pf(0), Utilization: pf(10),
+	}))
+	held := measuredLive(idleOn(maxAcct("b-held", 50, 3*time.Hour, 40, 3*day)), 0.5, usage.WindowFiveHour)
+	p := Decide([]Candidate{held, seat}, hoverOpts(), Config{}, leftAt("b-held", usage.WindowFiveHour), "c-seat")
+	if r, _ := find(p.Result, "b-held"); r.Rung() != RungHeldOut || !r.Carries {
+		t.Fatalf("b is at rung %s, carries %v: the case is a held-out carrier", r.Rung(), r.Carries)
+	}
+	want(t, p, ActionSwitch, ReasonBetterTarget, "b-held")
 }
 
 // The target is chosen first and the cooldown applied second. At a limit with
@@ -425,7 +513,7 @@ func TestEveryHoverMoveIsToACarrierABridgeOrALastResort(t *testing.T) {
 		case live.AtLimit() == "":
 			t.Fatalf("pool %d: a live account with room moved to %s, which does not carry the work", i, tgt.UUID)
 		case live.limit >= liveStopping && tgt.HasRunway && tgt.roomyByLevel() && tgt.RunsOutAt.After(live.RunsOutAt.Add(HoverCooldown)):
-		case live.out():
+		case live.downwardOpen():
 			if _, empty := tgt.Empty(); empty {
 				t.Fatalf("pool %d: a last resort onto %s, which is empty", i, tgt.UUID)
 			}

@@ -298,6 +298,7 @@ func idleOn(c Candidate) Candidate {
 func measuredLive(c Candidate, perMin float64, on usage.WindowName) Candidate {
 	c.BurnPerMin, c.HasBurn, c.BurnWindow = perMin, true, on
 	c.LiveBurns = []usage.LiveBurn{{PerMin: perMin, Window: on, From: now.Add(-3 * time.Minute), At: now}}
+	c.WorkRunning = c.LiveBurns[0].Running()
 	return c
 }
 
