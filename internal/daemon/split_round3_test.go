@@ -148,7 +148,7 @@ func TestAPollOfAnAccountWithAnUnadoptedNewerLoginIsHeldNotFailed(t *testing.T) 
 		fetches++
 		return "AT-u-1", nil
 	}, noFetch)
-	e.holdUntilStored("u-1", "refresh:RT-u-1-newer")
+	e.holdUntilStored("u-1", "refresh:RT-u-1-newer", "refresh:RT-u-1")
 
 	err := e.poll(context.Background(), a, config.Defaults(), configuredThresholds(config.Defaults()), nil, false)
 	if !errors.Is(err, errUnadopted) {
