@@ -24,11 +24,11 @@ const failedWriteRetry = time.Minute
 // agree, so no repair will (switcher.SettlePending): agreeing on its target
 // completes it -- cooldown and departure recorded -- and agreeing on another
 // account forgets it. A tick that could not read the stores settles nothing.
-func (e *Engine) settlePending(s *store.Store, ev switcher.Evaluation) {
+func (e *Engine) settlePending(s *store.Store, ev switcher.Evaluation, viewAt time.Time) {
 	if !ev.LoginKnown {
 		return
 	}
-	outcome, to, err := switcher.SettlePending(s, ev.Login, e.now())
+	outcome, to, err := switcher.SettlePending(s, ev.Login, viewAt, e.now())
 	switch {
 	case err != nil:
 		e.logf("the switch to %s whose keychain write could not be confirmed could not be settled: %v", to, err)
@@ -89,52 +89,6 @@ func (e *Engine) repairSplit(ctx context.Context, s *store.Store, ev switcher.Ev
 	return res, nil
 }
 
-// unresolvedFreezeMax is the longest the plan is held for a login store whose
-// login cannot be named.
-//
-// The plan is held at all only while the unnamed login is NEWER than the named
-// one (LoginView.UnnamedNewer): that is the one case where it may be somebody's
-// latest decision -- Claude Code's /login or refresh that went to the file
-// because its keychain write failed -- and where the plan's switch, which
-// writes both stores, could overwrite it. An older unnamed login is a
-// superseded one, and a login the oracle confirmed belongs to nobody here is
-// not ccdad's to protect; neither holds anything.
-//
-// Ten minutes, from what the wait can buy. The oracle is asked at most once a
-// resolveMinInterval (a minute), so ten minutes is ten asks: enough to ride out
-// a profile endpoint having a bad few minutes. An oracle that has not answered
-// in ten asks is failing in a way that does not clear by waiting -- an expired
-// access token is never answered -- and the cost of waiting longer is the
-// incident's own: a plan that cannot move while the live account runs to its
-// limit. After the bound the plan runs; its switch writes both stores, as
-// every switch before the split repair did.
-const unresolvedFreezeMax = 10 * time.Minute
-
-// freezesPlan reports whether the plan waits this tick for an Unresolved login
-// to be named. See unresolvedFreezeMax for when, and why for at most that long.
-func (e *Engine) freezesPlan(ev switcher.Evaluation) bool {
-	now := e.now()
-	if e.unresolvedSince.IsZero() {
-		e.unresolvedSince = now
-	}
-	unnamed, newer := ev.Login.UnnamedNewer()
-	if !newer {
-		return false
-	}
-	if uuid, asked := e.owners[unnamed.ID]; asked && uuid == "" {
-		return false
-	}
-	if now.Sub(e.unresolvedSince) < unresolvedFreezeMax {
-		return true
-	}
-	if !e.saidUnfroze {
-		e.saidUnfroze = true
-		e.logf("a newer login this store cannot name has been beside a different login for %s; the plan "+
-			"runs again, and a switch writes both stores (%s)", unresolvedFreezeMax, ev.Login.Describe())
-	}
-	return false
-}
-
 // maxOwners bounds the identity oracle's memory. A login's identity changes on
 // every refresh, so the map would otherwise grow for the life of the daemon;
 // forgetting costs one more ask, rate-limited.
@@ -170,7 +124,10 @@ func (e *Engine) ownerOf(id string) (string, bool) {
 //   - a login that is nobody's here, or that cannot be named, is left as it
 //     is and said so, once. Nothing is written over a login nobody has named;
 //     doctor warns about it.
-func (e *Engine) identifyStores(ctx context.Context, s *store.Store, ev switcher.Evaluation) {
+//
+// It reports whether it ADOPTED a login: the store's account changed under the
+// evaluation this tick made, and the caller does not act on that evaluation.
+func (e *Engine) identifyStores(ctx context.Context, s *store.Store, ev switcher.Evaluation) (adopted bool) {
 	stores := []struct {
 		name   string
 		blob   cclink.Blob
@@ -186,6 +143,7 @@ func (e *Engine) identifyStores(ctx context.Context, s *store.Store, ev switcher
 		owner, verdict := e.resolveStore(ctx, s, st.blob)
 		switch verdict {
 		case liveAdopted:
+			adopted = true
 			e.logf("%s holds a newer login of %s than ccdad had stored; it is %s's stored login now",
 				st.name, owner.Label(), owner.Label())
 		case liveOwned:
@@ -197,11 +155,11 @@ func (e *Engine) identifyStores(ctx context.Context, s *store.Store, ev switcher
 				"`ccdad doctor` and `ccdad switch` to the account you mean", st.name, ev.Login.Describe()))
 		default:
 			e.sayStoreOnce(st.holder.ID, fmt.Sprintf("%s holds a login this store cannot name, beside a "+
-				"different login in the other store (%s). The profile endpoint could not say whose it is yet; "+
-				"it is not repaired from, and the plan waits for it only while it is the newer login, for "+
-				"at most "+unresolvedFreezeMax.String(), st.name, ev.Login.Describe()))
+				"different login in the other store (%s). The profile endpoint could not say whose it is yet, "+
+				"and it is asked again; until then it is not repaired from or towards", st.name, ev.Login.Describe()))
 		}
 	}
+	return adopted
 }
 
 func (e *Engine) sayStoreOnce(id, line string) {

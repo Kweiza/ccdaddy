@@ -35,15 +35,18 @@ const (
 // already held the target, say) would otherwise be recorded by nobody, and
 // only the record would be corrected.
 //
-// The store lock is taken for the record and the state lock for the switch,
-// in that order, as Execute takes them; no credential lock is involved.
-func SettlePending(s *store.Store, v LoginView, now time.Time) (PendingSettlement, string, error) {
+// viewAt is when v was read. An intent recorded AFTER it is one v knows
+// nothing about -- a switch that started writing after the read -- and is left
+// alone; and what is cleared or completed is exactly the intent read here,
+// checked again under the state lock, never a later one recorded meanwhile.
+func SettlePending(s *store.Store, v LoginView, viewAt, now time.Time) (PendingSettlement, string, error) {
 	st, err := strategy.LoadState()
 	if err != nil {
 		return PendingOpen, "", err
 	}
 	to, left, ok := st.Pending()
-	if !ok || v.StoresDisagree() || v.Unresolved() {
+	at := st.PendingAt()
+	if !ok || at.After(viewAt) || v.StoresDisagree() || v.Unresolved() {
 		return PendingOpen, to, nil
 	}
 	lead := v.Lead()
@@ -52,7 +55,7 @@ func SettlePending(s *store.Store, v LoginView, now time.Time) (PendingSettlemen
 	}
 	if lead.Account.UUID != to {
 		err := strategy.WithState(stateTimeout, func(st *strategy.State) error {
-			st.ClearPending()
+			st.ClearPendingIf(to, at)
 			return nil
 		})
 		return PendingNotTaken, to, err
@@ -60,11 +63,22 @@ func SettlePending(s *store.Store, v LoginView, now time.Time) (PendingSettlemen
 	if !v.StoresOn(to) {
 		return PendingOpen, to, nil
 	}
-	if err := s.SetActive(to); err != nil {
-		return PendingOpen, to, err
-	}
-	if err := RecordSwitchAt(to, now, left); err != nil {
+	completed := false
+	err = strategy.WithState(stateTimeout, func(st *strategy.State) error {
+		if st.IsPending(to, at) {
+			st.RecordSwitch(to, now, left)
+			completed = true
+		}
+		return nil
+	})
+	if err != nil {
 		return PendingOpen, to, fmt.Errorf("completing the switch to %s: %w", to, err)
+	}
+	if !completed {
+		return PendingOpen, to, nil
+	}
+	if err := s.SetActive(to); err != nil {
+		return PendingCompleted, to, err
 	}
 	return PendingCompleted, to, nil
 }

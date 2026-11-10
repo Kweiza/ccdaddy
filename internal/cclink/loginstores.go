@@ -182,11 +182,13 @@ const (
 // keychain that was too slow for the write is the one being asked, and the
 // time the write already spent is no reason to give the answer less.
 //
-// The comparison is by LoginIdentity, which is all that decides which account
-// a store holds. A write that replaces an account with ITSELF -- a forced
-// reinstall, or the repair of a split login whose item already holds the
-// target -- makes written and previous the same login; that reads as landed,
-// and either way the item holds the login that was asked for.
+// The comparison is by CREDENTIAL -- access token, refresh token and expiry
+// -- the same sameCredential the write-skip uses, not by login identity. A
+// write that rotates the access token and keeps the refresh token has the
+// same identity before and after; comparing identities would call it landed
+// when the item still holds the old access token. When written and previous
+// are the same credential the item holds what was asked for either way, and
+// that reads as landed.
 //
 // A LOGOUT is the write with no login in it (ClearLogin, for an api-key
 // account), so "the login it was given" is NO login: an item that holds none,
@@ -198,21 +200,17 @@ func confirmKeychainWrite(written, previous Blob) writeOutcome {
 	if err != nil {
 		return writeUnresolved
 	}
-	want, id := LoginIdentity(written), ""
-	if ok {
-		id = LoginIdentity(got)
-	}
-	if want == "" {
+	if _, wantsLogin := written["claudeAiOauth"]; !wantsLogin {
 		if _, hasLogin := got["claudeAiOauth"]; !ok || !hasLogin {
 			return writeLanded
 		}
 	}
 	switch {
-	case id == "":
+	case !ok:
 		return writeUnresolved
-	case id == want:
+	case sameCredential(got, written):
 		return writeLanded
-	case id == LoginIdentity(previous):
+	case sameCredential(got, previous):
 		return writeDidNotLand
 	}
 	return writeUnresolved

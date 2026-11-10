@@ -278,6 +278,9 @@ type Result struct {
 	// Synced is a Switched outcome that was a sync (Request.Sync): no cooldown
 	// was stamped and no prompt poll scheduled.
 	Synced bool
+	// IntentErr is a failure to write the switch's intent ahead of it (see
+	// Execute). Reported rather than returned: the switch went ahead.
+	IntentErr error
 	// UnderLock says the outcome was decided under Claude Code's credential
 	// locks, after the keychain was read -- a stand-down there cost a lock
 	// hold and a keychain spawn, which a caller retrying it has to pace.
@@ -493,6 +496,47 @@ func Execute(s *store.Store, req Request) (Result, error) {
 		}
 	}
 
+	// THE INTENT IS WRITTEN AHEAD of the first store write. A keychain write
+	// can land and then never be reported -- the deadline, a Ctrl-C, a daemon
+	// replaced mid-write -- and if the intent were recorded only after the
+	// write returned, that split would be repaired by recency, which undoes a
+	// switch about half the time (see RepairTarget). Written ahead, the intent
+	// is on disk for every way the write can end; the outcomes that are KNOWN
+	// clear it again below, and only those the stores cannot say leave it.
+	//
+	// A sync records none: it moves nothing the engine chose. A write that
+	// completes a pending switch records none either: that intent is already
+	// the one on disk, and rewriting it would give it a new generation that
+	// SettlePending's exact check would then not recognise.
+	//
+	// An engine state that cannot be written does not stop the switch, for
+	// the reason a cooldown that cannot be stamped does not (RecordSwitch):
+	// it degrades towards the behaviour before the intent existed -- a split
+	// left by this switch repaired by recency -- and it is reported.
+	var ahead time.Time
+	if !req.Sync && !res.CompletedPending {
+		ahead = req.now()
+		if err := strategy.WithState(stateTimeout, func(st *strategy.State) error {
+			st.RecordPending(req.Target.UUID, ahead, req.Departure)
+			return nil
+		}); err != nil {
+			ahead = time.Time{}
+			res.IntentErr = fmt.Errorf("the switch could not be remembered before writing, so a keychain "+
+				"write that cannot be confirmed would be repaired by recency rather than towards it: %w", err)
+		}
+	}
+	// clearAhead forgets the intent written above once the outcome is known,
+	// and only that one -- never a later intent somebody else recorded.
+	clearAhead := func() error {
+		if ahead.IsZero() {
+			return nil
+		}
+		return strategy.WithState(stateTimeout, func(st *strategy.State) error {
+			st.ClearPendingIf(req.Target.UUID, ahead)
+			return nil
+		})
+	}
+
 	accounts := s.Accounts()
 	writes := cclink.WriteChanged
 	if req.Force {
@@ -609,6 +653,16 @@ func Execute(s *store.Store, req Request) (Result, error) {
 		return write, nil
 	})
 	if errors.Is(err, cclink.ErrNoChange) {
+		// Nothing was written, so the intent written ahead is settled: it did
+		// not take effect. Except when the stores ALREADY held the target of a
+		// pending switch -- an attended retry finding the keychain write of the
+		// first attempt landed. That switch took effect, and is recorded as
+		// such: departure, cooldown, and the pending cleared with it.
+		if res.Outcome == AlreadyOn && res.CompletedPending {
+			res.CooldownErr = RecordSwitchAt(req.Target.UUID, req.now(), req.Departure)
+		} else if cerr := clearAhead(); cerr != nil {
+			res.CooldownErr = cerr
+		}
 		// A takeover joined onto a stand-down is not damage: nothing was
 		// written, so there is no write for another process to have raced.
 		if res.Outcome == AlreadyOn && res.Before.Recorded.UUID != req.Target.UUID {
@@ -634,18 +688,13 @@ func Execute(s *store.Store, req Request) (Result, error) {
 	}
 	if err != nil {
 		// A keychain write that may have landed leaves a split the next pass
-		// repairs, and ccdad's intent is what that repair has to follow: the
-		// login it chose may well be the OLDER one (see RepairTarget). So the
-		// intent goes on disk, for the daemon and for any later command, with
-		// the departure the switch would have recorded. A sync that fails this
-		// way changes nothing about what is intended.
-		if (!req.Sync || res.CompletedPending) && (errors.Is(err, cclink.ErrLoginOutcomeUnknown) || errors.Is(err, cclink.ErrLoginHalfWritten)) {
-			rerr := strategy.WithState(stateTimeout, func(st *strategy.State) error {
-				st.RecordPending(req.Target.UUID, req.now(), req.Departure)
-				return nil
-			})
-			if rerr != nil {
-				err = errors.Join(err, fmt.Errorf("the switch could not be remembered for the repair that follows: %w", rerr))
+		// repairs, and the intent written ahead is what that repair follows:
+		// the login ccdad chose may well be the OLDER one (see RepairTarget).
+		// It stays. Any other failure is known not to have moved the item, and
+		// the intent is settled.
+		if !errors.Is(err, cclink.ErrLoginOutcomeUnknown) && !errors.Is(err, cclink.ErrLoginHalfWritten) {
+			if cerr := clearAhead(); cerr != nil {
+				err = errors.Join(err, cerr)
 			}
 		}
 		return res, err
@@ -661,8 +710,11 @@ func Execute(s *store.Store, req Request) (Result, error) {
 	leadWasTarget := res.Before.Lead().State == LiveManaged && res.Before.Lead().Account.UUID == req.Target.UUID
 	res.Synced = !res.CompletedPending && (req.Sync || (!req.Unattended && leadWasTarget))
 	if !res.Synced {
+		// RecordSwitch clears whatever is pending: this switch, done.
 		res.CooldownErr = RecordSwitchAt(req.Target.UUID, req.now(), req.Departure)
 		res.PromptPollErr = SchedulePromptPoll(req.Target.UUID, req.now(), store.SharingIdentity(accounts, req.Target))
+	} else {
+		res.CooldownErr = clearAhead()
 	}
 	res.ClearedKeyOwner, res.ClearedKey, res.KeyErr = releaseManagedAPIKey(s)
 	if !res.EnvTokenWins {

@@ -81,6 +81,31 @@ func TestAStoreWithTheSameRefreshTokenButAnOlderAccessTokenIsWritten(t *testing.
 	}
 }
 
+// S-E. The read-back compares CREDENTIALS, not identity. A write that keeps the
+// refresh token and changes the access token, ran out of time and did NOT
+// land, leaves the item on the old access token under the same identity;
+// calling that "landed" would write the file and leave the two stores holding
+// different credentials that no split check can see.
+func TestAnUnlandedWriteUnderTheSameRefreshTokenIsNotReadBackAsLanded(t *testing.T) {
+	withClaudeHome(t)
+	file := mustPath(ccpath.CredentialsPath())
+	before := `{"claudeAiOauth":{"accessToken":"AT-before","refreshToken":"RT-new"}}`
+	if err := os.WriteFile(file, []byte(before), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	kc := NewFakeKeychain(before)
+	kc.WriteTimesOutUnlanded = true
+	t.Cleanup(SetKeychainForTest(kc))
+
+	err := Activate(Blob{"claudeAiOauth": json.RawMessage(newLogin)})
+	if err == nil {
+		t.Fatal("a write that did not land under the same refresh token was read back as landed")
+	}
+	if got := fileNow(t, file); strings.Contains(got, `"AT-new"`) {
+		t.Fatalf("the file was written past a keychain write that did not land:\n%s", got)
+	}
+}
+
 // A LOGOUT that ran out of time is confirmed by the item holding no login.
 // Comparing identities there compares "" with "", which never matches, so every
 // slow logout read as unknown and left the file holding the login.

@@ -874,8 +874,8 @@ read fails, so sessions can spend an account ccdad does not show as live.
   stores and recording it: the target of ccdad's own switch whose outcome was
   unknown, if one is pending, otherwise the more recently issued login (the
   Keychain item's on a tie). A login it cannot name is identified through the
-  profile endpoint and is never repaired from; switching waits for it at most
-  ten minutes, and only while it is the newer login.
+  profile endpoint and is not repaired from or towards until it is named;
+  switching is not held back for it, and `ccdad doctor` warns about it.
 - `ccdad switch` repairs a split instead of answering "Already on".
 - `ccdad doctor`'s `login-split` row names which store holds which account. It
   fails when the stores hold logins of different accounts, and warns when a

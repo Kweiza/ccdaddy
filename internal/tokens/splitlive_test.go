@@ -32,25 +32,3 @@ func TestAnAccountLiveInTheFileBehindTheItemIsNotRefreshed(t *testing.T) {
 		t.Fatalf("the stored refresh token moved to %q; the grant the file's session holds was spent", rec.RefreshToken)
 	}
 }
-
-// Opus S3. Claude Code refreshed u-1 INTO THE FILE -- its keychain write
-// failed -- so the file holds u-1's newer pair, which no account has stored
-// yet, while the item holds somebody else. u-1's stored refresh token is
-// already spent; refreshing it here can revoke the family, the session's new
-// pair included. Until the newer login is named and adopted, u-1 is not
-// refreshed.
-func TestAnAccountThatMayOwnANewerUnnamedLoginIsNotRefreshed(t *testing.T) {
-	isolate(t)
-	seed(t, "u-1", oauthRecord("a1", "r1", time.Now().Add(-time.Hour), ""))
-	writeLive(t, oauthRecord("a1-refreshed", "r1-refreshed", time.Now().Add(8*time.Hour), ""))
-	t.Cleanup(cclink.SetKeychainForTest(cclink.NewFakeKeychain(
-		`{"claudeAiOauth":` + string(oauthRecord("a2", "r2", time.Now().Add(time.Hour), "")) + `}`)))
-
-	src := sourceFor(t, refusingEndpoint(t))
-	if got, err := src.AccessToken(context.Background(), "u-1"); !errors.Is(err, ErrLivenessUnknown) {
-		t.Fatalf("AccessToken = (%q, %v), want ErrLivenessUnknown and no request spent", got, err)
-	}
-	if rec := storedRecord(t, "u-1"); rec.RefreshToken != "r1" {
-		t.Fatalf("the stored refresh token moved to %q", rec.RefreshToken)
-	}
-}
