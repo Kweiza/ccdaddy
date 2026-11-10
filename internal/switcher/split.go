@@ -62,6 +62,10 @@ type LoginView struct {
 	// when nothing is recorded; an account no longer in the store keeps only
 	// its UUID.
 	Recorded store.Account
+	// Intent is the target of ccdad's own switch whose outcome could not be
+	// confirmed (strategy.State.Pending), or "". It decides the repair's
+	// direction before recency does; see RepairTarget.
+	Intent string
 }
 
 // ViewLogin attributes each store on its own and sets them beside the record.
@@ -174,7 +178,7 @@ func (v LoginView) StoresDisagree() bool {
 	if !v.HasItem || !v.Item.known() || !v.File.known() || v.Item.ID == v.File.ID {
 		return false
 	}
-	return v.newer().State == LiveManaged
+	return v.target().State == LiveManaged
 }
 
 // Unresolved reports two stores holding different logins where the engine
@@ -191,6 +195,38 @@ func (v LoginView) Unresolved() bool {
 		return false
 	}
 	return !v.StoresDisagree()
+}
+
+// UnnamedNewer is, for an Unresolved view, the store whose login cannot be
+// repaired from -- unnamed, or a newer login not yet stored -- and whether it
+// was issued AFTER the other store's. Only then can it be somebody's latest
+// decision (Claude Code's /login or refresh that landed in the file because
+// its keychain write failed); an older unnamed login is a superseded one, and
+// a plan that writes over it loses nothing. ok is false when the view is not
+// Unresolved, when neither store is named, or when either expiry is unknown.
+func (v LoginView) UnnamedNewer() (unnamed StoreHolder, newer bool) {
+	if !v.Unresolved() {
+		return StoreHolder{}, false
+	}
+	var named StoreHolder
+	switch {
+	case !v.Item.known() && v.File.known():
+		unnamed, named = v.Item, v.File
+	case v.Item.known() && !v.File.known():
+		unnamed, named = v.File, v.Item
+	case v.Item.known() && v.File.known():
+		unnamed = v.newer()
+		named = v.Item
+		if unnamed.ID == v.Item.ID {
+			named = v.File
+		}
+	default:
+		return StoreHolder{}, false
+	}
+	if unnamed.Expires.IsZero() || named.Expires.IsZero() {
+		return unnamed, false
+	}
+	return unnamed, unnamed.Expires.After(named.Expires)
 }
 
 // RecordBehind reports stores that agree on a named account while ccdad's
@@ -218,10 +254,32 @@ func (v LoginView) newer() StoreHolder {
 	return v.Item
 }
 
-// RepairTarget is the account a split is repaired TOWARDS: the one whose
-// login was issued most recently, the keychain item's on a tie.
+// target is the store a split is repaired towards: the one holding ccdad's
+// own unconfirmed switch target, else the newer.
+func (v LoginView) target() StoreHolder {
+	if v.Intent != "" {
+		for _, h := range []StoreHolder{v.Item, v.File} {
+			if h.State == LiveManaged && h.Account.UUID == v.Intent {
+				return h
+			}
+		}
+	}
+	return v.newer()
+}
+
+// RepairTarget is the account a split is repaired TOWARDS, decided in this
+// order:
 //
-// Recency rather than a fixed store, because either store can be ahead:
+//  1. ccdad's OWN switch whose outcome could not be confirmed (Intent), when
+//     a store holds its target. Recency cannot see this one: a switch installs
+//     a stored login that may have been issued hours ago, while the account it
+//     leaves was refreshed in place since -- so the login ccdad just chose is
+//     often the OLDER of the two, and recency would undo the switch.
+//  2. The store holding the more recently issued login.
+//  3. On a tie, the keychain item.
+//
+// Recency, after intent, rather than a fixed store, because either store can
+// be ahead:
 //
 //   - The item is ahead after a ccdad switch whose file write never happened
 //     -- the 2026-11-10 incident -- and after Claude Code's /login or refresh,
@@ -237,7 +295,7 @@ func (v LoginView) newer() StoreHolder {
 // the item because it is the store Claude Code reads first.
 func (v LoginView) RepairTarget() store.Account {
 	if v.StoresDisagree() {
-		return v.newer().Account
+		return v.target().Account
 	}
 	return v.Lead().Account
 }

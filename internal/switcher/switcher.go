@@ -278,6 +278,14 @@ type Result struct {
 	// Synced is a Switched outcome that was a sync (Request.Sync): no cooldown
 	// was stamped and no prompt poll scheduled.
 	Synced bool
+	// UnderLock says the outcome was decided under Claude Code's credential
+	// locks, after the keychain was read -- a stand-down there cost a lock
+	// hold and a keychain spawn, which a caller retrying it has to pace.
+	UnderLock bool
+	// CompletedPending is a write to the target of ccdad's own unconfirmed
+	// switch: it is recorded as that switch, cooldown and departure, even when
+	// the caller asked for a sync.
+	CompletedPending bool
 	// UnknownKeys are the unrecognized top-level keys the unknown-key probe
 	// found, read from the file that was actually merged. Merge preserves them;
 	// the operator still needs to know a new key exists.
@@ -472,12 +480,26 @@ func Execute(s *store.Store, req Request) (Result, error) {
 	// copy would read every refreshed switch as a race.
 	orig := creds
 
+	// A sync that lands the target of ccdad's own unconfirmed switch IS that
+	// switch, finished: it records the cooldown and the departure the switch
+	// would have, not nothing. Decided here, once, for every caller -- the
+	// daemon's repair and an attended `switch` alike.
+	if st, serr := strategy.LoadState(); serr == nil {
+		if to, left, ok := st.Pending(); ok && to == req.Target.UUID {
+			res.CompletedPending = true
+			if req.Departure == (strategy.Departure{}) {
+				req.Departure = left
+			}
+		}
+	}
+
 	accounts := s.Accounts()
 	writes := cclink.WriteChanged
 	if req.Force {
 		writes = cclink.WriteAll
 	}
 	err = activateWith(writes, func(live cclink.Blob, stores cclink.LoginStores) (cclink.Blob, error) {
+		res.UnderLock = true
 		res.UnknownKeys = cclink.UnknownKeys(live)
 		res.Before = ViewLogin(stores, accounts, s.Credentials, s.ActiveUUID(), req.Owners)
 		// The lead store's attribution, taken from the view rather than asked
@@ -611,6 +633,21 @@ func Execute(s *store.Store, req Request) (Result, error) {
 		return res, nil
 	}
 	if err != nil {
+		// A keychain write that may have landed leaves a split the next pass
+		// repairs, and ccdad's intent is what that repair has to follow: the
+		// login it chose may well be the OLDER one (see RepairTarget). So the
+		// intent goes on disk, for the daemon and for any later command, with
+		// the departure the switch would have recorded. A sync that fails this
+		// way changes nothing about what is intended.
+		if (!req.Sync || res.CompletedPending) && (errors.Is(err, cclink.ErrLoginOutcomeUnknown) || errors.Is(err, cclink.ErrLoginHalfWritten)) {
+			rerr := strategy.WithState(stateTimeout, func(st *strategy.State) error {
+				st.RecordPending(req.Target.UUID, req.now(), req.Departure)
+				return nil
+			})
+			if rerr != nil {
+				err = errors.Join(err, fmt.Errorf("the switch could not be remembered for the repair that follows: %w", rerr))
+			}
+		}
 		return res, err
 	}
 
@@ -622,7 +659,7 @@ func Execute(s *store.Store, req Request) (Result, error) {
 	// forward: the account was already live in a store Claude Code reads. See
 	// Request.Sync for the two ways a write is one.
 	leadWasTarget := res.Before.Lead().State == LiveManaged && res.Before.Lead().Account.UUID == req.Target.UUID
-	res.Synced = req.Sync || (!req.Unattended && leadWasTarget)
+	res.Synced = !res.CompletedPending && (req.Sync || (!req.Unattended && leadWasTarget))
 	if !res.Synced {
 		res.CooldownErr = RecordSwitchAt(req.Target.UUID, req.now(), req.Departure)
 		res.PromptPollErr = SchedulePromptPoll(req.Target.UUID, req.now(), store.SharingIdentity(accounts, req.Target))

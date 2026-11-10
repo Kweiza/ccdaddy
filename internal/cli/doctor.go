@@ -1400,6 +1400,7 @@ func checkLoginSplit(root string, usable, accountsUsable bool, stores cclink.Log
 	v := switcher.ViewLogin(stores, accounts, func(uuid string) (cclink.Blob, error) {
 		return store.CredentialsAt(root, uuid)
 	}, recorded, nil)
+	v.Intent = switcher.PendingTarget()
 	// Three findings, at two levels. Stores holding different logins the
 	// engine can name are the failure: two accounts can be spent. Stores
 	// holding different logins it cannot name yet, and a record that only
@@ -1423,7 +1424,8 @@ func checkLoginSplit(root string, usable, accountsUsable bool, stores cclink.Log
 			"the two login stores hold different logins and at least one cannot be named yet: %s. Claude "+
 				"Code falls back to the credentials file when its keychain read fails, so this may be a "+
 				"second account being spent. The daemon asks the profile endpoint whose it is and repairs "+
-				"once it can; nothing is written over a login ccdad cannot name", v.Describe())}
+				"once it can; it is never repaired from, and switching waits for it only while it is the "+
+				"newer login, for a few minutes at most", v.Describe())}
 	case v.RecordBehind():
 		target := v.RepairTarget()
 		return check{name, levelWarn, fmt.Sprintf(

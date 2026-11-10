@@ -188,3 +188,58 @@ func TestARepairThatCompletesAnEngineSwitchRecordsItsDeparture(t *testing.T) {
 		t.Fatalf("the departure was not recorded:\n%s", raw)
 	}
 }
+
+// astra 1. The decision under the lock attributes the stores again, and it has
+// to know what the oracle knows: an older login of the target, named by the
+// oracle and by nothing else, otherwise reads as unattributable there and the
+// unattended guard stands every repair down.
+func TestTheOraclesOwnersReachTheDecisionUnderTheLock(t *testing.T) {
+	isolate(t)
+	seed(t, "u-1", "chan@example.com")
+	target := seed(t, "u-2", "support@example.com")
+	writeLive(t, itemLogin("u-2"))
+	withItem(t, "u-2-older")
+	recordActive(t, "u-2")
+	owners := func(id string) (string, bool) { return "u-2", id == "refresh:RT-u-2-older" }
+	st, err := cclink.ReadLoginStores()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := openStore(t)
+	decided := ViewLogin(st, s.Accounts(), s.Credentials, s.ActiveUUID(), owners).At()
+
+	without, err := Execute(openStore(t), Request{Target: target, LiveUUID: "u-2", Unattended: true, Sync: true, Expect: &decided})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if without.Outcome != Unattributed {
+		t.Fatalf("precondition: without the owners the outcome = %v, want unattributed", without.Outcome)
+	}
+	res, err := Execute(openStore(t), Request{Target: target, LiveUUID: "u-2", Unattended: true, Sync: true,
+		Expect: &decided, Owners: owners})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Outcome != Switched {
+		t.Fatalf("outcome = %v, want switched: the oracle named the item's login as the target's", res.Outcome)
+	}
+}
+
+// E2. An ATTENDED switch whose keychain write could not be confirmed leaves its
+// intent on disk, as the engine's does, so the repair that follows completes
+// it rather than undoing it.
+func TestAnAttendedUnconfirmedSwitchLeavesItsIntentOnDisk(t *testing.T) {
+	isolate(t)
+	seed(t, "u-1", "chan@example.com")
+	target := seed(t, "u-2", "support@example.com")
+	liveAs(t, "u-1")
+	kc := withItem(t, "u-1")
+	kc.WriteLandsThenTimesOut, kc.ReadsFailAfterWrite = true, true
+
+	if _, err := Execute(openStore(t), Request{Target: target, LiveUUID: "u-1"}); !errors.Is(err, cclink.ErrLoginOutcomeUnknown) {
+		t.Fatalf("Execute = %v, want ErrLoginOutcomeUnknown", err)
+	}
+	if got := PendingTarget(); got != "u-2" {
+		t.Fatalf("pending target on disk = %q, want u-2", got)
+	}
+}

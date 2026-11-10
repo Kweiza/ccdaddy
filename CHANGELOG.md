@@ -34,12 +34,16 @@ must reference accounts by `uuid` or `alias`.
     already holds the login is not written at all.
   - The daemon compares the Keychain item, the credentials file and its own
     record of the live account on every pass. When the two stores hold
-    different logins it puts the more recently issued one in both (the
-    Keychain item's on a tie), records it without starting the switch
-    cooldown, and says so in `daemon.log`. If the engine wants to leave that
-    account anyway, its own switch is the repair. A login it cannot name is
-    identified through the profile endpoint first, and nothing is written
-    over a login nobody has named. A record that is merely behind is
+    different logins it puts one in both and records it, without starting
+    the switch cooldown, and says so in `daemon.log`. The login is ccdad's own
+    switch whose outcome was unknown when one is pending -- that switch is
+    then completed, cooldown and departure included -- and otherwise the
+    more recently issued one (the Keychain item's on a tie). If the engine
+    wants to leave that account anyway, its own switch is the repair. An
+    older login of an account is recognised from the logins its stored one
+    replaced; anything else ccdad cannot name is identified through the
+    profile endpoint, and switching waits for it at most ten minutes, and
+    only while it is the newer login. A record that is merely behind is
     corrected without touching either store.
   - A failed credential write is not retried for a minute, whether it was a
     switch or a repair: every attempt holds Claude Code's credential locks

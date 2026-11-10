@@ -14,6 +14,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/oauth"
 	"github.com/Kweiza/ccdaddy/internal/provider"
+	"github.com/Kweiza/ccdaddy/internal/usage"
 )
 
 // The engine's anti-flap state, on disk.
@@ -119,6 +120,21 @@ type stateFile struct {
 	// this build, which reads as no account held out -- the direction every
 	// unreadable state here degrades in, towards more switching.
 	Departures departures `json:"departures,omitempty"`
+	// PendingSwitch is a Claude switch whose keychain write may have landed
+	// without the outcome being confirmed -- the item may hold the target and
+	// the file not. It is ccdad's own intent, written by whichever switch
+	// failed that way (the engine's or an attended `ccdad switch`), and it is
+	// what decides the direction of the split repair that follows: the repair
+	// completes this switch rather than undo it. A completed switch clears it.
+	PendingSwitch *pendingSwitch `json:"pending_switch,omitempty"`
+}
+
+// pendingSwitch is the on-disk shape of State.PendingSwitch.
+type pendingSwitch struct {
+	To      string           `json:"to"`
+	At      time.Time        `json:"at"`
+	From    string           `json:"from,omitempty"`
+	Closing usage.WindowName `json:"closing,omitempty"`
 }
 
 // State is the parsed anti-flap state.
@@ -157,6 +173,9 @@ func (s *State) LastSwitch() (time.Time, string) {
 func (s *State) RecordSwitch(to string, at time.Time, left Departure) {
 	s.data.LastSwitchAt = at
 	s.data.LastSwitchTo = to
+	// A completed switch settles whatever was pending: it either was that
+	// switch, or superseded it.
+	s.data.PendingSwitch = nil
 	if left.From == "" || left.Closing == "" {
 		return
 	}
@@ -165,6 +184,26 @@ func (s *State) RecordSwitch(to string, at time.Time, left Departure) {
 	}
 	s.data.Departures[left.From] = departureMark{Closing: left.Closing, At: at}
 }
+
+// RecordPending remembers a switch to `to` whose outcome could not be
+// confirmed, with the departure it would have recorded. A later one replaces
+// it: the most recent intent is the one a repair carries out.
+func (s *State) RecordPending(to string, at time.Time, left Departure) {
+	s.data.PendingSwitch = &pendingSwitch{To: to, At: at, From: left.From, Closing: left.Closing}
+}
+
+// Pending is the switch whose outcome could not be confirmed, if any.
+func (s *State) Pending() (to string, left Departure, ok bool) {
+	p := s.data.PendingSwitch
+	if p == nil || p.To == "" {
+		return "", Departure{}, false
+	}
+	return p.To, Departure{From: p.From, Closing: p.Closing}, true
+}
+
+// ClearPending forgets the pending switch: the stores said it did not take
+// effect.
+func (s *State) ClearPending() { s.data.PendingSwitch = nil }
 
 // departuresFor is every remembered departure except the live account's own.
 //
@@ -362,6 +401,7 @@ func LoadState() (*State, error) {
 	s.data.CodexLastSwitchAt = parsed.CodexLastSwitchAt
 	s.data.CodexLastSwitchTo = parsed.CodexLastSwitchTo
 	s.data.Departures = parsed.Departures
+	s.data.PendingSwitch = parsed.PendingSwitch
 	s.data.Version = parsed.Version
 	return s, nil
 }

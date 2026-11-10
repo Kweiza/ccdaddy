@@ -218,7 +218,55 @@ func (s *Source) AccessToken(ctx context.Context, uuid string) (string, error) {
 	if stores.HasItem && isLiveLogin(rec, stores.File) {
 		return "", fmt.Errorf("%w: %q is live in the credentials file behind the keychain item", ErrLiveTokenStale, uuid)
 	}
+	// And a store may hold this account's login in a NEWER generation than
+	// the one stored: Claude Code refreshed it there -- into the file, when
+	// its keychain write failed -- and nothing has adopted it yet. The stored
+	// refresh token is then already spent, and presenting it can revoke the
+	// whole family, the session's new pair included. Which account such a
+	// login belongs to cannot be said from here (the daemon's oracle names
+	// and adopts it), so while the two stores hold different logins and one
+	// of them is a login no account stores, issued after this account's
+	// stored one, this account is treated as possibly live and not refreshed.
+	if mayOwnAnUnnamedNewerLogin(st, stores, rec) {
+		return "", fmt.Errorf("%w: %q: a login store holds a newer login no account has stored yet, "+
+			"and it may be this account's", ErrLivenessUnknown, uuid)
+	}
 	return s.refresh(ctx, uuid, rec)
+}
+
+// mayOwnAnUnnamedNewerLogin reports a split login -- the two stores holding
+// different logins -- where one store's login matches no account's stored
+// login nor any account's superseded history, and was issued after rec.
+func mayOwnAnUnnamedNewerLogin(st *store.Store, stores cclink.LoginStores, rec record) bool {
+	if !stores.HasItem || cclink.LoginIdentity(stores.Item) == cclink.LoginIdentity(stores.File) {
+		return false
+	}
+	accounts := st.Accounts()
+	for _, b := range []cclink.Blob{stores.Item, stores.File} {
+		found, ok := recordOf(b)
+		if !ok || !found.ExpiresAt.After(rec.ExpiresAt) {
+			continue
+		}
+		if !named(st, accounts, b) {
+			return true
+		}
+	}
+	return false
+}
+
+// named reports whether a login is some account's stored one, or one an
+// account's stored login superseded.
+func named(st *store.Store, accounts []store.Account, b cclink.Blob) bool {
+	id := cclink.LoginIdentity(b)
+	for _, a := range accounts {
+		if a.Superseded(id) {
+			return true
+		}
+		if stored, err := st.Credentials(a.UUID); err == nil && cclink.LoginIdentity(stored) == id {
+			return true
+		}
+	}
+	return false
 }
 
 // afterIdentityCheck runs between AccessToken's unlocked identity check and
