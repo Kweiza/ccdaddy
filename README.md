@@ -870,10 +870,12 @@ When the Keychain item and the credentials file hold different logins, the
 login is *split*: Claude Code falls back to the file whenever its own Keychain
 read fails, so sessions can spend an account ccdad does not show as live.
 
-- The daemon repairs a split on its next pass by putting the more recently
-  issued login in both stores (the Keychain item's on a tie) and recording it.
-  A login it cannot name is first identified through the profile endpoint;
-  nothing is written over a login nobody has named.
+- The daemon repairs a split on its next pass by putting one login in both
+  stores and recording it: the target of ccdad's own switch whose outcome was
+  unknown, if one is pending, otherwise the more recently issued login (the
+  Keychain item's on a tie). A login it cannot name is identified through the
+  profile endpoint and is never repaired from; switching waits for it at most
+  ten minutes, and only while it is the newer login.
 - `ccdad switch` repairs a split instead of answering "Already on".
 - `ccdad doctor`'s `login-split` row names which store holds which account. It
   fails when the stores hold logins of different accounts, and warns when a

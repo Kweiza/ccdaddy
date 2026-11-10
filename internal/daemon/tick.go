@@ -245,10 +245,11 @@ type Engine struct {
 	writeAfter    time.Time
 	saidWriteWait bool
 
-	// pending is an engine switch whose keychain write may have landed while
-	// its outcome was not confirmed, kept so the repair that completes it
-	// records it as that switch -- with its departure -- rather than as a sync.
-	pending *pendingSwitch
+	// unresolvedSince is when the stores were first seen holding different
+	// logins one of which cannot be named (see freezesPlan); zero when they
+	// are not. saidUnfroze latches the line that says the plan runs again.
+	unresolvedSince time.Time
+	saidUnfroze     bool
 
 	// owners is the identity oracle's memory, keyed by login identity: the
 	// managed account a login belongs to, or "" for a login that is nobody's
@@ -544,7 +545,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	// A split login is settled before the plan is acted on, and three ways:
 	//
 	//   - Stores whose logins cannot all be named yet are asked about, through
-	//     the identity oracle; nothing is written this tick.
+	//     the identity oracle, and the plan waits only while freezesPlan says.
 	//   - Stores that disagree, where the plan would LEAVE the account they
 	//     are repaired towards, are settled by the plan's own switch: it
 	//     writes both stores, once, with the plan's departure and cooldown.
@@ -557,13 +558,17 @@ func (e *Engine) Tick(ctx context.Context) error {
 	if !ev.LoginKnown || (!v.Split() && !v.Unresolved()) {
 		e.saidSplit = ""
 	}
-	e.settlePending(ev)
+	if ev.LoginKnown && !v.Unresolved() {
+		e.unresolvedSince, e.saidUnfroze = time.Time{}, false
+	}
+	e.settlePending(s, ev)
 	repairing := false
 	switch {
 	case ev.LoginKnown && v.Unresolved():
-		// No plan runs either: its swap writes both stores, and one of them
-		// holds a login nobody has named.
 		e.identifyStores(ctx, s, ev)
+		if !e.freezesPlan(ev) {
+			res, swapErr = e.act(ctx, s, ev)
+		}
 	case ev.LoginKnown && v.StoresDisagree() && !planLeaves(ev, v.RepairTarget()):
 		repairing = true
 		res, swapErr = e.repairSplit(ctx, s, ev)
@@ -872,17 +877,22 @@ func (e *Engine) execute(ctx context.Context, s *store.Store, req switcher.Reque
 	// a different tick's answer.
 	req.Now = e.now
 	req.Freshen = e.freshen(ctx)
+	// What the oracle has named, so the decision under the lock attributes the
+	// stores as the evaluation did.
+	req.Owners = e.ownerOf
 	res, err := switcher.Execute(s, req)
+	// Dated from when the attempt RETURNED. A failing write on the slow
+	// keychain this exists for can take most of a minute and a half, and a
+	// wait counted from before it would already be over by the next tick.
 	if err != nil {
-		e.writeAfter = now.Add(failedWriteRetry)
-		// A keychain write that may have landed leaves a split the next pass
-		// repairs. Remembered so that repair records it as THIS switch, with
-		// the plan's departure, rather than as a sync. A sync that fails this
-		// way changes nothing about what is pending.
-		if !req.Sync && (errors.Is(err, cclink.ErrLoginOutcomeUnknown) || errors.Is(err, cclink.ErrLoginHalfWritten)) {
-			e.pending = &pendingSwitch{Target: req.Target.UUID, Departure: req.Departure}
-		}
+		e.writeAfter = e.now().Add(failedWriteRetry)
 		return res, fmt.Errorf("%w (the next attempt is in %s)", err, failedWriteRetry)
+	}
+	// A Stale stand-down decided UNDER the lock cost what a failed write
+	// costs -- the locks held, the keychain read -- and the next tick would
+	// reach the same answer about the same login, so it waits as long.
+	if res.Outcome == switcher.Stale && res.UnderLock {
+		e.writeAfter = e.now().Add(failedWriteRetry)
 	}
 	if res.Outcome == switcher.Switched || res.Outcome == switcher.AlreadyOn {
 		e.writeAfter, e.saidWriteWait = time.Time{}, false

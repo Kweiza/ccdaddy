@@ -220,8 +220,11 @@ func TestATickRepairsASplitLoginTowardsTheItem(t *testing.T) {
 	}
 }
 
-// D1. A /login whose keychain write failed lands in the FILE: the newer login,
-// and the user's latest decision. The repair goes towards it.
+// D1. Claude Code's /login whose keychain write failed lands in the FILE: the
+// newer login, and the user's latest decision. Nothing of ccdad's is pending, so
+// recency decides and the repair goes towards it. (With ccdad's own switch
+// pending the same shape repairs the other way -- see
+// TestCcdadsOwnUnconfirmedSwitchDecidesTheDirection.)
 func TestATickRepairsTowardsTheNewerLoginInTheFile(t *testing.T) {
 	isolateEngine(t)
 	seedAccountExpiring(t, "u-1", "org-1", tickEpoch.Add(8*time.Hour))

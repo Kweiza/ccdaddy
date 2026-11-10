@@ -172,6 +172,7 @@ func Evaluate(s *store.Store, opts EvalOptions) (Evaluation, error) {
 	if err == nil {
 		ev.Stores = stores
 		ev.Login, ev.LoginKnown = ViewLogin(stores, accounts, s.Credentials, s.ActiveUUID(), opts.Owners), true
+		ev.Login.Intent = PendingTarget()
 		// The file's error, when the file is the only store.
 		_, _, err = stores.Live()
 	}
@@ -255,6 +256,18 @@ func Evaluate(s *store.Store, opts EvalOptions) (Evaluation, error) {
 		ev.Target, ev.HasTarget = target, true
 	}
 	return ev, nil
+}
+
+// PendingTarget is the target of ccdad's own switch whose outcome could not be
+// confirmed, or "" -- including when the engine state cannot be read, which
+// leaves the repair to decide by recency, as it would with nothing pending.
+func PendingTarget() string {
+	st, err := strategy.LoadState()
+	if err != nil {
+		return ""
+	}
+	to, _, _ := st.Pending()
+	return to
 }
 
 // liveOfView is the account the ranking measures from: the store Claude Code

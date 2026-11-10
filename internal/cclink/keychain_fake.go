@@ -29,6 +29,12 @@ type FakeKeychain struct {
 	wrote     bool
 	writes    int
 	readsFail bool
+	reads     int
+
+	// OnWrite, when set, runs at the start of every write, outside the
+	// fake's lock: a test advances its clock there to stand for a write that
+	// takes as long as a slow keychain's does.
+	OnWrite func()
 
 	// WriteLandsThenTimesOut makes every write store its payload and then
 	// report that it ran out of time -- the 2026-11-10 incident.
@@ -56,6 +62,13 @@ func (f *FakeKeychain) Secret() (string, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.secret, f.present
+}
+
+// Reads is how many lookups the item has been asked for.
+func (f *FakeKeychain) Reads() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.reads
 }
 
 // Writes is how many writes the item has been asked for.
@@ -105,10 +118,14 @@ func SetKeychainForTest(f *FakeKeychain) (restore func()) {
 
 // run answers one subcommand the way /usr/bin/security would.
 func (f *FakeKeychain) run(_ context.Context, _ time.Duration, args ...string) (securityResult, error) {
+	if args[0] == "add-generic-password" && f.OnWrite != nil {
+		f.OnWrite()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	switch args[0] {
 	case "find-generic-password":
+		f.reads++
 		if f.readsFail || (f.ReadsFailAfterWrite && f.wrote) {
 			return securityResult{code: 36}, nil
 		}

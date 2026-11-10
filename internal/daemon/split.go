@@ -7,7 +7,6 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/store"
-	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/switcher"
 )
 
@@ -21,34 +20,24 @@ import (
 // execute for why there is one backoff and not one per caller.
 const failedWriteRetry = time.Minute
 
-// pendingSwitch is an engine switch whose keychain write may have landed while
-// its outcome was not confirmed: the item holds Target, or might, and the file
-// does not. The next pass finds the split and repairs it; this is what makes
-// that repair record it as the switch it was -- cooldown and departure -- and
-// not as a sync of a login somebody else chose.
-type pendingSwitch struct {
-	Target    string
-	Departure strategy.Departure
-}
-
-// settlePending forgets a pending switch once the stores say how it went
-// without needing a repair: they agree, on any account. If they agree on the
-// target the switch completed some other way and there is nothing left to
-// record; if on another, it did not take effect. A tick that could not read the
-// stores settles nothing.
-func (e *Engine) settlePending(ev switcher.Evaluation) {
-	if e.pending == nil || !ev.LoginKnown {
+// settlePending closes out ccdad's own unconfirmed switch once the stores
+// agree, so no repair will (switcher.SettlePending): agreeing on its target
+// completes it -- cooldown and departure recorded -- and agreeing on another
+// account forgets it. A tick that could not read the stores settles nothing.
+func (e *Engine) settlePending(s *store.Store, ev switcher.Evaluation) {
+	if !ev.LoginKnown {
 		return
 	}
-	v := ev.Login
-	if v.StoresDisagree() || v.Unresolved() {
-		return
-	}
-	if lead := v.Lead(); lead.State == switcher.LiveManaged && lead.Account.UUID != e.pending.Target {
+	outcome, to, err := switcher.SettlePending(s, ev.Login, e.now())
+	switch {
+	case err != nil:
+		e.logf("the switch to %s whose keychain write could not be confirmed could not be settled: %v", to, err)
+	case outcome == switcher.PendingCompleted:
+		e.logf("the switch to %s whose keychain write could not be confirmed took effect; recorded it", to)
+	case outcome == switcher.PendingNotTaken:
 		e.logf("the switch to %s whose keychain write could not be confirmed did not take effect; "+
-			"both login stores hold %s", e.pending.Target, lead.Account.Label())
+			"both login stores hold %s", to, ev.Login.Lead().Account.Label())
 	}
-	e.pending = nil
 }
 
 // repairSplit makes both of Claude Code's login stores hold the same login and
@@ -59,12 +48,13 @@ func (e *Engine) settlePending(ev switcher.Evaluation) {
 // It runs INSTEAD of the plan, for the tick it runs in: the next tick ranks a
 // machine whose stores agree.
 //
-// The account is the one whose login was issued most recently
+// The account is the target of ccdad's own unconfirmed switch when a store
+// holds it, else the one whose login was issued most recently
 // (LoginView.RepairTarget says why). It is already live in one store, so this
 // is a SYNC: it records the account as live and stamps no cooldown -- a
 // cooldown would hold the engine on an account it may need to leave at once --
-// unless it completes an engine switch whose keychain write could not be
-// confirmed, which it records as that switch, departure included.
+// unless it completes ccdad's own unconfirmed switch, which Execute records as
+// that switch, departure included.
 //
 // It writes only the store that differs (cclink.writeMerged skips a store that
 // already holds the login), decides against both stores as this tick read them
@@ -80,21 +70,15 @@ func (e *Engine) repairSplit(ctx context.Context, s *store.Store, ev switcher.Ev
 		e.saidSplit = described
 		e.logf("the Claude Code login is split: %s. Claude Code reads the keychain item first and falls "+
 			"back to the credentials file when that read fails, so sessions can spend either login; "+
-			"putting %s, the more recently issued one, in both and recording it", described, target.Label())
+			"putting %s in both and recording it", described, target.Label())
 	}
 	at := ev.Login.At()
-	req := switcher.Request{Target: target, LiveUUID: target.UUID, Expect: &at, Sync: true}
-	completing := e.pending != nil && e.pending.Target == target.UUID
-	if completing {
-		req.Sync, req.Departure = false, e.pending.Departure
-	}
-	res, err := e.execute(ctx, s, req)
+	res, err := e.execute(ctx, s, switcher.Request{Target: target, LiveUUID: target.UUID, Expect: &at, Sync: true})
 	if err != nil {
 		return res, fmt.Errorf("repairing the split login: %w", err)
 	}
 	switch {
-	case res.Outcome == switcher.Switched && completing:
-		e.pending = nil
+	case res.Outcome == switcher.Switched && res.CompletedPending:
 		e.logf("repaired the split login and completed the switch to %s: both stores and ccdad's record "+
 			"now name it", target.Label())
 	case res.Outcome == switcher.Switched:
@@ -103,6 +87,52 @@ func (e *Engine) repairSplit(ctx context.Context, s *store.Store, ev switcher.Ev
 		e.logf("ccdad's record of the live account now names %s, which both stores already held", target.Label())
 	}
 	return res, nil
+}
+
+// unresolvedFreezeMax is the longest the plan is held for a login store whose
+// login cannot be named.
+//
+// The plan is held at all only while the unnamed login is NEWER than the named
+// one (LoginView.UnnamedNewer): that is the one case where it may be somebody's
+// latest decision -- Claude Code's /login or refresh that went to the file
+// because its keychain write failed -- and where the plan's switch, which
+// writes both stores, could overwrite it. An older unnamed login is a
+// superseded one, and a login the oracle confirmed belongs to nobody here is
+// not ccdad's to protect; neither holds anything.
+//
+// Ten minutes, from what the wait can buy. The oracle is asked at most once a
+// resolveMinInterval (a minute), so ten minutes is ten asks: enough to ride out
+// a profile endpoint having a bad few minutes. An oracle that has not answered
+// in ten asks is failing in a way that does not clear by waiting -- an expired
+// access token is never answered -- and the cost of waiting longer is the
+// incident's own: a plan that cannot move while the live account runs to its
+// limit. After the bound the plan runs; its switch writes both stores, as
+// every switch before the split repair did.
+const unresolvedFreezeMax = 10 * time.Minute
+
+// freezesPlan reports whether the plan waits this tick for an Unresolved login
+// to be named. See unresolvedFreezeMax for when, and why for at most that long.
+func (e *Engine) freezesPlan(ev switcher.Evaluation) bool {
+	now := e.now()
+	if e.unresolvedSince.IsZero() {
+		e.unresolvedSince = now
+	}
+	unnamed, newer := ev.Login.UnnamedNewer()
+	if !newer {
+		return false
+	}
+	if uuid, asked := e.owners[unnamed.ID]; asked && uuid == "" {
+		return false
+	}
+	if now.Sub(e.unresolvedSince) < unresolvedFreezeMax {
+		return true
+	}
+	if !e.saidUnfroze {
+		e.saidUnfroze = true
+		e.logf("a newer login this store cannot name has been beside a different login for %s; the plan "+
+			"runs again, and a switch writes both stores (%s)", unresolvedFreezeMax, ev.Login.Describe())
+	}
+	return false
 }
 
 // maxOwners bounds the identity oracle's memory. A login's identity changes on
@@ -163,12 +193,13 @@ func (e *Engine) identifyStores(ctx context.Context, s *store.Store, ev switcher
 				"already spent; it is repaired towards the newer one", st.name, owner.Label()))
 		case liveForeign:
 			e.sayStoreOnce(st.holder.ID, fmt.Sprintf("%s holds a login that belongs to no account in this "+
-				"store, beside a different login in the other store (%s). Nothing is written over it; run "+
+				"store, beside a different login in the other store (%s). It is not repaired; run "+
 				"`ccdad doctor` and `ccdad switch` to the account you mean", st.name, ev.Login.Describe()))
 		default:
 			e.sayStoreOnce(st.holder.ID, fmt.Sprintf("%s holds a login this store cannot name, beside a "+
 				"different login in the other store (%s). The profile endpoint could not say whose it is yet; "+
-				"nothing is written over it until it can", st.name, ev.Login.Describe()))
+				"it is not repaired from, and the plan waits for it only while it is the newer login, for "+
+				"at most "+unresolvedFreezeMax.String(), st.name, ev.Login.Describe()))
 		}
 	}
 }
