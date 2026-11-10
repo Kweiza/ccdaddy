@@ -34,10 +34,11 @@ func slowKeychain(t *testing.T, f fakeSecurity) (item, file string) {
 	item = statefulItem(t, oldLogin)
 	f.item = item
 	f.install(t)
-	// The write sleeps 3 s after landing; the bound is 1 s, so the write is
-	// killed with its outcome already decided. The bound is long enough that a
-	// loaded machine still finishes the READS inside it.
-	keychainWriteTimeout = time.Second
+	// The write sleeps a minute after landing; the bound is 6 s, so the write is
+	// killed with its outcome already decided. 6 s and not less: each READ is a
+	// re-exec of this test binary, and under -race on a loaded machine one took
+	// over a second, which failed the reads at a 1 s bound.
+	keychainWriteTimeout = 6 * time.Second
 	return item, file
 }
 
@@ -54,7 +55,7 @@ func fileNow(t *testing.T, path string) string {
 // the new login, so the switch is complete: the file follows the item, and the
 // caller is told it succeeded.
 func TestAWriteThatLandedAndTimedOutCompletesTheSwitch(t *testing.T) {
-	item, file := slowKeychain(t, fakeSecurity{writeHang: 3 * time.Second})
+	item, file := slowKeychain(t, fakeSecurity{writeHang: time.Minute})
 
 	err := Activate(Blob{"claudeAiOauth": json.RawMessage(newLogin)})
 	if err != nil {
@@ -71,7 +72,7 @@ func TestAWriteThatLandedAndTimedOutCompletesTheSwitch(t *testing.T) {
 // The write ran out of time and did NOT land: the item still holds the login it
 // held. That is the failure it looked like, and it is reported as one.
 func TestAWriteThatTimedOutWithoutLandingMovesNothing(t *testing.T) {
-	item, file := slowKeychain(t, fakeSecurity{writeHang: 3 * time.Second, writeLost: true})
+	item, file := slowKeychain(t, fakeSecurity{writeHang: time.Minute, writeLost: true})
 
 	err := Activate(Blob{"claudeAiOauth": json.RawMessage(newLogin)})
 	if err == nil {
@@ -95,7 +96,7 @@ func TestAWriteThatTimedOutWithoutLandingMovesNothing(t *testing.T) {
 // claimed: the error is ErrLoginOutcomeUnknown, nothing further is written, and
 // the message says the next pass repairs it.
 func TestAWriteThatCannotBeReadBackClaimsNeitherOutcome(t *testing.T) {
-	_, file := slowKeychain(t, fakeSecurity{writeHang: 3 * time.Second, readFailsAfterWrite: true})
+	_, file := slowKeychain(t, fakeSecurity{writeHang: time.Minute, readFailsAfterWrite: true})
 
 	err := Activate(Blob{"claudeAiOauth": json.RawMessage(newLogin)})
 	if !errors.Is(err, ErrLoginOutcomeUnknown) {
