@@ -2,6 +2,7 @@ package switcher
 
 import (
 	"strings"
+	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/store"
@@ -19,17 +20,35 @@ import (
 // every ccdad command read the item and saw the new account, and Claude Code,
 // falling back to the file, spent the old one for three hours.
 //
+// The FILE can be ahead of the item too. Claude Code writes its login to the
+// file whenever its own keychain write fails -- a /login, or its token refresh
+// -- so on the same loaded Mac the file can hold the newer login, of the same
+// account or of another.
+//
 // So "who is live" has three answers to compare, and this file compares them.
 // It is pure: the reads are cclink.ReadLoginStores (the daemon, once a tick)
 // and the stores handed to Execute's decision under Claude Code's locks.
 
-// StoreHolder is what one login store holds, in LiveStateOf's four answers.
+// StoreHolder is what one login store holds.
 type StoreHolder struct {
 	Account store.Account
 	State   LiveState
+	// ID is the login's cclink.LoginIdentity, "" when the store holds none or
+	// could not be read. Two stores with equal IDs hold the same login.
+	ID string
+	// Expires is the login's expiry, zero when it does not say. Every grant
+	// lasts as long, so the later expiry is the login issued later.
+	Expires time.Time
 }
 
-func (h StoreHolder) named() bool { return h.State == LiveManaged }
+// known reports a store whose OWNER is established: by its refresh token
+// matching a stored snapshot (LiveManaged), or by the identity oracle
+// (LiveResolved).
+func (h StoreHolder) known() bool { return h.State == LiveManaged || h.State == LiveResolved }
+
+// Owners names the managed account a login belongs to, by its LoginIdentity,
+// when the identity oracle has already answered for it. Nil knows nothing.
+type Owners func(id string) (uuid string, ok bool)
 
 // LoginView is each login store's account beside the account ccdad records as
 // active (accounts.toml's active_uuid).
@@ -46,15 +65,16 @@ type LoginView struct {
 }
 
 // ViewLogin attributes each store on its own and sets them beside the record.
-func ViewLogin(st cclink.LoginStores, accounts []store.Account, lookup Lookup, recorded string) LoginView {
+// owners may be nil.
+func ViewLogin(st cclink.LoginStores, accounts []store.Account, lookup Lookup, recorded string, owners Owners) LoginView {
 	v := LoginView{HasItem: st.HasItem, Recorded: store.Account{UUID: recorded}}
 	if st.HasItem {
-		v.Item.Account, v.Item.State = LiveStateOf(st.Item, accounts, lookup)
+		v.Item = holderOf(st.Item, accounts, lookup, owners)
 	}
 	if st.FileErr != nil {
 		v.File.State = LiveUnreadable
 	} else {
-		v.File.Account, v.File.State = LiveStateOf(st.File, accounts, lookup)
+		v.File = holderOf(st.File, accounts, lookup, owners)
 	}
 	for _, a := range accounts {
 		if a.UUID == recorded {
@@ -62,6 +82,36 @@ func ViewLogin(st cclink.LoginStores, accounts []store.Account, lookup Lookup, r
 		}
 	}
 	return v
+}
+
+func holderOf(b cclink.Blob, accounts []store.Account, lookup Lookup, owners Owners) StoreHolder {
+	h := StoreHolder{ID: cclink.LoginIdentity(b)}
+	h.Expires, _ = cclink.LoginExpiry(b)
+	h.Account, h.State = LiveStateOf(b, accounts, lookup)
+	if h.State == LiveUnattributed && owners != nil {
+		if uuid, ok := owners(h.ID); ok {
+			for _, a := range accounts {
+				if a.UUID == uuid {
+					h.Account, h.State = a, LiveResolved
+				}
+			}
+		}
+	}
+	return h
+}
+
+// StoresAt is what the two stores held when a decision was made, by login
+// identity. A write that acts on a decision checks it again under Claude
+// Code's locks and stands down if either store moved (Request.Expect).
+type StoresAt struct {
+	HasItem bool
+	ItemID  string
+	FileID  string
+}
+
+// At is the view's StoresAt.
+func (v LoginView) At() StoresAt {
+	return StoresAt{HasItem: v.HasItem, ItemID: v.Item.ID, FileID: v.File.ID}
 }
 
 // Lead is the store Claude Code reads first: the item when there is one.
@@ -78,67 +128,105 @@ func (v LoginView) AllOn(uuid string) bool {
 	return v.StoresOn(uuid) && v.Recorded.UUID == uuid
 }
 
-// StoresOn reports whether every login store names uuid. It is what decides
-// that a switch to uuid writes no credential: the item naming it while the file
-// names someone else is exactly the state a switch to it must repair, and the
-// one in which `ccdad switch` used to say "Already on". With the stores on
-// uuid and only the record behind, there is nothing to install and the record
-// is what gets corrected.
+// StoresOn reports whether the stores hold uuid's stored login and nothing
+// else. It is what decides that a switch to uuid writes no credential.
+//
+// With an item, the file must hold the SAME login or none. A file with a
+// different login -- another account's, an older or newer one of the same
+// account, or one this store cannot name -- is a store a switch to uuid has to
+// write, and it is the state in which `ccdad switch` used to say "Already on".
+// A missing file is not: some Claude Code releases delete it behind an item,
+// and creating it is not a switch's business. This is the same line Split and
+// Unresolved draw, so a machine `switch` would rewrite is one the daemon and
+// doctor do not call fine.
 func (v LoginView) StoresOn(uuid string) bool {
-	if v.HasItem && !(v.Item.named() && v.Item.Account.UUID == uuid) {
+	if !v.HasItem {
+		return v.File.State == LiveManaged && v.File.Account.UUID == uuid
+	}
+	if v.Item.State != LiveManaged || v.Item.Account.UUID != uuid {
 		return false
 	}
-	return v.File.named() && v.File.Account.UUID == uuid
+	return v.File.State == LiveNone || v.File.ID == v.Item.ID
 }
 
-// StoresDisagree reports that both stores hold a login this store can name, and
-// they name different accounts.
+// StoresDisagree reports two stores holding different logins whose owners are
+// both established, with the newer one -- the one a repair copies -- held as
+// ccdad's stored login for its account. That is a split the engine can repair:
+// it knows what it is copying and whose it is.
+//
+// The newer one has to be the stored snapshot because the repair installs the
+// snapshot (read again under the lock); a newer login the store has not taken
+// in yet is adopted first, by the daemon's oracle step, and repaired on the
+// pass after.
 func (v LoginView) StoresDisagree() bool {
-	return v.HasItem && v.Item.named() && v.File.named() && v.Item.Account.UUID != v.File.Account.UUID
-}
-
-// Split reports a login the engine repairs: the stores name different accounts,
-// or they agree and the record names another.
-//
-// It is decided only when the store Claude Code reads first can be NAMED. A
-// lead that is unattributable is very often a managed account Claude Code has
-// just rotated, and an unreadable one is not known at all; a repair is a write,
-// and writing over a login this store cannot name is the rotation stomp. Those
-// states have their own handling -- the profile oracle, and standing down --
-// and a split is judged once they have resolved.
-//
-// A file this store cannot name beside a named item is NOT a split. Claude
-// Code refreshes the login in the item and leaves the file behind it, so that
-// is the ordinary state of a machine whose item is in use, and calling it split
-// would rewrite the file after every refresh.
-func (v LoginView) Split() bool {
-	lead := v.Lead()
-	if !lead.named() {
+	if !v.HasItem || !v.Item.known() || !v.File.known() || v.Item.ID == v.File.ID {
 		return false
 	}
-	return v.StoresDisagree() || v.Recorded.UUID != lead.Account.UUID
+	return v.newer().State == LiveManaged
 }
 
-// RepairTarget is the account a split is repaired TOWARDS: the lead store's,
-// which is the keychain item's whenever there is one.
+// Unresolved reports two stores holding different logins where the engine
+// cannot repair: one of them cannot be named, or the newer one is not yet
+// ccdad's stored login. Nothing is written over it; the daemon asks the
+// identity oracle, and doctor warns.
 //
-// Why the item and not the file, nor the record:
+// It is the case the first version of this file waved through as "Claude Code
+// refreshed the item and left the file behind". That is one reading. Claude
+// Code writing its newer login to the FILE when its keychain write failed is
+// another, and the two cannot be told apart without naming the login.
+func (v LoginView) Unresolved() bool {
+	if !v.HasItem || v.Item.ID == "" || v.File.ID == "" || v.Item.ID == v.File.ID {
+		return false
+	}
+	return !v.StoresDisagree()
+}
+
+// RecordBehind reports stores that agree on a named account while ccdad's
+// record names another. Nothing needs installing; the record is corrected.
+func (v LoginView) RecordBehind() bool {
+	if v.StoresDisagree() || v.Unresolved() {
+		return false
+	}
+	lead := v.Lead()
+	return lead.State == LiveManaged && v.Recorded.UUID != lead.Account.UUID
+}
+
+// Split reports a login the engine repairs: stores that disagree, or a record
+// behind agreeing stores.
+func (v LoginView) Split() bool {
+	return v.StoresDisagree() || v.RecordBehind()
+}
+
+// newer is the store holding the more recently issued login, the item on a
+// tie or when either expiry is unknown.
+func (v LoginView) newer() StoreHolder {
+	if !v.Item.Expires.IsZero() && v.File.Expires.After(v.Item.Expires) {
+		return v.File
+	}
+	return v.Item
+}
+
+// RepairTarget is the account a split is repaired TOWARDS: the one whose
+// login was issued most recently, the keychain item's on a tie.
 //
-//   - The item is the store every writer reaches first. ccdad writes it before
-//     the file (cclink.writeMerged), and Claude Code's /login and its own token
-//     refresh write it and skip the file. So when the item and the file
-//     disagree, the item holds the most recent decision anyone made -- the
-//     switch whose file write never happened, or the user's own /login -- and
-//     the file holds the one before it.
-//   - The record is older still: ccdad writes it only after both stores have
-//     been written, so a switch that stopped part-way never reaches it.
-//     Repairing towards it would undo a switch that took effect, and then the
-//     engine would have to redo it, through the same slow keychain.
-//   - That the incident's sessions spent the FILE's account does not make the
-//     file the intent. They spent it because Claude Code's keychain read was
-//     failing under load; the repair puts one login in both stores, so which
-//     one Claude Code falls back to stops mattering.
+// Recency rather than a fixed store, because either store can be ahead:
+//
+//   - The item is ahead after a ccdad switch whose file write never happened
+//     -- the 2026-11-10 incident -- and after Claude Code's /login or refresh,
+//     which write the item and skip the file.
+//   - The file is ahead after any of those whose KEYCHAIN write failed: Claude
+//     Code's store then writes the file instead, and on the loaded Mac where
+//     splits happen its keychain writes fail as often as ccdad's do.
+//
+// Whichever was issued later is the most recent decision anyone made, and the
+// older login is the one that has been superseded -- for the same account its
+// refresh token is already spent. The record is never the target: ccdad writes
+// it only after both stores, so it is the oldest of the three. The tie goes to
+// the item because it is the store Claude Code reads first.
 func (v LoginView) RepairTarget() store.Account {
+	if v.StoresDisagree() {
+		return v.newer().Account
+	}
 	return v.Lead().Account
 }
 
@@ -166,6 +254,8 @@ func (h StoreHolder) describe() string {
 	switch h.State {
 	case LiveManaged:
 		return accountName(h.Account)
+	case LiveResolved:
+		return "a login of " + accountName(h.Account) + " that ccdad has not stored"
 	case LiveNone:
 		return "no login"
 	case LiveUnreadable:

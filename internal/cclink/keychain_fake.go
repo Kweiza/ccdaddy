@@ -23,10 +23,12 @@ import (
 // It is one item. The derived item name is not consulted: every lookup and
 // write lands on the same secret.
 type FakeKeychain struct {
-	mu      sync.Mutex
-	secret  string
-	present bool
-	wrote   bool
+	mu        sync.Mutex
+	secret    string
+	present   bool
+	wrote     bool
+	writes    int
+	readsFail bool
 
 	// WriteLandsThenTimesOut makes every write store its payload and then
 	// report that it ran out of time -- the 2026-11-10 incident.
@@ -56,6 +58,13 @@ func (f *FakeKeychain) Secret() (string, bool) {
 	return f.secret, f.present
 }
 
+// Writes is how many writes the item has been asked for.
+func (f *FakeKeychain) Writes() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.writes
+}
+
 // Set replaces what the item holds, as Claude Code writing it would.
 func (f *FakeKeychain) Set(secret string) {
 	f.mu.Lock()
@@ -69,6 +78,15 @@ func (f *FakeKeychain) Heal() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.WriteLandsThenTimesOut, f.WriteTimesOutUnlanded, f.WritesRefused, f.ReadsFailAfterWrite = false, false, false, false
+	f.readsFail = false
+}
+
+// FailReads makes every read fail (exit 36) while on is true, as a keychain
+// that has locked does.
+func (f *FakeKeychain) FailReads(on bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.readsFail = on
 }
 
 // SetKeychainForTest makes f this process's keychain and returns a function
@@ -91,7 +109,7 @@ func (f *FakeKeychain) run(_ context.Context, _ time.Duration, args ...string) (
 	defer f.mu.Unlock()
 	switch args[0] {
 	case "find-generic-password":
-		if f.ReadsFailAfterWrite && f.wrote {
+		if f.readsFail || (f.ReadsFailAfterWrite && f.wrote) {
 			return securityResult{code: 36}, nil
 		}
 		if !f.present {
@@ -104,6 +122,7 @@ func (f *FakeKeychain) run(_ context.Context, _ time.Duration, args ...string) (
 		}
 		return securityResult{}, nil
 	case "add-generic-password":
+		f.writes++
 		if f.WritesRefused {
 			return securityResult{code: 36}, nil
 		}

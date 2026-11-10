@@ -127,6 +127,9 @@ func TestOnlyAWriteCcdadGaveUpOnHasAnUnknownOutcome(t *testing.T) {
 		{"refused", &KeychainError{Op: "add-generic-password", failure: failNoInteraction, code: 36}, false},
 		{"binary missing", &KeychainError{Op: "add-generic-password", failure: failSecurityMissing}, false},
 		{"not a keychain error", errors.New("encoding"), false},
+		{"ended by a signal", &KeychainError{Op: "add-generic-password", failure: failSignaled}, true},
+		{"spawn failed with no status", &KeychainError{Op: "add-generic-password", failure: failOther}, true},
+		{"exited with a status and unrecognised stderr", &KeychainError{Op: "add-generic-password", failure: failOther, code: 1, stderr: "?"}, false},
 	}
 	for _, tc := range cases {
 		if got := writeOutcomeUnknown(tc.err); got != tc.want {

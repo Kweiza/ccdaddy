@@ -289,7 +289,7 @@ func Activate(incoming Blob) error {
 	if err := requireLogin(incoming); err != nil {
 		return err
 	}
-	return writeMerged(func(Blob, LoginStores) (Blob, error) { return incoming, nil })
+	return writeMerged(WriteChanged, func(Blob, LoginStores) (Blob, error) { return incoming, nil })
 }
 
 // ActivateWith is Activate for a caller whose decision is only sound against
@@ -315,8 +315,26 @@ func Activate(incoming Blob) error {
 //     Reading a credential blob the caller already holds is fine; writing is
 //     what waits until after this returns.
 func ActivateWith(decide func(live Blob) (Blob, error)) error {
-	return ActivateAgainst(func(live Blob, _ LoginStores) (Blob, error) { return decide(live) })
+	return ActivateAgainst(WriteChanged, func(live Blob, _ LoginStores) (Blob, error) { return decide(live) })
 }
+
+// StoreWrites says which login stores a write touches.
+type StoreWrites uint8
+
+const (
+	// WriteChanged writes only a store whose login differs from the one being
+	// installed, by LoginIdentity. Repairing a split installs an account one
+	// store already holds, and on the machine that needs the repair the
+	// keychain is the slow part: rewriting an item that already holds the
+	// login spends up to two bounded spawns -- the write and its read-back --
+	// to change nothing, and a read-back that cannot answer would fail a repair
+	// that never needed the keychain at all.
+	WriteChanged StoreWrites = iota
+	// WriteAll writes every store whatever it holds. It is `--force`: a person
+	// asked for the stored login to be put back over whatever the stores hold,
+	// the same grant included.
+	WriteAll
+)
 
 // ActivateAgainst is ActivateWith for a decision that also needs each store on
 // its own: decide is handed the merge base, as ActivateWith's is, and the item
@@ -325,8 +343,8 @@ func ActivateWith(decide func(live Blob) (Blob, error)) error {
 // name the target while the file names someone else, which is the split a
 // timed-out keychain write leaves -- and the merge base alone answers it about
 // the item. The rules ActivateWith lists for decide hold here unchanged.
-func ActivateAgainst(decide func(live Blob, stores LoginStores) (Blob, error)) error {
-	return writeMerged(func(live Blob, stores LoginStores) (Blob, error) {
+func ActivateAgainst(writes StoreWrites, decide func(live Blob, stores LoginStores) (Blob, error)) error {
+	return writeMerged(writes, func(live Blob, stores LoginStores) (Blob, error) {
 		incoming, err := decide(live, stores)
 		if err != nil {
 			return nil, err
@@ -368,11 +386,11 @@ func requireLogin(incoming Blob) error {
 // Nothing is lost by it: the account whose login is being removed keeps its own
 // stored snapshot in ccdad's store, and switching back reinstalls it.
 func ClearLogin() error {
-	return writeMerged(func(Blob, LoginStores) (Blob, error) { return Blob{}, nil })
+	return writeMerged(WriteChanged, func(Blob, LoginStores) (Blob, error) { return Blob{}, nil })
 }
 
 // writeMerged is the locked read-decide-merge-write all of the above perform.
-func writeMerged(decide func(live Blob, stores LoginStores) (Blob, error)) (err error) {
+func writeMerged(writes StoreWrites, decide func(live Blob, stores LoginStores) (Blob, error)) (err error) {
 	held, aerr := cclock.AcquireCredentials(LockTimeout)
 	if aerr != nil {
 		return aerr
@@ -430,20 +448,49 @@ func writeMerged(decide func(live Blob, stores LoginStores) (Blob, error)) (err 
 	// item back before anything is reported: landed carries on to the file
 	// like any other success, did-not-land is the failure it looked like, and
 	// a read that cannot tell stops here with neither claimed.
-	if err := installIntoKeychain(itemIsLive, merged); err != nil {
-		if err := settleKeychainWrite(err, merged, live); err != nil {
-			return err
+	//
+	// A STORE THAT ALREADY HOLDS THE LOGIN IS NOT WRITTEN, under WriteChanged
+	// (which says why). "Holds" is the same login by LoginIdentity, never ""
+	// -- which matches nothing, so a logout is always written.
+	want := LoginIdentity(merged)
+	holds := func(b Blob) bool { return writes == WriteChanged && want != "" && LoginIdentity(b) == want }
+	itemWrite := itemIsLive && !holds(stores.Item)
+	fileWrite := !holds(stores.File)
+	if itemWrite {
+		if err := installIntoKeychain(true, merged); err != nil {
+			if err := settleKeychainWrite(err, merged, live); err != nil {
+				return err
+			}
 		}
+		// Asked again because the item write and its read-back can take most
+		// of a minute on the machine this path is slow on, and the touch tick
+		// may have seen a takeover since. The item is already moved, so a
+		// takeover now is reported as the half-written state it leaves.
+		select {
+		case <-held.Compromised():
+			return fmt.Errorf("%w; Claude Code's credential lock was taken over before the file was written: %w",
+				ErrLoginHalfWritten, cclock.ErrCompromised)
+		default:
+		}
+	}
+	if !fileWrite {
+		return nil
 	}
 	if err := WriteFileAtomic(livePath, data, 0o600); err != nil {
 		if itemIsLive {
-			return fmt.Errorf("the keychain item Claude Code reads first now holds the new login, "+
-				"but the credentials file behind it could not be replaced: %w", err)
+			return fmt.Errorf("%w; the credentials file behind it could not be replaced: %w", ErrLoginHalfWritten, err)
 		}
 		return err
 	}
 	return nil
 }
+
+// ErrLoginHalfWritten is a switch whose keychain item took the new login and
+// whose credentials file did not: a split login, made by the switch itself. The
+// daemon repairs it on its next pass, and an engine that made it remembers the
+// switch so the repair records it as that switch.
+var ErrLoginHalfWritten = errors.New("the keychain item Claude Code reads first now holds the new login, " +
+	"and the credentials file behind it does not")
 
 // installIntoKeychain mirrors what was just written into the macOS Keychain
 // item -- WHEN one is already there.
