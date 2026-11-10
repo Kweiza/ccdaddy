@@ -66,10 +66,10 @@ func TestTheLoginClaudeCodeLeftInTheFileIsNamedWithoutTheOracle(t *testing.T) {
 	}
 }
 
-// E1. An unnamed login NEWER than the named one holds the plan -- it may be
-// somebody's latest decision -- but for at most unresolvedFreezeMax. After
-// that the plan runs, and its switch writes both stores.
-func TestANewerUnnamedLoginHoldsThePlanForABoundedTime(t *testing.T) {
+// S-A. An unnamed login store never holds the plan, newer or not: the plan
+// runs as it did before the split repair existed, and its switch writes both
+// stores. Naming the login goes on through the oracle meanwhile.
+func TestAnUnnamedStoreNeverHoldsThePlan(t *testing.T) {
 	isolateEngine(t)
 	seedAccount(t, "u-1", "org-1")
 	seedAccount(t, "u-2", "org-2")
@@ -78,54 +78,10 @@ func TestANewerUnnamedLoginHoldsThePlanForABoundedTime(t *testing.T) {
 	recordActive(t, "u-1")
 	splitReadings(t) // u-1 at 99%: the plan moves to u-2
 
-	now := tickEpoch
-	e := engineFor(t, tokensAreFine, noFetch)
-	e.Now = func() time.Time { return now }
-	tick(t, e)
-	if got := activeOnDisk(t); got != "u-1" {
-		t.Fatalf("active = %q: the plan ran beside a newer login nobody has named", got)
-	}
-	now = now.Add(unresolvedFreezeMax)
-	tick(t, e)
-	if got := activeOnDisk(t); got != "u-2" {
-		t.Fatalf("active = %q, want u-2: the plan is held past its bound", got)
-	}
-}
-
-// E1. An unnamed login OLDER than the named one is a superseded one: the plan
-// is not held for it at all.
-func TestAnOlderUnnamedLoginDoesNotHoldThePlan(t *testing.T) {
-	isolateEngine(t)
-	seedAccount(t, "u-1", "org-1")
-	seedAccount(t, "u-2", "org-2")
-	writeLiveLoginRT(t, "RT-stranger", tickEpoch.Add(time.Hour)) // older than the item's +8h
-	withItem(t, "u-1")
-	recordActive(t, "u-1")
-	splitReadings(t)
-
 	e := engineFor(t, tokensAreFine, noFetch)
 	tick(t, e)
 	if got := activeOnDisk(t); got != "u-2" {
-		t.Fatalf("active = %q, want u-2: an older unnamed login held the plan", got)
-	}
-}
-
-// E1. A login the oracle CONFIRMED belongs to nobody here does not hold the
-// plan, newer or not: it is not ccdad's to protect.
-func TestAForeignLoginDoesNotHoldThePlan(t *testing.T) {
-	isolateEngine(t)
-	seedAccount(t, "u-1", "org-1")
-	seedAccount(t, "u-2", "org-2")
-	writeLiveLoginRT(t, "RT-stranger", tickEpoch.Add(16*time.Hour))
-	withItem(t, "u-1")
-	recordActive(t, "u-1")
-	splitReadings(t)
-
-	e := engineFor(t, tokensAreFine, noFetch)
-	e.ResolveOwner = func(context.Context, string) (string, error) { return "someone-not-here", nil }
-	tick(t, e)
-	if got := activeOnDisk(t); got != "u-2" {
-		t.Fatalf("active = %q, want u-2: a confirmed foreign login held the plan", got)
+		t.Fatalf("active = %q, want u-2: an unnamed login held the plan", got)
 	}
 }
 

@@ -201,9 +201,31 @@ func (s *State) Pending() (to string, left Departure, ok bool) {
 	return p.To, Departure{From: p.From, Closing: p.Closing}, true
 }
 
-// ClearPending forgets the pending switch: the stores said it did not take
-// effect.
-func (s *State) ClearPending() { s.data.PendingSwitch = nil }
+// PendingAt is when the pending switch was recorded, its generation: two
+// records of the same target are told apart by it. Zero when nothing is
+// pending.
+func (s *State) PendingAt() time.Time {
+	if s.data.PendingSwitch == nil {
+		return time.Time{}
+	}
+	return s.data.PendingSwitch.At
+}
+
+// IsPending reports whether the pending switch is exactly the one recorded to
+// `to` at `at` -- not a later one recorded since.
+func (s *State) IsPending(to string, at time.Time) bool {
+	p := s.data.PendingSwitch
+	return p != nil && p.To == to && p.At.Equal(at)
+}
+
+// ClearPendingIf forgets the pending switch only if it is still exactly the
+// one recorded to `to` at `at`. A caller that decided from an earlier read must
+// not remove an intent somebody recorded after it.
+func (s *State) ClearPendingIf(to string, at time.Time) {
+	if s.IsPending(to, at) {
+		s.data.PendingSwitch = nil
+	}
+}
 
 // departuresFor is every remembered departure except the live account's own.
 //

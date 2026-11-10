@@ -1424,8 +1424,8 @@ func checkLoginSplit(root string, usable, accountsUsable bool, stores cclink.Log
 			"the two login stores hold different logins and at least one cannot be named yet: %s. Claude "+
 				"Code falls back to the credentials file when its keychain read fails, so this may be a "+
 				"second account being spent. The daemon asks the profile endpoint whose it is and repairs "+
-				"once it can; it is never repaired from, and switching waits for it only while it is the "+
-				"newer login, for a few minutes at most", v.Describe())}
+				"once it can. Until then it is not repaired from or towards; switching is not held back for it",
+			v.Describe())}
 	case v.RecordBehind():
 		target := v.RepairTarget()
 		return check{name, levelWarn, fmt.Sprintf(

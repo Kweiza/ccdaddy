@@ -245,12 +245,6 @@ type Engine struct {
 	writeAfter    time.Time
 	saidWriteWait bool
 
-	// unresolvedSince is when the stores were first seen holding different
-	// logins one of which cannot be named (see freezesPlan); zero when they
-	// are not. saidUnfroze latches the line that says the plan runs again.
-	unresolvedSince time.Time
-	saidUnfroze     bool
-
 	// owners is the identity oracle's memory, keyed by login identity: the
 	// managed account a login belongs to, or "" for a login that is nobody's
 	// here. A login is asked about once. saidStore latches the line logged for
@@ -545,7 +539,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	// A split login is settled before the plan is acted on, and three ways:
 	//
 	//   - Stores whose logins cannot all be named yet are asked about, through
-	//     the identity oracle, and the plan waits only while freezesPlan says.
+	//     the identity oracle, and the plan runs as usual.
 	//   - Stores that disagree, where the plan would LEAVE the account they
 	//     are repaired towards, are settled by the plan's own switch: it
 	//     writes both stores, once, with the plan's departure and cooldown.
@@ -558,15 +552,17 @@ func (e *Engine) Tick(ctx context.Context) error {
 	if !ev.LoginKnown || (!v.Split() && !v.Unresolved()) {
 		e.saidSplit = ""
 	}
-	if ev.LoginKnown && !v.Unresolved() {
-		e.unresolvedSince, e.saidUnfroze = time.Time{}, false
-	}
-	e.settlePending(s, ev)
+	e.settlePending(s, ev, now)
 	repairing := false
 	switch {
 	case ev.LoginKnown && v.Unresolved():
-		e.identifyStores(ctx, s, ev)
-		if !e.freezesPlan(ev) {
+		// The plan runs as it did before the split repair existed: an unnamed
+		// store holds nothing back. Except in the tick whose identification
+		// ADOPTED a login -- the plan was ranked from stores as they were
+		// before one of them was named, so it waits for the next tick's
+		// evaluation rather than act on that. Skipping one tick is simpler
+		// than evaluating twice in one, and a tick is about a second.
+		if !e.identifyStores(ctx, s, ev) {
 			res, swapErr = e.act(ctx, s, ev)
 		}
 	case ev.LoginKnown && v.StoresDisagree() && !planLeaves(ev, v.RepairTarget()):
@@ -953,6 +949,9 @@ func (e *Engine) execute(ctx context.Context, s *store.Store, req switcher.Reque
 	}
 	e.saidContended = false
 	e.saidOverridden = false
+	if res.IntentErr != nil {
+		e.logf("%v", res.IntentErr)
+	}
 	if res.CooldownErr != nil {
 		e.logf("%v", res.CooldownErr)
 	}

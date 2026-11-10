@@ -331,6 +331,9 @@ func autoPass(ctx context.Context, em *autoEmitter, s *store.Store) (ExitCode, e
 		// stand down — see credhome.Verdict — and always a reason to say so.
 		em.notice("%s", res.Claim.Notice)
 	}
+	if res.IntentErr != nil {
+		em.notice("%v", res.IntentErr)
+	}
 	if res.CooldownErr != nil {
 		em.notice("%v; the next evaluation may switch again sooner than it should", res.CooldownErr)
 	}

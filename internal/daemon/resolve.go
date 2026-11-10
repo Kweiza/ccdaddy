@@ -136,10 +136,15 @@ func (e *Engine) resolveStore(ctx context.Context, s *store.Store, live cclink.B
 	if _, managed := s.Get(uuid); !managed {
 		uuid = ""
 	}
-	if id != "" {
+	owner, verdict := e.verdictFor(s, live, uuid)
+	// Remembered only once the verdict SUCCEEDED. A failed adoption answers
+	// unresolved, and remembering the owner anyway would name the login from
+	// memory on every later tick -- so it would never be asked about or
+	// adopted again, and the account's only live grant would sit unadopted.
+	if id != "" && verdict != liveUnresolved {
 		e.remember(id, uuid)
 	}
-	return e.verdictFor(s, live, uuid)
+	return owner, verdict
 }
 
 // verdictFor turns the oracle's answer about live into a verdict, adopting

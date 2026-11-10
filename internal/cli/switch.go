@@ -415,6 +415,9 @@ func newSwitchCmd() *cobra.Command {
 				return WithCode(errSilent, ExitBlocked)
 			}
 
+			if res.IntentErr != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "note: %v\n", res.IntentErr)
+			}
 			noteCooldown(cmd, res.CooldownErr)
 			noteReleasedAPIKey(cmd, res)
 			// From the Result rather than a fresh probe: Execute decided it

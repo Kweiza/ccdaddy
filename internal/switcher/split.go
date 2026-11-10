@@ -197,38 +197,6 @@ func (v LoginView) Unresolved() bool {
 	return !v.StoresDisagree()
 }
 
-// UnnamedNewer is, for an Unresolved view, the store whose login cannot be
-// repaired from -- unnamed, or a newer login not yet stored -- and whether it
-// was issued AFTER the other store's. Only then can it be somebody's latest
-// decision (Claude Code's /login or refresh that landed in the file because
-// its keychain write failed); an older unnamed login is a superseded one, and
-// a plan that writes over it loses nothing. ok is false when the view is not
-// Unresolved, when neither store is named, or when either expiry is unknown.
-func (v LoginView) UnnamedNewer() (unnamed StoreHolder, newer bool) {
-	if !v.Unresolved() {
-		return StoreHolder{}, false
-	}
-	var named StoreHolder
-	switch {
-	case !v.Item.known() && v.File.known():
-		unnamed, named = v.Item, v.File
-	case v.Item.known() && !v.File.known():
-		unnamed, named = v.File, v.Item
-	case v.Item.known() && v.File.known():
-		unnamed = v.newer()
-		named = v.Item
-		if unnamed.ID == v.Item.ID {
-			named = v.File
-		}
-	default:
-		return StoreHolder{}, false
-	}
-	if unnamed.Expires.IsZero() || named.Expires.IsZero() {
-		return unnamed, false
-	}
-	return unnamed, unnamed.Expires.After(named.Expires)
-}
-
 // RecordBehind reports stores that agree on a named account while ccdad's
 // record names another. Nothing needs installing; the record is corrected.
 func (v LoginView) RecordBehind() bool {

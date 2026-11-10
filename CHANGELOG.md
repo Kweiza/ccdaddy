@@ -42,9 +42,9 @@ must reference accounts by `uuid` or `alias`.
     wants to leave that account anyway, its own switch is the repair. An
     older login of an account is recognised from the logins its stored one
     replaced; anything else ccdad cannot name is identified through the
-    profile endpoint, and switching waits for it at most ten minutes, and
-    only while it is the newer login. A record that is merely behind is
-    corrected without touching either store.
+    profile endpoint; until it is named it is not repaired from or towards,
+    switching is not held back for it, and `ccdad doctor` warns. A record
+    that is merely behind is corrected without touching either store.
   - A failed credential write is not retried for a minute, whether it was a
     switch or a repair: every attempt holds Claude Code's credential locks
     while the Keychain is slow.
