@@ -16,6 +16,8 @@ must reference accounts by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.29.1] — 2026-11-10
+
 ### Fixed
 
 - **A slow Keychain no longer leaves the login split between two accounts.**
@@ -4206,7 +4208,8 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.29.0...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.29.1...HEAD
+[0.29.1]: https://github.com/Kweiza/ccdaddy/compare/v0.29.0...v0.29.1
 [0.29.0]: https://github.com/Kweiza/ccdaddy/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/Kweiza/ccdaddy/compare/v0.27.0...v0.28.0
 [0.27.0]: https://github.com/Kweiza/ccdaddy/compare/v0.26.0...v0.27.0
