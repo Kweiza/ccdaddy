@@ -386,7 +386,16 @@ func newSwitchCmd() *cobra.Command {
 			}
 			noteProfileSync(cmd, res.ProfileSyncErr)
 			if res.Outcome == switcher.AlreadyOn {
-				fmt.Fprintf(cmd.ErrOrStderr(), "Already on %s.\n", target.Label())
+				// Both of Claude Code's login stores already held target. A
+				// record that named someone else has been corrected, and the
+				// user is told, because it is what `ccdad which` and doctor
+				// compare against.
+				if res.RecordedNow {
+					fmt.Fprintf(cmd.ErrOrStderr(), "Already on %s; ccdad's record of the live account named %s "+
+						"and now names it too.\n", target.Label(), res.Before.RecordedName())
+				} else {
+					fmt.Fprintf(cmd.ErrOrStderr(), "Already on %s.\n", target.Label())
+				}
 				return WithCode(errSilent, ExitNothingToDo)
 			}
 			// Refused, not failed: nothing was written, and the account is
@@ -413,6 +422,12 @@ func newSwitchCmd() *cobra.Command {
 			// and re-asking here would answer about a different instant.
 			noteCredentialHomeClaim(cmd, res.Claim)
 
+			// A split login is named before the success line: the user who ran
+			// this probably did so because sessions were spending an account
+			// ccdad said was not live, and this is the explanation.
+			if res.Before.Split() {
+				fmt.Fprintf(cmd.ErrOrStderr(), "The login was split: %s.\n", res.Before.Describe())
+			}
 			fmt.Fprintf(cmd.ErrOrStderr(), "Switched to %s.\n", target.Label())
 			// Claude Code reads CLAUDE_CODE_OAUTH_TOKEN in preference to the
 			// credentials file, so with that variable set the switch has done its

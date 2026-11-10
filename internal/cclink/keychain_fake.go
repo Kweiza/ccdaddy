@@ -34,6 +34,9 @@ type FakeKeychain struct {
 	// WriteTimesOutUnlanded makes every write store NOTHING and report that it
 	// ran out of time: the same failure, with the other outcome behind it.
 	WriteTimesOutUnlanded bool
+	// WritesRefused makes every write store nothing and ANSWER that it failed,
+	// the way a keychain refusing a non-interactive write does (exit 36).
+	WritesRefused bool
 	// ReadsFailAfterWrite makes every read after the first write fail the way a
 	// keychain refusing a non-interactive lookup does (exit 36), so a write
 	// that landed cannot be confirmed.
@@ -58,6 +61,14 @@ func (f *FakeKeychain) Set(secret string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.secret, f.present = secret, true
+}
+
+// Heal turns every failure mode off: the keychain answers normally from now on,
+// the way a loaded Mac does once its load drops.
+func (f *FakeKeychain) Heal() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.WriteLandsThenTimesOut, f.WriteTimesOutUnlanded, f.WritesRefused, f.ReadsFailAfterWrite = false, false, false, false
 }
 
 // SetKeychainForTest makes f this process's keychain and returns a function
@@ -93,6 +104,9 @@ func (f *FakeKeychain) run(_ context.Context, _ time.Duration, args ...string) (
 		}
 		return securityResult{}, nil
 	case "add-generic-password":
+		if f.WritesRefused {
+			return securityResult{code: 36}, nil
+		}
 		if f.WriteTimesOutUnlanded {
 			f.wrote = true
 			return securityResult{}, &KeychainError{Op: args[0], failure: failTimedOut}

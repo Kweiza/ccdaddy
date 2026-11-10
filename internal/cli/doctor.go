@@ -221,7 +221,10 @@ func runChecks() []check {
 	// chances for them to disagree inside a single report.
 	accountsCheck, accountsUsable := checkAccountsFile(root, storeUsable)
 
-	live, liveSource, liveErr := loadLiveWithSource()
+	// Both login stores in ONE read: the rows that ask who is live take Live()
+	// from it, and the login-split row compares the stores it came from.
+	stores, storesErr := readLoginStores()
+	live, liveSource, liveErr := liveOf(stores, storesErr)
 	// Read, never created: LoadGlobalConfig opens the file read-only and a
 	// missing one resolves to an empty config. This file's rule is that the
 	// probe must not CREATE what it probes, which is why store.Open is refused
@@ -277,6 +280,7 @@ func runChecks() []check {
 		checkClaudeCode(live, liveErr),
 		checkCredentialKeys(live, liveErr),
 		checkKeychain(liveErr),
+		checkLoginSplit(root, storeUsable, accountsUsable, stores, storesErr),
 		checkEnvironment(),
 		checkAPIKey(cfg, cfgErr),
 		checkOAuthSource(live, liveErr, liveSource),
@@ -1347,10 +1351,87 @@ func checkEnvironment() check {
 // of it.
 //
 // No value is printed on any branch. Every source here names a live credential.
-// loadLiveWithSource is the seam the tests fix the store name through. doctor
-// runs on the machine it is diagnosing, so a test cannot arrange for a keychain
-// item to exist without touching the developer's own.
-var loadLiveWithSource = cclink.LoadWithSource
+// readLoginStores is the seam the tests fix the stores through. doctor runs on
+// the machine it is diagnosing, so a test cannot arrange for a keychain item to
+// exist without touching the developer's own.
+var readLoginStores = cclink.ReadLoginStores
+
+// liveOf is cclink.LoadWithSource's answer, taken from a read already made.
+func liveOf(stores cclink.LoginStores, err error) (cclink.Blob, cclink.CredentialSource, error) {
+	if err != nil {
+		return nil, cclink.SourceNone, err
+	}
+	return stores.Live()
+}
+
+// checkLoginSplit reports Claude Code's two login stores, or ccdad's record of
+// the live account, naming different accounts -- a SPLIT login.
+//
+// It is a failure, not a warning. On 2026-11-10 a keychain write that ran out
+// of time left the item on one account and the credentials file on another;
+// Claude Code reads the item first and falls back to the file whenever that
+// read fails, which on a loaded Mac is often, so sessions spent the account
+// every ccdad command said was not live, for three hours, until it hit its
+// weekly limit. Every other row was green.
+//
+// It names each store's account by email and uuid, never by token, and says
+// what repairs it. It reads nothing the report has not already read except the
+// account list and the record, both without creating the store.
+func checkLoginSplit(root string, usable, accountsUsable bool, stores cclink.LoginStores, storesErr error) check {
+	const name = "login-split"
+	if !usable {
+		return check{name, levelSkipped, "there is no store to check"}
+	}
+	if !accountsUsable {
+		return check{name, levelSkipped, noAccountList}
+	}
+	if storesErr != nil {
+		return check{name, levelSkipped,
+			"the login store Claude Code reads first cannot be read, so the stores cannot be compared — see the keychain row"}
+	}
+	accounts, err := store.AccountsAt(root)
+	if err != nil {
+		return check{name, levelFail, fmt.Sprintf("the account list cannot be read: %v", err)}
+	}
+	recorded, err := store.ActiveAt(root)
+	if err != nil {
+		return check{name, levelFail, fmt.Sprintf("ccdad's record of the live account cannot be read: %v", err)}
+	}
+	v := switcher.ViewLogin(stores, accounts, func(uuid string) (cclink.Blob, error) {
+		return store.CredentialsAt(root, uuid)
+	}, recorded)
+	if v.Split() {
+		target := v.RepairTarget()
+		// Stores that disagree are the failure: two accounts can be spent.
+		// A record that only lags behind agreeing stores is a warning. Claude
+		// Code is on one account in both stores and spends nothing it should
+		// not; what is wrong is ccdad's own bookkeeping, which the daemon
+		// corrects on its next pass -- and a store that was added to and never
+		// switched records no account at all, which is not a fault to exit 1
+		// over.
+		if !v.StoresDisagree() {
+			return check{name, levelWarn, fmt.Sprintf(
+				"Claude Code's login stores agree on %s, and ccdad records %s as live. The daemon corrects "+
+					"the record on its next pass; `ccdad switch %s` does it now",
+				target.Label(), v.RecordedName(), target.Ref())}
+		}
+		return check{name, levelFail, fmt.Sprintf(
+			"the login is split: %s. Claude Code reads the keychain item first and falls back to the "+
+				"credentials file when that read fails, so sessions can spend either account. The daemon "+
+				"puts %s in both and records it on its next pass; `ccdad switch %s` does it now",
+			v.Describe(), target.Label(), target.Ref())}
+	}
+	if lead := v.Lead(); lead.State == switcher.LiveManaged && v.AllOn(lead.Account.UUID) {
+		return check{name, levelOK, fmt.Sprintf(
+			"Claude Code's login stores and ccdad's record all name %s", lead.Account.Label())}
+	}
+	// Not split, and not all on one account either: a store this store cannot
+	// name (a login Claude Code refreshed, or one ccdad does not manage), or no
+	// login at all. Nothing here says two accounts are being spent, which is
+	// the failure this row exists for; the claude-code and oauth-source rows
+	// speak to the rest.
+	return check{name, levelOK, "no two stores name different accounts: " + v.Describe()}
+}
 
 func checkOAuthSource(live cclink.Blob, liveErr error, liveSource cclink.CredentialSource) check {
 	// AN UNREADABLE CREDENTIALS FILE STILL ANSWERS MOST OF THIS. The login is

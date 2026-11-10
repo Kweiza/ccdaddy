@@ -711,10 +711,15 @@ func readFileForTest(t *testing.T, path string) []byte {
 // wrote; this axis is only about the NAME the report gives it.
 func stubLiveSource(t *testing.T, src cclink.CredentialSource) {
 	t.Helper()
-	saved := loadLiveWithSource
-	t.Cleanup(func() { loadLiveWithSource = saved })
-	loadLiveWithSource = func() (cclink.Blob, cclink.CredentialSource, error) {
-		live, err := cclink.Load()
-		return live, src, err
+	saved := readLoginStores
+	t.Cleanup(func() { readLoginStores = saved })
+	readLoginStores = func() (cclink.LoginStores, error) {
+		st, err := cclink.ReadLoginStores()
+		if err == nil && src == cclink.SourceKeychainItem {
+			// The same login, answered by the item: an item holding what the
+			// file holds is a machine whose stores agree.
+			st.Item, st.HasItem = st.File, true
+		}
+		return st, err
 	}
 }

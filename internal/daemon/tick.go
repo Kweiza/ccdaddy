@@ -235,6 +235,12 @@ type Engine struct {
 	// machine. Latched for the same reason -- the tick reaches it at 1 Hz.
 	saidUnreadable bool
 
+	// saidSplit is the split login last described in the log, so a split the
+	// repair cannot clear is said once rather than every tick; repairAfter is
+	// when a repair that failed may be tried again. See repairSplit.
+	saidSplit   string
+	repairAfter time.Time
+
 	// codexRankedUUIDs is the Codex lane's last ranking, best first, and
 	// codexSamples holds the usage readings the Codex proxy took off real
 	// inference responses. Both are beside cfg and polls under the same mutex
@@ -517,7 +523,25 @@ func (e *Engine) Tick(ctx context.Context) error {
 		return evErr
 	}
 
-	res, swapErr := e.act(ctx, s, ev)
+	// A split login is repaired before any plan is acted on. Stores that
+	// disagree cost the plan this tick (repairSplit says why); a record that
+	// only lags behind agreeing stores costs it nothing, because the plan was
+	// ranked against the account both stores hold.
+	var res switcher.Result
+	var swapErr error
+	split := ev.LoginKnown && ev.Login.Split()
+	repairing := split && ev.Login.StoresDisagree()
+	if !split {
+		e.saidSplit, e.repairAfter = "", time.Time{}
+	}
+	if repairing {
+		res, swapErr = e.repairSplit(ctx, s, ev)
+	} else {
+		if split {
+			e.correctRecord(s, ev.Login)
+		}
+		res, swapErr = e.act(ctx, s, ev)
+	}
 	// Dispatched AFTER the decision, and handed the live account rather than
 	// looking it up. The poll cadence branches on which account is active, and a
 	// poller that read that from the engine's published state would be racing
@@ -565,7 +589,9 @@ func (e *Engine) Tick(ctx context.Context) error {
 	if swapErr != nil {
 		return swapErr
 	}
-	if res.Outcome == switcher.Switched {
+	// A repair has said what it did; switchLogLine would describe it as the
+	// plan's move, with the plan's reason.
+	if res.Outcome == switcher.Switched && !repairing {
 		e.logf("%s", switchLogLine(ev, res.Target))
 	}
 	return nil
@@ -762,15 +788,26 @@ func (e *Engine) act(ctx context.Context, s *store.Store, ev switcher.Evaluation
 	} else {
 		e.saidUnattributed = false
 	}
-	res, err := switcher.Execute(s, switcher.Request{
-		Target: ev.Target, LiveUUID: live, Unattended: true, LiveForeign: foreign,
+	return e.execute(ctx, s, switcher.Request{
+		Target: ev.Target, LiveUUID: live, LiveForeign: foreign,
 		Departure: ev.Plan.Departure,
-		// The engine's clock, not the swap's own: every other decision this
-		// tick is dated from it, and a staleness answer taken from a
-		// different clock is a different tick's answer.
-		Now:     e.now,
-		Freshen: e.freshen(ctx),
 	})
+}
+
+// execute runs one unattended swap and says in daemon.log what came of it. It
+// is every swap the engine makes: the plan's (act) and a split login's repair
+// (repairSplit), so the two cannot report the same outcome two ways.
+//
+// It fills in what every engine swap shares rather than trusting each caller
+// to: Unattended, and the engine's clock and refresher.
+func (e *Engine) execute(ctx context.Context, s *store.Store, req switcher.Request) (switcher.Result, error) {
+	req.Unattended = true
+	// The engine's clock, not the swap's own: every other decision this tick
+	// is dated from it, and a staleness answer taken from a different clock is
+	// a different tick's answer.
+	req.Now = e.now
+	req.Freshen = e.freshen(ctx)
+	res, err := switcher.Execute(s, req)
 	if err != nil {
 		return res, err
 	}
@@ -843,6 +880,79 @@ func (e *Engine) act(ctx context.Context, s *store.Store, ev switcher.Evaluation
 		e.logf("Claude Code's displayed account name could not be updated: %v", res.ProfileSyncErr)
 	}
 	return res, nil
+}
+
+// splitRepairRetry is how long a split-login repair that FAILED waits before
+// the next attempt. A repair is a keychain write, and the failure that matters
+// most is a keychain too slow to answer: retrying at the tick rate would hold
+// Claude Code's credential locks for up to the keychain's write bound (30 s) on
+// nearly every second, against the machine least able to afford it.
+const splitRepairRetry = time.Minute
+
+// repairSplit puts one login in both of Claude Code's stores and records it,
+// when the evaluation found them -- or ccdad's record -- naming different
+// accounts (switcher.LoginView.Split).
+//
+// It runs INSTEAD of the plan, for the tick it runs in. The plan was ranked
+// against the keychain item alone, and a split login is exactly the machine
+// where that is not the account Claude Code spends: it falls back to the file
+// whenever its own keychain read fails, and on a loaded Mac that is often. The
+// next tick ranks a machine whose stores agree.
+//
+// The account is the item's (LoginView.RepairTarget says why), so the repair
+// installs a login Claude Code is already reading first: LiveUUID is that same
+// account, which exempts it from the staleness refresh -- refreshing it here
+// would rotate the grant under a running session -- and makes a login that
+// moves while the locks are awaited a Raced stand-down rather than a write.
+//
+// Manual mode does not hold it off. Manual mode stops the engine CHOOSING an
+// account; a repair chooses nothing, it carries out what the item already
+// holds.
+func (e *Engine) repairSplit(ctx context.Context, s *store.Store, ev switcher.Evaluation) (switcher.Result, error) {
+	if e.now().Before(e.repairAfter) {
+		return switcher.Result{}, nil
+	}
+	target := ev.Login.RepairTarget()
+	if described := ev.Login.Describe(); described != e.saidSplit {
+		e.saidSplit = described
+		e.logf("the Claude Code login is split: %s. Claude Code reads the keychain item first and falls "+
+			"back to the credentials file when that read fails, so sessions can spend either account; "+
+			"putting %s in both and recording it", described, target.Label())
+	}
+	res, err := e.execute(ctx, s, switcher.Request{Target: target, LiveUUID: target.UUID})
+	if err != nil {
+		e.repairAfter = e.now().Add(splitRepairRetry)
+		return res, fmt.Errorf("repairing the split login (next attempt in %s): %w", splitRepairRetry, err)
+	}
+	switch {
+	case res.Outcome == switcher.Switched:
+		e.logf("repaired the split login: both stores and ccdad's record now name %s", target.Label())
+	case res.RecordedNow:
+		e.logf("ccdad's record of the live account now names %s, which both stores already held", target.Label())
+	}
+	return res, nil
+}
+
+// correctRecord points ccdad's record of the live account at the account both
+// of Claude Code's stores hold, when only the record was behind.
+//
+// No credential is written and no Claude Code lock is taken: the stores
+// already agree, so there is nothing to install, and the record is ccdad's own.
+// A failure is logged rather than returned. The record is what `ccdad switch`
+// and doctor compare against, not what Claude Code reads, and a tick that
+// failed over it would count towards the daemon being replaced as wedged.
+func (e *Engine) correctRecord(s *store.Store, v switcher.LoginView) {
+	lead := v.Lead().Account
+	if err := s.SetActive(lead.UUID); err != nil {
+		if described := v.Describe(); described != e.saidSplit {
+			e.saidSplit = described
+			e.logf("ccdad's record of the live account could not be pointed at %s, which both Claude Code "+
+				"login stores hold: %v", lead.Label(), err)
+		}
+		return
+	}
+	e.logf("ccdad's record of the live account now names %s, which both Claude Code login stores hold "+
+		"(it named %s)", lead.Label(), v.RecordedName())
 }
 
 // dispatch starts a poll for every account that is due, and returns without
