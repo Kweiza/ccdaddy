@@ -115,24 +115,11 @@ func (s CredentialSource) String() string {
 // Blob for a machine where Claude Code has never logged in, and naming a store
 // for a login that is not there would be a third wrong answer of the same kind.
 func LoadWithSource() (Blob, CredentialSource, error) {
-	if live, ok, err := loadFromKeychain(); err != nil || ok {
-		if err != nil {
-			return nil, SourceNone, err
-		}
-		return live, SourceKeychainItem, nil
-	}
-	path, err := ccpath.CredentialsPath()
+	stores, err := ReadLoginStores()
 	if err != nil {
 		return nil, SourceNone, err
 	}
-	live, err := loadFrom(path)
-	if err != nil {
-		return nil, SourceNone, err
-	}
-	if len(live) == 0 {
-		return live, SourceNone, nil
-	}
-	return live, SourceCredentialsFile, nil
+	return stores.Live()
 }
 
 // loadLiveUnderLock is the merge base: the store Claude Code reads, with its
@@ -156,12 +143,18 @@ func LoadWithSource() (Blob, CredentialSource, error) {
 // half. The keychain half has no such scope to lose -- the item's name comes
 // from CLAUDE_CONFIG_DIR, which is how `ccdad run` gets its own item rather
 // than the machine's.
-// THE SECOND RETURN IS WHETHER THE ITEM ANSWERED, and it is not a convenience.
+//
+// HasItem IS WHETHER THE ITEM ANSWERED, and it is not a convenience.
 // installIntoKeychain replaces the item WHOLESALE, so the only item it may
 // write is the one this read took its base from; deriving that answer a second
 // time, from a separate lookup, is what let the two disagree -- the lookup was
 // attributes-only and could not fail, so a switch could commit to writing an
 // item it had never read.
+//
+// The item is read with keychainWriteTimeout, not the lookup bound: this read
+// is the first spawn of a write, and a loaded keychain that fails it fails the
+// switch before anything is written. The stores come back SEPARATELY as well as
+// merged, because whether the login is split is decided from both.
 //
 // THE ITEM IS NOT THE WHOLE BASE EITHER. The freshness argument above holds for
 // what the item HAS; it says nothing about what the item never had. Claude
@@ -178,28 +171,27 @@ func LoadWithSource() (Blob, CredentialSource, error) {
 // than an empty base. The write this base feeds replaces that file wholesale,
 // so continuing on the item alone would destroy machine keys at exactly the
 // moment ccdad cannot see what it is destroying.
-func loadLiveUnderLock(livePath string) (Blob, bool, error) {
-	item, ok, err := loadFromKeychain()
+func loadLiveUnderLock(livePath string) (LoginStores, error) {
+	item, ok, err := loadFromKeychain(keychainWriteTimeout)
 	if err != nil {
-		return nil, false, err
-	}
-	if !ok {
-		live, ferr := loadFrom(livePath)
-		return live, false, ferr
+		return LoginStores{}, err
 	}
 	file, ferr := loadFrom(livePath)
 	if ferr != nil {
-		return nil, true, fmt.Errorf("the keychain item Claude Code reads first answered, but the "+
+		if !ok {
+			return LoginStores{}, ferr
+		}
+		return LoginStores{}, fmt.Errorf("the keychain item Claude Code reads first answered, but the "+
 			"credentials file it shadows could not be read, and a switch rewrites that file: %w", ferr)
 	}
-	return overlayMachineKeys(item, file), true, nil
+	return LoginStores{Item: item, HasItem: ok, File: file}, nil
 }
 
 // loadFromKeychain is Load's first half: the item's login, and whether there
 // was an item at all. Off macOS there is no such store and the answer is
 // always "no item", which is not a failure.
-func loadFromKeychain() (Blob, bool, error) {
-	live, ok, err := LoadKeychainCredentials(context.Background())
+func loadFromKeychain(bound time.Duration) (Blob, bool, error) {
+	live, ok, err := loadKeychainCredentialsWithin(context.Background(), bound)
 	if errors.Is(err, ErrKeychainUnsupported) {
 		return nil, false, nil
 	}
@@ -297,7 +289,7 @@ func Activate(incoming Blob) error {
 	if err := requireLogin(incoming); err != nil {
 		return err
 	}
-	return writeMerged(func(Blob) (Blob, error) { return incoming, nil })
+	return writeMerged(func(Blob, LoginStores) (Blob, error) { return incoming, nil })
 }
 
 // ActivateWith is Activate for a caller whose decision is only sound against
@@ -323,8 +315,19 @@ func Activate(incoming Blob) error {
 //     Reading a credential blob the caller already holds is fine; writing is
 //     what waits until after this returns.
 func ActivateWith(decide func(live Blob) (Blob, error)) error {
-	return writeMerged(func(live Blob) (Blob, error) {
-		incoming, err := decide(live)
+	return ActivateAgainst(func(live Blob, _ LoginStores) (Blob, error) { return decide(live) })
+}
+
+// ActivateAgainst is ActivateWith for a decision that also needs each store on
+// its own: decide is handed the merge base, as ActivateWith's is, and the item
+// and the file as they were read under the same locks. Whether a login is
+// already where it should be is a question about BOTH stores -- the item can
+// name the target while the file names someone else, which is the split a
+// timed-out keychain write leaves -- and the merge base alone answers it about
+// the item. The rules ActivateWith lists for decide hold here unchanged.
+func ActivateAgainst(decide func(live Blob, stores LoginStores) (Blob, error)) error {
+	return writeMerged(func(live Blob, stores LoginStores) (Blob, error) {
+		incoming, err := decide(live, stores)
 		if err != nil {
 			return nil, err
 		}
@@ -365,11 +368,11 @@ func requireLogin(incoming Blob) error {
 // Nothing is lost by it: the account whose login is being removed keeps its own
 // stored snapshot in ccdad's store, and switching back reinstalls it.
 func ClearLogin() error {
-	return writeMerged(func(Blob) (Blob, error) { return Blob{}, nil })
+	return writeMerged(func(Blob, LoginStores) (Blob, error) { return Blob{}, nil })
 }
 
 // writeMerged is the locked read-decide-merge-write all of the above perform.
-func writeMerged(decide func(live Blob) (Blob, error)) (err error) {
+func writeMerged(decide func(live Blob, stores LoginStores) (Blob, error)) (err error) {
 	held, aerr := cclock.AcquireCredentials(LockTimeout)
 	if aerr != nil {
 		return aerr
@@ -378,12 +381,13 @@ func writeMerged(decide func(live Blob) (Blob, error)) (err error) {
 
 	livePath := filepath.Join(held.Scope(), ccpath.CredentialsFile)
 
-	live, itemIsLive, err := loadLiveUnderLock(livePath)
+	stores, err := loadLiveUnderLock(livePath)
 	if err != nil {
 		return err
 	}
+	live, itemIsLive := stores.base(), stores.HasItem
 
-	incoming, err := decide(live)
+	incoming, err := decide(live, stores)
 	if err != nil {
 		// Including ErrNoChange, which is a decision and not a failure. It
 		// still travels back through Release's deferred join, so a takeover
@@ -420,8 +424,16 @@ func writeMerged(decide func(live Blob) (Blob, error)) (err error) {
 	// deletes on its next successful write. The other order left the file moved
 	// and the login unchanged, which is the state this whole path exists to stop
 	// producing.
+	//
+	// A write that FAILED is not yet known to have moved nothing, though. One
+	// that ran out of time may have landed, and settleKeychainWrite reads the
+	// item back before anything is reported: landed carries on to the file
+	// like any other success, did-not-land is the failure it looked like, and
+	// a read that cannot tell stops here with neither claimed.
 	if err := installIntoKeychain(itemIsLive, merged); err != nil {
-		return err
+		if err := settleKeychainWrite(err, merged, live); err != nil {
+			return err
+		}
 	}
 	if err := WriteFileAtomic(livePath, data, 0o600); err != nil {
 		if itemIsLive {
@@ -458,12 +470,13 @@ func writeMerged(decide func(live Blob) (Blob, error)) (err error) {
 // blocks on. That was worth avoiding while the item was believed inert. It is
 // not worth avoiding to preserve a swap that does not swap anything.
 //
-// A failure is returned rather than warned about, and the caller sees a switch
-// that failed. That is the honest report: the file moved and the login did not,
-// which is exactly the state this whole path exists to stop producing. The two
-// writes cannot be made atomic -- one is a file and the other is a daemon --
-// so the choice is only which failure the caller is told about, and silence is
-// what let this go unnoticed for as long as it did.
+// A failure is returned rather than warned about, and returned AS IT IS: what
+// it means for the switch -- nothing written, or not known -- is
+// settleKeychainWrite's to say, because a write that ran out of time may have
+// landed and only reading the item back can tell. Silence is what let a stale
+// item go unnoticed for as long as it did, and a confident "nothing was
+// written" about a write that had landed is what split the login on
+// 2026-11-10.
 func installIntoKeychain(itemIsLive bool, merged Blob) error {
 	// itemIsLive comes from the READ that produced the merge base, not from a
 	// second lookup. The old lookup was ProbeCredentialKeychainItem, which
@@ -497,9 +510,5 @@ func installIntoKeychain(itemIsLive bool, merged Blob) error {
 	// CredentialKeychainItem(), not a probed candidate: it is the same name
 	// LoadKeychainCredentials just read from, so the item written is the item
 	// the base came from.
-	if err := CredentialKeychainItem().Write(ctx, string(compact)); err != nil {
-		return fmt.Errorf("the keychain item Claude Code reads first could not be updated, so nothing "+
-			"was written and the login did not change: %w", err)
-	}
-	return nil
+	return CredentialKeychainItem().Write(ctx, string(compact))
 }

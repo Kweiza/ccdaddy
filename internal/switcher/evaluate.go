@@ -48,6 +48,13 @@ type Evaluation struct {
 	// baseline is lost, so every candidate is compared against nothing, and
 	// this is the state where moving to a known-good account matters most.
 	LiveErr error
+	// Login is who each login store holds beside ccdad's record, from the same
+	// read Live came from; LoginKnown is false when that read failed. A caller
+	// that acts checks Login.Split() before the plan: a split login is repaired
+	// first, because a plan ranked against the item alone is a plan about a
+	// machine Claude Code may not be on.
+	Login      LoginView
+	LoginKnown bool
 	// NoReadings means nothing has ever been polled, so there is no evidence to
 	// choose on. Distinct from ActionBlocked, which is a choice that was made
 	// and came back empty — exit 4 is "wanted, but no viable target", and both
@@ -151,7 +158,15 @@ func Evaluate(s *store.Store, opts EvalOptions) (Evaluation, error) {
 	accounts := s.Accounts()
 	now := opts.now()
 
-	live, err := cclink.Load()
+	// Both stores, in ONE read: the item is what Live is attributed from, and
+	// reading it a second time for the split check would double the keychain
+	// spawns of every tick and could answer about a different instant.
+	stores, err := cclink.ReadLoginStores()
+	var live cclink.Blob
+	if err == nil {
+		ev.Login, ev.LoginKnown = ViewLogin(stores, accounts, s.Credentials, s.ActiveUUID()), true
+		live, _, err = stores.Live()
+	}
 	if err != nil {
 		// Not fatal, and NOT "nobody is live" either. Handing the nil blob to
 		// LiveStateOf answers LiveNone, which is the one reading a caller must

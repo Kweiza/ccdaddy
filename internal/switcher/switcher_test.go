@@ -182,8 +182,9 @@ func TestExecuteRecordsNothingWhenTheWriteWasNotDurable(t *testing.T) {
 
 	restore := activateWith
 	t.Cleanup(func() { activateWith = restore })
-	activateWith = func(decide func(cclink.Blob) (cclink.Blob, error)) error {
-		if _, err := decide(cclink.Blob{"claudeAiOauth": json.RawMessage(`{"refreshToken":"RT-u-1"}`)}); err != nil {
+	activateWith = func(decide func(cclink.Blob, cclink.LoginStores) (cclink.Blob, error)) error {
+		live := cclink.Blob{"claudeAiOauth": json.RawMessage(`{"refreshToken":"RT-u-1"}`)}
+		if _, err := decide(live, cclink.LoginStores{File: live}); err != nil {
 			return err
 		}
 		return cclock.ErrCompromised

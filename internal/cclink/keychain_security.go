@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"sync"
 	"time"
 )
 
@@ -28,15 +29,50 @@ import (
 // It is a var so a test can point it at a fixture; see keychain_security_test.go.
 var securityPath = "/usr/bin/security"
 
-// keychainTimeout bounds every spawn, and it is the whole reason this layer is
-// not three lines of exec.Command.
+// The two deadlines below bound every spawn, and they are the whole reason this
+// layer is not three lines of exec.Command. Each is defined here and nowhere
+// else; a caller names which one applies.
+
+// keychainReadTimeout bounds a LOOKUP: doctor, `which`, `status`, and the
+// daemon's once-a-tick read of who is live.
 //
 // A locked login keychain on a headless or SSH session does not fail: it blocks
-// on an unlock dialog that nobody is in front of. Claude Code allows 10 s;
-// ccdad allows less, because a healthy keychain answers in well under 100 ms
-// and because the caller that matters most -- doctor -- is a diagnostic a user
-// runs while waiting for it. A var so a test can shrink it rather than sleep.
-var keychainTimeout = 5 * time.Second
+// on an unlock dialog that nobody is in front of. Claude Code allows 10 s; a
+// lookup here allows less, because a healthy keychain answers in well under
+// 100 ms and because the caller that matters most -- doctor -- is a diagnostic
+// a user runs while waiting for it. A lookup that runs out of time decided
+// nothing and changed nothing, so the short bound costs one unanswered read,
+// which every caller already handles. A var so a test can shrink it rather than
+// sleep.
+var keychainReadTimeout = 5 * time.Second
+
+// keychainWriteTimeout bounds every spawn on the path that REPLACES the item:
+// the write itself, the read its merge base is taken from, the read that
+// confirms a write which ran out of time, and the delete.
+//
+// It is separate from the read bound because running out of time means
+// something different here. A lookup killed at its deadline changed nothing. A
+// write killed at its deadline may have completed anyway -- `security` hands
+// the item to securityd, and killing the client does not recall the request.
+// On 2026-11-10 one did exactly that: at a load average of 100-150 an
+// add-generic-password was killed at the old shared 5 s bound, the item went
+// on to hold the new login, and ccdad reported "nothing was written" and left
+// the credentials file on the old one. Claude Code then spent the old account
+// for three hours.
+//
+// 30 s, derived rather than picked. Claude Code gives its own keychain spawns
+// 10 s, which is what its authors consider a slow keychain; on the loaded Mac
+// above one `security` call took 9.4 s, already at Claude Code's limit while
+// the machine was still usable. Three times that measurement covers a machine
+// under heavier load than the one that failed, without reaching a wait a user
+// would mistake for a hang. The longer bound costs something only while the
+// keychain is actually slow, and it is paid inside Claude Code's credential
+// locks, holding Claude Code's own refresh off for at most that long; a short
+// bound costs a write whose outcome nobody knows. Even this one can be
+// exceeded, which is why a write that runs out of time is read back rather
+// than reported as a failure (see confirmKeychainWrite). A var so a test can
+// shrink it rather than sleep.
+var keychainWriteTimeout = 30 * time.Second
 
 // keychainWaitDelay bounds the SECOND way a spawn can hang, which the deadline
 // alone does not cover: the process exits, but something it started inherited
@@ -125,14 +161,34 @@ type securityResult struct {
 	code   int
 }
 
-// runSecurity runs one `security` subcommand under a wall-clock deadline with
+// runSecurity is how every subcommand is run: spawnSecurity, unless a test in
+// another package has put a FakeKeychain in its place (SetKeychainForTest).
+func runSecurity(ctx context.Context, bound time.Duration, args ...string) (securityResult, error) {
+	securityImplMu.RLock()
+	impl := securityImpl
+	securityImplMu.RUnlock()
+	return impl(ctx, bound, args...)
+}
+
+var (
+	securityImplMu sync.RWMutex
+	securityImpl   = spawnSecurity
+)
+
+// spawnSecurity runs one `security` subcommand under a wall-clock deadline with
 // an explicit kill.
 //
 // exec.CommandContext's default cancellation is Process.Kill -- SIGKILL, not a
 // request the child can ignore -- and WaitDelay bounds the wait that outlives
 // it. Both are needed: the deadline stops a child that will not finish, and the
 // delay stops a Wait that will not return.
-func runSecurity(ctx context.Context, args ...string) (securityResult, error) {
+//
+// bound is the deadline: keychainReadTimeout for a lookup, keychainWriteTimeout
+// for anything on the path that replaces the item. The caller names it rather
+// than this function choosing from the subcommand, because the read a switch
+// takes its merge base from is the same subcommand as a doctor lookup and does
+// not get the same bound.
+func spawnSecurity(ctx context.Context, bound time.Duration, args ...string) (securityResult, error) {
 	// The subcommand names itself in every error, rather than being passed a
 	// second time alongside the arguments: two spellings of the same thing
 	// drift, and the one in the error is the one nobody re-reads.
@@ -141,7 +197,7 @@ func runSecurity(ctx context.Context, args ...string) (securityResult, error) {
 		return securityResult{}, ErrKeychainUnsupported
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, keychainTimeout)
+	ctx, cancel := context.WithTimeout(ctx, bound)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, securityPath, args...)
@@ -201,7 +257,7 @@ func runSecurity(ctx context.Context, args ...string) (securityResult, error) {
 // item another application owns. A diagnostic that popped an auth prompt on
 // someone's machine would be a worse bug than the drift it was looking for.
 func (it KeychainItem) Present(ctx context.Context) (bool, error) {
-	res, err := runSecurity(ctx, "find-generic-password", "-a", it.Account, "-s", it.Service)
+	res, err := runSecurity(ctx, keychainReadTimeout, "find-generic-password", "-a", it.Account, "-s", it.Service)
 	if err != nil {
 		return false, err
 	}
@@ -220,7 +276,13 @@ func (it KeychainItem) Present(ctx context.Context) (bool, error) {
 // The argument order is Claude Code's own, -w between the account and the
 // service, so a process listing on a machine running both shows the same shape.
 func (it KeychainItem) Read(ctx context.Context) (string, bool, error) {
-	res, err := runSecurity(ctx, "find-generic-password", "-a", it.Account, "-w", "-s", it.Service)
+	return it.readWithin(ctx, keychainReadTimeout)
+}
+
+// readWithin is Read under a caller-chosen deadline: the write path reads with
+// keychainWriteTimeout, for the reason that bound's comment gives.
+func (it KeychainItem) readWithin(ctx context.Context, bound time.Duration) (string, bool, error) {
+	res, err := runSecurity(ctx, bound, "find-generic-password", "-a", it.Account, "-w", "-s", it.Service)
 	if err != nil {
 		return "", false, err
 	}
@@ -267,7 +329,7 @@ func (it KeychainItem) Read(ctx context.Context) (string, bool, error) {
 // doctor names the item, hands over the command, and says which of those two
 // machines the command is for.
 func (it KeychainItem) Delete(ctx context.Context) error {
-	res, err := runSecurity(ctx, "delete-generic-password", "-a", it.Account, "-s", it.Service)
+	res, err := runSecurity(ctx, keychainWriteTimeout, "delete-generic-password", "-a", it.Account, "-s", it.Service)
 	if err != nil {
 		return err
 	}
@@ -329,7 +391,7 @@ type KeychainLookup struct {
 // prompt cannot compete for the terminal. Changing that is a bigger change than
 // this one and it is not free either.
 func (it KeychainItem) Write(ctx context.Context, secret string) error {
-	res, err := runSecurity(ctx, "add-generic-password", "-U",
+	res, err := runSecurity(ctx, keychainWriteTimeout, "add-generic-password", "-U",
 		"-a", it.Account, "-s", it.Service,
 		"-X", hex.EncodeToString([]byte(secret)))
 	if err != nil {
@@ -386,7 +448,14 @@ func ProbeCredentialKeychainItem(ctx context.Context) (KeychainLookup, error) {
 // holding what its name says it holds, and silently reporting "no login" would
 // hide that.
 func LoadKeychainCredentials(ctx context.Context) (Blob, bool, error) {
-	secret, ok, err := CredentialKeychainItem().Read(ctx)
+	return loadKeychainCredentialsWithin(ctx, keychainReadTimeout)
+}
+
+// loadKeychainCredentialsWithin is LoadKeychainCredentials under a caller-chosen
+// deadline. The write path reads the item with keychainWriteTimeout: the base a
+// switch merges onto, and the read that confirms a write which ran out of time.
+func loadKeychainCredentialsWithin(ctx context.Context, bound time.Duration) (Blob, bool, error) {
+	secret, ok, err := CredentialKeychainItem().readWithin(ctx, bound)
 	if err != nil || !ok {
 		return nil, false, err
 	}
@@ -430,6 +499,19 @@ func LoadKeychainCredentials(ctx context.Context) (Blob, bool, error) {
 func SurvivesRestart(err error) bool {
 	var ke *KeychainError
 	return errors.As(err, &ke) && ke.failure == failNoInteraction
+}
+
+// writeOutcomeUnknown reports whether a failed WRITE may have landed anyway.
+//
+// Two failures are like that, and both are ccdad giving up on a `security`
+// that was still running: the deadline killed it, or it exited and something
+// it started kept the output pipe open. In both the request may already have
+// reached securityd, and on 2026-11-10 a killed add-generic-password did land.
+// Every other failure is `security` ANSWERING -- an exit status, or a binary
+// that never started -- and an answer that says it failed is one.
+func writeOutcomeUnknown(err error) bool {
+	var ke *KeychainError
+	return errors.As(err, &ke) && (ke.failure == failTimedOut || ke.failure == failLingering)
 }
 
 // UnlockLoginKeychain runs `security unlock-keychain` against the default
