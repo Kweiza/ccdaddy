@@ -22,8 +22,14 @@ import (
 // credentials file named different accounts, the engine read the item, saw
 // room, and never acted again while Claude Code spent the file's account.
 
+// itemLogin is what a switch to the account seeded under uuid leaves in the
+// item: its stored login, credential for credential.
 func itemLogin(uuid string) string {
-	return `{"claudeAiOauth":{"accessToken":"AT-RT-` + uuid + `","refreshToken":"RT-` + uuid + `"}}`
+	b, err := json.Marshal(oauthBlob("RT-" + uuid))
+	if err != nil {
+		panic(err)
+	}
+	return string(b)
 }
 
 func withItem(t *testing.T, uuid string) *cclink.FakeKeychain {

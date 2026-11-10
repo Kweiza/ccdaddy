@@ -120,6 +120,41 @@ func LoginExpiry(b Blob) (time.Time, bool) {
 	return oauthExpiresAt(b)
 }
 
+// sameCredential reports whether two blobs carry the same OAuth credential:
+// equal access token, refresh token and expiry, with at least one token
+// present. Equal identity alone is not enough -- see writeMerged.
+func sameCredential(a, b Blob) bool {
+	ca, okA := credentialOf(a)
+	cb, okB := credentialOf(b)
+	return okA && okB && ca == cb && (ca.access != "" || ca.refresh != "")
+}
+
+type credentialFields struct {
+	access, refresh string
+	expiresAt       int64
+	hasExpiry       bool
+}
+
+func credentialOf(b Blob) (credentialFields, bool) {
+	raw, ok := b["claudeAiOauth"]
+	if !ok {
+		return credentialFields{}, false
+	}
+	var wire struct {
+		AccessToken  string `json:"accessToken"`
+		RefreshToken string `json:"refreshToken"`
+		ExpiresAt    *int64 `json:"expiresAt"`
+	}
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		return credentialFields{}, false
+	}
+	c := credentialFields{access: wire.AccessToken, refresh: wire.RefreshToken}
+	if wire.ExpiresAt != nil {
+		c.expiresAt, c.hasExpiry = *wire.ExpiresAt, true
+	}
+	return c, true
+}
+
 // ErrLoginOutcomeUnknown is a switch whose keychain write ran out of time and
 // whose item could not be read back to say whether it landed. Nothing further
 // was written: the credentials file still holds what it held, and the item

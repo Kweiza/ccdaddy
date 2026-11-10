@@ -62,6 +62,11 @@ func (s *Store) SetCredentials(uuid string, creds cclink.Blob) error {
 		if _, ok := s.Get(uuid); !ok {
 			return fmt.Errorf("%q is not an account this store names", uuid)
 		}
+		for i := range s.data.Accounts {
+			if s.data.Accounts[i].UUID == uuid {
+				s.data.Accounts[i].SupersededLogins = s.supersededBy(uuid, s.data.Accounts[i].SupersededLogins, creds)
+			}
+		}
 		return s.writeCredentials(uuid, creds)
 	})
 }

@@ -234,6 +234,13 @@ type Request struct {
 	// sync whatever this says: the person named the account that is live, and
 	// what the call does is make the other store agree.
 	Sync bool
+
+	// Owners is the identity oracle's memory (see EvalOptions.Owners). The
+	// decision under the lock attributes the stores again, and without it a
+	// login the oracle has named -- an older generation of the account being
+	// repaired towards -- reads as unattributable there and stands every
+	// repair down.
+	Owners Owners
 }
 
 func (r Request) now() time.Time {
@@ -441,8 +448,6 @@ func Execute(s *store.Store, req Request) (Result, error) {
 	// the call writes is decided under the lock, and a write of a login inside
 	// that window is refused there (see the decision below); only a call that
 	// writes nothing may carry such a login through.
-	orig := creds
-	freshened := false
 	if req.LiveUUID != req.Target.UUID && cclink.WouldSelfRefresh(creds, req.now()) {
 		if req.Freshen == nil {
 			res.Outcome = Stale
@@ -459,8 +464,13 @@ func Execute(s *store.Store, req Request) (Result, error) {
 			res.FreshenErr = ferr
 			return res, nil
 		}
-		creds, freshened = fresh, true
+		creds = fresh
 	}
+	// What the in-lock re-read is compared with, taken AFTER Freshen: Freshen
+	// stores the pair it rotated to before returning it (tokens.Freshen), so
+	// the store holds the fresh pair now, and comparing with the pre-refresh
+	// copy would read every refreshed switch as a race.
+	orig := creds
 
 	accounts := s.Accounts()
 	writes := cclink.WriteChanged
@@ -469,7 +479,7 @@ func Execute(s *store.Store, req Request) (Result, error) {
 	}
 	err = activateWith(writes, func(live cclink.Blob, stores cclink.LoginStores) (cclink.Blob, error) {
 		res.UnknownKeys = cclink.UnknownKeys(live)
-		res.Before = ViewLogin(stores, accounts, s.Credentials, s.ActiveUUID(), nil)
+		res.Before = ViewLogin(stores, accounts, s.Credentials, s.ActiveUUID(), req.Owners)
 		// The lead store's attribution, taken from the view rather than asked
 		// a second time: the merge base IS the lead store's login, and two
 		// classifications of one blob are two chances to disagree.
@@ -564,9 +574,6 @@ func Execute(s *store.Store, req Request) (Result, error) {
 			return nil, cclink.ErrNoChange
 		}
 		write := cur
-		if freshened {
-			write = creds
-		}
 		// The expiry check, on what is ACTUALLY about to be written, and for
 		// every write. Installing a login inside Claude Code's refresh window
 		// starts the rotation loop whoever the target is, and a split repair

@@ -57,6 +57,30 @@ func TestAStoreThatAlreadyHoldsTheLoginIsNotWritten(t *testing.T) {
 	}
 }
 
+// The same login IDENTITY is not the same credential. A token endpoint may
+// rotate the access token and keep the refresh token; skipping a store that
+// holds the old access token under the same refresh token would leave the live
+// login on the old one while ccdad's copy moved on.
+func TestAStoreWithTheSameRefreshTokenButAnOlderAccessTokenIsWritten(t *testing.T) {
+	withClaudeHome(t)
+	file := mustPath(ccpath.CredentialsPath())
+	if err := os.WriteFile(file, []byte(oldLogin), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	kc := NewFakeKeychain(`{"claudeAiOauth":{"accessToken":"AT-before","refreshToken":"RT-new"}}`)
+	t.Cleanup(SetKeychainForTest(kc))
+
+	if err := Activate(Blob{"claudeAiOauth": json.RawMessage(newLogin)}); err != nil {
+		t.Fatalf("Activate: %v", err)
+	}
+	if n := kc.Writes(); n != 1 {
+		t.Fatalf("the item holding an older access token was written %d times, want 1", n)
+	}
+	if secret, _ := kc.Secret(); !strings.Contains(secret, `"AT-new"`) {
+		t.Fatalf("the item still holds the older access token: %s", secret)
+	}
+}
+
 // A LOGOUT that ran out of time is confirmed by the item holding no login.
 // Comparing identities there compares "" with "", which never matches, so every
 // slow logout read as unknown and left the file holding the login.
