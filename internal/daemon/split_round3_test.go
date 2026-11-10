@@ -11,7 +11,9 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
+	"github.com/Kweiza/ccdaddy/internal/config"
 	"github.com/Kweiza/ccdaddy/internal/store"
+	"github.com/Kweiza/ccdaddy/internal/strategy"
 )
 
 // The third review round of the split-login repair.
@@ -131,5 +133,38 @@ func TestANamedLoginThatCouldNotBeAdoptedSkipsTheTickAndHoldsTheRefresh(t *testi
 	}
 	if refreshed {
 		t.Fatal("u-1's spent refresh token was presented")
+	}
+}
+
+// The POLL holds the same account, through the same predicate: its access-token
+// fetch may refresh, and the stored refresh token is spent. The hold is not a
+// failure: it is filed with ErrLiveTokenStale -- rescheduled at the ordinary
+// cadence, no backoff, no quarantine.
+func TestAPollOfAnAccountWithAnUnadoptedNewerLoginIsHeldNotFailed(t *testing.T) {
+	isolateEngine(t)
+	a := seedAccount(t, "u-1", "org-1")
+	fetches := 0
+	e := engineFor(t, func(context.Context, string) (string, error) {
+		fetches++
+		return "AT-u-1", nil
+	}, noFetch)
+	e.markUnadopted("u-1", true)
+
+	err := e.poll(context.Background(), a, config.Defaults(), configuredThresholds(config.Defaults()), nil, false)
+	if !errors.Is(err, errUnadopted) {
+		t.Fatalf("poll = %v, want errUnadopted", err)
+	}
+	if fetches != 0 {
+		t.Fatalf("the access token was fetched %d times for an account whose stored refresh token is spent", fetches)
+	}
+	st, serr := strategy.LoadState()
+	if serr != nil {
+		t.Fatal(serr)
+	}
+	if _, quarantined := st.Quarantined("u-1", tickEpoch); quarantined {
+		t.Fatal("a held poll quarantined the account")
+	}
+	if entry, ok := cacheEntry(t, "u-1"); !ok || !entry.Poll.LastRateLimited.IsZero() {
+		t.Fatalf("a held poll was not rescheduled, or was backed off as a failure: %v %+v", ok, entry.Poll)
 	}
 }
