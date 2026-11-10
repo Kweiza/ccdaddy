@@ -236,10 +236,27 @@ type Engine struct {
 	saidUnreadable bool
 
 	// saidSplit is the split login last described in the log, so a split the
-	// repair cannot clear is said once rather than every tick; repairAfter is
-	// when a repair that failed may be tried again. See repairSplit.
-	saidSplit   string
-	repairAfter time.Time
+	// repair cannot clear is said once rather than every tick. See repairSplit.
+	saidSplit string
+
+	// writeAfter is when a credential write may be tried again after one
+	// FAILED -- the plan's swap and a split repair alike, see execute.
+	// saidWriteWait latches the line that says the engine is waiting.
+	writeAfter    time.Time
+	saidWriteWait bool
+
+	// pending is an engine switch whose keychain write may have landed while
+	// its outcome was not confirmed, kept so the repair that completes it
+	// records it as that switch -- with its departure -- rather than as a sync.
+	pending *pendingSwitch
+
+	// owners is the identity oracle's memory, keyed by login identity: the
+	// managed account a login belongs to, or "" for a login that is nobody's
+	// here. A login is asked about once. saidStore latches the line logged for
+	// a login store the oracle could not, or need not, repair. See
+	// identifyStores.
+	owners    map[string]string
+	saidStore map[string]bool
 
 	// codexRankedUUIDs is the Codex lane's last ranking, best first, and
 	// codexSamples holds the usage readings the Codex proxy took off real
@@ -509,6 +526,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	ev, evErr := switcher.Evaluate(s, switcher.EvalOptions{
 		Now:    now,
 		Config: func() (config.Config, error) { return cfg, cfgErr },
+		Owners: e.ownerOf,
 	})
 	if evErr != nil {
 		// The configured table, not hoverThresholds(cfg, ev): a failed
@@ -523,22 +541,35 @@ func (e *Engine) Tick(ctx context.Context) error {
 		return evErr
 	}
 
-	// A split login is repaired before any plan is acted on. Stores that
-	// disagree cost the plan this tick (repairSplit says why); a record that
-	// only lags behind agreeing stores costs it nothing, because the plan was
-	// ranked against the account both stores hold.
+	// A split login is settled before the plan is acted on, and three ways:
+	//
+	//   - Stores whose logins cannot all be named yet are asked about, through
+	//     the identity oracle; nothing is written this tick.
+	//   - Stores that disagree, where the plan would LEAVE the account they
+	//     are repaired towards, are settled by the plan's own switch: it
+	//     writes both stores, once, with the plan's departure and cooldown.
+	//   - Otherwise stores that disagree are synced (repairSplit), and the
+	//     plan waits a tick; a record only lagging behind agreeing stores is
+	//     corrected without a write, and the plan runs.
 	var res switcher.Result
 	var swapErr error
-	split := ev.LoginKnown && ev.Login.Split()
-	repairing := split && ev.Login.StoresDisagree()
-	if !split {
-		e.saidSplit, e.repairAfter = "", time.Time{}
+	v := ev.Login
+	if !ev.LoginKnown || (!v.Split() && !v.Unresolved()) {
+		e.saidSplit = ""
 	}
-	if repairing {
+	e.settlePending(ev)
+	repairing := false
+	switch {
+	case ev.LoginKnown && v.Unresolved():
+		// No plan runs either: its swap writes both stores, and one of them
+		// holds a login nobody has named.
+		e.identifyStores(ctx, s, ev)
+	case ev.LoginKnown && v.StoresDisagree() && !planLeaves(ev, v.RepairTarget()):
+		repairing = true
 		res, swapErr = e.repairSplit(ctx, s, ev)
-	} else {
-		if split {
-			e.correctRecord(s, ev.Login)
+	default:
+		if ev.LoginKnown && v.RecordBehind() {
+			e.correctRecord(s, v)
 		}
 		res, swapErr = e.act(ctx, s, ev)
 	}
@@ -788,10 +819,25 @@ func (e *Engine) act(ctx context.Context, s *store.Store, ev switcher.Evaluation
 	} else {
 		e.saidUnattributed = false
 	}
+	// Both stores as the plan saw them: the swap stands down if either moved
+	// before the locks were granted. On a split login this switch is also its
+	// repair, so it is a decision about both stores.
+	var expect *switcher.StoresAt
+	if ev.LoginKnown {
+		at := ev.Login.At()
+		expect = &at
+	}
 	return e.execute(ctx, s, switcher.Request{
 		Target: ev.Target, LiveUUID: live, LiveForeign: foreign,
-		Departure: ev.Plan.Departure,
+		Departure: ev.Plan.Departure, Expect: expect,
 	})
+}
+
+// planLeaves reports a plan that would move the login OFF target: its switch,
+// which writes both stores, is then the split's repair as well.
+func planLeaves(ev switcher.Evaluation, target store.Account) bool {
+	return !ev.NoReadings && ev.Plan.Action == strategy.ActionSwitch && ev.HasTarget &&
+		ev.Target.UUID != target.UUID
 }
 
 // execute runs one unattended swap and says in daemon.log what came of it. It
@@ -800,7 +846,26 @@ func (e *Engine) act(ctx context.Context, s *store.Store, ev switcher.Evaluation
 //
 // It fills in what every engine swap shares rather than trusting each caller
 // to: Unattended, and the engine's clock and refresher.
+//
+// AND IT HOLDS THE ONE BACKOFF for a credential write that failed, for both
+// callers. Every attempt holds Claude Code's credential locks for up to three
+// bounded keychain spawns -- about 93 s on the slow keychain that makes writes
+// fail -- and the tick loop turns about once a second, so a failing write
+// retried at the tick rate would keep Claude Code's own refresh starved for as
+// long as the keychain stayed slow. After a failure nothing is attempted for
+// failedWriteRetry. Only a write that succeeds clears it early: a tick whose
+// read failed, or whose stores happen to agree, has confirmed nothing about the
+// write that failed.
 func (e *Engine) execute(ctx context.Context, s *store.Store, req switcher.Request) (switcher.Result, error) {
+	now := e.now()
+	if now.Before(e.writeAfter) {
+		if !e.saidWriteWait {
+			e.saidWriteWait = true
+			e.logf("not writing Claude Code's login until %s: the last attempt failed, and each one holds "+
+				"Claude Code's credential locks while the keychain is slow", e.writeAfter.Format(time.TimeOnly))
+		}
+		return switcher.Result{Target: req.Target}, nil
+	}
 	req.Unattended = true
 	// The engine's clock, not the swap's own: every other decision this tick
 	// is dated from it, and a staleness answer taken from a different clock is
@@ -809,7 +874,18 @@ func (e *Engine) execute(ctx context.Context, s *store.Store, req switcher.Reque
 	req.Freshen = e.freshen(ctx)
 	res, err := switcher.Execute(s, req)
 	if err != nil {
-		return res, err
+		e.writeAfter = now.Add(failedWriteRetry)
+		// A keychain write that may have landed leaves a split the next pass
+		// repairs. Remembered so that repair records it as THIS switch, with
+		// the plan's departure, rather than as a sync. A sync that fails this
+		// way changes nothing about what is pending.
+		if !req.Sync && (errors.Is(err, cclink.ErrLoginOutcomeUnknown) || errors.Is(err, cclink.ErrLoginHalfWritten)) {
+			e.pending = &pendingSwitch{Target: req.Target.UUID, Departure: req.Departure}
+		}
+		return res, fmt.Errorf("%w (the next attempt is in %s)", err, failedWriteRetry)
+	}
+	if res.Outcome == switcher.Switched || res.Outcome == switcher.AlreadyOn {
+		e.writeAfter, e.saidWriteWait = time.Time{}, false
 	}
 	switch res.Outcome {
 	case switcher.Overridden:
@@ -878,57 +954,6 @@ func (e *Engine) execute(ctx context.Context, s *store.Store, req switcher.Reque
 	}
 	if res.ProfileSyncErr != nil {
 		e.logf("Claude Code's displayed account name could not be updated: %v", res.ProfileSyncErr)
-	}
-	return res, nil
-}
-
-// splitRepairRetry is how long a split-login repair that FAILED waits before
-// the next attempt. A repair is a keychain write, and the failure that matters
-// most is a keychain too slow to answer: retrying at the tick rate would hold
-// Claude Code's credential locks for up to the keychain's write bound (30 s) on
-// nearly every second, against the machine least able to afford it.
-const splitRepairRetry = time.Minute
-
-// repairSplit puts one login in both of Claude Code's stores and records it,
-// when the evaluation found them -- or ccdad's record -- naming different
-// accounts (switcher.LoginView.Split).
-//
-// It runs INSTEAD of the plan, for the tick it runs in. The plan was ranked
-// against the keychain item alone, and a split login is exactly the machine
-// where that is not the account Claude Code spends: it falls back to the file
-// whenever its own keychain read fails, and on a loaded Mac that is often. The
-// next tick ranks a machine whose stores agree.
-//
-// The account is the item's (LoginView.RepairTarget says why), so the repair
-// installs a login Claude Code is already reading first: LiveUUID is that same
-// account, which exempts it from the staleness refresh -- refreshing it here
-// would rotate the grant under a running session -- and makes a login that
-// moves while the locks are awaited a Raced stand-down rather than a write.
-//
-// Manual mode does not hold it off. Manual mode stops the engine CHOOSING an
-// account; a repair chooses nothing, it carries out what the item already
-// holds.
-func (e *Engine) repairSplit(ctx context.Context, s *store.Store, ev switcher.Evaluation) (switcher.Result, error) {
-	if e.now().Before(e.repairAfter) {
-		return switcher.Result{}, nil
-	}
-	target := ev.Login.RepairTarget()
-	if described := ev.Login.Describe(); described != e.saidSplit {
-		e.saidSplit = described
-		e.logf("the Claude Code login is split: %s. Claude Code reads the keychain item first and falls "+
-			"back to the credentials file when that read fails, so sessions can spend either account; "+
-			"putting %s in both and recording it", described, target.Label())
-	}
-	res, err := e.execute(ctx, s, switcher.Request{Target: target, LiveUUID: target.UUID})
-	if err != nil {
-		e.repairAfter = e.now().Add(splitRepairRetry)
-		return res, fmt.Errorf("repairing the split login (next attempt in %s): %w", splitRepairRetry, err)
-	}
-	switch {
-	case res.Outcome == switcher.Switched:
-		e.logf("repaired the split login: both stores and ccdad's record now name %s", target.Label())
-	case res.RecordedNow:
-		e.logf("ccdad's record of the live account now names %s, which both stores already held", target.Label())
 	}
 	return res, nil
 }

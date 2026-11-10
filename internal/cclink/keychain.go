@@ -404,6 +404,7 @@ const (
 	failTimedOut        keychainFailure = "timed-out"
 	failLingering       keychainFailure = "not-reaped"
 	failSecurityMissing keychainFailure = "security-missing"
+	failSignaled        keychainFailure = "signaled"
 )
 
 // classifyKeychainFailure is the classifier callers use: what `security` SAID if
@@ -533,6 +534,8 @@ func keychainFailureDetail(f keychainFailure) string {
 		return "the lookup exited but something it started held its output open, so ccdad stopped waiting and cannot trust what it read"
 	case failSecurityMissing:
 		return "/usr/bin/security is not there, so ccdad cannot look"
+	case failSignaled:
+		return "the lookup was ended by a signal before it could answer"
 	case failItemNotFound:
 		// Reachable only from a `security` that said "not found" on some exit
 		// code other than 44, which is not a machine ccdad can reason about --

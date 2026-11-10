@@ -39,6 +39,12 @@ var ErrNotClaude = errors.New("switcher: target is not a Claude account")
 // refuse would put a doomed switch in front of Claude Code's own refresh.
 var ErrNoLogin = errors.New("this account has no Claude Code login to install")
 
+// ErrStoredLoginMoved is an attended switch whose target's stored login
+// changed while it waited for Claude Code's locks -- a poll stored a rotated
+// pair. Nothing was written; running it again installs the new one.
+var ErrStoredLoginMoved = errors.New("the account's stored login changed while the switch waited for " +
+	"Claude Code's locks, so nothing was written; run it again")
+
 // Installable reports whether an account can become the live login at all.
 //
 // A SETUP-TOKEN account is stored but has no claudeAiOauth record and no file
@@ -208,6 +214,26 @@ type Request struct {
 	// zero value, because the mark is the engine's own record of an account it
 	// left at a limit and a hand switch is not one.
 	Departure strategy.Departure
+
+	// Expect is what both login stores held when the caller decided, and under
+	// the lock it REPLACES the LiveUUID precondition: if either store holds a
+	// different login now, an unattended swap stands down with Raced. LiveUUID
+	// asks only about the store Claude Code reads first, and a decision about a
+	// split login is a decision about both -- a /login that landed in the file
+	// while this call waited for the lock is a change LiveUUID cannot see.
+	Expect *StoresAt
+
+	// Sync marks a write that carries out a login one store already holds
+	// rather than a move the engine chose: a split-login repair. It records
+	// the account as live and stamps NO cooldown and no departure -- a
+	// cooldown there would hold the engine on an account it may need to leave
+	// at once. A repair that completes an ENGINE switch whose outcome was
+	// unknown is that switch, and passes Sync false with its departure.
+	//
+	// An attended switch to the account Claude Code already reads first is a
+	// sync whatever this says: the person named the account that is live, and
+	// what the call does is make the other store agree.
+	Sync bool
 }
 
 func (r Request) now() time.Time {
@@ -242,6 +268,9 @@ type Result struct {
 	// RecordedNow is an AlreadyOn whose stores both held Target while ccdad's
 	// record named someone else; the record now names Target.
 	RecordedNow bool
+	// Synced is a Switched outcome that was a sync (Request.Sync): no cooldown
+	// was stamped and no prompt poll scheduled.
+	Synced bool
 	// UnknownKeys are the unrecognized top-level keys the unknown-key probe
 	// found, read from the file that was actually merged. Merge preserves them;
 	// the operator still needs to know a new key exists.
@@ -405,10 +434,15 @@ func Execute(s *store.Store, req Request) (Result, error) {
 	// a superseded grant until the server rejects the family and BOTH sides are
 	// logged out.
 	//
-	// The target the caller believes is already live is exempt, and that is
-	// not an optimisation. Refreshing that account here would rotate the grant
-	// underneath a running session — the hazard the whole path is built to
-	// avoid — for a call whose answer is about to be AlreadyOn anyway.
+	// The target the caller believes is already live is exempt from the
+	// REFRESH, and that is not an optimisation: refreshing that account here
+	// would rotate the grant underneath a running session -- the hazard the
+	// whole path is built to avoid. It is not exempt from the check. Whether
+	// the call writes is decided under the lock, and a write of a login inside
+	// that window is refused there (see the decision below); only a call that
+	// writes nothing may carry such a login through.
+	orig := creds
+	freshened := false
 	if req.LiveUUID != req.Target.UUID && cclink.WouldSelfRefresh(creds, req.now()) {
 		if req.Freshen == nil {
 			res.Outcome = Stale
@@ -425,23 +459,26 @@ func Execute(s *store.Store, req Request) (Result, error) {
 			res.FreshenErr = ferr
 			return res, nil
 		}
-		creds = fresh
+		creds, freshened = fresh, true
 	}
 
 	accounts := s.Accounts()
-	err = activateWith(func(live cclink.Blob, stores cclink.LoginStores) (cclink.Blob, error) {
+	writes := cclink.WriteChanged
+	if req.Force {
+		writes = cclink.WriteAll
+	}
+	err = activateWith(writes, func(live cclink.Blob, stores cclink.LoginStores) (cclink.Blob, error) {
 		res.UnknownKeys = cclink.UnknownKeys(live)
-		res.Before = ViewLogin(stores, accounts, s.Credentials, s.ActiveUUID())
-		// AttributeFile, not AttributeLogin, and deliberately: this asks "is the
-		// FILE already this account", because the file is what a switch
-		// rewrites. AttributeLogin would answer about the environment instead,
-		// which switching does not touch — and that override is reported
-		// separately through EnvTokenWins.
+		res.Before = ViewLogin(stores, accounts, s.Credentials, s.ActiveUUID(), nil)
+		// The lead store's attribution, taken from the view rather than asked
+		// a second time: the merge base IS the lead store's login, and two
+		// classifications of one blob are two chances to disagree.
 		//
-		// It is also the only acceptable hysteresis baseline. store.go
-		// documents ActiveUUID as a display HINT that goes stale the moment the
-		// user runs /login inside Claude Code.
-		res.Live, res.LiveState = LiveStateOf(live, accounts, s.Credentials)
+		// It is the only acceptable hysteresis baseline. store.go documents
+		// ActiveUUID as a display HINT that goes stale the moment the user
+		// runs /login inside Claude Code.
+		lead := res.Before.Lead()
+		res.Live, res.LiveState = lead.Account, lead.State
 		res.LiveKnown = res.LiveState == LiveManaged
 
 		observed := ""
@@ -485,7 +522,12 @@ func Execute(s *store.Store, req Request) (Result, error) {
 			res.Outcome = Contended
 			return nil, cclink.ErrNoChange
 		}
-		if req.Unattended && observed != req.LiveUUID {
+		if req.Unattended && req.Expect != nil {
+			if res.Before.At() != *req.Expect {
+				res.Outcome = Raced
+				return nil, cclink.ErrNoChange
+			}
+		} else if req.Unattended && observed != req.LiveUUID {
 			res.Outcome = Raced
 			return nil, cclink.ErrNoChange
 		}
@@ -503,7 +545,39 @@ func Execute(s *store.Store, req Request) (Result, error) {
 			res.Outcome = Unattributed
 			return nil, cclink.ErrNoChange
 		}
-		return creds, nil
+		// THE STORED LOGIN, READ AGAIN under the lock, and what is written is
+		// that read, never the copy taken before the wait. While this call
+		// waited, a poll may have stored a rotated pair for Target -- Claude
+		// Code refreshing a login Target holds in one store, adopted by the
+		// daemon -- and writing the pre-lock copy would put a spent refresh
+		// token into both stores. If the stored login is a different one now,
+		// the decision was made about something that is gone: stand down.
+		cur, cerr := s.Credentials(req.Target.UUID)
+		if cerr != nil {
+			return nil, cerr
+		}
+		if cclink.LoginIdentity(cur) != cclink.LoginIdentity(orig) {
+			if !req.Unattended {
+				return nil, ErrStoredLoginMoved
+			}
+			res.Outcome = Raced
+			return nil, cclink.ErrNoChange
+		}
+		write := cur
+		if freshened {
+			write = creds
+		}
+		// The expiry check, on what is ACTUALLY about to be written, and for
+		// every write. Installing a login inside Claude Code's refresh window
+		// starts the rotation loop whoever the target is, and a split repair
+		// is a write: the exemption the target-is-live case gets above covers
+		// only the refresh, and only a call that writes nothing -- AlreadyOn,
+		// decided before this -- carries such a login through.
+		if cclink.WouldSelfRefresh(write, req.now()) {
+			res.Outcome = Stale
+			return nil, cclink.ErrNoChange
+		}
+		return write, nil
 	})
 	if errors.Is(err, cclink.ErrNoChange) {
 		// A takeover joined onto a stand-down is not damage: nothing was
@@ -537,8 +611,15 @@ func Execute(s *store.Store, req Request) (Result, error) {
 	if err := s.SetActive(req.Target.UUID); err != nil {
 		return res, err
 	}
-	res.CooldownErr = RecordSwitchAt(req.Target.UUID, req.now(), req.Departure)
-	res.PromptPollErr = SchedulePromptPoll(req.Target.UUID, req.now(), store.SharingIdentity(accounts, req.Target))
+	// A sync is not a move, so it stamps no cooldown and brings no poll
+	// forward: the account was already live in a store Claude Code reads. See
+	// Request.Sync for the two ways a write is one.
+	leadWasTarget := res.Before.Lead().State == LiveManaged && res.Before.Lead().Account.UUID == req.Target.UUID
+	res.Synced = req.Sync || (!req.Unattended && leadWasTarget)
+	if !res.Synced {
+		res.CooldownErr = RecordSwitchAt(req.Target.UUID, req.now(), req.Departure)
+		res.PromptPollErr = SchedulePromptPoll(req.Target.UUID, req.now(), store.SharingIdentity(accounts, req.Target))
+	}
 	res.ClearedKeyOwner, res.ClearedKey, res.KeyErr = releaseManagedAPIKey(s)
 	if !res.EnvTokenWins {
 		res.ProfileSyncErr = SyncGlobalConfigIdentity(s, req.Target, res.Live, res.LiveKnown)

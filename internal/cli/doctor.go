@@ -1399,27 +1399,37 @@ func checkLoginSplit(root string, usable, accountsUsable bool, stores cclink.Log
 	}
 	v := switcher.ViewLogin(stores, accounts, func(uuid string) (cclink.Blob, error) {
 		return store.CredentialsAt(root, uuid)
-	}, recorded)
-	if v.Split() {
+	}, recorded, nil)
+	// Three findings, at two levels. Stores holding different logins the
+	// engine can name are the failure: two accounts can be spent. Stores
+	// holding different logins it cannot name yet, and a record that only
+	// lags behind agreeing stores, are warnings -- the first because nothing
+	// says two accounts are being spent until the login is named (the daemon
+	// asks the identity oracle), the second because Claude Code is on one
+	// account in both stores and what is wrong is ccdad's own bookkeeping. A
+	// store that was added to and never switched records no account at all,
+	// which is not a fault to exit 1 over.
+	switch {
+	case v.StoresDisagree():
 		target := v.RepairTarget()
-		// Stores that disagree are the failure: two accounts can be spent.
-		// A record that only lags behind agreeing stores is a warning. Claude
-		// Code is on one account in both stores and spends nothing it should
-		// not; what is wrong is ccdad's own bookkeeping, which the daemon
-		// corrects on its next pass -- and a store that was added to and never
-		// switched records no account at all, which is not a fault to exit 1
-		// over.
-		if !v.StoresDisagree() {
-			return check{name, levelWarn, fmt.Sprintf(
-				"Claude Code's login stores agree on %s, and ccdad records %s as live. The daemon corrects "+
-					"the record on its next pass; `ccdad switch %s` does it now",
-				target.Label(), v.RecordedName(), target.Ref())}
-		}
 		return check{name, levelFail, fmt.Sprintf(
 			"the login is split: %s. Claude Code reads the keychain item first and falls back to the "+
-				"credentials file when that read fails, so sessions can spend either account. The daemon "+
-				"puts %s in both and records it on its next pass; `ccdad switch %s` does it now",
+				"credentials file when that read fails, so sessions can spend either login. The daemon "+
+				"puts %s, the more recently issued one, in both and records it on its next pass; "+
+				"`ccdad switch %s` does it now",
 			v.Describe(), target.Label(), target.Ref())}
+	case v.Unresolved():
+		return check{name, levelWarn, fmt.Sprintf(
+			"the two login stores hold different logins and at least one cannot be named yet: %s. Claude "+
+				"Code falls back to the credentials file when its keychain read fails, so this may be a "+
+				"second account being spent. The daemon asks the profile endpoint whose it is and repairs "+
+				"once it can; nothing is written over a login ccdad cannot name", v.Describe())}
+	case v.RecordBehind():
+		target := v.RepairTarget()
+		return check{name, levelWarn, fmt.Sprintf(
+			"Claude Code's login stores agree on %s, and ccdad records %s as live. The daemon corrects "+
+				"the record on its next pass; `ccdad switch %s` does it now",
+			target.Label(), v.RecordedName(), target.Ref())}
 	}
 	if lead := v.Lead(); lead.State == switcher.LiveManaged && v.AllOn(lead.Account.UUID) {
 		return check{name, levelOK, fmt.Sprintf(

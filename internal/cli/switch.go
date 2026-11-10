@@ -425,7 +425,11 @@ func newSwitchCmd() *cobra.Command {
 			// A split login is named before the success line: the user who ran
 			// this probably did so because sessions were spending an account
 			// ccdad said was not live, and this is the explanation.
-			if res.Before.Split() {
+			//
+			// Only for stores that held different logins. A record that merely
+			// lagged behind agreeing stores is ccdad's own bookkeeping, not a
+			// split anything was spending through.
+			if res.Before.StoresDisagree() || res.Before.Unresolved() {
 				fmt.Fprintf(cmd.ErrOrStderr(), "The login was split: %s.\n", res.Before.Describe())
 			}
 			fmt.Fprintf(cmd.ErrOrStderr(), "Switched to %s.\n", target.Label())

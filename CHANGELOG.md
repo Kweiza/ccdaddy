@@ -26,22 +26,35 @@ must reference accounts by `uuid` or `alias`.
   Code falls back to the file whenever its own Keychain read fails, so
   sessions kept spending the old account while every ccdad command showed the
   new one, and `ccdad switch` to the new account answered "Already on".
-  - A Keychain write now has 30 seconds; lookups keep 5. A write that still
-    runs out of time is read back: if the item holds the new login the switch
-    completes, if it holds the old one the switch failed as before, and if it
-    cannot be read back ccdad says the outcome is unknown and leaves the
-    repair to the next check.
+  - A Keychain write now has 30 seconds; lookups keep 5. A write that does
+    not answer -- it runs out of time, or a signal ends it -- is read back: if
+    the item holds the new login the switch completes, if it holds the old one
+    the switch failed as before, and if it cannot be read back ccdad says the
+    outcome is unknown and leaves the repair to the next check. A store that
+    already holds the login is not written at all.
   - The daemon compares the Keychain item, the credentials file and its own
-    record of the live account on every pass. When the two stores name
-    different accounts it puts the Keychain item's account in both, records
-    it, and says so in `daemon.log`; a record that is merely behind is
+    record of the live account on every pass. When the two stores hold
+    different logins it puts the more recently issued one in both (the
+    Keychain item's on a tie), records it without starting the switch
+    cooldown, and says so in `daemon.log`. If the engine wants to leave that
+    account anyway, its own switch is the repair. A login it cannot name is
+    identified through the profile endpoint first, and nothing is written
+    over a login nobody has named. A record that is merely behind is
     corrected without touching either store.
-  - `ccdad switch ACCOUNT` answers "Already on" only when both stores name
-    that account. Otherwise it installs it into both and says the login was
-    split.
-  - `ccdad doctor` has a `login-split` row. It fails when the two stores name
-    different accounts, names each store's account by email and uuid, and
-    warns when only ccdad's record is behind.
+  - A failed credential write is not retried for a minute, whether it was a
+    switch or a repair: every attempt holds Claude Code's credential locks
+    while the Keychain is slow.
+  - An account whose login sits in the credentials file behind a Keychain
+    item naming another account is no longer refreshed by ccdad: a session
+    may be spending it.
+  - `ccdad switch ACCOUNT` answers "Already on" only when both stores hold
+    that account's login. Otherwise it installs it into both and says the
+    login was split. Switching to an API-key account checks both stores for a
+    login left in front of the key.
+  - `ccdad doctor` has a `login-split` row. It fails when the two stores hold
+    logins of different accounts and names each store's account by email and
+    uuid; it warns when a login cannot be named yet or when only ccdad's
+    record is behind.
 
 ## [0.29.0] — 2026-11-10
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 )
@@ -112,6 +113,13 @@ func LoginIdentity(b Blob) string {
 	return ""
 }
 
+// LoginExpiry is when a blob's login expires, and whether it says. It is the
+// evidence of WHICH of two logins was issued later: Claude Code's grants all
+// last as long, so the later expiry is the later issue.
+func LoginExpiry(b Blob) (time.Time, bool) {
+	return oauthExpiresAt(b)
+}
+
 // ErrLoginOutcomeUnknown is a switch whose keychain write ran out of time and
 // whose item could not be read back to say whether it landed. Nothing further
 // was written: the credentials file still holds what it held, and the item
@@ -144,16 +152,30 @@ const (
 // reinstall, or the repair of a split login whose item already holds the
 // target -- makes written and previous the same login; that reads as landed,
 // and either way the item holds the login that was asked for.
+//
+// A LOGOUT is the write with no login in it (ClearLogin, for an api-key
+// account), so "the login it was given" is NO login: an item that holds none,
+// or is gone, has landed. Comparing identities there would compare "" with "",
+// which LoginIdentity's contract says never matches, and every logout that ran
+// out of time would read as unknown however it went.
 func confirmKeychainWrite(written, previous Blob) writeOutcome {
 	got, ok, err := loadKeychainCredentialsWithin(context.Background(), keychainWriteTimeout)
-	if err != nil || !ok {
+	if err != nil {
 		return writeUnresolved
 	}
-	id := LoginIdentity(got)
+	want, id := LoginIdentity(written), ""
+	if ok {
+		id = LoginIdentity(got)
+	}
+	if want == "" {
+		if _, hasLogin := got["claudeAiOauth"]; !ok || !hasLogin {
+			return writeLanded
+		}
+	}
 	switch {
 	case id == "":
 		return writeUnresolved
-	case id == LoginIdentity(written):
+	case id == want:
 		return writeLanded
 	case id == LoginIdentity(previous):
 		return writeDidNotLand
@@ -186,9 +208,9 @@ func settleKeychainWrite(writeErr error, written, previous Blob) error {
 // could not settle a write. It says, in a user's terms, what is and is not
 // known, and that the next check repairs it.
 func unconfirmedWriteError(writeErr error) error {
-	return fmt.Errorf("%w: the keychain item Claude Code reads first did not answer within %s while the new "+
-		"login was being written to it, and reading it back did not say which login it holds now. The "+
-		"credentials file was left as it was. The daemon checks both stores on its next pass and puts one "+
-		"login in both; running the same `ccdad switch` again does that now: %v",
+	return fmt.Errorf("%w: the keychain item Claude Code reads first did not answer while it was being "+
+		"updated (the write is allowed %s), and reading it back did not say what it holds now. The "+
+		"credentials file was left as it was. The daemon compares both stores on its next pass and puts "+
+		"one login in both; running the same command again settles it now: %v",
 		ErrLoginOutcomeUnknown, keychainWriteTimeout, writeErr)
 }

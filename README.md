@@ -860,18 +860,25 @@ atomic file replacement, and refuses unsafe file paths. Network refresh work is
 kept outside those credential locks. `ccdad doctor` reports storage conflicts
 and unexpected credential keys.
 
-A switch writes the Keychain item first and the credentials file second. A
-Keychain write that runs out of time (ccdad allows 30 seconds) is read back
-before anything is reported: if the item holds the new login the switch
-completes, and if it cannot be read back ccdad says the outcome is unknown
-rather than claiming either. When the Keychain item, the credentials file and
-ccdad's record of the live account name different accounts, the login is
-*split*: Claude Code falls back to the file whenever its own Keychain read
-fails, so sessions can spend an account ccdad does not show as live. The daemon
-repairs a split on its next pass by putting the Keychain item's account in both
-stores, `ccdad switch` repairs it instead of answering "Already on", and
-`ccdad doctor` fails its `login-split` row and names which store holds which
-account.
+A switch writes the Keychain item first and the credentials file second, and
+skips a store that already holds the login. A Keychain write that does not
+answer (ccdad allows 30 seconds) is read back before anything is reported: if
+the item holds the new login the switch completes, and if it cannot be read
+back ccdad says the outcome is unknown rather than claiming either.
+
+When the Keychain item and the credentials file hold different logins, the
+login is *split*: Claude Code falls back to the file whenever its own Keychain
+read fails, so sessions can spend an account ccdad does not show as live.
+
+- The daemon repairs a split on its next pass by putting the more recently
+  issued login in both stores (the Keychain item's on a tie) and recording it.
+  A login it cannot name is first identified through the profile endpoint;
+  nothing is written over a login nobody has named.
+- `ccdad switch` repairs a split instead of answering "Already on".
+- `ccdad doctor`'s `login-split` row names which store holds which account. It
+  fails when the stores hold logins of different accounts, and warns when a
+  login cannot be named yet or when only ccdad's record of the live account is
+  behind.
 
 On Windows, file protection relies on the inherited ACL rather than Unix mode
 bits. Account exports containing credentials must be treated as secrets.

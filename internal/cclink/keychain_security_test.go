@@ -56,6 +56,9 @@ const (
 	// securityWriteLostEnv makes a write store nothing, so a write that runs
 	// out of time is one that did not land.
 	securityWriteLostEnv = "CCDAD_TEST_SECURITY_WRITE_LOST"
+	// securityWriteSignalEnv makes a write kill itself with a signal after it
+	// has landed.
+	securityWriteSignalEnv = "CCDAD_TEST_SECURITY_WRITE_SIGNAL"
 )
 
 // TestMain routes on the environment before testing ever sees the argument
@@ -164,6 +167,8 @@ type fakeSecurity struct {
 	readFailsAfterWrite bool
 	// writeLost makes a write store nothing at all.
 	writeLost bool
+	// writeSignaled makes a write kill itself with a signal after landing.
+	writeSignaled bool
 }
 
 // install points the exec layer at the fixture and pretends this machine is
@@ -215,6 +220,10 @@ func (f fakeSecurity) install(t *testing.T) string {
 	t.Setenv(securityReadFailsAfterWriteEnv, "")
 	if f.readFailsAfterWrite {
 		t.Setenv(securityReadFailsAfterWriteEnv, "1")
+	}
+	t.Setenv(securityWriteSignalEnv, "")
+	if f.writeSignaled {
+		t.Setenv(securityWriteSignalEnv, "1")
 	}
 	t.Setenv(securityWriteLostEnv, "")
 	if f.writeLost {
@@ -282,6 +291,14 @@ func runStatefulItem(path string) (int, bool) {
 				return 96, true
 			}
 			_ = os.WriteFile(written, nil, 0o600)
+		}
+		// A signal ends it after the write landed: a process that did not
+		// EXIT, whose request had already reached the store.
+		if os.Getenv(securityWriteSignalEnv) != "" {
+			if p, err := os.FindProcess(os.Getpid()); err == nil {
+				_ = p.Kill()
+			}
+			time.Sleep(time.Minute)
 		}
 		// AFTER the write, which is the incident: the item changed, and the
 		// client was still running when ccdad's deadline killed it.

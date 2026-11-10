@@ -55,6 +55,9 @@ type Evaluation struct {
 	// machine Claude Code may not be on.
 	Login      LoginView
 	LoginKnown bool
+	// Stores is the raw read Login was built from. The daemon's identity
+	// oracle needs a store's own access token to ask whose login it is.
+	Stores cclink.LoginStores
 	// NoReadings means nothing has ever been polled, so there is no evidence to
 	// choose on. Distinct from ActionBlocked, which is a choice that was made
 	// and came back empty — exit 4 is "wanted, but no viable target", and both
@@ -116,6 +119,10 @@ type EvalOptions struct {
 	// because a target is handed to a switch that rewrites Claude Code's
 	// credentials file.
 	Provider provider.ID
+	// Owners is the identity oracle's memory: the daemon passes it so a login
+	// store it has already named reads as that account's (LiveResolved). Nil
+	// knows nothing, which is every one-shot caller.
+	Owners Owners
 }
 
 // provider is the pass's provider, defaulting a zero value to Claude.
@@ -162,10 +169,11 @@ func Evaluate(s *store.Store, opts EvalOptions) (Evaluation, error) {
 	// reading it a second time for the split check would double the keychain
 	// spawns of every tick and could answer about a different instant.
 	stores, err := cclink.ReadLoginStores()
-	var live cclink.Blob
 	if err == nil {
-		ev.Login, ev.LoginKnown = ViewLogin(stores, accounts, s.Credentials, s.ActiveUUID()), true
-		live, _, err = stores.Live()
+		ev.Stores = stores
+		ev.Login, ev.LoginKnown = ViewLogin(stores, accounts, s.Credentials, s.ActiveUUID(), opts.Owners), true
+		// The file's error, when the file is the only store.
+		_, _, err = stores.Live()
 	}
 	if err != nil {
 		// Not fatal, and NOT "nobody is live" either. Handing the nil blob to
@@ -177,7 +185,7 @@ func Evaluate(s *store.Store, opts EvalOptions) (Evaluation, error) {
 		ev.LiveErr = err
 		ev.Live, ev.LiveState = store.Account{}, LiveUnreadable
 	} else {
-		ev.Live, ev.LiveState = LiveStateOf(live, accounts, s.Credentials)
+		ev.Live, ev.LiveState = liveOfView(ev.Login)
 	}
 	ev.LiveKnown = ev.LiveState == LiveManaged
 	liveUUID := ""
@@ -247,6 +255,23 @@ func Evaluate(s *store.Store, opts EvalOptions) (Evaluation, error) {
 		ev.Target, ev.HasTarget = target, true
 	}
 	return ev, nil
+}
+
+// liveOfView is the account the ranking measures from: the store Claude Code
+// reads first, taken from the view rather than classified a second time -- or,
+// on a split the engine repairs, the account it repairs towards, because that
+// is the login the machine is about to be on and the one a plan to leave it
+// has to leave from. A login only the oracle has named is reported as
+// unattributed: the swap path's own resolution is what acts on it.
+func liveOfView(v LoginView) (store.Account, LiveState) {
+	if v.StoresDisagree() {
+		return v.RepairTarget(), LiveManaged
+	}
+	lead := v.Lead()
+	if lead.State == LiveResolved {
+		return store.Account{}, LiveUnattributed
+	}
+	return lead.Account, lead.State
 }
 
 // engineCandidates projects the store and the on-disk usage cache onto what the

@@ -67,8 +67,11 @@ var keychainReadTimeout = 5 * time.Second
 // under heavier load than the one that failed, without reaching a wait a user
 // would mistake for a hang. The longer bound costs something only while the
 // keychain is actually slow, and it is paid inside Claude Code's credential
-// locks, holding Claude Code's own refresh off for at most that long; a short
-// bound costs a write whose outcome nobody knows. Even this one can be
+// locks. A switch spawns up to three times under them -- the base read, the
+// write, and the read-back of a write that ran out of time -- each with this
+// bound and keychainWaitDelay after it, so Claude Code's own refresh can be held
+// off for about 93 s in the worst case; a short bound costs a write whose
+// outcome nobody knows. Even this one can be
 // exceeded, which is why a write that runs out of time is read back rather
 // than reported as a failure (see confirmKeychainWrite). A var so a test can
 // shrink it rather than sleep.
@@ -234,6 +237,13 @@ func spawnSecurity(ctx context.Context, bound time.Duration, args ...string) (se
 	}
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
+		// -1 is a process that did not EXIT: a signal ended it. That is not an
+		// answer from `security`, and for a write it is a request that may
+		// already have reached securityd, so it is classified rather than
+		// handed back as a status nobody chose.
+		if exitErr.ExitCode() == -1 {
+			return res, &KeychainError{Op: op, failure: failSignaled, stderr: res.stderr}
+		}
 		res.code = exitErr.ExitCode()
 		return res, nil
 	}
@@ -503,15 +513,24 @@ func SurvivesRestart(err error) bool {
 
 // writeOutcomeUnknown reports whether a failed WRITE may have landed anyway.
 //
-// Two failures are like that, and both are ccdad giving up on a `security`
-// that was still running: the deadline killed it, or it exited and something
-// it started kept the output pipe open. In both the request may already have
-// reached securityd, and on 2026-11-10 a killed add-generic-password did land.
-// Every other failure is `security` ANSWERING -- an exit status, or a binary
-// that never started -- and an answer that says it failed is one.
+// Only a CLEAN FAILURE RESPONSE is known not to have landed: `security` exited
+// with a status, or the binary was not there to start. Everything else is
+// ccdad not getting an answer -- the deadline killed it, its output pipe
+// outlived it, a signal ended it, or the spawn failed some other way after it
+// may have begun -- and in each the request may already have reached
+// securityd. On 2026-11-10 a killed add-generic-password did land. Reading the
+// item back costs one lookup; calling an unknown "nothing was written" cost a
+// split login.
 func writeOutcomeUnknown(err error) bool {
 	var ke *KeychainError
-	return errors.As(err, &ke) && (ke.failure == failTimedOut || ke.failure == failLingering)
+	if !errors.As(err, &ke) {
+		return false
+	}
+	switch ke.failure {
+	case failTimedOut, failLingering, failSignaled, failOther:
+		return ke.code == 0
+	}
+	return false
 }
 
 // UnlockLoginKeychain runs `security unlock-keychain` against the default

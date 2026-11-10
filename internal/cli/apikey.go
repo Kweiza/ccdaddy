@@ -321,10 +321,15 @@ func switchToAPIKey(cmd *cobra.Command, s *store.Store, target store.Account, ke
 	// the key is stored AND no OAuth login is sitting in front of it. With a
 	// login still present the key is inert, so reporting "already on" would be
 	// reporting a state that is not in effect.
+	//
+	// "No OAuth login in front of it" means in EITHER store. live is the store
+	// Claude Code reads first; with a keychain item the credentials file is the
+	// one it falls back to whenever that read fails, and a login left there --
+	// by a logout whose keychain write could not be confirmed -- is a login the
+	// key is still behind half the time.
 	if !force {
 		stored, ok := cclink.PrimaryAPIKey(cfg)
-		_, hasOAuth := live["claudeAiOauth"]
-		if ok && stored == key && !hasOAuth {
+		if ok && stored == key && !anyStoreHoldsALogin(live) {
 			fmt.Fprintf(stderr, "Already on %s.\n", target.Label())
 			return WithCode(errSilent, ExitNothingToDo)
 		}
@@ -375,6 +380,22 @@ func switchToAPIKey(cmd *cobra.Command, s *store.Store, target store.Account, ke
 	// and this describes what will happen to it.
 	noteCredentialHomeClaim(cmd, credhome.Decide())
 	return nil
+}
+
+// anyStoreHoldsALogin reports an OAuth login in live or in either login store.
+// A store that cannot be read is answered from live alone, which is what this
+// check was before both stores were read.
+func anyStoreHoldsALogin(live cclink.Blob) bool {
+	if _, ok := live["claudeAiOauth"]; ok {
+		return true
+	}
+	stores, err := cclink.ReadLoginStores()
+	if err != nil {
+		return false
+	}
+	_, inItem := stores.Item["claudeAiOauth"]
+	_, inFile := stores.File["claudeAiOauth"]
+	return inItem || inFile
 }
 
 // setupTokenRefusal is the message for the one activation that is still not

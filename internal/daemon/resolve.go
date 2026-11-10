@@ -45,6 +45,12 @@ const (
 	// liveForeign: the owner is an account this store does not manage. There
 	// is nothing of ours under the file, so a swap may proceed.
 	liveForeign
+	// liveOwned: the owner is a managed account, and the login is NOT newer
+	// than the one it has stored -- an older generation whose refresh token is
+	// already spent. It is not adopted: storing it would put a dead grant over
+	// a live one. The oracle's memory names it, so a LoginView sees it as that
+	// account's (switcher.LiveResolved).
+	liveOwned
 )
 
 // resolveLive answers who owns the login in the credentials file when the file
@@ -74,6 +80,28 @@ func (e *Engine) resolveLive(ctx context.Context, s *store.Store) (store.Account
 	live, err := cclink.Load()
 	if err != nil {
 		return store.Account{}, liveUnresolved
+	}
+	return e.resolveStore(ctx, s, live)
+}
+
+// resolveStore is resolveLive for any one login -- the store Claude Code reads
+// first, or the other one (identifyStores) -- and it is where the oracle is
+// actually asked.
+//
+// Two things were added for the split-login repair. The answer is REMEMBERED
+// per login (e.owners), so a login is asked about once rather than once a
+// minute, and a LoginView can name it from memory. And adoption is ORDERED: a
+// login replaces the account's stored one only when it was issued later. Both
+// stores can hold a login of the same account in different generations, and
+// adopting the older over the newer would put a spent refresh token back into
+// the store and undo the adoption the other store had just made.
+func (e *Engine) resolveStore(ctx context.Context, s *store.Store, live cclink.Blob) (store.Account, liveVerdict) {
+	if e.ResolveOwner == nil {
+		return store.Account{}, liveUnresolved
+	}
+	id := cclink.LoginIdentity(live)
+	if uuid, known := e.owners[id]; known && id != "" {
+		return e.verdictFor(s, live, uuid)
 	}
 	token, ok := liveAccessToken(live)
 	if !ok {
@@ -105,9 +133,21 @@ func (e *Engine) resolveLive(ctx context.Context, s *store.Store) (store.Account
 	if err != nil || uuid == "" {
 		return store.Account{}, liveUnresolved
 	}
+	if _, managed := s.Get(uuid); !managed {
+		uuid = ""
+	}
+	if id != "" {
+		e.remember(id, uuid)
+	}
+	return e.verdictFor(s, live, uuid)
+}
 
+// verdictFor turns the oracle's answer about live into a verdict, adopting
+// live into its owner's stored login when it is the newer of the two. uuid ""
+// is a login that belongs to no account here.
+func (e *Engine) verdictFor(s *store.Store, live cclink.Blob, uuid string) (store.Account, liveVerdict) {
 	owner, managed := s.Get(uuid)
-	if !managed {
+	if uuid == "" || !managed {
 		return store.Account{}, liveForeign
 	}
 	// Overlaid onto what the account already holds, not written in its place.
@@ -125,6 +165,13 @@ func (e *Engine) resolveLive(ctx context.Context, s *store.Store) (store.Account
 	if err != nil {
 		e.logf("could not read %s's stored login to adopt into it: %v", owner.Label(), err)
 		return store.Account{}, liveUnresolved
+	}
+	if cclink.LoginIdentity(next) == cclink.LoginIdentity(live) {
+		// Already stored -- adopted on an earlier pass.
+		return owner, liveAdopted
+	}
+	if !newerThanStored(live, next) {
+		return owner, liveOwned
 	}
 	adopted := cclink.Blob{}
 	for k, v := range next {

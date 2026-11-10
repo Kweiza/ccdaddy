@@ -105,6 +105,13 @@ const (
 	// It is appended rather than inserted so the existing values keep their
 	// numbers, the same rule Outcome carries.
 	LiveUnreadable
+	// LiveResolved: a login whose refresh token matches no stored snapshot,
+	// whose OWNER the identity oracle has named as one of this store's
+	// accounts. It is a generation of that account's login ccdad has not
+	// taken in -- newer, or older and already spent. Only a LoginView built
+	// with Owners produces it; LiveStateOf alone never does. Appended, for the
+	// reason LiveUnreadable is.
+	LiveResolved
 )
 
 func (s LiveState) String() string {
@@ -117,6 +124,8 @@ func (s LiveState) String() string {
 		return "a login this store cannot name"
 	case LiveUnreadable:
 		return "a login store this machine cannot read"
+	case LiveResolved:
+		return "a managed account's login that ccdad has not stored"
 	}
 	return "unknown"
 }

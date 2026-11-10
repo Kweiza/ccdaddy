@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/store"
+	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
 
@@ -102,9 +104,79 @@ func (l *logLines) contains(sub string) bool {
 
 func noFetch(context.Context, string) (*usage.Snapshot, error) { return snapshotWith(50), nil }
 
+// blobExpiring is a compact login under refresh token rt, expiring at exp.
+func blobExpiring(rt string, exp time.Time) string {
+	return `{"claudeAiOauth":{"accessToken":"AT-` + rt + `","refreshToken":"` + rt + `","expiresAt":` +
+		fmt.Sprint(exp.UnixMilli()) + `,"scopes":["user:inference","user:profile"]}}`
+}
+
+func loginExpiring(uuid string, exp time.Time) string { return blobExpiring("RT-"+uuid, exp) }
+
+// seedAccountExpiring is seedAccount with the stored login expiring at exp.
+func seedAccountExpiring(t *testing.T, uuid, org string, exp time.Time) {
+	t.Helper()
+	seedAccount(t, uuid, org)
+	s, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, _ := s.Get(uuid)
+	var b cclink.Blob
+	if err := json.Unmarshal([]byte(loginExpiring(uuid, exp)), &b); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add(a, b); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeLiveLoginRT(t *testing.T, rt string, exp time.Time) {
+	t.Helper()
+	if err := os.WriteFile(mustPath(ccpath.CredentialsPath()), []byte(blobExpiring(rt, exp)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeLiveLogin(t *testing.T, uuid string, exp time.Time) { writeLiveLoginRT(t, "RT-"+uuid, exp) }
+
+// readings puts one five-hour reading per account into the cache.
+func readings(t *testing.T, used map[string]float64) {
+	t.Helper()
+	if err := usage.WithCache(time.Second, func(c *usage.Cache) error {
+		for uuid, u := range used {
+			c.Put(uuid, usage.Entry{Snapshot: snapshotWith(u), FetchedAt: tickEpoch.Add(-time.Minute), NextPollAt: tickEpoch.Add(time.Hour)})
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// departureOnDisk reports whether strategy.json remembers leaving uuid.
+func departureOnDisk(t *testing.T, uuid string) bool {
+	t.Helper()
+	path, err := strategy.StatePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Departures map[string]json.RawMessage `json:"departures"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	_, ok := doc.Departures[uuid]
+	return ok
+}
+
 // THE REPAIR. A tick that finds the item on one account and the file on
-// another puts the item's account in both stores and records it -- with the
-// cooldown a normal switch stamps -- and says so in the log.
+// another puts the item's account -- the tie goes to the item -- in both
+// stores and records it, without stamping a cooldown: it is a sync, not a
+// move. And it writes only the store that differed.
 func TestATickRepairsASplitLoginTowardsTheItem(t *testing.T) {
 	isolateEngine(t)
 	seedAccount(t, "u-1", "org-1")
@@ -125,17 +197,82 @@ func TestATickRepairsASplitLoginTowardsTheItem(t *testing.T) {
 	if secret, _ := kc.Secret(); !holds(secret, "u-2") {
 		t.Fatalf("the item no longer holds u-2: %s", secret)
 	}
+	if n := kc.Writes(); n != 0 {
+		t.Fatalf("the item, which already held u-2, was written %d times", n)
+	}
 	if got := activeOnDisk(t); got != "u-2" {
 		t.Fatalf("active = %q, want u-2", got)
 	}
-	if _, to := lastSwitchOnDisk(t); to != "u-2" {
-		t.Fatalf("cooldown stamped for %q, want u-2: a repair records like a switch", to)
+	if at, _ := lastSwitchOnDisk(t); !at.IsZero() {
+		t.Fatal("a sync repair stamped the cooldown")
 	}
 	if !log.contains("login is split") || !log.contains("u-1@example.com") || !log.contains("u-2@example.com") {
 		t.Fatalf("the log does not name which store held which account: %q", log.lines)
 	}
 	if !log.contains("repaired the split login") {
 		t.Fatalf("the log does not say the split was repaired: %q", log.lines)
+	}
+}
+
+// D1. A /login whose keychain write failed lands in the FILE: the newer login,
+// and the user's latest decision. The repair goes towards it.
+func TestATickRepairsTowardsTheNewerLoginInTheFile(t *testing.T) {
+	isolateEngine(t)
+	seedAccountExpiring(t, "u-1", "org-1", tickEpoch.Add(8*time.Hour))
+	seedAccountExpiring(t, "u-2", "org-2", tickEpoch.Add(time.Hour))
+	writeLiveLogin(t, "u-1", tickEpoch.Add(8*time.Hour))
+	kc := cclink.NewFakeKeychain(loginExpiring("u-2", tickEpoch.Add(time.Hour)))
+	t.Cleanup(cclink.SetKeychainForTest(kc))
+	recordActive(t, "u-2")
+	// The file's account has room, so no plan leaves it.
+	readings(t, map[string]float64{"u-1": 36, "u-2": 99})
+
+	e := engineFor(t, tokensAreFine, noFetch)
+	tick(t, e)
+
+	if secret, _ := kc.Secret(); !holds(secret, "u-1") {
+		t.Fatalf("the item was not repaired to the newer login in the file: %s", secret)
+	}
+	if got := activeOnDisk(t); got != "u-1" {
+		t.Fatalf("active = %q, want u-1", got)
+	}
+}
+
+// D4. When the plan wants to LEAVE the account the split is repaired towards,
+// its switch is the repair: one write, both stores, with the plan's departure
+// and cooldown -- instead of installing a spent account and then holding the
+// engine on it with a cooldown.
+func TestAPlanThatLeavesTheRepairTargetIsTheRepair(t *testing.T) {
+	isolateEngine(t)
+	writeConfig(t, "hover = true\n")
+	seedAccount(t, "u-1", "org-1")
+	seedAccount(t, "u-2", "org-2")
+	liveAs(t, "u-1")
+	withItem(t, "u-2")
+	recordActive(t, "u-1")
+	// The item's account is spent; the file's has room.
+	if err := usage.WithCache(time.Second, func(c *usage.Cache) error {
+		c.Put("u-1", usage.Entry{Snapshot: snapshotWith(5), FetchedAt: tickEpoch.Add(-time.Minute), NextPollAt: tickEpoch.Add(time.Hour)})
+		c.Put("u-2", usage.Entry{Snapshot: snapshotWith(100), FetchedAt: tickEpoch.Add(-time.Minute), NextPollAt: tickEpoch.Add(time.Hour)})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	e := engineFor(t, tokensAreFine, noFetch)
+	tick(t, e)
+
+	if !holds(fileNow(t), "u-1") {
+		t.Fatalf("the file left the account with room:\n%s", fileNow(t))
+	}
+	if got := activeOnDisk(t); got != "u-1" {
+		t.Fatalf("active = %q, want u-1: the plan's switch is the repair", got)
+	}
+	if _, to := lastSwitchOnDisk(t); to != "u-1" {
+		t.Fatalf("cooldown stamped for %q, want the plan's switch to u-1", to)
+	}
+	if !departureOnDisk(t, "u-2") {
+		t.Fatal("the plan's departure from the spent account was not recorded")
 	}
 }
 
@@ -190,54 +327,76 @@ func TestATickCorrectsARecordBehindAgreeingStores(t *testing.T) {
 	}
 }
 
-// A repair that fails is not retried at the tick rate: every attempt is a
-// keychain write, and the failure that matters is a keychain too slow to
-// answer.
-func TestAFailedRepairWaitsBeforeTryingAgain(t *testing.T) {
+// D5. ONE backoff for a failed credential write, the plan's included: each
+// attempt holds Claude Code's credential locks while the keychain is slow. And
+// a tick whose read failed does not clear it -- only a write that succeeds does.
+func TestAFailedWriteWaitsBeforeTheNextAndAReadFailureDoesNotClearTheWait(t *testing.T) {
 	isolateEngine(t)
 	seedAccount(t, "u-1", "org-1")
 	seedAccount(t, "u-2", "org-2")
 	liveAs(t, "u-1")
-	kc := withItem(t, "u-2")
+	kc := withItem(t, "u-1")
 	kc.WritesRefused = true
 	recordActive(t, "u-1")
-	splitReadings(t)
+	splitReadings(t) // u-1 at 99%: the plan moves to u-2
 
 	now := tickEpoch
 	e := engineFor(t, tokensAreFine, noFetch)
 	e.Now = func() time.Time { return now }
 
 	if err := e.Tick(context.Background()); err == nil {
-		t.Fatal("a repair whose write failed reported success")
+		t.Fatal("a switch whose keychain write was refused reported success")
 	}
 	e.Wait()
+	if n := kc.Writes(); n != 1 {
+		t.Fatalf("writes = %d after the first tick, want 1", n)
+	}
+	// A tick whose read fails, then one whose read succeeds, inside the wait.
+	kc.FailReads(true)
+	_ = e.Tick(context.Background())
+	e.Wait()
+	kc.FailReads(false)
 	if err := e.Tick(context.Background()); err != nil {
-		t.Fatalf("the repair was retried on the very next tick: %v", err)
+		t.Fatalf("a tick inside the wait failed: %v", err)
 	}
 	e.Wait()
-	now = now.Add(splitRepairRetry)
+	if n := kc.Writes(); n != 1 {
+		t.Fatalf("writes = %d: the switch was retried inside the wait, after a read failure", n)
+	}
+	now = now.Add(failedWriteRetry)
 	kc.Heal()
 	tick(t, e)
 	if !holds(fileNow(t), "u-2") {
-		t.Fatalf("the repair was not retried once the wait was over:\n%s", fileNow(t))
+		t.Fatalf("the switch was not retried once the wait was over:\n%s", fileNow(t))
 	}
 }
 
-// THE INCIDENT, END TO END. The plan moves chan (99%) to support; the keychain
-// write lands and runs out of time, and the read-back fails too. The switch
-// claims neither outcome. When the keychain answers again the next tick finds
-// the item on support and the file on chan, and repairs towards support.
-func TestAnUnconfirmedSwitchIsRepairedOnTheNextTick(t *testing.T) {
+// THE INCIDENT, END TO END, and the departure the switch named. The plan moves
+// u-1 (spent) to u-2; the keychain write lands and runs out of time, and the
+// read-back fails too. The switch claims neither outcome. When the keychain
+// answers again -- after the write backoff -- the next tick finds the item on
+// u-2 and the file on u-1, and the repair completes THAT switch: cooldown and
+// departure recorded as the plan named them.
+func TestAnUnconfirmedSwitchIsCompletedByTheRepairWithItsDeparture(t *testing.T) {
 	isolateEngine(t)
+	writeConfig(t, "hover = true\n")
 	seedAccount(t, "u-1", "org-1")
 	seedAccount(t, "u-2", "org-2")
 	liveAs(t, "u-1")
 	kc := withItem(t, "u-1")
 	kc.WriteLandsThenTimesOut, kc.ReadsFailAfterWrite = true, true
 	recordActive(t, "u-1")
-	splitReadings(t)
+	if err := usage.WithCache(time.Second, func(c *usage.Cache) error {
+		c.Put("u-1", usage.Entry{Snapshot: snapshotWith(100), FetchedAt: tickEpoch.Add(-time.Minute), NextPollAt: tickEpoch.Add(time.Hour)})
+		c.Put("u-2", usage.Entry{Snapshot: snapshotWith(5), FetchedAt: tickEpoch.Add(-time.Minute), NextPollAt: tickEpoch.Add(time.Hour)})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 
+	now := tickEpoch
 	e := engineFor(t, tokensAreFine, noFetch)
+	e.Now = func() time.Time { return now }
 	err := e.Tick(context.Background())
 	e.Wait()
 	if !errors.Is(err, cclink.ErrLoginOutcomeUnknown) {
@@ -251,11 +410,78 @@ func TestAnUnconfirmedSwitchIsRepairedOnTheNextTick(t *testing.T) {
 	}
 
 	kc.Heal()
+	now = now.Add(failedWriteRetry)
 	tick(t, e)
 	if !holds(fileNow(t), "u-2") {
 		t.Fatalf("the next tick did not repair the file to the item's account:\n%s", fileNow(t))
 	}
 	if got := activeOnDisk(t); got != "u-2" {
 		t.Fatalf("active = %q, want u-2 after the repair", got)
+	}
+	if _, to := lastSwitchOnDisk(t); to != "u-2" {
+		t.Fatalf("cooldown stamped for %q, want u-2: the repair completed an engine switch", to)
+	}
+	if !departureOnDisk(t, "u-1") {
+		t.Fatal("the departure the unconfirmed switch named was not recorded by the repair that completed it")
+	}
+}
+
+// D1. A file this store cannot name beside a different login in the item is
+// not "fine". The oracle names it; a NEWER login of a managed account is
+// adopted into the store, and the pass after repairs towards it.
+func TestAnUnnamedNewerFileIsAdoptedAndRepairedTowards(t *testing.T) {
+	isolateEngine(t)
+	seedAccountExpiring(t, "u-1", "org-1", tickEpoch.Add(time.Hour))
+	seedAccount(t, "u-2", "org-2")
+	// Claude Code refreshed u-1 and wrote the new pair to the FILE, its
+	// keychain write having failed; the item still holds u-2.
+	writeLiveLoginRT(t, "RT-u-1-refreshed", tickEpoch.Add(8*time.Hour))
+	kc := cclink.NewFakeKeychain(loginExpiring("u-2", tickEpoch.Add(time.Hour)))
+	t.Cleanup(cclink.SetKeychainForTest(kc))
+	recordActive(t, "u-2")
+	readings(t, map[string]float64{"u-1": 36, "u-2": 99})
+
+	e := engineFor(t, tokensAreFine, noFetch)
+	e.ResolveOwner = func(_ context.Context, token string) (string, error) {
+		if token == "AT-RT-u-1-refreshed" {
+			return "u-1", nil
+		}
+		return "", errors.New("unknown token")
+	}
+	var log logLines
+	log.attach(e)
+	tick(t, e)
+	if !log.contains("newer login of") {
+		t.Fatalf("the newer login in the file was not adopted: %q", log.lines)
+	}
+	tick(t, e)
+	if secret, _ := kc.Secret(); !holds(secret, "u-1-refreshed") {
+		t.Fatalf("the item was not repaired to the newer login: %s", secret)
+	}
+}
+
+// D1. An unnamed file the oracle cannot answer for is left alone and said,
+// once; nothing is written over a login nobody has named.
+func TestAnUnnamedFileTheOracleCannotNameIsLeftAlone(t *testing.T) {
+	isolateEngine(t)
+	seedAccount(t, "u-1", "org-1")
+	seedAccount(t, "u-2", "org-2")
+	writeLiveLoginRT(t, "RT-stranger", tickEpoch.Add(8*time.Hour))
+	withItem(t, "u-2")
+	recordActive(t, "u-2")
+	splitReadings(t)
+	before := fileNow(t)
+
+	e := engineFor(t, tokensAreFine, noFetch)
+	var log logLines
+	log.attach(e)
+	tick(t, e)
+	tick(t, e)
+
+	if fileNow(t) != before {
+		t.Fatalf("a login nobody named was written over:\n%s", fileNow(t))
+	}
+	if !log.contains("cannot name") {
+		t.Fatalf("the unnamed login was not reported: %q", log.lines)
 	}
 }

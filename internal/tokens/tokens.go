@@ -191,7 +191,11 @@ func (s *Source) AccessToken(ctx context.Context, uuid string) (string, error) {
 	// The live branch needs no guard of its own: a failed Load answers a nil
 	// blob, isLiveLogin refuses that, and liveToken re-reads under the lock and
 	// reports the same failure if it is ever reached another way.
-	live, liveErr := cclink.Load()
+	stores, liveErr := cclink.ReadLoginStores()
+	var live cclink.Blob
+	if liveErr == nil {
+		live, _, liveErr = stores.Live()
+	}
 	if isLiveLogin(rec, live) {
 		return s.liveToken(ctx, uuid, rec)
 	}
@@ -201,6 +205,18 @@ func (s *Source) AccessToken(ctx context.Context, uuid string) (string, error) {
 	}
 	if liveErr != nil {
 		return "", fmt.Errorf("%w: %q: %v", ErrLivenessUnknown, uuid, liveErr)
+	}
+	// LIVE IN THE OTHER STORE is live too. With a keychain item, Claude Code
+	// falls back to the credentials file whenever its keychain read fails, so
+	// an account the FILE holds -- a split login -- can be the one a session is
+	// spending even though the item names somebody else. Refreshing it here
+	// would spend the refresh token that session holds and revoke its grant:
+	// rotation-stomp invariant 1 again, through the store this check used not
+	// to look at. It is not refreshed through liveToken either, which reads
+	// the item; the split repair puts it in both stores, and Claude Code
+	// refreshes it meanwhile.
+	if stores.HasItem && isLiveLogin(rec, stores.File) {
+		return "", fmt.Errorf("%w: %q is live in the credentials file behind the keychain item", ErrLiveTokenStale, uuid)
 	}
 	return s.refresh(ctx, uuid, rec)
 }
