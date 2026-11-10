@@ -13,6 +13,8 @@
 package store
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"strconv"
 	"strings"
 	"time"
@@ -107,6 +109,19 @@ type Account struct {
 	// later `ccdad add codex` stores a new one and the mark stops matching.
 	// Nothing has to clear it, and no stale mark can survive a re-login.
 	CodexReloginFor string `toml:"codex_relogin_for,omitempty"`
+	// SupersededLogins is the hashes (LoginHash) of the logins this account's
+	// stored credential was REPLACED by a newer one of, newest first and at
+	// most maxSupersededLogins long.
+	//
+	// It is what names an older generation of the account's login without
+	// asking anybody. Claude Code refreshing a login in the keychain item
+	// leaves the credentials file holding the previous one; once the newer one
+	// is adopted, the older matches no stored snapshot, and the only other way
+	// to name it is the profile endpoint -- called with an access token that
+	// has usually expired, so it never answers. A hash, for the reason
+	// CodexReloginFor is one. One space-separated string rather than a list,
+	// so Account stays comparable with ==, which callers and tests rely on.
+	SupersededLogins string `toml:"superseded_logins,omitempty"`
 	// Tier is organization_type, e.g. claude_max.
 	Tier string `toml:"tier,omitempty"`
 	// SubscriptionStatus is the last observed Claude subscription state.
@@ -287,6 +302,47 @@ func (a Account) Unambiguous() string {
 func (a Account) NeedsRelogin(currentRefreshTokenHash string) bool {
 	return a.CodexReloginFor != "" && currentRefreshTokenHash != "" &&
 		a.CodexReloginFor == currentRefreshTokenHash
+}
+
+// Superseded reports whether the login with this cclink.LoginIdentity is one
+// this account's stored credential was replaced by a newer one of.
+func (a Account) Superseded(loginIdentity string) bool {
+	if loginIdentity == "" {
+		return false
+	}
+	h := LoginHash(loginIdentity)
+	for _, s := range strings.Fields(a.SupersededLogins) {
+		if s == h {
+			return true
+		}
+	}
+	return false
+}
+
+// LoginHash names a login identity without carrying the token in it.
+func LoginHash(loginIdentity string) string {
+	sum := sha256.Sum256([]byte(loginIdentity))
+	return hex.EncodeToString(sum[:])
+}
+
+// maxSupersededLogins bounds SupersededLogins. A login is superseded on every
+// refresh -- several times a day -- and only the last few can still be sitting
+// in a store Claude Code has not rewritten.
+const maxSupersededLogins = 8
+
+// supersede is list with old prepended, bounded, when old is a login.
+func supersede(list, old string) string {
+	if old == "" {
+		return list
+	}
+	h := LoginHash(old)
+	out := []string{h}
+	for _, s := range strings.Fields(list) {
+		if s != h && len(out) < maxSupersededLogins {
+			out = append(out, s)
+		}
+	}
+	return strings.Join(out, " ")
 }
 
 // Identity is the polling budget an account draws on. The allowance is per

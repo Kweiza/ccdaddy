@@ -88,7 +88,19 @@ func holderOf(b cclink.Blob, accounts []store.Account, lookup Lookup, owners Own
 	h := StoreHolder{ID: cclink.LoginIdentity(b)}
 	h.Expires, _ = cclink.LoginExpiry(b)
 	h.Account, h.State = LiveStateOf(b, accounts, lookup)
-	if h.State == LiveUnattributed && owners != nil {
+	if h.State != LiveUnattributed {
+		return h
+	}
+	// An older generation of a managed account's login is named by the
+	// account's own history -- no oracle, no network -- and anything else by
+	// what the oracle has already said.
+	for _, a := range accounts {
+		if a.Superseded(h.ID) {
+			h.Account, h.State = a, LiveResolved
+			return h
+		}
+	}
+	if owners != nil {
 		if uuid, ok := owners(h.ID); ok {
 			for _, a := range accounts {
 				if a.UUID == uuid {

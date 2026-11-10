@@ -450,10 +450,13 @@ func writeMerged(writes StoreWrites, decide func(live Blob, stores LoginStores) 
 	// a read that cannot tell stops here with neither claimed.
 	//
 	// A STORE THAT ALREADY HOLDS THE LOGIN IS NOT WRITTEN, under WriteChanged
-	// (which says why). "Holds" is the same login by LoginIdentity, never ""
-	// -- which matches nothing, so a logout is always written.
-	want := LoginIdentity(merged)
-	holds := func(b Blob) bool { return writes == WriteChanged && want != "" && LoginIdentity(b) == want }
+	// (which says why). "Holds" is the same CREDENTIAL -- access token,
+	// refresh token and expiry -- not merely the same login identity: a token
+	// endpoint may rotate the access token and keep the refresh token, and a
+	// store holding the old access token under the same identity still needs
+	// the new one written. A store with no login matches nothing, so a logout
+	// is always written.
+	holds := func(b Blob) bool { return writes == WriteChanged && sameCredential(b, merged) }
 	itemWrite := itemIsLive && !holds(stores.Item)
 	fileWrite := !holds(stores.File)
 	if itemWrite {

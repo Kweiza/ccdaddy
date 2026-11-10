@@ -458,6 +458,7 @@ func (s *Store) add(a Account, creds cclink.Blob) error {
 		a.Disabled = existing.Disabled
 		a.Primary = existing.Primary
 		a.Elsewhere = existing.Elsewhere
+		a.SupersededLogins = s.supersededBy(a.UUID, existing.SupersededLogins, creds)
 	} else {
 		a.Idx = s.nextIdx(a.Provider)
 		if a.AddedAt.IsZero() {
@@ -684,6 +685,22 @@ func (s *Store) save() error {
 
 func (s *Store) credentialPath(uuid string) string {
 	return filepath.Join(s.root, credentialsDir, uuid+".json")
+}
+
+// supersededBy is an account's SupersededLogins once creds replaces what it
+// stores: the stored login is added when creds holds a different one. Every
+// path that replaces a stored credential goes through it, so the history
+// cannot depend on which caller did the replacing.
+func (s *Store) supersededBy(uuid, list string, creds cclink.Blob) string {
+	old, err := s.Credentials(uuid)
+	if err != nil {
+		return list
+	}
+	oldID, newID := cclink.LoginIdentity(old), cclink.LoginIdentity(creds)
+	if oldID == "" || oldID == newID {
+		return list
+	}
+	return supersede(list, oldID)
 }
 
 func (s *Store) writeCredentials(uuid string, creds cclink.Blob) error {

@@ -75,9 +75,16 @@ func TestExecuteInstallsWhatFreshenReturned(t *testing.T) {
 	var asked []string
 	res, err := Execute(openStore(t), Request{
 		Target: target, LiveUUID: "u-1", Unattended: true, Now: at(fixedNow),
+		// As tokens.Freshen does: the rotated pair is STORED, then returned.
+		// A fake that only returned it would hide the in-lock re-read comparing
+		// the store against the wrong copy.
 		Freshen: func(uuid string) (cclink.Blob, error) {
 			asked = append(asked, uuid)
-			return expiringBlob("RT-u-2-rotated", 8*time.Hour), nil
+			fresh := expiringBlob("RT-u-2-rotated", 8*time.Hour)
+			if err := openStore(t).Add(target, fresh); err != nil {
+				return nil, err
+			}
+			return fresh, nil
 		},
 	})
 	if err != nil {
