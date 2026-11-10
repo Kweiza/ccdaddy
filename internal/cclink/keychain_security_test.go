@@ -46,6 +46,16 @@ const (
 	securityFailExitEnv = "CCDAD_TEST_SECURITY_FAIL_EXIT"
 	securityHangEnv     = "CCDAD_TEST_SECURITY_HANG"
 	securityLingerEnv   = "CCDAD_TEST_SECURITY_LINGER"
+	// securityItemEnv makes the fixture a STATEFUL item: the path holds what a
+	// read prints, and a write replaces it. securityWriteHangEnv is how long a
+	// write sleeps after it has landed, and securityReadFailsAfterWriteEnv makes
+	// every read after a write fail.
+	securityItemEnv                = "CCDAD_TEST_SECURITY_ITEM"
+	securityWriteHangEnv           = "CCDAD_TEST_SECURITY_WRITE_HANG"
+	securityReadFailsAfterWriteEnv = "CCDAD_TEST_SECURITY_READ_FAILS_AFTER_WRITE"
+	// securityWriteLostEnv makes a write store nothing, so a write that runs
+	// out of time is one that did not land.
+	securityWriteLostEnv = "CCDAD_TEST_SECURITY_WRITE_LOST"
 )
 
 // TestMain routes on the environment before testing ever sees the argument
@@ -80,6 +90,11 @@ func runAsFakeSecurity() int {
 			return 99
 		}
 		time.Sleep(wait)
+	}
+	if item := os.Getenv(securityItemEnv); item != "" {
+		if code, handled := runStatefulItem(item); handled {
+			return code
+		}
 	}
 	if os.Getenv(securityLingerEnv) != "" {
 		// Hand this process's stdout -- the parent's pipe -- to a child that
@@ -128,7 +143,7 @@ type fakeSecurity struct {
 	stderr string
 	exit   int
 	// hang is how long the process sleeps before doing anything else. Paired
-	// with a shortened keychainTimeout it is the deadline case.
+	// with a shortened keychainReadTimeout it is the deadline case.
 	hang time.Duration
 	// linger makes it leak a child holding the output pipe.
 	linger bool
@@ -136,6 +151,19 @@ type fakeSecurity struct {
 	// is what it exits with (1 when unset).
 	failOp   string
 	failExit int
+	// item makes the fixture a stateful item stored at this path (see
+	// statefulItem); stdout and the exit fields are then not consulted for the
+	// two subcommands it handles.
+	item string
+	// writeHang is how long a write sleeps AFTER it has landed. Paired with a
+	// shortened keychainWriteTimeout it is a write that succeeded and reported
+	// a timeout.
+	writeHang time.Duration
+	// readFailsAfterWrite makes every read after the first write answer exit 36,
+	// so a write that landed cannot be confirmed.
+	readFailsAfterWrite bool
+	// writeLost makes a write store nothing at all.
+	writeLost bool
 }
 
 // install points the exec layer at the fixture and pretends this machine is
@@ -148,14 +176,16 @@ func (f fakeSecurity) install(t *testing.T) string {
 	t.Helper()
 
 	saved := struct {
-		path      string
-		goos      string
-		timeout   time.Duration
-		waitDelay time.Duration
-	}{securityPath, keychainGOOS, keychainTimeout, keychainWaitDelay}
+		path         string
+		goos         string
+		readTimeout  time.Duration
+		writeTimeout time.Duration
+		waitDelay    time.Duration
+	}{securityPath, keychainGOOS, keychainReadTimeout, keychainWriteTimeout, keychainWaitDelay}
 	t.Cleanup(func() {
 		securityPath, keychainGOOS = saved.path, saved.goos
-		keychainTimeout, keychainWaitDelay = saved.timeout, saved.waitDelay
+		keychainReadTimeout, keychainWriteTimeout = saved.readTimeout, saved.writeTimeout
+		keychainWaitDelay = saved.waitDelay
 	})
 
 	securityPath = os.Args[0]
@@ -177,7 +207,92 @@ func (f fakeSecurity) install(t *testing.T) string {
 	}
 	t.Setenv(securityFailOpEnv, f.failOp)
 	t.Setenv(securityFailExitEnv, strconv.Itoa(f.failExit))
+	t.Setenv(securityItemEnv, f.item)
+	t.Setenv(securityWriteHangEnv, "")
+	if f.writeHang > 0 {
+		t.Setenv(securityWriteHangEnv, f.writeHang.String())
+	}
+	t.Setenv(securityReadFailsAfterWriteEnv, "")
+	if f.readFailsAfterWrite {
+		t.Setenv(securityReadFailsAfterWriteEnv, "1")
+	}
+	t.Setenv(securityWriteLostEnv, "")
+	if f.writeLost {
+		t.Setenv(securityWriteLostEnv, "1")
+	}
 	return argv
+}
+
+// statefulItem is a keychain item the fixture really stores: a read prints
+// what is in the file and a write replaces it. It is what a write that LANDS
+// and then reports a timeout needs -- a fixture that only prints a canned
+// answer cannot show the item changing underneath a failure.
+//
+// It returns the path, seeded with initial (compact JSON, as Claude Code
+// writes it).
+func statefulItem(t *testing.T, initial string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "item")
+	if err := os.WriteFile(path, []byte(initial), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// itemNow is what the stateful item holds.
+func itemNow(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+// runStatefulItem is the fake `security` for a statefulItem: it handles the
+// two subcommands the credential path spawns and reports whether it did.
+func runStatefulItem(path string) (int, bool) {
+	if len(os.Args) < 2 {
+		return 0, false
+	}
+	written := path + ".written"
+	switch os.Args[1] {
+	case "find-generic-password":
+		if os.Getenv(securityReadFailsAfterWriteEnv) != "" {
+			if _, err := os.Stat(written); err == nil {
+				return 36, true
+			}
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return securityNotFoundCode, true
+		}
+		fmt.Fprint(os.Stdout, string(data))
+		return 0, true
+	case "add-generic-password":
+		for i := 2; i+1 < len(os.Args) && os.Getenv(securityWriteLostEnv) == ""; i++ {
+			if os.Args[i] != "-X" {
+				continue
+			}
+			payload, err := hex.DecodeString(os.Args[i+1])
+			if err != nil {
+				return 97, true
+			}
+			if err := os.WriteFile(path, payload, 0o600); err != nil {
+				return 96, true
+			}
+			_ = os.WriteFile(written, nil, 0o600)
+		}
+		// AFTER the write, which is the incident: the item changed, and the
+		// client was still running when ccdad's deadline killed it.
+		if d := os.Getenv(securityWriteHangEnv); d != "" {
+			if wait, err := time.ParseDuration(d); err == nil {
+				time.Sleep(wait)
+			}
+		}
+		return 0, true
+	}
+	return 0, false
 }
 
 // recordedArgv is what the fixture was actually invoked with.
@@ -346,7 +461,7 @@ func TestDeleteReportsARealFailure(t *testing.T) {
 // stands in for it.
 func TestSpawnIsKilledAtTheDeadline(t *testing.T) {
 	fakeSecurity{hang: 30 * time.Second}.install(t)
-	keychainTimeout = 150 * time.Millisecond
+	keychainReadTimeout = 150 * time.Millisecond
 
 	start := time.Now()
 	_, err := testItem.Present(context.Background())
@@ -372,7 +487,7 @@ func TestSpawnIsKilledAtTheDeadline(t *testing.T) {
 // lives, with the deadline already satisfied and nothing left to cancel.
 func TestSpawnStopsWaitingOnALingeringGrandchild(t *testing.T) {
 	fakeSecurity{linger: true, stdout: "irrelevant\n"}.install(t)
-	keychainTimeout = 30 * time.Second
+	keychainReadTimeout = 30 * time.Second
 	keychainWaitDelay = 200 * time.Millisecond
 
 	start := time.Now()
@@ -427,7 +542,7 @@ func TestMissingSecurityBinary(t *testing.T) {
 // keychain, and reporting that it did would put a false finding in a report.
 func TestCallerCancellationIsNotAKeychainFailure(t *testing.T) {
 	fakeSecurity{hang: 30 * time.Second}.install(t)
-	keychainTimeout = 30 * time.Second
+	keychainReadTimeout = 30 * time.Second
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {

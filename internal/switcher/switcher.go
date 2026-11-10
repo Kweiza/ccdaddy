@@ -234,6 +234,14 @@ type Result struct {
 	Live      store.Account
 	LiveKnown bool
 	LiveState LiveState
+	// Before is who each login store held, and whom ccdad recorded, under the
+	// lock before the write. Before.Split() on a Switched outcome means this
+	// call repaired a split login as well as -- or instead of -- moving it, and
+	// a caller says so.
+	Before LoginView
+	// RecordedNow is an AlreadyOn whose stores both held Target while ccdad's
+	// record named someone else; the record now names Target.
+	RecordedNow bool
 	// UnknownKeys are the unrecognized top-level keys the unknown-key probe
 	// found, read from the file that was actually merged. Merge preserves them;
 	// the operator still needs to know a new key exists.
@@ -301,7 +309,7 @@ type Result struct {
 
 // activateWith is the locked read-decide-write, as a var so a test can describe
 // a lock takeover without arranging one.
-var activateWith = cclink.ActivateWith
+var activateWith = cclink.ActivateAgainst
 
 // claimVerdict asks who is driving this credential home, as a var so a test can
 // describe a second store's engine without starting one.
@@ -421,8 +429,9 @@ func Execute(s *store.Store, req Request) (Result, error) {
 	}
 
 	accounts := s.Accounts()
-	err = activateWith(func(live cclink.Blob) (cclink.Blob, error) {
+	err = activateWith(func(live cclink.Blob, stores cclink.LoginStores) (cclink.Blob, error) {
 		res.UnknownKeys = cclink.UnknownKeys(live)
+		res.Before = ViewLogin(stores, accounts, s.Credentials, s.ActiveUUID())
 		// AttributeFile, not AttributeLogin, and deliberately: this asks "is the
 		// FILE already this account", because the file is what a switch
 		// rewrites. AttributeLogin would answer about the environment instead,
@@ -439,7 +448,24 @@ func Execute(s *store.Store, req Request) (Result, error) {
 		if res.LiveKnown {
 			observed = res.Live.UUID
 		}
-		if res.LiveKnown && res.Live.UUID == req.Target.UUID && !req.Force {
+		// Already on Target only when EVERY store says so. The merge base
+		// answers for the item alone, and an item on Target with the file on
+		// someone else is a split login -- the state a keychain write that ran
+		// out of time leaves, in which Claude Code falls back to the file
+		// whenever its own keychain read fails. "Already on" there leaves the
+		// user on the account they asked to leave; installing Target puts it in
+		// both stores. The item matched Target's stored snapshot, so the
+		// snapshot carries the item's own refresh token and nothing fresher is
+		// overwritten.
+		//
+		// The record is the third party to "already on", and it is corrected
+		// after the lock rather than by a write: with both stores on Target
+		// there is no credential left to install.
+		//
+		// StoresOn implies the merge base names Target: the base IS the lead
+		// store's login, so the check the base used to answer alone is part of
+		// this one.
+		if !req.Force && res.Before.StoresOn(req.Target.UUID) {
 			res.Outcome = AlreadyOn
 			return nil, cclink.ErrNoChange
 		}
@@ -482,6 +508,16 @@ func Execute(s *store.Store, req Request) (Result, error) {
 	if errors.Is(err, cclink.ErrNoChange) {
 		// A takeover joined onto a stand-down is not damage: nothing was
 		// written, so there is no write for another process to have raced.
+		if res.Outcome == AlreadyOn && res.Before.Recorded.UUID != req.Target.UUID {
+			// Both stores hold Target and ccdad's record names someone else:
+			// the last third of "already on", and the one a write cannot fix.
+			// After the credential locks, because the store lock is the OUTER
+			// one. RecordedNow tells a caller the record moved.
+			if err := s.SetActive(req.Target.UUID); err != nil {
+				return res, err
+			}
+			res.RecordedNow = true
+		}
 		if res.Outcome == AlreadyOn && !res.EnvTokenWins {
 			// The credentials file already named Target before this call, but
 			// ~/.claude.json's cached display may still name whoever was live

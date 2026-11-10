@@ -54,25 +54,12 @@ type Lookup func(uuid string) (cclink.Blob, error)
 // account could match a refresh token stored by another. "" means "cannot
 // identify" and never matches anything, including another "" — which is the
 // case for every token account, whose stored blob has no OAuth record at all.
+//
+// It is cclink.LoginIdentity: cclink needs the same comparison to read back a
+// keychain write that ran out of time, and two copies of it would be two
+// answers to "is this the same login".
 func CredentialIdentity(b cclink.Blob) string {
-	raw, ok := b["claudeAiOauth"]
-	if !ok {
-		return ""
-	}
-	var payload struct {
-		RefreshToken string `json:"refreshToken"`
-		AccessToken  string `json:"accessToken"`
-	}
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return ""
-	}
-	switch {
-	case payload.RefreshToken != "":
-		return "refresh:" + payload.RefreshToken
-	case payload.AccessToken != "":
-		return "access:" + payload.AccessToken
-	}
-	return ""
+	return cclink.LoginIdentity(b)
 }
 
 // LiveState is what the credentials file holds, in the four answers a swap
