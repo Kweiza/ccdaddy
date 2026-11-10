@@ -16,6 +16,8 @@ must reference accounts by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.29.0] — 2026-11-10
+
 Hover becomes an order: accounts with a five-hour window first, then the
 weekly-only seat whose week resets soonest, with every hand-off aimed before
 a limit -- a week's a reserve before it, a five-hour window's at the last
@@ -4160,7 +4162,8 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.28.0...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.29.0...HEAD
+[0.29.0]: https://github.com/Kweiza/ccdaddy/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/Kweiza/ccdaddy/compare/v0.27.0...v0.28.0
 [0.27.0]: https://github.com/Kweiza/ccdaddy/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/Kweiza/ccdaddy/compare/v0.25.0...v0.26.0
