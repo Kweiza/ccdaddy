@@ -55,7 +55,7 @@ const (
 	// than its stored one -- the account's live grant -- but storing it
 	// failed. Not remembered, so it is asked about and adopted again; until
 	// then the account's stored refresh token is already spent, and nothing
-	// may present it (see Engine.markUnadopted).
+	// may present it (verdictFor places the hold; see Engine.holdSpentToken).
 	liveAdoptFailed
 )
 
@@ -175,6 +175,9 @@ func (e *Engine) verdictFor(s *store.Store, live cclink.Blob, uuid string) (stor
 	next, err := s.Credentials(owner.UUID)
 	if err != nil {
 		e.logf("could not read %s's stored login to adopt into it: %v", owner.Label(), err)
+		// What is stored could not be read, so the hold waits for the newer
+		// login itself (or one that supersedes it).
+		e.holdUntilStored(owner.UUID, cclink.LoginIdentity(live), "")
 		return owner, liveAdoptFailed
 	}
 	if cclink.LoginIdentity(next) == cclink.LoginIdentity(live) {
@@ -194,16 +197,28 @@ func (e *Engine) verdictFor(s *store.Store, live cclink.Blob, uuid string) (stor
 	for k, v := range cclink.Extract(live) {
 		adopted[k] = v
 	}
-	if err := s.Add(owner, adopted); err != nil {
+	if err := adoptInto(s, owner, adopted); err != nil {
 		// The rotated pair is still in the live file and the account is still
 		// live, so nothing is lost but the repair -- provided the account's
 		// spent stored token is not presented meanwhile; liveAdoptFailed is
 		// how the caller knows to hold it.
 		e.logf("could not adopt the login Claude Code rotated for %s: %v", owner.Label(), err)
+		// The hold is placed HERE, with the stored login this verdict
+		// compared against as the spent one -- not one re-read after the
+		// failure. A write that failed on the store lock failed because
+		// something else held it, and that something may have stored a NEWER
+		// login of this account meanwhile; recorded as spent, that login
+		// would hold the account until the daemon restarted. Placed here, the
+		// hold covers every caller of the oracle, act's resolveLive included.
+		e.holdUntilStored(owner.UUID, cclink.LoginIdentity(live), cclink.LoginIdentity(next))
 		return owner, liveAdoptFailed
 	}
 	return owner, liveAdopted
 }
+
+// adoptInto stores an adopted login, as a var so a test can describe a write
+// that fails after another process stored a newer login meanwhile.
+var adoptInto = func(s *store.Store, a store.Account, creds cclink.Blob) error { return s.Add(a, creds) }
 
 // liveAccessToken pulls the bearer the oracle needs out of the live file.
 //

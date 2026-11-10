@@ -14,7 +14,7 @@ import (
 
 // Round 6: the hold lifts as soon as the stored credential is no longer the
 // SPENT one -- whatever replaced it -- and still holds while it is (see
-// TestTheHoldLiftsOnlyOnceTheStoreHoldsTheNewerLogin for the stores agreeing
+// TestTheHoldStaysWhileTheSpentLoginIsStillStored for the stores agreeing
 // while the spent login is still stored). A probe asks the hold too.
 
 func TestTheHoldLiftsWhenALaterGenerationIsStored(t *testing.T) {

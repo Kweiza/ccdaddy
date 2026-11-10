@@ -529,6 +529,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 		Now:    now,
 		Config: func() (config.Config, error) { return cfg, cfgErr },
 		Owners: e.ownerOf,
+		Held:   func(uuid string) bool { return e.holdSpentToken(uuid) != nil },
 	})
 	if evErr != nil {
 		// The configured table, not hoverThresholds(cfg, ev): a failed
@@ -559,8 +560,8 @@ func (e *Engine) Tick(ctx context.Context) error {
 	if !ev.LoginKnown || (!v.Split() && !v.Unresolved()) {
 		e.saidSplit = ""
 	}
-	// A hold on a spent stored refresh token is lifted only once the store
-	// holds the newer login (releaseStored says why nothing else lifts it).
+	// A hold on a spent stored refresh token is lifted once the account's
+	// stored credential is no longer the spent one (releaseStored).
 	e.releaseStored(s)
 	e.settlePending(s, ev, now)
 	repairing := false
@@ -876,6 +877,10 @@ func (e *Engine) execute(ctx context.Context, s *store.Store, req switcher.Reque
 	// token is spent, the install would hand Claude Code a token whose use
 	// revokes the newer login: the same hold every other path asks.
 	if err := e.holdSpentToken(req.Target.UUID); err != nil {
+		if e.saidStale != req.Target.UUID {
+			e.saidStale = req.Target.UUID
+			e.logf("not switching to %s: %v", req.Target.Label(), err)
+		}
 		return switcher.Result{Target: req.Target, Outcome: switcher.Stale, FreshenErr: err}, nil
 	}
 	now := e.now()
@@ -950,10 +955,15 @@ func (e *Engine) execute(ctx context.Context, s *store.Store, req switcher.Reque
 		// behind the first.
 		if e.saidStale != res.Target.UUID {
 			e.saidStale = res.Target.UUID
-			if res.FreshenErr != nil {
+			switch {
+			case errors.Is(res.FreshenErr, errUnadopted):
+				// Not the refresh window at all: the stored refresh token is
+				// spent, and freshen would not present it.
+				e.logf("not switching to %s: %v", res.Target.Label(), res.FreshenErr)
+			case res.FreshenErr != nil:
 				e.logf("not switching to %s: its stored login is one Claude Code would refresh on "+
 					"sight, and refreshing it here failed: %v", res.Target.Label(), res.FreshenErr)
-			} else {
+			default:
 				e.logf("not switching to %s: its stored login is one Claude Code would refresh on sight",
 					res.Target.Label())
 			}

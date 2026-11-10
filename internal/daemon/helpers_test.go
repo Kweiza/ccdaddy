@@ -148,6 +148,9 @@ func TestMain(m *testing.M) {
 	// above have already exited, so a subprocess daemon still gets the real one,
 	// and the one test that exercises it calls platformRedirectStderr directly.
 	redirectStderr = func(*os.File) error { return nil }
+	// After the roles, which are real daemons: the tests in this process never
+	// reach the developer's keychain (see cclink.IsolateKeychainForTests).
+	cclink.IsolateKeychainForTests()
 	os.Exit(m.Run())
 }
 
