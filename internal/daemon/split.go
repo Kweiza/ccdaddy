@@ -197,14 +197,23 @@ func (e *Engine) clearUnadopted() {
 	e.unadopted = nil
 }
 
-func (e *Engine) isUnadopted(uuid string) bool {
+// holdSpentToken is the ONE predicate every path that may present an
+// account's stored refresh token asks first -- the switch's freshen and the
+// poll's access-token fetch alike: errUnadopted while the account has a newer
+// login named and not yet stored, nil otherwise.
+func (e *Engine) holdSpentToken(uuid string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.unadopted[uuid]
+	if e.unadopted[uuid] {
+		return errUnadopted
+	}
+	return nil
 }
 
-// errUnadopted is freshen refusing an account whose newer login is named and
-// not yet stored.
+// errUnadopted is a path refusing an account whose newer login is named and
+// not yet stored. It is a transient HOLD, not a failure: handleFailure files it
+// with ErrLiveTokenStale, which reschedules at the ordinary cadence and
+// neither backs off nor quarantines.
 var errUnadopted = errors.New("a newer login of this account is named and not yet stored, so its stored " +
 	"refresh token is already spent and is not presented")
 

@@ -342,8 +342,8 @@ func (e *Engine) freshen(ctx context.Context) func(string) (cclink.Blob, error) 
 		return nil
 	}
 	return func(uuid string) (cclink.Blob, error) {
-		if e.isUnadopted(uuid) {
-			return nil, errUnadopted
+		if err := e.holdSpentToken(uuid); err != nil {
+			return nil, err
 		}
 		ctx, cancel := context.WithTimeout(ctx, e.pollTimeout())
 		defer cancel()
@@ -1364,7 +1364,13 @@ func (e *Engine) poll(ctx context.Context, a store.Account, cfg config.Config,
 	// while it was in flight (commit).
 	sent := e.now()
 
-	token, err := e.AccessToken(ctx, a.UUID)
+	// Asked before the token fetch, which may REFRESH: an account with a newer
+	// login named and not yet stored has a spent stored refresh token, and
+	// presenting it can revoke that newer login.
+	token, err := "", e.holdSpentToken(a.UUID)
+	if err == nil {
+		token, err = e.AccessToken(ctx, a.UUID)
+	}
 	var snap *usage.Snapshot
 	if err == nil {
 		// No Claude Code lock is held here. internal/tokens takes the refresh
@@ -1461,7 +1467,11 @@ func (e *Engine) handleFailure(in commitInput, cfg config.Config, err error) {
 		// Nothing is written: an account that cannot be polled has no schedule.
 		return
 
-	case errors.Is(err, tokens.ErrLiveTokenStale):
+	case errors.Is(err, tokens.ErrLiveTokenStale), errors.Is(err, errUnadopted):
+		// errUnadopted is the same kind of answer: a hold on an account whose
+		// stored refresh token is spent until a newer login is adopted -- not
+		// evidence about the account, so no backoff and no quarantine.
+		//
 		// This is UNKNOWN, and NOT an endpoint failure. Claude Code is the one
 		// that rotates the live login, and an eight-hour-old token means Claude
 		// Code has not run in eight hours — so there is no session whose
