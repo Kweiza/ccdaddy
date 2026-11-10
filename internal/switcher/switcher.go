@@ -505,22 +505,30 @@ func Execute(s *store.Store, req Request) (Result, error) {
 	// clear it again below, and only those the stores cannot say leave it.
 	//
 	// A sync records none: it moves nothing the engine chose. A write that
-	// completes a pending switch records none either: that intent is already
-	// the one on disk, and rewriting it would give it a new generation that
-	// SettlePending's exact check would then not recognise.
+	// completes a pending switch records it AGAIN, with the departure it
+	// inherited and a generation of its own: this call is now the one in
+	// flight, and the intent's age -- which SettlePending reads to tell a
+	// switch still writing from one that did not take effect -- has to be this
+	// call's, not the first attempt's.
 	//
 	// An engine state that cannot be written does not stop the switch, for
 	// the reason a cooldown that cannot be stamped does not (RecordSwitch):
 	// it degrades towards the behaviour before the intent existed -- a split
 	// left by this switch repaired by recency -- and it is reported.
 	var ahead time.Time
-	if !req.Sync && !res.CompletedPending {
-		ahead = req.now()
+	recordIntent := func() error {
+		at := req.now()
 		if err := strategy.WithState(stateTimeout, func(st *strategy.State) error {
-			st.RecordPending(req.Target.UUID, ahead, req.Departure)
+			st.RecordPending(req.Target.UUID, at, req.Departure)
 			return nil
 		}); err != nil {
-			ahead = time.Time{}
+			return err
+		}
+		ahead = at
+		return nil
+	}
+	if !req.Sync || res.CompletedPending {
+		if err := recordIntent(); err != nil {
 			res.IntentErr = fmt.Errorf("the switch could not be remembered before writing, so a keychain "+
 				"write that cannot be confirmed would be repaired by recency rather than towards it: %w", err)
 		}
@@ -659,7 +667,7 @@ func Execute(s *store.Store, req Request) (Result, error) {
 		// first attempt landed. That switch took effect, and is recorded as
 		// such: departure, cooldown, and the pending cleared with it.
 		if res.Outcome == AlreadyOn && res.CompletedPending {
-			res.CooldownErr = RecordSwitchAt(req.Target.UUID, req.now(), req.Departure)
+			res.CooldownErr = recordSwitchSettling(req.Target.UUID, req.now(), req.Departure, ahead)
 		} else if cerr := clearAhead(); cerr != nil {
 			res.CooldownErr = cerr
 		}
@@ -692,10 +700,24 @@ func Execute(s *store.Store, req Request) (Result, error) {
 		// the login ccdad chose may well be the OLDER one (see RepairTarget).
 		// It stays. Any other failure is known not to have moved the item, and
 		// the intent is settled.
-		if !errors.Is(err, cclink.ErrLoginOutcomeUnknown) && !errors.Is(err, cclink.ErrLoginHalfWritten) {
+		ambiguous := errors.Is(err, cclink.ErrLoginOutcomeUnknown) || errors.Is(err, cclink.ErrLoginHalfWritten)
+		switch {
+		case !ambiguous:
 			if cerr := clearAhead(); cerr != nil {
 				err = errors.Join(err, cerr)
 			}
+		case res.IntentErr != nil:
+			// The intent could not be written ahead, and the outcome is now
+			// exactly the one it exists for. One more try: whatever kept the
+			// state lock -- usually a moment's contention -- may be gone.
+			if rerr := recordIntent(); rerr == nil {
+				res.IntentErr = nil
+			}
+		}
+		// Reported WITH the failure, which is the one case where it matters:
+		// a keychain write that cannot be confirmed and no intent to follow.
+		if res.IntentErr != nil {
+			err = errors.Join(err, res.IntentErr)
 		}
 		return res, err
 	}
@@ -710,8 +732,9 @@ func Execute(s *store.Store, req Request) (Result, error) {
 	leadWasTarget := res.Before.Lead().State == LiveManaged && res.Before.Lead().Account.UUID == req.Target.UUID
 	res.Synced = !res.CompletedPending && (req.Sync || (!req.Unattended && leadWasTarget))
 	if !res.Synced {
-		// RecordSwitch clears whatever is pending: this switch, done.
-		res.CooldownErr = RecordSwitchAt(req.Target.UUID, req.now(), req.Departure)
+		// Recorded, and THIS switch's intent settled with it -- never another
+		// switch's, which may be in flight.
+		res.CooldownErr = recordSwitchSettling(req.Target.UUID, req.now(), req.Departure, ahead)
 		res.PromptPollErr = SchedulePromptPoll(req.Target.UUID, req.now(), store.SharingIdentity(accounts, req.Target))
 	} else {
 		res.CooldownErr = clearAhead()
@@ -853,19 +876,30 @@ func RecordSwitch(uuid string, left strategy.Departure) error {
 	return RecordSwitchAt(uuid, time.Now(), left)
 }
 
-// RecordSwitchAt is RecordSwitch at the instant at, on the caller's clock:
-// Execute's is the request's (Request.now), the one the prompt poll beside it
-// is scheduled on, so a switch on an injected clock stamps its cooldown on that
-// clock too.
-func RecordSwitchAt(uuid string, at time.Time, left strategy.Departure) error {
+// recordSwitchSettling is RecordSwitchAt that also settles the switch's own
+// intent -- the one written ahead of it at generation intent, if any -- in the
+// same locked write. A different intent pending now belongs to another switch
+// and is left alone.
+func recordSwitchSettling(uuid string, at time.Time, left strategy.Departure, intent time.Time) error {
 	err := strategy.WithState(stateTimeout, func(st *strategy.State) error {
 		st.RecordSwitch(uuid, at, left)
+		if !intent.IsZero() {
+			st.ClearPendingIf(uuid, intent)
+		}
 		return nil
 	})
 	if err != nil {
 		return fmt.Errorf("the auto-switch cooldown could not be recorded: %w", err)
 	}
 	return nil
+}
+
+// RecordSwitchAt is RecordSwitch at the instant at, on the caller's clock:
+// Execute's is the request's (Request.now), the one the prompt poll beside it
+// is scheduled on, so a switch on an injected clock stamps its cooldown on that
+// clock too.
+func RecordSwitchAt(uuid string, at time.Time, left strategy.Departure) error {
+	return recordSwitchSettling(uuid, at, left, time.Time{})
 }
 
 // releaseManagedAPIKey removes a stored primaryApiKey that belongs to a ccdad

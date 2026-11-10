@@ -77,6 +77,19 @@ var keychainReadTimeout = 5 * time.Second
 // shrink it rather than sleep.
 var keychainWriteTimeout = 30 * time.Second
 
+// WorstCaseSwitch is the longest one credential write can still be in flight:
+// Claude Code's three credential locks waited for in turn, then up to three
+// keychain spawns under them -- the base read, the write, and the read-back of
+// a write that ran out of time -- each at the write bound plus the wait for
+// its pipes. At today's values 3*9 s + 3*(30 s + 1 s) is two minutes.
+//
+// It is what an intent written ahead of a switch is given before anybody may
+// conclude the switch did not take effect: younger than this, the write may
+// still land.
+func WorstCaseSwitch() time.Duration {
+	return 3*LockTimeout + 3*(keychainWriteTimeout+keychainWaitDelay)
+}
+
 // keychainWaitDelay bounds the SECOND way a spawn can hang, which the deadline
 // alone does not cover: the process exits, but something it started inherited
 // the output pipe and keeps it open, so Wait blocks on a copy that will never

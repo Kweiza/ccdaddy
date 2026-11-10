@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 )
@@ -54,6 +55,14 @@ func SettlePending(s *store.Store, v LoginView, viewAt, now time.Time) (PendingS
 		return PendingOpen, to, nil
 	}
 	if lead.Account.UUID != to {
+		// Not yet: an intent is written AHEAD of its switch, so a young one
+		// may belong to a switch still waiting for the locks or the keychain,
+		// whose write has not landed -- the stores agreeing on another account
+		// says nothing about it yet. Only an intent older than the longest a
+		// switch can still be writing is one that did not take effect.
+		if now.Sub(at) < cclink.WorstCaseSwitch() {
+			return PendingOpen, to, nil
+		}
 		err := strategy.WithState(stateTimeout, func(st *strategy.State) error {
 			st.ClearPendingIf(to, at)
 			return nil
@@ -67,6 +76,7 @@ func SettlePending(s *store.Store, v LoginView, viewAt, now time.Time) (PendingS
 	err = strategy.WithState(stateTimeout, func(st *strategy.State) error {
 		if st.IsPending(to, at) {
 			st.RecordSwitch(to, now, left)
+			st.ClearPendingIf(to, at)
 			completed = true
 		}
 		return nil

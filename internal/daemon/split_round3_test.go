@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -52,8 +53,8 @@ func TestAnOracleAnswerWhoseAdoptionFailedIsNotRemembered(t *testing.T) {
 
 	e := engineFor(t, tokensAreFine, noFetch)
 	e.ResolveOwner = func(context.Context, string) (string, error) { return "u-1", nil }
-	if _, verdict := e.resolveStore(context.Background(), s, newer); verdict != liveUnresolved {
-		t.Fatalf("verdict = %v, want unresolved: the adoption could not happen", verdict)
+	if _, verdict := e.resolveStore(context.Background(), s, newer); verdict != liveAdoptFailed {
+		t.Fatalf("verdict = %v, want adopt-failed: the adoption could not happen", verdict)
 	}
 	if _, ok := e.ownerOf(cclink.LoginIdentity(newer)); ok {
 		t.Fatal("an answer whose adoption failed was remembered; the login would never be adopted")
@@ -90,5 +91,45 @@ func TestTheTickThatAdoptsALoginDoesNotActOnItsPlan(t *testing.T) {
 	}
 	if n := kc.Writes(); n != 0 {
 		t.Fatalf("the item was written %d times in the tick that adopted a login", n)
+	}
+}
+
+// Round 4, astra 5. The oracle NAMES the file's login as u-1's newer one, and
+// storing it fails. The tick still does not act on its plan -- ranked before the
+// login was named -- and u-1 is not refreshed: its stored refresh token is
+// already spent by whoever minted the newer one, and presenting it can revoke
+// the newer login with it.
+func TestANamedLoginThatCouldNotBeAdoptedSkipsTheTickAndHoldsTheRefresh(t *testing.T) {
+	isolateEngine(t)
+	seedAccountExpiring(t, "u-1", "org-1", tickEpoch.Add(time.Hour))
+	seedAccount(t, "u-2", "org-2")
+	seedAccount(t, "u-3", "org-3")
+	writeLiveLoginRT(t, "RT-u-1-refreshed", tickEpoch.Add(8*time.Hour))
+	kc := cclink.NewFakeKeychain(loginExpiring("u-2", tickEpoch.Add(time.Hour)))
+	t.Cleanup(cclink.SetKeychainForTest(kc))
+	recordActive(t, "u-2")
+	readings(t, map[string]float64{"u-1": 36, "u-2": 99, "u-3": 5})
+	root, err := ccpath.StoreHome()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "credentials", "u-1.json"), []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	e := engineFor(t, tokensAreFine, noFetch)
+	e.ResolveOwner = func(context.Context, string) (string, error) { return "u-1", nil }
+	refreshed := false
+	e.Freshen = func(context.Context, string) (cclink.Blob, error) { refreshed = true; return nil, errors.New("unused") }
+	tick(t, e)
+
+	if got := activeOnDisk(t); got != "u-2" {
+		t.Fatalf("active = %q: the tick that named a login acted on a plan made before it", got)
+	}
+	if _, err := e.freshen(context.Background())("u-1"); !errors.Is(err, errUnadopted) {
+		t.Fatalf("freshen(u-1) = %v, want errUnadopted: its stored refresh token is spent", err)
+	}
+	if refreshed {
+		t.Fatal("u-1's spent refresh token was presented")
 	}
 }

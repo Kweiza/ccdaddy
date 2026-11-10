@@ -252,6 +252,9 @@ type Engine struct {
 	// identifyStores.
 	owners    map[string]string
 	saidStore map[string]bool
+	// unadopted is the accounts with a newer login the oracle named and ccdad
+	// could not store (markUnadopted). Guarded by mu.
+	unadopted map[string]bool
 
 	// codexRankedUUIDs is the Codex lane's last ranking, best first, and
 	// codexSamples holds the usage readings the Codex proxy took off real
@@ -339,6 +342,9 @@ func (e *Engine) freshen(ctx context.Context) func(string) (cclink.Blob, error) 
 		return nil
 	}
 	return func(uuid string) (cclink.Blob, error) {
+		if e.isUnadopted(uuid) {
+			return nil, errUnadopted
+		}
 		ctx, cancel := context.WithTimeout(ctx, e.pollTimeout())
 		defer cancel()
 		return e.Freshen(ctx, uuid)
@@ -552,16 +558,26 @@ func (e *Engine) Tick(ctx context.Context) error {
 	if !ev.LoginKnown || (!v.Split() && !v.Unresolved()) {
 		e.saidSplit = ""
 	}
+	// A newer login named and not stored is held only while the stores
+	// disagree. Once they agree it is either gone from both, leaving nothing
+	// to protect, or it is the login Claude Code reads first, which act's own
+	// resolution adopts before any swap.
+	if ev.LoginKnown && !v.Unresolved() && !v.StoresDisagree() {
+		e.clearUnadopted()
+	}
 	e.settlePending(s, ev, now)
 	repairing := false
 	switch {
 	case ev.LoginKnown && v.Unresolved():
-		// The plan runs as it did before the split repair existed: an unnamed
-		// store holds nothing back. Except in the tick whose identification
-		// ADOPTED a login -- the plan was ranked from stores as they were
-		// before one of them was named, so it waits for the next tick's
-		// evaluation rather than act on that. Skipping one tick is simpler
-		// than evaluating twice in one, and a tick is about a second.
+		// An unnamed store holds back no plan, no freeze and no refresh: the
+		// plan runs as it did before the split repair existed. What still
+		// holds is the older rule act and Execute keep -- nothing is installed
+		// over an unattributed LIVE login, the store Claude Code reads first,
+		// because that can revoke a running session. And in the tick whose
+		// identification NAMED a login the plan waits: it was ranked from
+		// stores as they were before one of them was named, so the next
+		// tick's evaluation decides. Skipping one tick is simpler than
+		// evaluating twice in one, and a tick is about a second.
 		if !e.identifyStores(ctx, s, ev) {
 			res, swapErr = e.act(ctx, s, ev)
 		}

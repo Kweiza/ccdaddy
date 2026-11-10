@@ -51,6 +51,12 @@ const (
 	// a live one. The oracle's memory names it, so a LoginView sees it as that
 	// account's (switcher.LiveResolved).
 	liveOwned
+	// liveAdoptFailed: the owner is a managed account and the login is NEWER
+	// than its stored one -- the account's live grant -- but storing it
+	// failed. Not remembered, so it is asked about and adopted again; until
+	// then the account's stored refresh token is already spent, and nothing
+	// may present it (see Engine.markUnadopted).
+	liveAdoptFailed
 )
 
 // resolveLive answers who owns the login in the credentials file when the file
@@ -141,7 +147,7 @@ func (e *Engine) resolveStore(ctx context.Context, s *store.Store, live cclink.B
 	// unresolved, and remembering the owner anyway would name the login from
 	// memory on every later tick -- so it would never be asked about or
 	// adopted again, and the account's only live grant would sit unadopted.
-	if id != "" && verdict != liveUnresolved {
+	if id != "" && verdict != liveUnresolved && verdict != liveAdoptFailed {
 		e.remember(id, uuid)
 	}
 	return owner, verdict
@@ -169,7 +175,7 @@ func (e *Engine) verdictFor(s *store.Store, live cclink.Blob, uuid string) (stor
 	next, err := s.Credentials(owner.UUID)
 	if err != nil {
 		e.logf("could not read %s's stored login to adopt into it: %v", owner.Label(), err)
-		return store.Account{}, liveUnresolved
+		return owner, liveAdoptFailed
 	}
 	if cclink.LoginIdentity(next) == cclink.LoginIdentity(live) {
 		// Already stored -- adopted on an earlier pass.
@@ -190,11 +196,11 @@ func (e *Engine) verdictFor(s *store.Store, live cclink.Blob, uuid string) (stor
 	}
 	if err := s.Add(owner, adopted); err != nil {
 		// The rotated pair is still in the live file and the account is still
-		// live, so nothing is lost but the repair. Reported as unresolved
-		// because that is what it leaves behind: a file this store still
-		// cannot name.
+		// live, so nothing is lost but the repair -- provided the account's
+		// spent stored token is not presented meanwhile; liveAdoptFailed is
+		// how the caller knows to hold it.
 		e.logf("could not adopt the login Claude Code rotated for %s: %v", owner.Label(), err)
-		return store.Account{}, liveUnresolved
+		return owner, liveAdoptFailed
 	}
 	return owner, liveAdopted
 }
