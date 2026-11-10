@@ -21,10 +21,15 @@ import (
 // liveAsRotated writes the credentials file Claude Code leaves behind when it
 // refreshes a login on its own: the same account, carrying the pair the server
 // rotated to, which matches no stored snapshot.
+//
+// It carries an expiry LATER than the stored snapshot's, as a real rotation
+// does: Claude Code writes expiresAt on every pair it mints, and adoption takes
+// a login only when it was issued after the one stored (resolveStore says why).
 func liveAsRotated(t *testing.T, uuid string) {
 	t.Helper()
 	body := `{"claudeAiOauth":{"accessToken":"AT-rotated-` + uuid +
-		`","refreshToken":"RT-` + uuid + `-rotated"}}`
+		`","refreshToken":"RT-` + uuid + `-rotated","expiresAt":` +
+		fmt.Sprint(tickEpoch.Add(16*time.Hour).UnixMilli()) + `}}`
 	if err := os.WriteFile(mustPath(ccpath.CredentialsPath()), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
