@@ -173,9 +173,10 @@ func (s *State) LastSwitch() (time.Time, string) {
 func (s *State) RecordSwitch(to string, at time.Time, left Departure) {
 	s.data.LastSwitchAt = at
 	s.data.LastSwitchTo = to
-	// A completed switch settles whatever was pending: it either was that
-	// switch, or superseded it.
-	s.data.PendingSwitch = nil
+	// The pending intent is NOT cleared here. Intents are written ahead of
+	// their switches, so the one pending now may belong to another switch
+	// still in flight; only the switch that wrote it may clear it, by its
+	// target and generation (ClearPendingIf).
 	if left.From == "" || left.Closing == "" {
 		return
 	}

@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -125,9 +126,12 @@ func (e *Engine) ownerOf(id string) (string, bool) {
 //     is and said so, once. Nothing is written over a login nobody has named;
 //     doctor warns about it.
 //
-// It reports whether it ADOPTED a login: the store's account changed under the
-// evaluation this tick made, and the caller does not act on that evaluation.
-func (e *Engine) identifyStores(ctx context.Context, s *store.Store, ev switcher.Evaluation) (adopted bool) {
+// It reports whether it NAMED a managed account's newer login -- adopted, or
+// named and not adopted because storing it failed. Either way the evaluation
+// this tick made did not know whose that login is, and the caller does not
+// act on it. A login named and not adopted also holds its account's refresh
+// (markUnadopted) until a later adoption succeeds.
+func (e *Engine) identifyStores(ctx context.Context, s *store.Store, ev switcher.Evaluation) (named bool) {
 	stores := []struct {
 		name   string
 		blob   cclink.Blob
@@ -142,8 +146,15 @@ func (e *Engine) identifyStores(ctx context.Context, s *store.Store, ev switcher
 		}
 		owner, verdict := e.resolveStore(ctx, s, st.blob)
 		switch verdict {
+		case liveAdoptFailed:
+			named = true
+			e.markUnadopted(owner.UUID, true)
+			e.sayStoreOnce(st.holder.ID, fmt.Sprintf("%s holds a newer login of %s than ccdad has stored, "+
+				"and storing it failed; it is tried again, and %s is not refreshed meanwhile -- its stored "+
+				"refresh token is already spent", st.name, owner.Label(), owner.Label()))
 		case liveAdopted:
-			adopted = true
+			named = true
+			e.markUnadopted(owner.UUID, false)
 			e.logf("%s holds a newer login of %s than ccdad had stored; it is %s's stored login now",
 				st.name, owner.Label(), owner.Label())
 		case liveOwned:
@@ -159,8 +170,43 @@ func (e *Engine) identifyStores(ctx context.Context, s *store.Store, ev switcher
 				"and it is asked again; until then it is not repaired from or towards", st.name, ev.Login.Describe()))
 		}
 	}
-	return adopted
+	return named
 }
+
+// markUnadopted records whether uuid has a newer login the oracle named and
+// ccdad could not store. While it does, its stored refresh token has already
+// been spent by whoever minted the newer one, and presenting it can revoke the
+// whole family -- the newer login included -- so freshen refuses the account.
+// Guarded by e.mu: the swap path and the pollers read it.
+func (e *Engine) markUnadopted(uuid string, unadopted bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if !unadopted {
+		delete(e.unadopted, uuid)
+		return
+	}
+	if e.unadopted == nil {
+		e.unadopted = map[string]bool{}
+	}
+	e.unadopted[uuid] = true
+}
+
+func (e *Engine) clearUnadopted() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.unadopted = nil
+}
+
+func (e *Engine) isUnadopted(uuid string) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.unadopted[uuid]
+}
+
+// errUnadopted is freshen refusing an account whose newer login is named and
+// not yet stored.
+var errUnadopted = errors.New("a newer login of this account is named and not yet stored, so its stored " +
+	"refresh token is already spent and is not presented")
 
 func (e *Engine) sayStoreOnce(id, line string) {
 	if e.saidStore == nil {
