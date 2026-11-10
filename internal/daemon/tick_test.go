@@ -1852,14 +1852,17 @@ func TestAnAccountIsNotProbedWhileItsOwnPollIsStillRunning(t *testing.T) {
 	})
 
 	release := make(chan struct{})
-	now := tickEpoch
+	// The clock is read by the poll still in flight -- a poll stamps the
+	// instant it was sent before it waits on the endpoint -- so it is moved
+	// under a lock rather than by assignment.
+	clock := &fakeClock{t: tickEpoch}
 	e := engineFor(t, tokensAreFine, func(_ context.Context, token string) (*usage.Snapshot, error) {
 		if token == "AT-u-1" {
 			<-release
 		}
 		return unusedWindow(), nil
 	})
-	e.Now = func() time.Time { return now }
+	e.Now = clock.now
 	probes := stubProbe(t, e)
 
 	// The first tick dispatches a poll that never finishes.
@@ -1868,7 +1871,7 @@ func TestAnAccountIsNotProbedWhileItsOwnPollIsStillRunning(t *testing.T) {
 	}
 	// The second is past the ladder's floor, so nothing but the in-flight poll
 	// stands between this account and a warm-up.
-	now = tickEpoch.Add(2 * time.Minute)
+	clock.advance(2 * time.Minute)
 	if err := e.Tick(context.Background()); err != nil {
 		t.Fatal(err)
 	}
