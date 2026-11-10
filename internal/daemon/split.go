@@ -148,13 +148,12 @@ func (e *Engine) identifyStores(ctx context.Context, s *store.Store, ev switcher
 		switch verdict {
 		case liveAdoptFailed:
 			named = true
-			e.markUnadopted(owner.UUID, true)
+			e.holdUntilStored(owner.UUID, st.holder.ID)
 			e.sayStoreOnce(st.holder.ID, fmt.Sprintf("%s holds a newer login of %s than ccdad has stored, "+
 				"and storing it failed; it is tried again, and %s is not refreshed meanwhile -- its stored "+
 				"refresh token is already spent", st.name, owner.Label(), owner.Label()))
 		case liveAdopted:
 			named = true
-			e.markUnadopted(owner.UUID, false)
 			e.logf("%s holds a newer login of %s than ccdad had stored; it is %s's stored login now",
 				st.name, owner.Label(), owner.Label())
 		case liveOwned:
@@ -173,41 +172,62 @@ func (e *Engine) identifyStores(ctx context.Context, s *store.Store, ev switcher
 	return named
 }
 
-// markUnadopted records whether uuid has a newer login the oracle named and
-// ccdad could not store. While it does, its stored refresh token has already
-// been spent by whoever minted the newer one, and presenting it can revoke the
-// whole family -- the newer login included -- so freshen refuses the account.
+// holdUntilStored holds uuid's stored refresh token: the oracle named the
+// login with identity newer as the account's newer one, and storing it failed.
+// While it is held, whoever minted newer has already spent the stored refresh
+// token, and presenting it can revoke the whole family, newer included.
 // Guarded by e.mu: the swap path and the pollers read it.
-func (e *Engine) markUnadopted(uuid string, unadopted bool) {
+func (e *Engine) holdUntilStored(uuid, newer string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if !unadopted {
-		delete(e.unadopted, uuid)
-		return
-	}
 	if e.unadopted == nil {
-		e.unadopted = map[string]bool{}
+		e.unadopted = map[string]string{}
 	}
-	e.unadopted[uuid] = true
+	e.unadopted[uuid] = newer
 }
 
-func (e *Engine) clearUnadopted() {
+// releaseStored lifts each hold whose account's STORED credential now is the
+// newer login, or has superseded it. Nothing else lifts one: two login stores
+// agreeing says nothing about what ccdad has stored, and lifting on that would
+// let the next poll present the spent token after all.
+func (e *Engine) releaseStored(s *store.Store) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.unadopted = nil
+	for uuid, newer := range e.unadopted {
+		a, ok := s.Get(uuid)
+		if !ok {
+			delete(e.unadopted, uuid)
+			continue
+		}
+		stored, err := s.Credentials(uuid)
+		if (err == nil && cclink.LoginIdentity(stored) == newer) || a.Superseded(newer) {
+			delete(e.unadopted, uuid)
+		}
+	}
 }
 
 // holdSpentToken is the ONE predicate every path that may present an
-// account's stored refresh token asks first -- the switch's freshen and the
-// poll's access-token fetch alike: errUnadopted while the account has a newer
-// login named and not yet stored, nil otherwise.
+// account's stored refresh token asks first: errUnadopted while the account has
+// a newer login named and not yet stored, nil otherwise. accessToken and
+// freshen both ask it.
 func (e *Engine) holdSpentToken(uuid string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.unadopted[uuid] {
+	if _, held := e.unadopted[uuid]; held {
 		return errUnadopted
 	}
 	return nil
+}
+
+// accessToken is the daemon's ONE way to an account's access token, which may
+// refresh and so present the stored refresh token. It asks holdSpentToken
+// first, so no path gets a token past the hold: the usage poll and the profile
+// check both read through it.
+func (e *Engine) accessToken(ctx context.Context, uuid string) (string, error) {
+	if err := e.holdSpentToken(uuid); err != nil {
+		return "", err
+	}
+	return e.AccessToken(ctx, uuid)
 }
 
 // errUnadopted is a path refusing an account whose newer login is named and
