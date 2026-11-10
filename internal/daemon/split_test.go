@@ -485,3 +485,42 @@ func TestAnUnnamedFileTheOracleCannotNameIsLeftAlone(t *testing.T) {
 		t.Fatalf("the unnamed login was not reported: %q", log.lines)
 	}
 }
+
+// D1. A login of a managed account that is OLDER than the stored one is not
+// adopted: its refresh token is already spent, and storing it over the newer
+// one would undo the adoption the other store had just made. The oracle still
+// names it, from memory, without asking again.
+func TestAnOlderLoginIsNamedButNotAdopted(t *testing.T) {
+	isolateEngine(t)
+	seedAccountExpiring(t, "u-1", "org-1", tickEpoch.Add(8*time.Hour))
+	s, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var older cclink.Blob
+	if err := json.Unmarshal([]byte(blobExpiring("RT-u-1-older", tickEpoch.Add(time.Hour))), &older); err != nil {
+		t.Fatal(err)
+	}
+	asks := 0
+	e := engineFor(t, tokensAreFine, noFetch)
+	e.ResolveOwner = func(context.Context, string) (string, error) { asks++; return "u-1", nil }
+
+	if _, verdict := e.resolveStore(context.Background(), s, older); verdict != liveOwned {
+		t.Fatalf("verdict = %v, want liveOwned: the login is older than the stored one", verdict)
+	}
+	stored, err := s.Credentials("u-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cclink.LoginIdentity(stored) != "refresh:RT-u-1" {
+		t.Fatalf("the older login was adopted over the newer one: %s", cclink.LoginIdentity(stored))
+	}
+	if uuid, ok := e.ownerOf(cclink.LoginIdentity(older)); !ok || uuid != "u-1" {
+		t.Fatalf("the oracle's answer was not remembered: %q %v", uuid, ok)
+	}
+	e.nextResolveAt = time.Time{}
+	_, _ = e.resolveStore(context.Background(), s, older)
+	if asks != 1 {
+		t.Fatalf("the oracle was asked %d times about one login", asks)
+	}
+}
