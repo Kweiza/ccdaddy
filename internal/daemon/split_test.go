@@ -224,8 +224,9 @@ func TestATickRepairsTowardsTheNewerLoginInTheFile(t *testing.T) {
 	kc := cclink.NewFakeKeychain(loginExpiring("u-2", tickEpoch.Add(time.Hour)))
 	t.Cleanup(cclink.SetKeychainForTest(kc))
 	recordActive(t, "u-2")
-	// The file's account has room, so no plan leaves it.
-	readings(t, map[string]float64{"u-1": 36, "u-2": 99})
+	// Both have room, so no plan moves the login and only the repair
+	// direction decides where it ends up.
+	readings(t, map[string]float64{"u-1": 36, "u-2": 40})
 
 	e := engineFor(t, tokensAreFine, noFetch)
 	tick(t, e)
@@ -439,7 +440,7 @@ func TestAnUnnamedNewerFileIsAdoptedAndRepairedTowards(t *testing.T) {
 	kc := cclink.NewFakeKeychain(loginExpiring("u-2", tickEpoch.Add(time.Hour)))
 	t.Cleanup(cclink.SetKeychainForTest(kc))
 	recordActive(t, "u-2")
-	readings(t, map[string]float64{"u-1": 36, "u-2": 99})
+	readings(t, map[string]float64{"u-1": 36, "u-2": 40})
 
 	e := engineFor(t, tokensAreFine, noFetch)
 	e.ResolveOwner = func(_ context.Context, token string) (string, error) {
