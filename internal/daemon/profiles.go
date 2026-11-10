@@ -27,6 +27,11 @@ func (e *Engine) checkProfile(ctx context.Context, a store.Account, token string
 	if e.FetchProfile == nil {
 		return
 	}
+	// Held BEFORE the claim, so a hold does not spend the profile's own
+	// schedule: the claim would otherwise mark it refreshed for nothing.
+	if token == "" && e.holdSpentToken(a.UUID) != nil {
+		return
+	}
 	claimed := false
 	err := store.WithStore(func(s *store.Store) error {
 		var err error
@@ -43,7 +48,7 @@ func (e *Engine) checkProfile(ctx context.Context, a store.Account, token string
 		if e.AccessToken == nil {
 			return
 		}
-		token, err = e.AccessToken(ctx, a.UUID)
+		token, err = e.accessToken(ctx, a.UUID)
 		if err != nil {
 			e.logf("reading %s's token for its profile failed: %v", a.UUID, err)
 			return

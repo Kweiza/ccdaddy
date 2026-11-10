@@ -535,8 +535,15 @@ func Execute(s *store.Store, req Request) (Result, error) {
 	}
 	// clearAhead forgets the intent written above once the outcome is known,
 	// and only that one -- never a later intent somebody else recorded.
+	//
+	// Never when this call took over an earlier pending switch: its intent is
+	// that switch's, re-stamped, and this call failing or standing down says
+	// nothing about how that switch went -- the split it may have left still
+	// needs the intent to be repaired the right way. Agreeing stores settle it
+	// (SettlePending, once it is older than WorstCaseSwitch); success settles
+	// it through recordSwitchSettling.
 	clearAhead := func() error {
-		if ahead.IsZero() {
+		if ahead.IsZero() || res.CompletedPending {
 			return nil
 		}
 		return strategy.WithState(stateTimeout, func(st *strategy.State) error {

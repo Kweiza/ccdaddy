@@ -253,8 +253,9 @@ type Engine struct {
 	owners    map[string]string
 	saidStore map[string]bool
 	// unadopted is the accounts with a newer login the oracle named and ccdad
-	// could not store (markUnadopted). Guarded by mu.
-	unadopted map[string]bool
+	// could not store, each with that login's identity (holdUntilStored).
+	// Guarded by mu.
+	unadopted map[string]string
 
 	// codexRankedUUIDs is the Codex lane's last ranking, best first, and
 	// codexSamples holds the usage readings the Codex proxy took off real
@@ -558,13 +559,9 @@ func (e *Engine) Tick(ctx context.Context) error {
 	if !ev.LoginKnown || (!v.Split() && !v.Unresolved()) {
 		e.saidSplit = ""
 	}
-	// A newer login named and not stored is held only while the stores
-	// disagree. Once they agree it is either gone from both, leaving nothing
-	// to protect, or it is the login Claude Code reads first, which act's own
-	// resolution adopts before any swap.
-	if ev.LoginKnown && !v.Unresolved() && !v.StoresDisagree() {
-		e.clearUnadopted()
-	}
+	// A hold on a spent stored refresh token is lifted only once the store
+	// holds the newer login (releaseStored says why nothing else lifts it).
+	e.releaseStored(s)
 	e.settlePending(s, ev, now)
 	repairing := false
 	switch {
@@ -1364,13 +1361,7 @@ func (e *Engine) poll(ctx context.Context, a store.Account, cfg config.Config,
 	// while it was in flight (commit).
 	sent := e.now()
 
-	// Asked before the token fetch, which may REFRESH: an account with a newer
-	// login named and not yet stored has a spent stored refresh token, and
-	// presenting it can revoke that newer login.
-	token, err := "", e.holdSpentToken(a.UUID)
-	if err == nil {
-		token, err = e.AccessToken(ctx, a.UUID)
-	}
+	token, err := e.accessToken(ctx, a.UUID)
 	var snap *usage.Snapshot
 	if err == nil {
 		// No Claude Code lock is held here. internal/tokens takes the refresh
