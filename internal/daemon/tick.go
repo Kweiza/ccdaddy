@@ -253,9 +253,9 @@ type Engine struct {
 	owners    map[string]string
 	saidStore map[string]bool
 	// unadopted is the accounts with a newer login the oracle named and ccdad
-	// could not store, each with that login's identity (holdUntilStored).
-	// Guarded by mu.
-	unadopted map[string]string
+	// could not store, each with the newer login and the spent one
+	// (holdUntilStored). Guarded by mu.
+	unadopted map[string]spentHold
 
 	// codexRankedUUIDs is the Codex lane's last ranking, best first, and
 	// codexSamples holds the usage readings the Codex proxy took off real
@@ -871,6 +871,13 @@ func planLeaves(ev switcher.Evaluation, target store.Account) bool {
 // read failed, or whose stores happen to agree, has confirmed nothing about the
 // write that failed.
 func (e *Engine) execute(ctx context.Context, s *store.Store, req switcher.Request) (switcher.Result, error) {
+	// A switch installs the target's STORED login into Claude Code's stores,
+	// and Claude Code then refreshes with its stored refresh token. While that
+	// token is spent, the install would hand Claude Code a token whose use
+	// revokes the newer login: the same hold every other path asks.
+	if err := e.holdSpentToken(req.Target.UUID); err != nil {
+		return switcher.Result{Target: req.Target, Outcome: switcher.Stale, FreshenErr: err}, nil
+	}
 	now := e.now()
 	if now.Before(e.writeAfter) {
 		if !e.saidWriteWait {
@@ -1222,6 +1229,13 @@ func (e *Engine) probeDue(a store.Account, entry usage.Entry, cfg config.Config,
 	// Code is logged in as. Nothing is lost by waiting — an engine that cannot
 	// name the live account is about to switch, and a switch names it.
 	if !activeKnown || a.UUID == active {
+		return "", "", false
+	}
+	// A probe seeds a scratch Claude Code home with the account's STORED
+	// login, and the Claude Code it runs refreshes it when the access token
+	// has expired -- presenting the stored refresh token. While that token is
+	// spent (holdSpentToken), the probe would revoke the newer login with it.
+	if e.holdSpentToken(a.UUID) != nil {
 		return "", "", false
 	}
 	// thresholds(a.UUID), not cfg.Thresholds(): under hover the candidate window

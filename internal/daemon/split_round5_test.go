@@ -23,7 +23,7 @@ func TestTheProfileCheckIsHeldLikeThePoll(t *testing.T) {
 	e.FetchProfile = func(context.Context, string) (*identity.Profile, error) {
 		return &identity.Profile{AccountUUID: "u-1"}, nil
 	}
-	e.holdUntilStored("u-1", "refresh:RT-u-1-newer")
+	e.holdUntilStored("u-1", "refresh:RT-u-1-newer", "refresh:RT-u-1")
 
 	e.checkProfile(context.Background(), a, "", tickEpoch, true)
 	if fetches != 0 {
@@ -39,7 +39,7 @@ func TestTheHoldLiftsOnlyOnceTheStoreHoldsTheNewerLogin(t *testing.T) {
 	liveAs(t, "u-1")
 	withItem(t, "u-1") // both stores agree; the store still holds the old login
 	e := engineFor(t, tokensAreFine, noFetch)
-	e.holdUntilStored("u-1", "refresh:RT-u-1-newer")
+	e.holdUntilStored("u-1", "refresh:RT-u-1-newer", "refresh:RT-u-1")
 
 	s := openEngineStore(t)
 	e.releaseStored(s)

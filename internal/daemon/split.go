@@ -148,7 +148,11 @@ func (e *Engine) identifyStores(ctx context.Context, s *store.Store, ev switcher
 		switch verdict {
 		case liveAdoptFailed:
 			named = true
-			e.holdUntilStored(owner.UUID, st.holder.ID)
+			spent := ""
+			if stored, err := s.Credentials(owner.UUID); err == nil {
+				spent = cclink.LoginIdentity(stored)
+			}
+			e.holdUntilStored(owner.UUID, st.holder.ID, spent)
 			e.sayStoreOnce(st.holder.ID, fmt.Sprintf("%s holds a newer login of %s than ccdad has stored, "+
 				"and storing it failed; it is tried again, and %s is not refreshed meanwhile -- its stored "+
 				"refresh token is already spent", st.name, owner.Label(), owner.Label()))
@@ -172,35 +176,55 @@ func (e *Engine) identifyStores(ctx context.Context, s *store.Store, ev switcher
 	return named
 }
 
+// spentHold is one account's hold: the newer login the oracle named, and the
+// SPENT login -- the one ccdad had stored when the hold was placed, whose
+// refresh token whoever minted the newer one has already presented.
+type spentHold struct {
+	newer string
+	spent string
+}
+
 // holdUntilStored holds uuid's stored refresh token: the oracle named the
 // login with identity newer as the account's newer one, and storing it failed.
-// While it is held, whoever minted newer has already spent the stored refresh
-// token, and presenting it can revoke the whole family, newer included.
-// Guarded by e.mu: the swap path and the pollers read it.
-func (e *Engine) holdUntilStored(uuid, newer string) {
+// spent is the account's stored login at that moment, "" if it could not be
+// read. While it is held, presenting that stored refresh token can revoke the
+// whole family, newer included. Guarded by e.mu: the swap path and the pollers
+// read it.
+func (e *Engine) holdUntilStored(uuid, newer, spent string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.unadopted == nil {
-		e.unadopted = map[string]string{}
+		e.unadopted = map[string]spentHold{}
 	}
-	e.unadopted[uuid] = newer
+	e.unadopted[uuid] = spentHold{newer: newer, spent: spent}
 }
 
-// releaseStored lifts each hold whose account's STORED credential now is the
-// newer login, or has superseded it. Nothing else lifts one: two login stores
-// agreeing says nothing about what ccdad has stored, and lifting on that would
-// let the next poll present the spent token after all.
+// releaseStored lifts each hold once the account's STORED credential is no
+// longer the spent one -- whatever replaced it: the newer login adopted, a
+// later generation adopted after the newer one was missed, a re-login with
+// `ccdad add`, a switch that stored a new login. What the hold protects is
+// "the stored refresh token is spent", and that stops being true the moment
+// another login is stored. A spent identity that could not be read falls back
+// to waiting for the newer login itself (or one that superseded it).
+//
+// Two login stores AGREEING lifts nothing: they can agree on the newer login
+// while ccdad still stores the spent one, and the next poll would present it.
 func (e *Engine) releaseStored(s *store.Store) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	for uuid, newer := range e.unadopted {
+	for uuid, h := range e.unadopted {
 		a, ok := s.Get(uuid)
 		if !ok {
 			delete(e.unadopted, uuid)
 			continue
 		}
 		stored, err := s.Credentials(uuid)
-		if (err == nil && cclink.LoginIdentity(stored) == newer) || a.Superseded(newer) {
+		cur := ""
+		if err == nil {
+			cur = cclink.LoginIdentity(stored)
+		}
+		moved := cur != "" && (cur == h.newer || (h.spent != "" && cur != h.spent))
+		if moved || a.Superseded(h.newer) {
 			delete(e.unadopted, uuid)
 		}
 	}
