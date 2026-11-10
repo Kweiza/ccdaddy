@@ -2300,10 +2300,10 @@ func TestTickHealthDoesNotInventAVerdict(t *testing.T) {
 // so the report has to answer for a store it could not read.
 func stubLiveError(t *testing.T, err error) {
 	t.Helper()
-	saved := loadLiveWithSource
-	t.Cleanup(func() { loadLiveWithSource = saved })
-	loadLiveWithSource = func() (cclink.Blob, cclink.CredentialSource, error) {
-		return nil, cclink.SourceNone, err
+	saved := readLoginStores
+	t.Cleanup(func() { readLoginStores = saved })
+	readLoginStores = func() (cclink.LoginStores, error) {
+		return cclink.LoginStores{}, err
 	}
 }
 

@@ -860,6 +860,19 @@ atomic file replacement, and refuses unsafe file paths. Network refresh work is
 kept outside those credential locks. `ccdad doctor` reports storage conflicts
 and unexpected credential keys.
 
+A switch writes the Keychain item first and the credentials file second. A
+Keychain write that runs out of time (ccdad allows 30 seconds) is read back
+before anything is reported: if the item holds the new login the switch
+completes, and if it cannot be read back ccdad says the outcome is unknown
+rather than claiming either. When the Keychain item, the credentials file and
+ccdad's record of the live account name different accounts, the login is
+*split*: Claude Code falls back to the file whenever its own Keychain read
+fails, so sessions can spend an account ccdad does not show as live. The daemon
+repairs a split on its next pass by putting the Keychain item's account in both
+stores, `ccdad switch` repairs it instead of answering "Already on", and
+`ccdad doctor` fails its `login-split` row and names which store holds which
+account.
+
 On Windows, file protection relies on the inherited ACL rather than Unix mode
 bits. Account exports containing credentials must be treated as secrets.
 
@@ -950,6 +963,7 @@ profile failures, token refresh, and daemon activity.
 | Usage remains stale after `status --refresh` | The quota endpoint's freshness floor or 429 backoff still applies. Profile refresh and quota refresh are separate. |
 | Codex shows `needs-relogin` | Its refresh grant was rejected; use `ccdad add codex`. |
 | Claude switches do not affect the session | Check credential-root resolution, Keychain access, overriding token/helper settings, and whether the session is scoped. |
+| Sessions spend an account `ccdad which` does not show as live | Check `doctor`'s `login-split` row. A split login is repaired by the daemon on its next pass, or now by `ccdad switch` to the account the row names. |
 | Two daemons fight over a login | Give separate stores separate credential homes; inspect `doctor`'s ownership report. |
 | `accounts.toml` is missing but credential files remain | Restore a backup or recover the accounts; do not delete the remaining credentials. |
 | MCP tools disappeared after changing installation method | Check direct versus plugin-prefixed tool names. |

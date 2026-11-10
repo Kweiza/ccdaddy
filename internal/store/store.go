@@ -639,6 +639,17 @@ func (s *Store) SetActive(uuid string) error {
 // ActiveUUID is the last account ccdad activated, or "".
 func (s *Store) ActiveUUID() string { return s.data.ActiveUUID }
 
+// ActiveAt reads a store's recorded active account WITHOUT creating any part of
+// it, for the reason AccountsAt gives: doctor compares it against Claude Code's
+// login stores and must not bring a store into existence to do so.
+func ActiveAt(root string) (string, error) {
+	s := &Store{root: root}
+	if err := s.load(); err != nil {
+		return "", err
+	}
+	return s.ActiveUUID(), nil
+}
+
 // save writes accounts.toml atomically.
 //
 // It is unexported, and that is the point: it does not take the lock — every

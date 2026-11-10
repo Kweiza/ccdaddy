@@ -16,6 +16,33 @@ must reference accounts by `uuid` or `alias`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A slow Keychain no longer leaves the login split between two accounts.**
+  On a heavily loaded Mac a switch's Keychain write could run past ccdad's
+  5-second limit and complete anyway. ccdad then reported that nothing had
+  been written and left `~/.claude/.credentials.json` on the old account, so
+  the Keychain item named the new account and the file the old one. Claude
+  Code falls back to the file whenever its own Keychain read fails, so
+  sessions kept spending the old account while every ccdad command showed the
+  new one, and `ccdad switch` to the new account answered "Already on".
+  - A Keychain write now has 30 seconds; lookups keep 5. A write that still
+    runs out of time is read back: if the item holds the new login the switch
+    completes, if it holds the old one the switch failed as before, and if it
+    cannot be read back ccdad says the outcome is unknown and leaves the
+    repair to the next check.
+  - The daemon compares the Keychain item, the credentials file and its own
+    record of the live account on every pass. When the two stores name
+    different accounts it puts the Keychain item's account in both, records
+    it, and says so in `daemon.log`; a record that is merely behind is
+    corrected without touching either store.
+  - `ccdad switch ACCOUNT` answers "Already on" only when both stores name
+    that account. Otherwise it installs it into both and says the login was
+    split.
+  - `ccdad doctor` has a `login-split` row. It fails when the two stores name
+    different accounts, names each store's account by email and uuid, and
+    warns when only ccdad's record is behind.
+
 ## [0.29.0] — 2026-11-10
 
 Hover becomes an order: accounts with a five-hour window first, then the

@@ -150,12 +150,16 @@ func (v LoginView) Describe() string {
 		parts = append(parts, "the keychain item Claude Code reads first holds "+v.Item.describe())
 	}
 	parts = append(parts, "the credentials file holds "+v.File.describe())
-	if v.Recorded.UUID == "" {
-		parts = append(parts, "ccdad records no account as live")
-	} else {
-		parts = append(parts, "ccdad records "+accountName(v.Recorded)+" as live")
-	}
+	parts = append(parts, "ccdad records "+v.RecordedName()+" as live")
 	return strings.Join(parts, "; ")
+}
+
+// RecordedName is the recorded account as Describe names it, or "no account".
+func (v LoginView) RecordedName() string {
+	if v.Recorded.UUID == "" {
+		return "no account"
+	}
+	return accountName(v.Recorded)
 }
 
 func (h StoreHolder) describe() string {
