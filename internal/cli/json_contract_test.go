@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 )
 
@@ -884,6 +885,9 @@ func sandboxed(m *testing.M) int {
 			return 1
 		}
 	}
+	// The tests in this process never reach the developer's keychain (see
+	// cclink.IsolateKeychainForTests); any role re-exec has already exited.
+	cclink.IsolateKeychainForTests()
 	return m.Run()
 }
 

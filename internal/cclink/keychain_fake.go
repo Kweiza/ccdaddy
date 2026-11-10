@@ -3,7 +3,9 @@ package cclink
 import (
 	"context"
 	"encoding/hex"
+	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -100,6 +102,29 @@ func (f *FakeKeychain) FailReads(on bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.readsFail = on
+}
+
+// IsolateKeychainForTests is what a test package's TestMain calls before
+// m.Run: an empty FakeKeychain -- no item, which is what a sandboxed Claude
+// Code home has on any machine -- becomes the default, and spawning the real
+// /usr/bin/security from then on panics, so a test that reaches the
+// developer's own keychain fails loudly instead of reading it. A test that
+// needs an item installs its own fake with SetKeychainForTest, and its
+// cleanup restores this default. Production code must never call it.
+func IsolateKeychainForTests() {
+	SetKeychainForTest(&FakeKeychain{})
+	realSecurityForbidden.Store(true)
+}
+
+// realSecurityForbidden is set by IsolateKeychainForTests.
+var realSecurityForbidden atomic.Bool
+
+// refuseRealSecurity panics when a test package has forbidden the real binary.
+func refuseRealSecurity(args ...string) {
+	if realSecurityForbidden.Load() {
+		panic(fmt.Sprintf("a test spawned the real %s %v: the keychain is isolated for tests "+
+			"(cclink.IsolateKeychainForTests); install a FakeKeychain instead", securityPath, args))
+	}
 }
 
 // SetKeychainForTest makes f this process's keychain and returns a function

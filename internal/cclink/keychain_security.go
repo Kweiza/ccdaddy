@@ -212,6 +212,7 @@ func spawnSecurity(ctx context.Context, bound time.Duration, args ...string) (se
 	if keychainGOOS != "darwin" {
 		return securityResult{}, ErrKeychainUnsupported
 	}
+	refuseRealSecurity(args...)
 
 	ctx, cancel := context.WithTimeout(ctx, bound)
 	defer cancel()
@@ -571,6 +572,7 @@ func UnlockLoginKeychain(ctx context.Context) error {
 	if keychainGOOS != "darwin" {
 		return ErrKeychainUnsupported
 	}
+	refuseRealSecurity("unlock-keychain")
 	cmd := exec.CommandContext(ctx, securityPath, "unlock-keychain")
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {

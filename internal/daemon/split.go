@@ -129,8 +129,8 @@ func (e *Engine) ownerOf(id string) (string, bool) {
 // It reports whether it NAMED a managed account's newer login -- adopted, or
 // named and not adopted because storing it failed. Either way the evaluation
 // this tick made did not know whose that login is, and the caller does not
-// act on it. A login named and not adopted also holds its account's refresh
-// (markUnadopted) until a later adoption succeeds.
+// act on it. A login named and not adopted also holds its account's stored
+// refresh token (verdictFor places the hold; releaseStored lifts it).
 func (e *Engine) identifyStores(ctx context.Context, s *store.Store, ev switcher.Evaluation) (named bool) {
 	stores := []struct {
 		name   string
@@ -147,12 +147,8 @@ func (e *Engine) identifyStores(ctx context.Context, s *store.Store, ev switcher
 		owner, verdict := e.resolveStore(ctx, s, st.blob)
 		switch verdict {
 		case liveAdoptFailed:
+			// verdictFor has placed the hold.
 			named = true
-			spent := ""
-			if stored, err := s.Credentials(owner.UUID); err == nil {
-				spent = cclink.LoginIdentity(stored)
-			}
-			e.holdUntilStored(owner.UUID, st.holder.ID, spent)
 			e.sayStoreOnce(st.holder.ID, fmt.Sprintf("%s holds a newer login of %s than ccdad has stored, "+
 				"and storing it failed; it is tried again, and %s is not refreshed meanwhile -- its stored "+
 				"refresh token is already spent", st.name, owner.Label(), owner.Label()))
@@ -232,8 +228,10 @@ func (e *Engine) releaseStored(s *store.Store) {
 
 // holdSpentToken is the ONE predicate every path that may present an
 // account's stored refresh token asks first: errUnadopted while the account has
-// a newer login named and not yet stored, nil otherwise. accessToken and
-// freshen both ask it.
+// a newer login named and not yet stored, nil otherwise. Every path that hands
+// a stored login or token out of the engine asks it: accessToken (the usage
+// poll and the profile check), freshen, probeDue, and execute -- and a held
+// account is not a plan candidate at all (EvalOptions.Held).
 func (e *Engine) holdSpentToken(uuid string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()

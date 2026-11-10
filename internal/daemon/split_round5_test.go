@@ -31,9 +31,10 @@ func TestTheProfileCheckIsHeldLikeThePoll(t *testing.T) {
 	}
 }
 
-// The hold lifts only when the account's STORED credential is the newer login
-// (or has superseded it) -- not because the login stores agree.
-func TestTheHoldLiftsOnlyOnceTheStoreHoldsTheNewerLogin(t *testing.T) {
+// The hold stays while the account's stored credential is still the spent one,
+// even with both login stores agreeing; it lifts once something else is
+// stored -- here, the newer login itself.
+func TestTheHoldStaysWhileTheSpentLoginIsStillStored(t *testing.T) {
 	isolateEngine(t)
 	a := seedAccount(t, "u-1", "org-1")
 	liveAs(t, "u-1")
