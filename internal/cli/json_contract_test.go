@@ -735,6 +735,10 @@ func runRootTo(t *testing.T, stdout io.Writer, args ...string) (code ExitCode, s
 // process and cannot be asserted by constructing a value.
 const pipeRoleEnv = "CCDAD_TEST_PIPE_ARGV"
 
+// isolationRoleEnv makes the re-executed test binary report whether the
+// keychain is isolated in it, and exit -- what every other role runs under.
+const isolationRoleEnv = "CCDAD_TEST_REPORT_KEYCHAIN_ISOLATION"
+
 // mcpRoleEnv turns a re-executed copy of this binary into the ccdad binary
 // running `ccdad mcp`, so one test can drive the real server over a real pipe
 // through the protocol library's own command transport. Some guarantees are
@@ -786,6 +790,16 @@ type updateAssetRecord struct {
 }
 
 func TestMain(m *testing.M) {
+	// FIRST, before any role: the roles below are this binary re-executed as
+	// a child -- `status --json`, `auto --once --json`, the MCP server -- and
+	// a child that ran before the isolation would read the developer's real
+	// keychain. No child needs an item, so the empty default serves them all
+	// (cclink.IsolateKeychainForTests).
+	cclink.IsolateKeychainForTests()
+	if os.Getenv(isolationRoleEnv) != "" {
+		fmt.Print(cclink.KeychainIsolatedForTests())
+		os.Exit(0)
+	}
 	// The staged release asset. `ccdad update` EXECUTES what it downloaded
 	// before it installs it, and the only file that is both a real executable
 	// on all three operating systems and able to answer --version is a copy of
@@ -885,9 +899,6 @@ func sandboxed(m *testing.M) int {
 			return 1
 		}
 	}
-	// The tests in this process never reach the developer's keychain (see
-	// cclink.IsolateKeychainForTests); any role re-exec has already exited.
-	cclink.IsolateKeychainForTests()
 	return m.Run()
 }
 

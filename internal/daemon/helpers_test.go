@@ -116,6 +116,11 @@ const (
 // purpose: Spawn inherits the environment wholesale, so the spawner role would
 // otherwise be inherited by the very child the spawner starts.
 func TestMain(m *testing.M) {
+	// FIRST, before any role: the roles are this binary re-executed as real
+	// daemons and spawners, and a child that ran before the isolation would
+	// read the developer's real keychain on its first tick
+	// (cclink.IsolateKeychainForTests). None of them needs an item.
+	cclink.IsolateKeychainForTests()
 	for _, arg := range os.Args[1:] {
 		if arg == RunArg {
 			os.Exit(runAsSpawnedDaemon())
@@ -148,9 +153,6 @@ func TestMain(m *testing.M) {
 	// above have already exited, so a subprocess daemon still gets the real one,
 	// and the one test that exercises it calls platformRedirectStderr directly.
 	redirectStderr = func(*os.File) error { return nil }
-	// After the roles, which are real daemons: the tests in this process never
-	// reach the developer's keychain (see cclink.IsolateKeychainForTests).
-	cclink.IsolateKeychainForTests()
 	os.Exit(m.Run())
 }
 

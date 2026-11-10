@@ -119,6 +119,11 @@ func IsolateKeychainForTests() {
 // realSecurityForbidden is set by IsolateKeychainForTests.
 var realSecurityForbidden atomic.Bool
 
+// KeychainIsolatedForTests reports whether IsolateKeychainForTests has run in
+// this process: a test re-executing its own binary asks it of the child, to
+// prove the child cannot reach the real keychain either.
+func KeychainIsolatedForTests() bool { return realSecurityForbidden.Load() }
+
 // refuseRealSecurity panics when a test package has forbidden the real binary.
 func refuseRealSecurity(args ...string) {
 	if realSecurityForbidden.Load() {
