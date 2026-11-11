@@ -201,7 +201,9 @@ func (a Account) StoredLoginSpent(stored cclink.Blob, live cclink.LoginStores, o
 // cannot be read is no reason to hold it: holding it protects nothing, and
 // costs the split repair that puts it in the other store -- leaving there a
 // login it replaced, which Claude Code may present next. A stored login no
-// store holds, or one beside a later login that may be a's, stays held.
+// store holds, or one beside a later login that may be a's, stays held -- and
+// so does every stored login when a store could not be read, since that store
+// may hold the later login.
 //
 // "Could be a's" is any login owners does not name as ANOTHER account's --
 // another account's stored login, or one its stored login replaced. That
@@ -211,6 +213,12 @@ func (a Account) StoredLoginSpent(stored cclink.Blob, live cclink.LoginStores, o
 // name still counts, because it may be a's newer one, and the repair would
 // then write the spent login over it.
 func (a Account) liveHoldsNewest(stored cclink.Blob, live cclink.LoginStores, owners LoginOwners) bool {
+	// A store that could not be read may hold the later login. The file's
+	// failure is FileErr; the keychain's is the zero stores ReadLoginStores
+	// returns with its error, in which no store holds the stored login.
+	if live.FileErr != nil {
+		return false
+	}
 	storedID := cclink.LoginIdentity(stored)
 	held := false
 	for _, login := range live.Logins() {
