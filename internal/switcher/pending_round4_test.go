@@ -127,9 +127,7 @@ func TestAnIntentThatCouldNotBeWrittenIsReportedWithTheFailure(t *testing.T) {
 	liveAs(t, "u-1")
 	kc := withItem(t, "u-1")
 	kc.WriteLandsThenTimesOut, kc.ReadsFailAfterWrite = true, true
-	if err := os.MkdirAll(mustPath(strategy.StatePath()), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	obstructStateLock(t)
 
 	_, err := Execute(openStore(t), Request{Target: target, LiveUUID: "u-1"})
 	if !errors.Is(err, cclink.ErrLoginOutcomeUnknown) {
@@ -150,11 +148,7 @@ func TestAnIntentThatCouldNotBeWrittenAheadIsTriedOnceMore(t *testing.T) {
 	liveAs(t, "u-1")
 	kc := withItem(t, "u-1")
 	kc.WriteLandsThenTimesOut, kc.ReadsFailAfterWrite = true, true
-	statePath := mustPath(strategy.StatePath())
-	if err := os.MkdirAll(statePath, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	kc.OnWrite = func() { _ = os.Remove(statePath) }
+	kc.OnWrite = obstructStateLock(t)
 
 	_, err := Execute(openStore(t), Request{Target: target, LiveUUID: "u-1"})
 	if !errors.Is(err, cclink.ErrLoginOutcomeUnknown) {
@@ -166,4 +160,17 @@ func TestAnIntentThatCouldNotBeWrittenAheadIsTriedOnceMore(t *testing.T) {
 	if got := PendingTarget(); got != "u-2" {
 		t.Fatalf("pending target = %q, want u-2: the intent was not recorded on the second try", got)
 	}
+}
+
+// obstructStateLock holds the engine state's lock, as another process writing
+// it would, so every write of the state times out while it can still be READ --
+// an unreadable state is a different thing, and holds every stored login. It
+// returns the release.
+func obstructStateLock(t *testing.T) (release func()) {
+	t.Helper()
+	lock := mustPath(strategy.StatePath()) + ".lock"
+	if err := os.MkdirAll(lock, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return func() { _ = os.Remove(lock) }
 }

@@ -21,7 +21,7 @@ func spentLogins(s *store.Store) map[string]bool {
 	if err != nil {
 		return nil
 	}
-	return s.SpentLogins(stores)
+	return s.SpentLogins(stores, store.LoadOracleRecord())
 }
 
 // spentLoginReason is why a command will not present a's stored login, in the

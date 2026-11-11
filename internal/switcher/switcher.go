@@ -661,7 +661,7 @@ func Execute(s *store.Store, req Request) (Result, error) {
 		// it would revoke the newer login (store.Account.StoredLoginSpent).
 		// Decided here, against the stores as they are under the lock, for the
 		// daemon and every attended caller alike.
-		if target, ok := s.Get(req.Target.UUID); ok && target.StoredLoginSpent(cur, stores, store.LoadOracleRecord()) {
+		if target, ok := s.Get(req.Target.UUID); ok && target.StoredLoginSpent(cur, stores, store.LoadOracleRecord()).Held() {
 			res.Outcome, res.FreshenErr = Stale, store.ErrStoredLoginSpent
 			return nil, cclink.ErrNoChange
 		}
