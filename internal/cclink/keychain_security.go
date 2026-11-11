@@ -47,8 +47,10 @@ var securityPath = "/usr/bin/security"
 // sleep.
 var keychainReadTimeout = 5 * time.Second
 
-// keychainWriteTimeout bounds every spawn that REPLACES the item -- the write
-// and the delete -- and the read that confirms a write which ran out of time.
+// keychainWriteTimeout bounds every spawn on the path that REPLACES the item:
+// the write itself, the reads under Claude Code's credential locks that it is
+// decided from, the read that confirms a write which ran out of time, and the
+// delete.
 //
 // It is separate from the read bound because running out of time means
 // something different here. A lookup killed at its deadline changed nothing. A
@@ -69,49 +71,51 @@ var keychainReadTimeout = 5 * time.Second
 // write that runs out of time is read back rather than reported as a failure
 // (see confirmKeychainWrite). A var so a test can shrink it rather than sleep.
 //
-// THE WRITE IS THE ONLY SPAWN UNDER CLAUDE CODE'S CREDENTIAL LOCKS THAT GETS
-// IT. Claude Code's own token refresh waits on those locks, so the bound is
-// paid there only for the one spawn whose outcome it buys: the merge-base read
-// beside it is a lookup, and the read-back, which asks the keychain that was
-// just too slow and so gets this bound, runs after the locks are released.
-// lockedKeychainBound is what that leaves.
+// THE READS A SWITCH DECIDES FROM GET IT TOO, not the lookup bound, and the
+// reason is the incident's other half: the switch that did not happen while an
+// account ran to its limit. The keychain is slowest exactly when a switch is
+// needed most, and a switch that gives up on its first read at the lookup
+// bound fails in that situation every time. The bound is paid inside Claude
+// Code's credential locks, which its own refresh waits on, so it is spent
+// there on nothing else: the read-back of a write that ran out of time, which
+// decides nothing that has to be written under the same hold, runs after the
+// locks are released. lockedKeychainBound is what that leaves.
 var keychainWriteTimeout = 30 * time.Second
 
-// lockedKeychainBound is the longest one locked pass of a switch spends in
-// `security` while it holds Claude Code's credential locks: the merge-base read
-// under the lookup bound, then the item write under the write bound, each with
-// the wait for its pipes -- 5 s + 1 s + 30 s + 1 s at today's values. It is
-// how long Claude Code's own refresh can be kept waiting by the keychain.
+// lockedKeychainBound is the longest one hold of Claude Code's credential
+// locks spends in `security`: the merge-base read, then the item write, each
+// under the write bound and with the wait for its pipes -- 2*(30 s + 1 s) at
+// today's values. It is how long Claude Code's own refresh can be kept waiting
+// by the keychain.
 //
-// It used to be three spawns at the write bound, about 93 s: the merge-base
-// read had the write bound too, and the read-back of a write that ran out of
-// time ran under the locks. Neither needed them. A lookup that runs out of
-// time changes nothing and fails the switch before anything is written, and
-// what the read-back finds decides nothing that has to be written under the
-// same hold: a landed write's file follows in a second pass that takes the
-// locks again and spends one more lookup (see writeMerged).
+// It used to be 93 s, three spawns: the read-back of a write that ran out of
+// time ran under the same hold. It now runs after the locks are released, and
+// a write it finds landed is completed by a SECOND hold that reads the item
+// again -- one spawn, 31 s at most -- to see it still holds that write before
+// the file follows (writeMerged). The two holds are apart, and Claude Code's
+// refresh can take the locks between them.
 //
 // The waits for the second and third lock, which happen with the first one
 // held, are not the keychain's and are not counted here: LockTimeout bounds
 // each, as it did before.
 func lockedKeychainBound() time.Duration {
-	return (keychainReadTimeout + keychainWaitDelay) + (keychainWriteTimeout + keychainWaitDelay)
+	return 2 * (keychainWriteTimeout + keychainWaitDelay)
 }
 
 // WorstCaseSwitch is the longest one switch can still be writing after the
 // intent it records ahead of itself: Claude Code's three credential locks
 // waited for in turn and the keychain spawns under them (lockedKeychainBound);
 // then, for a write that ran out of time, the read-back after the locks are
-// released; and, when that finds the write landed, the second locked pass that
-// brings the file into line -- the locks again, and one more lookup. At today's
-// values 2*(3*9 s) + 37 s + 31 s + 6 s is a little over two minutes.
+// released; and, when that finds the write landed, the second hold that brings
+// the file into line -- the locks again, and one more read of the item. At
+// today's values 2*(3*9 s) + 62 s + 31 s + 31 s is just under three minutes.
 //
 // It is what an intent written ahead of a switch is given before anybody may
 // conclude the switch did not take effect: younger than this, the write may
 // still land.
 func WorstCaseSwitch() time.Duration {
-	return 2*3*LockTimeout + lockedKeychainBound() +
-		(keychainWriteTimeout + keychainWaitDelay) + (keychainReadTimeout + keychainWaitDelay)
+	readOrWrite := keychainWriteTimeout + keychainWaitDelay
+	return 2*3*LockTimeout + lockedKeychainBound() + 2*readOrWrite
 }
 
 // keychainWaitDelay bounds the SECOND way a spawn can hang, which the deadline
@@ -392,9 +396,8 @@ func (it KeychainItem) Read(ctx context.Context) (string, bool, error) {
 	return it.readWithin(ctx, keychainReadTimeout)
 }
 
-// readWithin is Read under a caller-chosen deadline: the read-back of a write
-// that ran out of time reads with keychainWriteTimeout, for the reason that
-// bound's comment gives.
+// readWithin is Read under a caller-chosen deadline: the write path reads with
+// keychainWriteTimeout, for the reason that bound's comment gives.
 func (it KeychainItem) readWithin(ctx context.Context, bound time.Duration) (string, bool, error) {
 	res, err := runSecurity(ctx, bound, "find-generic-password", "-a", it.Account, "-w", "-s", it.Service)
 	if err != nil {
@@ -566,8 +569,8 @@ func LoadKeychainCredentials(ctx context.Context) (Blob, bool, error) {
 }
 
 // loadKeychainCredentialsWithin is LoadKeychainCredentials under a caller-chosen
-// deadline. Every read is a lookup but one: the read that confirms a write which
-// ran out of time is held to keychainWriteTimeout.
+// deadline. The write path reads the item with keychainWriteTimeout: the base a
+// switch merges onto, and the read that confirms a write which ran out of time.
 func loadKeychainCredentialsWithin(ctx context.Context, bound time.Duration) (Blob, bool, error) {
 	secret, ok, err := CredentialKeychainItem().readWithin(ctx, bound)
 	if err != nil || !ok {

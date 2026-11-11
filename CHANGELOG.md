@@ -19,17 +19,17 @@ must reference accounts by `uuid` or `alias`.
 ### Changed
 
 - **A switch keeps Claude Code's token refresh waiting on the Keychain for
-  at most about 37 seconds, down from about 93.** Claude Code refreshes its
-  login under the same credential locks a switch writes under, and a switch
-  used to make up to three Keychain calls inside them, each allowed 30
-  seconds. The read a switch starts from is now a lookup with the 5-second
-  lookup limit -- a Keychain too slow for it fails the switch before anything
-  is written -- and only the write keeps 30 seconds. A write that runs out of
-  time is read back after the locks are released. When the read-back finds the
-  new login, the credentials file follows in a second, short pass under the
-  locks, so the switch still completes; when the Keychain item has changed
-  again by then, ccdad says the outcome is unknown and the daemon's next pass
-  puts one login in both stores.
+  at most about a minute, down from about a minute and a half.** Claude Code
+  refreshes its login under the same credential locks a switch writes under,
+  and a switch used to make up to three Keychain calls inside them, each
+  allowed 30 seconds: the read it starts from, the write, and the read-back of
+  a write that ran out of time. The read-back now runs after the locks are
+  released. When it finds the new login, the credentials file follows in a
+  second, separate pass under the locks that reads the Keychain item once
+  more, so the switch still completes; when the item has changed again by
+  then, ccdad says the outcome is unknown and the daemon's next pass puts one
+  login in both stores. Every Keychain call on a switch's path still has 30
+  seconds, so a loaded Mac is given as long as before.
 
 ### Fixed
 
