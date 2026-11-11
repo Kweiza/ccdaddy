@@ -429,10 +429,10 @@ func newProfile(uuid string) (runSession, error) {
 // this takes anyway, so the environment route is more machinery for a worse
 // contract.
 func authorise(stderr io.Writer, session runSession, blob cclink.Blob, label string) ([]string, bool, error) {
-	rec, ok := cclink.TokenRecordOf(blob)
-	if !ok {
+	if seedsLogin(blob) {
 		return session.env, true, nil
 	}
+	rec, _ := cclink.TokenRecordOf(blob)
 	switch rec.Kind {
 	case "setup-token":
 		return setEnv(session.env, "CLAUDE_CODE_OAUTH_TOKEN", rec.Token), false, nil
@@ -451,6 +451,16 @@ func authorise(stderr io.Writer, session runSession, blob cclink.Blob, label str
 	default:
 		return nil, false, UsageError("%s carries a %q credential ccdad does not know how to run", label, rec.Kind)
 	}
+}
+
+// seedsLogin reports whether a session run with blob is given its OAuth login,
+// seeded into the session's credentials file -- rather than a token ccdad
+// holds, which authorise hands over another way and which wins when an
+// account has both. It is what decides whether the session can present the
+// stored refresh token at all, and so whether a hold on it applies.
+func seedsLogin(blob cclink.Blob) bool {
+	_, isToken := cclink.TokenRecordOf(blob)
+	return !isToken
 }
 
 // installProfileAPIKey writes the account's key into the profile's own global
@@ -1419,7 +1429,7 @@ func newRunCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if hold.Held() {
+			if hold.Held() && seedsLogin(blob) {
 				return WithCode(fmt.Errorf("not running %s: %s", target.Label(), spentLoginReason(target)), ExitBlocked)
 			}
 
