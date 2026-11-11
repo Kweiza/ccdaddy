@@ -3,10 +3,12 @@ package daemon
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/cclink/cclinktest"
+	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
@@ -221,5 +223,39 @@ func TestARepairOverALoginOnlyTheOracleNamedGoesThrough(t *testing.T) {
 	tick(t, e)
 	if secret, _ := kc.Secret(); !holds(secret, "u-1") {
 		t.Fatalf("the item still holds the older login: %s", secret)
+	}
+}
+
+// E2 with the record of spent stored logins unreadable. The item holds u-2's
+// stored login, hours old; the file holds u-1's, refreshed since. u-1's later
+// login is another account's: it says nothing about whether u-2's stored
+// login is spent, and u-2's is the login Claude Code reads first. Counting it
+// against u-2 held u-2 and refused the repair on every pass, leaving the split
+// v0.29.1 exists to repair until a person dealt with the record.
+func TestCcdadsOwnUnconfirmedSwitchIsCompletedWithTheRecordUnreadable(t *testing.T) {
+	isolateEngine(t)
+	seedAccountExpiring(t, "u-1", "org-1", tickEpoch.Add(8*time.Hour))
+	seedAccountExpiring(t, "u-2", "org-2", tickEpoch.Add(time.Hour))
+	writeLiveLogin(t, "u-1", tickEpoch.Add(8*time.Hour))
+	cclinktest.Install(t, cclinktest.NewKeychain(loginExpiring("u-2", tickEpoch.Add(time.Hour))))
+	recordActive(t, "u-1")
+	recordPending(t, "u-2", strategy.Departure{From: "u-1", Closing: usage.WindowFiveHour})
+	readings(t, map[string]float64{"u-1": 36, "u-2": 40})
+	if err := os.WriteFile(mustPath(store.SpentRecordPath()), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	now := tickEpoch
+	e := engineFor(t, tokensAreFine, noFetch)
+	e.Now = func() time.Time { return now }
+	for i := 0; i < 3; i++ {
+		tick(t, e)
+		now = now.Add(time.Minute)
+	}
+	if !holds(fileNow(t), "u-2") {
+		t.Fatalf("the repair of ccdad's own switch was refused with the record unreadable:\n%s", fileNow(t))
+	}
+	if _, ok := pendingOnDisk(t); ok {
+		t.Fatal("the switch is still pending")
 	}
 }
