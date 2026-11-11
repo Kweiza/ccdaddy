@@ -255,7 +255,7 @@ type Engine struct {
 	saidStore loginMemory[struct{}]
 	// spent is the accounts whose stored refresh token this pass found spent
 	// (setSpent, holdSpentToken). Guarded by mu.
-	spent map[string]store.Hold
+	spent map[string]*store.SpentError
 	// unstored is the records of spent stored logins that could not be
 	// written yet, and saidUnstored latches the line that says so; see
 	// nameUnstored. Tick goroutine only.
@@ -574,7 +574,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	if ev.LoginKnown {
 		e.ageLoginMemory(ev.Stores, now)
 		e.forgetOracleRecord(s, ev.Stores)
-		e.setSpent(ev.Spent)
+		e.setSpent(s, ev.Spent)
 	}
 	e.settlePending(s, ev, now)
 	repairing := false
@@ -592,7 +592,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 		if e.identifyStores(ctx, s, ev) {
 			// A login it named and could not store holds its account's stored
 			// token from this pass, not the next: the stores were read above.
-			e.setSpent(s.SpentLogins(ev.Stores, e.oracleRecord()))
+			e.setSpent(s, s.SpentLogins(ev.Stores, e.oracleRecord()))
 		} else {
 			res, swapErr = e.act(ctx, s, ev)
 		}
