@@ -6,7 +6,6 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/provider"
-	"github.com/Kweiza/ccdaddy/internal/strategy"
 )
 
 // ErrStoredLoginSpent is a path refusing to present an account's stored login
@@ -31,11 +30,11 @@ func (e *SpentError) Error() string { return fmt.Sprintf("%v: %q", ErrStoredLogi
 func (e *SpentError) Unwrap() error { return ErrStoredLoginSpent }
 
 // OracleRecord is what the daemon has recorded about logins it could not
-// store (strategy.State): whose a login is, by LoginHash, as the identity
+// store (SpentRecord): whose a login is, by LoginHash, as the identity
 // oracle named it; and, per account, the stored login known to be spent and
 // the newer login that spent it, by LoginHash ("" for a spent login that could
 // not be read). LoadError is why the record could not be read, if it could
-// not. *strategy.State is one.
+// not. *SpentRecord is one.
 type OracleRecord interface {
 	NamedLogin(loginHash string) (uuid string, ok bool)
 	SpentStoredLogin(uuid string) (spent, newer string, ok bool)
@@ -153,19 +152,19 @@ func (a Account) SpentRecordHolds(stored cclink.Blob, rec OracleRecord) bool {
 	return spent != "" && LoginHash(id) == spent
 }
 
-// LoadOracleRecord is the daemon's record as the engine state holds it. A
-// state that was never written records nothing. One that cannot be read or
-// parsed reports why in LoadError, and holds every stored login
-// (StoredLoginSpent).
+// LoadOracleRecord is the daemon's record as its file holds it
+// (LoadSpentRecord). A record that was never written records nothing. One
+// that cannot be read or parsed reports why in LoadError, and holds stored
+// logins (StoredLoginSpent).
 func LoadOracleRecord() OracleRecord {
-	st, err := strategy.LoadState()
+	r, err := LoadSpentRecord()
 	if err != nil {
 		return unreadableRecord{err}
 	}
-	return st
+	return r
 }
 
-// unreadableRecord is a record whose state could not even be located.
+// unreadableRecord is a record whose file could not even be located.
 type unreadableRecord struct{ err error }
 
 func (unreadableRecord) NamedLogin(string) (string, bool)               { return "", false }

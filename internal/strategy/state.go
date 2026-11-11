@@ -127,42 +127,6 @@ type stateFile struct {
 	// what decides the direction of the split repair that follows: the repair
 	// completes this switch rather than undo it. A completed switch clears it.
 	PendingSwitch *pendingSwitch `json:"pending_switch,omitempty"`
-	// NamedLogins is the identity oracle's answer about every login it named
-	// as a managed account's and ccdad could not store: the account's uuid,
-	// keyed by the login's store.LoginHash -- a hash, for the reason
-	// SupersededLogins in accounts.toml is one.
-	//
-	// It is one fact about such a login nothing on this machine can derive.
-	// Its refresh token matches no stored login, and only the profile endpoint
-	// can say whose it is. Whether a login store still holds it, and whether
-	// it was issued after the account's stored login, every process derives
-	// for itself (store.Account.StoredLoginSpent).
-	NamedLogins map[string]string `json:"named_logins,omitempty"`
-	// SpentStoredLogins is, per account uuid, the stored login known to be
-	// SPENT -- the one the account stored when the oracle named a newer login
-	// of it that ccdad then could not store -- with that newer login, both as
-	// store.LoginHash.
-	//
-	// It is the other fact nothing can derive later. The newer login can be
-	// rotated again, out of every store, before the oracle names what replaced
-	// it, and then nothing on the machine connects the stored login to it; the
-	// stored refresh token is no less spent, and presenting it revokes the
-	// whole family. So the hold this records lasts until the account's stored
-	// login changes from the spent one, in every process
-	// (store.Account.StoredLoginSpent).
-	//
-	// Both live here, beside the cooldown, rather than with the account in
-	// accounts.toml: they are written when storing a login FAILED, and that
-	// write may have failed on the store's own lock, which accounts.toml is
-	// under. This file has a lock of its own.
-	SpentStoredLogins map[string]spentStoredLogin `json:"spent_stored_logins,omitempty"`
-}
-
-// spentStoredLogin is the on-disk shape of one SpentStoredLogins entry. Spent
-// is "" when the stored login could not be read when it was found spent.
-type spentStoredLogin struct {
-	Spent string `json:"spent,omitempty"`
-	Newer string `json:"newer"`
 }
 
 // pendingSwitch is the on-disk shape of State.PendingSwitch.
@@ -262,73 +226,6 @@ func (s *State) ClearPendingIf(to string, at time.Time) {
 	if s.IsPending(to, at) {
 		s.data.PendingSwitch = nil
 	}
-}
-
-// NamedLogin is the account the identity oracle named the login with this hash
-// as, when ccdad could not store it (stateFile.NamedLogins).
-func (s *State) NamedLogin(loginHash string) (uuid string, ok bool) {
-	uuid, ok = s.data.NamedLogins[loginHash]
-	return uuid, ok
-}
-
-// NameLogin records the oracle's answer that the login with this hash is
-// uuid's, for a login ccdad could not store.
-func (s *State) NameLogin(loginHash, uuid string) {
-	if s.data.NamedLogins == nil {
-		s.data.NamedLogins = map[string]string{}
-	}
-	s.data.NamedLogins[loginHash] = uuid
-}
-
-// ForgetNamedLogins forgets every named login keep refuses, and reports whether
-// it forgot any.
-func (s *State) ForgetNamedLogins(keep func(loginHash string) bool) bool {
-	forgot := false
-	for h := range s.data.NamedLogins {
-		if !keep(h) {
-			delete(s.data.NamedLogins, h)
-			forgot = true
-		}
-	}
-	return forgot
-}
-
-// SpentStoredLogin is the stored login of uuid known to be spent, and the
-// newer login that spent it, by store.LoginHash (stateFile.SpentStoredLogins).
-func (s *State) SpentStoredLogin(uuid string) (spent, newer string, ok bool) {
-	r, ok := s.data.SpentStoredLogins[uuid]
-	return r.Spent, r.Newer, ok
-}
-
-// RecordSpentStoredLogin records that uuid's stored login with hash spent ("" for
-// one that could not be read) was spent by the login with hash newer.
-//
-// An unknown spent login never replaces a known one. It is what a retry
-// records when its read of the stored login failed, which says nothing about
-// which login is spent; recorded over a known hash it would lift the hold the
-// moment the stored login could be read again -- and the login read then may
-// be the very one that is spent.
-func (s *State) RecordSpentStoredLogin(uuid, spent, newer string) {
-	if s.data.SpentStoredLogins == nil {
-		s.data.SpentStoredLogins = map[string]spentStoredLogin{}
-	}
-	if prev, ok := s.data.SpentStoredLogins[uuid]; ok && spent == "" {
-		spent = prev.Spent
-	}
-	s.data.SpentStoredLogins[uuid] = spentStoredLogin{Spent: spent, Newer: newer}
-}
-
-// ForgetSpentStoredLogins forgets the record of every account keep refuses, and
-// reports whether it forgot any.
-func (s *State) ForgetSpentStoredLogins(keep func(uuid string) bool) bool {
-	forgot := false
-	for uuid := range s.data.SpentStoredLogins {
-		if !keep(uuid) {
-			delete(s.data.SpentStoredLogins, uuid)
-			forgot = true
-		}
-	}
-	return forgot
 }
 
 // departuresFor is every remembered departure except the live account's own.
@@ -492,9 +389,7 @@ func storeRoot() (string, error) {
 // No lock is needed to read: every write is a rename, so a reader sees one whole
 // version of the document or another, never a torn one. A file that cannot be
 // read or parsed degrades to an empty state — no cooldown, no quarantine — and
-// records why in LoadError. The spent stored logins are the exception: an
-// unreadable state holds every one of them (store.Account.StoredLoginSpent),
-// and WithState will not write over it. That degradation is deliberately towards MORE
+// records why in LoadError. That degradation is deliberately towards MORE
 // switching rather than less: a quarantine that cannot be read is not evidence
 // that an account is dead, and refusing to switch at all on a corrupt file
 // would park the engine exactly the way anti-flap must never park it: those
@@ -530,8 +425,6 @@ func LoadState() (*State, error) {
 	s.data.CodexLastSwitchTo = parsed.CodexLastSwitchTo
 	s.data.Departures = parsed.Departures
 	s.data.PendingSwitch = parsed.PendingSwitch
-	s.data.NamedLogins = parsed.NamedLogins
-	s.data.SpentStoredLogins = parsed.SpentStoredLogins
 	s.data.Version = parsed.Version
 	return s, nil
 }
@@ -580,17 +473,6 @@ func WithState(timeout time.Duration, fn func(*State) error) (err error) {
 	s, err := LoadState()
 	if err != nil {
 		return err
-	}
-	// NEVER OVER A STATE THAT COULD NOT BE READ. Reading one degrades to an
-	// empty state, towards more switching, and that is right for a read; for a
-	// write it would put the empty state in the file's place, and with it every
-	// spent stored login it recorded would be released, in every process,
-	// without a word (stateFile.SpentStoredLogins). A read that fails holds
-	// every stored login instead (store.Account.StoredLoginSpent), and the file
-	// stays for a person to repair or remove; `ccdad doctor` names it.
-	if lerr := s.LoadError(); lerr != nil {
-		return fmt.Errorf("not writing the engine state over one that could not be read (%w); repair or "+
-			"remove %s", lerr, filepath.Join(root, StateFileName))
 	}
 	if err := fn(s); err != nil {
 		return err

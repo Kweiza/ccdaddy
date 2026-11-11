@@ -9,7 +9,6 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/store"
-	"github.com/Kweiza/ccdaddy/internal/strategy"
 )
 
 // THE HOLD OUTLIVES A SECOND ROTATION. The oracle names G1 as u-1's newer
@@ -87,7 +86,7 @@ func TestARecordThatCouldNotBeWrittenStillHoldsAndIsWrittenLater(t *testing.T) {
 	adoptInto = func(*store.Store, store.Account, cclink.Blob) error {
 		return errors.New("locking the ccdad store: timed out")
 	}
-	lock := mustPath(strategy.StatePath()) + ".lock"
+	lock := mustPath(store.SpentRecordPath()) + ".lock"
 	if err := os.MkdirAll(lock, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +113,7 @@ func TestARecordThatCouldNotBeWrittenStillHoldsAndIsWrittenLater(t *testing.T) {
 	writeLiveLoginRT(t, "RT-u-1-g2", tickEpoch.Add(10*time.Hour))
 	now = now.Add(resolveMinInterval)
 	tick(t, e)
-	st, err := strategy.LoadState()
+	st, err := store.LoadSpentRecord()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +137,7 @@ func TestAPassThatCannotReadTheStoresKeepsTheLastVerdict(t *testing.T) {
 	kc := withItem(t, "u-2")
 	writeLiveLoginRT(t, "RT-u-1-newer", tickEpoch.Add(9*time.Hour))
 	recordActive(t, "u-2")
-	if err := strategy.WithState(time.Second, func(st *strategy.State) error {
+	if err := store.WithSpentRecord(time.Second, func(st *store.SpentRecord) error {
 		st.NameLogin(store.LoginHash("refresh:RT-u-1-newer"), "u-1")
 		return nil
 	}); err != nil {

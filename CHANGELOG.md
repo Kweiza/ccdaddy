@@ -31,13 +31,14 @@ must reference accounts by `uuid` or `alias`.
   then says the outcome is unknown, leaves the file alone, and the daemon's
   next pass puts one login in both stores. Every Keychain call on a switch's
   path still has 30 seconds, so a loaded Mac is given as long as before.
-- **An engine state that cannot be read now holds every stored login, and is
-  not written over.** `~/.ccdad/strategy.json` now also records which stored
-  logins are spent (below). When it cannot be read or parsed, which ones are
-  spent is unknown, so no command presents a stored login until it can, and
-  ccdad no longer replaces the file with an empty one on its next write -- that
-  would release every hold in it. `ccdad doctor`'s `engine-state` row fails
-  and says to repair or remove the file.
+- **A record of spent stored logins that cannot be read holds stored logins,
+  and is not written over.** The record below lives in a file of its own,
+  `~/.ccdad/spent-logins.json`. When it cannot be read or parsed, which stored
+  logins are spent is unknown, so no command presents a stored login until it
+  can, and ccdad does not replace the file with an empty one -- that would
+  release every hold in it. `ccdad doctor`'s `spent-logins` row fails. The
+  engine state, `strategy.json`, is untouched by this: cooldowns,
+  quarantines, a switch's intent and the Codex lane go on as before.
 
 ### Fixed
 
@@ -50,7 +51,7 @@ must reference accounts by `uuid` or `alias`.
   newer one, and `ccdad run`, `ccdad probe` and `ccdad status --refresh` could
   present it too.
   - The daemon now records the named login and the spent stored login in
-    `strategy.json`, and every command checks that record and Claude Code's
+    `spent-logins.json`, and every command checks that record and Claude Code's
     login stores, on the very copy it is about to present: `ccdad switch` and
     `ccdad run` refuse with exit 4, a probe is skipped, and a refresh is not
     attempted. A Keychain that cannot be read does not lift the hold, and a

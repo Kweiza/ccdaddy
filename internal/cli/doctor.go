@@ -701,10 +701,8 @@ func checkEngineState(usable bool) check {
 		return check{"engine-state", levelFail, err.Error()}
 	}
 	if serr := st.LoadError(); serr != nil {
-		return check{"engine-state", levelFail, fmt.Sprintf(
-			"%v — the cooldown and every quarantine are being ignored, and no stored login is presented, "+
-				"because which ones are spent cannot be read. ccdad does not write over it: repair or remove %s",
-			serr, namePath(strategy.StatePath()))}
+		return check{"engine-state", levelWarn, fmt.Sprintf(
+			"%v — the cooldown and every quarantine are being ignored until it is rewritten", serr)}
 	}
 	return check{"engine-state", levelOK, namePath(strategy.StatePath())}
 }

@@ -10,7 +10,6 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/provider"
-	"github.com/Kweiza/ccdaddy/internal/strategy"
 )
 
 // loginIssued is a login whose expiry -- which orders logins by when they were
@@ -162,7 +161,7 @@ func TestAnUnreadableRecordHoldsEveryStoredLogin(t *testing.T) {
 		t.Fatalf("with no engine state at all, %v are held", got)
 	}
 
-	if err := os.WriteFile(filepath.Join(dir, strategy.StateFileName), []byte("{not json"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, SpentRecordFileName), []byte("{not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	got := s.SpentLogins(cclink.LoginStores{}, LoadOracleRecord())
@@ -172,7 +171,7 @@ func TestAnUnreadableRecordHoldsEveryStoredLogin(t *testing.T) {
 	if got["u-2"].Held() {
 		t.Error("u-2, which stores no login to present, is held")
 	}
-	unreadable := record{err: errors.New("parsing strategy.json: unexpected end of JSON input")}
+	unreadable := record{err: errors.New("parsing spent-logins.json: unexpected end of JSON input")}
 	if (Account{UUID: "u-1"}).StoredLoginSpent(claudeLogin("RT-1"), cclink.LoginStores{}, unreadable) != HeldUnreadableRecord {
 		t.Error("StoredLoginSpent ignores a record that could not be read")
 	}

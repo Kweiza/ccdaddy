@@ -8,7 +8,6 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/cclink/cclinktest"
 	"github.com/Kweiza/ccdaddy/internal/store"
-	"github.com/Kweiza/ccdaddy/internal/strategy"
 )
 
 // An account the CREDENTIALS FILE holds behind a keychain item naming somebody
@@ -46,7 +45,7 @@ func TestAStoredLoginANewerOneHasSpentIsNotPresented(t *testing.T) {
 	expired := oauthRecord("a1", "r1", time.Now().Add(-time.Hour), "")
 	seed(t, "u-1", expired)
 	writeLive(t, oauthRecord("a1-newer", "r1-newer", time.Now().Add(8*time.Hour), ""))
-	if err := strategy.WithState(time.Second, func(st *strategy.State) error {
+	if err := store.WithSpentRecord(time.Second, func(st *store.SpentRecord) error {
 		st.NameLogin(store.LoginHash("refresh:r1-newer"), "u-1")
 		st.RecordSpentStoredLogin("u-1", store.LoginHash("refresh:r1"), store.LoginHash("refresh:r1-newer"))
 		return nil
@@ -79,7 +78,7 @@ func TestAStoredLoginANewerOneHasSpentIsNotPresented(t *testing.T) {
 func TestARecordedSpentLoginIsNotPresentedWhenTheStoresCannotBeRead(t *testing.T) {
 	isolate(t)
 	seed(t, "u-1", oauthRecord("a1", "r1", time.Now().Add(time.Hour), ""))
-	if err := strategy.WithState(time.Second, func(st *strategy.State) error {
+	if err := store.WithSpentRecord(time.Second, func(st *store.SpentRecord) error {
 		st.RecordSpentStoredLogin("u-1", store.LoginHash("refresh:r1"), store.LoginHash("refresh:r1-newer"))
 		return nil
 	}); err != nil {
@@ -102,7 +101,7 @@ func TestARecordedSpentLoginIsNotPresentedWhenTheStoresCannotBeRead(t *testing.T
 func TestTheHoldIsDecidedOnTheStoredLoginThatIsPresented(t *testing.T) {
 	isolate(t)
 	seed(t, "u-1", oauthRecord("a1", "r1", time.Now().Add(-time.Hour), ""))
-	if err := strategy.WithState(time.Second, func(st *strategy.State) error {
+	if err := store.WithSpentRecord(time.Second, func(st *store.SpentRecord) error {
 		st.RecordSpentStoredLogin("u-1", store.LoginHash("refresh:r1"), store.LoginHash("refresh:r1-newer"))
 		return nil
 	}); err != nil {

@@ -8,7 +8,6 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/store"
-	"github.com/Kweiza/ccdaddy/internal/strategy"
 )
 
 // Round 7.
@@ -46,7 +45,7 @@ func TestAFailedAdoptionRacingALaterStoredLoginHoldsNothing(t *testing.T) {
 	if _, verdict := e.resolveStore(context.Background(), openEngineStore(t), g1); verdict != liveAdoptFailed {
 		t.Fatalf("verdict = %v, want adopt-failed", verdict)
 	}
-	st, err := strategy.LoadState()
+	st, err := store.LoadSpentRecord()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,8 +99,8 @@ func TestAPassForgetsTheRecordThatNoLongerHoldsAnything(t *testing.T) {
 	// u-2 stores another login since: its record no longer holds.
 	storeLogin(t, a2, blobExpiring("RT-u-2-later", tickEpoch.Add(10*time.Hour)))
 
-	state := func() *strategy.State {
-		st, err := strategy.LoadState()
+	state := func() *store.SpentRecord {
+		st, err := store.LoadSpentRecord()
 		if err != nil {
 			t.Fatal(err)
 		}
