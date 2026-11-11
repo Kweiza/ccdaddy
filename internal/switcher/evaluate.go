@@ -127,6 +127,18 @@ type EvalOptions struct {
 	// store it has already named reads as that account's (LiveResolved). Nil
 	// knows nothing, which is every one-shot caller.
 	Owners Owners
+	// Record is the record of spent stored logins to decide from. Nil reads
+	// it from disk; the daemon passes its own, which holds records it could
+	// not write yet.
+	Record store.OracleRecord
+}
+
+// record is the record of spent stored logins the pass decides from.
+func (o EvalOptions) record() store.OracleRecord {
+	if o.Record != nil {
+		return o.Record
+	}
+	return store.LoadOracleRecord()
 }
 
 // provider is the pass's provider, defaulting a zero value to Claude.
@@ -175,7 +187,7 @@ func Evaluate(s *store.Store, opts EvalOptions) (Evaluation, error) {
 	stores, err := cclink.ReadLoginStores()
 	// Taken whether or not the read succeeded: on a failed one the stores are
 	// the zero value, no evidence, and the daemon's record decides alone.
-	ev.Spent = s.SpentLogins(stores, store.LoadOracleRecord())
+	ev.Spent = s.SpentLogins(stores, opts.record())
 	if err == nil {
 		ev.Stores = stores
 		ev.Login, ev.LoginKnown = ViewLogin(stores, accounts, s.Credentials, s.ActiveUUID(), opts.Owners), true
