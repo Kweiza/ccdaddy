@@ -287,8 +287,8 @@ func TestASpentErrorSaysWhyItsHoldHolds(t *testing.T) {
 func TestAnotherAccountsLaterLoginDoesNotHoldTheLoginClaudeCodeIsOn(t *testing.T) {
 	unreadable := record{err: errors.New("parsing spent-logins.json: unexpected end of JSON input")}
 	stored := loginIssued("RT-u2", 1000)
-	a := Account{UUID: "u-2"}
-	others := []Account{{UUID: "u-1", SupersededLogins: LoginHash("refresh:RT-u1-old")}, a}
+	a := Account{UUID: "u-2", Provider: provider.Claude}
+	others := []Account{{UUID: "u-1", Provider: provider.Claude, SupersededLogins: LoginHash("refresh:RT-u1-old")}, a}
 	owners := OwnersOf(others, func(uuid string) (cclink.Blob, error) {
 		if uuid == "u-1" {
 			return loginIssued("RT-u1", 3000), nil
@@ -322,5 +322,29 @@ func TestAStoreThatCouldNotBeReadKeepsTheNewestLoginHeld(t *testing.T) {
 	live := cclink.LoginStores{HasItem: true, Item: g0, FileErr: errors.New("reading the credentials file: permission denied")}
 	if got := (Account{UUID: "u-1"}).StoredLoginSpent(g0, live, nil, unreadable); got != HeldUnreadableRecord {
 		t.Fatalf("StoredLoginSpent = %v, want HeldUnreadableRecord: the file that could not be read may hold G1", got)
+	}
+}
+
+// A Codex row proves nothing about a Claude login, whatever its blob holds:
+// `ccdad import` trusts a row's provider, so a Codex row can carry a
+// Claude-shaped login, and shape alone does not prove ownership. A later
+// login only such a row holds is a login nobody can name -- the switcher's
+// attribution says so too -- and it still counts against a stored login.
+func TestACodexRowsClaudeShapedLoginNamesNobody(t *testing.T) {
+	unreadable := record{err: errors.New("parsing spent-logins.json: unexpected end of JSON input")}
+	storedA := loginIssued("RT-a", 1000)
+	accounts := []Account{
+		{UUID: "u-a", Provider: provider.Claude},
+		{UUID: "u-x", Provider: provider.Codex},
+	}
+	owners := OwnersOf(accounts, func(uuid string) (cclink.Blob, error) {
+		if uuid == "u-x" {
+			return loginIssued("RT-x", 3000), nil
+		}
+		return storedA, nil
+	})
+	live := cclink.LoginStores{HasItem: true, Item: storedA, File: loginIssued("RT-x", 3000)}
+	if got := accounts[0].StoredLoginSpent(storedA, live, owners, unreadable); got != HeldUnreadableRecord {
+		t.Fatalf("StoredLoginSpent = %v, want HeldUnreadableRecord: a Codex row's Claude-shaped login names nobody", got)
 	}
 }
