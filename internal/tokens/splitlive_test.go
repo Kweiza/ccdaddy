@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Kweiza/ccdaddy/internal/cclink"
+	"github.com/Kweiza/ccdaddy/internal/cclink/cclinktest"
 )
 
 // An account the CREDENTIALS FILE holds behind a keychain item naming somebody
@@ -20,8 +20,8 @@ func TestAnAccountLiveInTheFileBehindTheItemIsNotRefreshed(t *testing.T) {
 	expired := oauthRecord("a1", "r1", time.Now().Add(-time.Hour), "")
 	seed(t, "u-1", expired)
 	writeLive(t, expired)
-	t.Cleanup(cclink.SetKeychainForTest(cclink.NewFakeKeychain(
-		`{"claudeAiOauth":` + string(oauthRecord("a2", "r2", time.Now().Add(time.Hour), "")) + `}`)))
+	cclinktest.Install(t, cclinktest.NewKeychain(
+		`{"claudeAiOauth":`+string(oauthRecord("a2", "r2", time.Now().Add(time.Hour), ""))+`}`))
 
 	src := sourceFor(t, refusingEndpoint(t))
 	got, err := src.AccessToken(context.Background(), "u-1")

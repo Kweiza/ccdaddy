@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
+	"github.com/Kweiza/ccdaddy/internal/cclink/cclinktest"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
@@ -16,7 +17,7 @@ import (
 // records.
 
 // splitOnto is the incident's machine with the item on u-2 and the file on u-1.
-func splitOnto(t *testing.T) *cclink.FakeKeychain {
+func splitOnto(t *testing.T) *cclinktest.Keychain {
 	t.Helper()
 	isolate(t)
 	seed(t, "u-1", "chan@example.com")

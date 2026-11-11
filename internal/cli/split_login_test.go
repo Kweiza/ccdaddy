@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Kweiza/ccdaddy/internal/cclink"
+	"github.com/Kweiza/ccdaddy/internal/cclink/cclinktest"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/store"
 )
@@ -15,13 +15,13 @@ import (
 
 // splitMachine is the incident's machine: chan in the credentials file and in
 // ccdad's record, support in the keychain item Claude Code reads first.
-func splitMachine(t *testing.T) *cclink.FakeKeychain {
+func splitMachine(t *testing.T) *cclinktest.Keychain {
 	t.Helper()
 	seedAccount(t, "uuid-chan", "chan@example.com")
 	seedAccount(t, "uuid-support", "support@example.com")
 	writeLiveFile(t, liveLoginJSON("RT-uuid-chan", ""))
-	kc := cclink.NewFakeKeychain(liveLoginJSON("RT-uuid-support", ""))
-	t.Cleanup(cclink.SetKeychainForTest(kc))
+	kc := cclinktest.NewKeychain(liveLoginJSON("RT-uuid-support", ""))
+	cclinktest.Install(t, kc)
 	recordLive(t, "uuid-chan")
 	return kc
 }
@@ -98,7 +98,7 @@ func TestDoctorPassesALoginWhoseStoresAndRecordAgree(t *testing.T) {
 	suppressAutoStart(t)
 	seedAccount(t, "uuid-support", "support@example.com")
 	writeLiveFile(t, liveLoginJSON("RT-uuid-support", ""))
-	t.Cleanup(cclink.SetKeychainForTest(cclink.NewFakeKeychain(liveLoginJSON("RT-uuid-support", ""))))
+	cclinktest.Install(t, cclinktest.NewKeychain(liveLoginJSON("RT-uuid-support", "")))
 	recordLive(t, "uuid-support")
 
 	_, r, _ := runDoctor(t)
@@ -115,7 +115,7 @@ func TestDoctorWarnsWhenOnlyTheRecordIsBehind(t *testing.T) {
 	seedAccount(t, "uuid-chan", "chan@example.com")
 	seedAccount(t, "uuid-support", "support@example.com")
 	writeLiveFile(t, liveLoginJSON("RT-uuid-support", ""))
-	t.Cleanup(cclink.SetKeychainForTest(cclink.NewFakeKeychain(liveLoginJSON("RT-uuid-support", ""))))
+	cclinktest.Install(t, cclinktest.NewKeychain(liveLoginJSON("RT-uuid-support", "")))
 	recordLive(t, "uuid-chan")
 
 	_, r, _ := runDoctor(t)
@@ -132,7 +132,7 @@ func TestDoctorWarnsAboutAFileItCannotNameBesideADifferentItem(t *testing.T) {
 	suppressAutoStart(t)
 	seedAccount(t, "uuid-support", "support@example.com")
 	writeLiveFile(t, liveLoginJSON("RT-stranger", ""))
-	t.Cleanup(cclink.SetKeychainForTest(cclink.NewFakeKeychain(liveLoginJSON("RT-uuid-support", ""))))
+	cclinktest.Install(t, cclinktest.NewKeychain(liveLoginJSON("RT-uuid-support", "")))
 	recordLive(t, "uuid-support")
 
 	_, r, _ := runDoctor(t)
@@ -152,7 +152,7 @@ func TestSwitchDoesNotCallARecordOnlyCorrectionSplit(t *testing.T) {
 	seedAccount(t, "uuid-chan", "chan@example.com")
 	seedAccount(t, "uuid-support", "support@example.com")
 	writeLiveFile(t, liveLoginJSON("RT-uuid-support", ""))
-	t.Cleanup(cclink.SetKeychainForTest(cclink.NewFakeKeychain(liveLoginJSON("RT-uuid-support", ""))))
+	cclinktest.Install(t, cclinktest.NewKeychain(liveLoginJSON("RT-uuid-support", "")))
 	recordLive(t, "uuid-chan")
 
 	_, _, stderr, _ := runRoot(t, "switch", "support@example.com")
@@ -175,7 +175,7 @@ func TestAnAPIKeySwitchIsNotAlreadyOnWhileTheFileHoldsALogin(t *testing.T) {
 	if code, _, _, top := runRoot(t, "switch", "key@example.com"); code != ExitOK {
 		t.Fatalf("first switch = %d (%s)", code, top)
 	}
-	t.Cleanup(cclink.SetKeychainForTest(cclink.NewFakeKeychain(`{}`)))
+	cclinktest.Install(t, cclinktest.NewKeychain(`{}`))
 	writeLiveFile(t, liveLoginJSON("RT-left-behind", ""))
 
 	code, _, stderr, _ := runRoot(t, "switch", "key@example.com")

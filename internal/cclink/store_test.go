@@ -833,3 +833,12 @@ func TestLoadWithSourceNamesTheFileWhenNoItemIsThere(t *testing.T) {
 		t.Fatalf("String() = %q, want it to name the file", src.String())
 	}
 }
+
+// SandboxClaudeHomeForTest is withClaudeHome for this package's external tests
+// (package cclink_test), which run against cclinktest's in-memory keychain and
+// cannot reach the unexported helper. It returns the credentials file's path.
+func SandboxClaudeHomeForTest(t *testing.T) string {
+	t.Helper()
+	withClaudeHome(t)
+	return mustPath(ccpath.CredentialsPath())
+}

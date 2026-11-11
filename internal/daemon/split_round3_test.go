@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
+	"github.com/Kweiza/ccdaddy/internal/cclink/cclinktest"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/config"
 	"github.com/Kweiza/ccdaddy/internal/store"
@@ -74,8 +75,8 @@ func TestTheTickThatAdoptsALoginDoesNotActOnItsPlan(t *testing.T) {
 	seedAccount(t, "u-2", "org-2")
 	seedAccount(t, "u-3", "org-3")
 	writeLiveLoginRT(t, "RT-u-1-refreshed", tickEpoch.Add(8*time.Hour))
-	kc := cclink.NewFakeKeychain(loginExpiring("u-2", tickEpoch.Add(time.Hour)))
-	t.Cleanup(cclink.SetKeychainForTest(kc))
+	kc := cclinktest.NewKeychain(loginExpiring("u-2", tickEpoch.Add(time.Hour)))
+	cclinktest.Install(t, kc)
 	recordActive(t, "u-2")
 	readings(t, map[string]float64{"u-1": 36, "u-2": 99, "u-3": 5})
 
@@ -107,8 +108,8 @@ func TestANamedLoginThatCouldNotBeAdoptedSkipsTheTickAndHoldsTheRefresh(t *testi
 	seedAccount(t, "u-2", "org-2")
 	seedAccount(t, "u-3", "org-3")
 	writeLiveLoginRT(t, "RT-u-1-refreshed", tickEpoch.Add(8*time.Hour))
-	kc := cclink.NewFakeKeychain(loginExpiring("u-2", tickEpoch.Add(time.Hour)))
-	t.Cleanup(cclink.SetKeychainForTest(kc))
+	kc := cclinktest.NewKeychain(loginExpiring("u-2", tickEpoch.Add(time.Hour)))
+	cclinktest.Install(t, kc)
 	recordActive(t, "u-2")
 	readings(t, map[string]float64{"u-1": 36, "u-2": 99, "u-3": 5})
 	root, err := ccpath.StoreHome()

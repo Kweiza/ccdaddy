@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -169,53 +170,117 @@ func (e *KeychainError) Detail() string {
 	return keychainFailureDetail(e.failure)
 }
 
-// securityResult is one completed spawn. A non-zero code is carried here rather
-// than as an error, because callers decide which codes mean what.
-type securityResult struct {
-	stdout string
-	stderr string
-	code   int
+// SecurityAnswer is what one `security` subcommand answered: what it printed
+// and the status it exited with. A non-zero Code is carried here rather than as
+// an error, because callers decide which codes mean what -- 44 is "the item is
+// not there", which is an answer.
+type SecurityAnswer struct {
+	Stdout string
+	Stderr string
+	Code   int
 }
 
-// runSecurity is how every subcommand is run: spawnSecurity, unless a test in
-// another package has put a FakeKeychain in its place (SetKeychainForTest).
-func runSecurity(ctx context.Context, bound time.Duration, args ...string) (securityResult, error) {
-	securityImplMu.RLock()
-	impl := securityImpl
-	securityImplMu.RUnlock()
-	return impl(ctx, bound, args...)
-}
+// SecurityRunner runs one `security` subcommand and returns its answer. ctx
+// carries the subcommand's deadline; a runner that gives up because that
+// deadline passed returns an error wrapping context.DeadlineExceeded, and that
+// is the only way a write that ran out of time is told apart from one that
+// answered.
+//
+// The real runner is spawnSecurity. The only other one is the in-memory item
+// in internal/cclink/cclinktest, which replaces the exec layer whole so that
+// every line ABOVE it -- the bounds, the read-back of an unconfirmed write,
+// the item-first order -- runs in another package's test as it does on a Mac.
+type SecurityRunner func(ctx context.Context, args ...string) (SecurityAnswer, error)
 
 var (
-	securityImplMu sync.RWMutex
-	securityImpl   = spawnSecurity
+	securityRunnerMu sync.RWMutex
+	securityRunner   SecurityRunner = spawnSecurity
 )
 
-// spawnSecurity runs one `security` subcommand under a wall-clock deadline with
-// an explicit kill.
+// SetSecurityRunnerForTest makes r run every subcommand in place of the real
+// binary and returns a function restoring the runner it replaced. It is the
+// seam cclinktest plugs its fake keychain into, the way
+// credhome.SetTryLockForTest replaces a lock primitive. Production code must
+// never call it.
+func SetSecurityRunnerForTest(r SecurityRunner) (restore func()) {
+	securityRunnerMu.Lock()
+	prev := securityRunner
+	securityRunner = r
+	securityRunnerMu.Unlock()
+	return func() {
+		securityRunnerMu.Lock()
+		securityRunner = prev
+		securityRunnerMu.Unlock()
+	}
+}
+
+// realSecurityForbidden is set by ForbidRealSecurityForTest.
+var realSecurityForbidden atomic.Bool
+
+// ForbidRealSecurityForTest makes every later spawn of the real
+// /usr/bin/security in this process panic, so a test that reaches the
+// developer's own keychain fails loudly instead of reading it. It cannot be
+// undone: a test binary that has forbidden the real keychain does not get it
+// back. Production code must never call it.
+func ForbidRealSecurityForTest() { realSecurityForbidden.Store(true) }
+
+// RealSecurityForbidden reports whether ForbidRealSecurityForTest has run in
+// this process: a test re-executing its own binary asks it of the child, to
+// prove the child cannot reach the real keychain either.
+func RealSecurityForbidden() bool { return realSecurityForbidden.Load() }
+
+// refuseRealSecurity panics when a test has forbidden the real binary.
+func refuseRealSecurity(args ...string) {
+	if realSecurityForbidden.Load() {
+		panic(fmt.Sprintf("a test spawned the real %s %v: the keychain is isolated for tests "+
+			"(cclinktest.Isolate); install a cclinktest.Keychain instead", securityPath, args))
+	}
+}
+
+// runSecurity is how every subcommand is run: under bound, by the runner in
+// place -- spawnSecurity, unless a test has replaced it.
+//
+// The bound is applied HERE, around whichever runner answers, and a runner
+// that ran out of it is classified here: it is the one failure a fake has to
+// be able to produce -- a write that landed and reported a timeout -- and the
+// one the real runner reports by the deadline rather than by anything
+// `security` said.
+func runSecurity(ctx context.Context, bound time.Duration, args ...string) (SecurityAnswer, error) {
+	securityRunnerMu.RLock()
+	run := securityRunner
+	securityRunnerMu.RUnlock()
+
+	ctx, cancel := context.WithTimeout(ctx, bound)
+	defer cancel()
+	res, err := run(ctx, args...)
+	if errors.Is(err, context.DeadlineExceeded) {
+		return res, &KeychainError{Op: args[0], failure: failTimedOut}
+	}
+	return res, err
+}
+
+// spawnSecurity runs one `security` subcommand under ctx's deadline with an
+// explicit kill.
 //
 // exec.CommandContext's default cancellation is Process.Kill -- SIGKILL, not a
 // request the child can ignore -- and WaitDelay bounds the wait that outlives
 // it. Both are needed: the deadline stops a child that will not finish, and the
 // delay stops a Wait that will not return.
 //
-// bound is the deadline: keychainReadTimeout for a lookup, keychainWriteTimeout
-// for anything on the path that replaces the item. The caller names it rather
-// than this function choosing from the subcommand, because the read a switch
-// takes its merge base from is the same subcommand as a doctor lookup and does
-// not get the same bound.
-func spawnSecurity(ctx context.Context, bound time.Duration, args ...string) (securityResult, error) {
+// The deadline is the caller's bound, applied by runSecurity:
+// keychainReadTimeout for a lookup, keychainWriteTimeout for a write. The
+// caller names it rather than this function choosing from the subcommand,
+// because the same subcommand is a doctor lookup and the read-back of a write
+// that ran out of time, and the two do not get the same bound.
+func spawnSecurity(ctx context.Context, args ...string) (SecurityAnswer, error) {
 	// The subcommand names itself in every error, rather than being passed a
 	// second time alongside the arguments: two spellings of the same thing
 	// drift, and the one in the error is the one nobody re-reads.
 	op := args[0]
 	if keychainGOOS != "darwin" {
-		return securityResult{}, ErrKeychainUnsupported
+		return SecurityAnswer{}, ErrKeychainUnsupported
 	}
 	refuseRealSecurity(args...)
-
-	ctx, cancel := context.WithTimeout(ctx, bound)
-	defer cancel()
 
 	cmd := exec.CommandContext(ctx, securityPath, args...)
 	cmd.WaitDelay = keychainWaitDelay
@@ -227,13 +292,14 @@ func spawnSecurity(ctx context.Context, bound time.Duration, args ...string) (se
 	cmd.Stdin = nil
 
 	err := cmd.Run()
-	res := securityResult{stdout: stdout.String(), stderr: stderr.String()}
+	res := SecurityAnswer{Stdout: stdout.String(), Stderr: stderr.String()}
 
 	// The deadline is checked BEFORE the error is inspected, because a killed
 	// child reports as an ordinary non-zero exit and would otherwise be
-	// classified from an empty stderr as "other".
-	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return res, &KeychainError{Op: op, failure: failTimedOut}
+	// classified from an empty stderr as "other". It is returned as the
+	// context's own error; runSecurity names it.
+	if ctxErr := ctx.Err(); errors.Is(ctxErr, context.DeadlineExceeded) {
+		return res, ctxErr
 	}
 	if err == nil {
 		return res, nil
@@ -256,9 +322,9 @@ func spawnSecurity(ctx context.Context, bound time.Duration, args ...string) (se
 		// already have reached securityd, so it is classified rather than
 		// handed back as a status nobody chose.
 		if exitErr.ExitCode() == -1 {
-			return res, &KeychainError{Op: op, failure: failSignaled, stderr: res.stderr}
+			return res, &KeychainError{Op: op, failure: failSignaled, stderr: res.Stderr}
 		}
-		res.code = exitErr.ExitCode()
+		res.Code = exitErr.ExitCode()
 		return res, nil
 	}
 	// "The binary is not there" has two spellings and the second one is not
@@ -285,14 +351,14 @@ func (it KeychainItem) Present(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	switch res.code {
+	switch res.Code {
 	case 0:
 		return true, nil
 	case securityNotFoundCode:
 		return false, nil
 	}
 	return false, &KeychainError{
-		Op: "find-generic-password", failure: classifyKeychainFailure(res.stderr, res.code), stderr: res.stderr, code: res.code}
+		Op: "find-generic-password", failure: classifyKeychainFailure(res.Stderr, res.Code), stderr: res.Stderr, code: res.Code}
 }
 
 // Read returns the secret stored in the item, and whether there was one.
@@ -310,14 +376,14 @@ func (it KeychainItem) readWithin(ctx context.Context, bound time.Duration) (str
 	if err != nil {
 		return "", false, err
 	}
-	switch res.code {
+	switch res.Code {
 	case 0:
-		return trimKeychainSecret(res.stdout), true, nil
+		return trimKeychainSecret(res.Stdout), true, nil
 	case securityNotFoundCode:
 		return "", false, nil
 	}
 	return "", false, &KeychainError{
-		Op: "find-generic-password", failure: classifyKeychainFailure(res.stderr, res.code), stderr: res.stderr, code: res.code}
+		Op: "find-generic-password", failure: classifyKeychainFailure(res.Stderr, res.Code), stderr: res.Stderr, code: res.Code}
 }
 
 // Delete removes the item. An item that was already absent is success: the
@@ -357,11 +423,11 @@ func (it KeychainItem) Delete(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if res.code == 0 || res.code == securityNotFoundCode {
+	if res.Code == 0 || res.Code == securityNotFoundCode {
 		return nil
 	}
 	return &KeychainError{
-		Op: "delete-generic-password", failure: classifyKeychainFailure(res.stderr, res.code), stderr: res.stderr, code: res.code}
+		Op: "delete-generic-password", failure: classifyKeychainFailure(res.Stderr, res.Code), stderr: res.Stderr, code: res.Code}
 }
 
 // KeychainLookup is what a probe for the legacy credential item found.
@@ -421,11 +487,11 @@ func (it KeychainItem) Write(ctx context.Context, secret string) error {
 	if err != nil {
 		return err
 	}
-	if res.code == 0 {
+	if res.Code == 0 {
 		return nil
 	}
 	return &KeychainError{
-		Op: "add-generic-password", failure: classifyKeychainFailure(res.stderr, res.code), stderr: res.stderr, code: res.code}
+		Op: "add-generic-password", failure: classifyKeychainFailure(res.Stderr, res.Code), stderr: res.Stderr, code: res.Code}
 }
 
 // ProbeCredentialKeychainItem is the doctor probe: derive the names this
