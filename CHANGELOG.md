@@ -25,28 +25,47 @@ must reference accounts by `uuid` or `alias`.
   allowed 30 seconds: the read it starts from, the write, and the read-back of
   a write that ran out of time. The read-back now runs after the locks are
   released. When it finds the new login, the credentials file follows in a
-  second, separate pass under the locks that reads the Keychain item once
-  more, so the switch still completes; when the item has changed again by
-  then, ccdad says the outcome is unknown and the daemon's next pass puts one
-  login in both stores. Every Keychain call on a switch's path still has 30
-  seconds, so a loaded Mac is given as long as before.
+  second, separate pass under the locks, so the switch still completes --
+  unless the Keychain item or the credentials file has changed again by then,
+  for instance because Claude Code refreshed the login into the file. ccdad
+  then says the outcome is unknown, leaves the file alone, and the daemon's
+  next pass puts one login in both stores. Every Keychain call on a switch's
+  path still has 30 seconds, so a loaded Mac is given as long as before.
+- **An engine state that cannot be read now holds every stored login, and is
+  not written over.** `~/.ccdad/strategy.json` now also records which stored
+  logins are spent (below). When it cannot be read or parsed, which ones are
+  spent is unknown, so no command presents a stored login until it can, and
+  ccdad no longer replaces the file with an empty one on its next write -- that
+  would release every hold in it. `ccdad doctor`'s `engine-state` row fails
+  and says to repair or remove the file.
 
 ### Fixed
 
-- **No `ccdad` command presents a stored login a newer one has already
-  replaced.** When a login store holds a newer login of an account than ccdad
-  has stored -- one the profile endpoint named and ccdad could not store --
-  the stored refresh token is already spent, and presenting it again can
-  revoke the newer login and every login refreshed from it. The daemon held
-  such an account back, but only in its own memory: `ccdad switch` installed
-  the spent login over the newer one, and `ccdad run`, `ccdad probe` and
-  `ccdad status --refresh` could present it too. The profile endpoint's answer
-  and the stored login it spent are now recorded on disk, and every command
-  checks them, and Claude Code's login stores, before it presents a stored
-  login: `ccdad switch` and `ccdad run` refuse with exit 4, a probe is
-  skipped, and a refresh is not attempted. The hold lasts until ccdad stores
-  another login for the account -- also when Claude Code refreshes the newer
-  login again before it is named -- and now outlives a daemon restart.
+- **A stored login the daemon knows is spent is no longer presented by any
+  `ccdad` command.** When the profile endpoint names a newer login of an
+  account than ccdad has stored, and storing it fails, the stored refresh
+  token is already spent: presenting it again can revoke the newer login and
+  every login refreshed from it. The daemon held such an account back, but
+  only in its own memory, so `ccdad switch` installed the spent login over the
+  newer one, and `ccdad run`, `ccdad probe` and `ccdad status --refresh` could
+  present it too.
+  - The daemon now records the named login and the spent stored login in
+    `strategy.json`, and every command checks that record and Claude Code's
+    login stores, on the very copy it is about to present: `ccdad switch` and
+    `ccdad run` refuse with exit 4, a probe is skipped, and a refresh is not
+    attempted. A Keychain that cannot be read does not lift the hold, and a
+    `ccdad run` of an account's setup token is not held back by its OAuth
+    login.
+  - The hold lasts until ccdad stores another login for the account, also
+    when Claude Code refreshes the newer login again before it is named, and
+    it outlives a daemon restart. A record the daemon cannot write is held
+    from its memory and written on its next passes.
+  - `ccdad doctor` has a `spent-logins` row, and `ccdad status` a notice, for
+    every held account, and the refusals say what lifts the hold. When no
+    login store holds the newer login any more, that is logging the account
+    in again with `ccdad add claude`.
+  - This covers logins the daemon has named. A newer login nobody has named
+    yet holds nothing, as before.
 
 ## [0.29.1] — 2026-11-10
 
