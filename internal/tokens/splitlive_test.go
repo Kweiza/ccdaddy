@@ -48,6 +48,7 @@ func TestAStoredLoginANewerOneHasSpentIsNotPresented(t *testing.T) {
 	writeLive(t, oauthRecord("a1-newer", "r1-newer", time.Now().Add(8*time.Hour), ""))
 	if err := strategy.WithState(time.Second, func(st *strategy.State) error {
 		st.NameLogin(store.LoginHash("refresh:r1-newer"), "u-1")
+		st.RecordSpentStoredLogin("u-1", store.LoginHash("refresh:r1"), store.LoginHash("refresh:r1-newer"))
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -60,5 +61,14 @@ func TestAStoredLoginANewerOneHasSpentIsNotPresented(t *testing.T) {
 	}
 	if rec := storedRecord(t, "u-1"); rec.RefreshToken != "r1" {
 		t.Fatalf("the stored refresh token moved to %q", rec.RefreshToken)
+	}
+
+	// Claude Code rotates the newer login again before anybody names what
+	// replaced it: nothing in the store connects u-1 to it, and the stored
+	// token is exactly as spent.
+	writeLive(t, oauthRecord("a1-again", "r1-again", time.Now().Add(9*time.Hour), ""))
+	got, err = src.AccessToken(context.Background(), "u-1")
+	if !errors.Is(err, store.ErrStoredLoginSpent) {
+		t.Fatalf("after a second rotation AccessToken = (%q, %v), want store.ErrStoredLoginSpent", got, err)
 	}
 }

@@ -13,10 +13,10 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
 
-// Round 6: the hold lifts as soon as something issued no earlier than the
-// newer login is stored -- whatever it is -- and still holds while the spent
-// login is (see TestTheHoldStaysWhileTheSpentLoginIsStillStored for the stores
-// agreeing while the spent login is still stored). A probe asks the hold too.
+// Round 6: the hold lifts as soon as the account's stored login is no longer
+// the spent one -- whatever replaced it -- and still holds while it is (see
+// TestTheHoldStaysWhileTheSpentLoginIsStillStored for the stores agreeing
+// while the spent login is still stored). A probe asks the hold too.
 
 func TestTheHoldLiftsWhenALaterGenerationIsStored(t *testing.T) {
 	isolateEngine(t)

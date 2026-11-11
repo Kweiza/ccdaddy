@@ -564,7 +564,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	// the last verdict: an unreadable store is no evidence a hold has lifted.
 	if ev.LoginKnown {
 		e.ageLoginMemory(ev.Stores, now)
-		e.forgetNamedLogins(ev.Stores)
+		e.forgetOracleRecord(s, ev.Stores)
 		e.setSpent(ev.Spent)
 	}
 	e.settlePending(s, ev, now)
