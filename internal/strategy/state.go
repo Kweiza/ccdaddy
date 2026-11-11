@@ -492,7 +492,9 @@ func storeRoot() (string, error) {
 // No lock is needed to read: every write is a rename, so a reader sees one whole
 // version of the document or another, never a torn one. A file that cannot be
 // read or parsed degrades to an empty state — no cooldown, no quarantine — and
-// records why in LoadError. That degradation is deliberately towards MORE
+// records why in LoadError. The spent stored logins are the exception: an
+// unreadable state holds every one of them (store.Account.StoredLoginSpent),
+// and WithState will not write over it. That degradation is deliberately towards MORE
 // switching rather than less: a quarantine that cannot be read is not evidence
 // that an account is dead, and refusing to switch at all on a corrupt file
 // would park the engine exactly the way anti-flap must never park it: those
@@ -578,6 +580,17 @@ func WithState(timeout time.Duration, fn func(*State) error) (err error) {
 	s, err := LoadState()
 	if err != nil {
 		return err
+	}
+	// NEVER OVER A STATE THAT COULD NOT BE READ. Reading one degrades to an
+	// empty state, towards more switching, and that is right for a read; for a
+	// write it would put the empty state in the file's place, and with it every
+	// spent stored login it recorded would be released, in every process,
+	// without a word (stateFile.SpentStoredLogins). A read that fails holds
+	// every stored login instead (store.Account.StoredLoginSpent), and the file
+	// stays for a person to repair or remove; `ccdad doctor` names it.
+	if lerr := s.LoadError(); lerr != nil {
+		return fmt.Errorf("not writing the engine state over one that could not be read (%w); repair or "+
+			"remove %s", lerr, filepath.Join(root, StateFileName))
 	}
 	if err := fn(s); err != nil {
 		return err

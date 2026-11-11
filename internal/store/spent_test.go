@@ -4,9 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
+	"github.com/Kweiza/ccdaddy/internal/provider"
+	"github.com/Kweiza/ccdaddy/internal/strategy"
 )
 
 // loginIssued is a login whose expiry -- which orders logins by when they were
@@ -22,7 +26,10 @@ func loginIssued(refresh string, expiresAt int64) cclink.Blob {
 type record struct {
 	named map[string]string
 	spent map[string][2]string
+	err   error
 }
+
+func (r record) LoadError() error { return r.err }
 
 func (r record) NamedLogin(h string) (string, bool) {
 	for id, uuid := range r.named {
@@ -92,7 +99,7 @@ func TestAStoredLoginIsSpentOnlyByANewerNamedLoginOfItsOwnInALiveStore(t *testin
 			cclink.LoginStores{File: newer}, named, true},
 	}
 	for _, tc := range cases {
-		if got := tc.a.StoredLoginSpent(tc.stored, tc.live, tc.named); got != tc.want {
+		if got := tc.a.StoredLoginSpent(tc.stored, tc.live, tc.named).Held(); got != tc.want {
 			t.Errorf("%s: StoredLoginSpent = %v, want %v", tc.name, got, tc.want)
 		}
 	}
@@ -126,10 +133,47 @@ func TestASpentStoredLoginIsHeldUntilTheAccountStoresAnother(t *testing.T) {
 		{"the spent login was unknown, and a readable login is stored", a, stored, unknown, false},
 	}
 	for _, tc := range cases {
-		if got := tc.a.StoredLoginSpent(tc.stored, again, tc.rec); got != tc.want {
+		if got := tc.a.StoredLoginSpent(tc.stored, again, tc.rec).Held(); got != tc.want {
 			t.Errorf("%s: StoredLoginSpent = %v, want %v", tc.name, got, tc.want)
 		}
 	}
 }
 
 var errUnreadableForTest = errors.New("the credentials file could not be read")
+
+// A RECORD THAT CANNOT BE READ IS NOT AN EMPTY ONE. The engine state that holds
+// which stored logins are spent can fail to read or parse, and what it held is
+// then unknown: every stored login is held until it can be read. A state that
+// was never written is different -- nothing was ever recorded in it -- and
+// holds nothing.
+func TestAnUnreadableRecordHoldsEveryStoredLogin(t *testing.T) {
+	dir := withStore(t)
+	s, err := Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add(Account{UUID: "u-1", Provider: provider.Claude}, claudeLogin("RT-1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add(Account{UUID: "u-2", Provider: provider.Claude}, cclink.Blob{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.SpentLogins(cclink.LoginStores{}, LoadOracleRecord()); len(got) != 0 {
+		t.Fatalf("with no engine state at all, %v are held", got)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, strategy.StateFileName), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := s.SpentLogins(cclink.LoginStores{}, LoadOracleRecord())
+	if !got["u-1"] {
+		t.Error("u-1's stored login is presented although the record of spent logins cannot be read")
+	}
+	if got["u-2"] {
+		t.Error("u-2, which stores no login to present, is held")
+	}
+	unreadable := record{err: errors.New("parsing strategy.json: unexpected end of JSON input")}
+	if (Account{UUID: "u-1"}).StoredLoginSpent(claudeLogin("RT-1"), cclink.LoginStores{}, unreadable) != HeldUnreadableRecord {
+		t.Error("StoredLoginSpent ignores a record that could not be read")
+	}
+}

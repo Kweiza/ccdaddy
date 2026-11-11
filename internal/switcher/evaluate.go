@@ -177,7 +177,7 @@ func Evaluate(s *store.Store, opts EvalOptions) (Evaluation, error) {
 		ev.Stores = stores
 		ev.Login, ev.LoginKnown = ViewLogin(stores, accounts, s.Credentials, s.ActiveUUID(), opts.Owners), true
 		ev.Login.Intent = PendingTarget()
-		ev.Spent = s.SpentLogins(stores)
+		ev.Spent = s.SpentLogins(stores, store.LoadOracleRecord())
 		// The file's error, when the file is the only store.
 		_, _, err = stores.Live()
 	}

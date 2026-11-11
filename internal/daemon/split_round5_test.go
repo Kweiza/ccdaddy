@@ -8,6 +8,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/cclink/cclinktest"
 	"github.com/Kweiza/ccdaddy/internal/identity"
+	"github.com/Kweiza/ccdaddy/internal/store"
 )
 
 // Round 5: the hold on a spent stored refresh token covers every token read,
@@ -54,7 +55,7 @@ func passSees(t *testing.T, e *Engine) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.setSpent(openEngineStore(t).SpentLogins(stores))
+	e.setSpent(openEngineStore(t).SpentLogins(stores, store.LoadOracleRecord()))
 }
 
 // The profile check reads the account's token through the same hold as the

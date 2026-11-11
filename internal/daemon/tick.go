@@ -583,7 +583,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 		if e.identifyStores(ctx, s, ev) {
 			// A login it named and could not store holds its account's stored
 			// token from this pass, not the next: the stores were read above.
-			e.setSpent(s.SpentLogins(ev.Stores))
+			e.setSpent(s.SpentLogins(ev.Stores, store.LoadOracleRecord()))
 		} else {
 			res, swapErr = e.act(ctx, s, ev)
 		}

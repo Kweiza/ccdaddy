@@ -21,30 +21,67 @@ var ErrStoredLoginSpent = errors.New("a newer login of this account was minted f
 // store (strategy.State): whose a login is, by LoginHash, as the identity
 // oracle named it; and, per account, the stored login known to be spent and
 // the newer login that spent it, by LoginHash ("" for a spent login that could
-// not be read). *strategy.State is one.
+// not be read). LoadError is why the record could not be read, if it could
+// not. *strategy.State is one.
 type OracleRecord interface {
 	NamedLogin(loginHash string) (uuid string, ok bool)
 	SpentStoredLogin(uuid string) (spent, newer string, ok bool)
+	LoadError() error
 }
 
-// StoredLoginSpent reports whether a's stored refresh token is SPENT: a newer
-// login was minted from it, and presenting it again -- a refresh, a switch that
-// installs it, a probe or a `ccdad run` session seeded with it -- can revoke
-// that newer login, and every login refreshed from it since, with it.
+// Hold is why an account's stored login is not presented, or NotHeld.
+type Hold uint8
+
+const (
+	// NotHeld: nothing says the stored refresh token is spent.
+	NotHeld Hold = iota
+	// HeldByNewerLogin: a login store holds a newer login of the account that
+	// the identity oracle named and ccdad has not stored. The daemon stores it
+	// as soon as it can, and the hold lifts.
+	HeldByNewerLogin
+	// HeldByRecord: the daemon recorded the stored login as spent, and no
+	// login store holds the newer login under the oracle's name any more --
+	// Claude Code refreshed it again, or it was written over. It lifts once
+	// the account stores another login: the daemon's own adoption of what
+	// Claude Code holds now, if that is the account's, or a new login.
+	HeldByRecord
+	// HeldUnreadableRecord: the record itself could not be read, so whether
+	// any stored login is spent is unknown, and every one is held until it
+	// can be read.
+	HeldUnreadableRecord
+)
+
+// Held reports whether the stored login is not to be presented.
+func (h Hold) Held() bool { return h != NotHeld }
+
+// StoredLoginSpent reports whether a's stored refresh token is SPENT, and why:
+// a newer login was minted from it, and presenting it again -- a refresh, a
+// switch that installs it, a probe or a `ccdad run` session seeded with it --
+// can revoke that newer login, and every login refreshed from it since, with
+// it.
 //
-// Either of two things says so:
+// Any of three things says so:
 //
-//   - A login sitting in one of Claude Code's live stores supersedes it: the
-//     identity oracle named that login a's, it is neither the stored login
-//     nor one the stored login replaced (the superseded history), and it was
-//     issued after it (cclink.IssuedAfter). A stored login that cannot be
-//     read is superseded by any such login.
-//   - The record says it is spent (SpentRecordHolds): the stored login has not
-//     changed since a newer login was named and could not be stored. This is
-//     the half that outlives the evidence. Claude Code can rotate the newer
-//     login again, out of every store, before the oracle names what replaced
-//     it -- and then nothing in the stores connects the stored login to it,
-//     while its refresh token is exactly as spent.
+//   - The record cannot be read (HeldUnreadableRecord). What it held is then
+//     unknown, and a stored login it may have recorded as spent cannot be
+//     told from one it did not, so every stored login is held until it can be
+//     read. A record that was never written is not unreadable: nothing was
+//     ever held by it.
+//   - A login sitting in one of Claude Code's live stores supersedes it
+//     (HeldByNewerLogin): the identity oracle named that login a's, it is
+//     neither the stored login nor one the stored login replaced (the
+//     superseded history), and it was issued after it (cclink.IssuedAfter). A
+//     stored login that cannot be read is superseded by any such login.
+//   - The record says it is spent (HeldByRecord, SpentRecordHolds): the stored
+//     login has not changed since a newer login was named and could not be
+//     stored. This is the half that outlives the evidence. Claude Code can
+//     rotate the newer login again, out of every store, before the oracle
+//     names what replaced it -- and then nothing in the stores connects the
+//     stored login to it, while its refresh token is exactly as spent.
+//
+// live is the stores as the caller read them. A read that FAILED is passed as
+// the zero LoginStores: it is no evidence either way, and the record decides
+// alone -- an unreadable store must never weaken a hold the record holds.
 //
 // IT IS THE ONE DECISION, and every process applies it to the stores it read
 // itself: the daemon to its polls, probes, plan and installs, tokens.Source
@@ -54,11 +91,14 @@ type OracleRecord interface {
 // command could see and a restart forgot. What is persisted is only what no
 // process can derive: the oracle's naming, and which stored login was spent.
 // It lifts by itself the moment the account stores another login.
-func (a Account) StoredLoginSpent(stored cclink.Blob, live cclink.LoginStores, rec OracleRecord) bool {
-	if a.SpentRecordHolds(stored, rec) {
-		return true
-	}
+func (a Account) StoredLoginSpent(stored cclink.Blob, live cclink.LoginStores, rec OracleRecord) Hold {
 	storedID := cclink.LoginIdentity(stored)
+	if rec.LoadError() != nil {
+		if storedID != "" {
+			return HeldUnreadableRecord
+		}
+		return NotHeld
+	}
 	for _, login := range live.Logins() {
 		id := cclink.LoginIdentity(login)
 		if id == "" || id == storedID || a.Superseded(id) {
@@ -68,10 +108,13 @@ func (a Account) StoredLoginSpent(stored cclink.Blob, live cclink.LoginStores, r
 			continue
 		}
 		if cclink.IssuedAfter(login, stored) {
-			return true
+			return HeldByNewerLogin
 		}
 	}
-	return false
+	if a.SpentRecordHolds(stored, rec) {
+		return HeldByRecord
+	}
+	return NotHeld
 }
 
 // SpentRecordHolds reports whether the record of a's spent stored login still
@@ -98,15 +141,23 @@ func (a Account) SpentRecordHolds(stored cclink.Blob, rec OracleRecord) bool {
 }
 
 // LoadOracleRecord is the daemon's record as the engine state holds it. A
-// state that cannot be read records nothing, which is the state a machine whose
-// daemon has never named a login is in.
+// state that was never written records nothing. One that cannot be read or
+// parsed reports why in LoadError, and holds every stored login
+// (StoredLoginSpent).
 func LoadOracleRecord() OracleRecord {
 	st, err := strategy.LoadState()
 	if err != nil {
-		return strategy.NewState()
+		return unreadableRecord{err}
 	}
 	return st
 }
+
+// unreadableRecord is a record whose state could not even be located.
+type unreadableRecord struct{ err error }
+
+func (unreadableRecord) NamedLogin(string) (string, bool)               { return "", false }
+func (unreadableRecord) SpentStoredLogin(string) (string, string, bool) { return "", "", false }
+func (r unreadableRecord) LoadError() error                             { return r.err }
 
 // StoredLoginSpent is Account.StoredLoginSpent for one stored account, against
 // the record on disk.
@@ -116,20 +167,19 @@ func (s *Store) StoredLoginSpent(uuid string, live cclink.LoginStores) bool {
 		return false
 	}
 	stored, _ := s.Credentials(uuid)
-	return a.StoredLoginSpent(stored, live, LoadOracleRecord())
+	return a.StoredLoginSpent(stored, live, LoadOracleRecord()).Held()
 }
 
 // SpentLogins is every Claude account whose stored refresh token is spent
-// (Account.StoredLoginSpent), against the record on disk.
-func (s *Store) SpentLogins(live cclink.LoginStores) map[string]bool {
-	rec := LoadOracleRecord()
+// (Account.StoredLoginSpent), against rec.
+func (s *Store) SpentLogins(live cclink.LoginStores, rec OracleRecord) map[string]bool {
 	out := map[string]bool{}
 	for _, a := range s.Accounts() {
 		if a.Provider != provider.Claude {
 			continue
 		}
 		stored, _ := s.Credentials(a.UUID)
-		if a.StoredLoginSpent(stored, live, rec) {
+		if a.StoredLoginSpent(stored, live, rec).Held() {
 			out[a.UUID] = true
 		}
 	}

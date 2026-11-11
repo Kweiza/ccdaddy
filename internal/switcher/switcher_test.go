@@ -4,14 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/cclock"
-	"github.com/Kweiza/ccdaddy/internal/strategy"
 )
 
 func TestExecuteInstallsTheTargetAndRecordsIt(t *testing.T) {
@@ -359,12 +357,8 @@ func TestACooldownThatCannotBeStampedDoesNotFailTheSwitch(t *testing.T) {
 	target := seed(t, "u-2", "two@example.com")
 	liveAs(t, "u-1")
 
-	// A directory where the state file belongs: the write fails, the swap does
-	// not.
-	statePath := mustPath(strategy.StatePath())
-	if err := os.MkdirAll(statePath, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	// The state's lock held elsewhere: the write fails, the swap does not.
+	obstructStateLock(t)
 
 	res, err := Execute(openStore(t), Request{Target: target, LiveUUID: "u-1"})
 	if err != nil {
