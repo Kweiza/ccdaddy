@@ -58,6 +58,10 @@ type Evaluation struct {
 	// Stores is the raw read Login was built from. The daemon's identity
 	// oracle needs a store's own access token to ask whose login it is.
 	Stores cclink.LoginStores
+	// Spent is every account whose stored login a newer one in Stores has
+	// superseded (store.Account.StoredLoginSpent): its stored refresh token
+	// is spent, so it is not a target. Empty when the stores could not be read.
+	Spent map[string]bool
 	// NoReadings means nothing has ever been polled, so there is no evidence to
 	// choose on. Distinct from ActionBlocked, which is a choice that was made
 	// and came back empty — exit 4 is "wanted, but no viable target", and both
@@ -123,10 +127,6 @@ type EvalOptions struct {
 	// store it has already named reads as that account's (LiveResolved). Nil
 	// knows nothing, which is every one-shot caller.
 	Owners Owners
-	// Held reports an account whose stored refresh token is spent and must not
-	// be installed (the daemon's hold); such an account is not a target. Nil
-	// holds nothing.
-	Held func(uuid string) bool
 }
 
 // provider is the pass's provider, defaulting a zero value to Claude.
@@ -177,6 +177,7 @@ func Evaluate(s *store.Store, opts EvalOptions) (Evaluation, error) {
 		ev.Stores = stores
 		ev.Login, ev.LoginKnown = ViewLogin(stores, accounts, s.Credentials, s.ActiveUUID(), opts.Owners), true
 		ev.Login.Intent = PendingTarget()
+		ev.Spent = s.SpentLogins(stores)
 		// The file's error, when the file is the only store.
 		_, _, err = stores.Live()
 	}
@@ -212,17 +213,15 @@ func Evaluate(s *store.Store, opts EvalOptions) (Evaluation, error) {
 	cache.Prune(added)
 
 	cands := engineCandidates(s, accounts, cache, opts.provider())
-	// A HELD account is not a target, the way a disabled one is not: its
-	// stored login holds a spent refresh token, every path that would install
-	// it stands down, and a plan that kept choosing it would stand the engine
-	// down every tick instead of picking the next candidate. The live account
-	// is exempt -- holding it out would read as a reason to LEAVE it, and the
-	// hold is about what ccdad would install, not about the login in use.
-	if opts.Held != nil {
-		for i := range cands {
-			if cands[i].UUID != liveUUID && opts.Held(cands[i].UUID) {
-				cands[i].Disabled = true
-			}
+	// An account whose stored login is SPENT is not a target, the way a
+	// disabled one is not: every path that would install it stands down, and
+	// a plan that kept choosing it would stand the engine down every tick
+	// instead of picking the next candidate. The live account is exempt --
+	// holding it out would read as a reason to LEAVE it, and the hold is about
+	// what ccdad would install, not about the login in use.
+	for i := range cands {
+		if cands[i].UUID != liveUUID && ev.Spent[cands[i].UUID] {
+			cands[i].Disabled = true
 		}
 	}
 	if !anyReading(cands) {

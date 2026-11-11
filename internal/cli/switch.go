@@ -398,6 +398,13 @@ func newSwitchCmd() *cobra.Command {
 				}
 				return WithCode(errSilent, ExitNothingToDo)
 			}
+			// A stored login a newer one has superseded is refused for its own
+			// reason: no refresh makes it installable, only storing the newer
+			// login does.
+			if res.Outcome == switcher.Stale && errors.Is(res.FreshenErr, store.ErrStoredLoginSpent) {
+				fmt.Fprintf(cmd.ErrOrStderr(), "Not switching to %s: %s.\n", target.Label(), spentLoginReason(target))
+				return WithCode(errSilent, ExitBlocked)
+			}
 			// Refused, not failed: nothing was written, and the account is
 			// installable again as soon as its grant is refreshed. Reported
 			// with the reason because "switch failed" sends the user to

@@ -62,6 +62,8 @@ type probeOptions struct {
 	window usage.WindowName
 	force  bool
 	now    time.Time
+	// spent is the accounts whose stored login is spent (spentLogins).
+	spent map[string]bool
 }
 
 // probeArgs is the child's command line.
@@ -165,6 +167,12 @@ func probeSkip(a store.Account, blob cclink.Blob, entry usage.Entry, o probeOpti
 	// spent against.
 	if a.Provider != provider.Claude {
 		return fmt.Sprintf("%s is a Codex account; ccdad never probes Codex", a.Label()), true
+	}
+	// Ahead of --force too, for the reason above: the daemon's own probe is a
+	// forced child, and the Claude Code it runs refreshes the stored login it
+	// is seeded with -- a spent refresh token revokes the newer login.
+	if o.spent[a.UUID] {
+		return fmt.Sprintf("not probing %s: %s", a.Label(), spentLoginReason(a)), false
 	}
 	if rec, isToken := cclink.TokenRecordOf(blob); isToken {
 		return fmt.Sprintf("%s's credential is %s rather than an OAuth login, and every usage window ccdad "+
@@ -387,6 +395,7 @@ func newProbeCmd() *cobra.Command {
 				model:  model,
 				force:  force,
 				now:    timeNow(),
+				spent:  spentLogins(s),
 			}
 			// The Windows shim rule, refused rather than resolved past. `run`
 			// resolves past a shim for every .cmd it can read, because the

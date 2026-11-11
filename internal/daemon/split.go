@@ -2,12 +2,12 @@ package daemon
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/store"
+	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/switcher"
 )
 
@@ -197,7 +197,7 @@ func (e *Engine) ownerOf(id string) (string, bool) {
 // named and not adopted because storing it failed. Either way the evaluation
 // this tick made did not know whose that login is, and the caller does not
 // act on it. A login named and not adopted also holds its account's stored
-// refresh token (verdictFor places the hold; releaseStored lifts it).
+// refresh token, in every process (nameUnstored).
 func (e *Engine) identifyStores(ctx context.Context, s *store.Store, ev switcher.Evaluation) (named bool) {
 	stores := []struct {
 		name   string
@@ -239,71 +239,85 @@ func (e *Engine) identifyStores(ctx context.Context, s *store.Store, ev switcher
 	return named
 }
 
-// spentHold is one account's hold: the newer login the oracle named, and the
-// SPENT login -- the one ccdad had stored when the hold was placed, whose
-// refresh token whoever minted the newer one has already presented.
-type spentHold struct {
-	newer string
-	spent string
-}
-
-// holdUntilStored holds uuid's stored refresh token: the oracle named the
-// login with identity newer as the account's newer one, and storing it failed.
-// spent is the account's stored login at that moment, "" if it could not be
-// read. While it is held, presenting that stored refresh token can revoke the
-// whole family, newer included. Guarded by e.mu: the swap path and the pollers
-// read it.
-func (e *Engine) holdUntilStored(uuid, newer, spent string) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.unadopted == nil {
-		e.unadopted = map[string]spentHold{}
-	}
-	e.unadopted[uuid] = spentHold{newer: newer, spent: spent}
-}
-
-// releaseStored lifts each hold once the account's STORED credential is no
-// longer the spent one -- whatever replaced it: the newer login adopted, a
-// later generation adopted after the newer one was missed, a re-login with
-// `ccdad add`, a switch that stored a new login. What the hold protects is
-// "the stored refresh token is spent", and that stops being true the moment
-// another login is stored. A spent identity that could not be read falls back
-// to waiting for the newer login itself (or one that superseded it).
+// nameUnstored records the identity oracle's answer that live is owner's, for
+// a newer login storing failed: the one fact about it no process can derive,
+// in the engine state every process reads (strategy.State.NamedLogin).
 //
-// Two login stores AGREEING lifts nothing: they can agree on the newer login
-// while ccdad still stores the spent one, and the next poll would present it.
-func (e *Engine) releaseStored(s *store.Store) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	for uuid, h := range e.unadopted {
-		a, ok := s.Get(uuid)
-		if !ok {
-			delete(e.unadopted, uuid)
-			continue
-		}
-		stored, err := s.Credentials(uuid)
-		cur := ""
-		if err == nil {
-			cur = cclink.LoginIdentity(stored)
-		}
-		moved := cur != "" && (cur == h.newer || (h.spent != "" && cur != h.spent))
-		if moved || a.Superseded(h.newer) {
-			delete(e.unadopted, uuid)
-		}
+// It is what holds owner's stored refresh token, in this daemon and in every
+// `ccdad` command, for as long as the newer login sits in a login store and
+// is not stored (store.Account.StoredLoginSpent). Nothing lifts it: the hold
+// is derived again from the stores and the stored login wherever it is asked,
+// so storing the newer login -- or anything later, a re-login included --
+// lifts it at once, and forgetNamedLogins drops the naming once no store
+// holds the login.
+//
+// A naming that cannot be written holds nothing until it is written. It is
+// logged, and since a failed adoption is not remembered, the next ask of the
+// oracle -- resolveMinInterval later -- tries the adoption and the naming
+// again.
+func (e *Engine) nameUnstored(owner store.Account, live cclink.Blob) {
+	h := store.LoginHash(cclink.LoginIdentity(live))
+	if err := strategy.WithState(stateTimeout, func(st *strategy.State) error {
+		st.NameLogin(h, owner.UUID)
+		return nil
+	}); err != nil {
+		e.logf("could not record that Claude Code holds a newer login of %s than ccdad has stored: %v; "+
+			"its stored refresh token is held only once the profile endpoint is asked again", owner.Label(), err)
 	}
 }
 
-// holdSpentToken is the ONE predicate every path that may present an
-// account's stored refresh token asks first: errUnadopted while the account has
-// a newer login named and not yet stored, nil otherwise. Every path that hands
-// a stored login or token out of the engine asks it: accessToken (the usage
-// poll and the profile check), freshen, probeDue, and execute -- and a held
-// account is not a plan candidate at all (EvalOptions.Held).
+// forgetNamedLogins drops the oracle's record of every login no login store
+// holds any more: a naming matters only while its login is in a store, since
+// only then can it hold anything (store.Account.StoredLoginSpent). A pass
+// whose stores could not all be read forgets nothing, and one with nothing to
+// forget does not take the state lock.
+func (e *Engine) forgetNamedLogins(st cclink.LoginStores) {
+	if st.FileErr != nil {
+		return
+	}
+	held := map[string]bool{}
+	for _, login := range st.Logins() {
+		if id := cclink.LoginIdentity(login); id != "" {
+			held[store.LoginHash(id)] = true
+		}
+	}
+	keep := func(h string) bool { return held[h] }
+	if cur, err := strategy.LoadState(); err != nil || !cur.ForgetNamedLogins(keep) {
+		return
+	}
+	if err := strategy.WithState(stateTimeout, func(state *strategy.State) error {
+		state.ForgetNamedLogins(keep)
+		return nil
+	}); err != nil {
+		e.logf("could not forget the profile endpoint's naming of logins no store holds any more: %v", err)
+	}
+}
+
+// setSpent records which accounts' stored logins this pass found spent
+// (store.Store.SpentLogins), for holdSpentToken. Guarded by e.mu: the swap
+// path and the pollers read it.
+func (e *Engine) setSpent(spent map[string]bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.spent = spent
+}
+
+// holdSpentToken is the ONE predicate every path in the engine that may
+// present an account's stored refresh token asks first: store.ErrStoredLoginSpent
+// while this pass found the account's stored login superseded by a newer one
+// in a login store, nil otherwise. Every path that hands a stored login or
+// token out of the engine asks it: accessToken (the usage poll and the profile
+// check), freshen, probeDue, and execute -- and a spent account is not a plan
+// candidate at all (switcher.Evaluation.Spent).
+//
+// It answers from the pass's own read, through the same decision
+// tokens.Source and switcher.Execute apply to theirs, which is what every
+// other process gets.
 func (e *Engine) holdSpentToken(uuid string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if _, held := e.unadopted[uuid]; held {
-		return errUnadopted
+	if e.spent[uuid] {
+		return store.ErrStoredLoginSpent
 	}
 	return nil
 }
@@ -319,13 +333,6 @@ func (e *Engine) accessToken(ctx context.Context, uuid string) (string, error) {
 	return e.AccessToken(ctx, uuid)
 }
 
-// errUnadopted is a path refusing an account whose newer login is named and
-// not yet stored. It is a transient HOLD, not a failure: handleFailure files it
-// with ErrLiveTokenStale, which reschedules at the ordinary cadence and
-// neither backs off nor quarantines.
-var errUnadopted = errors.New("a newer login of this account is named and not yet stored, so its stored " +
-	"refresh token is already spent and is not presented")
-
 // sayStoreOnce logs line about the login store holding the login id, once for
 // as long as the daemon remembers that login (loginMemory).
 func (e *Engine) sayStoreOnce(id, line string) {
@@ -339,17 +346,4 @@ func (e *Engine) sayStoreOnce(id, line string) {
 // remember records what the oracle said about a login.
 func (e *Engine) remember(id, uuid string) {
 	e.owners.put(id, uuid, e.now())
-}
-
-// newerThanStored reports whether login was issued after what the account
-// already has stored. Two logins with no expiry are not ordered, and the
-// login in hand wins, which is how adoption behaved before it was ordered at
-// all; a stored expiry beside a login without one keeps the stored.
-func newerThanStored(login, stored cclink.Blob) bool {
-	at, ok := cclink.LoginExpiry(login)
-	was, wasOK := cclink.LoginExpiry(stored)
-	if !ok {
-		return !wasOK
-	}
-	return !wasOK || at.After(was)
 }

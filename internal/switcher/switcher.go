@@ -320,9 +320,11 @@ type Result struct {
 	ClearedKeyOwner store.Account
 
 	// FreshenErr is why the Stale outcome could not be repaired, when a
-	// Freshen hook was wired and failed. Nil with a Stale outcome means either
-	// no hook was wired or the refresh succeeded and still came back inside
-	// Claude Code's refresh window.
+	// Freshen hook was wired and failed -- or store.ErrStoredLoginSpent, when
+	// the target's stored login is one a newer login in the stores has
+	// superseded and nothing would make it installable. Nil with a Stale
+	// outcome means either no hook was wired or the refresh succeeded and still
+	// came back inside Claude Code's refresh window.
 	FreshenErr error
 
 	// CooldownErr, KeyErr, and ProfileSyncErr are failures that happened AFTER
@@ -652,6 +654,15 @@ func Execute(s *store.Store, req Request) (Result, error) {
 				return nil, ErrStoredLoginMoved
 			}
 			res.Outcome = Raced
+			return nil, cclink.ErrNoChange
+		}
+		// A stored login a newer one in these very stores has superseded is
+		// not installed: its refresh token is spent, and Claude Code presenting
+		// it would revoke the newer login (store.Account.StoredLoginSpent).
+		// Decided here, against the stores as they are under the lock, for the
+		// daemon and every attended caller alike.
+		if target, ok := s.Get(req.Target.UUID); ok && target.StoredLoginSpent(cur, stores, store.LoadNamedLogins()) {
+			res.Outcome, res.FreshenErr = Stale, store.ErrStoredLoginSpent
 			return nil, cclink.ErrNoChange
 		}
 		write := cur

@@ -129,8 +129,8 @@ func TestANamedLoginThatCouldNotBeAdoptedSkipsTheTickAndHoldsTheRefresh(t *testi
 	if got := activeOnDisk(t); got != "u-2" {
 		t.Fatalf("active = %q: the tick that named a login acted on a plan made before it", got)
 	}
-	if _, err := e.freshen(context.Background())("u-1"); !errors.Is(err, errUnadopted) {
-		t.Fatalf("freshen(u-1) = %v, want errUnadopted: its stored refresh token is spent", err)
+	if _, err := e.freshen(context.Background())("u-1"); !errors.Is(err, store.ErrStoredLoginSpent) {
+		t.Fatalf("freshen(u-1) = %v, want store.ErrStoredLoginSpent: its stored refresh token is spent", err)
 	}
 	if refreshed {
 		t.Fatal("u-1's spent refresh token was presented")
@@ -149,11 +149,11 @@ func TestAPollOfAnAccountWithAnUnadoptedNewerLoginIsHeldNotFailed(t *testing.T) 
 		fetches++
 		return "AT-u-1", nil
 	}, noFetch)
-	e.holdUntilStored("u-1", "refresh:RT-u-1-newer", "refresh:RT-u-1")
+	spendStoredLogin(t, e, "u-1")
 
 	err := e.poll(context.Background(), a, config.Defaults(), configuredThresholds(config.Defaults()), nil, false)
-	if !errors.Is(err, errUnadopted) {
-		t.Fatalf("poll = %v, want errUnadopted", err)
+	if !errors.Is(err, store.ErrStoredLoginSpent) {
+		t.Fatalf("poll = %v, want store.ErrStoredLoginSpent", err)
 	}
 	if fetches != 0 {
 		t.Fatalf("the access token was fetched %d times for an account whose stored refresh token is spent", fetches)

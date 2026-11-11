@@ -3,12 +3,55 @@ package daemon
 import (
 	"context"
 	"testing"
+	"time"
 
+	"github.com/Kweiza/ccdaddy/internal/cclink"
+	"github.com/Kweiza/ccdaddy/internal/cclink/cclinktest"
 	"github.com/Kweiza/ccdaddy/internal/identity"
+	"github.com/Kweiza/ccdaddy/internal/store"
+	"github.com/Kweiza/ccdaddy/internal/strategy"
 )
 
 // Round 5: the hold on a spent stored refresh token covers every token read,
 // and lifts only once the store holds the newer login.
+
+// spendStoredLogin is Claude Code refreshing uuid's login into the keychain
+// item, and the daemon naming it and failing to store it: the item holds a
+// newer login of uuid, the identity oracle's naming of it is on disk, and e
+// takes a pass's verdict -- uuid's stored refresh token is spent.
+func spendStoredLogin(t *testing.T, e *Engine, uuid string) {
+	t.Helper()
+	newer := "RT-" + uuid + "-newer"
+	cclinktest.Install(t, cclinktest.NewKeychain(blobExpiring(newer, tickEpoch.Add(9*time.Hour))))
+	nameLogin(t, "refresh:"+newer, uuid)
+	passSees(t, e)
+	if e.holdSpentToken(uuid) == nil {
+		t.Fatalf("precondition: %s's stored login is not spent", uuid)
+	}
+}
+
+// nameLogin is the daemon's record of the identity oracle naming a login it
+// could not store (nameUnstored).
+func nameLogin(t *testing.T, loginIdentity, uuid string) {
+	t.Helper()
+	if err := strategy.WithState(time.Second, func(st *strategy.State) error {
+		st.NameLogin(store.LoginHash(loginIdentity), uuid)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// passSees has e take a pass's verdict on which stored logins are spent, from
+// the stores and the store as they are now.
+func passSees(t *testing.T, e *Engine) {
+	t.Helper()
+	stores, err := cclink.ReadLoginStores()
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.setSpent(openEngineStore(t).SpentLogins(stores))
+}
 
 // The profile check reads the account's token through the same hold as the
 // usage poll. Before, it called AccessToken directly, which may refresh.
@@ -23,7 +66,7 @@ func TestTheProfileCheckIsHeldLikeThePoll(t *testing.T) {
 	e.FetchProfile = func(context.Context, string) (*identity.Profile, error) {
 		return &identity.Profile{AccountUUID: "u-1"}, nil
 	}
-	e.holdUntilStored("u-1", "refresh:RT-u-1-newer", "refresh:RT-u-1")
+	spendStoredLogin(t, e, "u-1")
 
 	e.checkProfile(context.Background(), a, "", tickEpoch, true)
 	if fetches != 0 {
@@ -31,26 +74,28 @@ func TestTheProfileCheckIsHeldLikeThePoll(t *testing.T) {
 	}
 }
 
-// The hold stays while the account's stored credential is still the spent one,
-// even with both login stores agreeing; it lifts once something else is
-// stored -- here, the newer login itself.
+// The hold stays while the account's stored login is the spent one, even with
+// both login stores agreeing on the newer login; it lifts once the newer login
+// is stored.
 func TestTheHoldStaysWhileTheSpentLoginIsStillStored(t *testing.T) {
 	isolateEngine(t)
 	a := seedAccount(t, "u-1", "org-1")
-	liveAs(t, "u-1")
-	withItem(t, "u-1") // both stores agree; the store still holds the old login
+	newer := blobExpiring("RT-u-1-newer", tickEpoch.Add(9*time.Hour))
+	writeLiveLoginRT(t, "RT-u-1-newer", tickEpoch.Add(9*time.Hour))
+	cclinktest.Install(t, cclinktest.NewKeychain(newer))
+	nameLogin(t, "refresh:RT-u-1-newer", "u-1")
 	e := engineFor(t, tokensAreFine, noFetch)
-	e.holdUntilStored("u-1", "refresh:RT-u-1-newer", "refresh:RT-u-1")
 
-	s := openEngineStore(t)
-	e.releaseStored(s)
+	passSees(t, e)
 	if e.holdSpentToken("u-1") == nil {
 		t.Fatal("the hold lifted while the store still holds the spent login")
 	}
-	if err := s.Add(a, oauthBlob("RT-u-1-newer")); err != nil {
+	var b cclink.Blob
+	mustUnmarshal(t, newer, &b)
+	if err := openEngineStore(t).Add(a, b); err != nil {
 		t.Fatal(err)
 	}
-	e.releaseStored(openEngineStore(t))
+	passSees(t, e)
 	if err := e.holdSpentToken("u-1"); err != nil {
 		t.Fatalf("the hold did not lift once the store held the newer login: %v", err)
 	}

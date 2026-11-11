@@ -55,7 +55,8 @@ const (
 	// than its stored one -- the account's live grant -- but storing it
 	// failed. Not remembered, so it is asked about and adopted again; until
 	// then the account's stored refresh token is already spent, and nothing
-	// may present it (verdictFor places the hold; see Engine.holdSpentToken).
+	// may present it (verdictFor records the naming every process holds it
+	// by; see Engine.nameUnstored).
 	liveAdoptFailed
 )
 
@@ -176,16 +177,16 @@ func (e *Engine) verdictFor(s *store.Store, live cclink.Blob, uuid string) (stor
 	next, err := s.Credentials(owner.UUID)
 	if err != nil {
 		e.logf("could not read %s's stored login to adopt into it: %v", owner.Label(), err)
-		// What is stored could not be read, so the hold waits for the newer
-		// login itself (or one that supersedes it).
-		e.holdUntilStored(owner.UUID, cclink.LoginIdentity(live), "")
+		// What is stored could not be read, so it cannot be shown to be the
+		// later of the two, and the stored token is held (nameUnstored).
+		e.nameUnstored(owner, live)
 		return owner, liveAdoptFailed
 	}
 	if cclink.LoginIdentity(next) == cclink.LoginIdentity(live) {
 		// Already stored -- adopted on an earlier pass.
 		return owner, liveAdopted
 	}
-	if !newerThanStored(live, next) {
+	if !cclink.IssuedAfter(live, next) {
 		return owner, liveOwned
 	}
 	adopted := cclink.Blob{}
@@ -204,14 +205,13 @@ func (e *Engine) verdictFor(s *store.Store, live cclink.Blob, uuid string) (stor
 		// spent stored token is not presented meanwhile; liveAdoptFailed is
 		// how the caller knows to hold it.
 		e.logf("could not adopt the login Claude Code rotated for %s: %v", owner.Label(), err)
-		// The hold is placed HERE, with the stored login this verdict
-		// compared against as the spent one -- not one re-read after the
-		// failure. A write that failed on the store lock failed because
-		// something else held it, and that something may have stored a NEWER
-		// login of this account meanwhile; recorded as spent, that login
-		// would hold the account until the daemon restarted. Placed here, the
-		// hold covers every caller of the oracle, act's resolveLive included.
-		e.holdUntilStored(owner.UUID, cclink.LoginIdentity(live), cclink.LoginIdentity(next))
+		// Named HERE, so it covers every caller of the oracle, act's
+		// resolveLive included. What is recorded is the naming and nothing
+		// else: whether the stored token is spent is decided against whatever
+		// the account stores when it is asked, so a write that failed on the
+		// store lock because something else stored a NEWER login of this
+		// account meanwhile holds nothing.
+		e.nameUnstored(owner, live)
 		return owner, liveAdoptFailed
 	}
 	return owner, liveAdopted

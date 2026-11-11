@@ -8,17 +8,21 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/store"
+	"github.com/Kweiza/ccdaddy/internal/strategy"
 )
 
 // Round 7.
 
-// The spent identity is the stored login the verdict COMPARED, never one read
-// again after the adoption failed. Here the adoption of G1 waits on the store
-// lock while another process stores G2, then fails. A re-read would record G2
-// -- a live login -- as spent, and the hold would never lift.
-func TestTheSpentLoginIsTheOneTheVerdictCompared(t *testing.T) {
+// A failed adoption records only the naming; whether the stored token is spent
+// is decided against whatever the account stores when it is asked. Here the
+// adoption of G1 waits on the store lock while another process stores G2, a
+// later generation, and then fails. A hold fixed to the login the verdict
+// compared would hold the account on G2 -- a live login -- until the daemon
+// restarted.
+func TestAFailedAdoptionRacingALaterStoredLoginHoldsNothing(t *testing.T) {
 	isolateEngine(t)
 	seedAccountExpiring(t, "u-1", "org-1", tickEpoch.Add(time.Hour)) // G0
+	writeLiveLoginRT(t, "RT-u-1-g1", tickEpoch.Add(8*time.Hour))
 	var g1 cclink.Blob
 	mustUnmarshal(t, blobExpiring("RT-u-1-g1", tickEpoch.Add(8*time.Hour)), &g1)
 
@@ -29,7 +33,9 @@ func TestTheSpentLoginIsTheOneTheVerdictCompared(t *testing.T) {
 		// fails.
 		other := openEngineStore(t)
 		cur, _ := other.Get(a.UUID)
-		if err := other.Add(cur, oauthBlob("RT-u-1-g2")); err != nil {
+		var g2 cclink.Blob
+		mustUnmarshal(t, blobExpiring("RT-u-1-g2", tickEpoch.Add(16*time.Hour)), &g2)
+		if err := other.Add(cur, g2); err != nil {
 			t.Fatal(err)
 		}
 		return errors.New("locking the ccdad store: timed out")
@@ -40,12 +46,16 @@ func TestTheSpentLoginIsTheOneTheVerdictCompared(t *testing.T) {
 	if _, verdict := e.resolveStore(context.Background(), openEngineStore(t), g1); verdict != liveAdoptFailed {
 		t.Fatalf("verdict = %v, want adopt-failed", verdict)
 	}
-	if e.holdSpentToken("u-1") == nil {
-		t.Fatal("precondition: a failed adoption placed no hold")
+	st, err := strategy.LoadState()
+	if err != nil {
+		t.Fatal(err)
 	}
-	e.releaseStored(openEngineStore(t))
+	if uuid, ok := st.NamedLogin(store.LoginHash("refresh:RT-u-1-g1")); !ok || uuid != "u-1" {
+		t.Fatalf("precondition: the failed adoption did not record the naming: %q %v", uuid, ok)
+	}
+	passSees(t, e)
 	if err := e.holdSpentToken("u-1"); err != nil {
-		t.Fatalf("the hold stayed although G2, not the spent G0, is stored: %v", err)
+		t.Fatalf("the account is held although G2, issued after G1, is stored: %v", err)
 	}
 }
 
@@ -57,15 +67,56 @@ func TestAHeldAccountIsNotAPlanTarget(t *testing.T) {
 	seedAccount(t, "u-1", "org-1")
 	seedAccount(t, "u-2", "org-2")
 	seedAccount(t, "u-3", "org-3")
-	liveAs(t, "u-1")
+	// u-1 in the keychain item, and in the file behind it a newer login of
+	// u-2 that the identity oracle named and ccdad could not store.
+	withItem(t, "u-1")
+	writeLiveLoginRT(t, "RT-u-2-newer", tickEpoch.Add(9*time.Hour))
+	nameLogin(t, "refresh:RT-u-2-newer", "u-2")
 	recordActive(t, "u-1")
 	readings(t, map[string]float64{"u-1": 99, "u-2": 1, "u-3": 30})
 
 	e := engineFor(t, tokensAreFine, noFetch)
-	e.holdUntilStored("u-2", "refresh:RT-u-2-newer", "refresh:RT-u-2")
 	tick(t, e)
 
 	if got := activeOnDisk(t); got != "u-3" {
 		t.Fatalf("active = %q, want u-3: the held u-2 was planned for, or nothing moved", got)
+	}
+}
+
+// The oracle's record of a login ccdad could not store is kept only while a
+// login store holds that login: it can hold an account's stored token only
+// then. A pass forgets the rest, and a pass whose file could not be read
+// forgets nothing.
+func TestAPassForgetsTheNamingOfALoginNoStoreHolds(t *testing.T) {
+	isolateEngine(t)
+	writeLiveLoginRT(t, "RT-u-1-newer", tickEpoch.Add(9*time.Hour))
+	nameLogin(t, "refresh:RT-u-1-newer", "u-1")
+	nameLogin(t, "refresh:RT-u-2-gone", "u-2")
+	e := engineFor(t, tokensAreFine, noFetch)
+
+	named := func(id string) bool {
+		st, err := strategy.LoadState()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, ok := st.NamedLogin(store.LoginHash(id))
+		return ok
+	}
+	stores, err := cclink.ReadLoginStores()
+	if err != nil {
+		t.Fatal(err)
+	}
+	unread := stores
+	unread.FileErr = errors.New("the credentials file could not be read")
+	e.forgetNamedLogins(unread)
+	if !named("refresh:RT-u-2-gone") {
+		t.Fatal("a pass that could not read the file forgot a naming")
+	}
+	e.forgetNamedLogins(stores)
+	if named("refresh:RT-u-2-gone") {
+		t.Error("the naming of a login no store holds was kept")
+	}
+	if !named("refresh:RT-u-1-newer") {
+		t.Error("the naming of a login the credentials file holds was forgotten")
 	}
 }
