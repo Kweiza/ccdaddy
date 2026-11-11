@@ -16,6 +16,8 @@ must reference accounts by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.29.2] — 2026-11-11
+
 ### Changed
 
 - **A switch keeps Claude Code's token refresh waiting on the Keychain for
@@ -4270,7 +4272,8 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.29.1...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.29.2...HEAD
+[0.29.2]: https://github.com/Kweiza/ccdaddy/compare/v0.29.1...v0.29.2
 [0.29.1]: https://github.com/Kweiza/ccdaddy/compare/v0.29.0...v0.29.1
 [0.29.0]: https://github.com/Kweiza/ccdaddy/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/Kweiza/ccdaddy/compare/v0.27.0...v0.28.0
