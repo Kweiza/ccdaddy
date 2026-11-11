@@ -223,3 +223,49 @@ func TestALandedWriteWhoseItemMovesOnBeforeTheFileFollowsIsUnknown(t *testing.T)
 		t.Fatalf("the file followed a write the item no longer holds:\n%s", got)
 	}
 }
+
+// The FILE can move on between the two holds too. Claude Code refreshes the
+// login it found in the item, its own keychain write fails, and it writes the
+// newer login to the credentials file alone. Bringing the file into line with
+// the item then would put the login Claude Code had just spent back over the
+// one it minted: a third value in either store is an outcome nobody knows.
+func TestALandedWriteWhoseFileMovesOnBeforeItFollowsIsUnknown(t *testing.T) {
+	withClaudeHome(t)
+	file := mustPath(ccpath.CredentialsPath())
+	if err := os.WriteFile(file, []byte(oldLogin), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const rotated = `{"claudeAiOauth":{"accessToken":"AT-rotated","refreshToken":"RT-rotated"}}`
+	var mu sync.Mutex
+	item, reads := oldLogin, 0
+	t.Cleanup(SetSecurityRunnerForTest(func(_ context.Context, args ...string) (SecurityAnswer, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if args[0] == "add-generic-password" {
+			for i := 1; i+1 < len(args); i++ {
+				if args[i] == "-X" {
+					payload, _ := hex.DecodeString(args[i+1])
+					item = string(payload)
+				}
+			}
+			return SecurityAnswer{}, context.DeadlineExceeded
+		}
+		reads++
+		if reads == 2 {
+			// The read-back finds the write; Claude Code then rotates it into
+			// the credentials file alone.
+			if err := os.WriteFile(file, []byte(rotated), 0o600); err != nil {
+				t.Error(err)
+			}
+		}
+		return SecurityAnswer{Stdout: item}, nil
+	}))
+
+	err := Activate(Blob{"claudeAiOauth": json.RawMessage(newLogin)})
+	if !errors.Is(err, ErrLoginOutcomeUnknown) {
+		t.Fatalf("Activate = %v, want ErrLoginOutcomeUnknown", err)
+	}
+	if got := fileNow(t, file); !strings.Contains(got, "RT-rotated") {
+		t.Fatalf("the login Claude Code wrote to the file was put back over:\n%s", got)
+	}
+}

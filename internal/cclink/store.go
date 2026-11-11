@@ -427,8 +427,10 @@ type unconfirmedWrite struct {
 	err error
 	// written is the merged blob the item was given, previous what the item
 	// held before, and incoming what the caller decided to install -- which a
-	// second pass merges onto the file again.
-	written, previous, incoming Blob
+	// second pass merges onto the file again. fileBefore is what the
+	// credentials file held under the first hold, which the second checks it
+	// still holds.
+	written, previous, incoming, fileBefore Blob
 }
 
 // settle reads the item back and says what the write that ran out of time
@@ -440,44 +442,50 @@ func (u unconfirmedWrite) settle() error {
 	case writeUnresolved:
 		return unconfirmedWriteError(u.err)
 	}
-	return completeLandedWrite(u.incoming, u.written)
+	return completeLandedWrite(u.incoming, u.written, u.fileBefore)
 }
 
 // completeLandedWrite brings the credentials file into line with an item a
 // write that ran out of time is now known to have landed in: the locks again,
-// one read to see the item still holds that write, and the file. The read has
+// one read to see neither store has moved since, and the file. The read has
 // the write bound, as every read under the locks does: on the keychain that
 // was just too slow for the write, a shorter one would leave the login split
 // for want of a few seconds.
 //
-// The read is not a formality. The locks were released for the read-back,
-// and an item that moved since -- Claude Code's own /login -- must not have
-// the file put on a login it has already replaced; that is an outcome the next
-// pass of the split repair settles, like any other the read-back cannot name.
-// A pass that fails for any other reason leaves the item on the new login and
+// The check is not a formality, and it is of BOTH stores. The locks were
+// released for the read-back, and Claude Code may have written either since:
+// its /login into the item, or -- having refreshed the login it found in the
+// item, with its own keychain write failing -- the newer login into the file
+// alone. Bringing the file into line then would put a login Claude Code has
+// already replaced, possibly spent, back over the one it minted. So the item
+// must still hold the write, and the file must hold what it held before the
+// first hold or the login being written; any third login in either is an
+// outcome nobody knows, which the next pass of the split repair settles. A
+// pass that fails for any other reason leaves the item on the new login and
 // the file on the old: half written, which the same repair completes.
-func completeLandedWrite(incoming, written Blob) error {
+func completeLandedWrite(incoming, written, fileBefore Blob) error {
 	_, err := writeUnderLocks(writeFileOnly, func(_ Blob, stores LoginStores) (Blob, error) {
-		if !itemHoldsWrite(stores.Item, stores.HasItem, written) {
-			return nil, errItemMovedOn
+		fileStill := sameLoginOrNone(stores.File, fileBefore) || sameCredential(stores.File, written)
+		if !itemHoldsWrite(stores.Item, stores.HasItem, written) || !fileStill {
+			return nil, errStoresMovedOn
 		}
 		return incoming, nil
 	})
 	switch {
 	case err == nil:
 		return nil
-	case errors.Is(err, errItemMovedOn):
+	case errors.Is(err, errStoresMovedOn):
 		return fmt.Errorf("%w: the keychain item Claude Code reads first took the new login after its write "+
-			"ran out of time, and then changed again before the credentials file could follow. The file was "+
-			"left as it was; the daemon compares both stores on its next pass and puts one login in both",
-			ErrLoginOutcomeUnknown)
+			"ran out of time, and then one of the login stores changed again before the credentials file "+
+			"could follow. The file was left as it was; the daemon compares both stores on its next pass and "+
+			"puts one login in both", ErrLoginOutcomeUnknown)
 	}
 	return fmt.Errorf("%w; it took it after its write ran out of time, and the credentials file behind it could "+
 		"not then be brought into line: %w", ErrLoginHalfWritten, err)
 }
 
-// errItemMovedOn is completeLandedWrite's decision standing down.
-var errItemMovedOn = errors.New("the keychain item no longer holds the login that was written to it")
+// errStoresMovedOn is completeLandedWrite's decision standing down.
+var errStoresMovedOn = errors.New("a login store changed between the write and the file following it")
 
 // writeUnderLocks is one locked pass of writeMerged. It returns an
 // unconfirmedWrite, and no error of its own, for an item write whose outcome
@@ -555,7 +563,8 @@ func writeUnderLocks(writes StoreWrites, decide func(live Blob, stores LoginStor
 			if !writeOutcomeUnknown(werr) {
 				return nil, keychainWriteFailed(werr)
 			}
-			return &unconfirmedWrite{err: werr, written: merged, previous: live, incoming: incoming}, nil
+			return &unconfirmedWrite{err: werr, written: merged, previous: live, incoming: incoming,
+				fileBefore: stores.File}, nil
 		}
 		// Asked again because the item write can take most of the write bound
 		// on the machine this path is slow on, and the touch tick may have seen
