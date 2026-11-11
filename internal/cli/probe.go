@@ -12,6 +12,7 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/provider"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
+	"github.com/Kweiza/ccdaddy/internal/switcher"
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
 
@@ -63,8 +64,10 @@ type probeOptions struct {
 	force  bool
 	now    time.Time
 	// hold is the hold on the stored login this probe would seed, decided on
-	// that copy (store.Store.PresentableLogin).
+	// that copy (store.Store.PresentableLogin), and view the login stores it
+	// was decided against, for what lifts it (nil when they could not be read).
 	hold store.Hold
+	view *switcher.LoginView
 }
 
 // probeArgs is the child's command line.
@@ -179,7 +182,7 @@ func probeSkip(a store.Account, blob cclink.Blob, entry usage.Entry, o probeOpti
 	// is seeded with -- a spent refresh token revokes the newer login. After
 	// the token refusal, because only a login is seeded.
 	if o.hold.Held() {
-		return fmt.Sprintf("not probing %s: %s", a.Label(), spentLoginReason(a)), false
+		return fmt.Sprintf("not probing %s: %s", a.Label(), spentLoginReason(a, o.hold, o.view)), false
 	}
 	if kerr := refuseUnscopedRun(describeClaudeInstall(o.claude), blob, a.Label()); kerr != nil {
 		return kerr.Error(), true
@@ -451,8 +454,9 @@ func newProbeCmd() *cobra.Command {
 			stderr := cmd.ErrOrStderr()
 			notice := probeQuotaNoticer(stderr)
 			spent, failed := 0, 0
-			stores, _ := cclink.ReadLoginStores() // the zero value when it failed: no evidence
+			stores, storesErr := cclink.ReadLoginStores() // the zero value when it failed: no evidence
 			oracle := store.LoadOracleRecord()
+			o.view = loginView(s, stores, storesErr)
 			for _, a := range targets {
 				blob, hold, cerr := s.PresentableLogin(a.UUID, stores, oracle)
 				o.hold = hold

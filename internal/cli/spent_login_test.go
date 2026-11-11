@@ -223,3 +223,77 @@ func TestASetupTokenRunsBesideASpentOAuthLogin(t *testing.T) {
 		t.Fatalf("CLAUDE_CODE_OAUTH_TOKEN = %q, want the setup token", got)
 	}
 }
+
+// orphanedMachine is the hold nothing lifts on its own: the record says chan's
+// stored login is spent, and no login store holds a login nobody can name --
+// the item and the file both hold support's stored login. Whatever the newer
+// login was, it is gone from this machine, and only logging chan in again
+// stores another login.
+func orphanedMachine(t *testing.T) {
+	t.Helper()
+	seedAccount(t, "uuid-chan", "chan@example.com")
+	seedAccount(t, "uuid-support", "support@example.com")
+	writeLiveFile(t, liveLoginJSON("RT-uuid-support", ""))
+	cclinktest.Install(t, cclinktest.NewKeychain(liveLoginJSON("RT-uuid-support", "")))
+	recordLive(t, "uuid-support")
+	recordUnstoredLogin(t, "uuid-chan", "refresh:RT-uuid-chan-newer", "refresh:RT-uuid-chan")
+}
+
+// A HOLD NOTHING WILL LIFT IS SAID, AND SO IS WHAT DOES. Refusals used to say
+// the daemon would store the newer login, which it never will once no store
+// holds it; doctor and status said nothing at all, and the account sat out of
+// every plan and every poll.
+func TestAHoldOnlyALoginCanLiftSaysSoEverywhere(t *testing.T) {
+	isolate(t)
+	suppressAutoStart(t)
+	orphanedMachine(t)
+
+	code, _, stderr, _ := runRoot(t, "switch", "chan@example.com")
+	if code != ExitBlocked || !strings.Contains(stderr, "ccdad add claude") {
+		t.Errorf("switch: exit = %d, want %d and the way out, `ccdad add claude`:\n%s", code, ExitBlocked, stderr)
+	}
+	if strings.Contains(stderr, "as soon as it can") || strings.Contains(stderr, "profile endpoint") {
+		t.Errorf("switch suggests the daemon may yet store a login no store holds:\n%s", stderr)
+	}
+
+	_, r, _ := runDoctor(t)
+	if got := r.level(t, "spent-logins"); got != "warn" {
+		t.Errorf("spent-logins = %q, want warn: %s", got, r.detail(t, "spent-logins"))
+	}
+	if d := r.detail(t, "spent-logins"); !strings.Contains(d, "chan@example.com") ||
+		!strings.Contains(d, "ccdad add claude") || strings.Contains(d, "profile endpoint") {
+		t.Errorf("spent-logins does not name the account and the one way out: %s", d)
+	}
+
+	_, _, stderr, _ = runRoot(t, "status")
+	if !strings.Contains(stderr, "chan@example.com") || !strings.Contains(stderr, "ccdad add claude") {
+		t.Errorf("status does not say chan is held, or what lifts it:\n%s", stderr)
+	}
+}
+
+// While a store holds a login nobody can name yet, it may be the newer login
+// rotated again, and the daemon may still store it: the refusal says both
+// that and what to do if it is not.
+func TestAHoldBehindAnUnnamedLoginSaysTheDaemonMayStillStoreIt(t *testing.T) {
+	isolate(t)
+	suppressAutoStart(t)
+	spentMachine(t)
+	writeLiveFile(t, liveLoginJSON("RT-uuid-chan-rotated-again", ""))
+
+	_, _, stderr, _ := runRoot(t, "switch", "chan@example.com")
+	if !strings.Contains(stderr, "profile endpoint") || !strings.Contains(stderr, "ccdad add claude") {
+		t.Errorf("the refusal does not say the daemon may still name the login, and what to do if not:\n%s", stderr)
+	}
+}
+
+func TestDoctorPassesWhenNoStoredLoginIsHeld(t *testing.T) {
+	isolate(t)
+	suppressAutoStart(t)
+	seedAccount(t, "uuid-support", "support@example.com")
+	writeLiveFile(t, liveLoginJSON("RT-uuid-support", ""))
+
+	_, r, _ := runDoctor(t)
+	if got := r.level(t, "spent-logins"); got != "ok" {
+		t.Errorf("spent-logins = %q, want ok: %s", got, r.detail(t, "spent-logins"))
+	}
+}

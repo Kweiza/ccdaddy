@@ -281,6 +281,7 @@ func runChecks() []check {
 		checkCredentialKeys(live, liveErr),
 		checkKeychain(liveErr),
 		checkLoginSplit(root, storeUsable, accountsUsable, stores, storesErr),
+		checkSpentLogins(root, storeUsable, accountsUsable, stores, storesErr),
 		checkEnvironment(),
 		checkAPIKey(cfg, cfgErr),
 		checkOAuthSource(live, liveErr, liveSource),

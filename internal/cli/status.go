@@ -111,8 +111,13 @@ func loadSnapshot(cmd *cobra.Command, now time.Time, refresh bool) (snap view.Sn
 	accounts := s.Accounts()
 
 	// An unreadable live file costs the active marker and nothing else. Status
-	// is what a user reaches for when something is already wrong.
-	live, _ := cclink.Load()
+	// is what a user reaches for when something is already wrong. One read of
+	// both stores, which the held-login notices below use as well.
+	stores, storesErr := cclink.ReadLoginStores()
+	live, _, _ := stores.Live()
+	if storesErr != nil {
+		live = nil
+	}
 	active, hasActive := attributeLive(live, accounts, s.Credentials)
 
 	// Every notice is said on stderr AND kept for the Snapshot, through this one
@@ -121,6 +126,9 @@ func loadSnapshot(cmd *cobra.Command, now time.Time, refresh bool) (snap view.Sn
 	say := func(n string) {
 		fmt.Fprint(cmd.ErrOrStderr(), n)
 		notices = append(notices, n)
+	}
+	for _, n := range spentLoginNotices(s, stores, storesErr) {
+		say(n)
 	}
 
 	if refresh {

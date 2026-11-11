@@ -401,8 +401,16 @@ func newSwitchCmd() *cobra.Command {
 			// A stored login a newer one has superseded is refused for its own
 			// reason: no refresh makes it installable, only storing the newer
 			// login does.
-			if res.Outcome == switcher.Stale && errors.Is(res.FreshenErr, store.ErrStoredLoginSpent) {
-				fmt.Fprintf(cmd.ErrOrStderr(), "Not switching to %s: %s.\n", target.Label(), spentLoginReason(target))
+			if hold, spent := spentHoldOf(res.FreshenErr); res.Outcome == switcher.Stale && spent {
+				// The stores as the decision read them under the lock, or --
+				// when the refusal came from the refresh before it -- as they
+				// read now.
+				v := &res.Before
+				if !res.UnderLock {
+					stores, err := cclink.ReadLoginStores()
+					v = loginView(s, stores, err)
+				}
+				fmt.Fprintf(cmd.ErrOrStderr(), "Not switching to %s: %s.\n", target.Label(), spentLoginReason(target, hold, v))
 				return WithCode(errSilent, ExitBlocked)
 			}
 			// Refused, not failed: nothing was written, and the account is

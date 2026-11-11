@@ -18,6 +18,18 @@ import (
 var ErrStoredLoginSpent = errors.New("a newer login of this account was minted from its stored refresh token, " +
 	"and ccdad has not stored it, so the stored refresh token is already spent and is not presented")
 
+// SpentError is ErrStoredLoginSpent for one account, with why its stored login
+// is held -- which is what says what lifts it.
+type SpentError struct {
+	UUID string
+	Hold Hold
+}
+
+func (e *SpentError) Error() string { return fmt.Sprintf("%v: %q", ErrStoredLoginSpent, e.UUID) }
+
+// Unwrap makes errors.Is(err, ErrStoredLoginSpent) hold.
+func (e *SpentError) Unwrap() error { return ErrStoredLoginSpent }
+
 // OracleRecord is what the daemon has recorded about logins it could not
 // store (strategy.State): whose a login is, by LoginHash, as the identity
 // oracle named it; and, per account, the stored login known to be spent and
@@ -198,16 +210,17 @@ func (s *Store) PresentableLogin(uuid string, live cclink.LoginStores, rec Oracl
 }
 
 // SpentLogins is every Claude account whose stored refresh token is spent
-// (Account.StoredLoginSpent), against rec.
-func (s *Store) SpentLogins(live cclink.LoginStores, rec OracleRecord) map[string]bool {
-	out := map[string]bool{}
+// (Account.StoredLoginSpent), against rec, with why. An account it does not
+// name is NotHeld.
+func (s *Store) SpentLogins(live cclink.LoginStores, rec OracleRecord) map[string]Hold {
+	out := map[string]Hold{}
 	for _, a := range s.Accounts() {
 		if a.Provider != provider.Claude {
 			continue
 		}
 		stored, _ := s.Credentials(a.UUID)
-		if a.StoredLoginSpent(stored, live, rec).Held() {
-			out[a.UUID] = true
+		if hold := a.StoredLoginSpent(stored, live, rec); hold.Held() {
+			out[a.UUID] = hold
 		}
 	}
 	return out
