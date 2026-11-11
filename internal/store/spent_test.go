@@ -141,12 +141,13 @@ func TestASpentStoredLoginIsHeldUntilTheAccountStoresAnother(t *testing.T) {
 
 var errUnreadableForTest = errors.New("the credentials file could not be read")
 
-// A RECORD THAT CANNOT BE READ IS NOT AN EMPTY ONE. The engine state that holds
-// which stored logins are spent can fail to read or parse, and what it held is
-// then unknown: every stored login is held until it can be read. A state that
-// was never written is different -- nothing was ever recorded in it -- and
-// holds nothing.
-func TestAnUnreadableRecordHoldsEveryStoredLogin(t *testing.T) {
+// A RECORD THAT CANNOT BE READ IS NOT AN EMPTY ONE. The record of which stored
+// logins are spent can fail to read or parse, and what it held is then
+// unknown: a stored login is held until it can be read, unless Claude Code is
+// on it already -- which neither account here is, the stores being read as
+// holding nothing. A record that was never written is different -- nothing
+// was ever recorded in it -- and holds nothing.
+func TestAnUnreadableRecordHoldsTheStoredLoginsClaudeCodeIsNotOn(t *testing.T) {
 	dir := withStore(t)
 	s, err := Open()
 	if err != nil {

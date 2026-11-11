@@ -336,7 +336,8 @@ func TestTheAdviceForAnUnreadableRecordKeepsItsHolds(t *testing.T) {
 		t.Errorf("spent-logins = %q, want fail: %s", got, r.detail(t, "spent-logins"))
 	}
 	d := r.detail(t, "spent-logins")
-	for _, want := range []string{"chan@example.com", "ccdad add claude", "and only then remove it", "Restore "} {
+	for _, want := range []string{"chan@example.com", "ccdad add claude", "and only then remove it", "Restore ",
+		"stays on `ccdad doctor`'s list after it is logged in again"} {
 		if !strings.Contains(d, want) {
 			t.Errorf("spent-logins does not say %q: %s", want, d)
 		}

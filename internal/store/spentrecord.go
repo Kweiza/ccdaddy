@@ -164,7 +164,9 @@ func WithSpentRecord(timeout time.Duration, fn func(*SpentRecord) error) (err er
 
 // SpentRecordAdvice is what to do about a record that cannot be read, said the
 // same way everywhere: restore it, or log in again every account it may hold
-// as spent -- who -- and only then remove it.
+// as spent -- who -- and only then remove it. An account logged in again is
+// still on doctor's list -- its new login is in no store, and the record
+// cannot be read to tell it from the old -- so the advice says to keep count.
 //
 // REMOVING IT FIRST IS THE ONE THING NOT TO DO, and the reason the advice is
 // not simply "repair or remove it". An empty record holds nothing: every
@@ -178,7 +180,9 @@ func SpentRecordAdvice(who string) string {
 		path = SpentRecordFileName
 	}
 	return "Restore " + path + " from a backup, or log in again with `ccdad add claude` " + who +
-		", and only then remove it: removed first, it would let a spent stored login be presented again"
+		", and only then remove it: removed first, it would let a spent stored login be presented again. " +
+		"An account stays on `ccdad doctor`'s list after it is logged in again, until the record can be " +
+		"read, so keep track of the ones done"
 }
 
 // LoadError is why the record could not be read, nil when it could or when
