@@ -3,6 +3,7 @@ package tokens
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -120,5 +121,30 @@ func TestTheHoldIsDecidedOnTheStoredLoginThatIsPresented(t *testing.T) {
 	got, err := sourceFor(t, refusingEndpoint(t)).AccessToken(context.Background(), "u-1")
 	if err == nil && got != "a1-newer" {
 		t.Fatalf("AccessToken = %q, want the newer login's token or a refusal: the spent copy was used", got)
+	}
+}
+
+// E2's stores with the record of spent logins unreadable: ccdad's own switch
+// from u-1 to u-2 whose outcome was unknown left u-2's login in the item and
+// u-1's, issued later, in the file. Claude Code is on u-2, and u-1's later
+// login is another account's -- it says nothing about u-2's -- so u-2's token
+// is handed out as it would be with the record readable.
+func TestTheLoginClaudeCodeIsOnIsServedWithTheRecordUnreadable(t *testing.T) {
+	isolate(t)
+	seed(t, "u-1", oauthRecord("a1", "r1", time.Now().Add(8*time.Hour), ""))
+	u2 := oauthRecord("a2", "r2", time.Now().Add(time.Hour), "")
+	seed(t, "u-2", u2)
+	writeLive(t, oauthRecord("a1", "r1", time.Now().Add(8*time.Hour), ""))
+	cclinktest.Install(t, cclinktest.NewKeychain(`{"claudeAiOauth":`+string(u2)+`}`))
+	if err := os.WriteFile(mustPath(store.SpentRecordPath()), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := sourceFor(t, refusingEndpoint(t)).AccessToken(context.Background(), "u-2")
+	if errors.Is(err, store.ErrStoredLoginSpent) {
+		t.Fatalf("AccessToken(u-2) = %v: the login Claude Code is on was held for another account's later login", err)
+	}
+	if err != nil || got != "a2" {
+		t.Fatalf("AccessToken(u-2) = (%q, %v), want u-2's token", got, err)
 	}
 }

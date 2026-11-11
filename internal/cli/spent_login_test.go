@@ -375,3 +375,26 @@ func TestTheRecoveryListKeepsAnAccountWhoseStoredLoginCannotBeRead(t *testing.T)
 		t.Fatalf("spent-logins leaves out an account whose stored login cannot be read: %s", d)
 	}
 }
+
+// Doctor names owners the way the hold does. With the record unreadable and
+// E2's stores -- support's login in the item, chan's in the file -- each login
+// is the other account's, Claude Code is on support, and neither account's
+// stored login can be shown spent by the other's: neither is listed.
+func TestDoctorDoesNotListAnAccountForAnotherAccountsLogin(t *testing.T) {
+	isolate(t)
+	suppressAutoStart(t)
+	seedAccount(t, "uuid-chan", "chan@example.com")
+	seedAccount(t, "uuid-support", "support@example.com")
+	writeLiveFile(t, liveLoginJSON("RT-uuid-chan", ""))
+	cclinktest.Install(t, cclinktest.NewKeychain(liveLoginJSON("RT-uuid-support", "")))
+	recordLive(t, "uuid-chan")
+	if err := os.WriteFile(mustPath(store.SpentRecordPath()), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, r, _ := runDoctor(t)
+	d := r.detail(t, "spent-logins")
+	if strings.Contains(d, "support@example.com") || strings.Contains(d, "chan@example.com") {
+		t.Fatalf("spent-logins lists an account for another account's login: %s", d)
+	}
+}
