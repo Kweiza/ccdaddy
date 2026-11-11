@@ -87,15 +87,15 @@ func recordingKeychain(t *testing.T, initial string, readBack time.Duration) *[]
 	return &spawns
 }
 
-// CLAUDE CODE'S LOCKS ARE HELD FOR ONE LOOKUP AND ONE WRITE. Its own token
+// CLAUDE CODE'S LOCKS ARE HELD FOR ONE READ AND ONE WRITE. Its own token
 // refresh waits on them, so every spawn under them is time a session can be
-// kept from refreshing. The merge-base read is a lookup and has the lookup
-// bound; the write has the write bound; and the read-back of a write that ran
-// out of time -- which asks the keychain that was just too slow, under the
-// write bound -- runs after the locks are released. A landed write's file then
-// follows in a second, short locked pass that spends one more lookup. Before,
-// all three spawns ran under the locks at the write bound: about 93 s.
-func TestASwitchHoldsClaudeCodesLocksForOneLookupAndOneWrite(t *testing.T) {
+// kept from refreshing. The merge-base read and the write each have the write
+// bound -- a switch is most needed when the keychain is slowest -- and the
+// read-back of a write that ran out of time runs after the locks are released.
+// A landed write's file then follows in a second hold, apart from the first,
+// that spends one more read. Before, all three spawns ran under one hold:
+// about 93 s.
+func TestTheReadBackOfATimedOutWriteRunsOutsideClaudeCodesLocks(t *testing.T) {
 	withClaudeHome(t)
 	file := mustPath(ccpath.CredentialsPath())
 	if err := os.WriteFile(file, []byte(oldLogin), 0o600); err != nil {
@@ -111,29 +111,30 @@ func TestASwitchHoldsClaudeCodesLocksForOneLookupAndOneWrite(t *testing.T) {
 	}
 
 	// The spawns in order, with the locks each ran under. A locked stretch is
-	// one hold of Claude Code's locks; each is bounded by lockedKeychainBound.
+	// one hold of Claude Code's locks; each is bounded by lockedKeychainBound,
+	// and the one after the read-back by a single read.
 	var held time.Duration
 	readBack := false
+	readOrWrite := keychainWriteTimeout + keychainWaitDelay
 	for i, s := range *spawns {
-		switch {
-		case s.op == "find-generic-password" && !s.locked:
-			if s.bound <= keychainReadTimeout {
-				t.Errorf("spawn %d: the read-back has the lookup bound (%s); it asks the keychain the write was "+
-					"too slow for", i, s.bound)
+		if s.bound <= keychainReadTimeout {
+			t.Errorf("spawn %d: %s has the lookup bound (%s); everything on the write path has the write bound",
+				i, s.op, s.bound)
+		}
+		if !s.locked {
+			if s.op != "find-generic-password" || readBack {
+				t.Errorf("spawn %d: %s ran without Claude Code's locks", i, s.op)
 			}
-			readBack = true
-			held = 0
+			readBack, held = true, 0
 			continue
-		case !s.locked:
-			t.Errorf("spawn %d: %s ran without Claude Code's locks", i, s.op)
-		case s.op == "find-generic-password" && s.bound > keychainReadTimeout:
-			t.Errorf("spawn %d: a read under Claude Code's locks has %s, more than the lookup bound %s",
-				i, s.bound, keychainReadTimeout)
 		}
 		held += s.bound + keychainWaitDelay
-		if held > lockedKeychainBound() {
+		switch {
+		case held > lockedKeychainBound():
 			t.Errorf("spawn %d: %s of keychain time under one hold of the locks, past lockedKeychainBound %s",
 				i, held, lockedKeychainBound())
+		case readBack && held > readOrWrite:
+			t.Errorf("spawn %d: the hold after the read-back spent %s, more than one read", i, held)
 		}
 	}
 	if !readBack {
@@ -141,16 +142,16 @@ func TestASwitchHoldsClaudeCodesLocksForOneLookupAndOneWrite(t *testing.T) {
 	}
 }
 
-// The bound itself, at today's values: a lookup and a write, each with the wait
-// for its pipes. What it replaced was three spawns at the write bound, 93 s;
-// this pins it to well under half of that, so a later change that puts a spawn
-// back under the locks has to say so here.
-func TestTheKeychainTimeUnderClaudeCodesLocksIsOneLookupAndOneWrite(t *testing.T) {
-	want := (keychainReadTimeout + keychainWaitDelay) + (keychainWriteTimeout + keychainWaitDelay)
+// The bound itself, at today's values: one read and one write, each with the
+// wait for its pipes. What it replaced was three spawns under one hold, 93 s;
+// this pins it at 62 s, so a later change that puts a spawn back under the
+// same hold has to say so here.
+func TestTheKeychainTimeUnderClaudeCodesLocksIsOneReadAndOneWrite(t *testing.T) {
+	want := 2 * (keychainWriteTimeout + keychainWaitDelay)
 	if got := lockedKeychainBound(); got != want {
-		t.Fatalf("lockedKeychainBound = %s, want one lookup and one write: %s", got, want)
+		t.Fatalf("lockedKeychainBound = %s, want one read and one write: %s", got, want)
 	}
-	if got := lockedKeychainBound(); got > 40*time.Second {
+	if got := lockedKeychainBound(); got > 62*time.Second {
 		t.Fatalf("lockedKeychainBound = %s; Claude Code's refresh can be held off for that long", got)
 	}
 }
@@ -158,7 +159,7 @@ func TestTheKeychainTimeUnderClaudeCodesLocksIsOneLookupAndOneWrite(t *testing.T
 // The read-back has the WRITE bound, not the lookup bound: it asks the same
 // slow keychain that just failed to answer a write in time. Here the read-back
 // takes 1.5 s, a lookup is allowed 0.3 s and a write 6 s, so a read-back held
-// to the lookup bound cannot confirm the write that landed. The lookups before
+// to the lookup bound cannot confirm the write that landed. The reads before
 // and after it -- the merge base, and the item checked again before the file
 // follows -- answer at once.
 func TestTheReadBackIsHeldToTheWriteBound(t *testing.T) {

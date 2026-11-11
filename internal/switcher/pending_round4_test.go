@@ -85,9 +85,9 @@ func TestAnIntentOlderThanASwitchCanTakeIsSettledAsNotTaken(t *testing.T) {
 	}
 }
 
-func TestTheWorstCaseSwitchIsAboutTwoMinutes(t *testing.T) {
+func TestTheWorstCaseSwitchIsUnderThreeMinutes(t *testing.T) {
 	if got := cclink.WorstCaseSwitch(); got < 90*time.Second || got > 3*time.Minute {
-		t.Fatalf("WorstCaseSwitch = %s, want about two minutes", got)
+		t.Fatalf("WorstCaseSwitch = %s, want between a minute and a half and three minutes", got)
 	}
 }
 

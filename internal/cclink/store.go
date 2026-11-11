@@ -151,13 +151,11 @@ func LoadWithSource() (Blob, CredentialSource, error) {
 // attributes-only and could not fail, so a switch could commit to writing an
 // item it had never read.
 //
-// The item is read with the LOOKUP bound, although it is the first spawn of a
-// write: it runs under Claude Code's credential locks, a lookup that runs out
-// of time changes nothing, and a keychain too slow for it fails the switch
-// before anything is written -- the same answer the daemon's own read of the
-// stores, under the same bound, gives that keychain every tick
-// (lockedKeychainBound). The stores come back SEPARATELY as well as merged,
-// because whether the login is split is decided from both.
+// The item is read with keychainWriteTimeout, not the lookup bound: this read
+// is the first spawn of a write, and a loaded keychain that fails it fails the
+// switch -- on the machine that needs one most (keychainWriteTimeout says
+// why). The stores come back SEPARATELY as well as merged, because whether the
+// login is split is decided from both.
 //
 // THE ITEM IS NOT THE WHOLE BASE EITHER. The freshness argument above holds for
 // what the item HAS; it says nothing about what the item never had. Claude
@@ -175,7 +173,7 @@ func LoadWithSource() (Blob, CredentialSource, error) {
 // so continuing on the item alone would destroy machine keys at exactly the
 // moment ccdad cannot see what it is destroying.
 func loadLiveUnderLock(livePath string) (LoginStores, error) {
-	item, ok, err := loadFromKeychain(keychainReadTimeout)
+	item, ok, err := loadFromKeychain(keychainWriteTimeout)
 	if err != nil {
 		return LoginStores{}, err
 	}
@@ -396,7 +394,7 @@ func ClearLogin() error {
 //
 // It holds Claude Code's credential locks for one pass: the stores read, the
 // decision, the item written and the file written, with no more than
-// lockedKeychainBound spent in `security` -- one lookup and one write.
+// lockedKeychainBound spent in `security` -- one read and one write.
 //
 // A WRITE THAT RAN OUT OF TIME IS READ BACK AFTER THE LOCKS ARE RELEASED.
 // The read-back asks the keychain that was just too slow, so it is held to the
@@ -405,8 +403,8 @@ func ClearLogin() error {
 // neither login is an outcome nobody knows, which the next pass of the daemon's
 // split repair settles. Holding Claude Code's own refresh off for it bought
 // nothing but the wait. When it finds the write LANDED, the file follows in a
-// second locked pass that spends one lookup -- completeLandedWrite -- so a
-// switch whose write landed still completes in the call that made it.
+// second locked pass that spends one read of the item -- completeLandedWrite
+// -- so a switch whose write landed still completes in the call that made it.
 func writeMerged(writes StoreWrites, decide func(live Blob, stores LoginStores) (Blob, error)) error {
 	unconfirmed, err := writeUnderLocks(writes, decide)
 	if unconfirmed == nil {
@@ -447,9 +445,12 @@ func (u unconfirmedWrite) settle() error {
 
 // completeLandedWrite brings the credentials file into line with an item a
 // write that ran out of time is now known to have landed in: the locks again,
-// one lookup to see the item still holds that write, and the file.
+// one read to see the item still holds that write, and the file. The read has
+// the write bound, as every read under the locks does: on the keychain that
+// was just too slow for the write, a shorter one would leave the login split
+// for want of a few seconds.
 //
-// The lookup is not a formality. The locks were released for the read-back,
+// The read is not a formality. The locks were released for the read-back,
 // and an item that moved since -- Claude Code's own /login -- must not have
 // the file put on a login it has already replaced; that is an outcome the next
 // pass of the split repair settles, like any other the read-back cannot name.
@@ -607,7 +608,7 @@ var ErrLoginHalfWritten = errors.New("the keychain item Claude Code reads first 
 //
 // THE COST IS PAID INSIDE THE CREDENTIAL LOCKS, which is the objection this
 // path was refused on before. Two spawns of `security` -- the merge-base
-// lookup, then the install -- sit in a window Claude Code's own refresh blocks
+// read, then the install -- sit in a window Claude Code's own refresh blocks
 // on (lockedKeychainBound). That was worth avoiding while the item was
 // believed inert. It is not worth avoiding to preserve a swap that does not
 // swap anything.
