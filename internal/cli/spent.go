@@ -94,15 +94,31 @@ func checkSpentLogins(root string, usable, accountsUsable bool, stores cclink.Lo
 		stores = cclink.LoginStores{} // no evidence: the record decides alone
 	}
 	rec := store.LoadOracleRecord()
-	var held []string
+	var held, unreadable []string
 	for _, a := range accounts {
 		if a.Provider != provider.Claude {
 			continue
 		}
 		stored, _ := lookup(a.UUID)
-		if hold := a.StoredLoginSpent(stored, stores, rec); hold.Held() {
+		switch hold := a.StoredLoginSpent(stored, stores, rec); hold {
+		case store.NotHeld:
+		case store.HeldUnreadableRecord:
+			unreadable = append(unreadable, fmt.Sprintf("%s (%s)", a.Label(), a.UUID))
+		default:
 			held = append(held, fmt.Sprintf("%s (%s): %s", a.Label(), a.UUID, spentLoginReason(a, hold, v)))
 		}
+	}
+	// AN UNREADABLE RECORD is a failure, and its advice names every account
+	// it may hold: each must be logged in again before the file can go, or the
+	// file restored (store.SpentRecordAdvice).
+	if lerr := rec.LoadError(); lerr != nil {
+		who := "each account it may hold as spent"
+		if len(unreadable) > 0 {
+			who += ": " + strings.Join(unreadable, ", ")
+		}
+		return check{name, levelFail, fmt.Sprintf("the record of which stored logins are spent cannot be "+
+			"read (%v), so no stored login Claude Code is not already using is presented -- to a refresh, a "+
+			"switch, `ccdad run` or a probe -- until it can. %s", lerr, store.SpentRecordAdvice(who))}
 	}
 	if len(held) == 0 {
 		return check{name, levelOK, "no stored login is held back as spent"}

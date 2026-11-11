@@ -124,8 +124,8 @@ func LoadSpentRecord() (*SpentRecord, error) {
 //
 // NEVER OVER A RECORD THAT COULD NOT BE READ. Writing one would put an empty
 // record in its place and release every hold it kept, in every process,
-// without a word. The file stays for a person (SpentRecordAdvice says what to
-// do with it), and the write is refused.
+// without a word. The file stays for a person, and the write is refused,
+// saying what to do with it (SpentRecordAdvice).
 func WithSpentRecord(timeout time.Duration, fn func(*SpentRecord) error) (err error) {
 	root, err := spentRecordRoot()
 	if err != nil {
@@ -148,7 +148,8 @@ func WithSpentRecord(timeout time.Duration, fn func(*SpentRecord) error) (err er
 		return err
 	}
 	if lerr := r.LoadError(); lerr != nil {
-		return fmt.Errorf("not writing the record of spent stored logins over one that could not be read: %w", lerr)
+		return fmt.Errorf("not writing the record of spent stored logins over one that could not be read (%w). %s",
+			lerr, SpentRecordAdvice("every account `ccdad doctor` lists as held"))
 	}
 	if err := fn(r); err != nil {
 		return err
@@ -159,6 +160,25 @@ func WithSpentRecord(timeout time.Duration, fn func(*SpentRecord) error) (err er
 		return fmt.Errorf("encoding %s: %w", SpentRecordFileName, err)
 	}
 	return atomicfile.WriteFile(filepath.Join(root, SpentRecordFileName), encoded, 0o600)
+}
+
+// SpentRecordAdvice is what to do about a record that cannot be read, said the
+// same way everywhere: restore it, or log in again every account it may hold
+// as spent -- who -- and only then remove it.
+//
+// REMOVING IT FIRST IS THE ONE THING NOT TO DO, and the reason the advice is
+// not simply "repair or remove it". An empty record holds nothing: every
+// stored login it recorded as spent would be presented again, and with it the
+// newer login that spent it revoked. Logging an account in again stores a new
+// login, which no record of the old one can hold, so once every such account
+// has one, nothing the file held is left to protect.
+func SpentRecordAdvice(who string) string {
+	path, err := SpentRecordPath()
+	if err != nil {
+		path = SpentRecordFileName
+	}
+	return "Restore " + path + " from a backup, or log in again with `ccdad add claude` " + who +
+		", and only then remove it: removed first, it would let a spent stored login be presented again"
 }
 
 // LoadError is why the record could not be read, nil when it could or when

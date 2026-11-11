@@ -34,11 +34,16 @@ must reference accounts by `uuid` or `alias`.
 - **A record of spent stored logins that cannot be read holds stored logins,
   and is not written over.** The record below lives in a file of its own,
   `~/.ccdad/spent-logins.json`. When it cannot be read or parsed, which stored
-  logins are spent is unknown, so no command presents a stored login until it
-  can, and ccdad does not replace the file with an empty one -- that would
-  release every hold in it. `ccdad doctor`'s `spent-logins` row fails. The
-  engine state, `strategy.json`, is untouched by this: cooldowns,
-  quarantines, a switch's intent and the Codex lane go on as before.
+  logins are spent is unknown, so until it can be read no command presents a
+  stored login Claude Code is not already using: those accounts are not
+  polled, switched to, probed or run. The login Claude Code is on still is,
+  and the split repair still puts it in both stores. ccdad does not write over
+  the file, and `ccdad doctor`'s `spent-logins` row fails and names each
+  account it may hold. Restore the file from a backup, or log in again with
+  `ccdad add claude` each of those accounts, and only then remove it: removed
+  first, it would let a spent stored login be presented again. The engine
+  state, `strategy.json`, is untouched by this: cooldowns, quarantines, a
+  switch's intent and the Codex lane go on as before.
 
 ### Fixed
 
