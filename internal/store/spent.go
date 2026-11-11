@@ -3,6 +3,7 @@ package store
 import (
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/provider"
@@ -299,9 +300,30 @@ func OwnerByEvidence(loginIdentity string, accounts []Account, lookup func(uuid 
 
 // OwnersOf is LoginOwners over accounts: OwnerByEvidence, reading each stored
 // login through lookup.
+//
+// LAZILY, and once. Nothing is read until a login is asked about, which the
+// hold rule does only when the record cannot be read (liveHoldsNewest); and a
+// stored login read once is not read again, since the daemon decides for
+// every account on every pass and each decision may ask about two logins.
 func OwnersOf(accounts []Account, lookup func(uuid string) (cclink.Blob, error)) LoginOwners {
+	type read struct {
+		blob cclink.Blob
+		err  error
+	}
+	var mu sync.Mutex
+	seen := map[string]read{}
+	once := func(uuid string) (cclink.Blob, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		r, ok := seen[uuid]
+		if !ok {
+			r.blob, r.err = lookup(uuid)
+			seen[uuid] = r
+		}
+		return r.blob, r.err
+	}
 	return func(id string) (string, bool) {
-		a, ev := OwnerByEvidence(id, accounts, lookup)
+		a, ev := OwnerByEvidence(id, accounts, once)
 		return a.UUID, ev != NoEvidence
 	}
 }

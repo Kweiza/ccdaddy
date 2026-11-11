@@ -348,3 +348,39 @@ func TestACodexRowsClaudeShapedLoginNamesNobody(t *testing.T) {
 		t.Fatalf("StoredLoginSpent = %v, want HeldUnreadableRecord: a Codex row's Claude-shaped login names nobody", got)
 	}
 }
+
+// Who owns a login is asked only when the record cannot be read -- the only
+// time the hold rule needs it -- and each stored login is read once however
+// often it is asked. It reads every account's credentials, and the daemon
+// decides for every account on every pass.
+func TestTheOwnersAreReadOnlyWhenNeededAndOnce(t *testing.T) {
+	stored := loginIssued("RT-a", 1000)
+	accounts := []Account{
+		{UUID: "u-a", Provider: provider.Claude},
+		{UUID: "u-b", Provider: provider.Claude},
+		{UUID: "u-c", Provider: provider.Claude},
+	}
+	reads := 0
+	owners := OwnersOf(accounts, func(uuid string) (cclink.Blob, error) {
+		reads++
+		if uuid == "u-a" {
+			return stored, nil
+		}
+		return loginIssued("RT-"+uuid, 500), nil
+	})
+	live := cclink.LoginStores{HasItem: true, Item: stored, File: loginIssued("RT-unnamed", 3000)}
+	if reads != 0 {
+		t.Fatalf("building the owners read %d stored logins", reads)
+	}
+	accounts[0].StoredLoginSpent(stored, live, owners, record{})
+	if reads != 0 {
+		t.Fatalf("a readable record read %d stored logins to name owners it does not need", reads)
+	}
+	unreadable := record{err: errors.New("parsing spent-logins.json: unexpected end of JSON input")}
+	for i := 0; i < 3; i++ {
+		accounts[0].StoredLoginSpent(stored, live, owners, unreadable)
+	}
+	if reads > len(accounts) {
+		t.Fatalf("%d reads for %d accounts: a stored login was read more than once", reads, len(accounts))
+	}
+}
