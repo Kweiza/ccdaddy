@@ -3,11 +3,13 @@ package daemon
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/store"
+	"github.com/Kweiza/ccdaddy/internal/strategy"
 )
 
 // THE HOLD OUTLIVES A SECOND ROTATION. The oracle names G1 as u-1's newer
@@ -64,5 +66,62 @@ func TestTheHoldOutlivesASecondRotationBeforeItIsNamed(t *testing.T) {
 	}
 	if fetches != 0 {
 		t.Errorf("u-1's spent stored token was read %d times after G1 was rotated away", fetches)
+	}
+}
+
+// A RECORD THAT COULD NOT BE WRITTEN STILL HOLDS. Adoption failed, and so did
+// the write of the record -- the state's lock held elsewhere, a full disk. The
+// daemon knows the stored token is spent all the same: it holds it from
+// memory, from this pass on, and writes the record on a later pass, once it
+// can. Before, nothing held anything until the oracle was asked again.
+func TestARecordThatCouldNotBeWrittenStillHoldsAndIsWrittenLater(t *testing.T) {
+	isolateEngine(t)
+	seedAccount(t, "u-1", "org-1")
+	seedAccount(t, "u-2", "org-2")
+	withItem(t, "u-2")
+	writeLiveLoginRT(t, "RT-u-1-g1", tickEpoch.Add(9*time.Hour))
+	recordActive(t, "u-2")
+
+	saved := adoptInto
+	t.Cleanup(func() { adoptInto = saved })
+	adoptInto = func(*store.Store, store.Account, cclink.Blob) error {
+		return errors.New("locking the ccdad store: timed out")
+	}
+	lock := mustPath(strategy.StatePath()) + ".lock"
+	if err := os.MkdirAll(lock, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	now := tickEpoch
+	e := engineFor(t, tokensAreFine, noFetch)
+	e.Now = func() time.Time { return now }
+	e.ResolveOwner = func(_ context.Context, token string) (string, error) {
+		if token == "AT-RT-u-1-g1" {
+			return "u-1", nil
+		}
+		return "", errors.New("the profile endpoint did not answer")
+	}
+
+	tick(t, e)
+	if err := e.holdSpentToken("u-1"); !errors.Is(err, store.ErrStoredLoginSpent) {
+		t.Fatalf("u-1 = %v after the record could not be written, want held", err)
+	}
+
+	// The lock comes free, Claude Code rotates G1 away, and a pass goes by.
+	if err := os.Remove(lock); err != nil {
+		t.Fatal(err)
+	}
+	writeLiveLoginRT(t, "RT-u-1-g2", tickEpoch.Add(10*time.Hour))
+	now = now.Add(resolveMinInterval)
+	tick(t, e)
+	st, err := strategy.LoadState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spent, _, ok := st.SpentStoredLogin("u-1"); !ok || spent != store.LoginHash("refresh:RT-u-1") {
+		t.Fatalf("the record was not written once it could be: %q %v", spent, ok)
+	}
+	if err := e.holdSpentToken("u-1"); !errors.Is(err, store.ErrStoredLoginSpent) {
+		t.Fatalf("u-1 = %v after the record was written, want held", err)
 	}
 }

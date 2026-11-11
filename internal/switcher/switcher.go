@@ -235,12 +235,23 @@ type Request struct {
 	// what the call does is make the other store agree.
 	Sync bool
 
+	// Record is the record of spent stored logins the decision under the lock
+	// takes (see EvalOptions.Record). Nil reads it from disk.
+	Record store.OracleRecord
+
 	// Owners is the identity oracle's memory (see EvalOptions.Owners). The
 	// decision under the lock attributes the stores again, and without it a
 	// login the oracle has named -- an older generation of the account being
 	// repaired towards -- reads as unattributable there and stands every
 	// repair down.
 	Owners Owners
+}
+
+func (r Request) record() store.OracleRecord {
+	if r.Record != nil {
+		return r.Record
+	}
+	return store.LoadOracleRecord()
 }
 
 func (r Request) now() time.Time {
@@ -661,7 +672,7 @@ func Execute(s *store.Store, req Request) (Result, error) {
 		// it would revoke the newer login (store.Account.StoredLoginSpent).
 		// Decided here, against the stores as they are under the lock, for the
 		// daemon and every attended caller alike.
-		if target, ok := s.Get(req.Target.UUID); ok && target.StoredLoginSpent(cur, stores, store.LoadOracleRecord()).Held() {
+		if target, ok := s.Get(req.Target.UUID); ok && target.StoredLoginSpent(cur, stores, req.record()).Held() {
 			res.Outcome, res.FreshenErr = Stale, store.ErrStoredLoginSpent
 			return nil, cclink.ErrNoChange
 		}

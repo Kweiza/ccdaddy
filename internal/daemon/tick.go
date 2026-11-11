@@ -253,9 +253,14 @@ type Engine struct {
 	// loginMemoryGrace after (ageLoginMemory).
 	owners    loginMemory[string]
 	saidStore loginMemory[struct{}]
-	// spent is the accounts whose stored login this pass found superseded by
-	// a newer one in a login store (setSpent, holdSpentToken). Guarded by mu.
+	// spent is the accounts whose stored refresh token this pass found spent
+	// (setSpent, holdSpentToken). Guarded by mu.
 	spent map[string]bool
+	// unstored is the records of spent stored logins that could not be
+	// written yet, and saidUnstored latches the line that says so; see
+	// nameUnstored. Tick goroutine only.
+	unstored     []unstoredLogin
+	saidUnstored bool
 
 	// codexRankedUUIDs is the Codex lane's last ranking, best first, and
 	// codexSamples holds the usage readings the Codex proxy took off real
@@ -525,10 +530,14 @@ func (e *Engine) Tick(ctx context.Context) error {
 		return err
 	}
 
+	// A record of a spent stored login that could not be written is tried
+	// again on every pass, and decided from meanwhile (nameUnstored).
+	e.writeUnstored()
 	ev, evErr := switcher.Evaluate(s, switcher.EvalOptions{
 		Now:    now,
 		Config: func() (config.Config, error) { return cfg, cfgErr },
 		Owners: e.ownerOf,
+		Record: e.oracleRecord(),
 	})
 	if evErr != nil {
 		// The configured table, not hoverThresholds(cfg, ev): a failed
@@ -583,7 +592,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 		if e.identifyStores(ctx, s, ev) {
 			// A login it named and could not store holds its account's stored
 			// token from this pass, not the next: the stores were read above.
-			e.setSpent(s.SpentLogins(ev.Stores, store.LoadOracleRecord()))
+			e.setSpent(s.SpentLogins(ev.Stores, e.oracleRecord()))
 		} else {
 			res, swapErr = e.act(ctx, s, ev)
 		}
@@ -907,8 +916,10 @@ func (e *Engine) execute(ctx context.Context, s *store.Store, req switcher.Reque
 	req.Now = e.now
 	req.Freshen = e.freshen(ctx)
 	// What the oracle has named, so the decision under the lock attributes the
-	// stores as the evaluation did.
+	// stores as the evaluation did -- and the record of spent stored logins
+	// as this daemon knows it, unwritten ones included.
 	req.Owners = e.ownerOf
+	req.Record = e.oracleRecord()
 	res, err := switcher.Execute(s, req)
 	// Dated from when the attempt RETURNED. A failing write on the slow
 	// keychain this exists for can take up to cclink.WorstCaseSwitch, about

@@ -252,24 +252,72 @@ func (e *Engine) identifyStores(ctx context.Context, s *store.Store, ev switcher
 // derived again from the record, the stores and the stored login wherever it
 // is asked, and forgetOracleRecord drops what no longer applies.
 //
-// A record that cannot be written holds nothing until it is written. It is
-// logged, and since a failed adoption is not remembered, the next ask of the
-// oracle -- resolveMinInterval later -- tries the adoption and the record
-// again.
+// A RECORD THAT CANNOT BE WRITTEN STILL HOLDS, in this process: it is kept in
+// memory (oracleRecord lays it over the state on disk) and written again on
+// every pass until it lands (writeUnstored). The fact it records -- this
+// stored token is spent -- does not stop being true because a disk was full
+// or a lock was held, and the daemon's memory is the one place it is known
+// meanwhile; other processes learn it when the write lands.
 func (e *Engine) nameUnstored(owner store.Account, live, spent cclink.Blob) {
-	newer := store.LoginHash(cclink.LoginIdentity(live))
-	spentHash := ""
+	op := unstoredLogin{uuid: owner.UUID, newer: store.LoginHash(cclink.LoginIdentity(live))}
 	if id := cclink.LoginIdentity(spent); id != "" {
-		spentHash = store.LoginHash(id)
+		op.spent = store.LoginHash(id)
 	}
-	if err := strategy.WithState(stateTimeout, func(st *strategy.State) error {
-		st.NameLogin(newer, owner.UUID)
-		st.RecordSpentStoredLogin(owner.UUID, spentHash, newer)
+	e.unstored = append(e.unstored, op)
+	e.writeUnstored()
+}
+
+// unstoredLogin is one record nameUnstored has to write: the newer login, by
+// hash, named as uuid's, and the stored login it spent, by hash or "".
+type unstoredLogin struct{ uuid, newer, spent string }
+
+// applyTo makes the record in st, the way every write of it does.
+func (u unstoredLogin) applyTo(st *strategy.State) {
+	st.NameLogin(u.newer, u.uuid)
+	st.RecordSpentStoredLogin(u.uuid, u.spent, u.newer)
+}
+
+// writeUnstored writes every record that has not been written yet, and keeps
+// them in memory when it cannot. The tick calls it on every pass.
+func (e *Engine) writeUnstored() {
+	if len(e.unstored) == 0 {
+		return
+	}
+	err := strategy.WithState(stateTimeout, func(st *strategy.State) error {
+		for _, op := range e.unstored {
+			op.applyTo(st)
+		}
 		return nil
-	}); err != nil {
-		e.logf("could not record that Claude Code holds a newer login of %s than ccdad has stored: %v; "+
-			"its stored refresh token is held only once the profile endpoint is asked again", owner.Label(), err)
+	})
+	if err != nil {
+		if !e.saidUnstored {
+			e.saidUnstored = true
+			e.logf("could not record that Claude Code holds a newer login than ccdad has stored: %v; this "+
+				"daemon holds the stored refresh token meanwhile and writes the record on every pass until "+
+				"it lands, and other ccdad commands do not know of it until then", err)
+		}
+		return
 	}
+	if e.saidUnstored {
+		e.saidUnstored = false
+		e.logf("recorded the newer login(s) ccdad could not store; every ccdad command holds the spent " +
+			"stored refresh token now")
+	}
+	e.unstored = nil
+}
+
+// oracleRecord is the record this daemon decides from: the state on disk,
+// with every record not yet written laid over it.
+func (e *Engine) oracleRecord() store.OracleRecord {
+	rec := store.LoadOracleRecord()
+	st, ok := rec.(*strategy.State)
+	if !ok {
+		return rec
+	}
+	for _, op := range e.unstored {
+		op.applyTo(st)
+	}
+	return st
 }
 
 // forgetOracleRecord drops what the daemon recorded about logins it could not
