@@ -18,13 +18,24 @@ var ErrStoredLoginSpent = errors.New("a newer login of this account was minted f
 	"and ccdad has not stored it, so the stored refresh token is already spent and is not presented")
 
 // SpentError is ErrStoredLoginSpent for one account, with why its stored login
-// is held -- which is what says what lifts it.
+// is held -- which is what says what lifts it. Label names the account in the
+// text; without one it is named by UUID.
 type SpentError struct {
-	UUID string
-	Hold Hold
+	UUID  string
+	Label string
+	Hold  Hold
 }
 
-func (e *SpentError) Error() string { return fmt.Sprintf("%v: %q", ErrStoredLoginSpent, e.UUID) }
+// Error is HoldReason's sentence for this hold. It is what daemon.log and
+// `ccdad status --refresh` print, so it says what lifts the hold as every
+// other place does -- from the same table.
+func (e *SpentError) Error() string {
+	label := e.Label
+	if label == "" {
+		label = "account " + e.UUID
+	}
+	return HoldReason(e.Hold, label, StoresUnknown)
+}
 
 // Unwrap makes errors.Is(err, ErrStoredLoginSpent) hold.
 func (e *SpentError) Unwrap() error { return ErrStoredLoginSpent }
@@ -65,6 +76,60 @@ const (
 
 // Held reports whether the stored login is not to be presented.
 func (h Hold) Held() bool { return h != NotHeld }
+
+// StoresNow is what Claude Code's login stores hold now, as far as what lifts
+// a hold the record keeps depends on it.
+type StoresNow uint8
+
+const (
+	// StoresUnknown: the stores could not be read, or were not looked at.
+	StoresUnknown StoresNow = iota
+	// StoresHoldUnnamed: a store holds a login nobody can name yet -- possibly
+	// the newer login, refreshed again.
+	StoresHoldUnnamed
+	// StoresHoldNoneUnnamed: no store holds a login nobody can name.
+	StoresHoldNoneUnnamed
+)
+
+// HoldReason is why label's stored login is held, and what lifts the hold, in
+// a user's words. It is the one table of them: every refusal, `ccdad doctor`,
+// `ccdad status`, daemon.log and SpentError say it through here.
+//
+// What lifts a hold the record keeps depends on the stores (now). A newer
+// login still in a store under the oracle's name is the daemon's to store. One
+// that has left every store may be back as a login nobody can name yet,
+// refreshed again, which the daemon names and stores if it is the account's;
+// when no store holds anything unnamed, nothing will store it, and logging the
+// account in again is the only way out.
+func HoldReason(h Hold, label string, now StoresNow) string {
+	switch h {
+	case NotHeld:
+		return label + "'s stored login is not held"
+	case HeldUnreadableRecord:
+		path, err := SpentRecordPath()
+		if err != nil {
+			path = SpentRecordFileName
+		}
+		return "the record of which stored logins are spent, " + path + ", cannot be read, so no stored " +
+			"login Claude Code is not already using is presented until it can"
+	case HeldByNewerLogin:
+		return "Claude Code holds a newer login of " + label + " than ccdad has stored, so its stored refresh " +
+			"token is already spent, and presenting it could revoke the newer login. The daemon stores the " +
+			"newer login as soon as it can"
+	}
+	spent := label + "'s stored refresh token was already spent by a newer login ccdad could not store, " +
+		"and presenting it could revoke that login and every one refreshed from it since"
+	relogin := "log " + label + " in again with `ccdad add claude`"
+	switch now {
+	case StoresHoldUnnamed:
+		return spent + ". Claude Code holds a login ccdad cannot name yet, which may be that login refreshed " +
+			"again: the daemon asks the profile endpoint whose it is, and stores it if it is " + label +
+			"'s. If it is not, " + relogin
+	case StoresHoldNoneUnnamed:
+		return spent + ". No login store holds that login any more, so nothing will store it: " + relogin
+	}
+	return spent + ". If no login store holds that login any more, " + relogin
+}
 
 // StoredLoginSpent reports whether a's stored refresh token is SPENT, and why:
 // a newer login was minted from it, and presenting it again -- a refresh, a

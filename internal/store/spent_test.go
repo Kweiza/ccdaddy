@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
@@ -249,6 +250,30 @@ func TestAnUnreadableRecordLetsThroughOnlyTheNewestLoginInAStore(t *testing.T) {
 	for _, tc := range cases {
 		if got := a.StoredLoginSpent(stored, tc.live, unreadable); got != tc.want {
 			t.Errorf("%s: StoredLoginSpent = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// A refusal's own text says why THIS hold holds, and what lifts it: it is what
+// daemon.log and `ccdad status --refresh` print. One sentence for every hold
+// told a held account's user something false (an unreadable record is not a
+// newer login ccdad "has not stored") or left out the way out.
+func TestASpentErrorSaysWhyItsHoldHolds(t *testing.T) {
+	cases := []struct {
+		hold Hold
+		want string
+	}{
+		{HeldByNewerLogin, "as soon as it can"},
+		{HeldByRecord, "ccdad add claude"},
+		{HeldUnreadableRecord, "cannot be read"},
+	}
+	for _, tc := range cases {
+		err := error(&SpentError{UUID: "u-1", Hold: tc.hold})
+		if !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("hold %d: %q does not say %q", tc.hold, err.Error(), tc.want)
+		}
+		if !errors.Is(err, ErrStoredLoginSpent) {
+			t.Errorf("hold %d: the error is not ErrStoredLoginSpent", tc.hold)
 		}
 	}
 }
