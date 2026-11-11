@@ -55,7 +55,8 @@ func passSees(t *testing.T, e *Engine) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.setSpent(openEngineStore(t).SpentLogins(stores, store.LoadOracleRecord()))
+	s := openEngineStore(t)
+	e.setSpent(s, s.SpentLogins(stores, store.LoadOracleRecord()))
 }
 
 // The profile check reads the account's token through the same hold as the

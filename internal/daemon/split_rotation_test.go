@@ -196,3 +196,18 @@ func TestAnUnreadableRecordDoesNotHoldTheRepairOfTheNewestLogin(t *testing.T) {
 		t.Fatalf("the item still holds the spent G1 after three passes: %s\n%q", secret, log.lines)
 	}
 }
+
+// The daemon's own refusal names the account the way every other line does,
+// by its email: it is the sentence daemon.log prints after "not switching to
+// u-1@example.com:".
+func TestTheDaemonsHoldNamesTheAccountByEmail(t *testing.T) {
+	isolateEngine(t)
+	seedAccount(t, "u-1", "org-1")
+	e := engineFor(t, tokensAreFine, noFetch)
+	spendStoredLogin(t, e, "u-1")
+
+	err := e.holdSpentToken("u-1")
+	if err == nil || !strings.Contains(err.Error(), "u-1@example.com") {
+		t.Fatalf("holdSpentToken = %v, want it to name u-1@example.com", err)
+	}
+}

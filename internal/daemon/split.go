@@ -364,9 +364,15 @@ func (e *Engine) forgetOracleRecord(s *store.Store, st cclink.LoginStores) {
 }
 
 // setSpent records which accounts' stored logins this pass found spent
-// (store.Store.SpentLogins), for holdSpentToken. Guarded by e.mu: the swap
-// path and the pollers read it.
-func (e *Engine) setSpent(spent map[string]store.Hold) {
+// (store.Store.SpentLogins), as the refusal holdSpentToken gives for each --
+// naming the account by its label, as every other daemon.log line does.
+// Guarded by e.mu: the swap path and the pollers read it.
+func (e *Engine) setSpent(s *store.Store, holds map[string]store.Hold) {
+	spent := make(map[string]*store.SpentError, len(holds))
+	for uuid, hold := range holds {
+		a, _ := s.Get(uuid)
+		spent[uuid] = &store.SpentError{UUID: uuid, Label: a.Label(), Hold: hold}
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.spent = spent
@@ -386,8 +392,8 @@ func (e *Engine) setSpent(spent map[string]store.Hold) {
 func (e *Engine) holdSpentToken(uuid string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if hold := e.spent[uuid]; hold.Held() {
-		return &store.SpentError{UUID: uuid, Hold: hold}
+	if refusal, held := e.spent[uuid]; held {
+		return refusal
 	}
 	return nil
 }
