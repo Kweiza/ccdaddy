@@ -296,3 +296,15 @@ func TestDoctorPassesWhenNoStoredLoginIsHeld(t *testing.T) {
 		t.Errorf("spent-logins = %q, want ok: %s", got, r.detail(t, "spent-logins"))
 	}
 }
+
+// ONE TABLE OF REASONS. What a refusal, doctor or status says about a hold is
+// the sentence a SpentError prints in daemon.log, never a second copy of it.
+func TestARefusalSaysWhatTheSpentErrorSays(t *testing.T) {
+	a := store.Account{UUID: "uuid-chan", Email: "chan@example.com"}
+	for _, hold := range []store.Hold{store.HeldByNewerLogin, store.HeldByRecord, store.HeldUnreadableRecord} {
+		err := &store.SpentError{UUID: a.UUID, Label: a.Label(), Hold: hold}
+		if got := spentLoginReason(a, hold, nil); got != err.Error() {
+			t.Errorf("hold %d: the refusal says\n%q\nand the error\n%q", hold, got, err.Error())
+		}
+	}
+}

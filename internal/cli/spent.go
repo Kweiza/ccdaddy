@@ -12,45 +12,19 @@ import (
 )
 
 // spentLoginReason is why a's stored login is not presented, and what lifts
-// the hold, in the words every command uses after its own "Not ...ing X:".
-//
-// What lifts it depends on why it holds (store.Hold) and, for a hold the
-// record keeps, on what the login stores hold now -- v, nil when they could not
-// be read. A newer login still in a store under the oracle's name is the
-// daemon's to store. One that has left every store may be back as a login
-// nobody can name yet, refreshed again, which the daemon names and stores if
-// it is a's; when no store holds anything unnamed, nothing will ever store it,
-// and logging a in again is the only way out. Saying "the daemon stores it"
-// there sent people to wait for something that would not happen.
+// the hold, in the words every command uses after its own "Not ...ing X:" --
+// store.HoldReason's, with what the login stores hold now taken from v (nil
+// when they could not be read).
 func spentLoginReason(a store.Account, hold store.Hold, v *switcher.LoginView) string {
-	label := a.Label()
-	switch hold {
-	case store.HeldUnreadableRecord:
-		path, err := store.SpentRecordPath()
-		if err != nil {
-			path = store.SpentRecordFileName
-		}
-		return "the engine state that records which stored logins are spent cannot be read, so no stored " +
-			"login is presented until it can. Repair or remove " + path + "; `ccdad doctor` says why it " +
-			"cannot be read"
-	case store.HeldByNewerLogin:
-		return "Claude Code holds a newer login of " + label + " than ccdad has stored, so its stored refresh " +
-			"token is already spent, and presenting it could revoke the newer login. The daemon stores the " +
-			"newer login as soon as it can"
-	}
-	spent := label + "'s stored refresh token was already spent by a newer login ccdad could not store, " +
-		"and presenting it could revoke that login and every one refreshed from it since"
-	relogin := "log " + label + " in again with `ccdad add claude`"
+	now := store.StoresUnknown
 	switch {
 	case v == nil:
-		return spent + ". Whether a login store still holds that login cannot be told while the stores " +
-			"cannot be read; if none does, " + relogin
 	case holdsUnnamedLogin(*v):
-		return spent + ". Claude Code holds a login ccdad cannot name yet, which may be that login refreshed " +
-			"again: the daemon asks the profile endpoint whose it is, and stores it if it is " + label +
-			"'s. If it is not, " + relogin
+		now = store.StoresHoldUnnamed
+	default:
+		now = store.StoresHoldNoneUnnamed
 	}
-	return spent + ". No login store holds that login any more, so nothing will store it: " + relogin
+	return store.HoldReason(hold, a.Label(), now)
 }
 
 // holdsUnnamedLogin reports whether a login store holds a login this store

@@ -674,7 +674,7 @@ func Execute(s *store.Store, req Request) (Result, error) {
 		// daemon and every attended caller alike.
 		if target, ok := s.Get(req.Target.UUID); ok {
 			if hold := target.StoredLoginSpent(cur, stores, req.record()); hold.Held() {
-				res.Outcome, res.FreshenErr = Stale, &store.SpentError{UUID: target.UUID, Hold: hold}
+				res.Outcome, res.FreshenErr = Stale, &store.SpentError{UUID: target.UUID, Label: target.Label(), Hold: hold}
 				return nil, cclink.ErrNoChange
 			}
 		}

@@ -174,7 +174,8 @@ func (s *Source) AccessToken(ctx context.Context, uuid string) (string, error) {
 		return "", err
 	}
 	if hold.Held() {
-		return "", &store.SpentError{UUID: uuid, Hold: hold}
+		a, _ := st.Get(uuid)
+		return "", &store.SpentError{UUID: uuid, Label: a.Label(), Hold: hold}
 	}
 	rec, ok := recordOf(stored)
 	if !ok {
