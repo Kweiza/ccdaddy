@@ -106,12 +106,9 @@ func HoldReason(h Hold, label string, now StoresNow) string {
 	case NotHeld:
 		return label + "'s stored login is not held"
 	case HeldUnreadableRecord:
-		path, err := SpentRecordPath()
-		if err != nil {
-			path = SpentRecordFileName
-		}
-		return "the record of which stored logins are spent, " + path + ", cannot be read, so no stored " +
-			"login Claude Code is not already using is presented until it can"
+		return "the record of which stored logins are spent cannot be read, so no stored login Claude Code " +
+			"is not already using is presented until it can, and it may hold " + label + "'s. " +
+			SpentRecordAdvice(label+", and every other account `ccdad doctor` lists as held")
 	case HeldByNewerLogin:
 		return "Claude Code holds a newer login of " + label + " than ccdad has stored, so its stored refresh " +
 			"token is already spent, and presenting it could revoke the newer login. The daemon stores the " +

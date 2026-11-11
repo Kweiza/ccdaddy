@@ -308,3 +308,51 @@ func TestARefusalSaysWhatTheSpentErrorSays(t *testing.T) {
 		}
 	}
 }
+
+// unreadableRecordMachine has a record of spent stored logins nobody can read,
+// support on the login Claude Code holds, and chan stored in no store.
+func unreadableRecordMachine(t *testing.T) {
+	t.Helper()
+	seedAccount(t, "uuid-chan", "chan@example.com")
+	seedAccount(t, "uuid-support", "support@example.com")
+	writeLiveFile(t, liveLoginJSON("RT-uuid-support", ""))
+	recordLive(t, "uuid-support")
+	if err := os.WriteFile(mustPath(store.SpentRecordPath()), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// RECOVERY MUST NOT UNDO THE PROTECTION. Removing an unreadable record releases
+// every hold it kept, and a spent stored login is then presented again. So the
+// advice is: restore the file, or log in again every account it may hold --
+// named -- and only then remove it.
+func TestTheAdviceForAnUnreadableRecordKeepsItsHolds(t *testing.T) {
+	isolate(t)
+	suppressAutoStart(t)
+	unreadableRecordMachine(t)
+
+	_, r, _ := runDoctor(t)
+	if got := r.level(t, "spent-logins"); got != "fail" {
+		t.Errorf("spent-logins = %q, want fail: %s", got, r.detail(t, "spent-logins"))
+	}
+	d := r.detail(t, "spent-logins")
+	for _, want := range []string{"chan@example.com", "ccdad add claude", "and only then remove it", "Restore "} {
+		if !strings.Contains(d, want) {
+			t.Errorf("spent-logins does not say %q: %s", want, d)
+		}
+	}
+	// support is on the login Claude Code holds, and is not held.
+	if strings.Contains(d, "support@example.com") {
+		t.Errorf("spent-logins lists an account the record cannot hold: %s", d)
+	}
+
+	code, _, stderr, _ := runRoot(t, "switch", "chan@example.com")
+	if code != ExitBlocked {
+		t.Fatalf("switch: exit = %d, want %d:\n%s", code, ExitBlocked, stderr)
+	}
+	for _, want := range []string{"ccdad add claude", "and only then remove it", "Restore "} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("the refusal does not say %q:\n%s", want, stderr)
+		}
+	}
+}

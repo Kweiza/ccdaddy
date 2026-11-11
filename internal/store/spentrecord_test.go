@@ -3,6 +3,7 @@ package store
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -93,5 +94,25 @@ func TestTheRecordAndTheEngineStateDoNotShareAFile(t *testing.T) {
 	st, err := strategy.LoadState()
 	if err != nil || st.LoadError() != nil {
 		t.Fatalf("the engine state reads as unreadable with the record: %v %v", err, st.LoadError())
+	}
+}
+
+// The refusal to write says what to do instead, and it is not "remove it".
+func TestARefusedWriteSaysHowToRecoverWithoutReleasingAHold(t *testing.T) {
+	dir := withStore(t)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, SpentRecordFileName), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := WithSpentRecord(time.Second, func(*SpentRecord) error { return nil })
+	if err == nil {
+		t.Fatal("the write was not refused")
+	}
+	for _, want := range []string{"Restore ", "ccdad add claude", "and only then remove it"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not say %q: %v", want, err)
+		}
 	}
 }
