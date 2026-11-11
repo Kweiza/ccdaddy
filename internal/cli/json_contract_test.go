@@ -14,7 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/Kweiza/ccdaddy/internal/cclink"
+	"github.com/Kweiza/ccdaddy/internal/cclink/cclinktest"
 	"github.com/Kweiza/ccdaddy/internal/daemon"
 )
 
@@ -794,10 +794,10 @@ func TestMain(m *testing.M) {
 	// a child -- `status --json`, `auto --once --json`, the MCP server -- and
 	// a child that ran before the isolation would read the developer's real
 	// keychain. No child needs an item, so the empty default serves them all
-	// (cclink.IsolateKeychainForTests).
-	cclink.IsolateKeychainForTests()
+	// (cclinktest.Isolate).
+	cclinktest.Isolate()
 	if os.Getenv(isolationRoleEnv) != "" {
-		fmt.Print(cclink.KeychainIsolatedForTests())
+		fmt.Print(cclinktest.Isolated())
 		os.Exit(0)
 	}
 	// The staged release asset. `ccdad update` EXECUTES what it downloaded

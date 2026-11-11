@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
+	"github.com/Kweiza/ccdaddy/internal/cclink/cclinktest"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/credhome"
 )
@@ -119,8 +120,8 @@ func TestMain(m *testing.M) {
 	// FIRST, before any role: the roles are this binary re-executed as real
 	// daemons and spawners, and a child that ran before the isolation would
 	// read the developer's real keychain on its first tick
-	// (cclink.IsolateKeychainForTests). None of them needs an item.
-	cclink.IsolateKeychainForTests()
+	// (cclinktest.Isolate). None of them needs an item.
+	cclinktest.Isolate()
 	for _, arg := range os.Args[1:] {
 		if arg == RunArg {
 			os.Exit(runAsSpawnedDaemon())

@@ -1,35 +1,43 @@
-package cclink
+package cclink_test
 
 import (
 	"encoding/json"
 	"os"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/Kweiza/ccdaddy/internal/ccpath"
+	"github.com/Kweiza/ccdaddy/internal/cclink"
+	"github.com/Kweiza/ccdaddy/internal/cclink/cclinktest"
 )
 
-// The read-back has the WRITE bound, not the lookup bound: it asks the same
-// slow keychain that just failed to answer a write in time. Every spawn here
-// takes 1.5 s, a lookup is allowed 0.3 s and the write path 6 s, so a read-back
-// held to the lookup bound cannot confirm the write that landed.
-func TestTheReadBackIsHeldToTheWriteBound(t *testing.T) {
-	withClaudeHome(t)
-	file := mustPath(ccpath.CredentialsPath())
-	if err := os.WriteFile(file, []byte(oldLogin), 0o600); err != nil {
+// These run against cclinktest's in-memory item, from outside the package, the
+// way every other package's split-login tests do: what is under test is the
+// decision ABOVE the exec layer -- which store a switch writes, and how a write
+// that ran out of time is read back -- not the spawn.
+
+const (
+	oldLogin = `{"claudeAiOauth":{"accessToken":"AT-old","refreshToken":"RT-old"}}`
+	newLogin = `{"accessToken":"AT-new","refreshToken":"RT-new"}`
+)
+
+// credentialsFileHolding sandboxes Claude Code's home and puts body in its
+// credentials file, returning the file's path.
+func credentialsFileHolding(t *testing.T, body string) string {
+	t.Helper()
+	file := cclink.SandboxClaudeHomeForTest(t)
+	if err := os.WriteFile(file, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	fakeSecurity{item: statefulItem(t, oldLogin), hang: 1500 * time.Millisecond, writeHang: time.Minute}.install(t)
-	keychainReadTimeout = 300 * time.Millisecond
-	keychainWriteTimeout = 6 * time.Second
+	return file
+}
 
-	if err := Activate(Blob{"claudeAiOauth": json.RawMessage(newLogin)}); err != nil {
-		t.Fatalf("Activate = %v: the read-back did not get the write bound", err)
+func fileNow(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := fileNow(t, file); !strings.Contains(got, "RT-new") {
-		t.Fatalf("the file was not written after a confirmed write:\n%s", got)
-	}
+	return string(data)
 }
 
 // A store that already holds the login is not written. Repairing a split
@@ -37,16 +45,12 @@ func TestTheReadBackIsHeldToTheWriteBound(t *testing.T) {
 // the repair, a rewrite of the item spends two bounded spawns to change
 // nothing, and an unconfirmable one would fail the whole repair.
 func TestAStoreThatAlreadyHoldsTheLoginIsNotWritten(t *testing.T) {
-	withClaudeHome(t)
-	file := mustPath(ccpath.CredentialsPath())
-	if err := os.WriteFile(file, []byte(oldLogin), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	kc := NewFakeKeychain(`{"claudeAiOauth":` + newLogin + `}`)
+	file := credentialsFileHolding(t, oldLogin)
+	kc := cclinktest.NewKeychain(`{"claudeAiOauth":` + newLogin + `}`)
 	kc.WriteLandsThenTimesOut, kc.ReadsFailAfterWrite = true, true
-	t.Cleanup(SetKeychainForTest(kc))
+	cclinktest.Install(t, kc)
 
-	if err := Activate(Blob{"claudeAiOauth": json.RawMessage(newLogin)}); err != nil {
+	if err := cclink.Activate(cclink.Blob{"claudeAiOauth": json.RawMessage(newLogin)}); err != nil {
 		t.Fatalf("Activate = %v; the item already held the login and needed no write", err)
 	}
 	if n := kc.Writes(); n != 0 {
@@ -62,15 +66,11 @@ func TestAStoreThatAlreadyHoldsTheLoginIsNotWritten(t *testing.T) {
 // holds the old access token under the same refresh token would leave the live
 // login on the old one while ccdad's copy moved on.
 func TestAStoreWithTheSameRefreshTokenButAnOlderAccessTokenIsWritten(t *testing.T) {
-	withClaudeHome(t)
-	file := mustPath(ccpath.CredentialsPath())
-	if err := os.WriteFile(file, []byte(oldLogin), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	kc := NewFakeKeychain(`{"claudeAiOauth":{"accessToken":"AT-before","refreshToken":"RT-new"}}`)
-	t.Cleanup(SetKeychainForTest(kc))
+	credentialsFileHolding(t, oldLogin)
+	kc := cclinktest.NewKeychain(`{"claudeAiOauth":{"accessToken":"AT-before","refreshToken":"RT-new"}}`)
+	cclinktest.Install(t, kc)
 
-	if err := Activate(Blob{"claudeAiOauth": json.RawMessage(newLogin)}); err != nil {
+	if err := cclink.Activate(cclink.Blob{"claudeAiOauth": json.RawMessage(newLogin)}); err != nil {
 		t.Fatalf("Activate: %v", err)
 	}
 	if n := kc.Writes(); n != 1 {
@@ -87,17 +87,13 @@ func TestAStoreWithTheSameRefreshTokenButAnOlderAccessTokenIsWritten(t *testing.
 // calling that "landed" would write the file and leave the two stores holding
 // different credentials that no split check can see.
 func TestAnUnlandedWriteUnderTheSameRefreshTokenIsNotReadBackAsLanded(t *testing.T) {
-	withClaudeHome(t)
-	file := mustPath(ccpath.CredentialsPath())
 	before := `{"claudeAiOauth":{"accessToken":"AT-before","refreshToken":"RT-new"}}`
-	if err := os.WriteFile(file, []byte(before), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	kc := NewFakeKeychain(before)
+	file := credentialsFileHolding(t, before)
+	kc := cclinktest.NewKeychain(before)
 	kc.WriteTimesOutUnlanded = true
-	t.Cleanup(SetKeychainForTest(kc))
+	cclinktest.Install(t, kc)
 
-	err := Activate(Blob{"claudeAiOauth": json.RawMessage(newLogin)})
+	err := cclink.Activate(cclink.Blob{"claudeAiOauth": json.RawMessage(newLogin)})
 	if err == nil {
 		t.Fatal("a write that did not land under the same refresh token was read back as landed")
 	}
@@ -110,16 +106,12 @@ func TestAnUnlandedWriteUnderTheSameRefreshTokenIsNotReadBackAsLanded(t *testing
 // Comparing identities there compares "" with "", which never matches, so every
 // slow logout read as unknown and left the file holding the login.
 func TestALogoutThatLandedAndTimedOutCompletes(t *testing.T) {
-	withClaudeHome(t)
-	file := mustPath(ccpath.CredentialsPath())
-	if err := os.WriteFile(file, []byte(oldLogin), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	kc := NewFakeKeychain(oldLogin)
+	file := credentialsFileHolding(t, oldLogin)
+	kc := cclinktest.NewKeychain(oldLogin)
 	kc.WriteLandsThenTimesOut = true
-	t.Cleanup(SetKeychainForTest(kc))
+	cclinktest.Install(t, kc)
 
-	if err := ClearLogin(); err != nil {
+	if err := cclink.ClearLogin(); err != nil {
 		t.Fatalf("ClearLogin = %v; the item holds no login, so the logout landed", err)
 	}
 	if got := fileNow(t, file); strings.Contains(got, "claudeAiOauth") {

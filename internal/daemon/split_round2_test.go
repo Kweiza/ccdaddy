@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Kweiza/ccdaddy/internal/cclink"
+	"github.com/Kweiza/ccdaddy/internal/cclink/cclinktest"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
@@ -43,8 +43,8 @@ func TestTheLoginClaudeCodeLeftInTheFileIsNamedWithoutTheOracle(t *testing.T) {
 	seedAccountExpiring(t, "u-1", "org-1", tickEpoch.Add(-time.Hour))
 	seedAccount(t, "u-2", "org-2")
 	writeLiveLogin(t, "u-1", tickEpoch.Add(-time.Hour))
-	kc := cclink.NewFakeKeychain(blobExpiring("RT-u-1-refreshed", tickEpoch.Add(8*time.Hour)))
-	t.Cleanup(cclink.SetKeychainForTest(kc))
+	kc := cclinktest.NewKeychain(blobExpiring("RT-u-1-refreshed", tickEpoch.Add(8*time.Hour)))
+	cclinktest.Install(t, kc)
 	recordActive(t, "u-1")
 	readings(t, map[string]float64{"u-1": 36, "u-2": 40})
 
@@ -94,8 +94,8 @@ func TestCcdadsOwnUnconfirmedSwitchDecidesTheDirection(t *testing.T) {
 	seedAccountExpiring(t, "u-1", "org-1", tickEpoch.Add(8*time.Hour))
 	seedAccountExpiring(t, "u-2", "org-2", tickEpoch.Add(time.Hour))
 	writeLiveLogin(t, "u-1", tickEpoch.Add(8*time.Hour))
-	kc := cclink.NewFakeKeychain(loginExpiring("u-2", tickEpoch.Add(time.Hour)))
-	t.Cleanup(cclink.SetKeychainForTest(kc))
+	kc := cclinktest.NewKeychain(loginExpiring("u-2", tickEpoch.Add(time.Hour)))
+	cclinktest.Install(t, kc)
 	recordActive(t, "u-1")
 	recordPending(t, "u-2", strategy.Departure{From: "u-1", Closing: usage.WindowFiveHour})
 	readings(t, map[string]float64{"u-1": 36, "u-2": 40})
@@ -183,8 +183,8 @@ func TestAStaleRepairUnderTheLockWaitsBeforeTheNext(t *testing.T) {
 	seedAccountExpiring(t, "u-1", "org-1", tickEpoch.Add(time.Minute))
 	seedAccount(t, "u-2", "org-2")
 	writeLiveLogin(t, "u-2", tickEpoch.Add(8*time.Hour))
-	kc := cclink.NewFakeKeychain(loginExpiring("u-1", tickEpoch.Add(time.Minute)))
-	t.Cleanup(cclink.SetKeychainForTest(kc))
+	kc := cclinktest.NewKeychain(loginExpiring("u-1", tickEpoch.Add(time.Minute)))
+	cclinktest.Install(t, kc)
 	recordActive(t, "u-1")
 	readings(t, map[string]float64{"u-1": 36, "u-2": 40})
 	// The file is the newer login, so recency would repair towards u-2; ccdad's
@@ -210,8 +210,8 @@ func TestARepairOverALoginOnlyTheOracleNamedGoesThrough(t *testing.T) {
 	seedAccountExpiring(t, "u-1", "org-1", tickEpoch.Add(8*time.Hour))
 	seedAccount(t, "u-2", "org-2")
 	writeLiveLogin(t, "u-1", tickEpoch.Add(8*time.Hour))
-	kc := cclink.NewFakeKeychain(blobExpiring("RT-u-1-old", tickEpoch.Add(time.Hour)))
-	t.Cleanup(cclink.SetKeychainForTest(kc))
+	kc := cclinktest.NewKeychain(blobExpiring("RT-u-1-old", tickEpoch.Add(time.Hour)))
+	cclinktest.Install(t, kc)
 	recordActive(t, "u-1")
 	readings(t, map[string]float64{"u-1": 36, "u-2": 40})
 

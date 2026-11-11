@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
+	"github.com/Kweiza/ccdaddy/internal/cclink/cclinktest"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
@@ -32,10 +33,10 @@ func itemLogin(uuid string) string {
 	return string(b)
 }
 
-func withItem(t *testing.T, uuid string) *cclink.FakeKeychain {
+func withItem(t *testing.T, uuid string) *cclinktest.Keychain {
 	t.Helper()
-	kc := cclink.NewFakeKeychain(itemLogin(uuid))
-	t.Cleanup(cclink.SetKeychainForTest(kc))
+	kc := cclinktest.NewKeychain(itemLogin(uuid))
+	cclinktest.Install(t, kc)
 	return kc
 }
 
@@ -230,8 +231,8 @@ func TestATickRepairsTowardsTheNewerLoginInTheFile(t *testing.T) {
 	seedAccountExpiring(t, "u-1", "org-1", tickEpoch.Add(8*time.Hour))
 	seedAccountExpiring(t, "u-2", "org-2", tickEpoch.Add(time.Hour))
 	writeLiveLogin(t, "u-1", tickEpoch.Add(8*time.Hour))
-	kc := cclink.NewFakeKeychain(loginExpiring("u-2", tickEpoch.Add(time.Hour)))
-	t.Cleanup(cclink.SetKeychainForTest(kc))
+	kc := cclinktest.NewKeychain(loginExpiring("u-2", tickEpoch.Add(time.Hour)))
+	cclinktest.Install(t, kc)
 	recordActive(t, "u-2")
 	// Both have room, so no plan moves the login and only the repair
 	// direction decides where it ends up.
@@ -446,8 +447,8 @@ func TestAnUnnamedNewerFileIsAdoptedAndRepairedTowards(t *testing.T) {
 	// Claude Code refreshed u-1 and wrote the new pair to the FILE, its
 	// keychain write having failed; the item still holds u-2.
 	writeLiveLoginRT(t, "RT-u-1-refreshed", tickEpoch.Add(8*time.Hour))
-	kc := cclink.NewFakeKeychain(loginExpiring("u-2", tickEpoch.Add(time.Hour)))
-	t.Cleanup(cclink.SetKeychainForTest(kc))
+	kc := cclinktest.NewKeychain(loginExpiring("u-2", tickEpoch.Add(time.Hour)))
+	cclinktest.Install(t, kc)
 	recordActive(t, "u-2")
 	readings(t, map[string]float64{"u-1": 36, "u-2": 40})
 

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
+	"github.com/Kweiza/ccdaddy/internal/cclink/cclinktest"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/usage"
@@ -21,10 +22,10 @@ func itemLogin(uuid string) string {
 
 // withItem puts a fake keychain item on this machine, holding the account
 // seeded under uuid.
-func withItem(t *testing.T, uuid string) *cclink.FakeKeychain {
+func withItem(t *testing.T, uuid string) *cclinktest.Keychain {
 	t.Helper()
-	kc := cclink.NewFakeKeychain(itemLogin(uuid))
-	t.Cleanup(cclink.SetKeychainForTest(kc))
+	kc := cclinktest.NewKeychain(itemLogin(uuid))
+	cclinktest.Install(t, kc)
 	return kc
 }
 
@@ -35,7 +36,7 @@ func recordActive(t *testing.T, uuid string) {
 	}
 }
 
-func itemHolds(t *testing.T, kc *cclink.FakeKeychain, uuid string) bool {
+func itemHolds(t *testing.T, kc *cclinktest.Keychain, uuid string) bool {
 	t.Helper()
 	secret, ok := kc.Secret()
 	return ok && strings.Contains(secret, `"RT-`+uuid+`"`)
