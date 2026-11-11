@@ -107,8 +107,10 @@ func HoldReason(h Hold, label string, now StoresNow) string {
 	case NotHeld:
 		return label + "'s stored login is not held"
 	case HeldUnreadableRecord:
-		return "the record of which stored logins are spent cannot be read, so no stored login Claude Code " +
-			"is not already using is presented until it can, and it may hold " + label + "'s. " +
+		return "the record of which stored logins are spent cannot be read, and it may hold " + label +
+			"'s as spent. Until it can be read, a stored login is presented only when Claude Code's own " +
+			"login stores show it is on that login -- one holds it, both could be read, and neither holds a " +
+			"later login that could be the same account's -- and they do not show that for " + label + "'s. " +
 			SpentRecordAdvice(label+", and every other account `ccdad doctor` lists as held")
 	case HeldByNewerLogin:
 		return "Claude Code holds a newer login of " + label + " than ccdad has stored, so its stored refresh " +
@@ -140,10 +142,10 @@ func HoldReason(h Hold, label string, now StoresNow) string {
 //   - The record cannot be read (HeldUnreadableRecord). What it held is then
 //     unknown, and a stored login it may have recorded as spent cannot be
 //     told from one it did not, so stored logins are held until it can be
-//     read -- every one but a login Claude Code's own stores hold with nothing
-//     later beside it (liveHoldsNewest), which Claude Code is presenting
-//     already. A record that was never written is not unreadable: nothing was
-//     ever held by it.
+//     read -- every one but a login Claude Code is on already: one of its
+//     stores holds it, both could be read, and neither holds a later login
+//     that could be its account's (liveHoldsNewest). A record that was never
+//     written is not unreadable: nothing was ever held by it.
 //   - A login sitting in one of Claude Code's live stores supersedes it
 //     (HeldByNewerLogin): the identity oracle named that login a's, it is
 //     neither the stored login nor one the stored login replaced (the
@@ -207,12 +209,13 @@ func (a Account) StoredLoginSpent(stored cclink.Blob, live cclink.LoginStores, o
 // may hold the later login.
 //
 // "Could be a's" is any login owners does not name as ANOTHER account's --
-// another account's stored login, or one its stored login replaced. That
-// login says nothing about whether a's is spent: it is ccdad's own switch
-// from that account to a, whose outcome was unknown, and the repair that
-// completes it puts a's login in the other store. A later login nobody can
-// name still counts, because it may be a's newer one, and the repair would
-// then write the spent login over it.
+// another account's stored login, or one its stored login replaced. Such a
+// login says nothing about whether a's is spent, whatever put it there:
+// ccdad's own switch from that account to a whose outcome was unknown -- which
+// the repair completes by putting a's login in the other store -- or a /login
+// to that account that Claude Code wrote to the file while its keychain write
+// was failing. A later login nobody can name still counts, because it may be
+// a's newer one, and the repair would then write the spent login over it.
 func (a Account) liveHoldsNewest(stored cclink.Blob, live cclink.LoginStores, owners LoginOwners) bool {
 	// A store that could not be read may hold the later login. The file's
 	// failure is FileErr; the keychain's is the zero stores ReadLoginStores
