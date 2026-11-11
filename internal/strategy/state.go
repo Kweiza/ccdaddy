@@ -127,6 +127,22 @@ type stateFile struct {
 	// what decides the direction of the split repair that follows: the repair
 	// completes this switch rather than undo it. A completed switch clears it.
 	PendingSwitch *pendingSwitch `json:"pending_switch,omitempty"`
+	// NamedLogins is the identity oracle's answer about every login it named
+	// as a managed account's and ccdad could not store: the account's uuid,
+	// keyed by the login's store.LoginHash -- a hash, for the reason
+	// SupersededLogins in accounts.toml is one.
+	//
+	// It is the one fact about such a login nothing on this machine can derive.
+	// Its refresh token matches no stored login, and only the profile endpoint
+	// can say whose it is. Everything else -- that a login store still holds
+	// it, that it was issued after the account's stored login, so that the
+	// stored refresh token is spent -- every process derives for itself
+	// (store.Account.StoredLoginSpent), which is how a `ccdad` command knows to
+	// leave that stored token alone while the daemon is still trying to store
+	// the newer login. It lives here, beside the cooldown, rather than with the
+	// account: the store write that failed may have failed on the store's own
+	// lock, and this file has another.
+	NamedLogins map[string]string `json:"named_logins,omitempty"`
 }
 
 // pendingSwitch is the on-disk shape of State.PendingSwitch.
@@ -226,6 +242,35 @@ func (s *State) ClearPendingIf(to string, at time.Time) {
 	if s.IsPending(to, at) {
 		s.data.PendingSwitch = nil
 	}
+}
+
+// NamedLogin is the account the identity oracle named the login with this hash
+// as, when ccdad could not store it (stateFile.NamedLogins).
+func (s *State) NamedLogin(loginHash string) (uuid string, ok bool) {
+	uuid, ok = s.data.NamedLogins[loginHash]
+	return uuid, ok
+}
+
+// NameLogin records the oracle's answer that the login with this hash is
+// uuid's, for a login ccdad could not store.
+func (s *State) NameLogin(loginHash, uuid string) {
+	if s.data.NamedLogins == nil {
+		s.data.NamedLogins = map[string]string{}
+	}
+	s.data.NamedLogins[loginHash] = uuid
+}
+
+// ForgetNamedLogins forgets every named login keep refuses, and reports whether
+// it forgot any.
+func (s *State) ForgetNamedLogins(keep func(loginHash string) bool) bool {
+	forgot := false
+	for h := range s.data.NamedLogins {
+		if !keep(h) {
+			delete(s.data.NamedLogins, h)
+			forgot = true
+		}
+	}
+	return forgot
 }
 
 // departuresFor is every remembered departure except the live account's own.
@@ -425,6 +470,7 @@ func LoadState() (*State, error) {
 	s.data.CodexLastSwitchTo = parsed.CodexLastSwitchTo
 	s.data.Departures = parsed.Departures
 	s.data.PendingSwitch = parsed.PendingSwitch
+	s.data.NamedLogins = parsed.NamedLogins
 	s.data.Version = parsed.Version
 	return s, nil
 }

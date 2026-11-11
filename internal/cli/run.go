@@ -1413,6 +1413,11 @@ func newRunCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// The session refreshes this login with its stored refresh token,
+			// and a spent one revokes the newer login it was spent for.
+			if spentLogins(s)[target.UUID] {
+				return WithCode(fmt.Errorf("not running %s: %s", target.Label(), spentLoginReason(target)), ExitBlocked)
+			}
 
 			path, err := lookClaude("claude")
 			if err != nil {

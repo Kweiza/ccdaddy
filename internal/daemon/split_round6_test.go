@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/config"
 	"github.com/Kweiza/ccdaddy/internal/provider"
 	"github.com/Kweiza/ccdaddy/internal/store"
@@ -12,21 +13,20 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
 
-// Round 6: the hold lifts as soon as the stored credential is no longer the
-// SPENT one -- whatever replaced it -- and still holds while it is (see
-// TestTheHoldStaysWhileTheSpentLoginIsStillStored for the stores agreeing
-// while the spent login is still stored). A probe asks the hold too.
+// Round 6: the hold lifts as soon as something issued no earlier than the
+// newer login is stored -- whatever it is -- and still holds while the spent
+// login is (see TestTheHoldStaysWhileTheSpentLoginIsStillStored for the stores
+// agreeing while the spent login is still stored). A probe asks the hold too.
 
 func TestTheHoldLiftsWhenALaterGenerationIsStored(t *testing.T) {
 	isolateEngine(t)
 	a := seedAccount(t, "u-1", "org-1")
 	e := engineFor(t, tokensAreFine, noFetch)
-	// B1 was named and missed; B2, a later refresh, is what gets stored.
-	e.holdUntilStored("u-1", "refresh:RT-u-1-b1", "refresh:RT-u-1")
-	if err := openEngineStore(t).Add(a, oauthBlob("RT-u-1-b2")); err != nil {
-		t.Fatal(err)
-	}
-	e.releaseStored(openEngineStore(t))
+	// The newer login was named and missed; a later refresh is what gets
+	// stored.
+	spendStoredLogin(t, e, "u-1")
+	storeLogin(t, a, blobExpiring("RT-u-1-later", tickEpoch.Add(10*time.Hour)))
+	passSees(t, e)
 	if err := e.holdSpentToken("u-1"); err != nil {
 		t.Fatalf("the hold stayed after a later generation replaced the spent login: %v", err)
 	}
@@ -36,14 +36,22 @@ func TestTheHoldLiftsWhenTheAccountIsLoggedInAgain(t *testing.T) {
 	isolateEngine(t)
 	a := seedAccount(t, "u-1", "org-1")
 	e := engineFor(t, tokensAreFine, noFetch)
-	e.holdUntilStored("u-1", "refresh:RT-u-1-newer", "refresh:RT-u-1")
+	spendStoredLogin(t, e, "u-1")
 	// `ccdad add` stores a brand-new grant.
-	if err := openEngineStore(t).Add(a, oauthBlob("RT-u-1-relogin")); err != nil {
-		t.Fatal(err)
-	}
-	e.releaseStored(openEngineStore(t))
+	storeLogin(t, a, blobExpiring("RT-u-1-relogin", tickEpoch.Add(10*time.Hour)))
+	passSees(t, e)
 	if err := e.holdSpentToken("u-1"); err != nil {
 		t.Fatalf("the hold stayed after a re-login replaced the spent login: %v", err)
+	}
+}
+
+// storeLogin stores login as a's, as a later adoption or a re-login does.
+func storeLogin(t *testing.T, a store.Account, login string) {
+	t.Helper()
+	var b cclink.Blob
+	mustUnmarshal(t, login, &b)
+	if err := openEngineStore(t).Add(a, b); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -57,7 +65,7 @@ func TestNoSwitchInstallsAHeldStoredLogin(t *testing.T) {
 	liveAs(t, "u-1")
 	before := fileNow(t)
 	e := engineFor(t, tokensAreFine, noFetch)
-	e.holdUntilStored("u-2", "refresh:RT-u-2-newer", "refresh:RT-u-2")
+	spendStoredLogin(t, e, "u-2")
 
 	res, err := e.execute(context.Background(), openEngineStore(t), switcher.Request{Target: target, LiveUUID: "u-1"})
 	if err != nil {
@@ -73,6 +81,7 @@ func TestNoSwitchInstallsAHeldStoredLogin(t *testing.T) {
 // is due.
 func TestNoProbeIsDueWhileTheStoredTokenIsHeld(t *testing.T) {
 	isolateEngine(t)
+	seedAccount(t, "u-1", "org-1")
 	e := NewEngine()
 	e.Now = func() time.Time { return tickEpoch }
 	a := store.Account{UUID: "u-1", Provider: provider.Claude, SubscriptionStatus: "active"}
@@ -82,7 +91,7 @@ func TestNoProbeIsDueWhileTheStoredTokenIsHeld(t *testing.T) {
 	if _, _, want := e.probeDue(a, entry, cfg, thresholds, tickEpoch, "", true, nil); !want {
 		t.Fatal("precondition: the probe is not due without a hold")
 	}
-	e.holdUntilStored("u-1", "refresh:RT-u-1-newer", "refresh:RT-u-1")
+	spendStoredLogin(t, e, "u-1")
 	if _, _, want := e.probeDue(a, entry, cfg, thresholds, tickEpoch, "", true, nil); want {
 		t.Fatal("a probe is due for an account whose stored refresh token is spent")
 	}

@@ -51,6 +51,19 @@ func (l LoginStores) Live() (Blob, CredentialSource, error) {
 	return l.File, SourceCredentialsFile, nil
 }
 
+// Logins is the login each store that could be read holds: the item's when
+// there is one, and the file's unless it could not be read.
+func (l LoginStores) Logins() []Blob {
+	var out []Blob
+	if l.HasItem {
+		out = append(out, l.Item)
+	}
+	if l.FileErr == nil {
+		out = append(out, l.File)
+	}
+	return out
+}
+
 // base is the blob a switch merges onto and decides from: the item with the
 // file's machine keys folded back in, or the file alone when there is no item.
 // loadLiveUnderLock carries the argument for both halves.
@@ -118,6 +131,19 @@ func LoginIdentity(b Blob) string {
 // last as long, so the later expiry is the later issue.
 func LoginExpiry(b Blob) (time.Time, bool) {
 	return oauthExpiresAt(b)
+}
+
+// IssuedAfter reports whether login was issued after than, by LoginExpiry.
+// Two logins with no expiry are not ordered, and the login in hand wins, which
+// is how adoption behaved before it was ordered at all; an expiry on than
+// beside a login without one keeps than.
+func IssuedAfter(login, than Blob) bool {
+	at, ok := LoginExpiry(login)
+	was, wasOK := LoginExpiry(than)
+	if !ok {
+		return !wasOK
+	}
+	return !wasOK || at.After(was)
 }
 
 // sameCredential reports whether two blobs carry the same OAuth credential:

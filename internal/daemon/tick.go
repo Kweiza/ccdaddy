@@ -253,10 +253,9 @@ type Engine struct {
 	// loginMemoryGrace after (ageLoginMemory).
 	owners    loginMemory[string]
 	saidStore loginMemory[struct{}]
-	// unadopted is the accounts with a newer login the oracle named and ccdad
-	// could not store, each with the newer login and the spent one
-	// (holdUntilStored). Guarded by mu.
-	unadopted map[string]spentHold
+	// spent is the accounts whose stored login this pass found superseded by
+	// a newer one in a login store (setSpent, holdSpentToken). Guarded by mu.
+	spent map[string]bool
 
 	// codexRankedUUIDs is the Codex lane's last ranking, best first, and
 	// codexSamples holds the usage readings the Codex proxy took off real
@@ -530,7 +529,6 @@ func (e *Engine) Tick(ctx context.Context) error {
 		Now:    now,
 		Config: func() (config.Config, error) { return cfg, cfgErr },
 		Owners: e.ownerOf,
-		Held:   func(uuid string) bool { return e.holdSpentToken(uuid) != nil },
 	})
 	if evErr != nil {
 		// The configured table, not hoverThresholds(cfg, ev): a failed
@@ -561,12 +559,14 @@ func (e *Engine) Tick(ctx context.Context) error {
 	if !ev.LoginKnown || (!v.Split() && !v.Unresolved()) {
 		e.saidSplit = ""
 	}
+	// Which stored logins are spent is this pass's verdict, from the stores it
+	// read (switcher.Evaluation.Spent). A pass that could not read them keeps
+	// the last verdict: an unreadable store is no evidence a hold has lifted.
 	if ev.LoginKnown {
 		e.ageLoginMemory(ev.Stores, now)
+		e.forgetNamedLogins(ev.Stores)
+		e.setSpent(ev.Spent)
 	}
-	// A hold on a spent stored refresh token is lifted once the account's
-	// stored credential is no longer the spent one (releaseStored).
-	e.releaseStored(s)
 	e.settlePending(s, ev, now)
 	repairing := false
 	switch {
@@ -580,7 +580,11 @@ func (e *Engine) Tick(ctx context.Context) error {
 		// stores as they were before one of them was named, so the next
 		// tick's evaluation decides. Skipping one tick is simpler than
 		// evaluating twice in one, and a tick is about a second.
-		if !e.identifyStores(ctx, s, ev) {
+		if e.identifyStores(ctx, s, ev) {
+			// A login it named and could not store holds its account's stored
+			// token from this pass, not the next: the stores were read above.
+			e.setSpent(s.SpentLogins(ev.Stores))
+		} else {
 			res, swapErr = e.act(ctx, s, ev)
 		}
 	case ev.LoginKnown && v.StoresDisagree() && !planLeaves(ev, v.RepairTarget()):
@@ -961,7 +965,7 @@ func (e *Engine) execute(ctx context.Context, s *store.Store, req switcher.Reque
 		if e.saidStale != res.Target.UUID {
 			e.saidStale = res.Target.UUID
 			switch {
-			case errors.Is(res.FreshenErr, errUnadopted):
+			case errors.Is(res.FreshenErr, store.ErrStoredLoginSpent):
 				// Not the refresh window at all: the stored refresh token is
 				// spent, and freshen would not present it.
 				e.logf("not switching to %s: %v", res.Target.Label(), res.FreshenErr)
@@ -1487,10 +1491,11 @@ func (e *Engine) handleFailure(in commitInput, cfg config.Config, err error) {
 		// Nothing is written: an account that cannot be polled has no schedule.
 		return
 
-	case errors.Is(err, tokens.ErrLiveTokenStale), errors.Is(err, errUnadopted):
-		// errUnadopted is the same kind of answer: a hold on an account whose
-		// stored refresh token is spent until a newer login is adopted -- not
-		// evidence about the account, so no backoff and no quarantine.
+	case errors.Is(err, tokens.ErrLiveTokenStale), errors.Is(err, store.ErrStoredLoginSpent):
+		// store.ErrStoredLoginSpent is the same kind of answer: a hold on an
+		// account whose stored refresh token is spent until a newer login is
+		// stored -- not evidence about the account, so no backoff and no
+		// quarantine.
 		//
 		// This is UNKNOWN, and NOT an endpoint failure. Claude Code is the one
 		// that rotates the live login, and an eight-hour-old token means Claude
