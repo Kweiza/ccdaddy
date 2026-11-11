@@ -249,9 +249,10 @@ type Engine struct {
 	// managed account a login belongs to, or "" for a login that is nobody's
 	// here. A login is asked about once. saidStore latches the line logged for
 	// a login store the oracle could not, or need not, repair. See
-	// identifyStores.
-	owners    map[string]string
-	saidStore map[string]bool
+	// identifyStores. Both keep a login while a store holds it, and for
+	// loginMemoryGrace after (ageLoginMemory).
+	owners    loginMemory[string]
+	saidStore loginMemory[struct{}]
 	// unadopted is the accounts with a newer login the oracle named and ccdad
 	// could not store, each with the newer login and the spent one
 	// (holdUntilStored). Guarded by mu.
@@ -559,6 +560,9 @@ func (e *Engine) Tick(ctx context.Context) error {
 	v := ev.Login
 	if !ev.LoginKnown || (!v.Split() && !v.Unresolved()) {
 		e.saidSplit = ""
+	}
+	if ev.LoginKnown {
+		e.ageLoginMemory(ev.Stores, now)
 	}
 	// A hold on a spent stored refresh token is lifted once the account's
 	// stored credential is no longer the spent one (releaseStored).
