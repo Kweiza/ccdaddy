@@ -8,7 +8,6 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/provider"
 	"github.com/Kweiza/ccdaddy/internal/store"
-	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/switcher"
 )
 
@@ -27,9 +26,9 @@ func spentLoginReason(a store.Account, hold store.Hold, v *switcher.LoginView) s
 	label := a.Label()
 	switch hold {
 	case store.HeldUnreadableRecord:
-		path, err := strategy.StatePath()
+		path, err := store.SpentRecordPath()
 		if err != nil {
-			path = strategy.StateFileName
+			path = store.SpentRecordFileName
 		}
 		return "the engine state that records which stored logins are spent cannot be read, so no stored " +
 			"login is presented until it can. Repair or remove " + path + "; `ccdad doctor` says why it " +

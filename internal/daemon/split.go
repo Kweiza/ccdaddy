@@ -7,7 +7,6 @@ import (
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/store"
-	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/switcher"
 )
 
@@ -241,10 +240,10 @@ func (e *Engine) identifyStores(ctx context.Context, s *store.Store, ev switcher
 }
 
 // nameUnstored records what a failed adoption established and nothing can
-// derive later, in the engine state every process reads: the identity
-// oracle's answer that live is owner's (strategy.State.NamedLogin), and that
-// owner's stored login spent -- the one the verdict compared, nil if it could
-// not be read -- is spent, by live (strategy.State.SpentStoredLogin).
+// derive later, in the record every process reads (store.SpentRecord): the
+// identity oracle's answer that live is owner's, and that owner's stored login
+// spent -- the one the verdict compared, nil if it could not be read -- is
+// spent, by live.
 //
 // That is what holds owner's stored refresh token, in this daemon and in every
 // `ccdad` command, until owner stores another login
@@ -253,7 +252,7 @@ func (e *Engine) identifyStores(ctx context.Context, s *store.Store, ev switcher
 // is asked, and forgetOracleRecord drops what no longer applies.
 //
 // A RECORD THAT CANNOT BE WRITTEN STILL HOLDS, in this process: it is kept in
-// memory (oracleRecord lays it over the state on disk) and written again on
+// memory (oracleRecord lays it over the record on disk) and written again on
 // every pass until it lands (writeUnstored). The fact it records -- this
 // stored token is spent -- does not stop being true because a disk was full
 // or a lock was held, and the daemon's memory is the one place it is known
@@ -272,7 +271,7 @@ func (e *Engine) nameUnstored(owner store.Account, live, spent cclink.Blob) {
 type unstoredLogin struct{ uuid, newer, spent string }
 
 // applyTo makes the record in st, the way every write of it does.
-func (u unstoredLogin) applyTo(st *strategy.State) {
+func (u unstoredLogin) applyTo(st *store.SpentRecord) {
 	st.NameLogin(u.newer, u.uuid)
 	st.RecordSpentStoredLogin(u.uuid, u.spent, u.newer)
 }
@@ -283,7 +282,7 @@ func (e *Engine) writeUnstored() {
 	if len(e.unstored) == 0 {
 		return
 	}
-	err := strategy.WithState(stateTimeout, func(st *strategy.State) error {
+	err := store.WithSpentRecord(stateTimeout, func(st *store.SpentRecord) error {
 		for _, op := range e.unstored {
 			op.applyTo(st)
 		}
@@ -306,11 +305,11 @@ func (e *Engine) writeUnstored() {
 	e.unstored = nil
 }
 
-// oracleRecord is the record this daemon decides from: the state on disk,
-// with every record not yet written laid over it.
+// oracleRecord is the record this daemon decides from: the record on disk,
+// with every one not yet written laid over it.
 func (e *Engine) oracleRecord() store.OracleRecord {
 	rec := store.LoadOracleRecord()
-	st, ok := rec.(*strategy.State)
+	st, ok := rec.(*store.SpentRecord)
 	if !ok {
 		return rec
 	}
@@ -347,14 +346,14 @@ func (e *Engine) forgetOracleRecord(s *store.Store, st cclink.LoginStores) {
 			return a.SpentRecordHolds(stored, rec)
 		}
 	}
-	cur, err := strategy.LoadState()
+	cur, err := store.LoadSpentRecord()
 	if err != nil {
 		return
 	}
 	if forgot := cur.ForgetNamedLogins(keepNamed); !cur.ForgetSpentStoredLogins(keepSpent(cur)) && !forgot {
 		return
 	}
-	if err := strategy.WithState(stateTimeout, func(state *strategy.State) error {
+	if err := store.WithSpentRecord(stateTimeout, func(state *store.SpentRecord) error {
 		keep := keepSpent(state)
 		state.ForgetNamedLogins(keepNamed)
 		state.ForgetSpentStoredLogins(keep)

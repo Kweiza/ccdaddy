@@ -12,7 +12,6 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/cclink/cclinktest"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/store"
-	"github.com/Kweiza/ccdaddy/internal/strategy"
 )
 
 // A stored login a newer one has already superseded is not presented by any
@@ -40,7 +39,7 @@ func spentMachine(t *testing.T) *cclinktest.Keychain {
 // replaced (daemon.Engine.nameUnstored).
 func recordUnstoredLogin(t *testing.T, uuid, newer, spent string) {
 	t.Helper()
-	if err := strategy.WithState(time.Second, func(st *strategy.State) error {
+	if err := store.WithSpentRecord(time.Second, func(st *store.SpentRecord) error {
 		st.NameLogin(store.LoginHash(newer), uuid)
 		st.RecordSpentStoredLogin(uuid, store.LoginHash(spent), store.LoginHash(newer))
 		return nil
