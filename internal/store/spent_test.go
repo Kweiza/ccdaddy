@@ -310,3 +310,16 @@ func TestAnotherAccountsLaterLoginDoesNotHoldTheLoginClaudeCodeIsOn(t *testing.T
 		}
 	}
 }
+
+// A store that could not be read may hold the later login. The keychain item
+// holds the spent G0 and the credentials file, which could not be read, the
+// newer G1: with the record unreadable too, nothing shows G0 is the newest
+// login, and it stays held.
+func TestAStoreThatCouldNotBeReadKeepsTheNewestLoginHeld(t *testing.T) {
+	unreadable := record{err: errors.New("parsing spent-logins.json: unexpected end of JSON input")}
+	g0 := loginIssued("RT-g0", 1000)
+	live := cclink.LoginStores{HasItem: true, Item: g0, FileErr: errors.New("reading the credentials file: permission denied")}
+	if got := (Account{UUID: "u-1"}).StoredLoginSpent(g0, live, nil, unreadable); got != HeldUnreadableRecord {
+		t.Fatalf("StoredLoginSpent = %v, want HeldUnreadableRecord: the file that could not be read may hold G1", got)
+	}
+}
