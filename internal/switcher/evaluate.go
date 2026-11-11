@@ -58,9 +58,9 @@ type Evaluation struct {
 	// Stores is the raw read Login was built from. The daemon's identity
 	// oracle needs a store's own access token to ask whose login it is.
 	Stores cclink.LoginStores
-	// Spent is every account whose stored login a newer one in Stores has
-	// superseded (store.Account.StoredLoginSpent): its stored refresh token
-	// is spent, so it is not a target. Empty when the stores could not be read.
+	// Spent is every account whose stored refresh token is spent
+	// (store.Account.StoredLoginSpent), so it is not a target. When the stores
+	// could not be read, the daemon's record decides it alone.
 	Spent map[string]bool
 	// NoReadings means nothing has ever been polled, so there is no evidence to
 	// choose on. Distinct from ActionBlocked, which is a choice that was made
@@ -173,11 +173,13 @@ func Evaluate(s *store.Store, opts EvalOptions) (Evaluation, error) {
 	// reading it a second time for the split check would double the keychain
 	// spawns of every tick and could answer about a different instant.
 	stores, err := cclink.ReadLoginStores()
+	// Taken whether or not the read succeeded: on a failed one the stores are
+	// the zero value, no evidence, and the daemon's record decides alone.
+	ev.Spent = s.SpentLogins(stores, store.LoadOracleRecord())
 	if err == nil {
 		ev.Stores = stores
 		ev.Login, ev.LoginKnown = ViewLogin(stores, accounts, s.Credentials, s.ActiveUUID(), opts.Owners), true
 		ev.Login.Intent = PendingTarget()
-		ev.Spent = s.SpentLogins(stores, store.LoadOracleRecord())
 		// The file's error, when the file is the only store.
 		_, _, err = stores.Live()
 	}

@@ -126,3 +126,25 @@ func TestAForcedProbeDoesNotSpendAStoredLoginANewerOneHasSpent(t *testing.T) {
 		t.Fatalf("the refusal does not say the stored refresh token is spent:\n%s%s", top, stderr)
 	}
 }
+
+// A keychain that cannot be read -- locked over SSH, or past the lookup bound
+// on the loaded Mac -- is no evidence that the hold has lifted. The record
+// says the stored login is spent, and it says so without the stores.
+func TestARecordedSpentLoginStaysHeldWhenTheKeychainCannotBeRead(t *testing.T) {
+	isolate(t)
+	suppressAutoStart(t)
+	freezeClock(t, probeNow)
+	kc := spentMachine(t)
+	writeLiveFile(t, liveLoginJSON("RT-uuid-chan-rotated-again", ""))
+	kc.FailReads(true)
+	stub := stubClaude(t, ExitOK)
+
+	code, _, stderr, top := runRoot(t, "run", "chan@example.com")
+	if stub.started || code != ExitBlocked {
+		t.Fatalf("run: exit = %d, started = %v; want %d and no session:\n%s%s", code, stub.started, ExitBlocked, top, stderr)
+	}
+	code, _, stderr, top = runRoot(t, "probe", "--uuid", "uuid-chan", "--force")
+	if stub.started {
+		t.Fatalf("probe --force spent a stored login recorded as spent (exit %d):\n%s%s", code, top, stderr)
+	}
+}

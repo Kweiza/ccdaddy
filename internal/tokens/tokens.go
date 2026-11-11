@@ -197,8 +197,10 @@ func (s *Source) AccessToken(ctx context.Context, uuid string) (string, error) {
 	// spent the stored refresh token, and presenting it again can revoke the
 	// newer login with it. The decision is store.Account.StoredLoginSpent,
 	// taken against the stores just read, so every process that gets a token
-	// here -- the daemon's poll, a `ccdad status --refresh` -- applies it.
-	if liveErr == nil && st.StoredLoginSpent(uuid, stores) {
+	// here -- the daemon's poll, a `ccdad status --refresh` -- applies it. It
+	// is taken when the read FAILED too, on the zero stores it returned: no
+	// evidence, and the daemon's record decides alone.
+	if st.StoredLoginSpent(uuid, stores) {
 		return "", fmt.Errorf("%w: %q", store.ErrStoredLoginSpent, uuid)
 	}
 	var live cclink.Blob

@@ -81,7 +81,9 @@ func (l LoginStores) base() Blob {
 // a locked keychain is an unknown about the store Claude Code reads first, and
 // nothing about the file can stand in for it. A file that cannot be read is
 // carried in FileErr, so a caller that only wants Live gets exactly what Load
-// gave it.
+// gave it. With the error the LoginStores is the zero value, which holds no
+// login: no evidence of anything, which is what store.Account.StoredLoginSpent
+// is to be handed when the read failed.
 func ReadLoginStores() (LoginStores, error) {
 	item, ok, err := loadFromKeychain(keychainReadTimeout)
 	if err != nil {
