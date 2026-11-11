@@ -226,3 +226,29 @@ func TestThePresentedLoginIsTheOneTheHoldWasDecidedOn(t *testing.T) {
 			cclink.LoginIdentity(got), hold, err)
 	}
 }
+
+// Under an unreadable record, the stored login Claude Code's stores hold with
+// nothing later beside it is not held: Claude Code is presenting it already.
+// Every other stored login is.
+func TestAnUnreadableRecordLetsThroughOnlyTheNewestLoginInAStore(t *testing.T) {
+	unreadable := record{err: errors.New("parsing spent-logins.json: unexpected end of JSON input")}
+	stored := loginIssued("RT-stored", 2000)
+	a := Account{UUID: "u-1"}
+	cases := []struct {
+		name string
+		live cclink.LoginStores
+		want Hold
+	}{
+		{"the file holds it and nothing else", cclink.LoginStores{File: stored}, NotHeld},
+		{"both stores hold it", cclink.LoginStores{HasItem: true, Item: stored, File: stored}, NotHeld},
+		{"the item holds an older login beside it", cclink.LoginStores{HasItem: true, Item: loginIssued("RT-older", 1000), File: stored}, NotHeld},
+		{"a store holds a later login beside it", cclink.LoginStores{HasItem: true, Item: loginIssued("RT-later", 3000), File: stored}, HeldUnreadableRecord},
+		{"no store holds it", cclink.LoginStores{File: loginIssued("RT-other", 1000)}, HeldUnreadableRecord},
+		{"the stores could not be read", cclink.LoginStores{}, HeldUnreadableRecord},
+	}
+	for _, tc := range cases {
+		if got := a.StoredLoginSpent(stored, tc.live, unreadable); got != tc.want {
+			t.Errorf("%s: StoredLoginSpent = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
