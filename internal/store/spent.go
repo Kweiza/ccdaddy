@@ -76,8 +76,10 @@ func (h Hold) Held() bool { return h != NotHeld }
 //
 //   - The record cannot be read (HeldUnreadableRecord). What it held is then
 //     unknown, and a stored login it may have recorded as spent cannot be
-//     told from one it did not, so every stored login is held until it can be
-//     read. A record that was never written is not unreadable: nothing was
+//     told from one it did not, so stored logins are held until it can be
+//     read -- every one but a login Claude Code's own stores hold with nothing
+//     later beside it (liveHoldsNewest), which Claude Code is presenting
+//     already. A record that was never written is not unreadable: nothing was
 //     ever held by it.
 //   - A login sitting in one of Claude Code's live stores supersedes it
 //     (HeldByNewerLogin): the identity oracle named that login a's, it is
@@ -106,10 +108,10 @@ func (h Hold) Held() bool { return h != NotHeld }
 func (a Account) StoredLoginSpent(stored cclink.Blob, live cclink.LoginStores, rec OracleRecord) Hold {
 	storedID := cclink.LoginIdentity(stored)
 	if rec.LoadError() != nil {
-		if storedID != "" {
-			return HeldUnreadableRecord
+		if storedID == "" || liveHoldsNewest(stored, live) {
+			return NotHeld
 		}
-		return NotHeld
+		return HeldUnreadableRecord
 	}
 	for _, login := range live.Logins() {
 		id := cclink.LoginIdentity(login)
@@ -127,6 +129,28 @@ func (a Account) StoredLoginSpent(stored cclink.Blob, live cclink.LoginStores, r
 		return HeldByRecord
 	}
 	return NotHeld
+}
+
+// liveHoldsNewest reports whether one of Claude Code's login stores holds the
+// stored login and none holds a login issued after it (cclink.IssuedAfter).
+//
+// Such a login is what Claude Code is presenting already, so a record that
+// cannot be read is no reason to hold it: holding it protects nothing, and
+// costs the split repair that puts it in the other store -- leaving there a
+// login it replaced, which Claude Code may present next. A stored login no
+// store holds, or one a store holds beside a later login, stays held.
+func liveHoldsNewest(stored cclink.Blob, live cclink.LoginStores) bool {
+	storedID := cclink.LoginIdentity(stored)
+	held := false
+	for _, login := range live.Logins() {
+		switch id := cclink.LoginIdentity(login); {
+		case id == storedID:
+			held = true
+		case id != "" && cclink.IssuedAfter(login, stored):
+			return false
+		}
+	}
+	return held
 }
 
 // SpentRecordHolds reports whether the record of a's spent stored login still
