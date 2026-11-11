@@ -388,3 +388,23 @@ func TestTheOwnersAreReadOnlyWhenNeededAndOnce(t *testing.T) {
 		t.Fatalf("%d reads for %d accounts: a stored login was read more than once", reads, len(accounts))
 	}
 }
+
+// N8. A login that is one account's stored login and another account's
+// superseded one belongs to the account that stores it: what an account
+// stores now outranks what another account's history once held.
+func TestAStoredLoginOutranksAnotherAccountsHistory(t *testing.T) {
+	accounts := []Account{
+		{UUID: "u-old", Provider: provider.Claude, SupersededLogins: LoginHash("refresh:RT-x")},
+		{UUID: "u-now", Provider: provider.Claude},
+	}
+	lookup := func(uuid string) (cclink.Blob, error) {
+		if uuid == "u-now" {
+			return claudeLogin("RT-x"), nil
+		}
+		return claudeLogin("RT-other"), nil
+	}
+	a, ev := OwnerByEvidence("refresh:RT-x", accounts, lookup)
+	if a.UUID != "u-now" || ev != ByStoredLogin {
+		t.Fatalf("OwnerByEvidence = %s, %v; want u-now by its stored login", a.UUID, ev)
+	}
+}
