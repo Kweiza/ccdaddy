@@ -151,10 +151,13 @@ func LoadWithSource() (Blob, CredentialSource, error) {
 // attributes-only and could not fail, so a switch could commit to writing an
 // item it had never read.
 //
-// The item is read with keychainWriteTimeout, not the lookup bound: this read
-// is the first spawn of a write, and a loaded keychain that fails it fails the
-// switch before anything is written. The stores come back SEPARATELY as well as
-// merged, because whether the login is split is decided from both.
+// The item is read with the LOOKUP bound, although it is the first spawn of a
+// write: it runs under Claude Code's credential locks, a lookup that runs out
+// of time changes nothing, and a keychain too slow for it fails the switch
+// before anything is written -- the same answer the daemon's own read of the
+// stores, under the same bound, gives that keychain every tick
+// (lockedKeychainBound). The stores come back SEPARATELY as well as merged,
+// because whether the login is split is decided from both.
 //
 // THE ITEM IS NOT THE WHOLE BASE EITHER. The freshness argument above holds for
 // what the item HAS; it says nothing about what the item never had. Claude
@@ -172,7 +175,7 @@ func LoadWithSource() (Blob, CredentialSource, error) {
 // so continuing on the item alone would destroy machine keys at exactly the
 // moment ccdad cannot see what it is destroying.
 func loadLiveUnderLock(livePath string) (LoginStores, error) {
-	item, ok, err := loadFromKeychain(keychainWriteTimeout)
+	item, ok, err := loadFromKeychain(keychainReadTimeout)
 	if err != nil {
 		return LoginStores{}, err
 	}
@@ -390,10 +393,98 @@ func ClearLogin() error {
 }
 
 // writeMerged is the locked read-decide-merge-write all of the above perform.
-func writeMerged(writes StoreWrites, decide func(live Blob, stores LoginStores) (Blob, error)) (err error) {
+//
+// It holds Claude Code's credential locks for one pass: the stores read, the
+// decision, the item written and the file written, with no more than
+// lockedKeychainBound spent in `security` -- one lookup and one write.
+//
+// A WRITE THAT RAN OUT OF TIME IS READ BACK AFTER THE LOCKS ARE RELEASED.
+// The read-back asks the keychain that was just too slow, so it is held to the
+// write bound, and nothing about its answer has to be acted on under the same
+// hold: did-not-land is the failure it looked like, and an answer that names
+// neither login is an outcome nobody knows, which the next pass of the daemon's
+// split repair settles. Holding Claude Code's own refresh off for it bought
+// nothing but the wait. When it finds the write LANDED, the file follows in a
+// second locked pass that spends one lookup -- completeLandedWrite -- so a
+// switch whose write landed still completes in the call that made it.
+func writeMerged(writes StoreWrites, decide func(live Blob, stores LoginStores) (Blob, error)) error {
+	unconfirmed, err := writeUnderLocks(writes, decide)
+	if unconfirmed == nil {
+		return err
+	}
+	// err is the release's: a takeover after the item write was refused.
+	return errors.Join(unconfirmed.settle(), err)
+}
+
+// writeFileOnly is the pass that completes a write the item has already
+// taken: the item is confirmed to hold it and is not written again, and the
+// file is written unless it already holds the login. It is writeMerged's own
+// and no caller's to ask for.
+const writeFileOnly StoreWrites = WriteAll + 1
+
+// unconfirmedWrite is an item write that ran out of time, as writeUnderLocks
+// hands it back to be read back once the locks are released.
+type unconfirmedWrite struct {
+	// err is the write's own failure.
+	err error
+	// written is the merged blob the item was given, previous what the item
+	// held before, and incoming what the caller decided to install -- which a
+	// second pass merges onto the file again.
+	written, previous, incoming Blob
+}
+
+// settle reads the item back and says what the write that ran out of time
+// means for the switch. See writeMerged.
+func (u unconfirmedWrite) settle() error {
+	switch confirmKeychainWrite(u.written, u.previous) {
+	case writeDidNotLand:
+		return keychainWriteFailed(u.err)
+	case writeUnresolved:
+		return unconfirmedWriteError(u.err)
+	}
+	return completeLandedWrite(u.incoming, u.written)
+}
+
+// completeLandedWrite brings the credentials file into line with an item a
+// write that ran out of time is now known to have landed in: the locks again,
+// one lookup to see the item still holds that write, and the file.
+//
+// The lookup is not a formality. The locks were released for the read-back,
+// and an item that moved since -- Claude Code's own /login -- must not have
+// the file put on a login it has already replaced; that is an outcome the next
+// pass of the split repair settles, like any other the read-back cannot name.
+// A pass that fails for any other reason leaves the item on the new login and
+// the file on the old: half written, which the same repair completes.
+func completeLandedWrite(incoming, written Blob) error {
+	_, err := writeUnderLocks(writeFileOnly, func(_ Blob, stores LoginStores) (Blob, error) {
+		if !itemHoldsWrite(stores.Item, stores.HasItem, written) {
+			return nil, errItemMovedOn
+		}
+		return incoming, nil
+	})
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, errItemMovedOn):
+		return fmt.Errorf("%w: the keychain item Claude Code reads first took the new login after its write "+
+			"ran out of time, and then changed again before the credentials file could follow. The file was "+
+			"left as it was; the daemon compares both stores on its next pass and puts one login in both",
+			ErrLoginOutcomeUnknown)
+	}
+	return fmt.Errorf("%w; it took it after its write ran out of time, and the credentials file behind it could "+
+		"not then be brought into line: %w", ErrLoginHalfWritten, err)
+}
+
+// errItemMovedOn is completeLandedWrite's decision standing down.
+var errItemMovedOn = errors.New("the keychain item no longer holds the login that was written to it")
+
+// writeUnderLocks is one locked pass of writeMerged. It returns an
+// unconfirmedWrite, and no error of its own, for an item write whose outcome
+// is not known: that is read back once the locks are released.
+func writeUnderLocks(writes StoreWrites, decide func(live Blob, stores LoginStores) (Blob, error)) (unconfirmed *unconfirmedWrite, err error) {
 	held, aerr := cclock.AcquireCredentials(LockTimeout)
 	if aerr != nil {
-		return aerr
+		return nil, aerr
 	}
 	defer func() { err = errors.Join(err, held.Release()) }()
 
@@ -401,7 +492,7 @@ func writeMerged(writes StoreWrites, decide func(live Blob, stores LoginStores) 
 
 	stores, err := loadLiveUnderLock(livePath)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	live, itemIsLive := stores.base(), stores.HasItem
 
@@ -411,7 +502,7 @@ func writeMerged(writes StoreWrites, decide func(live Blob, stores LoginStores) 
 		// still travels back through Release's deferred join, so a takeover
 		// that happened while the caller was deciding is not lost just because
 		// the decision was to stand down.
-		return err
+		return nil, err
 	}
 
 	merged := Merge(live, incoming)
@@ -424,12 +515,12 @@ func writeMerged(writes StoreWrites, decide func(live Blob, stores LoginStores) 
 	// a diff of the credentials file meaningful.
 	data, err := marshalIndentNoEscape(merged)
 	if err != nil {
-		return fmt.Errorf("encoding credentials: %w", err)
+		return nil, fmt.Errorf("encoding credentials: %w", err)
 	}
 
 	select {
 	case <-held.Compromised():
-		return fmt.Errorf("aborting the switch before writing: %w", cclock.ErrCompromised)
+		return nil, fmt.Errorf("aborting the switch before writing: %w", cclock.ErrCompromised)
 	default:
 	}
 
@@ -444,10 +535,9 @@ func writeMerged(writes StoreWrites, decide func(live Blob, stores LoginStores) 
 	// producing.
 	//
 	// A write that FAILED is not yet known to have moved nothing, though. One
-	// that ran out of time may have landed, and settleKeychainWrite reads the
-	// item back before anything is reported: landed carries on to the file
-	// like any other success, did-not-land is the failure it looked like, and
-	// a read that cannot tell stops here with neither claimed.
+	// that ran out of time may have landed, and it is handed back to be read
+	// back after the locks are released (writeMerged): the file is not written
+	// past it here.
 	//
 	// A STORE THAT ALREADY HOLDS THE LOGIN IS NOT WRITTEN, under WriteChanged
 	// (which says why). "Holds" is the same CREDENTIAL -- access token,
@@ -456,36 +546,37 @@ func writeMerged(writes StoreWrites, decide func(live Blob, stores LoginStores) 
 	// store holding the old access token under the same identity still needs
 	// the new one written. A store with no login matches nothing, so a logout
 	// is always written.
-	holds := func(b Blob) bool { return writes == WriteChanged && sameCredential(b, merged) }
-	itemWrite := itemIsLive && !holds(stores.Item)
+	holds := func(b Blob) bool { return writes != WriteAll && sameCredential(b, merged) }
+	itemWrite := itemIsLive && writes != writeFileOnly && !holds(stores.Item)
 	fileWrite := !holds(stores.File)
 	if itemWrite {
-		if err := installIntoKeychain(true, merged); err != nil {
-			if err := settleKeychainWrite(err, merged, live); err != nil {
-				return err
+		if werr := installIntoKeychain(true, merged); werr != nil {
+			if !writeOutcomeUnknown(werr) {
+				return nil, keychainWriteFailed(werr)
 			}
+			return &unconfirmedWrite{err: werr, written: merged, previous: live, incoming: incoming}, nil
 		}
-		// Asked again because the item write and its read-back can take most
-		// of a minute on the machine this path is slow on, and the touch tick
-		// may have seen a takeover since. The item is already moved, so a
-		// takeover now is reported as the half-written state it leaves.
+		// Asked again because the item write can take most of the write bound
+		// on the machine this path is slow on, and the touch tick may have seen
+		// a takeover since. The item is already moved, so a takeover now is
+		// reported as the half-written state it leaves.
 		select {
 		case <-held.Compromised():
-			return fmt.Errorf("%w; Claude Code's credential lock was taken over before the file was written: %w",
+			return nil, fmt.Errorf("%w; Claude Code's credential lock was taken over before the file was written: %w",
 				ErrLoginHalfWritten, cclock.ErrCompromised)
 		default:
 		}
 	}
 	if !fileWrite {
-		return nil
+		return nil, nil
 	}
 	if err := WriteFileAtomic(livePath, data, 0o600); err != nil {
 		if itemIsLive {
-			return fmt.Errorf("%w; the credentials file behind it could not be replaced: %w", ErrLoginHalfWritten, err)
+			return nil, fmt.Errorf("%w; the credentials file behind it could not be replaced: %w", ErrLoginHalfWritten, err)
 		}
-		return err
+		return nil, err
 	}
-	return nil
+	return nil, nil
 }
 
 // ErrLoginHalfWritten is a switch whose keychain item took the new login and
@@ -515,15 +606,16 @@ var ErrLoginHalfWritten = errors.New("the keychain item Claude Code reads first 
 // stores its credentials, and a switch is not where it gets made.
 //
 // THE COST IS PAID INSIDE THE CREDENTIAL LOCKS, which is the objection this
-// path was refused on before. Two spawns of `security` -- a lookup that does
-// not decrypt, then the install -- sit in a window Claude Code's own refresh
-// blocks on. That was worth avoiding while the item was believed inert. It is
-// not worth avoiding to preserve a swap that does not swap anything.
+// path was refused on before. Two spawns of `security` -- the merge-base
+// lookup, then the install -- sit in a window Claude Code's own refresh blocks
+// on (lockedKeychainBound). That was worth avoiding while the item was
+// believed inert. It is not worth avoiding to preserve a swap that does not
+// swap anything.
 //
 // A failure is returned rather than warned about, and returned AS IT IS: what
-// it means for the switch -- nothing written, or not known -- is
-// settleKeychainWrite's to say, because a write that ran out of time may have
-// landed and only reading the item back can tell. Silence is what let a stale
+// it means for the switch -- nothing written, or not known -- is the
+// read-back's to say (unconfirmedWrite.settle), because a write that ran out of
+// time may have landed and only reading the item back can tell. Silence is what let a stale
 // item go unnoticed for as long as it did, and a confident "nothing was
 // written" about a write that had landed is what split the login on
 // 2026-11-10.

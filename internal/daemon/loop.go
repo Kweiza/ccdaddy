@@ -57,11 +57,12 @@ const (
 	// what the number has to avoid is catching an ordinary outage. Nothing in
 	// the tick body retries for anything like five minutes -- the poll timeout
 	// is seconds, and the slowest a tick gets is a credential write on a slow
-	// keychain, up to about 93 s (three spawns at the 30 s write bound), after
-	// which execute holds further writes off for failedWriteRetry -- so an
-	// unbroken run this long is structural rather than transient. Three such
-	// failing writes back to back cannot fill it, because the backoff puts a
-	// minute of non-writing ticks between them.
+	// keychain, up to cclink.WorstCaseSwitch (a little over two minutes, the
+	// waits for Claude Code's locks and the read-back of a write that ran out
+	// of time included), after which execute holds further writes off for
+	// failedWriteRetry -- so an unbroken run this long is structural rather
+	// than transient. Two such failing writes back to back cannot fill it,
+	// because the backoff puts a minute of non-writing ticks between them.
 	wedgedAfter = 5 * time.Minute
 
 	// tickErrorRepeatEvery is how often an unchanged tick error is written
