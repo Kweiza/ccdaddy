@@ -335,3 +335,26 @@ func TestAttributeLoginNamesTheFileWhenTheFileAnswered(t *testing.T) {
 		t.Fatalf("Via = %q, want it to name the credentials file", res.Via)
 	}
 }
+
+// N7. A login an account's stored login REPLACED is not that account's managed
+// login: ccdad no longer stores it, and its refresh token is spent. Attribution
+// names it unattributed -- a LoginView names it LiveResolved -- and never
+// managed: AttributeFile's answer is the hysteresis baseline of `ccdad switch`.
+func TestASupersededLoginIsNeverAttributedAsManaged(t *testing.T) {
+	isolate(t)
+	seed(t, "u-1", "chan@example.com")
+	s := openStore(t)
+	a, _ := s.Get("u-1")
+	if err := s.Add(a, oauthBlob("RT-u-1-newer")); err != nil {
+		t.Fatal(err)
+	}
+	s = openStore(t)
+
+	got, state := LiveStateOf(liveLogin("RT-u-1"), s.Accounts(), s.Credentials)
+	if state != LiveUnattributed {
+		t.Fatalf("LiveStateOf on a superseded login = %+v, %v; want LiveUnattributed", got, state)
+	}
+	if _, ok := AttributeFile(liveLogin("RT-u-1"), s.Accounts(), s.Credentials); ok {
+		t.Fatal("AttributeFile named a superseded login a managed account's")
+	}
+}
