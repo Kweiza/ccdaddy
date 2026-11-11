@@ -132,17 +132,37 @@ type stateFile struct {
 	// keyed by the login's store.LoginHash -- a hash, for the reason
 	// SupersededLogins in accounts.toml is one.
 	//
-	// It is the one fact about such a login nothing on this machine can derive.
+	// It is one fact about such a login nothing on this machine can derive.
 	// Its refresh token matches no stored login, and only the profile endpoint
-	// can say whose it is. Everything else -- that a login store still holds
-	// it, that it was issued after the account's stored login, so that the
-	// stored refresh token is spent -- every process derives for itself
-	// (store.Account.StoredLoginSpent), which is how a `ccdad` command knows to
-	// leave that stored token alone while the daemon is still trying to store
-	// the newer login. It lives here, beside the cooldown, rather than with the
-	// account: the store write that failed may have failed on the store's own
-	// lock, and this file has another.
+	// can say whose it is. Whether a login store still holds it, and whether
+	// it was issued after the account's stored login, every process derives
+	// for itself (store.Account.StoredLoginSpent).
 	NamedLogins map[string]string `json:"named_logins,omitempty"`
+	// SpentStoredLogins is, per account uuid, the stored login known to be
+	// SPENT -- the one the account stored when the oracle named a newer login
+	// of it that ccdad then could not store -- with that newer login, both as
+	// store.LoginHash.
+	//
+	// It is the other fact nothing can derive later. The newer login can be
+	// rotated again, out of every store, before the oracle names what replaced
+	// it, and then nothing on the machine connects the stored login to it; the
+	// stored refresh token is no less spent, and presenting it revokes the
+	// whole family. So the hold this records lasts until the account's stored
+	// login changes from the spent one, in every process
+	// (store.Account.StoredLoginSpent).
+	//
+	// Both live here, beside the cooldown, rather than with the account in
+	// accounts.toml: they are written when storing a login FAILED, and that
+	// write may have failed on the store's own lock, which accounts.toml is
+	// under. This file has a lock of its own.
+	SpentStoredLogins map[string]spentStoredLogin `json:"spent_stored_logins,omitempty"`
+}
+
+// spentStoredLogin is the on-disk shape of one SpentStoredLogins entry. Spent
+// is "" when the stored login could not be read when it was found spent.
+type spentStoredLogin struct {
+	Spent string `json:"spent,omitempty"`
+	Newer string `json:"newer"`
 }
 
 // pendingSwitch is the on-disk shape of State.PendingSwitch.
@@ -267,6 +287,35 @@ func (s *State) ForgetNamedLogins(keep func(loginHash string) bool) bool {
 	for h := range s.data.NamedLogins {
 		if !keep(h) {
 			delete(s.data.NamedLogins, h)
+			forgot = true
+		}
+	}
+	return forgot
+}
+
+// SpentStoredLogin is the stored login of uuid known to be spent, and the
+// newer login that spent it, by store.LoginHash (stateFile.SpentStoredLogins).
+func (s *State) SpentStoredLogin(uuid string) (spent, newer string, ok bool) {
+	r, ok := s.data.SpentStoredLogins[uuid]
+	return r.Spent, r.Newer, ok
+}
+
+// RecordSpentStoredLogin records that uuid's stored login with hash spent ("" for
+// one that could not be read) was spent by the login with hash newer.
+func (s *State) RecordSpentStoredLogin(uuid, spent, newer string) {
+	if s.data.SpentStoredLogins == nil {
+		s.data.SpentStoredLogins = map[string]spentStoredLogin{}
+	}
+	s.data.SpentStoredLogins[uuid] = spentStoredLogin{Spent: spent, Newer: newer}
+}
+
+// ForgetSpentStoredLogins forgets the record of every account keep refuses, and
+// reports whether it forgot any.
+func (s *State) ForgetSpentStoredLogins(keep func(uuid string) bool) bool {
+	forgot := false
+	for uuid := range s.data.SpentStoredLogins {
+		if !keep(uuid) {
+			delete(s.data.SpentStoredLogins, uuid)
 			forgot = true
 		}
 	}
@@ -471,6 +520,7 @@ func LoadState() (*State, error) {
 	s.data.Departures = parsed.Departures
 	s.data.PendingSwitch = parsed.PendingSwitch
 	s.data.NamedLogins = parsed.NamedLogins
+	s.data.SpentStoredLogins = parsed.SpentStoredLogins
 	s.data.Version = parsed.Version
 	return s, nil
 }

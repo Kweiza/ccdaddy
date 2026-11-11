@@ -71,11 +71,11 @@ func TestAHeldAccountIsNotAPlanTarget(t *testing.T) {
 	// u-2 that the identity oracle named and ccdad could not store.
 	withItem(t, "u-1")
 	writeLiveLoginRT(t, "RT-u-2-newer", tickEpoch.Add(9*time.Hour))
-	nameLogin(t, "refresh:RT-u-2-newer", "u-2")
 	recordActive(t, "u-1")
 	readings(t, map[string]float64{"u-1": 99, "u-2": 1, "u-3": 30})
 
 	e := engineFor(t, tokensAreFine, noFetch)
+	failToStore(t, e, "u-2", blobExpiring("RT-u-2-newer", tickEpoch.Add(9*time.Hour)))
 	tick(t, e)
 
 	if got := activeOnDisk(t); got != "u-3" {
@@ -83,40 +83,53 @@ func TestAHeldAccountIsNotAPlanTarget(t *testing.T) {
 	}
 }
 
-// The oracle's record of a login ccdad could not store is kept only while a
-// login store holds that login: it can hold an account's stored token only
-// then. A pass forgets the rest, and a pass whose file could not be read
+// What the daemon records about a login it could not store is kept only while
+// it can still hold something: the naming while a login store holds that
+// login, and the record of a spent stored login while the account still
+// stores it. A pass forgets the rest, and a pass whose file could not be read
 // forgets nothing.
-func TestAPassForgetsTheNamingOfALoginNoStoreHolds(t *testing.T) {
+func TestAPassForgetsTheRecordThatNoLongerHoldsAnything(t *testing.T) {
 	isolateEngine(t)
+	seedAccount(t, "u-1", "org-1")
+	a2 := seedAccount(t, "u-2", "org-2")
+	newer1 := blobExpiring("RT-u-1-newer", tickEpoch.Add(9*time.Hour))
 	writeLiveLoginRT(t, "RT-u-1-newer", tickEpoch.Add(9*time.Hour))
-	nameLogin(t, "refresh:RT-u-1-newer", "u-1")
-	nameLogin(t, "refresh:RT-u-2-gone", "u-2")
 	e := engineFor(t, tokensAreFine, noFetch)
+	failToStore(t, e, "u-1", newer1)
+	failToStore(t, e, "u-2", blobExpiring("RT-u-2-gone", tickEpoch.Add(9*time.Hour)))
+	// u-2 stores another login since: its record no longer holds.
+	storeLogin(t, a2, blobExpiring("RT-u-2-later", tickEpoch.Add(10*time.Hour)))
 
-	named := func(id string) bool {
+	state := func() *strategy.State {
 		st, err := strategy.LoadState()
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, ok := st.NamedLogin(store.LoginHash(id))
-		return ok
+		return st
 	}
+	named := func(id string) bool { _, ok := state().NamedLogin(store.LoginHash(id)); return ok }
+	spent := func(uuid string) bool { _, _, ok := state().SpentStoredLogin(uuid); return ok }
 	stores, err := cclink.ReadLoginStores()
 	if err != nil {
 		t.Fatal(err)
 	}
 	unread := stores
 	unread.FileErr = errors.New("the credentials file could not be read")
-	e.forgetNamedLogins(unread)
-	if !named("refresh:RT-u-2-gone") {
-		t.Fatal("a pass that could not read the file forgot a naming")
+	e.forgetOracleRecord(openEngineStore(t), unread)
+	if !named("refresh:RT-u-2-gone") || !spent("u-2") {
+		t.Fatal("a pass that could not read the file forgot something")
 	}
-	e.forgetNamedLogins(stores)
+	e.forgetOracleRecord(openEngineStore(t), stores)
 	if named("refresh:RT-u-2-gone") {
 		t.Error("the naming of a login no store holds was kept")
 	}
+	if spent("u-2") {
+		t.Error("the record of a spent stored login was kept after the account stored another")
+	}
 	if !named("refresh:RT-u-1-newer") {
 		t.Error("the naming of a login the credentials file holds was forgotten")
+	}
+	if !spent("u-1") {
+		t.Error("the record of a stored login that is still spent was forgotten")
 	}
 }

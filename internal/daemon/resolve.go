@@ -178,8 +178,9 @@ func (e *Engine) verdictFor(s *store.Store, live cclink.Blob, uuid string) (stor
 	if err != nil {
 		e.logf("could not read %s's stored login to adopt into it: %v", owner.Label(), err)
 		// What is stored could not be read, so it cannot be shown to be the
-		// later of the two, and the stored token is held (nameUnstored).
-		e.nameUnstored(owner, live)
+		// later of the two, and the stored token is held (nameUnstored) with
+		// the spent login unknown.
+		e.nameUnstored(owner, live, nil)
 		return owner, liveAdoptFailed
 	}
 	if cclink.LoginIdentity(next) == cclink.LoginIdentity(live) {
@@ -205,13 +206,15 @@ func (e *Engine) verdictFor(s *store.Store, live cclink.Blob, uuid string) (stor
 		// spent stored token is not presented meanwhile; liveAdoptFailed is
 		// how the caller knows to hold it.
 		e.logf("could not adopt the login Claude Code rotated for %s: %v", owner.Label(), err)
-		// Named HERE, so it covers every caller of the oracle, act's
-		// resolveLive included. What is recorded is the naming and nothing
-		// else: whether the stored token is spent is decided against whatever
-		// the account stores when it is asked, so a write that failed on the
-		// store lock because something else stored a NEWER login of this
-		// account meanwhile holds nothing.
-		e.nameUnstored(owner, live)
+		// Recorded HERE, so it covers every caller of the oracle, act's
+		// resolveLive included, and with the stored login THIS verdict
+		// compared as the spent one -- not one read again after the failure.
+		// A write that failed on the store lock failed because something
+		// else held it, and that something may have stored a NEWER login of
+		// this account meanwhile; recorded as spent, that login would hold
+		// the account for good. Recorded as `next`, the hold lifts at once,
+		// because the stored login is no longer the spent one.
+		e.nameUnstored(owner, live, next)
 		return owner, liveAdoptFailed
 	}
 	return owner, liveAdopted

@@ -37,16 +37,16 @@ must reference accounts by `uuid` or `alias`.
   replaced.** When a login store holds a newer login of an account than ccdad
   has stored -- one the profile endpoint named and ccdad could not store --
   the stored refresh token is already spent, and presenting it again can
-  revoke the newer login. The daemon held such an account back, but only in
-  its own memory: `ccdad switch` installed the spent login over the newer one,
-  and `ccdad run`, `ccdad probe` and `ccdad status --refresh` could present it
-  too. The profile endpoint's answer is now recorded on disk, and every command
-  checks Claude Code's login stores against it: `ccdad switch` and `ccdad run`
-  refuse with exit 4, a probe is skipped, and a refresh is not attempted. The
-  hold now outlives a daemon restart. It lasts while a login store holds the
-  newer login and ccdad has stored nothing issued after it; before, it lasted
-  until the account's stored login changed, whether or not a store still held
-  the newer one.
+  revoke the newer login and every login refreshed from it. The daemon held
+  such an account back, but only in its own memory: `ccdad switch` installed
+  the spent login over the newer one, and `ccdad run`, `ccdad probe` and
+  `ccdad status --refresh` could present it too. The profile endpoint's answer
+  and the stored login it spent are now recorded on disk, and every command
+  checks them, and Claude Code's login stores, before it presents a stored
+  login: `ccdad switch` and `ccdad run` refuse with exit 4, a probe is
+  skipped, and a refresh is not attempted. The hold lasts until ccdad stores
+  another login for the account -- also when Claude Code refreshes the newer
+  login again before it is named -- and now outlives a daemon restart.
 
 ## [0.29.1] — 2026-11-10
 

@@ -197,7 +197,8 @@ func (e *Engine) ownerOf(id string) (string, bool) {
 // named and not adopted because storing it failed. Either way the evaluation
 // this tick made did not know whose that login is, and the caller does not
 // act on it. A login named and not adopted also holds its account's stored
-// refresh token, in every process (nameUnstored).
+// refresh token, in every process, until the account stores another login
+// (nameUnstored).
 func (e *Engine) identifyStores(ctx context.Context, s *store.Store, ev switcher.Evaluation) (named bool) {
 	stores := []struct {
 		name   string
@@ -239,26 +240,31 @@ func (e *Engine) identifyStores(ctx context.Context, s *store.Store, ev switcher
 	return named
 }
 
-// nameUnstored records the identity oracle's answer that live is owner's, for
-// a newer login storing failed: the one fact about it no process can derive,
-// in the engine state every process reads (strategy.State.NamedLogin).
+// nameUnstored records what a failed adoption established and nothing can
+// derive later, in the engine state every process reads: the identity
+// oracle's answer that live is owner's (strategy.State.NamedLogin), and that
+// owner's stored login spent -- the one the verdict compared, nil if it could
+// not be read -- is spent, by live (strategy.State.SpentStoredLogin).
 //
-// It is what holds owner's stored refresh token, in this daemon and in every
-// `ccdad` command, for as long as the newer login sits in a login store and
-// is not stored (store.Account.StoredLoginSpent). Nothing lifts it: the hold
-// is derived again from the stores and the stored login wherever it is asked,
-// so storing the newer login -- or anything later, a re-login included --
-// lifts it at once, and forgetNamedLogins drops the naming once no store
-// holds the login.
+// That is what holds owner's stored refresh token, in this daemon and in every
+// `ccdad` command, until owner stores another login
+// (store.Account.StoredLoginSpent). Nothing lifts it by hand: the hold is
+// derived again from the record, the stores and the stored login wherever it
+// is asked, and forgetOracleRecord drops what no longer applies.
 //
-// A naming that cannot be written holds nothing until it is written. It is
+// A record that cannot be written holds nothing until it is written. It is
 // logged, and since a failed adoption is not remembered, the next ask of the
-// oracle -- resolveMinInterval later -- tries the adoption and the naming
+// oracle -- resolveMinInterval later -- tries the adoption and the record
 // again.
-func (e *Engine) nameUnstored(owner store.Account, live cclink.Blob) {
-	h := store.LoginHash(cclink.LoginIdentity(live))
+func (e *Engine) nameUnstored(owner store.Account, live, spent cclink.Blob) {
+	newer := store.LoginHash(cclink.LoginIdentity(live))
+	spentHash := ""
+	if id := cclink.LoginIdentity(spent); id != "" {
+		spentHash = store.LoginHash(id)
+	}
 	if err := strategy.WithState(stateTimeout, func(st *strategy.State) error {
-		st.NameLogin(h, owner.UUID)
+		st.NameLogin(newer, owner.UUID)
+		st.RecordSpentStoredLogin(owner.UUID, spentHash, newer)
 		return nil
 	}); err != nil {
 		e.logf("could not record that Claude Code holds a newer login of %s than ccdad has stored: %v; "+
@@ -266,12 +272,13 @@ func (e *Engine) nameUnstored(owner store.Account, live cclink.Blob) {
 	}
 }
 
-// forgetNamedLogins drops the oracle's record of every login no login store
-// holds any more: a naming matters only while its login is in a store, since
-// only then can it hold anything (store.Account.StoredLoginSpent). A pass
-// whose stores could not all be read forgets nothing, and one with nothing to
-// forget does not take the state lock.
-func (e *Engine) forgetNamedLogins(st cclink.LoginStores) {
+// forgetOracleRecord drops what the daemon recorded about logins it could not
+// store once it can no longer hold anything: the naming of a login no login
+// store holds any more, and the record of a spent stored login once the
+// account has stored another (store.Account.SpentRecordHolds) or is gone. A
+// pass whose stores could not all be read forgets nothing, and one with
+// nothing to forget does not take the state lock.
+func (e *Engine) forgetOracleRecord(s *store.Store, st cclink.LoginStores) {
 	if st.FileErr != nil {
 		return
 	}
@@ -281,15 +288,31 @@ func (e *Engine) forgetNamedLogins(st cclink.LoginStores) {
 			held[store.LoginHash(id)] = true
 		}
 	}
-	keep := func(h string) bool { return held[h] }
-	if cur, err := strategy.LoadState(); err != nil || !cur.ForgetNamedLogins(keep) {
+	keepNamed := func(h string) bool { return held[h] }
+	keepSpent := func(rec store.OracleRecord) func(string) bool {
+		return func(uuid string) bool {
+			a, ok := s.Get(uuid)
+			if !ok {
+				return false
+			}
+			stored, _ := s.Credentials(uuid)
+			return a.SpentRecordHolds(stored, rec)
+		}
+	}
+	cur, err := strategy.LoadState()
+	if err != nil {
+		return
+	}
+	if forgot := cur.ForgetNamedLogins(keepNamed); !cur.ForgetSpentStoredLogins(keepSpent(cur)) && !forgot {
 		return
 	}
 	if err := strategy.WithState(stateTimeout, func(state *strategy.State) error {
-		state.ForgetNamedLogins(keep)
+		keep := keepSpent(state)
+		state.ForgetNamedLogins(keepNamed)
+		state.ForgetSpentStoredLogins(keep)
 		return nil
 	}); err != nil {
-		e.logf("could not forget the profile endpoint's naming of logins no store holds any more: %v", err)
+		e.logf("could not forget the record of logins ccdad could not store that no longer hold anything: %v", err)
 	}
 }
 

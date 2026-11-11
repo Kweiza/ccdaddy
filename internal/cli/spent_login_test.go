@@ -26,19 +26,47 @@ func spentMachine(t *testing.T) *cclinktest.Keychain {
 	kc := cclinktest.NewKeychain(liveLoginJSON("RT-uuid-support", ""))
 	cclinktest.Install(t, kc)
 	recordLive(t, "uuid-support")
-	nameUnstoredLogin(t, "refresh:RT-uuid-chan-newer", "uuid-chan")
+	recordUnstoredLogin(t, "uuid-chan", "refresh:RT-uuid-chan-newer", "refresh:RT-uuid-chan")
 	return kc
 }
 
-// nameUnstoredLogin is the daemon's record of the profile endpoint naming a
-// login it could not store.
-func nameUnstoredLogin(t *testing.T, loginIdentity, uuid string) {
+// recordUnstoredLogin is the daemon's record of the profile endpoint naming
+// newer as uuid's and storing it failing, with spent the stored login it
+// replaced (daemon.Engine.nameUnstored).
+func recordUnstoredLogin(t *testing.T, uuid, newer, spent string) {
 	t.Helper()
 	if err := strategy.WithState(time.Second, func(st *strategy.State) error {
-		st.NameLogin(store.LoginHash(loginIdentity), uuid)
+		st.NameLogin(store.LoginHash(newer), uuid)
+		st.RecordSpentStoredLogin(uuid, store.LoginHash(spent), store.LoginHash(newer))
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Claude Code then refreshes the newer login AGAIN, into the same file, before
+// the profile endpoint has named what replaced it. Nothing in the stores
+// connects chan's stored login to the login there now; its refresh token is no
+// less spent, and presenting it revokes the whole family. Neither a switch nor
+// a session presents it.
+func TestASpentStoredLoginStaysHeldWhenTheNewerLoginIsRotatedAgainBeforeItIsNamed(t *testing.T) {
+	isolate(t)
+	suppressAutoStart(t)
+	spentMachine(t)
+	writeLiveFile(t, liveLoginJSON("RT-uuid-chan-rotated-again", ""))
+
+	code, _, stderr, _ := runRoot(t, "switch", "chan@example.com")
+	if code != ExitBlocked || !strings.Contains(stderr, "already spent") {
+		t.Fatalf("switch: exit = %d, want %d and the spent-login refusal; stderr:\n%s", code, ExitBlocked, stderr)
+	}
+	if got := liveFileNow(t); !strings.Contains(got, "RT-uuid-chan-rotated-again") {
+		t.Fatalf("the login Claude Code is on was written over with the spent one:\n%s", got)
+	}
+
+	stub := stubClaude(t, ExitOK)
+	code, _, stderr, top := runRoot(t, "run", "chan@example.com")
+	if code != ExitBlocked || stub.started {
+		t.Fatalf("run: exit = %d, started = %v; want %d and no session:\n%s%s", code, stub.started, ExitBlocked, top, stderr)
 	}
 }
 
