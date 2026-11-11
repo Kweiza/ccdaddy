@@ -356,3 +356,21 @@ func TestTheAdviceForAnUnreadableRecordKeepsItsHolds(t *testing.T) {
 		}
 	}
 }
+
+// An account whose stored login cannot be read either is on the list. The
+// record may hold it; once its file reads again, removing the record would let
+// that login be presented, so it has to be logged in again like the rest.
+func TestTheRecoveryListKeepsAnAccountWhoseStoredLoginCannotBeRead(t *testing.T) {
+	isolate(t)
+	suppressAutoStart(t)
+	unreadableRecordMachine(t)
+	creds := filepath.Join(mustPath(ccpath.StoreHome()), "credentials", "uuid-chan.json")
+	if err := os.WriteFile(creds, []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, r, _ := runDoctor(t)
+	if d := r.detail(t, "spent-logins"); !strings.Contains(d, "chan@example.com") {
+		t.Fatalf("spent-logins leaves out an account whose stored login cannot be read: %s", d)
+	}
+}
