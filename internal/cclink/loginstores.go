@@ -252,6 +252,16 @@ func itemHoldsWrite(got Blob, ok bool, written Blob) bool {
 	return ok && sameCredential(got, written)
 }
 
+// sameLoginOrNone reports whether a store's login is unchanged between two
+// reads: the same credential fields, or no login in either. Unlike
+// sameCredential it does not ask for a token -- a login Claude Code blanked
+// is unchanged if it is still blank.
+func sameLoginOrNone(a, b Blob) bool {
+	ca, okA := credentialOf(a)
+	cb, okB := credentialOf(b)
+	return okA == okB && ca == cb
+}
+
 // keychainWriteFailed is a keychain write that is known not to have landed: a
 // failure `security` ANSWERED, or one whose read-back found the item still on
 // the login it held. Nothing was written, and that is what it says.
