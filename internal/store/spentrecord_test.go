@@ -110,7 +110,8 @@ func TestARefusedWriteSaysHowToRecoverWithoutReleasingAHold(t *testing.T) {
 	if err == nil {
 		t.Fatal("the write was not refused")
 	}
-	for _, want := range []string{"Restore ", "ccdad add claude", "and only then remove it"} {
+	for _, want := range []string{"Restore ", "ccdad add claude", "and only then remove it",
+		"stays on `ccdad doctor`'s list after it is logged in again"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal does not say %q: %v", want, err)
 		}

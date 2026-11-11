@@ -68,10 +68,14 @@ func spentLoginNotices(s *store.Store, stores cclink.LoginStores, storesErr erro
 }
 
 // checkSpentLogins reports every account whose stored login no command
-// presents, and what lifts each hold (spentLoginReason). It is a warning: the
-// hold is what keeps a spent refresh token from revoking a newer login, but the
-// account is out of every plan, every poll and every probe while it lasts, and
-// some holds only a new login lifts.
+// presents, and what lifts each hold (spentLoginReason).
+//
+// A hold the record keeps is a warning: it is what keeps a spent refresh token
+// from revoking a newer login, but the account is out of every plan, every
+// poll and every probe while it lasts, and some holds only a new login lifts.
+// A record that cannot be read is a failure, and its row names every account
+// the record may hold, for the advice that comes with it
+// (store.SpentRecordAdvice).
 func checkSpentLogins(root string, usable, accountsUsable bool, stores cclink.LoginStores, storesErr error) check {
 	const name = "spent-logins"
 	if !usable {

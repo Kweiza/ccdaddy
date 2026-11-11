@@ -34,16 +34,21 @@ must reference accounts by `uuid` or `alias`.
 - **A record of spent stored logins that cannot be read holds stored logins,
   and is not written over.** The record below lives in a file of its own,
   `~/.ccdad/spent-logins.json`. When it cannot be read or parsed, which stored
-  logins are spent is unknown, so until it can be read no command presents a
-  stored login Claude Code is not already using: those accounts are not
-  polled, switched to, probed or run. The login Claude Code is on still is,
-  and the split repair still puts it in both stores. ccdad does not write over
-  the file, and `ccdad doctor`'s `spent-logins` row fails and names each
-  account it may hold. Restore the file from a backup, or log in again with
-  `ccdad add claude` each of those accounts, and only then remove it: removed
-  first, it would let a spent stored login be presented again. The engine
-  state, `strategy.json`, is untouched by this: cooldowns, quarantines, a
-  switch's intent and the Codex lane go on as before.
+  logins are spent is unknown, so until it can be read a stored login is
+  presented only when Claude Code is already on it: one of its login stores
+  holds it, both stores could be read, and neither holds a later login that
+  could be the same account's -- another account's login does not count. Every
+  other account is not polled, switched to, probed or run, and the split repair
+  still puts the login Claude Code is on in both stores, completing ccdad's
+  own switch whose outcome was unknown. ccdad does not write over the file, and
+  `ccdad doctor`'s `spent-logins` row fails and names each account the record
+  may hold, those whose stored login cannot be read either included. Restore
+  the file from a backup, or log in again with `ccdad add claude` each of those
+  accounts, and only then remove it: removed first, it would let a spent
+  stored login be presented again. An account stays on doctor's list after it
+  is logged in again, until the record can be read, so keep track of the ones
+  done. The engine state, `strategy.json`, is untouched by this: cooldowns,
+  quarantines, a switch's intent and the Codex lane go on as before.
 
 ### Fixed
 

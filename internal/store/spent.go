@@ -69,8 +69,8 @@ const (
 	// Claude Code holds now, if that is the account's, or a new login.
 	HeldByRecord
 	// HeldUnreadableRecord: the record itself could not be read, so whether
-	// any stored login is spent is unknown, and every one is held until it
-	// can be read.
+	// the stored login is spent is unknown, and it is held until the record
+	// can be read -- unless Claude Code is on it already (liveHoldsNewest).
 	HeldUnreadableRecord
 )
 
