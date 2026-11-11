@@ -272,10 +272,11 @@ const (
 // spent-login hold's (OwnersOf) both ask it -- so the two cannot name one
 // login two ways.
 //
-// ONLY CLAUDE ROWS are matched by their stored login. `ccdad import` trusts a
-// row's provider, and cclink.Extract carries a claudeAiOauth blob through
-// whatever the provider, so a row can be Provider: codex beside a
-// Claude-shaped login: shape alone does not prove ownership. daemon.pollable
+// ONLY CLAUDE ROWS name a login, by their stored login or by their history.
+// `ccdad import` trusts a row's provider, and cclink.Extract carries a
+// claudeAiOauth blob through whatever the provider, so a row can be Provider:
+// codex beside a Claude-shaped login: shape alone does not prove ownership.
+// Its history is that shape replaced, and proves no more. daemon.pollable
 // guards the same reachable row the same way.
 func OwnerByEvidence(loginIdentity string, accounts []Account, lookup func(uuid string) (cclink.Blob, error)) (Account, Evidence) {
 	if loginIdentity == "" {
@@ -294,7 +295,7 @@ func OwnerByEvidence(loginIdentity string, accounts []Account, lookup func(uuid 
 		}
 	}
 	for _, a := range accounts {
-		if a.Superseded(loginIdentity) {
+		if a.Provider == provider.Claude && a.Superseded(loginIdentity) {
 			return a, BySupersededLogin
 		}
 	}
