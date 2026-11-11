@@ -863,11 +863,11 @@ func planLeaves(ev switcher.Evaluation, target store.Account) bool {
 // to: Unattended, and the engine's clock and refresher.
 //
 // AND IT HOLDS THE ONE BACKOFF for a credential write that failed, for both
-// callers. Every attempt holds Claude Code's credential locks for up to three
-// bounded keychain spawns -- about 93 s on the slow keychain that makes writes
-// fail -- and the tick loop turns about once a second, so a failing write
-// retried at the tick rate would keep Claude Code's own refresh starved for as
-// long as the keychain stayed slow. After a failure nothing is attempted for
+// callers. Every attempt holds Claude Code's credential locks for a keychain
+// lookup and a write -- cclink's lockedKeychainBound, most of 40 s on the slow
+// keychain that makes writes fail -- and the tick loop turns about once a
+// second, so a failing write retried at the tick rate would keep Claude Code's
+// own refresh starved for as long as the keychain stayed slow. After a failure nothing is attempted for
 // failedWriteRetry. Only a write that succeeds clears it early: a tick whose
 // read failed, or whose stores happen to agree, has confirmed nothing about the
 // write that failed.
@@ -903,8 +903,9 @@ func (e *Engine) execute(ctx context.Context, s *store.Store, req switcher.Reque
 	req.Owners = e.ownerOf
 	res, err := switcher.Execute(s, req)
 	// Dated from when the attempt RETURNED. A failing write on the slow
-	// keychain this exists for can take most of a minute and a half, and a
-	// wait counted from before it would already be over by the next tick.
+	// keychain this exists for can take up to cclink.WorstCaseSwitch, about two
+	// minutes with the read-back and the waits for the locks, and a wait
+	// counted from before it would already be over by the next tick.
 	if err != nil {
 		e.writeAfter = e.now().Add(failedWriteRetry)
 		return res, fmt.Errorf("%w (the next attempt is in %s)", err, failedWriteRetry)

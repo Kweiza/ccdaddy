@@ -51,9 +51,10 @@ func fileNow(t *testing.T, path string) string {
 	return string(data)
 }
 
-// THE CORE CASE. The write landed and timed out; reading the item back finds
-// the new login, so the switch is complete: the file follows the item, and the
-// caller is told it succeeded.
+// THE CORE CASE. The write landed and timed out; reading the item back -- with
+// Claude Code's locks released -- finds the new login, so the switch is
+// complete: the file follows the item in a second locked pass, and the caller
+// is told it succeeded.
 func TestAWriteThatLandedAndTimedOutCompletesTheSwitch(t *testing.T) {
 	item, file := slowKeychain(t, fakeSecurity{writeHang: time.Minute})
 
@@ -138,28 +139,31 @@ func TestOnlyAWriteCcdadGaveUpOnHasAnUnknownOutcome(t *testing.T) {
 	}
 }
 
-// ONE PLACE DEFINES EACH BOUND, and the two are not the same. A lookup is held
-// to the short one; everything on the write path -- the merge-base read, the
-// write -- to the long one. A keychain that takes 1.5 s per call fails a
-// lookup and completes a switch.
-func TestALookupAndASwitchRunUnderDifferentBounds(t *testing.T) {
+// EVERY READ UNDER CLAUDE CODE'S LOCKS IS A LOOKUP, the merge-base read
+// included: it changes nothing, so running out of time costs only the switch,
+// before anything is written, and the long write bound is kept for the one
+// spawn whose outcome it buys (lockedKeychainBound). A keychain whose lookups
+// take 1.5 s, against a 0.3 s lookup bound and a 20 s write bound, fails a
+// lookup and fails the switch at its first read with neither store touched.
+func TestAKeychainTooSlowForALookupFailsTheSwitchBeforeAnyWrite(t *testing.T) {
 	withClaudeHome(t)
 	file := mustPath(ccpath.CredentialsPath())
 	if err := os.WriteFile(file, []byte(oldLogin), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	fakeSecurity{item: statefulItem(t, oldLogin), hang: 1500 * time.Millisecond}.install(t)
+	item := statefulItem(t, oldLogin)
+	fakeSecurity{item: item, hang: 1500 * time.Millisecond}.install(t)
 	keychainReadTimeout = 300 * time.Millisecond
 	keychainWriteTimeout = 20 * time.Second
 
 	if _, _, err := testItem.Read(context.Background()); err == nil {
 		t.Fatal("a lookup outlived the read bound")
 	}
-	if err := Activate(Blob{"claudeAiOauth": json.RawMessage(newLogin)}); err != nil {
-		t.Fatalf("a switch on a slow keychain failed under the write bound: %v", err)
+	if err := Activate(Blob{"claudeAiOauth": json.RawMessage(newLogin)}); err == nil {
+		t.Fatal("a switch whose merge-base read outlived the lookup bound went ahead")
 	}
-	if got := fileNow(t, file); !strings.Contains(got, "RT-new") {
-		t.Fatalf("the switch did not reach the file:\n%s", got)
+	if got := itemNow(t, item) + fileNow(t, file); strings.Contains(got, "RT-new") {
+		t.Fatalf("a switch that failed its first read wrote something:\n%s", got)
 	}
 }
 

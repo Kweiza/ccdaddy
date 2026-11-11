@@ -156,10 +156,12 @@ func credentialOf(b Blob) (credentialFields, bool) {
 }
 
 // ErrLoginOutcomeUnknown is a switch whose keychain write ran out of time and
-// whose item could not be read back to say whether it landed. Nothing further
-// was written: the credentials file still holds what it held, and the item
-// holds either login. It is not "nothing changed" and it is not "switched", and
-// a caller must not report either.
+// whose item could not be read back to say whether it landed -- or held a
+// login that was neither, or moved on before the credentials file could
+// follow. Nothing further was written: the credentials file still holds what
+// it held, and the item holds either login, or one that replaced it since. It
+// is not "nothing changed" and it is not "switched", and a caller must not
+// report either.
 var ErrLoginOutcomeUnknown = errors.New("whether the keychain item now holds the new login is not known")
 
 // writeOutcome is what reading the item back after an unconfirmed write found.
@@ -180,7 +182,11 @@ const (
 //
 // It reads with keychainWriteTimeout and a fresh deadline of its own: the
 // keychain that was too slow for the write is the one being asked, and the
-// time the write already spent is no reason to give the answer less.
+// time the write already spent is no reason to give the answer less. It runs
+// after Claude Code's credential locks are released (writeMerged), so that
+// bound is not paid inside them -- and so the item may have moved since the
+// write for reasons of its own, which is one more way to hold a login that is
+// neither of the two, and reads as unresolved like the rest.
 //
 // The comparison is by CREDENTIAL -- access token, refresh token and expiry
 // -- the same sameCredential the write-skip uses, not by login identity. A
@@ -189,50 +195,39 @@ const (
 // when the item still holds the old access token. When written and previous
 // are the same credential the item holds what was asked for either way, and
 // that reads as landed.
-//
-// A LOGOUT is the write with no login in it (ClearLogin, for an api-key
-// account), so "the login it was given" is NO login: an item that holds none,
-// or is gone, has landed. Comparing identities there would compare "" with "",
-// which LoginIdentity's contract says never matches, and every logout that ran
-// out of time would read as unknown however it went.
 func confirmKeychainWrite(written, previous Blob) writeOutcome {
 	got, ok, err := loadKeychainCredentialsWithin(context.Background(), keychainWriteTimeout)
-	if err != nil {
-		return writeUnresolved
-	}
-	if _, wantsLogin := written["claudeAiOauth"]; !wantsLogin {
-		if _, hasLogin := got["claudeAiOauth"]; !ok || !hasLogin {
-			return writeLanded
-		}
-	}
 	switch {
-	case !ok:
+	case err != nil:
 		return writeUnresolved
-	case sameCredential(got, written):
+	case itemHoldsWrite(got, ok, written):
 		return writeLanded
-	case sameCredential(got, previous):
+	case ok && sameCredential(got, previous):
 		return writeDidNotLand
 	}
 	return writeUnresolved
 }
 
-// settleKeychainWrite turns a failed keychain write into what it means for the
-// switch, and returns nil only when the write landed after all.
+// itemHoldsWrite reports whether an item -- got, and whether there is one --
+// holds what a write gave it: the same credential (sameCredential).
 //
-// A failure `security` ANSWERED is the failure it says it is: nothing was
-// written. A failure that was ccdad giving up on it (writeOutcomeUnknown) is
-// read back first, because the request may have reached securityd before the
-// client was killed -- and reporting "nothing was written" about a write that
-// landed is what left the item on one account and the file on another.
-func settleKeychainWrite(writeErr error, written, previous Blob) error {
-	if writeOutcomeUnknown(writeErr) {
-		switch confirmKeychainWrite(written, previous) {
-		case writeLanded:
-			return nil
-		case writeUnresolved:
-			return unconfirmedWriteError(writeErr)
-		}
+// A LOGOUT is the write with no login in it (ClearLogin, for an api-key
+// account), so "the login it was given" is NO login: an item that holds none,
+// or is gone, holds it. Comparing identities there would compare "" with "",
+// which LoginIdentity's contract says never matches, and every logout that ran
+// out of time would read as unknown however it went.
+func itemHoldsWrite(got Blob, ok bool, written Blob) bool {
+	if _, wantsLogin := written["claudeAiOauth"]; !wantsLogin {
+		_, hasLogin := got["claudeAiOauth"]
+		return !ok || !hasLogin
 	}
+	return ok && sameCredential(got, written)
+}
+
+// keychainWriteFailed is a keychain write that is known not to have landed: a
+// failure `security` ANSWERED, or one whose read-back found the item still on
+// the login it held. Nothing was written, and that is what it says.
+func keychainWriteFailed(writeErr error) error {
 	return fmt.Errorf("the keychain item Claude Code reads first could not be updated, so nothing "+
 		"was written and the login did not change: %w", writeErr)
 }

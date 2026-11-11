@@ -16,6 +16,21 @@ must reference accounts by `uuid` or `alias`.
 
 ## [Unreleased]
 
+### Changed
+
+- **A switch keeps Claude Code's token refresh waiting on the Keychain for
+  at most about 37 seconds, down from about 93.** Claude Code refreshes its
+  login under the same credential locks a switch writes under, and a switch
+  used to make up to three Keychain calls inside them, each allowed 30
+  seconds. The read a switch starts from is now a lookup with the 5-second
+  lookup limit -- a Keychain too slow for it fails the switch before anything
+  is written -- and only the write keeps 30 seconds. A write that runs out of
+  time is read back after the locks are released. When the read-back finds the
+  new login, the credentials file follows in a second, short pass under the
+  locks, so the switch still completes; when the Keychain item has changed
+  again by then, ccdad says the outcome is unknown and the daemon's next pass
+  puts one login in both stores.
+
 ## [0.29.1] — 2026-11-10
 
 ### Fixed

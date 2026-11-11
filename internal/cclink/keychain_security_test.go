@@ -195,6 +195,12 @@ func (f fakeSecurity) install(t *testing.T) string {
 
 	securityPath = os.Args[0]
 	keychainGOOS = "darwin"
+	// Every spawn of the fixture is a re-exec of this test binary, and under
+	// -race on a loaded machine one has taken over five seconds -- longer than
+	// the real lookup bound. The bounds are the subject of the tests that set
+	// them, after this; everywhere else a slow fixture must not read as a
+	// keychain that timed out, so a lookup gets as long as a write.
+	keychainReadTimeout = keychainWriteTimeout
 
 	argv := filepath.Join(t.TempDir(), "argv")
 	t.Setenv(securityRoleEnv, "1")
