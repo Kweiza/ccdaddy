@@ -90,15 +90,82 @@ func (e *Engine) repairSplit(ctx context.Context, s *store.Store, ev switcher.Ev
 	return res, nil
 }
 
-// maxOwners bounds the identity oracle's memory. A login's identity changes on
-// every refresh, so the map would otherwise grow for the life of the daemon;
-// forgetting costs one more ask, rate-limited.
-const maxOwners = 64
+// loginMemoryGrace is how long the daemon keeps what it knows about a login --
+// the identity oracle's answer, that a line about it has been said -- after the
+// last pass that saw it in one of Claude Code's login stores.
+//
+// A login leaves its stores for good almost every time it leaves them: Claude
+// Code rotated it, or a switch replaced it. The grace is for the exception, a
+// store that swings between two logins -- Claude Code writing the file when its
+// keychain write fails and the item when it does not -- so that neither the ask
+// nor the line repeats on every swing. Past it the login is forgotten; if it
+// comes back it costs one more ask, held to resolveMinInterval like any other,
+// and one more line.
+const loginMemoryGrace = 10 * time.Minute
+
+// loginMemory is what the daemon knows per login, by cclink.LoginIdentity,
+// kept while the login can still matter: while a login store holds it, and for
+// loginMemoryGrace after the last pass that saw it there (keepHeld).
+//
+// It used to be a map wiped whole once it reached 64 logins. A login's identity
+// changes on every refresh, so the map did fill, and wiping it forgot the
+// logins still sitting in a store along with the ones long gone: the profile
+// endpoint was asked about them again, and their line said again.
+type loginMemory[V any] map[string]rememberedLogin[V]
+
+type rememberedLogin[V any] struct {
+	value V
+	seen  time.Time
+}
+
+func (m loginMemory[V]) get(id string) (V, bool) {
+	r, ok := m[id]
+	return r.value, ok
+}
+
+// put remembers v about the login id, seen at now.
+func (m *loginMemory[V]) put(id string, v V, now time.Time) {
+	if *m == nil {
+		*m = loginMemory[V]{}
+	}
+	(*m)[id] = rememberedLogin[V]{value: v, seen: now}
+}
+
+// keepHeld marks each login the stores hold as seen at now, and forgets every
+// other one no pass has seen there for loginMemoryGrace.
+func (m loginMemory[V]) keepHeld(held []string, now time.Time) {
+	for _, id := range held {
+		if r, ok := m[id]; ok {
+			r.seen = now
+			m[id] = r
+		}
+	}
+	for id, r := range m {
+		if now.Sub(r.seen) > loginMemoryGrace {
+			delete(m, id)
+		}
+	}
+}
+
+// ageLoginMemory holds the daemon's per-login memory against the logins this
+// pass's stores hold (loginMemory). A store that could not be read is no
+// evidence that a login left it, so a pass with one ages nothing.
+func (e *Engine) ageLoginMemory(st cclink.LoginStores, now time.Time) {
+	if st.FileErr != nil {
+		return
+	}
+	held := []string{cclink.LoginIdentity(st.File)}
+	if st.HasItem {
+		held = append(held, cclink.LoginIdentity(st.Item))
+	}
+	e.owners.keepHeld(held, now)
+	e.saidStore.keepHeld(held, now)
+}
 
 // ownerOf is the identity oracle's memory as switcher.Owners: the managed
 // account a login belongs to, when the oracle has said.
 func (e *Engine) ownerOf(id string) (string, bool) {
-	uuid, ok := e.owners[id]
+	uuid, ok := e.owners.get(id)
 	return uuid, ok && uuid != ""
 }
 
@@ -259,26 +326,19 @@ func (e *Engine) accessToken(ctx context.Context, uuid string) (string, error) {
 var errUnadopted = errors.New("a newer login of this account is named and not yet stored, so its stored " +
 	"refresh token is already spent and is not presented")
 
+// sayStoreOnce logs line about the login store holding the login id, once for
+// as long as the daemon remembers that login (loginMemory).
 func (e *Engine) sayStoreOnce(id, line string) {
-	if e.saidStore == nil {
-		e.saidStore = map[string]bool{}
-	}
-	if e.saidStore[id] {
+	if _, said := e.saidStore.get(id); said {
 		return
 	}
-	if len(e.saidStore) >= maxOwners {
-		e.saidStore = map[string]bool{}
-	}
-	e.saidStore[id] = true
+	e.saidStore.put(id, struct{}{}, e.now())
 	e.logf("%s", line)
 }
 
 // remember records what the oracle said about a login.
 func (e *Engine) remember(id, uuid string) {
-	if e.owners == nil || len(e.owners) >= maxOwners {
-		e.owners = map[string]string{}
-	}
-	e.owners[id] = uuid
+	e.owners.put(id, uuid, e.now())
 }
 
 // newerThanStored reports whether login was issued after what the account

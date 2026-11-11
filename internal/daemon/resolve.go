@@ -95,8 +95,9 @@ func (e *Engine) resolveLive(ctx context.Context, s *store.Store) (store.Account
 // actually asked.
 //
 // Two things were added for the split-login repair. The answer is REMEMBERED
-// per login (e.owners), so a login is asked about once rather than once a
-// minute, and a LoginView can name it from memory. And adoption is ORDERED: a
+// per login (e.owners, for as long as a store holds the login -- loginMemory),
+// so a login is asked about once rather than once a minute, and a LoginView can
+// name it from memory. And adoption is ORDERED: a
 // login replaces the account's stored one only when it was issued later. Both
 // stores can hold a login of the same account in different generations, and
 // adopting the older over the newer would put a spent refresh token back into
@@ -106,7 +107,7 @@ func (e *Engine) resolveStore(ctx context.Context, s *store.Store, live cclink.B
 		return store.Account{}, liveUnresolved
 	}
 	id := cclink.LoginIdentity(live)
-	if uuid, known := e.owners[id]; known && id != "" {
+	if uuid, known := e.owners.get(id); known && id != "" {
 		return e.verdictFor(s, live, uuid)
 	}
 	token, ok := liveAccessToken(live)
