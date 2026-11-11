@@ -169,16 +169,17 @@ func probeSkip(a store.Account, blob cclink.Blob, entry usage.Entry, o probeOpti
 	if a.Provider != provider.Claude {
 		return fmt.Sprintf("%s is a Codex account; ccdad never probes Codex", a.Label()), true
 	}
-	// Ahead of --force too, for the reason above: the daemon's own probe is a
-	// forced child, and the Claude Code it runs refreshes the stored login it
-	// is seeded with -- a spent refresh token revokes the newer login.
-	if o.hold.Held() {
-		return fmt.Sprintf("not probing %s: %s", a.Label(), spentLoginReason(a)), false
-	}
 	if rec, isToken := cclink.TokenRecordOf(blob); isToken {
 		return fmt.Sprintf("%s's credential is %s rather than an OAuth login, and every usage window ccdad "+
 			"can read comes from a login's refresh grant — so a probe would spend quota for a reading "+
 			"nothing could ever take", a.Label(), credentialWord(rec.Kind)), true
+	}
+	// Ahead of --force too, for the reason above: the daemon's own probe is a
+	// forced child, and the Claude Code it runs refreshes the stored login it
+	// is seeded with -- a spent refresh token revokes the newer login. After
+	// the token refusal, because only a login is seeded.
+	if o.hold.Held() {
+		return fmt.Sprintf("not probing %s: %s", a.Label(), spentLoginReason(a)), false
 	}
 	if kerr := refuseUnscopedRun(describeClaudeInstall(o.claude), blob, a.Label()); kerr != nil {
 		return kerr.Error(), true

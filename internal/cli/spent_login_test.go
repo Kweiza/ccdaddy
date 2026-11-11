@@ -1,12 +1,14 @@
 package cli
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/cclink/cclinktest"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/store"
@@ -183,5 +185,41 @@ func TestRunSeedsTheStoredLoginTheHoldWasDecidedOn(t *testing.T) {
 	runRoot(t, "run", "chan@example.com")
 	if strings.Contains(string(seeded), `"RT-uuid-chan"`) {
 		t.Fatalf("the session was seeded with the spent stored login:\n%s", seeded)
+	}
+}
+
+// A setup token beside a spent OAuth login is run with the token: Claude Code
+// takes it from the environment, and no file is seeded, so the spent login is
+// never presented. The hold is for the path that seeds the login, and only
+// that one.
+func TestASetupTokenRunsBesideASpentOAuthLogin(t *testing.T) {
+	isolate(t)
+	suppressAutoStart(t)
+	spentMachine(t)
+	s, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, _ := s.Get("uuid-chan")
+	creds, err := s.Credentials("uuid-chan")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, err := json.Marshal(cclink.TokenRecord{Kind: "setup-token", Token: "sk-ant-oat-chan"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	creds[cclink.TokenKey] = rec
+	if err := s.Add(a, creds); err != nil {
+		t.Fatal(err)
+	}
+	stub := stubClaude(t, ExitOK)
+
+	code, _, stderr, top := runRoot(t, "run", "chan@example.com")
+	if code != ExitOK || !stub.started {
+		t.Fatalf("exit = %d, started = %v; want the setup token run:\n%s%s", code, stub.started, top, stderr)
+	}
+	if got, _ := envOf(stub.spec.Env, "CLAUDE_CODE_OAUTH_TOKEN"); got != "sk-ant-oat-chan" {
+		t.Fatalf("CLAUDE_CODE_OAUTH_TOKEN = %q, want the setup token", got)
 	}
 }
