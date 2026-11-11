@@ -125,3 +125,34 @@ func TestARecordThatCouldNotBeWrittenStillHoldsAndIsWrittenLater(t *testing.T) {
 		t.Fatalf("u-1 = %v after the record was written, want held", err)
 	}
 }
+
+// A pass that cannot read the login stores keeps the last pass's verdict on
+// which stored logins are spent: an unreadable store is no evidence that a hold
+// has lifted. The hold here is the stores' evidence alone -- the oracle's
+// naming of a newer login in the file, with no record of a spent login -- so
+// only the last verdict can keep it.
+func TestAPassThatCannotReadTheStoresKeepsTheLastVerdict(t *testing.T) {
+	isolateEngine(t)
+	seedAccount(t, "u-1", "org-1")
+	seedAccount(t, "u-2", "org-2")
+	kc := withItem(t, "u-2")
+	writeLiveLoginRT(t, "RT-u-1-newer", tickEpoch.Add(9*time.Hour))
+	recordActive(t, "u-2")
+	if err := strategy.WithState(time.Second, func(st *strategy.State) error {
+		st.NameLogin(store.LoginHash("refresh:RT-u-1-newer"), "u-1")
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	e := engineFor(t, tokensAreFine, noFetch)
+
+	tick(t, e)
+	if e.holdSpentToken("u-1") == nil {
+		t.Fatal("precondition: the newer login in the file held nothing")
+	}
+	kc.FailReads(true)
+	tick(t, e)
+	if err := e.holdSpentToken("u-1"); !errors.Is(err, store.ErrStoredLoginSpent) {
+		t.Fatalf("u-1 = %v after a pass that could not read the stores, want still held", err)
+	}
+}
