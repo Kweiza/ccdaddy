@@ -167,10 +167,10 @@ func HoldReason(h Hold, label string, now StoresNow) string {
 // command could see and a restart forgot. What is persisted is only what no
 // process can derive: the oracle's naming, and which stored login was spent.
 // It lifts by itself the moment the account stores another login.
-func (a Account) StoredLoginSpent(stored cclink.Blob, live cclink.LoginStores, rec OracleRecord) Hold {
+func (a Account) StoredLoginSpent(stored cclink.Blob, live cclink.LoginStores, owners LoginOwners, rec OracleRecord) Hold {
 	storedID := cclink.LoginIdentity(stored)
 	if rec.LoadError() != nil {
-		if storedID == "" || liveHoldsNewest(stored, live) {
+		if storedID == "" || a.liveHoldsNewest(stored, live, owners) {
 			return NotHeld
 		}
 		return HeldUnreadableRecord
@@ -193,27 +193,80 @@ func (a Account) StoredLoginSpent(stored cclink.Blob, live cclink.LoginStores, r
 	return NotHeld
 }
 
-// liveHoldsNewest reports whether one of Claude Code's login stores holds the
-// stored login and none holds a login issued after it (cclink.IssuedAfter).
+// liveHoldsNewest reports whether one of Claude Code's login stores holds a's
+// stored login and none holds a later-issued login (cclink.IssuedAfter) that
+// could be a's.
 //
 // Such a login is what Claude Code is presenting already, so a record that
 // cannot be read is no reason to hold it: holding it protects nothing, and
 // costs the split repair that puts it in the other store -- leaving there a
 // login it replaced, which Claude Code may present next. A stored login no
-// store holds, or one a store holds beside a later login, stays held.
-func liveHoldsNewest(stored cclink.Blob, live cclink.LoginStores) bool {
+// store holds, or one beside a later login that may be a's, stays held.
+//
+// "Could be a's" is any login owners does not name as ANOTHER account's --
+// another account's stored login, or one its stored login replaced. That
+// login says nothing about whether a's is spent: it is ccdad's own switch
+// from that account to a, whose outcome was unknown, and the repair that
+// completes it puts a's login in the other store. A later login nobody can
+// name still counts, because it may be a's newer one, and the repair would
+// then write the spent login over it.
+func (a Account) liveHoldsNewest(stored cclink.Blob, live cclink.LoginStores, owners LoginOwners) bool {
 	storedID := cclink.LoginIdentity(stored)
 	held := false
 	for _, login := range live.Logins() {
 		switch id := cclink.LoginIdentity(login); {
 		case id == storedID:
 			held = true
-		case id != "" && cclink.IssuedAfter(login, stored):
+		case id == "" || owners.ownedElsewhere(id, a.UUID):
+		case cclink.IssuedAfter(login, stored):
 			return false
 		}
 	}
 	return held
 }
+
+// LoginOwners names the managed account a login belongs to as far as this
+// store can say without asking anybody: the account whose stored login it is,
+// or whose stored login replaced it (Account.Superseded). Nil names nothing.
+type LoginOwners func(loginIdentity string) (uuid string, ok bool)
+
+// ownedElsewhere reports whether o names the login as an account other than
+// uuid's.
+func (o LoginOwners) ownedElsewhere(loginIdentity, uuid string) bool {
+	if o == nil {
+		return false
+	}
+	owner, ok := o(loginIdentity)
+	return ok && owner != uuid
+}
+
+// OwnersOf is LoginOwners over accounts, reading each stored login through
+// lookup. An account whose stored login cannot be read names only the logins
+// it replaced.
+func OwnersOf(accounts []Account, lookup func(uuid string) (cclink.Blob, error)) LoginOwners {
+	stored := map[string]string{}
+	for _, a := range accounts {
+		if b, err := lookup(a.UUID); err == nil {
+			if id := cclink.LoginIdentity(b); id != "" {
+				stored[id] = a.UUID
+			}
+		}
+	}
+	return func(id string) (string, bool) {
+		if uuid, ok := stored[id]; ok {
+			return uuid, true
+		}
+		for _, a := range accounts {
+			if a.Superseded(id) {
+				return a.UUID, true
+			}
+		}
+		return "", false
+	}
+}
+
+// LoginOwners is OwnersOf over this store's accounts and stored logins.
+func (s *Store) LoginOwners() LoginOwners { return OwnersOf(s.Accounts(), s.Credentials) }
 
 // SpentRecordHolds reports whether the record of a's spent stored login still
 // applies: the account still stores the login recorded as spent. Any other
@@ -281,8 +334,9 @@ func (s *Store) PresentableLogin(uuid string, live cclink.LoginStores, rec Oracl
 	if err != nil {
 		return nil, NotHeld, err
 	}
+	owners := s.LoginOwners()
 	for i := 0; ; i++ {
-		hold := a.StoredLoginSpent(stored, live, rec)
+		hold := a.StoredLoginSpent(stored, live, owners, rec)
 		if !hold.Held() || i == presentRereads {
 			return stored, hold, nil
 		}
@@ -299,12 +353,13 @@ func (s *Store) PresentableLogin(uuid string, live cclink.LoginStores, rec Oracl
 // name is NotHeld.
 func (s *Store) SpentLogins(live cclink.LoginStores, rec OracleRecord) map[string]Hold {
 	out := map[string]Hold{}
+	owners := s.LoginOwners()
 	for _, a := range s.Accounts() {
 		if a.Provider != provider.Claude {
 			continue
 		}
 		stored, _ := s.Credentials(a.UUID)
-		if hold := a.StoredLoginSpent(stored, live, rec); hold.Held() {
+		if hold := a.StoredLoginSpent(stored, live, owners, rec); hold.Held() {
 			out[a.UUID] = hold
 		}
 	}

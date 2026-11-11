@@ -673,7 +673,7 @@ func Execute(s *store.Store, req Request) (Result, error) {
 		// Decided here, against the stores as they are under the lock, for the
 		// daemon and every attended caller alike.
 		if target, ok := s.Get(req.Target.UUID); ok {
-			if hold := target.StoredLoginSpent(cur, stores, req.record()); hold.Held() {
+			if hold := target.StoredLoginSpent(cur, stores, s.LoginOwners(), req.record()); hold.Held() {
 				res.Outcome, res.FreshenErr = Stale, &store.SpentError{UUID: target.UUID, Label: target.Label(), Hold: hold}
 				return nil, cclink.ErrNoChange
 			}

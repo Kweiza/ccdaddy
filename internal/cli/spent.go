@@ -94,13 +94,14 @@ func checkSpentLogins(root string, usable, accountsUsable bool, stores cclink.Lo
 		stores = cclink.LoginStores{} // no evidence: the record decides alone
 	}
 	rec := store.LoadOracleRecord()
+	owners := store.OwnersOf(accounts, lookup)
 	var held, unreadable []string
 	for _, a := range accounts {
 		if a.Provider != provider.Claude {
 			continue
 		}
 		stored, _ := lookup(a.UUID)
-		switch hold := a.StoredLoginSpent(stored, stores, rec); hold {
+		switch hold := a.StoredLoginSpent(stored, stores, owners, rec); hold {
 		case store.NotHeld:
 		case store.HeldUnreadableRecord:
 			unreadable = append(unreadable, fmt.Sprintf("%s (%s)", a.Label(), a.UUID))
