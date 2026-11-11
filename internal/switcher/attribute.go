@@ -106,11 +106,14 @@ const (
 	// numbers, the same rule Outcome carries.
 	LiveUnreadable
 	// LiveResolved: a login whose refresh token matches no stored snapshot,
-	// whose OWNER the identity oracle has named as one of this store's
-	// accounts. It is a generation of that account's login ccdad has not
-	// taken in -- newer, or older and already spent. Only a LoginView built
-	// with Owners produces it; LiveStateOf alone never does. Appended, for the
-	// reason LiveUnreadable is.
+	// whose OWNER is nonetheless known to be one of this store's accounts --
+	// by that account's own history (a login its stored one replaced), or
+	// because the identity oracle has named it. It is a generation of that
+	// account's login ccdad does not store now: newer and not yet taken in,
+	// or older and already spent. Only a LoginView produces it -- its view of
+	// a store finds the history, and Owners carries the oracle's naming;
+	// LiveStateOf alone never does. Appended, for the reason LiveUnreadable
+	// is.
 	LiveResolved
 )
 
@@ -144,7 +147,7 @@ func AttributeFile(live cclink.Blob, accounts []store.Account, lookup Lookup) (s
 // is, is store.OwnerByEvidence's to say -- a Claude row's stored login, never
 // another provider's (it says why) -- and only its stored-login answer makes
 // the login managed here: a login an account's stored one replaced is a
-// generation ccdad has not taken in, which a LoginView names LiveResolved.
+// generation ccdad no longer stores, which a LoginView names LiveResolved.
 func LiveStateOf(live cclink.Blob, accounts []store.Account, lookup Lookup) (store.Account, LiveState) {
 	liveID := CredentialIdentity(live)
 	if liveID == "" {
