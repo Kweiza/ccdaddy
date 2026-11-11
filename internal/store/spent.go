@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/provider"
@@ -159,15 +160,41 @@ func (unreadableRecord) NamedLogin(string) (string, bool)               { return
 func (unreadableRecord) SpentStoredLogin(string) (string, string, bool) { return "", "", false }
 func (r unreadableRecord) LoadError() error                             { return r.err }
 
-// StoredLoginSpent is Account.StoredLoginSpent for one stored account, against
-// the record on disk.
-func (s *Store) StoredLoginSpent(uuid string, live cclink.LoginStores) bool {
+// presentRereads bounds how many more times PresentableLogin reads a stored
+// login that changed under it.
+const presentRereads = 3
+
+// PresentableLogin is uuid's stored login as it is about to be PRESENTED --
+// refreshed, handed out, or seeded into a session -- and the hold on that
+// exact copy (Account.StoredLoginSpent).
+//
+// The decision and the use are one read, and a caller presents the copy
+// returned here and no other. Deciding on a copy read again elsewhere is what
+// let a path check G1, the newer login the daemon had just stored, and then
+// present the spent G0 it had read first. When the copy is held, the store is
+// read again, and if the account has stored another login meanwhile the
+// decision is taken again on that one -- a few times at most: a hold that has
+// just lifted is no reason to refuse.
+func (s *Store) PresentableLogin(uuid string, live cclink.LoginStores, rec OracleRecord) (cclink.Blob, Hold, error) {
 	a, ok := s.Get(uuid)
 	if !ok {
-		return false
+		return nil, NotHeld, fmt.Errorf("%w: %q", ErrNotFound, uuid)
 	}
-	stored, _ := s.Credentials(uuid)
-	return a.StoredLoginSpent(stored, live, LoadOracleRecord()).Held()
+	stored, err := s.Credentials(uuid)
+	if err != nil {
+		return nil, NotHeld, err
+	}
+	for i := 0; ; i++ {
+		hold := a.StoredLoginSpent(stored, live, rec)
+		if !hold.Held() || i == presentRereads {
+			return stored, hold, nil
+		}
+		again, err := s.Credentials(uuid)
+		if err != nil || cclink.LoginIdentity(again) == cclink.LoginIdentity(stored) {
+			return stored, hold, nil
+		}
+		stored = again
+	}
 }
 
 // SpentLogins is every Claude account whose stored refresh token is spent

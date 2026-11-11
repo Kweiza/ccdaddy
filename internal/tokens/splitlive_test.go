@@ -94,3 +94,32 @@ func TestARecordedSpentLoginIsNotPresentedWhenTheStoresCannotBeRead(t *testing.T
 		t.Fatalf("AccessToken = (%q, %v), want store.ErrStoredLoginSpent", got, err)
 	}
 }
+
+// THE CHECK AND THE USE ARE ONE READ. The daemon stores u-1's newer login while
+// this call is reading the login stores, after it read the spent one. A check
+// that read the store again would see the newer login, find nothing held, and
+// let the call refresh the spent copy it had in hand.
+func TestTheHoldIsDecidedOnTheStoredLoginThatIsPresented(t *testing.T) {
+	isolate(t)
+	seed(t, "u-1", oauthRecord("a1", "r1", time.Now().Add(-time.Hour), ""))
+	if err := strategy.WithState(time.Second, func(st *strategy.State) error {
+		st.RecordSpentStoredLogin("u-1", store.LoginHash("refresh:r1"), store.LoginHash("refresh:r1-newer"))
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	kc := cclinktest.NewKeychain(`{}`)
+	adopted := false
+	kc.OnRead = func() {
+		if !adopted {
+			adopted = true
+			seed(t, "u-1", oauthRecord("a1-newer", "r1-newer", time.Now().Add(8*time.Hour), ""))
+		}
+	}
+	cclinktest.Install(t, kc)
+
+	got, err := sourceFor(t, refusingEndpoint(t)).AccessToken(context.Background(), "u-1")
+	if err == nil && got != "a1-newer" {
+		t.Fatalf("AccessToken = %q, want the newer login's token or a refusal: the spent copy was used", got)
+	}
+}

@@ -177,3 +177,53 @@ func TestAnUnreadableRecordHoldsEveryStoredLogin(t *testing.T) {
 		t.Error("StoredLoginSpent ignores a record that could not be read")
 	}
 }
+
+// changingRecord is a record whose first look at an account's spent login
+// stores another login for it -- another process adopting the newer login at
+// the moment the decision is being taken.
+type changingRecord struct {
+	record
+	change func()
+}
+
+func (r *changingRecord) SpentStoredLogin(uuid string) (string, string, bool) {
+	if r.change != nil {
+		r.change()
+		r.change = nil
+	}
+	return r.record.SpentStoredLogin(uuid)
+}
+
+// The copy presented is the copy decided on. A held copy is read again, and
+// when the account has stored another login meanwhile, the decision is taken
+// on THAT one -- which is then the one returned to be presented. A copy that
+// has not changed stays refused.
+func TestThePresentedLoginIsTheOneTheHoldWasDecidedOn(t *testing.T) {
+	withStore(t)
+	s, err := Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := Account{UUID: "u-1", Provider: provider.Claude}
+	if err := s.Add(a, claudeLogin("RT-spent")); err != nil {
+		t.Fatal(err)
+	}
+	spent := record{spent: map[string][2]string{"u-1": {"refresh:RT-spent", "refresh:RT-newer"}}}
+
+	got, hold, err := s.PresentableLogin("u-1", cclink.LoginStores{}, spent)
+	if err != nil || !hold.Held() || cclink.LoginIdentity(got) != "refresh:RT-spent" {
+		t.Fatalf("an unchanged spent copy = %s, %v, %v; want it held", cclink.LoginIdentity(got), hold, err)
+	}
+
+	adopting := &changingRecord{record: spent, change: func() {
+		cur, _ := s.Get("u-1")
+		if err := s.Add(cur, claudeLogin("RT-newer")); err != nil {
+			t.Fatal(err)
+		}
+	}}
+	got, hold, err = s.PresentableLogin("u-1", cclink.LoginStores{}, adopting)
+	if err != nil || hold.Held() || cclink.LoginIdentity(got) != "refresh:RT-newer" {
+		t.Fatalf("after the newer login was stored mid-decision = %s, %v, %v; want the newer copy, not held",
+			cclink.LoginIdentity(got), hold, err)
+	}
+}
