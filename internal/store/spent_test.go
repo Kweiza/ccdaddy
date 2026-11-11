@@ -267,6 +267,10 @@ func TestASpentErrorSaysWhyItsHoldHolds(t *testing.T) {
 		{HeldByNewerLogin, "as soon as it can"},
 		{HeldByRecord, "ccdad add claude"},
 		{HeldUnreadableRecord, "cannot be read"},
+		// Accurate when the held login is the one in the keychain item, as it
+		// is beside an unreadable file: the sentence does not claim Claude
+		// Code is not using it, only that its stores do not show it is.
+		{HeldUnreadableRecord, "and they do not show that for account u-1's"},
 	}
 	for _, tc := range cases {
 		err := error(&SpentError{UUID: "u-1", Hold: tc.hold})
