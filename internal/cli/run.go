@@ -1409,13 +1409,17 @@ func newRunCmd() *cobra.Command {
 			// because the refusal below turns on which credential shape this
 			// account is — and a refusal that first made a directory holding
 			// nothing would be tidied by the defer, but only after the fact.
-			blob, err := s.Credentials(target.UUID)
+			//
+			// The session refreshes this login with its stored refresh token,
+			// and a spent one revokes the newer login it was spent for: the
+			// copy read here is the one decided on and the one seeded
+			// (store.Store.PresentableLogin).
+			stores, _ := cclink.ReadLoginStores() // the zero value when it failed: no evidence
+			blob, hold, err := s.PresentableLogin(target.UUID, stores, store.LoadOracleRecord())
 			if err != nil {
 				return err
 			}
-			// The session refreshes this login with its stored refresh token,
-			// and a spent one revokes the newer login it was spent for.
-			if spentLogins(s)[target.UUID] {
+			if hold.Held() {
 				return WithCode(fmt.Errorf("not running %s: %s", target.Label(), spentLoginReason(target)), ExitBlocked)
 			}
 

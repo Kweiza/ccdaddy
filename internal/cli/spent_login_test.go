@@ -1,11 +1,14 @@
 package cli
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Kweiza/ccdaddy/internal/cclink/cclinktest"
+	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/store"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 )
@@ -146,5 +149,39 @@ func TestARecordedSpentLoginStaysHeldWhenTheKeychainCannotBeRead(t *testing.T) {
 	code, _, stderr, top = runRoot(t, "probe", "--uuid", "uuid-chan", "--force")
 	if stub.started {
 		t.Fatalf("probe --force spent a stored login recorded as spent (exit %d):\n%s%s", code, top, stderr)
+	}
+}
+
+// THE CHECK AND THE USE ARE ONE READ. The daemon stores chan's newer login
+// while `ccdad run` is reading the login stores, after it read the spent one.
+// A check that read the store again would find nothing held and seed the
+// session with the spent copy it had in hand.
+func TestRunSeedsTheStoredLoginTheHoldWasDecidedOn(t *testing.T) {
+	isolate(t)
+	suppressAutoStart(t)
+	kc := spentMachine(t)
+	adopted := false
+	kc.OnRead = func() {
+		if !adopted {
+			adopted = true
+			s, err := store.Open()
+			if err != nil {
+				t.Fatal(err)
+			}
+			a, _ := s.Get("uuid-chan")
+			if err := s.Add(a, credsFor("RT-uuid-chan-newer")); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	var seeded []byte
+	stubClaudeDuring(t, ExitOK, func(spec launchSpec) {
+		home, _ := envOf(spec.Env, "CLAUDE_SECURESTORAGE_CONFIG_DIR")
+		seeded, _ = os.ReadFile(filepath.Join(home, ccpath.CredentialsFile))
+	})
+
+	runRoot(t, "run", "chan@example.com")
+	if strings.Contains(string(seeded), `"RT-uuid-chan"`) {
+		t.Fatalf("the session was seeded with the spent stored login:\n%s", seeded)
 	}
 }

@@ -159,9 +159,22 @@ func (s *Source) AccessToken(ctx context.Context, uuid string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	stored, err := st.Credentials(uuid)
+	stores, liveErr := cclink.ReadLoginStores()
+	// A STORED LOGIN WHOSE REFRESH TOKEN IS SPENT is not presented at all, live
+	// or not, refreshed or merely handed out: whoever minted the newer login
+	// spent it, and presenting it again can revoke the newer login with it.
+	// The decision is store.Account.StoredLoginSpent, taken on the very copy
+	// used below (store.Store.PresentableLogin) against the stores just read,
+	// so every process that gets a token here -- the daemon's poll, a `ccdad
+	// status --refresh` -- applies it. It is taken when the read FAILED too, on
+	// the zero stores it returned: no evidence, and the daemon's record
+	// decides alone.
+	stored, hold, err := st.PresentableLogin(uuid, stores, store.LoadOracleRecord())
 	if err != nil {
 		return "", err
+	}
+	if hold.Held() {
+		return "", fmt.Errorf("%w: %q", store.ErrStoredLoginSpent, uuid)
 	}
 	rec, ok := recordOf(stored)
 	if !ok {
@@ -191,18 +204,6 @@ func (s *Source) AccessToken(ctx context.Context, uuid string) (string, error) {
 	// The live branch needs no guard of its own: a failed Load answers a nil
 	// blob, isLiveLogin refuses that, and liveToken re-reads under the lock and
 	// reports the same failure if it is ever reached another way.
-	stores, liveErr := cclink.ReadLoginStores()
-	// A STORED LOGIN A NEWER ONE HAS SUPERSEDED is not presented at all, live
-	// or not, refreshed or merely handed out: whoever minted the newer login
-	// spent the stored refresh token, and presenting it again can revoke the
-	// newer login with it. The decision is store.Account.StoredLoginSpent,
-	// taken against the stores just read, so every process that gets a token
-	// here -- the daemon's poll, a `ccdad status --refresh` -- applies it. It
-	// is taken when the read FAILED too, on the zero stores it returned: no
-	// evidence, and the daemon's record decides alone.
-	if st.StoredLoginSpent(uuid, stores) {
-		return "", fmt.Errorf("%w: %q", store.ErrStoredLoginSpent, uuid)
-	}
 	var live cclink.Blob
 	if liveErr == nil {
 		live, _, liveErr = stores.Live()

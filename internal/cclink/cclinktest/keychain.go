@@ -46,6 +46,10 @@ type Keychain struct {
 	// lock: a test advances its clock there to stand for a write that takes as
 	// long as a slow keychain's does.
 	OnWrite func()
+	// OnRead, when set, runs at the start of every lookup, outside the item's
+	// lock: a test lands another process's change there, at a moment no timing
+	// could arrange.
+	OnRead func()
 
 	// WriteLandsThenTimesOut makes every write store its payload and then
 	// report that it ran out of time -- the 2026-11-10 incident.
@@ -143,6 +147,9 @@ func (k *Keychain) FailReads(on bool) {
 func (k *Keychain) run(_ context.Context, args ...string) (cclink.SecurityAnswer, error) {
 	if args[0] == "add-generic-password" && k.OnWrite != nil {
 		k.OnWrite()
+	}
+	if args[0] == "find-generic-password" && k.OnRead != nil {
+		k.OnRead()
 	}
 	k.mu.Lock()
 	defer k.mu.Unlock()

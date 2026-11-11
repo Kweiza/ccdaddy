@@ -62,8 +62,9 @@ type probeOptions struct {
 	window usage.WindowName
 	force  bool
 	now    time.Time
-	// spent is the accounts whose stored login is spent (spentLogins).
-	spent map[string]bool
+	// hold is the hold on the stored login this probe would seed, decided on
+	// that copy (store.Store.PresentableLogin).
+	hold store.Hold
 }
 
 // probeArgs is the child's command line.
@@ -171,7 +172,7 @@ func probeSkip(a store.Account, blob cclink.Blob, entry usage.Entry, o probeOpti
 	// Ahead of --force too, for the reason above: the daemon's own probe is a
 	// forced child, and the Claude Code it runs refreshes the stored login it
 	// is seeded with -- a spent refresh token revokes the newer login.
-	if o.spent[a.UUID] {
+	if o.hold.Held() {
 		return fmt.Sprintf("not probing %s: %s", a.Label(), spentLoginReason(a)), false
 	}
 	if rec, isToken := cclink.TokenRecordOf(blob); isToken {
@@ -395,7 +396,6 @@ func newProbeCmd() *cobra.Command {
 				model:  model,
 				force:  force,
 				now:    timeNow(),
-				spent:  spentLogins(s),
 			}
 			// The Windows shim rule, refused rather than resolved past. `run`
 			// resolves past a shim for every .cmd it can read, because the
@@ -450,8 +450,11 @@ func newProbeCmd() *cobra.Command {
 			stderr := cmd.ErrOrStderr()
 			notice := probeQuotaNoticer(stderr)
 			spent, failed := 0, 0
+			stores, _ := cclink.ReadLoginStores() // the zero value when it failed: no evidence
+			oracle := store.LoadOracleRecord()
 			for _, a := range targets {
-				blob, cerr := s.Credentials(a.UUID)
+				blob, hold, cerr := s.PresentableLogin(a.UUID, stores, oracle)
+				o.hold = hold
 				if cerr != nil {
 					if !all {
 						return cerr
