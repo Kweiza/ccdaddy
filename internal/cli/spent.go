@@ -100,7 +100,15 @@ func checkSpentLogins(root string, usable, accountsUsable bool, stores cclink.Lo
 		if a.Provider != provider.Claude {
 			continue
 		}
-		stored, _ := lookup(a.UUID)
+		stored, lerr := lookup(a.UUID)
+		// A stored login that cannot be read is no evidence it is not spent:
+		// the record may hold it, and once the file reads again removing the
+		// record would let it be presented. It is on the list like the rest.
+		if lerr != nil && rec.LoadError() != nil {
+			unreadable = append(unreadable, fmt.Sprintf("%s (%s, whose stored login cannot be read either)",
+				a.Label(), a.UUID))
+			continue
+		}
 		switch hold := a.StoredLoginSpent(stored, stores, owners, rec); hold {
 		case store.NotHeld:
 		case store.HeldUnreadableRecord:
