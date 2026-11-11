@@ -302,9 +302,18 @@ func (s *State) SpentStoredLogin(uuid string) (spent, newer string, ok bool) {
 
 // RecordSpentStoredLogin records that uuid's stored login with hash spent ("" for
 // one that could not be read) was spent by the login with hash newer.
+//
+// An unknown spent login never replaces a known one. It is what a retry
+// records when its read of the stored login failed, which says nothing about
+// which login is spent; recorded over a known hash it would lift the hold the
+// moment the stored login could be read again -- and the login read then may
+// be the very one that is spent.
 func (s *State) RecordSpentStoredLogin(uuid, spent, newer string) {
 	if s.data.SpentStoredLogins == nil {
 		s.data.SpentStoredLogins = map[string]spentStoredLogin{}
+	}
+	if prev, ok := s.data.SpentStoredLogins[uuid]; ok && spent == "" {
+		spent = prev.Spent
 	}
 	s.data.SpentStoredLogins[uuid] = spentStoredLogin{Spent: spent, Newer: newer}
 }
