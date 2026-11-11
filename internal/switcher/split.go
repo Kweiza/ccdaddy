@@ -91,19 +91,23 @@ func ViewLogin(st cclink.LoginStores, accounts []store.Account, lookup Lookup, r
 func holderOf(b cclink.Blob, accounts []store.Account, lookup Lookup, owners Owners) StoreHolder {
 	h := StoreHolder{ID: cclink.LoginIdentity(b)}
 	h.Expires, _ = cclink.LoginExpiry(b)
-	h.Account, h.State = LiveStateOf(b, accounts, lookup)
-	if h.State != LiveUnattributed {
+	if h.ID == "" {
+		h.State = LiveNone
 		return h
 	}
-	// An older generation of a managed account's login is named by the
-	// account's own history -- no oracle, no network -- and anything else by
-	// what the oracle has already said.
-	for _, a := range accounts {
-		if a.Superseded(h.ID) {
-			h.Account, h.State = a, LiveResolved
-			return h
-		}
+	// The store's own evidence first (store.OwnerByEvidence): a Claude
+	// account's stored login is that account's, and an older generation of one
+	// is named by the account's history -- no oracle, no network. Anything else
+	// by what the oracle has already said.
+	switch a, ev := store.OwnerByEvidence(h.ID, accounts, lookup); ev {
+	case store.ByStoredLogin:
+		h.Account, h.State = a, LiveManaged
+		return h
+	case store.BySupersededLogin:
+		h.Account, h.State = a, LiveResolved
+		return h
 	}
+	h.State = LiveUnattributed
 	if owners != nil {
 		if uuid, ok := owners(h.ID); ok {
 			for _, a := range accounts {

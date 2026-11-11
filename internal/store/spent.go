@@ -234,8 +234,7 @@ func (a Account) liveHoldsNewest(stored cclink.Blob, live cclink.LoginStores, ow
 }
 
 // LoginOwners names the managed account a login belongs to as far as this
-// store can say without asking anybody: the account whose stored login it is,
-// or whose stored login replaced it (Account.Superseded). Nil names nothing.
+// store can say without asking anybody (OwnerByEvidence). Nil names nothing.
 type LoginOwners func(loginIdentity string) (uuid string, ok bool)
 
 // ownedElsewhere reports whether o names the login as an account other than
@@ -248,28 +247,62 @@ func (o LoginOwners) ownedElsewhere(loginIdentity, uuid string) bool {
 	return ok && owner != uuid
 }
 
-// OwnersOf is LoginOwners over accounts, reading each stored login through
-// lookup. An account whose stored login cannot be read names only the logins
-// it replaced.
-func OwnersOf(accounts []Account, lookup func(uuid string) (cclink.Blob, error)) LoginOwners {
-	stored := map[string]string{}
+// Evidence is how the store names a login's owner by its own records.
+type Evidence uint8
+
+const (
+	// NoEvidence: nothing stored names the login.
+	NoEvidence Evidence = iota
+	// ByStoredLogin: it is a Claude account's stored login.
+	ByStoredLogin
+	// BySupersededLogin: an account's stored login replaced it
+	// (Account.Superseded) -- an older generation of that account's login.
+	BySupersededLogin
+)
+
+// OwnerByEvidence names the managed account a login belongs to by the store's
+// own evidence, asking nobody: the Claude account whose stored login it is,
+// read through lookup, or failing that the account whose stored login replaced
+// it. It is the one answer to that question -- the switcher's attribution of a
+// login store (switcher.LiveStateOf, and its view of both stores) and the
+// spent-login hold's (OwnersOf) both ask it -- so the two cannot name one
+// login two ways.
+//
+// ONLY CLAUDE ROWS are matched by their stored login. `ccdad import` trusts a
+// row's provider, and cclink.Extract carries a claudeAiOauth blob through
+// whatever the provider, so a row can be Provider: codex beside a
+// Claude-shaped login: shape alone does not prove ownership. daemon.pollable
+// guards the same reachable row the same way.
+func OwnerByEvidence(loginIdentity string, accounts []Account, lookup func(uuid string) (cclink.Blob, error)) (Account, Evidence) {
+	if loginIdentity == "" {
+		return Account{}, NoEvidence
+	}
 	for _, a := range accounts {
-		if b, err := lookup(a.UUID); err == nil {
-			if id := cclink.LoginIdentity(b); id != "" {
-				stored[id] = a.UUID
-			}
+		if a.Provider != provider.Claude {
+			continue
+		}
+		stored, err := lookup(a.UUID)
+		if err != nil {
+			continue
+		}
+		if cclink.LoginIdentity(stored) == loginIdentity {
+			return a, ByStoredLogin
 		}
 	}
+	for _, a := range accounts {
+		if a.Superseded(loginIdentity) {
+			return a, BySupersededLogin
+		}
+	}
+	return Account{}, NoEvidence
+}
+
+// OwnersOf is LoginOwners over accounts: OwnerByEvidence, reading each stored
+// login through lookup.
+func OwnersOf(accounts []Account, lookup func(uuid string) (cclink.Blob, error)) LoginOwners {
 	return func(id string) (string, bool) {
-		if uuid, ok := stored[id]; ok {
-			return uuid, true
-		}
-		for _, a := range accounts {
-			if a.Superseded(id) {
-				return a.UUID, true
-			}
-		}
-		return "", false
+		a, ev := OwnerByEvidence(id, accounts, lookup)
+		return a.UUID, ev != NoEvidence
 	}
 }
 

@@ -140,29 +140,18 @@ func AttributeFile(live cclink.Blob, accounts []store.Account, lookup Lookup) (s
 	return a, state == LiveManaged
 }
 
-// LiveStateOf is AttributeFile without the collapse.
+// LiveStateOf is AttributeFile without the collapse. Which account a login
+// is, is store.OwnerByEvidence's to say -- a Claude row's stored login, never
+// another provider's (it says why) -- and only its stored-login answer makes
+// the login managed here: a login an account's stored one replaced is a
+// generation ccdad has not taken in, which a LoginView names LiveResolved.
 func LiveStateOf(live cclink.Blob, accounts []store.Account, lookup Lookup) (store.Account, LiveState) {
 	liveID := CredentialIdentity(live)
 	if liveID == "" {
 		return store.Account{}, LiveNone
 	}
-	for _, a := range accounts {
-		// This is not a redundant check against CredentialIdentity's own
-		// claudeAiOauth read. `ccdad import` trusts row.Provider unconditionally
-		// and cclink.Extract copies a claudeAiOauth blob through regardless of
-		// provider, so a stored row can carry Provider: codex alongside a
-		// Claude-shaped blob -- shape alone does not prove ownership. See
-		// daemon.pollable for the same guard against the same reachable row.
-		if a.Provider != provider.Claude {
-			continue
-		}
-		stored, err := lookup(a.UUID)
-		if err != nil {
-			continue
-		}
-		if CredentialIdentity(stored) == liveID {
-			return a, LiveManaged
-		}
+	if a, ev := store.OwnerByEvidence(liveID, accounts, lookup); ev == store.ByStoredLogin {
+		return a, LiveManaged
 	}
 	return store.Account{}, LiveUnattributed
 }
