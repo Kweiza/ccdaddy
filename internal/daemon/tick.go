@@ -255,7 +255,7 @@ type Engine struct {
 	saidStore loginMemory[struct{}]
 	// spent is the accounts whose stored refresh token this pass found spent
 	// (setSpent, holdSpentToken). Guarded by mu.
-	spent map[string]bool
+	spent map[string]store.Hold
 	// unstored is the records of spent stored logins that could not be
 	// written yet, and saidUnstored latches the line that says so; see
 	// nameUnstored. Tick goroutine only.

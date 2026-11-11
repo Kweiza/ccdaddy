@@ -367,7 +367,7 @@ func (e *Engine) forgetOracleRecord(s *store.Store, st cclink.LoginStores) {
 // setSpent records which accounts' stored logins this pass found spent
 // (store.Store.SpentLogins), for holdSpentToken. Guarded by e.mu: the swap
 // path and the pollers read it.
-func (e *Engine) setSpent(spent map[string]bool) {
+func (e *Engine) setSpent(spent map[string]store.Hold) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.spent = spent
@@ -387,8 +387,8 @@ func (e *Engine) setSpent(spent map[string]bool) {
 func (e *Engine) holdSpentToken(uuid string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.spent[uuid] {
-		return store.ErrStoredLoginSpent
+	if hold := e.spent[uuid]; hold.Held() {
+		return &store.SpentError{UUID: uuid, Hold: hold}
 	}
 	return nil
 }

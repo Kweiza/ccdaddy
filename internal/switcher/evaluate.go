@@ -61,7 +61,7 @@ type Evaluation struct {
 	// Spent is every account whose stored refresh token is spent
 	// (store.Account.StoredLoginSpent), so it is not a target. When the stores
 	// could not be read, the daemon's record decides it alone.
-	Spent map[string]bool
+	Spent map[string]store.Hold
 	// NoReadings means nothing has ever been polled, so there is no evidence to
 	// choose on. Distinct from ActionBlocked, which is a choice that was made
 	// and came back empty — exit 4 is "wanted, but no viable target", and both
@@ -234,7 +234,7 @@ func Evaluate(s *store.Store, opts EvalOptions) (Evaluation, error) {
 	// holding it out would read as a reason to LEAVE it, and the hold is about
 	// what ccdad would install, not about the login in use.
 	for i := range cands {
-		if cands[i].UUID != liveUUID && ev.Spent[cands[i].UUID] {
+		if cands[i].UUID != liveUUID && ev.Spent[cands[i].UUID].Held() {
 			cands[i].Disabled = true
 		}
 	}

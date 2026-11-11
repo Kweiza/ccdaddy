@@ -1424,13 +1424,14 @@ func newRunCmd() *cobra.Command {
 			// and a spent one revokes the newer login it was spent for: the
 			// copy read here is the one decided on and the one seeded
 			// (store.Store.PresentableLogin).
-			stores, _ := cclink.ReadLoginStores() // the zero value when it failed: no evidence
+			stores, storesErr := cclink.ReadLoginStores() // the zero value when it failed: no evidence
 			blob, hold, err := s.PresentableLogin(target.UUID, stores, store.LoadOracleRecord())
 			if err != nil {
 				return err
 			}
 			if hold.Held() && seedsLogin(blob) {
-				return WithCode(fmt.Errorf("not running %s: %s", target.Label(), spentLoginReason(target)), ExitBlocked)
+				return WithCode(fmt.Errorf("not running %s: %s", target.Label(),
+					spentLoginReason(target, hold, loginView(s, stores, storesErr))), ExitBlocked)
 			}
 
 			path, err := lookClaude("claude")

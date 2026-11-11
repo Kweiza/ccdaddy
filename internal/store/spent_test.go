@@ -166,10 +166,10 @@ func TestAnUnreadableRecordHoldsEveryStoredLogin(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := s.SpentLogins(cclink.LoginStores{}, LoadOracleRecord())
-	if !got["u-1"] {
+	if got["u-1"] != HeldUnreadableRecord {
 		t.Error("u-1's stored login is presented although the record of spent logins cannot be read")
 	}
-	if got["u-2"] {
+	if got["u-2"].Held() {
 		t.Error("u-2, which stores no login to present, is held")
 	}
 	unreadable := record{err: errors.New("parsing strategy.json: unexpected end of JSON input")}
