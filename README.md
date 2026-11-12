@@ -451,10 +451,15 @@ Hover orders the Claude lane's accounts instead of comparing their room:
 1. The account the session is on is kept until it reaches a limit, whatever
    kind of subscription it is (a credit seat is the exception, below). A
    five-hour account is not left for another that has more room, and a
-   weekly-only account is not left for a five-hour account that has room
-   again or for another whose week resets sooner. Five-hour quota
-   that comes back while a weekly-only account carries the session is not
-   used, which on a fleet short of quota can stop the session sooner.
+   weekly-only account is not left for another whose week resets sooner, nor
+   for a five-hour account while the work runs. One exception: when another
+   weekly-only account is at its limit, so the week is short of quota, and no
+   Claude Code session has written to its transcript for ten minutes, the
+   session moves from the weekly-only account to a five-hour account. The move
+   happens while nothing runs, after the prompt cache has expired, and it
+   spends five-hour quota that would otherwise reset unused. In a week where
+   every weekly-only account has room, five-hour quota that comes back while a
+   weekly-only account carries the session is not used.
 2. When the session has to move, accounts with a five-hour window come first,
    the one whose week resets soonest among them. An account that reports a
    five-hour window but no usage figures yet, because nothing has been spent
@@ -521,11 +526,13 @@ the last reading before the work would stop it, so on a five-hour account
 these cases stop the session, most often for about half a minute. In the
 simulated week, today's fleet under steady heavy use, and under the
 production rate of 5.4 points a minute in short bursts with pauses between
-them, does not stop; under heavy use in three-minute bursts it stops for 89
-seconds. Under the production rate in two-hour sessions it stops for 3862
-seconds, 134 of them while another account had room: the five-hour quota
-that rolls while a weekly-only seat carries the session goes unspent, and the
-week runs short. Six more cases cost the session something:
+them, stops for 6 seconds; under heavy use in three-minute bursts it stops for
+89 seconds. Under the production rate in two-hour sessions it stops for 26
+seconds. Without the move to a five-hour account while the work rests, it
+stopped for 3862 seconds there: the five-hour quota that rolled while a
+weekly-only account carried the session went unused, and the week ran short.
+That move takes 20 switches a week there instead of 13, all seven extra ones
+made while the work rests. Six more cases cost the session something:
 
 - A rate stands until a newer running measurement replaces it, across window
   resets and daemon restarts alike. A five-hour rate measured in a burst can

@@ -215,6 +215,12 @@ type Candidate struct {
 // Options configures one ranking pass.
 type Options struct {
 	Now time.Time
+	// LastActivity reports when the work was last seen doing anything -- under
+	// Claude, the newest write to a session transcript -- and whether anything
+	// was found. Nil, or nothing found, is never rest. It is a function so
+	// the pass reads the disk only when hover's rest return could fire
+	// (restReturnArmed), which is rarely. Under hover only.
+	LastActivity func() (time.Time, bool)
 	// Threshold is the utilization percent above which an account is spent. It
 	// is the fallback for any window the table below does not name.
 	Threshold float64
