@@ -128,6 +128,12 @@ func (s Snapshot) HoverLines() []string {
 func (s Snapshot) placeOf(r strategy.Ranked, row Row) string {
 	switch rung := r.Rung(); rung {
 	case strategy.RungShortWindow, strategy.RungWeeklyOnly:
+		// Filed by its tier with nothing spent since its windows rolled: the
+		// reading names the five-hour window and no figure, so there is no
+		// week to name a reset for either.
+		if !r.Headroom.Known {
+			return rung.String() + " · no usage reported since its windows reset"
+		}
 		if !r.HasWeeklyReset {
 			return rung.String() + " · no weekly reset"
 		}

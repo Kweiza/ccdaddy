@@ -456,7 +456,9 @@ Hover orders the Claude lane's accounts instead of comparing their room:
    that comes back while a weekly-only account carries the session is not
    used, which on a fleet short of quota can stop the session sooner.
 2. When the session has to move, accounts with a five-hour window come first,
-   the one whose week resets soonest among them.
+   the one whose week resets soonest among them. An account that reports a
+   five-hour window but no usage figures yet, because nothing has been spent
+   on it since its windows reset, counts as one of them.
 3. Then weekly-only accounts, such as verified Ultra seats, which report no
    five-hour window, again the one whose week resets soonest.
 4. An account is handed off one point before any limit it cannot avoid by
@@ -593,7 +595,11 @@ orders them by which comes back first, and status says so.
 Hover sets the threshold, credit threshold, strategy, preemption lead (the
 three minutes above), probe setting, and cooldown (2m) itself, and does not
 read `recovery_hysteresis`, `hysteresis_pct` or `headroom_ratio`: every hover
-move is made on the order's own rules.
+move is made on the order's own rules. Hover drives the Claude lane only. The
+Codex lane keeps the `headroom` policy that `ccdad strategy hover` writes
+beside it, with `codex.threshold`, the configured `cooldown` and those three
+margins, so the `overriding` mark in `ccdad config list` speaks for the Claude
+lane.
 `ccdad config list` identifies overridden values; status shows the order hover
 is using, and says of an account that would not carry the work running now
 how soon it would run out. Hover does not

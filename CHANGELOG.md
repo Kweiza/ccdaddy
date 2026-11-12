@@ -16,6 +16,30 @@ must reference accounts by `uuid` or `alias`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A five-hour account with no usage figures is chosen before an Ultra
+  seat.** An account whose reading names a five-hour window but reports no
+  utilization, because nothing has been spent on it since its windows reset,
+  was filed as unreadable, behind every weekly-only account with room. At a
+  hand-off the session went to the Ultra seat and, kept there until its limit,
+  did not come back for the five-hour quota. Hover now files it with the
+  five-hour accounts, after the ones that report a weekly reset, and keeps it
+  like any five-hour account when the session is on it. `ccdad status` says
+  "no usage reported since its windows reset" beside it. An account that has
+  never been read at all is still filed as unreadable: nothing says which kind
+  of subscription it is.
+
+### Changed
+
+- The reason given for a move from an unreadable account, an account left at a
+  limit earlier, or a credit seat onto a five-hour account is now "a
+  short-window account with room is first in the order" instead of "a
+  short-window account has room again".
+- The README says that hover drives the Claude lane only: the Codex lane keeps
+  the `headroom` policy, `cooldown` and the three margins that
+  `ccdad config list` marks as overridden by hover.
+
 ## [0.30.0] — 2026-11-12
 
 ### Changed

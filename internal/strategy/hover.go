@@ -17,7 +17,9 @@ import (
 //     owner's rule of 2026-11-12). A credit seat alone goes back to free quota
 //     with room left (creditSeatReturn).
 //  2. When the session has to move, accounts with a five-hour window come
-//     first, the one whose week resets soonest among them.
+//     first, the one whose week resets soonest among them -- an account whose
+//     reading names a five-hour window but no figure yet among them, after the
+//     ones with a weekly reset to compare.
 //  3. Weekly-only accounts come next -- a verified Ultra seat reads five_hour
 //     null -- the one whose week resets soonest among them.
 //  4. Every hand-off happens BEFORE a limit: one point before any window a
