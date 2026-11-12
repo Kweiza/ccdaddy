@@ -353,8 +353,8 @@ func TestDecideReportsThePlanHoverRanOn(t *testing.T) {
 }
 
 // Hover imposes the cooldown and nothing else. hysteresis_pct, headroom_ratio
-// and recovery_hysteresis are the user's -- the last is the margin between two
-// weekly-only seats -- and the spending ceiling is never a mode's to set.
+// and recovery_hysteresis pass through untouched -- no hover move reads them --
+// and the spending ceiling is never a mode's to set.
 func TestHoverConfigReplacesTheCooldownAndNothingElse(t *testing.T) {
 	tuned := Config{
 		HysteresisPct:      40,
