@@ -23,12 +23,28 @@ must reference accounts by `uuid` or `alias`.
   five-hour account has room again, or when another weekly-only account's
   week resets sooner. The order still decides where the session goes when it
   has to move: five-hour accounts first, then the weekly-only account whose
-  week resets soonest. On the simulated week of a four-account fleet the
-  session moves 3 to 7 times instead of 54 to 56. The cost is the five-hour
-  quota that comes back while an Ultra seat carries the session, which is not
-  used: about a third of a Max account's week, and on a fleet short of quota
-  the session stops sooner. `recovery_hysteresis` is no longer read under
-  hover, and `ccdad config list` marks it overridden.
+  week resets soonest. A session you put on an Ultra seat yourself, with
+  `ccdad switch` or `/login`, also stays there until its limit.
+
+  On the simulated week of a four-account fleet (one Max, three Ultra seats)
+  the session moves 3 to 7 times instead of 54 to 56. The cost is the
+  five-hour quota that comes back while an Ultra seat carries the session,
+  which is not used: about a third of the Max account's week. Under the
+  production rate in two-hour sessions that fleet now runs short, and the
+  session stops for about an hour a week (3862 seconds, from 46).
+
+  The reasons `ccdad auto --json` and the daemon log give change with it:
+  "another weekly-only account's week resets sooner" is gone, and "staying on
+  the short-window account until it reaches a limit" now reads "staying on
+  the live account until it reaches a limit". `recovery_hysteresis` is no
+  longer read under hover, and `ccdad config list` marks it overridden.
+
+### Fixed
+
+- **A hover hand-off no longer passes over a five-hour account for an Ultra
+  seat because the five-hour account's usage poll was throttled in the last
+  hour.** The preference for an account whose readings can be refreshed now
+  applies only among accounts of the same kind.
 
 ## [0.29.2] — 2026-11-11
 

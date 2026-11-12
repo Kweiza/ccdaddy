@@ -449,7 +449,7 @@ compatibility `hover` and `manual` flags. The dashboard's `c` key uses it too.
 Hover orders the Claude lane's accounts instead of comparing their room:
 
 1. The account the session is on is kept until it reaches a limit, whatever
-   kind it is. A five-hour account is not left for another that has more
+   kind of subscription it is (a credit seat is the exception, below). A five-hour account is not left for another that has more
    room, and a weekly-only account is not left for a five-hour account that
    has room again or for another whose week resets sooner. Five-hour quota
    that comes back while a weekly-only account carries the session is not
@@ -574,7 +574,7 @@ In a simulated week, with whole-percent readings and the daemon's warm-ups, a
 session stopped while another account had room in fourteen of 28
 fleet-and-load variants, for between 6 and 3501 seconds, and in none of the
 rest, every light and idle load among them. On the fleets that do not run dry
-those are mostly the five-hour hand-offs above, up to 37 seconds a stop; on
+those are mostly the five-hour hand-offs above, about half a minute a stop; on
 the two that do, they also hold the wait for a last point to read empty. Those
 figures belong to the simulated fleets and loads; they are not a bound on what
 a real week can cost. The remedy not taken is a reserve on the live account's

@@ -583,6 +583,24 @@ func TestALiveUltraWithRoomIsNotLeftForASoonerWeek(t *testing.T) {
 	}
 }
 
+// Nor is a seat with room left for a five-hour account that has room and can
+// carry the work: the five-hour preference waits for the next move.
+func TestALiveUltraWithRoomIsNotLeftForAFiveHourAccount(t *testing.T) {
+	pool := []Candidate{
+		idleOn(maxAcct("a-max", 10, 3*time.Hour, 40, 3*day)),
+		measuredLive(weekOnly("u-live", 30, 2*day), 0.05, usage.WindowSevenDay),
+	}
+	p := Decide(pool, hoverOpts(), Config{}, NewState(), "u-live")
+	if r, _ := find(p.Result, "a-max"); !r.Carries || p.Result.Order[0].UUID != "a-max" {
+		t.Fatalf("a-max first %v and carries %v: the fixture needs a five-hour carrier ranked first",
+			p.Result.Order[0].UUID == "a-max", r.Carries)
+	}
+	want(t, p, ActionStay, ReasonStayUntilLimit, "")
+	if p.Held.UUID != "a-max" {
+		t.Errorf("Held = %q, want the five-hour account named as the move held", p.Held.UUID)
+	}
+}
+
 // When the seat reaches its limit, the soonest week among the other seats is
 // where the session goes: that is the quota about to be lost.
 func TestAmongUltrasTheSoonestWeeklyResetIsEnteredAtALimit(t *testing.T) {
@@ -595,9 +613,9 @@ func TestAmongUltrasTheSoonestWeeklyResetIsEnteredAtALimit(t *testing.T) {
 	want(t, p, ActionSwitch, ReasonLastPoint, "u3-sooner")
 }
 
-// Two seats whose weeks end seconds apart never trade the session while the
-// live one has room, from either side.
-func TestTwoUltrasSecondsApartDoNotPingPong(t *testing.T) {
+// Two seats with room never trade the session, from either side -- not even
+// seconds apart, where a margin on the reset would have been the only guard.
+func TestTwoUltrasWithRoomDoNotTradeTheSession(t *testing.T) {
 	pool := []Candidate{
 		weekOnly("u1", 40, 5*day+17*time.Hour),
 		weekOnly("u2", 40, 5*day+17*time.Hour-10*time.Second),
