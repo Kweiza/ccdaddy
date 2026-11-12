@@ -1,7 +1,7 @@
 package store
 
 import (
-	"os"
+	"github.com/Kweiza/ccdaddy/internal/atomicfile"
 	"path/filepath"
 	"sort"
 	"time"
@@ -14,7 +14,7 @@ import (
 // applyAutoSort shares the same ordering between listing and resolving an
 // account reference. It reads only this store's cache and never polls.
 func (s *Store) applyAutoSort(now time.Time) {
-	raw, err := os.ReadFile(filepath.Join(s.root, config.FileName))
+	raw, err := atomicfile.ReadFile(filepath.Join(s.root, config.FileName))
 	if err != nil {
 		return
 	}

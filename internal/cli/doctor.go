@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Kweiza/ccdaddy/internal/atomicfile"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -738,7 +739,7 @@ func checkConfig(usable bool, settings config.Config, settingsErr error) check {
 			"%v — every value in it is being ignored and the engine is running on its defaults", settingsErr)}
 	}
 	detail := path
-	if raw, rerr := os.ReadFile(path); rerr == nil {
+	if raw, rerr := atomicfile.ReadFile(path); rerr == nil {
 		if unknown, uerr := config.UnknownKeys(raw); uerr == nil && len(unknown) > 0 {
 			return check{"config", levelWarn, fmt.Sprintf(
 				"%s carries keys this ccdad does not know, which are preserved but ignored: %v", path, unknown)}
@@ -1976,7 +1977,7 @@ func codexAccountsAt(root string) ([]store.Account, error) {
 // codexBlobAt reads one account's stored credential blob directly, for the same
 // reason codexAccountsAt exists: opening the store would create it.
 func codexBlobAt(root, uuid string) (cclink.Blob, bool) {
-	raw, err := os.ReadFile(filepath.Join(store.CredentialsDirAt(root), uuid+".json"))
+	raw, err := atomicfile.ReadFile(filepath.Join(store.CredentialsDirAt(root), uuid+".json"))
 	if err != nil {
 		return nil, false
 	}

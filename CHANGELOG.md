@@ -18,8 +18,9 @@ must reference accounts by `uuid` or `alias`.
 
 ### Fixed
 
-- On Windows, reading ccdad's own files (accounts, credentials, usage cache,
-  switch state, spent-login record, Codex serving pointer) at the instant
+- On Windows, reading ccdad's own files (accounts, credentials, config, usage
+  cache, history, daemon status, switch state, spent-login record, Codex
+  serving pointer) at the instant
   another ccdad process replaced one could fail with a sharing violation. The
   read is now retried with the same short backoff the replace already used.
 

@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github.com/Kweiza/ccdaddy/internal/atomicfile"
 	"maps"
 	"math"
 	"os"
@@ -590,7 +591,7 @@ func readConfig() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	raw, err := os.ReadFile(filepath.Join(root, FileName))
+	raw, err := atomicfile.ReadFile(filepath.Join(root, FileName))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, err

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Kweiza/ccdaddy/internal/atomicfile"
 	"os"
 	"path/filepath"
 	"time"
@@ -402,7 +403,7 @@ func ReadStatus() (Status, bool, error) {
 	if err != nil {
 		return Status{}, false, err
 	}
-	body, err := os.ReadFile(filepath.Join(root, StatusFileName))
+	body, err := atomicfile.ReadFile(filepath.Join(root, StatusFileName))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return Status{}, false, nil
