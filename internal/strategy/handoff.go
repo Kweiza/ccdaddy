@@ -578,8 +578,8 @@ func (r Ranked) roomyByLevel() bool {
 }
 
 // hoverMove is every move hover makes, and the hold when it makes none: the
-// pre-emptive move, the ordinary move (a return to a five-hour account, a sooner
-// week), the last-point hand-off and the empty live account all go through it,
+// pre-emptive move, the ordinary move (off an account nobody could read, or a
+// credit seat), the last-point hand-off and the empty live account all go through it,
 // in ModeRecovery as in ModeHover -- that mode only changes the order it walks.
 //
 // It picks the TARGET first and applies the cooldown second. "At a limit with
@@ -819,7 +819,7 @@ func (p *Plan) hoverMoveWithRoom(live Ranked, activeUUID string, cfg Config, st 
 		if isActive(target.UUID, activeUUID) {
 			break
 		}
-		reason, refused, retry := hoverGate(live, target, cfg)
+		reason, refused, retry := hoverGate(live, target)
 		if refused && reason == ReasonAlreadyBest {
 			// Not ahead of the live account by the order's own rules.
 			continue
@@ -863,7 +863,7 @@ func (p *Plan) creditSeatReturn(live Ranked, activeUUID string, cfg Config, st *
 	back := func(target Ranked) {
 		// The order's own reason when the order would make this move, so the
 		// sentence says which rule it is; else why the seat is left.
-		reason, refused, _ := hoverGate(live, target, cfg)
+		reason, refused, _ := hoverGate(live, target)
 		if refused {
 			reason = leaveReason(live, target)
 		}

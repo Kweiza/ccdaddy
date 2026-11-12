@@ -823,35 +823,32 @@ func gate(res Result, target Ranked, activeUUID string, cfg Config, st *State, n
 		return headroomGate(active, target, cfg)
 
 	case ModeConsumeFirst:
-		return weeklyResetGate(active, target, cfg, ReasonBetterTarget)
+		return weeklyResetGate(active, target, cfg)
 
 	case ModeHover:
-		return hoverGate(active, target, cfg)
+		return hoverGate(active, target)
 
 	default:
 		return headroomGate(active, target, cfg)
 	}
 }
 
-// weeklyResetGate is the margin on the soonest-weekly-reset axis, which both
-// consume-first and hover's weekly-only rung order on. allow is the reason a
-// move that clears it reports, so each mode says its own sentence over one
-// margin.
+// weeklyResetGate is consume-first's margin on the soonest-weekly-reset axis.
 //
-// No number is fixed for it -- neither mode has a margin of its own -- and
-// RecoveryHysteresis is borrowed rather than a second knob invented: it is the
-// same question, "is this timestamp meaningfully sooner", on a quantity that
-// moves even more slowly. Reset instants do not move between rollovers, so the
-// comparison is static and two seats whose weeks end seconds apart are refused
-// from either side: TestTwoUltrasSecondsApartDoNotPingPong.
-func weeklyResetGate(active, target Ranked, cfg Config, allow Reason) (Reason, bool, time.Time) {
+// No number is fixed for it and RecoveryHysteresis is borrowed rather than a
+// second knob invented: it is the same question, "is this timestamp
+// meaningfully sooner", on a quantity that moves even more slowly. Reset
+// instants do not move between rollovers, so the comparison is static and two
+// accounts whose weeks end minutes apart are refused from either side:
+// TestConsumeFirstHoldsAMarginOnTheWeeklyResetAxis.
+func weeklyResetGate(active, target Ranked, cfg Config) (Reason, bool, time.Time) {
 	if target.HasWeeklyReset != active.HasWeeklyReset {
-		return allow, false, time.Time{}
+		return ReasonBetterTarget, false, time.Time{}
 	}
 	if target.HasWeeklyReset && target.WeeklyResetsAt.After(active.WeeklyResetsAt.Add(-cfg.RecoveryHysteresis)) {
 		return ReasonWeeklyResetMargin, true, time.Time{}
 	}
-	return allow, false, time.Time{}
+	return ReasonBetterTarget, false, time.Time{}
 }
 
 // hoverGate is hover's order turned into a decision between a live account with
@@ -880,7 +877,7 @@ func weeklyResetGate(active, target Ranked, cfg Config, allow Reason) (Reason, b
 // the empty rung sorts last, and it is never a carrier. That is the
 // eighteen-switch incident's guard,
 // TestAFleetWithNothingLeftStaysPutInsteadOfSwappingEmptyForEmpty.
-func hoverGate(active, target Ranked, cfg Config) (Reason, bool, time.Time) {
+func hoverGate(active, target Ranked) (Reason, bool, time.Time) {
 	ra := active.Rung()
 	switch {
 	case ra == RungShortWindow || ra == RungWeeklyOnly:

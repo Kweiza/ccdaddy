@@ -487,9 +487,10 @@ Hover orders the Claude lane's accounts instead of comparing their room:
 
 An account left at a limit is held out until the window that stopped it rolls
 over, so the session is not taken straight back to it; it is still used when
-nothing else has room. Weekly-only quota is spent only while every five-hour
-account is at a limit, so on a fleet with several such seats most of their
-weekly quota can expire unspent.
+nothing else has room. A weekly-only seat, once the session is on it, is
+spent to its limit, so the five-hour windows that roll meanwhile go unspent;
+with several such seats, the ones the session never reaches can still expire
+unspent.
 
 Hover cannot see the work between two readings, and a session can still stop
 at a limit while another account has room. Hover projects the live account at
@@ -516,14 +517,13 @@ session stops until that reading lands. On a week a three-minute reserve
 absorbs most of that; a five-hour window has none, since it is handed off at
 the last reading before the work would stop it, so on a five-hour account
 these cases stop the session, most often for about half a minute. In the
-simulated week, today's fleet under the production rate of 5.4 points a
-minute leaves 0.5 five-hour points at a hand-off on average and stops five
-times a week, 46 seconds in all, none longer than ten; under steady heavy
-use it stops six times, 174 seconds; under heavy use in three-minute bursts
-five times, 145 seconds; and under the production rate in short bursts with
-pauses between them four times, 107 seconds, the longest 37. With the reserve
-on five-hour windows too it left 27 points a hand-off and stopped only under
-burst load, once, for 29 seconds. Six more cases cost the session something:
+simulated week, today's fleet under steady heavy use, and under the
+production rate of 5.4 points a minute in short bursts with pauses between
+them, does not stop; under heavy use in three-minute bursts it stops for 89
+seconds. Under the production rate in two-hour sessions it stops for 3862
+seconds, 134 of them while another account had room: the five-hour quota
+that rolls while a weekly-only seat carries the session goes unspent, and the
+week runs short. Six more cases cost the session something:
 
 - A rate stands until a newer running measurement replaces it, across window
   resets and daemon restarts alike. A five-hour rate measured in a burst can
@@ -571,8 +571,8 @@ burst load, once, for 29 seconds. Six more cases cost the session something:
   after a 429.
 
 In a simulated week, with whole-percent readings and the daemon's warm-ups, a
-session stopped while another account had room in eighteen of 28
-fleet-and-load variants, for between 36 and 3501 seconds, and in none of the
+session stopped while another account had room in fourteen of 28
+fleet-and-load variants, for between 6 and 3501 seconds, and in none of the
 rest, every light and idle load among them. On the fleets that do not run dry
 those are mostly the five-hour hand-offs above, up to 37 seconds a stop; on
 the two that do, they also hold the wait for a last point to read empty. Those
