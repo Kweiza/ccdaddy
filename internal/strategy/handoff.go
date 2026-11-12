@@ -1014,15 +1014,19 @@ func (r Ranked) lastResortOpen() bool {
 }
 
 // firstCarrier is the first account in the order, the live one excluded, that
-// can carry the work -- one whose poller is not throttled if there is one ON THE
-// SAME RUNG: a throttled reading cannot be refreshed after the move, and that
-// is a preference rather than a filter (TestPreemptionPrefersACandidateItCanStillSee).
+// can carry the work -- preferring, among five-hour accounts, one whose poller
+// is not throttled: a throttled reading cannot be refreshed after the move, and
+// that is a preference rather than a filter
+// (TestPreemptionPrefersACandidateItCanStillSee).
 //
-// The preference stops at the rung. A throttled five-hour account is still a
-// five-hour account, and the session is not returned to one from a seat with
-// room (hoverGate): passing it over for an Ultra because its poll drew a 429
-// in the last hour would keep the session on that Ultra for the rest of its
-// week. TestAThrottledFiveHourCarrierStillOutranksAnUltra.
+// The preference is kept to the five-hour rung because hover leaves an account
+// with room only at a limit (hoverGate), so whatever this picks keeps the
+// session until its limit. A five-hour account passed over is taken at the next
+// hand-off, hours away; an Ultra passed over for one whose week ends later, or
+// a five-hour account passed over for an Ultra, would not be until the seat
+// the session went to runs out, and the week passed over can expire meanwhile.
+// TestAThrottledFiveHourCarrierStillOutranksAnUltra,
+// TestAThrottledUltraWhoseWeekEndsFirstIsStillEnteredFirst.
 func firstCarrier(res Result, activeUUID string, byUUID map[string]Candidate, now time.Time) (Ranked, bool) {
 	var throttled Ranked
 	hasThrottled := false
@@ -1030,10 +1034,10 @@ func firstCarrier(res Result, activeUUID string, byUUID map[string]Candidate, no
 		if isActive(r.UUID, activeUUID) || !r.Carries {
 			continue
 		}
-		if hasThrottled && r.Rung() != throttled.Rung() {
+		if hasThrottled && r.Rung() != RungShortWindow {
 			break
 		}
-		if recentlyRateLimited(byUUID[r.UUID], now) {
+		if r.Rung() == RungShortWindow && recentlyRateLimited(byUUID[r.UUID], now) {
 			if !hasThrottled {
 				throttled, hasThrottled = r, true
 			}
