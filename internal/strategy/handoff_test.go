@@ -1362,3 +1362,23 @@ func TestNonHoverPreemptionKeepsThePoolMaximum(t *testing.T) {
 		t.Errorf("switched to %s (%s): the pool maximum refuses b, and the margin holds", p.Target.UUID, p.Reason)
 	}
 }
+
+// A five-hour account whose poll drew a 429 in the last hour is still where a
+// hand-off goes ahead of an Ultra. The throttle preference picks among accounts
+// of one rung; across rungs it would put the session on the Ultra, and since a
+// seat with room is left only at a limit, keep it there for the rest of its
+// week. Another five-hour account that is not throttled is still preferred.
+func TestAThrottledFiveHourCarrierStillOutranksAnUltra(t *testing.T) {
+	throttled := maxAcct("b-max", 10, 3*time.Hour, 40, 3*day)
+	throttled.LastRateLimited = now.Add(-10 * time.Minute)
+	pool := []Candidate{
+		maxAcct("a-live", 99, 3*time.Hour, 50, 4*day),
+		throttled,
+		weekOnly("u-ultra", 20, 5*day),
+	}
+	want(t, Decide(pool, hoverOpts(), Config{}, NewState(), "a-live"), ActionSwitch, ReasonLastPoint, "b-max")
+
+	clear := maxAcct("c-max", 10, 3*time.Hour, 40, 4*day)
+	pool = append(pool, clear)
+	want(t, Decide(pool, hoverOpts(), Config{}, NewState(), "a-live"), ActionSwitch, ReasonLastPoint, "c-max")
+}

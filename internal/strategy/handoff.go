@@ -1018,15 +1018,24 @@ func (r Ranked) lastResortOpen() bool {
 }
 
 // firstCarrier is the first account in the order, the live one excluded, that
-// can carry the work -- one whose poller is not throttled if there is one: a
-// throttled reading cannot be refreshed after the move, and that is a
-// preference rather than a filter (TestPreemptionPrefersACandidateItCanStillSee).
+// can carry the work -- one whose poller is not throttled if there is one ON THE
+// SAME RUNG: a throttled reading cannot be refreshed after the move, and that
+// is a preference rather than a filter (TestPreemptionPrefersACandidateItCanStillSee).
+//
+// The preference stops at the rung. A throttled five-hour account is still a
+// five-hour account, and the session is not returned to one from a seat with
+// room (hoverGate): passing it over for an Ultra because its poll drew a 429
+// in the last hour would keep the session on that Ultra for the rest of its
+// week. TestAThrottledFiveHourCarrierStillOutranksAnUltra.
 func firstCarrier(res Result, activeUUID string, byUUID map[string]Candidate, now time.Time) (Ranked, bool) {
 	var throttled Ranked
 	hasThrottled := false
 	for _, r := range res.Order {
 		if isActive(r.UUID, activeUUID) || !r.Carries {
 			continue
+		}
+		if hasThrottled && r.Rung() != throttled.Rung() {
+			break
 		}
 		if recentlyRateLimited(byUUID[r.UUID], now) {
 			if !hasThrottled {
