@@ -16,6 +16,20 @@ must reference accounts by `uuid` or `alias`.
 
 ## [Unreleased]
 
+### Changed
+
+- **Hover keeps the account it is on until that account reaches a limit.**
+  A weekly-only account, such as an Ultra seat, is no longer left when a
+  five-hour account has room again, or when another weekly-only account's
+  week resets sooner. The order still decides where the session goes when it
+  has to move: five-hour accounts first, then the weekly-only account whose
+  week resets soonest. On the simulated week of a four-account fleet the
+  session moves 3 to 7 times instead of 54 to 56. The cost is the five-hour
+  quota that comes back while an Ultra seat carries the session, which is not
+  used: about a third of a Max account's week, and on a fleet short of quota
+  the session stops sooner. `recovery_hysteresis` is no longer read under
+  hover, and `ccdad config list` marks it overridden.
+
 ## [0.29.2] — 2026-11-11
 
 ### Changed

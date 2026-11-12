@@ -448,14 +448,16 @@ compatibility `hover` and `manual` flags. The dashboard's `c` key uses it too.
 
 Hover orders the Claude lane's accounts instead of comparing their room:
 
-1. Accounts with a five-hour window come first. The one whose week resets
-   soonest is used, and it is kept until it reaches a limit; it is never left
-   for another five-hour account that merely has more room.
-2. Then weekly-only accounts, such as verified Ultra seats, which report no
-   five-hour window. The session always goes to the one whose week resets
-   soonest, once that week ends at least `recovery_hysteresis` (default 5m)
-   sooner than the current one's.
-3. The session returns to a five-hour account as soon as it has room again.
+1. The account the session is on is kept until it reaches a limit, whatever
+   kind it is. A five-hour account is not left for another that has more
+   room, and a weekly-only account is not left for a five-hour account that
+   has room again or for another whose week resets sooner. Five-hour quota
+   that comes back while a weekly-only account carries the session is not
+   used, which on a fleet short of quota can stop the session sooner.
+2. When the session has to move, accounts with a five-hour window come first,
+   the one whose week resets soonest among them.
+3. Then weekly-only accounts, such as verified Ultra seats, which report no
+   five-hour window, again the one whose week resets soonest.
 4. An account is handed off one point before any limit it cannot avoid by
    changing model (a primary credit seat at 95% of its balance), or earlier
    when the work running now would run it out: on a five-hour window, before
@@ -589,9 +591,9 @@ rollover that comes before it. When every account is past its last point, it
 orders them by which comes back first, and status says so.
 
 Hover sets the threshold, credit threshold, strategy, preemption lead (the
-three minutes above), probe setting, and cooldown (2m) itself. It uses your
-`recovery_hysteresis`, and does not read `hysteresis_pct` or `headroom_ratio`:
-every hover move is made on the order's own rules.
+three minutes above), probe setting, and cooldown (2m) itself, and does not
+read `recovery_hysteresis`, `hysteresis_pct` or `headroom_ratio`: every hover
+move is made on the order's own rules.
 `ccdad config list` identifies overridden values; status shows the order hover
 is using, and says of an account that would not carry the work running now
 how soon it would run out. Hover does not

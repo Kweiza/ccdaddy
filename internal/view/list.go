@@ -718,9 +718,9 @@ func ListRows(secs []Section) []ListRow {
 
 // HoverNote is the sentence a hover table prints under itself: the rule that
 // moves the session, which no cell shows. The order lines follow it.
-const HoverNote = "hover:    five-hour accounts first, then the soonest weekly reset; an account is handed off " +
-	"one point before any window's limit, or earlier when the work running now would run it out " +
-	"within minutes of its next reading"
+const HoverNote = "hover:    the live account is kept until it is handed off one point before any window's limit, " +
+	"or earlier when the work running now would run it out within minutes of its next reading; " +
+	"then five-hour accounts first, then the soonest weekly reset"
 
 // TrailerLines is everything printed UNDER an account table that is not a
 // legend, in order: the hover block, the unranked note, and one credit line per

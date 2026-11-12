@@ -104,8 +104,8 @@ const (
 	ModeRecovery
 	// ModeConsumeFirst: the user asked for perishable quota to be spent first.
 	ModeConsumeFirst
-	// ModeHover: hover's order -- five-hour accounts first, then the soonest
-	// weekly reset; see tier.go. Appended LAST, for the reason Reason's late
+	// ModeHover: hover's order -- the live account kept until a limit, then
+	// five-hour accounts first, then the soonest weekly reset; see tier.go. Appended LAST, for the reason Reason's late
 	// values are: the numbers are named in a report, and renumbering them is a
 	// diff nobody can review.
 	ModeHover
