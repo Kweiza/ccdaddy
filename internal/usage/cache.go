@@ -366,7 +366,7 @@ func LoadCache() (*Cache, error) {
 func LoadCacheAt(root string) (*Cache, error) {
 	c := &Cache{data: cacheFile{Version: 1, Accounts: map[string]Entry{}}}
 
-	raw, err := os.ReadFile(filepath.Join(root, CacheFileName))
+	raw, err := atomicfile.ReadFile(filepath.Join(root, CacheFileName))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return c, nil

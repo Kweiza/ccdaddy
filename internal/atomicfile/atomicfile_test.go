@@ -409,3 +409,36 @@ func TestTempPatternCannotMatchTheFileItProtects(t *testing.T) {
 		})
 	}
 }
+
+// A read that meets a transient failure -- on Windows, opening the file while
+// another process renames over it -- is retried, and a missing file is not.
+func TestReadFileRetriesRetryableFailures(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "accounts.toml")
+	if err := os.WriteFile(path, []byte("v = 1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	origRead, origRetryable := readFile, retryable
+	t.Cleanup(func() { readFile, retryable = origRead, origRetryable })
+
+	wantErr := errors.New("simulated sharing violation")
+	calls := 0
+	readFile = func(name string) ([]byte, error) {
+		calls++
+		if calls < 3 {
+			return nil, wantErr
+		}
+		return origRead(name)
+	}
+	retryable = func(err error) bool { return errors.Is(err, wantErr) }
+
+	got, err := ReadFile(path)
+	if err != nil || string(got) != "v = 1" || calls != 3 {
+		t.Fatalf("ReadFile = %q, %v after %d calls; want the contents on the third", got, err, calls)
+	}
+
+	calls = 0
+	readFile = func(name string) ([]byte, error) { calls++; return origRead(name) }
+	if _, err := ReadFile(filepath.Join(t.TempDir(), "absent")); !errors.Is(err, os.ErrNotExist) || calls != 1 {
+		t.Fatalf("missing file: err %v after %d calls, want ErrNotExist on the first", err, calls)
+	}
+}
