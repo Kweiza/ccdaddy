@@ -777,3 +777,17 @@ func TestARestReturnWaitsForTheRest(t *testing.T) {
 	pool := append(shortWeek(), maxAcct("b-max", 10, 3*time.Hour, 50, 1*day))
 	want(t, Decide(pool, o, Config{}, NewState(), "a-max"), ActionStay, ReasonStayUntilLimit, "")
 }
+
+// A five-hour account at its limit is not a short week: its window comes back
+// in hours, and every Max that fills one would otherwise arm the return off a
+// seat with a week of room behind it.
+func TestAFiveHourAccountAtItsLimitDoesNotArmTheRestReturn(t *testing.T) {
+	o := hoverOpts()
+	o.LastActivity = restedFor(time.Hour)
+	pool := []Candidate{
+		idleOn(maxAcct("a-max", 10, 3*time.Hour, 50, 4*day)),
+		measuredLive(weekOnly("u-live", 40, 2*day), 0.05, usage.WindowSevenDay),
+		maxAcct("b-full", 99, 2*time.Hour, 50, 3*day),
+	}
+	want(t, Decide(pool, o, Config{}, NewState(), "u-live"), ActionStay, ReasonStayUntilLimit, "")
+}
