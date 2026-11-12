@@ -220,7 +220,9 @@ const (
 	// ReasonProjectedExhaustion was.
 	ReasonLastPoint
 	// ReasonShortWindowRoom: under hover, the session leaves a live account
-	// nobody could read, or a credit seat, for a five-hour account with room.
+	// that is not one the order keeps -- one nobody could read whose tier is
+	// not known either, one the engine left at a limit before, or a credit
+	// seat -- for a five-hour account with room.
 	ReasonShortWindowRoom
 	// ReasonStayUntilLimit: under hover, another account ranks first but the
 	// live one has room, and an account with room is left only at a limit.
@@ -278,7 +280,7 @@ func (r Reason) String() string {
 	case ReasonLastPoint:
 		return "the live account is down to its last point before a limit"
 	case ReasonShortWindowRoom:
-		return "a short-window account has room again"
+		return "a short-window account with room is first in the order"
 	case ReasonStayUntilLimit:
 		return "staying on the live account until it reaches a limit"
 	case ReasonCannotCarry:

@@ -22,7 +22,8 @@ func hoverRow(uuid, email string, active bool) Row {
 
 // The order is hover's whole decision and no cell shows it, so every account
 // gets a line saying where the order put it and the one fact that put it there
-// -- including the account the session is on, and one nobody could read.
+// -- including the account the session is on, one nobody could read, and a
+// five-hour account with no figure yet.
 func TestHoverLinesSayWhereTheOrderPutEachAccountAndWhy(t *testing.T) {
 	room := strategy.Headroom{Known: true, MinPct: 50, MinAnyModelPct: 50, MinAnyModelWindow: usage.WindowSevenDay}
 	s := Snapshot{
@@ -30,6 +31,7 @@ func TestHoverLinesSayWhereTheOrderPutEachAccountAndWhy(t *testing.T) {
 		Hover: true,
 		Rows: []Row{
 			hoverRow("u-a", "a@example.com", true),
+			hoverRow("u-f", "f@example.com", false),
 			hoverRow("u-b", "b@example.com", false),
 			hoverRow("u-h", "h@example.com", false),
 			hoverRow("u-l", "l@example.com", false),
@@ -38,6 +40,7 @@ func TestHoverLinesSayWhereTheOrderPutEachAccountAndWhy(t *testing.T) {
 		HoverOrder: []strategy.Ranked{
 			{UUID: "u-a", Headroom: room, ShortWindow: usage.WindowFiveHour,
 				WeeklyResetsAt: colNow.Add(40 * time.Hour), HasWeeklyReset: true},
+			{UUID: "u-f", ShortWindow: usage.WindowFiveHour},
 			{UUID: "u-b", Headroom: room},
 			{UUID: "u-h", Headroom: room, ShortWindow: usage.WindowFiveHour, HeldOut: usage.WindowFiveHour},
 			{UUID: "u-x"},
@@ -48,11 +51,12 @@ func TestHoverLinesSayWhereTheOrderPutEachAccountAndWhy(t *testing.T) {
 	want := []string{
 		HoverNote,
 		"hover:    1. a@example.com  short-window · week resets Sun 04:00 · live",
-		"hover:    2. b@example.com  weekly-only · no weekly reset",
-		"hover:    3. h@example.com  held out until five_hour rolls over at Fri 14:00",
-		"hover:    4. u-x  unreadable",
-		"hover:    5. l@example.com  at its limit on five_hour",
-		"hover:    6. e@example.com  nothing left on five_hour",
+		"hover:    2. f@example.com  short-window · no usage reported since its windows reset",
+		"hover:    3. b@example.com  weekly-only · no weekly reset",
+		"hover:    4. h@example.com  held out until five_hour rolls over at Fri 14:00",
+		"hover:    5. u-x  unreadable",
+		"hover:    6. l@example.com  at its limit on five_hour",
+		"hover:    7. e@example.com  nothing left on five_hour",
 	}
 	if got := s.HoverLines(); !eq(got, want) {
 		t.Errorf("HoverLines =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
