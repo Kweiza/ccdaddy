@@ -243,6 +243,12 @@ const (
 	// the move needs. Plan.RetryAt carries that reading, or a rollover that
 	// comes before it. Appended last.
 	ReasonWaitsForAReading
+	// ReasonRestReturn: under hover, the session leaves a weekly-only seat
+	// with room for a five-hour account while the work rests and another
+	// weekly-only seat is at its limit -- a week the fleet is short of quota,
+	// when five-hour quota left to roll unspent is what stops the session
+	// later. Appended last.
+	ReasonRestReturn
 )
 
 func (r Reason) String() string {
@@ -287,6 +293,8 @@ func (r Reason) String() string {
 		return "the account the order prefers cannot carry the work running now"
 	case ReasonWaitsForAReading:
 		return "the move waits for a reading that shows the live account at its limit"
+	case ReasonRestReturn:
+		return "the work is resting and a weekly-only account is at its limit, so the session returns to a short-window account"
 	}
 	return "unknown"
 }
@@ -876,14 +884,23 @@ func weeklyResetGate(active, target Ranked, cfg Config) (Reason, bool, time.Time
 //     carries the session is not spent.
 //   - A live account on a worse rung -- unreadable, or one the engine had left
 //     at a limit -- moves onto room.
+//   - The one exception to the second rule (restReturn): while the work rests
+//     and another weekly-only seat is at its limit, a weekly-only seat is left
+//     for a five-hour account. The move lands while nothing runs, so it costs
+//     the session no warm cache, and it is made only in a week the fleet is
+//     short of quota, where the five-hour quota otherwise left to roll is what
+//     stops the session later. The owner chose this on 2026-11-12 from
+//     TestAReturnWhileTheWorkRestsSpendsTheMaxWhenTheFleetIsShort.
 //
 // An EMPTY target never reaches here ahead of a live account that is not empty:
 // the empty rung sorts last, and it is never a carrier. That is the
 // eighteen-switch incident's guard,
 // TestAFleetWithNothingLeftStaysPutInsteadOfSwappingEmptyForEmpty.
-func hoverGate(active, target Ranked) (Reason, bool, time.Time) {
+func hoverGate(active, target Ranked, restReturn bool) (Reason, bool, time.Time) {
 	ra := active.Rung()
 	switch {
+	case restReturn && ra == RungWeeklyOnly && target.Rung() == RungShortWindow:
+		return ReasonRestReturn, false, time.Time{}
 	case ra == RungShortWindow || ra == RungWeeklyOnly:
 		return ReasonStayUntilLimit, true, time.Time{}
 	case target.Rung() < ra:

@@ -5,7 +5,6 @@ import (
 	"math"
 	"reflect"
 	"sort"
-	"sync"
 	"testing"
 	"time"
 
@@ -367,73 +366,6 @@ type tierSimResult struct {
 	busy int
 }
 
-// returnPolicy is a rule laid over hover's own decision for the comparison in
-// TestReturningToTheMaxWhileTheWorkRests: hover as it ships stays on a seat with
-// room until its limit, and these take the session back to a five-hour account
-// while nothing is running. They are the harness's, not the engine's, so the
-// two can be measured before either is built.
-type returnPolicy int
-
-const (
-	// stayUntilLimit is hover as it ships.
-	stayUntilLimit returnPolicy = iota
-	// returnWhileResting moves the session off a weekly-only seat onto the
-	// first five-hour account in the order that carries the work, once the
-	// work has rested for restQuiet.
-	returnWhileResting
-	// returnWhileRestingShort is returnWhileResting, armed only while some
-	// weekly-only seat is at its limit: a week the fleet is short of quota.
-	returnWhileRestingShort
-)
-
-func (r returnPolicy) String() string {
-	return [...]string{"stay until a limit", "return while resting", "return while resting, when short"}[r]
-}
-
-// restQuiet is how long the work has to have asked for nothing before a return
-// counts as made while it rests: past the five-minute prompt cache, so the move
-// costs the session no warm cache.
-const restQuiet = 10 * time.Minute
-
-// reasonRestReturn marks a return the harness made, beyond every Reason the
-// engine gives.
-const reasonRestReturn = Reason(255)
-
-// restReturnReason is the reason the harness records for a return it makes.
-const restReturnReason = "returned to a five-hour account while the work rests"
-
-// restReturn is the move a policy makes where hover stayed, if it makes one.
-func restReturn(pol returnPolicy, p Plan, accts []tierAccount, live string, rested bool, st *State, now time.Time) (Ranked, bool) {
-	if pol == stayUntilLimit || p.Action != ActionStay || !rested {
-		return Ranked{}, false
-	}
-	if _, cooling := st.CooldownRemaining(now, HoverCooldown); cooling {
-		return Ranked{}, false
-	}
-	for _, a := range accts {
-		if a.uuid == live && a.short {
-			return Ranked{}, false
-		}
-	}
-	if pol == returnWhileRestingShort {
-		short := false
-		for _, r := range p.Result.Order {
-			if r.ShortWindow == "" && r.Headroom.Known && r.Rung() >= RungHeldOut {
-				short = true
-			}
-		}
-		if !short {
-			return Ranked{}, false
-		}
-	}
-	for _, r := range p.Result.Order {
-		if r.UUID != live && r.Rung() == RungShortWindow && r.Carries {
-			return r, true
-		}
-	}
-	return Ranked{}, false
-}
-
 // tierSimEpoch is where every tier simulation starts, and the instant the
 // fleets' resets are measured from.
 var tierSimEpoch = time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC)
@@ -507,7 +439,10 @@ func nextAsk(now time.Time, st *State, pollers []tierPoller, order []Ranked, atL
 // tierDecide asks the engine about the fleet as its readings stand, the way the
 // daemon's evaluation does, and reports false when there is nothing to ask about
 // yet: before the first poll there is no reading, and the daemon acts on none.
-func tierDecide(accts []tierAccount, pollers []tierPoller, now time.Time, st *State, live string) (Plan, bool) {
+//
+// lastActivity is the work's last activity as the daemon reads it off the
+// transcripts (Options.LastActivity), or nil for a run without it.
+func tierDecide(accts []tierAccount, pollers []tierPoller, now time.Time, st *State, live string, lastActivity func() (time.Time, bool)) (Plan, bool) {
 	cands := make([]Candidate, 0, len(accts))
 	for j := range accts {
 		if pollers[j].snap != nil {
@@ -517,20 +452,29 @@ func tierDecide(accts []tierAccount, pollers []tierPoller, now time.Time, st *St
 	if len(cands) == 0 {
 		return Plan{}, false
 	}
-	return Decide(cands, Options{Now: now, Hover: true}, Config{}, st, live), true
+	return Decide(cands, Options{Now: now, Hover: true, LastActivity: lastActivity}, Config{}, st, live), true
 }
 
 // runTierSim drives Decide over the fleet for span, at the daemon's one-second
 // cadence (asked as tierSimDrift says), with the live account spending the load.
+//
+// The work's last activity is the load's: the last second it asked for work,
+// which the transcripts would show to the second. Before any work it is
+// nothing found.
 func runTierSim(t *testing.T, label string, accts []tierAccount, load tierLoad, span time.Duration) tierSimResult {
 	t.Helper()
-	return runTierSimWith(t, label, accts, load, span, stayUntilLimit)
+	return runTierSimWith(t, label, accts, load, span, true)
 }
 
-// runTierSimWith is runTierSim with a return policy laid over hover's decision.
-func runTierSimWith(t *testing.T, label string, accts []tierAccount, load tierLoad, span time.Duration, pol returnPolicy) tierSimResult {
+// runTierSimWith is runTierSim with the activity signal on or off: off is hover
+// as it shipped before the rest return, which never sees the work rest.
+func runTierSimWith(t *testing.T, label string, accts []tierAccount, load tierLoad, span time.Duration, activity bool) tierSimResult {
 	t.Helper()
 	var workedAt time.Time
+	var lastActivity func() (time.Time, bool)
+	if activity {
+		lastActivity = func() (time.Time, bool) { return workedAt, !workedAt.IsZero() }
+	}
 	res := tierSimResult{switches: map[string]int{}, unspent: map[string]float64{}, served: map[string]float64{}}
 	st := NewState()
 	live := accts[0].uuid
@@ -549,23 +493,14 @@ func runTierSimWith(t *testing.T, label string, accts []tierAccount, load tierLo
 		}
 
 		if !now.Before(askAt) {
-			if p, asked := tierDecide(accts, pollers, now, st, live); asked {
-				rested := now.Sub(workedAt) >= restQuiet
-				if target, ok := restReturn(pol, p, accts, live, rested, st, now); ok {
-					p.Action, p.Target, p.Departure = ActionSwitch, target, Departure{}
-					p.Reason = reasonRestReturn
-				}
+			if p, asked := tierDecide(accts, pollers, now, st, live, lastActivity); asked {
 				if p.Action == ActionSwitch {
 					if load.perMin(now.Sub(tierSimEpoch)) > 0 {
 						res.busy++
 					}
 					live = p.Target.UUID
 					st.RecordSwitch(live, now, p.Departure)
-					if p.Reason == reasonRestReturn {
-						res.switches[restReturnReason]++
-					} else {
-						res.switches[p.Reason.String()]++
-					}
+					res.switches[p.Reason.String()]++
 					res.total++
 					// switcher.Execute's prompt poll of the account the work
 					// just moved to, and its record of the switch.
@@ -611,12 +546,11 @@ func runTierSimWith(t *testing.T, label string, accts []tierAccount, load tierLo
 		if want > 0 {
 			workedAt = now
 		}
-		// Rest is a fact the engine would read off its readings; the harness
-		// reads it off the load, so its idle is never wrong. Asked every second
-		// while a policy is on, so the return lands at the second the rest
-		// begins to count and not up to a drift step later.
-		if pol != stayUntilLimit && now.Sub(workedAt) >= restQuiet && askAt.After(now.Add(tierSimTick)) {
-			askAt = now.Add(tierSimTick)
+		// The rest is a clock turn nothing in the readings names: the engine is
+		// asked at the second it begins to count, not up to a drift step later.
+		if rests := workedAt.Add(RestQuiet); lastActivity != nil && !workedAt.IsZero() &&
+			rests.After(now) && rests.Before(askAt) {
+			askAt = rests
 		}
 		for j := range accts {
 			a := &accts[j]
@@ -799,9 +733,12 @@ var tierPauseLoad = paused("pause", 5.4/fiveHoursPerWeek,
 // that roll while a seat carries the session are not spent, so a third of the
 // Max account's week expires unspent, where 0.29.0 spent it to within a reading
 // step. On a fleet with room to spare that is quota nobody needed. On one that
-// is short of it, it is the session stopped: today's fleet under production load
-// stopped for 46 seconds in 0.29.0 and stops for 3862 now, 134 of them with
-// another account holding room (TestEveryFleetHandsOffBeforeTheLimit).
+// is short of it, it was the session stopped -- today's fleet under production
+// load stopped for 46 seconds in 0.29.0 and for 3862 staying until a limit --
+// and that is what the rest return answers: in a week a seat is at its limit,
+// the session goes back to the five-hour account while the work rests
+// (TestAReturnWhileTheWorkRestsSpendsTheMaxWhenTheFleetIsShort). These loads
+// never rest, so it moves nothing here.
 func TestTodaysFleetOverAWeek(t *testing.T) {
 	const week = 7 * day
 	limitReasons := map[string]bool{
@@ -871,33 +808,40 @@ func checkTierBooks(t *testing.T, res tierSimResult) {
 // under production load have less quota in a week than the load asks for -- so
 // a stopped second is allowed there, and only while nothing else had room.
 //
-// Fourteen variants do not meet it. Their figures are pinned here as measured
+// Fifteen variants do not meet it. Their figures are pinned here as measured
 // (stoppedWithRoomMeasured) rather than left out, and every other variant
 // measures zero -- every light and idle load among them. The gaps named are
 // the ones each figure is known to hold:
 //
 //	fleet                  load        stopped   with room elsewhere   gap
-//	today                  production     3862       134             five-hour, dry
+//	today                  production       26        26             five-hour
 //	today                  burst            89        89             five-hour, burst
+//	today                  pause             6         6             five-hour
 //	big Ultras             production        6         6             five-hour
 //	big Ultras             burst            29        29             five-hour, burst
-//	two Ultras             production      945        50             five-hour, dry
+//	two Ultras             production       46        46             five-hour
 //	two Ultras             burst            87        87             five-hour, burst
 //	two Max, three Ultras  heavy           534       534             five-hour, step, last point
-//	two Max, three Ultras  production    11600       183             five-hour, step, last point
+//	two Max, three Ultras  production    11648       231             five-hour, step, last point
 //	two Max, three Ultras  burst           268       268             five-hour, burst, last point
-//	two Max, three Ultras  pause            54        54             five-hour, step
+//	two Max, three Ultras  pause            60        60             five-hour, step
 //	two Max                heavy        122628      3501             five-hour, step, last point
 //	two Max                production    69692       161             five-hour, step
 //	two Max                burst         61343       605             five-hour, burst, last point
 //	two Max                pause          8372       666             five-hour, burst, last point
 //
 // The figures were re-measured when hover began leaving an account with room
-// only at a limit (2026-11-12); the gaps were traced before it, and "dry" marks
-// the two variants that began running dry then. Their five-hour quota rolls
-// unspent while a seat carries the session (TestTodaysFleetOverAWeek), so the
-// week has less quota in it than the load asks for. The two Max fleet has no
-// seat, and its figures did not move.
+// only at a limit, and again when it began returning to a five-hour account
+// while the work rests in a week a seat is at its limit (both 2026-11-12); the
+// gaps were traced before either. Staying until a limit ran today's fleet and
+// the two Ultras dry under production load -- 3862 and 945 seconds stopped, 134
+// and 50 of them with room elsewhere -- because five-hour quota rolled unspent
+// while a seat carried the session. The rest return spends it again
+// (TestAReturnWhileTheWorkRestsSpendsTheMaxWhenTheFleetIsShort). It costs the
+// fleets that run dry anyway a few seconds -- two Max, three Ultras went from
+// 183 to 231 under production load and from 54 to 60 under the pause load --
+// and gave today's fleet its first six under the pause load. The two Max fleet
+// has no seat, and its figures did not move.
 //
 // Two of the gaps are rules' prices rather than projections' misses.
 //
@@ -993,83 +937,72 @@ func TestEveryFleetHandsOffBeforeTheLimit(t *testing.T) {
 // whose stopped-with-room seconds are not zero, at the figure they measure.
 var stoppedWithRoomMeasured = map[string]int{
 	// The five-hour gap alone, or with the burst's or the fleet running dry.
-	"today/production":      134,
+	"today/production":      26,
 	"today/burst":           89,
+	"today/pause":           6,
 	"big Ultras/production": 6,
 	"big Ultras/burst":      29,
-	"two Ultras/production": 50,
+	"two Ultras/production": 46,
 	"two Ultras/burst":      87,
 	// The fleets that run dry, where the step, the burst and the wait for a
 	// last point to read empty add to the five-hour gap.
 	"two Max, three Ultras/heavy":      534,
-	"two Max, three Ultras/production": 183,
+	"two Max, three Ultras/production": 231,
 	"two Max, three Ultras/burst":      268,
-	"two Max, three Ultras/pause":      54,
+	"two Max, three Ultras/pause":      60,
 	"two Max/heavy":                    3501,
 	"two Max/production":               161,
 	"two Max/burst":                    605,
 	"two Max/pause":                    666,
 }
 
-// TestReturningToTheMaxWhileTheWorkRests compares hover as it ships with two
-// rules that take the session back to a five-hour account while the work rests.
-func TestReturningToTheMaxWhileTheWorkRests(t *testing.T) {
-	type row struct {
-		fleet, load string
-		pol         returnPolicy
-		weeks       int
-		res         tierSimResult
-	}
-	var rows []row
-	var mu sync.Mutex
-	fleets := []struct {
-		name string
-		of   func() []tierAccount
-	}{
-		{"today", todaysFleet},
-		{"big Ultras", bigUltraFleet},
-		{"two Ultras", twoUltraFleet},
-		{"2 Max 3 Ultras", twoMaxThreeUltraFleet},
-	}
-	loads := append(tierLoads[:len(tierLoads):len(tierLoads)], tierPauseLoad)
-	t.Run("runs", func(t *testing.T) {
-		for _, weeks := range []int{1, 3} {
-			for _, f := range fleets {
-				for _, l := range loads {
-					for _, pol := range []returnPolicy{stayUntilLimit, returnWhileResting, returnWhileRestingShort} {
-						weeks, f, l, pol := weeks, f, l, pol
-						t.Run(fmt.Sprintf("%dw/%s/%s/%d", weeks, f.name, l.name, pol), func(t *testing.T) {
-							t.Parallel()
-							res := runTierSimWith(t, fmt.Sprintf("%s, %s, %s", f.name, l.name, pol), f.of(), l, time.Duration(weeks)*7*day, pol)
-							checkTierBooks(t, res)
-							mu.Lock()
-							rows = append(rows, row{f.name, l.name, pol, weeks, res})
-							mu.Unlock()
-						})
-					}
-				}
-			}
+// The rest return, measured against hover without it on the two fleets it was
+// chosen on (2026-11-12), under production load -- two-hour sessions twelve
+// hours apart:
+//
+//	fleet        rest return  switches  while working  Max served  stopped  with room
+//	today        without            13             12       14.70     3862        134
+//	today        with               20             12       29.48       26         26
+//	big Ultras   without             1              1        2.98        6          6
+//	big Ultras   with                1              1        2.98        6          6
+//
+// Today's fleet runs short: an Ultra seat reaches its week, and from then on the
+// session goes back to the Max account in the rests, so its five-hour windows
+// stop rolling unspent and the session stops for seconds rather than an hour.
+// Every return lands in a rest -- the switches made while the work runs did not
+// grow. The fleet whose seats hold four times a Max week never runs short, no
+// seat reaches its limit, and the week is the week without the rule, switch for
+// switch.
+//
+// Returning on every rest instead was measured on the harness and not taken: on
+// the big-Ultra fleet it moved the session 28 times a week where this moves it
+// once, and stopped it for 46 seconds where this stops it for 6.
+func TestAReturnWhileTheWorkRestsSpendsTheMaxWhenTheFleetIsShort(t *testing.T) {
+	const week = 7 * day
+	production := tierLoads[3]
+	t.Run("today", func(t *testing.T) {
+		t.Parallel()
+		without := runTierSimWith(t, "today, production, without the rest return", todaysFleet(), production, week, false)
+		with := runTierSimWith(t, "today, production, with the rest return", todaysFleet(), production, week, true)
+		if with.stopped >= without.stopped/10 {
+			t.Errorf("stopped %d s with the rest return, %d without: want it to stop the dry week", with.stopped, without.stopped)
+		}
+		if with.busy > without.busy {
+			t.Errorf("%d switches while the work runs with the rest return, %d without: a return must land in a rest", with.busy, without.busy)
+		}
+		if with.served["short-window"] <= without.served["short-window"] {
+			t.Errorf("the Max served %.2f with the rest return, %.2f without", with.served["short-window"], without.served["short-window"])
+		}
+		if with.switches[ReasonRestReturn.String()] == 0 {
+			t.Errorf("no rest return in a week an Ultra reaches its limit: %v", with.switches)
 		}
 	})
-	sort.Slice(rows, func(i, j int) bool {
-		a, b := rows[i], rows[j]
-		if a.weeks != b.weeks {
-			return a.weeks < b.weeks
+	t.Run("big Ultras", func(t *testing.T) {
+		t.Parallel()
+		without := runTierSimWith(t, "big Ultras, production, without the rest return", bigUltraFleet(), production, week, false)
+		with := runTierSimWith(t, "big Ultras, production, with the rest return", bigUltraFleet(), production, week, true)
+		if !reflect.DeepEqual(with, without) {
+			t.Errorf("a fleet that never runs short moved:\nwith    %+v\nwithout %+v", with, without)
 		}
-		if a.fleet != b.fleet {
-			return a.fleet < b.fleet
-		}
-		if a.load != b.load {
-			return a.load < b.load
-		}
-		return a.pol < b.pol
 	})
-	t.Logf("%-5s %-15s %-11s %-34s %8s %5s %5s %9s %9s %9s %8s %8s",
-		"weeks", "fleet", "load", "policy", "switches", "busy", "rest", "max serv", "max left", "seat left", "stopped", "w/ room")
-	for _, r := range rows {
-		t.Logf("%-5d %-15s %-11s %-34s %8d %5d %5d %9.2f %9.2f %9.2f %8d %8d",
-			r.weeks, r.fleet, r.load, r.pol, r.res.total, r.res.busy, r.res.total-r.res.busy,
-			r.res.served["short-window"], r.res.unspent["short-window"], r.res.unspent["weekly-only"],
-			r.res.stopped, r.res.stoppedWithRoom)
-	}
 }

@@ -724,3 +724,56 @@ func TestAFiveHourAccountWithNoFiguresIsProjected(t *testing.T) {
 		}
 	})
 }
+
+// restedFor is an activity supplier whose last write was ago before the clock.
+func restedFor(ago time.Duration) func() (time.Time, bool) {
+	return func() (time.Time, bool) { return now.Add(-ago), true }
+}
+
+// shortWeek is a fleet in a week it is short of quota: the live Ultra seat has
+// room, another seat is at its last point, and the Max account carries the
+// work.
+func shortWeek() []Candidate {
+	return []Candidate{
+		idleOn(maxAcct("a-max", 10, 3*time.Hour, 50, 4*day)),
+		measuredLive(weekOnly("u-live", 40, 2*day), 0.05, usage.WindowSevenDay),
+		weekOnly("u-spent", 99, 3*day),
+	}
+}
+
+// The rest return is armed only in a week a seat is at its limit: with every
+// seat holding room, the live one is kept until its own limit however long the
+// work has rested, as the owner chose; with one at its last point, the session
+// goes back to the Max account.
+func TestARestReturnWaitsForASeatAtItsLimit(t *testing.T) {
+	o := hoverOpts()
+	o.LastActivity = restedFor(RestQuiet)
+	roomy := shortWeek()
+	roomy[2] = weekOnly("u-spent", 60, 3*day)
+	want(t, Decide(roomy, o, Config{}, NewState(), "u-live"), ActionStay, ReasonStayUntilLimit, "")
+	want(t, Decide(shortWeek(), o, Config{}, NewState(), "u-live"), ActionSwitch, ReasonRestReturn, "a-max")
+}
+
+// It waits for the rest: work seen inside RestQuiet, or no activity found at
+// all, keeps the seat. And it moves only off a seat: a five-hour account the
+// session is on is kept as before.
+func TestARestReturnWaitsForTheRest(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		activity func() (time.Time, bool)
+	}{
+		{"working a minute short of the rest", restedFor(RestQuiet - time.Minute)},
+		{"no supplier", nil},
+		{"nothing found", func() (time.Time, bool) { return time.Time{}, false }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o := hoverOpts()
+			o.LastActivity = tc.activity
+			want(t, Decide(shortWeek(), o, Config{}, NewState(), "u-live"), ActionStay, ReasonStayUntilLimit, "")
+		})
+	}
+	o := hoverOpts()
+	o.LastActivity = restedFor(time.Hour)
+	pool := append(shortWeek(), maxAcct("b-max", 10, 3*time.Hour, 50, 1*day))
+	want(t, Decide(pool, o, Config{}, NewState(), "a-max"), ActionStay, ReasonStayUntilLimit, "")
+}

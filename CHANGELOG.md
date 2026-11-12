@@ -16,13 +16,30 @@ must reference accounts by `uuid` or `alias`.
 
 ## [Unreleased]
 
+### Changed
+
+- **Hover returns to a five-hour account while the work rests, in a week
+  that is short of quota.** When another weekly-only account (such as an
+  Ultra seat) is at its limit and no Claude Code session has written to its
+  transcript for ten minutes, the session moves from the weekly-only account
+  it is on to a five-hour account that can carry the work, instead of
+  staying there until its own limit. In a week where every weekly-only
+  account has room nothing changes. On the simulated week of one Max and
+  three Ultra seats under the production rate in two-hour sessions, the
+  session now stops for 26 seconds instead of 3862, with 20 switches instead
+  of 13; every extra switch is made while the work rests. The reason given is
+  "the work is resting and a weekly-only account is at its limit, so the
+  session returns to a short-window account". ccdad reads the modification
+  times of `projects/**/*.jsonl` under Claude Code's config directory for
+  this, at most every 15 seconds and only while the move could happen.
+
 ### Fixed
 
 - On Windows, reading ccdad's own files (accounts, credentials, config, usage
   cache, history, daemon status, switch state, spent-login record, Codex
-  serving pointer) at the instant
-  another ccdad process replaced one could fail with a sharing violation. The
-  read is now retried with the same short backoff the replace already used.
+  serving pointer) at the instant another ccdad process replaced one could
+  fail with a sharing violation. The read is now retried with the same short
+  backoff the replace already used.
 
 ## [0.30.1] — 2026-11-12
 

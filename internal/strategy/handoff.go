@@ -622,7 +622,7 @@ func (p *Plan) hoverMove(activeUUID string, cfg Config, st *State, o Options, by
 	}
 
 	if live.AtLimit() == "" {
-		p.hoverMoveWithRoom(live, activeUUID, cfg, st, o.Now, byUUID)
+		p.hoverMoveWithRoom(live, activeUUID, cfg, st, o.Now, byUUID, p.restReturnArmed(live, o))
 		return
 	}
 
@@ -819,7 +819,7 @@ func nextReading(c Candidate, now time.Time) time.Time {
 // session onto an account the work would run out.
 // TestTheHoldNamesTheRuleThatKeptTheSession,
 // TestTheHoldNamesTheFirstCarrierInTheOrder.
-func (p *Plan) hoverMoveWithRoom(live Ranked, activeUUID string, cfg Config, st *State, now time.Time, byUUID map[string]Candidate) {
+func (p *Plan) hoverMoveWithRoom(live Ranked, activeUUID string, cfg Config, st *State, now time.Time, byUUID map[string]Candidate, restReturn bool) {
 	if p.seatCost(live) > 0 {
 		p.creditSeatReturn(live, activeUUID, cfg, st, now, byUUID)
 		return
@@ -830,7 +830,7 @@ func (p *Plan) hoverMoveWithRoom(live Ranked, activeUUID string, cfg Config, st 
 		if isActive(target.UUID, activeUUID) {
 			break
 		}
-		reason, refused, retry := hoverGate(live, target)
+		reason, refused, retry := hoverGate(live, target, restReturn)
 		if refused && reason == ReasonAlreadyBest {
 			// Not ahead of the live account by the order's own rules.
 			continue
@@ -855,6 +855,52 @@ func (p *Plan) hoverMoveWithRoom(live Ranked, activeUUID string, cfg Config, st 
 		}
 	}
 	p.hold(stay, retryAt)
+}
+
+// RestQuiet is how long the work has to have been quiet before hover counts it
+// as resting: past the five-minute prompt cache, so a move made then costs no
+// session a warm cache.
+const RestQuiet = 10 * time.Minute
+
+// restReturnArmed is whether the session may leave the live weekly-only seat
+// for a five-hour account while it still has room (hoverGate): the work is
+// resting, and another weekly-only seat is at its limit -- held out, at its last
+// point, or empty -- so the fleet is short of quota this week and the five-hour
+// quota rolling unspent behind the seat is quota the session will want.
+//
+// The order of the tests is the cost order: the activity is asked last, and
+// only when everything else holds, because it is the one input that reads the
+// disk (Options.LastActivity).
+//
+// In a week with room nothing changes: the seat is kept until its limit, as
+// the owner chose. Measured on the weekly simulation against returning on every
+// rest: that one moved the session 28 times a week on the big-Ultra fleet that
+// never runs short, and stopped it more, not less.
+// TestAReturnWhileTheWorkRestsSpendsTheMaxWhenTheFleetIsShort,
+// TestARestReturnWaitsForASeatAtItsLimit, TestARestReturnWaitsForTheRest.
+func (p *Plan) restReturnArmed(live Ranked, o Options) bool {
+	if live.Rung() != RungWeeklyOnly {
+		return false
+	}
+	short := false
+	for _, r := range p.Result.Order {
+		if r.UUID != live.UUID && r.Kind == identity.KindSubscription && r.ShortWindow == "" &&
+			r.Headroom.Known && r.Rung() >= RungHeldOut {
+			short = true
+			break
+		}
+	}
+	return short && o.resting()
+}
+
+// resting is whether the work has been quiet for RestQuiet, by the activity
+// the caller supplied. No supplier, or no activity it could find, is not rest.
+func (o Options) resting() bool {
+	if o.LastActivity == nil {
+		return false
+	}
+	at, ok := o.LastActivity()
+	return ok && !o.Now.Before(at.Add(RestQuiet))
 }
 
 // creditSeatReturn is the move off a live credit seat with room: a seat of the

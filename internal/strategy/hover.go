@@ -14,8 +14,10 @@ import (
 //     kind of subscription it is. A five-hour account is not left for another
 //     that holds more room, and a weekly-only seat is not left for a five-hour
 //     account that has room again or for a seat whose week ends sooner (the
-//     owner's rule of 2026-11-12). A credit seat alone goes back to free quota
-//     with room left (creditSeatReturn).
+//     owner's rule of 2026-11-12). A credit seat goes back to free quota with
+//     room left (creditSeatReturn), and a weekly-only seat goes back to a
+//     five-hour account while the work rests in a week another seat is at its
+//     limit (restReturnArmed, the owner's rule of the same day).
 //  2. When the session has to move, accounts with a five-hour window come
 //     first, the one whose week resets soonest among them -- an account whose
 //     reading names a five-hour window but no figure yet among them, after the
@@ -36,7 +38,9 @@ import (
 // 2026-11-09, and every move rewrites a running session's prompt cache.
 // TestTodaysFleetOverAWeek carries the figures. Its cost is stated there too
 // and is the real one: five-hour windows that roll while a seat carries the
-// session are not spent, and on a fleet short of quota that stops the session.
+// session are not spent, and on a fleet short of quota that stops the session
+// -- which the rest return answers, in the rests, in the weeks it bites
+// (TestAReturnWhileTheWorkRestsSpendsTheMaxWhenTheFleetIsShort).
 
 const (
 	// HoverHandoffThreshold is the threshold hover holds every window to: the
