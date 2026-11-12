@@ -607,10 +607,13 @@ func TestTwoUltrasSecondsApartDoNotPingPong(t *testing.T) {
 }
 
 // At the instant the live seat's week resets, its cached reading still names a
-// reset that is now in the past. The seat holds a fresh week, and it is still a
+// reset that is now in the past. The seat holds a fresh week -- the least
+// perishable quota in the pool, so the order files it behind the next soonest
+// week rather than reading the stale instant as soonest -- and it is still a
 // seat with room: the session stays on it.
 func TestWhenTheLiveUltrasWeekResetsTheSessionStays(t *testing.T) {
 	stale := weekOnly("u1-live", 70, -time.Minute)
 	pool := []Candidate{stale, weekOnly("u2", 40, 2*day), weekOnly("u3", 40, 5*day)}
+	eq(t, order(Rank(pool, hoverOpts())), []string{"u2", "u3", "u1-live"})
 	want(t, Decide(pool, hoverOpts(), Config{}, NewState(), "u1-live"), ActionStay, ReasonStayUntilLimit, "")
 }
