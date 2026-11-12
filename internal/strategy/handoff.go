@@ -324,8 +324,19 @@ func (o Options) runwayOf(c Candidate) runway {
 	var out runway
 	for _, w := range bindingWindows(c.Usage, o.Model, o.thresholdsFor(c)) {
 		pct, ok := w.Percent()
-		if !ok {
+		if !ok && !w.Present {
 			continue
+		}
+		// A window the reading names with no figure is one nothing has spent
+		// against since it rolled (shortWindowOf): all its room is there, and
+		// the work spends it like any other. Skipping it gave such an account
+		// no runway, so it carried on its level alone and, live, had no limit
+		// the engine could see coming -- while the order now files it ahead of
+		// every Ultra and keeps it until a limit. Room is all this reads;
+		// Headroom still calls the account unread, so nothing that decides
+		// money or recovery moves. TestAFiveHourAccountWithNoFiguresIsProjected.
+		if !ok {
+			pct = 0
 		}
 		// A window that has reset since the reading is a new window: the work
 		// spends it from the reset, not from the reading.
