@@ -16,6 +16,8 @@ must reference accounts by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.30.1] — 2026-11-12
+
 ### Fixed
 
 - **A five-hour account with no usage figures is chosen before an Ultra
@@ -4330,7 +4332,8 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.30.0...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.30.1...HEAD
+[0.30.1]: https://github.com/Kweiza/ccdaddy/compare/v0.30.0...v0.30.1
 [0.30.0]: https://github.com/Kweiza/ccdaddy/compare/v0.29.2...v0.30.0
 [0.29.2]: https://github.com/Kweiza/ccdaddy/compare/v0.29.1...v0.29.2
 [0.29.1]: https://github.com/Kweiza/ccdaddy/compare/v0.29.0...v0.29.1
