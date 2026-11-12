@@ -12,6 +12,7 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 
+	"github.com/Kweiza/ccdaddy/internal/atomicfile"
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/identity"
@@ -138,7 +139,7 @@ func Open() (*Store, error) {
 func (s *Store) load() error {
 	s.data = file{Version: 1}
 
-	raw, err := os.ReadFile(filepath.Join(s.root, accountsFile))
+	raw, err := atomicfile.ReadFile(filepath.Join(s.root, accountsFile))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
@@ -531,7 +532,7 @@ func (s *Store) remove(uuid string) error {
 	// an account with nothing to log in as. A file that was not there is
 	// nothing to put back, so a failed read is not an error here — the delete
 	// below already decides that.
-	prior, priorErr := os.ReadFile(s.credentialPath(uuid))
+	prior, priorErr := atomicfile.ReadFile(s.credentialPath(uuid))
 	if err := os.Remove(s.credentialPath(uuid)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("removing stored credentials: %w", err)
 	}
@@ -613,7 +614,7 @@ func (s *Store) Credentials(uuid string) (cclink.Blob, error) {
 	if err := ValidateUUID(uuid); err != nil {
 		return nil, err
 	}
-	raw, err := os.ReadFile(s.credentialPath(uuid))
+	raw, err := atomicfile.ReadFile(s.credentialPath(uuid))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			// A uuid says nothing about its provider, so both logins are named.

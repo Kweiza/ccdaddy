@@ -130,14 +130,41 @@ func WriteFile(path string, data []byte, perm os.FileMode) error {
 		return fmt.Errorf("closing temp file: %w", err)
 	}
 
+	if err := retrying(func() error { return renameFile(tmpName, path) }); err != nil {
+		return fmt.Errorf("replacing %s: %w", filepath.Base(path), err)
+	}
+	return nil
+}
+
+// readFile is a seam for the same reason renameFile is.
+var readFile = os.ReadFile
+
+// ReadFile reads a file WriteFile replaces, retried per winerr.Retryable.
+//
+// The replace is atomic for a reader on every platform, but on Windows a reader
+// that opens the file at the instant another process renames over it gets a
+// sharing violation rather than either version -- measured on CI, eight
+// goroutines opening the store while one of them wrote it. A missing file is
+// returned on the first try: winerr.Retryable does not name it, because it is
+// an answer, not a transient.
+func ReadFile(path string) ([]byte, error) {
+	var raw []byte
+	err := retrying(func() error {
+		var err error
+		raw, err = readFile(path)
+		return err
+	})
+	return raw, err
+}
+
+// retrying runs op until it succeeds, fails with an error retryable does not
+// accept, or has been tried replaceAttempts times, backing off between tries.
+func retrying(op func() error) error {
 	backoff := replaceBackoffMin
 	for attempt := 1; ; attempt++ {
-		err := renameFile(tmpName, path)
-		if err == nil {
-			return nil
-		}
-		if attempt >= replaceAttempts || !retryable(err) {
-			return fmt.Errorf("replacing %s: %w", filepath.Base(path), err)
+		err := op()
+		if err == nil || attempt >= replaceAttempts || !retryable(err) {
+			return err
 		}
 		time.Sleep(backoff)
 		if backoff *= 2; backoff > replaceBackoffMax {

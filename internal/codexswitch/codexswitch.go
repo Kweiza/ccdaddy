@@ -91,7 +91,7 @@ func acquireServingLock(root string) (*cclock.Lock, error) {
 // named by a pointer that no longer exists is the caller's to notice; this
 // function only reports what the file says.
 func ReadServing(root string) (string, bool) {
-	raw, err := os.ReadFile(ServingPath(root))
+	raw, err := atomicfile.ReadFile(ServingPath(root))
 	if err != nil {
 		return "", false
 	}

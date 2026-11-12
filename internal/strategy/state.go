@@ -402,7 +402,7 @@ func LoadState() (*State, error) {
 	}
 	s := NewState()
 
-	raw, err := os.ReadFile(filepath.Join(root, StateFileName))
+	raw, err := atomicfile.ReadFile(filepath.Join(root, StateFileName))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return s, nil

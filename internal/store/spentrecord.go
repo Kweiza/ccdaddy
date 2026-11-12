@@ -104,7 +104,7 @@ func LoadSpentRecord() (*SpentRecord, error) {
 		return nil, err
 	}
 	r := &SpentRecord{}
-	raw, err := os.ReadFile(path)
+	raw, err := atomicfile.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return r, nil
