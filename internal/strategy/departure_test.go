@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/provider"
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
@@ -38,10 +39,11 @@ func TestTheAccountJustLeftAtItsLimitIsHeldOutUntilItsWindowRolls(t *testing.T) 
 	}
 }
 
-// And it comes back the moment that window rolls -- read either way the
-// endpoint reports it: a window nothing has spent against since, or a window
-// that started after the session left.
-func TestTheSessionReturnsWhenTheFiveHourWindowRollsOver(t *testing.T) {
+// And it is entered again at the next move once that window rolls -- read
+// either way the endpoint reports it: a window nothing has spent against since,
+// or a window that started after the session left. The live seat is at its last
+// point, and the rolled five-hour account outranks the other seat with room.
+func TestAnAccountWhoseFiveHourWindowRolledIsEnteredAtTheNextMove(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		five usage.Window
@@ -52,12 +54,21 @@ func TestTheSessionReturnsWhenTheFiveHourWindowRollsOver(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			pool := []Candidate{
 				sub("a-left", &usage.Snapshot{FiveHour: tc.five, SevenDay: win(40, 3*day)}),
-				weekOnly("u-live", 30, 2*day),
+				weekOnly("u-other", 30, 1*day),
+				weekOnly("u-live", 99, 2*day),
 			}
 			p := Decide(pool, hoverOpts(), Config{}, leftAt("a-left", usage.WindowFiveHour), "u-live")
-			want(t, p, ActionSwitch, ReasonShortWindowRoom, "a-left")
+			want(t, p, ActionSwitch, ReasonLastPoint, "a-left")
 		})
 	}
+	// And while it is still held out, the other seat is where the session goes.
+	pool := []Candidate{
+		maxAcct("a-left", 85, 2*time.Hour, 40, 3*day),
+		weekOnly("u-other", 30, 1*day),
+		weekOnly("u-live", 99, 2*day),
+	}
+	p := Decide(pool, hoverOpts(), Config{}, leftAt("a-left", usage.WindowFiveHour), "u-live")
+	want(t, p, ActionSwitch, ReasonLastPoint, "u-other")
 }
 
 // A hold is a rung and never a filter: when everything else is at its limit or
@@ -104,7 +115,7 @@ func TestALiveAccountIsNeverHeldOutOfItsOwnSession(t *testing.T) {
 	want(t, p, ActionStay, ReasonAlreadyBest, "")
 }
 
-// Only a departure at a limit is remembered. A return, a move to a sooner week,
+// Only a departure at a limit is remembered. A move off an unreadable account,
 // a user's own switch -- none leaves an account anywhere it has to be held from.
 func TestTheHoldIsOnlyForALimitDeparture(t *testing.T) {
 	st := NewState()
@@ -133,8 +144,8 @@ func TestADepartureNamesTheClosingWindowOnlyWhenALimitDroveTheMove(t *testing.T)
 			t.Errorf("%s to %q, Departure = %+v, want u-live left on its empty week", p.Action, p.Target.UUID, p.Departure)
 		}
 	})
-	t.Run("a return to a five-hour account", func(t *testing.T) {
-		pool := []Candidate{maxAcct("a-max", 10, 3*time.Hour, 40, 3*day), weekOnly("u-live", 30, 2*day)}
+	t.Run("off an unreadable account", func(t *testing.T) {
+		pool := []Candidate{maxAcct("a-max", 10, 3*time.Hour, 40, 3*day), {UUID: "u-live", Kind: identity.KindSubscription}}
 		p := Decide(pool, hoverOpts(), Config{}, NewState(), "u-live")
 		want(t, p, ActionSwitch, ReasonShortWindowRoom, "a-max")
 		if p.Departure != (Departure{From: "u-live"}) {
@@ -146,8 +157,9 @@ func TestADepartureNamesTheClosingWindowOnlyWhenALimitDroveTheMove(t *testing.T)
 // The incident the cooldown alone could not stop: a session moved out and back
 // two minutes and one second apart. Driven tick by tick through one five-hour
 // cycle at a load that fills the window in two hours, the session leaves the
-// five-hour account once, at its limit, and comes back once, when the window
-// rolls -- and nothing in between.
+// five-hour account once, at its limit, and does not come back when the window
+// rolls: the Ultra it went to still has room, and a seat with room is left only
+// at a limit.
 func TestNoOutAndBackInsideAFiveHourCycle(t *testing.T) {
 	fleet := []tierAccount{
 		{uuid: "a-max", short: true, weekUtil: 10, weekAt: tierSimEpoch.Add(4 * day)},
@@ -156,11 +168,11 @@ func TestNoOutAndBackInsideAFiveHourCycle(t *testing.T) {
 	// Five hours and ten minutes: the window started on the first turn, so it
 	// rolls at five hours, and the poll that sees it is a margin after that.
 	res := runTierSim(t, "one five-hour cycle", fleet, steady("heavy", 0.025), 5*time.Hour+10*time.Minute)
-	if res.total != 2 {
-		t.Errorf("%d switches in one five-hour cycle, want 2: out at the limit and back at the rollover", res.total)
+	if res.total != 1 {
+		t.Errorf("%d switches in one five-hour cycle, want 1: out at the limit and no return", res.total)
 	}
-	if res.switches[ReasonShortWindowRoom.String()] != 1 {
-		t.Errorf("switches = %v, want exactly one return", res.switches)
+	if n := res.switches[ReasonShortWindowRoom.String()]; n != 0 {
+		t.Errorf("switches = %v, want no return to the five-hour account", res.switches)
 	}
 	if res.stopped != 0 {
 		t.Errorf("%d ticks stopped by a limit", res.stopped)

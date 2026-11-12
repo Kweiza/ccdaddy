@@ -243,10 +243,11 @@ func TestHoverIgnoresTheTuningAndNotTheMoneyGate(t *testing.T) {
 		t.Error("the credit gate was consulted for a primary seat")
 	}
 
-	// And from the seat the session goes to the perishable week. The hour-long
-	// cooldown does not hold it, because nothing has switched.
+	// And from the seat the session goes back to the free week: credits are
+	// spent only after free quota (creditSeatReturn). The hour-long cooldown
+	// does not hold it, because nothing has switched.
 	p = Decide([]Candidate{spent, seat}, o, tuned, NewState(), "c")
-	want(t, p, ActionSwitch, ReasonSoonerWeeklyReset, "a")
+	want(t, p, ActionSwitch, ReasonBetterTarget, "a")
 	if p.CreditConsulted {
 		t.Error("the credit gate was consulted for a primary seat")
 	}

@@ -107,22 +107,17 @@ func TestEveryKeyIsClassifiedAgainstHover(t *testing.T) {
 	}
 }
 
-// Hover stopped deriving recovery_hysteresis when it stopped pacing, and it is
-// the margin hover moves weekly-only seats on: a listing that marked it
-// overridden would report the user's own number as one nothing reads. The two
-// margins on room, hysteresis_pct and headroom_ratio, are the other way round:
-// no hover move reads them, and a listing that printed them as in force would
-// show a setting that does nothing.
-func TestHoverHonoursTheMarginsItReads(t *testing.T) {
-	if HoverOverrides(keyRecoveryHysteresis) || !hoverHonours[keyRecoveryHysteresis] {
-		t.Errorf("recovery_hysteresis: overridden=%v honoured=%v, want honoured",
-			HoverOverrides(keyRecoveryHysteresis), hoverHonours[keyRecoveryHysteresis])
-	}
-	// And the keys hover sets for itself or does not read are marked.
+// No hover move reads a margin. hysteresis_pct and headroom_ratio compare two
+// accounts' room, and recovery_hysteresis two accounts' reset instants; hover
+// leaves an account with room only at a limit, so a listing that printed any of
+// them as in force would show a setting that does nothing. The keys hover sets
+// for itself are marked the same way.
+func TestHoverDoesNotReadTheMargins(t *testing.T) {
 	for _, key := range []string{keyThreshold, keyCooldown, keyStrategy, keyPreemptLead, keyProbeUnknown, keyCreditThreshold,
-		keyHysteresisPct, keyHeadroomRatio} {
-		if !HoverOverrides(key) {
-			t.Errorf("%s is not marked overridden; hover sets it itself or does not read it", key)
+		keyHysteresisPct, keyHeadroomRatio, keyRecoveryHysteresis} {
+		if !HoverOverrides(key) || hoverHonours[key] {
+			t.Errorf("%s: overridden=%v honoured=%v, want overridden; hover sets it itself or does not read it",
+				key, HoverOverrides(key), hoverHonours[key])
 		}
 	}
 }

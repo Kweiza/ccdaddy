@@ -484,11 +484,11 @@ func TestAWindowThatResetsBeforeItRunsOutIsNotClosing(t *testing.T) {
 // that rolled a minute ago, and not polled since, has a fresh window -- and
 // under hover, whose levels are the whole of how it files an account the
 // session is not on, it is filed as the fresh window it is: a short-window
-// account with room, which the session on an Ultra moves to. The configured
+// account with room, which the session on an Ultra at its limit moves to. The configured
 // strategies rank on the reading as it was taken.
 func TestARolledReadingIsReadAsRolled(t *testing.T) {
 	rolled := maxAcct("a-rolled", 100, -time.Minute, 40, 3*day)
-	pool := []Candidate{rolled, idleOn(weekOnly("u-live", 30, 2*day))}
+	pool := []Candidate{rolled, idleOn(weekOnly("u-live", 99, 2*day))}
 
 	r := Rank(pool, hoverOpts())
 	if len(r.Order) == 0 || r.Order[0].UUID != "a-rolled" || r.Order[0].Rung() != RungShortWindow {
@@ -498,7 +498,7 @@ func TestARolledReadingIsReadAsRolled(t *testing.T) {
 		t.Errorf("rolled account's headroom %v under hover, want the week's 60: the five-hour window is fresh", got)
 	}
 	p := Decide(pool, hoverOpts(), Config{}, NewState(), "u-live")
-	want(t, p, ActionSwitch, ReasonShortWindowRoom, "a-rolled")
+	want(t, p, ActionSwitch, ReasonLastPoint, "a-rolled")
 
 	for _, c := range Rank(pool, opts()).Order {
 		if c.UUID == "a-rolled" && c.Headroom.Pct != 0 {
@@ -567,56 +567,50 @@ func TestALiveAccountAtALimitWithNowhereBetterIsBlocked(t *testing.T) {
 
 // ---- weekly-only seats ----------------------------------------------------
 
-// Among weekly-only seats the session always goes to the one whose week ends
-// first: that is the quota about to be lost.
-func TestAmongUltrasTheSoonestWeeklyResetIsMovedTo(t *testing.T) {
+// A seat in use is spent to its limit. Another seat whose week ends sooner --
+// even one whose week was just handed back at 0% -- does not pull the session
+// off a seat with room: the owner's rule of 2026-11-12, after hover moved a
+// session off support@ at 71% the moment another seat's week came back.
+func TestALiveUltraWithRoomIsNotLeftForASoonerWeek(t *testing.T) {
 	pool := []Candidate{
-		weekOnly("u1-live", 40, 5*day+17*time.Hour),
-		weekOnly("u2-sooner", 40, 5*day+10*time.Hour),
+		weekOnly("u1-live", 71, 2*day+15*time.Hour),
+		weekOnly("u2-sooner", 0, 2*day+8*time.Hour),
 	}
 	p := Decide(pool, hoverOpts(), Config{}, NewState(), "u1-live")
-	want(t, p, ActionSwitch, ReasonSoonerWeeklyReset, "u2-sooner")
-	if p.Departure.Closing != "" {
-		t.Errorf("Departure = %+v: a move to a sooner week leaves no account at a limit", p.Departure)
+	want(t, p, ActionStay, ReasonStayUntilLimit, "")
+	if p.Held.UUID != "u2-sooner" {
+		t.Errorf("Held = %q, want the sooner seat named as the move held", p.Held.UUID)
 	}
 }
 
-// Two seats whose weeks end seconds apart would otherwise trade the session on
-// any jitter in resets_at, and five minutes of difference in when a week
-// expires is worth nothing.
+// When the seat reaches its limit, the soonest week among the other seats is
+// where the session goes: that is the quota about to be lost.
+func TestAmongUltrasTheSoonestWeeklyResetIsEnteredAtALimit(t *testing.T) {
+	pool := []Candidate{
+		weekOnly("u1-live", 99, 5*day+17*time.Hour),
+		weekOnly("u2-later", 40, 6*day),
+		weekOnly("u3-sooner", 40, 5*day+10*time.Hour),
+	}
+	p := Decide(pool, hoverOpts(), Config{}, NewState(), "u1-live")
+	want(t, p, ActionSwitch, ReasonLastPoint, "u3-sooner")
+}
+
+// Two seats whose weeks end seconds apart never trade the session while the
+// live one has room, from either side.
 func TestTwoUltrasSecondsApartDoNotPingPong(t *testing.T) {
 	pool := []Candidate{
 		weekOnly("u1", 40, 5*day+17*time.Hour),
 		weekOnly("u2", 40, 5*day+17*time.Hour-10*time.Second),
 	}
-	want(t, Decide(pool, hoverOpts(), Config{}, NewState(), "u1"), ActionStay, ReasonWeeklyResetMargin, "")
+	want(t, Decide(pool, hoverOpts(), Config{}, NewState(), "u1"), ActionStay, ReasonStayUntilLimit, "")
 	want(t, Decide(pool, hoverOpts(), Config{}, NewState(), "u2"), ActionStay, ReasonAlreadyBest, "")
 }
 
 // At the instant the live seat's week resets, its cached reading still names a
-// reset that is now in the past. That seat holds a fresh week -- the least
-// perishable quota in the pool -- and the next soonest week is where the
-// session belongs.
-func TestWhenTheLiveUltrasWeekResetsTheNextSoonestTakesOver(t *testing.T) {
+// reset that is now in the past. The seat holds a fresh week, and it is still a
+// seat with room: the session stays on it.
+func TestWhenTheLiveUltrasWeekResetsTheSessionStays(t *testing.T) {
 	stale := weekOnly("u1-live", 70, -time.Minute)
 	pool := []Candidate{stale, weekOnly("u2", 40, 2*day), weekOnly("u3", 40, 5*day)}
-	want(t, Decide(pool, hoverOpts(), Config{}, NewState(), "u1-live"), ActionSwitch, ReasonSoonerWeeklyReset, "u2")
-
-	// And once the refresh lands, a week out, the session stays where it went.
-	refreshed := []Candidate{weekOnly("u1", 0, 7*day-time.Minute), weekOnly("u2-live", 40, 2*day), weekOnly("u3", 40, 5*day)}
-	want(t, Decide(refreshed, hoverOpts(), Config{}, NewState(), "u2-live"), ActionStay, ReasonAlreadyBest, "")
-}
-
-// The margin between weekly-only seats is the user's recovery_hysteresis, so a
-// user who wants seats to trade places only when a week ends an hour sooner can
-// say so -- and the default still moves for thirty minutes.
-func TestHoverHonoursTheUsersRecoveryHysteresisAsTheUltraMargin(t *testing.T) {
-	pool := []Candidate{
-		weekOnly("u1-live", 40, 5*day),
-		weekOnly("u2", 40, 5*day-30*time.Minute),
-	}
-	want(t, Decide(pool, hoverOpts(), Config{RecoveryHysteresis: time.Hour}, NewState(), "u1-live"),
-		ActionStay, ReasonWeeklyResetMargin, "")
-	want(t, Decide(pool, hoverOpts(), Config{}, NewState(), "u1-live"),
-		ActionSwitch, ReasonSoonerWeeklyReset, "u2")
+	want(t, Decide(pool, hoverOpts(), Config{}, NewState(), "u1-live"), ActionStay, ReasonStayUntilLimit, "")
 }

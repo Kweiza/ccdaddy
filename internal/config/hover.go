@@ -37,27 +37,29 @@ const KeyStrategy = keyStrategy
 
 // hoverOverrides is every key whose value in the file stops being read by the
 // Claude lane the moment hover is on: the ones hover derives for itself, and
-// the two margins its order has no use for. The Codex lane, which hover does
-// not drive, still reads the ones it uses -- the two margins among them
+// the three margins its order has no use for. The Codex lane, which hover does
+// not drive, still reads the ones it uses -- the margins among them
 // (switcher.EvaluateCodex hands Decide the configured anti-flap set).
-// hysteresis_pct and headroom_ratio compare two accounts' room, and hover moves
-// the session on the order's own rules -- a better rung, a sooner week by
-// recovery_hysteresis, a limit -- so no hover move reads either. A listing that
-// printed them as in force would show a setting that does nothing.
+// hysteresis_pct and headroom_ratio compare two accounts' room, and
+// recovery_hysteresis two accounts' reset instants; hover leaves an account
+// with room only at a limit, or off an account nobody could read, so no hover
+// move reads any of them. A listing that printed them as in force would show a
+// setting that does nothing.
 //
 // It is a table rather than a condition because the CLI has to be able to MARK
 // each of them. A listing that quietly stopped applying a number the user tuned
 // is the same failure as an accepted typo -- a setting that does nothing --
 // reached from the other side.
 var hoverOverrides = map[string]bool{
-	keyThreshold:       true,
-	keyCooldown:        true,
-	keyStrategy:        true,
-	keyPreemptLead:     true,
-	keyProbeUnknown:    true,
-	keyCreditThreshold: true,
-	keyHysteresisPct:   true,
-	keyHeadroomRatio:   true,
+	keyThreshold:          true,
+	keyCooldown:           true,
+	keyStrategy:           true,
+	keyPreemptLead:        true,
+	keyProbeUnknown:       true,
+	keyCreditThreshold:    true,
+	keyHysteresisPct:      true,
+	keyHeadroomRatio:      true,
+	keyRecoveryHysteresis: true,
 }
 
 // hoverHonours is the other half, and the reason this is two tables rather than
@@ -98,13 +100,7 @@ var hoverOverrides = map[string]bool{
 // deciding, out of a fact about quota, that the user did not mean the mode they
 // switched on -- and the order is the very thing a manual-mode user is
 // watching, so the two are useful together rather than exclusive.
-//
-// recovery_hysteresis is here because hover stopped deriving it when it
-// stopped pacing. It is the margin between two weekly-only seats -- how much
-// sooner one week must end before the session moves to it -- and a user who
-// wants an hour rather than five minutes can say so.
 var hoverHonours = map[string]bool{
-	keyRecoveryHysteresis:          true,
 	keyMaxAutoSpend:                true,
 	keyHover:                       true,
 	keyManual:                      true,

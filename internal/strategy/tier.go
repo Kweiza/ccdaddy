@@ -7,9 +7,9 @@ import "github.com/Kweiza/ccdaddy/internal/usage"
 // The rung says WHICH KIND of account should carry the session and the reset
 // says which of that kind. Nothing else is compared -- not slack, not pace, not
 // how much room an account holds -- because none of the owner's rules ask for
-// it: a five-hour account is used until it reaches a limit whatever another one
-// holds, and among weekly-only seats the one whose week ends first is the one
-// whose quota is about to be lost.
+// it: the account the session is on is used until it reaches a limit whatever
+// another one holds (hoverGate), and when the session moves, among each kind
+// the one whose week ends first is the one whose quota is about to be lost.
 
 // Rung is where hover's order files an account, best first. It is exported
 // because the order is reported -- `ccdad status` prints one line per account

@@ -10,32 +10,30 @@ import (
 //
 // The owner's rules, in the order the ranking applies them:
 //
-//  1. Accounts with a five-hour window come first. Among them the one whose
-//     week resets soonest is entered first, and the session then stays on it
-//     until it reaches a limit: a five-hour account is never left for another
-//     that merely holds more room.
-//  2. Weekly-only accounts come next -- a verified Ultra seat reads five_hour
-//     null -- and among them the session always goes to the one whose week
-//     resets soonest.
-//  3. The session returns to a five-hour account as soon as it has room again.
+//  1. The account the session is on is kept until it reaches a limit, whatever
+//     kind it is: a five-hour account is not left for another that holds more
+//     room, and a weekly-only seat is not left for a five-hour account that has
+//     room again or for a seat whose week ends sooner (the owner's rule of
+//     2026-11-12).
+//  2. When the session has to move, accounts with a five-hour window come
+//     first, the one whose week resets soonest among them.
+//  3. Weekly-only accounts come next -- a verified Ultra seat reads five_hour
+//     null -- the one whose week resets soonest among them.
 //  4. Every hand-off happens BEFORE a limit: one point before any window a
 //     model choice cannot dodge, or earlier when the next reading would land
 //     past it.
 //
 // tier.go is the order, departure.go is the one fact it has to remember, and
-// the anti-flap gate's ModeHover case is where "stay until a limit" and the
-// reset margin between weekly-only seats are held.
+// hoverGate is where "stay until a limit" is held.
 //
 // It replaced a pace rotation that derived a threshold per account and window
 // from how far through its window each account was and how many accounts
 // shared the pool. That held four accounts level with their own clocks by
 // moving the session two hundred times a week on the owner's fleet of
 // 2026-11-09, and every move rewrites a running session's prompt cache.
-// TestTodaysFleetOverAWeek carries both sets of figures. Its cost is stated
-// there too and is the real one: a weekly-only seat is spent only once every
-// five-hour account is at a limit, and then only the one whose week ends
-// first, so on a fleet with several Ultra seats most of their weeks now expire
-// unspent.
+// TestTodaysFleetOverAWeek carries the figures. Its cost is stated there too
+// and is the real one: five-hour windows that roll while a seat carries the
+// session are not spent, and on a fleet short of quota that stops the session.
 
 const (
 	// HoverHandoffThreshold is the threshold hover holds every window to: the
@@ -70,13 +68,12 @@ const (
 	// It is the only hold on the pre-emptive move -- Decide answers pre-emption
 	// before every margin but not before the cooldown -- so it is sized for that
 	// move: two polls at the 60 s urgent cadence, so that a session handed on
-	// can be handed on again before a second limit lands. It no longer has to
+	// can be handed on again before a second limit lands. It does not have to
 	// bound a rotation, which is what lets it be this short. The order does
-	// that: a return onto an account left at a limit waits for that account's
-	// window to roll, a move between two weekly-only seats needs one week to end
-	// recovery_hysteresis sooner than the other, and a five-hour account is left
-	// only at a limit. The out-and-back two minutes and one second apart that
-	// this cooldown once allowed needs none of the three.
+	// that: an account with room is left only at a limit, and a return onto an
+	// account left at a limit waits for that account's window to roll. The
+	// out-and-back two minutes and one second apart that this cooldown once
+	// allowed needs neither.
 	HoverCooldown = 2 * time.Minute
 )
 
@@ -174,13 +171,10 @@ func hoverTable(per map[usage.WindowName]float64) Thresholds {
 // HoverConfig is the anti-flap set hover imposes: the cooldown, and nothing
 // else.
 //
-// recovery_hysteresis is the user's again, because it is not a pace knob any
-// longer: it is the margin on the reset axis, which is what hover moves
-// weekly-only seats on, so a user who wants two Ultra seats to trade places only
-// when one week ends an hour sooner can say so. hysteresis_pct and
-// headroom_ratio are passed through untouched and read by nothing under hover:
-// hoverMove makes every hover move, on the order's own rules rather than a
-// margin on room (config.HoverOverrides marks them so).
+// recovery_hysteresis, hysteresis_pct and headroom_ratio are passed through
+// untouched and read by nothing under hover: hoverMove makes every hover move,
+// on the order's own rules rather than a margin (config.HoverOverrides marks
+// them so).
 //
 // preempt_lead is absent because it is not an anti-flap knob, and hover does not
 // read it: the live account's reserve is the poll policy's (hoverReserve).

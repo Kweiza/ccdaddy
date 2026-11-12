@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Kweiza/ccdaddy/internal/identity"
 	"github.com/Kweiza/ccdaddy/internal/pollpolicy"
 	"github.com/Kweiza/ccdaddy/internal/usage"
 )
@@ -306,15 +307,17 @@ func TestWhoIsLiveDoesNotChangeWhetherAnAccountCarries(t *testing.T) {
 	}
 }
 
-// A live account with room that stays because the account ahead of it in the
-// order cannot carry the work says so. The Max sorts first -- it has a
-// five-hour window -- but its week has five points, and at half a point a
-// minute the work would spend them in ten minutes: "already on the best
-// account" would be false of the session on the Ultra.
+// A live account that stays because the account ahead of it in the order cannot
+// carry the work says so. Only a live account the order would leave reaches the
+// carry test -- one with room is left only at a limit -- so the live account
+// here is one nobody could read, and the work's rate is the one last measured
+// on the Max. The Max sorts first, but its week has five points, and at half a
+// point a minute the work would spend them in ten minutes: "already on the best
+// account" would be false of the session.
 func TestALiveAccountKeptByAnAccountThatCannotCarryTheWorkSaysSo(t *testing.T) {
 	pool := []Candidate{
-		idleOn(maxAcct("a-max", 10, 3*time.Hour, 95, 3*day)),
-		measuredLive(weekOnly("u-live", 30, 2*day), 0.5, usage.WindowSevenDay),
+		measuredLive(idleOn(maxAcct("a-max", 10, 3*time.Hour, 95, 3*day)), 0.5, usage.WindowSevenDay),
+		{UUID: "u-live", Kind: identity.KindSubscription},
 	}
 	p := Decide(pool, hoverOpts(), Config{}, NewState(), "u-live")
 	want(t, p, ActionStay, ReasonCannotCarry, "")
@@ -322,7 +325,7 @@ func TestALiveAccountKeptByAnAccountThatCannotCarryTheWorkSaysSo(t *testing.T) {
 
 // The hold names the rule that kept the session, not the carry test, when the
 // rule would have kept it anyway. B's week resets sooner, so it sorts ahead of
-// the live A, and it could not carry the work -- but a five-hour account is
+// the live A, and it could not carry the work -- but an account with room is
 // left only at a limit, and that is why the session stays. Nothing is held for
 // --force to take: B would run the work out.
 func TestTheHoldNamesTheRuleThatKeptTheSession(t *testing.T) {
@@ -337,22 +340,22 @@ func TestTheHoldNamesTheRuleThatKeptTheSession(t *testing.T) {
 	}
 }
 
-// The first reason in the order is the one the hold reports. The session is on
-// an Ultra. Ahead of it, the Max the order prefers cannot carry the work -- its
+// The first carrier in the order is the move held. The session is on an Ultra
+// with room. Ahead of it, the Max the order prefers cannot carry the work -- its
 // week has five points, ten minutes at half a point a minute -- and after the
-// Max, another Ultra whose week ends two minutes sooner, inside the reset
-// margin, could. The session stays because the Max cannot carry it; the Ultra is
-// the move held, for --force.
-func TestTheHoldNamesTheFirstReasonInTheOrder(t *testing.T) {
+// Max, another Ultra whose week ends two minutes sooner could. The session
+// stays because it has room; the Ultra, not the Max, is the move held for
+// --force.
+func TestTheHoldNamesTheFirstCarrierInTheOrder(t *testing.T) {
 	pool := []Candidate{
 		idleOn(maxAcct("a-max", 10, 3*time.Hour, 95, 3*day)),
 		idleOn(weekOnly("b-ultra", 30, 2*day-2*time.Minute)),
 		measuredLive(weekOnly("u-live", 30, 2*day), 0.5, usage.WindowSevenDay),
 	}
 	p := Decide(pool, hoverOpts(), Config{}, NewState(), "u-live")
-	want(t, p, ActionStay, ReasonCannotCarry, "")
+	want(t, p, ActionStay, ReasonStayUntilLimit, "")
 	if p.Held.UUID != "b-ultra" {
-		t.Errorf("held %q, want the Ultra the margin refused", p.Held.UUID)
+		t.Errorf("held %q, want the Ultra that carries", p.Held.UUID)
 	}
 }
 

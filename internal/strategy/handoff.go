@@ -797,15 +797,17 @@ func nextReading(c Candidate, now time.Time) time.Time {
 //
 // The order's rule is asked first and the carry test second, so a hold names
 // what actually kept the session: an account the rule would not move to anyway
-// is held by that rule (StayUntilLimit, the weekly-reset margin), and only an
-// account the rule would move to and the work would run out is "cannot carry".
+// is held by that rule (StayUntilLimit), and only an account the rule would
+// move to and the work would run out is "cannot carry" -- which, since an
+// account with room is left only at a limit, is a move off an account nobody
+// could read.
 // The first such reason in the order is the one reported, because it is the
 // move the session would otherwise have made -- a later carrier the rule
 // refuses is still named as the move held (Held), but not as the reason. A hold
 // names its target only when that target carries, so --force never takes the
 // session onto an account the work would run out.
 // TestTheHoldNamesTheRuleThatKeptTheSession,
-// TestTheHoldNamesTheFirstReasonInTheOrder.
+// TestTheHoldNamesTheFirstCarrierInTheOrder.
 func (p *Plan) hoverMoveWithRoom(live Ranked, activeUUID string, cfg Config, st *State, now time.Time, byUUID map[string]Candidate) {
 	if p.seatCost(live) > 0 {
 		p.creditSeatReturn(live, activeUUID, cfg, st, now, byUUID)

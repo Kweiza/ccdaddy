@@ -658,32 +658,35 @@ var tierPauseLoad = paused("pause", 5.4/fiveHoursPerWeek,
 // a weekly rollover unspent, per tier; stopped is seconds a limit cut the session
 // off.
 //
-// Measured with this harness on both codes: the pace rotation hover ran before,
-// on the commit this branch was cut from, and the order. Load is weekly points a
-// minute; unspent is short-window / weekly-only; stopped is in seconds. The pace
-// rotation was asked every second (tierSimDrift at tierSimTick), because the
-// thresholds it derived moved with the clock and the drift measurement above was
-// taken on the order.
+// Measured with this harness on three codes: the pace rotation hover ran
+// before; the order as it shipped in 0.29.0, which also took the session back to
+// a five-hour account the moment it had room and moved between weekly-only seats
+// to the soonest week; and the order since 2026-11-12, which leaves an account
+// with room only at a limit. Load is weekly points a minute; unspent is
+// short-window / weekly-only; stopped is in seconds. The pace rotation was asked
+// every second (tierSimDrift at tierSimTick), because the thresholds it derived
+// moved with the clock and the drift measurement above was taken on the order.
 //
-//	                          pace rotation                    the order
-//	load           fleet   switches  unspent         stopped   switches  unspent         stopped
-//	idle  0.0075   today         33  31.28 / 138.08        0          2  2.00 / 183.55         0
-//	idle  0.0075   Fable         27  41.00 / 128.35        0          2  2.00 / 183.55         0
-//	light 0.01     today         38  28.47 / 120.35        0         54  1.99 / 168.14         0
-//	light 0.01     Fable         30  41.00 / 107.82        0         54  1.99 / 168.14         0
-//	heavy 0.025    today        183   5.64 /  29.84        0         56  1.94 /  45.66       174
-//	heavy 0.025    Fable        155  33.28 /  10.93      210         56  1.94 /  45.66       174
+//	                          pace rotation                    the order, 0.29.0                stay until a limit
+//	load           fleet   switches  unspent         stopped   switches  unspent         stopped  switches  unspent          stopped
+//	idle  0.0075   today         33  31.28 / 138.08        0          2  2.00 / 183.55         0         1   2.00 / 170.50        0
+//	idle  0.0075   Fable         27  41.00 / 128.35        0          2  2.00 / 183.55         0         1   2.00 / 170.50        0
+//	light 0.01     today         38  28.47 / 120.35        0         54  1.99 / 168.14         0         3  38.03 / 113.85        0
+//	light 0.01     Fable         30  41.00 / 107.82        0         54  1.99 / 168.14         0         3  38.03 / 113.85        0
+//	heavy 0.025    today        183   5.64 /  29.84        0         56  1.94 /  45.66       174         7  32.17 /   5.87        0
+//	heavy 0.025    Fable        155  33.28 /  10.93      210         56  1.94 /  45.66       174         7  32.17 /   5.87        0
 //
 // Readings are whole percents and the daemon's warm-ups start the idle
-// accounts' clocks, in both codes; the five-hour account's week is spent to
-// within a reading step of its last point.
+// accounts' clocks, in every code.
 //
 // Nearly two hundred moves a week was the cost the owner measured another way:
 // every switch rewrites the prompt cache of a running session, and the rotation
-// spent that to hold four accounts level with their own clocks. The order moves the
-// session twice per five-hour window it fills -- out before the limit, back at
-// the rollover -- and not otherwise, which is why light load, whose window fills
-// in the last minutes of its five hours, costs as many moves as heavy load does.
+// spent that to hold four accounts level with their own clocks. The 0.29.0 order
+// moved the session twice per five-hour window it filled -- out before the
+// limit, back at the rollover -- which on light load was as many moves as heavy
+// load. The owner took that back on 2026-11-12: a seat in use is spent to its
+// limit, and the five-hour preference is applied only when the session has to
+// move. The session now moves only when the live account reaches a limit.
 //
 // The Fable week past its last point is the variant the rotation failed
 // outright: it read the cap as the Max account's limit, left most of the
@@ -691,28 +694,28 @@ var tierPauseLoad = paused("pause", 5.4/fiveHoursPerWeek,
 // accounts had room. Under the order a cap on one model family is not a limit,
 // and the week is the same week to the hundredth.
 //
-// What it costs is the weekly-only seats' quota, stated plainly: they are spent
-// only while the five-hour account is at a limit, and then only the one whose
-// week ends first, so most of three Ultra weeks now expire unspent. What it
-// buys is the five-hour account spent to its last point every week.
+// What staying costs is the five-hour account's quota, stated plainly: windows
+// that roll while a seat carries the session are not spent, so a third of the
+// Max account's week expires unspent, where 0.29.0 spent it to within a reading
+// step. On a fleet with room to spare that is quota nobody needed. On one that
+// is short of it, it is the session stopped: today's fleet under production load
+// stopped for 46 seconds in 0.29.0 and stops for 3862 now, 134 of them with
+// another account holding room (TestEveryFleetHandsOffBeforeTheLimit).
 func TestTodaysFleetOverAWeek(t *testing.T) {
 	const week = 7 * day
-	const fiveHourWindows = float64(week) / float64(5*time.Hour)
+	limitReasons := map[string]bool{
+		ReasonLastPoint.String():           true,
+		ReasonProjectedExhaustion.String(): true,
+	}
 	for _, load := range []struct {
 		load tierLoad
-		// most is the switch bound: two per five-hour window the load fills
-		// -- the hand-off and the return -- and one per weekly rollover in the
-		// fleet, which is the only other event that reorders a seat. A load
-		// that never fills a window leaves only the rollovers and the week's
-		// own last point.
-		most float64
-		// stopped is the seconds a limit stops the session in the week, as
-		// measured: every one of them with another account holding room.
-		stopped int
+		// switches is the week's switch count as measured: each one a hand-off
+		// at a limit, the only event that moves the session.
+		switches int
 	}{
-		{tierLoads[0], 2 + 4, 0},
-		{tierLoads[1], 2*fiveHourWindows + 4, 0},
-		{tierLoads[2], 2*fiveHourWindows + 4, 174},
+		{tierLoads[0], 1},
+		{tierLoads[1], 3},
+		{tierLoads[2], 7},
 	} {
 		load := load
 		t.Run(load.load.name, func(t *testing.T) {
@@ -722,28 +725,19 @@ func TestTodaysFleetOverAWeek(t *testing.T) {
 				fableBlownFleet(), load.load, week)
 			for _, res := range []tierSimResult{today, fable} {
 				checkTierBooks(t, res)
-				// Purpose 2. This fleet never runs dry inside the week, so a
+				// This fleet never runs dry inside the week at these loads, so a
 				// second a limit stops the session is one another account could
-				// have carried. A week's reserve keeps those at none; a five-hour
-				// window is run to its next reading (closingReserve), and under
-				// heavy load the whole-percent step lets the work outrun the
-				// reading before the hand-off six times a week, for up to 29
-				// seconds. Those are pinned as measured.
-				if res.stopped != load.stopped || res.stoppedWithRoom != load.stopped {
-					t.Errorf("%d seconds stopped by a limit, %d of them with another account holding room, measured %d",
-						res.stopped, res.stoppedWithRoom, load.stopped)
+				// have carried: none.
+				if res.stopped != 0 {
+					t.Errorf("%d seconds stopped by a limit, want none", res.stopped)
 				}
-				if float64(res.total) > load.most {
-					t.Errorf("%d switches in a week, want at most %.0f: the order is moving the session "+
-						"for something other than a limit, a rollover or a return", res.total, load.most)
+				if res.total != load.switches {
+					t.Errorf("%d switches in a week, measured %d", res.total, load.switches)
 				}
-				// The five-hour tier is spent to its last point before its week
-				// ends: one account, one rollover, at most the one point the
-				// hand-off line keeps back and the one step a whole-percent
-				// reading can lag the week by.
-				if most := handoffRoomPct + usage.ReadingQuantum; res.unspent["short-window"] > most {
-					t.Errorf("%.2f points of the five-hour account's week expired unspent, want at most %v",
-						res.unspent["short-window"], most)
+				for reason, n := range res.switches {
+					if !limitReasons[reason] {
+						t.Errorf("%d switches because %q: the session moved for something other than a limit", n, reason)
+					}
 				}
 			}
 			// A cap on one model family is not a limit, so it moves nothing hover
@@ -776,30 +770,33 @@ func checkTierBooks(t *testing.T, res tierSimResult) {
 // under production load have less quota in a week than the load asks for -- so
 // a stopped second is allowed there, and only while nothing else had room.
 //
-// Eighteen variants do not meet it. Their figures are pinned here as measured
+// Fourteen variants do not meet it. Their figures are pinned here as measured
 // (stoppedWithRoomMeasured) rather than left out, and every other variant
 // measures zero -- every light and idle load among them. The gaps named are
 // the ones each figure is known to hold:
 //
 //	fleet                  load        stopped   with room elsewhere   gap
-//	today                  heavy           174       174             five-hour
-//	today                  production       46        46             five-hour
-//	today                  burst           145       145             five-hour, burst
-//	today                  pause           107       107             five-hour
-//	big Ultras             heavy           174       174             five-hour
-//	big Ultras             production       46        46             five-hour
-//	big Ultras             burst           145       145             five-hour, burst
-//	two Ultras             heavy           145       145             five-hour
-//	two Ultras             production       36        36             five-hour
-//	two Ultras             burst            58        58             five-hour
-//	two Max, three Ultras  heavy           637       637             five-hour, step, last point
-//	two Max, three Ultras  production    11674       257             five-hour, step, last point
-//	two Max, three Ultras  burst           525       525             five-hour, burst, last point
-//	two Max, three Ultras  pause            84        84             five-hour, step
+//	today                  production     3862       134             five-hour, dry
+//	today                  burst            89        89             five-hour, burst
+//	big Ultras             production        6         6             five-hour
+//	big Ultras             burst            29        29             five-hour, burst
+//	two Ultras             production      945        50             five-hour, dry
+//	two Ultras             burst            87        87             five-hour, burst
+//	two Max, three Ultras  heavy           534       534             five-hour, step, last point
+//	two Max, three Ultras  production    11600       183             five-hour, step, last point
+//	two Max, three Ultras  burst           268       268             five-hour, burst, last point
+//	two Max, three Ultras  pause            54        54             five-hour, step
 //	two Max                heavy        122628      3501             five-hour, step, last point
 //	two Max                production    69692       161             five-hour, step
 //	two Max                burst         61343       605             five-hour, burst, last point
 //	two Max                pause          8372       666             five-hour, burst, last point
+//
+// The figures were re-measured when hover began leaving an account with room
+// only at a limit (2026-11-12); the gaps were traced before it, and "dry" marks
+// the two variants that began running dry then. Their five-hour quota rolls
+// unspent while a seat carries the session (TestTodaysFleetOverAWeek), so the
+// week has less quota in it than the load asks for. The two Max fleet has no
+// seat, and its figures did not move.
 //
 // Two of the gaps are rules' prices rather than projections' misses.
 //
@@ -893,24 +890,19 @@ func TestEveryFleetHandsOffBeforeTheLimit(t *testing.T) {
 // stoppedWithRoomMeasured is the table above, by subtest name: the variants
 // whose stopped-with-room seconds are not zero, at the figure they measure.
 var stoppedWithRoomMeasured = map[string]int{
-	// The five-hour gap alone, or with the burst's: the fleets that do not run
-	// dry, whose five-hour windows are run to their next readings.
-	"today/heavy":           174,
-	"today/production":      46,
-	"today/burst":           145,
-	"today/pause":           107,
-	"big Ultras/heavy":      174,
-	"big Ultras/production": 46,
-	"big Ultras/burst":      145,
-	"two Ultras/heavy":      145,
-	"two Ultras/production": 36,
-	"two Ultras/burst":      58,
+	// The five-hour gap alone, or with the burst's or the fleet running dry.
+	"today/production":      134,
+	"today/burst":           89,
+	"big Ultras/production": 6,
+	"big Ultras/burst":      29,
+	"two Ultras/production": 50,
+	"two Ultras/burst":      87,
 	// The fleets that run dry, where the step, the burst and the wait for a
 	// last point to read empty add to the five-hour gap.
-	"two Max, three Ultras/heavy":      637,
-	"two Max, three Ultras/production": 257,
-	"two Max, three Ultras/burst":      525,
-	"two Max, three Ultras/pause":      84,
+	"two Max, three Ultras/heavy":      534,
+	"two Max, three Ultras/production": 183,
+	"two Max, three Ultras/burst":      268,
+	"two Max, three Ultras/pause":      54,
 	"two Max/heavy":                    3501,
 	"two Max/production":               161,
 	"two Max/burst":                    605,

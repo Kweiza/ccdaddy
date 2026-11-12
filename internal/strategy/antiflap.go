@@ -215,19 +215,16 @@ const (
 	// instant the answer can change.
 	ReasonNothingCanServe
 	// ReasonLastPoint: the live account is down to its last point on a window
-	// no model choice can dodge, and the target is not at a limit. The four
-	// hover reasons are appended last for the reason every value since
+	// no model choice can dodge, and the target is not at a limit. The hover
+	// reasons are appended last for the reason every value since
 	// ReasonProjectedExhaustion was.
 	ReasonLastPoint
-	// ReasonShortWindowRoom: under hover, a five-hour account has room again and
-	// the live account is not one -- the return rule 3 of hover's order names.
+	// ReasonShortWindowRoom: under hover, the session leaves a live account
+	// nobody could read, or one the engine had left at a limit, for a five-hour
+	// account with room.
 	ReasonShortWindowRoom
-	// ReasonSoonerWeeklyReset: under hover, a weekly-only account whose week
-	// ends sooner than the live one's by more than recovery_hysteresis.
-	ReasonSoonerWeeklyReset
-	// ReasonStayUntilLimit: under hover, another five-hour account ranks first
-	// but the live one is a five-hour account with room, and a five-hour
-	// account is left only at a limit.
+	// ReasonStayUntilLimit: under hover, another account ranks first but the
+	// live one has room, and an account with room is left only at a limit.
 	ReasonStayUntilLimit
 	// ReasonCannotCarry: under hover, the live account has room and the account
 	// the order prefers would not carry the work running now -- it would be at
@@ -282,10 +279,8 @@ func (r Reason) String() string {
 		return "the live account is down to its last point before a limit"
 	case ReasonShortWindowRoom:
 		return "a short-window account has room again"
-	case ReasonSoonerWeeklyReset:
-		return "another weekly-only account's week resets sooner"
 	case ReasonStayUntilLimit:
-		return "staying on the short-window account until it reaches a limit"
+		return "staying on the live account until it reaches a limit"
 	case ReasonCannotCarry:
 		return "the account the order prefers cannot carry the work running now"
 	case ReasonWaitsForAReading:
@@ -864,32 +859,34 @@ func weeklyResetGate(active, target Ranked, cfg Config, allow Reason) (Reason, b
 // A live account at a limit never reaches it: hoverMove answers that state by
 // tier, whichever account sorts first.
 //
-// A BETTER rung is a move: that is the order saying the session belongs
-// elsewhere -- back on a five-hour account with room, or onto room from an
-// unreadable account. The SAME rung is where the order's rules differ by tier:
+// An account with room is left only at a limit, whatever its rung. The order
+// decides where the session GOES -- from an account at a limit, at start-up, or
+// off an account nobody could read -- and never pulls it off one that still
+// has room:
 //
-//   - Two five-hour accounts: stay. The one ranked first may have its week
-//     ending sooner, but a five-hour account is left only at a limit, and
-//     rotating between two with room is the move hover exists not to make.
-//     The order still decides which one is ENTERED -- from a weekly-only seat,
-//     at start-up, or when the live one reaches its limit.
-//   - Two weekly-only accounts: the soonest weekly reset, past the margin.
-//   - Two unreadable accounts: nothing makes the first a better place for the
-//     session, so it stays where it is.
+//   - A five-hour account is not left for another that merely holds more room
+//     or whose week ends sooner: rotating between two with room is the move
+//     hover exists not to make.
+//   - A weekly-only seat is not left for a five-hour account that has room
+//     again, nor for another seat whose week ends sooner. The owner chose this
+//     on 2026-11-12: a seat in use is spent to its limit, and the five-hour
+//     preference is applied when the session next has to move. The cost is the
+//     one rule 1 of hover.go states: five-hour quota that rolls while a seat
+//     carries the session is not spent.
+//   - A live account on a worse rung -- unreadable, or one the engine had left
+//     at a limit -- moves onto room.
 //
 // An EMPTY target never reaches here ahead of a live account that is not empty:
 // the empty rung sorts last, and it is never a carrier. That is the
 // eighteen-switch incident's guard,
 // TestAFleetWithNothingLeftStaysPutInsteadOfSwappingEmptyForEmpty.
 func hoverGate(active, target Ranked, cfg Config) (Reason, bool, time.Time) {
-	ra, rt := active.Rung(), target.Rung()
+	ra := active.Rung()
 	switch {
-	case rt < ra:
-		return leaveReason(active, target), false, time.Time{}
-	case rt == RungShortWindow:
+	case ra == RungShortWindow || ra == RungWeeklyOnly:
 		return ReasonStayUntilLimit, true, time.Time{}
-	case rt == RungWeeklyOnly:
-		return weeklyResetGate(active, target, cfg, ReasonSoonerWeeklyReset)
+	case target.Rung() < ra:
+		return leaveReason(active, target), false, time.Time{}
 	}
 	return ReasonAlreadyBest, true, time.Time{}
 }

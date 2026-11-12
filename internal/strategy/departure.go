@@ -42,8 +42,8 @@ import (
 
 // Departure is the half of a switch the ranking later reads: the account the
 // engine left, and the window that had it at a limit. Closing is empty when the
-// account left was not at one -- a return to a five-hour account, a move to a
-// weekly-only seat whose week ends sooner, a user's own switch.
+// account left was not at one -- a move off an account nobody could read, a
+// return from a credit seat, a user's own switch.
 type Departure struct {
 	From    string
 	Closing usage.WindowName
