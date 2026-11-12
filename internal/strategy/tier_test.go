@@ -36,6 +36,47 @@ func TestAFiveHourKeyMakesAnAccountShortWindowEvenWhenItIsUnspent(t *testing.T) 
 	}
 }
 
+// unspentMax is a five-hour account nothing has spent against since both its
+// windows rolled: every key is there and every figure is null, so nothing about
+// its room can be read -- only that it has a five-hour window.
+func unspentMax(uuid string) Candidate {
+	return sub(uuid, &usage.Snapshot{FiveHour: usage.NewWindow(nil, nil), SevenDay: usage.NewWindow(nil, nil)})
+}
+
+// An account whose reading names a five-hour window but reports no figure is
+// still a five-hour account, and at a hand-off it is entered before an Ultra
+// with room. Filed as unreadable it went behind every Ultra, and since the
+// session is kept on an Ultra until its limit, the five-hour quota went
+// unspent for as long as that took. Among five-hour accounts it follows the
+// ones that report a weekly reset.
+func TestAFiveHourAccountWithNoFiguresIsEnteredBeforeAnUltra(t *testing.T) {
+	pool := []Candidate{
+		weekOnly("u1-live", 99, 5*day),
+		weekOnly("u2-sooner", 40, 1*day),
+		unspentMax("a-fresh"),
+	}
+	if r, _ := find(Rank(pool, hoverOpts()), "a-fresh"); r.Headroom.Known || r.Rung() != RungShortWindow {
+		t.Fatalf("known %v rung %v: the fixture needs an unread account filed with the five-hour ones",
+			r.Headroom.Known, r.Rung())
+	}
+	want(t, Decide(pool, hoverOpts(), Config{}, NewState(), "u1-live"), ActionSwitch, ReasonLastPoint, "a-fresh")
+
+	pool = append(pool, maxAcct("b-read", 10, 3*time.Hour, 50, 4*day))
+	eq(t, order(Rank(pool, hoverOpts())), []string{"b-read", "a-fresh", "u2-sooner", "u1-live"})
+}
+
+// The same account live is kept until a limit, like any five-hour account: an
+// Ultra with room does not take the session off it, and neither does a
+// five-hour account whose figures can be read.
+func TestALiveFiveHourAccountWithNoFiguresIsKept(t *testing.T) {
+	pool := []Candidate{
+		unspentMax("a-live"),
+		weekOnly("u-ultra", 40, 1*day),
+		maxAcct("b-read", 10, 3*time.Hour, 50, 1*day),
+	}
+	want(t, Decide(pool, hoverOpts(), Config{}, NewState(), "a-live"), ActionStay, ReasonStayUntilLimit, "")
+}
+
 // A verified Ultra seat sends five_hour null. Every window it carries is a
 // week, so it is weekly-only however many weekly windows it has.
 func TestAnUltraSeatIsWeeklyOnly(t *testing.T) {
