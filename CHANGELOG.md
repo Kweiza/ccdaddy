@@ -16,6 +16,8 @@ must reference accounts by `uuid` or `alias`.
 
 ## [Unreleased]
 
+## [0.31.0] — 2026-11-12
+
 ### Changed
 
 - **Hover returns to a five-hour account while the work rests, in a week
@@ -4360,7 +4362,8 @@ one, pin it — see the README's *Installing a specific version*.
   enforced `sha256sums.txt`, a keyless build-provenance attestation, and both
   installers.
 
-[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.30.1...HEAD
+[Unreleased]: https://github.com/Kweiza/ccdaddy/compare/v0.31.0...HEAD
+[0.31.0]: https://github.com/Kweiza/ccdaddy/compare/v0.30.1...v0.31.0
 [0.30.1]: https://github.com/Kweiza/ccdaddy/compare/v0.30.0...v0.30.1
 [0.30.0]: https://github.com/Kweiza/ccdaddy/compare/v0.29.2...v0.30.0
 [0.29.2]: https://github.com/Kweiza/ccdaddy/compare/v0.29.1...v0.29.2
