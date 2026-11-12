@@ -676,3 +676,51 @@ func TestWhenTheLiveUltrasWeekResetsTheSessionStays(t *testing.T) {
 	eq(t, order(Rank(pool, hoverOpts())), []string{"u2", "u3", "u1-live"})
 	want(t, Decide(pool, hoverOpts(), Config{}, NewState(), "u1-live"), ActionStay, ReasonStayUntilLimit, "")
 }
+
+// zeroMax is unspentMax's twin read as figures: both windows at 0%.
+func zeroMax(uuid string) Candidate {
+	return sub(uuid, &usage.Snapshot{FiveHour: win(0, 5*time.Hour), SevenDay: win(0, 7*day)})
+}
+
+// withLiveWork has the work measured at perMin five-hour points a minute and
+// seen running a minute ago.
+func withLiveWork(c Candidate, perMin float64) Candidate {
+	c.LiveBurns = []usage.LiveBurn{{PerMin: perMin, Window: usage.WindowFiveHour, From: now.Add(-4 * time.Minute), At: now.Add(-time.Minute)}}
+	c.WorkRunning, c.LastPairAt = true, now.Add(-time.Minute)
+	return c
+}
+
+// An account with no figures is projected like its twin read at 0%. Without the
+// projection it was a carrier on its level alone and, live, had no limit the
+// engine could see coming: entered ahead of an Ultra while its poll was
+// throttled for half an hour, and kept there into the five-hour limit.
+func TestAFiveHourAccountWithNoFiguresIsProjected(t *testing.T) {
+	t.Run("entering", func(t *testing.T) {
+		for _, mk := range []func(string) Candidate{zeroMax, unspentMax} {
+			a := mk("a-cand")
+			a.FetchedAt, a.NextPollAt = now.Add(-time.Minute), now.Add(30*time.Minute)
+			a.LastRateLimited = now.Add(-time.Minute)
+			live := withLiveWork(polled(maxAcct("l-live", 99, 3*time.Hour, 50, 4*day), 180*time.Second), 4)
+			pool := []Candidate{live, a, weekOnly("u-ultra", 40, 1*day)}
+			p := Decide(pool, hoverOpts(), Config{}, NewState(), "l-live")
+			if r, _ := find(p.Result, "a-cand"); r.Carries || !r.HasRunway {
+				_, read := a.Usage.FiveHour.Percent()
+				t.Errorf("read %v: carries %v runway %v, want a runway that does not carry the work",
+					read, r.Carries, r.HasRunway)
+			}
+			want(t, p, ActionSwitch, ReasonLastPoint, "u-ultra")
+		}
+	})
+	t.Run("staying", func(t *testing.T) {
+		for _, mk := range []func(string) Candidate{zeroMax, unspentMax} {
+			a := mk("a-live")
+			a.FetchedAt, a.NextPollAt = now.Add(-25*time.Minute), now.Add(5*time.Minute)
+			a.LastRateLimited = now.Add(-24 * time.Minute)
+			other := withLiveWork(idleOn(maxAcct("l-left", 60, 3*time.Hour, 40, 3*day)), 4)
+			pool := []Candidate{a, other, weekOnly("u-ultra", 40, 1*day)}
+			st := NewState()
+			st.RecordSwitch("a-live", now.Add(-25*time.Minute), Departure{})
+			want(t, Decide(pool, hoverOpts(), Config{}, st, "a-live"), ActionSwitch, ReasonProjectedExhaustion, "u-ultra")
+		}
+	})
+}

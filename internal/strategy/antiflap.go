@@ -280,7 +280,7 @@ func (r Reason) String() string {
 	case ReasonLastPoint:
 		return "the live account is down to its last point before a limit"
 	case ReasonShortWindowRoom:
-		return "a short-window account with room is first in the order"
+		return "the session moves to a short-window account with room"
 	case ReasonStayUntilLimit:
 		return "staying on the live account until it reaches a limit"
 	case ReasonCannotCarry:
