@@ -533,7 +533,7 @@ func OutOfQuota(h Headroom) (out, known bool) {
 // instant as "soonest" would hand the session to exactly the account whose
 // quota is in no danger. Both consume-first and hover's weekly-only rung sort on
 // this, so the two cannot disagree about a week that has ended.
-// TestWhenTheLiveUltrasWeekResetsTheNextSoonestTakesOver.
+// TestWhenTheLiveUltrasWeekResetsTheSessionStays.
 func weeklyResetOf(s *usage.Snapshot, model string, t Thresholds, now time.Time) timeValue {
 	var out timeValue
 	for _, w := range bindingWindows(s, model, t) {
