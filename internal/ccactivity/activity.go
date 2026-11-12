@@ -22,13 +22,19 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 )
 
-// cacheFor is how long one walk's answer stands in this process. The daemon asks
-// once a second while the return is armed, and a walk can go on being asked for
-// days when no move follows -- a cooldown, a switch that keeps failing, a
-// directory it cannot read. An answer this old can read a session that resumed
-// inside it as still resting, and that costs at most the one cache write that
-// session's first turn made: the rest it read was an hour long
-// (strategy.RestQuiet), so the cache from before it had already expired.
+// cacheFor is how long a walk's answer stands in this process when it says the
+// work is active or found nothing. The daemon asks once a second while the
+// return is armed, a walk over the owner's ~9,000 entries takes about a tenth
+// of a second, and an armed pass can go on asking for days -- a directory it
+// cannot read, work that keeps going. Neither answer moves the session, so
+// holding it costs only a later move.
+//
+// An answer that reads as rest is never held (Last): it is the one that moves
+// the session, and a held one would read a session that resumed since the walk
+// as resting -- moving it in its first turn, and throwing away the cache write
+// that turn made. Walking it again costs a tenth of a second a pass for as long
+// as the move does not follow, which is a cooldown's two minutes or a switch
+// that fails.
 const cacheFor = 15 * time.Second
 
 // LastWrite is the newest modification time of any transcript under configHome
@@ -122,16 +128,18 @@ var cache struct {
 	found  bool
 }
 
-// Last is LastWrite on Claude Code's own config root, every answer -- nothing
-// found included -- reused for cacheFor in this process.
-func Last(now time.Time) (time.Time, bool) {
+// Last is LastWrite on Claude Code's own config root. An answer that the work
+// is active -- a write younger than quiet -- or that nothing was found is reused
+// for cacheFor in this process; one that reads as rest is always walked again.
+func Last(now time.Time, quiet time.Duration) (time.Time, bool) {
 	home, err := ccpath.ConfigHome()
 	if err != nil {
 		return time.Time{}, false
 	}
 	cache.Lock()
 	defer cache.Unlock()
-	if age := now.Sub(cache.at); cache.home == home && !cache.at.IsZero() && age >= 0 && age < cacheFor {
+	if age := now.Sub(cache.at); cache.home == home && !cache.at.IsZero() && age >= 0 && age < cacheFor &&
+		(!cache.found || now.Sub(cache.newest) < quiet) {
 		return cache.newest, cache.found
 	}
 	cache.newest, cache.found = LastWrite(home, now)

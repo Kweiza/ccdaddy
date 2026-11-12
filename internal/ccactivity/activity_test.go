@@ -89,26 +89,39 @@ func TestAFutureMtimeCountsAsNow(t *testing.T) {
 	}
 }
 
-// Last reads Claude Code's own root and holds every answer for cacheFor,
-// nothing found included: a daemon asking once a second for days walks once
-// every cacheFor.
-func TestLastIsCachedForItsWindow(t *testing.T) {
+// Last holds an answer that the work is active, or that nothing was found, for
+// cacheFor -- and walks again for one that reads as rest, so a session that
+// resumed since the walk is never moved on a stale rest.
+func TestLastHoldsOnlyAnswersThatDoNotMove(t *testing.T) {
+	const quiet = time.Hour
 	home := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", home)
-	now := base.Add(2 * time.Hour)
-	if _, ok := Last(now); ok {
+	now := base.Add(30 * time.Minute)
+	if _, ok := Last(now, quiet); ok {
 		t.Fatal("found activity in an empty root")
 	}
 	path := filepath.Join(home, "projects", "-a", "s.jsonl")
 	touch(t, path, base)
-	if _, ok := Last(now.Add(cacheFor - time.Second)); ok {
+	if _, ok := Last(now.Add(time.Second), quiet); ok {
 		t.Fatal("nothing found was walked again inside its window")
 	}
-	if at, ok := Last(now.Add(cacheFor)); !ok || !at.Equal(base) {
-		t.Fatalf("after the window Last = %v, %v; want the new write", at, ok)
+	if at, ok := Last(now.Add(cacheFor), quiet); !ok || !at.Equal(base) {
+		t.Fatalf("after the window Last = %v, %v; want the write", at, ok)
 	}
-	touch(t, path, base.Add(time.Hour))
-	if at, _ := Last(now.Add(cacheFor + time.Second)); !at.Equal(base) {
-		t.Fatalf("inside the window Last = %v, want the cached %v", at, base)
+	// Active: held. A write since is not seen inside the window.
+	touch(t, path, base.Add(40*time.Minute))
+	if at, _ := Last(now.Add(cacheFor+time.Second), quiet); !at.Equal(base) {
+		t.Fatalf("an active answer inside the window: Last = %v, want the held %v", at, base)
+	}
+	// Rest: the walk an hour after base would read as rest, so the next ask
+	// walks again and sees the write the session made since.
+	rest := base.Add(quiet)
+	touch(t, path, base)
+	if at, _ := Last(rest, quiet); !at.Equal(base) {
+		t.Fatalf("Last = %v at the rest", at)
+	}
+	touch(t, path, rest.Add(-time.Second))
+	if at, _ := Last(rest.Add(time.Second), quiet); !at.Equal(rest.Add(-time.Second)) {
+		t.Fatalf("a resting answer was held: Last = %v, want the write made since", at)
 	}
 }
