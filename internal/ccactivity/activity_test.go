@@ -76,39 +76,39 @@ func TestAnUnreadableProjectIsNothingFound(t *testing.T) {
 	}
 }
 
-// A transcript dated past the clock is a clock that moved, not a write: it is
-// passed over rather than standing as the newest write until the clock catches
-// up.
-func TestAFutureMtimeIsPassedOver(t *testing.T) {
+// A transcript dated past the clock counts as written now: after the clock
+// steps back, the live session's own writes are the ones that look like the
+// future, and its older ones must not read as rest.
+func TestAFutureMtimeCountsAsNow(t *testing.T) {
 	home := t.TempDir()
-	touch(t, filepath.Join(home, "projects", "-a", "s.jsonl"), base)
-	touch(t, filepath.Join(home, "projects", "-b", "future.jsonl"), base.AddDate(1, 0, 0))
-	if at, ok := LastWrite(home, base.Add(time.Hour)); !ok || !at.Equal(base) {
-		t.Fatalf("LastWrite = %v, %v; want the write that is not in the future", at, ok)
+	now := base.Add(time.Hour)
+	touch(t, filepath.Join(home, "projects", "-a", "older.jsonl"), base)
+	touch(t, filepath.Join(home, "projects", "-b", "live.jsonl"), now.Add(2*time.Minute))
+	if at, ok := LastWrite(home, now); !ok || !at.Equal(now) {
+		t.Fatalf("LastWrite = %v, %v; want the clock's own now", at, ok)
 	}
 }
 
-// Last reuses a walk only while it says the work is active. An answer that
-// would read as rest is walked again, so a session that resumed after the
-// cached walk is seen at once.
-func TestLastReusesOnlyAnActiveAnswer(t *testing.T) {
+// Last reads Claude Code's own root and holds every answer for cacheFor,
+// nothing found included: a daemon asking once a second for days walks once
+// every cacheFor.
+func TestLastIsCachedForItsWindow(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", home)
-	const quiet = 10 * time.Minute
+	now := base.Add(2 * time.Hour)
+	if _, ok := Last(now); ok {
+		t.Fatal("found activity in an empty root")
+	}
 	path := filepath.Join(home, "projects", "-a", "s.jsonl")
 	touch(t, path, base)
-
-	now := base.Add(5 * time.Minute)
-	if at, ok := Last(now, quiet); !ok || !at.Equal(base) {
-		t.Fatalf("Last = %v, %v", at, ok)
+	if _, ok := Last(now.Add(cacheFor - time.Second)); ok {
+		t.Fatal("nothing found was walked again inside its window")
 	}
-	touch(t, path, base.Add(6*time.Minute))
-	if at, _ := Last(now.Add(time.Second), quiet); !at.Equal(base) {
-		t.Fatalf("an active answer inside the window: Last = %v, want the cached %v", at, base)
+	if at, ok := Last(now.Add(cacheFor)); !ok || !at.Equal(base) {
+		t.Fatalf("after the window Last = %v, %v; want the new write", at, ok)
 	}
-	// Ten minutes after the cached write the cached answer would read as rest:
-	// it is walked again, and the newer write is seen.
-	if at, _ := Last(base.Add(quiet), quiet); !at.Equal(base.Add(6 * time.Minute)) {
-		t.Fatalf("Last = %v, want the newer write rather than a cached rest", at)
+	touch(t, path, base.Add(time.Hour))
+	if at, _ := Last(now.Add(cacheFor + time.Second)); !at.Equal(base) {
+		t.Fatalf("inside the window Last = %v, want the cached %v", at, base)
 	}
 }

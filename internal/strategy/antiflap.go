@@ -886,8 +886,9 @@ func weeklyResetGate(active, target Ranked, cfg Config) (Reason, bool, time.Time
 //     at a limit -- moves onto room.
 //   - The one exception to the second rule (restReturn): while the work rests
 //     and another weekly-only seat is at its limit, a weekly-only seat is left
-//     for a five-hour account. The move lands while nothing runs, so it costs
-//     the session no warm cache, and it is made only in a week the fleet is
+//     for a five-hour account. The move lands after an hour with no transcript
+//     written, so the prompt cache it would cost has already expired
+//     (RestQuiet), and it is made only in a week the fleet is
 //     short of quota, where the five-hour quota otherwise left to roll is what
 //     stops the session later. The owner chose this on 2026-11-12 from
 //     TestAReturnWhileTheWorkRestsSpendsTheMaxWhenTheFleetIsShort.

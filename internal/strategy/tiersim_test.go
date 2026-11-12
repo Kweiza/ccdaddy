@@ -808,7 +808,7 @@ func checkTierBooks(t *testing.T, res tierSimResult) {
 // under production load have less quota in a week than the load asks for -- so
 // a stopped second is allowed there, and only while nothing else had room.
 //
-// Fifteen variants do not meet it. Their figures are pinned here as measured
+// Fourteen variants do not meet it. Their figures are pinned here as measured
 // (stoppedWithRoomMeasured) rather than left out, and every other variant
 // measures zero -- every light and idle load among them. The gaps named are
 // the ones each figure is known to hold:
@@ -816,7 +816,6 @@ func checkTierBooks(t *testing.T, res tierSimResult) {
 //	fleet                  load        stopped   with room elsewhere   gap
 //	today                  production       26        26             five-hour
 //	today                  burst            89        89             five-hour, burst
-//	today                  pause             6         6             five-hour
 //	big Ultras             production        6         6             five-hour
 //	big Ultras             burst            29        29             five-hour, burst
 //	two Ultras             production       46        46             five-hour
@@ -839,9 +838,8 @@ func checkTierBooks(t *testing.T, res tierSimResult) {
 // while a seat carried the session. The rest return spends it again
 // (TestAReturnWhileTheWorkRestsSpendsTheMaxWhenTheFleetIsShort). It costs the
 // fleets that run dry anyway a few seconds -- two Max, three Ultras went from
-// 183 to 231 under production load and from 54 to 60 under the pause load --
-// and gave today's fleet its first six under the pause load. The two Max fleet
-// has no seat, and its figures did not move.
+// 183 to 231 under production load and from 54 to 60 under the pause load. The
+// two Max fleet has no seat, and its figures did not move.
 //
 // Two of the gaps are rules' prices rather than projections' misses.
 //
@@ -939,7 +937,6 @@ var stoppedWithRoomMeasured = map[string]int{
 	// The five-hour gap alone, or with the burst's or the fleet running dry.
 	"today/production":      26,
 	"today/burst":           89,
-	"today/pause":           6,
 	"big Ultras/production": 6,
 	"big Ultras/burst":      29,
 	"two Ultras/production": 46,

@@ -2,9 +2,9 @@ package switcher
 
 import (
 	"fmt"
-	"github.com/Kweiza/ccdaddy/internal/ccactivity"
 	"time"
 
+	"github.com/Kweiza/ccdaddy/internal/ccactivity"
 	"github.com/Kweiza/ccdaddy/internal/cclink"
 	"github.com/Kweiza/ccdaddy/internal/config"
 	"github.com/Kweiza/ccdaddy/internal/provider"
@@ -269,7 +269,7 @@ func Evaluate(s *store.Store, opts EvalOptions) (Evaluation, error) {
 	o.Model = opts.Model
 	// Whether the work is resting, read off Claude Code's transcripts and only
 	// when hover's rest return could fire (strategy.Options.LastActivity).
-	o.LastActivity = func() (time.Time, bool) { return ccactivity.Last(now, strategy.RestQuiet) }
+	o.LastActivity = func() (time.Time, bool) { return ccactivity.Last(now) }
 	ev.Plan, ev.Decided = strategy.Decide(cands, o, cfg.StrategyConfig(), st, liveUUID), true
 
 	if ev.Plan.Action == strategy.ActionStay && opts.Force {

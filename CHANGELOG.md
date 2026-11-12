@@ -21,13 +21,15 @@ must reference accounts by `uuid` or `alias`.
 - **Hover returns to a five-hour account while the work rests, in a week
   that is short of quota.** When another weekly-only account (such as an
   Ultra seat) is at its limit and no Claude Code session has written to its
-  transcript for ten minutes, the session moves from the weekly-only account
+  transcript for an hour, the session moves from the weekly-only account
   it is on to a five-hour account that can carry the work, instead of
   staying there until its own limit. In a week where every weekly-only
   account has room nothing changes. On the simulated week of one Max and
   three Ultra seats under the production rate in two-hour sessions, the
   session now stops for 26 seconds instead of 3862, with 20 switches instead
-  of 13; every extra switch is made while the work rests. The reason given is
+  of 13, and in the simulation every extra switch is made while the work
+  rests. An hour is how long Claude Code keeps a subscriber's prompt cache,
+  so the move costs no warm cache. The reason given is
   "the work is resting and a weekly-only account is at its limit, so the
   session returns to a short-window account". ccdad reads the modification
   times of `projects/**/*.jsonl` under Claude Code's config directory for
