@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Kweiza/ccdaddy/internal/atomicfile"
 	"os"
 	"path/filepath"
 	"slices"
@@ -397,7 +398,7 @@ func LoadHistory() (*History, error) {
 	}
 	h := &History{data: historyFile{Version: 1, Accounts: map[string]Account{}}}
 
-	raw, err := os.ReadFile(filepath.Join(root, FileName))
+	raw, err := atomicfile.ReadFile(filepath.Join(root, FileName))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return h, nil
