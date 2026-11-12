@@ -220,15 +220,15 @@ const (
 	// ReasonProjectedExhaustion was.
 	ReasonLastPoint
 	// ReasonShortWindowRoom: under hover, the session leaves a live account
-	// nobody could read, or one the engine had left at a limit, for a five-hour
-	// account with room.
+	// nobody could read, or a credit seat, for a five-hour account with room.
 	ReasonShortWindowRoom
 	// ReasonStayUntilLimit: under hover, another account ranks first but the
 	// live one has room, and an account with room is left only at a limit.
 	ReasonStayUntilLimit
-	// ReasonCannotCarry: under hover, the live account has room and the account
-	// the order prefers would not carry the work running now -- it would be at
-	// a limit at its first live reading -- so the session stays.
+	// ReasonCannotCarry: under hover, the live account is not at a limit --
+	// nobody could read it, since one with room is left only at a limit -- and
+	// the account the order prefers would not carry the work running now: it
+	// would be at a limit at its first live reading, so the session stays.
 	ReasonCannotCarry
 	// ReasonWaitsForAReading: under hover, the live account is at a limit --
 	// projected there, or for the credit pool on its last point by level --
@@ -825,10 +825,10 @@ func gate(res Result, target Ranked, activeUUID string, cfg Config, st *State, n
 	case ModeConsumeFirst:
 		return weeklyResetGate(active, target, cfg)
 
-	case ModeHover:
-		return hoverGate(active, target)
-
 	default:
+		// ModeHover never reaches here: with an account in the order, Decide
+		// hands every hover pass to hoverMove, and without one there is no
+		// target to gate.
 		return headroomGate(active, target, cfg)
 	}
 }
@@ -856,10 +856,12 @@ func weeklyResetGate(active, target Ranked, cfg Config) (Reason, bool, time.Time
 // A live account at a limit never reaches it: hoverMove answers that state by
 // tier, whichever account sorts first.
 //
-// An account with room is left only at a limit, whatever its rung. The order
-// decides where the session GOES -- from an account at a limit, at start-up, or
-// off an account nobody could read -- and never pulls it off one that still
-// has room:
+// A subscription account with room is left only at a limit, whatever its rung.
+// The order decides where the session GOES -- from an account at a limit, from
+// a login that is not a managed account, or off an account nobody could read --
+// and never pulls it off one that still has room. A credit seat is the one
+// exception, and it is not decided here: it goes back to free quota on the
+// levels alone (creditSeatReturn).
 //
 //   - A five-hour account is not left for another that merely holds more room
 //     or whose week ends sooner: rotating between two with room is the move

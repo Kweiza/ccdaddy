@@ -793,7 +793,7 @@ func nextReading(c Candidate, now time.Time) time.Time {
 
 // hoverMoveWithRoom is the move from a live account with room: to the first
 // account ahead of it in the order that can carry the work, on the order's own
-// same-rung rules (hoverGate).
+// rule for leaving an account with room (hoverGate).
 //
 // The order's rule is asked first and the carry test second, so a hold names
 // what actually kept the session: an account the rule would not move to anyway
@@ -861,13 +861,9 @@ func (p *Plan) hoverMoveWithRoom(live Ranked, activeUUID string, cfg Config, st 
 // TestAPoolSeatReturnsToFreeQuotaBeforeAPrimarySeat.
 func (p *Plan) creditSeatReturn(live Ranked, activeUUID string, cfg Config, st *State, now time.Time, byUUID map[string]Candidate) {
 	back := func(target Ranked) {
-		// The order's own reason when the order would make this move, so the
-		// sentence says which rule it is; else why the seat is left.
-		reason, refused, _ := hoverGate(live, target)
-		if refused {
-			reason = leaveReason(live, target)
-		}
-		p.moveOrHold(target, reason, activeUUID, cfg, st, now)
+		// Why the seat is left: hoverGate would hold a seat with room, so the
+		// sentence is the live account's own (leaveReason).
+		p.moveOrHold(target, leaveReason(live, target), activeUUID, cfg, st, now)
 	}
 	for cost := costFree; cost < p.seatCost(live); cost++ {
 		rung := p.orderWhere(p.Result, func(r Ranked) bool { return !isActive(r.UUID, activeUUID) && p.seatCost(r) == cost })

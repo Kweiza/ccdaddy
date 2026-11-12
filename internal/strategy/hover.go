@@ -11,7 +11,8 @@ import (
 // The owner's rules, in the order the ranking applies them:
 //
 //  1. The account the session is on is kept until it reaches a limit, whatever
-//     kind it is: a five-hour account is not left for another that holds more
+//     kind of subscription it is -- a credit seat alone goes back to free quota
+//     with room left (creditSeatReturn): a five-hour account is not left for another that holds more
 //     room, and a weekly-only seat is not left for a five-hour account that has
 //     room again or for a seat whose week ends sooner (the owner's rule of
 //     2026-11-12).

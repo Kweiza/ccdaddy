@@ -1120,3 +1120,14 @@ func TestARatioOfOneIsNoMultiplicativeMarginAtAll(t *testing.T) {
 	p := Decide(cands, o, cfg, NewState(), "a")
 	want(t, p, ActionSwitch, ReasonBetterTarget, "b")
 }
+
+// A week that has already rolled, whose refresh has not landed, holds the least
+// perishable quota in the pool: consume-first files it behind a week that ends
+// in two days, not ahead of it as the soonest. Consume-first reads the reset as
+// the reading gives it, so this is where weeklyResetOf's future-only rule shows.
+func TestConsumeFirstDoesNotReadARolledWeekAsTheSoonest(t *testing.T) {
+	o := opts()
+	o.Strategy = StrategyConsumeFirst
+	pool := []Candidate{weekly("a-rolled", 60, -time.Minute), weekly("b", 60, 48*time.Hour)}
+	eq(t, order(Rank(pool, o)), []string{"b", "a-rolled"})
+}

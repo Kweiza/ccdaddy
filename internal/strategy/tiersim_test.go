@@ -803,7 +803,8 @@ func checkTierBooks(t *testing.T, res tierSimResult) {
 // The five-hour gap: a five-hour window is run to its next reading
 // (closingReserve), so work that outruns the reading before the hand-off --
 // the step under a steady load, a burst -- stops the session until the next
-// reading, for up to 37 seconds a stop on the fleets that do not run dry. With
+// reading, for up to 37 seconds a stop on the fleets that do not run dry as
+// measured before 2026-11-12 (the harness does not report the longest). With
 // the reserve, today's fleet and the big Ultras stopped only under burst load,
 // 29 s each, and none of the rest of those three fleets but the two Ultras
 // under production load, 159 s; the two dry fleets measured two Max 1170,
