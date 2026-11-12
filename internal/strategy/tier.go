@@ -21,16 +21,18 @@ type Rung uint8
 const (
 	// RungShortWindow is an account that carries a window shorter than a week
 	// -- a five-hour window, on today's plans -- with room on everything that
-	// can stop a session. These are spent first: their quota comes back every
-	// five hours, so a point of it not spent now is a point thrown away.
+	// can stop a session, or with no figure on any window yet. These are spent
+	// first: their quota comes back every five hours, so a point of it not
+	// spent now is a point thrown away.
 	RungShortWindow Rung = iota
 	// RungWeeklyOnly is an account with room whose every window is a week. A
 	// verified Ultra seat is one; so is a primary credit seat, which carries no
 	// window at all and so, having no weekly reset either, sorts last here.
 	RungWeeklyOnly
-	// RungUnknown is an account nobody could read. A maybe beats a no, which
-	// is the place headroomTier gives it too: behind every account known to
-	// have room, ahead of every account known not to.
+	// RungUnknown is an account nobody could read and whose reading, if it has
+	// one, names no five-hour window: its tier is not known either. A maybe
+	// beats a no, which is the place headroomTier gives it too: behind every
+	// account known to have room, ahead of every account known not to.
 	RungUnknown
 	// RungHeldOut is an account the engine left at a limit on a window that
 	// has not rolled since; departure.go says why that has to be remembered.
@@ -158,11 +160,19 @@ func (r Ranked) Rung() Rung {
 	if r.HeldOut != "" {
 		return RungHeldOut
 	}
-	if !r.Headroom.Known {
-		return RungUnknown
-	}
+	// The tier before the figures. A reading that names a five-hour window
+	// but reports no utilization on anything is an account nothing has spent
+	// against since its windows rolled (shortWindowOf), and filing it as
+	// unreadable put it behind every Ultra with room -- so at a hand-off the
+	// session went to the Ultra and, kept there until a limit, never came back
+	// for the five-hour quota. Within the rung it still sorts after the
+	// five-hour accounts that report a weekly reset (lessConsumeFirst).
+	// TestAFiveHourAccountWithNoFiguresIsEnteredBeforeAnUltra.
 	if r.ShortWindow != "" {
 		return RungShortWindow
+	}
+	if !r.Headroom.Known {
+		return RungUnknown
 	}
 	return RungWeeklyOnly
 }
