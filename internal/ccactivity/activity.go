@@ -26,9 +26,9 @@ import (
 // once a second while the return is armed, and a walk can go on being asked for
 // days when no move follows -- a cooldown, a switch that keeps failing, a
 // directory it cannot read. An answer this old can read a session that resumed
-// inside it as still resting, and that costs nothing: the rest it read was an
-// hour long (strategy.RestQuiet), so that session's prompt cache had already
-// expired.
+// inside it as still resting, and that costs at most the one cache write that
+// session's first turn made: the rest it read was an hour long
+// (strategy.RestQuiet), so the cache from before it had already expired.
 const cacheFor = 15 * time.Second
 
 // LastWrite is the newest modification time of any transcript under configHome
