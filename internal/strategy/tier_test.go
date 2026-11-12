@@ -791,3 +791,19 @@ func TestAFiveHourAccountAtItsLimitDoesNotArmTheRestReturn(t *testing.T) {
 	}
 	want(t, Decide(pool, o, Config{}, NewState(), "u-live"), ActionStay, ReasonStayUntilLimit, "")
 }
+
+// The activity is the one input that reads the disk, so it is not asked when
+// the return could move nothing: no five-hour account would take the work.
+func TestTheActivityIsNotAskedWithNowhereToReturnTo(t *testing.T) {
+	asked := 0
+	o := hoverOpts()
+	o.LastActivity = func() (time.Time, bool) { asked++; return now.Add(-time.Hour), true }
+	pool := []Candidate{
+		measuredLive(weekOnly("u-live", 40, 2*day), 0.05, usage.WindowSevenDay),
+		weekOnly("u-spent", 99, 3*day),
+	}
+	want(t, Decide(pool, o, Config{}, NewState(), "u-live"), ActionStay, ReasonAlreadyBest, "")
+	if asked != 0 {
+		t.Errorf("activity asked %d times with no five-hour account in the pass", asked)
+	}
+}
