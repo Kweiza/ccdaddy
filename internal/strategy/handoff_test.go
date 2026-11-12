@@ -1382,3 +1382,18 @@ func TestAThrottledFiveHourCarrierStillOutranksAnUltra(t *testing.T) {
 	pool = append(pool, clear)
 	want(t, Decide(pool, hoverOpts(), Config{}, NewState(), "a-live"), ActionSwitch, ReasonLastPoint, "c-max")
 }
+
+// Among Ultra seats the throttle preference does not apply. The seat whose week
+// ends first is entered even though its poll drew a 429 ten minutes ago: passed
+// over for a later week, it would wait until that seat's limit, and its own
+// week could expire unspent meanwhile.
+func TestAThrottledUltraWhoseWeekEndsFirstIsStillEnteredFirst(t *testing.T) {
+	sooner := weekOnly("u1-sooner", 30, 1*day)
+	sooner.LastRateLimited = now.Add(-10 * time.Minute)
+	pool := []Candidate{
+		maxAcct("a-live", 99, 3*time.Hour, 50, 4*day),
+		sooner,
+		weekOnly("u2-later", 30, 5*day),
+	}
+	want(t, Decide(pool, hoverOpts(), Config{}, NewState(), "a-live"), ActionSwitch, ReasonLastPoint, "u1-sooner")
+}
