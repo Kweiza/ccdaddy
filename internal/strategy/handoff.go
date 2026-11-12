@@ -877,7 +877,8 @@ const RestQuiet = 10 * time.Minute
 // rest: that one moved the session 28 times a week on the big-Ultra fleet that
 // never runs short, and stopped it more, not less.
 // TestAReturnWhileTheWorkRestsSpendsTheMaxWhenTheFleetIsShort,
-// TestARestReturnWaitsForASeatAtItsLimit, TestARestReturnWaitsForTheRest.
+// TestARestReturnWaitsForASeatAtItsLimit, TestARestReturnWaitsForTheRest,
+// TestAFiveHourAccountAtItsLimitDoesNotArmTheRestReturn.
 func (p *Plan) restReturnArmed(live Ranked, o Options) bool {
 	if live.Rung() != RungWeeklyOnly {
 		return false
