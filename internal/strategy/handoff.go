@@ -1037,7 +1037,7 @@ func firstCarrier(res Result, activeUUID string, byUUID map[string]Candidate, no
 		if hasThrottled && r.Rung() != RungShortWindow {
 			break
 		}
-		if r.Rung() == RungShortWindow && recentlyRateLimited(byUUID[r.UUID], now) {
+		if recentlyRateLimited(byUUID[r.UUID], now) {
 			if !hasThrottled {
 				throttled, hasThrottled = r, true
 			}

@@ -449,9 +449,10 @@ compatibility `hover` and `manual` flags. The dashboard's `c` key uses it too.
 Hover orders the Claude lane's accounts instead of comparing their room:
 
 1. The account the session is on is kept until it reaches a limit, whatever
-   kind of subscription it is (a credit seat is the exception, below). A five-hour account is not left for another that has more
-   room, and a weekly-only account is not left for a five-hour account that
-   has room again or for another whose week resets sooner. Five-hour quota
+   kind of subscription it is (a credit seat is the exception, below). A
+   five-hour account is not left for another that has more room, and a
+   weekly-only account is not left for a five-hour account that has room
+   again or for another whose week resets sooner. Five-hour quota
    that comes back while a weekly-only account carries the session is not
    used, which on a fleet short of quota can stop the session sooner.
 2. When the session has to move, accounts with a five-hour window come first,
@@ -464,8 +465,7 @@ Hover orders the Claude lane's accounts instead of comparing their room:
    its next reading; on a week, within three minutes after it. A five-hour
    window is run that close because it comes back in hours, and work that
    outruns the reading before the hand-off can stop the session, most often
-   for about half a minute; the longest stop in the simulated week was 37
-   seconds.
+   for about half a minute.
    The work's rate is taken only between two readings of an account that were
    both made while it was live, and it follows the work across a switch.
 5. The session is moved only to an account that would still have three

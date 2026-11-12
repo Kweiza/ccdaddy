@@ -39,12 +39,11 @@ must reference accounts by `uuid` or `alias`.
   the live account until it reaches a limit". `recovery_hysteresis` is no
   longer read under hover, and `ccdad config list` marks it overridden.
 
-### Fixed
-
-- **A hover hand-off no longer passes over a five-hour account for an Ultra
-  seat because the five-hour account's usage poll was throttled in the last
-  hour.** The preference for an account whose readings can be refreshed now
-  applies only among accounts of the same kind.
+  A hand-off prefers an account whose usage poll was not throttled in the
+  last hour only among five-hour accounts. Since the session now stays where
+  it goes, passing over a throttled five-hour account for an Ultra seat, or
+  the Ultra seat whose week ends first for a later one, would keep it off
+  that account until the next limit.
 
 ## [0.29.2] — 2026-11-11
 

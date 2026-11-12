@@ -11,11 +11,11 @@ import (
 // The owner's rules, in the order the ranking applies them:
 //
 //  1. The account the session is on is kept until it reaches a limit, whatever
-//     kind of subscription it is -- a credit seat alone goes back to free quota
-//     with room left (creditSeatReturn): a five-hour account is not left for another that holds more
-//     room, and a weekly-only seat is not left for a five-hour account that has
-//     room again or for a seat whose week ends sooner (the owner's rule of
-//     2026-11-12).
+//     kind of subscription it is. A five-hour account is not left for another
+//     that holds more room, and a weekly-only seat is not left for a five-hour
+//     account that has room again or for a seat whose week ends sooner (the
+//     owner's rule of 2026-11-12). A credit seat alone goes back to free quota
+//     with room left (creditSeatReturn).
 //  2. When the session has to move, accounts with a five-hour window come
 //     first, the one whose week resets soonest among them.
 //  3. Weekly-only accounts come next -- a verified Ultra seat reads five_hour
