@@ -161,6 +161,10 @@ func TestHoverLinesSayWhenAnAccountCannotCarryTheWork(t *testing.T) {
 		t.Errorf("HoverLines =\n%s\nwant a line ending %q", got, want)
 	}
 	for _, l := range lines {
+		if l == HoverNote {
+			// The rule's own sentence, not a line about an account.
+			continue
+		}
 		if strings.Contains(l, "at its limit") && !strings.Contains(l, "d@example.com") {
 			t.Errorf("HoverLines =\n%s\nsay an account with room is at its limit", got)
 		}
