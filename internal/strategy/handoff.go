@@ -622,7 +622,7 @@ func (p *Plan) hoverMove(activeUUID string, cfg Config, st *State, o Options, by
 	}
 
 	if live.AtLimit() == "" {
-		p.hoverMoveWithRoom(live, activeUUID, cfg, st, o.Now, byUUID, p.restReturnArmed(live, o))
+		p.hoverMoveWithRoom(live, activeUUID, cfg, st, o, byUUID)
 		return
 	}
 
@@ -819,11 +819,13 @@ func nextReading(c Candidate, now time.Time) time.Time {
 // session onto an account the work would run out.
 // TestTheHoldNamesTheRuleThatKeptTheSession,
 // TestTheHoldNamesTheFirstCarrierInTheOrder.
-func (p *Plan) hoverMoveWithRoom(live Ranked, activeUUID string, cfg Config, st *State, now time.Time, byUUID map[string]Candidate, restReturn bool) {
+func (p *Plan) hoverMoveWithRoom(live Ranked, activeUUID string, cfg Config, st *State, o Options, byUUID map[string]Candidate) {
+	now := o.Now
 	if p.seatCost(live) > 0 {
 		p.creditSeatReturn(live, activeUUID, cfg, st, now, byUUID)
 		return
 	}
+	restReturn := p.restReturnArmed(live, o)
 	stay, retryAt := ReasonAlreadyBest, time.Time{}
 	kept := false
 	for _, target := range p.reachable(live).Order {
@@ -858,9 +860,12 @@ func (p *Plan) hoverMoveWithRoom(live Ranked, activeUUID string, cfg Config, st 
 }
 
 // RestQuiet is how long the work has to have been quiet before hover counts it
-// as resting: past the five-minute prompt cache, so a move made then costs no
-// session a warm cache.
-const RestQuiet = 10 * time.Minute
+// as resting: the hour Claude Code keeps a subscriber's prompt cache, so a
+// move made then costs no session a warm cache. It also covers the tool call
+// that writes nothing while it runs: the longest measured on the owner's
+// machine was twenty minutes. Ten minutes was measured first and moved nothing
+// more on the weekly simulation than this does.
+const RestQuiet = time.Hour
 
 // restReturnArmed is whether the session may leave the live weekly-only seat
 // for a five-hour account while it still has room (hoverGate): the work is

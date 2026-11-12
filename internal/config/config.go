@@ -21,7 +21,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"github.com/Kweiza/ccdaddy/internal/atomicfile"
 	"maps"
 	"math"
 	"os"
@@ -31,6 +30,7 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 
+	"github.com/Kweiza/ccdaddy/internal/atomicfile"
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 	"github.com/Kweiza/ccdaddy/internal/strategy"
 	"github.com/Kweiza/ccdaddy/internal/usage"

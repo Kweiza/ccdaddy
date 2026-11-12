@@ -22,17 +22,14 @@ import (
 	"github.com/Kweiza/ccdaddy/internal/ccpath"
 )
 
-// cacheFor is how long a walk that found recent activity stands in this process.
-// The daemon asks once a second while the return is armed, and a walk over a
-// few thousand transcripts costs about a fifth of a second. Only an answer that
-// says the work is active is reused (Last): one that would let the session move
-// is always a fresh walk.
+// cacheFor is how long one walk's answer stands in this process. The daemon asks
+// once a second while the return is armed, and a walk can go on being asked for
+// days when no move follows -- a cooldown, a switch that keeps failing, a
+// directory it cannot read. An answer this old can read a session that resumed
+// inside it as still resting, and that costs nothing: the rest it read was an
+// hour long (strategy.RestQuiet), so that session's prompt cache had already
+// expired.
 const cacheFor = 15 * time.Second
-
-// skewAllowed is how far ahead of the clock a transcript's mtime may be and
-// still be read. Further ahead is a clock that moved, not a write, and one such
-// file would otherwise stand as the newest write until the clock caught up.
-const skewAllowed = time.Minute
 
 // LastWrite is the newest modification time of any transcript under configHome
 // as of now, and whether the walk saw the whole tree and found one. Symlinked
@@ -99,15 +96,18 @@ func (w *walker) walk(dir string) bool {
 	return complete && err == nil
 }
 
-// note counts one file if it is a transcript written no later than the clock
-// allows.
+// note counts one file if it is a transcript. One dated past the clock counts
+// as written now: a clock stepped back makes the live session's own writes
+// look like the future, and passing them over would read its older ones as
+// rest in the middle of work. The cost is a file dated far ahead, which holds
+// the return off until it is written again or removed.
 func (w *walker) note(path string, info fs.FileInfo) {
 	if !strings.HasSuffix(path, ".jsonl") || !info.Mode().IsRegular() {
 		return
 	}
 	at := info.ModTime()
-	if at.After(w.now.Add(skewAllowed)) {
-		return
+	if at.After(w.now) {
+		at = w.now
 	}
 	if at.After(w.newest) {
 		w.newest = at
@@ -119,29 +119,22 @@ var cache struct {
 	home   string
 	at     time.Time
 	newest time.Time
+	found  bool
 }
 
-// Last is LastWrite on Claude Code's own config root. A walk that found
-// activity younger than quiet is reused for cacheFor; every other answer --
-// one that would read as rest, or nothing found -- is walked again, so a
-// session that resumed since the cached walk is never read as resting.
-func Last(now time.Time, quiet time.Duration) (time.Time, bool) {
+// Last is LastWrite on Claude Code's own config root, every answer -- nothing
+// found included -- reused for cacheFor in this process.
+func Last(now time.Time) (time.Time, bool) {
 	home, err := ccpath.ConfigHome()
 	if err != nil {
 		return time.Time{}, false
 	}
 	cache.Lock()
 	defer cache.Unlock()
-	if age := now.Sub(cache.at); cache.home == home && !cache.at.IsZero() && age >= 0 && age < cacheFor &&
-		now.Sub(cache.newest) < quiet {
-		return cache.newest, true
+	if age := now.Sub(cache.at); cache.home == home && !cache.at.IsZero() && age >= 0 && age < cacheFor {
+		return cache.newest, cache.found
 	}
-	newest, found := LastWrite(home, now)
-	cache.home, cache.at, cache.newest = home, now, time.Time{}
-	if found {
-		cache.newest = newest
-	} else {
-		cache.at = time.Time{}
-	}
-	return newest, found
+	cache.newest, cache.found = LastWrite(home, now)
+	cache.home, cache.at = home, now
+	return cache.newest, cache.found
 }
