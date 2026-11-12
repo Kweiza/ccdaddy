@@ -5,6 +5,7 @@ import (
 	"math"
 	"reflect"
 	"sort"
+	"sync"
 	"testing"
 	"time"
 
@@ -361,6 +362,76 @@ type tierSimResult struct {
 	stopped, stoppedWithRoom int
 	// warmUps is how many warm-ups the daemon's rules started.
 	warmUps int
+	// busy counts the switches made while the load was asking for work: the
+	// ones that land in a running session. The rest land while it rests.
+	busy int
+}
+
+// returnPolicy is a rule laid over hover's own decision for the comparison in
+// TestReturningToTheMaxWhileTheWorkRests: hover as it ships stays on a seat with
+// room until its limit, and these take the session back to a five-hour account
+// while nothing is running. They are the harness's, not the engine's, so the
+// two can be measured before either is built.
+type returnPolicy int
+
+const (
+	// stayUntilLimit is hover as it ships.
+	stayUntilLimit returnPolicy = iota
+	// returnWhileResting moves the session off a weekly-only seat onto the
+	// first five-hour account in the order that carries the work, once the
+	// work has rested for restQuiet.
+	returnWhileResting
+	// returnWhileRestingShort is returnWhileResting, armed only while some
+	// weekly-only seat is at its limit: a week the fleet is short of quota.
+	returnWhileRestingShort
+)
+
+func (r returnPolicy) String() string {
+	return [...]string{"stay until a limit", "return while resting", "return while resting, when short"}[r]
+}
+
+// restQuiet is how long the work has to have asked for nothing before a return
+// counts as made while it rests: past the five-minute prompt cache, so the move
+// costs the session no warm cache.
+const restQuiet = 10 * time.Minute
+
+// reasonRestReturn marks a return the harness made, beyond every Reason the
+// engine gives.
+const reasonRestReturn = Reason(255)
+
+// restReturnReason is the reason the harness records for a return it makes.
+const restReturnReason = "returned to a five-hour account while the work rests"
+
+// restReturn is the move a policy makes where hover stayed, if it makes one.
+func restReturn(pol returnPolicy, p Plan, accts []tierAccount, live string, rested bool, st *State, now time.Time) (Ranked, bool) {
+	if pol == stayUntilLimit || p.Action != ActionStay || !rested {
+		return Ranked{}, false
+	}
+	if _, cooling := st.CooldownRemaining(now, HoverCooldown); cooling {
+		return Ranked{}, false
+	}
+	for _, a := range accts {
+		if a.uuid == live && a.short {
+			return Ranked{}, false
+		}
+	}
+	if pol == returnWhileRestingShort {
+		short := false
+		for _, r := range p.Result.Order {
+			if r.ShortWindow == "" && r.Headroom.Known && r.Rung() >= RungHeldOut {
+				short = true
+			}
+		}
+		if !short {
+			return Ranked{}, false
+		}
+	}
+	for _, r := range p.Result.Order {
+		if r.UUID != live && r.Rung() == RungShortWindow && r.Carries {
+			return r, true
+		}
+	}
+	return Ranked{}, false
 }
 
 // tierSimEpoch is where every tier simulation starts, and the instant the
@@ -453,6 +524,13 @@ func tierDecide(accts []tierAccount, pollers []tierPoller, now time.Time, st *St
 // cadence (asked as tierSimDrift says), with the live account spending the load.
 func runTierSim(t *testing.T, label string, accts []tierAccount, load tierLoad, span time.Duration) tierSimResult {
 	t.Helper()
+	return runTierSimWith(t, label, accts, load, span, stayUntilLimit)
+}
+
+// runTierSimWith is runTierSim with a return policy laid over hover's decision.
+func runTierSimWith(t *testing.T, label string, accts []tierAccount, load tierLoad, span time.Duration, pol returnPolicy) tierSimResult {
+	t.Helper()
+	var workedAt time.Time
 	res := tierSimResult{switches: map[string]int{}, unspent: map[string]float64{}, served: map[string]float64{}}
 	st := NewState()
 	live := accts[0].uuid
@@ -472,10 +550,22 @@ func runTierSim(t *testing.T, label string, accts []tierAccount, load tierLoad, 
 
 		if !now.Before(askAt) {
 			if p, asked := tierDecide(accts, pollers, now, st, live); asked {
+				rested := now.Sub(workedAt) >= restQuiet
+				if target, ok := restReturn(pol, p, accts, live, rested, st, now); ok {
+					p.Action, p.Target, p.Departure = ActionSwitch, target, Departure{}
+					p.Reason = reasonRestReturn
+				}
 				if p.Action == ActionSwitch {
+					if load.perMin(now.Sub(tierSimEpoch)) > 0 {
+						res.busy++
+					}
 					live = p.Target.UUID
 					st.RecordSwitch(live, now, p.Departure)
-					res.switches[p.Reason.String()]++
+					if p.Reason == reasonRestReturn {
+						res.switches[restReturnReason]++
+					} else {
+						res.switches[p.Reason.String()]++
+					}
 					res.total++
 					// switcher.Execute's prompt poll of the account the work
 					// just moved to, and its record of the switch.
@@ -518,6 +608,16 @@ func runTierSim(t *testing.T, label string, accts []tierAccount, load tierLoad, 
 
 		want := load.perMin(now.Sub(tierSimEpoch)) * tierSimTick.Minutes()
 		res.asked += want
+		if want > 0 {
+			workedAt = now
+		}
+		// Rest is a fact the engine would read off its readings; the harness
+		// reads it off the load, so its idle is never wrong. Asked every second
+		// while a policy is on, so the return lands at the second the rest
+		// begins to count and not up to a drift step later.
+		if pol != stayUntilLimit && now.Sub(workedAt) >= restQuiet && askAt.After(now.Add(tierSimTick)) {
+			askAt = now.Add(tierSimTick)
+		}
 		for j := range accts {
 			a := &accts[j]
 			if a.uuid != live {
@@ -553,6 +653,7 @@ func runTierSim(t *testing.T, label string, accts []tierAccount, load tierLoad, 
 	t.Logf("   five-hour points left in %d windows the session had left: %.2f", res.fiveWindowsLeft, res.fiveLeft)
 	t.Logf("   warm-ups %d", res.warmUps)
 	t.Logf("   session-stopping seconds %d, of which another account had room in %d", res.stopped, res.stoppedWithRoom)
+	t.Logf("   switches while the work runs %d, while it rests %d", res.busy, res.total-res.busy)
 	return res
 }
 
@@ -908,4 +1009,67 @@ var stoppedWithRoomMeasured = map[string]int{
 	"two Max/production":               161,
 	"two Max/burst":                    605,
 	"two Max/pause":                    666,
+}
+
+// TestReturningToTheMaxWhileTheWorkRests compares hover as it ships with two
+// rules that take the session back to a five-hour account while the work rests.
+func TestReturningToTheMaxWhileTheWorkRests(t *testing.T) {
+	type row struct {
+		fleet, load string
+		pol         returnPolicy
+		weeks       int
+		res         tierSimResult
+	}
+	var rows []row
+	var mu sync.Mutex
+	fleets := []struct {
+		name string
+		of   func() []tierAccount
+	}{
+		{"today", todaysFleet},
+		{"big Ultras", bigUltraFleet},
+		{"two Ultras", twoUltraFleet},
+		{"2 Max 3 Ultras", twoMaxThreeUltraFleet},
+	}
+	loads := append(tierLoads[:len(tierLoads):len(tierLoads)], tierPauseLoad)
+	t.Run("runs", func(t *testing.T) {
+		for _, weeks := range []int{1, 3} {
+			for _, f := range fleets {
+				for _, l := range loads {
+					for _, pol := range []returnPolicy{stayUntilLimit, returnWhileResting, returnWhileRestingShort} {
+						weeks, f, l, pol := weeks, f, l, pol
+						t.Run(fmt.Sprintf("%dw/%s/%s/%d", weeks, f.name, l.name, pol), func(t *testing.T) {
+							t.Parallel()
+							res := runTierSimWith(t, fmt.Sprintf("%s, %s, %s", f.name, l.name, pol), f.of(), l, time.Duration(weeks)*7*day, pol)
+							checkTierBooks(t, res)
+							mu.Lock()
+							rows = append(rows, row{f.name, l.name, pol, weeks, res})
+							mu.Unlock()
+						})
+					}
+				}
+			}
+		}
+	})
+	sort.Slice(rows, func(i, j int) bool {
+		a, b := rows[i], rows[j]
+		if a.weeks != b.weeks {
+			return a.weeks < b.weeks
+		}
+		if a.fleet != b.fleet {
+			return a.fleet < b.fleet
+		}
+		if a.load != b.load {
+			return a.load < b.load
+		}
+		return a.pol < b.pol
+	})
+	t.Logf("%-5s %-15s %-11s %-34s %8s %5s %5s %9s %9s %9s %8s %8s",
+		"weeks", "fleet", "load", "policy", "switches", "busy", "rest", "max serv", "max left", "seat left", "stopped", "w/ room")
+	for _, r := range rows {
+		t.Logf("%-5d %-15s %-11s %-34s %8d %5d %5d %9.2f %9.2f %9.2f %8d %8d",
+			r.weeks, r.fleet, r.load, r.pol, r.res.total, r.res.busy, r.res.total-r.res.busy,
+			r.res.served["short-window"], r.res.unspent["short-window"], r.res.unspent["weekly-only"],
+			r.res.stopped, r.res.stoppedWithRoom)
+	}
 }
