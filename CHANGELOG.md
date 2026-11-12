@@ -31,7 +31,8 @@ must reference accounts by `uuid` or `alias`.
   "the work is resting and a weekly-only account is at its limit, so the
   session returns to a short-window account". ccdad reads the modification
   times of `projects/**/*.jsonl` under Claude Code's config directory for
-  this, at most every 15 seconds and only while the move could happen.
+  this, only while the move could happen; a directory it cannot read counts as
+  activity.
 
 ### Fixed
 

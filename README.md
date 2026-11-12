@@ -455,9 +455,13 @@ Hover orders the Claude lane's accounts instead of comparing their room:
    for a five-hour account while the work runs. One exception: when another
    weekly-only account is at its limit, so the week is short of quota, and no
    Claude Code session has written to its transcript for ten minutes, the
-   session moves from the weekly-only account to a five-hour account. The move
-   happens while nothing runs, after the prompt cache has expired, and it
-   spends five-hour quota that would otherwise reset unused. In a week where
+   session moves from the weekly-only account to a five-hour account that can
+   carry the work. Nothing has been written for longer than the prompt cache
+   lasts, so the move costs no warm cache, and it spends five-hour quota that
+   would otherwise reset unused. A tool call that runs for over ten minutes
+   without output reads as rest too. ccdad reads only the transcripts'
+   modification times; a directory it cannot read, or none at all, counts as
+   activity. In a week where
    every weekly-only account has room, five-hour quota that comes back while a
    weekly-only account carries the session is not used.
 2. When the session has to move, accounts with a five-hour window come first,
@@ -524,10 +528,10 @@ session stops until that reading lands. On a week a three-minute reserve
 absorbs most of that; a five-hour window has none, since it is handed off at
 the last reading before the work would stop it, so on a five-hour account
 these cases stop the session, most often for about half a minute. In the
-simulated week, today's fleet under steady heavy use, and under the
-production rate of 5.4 points a minute in short bursts with pauses between
-them, stops for 6 seconds; under heavy use in three-minute bursts it stops for
-89 seconds. Under the production rate in two-hour sessions it stops for 26
+simulated week, today's fleet does not stop under steady heavy use; under
+the production rate of 5.4 points a minute in short bursts with pauses between
+them it stops for 6 seconds, and under heavy use in three-minute bursts for 89
+seconds. Under the production rate in two-hour sessions it stops for 26
 seconds. Without the move to a five-hour account while the work rests, it
 stopped for 3862 seconds there: the five-hour quota that rolled while a
 weekly-only account carried the session went unused, and the week ran short.

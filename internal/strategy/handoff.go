@@ -869,8 +869,9 @@ const RestQuiet = 10 * time.Minute
 // quota rolling unspent behind the seat is quota the session will want.
 //
 // The order of the tests is the cost order: the activity is asked last, and
-// only when everything else holds, because it is the one input that reads the
-// disk (Options.LastActivity).
+// only when everything else holds -- a five-hour account that would take the
+// work included -- because it is the one input that reads the disk
+// (Options.LastActivity), and a walk that could move nothing is a walk wasted.
 //
 // In a week with room nothing changes: the seat is kept until its limit, as
 // the owner chose. Measured on the weekly simulation against returning on every
@@ -883,15 +884,19 @@ func (p *Plan) restReturnArmed(live Ranked, o Options) bool {
 	if live.Rung() != RungWeeklyOnly {
 		return false
 	}
-	short := false
+	short, carrier := false, false
 	for _, r := range p.Result.Order {
-		if r.UUID != live.UUID && r.Kind == identity.KindSubscription && r.ShortWindow == "" &&
-			r.Headroom.Known && r.Rung() >= RungHeldOut {
+		if r.UUID == live.UUID {
+			continue
+		}
+		if r.Kind == identity.KindSubscription && r.ShortWindow == "" && r.Headroom.Known && r.Rung() >= RungHeldOut {
 			short = true
-			break
+		}
+		if r.Rung() == RungShortWindow && r.Carries {
+			carrier = true
 		}
 	}
-	return short && o.resting()
+	return short && carrier && o.resting()
 }
 
 // resting is whether the work has been quiet for RestQuiet, by the activity
