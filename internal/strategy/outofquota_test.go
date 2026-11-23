@@ -23,12 +23,12 @@ func hoverAt(uuid string, share, util float64) Candidate {
 // other account's pace target was far below its utilization.
 func livePoolOf20260824() []Candidate {
 	return []Candidate{
-		hoverAt("1-official", 0.90, 100),   // 0 points left
-		hoverAt("2-work", 0.30, 80),     // 20 points left
-		hoverAt("3-side", 0.15, 53), // 47 points left
-		hoverAt("4-spare", 0.35, 70),   // 30 points left
-		hoverAt("5-team", 0.51, 79),    // 21 points left
-		hoverAt("6-chip", 0.34, 80),        // 20 points left
+		hoverAt("1-official", 0.90, 100), // 0 points left
+		hoverAt("2-work", 0.30, 80),      // 20 points left
+		hoverAt("3-side", 0.15, 53),      // 47 points left
+		hoverAt("4-spare", 0.35, 70),     // 30 points left
+		hoverAt("5-team", 0.51, 79),      // 21 points left
+		hoverAt("6-alt", 0.34, 80),       // 20 points left
 	}
 }
 

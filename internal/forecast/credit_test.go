@@ -241,7 +241,7 @@ func TestASampleWithoutCreditDoesNotBreakTheChain(t *testing.T) {
 }
 
 // liveRolloverSeries is testdata/credit-rollover-2026-09-01.json: the
-// ~/.ccdad/history.json of the claude_enterprise seat on an-internal-server,
+// ~/.ccdad/history.json of the claude_enterprise seat on an internal server,
 // copied 2026-09-01 at 14:18 KST while its daemon was still appending to it.
 //
 // It is the first series this repository has ever held in which used_credits

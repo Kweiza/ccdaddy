@@ -47,8 +47,8 @@ These are not style preferences. Violating any of them is a defect.
   message through a file or an editor does not get past it.
 
 - **Repo artifacts are English.** README, comments, docs, CLI strings, commit
-  messages. Conversation with the user is Korean; nothing that lands in the tree
-  is.
+  messages. Whatever language the conversation is in, nothing that lands in the
+  tree is anything but English.
 
 ## Before you claim a change works
 

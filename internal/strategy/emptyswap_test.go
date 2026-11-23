@@ -19,7 +19,7 @@ import (
 // every one of those eighteen lines.
 func spentFleetOf20260905() []Candidate {
 	shares := []float64{0.98, 0.95, 0.90, 0.85}
-	names := []string{"1-official", "2-side", "3-chip", "4-spare"}
+	names := []string{"1-official", "2-side", "3-alt", "4-spare"}
 	out := make([]Candidate, 0, len(shares))
 	for i, share := range shares {
 		out = append(out, sub(names[i], snap(
